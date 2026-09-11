@@ -17,8 +17,11 @@ Two things fix that structurally, both done here:
   descendant — orphaned or not — dies when this process exits, and can be
   listed while the suite runs.
 
-This script is then the only process on the runner's pipe: it reports
-progress, kills what is left, prints the tail and returns.
+Round 15 then hung with exactly that in place, so the script no longer
+touches the step's pipe at all: `--detach` starts a copy of itself with a log
+file as its only inherited handle and returns at once, the workflow polls the
+log from a shell with no children, and a `.done` marker carries the exit
+code. Whatever hangs, the log is readable.
 """
 
 from __future__ import annotations
@@ -34,11 +37,16 @@ from ctypes import wintypes
 import psutil
 
 LOG = "pytest.log"
+WRAPPER_LOG = "ci-windows-tests.log"
+DONE = "ci-windows-tests.done"
 CAP_SECONDS = 20 * 60
 REPORT_EVERY = 60
 RESULT_RE = re.compile(r" (PASSED|FAILED|SKIPPED|ERROR|XFAIL|XPASS)")
 
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
+DETACHED_PROCESS = 0x00000008
+CREATE_NEW_PROCESS_GROUP = 0x00000200
+CREATE_BREAKAWAY_FROM_JOB = 0x01000000
 JobObjectBasicProcessIdList = 3
 JobObjectExtendedLimitInformation = 9
 
@@ -151,10 +159,32 @@ def _progress() -> str:
     return f"{done} results; last: {last}"
 
 
+def _detach() -> int:
+    """Start the real run with a log file as its only inherited handle."""
+    for stale in (WRAPPER_LOG, DONE, LOG):
+        try:
+            os.remove(stale)
+        except OSError:
+            pass
+    args = [sys.executable, os.path.abspath(__file__), "--run"]
+    flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+    with open(WRAPPER_LOG, "wb") as log:
+        try:
+            child = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, close_fds=True, creationflags=flags | CREATE_BREAKAWAY_FROM_JOB)
+        except OSError as exc:
+            # The runner may hold the step in a job that forbids breakaway.
+            print(f"--- breakaway refused ({exc}); detaching inside the runner's job")
+            child = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, close_fds=True, creationflags=flags)
+    print(f"--- detached runner pid {child.pid}; log in {WRAPPER_LOG}, marker {DONE}")
+    return 0
+
+
 def main() -> int:
-    # The runner's pipe is not a console: without this, one non-cp1252 byte
-    # in a test's output would crash the report at the very end.
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if "--detach" in sys.argv:
+        return _detach()
+    # stdout is a file: line-buffer it so the poller sees progress as it
+    # happens, and never let one non-cp1252 byte from a test crash the report.
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
     job = _join_job()
     args = [
         sys.executable, "-X", "faulthandler", "-m", "pytest", "backend/tests", "-v",
@@ -195,7 +225,10 @@ def main() -> int:
         if line.startswith(("FAILED ", "ERROR ")) or re.match(r"=+ .*(passed|failed|error).* =+", line):
             sys.stdout.write(line)
     sys.stdout.flush()
-    return 1 if rc is None else rc
+    rc = 1 if rc is None else rc
+    with open(DONE, "w") as marker:
+        marker.write(str(rc))
+    return rc
 
 
 if __name__ == "__main__":
