@@ -126,12 +126,24 @@ def test_grok_bag_stays_persistable_across_many_sessions(tmp_path: Path) -> None
     with that: 40 sessions x 20 messages used to leave 800 `act:` keys."""
     db = _grok_db(tmp_path)
     _grok_workspace(db, "w1", "/repo")
+    # One connection and one commit: 840 connect/commit/close cycles take
+    # over 90 s on the Windows runner (each commit is an fsync there).
+    con = sqlite3.connect(db)
     for s in range(40):
         sid = f"sess{s:04d}"
-        _grok_session(db, sid, "w1")
-        for seq in range(20):
-            _grok_msg(db, sid, seq, "user" if seq % 2 == 0 else "assistant",
-                      f"m{seq}", _old())
+        con.execute(
+            "INSERT OR IGNORE INTO sessions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (sid, "w1", None, None, None, None, "grok-4", "agent", "/w", "/w",
+             "active", "2026-09-07T00:00:00Z", "2026-09-07T00:00:00Z"),
+        )
+        con.executemany(
+            "INSERT INTO messages VALUES (?,?,?,?,?)",
+            [(sid, seq, "user" if seq % 2 == 0 else "assistant",
+              json.dumps({"content": [{"type": "text", "text": f"m{seq}"}]}), _old())
+             for seq in range(20)],
+        )
+    con.commit()
+    con.close()
 
     reader = GrokLogReader()
     seen: set[str] = set()
@@ -342,11 +354,24 @@ def test_copilot_store_bag_stays_persistable(tmp_path: Path) -> None:
     `db_act:*` keys — 60x the limit."""
     root = tmp_path / ".copilot"
     db = _copilot_db(root)
+    # One connection and one commit, for the same reason as the grok bag test.
+    con = sqlite3.connect(db)
     for s in range(30):
         sid = f"sess-{s}"
-        _copilot_session(db, sid)
+        con.execute("INSERT OR IGNORE INTO sessions (id, cwd) VALUES (?,?)", (sid, "/repo"))
         for t in range(8):
-            _copilot_turn(db, sid, t, f"q{t}", f"a{t}")
+            con.execute(
+                "INSERT INTO turns (session_id, turn_index, user_message, "
+                "assistant_response, timestamp) VALUES (?,?,?,?,?)",
+                (sid, t, f"q{t}", f"a{t}", "2026-09-07T00:00:00Z"),
+            )
+            con.execute(
+                "INSERT INTO assistant_usage_events (session_id, turn_index, model, "
+                "input_tokens, output_tokens, created_at) VALUES (?,?,?,?,?,?)",
+                (sid, t, "gpt-5", 10, 5, "2026-09-07T00:00:00Z"),
+            )
+    con.commit()
+    con.close()
 
     seen: set[str] = set()
     events = CopilotLogReader().parse_activity(db, seen)
