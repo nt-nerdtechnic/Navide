@@ -329,10 +329,18 @@ def _running_link(server: ScriptedServer) -> ServerLink:
     return link
 
 
-async def _run_briefly(link: ServerLink, seconds: float) -> None:
+async def _run_briefly(link: ServerLink, seconds: float, until=None) -> None:
+    """Run the link for `seconds`, or until `until()` holds when one is given:
+    a fixed 0.2 s window lost a race on the Windows runner (timer slices are
+    ~15 ms there), and the outcome-shaped tests only need the hello to land."""
     task = asyncio.create_task(link._run())
     try:
-        await asyncio.sleep(seconds)
+        if until is None:
+            await asyncio.sleep(seconds)
+        else:
+            deadline = asyncio.get_running_loop().time() + max(seconds, 2.0)
+            while not until() and asyncio.get_running_loop().time() < deadline:
+                await asyncio.sleep(0.01)
     finally:
         link._stopped = True
         task.cancel()
@@ -407,6 +415,6 @@ async def test_a_fresh_hello_clears_the_fallback(monkeypatch: pytest.MonkeyPatch
     link = _running_link(server)
     link._verify_fallback = True
 
-    await _run_briefly(link, 0.2)
+    await _run_briefly(link, 0.2, until=lambda: link._verify_fallback is False)
 
     assert link._verify_fallback is False
