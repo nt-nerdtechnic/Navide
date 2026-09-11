@@ -13,6 +13,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { isWindows } from '../../shared/osplat'
 import {
   isHighRiskExecutionPolicy,
   parseExecutionPolicy,
@@ -504,7 +505,9 @@ describe('ExecutionPolicyStore', () => {
     }
   })
 
-  it('repairs an existing directory permission drift before reading durable state', () => {
+  // POSIX mode bits: chmod is a no-op on NTFS directories, so the drift can
+  // neither be staged nor repaired there.
+  it.skipIf(isWindows())('repairs an existing directory permission drift before reading durable state', () => {
     const userData = temporaryUserData()
     try {
       writeRevisionFile(userData, persistedRevision(5))
@@ -528,7 +531,7 @@ describe('ExecutionPolicyStore', () => {
     }
   })
 
-  it('does not rewrite an owner-only directory while reading durable state', () => {
+  it.skipIf(isWindows())('does not rewrite an owner-only directory while reading durable state', () => {
     const userData = temporaryUserData()
     try {
       writeRevisionFile(userData, persistedRevision(5))

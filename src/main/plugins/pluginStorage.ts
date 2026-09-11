@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { open, readFile, readdir, rename, rm, stat, unlink, mkdir } from 'node:fs/promises'
+import { syncDirectory } from './fsSync'
 import { basename, dirname, join, relative, sep } from 'node:path'
 import type { JsonValue, StorageGetResult } from '../../../packages/plugin-contracts/src/index'
 import type {
@@ -228,12 +229,7 @@ export class NodePluginStorageFileSystem implements PluginStorageFileSystem {
 
   async syncDirectory(path: string): Promise<void> {
     this.observe?.('sync-directory', path)
-    const handle = await open(path, 'r')
-    try {
-      await handle.sync()
-    } finally {
-      await handle.close()
-    }
+    await syncDirectory(path)
   }
 }
 
