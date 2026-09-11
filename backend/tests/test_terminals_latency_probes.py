@@ -9,14 +9,16 @@ one.
 """
 
 import asyncio
-import fcntl
 import logging
 import os
 from types import SimpleNamespace
 
 import pytest
 
-from agent_team_backend.osplat._posix import PosixTerminalHandle
+# Real POSIX PTY behaviour: the module is skipped where these do not exist.
+fcntl = pytest.importorskip("fcntl")
+
+from agent_team_backend.osplat._posix import PosixTerminalHandle  # noqa: E402
 from agent_team_backend.terminals import (
     _ECHO_LAG_MAX_MS,
     _ECHO_LAG_WARN_MS,
