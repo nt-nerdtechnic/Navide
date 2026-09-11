@@ -7,31 +7,29 @@ _on_readable now drains until EAGAIN. These tests pin that behaviour, its
 bound, and the buffered-size bookkeeping that replaced a per-append re-sum.
 """
 
-import fcntl
 import os
 from types import SimpleNamespace
 
 import pytest
 
+# Real POSIX PTY behaviour: the module is skipped where these do not exist.
+fcntl = pytest.importorskip("fcntl")
+
 from agent_team_backend import terminals as terminals_mod
 from agent_team_backend.osplat._posix import PosixTerminalHandle
 from agent_team_backend.terminals import TerminalService
-
 
 def _nonblocking(fd: int) -> None:
     flags = fcntl.fcntl(fd, fcntl.F_GETFL)
     fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
 
-
 async def _emit(_event):  # EventSink stub — never actually called on this path
     return None
-
 
 def _cancel_pending_flush(svc: TerminalService, session_id: str) -> None:
     handle = svc._out_handles.pop(session_id, None)
     if handle:
         handle.cancel()
-
 
 def _cap_reads_at_1024(monkeypatch) -> list[int]:
     """Make os.read behave like a macOS PTY master; return the call log."""
@@ -44,7 +42,6 @@ def _cap_reads_at_1024(monkeypatch) -> list[int]:
 
     monkeypatch.setattr(os, "read", capped)
     return calls
-
 
 @pytest.mark.asyncio
 async def test_one_callback_drains_a_whole_repaint(monkeypatch):
@@ -68,7 +65,6 @@ async def test_one_callback_drains_a_whole_repaint(monkeypatch):
         os.close(r)
         os.close(w)
 
-
 @pytest.mark.asyncio
 async def test_drain_is_bounded_so_a_flood_yields_to_the_loop(monkeypatch):
     """An unbounded drain would starve every other session during a flood."""
@@ -90,7 +86,6 @@ async def test_drain_is_bounded_so_a_flood_yields_to_the_loop(monkeypatch):
         _cancel_pending_flush(svc, "t-flood")
         os.close(r)
         os.close(w)
-
 
 @pytest.mark.asyncio
 async def test_bytes_read_before_eof_are_not_lost(monkeypatch):
@@ -114,7 +109,6 @@ async def test_bytes_read_before_eof_are_not_lost(monkeypatch):
         _cancel_pending_flush(svc, "t-eof")
         os.close(r)
 
-
 @pytest.mark.asyncio
 async def test_buffered_size_counter_tracks_the_buffer():
     """The OOM guard reads this counter instead of re-summing the buffer."""
@@ -136,7 +130,6 @@ async def test_buffered_size_counter_tracks_the_buffer():
         _cancel_pending_flush(svc, "t-count")
         os.close(r)
         os.close(w)
-
 
 @pytest.mark.asyncio
 async def test_flush_resets_the_size_counter():

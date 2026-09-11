@@ -9,11 +9,14 @@ so the Electron flood protection holds.
 """
 
 import asyncio
-import fcntl
+
 import os
 from types import SimpleNamespace
 
 import pytest
+
+# Real POSIX PTY behaviour: the module is skipped where these do not exist.
+fcntl = pytest.importorskip("fcntl")
 
 from agent_team_backend.osplat._posix import PosixTerminalHandle
 from agent_team_backend.terminals import (
@@ -25,15 +28,12 @@ from agent_team_backend.terminals import (
     TerminalService,
 )
 
-
 def _nonblocking(fd: int) -> None:
     flags = fcntl.fcntl(fd, fcntl.F_GETFL)
     fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
 
-
 async def _emit(_event):  # EventSink stub for tests that never flush
     return None
-
 
 def _make_session(session_id: str, master_fd: int) -> SimpleNamespace:
     return SimpleNamespace(
@@ -45,17 +45,14 @@ def _make_session(session_id: str, master_fd: int) -> SimpleNamespace:
         output_log_fp=None,
     )
 
-
 def _pending_delay(svc: TerminalService, session_id: str) -> float:
     handle = svc._out_handles[session_id]
     return handle.when() - svc._loop.time()
-
 
 def _cancel_pending_flush(svc: TerminalService, session_id: str) -> None:
     handle = svc._out_handles.pop(session_id, None)
     if handle:
         handle.cancel()
-
 
 @pytest.mark.asyncio
 async def test_single_chunk_schedules_immediate_flush():
@@ -74,7 +71,6 @@ async def test_single_chunk_schedules_immediate_flush():
         _cancel_pending_flush(svc, "t-fast")
         os.close(r)
         os.close(w)
-
 
 @pytest.mark.asyncio
 async def test_sustained_stream_falls_back_to_batching_end_to_end():
@@ -131,7 +127,6 @@ async def test_sustained_stream_falls_back_to_batching_end_to_end():
         os.close(r)
         os.close(w)
 
-
 @pytest.mark.asyncio
 async def test_many_tiny_chunks_stay_on_the_fast_path():
     """The gate is throughput, not wakeup count. A CLI that wakes the reader
@@ -154,7 +149,6 @@ async def test_many_tiny_chunks_stay_on_the_fast_path():
         _cancel_pending_flush(svc, "t-tiny")
         os.close(r)
         os.close(w)
-
 
 @pytest.mark.asyncio
 async def test_one_viewport_repaint_stays_on_the_fast_path():
@@ -188,7 +182,6 @@ async def test_one_viewport_repaint_stays_on_the_fast_path():
         os.close(r)
         os.close(w)
 
-
 @pytest.mark.asyncio
 async def test_quiet_period_restores_fast_path():
     svc = TerminalService(_emit)
@@ -202,14 +195,12 @@ async def test_quiet_period_restores_fast_path():
     svc._recent_chunks["t-busy"] = deque([(now, _FAST_PATH_MAX_BYTES + 1)])
     assert svc._flush_delay("t-busy") == _OUTPUT_BATCH_MS / 1000
 
-
 def _frame_data(frame: bytes) -> bytes:
     """Raw PTY bytes of a binary terminal-output frame (skip the header)."""
     assert frame[0] == 0x01
     off = 6 + frame[5]          # past sessionId
     off += 1 + frame[off]       # past paneId
     return frame[off:]
-
 
 @pytest.mark.asyncio
 async def test_fast_path_emits_within_a_tick():
@@ -239,7 +230,6 @@ async def test_fast_path_emits_within_a_tick():
             pass
         os.close(r)
         os.close(w)
-
 
 @pytest.mark.asyncio
 async def test_flush_delay_with_explicit_now_matches_implicit_clock():

@@ -1,17 +1,19 @@
 from __future__ import annotations
 
-import fcntl
 import os
-import pty
+
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+# Real POSIX PTY behaviour: the module is skipped where these do not exist.
+fcntl = pytest.importorskip("fcntl")
+pty = pytest.importorskip("pty")
+
 from agent_team_backend.osplat._posix import PosixTerminalHandle
 from agent_team_backend import app
 from agent_team_backend.terminals import TerminalSession
-
 
 class OrderRecordingWS:
     """Records every outbound frame in send order — binary output frames and
@@ -27,7 +29,6 @@ class OrderRecordingWS:
     async def send_bytes(self, data: bytes) -> None:
         self.sent.append(data)
 
-
 def _frame_data(frame: bytes) -> bytes:
     """Raw PTY bytes of a binary terminal-output frame (skip the header)."""
     assert frame[0] == 0x01
@@ -35,10 +36,8 @@ def _frame_data(frame: bytes) -> bytes:
     off += 1 + frame[off]       # past paneId
     return frame[off:]
 
-
 def _type_of(msg: dict[str, Any] | bytes) -> str:
     return "terminal.output" if isinstance(msg, bytes) else msg["type"]
-
 
 def _fake_session_entry(session: app.Session, sid: str) -> tuple[int, int]:
     """Register a TerminalSession backed by a real PTY (TIOCSWINSZ needs a
@@ -56,7 +55,6 @@ def _fake_session_entry(session: app.Session, sid: str) -> tuple[int, int]:
     )
     session.terminals._sessions[sid] = entry
     return master, slave
-
 
 @pytest.mark.asyncio
 async def test_resize_drains_buffered_output_before_ack() -> None:
@@ -96,7 +94,6 @@ async def test_resize_drains_buffered_output_before_ack() -> None:
     # re-emitted the same output a second time.
     assert types.count("terminal.output") == 1
     assert sid not in svc._out_handles
-
 
 @pytest.mark.asyncio
 async def test_drain_output_noop_on_unknown_session() -> None:

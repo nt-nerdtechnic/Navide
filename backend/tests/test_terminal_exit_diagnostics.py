@@ -2,16 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import os
-import pty
+
 import time
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+# Real POSIX PTY behaviour: the module is skipped where these do not exist.
+pty = pytest.importorskip("pty")
+
 from agent_team_backend.osplat._posix import PosixTerminalHandle
 from agent_team_backend.terminals import TerminalService, TerminalSession
-
 
 @pytest.mark.asyncio
 async def test_terminal_exit_includes_lifetime_signal_and_probe(

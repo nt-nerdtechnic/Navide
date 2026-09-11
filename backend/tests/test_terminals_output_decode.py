@@ -7,31 +7,29 @@ conversation-log mirror (pipeline panes), where the per-session incremental
 decoder keeps a split multi-byte char from becoming U+FFFD in the log.
 """
 
-import fcntl
 import io
 import os
 from types import SimpleNamespace
 
 import pytest
 
+# Real POSIX PTY behaviour: the module is skipped where these do not exist.
+fcntl = pytest.importorskip("fcntl")
+
 from agent_team_backend.osplat._posix import PosixTerminalHandle
 from agent_team_backend.terminals import TerminalService
-
 
 def _nonblocking(fd: int) -> None:
     flags = fcntl.fcntl(fd, fcntl.F_GETFL)
     fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
 
-
 async def _emit(_event):  # EventSink stub — never actually called on this path
     return None
-
 
 def _cancel_pending_flush(svc: TerminalService, session_id: str) -> None:
     handle = svc._out_handles.pop(session_id, None)
     if handle:
         handle.cancel()
-
 
 @pytest.mark.asyncio
 async def test_raw_bytes_are_buffered_unmodified_across_a_split_char():
@@ -54,7 +52,6 @@ async def test_raw_bytes_are_buffered_unmodified_across_a_split_char():
         os.close(r)
         os.close(w)
 
-
 @pytest.mark.asyncio
 async def test_log_mirror_reassembles_a_split_multibyte_char():
     svc = TerminalService(_emit)
@@ -67,7 +64,6 @@ async def test_log_mirror_reassembles_a_split_multibyte_char():
     svc._mirror_to_log(session, payload[4:])
     assert "�" not in log_fp.getvalue()
     assert "中文字" in log_fp.getvalue()
-
 
 @pytest.mark.asyncio
 async def test_log_mirror_turns_genuinely_invalid_bytes_into_replacements():

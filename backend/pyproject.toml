@@ -29,6 +29,8 @@ dependencies = [
     "pywinpty>=3.0; sys_platform == 'win32'",
     "pyyaml>=6.0",
     "send2trash>=2.1.0",
+    # Windows has no system tz database; zoneinfo needs the package there.
+    "tzdata; sys_platform == 'win32'",
     "uvicorn[standard]>=0.32",
     "watchdog>=4.0",
     # Outbound WebSocket client for the Navide-Server link (server_link.py).

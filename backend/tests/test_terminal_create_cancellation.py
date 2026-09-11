@@ -8,10 +8,12 @@ from typing import Any
 
 import pytest
 
+# Real POSIX PTY behaviour: the module is skipped where these do not exist.
+pytest.importorskip("fcntl")
+
 from agent_team_backend.osplat import _posix
 from agent_team_backend import app, push_delivery
 from agent_team_backend import terminals as terminals_module
-
 
 class RecordingSocket:
     def __init__(self, *, fail: bool = False) -> None:
@@ -22,7 +24,6 @@ class RecordingSocket:
         if self.fail:
             raise RuntimeError("socket closed")
         self.sent.append(payload)
-
 
 class FakeTerminals:
     def __init__(self) -> None:
@@ -49,7 +50,6 @@ class FakeTerminals:
     def find_live_by_resume_id(self, *args: Any, **kwargs: Any) -> list[Any]:
         return []
 
-
 class BlockingAttribution:
     def __init__(self) -> None:
         self.started = threading.Event()
@@ -65,12 +65,10 @@ class BlockingAttribution:
     def unregister_pane(self, pane_id: str) -> None:
         self.unregistered.append(pane_id)
 
-
 def make_session(socket: RecordingSocket | None = None) -> app.Session:
     session = app.Session(socket or RecordingSocket())  # type: ignore[arg-type]
     session.terminals = FakeTerminals()  # type: ignore[assignment]
     return session
-
 
 @pytest.fixture(autouse=True)
 def terminal_create_stubs(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -89,7 +87,6 @@ def terminal_create_stubs(monkeypatch: pytest.MonkeyPatch) -> None:
     yield
     app._PTY_OWNERS.clear()
 
-
 def create_message(*, pane_id: str = "pane-1", generation: str = "gen-1", agent: str = "terminal") -> dict[str, Any]:
     return {
         "id": "create-request",
@@ -104,14 +101,12 @@ def create_message(*, pane_id: str = "pane-1", generation: str = "gen-1", agent:
         },
     }
 
-
 def cancel_message(*, pane_id: str = "pane-1", generation: str = "gen-1", msg_id: str = "cancel-request") -> dict[str, Any]:
     return {
         "id": msg_id,
         "type": "terminal.create.cancel",
         "payload": {"pane_id": pane_id, "create_generation": generation},
     }
-
 
 @pytest.mark.asyncio
 async def test_cancel_before_popen_tombstones_generation() -> None:
@@ -123,7 +118,6 @@ async def test_cancel_before_popen_tombstones_generation() -> None:
     assert session.terminals.created == []  # type: ignore[attr-defined]
     assert session.websocket.sent[0]["payload"]["cancelled"] is True  # type: ignore[attr-defined]
     assert session.websocket.sent[1]["error"]["code"] == "CREATE_CANCELLED"  # type: ignore[attr-defined]
-
 
 @pytest.mark.asyncio
 async def test_cancel_after_popen_waits_for_attribution_then_rolls_back(
@@ -151,7 +145,6 @@ async def test_cancel_after_popen_waits_for_attribution_then_rolls_back(
     assert "term-1" not in app._PTY_OWNERS
     assert terminals._sessions == {}
 
-
 @pytest.mark.asyncio
 async def test_send_failure_marks_dead_and_rolls_back_uncommitted_terminal() -> None:
     session = make_session(RecordingSocket(fail=True))
@@ -162,7 +155,6 @@ async def test_send_failure_marks_dead_and_rolls_back_uncommitted_terminal() -> 
     assert session.terminals.killed == [("term-1", True)]  # type: ignore[attr-defined]
     assert "term-1" not in app._PTY_OWNERS
 
-
 @pytest.mark.asyncio
 async def test_already_dead_session_rolls_back_before_commit() -> None:
     session = make_session()
@@ -172,7 +164,6 @@ async def test_already_dead_session_rolls_back_before_commit() -> None:
 
     assert session.websocket.sent == []  # type: ignore[attr-defined]
     assert session.terminals.killed == [("term-1", True)]  # type: ignore[attr-defined]
-
 
 @pytest.mark.asyncio
 async def test_handler_cancellation_during_attribution_rolls_back(
@@ -195,7 +186,6 @@ async def test_handler_cancellation_during_attribution_rolls_back(
     assert attribution.unregistered == ["pane-1"]
     assert "term-1" not in app._PTY_OWNERS
 
-
 @pytest.mark.asyncio
 async def test_repeated_cancel_is_idempotent() -> None:
     session = make_session()
@@ -205,7 +195,6 @@ async def test_repeated_cancel_is_idempotent() -> None:
 
     assert [message["payload"]["cancelled"] for message in session.websocket.sent] == [True, True]  # type: ignore[attr-defined]
     assert session.terminals.killed == []  # type: ignore[attr-defined]
-
 
 @pytest.mark.asyncio
 async def test_repeated_committed_create_reuses_same_terminal() -> None:
@@ -220,7 +209,6 @@ async def test_repeated_committed_create_reuses_same_terminal() -> None:
         "term-1",
     ]
 
-
 @pytest.mark.asyncio
 async def test_cancel_after_ack_does_not_kill_committed_terminal() -> None:
     session = make_session()
@@ -231,7 +219,6 @@ async def test_cancel_after_ack_does_not_kill_committed_terminal() -> None:
     assert session.websocket.sent[-1]["payload"]["cancelled"] is False  # type: ignore[attr-defined]
     assert session.terminals.killed == []  # type: ignore[attr-defined]
     assert "term-1" in session.terminals._sessions  # type: ignore[attr-defined]
-
 
 @pytest.mark.asyncio
 async def test_terminal_kill_requires_owner_and_clears_owner() -> None:
@@ -262,12 +249,10 @@ async def test_terminal_kill_requires_owner_and_clears_owner() -> None:
     assert second.terminals.killed == [(term.id, False)]  # type: ignore[attr-defined]
     assert term.id not in app._PTY_OWNERS
 
-
 # ── the push channel a create wires ─────────────────────────────────────────
 # A push channel is wired into the command before the spawn, but a spawn is not
 # a pane: it can still die, and the create can still be rolled back. What the
 # window is told, and when, has to follow the PTY rather than the wiring.
-
 
 @pytest.fixture()
 def push_events(monkeypatch: pytest.MonkeyPatch) -> list[str]:
@@ -283,13 +268,11 @@ def push_events(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     yield timeline
     push_delivery._reset_for_test()
 
-
 def _free_attribution(monkeypatch: pytest.MonkeyPatch) -> BlockingAttribution:
     attribution = BlockingAttribution()
     attribution.release.set()
     monkeypatch.setattr(app, "attribution", attribution)
     return attribution
-
 
 @pytest.mark.asyncio
 async def test_the_channel_is_announced_only_once_the_pty_exists(
@@ -308,7 +291,6 @@ async def test_the_channel_is_announced_only_once_the_pty_exists(
     await app.handle_message(session, create_message(agent="qwen"))
 
     assert push_events == ["pty", "push_state:True"]
-
 
 @pytest.mark.asyncio
 async def test_a_spawn_that_never_starts_announces_nothing_and_keeps_no_channel(
@@ -331,7 +313,6 @@ async def test_a_spawn_that_never_starts_announces_nothing_and_keeps_no_channel(
     # the pane id either — the watch file goes with it.
     assert push_delivery.get("pane-1") is None
 
-
 @pytest.mark.asyncio
 async def test_a_cancelled_create_takes_the_channel_with_it(
     push_events: list[str], monkeypatch: pytest.MonkeyPatch
@@ -350,7 +331,6 @@ async def test_a_cancelled_create_takes_the_channel_with_it(
     await asyncio.gather(create_task, cancel_task)
 
     assert push_delivery.get("pane-1") is None
-
 
 @pytest.mark.asyncio
 async def test_terminal_service_create_rolls_back_post_popen_setup_failure(

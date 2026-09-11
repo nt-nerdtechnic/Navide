@@ -11,24 +11,24 @@ would apply to the bytes we assert on.
 """
 
 import asyncio
-import fcntl
+
 import os
 from types import SimpleNamespace
 
 import pytest
 
+# Real POSIX PTY behaviour: the module is skipped where these do not exist.
+fcntl = pytest.importorskip("fcntl")
+
 from agent_team_backend.osplat._posix import PosixTerminalHandle
 from agent_team_backend.terminals import TerminalService
-
 
 def _nonblocking(fd: int) -> None:
     flags = fcntl.fcntl(fd, fcntl.F_GETFL)
     fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
 
-
 async def _emit(_event):  # EventSink stub — never actually called on this path
     return None
-
 
 async def test_small_write_completes_immediately():
     svc = TerminalService(_emit)
@@ -44,7 +44,6 @@ async def test_small_write_completes_immediately():
     finally:
         os.close(r)
         os.close(w)
-
 
 async def test_write_survives_eagain_without_data_loss():
     svc = TerminalService(_emit)
@@ -77,7 +76,6 @@ async def test_write_survives_eagain_without_data_loss():
         svc._unwatch_writable(session)
         os.close(r)
         os.close(w)
-
 
 async def test_closed_session_write_is_noop():
     svc = TerminalService(_emit)
