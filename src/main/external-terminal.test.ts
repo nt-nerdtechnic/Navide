@@ -12,6 +12,9 @@ import { spawn } from 'node:child_process'
 import { normalizePlatformId, setPlatformId, type PlatformId } from '../shared/osplat'
 import * as terminal from './external-terminal'
 
+// The real filesystem the suite runs on: NTFS has no executable bit to withhold.
+const hostIsWindows = normalizePlatformId(process.platform) === 'win32'
+
 type FakeChild = EventEmitter & { unref: ReturnType<typeof vi.fn> }
 
 // Created at spawn() time, never ahead of it: the event fires on a microtask,
@@ -68,16 +71,17 @@ describe('findOnPath', () => {
   })
 
   it('finds an executable that is present', () => {
-    // `sh` exists on every POSIX machine the suite runs on.
-    const found = terminal.findOnPath('sh', '/bin:/usr/bin')
-    expect(found === '/bin/sh' || found === '/usr/bin/sh').toBe(true)
+    on('darwin')
+    const dir = binDirWith('tool')
+    expect(terminal.findOnPath('tool', dir)).toBe(join(dir, 'tool'))
   })
 
   it('skips empty PATH segments instead of probing the cwd', () => {
     expect(terminal.findOnPath('sh', '::/nonexistent::')).toBeNull()
   })
 
-  it('requires the executable bit on POSIX', () => {
+  // chmod cannot withhold an executable bit NTFS does not have.
+  it.skipIf(hostIsWindows)('requires the executable bit on POSIX', () => {
     on('linux')
     expect(terminal.findOnPath('tool', plainDirWith('tool'))).toBeNull()
   })

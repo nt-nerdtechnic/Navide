@@ -2,10 +2,14 @@ import * as fs from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { normalizePlatformId } from '../../shared/osplat'
 import type { GitStorageLifecycleFileOps } from './gitStorageLifecycle'
 import { GitStorageLifecycleSelector } from './gitStorageLifecycle'
 
 const roots: string[] = []
+
+// The real filesystem the suite runs on: NTFS refuses to fsync a directory handle.
+const hostIsWindows = normalizePlatformId(process.platform) === 'win32'
 
 afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
@@ -62,7 +66,8 @@ describe('Git storage lifecycle selector', () => {
     expect(JSON.parse(fs.readFileSync(recordPath, 'utf8')).packageVersion).toBe('1.0.0')
   })
 
-  it('keeps a complete new selector when the parent directory flush fails', () => {
+  // The directory flush is skipped on Windows, so there is no second fsync to fail.
+  it.skipIf(hostIsWindows)('keeps a complete new selector when the parent directory flush fails', () => {
     const root = fs.mkdtempSync(join(tmpdir(), 'navide-git-lifecycle-'))
     roots.push(root)
     const recordPath = join(root, 'lifecycle.json')

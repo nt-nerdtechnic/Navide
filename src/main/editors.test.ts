@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
+import { delimiter, join, sep } from 'node:path'
 import { normalizePlatformId, setPlatformId } from '../shared/osplat'
 import {
   BUILT_IN_EDITORS,
@@ -173,35 +174,43 @@ describe('expandTemplate', () => {
   })
 })
 
+// PATH entries and hits are built with the host's own separators so the same
+// expectations hold on Windows, where `join` answers with backslashes and
+// PATH is `;`-separated.
+const optBin = join(sep, 'opt', 'bin')
+const usrBin = join(sep, 'usr', 'bin')
+const searchPath = [optBin, usrBin].join(delimiter)
+
 describe('whichIn', () => {
   const exists = (paths: string[]) => (p: string): boolean => paths.includes(p)
   const always = (): boolean => true
 
   it('returns the first PATH hit', () => {
-    const hit = whichIn('code', '/opt/bin:/usr/bin', exists(['/usr/bin/code', '/opt/bin/other']), always)
-    expect(hit).toBe('/usr/bin/code')
+    const hit = whichIn('code', searchPath, exists([join(usrBin, 'code'), join(optBin, 'other')]), always)
+    expect(hit).toBe(join(usrBin, 'code'))
   })
 
   it('prefers earlier PATH entries', () => {
-    const hit = whichIn('code', '/opt/bin:/usr/bin', exists(['/opt/bin/code', '/usr/bin/code']), always)
-    expect(hit).toBe('/opt/bin/code')
+    const hit = whichIn('code', searchPath, exists([join(optBin, 'code'), join(usrBin, 'code')]), always)
+    expect(hit).toBe(join(optBin, 'code'))
   })
 
   it('returns null when nothing is found', () => {
-    expect(whichIn('code', '/opt/bin:/usr/bin', exists([]), always)).toBeNull()
+    expect(whichIn('code', searchPath, exists([]), always)).toBeNull()
   })
 
   it('requires the executable bit', () => {
-    expect(whichIn('code', '/usr/bin', exists(['/usr/bin/code']), () => false)).toBeNull()
+    expect(whichIn('code', usrBin, exists([join(usrBin, 'code')]), () => false)).toBeNull()
   })
 
   it('accepts an absolute name directly', () => {
-    expect(whichIn('/custom/code', '', exists(['/custom/code']), always)).toBe('/custom/code')
-    expect(whichIn('/custom/code', '', exists([]), always)).toBeNull()
+    const custom = join(sep, 'custom', 'code')
+    expect(whichIn(custom, '', exists([custom]), always)).toBe(custom)
+    expect(whichIn(custom, '', exists([]), always)).toBeNull()
   })
 
   it('tolerates an empty PATH', () => {
-    expect(whichIn('code', '', exists(['/usr/bin/code']), always)).toBeNull()
+    expect(whichIn('code', '', exists([join(usrBin, 'code')]), always)).toBeNull()
   })
 
   describe('on Windows', () => {
@@ -211,22 +220,24 @@ describe('whichIn', () => {
     // name that works from a shell there names nothing on disk.
     it('resolves a bare name through its PATHEXT suffix', () => {
       setPlatformId('win32')
-      expect(whichIn('code', '/opt/bin', exists(['/opt/bin/code.cmd']), always)).toBe('/opt/bin/code.cmd')
-      expect(whichIn('cursor', '/opt/bin', exists(['/opt/bin/cursor.exe']), always)).toBe(
-        '/opt/bin/cursor.exe'
+      expect(whichIn('code', optBin, exists([join(optBin, 'code.cmd')]), always)).toBe(
+        join(optBin, 'code.cmd')
+      )
+      expect(whichIn('cursor', optBin, exists([join(optBin, 'cursor.exe')]), always)).toBe(
+        join(optBin, 'cursor.exe')
       )
     })
 
     it('prefers the bare name when both exist', () => {
       setPlatformId('win32')
-      expect(whichIn('code', '/opt/bin', exists(['/opt/bin/code', '/opt/bin/code.cmd']), always)).toBe(
-        '/opt/bin/code'
-      )
+      expect(
+        whichIn('code', optBin, exists([join(optBin, 'code'), join(optBin, 'code.cmd')]), always)
+      ).toBe(join(optBin, 'code'))
     })
 
     it('does not resolve suffixes off Windows', () => {
       setPlatformId('linux')
-      expect(whichIn('code', '/opt/bin', exists(['/opt/bin/code.cmd']), always)).toBeNull()
+      expect(whichIn('code', optBin, exists([join(optBin, 'code.cmd')]), always)).toBeNull()
     })
   })
 })
@@ -236,30 +247,32 @@ describe('resolveEditorCommand', () => {
   const always = (): boolean => true
 
   it('resolves from PATH', () => {
-    const hit = resolveEditorCommand(vscode, '/usr/bin', (p) => p === '/usr/bin/code', always)
-    expect(hit).toBe('/usr/bin/code')
+    const code = join(usrBin, 'code')
+    const hit = resolveEditorCommand(vscode, usrBin, (p) => p === code, always)
+    expect(hit).toBe(code)
   })
 
   it('falls back to the .app-bundled CLI when PATH has no hit', () => {
     // The common macOS case: VS Code is installed but its shell command was
     // never added to PATH (that is a separate opt-in step).
     const bundled = '/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code'
-    const hit = resolveEditorCommand(vscode, '/usr/bin', (p) => p === bundled, always)
+    const hit = resolveEditorCommand(vscode, usrBin, (p) => p === bundled, always)
     expect(hit).toBe(bundled)
   })
 
   it('returns null when the editor is not installed at all', () => {
-    expect(resolveEditorCommand(vscode, '/usr/bin', () => false, always)).toBeNull()
+    expect(resolveEditorCommand(vscode, usrBin, () => false, always)).toBeNull()
   })
 })
 
 describe('detectEditors', () => {
   it('reports availability per editor', () => {
-    const found = detectEditors('/usr/bin', (p) => p === '/usr/bin/cursor', () => true)
+    const cursor = join(usrBin, 'cursor')
+    const found = detectEditors(usrBin, (p) => p === cursor, () => true)
     expect(found.map((e) => e.id).sort()).toEqual(['cursor', 'vscode'])
     expect(found.find((e) => e.id === 'cursor')).toEqual({
       id: 'cursor',
-      command: '/usr/bin/cursor',
+      command: cursor,
       available: true
     })
     expect(found.find((e) => e.id === 'vscode')).toEqual({

@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs'
-import { join, win32 } from 'node:path'
+import { posix, win32 } from 'node:path'
 
 // Zero-flash startup settings: the renderer needs theme/language before first
 // paint, so the main process reads the backend-owned ui_settings.json
@@ -34,6 +34,10 @@ export interface BackendDataDirInputs {
  */
 export function resolveBackendDataDir(inputs: BackendDataDirInputs): string {
   const { envOverride, isPackaged, appDataPath, platform, homeDir, xdgDataHome, appData } = inputs
+  // The path module of the platform asked about, not the host's: a darwin or
+  // Linux data dir is always a POSIX path and a Windows one always a Windows
+  // path, whichever host a test pins the platform from.
+  const { join } = platform === 'win32' ? win32 : posix
   if (envOverride) {
     // Python-side does expanduser(); cover the common ~ / ~/ forms.
     if (envOverride === '~') return homeDir
@@ -46,10 +50,8 @@ export function resolveBackendDataDir(inputs: BackendDataDirInputs): string {
     // %APPDATA%\Agent-Team, exactly what the backend's
     // osplat.paths.app_support_dir("Agent-Team") answers on Windows: the
     // variable when set, its documented location under the profile otherwise.
-    // win32.join so the answer is a Windows path even when a test pins the
-    // platform from a POSIX host.
-    const base = appData || win32.join(homeDir, 'AppData', 'Roaming')
-    return win32.join(base, 'Agent-Team')
+    const base = appData || join(homeDir, 'AppData', 'Roaming')
+    return join(base, 'Agent-Team')
   }
   const base = xdgDataHome || join(homeDir, '.local', 'share')
   return join(base, 'Agent-Team')

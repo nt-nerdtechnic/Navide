@@ -23,7 +23,7 @@ import {
 } from './pluginInstalledTrust'
 import { canonicalTrustJson, type RegistryPackageEnvelope, type RegistryTrustMetadata } from './pluginRegistryTrust'
 import { defaultInstallerDeps, type InstallerTrustConfig } from './pluginInstaller'
-import type { PluginActivationCatalogEntry } from './installedPlugins'
+import { backendEntryOnDisk, type PluginActivationCatalogEntry } from './installedPlugins'
 import { projectBackendPluginActivationCatalog } from './pluginBackendActivationCatalog'
 import { makeZip } from './zipFixture'
 import { PluginCapabilityGrantStore } from './pluginCapabilityGrantStore'
@@ -115,6 +115,12 @@ function buildReservedPkg(): { bytes: Uint8Array; digest: string } {
   return { bytes, digest: sha256Hex(bytes) }
 }
 
+// The manifest names its backend entry in wire form (`backend/entry`); on
+// disk the Host looks for the platform's executable beside it, which on a
+// Windows host is `backend/entry.exe`. The fixture ships both so the
+// installer's wire check and the on-disk check pass on whichever host runs it.
+const BACKEND_ENTRY_ON_DISK = backendEntryOnDisk('backend/entry')
+
 function buildBackendPkg(): { bytes: Uint8Array; digest: string } {
   const manifest = JSON.stringify({
     schemaVersion: 2,
@@ -127,13 +133,11 @@ function buildBackendPkg(): { bytes: Uint8Array; digest: string } {
     marketplace: { description: 'Demo backend', license: 'MIT' },
     backend: { entry: 'backend/entry', protocolVersion: 1, activation: 'startup' },
   })
+  const entry = { data: Buffer.from([0x7f, 0x45, 0x4c, 0x46]), unixMode: 0o100755 }
   const zip = makeZip([
     { name: 'manifest.json', data: manifest },
-    {
-      name: 'backend/entry',
-      data: Buffer.from([0x7f, 0x45, 0x4c, 0x46]),
-      unixMode: 0o100755,
-    },
+    { name: 'backend/entry', ...entry },
+    ...(BACKEND_ENTRY_ON_DISK === 'backend/entry' ? [] : [{ name: BACKEND_ENTRY_ON_DISK, ...entry }]),
   ])
   const bytes = new Uint8Array(zip)
   return { bytes, digest: sha256Hex(bytes) }
@@ -1199,7 +1203,7 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
             packageDir: join(root, 'acme.demo'),
             artifactDigest: digest,
             backend: {
-              entryFile: join(root, 'acme.demo', 'backend', 'entry'),
+              entryFile: join(root, 'acme.demo', BACKEND_ENTRY_ON_DISK),
               protocolVersion: 1,
               activation: 'startup',
             },
@@ -1325,7 +1329,7 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
       manager.registerDescriptor(previousDescriptor)
       manager.registerBackendActivation({
         pluginId: 'acme.demo', packageVersion: '1.0.0', packageDir: previousDescriptor.packageDir!,
-        entryFile: join(root, 'acme.demo', 'backend', 'entry'), protocolVersion: 1,
+        entryFile: join(root, 'acme.demo', BACKEND_ENTRY_ON_DISK), protocolVersion: 1,
         activation: 'startup', approvedMethods: ['fixture.echo'], approvedEvents: [],
       })
       installFetch(signedDetail(digest), bytes, digest)
@@ -1382,7 +1386,7 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
       })
       const backend = {
         pluginId: 'acme.demo', packageVersion: '1.0.0', packageDir,
-        entryFile: join(packageDir, 'backend', 'entry'), protocolVersion: 1 as const,
+        entryFile: join(packageDir, BACKEND_ENTRY_ON_DISK), protocolVersion: 1 as const,
         activation: 'startup' as const, approvedMethods: ['fixture.echo'], approvedEvents: [],
       }
       manager.registerBackendActivation(backend)
@@ -1442,7 +1446,7 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
       manager.registerDescriptor(descriptor)
       const backend = {
         pluginId: 'acme.demo', packageVersion: '1.0.0', packageDir: descriptor.packageDir,
-        entryFile: join(descriptor.packageDir, 'backend', 'entry'), protocolVersion: 1 as const,
+        entryFile: join(descriptor.packageDir, BACKEND_ENTRY_ON_DISK), protocolVersion: 1 as const,
         activation: 'startup' as const, approvedMethods: ['fixture.echo'], approvedEvents: [],
       }
       manager.registerBackendActivation(backend)

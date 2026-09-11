@@ -7291,7 +7291,7 @@ describe('first-party Git private bridge', () => {
     })
     expect(sent).toEqual([{
       channel: 'git:contribution-action',
-      args: [{ operation: 'open_workspace', payload: { path: '/picked/workspace' } }],
+      args: [{ operation: 'open_workspace', payload: { path: resolve('/picked/workspace') } }],
     }])
 
     await expect(call(view, 'git.contribution', {

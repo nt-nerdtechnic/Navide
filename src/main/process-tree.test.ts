@@ -56,6 +56,8 @@ describe('killProcessTree', () => {
   let kill: ReturnType<typeof spyOnKill>
 
   beforeEach(() => {
+    // The ps-snapshot arm under test is the POSIX one, whichever host runs it.
+    setPlatformId('darwin')
     execFileSync.mockReset()
     execFileSync.mockReturnValue(SNAPSHOT)
     kill = spyOnKill()
@@ -63,6 +65,7 @@ describe('killProcessTree', () => {
 
   afterEach(() => {
     kill.mockRestore()
+    setPlatformId(normalizePlatformId(process.platform))
   })
 
   it('signals every process in the tree, not just the handle', () => {

@@ -7,6 +7,9 @@ import { fsyncFileSync, syncDirectory, syncDirectorySync, type SyncFileOps } fro
 import { NodePluginStorageFileSystem } from './pluginStorage'
 import { PluginCapabilityGrantStore } from './pluginCapabilityGrantStore'
 
+// The real filesystem the suite runs on: NTFS refuses to fsync a directory handle.
+const hostIsWindows = normalizePlatformId(process.platform) === 'win32'
+
 // Every fsync the module under test issues, classified by what the descriptor
 // points at, so a test can assert "the file was flushed, the directory was not".
 const flushed = vi.hoisted(() => ({ kinds: [] as Array<'file' | 'directory'> }))
@@ -111,7 +114,8 @@ describe('fsSync', () => {
   })
 
   describe('syncDirectory', () => {
-    it('flushes the directory off Windows', async () => {
+    // Pinning linux makes the code flush for real, which NTFS answers with EPERM.
+    it.skipIf(hostIsWindows)('flushes the directory off Windows', async () => {
       setPlatformId('linux')
       await syncDirectory(root)
       expect(opened.paths).toEqual([root])
