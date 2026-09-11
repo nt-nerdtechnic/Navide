@@ -235,12 +235,24 @@ class TestPaths:
         assert _linux.paths.home_env_var() == "HOME"
         assert _windows.paths.home_env_var() == "USERPROFILE"
 
+    # A quoted path reaches a program through the platform's own shell
+    # convention: POSIX apostrophes are literal characters to cmd.exe.
+    def test_quote_arg_follows_each_platforms_shell(self):
+        from agent_team_backend.osplat import _darwin, _linux, _windows
+
+        assert _darwin.paths.quote_arg("/tmp/a b") == "'/tmp/a b'"
+        assert _linux.paths.quote_arg("/tmp/a b") == "'/tmp/a b'"
+        assert _linux.paths.quote_arg("plain") == "plain"
+        assert _windows.paths.quote_arg(r"C:\Users\a b\x.exe") == r'"C:\Users\a b\x.exe"'
+        assert _windows.paths.quote_arg("plain") == "plain"
+
 
 class TestAskpassLauncher:
     """`GIT_ASKPASS` is exec'd by git with no shell: POSIX runs the script's
     shebang, Windows cannot exec a `.py` and needs a launcher around an
     interpreter."""
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="the exec bit does not exist on NTFS")
     def test_posix_returns_the_script_made_executable(self, tmp_path):
         from agent_team_backend.osplat import _darwin, _linux
 
@@ -315,7 +327,7 @@ class TestNoScatteredPlatformBranches:
             if "osplat" in path.parts:
                 continue  # the one place that is allowed to ask
             if _BRANCH_RE.search(path.read_text(encoding="utf-8")):
-                offenders.add(str(path.relative_to(root)))
+                offenders.add(path.relative_to(root).as_posix())
         new = offenders - PLATFORM_BRANCH_ALLOWLIST
         assert not new, (
             "these modules started branching on the platform; put the decision "

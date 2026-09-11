@@ -176,6 +176,16 @@ class Paths(Protocol):
         """
         ...
 
+    def quote_arg(self, arg: str) -> str:
+        """`arg` quoted as one word for a command line `shell_command` runs.
+
+        `shlex.quote` on POSIX; `subprocess.list2cmdline` on Windows, which
+        is the MSVCRT convention `cmd.exe` and every Windows program parse.
+        A path with a space quoted the POSIX way (`'C:\\a b'`) reaches a
+        Windows program with the apostrophes still attached.
+        """
+        ...
+
 
 class ResourceProbe(Protocol):
     """Per-process memory and CPU, read from the kernel without a subprocess.

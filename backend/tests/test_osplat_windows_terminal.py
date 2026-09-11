@@ -425,6 +425,93 @@ class TestHandle:
         await asyncio.sleep(0.02)
         assert calls == before
 
+    # ConPTY never closes the conout pipe on the child's behalf: the exit has
+    # to be watched and turned into EOF, or the session outlives its process.
+    async def test_child_exit_becomes_eof_while_conpty_keeps_the_pipe_open(
+        self, monkeypatch
+    ):
+        import threading
+
+        pty = _FakePTY(80, 24)
+        parked = threading.Event()  # ReadFile on a pipe nobody closes
+
+        def read(blocking: bool = False) -> str:
+            if pty.reads:
+                return pty.reads.pop(0)
+            parked.wait()
+            raise RuntimeError("I/O cancelled")
+
+        def cancel_io() -> bool:
+            pty.cancelled = True
+            parked.set()
+            return True
+
+        pty.read = read  # type: ignore[method-assign]
+        pty.cancel_io = cancel_io  # type: ignore[method-assign]
+        pty.reads = ["bye"]
+        exited = threading.Event()
+
+        class Kernel:
+            def WaitForSingleObject(self, handle, millis):
+                assert handle == 77
+                return _windows.WAIT_OBJECT_0 if exited.wait(millis / 1000) else WAIT_TIMEOUT
+
+        monkeypatch.setattr(_windows, "_kernel32", lambda: Kernel())
+        handle = _windows.WindowsTerminalHandle(pty, pty.pid, None, 77)
+        loop = asyncio.get_running_loop()
+        collected: list[bytes] = []
+        done = asyncio.Event()
+
+        def on_readable() -> None:
+            while True:
+                try:
+                    chunk = handle.read(64)
+                except BlockingIOError:
+                    return
+                if chunk is None:
+                    done.set()
+                    return
+                collected.append(chunk)
+
+        handle.start_reading(loop, on_readable)
+        await asyncio.sleep(0.05)
+        assert collected == [b"bye"] and not done.is_set()  # alive: no EOF invented
+        started = loop.time()
+        exited.set()
+        await asyncio.wait_for(done.wait(), 2)
+        assert loop.time() - started < 0.5
+        assert pty.cancelled
+        handle._watcher.join(1)
+        assert not handle._watcher.is_alive()
+
+    async def test_close_ends_the_exit_watcher_without_an_exit(self, monkeypatch):
+        import threading
+
+        pty = _FakePTY(80, 24)
+        parked = threading.Event()
+
+        def read(blocking: bool = False) -> str:
+            parked.wait()
+            raise RuntimeError("I/O cancelled")
+
+        pty.read = read  # type: ignore[method-assign]
+        pty.cancel_io = lambda: parked.set() or True  # type: ignore[method-assign]
+        monkeypatch.setattr(_windows, "_EXIT_WATCH_MS", 10)
+
+        class Kernel:
+            def WaitForSingleObject(self, handle, millis):
+                threading.Event().wait(millis / 1000)
+                return WAIT_TIMEOUT
+
+        monkeypatch.setattr(_windows, "_kernel32", lambda: Kernel())
+        monkeypatch.setattr(_windows.process_tree, "kill_tree", lambda pid, force: None)
+        handle = _windows.WindowsTerminalHandle(pty, pty.pid, None, 77)
+        handle.start_reading(asyncio.get_running_loop(), lambda: None)
+        handle.close()
+        handle._watcher.join(1)
+        handle._pump.join(1)
+        assert not handle._watcher.is_alive() and not handle._pump.is_alive()
+
     def test_read_without_data_blocks_and_none_at_eof(self):
         handle = _handle(_FakePTY(80, 24))
         with pytest.raises(BlockingIOError):

@@ -45,6 +45,7 @@ def askpass_launcher(helper_py: Path, python_exe: str | None) -> Path:
 # ---- appended: the members added for the Windows port ------------------------
 
 import os  # noqa: E402
+import shlex  # noqa: E402
 
 
 def executable_candidates(name: str) -> list[str]:
@@ -84,3 +85,7 @@ def symlinks_available() -> bool:
 
 def shell_command(command: str) -> list[str]:
     return ["/bin/sh", "-c", command]
+
+
+def quote_arg(arg: str) -> str:
+    return shlex.quote(arg)

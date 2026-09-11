@@ -32,6 +32,7 @@ from . import hook_drain
 from . import ws_auth
 from . import loop_watchdog
 from . import mem_probe
+from . import osplat
 from . import push_delivery
 from . import subagent_tracker
 from .analyzer import DEFAULT_MODEL as ANALYZER_DEFAULT_MODEL
@@ -1783,6 +1784,10 @@ async def health() -> dict[str, Any]:
 
 # Font mimes served inline (specimen @font-face fetch, /fs/page subresources).
 _FONT_MIMES = ("font/ttf", "font/otf", "font/woff", "font/woff2")
+# Windows' mimetypes table (the registry) knows none of these, so
+# `guess_type` would hand every font to the octet-stream branch there.
+for _mime, _ext in zip(_FONT_MIMES, (".ttf", ".otf", ".woff", ".woff2")):
+    mimetypes.add_type(_mime, _ext)
 
 
 def _serve_workspace_file(workspace: str, rel: str, *, allow_css: bool = False) -> FileResponse:
@@ -1936,7 +1941,9 @@ def _record_hook_file_write(
     root = os.path.realpath(ws_path)
     if resolved != root and not resolved.startswith(root + os.sep):
         return None
-    rel_path = os.path.relpath(resolved, root)
+    # Forward slashes, as `preview_record` over MCP stores them: the same
+    # file must land under one key on Windows too.
+    rel_path = Path(os.path.relpath(resolved, root)).as_posix()
     # The gate above stays the pane's workspace; only the database the row
     # lands in moves up to the project root.
     record_root = _preview_workspace(ws_path)
@@ -2448,7 +2455,7 @@ def _with_replaced_executable(command: Any, text: str, executable: str) -> Any:
     first_token = re.match(r"^\s*(?:'[^']*'|\"[^\"]*\"|\S+)", text)
     if first_token is None:
         return command
-    replaced = f"{text[:first_token.start()]}{shlex.quote(executable)}{text[first_token.end():]}"
+    replaced = f"{text[:first_token.start()]}{osplat.paths.quote_arg(executable)}{text[first_token.end():]}"
     if isinstance(command, list):
         updated = list(command)
         if updated:

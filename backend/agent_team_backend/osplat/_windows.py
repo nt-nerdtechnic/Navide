@@ -104,6 +104,7 @@ PROCESS_SET_QUOTA = 0x0100
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 SYNCHRONIZE = 0x00100000
 WAIT_OBJECT_0 = 0x00000000
+WAIT_TIMEOUT = 0x00000102
 INFINITE = 0xFFFFFFFF
 #: Exit code handed to TerminateProcess/TerminateJobObject.
 _TERMINATE_EXIT_CODE = 1
@@ -429,6 +430,12 @@ class _WindowsChild:
 #: Sleep between two consecutive empty reads while the child is still alive
 #: (the reader channel came back empty but the process has not gone yet).
 _PUMP_IDLE_S = 0.001
+#: How long the exit watcher waits per slice before re-checking `_closed`.
+_EXIT_WATCH_MS = 250
+#: Grace between the child's exit and cutting the pump's read: the conout
+#: pipe may still carry what the child wrote last, and the pump needs a
+#: moment to drain it.
+_EXIT_DRAIN_S = 0.05
 #: How long `watch_writable` waits before retrying a drain (see module doc).
 _WRITE_RETRY_S = 0.05
 
@@ -457,6 +464,8 @@ class WindowsTerminalHandle:
         self._paused = False
         self._scheduled = False
         self._pump: threading.Thread | None = None
+        self._process_handle = process_handle
+        self._watcher: threading.Thread | None = None
         self._write_retry: asyncio.TimerHandle | None = None
         # Input arrives as UTF-8 bytes and pywinpty wants text; a chunk that
         # ends mid-character keeps its tail here until the rest arrives.
@@ -492,8 +501,17 @@ class WindowsTerminalHandle:
                     name=f"conpty-pump-{self.pid}",
                     daemon=True,
                 )
+                if self._process_handle:
+                    self._watcher = threading.Thread(
+                        target=self._watch_exit,
+                        args=(self._pty, self._process_handle),
+                        name=f"conpty-exit-{self.pid}",
+                        daemon=True,
+                    )
         if start:
             self._pump.start()  # type: ignore[union-attr]
+            if self._watcher is not None:
+                self._watcher.start()
         else:
             self._notify()
 
@@ -538,6 +556,35 @@ class WindowsTerminalHandle:
             with self._lock:
                 self._eof = True
             self._notify()
+
+    def _watch_exit(self, pty: Any, process_handle: int) -> None:
+        """Worker: turn the child's exit into EOF on the output.
+
+        ConPTY keeps the conout pipe open until the pseudoconsole itself is
+        closed, so a child that exits leaves the pump parked in ReadFile for
+        good — POSIX gets its EOF from the kernel here, Windows has to make
+        one. Waits on the process handle in slices so `close()` is noticed;
+        anything but a timeout means the child is gone (`WAIT_FAILED` too:
+        `poll()` closes the handle once it has read the exit code). Then
+        gives the pump a moment to drain what the child wrote last and cuts
+        its read, which is the same unblocking `close()` relies on.
+        """
+        k = _kernel32()
+        while not self._closed:
+            if k.WaitForSingleObject(process_handle, _EXIT_WATCH_MS) != WAIT_TIMEOUT:
+                break
+        if self._closed:
+            return
+        time.sleep(_EXIT_DRAIN_S)
+        try:
+            pty.cancel_io()
+        except Exception:  # noqa: BLE001
+            pass
+        # The pump marks EOF itself once its read raises; this covers a read
+        # that returns instead, so the exit reaches the loop either way.
+        with self._lock:
+            self._eof = True
+        self._notify()
 
     def _enqueue(self, data: bytes) -> None:
         with self._lock:
@@ -938,6 +985,9 @@ class WindowsDiscoveryLayout(WindowsLayout):
 
     def shell_command(self, command: str) -> list[str]:
         return ["cmd.exe", "/d", "/s", "/c", command]
+
+    def quote_arg(self, arg: str) -> str:
+        return subprocess.list2cmdline([arg])
 
 
 class WindowsScheduler:

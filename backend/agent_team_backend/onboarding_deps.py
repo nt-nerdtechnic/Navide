@@ -311,11 +311,14 @@ def _install_method(resolved_path: str) -> str:
     """
     if not resolved_path:
         return ""
+    # Forward slashes on every platform, so the markers below match a
+    # Windows `realpath` too.
+    resolved_path = Path(resolved_path).as_posix()
     if "/node_modules/" in resolved_path:
         return "npm"
     if resolved_path.startswith(("/opt/homebrew/", "/usr/local/Cellar/")):
         return "homebrew"
-    home = str(Path.home())
+    home = Path.home().as_posix()
     if resolved_path.startswith(f"{home}/.local/share/"):
         return "native"
     if resolved_path.startswith(f"{home}/.") and "/bin/" in resolved_path:
@@ -484,8 +487,8 @@ def _same_npm_install(first: dict[str, Any], second: dict[str, Any], package: st
     if not package:
         return False
     marker = f"/node_modules/{package}/"
-    first_resolved = str(first.get("resolved_path") or "")
-    second_resolved = str(second.get("resolved_path") or "")
+    first_resolved = Path(str(first.get("resolved_path") or "")).as_posix()
+    second_resolved = Path(str(second.get("resolved_path") or "")).as_posix()
     if marker not in first_resolved or marker not in second_resolved:
         return False
     return first_resolved.split(marker, 1)[0] == second_resolved.split(marker, 1)[0]
@@ -494,11 +497,17 @@ def _same_npm_install(first: dict[str, Any], second: dict[str, Any], package: st
 def _candidate_removal(candidate: dict[str, Any], dep: Dep, version: str) -> dict[str, str]:
     """Return a confirmed removal command only when ownership is unambiguous."""
     package = dep.npm_package
-    resolved = str(candidate.get("resolved_path") or "")
+    resolved = Path(str(candidate.get("resolved_path") or "")).as_posix()
     path = str(candidate.get("path") or "")
     package_marker = f"/node_modules/{package}/" if package else ""
-    npm = Path(path).parent / "npm"
-    if not package_marker or package_marker not in resolved or not npm.is_file() or not os.access(npm, os.X_OK):
+    # The npm beside the binary: `npm` on POSIX, `npm.cmd` on Windows.
+    npm = None
+    for filename in osplat.paths.executable_candidates("npm"):
+        entry = Path(path).parent / filename
+        if entry.is_file() and osplat.paths.is_executable(entry):
+            npm = entry
+            break
+    if not package_marker or package_marker not in resolved or npm is None:
         return {"manager": "", "command": ""}
 
     uninstall = f"{shlex.quote(str(npm))} uninstall -g {shlex.quote(package)}"

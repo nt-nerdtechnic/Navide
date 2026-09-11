@@ -98,6 +98,9 @@ class DarwinLayout(DarwinPaths):
     def shell_command(self, command: str) -> list[str]:
         return _posix_paths.shell_command(command)
 
+    def quote_arg(self, arg: str) -> str:
+        return _posix_paths.quote_arg(arg)
+
 
 paths = DarwinLayout()
 secret_files = _posix_secrets.secret_files

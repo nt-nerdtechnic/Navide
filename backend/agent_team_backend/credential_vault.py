@@ -702,7 +702,7 @@ class CredentialVault:
             if slot_id is None:
                 secret = _read_text(self._live_file(agent_key))
             else:
-                secret = _read_text(
+                secret = _read_private_text(
                     self.slot_dir(agent_key, slot_id) / _SLOT_FILES[agent_key]
                 )
             spec = _cli_vendor_spec(agent_key)

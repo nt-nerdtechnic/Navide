@@ -476,7 +476,7 @@ def _pane_cwd_match(self, usage, pane_cwd, pane_id):
     # Claude names its per-project dir after the encoded cwd; the file path
     # carries it.
     expected_dir = encode_claude_cwd(pane_cwd)
-    return f"/{expected_dir}/" in usage.file_path
+    return expected_dir in Path(usage.file_path).parts
 
 
 ClaudeLogReader.pane_cwd_match = _pane_cwd_match

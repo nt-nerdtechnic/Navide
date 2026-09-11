@@ -531,7 +531,7 @@ def _workspace_match(self, usage, ws_path, owner_workspace=None):
     if owner_workspace is not None and owner_workspace == ws_path:
         return True
     hash_dir = cursor_project_hash(ws_path)
-    if hash_dir and f"/{hash_dir}/" in usage.file_path:
+    if hash_dir and hash_dir in Path(usage.file_path).parts:
         return True
     return False
 
@@ -541,7 +541,7 @@ def _pane_cwd_match(self, usage, pane_cwd, pane_id):
     # path instead. Only the claim fallbacks use this — marker binding never
     # depends on it.
     hash_dir = cursor_project_hash(pane_cwd)
-    return bool(hash_dir) and f"/{hash_dir}/" in usage.file_path
+    return bool(hash_dir) and hash_dir in Path(usage.file_path).parts
 
 
 CursorLogReader.binds_shared_db_by_marker = True

@@ -905,7 +905,9 @@ async def list_worktrees(workspace_path: str) -> list[dict[str, Any]]:
             if current:
                 worktrees.append(current)
             current = _blank()
-            current["path"] = line[len("worktree "):].strip()
+            # git prints `C:/Users/...` on Windows; normalise so the path
+            # compares equal to the OS-native one the caller holds.
+            current["path"] = os.path.normpath(line[len("worktree "):].strip())
             current["is_main"] = first
             first = False
         elif not current:

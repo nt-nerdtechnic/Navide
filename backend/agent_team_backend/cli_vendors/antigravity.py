@@ -22,7 +22,7 @@ import re
 import sqlite3
 from collections import Counter
 from pathlib import Path
-from urllib.parse import unquote
+from urllib.request import url2pathname
 
 import asyncio
 import base64
@@ -67,7 +67,8 @@ def _extract_cwd(text: str) -> str:
     """
     counts: Counter[str] = Counter()
     for m in _FILE_URI_RE.finditer(text):
-        counts[unquote(m.group(1)).rstrip("/")] += 1
+        # Also drops the leading "/" a `file:///C:/...` URI keeps on Windows.
+        counts[url2pathname(m.group(1)).rstrip("/")] += 1
     if not counts:
         return ""
     candidates = sorted(

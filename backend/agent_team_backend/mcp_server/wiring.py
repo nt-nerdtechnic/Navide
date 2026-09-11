@@ -51,7 +51,6 @@ import json
 import logging
 import os
 import secrets
-import shlex
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -61,7 +60,7 @@ from agent_team_backend.applog import app_data_dir, backend_port_file
 from agent_team_backend.cli_vendors import registry
 from agent_team_backend.cli_vendors.base import McpWiring, mcp_document, mcp_entry
 from agent_team_backend.mcp_server import auth, pane_home
-from agent_team_backend.osplat import secret_files
+from agent_team_backend.osplat import paths, secret_files
 
 log = logging.getLogger("agent_team_backend.mcp_server.wiring")
 
@@ -433,7 +432,7 @@ def wire_command(
             if not config.is_file():
                 return command
             value = str(config)
-        return _append_to_command(command, f"{wiring.flag} {shlex.quote(value)}")
+        return _append_to_command(command, f"{wiring.flag} {paths.quote_arg(value)}")
     if wiring.config_env:
         if env is not None and wiring.config_env not in env:
             env[wiring.config_env] = config_json(agent_key, port, pane_id)

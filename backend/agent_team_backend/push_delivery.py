@@ -33,7 +33,6 @@ import json
 import logging
 import os
 import secrets
-import shlex
 import socket
 import threading
 from collections.abc import Callable, Iterable
@@ -44,7 +43,7 @@ from typing import Any
 import httpx
 
 from .applog import app_data_dir
-from .osplat import secret_files, terminal_backend
+from .osplat import paths, secret_files, terminal_backend
 from .cli_vendors import registry
 from .cli_vendors.base import PushChannel
 from .pending_registry import TIMEOUT, PendingRegistry
@@ -236,7 +235,7 @@ def wire_spawn(
             command = _append_to_command(command, f"{channel.port_flag} {state.port}")
             if channel.host_flag:
                 command = _append_to_command(
-                    command, f"{channel.host_flag} {shlex.quote(channel.host)}"
+                    command, f"{channel.host_flag} {paths.quote_arg(channel.host)}"
                 )
             if channel.password_env and env is not None:
                 # Only when the CLI's own TUI can authenticate against it; a
@@ -251,7 +250,7 @@ def wire_spawn(
             path = _prepare_input_file(pane_id, channel)
             state.input_file = str(path)
             command = _append_to_command(
-                command, f"{channel.input_file_flag} {shlex.quote(str(path))}"
+                command, f"{channel.input_file_flag} {paths.quote_arg(str(path))}"
             )
         # KIND_HOOK needs nothing at spawn: the CLI's hook arms the channel.
     except Exception as err:  # noqa: BLE001 — a spawn is never broken over this
