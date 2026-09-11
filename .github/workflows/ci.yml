@@ -162,10 +162,8 @@ jobs:
 
   frontend-windows:
     name: Frontend checks and build (Windows)
-    # Discovery gate for the Windows port: the same typecheck / vitest / build
-    # as the macOS and Linux jobs, run where process.platform is "win32".
-    # Not yet wired into the aggregate gate — it joins lint-and-test once it
-    # is green, so a red Windows run cannot block macOS/Linux work meanwhile.
+    # The same typecheck / vitest / build as the macOS and Linux jobs, run
+    # where process.platform is "win32".
     runs-on: windows-latest
     timeout-minutes: 40
 
@@ -282,17 +280,14 @@ jobs:
 
   backend-windows:
     name: Backend checks (Windows)
-    # Discovery gate for the Windows port. Import first: until the POSIX-only
-    # modules sit behind osplat the app does not even load here, and that is a
-    # clearer signal than a wall of collection errors. Not yet wired into the
-    # aggregate gate (see frontend-windows).
+    # Same suite as the macOS and Linux jobs, where os.name is "nt". Import
+    # first: until the POSIX-only modules sit behind osplat the app does not
+    # even load here, and that is a clearer signal than a wall of collection
+    # errors. pytest-timeout is the guard against a test that waits on a
+    # POSIX-only thing forever; the runner has no SIGALRM, so the thread
+    # method, which ends the whole run at the first timeout.
     runs-on: windows-latest
-    timeout-minutes: 40
-    # contents: write only so the detached test runner can commit its log to
-    # the ci-logs branch each minute (see backend/ci_windows_tests.py); the
-    # runner agent goes dark mid-suite and nothing else survives that.
-    permissions:
-      contents: write
+    timeout-minutes: 25
 
     steps:
       - name: Check out source
@@ -319,75 +314,8 @@ jobs:
       - name: Backend imports on Windows
         run: uv --project backend run --locked python -c "import agent_team_backend.app"
 
-      - name: Collect the suite on Windows
-        # Collection is where the run stalls, and the step never ended even
-        # after python was killed: something spawned during collection keeps
-        # the step's stdout open. So the interpreter writes to a file in the
-        # background, bash polls it, prints the tail (importtime names the
-        # last module imported; the faulthandler dumps every thread at 240s),
-        # lists what is still running, and tears the tree down itself.
-        shell: bash
-        run: |
-          backend/.venv/Scripts/python.exe -X importtime -X faulthandler -c "import faulthandler, sys; faulthandler.dump_traceback_later(240, exit=True); import pytest; sys.exit(pytest.main(['backend/tests', '--collect-only', '-q', '-p', 'no:cacheprovider']))" > collect.log 2>&1 &
-          pid=$!
-          for i in $(seq 1 60); do kill -0 "$pid" 2>/dev/null || break; sleep 5; done
-          echo "--- python alive after wait: $(kill -0 "$pid" 2>/dev/null && echo yes || echo no)"
-          echo "--- processes still around:"
-          tasklist //FO CSV | grep -iE "python|node|winpty|conhost|git|uv\.exe|pytest|cmd\.exe|powershell" || true
-          echo "--- last 120 lines of collect.log:"
-          tail -n 120 collect.log
-          echo "--- collected items: $(grep -cE '::' collect.log || true)"
-          taskkill //F //T //PID "$pid" >/dev/null 2>&1 || true
-
-      - name: Start the backend tests
-        # backend/ci_windows_tests.py --detach starts a copy of itself with a
-        # log file as its only inherited handle and returns at once. The copy
-        # joins a kill-on-close Job Object, runs pytest with the same handle
-        # restriction, reports the job's process list every minute and writes
-        # the exit code to ci-windows-tests.done. Nothing it or any test
-        # spawns can hold a step's stdout pipe: that is what hung rounds 1-15
-        # and took the log with it.
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: backend/.venv/Scripts/python.exe backend/ci_windows_tests.py --detach
-
       - name: Backend tests
-        # pwsh, not bash: Start-Sleep is in-process, so this step has no
-        # children at all and must end when the marker appears or at the cap.
-        shell: pwsh
-        timeout-minutes: 25
-        run: |
-          $deadline = (Get-Date).AddMinutes(24)
-          $seen = 0
-          while (-not (Test-Path ci-windows-tests.done) -and (Get-Date) -lt $deadline) {
-            Start-Sleep -Seconds 30
-            if (Test-Path ci-windows-tests.log) {
-              $lines = @(Get-Content ci-windows-tests.log)
-              if ($lines.Count -gt $seen) { $lines[$seen..($lines.Count - 1)] | ForEach-Object { Write-Host $_ }; $seen = $lines.Count }
-            }
-          }
-          Write-Host "--- full runner log:"
-          if (Test-Path ci-windows-tests.log) { Get-Content ci-windows-tests.log } else { Write-Host "(no ci-windows-tests.log)" }
-          if (-not (Test-Path ci-windows-tests.done)) { Write-Host "--- runner still going at the cap"; exit 1 }
-          exit [int](Get-Content ci-windows-tests.done)
-
-      - name: Report the backend test log
-        # The job's log blob is uploaded when the job ends, so a hang in any
-        # step loses every step's output (round 14: all eight green steps
-        # gone). This step must not hang either: pwsh, no children.
-        if: always()
-        shell: pwsh
-        run: |
-          Write-Host "--- processes still around:"
-          Get-Process | Where-Object { $_.ProcessName -match 'python|node|winpty|conhost|git|uv|pytest|cmd|powershell|pwsh|claude|codex' } | ForEach-Object { Write-Host ("{0} ({1})" -f $_.ProcessName, $_.Id) }
-          if (Test-Path pytest.log) {
-            $lines = @(Get-Content pytest.log)
-            Write-Host ("--- results so far: {0}" -f @($lines | Where-Object { $_ -match ' (PASSED|FAILED|SKIPPED|ERROR|XFAIL|XPASS)' }).Count)
-            Write-Host "--- last 200 lines of pytest.log:"
-            $lines | Select-Object -Last 200 | ForEach-Object { Write-Host $_ }
-            $lines | Where-Object { $_ -match '^(FAILED|ERROR) ' } | Select-Object -First 100 | ForEach-Object { Write-Host $_ }
-          } else { Write-Host "(no pytest.log)" }
+        run: uv --project backend run --locked pytest backend/tests --timeout=90 --timeout-method=thread -o faulthandler_timeout=120
 
   plans:
     name: Packaged Plans checks (macOS)
@@ -475,7 +403,7 @@ jobs:
     # Preserve the existing required-check name for branch protection.
     name: Lint and test
     if: ${{ always() }}
-    needs: [frontend, frontend-linux, backend, backend-linux, plans, registry, dependency-audit]
+    needs: [frontend, frontend-linux, frontend-windows, backend, backend-linux, backend-windows, plans, registry, dependency-audit]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -483,16 +411,20 @@ jobs:
         env:
           FRONTEND_RESULT: ${{ needs.frontend.result }}
           FRONTEND_LINUX_RESULT: ${{ needs['frontend-linux'].result }}
+          FRONTEND_WINDOWS_RESULT: ${{ needs['frontend-windows'].result }}
           BACKEND_RESULT: ${{ needs.backend.result }}
           BACKEND_LINUX_RESULT: ${{ needs['backend-linux'].result }}
+          BACKEND_WINDOWS_RESULT: ${{ needs['backend-windows'].result }}
           PLANS_RESULT: ${{ needs.plans.result }}
           REGISTRY_RESULT: ${{ needs.registry.result }}
           AUDIT_RESULT: ${{ needs['dependency-audit'].result }}
         run: |
           test "$FRONTEND_RESULT" = success
           test "$FRONTEND_LINUX_RESULT" = success
+          test "$FRONTEND_WINDOWS_RESULT" = success
           test "$BACKEND_RESULT" = success
           test "$BACKEND_LINUX_RESULT" = success
+          test "$BACKEND_WINDOWS_RESULT" = success
           test "$PLANS_RESULT" = success
           test "$REGISTRY_RESULT" = success
           test "$AUDIT_RESULT" = success
