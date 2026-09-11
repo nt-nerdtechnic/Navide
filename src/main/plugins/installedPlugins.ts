@@ -17,6 +17,7 @@ import { isWindows } from '../../shared/osplat'
 import { verifyEd25519 } from './pluginVerify'
 import {
   assertManifestFiles,
+  backendEntryOnDisk,
   isManifestV2,
   manifestCapabilityPolicy,
   manifestCapabilities,
@@ -36,6 +37,7 @@ import type { ManifestPermissionsSummary } from '../../shared/executionPolicy'
 
 export {
   assertManifestFiles,
+  backendEntryOnDisk,
   isManifestV2,
   manifestCapabilityPolicy,
   manifestCapabilities,
@@ -59,19 +61,6 @@ function readUtf8File(path: string, label: string): string {
       `${label} is not valid UTF-8: ${error instanceof Error ? error.message : String(error)}`
     )
   }
-}
-
-/**
- * The file a manifest's `backend.entry` names on this platform.
- *
- * A package ships one manifest for every platform, so the entry is written
- * without an extension (`backend/navide-plans`); on Windows the packaged
- * executable beside it is `navide-plans.exe`, and a bare name resolves to
- * that the way a PATH lookup would.
- */
-export function backendEntryOnDisk(entry: string): string {
-  if (!isWindows() || extname(entry) !== '') return entry
-  return `${entry}.exe`
 }
 
 function assertBackendExecutableOnDisk(manifest: PluginManifestV2, pluginDir: string): void {

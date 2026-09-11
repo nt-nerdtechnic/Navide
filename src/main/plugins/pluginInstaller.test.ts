@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { normalizePlatformId, setPlatformId } from '../../shared/osplat'
 import { spawnSync } from 'node:child_process'
 import { generateKeyPairSync, sign as edSign, type KeyObject } from 'node:crypto'
 import {
@@ -488,6 +489,46 @@ describe('prepareInstall', () => {
     ).rejects.toThrow(/not marked executable/)
     expect(removed).toEqual([])
     expect(writes.size).toBe(0)
+  })
+
+  describe('on Windows', () => {
+    beforeEach(() => setPlatformId('win32'))
+    afterEach(() => setPlatformId(normalizePlatformId(process.platform)))
+
+    it('resolves a bare backend entry to the packaged .exe, exec bit or not', async () => {
+      const { bytes, digest } = v2Pkg([
+        {
+          name: 'manifest.json',
+          data: manifestV2({
+            contributes: undefined,
+            backend: { entry: 'backend/entry', protocolVersion: 1, activation: 'startup' },
+          }),
+        },
+        { name: 'backend/entry.exe', data: Buffer.from('MZ\0\0') },
+      ])
+      const { deps } = fakeDeps(bytes, digest)
+
+      const prepared = await prepareInstall({ ...REQ_BASE, expectedDigest: digest }, deps)
+      expect(prepared.containsBackendExecutable).toBe(true)
+    })
+
+    it('rejects a package that ships only the extensionless POSIX binary', async () => {
+      const { bytes, digest } = v2Pkg([
+        {
+          name: 'manifest.json',
+          data: manifestV2({
+            contributes: undefined,
+            backend: { entry: 'backend/entry', protocolVersion: 1, activation: 'startup' },
+          }),
+        },
+        { name: 'backend/entry', data: Buffer.from([0x7f, 0x45, 0x4c, 0x46]), unixMode: 0o100755 },
+      ])
+      const { deps } = fakeDeps(bytes, digest)
+
+      await expect(
+        prepareInstall({ ...REQ_BASE, expectedDigest: digest }, deps)
+      ).rejects.toThrow(/referenced file is missing: backend\/entry\.exe/)
+    })
   })
 
   it.each([

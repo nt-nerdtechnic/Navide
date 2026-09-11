@@ -13,7 +13,8 @@
 
 import { chmodSync, mkdirSync, readFileSync, writeFileSync, rmSync, renameSync, existsSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
-import { dirname, join } from 'node:path'
+import { dirname, extname, join } from 'node:path'
+import { isWindows } from '../../shared/osplat'
 import { canonicalArchivePath, portableArchiveCollisionKey } from './pluginPathPolicy'
 import {
   verifyPackage,
@@ -48,6 +49,7 @@ import {
   isManifestV2,
   manifestCapabilities,
   manifestToDescriptor,
+  backendEntryOnDisk,
   OFFICIAL_RECEIPT_NAME,
   type InstalledManifest,
   type OfficialReceipt,
@@ -228,13 +230,17 @@ function startsWithExecutableShebang(data: Uint8Array): boolean {
 }
 
 /** Validate the narrow Issue 02 POSIX executable contract. Exact binary
- * format and OS/architecture validation remain owned by Issue 27. */
+ * format and OS/architecture validation remain owned by Issue 27.
+ *
+ * The archive entry looked up is the one `backendEntryOnDisk` will run after
+ * install — on Windows a bare manifest entry names the `.exe` beside it — so
+ * a package that loads once installed is also one that installs. */
 function assertBackendExecutable(
   manifest: InstalledManifest,
   entries: readonly ZipEntry[]
 ): string | undefined {
   if (!isManifestV2(manifest) || !manifest.backend) return undefined
-  const backendPath = manifest.backend.entry
+  const backendPath = backendEntryOnDisk(manifest.backend.entry)
   const entry = entries.find(
     (candidate) =>
       candidate.type === 'regular' && canonicalEntryPath(candidate) === backendPath
@@ -245,7 +251,14 @@ function assertBackendExecutable(
   if (entry.data.length === 0) {
     throw new InstallError(`backend entry is empty: ${backendPath}`)
   }
-  if (!entry.executable) {
+  // A zip built on Windows carries no unix mode, and the exec bit means
+  // nothing to CreateProcess anyway: there the `.exe` extension the manifest
+  // contract leaves as the only option is the executability check, the same
+  // rule installedPlugins applies to the file on disk.
+  const executable = isWindows()
+    ? extname(backendPath).toLowerCase() === '.exe'
+    : entry.executable
+  if (!executable) {
     throw new InstallError(`backend entry is not marked executable: ${backendPath}`)
   }
   if (startsWithExecutableShebang(entry.data)) {

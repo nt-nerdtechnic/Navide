@@ -106,6 +106,8 @@ import {
   classifyOpenRequest,
   detectEditors,
   launchEditorProcess,
+  needsWindowsShell,
+  quoteForCmd,
   normalizeEditorId,
   DEFAULT_EDITOR_ID,
   type DetectedEditor,
@@ -1793,19 +1795,26 @@ function warnEditorUnavailable(target: BrowserWindow | null, editorId: string): 
  * died with a non-zero status right away — the caller then falls back.
  *
  * argv is passed as an array and never through a shell, so a path containing
- * spaces or shell metacharacters stays a single argument. PATH is the
- * login-shell one the backend resolved: the PATH Electron inherits when
- * launched from Finder omits Homebrew and friends.
+ * spaces or shell metacharacters stays a single argument. The one exception
+ * is a `.cmd`/`.bat` on Windows — the shape `code` and `cursor` take there —
+ * which Node will only start through cmd.exe; each element is then quoted
+ * for that command line first. PATH is the login-shell one the backend
+ * resolved: the PATH Electron inherits when launched from Finder omits
+ * Homebrew and friends.
  */
 function launchExternalEditor(argv: string[], cwd?: string): Promise<boolean> {
   const [command, ...args] = argv
   if (!command) return Promise.resolve(false)
+  const viaShell = needsWindowsShell(command)
   return launchEditorProcess(() =>
-    spawn(command, args, {
+    spawn(viaShell ? quoteForCmd(command) : command, viaShell ? args.map(quoteForCmd) : args, {
       ...(cwd ? { cwd } : {}),
       detached: true,
       stdio: 'ignore',
-      env: { ...process.env, PATH: getResolvedUserPath() }
+      env: { ...process.env, PATH: getResolvedUserPath() },
+      // windowsHide keeps the intermediate cmd.exe from flashing a console;
+      // the editor window it starts is not affected.
+      ...(viaShell ? { shell: true, windowsHide: true } : {})
     })
   )
 }

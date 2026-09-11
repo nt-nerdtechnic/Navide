@@ -11,6 +11,8 @@ import {
   normalizeEditorId,
   resolveEditorCommand,
   whichIn,
+  needsWindowsShell,
+  quoteForCmd,
   type DetectedEditor,
   type EditorPreference,
   type EditorProcess
@@ -228,11 +230,22 @@ describe('whichIn', () => {
       )
     })
 
-    it('prefers the bare name when both exist', () => {
+    // VS Code's bin\ ships the POSIX `code` shell script beside code.cmd; the
+    // extensionless one is the file CreateProcess cannot start.
+    it('never picks the extensionless script beside the .cmd', () => {
       setPlatformId('win32')
       expect(
         whichIn('code', optBin, exists([join(optBin, 'code'), join(optBin, 'code.cmd')]), always)
-      ).toBe(join(optBin, 'code'))
+      ).toBe(join(optBin, 'code.cmd'))
+      expect(whichIn('code', optBin, exists([join(optBin, 'code')]), always)).toBeNull()
+    })
+
+    it('looks a suffixed name up as written', () => {
+      setPlatformId('win32')
+      expect(whichIn('code.cmd', optBin, exists([join(optBin, 'code.cmd')]), always)).toBe(
+        join(optBin, 'code.cmd')
+      )
+      expect(whichIn('code.cmd', optBin, exists([join(optBin, 'code.cmd.exe')]), always)).toBeNull()
     })
 
     it('does not resolve suffixes off Windows', () => {
@@ -418,3 +431,33 @@ describe('buildEditorArgv', () => {
     expect(buildEditorArgv('custom', detected, [], { file: '/ws/a.ts' })).toBeNull()
   })
 })
+
+describe('needsWindowsShell', () => {
+  afterEach(() => setPlatformId(normalizePlatformId(process.platform)))
+
+  it('routes .cmd and .bat through the shell on Windows only', () => {
+    setPlatformId('win32')
+    expect(needsWindowsShell('C:\\Program Files\\VS Code\\bin\\code.cmd')).toBe(true)
+    expect(needsWindowsShell('cursor.BAT')).toBe(true)
+    expect(needsWindowsShell('C:\\tools\\code.exe')).toBe(false)
+    setPlatformId('linux')
+    expect(needsWindowsShell('code.cmd')).toBe(false)
+  })
+})
+
+describe('quoteForCmd', () => {
+  it('leaves a plain argument alone', () => {
+    expect(quoteForCmd('-g')).toBe('-g')
+    expect(quoteForCmd('C:\\src\\app.ts:12')).toBe('C:\\src\\app.ts:12')
+  })
+
+  it('quotes whitespace and cmd.exe metacharacters', () => {
+    expect(quoteForCmd('C:\\Program Files\\VS Code\\bin\\code.cmd')).toBe(
+      '"C:\\Program Files\\VS Code\\bin\\code.cmd"'
+    )
+    expect(quoteForCmd('a&b')).toBe('"a&b"')
+    expect(quoteForCmd('')).toBe('""')
+    expect(quoteForCmd('say "hi"')).toBe('"say \\"hi\\""')
+  })
+})
+
