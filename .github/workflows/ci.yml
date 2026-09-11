@@ -315,10 +315,14 @@ jobs:
         run: uv --project backend run --locked python -c "import agent_team_backend.app"
 
       - name: Collect the suite on Windows
-        # Collection has its own deadline: an import that blocks would
-        # otherwise look like a stalled test run.
+        # Collection has its own deadline, and it is where the run stalls:
+        # -X importtime prints every import as it happens, so the last line
+        # names the module that blocks, and the faulthandler dumps every
+        # thread's stack at 240s whatever phase pytest is in.
         shell: bash
-        run: timeout -k 10 300 backend/.venv/Scripts/python.exe -m pytest backend/tests --collect-only -q -p no:cacheprovider
+        run: >-
+          timeout -k 10 300 backend/.venv/Scripts/python.exe -X importtime -X faulthandler -c
+          "import faulthandler, sys; faulthandler.dump_traceback_later(240, exit=True); import pytest; sys.exit(pytest.main(['backend/tests', '--collect-only', '-q', '-p', 'no:cacheprovider']))"
 
       - name: Backend tests
         # Diagnostics for a run that stalls: GitHub discards the log of a job
