@@ -146,6 +146,12 @@ async def test_reap_kills_orphaned_snapshot_pids_and_their_subtree(monkeypatch):
         999: (1, 999, "L999"),
     }
     monkeypatch.setattr(terminals, "_ps_snapshot", lambda: snap)
+    # The table above is POSIX-shaped (launchd is ppid 1); pin the seam to
+    # that reading so the sweep, not the host's tree, is what is tested.
+    monkeypatch.setattr(
+        terminals.osplat.process_tree, "is_orphan_parent",
+        lambda ppid, me: ppid in (1, me),
+    )
     killed: list[int] = []
     monkeypatch.setattr(
         terminals, "_kill_breakaway", lambda pids: killed.extend(pids)
