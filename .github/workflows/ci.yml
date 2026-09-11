@@ -160,6 +160,56 @@ jobs:
           NODE_OPTIONS: "--max-old-space-size=4096"
         run: pnpm build
 
+  frontend-windows:
+    name: Frontend checks and build (Windows)
+    # Discovery gate for the Windows port: the same typecheck / vitest / build
+    # as the macOS and Linux jobs, run where process.platform is "win32".
+    # Not yet wired into the aggregate gate — it joins lint-and-test once it
+    # is green, so a red Windows run cannot block macOS/Linux work meanwhile.
+    runs-on: windows-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+          cache-suffix: frontend-windows
+
+      - name: Install dependencies
+        run: |
+          pnpm install --frozen-lockfile
+          uv --project backend sync --locked
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Frontend tests
+        run: pnpm test:run
+
+      - name: Build application and bundled plugins
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+        run: pnpm build
+
   backend:
     name: Backend checks (macOS)
     # Backend tests exercise macOS PTY/zsh behavior.
@@ -229,6 +279,43 @@ jobs:
       # one. This does: a real PTY, a real /proc read, and a real /health.
       - name: Linux runtime smoke test
         run: uv --project backend run --locked python backend/linux_smoke.py
+
+  backend-windows:
+    name: Backend checks (Windows)
+    # Discovery gate for the Windows port. Import first: until the POSIX-only
+    # modules sit behind osplat the app does not even load here, and that is a
+    # clearer signal than a wall of collection errors. Not yet wired into the
+    # aggregate gate (see frontend-windows).
+    runs-on: windows-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+          cache-suffix: backend-windows
+
+      - name: Install dependencies
+        run: uv --project backend sync --locked
+
+      - name: Lint backend
+        run: uv --project backend run --locked ruff check backend
+
+      - name: Backend imports on Windows
+        run: uv --project backend run --locked python -c "import agent_team_backend.app"
+
+      - name: Backend tests
+        run: uv --project backend run --locked pytest backend/tests
 
   plans:
     name: Packaged Plans checks (macOS)
