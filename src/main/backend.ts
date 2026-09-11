@@ -339,6 +339,14 @@ export async function startBackend(
     throw new Error('backend start abandoned: the app is quitting')
   }
 
+  // The pipe can already be dead when we write to it — the backend crashed
+  // before reading the key, or (Windows) it exited between exitCode's null
+  // and the `shutdown` line stopBackendProcess writes. An unhandled EPIPE
+  // there is an uncaught exception in main; the 'exit' handlers already
+  // cover what it would tell us.
+  proc.stdin?.on('error', (err: NodeJS.ErrnoException) => {
+    console.warn(`[backend] stdin ${err.code ?? err.message}`)
+  })
   handConfirmKey(proc)
 
   proc.stdout?.on('data', (chunk: Buffer) => forwardBackendLog(process.stdout, chunk))
