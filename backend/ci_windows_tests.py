@@ -42,6 +42,7 @@ import psutil
 
 LOG = "pytest.log"
 WRAPPER_LOG = "ci-windows-tests.log"
+HEARTBEAT_LOG = "ci-windows-heartbeat.log"
 DONE = "ci-windows-tests.done"
 # Rounds 16-17: even a childless pwsh poll step never ended, so the runner
 # agent itself goes dark and the job's log blob is never uploaded. The only
@@ -160,12 +161,13 @@ def _job_pids(job) -> list[int]:
 class _Uploader:
     """Commits the wrapper log to UPLOAD_BRANCH after every report."""
 
-    def __init__(self) -> None:
+    def __init__(self, local: str = WRAPPER_LOG, suffix: str = "") -> None:
         self.repo = os.environ.get("GITHUB_REPOSITORY", "")
         self.token = os.environ.get("GH_TOKEN", "")
         run = os.environ.get("GITHUB_RUN_ID", "local")
         attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "1")
-        self.path = f"windows/{run}-{attempt}.log"
+        self.local = local
+        self.path = f"windows/{run}-{attempt}{suffix}.log"
         self.sha: str | None = None
         self.enabled = bool(self.repo and self.token)
         if self.enabled:
@@ -200,7 +202,7 @@ class _Uploader:
             return
         sys.stdout.flush()
         try:
-            with open(WRAPPER_LOG, "rb") as fh:
+            with open(self.local, "rb") as fh:
                 content = base64.b64encode(fh.read()).decode()
             body = {"message": f"ci-log: {self.path} {note}", "content": content, "branch": UPLOAD_BRANCH}
             if self.sha:
@@ -253,27 +255,63 @@ def _progress() -> str:
 
 def _detach() -> int:
     """Start the real run with a log file as its only inherited handle."""
-    for stale in (WRAPPER_LOG, DONE, LOG):
+    for stale in (WRAPPER_LOG, HEARTBEAT_LOG, DONE, LOG):
         try:
             os.remove(stale)
         except OSError:
             pass
-    args = [sys.executable, os.path.abspath(__file__), "--run"]
+    runner = _spawn_detached("--run", WRAPPER_LOG)
+    # Round 20: the runner's own reports stopped mid-suite while every process
+    # it had listed was still alive, so a second, independent process now
+    # says every 30 s whether the runner, pytest and the agent are alive and
+    # uploads that separately — a stopped heartbeat means the machine or its
+    # network went, a live one with a silent runner means the runner is stuck.
+    heartbeat = _spawn_detached("--heartbeat", HEARTBEAT_LOG, str(runner.pid))
+    print(f"--- detached runner pid {runner.pid}, heartbeat pid {heartbeat.pid}; log in {WRAPPER_LOG}, marker {DONE}")
+    return 0
+
+
+def _spawn_detached(mode: str, log_path: str, *extra: str) -> subprocess.Popen:
+    args = [sys.executable, os.path.abspath(__file__), mode, *extra]
     flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
-    with open(WRAPPER_LOG, "wb") as log:
+    with open(log_path, "wb") as log:
         try:
-            child = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, close_fds=True, creationflags=flags | CREATE_BREAKAWAY_FROM_JOB)
+            return subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, close_fds=True, creationflags=flags | CREATE_BREAKAWAY_FROM_JOB)
         except OSError as exc:
             # The runner may hold the step in a job that forbids breakaway.
             print(f"--- breakaway refused ({exc}); detaching inside the runner's job")
-            child = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, close_fds=True, creationflags=flags)
-    print(f"--- detached runner pid {child.pid}; log in {WRAPPER_LOG}, marker {DONE}")
+            return subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, close_fds=True, creationflags=flags)
+
+
+def _heartbeat(runner_pid: int) -> int:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
+    uploader = _Uploader(HEARTBEAT_LOG, "-heartbeat")
+    started = time.monotonic()
+    while time.monotonic() - started < CAP_SECONDS + 600:
+        try:
+            runner = psutil.Process(runner_pid)
+            state = f"runner {runner.status()}, cpu {runner.cpu_times().user:.1f}s user, children {[c.name() for c in runner.children(recursive=True)]}"
+        except psutil.Error as exc:
+            state = f"runner gone ({exc.__class__.__name__})"
+        print(f"--- {int(time.monotonic() - started)}s: {state}; marker {'present' if os.path.exists(DONE) else 'absent'}; {len(psutil.pids())} processes; agent: {_runner_procs()}", flush=True)
+        if os.path.exists(DONE) and time.monotonic() - started > 60:
+            uploader.push("marker seen")
+            # Keep going a little: the step should end once the marker exists.
+            for i in range(6):
+                time.sleep(30)
+                print(f"--- after marker {i * 30 + 30}s: agent: {_runner_procs()}", flush=True)
+                uploader.push(f"after marker {i * 30 + 30}s")
+            return 0
+        uploader.push(f"{int(time.monotonic() - started)}s")
+        time.sleep(30)
     return 0
 
 
 def main() -> int:
     if "--detach" in sys.argv:
         return _detach()
+    if "--heartbeat" in sys.argv:
+        return _heartbeat(int(sys.argv[sys.argv.index("--heartbeat") + 1]))
     # stdout is a file: line-buffer it so the poller sees progress as it
     # happens, and never let one non-cp1252 byte from a test crash the report.
     sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
