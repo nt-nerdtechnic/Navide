@@ -1,6 +1,6 @@
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   DOC_SUFFIXES,
@@ -45,7 +45,7 @@ describe('plansDirectories', () => {
     }
     vi.mocked(statSync).mockClear()
     expect(isAllowedPlanDocumentPath('parent-0/child-0/.agent-team/plans/missing.html', tempWorkspace)).toBe(false)
-    const probes = vi.mocked(statSync).mock.calls.filter(([path]) => String(path).endsWith('/.git'))
+    const probes = vi.mocked(statSync).mock.calls.filter(([path]) => String(path).endsWith(`${sep}.git`))
     expect(probes.length).toBeGreaterThan(50)
     expect(probes.length).toBeLessThanOrEqual(2000)
   })

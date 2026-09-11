@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import {
   assertInsideRoot,
   clearElectronCaches,
@@ -10,8 +10,10 @@ import {
   type StorageCleanupDeps
 } from './storage-cleanup'
 
-const USER_DATA = '/Users/tester/Library/Application Support/Agent-Team'
-const CACHE_ROOT = '/Users/tester/Library/Caches'
+// Resolved like the product resolves its targets: on Windows that puts the
+// current drive in front, so the paths handed to removeDir still compare equal.
+const USER_DATA = resolve('/Users/tester/Library/Application Support/Agent-Team')
+const CACHE_ROOT = resolve('/Users/tester/Library/Caches')
 
 function makeDeps(overrides: Partial<StorageCleanupDeps> = {}): StorageCleanupDeps {
   return {
@@ -53,6 +55,7 @@ describe('resolveOsCacheRoot', () => {
     expect(resolveOsCacheRoot('linux', '/home/tester', {})).toBe('/home/tester/.cache')
     expect(resolveOsCacheRoot('linux', '/home/tester', { XDG_CACHE_HOME: '/xdg' })).toBe('/xdg')
     expect(resolveOsCacheRoot('win32', 'C:\\Users\\t', { LOCALAPPDATA: 'C:\\local' })).toBe('C:\\local')
+    expect(resolveOsCacheRoot('win32', 'C:\\Users\\t', {})).toBe('C:\\Users\\t\\AppData\\Local')
   })
 })
 

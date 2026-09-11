@@ -605,8 +605,8 @@ describe('commitInstall', () => {
     const prepared = await prepareInstall(signedV2Request(digest), deps, V2_TRUST_CONFIG)
 
     expect(commitInstall(prepared, '/plugins', deps)).toBeUndefined()
-    expect(writes.has('/plugins/acme.demo/backend/entry')).toBe(true)
-    expect(modes.get('/plugins/acme.demo/backend/entry')).toBe(0o700)
+    expect(writes.has(join('/plugins', 'acme.demo', 'backend', 'entry'))).toBe(true)
+    expect(modes.get(join('/plugins', 'acme.demo', 'backend', 'entry'))).toBe(0o700)
   })
 
   if (process.platform === 'darwin' || process.platform === 'linux') {
@@ -656,8 +656,8 @@ describe('commitInstall', () => {
     const { deps, dirs, writes } = fakeDeps(bytes, digest)
     const prepared = await prepareInstall({ ...REQ_BASE, expectedDigest: digest }, deps)
     commitInstall(prepared, '/plugins', deps)
-    expect(dirs).toContain('/plugins/acme.demo/dist')
-    expect(writes.has('/plugins/acme.demo/dist/')).toBe(false)
+    expect(dirs).toContain(join('/plugins', 'acme.demo', 'dist'))
+    expect(writes.has(join('/plugins', 'acme.demo', 'dist', ''))).toBe(false)
   })
 
   it('writes verified entries under <root>/<id> and returns a descriptor', async () => {
@@ -666,12 +666,12 @@ describe('commitInstall', () => {
     const prepared = await prepareInstall({ ...REQ_BASE, expectedDigest: digest }, deps)
     const desc = commitInstall(prepared, '/plugins', deps)
     if (!desc) throw new Error('expected frontend descriptor')
-    expect(removed).toContain('/plugins/acme.demo')
+    expect(removed).toContain(join('/plugins', 'acme.demo'))
     expect([...writes.keys()].sort()).toEqual([
-      '/plugins/acme.demo/dist/main.js',
-      '/plugins/acme.demo/manifest.json',
+      join('/plugins', 'acme.demo', 'dist', 'main.js'),
+      join('/plugins', 'acme.demo', 'manifest.json'),
     ])
-    expect(desc.entryFile).toBe('/plugins/acme.demo/dist/main.js')
+    expect(desc.entryFile).toBe(join('/plugins', 'acme.demo', 'dist', 'main.js'))
   })
 
   it('returns all v2 view contributions from a committed package', async () => {
@@ -684,14 +684,14 @@ describe('commitInstall', () => {
       expect.objectContaining({
         contributionKey: 'acme.demo.left',
         location: 'left',
-        entryFile: '/plugins/acme.demo/frontend/left/index.html',
+        entryFile: join('/plugins', 'acme.demo', 'frontend', 'left', 'index.html'),
       }),
     ])
-    expect(writes.has('/plugins/acme.demo/frontend/left/index.html')).toBe(true)
-    expect(writes.has('/plugins/acme.demo/.navide-package.zip')).toBe(true)
-    expect(writes.has('/plugins/acme.demo/.navide-registry-receipt.json')).toBe(true)
-    expect(writes.has('/plugins/.navide-registry-trust.json')).toBe(true)
-    expect(writes.has('/plugins/acme.demo/.navide-receipt.json')).toBe(false)
+    expect(writes.has(join('/plugins', 'acme.demo', 'frontend', 'left', 'index.html'))).toBe(true)
+    expect(writes.has(join('/plugins', 'acme.demo', '.navide-package.zip'))).toBe(true)
+    expect(writes.has(join('/plugins', 'acme.demo', '.navide-registry-receipt.json'))).toBe(true)
+    expect(writes.has(join('/plugins', '.navide-registry-trust.json'))).toBe(true)
+    expect(writes.has(join('/plugins', 'acme.demo', '.navide-receipt.json'))).toBe(false)
   })
 
   it('persists a valid Registry trust snapshot through the atomic writer', async () => {
@@ -805,7 +805,7 @@ describe('commitInstall', () => {
     const { deps, writes, removed } = fakeDeps(bytes, digest)
     const prepared = await prepareInstall(signedV2Request(digest), deps, V2_TRUST_CONFIG)
     writes.set(
-      '/plugins/.navide-registry-trust.json',
+      join('/plugins', '.navide-registry-trust.json'),
       new TextEncoder().encode(
         JSON.stringify({
           schemaVersion: 1,
@@ -932,7 +932,7 @@ describe('official (navide.) install policy', () => {
     expect(prepared.trustTier).toBe('signed-verified')
 
     commitInstall(prepared, '/plugins', deps)
-    const receiptRaw = writes.get('/plugins/navide.mini-ide/.navide-receipt.json')
+    const receiptRaw = writes.get(join('/plugins', 'navide.mini-ide', '.navide-receipt.json'))
     expect(receiptRaw).toBeDefined()
     const receipt = JSON.parse(Buffer.from(receiptRaw!).toString('utf8'))
     expect(receipt).toMatchObject({ id: 'navide.mini-ide', version: '1.0.0', digest })
@@ -1035,7 +1035,7 @@ describe('removePlugin', () => {
   it('removes the plugin directory', () => {
     const { deps, removed } = fakeDeps(new Uint8Array())
     removePlugin('/plugins', 'acme.demo', deps)
-    expect(removed).toContain('/plugins/acme.demo')
+    expect(removed).toContain(join('/plugins', 'acme.demo'))
   })
 })
 

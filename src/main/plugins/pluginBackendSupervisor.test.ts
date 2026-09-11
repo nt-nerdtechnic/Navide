@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { fileURLToPath } from 'node:url'
 import { existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -427,9 +427,11 @@ describe('PluginBackendSupervisor', () => {
     supervisors.push(supervisor)
 
     await supervisor.start()
+    // resolve(): on Windows '/workspace' comes back as 'D:\\workspace', so a
+    // literal comparison only holds on POSIX.
     await expect(
-      supervisor.clientFor(authenticatedRuntime, { workspacePath: '/workspace' }).call('fixture.bridge', null)
-    ).resolves.toEqual({ root: '/workspace' })
+      supervisor.clientFor(authenticatedRuntime, { workspacePath: resolve('/workspace') }).call('fixture.bridge', null)
+    ).resolves.toEqual({ root: resolve('/workspace') })
     expect(bridgeRequest).toEqual({
       jsonrpc: '2.0',
       id: 'bridge:child-request',
