@@ -311,7 +311,8 @@ jobs:
           test "$(find dist-release -maxdepth 1 -name 'Navide-*.deb' | wc -l | tr -d ' ')" -eq 1
           # The packaged backend must be the Linux one this job just built,
           # not a stale macOS binary that happened to be lying around.
-          appimage="$(find dist-release -maxdepth 1 -name 'Navide-*.AppImage' -print -quit)"
+          # Absolute path: the extraction below runs from a temp directory.
+          appimage="${PWD}/$(find dist-release -maxdepth 1 -name 'Navide-*.AppImage' -print -quit)"
           chmod +x "${appimage}"
           work="$(mktemp -d)"
           (cd "${work}" && "${appimage}" --appimage-extract >/dev/null)
