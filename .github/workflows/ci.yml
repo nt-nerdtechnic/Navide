@@ -335,16 +335,18 @@ jobs:
           taskkill //F //T //PID "$pid" >/dev/null 2>&1 || true
 
       - name: Backend tests
-        # Same shape as the collection step: the interpreter runs in the
-        # background writing to a file, bash reports progress every minute,
-        # caps the run at 20 minutes, prints the tail (-v names the last test
-        # that started; pytest-timeout's thread method fails a blocked test
-        # with a traceback; the faulthandler backstop dumps every thread at
-        # 18 minutes), then tears the process tree down itself so the step
-        # always ends with its log intact.
+        # The interpreter runs in the background writing to a file and records
+        # its Windows pid, bash reports progress every minute and caps the run
+        # at 20 minutes, then tears the real process tree down by that pid
+        # (an MSYS pid means nothing to taskkill). A child spawned by a test
+        # inherits the runner's stdout handle whatever fd 1 points at, so a
+        # survivor would otherwise hold the step open until the job timeout,
+        # which discards the log; the step timeout below and the always-on
+        # report step are the backstops that keep it.
         shell: bash
+        timeout-minutes: 25
         run: |
-          backend/.venv/Scripts/python.exe -X faulthandler -c "import faulthandler, sys; faulthandler.dump_traceback_later(1080, exit=True); import pytest; sys.exit(pytest.main(['backend/tests', '-v', '-p', 'no:cacheprovider', '--timeout=90', '--timeout-method=thread', '-o', 'faulthandler_timeout=120']))" > pytest.log 2>&1 &
+          backend/.venv/Scripts/python.exe -X faulthandler -c "import faulthandler, os, sys; open('py.pid', 'w').write(str(os.getpid())); faulthandler.dump_traceback_later(1080, exit=True); import pytest; sys.exit(pytest.main(['backend/tests', '-v', '-p', 'no:cacheprovider', '--timeout=90', '--timeout-method=thread', '-o', 'faulthandler_timeout=120']))" > pytest.log 2>&1 &
           pid=$!
           for i in $(seq 1 240); do
             kill -0 "$pid" 2>/dev/null || break
@@ -353,7 +355,10 @@ jobs:
           done
           alive=$(kill -0 "$pid" 2>/dev/null && echo yes || echo no)
           echo "--- python alive after wait: $alive"
-          taskkill //F //T //PID "$pid" >/dev/null 2>&1 || true
+          echo "--- processes still around:"
+          tasklist //FO CSV | grep -iE "python|node|winpty|conhost|git|uv\.exe|pytest|cmd\.exe|powershell|claude|codex" || true
+          winpid=$(cat py.pid 2>/dev/null || true)
+          [ -n "$winpid" ] && taskkill //F //T //PID "$winpid" >/dev/null 2>&1 || true
           echo "--- last 200 lines of pytest.log:"
           tail -n 200 pytest.log
           echo "--- summary:"
@@ -362,6 +367,18 @@ jobs:
           test "$alive" = no
           ! grep -qE "^(FAILED|ERROR) " pytest.log
 
+      - name: Report the backend test log
+        if: always()
+        shell: bash
+        run: |
+          echo "--- processes still around:"
+          tasklist //FO CSV | grep -iE "python|node|winpty|conhost|git|uv\.exe|pytest|cmd\.exe|powershell|claude|codex" || true
+          echo "--- results so far: $(grep -cE ' (PASSED|FAILED|SKIPPED|ERROR|XFAIL|XPASS)' pytest.log 2>/dev/null || true)"
+          echo "--- last 200 lines of pytest.log:"
+          tail -n 200 pytest.log 2>/dev/null || echo "(no pytest.log)"
+          grep -E "^(FAILED|ERROR) " pytest.log 2>/dev/null | head -n 100 || true
+          winpid=$(cat py.pid 2>/dev/null || true)
+          [ -n "$winpid" ] && taskkill //F //T //PID "$winpid" >/dev/null 2>&1 || true
 
   plans:
     name: Packaged Plans checks (macOS)
