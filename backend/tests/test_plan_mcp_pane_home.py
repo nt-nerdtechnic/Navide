@@ -345,7 +345,12 @@ def test_a_login_done_inside_the_pane_survives_the_next_spawn(home: Path) -> Non
     just refreshed, and the user would be asked to log in again."""
     grok = home / ".grok"
     grok.mkdir()
-    (grok / "user-settings.json").write_text(json.dumps({"apiKey": "old"}), encoding="utf-8")
+    real = grok / "user-settings.json"
+    real.write_text(json.dumps({"apiKey": "old"}), encoding="utf-8")
+    # The login happens after the real file was written. Say so explicitly: a
+    # tie goes to the real file by design, and coarse mtimes (one kernel tick
+    # on Linux) make a tie out of two writes in the same instant.
+    os.utime(real, (time.time() - 600, time.time() - 600))
     pane_home.prepare("grok", "p1", URL, SERVER)
     config = _config(home, "grok", "p1")
     rotated = _load(config)
