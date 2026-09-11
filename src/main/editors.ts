@@ -1,6 +1,8 @@
 import { accessSync, constants, existsSync } from 'node:fs'
 import { delimiter, isAbsolute, join } from 'node:path'
 
+import { isWindows } from '../shared/osplat'
+
 // Default-editor routing. Every "open this file" in the app funnels through
 // window:openEditor, so this module decides — per request — whether it goes to
 // the mini-IDE (the default and the only surface that can render a diff), to
@@ -163,10 +165,13 @@ export interface DetectedEditor {
   available: boolean
 }
 
-/** Does this path exist and carry the executable bit? */
+/**
+ * Does this path exist and carry the executable bit? Windows has no such
+ * bit — `X_OK` there is at best `F_OK` — so presence is the whole answer.
+ */
 function isExecutable(path: string, access: (p: string, mode: number) => void = accessSync): boolean {
   try {
-    access(path, constants.X_OK)
+    access(path, isWindows() ? constants.F_OK : constants.X_OK)
     return true
   } catch {
     return false
@@ -174,8 +179,15 @@ function isExecutable(path: string, access: (p: string, mode: number) => void = 
 }
 
 /**
+ * The suffixes a bare command name resolves under on Windows: `code` and
+ * `cursor` on PATH there are `code.cmd` and `cursor.cmd`.
+ */
+const WINDOWS_PATHEXT = ['.exe', '.cmd', '.bat', '.com']
+
+/**
  * Resolve an executable name against a PATH string. Returns the absolute path
- * of the first executable hit, or null.
+ * of the first executable hit, or null. On Windows a bare name is also tried
+ * under each PATHEXT suffix, the way cmd.exe resolves it.
  */
 export function whichIn(
   name: string,
@@ -184,9 +196,12 @@ export function whichIn(
   executable: (p: string) => boolean = isExecutable
 ): string | null {
   if (isAbsolute(name)) return exists(name) && executable(name) ? name : null
+  const names = isWindows() ? [name, ...WINDOWS_PATHEXT.map((ext) => name + ext)] : [name]
   for (const dir of pathEnv.split(delimiter).filter(Boolean)) {
-    const candidate = join(dir, name)
-    if (exists(candidate) && executable(candidate)) return candidate
+    for (const candidateName of names) {
+      const candidate = join(dir, candidateName)
+      if (exists(candidate) && executable(candidate)) return candidate
+    }
   }
   return null
 }

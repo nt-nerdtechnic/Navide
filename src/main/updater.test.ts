@@ -392,3 +392,34 @@ describe('initUpdater lifecycle', () => {
     expect(getSettings()).toMatchObject({ channel: 'beta' })
   })
 })
+
+describe('inAppUpdateSupported', () => {
+  // Fresh registry on purpose: earlier tests reset modules, so the osplat
+  // instance ./updater consults is whichever one this import resolves.
+  async function load() {
+    vi.resetModules()
+    const [{ inAppUpdateSupported }, osplat] = await Promise.all([
+      import('./updater'),
+      import('../shared/osplat'),
+    ])
+    return { inAppUpdateSupported, osplat }
+  }
+
+  it('is on for macOS and Windows regardless of the environment', async () => {
+    const { inAppUpdateSupported, osplat } = await load()
+    osplat.setPlatformId('darwin')
+    expect(inAppUpdateSupported({})).toBe(true)
+    // NSIS is handled natively by electron-updater; this used to be off only
+    // because no signed Windows build existed to update to.
+    osplat.setPlatformId('win32')
+    expect(inAppUpdateSupported({})).toBe(true)
+  })
+
+  it('is on for Linux only when running as an AppImage', async () => {
+    const { inAppUpdateSupported, osplat } = await load()
+    osplat.setPlatformId('linux')
+    expect(inAppUpdateSupported({ APPIMAGE: '/tmp/Navide.AppImage' })).toBe(true)
+    // A .deb install belongs to the package manager.
+    expect(inAppUpdateSupported({})).toBe(false)
+  })
+})

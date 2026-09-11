@@ -11,11 +11,11 @@
  * the command so it could be pasted by hand, which is why nobody noticed.
  */
 
-import { spawn } from 'node:child_process'
+import { spawn, type SpawnOptions } from 'node:child_process'
 import { accessSync, constants } from 'node:fs'
 import { delimiter, join } from 'node:path'
 
-import { isLinux, isMac } from '../shared/osplat'
+import { isLinux, isMac, isWindows } from '../shared/osplat'
 
 export interface OpenTerminalResult {
   ok: boolean
@@ -40,19 +40,36 @@ const LINUX_TERMINALS: ReadonlyArray<{
   { bin: 'xterm', argv: (s) => ['-e', 'bash', '-c', s] },
 ]
 
-/** Where a binary lives on PATH, or null. Node has no `which`. */
+/**
+ * The suffixes Windows will run a bare command name under. `code` on PATH is
+ * really `code.cmd`; `wt` is `wt.exe`. PATHEXT lists more, but these are the
+ * four that name something spawn() can start.
+ */
+const WINDOWS_PATHEXT = ['.exe', '.cmd', '.bat', '.com']
+
+/**
+ * Where a binary lives on PATH, or null. Node has no `which`.
+ *
+ * On Windows the executable bit does not exist — `X_OK` there is `F_OK` at
+ * best — so presence decides, and the bare name is tried before each PATHEXT
+ * suffix, the way cmd.exe resolves a command.
+ */
 export function findOnPath(
   bin: string,
   path: string | undefined = process.env.PATH
 ): string | null {
+  const windows = isWindows()
+  const names = windows ? [bin, ...WINDOWS_PATHEXT.map((ext) => bin + ext)] : [bin]
   for (const dir of (path ?? '').split(delimiter)) {
     if (!dir) continue
-    const candidate = join(dir, bin)
-    try {
-      accessSync(candidate, constants.X_OK)
-      return candidate
-    } catch {
-      // not here; keep looking
+    for (const name of names) {
+      const candidate = join(dir, name)
+      try {
+        accessSync(candidate, windows ? constants.F_OK : constants.X_OK)
+        return candidate
+      } catch {
+        // not here; keep looking
+      }
     }
   }
   return null
@@ -72,12 +89,12 @@ function openWithTerminalApp(command: string): Promise<OpenTerminalResult> {
   })
 }
 
-function launch(bin: string, argv: string[]): Promise<OpenTerminalResult> {
+function launch(bin: string, argv: string[], extra: SpawnOptions = {}): Promise<OpenTerminalResult> {
   return new Promise((resolve) => {
     // Detached and unref'd: the terminal outlives this request, and the app
     // must not wait on it — an install that sits at a sudo prompt for a
     // minute would otherwise hold the IPC reply for a minute.
-    const child = spawn(bin, argv, { detached: true, stdio: 'ignore' })
+    const child = spawn(bin, argv, { detached: true, stdio: 'ignore', ...extra })
     child.on('error', (err) => resolve({ ok: false, error: String(err) }))
     child.on('spawn', () => {
       child.unref()
@@ -110,6 +127,26 @@ async function openWithLinuxTerminal(
   }
 }
 
+async function openWithWindowsTerminal(
+  command: string,
+  path: string | undefined
+): Promise<OpenTerminalResult> {
+  // `-NoExit` is PowerShell's `; exec bash`: the window stays open with a
+  // shell once the command finishes. Windows Terminal when it is installed —
+  // it takes the shell command line as argv, so nothing of ours is quoted.
+  const powershell = ['powershell.exe', '-NoExit', '-Command', command]
+  const wt = findOnPath('wt.exe', path)
+  if (wt) {
+    const result = await launch(wt, powershell)
+    if (result.ok) return result
+    // On PATH but would not start — fall back rather than report no terminal.
+  }
+  // Otherwise the conhost route: `start` opens PowerShell in its own window.
+  // windowsHide keeps the intermediate cmd.exe from flashing a console of
+  // its own; the window `start` creates is not affected by it.
+  return launch('cmd.exe', ['/c', 'start', ...powershell], { windowsHide: true })
+}
+
 /**
  * Run `command` in a visible terminal window on this platform.
  *
@@ -126,8 +163,5 @@ export function openInExternalTerminal(
 ): Promise<OpenTerminalResult> {
   if (isMac()) return openWithTerminalApp(command)
   if (isLinux()) return openWithLinuxTerminal(command, path)
-  return Promise.resolve({
-    ok: false,
-    error: 'opening an external terminal is not supported on this platform yet',
-  })
+  return openWithWindowsTerminal(command, path)
 }

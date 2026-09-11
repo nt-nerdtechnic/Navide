@@ -69,7 +69,7 @@ import { lockPageZoom } from './web-contents-zoom'
 import { createUiZoomStore, type UiZoomStore } from './ui-zoom-store'
 import { clampUiScale, UI_SCALE_SETTING_KEY } from '../shared/uiScale'
 import { installContextMenu, registerTerminalContextMenu } from './context-menu'
-import { initUpdater } from './updater'
+import { inAppUpdateSupported, initUpdater } from './updater'
 import { withDeadline } from './deadline'
 import { MAX_RESTORE_ATTEMPTS, WindowRegistry, type WindowBounds, type WindowEntry } from './window-registry'
 import { registeredGitLeftWorkspace, trustedGitLeftWindow } from './gitLeftIpc'
@@ -126,7 +126,7 @@ import { warnMain } from './main-log'
 import { isAppWindowSender, UNTRUSTED_SENDER } from './ipcSender'
 import { installWindowControls } from './window-controls'
 import { openInExternalTerminal } from './external-terminal'
-import { isLinux, isMac } from '../shared/osplat'
+import { isMac } from '../shared/osplat'
 import {
   GitAccountsStore,
   type GitAccountCrypto,
@@ -1460,7 +1460,8 @@ function readUiSettings(): Record<string, unknown> {
       appDataPath: app.getPath('appData'),
       platform: process.platform,
       homeDir: app.getPath('home'),
-      xdgDataHome: process.env.XDG_DATA_HOME
+      xdgDataHome: process.env.XDG_DATA_HOME,
+      appData: process.env.APPDATA
     })
     return JSON.parse(readUiSettingsText(join(dataDir, UI_SETTINGS_FILE))) as Record<string, unknown>
   } catch {
@@ -3524,7 +3525,8 @@ ipcMain.on('settings:bootstrap', (event) => {
     appDataPath: app.getPath('appData'),
     platform: process.platform,
     homeDir: app.getPath('home'),
-    xdgDataHome: process.env.XDG_DATA_HOME
+    xdgDataHome: process.env.XDG_DATA_HOME,
+    appData: process.env.APPDATA
   })
   event.returnValue = readUiSettingsText(join(dataDir, UI_SETTINGS_FILE))
 })
@@ -3965,14 +3967,10 @@ app.whenReady().then(async () => {
   // Register updater IPC before any renderer can request its state. Packaged
   // builds automatically check GitHub Releases after a short delay.
   initUpdater({
-    // macOS updates through Squirrel.Mac, Linux through electron-updater's
-    // AppImage path — which only works when the app is actually running as an
-    // AppImage, because that is the only shape it can rewrite in place.
-    // A .deb install updates through the distribution's package manager, so
-    // offering in-app updates there would fight the system that owns the file.
-    // Windows (NSIS) is deliberately still off: it has no signed build to
-    // update to yet, and an unsigned installer download is worse than none.
-    enabled: app.isPackaged && (isMac() || (isLinux() && Boolean(process.env.APPIMAGE))),
+    // Packaged builds only; which install shapes can update themselves in
+    // place (Squirrel.Mac, NSIS, AppImage — not .deb) is inAppUpdateSupported's
+    // call. Windows updates go unverified until the build is code-signed.
+    enabled: app.isPackaged && inAppUpdateSupported(),
     currentVersion: app.getVersion(),
     // Installing quits the app by design, and the user already agreed to that
     // when they asked for the install. Without this they get a second "Quit?"

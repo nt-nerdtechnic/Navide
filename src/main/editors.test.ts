@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
+import { normalizePlatformId, setPlatformId } from '../shared/osplat'
 import {
   BUILT_IN_EDITORS,
   buildEditorArgv,
@@ -201,6 +202,32 @@ describe('whichIn', () => {
 
   it('tolerates an empty PATH', () => {
     expect(whichIn('code', '', exists(['/usr/bin/code']), always)).toBeNull()
+  })
+
+  describe('on Windows', () => {
+    afterEach(() => setPlatformId(normalizePlatformId(process.platform)))
+
+    // VS Code and Cursor install `code.cmd` / `cursor.cmd` onto PATH; the bare
+    // name that works from a shell there names nothing on disk.
+    it('resolves a bare name through its PATHEXT suffix', () => {
+      setPlatformId('win32')
+      expect(whichIn('code', '/opt/bin', exists(['/opt/bin/code.cmd']), always)).toBe('/opt/bin/code.cmd')
+      expect(whichIn('cursor', '/opt/bin', exists(['/opt/bin/cursor.exe']), always)).toBe(
+        '/opt/bin/cursor.exe'
+      )
+    })
+
+    it('prefers the bare name when both exist', () => {
+      setPlatformId('win32')
+      expect(whichIn('code', '/opt/bin', exists(['/opt/bin/code', '/opt/bin/code.cmd']), always)).toBe(
+        '/opt/bin/code'
+      )
+    })
+
+    it('does not resolve suffixes off Windows', () => {
+      setPlatformId('linux')
+      expect(whichIn('code', '/opt/bin', exists(['/opt/bin/code.cmd']), always)).toBeNull()
+    })
   })
 })
 

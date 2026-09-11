@@ -10,6 +10,23 @@ import {
 import { readUpdaterSettings, writeUpdaterSettings } from './updater-settings'
 import { readUpdaterState, writeUpdaterState } from './updater-state-store'
 import type { UpdateSettingsResult, UpdaterSettings, UpdateState, UpdateStatus } from '../shared/updater'
+import { isLinux, isMac, isWindows } from '../shared/osplat'
+
+/**
+ * Whether this platform's install shape can update itself in place.
+ *
+ * macOS updates through Squirrel.Mac and Windows through the NSIS installer
+ * electron-updater drives natively. Linux only when running as an AppImage —
+ * the one shape electron-updater can rewrite; a .deb install updates through
+ * the distribution's package manager, so offering in-app updates there would
+ * fight the system that owns the file. Windows builds are not code-signed
+ * yet, so until a certificate exists their updates install without signature
+ * verification.
+ */
+export function inAppUpdateSupported(env: Record<string, string | undefined> = process.env): boolean {
+  if (isMac() || isWindows()) return true
+  return isLinux() && Boolean(env.APPIMAGE)
+}
 
 let service: UpdaterService | null = null
 let settings: UpdaterSettings | null = null

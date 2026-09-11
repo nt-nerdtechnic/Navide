@@ -16,6 +16,8 @@
 
 import { execFileSync } from 'node:child_process'
 
+import { isWindows } from '../shared/osplat'
+
 /**
  * `pid` and all of its descendants, deepest first. Parses the two-column
  * `pid ppid` snapshot `ps` produces; unparsable lines are ignored.
@@ -52,6 +54,24 @@ export function descendantsFirst(pid: number, psSnapshot: string): number[] {
  */
 export function killProcessTree(pid: number | undefined, signal: NodeJS.Signals): void {
   if (typeof pid !== 'number' || pid <= 1) return
+
+  if (isWindows()) {
+    // No `ps` and no signals: taskkill walks the tree itself (`/T`), and `/F`
+    // is the only form that reliably ends a console process — without it
+    // taskkill posts WM_CLOSE, which a windowless backend never sees. So on
+    // Windows `signal` is always the forceful one; the Windows arm of the
+    // backend's stop path relies on exactly that (see backend.ts).
+    try {
+      execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], {
+        stdio: 'ignore',
+        timeout: 5_000,
+        windowsHide: true
+      })
+    } catch {
+      /* already gone, or taskkill unavailable — nothing else can be named */
+    }
+    return
+  }
 
   let targets = [pid]
   try {
