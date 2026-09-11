@@ -1,0 +1,202 @@
+"""Run the backend suite on the Windows CI runner and always come back.
+
+A step on the GitHub runner ends only when every handle to its stdout pipe is
+closed. Fourteen rounds of the Windows job showed the "Backend tests" step
+outliving both python and its own `timeout-minutes`, and the job timeout
+discards the step log — so we never saw which test was responsible. The
+mechanism fits a pseudo-console host (conhost.exe) or any other grandchild
+that inherited the pipe handle and outlived the python that spawned it:
+`taskkill /T` walks parent links, and an orphan has none.
+
+Two things fix that structurally, both done here:
+
+* pytest runs in a child that inherits nothing but a log file (`close_fds`
+  restricts the handle list on Windows), so no descendant can ever hold the
+  runner's pipe;
+* this process joins a Job Object with kill-on-close first, so every
+  descendant — orphaned or not — dies when this process exits, and can be
+  listed while the suite runs.
+
+This script is then the only process on the runner's pipe: it reports
+progress, kills what is left, prints the tail and returns.
+"""
+
+from __future__ import annotations
+
+import ctypes
+import os
+import re
+import subprocess
+import sys
+import time
+from ctypes import wintypes
+
+import psutil
+
+LOG = "pytest.log"
+CAP_SECONDS = 20 * 60
+REPORT_EVERY = 60
+RESULT_RE = re.compile(r" (PASSED|FAILED|SKIPPED|ERROR|XFAIL|XPASS)")
+
+JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
+JobObjectBasicProcessIdList = 3
+JobObjectExtendedLimitInformation = 9
+
+
+class _IO_COUNTERS(ctypes.Structure):
+    _fields_ = [(name, ctypes.c_ulonglong) for name in (
+        "ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
+        "ReadTransferCount", "WriteTransferCount", "OtherTransferCount",
+    )]
+
+
+class _JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+    _fields_ = [
+        ("PerProcessUserTimeLimit", ctypes.c_longlong),
+        ("PerJobUserTimeLimit", ctypes.c_longlong),
+        ("LimitFlags", wintypes.DWORD),
+        ("MinimumWorkingSetSize", ctypes.c_size_t),
+        ("MaximumWorkingSetSize", ctypes.c_size_t),
+        ("ActiveProcessLimit", wintypes.DWORD),
+        ("Affinity", ctypes.c_size_t),
+        ("PriorityClass", wintypes.DWORD),
+        ("SchedulingClass", wintypes.DWORD),
+    ]
+
+
+class _JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+    _fields_ = [
+        ("BasicLimitInformation", _JOBOBJECT_BASIC_LIMIT_INFORMATION),
+        ("IoInfo", _IO_COUNTERS),
+        ("ProcessMemoryLimit", ctypes.c_size_t),
+        ("JobMemoryLimit", ctypes.c_size_t),
+        ("PeakProcessMemoryUsed", ctypes.c_size_t),
+        ("PeakJobMemoryUsed", ctypes.c_size_t),
+    ]
+
+
+def _pid_list_struct(capacity: int):
+    class _JOBOBJECT_BASIC_PROCESS_ID_LIST(ctypes.Structure):
+        _fields_ = [
+            ("NumberOfAssignedProcesses", wintypes.DWORD),
+            ("NumberOfProcessIdsInList", wintypes.DWORD),
+            ("ProcessIdList", ctypes.c_size_t * capacity),
+        ]
+
+    return _JOBOBJECT_BASIC_PROCESS_ID_LIST()
+
+
+def _kernel32():
+    k = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+    k.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+    k.CreateJobObjectW.restype = wintypes.HANDLE
+    k.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+    k.SetInformationJobObject.restype = wintypes.BOOL
+    k.QueryInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD, ctypes.c_void_p]
+    k.QueryInformationJobObject.restype = wintypes.BOOL
+    k.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    k.AssignProcessToJobObject.restype = wintypes.BOOL
+    k.GetCurrentProcess.argtypes = []
+    k.GetCurrentProcess.restype = wintypes.HANDLE
+    return k
+
+
+def _join_job():
+    """Put this process in a fresh kill-on-close job; return (kernel32, job) or None."""
+    k32 = _kernel32()
+    job = k32.CreateJobObjectW(None, None)
+    if not job:
+        print(f"--- job object: CreateJobObjectW failed ({ctypes.get_last_error()})")
+        return None
+    info = _JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+    info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    if not k32.SetInformationJobObject(job, JobObjectExtendedLimitInformation, ctypes.byref(info), ctypes.sizeof(info)):
+        print(f"--- job object: SetInformationJobObject failed ({ctypes.get_last_error()})")
+        return None
+    if not k32.AssignProcessToJobObject(job, k32.GetCurrentProcess()):
+        # Nested jobs need Windows 8+; the runner has that, but say so if not.
+        print(f"--- job object: AssignProcessToJobObject failed ({ctypes.get_last_error()}); running unjailed")
+        return None
+    print("--- job object: joined, kill-on-close")
+    return k32, job
+
+
+def _job_pids(job) -> list[int]:
+    k32, handle = job
+    info = _pid_list_struct(256)
+    k32.QueryInformationJobObject(handle, JobObjectBasicProcessIdList, ctypes.byref(info), ctypes.sizeof(info), None)
+    return [int(pid) for pid in info.ProcessIdList[: info.NumberOfProcessIdsInList]]
+
+
+def _describe(pids: list[int]) -> str:
+    names = []
+    for pid in pids:
+        if pid == os.getpid():
+            continue
+        try:
+            names.append(f"{psutil.Process(pid).name()}({pid})")
+        except psutil.Error:
+            names.append(f"?({pid})")
+    return ", ".join(names) or "(none)"
+
+
+def _progress() -> str:
+    try:
+        with open(LOG, encoding="utf-8", errors="replace") as fh:
+            lines = fh.readlines()
+    except OSError:
+        return "0 results"
+    done = sum(1 for line in lines if RESULT_RE.search(line))
+    last = next((line.strip()[:140] for line in reversed(lines) if "::" in line), "")
+    return f"{done} results; last: {last}"
+
+
+def main() -> int:
+    # The runner's pipe is not a console: without this, one non-cp1252 byte
+    # in a test's output would crash the report at the very end.
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    job = _join_job()
+    args = [
+        sys.executable, "-X", "faulthandler", "-m", "pytest", "backend/tests", "-v",
+        "-p", "no:cacheprovider", "--timeout=90", "--timeout-method=thread",
+        "-o", "faulthandler_timeout=120",
+    ]
+    with open(LOG, "wb") as log:
+        # close_fds restricts the child's handle list to exactly these three.
+        child = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, close_fds=True)
+    print(f"--- pytest pid {child.pid}, cap {CAP_SECONDS}s", flush=True)
+
+    started = time.monotonic()
+    rc: int | None = None
+    while time.monotonic() - started < CAP_SECONDS:
+        rc = child.poll()
+        if rc is not None:
+            break
+        time.sleep(REPORT_EVERY)
+        elapsed = int(time.monotonic() - started)
+        peers = _describe(_job_pids(job)) if job else "(no job)"
+        print(f"--- {elapsed}s: {_progress()}\n    in job: {peers}", flush=True)
+
+    survivors = [pid for pid in (_job_pids(job) if job else []) if pid != os.getpid()]
+    print(f"--- pytest exit: {rc if rc is not None else 'still running at cap'}")
+    print(f"--- still in job: {_describe(survivors)}")
+    for pid in survivors:
+        try:
+            psutil.Process(pid).kill()
+        except psutil.Error:
+            pass
+
+    with open(LOG, encoding="utf-8", errors="replace") as fh:
+        lines = fh.readlines()
+    print("--- last 200 lines of pytest.log:")
+    sys.stdout.write("".join(lines[-200:]))
+    print("--- summary:")
+    for line in lines:
+        if line.startswith(("FAILED ", "ERROR ")) or re.match(r"=+ .*(passed|failed|error).* =+", line):
+            sys.stdout.write(line)
+    sys.stdout.flush()
+    return 1 if rc is None else rc
+
+
+if __name__ == "__main__":
+    sys.exit(main())

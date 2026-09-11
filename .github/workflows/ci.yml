@@ -335,37 +335,14 @@ jobs:
           taskkill //F //T //PID "$pid" >/dev/null 2>&1 || true
 
       - name: Backend tests
-        # The interpreter runs in the background writing to a file and records
-        # its Windows pid, bash reports progress every minute and caps the run
-        # at 20 minutes, then tears the real process tree down by that pid
-        # (an MSYS pid means nothing to taskkill). A child spawned by a test
-        # inherits the runner's stdout handle whatever fd 1 points at, so a
-        # survivor would otherwise hold the step open until the job timeout,
-        # which discards the log; the step timeout below and the always-on
-        # report step are the backstops that keep it.
+        # backend/ci_windows_tests.py runs pytest in a child that inherits
+        # nothing but its log file, inside a kill-on-close Job Object, and is
+        # the only process on this step's stdout pipe: a survivor spawned by
+        # a test can neither hold the step open nor outlive the script. The
+        # step timeout and the always-on report step below are the backstops.
         shell: bash
         timeout-minutes: 25
-        run: |
-          backend/.venv/Scripts/python.exe -X faulthandler -c "import faulthandler, os, sys; open('py.pid', 'w').write(str(os.getpid())); faulthandler.dump_traceback_later(1080, exit=True); import pytest; sys.exit(pytest.main(['backend/tests', '-v', '-p', 'no:cacheprovider', '--timeout=90', '--timeout-method=thread', '-o', 'faulthandler_timeout=120']))" > pytest.log 2>&1 &
-          pid=$!
-          for i in $(seq 1 240); do
-            kill -0 "$pid" 2>/dev/null || break
-            if [ $((i % 12)) -eq 0 ]; then echo "--- $((i * 5))s: $(grep -cE ' (PASSED|FAILED|SKIPPED|ERROR|XFAIL|XPASS)' pytest.log || true) results; last: $(grep -E '::' pytest.log | tail -n 1 | cut -c1-140)"; fi
-            sleep 5
-          done
-          alive=$(kill -0 "$pid" 2>/dev/null && echo yes || echo no)
-          echo "--- python alive after wait: $alive"
-          echo "--- processes still around:"
-          tasklist //FO CSV | grep -iE "python|node|winpty|conhost|git|uv\.exe|pytest|cmd\.exe|powershell|claude|codex" || true
-          winpid=$(cat py.pid 2>/dev/null || true)
-          [ -n "$winpid" ] && taskkill //F //T //PID "$winpid" >/dev/null 2>&1 || true
-          echo "--- last 200 lines of pytest.log:"
-          tail -n 200 pytest.log
-          echo "--- summary:"
-          grep -E "^(FAILED|ERROR) " pytest.log | head -n 100 || true
-          grep -E "=+ .*(passed|failed|error).* =+" pytest.log || true
-          test "$alive" = no
-          ! grep -qE "^(FAILED|ERROR) " pytest.log
+        run: backend/.venv/Scripts/python.exe backend/ci_windows_tests.py
 
       - name: Report the backend test log
         if: always()
@@ -377,8 +354,6 @@ jobs:
           echo "--- last 200 lines of pytest.log:"
           tail -n 200 pytest.log 2>/dev/null || echo "(no pytest.log)"
           grep -E "^(FAILED|ERROR) " pytest.log 2>/dev/null | head -n 100 || true
-          winpid=$(cat py.pid 2>/dev/null || true)
-          [ -n "$winpid" ] && taskkill //F //T //PID "$winpid" >/dev/null 2>&1 || true
 
   plans:
     name: Packaged Plans checks (macOS)
