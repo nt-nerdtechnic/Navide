@@ -287,7 +287,7 @@ jobs:
     # clearer signal than a wall of collection errors. Not yet wired into the
     # aggregate gate (see frontend-windows).
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
 
     steps:
       - name: Check out source
@@ -315,7 +315,10 @@ jobs:
         run: uv --project backend run --locked python -c "import agent_team_backend.app"
 
       - name: Backend tests
-        run: uv --project backend run --locked pytest backend/tests
+        # Thread-based per-test deadline (signals cannot interrupt on Windows):
+        # a test that blocks on a pipe or process wait fails with a traceback
+        # instead of stalling the job until its own timeout.
+        run: uv --project backend run --locked pytest backend/tests --timeout=90 --timeout-method=thread
 
   plans:
     name: Packaged Plans checks (macOS)

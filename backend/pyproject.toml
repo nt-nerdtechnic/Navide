@@ -46,6 +46,9 @@ dev = [
     "pyinstaller>=6.20.0",
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
+    # Per-test deadline for the Windows CI job: a hang there must fail with a
+    # traceback instead of eating the whole job timeout in silence.
+    "pytest-timeout>=2.3",
     "ruff>=0.9",
 ]
 
