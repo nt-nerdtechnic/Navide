@@ -236,7 +236,12 @@ def _describe(pids: list[int]) -> str:
         if pid == os.getpid():
             continue
         try:
-            names.append(f"{psutil.Process(pid).name()}({pid})")
+            proc = psutil.Process(pid)
+            name = proc.name()
+            # A second python.exe sat in the job for the whole of round 22;
+            # the tail of its command line says which test or fixture owns it.
+            tail = " ".join(proc.cmdline()[-2:])[-80:] if name.lower().startswith("python") else ""
+            names.append(f"{name}({pid}{': ' + tail if tail else ''})")
         except psutil.Error:
             names.append(f"?({pid})")
     return ", ".join(names) or "(none)"
