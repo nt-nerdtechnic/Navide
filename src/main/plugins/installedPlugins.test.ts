@@ -21,7 +21,9 @@ import {
   loadPluginDir,
   scanInstalledPlugins,
   InstalledPluginError,
+  backendEntryOnDisk,
 } from './installedPlugins'
+import { isWindows } from '../../shared/osplat'
 
 const VALID = { id: 'acme.demo', version: '1.2.3', entry: 'dist/main.js', requires: ['fs', 'git'] }
 
@@ -210,8 +212,8 @@ describe('Manifest v2 contract corpus', () => {
       contributionKey: 'acme.files.left',
       kind: 'custom',
       location: 'left',
-      iconFile: '/plugins/acme.files/assets/files.png',
-      entryFile: '/plugins/acme.files/frontend/left/index.html',
+      iconFile: join('/plugins', 'acme.files', 'assets', 'files.png'),
+      entryFile: join('/plugins', 'acme.files', 'frontend', 'left', 'index.html'),
     })
   })
 
@@ -244,7 +246,7 @@ describe('Manifest v2 contract corpus', () => {
       packageDir: '/plugins/navide.skills',
       views: [],
       backend: {
-        entryFile: '/plugins/navide.skills/backend/navide-skills',
+        entryFile: join('/plugins', 'navide.skills', backendEntryOnDisk('backend/navide-skills')),
         protocolVersion: 1,
         activation: 'startup',
       },
@@ -253,10 +255,10 @@ describe('Manifest v2 contract corpus', () => {
     expect(combinedActivation.packageVersion).toBe('1.0.0')
     expect(combinedActivation.views[0]).toMatchObject({
       contributionKey: 'acme.files.left',
-      entryFile: '/plugins/acme.files/frontend/left/index.html',
+      entryFile: join('/plugins', 'acme.files', 'frontend', 'left', 'index.html'),
     })
     expect(combinedActivation.backend?.entryFile).toBe(
-      '/plugins/acme.files/backend/acme-files'
+      join('/plugins', 'acme.files', backendEntryOnDisk('backend/acme-files'))
     )
   })
 
@@ -293,7 +295,7 @@ describe('manifestToDescriptor', () => {
     expect(d.id).toBe('acme.demo')
     expect(d.packageVersion).toBeUndefined()
     expect(d.devUrl).toBe('')
-    expect(d.entryFile).toBe('/plugins/acme.demo/dist/main.js')
+    expect(d.entryFile).toBe(join('/plugins', 'acme.demo', 'dist', 'main.js'))
     expect(d.requires).toEqual(['fs', 'git'])
   })
 })
@@ -368,7 +370,7 @@ describe('loadPluginDir', () => {
     const manifest = JSON.parse(readFixture('valid', 'backend-only-skills.json'))
     mkdirSync(join(root, 'backend'), { recursive: true })
     writeFileSync(join(root, 'manifest.json'), JSON.stringify(manifest))
-    const backendPath = join(root, 'backend', 'navide-skills')
+    const backendPath = join(root, backendEntryOnDisk('backend/navide-skills'))
     writeFileSync(backendPath, Buffer.from([0x7f, 0x45, 0x4c, 0x46]))
     chmodSync(backendPath, 0o700)
 
@@ -383,8 +385,22 @@ describe('loadPluginDir', () => {
     })
   })
 
+  // The exec-bit arm is POSIX-only: on Windows executability is the `.exe`
+  // extension, which this fixture name carries, so the mode cannot fail it.
+  it.skipIf(isWindows())('rejects a non-executable backend during disk loading', () => {
+    const manifest = JSON.parse(readFixture('valid', 'backend-only-skills.json'))
+    mkdirSync(join(root, 'backend'), { recursive: true })
+    writeFileSync(join(root, 'manifest.json'), JSON.stringify(manifest))
+    const backendPath = join(root, backendEntryOnDisk('backend/navide-skills'))
+    writeFileSync(backendPath, Buffer.from([0x7f, 0x45, 0x4c, 0x46]))
+    chmodSync(backendPath, 0o600)
+
+    const loaded = loadPluginDir(root)
+    expect(loaded.error).toMatch(/not executable/)
+    expect(loaded.activation).toBeUndefined()
+  })
+
   it.each([
-    ['non-executable', Buffer.from([0x7f, 0x45, 0x4c, 0x46]), 0o600, /not executable/],
     ['empty', Buffer.alloc(0), 0o700, /empty/],
     ['shebang', Buffer.from('#!/bin/sh\n'), 0o700, /must not be a script/],
     [
@@ -397,7 +413,7 @@ describe('loadPluginDir', () => {
     const manifest = JSON.parse(readFixture('valid', 'backend-only-skills.json'))
     mkdirSync(join(root, 'backend'), { recursive: true })
     writeFileSync(join(root, 'manifest.json'), JSON.stringify(manifest))
-    const backendPath = join(root, 'backend', 'navide-skills')
+    const backendPath = join(root, backendEntryOnDisk('backend/navide-skills'))
     writeFileSync(backendPath, content)
     chmodSync(backendPath, mode)
 

@@ -3,7 +3,9 @@ import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpath
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { appendPlansProvenanceQuery, FrontendPluginManager, registerBundledPlans } from './frontendPluginManager'
-import { loadPluginDir } from './installedPlugins'
+import { backendEntryOnDisk, loadPluginDir } from './installedPlugins'
+
+const PLANS_BACKEND = backendEntryOnDisk('backend/navide-plans')
 
 function packageFixture(directory: string): string {
   mkdirSync(join(directory, 'frontend/left'), { recursive: true })
@@ -12,8 +14,8 @@ function packageFixture(directory: string): string {
   writeFileSync(join(directory, 'manifest.json'), readFileSync('plugins/navide-plans/manifest.json'))
   writeFileSync(join(directory, 'frontend/left/index.html'), '<!doctype html>')
   writeFileSync(join(directory, 'frontend/window/index.html'), '<!doctype html>')
-  copyFileSync(process.execPath, join(directory, 'backend/navide-plans'))
-  chmodSync(join(directory, 'backend/navide-plans'), 0o700)
+  copyFileSync(process.execPath, join(directory, PLANS_BACKEND))
+  chmodSync(join(directory, PLANS_BACKEND), 0o700)
   return realpathSync(directory)
 }
 
@@ -35,7 +37,7 @@ describe('Plans Host provenance query', () => {
         descriptorSource: 'installed-catalog', selectionOrigin: 'installed-catalog',
         acquisitionProvenance: provenance, packageDirectory: installedDirectory,
         packageVersion: '0.1.0', frontendEntry: join(installedDirectory, 'frontend/left/index.html'),
-        backendExecutable: join(installedDirectory, 'backend/navide-plans'),
+        backendExecutable: join(installedDirectory, PLANS_BACKEND),
         frontendEntries: { 'navide.plans.window': join(installedDirectory, 'frontend/window/index.html') },
       })
     } finally {
@@ -53,7 +55,7 @@ describe('Plans Host provenance query', () => {
       expect(manager.getPlansProvenance()).toMatchObject({
         descriptorSource: 'factory-bundle', selectionOrigin: 'factory-bundle',
         acquisitionProvenance: 'factory-bundled', packageDirectory: directory,
-        packageVersion: '0.1.0', backendExecutable: join(directory, 'backend/navide-plans'),
+        packageVersion: '0.1.0', backendExecutable: join(directory, PLANS_BACKEND),
       })
       manager.replaceBuiltinForRecovery({ id: 'navide.plans', requires: [], devUrl: '', entryFile: '/legacy.html' })
       expect(manager.getPlansProvenance()).toMatchObject({ selectionOrigin: 'host-bundled', backendExecutable: null })
