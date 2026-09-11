@@ -315,14 +315,24 @@ jobs:
         run: uv --project backend run --locked python -c "import agent_team_backend.app"
 
       - name: Collect the suite on Windows
-        # Collection has its own deadline, and it is where the run stalls:
-        # -X importtime prints every import as it happens, so the last line
-        # names the module that blocks, and the faulthandler dumps every
-        # thread's stack at 240s whatever phase pytest is in.
+        # Collection is where the run stalls, and the step never ended even
+        # after python was killed: something spawned during collection keeps
+        # the step's stdout open. So the interpreter writes to a file in the
+        # background, bash polls it, prints the tail (importtime names the
+        # last module imported; the faulthandler dumps every thread at 240s),
+        # lists what is still running, and tears the tree down itself.
         shell: bash
-        run: >-
-          timeout -k 10 300 backend/.venv/Scripts/python.exe -X importtime -X faulthandler -c
-          "import faulthandler, sys; faulthandler.dump_traceback_later(240, exit=True); import pytest; sys.exit(pytest.main(['backend/tests', '--collect-only', '-q', '-p', 'no:cacheprovider']))"
+        run: |
+          backend/.venv/Scripts/python.exe -X importtime -X faulthandler -c "import faulthandler, sys; faulthandler.dump_traceback_later(240, exit=True); import pytest; sys.exit(pytest.main(['backend/tests', '--collect-only', '-q', '-p', 'no:cacheprovider']))" > collect.log 2>&1 &
+          pid=$!
+          for i in $(seq 1 60); do kill -0 "$pid" 2>/dev/null || break; sleep 5; done
+          echo "--- python alive after wait: $(kill -0 "$pid" 2>/dev/null && echo yes || echo no)"
+          echo "--- processes still around:"
+          tasklist //FO CSV | grep -iE "python|node|winpty|conhost|git|uv\.exe|pytest|cmd\.exe|powershell" || true
+          echo "--- last 120 lines of collect.log:"
+          tail -n 120 collect.log
+          echo "--- collected items: $(grep -cE '::' collect.log || true)"
+          taskkill //F //T //PID "$pid" >/dev/null 2>&1 || true
 
       - name: Backend tests
         # Diagnostics for a run that stalls: GitHub discards the log of a job
