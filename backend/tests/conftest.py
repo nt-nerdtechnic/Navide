@@ -193,6 +193,25 @@ def _pid_alive(pid: int) -> bool:
 
 
 @pytest.fixture
+def set_home(monkeypatch):
+    """Point the product's home at a directory on every platform.
+
+    `Path.home()` reads HOME on POSIX and USERPROFILE on Windows, so a bare
+    `monkeypatch.setenv("HOME", ...)` moves nothing on the Windows runner.
+    """
+    from pathlib import Path
+
+    from agent_team_backend import osplat
+
+    def _set(path) -> Path:
+        monkeypatch.setenv("HOME", str(path))
+        monkeypatch.setenv(osplat.paths.home_env_var(), str(path))
+        return Path(path)
+
+    return _set
+
+
+@pytest.fixture
 def pid_alive():
     """Signal-0 liveness probe."""
     return _pid_alive

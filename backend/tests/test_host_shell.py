@@ -330,6 +330,11 @@ async def test_public_git_diff_driver_command_is_rejected_before_spawn(tmp_path)
 
 
 def _write_fake_cli(bin_dir, name: str, script: str):
+    if os.name != "posix":
+        # The fakes are `#!/bin/sh` scripts found by bare name: the product
+        # execs `gh`/`glab` as given, which on Windows resolves only `.exe`,
+        # so no launcher written next to the script could be picked up.
+        pytest.skip("fake-CLI harness is a /bin/sh script exec'd by bare name")
     executable = bin_dir / name
     executable.write_text(f"#!/bin/sh\nset -eu\n{script}\n", encoding="utf-8")
     executable.chmod(0o755)

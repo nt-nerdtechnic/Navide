@@ -7,6 +7,7 @@ no test can read (let alone write) the machine's real plists.
 
 from __future__ import annotations
 
+import os
 import plistlib
 
 import pytest
@@ -15,6 +16,12 @@ from agent_team_backend import executions_service, osplat
 # The crontab/launchd implementation moved behind osplat; these tests exercise
 # it directly, and the façade's wire contract is pinned at the bottom.
 from agent_team_backend.osplat import _posix_scheduler as svc
+
+# launchd mutations address the job as `gui/<uid>/<label>`; there is no uid
+# (and no launchd) on Windows, so those paths cannot even build their argv.
+_needs_launchd_uid = pytest.mark.skipif(
+    not hasattr(os, "getuid"), reason="launchctl gui/<uid> domain needs os.getuid"
+)
 
 
 @pytest.fixture(autouse=True)
@@ -299,6 +306,7 @@ async def test_injection_labels_are_rejected(label, tmp_path, monkeypatch):
     assert calls == []
 
 
+@_needs_launchd_uid
 async def test_bootout_treats_not_loaded_as_success(tmp_path, monkeypatch):
     monkeypatch.setattr(svc, "_launch_agents_dir", lambda: tmp_path)
     (tmp_path / "com.foo.plist").write_bytes(plistlib.dumps({"Label": "com.foo"}))
@@ -310,6 +318,7 @@ async def test_bootout_treats_not_loaded_as_success(tmp_path, monkeypatch):
     assert [c[1] for c in calls] == ["disable", "bootout"]
 
 
+@_needs_launchd_uid
 async def test_bootout_failure_raises_with_stderr(tmp_path, monkeypatch):
     monkeypatch.setattr(svc, "_launch_agents_dir", lambda: tmp_path)
     (tmp_path / "com.foo.plist").write_bytes(plistlib.dumps({"Label": "com.foo"}))
@@ -320,6 +329,7 @@ async def test_bootout_failure_raises_with_stderr(tmp_path, monkeypatch):
         await svc.set_launch_agent_enabled("com.foo", False)
 
 
+@_needs_launchd_uid
 async def test_remove_keeps_the_plist_when_bootout_fails(tmp_path, monkeypatch):
     monkeypatch.setattr(svc, "_launch_agents_dir", lambda: tmp_path)
     plist = tmp_path / "com.foo.plist"
@@ -330,6 +340,7 @@ async def test_remove_keeps_the_plist_when_bootout_fails(tmp_path, monkeypatch):
     assert plist.exists()
 
 
+@_needs_launchd_uid
 async def test_remove_deletes_the_plist_after_a_clean_bootout(tmp_path, monkeypatch):
     monkeypatch.setattr(svc, "_launch_agents_dir", lambda: tmp_path)
     plist = tmp_path / "com.foo.plist"
@@ -486,6 +497,7 @@ async def test_system_level_jobs_cannot_be_mutated(directory, tmp_path, monkeypa
     assert (dirs[directory] / "x.plist").exists()
 
 
+@_needs_launchd_uid
 async def test_a_user_job_shadowing_a_system_label_is_still_manageable(tmp_path, monkeypatch):
     """The user's own copy is the one a mutation resolves to."""
     user, system_agents, _daemons = _scoped_dirs(monkeypatch, tmp_path)
@@ -523,8 +535,11 @@ async def test_list_executions_matches_window_contract(monkeypatch):
     async def fake_agents():
         return {"supported": True, "entries": [{"label": "com.x"}], "unreadable": 0, "error": None}
 
-    monkeypatch.setattr(svc, "list_crontab", fake_crontab)
-    monkeypatch.setattr(svc, "list_launch_agents", fake_agents)
+    # Patch the facade's own scanners, not the POSIX module's: on Linux the
+    # scheduler answers "launchagent" with the unsupported stub without ever
+    # calling into _posix_scheduler, and the shape under test is the facade's.
+    monkeypatch.setattr(executions_service, "list_crontab", fake_crontab)
+    monkeypatch.setattr(executions_service, "list_launch_agents", fake_agents)
 
     snapshot = await executions_service.list_executions()
 
@@ -582,6 +597,7 @@ async def test_symlink_escape_is_refused(tmp_path, monkeypatch):
     assert outside.exists()
 
 
+@_needs_launchd_uid
 async def test_disable_persists_through_launchd_override(tmp_path, monkeypatch):
     """bootout alone is undone at next login, so `launchctl disable` must run."""
     agents_dir = tmp_path / "LaunchAgents"

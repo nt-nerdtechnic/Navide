@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -137,6 +138,7 @@ def test_malformed_legacy_project_json_is_kept_and_not_marked_imported(
     assert not legacy.with_name(legacy.name + ".migrated-v1").exists()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows refuses to remove a workspace whose navide.db is open (WinError 32)")
 def test_save_recreates_a_vanished_workspace_data_dir(tmp_path: Path) -> None:
     """The old file store's _ensure_dir recreated a data dir that vanished
     mid-session; save() must do the same instead of pretending success."""

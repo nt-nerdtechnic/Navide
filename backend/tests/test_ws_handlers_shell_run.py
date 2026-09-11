@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -118,6 +119,10 @@ async def test_public_broker_rejects_git_template_without_creating_hooks(
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="fake `gh` is a #!/bin/sh script on a /usr/bin:/bin PATH (the test_host_shell fake-CLI harness)",
+)
 async def test_public_broker_does_not_return_provider_auth_fixture(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

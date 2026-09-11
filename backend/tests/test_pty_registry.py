@@ -134,6 +134,7 @@ def test_reap_kills_recorded_orphan() -> None:
     assert _registry() == {}
 
 
+@pytest.mark.skipif(not hasattr(os, "setsid"), reason="/bin/sh exec + lstart identity is POSIX-only")
 def test_reap_kills_orphan_behind_shell_exec() -> None:
     # The real app spawns `<shell> -lc <cmd>`; the shell execs the final
     # command, so ps shows `sleep 300`, not the shell. Identity must still

@@ -322,11 +322,17 @@ def test_install_timeout_reaps_the_whole_process_group(
     signals: list[int] = []
     _brew_present(monkeypatch)
     monkeypatch.setattr(ob.subprocess, "Popen", _fake_popen(0, timeout=True))
-    monkeypatch.setattr(ob.os, "getpgid", lambda _pid: 424242)
-    monkeypatch.setattr(ob.os, "killpg", lambda _pgid, sig: signals.append(sig))
+    # The product kills through osplat.process_tree (no getpgid/killpg on
+    # Windows); force=False is the SIGTERM step, force=True the SIGKILL one.
+    monkeypatch.setattr(ob.osplat.process_tree, "group_of", lambda _pid: 424242)
+    monkeypatch.setattr(
+        ob.osplat.process_tree,
+        "kill_group",
+        lambda _pgid, *, force: signals.append(force),
+    )
     r = ob.install_dep("node")
     assert r["ok"] is False and "timed out" in r["error"]
-    assert signals[:1] == [ob.signal.SIGTERM]
+    assert signals[:1] == [False]
 
 
 # ── ollama: installed ≠ serving ───────────────────────────────────────────────
@@ -498,7 +504,15 @@ def test_legacy_app_data_json_imported_once_and_retired(
     assert ob.is_complete() is True
 
 
+def _exe_name(name: str) -> str:
+    """`name` on POSIX; `name.com`/`.exe`/... on Windows, where PATH lookup
+    only ever tries the PATHEXT spellings."""
+    return ob.osplat.paths.executable_candidates(name)[0]
+
+
 def _make_executable(path: Path) -> Path:
+    if not path.suffix:
+        path = path.with_name(_exe_name(path.name))
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("#!/bin/sh\n", encoding="utf-8")
     path.chmod(0o755)
@@ -523,7 +537,7 @@ def test_cli_health_reports_distinct_duplicate_installations(
 ) -> None:
     first = _make_executable(tmp_path / "nvm" / "claude")
     second = _make_executable(tmp_path / "homebrew" / "claude")
-    monkeypatch.setenv("PATH", f"{first.parent}:{second.parent}")
+    monkeypatch.setenv("PATH", f"{first.parent}{ob.os.pathsep}{second.parent}")
     monkeypatch.setattr(
         ob,
         "_probe_alternate",
@@ -549,7 +563,7 @@ def _make_npm_claude_install(prefix: Path) -> tuple[Path, Path, Path]:
     target = _make_executable(
         prefix / "lib" / "node_modules" / "@anthropic-ai" / "claude-code" / "bin" / "claude.exe"
     )
-    binary = prefix / "bin" / "claude"
+    binary = prefix / "bin" / _exe_name("claude")
     binary.symlink_to(target)
     return npm, binary, target
 
@@ -694,13 +708,13 @@ def test_cli_health_collapses_aliases_to_same_physical_binary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     target = _make_executable(tmp_path / "package" / "claude.exe")
-    first = tmp_path / "bin-a" / "claude"
-    second = tmp_path / "bin-b" / "claude"
+    first = tmp_path / "bin-a" / _exe_name("claude")
+    second = tmp_path / "bin-b" / _exe_name("claude")
     first.parent.mkdir()
     second.parent.mkdir()
     first.symlink_to(target)
     second.symlink_to(target)
-    monkeypatch.setenv("PATH", f"{first.parent}:{second.parent}")
+    monkeypatch.setenv("PATH", f"{first.parent}{ob.os.pathsep}{second.parent}")
     monkeypatch.setattr(ob, "_dismissed_cli_health_fingerprint", lambda: "")
 
     health = ob.build_cli_health([_claude_status(first)])
@@ -748,7 +762,7 @@ def test_cli_binary_selection_persists_path_and_fingerprint_atomically(
     target = _make_executable(
         prefix / "lib" / "node_modules" / "@anthropic-ai" / "claude-code" / "bin" / "claude.exe"
     )
-    binary = prefix / "bin" / "claude"
+    binary = prefix / "bin" / _exe_name("claude")
     binary.parent.mkdir(parents=True, exist_ok=True)
     binary.symlink_to(target)
     monkeypatch.setenv("PATH", str(binary.parent))

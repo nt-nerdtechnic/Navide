@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from agent_team_backend import app
+from agent_team_backend import app, osplat
 from agent_team_backend.plugins import wiring as plugin_wiring
 from agent_team_backend.mcp_server import auth as plan_mcp_auth, wiring as plan_mcp_wiring
 
@@ -49,6 +49,7 @@ def test_write_claude_config_idempotent(tmp_path: Path) -> None:
     assert not path.with_suffix(".json.tmp").exists()
 
 
+@pytest.mark.skipif(not osplat.paths.enforces_posix_modes(), reason="POSIX mode bits")
 def test_write_claude_config_is_owner_only(tmp_path: Path) -> None:
     # The URL embeds the host internal token, so the file must never be
     # group/world readable.
@@ -57,6 +58,7 @@ def test_write_claude_config_is_owner_only(tmp_path: Path) -> None:
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
+@pytest.mark.skipif(not osplat.paths.enforces_posix_modes(), reason="POSIX mode bits")
 def test_write_claude_config_hardens_existing_wide_file(tmp_path: Path) -> None:
     # Unchanged content returns before rewriting, so a file left 0644 by an
     # older version has to be tightened on that path too.
@@ -431,6 +433,7 @@ def test_wire_cursor_git_exclude_ignores_a_commented_mention(tmp_path: Path) -> 
     assert lines[-1] == ".cursor/mcp.json"
 
 
+@pytest.mark.skipif(not osplat.paths.enforces_posix_modes(), reason="POSIX mode bits")
 def test_wire_cursor_keeps_the_permissions_the_users_file_had(tmp_path: Path) -> None:
     """cursor's mcp.json is where people put API keys for their own servers.
     Rewriting it must not widen a mode the user tightened."""

@@ -172,18 +172,19 @@ async def test_workspace_list_marks_which_recent_workspaces_have_a_live_pane(
 
 @pytest.mark.asyncio
 async def test_workspace_list_reports_a_live_workspace_the_recent_list_never_saw(
-    monkeypatch: pytest.MonkeyPatch, recent: None
+    monkeypatch: pytest.MonkeyPatch, recent: None, tmp_path: Path
 ) -> None:
     """A pane can run in a project the user never opened from the welcome
     screen — a legal workspace_path the recent list does not mention."""
-    monkeypatch.setattr(
-        plan_mcp, "_live_pane_workspaces", lambda: ["/ws/gamma", "/ws/alpha"]
-    )
+    # Real absolute paths: the live set is reported in resolved form.
+    alpha = str((tmp_path / "alpha").resolve())
+    gamma = str((tmp_path / "gamma").resolve())
+    monkeypatch.setattr(plan_mcp, "_live_pane_workspaces", lambda: [gamma, alpha])
 
     result = await plan_mcp.workspace_list(_host_ctx())
 
-    assert result["live_pane_workspaces"] == ["/ws/alpha", "/ws/gamma"]
-    assert "/ws/gamma" not in {entry["path"] for entry in result["workspaces"]}
+    assert result["live_pane_workspaces"] == [alpha, gamma]
+    assert gamma not in {entry["path"] for entry in result["workspaces"]}
 
 
 # ── C. pipeline_list ────────────────────────────────────────────────────────

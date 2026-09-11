@@ -1,8 +1,24 @@
+import json
+import shutil
 import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
+
+import pytest
 
 from agent_team_backend.claude_hooks import _build_curl_command
+
+
+def _bash() -> str | None:
+    """Git for Windows' bash first: a bare `which("bash")` can land on the WSL
+    stub in System32, which has no distribution to run anything with."""
+    git = shutil.which("git")
+    if git is not None:
+        candidate = Path(git).resolve().parent.parent / "bin" / "bash.exe"
+        if candidate.is_file():
+            return str(candidate)
+    return shutil.which("bash")
 
 
 def _run_hook(tmp_path, event_kind: str, body: bytes, endpoint: str = "claude"):
@@ -12,6 +28,12 @@ def _run_hook(tmp_path, event_kind: str, body: bytes, endpoint: str = "claude"):
     the interesting half, because that is the only channel a CLI reads a hook's
     decision from.
     """
+    # The hook command is a POSIX sh script: `shell=True` would hand it to
+    # cmd.exe on Windows, so run it under an explicit bash (Git for Windows
+    # ships one) — checked before the server thread starts.
+    bash = _bash()
+    if bash is None:
+        pytest.skip("hook commands are POSIX sh scripts and no bash is on PATH")
     received: list[bytes] = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -37,8 +59,7 @@ def _run_hook(tmp_path, event_kind: str, body: bytes, endpoint: str = "claude"):
 
     try:
         result = subprocess.run(
-            _build_curl_command(str(port_file), event_kind, endpoint=endpoint),
-            shell=True,
+            [bash, "-c", _build_curl_command(str(port_file), event_kind, endpoint=endpoint)],
             input=payload,
             text=True,
             capture_output=True,
@@ -89,7 +110,15 @@ def test_dev_instance_does_not_overwrite_production_hook(tmp_path) -> None:
     # Install production hook
     install_hooks(str(prod_port_file), settings_file=settings_file)
     initial_content = settings_file.read_text(encoding="utf-8")
-    assert str(prod_port_file) in initial_content
+    # Through the JSON, not the raw text: a Windows path's backslashes are
+    # escaped in the file.
+    commands = [
+        h["command"]
+        for entries in json.loads(initial_content)["hooks"].values()
+        for entry in entries
+        for h in entry.get("hooks", [])
+    ]
+    assert any(str(prod_port_file) in c for c in commands)
 
     # Attempt to install dev hook (port_file containing -dev)
     dev_port_file = tmp_path / "Agent-Team-dev" / "backend-port"

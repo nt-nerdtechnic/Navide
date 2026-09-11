@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import socket
+from pathlib import Path
 
 import pytest
 
@@ -35,7 +36,8 @@ class TestCreateAskpassContext:
 
         env, cleanup = await git_service.create_askpass_context(on_request)
         try:
-            assert env["GIT_ASKPASS"].endswith("git_askpass_helper.py")
+            # The script itself on POSIX, a `.cmd` launcher for it on Windows.
+            assert Path(env["GIT_ASKPASS"]).stem == "git_askpass_helper"
             port = int(env["NAVIDE_ASKPASS_PORT"])
             token = env["NAVIDE_ASKPASS_TOKEN"]
 

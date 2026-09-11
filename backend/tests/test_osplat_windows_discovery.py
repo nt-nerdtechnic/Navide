@@ -5,6 +5,7 @@ module imports everywhere and nothing here touches Win32.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -32,6 +33,7 @@ class TestExecutableCandidates:
         monkeypatch.setenv("PATHEXT", ".EXE;.CMD")
         assert win.executable_candidates("uv") == ["uv.exe", "uv.cmd"]
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="exercises the POSIX exec bit on the host; Windows access(X_OK) always answers True")
     def test_posix_asks_for_the_bare_name_and_the_exec_bit(self, tmp_path: Path) -> None:
         assert _posix_paths.executable_candidates("claude") == ["claude"]
         plain = tmp_path / "plain"

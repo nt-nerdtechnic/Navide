@@ -1,5 +1,7 @@
 """The CPU sweep behind the resource panel."""
 
+import pytest
+
 from agent_team_backend import process_cpu
 
 
@@ -29,6 +31,12 @@ class TestTimeParsing:
 
 class TestSyscallSweep:
     """The path every real sweep takes: `proc_pid_rusage`, no subprocess."""
+
+    @pytest.fixture(autouse=True)
+    def _sweep_available(self, monkeypatch):
+        # Windows reports the sweep unavailable; the stubbed probe is the
+        # subject here, so the platform gate must not short-circuit it.
+        monkeypatch.setattr(process_cpu, "available", lambda: True)
 
     def test_reads_the_kernel_counter_without_spawning_anything(self, monkeypatch):
         monkeypatch.setattr(
@@ -149,6 +157,7 @@ def _must_not_run(*_args, **_kwargs):
 
 def _force_fallback(monkeypatch) -> None:
     """Pretend the syscall cannot be resolved, so the subprocess path runs."""
+    monkeypatch.setattr(process_cpu, "available", lambda: True)  # not gated on win32
     monkeypatch.setattr(process_cpu.osplat.resource_probe, "available", lambda: False)
     monkeypatch.setattr(process_cpu.osplat.resource_probe, "sample", lambda pids: {})
 

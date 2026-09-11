@@ -22,6 +22,13 @@ from agent_team_backend.onboarding_deps import (
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
+# The login-shell probe is a POSIX seam: osplat answers None on Windows by
+# design (PATH comes from the registry), so the refresh is a no-op there.
+_needs_login_shell_probe = pytest.mark.skipif(
+    osplat.paths.login_path_probe() is None,
+    reason="login-shell PATH probe is None on this platform (Windows) by design",
+)
+
 
 @pytest.fixture(autouse=True)
 def _reset_path_probe_cache(monkeypatch):
@@ -39,6 +46,7 @@ def _make_run_result(stdout: str, returncode: int = 0) -> MagicMock:
 # ── merge order ──────────────────────────────────────────────────────────────
 
 
+@_needs_login_shell_probe
 def test_new_paths_prepended(monkeypatch):
     """Paths returned by the shell that are absent from PATH should be prepended."""
     monkeypatch.setenv("PATH", "/usr/bin:/bin")
@@ -67,6 +75,7 @@ def test_existing_paths_not_duplicated(monkeypatch):
 # ── dedup ─────────────────────────────────────────────────────────────────────
 
 
+@_needs_login_shell_probe
 def test_dedup_within_shell_output(monkeypatch):
     """Even if shell output contains duplicates, only first occurrence is added."""
     monkeypatch.setenv("PATH", "/usr/bin")
@@ -123,6 +132,7 @@ def test_empty_stdout_no_crash(monkeypatch):
 # ── fallback install prefixes ────────────────────────────────────────────────
 
 
+@_needs_login_shell_probe
 def test_fallback_dirs_merged_when_probe_fails(monkeypatch, tmp_path):
     """Standard install prefixes are merged even when the login-shell probe fails."""
     fallback = tmp_path / "brew-bin"
@@ -144,6 +154,7 @@ def test_fallback_dir_skipped_when_missing(monkeypatch, tmp_path):
     assert os.environ["PATH"] == original
 
 
+@_needs_login_shell_probe
 def test_shell_paths_ordered_before_fallback(monkeypatch, tmp_path):
     """Shell-derived paths are prepended ahead of fallback prefixes."""
     fallback = tmp_path / "fb"
@@ -157,6 +168,7 @@ def test_shell_paths_ordered_before_fallback(monkeypatch, tmp_path):
     assert parts[1] == str(fallback)
 
 
+@_needs_login_shell_probe
 def test_last_line_used_when_banner_present(monkeypatch):
     """When shell emits a banner, the last non-empty line is treated as PATH."""
     monkeypatch.setenv("PATH", "/usr/bin")
@@ -169,6 +181,7 @@ def test_last_line_used_when_banner_present(monkeypatch):
 # ── probe command shape ───────────────────────────────────────────────────────
 
 
+@_needs_login_shell_probe
 def test_probe_uses_interactive_zsh(monkeypatch):
     """zsh reads ~/.zshrc only in interactive mode; installers (e.g. grok)
     write PATH exports there, so the probe must run zsh with -i."""
@@ -176,11 +189,13 @@ def test_probe_uses_interactive_zsh(monkeypatch):
     assert _path_probe_command() == ["/bin/zsh", "-ilc", "echo $PATH"]
 
 
+@_needs_login_shell_probe
 def test_probe_uses_login_shell_for_non_zsh(monkeypatch):
     monkeypatch.setenv("SHELL", "/bin/bash")
     assert _path_probe_command() == ["/bin/bash", "-lc", "echo $PATH"]
 
 
+@_needs_login_shell_probe
 def test_probe_falls_back_to_bash_without_shell_env(monkeypatch):
     monkeypatch.delenv("SHELL", raising=False)
     assert _path_probe_command() == ["/bin/bash", "-lc", "echo $PATH"]
@@ -204,6 +219,7 @@ def test_non_posix_noop(monkeypatch):
 # ── detection missing → ok after refresh ─────────────────────────────────────
 
 
+@_needs_login_shell_probe
 def test_detection_missing_to_ok_after_refresh(monkeypatch, tmp_path):
     """
     Simulate a tool that is absent from the original PATH but present in the

@@ -19,12 +19,14 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
+import sys
 import time
 from typing import Any
 
 import pytest
 
 from agent_team_backend import terminals
+from agent_team_backend.osplat import _posix
 from agent_team_backend.terminals import (
     TerminalService,
     _children_map,
@@ -38,6 +40,8 @@ async def _noop_emit(event: dict[str, Any]) -> None:
 
 
 # ---- _ps_snapshot: parsing ----
+# _ps_snapshot delegates to whichever tree osplat wired for the host; the
+# ps-table parser under test is the POSIX one, so it is driven directly.
 
 def test_ps_snapshot_parses_fields_and_skips_garbage(monkeypatch, fake_ps):
     table = (
@@ -46,8 +50,8 @@ def test_ps_snapshot_parses_fields_and_skips_garbage(monkeypatch, fake_ps):
         "BAD\n\n"
         "300 200 100\n"
     )
-    monkeypatch.setattr(terminals.subprocess, "run", fake_ps(table))
-    assert _ps_snapshot() == {
+    monkeypatch.setattr(_posix.subprocess, "run", fake_ps(table))
+    assert _posix.process_tree.snapshot() == {
         100: (1, 100, "Thu Jul 24 10:05:00 2026"),
         200: (100, 200, "Thu Jul 24 10:05:03 2026"),
         300: (200, 100, ""),
@@ -57,8 +61,8 @@ def test_ps_snapshot_parses_fields_and_skips_garbage(monkeypatch, fake_ps):
 def test_ps_snapshot_empty_on_failure(monkeypatch):
     def boom(*a, **k):
         raise OSError("no ps")
-    monkeypatch.setattr(terminals.subprocess, "run", boom)
-    assert _ps_snapshot() == {}
+    monkeypatch.setattr(_posix.subprocess, "run", boom)
+    assert _posix.process_tree.snapshot() == {}
 
 
 # ---- _refresh_descendants: rolling snapshot + registry payload ----
@@ -176,7 +180,7 @@ async def test_reap_noop_when_ps_fails(monkeypatch):
 
 # ---- batch sweeper wiring ----
 
-async def test_close_schedules_reap_on_exit_but_not_on_kill(monkeypatch):
+async def test_close_schedules_reap_on_exit_but_not_on_kill(monkeypatch, tmp_path):
     monkeypatch.setattr(terminals, "_EXIT_ORPHAN_GRACE_S", 0.01)
     reaped: list[list[int]] = []
 
@@ -187,7 +191,12 @@ async def test_close_schedules_reap_on_exit_but_not_on_kill(monkeypatch):
 
     svc = TerminalService(emit=_noop_emit)
     # Natural exit: short-lived child, snapshot pre-seeded.
-    s1 = svc.create(pane_id="p1", agent_key=None, command=["sh", "-c", "exit 0"], cwd="/")
+    s1 = svc.create(
+        pane_id="p1",
+        agent_key=None,
+        command=[sys.executable, "-c", "raise SystemExit(0)"],
+        cwd=str(tmp_path),
+    )
     s1.descendants = {111: ""}
     for _ in range(100):
         if s1.closed:
@@ -198,7 +207,12 @@ async def test_close_schedules_reap_on_exit_but_not_on_kill(monkeypatch):
     assert reaped == [[111]]
 
     # kill() path: must NOT queue for the exit reaper (it sweeps on its own).
-    s2 = svc.create(pane_id="p2", agent_key=None, command=["sleep", "30"], cwd="/")
+    s2 = svc.create(
+        pane_id="p2",
+        agent_key=None,
+        command=[sys.executable, "-c", "import time; time.sleep(30)"],
+        cwd=str(tmp_path),
+    )
     s2.descendants = {222: ""}
     await svc.kill(s2.id, force=True)
     await asyncio.sleep(0.2)

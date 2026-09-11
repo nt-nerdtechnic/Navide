@@ -22,8 +22,13 @@ import os
 import signal
 import sys
 
+import pytest
+
 from agent_team_backend import terminals
 from agent_team_backend.terminals import TerminalService
+
+# Controlling tty, setsid, tcsetpgrp and fork: Windows/ConPTY has none of them.
+pytestmark = pytest.mark.skipif(not hasattr(os, "setsid"), reason="POSIX controlling-terminal semantics")
 
 
 def _frame_data(frame: bytes) -> bytes:

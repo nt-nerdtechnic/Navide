@@ -11,6 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+from agent_team_backend import osplat
 from agent_team_backend import usage_service as us
 from agent_team_backend.cli_vendors import _protocols as protocols_vendor
 from agent_team_backend.cli_vendors import antigravity as antigravity_vendor
@@ -1882,7 +1883,8 @@ def test_usage_cache_loads_last_good_and_ignores_invalid_files(tmp_path):
     assert "accessToken" not in raw
     assert "refreshToken" not in raw
     assert "must-not-persist" not in raw
-    assert cache.stat().st_mode & 0o777 == 0o600
+    if osplat.paths.enforces_posix_modes():
+        assert cache.stat().st_mode & 0o777 == 0o600
     loaded = us.UsageService(
         cache_path=cache,
         active_claude_slot_reader=lambda: "acct-a",
@@ -2652,11 +2654,11 @@ async def test_grok_billing_rpc_with_fake_stdio(tmp_path, monkeypatch):
 
 # ── Codex fetch: stranded in-pane login promotion ───────────────────────────
 
-async def test_fetch_codex_promotes_stranded_pane_login(monkeypatch, tmp_path):
+async def test_fetch_codex_promotes_stranded_pane_login(monkeypatch, tmp_path, set_home):
     """Fresh install: login done inside a manual pane sits in
     ~/.codex-panes/<pane>/auth.json; the poll must adopt it instead of
     reporting no-credentials forever."""
-    monkeypatch.setenv("HOME", str(tmp_path))
+    set_home(tmp_path)
     real = tmp_path / ".codex"
     pane_auth = tmp_path / ".codex-panes" / "pane-1" / "auth.json"
     pane_auth.parent.mkdir(parents=True)

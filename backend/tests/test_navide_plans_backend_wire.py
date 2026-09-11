@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import queue
 import re
-import select
 import subprocess
 import sys
+import threading
 import time
 from html import escape as html_escape
 from pathlib import Path
@@ -43,12 +44,34 @@ def _send(process: subprocess.Popen[bytes], frame: dict[str, Any]) -> None:
     process.stdin.flush()
 
 
+def _frames_of(process: subprocess.Popen[bytes]) -> queue.Queue[bytes]:
+    """One reader thread per child, started on first read.
+
+    A blocking readline is the only pipe wait that works everywhere:
+    `select` only accepts sockets on Windows. EOF is queued as b"".
+    """
+    frames = getattr(process, "_frames", None)
+    if frames is None:
+        frames = process._frames = queue.Queue()  # type: ignore[attr-defined]
+
+        def pump() -> None:
+            assert process.stdout is not None
+            for line in iter(process.stdout.readline, b""):
+                frames.put(line)
+            frames.put(b"")
+
+        threading.Thread(target=pump, daemon=True).start()
+    return frames
+
+
 def _read(process: subprocess.Popen[bytes], timeout: float = 2.0) -> dict[str, Any]:
     assert process.stdout is not None
-    ready, _, _ = select.select([process.stdout], [], [], timeout)
-    if not ready:
-        raise AssertionError(f"Backend Wire child produced no frame within {timeout}s")
-    line = process.stdout.readline()
+    try:
+        line = _frames_of(process).get(timeout=timeout)
+    except queue.Empty:
+        raise AssertionError(
+            f"Backend Wire child produced no frame within {timeout}s"
+        ) from None
     if not line:
         stderr = process.stderr.read().decode(errors="replace") if process.stderr else ""
         raise AssertionError(f"Backend Wire child exited without a frame: {stderr}")

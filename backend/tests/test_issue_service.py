@@ -260,6 +260,10 @@ class TestListIssues:
 
     @pytest.mark.asyncio
     async def test_trusted_issue_route_inherits_existing_gh_auth_config(self, tmp_path, monkeypatch):
+        if os.name != "posix":
+            # Same harness as test_host_shell: a `#!/bin/sh` fake exec'd by
+            # bare name, which Windows resolves only as `gh.exe`.
+            pytest.skip("fake-CLI harness is a /bin/sh script exec'd by bare name")
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()
         source_config = tmp_path / "gh-config"

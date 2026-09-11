@@ -9,7 +9,7 @@ import stat
 
 import pytest
 
-from agent_team_backend import device_crypto
+from agent_team_backend import device_crypto, osplat
 from agent_team_backend.device_crypto import CryptoError
 
 A = "dev-alice"
@@ -41,6 +41,10 @@ def test_a_key_is_generated_once_and_reused() -> None:
     assert device_crypto.is_public_key(first)
 
 
+@pytest.mark.skipif(
+    not osplat.paths.enforces_posix_modes(),
+    reason="POSIX mode bits: NTFS has none, secret_files hardens with an ACL",
+)
 def test_the_private_key_is_owner_only_on_disk() -> None:
     device_crypto.public_key()
     mode = stat.S_IMODE(os.stat(device_crypto.keys_path()).st_mode)
@@ -63,7 +67,11 @@ def test_a_truncated_key_file_is_replaced() -> None:
 
 def test_the_private_key_never_appears_in_the_published_key() -> None:
     published = device_crypto.public_key()
-    stored = json.loads(device_crypto.keys_path().read_text(encoding="utf-8"))
+    # The file is written through secret_files (DPAPI-wrapped on Windows), so
+    # read it back the same way rather than as plain text.
+    stored = json.loads(
+        osplat.secret_files.read_private(device_crypto.keys_path()).decode("utf-8")
+    )
     assert stored["x25519_private"] != published
 
 

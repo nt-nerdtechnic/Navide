@@ -31,7 +31,7 @@ def test_lookup_path_names_session_state_events_file(
 ) -> None:
     monkeypatch.setenv("COPILOT_HOME", str(tmp_path))
     path = app_module._session_lookup_path("copilot", "/ws", "sid-9")
-    assert path.endswith("/session-state/sid-9/events.jsonl")
+    assert Path(path).as_posix().endswith("/session-state/sid-9/events.jsonl")
 
 
 def test_session_exists_follows_lookup_path(

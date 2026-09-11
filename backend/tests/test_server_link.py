@@ -19,6 +19,7 @@ from agent_team_backend import (
     confirm_token,
     device_identity,
     device_signing,
+    osplat,
     remote_roster,
     server_link,
     trust_store,
@@ -537,6 +538,8 @@ async def test_auth_revoked_clears_the_token_and_stops_reconnecting():
         )
         await _until(lambda: bool(link.terminated_reason))
         assert "disabled" in link.terminated_reason
+        # The reason is set before the token clear is awaited off-thread.
+        await _until(lambda: bool(cleared))
         assert cleared == [True]
         # The whole point: a revoked account must not keep knocking.
         await asyncio.sleep(0.15)
@@ -1806,6 +1809,7 @@ def test_config_round_trips_through_settings_and_the_vault(tmp_path, monkeypatch
         pass
 
 
+@pytest.mark.skipif(not osplat.paths.enforces_posix_modes(), reason="POSIX mode bits")
 def test_app_secret_file_backend_is_private(tmp_path):
     vault = CredentialVault(
         root=tmp_path / "vault", real_home=tmp_path / "home", platform="linux"

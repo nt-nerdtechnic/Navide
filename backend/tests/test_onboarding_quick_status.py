@@ -12,6 +12,7 @@ import subprocess
 import pytest
 
 from agent_team_backend import onboarding_deps as od
+from agent_team_backend import osplat
 
 
 @pytest.fixture(autouse=True)
@@ -51,6 +52,10 @@ def test_quick_and_full_agree_on_missing(monkeypatch):
     assert set(quick.values()) == {"missing"}
 
 
+@pytest.mark.skipif(
+    osplat.paths.login_path_probe() is None,
+    reason="login-shell PATH probe is None on this platform (Windows) by design",
+)
 def test_path_probe_cached_until_forced(monkeypatch):
     calls = []
 

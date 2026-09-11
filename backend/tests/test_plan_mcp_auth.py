@@ -18,7 +18,7 @@ from typing import Any
 
 import pytest
 
-from agent_team_backend import agent_messaging
+from agent_team_backend import agent_messaging, osplat
 from agent_team_backend.mcp_server import server as plan_mcp, auth as plan_mcp_auth, wiring as plan_mcp_wiring
 from agent_team_backend.plugins.builtin.navide_plans import plan_tools
 
@@ -173,17 +173,20 @@ async def test_plan_list_accepts_a_host_credential(tmp_path, monkeypatch: pytest
 # ── file permissions: the tokens are bearer credentials ─────────────────────
 
 
+@pytest.mark.skipif(not osplat.paths.enforces_posix_modes(), reason="POSIX mode bits")
 def test_the_auth_file_is_not_readable_by_other_users() -> None:
     plan_mcp_auth.internal_token()  # generates and writes the file
     assert plan_mcp_auth.auth_path().stat().st_mode & 0o077 == 0
 
 
+@pytest.mark.skipif(not osplat.paths.enforces_posix_modes(), reason="POSIX mode bits")
 def test_a_rewrite_keeps_the_mode_tight() -> None:
     plan_mcp_auth.internal_token()
     plan_mcp_auth.regenerate_external_token()
     assert plan_mcp_auth.auth_path().stat().st_mode & 0o077 == 0
 
 
+@pytest.mark.skipif(not osplat.paths.enforces_posix_modes(), reason="POSIX mode bits")
 def test_a_file_left_world_readable_by_an_older_version_is_tightened() -> None:
     plan_mcp_auth.internal_token()
     path = plan_mcp_auth.auth_path()

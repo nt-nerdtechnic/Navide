@@ -51,9 +51,9 @@ def _usage(vendor: str, session_id: str, path: Path, cwd: str) -> TokenUsage:
 
 def test_pipeline_prebind_detects_and_persists_three_codex_panes(
     tmp_path: Path,
-    monkeypatch,
+    set_home,
 ) -> None:
-    monkeypatch.setenv("HOME", str(tmp_path))
+    set_home(tmp_path)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     ws = str(workspace)

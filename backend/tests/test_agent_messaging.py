@@ -1193,13 +1193,15 @@ def test_every_resolve_code_has_a_ui_string() -> None:
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[2]
-    source = (root / "backend/agent_team_backend/agent_messaging.py").read_text()
+    source = (root / "backend/agent_team_backend/agent_messaging.py").read_text(encoding="utf-8")
     codes = set(re.findall(r'_resolve_error\(\s*\n?\s*"([a-z-]+)"', source))
     assert codes, "no codes found — has _resolve_error been renamed?"
 
     for locale in ("en-US", "zh-TW"):
         strings = json.loads(
-            (root / f"packages/plugin-ui/src/foundation/i18n/locales/{locale}.json").read_text()
+            (root / f"packages/plugin-ui/src/foundation/i18n/locales/{locale}.json").read_text(
+                encoding="utf-8"
+            )
         )["msg"]
         missing = sorted(c for c in codes if f"reason-{c}" not in strings)
         assert not missing, f"{locale} is missing msg.reason-* for: {missing}"

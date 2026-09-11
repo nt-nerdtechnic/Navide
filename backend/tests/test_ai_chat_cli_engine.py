@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from typing import Any
 
 import pytest
@@ -46,20 +45,26 @@ def _fake_binary(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
-def killpg_calls(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, int]]:
+def killpg_calls(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, bool]]:
     """Never let _terminate_proc_tree touch real process groups in tests.
 
-    getpgid raises by default (→ per-proc terminate()/kill() fallback);
-    killpg records instead of signalling. Tests that want the killpg path
-    override getpgid and read the recorded calls.
+    The product goes through `osplat.process_tree` (`os.getpgid`/`os.killpg`
+    do not exist on Windows). group_of raises by default (→ per-proc
+    terminate()/kill() fallback); kill_group records instead of signalling.
+    Tests that want the kill_group path override group_of and read the
+    recorded (pgid, force) calls.
     """
-    calls: list[tuple[int, int]] = []
+    calls: list[tuple[int, bool]] = []
 
-    def fake_getpgid(pid: int) -> int:
+    def fake_group_of(pid: int) -> int:
         raise ProcessLookupError(pid)
 
-    monkeypatch.setattr(os, "getpgid", fake_getpgid)
-    monkeypatch.setattr(os, "killpg", lambda pgid, sig: calls.append((pgid, sig)))
+    monkeypatch.setattr(eng.osplat.process_tree, "group_of", fake_group_of)
+    monkeypatch.setattr(
+        eng.osplat.process_tree,
+        "kill_group",
+        lambda pgid, *, force: calls.append((pgid, force)),
+    )
     return calls
 
 
