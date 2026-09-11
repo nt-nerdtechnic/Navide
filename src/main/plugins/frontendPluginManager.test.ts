@@ -3,6 +3,7 @@ import { createHash, generateKeyPairSync, sign as edSign } from 'node:crypto'
 import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
+import { normalizePlatformId, setPlatformId } from '../../shared/osplat'
 
 // The manager imports electron for its view lifecycle. A functional stub backs
 // both the registry tests (which touch none of it) and the view-lifecycle tests
@@ -5321,6 +5322,7 @@ describe('mini-IDE dedicated window (openMiniIdePluginView)', () => {
       if (!win.isDestroyed()) win.close()
     }
     frontendPluginManager.destroy(MINI_IDE_PLUGIN_ID)
+    setPlatformId(normalizePlatformId(process.platform))
   })
 
   function lastWindow(): FakeWindowLike {
@@ -5331,6 +5333,9 @@ describe('mini-IDE dedicated window (openMiniIdePluginView)', () => {
   }
 
   it('creates a dedicated host window with the legacy editor options', () => {
+    // The hidden title bar is the macOS shape; other platforms get the system
+    // frame (systemFrameUnlessMac), so pin the platform this test describes.
+    setPlatformId('darwin')
     const winsBefore = windows.length
     const ok = openMiniIdePluginView('/ws', 'http://h:1')
     expect(ok).toBe(true)

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, utimes } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, symlink, utimes } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -38,9 +38,17 @@ describe('isSystemTempPath', () => {
     expect(isSystemTempPath(tmpdir())).toBe(false)
   })
 
-  it('treats /var and /private/var as the same root', () => {
+  it('treats a symlinked temp root and its target as the same root', async () => {
     // macOS resolves /var → /private/var; a naive prefix test would miss.
-    expect(isSystemTempPath('/private/var/x', '/var')).toBe(isSystemTempPath('/var/x', '/var'))
+    // Build the same shape under the sandbox so the check holds on every host.
+    const real = join(sandbox, 'real')
+    const link = join(sandbox, 'link')
+    await mkdir(real)
+    await symlink(real, link)
+    // The target is only realpath'd when it exists, like a real dropped file.
+    await writeFile(join(real, 'x'), '')
+    expect(isSystemTempPath(join(real, 'x'), link)).toBe(true)
+    expect(isSystemTempPath(join(link, 'x'), link)).toBe(true)
   })
 })
 
