@@ -11,6 +11,7 @@ import {
   normalizePlatformId,
   platformId,
   setPlatformId,
+  shellCommandArgv,
   type PlatformId,
 } from './osplat'
 
@@ -92,10 +93,19 @@ describe('defaultShell', () => {
     asPlatform('win32', () => expect(defaultShell({})).toBe('powershell.exe'))
   })
 
-  it('honours COMSPEC on Windows before guessing at PowerShell', () => {
+  // COMSPEC is set on every Windows session and names cmd.exe, whose syntax
+  // is nothing like what the spawn paths assume — honouring it would have made
+  // cmd.exe the effective default for everyone.
+  it('ignores COMSPEC on Windows and still lands on PowerShell', () => {
     asPlatform('win32', () => {
-      expect(defaultShell({ COMSPEC: 'C:\\Windows\\system32\\cmd.exe' })).toBe(
-        'C:\\Windows\\system32\\cmd.exe'
+      expect(defaultShell({ COMSPEC: 'C:\\Windows\\system32\\cmd.exe' })).toBe('powershell.exe')
+    })
+  })
+
+  it('still prefers SHELL on Windows when a user has set one', () => {
+    asPlatform('win32', () => {
+      expect(defaultShell({ SHELL: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe' })).toBe(
+        'C:\\Program Files\\PowerShell\\7\\pwsh.exe'
       )
     })
   })
@@ -167,5 +177,66 @@ describe('loginPathFallbacks', () => {
 
   it('has nothing to add on Windows', () => {
     asPlatform('win32', () => expect(loginPathFallbacks('C:\\Users\\x')).toEqual([]))
+  })
+})
+
+describe('shellCommandArgv', () => {
+  // Exactly what App.vue and AiCliDock built inline before the helper existed;
+  // the POSIX arms must not move by a single flag.
+  it('keeps the POSIX form the panes always used', () => {
+    asPlatform('darwin', () => {
+      expect(shellCommandArgv('/bin/zsh', 'claude')).toEqual(['/bin/zsh', '-ilc', 'claude'])
+      expect(shellCommandArgv('/bin/bash', 'claude')).toEqual(['/bin/bash', '-lc', 'claude'])
+    })
+    asPlatform('linux', () => {
+      expect(shellCommandArgv('/usr/bin/zsh', 'codex')).toEqual(['/usr/bin/zsh', '-ilc', 'codex'])
+      expect(shellCommandArgv('/usr/bin/fish', 'codex')).toEqual(['/usr/bin/fish', '-lc', 'codex'])
+    })
+  })
+
+  it('uses -NoExit -Command for both PowerShells on Windows', () => {
+    asPlatform('win32', () => {
+      expect(shellCommandArgv('powershell.exe', 'claude')).toEqual([
+        'powershell.exe',
+        '-NoLogo',
+        '-NoExit',
+        '-Command',
+        'claude',
+      ])
+      expect(shellCommandArgv('C:\\Program Files\\PowerShell\\7\\pwsh.exe', 'claude')).toEqual([
+        'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
+        '-NoLogo',
+        '-NoExit',
+        '-Command',
+        'claude',
+      ])
+      expect(shellCommandArgv('pwsh', 'claude')[1]).toBe('-NoLogo')
+    })
+  })
+
+  it('uses /k for cmd.exe on Windows', () => {
+    asPlatform('win32', () => {
+      expect(shellCommandArgv('C:\\Windows\\system32\\cmd.exe', 'claude')).toEqual([
+        'C:\\Windows\\system32\\cmd.exe',
+        '/k',
+        'claude',
+      ])
+    })
+  })
+
+  it('hands any other Windows shell the POSIX flags', () => {
+    asPlatform('win32', () => {
+      expect(shellCommandArgv('C:\\Program Files\\Git\\bin\\bash.exe', 'claude')).toEqual([
+        'C:\\Program Files\\Git\\bin\\bash.exe',
+        '-lc',
+        'claude',
+      ])
+    })
+  })
+
+  it('does not apply the Windows forms off Windows', () => {
+    asPlatform('linux', () => {
+      expect(shellCommandArgv('powershell.exe', 'x')).toEqual(['powershell.exe', '-lc', 'x'])
+    })
   })
 })

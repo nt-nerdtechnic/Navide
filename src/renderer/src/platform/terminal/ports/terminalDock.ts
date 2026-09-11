@@ -51,6 +51,11 @@ export interface TerminalFileListResult {
 export interface TerminalDockPort {
   readonly status: ReactiveValue<'starting' | 'connecting' | 'connected' | 'disconnected' | 'error'>
   readonly shell: ReactiveValue<string>
+  /** The argv that runs `command` inside `shell` and keeps the shell open —
+   *  the host's call, since only it knows the platform (PowerShell and
+   *  cmd.exe take different flags from a POSIX login shell). A port that
+   *  omits it gets the POSIX form. */
+  readonly spawnArgv?: (shell: string, command: string) => string[]
   readonly autoRestart: ReactiveValue<{ attempt: number; max: number; reason: string } | null>
 
   input(sessionId: string, data: string, timeoutMs?: number): Promise<PortResponse>

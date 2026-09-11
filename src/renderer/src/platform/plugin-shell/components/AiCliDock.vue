@@ -237,9 +237,13 @@ async function start(): Promise<void> {
       permissionStored: settingsGet<string | null>(cliPermissionKey(agentKey.value), null),
     })
     await term.spawn({
-      // zsh reads ~/.zshrc (where installers add PATH) only in interactive
-      // mode — plain -lc misses it (same wrapping as App.vue spawns).
-      command: [shell, shell.endsWith('zsh') ? '-ilc' : '-lc', command],
+      // The host port knows the platform and builds the argv (PowerShell and
+      // cmd.exe on Windows; the same wrapping as App.vue spawns elsewhere).
+      // Without one: zsh reads ~/.zshrc (where installers add PATH) only in
+      // interactive mode — plain -lc misses it.
+      command:
+        props.terminalPort.spawnArgv?.(shell, command) ??
+        [shell, shell.endsWith('zsh') ? '-ilc' : '-lc', command],
       cwd: props.workspacePath,
       agentKey: agentKey.value,
       metadata: {

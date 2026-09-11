@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { ref } from 'vue'
 import type { useBackend } from '../useBackend'
+import { normalizePlatformId, setPlatformId } from '../../../../shared/osplat'
 import { createHostTerminalDockPort } from '../hostSurfacePorts'
 import {
   runTerminalDockContract,
@@ -45,8 +46,26 @@ function createHarness(): TerminalDockContractHarness {
 runTerminalDockContract(createHarness)
 
 describe('Host terminal dock adapter', () => {
+  afterEach(() => setPlatformId(normalizePlatformId(process.platform)))
+
   it('does not bind raw route details into the port consumer type', () => {
     expect(createHarness().port).toHaveProperty('create')
     expect(createHarness().port).not.toHaveProperty('send')
+  })
+
+  // The dock cannot see the platform (plugin windows have no bridge for it),
+  // so the host port is where the shell's command form is decided.
+  it('builds the spawn argv for the platform it runs on', () => {
+    const { port } = createHarness()
+    setPlatformId('darwin')
+    expect(port.spawnArgv?.('/bin/zsh', 'claude')).toEqual(['/bin/zsh', '-ilc', 'claude'])
+    setPlatformId('win32')
+    expect(port.spawnArgv?.('powershell.exe', 'claude')).toEqual([
+      'powershell.exe',
+      '-NoLogo',
+      '-NoExit',
+      '-Command',
+      'claude',
+    ])
   })
 })
