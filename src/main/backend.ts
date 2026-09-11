@@ -38,9 +38,12 @@ const CONFIRM_TTL_MS = 30_000
 export function handConfirmKey(proc: ChildProcess): void {
   confirmKey = randomBytes(32).toString('hex')
   // One line, then the pipe closes: the backend reads exactly this much, and a
-  // stdin left open would be a channel neither side has a use for.
+  // stdin left open would be a channel neither side has a use for -- except on
+  // Windows, where it is the only way to ask for a graceful stop (see
+  // stopBackendProcess): no SIGTERM exists there, so the pipe stays open and
+  // carries a `shutdown` line later.
   proc.stdin?.write(`${confirmKey}\n`)
-  proc.stdin?.end()
+  if (!isWindows()) proc.stdin?.end()
 }
 
 /**
@@ -210,8 +213,8 @@ export function bindBackendPluginActivationCatalog(
  * Windows has no SIGTERM: `proc.kill` there is TerminateProcess on the
  * bootloader alone, which ends it instantly, fires 'exit', and leaves the real
  * backend and its PTY children running with nobody left to sweep them. The
- * backend exposes no cooperative shutdown channel either (no HTTP/WS route,
- * no stdin command; its only hook is uvicorn's signal handling), so a Windows
+ * cooperative channel there is stdin: a `shutdown` line makes the backend run
+ * uvicorn's exit (and so the PTY sweep) exactly as a SIGTERM would; a Windows
  * stop cannot be graceful today. What it can be is complete: take the tree
  * down by pid immediately and let 'exit' settle the promise.
  */
@@ -230,7 +233,11 @@ export function stopBackendProcess(proc: ChildProcess): Promise<void> {
       resolve()
     })
     if (isWindows()) {
-      killProcessTree(proc.pid, 'SIGKILL')
+      // Ask first: the backend turns this line into uvicorn's cooperative
+      // exit, which runs the PTY sweep a SIGTERM would. The 5s timer above
+      // still tree-kills whatever is left.
+      proc.stdin?.write('shutdown\n')
+      proc.stdin?.end()
       return
     }
     proc.kill('SIGTERM')
@@ -297,8 +304,9 @@ export async function startBackend(
     )
     proc = spawn(binaryPath, ['--port', String(port), '--log-level', 'info'], {
       env,
-      // stdin is open only to hand over the trust-confirmation key, and is
-      // closed immediately after. See handConfirmKey below.
+      // stdin hands over the trust-confirmation key and is closed right after
+      // on POSIX; on Windows it stays open to carry the `shutdown` line. See
+      // handConfirmKey and stopBackendProcess.
       stdio: ['pipe', 'pipe', 'pipe'],
       // The frozen backend is a console-subsystem exe; without this Windows
       // pops a console window for it behind the app. No-op elsewhere.

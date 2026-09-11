@@ -194,13 +194,19 @@ describe('mergePathList', () => {
 
 // -- Stopping the backend -----------------------------------------------------
 
-type FakeProc = EventEmitter & { pid: number; exitCode: number | null; kill: ReturnType<typeof vi.fn> }
+type FakeProc = EventEmitter & {
+  pid: number
+  exitCode: number | null
+  kill: ReturnType<typeof vi.fn>
+  stdin: { write: ReturnType<typeof vi.fn>; end: ReturnType<typeof vi.fn> }
+}
 
 function fakeProc(): FakeProc {
   const proc = new EventEmitter() as FakeProc
   proc.pid = 4102
   proc.exitCode = null
   proc.kill = vi.fn(() => true)
+  proc.stdin = { write: vi.fn(() => true), end: vi.fn() }
   return proc
 }
 
@@ -245,16 +251,30 @@ describe('stopBackendProcess', () => {
 
   // On Windows proc.kill is TerminateProcess on the bootloader alone, which
   // fires 'exit' at once and would clear the timer before the tree kill ever
-  // ran — the real backend and its PTY children would survive every quit.
-  it('goes straight to the tree kill on Windows instead of a signal nothing forwards', async () => {
+  // ran — so the graceful ask goes over stdin instead, and the timer still
+  // tree-kills a backend that does not exit in time.
+  it('asks over stdin on Windows and waits for exit', async () => {
     setPlatformId('win32')
     const proc = fakeProc()
     const stopped = stopBackendProcess(asChild(proc))
     expect(proc.kill).not.toHaveBeenCalled()
-    expect(killProcessTree).toHaveBeenCalledWith(4102, 'SIGKILL')
-    proc.exitCode = 1
-    proc.emit('exit', 1)
+    expect(proc.stdin.write).toHaveBeenCalledWith('shutdown\n')
+    expect(proc.stdin.end).toHaveBeenCalled()
+    expect(killProcessTree).not.toHaveBeenCalled()
+    proc.exitCode = 0
+    proc.emit('exit', 0)
     await expect(stopped).resolves.toBeUndefined()
+    expect(killProcessTree).not.toHaveBeenCalled()
+  })
+
+  it('tree-kills a Windows backend that ignores the stdin ask', async () => {
+    vi.useFakeTimers()
+    setPlatformId('win32')
+    const proc = fakeProc()
+    const stopped = stopBackendProcess(asChild(proc))
+    await vi.advanceTimersByTimeAsync(5000)
+    await expect(stopped).resolves.toBeUndefined()
+    expect(killProcessTree).toHaveBeenCalledWith(4102, 'SIGKILL')
   })
 })
 

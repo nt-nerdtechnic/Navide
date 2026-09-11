@@ -6,6 +6,8 @@ import sys
 
 import socket
 
+import threading
+
 import uvicorn
 
 from . import __version__
@@ -27,6 +29,31 @@ def _read_confirm_key() -> str:
         return sys.stdin.readline().strip()
     except Exception:  # noqa: BLE001 - startup must not die over a missing pipe
         return ""
+
+
+SHUTDOWN_LINE = "shutdown"
+
+
+def _watch_stdin_for_shutdown(server: "uvicorn.Server", stream=None) -> None:
+    """Turn a `shutdown` line on stdin into uvicorn's cooperative exit.
+
+    The parent process closes stdin right after the confirm key on POSIX, so
+    EOF is the ordinary case there and means nothing. On Windows there is no
+    SIGTERM to deliver, so Electron keeps the pipe open and writes this line
+    to run the same lifespan shutdown (PTY sweep, watcher teardown) a signal
+    would. Any other line is ignored; a missing or tty stdin is never read.
+    """
+    stream = sys.stdin if stream is None else stream
+    try:
+        if stream is None or stream.closed or stream.isatty():
+            return
+        for line in stream:
+            if line.strip() == SHUTDOWN_LINE:
+                logging.getLogger("agent_team_backend.main").info("shutdown requested on stdin")
+                server.should_exit = True
+                return
+    except Exception:  # noqa: BLE001 - a broken pipe must not take the server down
+        return
 
 
 def main() -> int:
@@ -113,6 +140,9 @@ def main() -> int:
         ws_ping_timeout=60.0,
     )
     server = uvicorn.Server(config)
+    threading.Thread(
+        target=_watch_stdin_for_shutdown, args=(server,), name="stdin-shutdown", daemon=True
+    ).start()
 
     log.info("listening on http://%s:%s", args.host, resolved_port)
     print(f"AGENT_TEAM_BACKEND_LISTEN host={args.host} port={resolved_port}", flush=True)
