@@ -316,13 +316,14 @@ jobs:
     # Preserve the existing required-check name for branch protection.
     name: Lint and test
     if: ${{ always() }}
-    needs: [frontend, backend, backend-linux, plans, registry, dependency-audit]
+    needs: [frontend, frontend-linux, backend, backend-linux, plans, registry, dependency-audit]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Require every check to succeed
         env:
           FRONTEND_RESULT: ${{ needs.frontend.result }}
+          FRONTEND_LINUX_RESULT: ${{ needs['frontend-linux'].result }}
           BACKEND_RESULT: ${{ needs.backend.result }}
           BACKEND_LINUX_RESULT: ${{ needs['backend-linux'].result }}
           PLANS_RESULT: ${{ needs.plans.result }}
@@ -330,6 +331,7 @@ jobs:
           AUDIT_RESULT: ${{ needs['dependency-audit'].result }}
         run: |
           test "$FRONTEND_RESULT" = success
+          test "$FRONTEND_LINUX_RESULT" = success
           test "$BACKEND_RESULT" = success
           test "$BACKEND_LINUX_RESULT" = success
           test "$PLANS_RESULT" = success
