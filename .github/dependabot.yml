@@ -32,6 +32,12 @@ updates:
       interval: "weekly"
       day: "monday"
     open-pull-requests-limit: 10
+    ignore:
+      # The MCP server is written against the 1.x FastMCP API; 2.x changes
+      # tool registration and the stateless transport. Upgrade deliberately,
+      # on its own branch, with the full suite — not from a bot PR (#59).
+      - dependency-name: "mcp"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
