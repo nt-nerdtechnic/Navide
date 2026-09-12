@@ -293,3 +293,19 @@ export function isAllowedPlanDocumentPath(relPath: string, workspaceRoot: string
 
   return false
 }
+
+/**
+ * Decide whether a watcher event names a plan document. The common case —
+ * storm traffic such as database and log writes, git, builds — fails the
+ * string checks before any filesystem probe runs; only a path shaped like a
+ * nested-repository plan directory pays for the bounded traversal behind
+ * `isAllowedPlanDocumentPath`.
+ */
+export function isPlanDocumentChangePath(relPath: string, workspaceRoot: string): boolean {
+  const segments = relPath.replace(/\\/g, '/').split('/')
+  if (segments.length < 2 || !isPlanDocName(segments[segments.length - 1])) return false
+  const parent = segments.slice(0, -1).join('/')
+  if ((PLAN_DOC_DIRS as readonly string[]).includes(parent)) return true
+  if (!PLAN_DOC_DIRS.some((planDir) => parent.endsWith(`/${planDir}`))) return false
+  return isAllowedPlanDocumentPath(relPath, workspaceRoot)
+}

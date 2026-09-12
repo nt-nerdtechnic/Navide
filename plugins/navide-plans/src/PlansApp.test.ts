@@ -57,7 +57,9 @@ beforeAll(async () => {
   })
   window.history.replaceState({}, '', `/?workspace_path=%2Fworkspace&rel_path=${encodeURIComponent(existingPath)}`)
   PlansApp = (await import('./PlansApp.vue')).default
-})
+  // Imports the whole PlansApp graph once; under a full parallel run the
+  // 10s hook default is on the edge and collects the file as failed.
+}, 30_000)
 
 beforeEach(() => {
   state.realNotify = false
@@ -824,6 +826,7 @@ describe('PlansApp', () => {
     expect(state.calls.filter(({ name }) => name === 'plans.list')).toHaveLength(1)
 
     await state.subscriptionListener?.({ workspace_path: '/workspace' })
+    await new Promise((r) => setTimeout(r, 250))
     await flushPromises()
     expect(state.calls.filter(({ name }) => name === 'plans.list')).toHaveLength(2)
   })

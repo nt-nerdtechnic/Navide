@@ -17,6 +17,7 @@ import {
 } from './backend'
 import { installPlansKeybindings } from './plansKeybindings'
 import { buildPlanCliContext } from './planCliContext'
+import { workspaceDisplayName } from './workspaceAlias'
 import PlanReviewToolbar from './retained/PlanReviewToolbar.vue'
 import PlanMarkdownBody from './retained/PlanMarkdownBody.vue'
 import NotificationHost from './retained/NotificationHost.vue'
@@ -84,6 +85,14 @@ type GroupMode = 'flat' | 'stage'
 const params = new URLSearchParams(window.location.search)
 const workspacePath = params.get('workspace_path') ?? ''
 const initialRelPath = params.get('rel_path') ?? ''
+// What the window title calls this workspace: the alias the user gave it,
+// resolved by the Host and passed as `workspace_display_name`, else the folder
+// name. Blank or absent means "no alias" — that is how clearing one works.
+// KNOWN LIMITATION: a load-time snapshot. Renaming the workspace while this
+// window is open does NOT retitle it — this bundle talks to a capability shim
+// with no project.* call or event, so there is nothing to follow. The title is
+// correct again the next time the window opens.
+const workspaceTitleName = workspaceDisplayName(workspacePath, params.get('workspace_display_name'))
 function isLeftContribution(): boolean {
   return new URLSearchParams(window.location.search).get('contribution') === 'left'
 }
@@ -136,6 +145,10 @@ const renameValue = ref('')
 const showCreateForm = ref(false)
 let stopTarget: (() => void) | null = null
 let plansSubscription: ReturnType<typeof plansBackend.subscribe> | null = null
+/** One saved document produces several plans.changed events and a file storm
+ * produces hundreds; each one used to start its own full plans.list scan. */
+const PLANS_CHANGED_DEBOUNCE_MS = 200
+let plansChangedTimer: ReturnType<typeof setTimeout> | null = null
 const aiCliController = createPlansAiCliController()
 
 /**
@@ -691,6 +704,14 @@ async function refreshSelected(): Promise<void> {
   }
 }
 
+function schedulePlansReload(): void {
+  if (plansChangedTimer !== null) clearTimeout(plansChangedTimer)
+  plansChangedTimer = setTimeout(() => {
+    plansChangedTimer = null
+    void loadPlans(false)
+  }, PLANS_CHANGED_DEBOUNCE_MS)
+}
+
 async function loadPlans(openSelected = true): Promise<void> {
   if (!workspacePath) {
     error.value = t('pane.plans.v2.workspace-required')
@@ -1210,12 +1231,20 @@ if (hostKeybindings) {
 }
 
 onMounted(() => {
+  // The dedicated Plans window's own webContents is blank; its title is
+  // mirrored from this document's (frontendPluginManager `mirrorTitle`), so
+  // without this the window stayed on the static 'Plans' and never said which
+  // project it belonged to. Only the window surface has a title to set — the
+  // embedded left contribution shares the main window's.
+  if (!isLeftContribution() && workspaceTitleName) {
+    document.title = `${workspaceTitleName} — Plans`
+  }
   loadTheme()
   if (!hostKeybindings) window.addEventListener('keydown', onKeydown)
   window.addEventListener('click', closeTransientMenus)
   window.addEventListener('message', onWindowMessage)
   try {
-    plansSubscription = plansBackend.subscribe('plans.changed', () => void loadPlans(false))
+    plansSubscription = plansBackend.subscribe('plans.changed', schedulePlansReload)
     void plansSubscription.ready.catch((cause: unknown) => toast(formatBackendError(cause), { type: 'error' }))
     void plansSubscription.settled.catch((cause: unknown) => {
       const code = typeof cause === 'object' && cause !== null && 'code' in cause
@@ -1237,6 +1266,8 @@ onUnmounted(() => {
   window.removeEventListener('message', onWindowMessage)
   plansSubscription?.dispose()
   plansSubscription = null
+  if (plansChangedTimer !== null) clearTimeout(plansChangedTimer)
+  plansChangedTimer = null
   stopTarget?.()
   aiCliController.dispose()
 })

@@ -42,6 +42,7 @@ import {
   resolveWorkspaceRelativePath,
   workspaceMutationPathError,
 } from './workspacePathPolicy'
+import { PLAN_DOC_DIRS, isPlanDocumentChangePath } from './plansDirectories'
 
 export const PLANS_BRIDGE_PORTS = [
   'filesystem',
@@ -714,48 +715,76 @@ export function createTestPlansFilesystemPort(): PlansFilesystemPort {
   const watcher = async (arguments_: JsonValue, context: PlansBridgeContext): Promise<JsonValue> => {
     const root = exactPathArguments(arguments_, 'rel_path', context)
     if (!canonicalExistingDirectory(root)) throw new PlansBridgeError('WORKSPACE_SCOPE_VIOLATION')
-    let watcherHandle: FSWatcher | undefined
+    // Only plan documents reach the child. Forwarding every workspace event
+    // (database and log writes, git, builds) as its own Bridge frame is what
+    // overflowed the Host→child output queue and took the child down; an
+    // event without a filename cannot be classified and is still forwarded.
+    const onEvent = (event: string, path: string | null): void => {
+      if (path !== null && !isPlanDocumentChangePath(path, root)) return
+      emitChanged(context, root, event, path)
+    }
+    const watcherHandles: FSWatcher[] = []
     try {
-      watcherHandle = watchPath(root, { recursive: true }, (event, filename) => {
-        emitChanged(context, root, event, filename ? String(filename) : null)
-      })
+      watcherHandles.push(watchPath(root, { recursive: true }, (event, filename) => {
+        onEvent(event, filename ? String(filename) : null)
+      }))
     } catch {
-      // Linux does not support recursive fs.watch. Watching the workspace root
-      // still gives the package a bounded change signal and keeps the adapter
-      // available on every supported Host platform.
-      try {
-        watcherHandle = watchPath(root, (event, filename) => {
-          emitChanged(context, root, event, filename ? String(filename) : null)
-        })
-      } catch {
+      // Linux does not support recursive fs.watch. Watching each canonical plan
+      // directory that exists keeps a bounded change signal on every supported
+      // Host platform; nested repositories stay out of reach there, and a
+      // workspace without any plan directory simply has nothing to report.
+      let attempted = 0
+      for (const planDir of PLAN_DOC_DIRS) {
+        const directory = resolve(root, planDir)
+        if (!canonicalExistingDirectory(directory)) continue
+        attempted += 1
+        try {
+          watcherHandles.push(watchPath(directory, (event, filename) => {
+            onEvent(event, filename ? `${planDir}/${String(filename)}` : null)
+          }))
+        } catch {
+          // Counted through `attempted`; the loop keeps the other directories.
+        }
+      }
+      if (attempted > 0 && watcherHandles.length === 0) {
         throw new PlansBridgeError('BACKEND_UNAVAILABLE', 'Workspace watcher is unavailable.')
       }
     }
     await new Promise<void>((resolvePromise, rejectPromise) => {
       let settled = false
+      const closeAll = (): void => {
+        for (const handle of watcherHandles) handle.close()
+      }
       const finish = (error?: PlansBridgeError): void => {
         if (settled) return
         settled = true
         context.signal.removeEventListener('abort', onAbort)
-        watcherHandle?.removeListener('error', onError)
-        watcherHandle?.removeListener('close', onClose)
+        for (const handle of watcherHandles) {
+          handle.removeListener('error', onError)
+          handle.removeListener('close', onClose)
+        }
         if (error) rejectPromise(error)
         else resolvePromise()
       }
       const onAbort = (): void => {
-        watcherHandle?.close()
+        closeAll()
         finish()
       }
       const onError = (): void => {
-        watcherHandle?.close()
+        closeAll()
         finish(new PlansBridgeError('BACKEND_UNAVAILABLE', 'Workspace watcher failed.'))
       }
       const onClose = (): void => {
         if (context.signal.aborted) finish()
-        else finish(new PlansBridgeError('BACKEND_UNAVAILABLE', 'Workspace watcher closed.'))
+        else {
+          closeAll()
+          finish(new PlansBridgeError('BACKEND_UNAVAILABLE', 'Workspace watcher closed.'))
+        }
       }
-      watcherHandle?.on('error', onError)
-      watcherHandle?.on('close', onClose)
+      for (const handle of watcherHandles) {
+        handle.on('error', onError)
+        handle.on('close', onClose)
+      }
       if (context.signal.aborted) {
         onAbort()
         return
