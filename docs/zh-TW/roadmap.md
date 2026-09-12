@@ -208,8 +208,8 @@ Exit Criteria：
 - Compatibility Test Kit 與 Adapter Health Diagnostics
 - 可重用 Role、Pipeline、Policy、Team Configuration 與 Engineering Template
 - 具有 Version 與 Capability Metadata 的安全 Template Packaging
-- 具有 PTY、Path、Permission、Packaging 與 Update 對等性的 Linux Support
-- 具有 ConPTY、Filesystem Behavior、Packaging 與 Policy 對等性的 Windows Support
+- 具有 PTY、Path、Permission、Packaging 與 Update 對等性的 Linux Support——已在 `main`，由 Linux CI Gate 涵蓋，並打包為 AppImage 與 `.deb`；剩餘工作是在發行版中提供這些安裝檔
+- 具有 ConPTY、Filesystem Behavior、Packaging 與 Policy 對等性的 Windows Support——已在 `main`，由 Windows CI Gate 涵蓋，並打包為 NSIS 安裝程式；剩餘工作是程式碼簽章、Task Scheduler 整合，以及可優雅關閉 CLI 的訊號
 - Platform 與 Adapter Capability Matrix
 - Internationalization 與 Accessible Workflow
 

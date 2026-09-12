@@ -16,7 +16,7 @@ Navide 是一套開源、AI-native 的軟體工程環境，專為一個人調度
 [![Electron](https://img.shields.io/badge/Electron-33-47848F?logo=electron)](https://www.electronjs.org/)
 [![Vue 3](https://img.shields.io/badge/Vue-3-4FC08D?logo=vue.js)](https://vuejs.org/)
 [![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python)](https://python.org/)
-[![Platform](https://img.shields.io/badge/platform-macOS-lightgrey?logo=apple)](https://www.apple.com/macos/)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)](docs/zh-TW/getting-started.md)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 ## AI 改變了執行能力，協調成為新的瓶頸
@@ -121,6 +121,8 @@ Navide 支援配備 Apple 晶片且執行 macOS 13 以上版本的 Mac。v0.2.1 
 - [下載 ZIP](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.1/Navide-0.2.1-arm64.zip)
 
 將 Navide 複製到「應用程式」後即可正常開啟，無需繞過 Gatekeeper。自此版本起支援 App 內自動更新。
+
+Linux 與 Windows 同樣受支援，並通過與 macOS 相同的 CI 關卡；Release CI 會為 Linux x64 建置 AppImage 與 `.deb`、為 Windows x64 建置 NSIS 安裝程式，這些安裝檔將自下一個版本起隨發行提供——v0.2.1 只附帶 macOS 資產，在此之前請在這兩個平台上從原始碼安裝。Windows 版本尚未經過程式碼簽章，因此首次執行時 SmartScreen 會出現警告；「執行管理」視窗在該平台無法列出或管理排程工作（尚未整合 Windows Task Scheduler）；每個 Pane 的 CLI Home 與受管理的 Skills 以符號連結建立，因此需要 Windows 開發人員模式或以系統管理員身分執行 Navide；CLI 只能被直接終止而無法收到停止通知，Pane 關閉前可能來不及寫出 Transcript。
 
 若要建立開發環境，仍可從原始碼安裝。
 
