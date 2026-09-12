@@ -122,7 +122,7 @@ Navide は Apple silicon 上の macOS 13 以降をサポートします。v0.2.1
 
 Navide を Applications にコピーすればそのまま開けます。Gatekeeper の回避は不要です。このリリース以降、アプリ内自動アップデートが利用できます。
 
-Linux と Windows もサポートされ、macOS と同じ CI Gate を通過します。Release CI は Linux x64 向けに AppImage と `.deb` を、Windows x64 向けに NSIS Installer をビルドしますが、これらの Installer が配布されるのは次のリリースからです。v0.2.1 には macOS の Asset のみが含まれるため、それまでこの 2 つの Platform では Source からインストールしてください。Windows Build はまだ Code Signing されていないため初回起動時に SmartScreen が警告し、Executions ウィンドウはこの Platform で Scheduled Job を一覧・管理できず（Windows Task Scheduler は未統合）、Pane ごとの CLI Home と管理対象の Skills は Symbolic Link で構成されるため Windows の開発者モードまたは管理者権限での実行が必要で、CLI は停止を通知されずに終了されるため Pane が閉じる前に Transcript を書き出せない場合があります。
+Linux と Windows もサポートされ、macOS と同じ CI Gate を通過します。Release CI は Linux x64 向けに AppImage と `.deb` を、Windows x64 向けに NSIS Installer をビルドしますが、これらの Installer が配布されるのは次のリリースからです。v0.2.1 には macOS の Asset のみが含まれるため、それまでこの 2 つの Platform では Source からインストールしてください。Windows Build はまだ Code Signing されていないため初回起動時に SmartScreen が警告し、Executions ウィンドウはこの Platform では設計上一覧する対象がなく（読み取るのは User の crontab と macOS の launchd で、Windows Task Scheduler は意図的に統合していません——Navide 自身が Scheduled Job を作ることはなく、Task Scheduler が既にマシンの Task を管理しているためです）、Pane ごとの CLI Home と管理対象の Skills は Symbolic Link で構成されるため Windows の開発者モードまたは管理者権限での実行が必要で、CLI は停止を通知されずに終了されるため Pane が閉じる前に Transcript を書き出せない場合があります。
 
 開発用 Checkout では、代わりに Source からインストールしてください。
 

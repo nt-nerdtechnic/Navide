@@ -3282,6 +3282,8 @@
     "count": "{count} 項",
     "empty": "沒有項目",
     "unsupported": "此平台不支援",
+    "no-source": "此平台沒有可列出的來源：Navide 讀的是使用者的 crontab 與 macOS 的 launchd 工作，這個系統兩者都沒有。Navide 本身從不建立排程工作，所以這裡沒有東西缺失。",
+    "no-source-windows": "Windows 的排程工作在「工作排程器」（taskschd.msc）裡，那裡可以列出、啟用、停用與移除；Navide 刻意不整合它。",
     "crontab": {
       "title": "系統 crontab",
       "filter-all": "全部",

@@ -586,7 +586,13 @@ class Scheduler(Protocol):
     Windows Task Scheduler (`schtasks`) is deliberately not wired: it is a
     different model (triggers, principals, XML task definitions) and would
     need its own kind and UI, so the Windows implementation reports both
-    kinds unsupported and stays inert.
+    kinds unsupported and stays inert. The premise that makes this a
+    decision rather than a gap: Navide never creates scheduled jobs of its
+    own on any platform — this seam only reads and edits what the user set
+    up — and Task Scheduler already manages the machine's tasks. Revisit
+    only if Navide starts registering tasks itself, as a third kind over
+    the PowerShell `ScheduledTasks` module (locale-independent state and
+    trigger data; `schtasks` output is localised and OEM-encoded).
     """
 
     async def list_jobs(self, kind: str) -> dict:
