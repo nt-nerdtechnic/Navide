@@ -1531,15 +1531,30 @@ describe('Plans packaged backend composition', () => {
         expect(mountedApp.findAll('.prt-panel .prt-note')).toHaveLength(1)
 
         // Drive the controls rather than exposed component methods. A rendered
-        // button is not evidence that its edit or confirmation UI is usable.
-        await mountedApp.get('[data-test="edit-n1"]').trigger('click')
+        // button is not evidence that its edit or confirmation UI is usable —
+        // nor is a rendered NOTE evidence that its buttons are: the toolbar
+        // keeps them `:disabled` until the write and its follow-up re-read
+        // both settle, while the note itself shows as soon as the write
+        // returns (PlansApp pushes into the meta object the toolbar renders).
+        // VTU's trigger() silently skips a disabled element, so a click in
+        // that window does nothing and the edit input never appears. Wait for
+        // the control to be enabled, which is what a user sees before clicking.
+        const clickWhenEnabled = async (selector: string): Promise<void> => {
+          // The wait spans a real round trip through the packaged child, so
+          // it gets more than waitFor's 1s default on a slow runner.
+          await vi.waitFor(() => {
+            expect(mountedApp.get(selector).attributes('disabled')).toBeUndefined()
+          }, { timeout: 5_000 })
+          await mountedApp.get(selector).trigger('click')
+        }
+        await clickWhenEnabled('[data-test="edit-n1"]')
         const editInput = mountedApp.get('[data-test="review-note-edit-input"]')
         expect(editInput.attributes('disabled')).toBeUndefined()
         expect.soft(document.activeElement, 'Edit must focus its input').toBe(editInput.element)
         await editInput.setValue('Edited through the UI')
         await mountedApp.get('[data-test="review-note-edit-save"]').trigger('click')
         await vi.waitFor(() => expect(mountedApp.text()).toContain('Edited through the UI'))
-        await mountedApp.get('[data-test="delete-n1"]').trigger('click')
+        await clickWhenEnabled('[data-test="delete-n1"]')
         await flushPromises()
         expect.soft(document.querySelector('.modal .card.confirm'), 'Delete must render the application confirmation').not.toBeNull()
         expect(readFileSync(planFile, 'utf8')).toContain('Edited through the UI')
@@ -1547,7 +1562,7 @@ describe('Plans packaged backend composition', () => {
         // an unresolved confirmation leaking into the rest of the suite.
         useNotify().resolveDialog(false)
         await flushPromises()
-        await mountedApp.get('[data-test="edit-n1"]').trigger('click')
+        await clickWhenEnabled('[data-test="edit-n1"]')
         await mountedApp.get('[data-test="review-note-edit-input"]').setValue('Draft text')
         await mountedApp.get('[data-test="review-note-edit-save"]').trigger('click')
         await vi.waitFor(() => expect(mountedApp.text()).toContain('Draft text'))
