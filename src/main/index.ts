@@ -3282,8 +3282,10 @@ ipcMain.handle('shell:openTerminal', async (event, command: string) => {
   if (!command || typeof command !== 'string') return { ok: false, error: 'invalid command' }
   // Run the install command in a visible terminal (sudo / OAuth prompts need
   // a real TTY). Which terminal is the platform's business — see
-  // external-terminal.ts; this used to be AppleScript only.
-  return await openInExternalTerminal(command)
+  // external-terminal.ts; this used to be AppleScript only. The login-shell
+  // PATH, not this process's: a Linux .desktop launch has no nvm on PATH,
+  // and `npm install -g` in the terminal has to find npm.
+  return await openInExternalTerminal(command, getResolvedUserPath())
 })
 
 // macOS TCC permissions (onboarding wizard). Requests are user-initiated only —

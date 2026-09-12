@@ -75,7 +75,10 @@ export function killProcessTree(pid: number | undefined, signal: NodeJS.Signals)
 
   let targets = [pid]
   try {
-    const snapshot = execFileSync('/bin/ps', ['-Ao', 'pid=,ppid='], {
+    // `ps` by name, not `/bin/ps`: NixOS and Guix have no /bin beyond sh, and
+    // the absolute path there meant no snapshot — so a SIGKILL took only the
+    // bootloader and left the Python backend and its PTYs running.
+    const snapshot = execFileSync('ps', ['-Ao', 'pid=,ppid='], {
       encoding: 'utf8',
       timeout: 2_000
     })

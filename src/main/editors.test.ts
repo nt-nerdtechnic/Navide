@@ -279,9 +279,40 @@ describe('resolveEditorCommand', () => {
   it('falls back to the .app-bundled CLI when PATH has no hit', () => {
     // The common macOS case: VS Code is installed but its shell command was
     // never added to PATH (that is a separate opt-in step).
-    const bundled = '/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code'
-    const hit = resolveEditorCommand(vscode, usrBin, (p) => p === bundled, always)
-    expect(hit).toBe(bundled)
+    setPlatformId('darwin')
+    try {
+      const bundled = '/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code'
+      const hit = resolveEditorCommand(vscode, usrBin, (p) => p === bundled, always)
+      expect(hit).toBe(bundled)
+    } finally {
+      setPlatformId(normalizePlatformId(process.platform))
+    }
+  })
+
+  // The Linux shapes: a deb/rpm whose /usr/bin/code symlink is missing, a
+  // snap on a distribution that does not put /snap/bin on PATH, and a Flatpak
+  // — whose exported launcher is named after the app id, so no lookup for
+  // `code` can ever find it.
+  it.each([
+    '/usr/share/code/bin/code',
+    '/snap/bin/code',
+    '/var/lib/flatpak/exports/bin/com.visualstudio.code',
+  ])('falls back to %s on Linux', (bundled) => {
+    setPlatformId('linux')
+    try {
+      expect(resolveEditorCommand(vscode, usrBin, (p) => p === bundled, always)).toBe(bundled)
+    } finally {
+      setPlatformId(normalizePlatformId(process.platform))
+    }
+  })
+
+  it('does not look for the macOS bundle on Linux', () => {
+    setPlatformId('linux')
+    try {
+      expect(vscode.bundledPaths().some((p) => p.includes('/Applications/'))).toBe(false)
+    } finally {
+      setPlatformId(normalizePlatformId(process.platform))
+    }
   })
 
   it('returns null when the editor is not installed at all', () => {

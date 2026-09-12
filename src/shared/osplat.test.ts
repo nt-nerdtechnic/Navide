@@ -4,6 +4,7 @@ import {
   isLinux,
   isMac,
   isWindows,
+  editorBundledPaths,
   loginPathFallbacks,
   loginShellFlags,
   needsDrawnWindowControls,
@@ -259,5 +260,38 @@ describe('shellCommandArgv', () => {
     asPlatform('linux', () => {
       expect(shellCommandArgv('powershell.exe', 'x')).toEqual(['powershell.exe', '-lc', 'x'])
     })
+  })
+})
+
+describe('editorBundledPaths', () => {
+  const hints = {
+    command: 'code',
+    macApp: 'Visual Studio Code',
+    linuxPrefixes: ['/usr/share/code'],
+    flatpakId: 'com.visualstudio.code',
+  }
+
+  it('names the .app-bundled CLI on macOS', () => {
+    asPlatform('darwin', () => {
+      expect(editorBundledPaths('/Users/x', hints)).toEqual([
+        '/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code',
+        '/Users/x/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code',
+      ])
+    })
+  })
+
+  it('names the package prefix, snap and Flatpak launchers on Linux', () => {
+    asPlatform('linux', () => {
+      expect(editorBundledPaths('/home/x', hints)).toEqual([
+        '/usr/share/code/bin/code',
+        '/snap/bin/code',
+        '/var/lib/flatpak/exports/bin/com.visualstudio.code',
+        '/home/x/.local/share/flatpak/exports/bin/com.visualstudio.code',
+      ])
+    })
+  })
+
+  it('has nothing to add on Windows', () => {
+    asPlatform('win32', () => expect(editorBundledPaths('C:\\Users\\x', hints)).toEqual([]))
   })
 })

@@ -33,7 +33,7 @@ import {
 } from './workspacePathPolicy'
 import { lstatSync, realpathSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
-import { resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 
 export interface PlanRootResolverInput {
   readonly runtime: BackendRuntimeContext
@@ -97,6 +97,14 @@ function nonEmptyString(value: unknown): value is string {
  * Resolve the package root that the Host owns for an activation or descriptor.
  * A package root must be an existing, real directory; accepting a symlink here
  * would let a later target change silently alter which descriptor is bound.
+ *
+ * Only the root itself has to be real. Its ancestors may be symlinks and on
+ * Linux often are — `/home` → `var/home` on Fedora Silverblue, a stow- or
+ * chezmoi-managed `~/.config`, a home on a second disk — and the plugins root
+ * under `userData` is never realpath'd before it gets here, so requiring the
+ * whole path to equal its realpath refused every plugin backend on such a
+ * machine with no plugin-specific error. (macOS's `/var` → `/private/var`
+ * is the same shape; `/Users` being real is why it never showed there.)
  */
 export function canonicalBackendPackageDir(packageDir: unknown): string | null {
   if (!nonEmptyString(packageDir)) return null
@@ -105,7 +113,9 @@ export function canonicalBackendPackageDir(packageDir: unknown): string | null {
     const entry = lstatSync(resolved)
     if (!entry.isDirectory() || entry.isSymbolicLink()) return null
     const canonical = realpathSync(resolved)
-    if (canonical !== resolved) return null
+    // The last component must survive canonicalisation unchanged: a link
+    // swapped in between the lstat above and the realpath would not.
+    if (canonical !== join(realpathSync(dirname(resolved)), basename(resolved))) return null
     const canonicalEntry = lstatSync(canonical)
     if (!canonicalEntry.isDirectory() || canonicalEntry.isSymbolicLink()) return null
     return canonical

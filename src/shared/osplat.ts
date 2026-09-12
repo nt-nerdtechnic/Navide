@@ -138,6 +138,50 @@ export function loginPathFallbacks(home: string, nvmBins: string[] = []): string
   }
 }
 
+/** Where an editor's CLI lives when it is installed but not on PATH. */
+export interface EditorInstallHints {
+  /** The CLI's name: `code`, `cursor`. */
+  command: string
+  /** The macOS bundle name under /Applications: `Visual Studio Code`. */
+  macApp: string
+  /** Linux package prefixes that carry `bin/<command>`: `/usr/share/code`. */
+  linuxPrefixes?: string[]
+  /** The Flatpak app id, whose exported launcher is named after it, not the CLI. */
+  flatpakId?: string
+}
+
+/**
+ * Absolute paths tried for an editor's CLI when PATH has no hit.
+ *
+ * macOS ships the CLI inside the .app and putting it on PATH is a manual
+ * opt-in most users skip. On Linux the deb/rpm has it under the package
+ * prefix (the `/usr/bin` symlink is not always there), snap exports it to
+ * `/snap/bin` (on PATH on Ubuntu, not elsewhere), and Flatpak exports a
+ * launcher named after the app id — `com.visualstudio.code`, never `code` —
+ * so a PATH lookup for the CLI's name can never find it. Windows has no
+ * entry yet: `code.cmd` lands on PATH from the installer there.
+ */
+export function editorBundledPaths(home: string, hints: EditorInstallHints): string[] {
+  const { command, macApp, linuxPrefixes = [], flatpakId } = hints
+  switch (platformId()) {
+    case 'darwin':
+      return [
+        `/Applications/${macApp}.app/Contents/Resources/app/bin/${command}`,
+        `${home}/Applications/${macApp}.app/Contents/Resources/app/bin/${command}`,
+      ]
+    case 'linux':
+      return [
+        ...linuxPrefixes.map((prefix) => `${prefix}/bin/${command}`),
+        `/snap/bin/${command}`,
+        ...(flatpakId
+          ? [`/var/lib/flatpak/exports/bin/${flatpakId}`, `${home}/.local/share/flatpak/exports/bin/${flatpakId}`]
+          : []),
+      ]
+    default:
+      return []
+  }
+}
+
 export function defaultShell(env: Record<string, string | undefined> = {}): string {
   const declared = env.SHELL
   if (declared && declared.length > 0) return declared

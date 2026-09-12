@@ -13,7 +13,7 @@
 
 import { spawn, type SpawnOptions } from 'node:child_process'
 import { accessSync, constants } from 'node:fs'
-import { delimiter, join } from 'node:path'
+import { basename, delimiter, join } from 'node:path'
 
 import { isLinux, isMac, isWindows } from '../shared/osplat'
 
@@ -22,23 +22,79 @@ export interface OpenTerminalResult {
   error?: string
 }
 
+type TerminalEntry = { bin: string; argv: (script: string) => string[] }
+
+/** `-e`/`-x`-style: the rest of argv is the command. */
+const rest = (flag: string) => (s: string): string[] => [flag, 'bash', '-c', s]
+/** kitty/foot-style: argv after the binary is the command, no flag at all. */
+const bare = (s: string): string[] => ['bash', '-c', s]
+
 /**
- * Terminal emulators tried in order on Linux.
+ * Terminal emulators tried in order on Linux, after `$TERMINAL` and
+ * `xdg-terminal-exec` (see linuxTerminalCandidates).
  *
  * Every entry takes the command as argv after its own separator, so the
- * command reaches `bash -c` verbatim with no quoting layer of ours in between.
+ * command reaches `bash -c` verbatim with no quoting layer of ours in between
+ * — which is why emulators whose only form is a single `-e "string"`
+ * (tilix, lxterminal, qterminal) are not listed: they would need one.
  * `x-terminal-emulator` goes first: it is Debian's alternatives symlink to
  * whatever the user picked, which beats guessing their desktop environment.
+ * The rest are one per desktop (GNOME old and new, KDE, XFCE, MATE) and the
+ * Wayland-native set a tiling-WM user is likely to have instead.
  */
-const LINUX_TERMINALS: ReadonlyArray<{
-  bin: string
-  argv: (script: string) => string[]
-}> = [
-  { bin: 'x-terminal-emulator', argv: (s) => ['-e', 'bash', '-c', s] },
-  { bin: 'gnome-terminal', argv: (s) => ['--', 'bash', '-c', s] },
-  { bin: 'konsole', argv: (s) => ['-e', 'bash', '-c', s] },
-  { bin: 'xterm', argv: (s) => ['-e', 'bash', '-c', s] },
+const LINUX_TERMINALS: ReadonlyArray<TerminalEntry> = [
+  { bin: 'x-terminal-emulator', argv: rest('-e') },
+  { bin: 'gnome-terminal', argv: rest('--') },
+  { bin: 'ptyxis', argv: rest('--') },
+  { bin: 'konsole', argv: rest('-e') },
+  { bin: 'xfce4-terminal', argv: rest('-x') },
+  { bin: 'mate-terminal', argv: rest('-x') },
+  { bin: 'terminator', argv: rest('-x') },
+  { bin: 'kitty', argv: bare },
+  { bin: 'alacritty', argv: rest('-e') },
+  { bin: 'wezterm', argv: (s) => ['start', '--', 'bash', '-c', s] },
+  { bin: 'foot', argv: bare },
+  { bin: 'xterm', argv: rest('-e') },
 ]
+
+/**
+ * The order Linux emulators are tried, given the user's environment.
+ *
+ * `$TERMINAL` first — it is the user naming their emulator outright, and its
+ * argv form is looked up by basename in the table (an unknown one gets the
+ * common `-e`). Then `xdg-terminal-exec`, the freedesktop resolver that reads
+ * the desktop's own default. Then the table, so a machine with none of the
+ * hints still gets whatever is installed.
+ */
+export function linuxTerminalCandidates(env: NodeJS.ProcessEnv): TerminalEntry[] {
+  const candidates: TerminalEntry[] = []
+  const preferred = env.TERMINAL?.trim()
+  if (preferred) {
+    const known = LINUX_TERMINALS.find((t) => t.bin === basename(preferred))
+    candidates.push({ bin: preferred, argv: known?.argv ?? rest('-e') })
+  }
+  candidates.push({ bin: 'xdg-terminal-exec', argv: bare })
+  for (const entry of LINUX_TERMINALS) {
+    if (entry.bin !== preferred && basename(preferred ?? '') !== entry.bin) candidates.push(entry)
+  }
+  return candidates
+}
+
+/**
+ * How long a freshly started emulator gets to fail before it counts as
+ * opened. The `'spawn'` event alone is not evidence: gnome-terminal and its
+ * kin are D-Bus clients that fork fine and only then exit non-zero when
+ * there is no session bus or display, and xterm dies the same way on
+ * "Can't open display" — so resolving on spawn reported success over a
+ * headless SSH session while nothing opened. Same window as the editors.
+ */
+export const LINUX_TERMINAL_FAILURE_WINDOW_MS = 800
+
+/** Options a caller (or a test) can pin instead of the machine's own. */
+export interface OpenTerminalOptions {
+  env?: NodeJS.ProcessEnv
+  failureWindowMs?: number
+}
 
 /**
  * The suffixes Windows will run a bare command name under. `code` on PATH is
@@ -103,27 +159,75 @@ function launch(bin: string, argv: string[], extra: SpawnOptions = {}): Promise<
   })
 }
 
+/**
+ * Start an emulator and report whether it stayed up.
+ *
+ * Unlike `launch`, success is "no non-zero exit inside the failure window":
+ * an emulator that hands off to a running instance exits 0 at once and is
+ * fine; one that exits non-zero could not open anything.
+ */
+function launchWatched(
+  bin: string,
+  argv: string[],
+  extra: SpawnOptions,
+  failureWindowMs: number
+): Promise<OpenTerminalResult> {
+  return new Promise((resolve) => {
+    const child = spawn(bin, argv, { detached: true, stdio: 'ignore', ...extra })
+    let settled = false
+    const settle = (result: OpenTerminalResult): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(result)
+    }
+    const timer = setTimeout(() => {
+      child.unref()
+      settle({ ok: true })
+    }, failureWindowMs)
+    child.on('error', (err) => settle({ ok: false, error: String(err) }))
+    child.on('exit', (code) => {
+      if (code !== 0) settle({ ok: false, error: `${basename(bin)} exited ${code}` })
+    })
+  })
+}
+
 async function openWithLinuxTerminal(
   command: string,
-  path: string | undefined
+  path: string | undefined,
+  { env = process.env, failureWindowMs = LINUX_TERMINAL_FAILURE_WINDOW_MS }: OpenTerminalOptions
 ): Promise<OpenTerminalResult> {
+  // No display, no window: every emulator would fork and then die, and the
+  // watched launch below would report each one — say so up front instead,
+  // and the wizard shows the command for the user's own terminal.
+  if (!env.DISPLAY && !env.WAYLAND_DISPLAY) {
+    return { ok: false, error: 'no display (DISPLAY and WAYLAND_DISPLAY are unset)' }
+  }
   // `; exec bash` mirrors Terminal.app: the window stays open with a shell
   // once the command finishes, so its output (or its sudo prompt) is not
   // gone the instant it returns.
   const script = `${command}; exec bash`
+  // The emulator, and the bash inside it, get the login-shell PATH the
+  // caller resolved: an `npm install -g` here has to find the nvm-provided
+  // npm the session PATH omits.
+  const childEnv = path === undefined ? env : { ...env, PATH: path }
   const tried: string[] = []
-  for (const terminal of LINUX_TERMINALS) {
+  const failures: string[] = []
+  for (const terminal of linuxTerminalCandidates(env)) {
     tried.push(terminal.bin)
     const bin = findOnPath(terminal.bin, path)
     if (!bin) continue
-    const result = await launch(bin, terminal.argv(script))
+    const result = await launchWatched(bin, terminal.argv(script), { env: childEnv }, failureWindowMs)
     if (result.ok) return result
     // Present on PATH but would not start — try the next one rather than
     // reporting a broken emulator as "no terminal".
+    failures.push(result.error ?? terminal.bin)
   }
   return {
     ok: false,
-    error: `no terminal emulator found (tried ${tried.join(', ')})`,
+    error: failures.length > 0
+      ? `no terminal emulator could open a window (${failures.join('; ')})`
+      : `no terminal emulator found (tried ${tried.join(', ')})`,
   }
 }
 
@@ -159,9 +263,10 @@ async function openWithWindowsTerminal(
  */
 export function openInExternalTerminal(
   command: string,
-  path: string | undefined = process.env.PATH
+  path: string | undefined = process.env.PATH,
+  options: OpenTerminalOptions = {}
 ): Promise<OpenTerminalResult> {
   if (isMac()) return openWithTerminalApp(command)
-  if (isLinux()) return openWithLinuxTerminal(command, path)
+  if (isLinux()) return openWithLinuxTerminal(command, path, options)
   return openWithWindowsTerminal(command, path)
 }

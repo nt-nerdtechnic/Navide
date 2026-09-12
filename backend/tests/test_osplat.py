@@ -466,6 +466,33 @@ class TestOrphanParent:
         assert not tree.is_orphan_parent(0, 500)
         assert not tree.is_orphan_parent(42, 500)
 
+    # systemd desktops: `systemd --user` is a child subreaper, so a CLI whose
+    # backend died gets ppid = that manager, never 1 — and the sweep skipped
+    # every leaked CLI after a backend crash.
+    def test_linux_also_accepts_the_session_subreapers(self, monkeypatch):
+        from agent_team_backend.osplat import _linux
+
+        comms = {1234: "systemd", 5678: "bwrap", 42: "bash"}
+        monkeypatch.setattr(_linux, "_read_comm", lambda pid: comms.get(pid))
+        tree = _linux.process_tree
+        assert tree.is_orphan_parent(1, 500)
+        assert tree.is_orphan_parent(500, 500)
+        assert tree.is_orphan_parent(1234, 500)
+        assert tree.is_orphan_parent(5678, 500)
+        assert not tree.is_orphan_parent(42, 500)
+        # A parent /proc cannot describe (gone, or hidepid) is not called an orphan.
+        assert not tree.is_orphan_parent(9999, 500)
+
+    def test_linux_reads_comm_from_proc(self, tmp_path, monkeypatch):
+        from agent_team_backend.osplat import _linux
+
+        (tmp_path / "77").mkdir()
+        (tmp_path / "77" / "comm").write_text("systemd\n")
+        monkeypatch.setattr(_linux, "_PROC", tmp_path)
+        assert _linux._read_comm(77) == "systemd"
+        assert _linux._read_comm(78) is None
+        assert _linux.process_tree.is_orphan_parent(77, 500)
+
     def test_windows_is_the_normalised_zero_or_this_process(self):
         from agent_team_backend.osplat import _windows
 
