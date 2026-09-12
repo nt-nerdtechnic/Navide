@@ -32,6 +32,7 @@ from agent_team_backend.applog import app_data_dir
 from agent_team_backend.osplat import paths
 from agent_team_backend import commit_message_prompt
 from agent_team_backend.git_security import is_remote_helper_form
+from agent_team_backend.git_askpass_helper import ASKPASS_FLAG
 from agent_team_backend.host_shell import (
     run_allowlisted,
     run_allowlisted_capped,
@@ -3053,12 +3054,20 @@ def _resolve_askpass_helper_path() -> str:
             log.warning("git askpass: stable helper copy failed: %s", err)
             helper = source
 
-    # git execs this path directly (no shell). POSIX runs the script through
-    # its shebang; Windows needs a launcher around an interpreter, and a frozen
-    # build carries none of its own (None → the one on PATH, which is what the
-    # shebang's `/usr/bin/env python3` already relies on).
-    interpreter = None if getattr(sys, "frozen", False) else sys.executable
-    return str(paths.askpass_launcher(helper, interpreter))
+    # git execs this path directly (no shell), so the seam writes whatever
+    # launcher this platform can exec around the argv below. That argv is
+    # always this process's own executable and never the name `python`: a
+    # frozen build ships no interpreter for that name to find, and on Windows
+    # it usually resolves to the Store's alias stub, which prints its install
+    # page and answers git with an empty credential. A frozen build re-enters
+    # itself through the askpass entry mode; from a checkout the same mode is
+    # reached with `-m`.
+    launch_argv = (
+        [sys.executable, ASKPASS_FLAG]
+        if getattr(sys, "frozen", False)
+        else [sys.executable, "-m", "agent_team_backend", ASKPASS_FLAG]
+    )
+    return str(paths.askpass_launcher(helper, launch_argv))
 
 
 _ASKPASS_HELPER_PATH = _resolve_askpass_helper_path()

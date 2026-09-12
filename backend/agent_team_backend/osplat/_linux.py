@@ -208,8 +208,8 @@ class LinuxLayout(LinuxPaths):
     def isolated_home_env(self, home_dir: Path) -> dict[str, str]:
         return _posix_paths.isolated_home_env(home_dir)
 
-    def askpass_launcher(self, helper_py: Path, python_exe: str | None) -> Path:
-        return _posix_paths.askpass_launcher(helper_py, python_exe)
+    def askpass_launcher(self, helper_py: Path, launch_argv: list[str]) -> Path:
+        return _posix_paths.askpass_launcher(helper_py, launch_argv)
 
     def executable_candidates(self, name: str) -> list[str]:
         return _posix_paths.executable_candidates(name)
@@ -238,6 +238,7 @@ class LinuxLayout(LinuxPaths):
 
 paths = LinuxLayout()
 secret_files = _posix_secrets.secret_files
+scripts = _posix_paths.scripts
 
 from . import _posix_scheduler  # noqa: E402
 

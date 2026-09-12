@@ -16,7 +16,7 @@ English | [繁體中文](README.zh-TW.md) | [日本語](README.ja-JP.md)
 [![Electron](https://img.shields.io/badge/Electron-33-47848F?logo=electron)](https://www.electronjs.org/)
 [![Vue 3](https://img.shields.io/badge/Vue-3-4FC08D?logo=vue.js)](https://vuejs.org/)
 [![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python)](https://python.org/)
-[![Platform](https://img.shields.io/badge/platform-macOS-lightgrey?logo=apple)](https://www.apple.com/macos/)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)](docs/en-US/getting-started.md)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 ## AI changed execution. Coordination is the new bottleneck.
@@ -121,6 +121,8 @@ Navide supports macOS 13+ on Apple silicon. The v0.2.1 release is signed with a 
 - [Download ZIP](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.1/Navide-0.2.1-arm64.zip)
 
 Copy Navide to Applications and open it normally — no Gatekeeper workaround is needed. In-app auto-update is available from this release onward.
+
+Linux and Windows are supported and run the same CI gates as macOS; release CI builds an AppImage and a `.deb` for Linux x64 and an NSIS installer for Windows x64, and those installers ship from the next release — v0.2.1 carries macOS assets only, so install from source on those platforms until then. The Windows build is not code-signed yet, so SmartScreen warns on first run, the Executions window cannot list or manage scheduled jobs there (Windows Task Scheduler is not integrated), per-pane CLI homes and managed skills need Windows Developer Mode or an elevated Navide because they are built from symbolic links, and a CLI is terminated rather than asked to stop, so it may not flush its transcript before a pane closes.
 
 For a development checkout, install from source instead.
 

@@ -1,24 +1,12 @@
 import json
-import shutil
+import re
 import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from pathlib import Path
 
-import pytest
-
+from agent_team_backend import osplat
 from agent_team_backend.claude_hooks import _build_curl_command
-
-
-def _bash() -> str | None:
-    """Git for Windows' bash first: a bare `which("bash")` can land on the WSL
-    stub in System32, which has no distribution to run anything with."""
-    git = shutil.which("git")
-    if git is not None:
-        candidate = Path(git).resolve().parent.parent / "bin" / "bash.exe"
-        if candidate.is_file():
-            return str(candidate)
-    return shutil.which("bash")
+from tests import hook_shell
 
 
 def _run_hook(tmp_path, event_kind: str, body: bytes, endpoint: str = "claude"):
@@ -28,12 +16,16 @@ def _run_hook(tmp_path, event_kind: str, body: bytes, endpoint: str = "claude"):
     the interesting half, because that is the only channel a CLI reads a hook's
     decision from.
     """
-    # The hook command is a POSIX sh script: `shell=True` would hand it to
-    # cmd.exe on Windows, so run it under an explicit bash (Git for Windows
-    # ships one) — checked before the server thread starts.
-    bash = _bash()
-    if bash is None:
-        pytest.skip("hook commands are POSIX sh scripts and no bash is on PATH")
+    # Which shell this text is for is the installer's declaration, not a guess:
+    # `shell=True` would hand it to cmd.exe on Windows, and bash would get
+    # PowerShell there. Resolved before the server thread starts, so a box with
+    # neither shell skips rather than leaving one hanging.
+    port_file = tmp_path / "backend.port"
+    argv = hook_shell.shell_argv(
+        osplat.scripts.hook_entry(
+            _build_curl_command(str(port_file), event_kind, endpoint=endpoint)
+        )
+    )
     received: list[bytes] = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -53,25 +45,23 @@ def _run_hook(tmp_path, event_kind: str, body: bytes, endpoint: str = "claude"):
     server.timeout = 5
     thread = threading.Thread(target=server.handle_request)
     thread.start()
-    port_file = tmp_path / "backend.port"
     port_file.write_text(str(server.server_port), encoding="utf-8")
     payload = '{"hook_event_name":"Stop","session_id":"session-1"}'
 
     try:
         result = subprocess.run(
-            [bash, "-c", _build_curl_command(str(port_file), event_kind, endpoint=endpoint)],
-            input=payload,
-            text=True,
-            capture_output=True,
-            timeout=10,
-            check=False,
+            argv, input=payload, text=True, capture_output=True, timeout=10, check=False
         )
     finally:
         thread.join(timeout=6)
         server.server_close()
 
     assert received == [payload.encode()]
-    return received, result.stdout
+    # One trailing line ending is the shell's, not the hook's: PowerShell ends
+    # a native command's output with a newline where sh passes curl's bytes
+    # through untouched, and a CLI parsing the JSON object cannot tell. Every
+    # other byte is compared exactly.
+    return received, result.stdout.removesuffix("\n").removesuffix("\r")
 
 
 def test_stop_hook_puts_the_response_on_stdout_where_the_cli_reads_decisions(tmp_path) -> None:
@@ -157,10 +147,64 @@ def test_subagent_stop_hook_is_installed(tmp_path) -> None:
     ]
     assert any("kind=subagent_stop" in c for c in commands)
     # It is a plain signal hook: its response is discarded, unlike Stop's.
-    assert all("-o /dev/null" in c for c in commands)
+    # How a shell spells "discard" (`-o /dev/null`, `-o NUL`) is the renderer's
+    # business, so the expected text comes from the same seam the installer
+    # wrote the command through rather than from a literal here.
+    shape = dict(
+        port_file=str(port_file),
+        header_file=str(tmp_path / "hook-auth"),
+        url_path="/hooks/claude",
+        event="subagent_stop",
+        timeout_s=2,
+    )
+    sink = re.search(r"-o \S+", osplat.scripts.hook_post_json(**shape, keep_body=False))
+    assert sink, "the renderer no longer discards a signal hook's response"
+    # It really is the discard, not boilerplate the kept-body form shares.
+    assert sink.group(0) not in osplat.scripts.hook_post_json(**shape, keep_body=True)
+    assert all(sink.group(0) in c for c in commands)
 
 
 def test_subagent_stop_hook_reaches_the_endpoint(tmp_path) -> None:
     payloads, stdout = _run_hook(tmp_path, "subagent_stop", b'{"ok":true}')
     assert payloads, "the hook sent nothing"
     assert stdout == "", "a signal hook's response must not reach the CLI"
+
+
+def test_a_windows_install_writes_powershell_and_says_so(tmp_path, monkeypatch) -> None:
+    """On Windows a hook's `command` runs under Git Bash, or PowerShell when
+    Git Bash is not installed — and the entry declares which it was written
+    for. Nothing here can assume sh, so the renderer is the seam and this
+    exercises its Windows arm on whatever machine runs the suite.
+    """
+    from agent_team_backend import claude_hooks, osplat
+    from agent_team_backend.osplat import _windows
+
+    monkeypatch.setattr(osplat, "scripts", _windows.scripts)
+    monkeypatch.setattr(claude_hooks, "_rewake_wanted", lambda: True)
+
+    settings_file = tmp_path / "settings.json"
+    port_file = tmp_path / "port"
+    port_file.write_text("1234", encoding="utf-8")
+    claude_hooks.install_hooks(str(port_file), settings_file=settings_file)
+
+    entries = [
+        h
+        for event in json.loads(settings_file.read_text(encoding="utf-8"))["hooks"].values()
+        for entry in event
+        for h in entry.get("hooks", [])
+    ]
+    assert entries
+    for hook in entries:
+        assert hook["shell"] == "powershell"
+        # The marker comment, then one PowerShell line — `#` comments in both
+        # shells, so the marker still reads the same to the installer.
+        marker, command = hook["command"].split("\n", 1)
+        assert marker.startswith("# agent-team-hook")
+        assert "\n" not in command
+        assert command.startswith("$PORT = Get-Content -ErrorAction SilentlyContinue ")
+        assert "curl.exe" in command
+        assert command.endswith("exit 0") or command.endswith("exit 2 }; exit 0")
+
+    rewake = [h for h in entries if h.get("asyncRewake")]
+    assert rewake, "the rewake waiter was not installed"
+    assert "[Console]::Error.WriteLine($BODY); exit 2" in rewake[0]["command"]

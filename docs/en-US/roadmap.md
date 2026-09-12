@@ -208,8 +208,8 @@ Scope:
 - Compatibility test kit and adapter health diagnostics
 - Reusable roles, pipelines, policies, team configurations, and engineering templates
 - Safe template packaging with version and capability metadata
-- Linux support with PTY, paths, permissions, packaging, and update parity
-- Windows support with ConPTY, filesystem behavior, packaging, and policy parity
+- Linux support with PTY, paths, permissions, packaging, and update parity — in `main`, covered by the Linux CI gates and packaged as an AppImage and a `.deb`; remaining work is publishing those installers in a release
+- Windows support with ConPTY, filesystem behavior, packaging, and policy parity — in `main`, covered by the Windows CI gates and packaged as an NSIS installer; remaining work is code signing, Task Scheduler integration, and a graceful CLI shutdown signal
 - Platform and adapter capability matrix
 - Internationalization and accessible workflows
 

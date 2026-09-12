@@ -2,13 +2,15 @@
 
 English | [繁體中文](../zh-TW/getting-started.md) | [日本語](../ja-JP/getting-started.md) | [Documentation](README.md)
 
-Navide supports macOS 13 or newer on Apple silicon. The [v0.1.47 GitHub prerelease](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.1.47) provides unsigned DMG and ZIP downloads. It is not signed or notarized by Apple.
+Navide supports macOS 13 or newer on Apple silicon, Linux x64, and Windows x64. The [v0.2.1 GitHub release](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.2.1) provides DMG and ZIP downloads for macOS, signed with a Developer ID certificate and notarized by Apple.
 
-To install the preview, download the DMG, copy Navide to Applications, then Control-click the app in Finder and choose **Open**. If macOS still blocks it, use **System Settings → Privacy & Security → Open Anyway** for Navide. Do not disable Gatekeeper globally.
+To install on macOS, download the DMG and copy Navide to Applications, then open it normally — no Gatekeeper workaround is needed.
+
+Release CI also builds an AppImage and a `.deb` for Linux x64 and an NSIS installer for Windows x64, but no release has published them yet: they ship from the next release, so install from source on those platforms until then. The Windows build is not code-signed, so SmartScreen warns on first run.
 
 ## What you need to install from source
 
-- macOS 13+
+- macOS 13+ on Apple silicon, Linux x64, or Windows x64
 - Node.js 22.12+ (22.x)
 - pnpm 10+
 - Python 3.12+
@@ -19,6 +21,7 @@ To install the preview, download the DMG, copy Navide to Applications, then Cont
   - Antigravity CLI (`agy`)
   - Grok CLI (`grok`)
 - Optional: Ollama or a local GGUF model for local analysis
+- On Windows: Developer Mode (**Settings → For developers**) or running Navide elevated, so it can create the symbolic links behind per-pane CLI homes and managed skills
 
 Each coding CLI has its own installation, authentication, subscription, and data policy. Navide does not replace those requirements.
 

@@ -605,6 +605,37 @@ def test_cli_health_builds_confirmed_npm_removal_for_owned_install(
     assert "Continue? [y/N]" in candidate["removal_command"]
 
 
+def test_cli_health_removal_command_is_the_terminal_shells_language(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The user runs this in a terminal the app opens, which is PowerShell on
+    Windows — where the sh spelling (`read -r`, `case ... esac`) is a syntax
+    error before it can ask anything.
+    """
+    from agent_team_backend import osplat
+    from agent_team_backend.osplat import _windows
+
+    _, binary, target = _make_npm_claude_install(tmp_path / "node")
+    other = _make_executable(tmp_path / "native" / "claude")
+    monkeypatch.setattr(ob, "_distinct_executables", lambda _command: [
+        _candidate_entry(binary, target),
+        _candidate_entry(other),
+    ])
+    monkeypatch.setattr(ob, "_probe_alternate", _probe_ok)
+    monkeypatch.setattr(ob, "_dismissed_cli_health_fingerprint", lambda: "")
+    monkeypatch.setattr(osplat, "scripts", _windows.scripts)
+
+    health = ob.build_cli_health([_claude_status(binary)])
+    command = health["entries"][0]["candidates"][0]["removal_command"]
+
+    assert command.startswith("Write-Host 'Remove ")
+    assert "$a = Read-Host 'Continue? [y/N]'" in command
+    assert "if ($a -match '^[Yy]') { & " in command
+    assert "uninstall -g @anthropic-ai/claude-code }" in command
+    assert "else { Write-Host 'Cancelled.' }" in command
+    assert "read -r" not in command
+
+
 def test_cli_health_never_offers_removal_for_the_only_install(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

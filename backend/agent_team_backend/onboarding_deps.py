@@ -19,7 +19,6 @@ import hashlib
 import logging
 import os
 import re
-import shlex
 import shutil
 import signal
 import sqlite3
@@ -510,13 +509,12 @@ def _candidate_removal(candidate: dict[str, Any], dep: Dep, version: str) -> dic
     if not package_marker or package_marker not in resolved or npm is None:
         return {"manager": "", "command": ""}
 
-    uninstall = f"{shlex.quote(str(npm))} uninstall -g {shlex.quote(package)}"
+    quote = osplat.paths.quote_arg
+    uninstall = f"{quote(str(npm))} uninstall -g {quote(package)}"
     description = f"Remove {dep.label} {version or ''} from {path}".replace("  ", " ")
-    confirmed = (
-        f"printf '%s\\n' {shlex.quote(description)}; "
-        "printf 'Continue? [y/N] '; read -r answer; "
-        f"case \"$answer\" in [Yy]*) {uninstall} ;; *) echo 'Cancelled.' ;; esac"
-    )
+    # The user's terminal runs this, so it has to be that terminal's language:
+    # `external-terminal.ts` opens sh on POSIX and PowerShell on Windows.
+    confirmed = osplat.scripts.confirm_then_run(description, uninstall)
     return {"manager": "npm", "command": confirmed}
 
 

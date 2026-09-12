@@ -346,8 +346,12 @@ jobs:
       - name: Report the backend test log
         # The job's log blob is uploaded when the job ends, so a hang in any
         # step loses every step's output. This step must not hang either:
-        # pwsh, no children.
+        # pwsh, no children. Diagnostics only, and never the job's verdict:
+        # after a run that spawns thousands of processes the runner has
+        # failed to start pwsh at all (0xC0000142, DLL init), which must not
+        # turn a suite that passed into a red job.
         if: always()
+        continue-on-error: true
         shell: pwsh
         run: |
           Write-Host "--- processes still around:"

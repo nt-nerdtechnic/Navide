@@ -23,9 +23,10 @@ from __future__ import annotations
 import json
 import logging
 import os
-import shlex
 from pathlib import Path
 from typing import Any
+
+from . import osplat
 
 log = logging.getLogger("agent_team_backend.copilot_hooks")
 
@@ -41,8 +42,8 @@ def hooks_dir() -> Path:
     return root / "hooks"
 
 
-def _build_command(port_file: str) -> str:
-    """Shell one-liner forwarding the hook's stdin JSON to this backend.
+def _build_command(port_file: str, shell: str) -> str:
+    """One `shell` one-liner forwarding the hook's stdin JSON to this backend.
 
     Reads the port at fire time so it survives backend restarts. Ends in
     `exit 0` unconditionally: a non-zero exit is how a Copilot hook reports
@@ -51,17 +52,14 @@ def _build_command(port_file: str) -> str:
     """
     from . import hook_auth
 
-    safe_port_file = shlex.quote(port_file)
     # The secret comes out of a 0600 file at fire time (`-H @file`); see hook_auth.
-    safe_auth_file = shlex.quote(str(hook_auth.header_file()))
-    return (
-        f"PORT=$(cat {safe_port_file} 2>/dev/null); "
-        f"[ -n \"$PORT\" ] && curl -fsS -m 2 -o /dev/null -X POST "
-        f"-H 'Content-Type: application/json' "
-        f"-H 'X-Agent-Team-Event: notification' "
-        f"-H @{safe_auth_file} "
-        f"--data-binary @- "
-        f"\"http://127.0.0.1:$PORT/hooks/copilot\" >/dev/null 2>&1; exit 0"
+    return osplat.scripts_by_shell[shell].hook_post_json(
+        port_file=port_file,
+        header_file=str(hook_auth.header_file()),
+        url_path="/hooks/copilot",
+        event="notification",
+        timeout_s=2,
+        exit_zero=True,
     )
 
 
@@ -82,7 +80,14 @@ def install_hooks(port_file: str, hooks_directory: Path | None = None) -> dict[s
         "hooks": {
             "notification": [
                 {
-                    "command": _build_command(port_file),
+                    # `command` is the cross-platform fallback Copilot copies
+                    # into whichever shell it runs; `bash` and `powershell`
+                    # take precedence over it per platform. All three are
+                    # written on every platform because this one file is read
+                    # wherever Copilot runs, not only where it was installed.
+                    "command": _build_command(port_file, "bash"),
+                    "bash": _build_command(port_file, "bash"),
+                    "powershell": _build_command(port_file, "powershell"),
                     "timeoutSec": 5,
                 }
             ]

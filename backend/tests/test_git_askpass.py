@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import socket
+import sys
 from pathlib import Path
 
 import pytest
@@ -261,3 +263,40 @@ class TestAskpassFailures:
             assert received == []
         finally:
             await cleanup()
+
+
+@pytest.mark.asyncio
+async def test_the_askpass_entry_mode_answers_a_prompt_like_the_helper_does():
+    """`<backend> --askpass-helper "<prompt>"` is what every launcher runs.
+
+    The frozen builds have no interpreter to hand the `.py` to, so the helper
+    is reached by re-entering this executable in that entry mode instead. It
+    has to answer on stdout exactly like a directly exec'd helper, and it must
+    reach the helper before anything the backend imports can print a line of
+    its own -- git reads the first line of stdout as the credential.
+    """
+    received: list[str] = []
+
+    async def on_request(request_id: str, prompt: str) -> None:
+        received.append(prompt)
+        git_service.resolve_credential(request_id, "s3cr3t-token")
+
+    env, cleanup = await git_service.create_askpass_context(on_request)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-m",
+            "agent_team_backend",
+            "--askpass-helper",
+            "Password for 'https://x':",
+            env={**os.environ, **env},
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
+    finally:
+        await cleanup()
+
+    assert proc.returncode == 0
+    assert stdout.splitlines()[0] == b"s3cr3t-token"
+    assert received == ["Password for 'https://x':"]

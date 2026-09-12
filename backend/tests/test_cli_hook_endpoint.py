@@ -485,9 +485,17 @@ def test_the_hook_secret_lives_in_a_private_file_the_command_only_names(tmp_path
     secret = hook_auth.token()
     for command in (
         _build_curl_command(str(tmp_path / "port"), "stop"),
-        _build_command(str(tmp_path / "port")),
+        # Both of Copilot's spellings: its hook file carries one per shell.
+        _build_command(str(tmp_path / "port"), "bash"),
+        _build_command(str(tmp_path / "port"), "powershell"),
     ):
-        assert f"-H @{path}" in command or f"-H @'{path}'" in command
+        # sh names the file after curl's `@`; PowerShell quotes the whole
+        # argument, because `@` starts a splat there.
+        assert (
+            f"-H @{path}" in command
+            or f"-H @'{path}'" in command
+            or f"-H '@{path}'" in command
+        )
         assert secret not in command
 
 

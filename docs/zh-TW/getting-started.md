@@ -2,13 +2,15 @@
 
 [English](../en-US/getting-started.md) | 繁體中文 | [日本語](../ja-JP/getting-started.md) | [文件中心](README.md)
 
-Navide 支援配備 Apple 晶片且執行 macOS 13 以上版本的 Mac。[v0.1.47 GitHub Prerelease](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.1.47) 提供未簽章的 DMG 與 ZIP 下載；這些檔案尚未經 Apple 簽章或 Notarization。
+Navide 支援配備 Apple 晶片且執行 macOS 13 以上版本的 Mac，以及 Linux x64 與 Windows x64。[v0.2.1 GitHub Release](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.2.1) 提供 macOS 的 DMG 與 ZIP 下載，並已經 Developer ID 簽章與 Apple Notarization。
 
-若要安裝 Preview，請下載 DMG、將 Navide 複製到「應用程式」，然後在 Finder 中按住 Control 點擊 App 並選擇「打開」。若 macOS 仍阻擋執行，請前往「系統設定 → 隱私權與安全性」，針對 Navide 選擇「強制打開」。請勿停用整個系統的 Gatekeeper。
+若要在 macOS 安裝，請下載 DMG、將 Navide 複製到「應用程式」，接著正常開啟即可，無需繞過 Gatekeeper。
+
+Release CI 也會為 Linux x64 建置 AppImage 與 `.deb`、為 Windows x64 建置 NSIS 安裝程式，但尚未有任何版本發行這些檔案：它們將自下一個版本起隨發行提供，在此之前請於這兩個平台從原始碼安裝。Windows 版本尚未經過程式碼簽章，首次執行時 SmartScreen 會出現警告。
 
 ## 從原始碼安裝的前置需求
 
-- macOS 13+
+- 配備 Apple 晶片的 macOS 13+、Linux x64 或 Windows x64
 - Node.js 22.12+（22.x）
 - pnpm 10+
 - Python 3.12+
@@ -19,6 +21,7 @@ Navide 支援配備 Apple 晶片且執行 macOS 13 以上版本的 Mac。[v0.1.4
   - Antigravity CLI（`agy`）
   - Grok CLI（`grok`）
 - 選用：用於本機分析的 Ollama 或本機 GGUF 模型
+- Windows 專屬：開發人員模式（**設定 → 開發人員專用**）或以系統管理員身分執行 Navide，Navide 才能建立每個 Pane 的 CLI Home 與受管理 Skills 所需的符號連結
 
 每個 Coding CLI 都有自己的安裝、驗證、訂閱與資料政策。Navide 不會取代這些需求。
 

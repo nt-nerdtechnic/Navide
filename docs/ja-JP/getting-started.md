@@ -2,13 +2,15 @@
 
 [English](../en-US/getting-started.md) | [繁體中文](../zh-TW/getting-started.md) | 日本語 | [ドキュメント](README.md)
 
-Navide は Apple silicon 上の macOS 13 以降をサポートします。[v0.1.47 GitHub Prerelease](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.1.47) では、未署名の DMG と ZIP を提供しています。Apple による署名も Notarization も行われていません。
+Navide は Apple silicon 上の macOS 13 以降、Linux x64、Windows x64 をサポートします。[v0.2.1 GitHub Release](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.2.1) では、macOS 向けの DMG と ZIP を提供しています。Developer ID で署名され、Apple の Notarization を通過しています。
 
-Preview をインストールするには、DMG をダウンロードして Navide を Applications にコピーし、Finder でアプリを Control-click して**開く**を選択します。それでも macOS にブロックされる場合は、Navide に対して**システム設定 → プライバシーとセキュリティ → このまま開く**を使用してください。Gatekeeper をシステム全体で無効化しないでください。
+macOS にインストールするには、DMG をダウンロードして Navide を Applications にコピーし、そのまま開きます。Gatekeeper の回避は不要です。
+
+Release CI は Linux x64 向けに AppImage と `.deb` を、Windows x64 向けに NSIS Installer もビルドしますが、まだどのリリースでも配布されていません。これらは次のリリースから配布されるため、それまでこの 2 つの Platform では Source からインストールしてください。Windows Build は Code Signing されていないため、初回起動時に SmartScreen が警告します。
 
 ## Source からインストールするために必要なもの
 
-- macOS 13+
+- Apple silicon 上の macOS 13+、Linux x64、または Windows x64
 - Node.js 22.12+（22.x）
 - pnpm 10+
 - Python 3.12+
@@ -19,6 +21,7 @@ Preview をインストールするには、DMG をダウンロードして Navi
   - Antigravity CLI (`agy`)
   - Grok CLI (`grok`)
 - 任意：Local Analysis 用の Ollama または Local GGUF Model
+- Windows の場合：開発者モード（**設定 → 開発者向け**）、または Navide を管理者権限で実行すること。Pane ごとの CLI Home と管理対象の Skills を支える Symbolic Link の作成に必要です
 
 各 Coding CLI には、それぞれ独自の Installation、Authentication、Subscription、Data Policy があります。Navide はそれらの要件を置き換えません。
 

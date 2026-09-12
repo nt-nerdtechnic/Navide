@@ -16,7 +16,7 @@ Navide は、一人の人間が複数の Coding Agent を指揮するための�
 [![Electron](https://img.shields.io/badge/Electron-33-47848F?logo=electron)](https://www.electronjs.org/)
 [![Vue 3](https://img.shields.io/badge/Vue-3-4FC08D?logo=vue.js)](https://vuejs.org/)
 [![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python)](https://python.org/)
-[![Platform](https://img.shields.io/badge/platform-macOS-lightgrey?logo=apple)](https://www.apple.com/macos/)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)](docs/ja-JP/getting-started.md)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 ## AI は実行能力を変えた。次のボトルネックは協調である
@@ -121,6 +121,8 @@ Navide は Apple silicon 上の macOS 13 以降をサポートします。v0.2.1
 - [ZIP をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.1/Navide-0.2.1-arm64.zip)
 
 Navide を Applications にコピーすればそのまま開けます。Gatekeeper の回避は不要です。このリリース以降、アプリ内自動アップデートが利用できます。
+
+Linux と Windows もサポートされ、macOS と同じ CI Gate を通過します。Release CI は Linux x64 向けに AppImage と `.deb` を、Windows x64 向けに NSIS Installer をビルドしますが、これらの Installer が配布されるのは次のリリースからです。v0.2.1 には macOS の Asset のみが含まれるため、それまでこの 2 つの Platform では Source からインストールしてください。Windows Build はまだ Code Signing されていないため初回起動時に SmartScreen が警告し、Executions ウィンドウはこの Platform で Scheduled Job を一覧・管理できず（Windows Task Scheduler は未統合）、Pane ごとの CLI Home と管理対象の Skills は Symbolic Link で構成されるため Windows の開発者モードまたは管理者権限での実行が必要で、CLI は停止を通知されずに終了されるため Pane が閉じる前に Transcript を書き出せない場合があります。
 
 開発用 Checkout では、代わりに Source からインストールしてください。
 

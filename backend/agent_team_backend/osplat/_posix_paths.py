@@ -8,8 +8,13 @@ share (the config and state roots) stays in each module.
 
 from __future__ import annotations
 
+import logging
+import shlex
 import stat
+import sys
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 
 def home_env_var() -> str:
@@ -25,15 +30,36 @@ def isolated_home_env(home_dir: Path) -> dict[str, str]:
     return {"HOME": home, "TMPDIR": home}
 
 
-def askpass_launcher(helper_py: Path, python_exe: str | None) -> Path:
-    """The `.py` itself: git execs it and the kernel runs the shebang.
+def askpass_launcher(helper_py: Path, launch_argv: list[str]) -> Path:
+    """The `.py` itself, or a `.sh` around `launch_argv` in a frozen build.
 
-    `python_exe` is unused on purpose — the shebang's `/usr/bin/env python3`
-    decides the interpreter, which is also why a frozen build works here
-    without carrying one. Best effort on the chmod: a helper on a read-only
-    volume is still worth pointing git at, and git reports the exec failure
-    itself.
+    From a source checkout the answer stays what it has always been: git execs
+    the script and the kernel runs its `/usr/bin/env python3` shebang. A
+    frozen build has no `python3` to promise — it ships one inside itself —
+    so it gets a sibling `.sh` that runs its own askpass entry mode and passes
+    git's prompt through.
+
+    Best effort on both writes: a helper on a read-only volume is still worth
+    pointing git at, and git reports the exec failure itself.
     """
+    if getattr(sys, "frozen", False):
+        launcher = helper_py.with_suffix(".sh")
+        argv = " ".join(shlex.quote(part) for part in launch_argv)
+        content = f'#!/bin/sh\nexec {argv} "$@"\n'.encode("utf-8")
+        try:
+            existing = launcher.read_bytes()
+        except OSError:
+            existing = b""
+        try:
+            # Rewritten only when its content differs, so a launcher that is
+            # already right keeps its mtime and no other process sees it flicker.
+            if existing != content:
+                launcher.write_bytes(content)
+            launcher.chmod(0o755)
+        except OSError as err:
+            log.warning("cannot write git askpass launcher %s: %s", launcher, err)
+        return launcher
+
     try:
         helper_py.chmod(helper_py.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     except OSError:
@@ -45,7 +71,6 @@ def askpass_launcher(helper_py: Path, python_exe: str | None) -> Path:
 # ---- appended: the members added for the Windows port ------------------------
 
 import os  # noqa: E402
-import shlex  # noqa: E402
 
 
 def executable_candidates(name: str) -> list[str]:
@@ -89,3 +114,70 @@ def shell_command(command: str) -> list[str]:
 
 def quote_arg(arg: str) -> str:
     return shlex.quote(arg)
+
+
+# ---- appended: the sh renderings of the scripts the backend writes -----------
+
+
+class PosixScripts:
+    """sh, for every shell a POSIX box opens and for Claude Code's default.
+
+    Also the `bash` half of Copilot's hook file on *every* platform: that file
+    declares both spellings and picks at fire time, so it is written once and
+    read wherever Copilot runs.
+    """
+
+    def hook_entry(self, command: str) -> dict:
+        # No `shell` key: sh is what Claude Code runs a hook with here, and
+        # adding one would rewrite every existing settings.json for nothing.
+        return {"type": "command", "command": command}
+
+    def hook_post_json(
+        self,
+        *,
+        port_file: str,
+        header_file: str,
+        url_path: str,
+        event: str,
+        timeout_s: int,
+        keep_body: bool = False,
+        exit_zero: bool = False,
+    ) -> str:
+        sink = "" if keep_body else "-o /dev/null "
+        tail = ' >/dev/null 2>&1; exit 0' if exit_zero else " || true"
+        return (
+            f"PORT=$(cat {shlex.quote(port_file)} 2>/dev/null); "
+            f'[ -n "$PORT" ] && curl -fsS -m {timeout_s} {sink}-X POST '
+            f"-H 'Content-Type: application/json' "
+            f"-H 'X-Agent-Team-Event: {event}' "
+            f"-H @{shlex.quote(header_file)} "
+            f"--data-binary @- "
+            f'"http://127.0.0.1:$PORT{url_path}"{tail}'
+        )
+
+    def hook_rewake(
+        self, *, port_file: str, header_file: str, url_path: str, timeout_s: int
+    ) -> str:
+        return (
+            f"PORT=$(cat {shlex.quote(port_file)} 2>/dev/null); "
+            f'[ -n "$PORT" ] || exit 0\n'
+            f"BODY=$(curl -fsS -m {timeout_s} -X POST "
+            f"-H 'Content-Type: application/json' "
+            f"-H 'X-Agent-Team-Event: rewake' "
+            f"-H @{shlex.quote(header_file)} "
+            f"--data-binary @- "
+            f'"http://127.0.0.1:$PORT{url_path}" || true)\n'
+            f'[ -n "$BODY" ] || exit 0\n'
+            f"printf '%s\\n' \"$BODY\" >&2\n"
+            f"exit 2"
+        )
+
+    def confirm_then_run(self, description: str, command: str) -> str:
+        return (
+            f"printf '%s\\n' {shlex.quote(description)}; "
+            "printf 'Continue? [y/N] '; read -r answer; "
+            f"case \"$answer\" in [Yy]*) {command} ;; *) echo 'Cancelled.' ;; esac"
+        )
+
+
+scripts = PosixScripts()

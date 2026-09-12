@@ -208,8 +208,8 @@ Scope：
 - Compatibility Test Kit と Adapter Health Diagnostics
 - 再利用可能な Role、Pipeline、Policy、Team Configuration、Engineering Template
 - Version と Capability Metadata を持つ安全な Template Packaging
-- PTY、Path、Permission、Packaging、Update が同等な Linux Support
-- ConPTY、Filesystem Behavior、Packaging、Policy が同等な Windows Support
+- PTY、Path、Permission、Packaging、Update が同等な Linux Support——`main` に取り込み済み。Linux CI Gate が対象とし、AppImage と `.deb` としてパッケージ化。残る作業はこれらの Installer をリリースで配布すること
+- ConPTY、Filesystem Behavior、Packaging、Policy が同等な Windows Support——`main` に取り込み済み。Windows CI Gate が対象とし、NSIS Installer としてパッケージ化。残る作業は Code Signing、Task Scheduler 統合、CLI を穏当に停止させるシグナル
 - Platform と Adapter の Capability Matrix
 - Internationalization と Accessible Workflow
 

@@ -570,6 +570,45 @@ class TestHandle:
         handle._pump.join(1)
         assert not handle._watcher.is_alive() and not handle._pump.is_alive()
 
+    def test_a_chunk_delivered_into_a_closed_loop_ends_the_pump_quietly(
+        self, monkeypatch
+    ):
+        """A pane's loop can go away before its pump does — window close, app
+        shutdown. POSIX reaches that moment with an `add_reader` callback the
+        loop simply stops calling; here it is a cross-thread call into a closed
+        loop, and it must end the pump rather than escape as a thread exception.
+        """
+        import threading
+
+        caught: list[object] = []
+        monkeypatch.setattr(threading, "excepthook", lambda args: caught.append(args))
+
+        pty = _FakePTY(80, 24)
+        parked = threading.Event()
+        opened = threading.Event()
+        pending = ["late output"]
+
+        def read(blocking: bool = False) -> str:
+            opened.set()
+            parked.wait(5)
+            if not pending:
+                raise RuntimeError("Standard out reached EOF")
+            return pending.pop(0)
+
+        pty.read = read  # type: ignore[method-assign]
+        handle = _handle(pty)
+        # A loop of its own: this one is closed under the pump, which is what
+        # the running test loop must not have done to it.
+        loop = asyncio.new_event_loop()
+        handle.start_reading(loop, lambda: None)
+        assert opened.wait(5), "the pump never reached its first read"
+        loop.close()
+        parked.set()
+
+        handle._pump.join(5)
+        assert not handle._pump.is_alive(), "the pump outlived the loop it fed"
+        assert not caught, f"the pump raised on its way out: {caught!r}"
+
     def test_read_without_data_blocks_and_none_at_eof(self):
         handle = _handle(_FakePTY(80, 24))
         with pytest.raises(BlockingIOError):
@@ -687,3 +726,64 @@ class TestResourceProbe:
             lambda: SimpleNamespace(memory_info=lambda: SimpleNamespace(peak_wset=123)),
         )
         assert _windows.resource_probe.peak_rss_bytes() == 123
+
+    def test_the_probe_reports_itself_usable_and_names_its_counter(self):
+        assert _windows.resource_probe.available() is True
+        assert _windows.resource_probe.memory_kind() == "private_bytes"
+
+    # Bytes and seconds, the same units the Darwin and Linux probes report:
+    # the private working set as-is, and user plus system CPU added up.
+    def test_sample_reports_private_bytes_and_total_cpu_seconds(self, monkeypatch):
+        _fake_processes(monkeypatch, {
+            10: _proc(private=4096, rss=999_999, user=1.5, system=0.25),
+            11: _proc(private=8192, rss=999_999, user=600.0, system=0.0),
+        })
+        assert _windows.resource_probe.sample([10, 11]) == {
+            10: (4096, 1.75),
+            11: (8192, 600.0),
+        }
+
+    # RSS on Windows is the working set, which charges a shared DLL to every
+    # process mapping it; it is the fallback only, for a psutil that does not
+    # carry the Windows-only field.
+    def test_sample_falls_back_to_rss_without_a_private_counter(self, monkeypatch):
+        _fake_processes(monkeypatch, {12: _proc(private=None, rss=2048, user=1.0, system=0.0)})
+        assert _windows.resource_probe.sample([12]) == {12: (2048, 1.0)}
+
+    # A pid that died mid-sweep, or that belongs to another user, is absent
+    # rather than zero — so the caller can tell "not measured" from "nothing".
+    def test_a_dead_or_foreign_pid_is_absent_not_zero(self, monkeypatch):
+        _fake_processes(
+            monkeypatch,
+            {13: _proc(private=1024, rss=1024, user=0.0, system=0.0)},
+            missing={14: psutil.NoSuchProcess(14), 15: psutil.AccessDenied(15)},
+        )
+        assert _windows.resource_probe.sample([13, 14, 15]) == {13: (1024, 0.0)}
+
+    def test_impossible_pids_are_never_looked_up(self, monkeypatch):
+        def must_not_run(_pid):
+            raise AssertionError("pid 0 and below are not processes")
+
+        monkeypatch.setattr(_windows.psutil, "Process", must_not_run)
+        assert _windows.resource_probe.sample([0, -1]) == {}
+        assert _windows.resource_probe.sample([]) == {}
+
+
+def _proc(*, private, rss, user, system) -> SimpleNamespace:
+    """One psutil.Process as this probe uses it: memory_info + cpu_times."""
+    memory = SimpleNamespace(rss=rss)
+    if private is not None:
+        memory.private = private
+    return SimpleNamespace(
+        memory_info=lambda: memory,
+        cpu_times=lambda: SimpleNamespace(user=user, system=system),
+    )
+
+
+def _fake_processes(monkeypatch, alive: dict, missing: dict | None = None) -> None:
+    def factory(pid):
+        if missing and pid in missing:
+            raise missing[pid]
+        return alive[pid]
+
+    monkeypatch.setattr(_windows.psutil, "Process", factory)
