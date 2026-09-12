@@ -208,7 +208,11 @@ real program says so through the seam too:
 `osplat.paths.executable_candidates("gh") != ["gh"]` for a `#!/bin/sh` fake
 found by bare name. (The run also writes
 `backend/agent_team_backend/git_askpass_helper.cmd`, as Windows does; it is
-gitignored.)
+gitignored.) The swapped run finishes sooner only because those skipped
+tests are the subprocess-heavy ones — every `git_service` test spawns real
+git several times — not because anything runs faster; it runs fewer tests,
+so it is a second pass before pushing, never a replacement for the normal
+run.
 
 What it verifies: path and environment arithmetic (`APPDATA`, `USERPROFILE`,
 `PATHEXT` candidate lists, `cmd.exe` argv shapes), seam-keyed skips, and the
