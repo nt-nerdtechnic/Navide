@@ -323,7 +323,15 @@ class TestWindowsAclForReal:
     #: What the OS itself and its administrators are called, as an en-US
     #: Windows prints them; a localized box would need the SIDs (S-1-5-18,
     #: S-1-5-32-544) resolved instead, and neither CI nor a dev box is one.
-    _MACHINE_PRINCIPALS = {"nt authority\\system", "builtin\\administrators"}
+    #: OWNER RIGHTS (S-1-3-4) is not a party at all: it is whoever owns the
+    #: file, which is the account that wrote it — the same principal the
+    #: named ACE above grants, spelled the way the creating token's default
+    #: DACL stamps it.
+    _MACHINE_PRINCIPALS = {
+        "nt authority\\system",
+        "builtin\\administrators",
+        "owner rights",
+    }
 
     def test_no_other_user_account_appears_in_the_dacl(self, tmp_path):
         path = tmp_path / "backend-ws-token"
