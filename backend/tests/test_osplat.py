@@ -247,10 +247,16 @@ class TestPaths:
         assert _windows.paths.quote_arg("plain") == "plain"
 
 
+#: What git_service hands the seam: this build's own executable plus the entry
+#: mode that answers a prompt. Never the bare name `python`.
+_LAUNCH_ARGV = ["/opt/navide/agent_team_backend", "--askpass-helper"]
+
+
 class TestAskpassLauncher:
-    """`GIT_ASKPASS` is exec'd by git with no shell: POSIX runs the script's
-    shebang, Windows cannot exec a `.py` and needs a launcher around an
-    interpreter."""
+    """`GIT_ASKPASS` is exec'd by git with no shell: a source checkout runs the
+    script's shebang, and every frozen build needs a launcher around the
+    backend's own askpass entry mode -- Windows always, because it cannot exec
+    a `.py` at all."""
 
     @pytest.mark.skipif(sys.platform == "win32", reason="the exec bit does not exist on NTFS")
     def test_posix_returns_the_script_made_executable(self, tmp_path):
@@ -259,43 +265,63 @@ class TestAskpassLauncher:
         helper = tmp_path / "git_askpass_helper.py"
         helper.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
         helper.chmod(0o644)
-        assert _darwin.paths.askpass_launcher(helper, "/usr/bin/python3") == helper
+        assert _darwin.paths.askpass_launcher(helper, _LAUNCH_ARGV) == helper
         assert os.stat(helper).st_mode & stat.S_IXUSR
         helper.chmod(0o644)
-        assert _linux.paths.askpass_launcher(helper, None) == helper
+        assert _linux.paths.askpass_launcher(helper, _LAUNCH_ARGV) == helper
         assert os.stat(helper).st_mode & stat.S_IXUSR
+
+    # A frozen build has no `python3` to promise the shebang, so POSIX stops
+    # relying on one too: the launcher runs the executable git_service named.
+    @pytest.mark.skipif(sys.platform == "win32", reason="the exec bit does not exist on NTFS")
+    def test_posix_frozen_build_writes_an_sh_launcher(self, tmp_path, monkeypatch):
+        from agent_team_backend.osplat import _darwin
+
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        helper = tmp_path / "git_askpass_helper.py"
+        helper.write_text("", encoding="utf-8")
+        launcher = _darwin.paths.askpass_launcher(helper, _LAUNCH_ARGV)
+        assert launcher == tmp_path / "git_askpass_helper.sh"
+        assert launcher.read_text(encoding="utf-8") == (
+            '#!/bin/sh\nexec /opt/navide/agent_team_backend --askpass-helper "$@"\n'
+        )
+        assert stat.S_IMODE(os.stat(launcher).st_mode) == 0o755
 
     def test_windows_writes_a_cmd_wrapper_beside_the_script(self, tmp_path):
         from agent_team_backend.osplat import _windows
 
         helper = tmp_path / "git_askpass_helper.py"
         helper.write_text("", encoding="utf-8")
-        launcher = _windows.paths.askpass_launcher(helper, r"C:\Python\python.exe")
+        launcher = _windows.paths.askpass_launcher(
+            helper, [r"C:\Program Files\Navide\backend.exe", "--askpass-helper"]
+        )
         assert launcher == tmp_path / "git_askpass_helper.cmd"
         assert launcher.read_bytes() == (
-            b'@"C:\\Python\\python.exe" "' + str(helper).encode() + b'" %*\r\n'
+            b'@"C:\\Program Files\\Navide\\backend.exe" --askpass-helper %*\r\n'
         )
 
-    # A frozen build carries no interpreter of its own: the launcher falls
-    # back to `python` on PATH, the same dependency the POSIX shebang has.
-    def test_windows_frozen_build_uses_python_from_path(self, tmp_path):
+    # The regression this whole entry mode exists for: `python` on a stock
+    # Windows is the Store's alias stub, which hands git an empty credential.
+    def test_windows_never_names_a_bare_interpreter(self, tmp_path):
         from agent_team_backend.osplat import _windows
 
         helper = tmp_path / "git_askpass_helper.py"
         helper.write_text("", encoding="utf-8")
-        launcher = _windows.paths.askpass_launcher(helper, None)
-        assert launcher.read_text(encoding="utf-8").startswith('@"python" "')
+        launcher = _windows.paths.askpass_launcher(helper, _LAUNCH_ARGV)
+        text = launcher.read_text(encoding="utf-8")
+        assert "python" not in text
+        assert text.startswith("@/opt/navide/agent_team_backend --askpass-helper")
 
     def test_windows_leaves_an_up_to_date_launcher_untouched(self, tmp_path):
         from agent_team_backend.osplat import _windows
 
         helper = tmp_path / "git_askpass_helper.py"
         helper.write_text("", encoding="utf-8")
-        launcher = _windows.paths.askpass_launcher(helper, "py")
+        launcher = _windows.paths.askpass_launcher(helper, _LAUNCH_ARGV)
         before = launcher.stat().st_mtime_ns
         os.utime(launcher, ns=(before - 10**9, before - 10**9))
         stamped = launcher.stat().st_mtime_ns
-        assert _windows.paths.askpass_launcher(helper, "py") == launcher
+        assert _windows.paths.askpass_launcher(helper, _LAUNCH_ARGV) == launcher
         assert launcher.stat().st_mtime_ns == stamped
 
     # git_service resolves the launcher at import: a directory that cannot be
@@ -313,7 +339,7 @@ class TestAskpassLauncher:
             raise PermissionError(13, "Access is denied", str(self))
 
         monkeypatch.setattr(Path, "write_bytes", denied)
-        launcher = _windows.paths.askpass_launcher(helper, "py")
+        launcher = _windows.paths.askpass_launcher(helper, _LAUNCH_ARGV)
         assert launcher == tmp_path / "git_askpass_helper.cmd"
         assert not launcher.exists()
         assert "cannot write git askpass launcher" in caplog.text
@@ -357,7 +383,6 @@ PLATFORM_BRANCH_ALLOWLIST = {
     "cli_vendors/cursor.py",
     "credential_vault.py",
     "proc_rusage.py",
-    "process_cpu.py",
     "process_memory.py",
 }
 
@@ -471,3 +496,141 @@ class TestPortedModulesStayPosixFree:
         source = posix.read_text(encoding="utf-8")
         assert _POSIX_IMPORT_RE.search(source)
         assert _POSIX_CALL_RE.search(source)
+
+
+class TestScripts:
+    """The texts a *shell* runs: hook commands and the confirm-then-run line.
+
+    Both implementations are exercised on whichever machine runs the suite --
+    they are pure string rendering, and Copilot's hook file carries the
+    PowerShell spelling even when written on a Mac.
+    """
+
+    def test_the_selected_renderer_is_this_platform(self):
+        expected = "WindowsScripts" if sys.platform == "win32" else "PosixScripts"
+        assert type(osplat.scripts).__name__ == expected
+        assert set(osplat.scripts_by_shell) == {"bash", "powershell"}
+
+    def test_posix_hook_entry_stays_the_shape_the_installer_has_always_written(self):
+        from agent_team_backend.osplat import _posix_paths
+
+        entry = _posix_paths.scripts.hook_entry("echo hi")
+        assert entry == {"type": "command", "command": "echo hi"}
+
+    # Without `shell`, Claude Code runs the command under Git Bash whenever it
+    # is installed -- and this text is PowerShell.
+    def test_windows_hook_entry_declares_powershell(self):
+        from agent_team_backend.osplat import _windows
+
+        entry = _windows.scripts.hook_entry("exit 0")
+        assert entry == {"type": "command", "shell": "powershell", "command": "exit 0"}
+
+    def test_posix_hook_post_json_reads_the_port_at_fire_time(self):
+        from agent_team_backend.osplat import _posix_paths
+
+        command = _posix_paths.scripts.hook_post_json(
+            port_file="/tmp/navide.port",
+            header_file="/tmp/hook.header",
+            url_path="/hooks/claude",
+            event="stop",
+            timeout_s=4,
+            keep_body=True,
+        )
+        assert command.startswith("PORT=$(cat /tmp/navide.port 2>/dev/null); ")
+        assert "-o /dev/null" not in command  # the Stop hook's answer is read
+        assert command.endswith('"http://127.0.0.1:$PORT/hooks/claude" || true')
+
+    def test_posix_exit_zero_swallows_a_failed_curl(self):
+        from agent_team_backend.osplat import _posix_paths
+
+        command = _posix_paths.scripts.hook_post_json(
+            port_file="/tmp/navide.port",
+            header_file="/tmp/hook.header",
+            url_path="/hooks/copilot",
+            event="notification",
+            timeout_s=2,
+            exit_zero=True,
+        )
+        assert command.endswith(">/dev/null 2>&1; exit 0")
+
+    def test_windows_hook_post_json_is_a_powershell_one_liner(self):
+        from agent_team_backend.osplat import _windows
+
+        command = _windows.scripts.hook_post_json(
+            port_file=r"C:\Users\a b\navide.port",
+            header_file=r"C:\Users\a b\hook.header",
+            url_path="/hooks/copilot",
+            event="notification",
+            timeout_s=2,
+            exit_zero=True,
+        )
+        assert "\n" not in command
+        # `curl` alone is a PowerShell alias for Invoke-WebRequest, which takes
+        # none of these arguments.
+        assert "curl.exe -fsS -m 2 -o NUL -X POST" in command
+        assert command.startswith(
+            "$PORT = Get-Content -ErrorAction SilentlyContinue 'C:\\Users\\a b\\navide.port'; "
+        )
+        # `@` starts a splat in PowerShell, so both curl `@` arguments are quoted.
+        assert "-H '@C:\\Users\\a b\\hook.header'" in command
+        assert "--data-binary '@-'" in command
+        assert command.endswith('"http://127.0.0.1:$PORT/hooks/copilot" }; exit 0')
+
+    def test_windows_keeps_the_body_when_the_cli_reads_it(self):
+        from agent_team_backend.osplat import _windows
+
+        command = _windows.scripts.hook_post_json(
+            port_file="p",
+            header_file="h",
+            url_path="/hooks/claude",
+            event="stop",
+            timeout_s=4,
+            keep_body=True,
+        )
+        assert "-o NUL" not in command
+
+    def test_windows_rewake_writes_the_body_to_stderr_and_exits_two(self):
+        from agent_team_backend.osplat import _windows
+
+        command = _windows.scripts.hook_rewake(
+            port_file="p", header_file="h", url_path="/hooks/claude/rewake", timeout_s=1860
+        )
+        assert "\n" not in command
+        assert "if (-not $PORT) { exit 0 }" in command
+        assert "$BODY = curl.exe -fsS -m 1860 -X POST" in command
+        assert command.endswith(
+            "if ($BODY) { [Console]::Error.WriteLine($BODY); exit 2 }; exit 0"
+        )
+
+    def test_posix_confirm_then_run_asks_before_running(self):
+        from agent_team_backend.osplat import _posix_paths
+
+        script = _posix_paths.scripts.confirm_then_run("Remove claude", "/usr/bin/npm uninstall")
+        assert script == (
+            "printf '%s\\n' 'Remove claude'; "
+            "printf 'Continue? [y/N] '; read -r answer; "
+            'case "$answer" in [Yy]*) /usr/bin/npm uninstall ;; *) echo \'Cancelled.\' ;; esac'
+        )
+
+    # `external-terminal.ts` runs this through `powershell -NoExit -Command`,
+    # which is a syntax error away from the sh spelling above.
+    def test_windows_confirm_then_run_is_powershell(self):
+        from agent_team_backend.osplat import _windows
+
+        script = _windows.scripts.confirm_then_run(
+            "Remove claude from C:\\a b", '"C:\\a b\\npm.cmd" uninstall -g x'
+        )
+        assert script == (
+            "Write-Host 'Remove claude from C:\\a b'; "
+            "$a = Read-Host 'Continue? [y/N]'; "
+            "if ($a -match '^[Yy]') { & \"C:\\a b\\npm.cmd\" uninstall -g x } "
+            "else { Write-Host 'Cancelled.' }"
+        )
+
+    # A single quote is the one character a PowerShell single-quoted string
+    # cannot carry as-is, and a directory name may well have one.
+    def test_windows_doubles_a_quote_in_the_description(self):
+        from agent_team_backend.osplat import _windows
+
+        script = _windows.scripts.confirm_then_run("Remove o'brien's cli", "npm x")
+        assert "Write-Host 'Remove o''brien''s cli'" in script

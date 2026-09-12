@@ -73,3 +73,21 @@ __all__ += ["secret_files"]
 scheduler: spec.Scheduler = _impl.scheduler
 
 __all__ += ["scheduler"]
+
+scripts: spec.Scripts = _impl.scripts
+
+#: Both shells' renderers, keyed by the name the consumer uses for them.
+#:
+#: For the one caller that has to write text for a shell this machine is not
+#: running: Copilot's hook file declares a `bash` and a `powershell` spelling
+#: side by side and chooses at fire time, so the file is correct wherever it
+#: is read rather than only where it was written. Everything else wants
+#: `scripts`, which is this machine's.
+from . import _posix_paths, _windows  # noqa: E402
+
+scripts_by_shell: dict[str, spec.Scripts] = {
+    "bash": _posix_paths.scripts,
+    "powershell": _windows.scripts,
+}
+
+__all__ += ["scripts", "scripts_by_shell"]

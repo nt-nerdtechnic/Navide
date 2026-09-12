@@ -96,16 +96,24 @@ class Paths(Protocol):
         """
         ...
 
-    def askpass_launcher(self, helper_py: Path, python_exe: str | None) -> Path:
-        """The path git can exec as `GIT_ASKPASS` to run `helper_py`.
+    def askpass_launcher(self, helper_py: Path, launch_argv: list[str]) -> Path:
+        """The path git can exec as `GIT_ASKPASS` to run the helper.
 
-        git execs `GIT_ASKPASS` directly, with no shell. POSIX can run the
-        script itself through its shebang, so the answer is `helper_py` made
-        executable. Windows cannot exec a `.py`, so a sibling `.cmd` that
-        invokes `python_exe` on it is written and returned instead; a
-        `python_exe` of None means this process carries no interpreter of its
-        own (a frozen build) and the one on `PATH` is used, which is what the
-        shebang's `/usr/bin/env python3` already relies on elsewhere.
+        git execs `GIT_ASKPASS` directly, with no shell, so the answer is
+        always a file the kernel (or cmd.exe) can start on its own.
+
+        `launch_argv` runs this backend's own askpass entry mode -- this
+        process's executable plus the flag -- and git's prompt is appended to
+        it. A launcher written around it depends on nothing but the running
+        build: a frozen backend has no `python` to promise, and the name
+        usually resolves on Windows to the Store's alias stub, which answers
+        git with an empty credential.
+
+        Windows always writes a sibling `.cmd`, because it cannot exec a
+        `.py`. POSIX writes a sibling `.sh` only when frozen and otherwise
+        returns `helper_py` itself, made executable: a source checkout's
+        `/usr/bin/env python3` shebang is the same interpreter `launch_argv`
+        names.
         """
         ...
 
@@ -430,8 +438,9 @@ class SecretFiles(Protocol):
       *program* too, which is why it must not be used for the second kind.
     - `write_private_plain` is for a secret another process consumes as-is:
       the ws token Electron reads, the header file curl loads, the MCP config
-      a CLI parses. POSIX gives it the same 0600; Windows can only write it
-      in the clear (an owner-only ACL is the missing piece — see `_windows`).
+      a CLI parses. POSIX gives it the same 0600; Windows has to write it in
+      the clear and protects it with an owner-only ACL instead (`icacls`,
+      see `_windows`).
     """
 
     def write_private(self, path: Path, data: bytes) -> None:
@@ -493,4 +502,80 @@ class Scheduler(Protocol):
 
     async def remove(self, kind: str, target: str) -> None:
         """Delete one job; `SchedulerError` on failure."""
+        ...
+
+
+class Scripts(Protocol):
+    """Text the platform's own shell runs: hook commands, and terminal prompts.
+
+    Three of the things the backend writes are *programs for a shell* rather
+    than argv, and each is read back by something that picked the shell for
+    us. Claude Code runs a hook's `command` under Git Bash on Windows, or
+    PowerShell when Git Bash is absent, and the hook entry says which with a
+    `shell` field; Copilot's hook file carries a `bash` and a `powershell`
+    spelling side by side and picks at fire time; and the "confirm, then run"
+    line goes to whichever terminal the app opens, `cmd`/PowerShell on
+    Windows.
+
+    So the renderer is the seam, not the caller: `osplat.scripts` is this
+    machine's, and `osplat.scripts_by_shell` names both for the one file that
+    has to carry a shell this machine is not running.
+    """
+
+    def hook_entry(self, command: str) -> dict:
+        """`command` as a Claude Code hook entry, declaring its shell.
+
+        POSIX: `{"type": "command", "command": ...}`, unchanged from what the
+        installer has always written. Windows adds `"shell": "powershell"`,
+        without which Claude Code falls back to Git Bash and finds nothing to
+        run this text with when it is not installed.
+        """
+        ...
+
+    def hook_post_json(
+        self,
+        *,
+        port_file: str,
+        header_file: str,
+        url_path: str,
+        event: str,
+        timeout_s: int,
+        keep_body: bool = False,
+        exit_zero: bool = False,
+    ) -> str:
+        """A one-liner that POSTs the hook's stdin JSON to the running backend.
+
+        `port_file` is read when the hook fires, not now, so the command
+        survives a backend restart on a different port, and its absence (no
+        backend) makes the whole thing a no-op. `header_file` is the
+        owner-only file curl loads the auth header out of -- the secret is
+        never written into the command, which lands in a world-readable
+        settings file.
+
+        `keep_body` keeps curl's stdout, which is where the CLI reads a hook's
+        decision from; everything else discards it. `exit_zero` ends the line
+        with an unconditional success, for a CLI that reads a non-zero exit as
+        a hook failure (Copilot) rather than as "nothing to report".
+        """
+        ...
+
+    def hook_rewake(
+        self, *, port_file: str, header_file: str, url_path: str, timeout_s: int
+    ) -> str:
+        """The parked-waiter variant: the body goes to stderr and exit 2 wakes the agent.
+
+        Backgrounded by the CLI, which reads only the exit code, so the
+        response body has to travel on stderr. An empty body, a missing port
+        file, or a refused connection all exit 0, which is "nothing to
+        report".
+        """
+        ...
+
+    def confirm_then_run(self, description: str, command: str) -> str:
+        """A script that prints `description`, asks for y/N, and runs `command` on yes.
+
+        Handed to a terminal the app opens, so it has to be that terminal's
+        language: sh on POSIX, PowerShell on Windows (`external-terminal.ts`
+        runs it through `powershell -NoExit -Command` there).
+        """
         ...

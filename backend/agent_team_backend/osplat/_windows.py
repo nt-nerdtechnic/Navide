@@ -75,16 +75,50 @@ class WindowsPaths:
 
 
 class WindowsResourceProbe:
-    """Per-pid sampling is not ported yet; only the self peak is available."""
+    """Memory and CPU from psutil, one process handle per pid.
+
+    `psutil` reads both out of the same `NtQueryInformationProcess` family of
+    calls that Task Manager uses, so this is the cheap in-process path the
+    other platforms get from `proc_pid_rusage` and `/proc` — there is no `ps`
+    here to shell out to anyway.
+
+    Memory is the private working set (`private`, what Task Manager calls
+    "Commit size"), not `rss`: RSS on Windows is the working set, which
+    charges every page of a shared DLL to each of the processes mapping it and
+    so over-reports a fleet of same-binary CLIs exactly the way it does on
+    POSIX. `private` is not interchangeable with `phys_footprint` or PSS — it
+    excludes shared pages outright where those charge them once — which is why
+    `memory_kind` names it for the panel to label.
+    """
 
     def available(self) -> bool:
-        return False
+        return True
 
     def sample(self, pids: list[int]) -> dict[int, tuple[int, float]]:
-        return {}
+        out: dict[int, tuple[int, float]] = {}
+        for pid in pids:
+            if pid <= 0:
+                continue
+            try:
+                proc = psutil.Process(pid)
+                memory = proc.memory_info()
+                cpu = proc.cpu_times()
+            except (psutil.Error, OSError):
+                # Died mid-sweep, or belongs to another user. Same contract as
+                # the Darwin and Linux probes: absent rather than zero, so the
+                # caller can tell "not measured" from "measured as nothing".
+                continue
+            # `private` is Windows-only on the psutil namedtuple; a build that
+            # does not carry it still answers with the working set.
+            private = getattr(memory, "private", None)
+            out[pid] = (
+                int(private if private is not None else memory.rss),
+                float(cpu.user) + float(cpu.system),
+            )
+        return out
 
     def memory_kind(self) -> str:
-        return "unavailable"
+        return "private_bytes"
 
     def peak_rss_bytes(self) -> int | None:
         try:
@@ -815,20 +849,23 @@ class WindowsLayout(WindowsPaths):
         home = str(home_dir)
         return {"USERPROFILE": home, "HOME": home, "TEMP": home, "TMP": home}
 
-    def askpass_launcher(self, helper_py: Path, python_exe: str | None) -> Path:
-        """A sibling `.cmd` that runs the helper through an interpreter.
+    def askpass_launcher(self, helper_py: Path, launch_argv: list[str]) -> Path:
+        """A sibling `.cmd` that runs this backend's own askpass entry mode.
 
         git execs `GIT_ASKPASS` with no shell and Windows cannot exec a
-        `.py`. `python_exe` None (a frozen build) falls back to `python` on
-        PATH. Rewritten only when its content differs, so a launcher that is
+        `.py`, so the launcher has to name something runnable. `launch_argv`
+        is this process's executable plus the flag, never the bare name
+        `python`: that name resolves on a stock Windows to the Store's alias
+        stub, which prints its install page and hands git an empty credential.
+
+        Rewritten only when its content differs, so a launcher that is
         already right keeps its mtime and no other process sees it flicker.
         Best effort on the write, like the POSIX chmod: git_service resolves
         this at import, so an unwritable directory must not stop the backend
         — git reports the missing launcher itself when a credential is asked.
         """
         launcher = helper_py.with_suffix(".cmd")
-        interpreter = python_exe or "python"
-        content = f'@"{interpreter}" "{helper_py}" %*\r\n'.encode("utf-8")
+        content = f"@{subprocess.list2cmdline(launch_argv)} %*\r\n".encode("utf-8")
         try:
             if launcher.read_bytes() == content:
                 return launcher
@@ -846,8 +883,9 @@ class WindowsLayout(WindowsPaths):
 # `os.chmod(0o600)` is a no-op on NTFS, so mode bits cannot protect a secret
 # here. `write_private` wraps the content with `CryptProtectData` instead:
 # only the same Windows account can unwrap it, whichever ACL the file ends up
-# with. `write_private_plain` stays in the clear because another program has
-# to read it; an owner-only ACL for that case is the missing piece.
+# with. `write_private_plain` has to stay in the clear because another program
+# reads it, so that one is protected the only way NTFS expresses it — an
+# owner-only ACL, written with `icacls` (see `_restrict_to_owner`).
 
 #: Header that marks a DPAPI-wrapped file; anything without it is read as-is.
 DPAPI_MAGIC = b"NAVIDE-DPAPI-1\n"
@@ -921,8 +959,62 @@ def _write_atomic(path: Path, data: bytes) -> None:
         raise
 
 
+#: `icacls` is a local, non-networked call; a timeout this generous only
+#: matters when the machine is thrashing.
+_ICACLS_TIMEOUT_S = 10.0
+
+
+def _current_user() -> str | None:
+    """The account to grant, or None when the name cannot be established."""
+    try:
+        name = os.getlogin()
+    except OSError:
+        # No console attached (a service-started backend): the environment is
+        # the other place the session's user name is written down.
+        name = ""
+    return name or os.environ.get("USERNAME") or None
+
+
+def _restrict_to_owner(path: Path, *, container: bool) -> None:
+    """Take `path` down to one full-control ACE for this account, via `icacls`.
+
+    `/inheritance:r` drops what the parent handed down — on a default profile
+    that is SYSTEM and Administrators, and on a tree someone has widened it can
+    be Users — and `/grant:r` then replaces any remaining grant for this
+    account rather than adding a second ACE, so calling this twice is the same
+    as calling it once. A directory also takes `(OI)(CI)` so the files created
+    inside it start owner-only too.
+
+    Never raises. The secret is already written and correct at this point; a
+    box where `icacls` is missing or refuses must still start, with the failure
+    in the log rather than in the caller.
+    """
+    user = _current_user()
+    if not user:
+        log.warning("cannot restrict %s: no account name to grant to", path)
+        return
+    rights = "(OI)(CI)F" if container else "F"
+    argv = ["icacls", str(path), "/inheritance:r", "/grant:r", f"{user}:{rights}"]
+    try:
+        proc = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=_ICACLS_TIMEOUT_S,
+            # No console flash on a GUI-launched backend; absent off Windows,
+            # where this module still imports for the tests.
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.SubprocessError) as err:
+        log.warning("icacls failed for %s: %s", path, err)
+        return
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip()
+        log.warning("icacls refused %s (exit %s): %s", path, proc.returncode, detail)
+
+
 class WindowsSecretFiles:
-    """`SecretFiles` through DPAPI; directory ACLs are out of scope for now."""
+    """`SecretFiles` through DPAPI for our own content, ACLs for the rest."""
 
     def write_private(self, path: Path, data: bytes) -> None:
         # Wrap first: a DPAPI failure must leave no file behind at all.
@@ -931,6 +1023,9 @@ class WindowsSecretFiles:
 
     def write_private_plain(self, path: Path, data: bytes) -> None:
         _write_atomic(path, data)
+        # After the replace, not before: the ACL has to land on the file that
+        # survives, and the temp file is the one that gets thrown away.
+        _restrict_to_owner(path, container=False)
 
     def read_private(self, path: Path) -> bytes:
         raw = path.read_bytes()
@@ -939,11 +1034,14 @@ class WindowsSecretFiles:
         return _dpapi("CryptUnprotectData", raw[len(DPAPI_MAGIC):])
 
     def harden_file(self, path: Path) -> None:
-        # No ACL rewrite yet; still reports a missing file like the POSIX one.
+        # `stat` first, so a missing file reports like the POSIX one does
+        # rather than as an `icacls` exit code in the log.
         path.stat()
+        _restrict_to_owner(path, container=False)
 
     def make_private_dir(self, path: Path) -> None:
         path.mkdir(parents=True, exist_ok=True)
+        _restrict_to_owner(path, container=True)
 
 
 
@@ -1054,3 +1152,85 @@ class WindowsScheduler:
 paths = WindowsDiscoveryLayout()
 secret_files = WindowsSecretFiles()
 scheduler = WindowsScheduler()
+
+
+# ---- appended: the PowerShell renderings of the scripts the backend writes ---
+#
+# PowerShell rather than cmd because that is what reads these texts here:
+# Claude Code runs a hook under Git Bash when it is installed and PowerShell
+# otherwise (so the entry declares which it wrote), Copilot's hook file has a
+# `powershell` key next to its `bash` one, and `external-terminal.ts` opens a
+# terminal with `powershell -NoExit -Command`.
+
+
+def _ps_quote(value: str) -> str:
+    """`value` as a PowerShell single-quoted string: only `'` needs escaping.
+
+    Single quotes and not double: inside double quotes PowerShell expands
+    `$name` and backticks, and these strings carry Windows paths a user chose
+    the characters of.
+    """
+    escaped = value.replace("'", "''")
+    return f"'{escaped}'"
+
+
+class WindowsScripts:
+    def hook_entry(self, command: str) -> dict:
+        # Without `shell`, Claude Code looks for Git Bash and only falls back
+        # to PowerShell when it finds none -- so a box that has Git installed
+        # would run this text under the wrong shell.
+        return {"type": "command", "shell": "powershell", "command": command}
+
+    def hook_post_json(
+        self,
+        *,
+        port_file: str,
+        header_file: str,
+        url_path: str,
+        event: str,
+        timeout_s: int,
+        keep_body: bool = False,
+        exit_zero: bool = False,
+    ) -> str:
+        # `curl.exe`, never `curl`: the bare name is a PowerShell alias for
+        # Invoke-WebRequest, which takes none of these arguments. `'@-'` and
+        # `'@file'` are quoted because `@` starts a splat or an array here.
+        # `exit_zero` costs nothing to honour -- the line already ends that
+        # way, because a PowerShell failure otherwise surfaces as a hook error.
+        sink = "" if keep_body else "-o NUL "
+        return (
+            f"$PORT = Get-Content -ErrorAction SilentlyContinue {_ps_quote(port_file)}; "
+            f"if ($PORT) {{ curl.exe -fsS -m {timeout_s} {sink}-X POST "
+            f"-H 'Content-Type: application/json' "
+            f"-H 'X-Agent-Team-Event: {event}' "
+            f"-H {_ps_quote('@' + header_file)} "
+            f"--data-binary '@-' "
+            f'"http://127.0.0.1:$PORT{url_path}" }}; exit 0'
+        )
+
+    def hook_rewake(
+        self, *, port_file: str, header_file: str, url_path: str, timeout_s: int
+    ) -> str:
+        return (
+            f"$PORT = Get-Content -ErrorAction SilentlyContinue {_ps_quote(port_file)}; "
+            f"if (-not $PORT) {{ exit 0 }}; "
+            f"$BODY = curl.exe -fsS -m {timeout_s} -X POST "
+            f"-H 'Content-Type: application/json' "
+            f"-H 'X-Agent-Team-Event: rewake' "
+            f"-H {_ps_quote('@' + header_file)} "
+            f"--data-binary '@-' "
+            f'"http://127.0.0.1:$PORT{url_path}" 2>$null; '
+            f"if ($BODY) {{ [Console]::Error.WriteLine($BODY); exit 2 }}; exit 0"
+        )
+
+    def confirm_then_run(self, description: str, command: str) -> str:
+        # `&` is the call operator: `command` starts with a quoted path, which
+        # PowerShell would otherwise treat as a string to print.
+        return (
+            f"Write-Host {_ps_quote(description)}; "
+            f"$a = Read-Host 'Continue? [y/N]'; "
+            f"if ($a -match '^[Yy]') {{ & {command} }} else {{ Write-Host 'Cancelled.' }}"
+        )
+
+
+scripts = WindowsScripts()

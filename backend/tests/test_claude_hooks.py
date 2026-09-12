@@ -164,3 +164,43 @@ def test_subagent_stop_hook_reaches_the_endpoint(tmp_path) -> None:
     payloads, stdout = _run_hook(tmp_path, "subagent_stop", b'{"ok":true}')
     assert payloads, "the hook sent nothing"
     assert stdout == "", "a signal hook's response must not reach the CLI"
+
+
+def test_a_windows_install_writes_powershell_and_says_so(tmp_path, monkeypatch) -> None:
+    """On Windows a hook's `command` runs under Git Bash, or PowerShell when
+    Git Bash is not installed — and the entry declares which it was written
+    for. Nothing here can assume sh, so the renderer is the seam and this
+    exercises its Windows arm on whatever machine runs the suite.
+    """
+    from agent_team_backend import claude_hooks, osplat
+    from agent_team_backend.osplat import _windows
+
+    monkeypatch.setattr(osplat, "scripts", _windows.scripts)
+    monkeypatch.setattr(claude_hooks, "_rewake_wanted", lambda: True)
+
+    settings_file = tmp_path / "settings.json"
+    port_file = tmp_path / "port"
+    port_file.write_text("1234", encoding="utf-8")
+    claude_hooks.install_hooks(str(port_file), settings_file=settings_file)
+
+    entries = [
+        h
+        for event in json.loads(settings_file.read_text(encoding="utf-8"))["hooks"].values()
+        for entry in event
+        for h in entry.get("hooks", [])
+    ]
+    assert entries
+    for hook in entries:
+        assert hook["shell"] == "powershell"
+        # The marker comment, then one PowerShell line — `#` comments in both
+        # shells, so the marker still reads the same to the installer.
+        marker, command = hook["command"].split("\n", 1)
+        assert marker.startswith("# agent-team-hook")
+        assert "\n" not in command
+        assert command.startswith("$PORT = Get-Content -ErrorAction SilentlyContinue ")
+        assert "curl.exe" in command
+        assert command.endswith("exit 0") or command.endswith("exit 2 }; exit 0")
+
+    rewake = [h for h in entries if h.get("asyncRewake")]
+    assert rewake, "the rewake waiter was not installed"
+    assert "[Console]::Error.WriteLine($BODY); exit 2" in rewake[0]["command"]

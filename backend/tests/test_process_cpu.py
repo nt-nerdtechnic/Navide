@@ -34,8 +34,9 @@ class TestSyscallSweep:
 
     @pytest.fixture(autouse=True)
     def _sweep_available(self, monkeypatch):
-        # Windows reports the sweep unavailable; the stubbed probe is the
-        # subject here, so the platform gate must not short-circuit it.
+        # The stubbed probe is the subject here, so the availability gate —
+        # which asks the real probe and then the real PATH — must not get a
+        # say in whether the sweep runs.
         monkeypatch.setattr(process_cpu, "available", lambda: True)
 
     def test_reads_the_kernel_counter_without_spawning_anything(self, monkeypatch):
@@ -110,10 +111,38 @@ class TestSweep:
         assert measured == {}
         assert taken_at > 0
 
-    def test_measures_nothing_on_windows(self, monkeypatch):
-        monkeypatch.setattr(process_cpu.sys, "platform", "win32")
+    # The platform probe answers everywhere the backend ships (Windows reads
+    # psutil); `ps` is what is left for a machine where it cannot be resolved,
+    # and a machine with neither measures nothing rather than guessing.
+    def test_the_probe_alone_makes_the_sweep_available(self, monkeypatch):
+        monkeypatch.setattr(process_cpu.osplat.resource_probe, "available", lambda: True)
+        monkeypatch.setattr(process_cpu.shutil, "which", _must_not_run)
+        assert process_cpu.available() is True
+
+    def test_without_a_probe_the_answer_is_whether_ps_exists(self, monkeypatch):
+        monkeypatch.setattr(process_cpu.osplat.resource_probe, "available", lambda: False)
+        monkeypatch.setattr(process_cpu, "_HAS_PS", None)
+        monkeypatch.setattr(process_cpu.shutil, "which", lambda name: None)
         assert process_cpu.available() is False
         assert process_cpu.cpu_times([1])[0] == {}
+        monkeypatch.setattr(process_cpu, "_HAS_PS", None)
+        monkeypatch.setattr(process_cpu.shutil, "which", lambda name: "/bin/ps")
+        assert process_cpu.available() is True
+
+    # A PATH scan on a path that samples on a timer: asked once, then cached.
+    def test_the_ps_lookup_is_resolved_only_once(self, monkeypatch):
+        calls = {"n": 0}
+
+        def counting(name):
+            calls["n"] += 1
+            return "/bin/ps"
+
+        monkeypatch.setattr(process_cpu.osplat.resource_probe, "available", lambda: False)
+        monkeypatch.setattr(process_cpu, "_HAS_PS", None)
+        monkeypatch.setattr(process_cpu.shutil, "which", counting)
+        assert process_cpu.available() is True
+        assert process_cpu.available() is True
+        assert calls["n"] == 1
 
     # The caller divides by the interval between two readings, so the clock has
     # to be read after the subprocess returns — charging its duration to the

@@ -2,9 +2,11 @@
 
 POSIX is tested against the real implementation on whatever machine runs the
 suite — mode bits are mode bits. The Windows implementation is imported
-directly and run with `crypt32` stubbed, which tests everything *around* the
-Win32 call (the header, the blob marshalling, legacy plaintext, atomicity)
-but not `CryptProtectData` itself; that needs a Windows box.
+directly and run with `crypt32` and `subprocess.run` stubbed, which tests
+everything *around* the Win32 calls (the header, the blob marshalling, legacy
+plaintext, atomicity, the `icacls` command shape) but not `CryptProtectData`
+or `icacls` themselves. Those need a Windows box, and the win32-only class at
+the end of this file is what checks them there.
 """
 
 from __future__ import annotations
@@ -12,7 +14,9 @@ from __future__ import annotations
 import ctypes
 import os
 import stat
+import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -183,13 +187,150 @@ class TestWindowsDpapi:
         with pytest.raises(FileNotFoundError):
             _windows.secret_files.read_private(tmp_path / "missing")
 
-    # Directory ACLs are out of scope on Windows (see `_windows`); the seam
-    # still creates the directory and still reports a missing file.
-    def test_directory_and_harden_are_creation_only(self, tmp_path, crypt32):
+    # Mode bits protect nothing on NTFS, so the seam still has to create the
+    # directory and still has to report a missing file the POSIX way.
+    def test_the_directory_is_created_and_a_missing_file_still_raises(
+        self, tmp_path, crypt32, icacls
+    ):
         target = tmp_path / "a" / "b"
         _windows.secret_files.make_private_dir(target)
         assert target.is_dir()
         with pytest.raises(FileNotFoundError):
             _windows.secret_files.harden_file(tmp_path / "missing")
-        (tmp_path / "present").write_bytes(b"x")
-        _windows.secret_files.harden_file(tmp_path / "present")
+        # Nothing was handed to icacls for a file that does not exist.
+        assert [argv[1] for argv in icacls.argvs] == [str(target)]
+
+
+class _FakeIcacls:
+    """Stands in for `subprocess.run`: records argv, answers as told."""
+
+    def __init__(self) -> None:
+        self.argvs: list[list[str]] = []
+        self.returncode = 0
+        self.raises: Exception | None = None
+
+    def __call__(self, argv, **kwargs):
+        self.argvs.append(list(argv))
+        if self.raises is not None:
+            raise self.raises
+        return SimpleNamespace(returncode=self.returncode, stdout="", stderr="denied")
+
+
+@pytest.fixture
+def icacls(monkeypatch):
+    fake = _FakeIcacls()
+    monkeypatch.setattr(_windows.subprocess, "run", fake)
+    monkeypatch.setenv("USERNAME", "navide")
+    monkeypatch.setattr(_windows.os, "getlogin", lambda: "navide")
+    return fake
+
+
+class TestWindowsOwnerOnlyAcl:
+    """The ACL that replaces mode bits, with `icacls` stubbed."""
+
+    # `/inheritance:r` drops what the parent handed down (SYSTEM,
+    # Administrators, and on a widened tree, Users); `/grant:r` replaces this
+    # account's grant instead of adding a second ACE, so a repeated write does
+    # not accumulate them.
+    def test_write_private_plain_restricts_the_file_after_the_replace(
+        self, tmp_path, crypt32, icacls
+    ):
+        path = tmp_path / "backend-ws-token"
+        _windows.secret_files.write_private_plain(path, b"tok")
+        assert path.read_bytes() == b"tok"
+        assert icacls.argvs == [
+            ["icacls", str(path), "/inheritance:r", "/grant:r", "navide:F"]
+        ]
+
+    def test_harden_file_restricts_an_existing_file(self, tmp_path, crypt32, icacls):
+        path = tmp_path / "hosts.yml"
+        path.write_bytes(b"token: x")
+        _windows.secret_files.harden_file(path)
+        assert icacls.argvs == [
+            ["icacls", str(path), "/inheritance:r", "/grant:r", "navide:F"]
+        ]
+
+    # A directory needs the object and container inherit flags, so the files
+    # written into it afterwards start owner-only too.
+    def test_make_private_dir_grants_inheritable_rights(self, tmp_path, crypt32, icacls):
+        path = tmp_path / "vault"
+        _windows.secret_files.make_private_dir(path)
+        assert icacls.argvs == [
+            ["icacls", str(path), "/inheritance:r", "/grant:r", "navide:(OI)(CI)F"]
+        ]
+
+    # The secret is already written and correct by the time icacls runs. A box
+    # where it is missing or refuses must still start, with the failure in the
+    # log rather than in the caller.
+    def test_a_failing_icacls_is_logged_and_swallowed(self, tmp_path, crypt32, icacls):
+        icacls.returncode = 5
+        path = tmp_path / "token"
+        _windows.secret_files.write_private_plain(path, b"tok")
+        assert path.read_bytes() == b"tok"
+
+        icacls.raises = OSError("icacls not found")
+        _windows.secret_files.write_private_plain(path, b"tok2")
+        assert path.read_bytes() == b"tok2"
+
+        icacls.raises = subprocess.TimeoutExpired("icacls", 10.0)
+        _windows.secret_files.write_private_plain(path, b"tok3")
+        assert path.read_bytes() == b"tok3"
+
+    # No console attached (a service-started backend): `os.getlogin` raises and
+    # the environment is the other place the session's user name is written.
+    def test_the_account_name_falls_back_to_the_environment(
+        self, tmp_path, crypt32, icacls, monkeypatch
+    ):
+        monkeypatch.setattr(_windows.os, "getlogin", _raise_no_console)
+        monkeypatch.setenv("USERNAME", "from-env")
+        _windows.secret_files.write_private_plain(tmp_path / "token", b"t")
+        assert icacls.argvs[0][-1] == "from-env:F"
+
+    def test_without_an_account_name_nothing_is_run(
+        self, tmp_path, crypt32, icacls, monkeypatch
+    ):
+        monkeypatch.setattr(_windows.os, "getlogin", _raise_no_console)
+        monkeypatch.delenv("USERNAME", raising=False)
+        path = tmp_path / "token"
+        _windows.secret_files.write_private_plain(path, b"t")
+        assert path.read_bytes() == b"t"
+        assert icacls.argvs == []
+
+
+def _raise_no_console():
+    raise OSError("no controlling console")
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="a real ACL needs a real NTFS")
+class TestWindowsAclForReal:
+    """The one check that runs `icacls` against the file it just protected.
+
+    Everything above stubs the call; this is what proves the flags mean what
+    the command shape claims — that after `write_private_plain` no account but
+    this one appears in the file's DACL.
+    """
+
+    def test_only_the_current_user_appears_in_the_dacl(self, tmp_path):
+        path = tmp_path / "backend-ws-token"
+        osplat.secret_files.write_private_plain(path, b"tok")
+        assert path.read_bytes() == b"tok"
+        proc = subprocess.run(
+            ["icacls", str(path)], capture_output=True, text=True, timeout=30
+        )
+        assert proc.returncode == 0, proc.stderr
+        # `icacls <file>` prints the path, then one `ACCOUNT:(rights)` entry
+        # per ACE, then a summary line. Every ACE has to name this account.
+        aces = []
+        for line in proc.stdout.splitlines():
+            text = line.replace(str(path), "", 1).strip()
+            if not text or "processed file" in text.lower():
+                continue
+            aces.append(text)
+        assert aces, f"no ACE printed: {proc.stdout!r}"
+        user = _windows._current_user()
+        assert user
+        for ace in aces:
+            account = ace.split(":", 1)[0]
+            assert account.split("\\")[-1].casefold() == user.casefold(), (
+                f"unexpected account in the DACL: {ace!r}"
+            )

@@ -687,3 +687,64 @@ class TestResourceProbe:
             lambda: SimpleNamespace(memory_info=lambda: SimpleNamespace(peak_wset=123)),
         )
         assert _windows.resource_probe.peak_rss_bytes() == 123
+
+    def test_the_probe_reports_itself_usable_and_names_its_counter(self):
+        assert _windows.resource_probe.available() is True
+        assert _windows.resource_probe.memory_kind() == "private_bytes"
+
+    # Bytes and seconds, the same units the Darwin and Linux probes report:
+    # the private working set as-is, and user plus system CPU added up.
+    def test_sample_reports_private_bytes_and_total_cpu_seconds(self, monkeypatch):
+        _fake_processes(monkeypatch, {
+            10: _proc(private=4096, rss=999_999, user=1.5, system=0.25),
+            11: _proc(private=8192, rss=999_999, user=600.0, system=0.0),
+        })
+        assert _windows.resource_probe.sample([10, 11]) == {
+            10: (4096, 1.75),
+            11: (8192, 600.0),
+        }
+
+    # RSS on Windows is the working set, which charges a shared DLL to every
+    # process mapping it; it is the fallback only, for a psutil that does not
+    # carry the Windows-only field.
+    def test_sample_falls_back_to_rss_without_a_private_counter(self, monkeypatch):
+        _fake_processes(monkeypatch, {12: _proc(private=None, rss=2048, user=1.0, system=0.0)})
+        assert _windows.resource_probe.sample([12]) == {12: (2048, 1.0)}
+
+    # A pid that died mid-sweep, or that belongs to another user, is absent
+    # rather than zero — so the caller can tell "not measured" from "nothing".
+    def test_a_dead_or_foreign_pid_is_absent_not_zero(self, monkeypatch):
+        _fake_processes(
+            monkeypatch,
+            {13: _proc(private=1024, rss=1024, user=0.0, system=0.0)},
+            missing={14: psutil.NoSuchProcess(14), 15: psutil.AccessDenied(15)},
+        )
+        assert _windows.resource_probe.sample([13, 14, 15]) == {13: (1024, 0.0)}
+
+    def test_impossible_pids_are_never_looked_up(self, monkeypatch):
+        def must_not_run(_pid):
+            raise AssertionError("pid 0 and below are not processes")
+
+        monkeypatch.setattr(_windows.psutil, "Process", must_not_run)
+        assert _windows.resource_probe.sample([0, -1]) == {}
+        assert _windows.resource_probe.sample([]) == {}
+
+
+def _proc(*, private, rss, user, system) -> SimpleNamespace:
+    """One psutil.Process as this probe uses it: memory_info + cpu_times."""
+    memory = SimpleNamespace(rss=rss)
+    if private is not None:
+        memory.private = private
+    return SimpleNamespace(
+        memory_info=lambda: memory,
+        cpu_times=lambda: SimpleNamespace(user=user, system=system),
+    )
+
+
+def _fake_processes(monkeypatch, alive: dict, missing: dict | None = None) -> None:
+    def factory(pid):
+        if missing and pid in missing:
+            raise missing[pid]
+        return alive[pid]
+
+    monkeypatch.setattr(_windows.psutil, "Process", factory)

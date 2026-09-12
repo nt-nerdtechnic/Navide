@@ -4,16 +4,32 @@ import argparse
 import logging
 import sys
 
-import socket
+from .git_askpass_helper import ASKPASS_FLAG, main as askpass_main
 
-import threading
+# This process was started by git as GIT_ASKPASS (through the launcher
+# `osplat.paths.askpass_launcher` wrote), not to serve: answer the one prompt
+# on argv and exit, which the helper does itself.
+#
+# Before the imports below, not inside `main()`, and this is why: git takes the
+# FIRST LINE OF STDOUT as the credential, and importing the backend prints to
+# stdout on the way up. It also keeps a credential prompt instant instead of
+# paying for a whole backend import.
+#
+# Deliberately not an argparse subcommand: git's prompt is free text ("Password
+# for 'https://x':") that must never be parsed as options.
+if len(sys.argv) > 1 and sys.argv[1] == ASKPASS_FLAG:
+    askpass_main(sys.argv[2] if len(sys.argv) > 2 else "")
 
-import uvicorn
+import socket  # noqa: E402
 
-from . import __version__
-from .app import app as _fastapi_app
-from . import confirm_token, ws_auth
-from .applog import backend_port_file, setup_file_logging
+import threading  # noqa: E402
+
+import uvicorn  # noqa: E402
+
+from . import __version__  # noqa: E402
+from .app import app as _fastapi_app  # noqa: E402
+from . import confirm_token, ws_auth  # noqa: E402
+from .applog import backend_port_file, setup_file_logging  # noqa: E402
 
 
 def _read_confirm_key() -> str:
