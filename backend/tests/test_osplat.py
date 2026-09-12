@@ -247,6 +247,112 @@ class TestPaths:
         assert _windows.paths.quote_arg("plain") == "plain"
 
 
+class TestLaunching:
+    """Finding a program, and putting in front of it whatever starts it.
+
+    Both implementations run on whichever machine runs the suite: the answer
+    is a function of the path's extension, which a Mac can reason about for
+    Windows perfectly well — and has to, since npm's `claude.cmd` is the shim
+    every Windows install of a coding CLI actually gets.
+    """
+
+    def test_posix_starts_every_runnable_file_the_same_way(self):
+        from agent_team_backend.osplat import _darwin, _linux
+
+        for paths in (_darwin.paths, _linux.paths):
+            assert paths.launch_kind("/usr/local/bin/claude") == "direct"
+            # The extension means nothing here: the kernel reads the shebang.
+            assert paths.launch_kind("/usr/local/bin/odd.cmd") == "direct"
+            assert paths.launch_argv("/bin/git", ["status", "-s"]) == ["/bin/git", "status", "-s"]
+            assert paths.launch_argv("/bin/git") == ["/bin/git"]
+            assert paths.pty_launch_parts("/bin/zsh", ("-l",)) == ("/bin/zsh", ["-l"])
+
+    def test_windows_names_the_interpreter_the_extension_needs(self):
+        from agent_team_backend.osplat import _windows
+
+        paths = _windows.paths
+        assert paths.launch_kind(r"C:\npm\claude.CMD") == "cmd"  # the case is not part of it
+        assert paths.launch_kind(r"C:\npm\run.bat") == "cmd"
+        assert paths.launch_kind(r"C:\tools\setup.ps1") == "powershell"
+        assert paths.launch_kind(r"C:\Program Files\Git\git.exe") == "direct"
+        assert paths.launch_argv(r"C:\npm\claude.cmd", ["-p", "hi"]) == [
+            "cmd.exe", "/d", "/c", r"C:\npm\claude.cmd", "-p", "hi",
+        ]
+        assert paths.launch_argv(r"C:\tools\setup.ps1") == [
+            "powershell.exe", "-NoLogo", "-NonInteractive", "-NoProfile",
+            "-ExecutionPolicy", "Bypass", "-File", r"C:\tools\setup.ps1",
+        ]
+        assert paths.launch_argv(r"C:\Git\git.exe", ["status"]) == [r"C:\Git\git.exe", "status"]
+
+    # `/s` tells cmd to strip the first and last quote of everything after
+    # `/c` — the very pair `list2cmdline` puts around a program path with a
+    # space in it. The string form still wants it; this one must not have it.
+    def test_the_cmd_wrapper_leaves_out_slash_s(self):
+        from agent_team_backend.osplat import _windows
+
+        assert _windows.paths.launch_argv(r"C:\a b\claude.cmd") == [
+            "cmd.exe", "/d", "/c", r"C:\a b\claude.cmd",
+        ]
+        assert _windows.paths.shell_command("echo hi") == ["cmd.exe", "/d", "/s", "/c", "echo hi"]
+
+    # ConPTY (winpty-rs) takes the application name and the rest of the line
+    # as two arguments, so the terminal backend needs the split, not an argv.
+    def test_pty_parts_split_the_launch_argv_for_conpty(self):
+        from agent_team_backend.osplat import _windows
+
+        assert _windows.paths.pty_launch_parts(r"C:\npm\claude.cmd", ("--resume",)) == (
+            "cmd.exe", ["/d", "/c", r"C:\npm\claude.cmd", "--resume"],
+        )
+        assert _windows.paths.pty_launch_parts(r"C:\Git\git.exe") == (r"C:\Git\git.exe", [])
+
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="the exec bit decides the answer, and NTFS has none",
+    )
+    def test_posix_resolution_is_the_plain_path_search(self, tmp_path):
+        from agent_team_backend.osplat import _darwin, _linux
+
+        tool = tmp_path / "mytool"
+        tool.write_text("#!/bin/sh\n")
+        tool.chmod(0o755)
+        assert _darwin.paths.resolve_program("mytool", path=str(tmp_path)) == str(tool)
+        # No PATHEXT here: a name is the whole name.
+        assert _darwin.paths.resolve_program("mytool.cmd", path=str(tmp_path)) is None
+        assert _linux.paths.resolve_program("absent", path=str(tmp_path)) is None
+
+    def test_windows_resolution_walks_pathext_in_order(self, tmp_path, monkeypatch):
+        from agent_team_backend.osplat import _windows
+
+        monkeypatch.setenv("PATHEXT", ".COM;.EXE;.CMD")
+        for name in ("claude.cmd", "claude.exe"):
+            (tmp_path / name).write_text("")
+            (tmp_path / name).chmod(0o755)  # the mode bits this box's which() asks for
+        assert _windows.paths.resolve_program("claude", path=str(tmp_path)) == str(
+            tmp_path / "claude.exe"
+        )
+        monkeypatch.setenv("PATHEXT", ".CMD;.EXE")
+        assert _windows.paths.resolve_program("claude", path=str(tmp_path)) == str(
+            tmp_path / "claude.cmd"
+        )
+        # An extension already on the name is kept, not extended again.
+        assert _windows.paths.resolve_program("claude.cmd", path=str(tmp_path)) == str(
+            tmp_path / "claude.cmd"
+        )
+        assert _windows.paths.resolve_program("absent", path=str(tmp_path)) is None
+
+    # The three command-text splits in `app` moved onto the terminal backend,
+    # which is `shlex.split` here and `CommandLineToArgvW` on Windows.
+    def test_posix_command_splitting_is_unchanged(self):
+        import shlex
+
+        from agent_team_backend.osplat import _posix
+
+        text = "claude -p 'two words' --resume abc"
+        # The POSIX backend is the subject; on Windows the host parser is
+        # CommandLineToArgvW, which reads the single quotes literally.
+        assert _posix.terminal_backend.parse_command(text) == shlex.split(text)
+
+
 #: What git_service hands the seam: this build's own executable plus the entry
 #: mode that answers a prompt. Never the bare name `python`.
 _LAUNCH_ARGV = ["/opt/navide/agent_team_backend", "--askpass-helper"]

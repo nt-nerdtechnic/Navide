@@ -15,9 +15,10 @@ import json
 import logging
 import os
 import re
-import shutil
 from pathlib import Path
 from typing import Any
+
+from . import osplat
 
 log = logging.getLogger("agent_team_backend.analyzer")
 
@@ -233,8 +234,12 @@ async def _run_llama_cli(
             f"<|im_start|>user\n{user_message}<|im_end|>\n"
             f"<|im_start|>assistant\n"
         )
-        cmd = [
-            cli,
+        # Resolved through the seam, then started through whatever runs it: a
+        # llama.cpp shipped as a script wrapper is a `.cmd` on Windows. A name
+        # nothing on PATH answers to is kept as it is, so the failure stays
+        # the FileNotFoundError that names it.
+        program = osplat.paths.resolve_program(cli) or cli
+        cmd = osplat.paths.launch_argv(program, [
             "-m", str(gguf_path),
             "-p", full_prompt,
             "-no-cnv",              # single-shot, no interactive loop
@@ -245,7 +250,7 @@ async def _run_llama_cli(
             "-c", str(CONTEXT_SIZE),
             # NOTE: do NOT add --log-disable — it suppresses generated text too.
             # Logs go to stderr (we now parse them for token counts).
-        ]
+        ])
         log.debug("llama-cli spawn: %s -m %s ngl=%d ...", cli, gguf_path.name, n_gpu_layers)
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -541,13 +546,13 @@ async def health(
 ) -> dict[str, Any]:
     """Check if llama-cli is in PATH and executable, and (if set) that the GGUF file exists."""
     cli = llama_cli_override or LLAMA_CLI
-    cli_path = shutil.which(cli)
+    cli_path = osplat.paths.resolve_program(cli)
     if not cli_path:
         return {"ok": False, "error": f"'{cli}' not found in PATH"}
     proc: asyncio.subprocess.Process | None = None
     try:
         proc = await asyncio.create_subprocess_exec(
-            cli_path, "--version",
+            *osplat.paths.launch_argv(cli_path, ["--version"]),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )

@@ -24,24 +24,52 @@ def _fake_run(stdout: str):
     return run
 
 
+def _resolves_to(monkeypatch: pytest.MonkeyPatch, found: str | None) -> None:
+    """What the launch seam finds on PATH for every name asked about."""
+    monkeypatch.setattr(
+        ob.osplat.paths, "resolve_program", lambda _name, *, path=None: found
+    )
+
+
 def test_detect_ok(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(ob.shutil, "which", lambda _x: "/usr/bin/node")
+    _resolves_to(monkeypatch, "/usr/bin/node")
     monkeypatch.setattr(ob.subprocess, "run", _fake_run("v22.3.0"))
     r = ob.detect_dep(_NODE)
     assert r["status"] == "ok" and r["version"] == "22.3.0"
 
 
 def test_detect_outdated(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(ob.shutil, "which", lambda _x: "/usr/bin/node")
+    _resolves_to(monkeypatch, "/usr/bin/node")
     monkeypatch.setattr(ob.subprocess, "run", _fake_run("v18.0.0"))
     r = ob.detect_dep(_NODE)
     assert r["status"] == "outdated" and r["version"] == "18.0.0"
 
 
 def test_detect_missing(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(ob.shutil, "which", lambda _x: None)
+    _resolves_to(monkeypatch, None)
     r = ob.detect_dep(_NODE)
     assert r["status"] == "missing" and r["version"] == ""
+
+
+# npm on Windows installs a CLI as a `claude.cmd` batch shim, and CreateProcess
+# cannot start one (WinError 193). Without the interpreter in front of it every
+# dep's version probe fails and the wizard reports the whole toolchain missing.
+def test_detect_probes_a_windows_shim_through_cmd(monkeypatch: pytest.MonkeyPatch) -> None:
+    from agent_team_backend.osplat import _windows
+
+    monkeypatch.setattr(ob.osplat, "paths", _windows.paths)
+    monkeypatch.setattr(
+        _windows.paths, "resolve_program", lambda _name, *, path=None: r"C:\npm\node.cmd"
+    )
+    probed: list[list[str]] = []
+
+    def run(cmd, *_a, **_k):
+        probed.append(list(cmd))
+        return subprocess.CompletedProcess(cmd, 0, "v22.3.0", "")
+
+    monkeypatch.setattr(ob.subprocess, "run", run)
+    assert ob.detect_dep(_NODE)["status"] == "ok"
+    assert probed == [["cmd.exe", "/d", "/c", r"C:\npm\node.cmd", "--version"]]
 
 
 # ── install-method classification (picks which official command applies) ──────
@@ -85,13 +113,14 @@ def test_detect_dep_requirements_come_from_the_resolved_install(monkeypatch: pyt
               min_version="22.0.0",
               install_cmds={"darwin": PlatformInstall("brew install node", ("brew",))})
     monkeypatch.setattr(ob.osplat, "platform_id", "darwin")
-    monkeypatch.setattr(ob.shutil, "which", lambda _x: None)
+    monkeypatch.setattr(ob.shutil, "which", lambda _x: None)  # the requirement probe
+    _resolves_to(monkeypatch, None)
     r = ob.detect_dep(dep)
     assert r["requirements"] == [{"name": "brew", "ok": False}]
 
 
 def test_detect_dep_exposes_official_maintenance_commands(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(ob.shutil, "which", lambda _x: "/usr/local/bin/claude")
+    _resolves_to(monkeypatch, "/usr/local/bin/claude")
     monkeypatch.setattr(ob.subprocess, "run", _fake_run("2.1.219 (Claude Code)"))
     r = ob.detect_dep(ob.DEPS_BY_ID["claude"])
     assert r["update_cmd"] == "claude update"

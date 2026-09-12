@@ -939,6 +939,57 @@ async def test_run_broker_returns_validation_failure_instead_of_raising() -> Non
     assert "not allowlisted" in stderr
 
 
+@pytest.mark.asyncio
+async def test_an_allowlisted_name_resolves_to_a_windows_shim(monkeypatch) -> None:
+    """`gh` from npm or scoop is a `gh.cmd`, and CreateProcess only ever
+    appends `.exe` — so the shim used to be invisible and every call rc 127.
+
+    The allowlist still guards the bare name: resolution happens after it, and
+    never lets the caller name a path of its own."""
+    from agent_team_backend.osplat import _windows
+
+    argv: list[tuple] = []
+
+    class VersionProc:
+        returncode = 0
+
+        async def communicate(self, *_a):
+            return b"gh version 2.0.0\n", b""
+
+    async def fake_exec(*a, **_k):
+        argv.append(a)
+        return VersionProc()
+
+    monkeypatch.setattr(host_shell, "paths", _windows.paths)
+    monkeypatch.setattr(
+        _windows.paths, "resolve_program", lambda name, *, path=None: rf"C:\scoop\{name}.cmd"
+    )
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    rc, stdout, _ = await run_allowlisted_text(["gh", "--version"])
+
+    assert rc == 0 and stdout.startswith("gh version")
+    assert argv[0] == ("cmd.exe", "/d", "/c", r"C:\scoop\gh.cmd", "--version")
+
+    # The refusal is unchanged, and nothing is resolved or spawned for it.
+    argv.clear()
+    rc, _, stderr = await run_allowlisted_text(["rm", "-rf", "."])
+    assert rc == 126 and "not allowlisted" in stderr and argv == []
+
+
+@pytest.mark.asyncio
+async def test_a_name_nothing_on_path_answers_to_reports_not_found(monkeypatch) -> None:
+    """The same 127 an exec failure produced, so callers read it the same way."""
+    monkeypatch.setattr(
+        host_shell.paths, "resolve_program", lambda _name, *, path=None: None
+    )
+
+    rc, stdout, stderr = await run_allowlisted_text(["git", "--version"])
+
+    assert (rc, stdout) == (127, "")
+    assert "git not found" in stderr
+
+
 # ── run_allowlisted_capped ────────────────────────────────────────────────────
 # The capped runner exists so a caller that only shows the head of a command's
 # output does not first buffer all of it. These pin the two halves that make it

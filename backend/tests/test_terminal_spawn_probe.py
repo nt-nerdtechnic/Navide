@@ -10,12 +10,19 @@ import pytest
 from agent_team_backend import app
 
 
+def _resolves_to(monkeypatch: pytest.MonkeyPatch, target: str | None) -> None:
+    """Where the launch seam finds the CLI — the probe's only PATH lookup."""
+    monkeypatch.setattr(
+        app.osplat.paths, "resolve_program", lambda _name, *, path=None: target
+    )
+
+
 def test_agent_cli_probe_reports_resolved_binary_and_version(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     binary = tmp_path / "claude"
     binary.write_text("#!/bin/sh\n")
-    monkeypatch.setattr(app.shutil, "which", lambda _name: str(binary))
+    _resolves_to(monkeypatch, str(binary))
     monkeypatch.setattr(
         app.subprocess,
         "run",
@@ -39,7 +46,7 @@ def test_agent_cli_probe_reports_resolved_binary_and_version(
 def test_agent_cli_probe_surfaces_sigkill_with_structured_details(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(app.shutil, "which", lambda _name: "/opt/bin/claude")
+    _resolves_to(monkeypatch, "/opt/bin/claude")
     monkeypatch.setattr(
         app.subprocess,
         "run",
@@ -61,7 +68,7 @@ def test_agent_cli_probe_surfaces_sigkill_with_structured_details(
 def test_agent_cli_probe_non_sigkill_signal_has_no_hint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(app.shutil, "which", lambda _name: "/opt/bin/claude")
+    _resolves_to(monkeypatch, "/opt/bin/claude")
     monkeypatch.setattr(
         app.subprocess,
         "run",
@@ -84,7 +91,7 @@ def test_agent_cli_probe_error_shows_symlink_target(
     link = tmp_path / "claude"
     link.symlink_to(real)
     resolved = str(real.resolve())
-    monkeypatch.setattr(app.shutil, "which", lambda _name: str(link))
+    _resolves_to(monkeypatch, str(link))
     monkeypatch.setattr(
         app.subprocess,
         "run",
@@ -106,7 +113,7 @@ def test_agent_cli_probe_success_payload_carries_resolved_symlink_target(
     real.write_text("#!/bin/sh\n")
     link = tmp_path / "claude"
     link.symlink_to(real)
-    monkeypatch.setattr(app.shutil, "which", lambda _name: str(link))
+    _resolves_to(monkeypatch, str(link))
     monkeypatch.setattr(
         app.subprocess,
         "run",
@@ -129,11 +136,11 @@ def test_agent_cli_probe_uses_explicit_binary_from_spawn_command(
 ) -> None:
     calls: list[str] = []
 
-    def which(name: str) -> str | None:
+    def resolve(name: str, *, path: str | None = None) -> str | None:
         calls.append(name)
         return name if name == "/opt/homebrew/bin/claude" else "/broken/bin/claude"
 
-    monkeypatch.setattr(app.shutil, "which", which)
+    monkeypatch.setattr(app.osplat.paths, "resolve_program", resolve)
     monkeypatch.setattr(
         app.subprocess,
         "run",
@@ -144,14 +151,49 @@ def test_agent_cli_probe_uses_explicit_binary_from_spawn_command(
         ) if command[0] == "/opt/homebrew/bin/claude" else None,
     )
 
+    # Double quotes on purpose: both parsers strip them, where a single quote
+    # is a literal character to the one Windows uses.
     result = app._probe_agent_cli_for_spawn(
-        "claude", "'/opt/homebrew/bin/claude' --session-id test"
+        "claude", '"/opt/homebrew/bin/claude" --session-id test'
     )
 
     assert result is not None
     assert result["binary_path"] == "/opt/homebrew/bin/claude"
     assert result["version"] == "2.1.168"
     assert calls == ["/opt/homebrew/bin/claude"]
+
+
+# The shim npm installs on Windows: `CreateProcess` refuses a `.cmd`, so the
+# probe has to name the interpreter. Before this the OSError was caught and
+# downgraded to "degraded", leaving the probe permanently useless there.
+def test_agent_cli_probe_runs_a_windows_shim_through_cmd(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agent_team_backend.osplat import _windows
+
+    monkeypatch.setattr(app.osplat, "paths", _windows.paths)
+    monkeypatch.setattr(
+        _windows.paths,
+        "resolve_program",
+        lambda _name, *, path=None: r"C:\Users\a\AppData\Roaming\npm\claude.cmd",
+    )
+    monkeypatch.setattr(
+        app.subprocess,
+        "run",
+        lambda command, **_kwargs: SimpleNamespace(
+            returncode=0, stdout="2.1.210 (Claude Code)\n", stderr=""
+        ),
+    )
+
+    result = app._probe_agent_cli_for_spawn("claude")
+
+    assert result is not None
+    assert result["probe_command"] == [
+        "cmd.exe", "/d", "/c",
+        r"C:\Users\a\AppData\Roaming\npm\claude.cmd", "--version",
+    ]
+    assert result["binary_path"] == r"C:\Users\a\AppData\Roaming\npm\claude.cmd"
+    assert result["version"] == "2.1.210"
 
 
 def test_plain_terminal_skips_agent_cli_probe() -> None:

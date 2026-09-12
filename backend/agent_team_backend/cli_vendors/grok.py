@@ -33,10 +33,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import asyncio
-import shutil
 import time
 from typing import Any
 
+from .. import osplat
 from .base import Dep, McpServerConfig, McpValue, McpWiring, SkillsWiring, VendorSpec
 from ..usage_common import _num, _snapshot, _window
 from ..log_readers.base import (
@@ -610,7 +610,7 @@ async def grok_billing_rpc(binary: str, env: dict | None = None) -> dict:
     ``env`` (``None`` = inherit the parent environment) lets a profile point the
     CLI at its isolated ``HOME`` shim so billing reflects that account."""
     proc = await asyncio.create_subprocess_exec(
-        binary, "agent", "stdio",
+        *osplat.paths.launch_argv(binary, ("agent", "stdio")),
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.DEVNULL,
@@ -661,7 +661,7 @@ async def fetch_grok(home: Path, env: dict | None = None) -> dict:
     creds = read_grok_credentials(home, env)
     if creds is None:
         return _snapshot("grok", "no-credentials")
-    binary = shutil.which("grok")
+    binary = osplat.paths.resolve_program("grok")
     if not binary:
         return _snapshot("grok", "unavailable", error="grok CLI not found")
     try:

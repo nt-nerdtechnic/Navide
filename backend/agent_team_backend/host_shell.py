@@ -250,6 +250,22 @@ def validate_argv(args: Sequence[str]) -> list[str]:
     return list(args)
 
 
+def _launch_argv(argv: Sequence[str], env: Mapping[str, str] | None) -> list[str] | None:
+    """`argv` resolved to a real file and wrapped in whatever starts it.
+
+    The allowlist check above stays on the bare name — resolution happens
+    after it, so it is still `gh` that is permitted and never a path the
+    caller chose. What resolution adds is the extension: `gh` installed by
+    npm or scoop on Windows is a `gh.cmd` shim, which `CreateProcess` only
+    appends `.exe` for and therefore cannot see. None when nothing on PATH
+    answers to the name, which the callers report the way a failed exec did.
+    """
+    program = paths.resolve_program(argv[0], path=(env or {}).get("PATH"))
+    if not program:
+        return None
+    return paths.launch_argv(program, argv[1:])
+
+
 def parse_allowlisted_command(command: str) -> list[str]:
     """Parse a display-oriented command without enabling shell syntax."""
     if not isinstance(command, str) or not command.strip() or _SHELL_SYNTAX.search(command):
@@ -767,10 +783,13 @@ async def run_allowlisted(
         argv = validate_argv(args)
     except ValueError as exc:
         return 126, b"", str(exc).encode("utf-8")
+    launch = _launch_argv(argv, env)
+    if launch is None:
+        return 127, b"", f"{argv[0]} not found".encode()
     process: asyncio.subprocess.Process | None = None
     try:
         process = await asyncio.create_subprocess_exec(
-            *argv,
+            *launch,
             cwd=cwd,
             env=dict(env) if env is not None else None,
             stdin=asyncio.subprocess.PIPE if input_bytes is not None else None,
@@ -855,10 +874,13 @@ async def run_allowlisted_capped(
         argv = validate_argv(args)
     except ValueError as exc:
         return 126, b"", str(exc).encode("utf-8"), False
+    launch = _launch_argv(argv, env)
+    if launch is None:
+        return 127, b"", f"{argv[0]} not found".encode(), False
     process: asyncio.subprocess.Process | None = None
     try:
         process = await asyncio.create_subprocess_exec(
-            *argv,
+            *launch,
             cwd=cwd,
             env=dict(env) if env is not None else None,
             stdin=None,

@@ -107,11 +107,11 @@ import yaml
 
 import asyncio
 import re
-import shutil
 import sqlite3
 import sys
 import time
 
+from .. import osplat
 from .base import Dep, McpServerConfig, McpValue, McpWiring, SkillsWiring, VendorSpec, command_text
 from ..usage_common import (
     HTTP_TIMEOUT,
@@ -1112,12 +1112,14 @@ async def _copilot_gh_token(login: str, host: str) -> str | None:
     Keychain and prints them read-only without prompting or rotating anything
     (verified live). None when gh is missing, fails or prints nothing; gh's
     active account may differ from Copilot's, hence the explicit ``--user``."""
-    binary = shutil.which("gh")
+    binary = osplat.paths.resolve_program("gh")
     if not binary:
         return None
     try:
         proc = await asyncio.create_subprocess_exec(
-            binary, "auth", "token", "--user", login, "--hostname", host,
+            *osplat.paths.launch_argv(
+                binary, ("auth", "token", "--user", login, "--hostname", host)
+            ),
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
         )
         out = await _communicate_or_kill(proc, timeout=COPILOT_GH_TOKEN_TIMEOUT)

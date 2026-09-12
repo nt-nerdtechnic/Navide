@@ -9,6 +9,7 @@ asked.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 
 from .. import proc_rusage
@@ -100,6 +101,18 @@ class DarwinLayout(DarwinPaths):
 
     def quote_arg(self, arg: str) -> str:
         return _posix_paths.quote_arg(arg)
+
+    def resolve_program(self, name_or_path: str, *, path: str | None = None) -> str | None:
+        return _posix_paths.resolve_program(name_or_path, path=path)
+
+    def launch_kind(self, program: str) -> str:
+        return _posix_paths.launch_kind(program)
+
+    def launch_argv(self, program: str, args: Sequence[str] = ()) -> list[str]:
+        return _posix_paths.launch_argv(program, args)
+
+    def pty_launch_parts(self, program: str, args: Sequence[str] = ()) -> tuple[str, list[str]]:
+        return _posix_paths.pty_launch_parts(program, args)
 
 
 paths = DarwinLayout()
