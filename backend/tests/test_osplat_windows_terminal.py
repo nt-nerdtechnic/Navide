@@ -10,6 +10,7 @@ Windows box; CI runs the same suite there against the real modules.
 from __future__ import annotations
 
 import asyncio
+import shutil
 import subprocess
 import sys
 import types
@@ -163,11 +164,12 @@ class TestSpawn:
         pty = _FakePTY.last
         assert pty is not None
         assert pty.size == (100, 30)
-        # The shim path goes first on the command line (winpty-rs prepends
-        # `appname` and leaves lpApplicationName NULL — which is exactly what
-        # lets CreateProcess run a .cmd); the rest is list2cmdline-quoted.
+        # `C:\npm\claude.cmd` is not on disk, so the launch seam cannot look
+        # through it: cmd.exe goes first on the command line (winpty-rs
+        # prepends `appname` and leaves lpApplicationName NULL) with the shim
+        # and the list2cmdline-quoted arguments behind `/d /c`.
         assert pty.spawn_args == (
-            r"C:\npm\claude.cmd", '--resume "abc def"', r"C:\ws",
+            "cmd.exe", r'/d /c C:\npm\claude.cmd --resume "abc def"', r"C:\ws",
             "PATH=x\0TERM=xterm-256color\0",
         )
         assert handle.pid == 4242
@@ -208,13 +210,49 @@ class TestSpawn:
             'claude -p "hi there"', cwd="C:\\", env={}, rows=1, cols=1
         )
         assert seen == ['claude -p "hi there"']
-        assert _FakePTY.last.spawn_args[:2] == (r"C:\npm\claude.cmd", '-p "hi there"')
+        assert _FakePTY.last.spawn_args[:2] == (
+            "cmd.exe", r'/d /c C:\npm\claude.cmd -p "hi there"',
+        )
 
     def test_a_bare_executable_passes_no_command_line(
-        self, kernel32, winpty, which_cmd_shim
+        self, kernel32, winpty, monkeypatch
     ):
+        monkeypatch.setattr(
+            _windows.shutil, "which",
+            lambda name, path=None: r"C:\tools\claude.exe" if name == "claude" else None,
+        )
         _windows.terminal_backend.spawn(["claude"], cwd="C:\\", env={}, rows=1, cols=1)
-        assert _FakePTY.last.spawn_args[1] is None
+        assert _FakePTY.last.spawn_args[:2] == (r"C:\tools\claude.exe", None)
+
+    # A real npm shim on disk is looked through: the pane's child is node on
+    # the CLI's script, not cmd.exe on the shim — the same pid the job, the
+    # exit watcher and the registry then follow, so a Ctrl-C reaches the CLI
+    # and the exit code is the CLI's own.
+    def test_a_generated_shim_spawns_node_on_the_script(
+        self, kernel32, winpty, monkeypatch, tmp_path
+    ):
+        from .test_osplat import _CLI_JS, _NPM_SHIM, _node_on_path, _write_shim
+
+        shim = _write_shim(tmp_path, _NPM_SHIM)
+        node, node_dir = _node_on_path(tmp_path)
+        script = str((tmp_path / "bin").joinpath(*_CLI_JS.split("\\")).resolve())
+        real_which = shutil.which
+        monkeypatch.setattr(
+            _windows.shutil, "which",
+            lambda name, path=None: str(shim) if name == "claude" else real_which(name, path=path),
+        )
+        handle = _windows.terminal_backend.spawn(
+            ["claude", "--resume", "abc def"],
+            cwd=r"C:\ws", env={"PATH": node_dir}, rows=30, cols=100,
+        )
+        assert _FakePTY.last.spawn_args[:2] == (
+            node, subprocess.list2cmdline([script, "--resume", "abc def"]),
+        )
+        # The job table keys on pid + start-time identity, and the pid it holds
+        # is node's — the look-through changed which process the pane tracks,
+        # not how the job is owned.
+        assert handle.pid == 4242
+        assert _windows._jobs == {4242: (kernel32.calls[1][1], "T4242")}
 
     def test_missing_executable_raises_before_any_pty_exists(
         self, kernel32, winpty, monkeypatch

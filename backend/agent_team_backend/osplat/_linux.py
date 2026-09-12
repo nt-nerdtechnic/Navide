@@ -294,8 +294,10 @@ class LinuxLayout(LinuxPaths):
     def launch_argv(self, program: str, args: Sequence[str] = ()) -> list[str]:
         return _posix_paths.launch_argv(program, args)
 
-    def pty_launch_parts(self, program: str, args: Sequence[str] = ()) -> tuple[str, list[str]]:
-        return _posix_paths.pty_launch_parts(program, args)
+    def pty_launch_parts(
+        self, program: str, args: Sequence[str] = (), *, path: str | None = None
+    ) -> tuple[str, list[str]]:
+        return _posix_paths.pty_launch_parts(program, args, path=path)
 
 
 paths = LinuxLayout()

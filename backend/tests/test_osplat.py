@@ -353,6 +353,192 @@ class TestLaunching:
         assert _posix.terminal_backend.parse_command(text) == shlex.split(text)
 
 
+# What the shim generators actually write, verbatim (CRLF as on disk):
+# npm's cmd-shim 8.0.0 (bundled with npm 10/11), the cmd-shim 2.x template
+# npm 6 shipped, yarn classic's @zkochan/cmd-shim 3.1.0, and pnpm 10's
+# @pnpm/cmd-shim — the last one with the NODE_PATH block pnpm adds for a
+# hoisted global install and once without it.
+_CLI_JS = r"node_modules\@anthropic-ai\claude-code\cli.js"
+
+_NPM_SHIM = (
+    "@ECHO off\r\n"
+    "GOTO start\r\n"
+    ":find_dp0\r\n"
+    "SET dp0=%~dp0\r\n"
+    "EXIT /b\r\n"
+    ":start\r\n"
+    "SETLOCAL\r\n"
+    "CALL :find_dp0\r\n"
+    "\r\n"
+    'IF EXIST "%dp0%\\node.exe" (\r\n'
+    '  SET "_prog=%dp0%\\node.exe"\r\n'
+    ") ELSE (\r\n"
+    '  SET "_prog=node"\r\n'
+    "  SET PATHEXT=%PATHEXT:;.JS;=;%\r\n"
+    ")\r\n"
+    "\r\n"
+    "endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "
+    f'"%_prog%"  "%dp0%\\{_CLI_JS}" %*\r\n'
+)
+
+_NPM6_SHIM = (
+    "@SETLOCAL\r\n"
+    "\r\n"
+    '@IF EXIST "%~dp0\\node.exe" (\r\n'
+    '  @SET "_prog=%~dp0\\node.exe"\r\n'
+    ") ELSE (\r\n"
+    '  @SET "_prog=node"\r\n'
+    "  @SET PATHEXT=%PATHEXT:;.JS;=;%\r\n"
+    ")\r\n"
+    "\r\n"
+    f'"%_prog%"  "%~dp0\\{_CLI_JS}" %*\r\n'
+    "@ENDLOCAL\r\n"
+)
+
+_YARN_SHIM = (
+    '@IF EXIST "%~dp0\\node.exe" (\r\n'
+    f'  "%~dp0\\node.exe"  "%~dp0\\{_CLI_JS}" %*\r\n'
+    ") ELSE (\r\n"
+    "  @SETLOCAL\r\n"
+    "  @SET PATHEXT=%PATHEXT:;.JS;=;%\r\n"
+    f'  node  "%~dp0\\{_CLI_JS}" %*\r\n'
+    ")\r\n"
+)
+
+_PNPM_TARGET = r"..\global\5\node_modules\@anthropic-ai\claude-code\cli.js"
+
+_PNPM_SHIM = (
+    "@SETLOCAL\r\n"
+    '@IF EXIST "%~dp0\\node.exe" (\r\n'
+    f'  "%~dp0\\node.exe"  "%~dp0\\{_PNPM_TARGET}" %*\r\n'
+    ") ELSE (\r\n"
+    "  @SET PATHEXT=%PATHEXT:;.JS;=;%\r\n"
+    f'  node  "%~dp0\\{_PNPM_TARGET}" %*\r\n'
+    ")\r\n"
+)
+
+_PNPM_NODE_PATH_SHIM = (
+    "@SETLOCAL\r\n"
+    "@IF NOT DEFINED NODE_PATH (\r\n"
+    '  @SET "NODE_PATH=C:\\Users\\u\\AppData\\Local\\pnpm\\global\\5\\.pnpm\\node_modules"\r\n'
+    ") ELSE (\r\n"
+    '  @SET "NODE_PATH=C:\\Users\\u\\AppData\\Local\\pnpm\\global\\5\\.pnpm\\node_modules;%NODE_PATH%"\r\n'
+    ")\r\n"
+    + _PNPM_SHIM[len("@SETLOCAL\r\n"):]
+)
+
+
+def _write_shim(root: Path, text: str, *, target: str = _CLI_JS, node_beside: bool = False) -> Path:
+    """A shim under `root/bin` with its script on disk where `%~dp0\<target>`
+    points; the shim-relative target is spelled with backslashes as the
+    generators write it, whatever the host."""
+    bin_dir = root / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    script = bin_dir.joinpath(*target.split("\\")).resolve()
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text("#!/usr/bin/env node\n")
+    if node_beside:
+        (bin_dir / "node.exe").write_text("")
+    shim = bin_dir / "claude.CMD"
+    shim.write_bytes(text.encode("utf-8"))
+    return shim
+
+
+def _node_on_path(root: Path) -> tuple[str, str]:
+    """A `node.exe` in its own directory, and that directory as a PATH."""
+    node_dir = root / "nodejs"
+    node_dir.mkdir()
+    node = node_dir / "node.exe"
+    node.write_text("")
+    node.chmod(0o755)
+    return str(node), str(node_dir)
+
+
+class TestShimPassthrough:
+    """The ConPTY spawn looks through a generated node shim to the `node.exe
+    <script>` it would run, so the pane holds the CLI and not cmd.exe. Only
+    a shim of a known generator's exact shape qualifies; everything else keeps
+    the cmd.exe wrapping."""
+
+    @pytest.mark.parametrize(
+        "text", [_NPM_SHIM, _NPM6_SHIM, _YARN_SHIM], ids=["npm", "npm6", "yarn-classic"]
+    )
+    def test_a_generated_shim_becomes_node_on_its_script(self, tmp_path, text):
+        from agent_team_backend.osplat import _windows
+
+        shim = _write_shim(tmp_path, text)
+        node, node_dir = _node_on_path(tmp_path)
+        script = str((tmp_path / "bin").joinpath(*_CLI_JS.split("\\")).resolve())
+        assert _windows.paths.pty_launch_parts(
+            str(shim), ["--resume", "abc def"], path=node_dir
+        ) == (node, [script, "--resume", "abc def"])
+
+    def test_pnpm_shim_resolves_its_parent_relative_script(self, tmp_path):
+        from agent_team_backend.osplat import _windows
+
+        shim = _write_shim(tmp_path, _PNPM_SHIM, target=_PNPM_TARGET)
+        node, node_dir = _node_on_path(tmp_path)
+        script = str((tmp_path / "bin").joinpath(*_PNPM_TARGET.split("\\")).resolve())
+        assert _windows.paths.pty_launch_parts(str(shim), path=node_dir) == (node, [script])
+
+    def test_node_beside_the_shim_wins_over_path(self, tmp_path):
+        from agent_team_backend.osplat import _windows
+
+        shim = _write_shim(tmp_path, _NPM_SHIM, node_beside=True)
+        _node, node_dir = _node_on_path(tmp_path)
+        head, _tail = _windows.paths.pty_launch_parts(str(shim), path=node_dir)
+        assert head == str(tmp_path / "bin" / "node.exe")
+
+    def _falls_back(self, shim: Path, args=(), *, path=None) -> None:
+        from agent_team_backend.osplat import _windows
+
+        assert _windows.paths.pty_launch_parts(str(shim), args, path=path) == (
+            "cmd.exe", ["/d", "/c", str(shim), *args],
+        )
+
+    def test_a_shim_that_sets_node_path_keeps_cmd_exe(self, tmp_path):
+        # pnpm's hoisted global layout needs NODE_PATH; the shim is the only
+        # thing that sets it, so running node directly would break module
+        # resolution. Environment is not carried — the shim stays in charge.
+        shim = _write_shim(tmp_path, _PNPM_NODE_PATH_SHIM, target=_PNPM_TARGET)
+        _node, node_dir = _node_on_path(tmp_path)
+        self._falls_back(shim, ["--version"], path=node_dir)
+
+    def test_a_shim_with_node_arguments_or_unknown_lines_keeps_cmd_exe(self, tmp_path):
+        _node, node_dir = _node_on_path(tmp_path)
+        with_args = _NPM_SHIM.replace('"%_prog%"  "%dp0%', '"%_prog%" --harmony "%dp0%')
+        self._falls_back(_write_shim(tmp_path, with_args), path=node_dir)
+        extra_line = _NPM_SHIM.replace("SETLOCAL\r\n", "SETLOCAL\r\nSET DEBUG=1\r\n", 1)
+        self._falls_back(_write_shim(tmp_path, extra_line), path=node_dir)
+        two_scripts = _YARN_SHIM.replace(f'node  "%~dp0\\{_CLI_JS}"', 'node  "%~dp0\\other.js"')
+        self._falls_back(_write_shim(tmp_path, two_scripts), path=node_dir)
+        self._falls_back(_write_shim(tmp_path, "@echo hello\r\n"), path=node_dir)
+
+    def test_a_shim_whose_pieces_are_missing_keeps_cmd_exe(self, tmp_path):
+        _node, node_dir = _node_on_path(tmp_path)
+        shim = _write_shim(tmp_path, _NPM_SHIM)
+        (tmp_path / "bin").joinpath(*_CLI_JS.split("\\")).unlink()  # script gone
+        self._falls_back(shim, path=node_dir)
+        shim = _write_shim(tmp_path, _NPM_SHIM)
+        self._falls_back(shim, path=str(tmp_path / "empty"))  # no node anywhere
+        big = _write_shim(tmp_path, _NPM_SHIM + "REM " + "x" * 5000 + "\r\n")
+        self._falls_back(big, path=node_dir)  # not a generated shim by size alone
+        self._falls_back(tmp_path / "bin" / "absent.cmd", path=node_dir)  # unreadable
+
+    def test_only_a_cmd_program_is_looked_into(self, tmp_path):
+        from agent_team_backend.osplat import _windows
+
+        exe = tmp_path / "claude.exe"
+        exe.write_bytes(_NPM_SHIM.encode())  # same bytes, wrong extension
+        assert _windows.paths.pty_launch_parts(str(exe), ["x"]) == (str(exe), ["x"])
+
+    def test_posix_ignores_the_path_argument(self):
+        from agent_team_backend.osplat import _darwin, _linux
+
+        for paths in (_darwin.paths, _linux.paths):
+            assert paths.pty_launch_parts("/bin/zsh", ("-l",), path="/nowhere") == ("/bin/zsh", ["-l"])
+
+
 #: What git_service hands the seam: this build's own executable plus the entry
 #: mode that answers a prompt. Never the bare name `python`.
 _LAUNCH_ARGV = ["/opt/navide/agent_team_backend", "--askpass-helper"]
