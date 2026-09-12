@@ -14,6 +14,7 @@ from __future__ import annotations
 import ctypes
 import os
 import stat
+import re
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -342,13 +343,15 @@ class TestWindowsAclForReal:
         )
         assert proc.returncode == 0, proc.stderr
         # `icacls <file>` prints the path, then one `ACCOUNT:(rights)` entry
-        # per ACE, then a summary line.
+        # per ACE, then a summary line ("Successfully processed 1 files;
+        # Failed processing 0 files") — which is why an ACE is recognised by
+        # its shape rather than by skipping lines that look like a summary.
+        ace_re = re.compile(r"^(?P<account>[^:]+):\((?P<rights>[^)]*)\)")
         aces = []
         for line in proc.stdout.splitlines():
             text = line.replace(str(path), "", 1).strip()
-            if not text or "processed file" in text.lower():
-                continue
-            aces.append(text)
+            if ace_re.match(text):
+                aces.append(text)
         assert aces, f"no ACE printed: {proc.stdout!r}"
         user = _windows._current_user()
         assert user
