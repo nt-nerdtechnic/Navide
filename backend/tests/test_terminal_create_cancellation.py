@@ -362,16 +362,23 @@ async def test_terminal_service_create_rolls_back_post_popen_setup_failure(
 
     registered = threading.Event()
     unregistered = threading.Event()
-    killed: list[tuple[int, int]] = []
+    killed: list[tuple[int, bool]] = []
 
     monkeypatch.setattr(_posix.pty, "openpty", recording_openpty)
     monkeypatch.setattr(terminals_module.shutil, "which", lambda _cmd: "/bin/bash")
     monkeypatch.setattr(terminals_module.subprocess, "Popen", lambda *_a, **_kw: process)
     monkeypatch.setattr(terminals_module.pty_registry, "register", lambda *_a: registered.set())
     monkeypatch.setattr(terminals_module.pty_registry, "unregister", lambda *_a: unregistered.set())
-    monkeypatch.setattr(terminals_module.os, "getpgid", lambda pid: pid)
+    # Stub the seam, not the os primitives under it: the rollback asks
+    # `process_tree.group_of` / `kill_group`, and which group gets killed is
+    # the platform-neutral fact this test is about (the signal is
+    # `_posix`'s business). The module stays gated on fcntl regardless —
+    # the real PTY above is POSIX — so this does not unlock Windows.
+    monkeypatch.setattr(terminals_module.osplat.process_tree, "group_of", lambda pid: pid)
     monkeypatch.setattr(
-        terminals_module.os, "killpg", lambda pgid, sig: killed.append((pgid, sig))
+        terminals_module.osplat.process_tree,
+        "kill_group",
+        lambda pgid, *, force: killed.append((pgid, force)),
     )
 
     def fail_add_reader(*_args: Any) -> None:
@@ -386,6 +393,6 @@ async def test_terminal_service_create_rolls_back_post_popen_setup_failure(
     assert await asyncio.to_thread(unregistered.wait, 2)
     assert service._sessions == {}
     assert process.returncode == -9
-    assert killed == [(9876, terminals_module.signal.SIGKILL)]
+    assert killed == [(9876, True)]
     with pytest.raises(OSError):
         os.fstat(opened[0])

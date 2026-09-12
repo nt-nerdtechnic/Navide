@@ -113,7 +113,7 @@ def test_detect_dep_requirements_come_from_the_resolved_install(monkeypatch: pyt
               min_version="22.0.0",
               install_cmds={"darwin": PlatformInstall("brew install node", ("brew",))})
     monkeypatch.setattr(ob.osplat, "platform_id", "darwin")
-    monkeypatch.setattr(ob.shutil, "which", lambda _x: None)  # the requirement probe
+    monkeypatch.setattr(ob.osplat.paths, "resolve_program", lambda _x, *, path=None: None)  # the requirement probe
     _resolves_to(monkeypatch, None)
     r = ob.detect_dep(dep)
     assert r["requirements"] == [{"name": "brew", "ok": False}]
@@ -273,7 +273,7 @@ def _fake_popen(returncode: int, stdout: str = "", stderr: str = "", *, timeout:
 def _brew_present(monkeypatch: pytest.MonkeyPatch) -> None:
     # A Homebrew install only exists on the darwin roster.
     monkeypatch.setattr(ob.osplat, "platform_id", "darwin")
-    monkeypatch.setattr(ob.shutil, "which", lambda name: f"/opt/homebrew/bin/{name}")
+    monkeypatch.setattr(ob.osplat.paths, "resolve_program", lambda name, *, path=None: f"/opt/homebrew/bin/{name}")
 
 
 def test_install_failure_surfaces_output_as_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -311,7 +311,7 @@ def test_install_blocked_when_bootstrap_binary_missing(
     # Fresh Mac without Homebrew: `brew install node` only ever produced a bare
     # exit 127, so the wizard has to name the real blocker instead of running it.
     monkeypatch.setattr(ob.osplat, "platform_id", "darwin")
-    monkeypatch.setattr(ob.shutil, "which", lambda _x: None)
+    monkeypatch.setattr(ob.osplat.paths, "resolve_program", lambda _x, *, path=None: None)
 
     def boom(*_a: object, **_k: object) -> None:
         raise AssertionError("must not shell out when a requirement is missing")
@@ -328,7 +328,7 @@ def test_install_bootstrap_gate_precedes_the_terminal_handoff(
 ) -> None:
     # claude is needs_terminal: without the gate the app reported success while
     # the terminal it opened just printed "npm: command not found".
-    monkeypatch.setattr(ob.shutil, "which", lambda _x: None)
+    monkeypatch.setattr(ob.osplat.paths, "resolve_program", lambda _x, *, path=None: None)
     r = ob.install_dep("claude")
     assert r["ok"] is False
     assert r["missing_requirements"] == ["npm"]
@@ -376,7 +376,7 @@ def test_ollama_status_separates_service_down_from_no_models(
 ) -> None:
     # `ollama list` fails when the daemon is down, which used to be reported
     # identically to "no models installed".
-    monkeypatch.setattr(ob.shutil, "which", lambda _x: "/opt/homebrew/bin/ollama")
+    monkeypatch.setattr(ob.osplat.paths, "resolve_program", lambda _x, *, path=None: "/opt/homebrew/bin/ollama")
     monkeypatch.setattr(
         ob.subprocess, "run", _ollama_list(1, "", "could not connect to ollama app")
     )
@@ -386,7 +386,7 @@ def test_ollama_status_separates_service_down_from_no_models(
 
 
 def test_ollama_status_lists_models_when_reachable(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(ob.shutil, "which", lambda _x: "/opt/homebrew/bin/ollama")
+    monkeypatch.setattr(ob.osplat.paths, "resolve_program", lambda _x, *, path=None: "/opt/homebrew/bin/ollama")
     monkeypatch.setattr(
         ob.subprocess, "run", _ollama_list(0, "NAME\tID\nqwen2.5-coder:7b\tabc\n")
     )
@@ -404,7 +404,7 @@ def test_gate_reports_analyzer_blocked_when_service_is_down() -> None:
 
 
 def test_pull_model_allows_namespaced_names(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(ob.shutil, "which", lambda _x: "/opt/homebrew/bin/ollama")
+    monkeypatch.setattr(ob.osplat.paths, "resolve_program", lambda _x, *, path=None: "/opt/homebrew/bin/ollama")
     monkeypatch.setattr(ob, "ollama_reachable", lambda: True)
     r = ob.pull_model("hf.co/user/repo:q4")
     assert r["ok"] is True and r["command"].endswith("hf.co/user/repo:q4")
@@ -413,7 +413,7 @@ def test_pull_model_allows_namespaced_names(monkeypatch: pytest.MonkeyPatch) -> 
 def test_pull_model_rejects_traversal_flags_and_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(ob.shutil, "which", lambda _x: "/opt/homebrew/bin/ollama")
+    monkeypatch.setattr(ob.osplat.paths, "resolve_program", lambda _x, *, path=None: "/opt/homebrew/bin/ollama")
     monkeypatch.setattr(ob, "ollama_reachable", lambda: True)
     assert ob.pull_model("../../etc/passwd")["ok"] is False
     assert ob.pull_model("-rf")["ok"] is False
@@ -423,7 +423,7 @@ def test_pull_model_rejects_traversal_flags_and_empty(
 def test_pull_model_blocked_while_the_service_is_down(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(ob.shutil, "which", lambda _x: "/opt/homebrew/bin/ollama")
+    monkeypatch.setattr(ob.osplat.paths, "resolve_program", lambda _x, *, path=None: "/opt/homebrew/bin/ollama")
     monkeypatch.setattr(ob, "ollama_reachable", lambda: False)
     r = ob.pull_model("qwen2.5-coder:7b")
     assert r["ok"] is False and r["needs_service"] is True
@@ -432,7 +432,7 @@ def test_pull_model_blocked_while_the_service_is_down(
 def test_start_ollama_service_hands_back_the_official_command(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(ob.shutil, "which", lambda name: f"/opt/homebrew/bin/{name}")
+    monkeypatch.setattr(ob.osplat.paths, "resolve_program", lambda name, *, path=None: f"/opt/homebrew/bin/{name}")
     assert ob.start_ollama_service() == {
         "ok": True,
         "needs_terminal": True,
@@ -441,8 +441,19 @@ def test_start_ollama_service_hands_back_the_official_command(
 
 
 def test_start_ollama_service_requires_ollama(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(ob.shutil, "which", lambda _x: None)
+    monkeypatch.setattr(ob.osplat.paths, "resolve_program", lambda _x, *, path=None: None)
     assert ob.start_ollama_service()["ok"] is False
+
+
+def test_every_program_lookup_goes_through_the_seam() -> None:
+    # `resolve_executable` asked the seam while six sibling checks (install
+    # requirements, ollama, brew) still called shutil.which directly. Same
+    # question — "is this program on this machine" — so the same answer:
+    # on Windows the seam is what knows a bare `npm` is `npm.cmd`, and a
+    # presence check that disagrees with the launch that follows it is a
+    # wizard that says "installed" and then cannot run the thing.
+    source = Path(ob.__file__).read_text(encoding="utf-8")
+    assert "shutil.which(" not in source, "ask osplat.paths.resolve_program instead"
 
 
 def test_local_bin_is_a_path_fallback(tmp_path) -> None:
