@@ -239,6 +239,7 @@ def test_probe_falls_back_to_bash_without_shell_env(monkeypatch):
     assert _path_probe_command()[-1] == SCRIPT
 
 
+@_needs_login_shell_probe
 def test_probe_script_marks_the_path_line():
     """The script prints the marker and PATH on ONE line, so the parser can
     pick it out of whatever the rc files printed around it."""
@@ -305,7 +306,7 @@ def test_refresh_asks_the_platform_for_its_fallbacks(monkeypatch, tmp_path):
     with patch("subprocess.run", return_value=_make_run_result("")):
         _refresh_path_from_login_shell()
     assert seen == [Path.home()]
-    assert os.environ["PATH"].split(":")[0] == str(fallback)
+    assert os.environ["PATH"].split(os.pathsep)[0] == str(fallback)
 
 
 # ── non-POSIX no-op ───────────────────────────────────────────────────────────
