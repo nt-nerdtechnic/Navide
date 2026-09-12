@@ -226,7 +226,7 @@ def _workspace_mismatch_warning(workspace_path: str) -> str | None:
         return None
     known = ", ".join(sorted(set(panes)))
     return (
-        f"no live Navide pane uses workspace_path {workspace_path!r}, so this plan "
+        f"no live Navide pane uses workspace_path '{workspace_path}', so this plan "
         "will not be visible in Navide's plan view (it resolves plans against the "
         f"pane's own workspace). Pane workspaces right now: {known}"
     )

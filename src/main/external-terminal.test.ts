@@ -12,6 +12,9 @@ import { spawn } from 'node:child_process'
 import { normalizePlatformId, setPlatformId, type PlatformId } from '../shared/osplat'
 import * as terminal from './external-terminal'
 
+// The real filesystem the suite runs on: NTFS has no executable bit to withhold.
+const hostIsWindows = normalizePlatformId(process.platform) === 'win32'
+
 type FakeChild = EventEmitter & { unref: ReturnType<typeof vi.fn> }
 
 // Created at spawn() time, never ahead of it: the event fires on a microtask,
@@ -49,6 +52,14 @@ function binDirWith(...names: string[]): string {
   cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
   return dir
 }
+
+/** The same, but without the executable bit — what every file is on Windows. */
+function plainDirWith(...names: string[]): string {
+  const dir = mkdtempSync(join(tmpdir(), 'navide-term-'))
+  for (const name of names) writeFileSync(join(dir, name), '')
+  cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
+  return dir
+}
 const cleanups: Array<() => void> = []
 afterEach(() => {
   for (const fn of cleanups.splice(0)) fn()
@@ -60,13 +71,48 @@ describe('findOnPath', () => {
   })
 
   it('finds an executable that is present', () => {
-    // `sh` exists on every POSIX machine the suite runs on.
-    const found = terminal.findOnPath('sh', '/bin:/usr/bin')
-    expect(found === '/bin/sh' || found === '/usr/bin/sh').toBe(true)
+    on('darwin')
+    const dir = binDirWith('tool')
+    expect(terminal.findOnPath('tool', dir)).toBe(join(dir, 'tool'))
   })
 
   it('skips empty PATH segments instead of probing the cwd', () => {
     expect(terminal.findOnPath('sh', '::/nonexistent::')).toBeNull()
+  })
+
+  // chmod cannot withhold an executable bit NTFS does not have.
+  it.skipIf(hostIsWindows)('requires the executable bit on POSIX', () => {
+    on('linux')
+    expect(terminal.findOnPath('tool', plainDirWith('tool'))).toBeNull()
+  })
+
+  describe('on Windows', () => {
+    // `code` on a Windows PATH is `code.cmd`, `wt` is `wt.exe`; cmd.exe
+    // resolves a bare name through PATHEXT and so must this.
+    it('finds a command through its PATHEXT suffix', () => {
+      on('win32')
+      const dir = plainDirWith('code.cmd')
+      expect(terminal.findOnPath('code', dir)).toBe(join(dir, 'code.cmd'))
+    })
+
+    it('tries the bare name before the suffixes', () => {
+      on('win32')
+      const dir = plainDirWith('wt.exe')
+      expect(terminal.findOnPath('wt.exe', dir)).toBe(join(dir, 'wt.exe'))
+      expect(terminal.findOnPath('wt', dir)).toBe(join(dir, 'wt.exe'))
+    })
+
+    it('does not rely on an executable bit that Windows does not have', () => {
+      on('win32')
+      const dir = plainDirWith('tool.exe')
+      expect(terminal.findOnPath('tool', dir)).toBe(join(dir, 'tool.exe'))
+    })
+
+    it('does not treat a PATHEXT suffix as a hit off Windows', () => {
+      on('linux')
+      const dir = binDirWith('code.cmd')
+      expect(terminal.findOnPath('code', dir)).toBeNull()
+    })
   })
 })
 
@@ -167,11 +213,60 @@ describe('openInExternalTerminal', () => {
     })
   })
 
-  it('refuses honestly on a platform it has no launcher for', async () => {
-    on('win32')
-    const result = await terminal.openInExternalTerminal('x')
-    expect(result.ok).toBe(false)
-    expect(result.error).toMatch(/not supported/)
-    expect(spawnMock).not.toHaveBeenCalled()
+  describe('on Windows', () => {
+    it('prefers Windows Terminal when it is on PATH', async () => {
+      on('win32')
+      const bin = plainDirWith('wt.exe')
+      spawnMock.mockImplementation(() => fakeChild('spawn'))
+
+      const command = 'winget install --id OpenAI.Codex'
+      await expect(terminal.openInExternalTerminal(command, bin)).resolves.toEqual({ ok: true })
+
+      const [exe, argv, opts] = spawnMock.mock.calls[0]
+      expect(exe).toBe(join(bin, 'wt.exe'))
+      // argv form: the command reaches PowerShell unmangled, and -NoExit
+      // keeps the window open the way Terminal.app's `do script` does.
+      expect(argv).toEqual(['powershell.exe', '-NoExit', '-Command', command])
+      expect(opts).toMatchObject({ detached: true, stdio: 'ignore' })
+    })
+
+    it('falls back to `cmd /c start powershell` without Windows Terminal', async () => {
+      on('win32')
+      spawnMock.mockImplementation(() => fakeChild('spawn'))
+
+      await expect(terminal.openInExternalTerminal('x', plainDirWith())).resolves.toEqual({ ok: true })
+
+      const [exe, argv, opts] = spawnMock.mock.calls[0]
+      expect(exe).toBe('cmd.exe')
+      expect(argv).toEqual(['/c', 'start', 'powershell.exe', '-NoExit', '-Command', 'x'])
+      // The launcher cmd.exe must not flash its own console; the PowerShell
+      // window `start` opens is a new console and is unaffected.
+      expect(opts).toMatchObject({ detached: true, stdio: 'ignore', windowsHide: true })
+    })
+
+    it('falls through to conhost when Windows Terminal is present but will not start', async () => {
+      on('win32')
+      const bin = plainDirWith('wt.exe')
+      spawnMock
+        .mockImplementationOnce(() => fakeChild('error'))
+        .mockImplementationOnce(() => fakeChild('spawn'))
+      await expect(terminal.openInExternalTerminal('x', bin)).resolves.toEqual({ ok: true })
+      expect(spawnMock.mock.calls.map((c) => c[0])).toEqual([join(bin, 'wt.exe'), 'cmd.exe'])
+    })
+
+    it('reports the failure when even the conhost route cannot start', async () => {
+      on('win32')
+      spawnMock.mockImplementation(() => fakeChild('error'))
+      const result = await terminal.openInExternalTerminal('x', plainDirWith())
+      expect(result.ok).toBe(false)
+      expect(result.error).toContain('ENOENT')
+    })
+
+    it('never touches osascript', async () => {
+      on('win32')
+      spawnMock.mockImplementation(() => fakeChild('spawn'))
+      await terminal.openInExternalTerminal('x', plainDirWith())
+      for (const call of spawnMock.mock.calls) expect(call[0]).not.toBe('osascript')
+    })
   })
 })

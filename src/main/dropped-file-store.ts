@@ -16,7 +16,7 @@
  */
 import { copyFile, mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
-import { basename, extname, join } from 'node:path'
+import { basename, extname, join, sep } from 'node:path'
 import { tmpdir } from 'node:os'
 
 /** Copies older than this are removed on startup. */
@@ -44,7 +44,7 @@ export function isSystemTempPath(target: string, tempRoot = tmpdir()): boolean {
   const roots = [...new Set([tempRoot, resolved(tempRoot)])]
   const targets = [...new Set([target, resolved(target)])]
   return roots.some((root) => {
-    const withSep = root.endsWith('/') ? root : `${root}/`
+    const withSep = root.endsWith(sep) ? root : `${root}${sep}`
     return targets.some((t) => t.startsWith(withSep))
   })
 }

@@ -21,10 +21,10 @@ def _write_jsonl(path: Path, records: list[dict]) -> None:
 
 
 @pytest.fixture
-def fake_codex_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def fake_codex_session(tmp_path: Path, set_home) -> Path:
     fake_home = tmp_path / "home"
     fake_home.mkdir()
-    monkeypatch.setenv("HOME", str(fake_home))
+    set_home(fake_home)
     return fake_home / ".codex" / "sessions" / "2026" / "05" / "27" / "rollout-test.jsonl"
 
 
@@ -136,10 +136,10 @@ def test_session_meta_cwd_picked_up(fake_codex_session: Path) -> None:
 
 def test_project_dirs_scan_pane_sessions_but_watch_stable_parent(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    set_home,
 ) -> None:
     fake_home = tmp_path / "home"
-    monkeypatch.setenv("HOME", str(fake_home))
+    set_home(fake_home)
     default_sessions = fake_home / ".codex" / "sessions"
     pane_sessions = fake_home / ".codex-panes" / "pane-1" / "sessions"
     default_sessions.mkdir(parents=True)

@@ -1,4 +1,6 @@
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { delimiter, join, sep } from 'node:path'
+import { normalizePlatformId, setPlatformId } from '../shared/osplat'
 import {
   BUILT_IN_EDITORS,
   buildEditorArgv,
@@ -9,6 +11,8 @@ import {
   normalizeEditorId,
   resolveEditorCommand,
   whichIn,
+  needsWindowsShell,
+  quoteForCmd,
   type DetectedEditor,
   type EditorPreference,
   type EditorProcess
@@ -172,67 +176,132 @@ describe('expandTemplate', () => {
   })
 })
 
+// PATH entries and hits are built with the host's own separators so the same
+// expectations hold on Windows, where `join` answers with backslashes and
+// PATH is `;`-separated.
+const optBin = join(sep, 'opt', 'bin')
+const usrBin = join(sep, 'usr', 'bin')
+const searchPath = [optBin, usrBin].join(delimiter)
+
 describe('whichIn', () => {
+  // The fixtures are the POSIX shape (a bare `code` on PATH); pinned so the
+  // Windows runner checks the same contract, and the `on Windows` block below
+  // opts into the suffixed lookup explicitly.
+  beforeEach(() => setPlatformId('linux'))
+  afterEach(() => setPlatformId(normalizePlatformId(process.platform)))
+
   const exists = (paths: string[]) => (p: string): boolean => paths.includes(p)
   const always = (): boolean => true
 
   it('returns the first PATH hit', () => {
-    const hit = whichIn('code', '/opt/bin:/usr/bin', exists(['/usr/bin/code', '/opt/bin/other']), always)
-    expect(hit).toBe('/usr/bin/code')
+    const hit = whichIn('code', searchPath, exists([join(usrBin, 'code'), join(optBin, 'other')]), always)
+    expect(hit).toBe(join(usrBin, 'code'))
   })
 
   it('prefers earlier PATH entries', () => {
-    const hit = whichIn('code', '/opt/bin:/usr/bin', exists(['/opt/bin/code', '/usr/bin/code']), always)
-    expect(hit).toBe('/opt/bin/code')
+    const hit = whichIn('code', searchPath, exists([join(optBin, 'code'), join(usrBin, 'code')]), always)
+    expect(hit).toBe(join(optBin, 'code'))
   })
 
   it('returns null when nothing is found', () => {
-    expect(whichIn('code', '/opt/bin:/usr/bin', exists([]), always)).toBeNull()
+    expect(whichIn('code', searchPath, exists([]), always)).toBeNull()
   })
 
   it('requires the executable bit', () => {
-    expect(whichIn('code', '/usr/bin', exists(['/usr/bin/code']), () => false)).toBeNull()
+    expect(whichIn('code', usrBin, exists([join(usrBin, 'code')]), () => false)).toBeNull()
   })
 
   it('accepts an absolute name directly', () => {
-    expect(whichIn('/custom/code', '', exists(['/custom/code']), always)).toBe('/custom/code')
-    expect(whichIn('/custom/code', '', exists([]), always)).toBeNull()
+    const custom = join(sep, 'custom', 'code')
+    expect(whichIn(custom, '', exists([custom]), always)).toBe(custom)
+    expect(whichIn(custom, '', exists([]), always)).toBeNull()
   })
 
   it('tolerates an empty PATH', () => {
-    expect(whichIn('code', '', exists(['/usr/bin/code']), always)).toBeNull()
+    expect(whichIn('code', '', exists([join(usrBin, 'code')]), always)).toBeNull()
+  })
+
+  describe('on Windows', () => {
+    afterEach(() => setPlatformId(normalizePlatformId(process.platform)))
+
+    // VS Code and Cursor install `code.cmd` / `cursor.cmd` onto PATH; the bare
+    // name that works from a shell there names nothing on disk.
+    it('resolves a bare name through its PATHEXT suffix', () => {
+      setPlatformId('win32')
+      expect(whichIn('code', optBin, exists([join(optBin, 'code.cmd')]), always)).toBe(
+        join(optBin, 'code.cmd')
+      )
+      expect(whichIn('cursor', optBin, exists([join(optBin, 'cursor.exe')]), always)).toBe(
+        join(optBin, 'cursor.exe')
+      )
+    })
+
+    // VS Code's bin\ ships the POSIX `code` shell script beside code.cmd; the
+    // extensionless one is the file CreateProcess cannot start.
+    it('never picks the extensionless script beside the .cmd', () => {
+      setPlatformId('win32')
+      expect(
+        whichIn('code', optBin, exists([join(optBin, 'code'), join(optBin, 'code.cmd')]), always)
+      ).toBe(join(optBin, 'code.cmd'))
+      expect(whichIn('code', optBin, exists([join(optBin, 'code')]), always)).toBeNull()
+    })
+
+    it('looks a suffixed name up as written', () => {
+      setPlatformId('win32')
+      expect(whichIn('code.cmd', optBin, exists([join(optBin, 'code.cmd')]), always)).toBe(
+        join(optBin, 'code.cmd')
+      )
+      expect(whichIn('code.cmd', optBin, exists([join(optBin, 'code.cmd.exe')]), always)).toBeNull()
+    })
+
+    it('does not resolve suffixes off Windows', () => {
+      setPlatformId('linux')
+      expect(whichIn('code', optBin, exists([join(optBin, 'code.cmd')]), always)).toBeNull()
+    })
   })
 })
 
 describe('resolveEditorCommand', () => {
+  // The fixtures are the POSIX shape (a bare `code` on PATH, an .app-bundled
+  // CLI); pinned so the Windows runner checks the same contract.
+  beforeEach(() => setPlatformId('linux'))
+  afterEach(() => setPlatformId(normalizePlatformId(process.platform)))
+
   const vscode = BUILT_IN_EDITORS.find((e) => e.id === 'vscode')!
   const always = (): boolean => true
 
   it('resolves from PATH', () => {
-    const hit = resolveEditorCommand(vscode, '/usr/bin', (p) => p === '/usr/bin/code', always)
-    expect(hit).toBe('/usr/bin/code')
+    const code = join(usrBin, 'code')
+    const hit = resolveEditorCommand(vscode, usrBin, (p) => p === code, always)
+    expect(hit).toBe(code)
   })
 
   it('falls back to the .app-bundled CLI when PATH has no hit', () => {
     // The common macOS case: VS Code is installed but its shell command was
     // never added to PATH (that is a separate opt-in step).
     const bundled = '/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code'
-    const hit = resolveEditorCommand(vscode, '/usr/bin', (p) => p === bundled, always)
+    const hit = resolveEditorCommand(vscode, usrBin, (p) => p === bundled, always)
     expect(hit).toBe(bundled)
   })
 
   it('returns null when the editor is not installed at all', () => {
-    expect(resolveEditorCommand(vscode, '/usr/bin', () => false, always)).toBeNull()
+    expect(resolveEditorCommand(vscode, usrBin, () => false, always)).toBeNull()
   })
 })
 
 describe('detectEditors', () => {
+  // The fixtures are the POSIX shape (a bare `code` on PATH); pinned so the
+  // Windows runner checks the same contract.
+  beforeEach(() => setPlatformId('linux'))
+  afterEach(() => setPlatformId(normalizePlatformId(process.platform)))
+
   it('reports availability per editor', () => {
-    const found = detectEditors('/usr/bin', (p) => p === '/usr/bin/cursor', () => true)
+    const cursor = join(usrBin, 'cursor')
+    const found = detectEditors(usrBin, (p) => p === cursor, () => true)
     expect(found.map((e) => e.id).sort()).toEqual(['cursor', 'vscode'])
     expect(found.find((e) => e.id === 'cursor')).toEqual({
       id: 'cursor',
-      command: '/usr/bin/cursor',
+      command: cursor,
       available: true
     })
     expect(found.find((e) => e.id === 'vscode')).toEqual({
@@ -378,3 +447,33 @@ describe('buildEditorArgv', () => {
     expect(buildEditorArgv('custom', detected, [], { file: '/ws/a.ts' })).toBeNull()
   })
 })
+
+describe('needsWindowsShell', () => {
+  afterEach(() => setPlatformId(normalizePlatformId(process.platform)))
+
+  it('routes .cmd and .bat through the shell on Windows only', () => {
+    setPlatformId('win32')
+    expect(needsWindowsShell('C:\\Program Files\\VS Code\\bin\\code.cmd')).toBe(true)
+    expect(needsWindowsShell('cursor.BAT')).toBe(true)
+    expect(needsWindowsShell('C:\\tools\\code.exe')).toBe(false)
+    setPlatformId('linux')
+    expect(needsWindowsShell('code.cmd')).toBe(false)
+  })
+})
+
+describe('quoteForCmd', () => {
+  it('leaves a plain argument alone', () => {
+    expect(quoteForCmd('-g')).toBe('-g')
+    expect(quoteForCmd('C:\\src\\app.ts:12')).toBe('C:\\src\\app.ts:12')
+  })
+
+  it('quotes whitespace and cmd.exe metacharacters', () => {
+    expect(quoteForCmd('C:\\Program Files\\VS Code\\bin\\code.cmd')).toBe(
+      '"C:\\Program Files\\VS Code\\bin\\code.cmd"'
+    )
+    expect(quoteForCmd('a&b')).toBe('"a&b"')
+    expect(quoteForCmd('')).toBe('""')
+    expect(quoteForCmd('say "hi"')).toBe('"say \\"hi\\""')
+  })
+})
+

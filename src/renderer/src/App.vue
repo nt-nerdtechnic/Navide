@@ -288,6 +288,7 @@ import PairingPrompt from './components/PairingPrompt.vue'
 import ShutdownOverlay, { type QuitStage } from './components/ShutdownOverlay.vue'
 import BrandLoader from './components/BrandLoader.vue'
 import NavideCloudMark from './components/NavideCloudMark.vue'
+import { shellCommandArgv } from '../../shared/osplat'
 const OnboardingWizard = defineAsyncComponent(() => import('./components/OnboardingWizard.vue'))
 const WhatsNewModal = defineAsyncComponent(() => import('./components/WhatsNewModal.vue'))
 const CliHealthGuide = defineAsyncComponent(() => import('./components/CliHealthGuide.vue'))
@@ -5286,8 +5287,9 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
 
     await ref.spawn({
       // zsh reads ~/.zshrc (where installers add PATH, e.g. Claude Code's
-      // ~/.local/bin) only in interactive mode — plain -lc misses it.
-      command: [userShell, userShell.endsWith('zsh') ? '-ilc' : '-lc', command],
+      // ~/.local/bin) only in interactive mode — plain -lc misses it; the
+      // helper picks that or the PowerShell/cmd.exe equivalent per platform.
+      command: shellCommandArgv(userShell, command),
       cwd: opts.workspacePath,
       agentKey: opts.agentKey,
       metadata: {

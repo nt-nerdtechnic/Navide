@@ -268,18 +268,18 @@ class TerminalCapability:
         # Signature provisional -- interface shell, filled in during Phase 2.
         #
         # The ``shell.run`` WS handler has no backing service: it inlines
-        # ``asyncio.create_subprocess_exec('/bin/sh', '-c', cmd)`` after
+        # ``asyncio.create_subprocess_exec(*osplat.paths.shell_command(cmd))`` after
         # validating that ``cwd`` is a registered workspace. This façade wraps
         # the same restricted subprocess call with the same cwd validation and
         # timeout. TODO(Phase 2): extract a proper ShellService and route both
         # the shell.run WS handler and this façade through it.
         import asyncio
 
+        from .. import osplat
+
         resolved_cwd = _validate_workspace_cwd(cwd)
         proc = await asyncio.create_subprocess_exec(
-            "/bin/sh",
-            "-c",
-            command,
+            *osplat.paths.shell_command(command),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             cwd=str(resolved_cwd) if resolved_cwd else None,

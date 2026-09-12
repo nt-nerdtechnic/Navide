@@ -13,6 +13,11 @@ import pytest
 from agent_team_backend import terminals as terminals_mod
 from agent_team_backend.terminals import TerminalService
 
+# The fake Popen below only reaches the POSIX backend; on Windows the spawn
+# goes through winpty, so each test would start a real python REPL in a
+# ConPTY and never kill it.
+pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="patches the POSIX backend's Popen")
+
 
 class _FakeProc:
     """Never-exiting stand-in so create() captures env without a real child."""

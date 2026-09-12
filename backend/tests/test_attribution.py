@@ -476,8 +476,8 @@ def test_marker_binds_two_codex_panes_and_returns_resume_id(codex_attr: tuple[At
     assert attr.pane_for_session("rollout-T2-uuid2")[0] == "p2"
 
 
-def test_codex_home_path_binds_to_session_home_id(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("HOME", str(tmp_path))
+def test_codex_home_path_binds_to_session_home_id(set_home, tmp_path: Path) -> None:
+    set_home(tmp_path)
     root = tmp_path / ".codex-panes" / "home-old" / "sessions" / "2026" / "06" / "08"
     root.mkdir(parents=True)
     f = root / "rollout-2026-06-08T00-00-00-sid.jsonl"
@@ -498,12 +498,12 @@ def test_codex_home_path_binds_to_session_home_id(monkeypatch: pytest.MonkeyPatc
 
 
 def test_codex_home_path_rebinds_new_rollout_after_rotation(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    set_home, tmp_path: Path
 ) -> None:
     """In-pane login rotates Codex to a fresh rollout file; the new session
     must bind to the same pane and announce the new resume id (so the
     frontend re-pins instead of staying on the dead pre-login session)."""
-    monkeypatch.setenv("HOME", str(tmp_path))
+    set_home(tmp_path)
     root = tmp_path / ".codex-panes" / "home-old" / "sessions" / "2026" / "07" / "30"
     root.mkdir(parents=True)
     a = root / "rollout-2026-07-30T22-00-00-sid-a.jsonl"
@@ -530,11 +530,11 @@ def test_codex_home_path_rebinds_new_rollout_after_rotation(
 
 
 def test_codex_home_path_waits_for_session_meta(
-    monkeypatch: pytest.MonkeyPatch,
+    set_home,
     tmp_path: Path,
 ) -> None:
     """A newly-created rollout must not publish its filename as a resume id."""
-    monkeypatch.setenv("HOME", str(tmp_path))
+    set_home(tmp_path)
     root = tmp_path / ".codex-panes" / "home-old" / "sessions"
     root.mkdir(parents=True)
     f = root / "rollout-2026-07-14T23-53-50-real-resume-id.jsonl"
@@ -600,12 +600,12 @@ def _codex_subagent_meta(sid: str, parent: str) -> str:
 
 
 def test_codex_home_path_ignores_subagent_rollout(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    set_home, tmp_path: Path
 ) -> None:
     """A sub-agent thread must never be pinned as the pane's session: codex
     refuses direct input on it, so a pane resumed onto one is unusable. The
     parent rollout in the same home keeps the binding."""
-    monkeypatch.setenv("HOME", str(tmp_path))
+    set_home(tmp_path)
     root = tmp_path / ".codex-panes" / "home-old" / "sessions" / "2026" / "08" / "24"
     root.mkdir(parents=True)
     parent = root / "rollout-2026-08-24T15-31-28-parent-id.jsonl"
@@ -674,8 +674,8 @@ def test_codex_marker_ignores_subagent_rollout(codex_attr: tuple[Attribution, Pa
     assert attr.maybe_bind_by_marker(usage) is None
 
 
-def test_codex_home_path_prevents_same_cwd_first_claim(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("HOME", str(tmp_path))
+def test_codex_home_path_prevents_same_cwd_first_claim(set_home, tmp_path: Path) -> None:
+    set_home(tmp_path)
     root = tmp_path / ".codex-panes"
     f1 = root / "home-a" / "sessions" / "rollout-a.jsonl"
     f2 = root / "home-b" / "sessions" / "rollout-b.jsonl"
@@ -752,7 +752,7 @@ def test_encode_claude_cwd_agrees_with_resume_preflight_encoder() -> None:
     from agent_team_backend.app import _session_lookup_path
 
     p = _session_lookup_path("claude", CJK_WS, "sid1")
-    assert p.endswith(f"/{encode_claude_cwd(CJK_WS)}/sid1.jsonl")
+    assert Path(p).parts[-2:] == (encode_claude_cwd(CJK_WS), "sid1.jsonl")
 
 
 def test_cwd_matches_dash_encoded_dir_for_cjk_workspace(

@@ -6,10 +6,12 @@ them behind as orphans. Every spawn is recorded here and removed on close; at
 startup, entries left over from a previous run are identity-checked and their
 process groups killed.
 
-Identity is the process start time (ps lstart), not the command line: shells
+Identity is the process start time (osplat.process_tree.start_time — ps
+lstart on POSIX, the creation time on Windows), not the command line: shells
 spawned as `zsh -lc <cmd>` exec the final command, so the visible command
 never matches the spawn argv, while pid+start-time survives exec and defeats
-pid recycling. Each entry also records the owning backend pid so a second
+pid recycling. The registry keeps calling the field `lstart` so entries
+written by earlier backend versions stay readable. Each entry also records the owning backend pid so a second
 backend sharing the data dir never reaps a live sibling's children.
 
 Entries additionally carry the root's last descendant snapshot (pid -> lstart,
@@ -24,13 +26,12 @@ from __future__ import annotations
 
 import logging
 import os
-import signal
 import sqlite3
-import subprocess
 import threading
 import time
 from pathlib import Path
 
+from . import osplat
 from .applog import app_data_dir
 from .db import DB_FILENAME, Database
 
@@ -38,12 +39,9 @@ log = logging.getLogger(__name__)
 
 _KV_KEY = "pty_registry"
 
-# Force a fixed locale so the lstart string captured at register time compares
-# equal to the one read back at reap time.
-_PS_ENV = {**os.environ, "LC_ALL": "C"}
-
-# register/unregister run on executor threads (terminals.py keeps their ps +
-# db I/O off the event loop), so every load-modify-save must be atomic.
+# register/unregister run on executor threads (terminals.py keeps their
+# process probe + db I/O off the event loop), so every load-modify-save must
+# be atomic.
 _lock = threading.Lock()
 
 # Lazily-opened database handle. The app injects its shared instance at
@@ -97,24 +95,8 @@ def _save(entries: dict[str, dict]) -> None:
         log.warning("pty registry write failed: %s", err)
 
 
-def _ps(pid: int, fields: str) -> str | None:
-    """One-line ps probe; None means the probe itself failed (not "no such
-    process" — that returns an empty string)."""
-    try:
-        out = subprocess.run(
-            ["ps", "-p", str(pid), "-o", fields],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            env=_PS_ENV,
-        ).stdout
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    return out.strip()
-
-
 def register(pid: int, argv: list[str]) -> None:
-    lstart = _ps(pid, "lstart=") or ""  # probe outside the lock (up to 5s)
+    lstart = osplat.process_tree.start_time(pid)  # probe outside the lock (up to 5s)
     with _lock:
         entries = _load()
         entries[str(pid)] = {
@@ -157,7 +139,7 @@ def update_descendants(snapshot: dict[int, dict[int, str]]) -> None:
 def _backend_alive(pid: int) -> bool:
     """Is `pid` a live agent_team_backend process (a sibling sharing this
     data dir)? A recycled pid running something else counts as dead."""
-    out = _ps(pid, "command=")
+    out = osplat.process_tree.command_of(pid)
     if out is None:
         return True  # can't tell — err on the side of not touching its children
     return "agent_team_backend" in out
@@ -174,31 +156,15 @@ def _lstart_eq(a: str, b: str) -> bool:
 
 
 def _ps_table() -> "dict[int, tuple[int, str]] | None":
-    """pid -> (pgid, lstart) for every process, from ONE ps snapshot. One
-    fork replaces the per-pid probes reap/scan used to run under the lock
-    (N x descendants x 5s-timeout worst case). None means the probe itself
-    failed — callers must treat that as 'cannot verify anything'."""
-    try:
-        out = subprocess.run(
-            ["ps", "-Ao", "pid=,pgid=,lstart="],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            env=_PS_ENV,
-        ).stdout
-    except (OSError, subprocess.TimeoutExpired):
+    """pid -> (group id, start-time identity) for every process, from ONE
+    snapshot. One table read replaces the per-pid probes reap/scan used to
+    run under the lock (N x descendants x 5s-timeout worst case). None means
+    the probe itself failed — callers must treat that as 'cannot verify
+    anything'."""
+    snap = osplat.process_tree.snapshot()
+    if not snap:
         return None
-    table: dict[int, tuple[int, str]] = {}
-    for line in out.splitlines():
-        parts = line.split()
-        if len(parts) < 3:
-            continue
-        try:
-            pid, pgid = int(parts[0]), int(parts[1])
-        except ValueError:
-            continue
-        table[pid] = (pgid, " ".join(parts[2:]))
-    return table
+    return {pid: (info[1], info[2]) for pid, info in snap.items()}
 
 
 def _classify_root(table: dict[int, tuple[int, str]], pid: int, info: dict) -> str:
@@ -236,11 +202,12 @@ def _match_descendants(
     return leaders, plain
 
 
-def _signal_each(targets: "list[tuple[int, bool]]", sig: int) -> None:
+def _signal_each(targets: "list[tuple[int, bool]]", *, force: bool) -> None:
     """Signal each (pid, is_group) target; already-dead pids are skipped."""
+    tree = osplat.process_tree
     for pid, group in targets:
         try:
-            (os.killpg if group else os.kill)(pid, sig)
+            (tree.kill_group if group else tree.kill)(pid, force=force)
         except (ProcessLookupError, PermissionError):
             pass
 
@@ -299,7 +266,7 @@ def reap_stale(grace: float = 1.0) -> list[int]:
     """Kill process groups (and recorded detached descendants) left by a dead
     backend run.
 
-    Blocking (ps + grace sleep) — call via asyncio.to_thread. Entries owned by
+    Blocking (process snapshot + grace sleep) — call via asyncio.to_thread. Entries owned by
     a live sibling backend are left untouched; if the ps snapshot itself fails
     everything is kept for the next startup; everything else is killed or
     confirmed gone and dropped. Returns the pids that were signalled.
@@ -316,7 +283,7 @@ def reap_stale(grace: float = 1.0) -> list[int]:
         if table is None:
             # Cannot verify identities — keep everything for the next startup
             # rather than signalling blind.
-            log.warning("pty reap skipped: ps snapshot failed")
+            log.warning("pty reap skipped: process snapshot failed")
             return []
         roots, desc_group, desc_solo, keep = _collect_stale(entries, table)
         # Roots and descendant group-leaders take their whole group (children
@@ -326,9 +293,9 @@ def reap_stale(grace: float = 1.0) -> list[int]:
             (pid, False) for pid in desc_solo
         ]
         if targets:
-            _signal_each(targets, signal.SIGTERM)
+            _signal_each(targets, force=False)
             time.sleep(grace)
-            _signal_each(targets, signal.SIGKILL)
+            _signal_each(targets, force=True)
             log.info(
                 "reaped %d orphaned PTY process group(s) %s and %d detached descendant(s) %s",
                 len(roots), roots, len(desc_group) + len(desc_solo), desc_group + desc_solo,

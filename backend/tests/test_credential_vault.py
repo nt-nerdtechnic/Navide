@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from agent_team_backend import osplat
 from agent_team_backend.credential_vault import (
     CLAUDE_LIVE_KEYCHAIN_SERVICE,
     DEFAULT_SLOT_ID,
@@ -113,6 +114,10 @@ def test_capture_and_restore_round_trip(tmp_path: Path, agent_key: str, live_rel
     assert live.read_text(encoding="utf-8") == '{"who": "acct-a"}'
 
 
+@pytest.mark.skipif(
+    not osplat.paths.enforces_posix_modes(),
+    reason="POSIX mode bits: NTFS has none, secret_files hardens with an ACL",
+)
 def test_slot_files_are_private(tmp_path: Path) -> None:
     vault = _file_vault(tmp_path)
     _write(tmp_path / "home" / ".codex" / "auth.json", "{}")
@@ -557,7 +562,8 @@ def test_atomic_writes_leave_no_tmp_and_keep_slot_private(tmp_path: Path) -> Non
     )
 
     slot_file = vault.slot_dir("codex", "slot1") / "auth.json"
-    assert stat.S_IMODE(os.stat(slot_file).st_mode) == 0o600
+    if osplat.paths.enforces_posix_modes():  # NTFS has no mode bits
+        assert stat.S_IMODE(os.stat(slot_file).st_mode) == 0o600
     assert list((tmp_path / "home").rglob("*.tmp")) == []
     assert list((tmp_path / "root").rglob("*.tmp")) == []
 
@@ -851,7 +857,8 @@ def test_login_spawn_env_per_agent(tmp_path: Path) -> None:
     assert env_set == {"CLAUDE_CONFIG_DIR": str(home)}
     assert env_remove == ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]
     # The home will hold fresh secrets — private regardless of umask.
-    assert stat.S_IMODE(os.stat(home).st_mode) == 0o700
+    if osplat.paths.enforces_posix_modes():  # NTFS has no mode bits
+        assert stat.S_IMODE(os.stat(home).st_mode) == 0o700
 
     assert vault.login_spawn_env("codex", "s1") == (
         {"CODEX_HOME": str(vault.login_home_path("codex", "s1"))}, []

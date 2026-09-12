@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { normalizePlatformId, setPlatformId } from '../shared/osplat'
 import { descendantsFirst, killProcessTree } from './process-tree'
 
 const execFileSync = vi.hoisted(() => vi.fn())
@@ -55,6 +56,8 @@ describe('killProcessTree', () => {
   let kill: ReturnType<typeof spyOnKill>
 
   beforeEach(() => {
+    // The ps-snapshot arm under test is the POSIX one, whichever host runs it.
+    setPlatformId('darwin')
     execFileSync.mockReset()
     execFileSync.mockReturnValue(SNAPSHOT)
     kill = spyOnKill()
@@ -62,6 +65,7 @@ describe('killProcessTree', () => {
 
   afterEach(() => {
     kill.mockRestore()
+    setPlatformId(normalizePlatformId(process.platform))
   })
 
   it('signals every process in the tree, not just the handle', () => {
@@ -99,5 +103,39 @@ describe('killProcessTree', () => {
 
     expect(kill).not.toHaveBeenCalled()
     expect(execFileSync).not.toHaveBeenCalled()
+  })
+
+  describe('on Windows', () => {
+    beforeEach(() => setPlatformId('win32'))
+    afterEach(() => setPlatformId(normalizePlatformId(process.platform)))
+
+    it('lets taskkill walk the tree instead of parsing ps', () => {
+      execFileSync.mockReturnValue('')
+
+      killProcessTree(4102, 'SIGKILL')
+
+      expect(execFileSync).toHaveBeenCalledTimes(1)
+      const [exe, argv, opts] = execFileSync.mock.calls[0]
+      expect(exe).toBe('taskkill')
+      expect(argv).toEqual(['/PID', '4102', '/T', '/F'])
+      expect(opts).toMatchObject({ windowsHide: true })
+      // There is no POSIX signal to deliver; process.kill would only reach
+      // the handle, which is the bug this module exists to avoid.
+      expect(kill).not.toHaveBeenCalled()
+    })
+
+    it('swallows a taskkill failure the way the POSIX arm swallows ESRCH', () => {
+      execFileSync.mockImplementation(() => {
+        throw new Error('ERROR: The process "4102" not found.')
+      })
+
+      expect(() => killProcessTree(4102, 'SIGKILL')).not.toThrow()
+      expect(kill).not.toHaveBeenCalled()
+    })
+
+    it('still refuses to touch pid 1 or an unspawned child', () => {
+      killProcessTree(undefined, 'SIGKILL')
+      expect(execFileSync).not.toHaveBeenCalled()
+    })
   })
 })

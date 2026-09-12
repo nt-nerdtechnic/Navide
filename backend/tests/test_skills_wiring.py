@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import json
-import shlex
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from agent_team_backend import native_skills
+from agent_team_backend import native_skills, osplat
 from agent_team_backend.cli_vendors.base import SkillsWiring
 from agent_team_backend.cli_vendors.registry import VENDORS
 from agent_team_backend.plugins.builtin.navide_skills import skills_wiring
@@ -162,7 +161,7 @@ def test_wire_command_is_idempotent_and_preserves_shell_wrapper(
 
     expected = str(view / ".claude" / "skills")
     assert once[:-1] == command[:-1]
-    assert once[-1] == f"claude resume abc --add-dir {shlex.quote(expected)}"
+    assert once[-1] == f"claude resume abc --add-dir {osplat.paths.quote_arg(expected)}"
     assert twice == once
 
 
@@ -177,8 +176,8 @@ def test_wire_command_repeats_the_flag_for_each_skill(
     wired = skills_wiring.wire_command("pi", "pi", None)
 
     assert wired == (
-        f"pi --skill {shlex.quote(str(view / 'alpha'))}"
-        f" --skill {shlex.quote(str(view / 'beta'))}"
+        f"pi --skill {osplat.paths.quote_arg(str(view / 'alpha'))}"
+        f" --skill {osplat.paths.quote_arg(str(view / 'beta'))}"
     )
 
 
@@ -199,9 +198,9 @@ def test_replacing_flag_passes_back_the_discovery_roots(
     # Ours first, then only the discovery roots that actually exist: ~/.agents
     # was never created, so passing it would invent a root kimi never had.
     assert wired == (
-        f"kimi --skills-dir {shlex.quote(str(view))}"
-        f" --skills-dir {shlex.quote(str(home / '.kimi-code' / 'skills'))}"
-        f" --skills-dir {shlex.quote(str(project / '.agents' / 'skills'))}"
+        f"kimi --skills-dir {osplat.paths.quote_arg(str(view))}"
+        f" --skills-dir {osplat.paths.quote_arg(str(home / '.kimi-code' / 'skills'))}"
+        f" --skills-dir {osplat.paths.quote_arg(str(project / '.agents' / 'skills'))}"
     )
 
 

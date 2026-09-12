@@ -26,13 +26,13 @@ import base64
 import hashlib
 import os
 import re
-import signal
 import sys
 import time
 from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from .. import osplat
 from .base import (
     Dep,
     McpServerConfig,
@@ -476,7 +476,7 @@ def _pane_cwd_match(self, usage, pane_cwd, pane_id):
     # Claude names its per-project dir after the encoded cwd; the file path
     # carries it.
     expected_dir = encode_claude_cwd(pane_cwd)
-    return f"/{expected_dir}/" in usage.file_path
+    return expected_dir in Path(usage.file_path).parts
 
 
 ClaudeLogReader.pane_cwd_match = _pane_cwd_match
@@ -695,9 +695,11 @@ def _panel_probe_env() -> dict[str, str]:
 async def _kill_group(pid: int) -> None:
     # Async on purpose: this runs on the backend's only event loop, and a
     # blocking sleep here freezes every WebSocket session for its duration.
-    for sig in (signal.SIGTERM, signal.SIGKILL):
+    for force in (False, True):
         try:
-            os.killpg(os.getpgid(pid), sig)
+            osplat.process_tree.kill_group(
+                osplat.process_tree.group_of(pid), force=force
+            )
         except (ProcessLookupError, PermissionError, OSError):
             return
         await asyncio.sleep(0.2)

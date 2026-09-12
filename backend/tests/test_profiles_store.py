@@ -248,5 +248,6 @@ def test_home_path_absolute_nfc_stable(tmp_path: Path) -> None:
     assert str(store.ensure_home(profile)) == home
 
 
-def test_canonical_path_str_strips_trailing_slash() -> None:
-    assert canonical_path_str("/tmp/a/b/") == "/tmp/a/b"
+def test_canonical_path_str_strips_trailing_slash(tmp_path: Path) -> None:
+    base = str(tmp_path / "a" / "b")
+    assert canonical_path_str(base + os.sep) == base

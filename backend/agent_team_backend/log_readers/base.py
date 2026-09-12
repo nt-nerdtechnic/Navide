@@ -197,7 +197,7 @@ def encode_claude_cwd(cwd: str) -> str:
     same encoding for its per-project dirs — shared infrastructure, not
     claude-only knowledge.
     """
-    return re.sub(r"[^A-Za-z0-9]", "-", cwd.rstrip("/"))
+    return re.sub(r"[^A-Za-z0-9]", "-", cwd.rstrip("/\\"))
 
 
 # ── activity dedup: line-scan high-water mark ─────────────────────────────
@@ -525,10 +525,9 @@ class LogReader(ABC):
         files sit outside any fixed root (Aider's per-workspace history
         file) override with their own match. `path` arrives resolved.
         """
-        s = str(path)
         for d in self.project_dirs():
             try:
-                if s.startswith(str(d.resolve()) + "/"):
+                if path.is_relative_to(d.resolve()):
                     return True
             except OSError:
                 continue

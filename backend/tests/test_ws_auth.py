@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from agent_team_backend import app as app_module
+from agent_team_backend import osplat
 from agent_team_backend import ws_auth
 from agent_team_backend.applog import backend_ws_token_file
 
@@ -34,6 +35,7 @@ def _isolated_token(tmp_path, monkeypatch):
 # ---- the token file ----------------------------------------------------------
 
 
+@pytest.mark.skipif(not osplat.paths.enforces_posix_modes(), reason="POSIX mode bits")
 def test_the_token_file_is_owner_only(tmp_path) -> None:
     """The port file next to it is 0644 on purpose — a shell hook resolves it
     with `cat`. A secret must not inherit that."""
@@ -42,6 +44,7 @@ def test_the_token_file_is_owner_only(tmp_path) -> None:
     assert mode == 0o600, oct(mode)
 
 
+@pytest.mark.skipif(not osplat.paths.enforces_posix_modes(), reason="POSIX mode bits")
 def test_an_existing_file_does_not_keep_a_wider_mode(tmp_path) -> None:
     """O_CREAT leaves the mode of a file that already exists, so a run that
     inherited a world-readable token file would silently stay world-readable."""

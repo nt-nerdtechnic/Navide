@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 
 from agent_team_backend import app as app_module
 from agent_team_backend.app import app
-from agent_team_backend import hook_auth
+from agent_team_backend import hook_auth, osplat
 
 
 @pytest.fixture()
@@ -478,7 +478,9 @@ def test_the_hook_secret_lives_in_a_private_file_the_command_only_names(tmp_path
 
     path = hook_auth.header_file()
     assert path.is_file()
-    assert os.stat(path).st_mode & 0o077 == 0
+    if osplat.paths.enforces_posix_modes():
+        # NTFS has no mode bits: secret_files hardens with an ACL there.
+        assert os.stat(path).st_mode & 0o077 == 0
     assert path.read_text(encoding="utf-8").startswith(f"{hook_auth.HEADER}: ")
     secret = hook_auth.token()
     for command in (

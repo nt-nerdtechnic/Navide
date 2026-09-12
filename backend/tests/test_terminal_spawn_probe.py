@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import signal
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,9 +11,11 @@ from agent_team_backend import app
 
 
 def test_agent_cli_probe_reports_resolved_binary_and_version(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(app.shutil, "which", lambda _name: "/opt/bin/claude")
+    binary = tmp_path / "claude"
+    binary.write_text("#!/bin/sh\n")
+    monkeypatch.setattr(app.shutil, "which", lambda _name: str(binary))
     monkeypatch.setattr(
         app.subprocess,
         "run",
@@ -25,12 +29,13 @@ def test_agent_cli_probe_reports_resolved_binary_and_version(
     result = app._probe_agent_cli_for_spawn("claude")
 
     assert result is not None
-    assert result["binary_path"] == "/opt/bin/claude"
-    assert result["resolved_path"] == "/opt/bin/claude"
+    assert result["binary_path"] == str(binary)
+    assert result["resolved_path"] == os.path.realpath(binary)
     assert result["version"] == "2.1.210"
     assert result["exit_code"] == 0
 
 
+@pytest.mark.skipif(not hasattr(signal, "SIGKILL"), reason="no POSIX SIGKILL to name")
 def test_agent_cli_probe_surfaces_sigkill_with_structured_details(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

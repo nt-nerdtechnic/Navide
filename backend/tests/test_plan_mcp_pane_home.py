@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from agent_team_backend import osplat
 from agent_team_backend.mcp_server import pane_home, wiring as plan_mcp_wiring
 
 URL = "http://127.0.0.1:4567/plan-mcp?pane=p1&t=tok"
@@ -192,6 +193,7 @@ def test_grok_shim_drops_a_list_entry_left_by_a_former_server_name(home: Path) -
     assert [s["id"] for s in servers] == ["mine", SERVER]
 
 
+@pytest.mark.skipif(not osplat.paths.enforces_posix_modes(), reason="POSIX mode bits")
 def test_grok_shim_config_is_not_world_readable(home: Path) -> None:
     (home / ".grok").mkdir()
     _, root = pane_home.prepare("grok", "p1", URL, SERVER)  # type: ignore[misc]
@@ -381,6 +383,7 @@ def test_a_newer_real_config_wins_over_the_shim_copy(home: Path) -> None:
     assert _load(config)["apiKey"] == "switched"
 
 
+@pytest.mark.skipif(not osplat.paths.enforces_posix_modes(), reason="POSIX mode bits")
 def test_no_part_of_the_shim_path_is_world_readable(home: Path) -> None:
     """grok's copy carries an API key, so not even a brief window is allowed."""
     (home / ".grok").mkdir()
@@ -473,3 +476,14 @@ def test_wire_command_leaves_a_preset_shim_var_alone(home: Path) -> None:
     plan_mcp_wiring.wire_command("kimi", "kimi", 4567, "p1", env)
     assert env == {"KIMI_CODE_HOME": "/somewhere/else"}
     assert not (home / ".navide-panes").exists()
+
+
+def test_no_symlinks_means_no_shim_and_no_files(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows without Developer Mode cannot create links: the pane spawns
+    unwired after one warning instead of failing entry by entry."""
+    from agent_team_backend import osplat
+
+    (home / ".claude").mkdir()
+    monkeypatch.setattr(osplat.paths, "symlinks_available", lambda: False)
+    assert pane_home.prepare("claude", "p1", URL, SERVER) is None
+    assert not (home / pane_home.PANES_DIR_NAME).exists()

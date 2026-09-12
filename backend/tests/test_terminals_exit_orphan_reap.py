@@ -19,12 +19,14 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
+import sys
 import time
 from typing import Any
 
 import pytest
 
 from agent_team_backend import terminals
+from agent_team_backend.osplat import _posix
 from agent_team_backend.terminals import (
     TerminalService,
     _children_map,
@@ -38,6 +40,8 @@ async def _noop_emit(event: dict[str, Any]) -> None:
 
 
 # ---- _ps_snapshot: parsing ----
+# _ps_snapshot delegates to whichever tree osplat wired for the host; the
+# ps-table parser under test is the POSIX one, so it is driven directly.
 
 def test_ps_snapshot_parses_fields_and_skips_garbage(monkeypatch, fake_ps):
     table = (
@@ -46,8 +50,8 @@ def test_ps_snapshot_parses_fields_and_skips_garbage(monkeypatch, fake_ps):
         "BAD\n\n"
         "300 200 100\n"
     )
-    monkeypatch.setattr(terminals.subprocess, "run", fake_ps(table))
-    assert _ps_snapshot() == {
+    monkeypatch.setattr(_posix.subprocess, "run", fake_ps(table))
+    assert _posix.process_tree.snapshot() == {
         100: (1, 100, "Thu Jul 24 10:05:00 2026"),
         200: (100, 200, "Thu Jul 24 10:05:03 2026"),
         300: (200, 100, ""),
@@ -57,8 +61,8 @@ def test_ps_snapshot_parses_fields_and_skips_garbage(monkeypatch, fake_ps):
 def test_ps_snapshot_empty_on_failure(monkeypatch):
     def boom(*a, **k):
         raise OSError("no ps")
-    monkeypatch.setattr(terminals.subprocess, "run", boom)
-    assert _ps_snapshot() == {}
+    monkeypatch.setattr(_posix.subprocess, "run", boom)
+    assert _posix.process_tree.snapshot() == {}
 
 
 # ---- _refresh_descendants: rolling snapshot + registry payload ----
@@ -142,12 +146,40 @@ async def test_reap_kills_orphaned_snapshot_pids_and_their_subtree(monkeypatch):
         999: (1, 999, "L999"),
     }
     monkeypatch.setattr(terminals, "_ps_snapshot", lambda: snap)
+    # The table above is POSIX-shaped (launchd is ppid 1); pin the seam to
+    # that reading so the sweep, not the host's tree, is what is tested.
+    monkeypatch.setattr(
+        terminals.osplat.process_tree, "is_orphan_parent",
+        lambda ppid, me: ppid in (1, me),
+    )
     killed: list[int] = []
     monkeypatch.setattr(
         terminals, "_kill_breakaway", lambda pids: killed.extend(pids)
     )
     await svc._reap_exit_orphans({200: "L200", 300: "L300", 400: "L400"})
     assert sorted(killed) == [200, 250, 300]
+
+
+# Which ppid marks an orphan is the tree's call (Windows normalises a stale
+# parent to 0, where a literal `(1, me)` would never match), so the sweep must
+# route through `is_orphan_parent` rather than decide for itself.
+async def test_reap_asks_the_process_tree_which_ppid_is_an_orphan(monkeypatch):
+    svc = TerminalService(emit=_noop_emit)
+    snap = {
+        200: (0, 200, "L200"),  # stale parent, as a Windows snapshot reports it
+        300: (1, 300, "L300"),
+    }
+    monkeypatch.setattr(terminals, "_ps_snapshot", lambda: snap)
+    monkeypatch.setattr(
+        terminals.osplat.process_tree, "is_orphan_parent",
+        lambda ppid, me: ppid in (0, me),
+    )
+    killed: list[int] = []
+    monkeypatch.setattr(
+        terminals, "_kill_breakaway", lambda pids: killed.extend(pids)
+    )
+    await svc._reap_exit_orphans({200: "L200", 300: "L300"})
+    assert killed == [200]
 
 
 async def test_reap_spares_recycled_pid_via_lstart_mismatch(monkeypatch):
@@ -176,7 +208,7 @@ async def test_reap_noop_when_ps_fails(monkeypatch):
 
 # ---- batch sweeper wiring ----
 
-async def test_close_schedules_reap_on_exit_but_not_on_kill(monkeypatch):
+async def test_close_schedules_reap_on_exit_but_not_on_kill(monkeypatch, tmp_path):
     monkeypatch.setattr(terminals, "_EXIT_ORPHAN_GRACE_S", 0.01)
     reaped: list[list[int]] = []
 
@@ -184,10 +216,20 @@ async def test_close_schedules_reap_on_exit_but_not_on_kill(monkeypatch):
         reaped.append(sorted(descendants))
 
     monkeypatch.setattr(TerminalService, "_reap_exit_orphans", fake_reap)
+    # The rolling snapshot loop ticks as soon as a session exists; a table
+    # that catches the child alive and childless would replace the seeded
+    # snapshot with {} (it did on Windows, where the spawn is slower than
+    # the process walk). An empty table is "ps failed": last snapshot kept.
+    monkeypatch.setattr(terminals, "_ps_snapshot", lambda: {})
 
     svc = TerminalService(emit=_noop_emit)
     # Natural exit: short-lived child, snapshot pre-seeded.
-    s1 = svc.create(pane_id="p1", agent_key=None, command=["sh", "-c", "exit 0"], cwd="/")
+    s1 = svc.create(
+        pane_id="p1",
+        agent_key=None,
+        command=[sys.executable, "-c", "raise SystemExit(0)"],
+        cwd=str(tmp_path),
+    )
     s1.descendants = {111: ""}
     for _ in range(100):
         if s1.closed:
@@ -198,7 +240,12 @@ async def test_close_schedules_reap_on_exit_but_not_on_kill(monkeypatch):
     assert reaped == [[111]]
 
     # kill() path: must NOT queue for the exit reaper (it sweeps on its own).
-    s2 = svc.create(pane_id="p2", agent_key=None, command=["sleep", "30"], cwd="/")
+    s2 = svc.create(
+        pane_id="p2",
+        agent_key=None,
+        command=[sys.executable, "-c", "import time; time.sleep(30)"],
+        cwd=str(tmp_path),
+    )
     s2.descendants = {222: ""}
     await svc.kill(s2.id, force=True)
     await asyncio.sleep(0.2)

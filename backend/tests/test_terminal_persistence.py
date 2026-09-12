@@ -1,16 +1,19 @@
 from __future__ import annotations
 
-import fcntl
 import os
-import pty
+
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+# Real POSIX PTY behaviour: the module is skipped where these do not exist.
+fcntl = pytest.importorskip("fcntl")
+pty = pytest.importorskip("pty")
+
+from agent_team_backend.osplat._posix import PosixTerminalHandle
 from agent_team_backend import app
 from agent_team_backend.terminals import TerminalSession
-
 
 class RecordingWS:
     def __init__(self) -> None:
@@ -18,7 +21,6 @@ class RecordingWS:
 
     async def send_json(self, payload: dict[str, Any]) -> None:
         self.sent.append(payload)
-
 
 def _fake_session_entry(session: app.Session, sid: str) -> tuple[int, int]:
     master, slave = pty.openpty()
@@ -29,12 +31,11 @@ def _fake_session_entry(session: app.Session, sid: str) -> tuple[int, int]:
         agent_key=None,
         command=["x"],
         cwd="/",
-        master_fd=master,
+        handle=PosixTerminalHandle(master),
         proc=SimpleNamespace(pid=4321, returncode=None),  # type: ignore[arg-type]
     )
     session.terminals._sessions[sid] = entry
     return master, slave
-
 
 @pytest.mark.asyncio
 async def test_terminals_are_app_level_shared() -> None:
@@ -43,7 +44,6 @@ async def test_terminals_are_app_level_shared() -> None:
     s1 = app.Session(RecordingWS())  # type: ignore[arg-type]
     s2 = app.Session(RecordingWS())  # type: ignore[arg-type]
     assert s1.terminals is s2.terminals
-
 
 @pytest.mark.asyncio
 async def test_disconnect_preserves_terminals() -> None:
@@ -64,7 +64,6 @@ async def test_disconnect_preserves_terminals() -> None:
                 os.close(fd)
             except OSError:
                 pass
-
 
 @pytest.mark.asyncio
 async def test_reattach_reports_alive_and_dead() -> None:
@@ -91,7 +90,6 @@ async def test_reattach_reports_alive_and_dead() -> None:
     result = next(m for m in ws.sent if m["type"] == "terminal.reattach.result")
     assert result["payload"]["alive"] == [sid]
     assert result["payload"]["dead"] == ["term-gone"]
-
 
 @pytest.mark.asyncio
 async def test_reattach_marks_requester_active() -> None:

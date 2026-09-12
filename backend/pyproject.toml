@@ -18,8 +18,19 @@ dependencies = [
     # been migrated to.
     "mcp>=1.28.1,<2",
     "openpyxl>=3.1.5",
+    # Process-tree walking and per-process counters for the Windows
+    # implementation of osplat.process_tree / resource_probe (psutil has
+    # binary wheels for every platform the backend ships on, so it costs the
+    # POSIX builds nothing to carry). osplat/_windows.py is its only importer.
+    "psutil>=7",
+    # ConPTY bindings for osplat/_windows.py's terminal backend. Windows-only
+    # wheels, so the marker keeps macOS/Linux resolution and PyInstaller
+    # builds from ever looking for it.
+    "pywinpty>=3.0; sys_platform == 'win32'",
     "pyyaml>=6.0",
     "send2trash>=2.1.0",
+    # Windows has no system tz database; zoneinfo needs the package there.
+    "tzdata; sys_platform == 'win32'",
     "uvicorn[standard]>=0.32",
     "watchdog>=4.0",
     # Outbound WebSocket client for the Navide-Server link (server_link.py).
@@ -35,6 +46,9 @@ dev = [
     "pyinstaller>=6.20.0",
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
+    # Per-test deadline for the Windows CI job: a hang there must fail with a
+    # traceback instead of eating the whole job timeout in silence.
+    "pytest-timeout>=2.3",
     "ruff>=0.9",
 ]
 

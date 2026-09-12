@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { open, readFile, readdir, rename, rm, stat, unlink, mkdir } from 'node:fs/promises'
+import { syncDirectory } from './fsSync'
 import { basename, dirname, join, relative, sep } from 'node:path'
 import type { JsonValue, StorageGetResult } from '../../../packages/plugin-contracts/src/index'
 import type {
@@ -133,6 +134,18 @@ export interface PluginStorageFileSystem {
 
 export type StorageDurabilityEvent = 'write-temp' | 'sync-file' | 'rename' | 'sync-directory'
 
+/**
+ * Undo `path.toNamespacedPath`. On Windows a recursive `mkdir` reports the
+ * first directory it created in `\\?\` form, which `relative` cannot compare
+ * against the plain path it was asked for: the result is the whole absolute
+ * path again, and every ancestor gets "flushed" under a nonsense name.
+ */
+function fromNamespacedPath(path: string): string {
+  if (path.startsWith('\\\\?\\UNC\\')) return `\\\\${path.slice('\\\\?\\UNC\\'.length)}`
+  if (path.startsWith('\\\\?\\')) return path.slice('\\\\?\\'.length)
+  return path
+}
+
 export class NodePluginStorageFileSystem implements PluginStorageFileSystem {
   constructor(private readonly observe?: (event: StorageDurabilityEvent, path: string) => void) {}
 
@@ -163,8 +176,9 @@ export class NodePluginStorageFileSystem implements PluginStorageFileSystem {
   }
 
   async mkdir(path: string): Promise<void> {
-    const created = await mkdir(path, { recursive: true, mode: 0o700 })
-    if (!created) return
+    const first = await mkdir(path, { recursive: true, mode: 0o700 })
+    if (!first) return
+    const created = fromNamespacedPath(first)
     let directory = created
     await this.syncDirectory(dirname(directory))
     for (const segment of relative(created, path).split(sep).filter(Boolean)) {
@@ -228,12 +242,7 @@ export class NodePluginStorageFileSystem implements PluginStorageFileSystem {
 
   async syncDirectory(path: string): Promise<void> {
     this.observe?.('sync-directory', path)
-    const handle = await open(path, 'r')
-    try {
-      await handle.sync()
-    } finally {
-      await handle.close()
-    }
+    await syncDirectory(path)
   }
 }
 

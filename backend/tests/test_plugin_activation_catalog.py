@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from agent_team_backend import osplat
 from agent_team_backend.plugins.activation_catalog import (
     ACTIVATION_CATALOG_DIGEST_ENV,
     ACTIVATION_CATALOG_PATH_ENV,
@@ -28,7 +29,7 @@ def _write_package(
     version: str = "1.2.3",
 ) -> tuple[Path, Path]:
     package_dir = root / plugin_id
-    backend = package_dir / "backend" / "acme-tools"
+    backend = package_dir / osplat.paths.backend_entry_on_disk("backend/acme-tools")
     backend.parent.mkdir(parents=True)
     backend.write_bytes(b"\x7fELF")
     manifest = {

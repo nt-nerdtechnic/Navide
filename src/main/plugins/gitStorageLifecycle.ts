@@ -11,6 +11,7 @@ import {
 } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import type { HostStorageSnapshotIdentity } from './pluginStorage'
+import { syncDirectorySync } from './fsSync'
 
 const GIT_PLUGIN_ID = 'navide.git'
 
@@ -129,12 +130,7 @@ export class GitStorageLifecycleSelector {
 
       // Persist the directory entry as well; this closes the durability gap
       // between an atomic rename and a power loss before the directory flush.
-      const parentDescriptor = this.fileOps.openSync(parentPath, constants.O_RDONLY)
-      try {
-        this.fileOps.fsyncSync(parentDescriptor)
-      } finally {
-        this.fileOps.closeSync(parentDescriptor)
-      }
+      syncDirectorySync(parentPath, { ops: this.fileOps })
       return true
     } catch (error) {
       if (fileDescriptor !== null) {

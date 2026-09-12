@@ -12,10 +12,12 @@
 
 import { closeSync, existsSync, lstatSync, openSync, readFileSync, readSync, readdirSync, statSync } from 'node:fs'
 import { TextDecoder } from 'node:util'
-import { join } from 'node:path'
+import { extname, join } from 'node:path'
+import { isWindows } from '../../shared/osplat'
 import { verifyEd25519 } from './pluginVerify'
 import {
   assertManifestFiles,
+  backendEntryOnDisk,
   isManifestV2,
   manifestCapabilityPolicy,
   manifestCapabilities,
@@ -35,6 +37,7 @@ import type { ManifestPermissionsSummary } from '../../shared/executionPolicy'
 
 export {
   assertManifestFiles,
+  backendEntryOnDisk,
   isManifestV2,
   manifestCapabilityPolicy,
   manifestCapabilities,
@@ -62,7 +65,7 @@ function readUtf8File(path: string, label: string): string {
 
 function assertBackendExecutableOnDisk(manifest: PluginManifestV2, pluginDir: string): void {
   if (!manifest.backend) return
-  const path = manifest.backend.entry
+  const path = backendEntryOnDisk(manifest.backend.entry)
   const entryPath = join(pluginDir, path)
   let entry
   try {
@@ -74,7 +77,14 @@ function assertBackendExecutableOnDisk(manifest: PluginManifestV2, pluginDir: st
     throw new Error(`backend entry is not a regular file: ${path}`)
   }
   if (entry.size === 0) throw new Error(`backend entry is empty: ${path}`)
-  if ((entry.mode & 0o111) === 0) {
+  // Windows has no exec bit: what CreateProcess will run is decided by the
+  // extension, so that stands in for the POSIX mode check there. `.exe` is
+  // the only one left once the manifest contract has refused script
+  // extensions (`.cmd`, `.bat`, ...).
+  const executable = isWindows()
+    ? extname(path).toLowerCase() === '.exe'
+    : (entry.mode & 0o111) !== 0
+  if (!executable) {
     throw new Error(`backend entry is not executable: ${path}`)
   }
 
@@ -106,7 +116,11 @@ function assertManifestFilesOnDisk(manifest: InstalledManifest, pluginDir: strin
   } catch {
     throw new Error(`plugin directory is missing or unsafe: ${pluginDir}`)
   }
-  for (const path of manifestReferencedFiles(manifest)) {
+  for (const referenced of manifestReferencedFiles(manifest)) {
+    const path =
+      isManifestV2(manifest) && referenced === manifest.backend?.entry
+        ? backendEntryOnDisk(referenced)
+        : referenced
     try {
       let current = pluginDir
       const segments = path.split('/')
@@ -213,7 +227,7 @@ export function manifestToActivation(
     views,
     backend: manifest.backend
       ? {
-          entryFile: join(pluginDir, manifest.backend.entry),
+          entryFile: join(pluginDir, backendEntryOnDisk(manifest.backend.entry)),
           protocolVersion: manifest.backend.protocolVersion,
           activation: manifest.backend.activation,
         }

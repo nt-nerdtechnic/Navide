@@ -17,6 +17,8 @@ import logging
 import os
 from pathlib import Path
 
+from ._posix import process_tree, terminal_backend
+
 log = logging.getLogger(__name__)
 
 _PROC = Path("/proc")
@@ -164,6 +166,81 @@ class LinuxResourceProbe:
     def memory_kind(self) -> str:
         return "pss"
 
+    def peak_rss_bytes(self) -> int | None:
+        import resource
+
+        # Linux reports ru_maxrss in kilobytes.
+        return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
+
 
 paths = LinuxPaths()
 resource_probe = LinuxResourceProbe()
+# PTY and process-group handling are plain POSIX; see `_posix`.
+__all__ = ["paths", "process_tree", "resource_probe", "terminal_backend"]
+
+
+# ---- appended: the Paths members added for the Windows port -----------------
+#
+# A subclass rather than edits to `LinuxPaths` above, so this lands as a pure
+# append; `paths` is rebound below to the complete implementation.
+
+from . import _posix_paths, _posix_secrets  # noqa: E402
+
+
+class LinuxLayout(LinuxPaths):
+    def state_dir(self, app_name: str) -> Path:
+        # `$XDG_DATA_HOME`, not `$XDG_CONFIG_HOME`: this is where `applog` has
+        # always put the backend's state on Linux, and an install's sessions
+        # and settings must stay findable across the move behind this seam.
+        configured = os.environ.get("XDG_DATA_HOME")
+        base = Path(configured) if configured else Path.home() / ".local" / "share"
+        return base / app_name
+
+    def config_home(self, home: Path) -> Path:
+        return home / ".config"
+
+    def roaming_app_data(self) -> Path | None:
+        return _posix_paths.roaming_app_data()
+
+    def home_env_var(self) -> str:
+        return _posix_paths.home_env_var()
+
+    def isolated_home_env(self, home_dir: Path) -> dict[str, str]:
+        return _posix_paths.isolated_home_env(home_dir)
+
+    def askpass_launcher(self, helper_py: Path, python_exe: str | None) -> Path:
+        return _posix_paths.askpass_launcher(helper_py, python_exe)
+
+    def executable_candidates(self, name: str) -> list[str]:
+        return _posix_paths.executable_candidates(name)
+
+    def is_executable(self, path: Path) -> bool:
+        return _posix_paths.is_executable(path)
+
+    def login_path_probe(self) -> list[str] | None:
+        return _posix_paths.login_path_probe()
+
+    def backend_entry_on_disk(self, entry: str) -> str:
+        return _posix_paths.backend_entry_on_disk(entry)
+
+    def enforces_posix_modes(self) -> bool:
+        return _posix_paths.enforces_posix_modes()
+
+    def symlinks_available(self) -> bool:
+        return _posix_paths.symlinks_available()
+
+    def shell_command(self, command: str) -> list[str]:
+        return _posix_paths.shell_command(command)
+
+    def quote_arg(self, arg: str) -> str:
+        return _posix_paths.quote_arg(arg)
+
+
+paths = LinuxLayout()
+secret_files = _posix_secrets.secret_files
+
+from . import _posix_scheduler  # noqa: E402
+
+# crontab only: launchd does not exist here, so that kind lists as
+# unsupported without ever spawning `launchctl`.
+scheduler = _posix_scheduler.PosixScheduler(launchd=False)

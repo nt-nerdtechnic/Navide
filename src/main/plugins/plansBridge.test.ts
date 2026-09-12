@@ -1,5 +1,5 @@
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { describe, expect, it } from 'vitest'
 import {
@@ -64,12 +64,13 @@ function request(
 async function runCoreCorpus(create: () => ReturnType<typeof createInMemoryPlansBridgeDispatcher>) {
   const dispatcher = create()
   const controller = new AbortController()
-  const bridgeContext = context(controller.signal, [], '/workspace')
+  const workspace = resolve('/workspace')
+  const bridgeContext = context(controller.signal, [], workspace)
 
   await expect(dispatcher.dispatch(
     request('filesystem', 'resolve_root', {}),
     bridgeContext,
-  )).resolves.toEqual({ root: '/workspace' })
+  )).resolves.toEqual({ root: workspace })
 
   await expect(dispatcher.dispatch(
     request('filesystem', 'rename', {
@@ -255,12 +256,13 @@ describe('Plans Host Bridge ports', () => {
   })
 
   it('renames the requested source path in the in-memory filesystem adapter', async () => {
+    const workspace = resolve('/workspace')
     const dispatcher = createInMemoryPlansBridgeDispatcher({
-      root: '/workspace',
-      files: { '/workspace/old-plan.md': 'draft' },
+      root: workspace,
+      files: { [join(workspace, 'old-plan.md')]: 'draft' },
     })
     const controller = new AbortController()
-    const bridgeContext = context(controller.signal, [], '/workspace')
+    const bridgeContext = context(controller.signal, [], workspace)
 
     await expect(dispatcher.dispatch(
       request('filesystem', 'rename', {

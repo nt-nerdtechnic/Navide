@@ -4,6 +4,7 @@ import { execFileSync, spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { parse } from 'yaml'
+import { isWindows } from '../../src/shared/osplat'
 
 const roots: string[] = []
 afterEach(() => {
@@ -49,7 +50,10 @@ function buildCount(root: string): number {
   return readFileSync(join(root, 'build-calls'), 'utf8').trim().split('\n').length
 }
 
-describe('Plans backend build cache', () => {
+// The stub `uv` is a shebang script found through PATH, which Windows'
+// CreateProcess never resolves (only .com/.exe), so the real uv would run and
+// parse the placeholder lock instead.
+describe.skipIf(isWindows())('Plans backend build cache', () => {
   it('skips unchanged development builds and rebuilds changed inputs or missing output', () => {
     const root = fixture()
     build(root)
@@ -80,7 +84,8 @@ describe('Plans backend build cache', () => {
   })
 })
 
-describe('production Plans CI fixture exclusion', () => {
+// The CI step under test is a /bin/sh script.
+describe.skipIf(isWindows())('production Plans CI fixture exclusion', () => {
   const workflow = parse(readFileSync('.github/workflows/ci.yml', 'utf8'))
   const command = workflow.jobs.plans.steps.find((step: { name?: string }) => step.name === 'Verify production Plans bundle excludes fixture').run as string
 

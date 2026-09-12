@@ -53,8 +53,12 @@ log = logging.getLogger("agent_team_backend.log_readers.antigravity")
 
 # A file URI run inside blob text: stop at control bytes (protobuf field
 # boundaries); printable junk that follows the path is trimmed by the
-# is_dir()/most-common selection in _extract_cwd.
-_FILE_URI_RE = re.compile(r"file://(/[^\x00-\x1f\x7f]+)")
+# is_dir()/most-common selection in _extract_cwd. The path is either rooted
+# (`file:///Users/...`, `file:///C:/...`) or a bare drive path (`file://C:\...`).
+_FILE_URI_RE = re.compile(r"file://(/[^\x00-\x1f\x7f]+|[A-Za-z]:[\\/][^\x00-\x1f\x7f]+)")
+# `file:///C:/...` keeps a slash before the drive letter that is not part of
+# the path.
+_DRIVE_SLASH_RE = re.compile(r"^/+(?=[A-Za-z]:)")
 
 
 def _extract_cwd(text: str) -> str:
@@ -67,7 +71,11 @@ def _extract_cwd(text: str) -> str:
     """
     counts: Counter[str] = Counter()
     for m in _FILE_URI_RE.finditer(text):
-        counts[unquote(m.group(1)).rstrip("/")] += 1
+        # Not url2pathname: on Windows it raises on a second ":" in the run,
+        # and a run is often the clean URI plus a junk-suffixed repeat of it.
+        path = unquote(_DRIVE_SLASH_RE.sub("", m.group(1))).rstrip("/")
+        if path:
+            counts[str(Path(path))] += 1
     if not counts:
         return ""
     candidates = sorted(

@@ -18,27 +18,30 @@ import time
 import pytest
 
 from agent_team_backend import terminals
+from agent_team_backend.osplat import _posix
 from agent_team_backend.terminals import _descendant_pids, _kill_breakaway
 
 
 # ---- _descendant_pids: tree parsing (pure, mocked ps) ----
+# _descendant_pids delegates to whichever tree osplat wired for the host; the
+# ps-table parser under test is the POSIX one, so it is driven directly.
 
 def test_descendant_pids_collects_whole_subtree(monkeypatch, fake_ps):
     # columns: pid ppid pgid — tree: 100 → 200 → 300, 100 → 201, and 999 → 998
     table = "100 1 100\n200 100 100\n300 200 300\n201 100 100\n999 1 999\n998 999 999\n"
-    monkeypatch.setattr(terminals.subprocess, "run", fake_ps(table))
-    assert sorted(_descendant_pids(100)) == [200, 201, 300]
+    monkeypatch.setattr(_posix.subprocess, "run", fake_ps(table))
+    assert sorted(_posix.process_tree.descendants(100)) == [200, 201, 300]
     # unrelated root only sees its own branch
-    assert sorted(_descendant_pids(999)) == [998]
+    assert sorted(_posix.process_tree.descendants(999)) == [998]
     # leaf has no descendants
-    assert _descendant_pids(300) == []
+    assert _posix.process_tree.descendants(300) == []
 
 
 def test_descendant_pids_survives_cycle_and_garbage(monkeypatch, fake_ps):
     # a recycled-pid cycle (100→200→100) must not loop forever; junk lines skipped
     table = "100 1 100\n200 100 100\n100 200 100\nBAD LINE\n\n201 100 100\n"
-    monkeypatch.setattr(terminals.subprocess, "run", fake_ps(table))
-    out = sorted(_descendant_pids(100))
+    monkeypatch.setattr(_posix.subprocess, "run", fake_ps(table))
+    out = sorted(_posix.process_tree.descendants(100))
     assert out == [200, 201]
 
 
@@ -51,6 +54,7 @@ def test_descendant_pids_returns_empty_when_ps_fails(monkeypatch):
 
 # ---- _kill_breakaway: signalling (mocked os.kill) ----
 
+@pytest.mark.skipif(not hasattr(signal, "SIGKILL"), reason="POSIX SIGKILL via os.kill")
 def test_kill_breakaway_sigkills_each_pid(monkeypatch):
     killed = []
     monkeypatch.setattr(terminals.os, "kill", lambda pid, sig: killed.append((pid, sig)))

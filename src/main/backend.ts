@@ -3,7 +3,7 @@ import { createHmac, randomBytes, randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { app } from 'electron'
 import {
   defaultShell,
@@ -38,9 +38,12 @@ const CONFIRM_TTL_MS = 30_000
 export function handConfirmKey(proc: ChildProcess): void {
   confirmKey = randomBytes(32).toString('hex')
   // One line, then the pipe closes: the backend reads exactly this much, and a
-  // stdin left open would be a channel neither side has a use for.
+  // stdin left open would be a channel neither side has a use for -- except on
+  // Windows, where it is the only way to ask for a graceful stop (see
+  // stopBackendProcess): no SIGTERM exists there, so the pipe stays open and
+  // carries a `shutdown` line later.
   proc.stdin?.write(`${confirmKey}\n`)
-  proc.stdin?.end()
+  if (!isWindows()) proc.stdin?.end()
 }
 
 /**
@@ -96,6 +99,24 @@ function findFreePort(): Promise<number> {
       }
     })
   })
+}
+
+/**
+ * The name PATH goes by in `env`.
+ *
+ * Windows spells it `Path` (and its `process.env` proxy answers any casing,
+ * but a spread copy of it is a plain object that does not), so the key has to
+ * be found rather than assumed or a second `PATH` gets written next to the
+ * one the child actually reads.
+ */
+export function pathEnvKey(env: Record<string, string | undefined>): string {
+  return Object.keys(env).find((key) => key.toUpperCase() === 'PATH') ?? 'PATH'
+}
+
+/** `head` ahead of whatever `existing` already listed, deduplicated. */
+export function mergePathList(head: string[], existing: string | undefined): string {
+  const tail = (existing ?? '').split(delimiter).filter(Boolean)
+  return [...new Set([...head, ...tail])].join(delimiter)
 }
 
 /** Ask the user's login shell for its full PATH (captures nvm/fnm/volta etc.).
@@ -175,6 +196,54 @@ export function bindBackendPluginActivationCatalog(
   return env
 }
 
+/**
+ * Stop the backend handle and everything beneath it.
+ *
+ * Resolves within the grace period no matter what. If the process already
+ * exited before the listener attached (e.g. the backend crashed, which is why
+ * the UI was stuck "connecting…"), 'exit' never fires again — so the timeout
+ * must resolve unconditionally, or app quit hangs forever. 5s: the backend's
+ * shutdown sweep (kill_all — one ps snapshot + 1s grace + watcher/MCP
+ * teardown) must finish, or every PTY child is orphaned; 2s cut it off on
+ * many-pane workspaces. Past the grace period the sweep did not happen, so
+ * this has to reach the whole tree by name: SIGKILL is not forwarded by the
+ * bootloader, and killing the handle alone would leave the real backend
+ * holding the port with its PTY children reparented to init.
+ *
+ * Windows has no SIGTERM: `proc.kill` there is TerminateProcess on the
+ * bootloader alone, which ends it instantly, fires 'exit', and leaves the real
+ * backend and its PTY children running with nobody left to sweep them. The
+ * cooperative channel there is stdin: a `shutdown` line makes the backend run
+ * uvicorn's exit (and so the PTY sweep) exactly as a SIGTERM would; a Windows
+ * stop cannot be graceful today. What it can be is complete: take the tree
+ * down by pid immediately and let 'exit' settle the promise.
+ */
+export function stopBackendProcess(proc: ChildProcess): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (proc.exitCode !== null) {
+      resolve()
+      return
+    }
+    const timer = setTimeout(() => {
+      if (proc.exitCode === null) killProcessTree(proc.pid, 'SIGKILL')
+      resolve()
+    }, 5000)
+    proc.once('exit', () => {
+      clearTimeout(timer)
+      resolve()
+    })
+    if (isWindows()) {
+      // Ask first: the backend turns this line into uvicorn's cooperative
+      // exit, which runs the PTY sweep a SIGTERM would. The 5s timer above
+      // still tree-kills whatever is left.
+      proc.stdin?.write('shutdown\n')
+      proc.stdin?.end()
+      return
+    }
+    proc.kill('SIGTERM')
+  })
+}
+
 export async function startBackend(
   healthCheckTimeoutMs = 45_000,
   approvedPluginCatalog?: BackendPluginActivationCatalogFile
@@ -202,25 +271,22 @@ export async function startBackend(
   // hard-coded `/bin/zsh`, a path that does not exist on Windows and is not
   // the default on most Linux installs.
   let userShell = defaultShell(process.env)
+  const pathKey = pathEnvKey(env)
   if (needsLoginShellPath()) {
     const { shell, path: loginPath } = await getLoginShellEnv()
     userShell = shell
     if (loginPath) {
       // Merge: login shell PATH first so user-installed tools take precedence,
       // then any paths the current process already has (rare but harmless).
-      const existing = (env.PATH ?? '').split(':').filter(Boolean)
-      const merged = [...new Set([...loginPath.split(':'), ...existing])]
-      env.PATH = merged.join(':')
+      env[pathKey] = mergePathList(loginPath.split(delimiter), env[pathKey])
     } else {
       // Fallback: the platform's own conventional tool locations, which the
       // session PATH omits. ~/.local/bin is where Claude Code's installer
       // puts `claude` on both platforms, and where uv lands on Linux.
-      const common = loginPathFallbacks(homedir())
-      const existing = (env.PATH ?? '').split(':').filter(Boolean)
-      env.PATH = [...new Set([...common, ...existing])].join(':')
+      env[pathKey] = mergePathList(loginPathFallbacks(homedir()), env[pathKey])
     }
   }
-  resolvedUserPath = env.PATH ?? null
+  resolvedUserPath = env[pathKey] ?? null
 
   // External Manifest v2 packages are never discovered by directory scan.
   // Python consumes only the exact-byte Host-approved catalog bound above;
@@ -238,9 +304,13 @@ export async function startBackend(
     )
     proc = spawn(binaryPath, ['--port', String(port), '--log-level', 'info'], {
       env,
-      // stdin is open only to hand over the trust-confirmation key, and is
-      // closed immediately after. See handConfirmKey below.
-      stdio: ['pipe', 'pipe', 'pipe']
+      // stdin hands over the trust-confirmation key and is closed right after
+      // on POSIX; on Windows it stays open to carry the `shutdown` line. See
+      // handConfirmKey and stopBackendProcess.
+      stdio: ['pipe', 'pipe', 'pipe'],
+      // The frozen backend is a console-subsystem exe; without this Windows
+      // pops a console window for it behind the app. No-op elsewhere.
+      windowsHide: true
     })
   } else {
     // Dev runs alongside the packaged app, which owns the default state dir.
@@ -256,7 +326,8 @@ export async function startBackend(
       {
         cwd: projectRoot,
         env,
-        stdio: ['pipe', 'pipe', 'pipe']
+        stdio: ['pipe', 'pipe', 'pipe'],
+        windowsHide: true
       }
     )
   }
@@ -268,6 +339,14 @@ export async function startBackend(
     throw new Error('backend start abandoned: the app is quitting')
   }
 
+  // The pipe can already be dead when we write to it — the backend crashed
+  // before reading the key, or (Windows) it exited between exitCode's null
+  // and the `shutdown` line stopBackendProcess writes. An unhandled EPIPE
+  // there is an uncaught exception in main; the 'exit' handlers already
+  // cover what it would tell us.
+  proc.stdin?.on('error', (err: NodeJS.ErrnoException) => {
+    console.warn(`[backend] stdin ${err.code ?? err.message}`)
+  })
   handConfirmKey(proc)
 
   proc.stdout?.on('data', (chunk: Buffer) => forwardBackendLog(process.stdout, chunk))
@@ -280,33 +359,7 @@ export async function startBackend(
     hostSessionToken,
     dataDir: env.AGENT_TEAM_DATA_DIR ?? join(app.getPath('appData'), 'Agent-Team'),
     proc,
-    stop: () =>
-      new Promise<void>((resolve) => {
-        if (proc.exitCode !== null) {
-          resolve()
-          return
-        }
-        // Always resolve within the grace period. If the process already exited
-        // before this listener attached (e.g. the backend crashed, which is why
-        // the UI was stuck "connecting…"), 'exit' never fires again — so the
-        // timeout below must resolve unconditionally, or app quit hangs forever.
-        // 5s: the backend's shutdown sweep (kill_all — one ps snapshot + 1s
-        // grace + watcher/MCP teardown) must finish, or every PTY child is
-        // orphaned; 2s cut it off on many-pane workspaces.
-        // Past the grace period the sweep did not happen, so this has to reach
-        // the whole tree by name: SIGKILL is not forwarded by the bootloader,
-        // and killing the handle alone would leave the real backend holding the
-        // port with its PTY children reparented to init.
-        const timer = setTimeout(() => {
-          if (proc.exitCode === null) killProcessTree(proc.pid, 'SIGKILL')
-          resolve()
-        }, 5000)
-        proc.once('exit', () => {
-          clearTimeout(timer)
-          resolve()
-        })
-        proc.kill('SIGTERM')
-      })
+    stop: () => stopBackendProcess(proc)
   }
 
   try {

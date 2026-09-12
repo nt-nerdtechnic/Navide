@@ -11,29 +11,30 @@ would apply to the bytes we assert on.
 """
 
 import asyncio
-import fcntl
+
 import os
 from types import SimpleNamespace
 
 import pytest
 
-from agent_team_backend.terminals import TerminalService
+# Real POSIX PTY behaviour: the module is skipped where these do not exist.
+fcntl = pytest.importorskip("fcntl")
 
+from agent_team_backend.osplat._posix import PosixTerminalHandle
+from agent_team_backend.terminals import TerminalService
 
 def _nonblocking(fd: int) -> None:
     flags = fcntl.fcntl(fd, fcntl.F_GETFL)
     fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
 
-
 async def _emit(_event):  # EventSink stub — never actually called on this path
     return None
-
 
 async def test_small_write_completes_immediately():
     svc = TerminalService(_emit)
     r, w = os.pipe()
     _nonblocking(w)
-    session = SimpleNamespace(id="t1", master_fd=w, closed=False, agent_key="claude")
+    session = SimpleNamespace(id="t1", handle=PosixTerminalHandle(w), closed=False, agent_key="claude")
     svc._sessions["t1"] = session
     try:
         svc.write("t1", "hello")
@@ -44,13 +45,12 @@ async def test_small_write_completes_immediately():
         os.close(r)
         os.close(w)
 
-
 async def test_write_survives_eagain_without_data_loss():
     svc = TerminalService(_emit)
     r, w = os.pipe()
     _nonblocking(w)
     _nonblocking(r)
-    session = SimpleNamespace(id="t1", master_fd=w, closed=False, agent_key="claude")
+    session = SimpleNamespace(id="t1", handle=PosixTerminalHandle(w), closed=False, agent_key="claude")
     svc._sessions["t1"] = session
     try:
         payload = b"A" * 500_000  # far exceeds the pipe buffer → guaranteed EAGAIN
@@ -77,12 +77,11 @@ async def test_write_survives_eagain_without_data_loss():
         os.close(r)
         os.close(w)
 
-
 async def test_closed_session_write_is_noop():
     svc = TerminalService(_emit)
     r, w = os.pipe()
     _nonblocking(w)
-    session = SimpleNamespace(id="t1", master_fd=w, closed=True, agent_key="claude")
+    session = SimpleNamespace(id="t1", handle=PosixTerminalHandle(w), closed=True, agent_key="claude")
     svc._sessions["t1"] = session
     try:
         svc.write("t1", "ignored")

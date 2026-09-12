@@ -359,7 +359,7 @@ class SkillsStore:
         works for the CLI that owns it and delivering it elsewhere is a
         deliberate choice, not the baseline.
         """
-        if not isinstance(real_path, str) or not real_path.startswith("/"):
+        if not isinstance(real_path, str) or not os.path.isabs(real_path):
             raise SkillValidationError("real_path must be an absolute path")
         native = self._read_native_targets()
         if not agents:
@@ -484,7 +484,7 @@ class SkillsStore:
         return {"name": name, "restored_to": str(origin)}
 
     def _native_source(self, real_path: str) -> Path:
-        if not isinstance(real_path, str) or not real_path.startswith("/"):
+        if not isinstance(real_path, str) or not os.path.isabs(real_path):
             raise SkillValidationError("real_path must be an absolute path")
         source = Path(real_path)
         if source.is_symlink() or not source.is_dir():
@@ -513,7 +513,7 @@ class SkillsStore:
         for line in text.splitlines():
             if line.startswith("migrated-from: "):
                 origin = line[len("migrated-from: "):].strip()
-                return Path(origin) if origin.startswith("/") else None
+                return Path(origin) if os.path.isabs(origin) else None
         return None
 
     @staticmethod
@@ -702,7 +702,7 @@ class SkillsStore:
             raise SkillValidationError("skills native_targets must be an object")
         clean: dict[str, list[str]] = {}
         for real, agents in raw.items():
-            if not isinstance(real, str) or not real.startswith("/"):
+            if not isinstance(real, str) or not os.path.isabs(real):
                 raise SkillValidationError("native target keys must be absolute paths")
             clean[real] = self._validate_agents(agents)
         return clean

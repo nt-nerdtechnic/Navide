@@ -1,5 +1,7 @@
 import { accessSync, constants, existsSync } from 'node:fs'
-import { delimiter, isAbsolute, join } from 'node:path'
+import { delimiter, extname, isAbsolute, join } from 'node:path'
+
+import { isWindows } from '../shared/osplat'
 
 // Default-editor routing. Every "open this file" in the app funnels through
 // window:openEditor, so this module decides — per request — whether it goes to
@@ -163,10 +165,13 @@ export interface DetectedEditor {
   available: boolean
 }
 
-/** Does this path exist and carry the executable bit? */
+/**
+ * Does this path exist and carry the executable bit? Windows has no such
+ * bit — `X_OK` there is at best `F_OK` — so presence is the whole answer.
+ */
 function isExecutable(path: string, access: (p: string, mode: number) => void = accessSync): boolean {
   try {
-    access(path, constants.X_OK)
+    access(path, isWindows() ? constants.F_OK : constants.X_OK)
     return true
   } catch {
     return false
@@ -174,8 +179,27 @@ function isExecutable(path: string, access: (p: string, mode: number) => void = 
 }
 
 /**
+ * The suffixes a bare command name resolves under on Windows: `code` and
+ * `cursor` on PATH there are `code.cmd` and `cursor.cmd`.
+ */
+const WINDOWS_PATHEXT = ['.exe', '.cmd', '.bat', '.com']
+
+/**
+ * The names a PATH lookup tries on Windows. Only suffixed ones: CreateProcess
+ * never runs an extensionless file, and VS Code's `bin\` (Cursor's too) ships
+ * the POSIX `code` shell script right beside `code.cmd`, so a bare hit there
+ * would be the one file that cannot start. A name that already carries a
+ * suffix is looked up as written.
+ */
+function windowsCandidateNames(name: string): string[] {
+  if (WINDOWS_PATHEXT.includes(extname(name).toLowerCase())) return [name]
+  return WINDOWS_PATHEXT.map((ext) => name + ext)
+}
+
+/**
  * Resolve an executable name against a PATH string. Returns the absolute path
- * of the first executable hit, or null.
+ * of the first executable hit, or null. On Windows a bare name is tried under
+ * each PATHEXT suffix, the way cmd.exe resolves it.
  */
 export function whichIn(
   name: string,
@@ -184,11 +208,39 @@ export function whichIn(
   executable: (p: string) => boolean = isExecutable
 ): string | null {
   if (isAbsolute(name)) return exists(name) && executable(name) ? name : null
+  const names = isWindows() ? windowsCandidateNames(name) : [name]
   for (const dir of pathEnv.split(delimiter).filter(Boolean)) {
-    const candidate = join(dir, name)
-    if (exists(candidate) && executable(candidate)) return candidate
+    for (const candidateName of names) {
+      const candidate = join(dir, candidateName)
+      if (exists(candidate) && executable(candidate)) return candidate
+    }
   }
   return null
+}
+
+/**
+ * Suffixes CreateProcess cannot run on its own: since the CVE-2024-27980 fix
+ * Node refuses to spawn a `.cmd`/`.bat` without `shell: true` (EINVAL), and
+ * that is exactly what `code` and `cursor` are on a Windows PATH.
+ */
+const WINDOWS_SHELL_SCRIPT_EXTS = ['.cmd', '.bat']
+
+/** Whether spawning this command has to go through cmd.exe. */
+export function needsWindowsShell(command: string): boolean {
+  return isWindows() && WINDOWS_SHELL_SCRIPT_EXTS.includes(extname(command).toLowerCase())
+}
+
+/**
+ * Quote one argv element for the cmd.exe command line `shell: true` builds
+ * by joining argv with spaces. Wrapped in double quotes when it holds
+ * whitespace or a cmd.exe metacharacter, so a path with spaces stays one
+ * argument through the `.cmd` shim's `%*` and reaches the editor's own
+ * CommandLineToArgvW intact. A double quote cannot occur in a Windows path,
+ * so escaping it is only for the odd custom argument.
+ */
+export function quoteForCmd(arg: string): string {
+  if (arg !== '' && !/[\s"&|<>^()]/.test(arg)) return arg
+  return `"${arg.replace(/"/g, '\\"')}"`
 }
 
 /**

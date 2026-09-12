@@ -10,12 +10,12 @@ older versions) are ignored on read and dropped on the next write.
 from __future__ import annotations
 
 import logging
-import os
 import time
 from pathlib import Path
 from typing import Any
 
 from .applog import app_data_dir
+from .osplat import secret_files
 from .db import DB_FILENAME, Database
 
 log = logging.getLogger("agent_team_backend.ai_chat_settings")
@@ -36,7 +36,7 @@ class AIChatSettingsStore:
         # Legacy documents held API keys; the legacy JSON was chmod 0o600, so
         # keep the database file equally private (best-effort).
         try:
-            os.chmod(self._db.path, 0o600)
+            secret_files.harden_file(self._db.path)
         except OSError:
             pass
 

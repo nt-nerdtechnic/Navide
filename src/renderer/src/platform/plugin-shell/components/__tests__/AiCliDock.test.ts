@@ -312,6 +312,22 @@ describe('AiCliDock — start guards and spawn path', () => {
     })
   })
 
+  it('lets the host port build the spawn argv when it offers to', async () => {
+    // The port owns the shell and the platform; a Windows host answers with
+    // PowerShell flags here, which the dock must not second-guess.
+    const terminalPort = makeTerminalPort()
+    ;(terminalPort as unknown as { shell: Ref<string> }).shell.value = 'powershell.exe'
+    ;(terminalPort as unknown as { spawnArgv: (shell: string, command: string) => string[] }).spawnArgv =
+      (shell, command) => [shell, '-NoLogo', '-NoExit', '-Command', command]
+    const wrapper = mountDock({ terminalPort })
+    await openDock(wrapper)
+    await wrapper.find('.ai-cli-btn.primary').trigger('click')
+    await flushPromises()
+    expect(termSpies.spawn).toHaveBeenCalledWith(expect.objectContaining({
+      command: ['powershell.exe', '-NoLogo', '-NoExit', '-Command', 'claude --dangerously-skip-permissions'],
+    }))
+  })
+
   it('injects the host context (bracketed paste + CR) only after a fresh spawn goes quiet', async () => {
     const buildContext = vi.fn(() => 'CONTEXT SNAPSHOT')
     termSpies.spawn.mockImplementation(async () => {

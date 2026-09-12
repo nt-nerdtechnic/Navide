@@ -50,6 +50,7 @@ from pathlib import Path
 from typing import Callable
 
 from .applog import app_data_dir, default_app_data_dir
+from .osplat import secret_files
 from .cli_vendors.registry import vendor as _cli_vendor_spec
 from .profiles_store import (
     CLAUDE_ENV_OVERRIDES,
@@ -240,23 +241,26 @@ def _read_text(path: Path) -> str | None:
         return None
 
 
-def _write_private(path: Path, text: str) -> None:
-    """Atomically write a 0600 file: the content lands in a same-directory
-    tmp file (created 0600) that then replaces the target, so a crash or a
-    full disk mid-write can never leave a truncated or world-readable
-    secret."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.unlink(missing_ok=True)
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+def _read_private_text(path: Path) -> str | None:
+    """A file written by ``_write_private``; None when absent or unreadable."""
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fp:
-            fp.write(text)
-        os.chmod(tmp, 0o600)  # umask-proof: the final file must be exactly 0600
-        os.replace(tmp, path)
-    except Exception:
-        tmp.unlink(missing_ok=True)
-        raise
+        return secret_files.read_private(path).decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def _write_private(path: Path, text: str) -> None:
+    """Atomically write an owner-only file this vault alone reads back (a
+    slot or app secret): the content lands in a same-directory tmp file
+    that then replaces the target, so a crash or a full disk mid-write can
+    never leave a truncated or world-readable secret. Read it back with
+    ``_read_private_text`` — the platform may wrap the content."""
+    secret_files.write_private(path, text.encode("utf-8"))
+
+
+def _write_live_file(path: Path, text: str) -> None:
+    """Same guarantees, plain content: the CLI itself reads this file."""
+    secret_files.write_private_plain(path, text.encode("utf-8"))
 
 
 def legacy_claude_keychain_service(config_dir: Path | str) -> str:
@@ -425,13 +429,13 @@ class CredentialVault:
                 # Stale file credentials would shadow-report the old account.
                 self._live_file("claude").unlink(missing_ok=True)
             else:
-                _write_private(self._live_file("claude"), creds.secret)
+                _write_live_file(self._live_file("claude"), creds.secret)
             self._write_live_oauth_account(creds.account)
             return
         if creds.secret is None:
             self._live_file(agent_key).unlink(missing_ok=True)
         else:
-            _write_private(self._live_file(agent_key), creds.secret)
+            _write_live_file(self._live_file(agent_key), creds.secret)
 
     def clear_live(self, agent_key: str) -> None:
         self.write_live(agent_key, LiveCredentials())
@@ -508,7 +512,7 @@ class CredentialVault:
         """
         if self._is_macos:
             return self._keychain_read(self.app_secret_service(name), strict=True)
-        return _read_text(self.app_secret_path(name))
+        return _read_private_text(self.app_secret_path(name))
 
     def write_app_secret(self, name: str, secret: str | None) -> None:
         """Store *secret*, or erase it when None. ``_keychain_write`` refuses a
@@ -581,8 +585,8 @@ class CredentialVault:
             if self._is_macos:
                 secret = self._keychain_read(self._slot_service(agent_key, slot_id))
             else:
-                secret = _read_text(slot / _SLOT_FILES["claude"])
-            account_raw = _read_text(slot / _OAUTH_ACCOUNT_SLOT_FILE)
+                secret = _read_private_text(slot / _SLOT_FILES["claude"])
+            account_raw = _read_private_text(slot / _OAUTH_ACCOUNT_SLOT_FILE)
             account = None
             if account_raw is not None:
                 try:
@@ -591,7 +595,7 @@ class CredentialVault:
                 except ValueError:
                     account = None
             return LiveCredentials(secret=secret, account=account)
-        return LiveCredentials(secret=_read_text(slot / _SLOT_FILES[agent_key]))
+        return LiveCredentials(secret=_read_private_text(slot / _SLOT_FILES[agent_key]))
 
     def _claude_profile_home_secret(self, slot_id: str) -> str | None:
         """The credential a managed claude profile's own persistent home holds
@@ -698,7 +702,7 @@ class CredentialVault:
             if slot_id is None:
                 secret = _read_text(self._live_file(agent_key))
             else:
-                secret = _read_text(
+                secret = _read_private_text(
                     self.slot_dir(agent_key, slot_id) / _SLOT_FILES[agent_key]
                 )
             spec = _cli_vendor_spec(agent_key)
@@ -894,8 +898,7 @@ class CredentialVault:
             # poller try to harvest one, and they have no secret file to read.
             return {}, []
         home = self.login_home_path(agent_key, slot_id)
-        home.mkdir(parents=True, exist_ok=True)
-        os.chmod(home, 0o700)  # umask-proof: the home will hold fresh secrets
+        secret_files.make_private_dir(home)  # the home will hold fresh secrets
         home_str = canonical_path_str(home)
         if agent_key == "claude":
             # Claude derives its Keychain item name from the literal

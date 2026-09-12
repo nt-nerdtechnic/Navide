@@ -105,7 +105,7 @@ describe('resolveExternalOpenTarget – out-of-workspace opens (file_ws as the r
   // on a filesystem-root path both emit it — and the containment check must not
   // demand a '//' prefix for that root.
   it('resolves against the filesystem root when file_ws is /', () => {
-    expect(resolveExternalOpenTarget('/', 'notes.txt', always)).toBe('/notes.txt')
+    expect(resolveExternalOpenTarget('/', 'notes.txt', always)).toBe(resolve('/', 'notes.txt'))
   })
 
   it('applies the same containment rule to an external root', () => {

@@ -54,7 +54,9 @@ async def test_written_text_reaches_child_stdin():
     )
     try:
         # The action under test: send text exactly like terminal.input does.
-        svc.write(session.id, "hello-pipeline\n")
+        # "\r" is what a terminal sends for Enter: ICRNL turns it into "\n" on
+        # POSIX, and a Windows console completes line input on it.
+        svc.write(session.id, "hello-pipeline\r")
 
         # Drain the event loop until the child echoes back (or we give up).
         for _ in range(500):

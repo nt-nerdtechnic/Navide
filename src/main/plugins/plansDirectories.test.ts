@@ -1,6 +1,6 @@
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   DOC_SUFFIXES,
@@ -45,10 +45,10 @@ describe('plansDirectories', () => {
     }
     vi.mocked(statSync).mockClear()
     expect(isAllowedPlanDocumentPath('parent-0/child-0/.agent-team/plans/missing.html', tempWorkspace)).toBe(false)
-    const probes = vi.mocked(statSync).mock.calls.filter(([path]) => String(path).endsWith('/.git'))
+    const probes = vi.mocked(statSync).mock.calls.filter(([path]) => String(path).endsWith(`${sep}.git`))
     expect(probes.length).toBeGreaterThan(50)
     expect(probes.length).toBeLessThanOrEqual(2000)
-  })
+  }, 30_000) // 2500 directories: slow to create on the Windows runner's disk
 
   it('bounds candidate-collection probes in a directory full of symlinks', () => {
     // The collection phase resolves every symlink entry (an lstat/realpath walk
@@ -66,7 +66,9 @@ describe('plansDirectories', () => {
       isAllowedPlanDocumentPath('link-0000/.agent-team/plans/p.html', tempWorkspace),
     ).toBe(false)
     expect(vi.mocked(statSync).mock.calls.length).toBeLessThanOrEqual(MAX_NESTED_CANDIDATES)
-  })
+    // Creating 3000 directory symlinks takes several seconds on the Windows
+    // runner; what is measured here is the probe count, not the setup.
+  }, 30_000)
 
   it('reuses the discovered allowset instead of re-running the traversal', () => {
     for (let i = 0; i < 300; i++) {

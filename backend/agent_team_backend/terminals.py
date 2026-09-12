@@ -3,17 +3,12 @@ from __future__ import annotations
 import asyncio
 import codecs
 import errno
-import fcntl
 import logging
 import os
-import pty
 import re
-import shlex
 import shutil
 import signal
-import struct
 import subprocess
-import termios
 import threading
 import time
 from collections import deque
@@ -23,7 +18,10 @@ from datetime import datetime, timezone
 from typing import IO, Any, Awaitable, Callable
 from uuid import uuid4
 
-from . import pty_registry
+from . import osplat, pty_registry
+from .osplat import spec
+from .osplat.proctree import children_map as _children_map
+from .osplat.proctree import walk_descendants as _walk_descendants
 
 
 # Strip ALL ANSI/VT escape sequences for clean log output:
@@ -136,8 +134,8 @@ class TerminalSession:
     agent_key: str | None
     command: list[str]
     cwd: str
-    master_fd: int
-    proc: subprocess.Popen[bytes]
+    handle: spec.TerminalHandle
+    proc: spec.ChildProcess
     started_monotonic: float = field(default_factory=time.monotonic)
     sequence: int = 0
     closed: bool = False
@@ -319,64 +317,21 @@ _LIFECYCLE_EXECUTOR = ThreadPoolExecutor(
 
 
 def _ps_snapshot() -> dict[int, tuple[int, int, str]]:
-    """pid -> (ppid, pgid, lstart) for every process, from one ps snapshot.
-    lstart (process start time) is the identity that defeats pid recycling;
-    pgid distinguishes detached descendants (own group) from same-group
-    children. The registry's fixed locale (pty_registry._PS_ENV) keeps the
-    lstart string comparable to one captured by a previous backend run.
-    Empty on failure."""
-    try:
-        out = subprocess.run(
-            ["ps", "-Ao", "pid=,ppid=,pgid=,lstart="],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            env=pty_registry._PS_ENV,
-        ).stdout
-    except (OSError, subprocess.TimeoutExpired):
-        return {}
-    snap: dict[int, tuple[int, int, str]] = {}
-    for line in out.splitlines():
-        parts = line.split()
-        if len(parts) < 3:
-            continue
-        try:
-            pid, ppid, pgid = int(parts[0]), int(parts[1]), int(parts[2])
-        except ValueError:
-            continue
-        snap[pid] = (ppid, pgid, " ".join(parts[3:]))
-    return snap
-
-
-def _children_map(snap: dict[int, tuple[int, int, str]]) -> dict[int, list[int]]:
-    children: dict[int, list[int]] = {}
-    for pid, entry in snap.items():
-        children.setdefault(entry[0], []).append(pid)
-    return children
-
-
-def _walk_descendants(children: dict[int, list[int]], root_pid: int) -> list[int]:
-    found: list[int] = []
-    seen: set[int] = {root_pid}  # never re-list root itself if a cycle points back
-    stack = list(children.get(root_pid, []))
-    while stack:
-        pid = stack.pop()
-        if pid in seen:
-            continue  # defends against a recycled-pid cycle in the ps table
-        seen.add(pid)
-        found.append(pid)
-        stack.extend(children.get(pid, []))
-    return found
+    """pid -> (ppid, group id, start-time identity) for every process, from
+    one table read (osplat.process_tree.snapshot). The start time is the
+    identity that defeats pid recycling; the group id distinguishes detached
+    descendants (own group) from same-group children. Empty on failure."""
+    return osplat.process_tree.snapshot()
 
 
 def _descendant_pids(root_pid: int) -> list[int]:
-    """Every PID descended from root_pid (child, grandchild, ...) from one ps
+    """Every PID descended from root_pid (child, grandchild, ...) from one
     snapshot. killpg on the PTY child's process group misses any grandchild
     that called setsid to start its own session/group (some CLIs do) — those
     outlive the group kill and become orphans. Snapshot the tree while root is
     still alive; once it dies the grandchildren reparent to launchd (ppid 1)
     and the ancestry is gone."""
-    return _walk_descendants(_children_map(_ps_snapshot()), root_pid)
+    return osplat.process_tree.descendants(root_pid)
 
 
 # Steady-state cadence of the descendant-snapshot loop. MCP servers and other
@@ -404,51 +359,9 @@ def _kill_breakaway(pids: "list[int] | tuple[int, ...]") -> None:
     pids slowly enough that this is negligible on a kill path."""
     for pid in pids:
         try:
-            os.kill(pid, signal.SIGKILL)
+            osplat.process_tree.kill(pid, force=True)
         except (ProcessLookupError, PermissionError):
             pass
-
-
-def _claim_ctty() -> None:
-    """Give the child a controlling terminal. Runs between fork() and exec().
-
-    start_new_session=True only calls setsid(): the child leads a new session
-    with NO controlling terminal, and dup2'ing the slave onto fd 0/1/2 does not
-    claim one. Without a ctty the kernel never gives the tty a foreground
-    process group, so it delivers neither SIGINT (^C) nor SIGWINCH (resize),
-    job control stays off, and /dev/tty is ENXIO — which is why sudo in a pane
-    refused with "a terminal is required to read the password" while `tty` and
-    `[ -t 0 ]` both looked healthy (those only check isatty()).
-
-    setsid() has already run by this point, so we are a session leader and the
-    ioctl is legal. Keep this minimal: only async-signal-safe work is valid
-    after fork(), so no logging and no allocation beyond the call itself.
-    """
-    try:
-        fcntl.ioctl(0, termios.TIOCSCTTY, 0)
-    except OSError:
-        # Degrade to the historical no-ctty behaviour rather than fail the
-        # spawn: an exception here propagates through Popen's errpipe and
-        # would make every pane unopenable. A pane without sudo and job
-        # control still beats no pane at all.
-        pass
-
-
-def _foreground_pgid(master_fd: int, fallback_pgid: int) -> int:
-    """The process group the tty considers foreground, or fallback_pgid.
-
-    With a ctty in play the PTY child is an interactive login shell whose job
-    control is live, so it puts the CLI in a process group of its OWN and makes
-    that group foreground. Signalling only the shell's group would then leave
-    the CLI untouched — it would die later by SIGHUP when the master closes,
-    with no chance to flush its transcript, which is exactly what resume
-    depends on. Ask the tty who is actually in front instead.
-    """
-    try:
-        fg = os.tcgetpgrp(master_fd)
-    except OSError:
-        return fallback_pgid
-    return fg if fg > 0 else fallback_pgid
 
 
 class TerminalService:
@@ -523,11 +436,6 @@ class TerminalService:
         if not shutil.which(argv[0]):
             raise FileNotFoundError(f"executable not found: {argv[0]}")
 
-        master, slave = pty.openpty()
-        self._set_winsize(master, rows, cols)
-        flags = fcntl.fcntl(master, fcntl.F_GETFL)
-        fcntl.fcntl(master, fcntl.F_SETFL, flags | os.O_NONBLOCK)
-
         final_env = os.environ.copy()
         final_env["TERM"] = final_env.get("TERM", "xterm-256color")
         final_env["COLUMNS"] = str(cols)
@@ -538,31 +446,13 @@ class TerminalService:
             final_env.pop(key, None)
 
         started_monotonic = time.monotonic()
-        try:
-            proc = subprocess.Popen(
-                argv,
-                stdin=slave,
-                stdout=slave,
-                stderr=slave,
-                cwd=cwd,
-                env=final_env,
-                close_fds=True,
-                start_new_session=True,
-                # setsid() alone leaves the child without a controlling
-                # terminal; claim the slave so the kernel will deliver ^C,
-                # SIGWINCH and hangups, and so /dev/tty resolves. See
-                # _claim_ctty.
-                preexec_fn=_claim_ctty,
-            )
-        except Exception:
-            os.close(master)
-            os.close(slave)
-            raise
-        try:
-            os.close(slave)
-        except BaseException:
-            self._abort_failed_create(proc, master, registry_future=None)
-            raise
+        # The platform seam owns the PTY and the child's session/controlling
+        # terminal (POSIX: openpty + setsid + claim the ctty; Windows: ConPTY
+        # in a kill-on-close job). Nothing is left open if it raises.
+        handle = osplat.terminal_backend.spawn(
+            argv, cwd=cwd, env=final_env, rows=rows, cols=cols
+        )
+        proc = handle.proc
         # Record the child so a future backend start can reap it if this
         # process dies without running its shutdown sweep. register runs a ps
         # probe + registry-file I/O — keep it off the event loop so the
@@ -577,10 +467,10 @@ class TerminalService:
             try:
                 pty_registry.register(proc.pid, argv)
             except BaseException:
-                self._abort_failed_create(proc, master, registry_future=None)
+                self._abort_failed_create(handle, registry_future=None)
                 raise
         except BaseException:
-            self._abort_failed_create(proc, master, registry_future=None)
+            self._abort_failed_create(handle, registry_future=None)
             raise
 
         # Open output log file if requested (pipeline panes pass a path).
@@ -600,7 +490,7 @@ class TerminalService:
                 agent_key=agent_key,
                 command=argv,
                 cwd=cwd,
-                master_fd=master,
+                handle=handle,
                 proc=proc,
                 started_monotonic=started_monotonic,
                 metadata=metadata or {},
@@ -609,7 +499,7 @@ class TerminalService:
             self._sessions[session.id] = session
             if log_fp is not None:
                 _register_live_log(session.id, output_log_file)
-            self._loop.add_reader(master, self._on_readable, session)
+            handle.start_reading(self._loop, lambda: self._on_readable(session))
         except BaseException:
             if session is not None:
                 self._sessions.pop(session.id, None)
@@ -619,7 +509,7 @@ class TerminalService:
                     log_fp.close()
                 except Exception:  # noqa: BLE001
                     pass
-            self._abort_failed_create(proc, master, registry_future=registry_future)
+            self._abort_failed_create(handle, registry_future=registry_future)
             raise
         if self._snapshot_task is None or self._snapshot_task.done():
             try:
@@ -645,18 +535,17 @@ class TerminalService:
 
     def _abort_failed_create(
         self,
-        proc: subprocess.Popen[bytes],
-        master_fd: int,
+        handle: spec.TerminalHandle,
         *,
         registry_future: asyncio.Future[Any] | None,
     ) -> None:
-        """Undo a Popen whose TerminalSession setup did not complete."""
+        """Undo a spawn whose TerminalSession setup did not complete."""
+        proc = handle.proc
+        handle.close()
         try:
-            os.close(master_fd)
-        except OSError:
-            pass
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            osplat.process_tree.kill_group(
+                osplat.process_tree.group_of(proc.pid), force=True
+            )
         except (ProcessLookupError, PermissionError):
             pass
         try:
@@ -767,7 +656,7 @@ class TerminalService:
             return
         while buf:
             try:
-                n = os.write(session.master_fd, buf)
+                n = session.handle.write(buf)
             except BlockingIOError:
                 break  # kernel buffer full — resume on writable
             except OSError as err:
@@ -797,13 +686,10 @@ class TerminalService:
         self._flush_input(session)
 
     def _watch_writable(self, session: TerminalSession) -> None:
-        self._loop.add_writer(session.master_fd, self._on_writable, session)
+        session.handle.watch_writable(self._loop, lambda: self._on_writable(session))
 
     def _unwatch_writable(self, session: TerminalSession) -> None:
-        try:
-            self._loop.remove_writer(session.master_fd)
-        except (ValueError, KeyError, OSError):
-            pass
+        session.handle.unwatch_writable()
 
     def log_sent(self, session_id: str, label: str, text: str) -> None:
         """Append a human-readable record of injected text to the session log.
@@ -830,7 +716,7 @@ class TerminalService:
         session = self._require(session_id)
         if session.closed:
             return
-        self._set_winsize(session.master_fd, rows, cols)
+        session.handle.resize(rows, cols)
 
     def force_redraw(self, session_id: str, cols: int, rows: int) -> None:
         """Nudge the PTY size to raise SIGWINCH so a TUI repaints after reattach.
@@ -840,8 +726,8 @@ class TerminalService:
         session = self._sessions.get(session_id)
         if not session or session.closed:
             return
-        self._set_winsize(session.master_fd, max(rows - 1, 1), cols)
-        self._set_winsize(session.master_fd, rows, cols)
+        session.handle.resize(max(rows - 1, 1), cols)
+        session.handle.resize(rows, cols)
 
     async def drain_output(self, session_id: str) -> None:
         """Flush all pending and kernel-buffered output before the caller's
@@ -862,7 +748,7 @@ class TerminalService:
         #    multi-byte character.
         while True:
             try:
-                chunk = os.read(session.master_fd, 4096)
+                chunk = session.handle.read(4096)
             except (BlockingIOError, OSError):
                 break
             if not chunk:
@@ -897,7 +783,7 @@ class TerminalService:
 
             spec = vendor(session.agent_key or "")
             seq = spec.interrupt_key if spec is not None and spec.interrupt_key is not None else b"\x03"
-            os.write(session.master_fd, seq)
+            session.handle.write(seq)
         except OSError as err:
             log.warning("interrupt session %s failed: %s", session_id, err)
 
@@ -915,12 +801,11 @@ class TerminalService:
         # workspace switch would otherwise stall unrelated requests (e.g. the
         # Welcome screen's workspace.list_recent) past their 10s timeout.
         descendants = await asyncio.to_thread(_descendant_pids, session.proc.pid)
-        sig = signal.SIGKILL if force else signal.SIGTERM
         # Read the foreground group BEFORE _close() shuts the master fd.
-        fg_pgid = _foreground_pgid(session.master_fd, 0)
+        fg_pgid = session.handle.foreground_group()
         try:
-            pgid = os.getpgid(session.proc.pid)
-            os.killpg(pgid, sig)
+            pgid = osplat.process_tree.group_of(session.proc.pid)
+            osplat.process_tree.kill_group(pgid, force=force)
         except ProcessLookupError:
             # Group already gone — closing the PTY master HUPs the child, so
             # it often dies before the SIGTERM lands. The escalation task
@@ -933,7 +818,7 @@ class TerminalService:
             # first hear about this as the SIGHUP from the close below and lose
             # the chance to flush the transcript that resume depends on.
             try:
-                os.killpg(fg_pgid, sig)
+                osplat.process_tree.kill_group(fg_pgid, force=force)
             except (ProcessLookupError, PermissionError):
                 pass
 
@@ -958,8 +843,8 @@ class TerminalService:
         then TERM the group and escalate."""
         descendants = await asyncio.to_thread(_descendant_pids, session.proc.pid)
         try:
-            pgid = os.getpgid(session.proc.pid)
-            os.killpg(pgid, signal.SIGTERM)
+            pgid = osplat.process_tree.group_of(session.proc.pid)
+            osplat.process_tree.kill_group(pgid, force=False)
         except (ProcessLookupError, PermissionError):
             pgid = 0
         await self._escalate_kill(session, pgid, descendants=descendants)
@@ -979,7 +864,7 @@ class TerminalService:
             await asyncio.sleep(0.05)
         if session.proc.poll() is None and pgid > 0:
             try:
-                os.killpg(pgid, signal.SIGKILL)
+                osplat.process_tree.kill_group(pgid, force=True)
             except (ProcessLookupError, PermissionError):
                 pass
             try:
@@ -1104,7 +989,7 @@ class TerminalService:
             if entry is None:
                 continue
             ppid, _pgid, lstart = entry
-            if ppid not in (1, me):
+            if not osplat.process_tree.is_orphan_parent(ppid, me):
                 continue  # still parented by a live process — not our orphan
             if recorded_lstart and lstart and lstart != recorded_lstart:
                 continue  # pid recycled since the snapshot — different process
@@ -1135,22 +1020,22 @@ class TerminalService:
             # Snapshot descendants while the child is still alive (see kill()).
             breakaway.extend(_walk_descendants(children, session.proc.pid))
             try:
-                targets.append((session, os.getpgid(session.proc.pid)))
+                targets.append((session, osplat.process_tree.group_of(session.proc.pid)))
             except ProcessLookupError:
                 # Child already gone — still close so the session is removed
                 # and its registry entry is dropped.
                 self._close(session, reason="shutdown")
         for session, pgid in targets:
             try:
-                os.killpg(pgid, signal.SIGTERM)
+                osplat.process_tree.kill_group(pgid, force=False)
             except (ProcessLookupError, PermissionError):
                 pass
             # Job control puts the CLI in its own group; the shell's pgid does
             # not reach it. See the same guard in kill().
-            fg_pgid = _foreground_pgid(session.master_fd, 0)
+            fg_pgid = session.handle.foreground_group()
             if fg_pgid > 0 and fg_pgid != pgid:
                 try:
-                    os.killpg(fg_pgid, signal.SIGTERM)
+                    osplat.process_tree.kill_group(fg_pgid, force=False)
                 except (ProcessLookupError, PermissionError):
                     pass
         deadline = self._loop.time() + grace
@@ -1163,7 +1048,7 @@ class TerminalService:
         for session, pgid in targets:
             if session.proc.poll() is None:
                 try:
-                    os.killpg(pgid, signal.SIGKILL)
+                    osplat.process_tree.kill_group(pgid, force=True)
                 except (ProcessLookupError, PermissionError):
                     pass
                 try:
@@ -1191,13 +1076,10 @@ class TerminalService:
         if isinstance(command, list):
             argv = list(command)
         else:
-            argv = shlex.split(command)
+            argv = osplat.terminal_backend.parse_command(command)
         if not argv:
             raise ValueError("command is empty")
         return argv
-
-    def _set_winsize(self, fd: int, rows: int, cols: int) -> None:
-        fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
 
     def _on_readable(self, session: TerminalSession) -> None:
         if session.closed:
@@ -1209,7 +1091,7 @@ class TerminalService:
         close_reason: str | None = None
         while nbytes < _READ_DRAIN_MAX_BYTES:
             try:
-                chunk = os.read(session.master_fd, _READ_CHUNK_BYTES)
+                chunk = session.handle.read(_READ_CHUNK_BYTES)
             except BlockingIOError:
                 break
             except OSError as err:
@@ -1310,10 +1192,7 @@ class TerminalService:
         # Suspend reading from the PTY while we drain the network buffer.
         # This provides natural backpressure so the CLI blocks when writing
         # instead of OOMing the Python backend or Electron WebSocket receiver.
-        try:
-            self._loop.remove_reader(session.master_fd)
-        except (ValueError, KeyError):
-            pass
+        session.handle.pause_reading()
 
         suspended_at = self._loop.time()
 
@@ -1332,7 +1211,7 @@ class TerminalService:
                     )
                 if not session.closed:
                     try:
-                        self._loop.add_reader(session.master_fd, self._on_readable, session)
+                        session.handle.resume_reading()
                     except (ValueError, OSError) as err:
                         log.warning("re-add reader for session %s failed: %s", session.id, err)
 
@@ -1396,10 +1275,7 @@ class TerminalService:
         if session.closed:
             return
         session.closed = True
-        try:
-            self._loop.remove_reader(session.master_fd)
-        except (ValueError, KeyError):
-            pass
+        session.handle.stop_reading()
         # Stop any pending input drain and discard unwritten bytes before the
         # fd is closed (remove_writer needs a still-valid fd).
         self._unwatch_writable(session)
@@ -1407,10 +1283,7 @@ class TerminalService:
         self._recent_chunks.pop(session.id, None)
         self._echo_probe.pop(session.id, None)
         self._input_blocked.discard(session.id)
-        try:
-            os.close(session.master_fd)
-        except OSError:
-            pass
+        session.handle.close()
         # Cancel pending batch timer and flush any buffered output before the
         # exit event so the client sees all output in order.
         handle = self._out_handles.pop(session.id, None)

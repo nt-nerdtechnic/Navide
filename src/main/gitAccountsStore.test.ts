@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { isWindows } from '../shared/osplat'
 import {
   GitAccountsStore,
   EncryptionUnavailableError,
@@ -180,7 +181,8 @@ describe('GitAccountsStore', () => {
     chmodSync(file, 0o644)
     const store = new GitAccountsStore(file, fakeCrypto())
     store.add({ label: 'a', host: 'github.com', username: 'u', token: 'tok-0600' })
-    expect(statSync(file).mode & 0o777).toBe(0o600)
+    // NTFS has no POSIX mode bits: chmod is a no-op there and stat reports 0666.
+    if (!isWindows()) expect(statSync(file).mode & 0o777).toBe(0o600)
   })
 
   it('survives a corrupt file on disk (→ empty store)', () => {

@@ -5,9 +5,9 @@ on:
     tags:
       - 'v*.*.*'
   # Manual trigger to dry-run the whole chain without publishing a release:
-  # macOS builds, signs, notarizes and verifies; Linux builds and validates.
-  # Both attach their installers as workflow artifacts so a dry run still
-  # yields something to download and try.
+  # macOS builds, signs, notarizes and verifies; Linux and Windows build and
+  # validate. All three attach their installers as workflow artifacts so a
+  # dry run still yields something to download and try.
   workflow_dispatch:
 
 permissions:
@@ -347,6 +347,149 @@ jobs:
             assets+=("${asset}")
           done < <(find dist-release -maxdepth 1 -type f \( -name 'Navide-*.AppImage' -o -name 'Navide-*.deb' -o -name 'latest-linux.yml' \) -print0)
           test "${#assets[@]}" -eq 3
+          # The macOS job normally created the release already; the create
+          # branch only fires on a manual rerun of this job alone.
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" "${assets[@]}" --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" "${assets[@]}" --verify-tag --generate-notes --title "Navide ${GITHUB_REF_NAME}"
+          fi
+
+  release-windows-x64:
+    if: github.ref_name != 'v0.1.40' && github.ref_name != 'v0.1.41' && github.ref_name != 'v0.1.49'
+    name: Package and release Windows x64
+    # Serialised behind macOS for the same reason the Linux job is: the
+    # release is created once and joined by the other platforms' assets.
+    needs: release-macos-arm64
+    runs-on: windows-latest
+    timeout-minutes: 45
+    environment:
+      name: production
+      url: https://github.com/nt-nerdtechnic/Navide/releases/latest
+    # Git-for-Windows bash on every step, so the Linux job's shell idioms
+    # (find/wc/test, arrays, process substitution) carry over unchanged.
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.0.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.x'
+          cache: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-suffix: release-windows
+
+      - name: Install dependencies
+        run: |
+          pnpm install --frozen-lockfile
+          uv --project backend sync --locked
+
+      - name: Verify tag and version sources
+        if: github.event_name == 'push'
+        run: pnpm release:check "${GITHUB_REF_NAME}"
+
+      - name: Run Windows release gates
+        # The platform-independent frontend gates already passed in the macOS
+        # job this depends on; what is worth repeating is the backend suite on
+        # this kernel, where the process, path and signal seams differ most.
+        run: |
+          uv --project backend run ruff check backend
+          uv --project backend run pytest backend/tests
+
+      - name: Provision Antigravity usage secrets
+        env:
+          ANTIGRAVITY_CLIENT_ID: ${{ secrets.ANTIGRAVITY_CLIENT_ID }}
+          ANTIGRAVITY_CLIENT_SECRET: ${{ secrets.ANTIGRAVITY_CLIENT_SECRET }}
+        run: |
+          if [ -n "$ANTIGRAVITY_CLIENT_ID" ] && [ -n "$ANTIGRAVITY_CLIENT_SECRET" ]; then
+            printf 'ANTIGRAVITY_CLIENT_ID = "%s"\nANTIGRAVITY_CLIENT_SECRET = "%s"\n' \
+              "$ANTIGRAVITY_CLIENT_ID" "$ANTIGRAVITY_CLIENT_SECRET" \
+              > backend/agent_team_backend/usage_secrets.py
+            echo "usage_secrets.py provisioned"
+          else
+            echo "Antigravity secrets not set; provider disabled in this build"
+          fi
+
+      - name: Build Python backend
+        # PyInstaller cannot cross-compile; this is the only place a Windows
+        # backend exe is ever produced.
+        working-directory: backend
+        run: uv run pyinstaller agent_team_backend.spec
+
+      - name: Build application
+        run: |
+          pnpm build
+          test -f dist-plugins/plans/index.html
+          test ! -e dist-plugins/plans/backend/navide-plans
+          test ! -e dist-plugins/plans/backend/navide-plans-go
+          node scripts/verify-plans-production.mjs
+          # No signing yet: there is no Windows code-signing certificate, so
+          # SmartScreen will warn on first run and electron-updater installs
+          # updates without verifying a signature. `--publish never` still
+          # writes latest.yml, which the NSIS updater reads.
+          pnpm exec electron-builder --win --x64 --publish never
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+
+      - name: Validate release artifacts
+        run: |
+          test -f dist-release/latest.yml
+          test "$(find dist-release -maxdepth 1 -name 'Navide-*-win-x64.exe' | wc -l | tr -d ' ')" -eq 1
+          # The packaged backend must be the Windows exe this job just built,
+          # and the v2 Plans package must carry its Windows backend. `test -f`
+          # rather than `-x`: the executable bit means nothing on NTFS.
+          test -f dist-release/win-unpacked/resources/bin/agent_team_backend.exe
+          test -f dist-release/win-unpacked/resources/plugins/navide-plans/backend/navide-plans.exe
+
+      - name: Attach installers to the workflow run
+        # Every run, including a workflow_dispatch dry run: this is how a
+        # Windows build gets tried on a real desktop before a tag publishes it.
+        uses: actions/upload-artifact@v4
+        with:
+          name: navide-windows-x64
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            dist-release/Navide-*-win-x64.exe
+            dist-release/Navide-*-win-x64.exe.blockmap
+            dist-release/latest.yml
+
+      - name: Publish GitHub Release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          assets=()
+          while IFS= read -r -d '' asset; do
+            assets+=("${asset}")
+          done < <(find dist-release -maxdepth 1 -type f \( -name 'Navide-*-win-x64.exe' -o -name 'Navide-*-win-x64.exe.blockmap' -o -name 'latest.yml' \) -print0)
+          # installer + latest.yml at least; the blockmap joins when produced.
+          test "${#assets[@]}" -ge 2
           # The macOS job normally created the release already; the create
           # branch only fires on a manual rerun of this job alone.
           if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then

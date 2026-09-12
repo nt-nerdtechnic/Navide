@@ -1,5 +1,6 @@
 import { revealPath as shellRevealPath } from './hostShell'
 import type { GitTransport } from '../../../shared/gitCompatibility'
+import { shellCommandArgv } from '../../../shared/osplat'
 import type { useBackend } from './useBackend'
 import type {
   ConflictStages,
@@ -262,6 +263,7 @@ export function createHostTerminalDockPort(backend: HostBackend): TerminalDockPo
   return {
     status: backend.status,
     shell: backend.shell,
+    spawnArgv: shellCommandArgv,
     autoRestart: backend.autoRestart,
     input: (sessionId, data, timeoutMs) => send('terminal.input', { terminal_session_id: sessionId, data }, timeoutMs),
     create: (request: TerminalCreateRequest, timeoutMs) => send('terminal.create', {

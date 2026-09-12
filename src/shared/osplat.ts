@@ -130,14 +130,42 @@ export function defaultShell(env: Record<string, string | undefined> = {}): stri
     case 'darwin':
       return '/bin/zsh'
     case 'win32':
-      // PowerShell 7 when it is installed, and Windows PowerShell otherwise;
-      // both accept the `-Command` form the spawn paths use. Resolution is by
-      // name so PATH decides, the same way `$SHELL` would.
-      return env.COMSPEC || 'powershell.exe'
+      // Windows PowerShell, which every supported Windows ships; resolution is
+      // by name so PATH decides, the same way `$SHELL` would. Deliberately not
+      // `COMSPEC`: that names cmd.exe, whose command syntax is nothing like
+      // what the spawn paths assume, and it is set on every Windows session so
+      // honouring it would have made cmd.exe the effective default.
+      return 'powershell.exe'
     default:
       // bash is not guaranteed on a minimal Linux install, but it is what
       // every distribution we would ship to has, and `sh` loses the
       // interactive features the CLI panes rely on.
       return '/bin/bash'
   }
+}
+
+/** The file name of `shell`, whichever separator its path uses. */
+function shellBasename(shell: string): string {
+  return shell.split(/[\\/]/).pop()?.toLowerCase() ?? ''
+}
+
+/**
+ * The argv that runs one command inside the user's shell and leaves the
+ * shell open afterwards — how every CLI pane is started.
+ *
+ * POSIX: `-l` so the login files load, plus `-i` for zsh because installers
+ * append to `~/.zshrc`, which a plain login shell skips. Windows PowerShell
+ * has neither flag: `-NoExit -Command` is the equivalent, and `-NoLogo`
+ * keeps the banner out of the pane. cmd.exe's `/k` is its `-NoExit`. Any
+ * other shell on Windows (Git's bash.exe, for one) takes the POSIX flags.
+ */
+export function shellCommandArgv(shell: string, command: string): string[] {
+  if (isWindows()) {
+    const name = shellBasename(shell)
+    if (name === 'powershell.exe' || name === 'powershell' || name === 'pwsh.exe' || name === 'pwsh') {
+      return [shell, '-NoLogo', '-NoExit', '-Command', command]
+    }
+    if (name === 'cmd.exe' || name === 'cmd') return [shell, '/k', command]
+  }
+  return [shell, shell.endsWith('zsh') ? '-ilc' : '-lc', command]
 }

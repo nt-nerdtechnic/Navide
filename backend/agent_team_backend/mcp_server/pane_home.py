@@ -43,6 +43,8 @@ from typing import Any
 
 from agent_team_backend.cli_vendors import registry
 from agent_team_backend.cli_vendors.base import McpWiring, mcp_document
+from agent_team_backend import osplat
+from agent_team_backend.osplat import secret_files
 
 log = logging.getLogger("agent_team_backend.mcp_server.pane_home")
 
@@ -372,6 +374,11 @@ def prepare(
     root = shim_root(agent_key, pane_id)
     if spec is None or root is None:
         return None
+    if not osplat.paths.symlinks_available():
+        # A shim is a tree of links. Without the privilege (Windows before
+        # Developer Mode) every entry would fail one by one; one line, unwired.
+        log.warning("symbolic links unavailable: %s pane %s spawns unwired", agent_key, pane_id)
+        return None
     home = real_home()
     if PANES_DIR_NAME in home.parts:
         # The backend was launched from inside a shimmed pane and inherited its
@@ -385,8 +392,7 @@ def prepare(
         # copy of the API key, so no part of the path may be world-readable,
         # even briefly.
         for directory in (panes_root(), root.parent, root):
-            directory.mkdir(parents=True, exist_ok=True)
-            os.chmod(directory, 0o700)
+            secret_files.make_private_dir(directory)
         _seed_link_targets(spec, real_vendor)
         if spec.shims_home:
             # PANES_DIR_NAME is skipped alongside the vendor dir: it lives in

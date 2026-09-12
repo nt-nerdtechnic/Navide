@@ -22,12 +22,12 @@ import json
 import logging
 import os
 import re
-import shlex
 import shutil
 import tempfile
 from pathlib import Path
 from typing import Any
 
+from agent_team_backend import osplat
 from agent_team_backend.applog import app_data_dir
 from agent_team_backend.cli_vendors.base import SkillsWiring
 from agent_team_backend.cli_vendors.registry import vendor
@@ -362,7 +362,7 @@ def wire_command(
     if not wiring.flag or str(view) in text:
         return command
     suffix = " ".join(
-        f"{wiring.flag} {shlex.quote(value)}" for value in flag_values(wiring, view, cwd)
+        f"{wiring.flag} {osplat.paths.quote_arg(value)}" for value in flag_values(wiring, view, cwd)
     )
     return _append_to_command(command, suffix) if suffix else command
 

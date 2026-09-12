@@ -4,6 +4,7 @@ import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpath
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { normalizePlatformId, setPlatformId } from '../../shared/osplat'
+import { backendEntryOnDisk } from './installedPlugins'
 
 // The manager imports electron for its view lifecycle. A functional stub backs
 // both the registry tests (which touch none of it) and the view-lifecycle tests
@@ -811,7 +812,7 @@ describe('devPlansPluginDescriptor', () => {
     expect(desc.requires).toEqual(['fs', 'ui', 'plans', 'terminal'])
     // Built separately (vite.plans.config.ts) — never served by the dev server.
     expect(desc.devUrl).toBe('')
-    expect(desc.entryFile.endsWith('dist-plugins/plans/index.html')).toBe(true)
+    expect(desc.entryFile.endsWith(join('dist-plugins', 'plans', 'index.html'))).toBe(true)
   })
 
   it('registers only via the builtin/official path (reserved id)', () => {
@@ -3115,7 +3116,7 @@ describe('loadInstalledPlugins official receipt gate', () => {
     }
     if (options.backend) {
       mkdirSync(join(dir, 'backend'), { recursive: true })
-      const backendPath = join(dir, 'backend', 'plugin')
+      const backendPath = join(dir, backendEntryOnDisk('backend/plugin'))
       writeFileSync(backendPath, Buffer.from([0x7f, 0x45, 0x4c, 0x46]))
       chmodSync(backendPath, 0o700)
     }
@@ -5484,7 +5485,7 @@ describe('ui.open_in_editor host capability — workspace containment / caller r
     const { opens, call } = openUiPlugin()
     const resp = await call({ filepath: 'src/app.ts' })
     expect(resp.error).toBeUndefined()
-    expect(opens).toEqual([{ workspace_path: '/ws', filepath: 'src/app.ts' }])
+    expect(opens).toEqual([{ workspace_path: resolve('/ws'), filepath: join('src', 'app.ts') }])
   })
 
   it('rejects a traversal that escapes the workspace', async () => {
@@ -5507,7 +5508,7 @@ describe('ui.open_in_editor host capability — workspace containment / caller r
     // the file's own root, and the target is normalized against it.
     const resp = await call({ workspace_path: '/elsewhere', filepath: 'notes/todo.md' })
     expect(resp.error).toBeUndefined()
-    expect(opens).toEqual([{ workspace_path: '/elsewhere', filepath: 'notes/todo.md' }])
+    expect(opens).toEqual([{ workspace_path: resolve('/elsewhere'), filepath: join('notes', 'todo.md') }])
   })
 
   it('rejects a traversal that escapes a call-supplied root', async () => {
@@ -5521,14 +5522,14 @@ describe('ui.open_in_editor host capability — workspace containment / caller r
     const { opens, call } = openUiPlugin()
     const resp = await call({ workspace_path: '/elsewhere', filepath: '/elsewhere/notes/todo.md' })
     expect(resp.error).toBeUndefined()
-    expect(opens).toEqual([{ workspace_path: '/elsewhere', filepath: 'notes/todo.md' }])
+    expect(opens).toEqual([{ workspace_path: resolve('/elsewhere'), filepath: join('notes', 'todo.md') }])
   })
 
   it('normalizes an in-workspace path before handing it downstream', async () => {
     const { opens, call } = openUiPlugin()
     const resp = await call({ filepath: 'src/../README.md' })
     expect(resp.error).toBeUndefined()
-    expect(opens).toEqual([{ workspace_path: '/ws', filepath: 'README.md' }])
+    expect(opens).toEqual([{ workspace_path: resolve('/ws'), filepath: 'README.md' }])
   })
 
   it('rejects a bare workspace reference (no file to open)', async () => {
@@ -6009,7 +6010,7 @@ describe('first-party Git private bridge', () => {
       writeFileSync(join(packageDir, 'manifest.json'), readFileSync('plugins/navide-plans/manifest.json'))
       writeFileSync(join(packageDir, 'frontend/left/index.html'), '<!doctype html>')
       writeFileSync(join(packageDir, 'frontend/window/index.html'), '<!doctype html>')
-      copyFileSync(process.execPath, join(packageDir, 'backend/navide-plans'))
+      copyFileSync(process.execPath, join(packageDir, backendEntryOnDisk('backend/navide-plans')))
       expect(registerBundledPlans(mgr, { isPackaged: false, resourcesPath: '', devRoot: root })).toEqual({ registered: true })
       mgr.setPlansDiagnosticsEnabled(true)
       mgr.setCapabilityGrantResolver(() => ({ packageVersion: '0.1.0', system: ['fs', 'ui', 'aiCli'], storage: true }))
@@ -6661,7 +6662,7 @@ describe('first-party Git private bridge', () => {
     })
     expect(opens).toEqual([{
       workspacePath,
-      relPath: '.agent-team/plans/feature.html',
+      relPath: join('.agent-team', 'plans', 'feature.html'),
     }])
   })
 
@@ -6747,7 +6748,7 @@ describe('first-party Git private bridge', () => {
       })
       expect(opens).toContainEqual({
         workspacePath: tempDir,
-        relPath: 'packages/subrepo/.agent-team/plans/nested.html',
+        relPath: join('packages', 'subrepo', '.agent-team', 'plans', 'nested.html'),
       })
 
       // 2. Nested repo with .git FILE (submodule/worktree): REJECTED
@@ -6897,7 +6898,7 @@ describe('first-party Git private bridge', () => {
       expect(editorCalls).toEqual([
         {
           workspace_path: resolve(tempDir),
-          filepath: '.agent-team/plans/feature.html',
+          filepath: join('.agent-team', 'plans', 'feature.html'),
         },
       ])
     } finally {
@@ -6994,7 +6995,7 @@ describe('first-party Git private bridge', () => {
       expect(editorCalls).toEqual([
         {
           workspace_path: resolve(tempDir),
-          filepath: 'src/main/index.ts',
+          filepath: join('src', 'main', 'index.ts'),
           line: '42',
         },
       ])
@@ -7147,7 +7148,7 @@ describe('first-party Git private bridge', () => {
     }
     expect(request).toMatchObject({
       type: 'project.peek',
-      payload: { workspace_path: '/workspace' },
+      payload: { workspace_path: resolve('/workspace') },
     })
     socket.receive({
       id: request.id,
@@ -7268,7 +7269,7 @@ describe('first-party Git private bridge', () => {
     expect(picked).toMatchObject({
       reqId: 'pick-workspace',
       ok: true,
-      result: { path: '/picked/workspace' },
+      result: { path: resolve('/picked/workspace') },
     })
     expect(typeof grant).toBe('string')
 
@@ -7290,7 +7291,7 @@ describe('first-party Git private bridge', () => {
     })
     expect(sent).toEqual([{
       channel: 'git:contribution-action',
-      args: [{ operation: 'open_workspace', payload: { path: '/picked/workspace' } }],
+      args: [{ operation: 'open_workspace', payload: { path: resolve('/picked/workspace') } }],
     }])
 
     await expect(call(view, 'git.contribution', {
@@ -7867,13 +7868,13 @@ describe('first-party Git private bridge', () => {
       operation: 'bind',
       payload: { accountId: 'account-1' },
     }, 'git-bind')).resolves.toMatchObject({ ok: true, result: { accountId: 'account-1' } })
-    expect(bind).toHaveBeenCalledWith('/workspace', 'account-1')
+    expect(bind).toHaveBeenCalledWith(resolve('/workspace'), 'account-1')
 
     await expect(call(view, 'git.account', {
       operation: 'unbind',
       payload: {},
     }, 'git-unbind')).resolves.toMatchObject({ ok: true, result: { accountId: null } })
-    expect(unbind).toHaveBeenCalledWith('/workspace')
+    expect(unbind).toHaveBeenCalledWith(resolve('/workspace'))
 
     await expect(call(view, 'git.account', {
       operation: 'bind',
@@ -8058,7 +8059,7 @@ describe('first-party Git private bridge', () => {
       bind: () => undefined,
       unbind: () => undefined,
       getBinding: () => 'account-1',
-      getCredential: (workspacePath) => workspacePath === '/workspace'
+      getCredential: (workspacePath) => workspacePath === resolve('/workspace')
         ? { username: 'alice', token: 'secret-token', expectedHost: 'github.com' }
         : null,
     })
@@ -8075,7 +8076,7 @@ describe('first-party Git private bridge', () => {
     }
     expect(request.type).toBe('git.push')
     expect(request.payload).toEqual({
-      workspace_path: '/workspace',
+      workspace_path: resolve('/workspace'),
       remote: 'origin',
       branch: 'main',
       credential: { username: 'alice', token: 'secret-token', expectedHost: 'github.com' },
@@ -8130,7 +8131,7 @@ describe('first-party Git private bridge', () => {
     await vi.waitFor(() => expect(socket.sent).toHaveLength(1))
     const request = JSON.parse(socket.sent[0]!)
     expect(request.payload).toMatchObject({
-      workspace_path: '/workspace',
+      workspace_path: resolve('/workspace'),
       remote: 'origin',
       branch: 'main',
     })
@@ -8145,7 +8146,7 @@ describe('first-party Git private bridge', () => {
       timestamp: '',
     })
     await expect(operation).resolves.toMatchObject({ ok: true })
-    expect(getCredential).toHaveBeenCalledWith('/workspace')
+    expect(getCredential).toHaveBeenCalledWith(resolve('/workspace'))
   })
 
   it('releases an interactive credential owner when the backend is unavailable', async () => {
@@ -8603,7 +8604,7 @@ describe('first-party Git private bridge', () => {
     }, 'window-open-clone')).resolves.toEqual({
       reqId: 'window-open-clone', ok: true, result: { accepted: true },
     })
-    expect(opened).toEqual(['/private/tmp/repo'])
+    expect(opened).toEqual([resolve('/private/tmp/repo')])
     expect(sent).toEqual([])
 
     await expect(call(view, 'git.contribution', {
@@ -8635,7 +8636,7 @@ describe('first-party Git private bridge', () => {
     })
     await Promise.resolve()
     const request = JSON.parse(socket.sent.at(-1)!) as { id: string; type: string; payload: Record<string, unknown> }
-    expect(request.payload).toEqual({ workspace_path: '/workspace', limit: 10 })
+    expect(request.payload).toEqual({ workspace_path: resolve('/workspace'), limit: 10 })
     expect(getCredential).not.toHaveBeenCalled()
     socket.receive({
       id: request.id,
@@ -8658,7 +8659,7 @@ describe('first-party Git private bridge', () => {
       payload: Record<string, unknown>
     }
     expect(localRequest.type).toBe('git.status')
-    expect(localRequest.payload).toEqual({ workspace_path: '/workspace' })
+    expect(localRequest.payload).toEqual({ workspace_path: resolve('/workspace') })
     socket.receive({
       id: localRequest.id,
       type: localRequest.type,

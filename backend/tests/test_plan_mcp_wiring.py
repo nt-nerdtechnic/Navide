@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import json
-import shlex
 import stat
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
-from agent_team_backend import app
+from agent_team_backend import app, osplat
 from agent_team_backend.plugins import wiring as plugin_wiring
 from agent_team_backend.mcp_server import auth as plan_mcp_auth, wiring as plan_mcp_wiring
 
@@ -49,6 +49,7 @@ def test_write_claude_config_idempotent(tmp_path: Path) -> None:
     assert not path.with_suffix(".json.tmp").exists()
 
 
+@pytest.mark.skipif(not osplat.paths.enforces_posix_modes(), reason="POSIX mode bits")
 def test_write_claude_config_is_owner_only(tmp_path: Path) -> None:
     # The URL embeds the host internal token, so the file must never be
     # group/world readable.
@@ -57,6 +58,7 @@ def test_write_claude_config_is_owner_only(tmp_path: Path) -> None:
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
+@pytest.mark.skipif(not osplat.paths.enforces_posix_modes(), reason="POSIX mode bits")
 def test_write_claude_config_hardens_existing_wide_file(tmp_path: Path) -> None:
     # Unchanged content returns before rewriting, so a file left 0644 by an
     # older version has to be tightened on that path too.
@@ -117,14 +119,14 @@ def test_wire_claude_appends_quoted_flag_to_shell_wrapper(claude_config: Path) -
     assert wired[:2] == ["/bin/zsh", "-ilc"]
     assert wired[2] == (
         "claude --dangerously-skip-permissions "
-        f"--mcp-config {shlex.quote(str(claude_config))}"
+        f"--mcp-config {osplat.paths.quote_arg(str(claude_config))}"
     )
     assert command[2] == "claude --dangerously-skip-permissions"  # input untouched
 
 
 def test_wire_claude_plain_string_command(claude_config: Path) -> None:
     wired = plan_mcp_wiring.wire_command("claude", "claude", 4567, claude_config=claude_config)
-    assert wired == f"claude --mcp-config {shlex.quote(str(claude_config))}"
+    assert wired == f"claude --mcp-config {osplat.paths.quote_arg(str(claude_config))}"
 
 
 def test_wire_claude_second_run_is_noop(claude_config: Path) -> None:
@@ -149,10 +151,8 @@ def test_wire_claude_missing_config_file_is_noop(tmp_path: Path) -> None:
 def test_wire_codex_appends_config_override() -> None:
     wired = plan_mcp_wiring.wire_command("codex", "codex --yolo", 4567)
     # No pane id given, so the override URL carries the host credential.
-    assert wired == (
-        "codex --yolo -c "
-        f"'mcp_servers.navide.url=\"{plan_mcp_wiring.plan_mcp_url(4567)}\"'"
-    )
+    override = f'mcp_servers.navide.url="{plan_mcp_wiring.plan_mcp_url(4567)}"'
+    assert wired == f"codex --yolo -c {osplat.paths.quote_arg(override)}"
     assert "client=host" in wired
 
 
@@ -160,7 +160,10 @@ def test_wire_codex_resume_command() -> None:
     command = ["/bin/zsh", "-lc", "codex resume abc123 --yolo"]
     wired = plan_mcp_wiring.wire_command("codex", command, 4567)
     assert wired[2].startswith("codex resume abc123 --yolo -c ")
-    assert f'mcp_servers.navide.url="{plan_mcp_wiring.plan_mcp_url(4567)}"' in wired[2]
+    # Through the platform's own argv split, so the inner quotes are the
+    # override's and not the quoting's.
+    words = osplat.terminal_backend.parse_command(wired[2])
+    assert words[-2:] == ["-c", f'mcp_servers.navide.url="{plan_mcp_wiring.plan_mcp_url(4567)}"']
 
 
 def test_wire_codex_with_pane_id_uses_pane_credential() -> None:
@@ -183,7 +186,7 @@ def test_wire_codex_second_run_is_noop() -> None:
 def test_wire_copilot_appends_inline_config() -> None:
     wired = plan_mcp_wiring.wire_command("copilot", "copilot --allow-all-tools", 4567)
     inline = plan_mcp_wiring.config_json("copilot", 4567)
-    assert wired == f"copilot --allow-all-tools --additional-mcp-config {shlex.quote(inline)}"
+    assert wired == f"copilot --allow-all-tools --additional-mcp-config {osplat.paths.quote_arg(inline)}"
     assert "client=host" in wired
 
 
@@ -201,6 +204,16 @@ def test_wire_copilot_second_run_is_noop() -> None:
     assert plan_mcp_wiring.wire_command("copilot", once, 4567) == once
 
 
+def test_wire_copilot_detects_its_entry_under_escaped_quotes() -> None:
+    """Already-wired detection reads the argv, not the quoting: the inline
+    JSON escaped the MSVCRT way (``\\"navide\\"``) has no literal ``"navide"``
+    in the command text, and must still count as wired."""
+    inline = plan_mcp_wiring.config_json("copilot", 4567)
+    command = f"copilot --additional-mcp-config {subprocess.list2cmdline([inline])}"
+    assert f'"{plan_mcp_wiring.SERVER_NAME}"' not in command
+    assert plan_mcp_wiring.wire_command("copilot", command, 4567) == command
+
+
 def test_wire_copilot_keeps_user_additional_config() -> None:
     """copilot's flag is additive and repeatable, so a user's own
     --additional-mcp-config is augmented, not stepped aside for."""
@@ -216,7 +229,7 @@ def test_wire_copilot_keeps_user_additional_config() -> None:
 def test_wire_qwen_appends_inline_config_with_http_url() -> None:
     wired = plan_mcp_wiring.wire_command("qwen", "qwen --yolo", 4567, pane_id="p1")
     inline = plan_mcp_wiring.config_json("qwen", 4567, "p1")
-    assert wired == f"qwen --yolo --mcp-config {shlex.quote(inline)}"
+    assert wired == f"qwen --yolo --mcp-config {osplat.paths.quote_arg(inline)}"
     entry = json.loads(inline)["mcpServers"][plan_mcp_wiring.SERVER_NAME]
     # qwen has no "type" discriminator: httpUrl is streamable HTTP, while a
     # plain "url" would be read as SSE.
@@ -431,6 +444,7 @@ def test_wire_cursor_git_exclude_ignores_a_commented_mention(tmp_path: Path) -> 
     assert lines[-1] == ".cursor/mcp.json"
 
 
+@pytest.mark.skipif(not osplat.paths.enforces_posix_modes(), reason="POSIX mode bits")
 def test_wire_cursor_keeps_the_permissions_the_users_file_had(tmp_path: Path) -> None:
     """cursor's mcp.json is where people put API keys for their own servers.
     Rewriting it must not widen a mode the user tightened."""
@@ -574,7 +588,7 @@ async def test_terminal_create_wires_claude_pane(
     created = session.terminals.created[0]  # type: ignore[attr-defined]
     inline = plan_mcp_wiring.config_json("claude", 4567, "pane-1")
     assert created["command"][2] == (
-        f"claude --dangerously-skip-permissions --mcp-config {shlex.quote(inline)}"
+        f"claude --dangerously-skip-permissions --mcp-config {osplat.paths.quote_arg(inline)}"
     )
     assert "pane=pane-1" in inline
     assert plan_mcp_wiring.caller_token() in inline

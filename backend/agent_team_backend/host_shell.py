@@ -12,13 +12,13 @@ import asyncio
 import os
 import re
 import shlex
-import sys
 import tempfile
 from pathlib import Path
 from typing import Mapping, Sequence
 
 import yaml
 
+from .osplat import paths, secret_files, terminal_backend
 from .git_security import (
     PublicRemoteTarget,
     assert_public_git_config_safe,
@@ -255,8 +255,8 @@ def parse_allowlisted_command(command: str) -> list[str]:
     if not isinstance(command, str) or not command.strip() or _SHELL_SYNTAX.search(command):
         raise ValueError("command must be one allowlisted executable invocation")
     try:
-        args = shlex.split(command, posix=True)
-    except ValueError as exc:
+        args = terminal_backend.parse_command(command)
+    except (ValueError, OSError) as exc:
         raise ValueError("command quoting is invalid") from exc
     return validate_argv(args)
 
@@ -549,8 +549,8 @@ def parse_public_allowlisted_command(
     if not isinstance(command, str) or not command.strip() or _SHELL_SYNTAX.search(command):
         raise _public_policy_error()
     try:
-        args = shlex.split(command, posix=True)
-    except ValueError as exc:
+        args = terminal_backend.parse_command(command)
+    except (ValueError, OSError) as exc:
         raise _public_policy_error() from exc
     return validate_public_argv(args, cwd=cwd, workspace_root=workspace_root)
 
@@ -560,18 +560,13 @@ def _platform_config_home(home: Path | None, xdg_config_home: str | None) -> Pat
         return Path(xdg_config_home).expanduser()
     if home is None:
         return None
-    if sys.platform == "darwin":
-        return home / "Library" / "Application Support"
-    if os.name == "nt":
-        appdata = os.environ.get("APPDATA")
-        return Path(appdata).expanduser() if appdata else home / "AppData" / "Roaming"
-    return home / ".config"
+    return paths.config_home(home)
 
 
 def _provider_config_path(executable: str) -> Path | None:
     """Resolve the provider's existing auth config without exposing it."""
     source_env = os.environ
-    home_value = source_env.get("HOME")
+    home_value = source_env.get(paths.home_env_var())
     home = Path(home_value).expanduser() if home_value else None
     xdg_config_home = source_env.get("XDG_CONFIG_HOME")
     if executable == "gh":
@@ -580,10 +575,11 @@ def _provider_config_path(executable: str) -> Path | None:
             return Path(configured_dir).expanduser() / "hosts.yml"
         if xdg_config_home:
             return Path(xdg_config_home).expanduser() / "gh" / "hosts.yml"
-        if os.name == "nt":
-            appdata = source_env.get("APPDATA")
-            if appdata:
-                return Path(appdata).expanduser() / "GitHub CLI" / "hosts.yml"
+        # gh is the one tool that names its Windows directory differently
+        # (`%APPDATA%\GitHub CLI`) instead of following `config_home`.
+        roaming = paths.roaming_app_data()
+        if roaming is not None:
+            return roaming.expanduser() / "GitHub CLI" / "hosts.yml"
         return home / ".config" / "gh" / "hosts.yml" if home else None
 
     configured_dir = source_env.get("GLAB_CONFIG_DIR")
@@ -612,19 +608,10 @@ def _read_provider_yaml(path: Path | None) -> dict:
 
 
 def _write_private_yaml(path: Path, value: dict) -> None:
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    secret_files.make_private_dir(path.parent)
     serialized = yaml.safe_dump(value, default_flow_style=False, sort_keys=False)
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            stream.write(serialized)
-    except Exception:
-        try:
-            os.close(descriptor)
-        except OSError:
-            pass
-        raise
-    os.chmod(path, 0o600)
+    # Plain content: the provider CLI reads this projected config itself.
+    secret_files.write_private_plain(path, serialized.encode("utf-8"))
 
 
 def _project_gh_auth(
@@ -746,7 +733,7 @@ def _prepare_public_provider_git_context(
     isolated_path: Path, target: PublicRemoteTarget, workspace_root: str, env: dict[str, str]
 ) -> None:
     git_dir = isolated_path / "provider-git"
-    git_dir.mkdir(mode=0o700)
+    secret_files.make_private_dir(git_dir)
     config = (
         "[core]\n"
         "\trepositoryformatversion = 0\n"
@@ -756,17 +743,7 @@ def _prepare_public_provider_git_context(
     )
     (git_dir / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
     config_path = git_dir / "config"
-    descriptor = os.open(config_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            stream.write(config)
-    except Exception:
-        try:
-            os.close(descriptor)
-        except OSError:
-            pass
-        raise
-    os.chmod(config_path, 0o600)
+    secret_files.write_private_plain(config_path, config.encode("utf-8"))
     env["GIT_DIR"] = str(git_dir)
     env["GIT_WORK_TREE"] = str(Path(workspace_root).resolve())
 
@@ -840,6 +817,15 @@ async def _read_stdout_capped(
                 break
         if truncated and process.returncode is None:
             process.kill()
+        if truncated:
+            # Keep reading (and dropping) until the killed child's end of the
+            # pipe closes. `process.wait()` resolves only once every pipe has
+            # disconnected, and a stream that paused its transport on a full
+            # buffer issues no further read, so it never sees EOF unless it
+            # is drained — under the Proactor loop that was a hang until the
+            # caller's timeout, reported as "not truncated".
+            while await process.stdout.read(_CAPPED_READ_CHUNK):
+                pass
         stderr = await stderr_task
     except BaseException:
         stderr_task.cancel()
@@ -939,13 +925,12 @@ async def run_public_allowlisted_text(
         with tempfile.TemporaryDirectory(prefix="navide-public-cli-") as isolated_home:
             isolated_path = Path(isolated_home)
             config_home = isolated_path / "config"
-            config_home.mkdir(mode=0o700)
-            (config_home / "gh").mkdir(mode=0o700)
-            (config_home / "glab").mkdir(mode=0o700)
+            secret_files.make_private_dir(config_home)
+            secret_files.make_private_dir(config_home / "gh")
+            secret_files.make_private_dir(config_home / "glab")
             env = {
                 "PATH": os.environ.get("PATH", os.defpath),
-                "HOME": isolated_home,
-                "TMPDIR": isolated_home,
+                **paths.isolated_home_env(isolated_path),
                 "XDG_CONFIG_HOME": str(config_home),
                 "GH_CONFIG_DIR": str(config_home / "gh"),
                 "GLAB_CONFIG_DIR": str(config_home / "glab"),
@@ -976,7 +961,7 @@ async def run_public_allowlisted_text(
                 )
             if command[0] == "git":
                 hooks_path = isolated_path / "hooks"
-                hooks_path.mkdir(mode=0o700)
+                secret_files.make_private_dir(hooks_path)
                 command = [
                     "git",
                     "-c",
