@@ -690,3 +690,168 @@ async def test_a_host_request_carries_an_empty_caller_pane_id(
     await task
     assert result["ok"] is True
     assert broadcasts[0]["payload"]["caller_pane_id"] == ""
+
+
+# ── workspace_open / workspace_switch ────────────────────────────────────────
+# The two workspace actions as tools of their own: open keeps ui.workspace.open's
+# global routing (no window owns a workspace that is not open yet), switch is
+# addressed to the caller's own window — the only window "switch" can mean.
+
+
+async def _answer_with(result: dict[str, Any]) -> None:
+    for _ in range(200):
+        keys = list(plan_mcp._ui_invoke_pending.pending)
+        if keys:
+            plan_mcp.resolve_ui_invoke(keys[0], {"ok": True, "result": result, "error": None})
+            return
+        await asyncio.sleep(0.005)
+    raise AssertionError("no pending ui.invoke request appeared")
+
+
+@pytest.mark.asyncio
+async def test_workspace_open_sends_ui_workspace_open_to_any_window(
+    broadcasts: list[dict[str, Any]],
+    addressed: list[tuple[Any, dict[str, Any]]],
+    unicasts: list[dict[str, Any]],
+) -> None:
+    task = asyncio.create_task(_answer("open"))
+    result = await plan_mcp.workspace_open("/ws/beta", _ctx())
+    await task
+
+    assert result == {"ok": True, "path": "/ws/beta"}
+    assert broadcasts == []
+    assert addressed == []
+    assert len(unicasts) == 1
+    payload = unicasts[0]["payload"]
+    assert unicasts[0]["type"] == "ui.invoke.request"
+    assert payload["op"] == "invoke"
+    assert payload["action"] == "ui.workspace.open"
+    assert payload["args"] == {"path": "/ws/beta"}
+    assert payload["global"] is True
+    assert payload["addressed"] is False
+
+
+@pytest.mark.asyncio
+async def test_workspace_open_from_a_pane_is_still_global_not_addressed_home(
+    addressed: list[tuple[Any, dict[str, Any]]], unicasts: list[dict[str, Any]]
+) -> None:
+    """The pane's own window is not the one being asked for: the target
+    workspace may belong to no window yet."""
+    agent_messaging.register("pa", "worker", "/ws/alpha", agent_key="claude", owner=_Window())
+
+    task = asyncio.create_task(_answer("open"))
+    result = await plan_mcp.workspace_open("/ws/beta", _pane_ctx("pa"))
+    await task
+
+    assert result["ok"] is True
+    assert addressed == []
+    assert len(unicasts) == 1
+    assert unicasts[0]["payload"]["global"] is True
+
+
+@pytest.mark.asyncio
+async def test_workspace_open_refuses_an_empty_path_without_asking_a_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _no_window_reached(monkeypatch)
+    result = await plan_mcp.workspace_open("", _ctx())
+    assert result["ok"] is False
+    assert "path" in result["error"]
+    assert plan_mcp._ui_invoke_pending.pending == {}
+
+
+@pytest.mark.asyncio
+async def test_workspace_open_passes_the_routing_error_through(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_unicast_any(_event: dict[str, Any]) -> bool:
+        return False
+
+    monkeypatch.setattr(app, "unicast_any", fake_unicast_any)
+    result = await plan_mcp.workspace_open("/ws/delta", _ctx())
+    assert result["ok"] is False
+    assert result["error_code"] == "ui_no_window"
+
+
+@pytest.mark.asyncio
+async def test_workspace_switch_from_a_pane_asks_its_own_window(
+    addressed: list[tuple[Any, dict[str, Any]]],
+    broadcasts: list[dict[str, Any]],
+    unicasts: list[dict[str, Any]],
+) -> None:
+    window = _Window()
+    agent_messaging.register("pa", "worker", "/ws/alpha", agent_key="claude", owner=window)
+
+    task = asyncio.create_task(_answer_with({"path": "/ws/beta"}))
+    result = await plan_mcp.workspace_switch("/ws/beta", _pane_ctx("pa"))
+    await task
+
+    assert result == {"ok": True, "path": "/ws/beta"}
+    assert broadcasts == []
+    assert unicasts == []
+    assert len(addressed) == 1
+    session, event = addressed[0]
+    assert session is window
+    payload = event["payload"]
+    assert payload["op"] == "invoke"
+    assert payload["action"] == "ui.workspace.switch"
+    assert payload["args"] == {"path": "/ws/beta"}
+    assert payload["workspace_path"] == "/ws/alpha"
+    assert payload["global"] is False
+    assert payload["addressed"] is True
+    assert payload["caller_pane_id"] == "pa"
+
+
+@pytest.mark.asyncio
+async def test_workspace_switch_passes_the_windows_refusal_through(
+    addressed: list[tuple[Any, dict[str, Any]]],
+) -> None:
+    agent_messaging.register("pa", "worker", "/ws/alpha", agent_key="claude", owner=_Window())
+
+    async def refuse() -> None:
+        for _ in range(200):
+            keys = list(plan_mcp._ui_invoke_pending.pending)
+            if keys:
+                plan_mcp.resolve_ui_invoke(
+                    keys[0],
+                    {
+                        "ok": False,
+                        "result": None,
+                        "error": "this window does not hold /ws/gamma; use ui.workspace.open",
+                    },
+                )
+                return
+            await asyncio.sleep(0.005)
+        raise AssertionError("no pending ui.invoke request appeared")
+
+    task = asyncio.create_task(refuse())
+    result = await plan_mcp.workspace_switch("/ws/gamma", _pane_ctx("pa"))
+    await task
+
+    assert result["ok"] is False
+    assert "ui.workspace.open" in result["error"]
+    assert len(addressed) == 1
+
+
+@pytest.mark.asyncio
+async def test_workspace_switch_refuses_a_host_caller_without_asking_a_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _no_window_reached(monkeypatch)
+    result = await plan_mcp.workspace_switch("/ws/beta", _ctx())
+    assert result["ok"] is False
+    assert "pane caller" in result["error"]
+    assert "ui_invoke" in result["error"]
+    assert plan_mcp._ui_invoke_pending.pending == {}
+
+
+@pytest.mark.asyncio
+async def test_workspace_switch_refuses_an_empty_path_without_asking_a_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agent_messaging.register("pa", "worker", "/ws/alpha", agent_key="claude", owner=_Window())
+    _no_window_reached(monkeypatch)
+    result = await plan_mcp.workspace_switch("", _pane_ctx("pa"))
+    assert result["ok"] is False
+    assert "path" in result["error"]
+    assert plan_mcp._ui_invoke_pending.pending == {}

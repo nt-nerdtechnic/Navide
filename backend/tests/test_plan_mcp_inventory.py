@@ -654,8 +654,12 @@ async def test_the_inventory_tools_are_registered_with_their_declared_arguments(
         "pipeline_status",
         "skills_list",
         "cli_message_log",
+        "workspace_open",
+        "workspace_switch",
     }
     # The Context parameter is injected, never asked of the agent.
+    for name in ("workspace_open", "workspace_switch"):
+        assert set(tools[name].inputSchema.get("properties") or {}) == {"path"}
     assert set(tools["cli_usage"].inputSchema.get("properties") or {}) == {"agent"}
     assert set(tools["pipeline_status"].inputSchema.get("properties") or {}) == {
         "workspace_path"

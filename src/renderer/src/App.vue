@@ -7758,6 +7758,44 @@ registerCommand('ui.workspace.open', async (args) => {
   if (!path) throw new Error('ui.workspace.open requires path')
   await window.agentTeam?.openMainWindow?.({ workspace_path: path })
 })
+// Switch THIS window to another workspace it already holds (one window, many
+// projects). A path this window does not hold is refused rather than opened on
+// the side — open has its own routing (global, any window), and answering it
+// here would hide that.
+//
+// It goes through switchToWorkspace, the one entry point every switch takes
+// (App.switchLoading.test.ts pins that), not onWorkspaceBrowse directly: the
+// browse alone leaves the window half-switched — switchToWorkspace is what
+// loads the entered workspace right away (onWorkspaceCheck), moves the focus
+// off a pane that is no longer on screen, covers the stage meanwhile, and
+// reports a browse that quietly declined.
+//
+// switchToWorkspace asks the user before aborting a running pipeline. An MCP
+// caller cannot answer that dialog and would only run into the reply timeout,
+// so the condition is refused up front with the reason instead. Its other
+// ways out are silent returns (detached window, workspace open in another
+// window), so the outcome is checked afterwards rather than assumed.
+registerCommand('ui.workspace.switch', async (args) => {
+  const path = (args as { path?: string } | undefined)?.path
+  if (!path) throw new Error('ui.workspace.switch requires path')
+  if (!workspaceOrder.value.some((w) => normWs(w) === normWs(path))) {
+    throw new Error(`this window does not hold ${path}; use ui.workspace.open to open it`)
+  }
+  if (pipeline.state === 'running') {
+    throw new Error(
+      'a pipeline is running in this window; abort it first or switch from the sidebar',
+    )
+  }
+  await switchToWorkspace(path)
+  if (normWs(currentWorkspace.value) !== normWs(path)) {
+    throw new Error(
+      `this window did not switch to ${path} (it may be open in another window, or ` +
+        'this window cannot switch); the workspace on screen is still ' +
+        currentWorkspace.value,
+    )
+  }
+  return { path: currentWorkspace.value }
+})
 registerCommand('ui.layout.setMode', (args) => {
   const mode = (args as { mode?: LayoutMode } | undefined)?.mode
   if (!mode) throw new Error('ui.layout.setMode requires mode')

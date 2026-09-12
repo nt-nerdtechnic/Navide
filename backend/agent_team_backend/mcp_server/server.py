@@ -4544,6 +4544,83 @@ async def workspace_list(ctx: Context) -> dict[str, Any]:
     return await asyncio.to_thread(_recent_workspace_rows)
 
 
+@server.tool()
+async def workspace_open(path: str, ctx: Context) -> dict[str, Any]:
+    """Open `path` as a workspace in Navide.
+
+    Whether that is a new window or an existing one that already has the
+    project open is Navide's decision. `path` must be the absolute path of a
+    project root — the kind `workspace_list` reports. This is the same as
+    `ui_invoke` with action "ui.workspace.open", without having to look the
+    action up first; like it, the request goes to any one live window (the
+    workspace may not have a window yet), so it errors only when no Navide
+    window is open at all.
+
+    Returns {ok: true, path} once the window has handled the request, or the
+    error the window (or the routing) reported.
+    """
+    caller = _resolve_caller(ctx)
+    if not path:
+        return {"ok": False, "result": None, "error": "workspace_open requires path"}
+    result = await _ui_request(
+        "",
+        "invoke",
+        caller=caller,
+        action="ui.workspace.open",
+        args={"path": path},
+        is_global=True,
+    )
+    if not result.get("ok"):
+        return result
+    return {"ok": True, "path": path}
+
+
+@server.tool()
+async def workspace_switch(path: str, ctx: Context) -> dict[str, Any]:
+    """Switch the window you are in to another workspace it already holds.
+
+    One Navide window can hold several projects (the sidebar lists them);
+    this puts `path` on screen in YOUR window. Panes are not affected — the
+    ones of the workspace being left keep running. `path` must be one the
+    window already holds: otherwise the window refuses with an error that
+    points at `workspace_open`, which is the tool for opening a project. The
+    window also refuses while a pipeline is running in it (a switch would
+    abort it, and the confirmation that asks is not yours to answer): call
+    `pipeline_abort` first, or let the user switch from the sidebar.
+
+    Only a CLI pane can call this, because "your window" is the window that
+    hosts the calling pane. A host or external caller has no window of its
+    own and gets ok: false — it can use `ui_invoke` with a workspace_path and
+    action "ui.workspace.switch" instead.
+
+    Returns {ok: true, path} with the workspace now on screen, or the error
+    the window reported.
+    """
+    caller = _resolve_caller(ctx)
+    if caller.kind != "pane":
+        return {
+            "ok": False,
+            "result": None,
+            "error": (
+                "workspace_switch needs a pane caller; use ui_invoke with a "
+                "workspace_path instead"
+            ),
+        }
+    if not path:
+        return {"ok": False, "result": None, "error": "workspace_switch requires path"}
+    result = await _ui_request(
+        _caller_workspace(caller),
+        "invoke",
+        caller=caller,
+        action="ui.workspace.switch",
+        args={"path": path},
+    )
+    if not result.get("ok"):
+        return result
+    switched = result.get("result") or {}
+    return {"ok": True, "path": switched.get("path") if isinstance(switched, dict) else path}
+
+
 def _pipeline_inventory() -> dict[str, Any]:
     """Pipelines with their stages, the active pipeline id, and the roles.
 
