@@ -305,6 +305,10 @@ class TestLaunching:
         )
         assert _windows.paths.pty_launch_parts(r"C:\Git\git.exe") == (r"C:\Git\git.exe", [])
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="the exec bit decides the answer, and NTFS has none",
+    )
     def test_posix_resolution_is_the_plain_path_search(self, tmp_path):
         from agent_team_backend.osplat import _darwin, _linux
 
@@ -341,8 +345,12 @@ class TestLaunching:
     def test_posix_command_splitting_is_unchanged(self):
         import shlex
 
+        from agent_team_backend.osplat import _posix
+
         text = "claude -p 'two words' --resume abc"
-        assert osplat.terminal_backend.parse_command(text) == shlex.split(text)
+        # The POSIX backend is the subject; on Windows the host parser is
+        # CommandLineToArgvW, which reads the single quotes literally.
+        assert _posix.terminal_backend.parse_command(text) == shlex.split(text)
 
 
 #: What git_service hands the seam: this build's own executable plus the entry

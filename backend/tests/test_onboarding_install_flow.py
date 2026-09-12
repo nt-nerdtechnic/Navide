@@ -113,6 +113,25 @@ def test_spawn_command_matches_the_name_as_windows_spells_it(
     ]
 
 
+def test_spawn_command_matches_the_bare_pinned_name_on_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pane command names the CLI without an extension, which is not one of
+    the candidates Windows tries on PATH — the rewrite still has to see it."""
+    from agent_team_backend.osplat import _windows
+
+    monkeypatch.setattr(app_mod.osplat, "paths", _windows.paths)
+    monkeypatch.setattr(
+        _windows.paths, "resolve_program",
+        lambda name, *, path=None: r"C:\npm\agent.cmd" if Path(name).stem == "agent" else None,
+    )
+    monkeypatch.setattr(ob, "resolve_executable", lambda _dep: r"C:\npm\agent.cmd")
+    command = ["cmd.exe", "/d", "/c", "cursor-agent --resume abc"]
+    assert app_mod._command_with_installed_cli_alias("cursor", command) == [
+        "cmd.exe", "/d", "/c", r"C:\npm\agent.cmd --resume abc",
+    ]
+
+
 def test_spawn_command_untouched_for_a_cli_without_aliases(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

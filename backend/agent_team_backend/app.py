@@ -2468,13 +2468,16 @@ def _names_a_known_command(program: str, names: "tuple[str, ...]") -> bool:
 
     A Windows PATH lookup answers `claude.cmd`, so comparing the bare stem
     against the pinned name would say no and leave the rewrite undone — the
-    very rewrite that exists to make the spawn work.
+    very rewrite that exists to make the spawn work. The pinned name itself
+    stays accepted: a pane command names the CLI without an extension, which
+    is not among the candidates Windows would try on PATH.
     """
-    spelled = {
+    spelled = {name.casefold() for name in names}
+    spelled.update(
         candidate.casefold()
         for name in names
         for candidate in osplat.paths.executable_candidates(name)
-    }
+    )
     return Path(program).name.casefold() in spelled
 
 
