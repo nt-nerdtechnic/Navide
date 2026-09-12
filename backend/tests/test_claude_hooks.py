@@ -42,7 +42,9 @@ def _run_hook(tmp_path, event_kind: str, body: bytes, endpoint: str = "claude"):
             pass
 
     server = HTTPServer(("127.0.0.1", 0), Handler)
-    server.timeout = 5
+    # Generous because powershell.exe can take seconds to start on a busy
+    # Windows runner; sh returns long before any of these are reached.
+    server.timeout = 30
     thread = threading.Thread(target=server.handle_request)
     thread.start()
     port_file.write_text(str(server.server_port), encoding="utf-8")
@@ -50,10 +52,10 @@ def _run_hook(tmp_path, event_kind: str, body: bytes, endpoint: str = "claude"):
 
     try:
         result = subprocess.run(
-            argv, input=payload, text=True, capture_output=True, timeout=10, check=False
+            argv, input=payload, text=True, capture_output=True, timeout=40, check=False
         )
     finally:
-        thread.join(timeout=6)
+        thread.join(timeout=31)
         server.server_close()
 
     assert received == [payload.encode()]
