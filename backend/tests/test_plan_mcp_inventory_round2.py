@@ -11,10 +11,16 @@ What these pin is what each one must not become: a clear that empties a feed
 without telling the windows drawing it, a token answer larger than the question
 it was asked in aid of, an instruction-file reader that will read any path it is
 handed, and a close that reports success when no window took it.
+
+mcp_list and prompt_list came later and complete the Settings pages' MCP
+counterparts (Memory / Skills / MCP / Prompts): what they pin is that a managed
+server row never reaches an agent unmasked, and that a prompt listing carries
+names and not the prompt text.
 """
 
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -23,8 +29,10 @@ import pytest
 
 from agent_team_backend import agent_messaging
 from agent_team_backend import app as backend_app
+from agent_team_backend import native_mcp
 from agent_team_backend import native_memory
 from agent_team_backend.fs_service import FsError
+from agent_team_backend.mcp_settings import MCPSettingsError
 from agent_team_backend.plan_index import resolve_plan_root
 from agent_team_backend.mcp_server import (
     server as plan_mcp,
@@ -626,7 +634,269 @@ async def test_the_close_description_warns_that_it_ends_the_other_agents_work() 
     assert "cli_interrupt" in text
 
 
-# ── E. registration ─────────────────────────────────────────────────────────
+# ── E. mcp_list ─────────────────────────────────────────────────────────────
+
+
+_STDIO_ROW = {
+    "name": "ctx",
+    "enabled": True,
+    "transport": "stdio",
+    "command": "npx",
+    "args": ["--api-key=abc", "https://h/?token=t"],
+    "env": {"API_KEY": "sk-1", "MODE": "fast"},
+}
+_HTTP_ROW = {
+    "name": "remote",
+    "enabled": False,
+    "transport": "http",
+    "url": "https://u:p@host/?api_key=x",
+    "headers": {"Authorization": "Bearer y", "Accept": "json"},
+}
+
+
+class _FakeMcpSettingsStore:
+    """Stands in for app.mcp_settings_store, which reads the real settings
+    file. Rows come back unmasked, exactly as the real store hands them out."""
+
+    path = Path("/nonexistent/mcp.json")
+
+    def __init__(self, rows: list[dict[str, Any]] | None = None, error: str = "") -> None:
+        self._rows = rows or []
+        self._error = error
+
+    def list_servers(self) -> list[dict[str, Any]]:
+        if self._error:
+            raise MCPSettingsError(self._error)
+        return copy.deepcopy(self._rows)
+
+
+class _FakeMcpManager:
+    def __init__(self, live: list[dict[str, Any]]) -> None:
+        self._live = live
+
+    async def list_status(self) -> list[dict[str, Any]]:
+        return self._live
+
+
+def _native_row() -> Any:
+    return native_mcp.NativeMcpServer(
+        name="own",
+        agent="claude",
+        transport="stdio",
+        path="/home/u/.claude.json",
+        command="uvx",
+        args=("--token", native_mcp.REDACTED_SECRET),
+    )
+
+
+@pytest.fixture
+def mcp_sources(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        backend_app, "mcp_settings_store", _FakeMcpSettingsStore([_STDIO_ROW, _HTTP_ROW])
+    )
+    monkeypatch.setattr(
+        backend_app,
+        "mcp_manager",
+        _FakeMcpManager(
+            [{"name": "ctx", "status": "connected", "tool_count": 3, "tools": ["a", "b", "c"]}]
+        ),
+    )
+    monkeypatch.setattr(native_mcp, "scan", lambda home=None: [_native_row()])
+    monkeypatch.setattr(
+        native_mcp,
+        "agent_targets",
+        lambda: [{"key": "claude", "label": "Claude", "state": "wired", "reflects": True}],
+    )
+
+
+@pytest.mark.asyncio
+async def test_mcp_list_masks_every_secret_the_settings_store_hands_out(
+    mcp_sources: None,
+) -> None:
+    """The store's rows are unmasked because the Settings page round-trips
+    them. An agent must never see the raw values — in env, in headers, inside
+    an argument, or inside a URL."""
+    agent_messaging.register("pa", "caller", "/ws")
+
+    result = await plan_mcp.mcp_list(_ctx())
+
+    by_name = {row["name"]: row for row in result["servers"]}
+    stdio = by_name["ctx"]
+    assert stdio["env"] == {"API_KEY": "***", "MODE": "fast"}
+    assert stdio["args"] == ["--api-key=***", "https://h/?token=***"]
+    assert stdio["command"] == "npx"
+    http = by_name["remote"]
+    assert http["url"] == "https://***@host/?api_key=***"
+    assert http["headers"] == {"Authorization": "***", "Accept": "json"}
+    flat = str(result)
+    for secret in ("sk-1", "abc", "token=t", "u:p@", "api_key=x", "Bearer y"):
+        assert secret not in flat
+
+
+@pytest.mark.asyncio
+async def test_mcp_list_merges_live_status_and_keeps_the_answer_a_summary(
+    mcp_sources: None,
+) -> None:
+    agent_messaging.register("pa", "caller", "/ws")
+
+    result = await plan_mcp.mcp_list(_ctx())
+
+    by_name = {row["name"]: row for row in result["servers"]}
+    assert by_name["ctx"]["status"] == "connected"
+    assert by_name["ctx"]["tool_count"] == 3
+    # A disabled server is "disabled" whatever the manager says about it.
+    assert by_name["remote"]["status"] == "disabled"
+    assert by_name["remote"]["tool_count"] == 0
+    # The tool list is what makes the WS payload large; the summary leaves it out.
+    assert all("tools" not in row for row in result["servers"])
+    # The settings file's location is for the Settings page, not for an agent.
+    assert "path" not in result
+    assert set(result) == {"servers", "native", "agents"}
+    assert result["native"][0]["name"] == "own"
+    assert result["native"][0]["agent"] == "claude"
+    assert result["agents"][0]["key"] == "claude"
+
+
+@pytest.mark.asyncio
+async def test_mcp_list_answers_an_unreadable_settings_file_with_ok_false(
+    mcp_sources: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        backend_app, "mcp_settings_store", _FakeMcpSettingsStore(error="invalid JSON at line 3")
+    )
+    agent_messaging.register("pa", "caller", "/ws")
+
+    result = await plan_mcp.mcp_list(_ctx())
+
+    assert result == {"ok": False, "error": "invalid JSON at line 3"}
+
+
+# ── F. prompt_list ──────────────────────────────────────────────────────────
+
+
+_PROMPT_SKILLS = [
+    {
+        "id": "advance",
+        "name": "Advance",
+        "icon": "play",
+        "description": "Keep going",
+        "prompt": "Continue with the next step.",
+        "resumePrompt": "Resume where you left off.",
+        "maxTurns": 5,
+        "category": "flow",
+        "enabled": True,
+        "isDefault": False,
+    },
+    {
+        "id": "review",
+        "name": "Review",
+        "icon": "eye",
+        "description": "Review the diff",
+        "prompt": "Review the current diff for bugs.",
+        "resumePrompt": "",
+        "maxTurns": 1,
+        "category": "quality",
+        "enabled": True,
+        "isDefault": True,
+    },
+]
+
+
+class _FakeUiSettingsStore:
+    def __init__(self, doc: dict[str, Any]) -> None:
+        self._doc = doc
+
+    def get(self) -> dict[str, Any]:
+        return self._doc
+
+
+@pytest.mark.asyncio
+async def test_prompt_list_returns_metadata_and_no_prompt_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        backend_app, "ui_settings_store", _FakeUiSettingsStore({"prompt-skills": _PROMPT_SKILLS})
+    )
+    agent_messaging.register("pa", "caller", "/ws")
+
+    result = await plan_mcp.prompt_list(_ctx())
+
+    assert [row["id"] for row in result["skills"]] == ["advance", "review"]
+    assert result["skills"][0] == {
+        "id": "advance",
+        "name": "Advance",
+        "icon": "play",
+        "description": "Keep going",
+        "category": "flow",
+        "enabled": True,
+        "isDefault": False,
+        "maxTurns": 5,
+    }
+    assert all("prompt" not in row and "resumePrompt" not in row for row in result["skills"])
+    assert result["default_id"] == "review"
+    assert "note" not in result
+
+
+@pytest.mark.asyncio
+async def test_prompt_list_reads_one_skill_in_full(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        backend_app, "ui_settings_store", _FakeUiSettingsStore({"prompt-skills": _PROMPT_SKILLS})
+    )
+    agent_messaging.register("pa", "caller", "/ws")
+
+    result = await plan_mcp.prompt_list(_ctx(), id="advance")
+
+    assert result == {"skill": _PROMPT_SKILLS[0]}
+    assert result["skill"]["prompt"] == "Continue with the next step."
+    assert result["skill"]["resumePrompt"] == "Resume where you left off."
+
+
+@pytest.mark.asyncio
+async def test_prompt_list_refuses_an_unknown_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        backend_app, "ui_settings_store", _FakeUiSettingsStore({"prompt-skills": _PROMPT_SKILLS})
+    )
+    agent_messaging.register("pa", "caller", "/ws")
+
+    result = await plan_mcp.prompt_list(_ctx(), id="nope")
+
+    assert result["ok"] is False
+    assert "nope" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_prompt_list_when_nothing_was_ever_saved(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Boundary: the key is absent until the user first saves, and the builtin
+    skill the app seeds then lives in the renderer, so the backend can only say
+    that much."""
+    monkeypatch.setattr(backend_app, "ui_settings_store", _FakeUiSettingsStore({"other": 1}))
+    agent_messaging.register("pa", "caller", "/ws")
+
+    result = await plan_mcp.prompt_list(_ctx())
+
+    assert result["skills"] == []
+    assert result["default_id"] == ""
+    assert result["note"] == "no prompt skills saved yet; the app seeds a builtin one on first use"
+
+
+@pytest.mark.asyncio
+async def test_prompt_list_skips_rows_that_are_not_objects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        backend_app,
+        "ui_settings_store",
+        _FakeUiSettingsStore({"prompt-skills": ["junk", None, _PROMPT_SKILLS[1]]}),
+    )
+    agent_messaging.register("pa", "caller", "/ws")
+
+    result = await plan_mcp.prompt_list(_ctx())
+
+    assert [row["id"] for row in result["skills"]] == ["review"]
+    assert "note" not in result
+
+
+# ── G. registration ─────────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -637,6 +907,8 @@ async def test_the_round_two_tools_are_registered_with_their_declared_arguments(
         "cli_token_stats",
         "memory_list",
         "cli_close_agent",
+        "mcp_list",
+        "prompt_list",
     }
     # The Context parameter is injected, never asked of the agent.
     assert set(tools["preview_clear"].inputSchema.get("properties") or {}) == {
@@ -654,3 +926,5 @@ async def test_the_round_two_tools_are_registered_with_their_declared_arguments(
         "target",
         "pane_id",
     }
+    assert set(tools["mcp_list"].inputSchema.get("properties") or {}) == set()
+    assert set(tools["prompt_list"].inputSchema.get("properties") or {}) == {"id"}

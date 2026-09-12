@@ -396,15 +396,17 @@ watcher 兜底，以 `source: "watcher"` 且無歸屬的形式記錄。因此 `p
 
 ### Workspace、Skills 與指示檔
 
-三個唯讀盤點。它們各自回答一個上面那些 Tool 預設你已經知道答案的問題：哪些路徑
-是 Workspace、寫指示給某個 CLI 之前它本來就拿到了什麼、以及這個專案本身已經說過
-什麼。
+五個唯讀盤點。它們各自回答一個上面那些 Tool 預設你已經知道答案的問題：哪些路徑
+是 Workspace、寫指示給某個 CLI 之前它本來就拿到了什麼、這個專案本身已經說過
+什麼、設定了哪些 MCP Server、以及使用者存了哪些 Prompt。
 
 | Tool | 參數 | 功能 |
 |---|---|---|
 | `workspace_list` | — | Navide 知道的專案，最近開啟的在前 —— `plan_create`、`preview_record`、`cli_open_agent` 都要一個專案根目錄的絕對路徑，而這就是那份清單。回傳 `{workspaces, live_pane_workspaces}`。每個 Workspace 帶著 Store 自己的紀錄（`path`、`name`、`last_opened_at`、`pinned`、`exists`），外加 `has_live_panes`：現在真的有 CLI Pane 跑在裡面時為真。優先挑這種 —— `has_live_panes` 為 false 的 Workspace 沒有任何 Navide 視窗在看它，寫進去的 Plan 或預覽根本不會呈現給使用者；`exists` 為 false 更嚴重，那是資料夾已經從磁碟上消失了。`live_pane_workspaces` 是那個 Live 集合本身（已解析）：Pane 可能跑在使用者從來沒從歡迎畫面開過的專案裡，那仍然是完全合法的 `workspace_path`，只是最近清單不會提到它 |
 | `skills_list` | — | Navide 管理的 Skills，以及其中哪些會送到你手上。Skill 是一包按需載入的指示資料夾；Navide 保有一個共用庫（使用者可以投遞給任何廠商），同時也反射各家 CLI 自己目錄裡的那些。自己動手寫指示之前先讀這個，或用它告訴使用者哪個 Skill 剛好涵蓋他問的事。回傳 `{skills, native, root, agents}`。每個共用 Skill 是 `{name, description, enabled, targets, managed, valid, native_conflict}` —— `targets` 為 null 代表每家廠商都收得到，是清單就代表只有那幾家，`enabled` 為 false 代表誰都收不到。每個 native 條目是 `{name, description, source, owner_agent, real_path, valid}`，也就是某家 CLI 本來就有的 Skill。`agents` 是每家廠商與它的投遞支援程度（`wired`／`planned`／`unsupported`），讓「沒有投遞」和「無法投遞」不會混在一起。`delivered_to_me` 是關於你的那一半 —— `{agent_key, skills, native_paths}`，也就是你自己的 CLI 實際被給了哪些；沒有 Pane 身分的呼叫端不會有這個欄位，因為它不是任何人的投遞對象。只有名稱與描述：Skill 的指示內容是你要用它的時候從它自己的資料夾讀，不是從這裡。唯讀 —— 要不要投遞某個 Skill 是使用者在 Settings 裡的決定 |
 | `memory_list` | `workspace_path`、`path=""` | 這裡的 CLI 會載入的指示檔 —— `CLAUDE.md`、`AGENTS.md`、`GEMINI.md` 等等，包含這個專案裡的與使用者家目錄裡的。不帶 `path` 時只列 Metadata：`{workspace_path, files, agents}`，每個檔案是 `scope`（`user` 或 `project`）、`path`、`relative`、`readers`（會載入它的廠商鍵）、`canonical`、`exists`、`size`、`modified`、`error`。還不存在的檔案一樣會被列出來，因為它標示的是「某個慣例該寫在哪裡」；`agents` 是每家廠商與 Navide 找它檔案的方式（`mapped` 或 `configured`）。帶 `path` 時回傳那一個檔案：`{workspace_path, file, path, text, exists, modified}` —— 而且路徑必須是這份清單報過的，其他一律拒絕，所以這不是一條讀任意檔案的路。唯讀：編輯指示檔是使用者在 Settings 裡的決定，這裡沒有對應的 Tool。沒有 Workspace 時只會列出 user 範圍的檔案 |
+| `mcp_list` | — | 這裡設定的 MCP Server —— Navide 自己以 Client 身分連接的那些（附即時狀態），以及各家 CLI 自己設定檔裡（`~/.claude.json`、`~/.codex/config.toml` 等）反射出來的那些，照檔案寫的呈現。回傳 `{servers, native, agents}`。每個 Navide 管理的 Server 是 `{name, enabled, transport, command, args, env}` 或 `{name, enabled, transport, url, headers}`，外加 `status`（`disabled`／`connected`／`error`／`unknown`）與 `tool_count`；工具清單本身不帶。每個 native 條目是 `{name, agent, transport, path, command, args, url, env, headers, enabled, valid, error}`。`agents` 是每家廠商與 Navide 對它 MCP 能做的事（`wired`／`planned`／`unsupported`），以及它自己的設定有沒有被反射。所有長得像憑證的值 —— env 與 header 的值、`--api-key=` 這類引數、URL 裡的 userinfo 與機密查詢參數 —— 都已經遮成 `***`；名稱與主機保留，條目才認得出來。全域清單，不分 Workspace。唯讀 —— 新增、啟用或編輯 Server 是使用者在 Settings 裡的決定 |
+| `prompt_list` | `id=""` | 使用者放在 Settings → Prompts 的 Prompt 技能 —— 從 App 對 CLI Pane 發射的已存指示。不帶 `id` 時只列 Metadata：`{skills, default_id}`，每個技能是 `{id, name, icon, description, category, enabled, isDefault, maxTurns}`，`default_id` 是標為預設的那個技能的 id（沒有則為 `""`）。使用者從沒存過任何一個時會多一個 `note`：App 會在第一次使用時植入一個內建技能，而那個從這裡看不到。帶 `id` 時回傳那一個技能的完整內容 —— `{skill}`，含 `prompt` 與 `resumePrompt`；未知的 id 回 `{ok: false, error}`。唯讀：建立或編輯是在 Settings 裡做的 |
 
 ### Pipeline
 

@@ -33,6 +33,7 @@ user-scope page.
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
@@ -222,6 +223,24 @@ def scan(home: Path | None = None) -> list[NativeMcpServer]:
     for source, path in native_sources(home):
         found.extend(_read_source(source, path))
     return found
+
+
+def mask_server_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Mask the secret-bearing fields of one managed-server row, the same way
+    scan() masks a native one. list_servers() hands rows out unmasked because
+    the Settings page edits them; anything that shows a row to an agent must
+    pass it through here first."""
+    masked = copy.deepcopy(row)
+    args = masked.get("args")
+    if isinstance(args, list):
+        masked["args"] = list(_mask_args(tuple(str(arg) for arg in args)))
+    url = masked.get("url")
+    if isinstance(url, str):
+        masked["url"] = _mask_url(url)
+    for field_name in ("env", "headers"):
+        if isinstance(masked.get(field_name), dict):
+            masked[field_name] = dict(_mask_map(masked[field_name]))
+    return masked
 
 
 def _read_source(source: NativeMcpSource, path: Path) -> list[NativeMcpServer]:

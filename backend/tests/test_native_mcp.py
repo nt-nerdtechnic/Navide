@@ -423,3 +423,46 @@ def test_the_roo_style_disabled_flag_is_honoured(tmp_path: Path) -> None:
 def test_every_reflected_agent_is_a_registered_vendor() -> None:
     """A source for an unknown agent would render nowhere in the matrix."""
     assert {source.agent for source in native_mcp.NATIVE_SOURCES} <= set(VENDORS)
+
+
+def test_mask_server_row_masks_a_stdio_row_without_touching_the_original() -> None:
+    """list_servers() rows are unmasked because the Settings page edits them;
+    the wrapper must mask the same three places scan() does, on a copy."""
+    row = {
+        "name": "a",
+        "enabled": True,
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["--api-key=abc", "https://h/?token=t", "--verbose"],
+        "env": {"API_KEY": "sk-1", "MODE": "fast"},
+    }
+    before = json.dumps(row, sort_keys=True)
+
+    masked = native_mcp.mask_server_row(row)
+
+    assert masked["args"] == ["--api-key=***", "https://h/?token=***", "--verbose"]
+    assert masked["env"] == {"API_KEY": native_mcp.REDACTED_SECRET, "MODE": "fast"}
+    assert masked["command"] == "npx"
+    assert masked["name"] == "a"
+    assert json.dumps(row, sort_keys=True) == before
+    assert masked["env"] is not row["env"]
+    assert masked["args"] is not row["args"]
+
+
+def test_mask_server_row_masks_an_http_row_without_touching_the_original() -> None:
+    row = {
+        "name": "b",
+        "enabled": False,
+        "transport": "http",
+        "url": "https://u:p@host/?api_key=x&mode=fast",
+        "headers": {"Authorization": "Bearer y", "Accept": "json"},
+    }
+    before = json.dumps(row, sort_keys=True)
+
+    masked = native_mcp.mask_server_row(row)
+
+    assert masked["url"] == "https://***@host/?api_key=***&mode=fast"
+    assert masked["headers"] == {"Authorization": native_mcp.REDACTED_SECRET, "Accept": "json"}
+    assert masked["enabled"] is False
+    assert json.dumps(row, sort_keys=True) == before
+    assert masked["headers"] is not row["headers"]

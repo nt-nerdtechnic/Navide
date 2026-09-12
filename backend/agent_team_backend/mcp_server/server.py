@@ -4420,6 +4420,23 @@ _NATIVE_SKILL_FIELDS = (
     "valid",
 )
 
+#: The ui-settings key the Prompts settings page saves its skills under. It
+#: must match PROMPT_SKILLS_SETTING_KEY in src/renderer/src/lib/promptSkills.ts
+#: (line 12); the backend has no other knowledge of that page's data.
+_PROMPT_SKILLS_SETTING_KEY = "prompt-skills"
+#: A prompt skill's `prompt` and `resumePrompt` are the instructions themselves
+#: — the fields a listing leaves behind; prompt_list(id=...) returns them.
+_PROMPT_SKILL_FIELDS = (
+    "id",
+    "name",
+    "icon",
+    "description",
+    "category",
+    "enabled",
+    "isDefault",
+    "maxTurns",
+)
+
 #: How many of the caller's own messages one read may return.
 _MESSAGE_LOG_MAX_LIMIT = 200
 #: Rows read before the privacy filter runs. The log is one flat tail of
@@ -5040,6 +5057,126 @@ async def memory_list(
     # One thread for the whole inventory: scan() stats every candidate in the
     # home and the workspace, and read() opens a file.
     return await asyncio.to_thread(_memory_inventory, chosen, str(path or "").strip())
+
+
+def _managed_mcp_rows() -> list[dict[str, Any]]:
+    """The servers Navide itself connects to, secrets masked.
+
+    list_servers() is unmasked because the Settings page round-trips it; every
+    row here goes through native_mcp.mask_server_row before it leaves.
+    """
+    from agent_team_backend import app as _app
+    from agent_team_backend import native_mcp
+
+    return [native_mcp.mask_server_row(row) for row in _app.mcp_settings_store.list_servers()]
+
+
+def _native_mcp_inventory() -> dict[str, Any]:
+    """What each CLI's own config declares — scan() masks as it reads."""
+    from agent_team_backend import native_mcp
+
+    return {
+        "native": [entry.as_dict() for entry in native_mcp.scan()],
+        "agents": native_mcp.agent_targets(),
+    }
+
+
+@server.tool()
+async def mcp_list(ctx: Context) -> dict[str, Any]:
+    """List the MCP servers configured here — Navide's own and each CLI's.
+
+    Two sources, both the ones Settings → MCP shows. The servers Navide
+    connects to as a client come with their live state; the servers each CLI
+    keeps in its own config (`~/.claude.json`, `~/.codex/config.toml`, ...)
+    are reflected as that file states them. Read it to learn what a server is
+    called, whether it is up, and how many tools it exposes before telling the
+    user a capability is missing. Read-only — adding, enabling or editing a
+    server is the user's decision, made in Settings; there is no tool here for
+    it.
+
+    Returns {servers, native, agents}. Each managed server is {name, enabled,
+    transport, command, args, env} or {name, enabled, transport, url, headers},
+    plus `status` (disabled / connected / error / unknown) and `tool_count`.
+    Each native entry is {name, agent, transport, path, command, args, url,
+    env, headers, enabled, valid, error}. `agents` is every vendor with what
+    Navide can do with its MCP (wired / planned / unsupported) and whether its
+    own config is reflected here.
+
+    Every credential-shaped value — env and header values, `--api-key=` style
+    arguments, URL userinfo and secret query parameters — is already masked
+    as `***` in both halves; names and hosts are kept so an entry stays
+    recognisable. This is a global inventory: it does not vary by workspace.
+    """
+    from agent_team_backend import app as _app
+    from agent_team_backend.mcp_settings import MCPSettingsError
+
+    _resolve_caller(ctx)
+    try:
+        configured = await asyncio.to_thread(_managed_mcp_rows)
+    except (MCPSettingsError, OSError) as err:
+        return {"ok": False, "error": str(err)}
+    live = await _app.mcp_manager.list_status()
+    live_map = {entry["name"]: entry for entry in live}
+    servers = []
+    for row in configured:
+        info = live_map.get(row["name"], {})
+        if not row.get("enabled", True):
+            status = "disabled"
+        else:
+            status = info.get("status", "unknown")
+        # The tool list itself stays out: this is a summary, and a server with
+        # dozens of tools would swamp the answer.
+        servers.append({**row, "status": status, "tool_count": info.get("tool_count", 0)})
+    reflected = await asyncio.to_thread(_native_mcp_inventory)
+    return {"servers": servers, **reflected}
+
+
+def _prompt_skills_inventory(skill_id: str) -> dict[str, Any]:
+    """The Prompts page's saved skills, as a summary or one of them in full."""
+    from agent_team_backend import app as _app
+
+    settings = _app.ui_settings_store.get()
+    raw = settings.get(_PROMPT_SKILLS_SETTING_KEY)
+    rows = [row for row in raw if isinstance(row, dict)] if isinstance(raw, list) else []
+    if skill_id:
+        skill = next((row for row in rows if row.get("id") == skill_id), None)
+        if skill is None:
+            return {"ok": False, "error": f"no prompt skill with id {skill_id!r}"}
+        return {"skill": skill}
+    result: dict[str, Any] = {
+        "skills": [_pick(row, _PROMPT_SKILL_FIELDS) for row in rows],
+        "default_id": next((str(row.get("id", "")) for row in rows if row.get("isDefault")), ""),
+    }
+    if _PROMPT_SKILLS_SETTING_KEY not in settings:
+        # Never saved: the page seeds a builtin skill on first use, and its
+        # text lives in the renderer, so the backend cannot list it here.
+        result["note"] = "no prompt skills saved yet; the app seeds a builtin one on first use"
+    return result
+
+
+@server.tool()
+async def prompt_list(ctx: Context, id: str = "") -> dict[str, Any]:
+    """List the prompt skills the user keeps in Settings → Prompts, or read one.
+
+    A prompt skill is a saved instruction the user fires at a CLI pane from
+    the app — a name, a description and the prompt text itself, optionally
+    with a resume prompt and a turn limit. Read the list to find out what the
+    user has already written before drafting an instruction of your own, or
+    to tell them which saved prompt covers what they are asking. Read-only:
+    creating or editing one is done in Settings.
+
+    Called with no id this lists metadata only — {skills, default_id}. Each
+    skill is {id, name, icon, description, category, enabled, isDefault,
+    maxTurns}; `default_id` is the id of the skill marked default, or "" when
+    none is. A `note` is added when the user has never saved any: the app then
+    seeds a builtin skill on first use, which is not visible from here.
+
+    Called with an id it returns that one skill in full — {skill}, carrying
+    `prompt` and `resumePrompt` as well. An id the list does not contain
+    answers {ok: false, error}.
+    """
+    _resolve_caller(ctx)
+    return await asyncio.to_thread(_prompt_skills_inventory, str(id or "").strip())
 
 
 # ── Closing another pane ─────────────────────────────────────────────────────

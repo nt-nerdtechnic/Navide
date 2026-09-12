@@ -449,15 +449,18 @@ Watcher がフォールバックとして拾い、`source: "watcher"`、帰属�
 
 ### Workspace・Skills・指示ファイル
 
-三つの読み取り専用インベントリです。それぞれ、上の Tool 群が「もう知っている」と
+五つの読み取り専用インベントリです。それぞれ、上の Tool 群が「もう知っている」と
 前提している問いに答えます: どのパスが Workspace なのか、CLI に指示を書く前にその
-CLI が既に何を渡されているのか、そしてこのプロジェクトが既に何を述べているのか。
+CLI が既に何を渡されているのか、このプロジェクトが既に何を述べているのか、どの MCP
+サーバーが設定されているのか、そしてユーザーがどの Prompt を保存しているのか。
 
 | Tool | パラメータ | 動作 |
 |---|---|---|
 | `workspace_list` | — | Navide が知っているプロジェクトを、最近開いた順に返します — `plan_create`、`preview_record`、`cli_open_agent` はどれもプロジェクトルートの絶対パスを求めますが、そのパスがどれなのかを教えるものが今までありませんでした。これがそのリストです。`{workspaces, live_pane_workspaces}` を返します。各 Workspace は Store 自身のレコード（`path`、`name`、`last_opened_at`、`pinned`、`exists`）に加えて `has_live_panes`（今まさに CLI Pane が動いていれば true）を持ちます。それを優先してください — `has_live_panes` が false の Workspace はどの Navide ウィンドウにも見られていないため、そこに書いた Plan や Preview はユーザーにまったく表示されません。`exists` が false はもっと厳しい失敗で、フォルダがディスクから消えています。`live_pane_workspaces` はその Live 集合そのもの（解決済み）です。Pane は、ユーザーが Welcome 画面から一度も開いていないプロジェクトで動いていることがあり、それは最近リストが言及しないだけの、まったく正当な `workspace_path` です |
 | `skills_list` | — | Navide が管理する Skills と、そのうちどれが自分に届くか。Skill は CLI が必要に応じて読み込む指示のフォルダです。Navide は任意のベンダーに配信できる共有ライブラリを持ち、同時に各 CLI が自分のディレクトリに持つものも反映します。自分で指示を書く前に何が使えるかを知るため、あるいはユーザーの求めていることをどの Skill がカバーするかを伝えるために読んでください。`{skills, native, root, agents}` を返します。各共有 Skill は `{name, description, enabled, targets, managed, valid, native_conflict}` — `targets` が null なら全ベンダーが受け取り、リストならそのベンダーのみ、`enabled` が false なら誰も受け取りません。各 native エントリは `{name, description, source, owner_agent, real_path, valid}` で、あるCLI が既に持っている Skill です。`agents` は各ベンダーとその配信サポート（`wired` / `planned` / `unsupported`）で、「配信されていない」と「配信できない」を分けたままにします。`delivered_to_me` は自分についての半分 — `{agent_key, skills, native_paths}`、自分の CLI が実際に与えられている名前です。Pane 識別を持たない呼び出し元は誰の配信対象でもないため、この欄はありません。あるのは名前と説明だけで、Skill の指示内容は使うときにそのフォルダから読むものです。読み取り専用 — Skill を配信するかどうかは Settings でのユーザーの判断です |
 | `memory_list` | `workspace_path`, `path=""` | ここの CLI が読み込む指示ファイル — `CLAUDE.md`、`AGENTS.md`、`GEMINI.md` など、このプロジェクトのものとユーザーのホームのもの。`path` なしで呼ぶとメタデータのみを一覧します: `{workspace_path, files, agents}` で、各ファイルは `scope`（`user` または `project`）、`path`、`relative`、`readers`（それを読み込むベンダーキー）、`canonical`、`exists`、`size`、`modified`、`error`。まだ存在しないファイルも一覧されます。それは「ある慣習がどこに置かれるか」を示すからです。`agents` は各ベンダーと Navide がそのファイルを見つける方法（`mapped` または `configured`）です。`path` を付けるとその一つを返します: `{workspace_path, file, path, text, exists, modified}` — パスはこの一覧が報告したものでなければならず、それ以外は拒否されるため、任意のファイルを読む手段ではありません。読み取り専用: 指示ファイルの編集は Settings でのユーザーの判断で、ここに対応する Tool はありません。Workspace が無い場合は user スコープのファイルのみが一覧されます |
+| `mcp_list` | — | ここで設定されている MCP サーバー — Navide 自身がクライアントとして接続するもの（ライブ状態付き）と、各 CLI が自分の設定（`~/.claude.json`、`~/.codex/config.toml` など）に持つものをファイルの記述どおりに反映したもの。`{servers, native, agents}` を返します。Navide 管理の各サーバーは `{name, enabled, transport, command, args, env}` または `{name, enabled, transport, url, headers}` に `status`（`disabled` / `connected` / `error` / `unknown`）と `tool_count` を加えたもので、ツール一覧そのものは含みません。各 native エントリは `{name, agent, transport, path, command, args, url, env, headers, enabled, valid, error}` です。`agents` は各ベンダーと、Navide がその MCP に対してできること（`wired` / `planned` / `unsupported`）、および自身の設定が反映されているかどうかです。資格情報の形をした値 — env と header の値、`--api-key=` 形式の引数、URL の userinfo と秘密のクエリパラメータ — はすべて `***` にマスク済みで、名前とホストはエントリを識別できるよう残されます。Workspace ごとではなくグローバルな一覧です。読み取り専用 — サーバーの追加・有効化・編集は Settings でのユーザーの判断です |
+| `prompt_list` | `id=""` | ユーザーが Settings → Prompts に保持する Prompt スキル — アプリから CLI Pane に送る保存済みの指示。`id` なしで呼ぶとメタデータのみを一覧します: `{skills, default_id}` で、各スキルは `{id, name, icon, description, category, enabled, isDefault, maxTurns}`、`default_id` はデフォルトに指定されたスキルの id（無ければ `""`）です。ユーザーが一度も保存していない場合は `note` が付きます: アプリは初回使用時に組み込みスキルを植え付けますが、それはここからは見えません。`id` を付けるとそのスキルを丸ごと返します — `{skill}` で、`prompt` と `resumePrompt` も含みます。未知の id は `{ok: false, error}` を返します。読み取り専用: 作成や編集は Settings で行います |
 
 ### Pipeline
 
