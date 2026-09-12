@@ -72,7 +72,7 @@ def test_new_paths_prepended(monkeypatch):
     shell_path = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
     with patch("subprocess.run", return_value=_make_run_result(_probe_output(shell_path))):
         _refresh_path_from_login_shell()
-    parts = os.environ["PATH"].split(":")
+    parts = os.environ["PATH"].split(os.pathsep)
     assert parts[0] == "/opt/homebrew/bin"
     assert parts[1] == "/usr/local/bin"
     # original paths preserved after new ones
@@ -86,7 +86,7 @@ def test_existing_paths_not_duplicated(monkeypatch):
     shell_path = "/usr/bin:/bin"
     with patch("subprocess.run", return_value=_make_run_result(_probe_output(shell_path))):
         _refresh_path_from_login_shell()
-    parts = os.environ["PATH"].split(":")
+    parts = os.environ["PATH"].split(os.pathsep)
     assert parts.count("/usr/bin") == 1
     assert parts.count("/bin") == 1
 
@@ -101,7 +101,7 @@ def test_dedup_within_shell_output(monkeypatch):
     shell_path = "/new/path:/new/path:/usr/bin"
     with patch("subprocess.run", return_value=_make_run_result(_probe_output(shell_path))):
         _refresh_path_from_login_shell()
-    parts = os.environ["PATH"].split(":")
+    parts = os.environ["PATH"].split(os.pathsep)
     assert parts.count("/new/path") == 1
 
 
@@ -159,7 +159,7 @@ def test_fallback_dirs_merged_when_probe_fails(monkeypatch, tmp_path):
     monkeypatch.setenv("PATH", "/usr/bin:/bin")
     with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="zsh", timeout=3)):
         _refresh_path_from_login_shell()
-    assert os.environ["PATH"].split(":")[0] == str(fallback)
+    assert os.environ["PATH"].split(os.pathsep)[0] == str(fallback)
 
 
 def test_fallback_dir_skipped_when_missing(monkeypatch, tmp_path):
@@ -181,7 +181,7 @@ def test_shell_paths_ordered_before_fallback(monkeypatch, tmp_path):
     monkeypatch.setenv("PATH", "/usr/bin")
     with patch("subprocess.run", return_value=_make_run_result(_probe_output("/shell/bin:/usr/bin"))):
         _refresh_path_from_login_shell()
-    parts = os.environ["PATH"].split(":")
+    parts = os.environ["PATH"].split(os.pathsep)
     assert parts[0] == "/shell/bin"
     assert parts[1] == str(fallback)
 
@@ -196,7 +196,7 @@ def test_marked_line_used_whatever_the_rc_files_print(monkeypatch):
     output = _probe_output("/opt/homebrew/bin:/usr/bin", "Welcome to zsh!") + "motd: 3 updates\n"
     with patch("subprocess.run", return_value=_make_run_result(output)):
         _refresh_path_from_login_shell()
-    assert os.environ["PATH"].split(":") == ["/opt/homebrew/bin", "/usr/bin"]
+    assert os.environ["PATH"].split(os.pathsep) == ["/opt/homebrew/bin", "/usr/bin"]
 
 
 # ── probe command shape ───────────────────────────────────────────────────────
@@ -243,7 +243,7 @@ def test_probe_falls_back_to_bash_without_shell_env(monkeypatch):
 def test_probe_script_marks_the_path_line():
     """The script prints the marker and PATH on ONE line, so the parser can
     pick it out of whatever the rc files printed around it."""
-    proc = subprocess.run(["/bin/sh", "-c", SCRIPT], capture_output=True, text=True,
+    proc = subprocess.run(osplat.paths.shell_command(SCRIPT), capture_output=True, text=True,
                           env={"PATH": "/a:/b"}, timeout=5)
     assert proc.stdout == f"{MARKER}/a:/b\n"
 
@@ -361,7 +361,7 @@ def test_detection_missing_to_ok_after_refresh(monkeypatch, tmp_path):
         _refresh_path_from_login_shell()
 
     # After refresh: tmp_path is now in os.environ["PATH"]
-    assert str(tmp_path) in os.environ["PATH"].split(":")
+    assert str(tmp_path) in os.environ["PATH"].split(os.pathsep)
 
     # detect_dep uses shutil.which which reads os.environ["PATH"]
     assert shutil.which("mytool") is not None
