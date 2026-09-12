@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { normalizePlatformId, setPlatformId } from '../../shared/osplat'
+import { platformId, setPlatformId } from '../../shared/osplat'
 import { spawnSync } from 'node:child_process'
 import { generateKeyPairSync, sign as edSign, type KeyObject } from 'node:crypto'
 import {
@@ -31,6 +31,12 @@ import {
 import { REGISTRY_TRUST_SNAPSHOT_NAME } from './pluginInstalledTrust'
 import { PLUGIN_QUARANTINE_DIR } from './pluginInstallPaths'
 import { makeZip, type ZipFile } from './zipFixture'
+
+// The platform to restore after a test that switched it: whatever this file
+// saw when it loaded — the host, or an injection from a vitest setup file.
+// Restoring to the host instead silently undid that injection for every
+// later test in the file (see src/shared/platformBaseline.test.ts).
+const BASELINE = platformId()
 
 const REQ_BASE = {
   registryUrl: 'http://localhost:8787',
@@ -199,7 +205,7 @@ describe('prepareInstall', () => {
   // carrying an exec bit); pinned so the Windows runner checks the same
   // contract, and the `on Windows` block opts into the .exe rule explicitly.
   beforeEach(() => setPlatformId('linux'))
-  afterEach(() => setPlatformId(normalizePlatformId(process.platform)))
+  afterEach(() => setPlatformId(BASELINE))
 
   it('rejects an install request without explicit provenance', async () => {
     const { bytes, digest } = pkg()
@@ -499,7 +505,7 @@ describe('prepareInstall', () => {
 
   describe('on Windows', () => {
     beforeEach(() => setPlatformId('win32'))
-    afterEach(() => setPlatformId(normalizePlatformId(process.platform)))
+    afterEach(() => setPlatformId(BASELINE))
 
     it('resolves a bare backend entry to the packaged .exe, exec bit or not', async () => {
       const { bytes, digest } = v2Pkg([
@@ -641,7 +647,7 @@ describe('commitInstall', () => {
   // carrying an exec bit); pinned so the Windows runner checks the same
   // contract.
   beforeEach(() => setPlatformId('linux'))
-  afterEach(() => setPlatformId(normalizePlatformId(process.platform)))
+  afterEach(() => setPlatformId(BASELINE))
 
   it('writes a backend-only package without creating a frontend descriptor', async () => {
     const { bytes, digest } = v2Pkg([

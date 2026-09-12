@@ -1,6 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { normalizePlatformId, setPlatformId } from '../shared/osplat'
+import { platformId, setPlatformId } from '../shared/osplat'
 import { descendantsFirst, killProcessTree } from './process-tree'
+
+// The platform to restore after a test that switched it: whatever this file
+// saw when it loaded — the host, or an injection from a vitest setup file.
+// Restoring to the host instead silently undid that injection for every
+// later test in the file (see src/shared/platformBaseline.test.ts).
+const BASELINE = platformId()
 
 const execFileSync = vi.hoisted(() => vi.fn())
 vi.mock('node:child_process', () => ({ execFileSync }))
@@ -65,7 +71,7 @@ describe('killProcessTree', () => {
 
   afterEach(() => {
     kill.mockRestore()
-    setPlatformId(normalizePlatformId(process.platform))
+    setPlatformId(BASELINE)
   })
 
   it('signals every process in the tree, not just the handle', () => {
@@ -115,7 +121,7 @@ describe('killProcessTree', () => {
 
   describe('on Windows', () => {
     beforeEach(() => setPlatformId('win32'))
-    afterEach(() => setPlatformId(normalizePlatformId(process.platform)))
+    afterEach(() => setPlatformId(BASELINE))
 
     it('lets taskkill walk the tree instead of parsing ps', () => {
       execFileSync.mockReturnValue('')

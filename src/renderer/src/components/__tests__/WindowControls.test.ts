@@ -1,8 +1,14 @@
 // @vitest-environment happy-dom
 import { mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { normalizePlatformId, setPlatformId, type PlatformId } from '../../../../shared/osplat'
+import { platformId, setPlatformId, type PlatformId } from '../../../../shared/osplat'
 import WindowControls from '../WindowControls.vue'
+
+// The platform to restore after a test that switched it: whatever this file
+// saw when it loaded — the host, or an injection from a vitest setup file.
+// Restoring to the host instead silently undid that injection for every
+// later test in the file (see src/shared/platformBaseline.test.ts).
+const BASELINE = platformId()
 
 type Bridge = {
   minimize: ReturnType<typeof vi.fn>
@@ -32,7 +38,7 @@ function installBridge(maximized = false): void {
 beforeEach(() => installBridge())
 
 afterEach(() => {
-  setPlatformId(normalizePlatformId(process.platform))
+  setPlatformId(BASELINE)
   delete (window as unknown as { agentTeam?: unknown }).agentTeam
 })
 

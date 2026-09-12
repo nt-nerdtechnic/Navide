@@ -1,7 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { MenuItemConstructorOptions } from 'electron'
-import { normalizePlatformId, setPlatformId, type PlatformId } from '../shared/osplat'
+import { normalizePlatformId, platformId, setPlatformId, type PlatformId } from '../shared/osplat'
 import { setTerminalSelection, forgetTerminalSelection } from './terminal-selection-cache'
+
+// The platform to restore after a test that switched it: whatever this file
+// saw when it loaded — the host, or an injection from a vitest setup file.
+// Restoring to the host instead silently undid that injection for every
+// later test in the file (see src/shared/platformBaseline.test.ts).
+const BASELINE = platformId()
 
 // Shared, hoisted capture of the template passed to Menu.buildFromTemplate,
 // plus the clipboard / focused-WebContents doubles Edit > Copy drives.
@@ -122,7 +128,7 @@ describe('installApplicationMenu', () => {
 
   afterEach(() => {
     vi.restoreAllMocks()
-    setPlatformId(normalizePlatformId(process.platform))
+    setPlatformId(BASELINE)
   })
 
   /** Rebuild the menu as `platform` would see it. */

@@ -3,8 +3,14 @@ import { createHash, generateKeyPairSync, sign as edSign } from 'node:crypto'
 import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
-import { normalizePlatformId, setPlatformId } from '../../shared/osplat'
+import { platformId, setPlatformId } from '../../shared/osplat'
 import { backendEntryOnDisk } from './installedPlugins'
+
+// The platform to restore after a test that switched it: whatever this file
+// saw when it loaded — the host, or an injection from a vitest setup file.
+// Restoring to the host instead silently undid that injection for every
+// later test in the file (see src/shared/platformBaseline.test.ts).
+const BASELINE = platformId()
 
 // The manager imports electron for its view lifecycle. A functional stub backs
 // both the registry tests (which touch none of it) and the view-lifecycle tests
@@ -5323,7 +5329,7 @@ describe('mini-IDE dedicated window (openMiniIdePluginView)', () => {
       if (!win.isDestroyed()) win.close()
     }
     frontendPluginManager.destroy(MINI_IDE_PLUGIN_ID)
-    setPlatformId(normalizePlatformId(process.platform))
+    setPlatformId(BASELINE)
   })
 
   function lastWindow(): FakeWindowLike {
