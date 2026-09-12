@@ -1,7 +1,8 @@
 import { accessSync, constants, existsSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { delimiter, extname, isAbsolute, join } from 'node:path'
 
-import { isWindows } from '../shared/osplat'
+import { editorBundledPaths, isWindows, type EditorInstallHints } from '../shared/osplat'
 
 // Default-editor routing. Every "open this file" in the app funnels through
 // window:openEditor, so this module decides — per request — whether it goes to
@@ -20,23 +21,22 @@ export interface EditorDefinition {
   kind: EditorKind
   /** Executable names looked up on PATH, in order. */
   commands: string[]
-  /** Absolute paths tried when PATH has no hit (macOS ships the CLI inside
-   *  the .app, and installing it onto PATH is a manual opt-in most users skip). */
-  bundledPaths: string[]
+  /** Absolute paths tried when PATH has no hit — the platform's own idea of
+   *  where an installed editor keeps a CLI that never made it onto PATH
+   *  (see editorBundledPaths). A function so the platform is asked at
+   *  resolution time, not at module load. */
+  bundledPaths: () => string[]
   /** Argv after the executable for a file open. */
   fileArgs: (file: string, line?: number) => string[]
   /** Argv after the executable for a folder open. */
   folderArgs: (dir: string) => string[]
 }
 
-const vscodeLike = (id: string, command: string, appName: string): EditorDefinition => ({
+const vscodeLike = (id: string, hints: EditorInstallHints): EditorDefinition => ({
   id,
   kind: 'external',
-  commands: [command],
-  bundledPaths: [
-    `/Applications/${appName}.app/Contents/Resources/app/bin/${command}`,
-    `${process.env.HOME ?? ''}/Applications/${appName}.app/Contents/Resources/app/bin/${command}`,
-  ],
+  commands: [hints.command],
+  bundledPaths: () => editorBundledPaths(homedir(), hints),
   // -g is the goto form: without it the file:line suffix is taken literally as
   // part of the filename.
   fileArgs: (file, line) => (line && line > 0 ? ['-g', `${file}:${line}`] : [file]),
@@ -47,8 +47,16 @@ const vscodeLike = (id: string, command: string, appName: string): EditorDefinit
  *  are handled by the host (plugin view / shell.openPath) and so carry no
  *  command; `custom` is driven entirely by the user's template. */
 export const BUILT_IN_EDITORS: EditorDefinition[] = [
-  vscodeLike('vscode', 'code', 'Visual Studio Code'),
-  vscodeLike('cursor', 'cursor', 'Cursor'),
+  vscodeLike('vscode', {
+    command: 'code',
+    macApp: 'Visual Studio Code',
+    // deb/rpm from Microsoft, and the Arch AUR package, respectively.
+    linuxPrefixes: ['/usr/share/code', '/opt/visual-studio-code'],
+    flatpakId: 'com.visualstudio.code',
+  }),
+  // Cursor on Linux ships as an AppImage with no fixed prefix and no
+  // Flatpak; only a `cursor` the user put on PATH themselves is found.
+  vscodeLike('cursor', { command: 'cursor', macApp: 'Cursor' }),
 ]
 
 /** Editor ids that need no detection because the host implements them. */
@@ -260,7 +268,7 @@ export function resolveEditorCommand(
     const hit = whichIn(name, pathEnv, exists, executable)
     if (hit) return hit
   }
-  for (const path of def.bundledPaths) {
+  for (const path of def.bundledPaths()) {
     if (path && exists(path) && executable(path)) return path
   }
   return null

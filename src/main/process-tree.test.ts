@@ -77,6 +77,14 @@ describe('killProcessTree', () => {
     expect(kill.mock.calls.every((c) => c[1] === 'SIGKILL')).toBe(true)
   })
 
+  it('looks ps up on PATH rather than pinning /bin/ps', () => {
+    // NixOS/Guix keep no /bin/ps; the absolute path there meant no snapshot
+    // and a kill that reached only the handle.
+    killProcessTree(4102, 'SIGKILL')
+    expect(execFileSync.mock.calls[0][0]).toBe('ps')
+    expect(execFileSync.mock.calls[0][1]).toEqual(['-Ao', 'pid=,ppid='])
+  })
+
   it('carries on when a process died between the snapshot and the signal', () => {
     kill.mockImplementation((pid) => {
       if (pid === 4200) throw new Error('ESRCH')

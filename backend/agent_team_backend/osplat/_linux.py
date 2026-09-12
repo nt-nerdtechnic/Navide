@@ -18,7 +18,8 @@ import os
 from collections.abc import Sequence
 from pathlib import Path
 
-from ._posix import process_tree, terminal_backend
+from . import _posix
+from ._posix import terminal_backend
 
 log = logging.getLogger(__name__)
 
@@ -174,9 +175,36 @@ class LinuxResourceProbe:
         return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
 
 
+#: What `/proc/<pid>/comm` reads as for the processes that adopt orphans on a
+#: Linux desktop besides init: the user's `systemd --user` (a child
+#: subreaper on every systemd desktop, so an orphan's ppid is it, not 1) and
+#: bubblewrap, which plays the same role inside a Flatpak.
+_SUBREAPER_COMMS = frozenset({"systemd", "bwrap"})
+
+
+def _read_comm(pid: int) -> str | None:
+    try:
+        return (_PROC / str(pid) / "comm").read_text().strip()
+    except OSError:
+        return None
+
+
+class LinuxProcessTree(_posix.PosixProcessTree):
+    def is_orphan_parent(self, ppid: int, me: int) -> bool:
+        # The POSIX answer (init or this backend), plus the subreapers: a
+        # CLI this backend spawned can only end up under `systemd --user`
+        # by the backend dying, which is exactly the orphan `reap_stale`
+        # is looking for. `terminals` still checks the process's identity
+        # (ps lstart) before killing anything this says yes to.
+        if super().is_orphan_parent(ppid, me):
+            return True
+        return _read_comm(ppid) in _SUBREAPER_COMMS
+
+
 paths = LinuxPaths()
 resource_probe = LinuxResourceProbe()
-# PTY and process-group handling are plain POSIX; see `_posix`.
+process_tree = LinuxProcessTree()
+# PTY handling is plain POSIX; see `_posix`.
 __all__ = ["paths", "process_tree", "resource_probe", "terminal_backend"]
 
 

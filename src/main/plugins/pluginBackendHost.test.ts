@@ -1,10 +1,10 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { existsSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { PluginBackendHost, type PluginBackendHostOptions } from './pluginBackendHost'
+import { PluginBackendHost, canonicalBackendPackageDir, type PluginBackendHostOptions } from './pluginBackendHost'
 import type {
   BackendPluginLaunchSpec,
   PluginBackendSupervisorOptions,
@@ -468,6 +468,30 @@ describe('PluginBackendHost', () => {
         ...activation,
         packageDir: symlink,
       })).toThrowError(expect.objectContaining({ code: 'INVALID_ACTIVATION' }))
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  // Fedora Silverblue's /home → var/home, a stow-managed ~/.config, a home on
+  // another disk: every plugin lives under a symlinked ancestor there, and the
+  // root used to be refused for not equalling its own realpath.
+  it('accepts a real package root reached through a symlinked ancestor', () => {
+    const root = mkdtempSync(join(tmpdir(), 'navide-backend-root-'))
+    try {
+      const real = join(root, 'real-home', 'plugins')
+      mkdirSync(join(real, 'pkg'), { recursive: true })
+      symlinkSync(join(root, 'real-home'), join(root, 'home-link'))
+      const viaLink = join(root, 'home-link', 'plugins', 'pkg')
+
+      const canonical = canonicalBackendPackageDir(viaLink)
+      expect(canonical).toBe(realpathSync(join(real, 'pkg')))
+      // Same canonical answer whichever spelling reaches it, so descriptor and
+      // activation compare equal across the two.
+      expect(canonicalBackendPackageDir(join(real, 'pkg'))).toBe(canonical)
+      // The root itself being a link is still refused.
+      symlinkSync(join(real, 'pkg'), join(real, 'pkg-link'))
+      expect(canonicalBackendPackageDir(join(real, 'pkg-link'))).toBeNull()
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
