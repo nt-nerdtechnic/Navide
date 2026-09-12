@@ -330,17 +330,23 @@ def _running_link(server: ScriptedServer) -> ServerLink:
 
 
 async def _run_briefly(link: ServerLink, seconds: float, until=None) -> None:
-    """Run the link for `seconds`, or until `until()` holds when one is given:
-    a fixed 0.2 s window lost a race on the Windows runner (timer slices are
-    ~15 ms there), and the outcome-shaped tests only need the hello to land."""
+    """Run the link for `seconds`; when `until` is given, wait for it to hold
+    first and only then start that window.
+
+    A window measured from the task's first tick lost races on the Windows
+    runner, where timer slices are ~15 ms: the link had not even connected
+    when it closed. Waiting for the thing under test to happen and then
+    watching for `seconds` is both steadier and stricter — the quiet the
+    caller asserts is quiet *after* the event, not instead of it.
+    """
     task = asyncio.create_task(link._run())
     try:
-        if until is None:
-            await asyncio.sleep(seconds)
-        else:
-            deadline = asyncio.get_running_loop().time() + max(seconds, 2.0)
-            while not until() and asyncio.get_running_loop().time() < deadline:
+        if until is not None:
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + max(seconds, 2.0)
+            while not until() and loop.time() < deadline:
                 await asyncio.sleep(0.01)
+        await asyncio.sleep(seconds)
     finally:
         link._stopped = True
         task.cancel()
@@ -364,7 +370,7 @@ async def test_a_verified_account_does_not_reconnect_in_a_loop(
     server = ScriptedServer(verified=True, status=[])
     link = _running_link(server)
 
-    await _run_briefly(link, 0.3)
+    await _run_briefly(link, 0.3, until=lambda: server.hellos >= 1)
 
     assert server.hellos == 1
 
@@ -381,7 +387,7 @@ async def test_an_old_server_does_not_provoke_a_reconnect_loop_either(
     server = ScriptedServer(verified=False, status=[])  # every status: UNKNOWN_TYPE
     link = _running_link(server)
 
-    await _run_briefly(link, 0.3)
+    await _run_briefly(link, 0.3, until=lambda: server.hellos >= 1)
 
     assert server.hellos == 1
 
