@@ -166,7 +166,7 @@
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-vue": "^5.2.1",
     "@vue/test-utils": "^2.5.0",
-    "electron": "^44.2.0",
+    "electron": "^44.3.0",
     "electron-builder": "^26.16.1",
     "electron-vite": "^3.1.0",
     "happy-dom": "^20.14.0",
