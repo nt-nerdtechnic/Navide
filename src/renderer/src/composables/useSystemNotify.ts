@@ -1,5 +1,6 @@
 import { computed, readonly, ref } from 'vue'
 import { settingsGet, settingsSet } from '@navide/plugin-ui/shared'
+import { notifySoundEnabled } from './useSoundNotify'
 
 /**
  * Native OS notifications for CLI pane state changes (turn done / needs input).
@@ -116,7 +117,9 @@ function notifyPaneState(
     return
   }
   lastKindByPane.set(paneId, kind)
-  void window.agentTeam?.notify({ paneId, title, body })
+  // Sound off also silences the OS notification's own sound; the chime and the
+  // system ding are the same "make noise" decision to the user.
+  void window.agentTeam?.notify({ paneId, title, body, silent: !notifySoundEnabled() })
 }
 
 /** A pane produced new activity (new turn): re-arm notifications for it so the
@@ -136,11 +139,13 @@ function markSeen(paneId: string): void {
   pendingPanes.value.delete(paneId)
 }
 
-/** A pane was removed: drop its dedup, pending and mute state. */
+/** A pane's process is gone: drop its dedup and pending state. Mute is NOT
+ *  dropped here — onKill runs this for rebuilds and idle reclaims too, where
+ *  the seat (and the user's mute on it) survives; the real-close path clears
+ *  mute itself. */
 function forgetPane(paneId: string): void {
   lastKindByPane.delete(paneId)
   pendingPanes.value.delete(paneId)
-  setPaneMuted(paneId, false)
 }
 
 const pendingCount = computed(() => pendingPanes.value.size)

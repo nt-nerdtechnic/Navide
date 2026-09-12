@@ -10,6 +10,7 @@ import {
   useSystemNotify,
   type NotifyKind,
 } from '../useSystemNotify'
+import { setNotifySoundEnabled } from '../useSoundNotify'
 
 describe('shouldNotify', () => {
   const cases: Array<{
@@ -222,10 +223,15 @@ describe('per-pane mute', () => {
     sys.forgetPane('mute-rearm')
   })
 
-  it('forgetPane (pane closed) drops the mute so a reused id starts unmuted', () => {
+  it('forgetPane (process gone) keeps the mute: rebuild and idle reclaim run it on a seat that survives', () => {
     const sys = useSystemNotify()
+    const before = sys.pendingCount.value
     setPaneMuted('mute-forget', true)
+    sys.notifyPaneState('mute-forget', 'done', 't', 'b')
     sys.forgetPane('mute-forget')
+    expect(sys.pendingCount.value).toBe(before)
+    expect(isPaneMuted('mute-forget')).toBe(true)
+    setPaneMuted('mute-forget', false)
     expect(isPaneMuted('mute-forget')).toBe(false)
   })
 
@@ -235,5 +241,32 @@ describe('per-pane mute', () => {
     expect(sys.mutedPanes.value.has('mute-ro')).toBe(true)
     setPaneMuted('mute-ro', false)
     expect(sys.mutedPanes.value.has('mute-ro')).toBe(false)
+  })
+})
+
+describe('OS notification sound follows the sound toggle', () => {
+  const notify = vi.fn(() => Promise.resolve())
+
+  beforeEach(() => {
+    __resetSettingsForTest()
+    notify.mockClear()
+    ;(window as unknown as { agentTeam: unknown }).agentTeam = { notify }
+    vi.spyOn(document, 'hasFocus').mockReturnValue(false)
+    window.dispatchEvent(new Event('blur'))
+  })
+
+  it('sound on → notification is not silent', () => {
+    const sys = useSystemNotify()
+    sys.notifyPaneState('snd-on', 'done', 't', 'b')
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ silent: false }))
+    sys.forgetPane('snd-on')
+  })
+
+  it('sound off → notification is delivered silent', () => {
+    const sys = useSystemNotify()
+    setNotifySoundEnabled(false)
+    sys.notifyPaneState('snd-off', 'done', 't', 'b')
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ silent: true }))
+    sys.forgetPane('snd-off')
   })
 })

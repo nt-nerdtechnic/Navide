@@ -232,7 +232,7 @@ declare global {
       writeHealthCheckTimeout: (timeoutSec: number) => Promise<{ ok: boolean; error?: string }>
       readCdpDebugConfig: () => Promise<{ ok: boolean; config?: { enabled: boolean; port: number } }>
       writeCdpDebugConfig: (config: { enabled: boolean; port: number }) => Promise<{ ok: boolean; error?: string }>
-      notify: (args: { paneId?: string; title: string; body?: string }) => Promise<{ ok: boolean }>
+      notify: (args: { paneId?: string; title: string; body?: string; silent?: boolean }) => Promise<{ ok: boolean }>
       onFocusPane: (cb: (paneId: string) => void) => void
       dispatchPlanExecution: (args: {
         workspace_path: string

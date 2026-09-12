@@ -44,8 +44,22 @@ describe('per-pane mute wiring in App.vue', () => {
     // Cold-restore placeholder (saved.pane_id) and realize (new paneId).
     expect(count('if (saved.is_muted) setPaneMuted(saved.pane_id, true)')).toBe(1)
     expect(count('if (saved.is_muted) setPaneMuted(paneId, true)')).toBe(1)
-    // Rebuild carries it to the replacement id and persists it there.
+    // Realize of a placeholder carries it to the replacement id and persists it.
     expect(appSource).toContain('const wasMuted = isPaneMuted(paneId)')
     expect(appSource).toContain('if (wasMuted) {\n      setPaneMuted(newId, true)\n      persistPaneMuted(newId, true)\n    }')
+  })
+
+  it('a user-initiated rebuild (resume or clean) carries the mute to the replacement id', () => {
+    // Both paths onKill(keepInList) the old pane first, so the flag has to be
+    // snapshotted before and re-applied to newId after.
+    for (const name of ['rebuildPaneViaResume', 'rebuildPaneClean']) {
+      const src = fn(name)
+      expect(src, name).toContain('muted: isPaneMuted(paneId)')
+      expect(src, name).toContain('if (snap.muted) {\n        setPaneMuted(newId, true)\n        persistPaneMuted(newId, true)\n      }')
+    }
+  })
+
+  it('onKill keeps the mute for keepInList (rebuild / idle reclaim) and clears it on a real close', () => {
+    expect(fn('onKill')).toContain('if (!keepInList) setPaneMuted(paneId, false)')
   })
 })

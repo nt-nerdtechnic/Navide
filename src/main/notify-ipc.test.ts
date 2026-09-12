@@ -122,6 +122,12 @@ describe('window:notify / window:setBadgeCount IPC', () => {
     expect(shown).toEqual([{ title: 'CLI finished', body: 'x completed', silent: false }])
   })
 
+  it('honours silent from the renderer and defaults to audible', () => {
+    notify({ sender: 'sender' }, { title: 'quiet', silent: true })
+    notify({ sender: 'sender' }, { title: 'loud' })
+    expect(shown.map((n) => n.silent)).toEqual([true, false])
+  })
+
   it('clicking the notification reveals the sender window and focuses the pane', () => {
     notify({ sender: 'sender' }, { paneId: 'p1', title: 'T' })
     expect(clickHandlers).toHaveLength(1)

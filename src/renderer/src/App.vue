@@ -5959,6 +5959,9 @@ async function onKill(paneId: string, opts: { markRemoved?: boolean, force?: boo
     pane.loopMaxTurns = 0
   }
   sysNotify.forgetPane(paneId)
+  // Mute is the user's setting on the seat, not on the process: a rebuild or
+  // idle reclaim (keepInList) keeps it, only a real close drops it.
+  if (!keepInList) setPaneMuted(paneId, false)
   // The stage this pane was a slot of is now waiting for a signal that can
   // never arrive: its watcher is cancelled and its PTY is gone. Release the
   // slot so the stage can still reach N/N. Done last, once the pane is out of
@@ -6263,6 +6266,7 @@ async function rebuildPaneViaResume(
       profileId: pane.profileId,
       model: pane.model,
       effort: pane.effort,
+      muted: isPaneMuted(paneId),
     }
     try { localStorage.removeItem(`terminal-scroll:${sessionId}`) } catch {}
     // Preserve layout order: keep the old pane as a dummy to avoid layout
@@ -6296,6 +6300,11 @@ async function rebuildPaneViaResume(
       // in-memory lineage has to follow. The backend does its own re-key off
       // previous_pane_id in the manual_pane.spawn below.
       rekeyLineage(paneId, newId)
+      setPaneMuted(paneId, false)
+      if (snap.muted) {
+        setPaneMuted(newId, true)
+        persistPaneMuted(newId, true)
+      }
       if (opts?.offerContinue) {
         const revived = panes.value.find((p) => p.id === newId)
         if (revived) revived.resumeContinueAvailable = true
@@ -6530,6 +6539,7 @@ async function rebuildPaneClean(paneId: string): Promise<void> {
     // vendor default while its record on disk still says otherwise.
     model: pane.model,
     effort: pane.effort,
+    muted: isPaneMuted(paneId),
   }
   for (const key of lockKeys) rebuildingPanes.add(key)
   try {
@@ -6555,6 +6565,11 @@ async function rebuildPaneClean(paneId: string): Promise<void> {
     if (newId) {
       // Same reason as the resume rebuild above: the old id is retired here.
       rekeyLineage(paneId, newId)
+      setPaneMuted(paneId, false)
+      if (snap.muted) {
+        setPaneMuted(newId, true)
+        persistPaneMuted(newId, true)
+      }
       if (snap.origin !== 'pipeline') {
         await sendQuiet<ProjectPayload>('manual_pane.spawn', {
           workspace_path: snap.workspacePath,

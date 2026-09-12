@@ -3098,14 +3098,16 @@ ipcMain.on(
 // renderer which pane to switch to via `notify:focusPane`.
 ipcMain.handle(
   'window:notify',
-  (event, args: { paneId?: string; title?: string; body?: string }): { ok: boolean } => {
+  (event, args: { paneId?: string; title?: string; body?: string; silent?: boolean }): { ok: boolean } => {
     if (!Notification.isSupported()) return { ok: false }
     const title = String(args?.title ?? '').trim()
     if (!title) return { ok: false }
     const notification = new Notification({
       title,
       body: String(args?.body ?? ''),
-      silent: false,
+      // The renderer's sound toggle covers the OS notification sound too;
+      // otherwise "sound off" still dings through macOS.
+      silent: args?.silent === true,
     })
     const paneId = String(args?.paneId ?? '')
     notification.on('click', () => {
