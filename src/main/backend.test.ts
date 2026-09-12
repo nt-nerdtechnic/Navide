@@ -8,10 +8,14 @@ import type { ChildProcess } from 'node:child_process'
 const killProcessTree = vi.hoisted(() => vi.fn())
 vi.mock('./process-tree', () => ({ killProcessTree }))
 
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { normalizePlatformId, setPlatformId } from '../shared/osplat'
 import {
   bindBackendPluginActivationCatalog,
   handConfirmKey,
+  listNvmNodeBins,
   mergePathList,
   mintTrustConfirmation,
   pathEnvKey,
@@ -31,6 +35,29 @@ describe('backend plugin activation environment', () => {
       AGENT_TEAM_PLUGIN_ACTIVATION_CATALOG: '/state/catalog.json',
       AGENT_TEAM_PLUGIN_ACTIVATION_CATALOG_SHA256: 'a'.repeat(64),
     })
+  })
+})
+
+describe('listNvmNodeBins', () => {
+  let home: string
+  afterEach(() => rmSync(home, { recursive: true, force: true }))
+
+  it('lists every installed version bin, newest first, and nothing else', () => {
+    home = mkdtempSync(join(tmpdir(), 'nvm-home-'))
+    const node = join(home, '.nvm', 'versions', 'node')
+    for (const v of ['v18.20.4', 'v22.11.0', 'v20.19.0']) mkdirSync(join(node, v, 'bin'), { recursive: true })
+    mkdirSync(join(node, 'v16.0.0'), { recursive: true }) // no bin: half-installed
+    writeFileSync(join(node, '.DS_Store'), '')
+    expect(listNvmNodeBins(home)).toEqual([
+      join(node, 'v22.11.0', 'bin'),
+      join(node, 'v20.19.0', 'bin'),
+      join(node, 'v18.20.4', 'bin'),
+    ])
+  })
+
+  it('is empty without nvm', () => {
+    home = mkdtempSync(join(tmpdir(), 'nvm-home-'))
+    expect(listNvmNodeBins(home)).toEqual([])
   })
 })
 

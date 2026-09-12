@@ -212,18 +212,24 @@ def _path_probe_command() -> list[str] | None:
     return osplat.paths.login_path_probe()
 
 
-# Standard install prefixes merged into PATH even when the login-shell probe
-# fails (slow shell config hits the 3s timeout, GUI launches get launchd's
-# minimal PATH) — otherwise brew itself is invisible to detection and installs.
-# ~/.local/bin is where vendor install scripts (aider, opencode, cursor, kimi)
-# drop their binary and export the dir from a shell rc file — invisible
-# whenever the rc probe times out, which made a just-installed CLI still read
-# as missing. Kept in this one tuple so tests can disable every fallback at once.
-_FALLBACK_PATH_DIRS = (
-    "/opt/homebrew/bin",
-    "/usr/local/bin",
-    os.path.expanduser("~/.local/bin"),
-)
+def _parse_login_path(stdout: str) -> list[str]:
+    """PATH entries from the probe's stdout: the `LOGIN_PATH_MARKER` line."""
+    marked = [line for line in stdout.splitlines() if line.startswith(osplat.spec.LOGIN_PATH_MARKER)]
+    if not marked:
+        return []
+    value = marked[-1][len(osplat.spec.LOGIN_PATH_MARKER):].strip()
+    return [entry for entry in value.split(os.pathsep) if entry]
+
+
+def _fallback_path_dirs() -> list[str]:
+    """Standard install prefixes merged into PATH even when the login-shell
+    probe fails (slow shell config hits the 3s timeout, GUI launches get the
+    session's minimal PATH) — otherwise brew itself is invisible to detection
+    and installs, and a CLI whose installer exported its dir from a shell rc
+    file (aider, opencode, cursor, kimi into ~/.local/bin; nvm and bun on
+    Linux) still reads as missing right after installing. Which dirs those
+    are is the platform's to say — see `Paths.login_path_fallbacks`."""
+    return osplat.paths.login_path_fallbacks(Path.home())
 
 
 # The login-shell probe costs ~1-3s (interactive zsh reads the full rc chain),
@@ -260,14 +266,12 @@ def _refresh_path_from_login_shell(force: bool = False) -> None:
             text=True,
             timeout=3,
         )
-        raw = proc.stdout or ""
-        # Take the last non-empty line (login shells may emit banner text first)
-        lines = [l for l in raw.splitlines() if l.strip()]
-        if lines:
-            shell_paths = lines[-1].split(os.pathsep)
+        # Only the marked line: rc files print banners, and an interactive
+        # bash's last line was a motd on more than one machine.
+        shell_paths = _parse_login_path(proc.stdout or "")
     except Exception:  # noqa: BLE001
         pass
-    shell_paths.extend(d for d in _FALLBACK_PATH_DIRS if os.path.isdir(d))
+    shell_paths.extend(d for d in _fallback_path_dirs() if os.path.isdir(d))
     current_paths = os.environ.get("PATH", "").split(os.pathsep)
     current_set = set(current_paths)
     seen: set[str] = set()

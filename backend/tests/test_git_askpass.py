@@ -300,3 +300,83 @@ async def test_the_askpass_entry_mode_answers_a_prompt_like_the_helper_does():
     assert proc.returncode == 0
     assert stdout.splitlines()[0] == b"s3cr3t-token"
     assert received == ["Password for 'https://x':"]
+
+
+# ── ssh prompts reach the same helper ────────────────────────────────────────
+
+_posix_only = pytest.mark.skipif(sys.platform == "win32", reason="POSIX askpass trio; Windows keeps GIT_ASKPASS only")
+
+
+class TestGitSubprocessEnv:
+    def test_posix_routes_ssh_prompts_to_the_same_helper(self):
+        from agent_team_backend.osplat import _darwin, _linux
+
+        for impl in (_linux.paths, _darwin.paths):
+            assert impl.git_subprocess_env("/state/ask.sh") == {
+                "GIT_ASKPASS": "/state/ask.sh",
+                "SSH_ASKPASS": "/state/ask.sh",
+                "SSH_ASKPASS_REQUIRE": "force",
+                "GIT_TERMINAL_PROMPT": "0",
+            }
+
+    def test_windows_keeps_git_askpass_only(self):
+        from agent_team_backend.osplat import _windows
+
+        assert _windows.paths.git_subprocess_env(r"C:\state\ask.cmd") == {"GIT_ASKPASS": r"C:\state\ask.cmd"}
+
+    @pytest.mark.asyncio
+    async def test_context_env_carries_the_platform_trio(self):
+        from agent_team_backend.osplat import paths
+
+        async def on_request(request_id: str, prompt: str) -> None:
+            pass
+
+        env, cleanup = await git_service.create_askpass_context(on_request)
+        try:
+            for key, value in paths.git_subprocess_env(env["GIT_ASKPASS"]).items():
+                assert env[key] == value
+        finally:
+            await cleanup()
+
+    @_posix_only
+    def test_ssh_answers_a_passphrase_through_the_trio_with_no_tty(self, tmp_path):
+        """The bug: ssh reads /dev/tty for a key passphrase and, with no tty and
+        no display, ignores SSH_ASKPASS — so a push over ssh from the backend
+        died with nothing to answer. With the trio, ssh-keygen (same
+        read_passphrase as ssh) asks the helper instead."""
+        import shutil
+        import subprocess
+
+        from agent_team_backend.osplat import _linux
+
+        if shutil.which("ssh-keygen") is None:
+            pytest.skip("no ssh-keygen on this machine")
+        key = tmp_path / "id_ed25519"
+        subprocess.run(
+            ["ssh-keygen", "-q", "-t", "ed25519", "-N", "pp-secret", "-f", str(key), "-C", "t"],
+            check=True, timeout=30,
+        )
+        helper = tmp_path / "ask.sh"
+        helper.write_text("#!/bin/sh\necho pp-secret\n")
+        helper.chmod(0o755)
+        base = {"PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path)}
+
+        with_trio = subprocess.run(
+            ["ssh-keygen", "-y", "-f", str(key)],
+            env={**base, **_linux.paths.git_subprocess_env(str(helper))},
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30,
+        )
+        assert with_trio.returncode == 0, with_trio.stderr
+        assert with_trio.stdout.startswith("ssh-ed25519 ")
+
+        # GIT_ASKPASS alone (what the env used to carry): ssh never consults it.
+        # A new session so there is no controlling tty for ssh-keygen to fall
+        # back to — from a developer's terminal it would otherwise sit on
+        # /dev/tty waiting for someone to type.
+        without = subprocess.run(
+            ["ssh-keygen", "-y", "-f", str(key)],
+            env={**base, "GIT_ASKPASS": str(helper)},
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30,
+            start_new_session=True,
+        )
+        assert without.returncode != 0

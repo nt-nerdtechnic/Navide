@@ -212,6 +212,9 @@ class LinuxLayout(LinuxPaths):
     def askpass_launcher(self, helper_py: Path, launch_argv: list[str]) -> Path:
         return _posix_paths.askpass_launcher(helper_py, launch_argv)
 
+    def git_subprocess_env(self, askpass: str) -> dict[str, str]:
+        return _posix_paths.git_subprocess_env(askpass)
+
     def executable_candidates(self, name: str) -> list[str]:
         return _posix_paths.executable_candidates(name)
 
@@ -219,7 +222,25 @@ class LinuxLayout(LinuxPaths):
         return _posix_paths.is_executable(path)
 
     def login_path_probe(self) -> list[str] | None:
-        return _posix_paths.login_path_probe()
+        # `-i` for bash too: the stock Debian/Ubuntu ~/.bashrc, where nvm and
+        # bun put their PATH lines, returns at once in a non-interactive shell.
+        return _posix_paths.login_path_probe(interactive_bash=True)
+
+    def login_path_fallbacks(self, home: Path) -> list[str]:
+        # The dirs the Linux installers use and the session PATH omits: the
+        # XDG-adjacent ones (uv, pnpm, `npm config set prefix`), the Rust and
+        # bun toolchains, nvm's per-version bins, and snap's, which most
+        # distributions leave off a .desktop-launched PATH.
+        return [
+            str(home / ".local" / "bin"),
+            str(home / ".local" / "share" / "pnpm"),
+            str(home / ".npm-global" / "bin"),
+            str(home / ".cargo" / "bin"),
+            str(home / ".bun" / "bin"),
+            *_posix_paths.nvm_node_bins(home),
+            "/usr/local/bin",
+            "/snap/bin",
+        ]
 
     def backend_entry_on_disk(self, entry: str) -> str:
         return _posix_paths.backend_entry_on_disk(entry)

@@ -108,16 +108,31 @@ export function loginShellFlags(shell: string): string[] {
  * Prepended to PATH so a tool installed to one of these is found even when
  * the shell would not answer (a heavy rc file timing out, an exotic shell).
  * Each list is the platform's own convention: Homebrew's prefixes on macOS;
- * on Linux the XDG-adjacent dirs the pnpm and uv installers use, plus snap's
- * bin which most distributions do not put on the session PATH.
+ * on Linux the XDG-adjacent dirs the pnpm, uv and `npm config set prefix`
+ * installers use, the Rust and bun toolchains, nvm's per-version bins, and
+ * snap's bin which most distributions do not put on the session PATH.
+ *
+ * `nvmBins` is nvm's `~/.nvm/versions/node/<v>/bin` list, newest first —
+ * enumerated by the caller because this module has no `fs` (see
+ * listNvmNodeBins in main). Mirrors `Paths.login_path_fallbacks` on the
+ * backend; keep the two lists the same.
  */
-export function loginPathFallbacks(home: string): string[] {
+export function loginPathFallbacks(home: string, nvmBins: string[] = []): string[] {
   const local = `${home}/.local/bin`
   switch (platformId()) {
     case 'darwin':
       return [local, '/usr/local/bin', '/opt/homebrew/bin', '/opt/homebrew/sbin']
     case 'linux':
-      return [local, `${home}/.local/share/pnpm`, '/usr/local/bin', '/snap/bin']
+      return [
+        local,
+        `${home}/.local/share/pnpm`,
+        `${home}/.npm-global/bin`,
+        `${home}/.cargo/bin`,
+        `${home}/.bun/bin`,
+        ...nvmBins,
+        '/usr/local/bin',
+        '/snap/bin',
+      ]
     default:
       return []
   }

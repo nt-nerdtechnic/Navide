@@ -78,6 +78,9 @@ class DarwinLayout(DarwinPaths):
     def askpass_launcher(self, helper_py: Path, launch_argv: list[str]) -> Path:
         return _posix_paths.askpass_launcher(helper_py, launch_argv)
 
+    def git_subprocess_env(self, askpass: str) -> dict[str, str]:
+        return _posix_paths.git_subprocess_env(askpass)
+
     def executable_candidates(self, name: str) -> list[str]:
         return _posix_paths.executable_candidates(name)
 
@@ -86,6 +89,16 @@ class DarwinLayout(DarwinPaths):
 
     def login_path_probe(self) -> list[str] | None:
         return _posix_paths.login_path_probe()
+
+    def login_path_fallbacks(self, home: Path) -> list[str]:
+        # Homebrew's two prefixes plus ~/.local/bin, where Claude Code's
+        # installer and uv put their binaries.
+        return [
+            str(home / ".local" / "bin"),
+            "/usr/local/bin",
+            "/opt/homebrew/bin",
+            "/opt/homebrew/sbin",
+        ]
 
     def backend_entry_on_disk(self, entry: str) -> str:
         return _posix_paths.backend_entry_on_disk(entry)

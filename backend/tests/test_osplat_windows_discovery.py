@@ -51,7 +51,7 @@ class TestExecutableCandidates:
 class TestOtherDiscoveryAnswers:
     def test_no_login_shell_to_probe(self, win) -> None:
         assert win.login_path_probe() is None
-        assert _posix_paths.login_path_probe()[-1] == "echo $PATH"
+        assert _posix_paths.login_path_probe()[-1] == _posix_paths.LOGIN_PATH_PROBE_SCRIPT
 
     def test_backend_entry_gains_exe_unless_it_names_a_suffix(self, win) -> None:
         assert win.backend_entry_on_disk("backend/navide-plans") == "backend/navide-plans.exe"

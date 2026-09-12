@@ -169,10 +169,31 @@ describe('loginPathFallbacks', () => {
       expect(loginPathFallbacks('/home/x')).toEqual([
         '/home/x/.local/bin',
         '/home/x/.local/share/pnpm',
+        '/home/x/.npm-global/bin',
+        '/home/x/.cargo/bin',
+        '/home/x/.bun/bin',
         '/usr/local/bin',
         '/snap/bin',
       ])
     })
+  })
+
+  // nvm is how most Linux users have node — and `claude`/`codex` with it —
+  // and it exports its bin only from ~/.bashrc, which is what the probe
+  // could not read when this fallback is the one in use.
+  it('slots the nvm bins the caller enumerated ahead of the system dirs on Linux', () => {
+    asPlatform('linux', () => {
+      const nvm = ['/home/x/.nvm/versions/node/v22.11.0/bin', '/home/x/.nvm/versions/node/v20.19.0/bin']
+      const dirs = loginPathFallbacks('/home/x', nvm)
+      expect(dirs.slice(5, 7)).toEqual(nvm)
+      expect(dirs.at(-2)).toBe('/usr/local/bin')
+    })
+  })
+
+  it('never adds nvm bins on macOS or Windows', () => {
+    const nvm = ['/Users/x/.nvm/versions/node/v22.11.0/bin']
+    asPlatform('darwin', () => expect(loginPathFallbacks('/Users/x', nvm)).not.toContain(nvm[0]))
+    asPlatform('win32', () => expect(loginPathFallbacks('C:\\Users\\x', nvm)).toEqual([]))
   })
 
   it('has nothing to add on Windows', () => {

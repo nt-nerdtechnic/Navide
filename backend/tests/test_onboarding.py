@@ -445,10 +445,13 @@ def test_start_ollama_service_requires_ollama(monkeypatch: pytest.MonkeyPatch) -
     assert ob.start_ollama_service()["ok"] is False
 
 
-def test_local_bin_is_a_path_fallback() -> None:
+def test_local_bin_is_a_path_fallback(tmp_path) -> None:
     # aider / opencode / cursor / kimi install scripts land in ~/.local/bin and
     # export it from a shell rc file the 3s probe can miss.
-    assert any(p.endswith("/.local/bin") for p in ob._FALLBACK_PATH_DIRS)
+    from agent_team_backend.osplat import _darwin, _linux
+
+    for paths in (_darwin.paths, _linux.paths):
+        assert str(tmp_path / ".local" / "bin") in paths.login_path_fallbacks(tmp_path)
 
 
 # ── completion flag ───────────────────────────────────────────────────────────

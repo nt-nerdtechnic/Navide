@@ -14,6 +14,8 @@ import stat
 import sys
 from pathlib import Path
 
+from . import spec
+
 log = logging.getLogger(__name__)
 
 
@@ -83,7 +85,12 @@ def is_executable(path: Path) -> bool:
     return os.access(path, os.X_OK)
 
 
-def login_path_probe() -> list[str]:
+#: What the probe runs: `printf` rather than `echo` so the marker and the
+#: value land on one line whatever the rc files printed before it.
+LOGIN_PATH_PROBE_SCRIPT = f'printf "{spec.LOGIN_PATH_MARKER}%s\\n" "$PATH"'
+
+
+def login_path_probe(*, interactive_bash: bool = False) -> list[str]:
     """The shell invocation used to read the user's real PATH.
 
     Uses $SHELL, not bash: installers write PATH exports into the user's own
@@ -91,11 +98,49 @@ def login_path_probe() -> list[str]:
     INTERACTIVE mode — a plain login shell (-lc) misses it (real case: grok's
     installer writes to ~/.zshrc; `zsh -lc` couldn't see it, so both detection
     and spawn kept failing with command-not-found after install).
+
+    `interactive_bash` asks the same of bash. Linux wants it: the nvm, bun and
+    `npm config set prefix` instructions all append to ~/.bashrc, and the
+    Debian/Ubuntu stock ~/.bashrc returns at its first line unless the shell
+    is interactive, so `bash -lc` sees ~/.profile and nothing else. macOS
+    keeps `-lc` for bash — the shipped bash 3.2 rc files are not written with
+    an interactive-but-headless shell in mind, and that is what shipped there.
+    Same split as `loginShellFlags` in src/shared/osplat.ts.
     """
     shell = os.environ.get("SHELL") or "/bin/bash"
-    if os.path.basename(shell) == "zsh":
-        return [shell, "-ilc", "echo $PATH"]
-    return [shell, "-lc", "echo $PATH"]
+    name = os.path.basename(shell)
+    interactive = name == "zsh" or (interactive_bash and name == "bash")
+    return [shell, "-ilc" if interactive else "-lc", LOGIN_PATH_PROBE_SCRIPT]
+
+
+def git_subprocess_env(askpass: str) -> dict[str, str]:
+    return {
+        "GIT_ASKPASS": askpass,
+        "SSH_ASKPASS": askpass,
+        "SSH_ASKPASS_REQUIRE": "force",
+        "GIT_TERMINAL_PROMPT": "0",
+    }
+
+
+def nvm_node_bins(home: Path) -> list[str]:
+    """Every `bin` nvm has installed under `home`, newest version first.
+
+    nvm exports exactly one of these (the `default` alias) and only from the
+    rc file the probe just failed to read, so which one the shell would have
+    chosen is unknowable here. A CLI installed with `npm install -g` lives
+    under the node version that installed it, so all of them go on `PATH`.
+    """
+    versions = home / ".nvm" / "versions" / "node"
+    try:
+        entries = [d for d in versions.iterdir() if (d / "bin").is_dir()]
+    except OSError:
+        return []
+
+    def key(d: Path) -> tuple[int, ...]:
+        digits = d.name.lstrip("v").split(".")
+        return tuple(int(part) if part.isdigit() else 0 for part in digits)
+
+    return [str(d / "bin") for d in sorted(entries, key=key, reverse=True)]
 
 
 def backend_entry_on_disk(entry: str) -> str:
