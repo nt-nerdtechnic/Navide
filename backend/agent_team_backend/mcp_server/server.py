@@ -573,11 +573,15 @@ async def cli_whoami(ctx: Context) -> dict[str, Any]:
     device, trusting or blocking one all move trust state, so they are the
     user's to do in Navide's account window and are deliberately on no tool.
 
+    `delegation_hint` restates the rule for where delegated work goes (a
+    Navide pane via cli_open_agent rather than your own subagents) so that a
+    pane which never read the server instructions still meets it here.
+
     A caller with no pane identity (host / external credential) is not a pane
     and has none of these: it gets {ok, caller} only.
     Returns {ok, caller, name, address, pane_id, workspace_path, agent_key,
-    busy, offline, hold_reason?, spawned_by?, waiting_on_me?, cloud?} or
-    {ok: false, error}.
+    busy, offline, delegation_hint, hold_reason?, spawned_by?, waiting_on_me?,
+    cloud?} or {ok: false, error}.
     """
     from agent_team_backend import agent_messaging
 
@@ -602,6 +606,7 @@ async def cli_whoami(ctx: Context) -> dict[str, Any]:
     # Not in _target_view because a peer's is on the roster elsewhere; yours is
     # not reported anywhere at all, and it is what tells you which CLI you are.
     result["agent_key"] = me.agent_key
+    result["delegation_hint"] = DELEGATION_RULE
     if me.spawned_by:
         # Through `current`, not `get`: a parent that was rebuilt around its
         # still-running CLI answers to a new id, and the retired one is exactly

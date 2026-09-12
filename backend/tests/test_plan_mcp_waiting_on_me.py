@@ -128,7 +128,7 @@ async def test_nobody_waiting_leaves_the_key_out_entirely() -> None:
     assert "waiting_on_me" not in me
     assert set(me) == {
         "ok", "caller", "name", "address", "pane_id", "workspace_path",
-        "same_workspace", "busy", "offline", "realized", "agent_key",
+        "same_workspace", "busy", "offline", "realized", "agent_key", "delegation_hint",
     }
 
 
