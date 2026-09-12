@@ -25,6 +25,10 @@ Ownership is unchanged: the queue, the rate limit, the log and the FIFO all
 stay in the renderer, which decides per message whether to push and falls back
 to the PTY the moment a push does not land. Nothing here is a delivery
 guarantee — see ``deliver`` for what each mechanism can actually prove.
+
+Despite the name, none of this is a user-facing "push notification": the desktop
+notification, sound and Dock badge the user sees live in the renderer
+(``useSystemNotify`` / ``useSoundNotify``) and are unrelated to these channels.
 """
 
 from __future__ import annotations
