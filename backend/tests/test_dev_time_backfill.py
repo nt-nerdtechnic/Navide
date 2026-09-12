@@ -106,7 +106,7 @@ def test_consecutive_assistant_records_merge_and_end_turn_closes(store, ws, clau
     ]
     assert (rows[0][2], rows[0][3]) == (_iso(T0 - 3600 + 5), _iso(T0 - 3600 + 120))
     got = _all(store, ws)
-    assert got == {"merged_s": 115 + 30, "human_s": 0, "agent_s": 145, "overlap_s": 0}
+    assert got == {"merged_s": 115 + 30, "human_s": 0, "agent_s": 145, "overlap_s": 0, "wall_s": 635}
 
 
 def test_gap_over_agent_threshold_splits_without_end_turn(store, ws, claude_home):
@@ -163,7 +163,7 @@ def test_by_pane_hides_backfill_rows_but_totals_and_days_include_them(store, ws,
     store.beat(ws, "real-pane", "human", T0 - 50)
     snap = store.snapshot(ws, now=T0)
     assert [p["pane_id"] for p in snap["by_pane"]] == ["real-pane"]
-    assert snap["totals"]["all"] == {"merged_s": 350, "human_s": 50, "agent_s": 300, "overlap_s": 0}
+    assert snap["totals"]["all"] == {"merged_s": 350, "human_s": 50, "agent_s": 300, "overlap_s": 0, "wall_s": 550}
     assert snap["totals"]["today"]["agent_s"] == 300
     assert snap["by_day"][-1]["agent_s"] == 300
 

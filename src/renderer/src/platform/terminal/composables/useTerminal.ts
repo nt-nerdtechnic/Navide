@@ -4246,14 +4246,14 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
    * of which reject), or the backend answered `ok: false` — which wsClient
    * resolves rather than rejects, so it has to be checked here.
    */
-  function _sendPasteChunk(text: string): Promise<PasteChunkFailure | null> {
+  function _sendPasteChunk(text: string, opts?: TerminalInputOptions): Promise<PasteChunkFailure | null> {
     if (!sessionId.value || status.value === 'exited' || status.value === 'error') {
       return Promise.resolve('transport')
     }
     if (!inputTransportReady()) {
       return Promise.resolve('transport')
     }
-    return terminalPort.input(sessionId.value, text, PASTE_ACK_TIMEOUT_MS)
+    return terminalPort.input(sessionId.value, text, PASTE_ACK_TIMEOUT_MS, opts)
       .then((reply) => {
         if (reply && typeof reply === 'object' && (reply as { ok?: unknown }).ok === false) {
           return 'refused' as const
@@ -4348,7 +4348,9 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
     // retry from here: the bytes that did land are already in the CLI's input,
     // so re-sending would duplicate them. Say so and let the user decide.
     const chunks = chunkForPty(payload, PASTE_CHUNK)
-    void Promise.all(chunks.map((chunk) => _sendPasteChunk(chunk))).then((outcomes) => {
+    // ⌘V and a file drop are the person at the keyboard; injection never
+    // comes through here (App.vue's injectText has its own path).
+    void Promise.all(chunks.map((chunk) => _sendPasteChunk(chunk, HUMAN_KEY))).then((outcomes) => {
       const lost = outcomes.filter((o) => o === 'transport' || o === 'refused').length
       const late = outcomes.filter((o) => o === 'timeout').length
       // A late ack is not a lost chunk: the backend writes the bytes into the

@@ -3,8 +3,8 @@ import { ref } from 'vue'
 import { useDevTime, formatDuration, ACTIVE_POLL_MS, type DevTimeSnapshot } from '../useDevTime'
 import { createMockBackend, withScope, flush } from './mockBackend'
 
-function totals(merged = 0, human = 0, agent = 0, overlap = 0) {
-  return { merged_s: merged, human_s: human, agent_s: agent, overlap_s: overlap }
+function totals(merged = 0, human = 0, agent = 0, overlap = 0, wall = merged) {
+  return { merged_s: merged, human_s: human, agent_s: agent, overlap_s: overlap, wall_s: wall }
 }
 
 function snapshot(workspacePath: string, over: Partial<DevTimeSnapshot> = {}): DevTimeSnapshot {

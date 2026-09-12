@@ -192,6 +192,26 @@ describe('useTerminal — manual paste', () => {
     scope.stop()
   })
 
+  // The backend counts development time off `human: true`; a clipboard paste
+  // is the user acting, while a bare pasteText (the programmatic entry used by
+  // the git/editor/dock windows) is not.
+  it('flags every chunk of a clipboard paste as human', async () => {
+    const { mock, scope } = await spawnedTerminal(undefined)
+    paste('x'.repeat(600))
+    const sent = mock.sent.filter((s) => s.type === 'terminal.input').map((s) => s.payload)
+    expect(sent.length).toBeGreaterThan(1)
+    for (const p of sent) expect(p).toMatchObject({ terminal_session_id: 'sess-1', human: true })
+    scope.stop()
+  })
+
+  it('leaves an injected pasteText without the flag', async () => {
+    const { mock, scope, terminal } = await spawnedTerminal(undefined)
+    expect(terminal.pasteText('injected\r')).toBe(true)
+    const sent = mock.sent.filter((s) => s.type === 'terminal.input').map((s) => s.payload)
+    expect(sent).toEqual([{ terminal_session_id: 'sess-1', data: 'injected\r' }])
+    scope.stop()
+  })
+
   it('leaves a plain shell paste unbracketed', async () => {
     const { mock, scope } = await spawnedTerminal(undefined)
     paste('echo hi\n')

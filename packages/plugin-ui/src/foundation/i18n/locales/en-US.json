@@ -2805,7 +2805,8 @@
     "no-data": "No activity recorded yet",
     "idle-hint": "Stops counting after {minutes} min idle",
     "reset-title": "Reset time",
-    "reset-confirm": "Wipe all development-time records for this workspace? This cannot be undone."
+    "reset-confirm": "Wipe all development-time records for this workspace? This cannot be undone.",
+    "wall-clock": "wall-clock {wall} · idle excluded {idle}%"
   },
   "mention": {
     "group-recent": "Recent",

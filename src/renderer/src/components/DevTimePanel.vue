@@ -27,7 +27,7 @@ const props = defineProps<Props>()
 const workspacePathRef: Ref<string> = computed(() => props.workspacePath) as unknown as Ref<string>
 const { snapshot, loading, reset } = useDevTime(props.backend, workspacePathRef)
 
-const EMPTY: DevTimeTotals = { merged_s: 0, human_s: 0, agent_s: 0, overlap_s: 0 }
+const EMPTY: DevTimeTotals = { merged_s: 0, human_s: 0, agent_s: 0, overlap_s: 0, wall_s: 0 }
 
 // ─────────────────────── Totals ───────────────────────────────────────────
 
@@ -44,6 +44,17 @@ const selected = ref<DevTimeWindow>('today')
 
 function totalsOf(w: DevTimeWindow): DevTimeTotals {
   return snapshot.value?.totals?.[w] ?? EMPTY
+}
+
+/** The small print under a card: elapsed clock time between the window's
+ *  first and last activity, and how much of it was idle. Null when the window
+ *  holds no interval — there is no span to speak of. */
+function wallClockOf(w: DevTimeWindow): { wall: string; idle: number } | null {
+  const t = totalsOf(w)
+  const wall = t.wall_s ?? 0
+  if (wall <= 0) return null
+  const idle = Math.round(Math.max(0, Math.min(1, 1 - t.merged_s / wall)) * 100)
+  return { wall: formatDuration(wall), idle }
 }
 
 // ─────────────────────── Source breakdown ─────────────────────────────────
@@ -149,6 +160,9 @@ async function confirmReset(): Promise<void> {
             <div class="big">{{ formatDuration(totalsOf(c.window).merged_s) }}</div>
             <div class="lbl">{{ $t(c.labelKey) }}</div>
           </button>
+        </div>
+        <div v-if="wallClockOf(selected)" class="wall">
+          {{ $t('devtime.wall-clock', { wall: wallClockOf(selected)!.wall, idle: wallClockOf(selected)!.idle }) }}
         </div>
       </section>
 
@@ -283,6 +297,15 @@ async function confirmReset(): Promise<void> {
   color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.5px;
+}
+.wall {
+  margin-top: 6px;
+  font-size: var(--font-3xs);
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ─────── source breakdown ─────── */

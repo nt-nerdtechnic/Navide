@@ -8,6 +8,9 @@ export interface DevTimeTotals {
   human_s: number
   agent_s: number
   overlap_s: number
+  /** Clock seconds from the first to the last interval inside the window;
+   *  0 when it holds none. `1 - merged_s / wall_s` is the idle share. */
+  wall_s: number
 }
 
 export interface DevTimeDay {

@@ -57,7 +57,7 @@ def test_consecutive_beats_merge_into_one_interval(store, ws):
     assert store.beat(ws, "p1", "human", T0 + 60) is False
     assert store.beat(ws, "p1", "human", T0 + 120) is False
     snap = store.snapshot(ws, now=T0 + 130)
-    assert _all(snap) == {"merged_s": 120, "human_s": 120, "agent_s": 0, "overlap_s": 0}
+    assert _all(snap) == {"merged_s": 120, "human_s": 120, "agent_s": 0, "overlap_s": 0, "wall_s": 120}
     assert snap["active"] is True
     assert snap["active_sources"] == ["human"]
     assert len(_rows(ws)) == 1
@@ -156,7 +156,7 @@ def test_human_agent_overlap(store, ws):
     store.beat(ws, "p1", "agent", T0 + 50)
     store.beat(ws, "p1", "agent", T0 + 200)
     got = _all(store.snapshot(ws, now=T0 + 200))
-    assert got == {"merged_s": 200, "human_s": 100, "agent_s": 150, "overlap_s": 50}
+    assert got == {"merged_s": 200, "human_s": 100, "agent_s": 150, "overlap_s": 50, "wall_s": 200}
     assert store.snapshot(ws, now=T0 + 200)["active_sources"] == ["human", "agent"]
 
 
@@ -194,6 +194,34 @@ def test_backfill_source_counts_as_agent(store, ws):
     got = _all(store.snapshot(ws, now=T0))
     assert got["agent_s"] == 600
     assert got["human_s"] == 0
+
+
+def test_wall_s_spans_first_to_last_activity_in_window(store, ws):
+    # One interval: wall == merged.
+    store.beat(ws, "p1", "human", T0)
+    store.beat(ws, "p1", "human", T0 + 100)
+    one = _all(store.snapshot(ws, now=T0 + 100))
+    assert one["wall_s"] == one["merged_s"] == 100
+    # A second pane's agent interval after an idle gap: wall spans across
+    # sources and panes, merged does not include the gap.
+    store.beat(ws, "p2", "agent", T0 + 400)
+    store.beat(ws, "p2", "agent", T0 + 460)
+    two = _all(store.snapshot(ws, now=T0 + 460))
+    assert two["merged_s"] == 160
+    assert two["wall_s"] == 460
+    assert two["wall_s"] > two["merged_s"]
+
+
+def test_wall_s_is_clipped_to_the_window(store, ws):
+    tz = timezone(timedelta(hours=8))
+    store = DevTimeStore(WorkspaceDatabases(), tz=tz)
+    start = datetime(2026, 9, 10, 23, 50, tzinfo=tz).timestamp()
+    for offset in (0, 600, 1200):
+        store.beat(ws, "p1", "agent", start + offset)   # 23:50 -> 00:10 local
+    snap = store.snapshot(ws, now=datetime(2026, 9, 11, 1, 0, tzinfo=tz).timestamp())
+    assert snap["totals"]["today"]["wall_s"] == 600       # only the post-midnight part
+    assert snap["totals"]["all"]["wall_s"] == 1200
+    assert snap["totals"]["last7d"]["wall_s"] == 1200
 
 
 # ── Day buckets ──────────────────────────────────────────────────────
@@ -290,7 +318,9 @@ def test_snapshot_shape_for_untouched_workspace(store, ws):
     assert snap["gap_agent_s"] == AGENT_GAP_S
     assert snap["active"] is False and snap["active_sources"] == []
     assert set(snap["totals"]) == {"today", "last7d", "last30d", "all"}
+    assert all(bucket["wall_s"] == 0 for bucket in snap["totals"].values())  # empty window
     assert len(snap["by_day"]) == 7 and snap["by_pane"] == []
+    assert "wall_s" not in snap["by_day"][0]
     # A read never plants a database in the workspace.
     import os
 

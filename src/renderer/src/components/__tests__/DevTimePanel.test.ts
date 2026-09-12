@@ -6,24 +6,26 @@ import DevTimePanel from '../DevTimePanel.vue'
 import { registerCommand } from '@navide/plugin-ui/shared'
 import type { DevTimeSnapshot } from '../../composables/useDevTime'
 
-function snapshot(): DevTimeSnapshot {
-  const t = (m: number, h: number, a: number, o: number) => ({ merged_s: m, human_s: h, agent_s: a, overlap_s: o })
+function snapshot(over: Partial<DevTimeSnapshot> = {}): DevTimeSnapshot {
+  const t = (m: number, h: number, a: number, o: number, w = m) => ({ merged_s: m, human_s: h, agent_s: a, overlap_s: o, wall_s: w })
   return {
     workspace_path: '/ws',
     gap_human_s: 300,
     gap_agent_s: 900,
     active: true,
     active_sources: ['agent'],
-    totals: { today: t(9300, 3600, 7200, 1500), last7d: t(36000, 0, 0, 0), last30d: t(0, 0, 0, 0), all: t(90061, 0, 0, 0) },
+    // today: 2h 35m of activity inside a 3h 10m span → 18% idle.
+    totals: { today: t(9300, 3600, 7200, 1500, 11400), last7d: t(36000, 0, 0, 0, 0), last30d: t(0, 0, 0, 0), all: t(90061, 0, 0, 0) },
     by_day: ['06', '07', '08', '09', '10', '11', '12'].map((d) => ({ date: `2026-09-${d}`, merged_s: d === '12' ? 9300 : 60, human_s: 0, agent_s: 0 })),
     by_pane: [{ pane_id: 'p1', today_s: 9300, all_s: 90061, active: true }],
+    ...over,
   }
 }
 
-function mountPanel() {
+function mountPanel(snap: DevTimeSnapshot = snapshot()) {
   const backend = {
     status: ref('connected'),
-    send: vi.fn(async () => ({ ok: true, payload: snapshot() })),
+    send: vi.fn(async () => ({ ok: true, payload: snap })),
     on: () => () => {},
   }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -36,7 +38,8 @@ function mountPanel() {
         { id: 'p2', agentKey: 'codex', agentLabel: 'Docs', roleLabel: 'writer' },
       ],
     },
-    global: { mocks: { $t: (key: string) => key } },
+    // Params are echoed so a test can read what the interpolation received.
+    global: { mocks: { $t: (key: string, params?: Record<string, unknown>) => params ? `${key} ${JSON.stringify(params)}` : key } },
   })
   return { w, backend }
 }
@@ -59,7 +62,19 @@ describe('DevTimePanel', () => {
     expect(rows[1].text()).toContain('Docs')
     expect(rows[1].text()).toContain('0m')
     expect(rows[1].find('.dot').classes()).not.toContain('on')
-    expect(w.find('.hint').text()).toBe('devtime.idle-hint')
+    expect(w.find('.hint').text()).toBe('devtime.idle-hint {"minutes":5}')
+    w.unmount()
+  })
+
+  it('prints wall-clock span and idle share under the cards, hidden when the window has no span', async () => {
+    const { w } = mountPanel()
+    await new Promise((r) => setTimeout(r, 0))
+    await w.vm.$nextTick()
+    expect(w.find('.wall').text()).toBe('devtime.wall-clock {"wall":"3h 10m","idle":18}')
+
+    // last7d has activity but wall_s 0 (the backend has no span for it): no line.
+    await w.findAll('.totals .cell')[1].trigger('click')
+    expect(w.find('.wall').exists()).toBe(false)
     w.unmount()
   })
 

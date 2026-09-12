@@ -2805,7 +2805,8 @@
     "no-data": "尚無活動記錄",
     "idle-hint": "閒置 {minutes} 分鐘後停止計時",
     "reset-title": "重設時間",
-    "reset-confirm": "清除此 workspace 的全部開發時間記錄？此操作無法復原。"
+    "reset-confirm": "清除此 workspace 的全部開發時間記錄？此操作無法復原。",
+    "wall-clock": "wall-clock {wall} · 排除閒置 {idle}%"
   },
   "mention": {
     "group-recent": "最近",

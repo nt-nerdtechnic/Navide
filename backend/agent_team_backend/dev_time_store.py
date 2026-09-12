@@ -676,11 +676,15 @@ class DevTimeStore:
     def _bucket(human: list[_Span], agent: list[_Span], lo: float, hi: float) -> dict[str, int]:
         h = _clip(human, lo, hi)
         a = _clip(agent, lo, hi)
+        merged = _union(h + a)
         return {
-            "merged_s": _seconds(_union(h + a)),
+            "merged_s": _seconds(merged),
             "human_s": _seconds(h),
             "agent_s": _seconds(a),
             "overlap_s": _seconds(_intersect(h, a)),
+            # Clock time between the first and last activity in the window
+            # (both ends already clipped); the idle share is 1 - merged/wall.
+            "wall_s": int(round(merged[-1][1] - merged[0][0])) if merged else 0,
         }
 
     def snapshot(self, workspace_path: str, now: float | None = None) -> dict[str, Any]:
