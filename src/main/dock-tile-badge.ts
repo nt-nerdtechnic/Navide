@@ -1,5 +1,7 @@
 import type { BrowserWindow } from 'electron'
 
+import { isMac } from '../shared/osplat'
+
 // macOS per-window Dock tile badge (Terminal.app-style): when a window is
 // minimized, its Dock tile can carry the same system red badge as the app icon
 // via NSWindow.dockTile.badgeLabel. Electron has no API for this, so we call
@@ -46,7 +48,7 @@ function loadApi(): ObjcApi | null {
 
 /** Set (or clear, with '') the red badge on a window's minimized Dock tile. */
 export function setWindowDockTileBadge(win: BrowserWindow, label: string): boolean {
-  if (process.platform !== 'darwin' || win.isDestroyed()) return false
+  if (!isMac() || win.isDestroyed()) return false
   const a = loadApi()
   if (!a) return false
   try {

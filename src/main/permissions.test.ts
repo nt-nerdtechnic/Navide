@@ -1,6 +1,7 @@
 import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { normalizePlatformId, setPlatformId } from '../shared/osplat'
 
 // permissions.ts caches the last prompt result on disk because macOS exposes no
 // non-prompting TCC read to Electron. These tests pin the contract the Settings
@@ -51,12 +52,8 @@ vi.mock('node:child_process', () => ({ execFile: vi.fn() }))
 // differently from the code under test and every cached read would miss.
 const CACHE = join(USER_DATA, 'permissions.json')
 
-function setPlatform(p: string): void {
-  Object.defineProperty(process, 'platform', { value: p, configurable: true })
-}
 
 describe('permissions (main)', () => {
-  const realPlatform = process.platform
 
   beforeEach(() => {
     files.clear()
@@ -64,14 +61,14 @@ describe('permissions (main)', () => {
     notificationsSupported = true
     showThrows = false
     openExternal.mockClear()
-    setPlatform('darwin')
+    setPlatformId('darwin')
   })
   afterEach(() => {
-    setPlatform(realPlatform)
+    setPlatformId(normalizePlatformId(process.platform))
   })
 
   it('reports every permission not-applicable off macOS without touching disk', async () => {
-    setPlatform('linux')
+    setPlatformId('linux')
     const { getPermissionStatuses, requestPermission } = await import('./permissions')
     expect(await getPermissionStatuses()).toEqual({
       automation: 'not-applicable',
@@ -136,7 +133,7 @@ describe('permissions (main)', () => {
   })
 
   it('openPermissionSettings is a no-op off macOS', async () => {
-    setPlatform('win32')
+    setPlatformId('win32')
     const { openPermissionSettings } = await import('./permissions')
     await openPermissionSettings('notifications')
     expect(openExternal).not.toHaveBeenCalled()

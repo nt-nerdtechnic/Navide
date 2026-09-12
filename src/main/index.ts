@@ -166,7 +166,7 @@ if (
   )
 }
 
-if (process.platform === 'darwin') {
+if (isMac()) {
   app.dock?.setIcon(nativeImage.createFromPath(join(__dirname, '../../resources/icon.png')))
 }
 
@@ -3127,7 +3127,7 @@ ipcMain.handle(
 // unseen done/attention activity. The renderer tracks WHEN to update it
 // (useSystemNotify's pendingCount); main just reflects the count.
 ipcMain.on('window:setBadgeCount', (event, count: number) => {
-  if (process.platform !== 'darwin') return
+  if (!isMac()) return
   app.dock?.setBadge(count > 0 ? String(count) : '')
   // Mirror the count onto the sender window's own Dock tile (Terminal.app-style):
   // the system red badge shows on its thumbnail while the window is minimized.
@@ -4114,7 +4114,7 @@ app.whenReady().then(async () => {
 })
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit()
+  if (!isMac()) app.quit()
 })
 
 // Shutdown budgets. They are deliberately SEPARATE: a single shared deadline
