@@ -147,8 +147,45 @@ test UI changes manually. To reproduce the build check locally, run `pnpm build`
   integration is two vendor spec files plus registration — never an
   `if agent_key == "<yours>"` branch in a shared module.
 
+**Tests that have to pass on macOS, Linux and Windows**
+
+CI runs both suites on all three. Most tests that fail on only one platform
+are correct code plus a test that answered a platform question itself instead
+of asking the seam the code under test asks. Two rules keep that out:
+
+- *Do not build a platform-dependent value by a different route than the
+  module under test.* If the module gets a path from `join()`, a PATH from
+  `os.pathsep`, a shell from `osplat.paths.shell_command()`, or kills through
+  `osplat.process_tree.kill()`, the test uses the same call — never a
+  `'/tmp/…'` literal as a fake-fs key, a `.split(":")`, a bare `/bin/sh`, or a
+  stub of `os.kill` under that module. The two spellings agree on the platform
+  you wrote the test on and disagree on exactly one other; and a stub that
+  lands under the seam does something worse than fail there — on Windows
+  `os.kill` is never reached, the real call raises an equivalent error, and
+  the test passes while executing none of what it claims. Stub the seam for
+  *which* pids are signalled; only a test about *how* (the signal itself) may
+  stub `os.kill`, gated on the capability (`skipif(not hasattr(signal,
+  "SIGKILL"))` — say what you need, not which OS you think you are on). A
+  literal that is a spec constant (`STATUS_CONTROL_C_EXIT`) or a value the test
+  itself set is fine to assert; a value the current platform decides (an OS
+  error message) is not. `backend/tests/test_cross_platform_test_hygiene.py`
+  and `src/main/crossPlatformTestHygiene.test.ts` ratchet the shapes that can be
+  matched statically; the rest is this paragraph.
+- *Take the platform as an input; do not ask the host.* Code that computes
+  another platform's paths should take the platform as a parameter and pick
+  `path.win32`/`path.posix` (or the osplat layout class) from it, the way
+  `resolveBackendDataDir` in `src/main/ui-settings-bootstrap.ts` does. Then a
+  test can assert all three answers on any runner — the fastest one, minutes
+  before the Windows job reports. `src/main/backend-ws-token-parity.test.ts`
+  does exactly this: the macOS runner asserts the Linux answer by driving
+  `_linux.LinuxLayout` directly and comparing with the Python side.
+
 > 請與現有程式碼風格保持一致。Python 提交前請執行完整 backend tests。
 > 新增 CLI 整合請依 `docs/adding-a-cli-vendor.md`，一家一檔，不要在共用模組加分支。
+> 測試要在三個平台都過：不要繞過被測程式用的 seam 自己造路徑／平台答案
+> （`join()`、`os.pathsep`、`osplat.*`——被測程式怎麼拿，測試就怎麼拿；stub 停在 seam，
+> 不停在 seam 底下的 `os.kill`）；算別的平台的路徑時把 platform 當參數傳、不要問 host，
+> 這樣三個平台的答案在任何 runner 都能斷言。
 
 ---
 
