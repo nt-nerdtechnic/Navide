@@ -338,3 +338,44 @@ describe('buildWorkspaceGroups', () => {
     expect(rows[1].count).toBe(2)
   })
 })
+
+describe('buildWorkspaceGroups display names', () => {
+  it('labels a row with the folder name when no alias is given', () => {
+    const rows = build({ here: A, order: [A] })
+    expect(rows[0].label).toBe('alpha')
+  })
+
+  it('labels a row with its alias', () => {
+    const rows = build({ here: A, order: [A], aliases: { [A]: 'Payments API' } })
+    expect(rows[0].label).toBe('Payments API')
+  })
+
+  it('leaves path and every comparison on the real path', () => {
+    // The alias is display only: the row still identifies itself by path, and
+    // its panes are still matched by path — so renaming a project can never
+    // move a pane between headings.
+    const rows = build({
+      here: A,
+      order: [A, B],
+      panes: [pane('a1', A), pane('b1', B)],
+      lineage: [row('a1'), row('b1')],
+      aliases: { [A]: 'same', [B]: 'same' },
+    })
+    expect(rows.map((r) => r.path)).toEqual([A, B])
+    expect(rows.map((r) => r.label)).toEqual(['same', 'same'])
+    expect(rows[0].paneIds).toEqual(['a1'])
+    expect(rows[1].paneIds).toEqual(['b1'])
+    // The parent path is what tells two identically-named rows apart.
+    expect(rows[0].displayPath).toBe('~/Desktop')
+  })
+
+  it('finds an alias stored without the trailing slash the row carries', () => {
+    const rows = build({ here: `${A}/`, order: [`${A}/`], aliases: { [A]: 'Payments API' } })
+    expect(rows[0].label).toBe('Payments API')
+  })
+
+  it('falls back to the folder name for a cleared alias', () => {
+    const rows = build({ here: A, order: [A], aliases: { [A]: '' } })
+    expect(rows[0].label).toBe('alpha')
+  })
+})

@@ -1861,7 +1861,9 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
           lastGroup = cand.group
           const hdr = document.createElement('div')
           hdr.className = 'term-mention-group'
-          hdr.textContent = cand.group
+          // Keyed on `group` (a path for workspace sections), titled with
+          // `groupLabel` — never print a raw key at the user.
+          hdr.textContent = cand.groupLabel ?? cand.group
           Object.assign(hdr.style, {
             padding: '6px 8px 3px', color: 'var(--gray-4)', fontSize: '10.5px',
             letterSpacing: '0.06em', textTransform: 'uppercase',

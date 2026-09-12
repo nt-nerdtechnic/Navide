@@ -794,6 +794,29 @@ describe('clusterMentionCandidates', () => {
     expect(out.map((x) => x.address)).toEqual(['x', 'y', 'a'])
     expect(out[0].group).toBeUndefined()
   })
+
+  it('sections by the key, not by the heading text', () => {
+    // Two projects can be called the same thing — the more so now that a
+    // project can be given a display name, which is allowed to repeat. Keyed on
+    // the path they stay two sections; keyed on the name they collapsed into
+    // one and each project appeared to hold the other's panes.
+    const at = (address: string, path: string, label: string): MentionCandidate =>
+      ({ address, group: path, groupLabel: label })
+    const out = clusterMentionCandidates([
+      at('a', '/w/one', 'api'),
+      at('b', '/w/two', 'api'),
+      at('c', '/w/one', 'api'),
+    ])
+    expect(out.map((x) => x.address)).toEqual(['a', 'c', 'b'])
+    expect(out.map((x) => x.group)).toEqual(['/w/one', '/w/one', '/w/two'])
+    expect(out.map((x) => x.groupLabel)).toEqual(['api', 'api', 'api'])
+  })
+
+  it('leads with the sender own workspace by path', () => {
+    const at = (address: string, path: string): MentionCandidate => ({ address, group: path })
+    const out = clusterMentionCandidates([at('a', '/w/two'), at('b', '/w/one')], '/w/one')
+    expect(out.map((x) => x.address)).toEqual(['b', 'a'])
+  })
 })
 
 describe('rankMentionCandidates', () => {
@@ -810,6 +833,18 @@ describe('rankMentionCandidates', () => {
     const out = rankMentionCandidates(all, ['proj/x-1'], 'Recent')
     expect(out[0]).toMatchObject({ address: 'proj/x-1', group: 'Recent' })
     expect(out.find((c) => c.address === 'claude-1')?.group).toBe('local')
+  })
+
+  it('drops the old section heading when it hoists a row into recents', () => {
+    // The hoisted row changes section, so a groupLabel left over from its
+    // workspace would title the recents header with a project name.
+    const out = rankMentionCandidates(
+      [{ address: 'proj/x-1', group: '/w/proj', groupLabel: 'Payments API' }],
+      ['proj/x-1'],
+      'Recent',
+    )
+    expect(out[0]).toMatchObject({ address: 'proj/x-1', group: 'Recent' })
+    expect(out[0].groupLabel).toBeUndefined()
   })
 
   it('ignores recents that are no longer offered (pane closed)', () => {

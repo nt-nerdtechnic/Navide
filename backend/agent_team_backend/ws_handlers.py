@@ -2744,6 +2744,28 @@ async def workspace_touch(session: "Session", msg_id: str, msg_type: str, payloa
         state=payload.get("state", ""),
         task=payload.get("task", ""),
     )
+    # Re-seed the display-name mirror from the project document, which is the
+    # truth for it. The entry this touch just created — a workspace dropped
+    # from the recent list and then reopened — carries only the folder
+    # basename, so without this the alias the project document still holds
+    # would be gone from every recent list until the next rename.
+    #
+    # Unconditional, in BOTH directions: an alias cleared in the project
+    # document has to push the basename back over a mirror still holding the
+    # old one, or "truth" would only mean truth while it is non-empty
+    # (set_name("") does the basename fallback itself).
+    #
+    # peek() (never load_or_create) — touching a recent entry must not create
+    # files inside the workspace. Offloaded for the same reason as
+    # list_recent above: peek opens a sqlite connection, and on a workspace
+    # with a legacy project.json it also WRITES (the one-time import), neither
+    # of which belongs on the event loop.
+    def _reseed_display_name_mirror() -> None:
+        project = app.project_store.peek(payload["path"])
+        if project is not None:
+            app.recent_workspaces_store.set_name(payload["path"], project.display_name)
+
+    await asyncio.to_thread(_reseed_display_name_mirror)
     recent = app.recent_workspaces_store.list()
     await session.send_json(
         make_response(msg_id, msg_type, {"recent": recent})
@@ -6282,6 +6304,86 @@ async def project_get_spawn_history(session: "Session", msg_id: str, msg_type: s
     )
 
 
+@handler("project.set_display_name")
+async def project_set_display_name(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """Persist a user-set display name for the workspace itself.
+
+    The truth lives in the workspace's own project document, alongside that
+    project's other ui state: the alias stays with the project folder, is
+    independent per project, and survives the global settings caches being
+    rebuilt or cleared. It does NOT leave this machine — `.agent-team/` is
+    git-ignored (the repo ignores it, and db.py writes a self-ignoring
+    `.gitignore` inside it), so the alias is never committed, pulled, or seen
+    by a teammate.
+
+    The global recent-workspaces store keeps a `name` mirror on top, because
+    the Welcome and sidebar recent lists draw many workspaces at once and
+    cannot open every project's db to find their names.
+
+    Empty `display_name` clears the alias: the project document goes back to ""
+    and the mirror back to the folder basename. The path stays the only
+    identifier — aliases are cosmetic and may repeat.
+
+    The store uses load_or_create rather than peek, so a workspace that has no
+    project document yet gets one instead of swallowing the rename. `ok`
+    therefore reports whether the name was really persisted: there is no path
+    that answers a rename with a success the user did not get.
+    """
+    from . import app
+
+    ws_raw = payload.get("workspace_path", "") or ""
+    display_name = (payload.get("display_name", "") or "").strip()
+    if not ws_raw.strip():
+        await session.send_json(
+            make_response(
+                msg_id, msg_type, {"ok": False, "error": "workspace_path is required"}
+            )
+        )
+        return
+
+    # Same reason as set_ui_state: the read-modify-write plus save is
+    # blocking, and the store's save lock serializes offloaded callers.
+    def _persist():
+        proj = app.project_store.set_display_name(ws_raw, display_name)
+        if proj is not None:
+            app.recent_workspaces_store.set_name(ws_raw, display_name)
+        return proj
+
+    project = await asyncio.to_thread(_persist)
+    if project is None:
+        await session.send_json(
+            make_response(
+                msg_id,
+                msg_type,
+                {"ok": False, "error": "could not write the project document"},
+            )
+        )
+        return
+
+    # Peer windows adopt the new name live (sidebar, title bar).
+    await app.broadcast(
+        make_event(
+            "project.ui_state_changed",
+            {
+                "workspace_path": project.workspace_path,
+                "display_name": display_name,
+            },
+        ),
+        exclude=session,
+    )
+    # And the Welcome recent list re-reads the mirror.
+    recent = await asyncio.to_thread(app.recent_workspaces_store.list)
+    await app.broadcast(
+        make_event(
+            "workspace.recent_changed",
+            {"recent": recent, "reason": "display_name"},
+        )
+    )
+    await session.send_json(
+        make_response(msg_id, msg_type, {"ok": True, "display_name": display_name})
+    )
+
+
 @handler("project.rename_pane")
 async def project_rename_pane(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     from . import app
@@ -7548,9 +7650,52 @@ async def ui_invoke_result(session: "Session", msg_id: str, msg_type: str, paylo
 
 @handler("agent_msg.list")
 async def agent_msg_list(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
     raw_ws = payload.get("workspace_path")
     workspace_path = str(raw_ws) if isinstance(raw_ws, str) and raw_ws else None
     entries = [e.to_dict() for e in agent_messaging.list_panes(workspace_path)]
+
+    # Add `workspace_display_name` — the workspace's user-set alias — so mention
+    # menus can title a section with the name the user chose. Done HERE, on the
+    # dict the roster handed back, rather than in RegisteredPane.to_dict():
+    # workspace_label / qualified_name there are the `<folder>/<pane>`
+    # addressing protocol (also MCP cli_list_targets' `address` and the
+    # cross-device three-part address), so the roster stays a roster and this
+    # stays a presentation detail of one payload.
+    #
+    # Source is the recent-list mirror, which the backend keeps equal to the
+    # display name (alias when set, folder basename otherwise). A path that is
+    # not in the mirror — a workspace never opened from this machine's recent
+    # list — gets NO field at all: the mirror has nothing to say about it, and
+    # the frontend falls back to `workspace_label` (the basename) on its own.
+    # The mirror cannot tell "no alias" from "alias equal to the folder name"
+    # either way — it stores the basename for both.
+    #
+    # Offloaded like workspace.list_recent: the mirror is sqlite plus an
+    # isdir() per entry, and this handler is polled every few seconds by every
+    # AI dock panel — so with nothing to enrich the read is skipped outright.
+    def _display_names() -> dict[str, str]:
+        store = app.recent_workspaces_store
+        return {
+            str(e.get("path", "")): str(e.get("name", "") or "")
+            for e in store.list()
+        }
+
+    names = await asyncio.to_thread(_display_names) if entries else {}
+    if names:
+        normalize = app.recent_workspaces_store._normalize
+        for entry in entries:
+            raw_path = entry.get("workspace_path") or ""
+            if not raw_path:
+                continue
+            # Both sides through the store's own normalization: the mirror keys
+            # are abspath(expanduser(...)) and a roster path is whatever the
+            # window registered, so comparing them raw misses silently.
+            display = names.get(normalize(str(raw_path)), "")
+            if display:
+                entry["workspace_display_name"] = display
+
     await session.send_json(make_response(msg_id, msg_type, {"panes": entries}))
 
 

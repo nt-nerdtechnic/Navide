@@ -1,4 +1,5 @@
 import { collapseHomePath } from '@navide/terminal'
+import { workspaceDisplayName } from './workspaceAlias'
 
 /** One row of the lineage tree: a pane id and where it sits in the subtree.
  *
@@ -57,6 +58,10 @@ export interface WorkspaceGroupInput {
   runGroupsByWorkspace: Readonly<Record<string, readonly { id: string; name: string }[]>>
   collapsed: ReadonlySet<string>
   homeDir: string
+  /** Path → user-set display name, for the workspaces that have one. Affects
+   *  the heading TEXT only: `path` and every comparison in here stay the real
+   *  path, because an alias is display and may repeat. */
+  aliases?: Readonly<Record<string, string>>
 }
 
 export interface WorkspaceGroupRow {
@@ -80,8 +85,6 @@ export interface WorkspaceGroupRow {
 }
 
 const norm = (p: string): string => p.replace(/\/+$/, '')
-
-const basename = (path: string): string => path.split('/').filter(Boolean).pop() ?? path
 
 /** The folder a workspace sits IN, home collapsed to `~`.
  *
@@ -112,7 +115,7 @@ export function workspaceParentPath(path: string, homeDir: string): string {
  *  order from what is on screen makes the list reshuffle on every switch.
  */
 export function buildWorkspaceGroups(input: WorkspaceGroupInput): WorkspaceGroupRow[] {
-  const { here, order, panes, lineage, runGroups, runGroupsByWorkspace, collapsed, homeDir } =
+  const { here, order, panes, lineage, runGroups, runGroupsByWorkspace, collapsed, homeDir, aliases } =
     input
   const rows: WorkspaceGroupRow[] = []
 
@@ -173,7 +176,7 @@ export function buildWorkspaceGroups(input: WorkspaceGroupInput): WorkspaceGroup
     const ids = idsIn(path)
     rows.push({
       path,
-      label: basename(path),
+      label: workspaceDisplayName(path, aliases),
       displayPath: workspaceParentPath(path, homeDir),
       isCurrent: true,
       collapsed: collapsed.has(path),

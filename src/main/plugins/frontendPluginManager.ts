@@ -4435,6 +4435,77 @@ export class FrontendPluginManager {
     return this.wsClient
   }
 
+  /** Best-effort display-name alias for the entry query of a plugin view, so
+   *  the window it lives in can wear the name the user gave the workspace
+   *  instead of the folder name. `''` means "no alias" and is also what every
+   *  failure returns — a sub-window that receives no alias falls back to
+   *  `basename(workspace_path)`, exactly what it showed before aliases
+   *  existed.
+   *
+   *  Read from `workspace.list_recent`, the recent-list MIRROR of
+   *  `Project.display_name`, and not from `project.peek`: peek is not a pure
+   *  read — it registers the path as a workspace (token attribution, a log
+   *  rescan) and provisions `.agent-team/plans/` inside it. Opening a
+   *  sub-folder of a workspace in the editor must not turn that folder into a
+   *  workspace with three files it never asked for. The mirror is read-only
+   *  and is exactly what the list views already show; a real workspace is in
+   *  it as soon as the App has opened it once, and a sub-folder is not — and
+   *  has no alias to report. An entry whose name is the folder basename is the
+   *  mirror's own fallback for "no alias", so it reports `''` too.
+   *
+   *  Path match: both sides are absolute with trailing slashes trimmed. The
+   *  backend files entries under `abspath(expanduser(path))`; `resolve` here
+   *  matches that for the absolute paths the renderer hands over. No realpath
+   *  on either side — a symlinked workspace is filed under the path the user
+   *  opened.
+   *
+   *  Bounded on purpose. `WsClient.send` waits up to 10s for a reply and
+   *  queues while the transport is down; a window open should not wait that
+   *  long for a title. The race caps it at `timeoutMs`, after which the
+   *  window opens with no alias.
+   *
+   *  Not cached: a rename between two opens must not be served a stale name,
+   *  and the Host has no `workspace.recent_changed` subscription to invalidate
+   *  a cache with. One local round trip per window open is the cheaper side of
+   *  that trade. */
+  async peekWorkspaceDisplayName(workspacePath: string, timeoutMs = 300): Promise<string> {
+    if (!workspacePath) return ''
+    const client = this.ensureBackend()
+    if (!client) return ''
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      const wanted = resolve(workspacePath).replace(/\/+$/, '')
+      // Swallowed here rather than at the race: a rejection arriving after the
+      // timeout already won would otherwise be an unhandled rejection.
+      const listing = client
+        .send<{ recent?: unknown }>('workspace.list_recent', {})
+        .then(
+          (response) => response,
+          () => null,
+        )
+      const response = await Promise.race([
+        listing,
+        new Promise<null>((settle) => {
+          timer = setTimeout(() => settle(null), timeoutMs)
+        }),
+      ])
+      if (!response || !response.ok) return ''
+      const recent = response.payload?.recent
+      if (!Array.isArray(recent)) return ''
+      for (const entry of recent as Array<{ path?: unknown; name?: unknown }>) {
+        if (typeof entry?.path !== 'string') continue
+        if (entry.path.replace(/\/+$/, '') !== wanted) continue
+        const name = typeof entry.name === 'string' ? entry.name.trim() : ''
+        return name === basename(wanted) ? '' : name
+      }
+      return ''
+    } catch {
+      return ''
+    } finally {
+      if (timer !== undefined) clearTimeout(timer)
+    }
+  }
+
   private hasActivePlansBackend(): boolean {
     return this.isPlansBackendAvailable()
   }
@@ -7291,15 +7362,24 @@ export function registerBundledMiniIde(
  *  reconcile (zero-flash; see plugins/mini-ide/mount.ts). A theme change alone
  *  never reloads a running view — open() only compares `workspace_path`, which
  *  is also why `file_ws` (an out-of-workspace file's own root) rides along as
- *  an ordinary param instead of altering the workspace. */
+ *  an ordinary param instead of altering the workspace.
+ *  `workspace_display_name` carries the workspace's user-set alias for the
+ *  window title. KNOWN LIMITATION: it is a load-time snapshot — renaming the
+ *  workspace while this window is open does NOT retitle it, because plugin
+ *  views have no `project.ui_state_changed` subscription (project.* is in
+ *  neither CAP_MAP nor CAP_EVENTS). The next open shows the new name. */
 function miniIdeQuery(
   workspacePath: string,
   httpUrl: string,
   extraParams: Record<string, string>,
-  theme: string
+  theme: string,
+  workspaceDisplayName = ''
 ): string {
   const params = new URLSearchParams()
   if (workspacePath) params.set('workspace_path', workspacePath)
+  // Omitted when blank so the view can tell "no alias" (fall back to the
+  // folder name) from an alias that happens to equal the folder name.
+  if (workspaceDisplayName.trim()) params.set('workspace_display_name', workspaceDisplayName.trim())
   if (httpUrl) params.set('http_url', httpUrl)
   for (const [key, value] of Object.entries(extraParams)) {
     if (value) params.set(key, value)
@@ -7371,13 +7451,15 @@ export function openMiniIdePluginView(
   workspacePath: string,
   httpUrl = '',
   extraParams: Record<string, string> = {},
-  theme = ''
+  theme = '',
+  // Resolved by the caller (openMiniIdeEditor) so this stays synchronous.
+  workspaceDisplayName = ''
 ): boolean {
   const base = frontendPluginManager.getDescriptor(MINI_IDE_PLUGIN_ID)
   if (!base) return false
   frontendPluginManager.open(
     ensureMiniIdeWindow(),
-    { ...base, query: miniIdeQuery(workspacePath, httpUrl, extraParams, theme) },
+    { ...base, query: miniIdeQuery(workspacePath, httpUrl, extraParams, theme, workspaceDisplayName) },
     // Fill the dedicated window's content bounds and track its resizes.
     'fill',
     // Esc (nav.hideSelf) closes the dedicated window, like the legacy editor.
@@ -7591,16 +7673,23 @@ export function registerBundledPlans(
  *  capabilityBackend shim), the optional `rel_path` of a plan to auto-open,
  *  the current `theme` id so the plugin paints with the app theme before its
  *  first settings reconcile (zero-flash; see plugins/plans/mount.ts), and the
- *  validated Host `locale`. */
+ *  validated Host `locale`.
+ *  `workspace_display_name` carries the workspace's user-set alias for the
+ *  window title; blank/absent means "no alias" and the view falls back to
+ *  `basename(workspace_path)`. KNOWN LIMITATION: a load-time snapshot — a
+ *  rename while the window is open does not retitle it (plugin views get no
+ *  `project.ui_state_changed`). */
 export function plansQuery(
   workspacePath: string,
   httpUrl: string,
   relPath: string,
   theme: string,
-  locale?: string
+  locale?: string,
+  workspaceDisplayName = ''
 ): string {
   const params = new URLSearchParams()
   if (workspacePath) params.set('workspace_path', workspacePath)
+  if (workspaceDisplayName.trim()) params.set('workspace_display_name', workspaceDisplayName.trim())
   if (httpUrl) params.set('http_url', httpUrl)
   if (relPath) params.set('rel_path', relPath)
   if (theme) params.set('theme', theme)
@@ -7680,7 +7769,7 @@ function ensurePlansWindow(): BrowserWindow {
  * the Plans extension is not registered. The core `?window=plans` BrowserWindow
  * path (plan-windows.ts) is untouched — this is a parallel, opt-in surface.
  */
-export function openPlansPluginView(
+export async function openPlansPluginView(
   hostWindow: BrowserWindow,
   workspacePath: string,
   httpUrl = '',
@@ -7689,21 +7778,22 @@ export function openPlansPluginView(
   locale = ''
 ): Promise<boolean> {
   const base = frontendPluginManager.getDescriptor(PLANS_PLUGIN_ID)
-  if (!base) return Promise.resolve(false)
+  if (!base) return false
+  const displayName = await frontendPluginManager.peekWorkspaceDisplayName(workspacePath)
   if (base.capabilityPolicy?.kind === 'manifest-v2') {
     if (
       !base.packageVersion ||
       !base.packageDir ||
       !frontendPluginManager.isPlansBackendAvailable() ||
       !hasCompletePlansContributions(base)
-    ) return Promise.resolve(false)
+    ) return false
     const window = ensurePlansWindow()
     return frontendPluginManager.openContributionWindow(
       window,
       `${PLANS_PLUGIN_ID}.window`,
       {
         workspacePath,
-        query: plansQuery(workspacePath, httpUrl, relPath, theme, locale),
+        query: plansQuery(workspacePath, httpUrl, relPath, theme, locale, displayName),
       },
     ).then((result) => {
       if (result.ok) return true
@@ -7714,7 +7804,7 @@ export function openPlansPluginView(
   }
   const instanceId = frontendPluginManager.open(
     hostWindow,
-    { ...base, query: plansQuery(workspacePath, httpUrl, relPath, theme, locale) },
+    { ...base, query: plansQuery(workspacePath, httpUrl, relPath, theme, locale, displayName) },
     {
       x: 0,
       y: 0,
@@ -7722,7 +7812,7 @@ export function openPlansPluginView(
       height: 800,
     }
   )
-  return Promise.resolve(instanceId !== null)
+  return instanceId !== null
 }
 
 /** Id of the Git extension (the standalone Git client surface). */
@@ -7762,7 +7852,13 @@ export function registerLegacyBundledGit(
  *  app theme before its first settings reconcile (zero-flash; see
  *  plugins/navide-git/src/mount.ts), plus `extraParams` forwarding an optional diff target
  *  (`git_diff_filepath`/`git_diff_staged`/`git_diff_commit`) GitWindowApp reads
- *  to show a file diff in its own panel instead of the mini-IDE. */
+ *  to show a file diff in its own panel instead of the mini-IDE.
+ *  `workspaceDisplayName` carries the workspace's user-set alias and is only
+ *  passed for the dedicated window, the one surface with a title of its own;
+ *  blank/absent means "no alias" and GitWindowApp falls back to
+ *  `basename(workspace_path)`. KNOWN LIMITATION: a load-time snapshot — a
+ *  rename while the window is open does not retitle it (plugin views get no
+ *  `project.ui_state_changed`). */
 function gitQuery(
   workspacePath: string,
   httpUrl: string,
@@ -7770,9 +7866,11 @@ function gitQuery(
   extraParams: Record<string, string> = {},
   v2 = true,
   contribution: 'left' | 'window' = 'window',
+  workspaceDisplayName = '',
 ): string {
   const params = new URLSearchParams()
   if (workspacePath) params.set('workspace_path', workspacePath)
+  if (workspaceDisplayName.trim()) params.set('workspace_display_name', workspaceDisplayName.trim())
   if (httpUrl) params.set('http_url', httpUrl)
   for (const [key, value] of Object.entries(extraParams)) {
     if (value) params.set(key, value)
@@ -7889,6 +7987,7 @@ export async function openGitPluginView(
 ): Promise<boolean> {
   const base = frontendPluginManager.getDescriptor(GIT_PLUGIN_ID)
   if (!base) return false
+  const displayName = await frontendPluginManager.peekWorkspaceDisplayName(workspacePath)
   const hostWindow = ensureGitWindow()
   if (base.capabilityPolicy?.kind !== 'manifest-v2' || !base.views) {
     // Explicit recovery may select the untouched V1 bundle. Keep this branch
@@ -7898,7 +7997,7 @@ export async function openGitPluginView(
       hostWindow,
       {
         ...base,
-        query: gitQuery(workspacePath, httpUrl, theme, extraParams, false),
+        query: gitQuery(workspacePath, httpUrl, theme, extraParams, false, 'window', displayName),
       },
       'fill',
       { closeHostOnHide: true, mirrorTitle: true },
@@ -7906,7 +8005,7 @@ export async function openGitPluginView(
     gitWindowViewInstanceId = null
     return true
   }
-  const query = gitQuery(workspacePath, httpUrl, theme, extraParams, true, 'window')
+  const query = gitQuery(workspacePath, httpUrl, theme, extraParams, true, 'window', displayName)
   const currentWorkspace = gitWindowViewInstanceId
     ? frontendPluginManager.workspacePathOfInstance(gitWindowViewInstanceId)
     : null

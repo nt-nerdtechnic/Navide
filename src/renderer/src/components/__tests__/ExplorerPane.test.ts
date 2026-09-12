@@ -266,3 +266,38 @@ describe('ExplorerPane – entry-renamed emission', () => {
     ])
   })
 })
+
+describe('ExplorerPane – workspace header name', () => {
+  function mountWithAlias(workspaceDisplayName?: string) {
+    const { backend } = createMockBackend('connected' as BackendStatus)
+    return mount(ExplorerPane, {
+      props: {
+        workspacePath: '/Users/dev/projects/agent-team',
+        ...(workspaceDisplayName === undefined ? {} : { workspaceDisplayName }),
+        backend: backend as never,
+      },
+      global: { plugins: [i18n] },
+    })
+  }
+
+  it('shows the alias the host passed in', () => {
+    const wrapper = mountWithAlias('Navide')
+    expect(wrapper.get('.exp-ws').text()).toBe('Navide')
+    // The path stays the identity — the alias is display only.
+    expect(wrapper.get('.exp-ws').attributes('title')).toBe('/Users/dev/projects/agent-team')
+  })
+
+  it('trims a padded alias instead of rendering the padding', () => {
+    expect(mountWithAlias('  Navide  ').get('.exp-ws').text()).toBe('Navide')
+  })
+
+  it('keeps the folder name for a host that passes no alias at all', () => {
+    // The main window does not pass the prop; nothing about its header changes.
+    expect(mountWithAlias().get('.exp-ws').text()).toBe('agent-team')
+  })
+
+  it('treats a blank alias as no alias', () => {
+    expect(mountWithAlias('').get('.exp-ws').text()).toBe('agent-team')
+    expect(mountWithAlias('   ').get('.exp-ws').text()).toBe('agent-team')
+  })
+})

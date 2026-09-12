@@ -35,6 +35,13 @@ import { aiTerminalPaneId, buildPlanCliContext, type PlanCliMetaSummary } from '
 const params = new URLSearchParams(window.location.search)
 const workspacePath = params.get('workspace_path') ?? ''
 const workspaceBaseName = workspacePath.split('/').filter(Boolean).at(-1) ?? workspacePath
+// What this window's title calls the workspace: the alias the user gave it,
+// which the Host resolved and passed as `workspace_display_name`, else the
+// folder name. A blank or absent param means "no alias" — that is how clearing
+// one works. KNOWN LIMITATION: a load-time snapshot. Renaming the workspace
+// while this window is open does NOT retitle it; the title is correct again
+// the next time the window opens.
+const workspaceTitleName = params.get('workspace_display_name')?.trim() || workspaceBaseName
 // Plan to auto-open on mount: the sidebar list clicked a plan, which opened
 // this window with the plan carried in the query string.
 const initialRelPath = params.get('rel_path') ?? ''
@@ -442,7 +449,7 @@ onBeforeMount(() => {
 })
 
 onMounted(() => {
-  document.title = `${workspaceBaseName} — Plans`
+  document.title = `${workspaceTitleName} — Plans`
   loadTheme()
   offSettingsChange = onSettingsChanged((keys) => {
     if (keys.includes('agent-team:theme') || keys.includes('agent-team:theme-custom')) {

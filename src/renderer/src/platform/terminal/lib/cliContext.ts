@@ -84,9 +84,20 @@ export const MENTION_BROADCAST_ADDRESS = 'all'
 export interface MentionCandidate {
   /** What gets typed into the prompt, e.g. "codex-1", "myproj/claude-2", "all". */
   address: string
-  /** Pre-translated section heading. Candidates carrying the same one are drawn
-   *  under a single header, in list order. Absent means "no section". */
+  /** The section KEY. Candidates carrying the same one are drawn under a single
+   *  header, in list order. Absent means "no section".
+   *
+   *  For a workspace section this is the workspace's absolute PATH, not its
+   *  name: two projects can be called the same thing — the more so now that a
+   *  project can be given a display name, which is allowed to repeat — and
+   *  keying on the name merged their panes into one section. What the header
+   *  shows is `groupLabel`. */
   group?: string
+  /** Pre-translated section heading. Absent means the key is presentable as-is
+   *  (the pre-path groups — "recent", "this window" — still are). Separate from
+   *  `group` so a section can be keyed on something unique and titled with
+   *  something readable. */
+  groupLabel?: string
   /** The pane's DisplayStatus, when this window can read it. Absent for `all`
    *  and for panes living in another workspace window — those have no local
    *  TerminalPane ref to ask, and the menu draws a hollow dot rather than
@@ -155,7 +166,10 @@ export function rankMentionCandidates(
     const found = byAddress.get(address)
     if (found && !seen.has(address)) {
       seen.add(address)
-      hoisted.push({ ...found, group: recentGroup })
+      // The recents section is its own group, so the hoisted row must drop the
+      // label its old group carried too — keeping it would title the recents
+      // header with a project name.
+      hoisted.push({ ...found, group: recentGroup, groupLabel: undefined })
     }
   }
   return [...hoisted, ...candidates.filter((c) => !seen.has(c.address))]

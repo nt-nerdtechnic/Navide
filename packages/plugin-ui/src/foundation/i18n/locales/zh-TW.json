@@ -497,6 +497,7 @@
     "copy-path": "複製路徑",
     "new-workspace-group": "新增群組",
     "rename-workspace-group": "重新命名群組",
+    "rename-workspace": "重新命名專案",
     "delete-workspace-group": "刪除群組",
     "copy-relative-path": "複製相對路徑",
     "switch-to-list-view": "切換為清單檢視",
@@ -1040,7 +1041,7 @@
         "accountsAgents": "帳號與代理",
         "integration": "整合",
         "system": "系統",
-        "security": "安全性"
+        "plugins": "外掛程式"
       },
       "general": "一般",
       "appearance": "外觀",
@@ -2163,6 +2164,8 @@
     "select-role": "選擇角色…",
     "waiting-backend": "等待後端…",
     "set-workspace-first": "請先設定工作區路徑",
+    "workspace-name-placeholder": "留空則使用資料夾名稱",
+    "workspace-name-hint": "Enter 儲存、Esc 取消；清空則還原為資料夾名稱。",
     "resume-session-id": "Session ID（或從歷史選擇）",
     "resume-session-not-found": "找不到該 Session，無法接續",
     "history-session-unavailable": "此 Session 的記憶已不存在",
@@ -3022,7 +3025,8 @@
     "confirmTitle": "要停掉正在跑的 pipeline 嗎？",
     "confirm": "這個專案正在跑的 pipeline 會被停止 — pipeline 屬於它啟動時的專案，沒辦法留在背景繼續跑。它的 agent 會留著，其他專案的東西也都不受影響。",
     "confirmBtn": "切換並停止",
-    "loading": "正在切換到 {name}…"
+    "loading": "正在切換到 {name}…",
+    "renameFailed": "無法重新命名 {name}：{reason}，名稱未儲存。"
   },
   "closeAll": {
     "label": "全部關閉",

@@ -185,6 +185,19 @@ class Project:
     # per-user default); [] is a valid "explicitly cleared to default" value.
     cli_agent_order: list[str] | None = None
     cli_agent_disabled: list[str] | None = None
+    # User-set display name for this workspace. "" = fall back to
+    # basename(workspace_path), which is what every surface showed before this
+    # field existed. Division of labour with `name`: `name` is the initial
+    # value recorded when the project document was created and has no UI to
+    # change it; `display_name` is the name the user picked and is the only one
+    # the sidebar / title bar / recent list honour. The truth lives here, in
+    # the workspace's own db: the alias stays with the project folder, is
+    # independent per project, and is not lost when the global settings caches
+    # are rebuilt. It is LOCAL — `.agent-team/` is git-ignored, so the alias is
+    # never committed and never reaches a teammate. The global
+    # recent-workspaces store keeps a `name` mirror for drawing lists without
+    # opening every project's db.
+    display_name: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -1262,6 +1275,48 @@ class ProjectStore:
         rest = [p for p in project.panes if p.pane_id not in rank]
         project.panes = listed + rest
         self.save(project)
+        return project
+
+    def set_display_name(
+        self,
+        workspace_path: str,
+        display_name: str,
+    ) -> Project | None:
+        """Persist the user-set display name for this workspace.
+
+        The value is stripped; an empty string is a legitimate write meaning
+        "clear the alias and go back to basename(workspace_path)".
+
+        Unlike the other ui-state setters this one uses load_or_create, not
+        peek: renaming is an explicit action the user takes on a workspace they
+        have open, so creating the project document for it is legitimate — and
+        it leaves no silent no-op path that would answer the user with a
+        success they did not get.
+
+        Returns None ONLY on a real failure: an empty path, a workspace that is
+        not a directory on disk, or a document that could not be written. The
+        caller is expected to report that to the user.
+
+        The alias is purely cosmetic: the workspace path stays the only
+        identifier, so duplicates across workspaces are allowed and nothing
+        here validates uniqueness.
+        """
+        if not workspace_path.strip():
+            # abspath("") is the backend's cwd, which IS a directory — without
+            # this guard an empty path would happily create a project document
+            # somewhere nobody asked for.
+            return None
+        try:
+            # RLock is reentrant: load_or_create may save() a fresh document.
+            with self._save_lock:
+                project = self.load_or_create(workspace_path)
+                project.display_name = display_name.strip()
+                self.save(project)
+        except (OSError, ValueError) as err:
+            log.warning(
+                "cannot set display name for %s: %s", workspace_path, err
+            )
+            return None
         return project
 
     def set_tab_order(

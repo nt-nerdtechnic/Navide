@@ -7,6 +7,7 @@ import { resolveDragBatch } from '../lib/paneBatchDrag'
 import { setBatchDragImage } from '../lib/batchDragImage'
 import { paneStatusLabelText, type PaneStatusValue } from '../lib/paneStatusLabel'
 import { rollupPaneStatus } from '../lib/paneStatusRollup'
+import { workspaceAliasOf, workspaceDisplayName } from '../lib/workspaceAlias'
 import { statusBadgeStyle } from '../composables/useStatusBadgePrefs'
 import { rollupTabStatus, runGroupStateLabelKey, tabRunStatePaneStatus } from '../lib/tabStatus'
 import {
@@ -351,6 +352,10 @@ interface Props {
   /** Workspace sections, this window's first. Omitted renders the flat list —
    *  which is what every other mount of this component gets. */
   workspaces?: WorkspaceGroupRow[]
+  /** Path → user-set workspace display name. The heading rows already arrive
+   *  labelled through `workspaces`; this is for the surfaces that name a
+   *  workspace from a path of their own (the resume picker). */
+  workspaceAliases?: Readonly<Record<string, string>>
   /** True in a detached window: it is one run group's view of ONE workspace,
    *  so it neither opens others nor switches between them — the controls are
    *  hidden rather than left to do nothing.
@@ -996,6 +1001,9 @@ const emit = defineEmits<{
   (e: 'open-git-accounts'): void
   (e: 'changes-count', count: number): void
   (e: 'rename-pane', paneId: string, name: string): void
+  /** A workspace's display name was edited. An empty `name` clears the alias
+   *  and restores the folder name. */
+  (e: 'rename-workspace', workspacePath: string, name: string): void
   (e: 'install-cli', payload: { agentKey: string; label: string }): void
   (e: 'update:collapsed', v: boolean): void
 }>()
@@ -1034,6 +1042,110 @@ function onRenameKeydown(e: KeyboardEvent): void {
   if (e.isComposing) return
   if (e.key === 'Enter') { e.preventDefault(); commitRename() }
   if (e.key === 'Escape') { e.preventDefault(); _cancelledRename = true; renamingPaneId.value = null }
+}
+
+// ── Workspace display name ───────────────────────────────────────────────────
+// Same gesture as the pane rename above — double-click the name, Enter commits,
+// Esc abandons, blur commits — because they are the same act on two rows of the
+// same list, and a second convention here would only be one more thing to learn.
+const renamingWorkspace = ref<string | null>(null)
+const wsRenameDraft = ref('')
+let _cancelledWsRename = false
+/** The alias the editor opened on, to compare the draft against on commit. */
+let _wsRenameSeed = ''
+
+/** How long a single click on another row waits before it switches.
+ *
+ *  The row is the switch, and `@dblclick.stop` on the name cannot cancel the
+ *  two clicks that already ran before it — so without this a double-click on
+ *  another row switched projects (restoring a whole project's panes behind a
+ *  cover) AND opened the editor, whose blur under the cover then committed.
+ *  The pane rows above need nothing of the sort: their click only focuses,
+ *  which is cheap and idempotent. A workspace switch is neither, so it is
+ *  deferred by one double-click interval and a double-click cancels it. */
+const WS_SWITCH_DBLCLICK_MS = 250
+let _wsSwitchTimer: ReturnType<typeof setTimeout> | null = null
+
+function cancelPendingWorkspaceSwitch(): void {
+  if (_wsSwitchTimer === null) return
+  clearTimeout(_wsSwitchTimer)
+  _wsSwitchTimer = null
+}
+
+function onWsHeadClick(path: string): void {
+  cancelPendingWorkspaceSwitch()
+  if (props.detachedWindow || path === workspacePath.value) return
+  _wsSwitchTimer = setTimeout(() => {
+    _wsSwitchTimer = null
+    emit('switch-to-workspace', path)
+  }, WS_SWITCH_DBLCLICK_MS)
+}
+
+/** A double-click on the row outside the name: still the switch, once. */
+function onWsHeadDblclick(path: string): void {
+  cancelPendingWorkspaceSwitch()
+  if (props.detachedWindow || path === workspacePath.value) return
+  emit('switch-to-workspace', path)
+}
+
+/** The name's own tooltip.
+ *
+ *  The full real path comes FIRST and unconditionally: it is what the
+ *  surrounding `.ws-text` title says, this element covers the part of the row
+ *  the pointer actually lands on, and with a display name — which may say
+ *  anything, including the same thing as another project's — the path is the
+ *  only thing left that identifies which folder the row is. The rename hint is
+ *  appended, never substituted. */
+function wsNameTitle(path: string): string {
+  return `${path}\n${i18n.global.t('action.rename-workspace')}`
+}
+
+function startWorkspaceRename(path: string): void {
+  // The double-click that opens this on another row is preceded by two clicks
+  // that each scheduled a switch; the editor opens on THIS row, not after one.
+  cancelPendingWorkspaceSwitch()
+  _cancelledWsRename = false
+  // Seeded with the ALIAS, not with what is on screen. A workspace that has no
+  // alias therefore opens EMPTY (the placeholder says the folder name is what
+  // an empty box means), which is what makes "opened the box and changed
+  // nothing" distinguishable from "typed the folder name in" on commit. Seeding
+  // the resolved label made the first one indistinguishable from the second,
+  // and blur then stored an alias equal to the folder name — in a project
+  // document the rename had to create — freezing the row's name if that folder
+  // was ever renamed on disk.
+  //
+  // This holds only because `workspaceAliases` arrives without the recent
+  // store's basename fallback (useWorkspaceAliases filters it): an alias that
+  // equals the folder name is filtered with it, so that one also opens empty
+  // and re-typing the folder name into it writes the same value back — a
+  // no-op for the document, and the price of the filter.
+  _wsRenameSeed = workspaceAliasOf(path, props.workspaceAliases)
+  wsRenameDraft.value = _wsRenameSeed
+  renamingWorkspace.value = path
+}
+
+function commitWorkspaceRename(): void {
+  if (_cancelledWsRename || !renamingWorkspace.value) return
+  const path = renamingWorkspace.value
+  const next = wsRenameDraft.value.trim()
+  renamingWorkspace.value = null
+  // An unchanged draft is not a rename. Blur commits, so double-clicking a name
+  // to select a word and then clicking away would otherwise emit a write — and
+  // the backend's rename uses load_or_create, so that write CREATES the project
+  // document in a workspace the user only looked at.
+  if (next === _wsRenameSeed) return
+  // Empty means "clear the alias" — sent as-is, not dropped: the placeholder
+  // says so, and swallowing it would make the one way back to the folder name
+  // look broken.
+  emit('rename-workspace', path, next)
+}
+
+function onWsRenameKeydown(e: KeyboardEvent): void {
+  // Ignore the Enter/Escape an IME sends while composing — that keystroke
+  // confirms candidate selection, not the rename.
+  if (e.isComposing) return
+  if (e.key === 'Enter') { e.preventDefault(); commitWorkspaceRename() }
+  if (e.key === 'Escape') { e.preventDefault(); _cancelledWsRename = true; renamingWorkspace.value = null }
 }
 
 function agentTypeLabel(agentKey: string): string {
@@ -1628,7 +1740,7 @@ const resumeOptions = computed<{ sessionId: string; label: string; workspacePath
     if (seen.has(sid)) continue
     seen.add(sid)
     const when = entry.spawnedAt ? entry.spawnedAt.slice(0, 16).replace('T', ' ') : '—'
-    const ws = entry.workspacePath.split('/').filter(Boolean).pop() ?? entry.workspacePath
+    const ws = workspaceDisplayName(entry.workspacePath, props.workspaceAliases)
     out.push({
       sessionId: sid,
       label: `${entry.customName || entry.agentLabel} · ${entry.roleLabel || '—'} · ${ws} · ${when}`,
@@ -1909,7 +2021,7 @@ function onWsDragEnd(e: DragEvent, path: string): void {
  *  and then jumps is worse than one placed from a constant. Kept generous:
  *  overshooting flips a menu that would have fitted, undershooting lets one
  *  hang off the edge, and only the second is a bug. */
-const WS_MENU_H = 96
+const WS_MENU_H = 124
 const WS_MENU_W = 170
 
 function openWsMenu(ev: MouseEvent, path: string, canClose: boolean): void {
@@ -1947,6 +2059,17 @@ onUnmounted(() => {
   document.removeEventListener('keydown', onWsMenuKeydown)
   document.removeEventListener('scroll', closeWsMenu, true)
 })
+
+/** Rename from the context menu — the safe route for a workspace that is NOT
+ *  the one on screen. Double-clicking its name would switch to it first (the
+ *  row is the switch), and switching restores a whole project's panes, which is
+ *  far more than the gesture asked for. */
+function startWorkspaceRenameFromMenu(): void {
+  const m = wsMenu.value
+  if (!m) return
+  closeWsMenu()
+  startWorkspaceRename(m.path)
+}
 
 function wsMenuAction(kind: 'reveal' | 'copy' | 'close'): void {
   const m = wsMenu.value
@@ -2257,6 +2380,7 @@ function onWindowBlur(): void {
 window.addEventListener('focus', onWindowFocus)
 window.addEventListener('blur', onWindowBlur)
 onUnmounted(() => {
+  cancelPendingWorkspaceSwitch()
   window.removeEventListener('focus', onWindowFocus)
   window.removeEventListener('blur', onWindowBlur)
 })
@@ -2490,10 +2614,17 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
         :class="{ 'part-top-plugin': sidebarTab === 'plans' && !legacyPlansRecovery }"
         style="flex: 1"
       >
+        <!-- The ALIAS, not the resolved display name: an unnamed workspace must
+             reach ExplorerPane as empty so its own basename fallback runs, which
+             keeps one place deciding what a nameless workspace is called. Empty
+             because the map has no basename-fallback entries (useWorkspaceAliases
+             leaves the recent store's folder-name mirror out), not because this
+             lookup strips them. -->
         <ExplorerPane
           v-if="backend && visibleTabIds.has('explorer')"
           v-show="sidebarTab === 'explorer'"
           :workspace-path="workspace ?? ''"
+          :workspace-display-name="workspaceAliasOf(workspace ?? '', workspaceAliases)"
           :backend="backend"
         />
         <!-- Generic plugin views are mounted by contribution key; the renderer
@@ -2892,7 +3023,8 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
           @dragenter="onWsDragOver($event, ws.path)"
           @dragleave="onWsDragLeave(ws.path)"
           @drop.prevent="onWsDrop($event, ws.path)"
-          @click="!detachedWindow && ws.path !== workspacePath && emit('switch-to-workspace', ws.path)"
+          @click="onWsHeadClick(ws.path)"
+          @dblclick="onWsHeadDblclick(ws.path)"
           @contextmenu="openWsMenu($event, ws.path, ws.path !== workspacePath || canCloseCurrent)"
         >
           <button
@@ -2901,9 +3033,34 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
             @click.stop="emit('toggle-workspace', ws.path)"
           >{{ ws.collapsed ? '›' : '⌄' }}</button>
           <span class="ws-icon"><FolderIcon /></span>
+          <!-- The hover title stays the FULL REAL PATH, on the name itself as
+               well as on the wrapper. With a display name the heading may say
+               anything at all, and may say the same thing as another
+               project's — the path is the only thing left that identifies
+               which folder this row is, so nothing here may replace it; the
+               name's own title appends the rename hint after the path. See
+               wsNameTitle(). -->
           <span class="ws-text" :title="ws.path">
             <span class="ws-line">
-              <span class="ws-name">{{ ws.label }}</span>
+              <input
+                v-if="renamingWorkspace === ws.path"
+                v-focus
+                v-model="wsRenameDraft"
+                class="ws-rename-input"
+                :placeholder="$t('label.workspace-name-placeholder')"
+                :title="$t('label.workspace-name-hint')"
+                @keydown="onWsRenameKeydown"
+                @blur="commitWorkspaceRename"
+                @click.stop
+                @mousedown.stop
+                @dblclick.stop
+              />
+              <span
+                v-else
+                class="ws-name"
+                :title="wsNameTitle(ws.path)"
+                @dblclick.stop="startWorkspaceRename(ws.path)"
+              >{{ ws.label }}</span>
               <span class="ws-count" v-bind="countBadgeAttrs(wsCountStates.get(ws.path))">{{ ws.count }}</span>
             </span>
             <span class="ws-path">{{ ws.displayPath }}</span>
@@ -3167,6 +3324,7 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
         :style="{ top: `${wsMenu.y}px`, left: `${wsMenu.x}px` }"
         @click.stop
       >
+        <button class="ws-ctx-opt" @click="startWorkspaceRenameFromMenu()">{{ $t('action.rename-workspace') }}</button>
         <button class="ws-ctx-opt" @click="wsMenuAction('reveal')">{{ $t('action.open-in-finder') }}</button>
         <button class="ws-ctx-opt" @click="wsMenuAction('copy')">{{ $t('action.copy-path') }}</button>
         <!-- Membership is exclusive, so this reads as a radio group: one tick,
@@ -4851,6 +5009,24 @@ button.icon-btn.muted:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
   line-height: 16px;
+}
+/* Takes the name's place in the same flex line. `min-width: 0` and an explicit
+   border-box are both load-bearing: an input's intrinsic width is ~20 chars,
+   which without the first would push the count badge and the row's actions out
+   of the sidebar's grid track, and the panel has no border-box reset of its own
+   so padding would otherwise be added ON TOP of the flex basis. Never
+   `width: 100%` here for the same reason. */
+.ws-rename-input {
+  flex: 1 1 0;
+  min-width: 0;
+  box-sizing: border-box;
+  background: var(--bg-inset);
+  border: 1px solid var(--accent-emphasis);
+  border-radius: var(--radius-xs);
+  color: var(--text-bright);
+  font-size: var(--font-xs);
+  line-height: 16px;
+  padding: 1px 5px;
 }
 /* The path disambiguates two projects that share a folder name. It is the
    part that gets dropped when the row runs out of width; the full path is on

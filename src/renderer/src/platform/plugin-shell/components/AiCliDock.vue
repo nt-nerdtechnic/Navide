@@ -193,15 +193,27 @@ async function refreshMentionTargets(): Promise<void> {
     const resp = await props.terminalPort.listAgentPanes()
     // Every address here lives in another window, so none of them carries a
     // status this panel could read — the menu draws hollow dots and says so by
-    // omission rather than inventing one. Grouped by workspace folder, as in
-    // the main window's menu.
+    // omission rather than inventing one. Sections are KEYED on the workspace's
+    // absolute path, as in the main window's menu, so two projects whose
+    // folders share a name do not merge into one section; the header shows the
+    // workspace's display name (its user-set alias) when the roster carries
+    // one, and the folder name otherwise.
     mentionTargets.value = clusterMentionCandidates(
       (resp.payload?.panes ?? [])
         .filter((p) => p.qualified_name && p.pane_id !== props.paneId)
-        .map((p) => ({
-          address: p.qualified_name as string,
-          group: p.workspace_label || (p.qualified_name as string).split('/')[0],
-        }))
+        .map((p) => {
+          const folder = p.workspace_label || (p.qualified_name as string).split('/')[0]
+          // An older backend sends neither field: the key falls back to the
+          // (ambiguous) folder name and the header to the folder name too. The
+          // alias is absent rather than blank when unknown, so a whitespace-only
+          // value never blanks a section header.
+          const label = p.workspace_display_name?.trim() || folder
+          return {
+            address: p.qualified_name as string,
+            group: p.workspace_path || folder,
+            groupLabel: label,
+          }
+        })
     )
   } catch {
     mentionTargets.value = []

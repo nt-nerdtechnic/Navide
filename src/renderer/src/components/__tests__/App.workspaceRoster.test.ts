@@ -587,7 +587,7 @@ describe('several workspaces in one window', () => {
     // while the registry's copy is from before the restart.
     expect(appSource).toContain('takeRestoredAdoptedWorkspaces')
     const at = appSource.indexOf('takeRestoredAdoptedWorkspaces')
-    const around = appSource.slice(at - 700, at + 900)
+    const around = appSource.slice(at - 700, at + 1200)
     expect(around).toContain('if (workspaceOrder.value.length) {')
     // And their agents come back, the same way a picked workspace's do.
     expect(around).toContain("'project.peek'")

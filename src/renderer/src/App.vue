@@ -5,6 +5,7 @@ import TerminalPane from './components/TerminalPane.vue'
 import WindowControls from './components/WindowControls.vue'
 import RestoredPanePlaceholder from './components/RestoredPanePlaceholder.vue'
 import { buildWorkspaceGroups, workspaceParentPath } from './lib/workspaceGroups'
+import { workspaceAliasKey } from './lib/workspaceAlias'
 import { buildPaneLineage } from './lib/paneLineage'
 import { ancestorTrail } from './lib/paneListView'
 import { closeAdvisoriesFor } from './lib/paneCloseAdvisories'
@@ -78,6 +79,7 @@ import {
 import { useStages } from './composables/useStages'
 import { usePipelines } from './composables/usePipelines'
 import { useRecentWorkspaces } from './composables/useRecentWorkspaces'
+import { useWorkspaceAliases } from './composables/useWorkspaceAliases'
 import { useAnalyzer, type ClassifyResult } from './composables/useAnalyzer'
 import { isPaneMuted, setPaneMuted, useSystemNotify } from './composables/useSystemNotify'
 import { useUpdater } from './composables/useUpdater'
@@ -315,6 +317,12 @@ const pipelinesApi = usePipelines(backend)
 const stagesApi = useStages(backend, () => pipelinesApi.activePipelineId.value)
 const analyzerApi = useAnalyzer(backend)
 const { recent: recentWorkspaces, touch: touchRecentWorkspace } = useRecentWorkspaces(backend)
+// Every surface that names a workspace reads this instead of taking the last
+// path segment for itself — there used to be six separate basename derivations,
+// and an alias would have shown up in whichever of them happened to be edited.
+const workspaceAliases = useWorkspaceAliases(backend, recentWorkspaces)
+/** What to call `path` on screen: its alias, else its folder name. */
+const wsDisplayName = (path: string): string => workspaceAliases.displayNameOf(path)
 const themeApi = useTheme()
 const settingsApi = useSettings()
 
@@ -1553,9 +1561,7 @@ const historyEntries = computed(() =>
 /** Names the project when it is not the one on screen. The modal no longer
  *  switches to it, so it has to say whose history this is. */
 const historyWorkspaceLabel = computed(() =>
-  historyIsForeign.value
-    ? (normWs(historyWorkspace.value).split('/').filter(Boolean).pop() ?? '')
-    : ''
+  historyIsForeign.value ? wsDisplayName(normWs(historyWorkspace.value)) : ''
 )
 
 /** True while the modal's list is being re-read from the backend. */
@@ -3272,7 +3278,9 @@ function readPaneShareText(ref: NonNullable<(typeof paneRefs)[string]>, maxLines
 // snapshot costs nothing (routing itself always re-resolves in the backend).
 /** `<folder>/<pane>` addresses of panes in other windows, each with the
  *  workspace folder the menu groups it under. */
-const remoteMessagingTargets = ref<Array<{ address: string; workspaceLabel: string }>>([])
+const remoteMessagingTargets = ref<
+  Array<{ address: string; workspacePath: string; workspaceLabel: string }>
+>([])
 /** paneId → `<folder>/<pane>`, so a pane dragged in from another window can be
  *  turned into an address without a second round trip. */
 const remoteTargetByPane = new Map<string, string>()
@@ -3280,7 +3288,12 @@ const remoteTargetByPane = new Map<string, string>()
 async function refreshRemoteMessagingTargets(timeoutMs?: number): Promise<void> {
   try {
     const resp = await backend.send<{
-      panes?: Array<{ pane_id?: string; qualified_name?: string; workspace_label?: string }>
+      panes?: Array<{
+        pane_id?: string
+        qualified_name?: string
+        workspace_label?: string
+        workspace_path?: string
+      }>
     }>('agent_msg.list', {}, timeoutMs)
     const localIds = new Set(panes.value.map((p) => p.id))
     const remote = (resp.payload?.panes ?? []).filter(
@@ -3290,6 +3303,10 @@ async function refreshRemoteMessagingTargets(timeoutMs?: number): Promise<void> 
     for (const p of remote) remoteTargetByPane.set(p.pane_id as string, p.qualified_name as string)
     remoteMessagingTargets.value = remote.map((p) => ({
       address: p.qualified_name as string,
+      // The path is the section key. A backend too old to send it leaves this
+      // empty and the label falls back to being the key, which is the old
+      // behaviour rather than one unnamed section swallowing every window.
+      workspacePath: p.workspace_path ?? '',
       workspaceLabel: p.workspace_label || (p.qualified_name as string).split('/')[0],
     }))
   } catch {
@@ -3343,10 +3360,16 @@ function rememberMentionPick(addresses: string[]): void {
 // The group and status words are resolved HERE because useTerminal owns no i18n
 // scope, and the ordering is decided here because recency is remembered here.
 function mentionCandidatesFor(paneId: string): MentionCandidate[] {
-  const folderOf = (path: string | undefined): string | undefined =>
-    path ? (path.split('/').filter(Boolean).pop() ?? path) : undefined
+  // The section KEY is the workspace's path, never its name: a name is not
+  // unique — two projects can share a folder name, and a display name is
+  // allowed to repeat outright — and keying on it merged two projects' panes
+  // into one section under one heading. The heading text is resolved
+  // separately, from the alias.
+  const groupKeyOf = (path: string | undefined): string | undefined =>
+    path ? workspaceAliasKey(path) : undefined
   const localGroup = i18n.global.t('mention.group-local')
-  const ownGroup = folderOf(panes.value.find((x) => x.id === paneId)?.workspacePath) ?? localGroup
+  const ownPath = panes.value.find((x) => x.id === paneId)?.workspacePath
+  const ownGroup = groupKeyOf(ownPath) ?? localGroup
   const others: MentionCandidate[] = panes.value
     .filter((x) => x.id !== paneId && x.messagingName)
     .map((x) => {
@@ -3356,7 +3379,8 @@ function mentionCandidatesFor(paneId: string): MentionCandidate[] {
       const status = paneRefs[x.id]?.displayStatus
       return {
         address: x.messagingName as string,
-        group: folderOf(x.workspacePath) ?? localGroup,
+        group: groupKeyOf(x.workspacePath) ?? localGroup,
+        groupLabel: x.workspacePath ? wsDisplayName(x.workspacePath) : undefined,
         status,
         statusLabel: status ? paneStatusLabelText(status) : undefined,
       }
@@ -3376,12 +3400,14 @@ function mentionCandidatesFor(paneId: string): MentionCandidate[] {
     ? [{
         address: MENTION_BROADCAST_ADDRESS,
         group: ownGroup,
+        groupLabel: ownPath ? wsDisplayName(ownPath) : undefined,
         statusLabel: i18n.global.t('mention.broadcast-hint'),
       }]
     : []
   const remote: MentionCandidate[] = remoteMessagingTargets.value.map((t) => ({
     address: t.address,
-    group: t.workspaceLabel,
+    group: t.workspacePath ? workspaceAliasKey(t.workspacePath) : t.workspaceLabel,
+    groupLabel: t.workspacePath ? wsDisplayName(t.workspacePath) : undefined,
   }))
   return rankMentionCandidates(
     clusterMentionCandidates([...broadcast, ...others, ...remote], ownGroup),
@@ -5960,7 +5986,12 @@ async function onKill(paneId: string, opts: { markRemoved?: boolean, force?: boo
   }
   sysNotify.forgetPane(paneId)
   // Mute is the user's setting on the seat, not on the process: a rebuild or
-  // idle reclaim (keepInList) keeps it, only a real close drops it.
+  // idle reclaim (keepInList) keeps it, only a real close drops it — from the
+  // runtime set only. The persisted flag stays with the record exactly like
+  // is_minimized does, so a workspace closed and reopened (onKillAll leaves
+  // its records 'spawned') brings the seat back muted. The one case where the
+  // record is about to be REUSED by a different pane is handled by the caller
+  // (activateStage) before it gets here.
   if (!keepInList) setPaneMuted(paneId, false)
   // The stage this pane was a slot of is now waiting for a signal that can
   // never arrive: its watcher is cancelled and its PTY is gone. Release the
@@ -7050,10 +7081,12 @@ const revivingHistoryPaneId = ref('')
 const unavailableHistoryPaneIds = ref<Set<string>>(new Set())
 
 // ── Titlebar & Status Bar ─────────────────────────────────────────────────────
+// The titlebar and document.title name. An alias belongs here too: the window
+// title is how a project is picked out of Mission Control, and it would be the
+// one surface still showing the folder name.
 const workspaceBaseName = computed(() => {
   if (!currentWorkspace.value) return 'Navide'
-  const parts = currentWorkspace.value.replace(/\\/g, '/').split('/')
-  return parts.filter(Boolean).at(-1) || 'Navide'
+  return wsDisplayName(currentWorkspace.value) || 'Navide'
 })
 
 /** The workspace's path for the titlebar, home collapsed to ~. Empty until
@@ -8208,6 +8241,9 @@ interface ProjectPayload {
   project: {
     id: string
     name: string
+    /** User-set display name for the workspace; '' = use the folder name. More
+     *  immediate than the recent-workspaces mirror, so it is adopted on peek. */
+    display_name?: string
     workspace_path: string
     state?: string
     current_stage_index?: number
@@ -8561,6 +8597,9 @@ async function onWorkspaceCheck(path: string): Promise<void> {
   for (const key of [...restoreSessions.keys()]) {
     if (key !== path && !isLocalWorkspace(key)) restoreSessions.delete(key)
   }
+  // Recorded BEFORE the read goes out: the reply is only believed if no
+  // rename or peer broadcast for `path` landed while it was in flight.
+  const aliasGen = workspaceAliases.generationOf(path)
   const resp = await sendQuiet<ProjectPayload>('project.peek', { workspace_path: path })
   if (seq !== workspaceCheckSeq) return
   if (resp === null) {
@@ -8600,6 +8639,10 @@ async function onWorkspaceCheck(path: string): Promise<void> {
   void nextTick(() => { applyingRemoteCliPrefs.value = false })
   existingProject.value = resp ? buildExistingProjectInfo(resp) : null
   projectCreatedAt.value = resp?.project?.created_at ?? ''
+  // 'peek': a read, and this one is not covered by the seq guard above — a
+  // rename does not bump workspaceCheckSeq — so the store drops it if this
+  // window wrote the alias for `path` after the read was issued.
+  if (resp?.project) workspaceAliases.adopt(path, resp.project.display_name ?? '', 'peek', aliasGen)
   currentMode.value = detectMode(resp)
   applyProjectPaths(resp ?? undefined)
   if (resp?.project) {
@@ -14285,9 +14328,18 @@ async function prefetchHeldRunGroups(): Promise<void> {
   for (const path of [...workspaceOrder.value]) {
     if (!path || normWs(path) === normWs(currentWorkspace.value)) continue
     if (normWs(path) in runGroupsByWorkspace.value) continue
+    const aliasGen = workspaceAliases.generationOf(path)
     const resp = await sendQuiet<ProjectPayload>('project.peek', { workspace_path: path })
     const stored = resp?.project?.ui_run_groups
     if (Array.isArray(stored)) _cacheRunGroups(path, stored)
+    // The reply already carries this workspace's alias, so the sidebar heading
+    // for a held-but-not-viewed project is named without a round trip of its
+    // own — and without waiting for the recent-workspaces mirror. 'peek'
+    // because it is: this loop awaits one peek per held workspace, so a rename
+    // the user makes while it runs is NEWER than the replies still arriving,
+    // and the generation taken before the send lets the store drop those for
+    // that path rather than undoing the rename.
+    if (resp?.project) workspaceAliases.adopt(path, resp.project.display_name ?? '', 'peek', aliasGen)
   }
 }
 
@@ -14307,12 +14359,16 @@ onMounted(() => {
       for (const path of restored) adoptWorkspace(path)
       // Their agents come back the same way a picked workspace's do.
       for (const path of extraWorkspaces.value) {
+        const aliasGen = workspaceAliases.generationOf(path)
         const resp = await sendQuiet<ProjectPayload>('project.peek', { workspace_path: path })
         if (!resp) continue
         // The reply already carries the records, so grouping a restored
         // workspace's panes costs no extra round trip.
         const stored = resp.project?.ui_run_groups
         if (Array.isArray(stored)) _cacheRunGroups(path, stored)
+        // Same reason as prefetchHeldRunGroups: a serialized read loop, so a
+        // rename made while it runs must survive the replies behind it.
+        if (resp.project) workspaceAliases.adopt(path, resp.project.display_name ?? '', 'peek', aliasGen)
         await restoreWorkspacePanes(resp, path)
       }
       // Anything the loop could not reach (a peek that timed out) gets one
@@ -14431,7 +14487,7 @@ async function switchToWorkspace(path: string): Promise<void> {
   // and stays blank while the entered workspace's panes are restored, one CLI
   // probe each. Blank reads as "the click did nothing".
   const coverSeq = ++switchCoverSeq
-  switchingWorkspaceName.value = path.split('/').filter(Boolean).pop() ?? path
+  switchingWorkspaceName.value = wsDisplayName(path)
   const coverTimer = setTimeout(() => {
     if (coverSeq === switchCoverSeq) switchingWorkspace.value = true
   }, SWITCH_COVER_DELAY_MS)
@@ -14445,9 +14501,7 @@ async function switchToWorkspace(path: string): Promise<void> {
     // the screen another. Undo the list swap and say so.
     if (normWs(currentWorkspace.value) !== normWs(path)) {
       notifyRestore.toast(
-        i18n.global.t('switchWorkspace.failed', {
-          name: path.split('/').filter(Boolean).pop() ?? path,
-        }),
+        i18n.global.t('switchWorkspace.failed', { name: wsDisplayName(path) }),
         { type: 'error' },
       )
       return
@@ -14488,6 +14542,26 @@ async function switchToWorkspace(path: string): Promise<void> {
   }
 }
 
+/** Give a workspace a display name, or clear it back to the folder name.
+ *
+ *  The ack is checked rather than assumed: a write that fails here would leave
+ *  the old name on screen with nothing said, and the user's only clue would be
+ *  that the rename "did not take" — which reads as the gesture having missed. */
+async function onRenameWorkspace(path: string, name: string): Promise<void> {
+  const ok = await workspaceAliases.setDisplayName(path, name)
+  if (ok) return
+  // The backend's own words. It refuses through an ordinary reply rather than
+  // an error frame, and the reason ("could not write the project document") is
+  // the difference between "try again" and "something is wrong with the disk".
+  notifyRestore.toast(
+    i18n.global.t('switchWorkspace.renameFailed', {
+      name: wsDisplayName(path),
+      reason: workspaceAliases.error.value,
+    }),
+    { type: 'error' },
+  )
+}
+
 /** Take a workspace back out of this window.
  *
  *  Its panes go with it — they were started in it and belong to it, and
@@ -14505,7 +14579,7 @@ async function closeWorkspace(path: string): Promise<void> {
   // action a reopen cannot undo — and the menu row alone does not say so.
   if (confirmBeforeCloseWorkspace.value) {
     const count = panes.value.filter((p) => normWs(p.workspacePath) === normWs(path)).length
-    const name = path.split('/').filter(Boolean).pop() || path
+    const name = wsDisplayName(path)
     const ok = await notifyRestore.confirm(
       count > 0
         ? i18n.global.t('confirm-close.sidebar-ws-body', { count })
@@ -14663,6 +14737,7 @@ const workspaceGroups = computed<WorkspaceGroupRow[]>(() =>
     runGroupsByWorkspace: runGroupsByWorkspace.value,
     collapsed: collapsedWorkspaces.value,
     homeDir: homeDir.value,
+    aliases: workspaceAliases.aliases.value,
   })
 )
 
@@ -14900,7 +14975,7 @@ const resourceRows = computed<ResourceSummaryRow[]>(() => {
       // workspace is not always the window's. Shown only when it differs.
       foreignWorkspace:
         p.workspacePath && p.workspacePath !== currentWorkspace.value
-          ? (p.workspacePath.split('/').filter(Boolean).pop() ?? p.workspacePath)
+          ? wsDisplayName(p.workspacePath)
           : '',
       bytes: (known ? bytesByKey.get(sessionKey) : bytesByPane.get(p.id)) ?? 0,
       cpuPercent: (known ? cpuByKey.get(sessionKey) : cpuByPane.get(p.id)) ?? null,
@@ -16330,6 +16405,7 @@ function paneIsCommander(p: ActivePane): boolean {
       :panes="paneViews"
       :lineage="paneLineage"
       :workspaces="workspaceGroups"
+      :workspace-aliases="workspaceAliases.aliases.value"
       :pipeline="pipelineView"
       :existing-project="existingProject"
       :workspace="currentWorkspace"
@@ -16392,6 +16468,7 @@ function paneIsCommander(p: ActivePane): boolean {
       @dispatch-issue="onDispatchIssue"
       @spawn-for-issue="onHandleIssue"
       @rename-pane="setPaneCustomName"
+      @rename-workspace="onRenameWorkspace"
       @install-cli="(p) => promptCliInstall(p.agentKey, p.label)"
       :collapsed="leftPanelCollapsed"
       :views="shellLayout.slots.left.views"

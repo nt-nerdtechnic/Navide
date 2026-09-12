@@ -8856,3 +8856,134 @@ describe('Git left legacy rollback composition', () => {
     })
   })
 })
+
+describe('workspace display name for plugin window titles', () => {
+  type Sent = { id: string; type: string; payload: Record<string, unknown> }
+  const recentEntry = (path: string, name: string) => ({
+    path,
+    name,
+    last_opened_at: '2026-01-01T00:00:00Z',
+    pinned: false,
+    last_known_state: '',
+    last_known_task: '',
+    exists: true,
+  })
+
+  async function answerListRecent(
+    socket: InstanceType<typeof wsMock.FakeNodeWebSocket>,
+    recent: unknown[],
+  ): Promise<Sent> {
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1))
+    const request = JSON.parse(socket.sent[0]!) as Sent
+    expect(request).toMatchObject({ type: 'workspace.list_recent' })
+    socket.receive({
+      id: request.id,
+      type: request.type,
+      ok: true,
+      payload: { recent, path: '/tmp/recent.json' },
+      error: null,
+      timestamp: '',
+    })
+    return request
+  }
+
+  it('reports the alias the recent-list mirror has for the workspace, trimmed', async () => {
+    const mgr = new FrontendPluginManager()
+    mgr.setBackendWsUrl('ws://workspace-alias-test')
+    const pending = mgr.peekWorkspaceDisplayName('/workspace')
+    const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+    socket.open()
+    await answerListRecent(socket, [
+      recentEntry(resolve('/other'), 'Other'),
+      recentEntry(resolve('/workspace'), '  Navide  '),
+    ])
+    await expect(pending).resolves.toBe('Navide')
+  })
+
+  it('reports no alias when the mirror holds the folder basename — its own "no alias"', async () => {
+    const mgr = new FrontendPluginManager()
+    mgr.setBackendWsUrl('ws://workspace-alias-basename-test')
+    const pending = mgr.peekWorkspaceDisplayName('/workspace')
+    const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+    socket.open()
+    // touch() writes the basename for a workspace with no alias.
+    await answerListRecent(socket, [recentEntry(resolve('/workspace'), 'workspace')])
+    await expect(pending).resolves.toBe('')
+  })
+
+  // The canary for the read being pure. `project.peek` registers the path as a
+  // workspace and provisions `.agent-team/plans/` inside it; opening a
+  // sub-folder in the editor used to do exactly that to the sub-folder. The
+  // mirror never holds a sub-folder, so the answer is '' and nothing is
+  // written anywhere.
+  it('reports no alias for a path the mirror does not hold, and never sends project.peek', async () => {
+    const mgr = new FrontendPluginManager()
+    mgr.setBackendWsUrl('ws://workspace-alias-miss-test')
+    const pending = mgr.peekWorkspaceDisplayName('/workspace/drafts')
+    const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+    socket.open()
+    await answerListRecent(socket, [recentEntry(resolve('/workspace'), 'Navide')])
+    await expect(pending).resolves.toBe('')
+    const types = socket.sent.map((raw) => (JSON.parse(raw) as Sent).type)
+    expect(types).toEqual(['workspace.list_recent'])
+    expect(types).not.toContain('project.peek')
+  })
+
+  it('matches the mirror entry through a trailing slash on either side', async () => {
+    const mgr = new FrontendPluginManager()
+    mgr.setBackendWsUrl('ws://workspace-alias-slash-test')
+    const pending = mgr.peekWorkspaceDisplayName('/workspace/')
+    const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+    socket.open()
+    await answerListRecent(socket, [recentEntry(`${resolve('/workspace')}/`, 'Navide')])
+    await expect(pending).resolves.toBe('Navide')
+  })
+
+  it('reports no alias when the listing is not a list', async () => {
+    const mgr = new FrontendPluginManager()
+    mgr.setBackendWsUrl('ws://workspace-alias-malformed-test')
+    const pending = mgr.peekWorkspaceDisplayName('/workspace')
+    const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+    socket.open()
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1))
+    const request = JSON.parse(socket.sent[0]!) as Sent
+    socket.receive({
+      id: request.id,
+      type: request.type,
+      ok: true,
+      payload: { recent: null },
+      error: null,
+      timestamp: '',
+    })
+    await expect(pending).resolves.toBe('')
+  })
+
+  it('gives up rather than hold a window open when the backend does not answer', async () => {
+    const mgr = new FrontendPluginManager()
+    mgr.setBackendWsUrl('ws://workspace-alias-timeout-test')
+    // WsClient.send waits up to 10s of its own and queues while the transport
+    // is down; the race is what brings that down to a title-sized wait.
+    await expect(mgr.peekWorkspaceDisplayName('/workspace', 5)).resolves.toBe('')
+  })
+
+  it('reports no alias without a backend url or a workspace at all', async () => {
+    const mgr = new FrontendPluginManager()
+    await expect(mgr.peekWorkspaceDisplayName('/workspace')).resolves.toBe('')
+    mgr.setBackendWsUrl('ws://workspace-alias-no-workspace-test')
+    await expect(mgr.peekWorkspaceDisplayName('')).resolves.toBe('')
+  })
+})
+
+describe('plansQuery workspace alias', () => {
+  it('carries a resolved alias and leaves the param out when there is none', () => {
+    const aliased = new URLSearchParams(plansQuery('/ws/agent-team', '', '', '', 'zh-TW', '  Navide  '))
+    expect(aliased.get('workspace_display_name')).toBe('Navide')
+    expect(aliased.get('workspace_path')).toBe('/ws/agent-team')
+
+    for (const alias of ['', '   ']) {
+      const plain = new URLSearchParams(plansQuery('/ws/agent-team', '', '', '', 'zh-TW', alias))
+      expect(plain.has('workspace_display_name')).toBe(false)
+    }
+    expect(new URLSearchParams(plansQuery('/ws/agent-team', '', '', '', 'zh-TW')).has('workspace_display_name')).toBe(false)
+  })
+})

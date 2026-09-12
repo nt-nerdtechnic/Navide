@@ -1898,10 +1898,22 @@ async function openFolderInEditor(
  * external file adds a tab instead of reloading; `host` only parents the
  * unavailable-fallback dialog.
  */
-function openMiniIdeEditor(host: BrowserWindow | null, params: Record<string, string>): boolean {
+async function openMiniIdeEditor(
+  host: BrowserWindow | null,
+  params: Record<string, string>
+): Promise<boolean> {
   const { workspace_path: workspacePath = '', ...extraParams } = params
   const httpUrl = backend ? `http://${backend.host}:${backend.port}` : ''
-  const opened = openMiniIdePluginView(workspacePath, httpUrl, extraParams, currentUiTheme())
+  // Best-effort and bounded (see peekWorkspaceDisplayName): a wedged backend
+  // costs a short delay, then the window opens titled with the folder name.
+  const displayName = await frontendPluginManager.peekWorkspaceDisplayName(workspacePath)
+  const opened = openMiniIdePluginView(
+    workspacePath,
+    httpUrl,
+    extraParams,
+    currentUiTheme(),
+    displayName
+  )
   if (!opened) {
     // Last-resort fallback: the mini-IDE ships bundled with the app, so this
     // only fires when the bundled assets are missing/invalid and no verified
@@ -2021,7 +2033,7 @@ async function handleMiniIdeUnavailable(
 function openDiffWindow(host: BrowserWindow | null, params: Record<string, string>): void {
   // EditorWindowApp reads diff_filepath/diff_staged from the entry query on
   // startup (or after the query-change reload) and opens the diff tab.
-  openMiniIdeEditor(host, {
+  void openMiniIdeEditor(host, {
     workspace_path: params.workspace_path ?? '',
     diff_filepath: params.filepath ?? '',
     diff_staged: params.staged ?? '',
@@ -2368,6 +2380,10 @@ async function openCatalogContributionWindow(
   )
   if (!contribution) return { ok: false, error: 'window contribution is not installed' }
 
+  // Best-effort and bounded (see peekWorkspaceDisplayName): a wedged backend
+  // costs a short delay, then the window opens titled with the folder name.
+  const workspaceDisplayName = await frontendPluginManager.peekWorkspaceDisplayName(workspacePath)
+
   const windowKey = getContributionWindowKey(contributionKey, workspacePath, normalizeWorkspacePath)
   let hostWindow = contributionWindows.get(windowKey)
   let created = false
@@ -2396,7 +2412,13 @@ async function openCatalogContributionWindow(
 
   const result = await frontendPluginManager.openContributionWindow(hostWindow, contributionKey, {
     workspacePath,
-    query: catalogContributionQuery(contributionKey, workspacePath, extraParams),
+    query: catalogContributionQuery(
+      contributionKey,
+      workspacePath,
+      extraParams,
+      '',
+      workspaceDisplayName,
+    ),
   })
   if (!result.ok) {
     if (created && !hostWindow.isDestroyed()) {
@@ -2432,6 +2454,11 @@ function catalogContributionQuery(
   // actually painting, which left an in-window contribution booting on the
   // wrong theme until the next theme change.
   renderedTheme = '',
+  // The workspace's user-set alias, resolved by the caller (only the window
+  // openers do, since an in-window contribution region has no title of its
+  // own). Blank leaves the param out and the view falls back to the folder
+  // name.
+  workspaceDisplayName = '',
 ): string {
   const isGit = contributionKey.startsWith('navide.git.')
   return composePluginContributionQuery({
@@ -2442,6 +2469,7 @@ function catalogContributionQuery(
     ...(isGit && backend ? { httpUrl: `http://${backend.host}:${backend.port}` } : {}),
     ...(isGit ? { gitReadOnly: currentGitReadOnlyQuery() } : {}),
     extraParams,
+    workspaceDisplayName,
   })
 }
 
@@ -2638,7 +2666,7 @@ ipcMain.handle('window:setUiScale', (event, next: unknown) => {
 function openBranchDiffWindow(host: BrowserWindow | null, params: Record<string, string>): void {
   // EditorWindowApp reads branch_diff_base/branch_diff_compare from the entry
   // query on startup (or after the query-change reload) and opens the tab.
-  openMiniIdeEditor(host, {
+  void openMiniIdeEditor(host, {
     workspace_path: params.workspace_path ?? '',
     branch_diff_base: params.branch_diff_base ?? 'main',
     branch_diff_compare: params.branch_diff_compare ?? '',
@@ -2794,10 +2822,9 @@ async function openLegacyPlanWindow(workspacePath: string, relPath?: string): Pr
   if (plansStorageAvailability?.status === 'recovery' && !frontendPluginManager.plansBackendFallbackAllowed()) return false
   const recoveryBootstrap = await getPlansLegacyRecoveryBootstrap(workspacePath)
   if (plansStorageAvailability?.status === 'recovery' && !recoveryBootstrap) return false
-  const existing = planWindows.get(workspacePath)
-  if (existing) {
-    // Already open for this workspace: focus it and, when a plan was clicked,
-    // ask the live window to switch to it instead of reopening a new window.
+  // Already open for this workspace: focus it and, when a plan was clicked,
+  // ask the live window to switch to it instead of reopening a new window.
+  const focusExisting = (existing: BrowserWindow): void => {
     if (existing.isMinimized()) existing.restore()
     existing.show()
     existing.focus()
@@ -2814,6 +2841,28 @@ async function openLegacyPlanWindow(workspacePath: string, relPath?: string): Pr
         existing.webContents.send('plan:open-doc', relPath)
       }
     }
+  }
+  const existing = planWindows.get(workspacePath)
+  if (existing) {
+    focusExisting(existing)
+    return
+  }
+  // Resolved by the Host even though this window runs the core renderer over a
+  // real WebSocket: one param spelling means PlanWindowApp needs a single
+  // title path, shared with the packaged Plans window that cannot query at
+  // all. Blank leaves the param out and it falls back to the folder name.
+  // Before the window exists, so a slow answer delays the window rather than
+  // showing an empty one (see peekWorkspaceDisplayName for the bound).
+  const legacyPlansDisplayName = await frontendPluginManager.peekWorkspaceDisplayName(workspacePath)
+  // Checked AGAIN after the await: two window:openPlans for the same workspace
+  // (a double-click on the sidebar row while the backend is slow) both pass
+  // the check above before either registers a window, since registration
+  // happens below the await. Whichever resumes first creates and registers
+  // its window synchronously; the second then sees it here and focuses it
+  // instead of opening a duplicate that the registry would never know about.
+  const raced = planWindows.get(workspacePath)
+  if (raced) {
+    focusExisting(raced)
     return
   }
   const win = new BrowserWindow({
@@ -2852,6 +2901,7 @@ async function openLegacyPlanWindow(workspacePath: string, relPath?: string): Pr
     window: 'plans',
     workspace_path: workspacePath,
     locale: currentUiLocale(),
+    ...(legacyPlansDisplayName ? { workspace_display_name: legacyPlansDisplayName } : {}),
     ...(plansRecoveryEnabled ? { legacy_plans_recovery: '1' } : {}),
     ...(relPath ? { rel_path: relPath } : {})
   })

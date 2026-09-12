@@ -23,6 +23,39 @@ describe('composePluginContributionQuery', () => {
     )
   })
 
+  it('carries the workspace alias for a window contribution and omits it when blank', () => {
+    const aliased = new URLSearchParams(composePluginContributionQuery({
+      contributionKey: 'navide.plans.window',
+      workspacePath: '/Users/dev/projects/agent-team',
+      theme: 'dark',
+      workspaceDisplayName: 'Navide',
+    }))
+    expect(aliased.get('workspace_display_name')).toBe('Navide')
+    // The path stays the identity; the alias is display only.
+    expect(aliased.get('workspace_path')).toBe('/Users/dev/projects/agent-team')
+
+    const padded = new URLSearchParams(composePluginContributionQuery({
+      contributionKey: 'navide.plans.window',
+      workspacePath: '/Users/dev/projects/agent-team',
+      theme: 'dark',
+      workspaceDisplayName: '  Navide  ',
+    }))
+    expect(padded.get('workspace_display_name')).toBe('Navide')
+
+    // Blank, whitespace-only and absent all mean "no alias": the param must
+    // stay out so the view cannot tell them apart from an alias equal to the
+    // folder name.
+    for (const workspaceDisplayName of ['', '   ', undefined]) {
+      const plain = new URLSearchParams(composePluginContributionQuery({
+        contributionKey: 'navide.plans.window',
+        workspacePath: '/Users/dev/projects/agent-team',
+        theme: 'dark',
+        workspaceDisplayName,
+      }))
+      expect(plain.has('workspace_display_name')).toBe(false)
+    }
+  })
+
   it('identifies a standalone Git contribution as the v2 window view with validated locale', () => {
     const query = composePluginContributionQuery({
       contributionKey: 'navide.git.window',

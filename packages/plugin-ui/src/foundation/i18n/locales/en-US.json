@@ -497,6 +497,7 @@
     "copy-path": "Copy path",
     "new-workspace-group": "New group",
     "rename-workspace-group": "Rename group",
+    "rename-workspace": "Rename project",
     "delete-workspace-group": "Delete group",
     "copy-relative-path": "Copy Relative Path",
     "switch-to-list-view": "Switch to List View",
@@ -1040,7 +1041,7 @@
         "accountsAgents": "Accounts & Agents",
         "integration": "Integrations",
         "system": "System",
-        "security": "Security"
+        "plugins": "Plugins"
       },
       "general": "General",
       "appearance": "Appearance",
@@ -2163,6 +2164,8 @@
     "select-role": "Select role…",
     "waiting-backend": "Waiting for backend…",
     "set-workspace-first": "Set workspace path first",
+    "workspace-name-placeholder": "Leave empty for the folder name",
+    "workspace-name-hint": "Enter to save, Esc to cancel. Empty restores the folder name.",
     "resume-session-id": "Session id (or pick from history)",
     "resume-session-not-found": "Session not found — cannot resume",
     "history-session-unavailable": "Session memory is no longer available",
@@ -3022,7 +3025,8 @@
     "confirmTitle": "Stop the running pipeline?",
     "confirm": "The pipeline running in this project will be stopped — a pipeline belongs to the project it was started in and cannot keep running in the background. Its agents stay open, and so does everything in the other projects.",
     "confirmBtn": "Switch and stop",
-    "loading": "Switching to {name}…"
+    "loading": "Switching to {name}…",
+    "renameFailed": "Could not rename {name} — {reason}. The name was not saved."
   },
   "closeAll": {
     "label": "close all",

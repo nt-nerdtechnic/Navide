@@ -8,7 +8,7 @@ import { defineComponent, h, nextTick, ref, type Ref } from 'vue'
 import { resolve } from 'node:path'
 import { CLI_AGENT_SPECS } from '../../agents'
 import { bracketedPaste } from '../../lib/aiCliContext'
-import type { TerminalDockPort } from '@navide/terminal'
+import type { MentionCandidate, TerminalDockPort } from '@navide/terminal'
 
 let i18n: typeof import('@navide/plugin-ui/foundation').i18n
 let AiCliDock: typeof import('../AiCliDock.vue').default
@@ -437,5 +437,130 @@ describe('AiCliDock — running controls and lifecycle events', () => {
     await new Promise((r) => setTimeout(r, 350))
     await injectPromise
     expect(termSpies.pasteText).toHaveBeenCalledWith('\r')
+  })
+})
+
+describe('AiCliDock — @-mention sections key on the workspace path', () => {
+  function mountWithRoster(panes: Record<string, unknown>[]): VueWrapper {
+    const port = {
+      status: ref('connected'),
+      shell: ref(''),
+      autoRestart: ref(null),
+      listAgentPanes: vi.fn(async () => ({ ok: true, payload: { panes } })),
+    } as unknown as TerminalDockPort
+    return mountDock({ terminalPort: port })
+  }
+
+  // The getter the dock hands the terminal; `mention-candidates` is an attr on
+  // the stub rather than a declared prop, hence the $attrs read.
+  function readCandidates(wrapper: VueWrapper): MentionCandidate[] {
+    const attrs = wrapper.findComponent(terminalStub).vm.$attrs as Record<string, unknown>
+    const getter = attrs['mention-candidates'] as () => MentionCandidate[]
+    return getter()
+  }
+
+  it('keeps same-named folders in separate sections titled with the folder name', async () => {
+    const wrapper = mountWithRoster([
+      {
+        pane_id: 'p1',
+        qualified_name: 'api/claude-1',
+        workspace_label: 'api',
+        workspace_path: '/Users/me/work/api',
+      },
+      {
+        pane_id: 'p2',
+        qualified_name: 'api/codex-1',
+        workspace_label: 'api',
+        workspace_path: '/Users/me/side/api',
+      },
+    ])
+    await flushPromises()
+
+    const candidates = readCandidates(wrapper)
+    expect(candidates).toHaveLength(2)
+    const byAddress = new Map(candidates.map((c) => [c.address, c]))
+    // The bug this guards: keying on the folder name merged both projects into
+    // a single "api" section, leaving the two panes indistinguishable.
+    expect(byAddress.get('api/claude-1')!.group).toBe('/Users/me/work/api')
+    expect(byAddress.get('api/codex-1')!.group).toBe('/Users/me/side/api')
+    expect(new Set(candidates.map((c) => c.group)).size).toBe(2)
+    // The header still reads as a folder name, not a whole absolute path.
+    expect(candidates.map((c) => c.groupLabel)).toEqual(['api', 'api'])
+  })
+
+  it('falls back to the folder name as the key when an older backend sends no workspace_path', async () => {
+    const wrapper = mountWithRoster([
+      { pane_id: 'p1', qualified_name: 'api/claude-1', workspace_label: 'api' },
+      { pane_id: 'p2', qualified_name: 'web/codex-1' },
+    ])
+    await flushPromises()
+
+    expect(readCandidates(wrapper)).toEqual([
+      { address: 'api/claude-1', group: 'api', groupLabel: 'api' },
+      { address: 'web/codex-1', group: 'web', groupLabel: 'web' },
+    ])
+  })
+
+  it('titles a section with the workspace alias when the roster carries one', async () => {
+    const wrapper = mountWithRoster([
+      {
+        pane_id: 'p1',
+        qualified_name: 'api/claude-1',
+        workspace_label: 'api',
+        workspace_path: '/Users/me/work/api',
+        workspace_display_name: 'Client Portal',
+      },
+      {
+        pane_id: 'p2',
+        qualified_name: 'api/codex-1',
+        workspace_label: 'api',
+        workspace_path: '/Users/me/side/api',
+      },
+    ])
+    await flushPromises()
+
+    const byAddress = new Map(readCandidates(wrapper).map((c) => [c.address, c]))
+    // The alias wins for the header…
+    expect(byAddress.get('api/claude-1')!.groupLabel).toBe('Client Portal')
+    // …and a pane whose workspace has no alias still reads as its folder name.
+    expect(byAddress.get('api/codex-1')!.groupLabel).toBe('api')
+    // The key stays the path either way: aliases are not unique either.
+    expect(byAddress.get('api/claude-1')!.group).toBe('/Users/me/work/api')
+    expect(byAddress.get('api/codex-1')!.group).toBe('/Users/me/side/api')
+    // The inserted handle is untouched by any of this.
+    expect(byAddress.get('api/claude-1')!.address).toBe('api/claude-1')
+  })
+
+  it('falls back to the folder name when the alias is blank or whitespace', async () => {
+    const wrapper = mountWithRoster([
+      {
+        pane_id: 'p1',
+        qualified_name: 'api/claude-1',
+        workspace_label: 'api',
+        workspace_path: '/Users/me/work/api',
+        workspace_display_name: '   ',
+      },
+    ])
+    await flushPromises()
+
+    expect(readCandidates(wrapper)[0].groupLabel).toBe('api')
+  })
+
+  it('leaves this panel out of its own mention list', async () => {
+    const wrapper = mountWithRoster([
+      {
+        pane_id: 'ab12cd34-test-cli-dock',
+        qualified_name: 'ws/self',
+        workspace_path: '/tmp/ws',
+      },
+      {
+        pane_id: 'p2',
+        qualified_name: 'ws/claude-1',
+        workspace_path: '/tmp/ws',
+      },
+    ])
+    await flushPromises()
+
+    expect(readCandidates(wrapper).map((c) => c.address)).toEqual(['ws/claude-1'])
   })
 })

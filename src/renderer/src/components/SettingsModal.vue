@@ -660,7 +660,7 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
     tab: 'executionPolicy',
     section: 'execution-policy',
     title: 'Execution Policy / 執行政策',
-    group: 'Security',
+    group: 'Plugins',
     summary: 'Edit the global agent policy, choose workspace sources, review repository recommendations, and recover corrupt policy storage.',
     keywords: 'execution policy permission permissions allowlist denylist full shell executable system namespace source repository recommendation untrusted recovery rebuild security 執行政策 權限 允許清單 拒絕清單 完整模式 shell 可執行檔 系統命名空間 來源 repository 建議 不受信任 修復 重建 安全性',
   },
@@ -2000,15 +2000,15 @@ watch(activeTab, (tab) => {
                   <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.2 2.6h6.1l3.5 3.5v7.3H3.2Z"/><path d="M9.1 2.7v3.5h3.5"/><path d="M5.4 8.4h5.2M5.4 10.7h3.4"/></svg>
                 </template>
               </SettingsNavItem>
+            </div>
+
+            <div class="s-nav-group">
+              <div class="s-nav-group-title">{{ $t('settings.nav.group.plugins') }}</div>
               <SettingsNavItem :label="$t('settings.nav.extensions')" :active="activeTab === 'extensions'" @select="activeTab = 'extensions'">
                 <template #icon>
                   <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6.4 2.6h3.2v1.5a1.3 1.3 0 0 0 2.4 0V2.6h1.4v3.2h-1.5a1.3 1.3 0 0 0 0 2.4h1.5v3.2H6.4v-1.5a1.3 1.3 0 0 0-2.4 0v1.5H2.6V8.2h1.5a1.3 1.3 0 0 0 0-2.4H2.6V2.6h3.8Z"/></svg>
                 </template>
               </SettingsNavItem>
-            </div>
-
-            <div class="s-nav-group">
-              <div class="s-nav-group-title">{{ $t('settings.nav.group.security') }}</div>
               <SettingsNavItem :label="$t('settings.nav.executionPolicy')" :active="activeTab === 'executionPolicy'" @select="activeTab = 'executionPolicy'">
                 <template #icon>
                   <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.8 13 3.7v3.7c0 3.1-2 5.7-5 6.8-3-1.1-5-3.7-5-6.8V3.7L8 1.8Z"/><path d="m5.7 8 1.5 1.5 3.2-3.2"/></svg>

@@ -83,7 +83,12 @@ export interface TerminalDockPort {
   onExit(callback: (payload: TerminalExitEvent) => void): () => void
 
   listFiles(workspacePath: string, query: string, maxResults: number): Promise<PortResponse<TerminalFileListResult>>
-  listAgentPanes(): Promise<PortResponse<{ panes?: Array<{ pane_id?: string; qualified_name?: string; workspace_label?: string }> }>>
+  /** `workspace_label` / `qualified_name` are the `<folder>/<pane>` addressing
+   *  protocol and are what gets inserted into a CLI. `workspace_path` is the
+   *  unique section key for mention menus (a folder name is not unique), and
+   *  `workspace_display_name` is the workspace's user-set alias — both
+   *  optional, since a backend older than either field sends neither. */
+  listAgentPanes(): Promise<PortResponse<{ panes?: Array<{ pane_id?: string; qualified_name?: string; workspace_label?: string; workspace_path?: string; workspace_display_name?: string }> }>>
   statPath(path: string, timeoutMs?: number): Promise<PortResponse<{ exists: boolean }>>
   getHomeDirectory?(): Promise<string>
   openFile(args: {
