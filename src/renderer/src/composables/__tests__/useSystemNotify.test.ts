@@ -200,6 +200,7 @@ describe('per-pane mute', () => {
     sys.notifyPaneState('mute-on', 'done', 't', 'b')
     expect(notify).not.toHaveBeenCalled()
     expect(sys.pendingCount.value).toBe(before + 1)
+    setPaneMuted('mute-on', false)
     sys.forgetPane('mute-on')
   })
 
@@ -210,6 +211,7 @@ describe('per-pane mute', () => {
     sys.notifyPaneState('mute-b', 'done', 't', 'b')
     expect(notify).toHaveBeenCalledTimes(1)
     expect(notify).toHaveBeenCalledWith(expect.objectContaining({ paneId: 'mute-b' }))
+    setPaneMuted('mute-a', false)
     sys.forgetPane('mute-a'); sys.forgetPane('mute-b')
   })
 
@@ -220,6 +222,7 @@ describe('per-pane mute', () => {
     setPaneMuted('mute-rearm', false)
     sys.notifyPaneState('mute-rearm', 'done', 't', 'b')
     expect(notify).toHaveBeenCalledTimes(1)
+    setPaneMuted('mute-rearm', false)
     sys.forgetPane('mute-rearm')
   })
 

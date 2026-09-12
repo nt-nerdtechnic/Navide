@@ -55,8 +55,38 @@ describe('per-pane mute wiring in App.vue', () => {
     for (const name of ['rebuildPaneViaResume', 'rebuildPaneClean']) {
       const src = fn(name)
       expect(src, name).toContain('muted: isPaneMuted(paneId)')
-      expect(src, name).toContain('if (snap.muted) {\n        setPaneMuted(newId, true)\n        persistPaneMuted(newId, true)\n      }')
+      expect(src, name).toContain('if (snap.muted) setPaneMuted(newId, true)')
+      // The DISK write must come after the spawn that re-keys the record to
+      // newId: set_pane_muted is a silent no-op for an id the store cannot
+      // find, so persisting before the spawn looks fine and writes nothing.
+      const persistAt = src.indexOf('persistPaneMuted(newId, true)')
+      const spawnAt = src.lastIndexOf("sendQuiet<ProjectPayload>('pipeline.slot_spawn'")
+      expect(persistAt, name).toBeGreaterThan(0)
+      expect(spawnAt, name).toBeGreaterThan(0)
+      expect(persistAt, name).toBeGreaterThan(spawnAt)
+      // A failed replacement drops the pane; its mute must not outlive it.
+      expect(src, name).toContain("panes.value = panes.value.filter((p) => p.id !== paneId)\n      setPaneMuted(paneId, false)")
     }
+  })
+
+  it('onKill never touches the persisted flag; only the slot-reuse caller clears it', () => {
+    // A workspace closed and reopened (onKillAll leaves its records 'spawned')
+    // must come back muted, like is_minimized does — so onKill stays off the
+    // disk. The exception is activateStage dropping cold placeholders whose
+    // slot record the fresh pane will reuse: cleared there, before onKill.
+    expect(fn('onKill')).not.toContain('project.set_pane_muted')
+    expect(fn('onKill')).not.toContain('persistPaneMuted')
+    const activate = fn('activateStage')
+    const clearAt = activate.indexOf('for (const paneId of unrealizedPaneIds) persistPaneMuted(paneId, false)')
+    const killAt = activate.indexOf("unrealizedPaneIds.map((paneId) => onKill(paneId, { markRemoved: false }))")
+    expect(clearAt).toBeGreaterThan(0)
+    expect(killAt).toBeGreaterThan(clearAt)
+  })
+
+  it('detaching a group to another window drops its local notify state', () => {
+    const src = fn('handleGroupDetached')
+    expect(src).toContain('sysNotify.forgetPane(p.id)')
+    expect(src).toContain('setPaneMuted(p.id, false)')
   })
 
   it('onKill keeps the mute for keepInList (rebuild / idle reclaim) and clears it on a real close', () => {

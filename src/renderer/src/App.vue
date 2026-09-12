@@ -6301,10 +6301,7 @@ async function rebuildPaneViaResume(
       // previous_pane_id in the manual_pane.spawn below.
       rekeyLineage(paneId, newId)
       setPaneMuted(paneId, false)
-      if (snap.muted) {
-        setPaneMuted(newId, true)
-        persistPaneMuted(newId, true)
-      }
+      if (snap.muted) setPaneMuted(newId, true)
       if (opts?.offerContinue) {
         const revived = panes.value.find((p) => p.id === newId)
         if (revived) revived.resumeContinueAvailable = true
@@ -6339,8 +6336,13 @@ async function rebuildPaneViaResume(
           run_group_id: snap.runGroupId || '',
         })
       }
+      // After the spawn above, not before: the record for newId only exists
+      // once manual_pane.spawn / pipeline.slot_spawn has re-keyed it, and
+      // set_pane_muted is a silent no-op for a pane the store cannot find.
+      if (snap.muted) persistPaneMuted(newId, true)
     } else {
       panes.value = panes.value.filter((p) => p.id !== paneId)
+      setPaneMuted(paneId, false)
       return 'spawn-failed'
     }
   } finally {
@@ -6566,10 +6568,7 @@ async function rebuildPaneClean(paneId: string): Promise<void> {
       // Same reason as the resume rebuild above: the old id is retired here.
       rekeyLineage(paneId, newId)
       setPaneMuted(paneId, false)
-      if (snap.muted) {
-        setPaneMuted(newId, true)
-        persistPaneMuted(newId, true)
-      }
+      if (snap.muted) setPaneMuted(newId, true)
       if (snap.origin !== 'pipeline') {
         await sendQuiet<ProjectPayload>('manual_pane.spawn', {
           workspace_path: snap.workspacePath,
@@ -6597,6 +6596,9 @@ async function rebuildPaneClean(paneId: string): Promise<void> {
           run_group_id: snap.runGroupId || '',
         })
       }
+      // Same ordering rule as the resume rebuild: the store can only find
+      // newId after the spawn above re-keyed its record.
+      if (snap.muted) persistPaneMuted(newId, true)
       const pane = panes.value.find((p) => p.id === newId)
       if (
         pane && pane.agentKey !== 'terminal' &&
@@ -6607,6 +6609,7 @@ async function rebuildPaneClean(paneId: string): Promise<void> {
       }
     } else {
       panes.value = panes.value.filter((p) => p.id !== paneId)
+      setPaneMuted(paneId, false)
     }
   } finally {
     for (const key of lockKeys) rebuildingPanes.delete(key)
@@ -9965,6 +9968,11 @@ async function activateStage(index: number): Promise<void> {
     .filter((pane) => !pane.realized && pane.stageId === stage.id && pane.origin === 'pipeline')
     .map((pane) => pane.id)
   if (unrealizedPaneIds.length > 0) {
+    // The slot record these placeholders sit on is reused by the fresh pane
+    // spawned below, so a mute left on it would come back on a pane the user
+    // never muted. Cleared here, while the pane is still in the list, because
+    // onKill itself never touches the persisted flag.
+    for (const paneId of unrealizedPaneIds) persistPaneMuted(paneId, false)
     await Promise.all(unrealizedPaneIds.map((paneId) => onKill(paneId, { markRemoved: false })))
   }
 
@@ -13658,6 +13666,11 @@ function handleGroupDetached(groupId: string): void {
       delete paneRefs[p.id]
       // Keep the persisted name: the pane re-registers in the child window.
       unregisterPaneMessaging(p.id, { keepPersisted: true })
+      // The pane leaves THIS window: its pending-badge and mute entries here
+      // would otherwise keep counting for a pane nobody can see. The child
+      // window rebuilds both from the persisted record.
+      sysNotify.forgetPane(p.id)
+      setPaneMuted(p.id, false)
     }
   }
   panes.value = panes.value.filter((p) => (p.runGroupId ?? '') !== groupId)
