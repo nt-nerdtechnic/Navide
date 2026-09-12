@@ -267,18 +267,27 @@ class Paths(Protocol):
         """
         ...
 
-    def pty_launch_parts(self, program: str, args: Sequence[str] = ()) -> tuple[str, list[str]]:
+    def pty_launch_parts(
+        self, program: str, args: Sequence[str] = (), *, path: str | None = None
+    ) -> tuple[str, list[str]]:
         """`launch_argv` split the way a pseudo-terminal spawn wants it.
 
         ConPTY (through winpty-rs) takes the application name and the rest of
         the command line separately rather than one argv, so the terminal
-        backend needs the head and the tail apart. Same decision as
-        `launch_argv` otherwise: POSIX hands back `program` and its args
-        untouched, Windows the cmd.exe wrapping.
+        backend needs the head and the tail apart. POSIX hands back `program`
+        and its args untouched.
 
-        Note what the Windows shape costs a pane: a shell sits between the
-        terminal and the CLI, so Ctrl-C reaches cmd.exe first, the exit code
-        is cmd.exe's, and the job object holds one process more.
+        Windows looks through an npm-style `.cmd` shim first: when the file is
+        recognisably one of the generated forms (npm's cmd-shim, yarn
+        classic's, pnpm's) and does nothing but start `node.exe` on a script,
+        the answer is that `node.exe` and script directly, so the pane holds
+        the CLI itself — Ctrl-C reaches it and not a batch interpreter, the
+        exit code is its own, and the job holds one process fewer. A shim
+        that is anything else — an environment it sets, arguments it adds, a
+        line the parser does not know — falls back to the cmd.exe wrapping of
+        `launch_argv`; the shim is never interpreted, only matched. `path`
+        is the PATH the pane will run with, searched for `node.exe` the way
+        the shim would search for `node`.
         """
         ...
 

@@ -180,7 +180,9 @@ def launch_argv(program: str, args: Sequence[str] = ()) -> list[str]:
     return [program, *args]
 
 
-def pty_launch_parts(program: str, args: Sequence[str] = ()) -> tuple[str, list[str]]:
+def pty_launch_parts(
+    program: str, args: Sequence[str] = (), *, path: str | None = None
+) -> tuple[str, list[str]]:
     return program, list(args)
 
 

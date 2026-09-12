@@ -36,6 +36,7 @@ import codecs
 import ctypes
 import logging
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -806,14 +807,16 @@ class WindowsTerminalBackend:
         if not words:
             raise ValueError("command is empty")
         # PATHEXT lookup: `claude` resolves to npm's `claude.cmd` shim. The
-        # application name is left NULL at CreateProcess (winpty-rs puts it at
-        # the head of the command line instead), which is what makes Windows
-        # run a .cmd through the interpreter at all.
+        # launch seam decides what actually starts: the `node.exe <script>`
+        # behind a recognised shim, else cmd.exe on the shim (a .cmd is not
+        # an image CreateProcess can run). winpty-rs puts `appname` at the
+        # head of the command line and leaves lpApplicationName NULL.
         exe = shutil.which(words[0], path=env.get("PATH") or None)
         if not exe:
             raise FileNotFoundError(f"executable not found: {words[0]}")
-        appname = subprocess.list2cmdline([exe])
-        cmdline = subprocess.list2cmdline(words[1:]) or None
+        head, tail = paths.pty_launch_parts(exe, words[1:], path=env.get("PATH") or None)
+        appname = subprocess.list2cmdline([head])
+        cmdline = subprocess.list2cmdline(tail) or None
         env_block = "\0".join(f"{k}={v}" for k, v in env.items()) + "\0"
         try:
             import winpty
@@ -1229,9 +1232,101 @@ class WindowsDiscoveryLayout(WindowsLayout):
             ]
         return [program, *args]
 
-    def pty_launch_parts(self, program: str, args: Sequence[str] = ()) -> tuple[str, list[str]]:
+    def pty_launch_parts(
+        self, program: str, args: Sequence[str] = (), *, path: str | None = None
+    ) -> tuple[str, list[str]]:
+        if self.launch_kind(program) == "cmd":
+            unwrapped = _unwrap_node_shim(program, path=path)
+            if unwrapped is not None:
+                node, script = unwrapped
+                return node, [script, *args]
         argv = self.launch_argv(program, args)
         return argv[0], argv[1:]
+
+
+#: Largest file still read as a shim. Every generator's output is well under
+#: 1 KiB; anything bigger is a real batch file and is left to cmd.exe.
+_SHIM_MAX_BYTES = 4096
+
+# The lines a generated node shim may consist of, one pattern per line shape,
+# matched whole against each stripped line (batch is case-insensitive). The
+# set is the union of what npm's cmd-shim (2.x through 8.x), yarn classic's
+# @zkochan/cmd-shim and pnpm's @pnpm/cmd-shim write when they wrap a node
+# script with no extra arguments and no environment of their own. A shim is
+# accepted only when every one of its lines is here or is the invocation
+# below; a line that sets NODE_PATH or PATH, or anything unknown, makes the
+# whole file unrecognised — it is matched, never interpreted.
+_SHIM_LINE_RES = [
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        r"@?ECHO off$",
+        r"GOTO start$",
+        r":find_dp0$",
+        r":start$",
+        r"SET dp0=%~dp0$",
+        r"EXIT /b$",
+        r"@?SETLOCAL$",
+        r"@?ENDLOCAL$",
+        r"CALL :find_dp0$",
+        r'@?IF EXIST "(?:%~dp0|%dp0%)\\node\.exe" \($',
+        r'@?SET "_prog=(?:%~dp0|%dp0%)\\node\.exe"$',
+        r'@?SET "_prog=node"$',
+        r"\) ELSE \($",
+        r"\)$",
+        r"@?SET PATHEXT=%PATHEXT:;\.JS;=;%$",
+    )
+]
+#: The line that runs the script: node (next to the shim, or from PATH), the
+#: script relative to the shim's directory, and `%*` — nothing in between.
+_SHIM_INVOKE_RE = re.compile(
+    r"^(?:endLocal & goto #_undefined_# 2>NUL \|\| title %COMSPEC% & )?@?"
+    r'(?:"%_prog%"|"(?:%~dp0|%dp0%)\\node\.exe"|node)\s+'
+    r'"(?:%~dp0|%dp0%)\\(?P<target>[^"]+)"\s+%\*$',
+    re.IGNORECASE,
+)
+
+
+def _unwrap_node_shim(program: str, *, path: str | None) -> tuple[str, str] | None:
+    """`(node.exe, script)` for a generated node shim at `program`, else None.
+
+    None means "run it through cmd.exe as before": the file is not a shim
+    of a known shape, its script is not on disk, or no `node.exe` can be
+    found where the shim would have looked (next to it, then on `path`).
+    """
+    try:
+        if os.path.getsize(program) > _SHIM_MAX_BYTES:
+            return None
+        text = Path(program).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    targets: set[str] = set()
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        invoke = _SHIM_INVOKE_RE.match(line)
+        if invoke:
+            targets.add(invoke.group("target"))
+            continue
+        if not any(pattern.match(line) for pattern in _SHIM_LINE_RES):
+            return None
+    if len(targets) != 1:
+        return None
+    shim_dir = os.path.dirname(os.path.abspath(program))
+    # `%~dp0` ends in a backslash, so the target is shim-relative; it is
+    # written with backslashes whatever the host, hence the split.
+    script = os.path.normpath(os.path.join(shim_dir, *targets.pop().split("\\")))
+    if not os.path.isfile(script):
+        return None
+    node = os.path.join(shim_dir, "node.exe")
+    if not os.path.isfile(node):
+        node = shutil.which("node.exe", path=path)
+        if not node:
+            return None
+    # The pane's reported binary stays the shim (that is what resolved); this
+    # line is where a log shows which process the pane actually holds.
+    log.info("node shim %s runs %s on %s", program, node, script)
+    return node, script
 
 
 class WindowsScheduler:
