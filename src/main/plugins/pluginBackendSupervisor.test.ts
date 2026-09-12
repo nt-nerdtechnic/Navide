@@ -1770,6 +1770,88 @@ describe('PluginBackendSupervisor', () => {
     expect(spawnCount).toBe(0)
   })
 
+  it('runs the Host-only before-spawn check after root refresh for each generation', async () => {
+    const order: string[] = []
+    let spawnCount = 0
+    const supervisor = makeSupervisor({
+      authorizedPlanRoot: { value: null },
+      refreshAuthorizedPlanRoot: async () => {
+        order.push('refresh')
+        return process.cwd()
+      },
+      beforeSpawn: () => {
+        order.push('before-spawn')
+      },
+      spawnProcess: () => {
+        spawnCount += 1
+        order.push('spawn')
+        return makeControlledChild(spawnCount)
+      },
+    })
+    supervisors.push(supervisor)
+
+    await supervisor.start()
+    await supervisor.restart()
+
+    expect(order).toEqual([
+      'refresh',
+      'before-spawn',
+      'spawn',
+      'refresh',
+      'before-spawn',
+      'spawn',
+    ])
+  })
+
+  it('fails closed without spawning when the Host-only before-spawn check rejects', async () => {
+    let spawnCount = 0
+    const supervisor = makeSupervisor({
+      beforeSpawn: async () => {
+        throw new Error('activation is no longer trusted')
+      },
+      spawnProcess: () => {
+        spawnCount += 1
+        return makeControlledChild(spawnCount)
+      },
+    })
+    supervisors.push(supervisor)
+
+    await expect(supervisor.start()).rejects.toMatchObject({ code: 'BACKEND_UNAVAILABLE' })
+    expect(spawnCount).toBe(0)
+  })
+
+  it('does not spawn after close wins a pending Host-only before-spawn check', async () => {
+    let hookStarted!: () => void
+    const started = new Promise<void>((resolve) => {
+      hookStarted = resolve
+    })
+    let releaseHook!: () => void
+    const release = new Promise<void>((resolve) => {
+      releaseHook = resolve
+    })
+    let spawnCount = 0
+    const supervisor = makeSupervisor({
+      beforeSpawn: async () => {
+        hookStarted()
+        await release
+      },
+      spawnProcess: () => {
+        spawnCount += 1
+        return makeControlledChild(spawnCount)
+      },
+    })
+    supervisors.push(supervisor)
+
+    const starting = supervisor.start()
+    await started
+    const closing = supervisor.close()
+    releaseHook()
+
+    await expect(starting).rejects.toMatchObject({ code: 'PLUGIN_STOPPING' })
+    await closing
+    expect(spawnCount).toBe(0)
+  })
+
   for (const [label, entryFile] of packagedFixtures) {
     const run = packagedFixtureEnabled ? it : it.skip
 

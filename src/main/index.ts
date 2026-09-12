@@ -15,14 +15,17 @@ import {
 import { abandonPendingBackends } from './backend-pending'
 import { installApplicationMenu, type AppMenuHooks, type RecentMenuEntry } from './menu'
 import { LEGAL_LINKS, isLegalRoute } from '../shared/legalLinks'
-import { openNoopPluginView, openFsProbePluginView, openMiniIdePluginView, openPlansPluginView, devPlansPluginDescriptor, devPlansV2PluginBundle, openGitPluginView, openGitLeftPluginView, updateGitLeftPluginView, closeGitLeftPluginView, registerBundledMiniIde, bundledMiniIdeDir, officialPluginArtifactPackageDir, registerBundledPlans, registerLegacyBundledGit, hasCompletePlansContributions, frontendPluginManager } from './plugins/frontendPluginManager'
+import { openNoopPluginView, openFsProbePluginView, openMiniIdePluginView, openPlansPluginView, devPlansPluginDescriptor, devPlansV2PluginBundle, openGitPluginView, openGitLeftPluginView, updateGitLeftPluginView, closeGitLeftPluginView, registerBundledMiniIde, bundledMiniIdeDir, officialPluginArtifactPackageDir, registerBundledPlans, registerLegacyBundledGit, hasCompletePlansContributions, createPluginBackendChildEnvironment, frontendPluginManager } from './plugins/frontendPluginManager'
 import { plansBackendActivation } from './plugins/frontendPluginManager'
 import {
   isTrustedPluginManagementSender,
   registerPluginIpc,
   resolveConfiguredMarketplace,
 } from './plugins/pluginIpc'
-import { readRegistryTrustSnapshot } from './plugins/pluginInstalledTrust'
+import {
+  readRegistryTrustSnapshot,
+  verifyInstalledRegistryPackage,
+} from './plugins/pluginInstalledTrust'
 import { contributionIcon } from './plugins/pluginContributionIcon'
 import { broadcastQuitStage } from './quit-progress'
 import { currentPluginHostTarget, UNIVERSAL_PLUGIN_TARGET } from './plugins/pluginTarget'
@@ -36,7 +39,12 @@ import {
 import { registerExecutionPolicyIpc } from './plugins/executionPolicyIpc'
 import { FAIL_CLOSED_EXECUTION_POLICY, type ExecutionPolicySnapshot } from './plugins/executionPolicy'
 import { PluginFactoryOptOutStore } from './plugins/pluginFactoryOptOutStore'
-import { loadPluginDir } from './plugins/installedPlugins'
+import { loadPluginDir, type PluginActivationCatalogEntry } from './plugins/installedPlugins'
+import {
+  BackendPluginError,
+  PluginBackendSupervisor,
+  type BackendPluginLaunchSpec,
+} from './plugins/pluginBackendSupervisor'
 import { bundledMiniIdeV2Dir, MINI_IDE_CONTRIBUTION, activateInstalledMiniIdeRecovery } from './plugins/miniIdePackage'
 import { MINI_IDE_PLUGIN_ID, MiniIdeStorageLifecycleSelector } from './plugins/miniIdeStorageLifecycle'
 import { createMiniIdeStorageMigrationGate, type MiniIdeStorageAvailability } from './plugins/miniIdeStorageMigrationGate'
@@ -733,6 +741,132 @@ const installedPluginTrust = {
   officialRegistryUrl: installedOfficialRegistryUrl,
   expectedTarget: currentPluginHostTarget(),
 }
+
+function currentInstalledRegistryTrust() {
+  const marketplace = resolveConfiguredMarketplace()
+  return {
+    pinnedRootKey: marketplace.trust.pinnedRegistryRootKey,
+    snapshot: readRegistryTrustSnapshot(pluginsRoot()),
+    registryAuthority: marketplace.trust.registryAuthority,
+    officialRegistryUrl: marketplace.trust.officialRegistryUrl,
+    expectedTarget: marketplace.trust.expectedTarget ?? currentPluginHostTarget(),
+    now: marketplace.trust.now,
+  }
+}
+
+function verifyCurrentInstalledBackendTrust(
+  activation: Pick<BackendPluginLaunchSpec, 'pluginId' | 'packageDir'>,
+): void {
+  const packageRelativePath = relative(pluginsRoot(), activation.packageDir)
+  if (
+    !packageRelativePath ||
+    isAbsolute(packageRelativePath) ||
+    packageRelativePath === '..' ||
+    packageRelativePath.startsWith(`..${sep}`)
+  ) {
+    // Factory-bundled and developer-local packages do not carry Registry
+    // receipts. The Registry trust hook applies only to installed Registry
+    // packages under the Host-owned plugins root.
+    return
+  }
+  const decision = verifyInstalledRegistryPackage(
+    activation.packageDir,
+    activation.pluginId,
+    currentInstalledRegistryTrust(),
+  )
+  if (decision.action === 'quarantine') {
+    throw new BackendPluginError(
+      'BACKEND_UNAVAILABLE',
+      'installed plugin trust verification failed',
+      { cause: new Error(decision.reason) },
+    )
+  }
+}
+
+function scheduleDeniedBackendRuntimeQuarantine(
+  activation: Pick<BackendPluginLaunchSpec, 'pluginId' | 'packageVersion' | 'packageDir'>,
+): void {
+  void frontendPluginManager
+    .revokePackageVersion(activation.pluginId, activation.packageVersion)
+    .catch((drainError: unknown) => {
+      console.warn(
+        `[main] revoked plugin runtime could not be drained: ${
+          drainError instanceof Error ? drainError.message : String(drainError)
+        }`,
+      )
+    })
+    .finally(() => {
+      const descriptor = frontendPluginManager.getDescriptor(activation.pluginId)
+      if (
+        !descriptor ||
+        descriptor.packageVersion !== activation.packageVersion ||
+        !descriptor.packageDir ||
+        relative(descriptor.packageDir, activation.packageDir) !== '' ||
+        relative(activation.packageDir, descriptor.packageDir) !== ''
+      ) return
+      try {
+        frontendPluginManager.removeInstalledPlugin(activation.pluginId, { restoreBuiltin: false })
+        applyPluginActivationChange({ pluginId: activation.pluginId })
+      } catch (error) {
+        console.warn(
+          `[main] revoked plugin descriptor could not be quarantined: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        )
+      }
+    })
+}
+
+async function preflightCandidateFrontend(
+  descriptor: Parameters<typeof frontendPluginManager.preflightPackageFrontend>[0],
+): Promise<void> {
+  const hostWindow = new BrowserWindow({
+    width: 1,
+    height: 1,
+    show: false,
+    skipTaskbar: true,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      backgroundThrottling: false,
+      webviewTag: false,
+    },
+  })
+  try {
+    await frontendPluginManager.preflightPackageFrontend(descriptor, hostWindow)
+  } finally {
+    if (!hostWindow.isDestroyed()) hostWindow.destroy()
+  }
+}
+
+async function preflightCandidateBackend(
+  activation: PluginActivationCatalogEntry,
+): Promise<void> {
+  const backend = activation.backend
+  if (!backend) return
+  const launch: BackendPluginLaunchSpec = {
+    pluginId: activation.pluginId,
+    packageVersion: activation.packageVersion,
+    packageDir: activation.packageDir,
+    entryFile: backend.entryFile,
+    protocolVersion: backend.protocolVersion,
+    activation: backend.activation,
+    approvedMethods: [],
+    approvedEvents: [],
+    approvedBridgePorts: [],
+  }
+  const supervisor = new PluginBackendSupervisor(launch, {
+    environment: createPluginBackendChildEnvironment(),
+    beforeSpawn: () => verifyCurrentInstalledBackendTrust(launch),
+  })
+  try {
+    await supervisor.start()
+  } finally {
+    await supervisor.close()
+  }
+}
+
 const pluginCapabilityGrants = new PluginCapabilityGrantStore(pluginsRoot())
 const executionPolicySourceStore = new ExecutionPolicySourceStore(app.getPath('userData'))
 const pluginFactoryOptOuts = new PluginFactoryOptOutStore(pluginsRoot())
@@ -753,6 +887,19 @@ const installedMiniIdeDescriptorPresent = frontendPluginManager.getDescriptor(MI
 frontendPluginManager.setCapabilityGrantResolver((pluginId, packageVersion) =>
   pluginCapabilityGrants.get(pluginId, packageVersion)
 )
+frontendPluginManager.setBackendSpawnTrustVerifier((activation) => {
+  try {
+    verifyCurrentInstalledBackendTrust(activation)
+  } catch (error) {
+    // The supervisor invokes this hook while its generation is still in the
+    // start path. Drain asynchronously so the trust failure remains fail
+    // closed without waiting on a re-entrant Host teardown. The completion
+    // path removes only the still-selected matching descriptor and catalog
+    // entry; a newer activation cannot be removed by this stale denial.
+    scheduleDeniedBackendRuntimeQuarantine(activation)
+    throw error
+  }
+})
 frontendPluginManager.setExecutionPolicyResolver((workspacePath?: string): ExecutionPolicySnapshot => {
   try {
     if (!workspacePath) return executionPolicySourceStore.getGlobalEffectivePolicy()
@@ -1039,8 +1186,23 @@ const applyPluginActivationChange = ({
   pluginId: string
   activation?: (typeof approvedInstalledPluginActivations)[number]
 }): void => {
-  if (activation?.pluginId === 'navide.plans' && activation.backend) {
-    const backend = plansBackendActivation(activation)
+  if (activation?.backend) {
+    // Generic packages get a descriptor-matching backend tuple with no
+    // Host-approved methods, events, or bridge ports until a package-specific
+    // Host policy grants them. Plans retains its existing explicit allowlist.
+    const backend: BackendPluginLaunchSpec | null = activation.pluginId === 'navide.plans'
+      ? plansBackendActivation(activation)
+      : {
+          pluginId: activation.pluginId,
+          packageVersion: activation.packageVersion,
+          packageDir: activation.packageDir,
+          entryFile: activation.backend.entryFile,
+          protocolVersion: activation.backend.protocolVersion,
+          activation: activation.backend.activation,
+          approvedMethods: [],
+          approvedEvents: [],
+          approvedBridgePorts: [],
+        }
     if (backend && !frontendPluginManager.hasBackendActivation(pluginId, activation.packageVersion)) {
       frontendPluginManager.registerBackendActivation(backend)
     }
@@ -1118,6 +1280,8 @@ const pluginTrustRefresh = registerPluginIpc(
   {
     resolveContributionIcon: contributionIcon,
     onActivationChange: applyPluginActivationChange,
+    preflightCandidateFrontend,
+    preflightCandidateBackend,
     cleanupPluginStorage: async (pluginId) => {
       await pluginStorageStore.cleanupPlugin(pluginId)
       if (pluginId === 'navide.plans') plansStorageLifecycle.clear()

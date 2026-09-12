@@ -62,6 +62,8 @@ export interface PluginBackendHostOptions {
   onBackendFailure?: (runtime: BackendRuntimeContext, error: BackendPluginError) => void
   /** Observe child diagnostic output (stderr / startup failure diagnostics). */
   onStderr?: (chunk: string) => void
+  /** Re-check Host-owned trust immediately before every backend child spawn. */
+  reverifyBeforeSpawn?: (activation: Readonly<BackendPluginLaunchSpec>) => void | Promise<void>
 }
 
 interface RegisteredBackend {
@@ -173,6 +175,7 @@ export class PluginBackendHost {
   private readonly resolveExecutionPolicy?: PluginBackendHostOptions['resolveExecutionPolicy']
   private readonly onBackendFailure?: PluginBackendHostOptions['onBackendFailure']
   private readonly onStderr?: PluginBackendHostOptions['onStderr']
+  private reverifyBeforeSpawn?: PluginBackendHostOptions['reverifyBeforeSpawn']
   private readonly backends = new Map<string, RegisteredBackend>()
   private readonly views = new Map<string, BoundView>()
   /** Package-version revocations are serialized and also act as an admission
@@ -193,6 +196,7 @@ export class PluginBackendHost {
     this.resolveExecutionPolicy = options.resolveExecutionPolicy
     this.onBackendFailure = options.onBackendFailure
     this.onStderr = options.onStderr
+    this.reverifyBeforeSpawn = options.reverifyBeforeSpawn
     this.createSupervisor = options.createSupervisor ?? defaultSupervisor
   }
 
@@ -207,6 +211,20 @@ export class PluginBackendHost {
       )
     }
     this.bridgeDispatcher = dispatcher
+  }
+
+  /** Install the Host's current-trust verifier before views are bound. The
+   * callback is retained by each supervisor so restarts re-check fresh facts. */
+  setBeforeSpawnVerifier(
+    verifier: PluginBackendHostOptions['reverifyBeforeSpawn'] | undefined,
+  ): void {
+    if (this.views.size > 0) {
+      throw new BackendPluginError(
+        'INVALID_RUNTIME',
+        'Backend spawn trust verifier cannot change while a view is bound.',
+      )
+    }
+    this.reverifyBeforeSpawn = verifier
   }
 
   register(activation: BackendPluginLaunchSpec): void {
@@ -371,6 +389,9 @@ export class PluginBackendHost {
         clientInfo: { name: 'navide-host', version: view.activation.packageVersion },
         bridgeDispatcher: this.bridgeDispatcher,
         authorizedPlanRoot: view.authorizedPlanRoot,
+        ...(this.reverifyBeforeSpawn
+          ? { beforeSpawn: () => this.reverifyBeforeSpawn?.(view.activation) }
+          : {}),
         ...(this.onStderr ? { onStderr: this.onStderr } : {}),
         ...(this.resolveExecutionPolicy
           ? { resolveExecutionPolicy: this.resolveExecutionPolicy }

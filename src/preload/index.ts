@@ -116,6 +116,7 @@ export interface InstalledPluginSummary {
   packageVersionGrant?: PackageVersionGrantSummary | null
   provenance?: 'official-registry' | 'developer-local-unpacked' | 'factory-bundled'
   warning?: string
+  pendingCandidateVersion?: string
 }
 
 export interface FactoryPluginSummary {
@@ -832,8 +833,14 @@ contextBridge.exposeInMainWorld('agentTeam', {
     commitInstall: (
       id: string,
       approval: { publisherConfirmed?: boolean; riskConfirmed?: boolean } = {}
-    ): Promise<{ id: string; requires: string[] }> =>
+    ): Promise<{ id: string; requires: string[]; restartRequired: true }> =>
       ipcRenderer.invoke('plugins:commitInstall', { id, ...approval }),
+    restart: (id: string): Promise<{
+      id: string
+      packageVersion: string
+      restoredInstances: number
+      skippedDestroyedHostWindows: number
+    }> => ipcRenderer.invoke('plugins:restart', { id }),
     remove: (id: string): Promise<{ ok: boolean }> =>
       ipcRenderer.invoke('plugins:remove', { id }),
     restoreFactoryPackage: (id: string): Promise<{ ok: boolean }> =>

@@ -27,10 +27,12 @@ import {
 } from './pluginManifest'
 import type { PluginLaunchDescriptor, PluginViewLaunchDescriptor } from './frontendPluginManager'
 import {
+  PLUGIN_ACTIVATION_DIR,
   PLUGIN_QUARANTINE_DIR,
   PLUGIN_QUARANTINE_MARKER,
   PLUGIN_STAGING_DIR,
 } from './pluginInstallPaths'
+import { PluginActivationSelector } from './pluginActivationSelector'
 import type { ManifestPermissionsSummary } from '../../shared/executionPolicy'
 
 export {
@@ -396,9 +398,14 @@ export function scanInstalledPlugins(root: string): ScannedPlugin[] {
   } catch {
     return []
   }
+  const lifecycleSelector = new PluginActivationSelector(root)
   const out: ScannedPlugin[] = []
   for (const name of names) {
-    if (name === PLUGIN_QUARANTINE_DIR || name === PLUGIN_STAGING_DIR) continue
+    if (
+      name === PLUGIN_ACTIVATION_DIR ||
+      name === PLUGIN_QUARANTINE_DIR ||
+      name === PLUGIN_STAGING_DIR
+    ) continue
     const dir = join(root, name)
     try {
       if (!statSync(dir).isDirectory()) continue
@@ -406,7 +413,14 @@ export function scanInstalledPlugins(root: string): ScannedPlugin[] {
     } catch {
       continue
     }
-    out.push(loadPluginDir(dir))
+    try {
+      const selected = lifecycleSelector.read(name)?.active
+      out.push(selected ? loadPluginDir(lifecycleSelector.packageDir(name, selected)) : loadPluginDir(dir))
+    } catch {
+      // A malformed selector is not an active package. Keep legacy scan
+      // compatibility for this directory without promoting any candidate.
+      out.push(loadPluginDir(dir))
+    }
   }
   return out
 }

@@ -284,6 +284,7 @@ import {
   MAX_DIAGNOSTIC_LINE_CHARS,
   MAX_DIAGNOSTIC_LINES_PER_EMISSION,
   type PluginLaunchDescriptor,
+  type PluginViewLaunchDescriptor,
 } from './frontendPluginManager'
 import { PluginBackendHost } from './pluginBackendHost'
 import { BackendPluginError, PluginBackendSupervisor } from './pluginBackendSupervisor'
@@ -2547,6 +2548,187 @@ describe('package-version grant revocation', () => {
         bounds: { x: 0, y: 0, width: 300, height: 500 },
         workspacePath: '/workspace',
       })).resolves.toEqual({ ok: true })
+    } finally {
+      revoke.mockRestore()
+      await mgr.closeBackendPlugins()
+    }
+  })
+})
+
+describe('immutable package restart frontend seam', () => {
+  it('drains old work behind a plugin barrier and restores native placement from the current descriptor only', async () => {
+    const mgr = new FrontendPluginManager()
+    const pluginId = 'acme.restartable'
+    const oldVersion = '1.0.0'
+    const newVersion = '2.0.0'
+    const contributionKey = `${pluginId}.main`
+    const oldView: PluginViewLaunchDescriptor = {
+      id: 'main', contributionKey, kind: 'custom', location: 'main', title: 'Restartable',
+      entryFile: '/plugins/acme.restartable/v1/index.html',
+    }
+    const newView: PluginViewLaunchDescriptor = { ...oldView, entryFile: '/plugins/acme.restartable/v2/index.html' }
+    const makeDescriptor = (packageVersion: string, view: PluginViewLaunchDescriptor): PluginLaunchDescriptor => ({
+      id: pluginId, packageVersion, packageDir: process.cwd(), requires: [], devUrl: '',
+      entryFile: view.entryFile, views: [view], capabilityPolicy: manifestV2CapabilityPolicy({ system: [] }),
+    })
+    const oldDescriptor = makeDescriptor(oldVersion, oldView)
+    const newDescriptor = makeDescriptor(newVersion, newView)
+    const oldContext: HostCapabilityContext = {
+      publisherEligible: false,
+      userGrant: { packageVersion: oldVersion, system: [], storage: true },
+      runtimeBinding: {
+        pluginId, packageVersion: oldVersion, workspaceId: 'workspace-1', instanceId: null, audience: contributionKey,
+      },
+    }
+    mgr.registerDescriptor(oldDescriptor)
+    mgr.setCapabilityGrantResolver((_id, packageVersion) => ({ packageVersion, system: [], storage: true }))
+    const revoke = vi.spyOn(PluginBackendHost.prototype, 'revokePackageVersion').mockResolvedValue()
+    const host = new FakeBrowserWindow()
+    try {
+      await mgr.openView(oldDescriptor, oldView, {
+        hostWindow: asHost(host), bounds: { x: 5, y: 7, width: 450, height: 320 },
+        workspacePath: '/workspace', query: '?workspace_path=%2Fworkspace&file_grant=stale', capabilityContext: oldContext,
+      })
+      const oldSurface = host.children[0] as FakeViewLike
+
+      const transaction = await mgr.beginPackageRestart(pluginId, oldVersion)
+      expect(revoke).toHaveBeenCalledWith(pluginId, oldVersion)
+      expect(oldSurface.webContents.isDestroyed()).toBe(true)
+
+      mgr.registerDescriptor(newDescriptor)
+      mgr.setPluginStorageSnapshotSelection(pluginId, {
+        activeVersion: newVersion,
+        previousVersion: oldVersion,
+      })
+      await expect(mgr.openView(newDescriptor, newView, {
+        hostWindow: asHost(new FakeBrowserWindow()), bounds: 'fill', workspacePath: '/workspace',
+        capabilityContext: {
+          ...oldContext,
+          userGrant: { packageVersion: newVersion, system: [], storage: true },
+          runtimeBinding: { ...oldContext.runtimeBinding!, packageVersion: newVersion },
+        },
+      })).rejects.toMatchObject({ code: 'PLUGIN_STOPPING' })
+
+      const restoring = mgr.restorePackageRestart(transaction, newVersion)
+      const restoredSurface = host.children[0] as FakeViewLike
+      expect(restoredSurface.webContents.loads).toEqual([
+        `${newView.entryFile}?workspace_path=%2Fworkspace`,
+      ])
+      ipcListeners.get('plugin:ready')?.({ sender: { id: restoredSurface.webContents.id } })
+      await expect(restoring).resolves.toEqual({ restoredInstances: 1, skippedDestroyedHostWindows: 0 })
+      mgr.completePackageRestart(transaction)
+
+      const restored = [...(mgr as unknown as { running: Map<string, {
+        capabilityContext: HostCapabilityContext | null
+      }> }).running.values()][0]
+      expect(restored?.capabilityContext?.runtimeBinding?.packageVersion).toBe(newVersion)
+      expect(restored?.capabilityContext?.storageSnapshots).toEqual(new Map([
+        ['candidate', newVersion], ['active', newVersion], ['previous', oldVersion],
+      ]))
+    } finally {
+      revoke.mockRestore()
+      await mgr.closeBackendPlugins()
+    }
+  })
+
+  it('preflights hidden candidate views without a catalog entry or capability binding', async () => {
+    const mgr = new FrontendPluginManager()
+    const descriptor: PluginLaunchDescriptor = {
+      id: 'acme.candidate', packageVersion: '2.0.0', packageDir: process.cwd(), requires: [], devUrl: '',
+      entryFile: '/plugins/acme.candidate/index.html',
+      views: [{
+        id: 'main', contributionKey: 'acme.candidate.main', kind: 'custom', location: 'main', title: 'Candidate',
+        entryFile: '/plugins/acme.candidate/index.html',
+      }],
+    }
+    const host = new FakeBrowserWindow()
+    const onFailure = vi.fn()
+    mgr.setActivationFailureHandler(onFailure)
+
+    const preflight = mgr.preflightPackageFrontend(descriptor, asHost(host))
+    const surface = host.children[0] as FakeViewLike
+    const running = [...(mgr as unknown as { running: Map<string, {
+      capabilityContext: HostCapabilityContext | null
+    }> }).running.values()][0]
+    expect(running?.capabilityContext).toBeNull()
+    expect(mgr.getDescriptor(descriptor.id)).toBeUndefined()
+    ipcListeners.get('plugin:ready')?.({ sender: { id: surface.webContents.id } })
+
+    await expect(preflight).resolves.toBeUndefined()
+    expect(host.children).toHaveLength(0)
+    expect(mgr.listContributionCatalog()).toEqual([])
+    expect(onFailure).not.toHaveBeenCalled()
+  })
+
+  it('reports a destroyed Host window explicitly instead of treating the placement as restored', async () => {
+    const mgr = new FrontendPluginManager()
+    const pluginId = 'acme.destroyed-host'
+    const oldVersion = '1.0.0'
+    const newVersion = '2.0.0'
+    const view: PluginViewLaunchDescriptor = {
+      id: 'main', contributionKey: `${pluginId}.main`, kind: 'custom', location: 'main', title: 'Destroyed host',
+      entryFile: '/plugins/acme.destroyed-host/index.html',
+    }
+    const descriptor = (packageVersion: string): PluginLaunchDescriptor => ({
+      id: pluginId, packageVersion, packageDir: process.cwd(), requires: [], devUrl: '', entryFile: view.entryFile,
+      views: [view], capabilityPolicy: manifestV2CapabilityPolicy({ system: [] }),
+    })
+    const oldDescriptor = descriptor(oldVersion)
+    const host = new FakeBrowserWindow()
+    mgr.registerDescriptor(oldDescriptor)
+    mgr.setCapabilityGrantResolver((_id, packageVersion) => ({ packageVersion, system: [], storage: true }))
+    const oldContext: HostCapabilityContext = {
+      publisherEligible: false, userGrant: { packageVersion: oldVersion, system: [], storage: true },
+      runtimeBinding: { pluginId, packageVersion: oldVersion, workspaceId: 'workspace-1', instanceId: null, audience: view.contributionKey },
+    }
+    const revoke = vi.spyOn(PluginBackendHost.prototype, 'revokePackageVersion').mockResolvedValue()
+    try {
+      await mgr.openView(oldDescriptor, view, {
+        hostWindow: asHost(host), bounds: 'fill', workspacePath: '/workspace', capabilityContext: oldContext,
+      })
+      const transaction = await mgr.beginPackageRestart(pluginId, oldVersion)
+      host.destroyed = true
+      mgr.registerDescriptor(descriptor(newVersion))
+      mgr.setPluginStorageSnapshotSelection(pluginId, { activeVersion: newVersion, previousVersion: oldVersion })
+
+      await expect(mgr.restorePackageRestart(transaction, newVersion)).resolves.toEqual({
+        restoredInstances: 0, skippedDestroyedHostWindows: 1,
+      })
+      mgr.completePackageRestart(transaction)
+    } finally {
+      revoke.mockRestore()
+      await mgr.closeBackendPlugins()
+    }
+  })
+
+  it('does not silently complete a renderer-owned guest placement', async () => {
+    const mgr = new FrontendPluginManager()
+    const pluginId = 'acme.pending-guest'
+    const oldVersion = '1.0.0'
+    const newVersion = '2.0.0'
+    const view: PluginViewLaunchDescriptor = {
+      id: 'left', contributionKey: `${pluginId}.left`, kind: 'custom', location: 'left', title: 'Guest',
+      entryFile: '/plugins/acme.pending-guest/index.html',
+    }
+    const descriptor = (packageVersion: string): PluginLaunchDescriptor => ({
+      id: pluginId, packageVersion, packageDir: process.cwd(), requires: [], devUrl: '', entryFile: view.entryFile,
+      views: [view], capabilityPolicy: manifestV2CapabilityPolicy({ system: [] }),
+    })
+    const host = new FakeBrowserWindow()
+    mgr.registerDescriptor(descriptor(oldVersion))
+    mgr.setCapabilityGrantResolver((_id, packageVersion) => ({ packageVersion, system: [], storage: true }))
+    const revoke = vi.spyOn(PluginBackendHost.prototype, 'revokePackageVersion').mockResolvedValue()
+    try {
+      await expect(mgr.prepareGuestContribution(asHost(host), view.contributionKey, {
+        workspacePath: '/workspace', query: '?workspace_path=%2Fworkspace',
+      })).resolves.toMatchObject({ ok: true })
+      const transaction = await mgr.beginPackageRestart(pluginId, oldVersion)
+      mgr.registerDescriptor(descriptor(newVersion))
+      mgr.setPluginStorageSnapshotSelection(pluginId, { activeVersion: newVersion, previousVersion: oldVersion })
+
+      await expect(mgr.restorePackageRestart(transaction, newVersion)).rejects.toThrow(/guest re-prepare/)
+      expect(() => mgr.completePackageRestart(transaction)).toThrow(/required placements/)
+      mgr.cancelPackageRestart(transaction)
     } finally {
       revoke.mockRestore()
       await mgr.closeBackendPlugins()

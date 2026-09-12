@@ -12,11 +12,10 @@
 // main-side, keyed by id, until commit.
 
 import { app, BrowserWindow, ipcMain, type IpcMainInvokeEvent } from 'electron'
-import { readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import {
   prepareInstall,
-  commitInstallTransaction,
+  stageInstallCandidate,
   removePlugin,
   type PreparedInstall,
   type InstallerTrustConfig,
@@ -24,7 +23,6 @@ import {
 import {
   sensitiveCapabilities,
   assertRegistryUrlAllowed,
-  sha256Hex,
 } from './pluginVerify'
 import type { RegistryPackageEnvelope, RegistryTrustMetadata } from './pluginRegistryTrust'
 import { verifyRegistryTrustMetadata } from './pluginRegistryTrust'
@@ -33,17 +31,12 @@ import {
   resolveMarketplaceRegistryRoot,
 } from './pluginRegistryRootApproval'
 import {
-  isManifestV2,
   loadPluginDir,
-  manifestCapabilityPolicy,
-  manifestToActivation,
-  manifestToInstalledPackageSummary,
   type PluginActivationCatalogEntry,
 } from './installedPlugins'
 import { isValidManifestV2PluginId } from './pluginManifestV2'
 import { PluginPublisherTrustStore } from './pluginPublisherTrust'
 import {
-  REGISTRY_ARTIFACT_NAME,
   readRegistryTrustSnapshot,
   discoverInstalledRegistryPackageIds,
   verifyInstalledRegistryPackage,
@@ -51,9 +44,14 @@ import {
   type InstalledTrustDecision,
 } from './pluginInstalledTrust'
 import { currentPluginHostTarget } from './pluginTarget'
-import type { FrontendPluginManager } from './frontendPluginManager'
+import type {
+  FrontendPluginManager,
+  PluginLaunchDescriptor,
+  PluginPackageRestartTransaction,
+} from './frontendPluginManager'
 import type { ContributionIcon } from './pluginContributionIcon'
 import { PluginCapabilityGrantStore } from './pluginCapabilityGrantStore'
+import { PluginActivationSelector } from './pluginActivationSelector'
 import type {
   ManifestPermissionsSummary,
   PackageVersionGrantSummary,
@@ -114,6 +112,7 @@ interface InstalledSummary {
   packageVersionGrant?: PackageVersionGrantSummary | null
   provenance?: 'official-registry' | 'developer-local-unpacked' | 'factory-bundled'
   warning?: string
+  pendingCandidateVersion?: string
 }
 
 export interface FactoryPackageSummary {
@@ -149,6 +148,10 @@ export interface PluginIpcOptions {
   restoreFactoryPackage?: (pluginId: string) => Promise<void> | void
   onFactoryPackageRemoved?: (pluginId: string) => void
   onPackageInstalled?: (pluginId: string) => void
+  /** Host-only hidden-window preflight. The candidate must not enter catalog state. */
+  preflightCandidateFrontend?: (descriptor: PluginLaunchDescriptor) => Promise<void>
+  /** Host-only standalone backend health check with no production bridge route. */
+  preflightCandidateBackend?: (activation: PluginActivationCatalogEntry) => Promise<void>
 }
 
 function assertPluginRemovalTarget(pluginsRoot: string, value: unknown): string {
@@ -189,23 +192,6 @@ async function revokeInstalledPackageRuntime(
   }
 }
 
-function cleanupFailedPluginInstall(
-  manager: FrontendPluginManager,
-  onActivationChange: PluginIpcOptions['onActivationChange'],
-  pluginId: string
-): void {
-  try {
-    manager.removeInstalledPlugin(pluginId)
-  } catch {
-    // Cleanup is best-effort; the install failure remains the reported error.
-  }
-  try {
-    onActivationChange?.({ pluginId })
-  } catch {
-    // Keep manager cleanup and the original install failure from being masked.
-  }
-}
-
 /** Restrict plugin management to the owning WebContents of a live Host window. */
 export function isTrustedPluginManagementSender(
   event: Pick<IpcMainInvokeEvent, 'sender' | 'senderFrame'>,
@@ -237,6 +223,7 @@ export function registerPluginIpc(
   const prepared = new Map<string, { pkg: PreparedInstall }>()
   const activeTransactions = new Set<string>()
   const capabilityGrants = new PluginCapabilityGrantStore(pluginsRoot)
+  const lifecycleSelector = new PluginActivationSelector(pluginsRoot)
 
   const assertAuthorized = (event: IpcMainInvokeEvent): void => {
     if (!authorizeSender(event)) throw new Error('unauthorized plugin management request')
@@ -272,7 +259,21 @@ export function registerPluginIpc(
       })
     }
     for (const pkg of manager.listInstalledPackages()) summaries.set(pkg.id, pkg)
-    return [...summaries.values()].map((summary) => ({
+    // A first install has no selected descriptor yet, so project a staged
+    // candidate into the inventory without treating that query result as an
+    // activation authority. Restart independently re-verifies its package.
+    for (const record of lifecycleSelector.list()) {
+      if (!record.candidate || summaries.has(record.pluginId)) continue
+      try {
+        const staged = loadPluginDir(lifecycleSelector.packageDir(record.pluginId, record.candidate))
+        if (staged.packageSummary) summaries.set(record.pluginId, staged.packageSummary)
+      } catch {
+        // A malformed candidate remains unavailable; its selector is not a grant.
+      }
+    }
+    return [...summaries.values()].map((summary) => {
+      const candidate = lifecycleSelector.read(summary.id)?.candidate
+      return {
       id: summary.id,
       requires: summary.requires,
       sensitive: sensitiveCapabilities(summary.requires),
@@ -307,7 +308,9 @@ export function registerPluginIpc(
         : {}),
       ...(summary.provenance ? { provenance: summary.provenance } : {}),
       ...(summary.warning ? { warning: summary.warning } : {}),
-    }))
+      ...(candidate ? { pendingCandidateVersion: candidate.packageVersion } : {}),
+    }
+    })
   })
 
   ipcMain.handle('plugins:listContributions', (event) => {
@@ -437,182 +440,165 @@ export function registerPluginIpc(
       if (pkg.requiresConfirmation && args.riskConfirmed !== true) {
         throw new Error(`capability and backend risk confirmation is required for ${args.id}`)
       }
-      // Persist this explicit, package-scoped publisher decision separately
-      // from installation and capability grants only after the package has
-      // passed post-write verification and manager registration.
-      const previousSummary = manager.listInstalledPackages().find((item) => item.id === pkg.id)
-      const previousDescriptor = manager.getDescriptor(pkg.id)
-      const previousGrant = previousDescriptor?.packageVersion
-        ? capabilityGrants.get(pkg.id, previousDescriptor.packageVersion)
-        : null
-      const previousActivation =
-        previousSummary?.provenance === 'official-registry'
-          ? loadPluginDir(join(pluginsRoot, pkg.id)).activation
-          : undefined
-      const previousArtifactDigest = previousActivation
-        ? (() => {
-            try {
-              return sha256Hex(
-                new Uint8Array(
-                  readFileSync(join(pluginsRoot, pkg.id, REGISTRY_ARTIFACT_NAME))
-                )
-              )
-            } catch {
-              return undefined
-            }
-          })()
-        : undefined
-      const previousPackageVersion = installedPackageVersion(manager, pluginsRoot, pkg.id)
-      const previousBackend = previousPackageVersion
-        ? manager.getBackendActivation(pkg.id, previousPackageVersion)
-        : undefined
-      let transaction: ReturnType<typeof commitInstallTransaction> | undefined
-      let publisherConsentPersisted = false
-      // Claim the prepared package synchronously before revocation yields.
-      // Keep the claim through rollback so its artifact and Grant stay paired.
+      // Commit deliberately stages only. It never drains the selected package,
+      // registers a candidate descriptor, or changes a production grant.
       activeTransactions.add(pkg.id)
       prepared.delete(args.id)
       try {
-        if (previousPackageVersion) {
-          await manager.revokePackageVersion(pkg.id, previousPackageVersion)
+        const staged = stageInstallCandidate(pkg, pluginsRoot)
+        const scanned = loadPluginDir(staged.candidateDir)
+        if (scanned.error) throw new Error(`staged candidate is invalid: ${scanned.error}`)
+        if (!scanned.activation || !scanned.packageSummary) {
+          throw new Error('immutable activation requires a Manifest v2 candidate')
         }
-        transaction = commitInstallTransaction(pkg, pluginsRoot)
-        const descriptor = transaction.descriptor
-        let verifiedArtifactDigest: string | undefined
-        if (pkg.registryEvidence) {
-          const verifyCommitted =
-            options.verifyCommittedInstall ??
-            ((pluginDir: string, pluginId: string, trustConfig: InstallerTrustConfig) =>
-              verifyInstalledRegistryPackage(pluginDir, pluginId, {
-                pinnedRootKey: trustConfig.pinnedRegistryRootKey,
-                snapshot: readRegistryTrustSnapshot(pluginsRoot),
-                registryAuthority: trustConfig.registryAuthority,
-                officialRegistryUrl: trustConfig.officialRegistryUrl,
-                expectedTarget: trustConfig.expectedTarget ?? currentPluginHostTarget(),
-                now: trustConfig.now,
-              }))
-          const decision = verifyCommitted(join(pluginsRoot, pkg.id), pkg.id, commitTrust)
-          if (decision.action === 'quarantine') {
-            throw new Error(`installed plugin quarantined: ${decision.reason}`)
+        const verifyCommitted =
+          options.verifyCommittedInstall ??
+          ((pluginDir: string, pluginId: string, trustConfig: InstallerTrustConfig) =>
+            verifyInstalledRegistryPackage(pluginDir, pluginId, {
+              pinnedRootKey: trustConfig.pinnedRegistryRootKey,
+              snapshot: readRegistryTrustSnapshot(pluginsRoot),
+              registryAuthority: trustConfig.registryAuthority,
+              officialRegistryUrl: trustConfig.officialRegistryUrl,
+              expectedTarget: trustConfig.expectedTarget ?? currentPluginHostTarget(),
+              now: trustConfig.now,
+            }))
+        const decision = verifyCommitted(staged.candidateDir, pkg.id, commitTrust)
+        if (decision.action === 'quarantine') {
+          throw new Error(`staged candidate quarantined: ${decision.reason}`)
+        }
+        const activation: PluginActivationCatalogEntry = {
+          ...scanned.activation,
+          provenance: 'official-registry',
+          artifactDigest: decision.artifactDigest,
+        }
+        if (scanned.descriptor) {
+          if (!options.preflightCandidateFrontend) {
+            throw new Error('candidate frontend preflight is unavailable')
           }
-          verifiedArtifactDigest = decision.artifactDigest
+          await options.preflightCandidateFrontend(scanned.descriptor)
         }
-        const summary = manifestToInstalledPackageSummary(pkg.manifest, pkg.provenance)
-        let activation: PluginActivationCatalogEntry | undefined
-        if (pkg.registryEvidence && isManifestV2(pkg.manifest)) {
-          activation = manifestToActivation(pkg.manifest, join(pluginsRoot, pkg.id))
-          activation.provenance = 'official-registry'
-          activation.artifactDigest = verifiedArtifactDigest
+        if (activation.backend) {
+          if (!options.preflightCandidateBackend) {
+            throw new Error('candidate backend preflight is unavailable')
+          }
+          await options.preflightCandidateBackend(activation)
         }
-        // `official` was earned in prepareInstall (Host-authorized Official
-        // Registry check); it
-        // is what allows a verified `navide.` install to claim its reserved id.
-        options.onActivationChange?.({ pluginId: pkg.id })
-        manager.registerInstalledPackage(summary, descriptor, { official: pkg.official })
-        if (isManifestV2(pkg.manifest)) {
-          const policy = manifestCapabilityPolicy(pkg.manifest)
-          if (policy.kind !== 'manifest-v2') throw new Error('invalid Manifest v2 capability policy')
-          capabilityGrants.set(pkg.id, {
-            packageVersion: pkg.version,
-            system: [...policy.system],
-            ...(policy.shell ? { shell: policy.shell } : {}),
-            ...(policy.shell === 'full' && args.riskConfirmed === true
-              ? { highRiskShellConfirmed: true }
-              : {}),
-            storage: true,
-          })
-        } else {
-          capabilityGrants.remove(pkg.id)
-        }
+        lifecycleSelector.stageCandidate(pkg.id, {
+          packageVersion: pkg.version,
+          target: staged.target,
+          artifactDigest: decision.artifactDigest,
+        }, {
+          fullShellConfirmed: args.riskConfirmed === true &&
+            scanned.descriptor?.capabilityPolicy?.kind === 'manifest-v2' &&
+            scanned.descriptor.capabilityPolicy.shell === 'full',
+        })
         if (publisherRequiresTrust) {
           publisherTrust.trust(pkg.publisherId, pkg.id)
-          publisherConsentPersisted = true
         }
-        if (activation?.backend) options.onActivationChange?.({ pluginId: pkg.id, activation })
-        options.onPackageInstalled?.(pkg.id)
-        transaction.finalize()
         return {
           id: pkg.id,
-          requires: summary.requires,
+          requires: scanned.packageSummary.requires,
+          restartRequired: true,
         }
-      } catch (error) {
-        if (publisherConsentPersisted) {
-          try {
-            publisherTrust.revoke(pkg.publisherId, pkg.id)
-          } catch {
-            // Preserve the original install failure if consent cleanup fails.
-          }
-        }
-        try {
-          // Drain a candidate activated earlier in this transaction before
-          // restoring files underneath its launch specification.
-          if (manager.hasBackendActivation(pkg.id, pkg.version)) {
-            await manager.revokePackageVersion(pkg.id, pkg.version)
-          }
-          transaction?.rollback()
-        } catch (rollbackError) {
-          cleanupFailedPluginInstall(manager, options.onActivationChange, pkg.id)
-          throw new AggregateError([error, rollbackError], 'Plugin install and rollback failed; runtime remains unavailable.')
-        }
-        cleanupFailedPluginInstall(manager, options.onActivationChange, pkg.id)
-        try {
-          if (previousGrant) capabilityGrants.set(pkg.id, previousGrant)
-          else capabilityGrants.remove(pkg.id)
-        } catch (grantError) {
-          throw new AggregateError([error, grantError], 'Plugin install and grant restoration failed; runtime remains unavailable.')
-        }
-        // Each restoration step is gated on the state it actually replaces: the
-        // package summary restores the package, the captured activation
-        // restores the backend. A Host can hold a descriptor and an approved
-        // backend without an installed-package summary, and that backend must
-        // still come back after the revocation this transaction performed.
-        try {
-          let restoredFactoryActivation: PluginActivationCatalogEntry | undefined
-          if (previousSummary) {
-            if (previousSummary.provenance === 'factory-bundled' && previousDescriptor?.packageDir) {
-              const restored = manager.loadFactoryPlugin(previousDescriptor.packageDir, pkg.id)
-              if (!restored.loaded) throw new Error(`Factory package restoration failed: ${restored.reason}`)
-              restoredFactoryActivation = restored.activation
-            } else {
-              manager.registerInstalledPackage(
-                previousSummary,
-                previousDescriptor,
-                { official: previousSummary.provenance === 'official-registry' }
-              )
-            }
-          } else if (previousBackend && previousDescriptor) {
-            // Without a summary there is no package registration to carry the
-            // descriptor back, and cleanupFailedPluginInstall dropped it. A
-            // backend activation is refused without its matching descriptor,
-            // so put back the one this Host held before the install. `builtin`
-            // records that the Host call site, not package data, is the
-            // identity source — as it was for the original registration.
-            manager.registerDescriptor(previousDescriptor, { builtin: true })
-          }
-          if (previousBackend && !manager.hasBackendActivation(pkg.id, previousBackend.packageVersion)) {
-            manager.registerBackendActivation(previousBackend)
-          }
-          if (restoredFactoryActivation) options.onActivationChange?.({ pluginId: pkg.id, activation: restoredFactoryActivation })
-          if (previousSummary?.provenance === 'official-registry') {
-            if (previousActivation && previousArtifactDigest) {
-              const activation = {
-                ...previousActivation,
-                provenance: 'official-registry' as const,
-                artifactDigest: previousArtifactDigest,
-              }
-              options.onActivationChange?.({ pluginId: pkg.id, activation })
-            }
-          }
-        } catch (restoreError) {
-          cleanupFailedPluginInstall(manager, options.onActivationChange, pkg.id)
-          throw new AggregateError([error, restoreError], 'Plugin install and runtime restoration failed.')
-        }
-        throw error
       } finally {
         activeTransactions.delete(pkg.id)
       }
     }
   )
+
+  ipcMain.handle('plugins:restart', async (event, args: { id?: unknown } | null) => {
+    assertAuthorized(event)
+    const id = assertPluginRemovalTarget(pluginsRoot, args?.id)
+    if (activeTransactions.has(id)) {
+      throw new Error(`plugin transaction already in progress for ${id}`)
+    }
+    const selectedBeforeRestart = lifecycleSelector.read(id)
+    if (!selectedBeforeRestart?.candidate) {
+      throw new Error(`plugin ${id} has no staged candidate to restart`)
+    }
+    const candidateDir = lifecycleSelector.packageDir(id, selectedBeforeRestart.candidate)
+    const restartTrust = resolveConfiguredMarketplace(trust).trust
+    const verifyCommitted =
+      options.verifyCommittedInstall ??
+      ((pluginDir: string, pluginId: string, trustConfig: InstallerTrustConfig) =>
+        verifyInstalledRegistryPackage(pluginDir, pluginId, {
+          pinnedRootKey: trustConfig.pinnedRegistryRootKey,
+          snapshot: readRegistryTrustSnapshot(pluginsRoot),
+          registryAuthority: trustConfig.registryAuthority,
+          officialRegistryUrl: trustConfig.officialRegistryUrl,
+          expectedTarget: trustConfig.expectedTarget ?? currentPluginHostTarget(),
+          now: trustConfig.now,
+        }))
+    const currentTrust = verifyCommitted(candidateDir, id, restartTrust)
+    if (currentTrust.action === 'quarantine') {
+      throw new Error(`staged candidate quarantined: ${currentTrust.reason}`)
+    }
+    if (currentTrust.artifactDigest !== selectedBeforeRestart.candidate.artifactDigest) {
+      throw new Error('staged candidate artifact identity changed before restart')
+    }
+    const scanned = loadPluginDir(candidateDir)
+    if (scanned.error || !scanned.activation || !scanned.packageSummary) {
+      throw new Error(`staged candidate is invalid${scanned.error ? `: ${scanned.error}` : ''}`)
+    }
+    const activation: PluginActivationCatalogEntry = {
+      ...scanned.activation,
+      provenance: 'official-registry',
+      artifactDigest: currentTrust.artifactDigest,
+    }
+    const previousDescriptor = manager.getDescriptor(id)
+    const previousVersion = previousDescriptor?.packageVersion
+    activeTransactions.add(id)
+    let restartTransaction: PluginPackageRestartTransaction | undefined
+    try {
+      if (previousVersion) {
+        restartTransaction = await manager.beginPackageRestart(id, previousVersion)
+      }
+      const selected = lifecycleSelector.activateCandidate(id)
+      const summary = { ...scanned.packageSummary, provenance: 'official-registry' as const }
+      if (scanned.descriptor) {
+        manager.registerInstalledPackage(summary, scanned.descriptor, { official: true })
+        const policy = scanned.descriptor.capabilityPolicy
+        if (!policy || policy.kind !== 'manifest-v2') {
+          throw new Error('invalid Manifest v2 capability policy')
+        }
+        capabilityGrants.set(id, {
+          packageVersion: selected.active!.packageVersion,
+          system: [...policy.system],
+        ...(policy.shell ? { shell: policy.shell } : {}),
+        ...(policy.shell === 'full' && selectedBeforeRestart.candidateFullShellConfirmed
+          ? { highRiskShellConfirmed: true }
+          : {}),
+          storage: true,
+        })
+        manager.setPluginStorageSnapshotSelection(id, {
+          activeVersion: selected.active!.packageVersion,
+          ...(selected.previous ? { previousVersion: selected.previous.packageVersion } : {}),
+        })
+      }
+      options.onActivationChange?.({ pluginId: id, activation })
+      if (restartTransaction) {
+        const report = await manager.restorePackageRestart(
+          restartTransaction,
+          selected.active!.packageVersion,
+        )
+        manager.completePackageRestart(restartTransaction)
+        options.onPackageInstalled?.(id)
+        return {
+          id,
+          packageVersion: selected.active!.packageVersion,
+          restoredInstances: report.restoredInstances,
+          skippedDestroyedHostWindows: report.skippedDestroyedHostWindows,
+        }
+      }
+      options.onPackageInstalled?.(id)
+      return { id, packageVersion: selected.active!.packageVersion, restoredInstances: 0, skippedDestroyedHostWindows: 0 }
+    } catch (error) {
+      if (restartTransaction) manager.cancelPackageRestart(restartTransaction)
+      throw error
+    } finally {
+      activeTransactions.delete(id)
+    }
+  })
 
   ipcMain.handle('plugins:remove', async (event, args: { id?: unknown } | null) => {
     assertAuthorized(event)
@@ -653,6 +639,7 @@ export function registerPluginIpc(
       // fail-closed instead of leaving a full grant over wiped storage.
       capabilityGrants.remove(id)
       removePlugin(pluginsRoot, id)
+      lifecycleSelector.clear(id)
       if (options.factoryPackageIds?.includes(id)) {
         if (!options.onFactoryPackageRemoved) {
           throw new Error('factory package removal is unavailable')

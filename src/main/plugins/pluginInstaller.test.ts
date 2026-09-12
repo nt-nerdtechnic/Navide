@@ -14,6 +14,7 @@ import { join } from 'node:path'
 import {
   prepareInstall,
   commitInstall,
+  stageInstallCandidate,
   defaultInstallerDeps,
   removePlugin,
   isUpdateAvailable,
@@ -590,6 +591,47 @@ describe('prepareInstall', () => {
 })
 
 describe('commitInstall', () => {
+  it('stages a Registry package into its immutable target directory without replacing the active install', async () => {
+    const { bytes, digest } = v2Pkg()
+    const root = mkdtempSync(join(tmpdir(), 'navide-plugin-candidate-'))
+    try {
+      const deps: InstallerDeps = {
+        ...defaultInstallerDeps,
+        async download() {
+          return { bytes, digestHeader: digest }
+        },
+      }
+      const prepared = await prepareInstall(signedV2Request(digest), deps, V2_TRUST_CONFIG)
+      const staged = stageInstallCandidate(prepared, root, deps)
+
+      expect(staged.candidateDir).toBe(join(root, 'acme.demo', '1.0.0', 'universal', 'package'))
+      expect(staged.descriptor?.packageDir).toBe(staged.candidateDir)
+      expect(existsSync(join(root, 'acme.demo', 'manifest.json'))).toBe(false)
+      expect(readFileSync(join(staged.candidateDir, 'manifest.json'), 'utf8')).toContain('acme.demo')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('does not overwrite an already staged immutable candidate', async () => {
+    const { bytes, digest } = v2Pkg()
+    const root = mkdtempSync(join(tmpdir(), 'navide-plugin-candidate-existing-'))
+    try {
+      const deps: InstallerDeps = {
+        ...defaultInstallerDeps,
+        async download() {
+          return { bytes, digestHeader: digest }
+        },
+      }
+      const prepared = await prepareInstall(signedV2Request(digest), deps, V2_TRUST_CONFIG)
+      stageInstallCandidate(prepared, root, deps)
+      await expect(Promise.resolve().then(() => stageInstallCandidate(prepared, root, deps)))
+        .rejects.toThrow(/already exists/)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('writes a backend-only package without creating a frontend descriptor', async () => {
     const { bytes, digest } = v2Pkg([
       {

@@ -1371,10 +1371,15 @@ additive contract only after authors can implement and test the complete
 provider Interface.
 
 An update is downloaded and verified in the background but is not a live code
-swap. The user chooses **Restart Plugin**. Navide drains that plugin, atomically
-activates one complete frontend/backend package version, and restores its view
-placements. Failure returns to the verified previous version. Navide itself and
-unrelated plugins do not restart.
+swap. It is staged at an immutable target-specific package directory, receives
+current trust verification plus restricted frontend and backend preflight, and
+is then offered through **Restart Plugin**. Navide drains only that plugin,
+atomically selects one complete frontend/backend package version and its
+matching storage selection, then restores native view placements from fresh
+Host-owned descriptor and Grant data. Navide itself and unrelated plugins do
+not restart. Interrupted activation recovery, rollback to a retained previous
+package, and retention/garbage collection are separate lifecycle work; a
+restart never claims to undo completed external effects.
 
 ## Backend trust
 
@@ -1405,8 +1410,8 @@ it does not restrict filesystem, network, subprocess, or OS access.
   rotating, expired, and revoked keys. Rotation has a bounded old/new overlap.
 - Yank prevents new installs; revocation also blocks install, update, activation,
   and future backend spawn. A newly revoked running frontend plugin is stopped
-  and quarantined; the later Electron backend supervisor must enforce the same
-  decision before and during backend execution.
+  and quarantined; the Electron backend supervisor re-verifies the current
+  root-signed trust decision immediately before every child spawn.
 - Developer Mode accepts one explicitly selected local unpacked Manifest v1 or
   Manifest v2 frontend directory only when `AGENT_TEAM_PLUGIN_DEV=1` and
   `AGENT_TEAM_PLUGIN_DEV_PATH` names that exact directory. Manifest v1 is a

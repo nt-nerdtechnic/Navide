@@ -244,6 +244,8 @@ export interface PluginBackendSupervisorOptions {
   /** Mutable Host-owned root, refreshed before a restarted generation starts. */
   authorizedPlanRoot?: AuthorizedPlanRootBinding
   refreshAuthorizedPlanRoot?: (signal: AbortSignal) => Promise<string>
+  /** Host-only activation check run after root refresh and before each child spawn. */
+  beforeSpawn?: () => void | Promise<void>
   /** Resolve the current agent policy for a Host-bound bridge operation. */
   resolveExecutionPolicy?: (
     runtime: BackendRuntimeContext,
@@ -1008,6 +1010,7 @@ export class PluginBackendSupervisor {
   private readonly bridgeDispatcher?: BackendBridgeDispatcher
   private readonly authorizedPlanRoot?: AuthorizedPlanRootBinding
   private readonly refreshAuthorizedPlanRoot?: (signal: AbortSignal) => Promise<string>
+  private readonly beforeSpawn?: () => void | Promise<void>
   private readonly resolveExecutionPolicy?: (
     runtime: BackendRuntimeContext,
     workspacePath?: string,
@@ -1091,6 +1094,7 @@ export class PluginBackendSupervisor {
     this.bridgeDispatcher = options.bridgeDispatcher
     this.authorizedPlanRoot = options.authorizedPlanRoot
     this.refreshAuthorizedPlanRoot = options.refreshAuthorizedPlanRoot
+    this.beforeSpawn = options.beforeSpawn
     this.resolveExecutionPolicy = options.resolveExecutionPolicy
     this.onFailure = options.onFailure
     if (
@@ -1623,6 +1627,8 @@ export class PluginBackendSupervisor {
   private async startInternal(): Promise<BackendHealth> {
     try {
       await this.refreshRootIfNeeded()
+      if (this.state !== 'starting') throw new BackendPluginError(this.lifecycleErrorCode())
+      await this.beforeSpawn?.()
       if (this.state !== 'starting') throw new BackendPluginError(this.lifecycleErrorCode())
       this.spawnChild()
       const id = this.nextRequestId()

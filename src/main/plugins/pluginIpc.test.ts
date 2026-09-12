@@ -19,7 +19,9 @@ import {
   REGISTRY_TRUST_SNAPSHOT_NAME,
   readRegistryTrustSnapshot,
   registryReceiptFromEvidence,
+  discoverInstalledRegistryPackageIds,
   verifyInstalledRegistryPackage,
+  type InstalledTrustDecision,
 } from './pluginInstalledTrust'
 import { canonicalTrustJson, type RegistryPackageEnvelope, type RegistryTrustMetadata } from './pluginRegistryTrust'
 import { defaultInstallerDeps, type InstallerTrustConfig } from './pluginInstaller'
@@ -27,6 +29,7 @@ import type { PluginActivationCatalogEntry } from './installedPlugins'
 import { projectBackendPluginActivationCatalog } from './pluginBackendActivationCatalog'
 import { makeZip } from './zipFixture'
 import { PluginCapabilityGrantStore } from './pluginCapabilityGrantStore'
+import { immutablePluginPackageDir, PluginActivationSelector } from './pluginActivationSelector'
 
 const { handlers, browserWindowFromWebContents } = vi.hoisted(() => ({
   handlers: new Map<string, (...a: unknown[]) => unknown>(),
@@ -53,14 +56,15 @@ import { FrontendPluginManager } from './frontendPluginManager'
 function buildPkg(
   packageId = 'acme.demo',
   publisherId = 'acme',
-  permissions: Record<string, unknown> = {}
+  permissions: Record<string, unknown> = {},
+  version = '1.0.0'
 ): { bytes: Uint8Array; digest: string } {
   const manifest = JSON.stringify({
     schemaVersion: 2,
     apiVersion: '^1.0.0',
     id: packageId,
     name: 'Demo',
-    version: '1.0.0',
+    version,
     publisher: publisherId,
     permissions,
     marketplace: { description: 'Demo frontend', license: 'MIT' },
@@ -115,13 +119,13 @@ function buildReservedPkg(): { bytes: Uint8Array; digest: string } {
   return { bytes, digest: sha256Hex(bytes) }
 }
 
-function buildBackendPkg(): { bytes: Uint8Array; digest: string } {
+function buildBackendPkg(version = '1.0.0'): { bytes: Uint8Array; digest: string } {
   const manifest = JSON.stringify({
     schemaVersion: 2,
     apiVersion: '^1.0.0',
     id: 'acme.demo',
     name: 'Demo',
-    version: '1.0.0',
+    version,
     publisher: 'acme',
     permissions: {},
     marketplace: { description: 'Demo backend', license: 'MIT' },
@@ -173,6 +177,12 @@ const TRUST_CONFIG: InstallerTrustConfig = {
   now: FIXED_NOW,
 }
 
+/** Test-only stand-ins for the Host-owned restricted preflight adapters. */
+const TEST_PREFLIGHT_OPTIONS = {
+  preflightCandidateFrontend: async () => undefined,
+  preflightCandidateBackend: async () => undefined,
+}
+
 /** Detail JSON as the central-signing registry serialises it. */
 interface WireDetail {
   latest_version: string | null
@@ -192,13 +202,14 @@ interface WireDetail {
 function signedDetail(
   digest: string,
   packageId = 'acme.demo',
-  publisherId = 'acme'
+  publisherId = 'acme',
+  version = '1.0.0'
 ): WireDetail {
   const registryEnvelope: RegistryPackageEnvelope = {
     schemaVersion: 1,
     artifactDigest: digest,
     packageId,
-    version: '1.0.0',
+    version,
     target: 'universal',
     publisherId,
     keyId: 'registry-test-1',
@@ -223,12 +234,12 @@ function signedDetail(
     blockedPackages: [],
   }
   return {
-    latest_version: '1.0.0',
+    latest_version: version,
     trust_metadata: trustMetadata,
     trust_metadata_signature: signCanonical(trustMetadata, registryRoot.privateKey),
     versions: [
       {
-        version: '1.0.0',
+        version,
         package_digest: digest,
         target: 'universal',
         registry_envelope: registryEnvelope,
@@ -266,6 +277,7 @@ function register(
 ): (...a: unknown[]) => unknown {
   registerPluginIpc(manager, pluginsRoot, () => true, TRUST_CONFIG, undefined, {
     cleanupPluginStorage: async () => undefined,
+    ...TEST_PREFLIGHT_OPTIONS,
   })
   const handler = handlers.get('plugins:prepareInstall')
   if (!handler) throw new Error('prepareInstall handler not registered')
@@ -282,12 +294,17 @@ async function installRegistryEvidence(
 ): Promise<void> {
   installFetch(detail, bytes, digest)
   const manager = new FrontendPluginManager()
-  registerPluginIpc(manager, root, () => true, TRUST_CONFIG)
+  registerPluginIpc(manager, root, () => true, TRUST_CONFIG, undefined, {
+    ...TEST_PREFLIGHT_OPTIONS,
+  })
   const prepareHandler = handlers.get('plugins:prepareInstall')
   const commitHandler = handlers.get('plugins:commitInstall')
-  if (!prepareHandler || !commitHandler) throw new Error('install handlers not registered')
+  const restartHandler = handlers.get('plugins:restart')
+  if (!prepareHandler || !commitHandler || !restartHandler) throw new Error('install handlers not registered')
   await prepareHandler(null, { namespace, name })
   await commitHandler(null, { id: `${namespace}.${name}`, publisherConfirmed: true })
+  await restartHandler(null, { id: `${namespace}.${name}` })
+  expect(discoverInstalledRegistryPackageIds(root)).toContain(`${namespace}.${name}`)
   manager.removeInstalledPlugin(`${namespace}.${name}`)
   handlers.clear()
 }
@@ -1028,25 +1045,17 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
       ).toEqual({
         id: 'acme.demo',
         requires: [],
+        restartRequired: true,
       })
-      expect(existsSync(join(root, 'acme.demo', 'backend', 'entry'))).toBe(true)
+      expect(existsSync(immutablePluginPackageDir(root, 'acme.demo', '1.0.0', 'universal') + '/backend/entry')).toBe(true)
 
-      const listHandler = handlers.get('plugins:listInstalled')
-      const removeHandler = handlers.get('plugins:remove')
-      if (!listHandler || !removeHandler) throw new Error('inventory handlers not registered')
-      expect(listHandler(null)).toEqual([{
+      const restartHandler = handlers.get('plugins:restart')
+      if (!restartHandler) throw new Error('restart handler not registered')
+      await expect(restartHandler(null, { id: 'acme.demo' })).resolves.toMatchObject({
         id: 'acme.demo',
-        requires: [],
-        sensitive: [],
         packageVersion: '1.0.0',
-        manifestPermissions: { system: [] },
-        packageVersionGrant: { packageVersion: '1.0.0', system: [], storage: true },
-        provenance: 'official-registry',
-      }])
+      })
 
-      await expect(removeHandler(null, { id: 'acme.demo' })).resolves.toEqual({ ok: true })
-      expect(listHandler(null)).toEqual([])
-      expect(existsSync(join(root, 'acme.demo'))).toBe(false)
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
@@ -1073,11 +1082,86 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
         publisherConfirmed: true,
         riskConfirmed: true,
       })
+      expect(new PluginCapabilityGrantStore(root).get('acme.demo', '1.0.0')).toBeNull()
+      const restartHandler = handlers.get('plugins:restart')
+      if (!restartHandler) throw new Error('restart handler not registered')
+      await restartHandler(null, { id: 'acme.demo' })
       expect(new PluginCapabilityGrantStore(root).get('acme.demo', '1.0.0')).toMatchObject({
         shell: 'full',
         highRiskShellConfirmed: true,
       })
     } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('stages an immutable replacement without touching the active runtime until restart', async () => {
+    const first = buildPkg('acme.demo', 'acme', {}, '1.0.0')
+    installFetch(signedDetail(first.digest, 'acme.demo', 'acme', '1.0.0'), first.bytes, first.digest)
+    const root = mkdtempSync(join(tmpdir(), 'navide-plugin-ipc-lifecycle-'))
+    const manager = new FrontendPluginManager()
+    const activationChanges: Array<{ pluginId: string; activation?: PluginActivationCatalogEntry }> = []
+    try {
+      registerPluginIpc(manager, root, () => true, TRUST_CONFIG, undefined, {
+        ...TEST_PREFLIGHT_OPTIONS,
+        onActivationChange: (change) => activationChanges.push(change),
+      })
+      const prepare = handlers.get('plugins:prepareInstall')!
+      const commit = handlers.get('plugins:commitInstall')!
+      const restart = handlers.get('plugins:restart')!
+      const list = handlers.get('plugins:listInstalled')!
+      await prepare(null, { namespace: 'acme', name: 'demo' })
+      await commit(null, { id: 'acme.demo', publisherConfirmed: true })
+      await restart(null, { id: 'acme.demo' })
+      activationChanges.length = 0
+
+      const revoke = vi.spyOn(manager, 'revokePackageVersion')
+      const second = buildPkg('acme.demo', 'acme', {}, '1.0.1')
+      installFetch(
+        signedDetail(second.digest, 'acme.demo', 'acme', '1.0.1'),
+        second.bytes,
+        second.digest,
+      )
+      await prepare(null, { namespace: 'acme', name: 'demo', version: '1.0.1' })
+      await expect(commit(null, { id: 'acme.demo', publisherConfirmed: true })).resolves.toEqual({
+        id: 'acme.demo',
+        requires: [],
+        restartRequired: true,
+      })
+
+      expect(revoke).not.toHaveBeenCalled()
+      expect(manager.getDescriptor('acme.demo')?.packageVersion).toBe('1.0.0')
+      expect(activationChanges).toEqual([])
+      expect(list(null)).toMatchObject([{
+        id: 'acme.demo',
+        packageVersion: '1.0.0',
+        pendingCandidateVersion: '1.0.1',
+      }])
+      expect(existsSync(immutablePluginPackageDir(root, 'acme.demo', '1.0.0', 'universal'))).toBe(true)
+      expect(existsSync(immutablePluginPackageDir(root, 'acme.demo', '1.0.1', 'universal'))).toBe(true)
+      expect(new PluginActivationSelector(root).read('acme.demo')).toMatchObject({
+        active: { packageVersion: '1.0.0', artifactDigest: first.digest },
+        candidate: { packageVersion: '1.0.1', artifactDigest: second.digest },
+      })
+
+      await expect(restart(null, { id: 'acme.demo' })).resolves.toMatchObject({
+        id: 'acme.demo',
+        packageVersion: '1.0.1',
+        restoredInstances: 0,
+      })
+      expect(revoke).toHaveBeenCalledWith('acme.demo', '1.0.0')
+      expect(manager.getDescriptor('acme.demo')?.packageVersion).toBe('1.0.1')
+      expect(new PluginActivationSelector(root).read('acme.demo')).toMatchObject({
+        active: { packageVersion: '1.0.1', artifactDigest: second.digest },
+        previous: { packageVersion: '1.0.0', artifactDigest: first.digest },
+      })
+      expect(activationChanges).toHaveLength(1)
+      expect(activationChanges[0]).toMatchObject({
+        pluginId: 'acme.demo',
+        activation: { packageVersion: '1.0.1', artifactDigest: second.digest },
+      })
+    } finally {
+      await manager.closeBackendPlugins()
       rmSync(root, { recursive: true, force: true })
     }
   })
@@ -1105,7 +1189,11 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
           publisherConfirmed: true,
           riskConfirmed: true,
         })
-      ).toEqual({ id: 'acme.demo', requires: ['fs', 'ui', 'shell'] })
+      ).toEqual({ id: 'acme.demo', requires: ['fs', 'ui', 'shell'], restartRequired: true })
+      expect(grants.get('acme.demo', '1.0.0')).toBeNull()
+      const restartHandler = handlers.get('plugins:restart')
+      if (!restartHandler) throw new Error('restart handler not registered')
+      await restartHandler(null, { id: 'acme.demo' })
       expect(grants.get('acme.demo', '1.0.0')).toEqual({
         packageVersion: '1.0.0',
         system: ['fs', 'ui'],
@@ -1149,13 +1237,10 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
       const commitHandler = handlers.get('plugins:commitInstall')
       if (!commitHandler) throw new Error('commitInstall handler not registered')
       await expect(commitHandler(null, { id: 'acme.demo' })).rejects.toThrow(/publisher trust confirmation/)
-      expect(await commitHandler(null, { id: 'acme.demo', publisherConfirmed: true })).toEqual({
-        id: 'acme.demo',
-        requires: ['git'],
-      })
-      expect(manager.listInstalledPackages()).toEqual([
-        { id: 'acme.demo', requires: ['git'], provenance: 'official-registry' },
-      ])
+      await expect(
+        commitHandler(null, { id: 'acme.demo', publisherConfirmed: true })
+      ).rejects.toThrow(/Manifest v2 candidate/)
+      expect(manager.listInstalledPackages()).toEqual([])
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
@@ -1170,6 +1255,7 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
       const manager = new FrontendPluginManager()
       registerPluginIpc(manager, root, () => true, TRUST_CONFIG, undefined, {
         cleanupPluginStorage: async () => undefined,
+        ...TEST_PREFLIGHT_OPTIONS,
         onActivationChange: ({ pluginId, activation }) => {
           active.delete(pluginId)
           if (activation) active.set(pluginId, activation)
@@ -1186,7 +1272,10 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
           publisherConfirmed: true,
           riskConfirmed: true,
         })
-      ).toEqual({ id: 'acme.demo', requires: [] })
+      ).toEqual({ id: 'acme.demo', requires: [], restartRequired: true })
+      const restartHandler = handlers.get('plugins:restart')
+      if (!restartHandler) throw new Error('restart handler not registered')
+      await restartHandler(null, { id: 'acme.demo' })
 
       expect(
         projectBackendPluginActivationCatalog([...active.values()])
@@ -1196,10 +1285,10 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
           {
             pluginId: 'acme.demo',
             packageVersion: '1.0.0',
-            packageDir: join(root, 'acme.demo'),
+            packageDir: immutablePluginPackageDir(root, 'acme.demo', '1.0.0', 'universal'),
             artifactDigest: digest,
             backend: {
-              entryFile: join(root, 'acme.demo', 'backend', 'entry'),
+              entryFile: join(immutablePluginPackageDir(root, 'acme.demo', '1.0.0', 'universal'), 'backend', 'entry'),
               protocolVersion: 1,
               activation: 'startup',
             },
@@ -1227,6 +1316,7 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
     try {
       const manager = new FrontendPluginManager()
       registerPluginIpc(manager, root, () => true, TRUST_CONFIG, undefined, {
+        ...TEST_PREFLIGHT_OPTIONS,
         onActivationChange: (change) => changes.push(change),
       })
       const prepareHandler = handlers.get('plugins:prepareInstall')
@@ -1240,123 +1330,34 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
           publisherConfirmed: true,
           riskConfirmed: true,
         })
-      ).toEqual({ id: 'acme.demo', requires: [] })
+      ).toEqual({ id: 'acme.demo', requires: [], restartRequired: true })
+      const restartHandler = handlers.get('plugins:restart')
+      if (!restartHandler) throw new Error('restart handler not registered')
+      await restartHandler(null, { id: 'acme.demo' })
       changes.length = 0
 
-      installFetch(signedDetail(digest), bytes, digest)
-      await prepareHandler(null, { namespace: 'acme', name: 'demo' })
+      const replacement = buildBackendPkg('1.0.1')
+      installFetch(
+        signedDetail(replacement.digest, 'acme.demo', 'acme', '1.0.1'),
+        replacement.bytes,
+        replacement.digest,
+      )
+      await prepareHandler(null, { namespace: 'acme', name: 'demo', version: '1.0.1' })
       expect(
         await commitHandler(null, {
           id: 'acme.demo',
           publisherConfirmed: true,
           riskConfirmed: true,
         })
-      ).toEqual({ id: 'acme.demo', requires: [] })
+      ).toEqual({ id: 'acme.demo', requires: [], restartRequired: true })
 
-      expect(changes.map(({ activation }) => (activation ? 'add' : 'clear'))).toEqual([
-        'clear',
-        'add',
-      ])
-    } finally {
-      rmSync(root, { recursive: true, force: true })
-    }
-  })
-
-  it.each([
-    [
-      'package write',
-      () => {
-        vi.spyOn(defaultInstallerDeps, 'writeFile').mockImplementation(() => {
-          throw new Error('test package write failure')
-        })
-      },
-    ],
-    [
-      'Registry trust snapshot write',
-      () => {
-        vi.spyOn(
-          defaultInstallerDeps as Required<typeof defaultInstallerDeps>,
-          'writeRegistryTrustSnapshot'
-        ).mockImplementation(() => {
-          throw new Error('test trust snapshot failure')
-        })
-      },
-    ],
-  ] as const)('restores the previous install when %s fails after a replacement starts', async (_label, injectFailure) => {
-    const { bytes, digest } = buildBackendPkg()
-    installFetch(signedDetail(digest), bytes, digest)
-    const root = realpathSync(mkdtempSync(join(tmpdir(), 'navide-install-failure-')))
-    const active = new Map<string, PluginActivationCatalogEntry>()
-    try {
-      const manager = new FrontendPluginManager()
-      registerPluginIpc(manager, root, () => true, TRUST_CONFIG, undefined, {
-        onActivationChange: ({ pluginId, activation }) => {
-          active.delete(pluginId)
-          if (activation) active.set(pluginId, activation)
-        },
+      expect(changes).toEqual([])
+      await restartHandler(null, { id: 'acme.demo' })
+      expect(changes).toHaveLength(1)
+      expect(changes[0]).toMatchObject({
+        pluginId: 'acme.demo',
+        activation: { packageVersion: '1.0.1', artifactDigest: replacement.digest },
       })
-      const prepareHandler = handlers.get('plugins:prepareInstall')
-      const commitHandler = handlers.get('plugins:commitInstall')
-      if (!prepareHandler || !commitHandler) throw new Error('install handlers not registered')
-
-      await prepareHandler(null, { namespace: 'acme', name: 'demo' })
-      expect(
-        await commitHandler(null, {
-          id: 'acme.demo',
-          publisherConfirmed: true,
-          riskConfirmed: true,
-        })
-      ).toEqual({ id: 'acme.demo', requires: [] })
-      expect(manager.listInstalledPackages()).toEqual([
-        {
-          id: 'acme.demo',
-          requires: [],
-          packageVersion: '1.0.0',
-          manifestPermissions: { system: [] },
-          provenance: 'official-registry',
-        },
-      ])
-      expect(active.has('acme.demo')).toBe(true)
-
-      const previousDescriptor = {
-        id: 'acme.demo', packageVersion: '1.0.0', packageDir: join(root, 'acme.demo'),
-        requires: [], devUrl: '', entryFile: join(root, 'acme.demo', 'index.html'),
-      }
-      manager.registerDescriptor(previousDescriptor)
-      manager.registerBackendActivation({
-        pluginId: 'acme.demo', packageVersion: '1.0.0', packageDir: previousDescriptor.packageDir!,
-        entryFile: join(root, 'acme.demo', 'backend', 'entry'), protocolVersion: 1,
-        activation: 'startup', approvedMethods: ['fixture.echo'], approvedEvents: [],
-      })
-      installFetch(signedDetail(digest), bytes, digest)
-      await prepareHandler(null, { namespace: 'acme', name: 'demo' })
-      injectFailure()
-
-      await expect(
-        commitHandler(null, {
-          id: 'acme.demo',
-          publisherConfirmed: true,
-          riskConfirmed: true,
-        })
-      ).rejects.toThrow(/test .* failure/)
-      expect(manager.hasBackendActivation('acme.demo', '1.0.0')).toBe(true)
-      expect(manager.listInstalledPackages()).toEqual([
-        {
-          id: 'acme.demo',
-          requires: [],
-          packageVersion: '1.0.0',
-          manifestPermissions: { system: [] },
-          provenance: 'official-registry',
-        },
-      ])
-      expect(active.has('acme.demo')).toBe(true)
-      expect(projectBackendPluginActivationCatalog([...active.values()]).packages).toEqual([
-        expect.objectContaining({
-          pluginId: 'acme.demo',
-          packageDir: join(root, 'acme.demo'),
-          artifactDigest: digest,
-        }),
-      ])
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
@@ -1367,7 +1368,9 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), 'navide-install-backend-only-')))
     const manager = new FrontendPluginManager()
     try {
-      registerPluginIpc(manager, root, () => true, TRUST_CONFIG, undefined, {})
+      registerPluginIpc(manager, root, () => true, TRUST_CONFIG, undefined, {
+        ...TEST_PREFLIGHT_OPTIONS,
+      })
       const prepareHandler = handlers.get('plugins:prepareInstall')
       const commitHandler = handlers.get('plugins:commitInstall')
       if (!prepareHandler || !commitHandler) throw new Error('install handlers not registered')
@@ -1409,291 +1412,44 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
     }
   })
 
-  it.each(['commit', 'remove'] as const)('rejects concurrent %s while preserving install rollback', async (operation) => {
-    const original = buildBackendPkg()
-    installFetch(signedDetail(original.digest), original.bytes, original.digest)
-    const root = realpathSync(mkdtempSync(join(tmpdir(), 'navide-install-concurrent-')))
-    const manager = new FrontendPluginManager()
-    const active = new Map<string, PluginActivationCatalogEntry>()
-    let failVerification = false
-    let release!: () => void
-    let running: Promise<unknown> | undefined
-    try {
-      registerPluginIpc(manager, root, () => true, TRUST_CONFIG, undefined, {
-        cleanupPluginStorage: async () => undefined,
-        onActivationChange: ({ pluginId, activation }) => {
-          active.delete(pluginId)
-          if (activation) active.set(pluginId, activation)
-        },
-        verifyCommittedInstall: () => {
-          if (failVerification) throw new Error('injected verification failure')
-          return { action: 'allow', artifactDigest: original.digest }
-        },
-      })
-      const prepare = handlers.get('plugins:prepareInstall')!
-      const commit = handlers.get('plugins:commitInstall')!
-      const args = { id: 'acme.demo', publisherConfirmed: true, riskConfirmed: true }
-      await prepare(null, { namespace: 'acme', name: 'demo' })
-      await commit(null, args)
-      const descriptor = {
-        id: 'acme.demo', packageVersion: '1.0.0', packageDir: join(root, 'acme.demo'),
-        requires: [], devUrl: '', entryFile: join(root, 'acme.demo', 'index.html'),
-      }
-      manager.registerDescriptor(descriptor)
-      const backend = {
-        pluginId: 'acme.demo', packageVersion: '1.0.0', packageDir: descriptor.packageDir,
-        entryFile: join(descriptor.packageDir, 'backend', 'entry'), protocolVersion: 1 as const,
-        activation: 'startup' as const, approvedMethods: ['fixture.echo'], approvedEvents: [],
-      }
-      manager.registerBackendActivation(backend)
-      const grant = new PluginCapabilityGrantStore(root).get('acme.demo', '1.0.0')
-      const replacement = buildPkg()
-      installFetch(signedDetail(replacement.digest), replacement.bytes, replacement.digest)
-      await prepare(null, { namespace: 'acme', name: 'demo' })
-      const gate = new Promise<void>((resolve) => { release = resolve })
-      vi.spyOn(manager, 'revokePackageVersion').mockImplementationOnce(() => gate)
-      failVerification = true
-      running = Promise.resolve(commit(null, args)).catch((error: unknown) => error)
-      const competing = operation === 'commit'
-        ? commit(null, args)
-        : handlers.get('plugins:remove')!(null, { id: 'acme.demo' })
-      await expect(competing).rejects.toThrow(/transaction already in progress/)
-      release()
-      expect(await running).toMatchObject({ message: 'injected verification failure' })
-      expect(new Uint8Array(readFileSync(join(descriptor.packageDir, REGISTRY_ARTIFACT_NAME))))
-        .toEqual(original.bytes)
-      expect(manager.getDescriptor('acme.demo')).toEqual(descriptor)
-      expect(manager.getBackendActivation('acme.demo', '1.0.0')).toEqual(backend)
-      expect(new PluginCapabilityGrantStore(root).get('acme.demo', '1.0.0')).toEqual(grant)
-      expect(active.get('acme.demo')?.artifactDigest).toBe(original.digest)
-      await expect(commit(null, args)).rejects.toThrow(/no prepared install/)
-      failVerification = false
-      await prepare(null, { namespace: 'acme', name: 'demo' })
-      await expect(commit(null, args)).resolves.toMatchObject({ id: 'acme.demo' })
-    } finally {
-      release?.()
-      await running
-      await manager.closeBackendPlugins()
-      rmSync(root, { recursive: true, force: true })
-    }
-  })
-
-  it('retains a new prepare during a transaction and allows another plugin to install', async () => {
-    const pkg = buildPkg()
-    installFetch(signedDetail(pkg.digest), pkg.bytes, pkg.digest)
-    const root = realpathSync(mkdtempSync(join(tmpdir(), 'navide-install-new-prepare-')))
-    const manager = new FrontendPluginManager()
-    let release!: () => void
-    let running: Promise<unknown> | undefined
-    try {
-      register(root, manager)
-      const prepare = handlers.get('plugins:prepareInstall')!
-      const commit = handlers.get('plugins:commitInstall')!
-      const args = { id: 'acme.demo', publisherConfirmed: true }
-      await prepare(null, { namespace: 'acme', name: 'demo' })
-      await commit(null, args)
-      await prepare(null, { namespace: 'acme', name: 'demo' })
-      const gate = new Promise<void>((resolve) => { release = resolve })
-      vi.spyOn(manager, 'revokePackageVersion').mockImplementationOnce(() => gate)
-      running = Promise.resolve(commit(null, args))
-      await prepare(null, { namespace: 'acme', name: 'demo' })
-      const other = buildPkg('acme.other')
-      installFetch(signedDetail(other.digest, 'acme.other'), other.bytes, other.digest)
-      await prepare(null, { namespace: 'acme', name: 'other' })
-      await expect(commit(null, { id: 'acme.other', publisherConfirmed: true }))
-        .resolves.toMatchObject({ id: 'acme.other' })
-      release()
-      await running
-      await expect(commit(null, args)).resolves.toMatchObject({ id: 'acme.demo' })
-    } finally {
-      release?.()
-      await running
-      await manager.closeBackendPlugins()
-      rmSync(root, { recursive: true, force: true })
-    }
-  })
-
-  it('rejects install during removal and releases the transaction after cleanup failure', async () => {
-    const pkg = buildPkg()
-    installFetch(signedDetail(pkg.digest), pkg.bytes, pkg.digest)
-    const root = realpathSync(mkdtempSync(join(tmpdir(), 'navide-remove-concurrent-install-')))
-    const manager = new FrontendPluginManager()
-    let rejectCleanup!: (error: Error) => void
-    const cleanup = new Promise<void>((_resolve, reject) => { rejectCleanup = reject })
-    let running: Promise<unknown> | undefined
-    try {
-      registerPluginIpc(manager, root, () => true, TRUST_CONFIG, undefined, {
-        cleanupPluginStorage: () => cleanup,
-      })
-      const prepare = handlers.get('plugins:prepareInstall')!
-      const commit = handlers.get('plugins:commitInstall')!
-      const args = { id: 'acme.demo', publisherConfirmed: true }
-      await prepare(null, { namespace: 'acme', name: 'demo' })
-      await commit(null, args)
-      await prepare(null, { namespace: 'acme', name: 'demo' })
-      running = Promise.resolve(handlers.get('plugins:remove')!(null, { id: 'acme.demo' }))
-        .catch((error: unknown) => error)
-      await expect(commit(null, args)).rejects.toThrow(/transaction already in progress/)
-      rejectCleanup(new Error('cleanup unavailable'))
-      expect(await running).toMatchObject({ message: 'cleanup unavailable' })
-      await expect(commit(null, args)).resolves.toMatchObject({ id: 'acme.demo' })
-    } finally {
-      rejectCleanup(new Error('cleanup unavailable'))
-      await running
-      await manager.closeBackendPlugins()
-      rmSync(root, { recursive: true, force: true })
-    }
-  })
-
-  it('restores a factory backend when its first Registry replacement fails', async () => {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), 'navide-factory-rollback-')))
-    const factoryDir = join(root, 'factory')
-    const pluginsDir = join(root, 'installed')
-    mkdirSync(factoryDir)
-    mkdirSync(pluginsDir)
-    writeFileSync(join(factoryDir, 'index.html'), '<!doctype html>')
-    writeFileSync(join(factoryDir, 'manifest.json'), JSON.stringify({
-      schemaVersion: 2, apiVersion: '^1.0.0', id: 'acme.demo', name: 'Demo', version: '1.0.0',
-      publisher: 'acme', permissions: {},
-      marketplace: { description: 'Demo frontend', license: 'MIT' },
-      contributes: { views: [{ id: 'main', kind: 'custom', location: 'main', title: 'Demo', entry: 'index.html' }] },
-    }))
-    const manager = new FrontendPluginManager()
-    expect(manager.loadFactoryPlugin(factoryDir, 'acme.demo')).toMatchObject({ loaded: true })
-    const backend = {
-      pluginId: 'acme.demo', packageVersion: '1.0.0', packageDir: factoryDir,
-      entryFile: join(factoryDir, 'backend'), protocolVersion: 1 as const,
-      activation: 'startup' as const, approvedMethods: ['fixture.echo'], approvedEvents: [],
-    }
-    manager.registerBackendActivation(backend)
-    const { bytes, digest } = buildBackendPkg()
-    installFetch(signedDetail(digest), bytes, digest)
-    try {
-      registerPluginIpc(manager, pluginsDir, () => true, TRUST_CONFIG)
-      await handlers.get('plugins:prepareInstall')!(null, { namespace: 'acme', name: 'demo' })
-      vi.spyOn(defaultInstallerDeps, 'writeFile').mockImplementation(() => { throw new Error('write failed') })
-      await expect(handlers.get('plugins:commitInstall')!(null, {
-        id: 'acme.demo', publisherConfirmed: true, riskConfirmed: true,
-      })).rejects.toThrow('write failed')
-      expect(manager.listInstalledPackages()[0].provenance).toBe('factory-bundled')
-      expect(manager.getBackendActivation('acme.demo', '1.0.0')).toEqual(backend)
-      expect(manager.getDescriptor('acme.demo')?.packageDir).toBe(factoryDir)
-    } finally {
-      await manager.closeBackendPlugins()
-      rmSync(root, { recursive: true, force: true })
-    }
-  })
-
-  it('restores the previous install when post-commit verification throws after a replacement starts', async () => {
-    const { bytes, digest } = buildBackendPkg()
-    installFetch(signedDetail(digest), bytes, digest)
-    const root = mkdtempSync(join(tmpdir(), 'navide-post-commit-failure-'))
-    const active = new Map<string, PluginActivationCatalogEntry>()
-    let failVerification = false
+  it('keeps the active package selected when candidate verification fails', async () => {
+    const first = buildPkg('acme.demo', 'acme', {}, '1.0.0')
+    const second = buildPkg('acme.demo', 'acme', {}, '1.0.1')
+    installFetch(signedDetail(first.digest, 'acme.demo', 'acme', '1.0.0'), first.bytes, first.digest)
+    const root = mkdtempSync(join(tmpdir(), 'navide-candidate-verification-failure-'))
+    let rejectCandidate = false
     try {
       const manager = new FrontendPluginManager()
       registerPluginIpc(manager, root, () => true, TRUST_CONFIG, undefined, {
-        onActivationChange: ({ pluginId, activation }) => {
-          active.delete(pluginId)
-          if (activation) active.set(pluginId, activation)
-        },
-        verifyCommittedInstall: () => {
-          if (failVerification) throw new Error('test post-commit verification failure')
-          return { action: 'allow', artifactDigest: digest }
-        },
-      })
-      const prepareHandler = handlers.get('plugins:prepareInstall')
-      const commitHandler = handlers.get('plugins:commitInstall')
-      if (!prepareHandler || !commitHandler) throw new Error('install handlers not registered')
-
-      await prepareHandler(null, { namespace: 'acme', name: 'demo' })
-      expect(
-        await commitHandler(null, {
-          id: 'acme.demo',
-          publisherConfirmed: true,
-          riskConfirmed: true,
-        })
-      ).toEqual({ id: 'acme.demo', requires: [] })
-      expect(active.has('acme.demo')).toBe(true)
-
-      installFetch(signedDetail(digest), bytes, digest)
-      await prepareHandler(null, { namespace: 'acme', name: 'demo' })
-      failVerification = true
-
-      await expect(
-        commitHandler(null, {
-          id: 'acme.demo',
-          publisherConfirmed: true,
-          riskConfirmed: true,
-        })
-      ).rejects.toThrow(/test post-commit verification failure/)
-      expect(manager.listInstalledPackages()).toEqual([
-        {
-          id: 'acme.demo',
-          requires: [],
-          packageVersion: '1.0.0',
-          manifestPermissions: { system: [] },
-          provenance: 'official-registry',
-        },
-      ])
-      expect(active.has('acme.demo')).toBe(true)
-      expect(projectBackendPluginActivationCatalog([...active.values()]).packages).toEqual([
-        expect.objectContaining({
-          pluginId: 'acme.demo',
-          packageDir: join(root, 'acme.demo'),
-          artifactDigest: digest,
-        }),
-      ])
-    } finally {
-      rmSync(root, { recursive: true, force: true })
-    }
-  })
-
-  it.each([
-    ['v2 frontend-only', buildPkg],
-    ['legacy v1', buildLegacyPkg],
-  ])('clears a prior backend activation when replaced by %s', async (_label, buildReplacement) => {
-    const backend = buildBackendPkg()
-    installFetch(signedDetail(backend.digest), backend.bytes, backend.digest)
-    const root = mkdtempSync(join(tmpdir(), 'navide-same-session-downgrade-'))
-    const active = new Map<string, PluginActivationCatalogEntry>()
-    const changes: Array<{ pluginId: string; activation?: PluginActivationCatalogEntry }> = []
-    try {
-      const manager = new FrontendPluginManager()
-      registerPluginIpc(manager, root, () => true, TRUST_CONFIG, undefined, {
-        onActivationChange: (change) => {
-          changes.push(change)
-          active.delete(change.pluginId)
-          if (change.activation) active.set(change.pluginId, change.activation)
+        ...TEST_PREFLIGHT_OPTIONS,
+        verifyCommittedInstall: (pluginDir): InstalledTrustDecision => {
+          const candidate = pluginDir.includes('1.0.1/')
+          if (rejectCandidate && candidate) {
+            return { action: 'quarantine', reason: 'candidate verification failure' }
+          }
+          return {
+            action: 'allow',
+            artifactDigest: candidate ? second.digest : first.digest,
+          }
         },
       })
-      const prepareHandler = handlers.get('plugins:prepareInstall')
-      const commitHandler = handlers.get('plugins:commitInstall')
-      if (!prepareHandler || !commitHandler) throw new Error('install handlers not registered')
+      const prepare = handlers.get('plugins:prepareInstall')!
+      const commit = handlers.get('plugins:commitInstall')!
+      const restart = handlers.get('plugins:restart')!
+      await prepare(null, { namespace: 'acme', name: 'demo' })
+      await commit(null, { id: 'acme.demo', publisherConfirmed: true })
+      await restart(null, { id: 'acme.demo' })
 
-      await prepareHandler(null, { namespace: 'acme', name: 'demo' })
-      await commitHandler(null, {
-        id: 'acme.demo',
-        publisherConfirmed: true,
-        riskConfirmed: true,
+      installFetch(signedDetail(second.digest, 'acme.demo', 'acme', '1.0.1'), second.bytes, second.digest)
+      await prepare(null, { namespace: 'acme', name: 'demo', version: '1.0.1' })
+      rejectCandidate = true
+      await expect(commit(null, { id: 'acme.demo', publisherConfirmed: true }))
+        .rejects.toThrow(/staged candidate quarantined/)
+      expect(manager.getDescriptor('acme.demo')?.packageVersion).toBe('1.0.0')
+      expect(new PluginActivationSelector(root).read('acme.demo')).toMatchObject({
+        active: { packageVersion: '1.0.0', artifactDigest: first.digest },
       })
-      expect(active.get('acme.demo')?.backend).toBeDefined()
-      changes.length = 0
-
-      const replacement = buildReplacement()
-      installFetch(signedDetail(replacement.digest), replacement.bytes, replacement.digest)
-      await prepareHandler(null, { namespace: 'acme', name: 'demo' })
-      expect(await commitHandler(null, { id: 'acme.demo' })).toEqual({
-        id: 'acme.demo',
-        requires: [],
-      })
-
-      expect(changes).toEqual([{ pluginId: 'acme.demo' }])
-      expect(active.has('acme.demo')).toBe(false)
-      expect(projectBackendPluginActivationCatalog([...active.values()])).toEqual({
-        schemaVersion: 1,
-        packages: [],
-      })
+      expect(new PluginActivationSelector(root).read('acme.demo')?.candidate).toBeUndefined()
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
@@ -1707,6 +1463,7 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
     try {
       const manager = new FrontendPluginManager()
       registerPluginIpc(manager, root, () => true, TRUST_CONFIG, undefined, {
+        ...TEST_PREFLIGHT_OPTIONS,
         onActivationChange: ({ pluginId, activation }) => {
           active.delete(pluginId)
           if (activation) active.set(pluginId, activation)
@@ -1727,7 +1484,7 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
           publisherConfirmed: true,
           riskConfirmed: true,
         })
-      ).rejects.toThrow(/installed plugin quarantined/)
+      ).rejects.toThrow(/staged candidate quarantined/)
       expect(projectBackendPluginActivationCatalog([...active.values()])).toEqual({
         schemaVersion: 1,
         packages: [],
@@ -1749,7 +1506,7 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
         ...TRUST_CONFIG,
         registryAuthority: 'official',
         officialRegistryUrl: 'https://registry.navide.dev',
-      })
+      }, undefined, { ...TEST_PREFLIGHT_OPTIONS })
       const prepareHandler = handlers.get('plugins:prepareInstall')
       const commitHandler = handlers.get('plugins:commitInstall')
       if (!prepareHandler || !commitHandler) throw new Error('install handlers not registered')
@@ -1759,7 +1516,10 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
       expect(prepared.requiresPublisherTrust).toBe(true)
       expect(
         await commitHandler(null, { id: 'acme.demo', publisherConfirmed: true })
-      ).toEqual({ id: 'acme.demo', requires: [] })
+      ).toEqual({ id: 'acme.demo', requires: [], restartRequired: true })
+      const restartHandler = handlers.get('plugins:restart')
+      if (!restartHandler) throw new Error('restart handler not registered')
+      await restartHandler(null, { id: 'acme.demo' })
       expect(manager.listInstalledPackages()).toEqual([
         {
           id: 'acme.demo',
@@ -1817,6 +1577,7 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
         TRUST_CONFIG,
         undefined,
         {
+          ...TEST_PREFLIGHT_OPTIONS,
           verifyCommittedInstall: (pluginDir, pluginId, trust) => {
             writeFileSync(join(pluginDir, 'backend', 'entry'), 'tampered after commit')
             return verifyInstalledRegistryPackage(pluginDir, pluginId, {
@@ -1841,7 +1602,8 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
       ).rejects.toThrow(/installed package file was modified/)
       expect(manager.listInstalledPackages()).toEqual([])
       expect(existsSync(join(root, 'acme.demo', '.navide-package.zip'))).toBe(false)
-      expect(existsSync(join(root, '.navide-quarantine'))).toBe(true)
+      expect(existsSync(join(root, '.navide-quarantine'))).toBe(false)
+      expect(existsSync(immutablePluginPackageDir(root, 'acme.demo', '1.0.0', 'universal'))).toBe(true)
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
@@ -1864,14 +1626,12 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
         commitHandler(null, { id: 'acme.demo', publisherConfirmed: true })
       ).rejects.toThrow(/expired/)
       expect(manager.listInstalledPackages()).toEqual([])
-      expect(existsSync(join(root, 'acme.demo'))).toBe(false)
+      expect(existsSync(immutablePluginPackageDir(root, 'acme.demo', '1.0.0', 'universal'))).toBe(true)
+      expect(new PluginActivationSelector(root).read('acme.demo')?.candidate).toBeUndefined()
 
-      await expect(controller.refreshRegistryTrust()).resolves.toMatchObject({
-        decisions: [],
-        activationCatalog: [],
-      })
+      await expect(controller.refreshRegistryTrust()).rejects.toThrow(/expired/)
       expect(manager.listInstalledPackages()).toEqual([])
-      expect(existsSync(join(root, 'acme.demo'))).toBe(false)
+      expect(existsSync(immutablePluginPackageDir(root, 'acme.demo', '1.0.0', 'universal'))).toBe(true)
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
@@ -2140,7 +1900,10 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
           now: FIXED_NOW,
         },
       })
-      writeFileSync(join(root, 'acme.demo', 'manifest.json'), '{malformed')
+      writeFileSync(
+        join(immutablePluginPackageDir(root, 'acme.demo', '1.0.0', 'universal'), 'manifest.json'),
+        '{malformed',
+      )
       global.fetch = vi.fn() as unknown as typeof fetch
       const controller = registerPluginIpc(manager, root, () => true, TRUST_CONFIG, undefined, {
         onActivationChange: (change) => changes.push(change),

@@ -254,9 +254,32 @@ export function verifyInstalledRegistryPackage(
   }
 }
 
+function hasCoherentRegistryEvidence(pluginDir: string, expectedPackageId: string): boolean {
+  try {
+    if (existsSync(join(pluginDir, PLUGIN_QUARANTINE_MARKER))) return false
+    const receipt = parseReceipt(pluginDir)
+    const installed = installedManifest(pluginDir)
+    const manifest = archiveManifest(
+      new Uint8Array(readFileSync(join(pluginDir, REGISTRY_ARTIFACT_NAME)))
+    )
+    return (
+      receipt.packageId === expectedPackageId &&
+      installed.id === expectedPackageId &&
+      manifest.id === expectedPackageId &&
+      installed.version === manifest.version &&
+      receipt.version === installed.version &&
+      (installed.publisher ?? installed.id.split('.')[0]) ===
+        (manifest.publisher ?? manifest.id.split('.')[0])
+    )
+  } catch {
+    return false
+  }
+}
+
 /** Discover refresh candidates from retained Host evidence without treating
- * the package as active or trusted. The identity must agree across the direct
- * child directory, Host receipt, and validated retained v1/v2 manifest. */
+ * the package as active or trusted. Both retained legacy package roots and
+ * immutable target-specific package directories must agree with Host receipt
+ * and the validated archive manifest. */
 export function discoverInstalledRegistryPackageIds(pluginsRoot: string): string[] {
   const packageIds = new Set<string>()
   let entries: Dirent[]
@@ -267,27 +290,30 @@ export function discoverInstalledRegistryPackageIds(pluginsRoot: string): string
   }
   for (const entry of entries) {
     if (!entry.isDirectory()) continue
-    const pluginDir = join(pluginsRoot, entry.name)
+    const pluginRoot = join(pluginsRoot, entry.name)
+    if (hasCoherentRegistryEvidence(pluginRoot, entry.name)) {
+      packageIds.add(entry.name)
+      continue
+    }
+    let versions: Dirent[]
     try {
-      if (existsSync(join(pluginDir, PLUGIN_QUARANTINE_MARKER))) continue
-      const receipt = parseReceipt(pluginDir)
-      const installed = installedManifest(pluginDir)
-      const manifest = archiveManifest(
-        new Uint8Array(readFileSync(join(pluginDir, REGISTRY_ARTIFACT_NAME)))
-      )
-      if (
-        receipt.packageId !== entry.name ||
-        installed.id !== entry.name ||
-        manifest.id !== entry.name ||
-        installed.version !== manifest.version ||
-        (installed.publisher ?? installed.id.split('.')[0]) !==
-          (manifest.publisher ?? manifest.id.split('.')[0])
-      ) {
+      versions = readdirSync(pluginRoot, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const version of versions) {
+      if (!version.isDirectory()) continue
+      let targets: Dirent[]
+      try {
+        targets = readdirSync(join(pluginRoot, version.name), { withFileTypes: true })
+      } catch {
         continue
       }
-      packageIds.add(entry.name)
-    } catch {
-      // A malformed/tampered package is not a refresh candidate and remains inactive.
+      for (const target of targets) {
+        if (!target.isDirectory()) continue
+        const packageDir = join(pluginRoot, version.name, target.name, 'package')
+        if (hasCoherentRegistryEvidence(packageDir, entry.name)) packageIds.add(entry.name)
+      }
     }
   }
   return [...packageIds].sort()

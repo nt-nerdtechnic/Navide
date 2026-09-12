@@ -60,6 +60,7 @@ import {
   PLUGIN_QUARANTINE_MARKER,
   PLUGIN_STAGING_DIR,
 } from './pluginInstallPaths'
+import { immutablePluginPackageDir } from './pluginActivationSelector'
 
 /** What a caller must supply to install a specific marketplace version. The
  *  trusted `expectedDigest` and (optional) signature material come from the
@@ -476,6 +477,79 @@ function writePreparedPackage(
       join(targetDir, OFFICIAL_RECEIPT_NAME),
       new TextEncoder().encode(JSON.stringify(receipt, null, 2))
     )
+  }
+}
+
+export interface StagedInstall {
+  /** Immutable Host-owned candidate directory. It is not a scan root and is
+   * never registered as a production descriptor by this operation. */
+  candidateDir: string
+  target: string
+  descriptor: PluginLaunchDescriptor | undefined
+}
+
+/** Write a verified package beside, never over, the current active package.
+ * Candidate discovery/activation is intentionally a separate Host lifecycle
+ * decision: staging does not revoke instances, change grants, or expose routes. */
+export function stageInstallCandidate(
+  prepared: PreparedInstall,
+  pluginsRoot: string,
+  deps: InstallerDeps = defaultInstallerDeps,
+): StagedInstall {
+  if (!deps.rename || !deps.pathExists) {
+    throw new InstallError('immutable candidate staging requires atomic directory rename support')
+  }
+  assertSafeArchiveEntries(prepared.entries)
+  const safeEntries = prepared.entries.map((entry) => ({
+    entry,
+    path: canonicalEntryPath(entry),
+  }))
+  const smuggledHostFile = safeEntries.find(({ path }) => {
+    const collisionKey = portableArchiveCollisionKey(path)
+    return collisionKey !== null && HOST_OWNED_ARCHIVE_NAMES.has(collisionKey)
+  })
+  if (smuggledHostFile) throw new InstallError(`package must not contain ${smuggledHostFile.path}`)
+  const backendEntry = assertBackendExecutable(prepared.manifest, prepared.entries)
+  const target = prepared.registryEvidence?.receipt.target
+  if (!target) {
+    throw new InstallError('immutable candidate staging requires Registry target evidence')
+  }
+  const candidateDir = immutablePluginPackageDir(pluginsRoot, prepared.id, prepared.version, target)
+  if (deps.pathExists(candidateDir)) {
+    throw new InstallError(`immutable candidate already exists for ${prepared.id}@${prepared.version}`)
+  }
+  const stagingRoot = join(pluginsRoot, PLUGIN_STAGING_DIR)
+  const stagingDir = join(stagingRoot, `${prepared.id}.${randomUUID()}`)
+  const trustSnapshotPath = join(pluginsRoot, REGISTRY_TRUST_SNAPSHOT_NAME)
+  if (prepared.registryEvidence) {
+    assertRegistryTrustSnapshotDoesNotRollback(
+      deps.readFile(trustSnapshotPath),
+      prepared.registryEvidence.trustSnapshot,
+    )
+  }
+  try {
+    deps.mkdirp(stagingRoot)
+    writePreparedPackage(prepared, stagingDir, backendEntry, safeEntries, deps)
+    deps.mkdirp(dirname(candidateDir))
+    deps.rename(stagingDir, candidateDir)
+    if (prepared.registryEvidence) {
+      const writeTrustSnapshot = deps.writeRegistryTrustSnapshot ?? writeRegistryTrustSnapshot
+      writeTrustSnapshot(pluginsRoot, prepared.registryEvidence.trustSnapshot)
+    }
+  } catch (error) {
+    // A package that never reached its immutable candidate location is only a
+    // transient write; leave active/previous packages and any committed
+    // candidate untouched. Ticket 29 owns recovery for interrupted writes.
+    deps.rmrf(stagingDir)
+    throw error
+  }
+  return {
+    candidateDir,
+    target,
+    descriptor:
+      isManifestV2(prepared.manifest) && prepared.manifest.contributes === undefined
+        ? undefined
+        : manifestToDescriptor(prepared.manifest, candidateDir),
   }
 }
 

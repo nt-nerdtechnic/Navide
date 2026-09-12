@@ -6,6 +6,11 @@ All notable released changes to Navide will be documented in this file. The form
 
 ### Added
 
+- Stage verified Manifest v2 updates as immutable candidates and expose an
+  explicit Restart Plugin activation flow. Candidate frontend views preflight
+  hidden with no capability context; backend health and current trust are
+  checked before activation, while restart drains and restores only the
+  selected plugin.
 - Build official Manifest v2 plugin artifacts from explicit canonical file
   lists, with deterministic ZIP metadata, target-specific backend validation,
   detached archive-signature tooling, and clean versioned factory resources.

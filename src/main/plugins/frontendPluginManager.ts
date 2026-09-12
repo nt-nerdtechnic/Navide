@@ -250,6 +250,48 @@ export interface PluginViewOpenOptions {
   canDispatch?: () => boolean
 }
 
+/** A Host-private restart record. It deliberately retains placement inputs,
+ * but never a package entry path, capability binding, file grant, or caller
+ * liveness closure: all of those must be resolved again after selection
+ * changes. */
+export interface PluginInstanceRestartSnapshot {
+  readonly pluginId: string
+  readonly packageVersion: string
+  readonly contributionKey: string
+  readonly hostWindow: BrowserWindow
+  readonly bounds: PluginViewBounds
+  readonly query: string
+  readonly workspacePath: string | null
+  readonly closeHostOnHide: boolean
+  readonly mirrorTitle: boolean
+  readonly initiallyVisible: boolean
+  /** Whether this contribution was registered in Host region composition. */
+  readonly contributionRegistered: boolean
+  /** Renderer-owned guests need an explicit renderer re-prepare; the Host
+   * cannot replace their carrier with a native view during restart. */
+  readonly carrier: 'native' | 'guest'
+}
+
+export interface PluginPackageRestartRestoreReport {
+  readonly restoredInstances: number
+  readonly skippedDestroyedHostWindows: number
+}
+
+declare const pluginPackageRestartTransactionBrand: unique symbol
+
+/** Opaque Host-only handle for one package-version restart. It is backed by a
+ * private WeakMap, so renderer data cannot manufacture a usable transaction. */
+export interface PluginPackageRestartTransaction {
+  readonly [pluginPackageRestartTransactionBrand]: void
+}
+
+interface PendingPackageRestart {
+  readonly pluginId: string
+  readonly packageVersion: string
+  readonly snapshots: readonly PluginInstanceRestartSnapshot[]
+  restored: boolean
+}
+
 /** What the manager needs from a mounted plugin surface.
  *
  *  A `location: 'window'` contribution is a native `WebContentsView`, which the
@@ -313,6 +355,8 @@ interface RunningPlugin {
   senderId: number
   /** Whether the view overlays the host's full content area (see {@link PluginViewBounds}). */
   fill: boolean
+  /** Placement that the Host can restore after a package-version restart. */
+  restartBounds: PluginViewBounds
   /** Removes the host `resize` listener; null when none is attached. */
   detachHostResize: (() => void) | null
   /** Removes the listeners this instance put on its host window — `closed`,
@@ -323,6 +367,10 @@ interface RunningPlugin {
    *  window): `hideSelf` then closes the window (legacy editor Esc semantics)
    *  instead of hiding the view under a still-visible host. */
   closeHostOnHide: boolean
+  /** Whether this native view mirrors its document title to a dedicated Host window. */
+  mirrorTitle: boolean
+  /** Host-tracked visibility; WebContents does not expose a reliable readback. */
+  visible: boolean
   /** True once the entry finished loading — open targets sent before that are
    *  queued in {@link pendingTargets} (mirrors the legacy editor window's
    *  pendingEditorOpenFiles flush on did-finish-load). */
@@ -1112,6 +1160,19 @@ export class FrontendPluginManager {
   /** Exact package-version tuples whose complete runtime is being revoked. */
   private readonly stoppingPlugins = new Set<string>()
   private readonly packageRevocationTasks = new Map<string, Promise<void>>()
+  /** Old-version admission barriers retained between a restart drain and the
+   * Host coordinator's selector/registry cutover. */
+  private readonly pendingPackageRestarts = new WeakMap<PluginPackageRestartTransaction, PendingPackageRestart>()
+  private readonly packageRestartBarriers = new Set<string>()
+  /** Reject all new work for a plugin while its selectors are between old and
+   * current versions. Internal restoration mounts directly after re-resolution. */
+  private readonly restartingPluginIds = new Set<string>()
+  /** Generic package storage selection from the Host activation coordinator.
+   * Plans and Mini-IDE keep their existing specialized selection paths. */
+  private readonly pluginStorageSnapshotSelections = new Map<
+    string,
+    { activeVersion: string; previousVersion?: string }
+  >()
   /** Package versions displaced by the temporary legacy recovery descriptor. */
   private readonly recoveryPackageVersions = new Map<string, string>()
   /** Host-renderer state for the left Git contribution, keyed by its host
@@ -1185,6 +1246,12 @@ export class FrontendPluginManager {
   private readonly pendingActivations = new Map<
     string,
     ReturnType<typeof setTimeout> | null
+  >()
+  /** Preflight waits are Host-private and deliberately independent of the
+   * production activation-failure observer. */
+  private readonly pluginReadyWaiters = new Map<
+    string,
+    { resolve: () => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }
   >()
   /** Instances whose readiness budget already bought them one reload. A missed
    *  budget is usually a loaded machine rather than a broken package, so the
@@ -1266,14 +1333,17 @@ export class FrontendPluginManager {
 
   private isPluginStopping(plugin: RunningPlugin): boolean {
     const packageVersion = this.packageVersionOfPlugin(plugin)
-    return packageVersion !== null && this.stoppingPlugins.has(packageVersionKey(plugin.id, packageVersion))
+    return this.restartingPluginIds.has(plugin.id) || (
+      packageVersion !== null && this.stoppingPlugins.has(packageVersionKey(plugin.id, packageVersion))
+    )
   }
 
   private isPackageVersionStopping(pluginId: string, packageVersion: unknown): boolean {
     return (
       typeof packageVersion === 'string' &&
       packageVersion.length > 0 &&
-      this.stoppingPlugins.has(packageVersionKey(pluginId, packageVersion))
+      (this.restartingPluginIds.has(pluginId) ||
+        this.stoppingPlugins.has(packageVersionKey(pluginId, packageVersion)))
     )
   }
 
@@ -1742,6 +1812,30 @@ export class FrontendPluginManager {
     this.refreshHostSessionRegistration()
   }
 
+  /** Set the durable Host-selected storage snapshot for a generic package. */
+  setPluginStorageSnapshotSelection(
+    pluginId: string,
+    selection: { activeVersion: string; previousVersion?: string },
+  ): void {
+    if (!nonEmptyString(pluginId) || !nonEmptyString(selection.activeVersion)) {
+      throw new Error('plugin storage snapshot selection requires a package id and active version')
+    }
+    if (selection.previousVersion !== undefined && !nonEmptyString(selection.previousVersion)) {
+      throw new Error('plugin storage snapshot previous version must be non-empty')
+    }
+    this.pluginStorageSnapshotSelections.set(pluginId, {
+      activeVersion: selection.activeVersion,
+      ...(selection.previousVersion ? { previousVersion: selection.previousVersion } : {}),
+    })
+  }
+
+  /** Delegate immediate pre-spawn trust revalidation to the backend child Host. */
+  setBackendSpawnTrustVerifier(
+    verifier: ((activation: Readonly<BackendPluginLaunchSpec>) => void | Promise<void>) | null,
+  ): void {
+    this.pluginBackendHost.setBeforeSpawnVerifier(verifier ?? undefined)
+  }
+
   setExecutionPolicyResolver(
     resolver: ((workspacePath?: string) => ExecutionPolicySnapshot) | null
   ): void {
@@ -1836,6 +1930,36 @@ export class FrontendPluginManager {
     })
   }
 
+  /** Wait for the sender-authenticated readiness handshake without involving
+   * production activation recovery. Used only by candidate frontend preflight. */
+  private waitForPluginReady(instanceId: string): Promise<void> {
+    const plugin = this.running.get(instanceId)
+    if (!plugin) return Promise.reject(new BackendPluginError('INVALID_RUNTIME'))
+    if (plugin.pluginReady) return Promise.resolve()
+    return new Promise<void>((resolveReady, rejectReady) => {
+      const timer = setTimeout(() => {
+        if (this.pluginReadyWaiters.get(instanceId)?.timer !== timer) return
+        this.pluginReadyWaiters.delete(instanceId)
+        rejectReady(new BackendPluginError('INVALID_RUNTIME', 'plugin readiness handshake timed out'))
+      }, 10_000)
+      timer.unref?.()
+      this.pluginReadyWaiters.set(instanceId, {
+        resolve: resolveReady,
+        reject: rejectReady,
+        timer,
+      })
+    })
+  }
+
+  private settlePluginReadyWaiter(instanceId: string, error?: Error): void {
+    const waiter = this.pluginReadyWaiters.get(instanceId)
+    if (!waiter) return
+    this.pluginReadyWaiters.delete(instanceId)
+    clearTimeout(waiter.timer)
+    if (error) waiter.reject(error)
+    else waiter.resolve()
+  }
+
   /** Host-only readiness seam for the legacy plugin-id opener. */
   async waitForLegacyEntryReady(pluginId: string): Promise<void> {
     const instanceId = this.legacyInstances.get(pluginId)
@@ -1852,6 +1976,7 @@ export class FrontendPluginManager {
     const plugin = this.running.get(instanceId)
     if (!plugin || !this.pendingActivations.has(instanceId)) return
     this.settleActivation(instanceId)
+    this.settlePluginReadyWaiter(instanceId, new BackendPluginError('INVALID_RUNTIME'))
     const packageVersion = plugin.capabilityContext?.runtimeBinding?.packageVersion
     if (!packageVersion) return
     if (plugin.id === PLANS_PLUGIN_ID && plugin.workspacePath) {
@@ -1888,6 +2013,9 @@ export class FrontendPluginManager {
       (policy.shell === 'full' && grant.highRiskShellConfirmed !== true)
     ) return null
     const installed = this.installedPackages.get(descriptor.id)
+    const selectedStorage = this.pluginStorageSnapshotSelections.get(descriptor.id)
+    if (selectedStorage && selectedStorage.activeVersion !== packageVersion) return null
+    const previousVersion = selectedStorage?.previousVersion ?? packageVersion
     return {
       publisherEligible:
         isReservedPluginId(descriptor.id) &&
@@ -1916,7 +2044,7 @@ export class FrontendPluginManager {
           ? [['previous', this.miniIdeStorageSnapshotContext.previousPackageVersion] as const]
           : descriptor.id === MINI_IDE_PLUGIN_ID
             ? []
-            : [['previous', packageVersion] as const]),
+            : [['previous', previousVersion] as const]),
       ]),
       storageSnapshotTier: 'active',
     }
@@ -3424,6 +3552,7 @@ export class FrontendPluginManager {
       if (plugin) {
         plugin.pluginReady = true
         this.settleActivation(plugin.instanceId)
+        this.settlePluginReadyWaiter(plugin.instanceId)
         console.log(`[plugin] ${plugin.id} ready`)
       }
     })
@@ -6301,6 +6430,7 @@ export class FrontendPluginManager {
     this.editorSelectionGrants.close(instanceId)
     this.editorAiCapability.close(instanceId)
     this.settleActivation(instanceId)
+    this.settlePluginReadyWaiter(instanceId, new BackendPluginError('INVALID_RUNTIME'))
     this.readinessReloaded.delete(instanceId)
     plugin.detachHostResize?.()
     plugin.detachHostResize = null
@@ -6586,9 +6716,11 @@ export class FrontendPluginManager {
             this.deactivate(existing.instanceId)
           } else {
             existing.fill = bounds === 'fill'
+            existing.restartBounds = bounds
             this.applyBounds(existing, bounds)
             this.trackHostResize(existing)
             existing.view.setVisible(true)
+            existing.visible = true
           }
           // Surface the window that actually hosts the view. Cross-window opens
           // keep the view on its original host, so focus that one — the open
@@ -6683,6 +6815,40 @@ export class FrontendPluginManager {
     return handle
   }
 
+  /** Restricted Host-only candidate preflight. Each declared frontend view is
+   * mounted hidden with no capability binding and must complete its
+   * sender-authenticated readiness handshake. The candidate never enters the
+   * descriptor/catalog or contribution registries, and every temporary view is
+   * destroyed even when a later view fails. */
+  async preflightPackageFrontend(
+    descriptor: PluginLaunchDescriptor,
+    hostWindow: BrowserWindow,
+  ): Promise<void> {
+    if (hostWindow.isDestroyed()) throw new Error('frontend preflight host window is unavailable')
+    const views = descriptor.views ?? []
+    if (views.length === 0) throw new Error('frontend preflight requires at least one contributed view')
+    this.registerIpc()
+    const mounted: PluginViewHandle[] = []
+    try {
+      for (const view of views) {
+        if (hostWindow.isDestroyed()) throw new Error('frontend preflight host window was destroyed')
+        const handle = this.mountView(
+          hostWindow,
+          descriptor,
+          'hidden',
+          '',
+          { capabilityContext: null, initiallyVisible: false, preflight: true },
+          view,
+          false,
+        )
+        mounted.push(handle)
+        await this.waitForPluginReady(handle.instanceId)
+      }
+    } finally {
+      for (const handle of mounted.reverse()) this.destroyInstance(handle.instanceId)
+    }
+  }
+
   /** Ensure a contribution has a live, deactivated instance without creating
    *  a visible placeholder rectangle. The renderer later activates the same
    *  Host-owned instance through {@link openContribution}. */
@@ -6717,7 +6883,10 @@ export class FrontendPluginManager {
     isV2Identity: boolean
     openedViaLegacyAdapter: boolean
     fill: boolean
+    restartBounds: PluginViewBounds
     closeHostOnHide: boolean
+    mirrorTitle: boolean
+    visible: boolean
   }): RunningPlugin {
     const { instanceId, descriptor, isV2Identity, openedViaLegacyAdapter } = input
     return {
@@ -6740,9 +6909,12 @@ export class FrontendPluginManager {
       query: input.query,
       senderId: input.surface.webContents.id,
       fill: input.fill,
+      restartBounds: input.restartBounds,
       detachHostResize: null,
       detachHostClosed: null,
       closeHostOnHide: input.closeHostOnHide,
+      mirrorTitle: input.mirrorTitle,
+      visible: input.visible,
       ready: false,
       lastDeliveredTarget: undefined,
       pluginReady: false,
@@ -6757,11 +6929,12 @@ export class FrontendPluginManager {
     hostWindow: BrowserWindow,
     descriptor: PluginLaunchDescriptor,
     isV2Identity: boolean,
-    openedViaLegacyAdapter: boolean
+    openedViaLegacyAdapter: boolean,
+    preflight = false,
   ): void {
     const contents = record.view.webContents
     this.running.set(instanceId, record)
-    if (isV2Identity && this.activationFailureHandler) {
+    if (isV2Identity && this.activationFailureHandler && !preflight) {
       // Register the activation immediately so load failure / renderer death
       // remain observable, but do not spend the readiness budget while the
       // entry document itself is still loading.
@@ -7031,6 +7204,8 @@ export class FrontendPluginManager {
         workspaceOnly?: boolean
       }
       deferTrustedEditorFileTarget?: boolean
+      /** Candidate preflight never registers production failure recovery. */
+      preflight?: boolean
     },
     viewDescriptor: PluginViewLaunchDescriptor | undefined,
     openedViaLegacyAdapter: boolean
@@ -7119,9 +7294,20 @@ export class FrontendPluginManager {
       isV2Identity,
       openedViaLegacyAdapter,
       fill: bounds === 'fill',
+      restartBounds: bounds,
       closeHostOnHide: opts.closeHostOnHide ?? false,
+      mirrorTitle: opts.mirrorTitle ?? false,
+      visible: opts.initiallyVisible !== false && bounds !== 'hidden',
     })
-    this.wireSurface(instanceId, record, hostWindow, descriptor, isV2Identity, openedViaLegacyAdapter)
+    this.wireSurface(
+      instanceId,
+      record,
+      hostWindow,
+      descriptor,
+      isV2Identity,
+      openedViaLegacyAdapter,
+      opts.preflight === true,
+    )
     this.applyBounds(record, bounds)
     this.trackHostResize(record)
 
@@ -7201,6 +7387,7 @@ export class FrontendPluginManager {
       this.trackHostResize(plugin)
     }
     plugin.view.setVisible(true)
+    plugin.visible = true
   }
 
   /** Focus one exact live Host-owned instance without changing its visibility
@@ -7220,12 +7407,16 @@ export class FrontendPluginManager {
     plugin.detachHostResize?.()
     plugin.detachHostResize = null
     plugin.view.setVisible(false)
+    plugin.visible = false
   }
 
   /** Update the plugin view's rect (host-driven layout). */
   setBounds(instanceId: string, bounds: PluginBounds): void {
     const plugin = this.resolveInstance(instanceId)
-    if (plugin) plugin.view.setBounds(bounds)
+    if (!plugin) return
+    plugin.fill = false
+    plugin.restartBounds = { ...bounds }
+    plugin.view.setBounds(bounds)
   }
 
   /** Host-driven incremental entry target update for one exact v2 instance.
@@ -7951,7 +8142,10 @@ export class FrontendPluginManager {
       isV2Identity: pending.isV2Identity,
       openedViaLegacyAdapter: false,
       fill: false,
+      restartBounds: 'hidden',
       closeHostOnHide: false,
+      mirrorTitle: false,
+      visible: false,
     })
     this.wireSurface(
       pending.instanceId,
@@ -8424,8 +8618,215 @@ export class FrontendPluginManager {
       // the life of the process; keeping this one as well would not add to that
       // guarantee and would strand UI-only packages that have no backend child
       // (Git) with a dead contribution until the App restarts.
-      this.stoppingPlugins.delete(key)
+      if (!this.packageRestartBarriers.has(key)) this.stoppingPlugins.delete(key)
     }
+  }
+
+  /** Capture one exact v2 package's Host-owned placements. Query strings are
+   * data only; receiver grants and renderer guest tokens never survive a
+   * restart. */
+  private snapshotPackageRestart(
+    pluginId: string,
+    packageVersion: string,
+  ): readonly PluginInstanceRestartSnapshot[] {
+    const snapshots: PluginInstanceRestartSnapshot[] = []
+    const seen = new Set<string>()
+    const snapshotKey = (hostWindow: BrowserWindow, contributionKey: string): string =>
+      `${hostWindow.id}\u0000${contributionKey}`
+    const cleanQuery = (query: string): string => {
+      const params = new URLSearchParams(query.startsWith('?') ? query.slice(1) : query)
+      params.delete('file_grant')
+      params.delete('nv_guest')
+      const value = params.toString()
+      return value ? `?${value}` : ''
+    }
+    for (const plugin of this.instancesForPackageVersion(pluginId, packageVersion)) {
+      if (!plugin.hasV2DescriptorIdentity || !plugin.contributionKey) {
+        throw new Error('package restart requires canonical contribution instances')
+      }
+      const key = snapshotKey(plugin.hostWindow, plugin.contributionKey)
+      seen.add(key)
+      const contributionRegistered =
+        this.contributionInstances.get(key)?.instanceId === plugin.instanceId
+      snapshots.push(Object.freeze({
+        pluginId,
+        packageVersion,
+        contributionKey: plugin.contributionKey,
+        hostWindow: plugin.hostWindow,
+        bounds:
+          typeof plugin.restartBounds === 'string'
+            ? plugin.restartBounds
+            : Object.freeze({ ...plugin.restartBounds }),
+        query: cleanQuery(plugin.query),
+        workspacePath: plugin.workspacePath,
+        closeHostOnHide: plugin.closeHostOnHide,
+        mirrorTitle: plugin.mirrorTitle,
+        initiallyVisible: plugin.visible,
+        contributionRegistered,
+        carrier: plugin.view.nativeView ? 'native' : 'guest',
+      }))
+    }
+    // A renderer may have received a guest URL but not attached before the
+    // restart begins. Preserve it as an explicit guest-reprepare requirement;
+    // silently dropping it leaves a blank region after the old token is swept.
+    for (const pending of this.pendingGuests.values()) {
+      if (pending.descriptor.id !== pluginId || pending.descriptor.packageVersion !== packageVersion) continue
+      const key = snapshotKey(pending.hostWindow, pending.contributionKey)
+      if (seen.has(key)) continue
+      seen.add(key)
+      snapshots.push(Object.freeze({
+        pluginId,
+        packageVersion,
+        contributionKey: pending.contributionKey,
+        hostWindow: pending.hostWindow,
+        bounds: 'hidden',
+        query: cleanQuery(pending.query),
+        workspacePath: pending.workspacePath,
+        closeHostOnHide: false,
+        mirrorTitle: false,
+        initiallyVisible: false,
+        contributionRegistered: true,
+        carrier: 'guest',
+      }))
+    }
+    return Object.freeze(snapshots)
+  }
+
+  /** Begin a Host-only restart transaction. The admission barrier covers the
+   * whole plugin through selector cutover, while the existing revoke method
+   * performs the actual in-flight backend drain. */
+  async beginPackageRestart(
+    pluginId: string,
+    expectedActiveVersion: string,
+  ): Promise<PluginPackageRestartTransaction> {
+    const descriptor = this.descriptors.get(pluginId)
+    if (
+      !descriptor ||
+      !hasV2DescriptorIdentity(descriptor) ||
+      descriptor.packageVersion !== expectedActiveVersion
+    ) {
+      throw new Error('package restart does not match the current Host descriptor')
+    }
+    if (this.restartingPluginIds.has(pluginId)) throw new Error('package restart is already in progress')
+    const key = packageVersionKey(pluginId, expectedActiveVersion)
+    const snapshots = this.snapshotPackageRestart(pluginId, expectedActiveVersion)
+    const transaction = Object.freeze({}) as PluginPackageRestartTransaction
+    this.pendingPackageRestarts.set(transaction, {
+      pluginId,
+      packageVersion: expectedActiveVersion,
+      snapshots,
+      restored: false,
+    })
+    this.restartingPluginIds.add(pluginId)
+    this.packageRestartBarriers.add(key)
+    try {
+      await this.revokePackageVersion(pluginId, expectedActiveVersion)
+      return transaction
+    } catch (error) {
+      this.pendingPackageRestarts.delete(transaction)
+      this.restartingPluginIds.delete(pluginId)
+      this.packageRestartBarriers.delete(key)
+      this.stoppingPlugins.delete(key)
+      throw error
+    }
+  }
+
+  /** Restore native placements through the current descriptor only. Guest
+   * placements are deliberately reported as incomplete rather than mounted as
+   * a different carrier; their renderer must request a fresh guest URL. */
+  async restorePackageRestart(
+    transaction: PluginPackageRestartTransaction,
+    expectedSelectedVersion: string,
+  ): Promise<PluginPackageRestartRestoreReport> {
+    const pending = this.pendingPackageRestarts.get(transaction)
+    if (!pending || pending.restored) throw new Error('package restart transaction is not active')
+    const descriptor = this.descriptors.get(pending.pluginId)
+    if (!descriptor || !hasV2DescriptorIdentity(descriptor) || descriptor.packageVersion !== expectedSelectedVersion) {
+      throw new Error('package restart selected descriptor is not current')
+    }
+    const guests = pending.snapshots.filter((snapshot) => snapshot.carrier === 'guest')
+    if (guests.length > 0) {
+      throw new Error('package restart requires renderer guest re-prepare before completion')
+    }
+    for (const snapshot of pending.snapshots) {
+      if (snapshot.pluginId !== pending.pluginId || snapshot.packageVersion !== pending.packageVersion) {
+        throw new Error('package restart transaction snapshot is invalid')
+      }
+      if (!descriptor.views?.some((view) => view.contributionKey === snapshot.contributionKey)) {
+        throw new Error(`package restart contribution '${snapshot.contributionKey}' is not registered`) 
+      }
+    }
+    let restoredInstances = 0
+    let skippedDestroyedHostWindows = 0
+    for (const snapshot of pending.snapshots) {
+      if (snapshot.hostWindow.isDestroyed()) {
+        skippedDestroyedHostWindows++
+        continue
+      }
+      const view = descriptor.views!.find((candidate) => candidate.contributionKey === snapshot.contributionKey)!
+      const capabilityContext = this.contributionCapabilityContext(
+        descriptor,
+        view,
+        snapshot.workspacePath ?? '',
+      )
+      if (descriptor.capabilityPolicy?.kind === 'manifest-v2' && !capabilityContext) {
+        throw new Error('package restart capability grant is missing')
+      }
+      const handle = this.mountView(
+        snapshot.hostWindow,
+        descriptor,
+        snapshot.bounds,
+        snapshot.query,
+        {
+          closeHostOnHide: snapshot.closeHostOnHide,
+          mirrorTitle: snapshot.mirrorTitle,
+          ...(snapshot.workspacePath ? { workspacePath: snapshot.workspacePath } : {}),
+          capabilityContext,
+          initiallyVisible: snapshot.initiallyVisible,
+        },
+        view,
+        false,
+      )
+      if (snapshot.contributionRegistered) {
+        this.contributionInstances.set(
+          this.contributionInstanceKey(snapshot.hostWindow, snapshot.contributionKey),
+          handle,
+        )
+      }
+      await this.waitForBackendBinding(handle.instanceId)
+      await this.waitForPluginReady(handle.instanceId)
+      restoredInstances++
+    }
+    pending.restored = true
+    return Object.freeze({ restoredInstances, skippedDestroyedHostWindows })
+  }
+
+  /** Complete only a successful (or explicitly host-destroyed) restore. */
+  completePackageRestart(transaction: PluginPackageRestartTransaction): void {
+    const pending = this.pendingPackageRestarts.get(transaction)
+    if (!pending) throw new Error('package restart transaction is not active')
+    if (!pending.restored && pending.snapshots.length > 0) {
+      throw new Error('package restart cannot complete before required placements restore')
+    }
+    this.finishPackageRestart(transaction, pending)
+  }
+
+  /** Release a failed Host-side selector/re-registration transaction. This
+   * does not attempt rollback or claim to undo completed external effects. */
+  cancelPackageRestart(transaction: PluginPackageRestartTransaction): void {
+    const pending = this.pendingPackageRestarts.get(transaction)
+    if (pending) this.finishPackageRestart(transaction, pending)
+  }
+
+  private finishPackageRestart(
+    transaction: PluginPackageRestartTransaction,
+    pending: PendingPackageRestart,
+  ): void {
+    this.pendingPackageRestarts.delete(transaction)
+    this.restartingPluginIds.delete(pending.pluginId)
+    const key = packageVersionKey(pending.pluginId, pending.packageVersion)
+    this.packageRestartBarriers.delete(key)
+    this.stoppingPlugins.delete(key)
   }
 
   /** Unregister a descriptor and tear down its view if it is open. Used by the

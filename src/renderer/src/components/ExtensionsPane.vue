@@ -222,6 +222,21 @@ async function remove(id: string): Promise<void> {
   await refreshInstalled()
 }
 
+async function restartPlugin(id: string): Promise<void> {
+  const api = pluginsApi()
+  if (!api) return
+  busy.value = true
+  error.value = ''
+  try {
+    await api.restart(id)
+    await refreshInstalled()
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    busy.value = false
+  }
+}
+
 async function restoreFactoryPackage(id: string): Promise<void> {
   const api = pluginsApi()
   if (!api) return
@@ -314,6 +329,9 @@ watch(() => props.workspacePath, () => { void refreshPolicy() })
           </span>
           <span class="ext-requires">{{ p.requires.join(', ') }}</span>
           <span v-if="p.warning" class="ext-badge ext-dev-warning">{{ p.warning }}</span>
+          <span v-if="p.pendingCandidateVersion" class="ext-badge ext-candidate">
+            Update {{ p.pendingCandidateVersion }} is ready
+          </span>
           <div v-if="p.manifestPermissions || p.packageVersion" class="ext-permission-details">
             <span v-if="p.manifestPermissions" class="ext-manifest-permissions">
               {{ $t('settings.extensionsPolicy.manifestPermissions') }}: {{ formatManifestPermissions(p.manifestPermissions) }}
@@ -322,7 +340,15 @@ watch(() => props.workspacePath, () => { void refreshPolicy() })
               {{ $t('settings.extensionsPolicy.packageVersionGrant') }}: {{ formatPackageGrant(p.packageVersionGrant) }}
             </span>
           </div>
-          <button class="ext-remove" @click="remove(p.id)">Remove</button>
+          <button
+            v-if="p.pendingCandidateVersion"
+            class="ext-restart"
+            :disabled="busy"
+            @click="restartPlugin(p.id)"
+          >
+            Restart Plugin
+          </button>
+          <button class="ext-remove" :disabled="busy" @click="remove(p.id)">Remove</button>
         </li>
         <li v-if="!nonFactoryInstalled.length" class="ext-empty nv-empty">No plugins installed.</li>
       </ul>
@@ -457,6 +483,10 @@ watch(() => props.workspacePath, () => { void refreshPolicy() })
   color: #c77400;
   font-size: var(--font-2xs);
 }
+.ext-badge.ext-candidate {
+  color: #2f6f9f;
+  font-size: var(--font-2xs);
+}
 .ext-badge.ext-active {
   color: #1a7f37;
   font-size: 11px;
@@ -467,7 +497,8 @@ watch(() => props.workspacePath, () => { void refreshPolicy() })
 }
 .ext-remove,
 .ext-install,
-.ext-restore {
+.ext-restore,
+.ext-restart {
   margin-left: auto;
 }
 .ext-search {
@@ -514,7 +545,7 @@ watch(() => props.workspacePath, () => { void refreshPolicy() })
   gap: 8px;
   margin-top: 12px;
 }
-/* These six buttons declare nothing of their own — they are native browser
+/* These buttons declare nothing of their own — they are native browser
  * buttons. Hover therefore darkens what the platform already painted instead
  * of replacing the fill: an overlay colour here would flip a light native
  * button to a dark one on hover, which is a bigger change than the missing
@@ -522,6 +553,7 @@ watch(() => props.workspacePath, () => { void refreshPolicy() })
  * no class of its own. */
 .ext-remove,
 .ext-install,
+.ext-restart,
 .ext-search button,
 .ext-confirm-publisher,
 .ext-confirm-risk,
@@ -530,6 +562,7 @@ watch(() => props.workspacePath, () => { void refreshPolicy() })
 }
 .ext-remove:hover:not(:disabled),
 .ext-install:hover:not(:disabled),
+.ext-restart:hover:not(:disabled),
 .ext-search button:hover:not(:disabled),
 .ext-confirm-publisher:hover:not(:disabled),
 .ext-confirm-risk:hover:not(:disabled),
