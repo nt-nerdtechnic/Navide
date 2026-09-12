@@ -9,6 +9,7 @@ import {
   isQualifiedTarget,
   normalizeMessagingName,
   uniqueMessagingName,
+  PUSH_UNCLEAR_LIMIT,
 } from '../lib/agentMessaging'
 
 /**
@@ -447,6 +448,10 @@ const correlations = new Map<string, { id: number; sentAt: number }>()
 /** Messages a recipient has reserved but not yet consumed, by message id. See
  *  reserveIncoming(); `reservedAt` is what expireReadReservations() reads. */
 const readReserved = new Map<number, { paneId: string; reservedAt: number }>()
+/** How many times each queued message's push has come back `unclear`, by
+ *  message id. Compared against {@link PUSH_UNCLEAR_LIMIT} in pumpPane();
+ *  cleared when the message gets out or leaves the queue. */
+const pushUnclearCount = new Map<number, number>()
 
 function configureMessaging(d: MessagingDeps): void {
   deps = d
@@ -564,6 +569,7 @@ function failMessage(id: number, reason: MessageReason): void {
     notifySenderOfFailure(m)
   }
   envelopes.delete(id)
+  pushUnclearCount.delete(id)
 }
 
 /**
@@ -1259,12 +1265,22 @@ async function pumpPane(paneId: string): Promise<void> {
   let requeued = false
   try {
     const ok = await deliverOnce(paneId, msg, envelope, push)
-    if (ok === null) {
+    const stuck = ok === 'unclear'
+      && (pushUnclearCount.get(id) ?? 0) + 1 >= PUSH_UNCLEAR_LIMIT
+    if (stuck) {
+      // The composer would not clear after PUSH_UNCLEAR_LIMIT pushes: the
+      // message is never getting through this way, and re-queuing it again
+      // would only park the pane's whole queue behind it. Fail it so the
+      // sender hears about it.
+      ackReason = { key: 'push-stuck' }
+      failMessage(id, ackReason)
+    } else if (ok === null || ok === 'unclear') {
       // Pushed and it did not land, and typing it in now is not an option —
       // either the channel may still be holding the text, or the typed path's
       // own gate is shut because the push was chosen for a pane someone is
       // typing in. Put the message back at the head of its queue with nothing
       // spent: the next pump sends it whichever way is open then.
+      if (ok === 'unclear') pushUnclearCount.set(id, (pushUnclearCount.get(id) ?? 0) + 1)
       requeued = true
       msg.status = 'queued'
       delete msg.route
@@ -1289,6 +1305,7 @@ async function pumpPane(paneId: string): Promise<void> {
     delivering.delete(paneId)
     if (!requeued) {
       q.shift()
+      pushUnclearCount.delete(id)
       ackInbound(id, ackOk, ackReason)
     }
   }
@@ -1298,29 +1315,30 @@ async function pumpPane(paneId: string): Promise<void> {
  * One delivery attempt for the head of a pane's queue.
  *
  * Returns true when the message reached the pane, false when it demonstrably
- * did not, and null when a push failed and typing it in now would be wrong —
- * the caller puts the message back rather than choosing between losing it and
- * writing it into a pane that cannot take it.
+ * did not, and null or 'unclear' when a push failed and typing it in now would
+ * be wrong — the caller puts the message back rather than choosing between
+ * losing it and writing it into a pane that cannot take it.
  *
  * Two separate reasons to hold off, and both have to be checked. The channel
  * may still be holding the text ('unclear'), in which case typing would submit
- * the envelope twice over. And the push may have been chosen precisely because
- * the typed path's gate was shut — someone is typing in the pane — so the
- * fallback is re-gated rather than assumed.
+ * the envelope twice over — passed through by name so the caller can count how
+ * often the same message hits it. And the push may have been chosen precisely
+ * because the typed path's gate was shut — someone is typing in the pane — so
+ * the fallback is re-gated rather than assumed (null).
  */
 async function deliverOnce(
   paneId: string,
   msg: AgentMessage,
   envelope: string,
   push: { kind: string } | null,
-): Promise<boolean | null> {
+): Promise<boolean | null | 'unclear'> {
   if (!deps) return false
   if (push && deps.pushDeliver) {
     msg.route = `push:${push.kind}`
     const outcome = await deps.pushDeliver(paneId, envelope)
     if (outcome === 'landed') return true
     delete msg.route
-    if (outcome === 'unclear') return null
+    if (outcome === 'unclear') return 'unclear'
     if (!deps.isPaneIdle(paneId)) return null
   }
   return deps.deliver(paneId, envelope)
@@ -1592,6 +1610,7 @@ function unqueue(id: number): boolean {
   if (!loc) return false
   if (heldInFlight(loc)) return false
   loc.q.splice(loc.index, 1)
+  pushUnclearCount.delete(id)
   return true
 }
 
@@ -1781,6 +1800,7 @@ export function _resetMessagingForTest(): void {
   remoteInbound.clear()
   correlations.clear()
   readReserved.clear()
+  pushUnclearCount.clear()
 }
 
 export function useAgentMessaging() {

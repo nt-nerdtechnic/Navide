@@ -21,6 +21,7 @@ function flush(): Promise<void> {
 describe('useAgentMessaging — push channels', () => {
   let clock: number
   let idlePanes: Set<string>
+  let holdKey: string | null
   let pushablePanes: Map<string, string>
   let pushResult: PushOutcome
   let typed: Array<{ paneId: string; text: string }>
@@ -36,7 +37,7 @@ describe('useAgentMessaging — push channels', () => {
       return true
     },
     isPaneIdle: (paneId) => idlePanes.has(paneId),
-    idleHoldKey: (paneId) => (idlePanes.has(paneId) ? null : 'typing'),
+    idleHoldKey: (paneId) => (idlePanes.has(paneId) ? null : holdKey),
     pushTarget: (paneId) => {
       const kind = pushablePanes.get(paneId)
       return kind ? { kind } : null
@@ -57,6 +58,7 @@ describe('useAgentMessaging — push channels', () => {
     _resetMessagingForTest()
     clock = 1_000_000
     idlePanes = new Set(['p1', 'p2'])
+    holdKey = 'typing'
     pushablePanes = new Map()
     pushResult = 'landed'
     typed = []
@@ -133,13 +135,79 @@ describe('useAgentMessaging — push channels', () => {
     expect(row.status).toBe('queued')
     expect(row.route).toBeUndefined()
 
-    // The next pump decides again — by then the pane has either sent what it
-    // was holding or been cleared.
+    // The next pump decides again. The push channel is now in cooldown, and
+    // the pane's own gate answers 'composer' until it shows activity — the
+    // text is still in the box, and typing would paste the envelope after it.
     pushablePanes.delete('p2')
+    idlePanes.delete('p2')
+    holdKey = 'composer'
+    m.pump()
+    await flush()
+    expect(typed).toEqual([])
+    expect(m.messages.value.find((x) => x.id === sent.id)!.status).toBe('queued')
+    expect(m.messages.value.find((x) => x.id === sent.id)!.hold).toEqual({ key: 'composer' })
+
+    // Activity in the pane lifts the hold: the box has moved on, so the typed
+    // path is safe again.
+    idlePanes.add('p2')
+    holdKey = null
     m.pump()
     await flush()
     expect(typed).toHaveLength(1)
     expect(m.messages.value.find((x) => x.id === sent.id)!.status).toBe('delivered')
+  })
+
+  it('fails a message whose push comes back unclear twice', async () => {
+    // A composer that will not clear twice running is one the message will
+    // never get through; parking the whole queue behind it forever helps
+    // nobody, so the sender is told instead.
+    pushablePanes.set('p2', 'tui-http')
+    pushResult = 'unclear'
+    const sent = m.sendMessage('sender', 'target', 'hello')
+    m.pump()
+    await flush()
+    expect(m.messages.value.find((x) => x.id === sent.id)!.status).toBe('queued')
+    m.pump()
+    await flush()
+    expect(pushed).toHaveLength(2)
+    const row = m.messages.value.find((x) => x.id === sent.id)!
+    expect(row.status).toBe('failed')
+    expect(row.reason).toEqual({ key: 'push-stuck' })
+    expect(typed).toEqual([])
+    // Gone from the queue: a later pump has nothing left to push or type into
+    // the target. The only injection is the failure notice, which goes back
+    // to the sender.
+    m.pump()
+    await flush()
+    expect(pushed).toHaveLength(2)
+    expect(typed.filter((t) => t.paneId === 'p2')).toEqual([])
+    expect(typed.filter((t) => t.paneId === 'p1')).toHaveLength(1)
+    expect(typed[0].text).toContain('delivery failed')
+  })
+
+  it('counts unclear pushes per message, not per pane', async () => {
+    // One unclear push that then lands must not leave a count behind for the
+    // next message to inherit: that one starts from zero again.
+    pushablePanes.set('p2', 'tui-http')
+    pushResult = 'unclear'
+    const first = m.sendMessage('sender', 'target', 'first')
+    m.pump()
+    await flush()
+    expect(m.messages.value.find((x) => x.id === first.id)!.status).toBe('queued')
+    pushResult = 'landed'
+    m.pump()
+    await flush()
+    expect(m.messages.value.find((x) => x.id === first.id)!.status).toBe('delivered')
+
+    pushResult = 'unclear'
+    const second = m.sendMessage('sender', 'target', 'second')
+    m.pump()
+    await flush()
+    // First unclear for this message: re-queued, not failed.
+    expect(m.messages.value.find((x) => x.id === second.id)!.status).toBe('queued')
+    m.pump()
+    await flush()
+    expect(m.messages.value.find((x) => x.id === second.id)!.status).toBe('failed')
   })
 
   it('re-queues rather than typing into a pane the typed path would hold', async () => {

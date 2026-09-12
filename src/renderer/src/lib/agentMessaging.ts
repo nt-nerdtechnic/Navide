@@ -556,6 +556,13 @@ export function normalizeMessagingName(raw: string): string | null {
  *  instead of one per pump tick. */
 export const PUSH_COOLDOWN_MS = 60_000
 
+/** How many `unclear` pushes the same message may come back from before it is
+ *  failed. An unclear push means the CLI's composer may still be holding the
+ *  envelope, so the message is re-queued rather than typed on top; a composer
+ *  that will not clear twice running is one the message will never get through,
+ *  and the sender is told so instead of the queue holding it forever. */
+export const PUSH_UNCLEAR_LIMIT = 2
+
 /** The same, for a CLI whose server simply is not listening yet. That is what a
  *  pane looks like for the first seconds of its life, and it fixes itself — so
  *  it is worth a handful of quick retries rather than a minute's silence. */

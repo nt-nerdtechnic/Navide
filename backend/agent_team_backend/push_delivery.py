@@ -570,19 +570,29 @@ async def _push_http(state: PaneChannel, text: str) -> tuple[bool, str]:
             log.debug("push submit to %s failed: %s", state.pane_id, err)
             reason = "submit-error"
         if reason:
-            await _clear_composer(client, base, channel)
+            cleared = await _clear_composer(client, base, channel)
+            if cleared:
+                reason = f"{reason}/cleared"
             return False, reason
     return True, ""
 
 
-async def _clear_composer(client: httpx.AsyncClient, base: str, channel: PushChannel) -> None:
-    """Best-effort undo of an append whose submit never happened."""
+async def _clear_composer(client: httpx.AsyncClient, base: str, channel: PushChannel) -> bool:
+    """Best-effort undo of an append whose submit never happened.
+
+    Returns True only when the CLI confirmed the clear (a 2xx/3xx answer), so
+    the composer is known to be empty again. False covers a channel with no
+    clear endpoint, a refusal, and an outright error alike: in all three the
+    text may still be sitting in the composer.
+    """
     if not channel.clear_path:
-        return
+        return False
     try:
-        await client.post(f"{base}{channel.clear_path}")
+        cleared = await client.post(f"{base}{channel.clear_path}")
     except Exception as err:  # noqa: BLE001 — there is nothing further to try
         log.debug("could not clear composer at %s: %s", base, err)
+        return False
+    return cleared.status_code < 400
 
 
 def leaves_text_behind(kind: str, reason: str) -> bool:
@@ -594,8 +604,16 @@ def leaves_text_behind(kind: str, reason: str) -> bool:
     or has to go back in the queue for the next pump, because clearing is best
     effort and a composer that still holds our text would take the envelope a
     second time.
+
+    A submit failure whose clear the CLI confirmed (`submit-*/cleared`) does
+    not count: the composer is empty again, so the next delivery may proceed
+    as usual. Only a clear that did not happen leaves text behind.
     """
-    return kind == KIND_HTTP and reason.startswith("submit-")
+    return (
+        kind == KIND_HTTP
+        and reason.startswith("submit-")
+        and not reason.endswith("/cleared")
+    )
 
 
 def _push_file(state: PaneChannel, text: str) -> tuple[bool, str]:

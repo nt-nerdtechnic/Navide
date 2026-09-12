@@ -2003,6 +2003,7 @@ function unregisterPaneMessaging(paneId: string, opts: { keepPersisted?: boolean
   paneBusyReported.delete(paneId)
   pushReadyPanes.delete(paneId)
   pushCooldownUntil.delete(paneId)
+  pushUnclearAt.delete(paneId)
   backend.send('agent_msg.unregister', { pane_id: paneId }).catch(() => { /* best effort */ })
   if (!opts.keepPersisted) dropPersistedMessagingName(paneId)
 }
@@ -2063,6 +2064,18 @@ function messagingHoldKey(
   const parkedOnQuestion = status === 'awaiting' && awaitingKind === 'question'
   if (status !== 'running' && status !== 'idle' && !parkedOnQuestion) return 'not-ready'
   if (pane.injectionStatus === 'scheduled' || pane.kickoffStatus === 'pending') return 'starting'
+  // The composer may still be holding the text of a push whose submit failed
+  // and whose clear was not confirmed. The typed path would paste the next
+  // envelope after it and submit both as one. That text only leaves the box
+  // when the TUI submits or clears it, and either shows up as pane activity —
+  // so hold until activity newer than the push, with no time limit (the stale
+  // notice tells the sender the message is parked). Ahead of `typing` because
+  // hasDraft cannot see text that arrived over HTTP.
+  const unclearAt = pushUnclearAt.get(paneId)
+  if (unclearAt !== undefined) {
+    if ((paneLastActiveAt.get(paneId) ?? 0) <= unclearAt) return 'composer'
+    pushUnclearAt.delete(paneId)
+  }
   const now = Date.now()
   // Ahead of the CLI-side reasons on purpose: those describe what the agent is
   // doing, this one describes the person at the keyboard, and a half-typed line
@@ -2119,6 +2132,12 @@ function deliveryHoldKey(paneId: string, opts: { ignoreTyping?: boolean } = {}):
  *  the CLI has a waiter parked. */
 const pushReadyPanes = new Map<string, string>()
 const pushCooldownUntil = new Map<string, number>()
+/** When a pane's last push came back `unclear`: its HTTP append may have left
+ *  the envelope in the CLI's composer. Text that arrived that way is invisible
+ *  to hasDraft (no keystrokes), so this is the only record that it is there.
+ *  Read by messagingHoldKey(); cleared on activity newer than the push, on a
+ *  fresh push_state, and on unregister. */
+const pushUnclearAt = new Map<string, number>()
 
 /** pushTarget() dep: the channel that could take a message for this pane right
  *  now, or null. Applies the gates that channel still answers to — every
@@ -2165,7 +2184,11 @@ async function pushDeliverAgentMessage(paneId: string, text: string): Promise<Pu
     /* the backend never answered — treat it as an ordinary refusal */
   }
   pushCooldownUntil.set(paneId, Date.now() + pushCooldownMs(reason))
-  return unclear ? 'unclear' : 'declined'
+  if (unclear) {
+    pushUnclearAt.set(paneId, Date.now())
+    return 'unclear'
+  }
+  return 'declined'
 }
 
 // Per-pane timestamp of the last turn_complete whose text was scanned for MSG
@@ -11144,6 +11167,7 @@ backend.on('agent_msg.push_state', (raw) => {
   if (ev.ready && ev.kind) {
     pushReadyPanes.set(ev.pane_id, ev.kind)
     pushCooldownUntil.delete(ev.pane_id)
+    pushUnclearAt.delete(ev.pane_id)
   } else {
     pushReadyPanes.delete(ev.pane_id)
   }
