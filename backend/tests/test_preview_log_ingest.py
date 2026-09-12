@@ -166,8 +166,9 @@ def test_the_receiver_still_answers_when_recording_blows_up(
     )
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
-    assert len(events) == 1
-    assert events[0]["payload"]["event_type"] == "agent_active"
+    activity = [e for e in events if e["type"] == "agent.activity"]
+    assert len(activity) == 1
+    assert activity[0]["payload"]["event_type"] == "agent_active"
 
 
 # ── watcher handler: event type → change ─────────────────────────────────
@@ -368,6 +369,10 @@ async def test_all_four_writers_land_in_the_same_database(
         "pane_for_session",
         lambda _sid: ("pane-1", str(subdir_ws), "stage-1"),
     )
+    # The dev-time store writes to the pane's registered workspace as-is and is
+    # not a preview writer; keep it out so the "second pile" check below stays
+    # about the four writers under test.
+    monkeypatch.setattr(app_module.dev_time_store, "agent_event", lambda *_a: False)
 
     _post_tool(client, "Write", str(subdir_ws / "hook.ts"))  # 1. the CLI hook
     await app_module._broadcast_git_changed(  # 2. the file watcher

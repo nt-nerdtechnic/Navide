@@ -50,7 +50,7 @@ describe('view registry', () => {
 
   it('seeds the shipped slots from the declaration order', () => {
     expect(defaultViewsFor('left')).toEqual(['agents', 'pipeline', 'explorer', 'git', 'plans'])
-    expect(defaultViewsFor('right')).toEqual(['history', 'tokens', 'tasker', 'messages', 'preview'])
+    expect(defaultViewsFor('right')).toEqual(['history', 'tokens', 'time', 'tasker', 'messages', 'preview'])
     expect(defaultViewsFor('up')).toEqual([])
     expect(defaultViewsFor('down')).toEqual([])
   })

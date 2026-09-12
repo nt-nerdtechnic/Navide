@@ -9,6 +9,7 @@ import type { useBackend } from '../composables/useBackend'
 import HistoryPanel from './HistoryPanel.vue'
 import TaskerPanel from './TaskerPanel.vue'
 import AgentMessagesPanel from './AgentMessagesPanel.vue'
+import DevTimePanel from './DevTimePanel.vue'
 import PreviewPanel from '../preview/PreviewPanel.vue'
 import { usePreview } from '../preview/usePreview'
 import type { PipelineStatusView } from './ControlPane.vue'
@@ -21,6 +22,8 @@ interface Stage {
 
 interface ActivePane {
   id: string
+  /** Vendor key; the TIME tab labels each pane's row with it. */
+  agentKey?: string
   agentLabel: string
   roleLabel: string
   stageId?: string
@@ -74,7 +77,7 @@ function setExpanded(v: boolean): void {
 // Tasker (machine-level crontab / LaunchAgents), the inter-CLI message log, or
 // the read-only preview panel.
 // Unknown or legacy persisted values fall back to the default.
-type RightTab = 'history' | 'tokens' | 'tasker' | 'messages' | 'preview'
+type RightTab = 'history' | 'tokens' | 'time' | 'tasker' | 'messages' | 'preview'
 
 // Icon and label per tab, in the panel's own order. Which of them actually
 // render is the layout's decision (`props.views`); this table only says how.
@@ -98,6 +101,13 @@ const TABS: { id: RightTab; icon: string; labelKey: string; paths: string[] }[] 
       'M2.5 7.5h2.25v6H2.5Z',
       'M6.9 3.5h2.25v10H6.9Z',
       'M11.3 6h2.25v7.5H11.3Z',
+    ],
+  },
+  {
+    id: 'time', icon: '\u23F1', labelKey: 'label.time',
+    paths: [
+      'M8 2a6 6 0 1 0 0 12A6 6 0 0 0 8 2Zm0 1.5a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9Z',
+      'M7.4 4.75h1.2v3.1l2.2 1.3-.6 1.04L7.4 8.6Z',
     ],
   },
   {
@@ -369,6 +379,12 @@ async function confirmReset(scope: ResetScope): Promise<void> {
       <HistoryPanel v-if="activeTab === 'history'" :backend="backend" :workspace-path="workspacePath" :pipeline="pipeline" />
       <TaskerPanel v-else-if="activeTab === 'tasker'" :backend="backend" />
       <AgentMessagesPanel v-else-if="activeTab === 'messages'" />
+      <DevTimePanel
+        v-else-if="activeTab === 'time'"
+        :backend="backend"
+        :workspace-path="workspacePath"
+        :panes="panes"
+      />
       <PreviewPanel
         v-else-if="activeTab === 'preview'"
         :backend="backend"

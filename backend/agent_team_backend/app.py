@@ -89,6 +89,7 @@ from .recent_workspaces import RecentWorkspacesStore
 from .roles_store import RolesStore
 from .stages_store import StagesStore
 from .db import DB_FILENAME, Database, WorkspaceDatabases
+from .dev_time_store import DevTimeStore
 from .store_migrations import run_startup_migrations, version_change
 from .terminals import TerminalService, output_frame_session_id
 from .tokens_store import TokensStore
@@ -184,6 +185,11 @@ tokens_store = TokensStore(db=database)
 history_store = HistoryStore(databases=workspace_databases)
 plan_index = PlanIndex(databases=workspace_databases)
 preview_log = PreviewLog(databases=workspace_databases)
+# resolve_pane: file activity under the id the pane answers to now, like
+# _current_pane_id below (a rebuilt pane must not split its time in two).
+dev_time_store = DevTimeStore(
+    databases=workspace_databases, resolve_pane=agent_messaging.resolve_alias
+)
 # Cross-workspace by construction, so it lives in the global database.
 agent_message_log = AgentMessageLog(db=database)
 codex_home_manager = CodexHomeManager()
@@ -900,6 +906,7 @@ _OWNERLESS_SWEEP_INTERVAL_SEC = 5 * 60.0
 _OWNERLESS_SINCE: dict[str, float] = {}
 _ownerless_sweeper_task: "asyncio.Task[None] | None" = None
 _mem_probe_task: "asyncio.Task[None] | None" = None
+_dev_time_sweeper_task: "asyncio.Task[None] | None" = None
 
 
 async def _sweep_ownerless_ptys_once(now: float | None = None) -> list[str]:
@@ -1094,6 +1101,13 @@ async def _on_log_activity(event: ActivityEvent) -> None:
             # generous — see _ACTIVITY_TEXT_MAX_CHARS.
             "text": _cap_activity_text(event.text),
         }))
+        if dev_time_store.agent_event(
+            attributed.workspace_path, pane_id,
+            "agent_active" if superseded else event.event_type, event.timestamp,
+        ):
+            await broadcast(make_event(
+                "devtime.changed", {"workspace_path": attributed.workspace_path}
+            ))
     except Exception as err:  # noqa: BLE001
         log.warning("activity sink failed: %s", err)
 
@@ -1601,6 +1615,12 @@ async def _start_log_watcher() -> None:
     global _mem_probe_task
     _mem_probe_task = asyncio.create_task(mem_probe.probe_loop())
 
+    # Close dev-time intervals nobody is beating any more (see DevTimeStore).
+    global _dev_time_sweeper_task
+    _dev_time_sweeper_task = asyncio.create_task(dev_time_store.stale_sweeper(
+        lambda ws: broadcast(make_event("devtime.changed", {"workspace_path": ws}))
+    ))
+
     # Name a frozen backend the moment it freezes: a daemon thread logs the
     # loop thread's stack when the loop stops turning (issue #24), instead of
     # the freeze being reproducible only under sample(1).
@@ -1720,6 +1740,8 @@ async def _stop_log_watcher() -> None:
         _ownerless_sweeper_task.cancel()
     if _mem_probe_task is not None:
         _mem_probe_task.cancel()
+    if _dev_time_sweeper_task is not None:
+        _dev_time_sweeper_task.cancel()
     await loop_watchdog.stop()
     # PTY children are detached process groups (start_new_session=True); they
     # must be killed here or they outlive the app as CPU-spinning orphans.
@@ -1739,6 +1761,10 @@ async def _stop_log_watcher() -> None:
         tokens_store.flush()
     except Exception as err:  # noqa: BLE001
         log.warning("token store shutdown flush failed: %s", err)
+    try:
+        dev_time_store.shutdown()
+    except Exception as err:  # noqa: BLE001
+        log.warning("dev time store shutdown failed: %s", err)
     if _git_watcher is not None:
         _git_watcher.stop()
     if _credential_watcher is not None:
@@ -2102,6 +2128,19 @@ async def cli_hook(vendor: str, request: Request) -> Any:
         # and their panes simply never gate on it.
         "pending_subagents": subagent_tracker.pending(pane_id),
     }))
+    # Dev time: only real work signals. A notification (idle_prompt /
+    # permission_prompt) is mapped to agent_active above for the busy-state
+    # path, but it marks the agent WAITING — beating on it would open an agent
+    # interval at exactly the moment nothing is running. Guarded like the
+    # preview record: this endpoint's response must not depend on the store.
+    if event_kind != "notification":
+        try:
+            if dev_time_store.agent_event(ws_path or cwd, pane_id or "", event_type, ""):
+                await broadcast(
+                    make_event("devtime.changed", {"workspace_path": ws_path or cwd})
+                )
+        except Exception as err:  # noqa: BLE001
+            log.warning("dev time record from %s hook failed: %s", vendor, err)
     if vendor == "claude" and event_kind == "stop":
         # This body is read by Claude Code as the Stop hook's own output, so it
         # is either a valid decision object or nothing at all: an unrecognized

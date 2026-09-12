@@ -196,7 +196,7 @@ export function createPluginTerminalDockPort(sdk: PluginCapabilitySdk): Terminal
     status: sdk.status,
     shell: sdk.shell,
     autoRestart: sdk.autoRestart,
-    input: (sessionId, data, timeoutMs) => request('terminal.input', { terminal_session_id: sessionId, data }, timeoutMs),
+    input: (sessionId, data, timeoutMs, opts) => request('terminal.input', { terminal_session_id: sessionId, data, ...(opts?.human ? { human: true } : {}) }, timeoutMs),
     create: (requestBody: TerminalCreateRequest, timeoutMs) => request('terminal.create', {
       pane_id: requestBody.paneId,
       create_generation: requestBody.createGeneration,

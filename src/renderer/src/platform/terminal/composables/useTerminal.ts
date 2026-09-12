@@ -27,7 +27,7 @@ import { TERMINAL_CREATE_TIMEOUT_MS, formatTerminalExit, isTerminalCrashLoopOpen
 import { settingsGet, settingsSet, setContext } from '@navide/plugin-ui/shared'
 
 import type { ITheme } from '@xterm/xterm'
-import type { TerminalDockPort, TerminalSpawnOptions } from '../ports/terminalDock'
+import type { TerminalDockPort, TerminalInputOptions, TerminalSpawnOptions } from '../ports/terminalDock'
 
 // Per-app-theme xterm palettes. CSS vars can't be used directly because
 // getPropertyValue returns the raw `var(--gray-12)` token, not the resolved hex.
@@ -262,6 +262,11 @@ const FOCUS_REPORT = /^\x1b\[[IO]/
 function isTerminalReport(data: string): boolean {
   return MOUSE_REPORT.test(data) || FOCUS_REPORT.test(data)
 }
+
+/** The custom key handler sends its bytes through pasteText, the same helper
+ *  programmatic injection uses — but a chord like Shift+Enter or ⌘⌫ is still
+ *  the person at the keyboard, so those sites pass this and injection does not. */
+const HUMAN_KEY: TerminalInputOptions = { human: true }
 
 // ── Edit > Copy bridge ──────────────────────────────────────────────────────
 // Main cannot read an xterm selection (`.xterm` is user-select: none, so
@@ -1976,7 +1981,7 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
       // buffer that decides whether the pane counts as "being typed at".
       inputBuffer = applyMentionPickToInput(inputBuffer, query, addresses)
       syncDraft()
-      void terminalPort.input(sessionId.value, data)
+      void terminalPort.input(sessionId.value, data, undefined, { human: true })
       opts?.onMentionPick?.(addresses)
     }
 
@@ -2611,7 +2616,7 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
       if (newlineChord && e.key === 'Enter') {
         e.preventDefault()
         e.stopPropagation()
-        pasteText(encodeShiftEnter(agentProfile(activeAgentKey)))
+        pasteText(encodeShiftEnter(agentProfile(activeAgentKey)), HUMAN_KEY)
         return false
       }
 
@@ -2631,7 +2636,7 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
         const len = Math.abs(selAnchorX - newX)
         if (len > 0) term.select(Math.min(selAnchorX, newX), selAnchorY, len)
         else term.clearSelection()
-        pasteText(e.key === 'ArrowLeft' ? '\x1b[D' : '\x1b[C')
+        pasteText(e.key === 'ArrowLeft' ? '\x1b[D' : '\x1b[C', HUMAN_KEY)
         return false
       }
 
@@ -2641,7 +2646,7 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
         if (selAnchorX < 0) { selAnchorX = curX; selAnchorY = curY }
         if (curX > 0) term.select(0, curY, curX)
         else term.clearSelection()
-        pasteText('\x01')
+        pasteText('\x01', HUMAN_KEY)
         return false
       }
 
@@ -2654,7 +2659,7 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
         const endX = Math.max(lineEnd, curX)
         if (endX > curX) term.select(curX, curY, endX - curX)
         else term.clearSelection()
-        pasteText('\x05')
+        pasteText('\x05', HUMAN_KEY)
         return false
       }
 
@@ -2665,7 +2670,7 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
         const count = Math.abs(curX - selAnchorX)
         if (count > 0) {
           // cursor right of anchor → backspace; cursor left → forward-delete
-          pasteText(curX > selAnchorX ? '\x7f'.repeat(count) : '\x1b[3~'.repeat(count))
+          pasteText(curX > selAnchorX ? '\x7f'.repeat(count) : '\x1b[3~'.repeat(count), HUMAN_KEY)
         }
         selAnchorX = -1; selAnchorY = -1
         term.clearSelection()
@@ -2733,10 +2738,10 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
       // it lives on a window-level listener (see useTerminalFontSize).
 
       // ── macOS cursor shortcuts (no Shift) ──────────────────────────────────
-      if (e.metaKey && !e.shiftKey && e.key === 'Backspace')  { e.preventDefault(); pasteText('\x15'); return false }
-      if (e.metaKey && !e.shiftKey && e.key === 'ArrowLeft')  { e.preventDefault(); pasteText('\x01'); return false }
-      if (e.metaKey && !e.shiftKey && e.key === 'ArrowRight') { e.preventDefault(); pasteText('\x05'); return false }
-      if (e.altKey  && !e.shiftKey && e.key === 'Backspace')  { e.preventDefault(); pasteText('\x17'); return false }
+      if (e.metaKey && !e.shiftKey && e.key === 'Backspace')  { e.preventDefault(); pasteText('\x15', HUMAN_KEY); return false }
+      if (e.metaKey && !e.shiftKey && e.key === 'ArrowLeft')  { e.preventDefault(); pasteText('\x01', HUMAN_KEY); return false }
+      if (e.metaKey && !e.shiftKey && e.key === 'ArrowRight') { e.preventDefault(); pasteText('\x05', HUMAN_KEY); return false }
+      if (e.altKey  && !e.shiftKey && e.key === 'Backspace')  { e.preventDefault(); pasteText('\x17', HUMAN_KEY); return false }
 
       // App reserves Ctrl+1..9 for CLI quick-select (see keybindings/defaults).
       // The central dispatcher normally consumes them, but if it misses (e.g. an
@@ -3455,6 +3460,9 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
   // is still true, so gating that path would deadlock the pane's own startup.
   let _stdinGated = false
   let _gatedInput = ''
+  // True once something in _gatedInput was typed rather than reported by the
+  // terminal, so the flush can carry the human flag the keystrokes would have.
+  let _gatedInputHuman = false
   const GATED_INPUT_MAX = 4096
   /** When the held buffer was last written to, for the staleness bound below. */
   let _gatedInputAt = 0
@@ -3490,16 +3498,19 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
     // prevent, arriving by the one path allowed to hold input.
     if (Date.now() - _gatedInputAt > GATED_INPUT_MAX_AGE_MS) {
       _gatedInput = ''
+      _gatedInputHuman = false
       return
     }
     const pending = _gatedInput
+    const human = _gatedInputHuman
     _gatedInput = ''
+    _gatedInputHuman = false
     // A pane that died while preparing has nowhere to replay to; dropping the
     // buffer is the only option left, and sending would clear isStopped for a
     // session that no longer exists.
     if (!sessionId.value || status.value === 'exited' || status.value === 'error') return
     noteUserInput(pending)
-    void terminalPort.input(sessionId.value, pending)
+    void terminalPort.input(sessionId.value, pending, undefined, human ? { human: true } : undefined)
   }
 
   // Renderer half of the input round-trip. The pane has no local echo, so the
@@ -3548,6 +3559,7 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
         // has already given up on.
         _gatedInput = (_gatedInput + data).slice(-GATED_INPUT_MAX)
         _gatedInputAt = Date.now()
+        if (!isTerminalReport(data)) _gatedInputHuman = true
         return
       }
       // Backstop for the disconnected overlay: refuse rather than queue. The
@@ -3597,7 +3609,9 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
       // every key would never let the lag they are feeling accumulate.
       if (!_keystrokeSentAt && data.length <= 16) _keystrokeSentAt = Date.now()
 
-      void terminalPort.input(sessionId.value, data)
+      // The one path that is the person typing; mouse/focus reports ride the
+      // same event and must not read as a human at the keyboard.
+      void terminalPort.input(sessionId.value, data, undefined, isTerminalReport(data) ? undefined : { human: true })
 
       // An open @-mention menu narrows by what was just typed (this is also
       // how IME-committed text reaches it — see openMentionMenu).
@@ -4217,10 +4231,10 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
   /** Returns false when nothing was sent, so a caller staging a paste in parts
    *  can stop rather than send the tail on its own — an Enter that arrives
    *  without the text it was meant to submit is its own kind of wrong. */
-  function pasteText(text: string): boolean {
+  function pasteText(text: string, opts?: TerminalInputOptions): boolean {
     if (!sessionId.value || status.value === 'exited' || status.value === 'error') return false
     if (!inputTransportReady()) return false
-    void terminalPort.input(sessionId.value, text)
+    void terminalPort.input(sessionId.value, text, undefined, opts)
     return true
   }
 

@@ -1686,7 +1686,7 @@ onUnmounted(() => {
               <span class="link-state">
                 {{ paused ? t('settings.p2p.link.paused') : t('settings.p2p.state-' + state) }}
               </span>
-              <button class="btn ghost small link-btn" :disabled="!!pending || !linkReady" @click="togglePaused" :title="linkWaitReason || undefined">
+              <button class="btn ghost small link-btn" :disabled="!!pending" @click="togglePaused">
                 {{ paused ? t('settings.p2p.link.resume') : t('settings.p2p.link.pause') }}
               </button>
             </div>

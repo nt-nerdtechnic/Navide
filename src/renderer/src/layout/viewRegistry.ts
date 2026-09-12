@@ -44,6 +44,7 @@ export type ViewId =
   | 'plans'
   | 'history'
   | 'tokens'
+  | 'time'
   | 'tasker'
   | 'messages'
   | 'preview'
@@ -83,6 +84,7 @@ export const VIEWS: readonly ViewDescriptor[] = [
   V({ id: 'plans', titleKey: 'label.plans', icon: '\u{1F4CB}', defaultSlot: 'left', allowedSlots: ['left'], preferredAxis: 'any', minSize: 240 }),
   V({ id: 'history', titleKey: 'label.history', icon: '\u{1F4DC}', defaultSlot: 'right', allowedSlots: ['right', 'up', 'down'], preferredAxis: 'any', minSize: 220 }),
   V({ id: 'tokens', titleKey: 'label.tokens', icon: '\u{1F4CA}', defaultSlot: 'right', allowedSlots: ['right'], preferredAxis: 'any', minSize: 200 }),
+  V({ id: 'time', titleKey: 'label.time', icon: '\u23F1', defaultSlot: 'right', allowedSlots: ['right'], preferredAxis: 'any', minSize: 200 }),
   V({ id: 'tasker', titleKey: 'label.tasker', icon: '\u{1F5D3}', defaultSlot: 'right', allowedSlots: ['right', 'up', 'down'], preferredAxis: 'any', minSize: 220 }),
   V({ id: 'messages', titleKey: 'label.messages', icon: '\u{2709}', defaultSlot: 'right', allowedSlots: ['right', 'up', 'down'], preferredAxis: 'any', minSize: 220 }),
   // Not in the original design table: the preview tab landed in the right panel

@@ -46,6 +46,8 @@ export function runTerminalDockContract(createHarness: () => TerminalDockContrac
       expect(harness.port.shell.value).toBe('bash')
 
       await harness.port.input('session-1', 'hello', 11)
+      await harness.port.input('session-1', 'typed', undefined, { human: true })
+      await harness.port.input('session-1', 'pasted', undefined, { human: false })
       await harness.port.create(createRequest(), 22)
       await harness.port.cancelCreate('pane-1', 'generation-1')
       await harness.port.reattach(['session-1'], 120, 32)
@@ -59,6 +61,9 @@ export function runTerminalDockContract(createHarness: () => TerminalDockContrac
 
       expect(harness.sent).toEqual([
         { type: 'terminal.input', payload: { terminal_session_id: 'session-1', data: 'hello' }, timeoutMs: 11 },
+        // Only a true flag reaches the wire — the backend keys off its presence.
+        { type: 'terminal.input', payload: { terminal_session_id: 'session-1', data: 'typed', human: true }, timeoutMs: undefined },
+        { type: 'terminal.input', payload: { terminal_session_id: 'session-1', data: 'pasted' }, timeoutMs: undefined },
         {
           type: 'terminal.create',
           payload: {

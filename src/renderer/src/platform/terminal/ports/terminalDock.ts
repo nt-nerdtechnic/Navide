@@ -48,6 +48,15 @@ export interface TerminalFileListResult {
   files?: string[]
 }
 
+export interface TerminalInputOptions {
+  /** The bytes came from the person at the keyboard (xterm onData minus
+   *  mouse/focus reports, or the mention picker) — never from paste helpers,
+   *  which programmatic injection also rides. The backend counts development
+   *  time off this flag; a port that sees it set forwards it as `human: true`
+   *  and sends nothing at all otherwise. */
+  human?: boolean
+}
+
 export interface TerminalDockPort {
   readonly status: ReactiveValue<'starting' | 'connecting' | 'connected' | 'disconnected' | 'error'>
   readonly shell: ReactiveValue<string>
@@ -58,7 +67,7 @@ export interface TerminalDockPort {
   readonly spawnArgv?: (shell: string, command: string) => string[]
   readonly autoRestart: ReactiveValue<{ attempt: number; max: number; reason: string } | null>
 
-  input(sessionId: string, data: string, timeoutMs?: number): Promise<PortResponse>
+  input(sessionId: string, data: string, timeoutMs?: number, opts?: TerminalInputOptions): Promise<PortResponse>
   create(request: TerminalCreateRequest, timeoutMs: number): Promise<PortResponse<TerminalCreateResult>>
   cancelCreate(paneId: string, createGeneration: string): Promise<PortResponse>
   /** `logs` maps a surviving session id to the transcript it is actually

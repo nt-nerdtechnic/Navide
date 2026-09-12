@@ -41,8 +41,11 @@ def events(monkeypatch) -> list[dict]:
 
 
 def _payload(events: list[dict]) -> dict:
-    assert len(events) == 1, f"expected exactly one broadcast, got {len(events)}"
-    return events[0]["payload"]
+    # The hook may also emit devtime.changed (dev-time heartbeat); only the
+    # agent.activity broadcast is under test here.
+    activity = [e for e in events if e["type"] == "agent.activity"]
+    assert len(activity) == 1, f"expected exactly one broadcast, got {len(events)}"
+    return activity[0]["payload"]
 
 
 def test_notification_forwards_the_type_that_distinguishes_waiting_from_done(

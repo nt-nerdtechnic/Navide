@@ -265,7 +265,7 @@ export function createHostTerminalDockPort(backend: HostBackend): TerminalDockPo
     shell: backend.shell,
     spawnArgv: shellCommandArgv,
     autoRestart: backend.autoRestart,
-    input: (sessionId, data, timeoutMs) => send('terminal.input', { terminal_session_id: sessionId, data }, timeoutMs),
+    input: (sessionId, data, timeoutMs, opts) => send('terminal.input', { terminal_session_id: sessionId, data, ...(opts?.human ? { human: true } : {}) }, timeoutMs),
     create: (request: TerminalCreateRequest, timeoutMs) => send('terminal.create', {
       pane_id: request.paneId,
       create_generation: request.createGeneration,

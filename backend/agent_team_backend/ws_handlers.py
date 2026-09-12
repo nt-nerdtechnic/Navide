@@ -4646,6 +4646,31 @@ async def tokens_reset(session: "Session", msg_id: str, msg_type: str, payload: 
     await app.broadcast(make_event("tokens.changed", snap))
 
 
+@handler("devtime.snapshot")
+async def devtime_snapshot(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    workspace_path = str(payload.get("workspace_path") or "")
+    snap = app.dev_time_store.snapshot(workspace_path)
+    await session.send_json(make_response(msg_id, msg_type, snap))
+    # First look at a workspace: replay its pre-feature Claude transcripts
+    # once, off the loop; the panel hears about the rows via devtime.changed.
+    app.dev_time_store.start_backfill(
+        workspace_path,
+        lambda ws: app.broadcast(make_event("devtime.changed", {"workspace_path": ws})),
+    )
+
+
+@handler("devtime.reset")
+async def devtime_reset(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    workspace_path = str(payload.get("workspace_path") or "")
+    app.dev_time_store.reset(workspace_path)
+    await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
+    await app.broadcast(make_event("devtime.changed", {"workspace_path": workspace_path}))
+
+
 # ── Pipeline history (timeline) (history.*) ─────────────────────────────────
 @handler("history.snapshot")
 async def history_snapshot(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
@@ -5591,8 +5616,19 @@ async def terminal_create_cancel(
 
 @handler("terminal.input")
 async def terminal_input(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
     session.terminals.write(payload["terminal_session_id"], payload["data"])
     await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
+    # A keyboard frame (the renderer flags only those: not mouse/focus reports,
+    # not paste or programmatic injection) is a human dev-time heartbeat for
+    # the pane behind the PTY. human_input never raises.
+    if payload.get("human") is True:
+        term = session.terminals.get(payload["terminal_session_id"])
+        if term is not None:
+            workspace_path = str(term.metadata.get("workspace_path") or term.cwd)
+            if app.dev_time_store.human_input(workspace_path, term.pane_id):
+                await app.broadcast(make_event("devtime.changed", {"workspace_path": workspace_path}))
 
 
 @handler("terminal.memory_usage")
@@ -5867,6 +5903,11 @@ async def terminal_kill(session: "Session", msg_id: str, msg_type: str, payload:
         if app._PTY_OWNERS.get(term_session_id) is session:
             app._PTY_OWNERS.pop(term_session_id, None)
     await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
+    # The process behind the pane is gone (idle reclaim comes through here
+    # too): nothing can beat for it until a respawn, so close its intervals.
+    if pane_id_for_unreg:
+        for workspace_path in app.dev_time_store.pane_removed(pane_id_for_unreg):
+            await app.broadcast(make_event("devtime.changed", {"workspace_path": workspace_path}))
 
 
 @handler("terminal.reattach")
@@ -6827,6 +6868,8 @@ async def _sweep_pane_ptys(session: "Session", pane_id: str) -> None:
         await session.terminals.kill(term_session_id, force=True)
         app._PTY_OWNERS.pop(term_session_id, None)
         app.attribution.unregister_pane(pane_id)
+    for workspace_path in app.dev_time_store.pane_removed(pane_id):
+        await app.broadcast(make_event("devtime.changed", {"workspace_path": workspace_path}))
 
 
 @handler("pipeline.slot_unspawn")

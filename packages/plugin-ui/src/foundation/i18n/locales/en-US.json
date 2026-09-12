@@ -2203,6 +2203,7 @@
     "tokens": "Tokens",
     "tasker": "Schedule",
     "messages": "Messages",
+    "time": "Time",
     "current-run": "Current run",
     "current-session": "This session",
     "no-focused-pane": "No pane in focus",
@@ -2787,6 +2788,24 @@
     "ago-hours": "{count} hour ago | {count} hours ago",
     "ago-days": "{count} day ago | {count} days ago",
     "ago-months": "{count} month ago | {count} months ago"
+  },
+  "devtime": {
+    "title": "Development time",
+    "today": "Today",
+    "last-7d": "7 days",
+    "all": "All time",
+    "sources": "Sources",
+    "human": "Human",
+    "agent": "Agent",
+    "human-only": "Human only",
+    "agent-only": "Agent only",
+    "overlap": "Overlap",
+    "daily": "Last 7 days",
+    "counting": "Counting now",
+    "no-data": "No activity recorded yet",
+    "idle-hint": "Stops counting after {minutes} min idle",
+    "reset-title": "Reset time",
+    "reset-confirm": "Wipe all development-time records for this workspace? This cannot be undone."
   },
   "mention": {
     "group-recent": "Recent",
