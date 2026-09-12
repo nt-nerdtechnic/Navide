@@ -1408,7 +1408,9 @@ describe('PluginBackendSupervisor', () => {
     await supervisor.start()
 
     await expect(supervisor.clientFor(authenticatedRuntime).call('fixture.stderr', null)).resolves.toEqual({ ok: true })
-    expect(stderr).toHaveBeenCalledWith('fixture diagnostic: /private/internal/path\n')
+    // The reply and the stderr line travel on different streams, so the call
+    // can resolve first; wait for the line rather than assuming it landed.
+    await vi.waitFor(() => expect(stderr).toHaveBeenCalledWith('fixture diagnostic: /private/internal/path\n'))
   })
 
   it('emits host-only diagnostic and original cause on sync spawn error before generic failure', async () => {
