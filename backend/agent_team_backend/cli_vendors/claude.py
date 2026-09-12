@@ -720,7 +720,7 @@ async def read_usage_panel(binary: str) -> str:
     a timeout, a non-zero exit with the CLI's first stderr line, or — when the
     exit carried no usage line at all — a note that the CLI needs updating."""
     proc = await asyncio.create_subprocess_exec(
-        binary, *USAGE_ARGS,
+        *osplat.paths.launch_argv(binary, USAGE_ARGS),
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
@@ -923,8 +923,7 @@ async def _run_probe(binary: str, timeout: float) -> tuple[bool, str]:
 
     try:
         proc = await asyncio.create_subprocess_exec(
-            binary,
-            *_PROBE_ARGS,
+            *osplat.paths.launch_argv(binary, _PROBE_ARGS),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             env=_refresh_probe_env(),

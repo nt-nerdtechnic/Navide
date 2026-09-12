@@ -14,6 +14,7 @@ import pytest
 
 from agent_team_backend import app as app_mod
 from agent_team_backend import onboarding_deps as ob
+from agent_team_backend import osplat
 from agent_team_backend.onboarding_deps import Dep
 
 
@@ -22,20 +23,28 @@ _ALIASED = Dep("cursor", "Cursor CLI", "", "agent_cli", ["agent", "--version"],
                install_cmd="curl https://example.invalid/install | bash")
 
 
-def _which(available: dict[str, str]):
-    return lambda name: available.get(Path(name).name)
+def _installed(monkeypatch: pytest.MonkeyPatch, available: dict[str, str]) -> None:
+    """What the launch seam finds on PATH, keyed by the bare command name.
+
+    One patch covers both callers: `onboarding_deps` and `app` now ask
+    `osplat.paths.resolve_program` rather than `shutil.which` each.
+    """
+    monkeypatch.setattr(
+        osplat.paths, "resolve_program",
+        lambda name, *, path=None: available.get(Path(name).name),
+    )
 
 
 # ── alternate executables ────────────────────────────────────────────────────
 def test_resolve_prefers_the_primary_name(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(ob.shutil, "which", _which({
+    _installed(monkeypatch, {
         "agent": "/opt/bin/agent", "cursor-agent": "/opt/bin/cursor-agent",
-    }))
+    })
     assert ob.resolve_executable(_ALIASED) == "/opt/bin/agent"
 
 
 def test_resolve_falls_back_to_the_legacy_name(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(ob.shutil, "which", _which({"cursor-agent": "/opt/bin/cursor-agent"}))
+    _installed(monkeypatch, {"cursor-agent": "/opt/bin/cursor-agent"})
     assert ob.resolve_executable(_ALIASED) == "/opt/bin/cursor-agent"
 
 
@@ -44,7 +53,7 @@ def test_detect_finds_a_cli_installed_under_its_legacy_name(
 ) -> None:
     # The whole point: a machine carrying only `cursor-agent` used to be told
     # "not installed" and offered an install it did not need.
-    monkeypatch.setattr(ob.shutil, "which", _which({"cursor-agent": "/opt/bin/cursor-agent"}))
+    _installed(monkeypatch, {"cursor-agent": "/opt/bin/cursor-agent"})
     probed: list[list[str]] = []
 
     def run(cmd, *_a, **_k):
@@ -62,14 +71,13 @@ def test_registry_declares_the_cursor_alias() -> None:
 
 
 def test_deps_without_an_alias_are_unaffected(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(ob.shutil, "which", _which({}))
+    _installed(monkeypatch, {})
     assert ob.resolve_executable(ob.DEPS_BY_ID["claude"]) == ""
 
 
 # ── spawn command rewriting ──────────────────────────────────────────────────
 def test_spawn_command_switches_to_the_installed_alias(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(app_mod.shutil, "which", _which({"agent": "/opt/bin/agent"}))
-    monkeypatch.setattr(ob.shutil, "which", _which({"agent": "/opt/bin/agent"}))
+    _installed(monkeypatch, {"agent": "/opt/bin/agent"})
     command = ["/bin/zsh", "-ilc", "cursor-agent --resume abc"]
     assert app_mod._command_with_installed_cli_alias("cursor", command) == [
         "/bin/zsh", "-ilc", "/opt/bin/agent --resume abc",
@@ -80,16 +88,35 @@ def test_spawn_command_untouched_when_the_requested_name_exists(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     available = {"cursor-agent": "/opt/bin/cursor-agent", "agent": "/opt/bin/agent"}
-    monkeypatch.setattr(app_mod.shutil, "which", _which(available))
-    monkeypatch.setattr(ob.shutil, "which", _which(available))
+    _installed(monkeypatch, available)
     command = ["/bin/zsh", "-ilc", "cursor-agent --resume abc"]
     assert app_mod._command_with_installed_cli_alias("cursor", command) == command
+
+
+def test_spawn_command_matches_the_name_as_windows_spells_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Windows PATH lookup answers `cursor-agent.cmd`; the rewrite has to
+    recognise that as the pinned name, or the spawn it exists to fix is left
+    pointing at a name this machine does not have."""
+    from agent_team_backend.osplat import _windows
+
+    monkeypatch.setattr(app_mod.osplat, "paths", _windows.paths)
+    monkeypatch.setattr(
+        _windows.paths, "resolve_program",
+        lambda name, *, path=None: r"C:\npm\agent.cmd" if Path(name).stem == "agent" else None,
+    )
+    monkeypatch.setattr(ob, "resolve_executable", lambda _dep: r"C:\npm\agent.cmd")
+    command = ["cmd.exe", "/d", "/c", r"cursor-agent.cmd --resume abc"]
+    assert app_mod._command_with_installed_cli_alias("cursor", command) == [
+        "cmd.exe", "/d", "/c", r"C:\npm\agent.cmd --resume abc",
+    ]
 
 
 def test_spawn_command_untouched_for_a_cli_without_aliases(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(app_mod.shutil, "which", _which({}))
+    _installed(monkeypatch, {})
     command = ["/bin/zsh", "-ilc", "claude --dangerously-skip-permissions"]
     assert app_mod._command_with_installed_cli_alias("claude", command) == command
 
@@ -97,15 +124,13 @@ def test_spawn_command_untouched_for_a_cli_without_aliases(
 def test_spawn_command_untouched_when_nothing_is_installed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(app_mod.shutil, "which", _which({}))
-    monkeypatch.setattr(ob.shutil, "which", _which({}))
+    _installed(monkeypatch, {})
     command = ["/bin/zsh", "-ilc", "cursor-agent"]
     assert app_mod._command_with_installed_cli_alias("cursor", command) == command
 
 
 def test_spawn_probe_accepts_the_legacy_binary(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(app_mod.shutil, "which", _which({"cursor-agent": "/opt/bin/cursor-agent"}))
-    monkeypatch.setattr(ob.shutil, "which", _which({"cursor-agent": "/opt/bin/cursor-agent"}))
+    _installed(monkeypatch, {"cursor-agent": "/opt/bin/cursor-agent"})
     monkeypatch.setattr(
         app_mod.subprocess, "run",
         lambda cmd, *_a, **_k: subprocess.CompletedProcess(cmd, 0, "2026.1.5", ""),

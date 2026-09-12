@@ -8,8 +8,6 @@ import mimetypes
 import os
 import re
 import secrets
-import shlex
-import shutil
 import signal
 import subprocess
 import threading
@@ -2465,6 +2463,21 @@ def _with_replaced_executable(command: Any, text: str, executable: str) -> Any:
     return replaced
 
 
+def _names_a_known_command(program: str, names: "tuple[str, ...]") -> bool:
+    """Whether `program` is one of `names`, as this platform spells them.
+
+    A Windows PATH lookup answers `claude.cmd`, so comparing the bare stem
+    against the pinned name would say no and leave the rewrite undone — the
+    very rewrite that exists to make the spawn work.
+    """
+    spelled = {
+        candidate.casefold()
+        for name in names
+        for candidate in osplat.paths.executable_candidates(name)
+    }
+    return Path(program).name.casefold() in spelled
+
+
 def _command_with_persisted_cli_binary(agent_key: str, command: Any) -> Any:
     """Replace the CLI executable while preserving shell flags and list wrappers."""
     selected = onboarding_deps.cli_binary_override(agent_key)
@@ -2473,10 +2486,10 @@ def _command_with_persisted_cli_binary(agent_key: str, command: Any) -> Any:
         return command
     text = _command_text(command)
     try:
-        parts = shlex.split(text)
-    except ValueError:
+        parts = osplat.terminal_backend.parse_command(text)
+    except (ValueError, OSError):
         return command
-    if not parts or Path(parts[0]).name != dep.check_cmd[0]:
+    if not parts or not _names_a_known_command(parts[0], (dep.check_cmd[0],)):
         return command
     return _with_replaced_executable(command, text, selected)
 
@@ -2494,12 +2507,12 @@ def _command_with_installed_cli_alias(agent_key: str, command: Any) -> Any:
         return command
     text = _command_text(command)
     try:
-        parts = shlex.split(text)
-    except ValueError:
+        parts = osplat.terminal_backend.parse_command(text)
+    except (ValueError, OSError):
         return command
-    if not parts or Path(parts[0]).name not in (dep.check_cmd[0], *dep.alt_commands):
+    if not parts or not _names_a_known_command(parts[0], (dep.check_cmd[0], *dep.alt_commands)):
         return command
-    if shutil.which(parts[0]):
+    if osplat.paths.resolve_program(parts[0]):
         return command  # the requested name resolves — nothing to fix
     installed = onboarding_deps.resolve_executable(dep)
     if not installed:
@@ -2557,13 +2570,13 @@ def _probe_agent_cli_for_spawn(agent_key: str, requested_command: Any = None) ->
         return None
     executable = None
     try:
-        command_parts = shlex.split(_command_text(requested_command))
-    except ValueError:
+        command_parts = osplat.terminal_backend.parse_command(_command_text(requested_command))
+    except (ValueError, OSError):
         command_parts = []
     requested_executable = command_parts[0] if command_parts else ""
     known_names = (dep.check_cmd[0], *dep.alt_commands)
-    if requested_executable and Path(requested_executable).name in known_names:
-        executable = shutil.which(requested_executable)
+    if requested_executable and _names_a_known_command(requested_executable, known_names):
+        executable = osplat.paths.resolve_program(requested_executable)
     executable = executable or onboarding_deps.resolve_executable(dep)
     if not executable:
         raise AgentCliProbeError(
@@ -2579,7 +2592,10 @@ def _probe_agent_cli_for_spawn(agent_key: str, requested_command: Any = None) ->
     executable_display = (
         f"{executable} → {resolved}" if resolved != executable else executable
     )
-    command = [executable, *dep.check_cmd[1:]]
+    # The interpreter included: a Windows CLI installed by npm is a `.cmd`
+    # shim, which only cmd.exe can start. Reported as the probe command too,
+    # so the detail names what actually ran.
+    command = osplat.paths.launch_argv(executable, dep.check_cmd[1:])
     started = time.monotonic()
     try:
         proc = subprocess.run(

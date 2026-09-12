@@ -71,6 +71,8 @@ def askpass_launcher(helper_py: Path, launch_argv: list[str]) -> Path:
 # ---- appended: the members added for the Windows port ------------------------
 
 import os  # noqa: E402
+import shutil  # noqa: E402
+from collections.abc import Sequence  # noqa: E402
 
 
 def executable_candidates(name: str) -> list[str]:
@@ -114,6 +116,27 @@ def shell_command(command: str) -> list[str]:
 
 def quote_arg(arg: str) -> str:
     return shlex.quote(arg)
+
+
+# ---- appended: finding a program and starting it ----------------------------
+
+
+def resolve_program(name_or_path: str, *, path: str | None = None) -> str | None:
+    return shutil.which(name_or_path, path=path)
+
+
+def launch_kind(program: str) -> str:
+    # Nothing to interpret: the kernel reads the shebang, so every runnable
+    # file starts the same way.
+    return "direct"
+
+
+def launch_argv(program: str, args: Sequence[str] = ()) -> list[str]:
+    return [program, *args]
+
+
+def pty_launch_parts(program: str, args: Sequence[str] = ()) -> tuple[str, list[str]]:
+    return program, list(args)
 
 
 # ---- appended: the sh renderings of the scripts the backend writes -----------

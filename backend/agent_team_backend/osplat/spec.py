@@ -18,6 +18,7 @@ degrades to "this panel shows nothing" instead of taking down the request.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Callable, NamedTuple, Protocol
 
@@ -191,6 +192,55 @@ class Paths(Protocol):
         is the MSVCRT convention `cmd.exe` and every Windows program parse.
         A path with a space quoted the POSIX way (`'C:\\a b'`) reaches a
         Windows program with the apostrophes still attached.
+        """
+        ...
+
+    def resolve_program(self, name_or_path: str, *, path: str | None = None) -> str | None:
+        """Where a program called `name_or_path` actually is, or None.
+
+        The one lookup every caller shares, so a stored binary override and a
+        fresh PATH lookup can never disagree about which file they mean. On
+        Windows that means `executable_candidates` order — a bare `claude` is
+        npm's `claude.cmd` shim — and the answer keeps the extension, which is
+        what `launch_kind` needs to read.
+
+        `path` overrides the PATH searched, for a caller that is about to run
+        the child with an environment of its own.
+        """
+        ...
+
+    def launch_kind(self, program: str) -> str:
+        """How this platform has to start `program`: "direct", "cmd" or "powershell".
+
+        Always "direct" on POSIX: the kernel reads the shebang. On Windows
+        `CreateProcess` can only start a real image, so a `.cmd`/`.bat` needs
+        cmd.exe and a `.ps1` needs powershell.exe — which is why handing
+        npm's `claude.cmd` straight to `subprocess` fails with WinError 193.
+        """
+        ...
+
+    def launch_argv(self, program: str, args: Sequence[str] = ()) -> list[str]:
+        """argv that starts `program` with `args`, interpreter included.
+
+        `[program, *args]` wherever `launch_kind` is "direct"; the interpreter
+        and its flags in front of it otherwise. The result goes to
+        `subprocess` unchanged — it is not a shell command line — so a caller
+        never has to quote anything itself.
+        """
+        ...
+
+    def pty_launch_parts(self, program: str, args: Sequence[str] = ()) -> tuple[str, list[str]]:
+        """`launch_argv` split the way a pseudo-terminal spawn wants it.
+
+        ConPTY (through winpty-rs) takes the application name and the rest of
+        the command line separately rather than one argv, so the terminal
+        backend needs the head and the tail apart. Same decision as
+        `launch_argv` otherwise: POSIX hands back `program` and its args
+        untouched, Windows the cmd.exe wrapping.
+
+        Note what the Windows shape costs a pane: a shell sits between the
+        terminal and the CLI, so Ctrl-C reaches cmd.exe first, the exit code
+        is cmd.exe's, and the job object holds one process more.
         """
         ...
 

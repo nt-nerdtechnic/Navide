@@ -2652,6 +2652,73 @@ async def test_grok_billing_rpc_with_fake_stdio(tmp_path, monkeypatch):
     assert windows and windows[0]["usedPercent"] == 10.0
 
 
+async def test_grok_billing_rpc_starts_a_windows_shim_through_cmd(monkeypatch):
+    """`grok` installed by npm is a `.cmd` shim: without cmd.exe in front the
+    RPC never spawns and the badge reports the CLI unavailable."""
+    from agent_team_backend.osplat import _windows
+
+    argv: list[tuple] = []
+
+    class ClosedProc:
+        returncode = 0
+
+        class _Stdin:
+            def write(self, _data): ...
+
+            async def drain(self): ...
+
+        class _Stdout:
+            async def readline(self):
+                return b""
+
+        stdin = _Stdin()
+        stdout = _Stdout()
+
+    async def fake_exec(*a, **_k):
+        argv.append(a)
+        return ClosedProc()
+
+    monkeypatch.setattr(grok_vendor.osplat, "paths", _windows.paths)
+    monkeypatch.setattr(grok_vendor.asyncio, "create_subprocess_exec", fake_exec)
+
+    try:
+        await grok_vendor.grok_billing_rpc(r"C:\npm\grok.cmd")
+    except ConnectionError:
+        pass  # the fake closes stdout at once; the spawn is what is under test
+
+    assert argv[0] == ("cmd.exe", "/d", "/c", r"C:\npm\grok.cmd", "agent", "stdio")
+
+
+async def test_copilot_gh_token_starts_a_windows_shim_through_cmd(monkeypatch):
+    """A scoop- or npm-installed `gh` is a `gh.cmd`, which CreateProcess never
+    finds (it only appends `.exe`) — so the token read used to return None."""
+    from agent_team_backend.osplat import _windows
+
+    argv: list[tuple] = []
+
+    class TokenProc:
+        returncode = 0
+
+        async def communicate(self):
+            return b"gho_shim\n", b""
+
+    async def fake_exec(*a, **_k):
+        argv.append(a)
+        return TokenProc()
+
+    monkeypatch.setattr(copilot_vendor.osplat, "paths", _windows.paths)
+    monkeypatch.setattr(
+        _windows.paths, "resolve_program", lambda _name, *, path=None: r"C:\scoop\gh.cmd"
+    )
+    monkeypatch.setattr(copilot_vendor.asyncio, "create_subprocess_exec", fake_exec)
+
+    assert await copilot_vendor._copilot_gh_token("octo", "github.com") == "gho_shim"
+    assert argv[0] == (
+        "cmd.exe", "/d", "/c", r"C:\scoop\gh.cmd",
+        "auth", "token", "--user", "octo", "--hostname", "github.com",
+    )
+
+
 # ── Codex fetch: stranded in-pane login promotion ───────────────────────────
 
 async def test_fetch_codex_promotes_stranded_pane_login(monkeypatch, tmp_path, set_home):

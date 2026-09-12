@@ -332,7 +332,7 @@ def resolve_executable(dep: Dep) -> str:
     installed CLI as missing and blocks its spawn.
     """
     for name in (dep.check_cmd[0], *dep.alt_commands):
-        found = shutil.which(name)
+        found = osplat.paths.resolve_program(name)
         if found:
             return found
     return ""
@@ -359,7 +359,8 @@ def detect_dep(dep: Dep, quick: bool = False) -> dict[str, Any]:
         started = time.monotonic()
         try:
             proc = subprocess.run(
-                [binary_path, *dep.check_cmd[1:]], capture_output=True, text=True, timeout=8
+                osplat.paths.launch_argv(binary_path, dep.check_cmd[1:]),
+                capture_output=True, text=True, timeout=8,
             )
             duration_ms = max(0, round((time.monotonic() - started) * 1000))
             exit_code = proc.returncode
@@ -456,7 +457,7 @@ def _probe_alternate(dep: Dep, executable: str) -> dict[str, Any]:
     status = "failed"
     try:
         proc = subprocess.run(
-            [executable, *dep.check_cmd[1:]],
+            osplat.paths.launch_argv(executable, dep.check_cmd[1:]),
             capture_output=True,
             text=True,
             timeout=3,

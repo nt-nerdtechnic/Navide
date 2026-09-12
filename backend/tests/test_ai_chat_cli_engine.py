@@ -84,6 +84,23 @@ async def test_run_cli_text_returns_stdout(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 @pytest.mark.asyncio
+async def test_run_cli_text_starts_a_windows_shim_through_cmd(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The editor's rewrite/complete path: the binary it resolves on Windows
+    is npm's `claude.cmd`, which CreateProcess refuses to start."""
+    from agent_team_backend.osplat import _windows
+
+    monkeypatch.setattr(eng.osplat, "paths", _windows.paths)
+    monkeypatch.setattr(eng, "resolve_cli_binary", lambda engine="claude": r"C:\npm\claude.cmd")
+    calls = _spawner(monkeypatch, [FakeTextProc(stdout=b"plain answer\n")])
+
+    assert await eng.run_cli_text("question") == "plain answer"
+    assert calls[0][:4] == ["cmd.exe", "/d", "/c", r"C:\npm\claude.cmd"]
+    assert calls[0][calls[0].index("-p") + 1] == "question"
+
+
+@pytest.mark.asyncio
 async def test_run_cli_text_raises_on_nonzero_exit(monkeypatch: pytest.MonkeyPatch) -> None:
     _spawner(monkeypatch, [FakeTextProc(stderr=b"broken pipes", returncode=2)])
 

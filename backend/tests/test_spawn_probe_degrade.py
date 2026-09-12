@@ -24,8 +24,10 @@ from agent_team_backend.app import (
 
 @pytest.fixture
 def fake_claude(monkeypatch):
-    """Make shutil.which resolve claude to a fake path so the probe runs."""
-    monkeypatch.setattr(app.shutil, "which", lambda _name: "/fake/bin/claude")
+    """Make the launch seam resolve claude to a fake path so the probe runs."""
+    monkeypatch.setattr(
+        app.osplat.paths, "resolve_program", lambda _name, *, path=None: "/fake/bin/claude"
+    )
 
 
 def _run_returns(monkeypatch, *, returncode=0, stdout="2.1.205 (Claude Code)"):
@@ -58,7 +60,9 @@ def test_exec_error_degrades(fake_claude, monkeypatch):
 
 
 def test_missing_binary_still_blocks(monkeypatch):
-    monkeypatch.setattr(app.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(
+        app.osplat.paths, "resolve_program", lambda _name, *, path=None: None
+    )
     with pytest.raises(app.AgentCliProbeError) as ei:
         _probe_agent_cli_for_spawn("claude")
     assert ei.value.details["reason"] == "not_found"

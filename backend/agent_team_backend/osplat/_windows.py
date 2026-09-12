@@ -41,6 +41,7 @@ import subprocess
 import threading
 import time
 from collections import deque
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Callable
 
@@ -1138,6 +1139,51 @@ class WindowsDiscoveryLayout(WindowsLayout):
 
     def quote_arg(self, arg: str) -> str:
         return subprocess.list2cmdline([arg])
+
+    def resolve_program(self, name_or_path: str, *, path: str | None = None) -> str | None:
+        # `shutil.which` consults PATHEXT itself, but only for a bare name and
+        # only on a Windows interpreter: asking it once per candidate gives the
+        # same answer wherever this runs and also extends a stored override
+        # (`C:\...\npm\claude`) to the shim that is actually on disk.
+        for candidate in self.executable_candidates(name_or_path):
+            found = shutil.which(candidate, path=path)
+            if found:
+                return found
+        return None
+
+    def launch_kind(self, program: str) -> str:
+        suffix = Path(program).suffix.lower()
+        if suffix in (".cmd", ".bat"):
+            return "cmd"
+        if suffix == ".ps1":
+            return "powershell"
+        return "direct"
+
+    def launch_argv(self, program: str, args: Sequence[str] = ()) -> list[str]:
+        kind = self.launch_kind(program)
+        if kind == "cmd":
+            # No `/s` here, unlike `shell_command`. `/s` makes cmd strip the
+            # first and the last quote of everything after `/c` — which is
+            # exactly the pair `list2cmdline` puts around a program path that
+            # contains a space, leaving cmd looking for `C:\Program`. Without
+            # it cmd keeps that pair (its documented rule for a command line
+            # whose one quoted token is the name of an executable).
+            # `/d` skips AutoRun, the same reason `shell_command` passes it.
+            return ["cmd.exe", "/d", "/c", program, *args]
+        if kind == "powershell":
+            # `-File` and not `-Command`: `-File` takes the rest of the line as
+            # plain arguments, where `-Command` would re-parse them as
+            # PowerShell source. `-NoProfile` also keeps a user profile from
+            # printing into the script's output.
+            return [
+                "powershell.exe", "-NoLogo", "-NonInteractive", "-NoProfile",
+                "-ExecutionPolicy", "Bypass", "-File", program, *args,
+            ]
+        return [program, *args]
+
+    def pty_launch_parts(self, program: str, args: Sequence[str] = ()) -> tuple[str, list[str]]:
+        argv = self.launch_argv(program, args)
+        return argv[0], argv[1:]
 
 
 class WindowsScheduler:
