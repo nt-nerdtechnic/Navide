@@ -4,9 +4,42 @@ import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+import psutil
+
 from agent_team_backend import osplat
 from agent_team_backend.claude_hooks import _build_curl_command
 from tests import hook_shell
+
+
+def _run_to_completion(
+    argv: list[str], payload: str, *, timeout: float
+) -> subprocess.CompletedProcess[str]:
+    """Run the hook, and on a timeout take its whole tree down with it.
+
+    `subprocess.run` kills only the process it started, so a hook that hangs
+    would leave the curl it spawned behind — and on Windows a survivor of the
+    test session has been enough to stop the CI job from ever finishing.
+    """
+    process = subprocess.Popen(
+        argv,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        stdout, stderr = process.communicate(payload, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            root = psutil.Process(process.pid)
+            for child in root.children(recursive=True):
+                child.kill()
+        except psutil.Error:
+            pass
+        process.kill()
+        process.communicate()
+        raise
+    return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
 
 
 def _run_hook(tmp_path, event_kind: str, body: bytes, endpoint: str = "claude"):
@@ -42,18 +75,19 @@ def _run_hook(tmp_path, event_kind: str, body: bytes, endpoint: str = "claude"):
             pass
 
     server = HTTPServer(("127.0.0.1", 0), Handler)
-    server.timeout = 5
+    # Room for powershell.exe to start on a busy Windows runner — sh returns
+    # long before any of these — but not so much room that a hook which hangs
+    # keeps the suite (and the runner) busy for a minute.
+    server.timeout = 20
     thread = threading.Thread(target=server.handle_request)
     thread.start()
     port_file.write_text(str(server.server_port), encoding="utf-8")
     payload = '{"hook_event_name":"Stop","session_id":"session-1"}'
 
     try:
-        result = subprocess.run(
-            argv, input=payload, text=True, capture_output=True, timeout=10, check=False
-        )
+        result = _run_to_completion(argv, payload, timeout=20)
     finally:
-        thread.join(timeout=6)
+        thread.join(timeout=21)
         server.server_close()
 
     assert received == [payload.encode()]

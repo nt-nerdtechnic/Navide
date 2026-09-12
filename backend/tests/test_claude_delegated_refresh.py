@@ -185,7 +185,10 @@ async def test_missing_cli_is_reported_and_briefly_gated(
     )
 
     assert await dr.attempt(FakeVault()) == dr.OUTCOME_CLI_UNAVAILABLE
-    assert 0 < dr.cooldown_remaining_seconds() <= dr.SHORT_COOLDOWN_S
+    # The bound is approximate on purpose: monotonic() counts from boot, so
+    # (t + 20.0) - t is 20.000000000000057 in float64 on a machine that has
+    # been up a while — as the Windows runner is.
+    assert 0 < dr.cooldown_remaining_seconds() == pytest.approx(dr.SHORT_COOLDOWN_S, abs=0.5)
 
 
 async def test_no_baseline_means_unobservable_and_no_probe(
