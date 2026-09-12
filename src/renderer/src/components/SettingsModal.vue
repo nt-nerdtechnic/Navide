@@ -27,6 +27,7 @@ import {
 } from '../composables/useUsage'
 import { systemNotifyEnabled, setSystemNotifyEnabled } from '../composables/useSystemNotify'
 import { notifySoundEnabled, setNotifySoundEnabled } from '../composables/useSoundNotify'
+import { usePermissions } from '../composables/usePermissions'
 import {
   AUTO_RESUME_ON_RECONNECT_SETTING_KEY,
   RESUME_BEHAVIOR_SETTING_KEY,
@@ -896,6 +897,19 @@ function onNotifySoundEnabledChange(): void {
   setNotifySoundEnabled(notifySoundEnabledModel.value)
 }
 
+// macOS notification permission. Electron cannot read the real TCC state (see
+// main/permissions.ts), so what we show is the last test result; the test
+// button fires a real notification so the user sees for themselves.
+const perms = usePermissions()
+const notifyPermissionStatus = computed(() => perms.statuses.value.notifications)
+const notifyPermissionApplicable = computed(() => notifyPermissionStatus.value !== 'not-applicable')
+function sendTestNotification(): void {
+  void perms.request('notifications', {
+    title: t('onboard.notif-test-title'),
+    body: t('onboard.notif-test-body'),
+  })
+}
+
 // Max resume spawns that run terminal.create concurrently (the rest queue).
 // Read live by useTerminal at spawn time; heavy resume bursts otherwise stack
 // on the backend and time out ("request terminal.create timeout").
@@ -1431,6 +1445,7 @@ onMounted(() => {
   window.addEventListener('keydown', onKeyDown)
   void loadSettingsPaths()
   void loadDetectedEditors()
+  void perms.refresh()
 })
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeyDown)
@@ -2912,6 +2927,22 @@ watch(activeTab, (tab) => {
                     :aria-label="$t('settings.general.notify-sound')"
                     @update:modelValue="onNotifySoundEnabledChange"
                   />
+                </template>
+              </SettingRow>
+
+              <SettingRow
+                v-if="notifyPermissionApplicable"
+                data-settings-section="general-notify-permission"
+                :title="$t('settings.general.notify-permission')"
+                :description="$t(`settings.general.notify-permission-status.${notifyPermissionStatus}`) + ' ' + $t('settings.general.notify-permission-hint')"
+              >
+                <template #control>
+                  <button
+                    class="ap-reset"
+                    :disabled="!!perms.requesting.value"
+                    @click="sendTestNotification"
+                  >{{ perms.requesting.value === 'notifications' ? $t('onboard.requesting') : $t('settings.general.notify-permission-test') }}</button>
+                  <button class="ap-reset" @click="perms.openSettings('notifications')">{{ $t('onboard.open-settings') }}</button>
                 </template>
               </SettingRow>
             </SettingsCard>

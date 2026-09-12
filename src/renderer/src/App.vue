@@ -79,7 +79,7 @@ import { useStages } from './composables/useStages'
 import { usePipelines } from './composables/usePipelines'
 import { useRecentWorkspaces } from './composables/useRecentWorkspaces'
 import { useAnalyzer, type ClassifyResult } from './composables/useAnalyzer'
-import { useSystemNotify } from './composables/useSystemNotify'
+import { isPaneMuted, setPaneMuted, useSystemNotify } from './composables/useSystemNotify'
 import { useUpdater } from './composables/useUpdater'
 import { usePaneReorderDrag } from './composables/usePaneReorderDrag'
 import { cliHealthGuideForLaunch, type CliHealthStatus, type OnboardStatus } from './composables/useOnboarding'
@@ -2989,6 +2989,7 @@ function syncViews(): void {
       sessionId: p.pinnedSessionId,
       slotLabel: p.slotLabel,
       isMinimized: minimizedPanes.value.has(p.id),
+      isMuted: isPaneMuted(p.id),
       loopActive: p.loopActive,
       loopWaitUntil: p.loopWaitUntil,
       rebuildVisible: p.realized && paneRebuildVisible(p),
@@ -8125,6 +8126,7 @@ interface ProjectPane {
   auto_name?: string
   auto_name_source?: string
   is_minimized?: boolean
+  is_muted?: boolean
   collapsed?: boolean
   output_log_file?: string
   stopped?: boolean
@@ -8934,6 +8936,7 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
       if (saved.is_minimized) {
         minimizedPanes.value = new Set([...minimizedPanes.value, saved.pane_id])
       }
+      if (saved.is_muted) setPaneMuted(saved.pane_id, true)
       if (saved.collapsed) {
         collapsedPanes.value = new Set([...collapsedPanes.value, saved.pane_id])
       }
@@ -9005,6 +9008,7 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
       if (saved.is_minimized) {
         minimizedPanes.value = new Set([...minimizedPanes.value, paneId])
       }
+      if (saved.is_muted) setPaneMuted(paneId, true)
       if (saved.collapsed) {
         collapsedPanes.value = new Set([...collapsedPanes.value, paneId])
       }
@@ -9365,6 +9369,7 @@ async function performRealizeRestoredPane(
     const fallbackCommand = isResume ? savedFallbackCommand : stripPinnedSessionId(savedFallbackCommand)
     const commandOverride = resumeCmd || fallbackCommand || ''
     const wasMinimized = minimizedPanes.value.has(paneId)
+    const wasMuted = isPaneMuted(paneId)
     const restored = await spawnRestoredPane({
       saved,
       workspacePath: batch.workspacePath,
@@ -9409,6 +9414,11 @@ async function performRealizeRestoredPane(
     if (wasMinimized) minimized.add(newId)
     minimizedPanes.value = minimized
     if (wasMinimized) persistPaneMinimized(newId, true)
+    setPaneMuted(paneId, false)
+    if (wasMuted) {
+      setPaneMuted(newId, true)
+      persistPaneMuted(newId, true)
+    }
 
     if (saved.stopped) paneRefs[newId]?.setStopped(true)
     return forceFresh ? 'fresh' : 'opened'
@@ -10722,7 +10732,7 @@ function scheduleDoneNotify(paneId: string, timestamp: string): void {
     })) return
     const pane = panes.value.find((p) => p.id === paneId)
     if (!pane) return
-    playDoneSound()
+    if (!isPaneMuted(paneId)) playDoneSound()
     sysNotify.notifyPaneState(
       paneId,
       'done',
@@ -10736,7 +10746,7 @@ function scheduleDoneNotify(paneId: string, timestamp: string): void {
 function notifyAttention(paneId: string): void {
   const pane = panes.value.find((p) => p.id === paneId)
   if (!pane) return
-  playAttentionSound()
+  if (!isPaneMuted(paneId)) playAttentionSound()
   sysNotify.notifyPaneState(
     paneId,
     'attention',
@@ -13155,6 +13165,7 @@ function projectPaneFromActive(pane: ActivePane): ProjectPane {
     auto_name: pane.autoName,
     auto_name_source: pane.autoNameSource,
     is_minimized: minimizedPanes.value.has(pane.id),
+    is_muted: isPaneMuted(pane.id),
     output_log_file: pane.outputLogFile,
     // The realize path rebuilds the launch flags from these two. Leaving them
     // out is silent — the pane comes back on the vendor default, which looks
@@ -14615,6 +14626,26 @@ function persistPaneMinimized(id: string, isMinimized: boolean): void {
     pane_id: pane.id,
     is_minimized: isMinimized,
   })
+}
+
+// Per-pane mute (no desktop notification, no sound; Dock badge still counts).
+// Runtime state lives in useSystemNotify so the gate reads it directly; this
+// mirrors it to project.json the way persistPaneMinimized does.
+function persistPaneMuted(id: string, isMuted: boolean): void {
+  const pane = panes.value.find((p) => p.id === id)
+  if (!pane) return
+  backend.send('project.set_pane_muted', {
+    workspace_path: pane.workspacePath,
+    pane_id: pane.id,
+    is_muted: isMuted,
+  })
+}
+
+function togglePaneMuted(id: string): void {
+  const next = !isPaneMuted(id)
+  setPaneMuted(id, next)
+  persistPaneMuted(id, next)
+  syncViews()
 }
 
 function persistPaneStopped(id: string, stopped: boolean): void {
@@ -16669,6 +16700,7 @@ function paneIsCommander(p: ActivePane): boolean {
           :loop-wait-until="p.loopWaitUntil"
           :loop-estimate-reset-at="p.loopEstimateResetAt"
           :login-expired="p.loginExpired"
+          :muted="isPaneMuted(p.id)"
           :usage-limit-until="p.usageLimitUntil"
           :usage-limit-hit="p.usageLimitAt != null"
           :continue-available="p.resumeContinueAvailable"
@@ -16686,6 +16718,7 @@ function paneIsCommander(p: ActivePane): boolean {
           @toggle-loop="(skillId?: string) => togglePaneLoop(p.id, skillId)"
           @loop-resume-now="resumeLoopNow(p.id)"
           @fix-login="fixPaneLogin(p.id)"
+          @toggle-mute="togglePaneMuted(p.id)"
           @continue-resume="continueRestoredPane(p.id)"
           @user-resume="persistPaneStopped(p.id, false)"
           @pty-lost="onPanePtyLost(p.id)"
@@ -17087,6 +17120,7 @@ function paneIsCommander(p: ActivePane): boolean {
           @click="restorePane(paneCtxMenu!.paneId); closePaneCtxMenu()"
         >{{ $t('action.restore') }}</div>
         <div class="pane-ctx-item" @click="startRenamePane(paneCtxMenu!.paneId)">{{ $t('action.rename') }}</div>
+        <div class="pane-ctx-item" @click="togglePaneMuted(paneCtxMenu!.paneId); closePaneCtxMenu()">{{ paneCtxView?.isMuted ? $t('action.unmute') : $t('action.mute') }}</div>
         <div
           class="pane-ctx-item"
           :class="{ disabled: !ctxMentionAddress }"

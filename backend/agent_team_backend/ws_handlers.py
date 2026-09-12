@@ -6064,6 +6064,20 @@ async def project_set_pane_minimized(session: "Session", msg_id: str, msg_type: 
     await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
 
 
+@handler("project.set_pane_muted")
+async def project_set_pane_muted(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """Per-pane mute: the renderer stops this pane's desktop notification and
+    sound; persisted so a restart keeps the pane quiet."""
+    from . import app
+
+    ws_raw = payload.get("workspace_path", "") or ""
+    pane_id = payload.get("pane_id", "") or ""
+    is_muted = bool(payload.get("is_muted", False))
+    if ws_raw and pane_id:
+        app.project_store.set_pane_muted(ws_raw, pane_id=pane_id, is_muted=is_muted)
+    await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
+
+
 @handler("project.set_pane_collapsed")
 async def project_set_pane_collapsed(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     """Whether this pane's lineage subtree is folded in the agent lists."""

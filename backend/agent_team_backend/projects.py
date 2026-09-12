@@ -129,6 +129,7 @@ class PaneRecord:
     output_log_file: str = ""       # conversation log path recorded at spawn time
     stopped: bool = False           # STOP badge: a stop action was issued and the user hasn't taken over yet
     is_minimized: bool = False      # collapsed to the sidebar. The renderer has been sending this since the feature shipped; the handler was missing, so it never persisted.
+    is_muted: bool = False          # per-pane mute: no desktop notification and no sound for this pane; the Dock badge still counts it
     collapsed: bool = False         # lineage subtree folded in the agent lists. Lives here, not in a Project-level id set: pane_id is regenerated every restart, so such a set would silently empty itself.
 
 
@@ -1202,6 +1203,22 @@ class ProjectStore:
         if pane is None:
             return project
         pane.is_minimized = is_minimized
+        self.save(project)
+        return project
+
+    def set_pane_muted(
+        self,
+        workspace_path: str,
+        *,
+        pane_id: str,
+        is_muted: bool,
+    ) -> Project:
+        """Persist the per-pane mute. No-op if pane not found."""
+        project = self.load_or_create(workspace_path)
+        pane = next((p for p in project.panes if p.pane_id == pane_id), None)
+        if pane is None:
+            return project
+        pane.is_muted = is_muted
         self.save(project)
         return project
 

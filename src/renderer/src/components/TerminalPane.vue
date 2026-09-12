@@ -70,6 +70,9 @@ interface Props {
   /** Runtime-only login-expired badge — lit when the pane's CLI reported an
    *  expired login; clicking it asks App.vue to re-send the login command. */
   loginExpired?: boolean
+  /** The user muted this pane: no desktop notification and no sound from it.
+   *  Shown as a 🔇 badge; clicking it asks App.vue to unmute. */
+  muted?: boolean
   /** Runtime-only quota badge — lit while this pane's CLI has announced it is
    *  out of quota. `usageLimitUntil` is when it comes back, or null when no
    *  reset time could be resolved (the badge then says so instead of naming a
@@ -101,6 +104,7 @@ const props = defineProps<Props>()
 const emit = defineEmits<{
   (e: 'set-focus', ev?: MouseEvent): void
   (e: 'minimize'): void
+  (e: 'toggle-mute'): void
   (e: 'rebuild'): void
   (e: 'rebuild-clean'): void
   (e: 'rename', name: string): void
@@ -619,6 +623,13 @@ onMounted(() => {
           >∞</button>
         </PromptSkillPicker>
         <span
+          v-if="muted"
+          class="muted-inline"
+          role="button"
+          :title="$t('pane.terminal.muted-tooltip')"
+          @click.stop="emit('toggle-mute')"
+        ><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8.7 3A6 6 0 0 1 18 8a21.3 21.3 0 0 0 .6 5"></path><path d="M17 17H3s3-2 3-9a4.67 4.67 0 0 1 .3-1.7"></path><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"></path><line x1="2" y1="2" x2="22" y2="22"></line></svg></span>
+        <span
           v-if="loginExpired"
           class="login-expired-inline"
           role="button"
@@ -883,6 +894,16 @@ onMounted(() => {
 .loop-inline.waiting:hover {
   opacity: 1;
   border-color: var(--success-fg);
+}
+.muted-inline {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.muted-inline:hover {
+  color: var(--text-primary);
 }
 .login-expired-inline {
   font-size: var(--font-3xs);

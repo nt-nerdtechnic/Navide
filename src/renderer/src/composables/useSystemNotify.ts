@@ -62,7 +62,25 @@ const lastKindByPane = new Map<string, NotifyKind>()
 // on markSeen (user switched to the pane), markActive (new turn superseded the
 // pending state), and forgetPane.
 const pendingPanes = ref(new Set<string>())
+// Panes the user muted (pane context menu / header badge). A muted pane never
+// reaches the OS notification or the sound, but still counts toward the Dock
+// badge — like the global toggles, mute means "don't interrupt me", not "don't
+// record it". Persisted per pane by App.vue (PaneRecord.is_muted); this set is
+// the runtime mirror the gate reads.
+const mutedPanes = ref(new Set<string>())
 let listenersBound = false
+
+export function isPaneMuted(paneId: string): boolean {
+  return mutedPanes.value.has(paneId)
+}
+
+export function setPaneMuted(paneId: string, muted: boolean): void {
+  if (mutedPanes.value.has(paneId) === muted) return
+  const next = new Set(mutedPanes.value)
+  if (muted) next.add(paneId)
+  else next.delete(paneId)
+  mutedPanes.value = next
+}
 
 function bindFocusListeners(): void {
   if (listenersBound || typeof window === 'undefined') return
@@ -85,8 +103,10 @@ function notifyPaneState(
 ): void {
   bindFocusListeners()
   pendingPanes.value.add(paneId)
-  // Disabled short-circuits before dedup is recorded, so re-enabling lets the
-  // very next signal through instead of treating it as a repeat.
+  // Muted panes and the disabled toggle both short-circuit before dedup is
+  // recorded, so unmuting / re-enabling lets the very next signal through
+  // instead of treating it as a repeat.
+  if (mutedPanes.value.has(paneId)) return
   if (!shouldNotify({
     appFocused: appFocused.value,
     lastKind: lastKindByPane.get(paneId),
@@ -116,10 +136,11 @@ function markSeen(paneId: string): void {
   pendingPanes.value.delete(paneId)
 }
 
-/** A pane was removed: drop its dedup and pending state. */
+/** A pane was removed: drop its dedup, pending and mute state. */
 function forgetPane(paneId: string): void {
   lastKindByPane.delete(paneId)
   pendingPanes.value.delete(paneId)
+  setPaneMuted(paneId, false)
 }
 
 const pendingCount = computed(() => pendingPanes.value.size)
@@ -129,6 +150,9 @@ export function useSystemNotify() {
   return {
     appFocused: readonly(appFocused),
     pendingCount,
+    mutedPanes: readonly(mutedPanes),
+    isPaneMuted,
+    setPaneMuted,
     notifyPaneState,
     markActive,
     markSeen,
