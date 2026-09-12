@@ -306,11 +306,26 @@ class TestWindowsAclForReal:
     """The one check that runs `icacls` against the file it just protected.
 
     Everything above stubs the call; this is what proves the flags mean what
-    the command shape claims — that after `write_private_plain` no account but
-    this one appears in the file's DACL.
+    the command shape claims — that after `write_private_plain` no *user*
+    account but this one can reach the file.
+
+    The machine's own principals are not user accounts and they stay. A file
+    created here carries SYSTEM, and for an administrator the local
+    Administrators group, as *explicit* ACEs taken from the creating process
+    token's default DACL: `/inheritance:r` does not touch them because they
+    were never inherited, and `/grant:r` rewrites only the entry it names.
+    Removing them would buy nothing anyway — an administrator holds
+    SeTakeOwnership and can put any DACL back — so this is the same boundary
+    0600 draws on POSIX, where root reads the file too. What must never appear
+    is a second person.
     """
 
-    def test_only_the_current_user_appears_in_the_dacl(self, tmp_path):
+    #: What the OS itself and its administrators are called, as an en-US
+    #: Windows prints them; a localized box would need the SIDs (S-1-5-18,
+    #: S-1-5-32-544) resolved instead, and neither CI nor a dev box is one.
+    _MACHINE_PRINCIPALS = {"nt authority\\system", "builtin\\administrators"}
+
+    def test_no_other_user_account_appears_in_the_dacl(self, tmp_path):
         path = tmp_path / "backend-ws-token"
         osplat.secret_files.write_private_plain(path, b"tok")
         assert path.read_bytes() == b"tok"
@@ -319,7 +334,7 @@ class TestWindowsAclForReal:
         )
         assert proc.returncode == 0, proc.stderr
         # `icacls <file>` prints the path, then one `ACCOUNT:(rights)` entry
-        # per ACE, then a summary line. Every ACE has to name this account.
+        # per ACE, then a summary line.
         aces = []
         for line in proc.stdout.splitlines():
             text = line.replace(str(path), "", 1).strip()
@@ -329,8 +344,15 @@ class TestWindowsAclForReal:
         assert aces, f"no ACE printed: {proc.stdout!r}"
         user = _windows._current_user()
         assert user
+
+        def account_of(ace: str) -> str:
+            return ace.split(":", 1)[0]
+
+        mine = [a for a in aces if account_of(a).split("\\")[-1].casefold() == user.casefold()]
+        assert mine, f"this account cannot reach its own secret: {aces!r}"
         for ace in aces:
-            account = ace.split(":", 1)[0]
-            assert account.split("\\")[-1].casefold() == user.casefold(), (
-                f"unexpected account in the DACL: {ace!r}"
+            if ace in mine:
+                continue
+            assert account_of(ace).casefold() in self._MACHINE_PRINCIPALS, (
+                f"a third party is in the DACL: {ace!r}"
             )

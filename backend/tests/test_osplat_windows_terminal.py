@@ -570,6 +570,45 @@ class TestHandle:
         handle._pump.join(1)
         assert not handle._watcher.is_alive() and not handle._pump.is_alive()
 
+    def test_a_chunk_delivered_into_a_closed_loop_ends_the_pump_quietly(
+        self, monkeypatch
+    ):
+        """A pane's loop can go away before its pump does — window close, app
+        shutdown. POSIX reaches that moment with an `add_reader` callback the
+        loop simply stops calling; here it is a cross-thread call into a closed
+        loop, and it must end the pump rather than escape as a thread exception.
+        """
+        import threading
+
+        caught: list[object] = []
+        monkeypatch.setattr(threading, "excepthook", lambda args: caught.append(args))
+
+        pty = _FakePTY(80, 24)
+        parked = threading.Event()
+        opened = threading.Event()
+        pending = ["late output"]
+
+        def read(blocking: bool = False) -> str:
+            opened.set()
+            parked.wait(5)
+            if not pending:
+                raise RuntimeError("Standard out reached EOF")
+            return pending.pop(0)
+
+        pty.read = read  # type: ignore[method-assign]
+        handle = _handle(pty)
+        # A loop of its own: this one is closed under the pump, which is what
+        # the running test loop must not have done to it.
+        loop = asyncio.new_event_loop()
+        handle.start_reading(loop, lambda: None)
+        assert opened.wait(5), "the pump never reached its first read"
+        loop.close()
+        parked.set()
+
+        handle._pump.join(5)
+        assert not handle._pump.is_alive(), "the pump outlived the loop it fed"
+        assert not caught, f"the pump raised on its way out: {caught!r}"
+
     def test_read_without_data_blocks_and_none_at_eof(self):
         handle = _handle(_FakePTY(80, 24))
         with pytest.raises(BlockingIOError):

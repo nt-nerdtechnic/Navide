@@ -652,7 +652,18 @@ class WindowsTerminalHandle:
             ):
                 return
             self._scheduled = True
-        loop.call_soon_threadsafe(self._deliver)
+        try:
+            loop.call_soon_threadsafe(self._deliver)
+        except RuntimeError:
+            # The pane's loop went away before its pump did — a window closing,
+            # or shutdown. POSIX reaches this moment with an `add_reader`
+            # callback the loop simply stops calling; here it is a cross-thread
+            # call into a closed loop, which raises on the pump thread. Nothing
+            # can be delivered any more, so end the pump the way `close()`
+            # would rather than let it surface as a thread exception.
+            with self._lock:
+                self._scheduled = False
+                self._closed = True
 
     def _deliver(self) -> None:
         with self._lock:
@@ -984,6 +995,16 @@ def _restrict_to_owner(path: Path, *, container: bool) -> None:
     account rather than adding a second ACE, so calling this twice is the same
     as calling it once. A directory also takes `(OI)(CI)` so the files created
     inside it start owner-only too.
+
+    What is left behind is the machine itself: SYSTEM, and on an administrator
+    account the local Administrators group, arrive on a new file as *explicit*
+    ACEs off the creating token's default DACL, so `/inheritance:r` has nothing
+    to remove and `/grant:r` only rewrites the entry it names. That is the
+    boundary this draws, and it is the one `0600` draws on POSIX: no other
+    person, rather than nobody at all — an administrator holds
+    SeTakeOwnershipPrivilege and can put any DACL back whatever is written
+    here, so spending a `/remove` on them would cost backup and system access
+    and buy no confidentiality.
 
     Never raises. The secret is already written and correct at this point; a
     box where `icacls` is missing or refuses must still start, with the failure

@@ -55,6 +55,10 @@ def spawn(tmp_path):
 
     for handle in handles:
         try:
+            # Before close, and before this test's loop goes: the pump runs on
+            # a thread of its own and a chunk arriving after the loop is closed
+            # would otherwise be delivered into it.
+            handle.stop_reading()
             handle.close()
         except Exception:  # noqa: BLE001 - teardown must not mask a failure
             pass
@@ -108,6 +112,10 @@ async def _drain_until(
         outcome = await asyncio.wait_for(done, timeout_s)
     except (asyncio.TimeoutError, TimeoutError):
         outcome = "timeout"
+    finally:
+        # Always, including the timeout path: this loop is about to be closed
+        # by the test that owns it, and the pump is still on its own thread.
+        handle.stop_reading()
     return outcome, b"".join(seen)
 
 
