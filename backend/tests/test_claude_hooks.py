@@ -76,18 +76,19 @@ def _run_hook(tmp_path, event_kind: str, body: bytes, endpoint: str = "claude"):
 
     server = HTTPServer(("127.0.0.1", 0), Handler)
     # Room for powershell.exe to start on a busy Windows runner — sh returns
-    # long before any of these — but not so much room that a hook which hangs
-    # keeps the suite (and the runner) busy for a minute.
-    server.timeout = 20
+    # long before any of these. The cap was kept short while a hung hook could
+    # leave its curl behind and stall the whole job; _run_to_completion takes
+    # the tree down now, so a slow start no longer has to look like a failure.
+    server.timeout = 45
     thread = threading.Thread(target=server.handle_request)
     thread.start()
     port_file.write_text(str(server.server_port), encoding="utf-8")
     payload = '{"hook_event_name":"Stop","session_id":"session-1"}'
 
     try:
-        result = _run_to_completion(argv, payload, timeout=20)
+        result = _run_to_completion(argv, payload, timeout=45)
     finally:
-        thread.join(timeout=21)
+        thread.join(timeout=46)
         server.server_close()
 
     assert received == [payload.encode()]
