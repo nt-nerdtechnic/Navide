@@ -134,6 +134,13 @@ describe('buildPaneStatusReply', () => {
     })
   })
 
+  it('reports waiting for a cold-restore placeholder and starting for a realized pane with no ref', () => {
+    // A placeholder has no CLI and will not get one on its own; a realized
+    // pane with no ref yet is genuinely booting. Same missing ref, two states.
+    expect(buildPaneStatusReply({ realized: false }, null).status).toBe('waiting')
+    expect(buildPaneStatusReply({ realized: true }, null).status).toBe('starting')
+  })
+
   it('reports the live status and buffer for a realized pane', () => {
     expect(
       buildPaneStatusReply({ outputLogFile: '/ws/x.log' }, { displayStatus: 'running', buffer: 'hello' })

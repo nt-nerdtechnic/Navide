@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   createWorkspaceRestoreSession,
+  explicitRestoreDecision,
   normalizeAutoResumeOnReconnect,
   normalizeResumeBehavior,
   normalizeRestoreScope,
@@ -243,5 +244,38 @@ describe('workspace restore session', () => {
     const session = create('always', 'single')
     settleWorkspaceRestoreSession(session, 'fresh')
     expect(session).toMatchObject({ behavior: 'always', scope: 'single', decision: 'fresh' })
+  })
+
+  describe('explicitRestoreDecision', () => {
+    it('resumes an undecided or cancelled session without settling it', () => {
+      // Naming one pane answers "which ones", so ask collapses to resume — but
+      // the workspace-wide question stays open for the user's own next click.
+      const undecided = create('ask')
+      expect(explicitRestoreDecision(undecided)).toBe('resume')
+      expect(undecided.decision).toBeUndefined()
+
+      const cancelled = create('ask')
+      settleWorkspaceRestoreSession(cancelled, 'cancelled')
+      expect(explicitRestoreDecision(cancelled)).toBe('resume')
+      expect(cancelled.decision).toBe('cancelled')
+    })
+
+    it('keeps a decision the user already made', () => {
+      const resume = create('ask')
+      settleWorkspaceRestoreSession(resume, 'resume', 'page')
+      expect(explicitRestoreDecision(resume)).toBe('resume')
+      const fresh = create('never')
+      settleWorkspaceRestoreSession(fresh, 'fresh')
+      expect(explicitRestoreDecision(fresh)).toBe('fresh')
+      expect(fresh.decision).toBe('fresh')
+    })
+
+    it('opens fresh, not resumed, when the user chose never and nothing is settled yet', () => {
+      // A pane reclaimed while idle can leave the session undecided. The agent
+      // naming it must not turn `never` into a resume of the old conversation.
+      const never = create('never')
+      expect(explicitRestoreDecision(never)).toBe('fresh')
+      expect(never.decision).toBeUndefined()
+    })
   })
 })

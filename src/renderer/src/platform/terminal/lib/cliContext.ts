@@ -565,11 +565,16 @@ export interface PaneStatusReply {
  *  buffer text — null when the pane exists but hasn't realized its
  *  TerminalPane ref yet (still shows a status, but no scrollback). */
 export function buildPaneStatusReply(
-  pane: { outputLogFile?: string; kickoffStatus?: string } | undefined,
+  pane: { outputLogFile?: string; kickoffStatus?: string; realized?: boolean } | undefined,
   live: { displayStatus?: string; awaitingKind?: string | null; buffer: string } | null
 ): PaneStatusReply {
+  // No ref means one of two things, and they used to share a word. A
+  // cold-restore placeholder (realized false) has no CLI at all and stays that
+  // way until someone opens it — 'waiting'; a realized pane whose ref has not
+  // mounted yet really is booting — 'starting'.
+  const status = pane?.realized === false ? 'waiting' : (live?.displayStatus ?? 'starting')
   const reply: PaneStatusReply = {
-    status: live?.displayStatus ?? 'starting',
+    status,
     buffer: live ? bufferTail(live.buffer, CLI_PASTE_BUFFER_CAP) : '',
     logPath: pane?.outputLogFile || undefined
   }

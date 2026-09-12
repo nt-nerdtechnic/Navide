@@ -134,7 +134,7 @@ export const ALL_SCOPE_RESTORE_CONCURRENCY = 2
 export async function runWithConcurrency(
   ids: readonly string[],
   limit: number,
-  task: (id: string) => Promise<void>,
+  task: (id: string) => Promise<unknown>,
 ): Promise<void> {
   let next = 0
   const worker = async (): Promise<void> => {
@@ -194,4 +194,18 @@ export async function resolveWorkspaceRestoreSession(opts: {
   if (selection === null) return settleWorkspaceRestoreSession(opts.session, 'cancelled')
   if (selection === 'fresh') return settleWorkspaceRestoreSession(opts.session, 'fresh')
   return settleWorkspaceRestoreSession(opts.session, 'resume', selection)
+}
+
+/** The decision for a restore an agent asked for BY NAME — one pane, through
+ *  ui.pane.open — as opposed to the workspace-wide question the modal asks.
+ *  Naming the pane already answers "which ones", so `ask` collapses to a
+ *  single-pane resume without the modal. Deliberately does NOT settle the
+ *  session: the user's own next click on a different placeholder is still
+ *  asked, exactly as before. A decision the user already made stands, and so
+ *  does `never`: an agent's request is not a licence to resume a conversation
+ *  the user said should never be resumed — it opens fresh, as their click
+ *  would have. */
+export function explicitRestoreDecision(session: WorkspaceRestoreSession): RestoreSessionDecision {
+  if (session.decision === 'resume' || session.decision === 'fresh') return session.decision
+  return session.behavior === 'never' ? 'fresh' : 'resume'
 }

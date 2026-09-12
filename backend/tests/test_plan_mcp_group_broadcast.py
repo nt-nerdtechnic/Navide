@@ -297,3 +297,35 @@ async def test_a_broadcast_that_is_not_a_reply_carries_no_such_key(
     await task
 
     assert delivered and all("reply_to" not in e["payload"] for e in delivered)
+
+
+@pytest.mark.asyncio
+async def test_an_ack_broadcast_reaches_every_peer_as_an_ack(
+    delivered: list[dict[str, Any]],
+) -> None:
+    """The group path dropped `kind` while `reply_to` travelled, so an ack
+    addressed to the group was silently downgraded and typed into every peer —
+    the opposite of what the caller asked for, and to more panes at once."""
+    _seed()
+    task = asyncio.create_task(
+        _answer_peers([{"pane_id": "pb", "name": "mate-1"}, {"pane_id": "pc", "name": "mate-2"}])
+    )
+    result = await plan_mcp.cli_send("group", "got it", _pane_ctx(), kind="ack")
+    await task
+
+    assert result["ok"] is True
+    assert [e["payload"]["kind"] for e in delivered] == ["ack", "ack"]
+
+
+@pytest.mark.asyncio
+async def test_an_ordinary_broadcast_still_carries_no_kind(
+    delivered: list[dict[str, Any]],
+) -> None:
+    """Same guard as the direct send: the payload every existing caller already
+    produces must not gain a key."""
+    _seed()
+    task = asyncio.create_task(_answer_peers([{"pane_id": "pb", "name": "mate-1"}]))
+    await plan_mcp.cli_send("group", "stand up", _pane_ctx())
+    await task
+
+    assert delivered and all("kind" not in e["payload"] for e in delivered)

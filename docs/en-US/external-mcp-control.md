@@ -95,8 +95,8 @@ documents the addresses, the idle gate and the guard rails they share.
 
 | Tool | Parameters | What it does |
 |---|---|---|
-| `cli_list_targets` | — | List addressable CLI panes: `name`, `address`, `pane_id` (the key every `ui.pane.*` action takes, and an alternative to `address` on the pane tools below), `workspace_path`, `same_workspace`, `busy`, `hold_reason?` |
-| `cli_whoami` | — | **CLI panes only.** Your own identity, in the same shape the roster describes a peer: `{ok, caller, name, address, pane_id, workspace_path, agent_key, busy, offline, hold_reason?, spawned_by?, waiting_on_me?}`. `pane_id` is what every `ui.pane.*` action takes, so this is what lets a pane act on itself; `spawned_by` names the pane that opened you (`{pane_id, gone: true}` once it has closed) |
+| `cli_list_targets` | — | List addressable CLI panes: `name`, `address`, `pane_id` (the key every `ui.pane.*` action takes, and an alternative to `address` on the pane tools below), `workspace_path`, `same_workspace`, `busy`, `realized` (false for a restore placeholder: no CLI is running behind it, so it is busy forever and a message parks until someone opens it — `ui.pane.open`, or `cli_send(open_target=true)`), `hold_reason?` |
+| `cli_whoami` | — | **CLI panes only.** Your own identity, in the same shape the roster describes a peer: `{ok, caller, name, address, pane_id, workspace_path, agent_key, busy, offline, realized, hold_reason?, spawned_by?, waiting_on_me?}`. `pane_id` is what every `ui.pane.*` action takes, so this is what lets a pane act on itself; `spawned_by` names the pane that opened you (`{pane_id, gone: true}` once it has closed) |
 | `cli_send` | `to` (a pane address, or `"group"` to broadcast), `text`, `wait_for_delivery_s=0` (capped at 120), `pane_id?`, `reply_to?` | Deliver an instruction to another pane once it's idle (queued if busy); returns `msg_key`, and with a wait, what became of it |
 | `cli_check_message` | `msg_key` | What became of one `cli_send`: `{status, target, age_seconds, reason?, settled_after_s?, hold?, held_for_s?, stale?}` |
 | `cli_cancel_message` | `msg_key` | Withdraw a message you sent, if it has not gone in yet. Decided by the window owning the recipient's queue: still waiting → dropped and the status becomes `cancelled`; delivery already started → the withdrawal is ignored and you are told what it settled as. A withdrawal is not a failure and writes no notice back to you. Returns `{ok, msg_key, status, reason?}` |
@@ -356,6 +356,7 @@ documented argument shapes.
 | `ui.pane.create` | `{agent, name?, task?}` | Spawn a pane for `agent` in the window's open workspace; `task`, if given, is sent as the kickoff prompt and skips role injection |
 | `ui.pane.close` | `{paneId}` | Kill a pane |
 | `ui.pane.focus` | `{paneId}` | Reveal and focus a pane (switches tab if needed) |
+| `ui.pane.open` | `{paneId}` | Open a restore placeholder (a pane whose `cli_list_targets` row says `realized: false`) and wait for it. Returns `{realized, reason, paneId}` — `paneId` is the id the pane is known by afterwards, `reason` is `opened`, `fresh` (a new session, no memory of the old one), `already-open`, or why it stayed closed. Under resume behavior `ask` it does not raise the modal |
 | `ui.pane.getStatus` | `{paneId}` | Returns `{status, buffer, logPath?}` for that pane |
 | `ui.pane.interrupt` | `{paneId}` | Press that pane's interrupt key. Returns `{sent, status, advisories?}` — the status is read *before* the press, because the press changes the very thing being reported |
 | `ui.tab.switch` | `{tabId}` | Switch the active stage/run-group tab |

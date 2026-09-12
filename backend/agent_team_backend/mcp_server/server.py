@@ -59,6 +59,20 @@ ROUTE_METHODS = ["GET", "POST", "DELETE"]
 
 PLANS_REL_DIR = ".agent-team/plans"
 
+# The one sentence that decides where delegated work goes. It is quoted in the
+# server instructions, in cli_open_agent's docstring and in cli_whoami's
+# `delegation_hint`, and a test pins all three to this constant so the rule
+# cannot drift into three slightly different rules.
+DELEGATION_RULE = (
+    "Delegation rule: work that edits files, runs longer than a few minutes, "
+    "or that the user may want to watch, interrupt or take over goes to a "
+    "Navide CLI pane via cli_open_agent — not to your own subagent facility "
+    "(Agent / Task tools). A pane is visible in Navide, can be opened mid-run "
+    "and outlives your session; a subagent is a black box that hands back one "
+    "summary. Keep subagents for short read-only lookups whose whole result "
+    "is a paragraph."
+)
+
 server = FastMCP(
     name="navide",
     instructions=(
@@ -98,9 +112,10 @@ server = FastMCP(
         "CLI agent Navide is running — in this workspace or in another "
         "workspace window — with cli_send. Call cli_list_targets first to see "
         "who exists and how to address them (a bare pane name in your own "
-        "workspace, `<folder>/<pane>` for another one). Use it when the user "
-        "asks you to hand work to, ask something of, or coordinate with "
-        "another pane or project; delivery is queued until that pane is idle, "
+        "workspace, `<folder>/<pane>` for another one). Use it to hand work "
+        "to, ask something of, or coordinate with another pane or project — "
+        "on your own judgment, not only when the user asks you to; delivery "
+        "is queued until that pane is idle, "
         "so cli_send returns before the other agent has read anything. It "
         "returns a msg_key — pass it to cli_check_message to find out whether "
         "the message was delivered, refused (with a reason) or still queued. "
@@ -137,8 +152,8 @@ server = FastMCP(
         "silent, so check what it actually said before trusting it.\n"
         "\n"
         "Delegating to a new agent: cli_open_agent opens a fresh CLI pane and "
-        "hands it a task. Use it when work is better done in parallel or by a "
-        "different CLI than yours; the new pane is asked to report back to you "
+        "hands it a task. " + DELEGATION_RULE + " The new pane is asked to "
+        "report back to you "
         "by message when it finishes, but that report is the child's own "
         "output rather than something Navide guarantees — it waits until you "
         "are between turns, and it never arrives at all if the child does not "
@@ -392,6 +407,11 @@ def _target_view(entry: Any, same_workspace: bool) -> dict[str, Any]:
         "same_workspace": same_workspace,
         "busy": entry.busy,
         "offline": entry.offline,
+        # False for a cold-restore placeholder: the window holds the saved pane
+        # but no CLI is running behind it, so it reads as busy forever and a
+        # message for it parks until someone opens it. Open it with ui.pane.open
+        # (ui_invoke) or cli_send(open_target=True).
+        "realized": entry.realized,
     }
     # Absent, not null, when nothing is queued for the pane: a target with no
     # message in flight has no hold to report, and an explicit null would read
@@ -702,8 +722,17 @@ async def cli_open_agent(
     workspace_path: str = "",
     model: str = "",
     effort: str = "",
+    pane_id: str = "",
 ) -> dict[str, Any]:
     """Open a new CLI pane and give it a task.
+
+    Delegation rule: work that edits files, runs longer than a few minutes, or
+    that the user may want to watch, interrupt or take over goes to a Navide
+    CLI pane via cli_open_agent — not to your own subagent facility (Agent /
+    Task tools). A pane is visible in Navide, can be opened mid-run and
+    outlives your session; a subagent is a black box that hands back one
+    summary. Keep subagents for short read-only lookups whose whole result is
+    a paragraph.
 
     `agent` is the CLI to run (e.g. "claude", "codex"), `name` is what the pane
     will be called — that name is also its messaging address, so pick something
@@ -771,6 +800,19 @@ async def cli_open_agent(
     refuse a pane NAME. Keep it if you may want to close or focus what you
     opened; `address` remains the right thing to send to.
     Returns {ok, name, address, pane_id, advisories?} or {ok: false, error}.
+
+    Passing `pane_id` REOPENS an existing pane instead of creating one: the
+    one whose cli_list_targets row says `realized: false` — a restore
+    placeholder holding a saved pane with no CLI behind it. Use the id, not the
+    name: the placeholder already owns that name, so asking for it by `name`
+    opens a second pane called `<name>-2` and leaves the first one closed.
+    `agent`, `name` and `task` are ignored on this path — the pane keeps its
+    own, and nothing is injected; send the task with cli_send afterwards (or
+    use cli_send(open_target=True) to do both at once). Answers {ok, pane_id,
+    name, address, realized, reason, reopened: true}; `reason: "fresh"` means
+    a new session with no memory of the earlier conversation. A pane that is
+    already open answers reopened: false, reason "already-open" and is left
+    alone. Unknown ids are refused with "unknown-pane-id".
     """
     from agent_team_backend import agent_messaging, app
     from agent_team_backend.ipc import make_event
@@ -779,6 +821,9 @@ async def cli_open_agent(
         caller = _resolve_caller(ctx)
     except CallerUnknown as err:
         return {"ok": False, "error": str(err)}
+    reopen_id = (pane_id or "").strip()
+    if reopen_id:
+        return await _reopen_pane(reopen_id)
     agent_key = (agent or "").strip()
     pane_name = (name or "").strip()
     if not agent_key:
@@ -859,6 +904,55 @@ async def cli_open_agent(
     return result
 
 
+async def _reopen_pane(pane_id: str) -> dict[str, Any]:
+    """cli_open_agent(pane_id=...): open a restore placeholder in place."""
+    from agent_team_backend import agent_messaging
+
+    entry = agent_messaging.current(pane_id)
+    if entry is None:
+        return {
+            "ok": False,
+            "error": (
+                f'unknown pane_id "{pane_id}" — it names no pane on this machine. '
+                "Pane ids change when a pane is rebuilt; read a fresh one from "
+                "cli_list_targets"
+            ),
+            "error_code": "unknown-pane-id",
+        }
+    if entry.realized:
+        return {
+            "ok": True,
+            "pane_id": entry.pane_id,
+            "name": entry.name,
+            "address": entry.qualified_name,
+            "realized": True,
+            "reason": "already-open",
+            "reopened": False,
+        }
+    opened = await _open_placeholder(entry)
+    if not opened["ok"]:
+        return {
+            "ok": False,
+            "error": (
+                f'"{entry.qualified_name}" could not be opened ({opened["reason"]})'
+            ),
+            "error_code": "open-failed",
+            "pane_id": entry.pane_id,
+            "realized": False,
+            "reason": opened["reason"],
+        }
+    pane = opened["pane"]
+    return {
+        "ok": True,
+        "pane_id": pane.pane_id,
+        "name": pane.name,
+        "address": pane.qualified_name,
+        "realized": True,
+        "reason": opened["reason"],
+        "reopened": True,
+    }
+
+
 async def _send_to_device(
     address: Any, text: str, *, caller: Any, me: str
 ) -> dict[str, Any] | None:
@@ -899,6 +993,43 @@ async def _send_to_device(
     }
 
 
+async def _open_placeholder(entry: Any) -> dict[str, Any]:
+    """Ask the window holding *entry* to open it (ui.pane.open) and re-read it.
+
+    Returns {ok, realized, reason, pane} — `pane` is the registry entry the
+    target is known by afterwards. A restore rebuilds the pane under a fresh
+    runtime id and registers the old one as an alias, so the entry that was
+    resolved before the open names a pane the window has already replaced;
+    delivering to it would be dropped by the receiving window. `reason` is the
+    renderer's word: "opened", "fresh" (a new session — resume behavior
+    "never", or the user chose start-fresh — so the agent does not remember
+    its earlier conversation), or why it stayed closed.
+    """
+    from agent_team_backend import agent_messaging
+
+    ui = await _ui_request(
+        entry.workspace_path,
+        "invoke",
+        caller=_pane_caller(entry.pane_id),
+        action="ui.pane.open",
+        args={"paneId": entry.pane_id},
+    )
+    outcome = (ui.get("result") or {}) if ui.get("ok") else {}
+    if not ui.get("ok") or not outcome.get("realized"):
+        return {
+            "ok": False,
+            "realized": False,
+            "reason": outcome.get("reason") or ui.get("error_code") or ui.get("error") or "unknown",
+            "pane": entry,
+        }
+    return {
+        "ok": True,
+        "realized": True,
+        "reason": outcome.get("reason"),
+        "pane": agent_messaging.current(entry.pane_id) or entry,
+    }
+
+
 #: Reserved `to:` value that fans a message out to the sender's own tab group.
 #: Deliberately NOT the bare-line protocol's "all"/"*": that one means every
 #: pane in the window, and one word meaning two scopes would be very hard to
@@ -912,7 +1043,7 @@ def _is_group_target(to: str) -> bool:
 
 
 async def _send_to_group(
-    caller: "_Caller", me: str, text: str, reply_to: str = ""
+    caller: "_Caller", me: str, text: str, reply_to: str = "", kind: str = ""
 ) -> dict[str, Any]:
     """Deliver *text* to every other pane in the sender's own tab group.
 
@@ -961,7 +1092,8 @@ async def _send_to_group(
             )
             continue
         msg_key = await _dispatch_delivery(
-            entry, text, caller=caller, me=me, cross_workspace=False, reply_to=reply_to
+            entry, text, caller=caller, me=me, cross_workspace=False,
+            reply_to=reply_to, kind=kind,
         )
         recipients.append(
             {"name": entry.name, "pane_id": entry.pane_id, "msg_key": msg_key, "accepted": True}
@@ -977,7 +1109,7 @@ async def _send_to_group(
 
 async def _dispatch_delivery(
     entry: Any, text: str, *, caller: "_Caller", me: str, cross_workspace: bool,
-    reply_to: str = "",
+    reply_to: str = "", kind: str = "",
 ) -> str:
     """Hand one message to the windows and record it; returns its msg_key.
 
@@ -991,6 +1123,13 @@ async def _dispatch_delivery(
     rows through the one ``acceptRemoteMessage`` path either way. Absent unless
     the caller passed one, which keeps the payload a non-reply produces exactly
     what it always was.
+
+    ``kind`` is "ack" for a message the receiving window must log and never
+    inject, and empty for every other send. The group broadcast passes it
+    through too: every group peer is a pane in the sender's own window, so an
+    ack reaches each of them under the same guarantee a direct one gets. It
+    rides the payload only when set, for the same reason ``reply_to`` does: an
+    ordinary send produces exactly the payload it always did.
     """
     from agent_team_backend import agent_messaging, app
     from agent_team_backend.ipc import make_event
@@ -1022,6 +1161,8 @@ async def _dispatch_delivery(
                 "rate_limit": True,
                 # Only present for a reply — see the docstring.
                 **({"reply_to": reply_to} if reply_to else {}),
+                # Only present for an ack — see the docstring.
+                **({"kind": kind} if kind else {}),
             },
         )
     )
@@ -1037,6 +1178,8 @@ async def cli_send(
     wait_for_delivery_s: float = 0.0,
     pane_id: str = "",
     reply_to: str = "",
+    kind: str = "message",
+    open_target: bool = False,
 ) -> dict[str, Any]:
     """Send an instruction to another CLI pane, in this or another workspace.
 
@@ -1089,6 +1232,21 @@ async def cli_send(
     correlation id from the msg_key, so the thread holds over there; what is
     lost is the link back to the row on this machine.
 
+    `kind: "ack"` is for a pure acknowledgement — "got it", "done", "thanks" —
+    and it changes what the message IS. An ack is written to the user's message
+    log and is NEVER put into the receiving agent's input box: that agent is not
+    interrupted, is not woken, and will not know you sent it. Use it to close a
+    loop the user is watching without spending another agent's turn. Anything
+    the other side has to act on, answer, or even know about must go as an
+    ordinary message — an ack carrying an instruction is an instruction nobody
+    reads. Any other value is treated as an ordinary message.
+
+    An ack reaches panes on this machine only, `to: "group"` included. A
+    `<device>/<workspace>/<pane>` target is refused with `ack-not-relayable`:
+    the relay cannot promise a message stays out of an input box on someone
+    else's machine, and a guarantee that holds only sometimes is one no agent
+    should build on. Send it as an ordinary message if it has to cross devices.
+
     Delivery is asynchronous: this returns once the message is accepted for
     delivery, not once the other agent has read it. Returns
     {ok, target, cross_workspace, msg_key} or {ok: false, error, error_code}.
@@ -1140,6 +1298,26 @@ async def cli_send(
     "unauthorized" means somebody has to sign in again. Telling all three to
     retry shortly — which is what this used to do — is advice that works for
     one of them.
+
+    A target whose cli_list_targets row says `realized: false` is a restore
+    placeholder: the window holds the saved pane but no CLI is running behind
+    it, so it is busy forever and the message parks until someone opens it.
+    The send still succeeds, and the answer says so with
+    `target_state: "not-opened"` and a `warning`. `open_target: true` opens it
+    first — the same restore the user's click would do, without the "resume
+    which?" modal — and only then delivers; the answer then carries
+    `opened: {realized: true, reason}`. `reason: "fresh"` means the pane came
+    up on a NEW session (resume behavior "never", or the user had chosen start
+    fresh for that workspace): the agent does not remember its earlier
+    conversation, so say what it needs to know. If the open fails the message
+    is NOT sent — {ok: false, error_code: "open-failed", open: {realized:
+    false, reason}}. A target that is already open is unaffected by the flag.
+
+    `open_target` applies to ONE named pane only. It is ignored — never
+    forwarded, never acted on — for `to: "group"` and for a cross-device
+    target: a broadcast must not be able to pull a whole batch of reclaimed
+    panes back up, and another machine's placeholders are that machine's to
+    open. This is a fixed boundary, not a missing feature.
     """
     from agent_team_backend import agent_messaging, app, message_routing
     from agent_team_backend.ipc import make_event
@@ -1150,6 +1328,9 @@ async def cli_send(
         return {"ok": False, "error": str(err)}
     if not (text or "").strip():
         return {"ok": False, "error": "text is empty"}
+    # Anything but the one special value is an ordinary message; a typo must not
+    # fail a send that would otherwise have gone through.
+    send_kind = "ack" if kind == "ack" else ""
     me = caller.pane_id if caller.kind == "pane" else ""
     target_id = (pane_id or "").strip()
     if not target_id and _is_group_target(to):
@@ -1160,7 +1341,7 @@ async def cli_send(
                 'address panes individually, or by pane_id',
                 "error_code": "no-group",
             }
-        return await _send_to_group(caller, me, text, reply_to)
+        return await _send_to_group(caller, me, text, reply_to, send_kind)
     # An id is already as qualified as an address gets, so the rule that a
     # caller with no workspace of its own must name one does not apply to it.
     if not target_id and caller.kind != "pane" and "/" not in (to or ""):
@@ -1182,6 +1363,29 @@ async def cli_send(
         # bare-line path so the two cannot answer the same address differently.
         routed = message_routing.route(me, to)
         if routed.remote is not None:
+            if send_kind == "ack":
+                # Refused rather than relayed, because the relay cannot carry
+                # the one thing an ack IS. The frame has no field for it
+                # (server_link builds a fixed payload, and the cloud server
+                # rebuilds the forwarded frame from named DB columns), and
+                # there is no capability negotiation — so even once every layer
+                # learns the field, a peer on an older build would still type
+                # the ack straight into its pane.
+                #
+                # An ack whose silence is probabilistic is worse than no ack at
+                # all: an agent picks it precisely because it promises not to
+                # interrupt anyone. Better to say no here than to be quietly
+                # wrong on somebody else's machine.
+                return {
+                    "ok": False,
+                    "error": (
+                        'kind="ack" cannot cross devices: this machine cannot '
+                        "promise the message stays out of that pane's input "
+                        "box. Send it as an ordinary message, or ack a pane on "
+                        "this machine."
+                    ),
+                    "error_code": "ack-not-relayable",
+                }
             relayed = await _send_to_device(routed.remote, text, caller=caller, me=me)
             # None means no server was ever configured on this machine; falling
             # through leaves the answer exactly what it was before cross-device
@@ -1201,23 +1405,49 @@ async def cli_send(
     if me and result.pane.pane_id == me:
         return {"ok": False, "error": "that is your own pane"}
 
+    # Only the single-target path gets here: the group broadcast and the
+    # cross-device relay returned above, so open_target cannot reach them.
+    target = result.pane
+    opened: dict[str, Any] | None = None
+    if not target.realized and open_target:
+        open_result = await _open_placeholder(target)
+        if not open_result["ok"]:
+            return {
+                "ok": False,
+                "error": (
+                    f'"{target.qualified_name}" is a restore placeholder and could not '
+                    f'be opened ({open_result["reason"]}); the message was not sent'
+                ),
+                "error_code": "open-failed",
+                "open": {"realized": False, "reason": open_result["reason"]},
+            }
+        opened = {"realized": True, "reason": open_result["reason"]}
+        target = open_result["pane"]
+
     msg_key = await _dispatch_delivery(
-        result.pane,
+        target,
         text,
         caller=caller,
         me=me,
         cross_workspace=result.cross_workspace,
         reply_to=reply_to,
+        kind=send_kind,
     )
-    return await _with_delivery_wait(
-        {
-            "ok": True,
-            "target": result.pane.qualified_name,
-            "cross_workspace": result.cross_workspace,
-            "msg_key": msg_key,
-        },
-        wait_s,
-    )
+    answer: dict[str, Any] = {
+        "ok": True,
+        "target": target.qualified_name,
+        "cross_workspace": result.cross_workspace,
+        "msg_key": msg_key,
+    }
+    if opened is not None:
+        answer["opened"] = opened
+    elif not target.realized:
+        answer["target_state"] = "not-opened"
+        answer["warning"] = (
+            "the target is a restore placeholder with no CLI running; the message "
+            "waits until someone opens it (ui.pane.open, or open_target=True)"
+        )
+    return await _with_delivery_wait(answer, wait_s)
 
 
 # ── Delivery outcome of a cli_send (cli_check_message) ─────────────────────
@@ -3514,6 +3744,9 @@ _PANE_PRIVATE_UI_ACTIONS = frozenset({"ui.messaging.readIncoming", "ui.messaging
 # budget. ui.pipeline.reset and ui.pipeline.abort only tear down and stay out.
 _UI_INVOKE_SLOW_ACTIONS = frozenset({
     "ui.pane.create",
+    # Restores a placeholder around a spawned (often resumed) CLI: the same
+    # startup wait as ui.pane.create, plus a session probe before it.
+    "ui.pane.open",
     "ui.pipeline.start",
     "ui.pipeline.next",
     "ui.pipeline.resume",

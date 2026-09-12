@@ -157,7 +157,7 @@ async def test_list_targets_still_answers_exactly_as_it_did() -> None:
     assert roster["you"] == "alpha/reviewer"
     assert set(roster["targets"][0]) == {
         "name", "address", "pane_id", "workspace_path", "same_workspace",
-        "busy", "offline",
+        "busy", "offline", "realized",
     }
 
 
@@ -307,7 +307,7 @@ async def test_whoami_omits_cloud_on_a_machine_with_no_server_link(
     assert "cloud" not in me
     assert set(me) == {
         "ok", "caller", "name", "address", "pane_id", "workspace_path",
-        "same_workspace", "agent_key", "busy", "offline",
+        "same_workspace", "agent_key", "busy", "offline", "realized",
     }
 
 
