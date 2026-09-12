@@ -4,7 +4,22 @@
  *
  * "done"      – ascending two-note chime (C5 → E5): signals task completion.
  * "attention" – double A5 ping: signals CLI is waiting for user input.
+ *
+ * Both are gated by the Settings → General → Notifications sound toggle,
+ * independently of the OS notification toggle in useSystemNotify.
  */
+
+import { settingsGet, settingsSet } from '@navide/plugin-ui/shared'
+
+export const NOTIFY_SOUND_ENABLED_KEY = 'agentTeam.notifySoundEnabled'
+
+export function notifySoundEnabled(): boolean {
+  return settingsGet<boolean>(NOTIFY_SOUND_ENABLED_KEY, true) !== false
+}
+
+export function setNotifySoundEnabled(enabled: boolean): void {
+  settingsSet(NOTIFY_SOUND_ENABLED_KEY, enabled)
+}
 
 let ctx: AudioContext | null = null
 
@@ -37,6 +52,7 @@ function playTone(
 
 /** Pleasant ascending chime — plays when a CLI pane finishes its turn. */
 export function playDoneSound(): void {
+  if (!notifySoundEnabled()) return
   try {
     const c = getCtx()
     const now = c.currentTime
@@ -49,6 +65,7 @@ export function playDoneSound(): void {
 
 /** Double ping — plays when the CLI needs user attention/input. */
 export function playAttentionSound(): void {
+  if (!notifySoundEnabled()) return
   try {
     const c = getCtx()
     const now = c.currentTime

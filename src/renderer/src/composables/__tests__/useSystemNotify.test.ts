@@ -1,5 +1,13 @@
-import { describe, it, expect } from 'vitest'
-import { shouldNotify, type NotifyKind } from '../useSystemNotify'
+// @vitest-environment happy-dom
+import { beforeEach, describe, it, expect, vi } from 'vitest'
+import { __resetSettingsForTest } from '@navide/plugin-ui/shared/testing'
+import {
+  setSystemNotifyEnabled,
+  shouldNotify,
+  systemNotifyEnabled,
+  useSystemNotify,
+  type NotifyKind,
+} from '../useSystemNotify'
 
 describe('shouldNotify', () => {
   const cases: Array<{
@@ -37,4 +45,52 @@ describe('shouldNotify', () => {
         .toBe(c.expected)
     })
   }
+})
+
+describe('shouldNotify — enabled gate', () => {
+  it('disabled suppresses even a fresh background signal', () => {
+    expect(shouldNotify({ appFocused: false, lastKind: undefined, kind: 'done', enabled: false }))
+      .toBe(false)
+  })
+
+  it('enabled: true behaves like the default', () => {
+    expect(shouldNotify({ appFocused: false, lastKind: undefined, kind: 'done', enabled: true }))
+      .toBe(true)
+  })
+})
+
+describe('notifyPaneState — system notification toggle', () => {
+  const notify = vi.fn(() => Promise.resolve())
+
+  beforeEach(() => {
+    __resetSettingsForTest()
+    notify.mockClear()
+    ;(window as unknown as { agentTeam: unknown }).agentTeam = { notify }
+    // Background the window: the gate never fires while focused.
+    vi.spyOn(document, 'hasFocus').mockReturnValue(false)
+  })
+
+  it('defaults to enabled', () => {
+    expect(systemNotifyEnabled()).toBe(true)
+  })
+
+  it('disabled: no OS notification, but the Dock badge still counts the pane', () => {
+    const sys = useSystemNotify()
+    const before = sys.pendingCount.value
+    setSystemNotifyEnabled(false)
+    sys.notifyPaneState('pane-toggle-off', 'done', 't', 'b')
+    expect(notify).not.toHaveBeenCalled()
+    expect(sys.pendingCount.value).toBe(before + 1)
+    sys.forgetPane('pane-toggle-off')
+  })
+
+  it('re-enabling lets the next signal through (dedup was not recorded while off)', () => {
+    const sys = useSystemNotify()
+    setSystemNotifyEnabled(false)
+    sys.notifyPaneState('pane-toggle-rearm', 'done', 't', 'b')
+    setSystemNotifyEnabled(true)
+    sys.notifyPaneState('pane-toggle-rearm', 'done', 't', 'b')
+    expect(notify).toHaveBeenCalledTimes(1)
+    sys.forgetPane('pane-toggle-rearm')
+  })
 })

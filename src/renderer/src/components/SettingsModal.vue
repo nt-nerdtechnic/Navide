@@ -25,6 +25,8 @@ import {
   setUsageRefreshSec,
   usageRefreshSec,
 } from '../composables/useUsage'
+import { systemNotifyEnabled, setSystemNotifyEnabled } from '../composables/useSystemNotify'
+import { notifySoundEnabled, setNotifySoundEnabled } from '../composables/useSoundNotify'
 import {
   AUTO_RESUME_ON_RECONNECT_SETTING_KEY,
   RESUME_BEHAVIOR_SETTING_KEY,
@@ -881,6 +883,17 @@ const autoResumeOnReconnectModel = ref(
 )
 function onAutoResumeOnReconnectChange(): void {
   settingsSet(AUTO_RESUME_ON_RECONNECT_SETTING_KEY, autoResumeOnReconnectModel.value)
+}
+
+// Background notifications for CLI done / needs-input: the OS notification and
+// the sound are separate toggles so either can be muted on its own.
+const systemNotifyEnabledModel = ref(systemNotifyEnabled())
+function onSystemNotifyEnabledChange(): void {
+  setSystemNotifyEnabled(systemNotifyEnabledModel.value)
+}
+const notifySoundEnabledModel = ref(notifySoundEnabled())
+function onNotifySoundEnabledChange(): void {
+  setNotifySoundEnabled(notifySoundEnabledModel.value)
 }
 
 // Max resume spawns that run terminal.create concurrently (the rest queue).
@@ -2866,6 +2879,38 @@ watch(activeTab, (tab) => {
                     max="120"
                     :value="healthCheckTimeoutSec"
                     @change="onHealthTimeoutChange(($event.target as HTMLInputElement).value)"
+                  />
+                </template>
+              </SettingRow>
+            </SettingsCard>
+          </SettingsSection>
+
+          <SettingsSection :label="$t('settings.section.notifications')">
+            <SettingsCard>
+              <SettingRow
+                data-settings-section="general-system-notify"
+                :title="$t('settings.general.system-notify')"
+                :description="$t('settings.general.system-notify-hint')"
+              >
+                <template #control>
+                  <ToggleSwitch
+                    v-model="systemNotifyEnabledModel"
+                    :aria-label="$t('settings.general.system-notify')"
+                    @update:modelValue="onSystemNotifyEnabledChange"
+                  />
+                </template>
+              </SettingRow>
+
+              <SettingRow
+                data-settings-section="general-notify-sound"
+                :title="$t('settings.general.notify-sound')"
+                :description="$t('settings.general.notify-sound-hint')"
+              >
+                <template #control>
+                  <ToggleSwitch
+                    v-model="notifySoundEnabledModel"
+                    :aria-label="$t('settings.general.notify-sound')"
+                    @update:modelValue="onNotifySoundEnabledChange"
                   />
                 </template>
               </SettingRow>

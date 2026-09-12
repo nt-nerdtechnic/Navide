@@ -1,4 +1,5 @@
 import { computed, readonly, ref } from 'vue'
+import { settingsGet, settingsSet } from '@navide/plugin-ui/shared'
 
 /**
  * Native OS notifications for CLI pane state changes (turn done / needs input).
@@ -24,13 +25,28 @@ import { computed, readonly, ref } from 'vue'
 
 export type NotifyKind = 'done' | 'attention'
 
-/** Pure gate: notify only when the app is backgrounded AND this is not a repeat
- *  of the last kind already notified for the pane. */
+/** Settings → General → Notifications. Off suppresses the OS notification only;
+ *  the Dock badge keeps tracking pending state because it reflects what is
+ *  waiting for the user rather than interrupting them. */
+export const SYSTEM_NOTIFY_ENABLED_KEY = 'agentTeam.systemNotifyEnabled'
+
+export function systemNotifyEnabled(): boolean {
+  return settingsGet<boolean>(SYSTEM_NOTIFY_ENABLED_KEY, true) !== false
+}
+
+export function setSystemNotifyEnabled(enabled: boolean): void {
+  settingsSet(SYSTEM_NOTIFY_ENABLED_KEY, enabled)
+}
+
+/** Pure gate: notify only when enabled, the app is backgrounded AND this is not
+ *  a repeat of the last kind already notified for the pane. */
 export function shouldNotify(args: {
   appFocused: boolean
   lastKind: NotifyKind | undefined
   kind: NotifyKind
+  enabled?: boolean
 }): boolean {
+  if (args.enabled === false) return false
   if (args.appFocused) return false
   return args.lastKind !== args.kind
 }
@@ -69,7 +85,14 @@ function notifyPaneState(
 ): void {
   bindFocusListeners()
   pendingPanes.value.add(paneId)
-  if (!shouldNotify({ appFocused: appFocused.value, lastKind: lastKindByPane.get(paneId), kind })) {
+  // Disabled short-circuits before dedup is recorded, so re-enabling lets the
+  // very next signal through instead of treating it as a repeat.
+  if (!shouldNotify({
+    appFocused: appFocused.value,
+    lastKind: lastKindByPane.get(paneId),
+    kind,
+    enabled: systemNotifyEnabled(),
+  })) {
     return
   }
   lastKindByPane.set(paneId, kind)
