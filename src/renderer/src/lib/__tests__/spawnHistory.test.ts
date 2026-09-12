@@ -24,6 +24,7 @@ import {
   isTerminalCrashLoopOpen,
   recordTerminalExit,
   resetTerminalCrashLoop,
+  STATUS_CONTROL_C_EXIT,
   terminalCrashKey,
 } from '@navide/terminal'
 
@@ -415,6 +416,32 @@ describe('terminal crash-loop diagnostics', () => {
     expect(isTerminalCrashLoopOpen(key)).toBe(true)
   })
 
+  it('counts a Windows STATUS_CONTROL_C_EXIT death past the one-second window', () => {
+    resetTerminalCrashLoop(key)
+    // Observed on a Windows machine: the pseudoconsole was torn down ~1047ms
+    // after spawn, so the plain fast-exit window missed it and the pane was
+    // rebuilt forever.
+    const controlCExit = { reason: 'exit', exit_code: STATUS_CONTROL_C_EXIT, uptime_ms: 1_047 }
+
+    expect(recordTerminalExit(key, controlCExit)).toEqual({ count: 1, open: false })
+    expect(recordTerminalExit(key, controlCExit)).toEqual({ count: 2, open: false })
+    expect(recordTerminalExit(key, controlCExit)).toEqual({ count: 3, open: true })
+    expect(isTerminalCrashLoopOpen(key)).toBe(true)
+  })
+
+  it('does not widen the window for other exit codes', () => {
+    resetTerminalCrashLoop(key)
+    expect(recordTerminalExit(key, { reason: 'exit', exit_code: 1, uptime_ms: 1_047 }))
+      .toEqual({ count: 0, open: false })
+  })
+
+  it('does not treat a long-lived STATUS_CONTROL_C_EXIT as a crash', () => {
+    resetTerminalCrashLoop(key)
+    recordTerminalExit(key, { reason: 'exit', exit_code: STATUS_CONTROL_C_EXIT, uptime_ms: 1_047 })
+    expect(recordTerminalExit(key, { reason: 'exit', exit_code: STATUS_CONTROL_C_EXIT, uptime_ms: 60_000 }))
+      .toEqual({ count: 0, open: false })
+  })
+
   it('resets the consecutive count after a non-fast exit', () => {
     resetTerminalCrashLoop(key)
     recordTerminalExit(key, { reason: 'exit', exit_code: -9, uptime_ms: 50 })
@@ -422,6 +449,18 @@ describe('terminal crash-loop diagnostics', () => {
     expect(recordTerminalExit(key, { reason: 'exit', exit_code: 0, uptime_ms: 1_500 }))
       .toEqual({ count: 0, open: false })
     expect(isTerminalCrashLoopOpen(key)).toBe(false)
+  })
+
+  it('names STATUS_CONTROL_C_EXIT next to its raw Windows exit code', () => {
+    expect(formatTerminalExit({
+      reason: 'exit',
+      exit_code: STATUS_CONTROL_C_EXIT,
+      uptime_ms: 1_047,
+      startup_probe: { binary_path: 'C:\\Users\\USER\\AppData\\Roaming\\npm\\claude.CMD' },
+    })).toBe(
+      'Process exited with code 3221225786 (STATUS_CONTROL_C_EXIT: console control event or pseudoconsole closed)'
+      + ' 1047ms after spawn — C:\\Users\\USER\\AppData\\Roaming\\npm\\claude.CMD',
+    )
   })
 
   it('formats the exact signal, lifetime, and resolved binary', () => {

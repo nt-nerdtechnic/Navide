@@ -322,6 +322,37 @@ def test_reap_never_signals_a_recycled_pid() -> None:
     assert _registry() == {}
 
 
+def test_reap_force_round_re_verifies_identity_after_the_grace(monkeypatch) -> None:
+    # The root matched at the first look and got the polite signal; during
+    # the grace its pid was recycled (a Windows backend's own first panes can
+    # land there). The force round must be re-checked against a fresh table:
+    # the recycled pid is dropped, the still-matching descendant is kept, and
+    # a fresh probe that fails authorizes nothing.
+    tables = [
+        {77: (77, "L77"), 88: (88, "L88")},        # verdict snapshot
+        {77: (77, "L77-recycled"), 88: (88, "L88")},  # after the grace
+    ]
+    monkeypatch.setattr(pty_registry, "_ps_table", lambda: tables.pop(0))
+    monkeypatch.setattr(pty_registry, "_backend_alive", lambda pid: False)
+    sent: list[tuple[list[tuple[int, bool]], bool]] = []
+    monkeypatch.setattr(
+        pty_registry, "_signal_each",
+        lambda targets, *, force: sent.append((list(targets), force)),
+    )
+    pty_registry._save({
+        "77": {"argv0": "x", "lstart": "L77", "owner": 1, "descendants": {"88": "L88"}},
+    })
+
+    assert pty_registry.reap_stale(grace=0.0) == [77, 88]
+    assert sent == [([(77, True), (88, True)], False), ([(88, True)], True)]
+
+    tables[:] = [{77: (77, "L77")}, None]  # the fresh probe fails
+    sent.clear()
+    pty_registry._save({"77": {"argv0": "x", "lstart": "L77", "owner": 1}})
+    pty_registry.reap_stale(grace=0.0)
+    assert sent == [([(77, True)], False), ([], True)]
+
+
 def test_reap_leaves_live_sibling_entries_untouched(monkeypatch) -> None:
     proc = subprocess.Popen(["sleep", "30"], start_new_session=True)
     try:

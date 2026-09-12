@@ -5,7 +5,9 @@ killpg(child_pgid) to take down the child and everything in its group. But a
 grandchild that calls setsid() starts its OWN session/group and escapes that
 killpg — it outlives the pane and accumulates as an orphan (observed: dozens of
 leftover `claude` processes exhausting RAM). _descendant_pids snapshots the
-tree before close; _kill_breakaway SIGKILLs whatever the group kill missed.
+tree before close (pid -> start-time identity); _kill_breakaway SIGKILLs
+whatever the group kill missed, but only pids that are still the recorded
+process — a pid recycled in between belongs to someone else.
 
 The setsid-grandchild harness and ps stubs are shared with
 test_terminals_exit_orphan_reap.py via conftest fixtures.
@@ -49,28 +51,83 @@ def test_descendant_pids_returns_empty_when_ps_fails(monkeypatch):
     def boom(*a, **k):
         raise OSError("no ps")
     monkeypatch.setattr(terminals.subprocess, "run", boom)
-    assert _descendant_pids(100) == []
+    assert _descendant_pids(100) == {}
 
 
-# ---- _kill_breakaway: signalling (mocked os.kill) ----
+def test_descendant_pids_records_each_start_time_identity(monkeypatch):
+    # pid -> (ppid, pgid, start): 100 → 200 → 300, and an unrelated 999
+    snap = {
+        100: (1, 100, "L100"),
+        200: (100, 100, "L200"),
+        300: (200, 300, "L300"),
+        999: (1, 999, "L999"),
+    }
+    monkeypatch.setattr(terminals, "_ps_snapshot", lambda: snap)
+    assert _descendant_pids(100) == {200: "L200", 300: "L300"}
+
+
+# ---- _kill_breakaway: signalling ----
+# Which pids get signalled is platform-neutral, but HOW they are signalled is
+# not: POSIX goes through `os.kill`, Windows through psutil. A test about the
+# choice of pids therefore stubs the seam (`process_tree.kill`), and only the
+# one test that is about SIGKILL itself stubs `os.kill` — and skips elsewhere.
 
 @pytest.mark.skipif(not hasattr(signal, "SIGKILL"), reason="POSIX SIGKILL via os.kill")
 def test_kill_breakaway_sigkills_each_pid(monkeypatch):
     killed = []
     monkeypatch.setattr(terminals.os, "kill", lambda pid, sig: killed.append((pid, sig)))
-    _kill_breakaway([11, 22, 33])
+    monkeypatch.setattr(
+        terminals, "_ps_snapshot",
+        lambda: {11: (1, 11, "L11"), 22: (1, 22, "L22"), 33: (1, 33, "L33")},
+    )
+    _kill_breakaway({11: "L11", 22: "L22", 33: "L33"})
     assert killed == [(11, signal.SIGKILL), (22, signal.SIGKILL), (33, signal.SIGKILL)]
 
 
 def test_kill_breakaway_ignores_already_dead(monkeypatch):
-    def kill(pid, sig):
+    def kill(pid, *, force):
         if pid == 22:
             raise ProcessLookupError
         if pid == 33:
             raise PermissionError
-    monkeypatch.setattr(terminals.os, "kill", kill)
+    monkeypatch.setattr(terminals.osplat.process_tree, "kill", kill)
+    monkeypatch.setattr(
+        terminals, "_ps_snapshot",
+        lambda: {11: (1, 11, "L11"), 22: (1, 22, "L22"), 33: (1, 33, "L33")},
+    )
     # must not raise
-    _kill_breakaway([11, 22, 33])
+    _kill_breakaway({11: "L11", 22: "L22", 33: "L33"})
+
+
+def test_kill_breakaway_spares_a_recycled_or_unverifiable_pid(monkeypatch):
+    killed = []
+    monkeypatch.setattr(
+        terminals.osplat.process_tree, "kill",
+        lambda pid, *, force: killed.append(pid),
+    )
+    monkeypatch.setattr(
+        terminals, "_ps_snapshot",
+        lambda: {
+            11: (1, 11, "L11"),        # same process — killed
+            22: (1, 22, "L22-new"),    # pid recycled since the snapshot
+            33: (1, 33, ""),           # identity unreadable now
+            44: (1, 44, "L44"),        # identity unreadable at snapshot time
+            # 55 is gone from the table
+        },
+    )
+    _kill_breakaway({11: "L11", 22: "L22", 33: "L33", 44: "", 55: "L55"})
+    assert killed == [11]
+
+
+def test_kill_breakaway_kills_nothing_when_the_snapshot_fails(monkeypatch):
+    killed = []
+    monkeypatch.setattr(
+        terminals.osplat.process_tree, "kill",
+        lambda pid, *, force: killed.append(pid),
+    )
+    monkeypatch.setattr(terminals, "_ps_snapshot", lambda: {})
+    _kill_breakaway({11: "L11"})
+    assert killed == []
 
 
 # ---- integration: a real setsid grandchild ----

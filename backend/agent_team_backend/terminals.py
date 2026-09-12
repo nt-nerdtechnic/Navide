@@ -324,14 +324,18 @@ def _ps_snapshot() -> dict[int, tuple[int, int, str]]:
     return osplat.process_tree.snapshot()
 
 
-def _descendant_pids(root_pid: int) -> list[int]:
-    """Every PID descended from root_pid (child, grandchild, ...) from one
-    snapshot. killpg on the PTY child's process group misses any grandchild
-    that called setsid to start its own session/group (some CLIs do) — those
-    outlive the group kill and become orphans. Snapshot the tree while root is
-    still alive; once it dies the grandchildren reparent to launchd (ppid 1)
-    and the ancestry is gone."""
-    return osplat.process_tree.descendants(root_pid)
+def _descendant_pids(root_pid: int) -> dict[int, str]:
+    """Every PID descended from root_pid (child, grandchild, ...) with its
+    start-time identity, from one snapshot. killpg on the PTY child's process
+    group misses any grandchild that called setsid to start its own
+    session/group (some CLIs do) — those outlive the group kill and become
+    orphans. Snapshot the tree while root is still alive; once it dies the
+    grandchildren reparent to launchd (ppid 1) and the ancestry is gone. The
+    identity is what `_kill_breakaway` checks before signalling, so a pid
+    recycled between this snapshot and the kill is left alone."""
+    snap = _ps_snapshot()
+    pids = _walk_descendants(_children_map(snap), root_pid)
+    return {pid: snap[pid][2] for pid in pids}
 
 
 # Steady-state cadence of the descendant-snapshot loop. MCP servers and other
@@ -351,13 +355,35 @@ _DESCENDANT_SNAPSHOT_FAST_S = 5.0
 _EXIT_ORPHAN_GRACE_S = 1.0
 
 
-def _kill_breakaway(pids: "list[int] | tuple[int, ...]") -> None:
-    """SIGKILL each pid still alive — the breakaway grandchildren a process-
-    group kill could not reach. Idempotent: pids already reaped by the group
-    kill raise ProcessLookupError and are skipped. Best-effort: a pid recycled
-    within the ~1s grace could in theory be mis-hit, but macOS/Linux recycle
-    pids slowly enough that this is negligible on a kill path."""
-    for pid in pids:
+def _same_process(recorded: str, current: str) -> bool:
+    """Whether two start-time identities name the same process. Empty on
+    either side is never a match — an unverifiable identity must never
+    authorize a kill. Whitespace-normalized: `ps` pads the day-of-month."""
+    return (
+        bool(recorded)
+        and bool(current)
+        and " ".join(recorded.split()) == " ".join(current.split())
+    )
+
+
+def _kill_breakaway(pids: dict[int, str]) -> None:
+    """SIGKILL each recorded pid that is still the recorded process — the
+    breakaway grandchildren a process-group kill could not reach. Takes one
+    fresh snapshot and signals only pids whose start-time identity still
+    matches the one recorded when the tree was snapshotted: a pid recycled
+    since then belongs to someone else. On Windows that someone can be the
+    backend's own next pane (the pid space is small and reused fast), so no
+    identity means no kill; a failed snapshot kills nothing. Blocking (one
+    process-table read) — call via asyncio.to_thread from the loop."""
+    if not pids:
+        return
+    snap = _ps_snapshot()
+    if not snap:
+        return  # cannot verify identities — do not kill blind
+    for pid, recorded in pids.items():
+        entry = snap.get(pid)
+        if entry is None or not _same_process(recorded, entry[2]):
+            continue
         try:
             osplat.process_tree.kill(pid, force=True)
         except (ProcessLookupError, PermissionError):
@@ -854,7 +880,7 @@ class TerminalService:
         session: TerminalSession,
         pgid: int,
         grace: float = 1.0,
-        descendants: "list[int] | tuple[int, ...]" = (),
+        descendants: dict[int, str] | None = None,
     ) -> None:
         deadline = self._loop.time() + grace
         # ASYNC110 suppressed: bounded poll (<= grace) with awaited sleeps —
@@ -875,7 +901,7 @@ class TerminalService:
             except subprocess.TimeoutExpired:
                 pass
         # Reap breakaway grandchildren that escaped the process group via setsid.
-        _kill_breakaway(descendants)
+        await asyncio.to_thread(_kill_breakaway, descendants or {})
         if session.proc.poll() is not None:
             await self._loop.run_in_executor(
                 _LIFECYCLE_EXECUTOR, pty_registry.unregister, session.proc.pid
@@ -975,15 +1001,15 @@ class TerminalService:
         launchd (ppid 1) or to this backend (observed macOS behavior) — and
         (b) still the same process, verified by comparing its ps lstart
         against the one recorded at snapshot time (defeats pid recycling;
-        empty lstart on either side skips the check). A verified orphan's
-        current subtree is killed with it (a leaked `npm exec` wrapper still
-        parents its own node child at sweep time)."""
+        an empty lstart on either side is no match — never kill unverified).
+        A verified orphan's current subtree is killed with it (a leaked
+        `npm exec` wrapper still parents its own node child at sweep time)."""
         snap = await asyncio.to_thread(_ps_snapshot)
         if not snap:
             return  # ps failed — cannot verify identities, do not kill blind
         children = _children_map(snap)
         me = os.getpid()
-        targets: list[int] = []
+        targets: dict[int, str] = {}
         for pid, recorded_lstart in descendants.items():
             entry = snap.get(pid)
             if entry is None:
@@ -991,13 +1017,14 @@ class TerminalService:
             ppid, _pgid, lstart = entry
             if not osplat.process_tree.is_orphan_parent(ppid, me):
                 continue  # still parented by a live process — not our orphan
-            if recorded_lstart and lstart and lstart != recorded_lstart:
-                continue  # pid recycled since the snapshot — different process
-            targets.append(pid)
-            targets.extend(_walk_descendants(children, pid))
+            if not _same_process(recorded_lstart, lstart):
+                continue  # recycled since the snapshot, or unverifiable — not ours
+            targets[pid] = lstart
+            for child in _walk_descendants(children, pid):
+                targets[child] = snap[child][2]
         if targets:
-            log.info("reaping %d orphaned descendant(s): %s", len(targets), targets)
-            _kill_breakaway(targets)
+            log.info("reaping %d orphaned descendant(s): %s", len(targets), list(targets))
+            await asyncio.to_thread(_kill_breakaway, targets)
 
     async def kill_all(self, grace: float = 1.0) -> None:
         """Terminate every live PTY child. Children run with
@@ -1008,17 +1035,19 @@ class TerminalService:
             self._snapshot_task.cancel()
             self._snapshot_task = None
         targets: list[tuple[TerminalSession, int]] = []
-        breakaway: list[int] = []
+        breakaway: dict[int, str] = {}
         # One shared ps snapshot for every session's descendant sweep. The
         # previous per-session snapshot (a full `ps -Ao` each, 5s budget)
         # pushed a many-pane shutdown past Electron's SIGKILL deadline, so
         # the sweep never got to the actual kills. Off the loop via to_thread.
-        children = _children_map(await asyncio.to_thread(_ps_snapshot))
+        snap = await asyncio.to_thread(_ps_snapshot)
+        children = _children_map(snap)
         for session in list(self._sessions.values()):
             if session.closed:
                 continue
             # Snapshot descendants while the child is still alive (see kill()).
-            breakaway.extend(_walk_descendants(children, session.proc.pid))
+            for pid in _walk_descendants(children, session.proc.pid):
+                breakaway[pid] = snap[pid][2]
             try:
                 targets.append((session, osplat.process_tree.group_of(session.proc.pid)))
             except ProcessLookupError:
@@ -1064,7 +1093,7 @@ class TerminalService:
         if self._reap_task is not None and not self._reap_task.done():
             await asyncio.gather(self._reap_task, return_exceptions=True)
         # Reap breakaway grandchildren that escaped every process group.
-        _kill_breakaway(breakaway)
+        await asyncio.to_thread(_kill_breakaway, breakaway)
 
     def _require(self, session_id: str) -> TerminalSession:
         session = self._sessions.get(session_id)

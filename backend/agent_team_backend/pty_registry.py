@@ -212,6 +212,23 @@ def _signal_each(targets: "list[tuple[int, bool]]", *, force: bool) -> None:
             pass
 
 
+def _still_same(
+    targets: "list[tuple[int, bool]]", table: dict[int, tuple[int, str]]
+) -> "list[tuple[int, bool]]":
+    """The targets whose start-time identity in a fresh table still matches
+    the one in `table` (the snapshot the verdict was made on). A pid gone or
+    recycled in between is dropped; a failed fresh probe drops everything —
+    an identity that cannot be re-checked never authorizes a second kill."""
+    fresh = _ps_table()
+    if fresh is None:
+        return []
+    return [
+        (pid, group)
+        for pid, group in targets
+        if pid in fresh and _lstart_eq(fresh[pid][1], table[pid][1])
+    ]
+
+
 def _collect_stale(
     entries: dict[str, dict], table: dict[int, tuple[int, str]]
 ) -> "tuple[list[int], list[int], list[int], dict[str, dict]]":
@@ -295,7 +312,10 @@ def reap_stale(grace: float = 1.0) -> list[int]:
         if targets:
             _signal_each(targets, force=False)
             time.sleep(grace)
-            _signal_each(targets, force=True)
+            # The grace is long enough for a pid to be recycled — on Windows
+            # by this backend's own first panes — so the force round is
+            # re-verified against a fresh table instead of re-sent blind.
+            _signal_each(_still_same(targets, table), force=True)
             log.info(
                 "reaped %d orphaned PTY process group(s) %s and %d detached descendant(s) %s",
                 len(roots), roots, len(desc_group) + len(desc_solo), desc_group + desc_solo,

@@ -125,6 +125,9 @@ def kernel32(monkeypatch) -> _FakeKernel32:
     fake = _FakeKernel32()
     monkeypatch.setattr(_windows, "_kernel32", lambda: fake)
     monkeypatch.setattr(_windows, "_jobs", {})
+    # The job table keys on pid + creation time; give every pid a stable one
+    # so the tests do not depend on what runs under 4242 on the host.
+    monkeypatch.setattr(_windows.process_tree, "start_time", lambda pid: f"T{pid}")
     return fake
 
 
@@ -189,7 +192,7 @@ class TestSpawn:
         assert pid == 4242
         assert kernel32.calls[4] == ("AssignProcessToJobObject", job, assign_handle)
         assert kernel32.calls[5] == ("CloseHandle", assign_handle)
-        assert _windows._jobs == {4242: job}
+        assert _windows._jobs == {4242: (job, "T4242")}
 
     def test_a_command_line_string_is_parsed_by_the_os_rules_then_rebuilt(
         self, kernel32, winpty, which_cmd_shim, monkeypatch
@@ -260,13 +263,41 @@ class TestSpawn:
 
 class TestKills:
     def test_kill_tree_terminates_the_job_when_the_root_has_one(self, kernel32):
-        _windows._jobs[77] = 555
+        _windows._jobs[77] = (555, "T77")
         _windows.process_tree.kill_tree(77, force=False)
         _windows.process_tree.kill_group(77, force=True)  # a "group" is the tree
         assert kernel32.calls == [
             ("TerminateJobObject", 555, _windows._TERMINATE_EXIT_CODE),
             ("TerminateJobObject", 555, _windows._TERMINATE_EXIT_CODE),
         ]
+
+    def test_kill_tree_leaves_the_job_of_a_recycled_pid_alone(self, kernel32, monkeypatch):
+        # The pane whose root was pid 77 has exited but not closed yet; 77 now
+        # belongs to a process started later. Its job must not be terminated
+        # (that would be a blind kill of whatever else the table says), and
+        # the walk must target what runs under 77 now.
+        _windows._jobs[77] = (555, "T77-old")
+        killed: list[int] = []
+
+        class Proc:
+            def __init__(self, pid):
+                self.pid = pid
+
+            def children(self, recursive=False):
+                return []
+
+            def kill(self):
+                killed.append(self.pid)
+
+        monkeypatch.setattr(_windows.psutil, "Process", Proc)
+        _windows.process_tree.kill_tree(77, force=True)
+        assert kernel32.calls == []
+        assert killed == [77]
+        # An identity that could not be read at registration never matches.
+        _windows._jobs[78] = (556, "")
+        _windows.process_tree.kill_tree(78, force=True)
+        assert kernel32.calls == []
+        assert killed == [77, 78]
 
     def test_kill_tree_walks_the_table_root_first_without_a_job(self, kernel32, monkeypatch):
         order: list[int] = []
@@ -542,6 +573,49 @@ class TestHandle:
         handle._watcher.join(1)
         assert not handle._watcher.is_alive()
 
+    async def test_pump_eof_under_a_live_child_waits_for_the_watcher(self, monkeypatch):
+        import threading
+
+        # The reader ends (pipe EOF / cancelled read) while the process handle
+        # says the child is still running. That must not reach the loop as
+        # EOF: `terminals` would close the session and tear the pseudoconsole
+        # out from under a live CLI. The watcher reports the real exit.
+        pty = _FakePTY(80, 24)
+        pty.reads = ["hi", RuntimeError("Standard out reached EOF")]
+        exited = threading.Event()
+
+        class Kernel:
+            def WaitForSingleObject(self, handle, millis):
+                assert handle == 77
+                return _windows.WAIT_OBJECT_0 if exited.wait(millis / 1000) else WAIT_TIMEOUT
+
+        monkeypatch.setattr(_windows, "_kernel32", lambda: Kernel())
+        handle = _windows.WindowsTerminalHandle(pty, pty.pid, None, 77)
+        loop = asyncio.get_running_loop()
+        collected: list[bytes] = []
+        done = asyncio.Event()
+
+        def on_readable() -> None:
+            while True:
+                try:
+                    chunk = handle.read(64)
+                except BlockingIOError:
+                    return
+                if chunk is None:
+                    done.set()
+                    return
+                collected.append(chunk)
+
+        handle.start_reading(loop, on_readable)
+        await asyncio.sleep(0.1)
+        handle._pump.join(1)
+        assert not handle._pump.is_alive()  # the reader is gone...
+        assert collected == [b"hi"] and not done.is_set()  # ...but no EOF was invented
+        exited.set()
+        await asyncio.wait_for(done.wait(), 2)
+        handle._watcher.join(1)
+        assert not handle._watcher.is_alive()
+
     async def test_close_ends_the_exit_watcher_without_an_exit(self, monkeypatch):
         import threading
 
@@ -657,7 +731,7 @@ class TestHandle:
         handle = _windows.terminal_backend.spawn(
             ["claude"], cwd="C:\\", env={}, rows=1, cols=1
         )
-        job = _windows._jobs[4242]
+        job, _start = _windows._jobs[4242]
         kernel32.calls.clear()
         pty = _FakePTY.last
         handle.close()
@@ -682,13 +756,31 @@ class TestHandle:
         assert handle.proc.poll() == 9
         assert kernel32.calls.count(("CloseHandle", handle._process_handle)) == 1
 
+    def test_close_of_an_exited_pane_spares_a_successor_on_the_same_pid(
+        self, kernel32, winpty, which_cmd_shim
+    ):
+        # Pane A's root exited; before A is closed, pane B is spawned and the
+        # OS hands it the same pid. A's close must close only A's job and
+        # leave B's entry in the table — closing B's job would kill B
+        # (KILL_ON_JOB_CLOSE) right after it started.
+        first = _windows.terminal_backend.spawn(["claude"], cwd="C:\\", env={}, rows=1, cols=1)
+        job_a, _ = _windows._jobs[4242]
+        _windows.terminal_backend.spawn(["claude"], cwd="C:\\", env={}, rows=1, cols=1)
+        job_b, _ = _windows._jobs[4242]
+        assert job_a != job_b
+        kernel32.calls.clear()
+        first.close()
+        assert ("CloseHandle", job_a) in kernel32.calls
+        assert ("CloseHandle", job_b) not in kernel32.calls
+        assert _windows._jobs[4242][0] == job_b
+
     def test_close_releases_the_process_handle_of_an_exited_child(
         self, kernel32, winpty, which_cmd_shim
     ):
         handle = _windows.terminal_backend.spawn(
             ["claude"], cwd="C:\\", env={}, rows=1, cols=1
         )
-        job = _windows._jobs[4242]
+        job, _start = _windows._jobs[4242]
         kernel32.calls.clear()
         kernel32.wait_result = _windows.WAIT_OBJECT_0
         kernel32.exit_code = 3
