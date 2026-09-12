@@ -3,11 +3,10 @@ import os
 import shlex
 import shutil
 import subprocess
-import sys
 
 import pytest
 
-from agent_team_backend import host_shell
+from agent_team_backend import host_shell, osplat
 from agent_team_backend.host_shell import (
     HOST_SHELL_EXECUTABLE_ALLOWLIST,
     parse_allowlisted_command,
@@ -329,11 +328,17 @@ async def test_public_git_diff_driver_command_is_rejected_before_spawn(tmp_path)
     assert "public shell policy" in stderr
 
 
+#: The fake-CLI harness writes `#!/bin/sh` scripts found by bare name. Ask the
+#: seam whether it would ever pick such a file up: on Windows
+#: `executable_candidates("gh")` is `gh.com`, `gh.exe`, ... — never `gh` —
+#: so no launcher written next to the script could be found, and the same is
+#: true here when the seam is swapped (`-p tests.osplat_win_swap`).
+_BARE_NAME_IS_RUNNABLE = osplat.paths.executable_candidates("gh") == ["gh"]
+_GIT_ON_HOST = osplat.paths.resolve_program("git") is not None
+
+
 def _write_fake_cli(bin_dir, name: str, script: str):
-    if os.name != "posix":
-        # The fakes are `#!/bin/sh` scripts found by bare name: the product
-        # execs `gh`/`glab` as given, which on Windows resolves only `.exe`,
-        # so no launcher written next to the script could be picked up.
+    if not _BARE_NAME_IS_RUNNABLE:
         pytest.skip("fake-CLI harness is a /bin/sh script exec'd by bare name")
     executable = bin_dir / name
     executable.write_text(f"#!/bin/sh\nset -eu\n{script}\n", encoding="utf-8")
@@ -352,18 +357,17 @@ def _init_repo_with_origin(repo, remote_url: str) -> None:
 
 
 def test_glab_config_path_matches_platform_default(tmp_path, monkeypatch) -> None:
+    # The code under test reads the home from `paths.home_env_var()` and
+    # derives the config dir from `paths.config_home()`; ask the same seam
+    # for both rather than branching on `os.name` here, so the test still
+    # agrees with the code when the seam is swapped to another platform's
+    # implementation (`-p tests.osplat_win_swap`).
     home = tmp_path / "home"
-    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv(osplat.paths.home_env_var(), str(home))
     monkeypatch.delenv("GLAB_CONFIG_DIR", raising=False)
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
-    if os.name == "nt":
-        appdata = home / "AppData" / "Roaming"
-        monkeypatch.setenv("APPDATA", str(appdata))
-        expected_home = appdata
-    elif sys.platform == "darwin":
-        expected_home = home / "Library" / "Application Support"
-    else:
-        expected_home = home / ".config"
+    monkeypatch.delenv("APPDATA", raising=False)
+    expected_home = osplat.paths.config_home(home)
 
     assert host_shell._provider_config_path("glab") == expected_home / "glab-cli" / "config.yml"
 
@@ -855,6 +859,8 @@ async def test_public_glab_context_hides_local_config_from_installed_glab(tmp_pa
     real_glab = shutil.which("glab")
     if real_glab is None:
         pytest.skip("glab CLI is not installed")
+    if not _BARE_NAME_IS_RUNNABLE:
+        pytest.skip("the glab wrapper is a /bin/sh script exec'd by bare name")
 
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -924,6 +930,7 @@ async def test_public_runner_strips_execution_environment_and_injects_fixed_git_
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(not _GIT_ON_HOST, reason="git is not resolvable through osplat.paths on this host")
 async def test_git_runs_through_exec_broker() -> None:
     rc, stdout, stderr = await run_allowlisted_text(["git", "--version"])
     assert rc == 0
@@ -1010,6 +1017,7 @@ def _repo_with_large_diff(path, line_count: int) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(not _GIT_ON_HOST, reason="git is not resolvable through osplat.paths on this host")
 async def test_capped_run_stops_at_the_cap_and_reports_truncation(tmp_path) -> None:
     _repo_with_large_diff(tmp_path, 4000)
     rc, stdout, stderr, truncated = await run_allowlisted_capped(
@@ -1024,6 +1032,7 @@ async def test_capped_run_stops_at_the_cap_and_reports_truncation(tmp_path) -> N
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(not _GIT_ON_HOST, reason="git is not resolvable through osplat.paths on this host")
 async def test_capped_run_returns_whole_output_below_the_cap(tmp_path) -> None:
     _repo_with_large_diff(tmp_path, 2)
     rc, stdout, stderr, truncated = await run_allowlisted_capped(
