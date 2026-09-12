@@ -1,3 +1,5 @@
+import { join } from 'node:path'
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // permissions.ts caches the last prompt result on disk because macOS exposes no
@@ -6,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // shows a real notification and records the result, and every path degrades to
 // a status string instead of throwing.
 
+const USER_DATA = join('/tmp', 'navide-permissions-test')
 const files = new Map<string, string>()
 const notifications: Array<{ title: string; body: string }> = []
 let notificationsSupported = true
@@ -13,7 +16,7 @@ let showThrows = false
 const openExternal = vi.fn(() => Promise.resolve())
 
 vi.mock('electron', () => ({
-  app: { getPath: () => '/tmp/navide-permissions-test' },
+  app: { getPath: () => USER_DATA },
   Notification: class {
     static isSupported(): boolean { return notificationsSupported }
     constructor(private readonly opts: { title: string; body: string }) {}
@@ -43,7 +46,10 @@ vi.mock('node:fs/promises', () => ({
 
 vi.mock('node:child_process', () => ({ execFile: vi.fn() }))
 
-const CACHE = '/tmp/navide-permissions-test/permissions.json'
+// join(), not a literal: the module builds the path the same way, and on
+// Windows that is a backslash — a literal would key the fake filesystem
+// differently from the code under test and every cached read would miss.
+const CACHE = join(USER_DATA, 'permissions.json')
 
 function setPlatform(p: string): void {
   Object.defineProperty(process, 'platform', { value: p, configurable: true })
