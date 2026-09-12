@@ -485,6 +485,18 @@ export function parseEventMs(timestamp: string): number {
   return Date.parse(timestamp)
 }
 
+/** Fingerprint of a turn's text, for the panes whose timestamp never parses.
+ *  The timestamp gate reads an unparseable stamp as fresh — deliberately, so a
+ *  missing field cannot mute a real turn — which leaves such a vendor with no
+ *  dedupe at all: every re-report of the same turn resends its MSG blocks.
+ *  Identity of the text is the only signal left, so hash it rather than hold
+ *  the whole turn per pane. */
+export function turnTextFingerprint(text: string): string {
+  let hash = 5381
+  for (let i = 0; i < text.length; i++) hash = (((hash << 5) + hash) ^ text.charCodeAt(i)) >>> 0
+  return `${text.length}:${hash.toString(36)}`
+}
+
 /** True when a turn_complete is a stale REPLAY rather than a live turn end: its
  *  own CLI timestamp is far older than now — e.g. the backend re-parsed the
  *  whole log on restart and re-emitted historical turns, or a vendor emits a

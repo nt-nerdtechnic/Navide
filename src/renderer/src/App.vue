@@ -132,7 +132,7 @@ import {
   CLI_PASTE_LINE_CAP
 } from '@navide/terminal'
 import { planDropPrompt, type PlanDragRef } from './lib/planDrag'
-import { activityMeansWorking, allSlotsFinished, applyLoopWait, applyTurnProgress, detailMeansToolUse, recordTurnComplete, paneSignalResetKeys, loopWaitBackoffMs, loopWaitHonoured, isReplayedTurnComplete, loopBackoffMs, loopContinueReady, loopStallVerdict, loopWaitingOnSubagents, LOOP_STALL_LIMIT, turnCompleteDone, turnEndsWithSentinel, type SlotSignal, type LoopWaitState } from './lib/completion'
+import { activityMeansWorking, allSlotsFinished, applyLoopWait, applyTurnProgress, detailMeansToolUse, recordTurnComplete, paneSignalResetKeys, loopWaitBackoffMs, loopWaitHonoured, isReplayedTurnComplete, parseEventMs, turnTextFingerprint, loopBackoffMs, loopContinueReady, loopStallVerdict, loopWaitingOnSubagents, LOOP_STALL_LIMIT, turnCompleteDone, turnEndsWithSentinel, type SlotSignal, type LoopWaitState } from './lib/completion'
 import { reorderByIds, reorderStrings, sortByIdOrder } from './lib/paneOrder'
 import { computeRangeSelection } from './lib/paneSelection'
 import { resolveDragBatch, reorderBatchByIds } from './lib/paneBatchDrag'
@@ -211,6 +211,7 @@ import {
   RESUME_BEHAVIOR_SETTING_KEY,
   RESTORE_SCOPE_SETTING_KEY,
   createWorkspaceRestoreSession,
+  explicitRestoreDecision,
   normalizeAutoResumeOnReconnect,
   pendingRestorePaneIds,
   resolveWorkspaceRestoreSession,
@@ -2170,6 +2171,11 @@ async function pushDeliverAgentMessage(paneId: string, text: string): Promise<Pu
 // Per-pane timestamp of the last turn_complete whose text was scanned for MSG
 // blocks — the hook and the watcher can deliver the same turn twice.
 const paneMsgProcessedAt = new Map<string, number>()
+// Same, for the turns whose timestamp does not parse at all: those read as
+// fresh above no matter how often they arrive, so the text itself is the only
+// thing left to recognise them by. Kept separate from the timestamp map so a
+// vendor that stamps its turns keeps the cheaper strictly-increasing gate.
+const paneMsgProcessedFingerprint = new Map<string, string>()
 
 /** Close out the report a spawned pane owes its parent, on the first turn that
  *  ends after its task went in.
@@ -2206,10 +2212,17 @@ function settleSpawnReport(
 function onTurnCompleteForMessaging(paneId: string, text: string, timestamp: string): void {
   const senderName = panes.value.find((p) => p.id === paneId)?.messagingName
   if (senderName && text && !isReplayedTurnComplete(timestamp, Date.now(), TURN_TEXT_REPLAY_TOLERANCE_MS)) {
-    const eventMs = Date.parse(timestamp)
-    const fresh = Number.isNaN(eventMs) || eventMs > (paneMsgProcessedAt.get(paneId) ?? 0)
+    // parseEventMs, not Date.parse: a vendor that emits bare epoch milliseconds
+    // (Kimi) reads as unparseable to Date.parse and so was never deduped here.
+    const eventMs = parseEventMs(timestamp)
+    const stamped = !Number.isNaN(eventMs)
+    const fingerprint = stamped ? '' : turnTextFingerprint(text)
+    const fresh = stamped
+      ? eventMs > (paneMsgProcessedAt.get(paneId) ?? 0)
+      : fingerprint !== paneMsgProcessedFingerprint.get(paneId)
     if (fresh) {
-      if (!Number.isNaN(eventMs)) paneMsgProcessedAt.set(paneId, eventMs)
+      if (stamped) paneMsgProcessedAt.set(paneId, eventMs)
+      else paneMsgProcessedFingerprint.set(paneId, fingerprint)
       const parsed = parseMessages(text)
       // A turn that opened a block and produced none is the protocol's one
       // invisible failure: nothing queued, so no log row and no failure notice
@@ -4902,8 +4915,17 @@ function scheduleInjection(pane: ActivePane): void {
       const MAX_KICKOFF_ATTEMPTS = 3
       let ok2 = false
       for (let attempt = 1; attempt <= MAX_KICKOFF_ATTEMPTS; attempt++) {
-        ok2 = await injectPane(pane.id, pane.kickoffPrompt, `kickoff:stage-${pane.stageId}`, true)
+        // A failure has two shapes and only one of them may be retried. The
+        // bytes never reaching the input box is worth another attempt; the
+        // prompt sitting in the composer that Enter would not submit is not —
+        // resending appends a second copy to the text already there.
+        const attemptEvidence: { echo?: EchoEvidence | null; submit?: SubmitEvidence | null } = {}
+        ok2 = await injectPane(pane.id, pane.kickoffPrompt, `kickoff:stage-${pane.stageId}`, true, undefined, attemptEvidence)
         if (ok2) break
+        if (attemptEvidence.echo != null) {
+          pipelineLog(`${tag} ✕ kickoff reached the input box but never submitted — not resending`)
+          break
+        }
         if (attempt < MAX_KICKOFF_ATTEMPTS) {
           pipelineLog(`${tag} ✕ kickoff injection failed (attempt ${attempt}/${MAX_KICKOFF_ATTEMPTS}) — retrying in 3s`)
           await sleep(3_000)
@@ -5303,6 +5325,7 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
         session_home_id: sessionHomeId,           // Codex per-pane CODEX_HOME id
         slot_label: opts.slotLabel ?? '',         // stable by_pane key survives frontend restarts
         profile_id: opts.profileId ?? '',        // CLI account pin (restore) → per-pane isolated home
+        run_group_id: pane.runGroupId ?? '',     // sidebar run group → by_group token bucket
       },
       outputLogFile,
       // Stable reattach key: the pinned CLI session id is identical on first
@@ -5892,6 +5915,7 @@ async function onKill(paneId: string, opts: { markRemoved?: boolean, force?: boo
   delete paneRefs[paneId]
   unregisterPaneMessaging(paneId)
   paneMsgProcessedAt.delete(paneId)
+  paneMsgProcessedFingerprint.delete(paneId)
   // The auto-name guard is per pane id and pane ids are never reused, so a
   // stale entry cannot misfire — it just never leaves. Dropped here with the
   // rest of the per-pane state.
@@ -7337,6 +7361,23 @@ registerCommand('ui.pane.focus', (args) => {
   const paneId = (args as { paneId?: string } | undefined)?.paneId
   if (!paneId) throw new Error(`ui.pane.focus requires ${PANE_ID_HINT}`)
   onFocusPane(paneId)
+})
+// The official form of what ui.pane.focus does as a side effect: open a
+// cold-restore placeholder. Unlike focus it waits for the restore to finish,
+// reports why it did or did not open, and — because the caller named ONE pane
+// — never raises the workspace-wide "resume which?" modal under ask mode
+// (explicitRestoreDecision). A pane that is already open is answered, not
+// restarted. The restored pane gets a fresh runtime id (the old one becomes
+// an alias), so the answer carries the id it is known by now.
+registerCommand('ui.pane.open', async (args) => {
+  const paneId = (args as { paneId?: string } | undefined)?.paneId
+  if (!paneId) throw new Error(`ui.pane.open requires ${PANE_ID_HINT}`)
+  const pane = panes.value.find((p) => p.id === paneId)
+  if (!pane) throw new Error(`unknown pane ${paneId}`)
+  if (pane.realized) return { realized: true, reason: 'already-open', paneId }
+  const reason = await realizeRestoredPane(paneId, false, { explicit: true })
+  const opened = panes.value.find((p) => p.id === paneId || p.formerPaneIds?.includes(paneId))
+  return { realized: opened?.realized === true, reason, paneId: opened?.id ?? paneId }
 })
 // The rung between "ask it to stop" (a message, which waits for the turn to
 // end) and ui.pane.close (which takes the pane and its PTY away). Like close
@@ -9052,7 +9093,7 @@ function deferredPaneStillCurrent(
 // path in the same tick. Keep one completion promise per pane so every caller
 // waits for the same restore attempt instead of treating an in-flight restore as
 // an immediate no-op.
-const restoringPanePromises = new Map<string, Promise<void>>()
+const restoringPanePromises = new Map<string, Promise<RealizeOutcome>>()
 
 async function restoreSessionDecision(
   session: RestoreSession,
@@ -9139,11 +9180,33 @@ async function advanceRestoreSession(trigger: RestoreSessionTrigger, coldBatch?:
   }
 }
 
-/** Realize one cold-restore record after explicit user activation. */
-async function realizeRestoredPane(paneId: string, aggregateReconnect = false): Promise<void> {
+/** How one realize attempt ended. 'opened' and 'fresh' both mean a CLI is
+ *  now running behind the pane; 'fresh' says it is a new session rather than
+ *  the saved one (resume behavior 'never', or the user chose "start fresh").
+ *  Everything else means the pane is still a placeholder. */
+type RealizeOutcome =
+  | 'opened'
+  | 'fresh'
+  | 'already-open'
+  | 'no-deferred'
+  | 'foreign-workspace'
+  | 'cancelled'
+  | 'superseded'
+  | 'session-unavailable'
+  | 'error'
+
+/** Realize one cold-restore record after explicit user activation.
+ *  `opts.explicit`: the caller named this one pane (ui.pane.open), so the
+ *  restore decision is taken by explicitRestoreDecision instead of the
+ *  workspace-wide question. */
+async function realizeRestoredPane(
+  paneId: string,
+  aggregateReconnect = false,
+  opts?: { explicit?: boolean },
+): Promise<RealizeOutcome> {
   const pending = restoringPanePromises.get(paneId)
   if (pending) return pending
-  const promise = performRealizeRestoredPane(paneId, aggregateReconnect)
+  const promise = performRealizeRestoredPane(paneId, aggregateReconnect, opts)
   restoringPanePromises.set(paneId, promise)
   void promise.then(
     () => {
@@ -9156,10 +9219,17 @@ async function realizeRestoredPane(paneId: string, aggregateReconnect = false): 
   return promise
 }
 
-async function performRealizeRestoredPane(paneId: string, aggregateReconnect = false): Promise<void> {
+async function performRealizeRestoredPane(
+  paneId: string,
+  aggregateReconnect = false,
+  opts?: { explicit?: boolean },
+): Promise<RealizeOutcome> {
   const placeholder = panes.value.find((p) => p.id === paneId)
   const deferred = placeholder?.deferredRestore
-  if (!placeholder || placeholder.realized || placeholder.restoring) return
+  if (placeholder?.realized) return 'already-open'
+  // No pane, or a restore already running that realizeRestoredPane's in-flight
+  // map did not know about: this attempt is not the one that will open it.
+  if (!placeholder || placeholder.restoring) return 'superseded'
   if (!deferred) {
     // A placeholder is only ever written together with its deferredRestore, so
     // this cannot happen — but if some third writer ever sets realized = false
@@ -9171,7 +9241,7 @@ async function performRealizeRestoredPane(paneId: string, aggregateReconnect = f
       message: 'restore placeholder has no deferred restore; it cannot be opened',
       paneId,
     })
-    return
+    return 'no-deferred'
   }
 
   const saved = deferred.saved
@@ -9186,7 +9256,7 @@ async function performRealizeRestoredPane(paneId: string, aggregateReconnect = f
       message: `restore needs workspace ${deferred.workspacePath}, which this window no longer holds`,
       paneId,
     })
-    return
+    return 'foreign-workspace'
   }
   const session = workspaceRestoreSession(batch.workspacePath)
   const sessionId = normalizeResumeSessionId(saved.agent, (saved.session_id ?? '').trim())
@@ -9194,14 +9264,16 @@ async function performRealizeRestoredPane(paneId: string, aggregateReconnect = f
   syncViews()
 
   try {
-    const decision = await restoreSessionDecision(session, batch, true)
-    if (decision === 'cancelled') return
-    if (!deferredPaneStillCurrent(paneId, deferred)) return
+    const decision = opts?.explicit
+      ? explicitRestoreDecision(session)
+      : await restoreSessionDecision(session, batch, true)
+    if (decision === 'cancelled') return 'cancelled'
+    if (!deferredPaneStillCurrent(paneId, deferred)) return 'superseded'
     const forceFresh = decision === 'fresh'
     const spec = agentSpecs.find((s) => s.agentKey === saved.agent)
     const skipFlag = skipFlagFor(saved.agent, spec)
     const canResume = await canResumeSession(saved.agent, batch.workspacePath, sessionId, { timeoutMs: 2500 })
-    if (!deferredPaneStillCurrent(paneId, deferred)) return
+    if (!deferredPaneStillCurrent(paneId, deferred)) return 'superseded'
     if (!forceFresh && shouldPreserveMissingSessionOnRestore(saved.agent, sessionId, canResume === true)) {
       const unavailable = canResume === false ? 'restore.session-unavailable' : 'restore.session-unknown'
       pipelineLog(`⚠ ${saved.agent} session ${sessionId} is ${canResume === false ? 'unavailable' : 'unknown'}; preserving saved pane`)
@@ -9209,12 +9281,12 @@ async function performRealizeRestoredPane(paneId: string, aggregateReconnect = f
         i18n.global.t(unavailable, { agent: spec?.label ?? saved.agent }),
         { type: 'error', duration: 8000 },
       )
-      return
+      return 'session-unavailable'
     }
 
     const attemptResume = !forceFresh && shouldAttemptResume(canResume)
     const chatHistoryFile = await savedHistoryFile(saved.agent, batch.workspacePath, saved.pane_id)
-    if (!deferredPaneStillCurrent(paneId, deferred)) return
+    if (!deferredPaneStillCurrent(paneId, deferred)) return 'superseded'
     let resumeCmd = attemptResume
       ? commandWithSelectedBinary(
           saved.agent,
@@ -9230,7 +9302,7 @@ async function performRealizeRestoredPane(paneId: string, aggregateReconnect = f
     let reconnectId = ''
     if (ghostConfirmed && supportsGhostReconnect(saved.agent)) {
       reconnectId = await resolveReconnectForPane(saved, batch.workspacePath, batch.savedClaims)
-      if (!deferredPaneStillCurrent(paneId, deferred)) return
+      if (!deferredPaneStillCurrent(paneId, deferred)) return 'superseded'
     }
     let wasDisconnected = false
     if (reconnectId) {
@@ -9239,7 +9311,7 @@ async function performRealizeRestoredPane(paneId: string, aggregateReconnect = f
         pane_id: saved.pane_id,
         session_id: reconnectId,
       })
-      if (!deferredPaneStillCurrent(paneId, deferred)) return
+      if (!deferredPaneStillCurrent(paneId, deferred)) return 'superseded'
       if (repointed) {
         resumeCmd = commandWithSelectedBinary(
           saved.agent,
@@ -9292,7 +9364,9 @@ async function performRealizeRestoredPane(paneId: string, aggregateReconnect = f
       shouldPersist: (newPaneId) =>
         isLocalWorkspace(batch.workspacePath) && panes.value.some((p) => p.id === newPaneId),
     })
-    if (!restored) return
+    // spawnRestoredPane answered null: the spawn itself failed (or the pane
+    // was dropped before it could be persisted). The placeholder stands.
+    if (!restored) return 'error'
     const { paneId: newId } = restored
     // A resumed CLI has its transcript back but is parked at the prompt, and the
     // restore path deliberately injects nothing. Offer the one-click continue.
@@ -9314,7 +9388,7 @@ async function performRealizeRestoredPane(paneId: string, aggregateReconnect = f
     if (wasMinimized) persistPaneMinimized(newId, true)
 
     if (saved.stopped) paneRefs[newId]?.setStopped(true)
-
+    return forceFresh ? 'fresh' : 'opened'
   } finally {
     const current = panes.value.find((p) => p.id === paneId)
     if (current && !current.realized && current.deferredRestore === deferred) {
@@ -9937,8 +10011,15 @@ async function activateStage(index: number): Promise<void> {
     const MAX_KICKOFF_ATTEMPTS = 3
     let ok = false
     for (let attempt = 1; attempt <= MAX_KICKOFF_ATTEMPTS; attempt++) {
-      ok = await injectPane(pane.id, kickoff, `kickoff:stage-${stage.id}`, true)
+      // Retry only the failure that left nothing behind — see the stage
+      // kickoff above: a prompt already in the composer must not be sent twice.
+      const attemptEvidence: { echo?: EchoEvidence | null; submit?: SubmitEvidence | null } = {}
+      ok = await injectPane(pane.id, kickoff, `kickoff:stage-${stage.id}`, true, undefined, attemptEvidence)
       if (ok) break
+      if (attemptEvidence.echo != null) {
+        pipelineLog(`${tag} ✕ kickoff reached the input box but never submitted — not resending`)
+        break
+      }
       if (attempt < MAX_KICKOFF_ATTEMPTS) {
         pipelineLog(`${tag} ✕ kickoff injection failed (attempt ${attempt}/${MAX_KICKOFF_ATTEMPTS}) — retrying in 3s`)
         await sleep(3_000)
@@ -10945,6 +11026,7 @@ backend.on('agent_msg.deliver', (raw) => {
     cross_workspace?: boolean
     rate_limit?: boolean
     reply_to?: string
+    kind?: string
   }
   if (!ev?.msg_key || !ev.target_pane_id || !ev.content) return
   // The broadcast reaches the sending window too. When the sender is one of our
@@ -10975,6 +11057,8 @@ backend.on('agent_msg.deliver', (raw) => {
     // Set when this message answers one this window sent; an id we never handed
     // out (or an older backend that drops the field) leaves the row unlinked.
     replyTo: ev.reply_to,
+    // Only cli_send(kind="ack") sets this: log the row, never inject it.
+    kind: ev.kind === 'ack' ? 'ack' : undefined,
   })
   if (!accepted || !ev.cross_workspace) return
   // The instruction came from another project — say so, since nothing else in
@@ -16911,6 +16995,7 @@ function paneIsCommander(p: ActivePane): boolean {
       :backend="backend"
       :workspace-path="pipeline.workspacePath"
       :stages="stagesApi.stages.value"
+      :run-groups="runGroups"
       :panes="paneViews"
       :active-pane-id="effectiveFocusPaneId"
       :pipeline="pipelineView"

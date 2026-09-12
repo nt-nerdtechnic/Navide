@@ -3028,6 +3028,11 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
             >◦</span>
             <span v-if="p.isCommander" class="manager-inline" title="Stage manager — controls flow and decides ---STAGE-DONE---">🎯 Mgr</span>
             <span v-if="!isRowExpanded(p.id)" class="agent-line-sub">{{ agentTypeLabel(p.agentKey) }} · {{ p.roleLabel || 'No role' }}</span>
+            <span
+              v-if="p.loopActive"
+              class="loop-tag"
+              :class="{ waiting: p.loopWaitUntil != null }"
+            >∞ Loop</span>
             <span v-if="p.isMinimized" class="minimized-tag" title="Docked in sidebar">
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line></svg>
               Docked
@@ -5560,6 +5565,19 @@ button.icon-btn.muted:hover {
   opacity: 0.45;
   margin-left: -4px; /* pulls back .agent-line's 6px gap */
   user-select: none;
+}
+.loop-tag {
+  font-size: var(--font-3xs);
+  padding: 1px 5px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  background: var(--success-subtle);
+  color: var(--success-fg);
+  border: 1px solid var(--success-emphasis);
+  white-space: nowrap;
+}
+.loop-tag.waiting {
+  opacity: 0.55;
 }
 .minimized-tag {
   margin-left: auto;

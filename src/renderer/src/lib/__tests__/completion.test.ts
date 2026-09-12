@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { activityMeansWorking, applyLoopWait, detailMeansToolUse, quotaTurnIsFresh, recordTurnComplete, paneSignalResetKeys, loopWaitBackoffMs, loopWaitHonoured, LOOP_WAIT_BACKOFF_MS, LOOP_WAIT_TOTAL_MAX_MS, slotFinished, allSlotsFinished, turnCompleteDone, loopContinueReady, turnEndsWithSentinel, parseEventMs, isReplayedTurnComplete, normalizeTurnText, turnMadeProgress, loopBackoffMs, applyTurnProgress, loopStallVerdict, loopWaitingOnSubagents, turnUsedNoTools, LOOP_STALL_BACKOFF_MS, LOOP_MIN_PROGRESS_CHARS, LOOP_STALL_LIMIT, LOOP_MAX_CONTINUES, LOOP_SUBAGENT_WAIT_MAX_MS, LOOP_RECENT_TURNS, type SlotSignal, type LoopStallState } from '../completion'
+import { activityMeansWorking, applyLoopWait, detailMeansToolUse, quotaTurnIsFresh, recordTurnComplete, paneSignalResetKeys, loopWaitBackoffMs, loopWaitHonoured, LOOP_WAIT_BACKOFF_MS, LOOP_WAIT_TOTAL_MAX_MS, slotFinished, allSlotsFinished, turnCompleteDone, loopContinueReady, turnEndsWithSentinel, parseEventMs, isReplayedTurnComplete, turnTextFingerprint, normalizeTurnText, turnMadeProgress, loopBackoffMs, applyTurnProgress, loopStallVerdict, loopWaitingOnSubagents, turnUsedNoTools, LOOP_STALL_BACKOFF_MS, LOOP_MIN_PROGRESS_CHARS, LOOP_STALL_LIMIT, LOOP_MAX_CONTINUES, LOOP_SUBAGENT_WAIT_MAX_MS, LOOP_RECENT_TURNS, type SlotSignal, type LoopStallState } from '../completion'
 
 // Fixed reference time for the watcher arming. turn_complete only counts when
 // its timestamp is strictly AFTER this.
@@ -1062,5 +1062,39 @@ describe('quotaTurnIsFresh · what it does NOT do', () => {
       sentinelSeen: true, turnCompleteAt: SEEN + 1_000, armedAt: ARMED,
       quotaSeenAt: SEEN, turnSourceAt: SEEN - 500
     })).toBe(true)
+  })
+})
+
+describe('turnTextFingerprint', () => {
+  // The dedupe of last resort: the timestamp gate reads an unparseable stamp as
+  // fresh, so for those vendors the same turn was re-dispatched every time it
+  // was re-reported — the MSG blocks in it sent again with no ceiling.
+  it('is stable for the same text', () => {
+    const text = '---MSG-START---\nto: reviewer\ndone\n---MSG-END---'
+    expect(turnTextFingerprint(text)).toBe(turnTextFingerprint(text))
+  })
+
+  it('separates turns that differ only at the very end', () => {
+    expect(turnTextFingerprint('report A')).not.toBe(turnTextFingerprint('report B'))
+  })
+
+  it('separates turns that differ only at the very start', () => {
+    expect(turnTextFingerprint('A report')).not.toBe(turnTextFingerprint('B report'))
+  })
+
+  it('separates a repeated block from the same block sent twice in one turn', () => {
+    // Two identical MSG blocks in one turn are two messages; the same block
+    // arriving in a later turn is a replay. Length alone cannot tell them
+    // apart, which is why the hash is length-prefixed rather than length-only.
+    const once = 'send it'
+    expect(turnTextFingerprint(once)).not.toBe(turnTextFingerprint(once + once))
+  })
+
+  it('is order-sensitive, not a character sum', () => {
+    expect(turnTextFingerprint('ab')).not.toBe(turnTextFingerprint('ba'))
+  })
+
+  it('handles an empty turn without collapsing it onto a real one', () => {
+    expect(turnTextFingerprint('')).not.toBe(turnTextFingerprint(' '))
   })
 })
