@@ -3282,6 +3282,8 @@
     "count": "{count} items",
     "empty": "Nothing here",
     "unsupported": "Not supported on this platform",
+    "no-source": "Nothing to list on this platform: Navide reads the user crontab and macOS launchd jobs, and this system has neither. Navide never creates scheduled jobs of its own, so nothing is missing here.",
+    "no-source-windows": "Windows keeps its scheduled tasks in Task Scheduler (taskschd.msc), which lists, enables, disables and removes them; Navide does not integrate it by design.",
     "crontab": {
       "title": "System crontab",
       "filter-all": "All",

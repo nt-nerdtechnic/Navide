@@ -88,6 +88,19 @@ const AGENT_FILTERS: AgentFilter[] = ['all', 'running', 'stopped']
 const crontab = computed(() => snapshot.value?.crontab ?? null)
 const launchAgents = computed(() => snapshot.value?.launch_agents ?? null)
 
+/** True when the backend could list nothing at all here: every source it
+ *  knows reported itself unsupported. Windows today. The three sections are
+ *  named after Unix and macOS things, so showing them empty would tell a
+ *  Windows user about crontab and launchd instead of about their machine;
+ *  one platform-level line says what is actually the case — nothing is
+ *  broken, this platform has no source Navide reads. Derived from the
+ *  snapshot, not from the platform id, so it stays true wherever both
+ *  sources are absent. */
+const noSourceOnPlatform = computed(() =>
+  crontab.value !== null && launchAgents.value !== null
+  && !crontab.value.supported && !launchAgents.value.supported
+)
+
 /** A LaunchAgent counts as up when launchd has it either running or loaded.
  *  Never true for a job whose state is unknown — both fields are null then. */
 function isAgentUp(agent: LaunchAgentEntry): boolean {
@@ -335,7 +348,14 @@ onUnmounted(() => {
       {{ t('executions.scan-failed', { message: scanError }) }}
     </p>
 
-    <div class="tk-body">
+    <div v-if="noSourceOnPlatform" class="tk-body tk-body--none" data-test="executions-no-source">
+      <p class="tk-platform-note">{{ t('executions.no-source') }}</p>
+      <p v-if="snapshot?.platform === 'win32'" class="tk-platform-note tk-platform-hint">
+        {{ t('executions.no-source-windows') }}
+      </p>
+    </div>
+
+    <div v-else class="tk-body">
       <!-- ── Unix crontab ─────────────────────────────────────────────── -->
       <section class="tk-section" data-section="crontab">
         <div class="tk-sec-hdr">
@@ -715,6 +735,18 @@ onUnmounted(() => {
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
+}
+.tk-body--none {
+  padding: 18px 14px;
+}
+.tk-platform-note {
+  margin: 0 0 8px;
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+  max-width: 44em;
+}
+.tk-platform-hint {
+  font-size: var(--font-2xs);
 }
 
 .tk-section {
