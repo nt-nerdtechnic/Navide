@@ -80,8 +80,15 @@ def test_new_paths_prepended(monkeypatch):
     assert "/bin" in parts
 
 
+@_needs_login_shell_probe
 def test_existing_paths_not_duplicated(monkeypatch):
-    """Paths already in PATH must not appear twice after refresh."""
+    """Paths already in PATH must not appear twice after refresh.
+
+    Gated like its siblings: on Windows there is no login shell to probe, the
+    refresh returns before touching PATH, and this test used to pass there
+    only because its ":"-joined fixture was split on ":" — asserting "no
+    duplicates" on a PATH the function never touched. Splitting on
+    os.pathsep (";" there) made that visible."""
     monkeypatch.setenv("PATH", "/usr/bin:/bin")
     shell_path = "/usr/bin:/bin"
     with patch("subprocess.run", return_value=_make_run_result(_probe_output(shell_path))):
