@@ -131,6 +131,76 @@ def test_flush_leaves_no_json_artifacts(tmp_path: Path) -> None:
     assert s2.snapshot(str(workspace))["workspace"]["cumulative"]["totals"]["calls"] == 1
 
 
+def test_record_accumulates_cumulative_by_group(store: TokensStore, workspace: str) -> None:
+    store.start_run(workspace, run_id="r1", task="t", run_dir="runs/r1")
+    store.record(workspace, source="cli", vendor="claude", group_id="rg-1",
+                 input_tokens=10, output_tokens=20)
+    store.record(workspace, source="cli", vendor="claude", group_id="rg-1",
+                 input_tokens=1, output_tokens=2)
+    store.record(workspace, source="cli", vendor="codex", group_id="rg-2",
+                 input_tokens=5, output_tokens=5)
+    # Ungrouped usage lands under "" — recorded always, unlike by_stage.
+    store.record(workspace, source="cli", vendor="claude",
+                 input_tokens=3, output_tokens=4)
+    snap = store.snapshot(workspace)
+
+    cum = snap["workspace"]["cumulative"]
+    assert cum["by_group"] == {
+        "rg-1": {"input": 11, "output": 22, "calls": 2},
+        "rg-2": {"input": 5, "output": 5, "calls": 1},
+        "": {"input": 3, "output": 4, "calls": 1},
+    }
+    assert snap["workspace"]["current_run"]["by_group"] == cum["by_group"]
+
+
+def test_reset_workspace_clears_by_group(store: TokensStore, workspace: str) -> None:
+    store.record(workspace, source="cli", vendor="claude", group_id="rg-1",
+                 input_tokens=10, output_tokens=20)
+    snap = store.reset("workspace", workspace_path=workspace)
+    assert snap["workspace"]["cumulative"]["by_group"] == {}
+
+
+def test_reset_run_clears_run_by_group_but_keeps_cumulative(store: TokensStore, workspace: str) -> None:
+    store.start_run(workspace, run_id="r1", task="t", run_dir="runs/r1")
+    store.record(workspace, source="cli", vendor="claude", group_id="rg-1",
+                 input_tokens=10, output_tokens=20)
+    snap = store.reset("run", workspace_path=workspace)
+    assert snap["workspace"]["current_run"]["by_group"] == {}
+    assert snap["workspace"]["cumulative"]["by_group"]["rg-1"]["calls"] == 1
+
+
+def test_persisted_doc_without_by_group_loads_and_records(tmp_path: Path) -> None:
+    """A workspace doc written before by_group existed must still load, show
+    the key in the snapshot and accept new records without KeyError."""
+    workspace = tmp_path / "ws"
+    (workspace / ".agent-team").mkdir(parents=True)
+    (workspace / ".agent-team" / "tokens.json").write_text(json.dumps({
+        "schemaVersion": 3,
+        "current_run": {
+            "run_id": "r0", "task": "t", "run_dir": "runs/r0",
+            "started_at": "2026-01-01T00:00:00+00:00", "ended_at": None,
+            "totals": {"input": 1, "output": 1, "calls": 1},
+            "by_vendor": {}, "by_stage": {}, "by_pane": {},
+        },
+        "runs": [],
+        "cumulative": {
+            "totals": {"input": 1, "output": 1, "calls": 1},
+            "by_vendor": {}, "by_stage": {},
+        },
+    }), encoding="utf-8")
+    s = TokensStore(global_path=tmp_path / "g.json", workspace_base_dir=tmp_path / "workspaces")
+
+    snap = s.snapshot(str(workspace))
+    assert snap["workspace"]["cumulative"]["by_group"] == {}
+    assert snap["workspace"]["current_run"]["by_group"] == {}
+
+    s.record(str(workspace), source="cli", vendor="claude", group_id="rg-1",
+             input_tokens=10, output_tokens=20)
+    snap = s.snapshot(str(workspace))
+    assert snap["workspace"]["cumulative"]["by_group"]["rg-1"]["calls"] == 1
+    assert snap["workspace"]["current_run"]["by_group"]["rg-1"]["calls"] == 1
+
+
 def test_reset_run_clears_current_but_keeps_cumulative(store: TokensStore, workspace: str) -> None:
     store.start_run(workspace, run_id="r1", task="t", run_dir="runs/r1")
     store.record(workspace, source="cli", vendor="claude",

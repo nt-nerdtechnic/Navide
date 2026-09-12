@@ -3,7 +3,8 @@ import { computed, ref, watch, type Ref } from 'vue'
 import { CLI_AGENT_SPECS } from '@navide/plugin-shell'
 import { settingsGet, settingsSet } from '@navide/plugin-ui/shared'
 import { useTokens, type TokenBucket, type ResetScope } from '../composables/useTokens'
-import { useNotify } from '@navide/plugin-ui/foundation'
+import { buildTokenGroupRows } from '../lib/tokenGroups'
+import { i18n, useNotify } from '@navide/plugin-ui/foundation'
 import type { useBackend } from '../composables/useBackend'
 import HistoryPanel from './HistoryPanel.vue'
 import TaskerPanel from './TaskerPanel.vue'
@@ -32,6 +33,9 @@ interface Props {
   backend: ReturnType<typeof useBackend>
   workspacePath: string
   stages: Stage[]
+  /** Sidebar run groups, in sidebar order. Rows come from the snapshot's
+   *  by_group buckets, so a group that spent nothing still lists as zero. */
+  runGroups?: readonly { id: string; name: string }[]
   panes: ActivePane[]
   /** The pane the user is looking at right now. The top block reports this
    *  pane's session alone — a workspace-wide tally answered a question nobody
@@ -228,6 +232,9 @@ const cumulativeByVendor = computed(
 const cumulativeByStage = computed(
   () => snapshot.value?.workspace?.cumulative?.by_stage ?? {}
 )
+const cumulativeByGroup = computed(
+  () => snapshot.value?.workspace?.cumulative?.by_group ?? {}
+)
 
 const vendorRows = computed(() => {
   const map = cumulativeByVendor.value
@@ -246,6 +253,13 @@ const stageRows = computed(() => {
     bucket: map[s.id] ?? EMPTY
   }))
 })
+
+const groupRows = computed(() =>
+  buildTokenGroupRows(props.runGroups ?? [], cumulativeByGroup.value, {
+    manual: i18n.global.t('label.manual'),
+    orphan: i18n.global.t('label.orphan-group'),
+  })
+)
 
 const paneRows = computed(() => {
   const run = currentRun.value
@@ -449,6 +463,23 @@ async function confirmReset(scope: ResetScope): Promise<void> {
           <table v-else class="grid">
             <tbody>
               <tr v-for="row in stageRows" :key="row.id">
+                <th>{{ row.label }}</th>
+                <td>{{ fmt(row.bucket.input) }}</td>
+                <td>{{ fmt(row.bucket.output) }}</td>
+                <td class="dim">{{ row.bucket.calls }}</td>
+              </tr>
+
+            </tbody>
+          </table>
+        </section>
+
+        <!-- By Group -->
+        <section class="block">
+          <div class="block-hdr"><span class="block-title">{{ $t('label.by-group') }}</span></div>
+          <div v-if="!groupRows.length" class="muted">{{ $t('label.no-groups') }}</div>
+          <table v-else class="grid">
+            <tbody>
+              <tr v-for="row in groupRows" :key="row.key">
                 <th>{{ row.label }}</th>
                 <td>{{ fmt(row.bucket.input) }}</td>
                 <td>{{ fmt(row.bucket.output) }}</td>

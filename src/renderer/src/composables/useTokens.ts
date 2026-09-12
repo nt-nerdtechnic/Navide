@@ -23,6 +23,9 @@ export interface CumulativeSnapshot {
   totals: TokenBucket
   by_vendor: Record<string, TokenBucket>
   by_stage: Record<string, TokenBucket>
+  /** Keyed by sidebar run group id; `""` is ungrouped usage. Keys may
+   *  outlive their group — the panel folds those into one orphan row. */
+  by_group: Record<string, TokenBucket>
 }
 
 export interface GlobalSnapshot {

@@ -52,6 +52,7 @@ class AttributedUsage:
     workspace_path: str | None
     stage_id: str | None
     slot_key: str | None = None  # stable "stageId:slotLabel" — use as tokens_store by_pane key
+    group_id: str = ""           # sidebar run group ("" = ungrouped) — tokens_store by_group key
 
 
 @dataclass
@@ -78,6 +79,7 @@ class _PaneRegistration:
     workspace_path: str
     stage_id: str | None
     slot_key: str = ""        # stable "stageId:slotLabel" (for tokens_store by_pane key)
+    group_id: str = ""        # sidebar run group ("" = ungrouped); live-updated by set_pane_group
     registered_at: float = field(default_factory=time.time)
     baseline_files: set[Path] = field(default_factory=set)
     claimed_session_ids: set[str] = field(default_factory=set)
@@ -257,6 +259,7 @@ class Attribution:
         workspace_path: str = "",
         stage_id: str | None = None,
         slot_key: str = "",
+        group_id: str = "",
         explicit_session_id: str = "",
         session_marker: str = "",
         session_home_id: str = "",
@@ -302,6 +305,7 @@ class Attribution:
         reg = _PaneRegistration(
             pane_id=pane_id, vendor=vendor, cwd=cwd,
             workspace_path=ws, stage_id=stage_id, slot_key=slot_key,
+            group_id=group_id,
             baseline_files=baseline, session_marker=session_marker,
             session_home_id=session_home_id,
         )
@@ -323,6 +327,17 @@ class Attribution:
         with self._lock:
             reg = self._panes.get(pane_id)
             return reg.slot_key if reg else ""
+
+    def set_pane_group(self, pane_id: str, group_id: str) -> bool:
+        """Re-point a live pane's run-group attribution. Only usage attributed
+        from now on is credited to `group_id`; buckets already recorded stay
+        where they are. False when the pane is not registered."""
+        with self._lock:
+            reg = self._panes.get(pane_id)
+            if reg is None:
+                return False
+            reg.group_id = group_id
+            return True
 
     def unregister_pane(self, pane_id: str) -> None:
         with self._lock:
@@ -351,12 +366,14 @@ class Attribution:
 
             # Pane attribution within the current run (best-effort for "By Pane")
             pane_id, stage_id, slot_key = self._lookup_pane_for(usage)
+            reg = self._panes.get(pane_id) if pane_id else None
             return AttributedUsage(
                 usage=usage,
                 pane_id=pane_id,
                 workspace_path=ws_path,
                 stage_id=stage_id,
                 slot_key=slot_key,
+                group_id=reg.group_id if reg else "",
             )
 
     def maybe_announce_session(self, usage: TokenUsage) -> SessionBinding | None:

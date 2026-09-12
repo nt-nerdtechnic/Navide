@@ -1411,6 +1411,7 @@ async def _on_log_token_usage(usage: TokenUsage) -> TokenSinkResult:
             pane_id=attributed.slot_key or attributed.pane_id,
             session_id=usage.session_id,
             stage_id=attributed.stage_id,
+            group_id=attributed.group_id,
             input_tokens=usage.input_tokens,
             output_tokens=usage.output_tokens,
             dedup_key=composite_key,

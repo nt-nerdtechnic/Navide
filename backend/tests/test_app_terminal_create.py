@@ -130,6 +130,7 @@ async def test_terminal_create_codex_prepares_home_and_registers_home_id(
         "workspace_path": "/ws",
         "stage_id": "01",
         "slot_key": "01:Build",
+        "group_id": "",
         "explicit_session_id": "",
         "session_marker": "",
         "session_home_id": "stable-home",
@@ -560,6 +561,32 @@ async def test_terminal_create_claude_resume_claims_resume_id(
 
 
 @pytest.mark.asyncio
+async def test_terminal_create_passes_run_group_id_to_attribution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """metadata.run_group_id is the sidebar group the pane was spawned into; it
+    must reach register_pane so the pane's usage is credited to that group."""
+    fake_attr = FakeAttribution()
+    monkeypatch.setattr(app, "attribution", fake_attr)
+    monkeypatch.setattr(app, "_register_workspace_and_backfill", lambda _ws: None)
+    session = _session()
+
+    await app.handle_message(session, {
+        "id": "m6g",
+        "type": "terminal.create",
+        "payload": {
+            "pane_id": "grouped-pane",
+            "agent_key": "claude",
+            "command": "claude",
+            "cwd": "/ws",
+            "metadata": {"workspace_path": "/ws", "run_group_id": "rg-1"},
+        },
+    })
+
+    assert fake_attr.registered[0]["group_id"] == "rg-1"
+
+
+@pytest.mark.asyncio
 async def test_terminal_create_claude_metadata_session_id_wins_over_command(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -973,6 +1000,7 @@ async def test_terminal_create_antigravity_registers_session_marker(
         "workspace_path": "/ws",
         "stage_id": None,
         "slot_key": "",
+        "group_id": "",
         "explicit_session_id": "",
         "session_marker": "at-pane:ag-pane",
         "session_home_id": "",

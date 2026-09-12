@@ -48,7 +48,7 @@ function snapshot(over: Partial<TokensSnapshot['workspace']> = {}): TokensSnapsh
         by_pane: { 's1:A': bucket(1, 2, 1) },
       },
       runs: [],
-      cumulative: { totals: bucket(100, 200, 30), by_vendor: { claude: bucket(5, 6, 7) }, by_stage: { s1: bucket(8, 9, 10) } },
+      cumulative: { totals: bucket(100, 200, 30), by_vendor: { claude: bucket(5, 6, 7) }, by_stage: { s1: bucket(8, 9, 10) }, by_group: {} },
       ...over,
     },
     global: { all_time: bucket(1000, 2000, 300), by_vendor: {}, by_day: {} },
@@ -156,6 +156,34 @@ describe('TokenStatsPanel', () => {
     w.unmount()
   })
 
+  it('renders BY GROUP rows from cumulative.by_group in runGroups order', async () => {
+    // Rows come from the snapshot, not from panes: a group with no usage still
+    // lists (as zeros) because the sidebar lists it.
+    const { w, emit } = mountPanel({
+      runGroups: [{ id: 'rg-2', name: 'Later' }, { id: 'rg-1', name: 'Earlier' }],
+    })
+    const snap = snapshot()
+    snap.workspace.cumulative.by_group = { 'rg-1': bucket(11, 22, 3) }
+    emit('tokens.changed', snap)
+    await w.findAll('.hdr .tab')[1].trigger('click')  // tokens
+    const groupBlock = w.findAll('.block').find((b) => b.text().includes('label.by-group'))!
+    const rows = groupBlock.findAll('tbody tr')
+    expect(rows.map((r) => r.find('th').text())).toEqual(['Later', 'Earlier'])
+    expect(rows[0].findAll('td').map((c) => c.text())).toEqual(['0', '0', '0'])
+    expect(rows[1].findAll('td').map((c) => c.text())).toEqual(['11', '22', '3'])
+    w.unmount()
+  })
+
+  it('shows no-groups empty state when there are no groups and by_group is empty', async () => {
+    const { w, emit } = mountPanel()
+    emit('tokens.changed', snapshot())
+    await w.findAll('.hdr .tab')[1].trigger('click')
+    const groupBlock = w.findAll('.block').find((b) => b.text().includes('label.by-group'))!
+    expect(groupBlock.text()).toContain('label.no-groups')
+    expect(groupBlock.find('table').exists()).toBe(false)
+    w.unmount()
+  })
+
   it('keys pane token rows by stage:slot so they survive a frontend restart', async () => {
     // by_pane is keyed 'stageId:slotLabel' on the backend; a pane's UUID
     // changes on every rebuild, so matching on it would zero the row.
@@ -232,7 +260,7 @@ describe('TokenStatsPanel', () => {
     const snap = snapshot({
       cumulative: {
         totals: bucket(77_059_400_000, 329_000_000, 369_287),
-        by_vendor: {}, by_stage: {},
+        by_vendor: {}, by_stage: {}, by_group: {},
       },
     })
     snap.global.all_time = bucket(2_500_000_000_000, 0, 0)

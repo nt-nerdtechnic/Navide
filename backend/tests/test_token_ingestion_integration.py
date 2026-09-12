@@ -136,3 +136,72 @@ async def test_ingestion_restart_append_and_workspace_replay(
         "calls": 2,
     }
     restarted_store.flush()
+
+
+# ── run-group attribution through the real handler + sink ────────────────────
+
+from agent_team_backend import app  # noqa: E402
+
+from .test_app_terminal_create import _session, _stub_agent_cli_probe  # noqa: E402, F401
+
+
+@pytest.mark.asyncio
+async def test_terminal_create_run_group_reaches_cumulative_by_group(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """terminal.create with metadata.run_group_id → usage on that pane's
+    session → the workspace snapshot carries cumulative.by_group[<group>]."""
+    config = tmp_path / "claude"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    workspace = str(workspace_path)
+    session_file = config / "projects" / encode_claude_cwd(workspace) / "sess-1.jsonl"
+    session_file.parent.mkdir(parents=True)
+    session_file.write_text("")
+
+    attribution = Attribution([ClaudeLogReader()], workspaces_path=tmp_path / "known-workspaces.json")
+    store = _store(tmp_path)
+    monkeypatch.setattr(app, "attribution", attribution)
+    monkeypatch.setattr(app, "tokens_store", store)
+    monkeypatch.setattr(app, "_register_workspace_and_backfill", lambda _ws: None)
+    monkeypatch.setattr(app, "track_live_session", lambda **_kwargs: None)
+    monkeypatch.setattr(app, "_schedule_tokens_broadcast", lambda _ws: None)
+
+    await app.handle_message(_session(), {
+        "id": "m1",
+        "type": "terminal.create",
+        "payload": {
+            "pane_id": "grouped-pane",
+            "agent_key": "claude",
+            "command": "claude",
+            "cwd": workspace,
+            "metadata": {
+                "workspace_path": workspace,
+                "explicit_session_id": "sess-1",
+                "run_group_id": "rg-1",
+            },
+        },
+    })
+
+    result = await app._on_log_token_usage(TokenUsage(
+        vendor="claude", input_tokens=100, output_tokens=40, cwd=workspace,
+        session_id="sess-1", file_path=str(session_file), dedup_key="m1::r1",
+    ))
+    assert result.handled is True
+
+    cumulative = store.snapshot(workspace)["workspace"]["cumulative"]
+    assert cumulative["by_group"] == {"rg-1": {"input": 100, "output": 40, "calls": 1}}
+
+    # Moving the pane re-points what comes next; the first bucket stays put.
+    assert attribution.set_pane_group("grouped-pane", "rg-2") is True
+    await app._on_log_token_usage(TokenUsage(
+        vendor="claude", input_tokens=1, output_tokens=2, cwd=workspace,
+        session_id="sess-1", file_path=str(session_file), dedup_key="m2::r2",
+    ))
+    cumulative = store.snapshot(workspace)["workspace"]["cumulative"]
+    assert cumulative["by_group"] == {
+        "rg-1": {"input": 100, "output": 40, "calls": 1},
+        "rg-2": {"input": 1, "output": 2, "calls": 1},
+    }

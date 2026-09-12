@@ -216,6 +216,39 @@ def test_pane_attribution_within_run(claude_attr: tuple[Attribution, Path]) -> N
     assert result.stage_id == "01"
 
 
+def test_register_pane_group_id_flows_through_attribute(claude_attr: tuple[Attribution, Path]) -> None:
+    attr, root = claude_attr
+    cwd = "/x"
+    proj_dir = root / "-x"; proj_dir.mkdir()
+    attr.register_pane("pane-1", vendor="claude", cwd=cwd,
+                       workspace_path=cwd, group_id="rg-1")
+    f = proj_dir / "s.jsonl"; f.write_text("")
+    result = attr.attribute(_make_usage("claude", session_id="s", file_path=str(f)))
+    assert result.pane_id == "pane-1"
+    assert result.group_id == "rg-1"
+
+
+def test_set_pane_group_repoints_subsequent_attribution(claude_attr: tuple[Attribution, Path]) -> None:
+    attr, root = claude_attr
+    cwd = "/x"
+    proj_dir = root / "-x"; proj_dir.mkdir()
+    attr.register_pane("pane-1", vendor="claude", cwd=cwd, workspace_path=cwd)
+    f = proj_dir / "s.jsonl"; f.write_text("")
+    usage = _make_usage("claude", session_id="s", file_path=str(f))
+    assert attr.attribute(usage).group_id == ""
+
+    assert attr.set_pane_group("pane-1", "rg-2") is True
+    assert attr.attribute(usage).group_id == "rg-2"
+    # Back to ungrouped is a plain "" too.
+    assert attr.set_pane_group("pane-1", "") is True
+    assert attr.attribute(usage).group_id == ""
+
+
+def test_set_pane_group_unknown_pane_returns_false(claude_attr: tuple[Attribution, Path]) -> None:
+    attr, _root = claude_attr
+    assert attr.set_pane_group("never-registered", "rg-1") is False
+
+
 def test_register_pane_scopes_baseline_to_workspace_folder(tmp_path: Path) -> None:
     """register_pane must enumerate only the pane's workspace folder, not the
     whole session tree. On a large ~/.claude the whole-tree scan stat'd ~1500

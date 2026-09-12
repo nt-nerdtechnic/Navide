@@ -222,6 +222,7 @@ def _empty_workspace_doc() -> dict[str, Any]:
             "totals": _empty_bucket(),
             "by_vendor": {},
             "by_stage": {},
+            "by_group": {},   # sidebar run group id → bucket; "" = ungrouped
         },
     }
 
@@ -256,6 +257,7 @@ def _new_run(run_id: str, task: str, run_dir: str) -> dict[str, Any]:
         "totals": _empty_bucket(),
         "by_vendor": {},
         "by_stage": {},
+        "by_group": {},
         "by_pane": {},
     }
 
@@ -666,6 +668,10 @@ class TokensStore:
             # Forward-compat: fill in any missing top-level keys.
             for k, v in _empty_workspace_doc().items():
                 doc.setdefault(k, v)
+            # by_group arrived after by_stage; docs persisted before it lack the key.
+            doc["cumulative"].setdefault("by_group", {})
+            if doc["current_run"]:
+                doc["current_run"].setdefault("by_group", {})
         self._workspace_cache[workspace_path] = doc
         return doc
 
@@ -1099,6 +1105,7 @@ class TokensStore:
         pane_id: str | None = None,
         session_id: str | None = None,
         stage_id: str | None = None,
+        group_id: str = "",
         input_tokens: int = 0,
         output_tokens: int = 0,
         dedup_key: str = "",
@@ -1180,6 +1187,7 @@ class TokensStore:
                     _add(run["by_vendor"].setdefault(vendor, _empty_bucket()), delta)
                     if stage_id:
                         _add(run["by_stage"].setdefault(stage_id, _empty_bucket()), delta)
+                    _add(run["by_group"].setdefault(group_id, _empty_bucket()), delta)
                     if pane_id:
                         _add(run["by_pane"].setdefault(pane_id, _empty_bucket()), delta)
                 # cumulative (workspace lifetime, runs included)
@@ -1188,6 +1196,8 @@ class TokensStore:
                 _add(cum["by_vendor"].setdefault(vendor, _empty_bucket()), delta)
                 if stage_id:
                     _add(cum["by_stage"].setdefault(stage_id, _empty_bucket()), delta)
+                # Always recorded — "" is the ungrouped bucket the panel shows too.
+                _add(cum["by_group"].setdefault(group_id, _empty_bucket()), delta)
                 # The live per-session tally is deliberately NOT fed here: it is
                 # read straight from the vendor's session log (set_live_total),
                 # so a missed or deduped event can never make it drift.

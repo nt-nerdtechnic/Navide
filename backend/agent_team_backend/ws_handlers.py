@@ -5500,6 +5500,7 @@ async def _terminal_create_impl(
                 workspace_path=ws_for_pane,
                 stage_id=metadata.get("stage_id") or metadata.get("stageId"),
                 slot_key=app._stable_pane_key(metadata, ""),
+                group_id=str(metadata.get("run_group_id") or ""),
                 explicit_session_id=explicit_session_id,
                 session_marker=str(metadata.get("session_marker") or ""),
                 session_home_id=str(metadata.get("session_home_id") or ""),
@@ -7025,6 +7026,12 @@ async def pane_set_run_group(session: "Session", msg_id: str, msg_type: str, pay
             )
         )
         return
+    # Re-point the live token attribution too, so usage from here on lands in
+    # the new group's bucket. A pane the attribution layer never registered
+    # (e.g. a placeholder) has nothing to move — that is not an error.
+    app.attribution.set_pane_group(
+        payload["pane_id"], str(payload.get("run_group_id") or "")
+    )
     await session.send_json(
         make_response(msg_id, msg_type, app._project_payload(project))
     )
