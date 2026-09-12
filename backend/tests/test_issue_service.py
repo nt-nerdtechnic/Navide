@@ -11,7 +11,7 @@ import subprocess
 
 import pytest
 
-from agent_team_backend import issue_service
+from agent_team_backend import issue_service, osplat
 
 
 # ── canned CLI output (trimmed real shapes) ────────────────────────────────────
@@ -260,9 +260,10 @@ class TestListIssues:
 
     @pytest.mark.asyncio
     async def test_trusted_issue_route_inherits_existing_gh_auth_config(self, tmp_path, monkeypatch):
-        if os.name != "posix":
+        if osplat.paths.executable_candidates("gh") != ["gh"]:
             # Same harness as test_host_shell: a `#!/bin/sh` fake exec'd by
-            # bare name, which Windows resolves only as `gh.exe`.
+            # bare name, which this platform's resolver would never pick up
+            # (Windows resolves only `gh.exe`; see _BARE_NAME_IS_RUNNABLE there).
             pytest.skip("fake-CLI harness is a /bin/sh script exec'd by bare name")
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()
@@ -406,6 +407,9 @@ async def test_run_timeout_kills_and_reaps(monkeypatch):
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
     monkeypatch.setattr(asyncio, "wait_for", fast_wait_for)
+    # The broker resolves `gh` through the seam before exec; without this a
+    # host with no gh (or the seam swapped) reports 127 before the fake runs.
+    monkeypatch.setattr(osplat.paths, "resolve_program", lambda name, *, path=None: name)
 
     rc, _out, err = await issue_service._run(["gh", "issue", "list"], "/ws")
     assert rc == 128

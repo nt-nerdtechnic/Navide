@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import os
 import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from agent_team_backend import app, ws_handlers
+from agent_team_backend import app, osplat, ws_handlers
 
 
 class FakeWebSocket:
@@ -120,8 +119,10 @@ async def test_public_broker_rejects_git_template_without_creating_hooks(
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="fake `gh` is a #!/bin/sh script on a /usr/bin:/bin PATH (the test_host_shell fake-CLI harness)",
+    osplat.paths.executable_candidates("gh") != ["gh"]
+    or osplat.paths.resolve_program("git") is None,
+    reason="fake `gh` is a #!/bin/sh script found by bare name, next to a real git "
+    "(the test_host_shell fake-CLI harness)",
 )
 async def test_public_broker_does_not_return_provider_auth_fixture(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

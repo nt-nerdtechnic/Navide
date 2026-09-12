@@ -180,6 +180,9 @@ def test_install_unknown_id_rejected() -> None:
 def test_install_needs_terminal_returns_command_without_running(monkeypatch: pytest.MonkeyPatch) -> None:
     # homebrew is needs_terminal → must NOT shell out, just hand back the command.
     monkeypatch.setattr(ob.osplat, "platform_id", "darwin")
+    # The bootstrap gate asks the seam for each required binary; answer for
+    # it so the test is about needs_terminal, not about what this host has.
+    monkeypatch.setattr(ob.osplat.paths, "resolve_program", lambda name, *, path=None: f"/usr/bin/{name}")
     called = {"ran": False}
     def boom(*_a, **_k):
         called["ran"] = True

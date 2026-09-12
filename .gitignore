@@ -35,6 +35,9 @@ dist-test-fixtures/
 backend/*.egg-info/
 backend/.mypy_cache/
 backend/.ruff_cache/
+# Written next to the package at import by osplat's Windows askpass launcher
+# (on Windows, and on any host running the suite with -p tests.osplat_win_swap).
+backend/agent_team_backend/git_askpass_helper.cmd
 # Note: backend/.python-version is intentionally tracked (uv uses it to pin Python)
 
 # ─── macOS ──────────────────────────────────────────────────────────────────
