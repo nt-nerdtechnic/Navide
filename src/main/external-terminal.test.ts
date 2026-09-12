@@ -9,8 +9,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('node:child_process', () => ({ spawn: vi.fn() }))
 
 import { spawn } from 'node:child_process'
-import { normalizePlatformId, setPlatformId, type PlatformId } from '../shared/osplat'
+import { normalizePlatformId, platformId, setPlatformId, type PlatformId } from '../shared/osplat'
 import * as terminal from './external-terminal'
+
+// The platform to restore after a test that switched it: whatever this file
+// saw when it loaded — the host, or an injection from a vitest setup file.
+// Restoring to the host instead silently undid that injection for every
+// later test in the file (see src/shared/platformBaseline.test.ts).
+const BASELINE = platformId()
 
 // The real filesystem the suite runs on: NTFS has no executable bit to withhold.
 const hostIsWindows = normalizePlatformId(process.platform) === 'win32'
@@ -38,7 +44,7 @@ const spawnMock = spawn as unknown as ReturnType<typeof vi.fn>
 
 beforeEach(() => spawnMock.mockReset())
 afterEach(() => {
-  setPlatformId(normalizePlatformId(process.platform))
+  setPlatformId(BASELINE)
   vi.restoreAllMocks()
 })
 

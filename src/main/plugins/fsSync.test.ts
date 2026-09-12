@@ -2,10 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { constants, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { normalizePlatformId, setPlatformId } from '../../shared/osplat'
+import { normalizePlatformId, platformId, setPlatformId } from '../../shared/osplat'
 import { fsyncFileSync, syncDirectory, syncDirectorySync, type SyncFileOps } from './fsSync'
 import { NodePluginStorageFileSystem } from './pluginStorage'
 import { PluginCapabilityGrantStore } from './pluginCapabilityGrantStore'
+
+// The platform to restore after a test that switched it: whatever this file
+// saw when it loaded — the host, or an injection from a vitest setup file.
+// Restoring to the host instead silently undid that injection for every
+// later test in the file (see src/shared/platformBaseline.test.ts).
+const BASELINE = platformId()
 
 // The real filesystem the suite runs on: NTFS refuses to fsync a directory handle.
 const hostIsWindows = normalizePlatformId(process.platform) === 'win32'
@@ -65,7 +71,7 @@ describe('fsSync', () => {
     opened.paths.length = 0
   })
   afterEach(() => {
-    setPlatformId(normalizePlatformId(process.platform))
+    setPlatformId(BASELINE)
     rmSync(root, { recursive: true, force: true })
   })
 

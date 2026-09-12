@@ -1,7 +1,13 @@
 import { join } from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { normalizePlatformId, setPlatformId } from '../shared/osplat'
+import { platformId, setPlatformId } from '../shared/osplat'
+
+// The platform to restore after a test that switched it: whatever this file
+// saw when it loaded — the host, or an injection from a vitest setup file.
+// Restoring to the host instead silently undid that injection for every
+// later test in the file (see src/shared/platformBaseline.test.ts).
+const BASELINE = platformId()
 
 // permissions.ts caches the last prompt result on disk because macOS exposes no
 // non-prompting TCC read to Electron. These tests pin the contract the Settings
@@ -64,7 +70,7 @@ describe('permissions (main)', () => {
     setPlatformId('darwin')
   })
   afterEach(() => {
-    setPlatformId(normalizePlatformId(process.platform))
+    setPlatformId(BASELINE)
   })
 
   it('reports every permission not-applicable off macOS without touching disk', async () => {

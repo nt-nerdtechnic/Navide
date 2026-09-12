@@ -16,6 +16,12 @@ import {
   type PlatformId,
 } from './osplat'
 
+// The platform to restore after a test that switched it: whatever this file
+// saw when it loaded — the host, or an injection from a vitest setup file.
+// Restoring to the host instead silently undid that injection for every
+// later test in the file (see src/shared/platformBaseline.test.ts).
+const BASELINE = platformId()
+
 // The module caches an injected value, so every test has to hand it back or
 // the next one inherits a platform it did not ask for.
 const asPlatform = (id: PlatformId, run: () => void): void => {
@@ -24,10 +30,9 @@ const asPlatform = (id: PlatformId, run: () => void): void => {
 }
 
 afterEach(() => {
-  // `process.platform` is what main and preload actually resolve against, so
-  // restoring to it rather than to a fixed id keeps the suite honest about
-  // which machine it is on.
-  setPlatformId(normalizePlatformId(process.platform))
+  // Back to what this file loaded with — the host, or a suite-wide
+  // injection — never to a fixed id.
+  setPlatformId(BASELINE)
 })
 
 describe('normalizePlatformId', () => {

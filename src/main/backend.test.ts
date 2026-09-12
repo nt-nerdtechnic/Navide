@@ -11,7 +11,7 @@ vi.mock('./process-tree', () => ({ killProcessTree }))
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { normalizePlatformId, setPlatformId } from '../shared/osplat'
+import { platformId, setPlatformId } from '../shared/osplat'
 import {
   bindBackendPluginActivationCatalog,
   handConfirmKey,
@@ -22,6 +22,12 @@ import {
   stopBackendProcess,
   waitForHealth,
 } from './backend'
+
+// The platform to restore after a test that switched it: whatever this file
+// saw when it loaded — the host, or an injection from a vitest setup file.
+// Restoring to the host instead silently undid that injection for every
+// later test in the file (see src/shared/platformBaseline.test.ts).
+const BASELINE = platformId()
 
 describe('backend plugin activation environment', () => {
   it('replaces directory discovery with a path and exact-byte digest binding', () => {
@@ -107,7 +113,7 @@ describe('waitForHealth', () => {
 // notice when it moves.
 
 describe('the trust-confirmation key', () => {
-  afterEach(() => setPlatformId(normalizePlatformId(process.platform)))
+  afterEach(() => setPlatformId(BASELINE))
 
   it('goes over stdin once and closes the pipe', () => {
     // Not a file and not an environment variable, deliberately: `cat` and
@@ -256,7 +262,7 @@ const asChild = (proc: FakeProc): ChildProcess => proc as unknown as ChildProces
 describe('stopBackendProcess', () => {
   afterEach(() => {
     killProcessTree.mockReset()
-    setPlatformId(normalizePlatformId(process.platform))
+    setPlatformId(BASELINE)
     vi.useRealTimers()
   })
 

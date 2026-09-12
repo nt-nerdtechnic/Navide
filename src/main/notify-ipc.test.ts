@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { normalizePlatformId, setPlatformId } from '../shared/osplat'
+import { platformId, setPlatformId } from '../shared/osplat'
+
+// The platform to restore after a test that switched it: whatever this file
+// saw when it loaded — the host, or an injection from a vitest setup file.
+// Restoring to the host instead silently undid that injection for every
+// later test in the file (see src/shared/platformBaseline.test.ts).
+const BASELINE = platformId()
 
 // The renderer's useSystemNotify ends in two IPC channels owned by
 // `src/main/index.ts`: `window:notify` (desktop notification whose click brings
@@ -111,7 +117,7 @@ describe('window:notify / window:setBadgeCount IPC', () => {
     expect(setBadge).toBeTypeOf('function')
   }, 60_000)
 
-  afterEach(() => setPlatformId(normalizePlatformId(process.platform)))
+  afterEach(() => setPlatformId(BASELINE))
 
   it('shows a non-silent notification with the given title and body', () => {
     const res = notify({ sender: 'sender' }, { paneId: 'p1', title: 'CLI finished', body: 'x completed' })

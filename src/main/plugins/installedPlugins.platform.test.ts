@@ -2,8 +2,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { isWindows, normalizePlatformId, setPlatformId } from '../../shared/osplat'
+import { isWindows, platformId, setPlatformId } from '../../shared/osplat'
 import { backendEntryOnDisk, loadPluginDir } from './installedPlugins'
+
+// The platform to restore after a test that switched it: whatever this file
+// saw when it loaded — the host, or an injection from a vitest setup file.
+// Restoring to the host instead silently undid that injection for every
+// later test in the file (see src/shared/platformBaseline.test.ts).
+const BASELINE = platformId()
 
 const FIXTURE = join(process.cwd(), 'docs/plugin-contracts/fixtures/valid/backend-only-skills.json')
 const ELF_HEADER = Buffer.from([0x7f, 0x45, 0x4c, 0x46])
@@ -15,7 +21,7 @@ describe('backend entry executability by platform', () => {
     mkdirSync(join(root, 'backend'), { recursive: true })
   })
   afterEach(() => {
-    setPlatformId(normalizePlatformId(process.platform))
+    setPlatformId(BASELINE)
     rmSync(root, { recursive: true, force: true })
   })
 

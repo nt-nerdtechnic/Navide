@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { delimiter, join, sep } from 'node:path'
-import { normalizePlatformId, setPlatformId } from '../shared/osplat'
+import { platformId, setPlatformId } from '../shared/osplat'
 import {
   BUILT_IN_EDITORS,
   buildEditorArgv,
@@ -17,6 +17,12 @@ import {
   type EditorPreference,
   type EditorProcess
 } from './editors'
+
+// The platform to restore after a test that switched it: whatever this file
+// saw when it loaded — the host, or an injection from a vitest setup file.
+// Restoring to the host instead silently undid that injection for every
+// later test in the file (see src/shared/platformBaseline.test.ts).
+const BASELINE = platformId()
 
 const prefer = (editorId: string, customCommand: string[] = []): EditorPreference => ({
   editorId,
@@ -188,7 +194,7 @@ describe('whichIn', () => {
   // Windows runner checks the same contract, and the `on Windows` block below
   // opts into the suffixed lookup explicitly.
   beforeEach(() => setPlatformId('linux'))
-  afterEach(() => setPlatformId(normalizePlatformId(process.platform)))
+  afterEach(() => setPlatformId(BASELINE))
 
   const exists = (paths: string[]) => (p: string): boolean => paths.includes(p)
   const always = (): boolean => true
@@ -222,7 +228,7 @@ describe('whichIn', () => {
   })
 
   describe('on Windows', () => {
-    afterEach(() => setPlatformId(normalizePlatformId(process.platform)))
+    afterEach(() => setPlatformId(BASELINE))
 
     // VS Code and Cursor install `code.cmd` / `cursor.cmd` onto PATH; the bare
     // name that works from a shell there names nothing on disk.
@@ -265,7 +271,7 @@ describe('resolveEditorCommand', () => {
   // The fixtures are the POSIX shape (a bare `code` on PATH, an .app-bundled
   // CLI); pinned so the Windows runner checks the same contract.
   beforeEach(() => setPlatformId('linux'))
-  afterEach(() => setPlatformId(normalizePlatformId(process.platform)))
+  afterEach(() => setPlatformId(BASELINE))
 
   const vscode = BUILT_IN_EDITORS.find((e) => e.id === 'vscode')!
   const always = (): boolean => true
@@ -285,7 +291,7 @@ describe('resolveEditorCommand', () => {
       const hit = resolveEditorCommand(vscode, usrBin, (p) => p === bundled, always)
       expect(hit).toBe(bundled)
     } finally {
-      setPlatformId(normalizePlatformId(process.platform))
+      setPlatformId(BASELINE)
     }
   })
 
@@ -302,7 +308,7 @@ describe('resolveEditorCommand', () => {
     try {
       expect(resolveEditorCommand(vscode, usrBin, (p) => p === bundled, always)).toBe(bundled)
     } finally {
-      setPlatformId(normalizePlatformId(process.platform))
+      setPlatformId(BASELINE)
     }
   })
 
@@ -311,7 +317,7 @@ describe('resolveEditorCommand', () => {
     try {
       expect(vscode.bundledPaths().some((p) => p.includes('/Applications/'))).toBe(false)
     } finally {
-      setPlatformId(normalizePlatformId(process.platform))
+      setPlatformId(BASELINE)
     }
   })
 
@@ -324,7 +330,7 @@ describe('detectEditors', () => {
   // The fixtures are the POSIX shape (a bare `code` on PATH); pinned so the
   // Windows runner checks the same contract.
   beforeEach(() => setPlatformId('linux'))
-  afterEach(() => setPlatformId(normalizePlatformId(process.platform)))
+  afterEach(() => setPlatformId(BASELINE))
 
   it('reports availability per editor', () => {
     const cursor = join(usrBin, 'cursor')
@@ -480,7 +486,7 @@ describe('buildEditorArgv', () => {
 })
 
 describe('needsWindowsShell', () => {
-  afterEach(() => setPlatformId(normalizePlatformId(process.platform)))
+  afterEach(() => setPlatformId(BASELINE))
 
   it('routes .cmd and .bat through the shell on Windows only', () => {
     setPlatformId('win32')
