@@ -52,7 +52,11 @@ _STATUSES = ("queued", "delivering", "delivered", "failed", "cancelled")
 # it without writing the report it was asked for. Unlike a notice it is an
 # ordinary message in every other respect — it has a real sender and can be
 # resent — so only the label is Navide's.
-_KINDS = ("notice", "fallback")
+#
+# "ack" is a bare acknowledgement an agent sent through cli_send(kind="ack"):
+# it is written to this log for the user to read and is never injected into the
+# recipient's pane, so it is the one kind the recipient never sees.
+_KINDS = ("notice", "fallback", "ack")
 # Mirrors the frontend's clearMessageLog rule: in-flight messages survive.
 DEFAULT_KEEP_STATUSES = ("queued", "delivering")
 

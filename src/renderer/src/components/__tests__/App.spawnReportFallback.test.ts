@@ -116,7 +116,7 @@ describe('the fallback kind is carried end to end', () => {
       resolve(process.cwd(), 'backend/agent_team_backend/agent_message_log.py'),
       'utf8',
     )
-    expect(backend).toContain('_KINDS = ("notice", "fallback")')
+    expect(backend).toContain('_KINDS = ("notice", "fallback", "ack")')
   })
 
   it('is not treated as a Navide notice, because it has a real sender', () => {
@@ -133,6 +133,8 @@ describe('the fallback kind is carried end to end', () => {
       .split('\n')
       .filter((l) => l.includes("kind === 'fallback'"))
       .map((l) => l.trim())
-    expect(branches).toEqual(["if (row.kind === 'notice' || row.kind === 'fallback') m.kind = row.kind"])
+    expect(branches).toEqual([
+      "if (row.kind === 'notice' || row.kind === 'fallback' || row.kind === 'ack') m.kind = row.kind",
+    ])
   })
 })

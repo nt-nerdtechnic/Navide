@@ -97,8 +97,13 @@ export interface AgentMessage {
    *  a sending pane) rather than one an agent sent. It stops a bounced notice
    *  from producing another one, and it is what the log panel reads to suppress
    *  Resend — so unlike `hold` it is persisted: after a reload the panel must
-   *  still know what a row is without parsing its text. */
-  kind?: 'notice' | 'fallback'
+   *  still know what a row is without parsing its text.
+   *
+   *  'ack' marks a message that is logged and never delivered: a bare
+   *  acknowledgement ("got it", "done") the user may want to read in the log,
+   *  but that must not interrupt the recipient. It is the only kind that never
+   *  enters a queue, so nothing is ever typed into the recipient's pane. */
+  kind?: 'notice' | 'fallback' | 'ack'
   /** Failure reason when status === 'failed'. */
   reason?: MessageReason
   /** Why this message has not been injected yet, while status === 'queued'. */
@@ -112,8 +117,12 @@ export interface AgentMessage {
    *  a recipient that asked for it itself (the `cli_read_incoming` MCP tool),
    *  `push:<kind>` for one of the vendor push channels. Like `hold` it is
    *  in-memory only: it describes how a live row got out, and a restored log has
-   *  no delivery left to explain. */
-  route?: 'hook' | 'read' | `push:${string}`
+   *  no delivery left to explain.
+   *
+   *  'ack' is the odd one out: it records that the message deliberately never
+   *  went out at all. The row is settled and correct — an 'ack' kind is only
+   *  ever logged — so this says how it was settled, not how it was typed in. */
+  route?: 'hook' | 'read' | 'ack' | `push:${string}`
   /** `uid` of the message this one answers, set when the sender echoed back the
    *  correlation id carried in that message's envelope. Persisted (`reply_to`):
    *  a recipient reading its own mail over MCP has to be able to see what a
@@ -158,7 +167,7 @@ export interface PersistedMessageRow {
   recipient_agent?: string
   /** See AgentMessage.kind. Absent on rows written before the column existed,
    *  which is exactly right — every one of them is an ordinary message. */
-  kind?: 'notice' | 'fallback'
+  kind?: 'notice' | 'fallback' | 'ack'
   /** See AgentMessage.inReplyTo — the `uid` of the row this one answers. */
   reply_to?: string
   /** See AgentMessage.correlationId. */
@@ -339,6 +348,13 @@ const CANCELLED_REASON: MessageReason = { key: 'cancelled' }
  *  reason rides along only to say HOW it arrived; every consumer of a positive
  *  report ignores it (see resolveRemoteDelivery). */
 export const READ_REASON: MessageReason = { key: 'read' }
+/** Verdict reported back for a message that was logged and never delivered.
+ *
+ *  Paired with `ok: true`, like {@link READ_REASON}: an ack did not fail, it
+ *  was deliberately never typed into the recipient. The sender's
+ *  cli_check_message would otherwise sit on `queued` forever and read as
+ *  stuck. */
+export const ACK_REASON: MessageReason = { key: 'ack' }
 
 // ── Module-level singleton state ──────────────────────────────────────────
 let deps: MessagingDeps | null = null
@@ -399,7 +415,7 @@ function fromPersistedRow(row: PersistedMessageRow): AgentMessage {
   if (row.remote_workspace) m.remoteWorkspace = row.remote_workspace
   if (row.sender_agent) m.fromAgent = row.sender_agent
   if (row.recipient_agent) m.toAgent = row.recipient_agent
-  if (row.kind === 'notice' || row.kind === 'fallback') m.kind = row.kind
+  if (row.kind === 'notice' || row.kind === 'fallback' || row.kind === 'ack') m.kind = row.kind
   if (row.reply_to) m.inReplyTo = row.reply_to
   if (row.correlation_id) m.correlationId = row.correlation_id
   return m
@@ -761,8 +777,10 @@ export interface SendOptions {
   includeReplyHint?: boolean
   /** Correlation id the sender echoed back, when this message is a reply. */
   replyTo?: string
-  /** Internal: marks a Navide-authored notice. See notifySenderOfFailure(). */
-  kind?: 'notice' | 'fallback'
+  /** Internal: marks a Navide-authored notice. See notifySenderOfFailure().
+   *  'ack' marks a bare acknowledgement: logged for the user to read, never
+   *  injected into the recipient's pane. */
+  kind?: 'notice' | 'fallback' | 'ack'
 }
 
 /**
@@ -816,6 +834,18 @@ function sendMessage(from: string, to: string, content: string, opts: SendOption
 
   const key = pairKey(from, to, false)
   pairSends.set(key, [...(pairSends.get(key) ?? []), now])
+  if (msg.kind === 'ack') {
+    // Never enqueued, so pumpPane can never reach it and deliverAgentMessage is
+    // never called: this is the only point that can guarantee the recipient's
+    // input box is left alone. The row stays in the log for the user to read.
+    //
+    // Deliberately AFTER the rate limit and queue cap checks, and after the
+    // pair's budget is spent above: an ack still costs the loop guard, or it
+    // would be a hole through the rate limit that two agents acking each other
+    // could ride forever.
+    markLoggedOnly(msg)
+    return msg
+  }
   if (msg.kind === 'notice') {
     // A notice is Navide's own text, already in the form the pane must see: its
     // first line says "delivery failed", which is how an agent tells it apart
@@ -936,6 +966,9 @@ function acceptRemoteMessage(args: {
   /** Correlation id the sender echoed back when this message is a reply to one
    *  this window sent. Unknown ids leave the row unlinked. */
   replyTo?: string
+  /** Only ever 'ack', and only from the MCP cli_send tool: the message is
+   *  logged here and never injected. Absent for every other sender. */
+  kind?: 'ack'
 }): boolean {
   if (!deps) return false
   const localName = nameByPane.get(args.targetPaneId)
@@ -981,9 +1014,19 @@ function acceptRemoteMessage(args: {
     // same message its sender does.
     correlationId: args.msgKey,
   }
+  if (args.kind === 'ack') msg.kind = 'ack'
   stampAgents(msg, args.fromAgent, agentByPane.get(args.targetPaneId))
   if (args.replyTo) linkReply(msg, args.replyTo)
   pushLog(msg)
+
+  if (args.kind === 'ack') {
+    // Settled here rather than enqueued: see markLoggedOnly. Reporting `ok:
+    // true` is not optional — without it the sender's cli_check_message sits on
+    // `queued` until it reads as stale two minutes later.
+    markLoggedOnly(msg)
+    deps.reportDelivery?.(args.msgKey, true, ACK_REASON)
+    return true
+  }
 
   const q = queues.get(args.targetPaneId) ?? []
   if (q.length >= QUEUE_CAP) {
@@ -1595,6 +1638,26 @@ function markRead(m: AgentMessage): void {
   ackInbound(m.id, true, READ_REASON)
 }
 
+/**
+ * Settle a message that is logged but never delivered.
+ *
+ * An 'ack' never enters a queue, so nothing downstream will ever settle it:
+ * pumpPane cannot reach a message no queue holds, and the row would sit on
+ * `queued` for good. Mirrors markRead() — the row succeeded, so no `reason` is
+ * written onto it; `route` records how it got out, which here is that it
+ * deliberately did not.
+ *
+ * `route` is not persisted, like 'hook' and 'read' before it: PersistedMessageUpdate
+ * carries no such column, and a restored row has no delivery left to explain.
+ */
+function markLoggedOnly(m: AgentMessage): void {
+  m.status = 'delivered'
+  m.deliveredAt = deps ? deps.now() : m.createdAt
+  m.route = 'ack'
+  delete m.hold
+  deps?.persistUpdate?.([{ uid: m.uid, status: 'delivered', delivered_at: m.deliveredAt }])
+}
+
 /** The routing key an outbound cross-workspace message is known by, while it is
  *  still awaiting a report. */
 function outboundKeyOf(id: number): string | null {
@@ -1676,6 +1739,10 @@ function pauseMessaging(): void {
  *
  * A cancelled row is re-sendable for the same reason a failed one is: the text
  * never reached anyone, so sending it again delivers it once, not twice.
+ *
+ * `kind` is not carried over, and nothing reaches here that would need it to be:
+ * the panel gives a 'notice' and an 'ack' row no Resend button, so neither can
+ * be retried into an ordinary message.
  */
 function retryMessage(id: number): AgentMessage | null {
   const m = findMessage(id)
