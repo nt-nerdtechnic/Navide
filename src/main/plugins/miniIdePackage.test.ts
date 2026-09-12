@@ -22,7 +22,7 @@ function manager(options: {
 }
 
 function recoverySource(root: string) {
-  return { isPackaged: true, resourcesPath: root }
+  return { isPackaged: true, resourcesPath: root, artifactVersion: '0.1.0' }
 }
 
 describe('Mini-IDE legacy recovery package guard', () => {

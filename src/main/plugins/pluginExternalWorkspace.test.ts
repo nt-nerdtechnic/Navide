@@ -399,6 +399,10 @@ export default {
         cpSync(join(externalProject, 'dist', 'package'), aliasDirectory, { recursive: true })
         writeFileSync(join(aliasDirectory, 'frontend', 'alias'), 'alias\n')
         writeFileSync(join(aliasDirectory, 'frontend', 'alias.'), 'portable alias\n')
+        writeFileSync(
+          join(aliasDirectory, 'artifact-files.json'),
+          JSON.stringify({ files: ['manifest.json', 'frontend/index.html', 'frontend/main.js', 'frontend/alias', 'frontend/alias.'] })
+        )
         const aliasResult = runExternalCli(['validate', aliasDirectory], externalProject)
         expect(aliasResult.status).not.toBe(0)
         expect(`${aliasResult.stdout}\n${aliasResult.stderr}`).toContain('portable archive collision')

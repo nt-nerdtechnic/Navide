@@ -1,11 +1,18 @@
 import { defineConfig, type Plugin } from 'vite'
 import vue from '@vitejs/plugin-vue'
-import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { copyFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 const repositoryRoot = resolve(__dirname, '../..')
 const packageRoot = resolve(__dirname)
 const outDir = resolve(repositoryRoot, 'dist-plugins/navide-git')
+function outputFiles(directory: string): string[] {
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => (
+    entry.isDirectory()
+      ? outputFiles(resolve(directory, entry.name)).map((file) => `${entry.name}/${file}`)
+      : [entry.name]
+  )).sort()
+}
 
 const emitManifest: Plugin = {
   name: 'emit-navide-git-manifest',
@@ -22,6 +29,10 @@ const emitManifest: Plugin = {
     const assetsDir = resolve(outDir, 'assets')
     mkdirSync(assetsDir, { recursive: true })
     copyFileSync(resolve(packageRoot, 'assets/git.png'), resolve(assetsDir, 'git.png'))
+    writeFileSync(
+      resolve(outDir, 'artifact-files.json'),
+      `${JSON.stringify({ files: ['manifest.json', ...outputFiles(outDir).filter((file) => file !== 'manifest.json')] }, null, 2)}\n`,
+    )
   },
 }
 

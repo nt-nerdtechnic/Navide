@@ -78,6 +78,7 @@ def build_v2_package(
     omit_paths: set[str] | None = None,
     backend_mode: int = stat.S_IFREG | 0o755,
     backend_data: bytes = b"\x7fELF-test-backend",
+    extra_files: dict[str, bytes] | None = None,
 ) -> bytes:
     """Build a package containing every file referenced by a v2 manifest."""
     manifest = manifest if manifest is not None else contract_manifest()
@@ -119,4 +120,6 @@ def build_v2_package(
                 else b"asset"
             )
             zf.writestr(info, data)
+        for path, data in (extra_files or {}).items():
+            zf.writestr(path, data)
     return buffer.getvalue()

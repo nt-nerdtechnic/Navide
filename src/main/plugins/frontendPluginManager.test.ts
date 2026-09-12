@@ -262,6 +262,8 @@ import {
   frontendPluginManager,
   isReservedPluginId,
   devPlansPluginDescriptor,
+  devPlansV2PluginBundle,
+  devGitPluginDescriptor,
   openMiniIdePluginView,
   openPlansPluginView,
   plansQuery,
@@ -271,6 +273,10 @@ import {
   PLANS_PLUGIN_ID,
   MINI_IDE_PLUGIN_ID,
   bundledMiniIdeDir,
+  bundledPlansDir,
+  bundledPlansV2Dir,
+  bundledGitDir,
+  officialPluginArtifactPackageDir,
   registerBundledMiniIde,
   registerBundledPlans,
   createPluginBackendChildEnvironment,
@@ -807,6 +813,50 @@ describe('Plans private filesystem grant revalidation', () => {
 })
 
 describe('devPlansPluginDescriptor', () => {
+  it('resolves v2 artifacts from explicit version and target coordinates while legacy paths stay unchanged', () => {
+    const source = { isPackaged: true, resourcesPath: '/resources', artifactVersion: '4.5.6' }
+    expect(officialPluginArtifactPackageDir(source, MINI_IDE_PLUGIN_ID, 'universal')).toBe(
+      join('/resources', 'official-artifacts', MINI_IDE_PLUGIN_ID, '4.5.6', 'universal', 'package')
+    )
+    expect(bundledPlansV2Dir(source)).toBe(
+      join('/resources', 'official-artifacts', PLANS_PLUGIN_ID, '4.5.6', `${process.platform}-${process.arch}`, 'package')
+    )
+    expect(bundledPlansDir(source)).toBe(join('/resources', 'plugins', 'plans'))
+    expect(bundledGitDir(source)).toBe(join('/resources', 'plugins', 'git'))
+  })
+
+  it('does not discover a combined Plans version from a sibling artifact directory', () => {
+    const root = mkdtempSync(join(tmpdir(), 'navide-plans-explicit-version-'))
+    try {
+      const decoy = join(
+        root,
+        'dist-plugins',
+        'official-artifacts',
+        PLANS_PLUGIN_ID,
+        '9.9.9',
+        `${process.platform}-${process.arch}`,
+        'package',
+      )
+      mkdirSync(join(decoy, 'frontend/left'), { recursive: true })
+      mkdirSync(join(decoy, 'frontend/window'), { recursive: true })
+      mkdirSync(join(decoy, 'backend'), { recursive: true })
+      writeFileSync(join(decoy, 'manifest.json'), readFileSync('plugins/navide-plans/manifest.json'))
+      writeFileSync(join(decoy, 'frontend/left/index.html'), '<!doctype html>')
+      writeFileSync(join(decoy, 'frontend/window/index.html'), '<!doctype html>')
+      copyFileSync(process.execPath, join(decoy, 'backend/navide-plans'))
+
+      expect(devPlansV2PluginBundle('1.2.3', root)).toBeNull()
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('uses the universal Git artifact path for an explicit development version', () => {
+    expect(devGitPluginDescriptor('4.5.6', '/repo').entryFile).toBe(
+      join('/repo', 'dist-plugins', 'official-artifacts', GIT_PLUGIN_ID, '4.5.6', 'universal', 'package', 'frontend/window/index.html')
+    )
+  })
+
   it('describes the navide.plans dev bundle with the plans-only event grant', () => {
     const desc = devPlansPluginDescriptor()
     expect(desc.id).toBe(PLANS_PLUGIN_ID)
@@ -848,6 +898,7 @@ describe('devPlansPluginDescriptor', () => {
       expect(registerBundledPlans(mgr, {
         isPackaged: false,
         resourcesPath: '',
+        artifactVersion: '0.1.92',
         devRoot: root,
       })).toEqual({ registered: true })
       expect(mgr.getDescriptor(PLANS_PLUGIN_ID)?.packageVersion).toBeUndefined()
@@ -905,6 +956,7 @@ describe('devPlansPluginDescriptor', () => {
       expect(registerBundledPlans(mgr, {
         isPackaged: false,
         resourcesPath: '',
+        artifactVersion: '2.0.0',
         devRoot: join(root, 'no-bundled-copy'),
         installedActivation: {
           pluginId: PLANS_PLUGIN_ID,
@@ -3645,14 +3697,14 @@ describe('bundled mini-IDE builtin resolution', () => {
   })
 
   it('resolves resourcesPath/plugins/mini-ide when packaged', () => {
-    expect(bundledMiniIdeDir({ isPackaged: true, resourcesPath: '/res' })).toBe(
+    expect(bundledMiniIdeDir({ isPackaged: true, resourcesPath: '/res', artifactVersion: '1.2.3' })).toBe(
       join('/res', 'plugins', 'mini-ide')
     )
   })
 
   it('resolves dist-plugins/mini-ide under the dev root when unpackaged', () => {
     expect(
-      bundledMiniIdeDir({ isPackaged: false, resourcesPath: '/res', devRoot: '/repo' })
+      bundledMiniIdeDir({ isPackaged: false, resourcesPath: '/res', artifactVersion: '1.2.3', devRoot: '/repo' })
     ).toBe(join('/repo', 'dist-plugins', 'mini-ide'))
   })
 
@@ -3660,7 +3712,7 @@ describe('bundled mini-IDE builtin resolution', () => {
     const dir = join(root, 'plugins', 'mini-ide')
     writeBundled(dir)
     const mgr = new FrontendPluginManager()
-    const result = registerBundledMiniIde(mgr, { isPackaged: true, resourcesPath: root })
+    const result = registerBundledMiniIde(mgr, { isPackaged: true, resourcesPath: root, artifactVersion: '1.0.0' })
     expect(result.registered).toBe(true)
     const desc = mgr.getDescriptor(MINI_IDE_PLUGIN_ID)
     expect(desc?.entryFile).toBe(join(dir, 'index.html'))
@@ -3674,6 +3726,7 @@ describe('bundled mini-IDE builtin resolution', () => {
     const result = registerBundledMiniIde(mgr, {
       isPackaged: false,
       resourcesPath: '/unused',
+      artifactVersion: '1.0.0',
       devRoot: root,
     })
     expect(result.registered).toBe(true)
@@ -3692,7 +3745,7 @@ describe('bundled mini-IDE builtin resolution', () => {
     }
     mgr.registerDescriptor(installed, { official: true })
 
-    const result = registerBundledMiniIde(mgr, { isPackaged: true, resourcesPath: root })
+    const result = registerBundledMiniIde(mgr, { isPackaged: true, resourcesPath: root, artifactVersion: '1.0.0' })
     expect(result.registered).toBe(true)
     // Installed copy stays active; the bundled one is only the fallback.
     expect(mgr.getDescriptor(MINI_IDE_PLUGIN_ID)?.entryFile).toBe(installed.entryFile)
@@ -3711,7 +3764,7 @@ describe('bundled mini-IDE builtin resolution', () => {
       },
       { official: true }
     )
-    registerBundledMiniIde(mgr, { isPackaged: true, resourcesPath: root })
+    registerBundledMiniIde(mgr, { isPackaged: true, resourcesPath: root, artifactVersion: '1.0.0' })
 
     mgr.removeInstalledPlugin(MINI_IDE_PLUGIN_ID)
     expect(mgr.getDescriptor(MINI_IDE_PLUGIN_ID)?.entryFile).toBe(join(dir, 'index.html'))
@@ -3719,7 +3772,7 @@ describe('bundled mini-IDE builtin resolution', () => {
 
   it('a missing bundled dir is refused without crashing (dialog fallback)', () => {
     const mgr = new FrontendPluginManager()
-    const result = registerBundledMiniIde(mgr, { isPackaged: true, resourcesPath: root })
+    const result = registerBundledMiniIde(mgr, { isPackaged: true, resourcesPath: root, artifactVersion: '1.0.0' })
     expect(result.registered).toBe(false)
     expect(result.reason).toBeTruthy()
     expect(mgr.getDescriptor(MINI_IDE_PLUGIN_ID)).toBeUndefined()
@@ -3730,7 +3783,7 @@ describe('bundled mini-IDE builtin resolution', () => {
     mkdirSync(dir, { recursive: true })
     writeFileSync(join(dir, 'manifest.json'), 'not json at all')
     const mgr = new FrontendPluginManager()
-    const result = registerBundledMiniIde(mgr, { isPackaged: true, resourcesPath: root })
+    const result = registerBundledMiniIde(mgr, { isPackaged: true, resourcesPath: root, artifactVersion: '1.0.0' })
     expect(result.registered).toBe(false)
     expect(mgr.getDescriptor(MINI_IDE_PLUGIN_ID)).toBeUndefined()
   })
@@ -3744,7 +3797,7 @@ describe('bundled mini-IDE builtin resolution', () => {
       requires: [],
     })
     const mgr = new FrontendPluginManager()
-    const result = registerBundledMiniIde(mgr, { isPackaged: true, resourcesPath: root })
+    const result = registerBundledMiniIde(mgr, { isPackaged: true, resourcesPath: root, artifactVersion: '1.0.0' })
     expect(result.registered).toBe(false)
     expect(result.reason).toMatch(/acme\.impostor/)
     expect(mgr.getDescriptor(MINI_IDE_PLUGIN_ID)).toBeUndefined()
@@ -3758,7 +3811,7 @@ describe('bundled mini-IDE builtin resolution', () => {
       JSON.stringify({ id: MINI_IDE_PLUGIN_ID, version: '1.0.0', entry: 'index.html', requires: [] })
     )
     const mgr = new FrontendPluginManager()
-    const result = registerBundledMiniIde(mgr, { isPackaged: true, resourcesPath: root })
+    const result = registerBundledMiniIde(mgr, { isPackaged: true, resourcesPath: root, artifactVersion: '1.0.0' })
     expect(result.registered).toBe(false)
     expect(result.reason).toMatch(/entry file missing/)
     expect(mgr.getDescriptor(MINI_IDE_PLUGIN_ID)).toBeUndefined()
@@ -7516,7 +7569,15 @@ describe('first-party Git private bridge', () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), 'plans-factory-query-')))
     const mgr = new FrontendPluginManager()
     try {
-      const packageDir = join(root, 'dist-plugins/navide-plans')
+      const packageDir = join(
+        root,
+        'dist-plugins',
+        'official-artifacts',
+        PLANS_PLUGIN_ID,
+        '0.1.0',
+        `${process.platform}-${process.arch}`,
+        'package',
+      )
       mkdirSync(join(packageDir, 'frontend/left'), { recursive: true })
       mkdirSync(join(packageDir, 'frontend/window'), { recursive: true })
       mkdirSync(join(packageDir, 'backend'), { recursive: true })
@@ -7524,7 +7585,12 @@ describe('first-party Git private bridge', () => {
       writeFileSync(join(packageDir, 'frontend/left/index.html'), '<!doctype html>')
       writeFileSync(join(packageDir, 'frontend/window/index.html'), '<!doctype html>')
       copyFileSync(process.execPath, join(packageDir, 'backend/navide-plans'))
-      expect(registerBundledPlans(mgr, { isPackaged: false, resourcesPath: '', devRoot: root })).toEqual({ registered: true })
+      expect(registerBundledPlans(mgr, {
+        isPackaged: false,
+        resourcesPath: '',
+        artifactVersion: '0.1.0',
+        devRoot: root,
+      })).toEqual({ registered: true })
       mgr.setPlansDiagnosticsEnabled(true)
       mgr.setCapabilityGrantResolver(() => ({ packageVersion: '0.1.0', system: ['fs', 'ui', 'aiCli'], storage: true }))
       const descriptor = mgr.getDescriptor(PLANS_PLUGIN_ID)!

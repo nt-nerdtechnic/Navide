@@ -15,14 +15,21 @@ import argparse
 import hashlib
 import json
 import sys
+import os
 import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
 from pathlib import Path
 
-from .package import PackageError, build_package
-from .signing import generate_keypair, sign_digest
+from .package import (
+    DuplicateJsonKeyError,
+    PackageError,
+    _reject_duplicate_json_keys,
+    build_package,
+    read_package,
+)
+from .signing import generate_keypair, read_private_key_file, sign_digest
 
 
 def _digest(data: bytes) -> str:
@@ -35,7 +42,9 @@ def cmd_keygen(args: argparse.Namespace) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     priv_path = out_dir / f"{args.name}.key"
     pub_path = out_dir / f"{args.name}.pub"
-    priv_path.write_text(private_pem)
+    fd = os.open(priv_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="ascii") as stream:
+        stream.write(private_pem)
     pub_path.write_text(public_pem)
     print(f"private key: {priv_path}")
     print(f"public key:  {pub_path}")
@@ -45,21 +54,31 @@ def cmd_keygen(args: argparse.Namespace) -> int:
 def cmd_pack(args: argparse.Namespace) -> int:
     src = Path(args.src_dir)
     try:
-        data = build_package(src)
+        files = json.loads(
+            (src / "artifact-files.json").read_text(encoding="utf-8"),
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
+        if not isinstance(files, dict) or set(files) != {"files"} or not isinstance(files["files"], list) or not all(isinstance(path, str) for path in files["files"]):
+            raise PackageError("artifact-files.json must contain only a files array")
+        data = build_package(src, files["files"])
+        read_package(data, target=args.target)
     except PackageError as exc:
         print(f"pack failed: {exc}", file=sys.stderr)
+        return 1
+    except (OSError, DuplicateJsonKeyError, json.JSONDecodeError) as exc:
+        print(f"pack failed: artifact-files.json is invalid: {exc}", file=sys.stderr)
         return 1
     manifest = json.loads((src / "manifest.json").read_text())
     default_out = f"{manifest['id']}-{manifest['version']}.vsix"
     out_path = Path(args.out) if args.out else Path(default_out)
     out_path.write_bytes(data)
-    print(f"packed {out_path} ({len(data)} bytes, sha256 {_digest(data)})")
+    print(f"packed {out_path} for {args.target} ({len(data)} bytes, sha256 {_digest(data)})")
     return 0
 
 
 def cmd_sign(args: argparse.Namespace) -> int:
     package_path = Path(args.package)
-    private_pem = Path(args.key).read_text()
+    private_pem = read_private_key_file(Path(args.key))
     signature = sign_digest(private_pem, _digest(package_path.read_bytes()))
     if args.out:
         Path(args.out).write_text(signature)
@@ -74,6 +93,7 @@ def post_package(
     package_path: Path | str,
     token: str,
     signature: str | None = None,
+    target: str = "universal",
     *,
     client: object | None = None,
 ) -> tuple[int, str]:
@@ -86,7 +106,7 @@ def post_package(
     package_path = Path(package_path)
     data = package_path.read_bytes()
     url = registry_url.rstrip("/") + "/api/publish"
-    params = {"signature": signature} if signature else None
+    params = {"target": target, **({"signature": signature} if signature else {})}
     headers = {"Authorization": f"Bearer {token}"}
 
     if client is not None:
@@ -98,8 +118,7 @@ def post_package(
         )
         return resp.status_code, resp.text
 
-    if signature:
-        url += f"?signature={urllib.parse.quote(signature)}"
+    url += "?" + urllib.parse.urlencode(params)
     body, content_type = _multipart(package_path.name, data)
     req = urllib.request.Request(url, data=body, headers=headers, method="POST")
     req.add_header("Content-Type", content_type)
@@ -129,7 +148,7 @@ def cmd_publish(args: argparse.Namespace) -> int:
             sig_path.read_text().strip() if sig_path.is_file() else args.signature
         )
     status, text = post_package(
-        args.registry, args.package, args.token, signature
+        args.registry, args.package, args.token, signature, args.target
     )
     print(f"{status} {text}")
     return 0 if 200 <= status < 300 else 1
@@ -147,6 +166,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_pack = sub.add_parser("pack", help="build a .vsix package from a source dir")
     p_pack.add_argument("src_dir")
     p_pack.add_argument("--out")
+    p_pack.add_argument("--target", default="universal")
     p_pack.set_defaults(func=cmd_pack)
 
     p_sign = sub.add_parser("sign", help="detached-sign a package")
@@ -160,6 +180,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_pub.add_argument("--registry", required=True)
     p_pub.add_argument("--token", required=True)
     p_pub.add_argument("--signature", help="signature string or a file path")
+    p_pub.add_argument("--target", default="universal")
     p_pub.set_defaults(func=cmd_publish)
 
     return parser

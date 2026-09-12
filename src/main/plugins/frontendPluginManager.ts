@@ -101,6 +101,7 @@ import {
   canonicalBackendPackageDir,
   PluginBackendHost,
 } from './pluginBackendHost'
+import { currentPluginHostTarget, UNIVERSAL_PLUGIN_TARGET } from './pluginTarget'
 import {
   isAllowedBackendTimeout,
   MAX_BACKEND_CALLS_PER_INSTANCE,
@@ -8529,16 +8530,45 @@ export interface BundledMiniIdeSource {
   isPackaged: boolean
   /** `process.resourcesPath` (packaged builds only). */
   resourcesPath: string
+  /** Version selected by the running App for every bundled artifact lookup. */
+  artifactVersion: string
   /** Repo root holding `dist-plugins/` when unpackaged. Defaults to the
    *  built main bundle's `../..` (`out/main` → repo root). */
   devRoot?: string
 }
 
+/** Explicit coordinates for an App-bundled Manifest v2 artifact. The version
+ * comes from the running App, never from a directory scan or package manifest.
+ * Legacy recovery helpers accept the same coordinates but continue selecting
+ * their retained, unversioned paths. */
+export interface OfficialPluginArtifactSource extends BundledMiniIdeSource {}
+
 /** Optional selected activation supplied by the startup installer scan. The
  * installed package must win over the bundled copy, but its already-verified
  * activation must still be registered with the package-local Host broker. */
-export interface BundledPlansSource extends BundledMiniIdeSource {
+export interface BundledPlansSource extends OfficialPluginArtifactSource {
   installedActivation?: PluginActivationCatalogEntry
+}
+
+/** Resolve one versioned App artifact without discovering sibling versions.
+ * Frontend-only packages use {@link UNIVERSAL_PLUGIN_TARGET}; packages with a
+ * self-contained backend use {@link currentPluginHostTarget}. */
+export function officialPluginArtifactPackageDir(
+  source: OfficialPluginArtifactSource,
+  pluginId: string,
+  target: string,
+): string {
+  const base = source.isPackaged
+    ? source.resourcesPath
+    : join(source.devRoot ?? join(__dirname, '../..'), 'dist-plugins')
+  return join(
+    base,
+    'official-artifacts',
+    pluginId,
+    source.artifactVersion,
+    target,
+    'package',
+  )
 }
 
 /** Directory of the bundled mini-IDE copy: `resources/plugins/mini-ide` inside
@@ -8813,12 +8843,11 @@ export function bundledPlansDir(source: BundledMiniIdeSource): string {
     : join(source.devRoot ?? join(__dirname, '../..'), 'dist-plugins', 'plans')
 }
 
-/** Directory of the production combined Plans package. The old
- *  `dist-plugins/plans` bundle remains a separate rollback adapter. */
-export function bundledPlansV2Dir(source: BundledMiniIdeSource): string {
-  return source.isPackaged
-    ? join(source.resourcesPath, 'plugins', 'navide-plans')
-    : join(source.devRoot ?? join(__dirname, '../..'), 'dist-plugins', 'navide-plans')
+/** Directory of the production combined Plans package selected by explicit App
+ *  version and host target. The old `dist-plugins/plans` bundle remains a
+ *  separate rollback adapter. */
+export function bundledPlansV2Dir(source: OfficialPluginArtifactSource): string {
+  return officialPluginArtifactPackageDir(source, PLANS_PLUGIN_ID, currentPluginHostTarget())
 }
 
 export function plansBackendActivation(
@@ -8988,13 +9017,22 @@ export function devPlansPluginDescriptor(): PluginLaunchDescriptor {
   }
 }
 
-/** Dev descriptor for the combined package. The legacy descriptor above is
- *  intentionally preserved for rollback tests and manual fallback checks. */
-export function devPlansV2PluginBundle(): {
+/** Dev descriptor for the combined package selected by an explicit App
+ * version. The legacy descriptor above is intentionally preserved for
+ * rollback tests and manual fallback checks. */
+export function devPlansV2PluginBundle(
+  artifactVersion: string,
+  devRoot?: string,
+): {
   descriptor: PluginLaunchDescriptor
   activation: BackendPluginLaunchSpec
 } | null {
-  const dir = join(__dirname, '../../dist-plugins/navide-plans')
+  const dir = bundledPlansV2Dir({
+    isPackaged: false,
+    resourcesPath: '',
+    artifactVersion,
+    devRoot,
+  })
   const scanned = loadPluginDir(dir)
   if (
     !scanned.descriptor ||
@@ -9006,8 +9044,11 @@ export function devPlansV2PluginBundle(): {
   return activation ? { descriptor: scanned.descriptor, activation } : null
 }
 
-export function devPlansV2PluginDescriptor(): PluginLaunchDescriptor | null {
-  return devPlansV2PluginBundle()?.descriptor ?? null
+export function devPlansV2PluginDescriptor(
+  artifactVersion: string,
+  devRoot?: string,
+): PluginLaunchDescriptor | null {
+  return devPlansV2PluginBundle(artifactVersion, devRoot)?.descriptor ?? null
 }
 
 let plansWindow: BrowserWindow | null = null
@@ -9142,8 +9183,8 @@ function gitQuery(
 
 /**
  * Dev-only Git descriptor pointing at the LOCAL Manifest v2 build output
- * (`dist-plugins/navide-git/`, produced by `pnpm run build:git:v2`). Registered at
- * startup only under `AGENT_TEAM_PLUGIN_DEV=1`, mirroring
+ * (the explicit `official-artifacts/navide.git/<version>/universal/package/`
+ * directory). Registered at startup only under `AGENT_TEAM_PLUGIN_DEV=1`, mirroring
  * {@link devPlansPluginDescriptor}. The bundle is built separately
  * (plugins/navide-git/vite.config.ts) with the package-local capability
  * backend, so it
@@ -9152,8 +9193,15 @@ function gitQuery(
  * system grant; the Host adds the official package's authenticated workspace
  * binding at open time.
  */
-export function devGitPluginDescriptor(): PluginLaunchDescriptor {
-  const dir = join(__dirname, '../../dist-plugins/navide-git')
+export function devGitPluginDescriptor(
+  artifactVersion: string,
+  devRoot?: string,
+): PluginLaunchDescriptor {
+  const dir = officialPluginArtifactPackageDir(
+    { isPackaged: false, resourcesPath: '', artifactVersion, devRoot },
+    GIT_PLUGIN_ID,
+    UNIVERSAL_PLUGIN_TARGET,
+  )
   const scanned = loadPluginDir(dir)
   if (scanned.descriptor) return scanned.descriptor
   return {

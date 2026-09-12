@@ -23,6 +23,8 @@ function fixture(): string {
   file(root, 'plugins/navide-plans/backend/plans_backend.py', '# production source\n')
   file(root, 'backend/pyproject.toml', '# build dependencies\n')
   file(root, 'backend/uv.lock', '# pinned toolchain\n')
+  file(root, 'dist-plugins/navide-plans/manifest.json', JSON.stringify({ backend: { entry: 'backend/navide-plans' } }))
+  file(root, 'dist-plugins/navide-plans/artifact-files.json', JSON.stringify({ files: ['manifest.json'] }))
   file(root, 'scripts/build-plans-v2-backend.mjs', readFileSync('scripts/build-plans-v2-backend.mjs', 'utf8'))
   const uv = file(root, 'bin/uv', `#!/usr/bin/env node
 const fs = require('node:fs');

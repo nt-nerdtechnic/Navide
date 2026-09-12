@@ -6,6 +6,9 @@ All notable released changes to Navide will be documented in this file. The form
 
 ### Added
 
+- Build official Manifest v2 plugin artifacts from explicit canonical file
+  lists, with deterministic ZIP metadata, target-specific backend validation,
+  detached archive-signature tooling, and clean versioned factory resources.
 - Add public, Host-validated plugin window requests and typed editor, Git,
   account, and Issue capability adapters for the ongoing miniIDE migration.
   Window targets retain caller/receiver authority separation; missing IDE

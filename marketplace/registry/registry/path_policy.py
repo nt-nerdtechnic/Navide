@@ -9,12 +9,14 @@ from typing import Literal
 ArchivePathKind = Literal["regular", "directory"]
 
 _PACKAGE_PATH_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
+MAX_ARCHIVE_PATH_LENGTH = 1024
 
 
 def _canonical_relative_path(path: str) -> str | None:
     if (
         not isinstance(path, str)
         or not path
+        or len(path) > MAX_ARCHIVE_PATH_LENGTH
         or "\x00" in path
         or path.startswith(("/", "\\"))
         or "\\" in path

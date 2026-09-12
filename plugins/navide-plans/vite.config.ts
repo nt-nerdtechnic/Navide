@@ -12,6 +12,13 @@ const pluginDistDir = process.env.NAVIDE_PLANS_DIST_DIR
   : resolve(repositoryRoot, 'dist-plugins/navide-plans')
 const frontendOutDir = resolve(pluginDistDir, 'frontend')
 const legacyAssetsDir = resolve(pluginDistDir, 'assets')
+function outputFiles(directory: string): string[] {
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => (
+    entry.isDirectory()
+      ? outputFiles(resolve(directory, entry.name)).map((file) => `${entry.name}/${file}`)
+      : [entry.name]
+  )).sort()
+}
 function sourceFiles(directory: string): string[] {
   return readdirSync(resolve(packageRoot, directory), { withFileTypes: true })
     .flatMap((entry) => entry.isDirectory()
@@ -40,8 +47,13 @@ const emitManifest: Plugin = {
       readFileSync(resolve(packageRoot, 'manifest.json'), 'utf8'),
     )
     manifest.version = appVersion
+    if (process.platform === 'win32') manifest.backend.entry = 'backend/navide-plans.exe'
     mkdirSync(pluginDistDir, { recursive: true })
     writeFileSync(resolve(pluginDistDir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`)
+    writeFileSync(
+      resolve(pluginDistDir, 'artifact-files.json'),
+      `${JSON.stringify({ files: ['manifest.json', ...outputFiles(frontendOutDir).map((file) => `frontend/${file}`)] }, null, 2)}\n`,
+    )
   },
 }
 

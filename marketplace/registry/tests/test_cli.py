@@ -18,6 +18,9 @@ def _make_src(tmp_path: Path) -> Path:
     (src / "manifest.json").write_text(json.dumps(valid_manifest()))
     (src / "icon.png").write_bytes(b"\x89PNG\r\n\x1a\n-icon")
     (src / "README.md").write_text("# Hello\n")
+    (src / "artifact-files.json").write_text(
+        json.dumps({"files": ["manifest.json", "icon.png", "README.md"]})
+    )
     return src
 
 
@@ -48,6 +51,12 @@ def test_pack_builds_valid_package(tmp_path: Path) -> None:
     assert loaded.manifest.id == "acme.hello"
 
 
+def test_pack_requires_one_explicit_canonical_file_list(tmp_path: Path) -> None:
+    src = _make_src(tmp_path)
+    (src / "artifact-files.json").write_text('{"files":["manifest.json"],"files":[]}')
+    assert cli.main(["pack", str(src)]) == 1
+
+
 def test_pack_sign_publish_roundtrip(
     tmp_path: Path, signed_env: SignedEnv
 ) -> None:
@@ -56,6 +65,7 @@ def test_pack_sign_publish_roundtrip(
     key = tmp_path / "acme.key"
     sig = tmp_path / "acme.sig"
     key.write_text(signed_env.private_pem)
+    key.chmod(0o600)
 
     # pack -> sign via the CLI commands.
     assert cli.main(["pack", str(src), "--out", str(pkg)]) == 0

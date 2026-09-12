@@ -1,6 +1,6 @@
 import { defineConfig, type Plugin } from 'vite'
 import vue from '@vitejs/plugin-vue'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 const repositoryRoot = resolve(__dirname, '../..')
@@ -9,6 +9,13 @@ const frontendRoot = resolve(packageRoot, 'frontend')
 const outputRoot = process.env.NAVIDE_MINI_IDE_DIST_DIR
   ? resolve(process.env.NAVIDE_MINI_IDE_DIST_DIR)
   : resolve(repositoryRoot, 'dist-plugins/navide-mini-ide')
+function outputFiles(directory: string): string[] {
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => (
+    entry.isDirectory()
+      ? outputFiles(resolve(directory, entry.name)).map((file) => `${entry.name}/${file}`)
+      : [entry.name]
+  )).sort()
+}
 
 const emitManifest: Plugin = {
   name: 'emit-navide-mini-ide-manifest',
@@ -17,6 +24,10 @@ const emitManifest: Plugin = {
     manifest.version = JSON.parse(readFileSync(resolve(repositoryRoot, 'package.json'), 'utf8')).version
     mkdirSync(outputRoot, { recursive: true })
     writeFileSync(resolve(outputRoot, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`)
+    writeFileSync(
+      resolve(outputRoot, 'artifact-files.json'),
+      `${JSON.stringify({ files: ['manifest.json', ...outputFiles(resolve(outputRoot, 'frontend')).map((file) => `frontend/${file}`)] }, null, 2)}\n`,
+    )
   },
 }
 

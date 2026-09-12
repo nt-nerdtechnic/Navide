@@ -1,15 +1,13 @@
 import { existsSync } from 'node:fs'
-import { join } from 'node:path'
 import { loadPluginDir } from './installedPlugins'
 import type { FrontendPluginManager, BundledMiniIdeSource } from './frontendPluginManager'
-import { bundledMiniIdeDir } from './frontendPluginManager'
+import { bundledMiniIdeDir, officialPluginArtifactPackageDir } from './frontendPluginManager'
+import { UNIVERSAL_PLUGIN_TARGET } from './pluginTarget'
 
 export const MINI_IDE_CONTRIBUTION = 'navide.mini-ide.window'
 
 export function bundledMiniIdeV2Dir(source: BundledMiniIdeSource): string {
-  return source.isPackaged
-    ? join(source.resourcesPath, 'plugins', 'navide-mini-ide')
-    : join(source.devRoot ?? join(__dirname, '../..'), 'dist-plugins', 'navide-mini-ide')
+  return officialPluginArtifactPackageDir(source, 'navide.mini-ide', UNIVERSAL_PLUGIN_TARGET)
 }
 
 /** The old artifact is a recovery implementation of an installed IDE, never

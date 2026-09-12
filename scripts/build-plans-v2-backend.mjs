@@ -21,6 +21,7 @@ const backendDirectory = resolve(repositoryRoot, 'dist-plugins/navide-plans/back
 const executableName = process.platform === 'win32' ? 'navide-plans.exe' : 'navide-plans'
 const executable = join(backendDirectory, executableName)
 const cacheFile = resolve(repositoryRoot, 'node_modules/.cache/navide/plans-v2-backend.json')
+const artifactFileList = resolve(repositoryRoot, 'dist-plugins/navide-plans/artifact-files.json')
 
 // `--if-needed` is how `pnpm dev` invokes this script, and only `pnpm dev`:
 // every production path (build:plans:backend ← build:plans ←
@@ -103,10 +104,25 @@ function executableDigest() {
   return createHash('sha256').update(bytes).digest('hex')
 }
 
+function recordBackendArtifactFile() {
+  const listed = JSON.parse(readFileSync(artifactFileList, 'utf8'))
+  if (!Array.isArray(listed.files) || listed.files.some((file) => typeof file !== 'string')) {
+    throw new Error(`Plans artifact file list is invalid: ${artifactFileList}`)
+  }
+  const manifest = JSON.parse(readFileSync(resolve(repositoryRoot, 'dist-plugins/navide-plans/manifest.json'), 'utf8'))
+  const backendEntry = `backend/${executableName}`
+  if (manifest.backend?.entry !== backendEntry) {
+    throw new Error(`Plans manifest must select its target executable: ${backendEntry}`)
+  }
+  const files = [...new Set([...listed.files, backendEntry])].sort()
+  writeFileSync(artifactFileList, `${JSON.stringify({ files }, null, 2)}\n`)
+}
+
 if (developmentInvocation) {
   try {
     const cached = JSON.parse(readFileSync(cacheFile, 'utf8'))
     if (cached.inputDigest === inputDigest && cached.outputDigest === executableDigest()) {
+      recordBackendArtifactFile()
       console.log(`Reusing unchanged production Plans backend: ${executable}`)
       process.exit(0)
     }
@@ -164,6 +180,7 @@ try {
   }
   if (process.platform !== 'win32') chmodSync(executable, entry.mode | 0o111)
   const outputDigest = executableDigest()
+  recordBackendArtifactFile()
   mkdirSync(dirname(cacheFile), { recursive: true })
   writeFileSync(cacheFile, `${JSON.stringify({ inputDigest, outputDigest })}\n`)
   console.log(`Built production Plans backend: ${executable}`)

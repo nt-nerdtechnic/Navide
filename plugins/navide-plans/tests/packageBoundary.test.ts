@@ -151,7 +151,7 @@ describe('navide.plans production package boundary', () => {
     expect(pluginMessages).toEqual({ pane: { plans: shadowMessages.pane?.plans } })
   })
 
-  it('ships both the v2 artifact and explicit legacy recovery resources', () => {
+  it('ships versioned factory artifacts alongside explicit legacy recovery resources', () => {
     const rootPackage = JSON.parse(readFileSync(join(repositoryRoot, 'package.json'), 'utf8')) as {
       scripts?: Record<string, string>
       build?: { extraResources?: Array<{ from?: string; to?: string }> }
@@ -162,20 +162,20 @@ describe('navide.plans production package boundary', () => {
     expect(rootPackage.scripts?.['build:plans']).toContain('build:plans:v2')
     expect(rootPackage.scripts?.['build:plans']).toContain('build:plans:backend')
     expect(rootPackage.build?.extraResources).toEqual(expect.arrayContaining([
-      { from: 'dist-plugins/navide-plans', to: 'plugins/navide-plans' },
+      { from: 'dist-plugins/official-artifacts/factory-resources', to: 'official-artifacts' },
       { from: 'dist-plugins/plans', to: 'plugins/plans' },
     ]))
   })
 
-  it('prepares the real production Plans package during pnpm dev without nesting pnpm', () => {
+  it('prepares the versioned factory artifact during pnpm dev', () => {
     const rootPackage = JSON.parse(readFileSync(join(repositoryRoot, 'package.json'), 'utf8')) as {
       scripts?: Record<string, string>
     }
     const devScript = rootPackage.scripts?.dev ?? ''
     expect(devScript).toContain('vite build --config vite.plans.config.ts')
-    expect(devScript).toContain('vite build --config plugins/navide-plans/vite.config.ts')
+    expect(devScript).toContain('build:plans:v2')
     expect(devScript).toContain('build-plans-v2-backend.mjs')
-    expect(devScript).not.toContain('pnpm')
+    expect(devScript).toContain('stage-official-plugin-artifacts.mjs')
     expect(devScript).not.toContain('fixture')
     expect(devScript).toContain('electron-vite dev')
   })

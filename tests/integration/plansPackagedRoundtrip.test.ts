@@ -1191,7 +1191,7 @@ describe('Plans packaged backend composition', () => {
       managers.push(manager)
       try {
         manager.setPlansDiagnosticsEnabled(true)
-        expect(registerBundledPlans(manager, { isPackaged: false, resourcesPath: '', devRoot: process.cwd() })).toEqual({ registered: true })
+        expect(registerBundledPlans(manager, { isPackaged: false, resourcesPath: '', artifactVersion: '0.2.1', devRoot: process.cwd() })).toEqual({ registered: true })
         const descriptor = manager.getDescriptor(PLANS_PLUGIN_ID)!
         const view = descriptor.views!.find((candidate) => candidate.contributionKey === 'navide.plans.window')!
         const packageDirectory = realpathSync(join(process.cwd(), 'dist-plugins/navide-plans'))

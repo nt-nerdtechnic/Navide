@@ -118,20 +118,27 @@ acme-files/
 }
 ```
 
-The Issue 06 SDK distribution includes a `navide-plugin` executable with these
+The SDK distribution includes a `navide-plugin` executable with these
 commands:
 
 ```text
 navide-plugin validate <directory>
-navide-plugin package <directory> [--out <file>]
+navide-plugin package <directory> [--target <target>] [--out <file>]
+navide-plugin sign <package> --key <private-key> [--out <signature>]
+navide-plugin verify <package> --key <public-key> --signature <signature>
 ```
 
-`validate` rejects duplicate JSON keys, unknown manifest fields, unsafe paths,
-symlinks, missing referenced files, and files outside the frontend/assets
-package boundary. `package` emits a deterministic `.vsix` ZIP with a root
-`manifest.json`; it rejects manifests containing backend contributions. The
-CLI has no Host transport, process execution, signing, registry publishing,
-scaffolding, or development server.
+Every staging directory includes an `artifact-files.json` control file with one
+explicit `files` array. It is not included in the archive. `validate` rejects
+duplicate JSON keys, unknown manifest fields, unsafe paths, symlinks, missing
+referenced files, source-only material, and package shapes that do not match
+their manifest. `package` emits a deterministic `.vsix` ZIP with a root
+`manifest.json`. Frontend-only packages use `universal`; backend and combined
+packages must name the build host's exact platform-architecture target and
+contain one self-contained executable. `sign` and `verify` use a detached
+Ed25519 signature over the SHA-256 digest of the complete archive. The CLI has
+no Host transport, process execution, registry publishing, scaffolding, or
+development server.
 
 ## Issue 06 external workspace workflow
 

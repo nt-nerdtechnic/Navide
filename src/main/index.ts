@@ -15,7 +15,7 @@ import {
 import { abandonPendingBackends } from './backend-pending'
 import { installApplicationMenu, type AppMenuHooks, type RecentMenuEntry } from './menu'
 import { LEGAL_LINKS, isLegalRoute } from '../shared/legalLinks'
-import { openNoopPluginView, openFsProbePluginView, openMiniIdePluginView, openPlansPluginView, devPlansPluginDescriptor, devPlansV2PluginBundle, openGitPluginView, openGitLeftPluginView, updateGitLeftPluginView, closeGitLeftPluginView, registerBundledMiniIde, bundledMiniIdeDir, registerBundledPlans, registerLegacyBundledGit, hasCompletePlansContributions, frontendPluginManager } from './plugins/frontendPluginManager'
+import { openNoopPluginView, openFsProbePluginView, openMiniIdePluginView, openPlansPluginView, devPlansPluginDescriptor, devPlansV2PluginBundle, openGitPluginView, openGitLeftPluginView, updateGitLeftPluginView, closeGitLeftPluginView, registerBundledMiniIde, bundledMiniIdeDir, officialPluginArtifactPackageDir, registerBundledPlans, registerLegacyBundledGit, hasCompletePlansContributions, frontendPluginManager } from './plugins/frontendPluginManager'
 import { plansBackendActivation } from './plugins/frontendPluginManager'
 import {
   isTrustedPluginManagementSender,
@@ -25,7 +25,7 @@ import {
 import { readRegistryTrustSnapshot } from './plugins/pluginInstalledTrust'
 import { contributionIcon } from './plugins/pluginContributionIcon'
 import { broadcastQuitStage } from './quit-progress'
-import { currentPluginHostTarget } from './plugins/pluginTarget'
+import { currentPluginHostTarget, UNIVERSAL_PLUGIN_TARGET } from './plugins/pluginTarget'
 import { PluginStorageStore } from './plugins/pluginStorage'
 import { TerminalStorageOwnerService } from './terminalStorageOwner'
 import { FilePickerHostService } from './filePicker'
@@ -747,6 +747,7 @@ const installedGitDescriptorPresent = frontendPluginManager.getDescriptor('navid
 const miniIdeSource = {
   isPackaged: app.isPackaged,
   resourcesPath: process.resourcesPath,
+  artifactVersion: app.getVersion(),
 }
 const installedMiniIdeDescriptorPresent = frontendPluginManager.getDescriptor(MINI_IDE_PLUGIN_ID) !== undefined
 frontendPluginManager.setCapabilityGrantResolver((pluginId, packageVersion) =>
@@ -771,9 +772,11 @@ frontendPluginManager.setExecutionPolicyResolver((workspacePath?: string): Execu
   }
 })
 const factoryGitActivations = installedPluginLoad.activationCatalog.slice(0, 0)
-const factoryGitDir = (): string => app.isPackaged
-  ? join(process.resourcesPath, 'plugins', 'navide-git')
-  : join(__dirname, '../../dist-plugins/navide-git')
+const factoryGitDir = (): string => officialPluginArtifactPackageDir(
+  miniIdeSource,
+  'navide.git',
+  UNIVERSAL_PLUGIN_TARGET,
+)
 function loadFactoryGitPackage() {
   const factoryGit = frontendPluginManager.loadFactoryPlugin(factoryGitDir(), 'navide.git')
   if (!factoryGit.loaded) return factoryGit
@@ -840,6 +843,7 @@ if (shouldAttemptFactoryGit({
     activateLegacy: () => registerLegacyBundledGit(frontendPluginManager, {
       isPackaged: app.isPackaged,
       resourcesPath: process.resourcesPath,
+      artifactVersion: app.getVersion(),
     }),
   })
   if (selection.mode === 'v2') factoryGitActivations.push(selection.activation)
@@ -861,6 +865,7 @@ frontendPluginManager.setActivationFailureHandler((failure) => {
     activateLegacy: () => registerLegacyBundledGit(frontendPluginManager, {
       isPackaged: app.isPackaged,
       resourcesPath: process.resourcesPath,
+      artifactVersion: app.getVersion(),
     }),
     onActivated: () => {
       // The only record of *why* the session downgraded. Without it a user
@@ -945,6 +950,7 @@ const terminalStorageOwnerService = new TerminalStorageOwnerService({
           bundledMiniIdeDir({
             isPackaged: app.isPackaged,
             resourcesPath: process.resourcesPath,
+            artifactVersion: app.getVersion(),
           }),
           'index.html',
         ),
@@ -1321,6 +1327,7 @@ if (selectedMiniIdeV2) {
 const bundledPlans = registerBundledPlans(frontendPluginManager, {
   isPackaged: app.isPackaged,
   resourcesPath: process.resourcesPath,
+  artifactVersion: app.getVersion(),
   installedActivation: installedPluginLoad.activationCatalog.find(
     (entry) => entry.pluginId === 'navide.plans'
   ),
@@ -4361,6 +4368,7 @@ app.whenReady().then(async () => {
     const recovery = registerLegacyBundledGit(frontendPluginManager, {
       isPackaged: app.isPackaged,
       resourcesPath: process.resourcesPath,
+      artifactVersion: app.getVersion(),
     })
     if (!recovery.registered) {
       warnMain(`[main] NAVIDE_GIT_RECOVERY=legacy but legacy Git bundle is unavailable: ${recovery.reason}`)
@@ -4389,7 +4397,7 @@ app.whenReady().then(async () => {
     // has loaded one. A second backend for the same plugin id cannot be
     // registered safely, so the legacy bundle is considered only when no v2
     // package/backend pair is active.
-    const devPlansV2Package = devPlansV2PluginBundle()
+    const devPlansV2Package = devPlansV2PluginBundle(app.getVersion())
     const activePlansDescriptor = frontendPluginManager.getDescriptor('navide.plans')
     let devPlansV2Registered = Boolean(
       activePlansDescriptor?.capabilityPolicy?.kind === 'manifest-v2' &&

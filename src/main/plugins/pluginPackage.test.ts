@@ -155,6 +155,11 @@ describe('readZipEntries', () => {
     expect(() => readZipEntries(zip)).toThrow(PluginPackageError)
   })
 
+  it('rejects a stored entry whose declared size exceeds the per-entry limit', () => {
+    const zip = makeZip([{ name: 'large.bin', data: Buffer.alloc(51 * 1024 * 1024) }])
+    expect(() => readZipEntries(zip)).toThrow(/exceeds the .* limit/)
+  })
+
   it('throws PluginPackageError (not RangeError) on an out-of-bounds local offset', () => {
     // Central directory entry whose localOffset points past the buffer end.
     const name = Buffer.from('x.js')

@@ -178,6 +178,12 @@ def test_manifest_v2_backend_entry_rejects_empty_file() -> None:
         read_package(build_v2_package(manifest, backend_data=b""))
 
 
+def test_backend_only_package_rejects_smuggled_frontend_entry() -> None:
+    manifest = contract_manifest("backend-only-skills.json")
+    with pytest.raises(PackageError, match="backend-only package"):
+        read_package(build_v2_package(manifest, extra_files={"frontend/main/index.html": b"<!doctype html>"}))
+
+
 def test_manifest_v2_referenced_file_is_required() -> None:
     manifest = contract_manifest()
     first_entry = manifest["contributes"]["views"][0]["entry"]
@@ -290,6 +296,17 @@ def test_noncanonical_manifest_alias_is_rejected_before_manifest_read() -> None:
 def test_unsafe_unreferenced_archive_entry_is_rejected() -> None:
     with pytest.raises(PackageError, match="unsafe archive entry path"):
         read_package(build_package(extra_files={"../escape.js": b"blocked"}))
+
+
+@pytest.mark.parametrize("path", ["frontend/main.ts", "assets/publisher.key", ".env"])
+def test_source_only_or_secret_archive_entry_is_rejected(path: str) -> None:
+    with pytest.raises(PackageError, match="source-only or secret"):
+        read_package(build_v2_package(extra_files={path: b"blocked"}))
+
+
+def test_legacy_v1_backend_source_remains_readable() -> None:
+    loaded = read_package(build_package(extra_files={"backend.py": b"legacy source"}))
+    assert "backend.py" in {asset.path for asset in loaded.assets}
 
 
 @pytest.mark.parametrize(

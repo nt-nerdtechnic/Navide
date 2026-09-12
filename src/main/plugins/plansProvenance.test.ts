@@ -28,7 +28,10 @@ describe('Plans Host provenance query', () => {
       expect(scanned.error).toBeUndefined()
       manager.registerInstalledPackage({ ...scanned.packageSummary!, provenance }, scanned.descriptor!, { official: true })
       expect(registerBundledPlans(manager, {
-        isPackaged: false, resourcesPath: '', devRoot: root,
+        isPackaged: false,
+        resourcesPath: '',
+        artifactVersion: '0.1.0',
+        devRoot: root,
         installedActivation: { ...scanned.activation!, provenance },
       })).toEqual({ registered: true })
       expect(manager.getPlansProvenance()).toMatchObject({
@@ -48,8 +51,19 @@ describe('Plans Host provenance query', () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), 'plans-provenance-')))
     const manager = new FrontendPluginManager()
     try {
-      const directory = packageFixture(join(root, 'dist-plugins/navide-plans'))
-      expect(registerBundledPlans(manager, { isPackaged: false, resourcesPath: '', devRoot: root })).toEqual({ registered: true })
+      const directory = packageFixture(join(
+        root,
+        'dist-plugins',
+        'official-artifacts/navide.plans/0.1.0',
+        `${process.platform}-${process.arch}`,
+        'package',
+      ))
+      expect(registerBundledPlans(manager, {
+        isPackaged: false,
+        resourcesPath: '',
+        artifactVersion: '0.1.0',
+        devRoot: root,
+      })).toEqual({ registered: true })
       expect(manager.getPlansProvenance()).toMatchObject({
         descriptorSource: 'factory-bundle', selectionOrigin: 'factory-bundle',
         acquisitionProvenance: 'factory-bundled', packageDirectory: directory,
@@ -71,7 +85,10 @@ describe('Plans Host provenance query', () => {
       const other = loadPluginDir(packageFixture(join(root, 'other')))
       manager.registerInstalledPackage({ ...selected.packageSummary!, provenance: 'official-registry' }, selected.descriptor!, { official: true })
       expect(registerBundledPlans(manager, {
-        isPackaged: false, resourcesPath: '', devRoot: root,
+        isPackaged: false,
+        resourcesPath: '',
+        artifactVersion: '0.1.0',
+        devRoot: root,
         installedActivation: other.activation!,
       })).toEqual({
         registered: false,
