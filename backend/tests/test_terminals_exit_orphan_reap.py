@@ -195,6 +195,24 @@ async def test_reap_spares_recycled_pid_via_lstart_mismatch(monkeypatch):
     assert killed == []
 
 
+async def test_reap_never_kills_an_unverifiable_descendant(monkeypatch):
+    svc = TerminalService(emit=_noop_emit)
+    # No identity on one side or the other: the pid may well have been
+    # recycled (on Windows: by this backend's next pane) — never kill blind.
+    snap = {200: (1, 200, "L200"), 300: (1, 300, "")}
+    monkeypatch.setattr(terminals, "_ps_snapshot", lambda: snap)
+    monkeypatch.setattr(
+        terminals.osplat.process_tree, "is_orphan_parent",
+        lambda ppid, me: ppid in (1, me),
+    )
+    killed: list[int] = []
+    monkeypatch.setattr(
+        terminals, "_kill_breakaway", lambda pids: killed.extend(pids)
+    )
+    await svc._reap_exit_orphans({200: "", 300: "L300"})
+    assert killed == []
+
+
 async def test_reap_noop_when_ps_fails(monkeypatch):
     svc = TerminalService(emit=_noop_emit)
     monkeypatch.setattr(terminals, "_ps_snapshot", lambda: {})

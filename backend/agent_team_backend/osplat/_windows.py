@@ -277,30 +277,46 @@ def _assign_to_job(job: int, pid: int) -> None:
         k.CloseHandle(handle)
 
 
-#: Root pid -> job handle for every live terminal. `kill_tree` on a root pid
-#: terminates the job instead of walking the table, which also reaches
-#: grandchildren that were spawned after the last snapshot.
-_jobs: dict[int, int] = {}
+#: Root pid -> (job handle, start-time identity) for every live terminal.
+#: `kill_tree` on a root pid terminates the job instead of walking the table,
+#: which also reaches grandchildren that were spawned after the last snapshot.
+#: The identity is what keeps a recycled pid from reaching another pane's
+#: job: a root that exited stays in the table until its handle is closed,
+#: and a new pane can be spawned onto the same pid in that window.
+_jobs: dict[int, tuple[int, str]] = {}
 _jobs_lock = threading.Lock()
 
 
 def _register_job(pid: int, job: int) -> None:
+    start = process_tree.start_time(pid)
     with _jobs_lock:
-        _jobs[pid] = job
+        _jobs[pid] = (job, start)
 
 
-def _release_job(pid: int) -> None:
-    """Close the job handle — with KILL_ON_JOB_CLOSE that ends the tree."""
+def _release_job(pid: int, job: int) -> None:
+    """Close the job handle — with KILL_ON_JOB_CLOSE that ends the tree.
+
+    Only the handle's own job is closed and only its own entry is dropped: a
+    pane spawned onto this pid after the first one exited owns the table
+    entry by then, and its job must survive the first pane's close.
+    """
     with _jobs_lock:
-        job = _jobs.pop(pid, None)
-    if job is not None:
-        _kernel32().CloseHandle(job)
+        entry = _jobs.get(pid)
+        if entry is not None and entry[0] == job:
+            del _jobs[pid]
+    _kernel32().CloseHandle(job)
 
 
 def _terminate_job(pid: int) -> bool:
     with _jobs_lock:
-        job = _jobs.get(pid)
-    if job is None:
+        entry = _jobs.get(pid)
+    if entry is None:
+        return False
+    job, start = entry
+    # A pid whose identity no longer matches (or never could be read) is not
+    # the process this job was made for: leave the job alone and let the
+    # caller walk the table for whatever runs under that pid now.
+    if not start or process_tree.start_time(pid) != start:
         return False
     return bool(_kernel32().TerminateJobObject(job, _TERMINATE_EXIT_CODE))
 
@@ -603,9 +619,31 @@ class WindowsTerminalHandle:
                     break
                 time.sleep(_PUMP_IDLE_S)
         finally:
-            with self._lock:
-                self._eof = True
-            self._notify()
+            # The read ending is not the child ending. Once `close()` has
+            # cut the read, or without a watcher to say otherwise, it is
+            # EOF; but an output stream that ends under a child that is
+            # still running must not become one — `terminals` closes the
+            # session on EOF, and that close tears the pseudoconsole out
+            # from under a live CLI. The watcher owns the exit: it makes
+            # the EOF once the process handle signals.
+            if self._closed or not self._process_handle or self._child_exited():
+                with self._lock:
+                    self._eof = True
+                self._notify()
+            else:
+                log.warning(
+                    "conpty output ended while pid %s is still running; "
+                    "waiting for its exit before reporting EOF",
+                    self.pid,
+                )
+
+    def _child_exited(self) -> bool:
+        """Whether the process handle has signalled (the watcher's reading:
+        anything but a timeout, `WAIT_FAILED` on a handle `poll()` has
+        already released included)."""
+        return (
+            _kernel32().WaitForSingleObject(self._process_handle, 0) != WAIT_TIMEOUT
+        )
 
     def _watch_exit(self, pty: Any, process_handle: int) -> None:
         """Worker: turn the child's exit into EOF on the output.
@@ -724,7 +762,7 @@ class WindowsTerminalHandle:
         # Closing the job handle is the kill (KILL_ON_JOB_CLOSE) — the same
         # outcome the POSIX close reaches through SIGHUP on the master.
         if self._job is not None:
-            _release_job(self.pid)
+            _release_job(self.pid, self._job)
         else:
             try:
                 process_tree.kill_tree(self.pid, force=True)

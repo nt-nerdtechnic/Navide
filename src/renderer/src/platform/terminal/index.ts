@@ -75,6 +75,7 @@ export {
   recordTerminalExit,
   resetTerminalCrashLoop,
   terminalCrashKey,
+  STATUS_CONTROL_C_EXIT,
   TERMINAL_CREATE_TIMEOUT_MS,
 } from './lib/terminalLifecycle'
 export type { CrashLoopState, TerminalExitDetails, TerminalStartupProbe } from './lib/terminalLifecycle'
