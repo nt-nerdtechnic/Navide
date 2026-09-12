@@ -162,7 +162,7 @@ def test_spawn_probe_accepts_the_legacy_binary(monkeypatch: pytest.MonkeyPatch) 
 def test_install_result_names_the_dep(monkeypatch: pytest.MonkeyPatch) -> None:
     # The dialog renders label + docs link from the result itself, so every
     # branch has to carry them — including the ones that fail.
-    monkeypatch.setattr(ob.shutil, "which", lambda _x: "/opt/homebrew/bin/brew")
+    monkeypatch.setattr(ob.osplat.paths, "resolve_program", lambda _x, *, path=None: "/opt/homebrew/bin/brew")
     result = ob.install_dep("claude")
     assert result["label"] == "Claude Code"
     assert result["docs_url"] == ob.DEPS_BY_ID["claude"].docs_url
@@ -170,7 +170,7 @@ def test_install_result_names_the_dep(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_missing_bootstrap_result_still_names_the_dep(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(ob.shutil, "which", lambda _x: None)
+    monkeypatch.setattr(ob.osplat.paths, "resolve_program", lambda _x, *, path=None: None)
     result = ob.install_dep("claude")
     assert result["ok"] is False
     assert result["missing_requirements"] == ["npm"]

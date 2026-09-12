@@ -107,7 +107,7 @@ Founder dogfooding must never be described as customer validation. Future direct
 - Workspace-scoped state, run events, handoffs, and compatible token summaries are stored under `.agent-team/`.
 - Navide provides editor, Diff, terminal, diagnostics, Git, test, and review surfaces.
 - Navide is local-first and does not require a Navide account.
-- Navide supports macOS 13+ on Apple silicon and provides a clearly labeled unsigned v0.1.47 preview download alongside source installation.
+- Navide supports macOS 13+ on Apple silicon, Linux x64, and Windows x64. The v0.2.1 release provides macOS downloads signed with a Developer ID certificate and notarized by Apple, alongside source installation; Linux and Windows installers are built by release CI and ship from the next release, and the Windows build is not code-signed.
 - Navide's founder uses it as the primary environment for developing Navide.
 
 ## Directional claims that require a label
@@ -122,7 +122,7 @@ Use `product direction`, `long-term direction`, `destination`, or equivalent lan
 
 ## Claims that are not currently supportable
 
-- A signed or notarized public download is available.
+- A signed or notarized download is available for every supported platform (the Windows build is not code-signed, and the Linux and Windows installers have not shipped yet).
 - Navide provides a complete workspace sandbox.
 - Navide is universally offline.
 - Navide makes an engineer a specific multiple faster.

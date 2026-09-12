@@ -107,7 +107,7 @@ Founder Dogfooding を Customer Validation と表現してはなりません。F
 - Workspace ごとの State、Run Event、Handoff、対応する Token Summary は `.agent-team/` に保存されます。
 - Navide は Editor、Diff、Terminal、Diagnostics、Git、Test、Review Surface を提供します。
 - Navide は Local-first で、Navide Account を必要としません。
-- Navide は Apple silicon 上の macOS 13+ をサポートし、明確に未署名と表示した v0.1.47 Preview Download と Source Installation を提供します。
+- Navide は Apple silicon 上の macOS 13+、Linux x64、Windows x64 をサポートします。v0.2.1 では Developer ID 証明書で署名し Apple の Notarization を受けた macOS 向けダウンロードと Source Installation を提供します。Linux と Windows のインストーラーは Release CI でビルドされ、次のリリースから配布されます。Windows ビルドはまだコード署名されていません。
 - Navide の創設者は Navide 開発の主要環境として利用しています。
 
 ## ラベルが必要な方向性の主張
@@ -122,7 +122,7 @@ Founder Dogfooding を Customer Validation と表現してはなりません。F
 
 ## 現在は裏付けられない主張
 
-- 署名済みまたは Notarization 済みの Public Download がある。
+- すべての対応プラットフォームで署名済みまたは Notarization 済みのダウンロードがある（Windows ビルドは未署名で、Linux と Windows のインストーラーはまだ配布されていない）。
 - Navide は完全な Workspace Sandbox を提供する。
 - Navide は常に完全オフラインである。
 - Navide によりエンジニアが特定倍率で速くなる。

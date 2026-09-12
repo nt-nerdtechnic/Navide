@@ -19,7 +19,6 @@ import hashlib
 import logging
 import os
 import re
-import shutil
 import signal
 import sqlite3
 import subprocess
@@ -407,7 +406,7 @@ def detect_dep(dep: Dep, quick: bool = False) -> dict[str, Any]:
         # "Homebrew is missing" during its check step instead of only after the
         # install command has already failed.
         "requirements": [
-            {"name": name, "ok": shutil.which(name) is not None}
+            {"name": name, "ok": osplat.paths.resolve_program(name) is not None}
             # Read the resolved install, not the Dep: the platform port moved
             # the foundation deps' brew requirement into install_cmds, which
             # left this list empty on macOS and the wizard no longer pulled
@@ -724,7 +723,7 @@ def detect_ollama_status() -> dict[str, Any]:
     from "no models installed" if only the parsed list is returned, which left
     the wizard telling users to pull a model that could never succeed.
     """
-    if shutil.which("ollama") is None:
+    if osplat.paths.resolve_program("ollama") is None:
         return {"models": [], "reachable": False, "detail": "ollama not installed"}
     try:
         proc = subprocess.run(
@@ -888,7 +887,7 @@ def missing_requirements(dep: Dep) -> list[str]:
     the macOS install of `uv` needs Homebrew, the Linux one needs curl.
     """
     install = dep.install_for(osplat.platform_id)
-    return [name for name in install.requires_binaries if shutil.which(name) is None]
+    return [name for name in install.requires_binaries if osplat.paths.resolve_program(name) is None]
 
 
 def _terminate_process_group(proc: subprocess.Popen[str]) -> None:
@@ -1013,7 +1012,7 @@ def pull_model(model: str) -> dict[str, Any]:
     name = model or ""
     if not _MODEL_NAME_RE.fullmatch(name) or ".." in name:
         return {"ok": False, "error": "invalid model name"}
-    if shutil.which("ollama") is None:
+    if osplat.paths.resolve_program("ollama") is None:
         return {"ok": False, "error": "ollama not installed"}
     if not ollama_reachable():
         return {
@@ -1032,9 +1031,9 @@ OLLAMA_SERVICE_CMD = "brew services start ollama"
 
 def start_ollama_service() -> dict[str, Any]:
     """Hand the official service-start command to an external Terminal."""
-    if shutil.which("ollama") is None:
+    if osplat.paths.resolve_program("ollama") is None:
         return {"ok": False, "error": "ollama not installed"}
-    if shutil.which("brew") is None:
+    if osplat.paths.resolve_program("brew") is None:
         return {"ok": False, "error": "brew is required to manage the ollama service"}
     return {"ok": True, "needs_terminal": True, "command": OLLAMA_SERVICE_CMD}
 
