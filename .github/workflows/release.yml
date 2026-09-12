@@ -326,7 +326,7 @@ jobs:
       - name: Attach installers to the workflow run
         # Every run, including a workflow_dispatch dry run: this is how a
         # Linux build gets tried on a real desktop before a tag publishes it.
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: navide-linux-x64
           if-no-files-found: error
@@ -469,7 +469,7 @@ jobs:
       - name: Attach installers to the workflow run
         # Every run, including a workflow_dispatch dry run: this is how a
         # Windows build gets tried on a real desktop before a tag publishes it.
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: navide-windows-x64
           if-no-files-found: error
