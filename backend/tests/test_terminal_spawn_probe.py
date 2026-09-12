@@ -151,8 +151,10 @@ def test_agent_cli_probe_uses_explicit_binary_from_spawn_command(
         ) if command[0] == "/opt/homebrew/bin/claude" else None,
     )
 
+    # Double quotes on purpose: both parsers strip them, where a single quote
+    # is a literal character to the one Windows uses.
     result = app._probe_agent_cli_for_spawn(
-        "claude", "'/opt/homebrew/bin/claude' --session-id test"
+        "claude", '"/opt/homebrew/bin/claude" --session-id test'
     )
 
     assert result is not None
