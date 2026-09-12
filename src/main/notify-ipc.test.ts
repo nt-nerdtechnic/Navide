@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { normalizePlatformId, setPlatformId } from '../shared/osplat'
 
 // The renderer's useSystemNotify ends in two IPC channels owned by
 // `src/main/index.ts`: `window:notify` (desktop notification whose click brings
@@ -87,12 +88,8 @@ vi.mock('electron', () => {
 type NotifyHandler = (event: { sender: unknown }, args: Record<string, unknown>) => { ok: boolean }
 type BadgeHandler = (event: { sender: unknown }, count: number) => void
 
-function setPlatform(p: string): void {
-  Object.defineProperty(process, 'platform', { value: p, configurable: true })
-}
 
 describe('window:notify / window:setBadgeCount IPC', () => {
-  const realPlatform = process.platform
   let notify: NotifyHandler
   let setBadge: BadgeHandler
 
@@ -114,7 +111,7 @@ describe('window:notify / window:setBadgeCount IPC', () => {
     expect(setBadge).toBeTypeOf('function')
   }, 60_000)
 
-  afterEach(() => setPlatform(realPlatform))
+  afterEach(() => setPlatformId(normalizePlatformId(process.platform)))
 
   it('shows a non-silent notification with the given title and body', () => {
     const res = notify({ sender: 'sender' }, { paneId: 'p1', title: 'CLI finished', body: 'x completed' })
@@ -159,28 +156,28 @@ describe('window:notify / window:setBadgeCount IPC', () => {
   })
 
   it('setBadgeCount mirrors the count to the app Dock and the sender window tile', () => {
-    setPlatform('darwin')
+    setPlatformId('darwin')
     setBadge({ sender: 'sender' }, 3)
     expect(dockSetBadge).toHaveBeenCalledWith('3')
     expect(setWindowDockTileBadge).toHaveBeenCalledWith(fakeWin, '3')
   })
 
   it('setBadgeCount(0) clears both badges', () => {
-    setPlatform('darwin')
+    setPlatformId('darwin')
     setBadge({ sender: 'sender' }, 0)
     expect(dockSetBadge).toHaveBeenCalledWith('')
     expect(setWindowDockTileBadge).toHaveBeenCalledWith(fakeWin, '')
   })
 
   it('setBadgeCount skips the window tile when the sender has no window', () => {
-    setPlatform('darwin')
+    setPlatformId('darwin')
     setBadge({ sender: 'orphan' }, 2)
     expect(dockSetBadge).toHaveBeenCalledWith('2')
     expect(setWindowDockTileBadge).not.toHaveBeenCalled()
   })
 
   it('setBadgeCount is a no-op off macOS', () => {
-    setPlatform('linux')
+    setPlatformId('linux')
     setBadge({ sender: 'sender' }, 5)
     expect(dockSetBadge).not.toHaveBeenCalled()
     expect(setWindowDockTileBadge).not.toHaveBeenCalled()

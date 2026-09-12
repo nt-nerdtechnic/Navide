@@ -5,6 +5,8 @@ import { readFile, writeFile, rename, readdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
+import { isMac } from '../shared/osplat'
+
 const execFileAsync = promisify(execFile)
 
 export type PermissionKey = 'automation' | 'notifications' | 'folders' | 'fullDisk'
@@ -16,8 +18,6 @@ const SETTINGS_PANES: Record<PermissionKey, string> = {
   folders: 'x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders',
   fullDisk: 'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles',
 }
-
-const isMac = (): boolean => process.platform === 'darwin'
 
 // macOS exposes no non-prompting TCC check to Electron for automation /
 // notifications / folders — probing them IS the prompt — so the last known

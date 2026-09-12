@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { MenuItemConstructorOptions } from 'electron'
+import { normalizePlatformId, setPlatformId, type PlatformId } from '../shared/osplat'
 import { setTerminalSelection, forgetTerminalSelection } from './terminal-selection-cache'
 
 // Shared, hoisted capture of the template passed to Menu.buildFromTemplate,
@@ -54,7 +55,11 @@ const focused = {
   reload: (): void => { focused.reloadCalls++ }
 }
 
-const isMac = process.platform === 'darwin'
+// The menu's shape is a platform decision (`isMac()` in menu.ts), so every
+// arm is driven here with setPlatformId and asserted on every host — this
+// file used to read process.platform itself and assert only the host's arm,
+// so a macOS runner never saw the Linux/Windows menu and vice versa.
+const NON_MAC: PlatformId[] = ['linux', 'win32']
 
 function submenuOf(label: string): MenuItemConstructorOptions[] {
   const top = h.template.find((i) => i.label === label)
@@ -112,15 +117,27 @@ describe('installApplicationMenu', () => {
     focused.reloadCalls = 0
     forgetTerminalSelection(FOCUSED_ID) // module state outlives a single case
     h.focusedWebContents = focused
-    installApplicationMenu(hooks)
+    installOn(normalizePlatformId(process.platform))
   })
 
   afterEach(() => {
     vi.restoreAllMocks()
+    setPlatformId(normalizePlatformId(process.platform))
   })
 
-  it('app menu (macOS) / File menu (non-macOS) has Settings… with ⌘, and Check for Updates…', () => {
-    const menu = isMac ? submenuOf('Agent-Team') : submenuOf('File')
+  /** Rebuild the menu as `platform` would see it. */
+  function installOn(platform: PlatformId): void {
+    setPlatformId(platform)
+    installApplicationMenu(hooks)
+  }
+
+  it.each([
+    ['darwin', 'Agent-Team'],
+    ['linux', 'File'],
+    ['win32', 'File'],
+  ] as const)('on %s the %s menu has Settings… with ⌘, and Check for Updates…', (platform, top) => {
+    installOn(platform)
+    const menu = submenuOf(top)
     const settings = itemIn(menu, 'Settings…')
     expect(settings.accelerator).toBe('CmdOrCtrl+,')
     const updates = itemIn(menu, 'Check for Updates…')
@@ -358,17 +375,19 @@ describe('installApplicationMenu', () => {
     })
   })
 
-  it.runIf(isMac)('File has no Close Window on macOS (deliberate omission)', () => {
+  it('File has no Close Window on macOS (deliberate omission)', () => {
     // `role: 'close'` owns ⌘W, which fires in the main process ahead of the
     // renderer's closeActiveEditor. Putting it back silently kills tab-closing
     // while leaving the binding visible in Settings.
+    installOn('darwin')
     const closeRoles = submenuOf('File').filter(
       (i) => typeof i.role === 'string' && i.role.toLowerCase() === 'close'
     )
     expect(closeRoles).toEqual([])
   })
 
-  it.runIf(!isMac)('Window keeps Close off macOS, where Ctrl+W is free', () => {
+  it.each(NON_MAC)('Window keeps Close on %s, where Ctrl+W is free', (platform) => {
+    installOn(platform)
     const closeRoles = submenuOf('Window').filter(
       (i) => typeof i.role === 'string' && i.role.toLowerCase() === 'close'
     )
@@ -395,9 +414,13 @@ describe('installApplicationMenu', () => {
     expect(zoomRoles).toEqual([])
   })
 
-  it('builds and clicks safely with no hooks at all', () => {
+  it.each([
+    ['darwin', 'Agent-Team'],
+    ['linux', 'File'],
+  ] as const)('builds and clicks safely with no hooks at all on %s', (platform, top) => {
+    setPlatformId(platform)
     expect(() => installApplicationMenu()).not.toThrow()
-    const menu = isMac ? submenuOf('Agent-Team') : submenuOf('File')
+    const menu = submenuOf(top)
     expect(() => fire(itemIn(menu, 'Settings…'))).not.toThrow()
     expect(() => fire(itemIn(submenuOf('Window'), 'Pipeline Manager'))).not.toThrow()
     expect(() => fire(itemIn(submenuOf('Window'), 'Resource Manager'))).not.toThrow()

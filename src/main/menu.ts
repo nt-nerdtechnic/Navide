@@ -1,5 +1,6 @@
 import { app, clipboard, Menu, webContents, type BrowserWindow, type MenuItemConstructorOptions } from 'electron'
 import { LEGAL_LABELS, LEGAL_ROUTES, type LegalRoute } from '../shared/legalLinks'
+import { isMac } from '../shared/osplat'
 import { getTerminalSelection } from './terminal-selection-cache'
 
 /**
@@ -114,7 +115,7 @@ export function installApplicationMenu(
   hooks: AppMenuHooks = {},
   recents: RecentMenuEntry[] = []
 ): void {
-  const isMac = process.platform === 'darwin'
+  const mac = isMac()
 
   // `role: 'copy'` copies the DOM selection, which a terminal pane never has
   // (`.xterm` is user-select: none), so Edit > Copy was inert while a CLI was
@@ -211,7 +212,7 @@ export function installApplicationMenu(
   }
 
   const template: MenuItemConstructorOptions[] = [
-    ...(isMac
+    ...(mac
       ? [
           {
             label: app.name,
@@ -254,7 +255,7 @@ export function installApplicationMenu(
         // No app menu off macOS — surface the same entries under File. macOS
         // gets nothing here: its Settings… live in the app menu, and `close` is
         // omitted so ⌘W reaches the renderer (see the doc comment above).
-        ...(isMac
+        ...(mac
           ? []
           : [
               { type: 'separator' } as MenuItemConstructorOptions,
@@ -274,7 +275,7 @@ export function installApplicationMenu(
         { role: 'cut' },
         copyItem,
         { role: 'paste' },
-        ...(isMac
+        ...(mac
           ? [
               { role: 'pasteAndMatchStyle' } as MenuItemConstructorOptions,
               { role: 'delete' } as MenuItemConstructorOptions,
@@ -319,7 +320,7 @@ export function installApplicationMenu(
         // macOS "zoom" = maximize the window frame. Unrelated to content zoom,
         // has no accelerator, and is part of the standard Window menu.
         { role: 'zoom' },
-        ...(isMac
+        ...(mac
           ? [
               { type: 'separator' } as MenuItemConstructorOptions,
               { role: 'front' } as MenuItemConstructorOptions
