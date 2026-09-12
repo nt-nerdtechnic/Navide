@@ -182,6 +182,17 @@ describe('third-party plugin external workspace', () => {
         }
         runPnpmOrThrow(['run', 'build:public-packages'], repository)
 
+        // The editor subpath must carry portable workers for offline/file://
+        // consumers, rather than resolve them against the Host origin.
+        const editorBundle = join(repository, 'packages/plugin-ui/dist/editor/index.js')
+        const editorSource = readFileSync(editorBundle, 'utf8')
+        expect(editorSource).not.toMatch(/["']\/assets\/[^"']*\.worker-/)
+        const workerUrls = [...editorSource.matchAll(/new URL\(\s*["']([^"']+\.worker-[^"']+\.js)["']/g)]
+        expect(workerUrls).toHaveLength(5)
+        for (const [, workerUrl] of workerUrls) {
+          expect(readFileSync(new URL(workerUrl, pathToFileURL(editorBundle))).length).toBeGreaterThan(0)
+        }
+
         const packageTarballs: Record<string, string> = {}
         for (const packageName of ['plugin-contracts', 'plugin-sdk', 'plugin-ui']) {
           const packageDirectory = join(repository, 'packages', packageName)
@@ -260,6 +271,15 @@ describe('third-party plugin external workspace', () => {
           realpathSync(join(repository, 'node_modules', 'vue-i18n')),
           join(externalProject, 'node_modules', 'vue-i18n')
         )
+        // Only this generated editor probe needs the optional Monaco peer;
+        // the shipped sample keeps its existing public surface and behavior.
+        symlinkSync(realpathSync(join(repository, 'node_modules', 'monaco-editor')), join(externalProject, 'node_modules', 'monaco-editor'))
+        writeFileSync(join(externalProject, 'src/editor-surface-probe.ts'), `
+import { EditorPane, createPreflightEditorPort, type EditorPort } from '@navide/plugin-ui/editor'
+export { EditorPane }
+export const port: EditorPort = createPreflightEditorPort()
+export function save(editor: InstanceType<typeof EditorPane>): Promise<void> { return editor.save() }
+`)
         runNodeEntryOrThrow(
           typescriptCli,
           ['--noEmit', '--project', join(externalProject, 'tsconfig.json')],
@@ -270,6 +290,18 @@ describe('third-party plugin external workspace', () => {
           ['build', '--config', join(externalProject, 'vite.config.ts')],
           externalProject
         )
+        writeFileSync(join(externalProject, 'editor.vite.config.mjs'), `
+export default {
+  base: './',
+  build: {
+    outDir: 'editor-probe',
+    lib: { entry: 'src/editor-surface-probe.ts', formats: ['es'], fileName: () => 'editor.js' },
+    rollupOptions: { external: ['vue', 'vue-i18n', 'monaco-editor'] },
+  },
+}
+`)
+        runNodeEntryOrThrow(viteCli, ['build', '--config', join(externalProject, 'editor.vite.config.mjs')], externalProject)
+        expect(readFileSync(join(externalProject, 'editor-probe/editor.js'), 'utf8')).not.toContain('src/renderer')
         runNodeEntryOrThrow(join(externalProject, 'scripts', 'stage-package.mjs'), [], externalProject)
         runPnpmOrThrow(['run', 'check'], externalProject)
         runPnpmOrThrow(['run', 'package'], externalProject)

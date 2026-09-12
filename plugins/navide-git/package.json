@@ -1,10 +1,14 @@
 {
   "name": "@navide/navide-git",
-  "private": true,
+  "description": "Navide Git plugin and consumer-injected Vue composition surfaces.",
+  "license": "MIT",
+  "publishConfig": { "access": "public" },
+  "files": ["src", "!src/**/*.test.ts", "!src/**/__tests__"],
   "type": "module",
   "version": "0.1.0",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./composition": "./src/composition.ts"
   },
   "imports": {
     "#git-feature": "./src/git-feature/index.ts",

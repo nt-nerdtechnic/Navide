@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, Notification, powerMonitor, safeStorage, session, shell, type IpcMainInvokeEvent } from 'electron'
 import { createGuestAttachHooks, type MutableWebPreferences } from './plugins/pluginGuestAttach'
-import { join, dirname } from 'node:path'
+import { join, dirname, basename, isAbsolute, relative, sep } from 'node:path'
 import { writeFile, readFile, mkdir } from 'node:fs/promises'
 import { readFileSync, statSync, existsSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -15,7 +15,7 @@ import {
 import { abandonPendingBackends } from './backend-pending'
 import { installApplicationMenu, type AppMenuHooks, type RecentMenuEntry } from './menu'
 import { LEGAL_LINKS, isLegalRoute } from '../shared/legalLinks'
-import { openNoopPluginView, openFsProbePluginView, openMiniIdePluginView, devMiniIdePluginDescriptor, openPlansPluginView, devPlansPluginDescriptor, devPlansV2PluginBundle, openGitPluginView, openGitLeftPluginView, updateGitLeftPluginView, closeGitLeftPluginView, registerBundledMiniIde, registerBundledPlans, registerLegacyBundledGit, hasCompletePlansContributions, frontendPluginManager } from './plugins/frontendPluginManager'
+import { openNoopPluginView, openFsProbePluginView, openMiniIdePluginView, openPlansPluginView, devPlansPluginDescriptor, devPlansV2PluginBundle, openGitPluginView, openGitLeftPluginView, updateGitLeftPluginView, closeGitLeftPluginView, registerBundledMiniIde, bundledMiniIdeDir, registerBundledPlans, registerLegacyBundledGit, hasCompletePlansContributions, frontendPluginManager } from './plugins/frontendPluginManager'
 import { plansBackendActivation } from './plugins/frontendPluginManager'
 import {
   isTrustedPluginManagementSender,
@@ -27,6 +27,8 @@ import { contributionIcon } from './plugins/pluginContributionIcon'
 import { broadcastQuitStage } from './quit-progress'
 import { currentPluginHostTarget } from './plugins/pluginTarget'
 import { PluginStorageStore } from './plugins/pluginStorage'
+import { TerminalStorageOwnerService } from './terminalStorageOwner'
+import { FilePickerHostService } from './filePicker'
 import { PluginCapabilityGrantStore } from './plugins/pluginCapabilityGrantStore'
 import {
   ExecutionPolicySourceStore,
@@ -34,6 +36,11 @@ import {
 import { registerExecutionPolicyIpc } from './plugins/executionPolicyIpc'
 import { FAIL_CLOSED_EXECUTION_POLICY, type ExecutionPolicySnapshot } from './plugins/executionPolicy'
 import { PluginFactoryOptOutStore } from './plugins/pluginFactoryOptOutStore'
+import { loadPluginDir } from './plugins/installedPlugins'
+import { bundledMiniIdeV2Dir, MINI_IDE_CONTRIBUTION, activateInstalledMiniIdeRecovery } from './plugins/miniIdePackage'
+import { MINI_IDE_PLUGIN_ID, MiniIdeStorageLifecycleSelector } from './plugins/miniIdeStorageLifecycle'
+import { createMiniIdeStorageMigrationGate, type MiniIdeStorageAvailability } from './plugins/miniIdeStorageMigrationGate'
+import { createMiniIdeLegacyPreferences } from './plugins/miniIdeLegacyPreferences'
 import { recoverFailedGitV2Activation } from './plugins/gitV2ActivationRecovery'
 import { composePluginContributionQuery } from './plugins/pluginContributionQuery'
 import {
@@ -132,6 +139,7 @@ import {
   type GitAccountCrypto,
   type GitAccountInput
 } from './gitAccountsStore'
+import type { EditorNativeHost } from './plugins/editorNativeCapability'
 
 // Dev isolation: give a `npm run dev` instance its own Electron userData so its
 // renderer localStorage (layout, settings) doesn't clobber the packaged app's
@@ -736,6 +744,11 @@ const installedPluginLoad = frontendPluginManager.loadInstalledPlugins(pluginsRo
 // descriptor suppresses the bundled factory copy. A corrupt/quarantined
 // directory named navide.git is not an authoritative installation.
 const installedGitDescriptorPresent = frontendPluginManager.getDescriptor('navide.git') !== undefined
+const miniIdeSource = {
+  isPackaged: app.isPackaged,
+  resourcesPath: process.resourcesPath,
+}
+const installedMiniIdeDescriptorPresent = frontendPluginManager.getDescriptor(MINI_IDE_PLUGIN_ID) !== undefined
 frontendPluginManager.setCapabilityGrantResolver((pluginId, packageVersion) =>
   pluginCapabilityGrants.get(pluginId, packageVersion)
 )
@@ -778,6 +791,45 @@ function loadFactoryGitPackage() {
   })
   return factoryGit
 }
+function hasValidMiniIdeV2Descriptor(
+  descriptor = frontendPluginManager.getDescriptor(MINI_IDE_PLUGIN_ID),
+): boolean {
+  return Boolean(
+    descriptor?.capabilityPolicy?.kind === 'manifest-v2' &&
+      descriptor.packageVersion &&
+      descriptor.views?.some((view) =>
+        view.contributionKey === MINI_IDE_CONTRIBUTION &&
+        view.location === 'window' &&
+        existsSync(view.entryFile)
+      )
+  )
+}
+function loadFactoryMiniIdePackage() {
+  const factoryMiniIde = frontendPluginManager.loadFactoryPlugin(
+    bundledMiniIdeV2Dir(miniIdeSource),
+    MINI_IDE_PLUGIN_ID,
+  )
+  if (!factoryMiniIde.loaded) return factoryMiniIde
+  const descriptor = frontendPluginManager.getDescriptor(factoryMiniIde.pluginId)
+  const policy = descriptor?.capabilityPolicy
+  if (policy?.kind !== 'manifest-v2' || !hasValidMiniIdeV2Descriptor(descriptor)) {
+    frontendPluginManager.removeInstalledPlugin(factoryMiniIde.pluginId, { restoreBuiltin: false })
+    return { loaded: false as const, reason: 'factory package has no valid Mini-IDE window contribution' }
+  }
+  pluginCapabilityGrants.set(factoryMiniIde.pluginId, {
+    packageVersion: factoryMiniIde.packageVersion,
+    system: [...policy.system],
+    ...(policy.shell ? { shell: policy.shell } : {}),
+    storage: true,
+  })
+  return factoryMiniIde
+}
+const factoryMiniIdeActivations = installedPluginLoad.activationCatalog.slice(0, 0)
+if (!installedMiniIdeDescriptorPresent && !pluginFactoryOptOuts.has(MINI_IDE_PLUGIN_ID)) {
+  const factoryMiniIde = loadFactoryMiniIdePackage()
+  if (factoryMiniIde.loaded) factoryMiniIdeActivations.push(factoryMiniIde.activation)
+  else warnMain(`[main] bundled Mini-IDE v2 unavailable: ${factoryMiniIde.reason}`)
+}
 if (shouldAttemptFactoryGit({
   forcedLegacy: gitRecoveryEnabled,
   installedPackagePresent: installedGitDescriptorPresent,
@@ -800,6 +852,7 @@ if (shouldAttemptFactoryGit({
     )
   }
 }
+let miniIdeRecoveryEnabled = false
 frontendPluginManager.setActivationFailureHandler((failure) => {
   const recovered = recoverFailedGitV2Activation(failure, {
     selectedDescriptor: () => frontendPluginManager.getDescriptor('navide.git') ?? null,
@@ -831,6 +884,30 @@ frontendPluginManager.setActivationFailureHandler((failure) => {
       `[main] failed navide.git v2 activation could not switch to legacy recovery: ${failure.reason}`
     )
   }
+  if (
+    failure.pluginId === MINI_IDE_PLUGIN_ID &&
+    !pluginFactoryOptOuts.has(MINI_IDE_PLUGIN_ID) &&
+    hasValidMiniIdeV2Descriptor() &&
+    pluginCapabilityGrants.get(MINI_IDE_PLUGIN_ID, failure.packageVersion) !== null
+  ) {
+    const overlayReady = installMiniIdeLegacyPreferenceOverlay(failure.packageVersion)
+    const recovery = overlayReady
+      ? activateInstalledMiniIdeRecovery(frontendPluginManager, miniIdeSource)
+      : { registered: false, reason: 'no trusted Mini-IDE storage snapshot is available' }
+    if (recovery.registered) {
+      miniIdeRecoveryEnabled = true
+      for (const [key, hostWindow] of contributionWindows) {
+        if (key === MINI_IDE_CONTRIBUTION && !hostWindow.isDestroyed()) hostWindow.close()
+      }
+      for (const hostWindow of mainWindows) {
+        if (hostWindow.isDestroyed() || detachedWindowIds.has(hostWindow.id)) continue
+        hostWindow.webContents.send('plugins:contributionsChanged')
+      }
+      warnMain(`[main] Mini-IDE v2 activation failed (${failure.reason}); switched to installed recovery`)
+    } else {
+      warnMain(`[main] Mini-IDE v2 activation failed; recovery unavailable: ${recovery.reason}`)
+    }
+  }
 })
 frontendPluginManager.setPlansBackendFailureHandler((failure) => {
   // This covers both an initial bind failure and a later renderer/child
@@ -848,6 +925,7 @@ frontendPluginManager.setPlansBackendFailureHandler((failure) => {
 let approvedInstalledPluginActivations = [
   ...installedPluginLoad.activationCatalog,
   ...factoryGitActivations,
+  ...factoryMiniIdeActivations,
 ]
 for (const error of installedPluginLoad.errors) {
   console.warn(`[main] installed plugin quarantined: ${error}`)
@@ -858,11 +936,95 @@ for (const error of installedPluginLoad.errors) {
 const pluginStorageStore = new PluginStorageStore(
   () => join(app.getPath('userData'), 'plugin-storage-v2')
 )
+const terminalStorageOwnerService = new TerminalStorageOwnerService({
+  preloadPath: join(__dirname, '../preload/terminal-owner-preload.js'),
+  entry: (origin) => {
+    if (origin === 'legacy-mini-ide') {
+      return {
+        filePath: join(
+          bundledMiniIdeDir({
+            isPackaged: app.isPackaged,
+            resourcesPath: process.resourcesPath,
+          }),
+          'index.html',
+        ),
+      }
+    }
+    const rendererUrl = process.env['ELECTRON_RENDERER_URL']
+    return rendererUrl
+      ? { url: rendererUrl }
+      : { filePath: join(__dirname, '../renderer/index.html') }
+  },
+})
+frontendPluginManager.setTerminalStorageHandler((origin, request, canDispatch) =>
+  terminalStorageOwnerService.execute(origin, request, canDispatch)
+)
+const filePickerHostService = new FilePickerHostService({
+  preloadPath: join(__dirname, '../preload/file-picker-preload.js'),
+  entry: process.env['ELECTRON_RENDERER_URL']
+    ? { url: process.env['ELECTRON_RENDERER_URL'] }
+    : { filePath: join(__dirname, '../renderer/index.html') },
+  openPreview: ({ workspacePath, canonicalPath, canDispatch }) => {
+    if (!canDispatch()) return Promise.resolve(false)
+    const workspaceRoot = normalizeWorkspacePath(workspacePath)
+    if (!workspaceRoot || !isAbsolute(canonicalPath)) return Promise.resolve(false)
+    const relPath = relative(workspaceRoot, canonicalPath)
+    if (
+      !relPath ||
+      isAbsolute(relPath) ||
+      relPath === '..' ||
+      relPath.startsWith(`..${sep}`)
+    ) return Promise.resolve(false)
+    return openCatalogContributionWindow(
+      'navide.plans.window',
+      workspacePath,
+      { filepath: canonicalPath },
+      {
+        path: canonicalPath,
+        expectedCanonicalPath: canonicalPath,
+        workspaceOnly: true,
+      },
+      canDispatch,
+    ).then((result) => {
+      if (!result.ok && canDispatch()) {
+        const reason = result.error ?? 'unknown error'
+        warnMain(`[main] navide.plans.window preview unavailable: ${reason}`)
+        showPlansPreviewUnavailable(workspacePath)
+      }
+      return result.ok
+    })
+  },
+  openSelected: ({ workspacePath, canonicalPath, line, canDispatch }) => {
+    if (!canDispatch()) return Promise.resolve(false)
+    const workspaceRoot = normalizeWorkspacePath(workspacePath)
+    const targetPath = canonicalPath
+    if (!workspaceRoot || !targetPath || !isAbsolute(targetPath)) return Promise.resolve(false)
+    const relPath = relative(workspaceRoot, targetPath)
+    const inWorkspace = relPath &&
+      !isAbsolute(relPath) &&
+      relPath !== '..' &&
+      !relPath.startsWith(`..${sep}`)
+    return openMiniIdeEditor(null, {
+      workspace_path: workspacePath,
+      ...(inWorkspace
+        ? { filepath: relPath }
+        : { filepath: basename(targetPath), file_ws: dirname(targetPath) }),
+      ...(line !== undefined ? { line: String(line) } : {}),
+    }, canDispatch, {
+      path: targetPath,
+      expectedCanonicalPath: targetPath,
+    })
+  },
+})
+frontendPluginManager.setFilePickerHost(filePickerHostService)
 const gitStorageLifecycle = new GitStorageLifecycleSelector(
   join(app.getPath('userData'), 'plugin-storage-v2', 'lifecycle.json'),
 )
 const plansStorageLifecycle = new PlansStorageLifecycleSelector(
   join(app.getPath('userData'), 'plugin-storage-v2', 'plans-lifecycle.json'),
+)
+const miniIdeStorageLifecycle = new MiniIdeStorageLifecycleSelector(
+  join(app.getPath('userData'), 'plugin-storage-v2', 'mini-ide-lifecycle.json'),
 )
 const applyPluginActivationChange = ({
   pluginId,
@@ -953,8 +1115,15 @@ const pluginTrustRefresh = registerPluginIpc(
     cleanupPluginStorage: async (pluginId) => {
       await pluginStorageStore.cleanupPlugin(pluginId)
       if (pluginId === 'navide.plans') plansStorageLifecycle.clear()
+      if (pluginId === MINI_IDE_PLUGIN_ID) {
+        miniIdeStorageLifecycle.clear()
+        miniIdeStorageAvailability = null
+        miniIdeStoragePackageVersion = null
+        clearMiniIdeLegacyPreferenceOverlay()
+        frontendPluginManager.setMiniIdeStorageSnapshotContext('', null)
+      }
     },
-    factoryPackageIds: ['navide.git'],
+    factoryPackageIds: ['navide.git', MINI_IDE_PLUGIN_ID],
     listFactoryPackages: () => {
       const descriptor = frontendPluginManager.getDescriptor('navide.git')
       const factoryActive = frontendPluginManager
@@ -962,14 +1131,46 @@ const pluginTrustRefresh = registerPluginIpc(
         .some((pkg) => pkg.id === 'navide.git' && pkg.provenance === 'factory-bundled') &&
         descriptor?.capabilityPolicy?.kind === 'manifest-v2' &&
         !gitRecoveryEnabled
+      const miniDescriptor = frontendPluginManager.getDescriptor(MINI_IDE_PLUGIN_ID)
+      const miniFactoryActive = frontendPluginManager
+        .listInstalledPackages()
+        .some((pkg) => pkg.id === MINI_IDE_PLUGIN_ID && pkg.provenance === 'factory-bundled') &&
+        hasValidMiniIdeV2Descriptor(miniDescriptor) &&
+        !miniIdeRecoveryEnabled
       return [{
         id: 'navide.git',
         version: factoryActive ? descriptor?.packageVersion ?? null : null,
         active: factoryActive,
         optedOut: pluginFactoryOptOuts.has('navide.git'),
+      }, {
+        id: MINI_IDE_PLUGIN_ID,
+        version: miniFactoryActive ? miniDescriptor?.packageVersion ?? null : null,
+        active: miniFactoryActive,
+        optedOut: pluginFactoryOptOuts.has(MINI_IDE_PLUGIN_ID),
       }]
     },
     restoreFactoryPackage: (pluginId) => {
+      if (pluginId === MINI_IDE_PLUGIN_ID) {
+        if (existsSync(join(pluginsRoot(), pluginId))) {
+          throw new Error('an installed package already owns this plugin id')
+        }
+        const restored = miniIdeRecoveryEnabled
+          ? frontendPluginManager.restoreFactoryAfterRecovery(
+              bundledMiniIdeV2Dir(miniIdeSource),
+              MINI_IDE_PLUGIN_ID,
+            )
+          : loadFactoryMiniIdePackage()
+        const restoredOk = 'loaded' in restored ? restored.loaded : restored.restored
+        if (!restoredOk) {
+          throw new Error('reason' in restored ? restored.reason : 'factory Mini-IDE restore failed')
+        }
+        pluginFactoryOptOuts.remove(pluginId)
+        miniIdeRecoveryEnabled = false
+        clearMiniIdeLegacyPreferenceOverlay()
+        const activation = 'activation' in restored ? restored.activation : undefined
+        applyPluginActivationChange({ pluginId, activation })
+        return
+      }
       if (pluginId !== 'navide.git') throw new Error('unknown factory package')
       assertFactoryGitRestoreAllowed({ forcedLegacy: gitRecoveryForced })
       if (existsSync(join(pluginsRoot(), pluginId))) {
@@ -987,6 +1188,20 @@ const pluginTrustRefresh = registerPluginIpc(
       }
     },
     onFactoryPackageRemoved: (pluginId) => {
+      if (pluginId === MINI_IDE_PLUGIN_ID) {
+        pluginFactoryOptOuts.add(pluginId)
+        miniIdeRecoveryEnabled = false
+        clearMiniIdeLegacyPreferenceOverlay()
+        for (const [key, hostWindow] of contributionWindows) {
+          if (key === MINI_IDE_CONTRIBUTION && !hostWindow.isDestroyed()) hostWindow.close()
+        }
+        for (const hostWindow of mainWindows) {
+          if (!hostWindow.isDestroyed() && !detachedWindowIds.has(hostWindow.id)) {
+            hostWindow.webContents.send('plugins:contributionsChanged')
+          }
+        }
+        return
+      }
       pluginFactoryOptOuts.add(pluginId)
       gitRecoveryEnabled = gitRecoveryForced
       for (const hostWindow of mainWindows) {
@@ -997,6 +1212,7 @@ const pluginTrustRefresh = registerPluginIpc(
     },
     onPackageInstalled: (pluginId) => {
       if (pluginId === 'navide.git') pluginFactoryOptOuts.remove(pluginId)
+      if (pluginId === MINI_IDE_PLUGIN_ID) pluginFactoryOptOuts.remove(pluginId)
     },
   }
 )
@@ -1089,15 +1305,17 @@ const approvedBackendPluginCatalog = () =>
 // code/GPU caches, electron-updater downloads). Never user state.
 registerStorageIpc()
 
-// Mini-IDE keeps its bundled v1 delivery path. Plans selects the combined
-// Manifest v2 package when its verified frontend/backend artifact is present;
-// the legacy bundle remains an explicit recovery fallback.
-const bundledMiniIde = registerBundledMiniIde(frontendPluginManager, {
-  isPackaged: app.isPackaged,
-  resourcesPath: process.resourcesPath,
-})
-if (!bundledMiniIde.registered) {
-  console.warn(`[main] bundled mini-IDE unavailable: ${bundledMiniIde.reason}`)
+// Keep the old bundle only as a fallback for a selected, verified v2 package.
+// A missing factory package or a durable opt-out therefore leaves the editor
+// unavailable and cannot silently re-enable the removed legacy surface.
+const selectedMiniIdeV2 = hasValidMiniIdeV2Descriptor()
+if (selectedMiniIdeV2) {
+  const bundledMiniIde = registerBundledMiniIde(frontendPluginManager, miniIdeSource)
+  if (!bundledMiniIde.registered) {
+    console.warn(`[main] Mini-IDE recovery bundle unavailable: ${bundledMiniIde.reason}`)
+  }
+} else {
+  console.warn('[main] Mini-IDE v2 contribution is unavailable')
 }
 
 const bundledPlans = registerBundledPlans(frontendPluginManager, {
@@ -1290,6 +1508,7 @@ async function autoRestartBackend(): Promise<void> {
       return
     }
     backend = started
+    frontendPluginManager.setTerminalShell(started.shell)
     backendLastError = null
     backendRestartPending = null
     watchBackendCrash(backend)
@@ -1349,6 +1568,7 @@ ipcMain.handle('backend:restart', async () => {
         readHealthCheckTimeoutSec(healthTimeoutPath()) * 1000,
         approvedBackendPluginCatalog()
       )
+      frontendPluginManager.setTerminalShell(backend.shell)
       backendLastError = null
       watchBackendCrash(backend)
       console.log(`[main] backend restarted at ${backend.host}:${backend.port}`)
@@ -1395,7 +1615,7 @@ ipcMain.handle('backend:stop', async () => {
   }
 })
 
-ipcMain.handle('workspace:pick', async (_event, defaultPath?: string) => {
+async function pickWorkspacePath(defaultPath?: string): Promise<string | null> {
   const opts: Electron.OpenDialogOptions = {
     title: 'Pick workspace folder',
     properties: ['openDirectory', 'createDirectory'],
@@ -1409,7 +1629,9 @@ ipcMain.handle('workspace:pick', async (_event, defaultPath?: string) => {
 
   if (result.canceled || result.filePaths.length === 0) return null
   return result.filePaths[0]
-})
+}
+
+ipcMain.handle('workspace:pick', (_event, defaultPath?: string) => pickWorkspacePath(defaultPath))
 
 ipcMain.handle('workspace:new', async () => {
   const opts: Electron.OpenDialogOptions = {
@@ -1528,6 +1750,33 @@ function currentGitReadOnlyQuery(): Record<string, string> {
 }
 
 let gitStorageMigrationInFlight: { packageVersion: string; promise: Promise<void> } | null = null
+let miniIdeStorageAvailability: MiniIdeStorageAvailability | null = null
+let miniIdeStoragePackageVersion: string | null = null
+function clearMiniIdeLegacyPreferenceOverlay(): void {
+  frontendPluginManager.setMiniIdeLegacyPreferences(null)
+}
+function installMiniIdeLegacyPreferenceOverlay(packageVersion: string): boolean {
+  const snapshot = miniIdeStorageAvailability?.status === 'ready' && miniIdeStoragePackageVersion === packageVersion
+    ? { pluginId: MINI_IDE_PLUGIN_ID, packageVersion, tier: 'active' as const }
+    : miniIdeStorageAvailability?.status === 'recovery' && miniIdeStoragePackageVersion === packageVersion
+      ? miniIdeStorageLifecycle.sourceFor(packageVersion)
+      : null
+  if (!snapshot) return false
+  frontendPluginManager.setMiniIdeLegacyPreferences(
+    createMiniIdeLegacyPreferences(pluginStorageStore, snapshot),
+  )
+  return true
+}
+const ensureMiniIdeStorage = createMiniIdeStorageMigrationGate({
+  store: pluginStorageStore,
+  lifecycle: miniIdeStorageLifecycle,
+  readLegacySettings: readUiSettings,
+  onReady: (packageVersion, previousPackageVersion) => {
+    miniIdeStoragePackageVersion = packageVersion
+    frontendPluginManager.setMiniIdeStorageSnapshotContext(packageVersion, previousPackageVersion)
+    clearMiniIdeLegacyPreferenceOverlay()
+  },
+})
 
 async function migrateGitStorage(): Promise<void> {
   const descriptor = frontendPluginManager.getDescriptor('navide.git')
@@ -1702,6 +1951,18 @@ async function projectPlansLegacyPreferences(
 async function prepareCatalogContribution(contributionKey: string): Promise<boolean> {
   if (contributionKey.startsWith('navide.plans.')) {
     return (await migratePlansStorageState()).status === 'ready'
+  }
+  if (contributionKey === MINI_IDE_CONTRIBUTION) {
+    const descriptor = frontendPluginManager.getDescriptor(MINI_IDE_PLUGIN_ID)
+    const packageVersion = descriptor?.packageVersion
+    if (!hasValidMiniIdeV2Descriptor(descriptor) || !packageVersion) {
+      miniIdeStorageAvailability = { status: 'unavailable' }
+      miniIdeStoragePackageVersion = packageVersion ?? null
+      return false
+    }
+    miniIdeStorageAvailability = await ensureMiniIdeStorage(packageVersion)
+    miniIdeStoragePackageVersion = packageVersion
+    return miniIdeStorageAvailability.status === 'ready'
   }
   if (!contributionKey.startsWith('navide.git.')) return true
   const descriptor = frontendPluginManager.getDescriptor('navide.git')
@@ -1879,36 +2140,96 @@ async function openFolderInEditor(
 }
 
 /**
- * Open the mini-IDE plugin view (the editor surface) in its dedicated window,
+ * Open the declared Mini-IDE v2 window contribution in its dedicated window,
  * forwarding editor open params (`filepath`/`file_ws`/`line`/`sidebar`/`diff_*`/
  * `branch_diff_*`) as the entry query EditorWindowApp reads from
- * `window.location.search`. A changed workspace reloads the running view (see
- * FrontendPluginManager.open) — `file_ws`, the root of a file living outside
- * the workspace, deliberately is NOT part of that identity, so opening an
- * external file adds a tab instead of reloading; `host` only parents the
- * unavailable-fallback dialog.
+ * `window.location.search`; the Host keeps all extra targets intact and mints
+ * a trusted external-file grant when one is needed.
  */
-function openMiniIdeEditor(host: BrowserWindow | null, params: Record<string, string>): boolean {
-  const { workspace_path: workspacePath = '', ...extraParams } = params
-  const httpUrl = backend ? `http://${backend.host}:${backend.port}` : ''
-  const opened = openMiniIdePluginView(workspacePath, httpUrl, extraParams, currentUiTheme())
-  if (!opened) {
-    // Last-resort fallback: the mini-IDE ships bundled with the app, so this
-    // only fires when the bundled assets are missing/invalid and no verified
-    // marketplace install is present.
-    const target = host && !host.isDestroyed() ? host : mainWindow
-    if (target && !target.isDestroyed()) {
-      void handleMiniIdeUnavailable(target, workspacePath, extraParams)
-    }
-  }
-  return opened
+type TrustedEditorFileTarget = {
+  path: string
+  expectedCanonicalPath?: string
+  workspaceOnly?: boolean
 }
 
-// The `ui.open_in_editor` host capability (plugin broker): a sandboxed plugin
-// view (e.g. the Git window's file list) asks the host to open a file. It goes
-// through the same router as window:openEditor so the user's default-editor
-// choice applies here too, with the mini-IDE as the fallback.
-frontendPluginManager.setOpenInEditorHandler((params) => routeEditorOpen(null, params))
+function isTrustedEditorFileTargetCurrent(target: TrustedEditorFileTarget): boolean {
+  if (target.expectedCanonicalPath === undefined) return true
+  try {
+    return statSync(target.path).isFile() && realpathSync(target.path) === target.expectedCanonicalPath
+  } catch {
+    return false
+  }
+}
+
+async function openMiniIdeEditor(
+  host: BrowserWindow | null,
+  params: Record<string, string>,
+  canDispatch: () => boolean = () => true,
+  trustedEditorFileTarget?: TrustedEditorFileTarget,
+): Promise<boolean> {
+  if (!canDispatch()) return false
+  if (trustedEditorFileTarget && !isTrustedEditorFileTargetCurrent(trustedEditorFileTarget)) return false
+  const { workspace_path: workspacePath = '', ...extraParams } = params
+  if (miniIdeRecoveryEnabled) {
+    const httpUrl = backend ? `http://${backend.host}:${backend.port}` : ''
+    if (await openMiniIdePluginView(workspacePath, httpUrl, extraParams, currentUiTheme(), {
+      canDispatch,
+      trustedEditorFileTarget,
+    })) return true
+  }
+  const targetPath = extraParams.filepath
+    ? resolveExternalOpenTarget(extraParams.file_ws || workspacePath, extraParams.filepath)
+    : null
+  const result = await openCatalogContributionWindow(
+    MINI_IDE_CONTRIBUTION,
+    workspacePath,
+    extraParams,
+    trustedEditorFileTarget ?? (targetPath ? { path: targetPath } : undefined),
+    canDispatch,
+  )
+  if (result.ok) return true
+  if (!canDispatch()) return false
+  if (trustedEditorFileTarget && !isTrustedEditorFileTargetCurrent(trustedEditorFileTarget)) return false
+
+  // An installed v2 package may have failed after selection. Its legacy copy
+  // is a guarded recovery path; it is never used for a missing or opted-out
+  // IDE, and storage migration failures remain unavailable until repaired.
+  if (
+    result.error !== 'mini-ide storage unavailable' &&
+    !pluginFactoryOptOuts.has(MINI_IDE_PLUGIN_ID) &&
+    hasValidMiniIdeV2Descriptor() &&
+    frontendPluginManager.listInstalledPackages().some((pkg) => pkg.id === MINI_IDE_PLUGIN_ID) &&
+    pluginCapabilityGrants.get(
+      MINI_IDE_PLUGIN_ID,
+      frontendPluginManager.getDescriptor(MINI_IDE_PLUGIN_ID)?.packageVersion ?? '',
+    ) !== null
+  ) {
+    const packageVersion = frontendPluginManager.getDescriptor(MINI_IDE_PLUGIN_ID)?.packageVersion
+    const overlayReady = Boolean(packageVersion && installMiniIdeLegacyPreferenceOverlay(packageVersion))
+    const recovery = overlayReady
+      ? activateInstalledMiniIdeRecovery(frontendPluginManager, miniIdeSource)
+      : { registered: false, reason: 'no trusted Mini-IDE storage snapshot is available' }
+    if (recovery.registered) {
+      miniIdeRecoveryEnabled = true
+      const httpUrl = backend ? `http://${backend.host}:${backend.port}` : ''
+      if (await openMiniIdePluginView(workspacePath, httpUrl, extraParams, currentUiTheme(), {
+        canDispatch,
+        trustedEditorFileTarget,
+      })) return true
+    }
+  }
+
+  if (!canDispatch()) return false
+  const target = host && !host.isDestroyed() ? host : mainWindow
+  void handleMiniIdeUnavailable(target, extraParams)
+  return false
+}
+
+// The `ui.open_in_editor` host capability is the plugin semantic editor route:
+// a contribution asks for the IDE surface, regardless of the user's explicit
+// external-editor preference. Direct user actions continue through
+// routeEditorOpen and retain that preference.
+frontendPluginManager.setOpenInEditorHandler((params) => openMiniIdeEditor(null, params))
 frontendPluginManager.setOpenPlansWindowHandler((workspacePath, relPath) =>
   openPlanWindow(workspacePath, relPath)
 )
@@ -1919,6 +2240,126 @@ frontendPluginManager.setOpenPlansWindowHandler((workspacePath, relPath) =>
 frontendPluginManager.setPublicCapabilityHandler((plan) =>
   frontendPluginManager.executePublicCapability(plan)
 )
+
+// Native editor capability handlers run only after FrontendPluginManager has
+// authorized the exact plugin instance and workspace binding. Reuse the same
+// native picker, editor routing, window routing, and keybinding persistence
+// helpers used by the Host IPC handlers above.
+frontendPluginManager.setEditorNativeHandlers({
+  pickFile: (title) => pickFilePath({ title }),
+  pickWorkspace: (defaultPath) => pickWorkspacePath(defaultPath),
+  revealPath: (target) => {
+    const result = revealShellPath(target)
+    if (!result.ok) throw new Error(result.error ?? 'reveal failed')
+  },
+  openPath: async (target) => {
+    const result = await openShellPath(target)
+    if (!result.ok) throw new Error(result.error ?? 'open failed')
+  },
+  openTempFile: async (name, content) => {
+    const result = await openTempFilePath(name, content)
+    if (!result.ok) throw new Error(result.error ?? 'open temp file failed')
+  },
+  listEditors: async (refresh) => currentDetectedEditors(refresh).map((editor) => ({
+    id: editor.id,
+    label: editor.id === 'vscode' ? 'Visual Studio Code' : editor.id === 'cursor' ? 'Cursor' : editor.id,
+    available: editor.available,
+  })),
+  openFolderInEditor: async (dir, editorId) => {
+    if (!(await openFolderInEditor(null, dir, editorId))) {
+      throw new Error('editor unavailable')
+    }
+  },
+  openEditorWindow: async (args) => {
+    const ok = await openMiniIdeEditor(null, {
+      workspace_path: args.workspace_path,
+      ...(args.filepath !== undefined ? { filepath: args.filepath } : {}),
+      ...(args.file_ws !== undefined ? { file_ws: args.file_ws } : {}),
+      ...(args.line !== undefined ? { line: String(args.line) } : {}),
+      ...(args.sidebar !== undefined ? { sidebar: args.sidebar } : {}),
+    })
+    if (!ok) throw new Error('editor open failed')
+  },
+  openPluginWindow: async ({ contributionKey, workspacePath, filePath, line }) => {
+    const extraParams: Record<string, string> = {}
+    const trustedEditorFileTarget = filePath
+      ? { path: filePath, expectedCanonicalPath: filePath }
+      : undefined
+    if (filePath) {
+      const workspaceRoot = normalizeWorkspacePath(workspacePath)
+      const targetPath = normalizeWorkspacePath(filePath)
+      const relPath = workspaceRoot ? relative(workspaceRoot, targetPath) : ''
+      if (
+        relPath &&
+        !isAbsolute(relPath) &&
+        relPath !== '..' &&
+        !relPath.startsWith(`..${sep}`)
+      ) {
+        extraParams.filepath = relPath
+      } else {
+        extraParams.filepath = basename(targetPath)
+        extraParams.file_ws = dirname(targetPath)
+      }
+    }
+    if (line !== undefined) extraParams.line = String(line)
+
+    const result = await openCatalogContributionWindow(
+      contributionKey,
+      workspacePath,
+      extraParams,
+      trustedEditorFileTarget,
+    )
+    if (result.ok) return { ok: true }
+
+    // A Mini-IDE contribution can be in guarded legacy recovery after its v2
+    // window failed. Reuse the semantic editor route so that recovery keeps
+    // the same exact file target and Host grant; it does not recurse through
+    // this native handler.
+    if (contributionKey === MINI_IDE_CONTRIBUTION) {
+      if (await openMiniIdeEditor(null, { workspace_path: workspacePath, ...extraParams }, () => true, trustedEditorFileTarget)) {
+        return { ok: true }
+      }
+    }
+
+    // Catalog ownership is authoritative. Contribution keys may contain
+    // dots, so deriving a plugin id from the last separator can misclassify a
+    // missing target as an installed package.
+    const catalogEntry = frontendPluginManager.listContributionCatalog().find(
+      (entry) => entry.contributionKey === contributionKey,
+    )
+    const miniIdeInstalled = contributionKey === MINI_IDE_CONTRIBUTION && Boolean(
+      frontendPluginManager.getDescriptor(MINI_IDE_PLUGIN_ID) ||
+      frontendPluginManager.listInstalledPackages().some((pkg) => pkg.id === MINI_IDE_PLUGIN_ID),
+    )
+    return catalogEntry || miniIdeInstalled
+      ? {
+          ok: false,
+          error: 'PLUGIN_UNAVAILABLE' as const,
+          message: 'The requested plugin contribution is installed but unavailable right now.',
+        }
+      : {
+          ok: false,
+          error: 'PLUGIN_NOT_INSTALLED' as const,
+          message: 'The requested plugin contribution is not installed.',
+        }
+  },
+  openMainWindow: (workspacePath) => openMainWindow(workspacePath),
+  openBranchDiffWindow: (workspacePath, base) => openBranchDiffWindow(null, {
+    workspace_path: workspacePath,
+    branch_diff_base: base,
+  }),
+  openGitWindow: async (args) => {
+    if (!(await openGitWindow(args.workspace_path, gitWindowExtraParams(args)))) {
+      throw new Error('Git window unavailable')
+    }
+  },
+  openGitHistoryWindow: async (workspacePath) => {
+    if (!(await openGitWindow(workspacePath))) throw new Error('Git window unavailable')
+  },
+  readKeybindings: () => readKeybindingsFile(),
+  writeKeybindings: (content) => writeKeybindingsFile(content),
+  setUiScale: (scale) => uiZoomStore().set(scale),
+})
 
 // Plans v2 keeps all workspace reads and mutations on the existing backend
 // filesystem service. The package child only receives the Host-private bridge
@@ -1972,40 +2413,56 @@ frontendPluginManager.setHostShellHandlers({
 })
 
 /**
- * Fallback when the mini-IDE plugin view could not be opened: plain file opens
- * go to the OS default application; diff/branch-diff and bare opens keep a
- * dialog (no external equivalent).
+ * Surface a clear failure when the mini-IDE plugin view could not be opened.
+ * There is no implicit OS-editor fallback: the selected editor route is owned
+ * by routeEditorOpen, and this handler only reports the unavailable Mini-IDE.
  */
 async function handleMiniIdeUnavailable(
-  target: BrowserWindow,
-  workspacePath: string,
+  target: BrowserWindow | null,
   params: Record<string, string>
 ): Promise<void> {
   const kind = classifyEditorOpen(params)
-  if (kind === 'file') {
-    // `file_ws` (an out-of-workspace file's own root) is what `filepath` is
-    // relative to when present — resolving it against the workspace instead
-    // would point at a different file, or at nothing.
-    const abs = resolveExternalOpenTarget(params.file_ws || workspacePath, params.filepath ?? '')
-    if (abs) {
-      // shell.openPath returns an empty string on success, or an error message.
-      const err = await shell.openPath(abs)
-      if (err) shell.showItemInFolder(abs)
-      return
-    }
-    // Missing/unsafe target (e.g. stale reference) — fall through to the dialog.
-  }
-  void dialog.showMessageBox(target, {
-    type: 'info',
+  const options: Electron.MessageBoxOptions = {
+    type: 'error',
     title: 'Mini-IDE unavailable',
-    message: kind === 'diff' ? 'Diff view requires the Mini-IDE' : 'Mini-IDE could not be loaded',
+    message: kind === 'diff'
+      ? 'Unable to open the diff because the Mini-IDE is unavailable.'
+      : kind === 'file'
+        ? 'Unable to open the file because the Mini-IDE is unavailable.'
+        : 'The Mini-IDE is unavailable.',
     detail:
       (kind === 'diff'
-        ? 'Diff views can only be shown in the Mini-IDE, and its bundled assets are missing or invalid. '
-        : 'The bundled Mini-IDE assets are missing or invalid. ') +
-      'Reinstall Navide, or install the Mini-IDE extension from Settings → Extensions. ' +
-      '(Development: run `pnpm run build:mini-ide` to produce dist-plugins/mini-ide.)',
-  })
+        ? 'Diff views require the Mini-IDE. '
+        : kind === 'file'
+          ? 'This file can only be opened through the Mini-IDE in the current configuration. '
+          : '') +
+      'The Mini-IDE extension is not installed or could not be loaded. Open Settings → Extensions to inspect its status.',
+  }
+  void (target && !target.isDestroyed()
+    ? dialog.showMessageBox(target, options)
+    : dialog.showMessageBox(options))
+}
+
+function showPlansPreviewUnavailable(workspacePath: string): void {
+  const plansInstalled = Boolean(
+    frontendPluginManager.getDescriptor('navide.plans') ||
+    frontendPluginManager.listInstalledPackages().some((pkg) => pkg.id === 'navide.plans'),
+  )
+  const missing = !plansInstalled
+  const target = findMainWindowForWorkspace(workspacePath) ?? mainWindow
+  const options: Electron.MessageBoxOptions = {
+    type: 'error',
+    title: 'Plans unavailable',
+    message: missing
+      ? 'Unable to preview this HTML file because Plans is not installed.'
+      : 'Unable to preview this HTML file because Plans is unavailable.',
+    detail: missing
+      ? 'The Plans extension is not installed. Open Settings → Extensions to inspect its status.'
+      : 'The installed Plans extension could not be loaded. Open Settings → Extensions to inspect its status.',
+  }
+  void (target && !target.isDestroyed()
+    ? dialog.showMessageBox(target, options)
+    : dialog.showMessageBox(options))
 }
 
 function openDiffWindow(host: BrowserWindow | null, params: Record<string, string>): void {
@@ -2021,15 +2478,15 @@ function openDiffWindow(host: BrowserWindow | null, params: Record<string, strin
   })
 }
 
-ipcMain.handle('window:openMain', (_event, args?: { workspace_path?: string }) => {
+function openMainWindow(workspacePath = ''): void {
   const params: Record<string, string> = {}
-  const ws = (args?.workspace_path ?? '').trim()
+  const ws = workspacePath?.trim() ?? ''
   if (ws) {
     // Already open in some window → focus it instead of duplicating.
     const existing = findMainWindowForWorkspace(ws)
     if (existing) {
       revealMainWindow(existing)
-      return { ok: true }
+      return
     }
     params.workspace_path = ws
     // duplicate=1 marks a window cloned from a live one (its source's CLI
@@ -2039,6 +2496,10 @@ ipcMain.handle('window:openMain', (_event, args?: { workspace_path?: string }) =
     params.duplicate = '1'
   }
   void createWindow(params)
+}
+
+ipcMain.handle('window:openMain', (_event, args?: { workspace_path?: string }) => {
+  openMainWindow(args?.workspace_path)
   return { ok: true }
 })
 
@@ -2349,10 +2810,19 @@ async function openCatalogContributionWindow(
   contributionKey: string,
   workspacePath: string,
   extraParams: Record<string, string> = {},
+  trustedEditorFileTarget?: TrustedEditorFileTarget,
+  canDispatch: () => boolean = () => true,
 ): Promise<{ ok: boolean; error?: string }> {
+  if (!canDispatch()) return { ok: false, error: 'request is no longer active' }
   if (!(await prepareCatalogContribution(contributionKey))) {
-    return { ok: false, error: 'Plans v2 storage is unavailable' }
+    return {
+      ok: false,
+      error: contributionKey === MINI_IDE_CONTRIBUTION
+        ? 'mini-ide storage unavailable'
+        : 'Plans v2 storage is unavailable',
+    }
   }
+  if (!canDispatch()) return { ok: false, error: 'request is no longer active' }
   const contribution = frontendPluginManager.listContributionCatalog().find(
     (entry) => entry.contributionKey === contributionKey && entry.location === 'window'
   )
@@ -2384,10 +2854,20 @@ async function openCatalogContributionWindow(
     })
   }
 
+  if (!canDispatch()) {
+    if (created && !hostWindow.isDestroyed()) hostWindow.close()
+    return { ok: false, error: 'request is no longer active' }
+  }
   const result = await frontendPluginManager.openContributionWindow(hostWindow, contributionKey, {
     workspacePath,
     query: catalogContributionQuery(contributionKey, workspacePath, extraParams),
+    ...(trustedEditorFileTarget ? { trustedEditorFileTarget } : {}),
+    canDispatch,
   })
+  if (!canDispatch()) {
+    if (created && !hostWindow.isDestroyed()) hostWindow.close()
+    return { ok: false, error: 'request is no longer active' }
+  }
   if (!result.ok) {
     if (created && !hostWindow.isDestroyed()) {
       if (contributionWindows.get(windowKey) === hostWindow) contributionWindows.delete(windowKey)
@@ -2447,21 +2927,33 @@ async function openGitWindow(workspacePath: string, extraParams: Record<string, 
   })
 }
 
+function gitWindowExtraParams(args: {
+  filepath?: string
+  name?: string
+  staged?: boolean | string
+  commit?: string
+  base?: string
+  compare?: string
+}): Record<string, string> {
+  const extraParams: Record<string, string> = {}
+  if (args.filepath) {
+    extraParams.git_diff_filepath = args.filepath
+    extraParams.git_diff_name = args.name ?? ''
+    extraParams.git_diff_staged = typeof args.staged === 'boolean' ? String(args.staged) : (args.staged ?? '')
+    extraParams.git_diff_commit = args.commit ?? ''
+  }
+  if (args.base) extraParams.git_diff_base = args.base
+  if (args.compare) extraParams.git_diff_compare = args.compare
+  return extraParams
+}
+
 ipcMain.handle('window:openGit', async (_event, args: Record<string, string>) => {
   const workspacePath = (args?.workspace_path ?? '').trim()
   if (!workspacePath) return { ok: false }
   // Optional diff target: focus the Git window on a file's diff (shown in its
   // own panel, not the mini-IDE). GitWindowApp reads these git_diff_* keys on
   // load and via the incremental openTarget delivery when already open.
-  const extraParams: Record<string, string> = {}
-  if (args.filepath) {
-    extraParams.git_diff_filepath = args.filepath
-    extraParams.git_diff_staged = args.staged ?? ''
-    extraParams.git_diff_commit = args.commit ?? ''
-  }
-  if (args.base) extraParams.git_diff_base = args.base
-  if (args.compare) extraParams.git_diff_compare = args.compare
-  const ok = await openGitWindow(workspacePath, extraParams)
+  const ok = await openGitWindow(workspacePath, gitWindowExtraParams(args))
   return { ok }
 })
 
@@ -2565,7 +3057,12 @@ ipcMain.handle('plugins:prepareContribution', async (event, args: Record<string,
     return { ok: false, error: 'Plans legacy recovery is active' }
   }
   if (!(await prepareCatalogContribution(contributionKey))) {
-    return { ok: false, error: 'Plans v2 storage is unavailable' }
+    return {
+      ok: false,
+      error: contributionKey === MINI_IDE_CONTRIBUTION
+        ? 'Mini-IDE storage is unavailable'
+        : 'Plans v2 storage is unavailable',
+    }
   }
   const renderedTheme = typeof args?.theme === 'string' ? args.theme : ''
   const result = await frontendPluginManager.prepareGuestContribution(hostWindow, contributionKey, {
@@ -3191,24 +3688,33 @@ ipcMain.handle(
   }
 )
 
+async function pickFilePath(args?: {
+  title?: string
+  filters?: Electron.FileFilter[]
+  defaultPath?: string
+}): Promise<string | null> {
+  const opts: Electron.OpenDialogOptions = {
+    title: args?.title ?? 'Select File',
+    properties: ['openFile'],
+    filters: args?.filters ?? [{ name: 'All Files', extensions: ['*'] }],
+  }
+  if (args?.defaultPath) opts.defaultPath = args.defaultPath
+  const win = BrowserWindow.getFocusedWindow() ?? mainWindow
+  const result = win
+    ? await dialog.showOpenDialog(win, opts)
+    : await dialog.showOpenDialog(opts)
+  if (result.canceled || result.filePaths.length === 0) return null
+  return result.filePaths[0] ?? null
+}
+
 ipcMain.handle(
   'dialog:pickFile',
   async (
     _event,
     args?: { title?: string; filters?: Electron.FileFilter[]; defaultPath?: string }
   ): Promise<{ ok: boolean; path?: string; canceled?: boolean }> => {
-    const opts: Electron.OpenDialogOptions = {
-      title: args?.title ?? 'Select File',
-      properties: ['openFile'],
-      filters: args?.filters ?? [{ name: 'All Files', extensions: ['*'] }],
-    }
-    if (args?.defaultPath) opts.defaultPath = args.defaultPath
-    const win = BrowserWindow.getFocusedWindow() ?? mainWindow
-    const result = win
-      ? await dialog.showOpenDialog(win, opts)
-      : await dialog.showOpenDialog(opts)
-    if (result.canceled || result.filePaths.length === 0) return { ok: false, canceled: true }
-    return { ok: true, path: result.filePaths[0] }
+    const path = await pickFilePath(args)
+    return path ? { ok: true, path } : { ok: false, canceled: true }
   }
 )
 
@@ -3293,6 +3799,16 @@ ipcMain.handle('permissions:open-settings', async (_event, key: PermissionKey) =
   }
 })
 
+function revealShellPath(target: string): { ok: boolean; error?: string } {
+  if (!target || typeof target !== 'string') return { ok: false, error: 'invalid path' }
+  try {
+    shell.showItemInFolder(target)
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, error: String(e) }
+  }
+}
+
 async function openShellPath(target: string): Promise<{ ok: boolean; error?: string; revealed?: boolean }> {
   if (!target || typeof target !== 'string') return { ok: false, error: 'invalid path' }
   // shell.openPath returns an empty string on success, or an error message.
@@ -3300,12 +3816,10 @@ async function openShellPath(target: string): Promise<{ ok: boolean; error?: str
   if (err) {
     // If openPath failed (e.g. file doesn't exist), try revealing the parent
     // directory in Finder so the user can navigate from there.
-    try {
-      shell.showItemInFolder(target)
+    if (revealShellPath(target).ok) {
       return { ok: true, revealed: true }
-    } catch {
-      return { ok: false, error: err }
     }
+    return { ok: false, error: err }
   }
   return { ok: true }
 }
@@ -3317,13 +3831,7 @@ ipcMain.handle('shell:openPath', async (event, target: string) => {
 
 ipcMain.handle('shell:revealPath', async (event, target: string) => {
   if (!isAppWindowSender(event)) return UNTRUSTED_SENDER
-  if (!target || typeof target !== 'string') return { ok: false, error: 'invalid path' }
-  try {
-    shell.showItemInFolder(target)
-    return { ok: true }
-  } catch (e) {
-    return { ok: false, error: String(e) }
-  }
+  return revealShellPath(target)
 })
 
 // A one-time confirmation for one trust-changing action, minted here because
@@ -3386,8 +3894,10 @@ ipcMain.handle('shell:openExternal', async (event, url: string) => {
 
 // Write read-only content (e.g. a file's HEAD version) to a temp file and open
 // it with the OS default app — the equivalent of Cursor's "Open File (HEAD)".
-ipcMain.handle('shell:openTempFile', async (event, filename: string, content: string) => {
-  if (!isAppWindowSender(event)) return UNTRUSTED_SENDER
+async function openTempFilePath(
+  filename: string,
+  content: string,
+): Promise<{ ok: boolean; path?: string; error?: string }> {
   if (!filename || typeof filename !== 'string') return { ok: false, error: 'invalid filename' }
   try {
     const artifact = await writeTempTextArtifact(tmpdir(), filename, content ?? '')
@@ -3396,12 +3906,14 @@ ipcMain.handle('shell:openTempFile', async (event, filename: string, content: st
   } catch (e) {
     return { ok: false, error: String(e) }
   }
+}
+
+ipcMain.handle('shell:openTempFile', async (event, filename: string, content: string) => {
+  if (!isAppWindowSender(event)) return UNTRUSTED_SENDER
+  return openTempFilePath(filename, content)
 })
 
-// Read bytes from a file starting at a given offset. Used by the stage watcher
-// to scan the outputLogFile for sentinel strings — more reliable than cleanBuffer
-// which can be truncated or have scanFrom issues from Q&A injections.
-ipcMain.handle('keybindings:read', async () => {
+async function readKeybindingsFile(): Promise<{ ok: boolean; content?: string; error?: string }> {
   const filePath = join(app.getPath('userData'), 'keybindings.json')
   try {
     const content = await readFile(filePath, 'utf-8')
@@ -3415,10 +3927,12 @@ ipcMain.handle('keybindings:read', async () => {
     if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return { ok: true, content: '[]' }
     return { ok: false, error: String(e) }
   }
-})
+}
 
-ipcMain.handle('keybindings:write', async (event, content: string) => {
-  if (!isAppWindowSender(event)) return UNTRUSTED_SENDER
+async function writeKeybindingsFile(
+  content: string,
+  writerId?: number,
+): Promise<{ ok: boolean; error?: string }> {
   if (typeof content !== 'string') return { ok: false, error: 'invalid content' }
   const filePath = join(app.getPath('userData'), 'keybindings.json')
   try {
@@ -3429,13 +3943,24 @@ ipcMain.handle('keybindings:write', async (event, content: string) => {
       if (win.isDestroyed()) continue
       // Skip the writer: it already applied these rules, and echoing them back
       // rebuilds its resolver a second time for nothing.
-      if (win.webContents.id === event.sender.id) continue
+      if (writerId !== undefined && win.webContents.id === writerId) continue
       win.webContents.send('keybindings:changed', content)
     }
+    frontendPluginManager.notifyEditorKeybindingsChanged(content)
     return { ok: true }
   } catch (e) {
     return { ok: false, error: String(e) }
   }
+}
+
+// Read bytes from a file starting at a given offset. Used by the stage watcher
+// to scan the outputLogFile for sentinel strings — more reliable than cleanBuffer
+// which can be truncated or have scanFrom issues from Q&A injections.
+ipcMain.handle('keybindings:read', () => readKeybindingsFile())
+
+ipcMain.handle('keybindings:write', async (event, content: string) => {
+  if (!isAppWindowSender(event)) return UNTRUSTED_SENDER
+  return writeKeybindingsFile(content, event.sender.id)
 })
 
 ipcMain.handle('fs:readFrom', async (event, filePath: string, fromByte: number) => {
@@ -3849,15 +4374,15 @@ app.whenReady().then(async () => {
   // Registry provenance.
   const pluginDevEnabled = process.env['AGENT_TEAM_PLUGIN_DEV'] === '1'
   if (pluginDevEnabled) {
-    // Dev-only: register the locally built mini-IDE (dist-plugins/mini-ide) so
-    // editor/diff opens work without a marketplace install. Overrides any
-    // installed copy for this run (registerDescriptor replaces by id).
-    const devDescriptor = devMiniIdePluginDescriptor()
-    if (existsSync(devDescriptor.entryFile)) {
+    // Dev-only: prefer the local Manifest v2 bundle. The old descriptor is a
+    // recovery artifact and must not be the normal developer override.
+    const devMiniIde = loadPluginDir(bundledMiniIdeV2Dir(miniIdeSource))
+    const devDescriptor = devMiniIde.descriptor
+    if (devDescriptor && hasValidMiniIdeV2Descriptor(devDescriptor)) {
       frontendPluginManager.registerDeveloperDescriptor(devDescriptor)
     } else {
       console.warn(
-        '[main] AGENT_TEAM_PLUGIN_DEV=1 but mini-IDE dev bundle is missing — run `pnpm run build:mini-ide`'
+        `[main] AGENT_TEAM_PLUGIN_DEV=1 but Mini-IDE v2 dev bundle is unavailable: ${devMiniIde.error ?? 'invalid contribution'}`
       )
     }
     // Dev-only: keep the already selected combined Plans package when startup
@@ -3934,14 +4459,10 @@ app.whenReady().then(async () => {
           },
           onOpenMiniIdePlugin: () => {
             // Dev-only: workspace via AGENT_TEAM_PLUGIN_WORKSPACE, else empty.
-            // Opens in the dedicated mini-IDE window (no host needed).
-            const httpUrl = backend ? `http://${backend.host}:${backend.port}` : ''
-            openMiniIdePluginView(
-              process.env['AGENT_TEAM_PLUGIN_WORKSPACE'] ?? '',
-              httpUrl,
-              {},
-              currentUiTheme()
-            )
+            // Open the declared v2 contribution through the same Host route.
+            void openMiniIdeEditor(null, {
+              workspace_path: process.env['AGENT_TEAM_PLUGIN_WORKSPACE'] ?? '',
+            })
           },
           onOpenPlansPlugin: () => {
             const host = BrowserWindow.getFocusedWindow() ?? mainWindow
@@ -4022,6 +4543,7 @@ app.whenReady().then(async () => {
   )
     .then((b) => {
       backend = b
+      frontendPluginManager.setTerminalShell(b.shell)
       backendLastError = null
       watchBackendCrash(b)
       // Starts the stability window whose completion clears the restore
@@ -4170,6 +4692,11 @@ async function teardownBackendAndQuit(): Promise<void> {
   broadcastQuitStage('closing')
   app.quit()
 }
+
+app.on('will-quit', () => {
+  terminalStorageOwnerService.dispose()
+  filePickerHostService.dispose()
+})
 
 app.on('before-quit', async (e) => {
   // Confirmation gate — shared "confirm before close" setting, driven by renderer.

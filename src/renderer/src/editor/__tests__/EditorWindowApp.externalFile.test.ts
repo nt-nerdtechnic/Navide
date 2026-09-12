@@ -50,9 +50,8 @@ vi.mock('../FilePreviewPane.vue', () => stub('FilePreviewPane', ['workspacePath'
 // window workspace instead of the tab's own root writes to the wrong file.
 const saveCalls = vi.hoisted(() => [] as Array<{ workspacePath: string; relPath: string }>)
 
-vi.mock('../EditorPane.vue', () => ({
-  __esModule: true,
-  default: defineComponent({
+vi.mock('@navide/plugin-ui/editor', () => ({
+  EditorPane: defineComponent({
     name: 'EditorPane',
     props: {
       workspacePath: { type: String, default: '' },

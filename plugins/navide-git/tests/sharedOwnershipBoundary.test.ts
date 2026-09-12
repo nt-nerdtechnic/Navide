@@ -42,6 +42,8 @@ describe('public Vue plugin ownership boundary', () => {
 
     expect(Object.keys(manifest.exports).sort()).toEqual([
       '.',
+      './editor',
+      './file-picker',
       './foundation',
       './shared',
       './styles.css',

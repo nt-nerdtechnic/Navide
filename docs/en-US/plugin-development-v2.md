@@ -57,6 +57,15 @@ status changes only Registry trust and marketplace classification; it does not
 grant access to private Host modules or force an official package to be
 installed. The base App must remain usable with an empty plugin catalog.
 
+The `@navide/plugin-ui/editor` subpath provides the shared text editor and a
+typed consumer-injected `EditorPort`. It does not expose Host transports,
+diagnostics stores, window state, or filesystem authority. See
+[Shared editor composition](editor-design.md#shared-editor-composition) for
+its peer dependency, effect adapter, and restricted-preflight contract. Raw
+terminal and vendor-shell modules remain Host-owned; Plugins use the public
+safe AI CLI controller instead. The user reaffirmed this graph for miniIDE
+migration on 2026-09-11, superseding the earlier private-feature proposal.
+
 The package manifests declare public npm publication metadata and use normal
 SemVer 2.0.0 versions, but registry publication is future work outside Issue
 06. The package implementations live under
@@ -881,7 +890,7 @@ are not Manifest v2 permissions.
 |---|---|---|
 | `system:fs` | `fs.readFile`, `fs.listDirectory`, `fs.glob`, `fs.stat`, `workspace.filesChanged` | `workspace` |
 | `system:ui` | `ui.openInEditor` | `workspace` |
-| `system:ui` | `ui.openExternal` | `plugin` (HTTPS; Host user-gesture gate) |
+| `system:ui` | `ui.openExternal` | `plugin` (HTTP/HTTPS web links; Host user-gesture gate) |
 | `system:aiCli` | `aiCli.listProfiles`, `startSession`, `resumeSession`, `cancelStart`, `reattachSession`, `sendInput`, `resizeSession`, `redrawSession`, `interruptSession`, `stopSession`, `output`, `exited` | `workspace` |
 | `shell` | `shell.run` | `workspace` |
 
@@ -1120,6 +1129,56 @@ Issues 25 and 26 must reuse this Execution Policy contract, its Policy Sources,
 Host-minted Initiators, and the shared Host broker for miniIDE composition.
 They must not introduce an IDE-specific policy, permission, or Initiator model.
 
+### Independent plugin windows and editor capability adapters
+
+`ui.openPluginWindow` opens an installed contribution whose declared location
+is `window`. The SDK exposes it as
+`createPluginViewRuntimeClient().openContributionWindow(...)`. Its closed
+arguments are `contributionKey`, optional `path`, `line`, and `grant`.
+The contribution key selects a resource; it does not assert caller or target
+runtime identity. The Host derives the workspace from the caller binding,
+checks its `ui` permission, exact-version Grant and applicable Execution
+Policy, and resolves the registered target contribution. A path must be
+contained by that workspace or covered by the caller's exact-file selection.
+The Host creates a new target-owned selection grant when transferring an
+external file. Caller grants, instance identifiers, URLs and raw query maps
+are never transferred as authority.
+
+The result is `{ ok: true }` or a structured failure with
+`PLUGIN_NOT_INSTALLED` / `PLUGIN_UNAVAILABLE` and a message. An absent or
+uninstalled IDE must be reported to the user; it must not silently open the
+Host editor or the operating system's default editor. Explicit external-editor
+preferences remain separate. Recovery for an installed plugin version is
+distinct from treating an uninstalled or disabled plugin as present.
+The miniIDE package declares `navide.mini-ide.window`; its complete activation
+and parity verification remain part of Issue 26, not implied by this API.
+
+Typed Git methods under `shell` use a Host-fixed Git operation mapping.
+`aiCli.generateCommitMessage` retains AI authority. The Git package's public
+`@navide/navide-git/composition` export is side-effect-free build-time
+composition: consumers inject authority and bundle the surfaces, without an
+installed Git plugin or a runtime import of its mount entry.
+
+Issue operations use `shell.issueProvider`, `shell.listIssues`,
+`shell.getIssue`, `shell.createIssue`, `shell.commentIssue`, and
+`shell.setIssueState`. They reuse the existing provider services. The Host
+derives repository containment and the executable policy from the authenticated
+Initiator, then checks the actual `git`, `gh`, or `glab` command before each
+provider subprocess. A plugin cannot supply backend routes or policy fields.
+Account operations use the fixed `ui.listGitAccounts`,
+`ui.getGitAccountBinding`, `ui.addGitAccount`, `ui.bindGitAccount`, and
+`ui.unbindGitAccount` methods. Responses contain masked account summaries;
+stored credentials and backend authentication tokens stay with the Host.
+
+Editor read/write metadata, expected-mtime conflicts, search, native pickers,
+and review operations use the closed public capability catalog. Review request
+IDs are Host-minted and instance-bound, with teardown on cancellation or
+instance/backend loss. Selected-file filesystem authority remains exact-file.
+External HTML preview separately retains its existing parent-directory
+resource-read scope for relative assets and sibling resource URLs; it does
+not grant directory listing or sibling writes, and the resource URL never
+contains the backend WebSocket authentication token.
+
 ### Embedded AI CLI public mapping
 
 `AiCliDock` currently consumes the generic terminal transport. The public
@@ -1137,10 +1196,21 @@ catalog exposes only the Host-mediated AI CLI addresses below:
 | `aiCli.redrawSession` | Redraw an owned session |
 | `aiCli.interruptSession` | Interrupt an owned session |
 | `aiCli.stopSession` | Stop an owned session |
+| `aiCli.readTerminalView` | Read Host-owned font, last dimensions and serialized history; no PTY/storage identity |
+| `aiCli.saveTerminalView` | Save serialized history for an owned session |
+| `aiCli.setTerminalFontSize` | Update the existing terminal font owner |
+| `aiCli.listMentionTargets` | Project the existing qualified messaging roster for an owned session |
+| `aiCli.saveClipboardImage` | Save pasted image bytes through the existing Host image store |
+| `aiCli.showTerminalContextMenu` / `aiCli.reportTerminalSelection` | Use the instance's native clipboard menu and selection owner |
 | `aiCli.output` / `aiCli.exited` | Directed output and exit events |
 
-`aiCli.startSession` accepts only an allowlisted `profileId` and terminal
-display dimensions. The Host derives the command, arguments, working directory,
+`aiCli.startSession` accepts an allowlisted `profileId`, terminal display
+dimensions, the existing optional YOLO choice and an opaque start request ID.
+Optional `persistView` on start/resume selects Host-owned terminal persistence;
+it does not accept a storage key or process identity. `listProfiles` can opt
+into `terminalView` presentation metadata and the existing embedded editor
+profile set. Shared Git/Plans consumers retain their existing defaults.
+The Host derives the command, arguments, working directory,
 environment, credentials, workspace, pane metadata, session ID, view instance,
 and event audience. Resize and redraw carry validated positive terminal
 dimensions, and stop carries an explicit force value; neither permits raw PTY
@@ -1156,6 +1226,52 @@ for `ui.openExternal` before opening a URL.
 Filesystem calls used by the dock's `@`-file picker remain authorized by
 the public `system:fs` catalog; they are not absorbed into the AI CLI
 permission.
+
+Terminal presentation persistence is not Plugin Storage. The Host maps the
+migrated miniIDE window to the exact legacy miniIDE entry URL and default
+Electron partition; other public consumers have contribution/workspace-derived
+keys at the Host terminal owner. The Host renderer and legacy miniIDE renderer
+remain separate origins. Minimal terminal-only bootstrap branches load no IDE
+UI, and the owner stays available without a visible editor/main window.
+Only fixed font/dimensions/session/history operations cross that internal
+boundary. No package chooses an origin, key, raw PTY or arbitrary method.
+The only miniIDE Plugin Storage migration keys remain `ide-sidebar-width`,
+`ide-ai-panel-width`, and `agentTeam.search.opts`.
+
+Persisted-session adoption requires backend-owned profile, canonical workspace
+and origin metadata, checked before ownership transfer or redraw. Public
+output stays text; the Host streams UTF-8 decoding across backend binary
+batches. Clipboard images reuse the existing `dropped-files` store and media
+types. Embedded terminal native file-drop behavior is not introduced by this
+migration: that gesture belongs to the separate Host TerminalPane surface.
+
+`ui.openFilePicker` preserves the embedded terminal's searchable file popup
+through a Host-owned picker-only view. Its request contains `query`, untrusted
+`candidates`, optional `line`, and an optional owned `sessionId`. A candidate or
+a renderer's user Initiator classification does not authorize an external file.
+The Host performs lookup internally; the isolated picker returns an opaque row
+identifier on actual selection. The public result is only `{ opened: boolean }`.
+Neither filesystem lookup results nor a selected-file grant are returned to
+the calling package.
+
+The existing direct workspace HTML behavior is separate from external-file
+selection: a canonical contained `.html`/`.htm` candidate opens the installed
+Plans window's read-only `filepath` preview branch without showing the picker.
+That branch uses the receiver's existing `fs.previewResource` authorization
+and a sandboxed resource iframe, retaining relative assets. It does not enter
+the `rel_path` Plans document model or extend `plans.list`, `plans.read`,
+mutation or MCP allowlists. Missing Plans is an explicit error, never a Host
+preview implementation or implicit legacy replacement.
+
+The invocation binds the source instance, workspace, optional session, and
+picker sender/main frame. Navigation, workspace changes, instance/session
+teardown and policy revocation invalidate dispatch. The selected canonical
+identity is checked again before the receiving editor obtains an exact-file
+grant. No directory/list/write authority follows from picker selection.
+`@navide/plugin-ui/file-picker` exports only the popup presentation helper so
+the fixed Host renderer can reuse it without loading terminal or IDE code.
+Runtime focus, IME, placement and outside-click behavior remain part of the
+consolidated manual migration verification.
 
 ### Issue 15 runtime boundary
 

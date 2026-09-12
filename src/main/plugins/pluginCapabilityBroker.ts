@@ -5,6 +5,8 @@
 // `frontendPluginManager.ts`.
 
 import { eventNamespace, resolveWsType } from './capabilityMap'
+import { EDITOR_AI_EVENTS, validateEditorAiEvent } from './editorAiCapability'
+import { isPreferenceJsonValue, validateEditorPreferencesEvent } from './editorPreferenceCapability'
 import {
   HOST_SHELL_EXECUTABLE_ALLOWLIST,
   publicCapabilityEntry,
@@ -779,7 +781,7 @@ export function planPublicCapabilityCall(
       initiator,
       context.executionPolicy,
       entry.namespace,
-      entry.namespace === 'shell' ? String(args.command) : undefined,
+      entry.namespace === 'shell' ? entry.shellCommand ?? String(args.command) : undefined,
     )
   ) {
     return publicDenied(call.reqId, 'CAPABILITY_DENIED', 'agent execution policy denied the operation')
@@ -808,7 +810,7 @@ export function planPublicCapabilityCall(
   }
 
   if (entry.namespace === 'shell' && policy.shell === 'allowlist') {
-    if (!shellCommandAllowed(String(args.command), HOST_SHELL_EXECUTABLE_ALLOWLIST)) {
+    if (!shellCommandAllowed(entry.shellCommand ?? String(args.command), HOST_SHELL_EXECUTABLE_ALLOWLIST)) {
       return publicDenied(call.reqId, 'CAPABILITY_DENIED', 'shell executable is not Host-allowlisted')
     }
   }
@@ -950,7 +952,7 @@ export function isPublicCapabilityEventAllowed(
 ): boolean {
   const entry = publicCapabilityEntry(event)
   if (!entry || entry.kind !== 'event') return false
-  if (!policy.system.includes(entry.namespace as PluginSystemNamespace)) return false
+  if (entry.namespace === 'shell' ? !policy.shell : !policy.system.includes(entry.namespace as PluginSystemNamespace)) return false
   if (entry.eligibility === 'firstParty' && !context.publisherEligible) return false
   const binding = context.runtimeBinding
   if (!binding || !requiresWorkspace(binding)) return false
@@ -958,7 +960,7 @@ export function isPublicCapabilityEventAllowed(
   if (
     !grant ||
     grant.packageVersion !== binding.packageVersion ||
-    !grant.system.includes(entry.namespace as PluginSystemNamespace)
+    (entry.namespace === 'shell' ? grant.shell !== policy.shell : !grant.system.includes(entry.namespace as PluginSystemNamespace))
   ) {
     return false
   }
@@ -989,6 +991,32 @@ export function isPublicCapabilityEventAllowed(
           ['created', 'changed', 'deleted'].includes(String(change.kind))
       )
     )
+  }
+  if (event === 'ui.keybindingsChanged') {
+    return Boolean(sourceBinding && sameBinding(sourceBinding, binding) && isRecord(payload) &&
+      Object.keys(payload).every(key => key === 'content') && typeof payload.content === 'string')
+  }
+  if (event === 'shell.gitCredentialRequested' || event === 'shell.gitCredentialCancelled') {
+    if (!sourceBinding || !sameBinding(sourceBinding, binding) || !isRecord(payload) ||
+      typeof payload.requestId !== 'string' || !payload.requestId) return false
+    return event === 'shell.gitCredentialCancelled'
+      ? Object.keys(payload).every(key => key === 'requestId')
+      : Object.keys(payload).every(key => ['requestId', 'host', 'prompt'].includes(key)) &&
+        typeof payload.host === 'string' && typeof payload.prompt === 'string'
+  }
+  if (event === 'ui.editorPreferencesChanged') {
+    return Boolean(sourceBinding && sameBinding(sourceBinding, binding) && validateEditorPreferencesEvent(payload))
+  }
+  if (event === 'ui.pluginStorageChanged') {
+    return Boolean(sourceBinding && sameBinding(sourceBinding, binding) && isRecord(payload) &&
+      Object.keys(payload).every(key => ['scope', 'key', 'value', 'deleted'].includes(key)) &&
+      (payload.scope === 'plugin' || payload.scope === 'workspace') &&
+      typeof payload.key === 'string' && payload.key.length > 0 && typeof payload.deleted === 'boolean' &&
+      isPreferenceJsonValue(payload.value))
+  }
+  if ((EDITOR_AI_EVENTS as readonly string[]).includes(event)) {
+    return Boolean(sourceBinding && sameBinding(sourceBinding, binding) &&
+      requiresAiCliBinding(binding) && validateEditorAiEvent(event, payload))
   }
   if (event !== 'aiCli.output' && event !== 'aiCli.exited') return false
   if (!sourceBinding || !sameBinding(sourceBinding, binding)) return false

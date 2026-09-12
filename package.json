@@ -17,8 +17,9 @@
   "scripts": {
     "dev": "vite build --config vite.plans.config.ts && vite build --config plugins/navide-plans/vite.config.ts && node scripts/build-plans-v2-backend.mjs --if-needed && electron-vite dev",
     "build": "pnpm run build:official-plugins && pnpm run build:git:legacy && electron-vite build",
-    "build:official-plugins": "pnpm run build:mini-ide && pnpm run build:plans && pnpm run build:git:v2",
+    "build:official-plugins": "pnpm run build:mini-ide && pnpm run build:mini-ide:v2 && pnpm run build:plans && pnpm run build:git:v2",
     "build:mini-ide": "vite build --config vite.mini-ide.config.ts",
+    "build:mini-ide:v2": "vite build --config plugins/navide-mini-ide/vite.config.ts",
     "build:plans:legacy": "vite build --config vite.plans.config.ts",
     "build:plans:v2": "vite build --config plugins/navide-plans/vite.config.ts",
     "build:plans:backend": "node scripts/build-plans-v2-backend.mjs",
@@ -71,6 +72,10 @@
       {
         "from": "dist-plugins/mini-ide",
         "to": "plugins/mini-ide"
+      },
+      {
+        "from": "dist-plugins/navide-mini-ide",
+        "to": "plugins/navide-mini-ide"
       },
       {
         "from": "dist-plugins/plans",

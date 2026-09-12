@@ -290,11 +290,14 @@ import {
 } from './pluginCapabilityBroker'
 import { PluginStorageError } from './pluginStorage'
 import type { ExecutionPolicySnapshot } from './executionPolicy'
+import type { JsonValue } from '../../../packages/plugin-contracts/src/index'
+import type { FilePickerInvocation } from '../filePicker'
 
 interface FakeWebContentsLike {
   id: number
   sent: Array<{ channel: string; args: unknown[] }>
   loads: string[]
+  reloads: number
   focusCount: number
   isDestroyed(): boolean
   focus(): void
@@ -2681,6 +2684,47 @@ describe('registerDescriptor reserved-id guard', () => {
     })
   })
 
+  it('binds the lifecycle-selected previous Mini-IDE storage snapshot', async () => {
+    const mgr = new FrontendPluginManager()
+    const packageDescriptor: PluginLaunchDescriptor = {
+      id: MINI_IDE_PLUGIN_ID,
+      packageVersion: '2.0.0',
+      requires: ['ui'],
+      capabilityPolicy: { kind: 'manifest-v2', system: ['ui'], grants: [] },
+      devUrl: '',
+      entryFile: '/plugins/mini-ide/index.html',
+      views: [{
+        id: 'left',
+        contributionKey: 'navide.mini-ide.left',
+        kind: 'custom',
+        location: 'left',
+        title: 'Mini IDE',
+        entryFile: '/plugins/mini-ide/index.html',
+      }],
+    }
+    mgr.registerDescriptor(packageDescriptor, { builtin: true })
+    mgr.setCapabilityGrantResolver(() => ({
+      packageVersion: '2.0.0',
+      system: ['ui'],
+      storage: true,
+    }))
+    mgr.setMiniIdeStorageSnapshotContext('2.0.0', '1.9.0')
+
+    await expect(mgr.openContribution(asHost(new FakeBrowserWindow()), 'navide.mini-ide.left', {
+      bounds: 'fill',
+      workspacePath: '/workspace',
+    })).resolves.toEqual({ ok: true })
+
+    const running = [...(mgr as unknown as {
+      running: Map<string, { capabilityContext: HostCapabilityContext | null }>
+    }).running.values()]
+    expect([...running[0].capabilityContext!.storageSnapshots!.entries()]).toEqual([
+      ['candidate', '2.0.0'],
+      ['active', '2.0.0'],
+      ['previous', '1.9.0'],
+    ])
+  })
+
   it('derives the same workspace identity across manager instances', () => {
     const first = new FrontendPluginManager().gitCapabilityContext(
       '1.0.0',
@@ -3969,6 +4013,14 @@ describe('opaque view instance ownership', () => {
     }
   }
 
+  function v2WindowDescriptor(id = 'acme.window-target'): PluginLaunchDescriptor {
+    const descriptor = v2PackageDescriptor(id)
+    return {
+      ...descriptor,
+      views: [descriptor.views![1]!],
+    }
+  }
+
   it('creates independently addressable opaque instances for one package', async () => {
     const mgr = new FrontendPluginManager()
     const packageDesc = packageDescriptor()
@@ -4002,6 +4054,416 @@ describe('opaque view instance ownership', () => {
     expect(hostB.focusCount).toBeGreaterThan(0)
     expect((hostA.children[0] as FakeViewLike).webContents.focusCount).toBeGreaterThan(0)
     expect((hostB.children[0] as FakeViewLike).webContents.focusCount).toBeGreaterThan(0)
+  })
+
+  it('mints a receiver-owned file grant for new and reused window contribution targets', async () => {
+    const mgr = new FrontendPluginManager()
+    const descriptor = v2WindowDescriptor()
+    mgr.registerDescriptor(descriptor)
+    mgr.setCapabilityGrantResolver(() => ({
+      packageVersion: descriptor.packageVersion!,
+      system: ['fs', 'aiCli'],
+      storage: true,
+    }))
+    const workspacePath = realpathSync(mkdtempSync(join(tmpdir(), 'window-target-workspace-')))
+    try {
+      const firstPath = join(workspacePath, 'first.ts')
+      const secondPath = join(workspacePath, 'second.ts')
+      const firstHost = new FakeBrowserWindow()
+      const firstOpening = mgr.openContributionWindow(
+        asHost(firstHost),
+        descriptor.views![0]!.contributionKey,
+        {
+          workspacePath,
+          query: `?workspace_path=${encodeURIComponent(workspacePath)}&filepath=first.ts&file_grant=caller-grant`,
+          trustedEditorFileTarget: { path: firstPath },
+        },
+      )
+      const firstView = firstHost.children[0] as FakeViewLike
+      firstView.webContents.emit('did-finish-load')
+      const firstResult = await firstOpening
+      expect(firstResult).toEqual({ ok: true })
+      const firstLoaded = new URLSearchParams(firstView.webContents.loads[0]!.split('?')[1])
+      // A trusted target is withheld from the bootstrap URL until the initial
+      // backend binding has completed. The renderer must never receive the
+      // caller's grant or an unbound file target during that await.
+      expect(firstLoaded.get('file_grant')).toBeNull()
+      expect(firstLoaded.get('filepath')).toBeNull()
+
+      const running = (mgr as unknown as {
+        running: Map<string, { hostWindow: FakeBrowserWindow; capabilityContext: HostCapabilityContext | null }>
+      }).running
+      const firstInstanceId = [...running.entries()].find(([, plugin]) => plugin.hostWindow === firstHost)?.[0]
+      expect(firstInstanceId).toBeTruthy()
+      const firstPlugin = running.get(firstInstanceId!)!
+      const firstBinding = firstPlugin.capabilityContext!.runtimeBinding!
+      const grants = (mgr as unknown as {
+        editorSelectionGrants: {
+          resolve: (owner: { instanceId: string; workspaceId: string; packageVersion: string }, grant: unknown, kind: 'file') => string
+        }
+      }).editorSelectionGrants
+      const firstOwner = {
+        instanceId: firstInstanceId!,
+        workspaceId: firstBinding.workspaceId!,
+        packageVersion: firstBinding.packageVersion,
+      }
+      const firstTarget = firstView.webContents.sent.at(-1)
+      expect(firstTarget?.channel).toBe('plugin:openTarget')
+      const firstParams = firstTarget?.args[0] as Record<string, string>
+      const firstGrant = firstParams.file_grant
+      expect(firstGrant).toBeTruthy()
+      expect(firstGrant).not.toBe('caller-grant')
+      expect(grants.resolve(firstOwner, firstGrant, 'file')).toBe(firstPath)
+
+      const reused = await mgr.openContributionWindow(
+        asHost(firstHost),
+        descriptor.views![0]!.contributionKey,
+        {
+          workspacePath,
+          query: `?workspace_path=${encodeURIComponent(workspacePath)}&filepath=second.ts&file_grant=caller-reused`,
+          trustedEditorFileTarget: { path: secondPath },
+        },
+      )
+      expect(reused).toEqual({ ok: true })
+      expect(firstView.webContents.loads).toHaveLength(1)
+      const target = firstView.webContents.sent.at(-1)
+      expect(target?.channel).toBe('plugin:openTarget')
+      const secondParams = target?.args[0] as Record<string, string>
+      expect(secondParams.file_grant).toBeTruthy()
+      expect(secondParams.file_grant).not.toBe('caller-reused')
+      expect(grants.resolve(firstOwner, secondParams.file_grant, 'file')).toBe(secondPath)
+
+      await expect(mgr.openContributionWindow(
+        asHost(firstHost),
+        descriptor.views![0]!.contributionKey,
+        {
+          workspacePath,
+          query: `?workspace_path=${encodeURIComponent(workspacePath)}&file_grant=caller-only`,
+        },
+      )).resolves.toEqual({ ok: true })
+      const strippedTarget = firstView.webContents.sent.at(-1)?.args[0] as Record<string, string>
+      expect(strippedTarget.file_grant).toBeUndefined()
+
+      expect(() => grants.resolve(
+        { ...firstOwner, instanceId: 'sibling-instance' },
+        secondParams.file_grant,
+        'file',
+      )).toThrow(/owned by this instance/)
+      expect(() => grants.resolve(
+        { ...firstOwner, workspaceId: 'sibling-workspace' },
+        secondParams.file_grant,
+        'file',
+      )).toThrow(/owned by this instance/)
+    } finally {
+      rmSync(workspacePath, { recursive: true, force: true })
+    }
+  })
+
+  it('withholds a new target when its live dispatch gate expires during binding', async () => {
+    const mgr = new FrontendPluginManager()
+    const descriptor = v2WindowDescriptor('acme.window-target-gated')
+    mgr.registerDescriptor(descriptor)
+    mgr.setCapabilityGrantResolver(() => ({
+      packageVersion: descriptor.packageVersion!,
+      system: ['fs', 'aiCli'],
+      storage: true,
+    }))
+    const workspacePath = realpathSync(mkdtempSync(join(tmpdir(), 'window-target-gated-')))
+    try {
+      const host = new FakeBrowserWindow()
+      let active = true
+      vi.spyOn(mgr, 'waitForBackendBinding').mockResolvedValue()
+      const opening = mgr.openContributionWindow(
+        asHost(host),
+        descriptor.views![0]!.contributionKey,
+        {
+          workspacePath,
+          query: `?workspace_path=${encodeURIComponent(workspacePath)}&filepath=main.ts&file_grant=caller-grant`,
+          trustedEditorFileTarget: { path: join(workspacePath, 'main.ts') },
+          canDispatch: () => active,
+        },
+      )
+      await Promise.resolve()
+      const view = host.children[0] as FakeViewLike
+      expect(view).toBeDefined()
+      active = false
+      view.webContents.emit('did-finish-load')
+      await expect(opening).resolves.toEqual({ ok: false, error: 'request is no longer active' })
+      expect(host.children).toHaveLength(0)
+      const loaded = new URLSearchParams(view.webContents.loads[0]!.split('?')[1])
+      expect(loaded.get('file_grant')).toBeNull()
+      expect(loaded.get('filepath')).toBeNull()
+      expect(view.webContents.sent.filter(({ channel }) => channel === 'plugin:openTarget')).toHaveLength(0)
+    } finally {
+      rmSync(workspacePath, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects a trusted target whose canonical path changes while binding is pending', async () => {
+    const mgr = new FrontendPluginManager()
+    const descriptor = v2WindowDescriptor('acme.window-target-canonical')
+    mgr.registerDescriptor(descriptor)
+    mgr.setCapabilityGrantResolver(() => ({
+      packageVersion: descriptor.packageVersion!,
+      system: ['fs', 'aiCli'],
+      storage: true,
+    }))
+    const workspacePath = realpathSync(mkdtempSync(join(tmpdir(), 'window-target-canonical-')))
+    try {
+      const targetPath = join(workspacePath, 'target.ts')
+      const replacementPath = join(workspacePath, 'replacement.ts')
+      writeFileSync(targetPath, 'original')
+      writeFileSync(replacementPath, 'replacement')
+      const expectedCanonicalPath = realpathSync(targetPath)
+      vi.spyOn(mgr, 'waitForBackendBinding').mockResolvedValue()
+      const host = new FakeBrowserWindow()
+      const opening = mgr.openContributionWindow(
+        asHost(host),
+        descriptor.views![0]!.contributionKey,
+        {
+          workspacePath,
+          query: `?workspace_path=${encodeURIComponent(workspacePath)}&filepath=target.ts`,
+          trustedEditorFileTarget: { path: targetPath, expectedCanonicalPath, workspaceOnly: true },
+        },
+      )
+      await Promise.resolve()
+      const view = host.children[0] as FakeViewLike
+      expect(view).toBeDefined()
+      rmSync(targetPath)
+      symlinkSync(replacementPath, targetPath)
+      view.webContents.emit('did-finish-load')
+
+      await expect(opening).resolves.toEqual({
+        ok: false,
+        error: 'selected resource changed before opening',
+      })
+      expect(host.children).toHaveLength(0)
+      expect(view.webContents.sent.filter(({ channel }) => channel === 'plugin:openTarget')).toHaveLength(0)
+    } finally {
+      rmSync(workspacePath, { recursive: true, force: true })
+    }
+  })
+
+  it('replays the last receiver target after a readiness retry without its expired request gate', async () => {
+    vi.useFakeTimers()
+    const mgr = new FrontendPluginManager()
+    const descriptor = v2WindowDescriptor('acme.window-target-retry')
+    mgr.registerDescriptor(descriptor)
+    mgr.setCapabilityGrantResolver(() => ({
+      packageVersion: descriptor.packageVersion!,
+      system: ['fs', 'aiCli'],
+      storage: true,
+    }))
+    mgr.setActivationFailureHandler(vi.fn())
+    const workspacePath = realpathSync(mkdtempSync(join(tmpdir(), 'window-target-retry-')))
+    try {
+      const targetPath = join(workspacePath, 'target.ts')
+      writeFileSync(targetPath, 'target')
+      const host = new FakeBrowserWindow()
+      const contribution = descriptor.views![0]!.contributionKey
+      await mgr.openContributionWindow(asHost(host), contribution, {
+        workspacePath,
+        query: `?workspace_path=${encodeURIComponent(workspacePath)}`,
+      })
+      const view = host.children[0] as FakeViewLike
+      view.webContents.emit('did-finish-load')
+      let active = true
+      await expect(mgr.openContributionWindow(asHost(host), contribution, {
+        workspacePath,
+        query: `?workspace_path=${encodeURIComponent(workspacePath)}&filepath=target.ts`,
+        trustedEditorFileTarget: { path: targetPath },
+        canDispatch: () => active,
+      })).resolves.toEqual({ ok: true })
+      const beforeRetry = view.webContents.sent.filter(({ channel }) => channel === 'plugin:openTarget')
+      expect(beforeRetry).toHaveLength(1)
+
+      // The original request has ended by the time the readiness budget causes
+      // a guest reload. Replay uses only the receiver-owned delivered params.
+      active = false
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(view.webContents.reloads).toBe(1)
+      let reopenActive = true
+      const canceled = mgr.openContributionWindow(asHost(host), contribution, {
+        workspacePath,
+        query: `?workspace_path=${encodeURIComponent(workspacePath)}&filepath=target.ts`,
+        trustedEditorFileTarget: { path: targetPath },
+        canDispatch: () => reopenActive,
+      })
+      reopenActive = false
+      view.webContents.emit('did-finish-load')
+      await expect(canceled).resolves.toEqual({ ok: false, error: 'request is no longer active' })
+      const afterRetry = view.webContents.sent.filter(({ channel }) => channel === 'plugin:openTarget')
+      expect(afterRetry).toHaveLength(2)
+      expect(afterRetry[1]!.args[0]).toEqual(afterRetry[0]!.args[0])
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+      rmSync(workspacePath, { recursive: true, force: true })
+    }
+  })
+
+  it('does not let a readiness retry replay overwrite a target reopened while loading', async () => {
+    vi.useFakeTimers()
+    const mgr = new FrontendPluginManager()
+    const descriptor = v2WindowDescriptor('acme.window-target-retry-reopen')
+    mgr.registerDescriptor(descriptor)
+    mgr.setCapabilityGrantResolver(() => ({
+      packageVersion: descriptor.packageVersion!,
+      system: ['fs', 'aiCli'],
+      storage: true,
+    }))
+    mgr.setActivationFailureHandler(vi.fn())
+    const workspacePath = realpathSync(mkdtempSync(join(tmpdir(), 'window-target-retry-reopen-')))
+    try {
+      const firstPath = join(workspacePath, 'first.ts')
+      const secondPath = join(workspacePath, 'second.ts')
+      writeFileSync(firstPath, 'first')
+      writeFileSync(secondPath, 'second')
+      const host = new FakeBrowserWindow()
+      const contribution = descriptor.views![0]!.contributionKey
+      await mgr.openContributionWindow(asHost(host), contribution, {
+        workspacePath,
+        query: `?workspace_path=${encodeURIComponent(workspacePath)}`,
+      })
+      const view = host.children[0] as FakeViewLike
+      view.webContents.emit('did-finish-load')
+      await mgr.openContributionWindow(asHost(host), contribution, {
+        workspacePath,
+        query: `?workspace_path=${encodeURIComponent(workspacePath)}&filepath=first.ts`,
+        trustedEditorFileTarget: { path: firstPath },
+      })
+
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(view.webContents.reloads).toBe(1)
+      const reopening = mgr.openContributionWindow(asHost(host), contribution, {
+        workspacePath,
+        query: `?workspace_path=${encodeURIComponent(workspacePath)}&filepath=second.ts`,
+        trustedEditorFileTarget: { path: secondPath },
+        canDispatch: () => true,
+      })
+      // The entry is still loading, so the old replay waits for the new
+      // document and the reopened target cannot be sent into stale content.
+      expect(view.webContents.sent.filter(({ channel }) => channel === 'plugin:openTarget')).toHaveLength(1)
+      view.webContents.emit('did-finish-load')
+      await expect(reopening).resolves.toEqual({ ok: true })
+      const targets = view.webContents.sent
+        .filter(({ channel }) => channel === 'plugin:openTarget')
+        .map(({ args }) => args[0] as Record<string, string>)
+      expect(targets).toHaveLength(3)
+      expect(targets.at(-1)?.file_grant).toBeTruthy()
+      const grants = (mgr as unknown as {
+        editorSelectionGrants: { resolve: (owner: unknown, grant: unknown, kind: 'file') => string }
+      }).editorSelectionGrants
+      const running = (mgr as unknown as {
+        running: Map<string, { capabilityContext: HostCapabilityContext | null }>
+      }).running
+      const plugin = [...running.values()][0]
+      const binding = plugin.capabilityContext!.runtimeBinding!
+      expect(grants.resolve({
+        instanceId: binding.instanceId!,
+        workspaceId: binding.workspaceId!,
+        packageVersion: binding.packageVersion,
+      }, targets.at(-1)!.file_grant, 'file')).toBe(secondPath)
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+      rmSync(workspacePath, { recursive: true, force: true })
+    }
+  })
+
+  it('delivers Host-contained HTML preview targets without file grants on fresh and reused windows', async () => {
+    const mgr = new FrontendPluginManager()
+    const descriptor = v2WindowDescriptor('acme.window-html-preview')
+    mgr.registerDescriptor(descriptor)
+    mgr.setCapabilityGrantResolver(() => ({
+      packageVersion: descriptor.packageVersion!,
+      system: ['fs', 'aiCli'],
+      storage: true,
+    }))
+    const workspacePath = realpathSync(mkdtempSync(join(tmpdir(), 'window-html-preview-')))
+    try {
+      const firstPath = join(workspacePath, 'first.html')
+      const secondPath = join(workspacePath, 'second.html')
+      writeFileSync(firstPath, '<p>first</p>')
+      writeFileSync(secondPath, '<p>second</p>')
+      const host = new FakeBrowserWindow()
+      const contribution = descriptor.views![0]!.contributionKey
+      const firstOpening = mgr.openContributionWindow(asHost(host), contribution, {
+        workspacePath,
+        query: `?workspace_path=${encodeURIComponent(workspacePath)}&filepath=forged.html&rel_path=stale.html&file_ws=/outside&file_grant=caller`,
+        trustedEditorFileTarget: {
+          path: firstPath,
+          expectedCanonicalPath: realpathSync(firstPath),
+          workspaceOnly: true,
+        },
+      })
+      const view = host.children[0] as FakeViewLike
+      view.webContents.emit('did-finish-load')
+      await expect(firstOpening).resolves.toEqual({ ok: true })
+      const bootstrap = new URLSearchParams(view.webContents.loads[0]!.split('?')[1])
+      expect(bootstrap.get('filepath')).toBeNull()
+      expect(bootstrap.get('file_ws')).toBeNull()
+      expect(bootstrap.get('file_grant')).toBeNull()
+      view.webContents.emit('did-finish-load')
+      const firstTarget = view.webContents.sent.at(-1)?.args[0] as Record<string, string>
+      expect(firstTarget).toMatchObject({ filepath: realpathSync(firstPath) })
+      expect(firstTarget.file_ws).toBeUndefined()
+      expect(firstTarget.file_grant).toBeUndefined()
+      expect(firstTarget.rel_path).toBeUndefined()
+
+      await expect(mgr.openContributionWindow(asHost(host), contribution, {
+        workspacePath,
+        query: `?workspace_path=${encodeURIComponent(workspacePath)}&filepath=forged-second.html&file_ws=/outside&file_grant=caller-second`,
+        trustedEditorFileTarget: {
+          path: secondPath,
+          expectedCanonicalPath: realpathSync(secondPath),
+          workspaceOnly: true,
+        },
+      })).resolves.toEqual({ ok: true })
+      const reusedTarget = view.webContents.sent.at(-1)?.args[0] as Record<string, string>
+      expect(reusedTarget).toMatchObject({ filepath: realpathSync(secondPath) })
+      expect(reusedTarget.file_ws).toBeUndefined()
+      expect(reusedTarget.file_grant).toBeUndefined()
+
+      const stalePath = join(workspacePath, 'stale.html')
+      const replacementPath = join(workspacePath, 'replacement.html')
+      writeFileSync(stalePath, '<p>stale</p>')
+      writeFileSync(replacementPath, '<p>replacement</p>')
+      const expectedStalePath = realpathSync(stalePath)
+      rmSync(stalePath)
+      symlinkSync(replacementPath, stalePath)
+      const sentBeforeStale = view.webContents.sent.length
+      await expect(mgr.openContributionWindow(asHost(host), contribution, {
+        workspacePath,
+        query: `?workspace_path=${encodeURIComponent(workspacePath)}&filepath=stale.html`,
+        trustedEditorFileTarget: {
+          path: stalePath,
+          expectedCanonicalPath: expectedStalePath,
+          workspaceOnly: true,
+        },
+      })).resolves.toEqual({ ok: false, error: 'selected resource changed before opening' })
+      expect(view.webContents.sent).toHaveLength(sentBeforeStale)
+    } finally {
+      rmSync(workspacePath, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses a preview target when the Plans window contribution is missing', async () => {
+    const mgr = new FrontendPluginManager()
+    const host = new FakeBrowserWindow()
+    await expect(mgr.openContributionWindow(
+      asHost(host),
+      'navide.plans.window',
+      {
+        workspacePath: '/workspace',
+        query: '?workspace_path=%2Fworkspace&filepath=plan.html&file_grant=caller',
+        trustedEditorFileTarget: {
+          path: '/workspace/plan.html',
+          workspaceOnly: true,
+        },
+      },
+    )).resolves.toEqual({ ok: false, error: 'contribution is not installed' })
+    expect(host.children).toHaveLength(0)
   })
 
   it('resolves stale catalog objects against the current registered package', async () => {
@@ -4239,6 +4701,77 @@ describe('opaque view instance ownership', () => {
     })
     expect(eventsOf(leftView, 'workspace.filesChanged')).toHaveLength(1)
     expect(eventsOf(windowView, 'workspace.filesChanged')).toHaveLength(1)
+  })
+
+  it('decodes public PTY bytes per session and flushes the UTF-8 tail before exit', async () => {
+    vi.useFakeTimers()
+    try {
+      const mgr = new FrontendPluginManager()
+      const packageDesc = v2PackageDescriptor('navide.git')
+      const context = v2Context({ pluginId: 'navide.git', sessionId: 'binary-session' })
+      mgr.registerDescriptor({ ...packageDesc, capabilityContext: context }, { official: true })
+      const host = new FakeBrowserWindow()
+      const handle = await mgr.openView(packageDesc, packageDesc.views![0], {
+        hostWindow: asHost(host),
+        bounds: 'fill',
+        capabilityContext: context,
+      })
+      const view = host.children[0] as FakeViewLike
+      mgr.noteTerminalRoutes(handle.instanceId, 'terminal.create', {
+        terminal_session_id: 'binary-session',
+      })
+
+      dispatchEvent(mgr, 'terminal.output', {
+        terminal_session_id: 'binary-session',
+        data: new Uint8Array([0xe2]),
+      })
+      vi.advanceTimersByTime(12)
+      expect(eventsOf(view, 'aiCli.output')).toHaveLength(0)
+
+      dispatchEvent(mgr, 'terminal.output', {
+        terminal_session_id: 'binary-session',
+        data: new Uint8Array([0x82, 0xac]),
+      })
+      vi.advanceTimersByTime(12)
+      expect(eventsOf(view, 'aiCli.output')).toContainEqual({
+        type: 'aiCli.output',
+        data: { sessionId: 'binary-session', data: '€' },
+      })
+
+      dispatchEvent(mgr, 'terminal.output', {
+        terminal_session_id: 'binary-session',
+        data: 'A',
+      })
+      dispatchEvent(mgr, 'terminal.output', {
+        terminal_session_id: 'binary-session',
+        data: new Uint8Array([0xe2, 0x82, 0xac]),
+      })
+      vi.advanceTimersByTime(12)
+      expect(eventsOf(view, 'aiCli.output')).toContainEqual({
+        type: 'aiCli.output',
+        data: { sessionId: 'binary-session', data: 'A€' },
+      })
+
+      dispatchEvent(mgr, 'terminal.output', {
+        terminal_session_id: 'binary-session',
+        data: new Uint8Array([0xe2]),
+      })
+      vi.advanceTimersByTime(12)
+      dispatchEvent(mgr, 'terminal.exit', {
+        terminal_session_id: 'binary-session',
+        exit_code: 0,
+      })
+      expect(eventsOf(view, 'aiCli.output')).toContainEqual({
+        type: 'aiCli.output',
+        data: { sessionId: 'binary-session', data: '�' },
+      })
+      expect(eventsOf(view, 'aiCli.exited')).toContainEqual({
+        type: 'aiCli.exited',
+        data: { sessionId: 'binary-session', exitCode: 0 },
+      })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('does not route workspace events across packages sharing version and workspace', async () => {
@@ -5332,12 +5865,12 @@ describe('mini-IDE dedicated window (openMiniIdePluginView)', () => {
     return views[views.length - 1]
   }
 
-  it('creates a dedicated host window with the legacy editor options', () => {
+  it('creates a dedicated host window with the legacy editor options', async () => {
     // The hidden title bar is the macOS shape; other platforms get the system
     // frame (systemFrameUnlessMac), so pin the platform this test describes.
     setPlatformId('darwin')
     const winsBefore = windows.length
-    const ok = openMiniIdePluginView('/ws', 'http://h:1')
+    const ok = await openMiniIdePluginView('/ws', 'http://h:1')
     expect(ok).toBe(true)
     expect(windows.length).toBe(winsBefore + 1)
     const win = lastWindow()
@@ -5354,13 +5887,13 @@ describe('mini-IDE dedicated window (openMiniIdePluginView)', () => {
     expect(view.bounds).toEqual({ x: 0, y: 0, width: 1000, height: 700 })
   })
 
-  it('passes the current theme in the entry query', () => {
-    openMiniIdePluginView('/ws', '', {}, 'light')
+  it('passes the current theme in the entry query', async () => {
+    await openMiniIdePluginView('/ws', '', {}, 'light')
     expect(lastView().webContents.loads[0]).toContain('theme=light')
   })
 
-  it('mirrors the plugin page title onto the dedicated host window', () => {
-    openMiniIdePluginView('/ws', 'http://h:1')
+  it('mirrors the plugin page title onto the dedicated host window', async () => {
+    await openMiniIdePluginView('/ws', 'http://h:1')
     const win = lastWindow()
     // The host's own webContents is blank; without mirroring the window would
     // keep its creation-time title in the macOS Window menu forever.
@@ -5369,22 +5902,22 @@ describe('mini-IDE dedicated window (openMiniIdePluginView)', () => {
     expect(win.title).toBe('main.ts — Mini-IDE')
   })
 
-  it('ignores an empty page title so the window keeps its feature name', () => {
-    openMiniIdePluginView('/ws', 'http://h:1')
+  it('ignores an empty page title so the window keeps its feature name', async () => {
+    await openMiniIdePluginView('/ws', 'http://h:1')
     const win = lastWindow()
     lastView().webContents.emit('page-title-updated', {}, '')
     expect(win.title).toBe('Mini-IDE')
   })
 
-  it('reopen restores and focuses the dedicated window without reloading', () => {
-    openMiniIdePluginView('/ws', '', {}, 'light')
+  it('reopen restores and focuses the dedicated window without reloading', async () => {
+    await openMiniIdePluginView('/ws', '', {}, 'light')
     const win = lastWindow()
     const view = lastView()
     view.webContents.emit('did-finish-load')
     win.minimized = true
 
     const winsBefore = windows.length
-    openMiniIdePluginView('/ws', '', { filepath: 'a.ts' }, 'light')
+    await openMiniIdePluginView('/ws', '', { filepath: 'a.ts' }, 'light')
     expect(windows.length).toBe(winsBefore) // same window reused
     expect(win.minimized).toBe(false)
     expect(win.focusCount).toBeGreaterThan(0)
@@ -5394,17 +5927,17 @@ describe('mini-IDE dedicated window (openMiniIdePluginView)', () => {
     expect(targets[0].args[0]).toMatchObject({ workspace_path: '/ws', filepath: 'a.ts' })
   })
 
-  it('a theme change alone does not reload the running view', () => {
-    openMiniIdePluginView('/ws', '', {}, 'light')
+  it('a theme change alone does not reload the running view', async () => {
+    await openMiniIdePluginView('/ws', '', {}, 'light')
     const view = lastView()
     view.webContents.emit('did-finish-load')
 
-    openMiniIdePluginView('/ws', '', {}, 'dark-github')
+    await openMiniIdePluginView('/ws', '', {}, 'dark-github')
     expect(view.webContents.loads).toHaveLength(1) // still the first load
   })
 
-  it('hideSelf closes the dedicated window and tears the view down', () => {
-    openMiniIdePluginView('/ws')
+  it('hideSelf closes the dedicated window and tears the view down', async () => {
+    await openMiniIdePluginView('/ws')
     const win = lastWindow()
     const view = lastView()
 
@@ -5415,19 +5948,105 @@ describe('mini-IDE dedicated window (openMiniIdePluginView)', () => {
     expect(view.webContents.isDestroyed()).toBe(true)
   })
 
-  it('close then reopen recreates the window and view cleanly', () => {
-    openMiniIdePluginView('/ws')
+  it('close then reopen recreates the window and view cleanly', async () => {
+    await openMiniIdePluginView('/ws')
     const win1 = lastWindow()
     win1.close()
 
     const winsBefore = windows.length
     const viewsBefore = views.length
-    const ok = openMiniIdePluginView('/ws')
+    const ok = await openMiniIdePluginView('/ws')
     expect(ok).toBe(true)
     expect(windows.length).toBe(winsBefore + 1) // fresh window
     expect(views.length).toBe(viewsBefore + 1) // fresh view
     expect(lastWindow()).not.toBe(win1)
     expect(lastView().webContents.loads).toHaveLength(1)
+  })
+
+  it('rejects a recovery target whose canonical path changed before grant minting', async () => {
+    const workspacePath = realpathSync(mkdtempSync(join(tmpdir(), 'mini-recovery-target-')))
+    try {
+      const targetPath = join(workspacePath, 'target.ts')
+      const replacementPath = join(workspacePath, 'replacement.ts')
+      writeFileSync(targetPath, 'original')
+      writeFileSync(replacementPath, 'replacement')
+      const expectedCanonicalPath = realpathSync(targetPath)
+      rmSync(targetPath)
+      symlinkSync(replacementPath, targetPath)
+      frontendPluginManager.setCapabilityContext(MINI_IDE_PLUGIN_ID, {
+        publisherEligible: true,
+        userGrant: { packageVersion: '1.0.0', system: ['fs'] },
+        runtimeBinding: {
+          pluginId: MINI_IDE_PLUGIN_ID,
+          packageVersion: '1.0.0',
+          workspaceId: 'legacy-workspace',
+          instanceId: 'legacy-instance',
+          audience: 'legacy-mini-ide',
+        },
+      })
+      const viewsBefore = views.length
+      const ok = await openMiniIdePluginView(
+        workspacePath,
+        '',
+        { filepath: 'target.ts', file_ws: workspacePath },
+        '',
+        { trustedEditorFileTarget: { path: targetPath, expectedCanonicalPath } },
+      )
+      expect(ok).toBe(false)
+      expect(views).toHaveLength(viewsBefore)
+      expect(lastWindow().destroyed).toBe(true)
+    } finally {
+      rmSync(workspacePath, { recursive: true, force: true })
+    }
+  })
+
+  it('withholds a legacy recovery target until the existing entry finishes loading', async () => {
+    const workspacePath = realpathSync(mkdtempSync(join(tmpdir(), 'mini-recovery-ready-')))
+    const externalRoot = realpathSync(mkdtempSync(join(tmpdir(), 'mini-recovery-external-')))
+    try {
+      const targetPath = join(externalRoot, 'picked.html')
+      writeFileSync(targetPath, '<p>picked</p>')
+      frontendPluginManager.setCapabilityContext(MINI_IDE_PLUGIN_ID, {
+        publisherEligible: true,
+        userGrant: { packageVersion: '1.0.0', system: ['fs'] },
+        runtimeBinding: {
+          pluginId: MINI_IDE_PLUGIN_ID,
+          packageVersion: '1.0.0',
+          workspaceId: 'legacy-workspace',
+          instanceId: 'legacy-instance',
+          audience: 'legacy-mini-ide',
+        },
+      })
+      expect(await openMiniIdePluginView(workspacePath)).toBe(true)
+      const view = lastView()
+      const reopening = openMiniIdePluginView(
+        workspacePath,
+        '',
+        { filepath: 'picked.html', file_ws: externalRoot, file_grant: 'caller-grant' },
+        '',
+        {
+          canDispatch: () => true,
+          trustedEditorFileTarget: {
+            path: targetPath,
+            expectedCanonicalPath: realpathSync(targetPath),
+          },
+        },
+      )
+      expect(view.webContents.loads).toHaveLength(1)
+      expect(view.webContents.sent.filter(({ channel }) => channel === 'plugin:openTarget')).toHaveLength(0)
+
+      view.webContents.emit('did-finish-load')
+      expect(await reopening).toBe(true)
+      const target = view.webContents.sent.at(-1)
+      expect(target?.channel).toBe('plugin:openTarget')
+      const params = target?.args[0] as Record<string, string>
+      expect(params.filepath).toBe('picked.html')
+      expect(params.file_grant).toBeTruthy()
+      expect(params.file_grant).not.toBe('caller-grant')
+    } finally {
+      rmSync(workspacePath, { recursive: true, force: true })
+      rmSync(externalRoot, { recursive: true, force: true })
+    }
   })
 })
 
@@ -5746,6 +6365,217 @@ describe('Manifest v2 capability runtime deferral', () => {
     })
   })
 
+  it('notifies matching plugin storage instances after successful mutations only', async () => {
+    const mgr = new FrontendPluginManager()
+    const storageDescriptor = (
+      id: string,
+      workspacePath: string,
+      storageSnapshotTier: StorageSnapshotTier = 'active',
+      packageVersion = '1.0.0',
+    ): PluginLaunchDescriptor => ({
+      id,
+      packageVersion,
+      requires: [],
+      capabilityPolicy: manifestV2CapabilityPolicy({ system: ['ui'] }),
+      capabilityContext: {
+        publisherEligible: false,
+        userGrant: { packageVersion, system: ['ui'], storage: true },
+        runtimeBinding: {
+          pluginId: id,
+          packageVersion,
+          workspaceId: mgr.workspaceIdForPath(workspacePath),
+          instanceId: null,
+          audience: `${id}.main`,
+        },
+        storageSnapshots: new Map([
+          ['candidate', packageVersion],
+          ['active', packageVersion],
+          ['previous', '0.9.0'],
+        ]),
+        storageSnapshotTier,
+      },
+      devUrl: '',
+      entryFile: `/plugins/${id}/index.html`,
+      views: [{
+        id: 'main',
+        contributionKey: `${id}.main`,
+        kind: 'custom',
+        location: 'main',
+        title: id,
+        entryFile: `/plugins/${id}/index.html`,
+      }],
+    })
+    const firstDescriptor = storageDescriptor('acme.storage-owned', '/workspace')
+    mgr.registerDescriptor(firstDescriptor)
+    const firstHost = new FakeBrowserWindow()
+    const firstHandle = await mgr.openView(firstDescriptor, firstDescriptor.views![0], {
+      hostWindow: asHost(firstHost),
+      bounds: 'fill',
+      workspacePath: '/workspace',
+      capabilityContext: firstDescriptor.capabilityContext,
+    })
+    const first = { mgr, view: firstHost.children[0] as FakeViewLike, instanceId: firstHandle.instanceId }
+    const secondDescriptor = storageDescriptor('acme.storage-owned', '/other-workspace')
+    const secondHost = new FakeBrowserWindow()
+    await mgr.openView(secondDescriptor, secondDescriptor.views![0], {
+      hostWindow: asHost(secondHost),
+      bounds: 'fill',
+      workspacePath: '/other-workspace',
+      capabilityContext: secondDescriptor.capabilityContext,
+    })
+    const secondView = secondHost.children[0] as FakeViewLike
+    const candidateDescriptor = storageDescriptor('acme.storage-owned', '/candidate-workspace', 'candidate')
+    const candidateHost = new FakeBrowserWindow()
+    await mgr.openView(candidateDescriptor, candidateDescriptor.views![0], {
+      hostWindow: asHost(candidateHost),
+      bounds: 'fill',
+      workspacePath: '/candidate-workspace',
+      capabilityContext: candidateDescriptor.capabilityContext,
+    })
+    const candidateView = candidateHost.children[0] as FakeViewLike
+
+    const otherDescriptor: PluginLaunchDescriptor = {
+      id: 'acme.storage-other',
+      packageVersion: '1.0.0',
+      requires: [],
+      capabilityPolicy: manifestV2CapabilityPolicy({ system: ['ui'] }),
+      capabilityContext: {
+        publisherEligible: false,
+        userGrant: { packageVersion: '1.0.0', system: ['ui'], storage: true },
+        runtimeBinding: {
+          pluginId: 'acme.storage-other',
+          packageVersion: '1.0.0',
+          workspaceId: mgr.workspaceIdForPath('/workspace'),
+          instanceId: null,
+          audience: 'acme.storage-other.main',
+        },
+        storageSnapshots: new Map([
+          ['candidate', '1.0.0'],
+          ['active', '1.0.0'],
+          ['previous', '0.9.0'],
+        ]),
+        storageSnapshotTier: 'active',
+      },
+      devUrl: '',
+      entryFile: '/plugins/acme.storage-other/index.html',
+      views: [{
+        id: 'main',
+        contributionKey: 'acme.storage-other.main',
+        kind: 'custom',
+        location: 'main',
+        title: 'Other storage',
+        entryFile: '/plugins/acme.storage-other/index.html',
+      }],
+    }
+    mgr.registerDescriptor(otherDescriptor)
+    const otherHost = new FakeBrowserWindow()
+    await mgr.openView(otherDescriptor, otherDescriptor.views![0], {
+      hostWindow: asHost(otherHost),
+      bounds: 'fill',
+      workspacePath: '/workspace',
+      capabilityContext: otherDescriptor.capabilityContext,
+    })
+    const otherView = otherHost.children[0] as FakeViewLike
+    const viewsToCheck = [first.view, secondView, candidateView, otherView]
+    for (const view of viewsToCheck) view.webContents.sent.length = 0
+
+    mgr.setPublicStorageHandler(() => null)
+    const handler = ipcHandlers.get(CALL)
+    expect(handler).toBeDefined()
+    await expect(handler!({ sender: { id: first.view.webContents.id } }, {
+      reqId: 'storage-plugin-set',
+      ns: 'storage',
+      method: 'set',
+      args: { scope: 'plugin', key: 'agentTeam.git.logScope', value: 'all' },
+    })).resolves.toMatchObject({ ok: true })
+
+    const storageEvents = (view: FakeViewLike) => view.webContents.sent.filter((message) =>
+      (message.args[0] as { type?: string }).type === 'ui.pluginStorageChanged')
+    expect(storageEvents(first.view)).toEqual([expect.objectContaining({
+      channel: 'plugin:cap:event',
+      args: [{
+        type: 'ui.pluginStorageChanged',
+        data: {
+          scope: 'plugin',
+          key: 'agentTeam.git.logScope',
+          value: 'all',
+          deleted: false,
+        },
+      }],
+    })])
+    expect(storageEvents(secondView)).toHaveLength(1)
+    expect(storageEvents(candidateView)).toHaveLength(0)
+    expect(storageEvents(otherView)).toHaveLength(0)
+
+    const firstRuntime = (mgr as unknown as {
+      running: Map<string, { capabilityContext?: HostCapabilityContext | null }>
+    }).running.get(first.instanceId)?.capabilityContext?.runtimeBinding
+    expect(firstRuntime).toBeDefined()
+    ;(mgr as unknown as {
+      dispatchPluginStorageChanged: (plan: unknown, scope: 'plugin' | 'workspace', key: string, value: JsonValue, deleted: boolean) => void
+    }).dispatchPluginStorageChanged({
+      kind: 'public',
+      address: 'storage.set',
+      scope: 'plugin',
+      args: { scope: 'plugin', key: 'versioned', value: true },
+      runtime: { ...firstRuntime!, packageVersion: '2.0.0' },
+      storage: {
+        partition: { pluginId: 'acme.storage-owned', workspaceId: null, key: 'versioned' },
+        snapshot: { pluginId: 'acme.storage-owned', tier: 'active', packageVersion: '2.0.0' },
+      },
+    }, 'plugin', 'versioned', true, false)
+    expect(storageEvents(first.view)).toHaveLength(1)
+    expect(storageEvents(secondView)).toHaveLength(1)
+    expect(storageEvents(candidateView)).toHaveLength(0)
+    expect(storageEvents(otherView)).toHaveLength(0)
+
+    for (const view of viewsToCheck) view.webContents.sent.length = 0
+    await expect(handler!({ sender: { id: first.view.webContents.id } }, {
+      reqId: 'storage-workspace-set',
+      ns: 'storage',
+      method: 'set',
+      args: { scope: 'workspace', key: 'agentTeam.gitTabRepo', value: '/workspace' },
+    })).resolves.toMatchObject({ ok: true })
+    expect(storageEvents(first.view)).toHaveLength(1)
+    expect(storageEvents(secondView)).toHaveLength(0)
+    expect(storageEvents(candidateView)).toHaveLength(0)
+    expect(storageEvents(otherView)).toHaveLength(0)
+
+    for (const view of viewsToCheck) view.webContents.sent.length = 0
+    await expect(handler!({ sender: { id: first.view.webContents.id } }, {
+      reqId: 'storage-plugin-delete',
+      ns: 'storage',
+      method: 'delete',
+      args: { scope: 'plugin', key: 'agentTeam.git.logScope' },
+    })).resolves.toMatchObject({ ok: true })
+    expect(storageEvents(first.view)[0].args[0]).toMatchObject({
+      type: 'ui.pluginStorageChanged',
+      data: {
+        scope: 'plugin',
+        key: 'agentTeam.git.logScope',
+        value: null,
+        deleted: true,
+      },
+    })
+    expect(storageEvents(secondView)).toHaveLength(1)
+    expect(storageEvents(candidateView)).toHaveLength(0)
+
+    for (const view of viewsToCheck) view.webContents.sent.length = 0
+    mgr.setPublicStorageHandler(() => {
+      throw new PluginStorageError('INTERNAL_ERROR', 'storage failed')
+    })
+    await expect(handler!({ sender: { id: first.view.webContents.id } }, {
+      reqId: 'storage-plugin-failed',
+      ns: 'storage',
+      method: 'set',
+      args: { scope: 'plugin', key: 'agentTeam.git.logScope', value: 'all' },
+    })).resolves.toMatchObject({ ok: false, error: { code: 'INTERNAL_ERROR' } })
+    expect(storageEvents(first.view)).toHaveLength(0)
+    expect(storageEvents(secondView)).toHaveLength(0)
+    expect(storageEvents(candidateView)).toHaveLength(0)
+    expect(storageEvents(otherView)).toHaveLength(0)
+  })
+
   it('keeps the selected storage tier fixed for a live v2 instance', async () => {
     const mgr = new FrontendPluginManager()
     const activeContext: HostCapabilityContext = {
@@ -5986,6 +6816,690 @@ describe('first-party Git private bridge', () => {
       args,
     })) as Record<string, unknown>
   }
+
+  async function publicCall(
+    view: FakeViewLike,
+    ns: string,
+    method: string,
+    args: Record<string, unknown>,
+    reqId = 'public-git-1',
+  ): Promise<Record<string, unknown>> {
+    const handler = ipcHandlers.get(CAPABILITY_CALL)
+    expect(handler).toBeDefined()
+    return (await handler!({ sender: { id: view.webContents.id } }, {
+      reqId,
+      ns,
+      method,
+      args,
+    })) as Record<string, unknown>
+  }
+
+  it('dispatches typed public Git requests while retaining the private identity guard', async () => {
+    const { mgr, view } = await openGitView()
+    mgr.setPublicCapabilityHandler((plan) => mgr.executePublicCapability(plan))
+    mgr.setBackendWsUrl('ws://public-git-status-test')
+    const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+    socket.open()
+
+    const operation = publicCall(view, 'shell', 'gitStatus', { repositoryPath: '.' }, 'public-git-status')
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1))
+    const request = JSON.parse(socket.sent[0]!) as { id: string; type: string; payload: Record<string, unknown> }
+    expect(request.type).toBe('git.status')
+    expect(request.payload).toEqual({ workspace_path: '/workspace' })
+    socket.receive({ id: request.id, type: request.type, ok: true, payload: { branch: 'main' }, error: null, timestamp: '' })
+    await expect(operation).resolves.toEqual({ reqId: 'public-git-status', ok: true, result: { branch: 'main' } })
+
+    await expect(call(view, 'git.request', {
+      type: 'git.status',
+      payload: { workspace_path: '/workspace', instanceId: 'forged' },
+    }, 'private-identity-guard')).resolves.toMatchObject({
+      reqId: 'private-identity-guard',
+      ok: false,
+      error: { code: 'BAD_REQUEST' },
+    })
+    expect(socket.sent).toHaveLength(1)
+  })
+
+  it('denies an agent public Git plan before opening a backend connection', async () => {
+    const { mgr, view, instanceId } = await openGitView()
+    const socketsBefore = wsMock.FakeNodeWebSocket.instances.length
+    const handler = vi.fn()
+    mgr.setPublicCapabilityHandler(handler)
+    mgr.setExecutionPolicyResolver(() => ({
+      policy: { schemaVersion: 1, mode: 'allowlist', system: [], shell: [] },
+      revision: 1,
+      state: 'user',
+    }))
+
+    await expect(mgr.executeAgentCapability(instanceId, {
+      reqId: 'denied-public-git',
+      ns: 'shell',
+      method: 'gitStatus',
+      args: { repositoryPath: '.' },
+    })).resolves.toMatchObject({
+      reqId: 'denied-public-git',
+      ok: false,
+      error: { code: 'CAPABILITY_DENIED' },
+    })
+    expect(handler).not.toHaveBeenCalled()
+    expect(wsMock.FakeNodeWebSocket.instances).toHaveLength(socketsBefore)
+  })
+
+  it('rejects a public clone selection grant owned by another Git instance', async () => {
+    const workspacePath = realpathSync(mkdtempSync(join(tmpdir(), 'public-git-clone-owner-')))
+    try {
+      const { mgr, instanceId } = await openGitView(workspacePath)
+      const socketsBefore = wsMock.FakeNodeWebSocket.instances.length
+      const secondDescriptor = gitDescriptor(mgr, workspacePath, 'git-left')
+      const secondHost = new FakeBrowserWindow()
+      const secondHandle = await mgr.openView(secondDescriptor, secondDescriptor.views![0], {
+        hostWindow: asHost(secondHost),
+        bounds: 'fill',
+        workspacePath,
+        capabilityContext: secondDescriptor.capabilityContext,
+      })
+      const running = (mgr as unknown as {
+        running: Map<string, { capabilityContext?: HostCapabilityContext | null }>
+      }).running
+      const secondBinding = running.get(secondHandle.instanceId)?.capabilityContext?.runtimeBinding
+      expect(secondBinding).toBeDefined()
+      const selectionGrants = (mgr as unknown as {
+        editorSelectionGrants: { mint: (owner: { instanceId: string; workspaceId: string; packageVersion: string }, path: string, kind: 'directory') => { grant: string } }
+      }).editorSelectionGrants
+      const target = join(workspacePath, 'clone-target')
+      const selected = selectionGrants.mint({
+        instanceId: secondBinding!.instanceId!,
+        workspaceId: secondBinding!.workspaceId!,
+        packageVersion: secondBinding!.packageVersion,
+      }, target, 'directory')
+      const firstBinding = running.get(instanceId)?.capabilityContext?.runtimeBinding
+      expect(firstBinding).toBeDefined()
+      const request = {
+        kind: 'public' as const,
+        address: 'shell.gitClone',
+        scope: 'workspace' as const,
+        args: {
+          repositoryPath: '.',
+          url: 'https://github.com/acme/repo.git',
+          target_dir: target,
+          selectionGrant: selected.grant,
+        },
+        runtime: firstBinding!,
+      }
+
+      await expect(mgr.executePublicCapability(request)).rejects.toThrow(/owned by this instance/)
+      expect(wsMock.FakeNodeWebSocket.instances).toHaveLength(socketsBefore)
+    } finally {
+      rmSync(workspacePath, { recursive: true, force: true })
+    }
+  })
+
+  it('dispatches public Git account methods through the fixed mapping and bound workspace', async () => {
+    const { mgr, view } = await openGitView('/workspace', 'git-history')
+    const bind = vi.fn()
+    const unbind = vi.fn()
+    mgr.setGitAccountHandlers({
+      available: () => true,
+      list: () => [{ id: 'account-1', label: 'GitHub', host: 'github.com', username: 'alice', tokenLast4: '1234' }],
+      add: () => ({ id: 'unused', label: 'unused', host: 'github.com', username: 'unused', tokenLast4: '0000' }),
+      update: () => undefined,
+      remove: () => undefined,
+      bind,
+      unbind,
+      getBinding: () => 'account-1',
+      getCredential: () => null,
+    })
+    mgr.setPublicCapabilityHandler((plan) => mgr.executePublicCapability(plan))
+
+    await expect(publicCall(view, 'ui', 'listGitAccounts', {}, 'public-account-list')).resolves.toEqual({
+      reqId: 'public-account-list',
+      ok: true,
+      result: {
+        available: true,
+        accounts: [{ id: 'account-1', label: 'GitHub', host: 'github.com', username: 'alice', tokenLast4: '1234' }],
+      },
+    })
+    await expect(publicCall(view, 'ui', 'bindGitAccount', { accountId: 'account-1' }, 'public-account-bind')).resolves.toEqual({
+      reqId: 'public-account-bind',
+      ok: true,
+      result: { accountId: 'account-1' },
+    })
+    expect(bind).toHaveBeenCalledWith('/workspace', 'account-1')
+
+    await expect(publicCall(view, 'ui', 'bindGitAccount', {
+      accountId: 'account-1',
+      workspace_path: '/other-workspace',
+    }, 'public-account-forged-workspace')).resolves.toMatchObject({
+      reqId: 'public-account-forged-workspace',
+      ok: false,
+      error: { code: 'INVALID_ARGUMENT' },
+    })
+    expect(bind).toHaveBeenCalledTimes(1)
+    expect(unbind).not.toHaveBeenCalled()
+  })
+
+  it('denies an agent public Git account plan before invoking account handlers', async () => {
+    const { mgr, instanceId } = await openGitView()
+    const bind = vi.fn()
+    mgr.setGitAccountHandlers({
+      available: () => true,
+      list: () => [],
+      add: () => ({ id: 'unused', label: 'unused', host: 'github.com', username: 'unused', tokenLast4: '0000' }),
+      update: () => undefined,
+      remove: () => undefined,
+      bind,
+      unbind: () => undefined,
+      getBinding: () => null,
+      getCredential: () => null,
+    })
+    mgr.setPublicCapabilityHandler((plan) => mgr.executePublicCapability(plan))
+    mgr.setExecutionPolicyResolver(() => ({
+      policy: { schemaVersion: 1, mode: 'allowlist', system: [], shell: [] },
+      revision: 1,
+      state: 'user',
+    }))
+
+    await expect(mgr.executeAgentCapability(instanceId, {
+      reqId: 'denied-public-account',
+      ns: 'ui',
+      method: 'bindGitAccount',
+      args: { accountId: 'account-1' },
+    })).resolves.toMatchObject({
+      reqId: 'denied-public-account',
+      ok: false,
+      error: { code: 'CAPABILITY_DENIED' },
+    })
+    expect(bind).not.toHaveBeenCalled()
+  })
+
+  it('opens the Host file picker with bound view context and Host-owned search', async () => {
+    const { mgr, instanceId } = await openGitView('/workspace', 'git-file-picker')
+    mgr.setBackendWsUrl('ws://public-file-picker-test')
+    const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+    socket.open()
+    const runtime = (
+      mgr as unknown as {
+        running: Map<string, { capabilityContext: HostCapabilityContext }>
+      }
+    ).running.get(instanceId)!.capabilityContext.runtimeBinding!
+    const invocationRef: { current: Pick<FilePickerInvocation, 'request' | 'canDispatch' | 'search'> | null } = { current: null }
+    const open = vi.fn(async (candidate: FilePickerInvocation) => {
+      invocationRef.current = candidate
+      const matches = await candidate.search(candidate.request.query as string)
+      return { opened: matches.length > 0 }
+    })
+    const cancelInstance = vi.fn()
+    const cancelSession = vi.fn()
+    mgr.setFilePickerHost({ open, cancelInstance, cancelSession })
+
+    const pending = mgr.executePublicCapability({
+      kind: 'public',
+      address: 'ui.openFilePicker',
+      scope: 'workspace',
+      runtime,
+      args: {
+        query: 'read',
+        candidates: ['README.md'],
+        line: 4,
+      },
+    })
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1))
+    const request = JSON.parse(socket.sent[0]!) as {
+      id: string
+      type: string
+      payload: Record<string, unknown>
+    }
+    expect(request).toMatchObject({
+      type: 'fs.list_files_flat',
+      payload: { workspace_path: '/workspace', query: 'read', max_results: 20 },
+    })
+    socket.receive({
+      id: request.id,
+      type: request.type,
+      ok: true,
+      payload: { ok: true, files: ['README.md'], truncated: false },
+      error: null,
+      timestamp: '',
+    })
+    await expect(pending).resolves.toEqual({ opened: true })
+    expect(open).toHaveBeenCalledTimes(1)
+    expect(invocationRef.current?.request).toEqual({
+      query: 'read',
+      candidates: ['README.md'],
+      line: 4,
+    })
+    expect(invocationRef.current?.canDispatch()).toBe(true)
+    expect(cancelSession).not.toHaveBeenCalled()
+  })
+
+  it('rejects a file picker request for a foreign session before Host lookup', async () => {
+    const { mgr, instanceId } = await openGitView('/workspace', 'git-file-picker-session')
+    const open = vi.fn(async () => ({ opened: true }))
+    mgr.setFilePickerHost({ open, cancelInstance: vi.fn(), cancelSession: vi.fn() })
+    const runtime = (
+      mgr as unknown as {
+        running: Map<string, { capabilityContext: HostCapabilityContext }>
+      }
+    ).running.get(instanceId)!.capabilityContext.runtimeBinding!
+
+    await expect(mgr.executePublicCapability({
+      kind: 'public',
+      address: 'ui.openFilePicker',
+      scope: 'workspace',
+      runtime,
+      args: {
+        query: 'secret',
+        candidates: ['secret.txt'],
+        sessionId: 'foreign-session',
+      },
+    })).rejects.toThrow(/session is no longer owned/)
+    expect(open).not.toHaveBeenCalled()
+  })
+
+  it('invalidates an in-flight file picker when its instance is destroyed', async () => {
+    const { mgr, instanceId } = await openGitView('/workspace', 'git-file-picker-teardown')
+    const capturedRef: { current: Pick<FilePickerInvocation, 'canDispatch'> | null } = { current: null }
+    const cancelInstance = vi.fn()
+    mgr.setFilePickerHost({
+      open: vi.fn(async (invocation: FilePickerInvocation) => {
+        capturedRef.current = invocation
+        return { opened: false }
+      }),
+      cancelInstance,
+      cancelSession: vi.fn(),
+    })
+    const runtime = (
+      mgr as unknown as {
+        running: Map<string, { capabilityContext: HostCapabilityContext }>
+      }
+    ).running.get(instanceId)!.capabilityContext.runtimeBinding!
+
+    await expect(mgr.executePublicCapability({
+      kind: 'public',
+      address: 'ui.openFilePicker',
+      scope: 'workspace',
+      runtime,
+      args: {
+        query: 'read',
+        candidates: [],
+      },
+    })).resolves.toEqual({ opened: false })
+    expect(capturedRef.current?.canDispatch()).toBe(true)
+    mgr.destroyInstance(instanceId)
+    expect(cancelInstance).toHaveBeenCalledWith(instanceId)
+    expect(capturedRef.current?.canDispatch()).toBe(false)
+  })
+
+  it('dispatches public Issue requests with Host-derived workspace and executable policy', async () => {
+    const { mgr, view } = await openGitView('/workspace')
+    mgr.setPublicCapabilityHandler((plan) => mgr.executePublicCapability(plan))
+    mgr.setBackendWsUrl('ws://public-issues-test')
+    const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+    socket.open()
+
+    const operation = publicCall(view, 'shell', 'listIssues', {
+      repositoryPath: '.',
+      limit: 5,
+    }, 'public-issues-list')
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1))
+    const request = JSON.parse(socket.sent[0]!) as {
+      id: string
+      type: string
+      payload: Record<string, unknown>
+    }
+    expect(request.type).toBe('issues.public')
+    expect(request.payload).toEqual({
+      workspace_path: '/workspace',
+      operation: 'list',
+      arguments: { limit: 5 },
+      execution_policy: { mode: 'allowlist', shell: ['git', 'gh', 'glab'] },
+    })
+    socket.receive({
+      id: request.id,
+      type: request.type,
+      ok: true,
+      payload: { ok: true, provider: 'github', issues: [] },
+      error: null,
+      timestamp: '',
+    })
+    await expect(operation).resolves.toEqual({
+      reqId: 'public-issues-list',
+      ok: true,
+      result: { ok: true, provider: 'github', issues: [] },
+    })
+
+    await expect(publicCall(view, 'shell', 'listIssues', {
+      repositoryPath: '.',
+      limit: 5,
+      execution_policy: { mode: 'full', shell: ['sh'] },
+    }, 'public-issues-forged-policy')).resolves.toMatchObject({
+      reqId: 'public-issues-forged-policy',
+      ok: false,
+      error: { code: 'INVALID_ARGUMENT' },
+    })
+    expect(socket.sent).toHaveLength(1)
+  })
+
+  it('derives an agent public Issue policy from the current Host snapshot', async () => {
+    const { mgr, instanceId } = await openGitView('/workspace')
+    mgr.setPublicCapabilityHandler((plan) => mgr.executePublicCapability(plan))
+    mgr.setExecutionPolicyResolver(() => ({
+      policy: { schemaVersion: 1, mode: 'allowlist', system: [], shell: ['git', 'gh'] },
+      revision: 7,
+      state: 'user',
+    }))
+    mgr.setBackendWsUrl('ws://public-agent-issues-test')
+    const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+    socket.open()
+
+    const operation = mgr.executeAgentCapability(instanceId, {
+      reqId: 'agent-public-issues',
+      ns: 'shell',
+      method: 'listIssues',
+      args: { limit: 3 },
+    })
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1))
+    const request = JSON.parse(socket.sent[0]!) as {
+      id: string
+      type: string
+      payload: Record<string, unknown>
+    }
+    expect(request.type).toBe('issues.public')
+    expect(request.payload.execution_policy).toEqual({ mode: 'allowlist', shell: ['git', 'gh'] })
+    expect(request.payload).toMatchObject({
+      workspace_path: '/workspace',
+      operation: 'list',
+      arguments: { limit: 3 },
+    })
+    socket.receive({
+      id: request.id,
+      type: request.type,
+      ok: true,
+      payload: { ok: true, provider: 'github', issues: [] },
+      error: null,
+      timestamp: '',
+    })
+    await expect(operation).resolves.toMatchObject({
+      reqId: 'agent-public-issues',
+      ok: true,
+      result: { ok: true, provider: 'github', issues: [] },
+    })
+  })
+
+  it('denies an agent public Issue request before opening the backend when policy is stale or unavailable', async () => {
+    const { mgr, instanceId } = await openGitView('/workspace')
+    mgr.setPublicCapabilityHandler((plan) => mgr.executePublicCapability(plan))
+    mgr.setExecutionPolicyResolver(() => ({
+      policy: { schemaVersion: 1, mode: 'allowlist', system: [], shell: [] },
+      revision: 1,
+      state: 'user',
+    }))
+    const socketsBefore = wsMock.FakeNodeWebSocket.instances.length
+
+    await expect(mgr.executeAgentCapability(instanceId, {
+      reqId: 'denied-agent-public-issues',
+      ns: 'shell',
+      method: 'listIssues',
+      args: {},
+    })).resolves.toMatchObject({
+      reqId: 'denied-agent-public-issues',
+      ok: false,
+      error: { code: 'CAPABILITY_DENIED' },
+    })
+    expect(wsMock.FakeNodeWebSocket.instances).toHaveLength(socketsBefore)
+
+    mgr.setExecutionPolicyResolver(() => ({
+      policy: { schemaVersion: 1, mode: 'allowlist', system: [], shell: ['git'] },
+      revision: 2,
+      state: 'corrupt',
+    }))
+    await expect(mgr.executeAgentCapability(instanceId, {
+      reqId: 'denied-corrupt-public-issues',
+      ns: 'shell',
+      method: 'listIssues',
+      args: {},
+    })).resolves.toMatchObject({
+      reqId: 'denied-corrupt-public-issues',
+      ok: false,
+      error: { code: 'CAPABILITY_DENIED' },
+    })
+    expect(wsMock.FakeNodeWebSocket.instances).toHaveLength(socketsBefore)
+  })
+
+  it('reads only fixed Host editor preferences through the existing settings backend', async () => {
+    const { mgr, view } = await openGitView('/workspace')
+    mgr.setPublicCapabilityHandler((plan) => mgr.executePublicCapability(plan))
+    mgr.setBackendWsUrl('ws://public-editor-preferences-read-test')
+    const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+    socket.open()
+
+    const operation = publicCall(view, 'ui', 'readEditorPreferences', {}, 'public-editor-preferences-read')
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1))
+    const request = JSON.parse(socket.sent[0]!) as { id: string; type: string; payload: Record<string, unknown> }
+    expect(request.type).toBe('ui.settings.get')
+    expect(request.payload).toEqual({})
+    socket.receive({
+      id: request.id,
+      type: request.type,
+      ok: true,
+      payload: {
+        settings: {
+          'agentTeam.yolo': '0',
+          'agent-team:theme': 'dark',
+          'agentTeam.git.logScope': 'all',
+          token: 'must-not-cross',
+          'other.setting': { nested: true },
+        },
+      },
+      error: null,
+      timestamp: '',
+    })
+
+    await expect(operation).resolves.toEqual({
+      reqId: 'public-editor-preferences-read',
+      ok: true,
+      result: {
+        preferences: {
+          'agentTeam.yolo': '0',
+          'agent-team:theme': 'dark',
+          'agentTeam.git.logScope': 'all',
+        },
+      },
+    })
+  })
+
+  it('writes only a fixed writable Host editor preference through ui.settings.set', async () => {
+    const { mgr, view } = await openGitView('/workspace')
+    mgr.setPublicCapabilityHandler((plan) => mgr.executePublicCapability(plan))
+    mgr.setBackendWsUrl('ws://public-editor-preferences-write-test')
+    const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+    socket.open()
+
+    const operation = publicCall(view, 'ui', 'writeEditorPreference', {
+      key: 'agent-team:theme',
+      value: 'light',
+    }, 'public-editor-preferences-write')
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1))
+    const request = JSON.parse(socket.sent[0]!) as { id: string; type: string; payload: Record<string, unknown> }
+    expect(request.type).toBe('ui.settings.set')
+    expect(request.payload).toEqual({ updates: { 'agent-team:theme': 'light' } })
+    socket.receive({
+      id: request.id,
+      type: request.type,
+      ok: true,
+      payload: { ok: true },
+      error: null,
+      timestamp: '',
+    })
+
+    await expect(operation).resolves.toEqual({
+      reqId: 'public-editor-preferences-write',
+      ok: true,
+      result: { ok: true },
+    })
+  })
+
+  it('denies editor preference writes before opening a backend connection when the agent policy omits UI', async () => {
+    const { mgr, instanceId } = await openGitView('/workspace')
+    const socketsBefore = wsMock.FakeNodeWebSocket.instances.length
+    mgr.setPublicCapabilityHandler((plan) => mgr.executePublicCapability(plan))
+    mgr.setExecutionPolicyResolver(() => ({
+      policy: { schemaVersion: 1, mode: 'allowlist', system: [], shell: [] },
+      revision: 1,
+      state: 'user',
+    }))
+
+    await expect(mgr.executeAgentCapability(instanceId, {
+      reqId: 'denied-editor-preferences-write',
+      ns: 'ui',
+      method: 'writeEditorPreference',
+      args: { key: 'agent-team:theme', value: 'light' },
+    })).resolves.toMatchObject({
+      reqId: 'denied-editor-preferences-write',
+      ok: false,
+      error: { code: 'CAPABILITY_DENIED' },
+    })
+    expect(wsMock.FakeNodeWebSocket.instances).toHaveLength(socketsBefore)
+  })
+
+  it('publishes filtered Host editor preferences to each authorized v2 instance', async () => {
+    const { mgr, view } = await openGitView('/workspace')
+    view.webContents.sent.length = 0
+
+    mgr.dispatchHostSettingsChanged({
+      settings: {
+        'agentTeam.yolo': '1',
+        'agent-team:language': 'zh-TW',
+        'agentTeam.gitTopRatio': 0.4,
+        token: 'must-not-cross',
+        'unknown.setting': 'ignored',
+      },
+    })
+
+    expect(view.webContents.sent).toContainEqual({
+      channel: 'plugin:cap:event',
+      args: [{
+        type: 'ui.editorPreferencesChanged',
+        data: {
+          preferences: {
+            'agentTeam.yolo': '1',
+            'agent-team:language': 'zh-TW',
+            'agentTeam.gitTopRatio': 0.4,
+          },
+        },
+      }],
+    })
+    const publicEvent = view.webContents.sent.find((entry) =>
+      (entry.args[0] as { type?: string }).type === 'ui.editorPreferencesChanged')
+    expect(JSON.stringify(publicEvent)).not.toContain('must-not-cross')
+  })
+
+  it('overlays retained v1 mini-IDE settings through the selected snapshot adapter', async () => {
+    const mgr = new FrontendPluginManager()
+    const descriptor: PluginLaunchDescriptor = {
+      id: MINI_IDE_PLUGIN_ID,
+      requires: ['ui'],
+      devUrl: '',
+      entryFile: '/plugins/mini-ide/index.html',
+    }
+    mgr.registerBuiltin(descriptor)
+    const host = new FakeBrowserWindow()
+    const instanceId = mgr.open(asHost(host), descriptor, 'fill', { workspacePath: '/workspace' })
+    expect(instanceId).toBeTruthy()
+    const view = host.children[0] as FakeViewLike
+    const reads: Record<string, unknown>[] = []
+    const writes: Record<string, unknown>[] = []
+    mgr.setMiniIdeLegacyPreferences({
+      read: async (settings) => {
+        reads.push(settings)
+        return { ...settings, 'ide-sidebar-width': 'snapshot-value' }
+      },
+      write: async (updates) => {
+        writes.push(updates)
+        const remaining = { ...updates }
+        delete remaining['ide-sidebar-width']
+        delete remaining['ide-ai-panel-width']
+        delete remaining['agentTeam.search.opts']
+        return remaining
+      },
+    })
+    mgr.setBackendWsUrl('ws://mini-ide-settings-test')
+    const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+    socket.open()
+    const handler = ipcHandlers.get(CAPABILITY_CALL)!
+
+    const read = handler(
+      { sender: { id: view.webContents.id } },
+      { reqId: 'mini-settings-read', ns: 'ui', method: 'settings_get', args: {} },
+    )
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1))
+    const getRequest = JSON.parse(socket.sent[0]!) as { id: string; type: string }
+    socket.receive({
+      id: getRequest.id,
+      type: getRequest.type,
+      ok: true,
+      payload: { settings: { 'ide-sidebar-width': 'host-value', 'other.setting': true } },
+      error: null,
+      timestamp: '',
+    })
+    await expect(read).resolves.toEqual({
+      reqId: 'mini-settings-read',
+      ok: true,
+      result: { settings: { 'ide-sidebar-width': 'snapshot-value', 'other.setting': true } },
+    })
+    expect(reads).toEqual([{ 'ide-sidebar-width': 'host-value', 'other.setting': true }])
+
+    const selectedWrite = await handler(
+      { sender: { id: view.webContents.id } },
+      {
+        reqId: 'mini-settings-write-selected',
+        ns: 'ui',
+        method: 'settings_set',
+        args: { updates: { 'ide-sidebar-width': 'new-value' } },
+      },
+    )
+    expect(selectedWrite).toEqual({
+      reqId: 'mini-settings-write-selected',
+      ok: true,
+      result: { ok: true },
+    })
+    expect(writes).toEqual([{ 'ide-sidebar-width': 'new-value' }])
+    expect(socket.sent).toHaveLength(1)
+
+    const mixedWrite = handler(
+      { sender: { id: view.webContents.id } },
+      {
+        reqId: 'mini-settings-write-mixed',
+        ns: 'ui',
+        method: 'settings_set',
+        args: { updates: { 'ide-ai-panel-width': 'new-width', 'other.setting': 1 } },
+      },
+    )
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(2))
+    const setRequest = JSON.parse(socket.sent[1]!) as { id: string; type: string; payload: unknown }
+    expect(setRequest.payload).toEqual({ updates: { 'other.setting': 1 } })
+    socket.receive({
+      id: setRequest.id,
+      type: setRequest.type,
+      ok: true,
+      payload: { ok: true },
+      error: null,
+      timestamp: '',
+    })
+    await expect(mixedWrite).resolves.toMatchObject({ ok: true })
+
+    view.webContents.sent.length = 0
+    ;(mgr as unknown as { dispatchEvent: (event: string, payload: unknown) => void }).dispatchEvent(
+      'ui.settings_changed',
+      { source: 'host', settings: { 'ide-sidebar-width': 'backend', 'other.setting': false } },
+    )
+    expect(view.webContents.sent).toContainEqual({
+      channel: 'plugin:cap:event',
+      args: [{ type: 'ui.settings_changed', data: { source: 'host', settings: { 'other.setting': false } } }],
+    })
+    expect(JSON.stringify(view.webContents.sent)).not.toContain('ide-sidebar-width')
+    if (instanceId) mgr.destroyInstance(instanceId)
+  })
 
   it('keeps Plans provenance invisible by default and overrides caller diagnostics when explicitly enabled', async () => {
     const disabled = await openPlansView()
@@ -6258,7 +7772,7 @@ describe('first-party Git private bridge', () => {
       },
     })
 
-    expect(view.webContents.sent).toEqual([{
+    expect(view.webContents.sent).toContainEqual({
       channel: 'plugin:cap:event',
       args: [{
         type: 'ui.settings_changed',
@@ -6270,7 +7784,8 @@ describe('first-party Git private bridge', () => {
           },
         },
       }],
-    }])
+    })
+    expect(view.webContents.sent).toHaveLength(2)
   })
 
   it('does not route Host-owned language settings changes to v2 Git views', async () => {
@@ -6283,7 +7798,13 @@ describe('first-party Git private bridge', () => {
       },
     })
 
-    expect(view.webContents.sent).toHaveLength(0)
+    expect(view.webContents.sent).toEqual([{
+      channel: 'plugin:cap:event',
+      args: [{
+        type: 'ui.editorPreferencesChanged',
+        data: { preferences: { 'agent-team:language': 'zh-TW' } },
+      }],
+    }])
   })
 
   it('routes Host-owned language settings changes to active Plans v2 views', async () => {
@@ -6296,7 +7817,7 @@ describe('first-party Git private bridge', () => {
       },
     })
 
-    expect(view.webContents.sent).toEqual([{
+    expect(view.webContents.sent).toContainEqual({
       channel: 'plugin:cap:event',
       args: [{
         type: 'ui.settings_changed',
@@ -6307,7 +7828,8 @@ describe('first-party Git private bridge', () => {
           },
         },
       }],
-    }])
+    })
+    expect(view.webContents.sent).toHaveLength(2)
   })
 
   it('preserves Git package-private settings contract: Plans receives only Host language and never Git settings or storage', async () => {
@@ -6347,7 +7869,8 @@ describe('first-party Git private bridge', () => {
     gitView.webContents.sent.length = 0
     plansView.webContents.sent.length = 0
 
-    // 1. Git-only Host settings: Git receives them, Plans receives nothing
+    // 1. Git-only Host settings: private Git receives them and both v2 views
+    // receive the public editor-preference projection.
     mgr.dispatchHostSettingsChanged({
       settings: {
         'agentTeam.yolo': '0',
@@ -6355,8 +7878,8 @@ describe('first-party Git private bridge', () => {
         'agent-team:theme': 'dark',
       },
     })
-    expect(gitView.webContents.sent).toHaveLength(1)
-    expect(gitView.webContents.sent[0]).toEqual({
+    expect(gitView.webContents.sent).toHaveLength(2)
+    expect(gitView.webContents.sent).toContainEqual({
       channel: 'plugin:cap:event',
       args: [{
         type: 'ui.settings_changed',
@@ -6370,7 +7893,20 @@ describe('first-party Git private bridge', () => {
         },
       }],
     })
-    expect(plansView.webContents.sent).toHaveLength(0)
+    expect(plansView.webContents.sent).toHaveLength(1)
+    expect(plansView.webContents.sent[0]).toMatchObject({
+      channel: 'plugin:cap:event',
+      args: [{
+        type: 'ui.editorPreferencesChanged',
+        data: {
+          preferences: {
+            'agentTeam.yolo': '0',
+            'agentTeam.analyzerModel': 'qwen2:latest',
+            'agent-team:theme': 'dark',
+          },
+        },
+      }],
+    })
 
     gitView.webContents.sent.length = 0
     plansView.webContents.sent.length = 0
@@ -6382,7 +7918,8 @@ describe('first-party Git private bridge', () => {
         'agent-team:language': 'zh-TW',
       },
     })
-    expect(gitView.webContents.sent).toEqual([{
+    expect(gitView.webContents.sent).toHaveLength(2)
+    expect(gitView.webContents.sent).toContainEqual({
       channel: 'plugin:cap:event',
       args: [{
         type: 'ui.settings_changed',
@@ -6393,8 +7930,9 @@ describe('first-party Git private bridge', () => {
           },
         },
       }],
-    }])
-    expect(plansView.webContents.sent).toEqual([{
+    })
+    expect(plansView.webContents.sent).toHaveLength(2)
+    expect(plansView.webContents.sent).toContainEqual({
       channel: 'plugin:cap:event',
       args: [{
         type: 'ui.settings_changed',
@@ -6405,12 +7943,13 @@ describe('first-party Git private bridge', () => {
           },
         },
       }],
-    }])
+    })
 
     gitView.webContents.sent.length = 0
     plansView.webContents.sent.length = 0
 
-    // 3. Plugin-storage settings: Git receives git user preference, Plans receives nothing
+    // 3. Plugin-storage settings: Git receives both the public generic event
+    // and its existing private compatibility event; Plans receives nothing.
     mgr.setPublicStorageHandler(() => null)
     const handler = ipcHandlers.get(CAPABILITY_CALL)
     await handler!(
@@ -6422,11 +7961,26 @@ describe('first-party Git private bridge', () => {
         args: { scope: 'plugin', key: 'agentTeam.git.logScope', value: 'all' },
       },
     )
-    expect(gitView.webContents.sent).toHaveLength(1)
-    expect(gitView.webContents.sent[0].args[0]).toMatchObject({
-      type: 'ui.settings_changed',
-      data: { source: 'plugin-storage' },
-    })
+    expect(gitView.webContents.sent).toHaveLength(2)
+    expect(gitView.webContents.sent).toContainEqual(expect.objectContaining({
+      channel: 'plugin:cap:event',
+      args: [{
+        type: 'ui.pluginStorageChanged',
+        data: {
+          scope: 'plugin',
+          key: 'agentTeam.git.logScope',
+          value: 'all',
+          deleted: false,
+        },
+      }],
+    }))
+    expect(gitView.webContents.sent).toContainEqual(expect.objectContaining({
+      channel: 'plugin:cap:event',
+      args: [expect.objectContaining({
+        type: 'ui.settings_changed',
+        data: expect.objectContaining({ source: 'plugin-storage' }),
+      })],
+    }))
     expect(plansView.webContents.sent).toHaveLength(0)
   })
 
@@ -6475,7 +8029,8 @@ describe('first-party Git private bridge', () => {
     })
 
     // Plans v2 receives only language
-    expect(plansView.webContents.sent).toEqual([{
+    expect(plansView.webContents.sent).toHaveLength(2)
+    expect(plansView.webContents.sent).toContainEqual({
       channel: 'plugin:cap:event',
       args: [{
         type: 'ui.settings_changed',
@@ -6486,7 +8041,7 @@ describe('first-party Git private bridge', () => {
           },
         },
       }],
-    }])
+    })
 
     // Explicit recovery Git receives only git read-only settings; language MUST NOT enter legacy Git fan-out
     expect(legacyGitView.webContents.sent).toEqual([{
@@ -6512,8 +8067,10 @@ describe('first-party Git private bridge', () => {
       },
     })
 
-    // Plans v2 receives language
-    expect(plansView.webContents.sent).toEqual([{
+    // Plans v2 receives language through both the public editor contract and
+    // its existing private settings contract.
+    expect(plansView.webContents.sent).toHaveLength(2)
+    expect(plansView.webContents.sent).toContainEqual({
       channel: 'plugin:cap:event',
       args: [{
         type: 'ui.settings_changed',
@@ -6524,7 +8081,7 @@ describe('first-party Git private bridge', () => {
           },
         },
       }],
-    }])
+    })
 
     // Legacy Git fan-out receives NOTHING (language is completely blocked from legacy Git)
     expect(legacyGitView.webContents.sent).toHaveLength(0)
@@ -7781,6 +9338,213 @@ describe('first-party Git private bridge', () => {
     }
   })
 
+  it('forwards public filesystem encoding and editor metadata without dropping backend conflicts', async () => {
+    const workspacePath = mkdtempSync(join(tmpdir(), 'navide-public-fs-editor-metadata-'))
+    try {
+      const { mgr } = await openGitView(workspacePath)
+      mgr.setBackendWsUrl('ws://public-fs-editor-metadata-test')
+      const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+      socket.open()
+      const runtime = (
+        mgr as unknown as {
+          running: Map<string, { capabilityContext: HostCapabilityContext }>
+        }
+      ).running.get([...(
+        mgr as unknown as { running: Map<string, unknown> }
+      ).running.keys()][0]!)!.capabilityContext.runtimeBinding!
+
+      const dispatch = async (address: 'fs.readFile' | 'fs.writeFile', args: Record<string, unknown>, response: unknown) => {
+        const pending = mgr.executePublicCapability({
+          kind: 'public', address, scope: 'workspace', runtime, args,
+        })
+        await vi.waitFor(() => expect(socket.sent).toHaveLength(1))
+        const request = JSON.parse(socket.sent.pop()!) as { id: string; type: string; payload: Record<string, unknown> }
+        socket.receive({ id: request.id, type: request.type, ok: true, payload: response, error: null, timestamp: '' })
+        return { request, result: await pending }
+      }
+
+      const read = await dispatch('fs.readFile', { path: 'document.txt', encoding: 'utf16le' }, {
+        ok: true,
+        content: 'ok',
+        encoding: 'UTF-16LE',
+        bom: true,
+        mtime: 123,
+        size: 2,
+        ext: '.txt',
+      })
+      expect(read.request.payload).toEqual({ workspace_path: workspacePath, rel_path: 'document.txt', encoding_override: 'utf16le' })
+      expect(read.result).toEqual({
+        ok: true,
+        content: 'ok',
+        encoding: 'UTF-16LE',
+        bom: true,
+        mtime: 123,
+        size: 2,
+        ext: '.txt',
+      })
+
+      const binary = await dispatch('fs.readFile', { path: 'image.bin' }, {
+        ok: false,
+        error: 'Binary file',
+        is_binary: true,
+        is_image: false,
+        size: 4,
+        ext: '.bin',
+      })
+      expect(binary.result).toEqual({
+        ok: false,
+        error: 'Binary file',
+        is_binary: true,
+        is_image: false,
+        size: 4,
+        ext: '.bin',
+        content: '',
+      })
+
+      const failed = await dispatch('fs.readFile', { path: 'missing.txt' }, {
+        ok: false,
+        error: 'File not found',
+        size: 0,
+        ext: '.txt',
+      })
+      expect(failed.result).toEqual({
+        ok: false,
+        error: 'File not found',
+        size: 0,
+        ext: '.txt',
+        content: '',
+      })
+
+      const write = await dispatch('fs.writeFile', {
+        path: 'document.txt', content: 'updated', encoding: 'utf8', expectedMtime: 0,
+      }, { ok: true })
+      expect(write.request.payload).toEqual({
+        workspace_path: workspacePath, rel_path: 'document.txt', content: 'updated', encoding: 'utf8', expected_mtime: 0,
+      })
+
+      const omitted = await dispatch('fs.writeFile', { path: 'document.txt', content: 'updated again' }, { ok: false, conflict: true })
+      expect(omitted.request.payload).toEqual({ workspace_path: workspacePath, rel_path: 'document.txt', content: 'updated again' })
+      expect(omitted.result).toEqual({ ok: false, conflict: true })
+    } finally {
+      rmSync(workspacePath, { recursive: true, force: true })
+    }
+  })
+
+  it('routes external selected read, write, and stat requests to the selected file workspace', async () => {
+    const workspacePath = realpathSync(mkdtempSync(join(tmpdir(), 'navide-public-fs-selected-workspace-')))
+    const externalPath = realpathSync(mkdtempSync(join(tmpdir(), 'navide-public-fs-selected-external-')))
+    try {
+      writeFileSync(join(externalPath, 'notes.txt'), 'external')
+      const { mgr } = await openGitView(workspacePath)
+      mgr.setBackendWsUrl('ws://public-fs-selected-file-test')
+      const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+      socket.open()
+      const running = (mgr as unknown as {
+        running: Map<string, { capabilityContext: HostCapabilityContext }>
+      }).running
+      const instanceId = [...running.keys()].at(-1)!
+      const runtime = running.get(instanceId)!.capabilityContext.runtimeBinding!
+      const selectionGrants = (mgr as unknown as {
+        editorSelectionGrants: { mint: (owner: { instanceId: string; workspaceId: string; packageVersion: string }, path: string, kind: 'file') => { grant: string } }
+      }).editorSelectionGrants
+      const selected = selectionGrants.mint({
+        instanceId: runtime.instanceId!,
+        workspaceId: runtime.workspaceId!,
+        packageVersion: runtime.packageVersion,
+      }, join(externalPath, 'notes.txt'), 'file')
+
+      const dispatch = async (
+        address: 'fs.readFile' | 'fs.writeFile' | 'fs.stat',
+        args: Record<string, unknown>,
+        response: unknown,
+      ) => {
+        const before = socket.sent.length
+        const pending = mgr.executePublicCapability({
+          kind: 'public', address, scope: 'workspace', runtime, args,
+        })
+        await vi.waitFor(() => expect(socket.sent).toHaveLength(before + 1))
+        const request = JSON.parse(socket.sent.at(-1)!) as { id: string; type: string; payload: Record<string, unknown> }
+        socket.receive({ id: request.id, type: request.type, ok: true, payload: response, error: null, timestamp: '' })
+        return { request, result: await pending }
+      }
+
+      const read = await dispatch('fs.readFile', { path: 'notes.txt', selectionGrant: selected.grant }, { content: 'external' })
+      expect(read.request.payload).toEqual({ workspace_path: externalPath, rel_path: 'notes.txt' })
+      expect(read.result).toEqual({ content: 'external' })
+
+      const write = await dispatch('fs.writeFile', {
+        path: 'notes.txt', content: 'updated', selectionGrant: selected.grant,
+      }, { ok: true })
+      expect(write.request.payload).toEqual({ workspace_path: externalPath, rel_path: 'notes.txt', content: 'updated' })
+
+      const stat = await dispatch('fs.stat', { path: 'notes.txt', selectionGrant: selected.grant }, { exists: true })
+      expect(stat.request.payload).toEqual({ workspace_path: externalPath, path: join(externalPath, 'notes.txt') })
+      expect(stat.result).toEqual({ exists: true })
+
+      const sent = socket.sent.length
+      await expect(mgr.executePublicCapability({
+        kind: 'public', address: 'fs.readFile', scope: 'workspace', runtime,
+        args: { path: 'sibling.txt', selectionGrant: selected.grant },
+      })).rejects.toThrow(/selected file/)
+      expect(socket.sent).toHaveLength(sent)
+    } finally {
+      rmSync(workspacePath, { recursive: true, force: true })
+      rmSync(externalPath, { recursive: true, force: true })
+    }
+  })
+
+  it('forwards fs.listDirectory showHidden only when provided', async () => {
+    const workspacePath = mkdtempSync(join(tmpdir(), 'navide-public-fs-list-hidden-'))
+    try {
+      const { mgr } = await openGitView(workspacePath)
+      mgr.setBackendWsUrl('ws://public-fs-list-hidden-test')
+      const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+      socket.open()
+      const runtime = (
+        mgr as unknown as { running: Map<string, { capabilityContext: HostCapabilityContext }> }
+      ).running.get([...(
+        mgr as unknown as { running: Map<string, unknown> }
+      ).running.keys()][0]!)!.capabilityContext.runtimeBinding!
+      const dispatch = async (args: Record<string, unknown>, response: unknown) => {
+        const pending = mgr.executePublicCapability({
+          kind: 'public', address: 'fs.listDirectory', scope: 'workspace', runtime, args,
+        })
+        await vi.waitFor(() => expect(socket.sent).toHaveLength(1))
+        const request = JSON.parse(socket.sent.pop()!) as { id: string; type: string; payload: Record<string, unknown> }
+        socket.receive({ id: request.id, type: request.type, ok: true, payload: response, error: null, timestamp: '' })
+        return { request, result: await pending }
+      }
+      const listed = await dispatch({ path: 'src' }, {
+        ok: true,
+        entries: [
+          { name: 'src', rel_path: 'src', is_dir: true, is_hidden: false, is_noise: false },
+          { name: 'README.md', kind: 'file' },
+        ],
+        truncated: true,
+      })
+      expect(listed.request.payload).toEqual({ workspace_path: workspacePath, rel_path: 'src' })
+      expect(listed.result).toEqual({
+        ok: true,
+        entries: [
+          { name: 'src', kind: 'directory', rel_path: 'src', is_dir: true, is_hidden: false, is_noise: false },
+          { name: 'README.md', kind: 'file' },
+        ],
+        truncated: true,
+      })
+
+      const hidden = await dispatch({ path: 'src', showHidden: false }, {
+        ok: false,
+        error: 'not a directory',
+      })
+      expect(hidden.request.payload).toEqual({
+        workspace_path: workspacePath, rel_path: 'src', show_hidden: false,
+      })
+      expect(hidden.result).toEqual({ ok: false, error: 'not a directory', entries: [] })
+    } finally {
+      rmSync(workspacePath, { recursive: true, force: true })
+    }
+  })
+
   it('rejects Git contribution paths through a dangling symlink', async () => {
     const workspacePath = mkdtempSync(join(tmpdir(), 'navide-git-workspace-'))
     const outsidePath = mkdtempSync(join(tmpdir(), 'navide-git-outside-'))
@@ -8238,8 +10002,44 @@ describe('first-party Git private bridge', () => {
       (message) => message.channel === 'plugin:cap:event' &&
         (message.args[0] as { type?: string }).type === 'git.credential_request',
     )
+    const publicCredentialEvents = (view: FakeViewLike, type: string) => view.webContents.sent.filter(
+      (message) => message.channel === 'plugin:cap:event' &&
+        (message.args[0] as { type?: string }).type === type,
+    )
     expect(credentialEvents(first.view)).toHaveLength(1)
     expect(credentialEvents(secondView)).toHaveLength(0)
+    expect(publicCredentialEvents(first.view, 'shell.gitCredentialRequested')).toEqual([{
+      channel: 'plugin:cap:event',
+      args: [{
+        type: 'shell.gitCredentialRequested',
+        data: {
+          requestId: 'askpass-1',
+          host: 'github.com',
+          prompt: "Username for 'https://github.com': ",
+        },
+      }],
+    }])
+    expect(publicCredentialEvents(secondView, 'shell.gitCredentialRequested')).toHaveLength(0)
+    const publicRequest = first.view.webContents.sent.find((message) =>
+      (message.args[0] as { type?: string }).type === 'shell.gitCredentialRequested')
+    expect(JSON.stringify(publicRequest)).not.toContain('credential_owner_nonce')
+    expect(JSON.stringify(publicRequest)).not.toContain('/workspace')
+
+    socket.receive({
+      id: 'credential-event-wrong-workspace',
+      type: 'git.credential_request',
+      payload: {
+        request_id: 'askpass-wrong-workspace',
+        workspace_path: '/other-workspace',
+        host: 'github.com',
+        prompt: 'must not route',
+        credential_owner_nonce: fetchRequest.payload.credential_owner_nonce,
+      },
+      timestamp: '',
+    })
+    expect(publicCredentialEvents(first.view, 'shell.gitCredentialRequested')).toHaveLength(1)
+    expect(credentialEvents(first.view)).toHaveLength(1)
+    expect(publicCredentialEvents(secondView, 'shell.gitCredentialRequested')).toHaveLength(0)
 
     await expect(call(secondView, 'git.request', {
       type: 'git.credential_submit',
@@ -8276,6 +10076,156 @@ describe('first-party Git private bridge', () => {
       timestamp: '',
     })
     await expect(operation).resolves.toMatchObject({ ok: true })
+
+    const secondOperation = call(first.view, 'git.request', {
+      type: 'git.fetch',
+      payload: { workspace_path: '/workspace' },
+    }, 'git-interactive-fetch-cancelled')
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(3))
+    const secondFetchRequest = JSON.parse(socket.sent[2]!) as {
+      id: string
+      type: string
+      payload: Record<string, unknown>
+    }
+    socket.receive({
+      id: 'credential-event-2',
+      type: 'git.credential_request',
+      payload: {
+        request_id: 'askpass-2',
+        workspace_path: '/workspace',
+        host: 'gitlab.com',
+        prompt: 'Username: ',
+        credential_owner_nonce: secondFetchRequest.payload.credential_owner_nonce,
+      },
+      timestamp: '',
+    })
+    socket.receive({
+      id: secondFetchRequest.id,
+      type: secondFetchRequest.type,
+      ok: true,
+      payload: { ok: true },
+      error: null,
+      timestamp: '',
+    })
+    await expect(secondOperation).resolves.toMatchObject({ ok: true })
+    expect(publicCredentialEvents(first.view, 'shell.gitCredentialCancelled')).toEqual([{
+      channel: 'plugin:cap:event',
+      args: [{
+        type: 'shell.gitCredentialCancelled',
+        data: { requestId: 'askpass-2' },
+      }],
+    }])
+    expect(publicCredentialEvents(secondView, 'shell.gitCredentialCancelled')).toHaveLength(0)
+  })
+
+  it('keeps public terminal view state bound to the authenticated contribution', async () => {
+    const opened = await openGitView('/workspace', 'git-window')
+    const runtime = (
+      opened.mgr as unknown as {
+        running: Map<string, { capabilityContext: HostCapabilityContext }>
+      }
+    ).running.get(opened.instanceId)!.capabilityContext.runtimeBinding!
+    const execute = (address: string, args: Record<string, unknown>) =>
+      opened.mgr.executePublicCapability({
+        kind: 'public',
+        address,
+        scope: 'workspace',
+        runtime,
+        args,
+      })
+    const requests: Array<{ origin: string; request: Record<string, unknown> }> = []
+    opened.mgr.setTerminalStorageHandler(async (origin, request, canDispatch) => {
+      requests.push({ origin, request: request as unknown as Record<string, unknown> })
+      expect(canDispatch()).toBe(true)
+      return {
+        fontSize: 14,
+        lastSize: { cols: 100, rows: 30 },
+        ptyId: 'private-pty',
+        snapshot: 'nv1:private-history',
+      }
+    })
+
+    await expect(execute('aiCli.readTerminalView', {})).resolves.toMatchObject({
+      fontSize: 14,
+      lastSize: { cols: 100, rows: 30 },
+      snapshot: 'nv1:private-history',
+    })
+    const context = (
+      opened.mgr as unknown as {
+        running: Map<string, { capabilityContext: HostCapabilityContext }>
+      }
+    ).running.get(opened.instanceId)!.capabilityContext
+    context.sessionBindings = new Map([['owned-session', runtime]])
+
+    await expect(execute('aiCli.saveTerminalView', {
+      sessionId: 'owned-session',
+      snapshots: ['nv1:owned-history'],
+    })).resolves.toEqual({})
+    await expect(execute('aiCli.setTerminalFontSize', {
+      fontSize: 16,
+    })).resolves.toEqual({})
+
+    expect(requests.map(({ origin, request }) => [origin, request.operation])).toEqual([
+      ['host', 'read'],
+      ['host', 'snapshot'],
+      ['host', 'font'],
+    ])
+    expect(JSON.stringify(requests)).not.toContain('private-pty')
+  })
+
+  it('lists the opt-in terminal profile registry with fixed full-screen metadata', async () => {
+    const opened = await openGitView('/workspace', 'git-window')
+    const runtime = (
+      opened.mgr as unknown as {
+        running: Map<string, { capabilityContext: HostCapabilityContext }>
+      }
+    ).running.get(opened.instanceId)!.capabilityContext.runtimeBinding!
+    const result = await opened.mgr.executePublicCapability({
+      kind: 'public',
+      address: 'aiCli.listProfiles',
+      scope: 'workspace',
+      runtime,
+      args: { terminalView: true },
+    }) as { profiles: unknown[] }
+    expect(result.profiles).toEqual(expect.arrayContaining([
+      { id: 'droid', label: 'Droid', bracketedPaste: true },
+      { id: 'claude', label: 'Claude Code', fullScreenTui: true, bracketedPaste: true },
+      { id: 'codex', label: 'Codex', bracketedPaste: true, shiftEnterSequence: '\x1b[13;2u' },
+    ]))
+  })
+
+  it('drops native terminal resource requests when the session binding is wrong', async () => {
+    const opened = await openGitView('/workspace', 'git-window')
+    const ownerCalls: unknown[] = []
+    opened.mgr.setTerminalStorageHandler(async () => {
+      ownerCalls.push('unexpected')
+      return null
+    })
+    await expect(publicCall(opened.view, 'aiCli', 'saveTerminalView', {
+      sessionId: 'sibling-session',
+      snapshots: ['nv1:history'],
+    }, 'terminal-wrong-session')).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'CAPABILITY_DENIED' },
+    })
+    expect(ownerCalls).toHaveLength(0)
+  })
+
+  it('allows selection reporting after exit without a session id while retaining session checks when supplied', async () => {
+    const opened = await openGitView('/workspace', 'git-window')
+    opened.mgr.setPublicCapabilityHandler((plan) => opened.mgr.executePublicCapability(plan))
+
+    await expect(publicCall(opened.view, 'aiCli', 'reportTerminalSelection', {
+      selection: 'copied after exit',
+    }, 'terminal-selection-after-exit')).resolves.toMatchObject({ ok: true })
+
+    await expect(publicCall(opened.view, 'aiCli', 'reportTerminalSelection', {
+      sessionId: 'sibling-session',
+      selection: 'must be denied',
+    }, 'terminal-selection-sibling')).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'CAPABILITY_DENIED' },
+    })
   })
 
   it('buffers early AI output and resumes a detached session by Host tuple', async () => {
@@ -8392,6 +10342,122 @@ describe('first-party Git private bridge', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('attests the Host allowlisted profiles before persisted ledger reattach effects', async () => {
+    const opened = await openGitView('/workspace', 'git-window')
+    opened.mgr.setTerminalStorageHandler(async () => ({
+      fontSize: 12,
+      lastSize: null,
+      ptyId: null,
+      snapshot: null,
+    }))
+    opened.mgr.setBackendWsUrl('ws://git-ai-profile-attestation-test')
+    const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+    socket.open()
+    const internal = opened.mgr as unknown as {
+      running: Map<string, { capabilityContext: HostCapabilityContext }>
+      wsClient: unknown
+      aiSessions: Map<string, Record<string, unknown>>
+    }
+    const plugin = internal.running.get(opened.instanceId)!
+    const runtime = plugin.capabilityContext.runtimeBinding!
+    internal.aiSessions.set('attested-session', {
+      sessionId: 'attested-session',
+      profileId: 'claude',
+      pluginId: runtime.pluginId,
+      packageVersion: runtime.packageVersion,
+      workspaceId: runtime.workspaceId,
+      audience: runtime.audience,
+      attachedInstanceId: null,
+      client: internal.wsClient,
+      createdAt: Date.now(),
+      persistView: true,
+    })
+
+    const resume = opened.mgr.executePublicCapability({
+      kind: 'public',
+      address: 'aiCli.resumeSession',
+      scope: 'workspace',
+      runtime,
+      args: { cols: 100, rows: 30, persistView: true },
+    })
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1))
+    const request = JSON.parse(socket.sent[0]!) as {
+      type: string
+      payload: Record<string, unknown>
+    }
+    expect(request.type).toBe('terminal.reattach')
+    expect(request.payload.expected_profile_ids).toEqual(plugin.capabilityContext.aiCliProfiles)
+    expect(request.payload.expected_workspace_path).toBe('/workspace')
+    expect(request.payload.expected_origin).toBe('navide.git')
+
+    socket.receive({
+      id: JSON.parse(socket.sent[0]!).id,
+      type: request.type,
+      ok: true,
+      payload: { alive: ['attested-session'], dead: [] },
+      error: null,
+      timestamp: '',
+    })
+    await expect(resume).resolves.toEqual({ sessionId: 'attested-session', profileId: 'claude' })
+  })
+
+  it('rejects a detached ledger session whose profile is no longer Host-allowlisted before backend dispatch', async () => {
+    const opened = await openGitView('/workspace', 'git-window')
+    opened.mgr.setBackendWsUrl('ws://git-ai-revoked-profile-test')
+    const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+    socket.open()
+    const internal = opened.mgr as unknown as {
+      running: Map<string, { capabilityContext: HostCapabilityContext }>
+      wsClient: unknown
+      aiSessions: Map<string, Record<string, unknown>>
+    }
+    const plugin = internal.running.get(opened.instanceId)!
+    const runtime = plugin.capabilityContext.runtimeBinding!
+    plugin.capabilityContext.aiCliProfiles = ['claude']
+    internal.aiSessions.set('revoked-profile-session', {
+      sessionId: 'revoked-profile-session',
+      profileId: 'droid',
+      pluginId: runtime.pluginId,
+      packageVersion: runtime.packageVersion,
+      workspaceId: runtime.workspaceId,
+      audience: runtime.audience,
+      attachedInstanceId: null,
+      client: internal.wsClient,
+      createdAt: Date.now(),
+    })
+
+    await expect(opened.mgr.executePublicCapability({
+      kind: 'public',
+      address: 'aiCli.resumeSession',
+      scope: 'workspace',
+      runtime,
+      args: { cols: 100, rows: 30 },
+    })).resolves.toBeNull()
+    expect(socket.sent).toHaveLength(0)
+  })
+
+  it('rejects a start request whose profile is no longer Host-allowlisted before backend dispatch', async () => {
+    const opened = await openGitView('/workspace', 'git-ai-start-revoked-profile-test')
+    opened.mgr.setBackendWsUrl('ws://git-ai-start-revoked-profile-test')
+    const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+    socket.open()
+    const internal = opened.mgr as unknown as {
+      running: Map<string, { capabilityContext: HostCapabilityContext }>
+    }
+    const plugin = internal.running.get(opened.instanceId)!
+    const runtime = plugin.capabilityContext.runtimeBinding!
+    plugin.capabilityContext.aiCliProfiles = ['claude']
+
+    await expect(opened.mgr.executePublicCapability({
+      kind: 'public',
+      address: 'aiCli.startSession',
+      scope: 'workspace',
+      runtime,
+      args: { profileId: 'droid', requestId: 'revoked-start', cols: 80, rows: 24 },
+    })).rejects.toThrow(/profile 'droid' is not available/)
+    expect(socket.sent).toHaveLength(0)
   })
 
   it('bounds and expires AI output that arrives before session creation commits', async () => {

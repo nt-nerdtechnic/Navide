@@ -2,12 +2,13 @@
 import { describe, it, expect, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { defineComponent, h, ref, nextTick } from 'vue'
-import EditorPane from '../EditorPane.vue'
+import { EditorPane, createPreflightEditorPort } from '@navide/plugin-ui/editor'
+import { createHostEditorPort } from '../../composables/hostEditorPort'
 import { i18n } from '@navide/plugin-ui/foundation'
 
 // Monaco cannot run in happy-dom — replace the editor view with a stub that
 // just renders the bound content.
-vi.mock('../view/EditorViewMonaco.vue', () => ({
+vi.mock('../../../../../packages/plugin-ui/src/editor/view/EditorViewMonaco.vue', () => ({
   default: defineComponent({
     name: 'EditorViewMonaco',
     props: { modelValue: { type: String, default: '' } },
@@ -46,13 +47,24 @@ function mountPane(backend: ReturnType<typeof makeBackend>) {
       workspacePath: '/ws',
       relPath: 'a.txt',
       name: 'a.txt',
-      backend: backend as never,
+      port: createHostEditorPort(backend as never),
     },
     global: { plugins: [i18n] },
   })
 }
 
 describe('EditorPane – connection states', () => {
+  it('mounts the same exported editor with the restricted preflight adapter', async () => {
+    const port = createPreflightEditorPort()
+    const wrapper = mount(EditorPane, {
+      props: { workspacePath: '/ws', relPath: 'a.txt', name: 'a.txt', port },
+      global: { plugins: [i18n] },
+    })
+    await flushPromises()
+    expect(wrapper.text()).toContain('Editor operations are unavailable during preflight')
+    expect(wrapper.find('.mock-monaco').exists()).toBe(false)
+    wrapper.unmount()
+  })
   it('shows "Waiting for backend…" instead of "Loading…" while not connected', async () => {
     const backend = makeBackend('connecting')
     const wrapper = mountPane(backend)

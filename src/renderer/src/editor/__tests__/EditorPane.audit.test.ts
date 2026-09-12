@@ -2,12 +2,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import { defineComponent, h, ref, nextTick } from 'vue'
-import EditorPane from '../EditorPane.vue'
+import { EditorPane } from '@navide/plugin-ui/editor'
+import { createHostEditorPort } from '../../composables/hostEditorPort'
 import { i18n } from '@navide/plugin-ui/foundation'
 
 // Stateful Monaco view stub: enough surface for selection, external edits and
 // find/replace to run against the bound modelValue.
-vi.mock('../view/EditorViewMonaco.vue', () => ({
+vi.mock('../../../../../packages/plugin-ui/src/editor/view/EditorViewMonaco.vue', () => ({
   default: defineComponent({
     name: 'EditorViewMonaco',
     props: { modelValue: { type: String, default: '' } },
@@ -96,7 +97,7 @@ function mountPane(backend: ReturnType<typeof makeBackend>) {
       workspacePath: '/ws',
       relPath: 'a.txt',
       name: 'a.txt',
-      backend: backend as never,
+      port: createHostEditorPort(backend as never),
     },
     global: { plugins: [i18n] },
   })

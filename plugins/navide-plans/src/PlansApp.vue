@@ -19,6 +19,7 @@ import { installPlansKeybindings } from './plansKeybindings'
 import { buildPlanCliContext } from './planCliContext'
 import PlanReviewToolbar from './retained/PlanReviewToolbar.vue'
 import PlanMarkdownBody from './retained/PlanMarkdownBody.vue'
+import HtmlFilePreview from './HtmlFilePreview.vue'
 import NotificationHost from './retained/NotificationHost.vue'
 import { resolvePlanStore, type SectionBody } from './retained/planStore'
 import { htmlPlanAwaitingUser, parseHtmlPlanMeta } from './retained/usePlanHtml'
@@ -84,6 +85,7 @@ type GroupMode = 'flat' | 'stage'
 const params = new URLSearchParams(window.location.search)
 const workspacePath = params.get('workspace_path') ?? ''
 const initialRelPath = params.get('rel_path') ?? ''
+const initialFilePath = params.get('filepath') ?? ''
 function isLeftContribution(): boolean {
   return new URLSearchParams(window.location.search).get('contribution') === 'left'
 }
@@ -107,6 +109,7 @@ const markdownRefresh = ref(0)
 const plans = ref<PlanSummary[]>([])
 const selectedPath = ref(initialRelPath)
 const selected = ref<PlanDocument | null>(null)
+const htmlPreviewTarget = ref<{ path: string; name: string } | null>(null)
 const documentLoadError = ref<{ relPath: string; reason: string } | null>(null)
 const searchQuery = ref('')
 const stageFilter = ref<StageFilter>('all')
@@ -577,7 +580,7 @@ function persistLastOpened(relPath: string): void {
  * a load error is worse than opening it empty.
  */
 async function restoreLastOpened(): Promise<void> {
-  if (isLeftContribution() || initialRelPath || selectedPath.value) return
+  if (isLeftContribution() || initialRelPath || initialFilePath || htmlPreviewTarget.value || selectedPath.value) return
   const stored = lastOpenedPath.value
   if (!stored || !plans.value.some((plan) => plan.rel_path === stored)) return
   await openPlan(stored)
@@ -597,6 +600,7 @@ function isPinned(relPath: string): boolean {
 let activeReadGeneration = 0
 
 function applySelected(document: PlanDocument, relPath: string): void {
+  htmlPreviewTarget.value = null
   previewAnchorCounts = countNoteAnchors(document.meta?.reviewNotes ?? [])
   selected.value = { ...document, rel_path: document.rel_path || relPath }
   selectedPath.value = relPath
@@ -604,6 +608,36 @@ function applySelected(document: PlanDocument, relPath: string): void {
   todoStatus.value = document.meta?.todos[0]?.status ?? 'pending'
   markdownRefresh.value++
   persistLastOpened(relPath)
+}
+
+function isHtmlPreviewPath(path: string): boolean {
+  return path.toLowerCase().endsWith('.html') || path.toLowerCase().endsWith('.htm')
+}
+
+function workspaceRelativeHtmlTarget(target: Record<string, string>): { path: string; name: string } | null {
+  const root = (target.workspace_path || workspacePath).replace(/\/+$/, '')
+  const currentRoot = workspacePath.replace(/\/+$/, '')
+  const filepath = target.filepath?.trim() ?? ''
+  if (!root || root !== currentRoot || !filepath || !isHtmlPreviewPath(filepath)) return null
+  const prefix = `${root}/`
+  if (!filepath.startsWith(prefix)) return null
+  const path = filepath.slice(prefix.length)
+  if (!path || path === '.' || path.startsWith('/') || path === '../' || path.includes('/../')) return null
+  return { path, name: path.split('/').pop() ?? path }
+}
+
+function openHtmlPreview(target: { path: string; name: string }): void {
+  activeReadGeneration++
+  reviewToolbar.value?.resetDocumentState()
+  cancelRename()
+  snapshotPreview.value = null
+  savedScrollY = 0
+  sectionEditing.value = false
+  documentLoadError.value = null
+  selected.value = null
+  selectedPath.value = ''
+  selectedTodoId.value = ''
+  htmlPreviewTarget.value = target
 }
 
 function countNoteAnchors(notes: PlanMeta['reviewNotes']): Record<string, number> {
@@ -664,6 +698,7 @@ async function openInEditor(relPath: string): Promise<void> {
 }
 
 async function openPlan(relPath: string): Promise<void> {
+  htmlPreviewTarget.value = null
   selectedPath.value = relPath
   if (isLeftContribution()) {
     noteOpened(relPath)
@@ -1140,6 +1175,11 @@ async function onToolbarDeleted(path: string): Promise<void> {
 }
 
 function receiveTarget(target: Record<string, string>): void {
+  const htmlTarget = workspaceRelativeHtmlTarget(target)
+  if (htmlTarget) {
+    openHtmlPreview(htmlTarget)
+    return
+  }
   if (target.rel_path) void openPlan(target.rel_path)
 }
 
@@ -1211,6 +1251,8 @@ if (hostKeybindings) {
 
 onMounted(() => {
   loadTheme()
+  const initialHtmlTarget = workspaceRelativeHtmlTarget({ workspace_path: workspacePath, filepath: initialFilePath })
+  if (initialHtmlTarget) openHtmlPreview(initialHtmlTarget)
   if (!hostKeybindings) window.addEventListener('keydown', onKeydown)
   window.addEventListener('click', closeTransientMenus)
   window.addEventListener('message', onWindowMessage)
@@ -1552,7 +1594,12 @@ onUnmounted(() => {
       >⟩</button>
 
       <main v-if="!isLeftContribution()" class="plan-window-main plan-content">
-        <div v-if="documentLoadError" class="pdp-error">
+        <HtmlFilePreview
+          v-if="htmlPreviewTarget"
+          :path="htmlPreviewTarget.path"
+          :name="htmlPreviewTarget.name"
+        />
+        <div v-else-if="documentLoadError" class="pdp-error">
           <span>{{ t('pane.plans.doc-load-failed') }}</span>
           <span v-if="documentLoadError.reason" class="pdp-error-reason">{{ documentLoadError.reason }}</span>
           <span class="pdp-error-path">{{ workspacePath }} › {{ documentLoadError.relPath }}</span>

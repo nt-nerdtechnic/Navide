@@ -4,6 +4,14 @@ All notable released changes to Navide will be documented in this file. The form
 
 ## [Unreleased]
 
+### Added
+
+- Add public, Host-validated plugin window requests and typed editor, Git,
+  account, and Issue capability adapters for the ongoing miniIDE migration.
+  Window targets retain caller/receiver authority separation; missing IDE
+  assets no longer silently open files in the OS default editor.
+
+
 ## [0.2.1] — 2026-09-10 — signed release
 
 ### Changed

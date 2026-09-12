@@ -27,6 +27,29 @@ Navide's editor is a Monaco-based workspace surface for inspecting and accepting
 | `PlansPane.vue` | Plan discovery and navigation |
 | `EditorWindowApp.vue` | Standalone editor-window shell and routing |
 
+## Shared editor composition
+
+`@navide/plugin-ui/editor` exports `EditorPane`, `EditorPort`, its request/result
+types, and `createPreflightEditorPort`. The public UI package owns the Monaco
+view, language detection, text transforms, and editor commands. Consumers supply
+file reads/writes (including encoding and optimistic save-conflict metadata),
+image reads, AI operations, connection state, file-change subscriptions, and
+diagnostic lookup through `EditorPort`. Coordinates passed to that port are
+data, not authority; adapters must use their authenticated Host boundary.
+
+The Host editor window constructs `createHostEditorPort`. Host diagnostics
+stores, tabs, workspace identity, and session state stay outside the public UI
+package. The legacy miniIDE recovery build uses that same composition through
+its retained capability adapter until the v2 package cutover. Restricted
+preflight uses `createPreflightEditorPort`, which denies all file and AI effects
+without constructing a production transport.
+
+The `monaco-editor` peer is required by the editor subpath. Import
+`@navide/plugin-ui/styles.css` and install the existing foundation i18n instance
+in a packaged consumer. Rich previews, Explorer/Search and window composition
+remain separate consumer-owned migration surfaces; extracting the core editor
+does not remove their recovery behavior.
+
 ## Backend boundary
 
 File reads and writes, workspace checks, AI editing requests, and related operations cross Navide's backend or preload boundaries. The renderer must not gain unrestricted filesystem access merely because Monaco runs in the renderer.

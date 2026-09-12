@@ -16,10 +16,13 @@ export {
   PURGED_LOCALSTORAGE_PREFIXES,
 } from './lib/settings'
 export type { SettingsBackend, SettingsReadinessStatus } from './lib/settings'
+export * from './lib/uiScale'
 
 export type { KeybindingsPort } from './ports/keybindings'
 export type { PortError, PortResponse } from './ports/response'
 export type { ReactiveValue } from './ports/value'
+export { parseConflicts, buildResolved, hasConflicts, countConflicts } from './lib/conflict-parser'
+export type { ConflictChoice, ConflictSection, ContextSection, FileSection } from './lib/conflict-parser'
 
 export { COMMAND_IDS, commandI18nKey, describeCommand } from './keybindings/commandCatalog'
 export type { CommandInfo } from './keybindings/commandCatalog'

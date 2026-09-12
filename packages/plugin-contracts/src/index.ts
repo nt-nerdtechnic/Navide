@@ -2,8 +2,27 @@ import manifestV2Schema from './schemas/plugin-manifest-v2.schema.json' with { t
 import capabilitiesV1 from './schemas/capabilities-v1.json' with { type: 'json' }
 import executionPolicyV1Schema from './schemas/execution-policy-v1.schema.json' with { type: 'json' }
 import { canonicalHtmlPath, canonicalPackagePath } from './archive.js'
+import type { EditorFilesystemParams, EditorFilesystemResults } from './editorFilesystem.js'
+import type { EditorAiParams, EditorAiResults, EditorAiEvents } from './editorAi.js'
+import type { AiTerminalParams, AiTerminalResults } from './aiTerminal.js'
+import type { EditorNativeParams, EditorNativeResults, EditorNativeEvents } from './editorNative.js'
+import type { GitCapabilityParams, GitCapabilityResults } from './gitCapabilities.js'
+import type { GitAccountParams, GitAccountResults, GitCredentialEvents } from './gitAccounts.js'
+import type { IssueParams, IssueResults } from './issues.js'
+import type { EditorPreferenceParams, EditorPreferenceResults, EditorPreferenceEvents } from './editorPreferences.js'
+import type { FilePickerRequest } from './filePicker.js'
+export { validFilePickerRequest } from './filePicker.js'
+export type { FilePickerRequest } from './filePicker.js'
 
 export * from './archive.js'
+export * from './aiTerminal.js'
+export type { FileSearchOptions, EditorFilesystemParams, EditorFilesystemResults } from './editorFilesystem.js'
+export type { EditorAiParams, EditorAiResults, EditorAiEvents, EditorReviewResult } from './editorAi.js'
+export type { EditorNativeParams, EditorNativeResults, EditorNativeEvents, EditorFileSelection } from './editorNative.js'
+export * from './gitCapabilities.js'
+export * from './issues.js'
+export * from './editorPreferences.js'
+export type { GitAccountParams, GitAccountResults, GitAccountSummary } from './gitAccounts.js'
 
 export type JsonPrimitive = string | number | boolean | null
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue }
@@ -672,21 +691,22 @@ export class PluginError extends Error {
   }
 }
 
-export interface PublicMethodParams {
-  'fs.readFile': { path: string }
-  'fs.writeFile': { path: string; content: string }
-  'fs.readImage': { path: string }
-  'fs.listDirectory': { path: string }
+export interface PublicMethodParams extends EditorFilesystemParams, EditorAiParams, AiTerminalParams, EditorNativeParams, GitCapabilityParams, GitAccountParams, IssueParams, EditorPreferenceParams {
+  'ui.openFilePicker': FilePickerRequest
+  'fs.readFile': { path: string; encoding?: string; selectionGrant?: string }
+  'fs.writeFile': { path: string; content: string; encoding?: string; expectedMtime?: number; selectionGrant?: string }
+  'fs.readImage': { path: string; selectionGrant?: string }
+  'fs.listDirectory': { path: string; showHidden?: boolean }
   'fs.listFilesFlat': { query?: string; maxResults?: number }
   'fs.glob': { pattern: string }
-  'fs.stat': { path: string }
-  'fs.statPath': { path: string }
+  'fs.stat': { path: string; selectionGrant?: string }
+  'fs.statPath': { path: string; selectionGrant?: string }
   'ui.openInEditor': { path: string; line?: number; column?: number }
   'ui.openPlansWindow': { path: string }
   'ui.openExternal': { url: string }
-  'aiCli.listProfiles': Record<string, never>
-  'aiCli.startSession': { profileId: string; requestId?: string; cols: number; rows: number; yolo?: boolean }
-  'aiCli.resumeSession': { cols: number; rows: number }
+  'aiCli.listProfiles': { terminalView?: boolean }
+  'aiCli.startSession': { profileId: string; requestId?: string; cols: number; rows: number; yolo?: boolean; persistView?: boolean }
+  'aiCli.resumeSession': { cols: number; rows: number; persistView?: boolean }
   'aiCli.cancelStart': { requestId: string }
   'aiCli.reattachSession': { sessionId: string; cols: number; rows: number }
   'aiCli.sendInput': { sessionId: string; data: string }
@@ -700,19 +720,36 @@ export interface PublicMethodParams {
   'storage.delete': { scope: StoragePartitionScope; key: string }
 }
 
-export interface PublicMethodResults {
-  'fs.readFile': { content: string }
-  'fs.writeFile': { ok: boolean }
-  'fs.readImage': { ok: boolean; data_url?: string }
-  'fs.listDirectory': { entries: Array<{ name: string; kind: 'file' | 'directory' }> }
-  'fs.listFilesFlat': { files?: string[] }
+export interface PublicMethodResults extends EditorFilesystemResults, EditorAiResults, AiTerminalResults, EditorNativeResults, GitCapabilityResults, GitAccountResults, IssueResults, EditorPreferenceResults {
+  'ui.openFilePicker': { opened: boolean }
+  'fs.readFile': {
+    content: string
+    ok?: boolean
+    error?: string
+    encoding?: string
+    bom?: boolean
+    mtime?: number
+    is_binary?: boolean
+    is_image?: boolean
+    size?: number
+    ext?: string
+  }
+  'fs.writeFile': { ok: boolean; error?: string; mtime?: number; conflict?: boolean }
+  'fs.readImage': { ok: boolean; data_url?: string; mime?: string; size?: number; error?: string }
+  'fs.listDirectory': {
+    entries: Array<{ name: string; kind: 'file' | 'directory'; rel_path?: string; is_dir?: boolean; is_hidden?: boolean; is_noise?: boolean }>
+    ok?: boolean
+    truncated?: boolean
+    error?: string
+  }
+  'fs.listFilesFlat': { files?: string[]; ok?: boolean; truncated?: boolean; error?: string }
   'fs.glob': { paths: string[] }
   'fs.stat': { kind: 'file' | 'directory'; size: number; modifiedAt: string }
   'fs.statPath': { exists: boolean }
   'ui.openInEditor': { opened: boolean }
   'ui.openPlansWindow': { opened: boolean }
   'ui.openExternal': { opened: boolean }
-  'aiCli.listProfiles': { profiles: Array<{ id: string; label: string }> }
+  'aiCli.listProfiles': { profiles: Array<{ id: string; label: string; fullScreenTui?: boolean; bracketedPaste?: boolean; shiftEnterSequence?: string }> }
   'aiCli.startSession': { sessionId: string }
   'aiCli.resumeSession': { sessionId: string; profileId: string } | null
   'aiCli.cancelStart': Record<string, never>
@@ -732,7 +769,9 @@ export type PublicMethod = keyof PublicMethodParams
 export type Params<M extends PublicMethod> = PublicMethodParams[M]
 export type Result<M extends PublicMethod> = PublicMethodResults[M]
 
-export interface PublicEventPayloads {
+export interface PublicEventPayloads extends EditorAiEvents, EditorNativeEvents, EditorPreferenceEvents, GitCredentialEvents {
+  /** UI notification for a write to this receiver's own selected snapshot. */
+  'ui.pluginStorageChanged': { scope: StoragePartitionScope; key: string; value: JsonValue; deleted: boolean }
   'workspace.filesChanged': {
     changes: Array<{ path: string; kind: 'created' | 'changed' | 'deleted' }>
   }

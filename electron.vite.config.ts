@@ -46,7 +46,9 @@ export default defineConfig({
         input: {
           index: resolve(__dirname, 'src/preload/index.ts'),
           // Dedicated minimal preload for plugin WebContentsViews (Phase 2 M1).
-          'plugin-preload': resolve(__dirname, 'src/preload/plugin-preload.ts')
+          'plugin-preload': resolve(__dirname, 'src/preload/plugin-preload.ts'),
+          'terminal-owner-preload': resolve(__dirname, 'src/preload/terminal-owner-preload.ts'),
+          'file-picker-preload': resolve(__dirname, 'src/preload/file-picker-preload.ts')
         }
       }
     },
@@ -60,10 +62,13 @@ export default defineConfig({
       alias: {
         '@navide/plugin-contracts': resolve(__dirname, 'packages/plugin-contracts/src/index.ts'),
         '@navide/plugin-ui/shared': resolve(__dirname, 'packages/plugin-ui/src/shared/index.ts'),
+        '@navide/plugin-ui/file-picker': resolve(__dirname, 'packages/plugin-ui/src/terminalFilePicker.ts'),
+        '@navide/plugin-ui/editor': resolve(__dirname, 'packages/plugin-ui/src/editor/index.ts'),
         '@navide/terminal': resolve(__dirname, 'src/renderer/src/platform/terminal/index.ts'),
         '@navide/plugin-shell': resolve(__dirname, 'src/renderer/src/platform/plugin-shell/index.ts'),
         '@navide/plugin-ui/styles.css': resolve(__dirname, 'packages/plugin-ui/src/foundation/styles.css'),
         '@navide/plugin-ui/foundation': resolve(__dirname, 'packages/plugin-ui/src/foundation/index.ts'),
+        '@navide/plugin-ui': resolve(__dirname, 'packages/plugin-ui/src/index.ts'),
       },
     },
     server: {

@@ -165,7 +165,10 @@ interface RuntimeCapabilityBridge {
 
 export interface PluginViewRuntimeClient {
   ready(): void
+  /** Open an installed window contribution using Host-validated target authority. */
+  openContributionWindow(params: Params<'ui.openPluginWindow'>): Promise<Result<'ui.openPluginWindow'>>
   onOpenTarget(listener: (target: Record<string, string>) => void): Disposable
+  onBackendStatus(listener: (status: 'connecting' | 'connected' | 'disconnected' | 'error') => void): Disposable
 }
 
 interface RuntimeViewBridge {
@@ -201,6 +204,9 @@ function runtimeViewBridge(): RuntimeViewBridge {
  * transport remains an SDK implementation detail. */
 export function createPluginViewRuntimeClient(): PluginViewRuntimeClient {
   return Object.freeze({
+    openContributionWindow(params: Params<'ui.openPluginWindow'>): Promise<Result<'ui.openPluginWindow'>> {
+      return createPluginCapabilityClient().capabilities.invoke('ui.openPluginWindow', params)
+    },
     ready(): void {
       runtimeViewBridge().ready()
     },
@@ -209,6 +215,14 @@ export function createPluginViewRuntimeClient(): PluginViewRuntimeClient {
         throw new PluginError('INVALID_ARGUMENT', 'Plugin target listener is invalid.')
       }
       return Object.freeze({ dispose: runtimeViewBridge().onOpenTarget(listener) })
+    },
+    onBackendStatus(listener: (status: 'connecting' | 'connected' | 'disconnected' | 'error') => void): Disposable {
+      return Object.freeze({ dispose: runtimeCapabilityBridge().on('nav.backend_status', payload => {
+        const status = (payload as { status?: unknown } | null)?.status
+        if (status === 'connecting' || status === 'connected' || status === 'disconnected' || status === 'error') {
+          listener(status)
+        }
+      }) })
     },
   })
 }

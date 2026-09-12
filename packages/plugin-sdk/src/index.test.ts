@@ -29,6 +29,33 @@ afterEach(() => {
 })
 
 describe('public plugin SDK adapters', () => {
+  it('routes contribution window requests through the fixed capability', async () => {
+    const bridge: TestCapabilityBridge = {
+      callCapability: vi.fn(() => Promise.resolve({ reqId: 'cap-window', ok: true, result: { ok: true } })),
+      on: vi.fn(),
+    }
+    ;(globalThis as unknown as { nav: TestCapabilityBridge }).nav = bridge
+
+    await expect(createPluginViewRuntimeClient().openContributionWindow({
+      contributionKey: 'navide.git.left', path: 'src/main.ts', line: 4,
+    })).resolves.toEqual({ ok: true })
+    expect(bridge.callCapability).toHaveBeenCalledWith('ui', 'openPluginWindow', {
+      contributionKey: 'navide.git.left', path: 'src/main.ts', line: 4,
+    })
+  })
+
+  it('preserves unavailable contribution results from the Host', async () => {
+    const bridge: TestCapabilityBridge = {
+      callCapability: vi.fn(() => Promise.resolve({ reqId: 'cap-window-2', ok: true,
+        result: { ok: false, error: 'PLUGIN_UNAVAILABLE', message: 'window unavailable' } })),
+      on: vi.fn(),
+    }
+    ;(globalThis as unknown as { nav: TestCapabilityBridge }).nav = bridge
+
+    await expect(createPluginViewRuntimeClient().openContributionWindow({ contributionKey: 'missing.window' }))
+      .resolves.toEqual({ ok: false, error: 'PLUGIN_UNAVAILABLE', message: 'window unavailable' })
+  })
+
   it('routes typed public capabilities and events through the SDK boundary', async () => {
     const unsubscribe = vi.fn()
     const bridge: TestCapabilityBridge = {
