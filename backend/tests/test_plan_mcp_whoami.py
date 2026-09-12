@@ -308,6 +308,7 @@ async def test_whoami_omits_cloud_on_a_machine_with_no_server_link(
     assert set(me) == {
         "ok", "caller", "name", "address", "pane_id", "workspace_path",
         "same_workspace", "agent_key", "busy", "offline", "realized",
+        "delegation_hint",
     }
 
 
