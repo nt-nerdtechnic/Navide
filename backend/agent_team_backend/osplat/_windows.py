@@ -1120,6 +1120,16 @@ class WindowsDiscoveryLayout(WindowsLayout):
         # already carries it.
         return None
 
+    def login_path_fallbacks(self, home: Path) -> list[str]:
+        # Nothing the registry PATH would be missing.
+        return []
+
+    def git_subprocess_env(self, askpass: str) -> dict[str, str]:
+        # GIT_ASKPASS only, as before: whether the bundled OpenSSH execs the
+        # `.cmd` launcher as SSH_ASKPASS is unverified, and git's own prompts
+        # are the ones the Windows port has exercised.
+        return {"GIT_ASKPASS": askpass}
+
     def backend_entry_on_disk(self, entry: str) -> str:
         if Path(entry).suffix:
             return entry

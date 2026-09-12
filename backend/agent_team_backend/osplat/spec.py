@@ -23,6 +23,12 @@ from pathlib import Path
 from typing import Callable, NamedTuple, Protocol
 
 
+#: What `Paths.login_path_probe` makes the shell print in front of `PATH`.
+#: Rc files chatter on stdout (banners, `neofetch`, a stray `echo`), and the
+#: line that carries this prefix is the only one the caller may trust.
+LOGIN_PATH_MARKER = "__NAVIDE_PATH__"
+
+
 class Paths(Protocol):
     """Where this platform keeps the kinds of directory the backend looks in.
 
@@ -118,6 +124,22 @@ class Paths(Protocol):
         """
         ...
 
+    def git_subprocess_env(self, askpass: str) -> dict[str, str]:
+        """The environment that makes every prompt a git subprocess can raise
+        go to `askpass` — git's own (HTTPS user/password) and, where ssh is
+        the transport, ssh's (key passphrase, host-key confirmation).
+
+        The backend runs git with no controlling terminal. `GIT_ASKPASS` alone
+        covers only git's prompts: ssh reads `/dev/tty` for its own, fails
+        when there is none, and honours `SSH_ASKPASS` only under a display or
+        when `SSH_ASKPASS_REQUIRE=force` says so (OpenSSH ≥ 8.4). Linux is
+        where this bites — no Keychain-backed agent holds the passphrase by
+        default — so a push over ssh died with "Permission denied (publickey)"
+        and nothing to answer. `GIT_TERMINAL_PROMPT=0` closes the last gap:
+        with askpass declined, git fails fast instead of waiting on a tty.
+        """
+        ...
+
     def executable_candidates(self, name: str) -> list[str]:
         """The file names a command called `name` may have on disk here.
 
@@ -144,6 +166,22 @@ class Paths(Protocol):
         GUI-launched backend never read; the probe recovers them. Windows
         keeps `PATH` in the registry and the process already has it, so there
         is nothing to probe — None tells the caller to keep what it has.
+
+        The line to read is the one prefixed with `LOGIN_PATH_MARKER`: the
+        shell's own rc chatter shares stdout, and "the last line" was the
+        motd on more than one machine.
+        """
+        ...
+
+    def login_path_fallbacks(self, home: Path) -> list[str]:
+        """Where user-installed tools live when the probe cannot answer.
+
+        Merged into `PATH` after whatever the probe found (or in its place
+        when the shell timed out), so a tool in one of these is found even
+        with a heavy rc file or an exotic shell. Each platform's own
+        conventions, mirroring `loginPathFallbacks` in src/shared/osplat.ts;
+        entries that do not exist on disk are the caller's to drop. Windows
+        has nothing to add: its `PATH` is the registry's and already complete.
         """
         ...
 

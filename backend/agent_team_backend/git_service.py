@@ -3088,8 +3088,10 @@ async def create_askpass_context(
     """Start a one-shot loopback TCP server for a GIT_ASKPASS helper to call back into.
 
     Returns (env, cleanup):
-      env     -- vars to merge into the git subprocess environment: GIT_ASKPASS
-                 pointing at git_askpass_helper.py, plus the port/token the
+      env     -- vars to merge into the git subprocess environment: the
+                 platform's `git_subprocess_env` (GIT_ASKPASS pointing at
+                 git_askpass_helper.py and, on POSIX, the SSH_ASKPASS trio so
+                 ssh's own prompts arrive here too), plus the port/token the
                  helper needs to reach this server.
       cleanup -- async function that closes the server; callers must invoke it
                  once the git subprocess has finished (success, failure, or
@@ -3166,7 +3168,7 @@ async def create_askpass_context(
     port = server.sockets[0].getsockname()[1]
 
     env = {
-        "GIT_ASKPASS": _ASKPASS_HELPER_PATH,
+        **paths.git_subprocess_env(_ASKPASS_HELPER_PATH),
         "NAVIDE_ASKPASS_PORT": str(port),
         "NAVIDE_ASKPASS_TOKEN": token,
     }

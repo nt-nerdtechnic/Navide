@@ -1,6 +1,6 @@
 import { spawn, execFile, type ChildProcess } from 'node:child_process'
 import { createHmac, randomBytes, randomUUID } from 'node:crypto'
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { homedir } from 'node:os'
 import { delimiter, join } from 'node:path'
@@ -18,6 +18,7 @@ import {
   writeBackendPluginActivationCatalog,
   type BackendPluginActivationCatalogFile,
 } from './plugins/pluginBackendActivationCatalog'
+import { resolveBackendDataDir } from './ui-settings-bootstrap'
 
 /**
  * The key that tells a person's own window apart from an agent driving the same
@@ -117,6 +118,45 @@ export function pathEnvKey(env: Record<string, string | undefined>): string {
 export function mergePathList(head: string[], existing: string | undefined): string {
   const tail = (existing ?? '').split(delimiter).filter(Boolean)
   return [...new Set([...head, ...tail])].join(delimiter)
+}
+
+/**
+ * Every `bin` nvm has installed under `home`, newest version first.
+ *
+ * nvm exports exactly one of these (its `default` alias) and only from the
+ * rc file the probe just failed to read, so which one the shell would have
+ * picked is unknowable here; a CLI installed with `npm install -g` lives
+ * under the node that installed it, so all of them go on PATH. Same rule as
+ * `nvm_node_bins` on the backend.
+ */
+export function listNvmNodeBins(home: string): string[] {
+  const versions = join(home, '.nvm', 'versions', 'node')
+  let names: string[]
+  try {
+    names = readdirSync(versions)
+  } catch {
+    return []
+  }
+  const key = (name: string): number[] =>
+    name.replace(/^v/, '').split('.').map((part) => (/^\d+$/.test(part) ? Number(part) : 0))
+  const compare = (a: string, b: string): number => {
+    const ka = key(a), kb = key(b)
+    for (let i = 0; i < Math.max(ka.length, kb.length); i++) {
+      const d = (kb[i] ?? 0) - (ka[i] ?? 0)
+      if (d !== 0) return d
+    }
+    return 0
+  }
+  return names
+    .filter((name) => {
+      try {
+        return statSync(join(versions, name, 'bin')).isDirectory()
+      } catch {
+        return false
+      }
+    })
+    .sort(compare)
+    .map((name) => join(versions, name, 'bin'))
 }
 
 /** Ask the user's login shell for its full PATH (captures nvm/fnm/volta etc.).
@@ -283,7 +323,7 @@ export async function startBackend(
       // Fallback: the platform's own conventional tool locations, which the
       // session PATH omits. ~/.local/bin is where Claude Code's installer
       // puts `claude` on both platforms, and where uv lands on Linux.
-      env[pathKey] = mergePathList(loginPathFallbacks(homedir()), env[pathKey])
+      env[pathKey] = mergePathList(loginPathFallbacks(homedir(), listNvmNodeBins(homedir())), env[pathKey])
     }
   }
   resolvedUserPath = env[pathKey] ?? null
@@ -357,7 +397,7 @@ export async function startBackend(
     port,
     shell: userShell,
     hostSessionToken,
-    dataDir: env.AGENT_TEAM_DATA_DIR ?? join(app.getPath('appData'), 'Agent-Team'),
+    dataDir: backendDataDir(env),
     proc,
     stop: () => stopBackendProcess(proc)
   }
@@ -386,6 +426,35 @@ export async function startBackend(
 
 
 /**
+ * Where the backend just spawned keeps its state, seen from `env` — the
+ * environment it was spawned with, so the dev override set above is honoured.
+ *
+ * Goes through the same resolver the ui_settings bootstrap uses instead of
+ * re-deriving the path here: an earlier copy fell back to
+ * `<appData>/Agent-Team`, which matches the backend's `state_dir` on macOS
+ * (~/Library/Application Support) and Windows (%APPDATA%) but not on Linux,
+ * where appData is ~/.config and the backend writes under
+ * $XDG_DATA_HOME (~/.local/share). A packaged Linux build then read its ws
+ * token from a directory nothing wrote to, and every window was refused.
+ */
+export function backendDataDir(env: NodeJS.ProcessEnv): string {
+  return resolveBackendDataDir({
+    envOverride: env.AGENT_TEAM_DATA_DIR,
+    isPackaged: app.isPackaged,
+    appDataPath: app.getPath('appData'),
+    platform: process.platform,
+    homeDir: app.getPath('home'),
+    xdgDataHome: env.XDG_DATA_HOME,
+    appData: env.APPDATA
+  })
+}
+
+/** The file the backend mints its `/ws` credential into, under `dataDir`. */
+export function wsTokenPath(dataDir: string): string {
+  return join(dataDir, 'backend-ws-token')
+}
+
+/**
  * The credential the backend requires on /ws, or '' if it is not there yet.
  *
  * Read from disk on every call rather than cached: the backend mints a new one
@@ -395,7 +464,7 @@ export async function startBackend(
  */
 export function readWsToken(handle: BackendHandle): string {
   try {
-    return readFileSync(join(handle.dataDir, 'backend-ws-token'), 'utf8').trim()
+    return readFileSync(wsTokenPath(handle.dataDir), 'utf8').trim()
   } catch {
     // Absent means the backend has not written it yet, or is an older build.
     // Callers pass '' through and the backend answers for itself.
