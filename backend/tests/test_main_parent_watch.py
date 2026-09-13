@@ -158,9 +158,37 @@ def test_a_backend_whose_parent_dies_exits_by_itself(tmp_path) -> None:
             assert time.monotonic() < deadline, "the backend outlived its parent"
             time.sleep(0.25)
     finally:
+        # Release our handle so the parent's pid is fully gone rather than a
+        # handle-held zombie, the way it is in production once the app is gone.
         if parent.poll() is None:
             parent.kill()
+            parent.wait(timeout=5)
+        # Only a backend that outlived its parent is still here to kill. POSIX
+        # raises ProcessLookupError for an already-dead pid; Windows raises
+        # OSError (WinError 87) — catch both, or a passing run dies in cleanup.
         try:
-            os.kill(backend_pid, 9)  # only reached when the assertion above failed
-        except (ProcessLookupError, NameError):
+            os.kill(backend_pid, 9)
+        except (ProcessLookupError, NameError, OSError):
             pass
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows GetExitCodeProcess path")
+def test_windows_is_alive_uses_the_exit_code_not_just_pid_exists() -> None:
+    # A running process is alive; once it exits it is not — even in the window
+    # where a held handle keeps its pid around. The hardened check asks the
+    # kernel for the exit code rather than trusting pid_exists alone.
+    import subprocess
+
+    from agent_team_backend.osplat import _windows
+
+    tree = _windows.WindowsProcessTree()
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        assert tree.is_alive(proc.pid) is True
+        proc.kill()
+        proc.wait(timeout=5)
+        # The Popen object still holds a handle to the now-dead process here.
+        assert tree.is_alive(proc.pid) is False
+    finally:
+        if proc.poll() is None:
+            proc.kill()
