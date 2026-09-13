@@ -352,6 +352,25 @@ class TestLaunching:
         # CommandLineToArgvW, which reads the single quotes literally.
         assert _posix.terminal_backend.parse_command(text) == shlex.split(text)
 
+    @pytest.mark.skipif(sys.platform != "win32", reason="CommandLineToArgvW is Windows-only")
+    def test_windows_mcp_json_survives_quote_arg_round_trip(self):
+        # A Windows agent pane is handed the bare command string (no PowerShell
+        # wrapper), and the backend appends `--mcp-config <quote_arg(json)>`
+        # before splitting it with CommandLineToArgvW. The JSON — braces, inner
+        # quotes, and a URL's `&t=` — must come back out as ONE intact argv
+        # token, or the CLI receives a mangled config. This is the round trip
+        # that the removed PowerShell wrapper used to break.
+        from agent_team_backend.osplat import _windows
+
+        json_payload = '{"mcpServers":{"navide":{"type":"http","url":"http://127.0.0.1:1/p?pane=x&t=y"}}}'
+        command = f"claude --dangerously-skip-permissions --mcp-config {_windows.paths.quote_arg(json_payload)}"
+        assert _windows.terminal_backend.parse_command(command) == [
+            "claude",
+            "--dangerously-skip-permissions",
+            "--mcp-config",
+            json_payload,
+        ]
+
 
 # What the shim generators actually write, verbatim (CRLF as on disk):
 # npm's cmd-shim 8.0.0 (bundled with npm 10/11), the cmd-shim 2.x template

@@ -266,6 +266,65 @@ describe('shellCommandArgv', () => {
       expect(shellCommandArgv('powershell.exe', 'x')).toEqual(['powershell.exe', '-lc', 'x'])
     })
   })
+
+  // A Windows agent pane must NOT be wrapped in `powershell -Command`: that
+  // re-parses the command as PowerShell, so a `--mcp-config {…}` JSON payload
+  // (braces = script block) and a plan-mcp URL's `&` (call operator) broke
+  // every such pane at launch. Handed the bare string, the backend splits it
+  // with CommandLineToArgvW rules and runs the program directly.
+  it('returns the plain string for a Windows agent pane, untouched', () => {
+    asPlatform('win32', () => {
+      const adversarial = [
+        'claude --mcp-config {"mcpServers":{"a":1}}',
+        'claude --mcp-config {"url":"http://127.0.0.1:1/p?pane=x&t=y"}',
+        `claude --note 'quoted' --other "double" $env:PATH`,
+        'claude --dir C:\\My Projects\\agent team',
+      ]
+      for (const command of adversarial) {
+        // The shell name is irrelevant for an agent pane — no wrapper is added.
+        expect(shellCommandArgv('powershell.exe', command, { agentPane: true })).toBe(command)
+        expect(shellCommandArgv('cmd.exe', command, { agentPane: true })).toBe(command)
+      }
+    })
+  })
+
+  it('still wraps a Windows terminal pane (agentPane false/omitted)', () => {
+    asPlatform('win32', () => {
+      expect(shellCommandArgv('powershell.exe', 'powershell.exe', { agentPane: false })).toEqual([
+        'powershell.exe',
+        '-NoLogo',
+        '-NoExit',
+        '-Command',
+        'powershell.exe',
+      ])
+      // Omitting the option is the same as a terminal pane: wrapped.
+      expect(shellCommandArgv('powershell.exe', 'powershell.exe')).toEqual([
+        'powershell.exe',
+        '-NoLogo',
+        '-NoExit',
+        '-Command',
+        'powershell.exe',
+      ])
+    })
+  })
+
+  it('ignores agentPane off Windows — POSIX still loads the login shell', () => {
+    const command = 'claude --mcp-config {"mcpServers":{"a":1}}'
+    asPlatform('darwin', () => {
+      expect(shellCommandArgv('/bin/zsh', command, { agentPane: true })).toEqual([
+        '/bin/zsh',
+        '-ilc',
+        command,
+      ])
+    })
+    asPlatform('linux', () => {
+      expect(shellCommandArgv('/bin/bash', command, { agentPane: true })).toEqual([
+        '/bin/bash',
+        '-lc',
+        command,
+      ])
+    })
+  })
 })
 
 describe('editorBundledPaths', () => {

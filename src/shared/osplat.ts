@@ -208,18 +208,45 @@ function shellBasename(shell: string): string {
   return shell.split(/[\\/]/).pop()?.toLowerCase() ?? ''
 }
 
+export interface ShellCommandOptions {
+  /**
+   * True when `command` is a CLI agent invocation (`claude --mcp-config {…}`)
+   * rather than the user's interactive shell. On Windows this returns the
+   * command as a plain string instead of wrapping it in `powershell -Command`,
+   * because PowerShell's `-Command` re-parses the string as PowerShell code:
+   * the `{…}` of a `--mcp-config` JSON payload is read as a script block and
+   * the `&` in a plan-mcp URL as the call operator, so every such pane died at
+   * launch with a parser error. Handed the bare string, the backend splits it
+   * with `CommandLineToArgvW` rules and runs the program directly (its own
+   * PATHEXT / npm-shim resolution), so there is no PowerShell and no cmd.exe
+   * in the chain — the JSON stays one intact argument (the backend already
+   * quotes appended flags for those same rules). No effect off Windows, where
+   * the login-shell wrapping below is what loads the PATH the CLI needs.
+   */
+  agentPane?: boolean
+}
+
 /**
- * The argv that runs one command inside the user's shell and leaves the
- * shell open afterwards — how every CLI pane is started.
+ * The command that runs one CLI pane inside the user's shell and leaves it
+ * open afterwards — how every CLI pane is started.
  *
  * POSIX: `-l` so the login files load, plus `-i` for zsh because installers
  * append to `~/.zshrc`, which a plain login shell skips. Windows PowerShell
  * has neither flag: `-NoExit -Command` is the equivalent, and `-NoLogo`
  * keeps the banner out of the pane. cmd.exe's `/k` is its `-NoExit`. Any
  * other shell on Windows (Git's bash.exe, for one) takes the POSIX flags.
+ *
+ * Windows agent panes (see `ShellCommandOptions.agentPane`) are the exception:
+ * they return the plain command string so the backend runs the program
+ * directly, no PowerShell in the way.
  */
-export function shellCommandArgv(shell: string, command: string): string[] {
+export function shellCommandArgv(
+  shell: string,
+  command: string,
+  opts: ShellCommandOptions = {},
+): string | string[] {
   if (isWindows()) {
+    if (opts.agentPane) return command
     const name = shellBasename(shell)
     if (name === 'powershell.exe' || name === 'powershell' || name === 'pwsh.exe' || name === 'pwsh') {
       return [shell, '-NoLogo', '-NoExit', '-Command', command]

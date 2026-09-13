@@ -5383,7 +5383,9 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
       // zsh reads ~/.zshrc (where installers add PATH, e.g. Claude Code's
       // ~/.local/bin) only in interactive mode — plain -lc misses it; the
       // helper picks that or the PowerShell/cmd.exe equivalent per platform.
-      command: shellCommandArgv(userShell, command),
+      // A Windows agent pane skips the PowerShell wrapper entirely (agentPane):
+      // `-Command` would re-parse a `--mcp-config {…}` payload as PowerShell.
+      command: shellCommandArgv(userShell, command, { agentPane: opts.agentKey !== 'terminal' }),
       cwd: opts.workspacePath,
       agentKey: opts.agentKey,
       metadata: {
