@@ -20,13 +20,15 @@ from .git_askpass_helper import ASKPASS_FLAG, main as askpass_main
 if len(sys.argv) > 1 and sys.argv[1] == ASKPASS_FLAG:
     askpass_main(sys.argv[2] if len(sys.argv) > 2 else "")
 
+import os  # noqa: E402
 import socket  # noqa: E402
 
 import threading  # noqa: E402
+import time  # noqa: E402
 
 import uvicorn  # noqa: E402
 
-from . import __version__  # noqa: E402
+from . import __version__, osplat  # noqa: E402
 from .app import app as _fastapi_app  # noqa: E402
 from . import confirm_token, ws_auth  # noqa: E402
 from .applog import backend_port_file, setup_file_logging  # noqa: E402
@@ -70,6 +72,28 @@ def _watch_stdin_for_shutdown(server: "uvicorn.Server", stream=None) -> None:
                 return
     except Exception:  # noqa: BLE001 - a broken pipe must not take the server down
         return
+
+
+def _watch_parent_for_shutdown(
+    server: "uvicorn.Server", pid: int, *, interval_s: float = 2.0, is_alive=None
+) -> None:
+    """The POSIX half of "the backend dies with the app".
+
+    Same cooperative exit as a `shutdown` line on stdin: `should_exit` lets
+    uvicorn run the lifespan shutdown (PTY sweep, watcher teardown) instead of
+    leaving every CLI child behind. Polled, because POSIX has no signal for
+    "your parent is gone" that survives the PyInstaller bootloader and `uv run`
+    sitting between the app and this process.
+    """
+    alive = is_alive or osplat.process_tree.is_alive
+    while not server.should_exit:
+        if not alive(pid):
+            logging.getLogger("agent_team_backend.main").info(
+                "parent process %d is gone; shutting down", pid
+            )
+            server.should_exit = True
+            return
+        time.sleep(interval_s)
 
 
 def main() -> int:
@@ -159,6 +183,11 @@ def main() -> int:
     threading.Thread(
         target=_watch_stdin_for_shutdown, args=(server,), name="stdin-shutdown", daemon=True
     ).start()
+    parent = osplat.process_tree.parent_to_follow(os.environ)
+    if parent is not None:
+        threading.Thread(
+            target=_watch_parent_for_shutdown, args=(server, parent), name="parent-watch", daemon=True
+        ).start()
 
     log.info("listening on http://%s:%s", args.host, resolved_port)
     print(f"AGENT_TEAM_BACKEND_LISTEN host={args.host} port={resolved_port}", flush=True)

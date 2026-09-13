@@ -15,6 +15,7 @@ import shlex
 import signal
 import struct
 import subprocess
+from collections.abc import Mapping
 from typing import Callable
 
 # Guarded so the module imports on Windows: the ratchet test and the Windows
@@ -128,6 +129,17 @@ class PosixProcessTree:
     def is_orphan_parent(self, ppid: int, me: int) -> bool:
         # Reparented to init/launchd, or to this backend (observed on macOS).
         return ppid in (1, me)
+
+    def parent_to_follow(self, env: Mapping[str, str]) -> int | None:
+        # Not os.getppid(): the frozen backend's parent is PyInstaller's
+        # bootloader and the dev backend's is `uv run`, neither of which is the
+        # app. The app says which pid it is.
+        raw = env.get("AGENT_TEAM_PARENT_PID", "")
+        try:
+            pid = int(raw)
+        except ValueError:
+            return None
+        return pid if pid > 0 else None
 
     def kill(self, pid: int, *, force: bool) -> None:
         os.kill(pid, _signal_for(force))

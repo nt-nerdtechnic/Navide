@@ -332,6 +332,11 @@ export async function startBackend(
   // Python consumes only the exact-byte Host-approved catalog bound above;
   // bundled v1 plugins remain an explicit backend-owned compatibility path.
 
+  // Who to follow into exit: on POSIX the backend polls this pid and shuts
+  // down when the app is gone (a crash or SIGTERM never reaches the stdin
+  // `shutdown` line); Windows ignores it, the Job Object does that there.
+  env.AGENT_TEAM_PARENT_PID = String(process.pid)
+
   let proc: ChildProcess
   if (app.isPackaged) {
     // PyInstaller names the frozen backend after the spec, plus the platform's
