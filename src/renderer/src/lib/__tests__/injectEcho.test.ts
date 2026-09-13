@@ -199,6 +199,37 @@ describe('submitEvidence', () => {
     ).toBe('growth')
   })
 
+  // Claude Code mid-turn: the message is enqueued, drawn just above the
+  // composer, and the queue hint appears at the bottom. Our tail never leaves
+  // the screen, so 'tail-left' can never fire — the hint is the proof.
+  it('names queued when the tail stays but the queue hint appeared', () => {
+    expect(
+      submitEvidence({
+        tailWasOnScreen: true,
+        tail: 'runthetests',
+        screen: '│ > run the tests\n│\n  Press up to edit queued messages',
+        grownBy: 0,
+      }),
+    ).toBe('queued')
+  })
+
+  it('recognises the other wordings of the queue hint', () => {
+    for (const hint of [
+      'Press up to select a queued message to edit, or Enter to send them now',
+      'Press up to select a queued message, then Enter to edit it',
+    ]) {
+      expect(
+        submitEvidence({ tailWasOnScreen: true, tail: 'runthetests', screen: `> run the tests\n${hint}`, grownBy: 0 }),
+      ).toBe('queued')
+    }
+  })
+
+  it('still answers null when the tail stays and no queue hint is shown', () => {
+    expect(
+      submitEvidence({ tailWasOnScreen: true, tail: 'runthetests', screen: '> run the tests\n? for shortcuts', grownBy: 99 }),
+    ).toBeNull()
+  })
+
   it('agrees with submitLanded', () => {
     const cases = [
       { tailWasOnScreen: true, tail: 'abc', screen: 'gone', grownBy: 0 },
@@ -214,6 +245,11 @@ describe('injectionVerified', () => {
   it('is true only when both halves observed the payload itself', () => {
     expect(injectionVerified('tail', 'tail-left')).toBe(true)
     expect(injectionVerified('placeholder', 'tail-left')).toBe(true)
+  })
+
+  it('treats a queued submit as verified', () => {
+    expect(injectionVerified('tail', 'queued')).toBe(true)
+    expect(injectionVerified('growth', 'queued')).toBe(false)
   })
 
   it('is false when either half rests on growth alone', () => {

@@ -33,8 +33,16 @@ export function normalizeForMatch(s: string): string {
 export type EchoEvidence = 'tail' | 'placeholder' | 'growth'
 
 /** How we concluded Enter took. `tail-left` watched our text leave the
- *  composer; `growth` only saw the terminal react. */
-export type SubmitEvidence = 'tail-left' | 'growth'
+ *  composer; `queued` saw the CLI's own "message queued" hint appear; `growth`
+ *  only saw the terminal react. */
+export type SubmitEvidence = 'tail-left' | 'queued' | 'growth'
+
+/** Claude Code's footer hint once a mid-turn message is enqueued. Three
+ *  wordings ship ("Press up to edit queued messages", "Press up to select a
+ *  queued message to edit, …", "…, then Enter to edit it"); all share this
+ *  prefix. Matched against the normalized screen, so it is written without
+ *  spaces and survives wrapping and frame characters. */
+export const QUEUED_HINT_RE = /pressupto(?:edit|selecta)queuedmessage/i
 
 /** Whether a pair of evidences is strong enough to call the injection verified.
  *  Growth-only on either half means we wrote bytes and cannot say where they
@@ -157,7 +165,14 @@ export function submitEvidence(opts: {
   grownBy: number
 }): SubmitEvidence | null {
   if (opts.tailWasOnScreen && opts.tail) {
-    return normalizeForMatch(opts.screen).includes(opts.tail) ? null : 'tail-left'
+    const screen = normalizeForMatch(opts.screen)
+    if (!screen.includes(opts.tail)) return 'tail-left'
+    // Claude Code mid-turn: Enter enqueues the message and redraws it just
+    // above the composer, so our tail never leaves the screen and 'tail-left'
+    // cannot fire. Its queue hint is the positive signal instead. Without it
+    // every mid-turn delivery was reported as inject-failed after 3 Enters,
+    // the sender resent, and the recipient's queue held 3–4 copies.
+    return QUEUED_HINT_RE.test(screen) ? 'queued' : null
   }
   return opts.grownBy > 0 ? 'growth' : null
 }
