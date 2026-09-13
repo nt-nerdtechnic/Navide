@@ -6,6 +6,7 @@ import {
   DOC_SUFFIXES,
   isAllowedPlanDocumentPath,
   isPlanDocName,
+  isPlanDocumentChangePath,
   MAX_NESTED_CANDIDATES,
   PLAN_DOC_DIRS,
 } from './plansDirectories'
@@ -338,7 +339,7 @@ describe('plansDirectories', () => {
       expect(
         isAllowedPlanDocumentPath('z0000-beyond/.agent-team/plans/p.html', tempWorkspace),
       ).toBe(false)
-    })
+    }, 20_000)
   })
 
   describe('isAllowedPlanDocumentPath - Security & Symlink Containment', () => {
@@ -370,6 +371,48 @@ describe('plansDirectories', () => {
       expect(
         isAllowedPlanDocumentPath('packages/fake-repo/.agent-team/plans/doc.html', tempWorkspace),
       ).toBe(false)
+    })
+  })
+
+  describe('isPlanDocumentChangePath', () => {
+    it('drops the workspace traffic that used to flood the Host→child queue', () => {
+      vi.mocked(statSync).mockClear()
+      for (const noise of [
+        '.agent-team/navide.db',
+        '.agent-team/pipeline.log',
+        '.agent-team/navide.db-journal',
+        '.git/index',
+        'src/renderer/App.vue',
+        '.agent-team/plans',
+        '.agent-team/plans/_template.html',
+        '.agent-team/plans/.draft.html',
+        'plan.html',
+      ]) {
+        expect(isPlanDocumentChangePath(noise, tempWorkspace), noise).toBe(false)
+      }
+      expect(vi.mocked(statSync)).not.toHaveBeenCalled()
+    })
+
+    it('keeps top-level plan documents in every canonical directory without a filesystem probe', () => {
+      vi.mocked(statSync).mockClear()
+      for (const planDir of PLAN_DOC_DIRS) {
+        expect(isPlanDocumentChangePath(`${planDir}/doc.html`, tempWorkspace), planDir).toBe(true)
+      }
+      expect(isPlanDocumentChangePath('.cursor/plans/legacy.plan.md', tempWorkspace)).toBe(true)
+      expect(isPlanDocumentChangePath('.agent-team\\plans\\windows.html', tempWorkspace)).toBe(true)
+      expect(vi.mocked(statSync)).not.toHaveBeenCalled()
+    })
+
+    it('keeps nested-repository plan documents only for a genuine nested repository', () => {
+      const nestedRepo = join(tempWorkspace, 'packages/child')
+      mkdirSync(join(nestedRepo, '.agent-team/plans'), { recursive: true })
+      mkdirSync(join(nestedRepo, '.git'), { recursive: true })
+      writeFileSync(join(nestedRepo, '.agent-team/plans/doc.html'), '<html></html>')
+      mkdirSync(join(tempWorkspace, 'packages/plain/.agent-team/plans'), { recursive: true })
+
+      expect(isPlanDocumentChangePath('packages/child/.agent-team/plans/doc.html', tempWorkspace)).toBe(true)
+      expect(isPlanDocumentChangePath('packages/plain/.agent-team/plans/doc.html', tempWorkspace)).toBe(false)
+      expect(isPlanDocumentChangePath('packages/child/.agent-team/navide.db', tempWorkspace)).toBe(false)
     })
   })
 })

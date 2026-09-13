@@ -281,6 +281,40 @@ describe('Plans Host Bridge ports', () => {
     )).rejects.toMatchObject({ code: 'BACKEND_UNAVAILABLE' })
   })
 
+  it('forwards watcher events for plan documents only', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'navide-plans-bridge-watch-'))
+    const canonicalRoot = realpathSync(root)
+    mkdirSync(join(root, '.agent-team/plans'), { recursive: true })
+    const dispatcher = createLocalFilesystemDispatcher()
+    const controller = new AbortController()
+    const events: Array<{ event: string; payload: unknown }> = []
+    const bridgeContext = context(controller.signal, events, canonicalRoot, runtime, canonicalRoot)
+    const watcher = dispatcher.dispatch(request('filesystem', 'watch', { rel_path: '' }), bridgeContext)
+    const settle = (): Promise<void> => new Promise((resolvePromise) => setTimeout(resolvePromise, 300))
+    try {
+      await settle()
+      // The storm that took the child down: backend state files and logs next
+      // to the plans directory, plus ordinary source edits.
+      writeFileSync(join(root, '.agent-team/navide.db'), 'db', 'utf8')
+      writeFileSync(join(root, '.agent-team/pipeline.log'), 'log', 'utf8')
+      writeFileSync(join(root, 'notes.txt'), 'text', 'utf8')
+      await settle()
+      expect(events).toEqual([])
+
+      writeFileSync(join(root, '.agent-team/plans/doc.html'), '<html></html>', 'utf8')
+      await settle()
+      expect(events.length).toBeGreaterThan(0)
+      for (const { event, payload } of events) {
+        expect(event).toBe('filesystem.changed')
+        expect(payload).toMatchObject({ workspace_path: canonicalRoot, path: '.agent-team/plans/doc.html' })
+      }
+    } finally {
+      controller.abort()
+      await expect(watcher).resolves.toBeNull()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('does not overwrite an existing production rename destination', async () => {
     const root = mkdtempSync(join(tmpdir(), 'navide-plans-bridge-rename-'))
     const dispatcher = createLocalFilesystemDispatcher()

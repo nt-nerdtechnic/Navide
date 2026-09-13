@@ -831,6 +831,23 @@ describe('PlansApp', () => {
     expect(state.calls.filter(({ name }) => name === 'plans.list')).toHaveLength(2)
   })
 
+  it('collapses a burst of plans.changed events into one plans.list scan', async () => {
+    await mountPlans()
+    expect(state.calls.filter(({ name }) => name === 'plans.list')).toHaveLength(1)
+
+    // One saved document fans out into several watcher events; a file storm
+    // into hundreds. Each used to start its own full scan.
+    for (let index = 0; index < 5; index += 1) {
+      state.subscriptionListener?.({ workspace_path: '/workspace' })
+      await new Promise((r) => setTimeout(r, 20))
+    }
+    await flushPromises()
+    expect(state.calls.filter(({ name }) => name === 'plans.list')).toHaveLength(1)
+    await new Promise((r) => setTimeout(r, 250))
+    await flushPromises()
+    expect(state.calls.filter(({ name }) => name === 'plans.list')).toHaveLength(2)
+  })
+
   it('keeps in-memory fallback on initial empty preference read without calling setWorkspacePreference', async () => {
     state.preferences = {}
     const view = await mountPlans()

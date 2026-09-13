@@ -577,6 +577,92 @@ def test_lists_metadata_less_documents_and_promotes_markdown_without_corrupting_
     assert "---# README" not in stored[document_path]
 
 
+def _list_request(request_id: str) -> dict[str, Any]:
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": "navide/call",
+        "params": {"_meta": CLIENT_META, "name": "plans.list", "arguments": {}, "runtime": RUNTIME},
+    }
+
+
+def _serve_one_empty_scan(process: subprocess.Popen[bytes], leader_id: str) -> list[dict[str, Any]]:
+    """Answer one full plans.list scan on behalf of `leader_id`, collecting every
+    other frame (the responses) until the scan's last bridge call is served."""
+    others: list[dict[str, Any]] = []
+    served_root_listing = False
+    while not served_root_listing:
+        frame = _read(process)
+        if frame.get("method") != "navide/host/call":
+            others.append(frame)
+            continue
+        params = frame["params"]
+        assert params["origin"] == {"kind": "call", "requestId": leader_id}
+        if params["operation"] == "stat_path":
+            _reply_bridge(process, frame, {"exists": False})
+        elif params["operation"] == "list_dir":
+            assert params["arguments"] == {"rel_path": "", "mode": "discovery"}
+            _reply_bridge(process, frame, {"entries": []})
+            served_root_listing = True
+        else:
+            raise AssertionError(f"unexpected filesystem operation: {params['operation']}")
+    return others
+
+
+def test_overlapping_list_calls_share_one_scan(
+    backend_process: subprocess.Popen[bytes],
+) -> None:
+    # The first call becomes the scan leader; its first bridge call proves the
+    # scan is running before the followers arrive.
+    _send(backend_process, _list_request("list-leader"))
+    first = _read(backend_process)
+    assert first["method"] == "navide/host/call"
+    assert first["params"]["origin"] == {"kind": "call", "requestId": "list-leader"}
+    for follower in ("list-follower-1", "list-follower-2"):
+        _send(backend_process, _list_request(follower))
+    time.sleep(0.2)
+    _reply_bridge(backend_process, first, {"exists": False})
+
+    responses = _serve_one_empty_scan(backend_process, "list-leader")
+    deadline = time.monotonic() + 2
+    while len(responses) < 3:
+        assert time.monotonic() < deadline
+        frame = _read(backend_process, max(0.01, deadline - time.monotonic()))
+        # Every bridge call the child makes after the scan belongs to nobody:
+        # a follower running its own scan would show up here.
+        assert frame.get("method") != "navide/host/call", frame
+        responses.append(frame)
+    assert sorted(frame["id"] for frame in responses) == ["list-follower-1", "list-follower-2", "list-leader"]
+    assert all(frame["result"]["value"] == [] for frame in responses)
+
+
+def test_cancelled_leader_does_not_cancel_the_followers_list_call(
+    backend_process: subprocess.Popen[bytes],
+) -> None:
+    _send(backend_process, _list_request("list-leader"))
+    first = _read(backend_process)
+    assert first["params"]["origin"] == {"kind": "call", "requestId": "list-leader"}
+    _send(backend_process, _list_request("list-follower"))
+    time.sleep(0.2)
+    _send(
+        backend_process,
+        {
+            "jsonrpc": "2.0",
+            "method": "notifications/cancelled",
+            "params": {"requestId": first["id"], "reason": "timeout"},
+        },
+    )
+    leader_response = _read(backend_process)
+    assert leader_response["id"] == "list-leader"
+    assert leader_response["error"]["data"] == {"code": "USER_CANCELLED"}
+
+    # The follower takes the next flight instead of inheriting the cancellation.
+    responses = _serve_one_empty_scan(backend_process, "list-follower")
+    if not responses:
+        responses.append(_read(backend_process))
+    assert [(frame["id"], frame["result"]["value"]) for frame in responses] == [("list-follower", [])]
+
+
 def test_host_bridge_cancellation_settles_the_child_call(
     backend_process: subprocess.Popen[bytes],
 ) -> None:
