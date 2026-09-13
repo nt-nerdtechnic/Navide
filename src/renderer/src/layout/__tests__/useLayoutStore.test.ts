@@ -273,8 +273,8 @@ describe('moving views between slots', () => {
     const s = useLayoutStore()
     s.applyPreset('bottom-panel')
     expect(s.layout.value.slots.down.views).toEqual(['history', 'messages'])
-    expect(s.layout.value.slots.right.views).toEqual(['tokens', 'time', 'tasker', 'preview'])
-    expect(s.layout.value.slots.right.active).toBe('tokens')
+    expect(s.layout.value.slots.right.views).toEqual(['time', 'tokens', 'tasker', 'preview'])
+    expect(s.layout.value.slots.right.active).toBe('time')
     expect(s.slotOf('history')).toBe('down')
   })
 
