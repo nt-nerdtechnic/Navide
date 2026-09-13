@@ -8,6 +8,7 @@ import { buildWorkspaceGroups } from './lib/workspaceGroups'
 import { workspaceAliasKey } from './lib/workspaceAlias'
 import { buildPaneLineage } from './lib/paneLineage'
 import { ancestorTrail } from './lib/paneListView'
+import { subtreeSignals } from './lib/paneSubtreeStatus'
 import { closeAdvisoriesFor } from './lib/paneCloseAdvisories'
 import { interruptAdvisoriesFor } from './lib/paneInterruptAdvisories'
 import { panesOfActiveTab, panesOfViewedWorkspace } from './lib/paneVisibility'
@@ -15915,6 +15916,27 @@ function paneListTrail(ancestors: readonly string[]): string {
   return ancestorTrail(ancestors, (id) => paneNameById.value.get(id) ?? '')
 }
 
+/** Each parent card's "↳ n" subtree signal — the loudest status among the
+ *  panes it spawned and how many are in it. Read from paneViews, not the
+ *  lineage tree, because it is live status; see subtreeSignals for why it is
+ *  walked over all panes and kept out of the pane's own status. */
+const paneListSubtree = computed(() => subtreeSignals(paneViews.value))
+
+/** The subtree chip's state, colour and legend in one binding: a coloured
+ *  "↳ 2" with no tooltip is a number nobody can read. */
+function paneListSubtreeAttrs(id: string): Record<string, unknown> {
+  const sub = paneListSubtree.value.get(id)
+  if (!sub) return {}
+  return {
+    'data-status': sub.state,
+    style: statusBadgeStyle(sub.state),
+    title: i18n.global.t('pane.terminal.subtree-tooltip', {
+      count: sub.count,
+      status: paneStatusLabelText(sub.state),
+    }),
+  }
+}
+
 /** How far a nested card sits in from its parent's edge. Deliberately small,
  *  and capped: these lists are narrow, and past three levels the indent would
  *  cost more width than the ancestry is worth showing. */
@@ -16961,7 +16983,16 @@ function paneIsCommander(p: ActivePane): boolean {
               v-if="p.loopActive"
               class="meeting-loop"
               :class="{ waiting: p.loopWaitUntil != null }"
-            >∞ Loop</span>
+              :title="$t('pane.terminal.loop-tag-tooltip')"
+            >∞</span>
+            <!-- What the family is doing, on the parent: the card's own badge
+                 says only what its terminal is doing, and a closed family's
+                 running or blocked child was otherwise invisible. -->
+            <span
+              v-if="paneListSubtree.has(p.id)"
+              class="meeting-subtree"
+              v-bind="paneListSubtreeAttrs(p.id)"
+            >↳ {{ paneListSubtree.get(p.id)?.count }}</span>
             <span class="meeting-badge" :data-status="p.status" :style="statusBadgeStyle(p.status)">{{ paneStatusLabelText(p.status) }}</span>
           </div>
           <div v-if="auxiliaryListPanes.length === 0" class="meeting-empty">
@@ -17028,7 +17059,8 @@ function paneIsCommander(p: ActivePane): boolean {
               v-if="p.loopActive"
               class="spotlight-thumb-loop"
               :class="{ waiting: p.loopWaitUntil != null }"
-            >∞ Loop</span>
+              :title="$t('pane.terminal.loop-tag-tooltip')"
+            >∞</span>
             <span class="spotlight-thumb-badge" :data-status="p.status" :style="statusBadgeStyle(p.status)">{{ paneStatusLabelText(p.status) }}</span>
             <!-- The compact form of the family strip: dots and a count, no
                  words. A thumb has room for one more chip, not for a row. -->
@@ -17151,7 +17183,16 @@ function paneIsCommander(p: ActivePane): boolean {
               v-if="p.loopActive"
               class="meeting-loop"
               :class="{ waiting: p.loopWaitUntil != null }"
-            >∞ Loop</span>
+              :title="$t('pane.terminal.loop-tag-tooltip')"
+            >∞</span>
+            <!-- What the family is doing, on the parent: the card's own badge
+                 says only what its terminal is doing, and a closed family's
+                 running or blocked child was otherwise invisible. -->
+            <span
+              v-if="paneListSubtree.has(p.id)"
+              class="meeting-subtree"
+              v-bind="paneListSubtreeAttrs(p.id)"
+            >↳ {{ paneListSubtree.get(p.id)?.count }}</span>
             <span class="meeting-badge" :data-status="p.status" :style="statusBadgeStyle(p.status)">{{ paneStatusLabelText(p.status) }}</span>
           </div>
           <div v-if="auxiliaryListPanes.length === 0" class="meeting-empty">
@@ -18687,6 +18728,22 @@ function paneIsCommander(p: ActivePane): boolean {
 .meeting-loop.waiting {
   opacity: 0.55;
 }
+/* The parent card's subtree chip, "↳ n", painted in the loudest status among
+   its spawned descendants (see paneListSubtree). Only the states that mean
+   something is still moving or stuck get a rule — idle and below never render
+   the chip. Same shape and --status-badge-* hooks as .meeting-badge so a
+   recoloured status in Settings moves this with it. */
+.meeting-subtree {
+  font-size: var(--font-3xs);
+  padding: 2px 6px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.meeting-subtree[data-status="running"]  { background: var(--status-badge-bg, var(--success-subtle)); color: var(--status-badge-fg, var(--success-fg)); border: 1px solid var(--status-badge-fg, var(--success-emphasis)); }
+.meeting-subtree[data-status="starting"] { background: var(--status-badge-bg, var(--status-starting-subtle)); color: var(--status-badge-fg, var(--status-starting-fg)); border: 1px solid var(--status-badge-fg, var(--status-starting-emphasis)); }
+.meeting-subtree[data-status="error"]    { background: var(--status-badge-bg, var(--danger-subtle)); color: var(--status-badge-fg, var(--danger-bright)); border: 1px solid var(--status-badge-fg, var(--danger-emphasis)); }
+.meeting-subtree[data-status="awaiting"] { background: var(--status-badge-bg, color-mix(in srgb, var(--warning-fg) 20%, transparent)); color: var(--status-badge-fg, var(--warning-fg)); border: 1px solid var(--status-badge-fg, color-mix(in srgb, var(--warning-fg) 45%, transparent)); }
 .meeting-empty {
   color: var(--text-disabled);
   font-size: var(--font-2xs);
