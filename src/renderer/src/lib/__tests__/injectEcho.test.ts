@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  echoEvidence, echoLanded, echoTimeoutFor, growthNeededFor, injectionVerified,
-  normalizeForMatch, submitEvidence, submitLanded, TAIL_MATCH_LEN
+  composerHoldsPayload, echoEvidence, echoLanded, echoTimeoutFor, growthNeededFor, injectionVerified,
+  normalizeForMatch, submitBaseline, submitEvidence, submitLanded, TAIL_MATCH_LEN
 } from '../injectEcho'
 
 describe('normalizeForMatch', () => {
@@ -224,6 +224,46 @@ describe('submitEvidence', () => {
     }
   })
 
+  // The hint alone is ambiguous when a message was ALREADY queued before this
+  // Enter: it stays on screen whether or not this Enter took. The caller
+  // snapshots the composer before pressing Enter (submitBaseline); with that
+  // in hand 'queued' needs the hint to be NEW, or our tail to have been drawn
+  // one more time (the queued copy above the composer).
+  const QUEUED_SCREEN = '│ > run the tests\n  Press up to edit queued messages'
+
+  it('refuses queued when the hint predates this Enter and the tail count did not grow', () => {
+    const buffer = 'earlier stuff\n> run the tests\nPress up to edit queued messages'
+    const baseline = submitBaseline({ screen: QUEUED_SCREEN, buffer, tail: 'runthetests' })
+    expect(baseline).toEqual({ queuedHint: true, tailCount: 1 })
+    expect(
+      submitEvidence({
+        tailWasOnScreen: true, tail: 'runthetests', screen: QUEUED_SCREEN, grownBy: 12, buffer, baseline,
+      }),
+    ).toBeNull()
+  })
+
+  it('accepts queued over a pre-existing hint once our tail was drawn one more time', () => {
+    const before = 'first: run the tests\nPress up to edit queued messages'
+    const baseline = submitBaseline({ screen: QUEUED_SCREEN, buffer: before, tail: 'runthetests' })
+    const after = before + '\n> run the tests\nPress up to edit queued messages'
+    expect(
+      submitEvidence({
+        tailWasOnScreen: true, tail: 'runthetests', screen: QUEUED_SCREEN, grownBy: 40, buffer: after, baseline,
+      }),
+    ).toBe('queued')
+  })
+
+  it('accepts queued when the hint was absent before this Enter', () => {
+    const baseline = submitBaseline({ screen: '│ > run the tests', buffer: '> run the tests', tail: 'runthetests' })
+    expect(baseline).toEqual({ queuedHint: false, tailCount: 1 })
+    expect(
+      submitEvidence({
+        tailWasOnScreen: true, tail: 'runthetests', screen: QUEUED_SCREEN, grownBy: 0,
+        buffer: '> run the tests\nPress up to edit queued messages', baseline,
+      }),
+    ).toBe('queued')
+  })
+
   it('still answers null when the tail stays and no queue hint is shown', () => {
     expect(
       submitEvidence({ tailWasOnScreen: true, tail: 'runthetests', screen: '> run the tests\n? for shortcuts', grownBy: 99 }),
@@ -264,5 +304,30 @@ describe('injectionVerified', () => {
   it('is false when either half found nothing', () => {
     expect(injectionVerified(null, 'tail-left')).toBe(false)
     expect(injectionVerified('tail', null)).toBe(false)
+  })
+})
+
+describe('composerHoldsPayload', () => {
+  // A spawn kickoff judged 'unverified' is only retyped when the composer is
+  // NOT holding the first copy — otherwise the second copy lands on top of it.
+  it('holds when the normalized tail of our text is on screen', () => {
+    expect(composerHoldsPayload('│ > run the tests\n│', 'runthetests')).toBe(true)
+  })
+
+  it('holds when the TUI collapsed the paste into its placeholder', () => {
+    expect(composerHoldsPayload('> [Pasted text #1 +40 lines]', 'runthetests')).toBe(true)
+  })
+
+  it('reads a vendor\'s empty-composer hint as blank', () => {
+    // Claude Code's idle composer shows a suggestion, not our text.
+    expect(composerHoldsPayload('> Try "fix lint errors"\n? for shortcuts', 'runthetests')).toBe(false)
+  })
+
+  it('reads an empty screen as blank', () => {
+    expect(composerHoldsPayload('', 'runthetests')).toBe(false)
+  })
+
+  it('never holds on an empty tail', () => {
+    expect(composerHoldsPayload('anything at all', '')).toBe(false)
   })
 })

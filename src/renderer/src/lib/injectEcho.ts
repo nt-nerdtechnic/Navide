@@ -44,6 +44,34 @@ export type SubmitEvidence = 'tail-left' | 'queued' | 'growth'
  *  spaces and survives wrapping and frame characters. */
 export const QUEUED_HINT_RE = /pressupto(?:edit|selecta)queuedmessage/i
 
+/** What the composer looked like BEFORE Enter, for the `queued` verdict. The
+ *  queue hint alone is ambiguous once a message is already queued: it stays on
+ *  screen whether or not this Enter took. So the caller samples it, plus how
+ *  many times our tail is already in the buffer — a successful enqueue redraws
+ *  the message above the composer, adding one more copy. */
+export interface SubmitBaseline {
+  queuedHint: boolean
+  tailCount: number
+}
+
+/** Occurrences of the normalized tail in the normalized buffer. */
+function countTail(buffer: string, tail: string): number {
+  if (!tail) return 0
+  const hay = normalizeForMatch(buffer)
+  let n = 0
+  for (let i = hay.indexOf(tail); i !== -1; i = hay.indexOf(tail, i + tail.length)) n++
+  return n
+}
+
+/** Sample the composer before pressing Enter. Same `screen` / `tail` the
+ *  submitEvidence polls will use, `buffer` the pane's clean scrollback. */
+export function submitBaseline(opts: { screen: string; buffer: string; tail: string }): SubmitBaseline {
+  return {
+    queuedHint: QUEUED_HINT_RE.test(normalizeForMatch(opts.screen)),
+    tailCount: countTail(opts.buffer, opts.tail),
+  }
+}
+
 /** Whether a pair of evidences is strong enough to call the injection verified.
  *  Growth-only on either half means we wrote bytes and cannot say where they
  *  went — an honest "unverified", not a success and not a failure. */
@@ -123,6 +151,20 @@ export function echoEvidence(
     : null
 }
 
+/** Is the composer holding OUR payload right now — either its normalized
+ *  `tail` verbatim, or the collapsed-paste summary a TUI draws in its place?
+ *
+ *  Asked before a spawn kickoff judged 'unverified' is typed a second time:
+ *  growth-only evidence cannot say whether the first copy landed, and typing
+ *  another on top of it would submit both as one prompt. A vendor's own
+ *  empty-composer hint ("Try \"fix lint errors\"") matches neither signal, so
+ *  it reads as blank — which it is, as far as our text goes. `screen` is the
+ *  rendered bottom of the visible screen (useTerminal.readScreenTail). */
+export function composerHoldsPayload(screen: string, tail: string): boolean {
+  if (!tail) return false
+  return normalizeForMatch(screen).includes(tail) || PASTE_PLACEHOLDER_RE.test(screen)
+}
+
 /** Lines at the bottom of the visible screen that hold the input box. Small
  *  on purpose: a TUI redraws the submitted message just ABOVE the composer, so
  *  a generous window keeps matching our tail after a successful submit. */
@@ -163,6 +205,11 @@ export function submitEvidence(opts: {
   tail: string
   screen: string
   grownBy: number
+  /** Clean scrollback now; only read when `baseline` is given. */
+  buffer?: string
+  /** From submitBaseline(), sampled before Enter. Without it the hint alone
+   *  decides — the caller has not been wired for the snapshot yet. */
+  baseline?: SubmitBaseline
 }): SubmitEvidence | null {
   if (opts.tailWasOnScreen && opts.tail) {
     const screen = normalizeForMatch(opts.screen)
@@ -172,7 +219,14 @@ export function submitEvidence(opts: {
     // cannot fire. Its queue hint is the positive signal instead. Without it
     // every mid-turn delivery was reported as inject-failed after 3 Enters,
     // the sender resent, and the recipient's queue held 3–4 copies.
-    return QUEUED_HINT_RE.test(screen) ? 'queued' : null
+    if (!QUEUED_HINT_RE.test(screen)) return null
+    // A hint that was already up before this Enter proves nothing about THIS
+    // message: only a hint that is new, or one more copy of our tail in the
+    // buffer (the enqueued message redrawn above the composer), does.
+    if (opts.baseline && opts.baseline.queuedHint) {
+      return countTail(opts.buffer ?? '', opts.tail) === opts.baseline.tailCount + 1 ? 'queued' : null
+    }
+    return 'queued'
   }
   return opts.grownBy > 0 ? 'growth' : null
 }

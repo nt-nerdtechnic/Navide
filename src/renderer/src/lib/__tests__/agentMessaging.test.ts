@@ -10,6 +10,8 @@ import {
   TURN_SILENCE_MS,
   TURN_STALE_MS,
   VENDORS_WITHOUT_TURN_END,
+  VENDORS_WITHOUT_USER_TEXT,
+  turnEndConsumesDeliveries,
   parseMessages,
   parseSpawns,
   renderSpawnKickoff,
@@ -586,6 +588,30 @@ describe('isTurnInFlight', () => {
     expect([...VENDORS_WITHOUT_TURN_END].sort()).toEqual([
       'grok', 'kimi', 'pi', 'qwen',
     ])
+  })
+})
+
+describe('turnEndConsumesDeliveries', () => {
+  // A delivered-pending message is normally released by the recipient's own
+  // user record (the envelope, one per message). Only a vendor whose reader
+  // never surfaces user text falls back to "the next turn end consumed
+  // everything" — and that must never be claude: it ends the current turn
+  // BEFORE dequeuing, so its turn_complete arrives with the message still
+  // queued. A pane that has only ever run slash commands or image prompts
+  // gets text="" on every user record, which is why this is a static set and
+  // not something learned from the events.
+  it('is empty today — every shipped reader carries user text', () => {
+    expect([...VENDORS_WITHOUT_USER_TEXT]).toEqual([])
+  })
+
+  it('never lets a turn end clear claude deliveries', () => {
+    expect(turnEndConsumesDeliveries('claude')).toBe(false)
+    expect(turnEndConsumesDeliveries('codex')).toBe(false)
+  })
+
+  it('does for a vendor listed as having no user text', () => {
+    expect(turnEndConsumesDeliveries('claude', new Set(['claude']))).toBe(true)
+    expect(turnEndConsumesDeliveries('codex', new Set(['claude']))).toBe(false)
   })
 })
 

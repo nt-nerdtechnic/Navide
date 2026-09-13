@@ -437,6 +437,12 @@ const delivering = new Set<string>()
 const envelopes = new Map<number, string>()
 /** Enqueue timestamps per `${from}→${to}` pair, for rate limiting. */
 const pairSends = new Map<string, number[]>()
+/** msgKeys this window has already accepted, newest last. The backend
+ *  broadcasts each routed message exactly once, but a window holding two
+ *  sockets (a connect() race) hears every broadcast twice — and each copy
+ *  would otherwise become its own queued row, injected back to back. */
+const acceptedMsgKeys = new Set<string>()
+const ACCEPTED_MSG_KEYS_CAP = 500
 /** Outbound cross-workspace messages awaiting a delivery report, by msgKey. */
 const remoteOutbound = new Map<string, { id: number; sentAt: number }>()
 /** Inbound cross-workspace messages to report back on, message id → msgKey. */
@@ -979,6 +985,14 @@ function acceptRemoteMessage(args: {
   if (!deps) return false
   const localName = nameByPane.get(args.targetPaneId)
   if (!localName) return false
+  // Checked after the ownership test so a window that does not own the target
+  // never records the key — the owning window still has to accept it.
+  if (acceptedMsgKeys.has(args.msgKey)) return false
+  acceptedMsgKeys.add(args.msgKey)
+  if (acceptedMsgKeys.size > ACCEPTED_MSG_KEYS_CAP) {
+    const oldest = acceptedMsgKeys.values().next().value
+    if (oldest !== undefined) acceptedMsgKeys.delete(oldest)
+  }
 
   if (args.rateLimit) {
     const now = deps.now()
@@ -1796,6 +1810,7 @@ export function _resetMessagingForTest(): void {
   delivering.clear()
   envelopes.clear()
   pairSends.clear()
+  acceptedMsgKeys.clear()
   remoteOutbound.clear()
   remoteInbound.clear()
   correlations.clear()
