@@ -339,6 +339,114 @@ describe('useTerminal — RUNNING badge vs self-triggered repaints', () => {
     scope.stop()
   })
 
+  // ── DELIVERED-PENDING: a message Navide sent in, not yet consumed ────────
+  // Claude Code enqueues a mid-turn message and keeps working on the current
+  // turn; a long tool call paints only a spinner (stripped as TUI noise), so
+  // the PTY heuristic settles to idle while a message of ours is still sitting
+  // in its queue. App.vue raises this after a verified delivery and releases
+  // it when the recipient's transcript shows the envelope as a user record
+  // (or, for readers without user text, at the next turn end).
+
+  it('shows RUNNING while a delivered message is still unconsumed', async () => {
+    const { result, mock, scope } = await spawnedFake()
+    await chunkThenWait(mock, 0, 100)
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(result.displayStatus.value).toBe('idle')
+    result.markDeliveredPending()
+    expect(result.displayStatus.value).toBe('running')
+    scope.stop()
+  })
+
+  it('outranks an authoritative turn end — claude ends the turn BEFORE dequeuing', async () => {
+    const { result, mock, scope } = await spawnedFake()
+    await chunkThenWait(mock, 0, 100)
+    result.markDeliveredPending()
+    result.markTurnComplete()
+    expect(result.displayStatus.value).toBe('running')
+    scope.stop()
+  })
+
+  it('returns to the PTY verdict once every delivery is consumed', async () => {
+    const { result, mock, scope } = await spawnedFake()
+    await chunkThenWait(mock, 0, 100)
+    result.markTurnComplete()
+    expect(result.displayStatus.value).toBe('idle')
+    result.markDeliveredPending()
+    result.markDeliveredPending()
+    expect(result.displayStatus.value).toBe('running')
+    result.clearDeliveredPending()
+    expect(result.displayStatus.value).toBe('running')
+    result.clearDeliveredPending()
+    expect(result.displayStatus.value).toBe('idle')
+    scope.stop()
+  })
+
+  it('clears every outstanding delivery at once when asked to', async () => {
+    const { result, mock, scope } = await spawnedFake()
+    await chunkThenWait(mock, 0, 100)
+    result.markTurnComplete()
+    result.markDeliveredPending()
+    result.markDeliveredPending()
+    result.clearDeliveredPending(true)
+    expect(result.displayStatus.value).toBe('idle')
+    scope.stop()
+  })
+
+  it('blows the fuse after 120s so a lost consume signal cannot park the badge', async () => {
+    const { result, mock, scope } = await spawnedFake()
+    await chunkThenWait(mock, 0, 100)
+    result.markTurnComplete()
+    result.markDeliveredPending()
+    await vi.advanceTimersByTimeAsync(119_000)
+    expect(result.displayStatus.value).toBe('running')
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(result.displayStatus.value).toBe('idle')
+    scope.stop()
+  })
+
+  it('does not let a stale delivery linger past the fuse once a new one lands', async () => {
+    // Left alone, a count that survived the fuse would need TWO consume
+    // signals to drain after the next delivery, holding RUNNING for a message
+    // that was consumed long ago.
+    const { result, mock, scope } = await spawnedFake()
+    await chunkThenWait(mock, 0, 100)
+    result.markTurnComplete()
+    result.markDeliveredPending()
+    await vi.advanceTimersByTimeAsync(130_000)
+    expect(result.displayStatus.value).toBe('idle')
+    result.markDeliveredPending()
+    expect(result.displayStatus.value).toBe('running')
+    result.clearDeliveredPending()
+    expect(result.displayStatus.value).toBe('idle')
+    scope.stop()
+  })
+
+  it('yields to AWAITING — a parked pane cannot consume anything', async () => {
+    const { result, mock, scope } = await spawnedFake()
+    await chunkThenWait(mock, 0, 100)
+    result.markDeliveredPending()
+    result.markNeedsInput()
+    expect(result.displayStatus.value).toBe('awaiting')
+    scope.stop()
+  })
+
+  it('does not carry a pending delivery across a respawn', async () => {
+    const { result, mock, scope } = await spawnedFake()
+    await chunkThenWait(mock, 0, 100)
+    result.markTurnComplete()
+    result.markDeliveredPending()
+    expect(result.displayStatus.value).toBe('running')
+    result.status.value = 'exited'
+    mock.setResponse('terminal.create', { terminal_session_id: 'sess-2', pid: 43 })
+    const respawning = result.spawn({ command: 'bash', cwd: '/tmp', skipReattach: true })
+    await vi.advanceTimersByTimeAsync(200)
+    await respawning
+    await chunkThenWait(mock, 1, 100)
+    result.markTurnComplete()
+    expect(result.displayStatus.value).toBe('idle')
+    scope.stop()
+  })
+
   it('reports the permission kind when both waits are raised at once', async () => {
     // The badge is the same either way, but awaitingKind feeds the messaging
     // gate: a permission prompt blocks a tool call the agent already committed

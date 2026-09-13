@@ -1414,6 +1414,20 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
   // finished turn on the PTY. Same settle semantics as awaiting: clean output
   // past the window means the user answered and the CLI moved on.
   const questionAt = ref<number>(0)
+  // Messages Navide itself delivered into this pane that the CLI has not yet
+  // picked up, fed in by App.vue. A CLI that queues mid-turn input (Claude
+  // Code) keeps working on the current turn — often painting only a spinner,
+  // which is stripped as TUI noise — so the PTY heuristic settles to idle
+  // while our message is still sitting in its queue. A count, not a flag: each
+  // envelope the recipient's transcript shows consumed releases one, so two
+  // deliveries need two consumes. The timestamp is the fuse's clock, taken at
+  // the LATEST delivery — see displayStatus for why the fuse exists at all.
+  const deliveredPendingCount = ref<number>(0)
+  const deliveredPendingAt = ref<number>(0)
+  // Same reasoning as TURN_STALE_MS in lib/agentMessaging.ts: the consume
+  // signal is trustworthy but a single miss (a reader dropping a record, a
+  // turn aborted with ESC) must not park the badge on RUNNING forever.
+  const DELIVERED_PENDING_FUSE_MS = 120_000
   // Tick so displayStatus re-evaluates after output goes quiet.
   const nowTick = ref<number>(Date.now())
   const isOnScreen = (): boolean => opts?.onScreen?.() ?? true
@@ -1519,6 +1533,20 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
       questionAt.value > 0 &&
       lastCleanBurstAt.value < questionAt.value + AWAITING_SETTLE_MS
     ) return 'awaiting'
+    // A message we delivered that the CLI has not consumed yet means it still
+    // has work queued, whatever the PTY says. Below both AWAITING paths on
+    // purpose: a pane parked on a prompt or a question cannot consume anything
+    // until the user acts, and hiding that behind RUNNING would take the one
+    // badge that tells them to. Above the authoritative turn end because
+    // Claude Code ends the CURRENT turn before it dequeues — that turn_complete
+    // is exactly the moment this must keep reporting RUNNING. The fuse is not
+    // a detection window: a consume signal that never arrives would otherwise
+    // hold RUNNING indefinitely (GitHub #21 parked a pane 8.5h on one lost
+    // signal), so past it the delivery is deemed consumed.
+    if (
+      deliveredPendingCount.value > 0 &&
+      nowTick.value - deliveredPendingAt.value <= DELIVERED_PENDING_FUSE_MS
+    ) return 'running'
     if (turnCompleteAt.value > lastCleanBurstAt.value) return 'idle'
     if (nowTick.value - lastCleanBurstAt.value > IDLE_CONFIRM_MS) return 'idle'
     return runningLatched.value ? 'running' : 'idle'
@@ -1669,6 +1697,27 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
    *  question, so a stale flag can't hold the badge past the answer. */
   function clearQuestion(): void {
     questionAt.value = 0
+  }
+
+  /** Navide delivered a message into this pane and the CLI accepted it (Enter
+   *  verified). Called from App.vue's deliverAgentMessage. A count that already
+   *  outlived the fuse is stale by definition — its consume signal was lost —
+   *  so it is dropped rather than carried into the new delivery, or the next
+   *  consume would leave a ghost holding RUNNING for a message long gone. */
+  function markDeliveredPending(): void {
+    const now = Date.now()
+    if (deliveredPendingCount.value > 0 && now - deliveredPendingAt.value > DELIVERED_PENDING_FUSE_MS) {
+      deliveredPendingCount.value = 0
+    }
+    deliveredPendingCount.value += 1
+    deliveredPendingAt.value = now
+  }
+
+  /** The CLI picked a delivered message up. One per envelope the recipient's
+   *  transcript shows as a user record; `all` for readers that carry no user
+   *  text, where the next turn end is the only consume signal there is. */
+  function clearDeliveredPending(all = false): void {
+    deliveredPendingCount.value = all ? 0 : Math.max(0, deliveredPendingCount.value - 1)
   }
 
   function markBufferPosition(): number {
@@ -4184,6 +4233,7 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
     // no longer exists.
     awaitingInputAt.value = 0
     questionAt.value = 0
+    deliveredPendingCount.value = 0
     error.value = ''
     stallReason.value = null  // a retry must not inherit the last attempt's exit
     status.value = 'starting'
@@ -4573,6 +4623,8 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
     clearNeedsInput,
     markQuestion,
     clearQuestion,
+    markDeliveredPending,
+    clearDeliveredPending,
     markBufferPosition,
     recleanBuffer,
     flushPendingClean,
