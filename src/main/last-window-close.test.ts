@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { normalizePlatformId, setPlatformId, type PlatformId } from '../shared/osplat'
+import { platformId, setPlatformId, type PlatformId } from '../shared/osplat'
 import { guardLastWindowClose, lastWindowCloseNeedsPrompt, type LastWindowCloseDeps } from './last-window-close'
+
+const BASELINE = platformId()
 
 const base = { mac: false, confirmEnabled: true, quitConfirmed: false, promptOpen: false, liveWindows: 1 }
 
@@ -33,7 +35,7 @@ describe('lastWindowCloseNeedsPrompt', () => {
 // The regression this pins: on Ubuntu, close the last window → "Quit?" →
 // Cancel → the window was already gone and the app kept running headless.
 describe('guardLastWindowClose', () => {
-  afterEach(() => { setPlatformId(normalizePlatformId(process.platform)) })
+  afterEach(() => { setPlatformId(BASELINE) })
 
   function deps(overrides: Partial<Omit<LastWindowCloseDeps, 'quit'>> = {}): LastWindowCloseDeps & { quit: ReturnType<typeof vi.fn> } {
     return {
