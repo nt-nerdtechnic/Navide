@@ -18,7 +18,7 @@ degrades to "this panel shows nothing" instead of taking down the request.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Callable, NamedTuple, Protocol
 
@@ -398,6 +398,21 @@ class ProcessTree(Protocol):
 
     def is_orphan_parent(self, ppid: int, me: int) -> bool:
         """Whether a `snapshot()` ppid means the real parent is gone (init or `me` on POSIX, 0 on Windows)."""
+        ...
+
+    def parent_to_follow(self, env: Mapping[str, str]) -> int | None:
+        """The pid whose death should end this backend, or None when the OS does that itself.
+
+        The app names itself in `AGENT_TEAM_PARENT_PID` when it spawns the
+        backend. On POSIX nothing ties a child's life to its parent's -- a
+        crashed or SIGTERMed Electron leaves the backend running, reparented,
+        still holding the port file for the next launch to fight over -- so
+        the backend polls this pid and shuts down when it is gone. Windows
+        starts the backend inside a Job Object with KILL_ON_JOB_CLOSE, which
+        already takes it down with the app, so it returns None and no thread
+        is started. Also None when the variable is absent: a backend nobody
+        spawned from the app (tests, a developer's terminal) follows nothing.
+        """
         ...
 
     def kill(self, pid: int, *, force: bool) -> None:

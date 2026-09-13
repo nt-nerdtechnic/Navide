@@ -42,7 +42,7 @@ import subprocess
 import threading
 import time
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Callable
 
@@ -396,6 +396,11 @@ class WindowsProcessTree:
         # No reparenting here: `snapshot` writes 0 for a parent that is gone
         # (see `_stale_parent`), so 0 is what an orphan looks like.
         return ppid in (0, me)
+
+    def parent_to_follow(self, env: Mapping[str, str]) -> int | None:
+        # The Job Object the app puts this backend in (KILL_ON_JOB_CLOSE) ends
+        # it with the app; nothing to poll.
+        return None
 
     def kill(self, pid: int, *, force: bool) -> None:
         # Both `force` values are TerminateProcess: Windows has no SIGTERM.
