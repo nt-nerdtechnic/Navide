@@ -307,6 +307,10 @@ describe('Plans Host Bridge ports', () => {
       for (const { event, payload } of events) {
         expect(event).toBe('filesystem.changed')
         expect(payload).toMatchObject({ workspace_path: canonicalRoot, path: '.agent-team/plans/doc.html' })
+        // Vacuous on POSIX and the whole point on Windows, where fs.watch
+        // reports the host separator: this wire is posix, and the child
+        // rejects a workspace-relative path containing a backslash.
+        expect(String((payload as { path: string }).path)).not.toContain('\\')
       }
     } finally {
       controller.abort()
