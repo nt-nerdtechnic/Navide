@@ -146,7 +146,8 @@
         "AppImage",
         "deb"
       ],
-      "icon": "resources/icon.png",
+      "executableName": "navide",
+      "icon": "build/icons",
       "category": "Development",
       "maintainer": "Navide Team <nt.fitproject@gmail.com>",
       "synopsis": "AI-native engineering environment for directing multiple coding agents",
@@ -158,6 +159,9 @@
           "to": "bin/agent_team_backend"
         }
       ]
+    },
+    "deb": {
+      "packageName": "navide"
     }
   },
   "devDependencies": {
