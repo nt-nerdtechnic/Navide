@@ -396,6 +396,8 @@
       "question-status-tooltip": "The agent asked you something and is waiting for the answer — nothing moves until you reply",
       "rename-title-tooltip": "Double-click to rename this pane",
       "auto-named-tooltip": "Named automatically from this session's first instruction — rename it and it stays yours",
+      "loop-tag-tooltip": "Loop is running on this pane",
+      "subtree-tooltip": "{count} spawned pane(s) {status} under this one",
       "loop-tooltip": "Loop — send the configured loop prompt to this pane",
       "loop-badge-tooltip": "Loop prompt was sent to this pane — click to turn the loop off",
       "loop-waiting-tooltip": "Loop paused — session limit hit; auto-resume at {time}. Click to resume now",

@@ -396,6 +396,8 @@
       "question-status-tooltip": "Agent 問了你一個問題，正在等你選，在你回應前不會有任何進展",
       "rename-title-tooltip": "雙擊可重新命名此 pane",
       "auto-named-tooltip": "此名稱由系統依這個 session 的第一句指令自動產生 — 只要你改過名，就不會再被自動命名",
+      "loop-tag-tooltip": "此 pane 正在執行 Loop",
+      "subtree-tooltip": "底下有 {count} 個派生 pane 處於 {status}",
       "loop-tooltip": "Loop — 將設定的 Loop 提示詞送入此 pane",
       "loop-badge-tooltip": "已對此 pane 送出 Loop 提示詞 — 點擊標籤可關閉 Loop",
       "loop-waiting-tooltip": "Loop 暫停 — 已達工作階段上限；將於 {time} 自動續跑，點擊標籤可立即續跑",
