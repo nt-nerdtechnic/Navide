@@ -53,7 +53,10 @@ describe('ControlPane – ∞ Loop tag on sidebar pane rows', () => {
     const items = wrapper.findAll('.agent-item')
     expect(items).toHaveLength(3)
     expect(items[0].find('.loop-tag').exists()).toBe(true)
-    expect(items[0].find('.loop-tag').text()).toBe('∞ Loop')
+    // Icon only — the word was dropped to give the pane name back its width;
+    // the tooltip carries the legend instead.
+    expect(items[0].find('.loop-tag').text()).toBe('∞')
+    expect(items[0].find('.loop-tag').attributes('title')).toBe('pane.terminal.loop-tag-tooltip')
     expect(items[1].find('.loop-tag').exists()).toBe(false)
     expect(items[2].find('.loop-tag').exists()).toBe(false)
     // The rest of the row is untouched: status dot and vendor·role sub-label stay.
