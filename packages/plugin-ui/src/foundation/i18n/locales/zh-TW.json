@@ -430,7 +430,8 @@
         "hint": "把游標移到技能上，這裡會顯示它實際會送出的內容。",
         "max-turns": "跑滿 {n} 輪後停止",
         "unlimited": "無輪次上限",
-        "is-default": "★ 預設技能"
+        "is-default": "★ 預設技能",
+        "send-once": "單次送出"
       }
     },
     "prep": {
@@ -1250,7 +1251,7 @@
     },
     "prompts": {
       "title": "Prompt 技能",
-      "intro": "CLI pane 的 ∞ 按鈕可施放的整段指令。一個技能就是一整段 prompt —— 選技能是「換一段」，不會跟別的技能疊加。",
+      "intro": "CLI pane 的 ∞ 按鈕可施放的整段指令。一個技能就是一整段 prompt —— 選技能是「換一段」，不會跟別的技能疊加。只有預設技能會以 loop 執行，其他技能都只送出一次。",
       "new": "新增技能",
       "new-name": "新技能",
       "copy-name": "{name} 副本",
@@ -1264,6 +1265,8 @@
       "disabled": "已停用",
       "name": "名稱",
       "icon": "圖示",
+      "icon-custom": "自訂圖示",
+      "icon-custom-hint": "輸入或貼上任一表情符號，就能當成這個技能的圖示。",
       "description": "摘要",
       "prompt": "施放時送出的 prompt",
       "resume": "續跑詞",
@@ -1275,8 +1278,10 @@
       "disable": "停用",
       "duplicate": "複製",
       "delete": "刪除",
-      "hint": "預設技能就是單擊 ∞ 會送出的那一段；停用的技能留在這裡，但不會出現在選單上。",
-      "advanced": "進階"
+      "hint": "預設技能就是單擊 ∞ 會送出的那一段，也是唯一會 loop 的技能；停用的技能留在這裡，但不會出現在選單上。",
+      "advanced": "進階",
+      "send-once": "單次送出",
+      "send-once-hint": "只有預設技能會以 loop 方式執行；這個技能只送出一次，沒有續跑詞與輪次上限。"
     },
     "section": {
       "general-behavior": "一般行為",

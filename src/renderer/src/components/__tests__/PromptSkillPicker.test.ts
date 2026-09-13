@@ -132,6 +132,22 @@ describe('PromptSkillPicker – casting', () => {
     expect(document.body.querySelector('.ps-preview')?.textContent).toContain('prompt for a')
   })
 
+  it('labels the preview by what casting does: loop for the default, one-shot for the rest', async () => {
+    wrapper = await open([skill('a', { isDefault: true }), skill('b')])
+    const slots = document.body.querySelectorAll<HTMLElement>('.ps-slot')
+    slots[0].dispatchEvent(new MouseEvent('mouseenter'))
+    await wrapper.vm.$nextTick()
+    let meta = document.body.querySelector('.ps-pv-meta')?.textContent ?? ''
+    expect(meta).toContain('skill-picker.unlimited')
+    expect(meta).not.toContain('skill-picker.send-once')
+
+    slots[1].dispatchEvent(new MouseEvent('mouseenter'))
+    await wrapper.vm.$nextTick()
+    meta = document.body.querySelector('.ps-pv-meta')?.textContent ?? ''
+    expect(meta).toContain('skill-picker.send-once')
+    expect(meta).not.toContain('skill-picker.unlimited')
+  })
+
   it('closes on Escape without casting', async () => {
     wrapper = await open([skill('a')])
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
@@ -187,5 +203,35 @@ describe('PromptSkillPicker – reaching the ring', () => {
     vi.advanceTimersByTime(300)
     await wrapper.vm.$nextTick()
     expect(document.body.querySelector('.ps-bridge')).toBeNull()
+  })
+})
+
+describe('PromptSkillPicker – custom icons', () => {
+  it('shows a custom glyph in the ring slot and in the preview', async () => {
+    // The picker passes skill.icon straight through, so a custom character has
+    // to survive the trip from the store to a 40px slot.
+    wrapper = makeWrapper([skill('a', { icon: '🚀' }), skill('b')])
+    await wrapper.find('.ps-anchor').trigger('mouseenter')
+    vi.advanceTimersByTime(300)
+    await wrapper.vm.$nextTick()
+
+    const slots = document.body.querySelectorAll<HTMLElement>('.ps-slot')
+    expect(slots[0].querySelector('.ps-glyph')?.textContent).toBe('🚀')
+    expect(slots[1].querySelector('svg')).not.toBeNull()
+
+    slots[0].dispatchEvent(new MouseEvent('mouseenter'))
+    await wrapper.vm.$nextTick()
+    expect(document.body.querySelector('.ps-preview .ps-glyph')?.textContent).toBe('🚀')
+  })
+
+  it('shows a custom glyph in the list layout too', async () => {
+    wrapper = makeWrapper([
+      skill('a', { icon: '🎯' }),
+      ...Array.from({ length: RING_MAX_SLOTS }, (_, i) => skill(`s${i}`)),
+    ])
+    await wrapper.find('.ps-anchor').trigger('mouseenter')
+    vi.advanceTimersByTime(300)
+    await wrapper.vm.$nextTick()
+    expect(document.body.querySelector('.ps-row .ps-glyph')?.textContent).toBe('🎯')
   })
 })

@@ -430,7 +430,8 @@
         "hint": "Point at a skill to see exactly what it will send.",
         "max-turns": "Stops after {n} turns",
         "unlimited": "No turn cap",
-        "is-default": "★ Default skill"
+        "is-default": "★ Default skill",
+        "send-once": "Sends once"
       }
     },
     "prep": {
@@ -1250,7 +1251,7 @@
     },
     "prompts": {
       "title": "Prompt Skills",
-      "intro": "Reusable whole instructions a CLI pane can cast from its ∞ loop button. One skill is one complete prompt — picking a skill replaces the prompt, it never appends to another.",
+      "intro": "Reusable whole instructions a CLI pane can cast from its ∞ button. One skill is one complete prompt — picking a skill replaces the prompt, it never appends to another. Only the default skill runs as a loop; every other skill is sent once.",
       "new": "New skill",
       "new-name": "New skill",
       "copy-name": "{name} copy",
@@ -1264,6 +1265,8 @@
       "disabled": "Disabled",
       "name": "Name",
       "icon": "Icon",
+      "icon-custom": "Custom icon",
+      "icon-custom-hint": "Type or paste any emoji to use it as this skill's icon.",
       "description": "Summary",
       "prompt": "Prompt sent on cast",
       "resume": "Resume text",
@@ -1275,8 +1278,10 @@
       "disable": "Disable",
       "duplicate": "Duplicate",
       "delete": "Delete",
-      "hint": "The default skill is what a plain click on ∞ casts; disabled skills stay here but leave the picker.",
-      "advanced": "Advanced"
+      "hint": "The default skill is what a plain click on ∞ casts, and the only one that loops; disabled skills stay here but leave the picker.",
+      "advanced": "Advanced",
+      "send-once": "Sends once",
+      "send-once-hint": "Only the default skill runs as a loop; this one is sent once, with no resume or turn cap."
     },
     "section": {
       "general-behavior": "General behavior",

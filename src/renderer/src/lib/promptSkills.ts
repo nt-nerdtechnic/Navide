@@ -11,10 +11,76 @@ import { settingsGet, settingsSet } from '@navide/plugin-ui/shared'
 
 export const PROMPT_SKILLS_SETTING_KEY = 'prompt-skills'
 
-/** Icon names, not SVG strings: the drawing can change without touching a
- *  user's stored skills. Rendered by PromptSkillIcon.vue. */
-export const PROMPT_SKILL_ICONS = ['advance', 'green', 'scan', 'doc', 'refactor', 'edit'] as const
-export type PromptSkillIcon = (typeof PROMPT_SKILL_ICONS)[number]
+/** Built-in icon NAMES, not SVG strings: the drawing can change without
+ *  touching a user's stored skills. Drawn by PromptSkillIcon.vue, which owns
+ *  one path per name — the two lists must stay in step. */
+export const PROMPT_SKILL_ICONS = [
+  'advance',
+  'green',
+  'scan',
+  'doc',
+  'refactor',
+  'edit',
+  'bug',
+  'test',
+  'rocket',
+  'shield',
+  'bolt',
+  'sparkle',
+  'branch',
+  'database',
+  'terminal',
+  'globe',
+  'chart',
+  'clock',
+  'lock',
+  'package',
+  'question',
+  'list',
+  'eye',
+  'star',
+] as const
+export type PromptSkillBuiltinIcon = (typeof PROMPT_SKILL_ICONS)[number]
+
+/** A skill's icon is EITHER a builtin name above OR one character the user
+ *  typed (an emoji, usually). Kept as a plain string rather than a union so a
+ *  build that predates custom icons still reads the field instead of dropping
+ *  the skill; `asIcon` is what keeps the value to those two shapes. */
+export type PromptSkillIcon = string
+
+/** Identifier shape of a builtin name. A value matching this that is NOT in
+ *  the list is a name from a newer build, so it collapses instead of being
+ *  drawn as text. Two characters minimum — every builtin is longer than that,
+ *  and it leaves a single letter free to be a custom icon. */
+const BUILTIN_ICON_NAME_RE = /^[a-z][a-z0-9-]+$/
+
+export function isBuiltinPromptSkillIcon(value: string): value is PromptSkillBuiltinIcon {
+  return (PROMPT_SKILL_ICONS as readonly string[]).includes(value)
+}
+
+/** Split into user-perceived characters, so a ZWJ sequence (👩‍💻) or a flag
+ *  counts as one. Intl.Segmenter is present in Electron; the spread is a
+ *  fallback for a test environment that lacks it. */
+function graphemes(value: string): string[] {
+  const Segmenter = (Intl as { Segmenter?: typeof Intl.Segmenter }).Segmenter
+  if (!Segmenter) return [...value]
+  const segmenter = new Segmenter(undefined, { granularity: 'grapheme' })
+  return Array.from(segmenter.segment(value), (s) => s.segment)
+}
+
+/** The single character a custom icon renders, or null when there is none to
+ *  take. One grapheme only: a longer string would overflow the ring's slot, so
+ *  a paste of several emoji keeps the first. */
+export function normalizeCustomIcon(raw: string): string | null {
+  const trimmed = raw.trim()
+  if (!trimmed) return null
+  return graphemes(trimmed)[0] ?? null
+}
+
+/** The custom character this icon draws, or null when it names a builtin. */
+export function promptSkillIconGlyph(icon: string): string | null {
+  return isBuiltinPromptSkillIcon(icon) ? null : icon
+}
 
 export interface PromptSkill {
   id: string
@@ -30,7 +96,8 @@ export interface PromptSkill {
   maxTurns: number
   category: string
   enabled: boolean
-  /** Which skill a plain click on ∞ casts. Exactly one skill carries it. */
+  /** Which skill a plain click on ∞ casts. Exactly one skill carries it, and
+   *  it is the only one that runs as a loop (see isLoopSkill). */
   isDefault: boolean
 }
 
@@ -57,9 +124,12 @@ function asString(value: unknown, fallback = ''): string {
 }
 
 function asIcon(value: unknown): PromptSkillIcon {
-  return PROMPT_SKILL_ICONS.includes(value as PromptSkillIcon)
-    ? (value as PromptSkillIcon)
-    : 'advance'
+  if (typeof value !== 'string') return 'advance'
+  if (isBuiltinPromptSkillIcon(value)) return value
+  // Identifier-shaped but unknown: a builtin this build cannot draw (a skill
+  // written by a newer one). Fall back rather than render its first letter.
+  if (BUILTIN_ICON_NAME_RE.test(value)) return 'advance'
+  return normalizeCustomIcon(value) ?? 'advance'
 }
 
 function asTurns(value: unknown): number {
@@ -137,6 +207,12 @@ export function savePromptSkills(skills: readonly PromptSkill[]): PromptSkill[] 
   settingsSet(PROMPT_SKILLS_SETTING_KEY, normalized)
   settingsSet(LOOP_PROMPT_SETTING_KEY, defaultPromptSkill(normalized).prompt)
   return normalized
+}
+
+/** Only the default skill runs as a LOOP (badge, auto-continue, turn cap).
+ *  Every other skill is a plain one-shot prompt: sent once, then done. */
+export function isLoopSkill(skill: PromptSkill): boolean {
+  return skill.isDefault
 }
 
 /** The skill a plain ∞ click casts. Never null: normalize guarantees one. */

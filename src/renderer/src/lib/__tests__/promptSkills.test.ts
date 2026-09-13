@@ -14,10 +14,14 @@ import {
   builtinPromptSkills,
   castablePromptSkills,
   defaultPromptSkill,
+  isLoopSkill,
   loadPromptSkills,
   nextSkillId,
   normalizePromptSkills,
   resolvePromptSkill,
+  normalizeCustomIcon,
+  promptSkillIconGlyph,
+  isBuiltinPromptSkillIcon,
   ringGeometry,
   ringSlotOffsets,
   savePromptSkills,
@@ -137,6 +141,17 @@ describe('resolvePromptSkill', () => {
   })
 })
 
+describe('isLoopSkill', () => {
+  it('only the default skill loops; every other skill is a one-shot send', () => {
+    const skills = normalizePromptSkills([
+      skill({ id: 'a', isDefault: true }),
+      skill({ id: 'b' }),
+    ])
+    expect(isLoopSkill(skills[0])).toBe(true)
+    expect(isLoopSkill(skills[1])).toBe(false)
+  })
+})
+
 describe('castablePromptSkills', () => {
   it('hides disabled skills and puts the default first', () => {
     const skills = normalizePromptSkills([
@@ -205,5 +220,56 @@ describe('ringSlotOffsets ordering', () => {
   it('puts the first skill on the left so digit keys read left-to-right', () => {
     const xs = ringSlotOffsets(5).map((o) => o.x)
     for (let i = 1; i < xs.length; i += 1) expect(xs[i]).toBeGreaterThan(xs[i - 1])
+  })
+})
+
+describe('custom icons', () => {
+  it('takes one grapheme, keeping a multi-codepoint emoji whole', () => {
+    expect(normalizeCustomIcon('🚀')).toBe('🚀')
+    expect(normalizeCustomIcon(' 🚀 ')).toBe('🚀')
+    expect(normalizeCustomIcon('👩‍💻')).toBe('👩‍💻')
+    expect(normalizeCustomIcon('🚀🎉')).toBe('🚀') // a paste keeps the first
+    expect(normalizeCustomIcon('')).toBeNull()
+    expect(normalizeCustomIcon('   ')).toBeNull()
+  })
+
+  it('tells a builtin name apart from a custom glyph', () => {
+    expect(isBuiltinPromptSkillIcon('rocket')).toBe(true)
+    expect(isBuiltinPromptSkillIcon('🚀')).toBe(false)
+    expect(promptSkillIconGlyph('rocket')).toBeNull()
+    expect(promptSkillIconGlyph('🚀')).toBe('🚀')
+  })
+})
+
+describe('normalizePromptSkills – icon field', () => {
+  function iconOf(icon: unknown): string {
+    return normalizePromptSkills([{ id: 'a', name: 'a', prompt: 'p', icon }])[0].icon
+  }
+
+  it('keeps a builtin name and a custom glyph', () => {
+    expect(iconOf('rocket')).toBe('rocket')
+    expect(iconOf('🚀')).toBe('🚀')
+    expect(iconOf('👩‍💻')).toBe('👩‍💻')
+  })
+
+  it('collapses an unknown builtin-shaped name instead of showing its first letter', () => {
+    // A skill written by a newer build naming an icon this one cannot draw.
+    expect(iconOf('hologram')).toBe('advance')
+    expect(iconOf('some-new-icon')).toBe('advance')
+  })
+
+  it('leaves a single letter usable as a custom icon', () => {
+    // Every builtin name is longer than one character, so a lone letter is
+    // unambiguous — and lowercase must behave like uppercase here.
+    expect(iconOf('a')).toBe('a')
+    expect(iconOf('A')).toBe('A')
+    expect(iconOf('7')).toBe('7')
+  })
+
+  it('collapses anything that is neither', () => {
+    expect(iconOf(undefined)).toBe('advance')
+    expect(iconOf(42)).toBe('advance')
+    expect(iconOf('')).toBe('advance')
+    expect(iconOf('   ')).toBe('advance')
   })
 })

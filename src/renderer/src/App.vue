@@ -255,7 +255,7 @@ import {
   unseenTail,
   formatLoopTime,
 } from './lib/loopPrompt'
-import { resolvePromptSkill } from './lib/promptSkills'
+import { isLoopSkill, resolvePromptSkill } from './lib/promptSkills'
 import { usePromptSkills } from './composables/usePromptSkills'
 import { loginCommandFor, matchLoginExpired } from './lib/cliLoginExpired'
 import { detectUsageLimit, usageLimitDue } from './lib/cliUsageLimit'
@@ -3613,6 +3613,13 @@ async function togglePaneLoop(paneId: string, skillId?: string): Promise<void> {
   // resolvePromptSkill falls back to the default for an id whose skill the
   // user has since deleted.
   const skill = resolvePromptSkill(promptSkills.value, skillId)
+  // A non-default skill is a plain prompt: send it once and stop — no LOOP
+  // badge, no auto-continue, no turn cap. Only the default skill loops.
+  if (!isLoopSkill(skill)) {
+    const ok = await injectPane(paneId, skill.prompt, 'skill-cast', true)
+    if (!ok) console.warn(`[loop] pane ${paneId}: skill "${skill.id}" injection failed`)
+    return
+  }
   // Optimistic UI: badge + watcher arm immediately; rolled back below if the
   // start injection doesn't land (e.g. pane still 'starting', no session yet).
   pane.loopActive = true

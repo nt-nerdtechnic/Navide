@@ -256,11 +256,12 @@ defineExpose({ closeNow })
           </div>
           <div class="ps-pv-body">{{ previewSkill.prompt }}</div>
           <div class="ps-pv-meta">
-            <span>{{
+            <span v-if="previewSkill.isDefault">{{
               previewSkill.maxTurns > 0
                 ? $t('pane.terminal.skill-picker.max-turns', { n: previewSkill.maxTurns })
                 : $t('pane.terminal.skill-picker.unlimited')
             }}</span>
+            <span v-else>{{ $t('pane.terminal.skill-picker.send-once') }}</span>
             <span v-if="previewSkill.isDefault">{{ $t('pane.terminal.skill-picker.is-default') }}</span>
           </div>
         </div>

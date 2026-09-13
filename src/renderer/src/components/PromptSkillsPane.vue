@@ -14,8 +14,10 @@ import { usePromptSkills } from '../composables/usePromptSkills'
 import {
   PROMPT_SKILL_ICONS,
   nextSkillId,
+  normalizeCustomIcon,
+  promptSkillIconGlyph,
   type PromptSkill,
-  type PromptSkillIcon as IconName,
+  type PromptSkillBuiltinIcon as IconName,
 } from '../lib/promptSkills'
 
 const { t } = useI18n()
@@ -114,6 +116,32 @@ function toggleEnabled(skill: PromptSkill): void {
 }
 
 const ICONS = PROMPT_SKILL_ICONS as readonly IconName[]
+
+/** Custom icons: anything that is not a builtin name is one character the user
+ *  typed. The field mirrors the draft so switching skills — or clicking a
+ *  builtin — clears whatever was in it. */
+const customIcon = ref('')
+watch(
+  () => draft.value?.icon,
+  (icon) => {
+    customIcon.value = icon ? (promptSkillIconGlyph(icon) ?? '') : ''
+  },
+  { immediate: true },
+)
+
+function applyCustomIcon(): void {
+  const d = draft.value
+  if (!d) return
+  const glyph = normalizeCustomIcon(customIcon.value)
+  if (!glyph) {
+    // Nothing usable typed: put the field back rather than blanking the icon.
+    customIcon.value = promptSkillIconGlyph(d.icon) ?? ''
+    return
+  }
+  customIcon.value = glyph // a multi-emoji paste keeps only the first
+  d.icon = glyph
+  commit()
+}
 </script>
 
 <template>
@@ -179,11 +207,12 @@ const ICONS = PROMPT_SKILL_ICONS as readonly IconName[]
             <span class="prompt-card-desc">{{ skill.description || skill.prompt }}</span>
             <span class="prompt-card-tags">
               <span class="pchip">{{ skill.category }}</span>
-              <span class="pchip">{{
+              <span v-if="skill.isDefault" class="pchip">{{
                 skill.maxTurns > 0
                   ? t('settings.prompts.turns', { n: skill.maxTurns })
                   : t('settings.prompts.turns-unlimited')
               }}</span>
+              <span v-else class="pchip">{{ t('settings.prompts.send-once') }}</span>
               <span v-if="!skill.enabled" class="pchip warn">{{ t('settings.prompts.disabled') }}</span>
             </span>
           </button>
@@ -233,9 +262,20 @@ const ICONS = PROMPT_SKILL_ICONS as readonly IconName[]
                 class="icon-btn"
                 :class="{ on: draft.icon === name }"
                 :aria-label="name"
+                :title="name"
                 :aria-pressed="draft.icon === name"
                 @click="draft.icon = name; commit()"
               ><PromptSkillIcon :name="name" /></button>
+              <input
+                v-model="customIcon"
+                class="icon-btn icon-custom"
+                :class="{ on: !!promptSkillIconGlyph(draft.icon) }"
+                :aria-label="t('settings.prompts.icon-custom')"
+                :title="t('settings.prompts.icon-custom-hint')"
+                placeholder="🙂"
+                @change="applyCustomIcon"
+                @blur="applyCustomIcon"
+              />
             </div>
           </div>
         </div>
@@ -247,7 +287,8 @@ const ICONS = PROMPT_SKILL_ICONS as readonly IconName[]
 
         <div class="drawer-section">
           <h4>{{ t('settings.prompts.advanced') }}</h4>
-          <label>
+          <p v-if="!draft.isDefault" class="drawer-hint">{{ t('settings.prompts.send-once-hint') }}</p>
+          <label v-if="draft.isDefault">
             <span>{{ t('settings.prompts.resume') }}</span>
             <input
               v-model="draft.resumePrompt"
@@ -256,7 +297,7 @@ const ICONS = PROMPT_SKILL_ICONS as readonly IconName[]
             />
           </label>
           <div class="drawer-grid">
-            <label>
+            <label v-if="draft.isDefault">
               <span>{{ t('settings.prompts.max-turns') }}</span>
               <input v-model.number="draft.maxTurns" type="number" min="0" @change="commit" />
             </label>
@@ -625,6 +666,15 @@ textarea:focus {
   border-color: var(--success-fg);
   color: var(--success-fg);
   background: var(--success-subtle);
+}
+/* Same box as a builtin swatch, but it is an input: one character, centred.
+   `display` is reset because .icon-btn sets flex, which an input must not be. */
+.icon-custom {
+  display: block;
+  font-size: 15px;
+  line-height: 1;
+  text-align: center;
+  padding: 0;
 }
 .drawer-actions {
   display: flex;
