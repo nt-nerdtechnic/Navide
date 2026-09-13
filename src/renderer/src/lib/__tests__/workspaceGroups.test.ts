@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildWorkspaceGroups, workspaceParentPath, type LineageRow } from '../workspaceGroups'
+import { buildWorkspaceGroups, type LineageRow } from '../workspaceGroups'
 
 // The sidebar's grouping, run for real rather than read as source text. It sat
 // inside App.vue, which cannot be mounted in a test (backend and terminal
@@ -42,25 +42,6 @@ function build(over: Partial<Parameters<typeof buildWorkspaceGroups>[0]> = {}) {
     ...over,
   })
 }
-
-describe('workspaceParentPath', () => {
-  it('shows the folder the workspace sits in, home collapsed', () => {
-    expect(workspaceParentPath(A, HOME)).toBe('~/Desktop')
-    expect(workspaceParentPath(C, HOME)).toBe('~/Git')
-  })
-
-  it('ignores a trailing slash', () => {
-    expect(workspaceParentPath(`${A}/`, HOME)).toBe('~/Desktop')
-  })
-
-  it('falls back to the folder itself at the root', () => {
-    expect(workspaceParentPath('/alpha', HOME)).toBe('/alpha')
-  })
-
-  it('leaves a path outside home alone', () => {
-    expect(workspaceParentPath('/opt/work/proj', HOME)).toBe('/opt/work')
-  })
-})
 
 describe('buildWorkspaceGroups', () => {
   it('splits a workspace into its run groups, in tab order', () => {
@@ -365,8 +346,27 @@ describe('buildWorkspaceGroups display names', () => {
     expect(rows.map((r) => r.label)).toEqual(['same', 'same'])
     expect(rows[0].paneIds).toEqual(['a1'])
     expect(rows[1].paneIds).toEqual(['b1'])
-    // The parent path is what tells two identically-named rows apart.
-    expect(rows[0].displayPath).toBe('~/Desktop')
+    // The full path is what tells two identically-named rows apart — and,
+    // under an alias, the only place the real folder name is still shown.
+    expect(rows[0].displayPath).toBe('~/Desktop/alpha')
+  })
+
+  it('shows the full path under the heading, home collapsed, trailing slash dropped', () => {
+    const rows = build({
+      here: A,
+      order: [A, `${C}/`, '/opt/work/proj'],
+      panes: [pane('a1', A), pane('c1', C), pane('o1', '/opt/work/proj')],
+      lineage: [row('a1'), row('c1'), row('o1')],
+      aliases: { [A]: 'Payments' },
+    })
+    expect(rows.map((r) => r.displayPath)).toEqual([
+      '~/Desktop/alpha',
+      '~/Git/gamma',
+      '/opt/work/proj',
+    ])
+    // An aliased heading must not hide the folder: the path still ends in it.
+    expect(rows[0].label).toBe('Payments')
+    expect(rows[0].displayPath.endsWith('/alpha')).toBe(true)
   })
 
   it('finds an alias stored without the trailing slash the row carries', () => {

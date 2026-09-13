@@ -86,19 +86,6 @@ export interface WorkspaceGroupRow {
 
 const norm = (p: string): string => p.replace(/\/+$/, '')
 
-/** The folder a workspace sits IN, home collapsed to `~`.
- *
- *  The heading already shows the last segment as the name, so repeating it in
- *  the path costs a whole row's width and identifies nothing. What tells two
- *  projects of the same name apart is where they live. */
-export function workspaceParentPath(path: string, homeDir: string): string {
-  const trimmed = norm(path)
-  const cut = trimmed.lastIndexOf('/')
-  // A root-level folder has no parent worth showing; fall back to itself.
-  if (cut <= 0) return collapseHomePath(trimmed || path, homeDir)
-  return collapseHomePath(trimmed.slice(0, cut), homeDir)
-}
-
 /** The sidebar's outer layer: one row per workspace this window holds.
  *
  *  STRUCTURE ONLY — ids, paths and counts. Nothing here reads live pane status,
@@ -177,7 +164,10 @@ export function buildWorkspaceGroups(input: WorkspaceGroupInput): WorkspaceGroup
     rows.push({
       path,
       label: workspaceDisplayName(path, aliases),
-      displayPath: workspaceParentPath(path, homeDir),
+      // The full path, home collapsed to `~`. The heading may be an alias
+      // that hides the folder name, so the path is the only place the real
+      // folder is still legible on the row.
+      displayPath: collapseHomePath(norm(path) || path, homeDir),
       isCurrent: true,
       collapsed: collapsed.has(path),
       // Counted off `panes`, not off `own`: a collapsed parent keeps its
