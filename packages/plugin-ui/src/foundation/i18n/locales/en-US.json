@@ -577,6 +577,8 @@
     "unmute": "Unmute notifications",
     "restore-selected": "Restore selected",
     "remove-selected": "Remove selected",
+    "remove-children": "Remove {count} sub-panes",
+    "remove-children-title": "Close only the agents this pane spawned; the pane itself stays",
     "run-pipeline": "▶ Run pipeline",
     "reset": "Reset",
     "wipe-restart": "↺ Wipe & restart",

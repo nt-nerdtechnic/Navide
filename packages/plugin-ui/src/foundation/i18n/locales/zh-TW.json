@@ -577,6 +577,8 @@
     "unmute": "取消靜音",
     "restore-selected": "還原所選",
     "remove-selected": "移除所選",
+    "remove-children": "移除旗下 {count} 個子面板",
+    "remove-children-title": "只關閉這個面板派生出的子面板，本身保留",
     "run-pipeline": "▶ 執行流程",
     "reset": "重設",
     "wipe-restart": "↺ 清除並重新開始",

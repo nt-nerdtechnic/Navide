@@ -6,7 +6,7 @@ import WindowControls from './components/WindowControls.vue'
 import RestoredPanePlaceholder from './components/RestoredPanePlaceholder.vue'
 import { buildWorkspaceGroups } from './lib/workspaceGroups'
 import { workspaceAliasKey } from './lib/workspaceAlias'
-import { buildPaneLineage } from './lib/paneLineage'
+import { buildPaneLineage, withDescendants } from './lib/paneLineage'
 import { ancestorTrail } from './lib/paneListView'
 import { subtreeSignals } from './lib/paneSubtreeStatus'
 import { closeAdvisoriesFor } from './lib/paneCloseAdvisories'
@@ -1850,6 +1850,16 @@ const paneTurnCompleteSourceAt = new Map<string, number>()
 // model that replaces buffer-guessing.
 const paneLastActiveAt = new Map<string, number>()
 
+// Panes whose log reader has ever surfaced a user record WITH its text. Decides
+// which consume signal releases a delivered-pending message (see
+// deliverAgentMessage): a reader that carries user text shows the injected
+// envelope as a user record when the CLI picks it up, one record per message;
+// a reader that never does leaves the next turn end as the only signal. There
+// is no per-vendor flag for this, and grepping the readers is unreliable
+// (claude's emits `detail=str(rtype)`), so it is learned per pane from the
+// events themselves.
+const paneUserRecordSeen = new Set<string>()
+
 // Per-pane count of background subagents the CLI is still waiting on, as last
 // reported by a hook event, with the wall-clock time of that report. The
 // unattended loop reads it to tell a turn that ended DONE from one that ended
@@ -2023,6 +2033,10 @@ function unregisterPaneMessaging(paneId: string, opts: { keepPersisted?: boolean
 async function deliverAgentMessage(paneId: string, text: string): Promise<boolean> {
   const ok = await injectPane(paneId, text, 'agent-msg', true)
   if (!ok) return false
+  // The CLI accepted it, but may only have queued it (Claude Code mid-turn).
+  // Hold the badge on RUNNING until the recipient's log shows it consumed —
+  // released in the agent.activity handler, fused inside useTerminal.
+  paneRefs[paneId]?.markDeliveredPending?.()
   await sleep(1500)
   const sw = watchers.get(paneId)
   if (sw && !sw.cancelled) {
@@ -6711,6 +6725,17 @@ async function batchKill(ids: string[]): Promise<void> {
   selectedPaneIds.value = new Set()
 }
 
+/** Every pane this one spawned, transitively — never the pane itself. */
+function descendantPaneIds(paneId: string): string[] {
+  return withDescendants([paneId], panes.value).filter((id) => id !== paneId)
+}
+
+// "Remove sub-panes": closes only what the right-clicked pane spawned. The
+// parent stays; its sidebar row simply loses the ↳ family beneath it.
+async function killDescendants(paneId: string): Promise<void> {
+  for (const id of descendantPaneIds(paneId)) await onKill(id)
+}
+
 async function batchRebuild(ids: string[]): Promise<void> {
   // Rebuild replaces pane ids, so capture the resumable subset up front.
   const targets = panes.value.filter((p) => ids.includes(p.id) && paneCanRebuild(p)).map((p) => p.id)
@@ -10937,6 +10962,12 @@ backend.on('agent.activity', (raw) => {
     }
     // Badge: authoritative turn end → drop the RUNNING hysteresis latch now.
     paneRefs[ev.pane_id]?.markTurnComplete?.()
+    // Delivered-pending fallback for readers that carry no user text: the next
+    // turn end is the only proof the CLI got to our message. NEVER for a reader
+    // that does carry it — Claude Code ends the current turn BEFORE dequeuing,
+    // so its turn_complete arrives while the message is still queued; there
+    // the user record itself releases the hold (agent_active branch below).
+    if (!paneUserRecordSeen.has(ev.pane_id)) paneRefs[ev.pane_id]?.clearDeliveredPending?.(true)
     if (!markerReply && !ev.superseded) scheduleDoneNotify(ev.pane_id, ev.timestamp ?? '')
     // Judge THIS turn's own text (not a retained map): an empty-text
     // turn_complete (Claude Stop hook, thinking-only record, Codex cross-batch)
@@ -10999,13 +11030,16 @@ backend.on('agent.activity', (raw) => {
     // turn_complete, so the user's command wins over the reply-text fallback.
     // Injected inter-CLI envelopes land in the CLI log as user records too —
     // never title a pane with one. Set-once lives inside setPaneAutoName.
-    if (
-      (ev.detail === 'user' || ev.detail === 'prompt' || ev.detail === 'user_message') &&
-      ev.text &&
-      !isInjectedMessageText(ev.text)
-    ) {
-      setPaneAutoName(ev.pane_id, deriveAutoName(ev.text))
-      requestLlmPaneName(ev.pane_id, ev.text)
+    if ((ev.detail === 'user' || ev.detail === 'prompt' || ev.detail === 'user_message') && ev.text) {
+      // This reader carries user text, so the envelope itself is the consume
+      // signal for delivered-pending — one record releases one delivery.
+      paneUserRecordSeen.add(ev.pane_id)
+      if (isInjectedMessageText(ev.text)) {
+        paneRefs[ev.pane_id]?.clearDeliveredPending?.()
+      } else {
+        setPaneAutoName(ev.pane_id, deriveAutoName(ev.text))
+        requestLlmPaneName(ev.pane_id, ev.text)
+      }
     }
     // A new turn re-arms 'done' notifications for this pane.
     sysNotify.markActive(ev.pane_id)
@@ -15108,6 +15142,11 @@ const ctxTargetIds = computed<string[]>(() => {
   return [m.paneId]
 })
 const ctxIsBatch = computed(() => ctxTargetIds.value.length > 1)
+// Spawned descendants of the right-clicked pane; the "Remove sub-panes" item
+// only appears when there are some.
+const ctxDescendantIds = computed<string[]>(() =>
+  paneCtxMenu.value ? descendantPaneIds(paneCtxMenu.value.paneId) : []
+)
 
 // "Send message": the address of the right-clicked pane, to be typed into the
 // pane the user is currently working in. Same string the @-menu completes, so
@@ -17345,6 +17384,12 @@ function paneIsCommander(p: ActivePane): boolean {
           @click="onReinject(paneCtxMenu!.paneId); closePaneCtxMenu()"
         >{{ $t('action.reapply-role') }}</div>
         <div class="pane-ctx-sep"></div>
+        <div
+          v-if="ctxDescendantIds.length"
+          class="pane-ctx-item danger"
+          :title="$t('action.remove-children-title')"
+          @click="killDescendants(paneCtxMenu!.paneId); closePaneCtxMenu()"
+        >{{ $t('action.remove-children', { count: ctxDescendantIds.length }) }}</div>
         <div class="pane-ctx-item danger" @click="onKill(paneCtxMenu!.paneId); closePaneCtxMenu()">{{ $t('action.remove') }}</div>
         </template>
       </div>
