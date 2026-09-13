@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, type VueWrapper } from '@vue/test-utils'
 import PromptSkillPicker from '../PromptSkillPicker.vue'
-import { RING_MAX_SLOTS, type PromptSkill } from '../../lib/promptSkills'
+import { RING_MAX_SLOTS, RING_SLOT_D, ringSlotOffsets, type PromptSkill } from '../../lib/promptSkills'
 
 // The picker is a hover layer over the ∞ button: it must not open on a cursor
 // merely crossing the header, must never swallow the plain click, and must
@@ -158,5 +158,34 @@ describe('PromptSkillPicker – layout fallback', () => {
     await wrapper.vm.$nextTick()
     expect(menu()?.classList.contains('list')).toBe(true)
     expect(document.body.querySelectorAll('.ps-row')).toHaveLength(RING_MAX_SLOTS + 1)
+  })
+})
+
+describe('PromptSkillPicker – reaching the ring', () => {
+  it('spans the bare gap between the button and the slots', async () => {
+    // The slots sit an arc away from the anchor with nothing in between; the
+    // bridge is what the cursor hovers on the way down, so its box has to
+    // reach both the nearest slot's top edge and the outermost slot's side.
+    wrapper = makeWrapper([skill('a'), skill('b')])
+    await wrapper.find('.ps-anchor').trigger('mouseenter')
+    vi.advanceTimersByTime(300)
+    await wrapper.vm.$nextTick()
+
+    const bridge = document.body.querySelector<HTMLElement>('.ps-bridge')
+    expect(bridge).not.toBeNull()
+
+    const offsets = ringSlotOffsets(2)
+    const nearestSlotTop = Math.min(...offsets.map((o) => o.y)) - RING_SLOT_D / 2
+    const outermostSlotEdge = Math.max(...offsets.map((o) => Math.abs(o.x))) + RING_SLOT_D / 2
+    expect(Number.parseFloat(bridge!.style.height)).toBeGreaterThanOrEqual(nearestSlotTop)
+    expect(Number.parseFloat(bridge!.style.width) / 2).toBeGreaterThanOrEqual(outermostSlotEdge)
+  })
+
+  it('draws no bridge in the list layout, where the list is its own hover target', async () => {
+    wrapper = makeWrapper(Array.from({ length: RING_MAX_SLOTS + 1 }, (_, i) => skill(`s${i}`)))
+    await wrapper.find('.ps-anchor').trigger('mouseenter')
+    vi.advanceTimersByTime(300)
+    await wrapper.vm.$nextTick()
+    expect(document.body.querySelector('.ps-bridge')).toBeNull()
   })
 })

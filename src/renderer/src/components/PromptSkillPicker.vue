@@ -79,6 +79,16 @@ const previewStyle = computed(() => {
 })
 const footStyle = computed(() => ({ top: `${geometry.value.radius + RING_SLOT_D / 2 + 12}px` }))
 
+/** The button and the ring do not touch: there is bare pane header between
+ *  them. Without something to hover, walking the cursor down to a slot leaves
+ *  the anchor, starts the close timer, and the ring vanishes mid-reach. This
+ *  box spans that gap and belongs to the menu, so entering it keeps the ring
+ *  open. It is clipped to a wedge so it only covers the path to the slots. */
+const bridgeStyle = computed(() => ({
+  width: `${geometry.value.radius * 2 + RING_SLOT_D}px`,
+  height: `${geometry.value.radius + RING_SLOT_D / 2}px`,
+}))
+
 const previewSkill = computed(() => castable.value.find((s) => s.id === hoverId.value) ?? null)
 
 function measure(): void {
@@ -219,6 +229,7 @@ defineExpose({ closeNow })
     >
       <!-- Ring layout -->
       <template v-if="!asList">
+        <div class="ps-bridge" :style="bridgeStyle" aria-hidden="true" />
         <button
           v-for="(slot, i) in slots"
           :key="slot.skill.id"
@@ -305,6 +316,17 @@ defineExpose({ closeNow })
   width: 0;
   height: 0;
   z-index: var(--z-popover);
+}
+
+/* Hover bridge between the button and the ring. Behind everything else in
+   the menu's stacking context, so it can never steal a slot's hover. */
+.ps-bridge {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform: translateX(-50%);
+  z-index: -1;
+  clip-path: polygon(calc(50% - 22px) 0, calc(50% + 22px) 0, 100% 100%, 0 100%);
 }
 
 .ps-slot {

@@ -173,8 +173,11 @@ export const RING_SLOT_GAP = 12
  *  out before it stops reading as attached to it. */
 export const RING_R_MIN = 46
 export const RING_R_MAX = 92
-/** Angle between neighbours, and the widest fan allowed. */
-export const RING_STEP_DEG = 44
+/** Angle between neighbours, and the widest fan allowed. A wider step pulls a
+ *  small ring IN: the radius solved from the chord shrinks faster than the arc
+ *  spreads, so two slots keep the same left/right span but sit closer to the
+ *  button — the gap the cursor has to cross is what made them hard to hit. */
+export const RING_STEP_DEG = 56
 export const RING_SPAN_MAX_DEG = 140
 /** Above this many skills the ring is replaced by the list layout. */
 export const RING_MAX_SLOTS = 5
