@@ -720,8 +720,14 @@ export function createTestPlansFilesystemPort(): PlansFilesystemPort {
     // overflowed the Host→child output queue and took the child down; an
     // event without a filename cannot be classified and is still forwarded.
     const onEvent = (event: string, path: string | null): void => {
-      if (path !== null && !isPlanDocumentChangePath(path, root)) return
-      emitChanged(context, root, event, path)
+      // fs.watch reports the host's own separator, and this wire is posix:
+      // the classifier normalises before matching, the child rejects a path
+      // with a backslash outright, and the Plans app compares what arrives
+      // here against paths it built itself. Normalise once, at the boundary,
+      // so the half that classifies and the half that reports cannot disagree.
+      const relPath = path === null ? null : path.replace(/\\/g, '/')
+      if (relPath !== null && !isPlanDocumentChangePath(relPath, root)) return
+      emitChanged(context, root, event, relPath)
     }
     const watcherHandles: FSWatcher[] = []
     try {
