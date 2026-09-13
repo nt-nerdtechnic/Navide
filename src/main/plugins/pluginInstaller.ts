@@ -11,7 +11,18 @@
 // confirmation (sensitive `fs`/`aiCli`/`shell` capabilities) AFTER verification but
 // BEFORE anything is written to disk.
 
-import { chmodSync, mkdirSync, readFileSync, writeFileSync, rmSync, renameSync, existsSync } from 'node:fs'
+import {
+  chmodSync,
+  closeSync,
+  existsSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { canonicalArchivePath, portableArchiveCollisionKey } from './pluginPathPolicy'
@@ -60,7 +71,7 @@ import {
   PLUGIN_QUARANTINE_MARKER,
   PLUGIN_STAGING_DIR,
 } from './pluginInstallPaths'
-import { immutablePluginPackageDir } from './pluginActivationSelector'
+import { immutablePluginPackageDir, PluginActivationSelector } from './pluginActivationSelector'
 
 /** What a caller must supply to install a specific marketplace version. The
  *  trusted `expectedDigest` and (optional) signature material come from the
@@ -171,6 +182,8 @@ export interface InstallerDeps {
   /** Atomic directory move used by the production install transaction. */
   rename?(from: string, to: string): void
   pathExists?(path: string): boolean
+  /** Durably flush a directory after package staging or a directory rename. */
+  syncDirectory?(path: string): void
 }
 
 /** Default deps: global `fetch` (Electron main / Node 18+) + `node:fs`. */
@@ -186,6 +199,8 @@ export const defaultInstallerDeps: InstallerDeps = {
   },
   writeFile(path, data) {
     writeFileSync(path, data)
+    const file = openSync(path, 'r')
+    try { fsyncSync(file) } finally { closeSync(file) }
   },
   readFile(path) {
     try {
@@ -206,6 +221,10 @@ export const defaultInstallerDeps: InstallerDeps = {
   },
   pathExists(path) {
     return existsSync(path)
+  },
+  syncDirectory(path) {
+    const directory = openSync(path, 'r')
+    try { fsyncSync(directory) } finally { closeSync(directory) }
   },
 }
 
@@ -516,7 +535,36 @@ export function stageInstallCandidate(
   }
   const candidateDir = immutablePluginPackageDir(pluginsRoot, prepared.id, prepared.version, target)
   if (deps.pathExists(candidateDir)) {
-    throw new InstallError(`immutable candidate already exists for ${prepared.id}@${prepared.version}`)
+    const selector = new PluginActivationSelector(pluginsRoot)
+    let referenced = false
+    try {
+      const record = selector.read(prepared.id)
+      referenced = [record?.active, record?.previous, record?.candidate].some((selection) =>
+        selection?.packageVersion === prepared.version &&
+        selection.target === target,
+      )
+    } catch {
+      // A corrupt record is a recovery boundary: never relocate bytes that it
+      // may still reference, and do not infer a replacement candidate.
+      throw new InstallError(`immutable candidate cannot be reconciled while ${prepared.id} lifecycle is unreadable`)
+    }
+    if (referenced) {
+      throw new InstallError(`immutable candidate already exists for ${prepared.id}@${prepared.version}`)
+    }
+    // An immutable package without any durable lifecycle reference is never
+    // auto-adopted: it may have survived an interrupted stage before consent
+    // was recorded. Preserve it as forensic quarantine evidence, then allow a
+    // fresh verified candidate to stage beside it.
+    const quarantineRoot = join(pluginsRoot, PLUGIN_QUARANTINE_DIR)
+    const quarantinePath = join(quarantineRoot, `${prepared.id}.unreferenced.${randomUUID()}`)
+    try {
+      deps.mkdirp(quarantineRoot)
+      deps.rename(candidateDir, quarantinePath)
+    } catch (error) {
+      throw new InstallError(
+        `immutable candidate could not be quarantined: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
   }
   const stagingRoot = join(pluginsRoot, PLUGIN_STAGING_DIR)
   const stagingDir = join(stagingRoot, `${prepared.id}.${randomUUID()}`)
@@ -530,8 +578,10 @@ export function stageInstallCandidate(
   try {
     deps.mkdirp(stagingRoot)
     writePreparedPackage(prepared, stagingDir, backendEntry, safeEntries, deps)
+    deps.syncDirectory?.(stagingDir)
     deps.mkdirp(dirname(candidateDir))
     deps.rename(stagingDir, candidateDir)
+    deps.syncDirectory?.(dirname(candidateDir))
     if (prepared.registryEvidence) {
       const writeTrustSnapshot = deps.writeRegistryTrustSnapshot ?? writeRegistryTrustSnapshot
       writeTrustSnapshot(pluginsRoot, prepared.registryEvidence.trustSnapshot)

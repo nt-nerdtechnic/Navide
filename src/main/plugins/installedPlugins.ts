@@ -25,6 +25,7 @@ import {
   type InstalledManifest,
   type PluginManifestV2,
 } from './pluginManifest'
+import { isValidManifestV2PluginId } from './pluginManifestV2'
 import type { PluginLaunchDescriptor, PluginViewLaunchDescriptor } from './frontendPluginManager'
 import {
   PLUGIN_ACTIVATION_DIR,
@@ -399,6 +400,10 @@ export function scanInstalledPlugins(root: string): ScannedPlugin[] {
     return []
   }
   const lifecycleSelector = new PluginActivationSelector(root)
+  // This scanner intentionally does not reconcile an interrupted selector.
+  // Cold recovery must re-verify its exact package against current Registry
+  // trust before changing the durable active pointer; that asynchronous trust
+  // boundary belongs to the installed-package lifecycle coordinator.
   const out: ScannedPlugin[] = []
   for (const name of names) {
     if (
@@ -414,12 +419,20 @@ export function scanInstalledPlugins(root: string): ScannedPlugin[] {
       continue
     }
     try {
-      const selected = lifecycleSelector.read(name)?.active
+      // Legacy package directories are named by the unpacker, not necessarily
+      // by the manifest id. Only a valid manifest-v2 id can have a durable
+      // lifecycle record, so an arbitrary legacy directory must not be
+      // mistaken for a corrupt selector merely because its directory name is
+      // not an id.
+      const selected = isValidManifestV2PluginId(name)
+        ? lifecycleSelector.read(name)?.active
+        : undefined
       out.push(selected ? loadPluginDir(lifecycleSelector.packageDir(name, selected)) : loadPluginDir(dir))
     } catch {
-      // A malformed selector is not an active package. Keep legacy scan
-      // compatibility for this directory without promoting any candidate.
-      out.push(loadPluginDir(dir))
+      // A lifecycle selector that exists but cannot be validated may still
+      // reference retained package/storage state. Do not guess a legacy root
+      // package or a semver fallback while that recovery pointer is unreadable.
+      out.push({ dir, error: 'plugin lifecycle selector is unreadable' })
     }
   }
   return out

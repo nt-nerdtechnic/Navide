@@ -546,14 +546,40 @@ export function registerPluginIpc(
       artifactDigest: currentTrust.artifactDigest,
     }
     const previousDescriptor = manager.getDescriptor(id)
-    const previousVersion = previousDescriptor?.packageVersion
+    // Backend-only packages deliberately have no frontend descriptor. The
+    // durable active selector remains the authoritative runtime identity, so
+    // it must still be drained before candidate promotion.
+    const previousVersion = previousDescriptor?.packageVersion ?? selectedBeforeRestart.active?.packageVersion
+    const previousGrant = previousVersion ? capabilityGrants.get(id, previousVersion) : null
+    if (previousVersion && !previousGrant) {
+      throw new Error(`active package grant is unavailable for ${id}`)
+    }
     activeTransactions.add(id)
     let restartTransaction: PluginPackageRestartTransaction | undefined
+    let drainedBackendOnly = false
+    let promoted = false
     try {
+      lifecycleSelector.beginActivation(id, previousGrant ? { previousGrant } : {})
       if (previousVersion) {
-        restartTransaction = await manager.beginPackageRestart(id, previousVersion)
+        if (previousDescriptor) {
+          restartTransaction = await manager.beginPackageRestart(id, previousVersion)
+        } else {
+          await manager.revokePackageVersion(id, previousVersion)
+          drainedBackendOnly = true
+        }
+      }
+      // The old runtime may take time to drain. Re-check the exact candidate
+      // bytes and current Registry authority at the cutover seam, not only
+      // before the drain started.
+      const cutoverTrust = verifyCommitted(candidateDir, id, resolveConfiguredMarketplace(trust).trust)
+      if (cutoverTrust.action === 'quarantine') {
+        throw new Error(`staged candidate quarantined: ${cutoverTrust.reason}`)
+      }
+      if (cutoverTrust.artifactDigest !== selectedBeforeRestart.candidate.artifactDigest) {
+        throw new Error('staged candidate artifact identity changed during restart')
       }
       const selected = lifecycleSelector.activateCandidate(id)
+      promoted = true
       const summary = { ...scanned.packageSummary, provenance: 'official-registry' as const }
       if (scanned.descriptor) {
         manager.registerInstalledPackage(summary, scanned.descriptor, { official: true })
@@ -574,6 +600,19 @@ export function registerPluginIpc(
           activeVersion: selected.active!.packageVersion,
           ...(selected.previous ? { previousVersion: selected.previous.packageVersion } : {}),
         })
+      } else {
+        // Backend-only packages have no frontend descriptor, but they still
+        // need a version-bound grant for their next update or rollback.
+        manager.registerInstalledPackage(summary, undefined, { official: true }, candidateDir)
+        capabilityGrants.set(id, {
+          packageVersion: selected.active!.packageVersion,
+          system: [],
+          storage: true,
+        })
+        manager.setPluginStorageSnapshotSelection(id, {
+          activeVersion: selected.active!.packageVersion,
+          ...(selected.previous ? { previousVersion: selected.previous.packageVersion } : {}),
+        })
       }
       options.onActivationChange?.({ pluginId: id, activation })
       if (restartTransaction) {
@@ -582,6 +621,7 @@ export function registerPluginIpc(
           selected.active!.packageVersion,
         )
         manager.completePackageRestart(restartTransaction)
+        lifecycleSelector.completeActivation(id)
         options.onPackageInstalled?.(id)
         return {
           id,
@@ -590,10 +630,231 @@ export function registerPluginIpc(
           skippedDestroyedHostWindows: report.skippedDestroyedHostWindows,
         }
       }
+      lifecycleSelector.completeActivation(id)
       options.onPackageInstalled?.(id)
       return { id, packageVersion: selected.active!.packageVersion, restoredInstances: 0, skippedDestroyedHostWindows: 0 }
     } catch (error) {
+      if (promoted) {
+        try {
+          const promotedSelection = lifecycleSelector.read(id)
+          const previous = promotedSelection?.previous
+          if (previous) {
+            const previousDir = lifecycleSelector.packageDir(id, previous)
+            const previousTrust = verifyCommitted(
+              previousDir,
+              id,
+              resolveConfiguredMarketplace(trust).trust,
+            )
+            if (previousTrust.action === 'quarantine') {
+              throw new Error(`previous package is unavailable for rollback: ${previousTrust.reason}`)
+            }
+            if (previousTrust.artifactDigest !== previous.artifactDigest) {
+              throw new Error('previous package artifact identity changed before rollback')
+            }
+            const previousScanned = loadPluginDir(previousDir)
+            if (
+              previousScanned.error ||
+              !previousScanned.activation ||
+              !previousScanned.packageSummary
+            ) {
+              throw new Error(
+                `previous package is invalid for rollback${previousScanned.error ? `: ${previousScanned.error}` : ''}`,
+              )
+            }
+            await manager.revokePackageVersion(id, promotedSelection.active!.packageVersion)
+            lifecycleSelector.rollbackPromotedActivation(id)
+            const retainedGrant = promotedSelection.previousGrant
+            if (!retainedGrant) throw new Error('previous package grant is unavailable for rollback')
+            capabilityGrants.set(id, retainedGrant)
+            manager.registerInstalledPackage(
+              { ...previousScanned.packageSummary, provenance: 'official-registry' },
+              previousScanned.descriptor,
+              { official: true },
+              previousDir,
+            )
+            manager.setPluginStorageSnapshotSelection(id, { activeVersion: previous.packageVersion })
+            options.onActivationChange?.({
+              pluginId: id,
+              activation: {
+                ...previousScanned.activation,
+                provenance: 'official-registry',
+                artifactDigest: previousTrust.artifactDigest,
+              },
+            })
+            if (restartTransaction && previousScanned.descriptor) {
+              await manager.restorePackageRestart(restartTransaction, previous.packageVersion)
+              manager.completePackageRestart(restartTransaction)
+              restartTransaction = undefined
+            }
+          } else {
+            await manager.revokePackageVersion(id, promotedSelection?.active?.packageVersion ?? selectedBeforeRestart.candidate.packageVersion)
+            lifecycleSelector.rollbackPromotedActivation(id)
+            manager.removeInstalledPlugin(id, { restoreBuiltin: false })
+            options.onActivationChange?.({ pluginId: id })
+          }
+        } catch (rollbackError) {
+          if (restartTransaction) manager.cancelPackageRestart(restartTransaction)
+          throw new AggregateError([error, rollbackError], 'Plugin restart and rollback failed.')
+        }
+      }
+      if (!promoted) {
+        try {
+          lifecycleSelector.recoverInterruptedActivation(id)
+          if (restartTransaction && previousVersion) {
+            await manager.restorePackageRestart(restartTransaction, previousVersion)
+            manager.completePackageRestart(restartTransaction)
+            restartTransaction = undefined
+          }
+          if (drainedBackendOnly && selectedBeforeRestart.active) {
+            const priorScanned = loadPluginDir(
+              lifecycleSelector.packageDir(id, selectedBeforeRestart.active),
+            )
+            if (priorScanned.activation) {
+              options.onActivationChange?.({
+                pluginId: id,
+                activation: {
+                  ...priorScanned.activation,
+                  provenance: 'official-registry',
+                  artifactDigest: selectedBeforeRestart.active.artifactDigest,
+                },
+              })
+            }
+          }
+        } catch (recoveryError) {
+          if (restartTransaction) manager.cancelPackageRestart(restartTransaction)
+          throw new AggregateError([error, recoveryError], 'Plugin restart recovery failed.')
+        }
+      }
       if (restartTransaction) manager.cancelPackageRestart(restartTransaction)
+      throw error
+    } finally {
+      activeTransactions.delete(id)
+    }
+  })
+
+  ipcMain.handle('plugins:rollback', async (event, args: { id?: unknown } | null) => {
+    assertAuthorized(event)
+    const id = assertPluginRemovalTarget(pluginsRoot, args?.id)
+    if (activeTransactions.has(id)) {
+      throw new Error(`plugin transaction already in progress for ${id}`)
+    }
+    const selectedBeforeRollback = lifecycleSelector.read(id)
+    if (
+      !selectedBeforeRollback?.active ||
+      !selectedBeforeRollback.previous ||
+      selectedBeforeRollback.candidate ||
+      selectedBeforeRollback.activation
+    ) {
+      throw new Error(`plugin ${id} has no completed activation to roll back`)
+    }
+    const previous = selectedBeforeRollback.previous
+    const previousDir = lifecycleSelector.packageDir(id, previous)
+    const verifyCommitted =
+      options.verifyCommittedInstall ??
+      ((pluginDir: string, pluginId: string, trustConfig: InstallerTrustConfig) =>
+        verifyInstalledRegistryPackage(pluginDir, pluginId, {
+          pinnedRootKey: trustConfig.pinnedRegistryRootKey,
+          snapshot: readRegistryTrustSnapshot(pluginsRoot),
+          registryAuthority: trustConfig.registryAuthority,
+          officialRegistryUrl: trustConfig.officialRegistryUrl,
+          expectedTarget: trustConfig.expectedTarget ?? currentPluginHostTarget(),
+          now: trustConfig.now,
+        }))
+    const verifyPrevious = () => {
+      const decision = verifyCommitted(previousDir, id, resolveConfiguredMarketplace(trust).trust)
+      if (decision.action === 'quarantine') {
+        throw new Error(`previous package is unavailable for rollback: ${decision.reason}`)
+      }
+      if (decision.artifactDigest !== previous.artifactDigest) {
+        throw new Error('previous package artifact identity changed before rollback')
+      }
+      return decision
+    }
+    verifyPrevious()
+    const previousScanned = loadPluginDir(previousDir)
+    if (
+      previousScanned.error ||
+      !previousScanned.activation ||
+      !previousScanned.packageSummary ||
+      !selectedBeforeRollback.previousGrant
+    ) {
+      throw new Error(
+        `previous package is unavailable for rollback${previousScanned.error ? `: ${previousScanned.error}` : ''}`,
+      )
+    }
+    const currentDescriptor = manager.getDescriptor(id)
+    // A backend-only activation has no descriptor, but its exact active
+    // selector identity still owns a live runtime that must drain first.
+    const currentVersion = currentDescriptor?.packageVersion ?? selectedBeforeRollback.active.packageVersion
+    activeTransactions.add(id)
+    let restartTransaction: PluginPackageRestartTransaction | undefined
+    let drainedBackendOnly = false
+    let promoted = false
+    try {
+      lifecycleSelector.beginRollback(id)
+      if (currentDescriptor) {
+        restartTransaction = await manager.beginPackageRestart(id, currentVersion)
+      } else {
+        await manager.revokePackageVersion(id, currentVersion)
+        drainedBackendOnly = true
+      }
+      const currentPreviousTrust = verifyPrevious()
+      const selected = lifecycleSelector.activatePrevious(id)
+      promoted = true
+      capabilityGrants.set(id, selectedBeforeRollback.previousGrant!)
+      manager.registerInstalledPackage(
+        { ...previousScanned.packageSummary, provenance: 'official-registry' },
+        previousScanned.descriptor,
+        { official: true },
+        previousDir,
+      )
+      manager.setPluginStorageSnapshotSelection(id, { activeVersion: selected.active!.packageVersion })
+      options.onActivationChange?.({
+        pluginId: id,
+        activation: {
+          ...previousScanned.activation,
+          provenance: 'official-registry',
+          artifactDigest: currentPreviousTrust.artifactDigest,
+        },
+      })
+      if (restartTransaction && previousScanned.descriptor) {
+        const report = await manager.restorePackageRestart(restartTransaction, selected.active!.packageVersion)
+        manager.completePackageRestart(restartTransaction)
+        restartTransaction = undefined
+        lifecycleSelector.completeRollback(id)
+        return {
+          id,
+          packageVersion: selected.active!.packageVersion,
+          restoredInstances: report.restoredInstances,
+          skippedDestroyedHostWindows: report.skippedDestroyedHostWindows,
+        }
+      }
+      lifecycleSelector.completeRollback(id)
+      return { id, packageVersion: selected.active!.packageVersion, restoredInstances: 0, skippedDestroyedHostWindows: 0 }
+    } catch (error) {
+      try {
+        if (!promoted) {
+          lifecycleSelector.recoverInterruptedActivation(id)
+          if (restartTransaction) manager.cancelPackageRestart(restartTransaction)
+          if (drainedBackendOnly) {
+            const currentDir = lifecycleSelector.packageDir(id, selectedBeforeRollback.active)
+            const currentScanned = loadPluginDir(currentDir)
+            if (currentScanned.activation) {
+              options.onActivationChange?.({
+                pluginId: id,
+                activation: {
+                  ...currentScanned.activation,
+                  provenance: 'official-registry',
+                  artifactDigest: selectedBeforeRollback.active.artifactDigest,
+                },
+              })
+            }
+          }
+        }
+      } catch (recoveryError) {
+        if (restartTransaction) manager.cancelPackageRestart(restartTransaction)
+        throw new AggregateError([error, recoveryError], 'Plugin rollback recovery failed.')
+      }
       throw error
     } finally {
       activeTransactions.delete(id)

@@ -874,6 +874,10 @@ const installedPluginLoad = frontendPluginManager.loadInstalledPlugins(pluginsRo
   provenance: 'official-registry',
   trust: installedPluginTrust,
 })
+// Project the recovered durable package/storage selection before any factory
+// or renderer activation can mount a plugin instance. Invalid selectors remain
+// fail-closed in the loader and never become a guessed storage fallback.
+frontendPluginManager.projectPluginStorageSnapshotSelections(pluginsRoot())
 // Only a package that passed install verification and produced a usable
 // descriptor suppresses the bundled factory copy. A corrupt/quarantined
 // directory named navide.git is not an authoritative installation.

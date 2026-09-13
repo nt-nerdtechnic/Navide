@@ -1111,7 +1111,7 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
       const restart = handlers.get('plugins:restart')!
       const list = handlers.get('plugins:listInstalled')!
       await prepare(null, { namespace: 'acme', name: 'demo' })
-      await commit(null, { id: 'acme.demo', publisherConfirmed: true })
+      await commit(null, { id: 'acme.demo', publisherConfirmed: true, riskConfirmed: true })
       await restart(null, { id: 'acme.demo' })
       activationChanges.length = 0
 
@@ -1159,6 +1159,174 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
       expect(activationChanges[0]).toMatchObject({
         pluginId: 'acme.demo',
         activation: { packageVersion: '1.0.1', artifactDigest: second.digest },
+      })
+    } finally {
+      await manager.closeBackendPlugins()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rolls a promoted candidate back to the verified previous package when placement restoration fails', async () => {
+    const first = buildPkg('acme.demo', 'acme', {}, '1.0.0')
+    const second = buildPkg('acme.demo', 'acme', {}, '1.0.1')
+    const root = mkdtempSync(join(tmpdir(), 'navide-plugin-restart-rollback-'))
+    const manager = new FrontendPluginManager()
+    try {
+      registerPluginIpc(manager, root, () => true, TRUST_CONFIG, undefined, TEST_PREFLIGHT_OPTIONS)
+      const prepare = handlers.get('plugins:prepareInstall')!
+      const commit = handlers.get('plugins:commitInstall')!
+      const restart = handlers.get('plugins:restart')!
+
+      installFetch(signedDetail(first.digest, 'acme.demo', 'acme', '1.0.0'), first.bytes, first.digest)
+      await prepare(null, { namespace: 'acme', name: 'demo' })
+      await commit(null, { id: 'acme.demo', publisherConfirmed: true, riskConfirmed: true })
+      await restart(null, { id: 'acme.demo' })
+
+      installFetch(signedDetail(second.digest, 'acme.demo', 'acme', '1.0.1'), second.bytes, second.digest)
+      await prepare(null, { namespace: 'acme', name: 'demo', version: '1.0.1' })
+      await commit(null, { id: 'acme.demo', publisherConfirmed: true })
+      vi.spyOn(manager, 'restorePackageRestart').mockRejectedValueOnce(new Error('injected placement failure'))
+
+      await expect(restart(null, { id: 'acme.demo' })).rejects.toThrow('injected placement failure')
+      expect(manager.getDescriptor('acme.demo')?.packageVersion).toBe('1.0.0')
+      expect(new PluginActivationSelector(root).read('acme.demo')).toEqual({
+        schemaVersion: 1,
+        pluginId: 'acme.demo',
+        active: { packageVersion: '1.0.0', target: 'universal', artifactDigest: first.digest },
+        candidate: { packageVersion: '1.0.1', target: 'universal', artifactDigest: second.digest },
+      })
+    } finally {
+      await manager.closeBackendPlugins()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('re-verifies and restarts only the retained previous package on explicit rollback', async () => {
+    const first = buildPkg('acme.demo', 'acme', {}, '1.0.0')
+    const second = buildPkg('acme.demo', 'acme', {}, '1.0.1')
+    const root = mkdtempSync(join(tmpdir(), 'navide-plugin-explicit-rollback-'))
+    const manager = new FrontendPluginManager()
+    try {
+      registerPluginIpc(manager, root, () => true, TRUST_CONFIG, undefined, TEST_PREFLIGHT_OPTIONS)
+      const prepare = handlers.get('plugins:prepareInstall')!
+      const commit = handlers.get('plugins:commitInstall')!
+      const restart = handlers.get('plugins:restart')!
+      const rollback = handlers.get('plugins:rollback')
+      if (!rollback) throw new Error('rollback handler not registered')
+
+      installFetch(signedDetail(first.digest, 'acme.demo', 'acme', '1.0.0'), first.bytes, first.digest)
+      await prepare(null, { namespace: 'acme', name: 'demo' })
+      await commit(null, { id: 'acme.demo', publisherConfirmed: true, riskConfirmed: true })
+      await restart(null, { id: 'acme.demo' })
+      installFetch(signedDetail(second.digest, 'acme.demo', 'acme', '1.0.1'), second.bytes, second.digest)
+      await prepare(null, { namespace: 'acme', name: 'demo', version: '1.0.1' })
+      await commit(null, { id: 'acme.demo', publisherConfirmed: true, riskConfirmed: true })
+      await restart(null, { id: 'acme.demo' })
+
+      await expect(rollback(null, { id: 'acme.demo' })).resolves.toMatchObject({
+        id: 'acme.demo',
+        packageVersion: '1.0.0',
+      })
+      expect(manager.getDescriptor('acme.demo')?.packageVersion).toBe('1.0.0')
+      expect(new PluginActivationSelector(root).read('acme.demo')).toEqual({
+        schemaVersion: 1,
+        pluginId: 'acme.demo',
+        active: { packageVersion: '1.0.0', target: 'universal', artifactDigest: first.digest },
+        candidate: { packageVersion: '1.0.1', target: 'universal', artifactDigest: second.digest },
+      })
+    } finally {
+      await manager.closeBackendPlugins()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('drains a backend-only active version before promoting an explicit rollback', async () => {
+    const first = buildBackendPkg('1.0.0')
+    const second = buildBackendPkg('1.0.1')
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'navide-plugin-backend-rollback-drain-')))
+    const manager = new FrontendPluginManager()
+    try {
+      registerPluginIpc(manager, root, () => true, TRUST_CONFIG, undefined, {
+        ...TEST_PREFLIGHT_OPTIONS,
+        onActivationChange: ({ activation }) => {
+          if (!activation?.backend) return
+          const packageDirectories = (manager as unknown as {
+            installedPackageDirectories: Map<string, string>
+          }).installedPackageDirectories
+          expect(packageDirectories.get(activation.pluginId)).toBe(activation.packageDir)
+          manager.registerBackendActivation({
+            pluginId: activation.pluginId,
+            packageVersion: activation.packageVersion,
+            packageDir: activation.packageDir,
+            entryFile: activation.backend.entryFile,
+            protocolVersion: activation.backend.protocolVersion,
+            activation: activation.backend.activation,
+            approvedMethods: [],
+            approvedEvents: [],
+            approvedBridgePorts: [],
+          })
+        },
+      })
+      const prepare = handlers.get('plugins:prepareInstall')!
+      const commit = handlers.get('plugins:commitInstall')!
+      const restart = handlers.get('plugins:restart')!
+      const rollback = handlers.get('plugins:rollback')
+      if (!rollback) throw new Error('rollback handler not registered')
+
+      installFetch(signedDetail(first.digest, 'acme.demo', 'acme', '1.0.0'), first.bytes, first.digest)
+      await prepare(null, { namespace: 'acme', name: 'demo' })
+      await commit(null, { id: 'acme.demo', publisherConfirmed: true, riskConfirmed: true })
+      await restart(null, { id: 'acme.demo' })
+      expect(manager.hasBackendActivation('acme.demo', '1.0.0')).toBe(true)
+      installFetch(signedDetail(second.digest, 'acme.demo', 'acme', '1.0.1'), second.bytes, second.digest)
+      await prepare(null, { namespace: 'acme', name: 'demo', version: '1.0.1' })
+      await commit(null, { id: 'acme.demo', publisherConfirmed: true, riskConfirmed: true })
+      await restart(null, { id: 'acme.demo' })
+      expect(manager.hasBackendActivation('acme.demo', '1.0.1')).toBe(true)
+
+      const revoke = vi.spyOn(manager, 'revokePackageVersion')
+      await expect(rollback(null, { id: 'acme.demo' })).resolves.toMatchObject({ packageVersion: '1.0.0' })
+      expect(revoke).toHaveBeenCalledWith('acme.demo', '1.0.1')
+      expect(manager.hasBackendActivation('acme.demo', '1.0.0')).toBe(true)
+    } finally {
+      await manager.closeBackendPlugins()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('leaves a promoted rollback journal for cold recovery when placement restoration fails', async () => {
+    const first = buildPkg('acme.demo', 'acme', {}, '1.0.0')
+    const second = buildPkg('acme.demo', 'acme', {}, '1.0.1')
+    const root = mkdtempSync(join(tmpdir(), 'navide-plugin-rollback-recovery-'))
+    const manager = new FrontendPluginManager()
+    try {
+      registerPluginIpc(manager, root, () => true, TRUST_CONFIG, undefined, TEST_PREFLIGHT_OPTIONS)
+      const prepare = handlers.get('plugins:prepareInstall')!
+      const commit = handlers.get('plugins:commitInstall')!
+      const restart = handlers.get('plugins:restart')!
+      const rollback = handlers.get('plugins:rollback')
+      if (!rollback) throw new Error('rollback handler not registered')
+
+      installFetch(signedDetail(first.digest, 'acme.demo', 'acme', '1.0.0'), first.bytes, first.digest)
+      await prepare(null, { namespace: 'acme', name: 'demo' })
+      await commit(null, { id: 'acme.demo', publisherConfirmed: true })
+      await restart(null, { id: 'acme.demo' })
+      installFetch(signedDetail(second.digest, 'acme.demo', 'acme', '1.0.1'), second.bytes, second.digest)
+      await prepare(null, { namespace: 'acme', name: 'demo', version: '1.0.1' })
+      await commit(null, { id: 'acme.demo', publisherConfirmed: true })
+      await restart(null, { id: 'acme.demo' })
+      vi.spyOn(manager, 'restorePackageRestart').mockRejectedValueOnce(new Error('injected rollback restore failure'))
+
+      await expect(rollback(null, { id: 'acme.demo' })).rejects.toThrow('injected rollback restore failure')
+      const selector = new PluginActivationSelector(root)
+      expect(selector.read('acme.demo')).toMatchObject({
+        active: { packageVersion: '1.0.0' },
+        candidate: { packageVersion: '1.0.1' },
+        activation: { kind: 'rollback', phase: 'promoted' },
+      })
+      expect(new PluginActivationSelector(root).recoverInterruptedActivation('acme.demo')).toMatchObject({
+        active: { packageVersion: '1.0.0' },
+        candidate: { packageVersion: '1.0.1' },
       })
     } finally {
       await manager.closeBackendPlugins()

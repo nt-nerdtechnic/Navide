@@ -22,6 +22,7 @@ import {
   scanInstalledPlugins,
   InstalledPluginError,
 } from './installedPlugins'
+import { immutablePluginPackageDir, PluginActivationSelector } from './pluginActivationSelector'
 
 const VALID = { id: 'acme.demo', version: '1.2.3', entry: 'dist/main.js', requires: ['fs', 'git'] }
 
@@ -471,5 +472,56 @@ describe('scanInstalledPlugins', () => {
     const err = scanned.find((s) => s.error)
     expect(ok?.descriptor?.entryFile).toBe(join(good, 'dist/main.js'))
     expect(err?.error).toBeTruthy()
+  })
+
+  it('keeps a legacy package in an arbitrary unpacker directory when no selector exists', () => {
+    const legacyDir = join(root, 'frontend-only')
+    mkdirSync(legacyDir)
+    writeFileSync(join(legacyDir, 'manifest.json'), JSON.stringify(VALID))
+
+    expect(scanInstalledPlugins(root)).toEqual([
+      expect.objectContaining({ dir: legacyDir, descriptor: expect.objectContaining({ id: 'acme.demo' }) }),
+    ])
+  })
+
+  it('loads only the exact active package selected by a valid durable selector', () => {
+    const legacyDir = join(root, 'acme.demo')
+    mkdirSync(legacyDir)
+    writeFileSync(join(legacyDir, 'manifest.json'), JSON.stringify({ ...VALID, version: '9.9.9' }))
+    const selected = {
+      packageVersion: '1.2.3',
+      target: 'universal',
+      artifactDigest: 'a'.repeat(64),
+    }
+    const packageDir = immutablePluginPackageDir(root, 'acme.demo', selected.packageVersion, selected.target)
+    mkdirSync(packageDir, { recursive: true })
+    writeFileSync(join(packageDir, 'manifest.json'), JSON.stringify(VALID))
+    new PluginActivationSelector(root).stageCandidate('acme.demo', selected)
+    new PluginActivationSelector(root).activateCandidate('acme.demo')
+
+    expect(scanInstalledPlugins(root)).toEqual([
+      expect.objectContaining({
+        dir: packageDir,
+        descriptor: expect.objectContaining({ id: 'acme.demo', packageDir }),
+      }),
+    ])
+  })
+
+  it('fails closed instead of falling back to a legacy root when its lifecycle selector is unreadable', () => {
+    const pluginDir = join(root, 'acme.demo')
+    mkdirSync(pluginDir)
+    writeFileSync(join(pluginDir, 'manifest.json'), JSON.stringify(VALID))
+    const selector = new PluginActivationSelector(root)
+    selector.stageCandidate('acme.demo', {
+      packageVersion: '1.0.0',
+      target: 'universal',
+      artifactDigest: 'a'.repeat(64),
+    })
+    writeFileSync(join(root, '.navide-lifecycle', 'acme.demo.json'), '{bad')
+
+    expect(scanInstalledPlugins(root)).toEqual([{
+      dir: pluginDir,
+      error: 'plugin lifecycle selector is unreadable',
+    }])
   })
 })

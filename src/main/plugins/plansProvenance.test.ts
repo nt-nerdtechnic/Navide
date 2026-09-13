@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { appendPlansProvenanceQuery, FrontendPluginManager, registerBundledPlans } from './frontendPluginManager'
@@ -12,8 +12,9 @@ function packageFixture(directory: string): string {
   writeFileSync(join(directory, 'manifest.json'), readFileSync('plugins/navide-plans/manifest.json'))
   writeFileSync(join(directory, 'frontend/left/index.html'), '<!doctype html>')
   writeFileSync(join(directory, 'frontend/window/index.html'), '<!doctype html>')
-  copyFileSync(process.execPath, join(directory, 'backend/navide-plans'))
-  chmodSync(join(directory, 'backend/navide-plans'), 0o700)
+  const backendEntry = join(directory, 'backend/navide-plans')
+  writeFileSync(backendEntry, Buffer.from([0x7f, 0x45, 0x4c, 0x46]))
+  chmodSync(backendEntry, 0o700)
   return realpathSync(directory)
 }
 

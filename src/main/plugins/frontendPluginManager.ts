@@ -145,6 +145,7 @@ import { AiTerminalOutputDecoder } from './aiTerminalOutput'
 import { MINI_IDE_STORAGE_KEYS } from '../../shared/miniIdePreferences'
 import type { MiniIdeLegacyPreferences } from './miniIdeLegacyPreferences'
 import type { FilePickerHost, FilePickerInvocation } from '../filePicker'
+import { PluginActivationSelector } from './pluginActivationSelector'
 
 /** Everything the manager needs to launch one plugin view. */
 export interface PluginLaunchDescriptor {
@@ -1092,6 +1093,9 @@ export class FrontendPluginManager {
   /** Validated packages installed under userData/plugins, including packages
    *  with no frontend descriptor. */
   private readonly installedPackages = new Map<string, InstalledPluginPackageSummary>()
+  /** Canonical roots for installed packages. Backend-only packages have no
+   *  descriptor, so their Host-approved backend activation is matched here. */
+  private readonly installedPackageDirectories = new Map<string, string>()
   /** Host-bundled builtin descriptors kept as fallbacks: removing a marketplace
    *  override of a bundled plugin reverts to the bundled copy instead of
    *  leaving the surface unavailable (see {@link removeInstalledPlugin}). */
@@ -1827,6 +1831,20 @@ export class FrontendPluginManager {
       activeVersion: selection.activeVersion,
       ...(selection.previousVersion ? { previousVersion: selection.previousVersion } : {}),
     })
+  }
+
+  /** Project valid durable package selections before any plugin instance can
+   * mount. Invalid or incomplete records are deliberately not turned into a
+   * guessed storage selection. */
+  projectPluginStorageSnapshotSelections(root: string): void {
+    const lifecycleSelector = new PluginActivationSelector(root)
+    for (const record of lifecycleSelector.list()) {
+      if (!record.active) continue
+      this.setPluginStorageSnapshotSelection(record.pluginId, {
+        activeVersion: record.active.packageVersion,
+        ...(record.previous ? { previousVersion: record.previous.packageVersion } : {}),
+      })
+    }
   }
 
   /** Delegate immediate pre-spawn trust revalidation to the backend child Host. */
@@ -7533,27 +7551,44 @@ export class FrontendPluginManager {
   /** Register one Host-approved package-local backend activation. */
   registerBackendActivation(activation: BackendPluginLaunchSpec): void {
     const descriptor = this.descriptors.get(activation.pluginId)
-    if (!descriptor) {
-      throw new BackendPluginError(
-        'INVALID_ACTIVATION',
-        'Backend activation has no selected package descriptor.',
-      )
-    }
-    const descriptorPackageDir = canonicalBackendPackageDir(descriptor.packageDir)
     const activationPackageDir = canonicalBackendPackageDir(activation.packageDir)
-    if (
-      descriptor.id !== activation.pluginId ||
-      descriptor.packageVersion !== activation.packageVersion ||
-      !descriptorPackageDir ||
-      !activationPackageDir ||
-      descriptorPackageDir !== activationPackageDir
-    ) {
+    const descriptorPackageDir = descriptor
+      ? canonicalBackendPackageDir(descriptor.packageDir)
+      : null
+    const installed = !descriptor ? this.installedPackages.get(activation.pluginId) : undefined
+    const installedPackageDir = !descriptor
+      ? this.installedPackageDirectories.get(activation.pluginId)
+      : undefined
+    const matchesDescriptor = Boolean(
+      descriptor &&
+      descriptor.id === activation.pluginId &&
+      descriptor.packageVersion === activation.packageVersion &&
+      descriptorPackageDir &&
+      activationPackageDir &&
+      descriptorPackageDir === activationPackageDir,
+    )
+    // A verified Manifest v2 package can legitimately contribute only a
+    // backend. It has no selected frontend descriptor, but it must still
+    // match the exact installed package identity recorded by the Host loader.
+    const matchesBackendOnlyPackage = Boolean(
+      !descriptor &&
+      installed &&
+      installed.packageVersion === activation.packageVersion &&
+      installedPackageDir &&
+      activationPackageDir &&
+      installedPackageDir === activationPackageDir,
+    )
+    if (!matchesDescriptor && !matchesBackendOnlyPackage) {
       throw new BackendPluginError(
         'INVALID_ACTIVATION',
-        'Backend activation does not match the selected package descriptor.',
+        descriptor
+          ? 'Backend activation does not match the selected package descriptor.'
+          : installed
+            ? 'Backend activation does not match the installed package identity.'
+            : 'Backend activation has no selected package descriptor.',
       )
     }
-    activation = { ...activation, packageDir: descriptorPackageDir }
+    activation = { ...activation, packageDir: descriptorPackageDir ?? installedPackageDir! }
     const existing = this.pluginBackendHost.activationForPlugin(activation.pluginId)
     if (existing) {
       throw new BackendPluginError(
@@ -7606,6 +7641,7 @@ export class FrontendPluginManager {
   /** Host-only rollback snapshot of an already approved backend registration. */
   getBackendActivation(pluginId: string, packageVersion: string): BackendPluginLaunchSpec | undefined {
     const packageDir = this.descriptors.get(pluginId)?.packageDir
+      ?? this.installedPackageDirectories.get(pluginId)
     return packageDir ? this.pluginBackendHost.activationFor(pluginId, packageVersion, packageDir) : undefined
   }
 
@@ -7829,7 +7865,7 @@ export class FrontendPluginManager {
       warning: 'Unsigned local unpacked plugin — Developer Mode only',
     }
     try {
-      this.registerInstalledPackage(summary, descriptor)
+      this.registerInstalledPackage(summary, descriptor, {}, packageDir)
     } catch (error) {
       return { loaded: false, error: error instanceof Error ? error.message : String(error) }
     }
@@ -7871,7 +7907,7 @@ export class FrontendPluginManager {
     }
     summary.provenance = 'factory-bundled'
     activation.provenance = 'factory-bundled'
-    this.registerInstalledPackage(summary, scanned.descriptor, { official: true })
+    this.registerInstalledPackage(summary, scanned.descriptor, { official: true }, packageDir)
     this.descriptorSources.set(expectedPluginId, 'factory-bundle')
     return {
       loaded: true,
@@ -7886,7 +7922,8 @@ export class FrontendPluginManager {
   registerInstalledPackage(
     summary: InstalledPluginPackageSummary,
     descriptor?: PluginLaunchDescriptor,
-    opts: { official?: boolean } = {}
+    opts: { official?: boolean } = {},
+    packageDir?: string,
   ): void {
     if (summary.id === HOST_EVENT_SOURCE_PLUGIN_ID) {
       throw new Error(`internal Host event identity '${HOST_EVENT_SOURCE_PLUGIN_ID}' is not a plugin id`)
@@ -7913,6 +7950,9 @@ export class FrontendPluginManager {
     this.clearTerminalRoutes(summary.id)
     this.descriptors.delete(summary.id)
     if (descriptor) this.registerDescriptor(descriptor, opts)
+    const canonicalPackageDir = canonicalBackendPackageDir(packageDir ?? descriptor?.packageDir)
+    if (canonicalPackageDir) this.installedPackageDirectories.set(summary.id, canonicalPackageDir)
+    else this.installedPackageDirectories.delete(summary.id)
     this.installedPackages.set(summary.id, {
       id: summary.id,
       requires: [...summary.requires],
@@ -8374,6 +8414,53 @@ export class FrontendPluginManager {
   } {
     const loaded: string[] = []
     const errors: string[] = []
+    const lifecycleSelector = new PluginActivationSelector(root)
+    const blockedRecoveryPluginIds = new Set<string>()
+    // A selector transition is not recovery authority on its own. For an
+    // official package, authenticate precisely the package that a cold
+    // recovery would select before changing the durable pointer or scanning
+    // any contribution. This keeps a post-drain crash from reviving a
+    // revoked/mutated prior package merely because it is retained on disk.
+    if (source?.provenance === 'official-registry') {
+      for (const record of lifecycleSelector.list()) {
+        if (!record.activation) continue
+        const recoveredSelection = record.activation.phase === 'prepared'
+          ? record.active
+          : record.activation.kind === 'candidate'
+            ? record.previous
+            : record.active
+        // A virgin first-install candidate has no prior selected package and
+        // can only recover to no active package. It has nothing to admit.
+        if (!recoveredSelection) {
+          lifecycleSelector.recoverInterruptedActivation(record.pluginId)
+          continue
+        }
+        const decision = verifyInstalledRegistryPackage(
+          lifecycleSelector.packageDir(record.pluginId, recoveredSelection),
+          record.pluginId,
+          source.trust,
+        )
+        if (
+          decision.action === 'quarantine' ||
+          decision.artifactDigest !== recoveredSelection.artifactDigest
+        ) {
+          blockedRecoveryPluginIds.add(record.pluginId)
+          errors.push(
+            `${record.pluginId}: interrupted lifecycle recovery blocked: ${
+              decision.action === 'quarantine'
+                ? decision.reason
+                : 'retained artifact digest does not match the lifecycle selector'
+            }`,
+          )
+          continue
+        }
+        lifecycleSelector.recoverInterruptedActivation(record.pluginId)
+      }
+    }
+    const scannedPlugins = scanInstalledPlugins(root)
+    const durableSelections = new Map(
+      lifecycleSelector.list().map((record) => [record.pluginId, record] as const),
+    )
     const approved: Array<{
       scanned: ReturnType<typeof scanInstalledPlugins>[number]
       pluginId: string
@@ -8381,7 +8468,7 @@ export class FrontendPluginManager {
       opts: { official?: boolean }
     }> = []
 
-    for (const scanned of scanInstalledPlugins(root)) {
+    for (const scanned of scannedPlugins) {
       if (scanned.error) {
         errors.push(`${scanned.dir}: ${scanned.error}`)
         continue
@@ -8389,6 +8476,7 @@ export class FrontendPluginManager {
       const pluginId = scanned.activation?.pluginId ?? scanned.descriptor?.id
       if (pluginId === undefined || scanned.packageSummary === undefined) continue
       if (includePluginIds && !includePluginIds.has(pluginId)) continue
+      if (blockedRecoveryPluginIds.has(pluginId)) continue
 
       const isV2 = scanned.activation !== undefined
       if (source?.provenance === 'official-registry') {
@@ -8401,6 +8489,14 @@ export class FrontendPluginManager {
         const decision = verifyInstalledRegistryPackage(scanned.dir, pluginId, source.trust)
         if (decision.action === 'quarantine') {
           errors.push(`${scanned.dir}: quarantined: ${decision.reason ?? 'trust verification failed'}`)
+          continue
+        }
+        const durableSelection = durableSelections.get(pluginId)
+        if (
+          durableSelection?.active &&
+          decision.artifactDigest !== durableSelection.active.artifactDigest
+        ) {
+          errors.push(`${scanned.dir}: active artifact digest does not match the durable lifecycle selector`)
           continue
         }
         scanned.packageSummary.provenance = 'official-registry'
@@ -8474,7 +8570,7 @@ export class FrontendPluginManager {
 
     for (const { scanned, packageSummary, opts } of uniqueApproved) {
       try {
-        this.registerInstalledPackage(packageSummary, scanned.descriptor, opts)
+        this.registerInstalledPackage(packageSummary, scanned.descriptor, opts, scanned.dir)
         if (scanned.descriptor) loaded.push(scanned.descriptor.id)
       } catch (err) {
         errors.push(`${scanned.dir}: ${err instanceof Error ? err.message : String(err)}`)
@@ -8520,6 +8616,7 @@ export class FrontendPluginManager {
         this.destroyPluginInstances(pluginId)
         this.clearTerminalRoutes(pluginId)
         this.installedPackages.delete(pluginId)
+        this.installedPackageDirectories.delete(pluginId)
         this.descriptors.delete(pluginId)
         const fallback = this.builtinFallbacks.get(pluginId)
         if (fallback) this.registerDescriptor(fallback, { builtin: true })
@@ -8532,6 +8629,7 @@ export class FrontendPluginManager {
         this.destroyPluginInstances(pluginId)
         this.clearTerminalRoutes(pluginId)
         this.installedPackages.delete(pluginId)
+        this.installedPackageDirectories.delete(pluginId)
         this.descriptors.delete(pluginId)
         const fallback = this.builtinFallbacks.get(pluginId)
         if (fallback) this.registerDescriptor(fallback, { builtin: true })
@@ -8836,6 +8934,7 @@ export class FrontendPluginManager {
   removeInstalledPlugin(id: string, opts: { restoreBuiltin?: boolean } = {}): void {
     this.preparePluginRemoval(id)
     this.installedPackages.delete(id)
+    this.installedPackageDirectories.delete(id)
     this.descriptors.delete(id)
     if (opts.restoreBuiltin !== false) {
       const fallback = this.builtinFallbacks.get(id)

@@ -290,6 +290,20 @@ import { PluginBackendHost } from './pluginBackendHost'
 import { BackendPluginError, PluginBackendSupervisor } from './pluginBackendSupervisor'
 import type { PlansBridgeContext } from './plansBridge'
 import { manifestV2CapabilityPolicy } from './pluginPermissions'
+import { PluginActivationSelector } from './pluginActivationSelector'
+import {
+  REGISTRY_ARTIFACT_NAME,
+  REGISTRY_RECEIPT_NAME,
+  registryReceiptFromEvidence,
+  type InstalledRegistryTrustContext,
+} from './pluginInstalledTrust'
+import {
+  canonicalTrustJson,
+  type RegistryPackageEnvelope,
+  type RegistryTrustMetadata,
+} from './pluginRegistryTrust'
+import { sha256Hex } from './pluginVerify'
+import { makeZip } from './zipFixture'
 import {
   HOST_EVENT_SOURCE_PLUGIN_ID,
   type HostCapabilityContext,
@@ -844,7 +858,9 @@ describe('devPlansPluginDescriptor', () => {
       writeFileSync(join(decoy, 'manifest.json'), readFileSync('plugins/navide-plans/manifest.json'))
       writeFileSync(join(decoy, 'frontend/left/index.html'), '<!doctype html>')
       writeFileSync(join(decoy, 'frontend/window/index.html'), '<!doctype html>')
-      copyFileSync(process.execPath, join(decoy, 'backend/navide-plans'))
+      const backendEntry = join(decoy, 'backend/navide-plans')
+      writeFileSync(backendEntry, Buffer.from([0x7f, 0x45, 0x4c, 0x46]))
+      chmodSync(backendEntry, 0o700)
 
       expect(devPlansV2PluginBundle('1.2.3', root)).toBeNull()
     } finally {
@@ -993,6 +1009,71 @@ describe('devPlansPluginDescriptor', () => {
       message: 'Backend activation has no selected package descriptor.',
     }))
     expect(mgr.hasBackendActivity()).toBe(false)
+  })
+
+  it('registers an installed backend-only activation only for its exact package identity', async () => {
+    const mgr = new FrontendPluginManager()
+    const pluginId = 'acme.backend-only'
+    const packageVersion = '1.0.0'
+    const packageDir = process.cwd()
+    const activation = {
+      pluginId,
+      packageVersion,
+      packageDir,
+      entryFile: '/plugins/acme.backend-only/backend',
+      protocolVersion: 1 as const,
+      activation: 'startup' as const,
+      approvedMethods: ['backend.run'],
+      approvedEvents: [],
+    }
+
+    mgr.registerInstalledPackage(
+      { id: pluginId, packageVersion, requires: [] },
+      undefined,
+      {},
+      packageDir,
+    )
+    mgr.registerBackendActivation(activation)
+
+    expect(mgr.hasBackendActivation(pluginId, packageVersion)).toBe(true)
+    expect(mgr.getBackendActivation(pluginId, packageVersion)).toEqual(
+      expect.objectContaining({ pluginId, packageVersion }),
+    )
+
+    await mgr.revokePackageVersion(pluginId, packageVersion)
+    expect(mgr.hasBackendActivation(pluginId, packageVersion)).toBe(false)
+
+    // The dynamic activation catalog may restore this Host-verified
+    // backend-only version after the restart drain completes.
+    mgr.registerBackendActivation(activation)
+    expect(mgr.hasBackendActivation(pluginId, packageVersion)).toBe(true)
+
+    await mgr.closeBackendPlugins()
+  })
+
+  it('rejects a backend-only activation with a mismatched installed package root', () => {
+    const mgr = new FrontendPluginManager()
+    const pluginId = 'acme.backend-only'
+    mgr.registerInstalledPackage(
+      { id: pluginId, packageVersion: '1.0.0', requires: [] },
+      undefined,
+      {},
+      process.cwd(),
+    )
+
+    expect(() => mgr.registerBackendActivation({
+      pluginId,
+      packageVersion: '1.0.0',
+      packageDir: join(process.cwd(), 'src'),
+      entryFile: '/plugins/acme.backend-only/backend',
+      protocolVersion: 1,
+      activation: 'startup',
+      approvedMethods: ['backend.run'],
+      approvedEvents: [],
+    })).toThrowError(expect.objectContaining({
+      code: 'INVALID_ACTIVATION',
+      message: 'Backend activation does not match the installed package identity.',
+    }))
   })
 
   it('rejects a backend activation whose package root is not the selected descriptor root', () => {
@@ -3322,6 +3403,313 @@ describe('registerDescriptor reserved-id guard', () => {
       expect(onFailure).not.toHaveBeenCalled()
     } finally {
       vi.useRealTimers()
+    }
+  })
+})
+
+describe('durable plugin selector startup wiring', () => {
+  function writeTrustedActivePackage(root: string, pluginId: string): {
+    trust: InstalledRegistryTrustContext
+    selection: { packageVersion: string; target: string; artifactDigest: string }
+  } {
+    const version = '1.0.0'
+    const target = 'universal'
+    const packageDir = join(root, pluginId, version, target, 'package')
+    mkdirSync(join(packageDir, 'frontend'), { recursive: true })
+    const manifest = JSON.stringify({
+      schemaVersion: 2,
+      apiVersion: '^1.0.0',
+      id: pluginId,
+      name: 'Recovery',
+      version,
+      publisher: 'acme',
+      permissions: {},
+      marketplace: { description: 'Recovery test plugin', license: 'MIT' },
+      contributes: {
+        views: [{
+          id: 'main',
+          kind: 'custom',
+          location: 'main',
+          title: 'Recovery',
+          entry: 'frontend/index.html',
+        }],
+      },
+    })
+    const archive = new Uint8Array(makeZip([
+      { name: 'manifest.json', data: manifest },
+      { name: 'frontend/index.html', data: '<!doctype html>' },
+    ]))
+    writeFileSync(join(packageDir, 'manifest.json'), manifest)
+    writeFileSync(join(packageDir, 'frontend', 'index.html'), '<!doctype html>')
+    writeFileSync(join(packageDir, REGISTRY_ARTIFACT_NAME), archive)
+
+    const rootKey = generateKeyPairSync('ed25519')
+    const signerKey = generateKeyPairSync('ed25519')
+    const rootPem = rootKey.publicKey.export({ type: 'spki', format: 'pem' }).toString()
+    const signerPem = signerKey.publicKey.export({ type: 'spki', format: 'pem' }).toString()
+    const signed = (value: unknown, key = signerKey.privateKey): string =>
+      edSign(null, Buffer.from(canonicalTrustJson(value)), key).toString('base64')
+    const artifactDigest = sha256Hex(archive)
+    const envelope: RegistryPackageEnvelope = {
+      schemaVersion: 1,
+      artifactDigest,
+      packageId: pluginId,
+      version,
+      target,
+      publisherId: 'acme',
+      keyId: 'selector-test',
+      signedAt: '2026-08-16T11:00:00.000Z',
+    }
+    const metadata: RegistryTrustMetadata = {
+      schemaVersion: 1,
+      registryProfile: 'official',
+      rootFingerprint: `sha256:${'1'.repeat(64)}`,
+      generatedAt: '2026-08-16T10:00:00.000Z',
+      expiresAt: '2026-08-17T10:00:00.000Z',
+      signers: [{
+        keyId: 'selector-test',
+        publicKey: signerPem,
+        status: 'active',
+        notBefore: '2026-08-01T00:00:00.000Z',
+        notAfter: '2026-09-01T00:00:00.000Z',
+      }],
+      blockedPublishers: [],
+      blockedPackages: [],
+    }
+    writeFileSync(
+      join(packageDir, REGISTRY_RECEIPT_NAME),
+      JSON.stringify(registryReceiptFromEvidence({
+        packageId: pluginId,
+        version,
+        publisherId: 'acme',
+        target,
+        artifactDigest,
+        envelope,
+        envelopeSignature: signed(envelope),
+      })),
+    )
+    return {
+      trust: {
+        pinnedRootKey: rootPem,
+        snapshot: {
+          schemaVersion: 1,
+          metadata,
+          metadataSignature: signed(metadata, rootKey.privateKey),
+        },
+        expectedTarget: target,
+        now: new Date('2026-08-16T12:00:00.000Z'),
+      },
+      selection: { packageVersion: version, target, artifactDigest },
+    }
+  }
+
+  it('projects the selected active and previous package versions into generic storage', () => {
+    const root = mkdtempSync(join(tmpdir(), 'navide-selector-projection-'))
+    try {
+      const selector = new PluginActivationSelector(root)
+      selector.stageCandidate('acme.storage', {
+        packageVersion: '1.0.0',
+        target: 'universal',
+        artifactDigest: '11'.repeat(32),
+      })
+      selector.activateCandidate('acme.storage')
+      selector.stageCandidate('acme.storage', {
+        packageVersion: '2.0.0',
+        target: 'universal',
+        artifactDigest: '22'.repeat(32),
+      })
+      selector.activateCandidate('acme.storage')
+
+      const mgr = new FrontendPluginManager()
+      mgr.projectPluginStorageSnapshotSelections(root)
+
+      const selections = (mgr as unknown as {
+        pluginStorageSnapshotSelections: Map<string, { activeVersion: string; previousVersion?: string }>
+      }).pluginStorageSnapshotSelections
+      expect(selections.get('acme.storage')).toEqual({
+        activeVersion: '2.0.0',
+        previousVersion: '1.0.0',
+      })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('re-verifies the exact recovered active package before scanning after a cold interrupted activation', () => {
+    const root = mkdtempSync(join(tmpdir(), 'navide-selector-cold-recovery-'))
+    try {
+      const pluginId = 'acme.recovery'
+      const { trust, selection } = writeTrustedActivePackage(root, pluginId)
+      const selector = new PluginActivationSelector(root)
+      selector.stageCandidate(pluginId, selection)
+      selector.activateCandidate(pluginId)
+      selector.stageCandidate(pluginId, {
+        packageVersion: '2.0.0', target: 'universal', artifactDigest: '22'.repeat(32),
+      })
+      selector.beginActivation(pluginId)
+
+      const result = new FrontendPluginManager().loadInstalledPlugins(root, {
+        provenance: 'official-registry', trust,
+      })
+
+      expect(result.loaded).toEqual([pluginId])
+      expect(result.errors).toEqual([])
+      expect(new PluginActivationSelector(root).read(pluginId)).toMatchObject({
+        active: selection,
+        candidate: { packageVersion: '2.0.0' },
+      })
+      expect(new PluginActivationSelector(root).read(pluginId)?.activation).toBeUndefined()
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('does not recover or register when the exact retained rollback package no longer verifies', () => {
+    const root = mkdtempSync(join(tmpdir(), 'navide-selector-recovery-trust-failure-'))
+    try {
+      const pluginId = 'acme.recovery'
+      const { trust, selection } = writeTrustedActivePackage(root, pluginId)
+      const selector = new PluginActivationSelector(root)
+      selector.stageCandidate(pluginId, selection)
+      selector.activateCandidate(pluginId)
+      const candidate = {
+        packageVersion: '2.0.0', target: 'universal', artifactDigest: '22'.repeat(32),
+      }
+      selector.stageCandidate(pluginId, candidate)
+      selector.beginActivation(pluginId)
+      selector.activateCandidate(pluginId)
+      writeFileSync(
+        join(root, pluginId, selection.packageVersion, selection.target, 'package', REGISTRY_ARTIFACT_NAME),
+        'tampered retained artifact',
+      )
+
+      const result = new FrontendPluginManager().loadInstalledPlugins(root, {
+        provenance: 'official-registry', trust,
+      })
+
+      expect(result.loaded).toEqual([])
+      expect(result.activationCatalog).toEqual([])
+      expect(result.errors.join(' ')).toMatch(/interrupted lifecycle recovery blocked/i)
+      expect(new PluginActivationSelector(root).read(pluginId)).toMatchObject({
+        active: candidate,
+        previous: selection,
+        activation: { kind: 'candidate', phase: 'promoted' },
+      })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects an official package when its verified digest differs from the durable active selector', () => {
+    const root = mkdtempSync(join(tmpdir(), 'navide-selector-digest-'))
+    try {
+      const pluginId = 'acme.digest'
+      const version = '1.0.0'
+      const packageDir = join(root, pluginId, version, 'universal', 'package')
+      mkdirSync(join(packageDir, 'frontend'), { recursive: true })
+      const manifest = JSON.stringify({
+        schemaVersion: 2,
+        apiVersion: '^1.0.0',
+        id: pluginId,
+        name: 'Digest',
+        version,
+        publisher: 'acme',
+        permissions: {},
+        marketplace: { description: 'Digest test plugin', license: 'MIT' },
+        contributes: {
+          views: [{
+            id: 'main',
+            kind: 'custom',
+            location: 'main',
+            title: 'Digest',
+            entry: 'frontend/index.html',
+          }],
+        },
+      })
+      const archive = new Uint8Array(makeZip([
+        { name: 'manifest.json', data: manifest },
+        { name: 'frontend/index.html', data: '<!doctype html>' },
+      ]))
+      writeFileSync(join(packageDir, 'manifest.json'), manifest)
+      writeFileSync(join(packageDir, 'frontend', 'index.html'), '<!doctype html>')
+      writeFileSync(join(packageDir, REGISTRY_ARTIFACT_NAME), archive)
+
+      const rootKey = generateKeyPairSync('ed25519')
+      const signerKey = generateKeyPairSync('ed25519')
+      const rootPem = rootKey.publicKey.export({ type: 'spki', format: 'pem' }).toString()
+      const signerPem = signerKey.publicKey.export({ type: 'spki', format: 'pem' }).toString()
+      const signed = (value: unknown, key = signerKey.privateKey): string =>
+        edSign(null, Buffer.from(canonicalTrustJson(value)), key).toString('base64')
+      const digest = sha256Hex(archive)
+      const envelope: RegistryPackageEnvelope = {
+        schemaVersion: 1,
+        artifactDigest: digest,
+        packageId: pluginId,
+        version,
+        target: 'universal',
+        publisherId: 'acme',
+        keyId: 'selector-test',
+        signedAt: '2026-08-16T11:00:00.000Z',
+      }
+      const metadata: RegistryTrustMetadata = {
+        schemaVersion: 1,
+        registryProfile: 'official',
+        rootFingerprint: `sha256:${'1'.repeat(64)}`,
+        generatedAt: '2026-08-16T10:00:00.000Z',
+        expiresAt: '2026-08-17T10:00:00.000Z',
+        signers: [{
+          keyId: 'selector-test',
+          publicKey: signerPem,
+          status: 'active',
+          notBefore: '2026-08-01T00:00:00.000Z',
+          notAfter: '2026-09-01T00:00:00.000Z',
+        }],
+        blockedPublishers: [],
+        blockedPackages: [],
+      }
+      writeFileSync(
+        join(packageDir, REGISTRY_RECEIPT_NAME),
+        JSON.stringify(registryReceiptFromEvidence({
+          packageId: pluginId,
+          version,
+          publisherId: 'acme',
+          target: 'universal',
+          artifactDigest: digest,
+          envelope,
+          envelopeSignature: signed(envelope),
+        }))
+      )
+
+      const selector = new PluginActivationSelector(root)
+      selector.stageCandidate(pluginId, {
+        packageVersion: version,
+        target: 'universal',
+        artifactDigest: '00'.repeat(32),
+      })
+      selector.activateCandidate(pluginId)
+
+      const mgr = new FrontendPluginManager()
+      const trust: InstalledRegistryTrustContext = {
+        pinnedRootKey: rootPem,
+        snapshot: {
+          schemaVersion: 1,
+          metadata,
+          metadataSignature: signed(metadata, rootKey.privateKey),
+        },
+        expectedTarget: 'universal',
+        now: new Date('2026-08-16T12:00:00.000Z'),
+      }
+      const result = mgr.loadInstalledPlugins(root, {
+        provenance: 'official-registry',
+        trust,
+      })
+
+      expect(result.loaded).toEqual([])
+      expect(result.activationCatalog).toEqual([])
+      expect(result.errors.join(' ')).toMatch(/digest/i)
+      expect(mgr.getDescriptor(pluginId)).toBeUndefined()
+    } finally {
+      rmSync(root, { recursive: true, force: true })
     }
   })
 })

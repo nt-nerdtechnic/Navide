@@ -18,11 +18,19 @@ import { isPluginTargetCompatible } from './pluginTarget'
 import { isValidManifestV2PluginId } from './pluginManifestV2'
 import { parseHostTrustJsonObject } from './pluginTrustJson'
 import { PLUGIN_ACTIVATION_DIR } from './pluginInstallPaths'
+import type { HostCapabilityGrant } from './pluginCapabilityBroker'
 
 export interface PluginPackageSelection {
   packageVersion: string
   target: string
   artifactDigest: string
+}
+
+/** Durable activation progress. It distinguishes an intentional staged
+ * candidate from a restart that was interrupted after the old runtime drained. */
+export interface PluginActivationProgress {
+  kind: 'candidate' | 'rollback'
+  phase: 'prepared' | 'promoted'
 }
 
 export interface PluginActivationSelectorRecord {
@@ -33,6 +41,12 @@ export interface PluginActivationSelectorRecord {
   /** Explicit full-shell confirmation, retained only until candidate promotion. */
   candidateFullShellConfirmed?: true
   previous?: PluginPackageSelection
+  /** Durable grant for the retained previous package; rollback must never
+   * reconstruct package-version consent from a manifest alone. */
+  previousGrant?: HostCapabilityGrant
+  /** Grant bound to the active package while candidate cutover is in progress. */
+  activeGrant?: HostCapabilityGrant
+  activation?: PluginActivationProgress
 }
 
 function validDigest(value: unknown): value is string {
@@ -40,7 +54,12 @@ function validDigest(value: unknown): value is string {
 }
 
 function validVersion(value: unknown): value is string {
-  return typeof value === 'string' && value.length > 0 && !value.includes('/') && !value.includes('\\')
+  return typeof value === 'string' &&
+    value.length > 0 &&
+    value !== '.' &&
+    value !== '..' &&
+    !value.includes('/') &&
+    !value.includes('\\')
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -82,6 +101,39 @@ function validatePackage(value: unknown): PluginPackageSelection | undefined {
   }
 }
 
+function validateActivation(value: unknown): PluginActivationProgress | undefined {
+  if (value === undefined) return undefined
+  if (
+    !isObject(value) ||
+    (value.kind !== 'candidate' && value.kind !== 'rollback') ||
+    (value.phase !== 'prepared' && value.phase !== 'promoted')
+  ) throw new Error('invalid plugin lifecycle activation progress')
+  return { kind: value.kind, phase: value.phase }
+}
+
+function validateGrant(value: unknown, selection: PluginPackageSelection | undefined): HostCapabilityGrant | undefined {
+  if (value === undefined) return undefined
+  if (!selection || !isObject(value)) throw new Error('invalid plugin lifecycle previous grant')
+  const keys = Object.keys(value)
+  if (
+    keys.some((key) => !['packageVersion', 'system', 'shell', 'highRiskShellConfirmed', 'storage'].includes(key)) ||
+    value.packageVersion !== selection.packageVersion ||
+    !Array.isArray(value.system) ||
+    value.system.some((item) => item !== 'fs' && item !== 'ui' && item !== 'aiCli') ||
+    new Set(value.system).size !== value.system.length ||
+    (value.shell !== undefined && value.shell !== 'allowlist' && value.shell !== 'full') ||
+    (value.highRiskShellConfirmed !== undefined && value.highRiskShellConfirmed !== true) ||
+    value.storage !== true
+  ) throw new Error('invalid plugin lifecycle previous grant')
+  return {
+    packageVersion: value.packageVersion,
+    system: [...value.system] as HostCapabilityGrant['system'],
+    ...(value.shell ? { shell: value.shell } : {}),
+    ...(value.highRiskShellConfirmed ? { highRiskShellConfirmed: true } : {}),
+    storage: true,
+  }
+}
+
 function validateRecord(expectedPluginId: string, value: unknown): PluginActivationSelectorRecord {
   if (!isObject(value) || value.schemaVersion !== 1 || value.pluginId !== expectedPluginId) {
     throw new Error('invalid plugin lifecycle selector')
@@ -97,6 +149,9 @@ function validateRecord(expectedPluginId: string, value: unknown): PluginActivat
       'candidate',
       'candidateFullShellConfirmed',
       'previous',
+      'previousGrant',
+      'activeGrant',
+      'activation',
     ].includes(key)) ||
     (value.candidateFullShellConfirmed !== undefined && value.candidateFullShellConfirmed !== true) ||
     (value.candidateFullShellConfirmed === true && value.candidate === undefined)
@@ -106,6 +161,13 @@ function validateRecord(expectedPluginId: string, value: unknown): PluginActivat
   const active = validatePackage(value.active)
   const candidate = validatePackage(value.candidate)
   const previous = validatePackage(value.previous)
+  const previousGrant = validateGrant(value.previousGrant, previous)
+  const activeGrant = validateGrant(value.activeGrant, active)
+  const activation = validateActivation(value.activation)
+  if (
+    (activation?.kind === 'candidate' && candidate === undefined) ||
+    (activation?.kind === 'rollback' && activation.phase === 'promoted' && candidate === undefined)
+  ) throw new Error('invalid plugin lifecycle selector')
   return {
     schemaVersion: 1,
     pluginId: expectedPluginId,
@@ -113,6 +175,9 @@ function validateRecord(expectedPluginId: string, value: unknown): PluginActivat
     ...(candidate ? { candidate } : {}),
     ...(value.candidateFullShellConfirmed === true ? { candidateFullShellConfirmed: true } : {}),
     ...(previous ? { previous } : {}),
+    ...(previousGrant ? { previousGrant } : {}),
+    ...(activeGrant ? { activeGrant } : {}),
+    ...(activation ? { activation } : {}),
   }
 }
 
@@ -198,6 +263,30 @@ export class PluginActivationSelector {
     return next
   }
 
+  /** Persist the only restart-in-progress marker before draining the selected
+   * runtime. A cold start can therefore distinguish a staged candidate from an
+   * interrupted cutover without guessing from package directories. */
+  beginActivation(
+    pluginId: string,
+    options: { previousGrant?: HostCapabilityGrant } = {},
+  ): PluginActivationSelectorRecord {
+    const current = this.read(pluginId)
+    if (!current?.candidate) throw new Error(`plugin ${pluginId} has no staged candidate`)
+    if (current.activation) throw new Error(`plugin ${pluginId} activation is already in progress`)
+    const next: PluginActivationSelectorRecord = {
+      schemaVersion: 1,
+      pluginId,
+      ...(current.active ? { active: current.active } : {}),
+      candidate: current.candidate,
+      ...(current.candidateFullShellConfirmed ? { candidateFullShellConfirmed: true } : {}),
+      ...(current.previous ? { previous: current.previous } : {}),
+      ...(options.previousGrant ? { activeGrant: validateGrant(options.previousGrant, current.active) } : {}),
+      activation: { kind: 'candidate', phase: 'prepared' },
+    }
+    writeAtomic(selectorPath(this.root, pluginId), next)
+    return next
+  }
+
   /** Atomically promote the staged package identity. The preceding active
    * identity becomes previous; package files and snapshots are retained. */
   activateCandidate(pluginId: string): PluginActivationSelectorRecord {
@@ -207,7 +296,148 @@ export class PluginActivationSelector {
       schemaVersion: 1,
       pluginId,
       active: current.candidate,
+      ...(current.activation ? { candidate: current.candidate } : {}),
+      ...(current.candidateFullShellConfirmed && current.activation
+        ? { candidateFullShellConfirmed: true }
+        : {}),
       ...(current.active ? { previous: current.active } : current.previous ? { previous: current.previous } : {}),
+      ...(current.active && current.activeGrant ? { previousGrant: current.activeGrant } : {}),
+      ...(current.activation ? { activation: { kind: 'candidate', phase: 'promoted' } as const } : {}),
+    }
+    writeAtomic(selectorPath(this.root, pluginId), next)
+    return next
+  }
+
+  /** Mark a fully restored promotion complete. Candidate bytes remain immutable
+   * throughout the transaction, then become retained active/previous state. */
+  completeActivation(pluginId: string): PluginActivationSelectorRecord {
+    const current = this.read(pluginId)
+    if (!current?.activation) {
+      if (!current) throw new Error(`plugin ${pluginId} has no lifecycle record`)
+      return current
+    }
+    if (current.activation.kind !== 'candidate' || current.activation.phase !== 'promoted' || !current.active) {
+      throw new Error(`plugin ${pluginId} activation has not been promoted`)
+    }
+    const next: PluginActivationSelectorRecord = {
+      schemaVersion: 1,
+      pluginId,
+      active: current.active,
+      ...(current.previous ? { previous: current.previous } : {}),
+      ...(current.previousGrant ? { previousGrant: current.previousGrant } : {}),
+    }
+    writeAtomic(selectorPath(this.root, pluginId), next)
+    return next
+  }
+
+  /** Recover only a durable interrupted activation. A pre-promotion crash
+   * keeps the selected active package; a post-promotion crash returns to its
+   * exact previous selection. Candidate bytes are retained in both cases. */
+  recoverInterruptedActivation(pluginId: string): PluginActivationSelectorRecord | null {
+    const current = this.read(pluginId)
+    if (!current?.activation) return null
+    const next: PluginActivationSelectorRecord = current.activation.phase === 'prepared'
+      ? {
+          schemaVersion: 1,
+          pluginId,
+          ...(current.active ? { active: current.active } : {}),
+          candidate: current.candidate!,
+          ...(current.candidateFullShellConfirmed ? { candidateFullShellConfirmed: true } : {}),
+          ...(current.previous ? { previous: current.previous } : {}),
+          ...(current.previousGrant ? { previousGrant: current.previousGrant } : {}),
+          ...(current.activeGrant ? { activeGrant: current.activeGrant } : {}),
+        }
+      : current.activation.kind === 'rollback'
+        ? {
+            schemaVersion: 1,
+            pluginId,
+            active: current.active!,
+            candidate: current.candidate!,
+            ...(current.candidateFullShellConfirmed ? { candidateFullShellConfirmed: true } : {}),
+          }
+        : {
+          schemaVersion: 1,
+          pluginId,
+          ...(current.previous ? { active: current.previous } : {}),
+          candidate: current.candidate!,
+          ...(current.candidateFullShellConfirmed ? { candidateFullShellConfirmed: true } : {}),
+        }
+    writeAtomic(selectorPath(this.root, pluginId), next)
+    return next
+  }
+
+  /** Abort a promoted, not-yet-completed candidate in the live process. The
+   * caller must first drain the candidate runtime and re-verify `previous`
+   * against current trust before selecting this record. */
+  rollbackPromotedActivation(pluginId: string): PluginActivationSelectorRecord {
+    const current = this.read(pluginId)
+    if (!current?.activation || current.activation.phase !== 'promoted') {
+      throw new Error(`plugin ${pluginId} has no promoted activation to roll back`)
+    }
+    const recovered = this.recoverInterruptedActivation(pluginId)
+    if (!recovered) throw new Error(`plugin ${pluginId} has no activation to recover`)
+    return recovered
+  }
+
+  /** Persist an explicit rollback before the current runtime is drained. A
+   * staged update must be resolved first so retained candidate bytes cannot be
+   * overwritten by this transition. */
+  beginRollback(pluginId: string): PluginActivationSelectorRecord {
+    const current = this.read(pluginId)
+    if (!current?.active || !current.previous) {
+      throw new Error(`plugin ${pluginId} has no previous package to roll back to`)
+    }
+    if (current.candidate || current.activation) {
+      throw new Error(`plugin ${pluginId} cannot roll back while another lifecycle transition is pending`)
+    }
+    const next: PluginActivationSelectorRecord = {
+      schemaVersion: 1,
+      pluginId,
+      active: current.active,
+      previous: current.previous,
+      ...(current.previousGrant ? { previousGrant: current.previousGrant } : {}),
+      activation: { kind: 'rollback', phase: 'prepared' },
+    }
+    writeAtomic(selectorPath(this.root, pluginId), next)
+    return next
+  }
+
+  /** Atomically select the retained previous package. The displaced package is
+   * retained as a candidate, never deleted or overwritten by rollback. */
+  activatePrevious(pluginId: string): PluginActivationSelectorRecord {
+    const current = this.read(pluginId)
+    if (
+      !current?.active ||
+      !current.previous ||
+      current.activation?.kind !== 'rollback' ||
+      current.activation.phase !== 'prepared'
+    ) {
+      throw new Error(`plugin ${pluginId} has no prepared rollback`)
+    }
+    const next: PluginActivationSelectorRecord = {
+      schemaVersion: 1,
+      pluginId,
+      active: current.previous,
+      candidate: current.active,
+      activation: { kind: 'rollback', phase: 'promoted' },
+    }
+    writeAtomic(selectorPath(this.root, pluginId), next)
+    return next
+  }
+
+  /** Finish a restored rollback while retaining the displaced package as the
+   * next explicit candidate. */
+  completeRollback(pluginId: string): PluginActivationSelectorRecord {
+    const current = this.read(pluginId)
+    if (current?.activation?.kind !== 'rollback' || current.activation.phase !== 'promoted') {
+      throw new Error(`plugin ${pluginId} has no promoted rollback to complete`)
+    }
+    const next: PluginActivationSelectorRecord = {
+      schemaVersion: 1,
+      pluginId,
+      active: current.active!,
+      candidate: current.candidate!,
+      ...(current.candidateFullShellConfirmed ? { candidateFullShellConfirmed: true } : {}),
     }
     writeAtomic(selectorPath(this.root, pluginId), next)
     return next
