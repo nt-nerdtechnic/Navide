@@ -10,30 +10,19 @@
 # PyInstaller cannot cross-compile, so this spec runs once per target platform
 # on that platform's own CI runner.
 
-import sys
+# On Windows the ConPTY terminal backend is pywinpty, whose `conpty.dll`
+# launches winpty's loose `OpenConsole.exe` as the pty host. That `.exe` is not
+# reached by PyInstaller's graph walk and is not reliably picked up by
+# `collect_data_files` (whether a bare `.exe` counts as a data file varies by
+# PyInstaller version), so `_pyinstaller_winpty.collect_winpty` walks the
+# package directory and adds every `.exe` explicitly. Without it the
+# pseudoconsole is torn down at once and every pane exits with
+# STATUS_CONTROL_C_EXIT — the Windows app cannot run any pane. `--self-check
+# conpty` (see __main__.py) and test_pyinstaller_spec.py both assert the file
+# survives into the build so the omission can never ship silently again.
+from _pyinstaller_winpty import collect_winpty
 
-# On Windows the ConPTY terminal backend is pywinpty (winpty.PTY). pywinpty 3.x
-# does not create the pseudoconsole itself: conpty.dll launches winpty's own
-# `OpenConsole.exe` as the pty host. PyInstaller's graph walk collects the
-# extension module and the DLLs it links, but `OpenConsole.exe` is a loose data
-# file inside the `winpty` package that nothing imports, so a onefile build
-# omits it. When it is missing the spawn still "succeeds" but the pseudoconsole
-# is torn down immediately, the child receives CTRL_CLOSE_EVENT, and every
-# terminal / CLI pane exits within ~1 s with STATUS_CONTROL_C_EXIT (0xC000013A)
-# — the Windows app cannot run any pane. So collect the WHOLE winpty package
-# (data files + dynamic libs) into its `winpty/` subdir, keeping the layout
-# conpty.dll expects; collecting the package rather than naming OpenConsole.exe
-# by hand means a future pywinpty that adds another helper file is covered too.
-# `--self-check conpty` (see __main__.py) and test_pyinstaller_spec.py both
-# assert this file survives into the build so the omission can never ship
-# silently again.
-_winpty_binaries = []
-_winpty_datas = []
-if sys.platform == 'win32':
-    from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
-
-    _winpty_binaries = collect_dynamic_libs('winpty')
-    _winpty_datas = collect_data_files('winpty', include_py_files=False)
+_winpty_binaries, _winpty_datas = collect_winpty()
 
 a = Analysis(
     ['run.py'],

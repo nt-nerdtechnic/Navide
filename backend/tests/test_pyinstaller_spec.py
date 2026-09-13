@@ -106,17 +106,19 @@ def test_datas_sources_exist():
 
 
 def test_spec_wires_winpty_collection():
-    """The spec must feed the collected winpty package into Analysis.
+    """The spec must feed the shared winpty collector into Analysis.
 
     Structural, so it runs on every platform's CI (not just Windows): the
     `binaries=` argument must be the collected `_winpty_binaries` and `datas=`
-    must add `_winpty_datas`. Naming OpenConsole.exe by hand instead would
-    regress the moment pywinpty adds another helper file, so we require the
-    whole-package collect helpers to be present too.
+    must add `_winpty_datas`, both produced by `collect_winpty()`. Doing the
+    collection through the shared helper (rather than inline) is what lets
+    test_helper_collects_openconsole_on_windows below exercise the exact logic.
     """
     src = SPEC_PATH.read_text(encoding="utf-8")
-    assert "collect_dynamic_libs('winpty')" in src, "spec no longer collects winpty dynamic libs"
-    assert "collect_data_files('winpty'" in src, "spec no longer collects winpty data files"
+    assert "from _pyinstaller_winpty import collect_winpty" in src, (
+        "spec no longer imports the shared winpty collector"
+    )
+    assert "collect_winpty()" in src, "spec no longer calls collect_winpty()"
 
     call = _analysis_call()
     binaries = next((kw.value for kw in call.keywords if kw.arg == "binaries"), None)
@@ -133,24 +135,32 @@ def test_spec_wires_winpty_collection():
     assert "_winpty_datas" in names, "Analysis(datas=...) must include _winpty_datas"
 
 
-def test_spec_collects_openconsole_on_windows():
-    """On Windows the collection must actually yield winpty/OpenConsole.exe.
+def test_helper_collects_openconsole_on_windows():
+    """On Windows `collect_winpty()` must actually yield winpty/OpenConsole.exe.
 
     This is the file whose absence makes every ConPTY pane die with
-    STATUS_CONTROL_C_EXIT. Windows-only because pywinpty (and its data files)
-    exist only there; the frozen build additionally proves usability through
-    `agent_team_backend --self-check conpty` in CI.
+    STATUS_CONTROL_C_EXIT, and the whole reason the collection walks the package
+    for `.exe` instead of trusting `collect_data_files`' type classification
+    (which does not return the bare `.exe` on every PyInstaller version).
+    Windows-only because pywinpty exists only there; the frozen build
+    additionally proves usability through `--self-check conpty` in CI.
     """
     if sys.platform != "win32":
         import pytest
 
-        pytest.skip("winpty data files only exist on Windows")
+        pytest.skip("winpty and its OpenConsole.exe exist only on Windows")
 
-    from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
+    sys.path.insert(0, str(BACKEND_ROOT))
+    try:
+        from _pyinstaller_winpty import collect_winpty
+    finally:
+        sys.path.pop(0)
 
-    collected = collect_data_files("winpty", include_py_files=False) + collect_dynamic_libs("winpty")
-    dests = {Path(dest).name.lower() for _src, dest in collected}
-    assert "openconsole.exe" in dests, (
-        "winpty collection is missing OpenConsole.exe — ConPTY panes would die "
-        f"with STATUS_CONTROL_C_EXIT; collected: {sorted(dests)}"
+    binaries, datas = collect_winpty()
+    # A datas/binaries entry is (source_path, dest_dir); the filename lives in
+    # the source, and dest is the `winpty/` target directory.
+    names = {Path(src).name.lower() for src, _dest in [*binaries, *datas]}
+    assert "openconsole.exe" in names, (
+        "collect_winpty() is missing OpenConsole.exe — ConPTY panes would die "
+        f"with STATUS_CONTROL_C_EXIT; collected: {sorted(names)}"
     )
