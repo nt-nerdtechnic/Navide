@@ -1,7 +1,12 @@
 // @vitest-environment happy-dom
+// StorageSection + useStorageUsage together: the section draws what the
+// composable holds, so the two are exercised through one host component the
+// way the Resource Manager hosts them.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
-import StorageUsagePane from '../StorageUsagePane.vue'
+import { defineComponent, h } from 'vue'
+import StorageSection from '../StorageSection.vue'
+import { useStorageUsage } from '../../composables/useStorageUsage'
 import { i18n } from '@navide/plugin-ui/foundation'
 import { createMockBackend } from '../../composables/__tests__/mockBackend'
 
@@ -88,7 +93,19 @@ function report() {
   }
 }
 
-async function mountPane(opts: { rejectCleanup?: Error } = {}) {
+/** Hosts the composable the way ResourceManagerModal does. */
+const Host = defineComponent({
+  props: { backend: { type: Object, required: true } },
+  setup(props) {
+    const storage = useStorageUsage({
+      backend: props.backend as never,
+      workspacePaths: () => ['/Users/test/code/demo'],
+    })
+    return () => h(StorageSection, { storage })
+  },
+})
+
+async function mountSection(opts: { rejectCleanup?: Error; scan?: boolean } = {}) {
   const mock = createMockBackend('connected')
   mock.setResponse('storage.usage', report())
   mock.setResponse('storage.cleanup', { totalFreedBytes: 1_200_000_000, results: [] })
@@ -105,15 +122,19 @@ async function mountPane(opts: { rejectCleanup?: Error } = {}) {
         ? Promise.reject(failure)
         : inner(type, payload, timeoutMs)) as typeof inner
   }
-  const wrapper = mount(StorageUsagePane, {
-    props: { backend: mock.backend, workspacePaths: ['/Users/test/code/demo'] },
+  const wrapper = mount(Host, {
+    props: { backend: mock.backend },
     global: { plugins: [i18n] },
   })
   await flushPromises()
+  if (opts.scan !== false) {
+    await wrapper.get('[data-act="rescan"]').trigger('click')
+    await flushPromises()
+  }
   return { wrapper, mock }
 }
 
-describe('StorageUsagePane', () => {
+describe('StorageSection', () => {
   let wrapper: VueWrapper | undefined
 
   afterEach(() => {
@@ -122,8 +143,21 @@ describe('StorageUsagePane', () => {
     delete (window as unknown as Record<string, unknown>).agentTeam
   })
 
-  it('scans on mount and renders every group and item', async () => {
-    const mounted = await mountPane()
+  // The scan walks several large trees, so nothing may ask for it on mount.
+  it('stays collapsed and unscanned until asked', async () => {
+    const mounted = await mountSection({ scan: false })
+    wrapper = mounted.wrapper
+    expect(mounted.mock.sent.filter((s) => s.type === 'storage.usage')).toHaveLength(0)
+    expect(wrapper.get('[data-part="storage"]').attributes('data-open')).toBe('false')
+    expect(wrapper.find('[data-part="storage-body"]').exists()).toBe(false)
+    expect(wrapper.get('[data-part="storage-summary"]').text()).toBe(
+      i18n.global.t('resource.storage.unscanned')
+    )
+    expect(wrapper.get('[data-act="rescan"]').text()).toBe(i18n.global.t('resource.storage.scan'))
+  })
+
+  it('scans on request, opens, and renders every group and item', async () => {
+    const mounted = await mountSection()
     wrapper = mounted.wrapper
 
     const scans = mounted.mock.sent.filter((s) => s.type === 'storage.usage')
@@ -132,10 +166,14 @@ describe('StorageUsagePane', () => {
       workspacePaths: ['/Users/test/code/demo'],
       staleDays: 30,
     })
+    expect(wrapper.get('[data-part="storage"]').attributes('data-open')).toBe('true')
+    expect(wrapper.get('[data-part="storage-summary"]').text()).toContain('3.3 GB')
+    // Safe cleanable: rotatedLogs + storeBackups + chromiumCache = 2 GB.
+    expect(wrapper.get('[data-part="storage-summary"]').text()).toContain('1.9 GB')
 
     expect(wrapper.findAll('.su-item')).toHaveLength(5)
     const cache = wrapper.get('[data-item-id="rotatedLogs"]')
-    // Labels resolve through settings.storage.item.<id>.label.
+    // Labels resolve through resource.storage.item.<id>.label.
     expect(cache.get('.su-item-label').text()).toBe('Rotated backend logs')
     expect(cache.get('.su-size').text()).toBe('858 MB')
     expect(cache.get('.su-count').text()).toContain('4200')
@@ -144,13 +182,27 @@ describe('StorageUsagePane', () => {
     expect(wrapper.get('[data-item-id="storeBackups"]').get('.su-item-note').text()).toBe(
       'Rotated daily'
     )
+    // One bar segment per group, sized by share of the total.
+    const segs = wrapper.findAll('[data-part="storage-bar"] .su-bar-seg')
+    expect(segs.map((s) => s.attributes('data-group'))).toEqual(['appData', 'electron', 'workspaces'])
+    expect(segs[2].attributes('style')).toContain('42.9%')
     // Permission problems are a warning, not a failed scan.
     expect(wrapper.get('.su-warnings').text()).toContain('permission denied')
     expect(wrapper.find('.su-error').exists()).toBe(false)
   })
 
+  it('collapses and re-opens on the header toggle without rescanning', async () => {
+    const mounted = await mountSection()
+    wrapper = mounted.wrapper
+    await wrapper.get('[data-act="toggle-storage"]').trigger('click')
+    expect(wrapper.find('[data-part="storage-body"]').exists()).toBe(false)
+    await wrapper.get('[data-act="toggle-storage"]').trigger('click')
+    expect(wrapper.find('[data-part="storage-body"]').exists()).toBe(true)
+    expect(mounted.mock.sent.filter((s) => s.type === 'storage.usage')).toHaveLength(1)
+  })
+
   it('sorts items inside a group by size descending', async () => {
-    const mounted = await mountPane()
+    const mounted = await mountSection()
     wrapper = mounted.wrapper
     // Groups render in backend order, so the first three rows are the appData group.
     const ids = wrapper
@@ -161,7 +213,7 @@ describe('StorageUsagePane', () => {
   })
 
   it('renders no checkbox for non-cleanable items', async () => {
-    const mounted = await mountPane()
+    const mounted = await mountSection()
     wrapper = mounted.wrapper
     expect(wrapper.get('[data-item-id="appDataOther"]').find('.su-check').exists()).toBe(false)
     expect(wrapper.get('[data-item-id="appDataOther"]').classes()).toContain('su-item-locked')
@@ -175,10 +227,10 @@ describe('StorageUsagePane', () => {
     ;(window as unknown as Record<string, unknown>).agentTeam = {
       storage: { clearElectronCaches },
     }
-    const mounted = await mountPane()
+    const mounted = await mountSection()
     wrapper = mounted.wrapper
 
-    await wrapper.get('.su-clean-safe').trigger('click')
+    await wrapper.get('[data-act="clean-safe"]').trigger('click')
     await flushPromises()
     // One summary confirm, listing exactly the safe cleanable items.
     const confirmIds = wrapper
@@ -195,16 +247,16 @@ describe('StorageUsagePane', () => {
     expect(cleanups[0].payload.itemIds).toEqual(['rotatedLogs', 'storeBackups'])
     expect(clearElectronCaches).toHaveBeenCalledWith({ chromium: true, updater: false })
 
-    // Freed bytes are summed across both paths, then the pane rescans.
+    // Freed bytes are summed across both paths, then the section rescans.
     expect(wrapper.get('.su-result').text()).toContain('1.9 GB')
     expect(mounted.mock.sent.filter((s) => s.type === 'storage.usage')).toHaveLength(2)
   })
 
   it('surfaces a clear message when the electron cache bridge is missing', async () => {
-    const mounted = await mountPane()
+    const mounted = await mountSection()
     wrapper = mounted.wrapper
 
-    await wrapper.get('.su-clean-safe').trigger('click')
+    await wrapper.get('[data-act="clean-safe"]').trigger('click')
     await flushPromises()
     await wrapper.get('.su-confirm-ok').trigger('click')
     await flushPromises()
@@ -222,10 +274,10 @@ describe('StorageUsagePane', () => {
         }),
       },
     }
-    const mounted = await mountPane()
+    const mounted = await mountSection()
     wrapper = mounted.wrapper
 
-    await wrapper.get('.su-clean-safe').trigger('click')
+    await wrapper.get('[data-act="clean-safe"]').trigger('click')
     await flushPromises()
     await wrapper.get('.su-confirm-ok').trigger('click')
     await flushPromises()
@@ -242,10 +294,10 @@ describe('StorageUsagePane', () => {
     ;(window as unknown as Record<string, unknown>).agentTeam = {
       storage: { clearElectronCaches },
     }
-    const mounted = await mountPane({ rejectCleanup: new Error('request timed out') })
+    const mounted = await mountSection({ rejectCleanup: new Error('request timed out') })
     wrapper = mounted.wrapper
 
-    await wrapper.get('.su-clean-safe').trigger('click')
+    await wrapper.get('[data-act="clean-safe"]').trigger('click')
     await flushPromises()
     await wrapper.get('.su-confirm-ok').trigger('click')
     await flushPromises()
@@ -260,35 +312,66 @@ describe('StorageUsagePane', () => {
   })
 
   it('enables "Clean selected" only once a non-safe item is checked', async () => {
-    const mounted = await mountPane()
+    const mounted = await mountSection()
     wrapper = mounted.wrapper
 
-    const cleanSelected = wrapper.get('.su-clean-selected')
+    const cleanSelected = wrapper.get('[data-act="clean-selected"]')
     expect(cleanSelected.attributes('disabled')).toBeDefined()
 
     // A safe item alone is not enough — that is what "Clean safe items" is for.
     await wrapper.get('[data-item-id="rotatedLogs"] .su-check').setValue(true)
-    expect(wrapper.get('.su-clean-selected').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-act="clean-selected"]').attributes('disabled')).toBeDefined()
 
     await wrapper.get('[data-item-id="pipelineLogs"] .su-check').setValue(true)
-    expect(wrapper.get('.su-clean-selected').attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('[data-act="clean-selected"]').attributes('disabled')).toBeUndefined()
 
-    await wrapper.get('.su-clean-selected').trigger('click')
+    await wrapper.get('[data-act="clean-selected"]').trigger('click')
     await flushPromises()
     expect(
       wrapper.findAll('[data-confirm-id]').map((el) => el.attributes('data-confirm-id'))
     ).toEqual(['rotatedLogs', 'pipelineLogs'])
   })
 
+  it('cancelling the confirm deletes nothing', async () => {
+    const mounted = await mountSection()
+    wrapper = mounted.wrapper
+    await wrapper.get('[data-act="clean-safe"]').trigger('click')
+    await wrapper.get('.su-confirm-cancel').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.su-confirm').exists()).toBe(false)
+    expect(mounted.mock.sent.filter((s) => s.type === 'storage.cleanup')).toHaveLength(0)
+  })
+
   it('rescans with the new threshold when staleDays changes', async () => {
-    const mounted = await mountPane()
+    const mounted = await mountSection()
     wrapper = mounted.wrapper
 
-    await wrapper.get('.su-stale-select').setValue('90')
+    await wrapper.get('[data-act="stale-days"]').setValue('90')
     await flushPromises()
 
     const scans = mounted.mock.sent.filter((s) => s.type === 'storage.usage')
     expect(scans).toHaveLength(2)
     expect(scans[1].payload.staleDays).toBe(90)
+  })
+
+  it('treats a payload without groups as a failed scan, not a crash', async () => {
+    const mock = createMockBackend('connected')
+    mock.setResponse('storage.usage', {})
+    wrapper = mount(Host, { props: { backend: mock.backend }, global: { plugins: [i18n] } })
+    await wrapper.get('[data-act="rescan"]').trigger('click')
+    await flushPromises()
+    // Nothing to open onto, so the error is in the header's summary slot.
+    expect(wrapper.get('[data-part="storage"]').attributes('data-open')).toBe('false')
+    expect(wrapper.get('[data-part="storage-summary"]').text()).toContain('storage scan failed')
+  })
+
+  it('renders no untranslated i18n keys in either locale', async () => {
+    for (const locale of ['zh-TW', 'en-US'] as const) {
+      i18n.global.locale.value = locale
+      const mounted = await mountSection()
+      expect(mounted.wrapper.text()).not.toMatch(/resource\.storage\.[a-zA-Z.-]+/)
+      mounted.wrapper.unmount()
+    }
+    i18n.global.locale.value = 'en-US'
   })
 })

@@ -97,7 +97,6 @@ import SettingsSystemHelp from './SettingsSystemHelp.vue'
 import IconReferenceHelp from './IconReferenceHelp.vue'
 import ExtensionsPane from './ExtensionsPane.vue'
 import ExecutionPolicyPane from './ExecutionPolicyPane.vue'
-import StorageUsagePane from './StorageUsagePane.vue'
 import LayoutSettingsPane from '../layout/LayoutSettingsPane.vue'
 import McpPane from './McpPane.vue'
 import SkillsPane from './SkillsPane.vue'
@@ -128,12 +127,8 @@ const props = defineProps<{
   /** True when a workspace is open — CLI account sign-in needs one to spawn
    *  the login pane. */
   workspaceOpen?: boolean
-  /** Workspaces the app knows about — the Storage tab scans them for
-   *  reclaimable build output and logs. */
-  workspacePaths?: string[]
   /** The workspace currently open, empty when none is. The Memory tab edits
-   *  this project's instruction files, so it needs the open one by name
-   *  rather than the first of ``workspacePaths``. */
+   *  this project's instruction files. */
   workspacePath?: string
   stagesApi: ReturnType<typeof useStages>
   analyzerApi: ReturnType<typeof useAnalyzer>
@@ -165,6 +160,7 @@ const emit = defineEmits<{
   (e: 'update:idleReclaimEnabled', v: boolean): void
   (e: 'update:idleReclaimMinutes', v: string): void
   (e: 'reclaim-now'): void
+  (e: 'open-resource-manager'): void
 }>()
 const confirmBeforeCloseModel = computed({
   get: () => props.confirmBeforeClose ?? true,
@@ -202,7 +198,7 @@ const reclaimNowCount = computed(() => props.reclaimableNowCount ?? 0)
 const reclaimNowSize = computed(() => formatBytes(props.reclaimableNowBytes ?? 0))
 
 // ── Tab ───────────────────────────────────────────────────────────────────────
-type Tab = 'mcp' | 'skills' | 'prompts' | 'memory' | 'analyzer' | 'cliAgents' | 'general' | 'cross-device' | 'updates' | 'appearance' | 'statusBadges' | 'layout' | 'accounts' | 'extensions' | 'executionPolicy' | 'storage' | 'keybindings' | 'help'
+type Tab = 'mcp' | 'skills' | 'prompts' | 'memory' | 'analyzer' | 'cliAgents' | 'general' | 'cross-device' | 'updates' | 'appearance' | 'statusBadges' | 'layout' | 'accounts' | 'extensions' | 'executionPolicy' | 'keybindings' | 'help'
 
 /** Topics inside the Help tab — read-only reference material, no settings. */
 type HelpTopic =
@@ -397,6 +393,8 @@ interface SettingsSearchItem {
   keywords: string
   mcpView?: MView
   helpTopic?: HelpTopic
+  /** A result that is a door out of Settings rather than a place in it. */
+  opens?: 'resource-manager'
 }
 
 const settingsSearchQuery = ref('')
@@ -647,13 +645,16 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
     keywords: 'keybinding keybindings customize rebind remap shortcut shortcuts hotkey chord conflict reset 自訂 快捷鍵 改鍵 重新綁定 衝突 還原 keybindings.json',
   },
   {
+    // Storage lives in the Resource Manager now; the entry stays so "disk" and
+    // "cleanup" still find it from here.
     id: 'storage',
-    tab: 'storage',
+    tab: 'general',
     section: 'storage',
+    opens: 'resource-manager',
     title: 'Storage / 儲存空間',
     group: 'System',
-    summary: 'Scan disk usage across app data, Electron caches, CLI homes and workspaces, then clean up reclaimable space.',
-    keywords: 'storage disk space usage cache caches cleanup clean logs node_modules stale free 儲存 空間 磁碟 快取 清理 清除 日誌 佔用 釋出',
+    summary: 'Opens the Resource Manager, where disk usage across app data, Electron caches, CLI homes and workspaces is scanned and cleaned up.',
+    keywords: 'storage disk space usage cache caches cleanup clean logs node_modules stale free resource manager 儲存 空間 磁碟 快取 清理 清除 日誌 佔用 釋出 資源',
   },
   {
     id: 'execution-policy',
@@ -753,6 +754,11 @@ const settingsSearchResults = computed(() => {
 })
 
 async function openSettingsSearchResult(item: SettingsSearchItem): Promise<void> {
+  if (item.opens === 'resource-manager') {
+    settingsSearchQuery.value = ''
+    emit('open-resource-manager')
+    return
+  }
   activeTab.value = item.tab
   if (item.tab === 'mcp' && item.mcpView) mView.value = item.mcpView
   if (item.tab === 'help' && item.helpTopic) helpTopic.value = item.helpTopic
@@ -1039,7 +1045,6 @@ const settingsScopeNotes: Record<SettingsTab, { scope: string; storage: keyof Se
   accounts: { scope: 'User / Workspace bindings', storage: 'safeStorage' },
   extensions: { scope: 'User', storage: 'mainProcess' },
   executionPolicy: { scope: 'User / Workspace', storage: 'mainProcess' },
-  storage: { scope: 'User', storage: 'app_data_dir' },
   keybindings: { scope: 'User', storage: 'mainProcess' },
 }
 
@@ -2018,11 +2023,6 @@ watch(activeTab, (tab) => {
 
             <div class="s-nav-group">
               <div class="s-nav-group-title">{{ $t('settings.nav.group.system') }}</div>
-              <SettingsNavItem :label="$t('settings.nav.storage')" :active="activeTab === 'storage'" @select="activeTab = 'storage'">
-                <template #icon>
-                  <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="8" cy="3.8" rx="5.2" ry="2"/><path d="M2.8 3.8v4.4c0 1.1 2.3 2 5.2 2s5.2-.9 5.2-2V3.8"/><path d="M2.8 8.2v4c0 1.1 2.3 2 5.2 2s5.2-.9 5.2-2v-4"/></svg>
-                </template>
-              </SettingsNavItem>
               <SettingsNavItem :label="$t('settings.nav.keybindings')" :active="activeTab === 'keybindings'" @select="activeTab = 'keybindings'">
                 <template #icon>
                   <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="1.3" y="3.8" width="13.4" height="8.4" rx="1.4"/><path d="M4 6.4h0.01M6.4 6.4h0.01M8.8 6.4h0.01M11.2 6.4h0.01M4 8.8h0.01M11.2 8.8h0.01M6 10.6h4"/></svg>
@@ -3562,17 +3562,6 @@ watch(activeTab, (tab) => {
         </div>
 
         <!-- ── STORAGE TAB ───────────────────────────────────────────────── -->
-        <div v-show="activeTab === 'storage'" class="s-body storage-body" data-settings-section="storage">
-          <h1 class="s-page-title">{{ $t('settings.nav.storage') }}</h1>
-          <!-- Lazy-mounted: the scan is expensive, so it only runs once the
-               user actually opens this tab. -->
-          <StorageUsagePane
-            v-if="activeTab === 'storage'"
-            :backend="props.backend"
-            :workspace-paths="props.workspacePaths"
-          />
-        </div>
-
         </div>
         <!-- /.s-content -->
 
@@ -3962,11 +3951,8 @@ watch(activeTab, (tab) => {
 /* Accounts tab stacks two tall blocks (git + CLI accounts); scroll the tab so
    neither squeezes the other to zero height inside the overflow-hidden s-body. */
 .accounts-body { display: block; overflow-y: auto; }
-/* Storage tab is a two-column settings page like appearance/general: the bare
-   .s-body clips instead of scrolling, so it needs its own scroll + padding. */
-.storage-body { overflow-y: auto; padding: 18px 22px; }
-/* Same reason as storage: a stack of region cards needs the gutter and its own
-   scroll, which the bare .s-body (overflow:hidden, no padding) does not give. */
+/* A stack of region cards needs the gutter and its own scroll, which the bare
+   .s-body (overflow:hidden, no padding) does not give. */
 .layout-body { overflow-y: auto; padding: 18px 22px; }
 /* Same reason: a scrolling list of status rows needs the gutter and its own
    scroll, which the bare .s-body does not give. */

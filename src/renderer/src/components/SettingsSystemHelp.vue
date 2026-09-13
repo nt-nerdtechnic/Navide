@@ -102,8 +102,7 @@ const tabs: TabRow[] = [
     more: '本頁第 3 章',
   },
   { tab: 'Extensions', what: '已安裝的外掛與市集安裝', more: '本頁第 4 章' },
-  { group: 'SYSTEM', groupSpan: 4, tab: 'Storage', what: '磁碟用量掃描與清理', more: '本頁第 4 章' },
-  { tab: 'Shortcuts', what: '快捷鍵改綁、匯入匯出', more: '本頁第 4 章' },
+  { group: 'SYSTEM', groupSpan: 3, tab: 'Shortcuts', what: '快捷鍵改綁、匯入匯出', more: '本頁第 4 章' },
   { tab: 'Updates', what: '檢查／下載／安裝三段開關', more: '本頁第 4 章' },
   {
     tab: 'Help',
@@ -222,7 +221,7 @@ const memoryCoverage: PairRow[] = [
   { key: 'Not mapped', value: 'Navide 不知道路徑的 CLI。目前是空的。' },
 ]
 
-// ── 4 · Storage / Updates ────────────────────────────────────────────────
+// ── 7 · Storage（Resource Manager 內）────────────────────────────────────
 const storageCategories: PairRow[] = [
   {
     key: 'App data',
@@ -311,7 +310,7 @@ const otherWindows: PairRow[] = [
 // ── 7 · 維護速查 ─────────────────────────────────────────────────────────
 const maintenance: PairRow[] = [
   { key: '記憶體吃太兇', value: 'Resource Manager ▸ Reclaim；或設定 ▸ General 調低閒置門檻' },
-  { key: '磁碟滿了', value: '設定 ▸ Storage ▸ Clean safe items' },
+  { key: '磁碟滿了', value: 'Window ▸ Resource Manager ▸ Storage ▸ Clean safe items' },
   { key: '狀態列有 ⚠ N leftover', value: '點它，按 Clean up' },
   { key: '面板全部沒反應', value: 'Backend 藥丸 ▸ Restart' },
   { key: '快捷鍵互相打架', value: '設定 ▸ Shortcuts ▸ Conflicts 篩選器' },
@@ -575,47 +574,11 @@ const maintenance: PairRow[] = [
       </div>
     </section>
 
-    <!-- ── 4 · Storage / Shortcuts / Updates / Analyzer / Extensions ── -->
+    <!-- ── 4 · Shortcuts / Updates / Analyzer / Extensions ── -->
     <section class="syh-section">
       <h2 class="syh-h2">
-        <span class="syh-num">4</span>Storage、Shortcuts、Updates、Analyzer、Extensions
+        <span class="syh-num">4</span>Shortcuts、Updates、Analyzer、Extensions
       </h2>
-
-      <h3 class="syh-h3">Storage</h3>
-      <p class="syh-p">
-        掃描這個 app、各家 CLI 的家目錄、以及你開過的工作區佔了多少磁碟，
-        共 <strong>25 個項目分四大類</strong>，其中 17 項可清理。
-      </p>
-      <div class="syh-tablewrap">
-        <table class="syh-table">
-          <thead>
-            <tr><th>分類</th><th>內容舉例</th></tr>
-          </thead>
-          <tbody>
-            <tr v-for="row in storageCategories" :key="row.key">
-              <td class="syh-nowrap"><strong>{{ row.key }}</strong></td>
-              <td>{{ row.value }}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <p class="syh-p">
-        每一項標一個風險等級 <strong>Safe</strong>／<strong>Caution</strong>／<strong>Danger</strong>，
-        動不得的標 <em>Not removable</em>；<em>Paths</em> 可展開看實際路徑。
-        上方的 <em>Stale threshold</em>（7／30／90 天，預設 30）決定「多久沒動過才算過期、才可清理」。
-      </p>
-      <p class="syh-p">
-        清理兩顆鈕：<em>Clean safe items</em> 一次清掉所有安全項；<em>Clean selected</em> 清你自己勾的。
-        兩者都會跳確認框寫明大約釋出多少空間，勾到 Danger 項時另外警告。
-      </p>
-      <div class="syh-callout syh-callout--warn">
-        <div class="syh-callout-title">刪掉就沒了</div>
-        <div class="syh-callout-text">
-          確認鈕寫的是 <em>Delete permanently</em>——不是丟到垃圾桶。
-          真正需要用到 <em>Clean selected</em> 的只有一項：<strong>CLI conversation history</strong>
-          （各家 CLI 的對話歷史），它是唯一既標 Danger 又可清理的項目。清掉之後那些對話就接不回來了。
-        </div>
-      </div>
 
       <h3 class="syh-h3">Shortcuts</h3>
       <p class="syh-p">
@@ -1033,7 +996,10 @@ const maintenance: PairRow[] = [
           或按 <em>Reclaim</em> 回收它。<strong>沒有強制結束</strong>。
         </li>
         <li>底下一行寫著目前的自動回收設定（開／關、幾分鐘），旁邊 <em>Settings</em> 直接跳過去調。</li>
-        <li>另有 <strong>Disk space</strong> 一段，可 <em>Scan</em> 掃工作區用量、<em>Review</em> 跳到 Storage 分頁。</li>
+        <li>
+          上方第三張卡 <strong>Disk</strong> 與底下的 <strong>Storage</strong> 區段是同一份掃描
+          （見下一節）；掃描只在按下 <em>Scan</em> 時才跑，開啟介面不會自動掃。
+        </li>
       </ul>
       <p class="syh-note">
         數字是<strong>整棵行程樹</strong>一起算的。正在忙的面板按回收會被跳過並回報
@@ -1048,6 +1014,43 @@ const maintenance: PairRow[] = [
           真正能把記憶體拿回來的手段只有<strong>回收</strong>：結束那個行程，
           面板變成點一下就繼續的佔位卡，對話從 CLI 自己的 transcript 接回來
           （見本面板的「工作區與面板」分頁第 3 章）。
+        </div>
+      </div>
+
+      <h3 class="syh-h3">Storage（磁碟用量與清理）</h3>
+      <p class="syh-p">
+        Resource Manager 進程表下方的 <strong>Storage</strong> 區段（點標題展開／收合）。
+        掃描這個 app、各家 CLI 的家目錄、以及你開過的工作區佔了多少磁碟，
+        共 <strong>25 個項目分四大類</strong>，其中 17 項可清理。
+      </p>
+      <div class="syh-tablewrap">
+        <table class="syh-table">
+          <thead>
+            <tr><th>分類</th><th>內容舉例</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="row in storageCategories" :key="row.key">
+              <td class="syh-nowrap"><strong>{{ row.key }}</strong></td>
+              <td>{{ row.value }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="syh-p">
+        每一項標一個風險等級 <strong>Safe</strong>／<strong>Caution</strong>／<strong>Danger</strong>，
+        動不得的標 <em>Not removable</em>；<em>Paths</em> 可展開看實際路徑。
+        標題列的 <em>Stale threshold</em>（7／30／90 天，預設 30）決定「多久沒動過才算過期、才可清理」。
+      </p>
+      <p class="syh-p">
+        標題列的兩顆清理鈕：<em>Clean safe items</em> 一次清掉所有安全項；<em>Clean selected</em> 清你自己勾的。
+        兩者都會跳確認框寫明大約釋出多少空間，勾到 Danger 項時另外警告。
+      </p>
+      <div class="syh-callout syh-callout--warn">
+        <div class="syh-callout-title">刪掉就沒了</div>
+        <div class="syh-callout-text">
+          確認鈕寫的是 <em>Delete permanently</em>——不是丟到垃圾桶。
+          真正需要用到 <em>Clean selected</em> 的只有一項：<strong>CLI conversation history</strong>
+          （各家 CLI 的對話歷史），它是唯一既標 Danger 又可清理的項目。清掉之後那些對話就接不回來了。
         </div>
       </div>
 

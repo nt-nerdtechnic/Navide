@@ -16,7 +16,9 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { useBackend } from '../composables/useBackend'
 import type { useResourceUsage } from '../composables/useResourceUsage'
+import { useStorageUsage } from '../composables/useStorageUsage'
 import type { ResourceSummaryRow } from './ResourceSummaryPanel.vue'
+import StorageSection from './StorageSection.vue'
 import { formatBytes } from '../lib/formatBytes'
 import { formatCpuPercent, machineCpuShare, machineMemoryShare } from '../lib/resourceSampling'
 import { idleReclaimDisabled } from '../lib/idleReclaim'
@@ -33,6 +35,8 @@ const props = defineProps<{
   /** Read-only mirror of the Settings › General rows. */
   autoReclaimOn: boolean
   autoReclaimMinutes: string
+  /** Workspaces the app knows about — the storage scan walks them too. */
+  workspacePaths?: string[]
 }>()
 const emit = defineEmits<{ close: [] }>()
 
@@ -297,30 +301,21 @@ async function paneAction(paneId: string, action: 'focus' | 'reclaim'): Promise<
 
 // ── Disk, on request ────────────────────────────────────────────────────────
 // `storage.usage` walks several large trees (app data, every CLI profile home,
-// every open workspace), so it is a button, not part of the sampling loop —
-// the same reason the Storage settings page makes you ask for it.
-const disk = ref<{ totalBytes: number; freeBytes: number } | null>(null)
-const diskState = ref<'idle' | 'scanning' | 'failed'>('idle')
-
-async function scanDisk(): Promise<void> {
-  if (diskState.value === 'scanning' || props.backend.status.value !== 'connected') return
-  diskState.value = 'scanning'
-  try {
-    const resp = await props.backend.send<{ disk?: { totalBytes?: number; freeBytes?: number } }>(
-      'storage.usage',
-      {}
-    )
-    const d = resp.payload?.disk
-    if (d && typeof d.totalBytes === 'number' && typeof d.freeBytes === 'number') {
-      disk.value = { totalBytes: d.totalBytes, freeBytes: d.freeBytes }
-      diskState.value = 'idle'
-      return
-    }
-    diskState.value = 'failed'
-  } catch {
-    diskState.value = 'failed'
-  }
-}
+// every open workspace), so it is a button, not part of the sampling loop.
+// One instance feeds both the Disk card up top and the Storage section below.
+const storage = useStorageUsage({
+  backend: props.backend,
+  workspacePaths: () => props.workspacePaths,
+})
+const diskState = computed<'unscanned' | 'scanning' | 'failed' | 'scanned'>(() =>
+  storage.scanning.value && !storage.report.value
+    ? 'scanning'
+    : storage.report.value
+      ? 'scanned'
+      : storage.scanError.value
+        ? 'failed'
+        : 'unscanned'
+)
 </script>
 
 <template>
@@ -343,6 +338,33 @@ async function scanDisk(): Promise<void> {
             <span class="rm-v" data-part="value">{{ sizeText(totals.bytes) }}</span>
             <span class="rm-sub">{{ shareText(memoryShare) }}</span>
           </div>
+          <div class="rm-metric rm-metric-disk" data-metric="disk" :data-state="diskState">
+            <span class="rm-k">{{ t('resource.disk') }}</span>
+            <span class="rm-v" data-part="value">
+              {{ storage.report.value ? formatBytes(storage.report.value.totalBytes) : '—' }}
+            </span>
+            <span class="rm-sub" data-part="disk">
+              {{ diskState === 'scanning'
+                ? t('resource.disk-scanning')
+                : diskState === 'failed'
+                  ? t('resource.disk-failed')
+                  : storage.report.value
+                    ? t('resource.disk-free', {
+                        free: formatBytes(storage.report.value.disk.freeBytes),
+                        total: formatBytes(storage.report.value.disk.totalBytes),
+                      })
+                    : t('resource.disk-unscanned') }}
+            </span>
+          </div>
+          <button
+            v-if="!storage.report.value"
+            class="rm-ghost rm-disk-scan"
+            data-act="scan-disk"
+            :disabled="storage.scanning.value"
+            @click="void storage.scan()"
+          >
+            {{ t('resource.disk-scan') }}
+          </button>
           <span class="rm-spacer" />
           <button class="rm-ghost" data-act="refresh" @click="void usage.refresh()">
             {{ t('resource.refresh') }}
@@ -421,30 +443,7 @@ async function scanDisk(): Promise<void> {
           </p>
         </div>
 
-        <div class="rm-disk">
-          <span class="rm-disk-k">{{ t('resource.disk') }}</span>
-          <span class="rm-disk-v" data-part="disk">
-            {{ diskState === 'scanning'
-              ? t('resource.disk-scanning')
-              : diskState === 'failed'
-                ? t('resource.disk-failed')
-                : disk
-                  ? t('resource.disk-free', {
-                      free: formatBytes(disk.freeBytes),
-                      total: formatBytes(disk.totalBytes),
-                    })
-                  : t('resource.disk-unscanned') }}
-          </span>
-          <span class="rm-spacer" />
-          <button
-            class="rm-ghost"
-            data-act="scan-disk"
-            :disabled="diskState === 'scanning'"
-            @click="void scanDisk()"
-          >
-            {{ t('resource.disk-scan') }}
-          </button>
-        </div>
+        <StorageSection :storage="storage" />
 
         <div class="rm-foot">
           <span class="rm-foot-text">
@@ -598,9 +597,11 @@ async function scanDisk(): Promise<void> {
 .rm-head-row .c-cpu,
 .rm-head-row .c-mem { text-align: right; }
 
+/* Shares the card's height with the Storage section below: closed, that is
+ * one header line; open, the two split what is left and each scrolls. */
 .rm-rows {
-  flex: 1;
-  min-height: 0;
+  flex: 1 1 50%;
+  min-height: 120px;
   overflow-y: auto;
   padding-bottom: 8px;
 }
@@ -694,16 +695,9 @@ async function scanDisk(): Promise<void> {
   text-align: center;
 }
 
-.rm-disk {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 16px;
-  border-top: 1px solid var(--border-muted);
-  font-size: var(--font-2xs);
-}
-.rm-disk-k { color: var(--text-muted); }
-.rm-disk-v { color: var(--text-secondary); }
+.rm-metric-disk .rm-v { min-width: 4ch; }
+.rm-metric-disk[data-state='unscanned'] .rm-v { color: var(--text-muted); }
+.rm-disk-scan { align-self: center; }
 
 .rm-foot {
   display: flex;

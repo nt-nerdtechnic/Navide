@@ -52,7 +52,7 @@ import { useAgentMessaging, encodeReason, isBroadcastTarget, NOTICE_SENDER } fro
 import type { PushOutcome, RouteResult } from './composables/useAgentMessaging'
 import { createMessageLogPersistence } from './composables/useMessageLogPersistence'
 import type { ParsedAgentMessage } from './lib/agentMessaging'
-import { VENDORS_WITHOUT_TURN_END, hasUnparsedMessageAttempt, isInjectedMessageText, isTurnInFlight, normalizeMessagingName, parseMessages, parseSpawns, pushCooldownMs, renderFallbackReport, renderFormatNotice, renderSpawnKickoff, renderSpawnNotice } from './lib/agentMessaging'
+import { VENDORS_WITHOUT_TURN_END, hasUnparsedMessageAttempt, isInjectedMessageText, isTurnInFlight, normalizeMessagingName, parseMessages, parseSpawns, pushCooldownMs, renderFallbackReport, renderFormatNotice, renderSpawnKickoff, renderSpawnNotice, turnEndConsumesDeliveries } from './lib/agentMessaging'
 import {
   evaluateTurnSpawns,
   evaluateSpawnRequest,
@@ -110,7 +110,7 @@ import { evaluateManagerStage, fullAutoStallAction, type ManagerStageVerdict } f
 import { closeEndsTheRun } from './lib/workspaceCloseRun'
 import { droppedPrefix, remapCursor, type BufferObservation } from './lib/bufferCursor'
 import { i18n } from '@navide/plugin-ui/foundation'
-import { deriveAutoName } from './lib/autoName'
+import { deriveAutoName, stripCliSessionContext } from './lib/autoName'
 import { bootWorkspaceToRecord } from './lib/bootWorkspace'
 import { diagLog } from '@navide/terminal'
 import { reclaimBlockedBy, focusedForReclaim, idleReclaimDisabled, idleReclaimThresholdMs, RECLAIM_NOW_THRESHOLD_MS, type ReclaimCandidate } from './lib/idleReclaim'
@@ -149,8 +149,8 @@ import {
 import { pickReusablePane, runReportedDispatch, validatePlanDispatch, type PlanDispatchOutcome, type PlanDispatchPayload } from './lib/planDispatch'
 import { planExecutionPrompt } from './lib/planExecutePrompt'
 import {
-  echoEvidence, echoTimeoutFor, injectionVerified, normalizeForMatch,
-  submitEvidence, type EchoEvidence, type SubmitEvidence,
+  composerHoldsPayload, echoEvidence, echoTimeoutFor, injectionVerified, normalizeForMatch,
+  submitBaseline, submitEvidence, type EchoEvidence, type SubmitEvidence,
   SUBMIT_CONFIRM_MS, SUBMIT_SCREEN_LINES, TAIL_MATCH_LEN
 } from './lib/injectEcho'
 import { recordDiagnostic, readDiagnostics, currentDiagnosticSeq } from './lib/uiDiagnostics'
@@ -1850,16 +1850,6 @@ const paneTurnCompleteSourceAt = new Map<string, number>()
 // model that replaces buffer-guessing.
 const paneLastActiveAt = new Map<string, number>()
 
-// Panes whose log reader has ever surfaced a user record WITH its text. Decides
-// which consume signal releases a delivered-pending message (see
-// deliverAgentMessage): a reader that carries user text shows the injected
-// envelope as a user record when the CLI picks it up, one record per message;
-// a reader that never does leaves the next turn end as the only signal. There
-// is no per-vendor flag for this, and grepping the readers is unreliable
-// (claude's emits `detail=str(rtype)`), so it is learned per pane from the
-// events themselves.
-const paneUserRecordSeen = new Set<string>()
-
 // Per-pane count of background subagents the CLI is still waiting on, as last
 // reported by a hook event, with the wall-clock time of that report. The
 // unattended loop reads it to tell a turn that ended DONE from one that ended
@@ -2522,15 +2512,72 @@ function standaloneSpawnGateContext() {
   }
 }
 
-/** Wait for a freshly created pane's CLI to settle, then inject its task. Slow
- *  by nature: a cold CLI can take tens of seconds to print its first byte. */
+/** Upper bound on waiting for a fresh pane's prompt before the kickoff is
+ *  typed regardless. Past it the old behaviour (type and hope) is the only
+ *  option left, and a diagnostic says the gate never opened. */
+const KICKOFF_PROMPT_READY_TIMEOUT_MS = 30_000
+/** Clean-buffer silence a prompt-ready pane must show. The same window the
+ *  messaging gate calls `settling`: a TUI that is still painting its first
+ *  screen keeps producing clean output in bursts shorter than this. */
+const PROMPT_READY_QUIET_MS = 2000
+/** How many times a kickoff is typed before it is given up as failed. */
+const KICKOFF_MAX_ATTEMPTS = 2
+
+/** Wait until a freshly spawned pane's CLI is at its prompt: the status
+ *  machine reads `idle` (past booting, not latched running by its own startup
+ *  paint, not parked on a trust dialog or permission box) AND the clean buffer
+ *  has stopped growing for PROMPT_READY_QUIET_MS. One quiet second was the old
+ *  gate, and it opened between two bursts of a cold Claude Code painting its
+ *  banner, tip and version line — the task was typed into a TUI still
+ *  initialising and never reached the composer.
+ *
+ *  No vendor spec declares its composer prompt, so nothing here looks for a
+ *  prompt character; the state machine's idle verdict is the shared signal.
+ *  Resolves true when ready, false on timeout or a dead pane. */
+async function waitForPromptReady(paneId: string, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  let lastSize = paneCleanBytes(paneId)
+  let stableSince = Date.now()
+  while (Date.now() < deadline) {
+    if (!paneAlive(paneId)) return false
+    await sleep(250)
+    const ref = paneRefs[paneId]
+    if (!ref) return false
+    const size = paneCleanBytes(paneId)
+    if (size !== lastSize) {
+      lastSize = size
+      stableSince = Date.now()
+      continue
+    }
+    const status = ref.displayStatus as string | undefined
+    if (status === 'idle' && Date.now() - stableSince >= PROMPT_READY_QUIET_MS) return true
+  }
+  return false
+}
+
+/** Wait for a freshly created pane's CLI to reach its prompt, then inject its
+ *  task. Slow by nature: a cold CLI can take tens of seconds to print its
+ *  first byte.
+ *
+ *  `requestId` is set on the MCP path: cli_open_agent blocks on the
+ *  agent_spawn.kickoff verdict this emits, so every exit — settled, early
+ *  return, throw — must report one or the call waits out its 45s deadline. */
 async function kickoffRequestedPane(
   paneId: string,
   parentName: string,
   task: string,
+  requestId?: string,
 ): Promise<boolean> {
   const pane = panes.value.find((p) => p.id === paneId)
   if (!pane) return false
+  let verdictSent = false
+  const emitKickoffVerdict = (kickoff: 'sent' | 'unverified' | 'failed', reason?: string): void => {
+    if (!requestId || verdictSent) return
+    verdictSent = true
+    const payload: Record<string, unknown> = { request_id: requestId, pane_id: paneId, kickoff }
+    if (reason) payload.reason = reason
+    backend.send('agent_spawn.kickoff', payload).catch(() => { /* the tool call times out and says so */ })
+  }
   // The pane's own task has to land before anything else may type into it: a
   // CLI still booting can be sitting on a trust dialog, where an injected
   // message plus its newline would answer the prompt. The messaging idle gate
@@ -2543,34 +2590,93 @@ async function kickoffRequestedPane(
       await dismissStartupDialog(paneId, DISMISS_TIMEOUT_MS)
       await waitForStartupActivity(paneId)
     }
-    await waitForQuiet(paneId, 1000, 8000)
+    const promptReady = await waitForPromptReady(paneId, KICKOFF_PROMPT_READY_TIMEOUT_MS)
     if (!paneAlive(paneId)) return false
+    if (!promptReady) {
+      recordDiagnostic({
+        level: 'warn',
+        code: 'spawn.prompt-ready-timeout',
+        message:
+          `pane never read idle+quiet within ${KICKOFF_PROMPT_READY_TIMEOUT_MS}ms — ` +
+          'typing the kickoff anyway',
+        paneId,
+      })
+    }
     // Collect HOW the injection was verified, not just whether. On a pane that
     // is still painting its first screen the echo check passes on buffer growth
     // alone, so a `true` here can mean "we wrote bytes and cannot say where they
     // went" — which used to be reported as an outright success.
-    const evidence: { echo?: EchoEvidence | null; submit?: SubmitEvidence | null } = {}
-    const kicked = await injectPane(
-      paneId, renderSpawnKickoff(task, parentName), 'agent-spawn', true, undefined, evidence
-    )
-    const verified = kicked && injectionVerified(evidence.echo ?? null, evidence.submit ?? null)
-    const settled = paneRefs[paneId] ? panes.value.find((p) => p.id === paneId) : undefined
-    if (settled) {
-      settled.kickoffStatus = !kicked ? 'failed' : verified ? 'sent' : 'unverified'
+    const text = renderSpawnKickoff(task, parentName)
+    const tail = normalizeForMatch(text).slice(-TAIL_MATCH_LEN)
+    const screenTail = (): string => {
+      const read = paneRefs[paneId]?.readScreenTail as ((n: number) => string) | undefined
+      return read ? read(SUBMIT_SCREEN_LINES) : ''
     }
-    if (kicked && !verified) {
+    let outcome: 'sent' | 'unverified' | 'failed' = 'failed'
+    let retriedOut = false
+    let evidence: { echo?: EchoEvidence | null; submit?: SubmitEvidence | null } = {}
+    for (let attempt = 1; attempt <= KICKOFF_MAX_ATTEMPTS; attempt++) {
+      evidence = {}
+      const kicked = await injectPane(paneId, text, 'agent-spawn', true, undefined, evidence)
+      if (!kicked) {
+        outcome = 'failed'
+        break
+      }
+      if (injectionVerified(evidence.echo ?? null, evidence.submit ?? null)) {
+        outcome = 'sent'
+        break
+      }
+      outcome = 'unverified'
+      // A second attempt that still cannot be verified is a failure, not a
+      // shrug: the caller is told to resend with cli_send instead of being
+      // left to poll.
+      if (attempt === KICKOFF_MAX_ATTEMPTS) {
+        outcome = 'failed'
+        retriedOut = true
+        break
+      }
+      // Retype only when the composer is NOT holding the first copy — typing
+      // on top of it would submit both as one prompt, and so would a cli_send
+      // resend, which is why this one stays 'unverified' rather than failed.
+      // A vendor's empty-composer hint reads as blank; a collapsed-paste
+      // summary does not.
+      if (composerHoldsPayload(screenTail(), tail)) break
+      if (!paneAlive(paneId)) return false
+      recordDiagnostic({
+        level: 'warn',
+        code: 'spawn.kickoff-retry',
+        message:
+          `kickoff unverified on ${evidence.echo ?? 'no'} echo / ${evidence.submit ?? 'no'} submit ` +
+          `evidence and the composer is blank — typing it again (${attempt + 1}/${KICKOFF_MAX_ATTEMPTS})`,
+        paneId,
+      })
+    }
+    const unverifiedReason =
+      `kickoff reported success on ${evidence.echo ?? 'no'} echo / ` +
+      `${evidence.submit ?? 'no'} submit evidence — growth alone cannot ` +
+      'distinguish our text from a booting CLI repainting'
+    const settled = paneRefs[paneId] ? panes.value.find((p) => p.id === paneId) : undefined
+    if (settled) settled.kickoffStatus = outcome
+    if (outcome === 'unverified') {
       // The one outcome that used to be invisible: no throw, no false, and no
       // notice — just a pane sitting idle with an empty prompt.
       recordDiagnostic({
         level: 'warn',
         code: 'spawn.kickoff-unverified',
-        message:
-          `kickoff reported success on ${evidence.echo ?? 'no'} echo / ` +
-          `${evidence.submit ?? 'no'} submit evidence — growth alone cannot ` +
-          'distinguish our text from a booting CLI repainting',
+        message: unverifiedReason,
         paneId,
       })
+      emitKickoffVerdict('unverified', unverifiedReason)
+    } else if (retriedOut) {
+      // Typed KICKOFF_MAX_ATTEMPTS times, never verified. (A plain injectPane
+      // failure already logged inject.failed itself.)
+      const reason = `kickoff typed ${KICKOFF_MAX_ATTEMPTS}× and never verified — ${unverifiedReason}`
+      recordDiagnostic({ level: 'warn', code: 'spawn.kickoff-failed', message: reason, paneId })
+      emitKickoffVerdict('failed', reason)
+    } else {
+      emitKickoffVerdict(outcome)
     }
+    const kicked = outcome !== 'failed'
     // Arm the fallback report only once the task is really in: a kickoff that
     // never landed leaves a pane with nothing to report on. `parentName` is
     // only a messaging handle when a live pane answers to it — the MCP path
@@ -2590,6 +2696,7 @@ async function kickoffRequestedPane(
     // and cli_get_status read, and resetting it to 'none' would erase it.
     const live = panes.value.find((p) => p.id === paneId)
     if (live?.kickoffStatus === 'pending') live.kickoffStatus = 'none'
+    emitKickoffVerdict('failed', 'kickoff never reached a verdict (pane gone or injection threw)')
   }
 }
 
@@ -2747,6 +2854,12 @@ async function handleMcpSpawnRequest(ev: {
     // returning paneId above. There is no parent pane to report back to, so
     // no kickoffRequestedPane / report-back marker either.
     report({ ok: true, paneId, name: childName, advisories: gate.advisories })
+    // cli_open_agent now blocks on a kickoff verdict after the spawn verdict;
+    // injectStandaloneTask already typed the task (a failure returned null
+    // above), so answer at once rather than letting the call wait out 45s.
+    backend.send('agent_spawn.kickoff', {
+      request_id: ev.request_id, pane_id: paneId, kickoff: 'sent',
+    }).catch(() => { /* the tool call times out and says so */ })
     return
   }
   // Shut the injection window before the caller learns this pane's name, not
@@ -2756,7 +2869,7 @@ async function handleMcpSpawnRequest(ev: {
   notifyRestore.toast(i18n.global.t('msg.spawn-toast', { parent: parentName, child: childName }))
   report({ ok: true, paneId, name: childName, advisories: gate.advisories })
 
-  void kickoffRequestedPane(paneId, parentName, gate.task)
+  void kickoffRequestedPane(paneId, parentName, gate.task, ev.request_id)
     .then((ok) => {
       if (!ok) {
         sendSpawnFeedback(parentName, 'partial', `pane「${childName}」已開啟，但任務注入失敗，請自行確認`)
@@ -3219,6 +3332,9 @@ async function injectText(
   // Whether the composer is holding our tail RIGHT NOW decides which signal we
   // can trust below, so sample it before pressing Enter.
   const tailWasOnScreen = !!tail && normalizeForMatch(screenTail()).includes(tail)
+  // Sampled before Enter too: a queue hint already on screen from an earlier
+  // message must not vouch for this one — see submitEvidence's baseline branch.
+  const baseline = submitBaseline({ screen: screenTail(), buffer: cleanBuf(), tail })
   const MAX_SUBMITS = 3
   for (let attempt = 1; attempt <= MAX_SUBMITS; attempt++) {
     if (shouldAbort?.()) return false
@@ -3240,7 +3356,9 @@ async function injectText(
         tailWasOnScreen,
         tail,
         screen: screenTail(),
-        grownBy: cleanBytes() - before
+        grownBy: cleanBytes() - before,
+        buffer: cleanBuf(),
+        baseline
       })
       landed = how !== null
       if (landed && evidence) evidence.submit = how
@@ -6954,7 +7072,7 @@ watch(currentWorkspace, (workspacePath) => {
 // alone is not enough: asking for the tab you are already on leaves the prop
 // unchanged, so the modal's watcher never fires and the request is dropped.
 const settingsTabRequest = ref(0)
-const settingsInitialTab = ref<'general' | 'cross-device' | 'mcp' | 'analyzer' | 'updates' | 'appearance' | 'accounts' | 'storage' | 'keybindings' | 'prompts'>('general')
+const settingsInitialTab = ref<'general' | 'cross-device' | 'mcp' | 'analyzer' | 'updates' | 'appearance' | 'accounts' | 'keybindings' | 'prompts'>('general')
 // Needed to retarget an already-open modal: initialTab is only honoured on mount
 // and by its own watcher, so re-issuing the same tab is a no-op without this.
 const settingsModalRef = ref<{
@@ -7341,7 +7459,7 @@ registerCommand('workbench.action.focusPreviousPane', () => { cycleFocusedPane(-
 // ── External UI action bus (MCP-driven) ─────────────────────────────────────
 // Actions a UI-control MCP client can invoke via ui.invoke.request. See
 // useUiActionBus for the request/reply plumbing and ownership check.
-const UI_SETTINGS_TABS = ['general', 'mcp', 'analyzer', 'updates', 'appearance', 'accounts', 'storage', 'keybindings'] as const
+const UI_SETTINGS_TABS = ['general', 'mcp', 'analyzer', 'updates', 'appearance', 'accounts', 'keybindings'] as const
 registerCommand('ui.settings.open', (args) => {
   const tab = (args as { tab?: string } | undefined)?.tab
   if (tab && (UI_SETTINGS_TABS as readonly string[]).includes(tab)) {
@@ -7659,6 +7777,7 @@ registerCommand('workbench.action.focusPreview', () => {
   preview.focus()
 })
 registerCommand('ui.window.openPlans', () => { openPlansWindow() })
+registerCommand('ui.window.openResourceManager', () => { openResourceManager() })
 registerCommand('ui.window.openGit', async () => {
   if (!currentWorkspace.value) return
   await window.agentTeam?.openGitWindow?.({ workspace_path: currentWorkspace.value })
@@ -10964,12 +11083,12 @@ backend.on('agent.activity', (raw) => {
     }
     // Badge: authoritative turn end → drop the RUNNING hysteresis latch now.
     paneRefs[ev.pane_id]?.markTurnComplete?.()
-    // Delivered-pending fallback for readers that carry no user text: the next
-    // turn end is the only proof the CLI got to our message. NEVER for a reader
-    // that does carry it — Claude Code ends the current turn BEFORE dequeuing,
-    // so its turn_complete arrives while the message is still queued; there
-    // the user record itself releases the hold (agent_active branch below).
-    if (!paneUserRecordSeen.has(ev.pane_id)) paneRefs[ev.pane_id]?.clearDeliveredPending?.(true)
+    // Delivered-pending fallback for readers without user text. Never for one
+    // that has it: Claude ends the turn BEFORE dequeuing, so the user record
+    // itself is the consume signal (agent_active branch below).
+    if (turnEndConsumesDeliveries(panes.value.find((p) => p.id === ev.pane_id)?.agentKey ?? '')) {
+      paneRefs[ev.pane_id]?.clearDeliveredPending?.(true)
+    }
     if (!markerReply && !ev.superseded) scheduleDoneNotify(ev.pane_id, ev.timestamp ?? '')
     // Judge THIS turn's own text (not a retained map): an empty-text
     // turn_complete (Claude Stop hook, thinking-only record, Codex cross-batch)
@@ -11033,9 +11152,8 @@ backend.on('agent.activity', (raw) => {
     // Injected inter-CLI envelopes land in the CLI log as user records too —
     // never title a pane with one. Set-once lives inside setPaneAutoName.
     if ((ev.detail === 'user' || ev.detail === 'prompt' || ev.detail === 'user_message') && ev.text) {
-      // This reader carries user text, so the envelope itself is the consume
-      // signal for delivered-pending — one record releases one delivery.
-      paneUserRecordSeen.add(ev.pane_id)
+      // The envelope showing up as a user record is the consume signal for
+      // delivered-pending — one record releases one delivery.
       if (isInjectedMessageText(ev.text)) {
         paneRefs[ev.pane_id]?.clearDeliveredPending?.()
       } else {
@@ -11253,6 +11371,14 @@ backend.on('agent_msg.deliver', (raw) => {
   )
 })
 
+// Spawn request ids this window has already acted on, newest last. The
+// backend broadcasts each request once, but a window holding two sockets (a
+// connect() race) hears it twice: the first copy opens the pane, and the
+// second then trips the gate's name check against that very pane — refused as
+// "you already opened it" while the pane it opened is already running the task.
+const seenSpawnRequestIds = new Set<string>()
+const SEEN_SPAWN_REQUEST_IDS_CAP = 200
+
 // cli_open_agent wants a pane opened. Every window sees this; only the one
 // owning the requesting pane answers (handleMcpSpawnRequest bails otherwise).
 backend.on('agent_spawn.request', (raw) => {
@@ -11272,6 +11398,12 @@ backend.on('agent_spawn.request', (raw) => {
   // An external caller (no requesting pane) addresses this by target_workspace
   // instead — accept the event as long as one of the two identifies an owner.
   if (!ev?.request_id || (!ev.requester_pane_id && !ev.target_workspace)) return
+  if (seenSpawnRequestIds.has(ev.request_id)) return
+  seenSpawnRequestIds.add(ev.request_id)
+  if (seenSpawnRequestIds.size > SEEN_SPAWN_REQUEST_IDS_CAP) {
+    const oldest = seenSpawnRequestIds.values().next().value
+    if (oldest !== undefined) seenSpawnRequestIds.delete(oldest)
+  }
   void handleMcpSpawnRequest({
     request_id: ev.request_id,
     requester_pane_id: ev.requester_pane_id ?? '',
@@ -15379,8 +15511,11 @@ const llmNameRequested = new Set<string>()
  * material rather than the heuristic title so the model sees the full request
  * instead of its own truncation.
  */
-function requestLlmPaneName(paneId: string, material: string): void {
+function requestLlmPaneName(paneId: string, rawMaterial: string): void {
   const pane = panes.value.find((p) => p.id === paneId)
+  // Same cut the heuristic makes: a dropped pane's context paste is not what
+  // this pane is for, and the model would otherwise title it from the excerpt.
+  const material = stripCliSessionContext(rawMaterial)
   if (!pane || !pane.workspacePath || !material.trim()) return
   if (pane.customName || pane.nameLocked || pane.autoNameSource === 'llm') return
   if (llmNameRequested.has(paneId)) return
@@ -16638,7 +16773,6 @@ function paneIsCommander(p: ActivePane): boolean {
       :cli-profiles-api="cliProfilesApi"
       :workspace-open="!!currentWorkspace"
       :workspace-path="currentWorkspace"
-      :workspace-paths="knownWorkspacePaths"
       :initial-tab="settingsInitialTab"
       :tab-request="settingsTabRequest"
       v-model:confirm-before-close="confirmBeforeClose"
@@ -16651,6 +16785,7 @@ function paneIsCommander(p: ActivePane): boolean {
       :reclaimable-now-bytes="reclaimableNowIds.length * RECLAIM_ESTIMATE_BYTES_PER_CLI"
       @reclaim-now="() => void reclaimPanesNow()"
       @close="showSettings = false; settingsInitialTab = 'general'"
+      @open-resource-manager="showSettings = false; settingsInitialTab = 'general'; openResourceManager()"
       @reopen-onboarding="() => { showSettings = false; reopenOnboarding() }"
       @cli-login="onCliLoginSpawn"
     />
@@ -16675,6 +16810,7 @@ function paneIsCommander(p: ActivePane): boolean {
       :local-rows="resourceRows"
       :auto-reclaim-on="idleReclaimEnabled"
       :auto-reclaim-minutes="idleReclaimMinutes"
+      :workspace-paths="knownWorkspacePaths"
       @close="showResourceManager = false"
     />
     <PipelineManagerModal
