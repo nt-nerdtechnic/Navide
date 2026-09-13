@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, Notification, powerMonitor, safeStorage, session, shell, type IpcMainInvokeEvent } from 'electron'
 import { createGuestAttachHooks, type MutableWebPreferences } from './plugins/pluginGuestAttach'
+import { guardLastWindowClose } from './last-window-close'
 import { join, dirname } from 'node:path'
 import { writeFile, readFile, mkdir } from 'node:fs/promises'
 import { readFileSync, statSync, existsSync, realpathSync } from 'node:fs'
@@ -201,6 +202,9 @@ let quitConfirm = {
   dontShowLabel: "Don't show this again",
 }
 let quitConfirmed = false
+// True while the quit confirmation dialog is on screen, so a second close
+// request cannot stack another one.
+let quitPromptOpen = false
 // Multiple independent main windows (VS Code-style cmd+shift+N). `mainWindow`
 // tracks the most-recently-focused one so dialogs parent to it; `mainWindows`
 // holds them all for lifecycle code that must reach every main window.
@@ -4167,6 +4171,29 @@ app.on('window-all-closed', () => {
   if (!isMac()) app.quit()
 })
 
+// Off macOS, closing the last window quits the app (above), so the quit
+// confirmation has to run from that window's own close event, while a Cancel
+// can still keep it (see last-window-close.ts). Every window counts as "last"
+// — a Plans or Git window left open after the main window is the one whose
+// close would quit — so the guard goes on each window as Electron creates it,
+// whichever factory made it. A confirmed quit goes through the same teardown
+// as before-quit; `quitConfirmed` then lets app.quit() close the windows.
+app.on('browser-window-created', (_event, win) => {
+  win.on('close', (e) => {
+    guardLastWindowClose(e, {
+      liveWindows: () => BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed()).length,
+      confirmEnabled: () => quitConfirm.enabled,
+      quitConfirmed: () => quitConfirmed,
+      promptOpen: () => quitPromptOpen,
+      ask: () => askQuitConfirm(win),
+      quit: () => {
+        quitConfirmed = true
+        void teardownBackendAndQuit()
+      },
+    })
+  })
+})
+
 // Shutdown budgets. They are deliberately SEPARATE: a single shared deadline
 // let a slow spawn eat the stop budget, and stopping must keep its full window
 // — it has to outlast backend.stop()'s own 5s SIGTERM grace, or the cap
@@ -4232,29 +4259,42 @@ async function teardownBackendAndQuit(): Promise<void> {
   app.quit()
 }
 
+// The "confirm before quit" dialog. Resolves true when the user chose Quit;
+// the "don't show again" checkbox is applied here so both callers agree.
+async function askQuitConfirm(win: BrowserWindow | undefined): Promise<boolean> {
+  const opts = {
+    type: 'question' as const,
+    buttons: [quitConfirm.quitLabel, quitConfirm.cancelLabel],
+    defaultId: 0,
+    cancelId: 1,
+    message: quitConfirm.message,
+    detail: quitConfirm.detail,
+    checkboxLabel: quitConfirm.dontShowLabel,
+    checkboxChecked: false,
+  }
+  quitPromptOpen = true
+  let res: Electron.MessageBoxReturnValue
+  try {
+    res = win && !win.isDestroyed() ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts)
+  } finally {
+    quitPromptOpen = false
+  }
+  if (res.response === 1) return false
+  if (res.checkboxChecked) {
+    quitConfirm.enabled = false
+    for (const w of BrowserWindow.getAllWindows()) {
+      if (!w.isDestroyed()) w.webContents.send('app:quitConfirmDisabled')
+    }
+  }
+  return true
+}
+
 app.on('before-quit', async (e) => {
   // Confirmation gate — shared "confirm before close" setting, driven by renderer.
   if (quitConfirm.enabled && !quitConfirmed) {
     e.preventDefault()
     const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
-    const opts = {
-      type: 'question' as const,
-      buttons: [quitConfirm.quitLabel, quitConfirm.cancelLabel],
-      defaultId: 0,
-      cancelId: 1,
-      message: quitConfirm.message,
-      detail: quitConfirm.detail,
-      checkboxLabel: quitConfirm.dontShowLabel,
-      checkboxChecked: false,
-    }
-    const res = win ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts)
-    if (res.response === 1) return // cancelled — stay open (default already prevented)
-    if (res.checkboxChecked) {
-      quitConfirm.enabled = false
-      for (const w of BrowserWindow.getAllWindows()) {
-        if (!w.isDestroyed()) w.webContents.send('app:quitConfirmDisabled')
-      }
-    }
+    if (!(await askQuitConfirm(win))) return // cancelled — stay open (default already prevented)
     quitConfirmed = true
     void teardownBackendAndQuit() // default prevented → drive quit ourselves
     return
