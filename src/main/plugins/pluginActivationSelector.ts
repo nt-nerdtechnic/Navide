@@ -26,6 +26,13 @@ export interface PluginPackageSelection {
   artifactDigest: string
 }
 
+/** Host proof supplied with the exact selection it authorizes. The persisted
+ * selector stores the selection as the role and the grant as its sibling. */
+export interface PluginSelectionGrant {
+  selection: PluginPackageSelection
+  grant: HostCapabilityGrant
+}
+
 /** Durable activation progress. It distinguishes an intentional staged
  * candidate from a restart that was interrupted after the old runtime drained. */
 export interface PluginActivationProgress {
@@ -38,8 +45,10 @@ export interface PluginActivationSelectorRecord {
   pluginId: string
   active?: PluginPackageSelection
   candidate?: PluginPackageSelection
-  /** Explicit full-shell confirmation, retained only until candidate promotion. */
+  /** Legacy Host confirmation for staged records written before candidate grants. */
   candidateFullShellConfirmed?: true
+  /** Host grant structurally bound to the candidate selection. */
+  candidateGrant?: HostCapabilityGrant
   previous?: PluginPackageSelection
   /** Durable grant for the retained previous package; rollback must never
    * reconstruct package-version consent from a manifest alone. */
@@ -111,6 +120,12 @@ function validateActivation(value: unknown): PluginActivationProgress | undefine
   return { kind: value.kind, phase: value.phase }
 }
 
+function sameSelection(left: PluginPackageSelection, right: PluginPackageSelection): boolean {
+  return left.packageVersion === right.packageVersion &&
+    left.target === right.target &&
+    left.artifactDigest === right.artifactDigest
+}
+
 function validateGrant(value: unknown, selection: PluginPackageSelection | undefined): HostCapabilityGrant | undefined {
   if (value === undefined) return undefined
   if (!selection || !isObject(value)) throw new Error('invalid plugin lifecycle previous grant')
@@ -148,6 +163,7 @@ function validateRecord(expectedPluginId: string, value: unknown): PluginActivat
       'active',
       'candidate',
       'candidateFullShellConfirmed',
+      'candidateGrant',
       'previous',
       'previousGrant',
       'activeGrant',
@@ -161,12 +177,21 @@ function validateRecord(expectedPluginId: string, value: unknown): PluginActivat
   const active = validatePackage(value.active)
   const candidate = validatePackage(value.candidate)
   const previous = validatePackage(value.previous)
+  const candidateGrant = validateGrant(value.candidateGrant, candidate)
   const previousGrant = validateGrant(value.previousGrant, previous)
   const activeGrant = validateGrant(value.activeGrant, active)
   const activation = validateActivation(value.activation)
   if (
-    (activation?.kind === 'candidate' && candidate === undefined) ||
-    (activation?.kind === 'rollback' && activation.phase === 'promoted' && candidate === undefined)
+    (previous !== undefined && active === undefined) ||
+    (activation?.kind === 'candidate' && activation.phase === 'prepared' && candidate === undefined) ||
+    (activation?.kind === 'candidate' && activation.phase === 'prepared' && active === undefined &&
+      (previous !== undefined || activeGrant !== undefined)) ||
+    (activation?.kind === 'candidate' && activation.phase === 'promoted' &&
+      (active === undefined || candidate === undefined || !sameSelection(active, candidate))) ||
+    (activation?.kind === 'rollback' && activation.phase === 'prepared' &&
+      (active === undefined || previous === undefined || candidate !== undefined)) ||
+    (activation?.kind === 'rollback' && activation.phase === 'promoted' &&
+      (active === undefined || candidate === undefined || previous !== undefined || sameSelection(active, candidate)))
   ) throw new Error('invalid plugin lifecycle selector')
   return {
     schemaVersion: 1,
@@ -174,6 +199,7 @@ function validateRecord(expectedPluginId: string, value: unknown): PluginActivat
     ...(active ? { active } : {}),
     ...(candidate ? { candidate } : {}),
     ...(value.candidateFullShellConfirmed === true ? { candidateFullShellConfirmed: true } : {}),
+    ...(candidateGrant ? { candidateGrant } : {}),
     ...(previous ? { previous } : {}),
     ...(previousGrant ? { previousGrant } : {}),
     ...(activeGrant ? { activeGrant } : {}),
@@ -242,7 +268,7 @@ export class PluginActivationSelector {
   stageCandidate(
     pluginId: string,
     candidate: PluginPackageSelection,
-    options: { fullShellConfirmed?: boolean } = {},
+    options: { fullShellConfirmed?: boolean; candidateGrant?: PluginSelectionGrant } = {},
   ): PluginActivationSelectorRecord {
     if (!isValidManifestV2PluginId(pluginId)) throw new Error('invalid plugin id')
     const candidateSelection = validatePackage(candidate)
@@ -251,13 +277,21 @@ export class PluginActivationSelector {
     if (current?.candidate && JSON.stringify(current.candidate) !== JSON.stringify(candidateSelection)) {
       throw new Error(`plugin ${pluginId} already has a staged candidate`)
     }
+    if (options.candidateGrant && !sameSelection(options.candidateGrant.selection, candidateSelection)) {
+      throw new Error('candidate grant does not match the staged package identity')
+    }
     const next: PluginActivationSelectorRecord = {
       schemaVersion: 1,
       pluginId,
       ...(current?.active ? { active: current.active } : {}),
+      ...(current?.activeGrant ? { activeGrant: current.activeGrant } : {}),
       candidate: candidateSelection,
       ...(options.fullShellConfirmed ? { candidateFullShellConfirmed: true as const } : {}),
+      ...(options.candidateGrant
+        ? { candidateGrant: validateGrant(options.candidateGrant.grant, candidateSelection) }
+        : {}),
       ...(current?.previous ? { previous: current.previous } : {}),
+      ...(current?.previousGrant ? { previousGrant: current.previousGrant } : {}),
     }
     writeAtomic(selectorPath(this.root, pluginId), next)
     return next
@@ -279,8 +313,12 @@ export class PluginActivationSelector {
       ...(current.active ? { active: current.active } : {}),
       candidate: current.candidate,
       ...(current.candidateFullShellConfirmed ? { candidateFullShellConfirmed: true } : {}),
+      ...(current.candidateGrant ? { candidateGrant: current.candidateGrant } : {}),
       ...(current.previous ? { previous: current.previous } : {}),
-      ...(options.previousGrant ? { activeGrant: validateGrant(options.previousGrant, current.active) } : {}),
+      ...(current.previousGrant ? { previousGrant: current.previousGrant } : {}),
+      ...(options.previousGrant
+        ? { activeGrant: validateGrant(options.previousGrant, current.active) }
+        : current.activeGrant ? { activeGrant: current.activeGrant } : {}),
       activation: { kind: 'candidate', phase: 'prepared' },
     }
     writeAtomic(selectorPath(this.root, pluginId), next)
@@ -296,6 +334,7 @@ export class PluginActivationSelector {
       schemaVersion: 1,
       pluginId,
       active: current.candidate,
+      ...(current.candidateGrant ? { activeGrant: current.candidateGrant } : {}),
       ...(current.activation ? { candidate: current.candidate } : {}),
       ...(current.candidateFullShellConfirmed && current.activation
         ? { candidateFullShellConfirmed: true }
@@ -310,7 +349,10 @@ export class PluginActivationSelector {
 
   /** Mark a fully restored promotion complete. Candidate bytes remain immutable
    * throughout the transaction, then become retained active/previous state. */
-  completeActivation(pluginId: string): PluginActivationSelectorRecord {
+  completeActivation(
+    pluginId: string,
+    options: { activeGrant?: HostCapabilityGrant } = {},
+  ): PluginActivationSelectorRecord {
     const current = this.read(pluginId)
     if (!current?.activation) {
       if (!current) throw new Error(`plugin ${pluginId} has no lifecycle record`)
@@ -323,6 +365,15 @@ export class PluginActivationSelector {
       schemaVersion: 1,
       pluginId,
       active: current.active,
+      ...(options.activeGrant
+        ? { activeGrant: (() => {
+            const grant = validateGrant(options.activeGrant, current.active)
+            if (current.activeGrant && JSON.stringify(current.activeGrant) !== JSON.stringify(grant)) {
+              throw new Error('active grant does not match the promoted package grant')
+            }
+            return grant
+          })() }
+        : current.activeGrant ? { activeGrant: current.activeGrant } : {}),
       ...(current.previous ? { previous: current.previous } : {}),
       ...(current.previousGrant ? { previousGrant: current.previousGrant } : {}),
     }
@@ -343,6 +394,7 @@ export class PluginActivationSelector {
           ...(current.active ? { active: current.active } : {}),
           candidate: current.candidate!,
           ...(current.candidateFullShellConfirmed ? { candidateFullShellConfirmed: true } : {}),
+          ...(current.candidateGrant ? { candidateGrant: current.candidateGrant } : {}),
           ...(current.previous ? { previous: current.previous } : {}),
           ...(current.previousGrant ? { previousGrant: current.previousGrant } : {}),
           ...(current.activeGrant ? { activeGrant: current.activeGrant } : {}),
@@ -352,14 +404,17 @@ export class PluginActivationSelector {
             schemaVersion: 1,
             pluginId,
             active: current.active!,
+            ...(current.activeGrant ? { activeGrant: current.activeGrant } : {}),
             candidate: current.candidate!,
-            ...(current.candidateFullShellConfirmed ? { candidateFullShellConfirmed: true } : {}),
+            ...(current.candidateGrant ? { candidateGrant: current.candidateGrant } : {}),
           }
         : {
           schemaVersion: 1,
           pluginId,
           ...(current.previous ? { active: current.previous } : {}),
+          ...(current.previousGrant ? { activeGrant: current.previousGrant } : {}),
           candidate: current.candidate!,
+          ...(current.activeGrant ? { candidateGrant: current.activeGrant } : {}),
           ...(current.candidateFullShellConfirmed ? { candidateFullShellConfirmed: true } : {}),
         }
     writeAtomic(selectorPath(this.root, pluginId), next)
@@ -394,6 +449,7 @@ export class PluginActivationSelector {
       schemaVersion: 1,
       pluginId,
       active: current.active,
+      ...(current.activeGrant ? { activeGrant: current.activeGrant } : {}),
       previous: current.previous,
       ...(current.previousGrant ? { previousGrant: current.previousGrant } : {}),
       activation: { kind: 'rollback', phase: 'prepared' },
@@ -418,7 +474,9 @@ export class PluginActivationSelector {
       schemaVersion: 1,
       pluginId,
       active: current.previous,
+      ...(current.previousGrant ? { activeGrant: current.previousGrant } : {}),
       candidate: current.active,
+      ...(current.activeGrant ? { candidateGrant: current.activeGrant } : {}),
       activation: { kind: 'rollback', phase: 'promoted' },
     }
     writeAtomic(selectorPath(this.root, pluginId), next)
@@ -436,7 +494,9 @@ export class PluginActivationSelector {
       schemaVersion: 1,
       pluginId,
       active: current.active!,
+      ...(current.activeGrant ? { activeGrant: current.activeGrant } : {}),
       candidate: current.candidate!,
+      ...(current.candidateGrant ? { candidateGrant: current.candidateGrant } : {}),
       ...(current.candidateFullShellConfirmed ? { candidateFullShellConfirmed: true } : {}),
     }
     writeAtomic(selectorPath(this.root, pluginId), next)

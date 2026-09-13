@@ -1095,6 +1095,64 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
     }
   })
 
+  it('keeps B full-shell consent version-bound across rollback and a fresh selector reload', async () => {
+    const first = buildPkg('acme.demo', 'acme', { shell: 'full' }, '1.0.0')
+    const second = buildPkg('acme.demo', 'acme', { shell: 'full' }, '1.0.1')
+    const root = mkdtempSync(join(tmpdir(), 'navide-plugin-ipc-full-shell-rollback-'))
+    const manager = new FrontendPluginManager()
+    try {
+      registerPluginIpc(manager, root, () => true, TRUST_CONFIG, undefined, TEST_PREFLIGHT_OPTIONS)
+      const prepare = handlers.get('plugins:prepareInstall')!
+      const commit = handlers.get('plugins:commitInstall')!
+      const restart = handlers.get('plugins:restart')!
+      const rollback = handlers.get('plugins:rollback')!
+
+      installFetch(signedDetail(first.digest, 'acme.demo', 'acme', '1.0.0'), first.bytes, first.digest)
+      await prepare(null, { namespace: 'acme', name: 'demo' })
+      await commit(null, { id: 'acme.demo', publisherConfirmed: true, riskConfirmed: true })
+      await restart(null, { id: 'acme.demo' })
+
+      installFetch(signedDetail(second.digest, 'acme.demo', 'acme', '1.0.1'), second.bytes, second.digest)
+      await prepare(null, { namespace: 'acme', name: 'demo', version: '1.0.1' })
+      await commit(null, { id: 'acme.demo', publisherConfirmed: true, riskConfirmed: true })
+      await restart(null, { id: 'acme.demo' })
+      expect(new PluginCapabilityGrantStore(root).get('acme.demo', '1.0.1')).toMatchObject({
+        packageVersion: '1.0.1',
+        shell: 'full',
+        highRiskShellConfirmed: true,
+      })
+
+      await expect(rollback(null, { id: 'acme.demo' })).resolves.toMatchObject({ packageVersion: '1.0.0' })
+      expect(new PluginActivationSelector(root).read('acme.demo')).toMatchObject({
+        active: { packageVersion: '1.0.0', artifactDigest: first.digest },
+        candidate: { packageVersion: '1.0.1', artifactDigest: second.digest },
+      })
+
+      const reloaded = new PluginActivationSelector(root)
+      expect(reloaded.read('acme.demo')?.candidate).toEqual({
+        packageVersion: '1.0.1', target: 'universal', artifactDigest: second.digest,
+      })
+      await expect(restart(null, { id: 'acme.demo' })).resolves.toMatchObject({ packageVersion: '1.0.1' })
+      expect(new PluginCapabilityGrantStore(root).get('acme.demo', '1.0.1')).toMatchObject({
+        packageVersion: '1.0.1',
+        shell: 'full',
+        highRiskShellConfirmed: true,
+      })
+      expect(new PluginCapabilityGrantStore(root).get('acme.demo', '1.0.2')).toBeNull()
+      expect(new PluginActivationSelector(root).read('acme.demo')?.active).not.toEqual({
+        ...second,
+        packageVersion: '1.0.2',
+      })
+      expect(new PluginActivationSelector(root).read('acme.demo')?.active).not.toEqual({
+        ...second,
+        artifactDigest: 'c'.repeat(64),
+      })
+    } finally {
+      await manager.closeBackendPlugins()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it('stages an immutable replacement without touching the active runtime until restart', async () => {
     const first = buildPkg('acme.demo', 'acme', {}, '1.0.0')
     installFetch(signedDetail(first.digest, 'acme.demo', 'acme', '1.0.0'), first.bytes, first.digest)
@@ -1192,8 +1250,10 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
       expect(new PluginActivationSelector(root).read('acme.demo')).toEqual({
         schemaVersion: 1,
         pluginId: 'acme.demo',
+        activeGrant: { packageVersion: '1.0.0', system: [], storage: true },
         active: { packageVersion: '1.0.0', target: 'universal', artifactDigest: first.digest },
         candidate: { packageVersion: '1.0.1', target: 'universal', artifactDigest: second.digest },
+        candidateGrant: { packageVersion: '1.0.1', system: [], storage: true },
       })
     } finally {
       await manager.closeBackendPlugins()
@@ -1231,8 +1291,10 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
       expect(new PluginActivationSelector(root).read('acme.demo')).toEqual({
         schemaVersion: 1,
         pluginId: 'acme.demo',
+        activeGrant: { packageVersion: '1.0.0', system: [], storage: true },
         active: { packageVersion: '1.0.0', target: 'universal', artifactDigest: first.digest },
         candidate: { packageVersion: '1.0.1', target: 'universal', artifactDigest: second.digest },
+        candidateGrant: { packageVersion: '1.0.1', system: [], storage: true },
       })
     } finally {
       await manager.closeBackendPlugins()

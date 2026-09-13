@@ -22,10 +22,7 @@ import {
   registerPluginIpc,
   resolveConfiguredMarketplace,
 } from './plugins/pluginIpc'
-import {
-  readRegistryTrustSnapshot,
-  verifyInstalledRegistryPackage,
-} from './plugins/pluginInstalledTrust'
+import { readRegistryTrustSnapshot } from './plugins/pluginInstalledTrust'
 import { contributionIcon } from './plugins/pluginContributionIcon'
 import { broadcastQuitStage } from './quit-progress'
 import { currentPluginHostTarget, UNIVERSAL_PLUGIN_TARGET } from './plugins/pluginTarget'
@@ -40,6 +37,7 @@ import { registerExecutionPolicyIpc } from './plugins/executionPolicyIpc'
 import { FAIL_CLOSED_EXECUTION_POLICY, type ExecutionPolicySnapshot } from './plugins/executionPolicy'
 import { PluginFactoryOptOutStore } from './plugins/pluginFactoryOptOutStore'
 import { loadPluginDir, type PluginActivationCatalogEntry } from './plugins/installedPlugins'
+import { verifyInstalledBackendSpawnTrust } from './plugins/pluginBackendSpawnTrust'
 import {
   BackendPluginError,
   PluginBackendSupervisor,
@@ -755,32 +753,12 @@ function currentInstalledRegistryTrust() {
 }
 
 function verifyCurrentInstalledBackendTrust(
-  activation: Pick<BackendPluginLaunchSpec, 'pluginId' | 'packageDir'>,
+  activation: Pick<BackendPluginLaunchSpec, 'pluginId' | 'packageVersion' | 'packageDir'>,
 ): void {
-  const packageRelativePath = relative(pluginsRoot(), activation.packageDir)
-  if (
-    !packageRelativePath ||
-    isAbsolute(packageRelativePath) ||
-    packageRelativePath === '..' ||
-    packageRelativePath.startsWith(`..${sep}`)
-  ) {
-    // Factory-bundled and developer-local packages do not carry Registry
-    // receipts. The Registry trust hook applies only to installed Registry
-    // packages under the Host-owned plugins root.
-    return
-  }
-  const decision = verifyInstalledRegistryPackage(
-    activation.packageDir,
-    activation.pluginId,
-    currentInstalledRegistryTrust(),
-  )
-  if (decision.action === 'quarantine') {
-    throw new BackendPluginError(
-      'BACKEND_UNAVAILABLE',
-      'installed plugin trust verification failed',
-      { cause: new Error(decision.reason) },
-    )
-  }
+  verifyInstalledBackendSpawnTrust(activation, {
+    pluginsRoot,
+    currentRegistryTrust: currentInstalledRegistryTrust,
+  })
 }
 
 function scheduleDeniedBackendRuntimeQuarantine(

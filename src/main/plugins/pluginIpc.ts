@@ -51,7 +51,8 @@ import type {
 } from './frontendPluginManager'
 import type { ContributionIcon } from './pluginContributionIcon'
 import { PluginCapabilityGrantStore } from './pluginCapabilityGrantStore'
-import { PluginActivationSelector } from './pluginActivationSelector'
+import { PluginActivationSelector, type PluginPackageSelection } from './pluginActivationSelector'
+import type { HostCapabilityGrant } from './pluginCapabilityBroker'
 import type {
   ManifestPermissionsSummary,
   PackageVersionGrantSummary,
@@ -483,14 +484,31 @@ export function registerPluginIpc(
           }
           await options.preflightCandidateBackend(activation)
         }
-        lifecycleSelector.stageCandidate(pkg.id, {
+        const candidate: PluginPackageSelection = {
           packageVersion: pkg.version,
           target: staged.target,
           artifactDigest: decision.artifactDigest,
-        }, {
-          fullShellConfirmed: args.riskConfirmed === true &&
-            scanned.descriptor?.capabilityPolicy?.kind === 'manifest-v2' &&
-            scanned.descriptor.capabilityPolicy.shell === 'full',
+        }
+        let candidateGrant: HostCapabilityGrant
+        if (scanned.descriptor) {
+          const policy = scanned.descriptor.capabilityPolicy
+          if (!policy || policy.kind !== 'manifest-v2') {
+            throw new Error('invalid Manifest v2 capability policy')
+          }
+          candidateGrant = {
+            packageVersion: candidate.packageVersion,
+            system: [...policy.system],
+            ...(policy.shell ? { shell: policy.shell } : {}),
+            ...(policy.shell === 'full' && args.riskConfirmed === true
+              ? { highRiskShellConfirmed: true as const }
+              : {}),
+            storage: true,
+          }
+        } else {
+          candidateGrant = { packageVersion: candidate.packageVersion, system: [], storage: true }
+        }
+        lifecycleSelector.stageCandidate(pkg.id, candidate, {
+          candidateGrant: { selection: candidate, grant: candidateGrant },
         })
         if (publisherRequiresTrust) {
           publisherTrust.trust(pkg.publisherId, pkg.id)
@@ -554,6 +572,43 @@ export function registerPluginIpc(
     if (previousVersion && !previousGrant) {
       throw new Error(`active package grant is unavailable for ${id}`)
     }
+    let promotedGrant: HostCapabilityGrant
+    if (scanned.descriptor) {
+      const policy = scanned.descriptor.capabilityPolicy
+      if (!policy || policy.kind !== 'manifest-v2') {
+        throw new Error('invalid Manifest v2 capability policy')
+      }
+      const candidateProof = selectedBeforeRestart.candidateGrant
+      const fullShellConfirmed = policy.shell === 'full' &&
+        (candidateProof
+          ? candidateProof.highRiskShellConfirmed === true
+          : selectedBeforeRestart.candidateFullShellConfirmed === true)
+      if (policy.shell === 'full' && !fullShellConfirmed) {
+        throw new Error('staged candidate full-shell approval is unavailable')
+      }
+      promotedGrant = {
+        packageVersion: selectedBeforeRestart.candidate.packageVersion,
+        system: [...policy.system],
+        ...(policy.shell ? { shell: policy.shell } : {}),
+        ...(fullShellConfirmed ? { highRiskShellConfirmed: true as const } : {}),
+        storage: true,
+      }
+      if (candidateProof && JSON.stringify(candidateProof) !== JSON.stringify(promotedGrant)) {
+        throw new Error('staged candidate grant does not match the current capability policy')
+      }
+    } else {
+      promotedGrant = {
+        packageVersion: selectedBeforeRestart.candidate.packageVersion,
+        system: [],
+        storage: true,
+      }
+      if (
+        selectedBeforeRestart.candidateGrant &&
+        JSON.stringify(selectedBeforeRestart.candidateGrant) !== JSON.stringify(promotedGrant)
+      ) {
+        throw new Error('staged candidate grant does not match the current backend policy')
+      }
+    }
     activeTransactions.add(id)
     let restartTransaction: PluginPackageRestartTransaction | undefined
     let drainedBackendOnly = false
@@ -571,6 +626,15 @@ export function registerPluginIpc(
       // The old runtime may take time to drain. Re-check the exact candidate
       // bytes and current Registry authority at the cutover seam, not only
       // before the drain started.
+      const cutoverSelection = lifecycleSelector.read(id)
+      if (
+        !cutoverSelection?.candidate ||
+        cutoverSelection.candidate.packageVersion !== selectedBeforeRestart.candidate.packageVersion ||
+        cutoverSelection.candidate.target !== selectedBeforeRestart.candidate.target ||
+        cutoverSelection.candidate.artifactDigest !== selectedBeforeRestart.candidate.artifactDigest
+      ) {
+        throw new Error('staged candidate identity changed during restart')
+      }
       const cutoverTrust = verifyCommitted(candidateDir, id, resolveConfiguredMarketplace(trust).trust)
       if (cutoverTrust.action === 'quarantine') {
         throw new Error(`staged candidate quarantined: ${cutoverTrust.reason}`)
@@ -583,19 +647,7 @@ export function registerPluginIpc(
       const summary = { ...scanned.packageSummary, provenance: 'official-registry' as const }
       if (scanned.descriptor) {
         manager.registerInstalledPackage(summary, scanned.descriptor, { official: true })
-        const policy = scanned.descriptor.capabilityPolicy
-        if (!policy || policy.kind !== 'manifest-v2') {
-          throw new Error('invalid Manifest v2 capability policy')
-        }
-        capabilityGrants.set(id, {
-          packageVersion: selected.active!.packageVersion,
-          system: [...policy.system],
-        ...(policy.shell ? { shell: policy.shell } : {}),
-        ...(policy.shell === 'full' && selectedBeforeRestart.candidateFullShellConfirmed
-          ? { highRiskShellConfirmed: true }
-          : {}),
-          storage: true,
-        })
+        capabilityGrants.set(id, promotedGrant)
         manager.setPluginStorageSnapshotSelection(id, {
           activeVersion: selected.active!.packageVersion,
           ...(selected.previous ? { previousVersion: selected.previous.packageVersion } : {}),
@@ -604,11 +656,7 @@ export function registerPluginIpc(
         // Backend-only packages have no frontend descriptor, but they still
         // need a version-bound grant for their next update or rollback.
         manager.registerInstalledPackage(summary, undefined, { official: true }, candidateDir)
-        capabilityGrants.set(id, {
-          packageVersion: selected.active!.packageVersion,
-          system: [],
-          storage: true,
-        })
+        capabilityGrants.set(id, promotedGrant)
         manager.setPluginStorageSnapshotSelection(id, {
           activeVersion: selected.active!.packageVersion,
           ...(selected.previous ? { previousVersion: selected.previous.packageVersion } : {}),
@@ -621,7 +669,7 @@ export function registerPluginIpc(
           selected.active!.packageVersion,
         )
         manager.completePackageRestart(restartTransaction)
-        lifecycleSelector.completeActivation(id)
+        lifecycleSelector.completeActivation(id, { activeGrant: promotedGrant })
         options.onPackageInstalled?.(id)
         return {
           id,
@@ -630,7 +678,7 @@ export function registerPluginIpc(
           skippedDestroyedHostWindows: report.skippedDestroyedHostWindows,
         }
       }
-      lifecycleSelector.completeActivation(id)
+      lifecycleSelector.completeActivation(id, { activeGrant: promotedGrant })
       options.onPackageInstalled?.(id)
       return { id, packageVersion: selected.active!.packageVersion, restoredInstances: 0, skippedDestroyedHostWindows: 0 }
     } catch (error) {

@@ -1,8 +1,10 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { generateKeyPairSync, sign as edSign } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { fileURLToPath } from 'node:url'
-import { existsSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { PassThrough } from 'node:stream'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -26,6 +28,17 @@ import {
   type PlansBridgePort,
 } from './plansBridge'
 import { MAX_BACKEND_BRIDGE_RESULT_BYTES } from './pluginBackendLimits'
+import { verifyInstalledBackendSpawnTrust } from './pluginBackendSpawnTrust'
+import { immutablePluginPackageDir, PluginActivationSelector } from './pluginActivationSelector'
+import {
+  REGISTRY_ARTIFACT_NAME,
+  REGISTRY_RECEIPT_NAME,
+  registryReceiptFromEvidence,
+  type InstalledRegistryTrustContext,
+} from './pluginInstalledTrust'
+import { canonicalTrustJson, type RegistryPackageEnvelope, type RegistryTrustMetadata } from './pluginRegistryTrust'
+import { sha256Hex } from './pluginVerify'
+import { makeZip } from './zipFixture'
 
 const fixture = fileURLToPath(new URL('./test-fixtures/backend-wire-child.mjs', import.meta.url))
 const packagedFixtureEnabled = process.env.NAVIDE_TEST_PACKAGED_PLANS === '1'
@@ -129,6 +142,77 @@ const packagedRuntime = createAuthenticatedBackendRuntime({
   hostWindowId: 'window-1',
   initiator: { kind: 'user', id: 'user-1' },
 })
+
+function signedBackendFixture(root: string, version = '1.0.0', label = 'Backend'): {
+  packageDir: string
+  selection: { packageVersion: string; target: string; artifactDigest: string }
+  trust: InstalledRegistryTrustContext
+} {
+  const pluginId = 'acme.backend'
+  const target = 'universal'
+  const packageDir = immutablePluginPackageDir(root, pluginId, version, target)
+  mkdirSync(join(packageDir, 'frontend'), { recursive: true })
+  const manifest = JSON.stringify({
+    schemaVersion: 2,
+    apiVersion: '^1.0.0',
+    id: pluginId,
+    name: label,
+    version,
+    publisher: 'acme',
+    permissions: {},
+    marketplace: { description: 'Backend', license: 'MIT' },
+    contributes: { views: [{ id: 'main', kind: 'custom', location: 'main', title: label, entry: 'frontend/index.html' }] },
+  })
+  const archive = new Uint8Array(makeZip([
+    { name: 'manifest.json', data: manifest },
+    { name: 'frontend/index.html', data: `<!doctype html><!-- ${label} -->` },
+  ]))
+  const digest = sha256Hex(archive)
+  const rootKey = generateKeyPairSync('ed25519')
+  const signerKey = generateKeyPairSync('ed25519')
+  const rootPem = rootKey.publicKey.export({ type: 'spki', format: 'pem' }).toString()
+  const signerPem = signerKey.publicKey.export({ type: 'spki', format: 'pem' }).toString()
+  const metadata: RegistryTrustMetadata = {
+    schemaVersion: 1,
+    registryProfile: 'official',
+    rootFingerprint: `sha256:${'1'.repeat(64)}`,
+    generatedAt: '2026-08-16T10:00:00.000Z',
+    expiresAt: '2026-08-17T10:00:00.000Z',
+    signers: [{ keyId: 'spawn-test', publicKey: signerPem, status: 'active', notBefore: '2026-08-01T00:00:00.000Z', notAfter: '2026-09-01T00:00:00.000Z' }],
+    blockedPublishers: [],
+    blockedPackages: [],
+  }
+  const signed = (value: unknown, key = signerKey.privateKey): string =>
+    edSign(null, Buffer.from(canonicalTrustJson(value)), key).toString('base64')
+  const envelope: RegistryPackageEnvelope = {
+    schemaVersion: 1,
+    artifactDigest: digest,
+    packageId: pluginId,
+    version,
+    target,
+    publisherId: 'acme',
+    keyId: 'spawn-test',
+    signedAt: '2026-08-16T11:00:00.000Z',
+  }
+  writeFileSync(join(packageDir, 'manifest.json'), manifest)
+  writeFileSync(join(packageDir, 'frontend/index.html'), `<!doctype html><!-- ${label} -->`)
+  writeFileSync(join(packageDir, REGISTRY_ARTIFACT_NAME), archive)
+  writeFileSync(join(packageDir, REGISTRY_RECEIPT_NAME), JSON.stringify(registryReceiptFromEvidence({
+    packageId: pluginId, version, publisherId: 'acme', target, artifactDigest: digest,
+    envelope, envelopeSignature: signed(envelope), registryAuthority: 'official',
+  })))
+  return {
+    packageDir,
+    selection: { packageVersion: version, target, artifactDigest: digest },
+    trust: {
+      pinnedRootKey: rootPem,
+      snapshot: { schemaVersion: 1, metadata, metadataSignature: signed(metadata, rootKey.privateKey) },
+      registryAuthority: 'official',
+      expectedTarget: target,
+      now: new Date('2026-08-16T12:00:00.000Z'),
+    },
+  }
+}
 
 function makeSupervisor(
   overrides: Partial<PluginBackendSupervisorOptions> = {}
@@ -1818,6 +1902,138 @@ describe('PluginBackendSupervisor', () => {
 
     await expect(supervisor.start()).rejects.toMatchObject({ code: 'BACKEND_UNAVAILABLE' })
     expect(spawnCount).toBe(0)
+  })
+
+  describe('installed backend selector admission', () => {
+    function selectorSupervisor(
+      root: string,
+      launch: BackendPluginLaunchSpec,
+      spawnCount: { value: number },
+      trust: InstalledRegistryTrustContext,
+    ): PluginBackendSupervisor {
+      return new PluginBackendSupervisor(launch, {
+        environment: { NAVIDE_FIXTURE: 'backend-wire' },
+        beforeSpawn: () => verifyInstalledBackendSpawnTrust(launch, {
+          pluginsRoot: () => root,
+          currentRegistryTrust: () => trust,
+        }),
+        spawnProcess: () => {
+          spawnCount.value += 1
+          return makeControlledChild(spawnCount.value)
+        },
+      })
+    }
+
+    it('rejects a signed same-ID B launch when selector A is active without spawning', async () => {
+      const root = mkdtempSync(join(tmpdir(), 'navide-backend-selector-admission-'))
+      try {
+        const a = signedBackendFixture(root, '1.0.0')
+        const b = signedBackendFixture(root, '2.0.0')
+        const selector = new PluginActivationSelector(root)
+        selector.stageCandidate('acme.backend', a.selection)
+        selector.activateCandidate('acme.backend')
+        selector.completeActivation('acme.backend')
+        const spawnCount = { value: 0 }
+        const supervisor = selectorSupervisor(root, {
+          ...activation,
+          packageVersion: b.selection.packageVersion,
+          packageDir: b.packageDir,
+        }, spawnCount, a.trust)
+        try {
+          await expect(supervisor.start()).rejects.toMatchObject({ code: 'BACKEND_UNAVAILABLE' })
+          expect(spawnCount.value).toBe(0)
+        } finally {
+          await supervisor.close()
+        }
+      } finally {
+        rmSync(root, { recursive: true, force: true })
+      }
+    })
+
+    it('rejects a same-version same-target replacement when the active selector digest differs', async () => {
+      const root = mkdtempSync(join(tmpdir(), 'navide-backend-selector-digest-'))
+      const replacementRoot = mkdtempSync(join(tmpdir(), 'navide-backend-selector-digest-b-'))
+      try {
+        const a = signedBackendFixture(root, '1.0.0')
+        const b = signedBackendFixture(replacementRoot, '1.0.0', 'Backend B')
+        const selector = new PluginActivationSelector(root)
+        selector.stageCandidate('acme.backend', a.selection)
+        selector.activateCandidate('acme.backend')
+        selector.completeActivation('acme.backend')
+        expect(b.selection).toMatchObject({
+          packageVersion: a.selection.packageVersion,
+          target: a.selection.target,
+        })
+        expect(b.selection.artifactDigest).not.toBe(a.selection.artifactDigest)
+        for (const relativePath of ['manifest.json', 'frontend/index.html', REGISTRY_ARTIFACT_NAME, REGISTRY_RECEIPT_NAME]) {
+          cpSync(join(b.packageDir, relativePath), join(a.packageDir, relativePath))
+        }
+
+        const spawnCount = { value: 0 }
+        const supervisor = selectorSupervisor(root, {
+          ...activation,
+          packageVersion: b.selection.packageVersion,
+          packageDir: a.packageDir,
+        }, spawnCount, b.trust)
+        try {
+          await expect(supervisor.start()).rejects.toMatchObject({
+            code: 'BACKEND_UNAVAILABLE',
+            message: expect.stringMatching(/artifact digest does not match/),
+          })
+          expect(spawnCount.value).toBe(0)
+        } finally {
+          await supervisor.close()
+        }
+      } finally {
+        rmSync(root, { recursive: true, force: true })
+        rmSync(replacementRoot, { recursive: true, force: true })
+      }
+    })
+
+    it('allows a valid selector-absent legacy package but rejects its tampered archive', async () => {
+      const root = mkdtempSync(join(tmpdir(), 'navide-backend-selector-legacy-'))
+      try {
+        const pkg = signedBackendFixture(root, '1.0.0')
+        const spawnCount = { value: 0 }
+        const supervisor = selectorSupervisor(root, { ...activation, packageDir: pkg.packageDir }, spawnCount, pkg.trust)
+        try {
+          await supervisor.start()
+          expect(spawnCount.value).toBe(1)
+        } finally {
+          await supervisor.close()
+        }
+        writeFileSync(join(pkg.packageDir, REGISTRY_ARTIFACT_NAME), 'tampered archive')
+        const rejectedCount = { value: 0 }
+        const rejected = selectorSupervisor(root, { ...activation, packageDir: pkg.packageDir }, rejectedCount, pkg.trust)
+        try {
+          await expect(rejected.start()).rejects.toMatchObject({ code: 'BACKEND_UNAVAILABLE' })
+          expect(rejectedCount.value).toBe(0)
+        } finally {
+          await rejected.close()
+        }
+      } finally {
+        rmSync(root, { recursive: true, force: true })
+      }
+    })
+
+    it('rejects a corrupt present selector without fallback or spawning', async () => {
+      const root = mkdtempSync(join(tmpdir(), 'navide-backend-selector-corrupt-'))
+      try {
+        const pkg = signedBackendFixture(root, '1.0.0')
+        mkdirSync(join(root, '.navide-lifecycle'), { recursive: true })
+        writeFileSync(join(root, '.navide-lifecycle', 'acme.backend.json'), '{not-json')
+        const spawnCount = { value: 0 }
+        const supervisor = selectorSupervisor(root, { ...activation, packageDir: pkg.packageDir }, spawnCount, pkg.trust)
+        try {
+          await expect(supervisor.start()).rejects.toMatchObject({ code: 'BACKEND_UNAVAILABLE' })
+          expect(spawnCount.value).toBe(0)
+        } finally {
+          await supervisor.close()
+        }
+      } finally {
+        rmSync(root, { recursive: true, force: true })
+      }
+    })
   })
 
   it('does not spawn after close wins a pending Host-only before-spawn check', async () => {

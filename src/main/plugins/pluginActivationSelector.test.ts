@@ -145,6 +145,80 @@ describe('PluginActivationSelector', () => {
     })
   })
 
+  it('re-promotes the exact full-shell B identity after rollback and selector reload', () => {
+    const { root, selector } = fixture()
+    const grantB = {
+      packageVersion: second.packageVersion,
+      system: ['aiCli'] as const,
+      shell: 'full' as const,
+      highRiskShellConfirmed: true as const,
+      storage: true as const,
+    }
+
+    selector.stageCandidate('acme.demo', first)
+    selector.activateCandidate('acme.demo')
+    selector.completeActivation('acme.demo')
+    selector.stageCandidate('acme.demo', second, {
+      candidateGrant: { selection: second, grant: grantB },
+    })
+    expect(selector.read('acme.demo')).toMatchObject({ candidate: second, candidateGrant: grantB })
+    selector.beginActivation('acme.demo')
+    selector.activateCandidate('acme.demo')
+    selector.completeActivation('acme.demo', { activeGrant: grantB })
+
+    selector.beginRollback('acme.demo')
+    selector.activatePrevious('acme.demo')
+    selector.completeRollback('acme.demo')
+
+    const reloaded = new PluginActivationSelector(root)
+    expect(reloaded.read('acme.demo')).toMatchObject({
+      active: first,
+      candidate: second,
+      candidateGrant: grantB,
+    })
+    reloaded.beginActivation('acme.demo')
+    reloaded.activateCandidate('acme.demo')
+    expect(reloaded.completeActivation('acme.demo', { activeGrant: grantB })).toMatchObject({
+      active: second,
+      previous: first,
+      activeGrant: grantB,
+    })
+    expect(reloaded.read('acme.demo')?.active).toEqual(second)
+    expect(reloaded.read('acme.demo')?.active).not.toEqual({
+      ...second,
+      packageVersion: '2.0.1',
+    })
+    expect(reloaded.read('acme.demo')?.active).not.toEqual({
+      ...second,
+      artifactDigest: 'c'.repeat(64),
+    })
+
+    reloaded.clear('acme.demo')
+    const changed = {
+      packageVersion: second.packageVersion,
+      target: 'darwin-arm64',
+      artifactDigest: 'c'.repeat(64),
+    } as const
+    expect(() => reloaded.stageCandidate('acme.demo', changed, {
+      candidateGrant: {
+        selection: second,
+        grant: grantB,
+      },
+    })).toThrow(/candidate grant does not match/)
+    reloaded.stageCandidate('acme.demo', changed, {
+      candidateGrant: { selection: changed, grant: grantB },
+    })
+    expect(reloaded.read('acme.demo')).toMatchObject({
+      candidate: {
+        packageVersion: second.packageVersion,
+        target: 'darwin-arm64',
+        artifactDigest: 'c'.repeat(64),
+      },
+    })
+    expect(reloaded.read('acme.demo')).toHaveProperty('candidateGrant', grantB)
+    expect(reloaded.read('acme.demo')).not.toHaveProperty('candidateFullShellConfirmed')
+  })
+
   it('rejects a second candidate instead of overwriting a staged package', () => {
     const { selector } = fixture()
     selector.stageCandidate('acme.demo', first)
@@ -193,5 +267,59 @@ describe('PluginActivationSelector', () => {
     }))
 
     expect(() => new PluginActivationSelector(root).read('acme.demo')).toThrow(/package selector/)
+  })
+
+  it.each([
+    ['candidate activation without candidate', {
+      schemaVersion: 1, pluginId: 'acme.demo', activation: { kind: 'candidate', phase: 'promoted' },
+    }],
+    ['rollback prepared without active and previous', {
+      schemaVersion: 1, pluginId: 'acme.demo', activation: { kind: 'rollback', phase: 'prepared' },
+    }],
+    ['rollback promoted without candidate', {
+      schemaVersion: 1, pluginId: 'acme.demo', active: first,
+      activation: { kind: 'rollback', phase: 'promoted' },
+    }],
+    ['unknown activation kind', {
+      schemaVersion: 1, pluginId: 'acme.demo', candidate: first,
+      activation: { kind: 'replacement', phase: 'prepared' },
+    }],
+    ['unknown activation phase', {
+      schemaVersion: 1, pluginId: 'acme.demo', candidate: first,
+      activation: { kind: 'candidate', phase: 'committed' },
+    }],
+  ])('fails closed for impossible lifecycle record: %s', (_name, record) => {
+    const { root } = fixture()
+    mkdirSync(join(root, '.navide-lifecycle'), { recursive: true })
+    writeFileSync(join(root, '.navide-lifecycle', 'acme.demo.json'), JSON.stringify(record))
+    expect(() => new PluginActivationSelector(root).read('acme.demo')).toThrow(/plugin lifecycle/)
+  })
+
+  it.each([
+    ['first-install prepared', {
+      schemaVersion: 1, pluginId: 'acme.demo', candidate: first,
+      activation: { kind: 'candidate', phase: 'prepared' },
+    }],
+    ['candidate interrupted after promotion', {
+      schemaVersion: 1, pluginId: 'acme.demo', active: second, candidate: second, previous: first,
+      activation: { kind: 'candidate', phase: 'promoted' },
+    }],
+    ['rollback interrupted before promotion', {
+      schemaVersion: 1, pluginId: 'acme.demo', active: second, previous: first,
+      activation: { kind: 'rollback', phase: 'prepared' },
+    }],
+    ['rollback interrupted after promotion', {
+      schemaVersion: 1, pluginId: 'acme.demo', active: first, candidate: second,
+      activation: { kind: 'rollback', phase: 'promoted' },
+    }],
+  ])('reads and deterministically recovers valid lifecycle record: %s', (_name, record) => {
+    const { root } = fixture()
+    mkdirSync(join(root, '.navide-lifecycle'), { recursive: true })
+    writeFileSync(join(root, '.navide-lifecycle', 'acme.demo.json'), JSON.stringify(record))
+    const selector = new PluginActivationSelector(root)
+    expect(selector.read('acme.demo')).toMatchObject(record)
+    const recovered = selector.recoverInterruptedActivation('acme.demo')
+    expect(recovered).not.toBeNull()
+    expect(new PluginActivationSelector(root).recoverInterruptedActivation('acme.demo')).toBeNull()
   })
 })
