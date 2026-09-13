@@ -326,6 +326,19 @@ function ctxCopyPath(): void {
   justify-content: center;
   z-index: calc(var(--z-modal) + 110);
 }
+/* Windows and Linux draw their window controls into the app's own 38px
+   `.titlebar` (macOS gets OS-drawn traffic lights painted over the window
+   instead). This opaque, full-viewport overlay used to start at `inset: 0` and
+   cover that bar, so the first-launch / Home screen on those platforms had no
+   reachable minimise or close — only Alt+F4. Start below the bar so the drawn
+   controls, and the bar's draggable region, stay reachable; the titlebar keeps
+   its own z-index (below real modals), it is simply no longer covered here.
+   Gated on `data-window-controls="drawn"`, which `main.ts` sets only when
+   `needsDrawnWindowControls()` is true — macOS never gets it, so its overlay is
+   unchanged (its controls are drawn by the OS above everything regardless). */
+html[data-window-controls='drawn'] .welcome-overlay {
+  top: var(--titlebar-height, 38px);
+}
 /* Opened over a working window, so the app stays visible behind it — the
    startup screen's opaque inset would read as "the workspace closed". */
 .welcome-overlay--modal { background: rgb(0 0 0 / 52%); }
