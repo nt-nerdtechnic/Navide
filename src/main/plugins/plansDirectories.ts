@@ -294,15 +294,30 @@ export function isAllowedPlanDocumentPath(relPath: string, workspaceRoot: string
   return false
 }
 
+/** Every plan directory and every ancestor of one, e.g. `.agent-team` and
+ * `.agent-team/plans`: a directory moved in or out of the workspace arrives
+ * as a single event naming the directory, never its documents. */
+const PLAN_DIRECTORY_PATHS: readonly string[] = Array.from(new Set(
+  PLAN_DOC_DIRS.flatMap((planDir) => {
+    const segments = planDir.split('/')
+    return segments.map((_, index) => segments.slice(0, index + 1).join('/'))
+  }),
+))
+
 /**
- * Decide whether a watcher event names a plan document. The common case —
- * storm traffic such as database and log writes, git, builds — fails the
- * string checks before any filesystem probe runs; only a path shaped like a
+ * Decide whether a watcher event names a plan document, or a directory whose
+ * move would add or remove documents wholesale. The common case — storm
+ * traffic such as database and log writes, git, builds — fails the string
+ * checks before any filesystem probe runs; only a path shaped like a
  * nested-repository plan directory pays for the bounded traversal behind
  * `isAllowedPlanDocumentPath`.
  */
 export function isPlanDocumentChangePath(relPath: string, workspaceRoot: string): boolean {
-  const segments = relPath.replace(/\\/g, '/').split('/')
+  const normalized = relPath.replace(/\\/g, '/')
+  if (PLAN_DIRECTORY_PATHS.some((dir) => normalized === dir || normalized.endsWith(`/${dir}`))) {
+    return true
+  }
+  const segments = normalized.split('/')
   if (segments.length < 2 || !isPlanDocName(segments[segments.length - 1])) return false
   const parent = segments.slice(0, -1).join('/')
   if ((PLAN_DOC_DIRS as readonly string[]).includes(parent)) return true

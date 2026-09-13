@@ -586,18 +586,26 @@ def _list_request(request_id: str) -> dict[str, Any]:
     }
 
 
-def _serve_one_empty_scan(process: subprocess.Popen[bytes], leader_id: str) -> list[dict[str, Any]]:
-    """Answer one full plans.list scan on behalf of `leader_id`, collecting every
-    other frame (the responses) until the scan's last bridge call is served."""
+def _serve_one_empty_scan(
+    process: subprocess.Popen[bytes], leader_ids: set[str] | str
+) -> tuple[list[dict[str, Any]], str]:
+    """Answer one full plans.list scan on behalf of one of `leader_ids`,
+    collecting every other frame (the responses) until the scan's last bridge
+    call is served. Returns (other frames, the id that ran the scan)."""
+    allowed = {leader_ids} if isinstance(leader_ids, str) else leader_ids
     others: list[dict[str, Any]] = []
     served_root_listing = False
+    scanner = ""
     while not served_root_listing:
         frame = _read(process)
         if frame.get("method") != "navide/host/call":
             others.append(frame)
             continue
         params = frame["params"]
-        assert params["origin"] == {"kind": "call", "requestId": leader_id}
+        assert params["origin"]["kind"] == "call"
+        assert params["origin"]["requestId"] in allowed, params["origin"]
+        scanner = scanner or params["origin"]["requestId"]
+        assert params["origin"]["requestId"] == scanner, (scanner, params["origin"])
         if params["operation"] == "stat_path":
             _reply_bridge(process, frame, {"exists": False})
         elif params["operation"] == "list_dir":
@@ -606,10 +614,10 @@ def _serve_one_empty_scan(process: subprocess.Popen[bytes], leader_id: str) -> l
             served_root_listing = True
         else:
             raise AssertionError(f"unexpected filesystem operation: {params['operation']}")
-    return others
+    return others, scanner
 
 
-def test_overlapping_list_calls_share_one_scan(
+def test_overlapping_list_calls_share_one_follow_up_scan(
     backend_process: subprocess.Popen[bytes],
 ) -> None:
     # The first call becomes the scan leader; its first bridge call proves the
@@ -623,17 +631,68 @@ def test_overlapping_list_calls_share_one_scan(
     time.sleep(0.2)
     _reply_bridge(backend_process, first, {"exists": False})
 
-    responses = _serve_one_empty_scan(backend_process, "list-leader")
+    responses, _ = _serve_one_empty_scan(backend_process, "list-leader")
+    # Both followers arrived while the leader's scan was running, so neither
+    # may take its snapshot; they share exactly one scan started after them.
+    more, scanner = _serve_one_empty_scan(backend_process, {"list-follower-1", "list-follower-2"})
+    responses += more
     deadline = time.monotonic() + 2
     while len(responses) < 3:
         assert time.monotonic() < deadline
         frame = _read(backend_process, max(0.01, deadline - time.monotonic()))
-        # Every bridge call the child makes after the scan belongs to nobody:
-        # a follower running its own scan would show up here.
+        # Every bridge call the child makes after the second scan belongs to
+        # nobody: a third scan would show up here.
         assert frame.get("method") != "navide/host/call", frame
         responses.append(frame)
+    assert scanner in {"list-follower-1", "list-follower-2"}
     assert sorted(frame["id"] for frame in responses) == ["list-follower-1", "list-follower-2", "list-leader"]
     assert all(frame["result"]["value"] == [] for frame in responses)
+
+
+def test_list_caller_arriving_mid_scan_sees_the_write_the_scan_missed(
+    backend_process: subprocess.Popen[bytes],
+) -> None:
+    plan_html = (
+        '<script id="plan-meta" type="application/json">'
+        '{"name":"new","stage":"draft","todos":[]}</script>'
+    )
+    _send(backend_process, _list_request("list-leader"))
+    first = _read(backend_process)
+    assert first["params"]["origin"] == {"kind": "call", "requestId": "list-leader"}
+    assert first["params"]["operation"] == "stat_path"
+    assert first["params"]["arguments"] == {"rel_path": ".agent-team/plans"}
+    _reply_bridge(backend_process, first, {"exists": True})
+    listing = _read(backend_process)
+    assert listing["params"]["operation"] == "list_dir"
+    assert listing["params"]["arguments"] == {"rel_path": ".agent-team/plans"}
+    # The leader has consumed `.agent-team/plans` as empty; a document is
+    # written right after, and a caller arriving from here on must see it.
+    _reply_bridge(backend_process, listing, {"entries": []})
+    disk = {".agent-team/plans": ["new.html"]}
+    _send(backend_process, _list_request("list-follower"))
+
+    responses: list[dict[str, Any]] = []
+    deadline = time.monotonic() + 4
+    while len(responses) < 2:
+        assert time.monotonic() < deadline
+        frame = _read(backend_process, max(0.01, deadline - time.monotonic()))
+        if frame.get("method") != "navide/host/call":
+            responses.append(frame)
+            continue
+        params = frame["params"]
+        rel = params["arguments"].get("rel_path", "")
+        if params["operation"] == "stat_path":
+            _reply_bridge(backend_process, frame, {"exists": rel in disk or rel.startswith(".agent-team/plans/")})
+        elif params["operation"] == "list_dir":
+            _reply_bridge(backend_process, frame, {"entries": disk.get(rel, [])})
+        elif params["operation"] == "read_file":
+            _reply_bridge(backend_process, frame, {"content": plan_html, "mtime": 1.0})
+        else:
+            raise AssertionError(params["operation"])
+
+    by_id = {frame["id"]: frame for frame in responses}
+    assert [entry["rel_path"] for entry in by_id["list-leader"]["result"]["value"]] == []
+    assert [entry["rel_path"] for entry in by_id["list-follower"]["result"]["value"]] == [".agent-team/plans/new.html"]
 
 
 def test_cancelled_leader_does_not_cancel_the_followers_list_call(
@@ -657,7 +716,7 @@ def test_cancelled_leader_does_not_cancel_the_followers_list_call(
     assert leader_response["error"]["data"] == {"code": "USER_CANCELLED"}
 
     # The follower takes the next flight instead of inheriting the cancellation.
-    responses = _serve_one_empty_scan(backend_process, "list-follower")
+    responses, _ = _serve_one_empty_scan(backend_process, "list-follower")
     if not responses:
         responses.append(_read(backend_process))
     assert [(frame["id"], frame["result"]["value"]) for frame in responses] == [("list-follower", [])]

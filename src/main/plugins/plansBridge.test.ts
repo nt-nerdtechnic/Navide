@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { describe, expect, it } from 'vitest'
@@ -289,8 +289,11 @@ describe('Plans Host Bridge ports', () => {
     const controller = new AbortController()
     const events: Array<{ event: string; payload: unknown }> = []
     const bridgeContext = context(controller.signal, events, canonicalRoot, runtime, canonicalRoot)
-    const watcher = dispatcher.dispatch(request('filesystem', 'watch', { rel_path: '' }), bridgeContext)
     const settle = (): Promise<void> => new Promise((resolvePromise) => setTimeout(resolvePromise, 300))
+    // FSEvents can replay the directory creation above into a watch that
+    // starts right after it; let it drain before the watch begins.
+    await settle()
+    const watcher = dispatcher.dispatch(request('filesystem', 'watch', { rel_path: '' }), bridgeContext)
     try {
       await settle()
       // The storm that took the child down: backend state files and logs next
@@ -312,6 +315,13 @@ describe('Plans Host Bridge ports', () => {
         // rejects a workspace-relative path containing a backslash.
         expect(String((payload as { path: string }).path)).not.toContain('\\')
       }
+
+      // Moving a whole plan directory away sends one event naming the
+      // directory and none for the documents inside it.
+      events.length = 0
+      renameSync(join(root, '.agent-team/plans'), join(root, '.agent-team/stash'))
+      await settle()
+      expect(events.map(({ payload }) => (payload as { path?: string }).path)).toContain('.agent-team/plans')
     } finally {
       controller.abort()
       await expect(watcher).resolves.toBeNull()

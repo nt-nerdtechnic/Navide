@@ -383,7 +383,6 @@ describe('plansDirectories', () => {
         '.agent-team/navide.db-journal',
         '.git/index',
         'src/renderer/App.vue',
-        '.agent-team/plans',
         '.agent-team/plans/_template.html',
         '.agent-team/plans/.draft.html',
         'plan.html',
@@ -400,6 +399,17 @@ describe('plansDirectories', () => {
       }
       expect(isPlanDocumentChangePath('.cursor/plans/legacy.plan.md', tempWorkspace)).toBe(true)
       expect(isPlanDocumentChangePath('.agent-team\\plans\\windows.html', tempWorkspace)).toBe(true)
+      expect(vi.mocked(statSync)).not.toHaveBeenCalled()
+    })
+
+    it('keeps directory events for plan directories and their ancestors, which is all a move sends', () => {
+      vi.mocked(statSync).mockClear()
+      for (const directory of ['.agent-team', '.agent-team/plans', 'docs', 'docs/reports', 'packages/child/.agent-team', 'packages/child/.cursor/plans']) {
+        expect(isPlanDocumentChangePath(directory, tempWorkspace), directory).toBe(true)
+      }
+      for (const other of ['.agent-team/state', 'documents', 'packages/child', 'node_modules/.agent-team-x']) {
+        expect(isPlanDocumentChangePath(other, tempWorkspace), other).toBe(false)
+      }
       expect(vi.mocked(statSync)).not.toHaveBeenCalled()
     })
 
