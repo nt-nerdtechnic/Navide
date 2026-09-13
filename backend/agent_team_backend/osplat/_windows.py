@@ -797,6 +797,59 @@ class WindowsTerminalBackend:
     def parse_command(self, command: str) -> list[str]:
         return _split_command_line(command)
 
+    def self_check_conpty(self) -> tuple[bool, str]:
+        # Real ConPTY, not a mock: spawn `cmd /c exit 0` and require a clean
+        # exit. pywinpty does not create the pseudoconsole itself — conpty.dll
+        # launches winpty's `OpenConsole.exe` as the host — so a frozen build
+        # that dropped that file spawns fine but the child is torn down at once
+        # and exits with STATUS_CONTROL_C_EXIT (0xC000013A). That is exactly
+        # the "every pane dies on Windows" regression, caught here in CI before
+        # it ships.
+        status_control_c_exit = 0xC000013A
+        try:
+            import winpty
+        except Exception as exc:  # noqa: BLE001
+            return False, f"conpty self-check: FAIL — cannot import winpty: {exc}"
+        winpty_dir = os.path.dirname(winpty.__file__)
+        open_console = os.path.join(winpty_dir, "OpenConsole.exe")
+        if not os.path.exists(open_console):
+            return False, (
+                "conpty self-check: FAIL — OpenConsole.exe missing from "
+                f"{winpty_dir}; ConPTY panes would die with STATUS_CONTROL_C_EXIT"
+            )
+        cmd = os.path.join(
+            os.environ.get("SystemRoot", r"C:\Windows"), "System32", "cmd.exe"
+        )
+        try:
+            pty = winpty.PTY(80, 24)
+            pty.spawn(cmd, cmdline="/c exit 0")
+        except Exception as exc:  # noqa: BLE001
+            return False, f"conpty self-check: FAIL — spawn raised: {exc}"
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline:
+            try:
+                alive = pty.isalive()
+            except Exception:  # noqa: BLE001
+                alive = False
+            if not alive:
+                break
+            time.sleep(0.05)
+        else:
+            return False, "conpty self-check: FAIL — child never exited within 10s"
+        try:
+            status = pty.get_exitstatus()
+        except Exception:  # noqa: BLE001
+            status = None
+        if status == status_control_c_exit:
+            return False, (
+                "conpty self-check: FAIL — child exited with STATUS_CONTROL_C_EXIT "
+                "(pseudoconsole torn down; OpenConsole.exe not usable)"
+            )
+        return True, (
+            f"conpty self-check: OK — clean ConPTY exit (status={status}), "
+            "OpenConsole.exe present"
+        )
+
     def spawn(
         self,
         argv: list[str] | str,

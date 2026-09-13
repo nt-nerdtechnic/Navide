@@ -20,6 +20,29 @@ from .git_askpass_helper import ASKPASS_FLAG, main as askpass_main
 if len(sys.argv) > 1 and sys.argv[1] == ASKPASS_FLAG:
     askpass_main(sys.argv[2] if len(sys.argv) > 2 else "")
 
+
+def _self_check_conpty() -> int:
+    """Prove the packaged build can actually open a ConPTY, then exit.
+
+    Windows CI runs this against the FROZEN onefile exe after packaging. The
+    unit tests can only see what the spec collects; they cannot see whether the
+    bootloader extracts winpty's `OpenConsole.exe` such that conpty.dll finds
+    it at runtime. The real work lives in the platform seam
+    (`osplat.terminal_backend.self_check_conpty`) so nothing here branches on
+    the platform: Windows spawns a real ConPTY and fails on a torn-down
+    pseudoconsole, POSIX reports a skip. Kept before the heavy imports and
+    behind an explicit flag so it costs a normal launch nothing.
+    """
+    from . import osplat
+
+    ok, message = osplat.terminal_backend.self_check_conpty()
+    print(message)
+    return 0 if ok else 1
+
+
+if len(sys.argv) > 2 and sys.argv[1] == "--self-check" and sys.argv[2] == "conpty":
+    raise SystemExit(_self_check_conpty())
+
 import os  # noqa: E402
 import socket  # noqa: E402
 

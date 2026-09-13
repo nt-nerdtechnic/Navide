@@ -292,6 +292,11 @@ class PosixTerminalBackend:
     def parse_command(self, command: str) -> list[str]:
         return shlex.split(command)
 
+    def self_check_conpty(self) -> tuple[bool, str]:
+        # The pty comes from the kernel via `pty.openpty`; there is no bundled
+        # console host to lose, so nothing to check.
+        return True, "conpty self-check: skipped (POSIX pty needs no bundled host)"
+
     def spawn(
         self,
         argv: list[str] | str,

@@ -10,11 +10,25 @@
 # PyInstaller cannot cross-compile, so this spec runs once per target platform
 # on that platform's own CI runner.
 
+# On Windows the ConPTY terminal backend is pywinpty, whose `conpty.dll`
+# launches winpty's loose `OpenConsole.exe` as the pty host. That `.exe` is not
+# reached by PyInstaller's graph walk and is not reliably picked up by
+# `collect_data_files` (whether a bare `.exe` counts as a data file varies by
+# PyInstaller version), so `_pyinstaller_winpty.collect_winpty` walks the
+# package directory and adds every `.exe` explicitly. Without it the
+# pseudoconsole is torn down at once and every pane exits with
+# STATUS_CONTROL_C_EXIT — the Windows app cannot run any pane. `--self-check
+# conpty` (see __main__.py) and test_pyinstaller_spec.py both assert the file
+# survives into the build so the omission can never ship silently again.
+from _pyinstaller_winpty import collect_winpty
+
+_winpty_binaries, _winpty_datas = collect_winpty()
+
 a = Analysis(
     ['run.py'],
     pathex=['.'],
-    binaries=[],
-    datas=[
+    binaries=_winpty_binaries,
+    datas=_winpty_datas + [
         # git execs GIT_ASKPASS by path (no shell), so this must exist as a
         # real file on disk in the onefile extraction dir -- PyInstaller only
         # extracts modules bundled in the PYZ archive on demand as .pyc, never

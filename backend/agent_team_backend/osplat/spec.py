@@ -515,6 +515,20 @@ class TerminalBackend(Protocol):
         """Split a command-line string into argv the way this platform's shell would."""
         ...
 
+    def self_check_conpty(self) -> tuple[bool, str]:
+        """Prove a real pseudo-terminal can be opened here, for CI to gate on.
+
+        Returns ``(ok, message)``. POSIX has no packaging risk around its pty
+        and returns ``(True, ...)`` without spawning anything. Windows freezes
+        winpty's ``OpenConsole.exe`` into the bundle; when it is missing the
+        pseudoconsole is torn down at once and the child dies with
+        ``STATUS_CONTROL_C_EXIT`` — so there it spawns a real ConPTY and
+        fails on that. Run against the FROZEN exe (``--self-check conpty``),
+        where the unit tests cannot see whether the bootloader laid the file
+        out where ``conpty.dll`` finds it.
+        """
+        ...
+
     def spawn(
         self,
         argv: list[str] | str,
