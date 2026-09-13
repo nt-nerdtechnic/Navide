@@ -249,12 +249,15 @@ async function start(): Promise<void> {
       permissionStored: settingsGet<string | null>(cliPermissionKey(agentKey.value), null),
     })
     await term.spawn({
-      // The host port knows the platform and builds the argv (PowerShell and
+      // The host port knows the platform and builds the command (PowerShell and
       // cmd.exe on Windows; the same wrapping as App.vue spawns elsewhere).
-      // Without one: zsh reads ~/.zshrc (where installers add PATH) only in
-      // interactive mode — plain -lc misses it.
+      // This dock only ever spawns CLI agents, so it is always an agent pane —
+      // on Windows that skips the PowerShell wrapper (a `--mcp-config {…}`
+      // payload would not survive `-Command`). Without a port: zsh reads
+      // ~/.zshrc (where installers add PATH) only in interactive mode — plain
+      // -lc misses it.
       command:
-        props.terminalPort.spawnArgv?.(shell, command) ??
+        props.terminalPort.spawnArgv?.(shell, command, { agentPane: true }) ??
         [shell, shell.endsWith('zsh') ? '-ilc' : '-lc', command],
       cwd: props.workspacePath,
       agentKey: agentKey.value,
