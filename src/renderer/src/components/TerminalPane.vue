@@ -344,6 +344,8 @@ defineExpose({
   clearNeedsInput: terminal.clearNeedsInput,
   markQuestion: terminal.markQuestion,
   clearQuestion: terminal.clearQuestion,
+  markDeliveredPending: terminal.markDeliveredPending,
+  clearDeliveredPending: terminal.clearDeliveredPending,
   markBufferPosition: terminal.markBufferPosition,
   recleanBuffer: terminal.recleanBuffer,
   flushPendingClean: terminal.flushPendingClean,
