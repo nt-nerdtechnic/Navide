@@ -142,6 +142,8 @@ SYNCHRONIZE = 0x00100000
 WAIT_OBJECT_0 = 0x00000000
 WAIT_TIMEOUT = 0x00000102
 INFINITE = 0xFFFFFFFF
+#: GetExitCodeProcess returns this while a process is still running.
+STILL_ACTIVE = 259
 #: Exit code handed to TerminateProcess/TerminateJobObject.
 _TERMINATE_EXIT_CODE = 1
 
@@ -390,7 +392,28 @@ class WindowsProcessTree:
             return None
 
     def is_alive(self, pid: int) -> bool:
-        return psutil.pid_exists(pid)
+        # `pid_exists` is the cheap first cut, but on Windows a process can have
+        # exited while a handle to it is still held — a debugger, or WerFault
+        # collecting a crash dump of the app for the seconds it takes — which
+        # keeps the pid from being reused and which psutil reads inconsistently.
+        # The backend follows the app's pid to know when to shut down, so a
+        # crashed parent read as "still alive" is exactly how it would be
+        # orphaned. Ask the kernel: a process that has exited has an exit code,
+        # only STILL_ACTIVE is actually running.
+        if not psutil.pid_exists(pid):
+            return False
+        k = _kernel32()
+        handle = k.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            # Cannot open it to ask; pid_exists already said it is there.
+            return True
+        try:
+            code = ctypes.c_uint32(0)
+            if k.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return code.value == STILL_ACTIVE
+            return True
+        finally:
+            k.CloseHandle(handle)
 
     def is_orphan_parent(self, ppid: int, me: int) -> bool:
         # No reparenting here: `snapshot` writes 0 for a parent that is gone
@@ -398,9 +421,20 @@ class WindowsProcessTree:
         return ppid in (0, me)
 
     def parent_to_follow(self, env: Mapping[str, str]) -> int | None:
-        # The Job Object the app puts this backend in (KILL_ON_JOB_CLOSE) ends
-        # it with the app; nothing to poll.
-        return None
+        # Follow the pid the app named, the same as POSIX. There is no Job
+        # Object tying this backend to the app — the app never creates one (the
+        # KILL_ON_JOB_CLOSE job in this module owns a pane's PTY child, not this
+        # process) — so on an abnormal exit (a crash or Task-Manager kill of the
+        # app, where its normal quit path and the stdin `shutdown` line never
+        # run) nothing else would end this backend, and the next launch finds a
+        # second one holding the port. `_watch_parent_for_shutdown` guards the
+        # fast Windows pid reuse with `identity` (pid + start time).
+        raw = env.get("AGENT_TEAM_PARENT_PID", "")
+        try:
+            pid = int(raw)
+        except ValueError:
+            return None
+        return pid if pid > 0 else None
 
     def kill(self, pid: int, *, force: bool) -> None:
         # Both `force` values are TerminateProcess: Windows has no SIGTERM.
