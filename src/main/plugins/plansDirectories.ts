@@ -294,15 +294,13 @@ export function isAllowedPlanDocumentPath(relPath: string, workspaceRoot: string
   return false
 }
 
-/** Every plan directory and every ancestor of one, e.g. `.agent-team` and
- * `.agent-team/plans`: a directory moved in or out of the workspace arrives
- * as a single event naming the directory, never its documents. */
-const PLAN_DIRECTORY_PATHS: readonly string[] = Array.from(new Set(
-  PLAN_DOC_DIRS.flatMap((planDir) => {
-    const segments = planDir.split('/')
-    return segments.map((_, index) => segments.slice(0, index + 1).join('/'))
-  }),
-))
+/** The plan directories themselves: one moved in or out of the workspace
+ * arrives as a single event naming the directory, never its documents.
+ * Deliberately not their ancestors. A host whose watcher reports the parent
+ * of a changed file — Windows does — names `.agent-team` for every database
+ * and log write beside the plans, and `docs` for every ordinary edit under
+ * it: exactly the storm this filter exists to stop. */
+const PLAN_DIRECTORY_PATHS: readonly string[] = PLAN_DOC_DIRS
 
 /**
  * Decide whether a watcher event names a plan document, or a directory whose

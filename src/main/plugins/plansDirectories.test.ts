@@ -402,10 +402,16 @@ describe('plansDirectories', () => {
       expect(vi.mocked(statSync)).not.toHaveBeenCalled()
     })
 
-    it('keeps directory events for plan directories and their ancestors, which is all a move sends', () => {
+    it('keeps directory events for plan directories, but not for the ancestors that also name ordinary traffic', () => {
       vi.mocked(statSync).mockClear()
-      for (const directory of ['.agent-team', '.agent-team/plans', 'docs', 'docs/reports', 'packages/child/.agent-team', 'packages/child/.cursor/plans']) {
+      for (const directory of ['.agent-team/plans', 'docs/reports', 'packages/child/.cursor/plans']) {
         expect(isPlanDocumentChangePath(directory, tempWorkspace), directory).toBe(true)
+      }
+      // A watcher that reports the parent of a changed file — Windows does —
+      // names these for every database write beside the plans and every edit
+      // under docs, so an ancestor cannot mean "a plan directory moved".
+      for (const ancestor of ['.agent-team', 'docs', '.claude', '.cursor', 'packages/child/.agent-team']) {
+        expect(isPlanDocumentChangePath(ancestor, tempWorkspace), ancestor).toBe(false)
       }
       for (const other of ['.agent-team/state', 'documents', 'packages/child', 'node_modules/.agent-team-x']) {
         expect(isPlanDocumentChangePath(other, tempWorkspace), other).toBe(false)

@@ -15,7 +15,6 @@ import queue
 import re
 import sys
 import threading
-import time
 import uuid
 from datetime import datetime, timezone
 from html import escape as html_escape
@@ -86,10 +85,14 @@ _subscriptions: dict[str, dict[str, Any]] = {}
 _bridge_pending: dict[str, queue.Queue[tuple[str, Any]]] = {}
 _bridge_origin_ids: dict[str, set[str]] = {}
 _bridge_watch_origins: set[str] = set()
-# In-flight plans.list scan: {"done": threading.Event, "started_at": float,
+# In-flight plans.list scan: {"done": threading.Event, "generation": int,
 # "result": list | None, "error": BaseException | None}. Callers that arrive
 # while it runs wait for it, then share the one scan started after them.
+# The generation counts scans, not time: a clock coarse enough to read the
+# same value twice a millisecond apart (Windows ticks every ~15.6 ms) cannot
+# order a caller against a scan that started beside it.
 _list_flight: dict[str, Any] | None = None
+_list_generation = 0
 
 SERVER_INFO = {"name": "navide.plans", "version": "0.1.0"}
 
@@ -868,23 +871,25 @@ def _list_plans_single_flight(origin: dict[str, Any]) -> list[dict[str, Any]]:
     a scan started after it arrived: a scan already past some directory when
     the caller's write landed would hand it a pre-write snapshot.
     """
-    global _list_flight
-    arrived_at = time.monotonic()
+    global _list_flight, _list_generation
+    with _state_lock:
+        arrived_after = _list_generation
     while True:
         with _state_lock:
             flight = _list_flight
             leader = flight is None
             if leader:
+                _list_generation += 1
                 flight = _list_flight = {
                     "done": threading.Event(),
-                    "started_at": time.monotonic(),
+                    "generation": _list_generation,
                     "result": None,
                     "error": None,
                 }
         assert flight is not None
         if not leader:
             flight["done"].wait()
-            if flight["started_at"] < arrived_at:
+            if flight["generation"] <= arrived_after:
                 continue
             error = flight["error"]
             # A leader cancelled by its own caller says nothing about ours:
