@@ -10,7 +10,7 @@ It is not another chat panel inside the traditional IDE. Navide is being built a
 
 English | [繁體中文](README.zh-TW.md) | [日本語](README.ja-JP.md)
 
-[Download v0.2.1](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.2.1) | [Getting started](docs/en-US/getting-started.md) | [Documentation](docs/en-US/README.md) | [Roadmap](docs/en-US/roadmap.md)
+[Download v0.2.2](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.2.2) | [Getting started](docs/en-US/getting-started.md) | [Documentation](docs/en-US/README.md) | [Roadmap](docs/en-US/roadmap.md)
 
 [![Latest release](https://img.shields.io/github/v/release/nt-nerdtechnic/Navide?sort=semver&label=release&logo=github)](https://github.com/nt-nerdtechnic/Navide/releases/latest)
 [![Electron](https://img.shields.io/badge/Electron-33-47848F?logo=electron)](https://www.electronjs.org/)
@@ -115,14 +115,14 @@ Read [Privacy and Data Flows](docs/en-US/privacy.md) and the [Security Policy](S
 
 ## Try Navide
 
-Navide supports macOS 13+ on Apple silicon. The v0.2.1 release is signed with a Developer ID certificate and notarized by Apple:
+Navide supports macOS 13+ on Apple silicon. The v0.2.2 release is signed with a Developer ID certificate and notarized by Apple:
 
-- [Download DMG](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.1/Navide-0.2.1-arm64.dmg)
-- [Download ZIP](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.1/Navide-0.2.1-arm64.zip)
+- [Download DMG](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.2/Navide-0.2.2-arm64.dmg)
+- [Download ZIP](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.2/Navide-0.2.2-arm64.zip)
 
 Copy Navide to Applications and open it normally — no Gatekeeper workaround is needed. In-app auto-update is available from this release onward.
 
-Linux and Windows are supported and run the same CI gates as macOS; release CI builds an AppImage and a `.deb` for Linux x64 and an NSIS installer for Windows x64, and those installers ship from the next release — v0.2.1 carries macOS assets only, so install from source on those platforms until then. The Windows build is not code-signed yet, so SmartScreen warns on first run, the Executions window has nothing to list there by design (it reads the user crontab and macOS launchd; Windows Task Scheduler is deliberately not integrated, since Navide never creates scheduled jobs of its own and Task Scheduler already manages the machine's tasks), per-pane CLI homes and managed skills need Windows Developer Mode or an elevated Navide because they are built from symbolic links, and a CLI is terminated rather than asked to stop, so it may not flush its transcript before a pane closes.
+Linux and Windows are supported and run the same CI gates as macOS; release CI builds an AppImage and a `.deb` for Linux x64 and an NSIS installer for Windows x64, and those installers ship from the next release — v0.2.2 carries macOS assets only, so install from source on those platforms until then. The Windows build is not code-signed yet, so SmartScreen warns on first run, the Executions window has nothing to list there by design (it reads the user crontab and macOS launchd; Windows Task Scheduler is deliberately not integrated, since Navide never creates scheduled jobs of its own and Task Scheduler already manages the machine's tasks), per-pane CLI homes and managed skills need Windows Developer Mode or an elevated Navide because they are built from symbolic links, and a CLI is terminated rather than asked to stop, so it may not flush its transcript before a pane closes.
 
 For a development checkout, install from source instead.
 

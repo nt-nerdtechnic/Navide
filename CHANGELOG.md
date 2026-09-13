@@ -4,6 +4,34 @@ All notable released changes to Navide will be documented in this file. The form
 
 ## [Unreleased]
 
+## [0.2.2] — 2026-09-13 — signed release
+
+### Added
+
+- Multi-platform support for Windows and Linux:
+  - Windows: native NSIS installer packaging, ConPTY terminal integration, DPAPI secret encryption, Job Object resource governance, and osplat platform abstraction.
+  - Linux: official AppImage packaging with static FUSE3 runtime, .desktop integration, and /proc resource probe.
+- Prompt Skills enhancements:
+  - Custom single-grapheme character and emoji icons with 24 builtin vector icons.
+  - One-shot prompt casting for non-default skills without entering the infinity loop mode.
+- Workspace & UI hierarchy improvements:
+  - Workspace display name aliases across UI, plugins, and separate windows.
+  - Full directory path display under sidebar workspace headers for clear disambiguation.
+  - Subtree status indicators and badges on parent panes and meeting cards.
+  - Token consumption attribution and display grouped by sidebar run group.
+- MCP and Messaging protocol extensions:
+  - Support waking cold-restored placeholder agents via `cli_send` and `ui.pane.open`.
+  - Ack-only agent messages that log without injecting into terminal input.
+  - Multi-device connectivity presence hints in `cli_whoami`.
+
+### Changed
+
+- Hardened Plans scanning and watcher infrastructure:
+  - Single-flight concurrent scan coalescing to eliminate redundant backend scans.
+  - Debounced watcher events and scan-start timestamps to prevent dropped updates during concurrent edits.
+  - Accurate plan directory move tracking and path preservation.
+  - Plans v2 retry affordance and recovery reason reporting.
+
 ## [0.2.1] — 2026-09-10 — signed release
 
 ### Changed

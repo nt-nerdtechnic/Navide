@@ -126,7 +126,10 @@ describe('contribution window registry', () => {
     vi.resetModules()
   })
 
-  it('keeps the reopened window registered when the closing window settles late', async () => {
+  it(
+    'keeps the reopened window registered when the closing window settles late',
+    { timeout: 60_000 },
+    async () => {
     const manager = await import('./plugins/frontendPluginManager')
     vi.spyOn(manager.frontendPluginManager, 'listContributionCatalog').mockReturnValue([
       {

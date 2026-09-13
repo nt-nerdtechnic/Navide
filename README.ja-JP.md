@@ -10,7 +10,7 @@ Navide は、一人の人間が複数の Coding Agent を指揮するための�
 
 [English](README.md) | [繁體中文](README.zh-TW.md) | 日本語
 
-[v0.2.1 をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.2.1) | [はじめに](docs/ja-JP/getting-started.md) | [ドキュメント](docs/ja-JP/README.md) | [ロードマップ](docs/ja-JP/roadmap.md)
+[v0.2.2 をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.2.2) | [はじめに](docs/ja-JP/getting-started.md) | [ドキュメント](docs/ja-JP/README.md) | [ロードマップ](docs/ja-JP/roadmap.md)
 
 [![Latest release](https://img.shields.io/github/v/release/nt-nerdtechnic/Navide?sort=semver&label=release&logo=github)](https://github.com/nt-nerdtechnic/Navide/releases/latest)
 [![Electron](https://img.shields.io/badge/Electron-33-47848F?logo=electron)](https://www.electronjs.org/)
@@ -115,14 +115,14 @@ Local-first は常に完全オフラインという意味ではありません�
 
 ## Navide を試す
 
-Navide は Apple silicon 上の macOS 13 以降をサポートします。v0.2.1 は Developer ID で署名され、Apple の Notarization を通過した正式版です。
+Navide は Apple silicon 上の macOS 13 以降をサポートします。v0.2.2 は Developer ID で署名され、Apple の Notarization を通過した正式版です。
 
-- [DMG をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.1/Navide-0.2.1-arm64.dmg)
-- [ZIP をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.1/Navide-0.2.1-arm64.zip)
+- [DMG をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.2/Navide-0.2.2-arm64.dmg)
+- [ZIP をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.2/Navide-0.2.2-arm64.zip)
 
 Navide を Applications にコピーすればそのまま開けます。Gatekeeper の回避は不要です。このリリース以降、アプリ内自動アップデートが利用できます。
 
-Linux と Windows もサポートされ、macOS と同じ CI Gate を通過します。Release CI は Linux x64 向けに AppImage と `.deb` を、Windows x64 向けに NSIS Installer をビルドしますが、これらの Installer が配布されるのは次のリリースからです。v0.2.1 には macOS の Asset のみが含まれるため、それまでこの 2 つの Platform では Source からインストールしてください。Windows Build はまだ Code Signing されていないため初回起動時に SmartScreen が警告し、Executions ウィンドウはこの Platform では設計上一覧する対象がなく（読み取るのは User の crontab と macOS の launchd で、Windows Task Scheduler は意図的に統合していません——Navide 自身が Scheduled Job を作ることはなく、Task Scheduler が既にマシンの Task を管理しているためです）、Pane ごとの CLI Home と管理対象の Skills は Symbolic Link で構成されるため Windows の開発者モードまたは管理者権限での実行が必要で、CLI は停止を通知されずに終了されるため Pane が閉じる前に Transcript を書き出せない場合があります。
+Linux と Windows もサポートされ、macOS と同じ CI Gate を通過します。Release CI は Linux x64 向けに AppImage と `.deb` を、Windows x64 向けに NSIS Installer をビルドしますが、これらの Installer が配布されるのは次のリリースからです。v0.2.2 には macOS の Asset のみが含まれるため、それまでこの 2 つの Platform では Source からインストールしてください。Windows Build はまだ Code Signing されていないため初回起動時に SmartScreen が警告し、Executions ウィンドウはこの Platform では設計上一覧する対象がなく（読み取るのは User の crontab と macOS の launchd で、Windows Task Scheduler は意図的に統合していません——Navide 自身が Scheduled Job を作ることはなく、Task Scheduler が既にマシンの Task を管理しているためです）、Pane ごとの CLI Home と管理対象の Skills は Symbolic Link で構成されるため Windows の開発者モードまたは管理者権限での実行が必要で、CLI は停止を通知されずに終了されるため Pane が閉じる前に Transcript を書き出せない場合があります。
 
 開発用 Checkout では、代わりに Source からインストールしてください。
 

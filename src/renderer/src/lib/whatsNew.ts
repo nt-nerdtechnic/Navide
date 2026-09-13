@@ -68,6 +68,35 @@ export const WHATS_NEW_CHROME = {
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    version: '0.2.2',
+    title: {
+      'zh-TW': 'Windows 與 Linux 跨平台支援、Prompt Skills 自訂圖示與工作區別名',
+      'en-US': 'Windows & Linux Multi-Platform Support, Custom Prompt Skill Icons & Workspace Aliases',
+    },
+    highlights: [
+      {
+        'zh-TW': 'Windows 與 Linux 正式支援：新增 Windows NSIS 安裝包、ConPTY 終端機與 DPAPI 安全加密；Linux 支援 AppImage（內建靜態 FUSE3 執行期）與桌面整合。',
+        'en-US': 'Windows & Linux support: Official Windows NSIS installer, ConPTY terminal, and DPAPI encryption; Linux AppImage with static FUSE3 runtime and desktop integration.',
+      },
+      {
+        'zh-TW': 'Prompt Skills 升級：支援自訂 Emoji/單字元圖示與 24 款內建向量圖示；非預設技能支援一鍵單次呼叫（One-shot Cast），不再強制循環。',
+        'en-US': 'Prompt Skills enhancements: Support for custom single-character emoji icons and 24 builtin vector icons, plus one-shot casting for non-default skills without loop lock.',
+      },
+      {
+        'zh-TW': '工作區別名與階層狀態：支援設定工作區顯示名稱別名；側邊欄整合子 Agent 樹狀狀態標籤（Subtree Status）、Token 消耗分組與長路徑清晰展示。',
+        'en-US': 'Workspace aliases & hierarchy status: Custom workspace display names, sidebar subtree status badges, token attribution by run group, and clear path hierarchy.',
+      },
+      {
+        'zh-TW': 'Plans 穩定性加固：實作單一飛行（Single-flight）併發掃描合併與防抖機制，支援目錄搬移即時追蹤與重試復原。',
+        'en-US': 'Plans performance & hardening: Single-flight concurrent scan coalescing, debounced watcher events, directory move tracking, and recovery retries.',
+      },
+      {
+        'zh-TW': 'MCP 與訊息協議加強：支援喚醒冷啟動面板、Ack-only 確認訊息不佔用終端輸入、以及多裝置連線感知。',
+        'en-US': 'MCP & messaging extensions: Wake cold-restored agent panes, ack-only receipt messages, and multi-device presence hints.',
+      },
+    ],
+  },
+  {
     version: '0.2.1',
     title: {
       'zh-TW': '外掛架構升級：打包 Plans 執行期與執行策略（Execution Policy）設定',

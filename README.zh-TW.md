@@ -10,7 +10,7 @@ Navide 是一套開源、AI-native 的軟體工程環境，專為一個人調度
 
 [English](README.md) | 繁體中文 | [日本語](README.ja-JP.md)
 
-[下載 v0.2.1](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.2.1) | [開始使用](docs/zh-TW/getting-started.md) | [文件中心](docs/zh-TW/README.md) | [Roadmap](docs/zh-TW/roadmap.md)
+[下載 v0.2.2](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.2.2) | [開始使用](docs/zh-TW/getting-started.md) | [文件中心](docs/zh-TW/README.md) | [Roadmap](docs/zh-TW/roadmap.md)
 
 [![Latest release](https://img.shields.io/github/v/release/nt-nerdtechnic/Navide?sort=semver&label=release&logo=github)](https://github.com/nt-nerdtechnic/Navide/releases/latest)
 [![Electron](https://img.shields.io/badge/Electron-33-47848F?logo=electron)](https://www.electronjs.org/)
@@ -115,14 +115,14 @@ Local-first 不代表所有情況都完全離線。使用外部 Agent CLI、雲�
 
 ## 試用 Navide
 
-Navide 支援配備 Apple 晶片且執行 macOS 13 以上版本的 Mac。v0.2.1 為經 Developer ID 簽章並通過 Apple Notarization 的正式版本：
+Navide 支援配備 Apple 晶片且執行 macOS 13 以上版本的 Mac。v0.2.2 為經 Developer ID 簽章並通過 Apple Notarization 的正式版本：
 
-- [下載 DMG](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.1/Navide-0.2.1-arm64.dmg)
-- [下載 ZIP](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.1/Navide-0.2.1-arm64.zip)
+- [下載 DMG](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.2/Navide-0.2.2-arm64.dmg)
+- [下載 ZIP](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.2/Navide-0.2.2-arm64.zip)
 
 將 Navide 複製到「應用程式」後即可正常開啟，無需繞過 Gatekeeper。自此版本起支援 App 內自動更新。
 
-Linux 與 Windows 同樣受支援，並通過與 macOS 相同的 CI 關卡；Release CI 會為 Linux x64 建置 AppImage 與 `.deb`、為 Windows x64 建置 NSIS 安裝程式，這些安裝檔將自下一個版本起隨發行提供——v0.2.1 只附帶 macOS 資產，在此之前請在這兩個平台上從原始碼安裝。Windows 版本尚未經過程式碼簽章，因此首次執行時 SmartScreen 會出現警告；「執行管理」視窗在該平台依設計沒有可列出的內容（它讀的是使用者的 crontab 與 macOS 的 launchd；Windows Task Scheduler 是刻意不整合——Navide 本身從不建立排程工作，而工作排程器已能管理機器上的工作）；每個 Pane 的 CLI Home 與受管理的 Skills 以符號連結建立，因此需要 Windows 開發人員模式或以系統管理員身分執行 Navide；CLI 只能被直接終止而無法收到停止通知，Pane 關閉前可能來不及寫出 Transcript。
+Linux 與 Windows 同樣受支援，並通過與 macOS 相同的 CI 關卡；Release CI 會為 Linux x64 建置 AppImage 與 `.deb`、為 Windows x64 建置 NSIS 安裝程式，這些安裝檔將自下一個版本起隨發行提供——v0.2.2 只附帶 macOS 資產，在此之前請在這兩個平台上從原始碼安裝。Windows 版本尚未經過程式碼簽章，因此首次執行時 SmartScreen 會出現警告；「執行管理」視窗在該平台依設計沒有可列出的內容（它讀的是使用者的 crontab 與 macOS 的 launchd；Windows Task Scheduler 是刻意不整合——Navide 本身從不建立排程工作，而工作排程器已能管理機器上的工作）；每個 Pane 的 CLI Home 與受管理的 Skills 以符號連結建立，因此需要 Windows 開發人員模式或以系統管理員身分執行 Navide；CLI 只能被直接終止而無法收到停止通知，Pane 關閉前可能來不及寫出 Transcript。
 
 若要建立開發環境，仍可從原始碼安裝。
 
