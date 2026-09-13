@@ -17773,7 +17773,7 @@ function paneIsCommander(p: ActivePane): boolean {
   font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
   overflow: hidden;
   box-sizing: border-box;
-  padding-top: 38px;
+  padding-top: var(--titlebar-height);
   /* The status bar is an absolute overlay, so the shell reserves its height as
      padding rather than as a grid row. Hiding it therefore means zeroing this,
      not removing a track. */
@@ -17822,7 +17822,7 @@ function paneIsCommander(p: ActivePane): boolean {
   top: 0;
   left: 0;
   right: 0;
-  height: 38px;
+  height: var(--titlebar-height);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -19140,6 +19140,15 @@ body,
   margin: 0;
   height: 100%;
   background: var(--bg-inset);
+}
+
+:root {
+  /* Height of the app's custom titlebar. One source of truth: `.titlebar`'s
+     own height, the `.app` top padding that reserves room for it, and the
+     Welcome overlay that must start below it (so drawn window controls stay
+     reachable on Windows/Linux) all read this, so changing the bar's height
+     never leaves the three out of sync. */
+  --titlebar-height: 38px;
 }
 
 </style>
