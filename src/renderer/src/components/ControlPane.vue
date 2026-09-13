@@ -7,7 +7,7 @@ import { resolveDragBatch } from '../lib/paneBatchDrag'
 import { setBatchDragImage } from '../lib/batchDragImage'
 import { paneStatusLabelText, type PaneStatusValue } from '../lib/paneStatusLabel'
 import { rollupPaneStatus } from '../lib/paneStatusRollup'
-import { effectiveParents } from '../lib/paneLineage'
+import { subtreeSignals } from '../lib/paneSubtreeStatus'
 import { workspaceAliasOf, workspaceDisplayName } from '../lib/workspaceAlias'
 import { statusBadgeStyle } from '../composables/useStatusBadgePrefs'
 import { rollupTabStatus, runGroupStateLabelKey, tabRunStatePaneStatus } from '../lib/tabStatus'
@@ -827,69 +827,34 @@ const wsCountStates = computed<Map<string, PaneStatusValue | undefined>>(() => {
   return out
 })
 
-/** The subtree states worth a badge on the parent row. Everything from idle
- *  down is "nothing to report" — the row then looks exactly as it did before
- *  this badge existed. */
-const SUBTREE_SIGNAL_STATES: ReadonlySet<PaneStatusValue> = new Set<PaneStatusValue>([
-  'awaiting',
-  'error',
-  'running',
-  'starting',
-])
+/** Each parent pane's "↳ n" subtree signal, keyed by pane id — see
+ *  subtreeSignals for why it is computed from spawnedBy over all panes and
+ *  kept out of the pane's own status. */
+const subtreeById = computed(() => subtreeSignals(props.panes))
 
-/** Each parent pane's subtree signal, keyed by pane id.
- *
- *  A pane's own status pill says only what ITS terminal is doing. A parent
- *  that has handed work to spawned children sits idle while they run, and once
- *  the subtree is folded nothing on screen says so — a child parked on a
- *  permission prompt was invisible until the user happened to unfold it. This
- *  is the loudest status among the whole subtree (rollupPaneStatus, so
- *  awaiting outranks running) and how many descendants are in it. Computed from
- *  `spawnedBy` over ALL panes rather than from the lineage rows, so folding a
- *  subtree cannot hide the very thing this exists to surface. Kept out of the
- *  pane's own `status`: that field paints the count pills and group keys too,
- *  and a parent must not count as running there when it is not. */
-const subtreeById = computed<Map<string, { state: PaneStatusValue; count: number }>>(() => {
-  const parents = effectiveParents(props.panes)
-  const childrenOf = new Map<string, string[]>()
-  for (const p of props.panes) {
-    const parent = parents.get(p.id) ?? ''
-    if (!parent) continue
-    const bucket = childrenOf.get(parent)
-    if (bucket) bucket.push(p.id)
-    else childrenOf.set(parent, [p.id])
-  }
-  const statusById = new Map(props.panes.map((p) => [p.id, p.status]))
-  const out = new Map<string, { state: PaneStatusValue; count: number }>()
-  for (const id of childrenOf.keys()) {
-    const statuses: string[] = []
-    const stack = [...(childrenOf.get(id) ?? [])]
-    while (stack.length) {
-      const child = stack.pop() as string
-      statuses.push(statusById.get(child) ?? '')
-      stack.push(...(childrenOf.get(child) ?? []))
-    }
-    const state = rollupPaneStatus(statuses)
-    if (!state || !SUBTREE_SIGNAL_STATES.has(state)) continue
-    out.set(id, { state, count: statuses.filter((st) => st === state).length })
-  }
-  return out
-})
+/** The status the row's dot is painted with: the pane's own, unless a pane it
+ *  spawned is louder. The sidebar row has no width for another chip, so the
+ *  family's state rides on the dot that is already there — the same attention
+ *  order as every other rollup, so a child waiting on the user turns the dot
+ *  amber over a parent that is merely running. The expanded row's text pill
+ *  keeps saying what THIS pane is doing. */
+function dotStateOf(p: ActivePaneView): PaneStatusValue {
+  const sub = subtreeById.value.get(p.id)
+  if (!sub) return p.status
+  return rollupPaneStatus([p.status, sub.state]) ?? p.status
+}
 
-/** The subtree tag's state, colour and legend in one binding, for the same
- *  reason countBadgeAttrs is: a coloured "↳ 2" with no tooltip is a number
- *  nobody can read. */
-function subtreeTagAttrs(id: string): Record<string, unknown> {
-  const sub = subtreeById.value.get(id)
-  if (!sub) return {}
-  return {
-    'data-state': sub.state,
-    style: statusBadgeStyle(sub.state),
-    title: i18n.global.t('pane.terminal.subtree-tooltip', {
-      count: sub.count,
-      status: paneStatusLabelText(sub.state),
-    }),
-  }
+/** The dot's legend: the pane's own status, and the family's when that is
+ *  what coloured it. */
+function dotTitleOf(p: ActivePaneView): string {
+  const own = paneStatusLabelText(p.status)
+  const sub = subtreeById.value.get(p.id)
+  if (!sub) return own
+  const family = i18n.global.t('pane.terminal.subtree-tooltip', {
+    count: sub.count,
+    status: paneStatusLabelText(sub.state),
+  })
+  return `${own} · ${family}`
 }
 
 /** The attributes that paint a count pill with a status.
@@ -3223,7 +3188,7 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
               @click.stop="emit('toggle-collapsed', p.id)"
             >{{ folded ? '▸' : '▾' }}</button>
             <span v-else-if="depth || g.rail" class="lineage-spacer"></span>
-            <span class="status-dot" :data-state="p.status" :style="statusBadgeStyle(p.status)" :title="paneStatusLabelText(p.status)"></span>
+            <span class="status-dot" :data-state="dotStateOf(p)" :style="statusBadgeStyle(dotStateOf(p))" :title="dotTitleOf(p)"></span>
             <!-- No MCP tag beside it. `origin === 'mcp'` is still recorded and
                  still drives spawn behaviour; it just does not need a badge.
                  The indentation already says an agent spawned this pane, and
@@ -3259,11 +3224,6 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
               :class="{ waiting: p.loopWaitUntil != null }"
               :title="$t('pane.terminal.loop-tag-tooltip')"
             >∞</span>
-            <span
-              v-if="subtreeById.has(p.id)"
-              class="subtree-tag"
-              v-bind="subtreeTagAttrs(p.id)"
-            >↳ {{ subtreeById.get(p.id)?.count }}</span>
             <span v-if="p.isMuted" class="muted-tag" :title="$t('pane.terminal.muted-tooltip')"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8.7 3A6 6 0 0 1 18 8a21.3 21.3 0 0 0 .6 5"></path><path d="M17 17H3s3-2 3-9a4.67 4.67 0 0 1 .3-1.7"></path><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"></path><line x1="2" y1="2" x2="22" y2="22"></line></svg></span>
             <span v-if="p.isMinimized" class="minimized-tag" title="Docked in sidebar">
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line></svg>
@@ -5829,35 +5789,6 @@ button.icon-btn.muted:hover {
 }
 .loop-tag.waiting {
   opacity: 0.55;
-}
-/* The parent row's subtree signal: "↳ n" painted in the loudest status among
-   its spawned descendants (see subtreeById). Only the states that mean
-   something is still moving or stuck get a rule — idle and below never render
-   the tag at all. Same --status-badge-* hooks as the .state pill so a
-   recoloured status in Settings moves this with it. */
-.subtree-tag {
-  font-size: var(--font-3xs);
-  padding: 1px 5px;
-  border-radius: 3px;
-  flex-shrink: 0;
-  white-space: nowrap;
-  border: 1px solid currentColor;
-}
-.subtree-tag[data-state='running'] {
-  background: var(--status-badge-bg, var(--success-subtle));
-  color: var(--status-badge-fg, var(--success-fg));
-}
-.subtree-tag[data-state='starting'] {
-  background: var(--status-badge-bg, var(--status-starting-muted));
-  color: var(--status-badge-fg, var(--status-starting-fg));
-}
-.subtree-tag[data-state='awaiting'] {
-  background: var(--status-badge-bg, color-mix(in srgb, var(--warning-fg) 20%, transparent));
-  color: var(--status-badge-fg, var(--warning-fg));
-}
-.subtree-tag[data-state='error'] {
-  background: var(--status-badge-bg, var(--danger-deep));
-  color: var(--status-badge-fg, var(--danger-fg));
 }
 .muted-tag {
   display: inline-flex;

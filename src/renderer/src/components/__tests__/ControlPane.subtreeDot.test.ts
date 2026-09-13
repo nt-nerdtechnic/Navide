@@ -3,11 +3,12 @@ import { describe, it, expect, afterEach } from 'vitest'
 import { shallowMount, type VueWrapper } from '@vue/test-utils'
 import ControlPane from '../ControlPane.vue'
 
-// A parent pane's own status pill only says what ITS terminal is doing. The
-// "↳ n" subtree tag beside it says what the panes it spawned are doing — the
-// loudest status among all descendants, and how many of them are in it — so a
-// folded subtree can no longer hide a child that is still running or parked
-// on a permission prompt.
+// A parent row's status dot is painted with the loudest status among the pane
+// itself and the panes it spawned. The sidebar row has no width for another
+// chip, so the family rides on the dot that is already there — and a folded
+// subtree can no longer hide a child that is still running or parked on a
+// permission prompt. The expanded row's text pill keeps saying what THIS pane
+// is doing.
 
 function makeProps(panes: Record<string, unknown>[], collapsed: string[] = []): Record<string, unknown> {
   return {
@@ -46,7 +47,7 @@ function lineageOf(panes: Record<string, unknown>[], collapsed: Set<string>) {
 
 const basePane = { agentLabel: 'Claude', status: 'idle', command: 'claude', origin: 'manual', isMinimized: false, isCommander: false }
 
-describe('ControlPane – subtree status tag on parent pane rows', () => {
+describe('ControlPane – subtree status on the parent row dot', () => {
   let wrapper: VueWrapper
 
   function mount(panes: Record<string, unknown>[], collapsed: string[] = []): void {
@@ -63,50 +64,57 @@ describe('ControlPane – subtree status tag on parent pane rows', () => {
     sessionStorage.clear()
   })
 
+  const dotOf = (i: number) => wrapper.findAll('.agent-item')[i].find('.status-dot')
 
-  it('paints the parent with the loudest descendant status and counts how many share it', () => {
+  it('paints an idle parent with its running children, and says so on hover', () => {
     mount([
       { ...basePane, id: 'parent', status: 'idle' },
       { ...basePane, id: 'c1', spawnedBy: 'parent', status: 'idle' },
       { ...basePane, id: 'c2', spawnedBy: 'parent', status: 'running' },
       { ...basePane, id: 'c3', spawnedBy: 'parent', status: 'running' }
     ])
-    const tags = wrapper.findAll('.subtree-tag')
-    expect(tags).toHaveLength(1)
-    expect(tags[0].text()).toBe('↳ 2')
-    expect(tags[0].attributes('data-state')).toBe('running')
-    // The legend is real i18n (script-side), not the template's $t mock.
-    expect(tags[0].attributes('title')).toBe('2 spawned pane(s) running under this one')
-    // The parent's own pill is untouched: it is still idle, and can be typed into.
-    const parentRow = wrapper.findAll('.agent-item')[0]
-    expect(parentRow.find('.status-dot').attributes('data-state')).toBe('idle')
+    expect(dotOf(0).attributes('data-state')).toBe('running')
+    // Own status first, then the family — real i18n on the script side.
+    expect(dotOf(0).attributes('title')).toBe('idle · 2 spawned pane(s) running under this one')
+    // No extra chip on the row: the dot is the whole signal.
+    expect(wrapper.find('.subtree-tag').exists()).toBe(false)
   })
 
-  it('lets awaiting outrank running, so a blocked child is what the parent shows', () => {
+  it('lets a blocked child outrank a running parent', () => {
     mount([
-      { ...basePane, id: 'parent' },
+      { ...basePane, id: 'parent', status: 'running' },
       { ...basePane, id: 'c1', spawnedBy: 'parent', status: 'running' },
       { ...basePane, id: 'c2', spawnedBy: 'parent', status: 'awaiting' }
     ])
-    const tag = wrapper.find('.subtree-tag')
-    expect(tag.attributes('data-state')).toBe('awaiting')
-    expect(tag.text()).toBe('↳ 1')
+    expect(dotOf(0).attributes('data-state')).toBe('awaiting')
   })
 
-  it('renders nothing when every descendant is idle, or when a pane has none', () => {
+  it('keeps the parent own status when it is already the loudest', () => {
     mount([
-      { ...basePane, id: 'parent' },
+      { ...basePane, id: 'parent', status: 'awaiting' },
+      { ...basePane, id: 'c1', spawnedBy: 'parent', status: 'running' }
+    ])
+    expect(dotOf(0).attributes('data-state')).toBe('awaiting')
+    expect(dotOf(0).attributes('title')).toBe('awaiting · 1 spawned pane(s) running under this one')
+  })
+
+  it('leaves the dot alone when every descendant is idle, or when a pane has none', () => {
+    mount([
+      { ...basePane, id: 'parent', status: 'idle' },
       { ...basePane, id: 'c1', spawnedBy: 'parent', status: 'idle' },
       { ...basePane, id: 'c2', spawnedBy: 'parent', status: 'exited' },
       { ...basePane, id: 'lone', status: 'running' }
     ])
-    expect(wrapper.findAll('.subtree-tag')).toHaveLength(0)
+    expect(dotOf(0).attributes('data-state')).toBe('idle')
+    expect(dotOf(0).attributes('title')).toBe('idle')
+    expect(dotOf(3).attributes('data-state')).toBe('running')
+    expect(dotOf(3).attributes('title')).toBe('running')
   })
 
-  it('counts grandchildren, and keeps the tag on a collapsed parent', () => {
+  it('counts grandchildren, and keeps painting a collapsed parent', () => {
     mount(
       [
-        { ...basePane, id: 'parent' },
+        { ...basePane, id: 'parent', status: 'idle' },
         { ...basePane, id: 'child', spawnedBy: 'parent', status: 'idle' },
         { ...basePane, id: 'grandchild', spawnedBy: 'child', status: 'running' }
       ],
@@ -114,22 +122,16 @@ describe('ControlPane – subtree status tag on parent pane rows', () => {
     )
     // Only the collapsed parent is drawn — the running grandchild is off screen.
     expect(wrapper.findAll('.agent-item')).toHaveLength(1)
-    const tag = wrapper.find('.subtree-tag')
-    expect(tag.exists()).toBe(true)
-    expect(tag.text()).toBe('↳ 1')
-    expect(tag.attributes('data-state')).toBe('running')
+    expect(dotOf(0).attributes('data-state')).toBe('running')
   })
 
-  it('does not paint the tag on the children themselves', () => {
+  it('does not repaint the children themselves', () => {
     mount([
-      { ...basePane, id: 'parent' },
+      { ...basePane, id: 'parent', status: 'idle' },
       { ...basePane, id: 'c1', spawnedBy: 'parent', status: 'running' },
-      { ...basePane, id: 'c2', spawnedBy: 'parent', status: 'running' }
+      { ...basePane, id: 'c2', spawnedBy: 'parent', status: 'idle' }
     ])
-    const items = wrapper.findAll('.agent-item')
-    expect(items).toHaveLength(3)
-    expect(items[0].find('.subtree-tag').exists()).toBe(true)
-    expect(items[1].find('.subtree-tag').exists()).toBe(false)
-    expect(items[2].find('.subtree-tag').exists()).toBe(false)
+    expect(dotOf(1).attributes('data-state')).toBe('running')
+    expect(dotOf(2).attributes('data-state')).toBe('idle')
   })
 })
