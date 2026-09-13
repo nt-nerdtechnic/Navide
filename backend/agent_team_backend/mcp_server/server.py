@@ -649,16 +649,31 @@ async def cli_whoami(ctx: Context) -> dict[str, Any]:
 # tool waits for that verdict instead of reporting "requested", so the agent
 # learns whether it actually got a pane and, if not, why.
 #
-# The verdict lands once the pane exists, not once its CLI has booted: booting
-# a cold CLI can take longer than any deadline an agent would tolerate, so that
-# part continues after the answer and reports failure by message.
+# The verdict lands once the pane exists, not once its CLI has booted. The
+# KICKOFF verdict follows separately: the window emits agent_spawn.kickoff once
+# the task's injection settles (sent / unverified / failed), and the tool waits
+# for that too before answering — a cold CLI can take tens of seconds to reach
+# its prompt, and "ok" without the kickoff was read as "delivered" by every
+# caller, who then never learned the pane sat idle with an empty prompt.
 _SPAWN_VERDICT_TIMEOUT_S = 40.0
+_KICKOFF_VERDICT_TIMEOUT_S = 45.0
 _pending_spawns: dict[str, asyncio.Future[dict[str, Any]]] = {}
+_pending_kickoffs: dict[str, asyncio.Future[dict[str, Any]]] = {}
 
 
 def resolve_spawn(request_id: str, verdict: dict[str, Any]) -> bool:
     """Hand a window's verdict to the waiting cli_open_agent call."""
     future = _pending_spawns.get(request_id)
+    if future is None or future.done():
+        return False
+    future.set_result(verdict)
+    return True
+
+
+def resolve_kickoff(request_id: str, verdict: dict[str, Any]) -> bool:
+    """Hand a window's kickoff verdict ({pane_id, kickoff, reason?}) to the
+    cli_open_agent call waiting on it."""
+    future = _pending_kickoffs.get(request_id)
     if future is None or future.done():
         return False
     future.set_result(verdict)
@@ -761,19 +776,23 @@ async def cli_open_agent(
     its own; the workspace's CLI-pane count is still tracked for the advisory
     below.
 
-    `ok: true` means the PANE EXISTS — not that the task arrived. The CLI boots
-    and is given the task afterwards, and that half can fail on its own. Check
-    it with cli_get_status: `ui.kickoff` is "sent" when the task was observed
-    landing, "unverified" when the bytes were written but the only echo was a
-    booting CLI repainting (read `ui.buffer`; re-send with cli_send if the
-    prompt is empty), or "failed". A failure is ALSO reported by message to a
-    pane caller — but only to a pane caller, and only when the injection
-    reported failure, which is exactly the case "unverified" exists to cover. For a pane caller, the new pane is asked to report its
-    result to you by message when it finishes — but that report is the child
-    agent's own output, not a guarantee from Navide: it is held until you are
-    between turns, and nothing arrives if the child never writes the block.
-    Poll cli_get_status / cli_wait_idle whenever you need to be sure. An
-    external or host caller gets no such message at all and must poll.
+    `ok: true` means the pane exists, and `kickoff` says whether the task
+    reached it. The call blocks until the window has booted the CLI, waited
+    for its prompt and typed the task (up to ~45s on top of the spawn), then
+    answers `kickoff: "sent"` — our own text was observed landing and being
+    submitted — or `kickoff: "failed"`: the injection could not be verified
+    after a bounded retry, or no verdict arrived in time. A failed kickoff is
+    still `ok: true` (the pane is open; do NOT open it again) and comes with
+    `hint`, which says to resend the task with cli_send to the returned
+    address, and the window's reason in `advisories`. There is no "pending"
+    answer, so nothing needs polling to learn whether the task arrived.
+    For a pane caller, the new pane is asked to report its result to you by
+    message when it finishes — but that report is the child agent's own
+    output, not a guarantee from Navide: it is held until you are between
+    turns, and nothing arrives if the child never writes the block. Poll
+    cli_get_status / cli_wait_idle whenever you need to be sure it is still
+    working. An external or host caller gets no such message at all and must
+    poll.
 
     `model` names the model the new pane runs, and `effort` its reasoning
     level. Both are optional, and asking a CLI that cannot take them is
@@ -804,7 +823,8 @@ async def cli_open_agent(
     `ui.pane.focus` and `ui.pane.getStatus` take through ui_invoke, all of which
     refuse a pane NAME. Keep it if you may want to close or focus what you
     opened; `address` remains the right thing to send to.
-    Returns {ok, name, address, pane_id, advisories?} or {ok: false, error}.
+    Returns {ok, name, address, pane_id, kickoff, hint?, advisories?} or
+    {ok: false, error}.
 
     Passing `pane_id` REOPENS an existing pane instead of creating one: the
     one whose cli_list_targets row says `realized: false` — a restore
@@ -856,6 +876,10 @@ async def cli_open_agent(
     loop = asyncio.get_running_loop()
     future: asyncio.Future[dict[str, Any]] = loop.create_future()
     _pending_spawns[request_id] = future
+    # Registered BEFORE the broadcast: the standalone path types the task
+    # before it answers the spawn, so its kickoff verdict can arrive first.
+    kickoff_future: asyncio.Future[dict[str, Any]] = loop.create_future()
+    _pending_kickoffs[request_id] = kickoff_future
     try:
         spawn_payload: dict[str, Any] = {
             "request_id": request_id,
@@ -878,6 +902,7 @@ async def cli_open_agent(
         await app.broadcast(make_event("agent_spawn.request", spawn_payload))
         verdict = await asyncio.wait_for(future, timeout=_SPAWN_VERDICT_TIMEOUT_S)
     except asyncio.TimeoutError:
+        _pending_kickoffs.pop(request_id, None)
         return {
             "ok": False,
             "error": "no answer from the window that owns your pane — it may have "
@@ -888,7 +913,23 @@ async def cli_open_agent(
         _pending_spawns.pop(request_id, None)
 
     if not verdict.get("ok"):
+        _pending_kickoffs.pop(request_id, None)
         return {"ok": False, "error": str(verdict.get("error") or "spawn refused")}
+    # The pane exists; now the task. Waited for here rather than reported by
+    # message: the caller acts on this answer, and "ok" alone was taken as
+    # "delivered" by every caller that got it.
+    try:
+        kickoff_verdict = await asyncio.wait_for(
+            kickoff_future, timeout=_KICKOFF_VERDICT_TIMEOUT_S
+        )
+    except asyncio.TimeoutError:
+        kickoff_verdict = {
+            "kickoff": "failed",
+            "reason": f"no kickoff verdict from the window within "
+            f"{_KICKOFF_VERDICT_TIMEOUT_S:.0f}s",
+        }
+    finally:
+        _pending_kickoffs.pop(request_id, None)
     new_pane_id = str(verdict.get("pane_id") or "")
     entry = agent_messaging.get(new_pane_id)
     result: dict[str, Any] = {
@@ -904,8 +945,24 @@ async def cli_open_agent(
     # be handed to ui.pane.close as if it addressed something.
     if new_pane_id:
         result["pane_id"] = new_pane_id
-    if verdict.get("advisories"):
-        result["advisories"] = verdict["advisories"]
+    advisories = list(verdict.get("advisories") or [])
+    # Two answers only. "unverified" is the window's honest word for "bytes
+    # written, nothing seen" — to the caller that is a task that did not
+    # arrive, and the cure is the same as for an outright failure.
+    if str(kickoff_verdict.get("kickoff") or "") == "sent":
+        result["kickoff"] = "sent"
+    else:
+        result["kickoff"] = "failed"
+        result["hint"] = (
+            f"the task never reached the pane's prompt — resend it with "
+            f"cli_send(to=\"{result['address']}\", text=...); the pane is open, "
+            f"do not open another"
+        )
+        reason = str(kickoff_verdict.get("reason") or "")
+        if reason:
+            advisories.append(f"kickoff: {reason}")
+    if advisories:
+        result["advisories"] = advisories
     return result
 
 
@@ -2682,6 +2739,10 @@ async def cli_get_status(target: str, ctx: Context, pane_id: str = "") -> dict[s
     age_seconds}. `ui`, when the owning Navide window answers in time, is
     {status, buffer, logPath?, awaitingKind?, kickoff?} straight from the
     renderer; it is omitted (not a failure) when the window does not reply.
+    `busy` is the backend's own activity verdict OR'd with that badge: true
+    when `ui.status` is "running" or "starting", since the renderer sees
+    things the activity log cannot (a delivered message the CLI has queued
+    but not yet consumed). Without a `ui` block it is the backend's alone.
 
     `ui.kickoff` is how this pane's spawn-time task injection ended, and it is
     the authoritative answer to "did cli_open_agent's task actually arrive":
@@ -2749,6 +2810,9 @@ async def cli_get_status(target: str, ctx: Context, pane_id: str = "") -> dict[s
     )
     if ui_result.get("ok") and isinstance(ui_result.get("result"), dict):
         status["ui"] = ui_result["result"]
+        # One answer, not two that disagree: the badge only ever ADDS busy.
+        if ui_result["result"].get("status") in ("running", "starting"):
+            status["busy"] = True
     return status
 
 

@@ -350,7 +350,7 @@ documented argument shapes.
 
 | Action | Args | Effect |
 |---|---|---|
-| `ui.settings.open` | `{tab?}` (one of `general`, `mcp`, `analyzer`, `updates`, `appearance`, `accounts`, `storage`, `keybindings`) | Open Settings, optionally to a specific tab |
+| `ui.settings.open` | `{tab?}` (one of `general`, `mcp`, `analyzer`, `updates`, `appearance`, `accounts`, `keybindings`) | Open Settings, optionally to a specific tab |
 | `ui.settings.close` | — | Close Settings |
 | `ui.settings.yolo` | `{yolo?}` | Read the global CLI permission-bypass switch, or set it when `yolo` is passed. Returns `{yolo, agents}`, each agent being `{agent, mode, skipFlag}`. Not workspace-scoped: any window answers it, and `skipFlag` — not `yolo` — is the per-vendor answer |
 | `ui.pane.create` | `{agent, name?, task?}` | Spawn a pane for `agent` in the window's open workspace; `task`, if given, is sent as the kickoff prompt and skips role injection |
@@ -362,6 +362,7 @@ documented argument shapes.
 | `ui.tab.switch` | `{tabId}` | Switch the active stage/run-group tab |
 | `ui.preview.show` | `{kind, …}` | Show a file, diff or inline snippet in the right rail's preview panel |
 | `ui.window.openPlans` | — | Open the Plan window |
+| `ui.window.openResourceManager` | — | Open the Resource Manager (CPU, memory and disk usage, with storage cleanup) |
 | `ui.window.openGit` | — | Open the Git window for the current workspace |
 | `ui.window.openPipeline` | `{pipelineId?}` | Open the Pipeline Manager window |
 | `ui.workspace.open` | `{path}` | Open `path` as a workspace (routed to any live window — see above) |

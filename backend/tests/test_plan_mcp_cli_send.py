@@ -503,6 +503,7 @@ async def test_open_agent_broadcasts_the_request_and_returns_the_verdict(
                 plan_mcp.resolve_spawn(
                     keys[0], {"ok": True, "pane_id": "new-pane", "name": "reviewer2"}
                 )
+                plan_mcp.resolve_kickoff(keys[0], {"pane_id": "new-pane", "kickoff": "sent"})
                 return
             await asyncio.sleep(0.005)
 
@@ -515,6 +516,7 @@ async def test_open_agent_broadcasts_the_request_and_returns_the_verdict(
         "name": "reviewer2",
         "address": "alpha/reviewer2",
         "pane_id": "new-pane",
+        "kickoff": "sent",
     }
     assert len(captured) == 1
     payload = captured[0]["payload"]
@@ -548,6 +550,7 @@ async def test_open_agent_forwards_advisories_from_the_verdict(
                         "advisories": ["此工作區已有 8 個 CLI pane（建議值 8）"],
                     },
                 )
+                plan_mcp.resolve_kickoff(keys[0], {"pane_id": "new-pane", "kickoff": "sent"})
                 return
             await asyncio.sleep(0.005)
 
@@ -560,6 +563,7 @@ async def test_open_agent_forwards_advisories_from_the_verdict(
         "name": "reviewer3",
         "address": "alpha/reviewer3",
         "pane_id": "new-pane",
+        "kickoff": "sent",
         "advisories": ["此工作區已有 8 個 CLI pane（建議值 8）"],
     }
 
@@ -765,6 +769,7 @@ async def test_open_agent_from_an_external_caller_sends_target_workspace_with_no
             if keys:
                 agent_messaging.register("new-pane", "worker", "/ws/ext")
                 plan_mcp.resolve_spawn(keys[0], {"ok": True, "pane_id": "new-pane", "name": "worker"})
+                plan_mcp.resolve_kickoff(keys[0], {"pane_id": "new-pane", "kickoff": "sent"})
                 return
             await asyncio.sleep(0.005)
 
@@ -779,6 +784,7 @@ async def test_open_agent_from_an_external_caller_sends_target_workspace_with_no
         "name": "worker",
         "address": "ext/worker",
         "pane_id": "new-pane",
+        "kickoff": "sent",
     }
     payload = captured[0]["payload"]
     assert payload["requester_pane_id"] == ""
@@ -799,6 +805,7 @@ async def test_open_agent_from_a_pane_caller_never_sends_target_workspace(
             if keys:
                 agent_messaging.register("new-pane", "worker2", "/ws/alpha")
                 plan_mcp.resolve_spawn(keys[0], {"ok": True, "pane_id": "new-pane", "name": "worker2"})
+                plan_mcp.resolve_kickoff(keys[0], {"pane_id": "new-pane", "kickoff": "sent"})
                 return
             await asyncio.sleep(0.005)
 
@@ -1867,6 +1874,7 @@ async def test_open_agent_carries_model_and_effort_to_the_window(
                 plan_mcp.resolve_spawn(
                     keys[0], {"ok": True, "pane_id": "new-pane", "name": "worker"}
                 )
+                plan_mcp.resolve_kickoff(keys[0], {"pane_id": "new-pane", "kickoff": "sent"})
                 return
             await asyncio.sleep(0.005)
 
@@ -1898,6 +1906,7 @@ async def test_open_agent_omits_model_keys_when_none_was_asked_for(
                 plan_mcp.resolve_spawn(
                     keys[0], {"ok": True, "pane_id": "new-pane", "name": "worker"}
                 )
+                plan_mcp.resolve_kickoff(keys[0], {"pane_id": "new-pane", "kickoff": "sent"})
                 return
             await asyncio.sleep(0.005)
 

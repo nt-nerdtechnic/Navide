@@ -7625,6 +7625,29 @@ async def agent_spawn_result(session: "Session", msg_id: str, msg_type: str, pay
     await session.send_json(make_response(msg_id, msg_type, {"ok": True, "delivered": delivered}))
 
 
+@handler("agent_spawn.kickoff")
+async def agent_spawn_kickoff(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """A window's kickoff verdict for an agent_spawn.request — whether the
+    task was observed landing in the new pane — handed to the cli_open_agent
+    call still waiting on it."""
+    from .mcp_server import server as plan_mcp
+
+    request_id = str(payload.get("request_id") or "")
+    if not request_id:
+        await session.send_json(
+            make_error(msg_id, msg_type, "BAD_REQUEST", "agent_spawn.kickoff needs request_id")
+        )
+        return
+    verdict: dict[str, Any] = {
+        "pane_id": str(payload.get("pane_id") or ""),
+        "kickoff": str(payload.get("kickoff") or ""),
+    }
+    if payload.get("reason"):
+        verdict["reason"] = str(payload["reason"])
+    delivered = plan_mcp.resolve_kickoff(request_id, verdict)
+    await session.send_json(make_response(msg_id, msg_type, {"ok": True, "delivered": delivered}))
+
+
 @handler("ui.invoke.result")
 async def ui_invoke_result(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     """A renderer window's reply to a ui.invoke.request, handed to the

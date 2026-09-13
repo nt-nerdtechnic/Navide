@@ -368,6 +368,7 @@ async def test_open_agent_returns_the_new_pane_id(
                 plan_mcp.resolve_spawn(
                     keys[0], {"ok": True, "pane_id": "child-1", "name": "reviewer"}
                 )
+                plan_mcp.resolve_kickoff(keys[0], {"pane_id": "child-1", "kickoff": "sent"})
                 return
             await asyncio.sleep(0.005)
 
@@ -393,6 +394,7 @@ async def test_open_agent_omits_pane_id_when_the_window_named_none(
             keys = list(plan_mcp._pending_spawns)
             if keys:
                 plan_mcp.resolve_spawn(keys[0], {"ok": True, "name": "reviewer"})
+                plan_mcp.resolve_kickoff(keys[0], {"pane_id": "", "kickoff": "sent"})
                 return
             await asyncio.sleep(0.005)
 
