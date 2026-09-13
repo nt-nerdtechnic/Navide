@@ -1194,12 +1194,31 @@ describe('Plans packaged backend composition', () => {
         expect(registerBundledPlans(manager, { isPackaged: false, resourcesPath: '', artifactVersion: '0.2.1', devRoot: process.cwd() })).toEqual({ registered: true })
         const descriptor = manager.getDescriptor(PLANS_PLUGIN_ID)!
         const view = descriptor.views!.find((candidate) => candidate.contributionKey === 'navide.plans.window')!
-        const packageDirectory = realpathSync(join(process.cwd(), 'dist-plugins/navide-plans'))
+        const packageDirectory = realpathSync(join(
+          process.cwd(),
+          'dist-plugins',
+          'official-artifacts',
+          'factory-resources',
+          PLANS_PLUGIN_ID,
+          '0.2.1',
+          `${process.platform}-${process.arch}`,
+          'package',
+        ))
         const packageVersion = JSON.parse(readFileSync(join(packageDirectory, 'manifest.json'), 'utf8')).version
+        expect(packageVersion).toBe('0.2.1')
         expect(manager.getPlansProvenance()).toMatchObject({
-          selectionOrigin: 'factory-bundle', packageDirectory, packageVersion,
-          backendExecutable: realpathSync(productionBackend),
-          frontendEntries: { 'navide.plans.window': view.entryFile },
+          descriptorSource: 'factory-bundle',
+          selectionOrigin: 'factory-bundle',
+          packageDirectory,
+          packageVersion,
+          backendExecutable: realpathSync(join(
+            packageDirectory,
+            'backend',
+            process.platform === 'win32' ? 'navide-plans.exe' : 'navide-plans',
+          )),
+          frontendEntries: {
+            'navide.plans.window': join(packageDirectory, 'frontend', 'window', 'index.html'),
+          },
         })
         manager.setBackendWsUrl('ws://plans-core-test')
         manager.configurePlansFilesystemService(createTestPlansFilesystemPort())

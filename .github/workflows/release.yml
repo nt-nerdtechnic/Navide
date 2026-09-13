@@ -139,8 +139,8 @@ jobs:
           test -n "${app_path}"
           test ! -e "${app_path}/Contents/Resources/plugins/plans/backend/navide-plans"
           test ! -e "${app_path}/Contents/Resources/plugins/plans/backend/navide-plans-go"
-          # …and the v2 package that replaces it does carry its backend.
-          test -x "${app_path}/Contents/Resources/plugins/navide-plans/backend/navide-plans"
+          # …and the exact selected v2 factory package carries its arm64 backend.
+          test -x "${app_path}/Contents/Resources/official-artifacts/navide.plans/0.2.1/darwin-arm64/package/backend/navide-plans"
           echo "Verifying ${app_path}"
           # Signed with a valid Developer ID and the seal is intact.
           codesign --verify --deep --strict --verbose=2 "${app_path}"
@@ -319,8 +319,8 @@ jobs:
           backend="$(find "${work}/squashfs-root/resources/bin" -maxdepth 1 -name 'agent_team_backend' -print -quit)"
           test -n "${backend}"
           file "${backend}" | grep -q 'ELF 64-bit'
-          # …and the v2 Plans package carries its Linux backend.
-          test -x "${work}/squashfs-root/resources/plugins/navide-plans/backend/navide-plans"
+          # …and the exact selected v2 factory package carries its Linux backend.
+          test -x "${work}/squashfs-root/resources/official-artifacts/navide.plans/0.2.1/linux-x64/package/backend/navide-plans"
           rm -rf "${work}"
 
       - name: Attach installers to the workflow run

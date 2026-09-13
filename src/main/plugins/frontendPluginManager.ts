@@ -9058,12 +9058,16 @@ export function officialPluginArtifactPackageDir(
   pluginId: string,
   target: string,
 ): string {
-  const base = source.isPackaged
-    ? source.resourcesPath
-    : join(source.devRoot ?? join(__dirname, '../..'), 'dist-plugins')
+  const artifactRoot = source.isPackaged
+    ? join(source.resourcesPath, 'official-artifacts')
+    : join(
+        source.devRoot ?? join(__dirname, '../..'),
+        'dist-plugins',
+        'official-artifacts',
+        'factory-resources',
+      )
   return join(
-    base,
-    'official-artifacts',
+    artifactRoot,
     pluginId,
     source.artifactVersion,
     target,
@@ -9684,7 +9688,10 @@ function gitQuery(
 /**
  * Dev-only Git descriptor pointing at the LOCAL Manifest v2 build output
  * (the explicit `official-artifacts/navide.git/<version>/universal/package/`
- * directory). Registered at startup only under `AGENT_TEAM_PLUGIN_DEV=1`, mirroring
+ * directory in packaged apps, or
+ * `official-artifacts/factory-resources/navide.git/<version>/universal/package/`
+ * during unpackaged dev lookup).
+ * Registered at startup only under `AGENT_TEAM_PLUGIN_DEV=1`, mirroring
  * {@link devPlansPluginDescriptor}. The bundle is built separately
  * (plugins/navide-git/vite.config.ts) with the package-local capability
  * backend, so it

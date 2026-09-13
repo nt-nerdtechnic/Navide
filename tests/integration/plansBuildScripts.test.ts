@@ -132,9 +132,11 @@ describe('production Plans CI fixture exclusion', () => {
 
 describe('release workflow verifies the Plans artifact it signs', () => {
   const workflow = parse(readFileSync('.github/workflows/release.yml', 'utf8'))
-  const steps = workflow.jobs['release-macos-arm64'].steps as Array<{ name?: string; run?: string }>
-  const buildStep = steps.find((step) => step.name === 'Build, sign & notarize application')?.run ?? ''
-  const verifyStep = steps.find((step) => step.name === 'Verify signature & notarization')?.run ?? ''
+  const macosSteps = workflow.jobs['release-macos-arm64'].steps as Array<{ name?: string; run?: string }>
+  const linuxSteps = workflow.jobs['release-linux-x64'].steps as Array<{ name?: string; run?: string }>
+  const buildStep = macosSteps.find((step) => step.name === 'Build, sign & notarize application')?.run ?? ''
+  const verifyStep = macosSteps.find((step) => step.name === 'Verify signature & notarization')?.run ?? ''
+  const linuxValidationStep = linuxSteps.find((step) => step.name === 'Validate release artifacts')?.run ?? ''
 
   it('runs the production Plans verifier before signing', () => {
     expect(buildStep).toContain('node scripts/verify-plans-production.mjs')
@@ -144,7 +146,12 @@ describe('release workflow verifies the Plans artifact it signs', () => {
       .toBeLessThan(buildStep.indexOf('pnpm exec electron-builder'))
   })
 
-  it('asserts the signed app actually carries the packaged Plans backend', () => {
-    expect(verifyStep).toContain('Contents/Resources/plugins/navide-plans/backend/navide-plans')
+  it('asserts each release artifact carries its exact official Plans package backend', () => {
+    expect(verifyStep).toContain(
+      'Contents/Resources/official-artifacts/navide.plans/0.2.1/darwin-arm64/package/backend/navide-plans',
+    )
+    expect(linuxValidationStep).toContain(
+      'squashfs-root/resources/official-artifacts/navide.plans/0.2.1/linux-x64/package/backend/navide-plans',
+    )
   })
 })

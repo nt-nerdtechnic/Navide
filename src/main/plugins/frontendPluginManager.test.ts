@@ -838,6 +838,20 @@ describe('devPlansPluginDescriptor', () => {
     )
     expect(bundledPlansDir(source)).toBe(join('/resources', 'plugins', 'plans'))
     expect(bundledGitDir(source)).toBe(join('/resources', 'plugins', 'git'))
+    expect(officialPluginArtifactPackageDir(
+      { isPackaged: false, resourcesPath: '', artifactVersion: '4.5.6', devRoot: '/repo' },
+      MINI_IDE_PLUGIN_ID,
+      'universal',
+    )).toBe(join(
+      '/repo',
+      'dist-plugins',
+      'official-artifacts',
+      'factory-resources',
+      MINI_IDE_PLUGIN_ID,
+      '4.5.6',
+      'universal',
+      'package',
+    ))
   })
 
   it('does not discover a combined Plans version from a sibling artifact directory', () => {
@@ -847,6 +861,7 @@ describe('devPlansPluginDescriptor', () => {
         root,
         'dist-plugins',
         'official-artifacts',
+        'factory-resources',
         PLANS_PLUGIN_ID,
         '9.9.9',
         `${process.platform}-${process.arch}`,
@@ -870,7 +885,7 @@ describe('devPlansPluginDescriptor', () => {
 
   it('uses the universal Git artifact path for an explicit development version', () => {
     expect(devGitPluginDescriptor('4.5.6', '/repo').entryFile).toBe(
-      join('/repo', 'dist-plugins', 'official-artifacts', GIT_PLUGIN_ID, '4.5.6', 'universal', 'package', 'frontend/window/index.html')
+      join('/repo', 'dist-plugins', 'official-artifacts', 'factory-resources', GIT_PLUGIN_ID, '4.5.6', 'universal', 'package', 'frontend/window/index.html')
     )
   })
 
@@ -8143,6 +8158,7 @@ describe('first-party Git private bridge', () => {
         root,
         'dist-plugins',
         'official-artifacts',
+        'factory-resources',
         PLANS_PLUGIN_ID,
         '0.1.0',
         `${process.platform}-${process.arch}`,

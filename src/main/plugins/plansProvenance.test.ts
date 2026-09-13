@@ -55,7 +55,7 @@ describe('Plans Host provenance query', () => {
       const directory = packageFixture(join(
         root,
         'dist-plugins',
-        'official-artifacts/navide.plans/0.1.0',
+        'official-artifacts/factory-resources/navide.plans/0.1.0',
         `${process.platform}-${process.arch}`,
         'package',
       ))
