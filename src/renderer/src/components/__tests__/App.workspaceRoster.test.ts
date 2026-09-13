@@ -568,8 +568,10 @@ describe('several workspaces in one window', () => {
     const body = appSource.slice(start, appSource.indexOf('\n}', start))
     expect(body).toContain('reportAdoptedWorkspaces')
     // A reload restores the list from sessionStorage without going through
-    // adoptWorkspace, so it has to be re-reported on mount.
-    expect(appSource).toContain('if (workspaceOrder.value.length) {')
+    // adoptWorkspace, so it has to be re-reported on mount. A relaunch reports
+    // through adoptWorkspace instead, which is why the mount-time report is
+    // conditional on having claimed nothing.
+    expect(appSource).toContain('if (!restored.length) window.agentTeam?.reportAdoptedWorkspaces?.(')
   })
 
   it('answers an external spawn for any workspace it holds', () => {
@@ -583,15 +585,26 @@ describe('several workspaces in one window', () => {
   })
 
   it('takes back its adopted workspaces after a relaunch', () => {
-    // sessionStorage wins when both exist: it is this window's live state,
-    // while the registry's copy is from before the restart.
+    // The claim is unconditional. It used to sit in the else of
+    // `if (workspaceOrder.value.length)`, which never ran: the currentWorkspace
+    // watcher seeds workspaceOrder during setup and a restored window always
+    // carries a workspace_path, so the list is already one entry long by
+    // onMounted and the else was dead code. sessionStorage still wins when both
+    // exist — main hands the registry's copy out exactly once, so a reload
+    // claims nothing and keeps its own live state.
     expect(appSource).toContain('takeRestoredAdoptedWorkspaces')
     const at = appSource.indexOf('takeRestoredAdoptedWorkspaces')
-    const around = appSource.slice(at - 700, at + 1200)
-    expect(around).toContain('if (workspaceOrder.value.length) {')
+    const around = appSource.slice(at - 900, at + 1600)
+    expect(around).not.toContain('if (workspaceOrder.value.length) {')
+    expect(around).toContain('const restored = (await window.agentTeam?.takeRestoredAdoptedWorkspaces?.()) ?? []')
+    expect(around).toContain('for (const path of restored) adoptWorkspace(path)')
+    // A window that claimed nothing still has to tell main what it holds.
+    expect(around).toContain('if (!restored.length) window.agentTeam?.reportAdoptedWorkspaces?.(')
     // And their agents come back, the same way a picked workspace's do.
     expect(around).toContain("'project.peek'")
     expect(around).toContain('restoreWorkspacePanes')
+    // A peek that comes back empty says so instead of reading as "no panes".
+    expect(around).toContain('[restore] project.peek returned nothing')
   })
 
   it('still ties the history pane to the primary workspace', () => {

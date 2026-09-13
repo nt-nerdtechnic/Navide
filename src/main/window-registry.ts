@@ -273,12 +273,30 @@ export class WindowRegistry {
     this.persistNow()
   }
 
-  /** Mark this run as a clean exit. Synchronous — called from before-quit. */
+  /** Mark this run as a clean exit. Synchronous — called from before-quit, and
+   *  from the updater's install hook for the quit shapes that close the
+   *  windows first. */
   markCleanExit(): void {
     this.cleanExit = true
     // Freeze the currently-open windows so the per-window remove() calls that
-    // follow during the quit sequence can't empty the restore snapshot.
-    this.snapshot = [...this.entries.values()]
+    // follow during the quit sequence can't empty the restore snapshot. A
+    // second call once the windows are already gone must not undo the first:
+    // the quit paths that close windows before before-quit reach this twice.
+    if (this.entries.size || !this.snapshot.length) {
+      this.snapshot = [...this.entries.values()]
+    }
+    this.persistNow()
+  }
+
+  /** Undo markCleanExit for a quit that did not happen.
+   *
+   *  The updater freezes the snapshot when an install starts, but an install
+   *  can be refused or time out and leave the app running. Without this the
+   *  run would stay marked clean, and a crash later in it would come back with
+   *  no restore offer — the exact case the crash banner exists for. */
+  clearCleanExit(): void {
+    if (!this.cleanExit) return
+    this.cleanExit = false
     this.persistNow()
   }
 

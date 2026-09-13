@@ -4043,10 +4043,17 @@ app.whenReady().then(async () => {
     // when they asked for the install. Without this they get a second "Quit?"
     // dialog on top of the one they just answered — and cancelling it leaves
     // the update staged anyway, so the question is not even truthful.
-    onInstallStarting: () => { quitConfirmed = true },
+    // Freeze the restore snapshot here, not in before-quit: a quit started by
+    // autoUpdater.quitAndInstall() emits before-quit AFTER closing every
+    // window, so by then each window's 'closed' has already remove()d its
+    // entry and the snapshot would be frozen empty. This is the only hook the
+    // update path offers that still runs while the windows are open.
+    onInstallStarting: () => { quitConfirmed = true; windowRegistry.markCleanExit() },
     // The install did not take the app down (bad precondition, error, or
     // timeout) — restore the confirmation gate the waiver above disabled.
-    onInstallAbandoned: () => { quitConfirmed = false },
+    // ...and the snapshot freeze above goes back with it: the app is still
+    // running, so this run is not a clean exit after all.
+    onInstallAbandoned: () => { quitConfirmed = false; windowRegistry.clearCleanExit() },
   })
   // Detect an unclean previous exit and stash its windows for the restore
   // banner. Always reset the file (start tracking this run) — but only OFFER

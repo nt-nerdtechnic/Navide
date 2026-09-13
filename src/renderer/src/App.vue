@@ -14356,20 +14356,30 @@ onMounted(() => {
   // Two ways this window can already hold workspaces before anyone clicks:
   //  · a reload — sessionStorage kept the list, but main has not heard it;
   //  · a relaunch — sessionStorage is empty and the registry has the list.
-  // sessionStorage wins when both exist: it is this window's live state, while
-  // the registry's copy is from before the restart.
-  if (workspaceOrder.value.length) {
-    window.agentTeam?.reportAdoptedWorkspaces?.([...workspaceOrder.value])
-    void prefetchHeldRunGroups()
-  } else {
-    void (async () => {
-      const restored = (await window.agentTeam?.takeRestoredAdoptedWorkspaces?.()) ?? []
-      for (const path of restored) adoptWorkspace(path)
+  // Ask main unconditionally. Gating the claim on an empty workspaceOrder
+  // never fired: the currentWorkspace watcher above seeds the list during
+  // setup, and a restored window is always created with a workspace_path, so
+  // the list is already one entry long by the time this runs. main hands the
+  // registry's copy out exactly once, so a reload claims nothing and keeps
+  // its own live state — the precedence the two branches used to encode.
+  void (async () => {
+    const restored = (await window.agentTeam?.takeRestoredAdoptedWorkspaces?.()) ?? []
+    for (const path of restored) adoptWorkspace(path)
+    // adoptWorkspace reports through persistExtraWorkspaces; a window that
+    // claimed nothing still has to tell main what sessionStorage gave it.
+    if (!restored.length) window.agentTeam?.reportAdoptedWorkspaces?.([...workspaceOrder.value])
+    if (restored.length) {
       // Their agents come back the same way a picked workspace's do.
       for (const path of extraWorkspaces.value) {
         const aliasGen = workspaceAliases.generationOf(path)
         const resp = await sendQuiet<ProjectPayload>('project.peek', { workspace_path: path })
-        if (!resp) continue
+        if (!resp) {
+          // Its panes are still on disk — nothing was lost, nobody read them.
+          // Silent until now, which made a stalled peek look like a wiped
+          // workspace.
+          console.warn('[restore] project.peek returned nothing; panes not restored for', path)
+          continue
+        }
         // The reply already carries the records, so grouping a restored
         // workspace's panes costs no extra round trip.
         const stored = resp.project?.ui_run_groups
@@ -14379,11 +14389,11 @@ onMounted(() => {
         if (resp.project) workspaceAliases.adopt(path, resp.project.display_name ?? '', 'peek', aliasGen)
         await restoreWorkspacePanes(resp, path)
       }
-      // Anything the loop could not reach (a peek that timed out) gets one
-      // more try; everything it did reach is already cached and skipped.
-      await prefetchHeldRunGroups()
-    })()
-  }
+    }
+    // Anything the loop could not reach (a peek that timed out) gets one
+    // more try; everything it did reach is already cached and skipped.
+    await prefetchHeldRunGroups()
+  })()
 })
 
 /** The ＋ on the sidebar's Workspace heading: the Welcome picker, reopened

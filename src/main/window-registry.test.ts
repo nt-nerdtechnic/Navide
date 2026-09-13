@@ -107,6 +107,55 @@ describe('WindowRegistry', () => {
     ])
   })
 
+  it('a second markCleanExit after the windows are gone keeps the first snapshot', () => {
+    // The quit shapes that close every window before before-quit reach
+    // markCleanExit twice — once while the windows are open, once after. The
+    // second call must not re-freeze an empty entries map over a good
+    // snapshot, or the restore list is lost exactly on those quits.
+    const run1 = new WindowRegistry(file)
+    run1.readPendingAndReset()
+    run1.setWorkspace(1, '/ws/alpha')
+    run1.setWorkspace(2, '/ws/beta')
+    run1.markCleanExit()
+    run1.remove(1)
+    run1.remove(2)
+    run1.markCleanExit()
+
+    const run2 = new WindowRegistry(file)
+    run2.readPendingAndReset()
+    expect(run2.cleanExitRestore()).toEqual([
+      { workspace_path: '/ws/alpha' },
+      { workspace_path: '/ws/beta' },
+    ])
+  })
+
+  it('markCleanExit with no windows open still records an empty snapshot', () => {
+    // The plain "user closed everything, then quit" path: nothing to restore,
+    // and the guard above must not resurrect a stale list.
+    const run1 = new WindowRegistry(file)
+    run1.readPendingAndReset()
+    run1.markCleanExit()
+
+    const run2 = new WindowRegistry(file)
+    run2.readPendingAndReset()
+    expect(run2.cleanExitRestore()).toEqual([])
+  })
+
+  it('clearCleanExit puts back the crash offer when an install never took the app down', () => {
+    // The updater freezes the snapshot when an install starts; a refused or
+    // timed-out install leaves the app running, and the run must stop counting
+    // as a clean exit or a later crash comes back with nothing to restore.
+    const run1 = new WindowRegistry(file)
+    run1.readPendingAndReset()
+    run1.setWorkspace(1, '/ws/alpha')
+    run1.markCleanExit()
+    run1.clearCleanExit()
+    // ...crash: no further markCleanExit...
+
+    const run2 = new WindowRegistry(file)
+    expect(run2.readPendingAndReset()).toEqual([{ workspace_path: '/ws/alpha' }])
+  })
+
   it('restoreOnLaunch=false suppresses clean-exit auto-restore and persists across reset', () => {
     const run1 = new WindowRegistry(file)
     run1.readPendingAndReset()

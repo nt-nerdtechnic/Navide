@@ -403,6 +403,11 @@ class ProjectStore:
                 log.warning("project.json at %s is corrupt during peek (%s)", pf, err)
                 return None
         if not isinstance(data, dict):
+            # The two corrupt-document branches below say so; this one used to
+            # return empty-handed in silence, which reads downstream as "that
+            # workspace has no panes" rather than "its record is unreadable".
+            if data is not None:
+                log.warning("project document for %s is not an object during peek", ws)
             return None
         try:
             project = Project.from_dict(data)

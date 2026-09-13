@@ -77,8 +77,15 @@ describe('runGroupsByWorkspace', () => {
   it('runs the prefetch on both ways a window comes up holding workspaces', () => {
     // A reload keeps the roster in sessionStorage and loads no groups at all;
     // a relaunch restores it and peeks each one, which already carries them.
-    expect(appSource).toContain('void prefetchHeldRunGroups()')
-    expect(appSource).toContain('await prefetchHeldRunGroups()')
+    // Both paths now share one mount-time call — it used to be two, one per
+    // branch of a condition that only ever took the reload side.
+    const at = appSource.indexOf('takeRestoredAdoptedWorkspaces')
+    expect(at).toBeGreaterThan(-1)
+    const mount = appSource.slice(at, at + 1800)
+    expect(mount).toContain('await prefetchHeldRunGroups()')
+    // Outside the restored-only block, so a reload reaches it too.
+    expect(mount.indexOf('await prefetchHeldRunGroups()'))
+      .toBeGreaterThan(mount.indexOf('await restoreWorkspacePanes(resp, path)'))
   })
 
   it('forgets a workspace the window lets go, so re-opening it reloads', () => {
