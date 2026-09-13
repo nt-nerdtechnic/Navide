@@ -30,8 +30,23 @@ function stripFiller(text: string): string {
   return out || text
 }
 
+// The block buildPaneContextPaste writes into a pane's prompt when another
+// pane is dropped onto it. It is user-record text like any prompt, so it
+// reaches the namer — and its header line is exactly the kind of short first
+// clause the heuristic picks, which is how panes came to be called
+// "CLI session context". The whole block goes, terminated or not: the paste
+// is long and the material cap can cut it before its end marker.
+const CLI_CONTEXT_BLOCK_RE =
+  /--- CLI session context:[\s\S]*?(?:--- end CLI session context ---|$)/g
+
+/** Drop pasted CLI session context blocks so a title only ever comes from what
+ *  the person actually typed around them. */
+export function stripCliSessionContext(material: string): string {
+  return material.replace(CLI_CONTEXT_BLOCK_RE, '')
+}
+
 export function deriveAutoName(material: string): string {
-  const cleaned = material
+  const cleaned = stripCliSessionContext(material)
     .slice(0, MAX_MATERIAL)
     .replace(/@\S+/g, '')
     .replace(/\[Context:[^\]]+\]/g, '')

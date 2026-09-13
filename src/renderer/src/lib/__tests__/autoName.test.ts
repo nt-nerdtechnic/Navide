@@ -106,3 +106,28 @@ describe('a path is not a title', () => {
     expect(title).not.toBe('main')
   })
 })
+
+describe('deriveAutoName with a pasted CLI session context block', () => {
+  const block = [
+    '--- CLI session context: 狀態判斷 (claude) ---',
+    'source_pane_id: "49f7d379-d5f6-43f0-ba57-2ed0ddc19435"',
+    'source_name: "狀態判斷"',
+    'The recent rendered context is included below. For the complete conversation, read conversation_log with a read-only file command.',
+    '--- recent terminal excerpt ---',
+    'some terminal output here',
+    '--- end recent terminal excerpt ---',
+    '--- end CLI session context ---'
+  ].join('\n')
+
+  it('never titles a pane with the context header', () => {
+    expect(deriveAutoName(block)).toBe('')
+  })
+
+  it('titles from the words typed after the block', () => {
+    expect(deriveAutoName(`${block}\n請看一下這張 pane 卡在哪裡`)).toBe('看一下這張 pane 卡在哪裡')
+  })
+
+  it('titles from the words typed before the block', () => {
+    expect(deriveAutoName(`接手這個任務\n${block}`)).toBe('接手這個任務')
+  })
+})
