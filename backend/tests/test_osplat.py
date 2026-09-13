@@ -872,6 +872,75 @@ class TestScripts:
         )
         assert command.endswith(">/dev/null 2>&1; exit 0")
 
+    def test_posix_without_curl_spells_the_post_with_python3(self, monkeypatch):
+        # Decided when the hook is written: a box without curl (Ubuntu Desktop)
+        # gets the standard-library spelling, with the same discard and tail.
+        from agent_team_backend.osplat import _posix_paths
+
+        monkeypatch.setattr(_posix_paths, "resolve_program", lambda name, *, path=None: None)
+        command = _posix_paths.scripts.hook_post_json(
+            port_file="/tmp/navide.port",
+            header_file="/tmp/hook.header",
+            url_path="/hooks/claude",
+            event="pre_tool_use",
+            timeout_s=2,
+        )
+        assert "curl -fsS" not in command
+        assert command.startswith("PORT=$(cat /tmp/navide.port 2>/dev/null); ")
+        assert "python3 -c " in command
+        assert command.endswith("/tmp/hook.header 2 >/dev/null || true")
+
+        rewake = _posix_paths.scripts.hook_rewake(
+            port_file="/tmp/navide.port",
+            header_file="/tmp/hook.header",
+            url_path="/hooks/claude/rewake",
+            timeout_s=1860,
+        )
+        assert "curl -fsS" not in rewake
+        assert "BODY=$(python3 -c " in rewake
+        assert rewake.endswith("exit 2")
+
+    def test_posix_with_curl_keeps_the_exact_command_text(self, monkeypatch):
+        # The curl spelling is what every installed settings.json holds; a
+        # changed text would rewrite them all on the next start.
+        from agent_team_backend.osplat import _posix_paths
+
+        monkeypatch.setattr(_posix_paths, "resolve_program", lambda name, *, path=None: "/usr/bin/curl")
+        command = _posix_paths.scripts.hook_post_json(
+            port_file="/tmp/navide.port",
+            header_file="/tmp/hook.header",
+            url_path="/hooks/claude",
+            event="stop",
+            timeout_s=4,
+            keep_body=True,
+        )
+        assert command == (
+            "PORT=$(cat /tmp/navide.port 2>/dev/null); "
+            '[ -n "$PORT" ] && curl -fsS -m 4 -X POST '
+            "-H 'Content-Type: application/json' "
+            "-H 'X-Agent-Team-Event: stop' "
+            "-H @/tmp/hook.header "
+            "--data-binary @- "
+            '"http://127.0.0.1:$PORT/hooks/claude" || true'
+        )
+        discarded = _posix_paths.scripts.hook_post_json(
+            port_file="/tmp/navide.port",
+            header_file="/tmp/hook.header",
+            url_path="/hooks/copilot",
+            event="notification",
+            timeout_s=2,
+            exit_zero=True,
+        )
+        assert discarded == (
+            "PORT=$(cat /tmp/navide.port 2>/dev/null); "
+            '[ -n "$PORT" ] && curl -fsS -m 2 -o /dev/null -X POST '
+            "-H 'Content-Type: application/json' "
+            "-H 'X-Agent-Team-Event: notification' "
+            "-H @/tmp/hook.header "
+            "--data-binary @- "
+            '"http://127.0.0.1:$PORT/hooks/copilot" >/dev/null 2>&1; exit 0'
+        )
+
     def test_windows_hook_post_json_is_a_powershell_one_liner(self):
         from agent_team_backend.osplat import _windows
 

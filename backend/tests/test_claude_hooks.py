@@ -1,10 +1,12 @@
 import json
 import re
+import shutil
 import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import psutil
+import pytest
 
 from agent_team_backend import osplat
 from agent_team_backend.claude_hooks import _build_curl_command
@@ -122,6 +124,67 @@ def test_qwens_stop_hook_keeps_discarding_the_response(tmp_path) -> None:
     _received, stdout = _run_hook(tmp_path, "stop", b'{"ok":true}', endpoint="qwen")
 
     assert stdout == ""
+
+
+def test_without_curl_the_hook_still_delivers_and_prints_the_decision(tmp_path, monkeypatch) -> None:
+    """Ubuntu Desktop ships without curl. Written on such a box, the hook is
+    spelled with python3 and must behave exactly like the curl one: same body
+    to the backend, same decision back on stdout, and the auth header still
+    loaded from the header file rather than the command."""
+    from agent_team_backend.osplat import _posix_paths
+
+    if osplat.scripts is not _posix_paths.scripts:
+        pytest.skip("the sh rendering is the POSIX box's; Windows writes PowerShell")
+    if shutil.which("python3") is None:
+        pytest.skip("python3 is what the fallback runs with")
+
+    monkeypatch.setattr(
+        _posix_paths, "resolve_program", lambda name, *, path=None: None if name == "curl" else name
+    )
+    port_file = tmp_path / "backend.port"
+    command = _build_curl_command(str(port_file), "stop")
+    assert "curl -fsS" not in command
+    assert "python3 -c" in command
+
+    decision = b'{"decision":"block","reason":"[Navide MSG] from: builder"}'
+    seen_headers: dict[str, str] = {}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            seen_headers.update({k: v for k, v in self.headers.items()})
+            self.rfile.read(int(self.headers["Content-Length"]))
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(decision)))
+            self.end_headers()
+            self.wfile.write(decision)
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    server.timeout = 45
+    thread = threading.Thread(target=server.handle_request)
+    thread.start()
+    port_file.write_text(str(server.server_port), encoding="utf-8")
+    try:
+        result = _run_to_completion(
+            hook_shell.shell_argv(osplat.scripts.hook_entry(command)),
+            '{"hook_event_name":"Stop"}',
+            timeout=45,
+        )
+    finally:
+        thread.join(timeout=46)
+        server.server_close()
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.removesuffix("\n") == decision.decode()
+    assert seen_headers.get("X-Agent-Team-Event") == "stop"
+    assert seen_headers.get("Content-Type") == "application/json"
+    # The secret travels in the header file, never in the settings.json text.
+    from agent_team_backend import hook_auth
+
+    assert hook_auth.token() not in command
+    assert seen_headers.get(hook_auth.HEADER) == hook_auth.token()
 
 
 def test_dev_instance_does_not_overwrite_production_hook(tmp_path) -> None:

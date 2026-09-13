@@ -189,6 +189,25 @@ def pty_launch_parts(
 # ---- appended: the sh renderings of the scripts the backend writes -----------
 
 
+# What a hook runs to POST its stdin to the backend when there is no curl.
+# Ubuntu Desktop ships without curl (Server has it), and a hook that fails
+# quietly there took every hook-driven feature with it. python3 is on every
+# desktop Linux, so the same request is spelled with the standard library:
+# argv carries port, path, event, header file and timeout so nothing here has
+# to be quoted for sh. Errors go to stderr and exit non-zero, like curl -f.
+_PY_POST = (
+    "import os,sys,urllib.request as u\n"
+    "p,q,e,h,t=sys.argv[1:6]\n"
+    'H={"Content-Type":"application/json","X-Agent-Team-Event":e}\n'
+    "if os.path.exists(h):\n"
+    '    for l in open(h,encoding="utf-8"):\n'
+    '        if ":" in l:\n'
+    '            k,v=l.split(":",1);H[k.strip()]=v.strip()\n'
+    'r=u.urlopen(u.Request("http://127.0.0.1:"+p+q,data=sys.stdin.buffer.read(),headers=H,method="POST"),timeout=float(t))\n'
+    "sys.stdout.buffer.write(r.read())"
+)
+
+
 class PosixScripts:
     """sh, for every shell a POSIX box opens and for Claude Code's default.
 
@@ -202,6 +221,30 @@ class PosixScripts:
         # adding one would rewrite every existing settings.json for nothing.
         return {"type": "command", "command": command}
 
+    def _post(
+        self, *, header_file: str, url_path: str, event: str, timeout_s: int, discard: bool
+    ) -> str:
+        """The request itself: JSON body from stdin, response to stdout unless
+        `discard`. Decided when the hook is *written*: curl when this machine
+        has it -- that text is byte-for-byte what every installed settings.json
+        already holds -- and the python3 spelling otherwise."""
+        if resolve_program("curl") is not None:
+            sink = "-o /dev/null " if discard else ""
+            return (
+                f"curl -fsS -m {timeout_s} {sink}-X POST "
+                f"-H 'Content-Type: application/json' "
+                f"-H 'X-Agent-Team-Event: {event}' "
+                f"-H @{shlex.quote(header_file)} "
+                f"--data-binary @- "
+                f'"http://127.0.0.1:$PORT{url_path}"'
+            )
+        return (
+            f"python3 -c {shlex.quote(_PY_POST)} \"$PORT\" "
+            f"{shlex.quote(url_path)} {shlex.quote(event)} "
+            f"{shlex.quote(header_file)} {timeout_s}"
+            + (" >/dev/null" if discard else "")
+        )
+
     def hook_post_json(
         self,
         *,
@@ -213,30 +256,27 @@ class PosixScripts:
         keep_body: bool = False,
         exit_zero: bool = False,
     ) -> str:
-        sink = "" if keep_body else "-o /dev/null "
         tail = ' >/dev/null 2>&1; exit 0' if exit_zero else " || true"
+        post = self._post(
+            header_file=header_file, url_path=url_path, event=event, timeout_s=timeout_s,
+            discard=not keep_body,
+        )
         return (
             f"PORT=$(cat {shlex.quote(port_file)} 2>/dev/null); "
-            f'[ -n "$PORT" ] && curl -fsS -m {timeout_s} {sink}-X POST '
-            f"-H 'Content-Type: application/json' "
-            f"-H 'X-Agent-Team-Event: {event}' "
-            f"-H @{shlex.quote(header_file)} "
-            f"--data-binary @- "
-            f'"http://127.0.0.1:$PORT{url_path}"{tail}'
+            f'[ -n "$PORT" ] && {post}{tail}'
         )
 
     def hook_rewake(
         self, *, port_file: str, header_file: str, url_path: str, timeout_s: int
     ) -> str:
+        post = self._post(
+            header_file=header_file, url_path=url_path, event="rewake", timeout_s=timeout_s,
+            discard=False,
+        )
         return (
             f"PORT=$(cat {shlex.quote(port_file)} 2>/dev/null); "
             f'[ -n "$PORT" ] || exit 0\n'
-            f"BODY=$(curl -fsS -m {timeout_s} -X POST "
-            f"-H 'Content-Type: application/json' "
-            f"-H 'X-Agent-Team-Event: rewake' "
-            f"-H @{shlex.quote(header_file)} "
-            f"--data-binary @- "
-            f'"http://127.0.0.1:$PORT{url_path}" || true)\n'
+            f"BODY=$({post} || true)\n"
             f'[ -n "$BODY" ] || exit 0\n'
             f"printf '%s\\n' \"$BODY\" >&2\n"
             f"exit 2"
