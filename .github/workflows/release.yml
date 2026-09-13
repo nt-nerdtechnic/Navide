@@ -355,6 +355,132 @@ jobs:
             gh release create "${GITHUB_REF_NAME}" "${assets[@]}" --verify-tag --generate-notes --title "Navide ${GITHUB_REF_NAME}"
           fi
 
+  package-linux-arm64:
+    # Manual dry runs only: this build exists so the Linux port can be tried
+    # in an arm64 VM on Apple silicon, where the x64 binaries cannot run. It
+    # is never published, so it does not wait on the macOS job.
+    if: github.event_name == 'workflow_dispatch'
+    name: Package Linux arm64 (dry run only)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    environment:
+      name: production
+      url: https://github.com/nt-nerdtechnic/Navide/releases/latest
+
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.0.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.x'
+          cache: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-suffix: package-linux-arm64
+
+      - name: Install dependencies
+        run: |
+          pnpm install --frozen-lockfile
+          uv --project backend sync --locked
+
+      - name: Run Linux release gates
+        # Same OS-level gates as the x64 job, on the arm64 kernel: the backend
+        # suite, and the smoke test that opens a real PTY, reads /proc, and
+        # serves /health.
+        run: |
+          uv --project backend run ruff check backend
+          uv --project backend run pytest backend/tests
+          uv --project backend run python backend/linux_smoke.py
+
+      - name: Provision Antigravity usage secrets
+        env:
+          ANTIGRAVITY_CLIENT_ID: ${{ secrets.ANTIGRAVITY_CLIENT_ID }}
+          ANTIGRAVITY_CLIENT_SECRET: ${{ secrets.ANTIGRAVITY_CLIENT_SECRET }}
+        run: |
+          if [ -n "$ANTIGRAVITY_CLIENT_ID" ] && [ -n "$ANTIGRAVITY_CLIENT_SECRET" ]; then
+            printf 'ANTIGRAVITY_CLIENT_ID = "%s"\nANTIGRAVITY_CLIENT_SECRET = "%s"\n' \
+              "$ANTIGRAVITY_CLIENT_ID" "$ANTIGRAVITY_CLIENT_SECRET" \
+              > backend/agent_team_backend/usage_secrets.py
+            echo "usage_secrets.py provisioned"
+          else
+            echo "Antigravity secrets not set; provider disabled in this build"
+          fi
+
+      - name: Build Python backend
+        # PyInstaller cannot cross-compile; an arm64 backend binary can only
+        # come from an arm64 runner.
+        working-directory: backend
+        run: uv run pyinstaller agent_team_backend.spec
+
+      - name: Build application
+        shell: bash
+        run: |
+          pnpm build
+          test -f dist-plugins/plans/index.html
+          test ! -e dist-plugins/plans/backend/navide-plans
+          test ! -e dist-plugins/plans/backend/navide-plans-go
+          node scripts/verify-plans-production.mjs
+          # No signing on Linux: neither AppImage nor deb has a Gatekeeper or
+          # SmartScreen equivalent, so there is no certificate to provision and
+          # nothing to notarize. `--publish never` still writes latest-linux.yml,
+          # which the AppImage updater reads.
+          pnpm exec electron-builder --linux --arm64 --publish never
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+
+      - name: Validate release artifacts
+        shell: bash
+        run: |
+          test -f dist-release/latest-linux.yml
+          test "$(find dist-release -maxdepth 1 -name 'Navide-*.AppImage' | wc -l | tr -d ' ')" -eq 1
+          test "$(find dist-release -maxdepth 1 -name 'Navide-*.deb' | wc -l | tr -d ' ')" -eq 1
+          # The packaged backend must be the Linux one this job just built,
+          # not a stale macOS binary that happened to be lying around.
+          # Absolute path: the extraction below runs from a temp directory.
+          appimage="${PWD}/$(find dist-release -maxdepth 1 -name 'Navide-*.AppImage' -print -quit)"
+          chmod +x "${appimage}"
+          work="$(mktemp -d)"
+          (cd "${work}" && "${appimage}" --appimage-extract >/dev/null)
+          backend="$(find "${work}/squashfs-root/resources/bin" -maxdepth 1 -name 'agent_team_backend' -print -quit)"
+          test -n "${backend}"
+          file "${backend}" | grep -q 'ELF 64-bit.*aarch64'
+          # …and the v2 Plans package carries its Linux backend.
+          test -x "${work}/squashfs-root/resources/plugins/navide-plans/backend/navide-plans"
+          rm -rf "${work}"
+
+      - name: Attach installers to the workflow run
+        # The only output of this job.
+        uses: actions/upload-artifact@v7
+        with:
+          name: navide-linux-arm64
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            dist-release/Navide-*.AppImage
+            dist-release/Navide-*.deb
+            dist-release/latest-linux.yml
+
   release-windows-x64:
     if: github.ref_name != 'v0.1.40' && github.ref_name != 'v0.1.41' && github.ref_name != 'v0.1.49'
     name: Package and release Windows x64
