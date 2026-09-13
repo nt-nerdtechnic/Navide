@@ -518,23 +518,6 @@ async function createWindow(
   win.once('ready-to-show', showOnce)
   setTimeout(showOnce, 4000)
   win.on('focus', () => { mainWindow = win })
-  // Off macOS, closing the last window quits the app, so the quit confirmation
-  // has to run here while a Cancel can still keep the window (see
-  // last-window-close.ts). A confirmed quit goes through the same teardown as
-  // before-quit; `quitConfirmed` then lets app.quit() close this window.
-  win.on('close', (e) => {
-    guardLastWindowClose(e, {
-      liveWindows: () => BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed()).length,
-      confirmEnabled: () => quitConfirm.enabled,
-      quitConfirmed: () => quitConfirmed,
-      promptOpen: () => quitPromptOpen,
-      ask: () => askQuitConfirm(win),
-      quit: () => {
-        quitConfirmed = true
-        void teardownBackendAndQuit()
-      },
-    })
-  })
   win.on('closed', () => {
     mainWindows.delete(win)
     mainWindowWorkspaces.delete(win)
@@ -4186,6 +4169,29 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => {
   if (!isMac()) app.quit()
+})
+
+// Off macOS, closing the last window quits the app (above), so the quit
+// confirmation has to run from that window's own close event, while a Cancel
+// can still keep it (see last-window-close.ts). Every window counts as "last"
+// — a Plans or Git window left open after the main window is the one whose
+// close would quit — so the guard goes on each window as Electron creates it,
+// whichever factory made it. A confirmed quit goes through the same teardown
+// as before-quit; `quitConfirmed` then lets app.quit() close the windows.
+app.on('browser-window-created', (_event, win) => {
+  win.on('close', (e) => {
+    guardLastWindowClose(e, {
+      liveWindows: () => BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed()).length,
+      confirmEnabled: () => quitConfirm.enabled,
+      quitConfirmed: () => quitConfirmed,
+      promptOpen: () => quitPromptOpen,
+      ask: () => askQuitConfirm(win),
+      quit: () => {
+        quitConfirmed = true
+        void teardownBackendAndQuit()
+      },
+    })
+  })
 })
 
 // Shutdown budgets. They are deliberately SEPARATE: a single shared deadline

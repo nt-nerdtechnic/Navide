@@ -89,6 +89,25 @@ describe('guardLastWindowClose', () => {
     expect(ask).not.toHaveBeenCalled()
   })
 
+  it('linux: main window closed first, a plugin window last — only the last close prompts, once', async () => {
+    // The guard is attached to every window Electron creates, so the window
+    // that happens to be last is the one that asks, whatever kind it is.
+    setPlatformId('linux')
+    let live = 2
+    const ask = vi.fn(() => Promise.resolve(false))
+    const d = deps({ ask, liveWindows: () => live })
+    const closeMain = { preventDefault: vi.fn() }
+    expect(guardLastWindowClose(closeMain, d)).toBe(false)
+    expect(closeMain.preventDefault).not.toHaveBeenCalled()
+    live = 1
+    const closePlans = { preventDefault: vi.fn() }
+    expect(guardLastWindowClose(closePlans, d)).toBe(true)
+    expect(closePlans.preventDefault).toHaveBeenCalledTimes(1)
+    await Promise.resolve()
+    expect(ask).toHaveBeenCalledTimes(1)
+    expect(d.quit).not.toHaveBeenCalled()
+  })
+
   it('linux: closing one of several windows does not prompt', () => {
     setPlatformId('linux')
     const e = { preventDefault: vi.fn() }
