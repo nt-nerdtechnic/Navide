@@ -332,9 +332,12 @@ export async function startBackend(
   // Python consumes only the exact-byte Host-approved catalog bound above;
   // bundled v1 plugins remain an explicit backend-owned compatibility path.
 
-  // Who to follow into exit: on POSIX the backend polls this pid and shuts
-  // down when the app is gone (a crash or SIGTERM never reaches the stdin
-  // `shutdown` line); Windows ignores it, the Job Object does that there.
+  // Who to follow into exit: the backend polls this pid and shuts down when
+  // the app is gone. A normal quit is cooperative (SIGTERM on POSIX, the stdin
+  // `shutdown` line on Windows), but a crash or a Task-Manager kill reaches
+  // neither — and there is no Job Object tying the backend to this process, on
+  // any platform — so on both the backend watches this pid (identity-guarded
+  // against Windows pid reuse) and ends itself when it disappears.
   env.AGENT_TEAM_PARENT_PID = String(process.pid)
 
   let proc: ChildProcess

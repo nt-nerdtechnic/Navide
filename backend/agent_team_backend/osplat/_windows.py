@@ -398,9 +398,20 @@ class WindowsProcessTree:
         return ppid in (0, me)
 
     def parent_to_follow(self, env: Mapping[str, str]) -> int | None:
-        # The Job Object the app puts this backend in (KILL_ON_JOB_CLOSE) ends
-        # it with the app; nothing to poll.
-        return None
+        # Follow the pid the app named, the same as POSIX. There is no Job
+        # Object tying this backend to the app — the app never creates one (the
+        # KILL_ON_JOB_CLOSE job in this module owns a pane's PTY child, not this
+        # process) — so on an abnormal exit (a crash or Task-Manager kill of the
+        # app, where its normal quit path and the stdin `shutdown` line never
+        # run) nothing else would end this backend, and the next launch finds a
+        # second one holding the port. `_watch_parent_for_shutdown` guards the
+        # fast Windows pid reuse with `identity` (pid + start time).
+        raw = env.get("AGENT_TEAM_PARENT_PID", "")
+        try:
+            pid = int(raw)
+        except ValueError:
+            return None
+        return pid if pid > 0 else None
 
     def kill(self, pid: int, *, force: bool) -> None:
         # Both `force` values are TerminateProcess: Windows has no SIGTERM.

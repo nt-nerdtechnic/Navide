@@ -98,19 +98,31 @@ def _watch_stdin_for_shutdown(server: "uvicorn.Server", stream=None) -> None:
 
 
 def _watch_parent_for_shutdown(
-    server: "uvicorn.Server", pid: int, *, interval_s: float = 2.0, is_alive=None
+    server: "uvicorn.Server", pid: int, *, interval_s: float = 2.0, is_alive=None, identity=None
 ) -> None:
-    """The POSIX half of "the backend dies with the app".
+    """The backend dies with the app when the app cannot say so itself.
 
     Same cooperative exit as a `shutdown` line on stdin: `should_exit` lets
     uvicorn run the lifespan shutdown (PTY sweep, watcher teardown) instead of
-    leaving every CLI child behind. Polled, because POSIX has no signal for
-    "your parent is gone" that survives the PyInstaller bootloader and `uv run`
-    sitting between the app and this process.
+    leaving every CLI child behind. Polled, because neither platform has a
+    signal for "your parent is gone" that survives the PyInstaller bootloader
+    and `uv run` sitting between the app and this process — and on Windows the
+    normal quit's stdin `shutdown` never runs after a crash or a Task-Manager
+    kill either.
+
+    The pid alone is not enough on Windows, which reuses pids quickly: a dead
+    parent's number can belong to something else within the poll interval and
+    read as "still alive". So capture the parent's `identity` (pid + start
+    time) up front and treat a changed identity as the parent being gone, the
+    same reading `process_tree.identity` is documented for.
     """
     alive = is_alive or osplat.process_tree.is_alive
+    identity_of = identity or osplat.process_tree.identity
+    # "" means the identity could not be read (e.g. the parent already exited):
+    # fall back to the liveness check alone rather than exit on an empty match.
+    original_identity = identity_of(pid)
     while not server.should_exit:
-        if not alive(pid):
+        if not alive(pid) or (original_identity and identity_of(pid) != original_identity):
             logging.getLogger("agent_team_backend.main").info(
                 "parent process %d is gone; shutting down", pid
             )
