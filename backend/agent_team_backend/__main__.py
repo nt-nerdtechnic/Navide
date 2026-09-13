@@ -20,6 +20,83 @@ from .git_askpass_helper import ASKPASS_FLAG, main as askpass_main
 if len(sys.argv) > 1 and sys.argv[1] == ASKPASS_FLAG:
     askpass_main(sys.argv[2] if len(sys.argv) > 2 else "")
 
+
+def _self_check_conpty() -> int:
+    """Prove the packaged build can actually open a ConPTY, then exit.
+
+    Windows CI runs this against the FROZEN onefile exe after packaging. The
+    unit tests can only see what the spec collects; they cannot see whether the
+    bootloader extracts winpty's `OpenConsole.exe` such that conpty.dll finds
+    it at runtime. Here we do the real thing: spawn `cmd /c exit 0` through
+    winpty and require a clean exit. A build that dropped OpenConsole.exe spawns
+    fine but the child dies at once with STATUS_CONTROL_C_EXIT (0xC000013A), so
+    this returns non-zero and the CI step turns red — the "every pane dies on
+    Windows" regression can never ship silently again.
+
+    Kept before the heavy imports and behind an explicit flag so it costs a
+    normal launch nothing. Windows-only; a no-op success elsewhere.
+    """
+    import os
+    import time
+
+    if sys.platform != "win32":
+        print("conpty self-check: skipped (not win32)")
+        return 0
+    STATUS_CONTROL_C_EXIT = 0xC000013A
+    try:
+        import winpty
+    except Exception as exc:  # noqa: BLE001
+        print(f"conpty self-check: FAIL — cannot import winpty: {exc}")
+        return 1
+    # In a onefile build the package is extracted under sys._MEIPASS; otherwise
+    # it is the installed winpty package. OpenConsole.exe must sit beside the
+    # extension module for conpty.dll to launch it.
+    winpty_dir = os.path.dirname(winpty.__file__)
+    open_console = os.path.join(winpty_dir, "OpenConsole.exe")
+    if not os.path.exists(open_console):
+        print(
+            "conpty self-check: FAIL — OpenConsole.exe missing from "
+            f"{winpty_dir}; ConPTY panes would die with STATUS_CONTROL_C_EXIT"
+        )
+        return 1
+    try:
+        pty = winpty.PTY(80, 24)
+        pty.spawn(
+            os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "cmd.exe"),
+            cmdline="/c exit 0",
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"conpty self-check: FAIL — spawn raised: {exc}")
+        return 1
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline:
+        try:
+            alive = pty.isalive()
+        except Exception:  # noqa: BLE001
+            alive = False
+        if not alive:
+            break
+        time.sleep(0.05)
+    else:
+        print("conpty self-check: FAIL — child never exited within 10s")
+        return 1
+    try:
+        status = pty.get_exitstatus()
+    except Exception:  # noqa: BLE001
+        status = None
+    if status == STATUS_CONTROL_C_EXIT:
+        print(
+            "conpty self-check: FAIL — child exited with STATUS_CONTROL_C_EXIT "
+            "(pseudoconsole torn down; OpenConsole.exe not usable)"
+        )
+        return 1
+    print(f"conpty self-check: OK — clean ConPTY exit (status={status}), OpenConsole.exe present")
+    return 0
+
+
+if len(sys.argv) > 2 and sys.argv[1] == "--self-check" and sys.argv[2] == "conpty":
+    raise SystemExit(_self_check_conpty())
+
 import os  # noqa: E402
 import socket  # noqa: E402
 

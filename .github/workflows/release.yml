@@ -441,6 +441,14 @@ jobs:
         working-directory: backend
         run: uv run pyinstaller agent_team_backend.spec
 
+      - name: Verify the frozen backend can open a ConPTY
+        # The unit tests only see what the spec collects; they cannot see
+        # whether the bootloader extracts winpty's OpenConsole.exe so conpty.dll
+        # finds it at runtime. This spawns a real ConPTY inside the FROZEN exe:
+        # a build that dropped OpenConsole.exe exits every pane at once with
+        # STATUS_CONTROL_C_EXIT, so this step goes red before that ever ships.
+        run: backend/dist/agent_team_backend.exe --self-check conpty
+
       - name: Build application
         run: |
           pnpm build
