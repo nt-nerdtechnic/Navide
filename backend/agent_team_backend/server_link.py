@@ -1000,7 +1000,15 @@ class ServerLink:
         return self._sync_engine
 
     async def _offer_sync_key(self, device_id: str) -> bool:
-        """Wrap this account's sync key for one paired device and send it."""
+        """Wrap this account's sync key for one paired device and send it.
+
+        Nothing in here may raise. ``_finish_pairing`` awaits it as its last
+        step, and the only ``except`` above that is a narrow ``PairingError`` —
+        so an exception escaping this would come out of the pairing exchange
+        itself, after the pin was already written. The send is inside the guard
+        for that reason: it was outside it once, which made this docstring a
+        claim the code did not keep.
+        """
         try:
             if not await asyncio.to_thread(sync_keyring.has_account_key):
                 return False
@@ -1014,10 +1022,10 @@ class ServerLink:
                 from_device=self._device_id,
                 to_device=device_id,
             )
-        except Exception as err:  # noqa: BLE001 - never break pairing or a session
-            log.warning("could not wrap the sync key for %s: %s", device_id, err)
+            return await self._send_pair_frame(device_id, SYNC_KEY_OFFER, wrapped=wrapped)
+        except Exception as err:  # noqa: BLE001 - pairing must survive this
+            log.warning("could not hand the sync key to %s: %s", device_id, err)
             return False
-        return await self._send_pair_frame(device_id, SYNC_KEY_OFFER, wrapped=wrapped)
 
     async def _adopt_sync_key(self, device_id: str, wrapped: str) -> None:
         """Take the account key a paired device sealed for this one."""

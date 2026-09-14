@@ -20,10 +20,20 @@ handed the account key syncs nothing rather than uploading readable records.
 **Nothing here can break the app.** Every entry point is called from the link's
 own task and every failure is logged and swallowed by the caller: sync is a
 convenience laid over state that is already correct on disk.
+
+**The blocking half runs off the loop.** A round reads every skill's file tree
+and every instruction file, encrypts each record, and touches SQLite — none of
+which is async, and all of which happens inside the backend's own event loop
+task. ``loop_watchdog`` calls a 2-second stall a fault and says so in the log,
+and a user with a few large instruction files would reach that on an ordinary
+sync. So the per-item work is handed to a worker thread in whole batches: one
+hop per pull page and one per push, rather than one per item, because the hop
+is only worth making if it carries real work.
 """
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -320,7 +330,7 @@ class SyncEngine:
             raise SyncError(f"no adapter registered for {scope!r}")
         if not self._enabled(scope):
             return {"scope": scope, "skipped": "disabled"}
-        if not sync_keyring.has_account_key():
+        if not await asyncio.to_thread(sync_keyring.has_account_key):
             return {"scope": scope, "skipped": "no-key"}
         pulled = await self._pull(adapter)
         pushed = await self._push(adapter)
@@ -352,11 +362,7 @@ class SyncEngine:
             )
             items = reply.get("items")
             items = items if isinstance(items, list) else []
-            snapshot = adapter.snapshot()
-            blocked = self._store.conflict_ids(scope)
-            for raw in items:
-                if self._apply_one(adapter, raw, snapshot, blocked):
-                    applied += 1
+            applied += await asyncio.to_thread(self._apply_page, adapter, items)
             cursor = int(reply.get("cursor") or since)
             if cursor > since:
                 self._store.set_cursor(scope, cursor)
@@ -368,6 +374,12 @@ class SyncEngine:
                 log.warning("sync.pull on %s made no progress; stopping this round", scope)
                 break
         return applied
+
+    def _apply_page(self, adapter: ScopeAdapter, items: list[Any]) -> int:
+        """Apply one pull page. Runs in a worker thread; touches disk freely."""
+        snapshot = adapter.snapshot()
+        blocked = self._store.conflict_ids(adapter.scope)
+        return sum(1 for raw in items if self._apply_one(adapter, raw, snapshot, blocked))
 
     def _apply_one(
         self,
@@ -453,6 +465,31 @@ class SyncEngine:
     # ── push ────────────────────────────────────────────────────────────
     async def _push(self, adapter: ScopeAdapter) -> int:
         scope = adapter.scope
+        # One hop for everything that reads disk or encrypts; what comes back is
+        # ready to put on the wire.
+        pending, built = await asyncio.to_thread(self._prepare_push, adapter)
+
+        # Two budgets, because either one alone is wrong: sixty-four tiny items
+        # is a fine batch and two large ones is not, and the frame is what the
+        # server actually refuses.
+        sent = 0
+        batch: list[dict[str, Any]] = []
+        budget = 0
+        for item, size in built:
+            if batch and (len(batch) >= PUSH_BATCH or budget + size > MAX_PUSH_BYTES):
+                sent += await self._send_batch(scope, batch, pending)
+                batch, budget = [], 0
+            batch.append(item)
+            budget += size
+        if batch:
+            sent += await self._send_batch(scope, batch, pending)
+        return sent
+
+    def _prepare_push(
+        self, adapter: ScopeAdapter
+    ) -> tuple[list[tuple[str, Any, str]], list[tuple[dict[str, Any], int]]]:
+        """Everything a push needs, computed off the loop."""
+        scope = adapter.scope
         snapshot = adapter.snapshot()
         states = self._store.states(scope)
         blocked = self._store.conflict_ids(scope)
@@ -478,22 +515,7 @@ class SyncEngine:
             for entry in (self._build(scope, i, p, h, states, updated_at) for i, p, h in pending)
             if entry is not None
         ]
-
-        # Two budgets, because either one alone is wrong: sixty-four tiny items
-        # is a fine batch and two large ones is not, and the frame is what the
-        # server actually refuses.
-        sent = 0
-        batch: list[dict[str, Any]] = []
-        budget = 0
-        for item, size in built:
-            if batch and (len(batch) >= PUSH_BATCH or budget + size > MAX_PUSH_BYTES):
-                sent += await self._send_batch(scope, batch, pending)
-                batch, budget = [], 0
-            batch.append(item)
-            budget += size
-        if batch:
-            sent += await self._send_batch(scope, batch, pending)
-        return sent
+        return pending, built
 
     def _build(
         self,
@@ -542,6 +564,12 @@ class SyncEngine:
     ) -> int:
         by_id = {item_id: (payload, item_hash) for item_id, payload, item_hash in pending}
         reply = _payload(await self._request("sync.push", {"scope": scope, "items": wire}))
+        return await asyncio.to_thread(self._record_reply, scope, reply, by_id)
+
+    def _record_reply(
+        self, scope: str, reply: dict[str, Any], by_id: dict[str, tuple[Any, str]]
+    ) -> int:
+        """Write what the server said into the local record. Off the loop."""
         accepted = reply.get("accepted")
         for entry in accepted if isinstance(accepted, list) else []:
             if not isinstance(entry, dict):

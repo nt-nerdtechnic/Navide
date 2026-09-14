@@ -754,3 +754,75 @@ async def test_a_device_without_a_key_offers_nothing(monkeypatch):
 
     assert await link._offer_sync_key("dev-b") is False
     assert sent == []
+
+
+# ── the blocking half stays off the event loop ───────────────────────────────
+@pytest.mark.asyncio
+async def test_the_disk_work_of_a_round_runs_in_a_worker_thread(tmp_path, account_key):
+    """A round reads every skill tree and instruction file and encrypts each
+    record. On the loop that is a stall the backend's own watchdog calls a
+    fault at two seconds, so the adapter must be touched from a worker."""
+    import threading
+
+    server = FakeServer()
+    device = Device(tmp_path, server, "dev-a", {"p1": {"id": "p1", "prompt": "hello"}})
+    loop_thread = threading.get_ident()
+    seen: list[int] = []
+
+    original = device.adapter.snapshot
+    device.adapter.snapshot = lambda: (seen.append(threading.get_ident()), original())[1]
+
+    await device.sync()
+
+    assert seen, "the adapter was never asked what it holds"
+    assert loop_thread not in seen, "snapshot() ran on the event loop thread"
+
+
+@pytest.mark.asyncio
+async def test_incoming_items_are_applied_off_the_loop_too(tmp_path, account_key):
+    import threading
+
+    server = FakeServer()
+    a = Device(tmp_path, server, "dev-a", {"p1": {"id": "p1", "prompt": "hello"}})
+    b = Device(tmp_path, server, "dev-b")
+    await a.sync()
+
+    loop_thread = threading.get_ident()
+    seen: list[int] = []
+    original = b.adapter.apply
+    b.adapter.apply = lambda item_id, payload: (
+        seen.append(threading.get_ident()),
+        original(item_id, payload),
+    )[1]
+
+    await b.sync()
+
+    assert seen, "nothing was applied"
+    assert loop_thread not in seen, "apply() ran on the event loop thread"
+
+
+@pytest.mark.asyncio
+async def test_a_failing_key_offer_cannot_break_pairing(monkeypatch, account_key):
+    """`_finish_pairing` awaits the offer as its last step, and the only except
+    above it is a narrow PairingError — so anything escaping here would come out
+    of the pairing exchange after the pin was already written."""
+    from agent_team_backend import remote_roster
+
+    link = _bare_link()
+    # Both of these must succeed, or the failure below is never reached: the
+    # first version of this test passed a bogus public key, wrap_for raised
+    # first, and the guard being tested was never entered. The mutation that
+    # moves the send back outside the guard is what exposed it.
+    monkeypatch.setattr(remote_roster, "public_key_for", lambda _d: "valid-looking")
+    monkeypatch.setattr(sync_keyring, "wrap_for", lambda **kw: "sealed")
+
+    reached = []
+
+    async def _explode(*a, **k):
+        reached.append(a)
+        raise RuntimeError("the socket went away mid-send")
+
+    monkeypatch.setattr(link, "_send_pair_frame", _explode)
+
+    assert await link._offer_sync_key("dev-b") is False  # swallowed, not raised
+    assert reached, "the send was never attempted, so nothing was proven"
