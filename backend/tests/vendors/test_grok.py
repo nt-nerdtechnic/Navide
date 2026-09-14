@@ -429,8 +429,10 @@ def test_resume_preflight_can_now_check_a_session(_grok_home: Path) -> None:
 
     assert app_module._session_exists("grok", WS, SID) is True
     assert app_module._session_exists("grok", WS, "not-a-session") is False
+    # The tail is spelled with the host's own separator: the lookup returns a
+    # native path, so a hard-coded "/" only matches away from Windows.
     assert app_module._session_lookup_path("grok", WS, SID).endswith(
-        f"{GROUP}/{SID}/updates.jsonl"
+        str(Path(GROUP) / SID / "updates.jsonl")
     )
 
 
