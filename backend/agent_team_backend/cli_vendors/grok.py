@@ -710,9 +710,10 @@ SPEC = VendorSpec(
         config_dir=".grok",
         config_file=("user-settings.json",),
     ),
-    # Empty, not None: grok has no auth subcommand — its TUI prompts for
-    # sign-in on a bare launch — so the flags are stripped and nothing added.
-    login_command_args="",
+    # `grok login` defaults to the browser OAuth flow at auth.x.ai, which a PTY
+    # pane can carry: the CLI opens the browser and waits. `--device-auth` is
+    # the headless alternative and is not what a desktop pane needs.
+    login_command_args="login",
     live_file=(".grok", "auth.json"),
     slot_file="auth.json",
     login_home_secret_file=("home", ".grok", "auth.json"),
@@ -728,9 +729,14 @@ SPEC = VendorSpec(
         "GROK_DAEMON_CHILD",
     ),
     make_log_reader=GrokLogReader,
-    install_dep=Dep("grok", "Grok CLI", "superagent-ai Grok coding agent", "agent_cli",
+    # xAI's own grok-build CLI. A same-named community CLI (superagent-ai/
+    # grok-cli) installs to the same ~/.grok/bin/grok, so `which grok` cannot
+    # tell them apart — the version string can: this one prints
+    # "grok <x.y.z> (<commit>)", the community one a bare "1.1.7".
+    install_dep=Dep("grok", "Grok CLI", "xAI Grok coding agent", "agent_cli",
         ["grok", "--version"], r"(\d+\.\d+\.\d+)",
-        install_cmd="curl -fsSL https://raw.githubusercontent.com/superagent-ai/grok-cli/main/install.sh | bash",
-        needs_terminal=True, requires_binaries=("curl",), optional=True, docs_url="https://github.com/superagent-ai/grok-cli",
+        install_cmd="curl -fsSL https://x.ai/cli/install.sh | bash",
+        needs_terminal=True, requires_binaries=("curl",), optional=True,
+        docs_url="https://docs.x.ai/build/cli/reference",
         update_cmd="grok update"),
 )

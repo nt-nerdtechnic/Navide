@@ -217,6 +217,52 @@ async def test_a_kickoff_verdict_that_beats_the_spawn_verdict_is_not_lost(
     assert result["kickoff"] == "sent"
 
 
+@pytest.mark.asyncio
+async def test_a_broadcast_that_raises_leaks_no_pending_kickoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only the TimeoutError path and the two verdict paths drop the kickoff
+    future. Anything else thrown between registering it and awaiting it — a
+    broadcast that raises — used to leave it in the dict for the life of the
+    process, one entry per call."""
+    agent_messaging.register("pa", "lead", "/ws/alpha", agent_key="claude")
+
+    async def exploding_broadcast(event: dict[str, Any], **_kwargs: Any) -> None:
+        raise RuntimeError("no sockets")
+
+    monkeypatch.setattr(app, "broadcast", exploding_broadcast)
+
+    with pytest.raises(RuntimeError):
+        await plan_mcp.cli_open_agent("codex", "reviewer", "review the PR", _ctx())
+
+    assert plan_mcp._pending_spawns == {}
+    assert plan_mcp._pending_kickoffs == {}
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_call_leaks_no_pending_kickoff(
+    captured: list[dict[str, Any]],
+) -> None:
+    """The cleanup catches BaseException rather than Exception on purpose.
+    CancelledError is not an Exception, and a cli_open_agent whose MCP client
+    disconnects mid-wait is cancelled exactly there — an `except Exception`
+    would walk past it and leave the future behind, one per dropped call."""
+    agent_messaging.register("pa", "lead", "/ws/alpha", agent_key="claude")
+    call = asyncio.create_task(
+        plan_mcp.cli_open_agent("codex", "reviewer", "review the PR", _ctx())
+    )
+    for _ in range(400):
+        if plan_mcp._pending_spawns:
+            break
+        await asyncio.sleep(0.005)
+    assert plan_mcp._pending_kickoffs, "the kickoff future is registered before the broadcast"
+    call.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await call
+    assert plan_mcp._pending_spawns == {}
+    assert plan_mcp._pending_kickoffs == {}
+
+
 def test_resolve_kickoff_ignores_an_unknown_request_id() -> None:
     assert plan_mcp.resolve_kickoff("nope", {"kickoff": "sent"}) is False
 

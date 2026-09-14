@@ -911,6 +911,11 @@ async def cli_open_agent(
             "closed. Check cli_list_targets before retrying: the pane may exist "
             "already, in which case reopening it would duplicate the work",
         }
+    except BaseException:
+        # Nobody is left to answer the kickoff either (a broadcast that threw,
+        # a cancelled call) — drop it with the spawn rather than leaking it.
+        _pending_kickoffs.pop(request_id, None)
+        raise
     finally:
         _pending_spawns.pop(request_id, None)
 
