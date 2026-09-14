@@ -557,7 +557,11 @@ def test_content_travels_for_a_skill_navide_created(tmp_path, monkeypatch):
     store, root = _make_store(tmp_path, monkeypatch)
     store.create_skill("writer", "writes", consent=True)
     (root / "writer" / "scripts").mkdir(parents=True)
-    (root / "writer" / "scripts" / "go.sh").write_text("echo hi\n", encoding="utf-8")
+    # write_bytes, not write_text: on Windows the text mode turns "\n" into
+    # "\r\n" on disk, and export_content reads bytes verbatim (a script must
+    # travel unchanged), so a text-mode fixture would assert a different file
+    # there than here.
+    (root / "writer" / "scripts" / "go.sh").write_bytes(b"echo hi\n")
 
     content = store.export_content("writer")
     assert content is not None
