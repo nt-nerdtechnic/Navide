@@ -581,3 +581,24 @@ def test_timestamp_falls_back_to_now_not_the_db_mtime(
     assert [e.event_type for e in events] == ["turn_complete"]
     stamped = datetime.fromisoformat(events[0].timestamp).timestamp()
     assert abs(stamped - time.time()) < 60
+
+
+def test_long_reply_keeps_its_closing_sentinel(tmp_path: Path, monkeypatch) -> None:
+    """A reply past the text cap must keep its TAIL: the loop's <<LOOP_DONE>>
+    and the messaging ---MSG-END--- both sit on the last line, and a head-only
+    slice threw them away — the loop then never saw the run finish."""
+    reader = _reader_rooted_at(tmp_path, monkeypatch)
+    db = _make_store(
+        tmp_path / ".cursor" / "chats", "8" * 32, _SID, cwd="/work/proj"
+    )
+    seen = _armed(reader, db)
+
+    body = "x" * 20_000
+    _append_blobs(db, "t", _assistant(f"{body}\n<<LOOP_DONE>>"))
+    events = reader.parse_activity(db, seen)
+
+    assert [e.event_type for e in events] == ["turn_complete"]
+    text = events[0].text
+    assert len(text) < 20_000                       # still capped
+    assert text.startswith("xxxx")                  # head kept
+    assert text.rstrip().endswith("<<LOOP_DONE>>")  # tail kept
