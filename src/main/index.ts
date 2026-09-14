@@ -127,7 +127,7 @@ import { resolveBackendDataDir, readUiSettingsText, UI_SETTINGS_FILE } from './u
 import { PlanWindowRegistry } from './plan-windows'
 import { warnMain } from './main-log'
 import { isAppWindowSender, UNTRUSTED_SENDER } from './ipcSender'
-import { installWindowControls } from './window-controls'
+import { drawnFrameWhereNeeded, installWindowControls } from './window-controls'
 import { openInExternalTerminal } from './external-terminal'
 import { isMac } from '../shared/osplat'
 import {
@@ -2873,6 +2873,13 @@ async function openLegacyPlanWindow(workspacePath: string, relPath?: string): Pr
     width: 1100,
     height: 760,
     title: 'Plans',
+    // The only Host window that still took the system's frame. On Windows and
+    // Linux that made it the odd one out — every other window in the app draws
+    // its own bar there — so it hides the bar and PlanWindowApp draws the
+    // replacement. macOS keeps the system frame it has always had: hiding it
+    // there would change a window that is not in the fix's scope, and the
+    // traffic lights it would then need are the thing that already works.
+    ...drawnFrameWhereNeeded(),
     backgroundColor: '#0d1117',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
