@@ -58,6 +58,19 @@ export function normalizeResumeSessionId(agentKey: string, sessionId: string): s
   return specFor(agentKey)?.normalizeSessionId?.(id) ?? id
 }
 
+/** Characters a session id may contain before it is interpolated into a
+ * resume command. The command runs as `[shell, '-ilc', cmd]`, so an id
+ * carrying `;` or a backtick is code, not an argument.
+ *
+ * Mirrors the backend's `_SAFE_SESSION_ID` (mcp_server/server.py), which
+ * refuses such an id before the spawn is ever broadcast; this is the second
+ * layer, for a renderer that must not trust that the first one ran. */
+export const SHELL_SAFE_SESSION_ID = /^[A-Za-z0-9._:/-]{1,255}$/
+
+export function isShellSafeSessionId(sessionId: string): boolean {
+  return SHELL_SAFE_SESSION_ID.test(sessionId)
+}
+
 /** A saved conversation is data, not permission to start a replacement. For a
  * vendor that says so, keep the record untouched when its transcript is
  * unavailable; a fresh spawn stays an explicit user action from Agent History. */

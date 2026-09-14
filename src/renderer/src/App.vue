@@ -166,6 +166,7 @@ import {
   acquirePaneRebuildLock,
   cancelStalePendingCreate,
   dedupeRestorablePanes,
+  isShellSafeSessionId,
   modelArgsFor,
   type CliModelRequest,
   normalizeResumeSessionId,
@@ -2405,6 +2406,17 @@ function mcpSpawnCommandOverride(req: {
 }): string {
   const sessionId = (req.sessionId ?? '').trim()
   if (!sessionId) return ''
+  // Second layer of the backend's shape check: the id goes into a shell
+  // command string, so anything that could split into more words is refused
+  // here too rather than trusted to have been refused upstream.
+  if (!isShellSafeSessionId(sessionId)) {
+    recordDiagnostic({
+      level: 'warn',
+      code: 'spawn.resume-unsafe-id',
+      message: `session id refused — not shell-safe, opening a fresh pane instead`,
+    })
+    return ''
+  }
   const spec = agentSpecs.find((s) => s.agentKey === req.agentKey)
   const resume = buildResumeCommand(req.agentKey, sessionId, skipFlagFor(req.agentKey, spec), '', {
     model: req.model ?? '',
