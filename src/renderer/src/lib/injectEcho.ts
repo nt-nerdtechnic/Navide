@@ -82,6 +82,24 @@ export function injectionVerified(
   return echo !== null && echo !== 'growth' && submit !== null && submit !== 'growth'
 }
 
+/** Whether a spawn kickoff landed. Strict evidence (injectionVerified) is
+ *  unreachable for the common case: Claude Code collapses a multi-line paste
+ *  to "[Pasted text #N +M lines]", so the tail is never on screen, Enter can
+ *  only be judged by growth, and every long kickoff read 'unverified' — which
+ *  the retry loop then retyped or reported failed with a resend hint, doubling
+ *  the task. Once the prompt-ready gate has opened (idle + quiet), the pane is
+ *  not painting anything of its own, so growth after the paste and growth
+ *  after Enter are the CLI reacting to us and count as verified. Without the
+ *  gate, growth stays what it was: a booting TUI repainting. */
+export function kickoffVerified(
+  echo: EchoEvidence | null,
+  submit: SubmitEvidence | null,
+  promptReady: boolean,
+): boolean {
+  if (injectionVerified(echo, submit)) return true
+  return promptReady && echo !== null && submit !== null
+}
+
 /** Growth that counts as "echoed" for a payload of this size.
  *
  *  A flat 40 chars is unreachable for a short prompt: a one-line instruction
@@ -223,8 +241,13 @@ export function submitEvidence(opts: {
     // A hint that was already up before this Enter proves nothing about THIS
     // message: only a hint that is new, or one more copy of our tail in the
     // buffer (the enqueued message redrawn above the composer), does.
+    // "One more" is a floor, not an exact count: the clean buffer is the raw
+    // output stream, and an Ink TUI redraws its whole bottom region on every
+    // spinner frame — several copies of the composer (still holding our tail)
+    // land per second, so an exact +1 was never met and every second mid-turn
+    // delivery read as unsubmitted after 3 Enters.
     if (opts.baseline && opts.baseline.queuedHint) {
-      return countTail(opts.buffer ?? '', opts.tail) === opts.baseline.tailCount + 1 ? 'queued' : null
+      return countTail(opts.buffer ?? '', opts.tail) > opts.baseline.tailCount ? 'queued' : null
     }
     return 'queued'
   }

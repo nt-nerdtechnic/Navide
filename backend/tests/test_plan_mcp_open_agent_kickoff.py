@@ -134,6 +134,11 @@ async def test_open_agent_treats_an_unverified_kickoff_as_failed(
 
     assert result["kickoff"] == "failed"
     assert "cli_send" in result["hint"]
+    # But NOT a blind resend: 'unverified' is also what the window answers when
+    # its own text is still sitting in the composer, where a resend would
+    # submit both as one prompt. The caller is told to look first.
+    assert "cli_get_status" in result["hint"]
+    assert "never reached" not in result["hint"]
 
 
 @pytest.mark.asyncio
@@ -151,6 +156,12 @@ async def test_open_agent_times_out_the_kickoff_wait_as_failed(
     assert result["ok"] is True
     assert result["kickoff"] == "failed"
     assert "cli_send" in result["hint"]
+    # The window may still be typing it past the deadline (a cold CLI plus its
+    # session-marker turn): a resend-now hint would double the task once it
+    # lands, so the timeout reads as "look first", not "never arrived".
+    assert "cli_get_status" in result["hint"]
+    assert "never reached" not in result["hint"]
+    assert "may still be typing" in " ".join(result["advisories"])
     assert plan_mcp._pending_kickoffs == {}
 
 

@@ -44,6 +44,17 @@ describe('kickoffRequestedPane waits for the prompt, not for one quiet second', 
   })
 })
 
+describe('kickoffRequestedPane judges the injection against the gate it waited on', () => {
+  it('uses kickoffVerified with the prompt-ready result, not the strict check alone', () => {
+    // The strict check never passes for a collapsed paste (Claude Code shows
+    // "[Pasted text #N +M lines]" for a multi-line task, so the tail is never
+    // on screen and Enter is judged by growth); judged strictly, every long
+    // kickoff was retyped or reported failed with a resend hint.
+    expect(kickoff()).toContain('kickoffVerified(evidence.echo ?? null, evidence.submit ?? null, promptReady)')
+    expect(kickoff()).not.toContain('injectionVerified(')
+  })
+})
+
 describe('kickoffRequestedPane retries an unverified injection at most once', () => {
   it('bounds the attempts at 2', () => {
     expect(appSource).toContain('const KICKOFF_MAX_ATTEMPTS = 2')
@@ -89,5 +100,22 @@ describe('the kickoff verdict reaches the waiting cli_open_agent call', () => {
     // go out from there when nothing settled it.
     const fin = kickoff().slice(kickoff().lastIndexOf('} finally {'))
     expect(fin).toContain("emitKickoffVerdict('failed'")
+  })
+})
+
+describe('deliverAgentMessage marks delivered-pending before the Enter, not after', () => {
+  // An idle CLI writes the user record the moment it submits, and that record
+  // can reach the agent.activity handler inside injectPane's 200ms submit
+  // poll. A consume that lands before its mark is dropped (count already 0),
+  // and the mark that follows then holds RUNNING for the whole 120s fuse.
+  it('marks first, injects second, and unmarks on an injection failure', () => {
+    const fn = block('async function deliverAgentMessage(', '\n/** How long after the last keystroke')
+    const mark = fn.indexOf('markDeliveredPending?.()')
+    const inject = fn.indexOf("await injectPane(paneId, text, 'agent-msg', true)")
+    expect(mark).toBeGreaterThan(-1)
+    expect(inject).toBeGreaterThan(mark)
+    const failure = fn.indexOf('if (!ok) {', inject)
+    expect(failure).toBeGreaterThan(-1)
+    expect(fn.slice(failure, failure + 120)).toContain('clearDeliveredPending?.()')
   })
 })

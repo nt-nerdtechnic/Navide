@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   composerHoldsPayload, echoEvidence, echoLanded, echoTimeoutFor, growthNeededFor, injectionVerified,
-  normalizeForMatch, submitBaseline, submitEvidence, submitLanded, TAIL_MATCH_LEN
+  kickoffVerified, normalizeForMatch, submitBaseline, submitEvidence, submitLanded, TAIL_MATCH_LEN
 } from '../injectEcho'
 
 describe('normalizeForMatch', () => {
@@ -253,6 +253,21 @@ describe('submitEvidence', () => {
     ).toBe('queued')
   })
 
+  it('accepts queued over a pre-existing hint when the tail was drawn MORE than once more', () => {
+    // The clean buffer is the raw output stream: an Ink TUI redraws its whole
+    // bottom region on every spinner frame, so the composer holding our tail
+    // is copied several times during the 2.5s poll. An exact +1 never matched
+    // and the delivery read as unsubmitted after 3 Enters.
+    const before = 'first: run the tests\nPress up to edit queued messages'
+    const baseline = submitBaseline({ screen: QUEUED_SCREEN, buffer: before, tail: 'runthetests' })
+    const after = before + '\n> run the tests\n> run the tests\n> run the tests\nPress up to edit queued messages'
+    expect(
+      submitEvidence({
+        tailWasOnScreen: true, tail: 'runthetests', screen: QUEUED_SCREEN, grownBy: 80, buffer: after, baseline,
+      }),
+    ).toBe('queued')
+  })
+
   it('accepts queued when the hint was absent before this Enter', () => {
     const baseline = submitBaseline({ screen: '│ > run the tests', buffer: '> run the tests', tail: 'runthetests' })
     expect(baseline).toEqual({ queuedHint: false, tailCount: 1 })
@@ -329,5 +344,33 @@ describe('composerHoldsPayload', () => {
 
   it('never holds on an empty tail', () => {
     expect(composerHoldsPayload('anything at all', '')).toBe(false)
+  })
+})
+
+describe('kickoffVerified', () => {
+  // Claude Code collapses a multi-line paste to "[Pasted text #N +M lines]":
+  // the tail is never on screen, so Enter can only ever be judged by growth
+  // and the strict check is unreachable for every long kickoff. Past the
+  // prompt-ready gate the pane paints nothing of its own, so growth is the
+  // CLI reacting to us.
+  it('is the strict verdict when that already passes', () => {
+    expect(kickoffVerified('tail', 'tail-left', false)).toBe(true)
+    expect(kickoffVerified('placeholder', 'queued', false)).toBe(true)
+  })
+
+  it('accepts growth-only evidence once the prompt-ready gate opened', () => {
+    expect(kickoffVerified('growth', 'growth', true)).toBe(true)
+    expect(kickoffVerified('placeholder', 'growth', true)).toBe(true)
+  })
+
+  it('keeps growth-only evidence unverified when the gate never opened', () => {
+    expect(kickoffVerified('growth', 'growth', false)).toBe(false)
+    expect(kickoffVerified('placeholder', 'growth', false)).toBe(false)
+  })
+
+  it('never vouches for a missing half, gate or not', () => {
+    expect(kickoffVerified(null, 'growth', true)).toBe(false)
+    expect(kickoffVerified('growth', null, true)).toBe(false)
+    expect(kickoffVerified(null, null, true)).toBe(false)
   })
 })

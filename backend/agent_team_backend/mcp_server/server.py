@@ -783,9 +783,11 @@ async def cli_open_agent(
     submitted — or `kickoff: "failed"`: the injection could not be verified
     after a bounded retry, or no verdict arrived in time. A failed kickoff is
     still `ok: true` (the pane is open; do NOT open it again) and comes with
-    `hint`, which says to resend the task with cli_send to the returned
-    address, and the window's reason in `advisories`. There is no "pending"
-    answer, so nothing needs polling to learn whether the task arrived.
+    `hint` and the window's reason in `advisories`. FOLLOW THE HINT: when the
+    window saw the task not go in, it says to resend with cli_send to the
+    returned address; when the window could not tell (its text may be sitting
+    in the composer, or it was still typing when the deadline hit), it says to
+    read cli_get_status first — a blind resend there doubles the task.
     For a pane caller, the new pane is asked to report its result to you by
     message when it finishes — but that report is the child agent's own
     output, not a guarantee from Navide: it is held until you are between
@@ -923,10 +925,13 @@ async def cli_open_agent(
             kickoff_future, timeout=_KICKOFF_VERDICT_TIMEOUT_S
         )
     except asyncio.TimeoutError:
+        # The window may still be typing it (a cold CLI plus its session
+        # marker turn can outlast this deadline), so this is "unknown", not
+        # "did not arrive" — the hint below must not say resend outright.
         kickoff_verdict = {
-            "kickoff": "failed",
+            "kickoff": "unverified",
             "reason": f"no kickoff verdict from the window within "
-            f"{_KICKOFF_VERDICT_TIMEOUT_S:.0f}s",
+            f"{_KICKOFF_VERDICT_TIMEOUT_S:.0f}s — it may still be typing the task",
         }
     finally:
         _pending_kickoffs.pop(request_id, None)
@@ -949,15 +954,29 @@ async def cli_open_agent(
     # Two answers only. "unverified" is the window's honest word for "bytes
     # written, nothing seen" — to the caller that is a task that did not
     # arrive, and the cure is the same as for an outright failure.
-    if str(kickoff_verdict.get("kickoff") or "") == "sent":
+    kickoff = str(kickoff_verdict.get("kickoff") or "")
+    if kickoff == "sent":
         result["kickoff"] = "sent"
-    else:
+    elif kickoff == "failed":
         result["kickoff"] = "failed"
         result["hint"] = (
             f"the task never reached the pane's prompt — resend it with "
             f"cli_send(to=\"{result['address']}\", text=...); the pane is open, "
             f"do not open another"
         )
+    else:
+        # "unverified" (the window saw its text still sitting in the composer,
+        # or could not tell) and the timeout above: the task may well be in.
+        # A blind resend here is what doubles a task, so the caller is told to
+        # look first.
+        result["kickoff"] = "failed"
+        result["hint"] = (
+            f"the task could not be confirmed as delivered — it may already be "
+            f"in the pane. Read cli_get_status(target=\"{result['address']}\") "
+            f"first: resend with cli_send only if ui.kickoff is not \"sent\" and "
+            f"ui.buffer shows an empty prompt; the pane is open, do not open another"
+        )
+    if kickoff != "sent":
         reason = str(kickoff_verdict.get("reason") or "")
         if reason:
             advisories.append(f"kickoff: {reason}")
