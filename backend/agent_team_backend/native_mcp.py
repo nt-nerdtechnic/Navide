@@ -129,7 +129,7 @@ NATIVE_SOURCES: tuple[NativeMcpSource, ...] = (
     NativeMcpSource("kilo", (".config", "kilo", "kilo.json"), "jsonc", ("mcp",)),
     NativeMcpSource("kilo", (".config", "kilo", "kilo.jsonc"), "jsonc", ("mcp",)),
     NativeMcpSource("kimi", (".kimi-code", "mcp.json"), "jsonc", ("mcpServers",)),
-    NativeMcpSource("grok", (".grok", "config.toml"), "toml", ("mcp_servers",)),
+    NativeMcpSource("grok", (".grok", "user-settings.json"), "jsonc", ("mcp", "servers"), "id"),
     NativeMcpSource(
         "antigravity", (".gemini", "config", "mcp_config.json"), "jsonc", ("mcpServers",)
     ),
