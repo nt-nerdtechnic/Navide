@@ -19,7 +19,7 @@ The root [README](../../README.md) introduces the product and current distributi
 
 | Document | Purpose |
 |---|---|
-| [Getting started](getting-started.md) | Download the unsigned preview or install from source, then complete the first launch |
+| [Getting started](getting-started.md) | Download the signed macOS build or the Windows or Linux installer, or install from source, then complete the first launch |
 | [User guide](user-guide.md) | Learn workspaces, panes, pipelines, coordination, Git, history, and editor workflows |
 | [Troubleshooting](troubleshooting.md) | Resolve startup, permissions, agent-session, analyzer, and token-tracking problems |
 

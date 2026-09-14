@@ -93,9 +93,16 @@ so `which grok` cannot tell them apart; the version string can — xAI's prints
 the integration: sign-in is `grok login` (browser OAuth at auth.x.ai), and MCP
 servers live in `~/.grok/config.toml` under `[mcp_servers.<name>]` — a TOML map
 keyed by the server's name, where a bare `url` means streamable HTTP — instead
-of a `mcp.servers` **list** in `~/.grok/user-settings.json`. Everything below
-still describes the community CLI and is kept as the record of how the
-integration was built.
+of a `mcp.servers` **list** in `~/.grok/user-settings.json`. Resume is
+`grok -r <id>` — `-s`/`--session-id` NAMES a new session and errors on an
+existing id, so the `grok -s` below no longer applies. Sessions are one
+directory each under `$GROK_HOME/sessions/<url-encoded-cwd>/<uuid7>/`
+(`updates.jsonl` transcript, `usage.json`, `summary.json`); the shared
+`~/.grok/grok.db` is gone. The transcript carries an explicit `turn_completed`
+record with the turn's tokens, so the 8-second-silence turn-end inference the
+community CLI needed was removed with it. `grok update` exists and is the
+update action. Everything below still describes the community CLI and is kept
+as the record of how the integration was built.
 
 The following notes preserve the research that informed the integration.
 

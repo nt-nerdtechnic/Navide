@@ -1280,7 +1280,7 @@
             "autoReclaim": "30"
           }
         },
-        "intro": "設定視窗的十六個分頁分別管什麼、Navide Cloud 怎麼把幾台機器接成一個私有網路，以及選單、獨立視窗與資源維護這些散在主畫面之外的系統面。",
+        "intro": "設定視窗的十七個分頁分別管什麼、Navide Cloud 怎麼把幾台機器接成一個私有網路，以及選單、獨立視窗與資源維護這些散在主畫面之外的系統面。",
         "s1": {
           "title": "設定總覽",
           "p1": "設定視窗用 <kbd class=\"syh-kbd\">⌘,</kbd> 開啟，標題列的齒輪鈕是同一個入口。左側側欄分五組，共 <strong>17 個分頁</strong>。",
@@ -1290,7 +1290,7 @@
             "title": "搜尋索引不是全覆蓋",
             "text": "索引是一份人工維護的清單，<strong>CLI Agents、Layout、Extensions 這三個分頁沒有任何條目</strong>，搜尋不到它們裡面的東西，得自己點進去。"
           },
-          "h2": "十六個分頁",
+          "h2": "十七個分頁",
           "tabTable": {
             "group": "分組",
             "tab": "分頁",
@@ -1439,7 +1439,7 @@
           "appearance": {
             "theme": "<strong>Theme</strong> — 五種內建：Dark (GitHub)、Midnight、Forest、Light、High Contrast，預設是 Dark (GitHub)。",
             "colors": "<strong>Custom Colors</strong> — 八個可覆寫的色彩 token（背景、表面、文字、次要文字、邊框、強調、成功、危險）。覆寫疊在目前主題之上，<strong>換主題時保留</strong>；<em>↺ Reset to defaults</em> 還原。",
-            "language": "<strong>Language</strong> — <strong>只有兩種</strong>：<code>繁體中文</code> 與 <code>English</code>。這是使用者層級偏好，套用到所有工作區。",
+            "language": "<strong>Language</strong> — <strong>只有兩種</strong>：<code>繁體中文</code> 與 <code>English</code>。沒選過之前，Navide 跟隨系統語言。這是使用者層級偏好，套用到所有工作區。",
             "uiScale": "<strong>Interface Scale</strong> — 整體介面縮放，六段 80%／90%／100%／110%／125%／150%，預設 100%，快捷鍵 <kbd class=\"syh-kbd\">⇧⌘=</kbd>／<kbd class=\"syh-kbd\">⇧⌘-</kbd>／<kbd class=\"syh-kbd\">⇧⌘0</kbd>。它走的是 Electron 的頁面縮放而不是 CSS 變數，所以文字、圖示、邊框、間距會一起變，而且由主行程套用到<strong>每一個視窗</strong>，外掛視窗也算。它和面板字級是<strong>兩條獨立的軸</strong>：<kbd class=\"syh-kbd\">⌘=</kbd>／<kbd class=\"syh-kbd\">⌘-</kbd>／<kbd class=\"syh-kbd\">⌘0</kbd> 只改終端機<strong>內容</strong>的字級（整個視窗的 CLI 面板共用同一個值），Interface Scale 改的是外面那層殼；兩者是<strong>相乘</strong>的，就像瀏覽器的頁面縮放疊在網站自己的字級上。",
             "restore": "<strong>Restore Windows</strong> — 下次啟動時重開上次結束時開著的工作區視窗。"
           },
@@ -1728,7 +1728,7 @@
             "text": "Electron 內建的整窗縮放（<em>Zoom In</em>／<em>Zoom Out</em>／<em>Actual Size</em>）被拿掉了，因為 Navide 自己有兩條縮放軸：<kbd class=\"syh-kbd\">⌘=</kbd>／<kbd class=\"syh-kbd\">⌘-</kbd>／<kbd class=\"syh-kbd\">⌘0</kbd> 改終端機<strong>內容</strong>的字級，<kbd class=\"syh-kbd\">⇧⌘=</kbd>／<kbd class=\"syh-kbd\">⇧⌘-</kbd>／<kbd class=\"syh-kbd\">⇧⌘0</kbd> 改<strong>整體介面縮放</strong>（設定 ▸ Appearance ▸ Interface Scale）。原生 role 留著的話，它們的 accelerator 會搶在這兩者前面。<kbd class=\"syh-kbd\">⌘R</kbd> 也改成「重建焦點面板」，重新載入整個視窗改用 <kbd class=\"syh-kbd\">⇧⌘R</kbd>，選單裡則是一個不帶快捷鍵的 <em>Reload Window</em>。<kbd class=\"syh-kbd\">⌘W</kbd> 在 macOS 上留給了「關閉分頁」，所以關視窗只剩紅綠燈或 <kbd class=\"syh-kbd\">⌘Q</kbd>。"
           },
           "h3": "Schedule（排程）— 不是獨立視窗",
-          "p1": "這台 Mac 的背景排程列在<strong>右側槽的一個分頁</strong>裡，分頁名稱是 <strong>Schedule</strong>（🗓），也可以搬到上下兩槽。它不是從 Window 選單開的視窗。分三段：",
+          "p1": "這台機器的背景排程列在<strong>右側槽的一個分頁</strong>裡，分頁名稱是 <strong>Schedule</strong>（🗓），也可以搬到上下兩槽。它不是從 Window 選單開的視窗。macOS 上分三段；Linux 只有 crontab 一段；Windows 依設計什麼都不列——Navide 本身從不建立排程工作，而工作排程器已經在管理機器上的工作。",
           "scheduleTable": {
             "section": "區塊",
             "source": "來源",
@@ -2901,7 +2901,7 @@
             "protocolOnly": "僅輸出協定"
           },
           "note1": "<strong>十四家都送得出訊息</strong>，差別只在走哪條路。輸出協定每家都通——Navide 讀得到各家 agent「講完一段話」以及它講了什麼。MCP 工具則要那家 CLI 提供接入點（啟動參數、一個帶整份設定的環境變數，或一份只給這個 pane 用的設定目錄鏡像），Aider、Droid、Muse Code、Pi 目前沒有，所以它們只走輸出協定。",
-          "note2": "兩個實務上的但書：<strong>Antigravity</strong> 在「agent 反問你」的那個回合送不出訊息（那個回合不帶回覆文字），一般回答的回合正常；<strong>Qwen、Pi、Grok、Kimi</strong> 沒有明確的「回合結束」訊號，Navide 靠 8 秒靜默推斷，所以送出時機會晚一些。"
+          "note2": "兩個實務上的但書：<strong>Antigravity</strong> 在「agent 反問你」的那個回合送不出訊息（那個回合不帶回覆文字），一般回答的回合正常；<strong>Qwen、Pi、Kimi</strong> 沒有明確的「回合結束」訊號，Navide 靠 8 秒靜默推斷，所以送出時機會晚一些。"
         },
         "s4": {
           "title": "怎麼指定對方",
@@ -2943,7 +2943,7 @@
             "quiet": "最近 2 秒沒有任何輸出"
           },
           "p2": "條件不滿足就先排隊，滿足了自動送出。所以對方正在跑長任務時，你的訊息會等它做完 — 這是刻意的。對方收到的訊息開頭會標明來源，它才知道要回覆給誰。",
-          "note": "少數 CLI（Qwen、Pi、Grok、Kimi）的紀錄裡沒有「回合結束」這個訊號，Navide 無從得知它們何時做完，改以「安靜 8 秒」當作結束。所以送給這幾種 CLI 的訊息可能會多等一會兒。"
+          "note": "少數 CLI（Qwen、Pi、Kimi）的紀錄裡沒有「回合結束」這個訊號，Navide 無從得知它們何時做完，改以「安靜 8 秒」當作結束。所以送給這幾種 CLI 的訊息可能會多等一會兒。"
         },
         "s6": {
           "title": "你在畫面上看得到什麼",
@@ -3572,7 +3572,7 @@
             "cli_usage": "各家 CLI 還剩多少額度；派工前先看，否則訊息會送達到一個已經用完額度的 CLI 手上",
             "cli_token_stats": "這個工作區目前的 token 用量"
           },
-          "note3": "詳細用法見本頁的「CLI 互傳訊息」主題。「等對方做完」是盡力而為：多數 CLI（含 Cursor）會自己回報回合結束，Kimi／Grok／Pi／Qwen 是靠 8 秒沒動靜推論的。回傳的 <code>source</code> 就是在講這次的「做完」有多可信，這幾家請當作參考而不是保證。若等待途中對方的視窗被關掉、pane 被砍掉，<code>source</code> 會是 <code>target_lost</code>：訊息確實送出去了，只是已經無法確認它做完沒有——這不是送出失敗，不要重送。",
+          "note3": "詳細用法見本頁的「CLI 互傳訊息」主題。「等對方做完」是盡力而為：多數 CLI（含 Cursor）會自己回報回合結束，Kimi／Pi／Qwen 是靠 8 秒沒動靜推論的。回傳的 <code>source</code> 就是在講這次的「做完」有多可信，這幾家請當作參考而不是保證。若等待途中對方的視窗被關掉、pane 被砍掉，<code>source</code> 會是 <code>target_lost</code>：訊息確實送出去了，只是已經無法確認它做完沒有——這不是送出失敗，不要重送。",
           "note4": "同一個工作區裡可以有兩個 pane 同名，這時候光靠名字說不清要找誰，上面幾個工具會直接以 <code>ambiguous-target</code> 拒絕，而不是隨便挑一個。要指定其中一個，就把 <code>cli_list_targets</code> 回傳的 <code>pane_id</code> 當參數傳給 <code>cli_send</code>、<code>cli_send_and_wait</code>、<code>cli_read_log</code>、<code>cli_get_status</code> 或 <code>cli_wait_idle</code>，這時候位址參數就不用填了。平常還是用名字比較好讀；pane 換了新的 CLI 重開之後 id 會換一個，遇到 <code>unknown-pane-id</code> 重新查一次即可。跨裝置的 pane 沒有本機 id，只能用名字定址。",
           "note5": "<code>cli_send</code> 的位址填 <code>group</code>，不是去找名叫 group 的 pane，而是廣播給<strong>自己所在分頁群組</strong>裡的其他 pane（同工作區）。這跟裸行協定的 <code>all</code> 不一樣：<code>all</code> 是整個視窗、不分群組。沒有分到任何群組的 pane 共用同一個隱含群組，所以它們彼此送得到，而不是誰也送不到。回傳的形狀也不一樣：<code>recipients</code> 裡每個收件者各有一個 <code>msg_key</code>，要分別拿去 <code>cli_check_message</code> 查；空的 <code>recipients</code> 代表你的群組裡沒有別人，不是失敗。代價與 <code>all</code> 相同：真的取名叫 group 的 pane 從此無法用名字定址。",
           "h4": "哪些 CLI 接得到",

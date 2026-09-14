@@ -1,6 +1,6 @@
 # Versioning and In-App Releases
 
-> **Current distribution status:** v0.1.50 is the latest signed and notarized macOS arm64 stable release, built and published by GitHub Actions and eligible for the in-app updater. (v0.1.49 was a one-off manual unsigned preview published while the signing key was being set up; v0.1.26–v0.1.48 were unsigned previews.) Every stable release from v0.1.50 onward goes through the signed workflow described below.
+> **Current distribution status:** v0.2.2 is the current stable release. It ships a signed and notarized macOS arm64 DMG/ZIP, an unsigned Windows x64 NSIS installer, and a Linux x64 AppImage and `.deb`, all built and published by GitHub Actions; the macOS, Windows and AppImage builds are eligible for the in-app updater. Windows on Arm and Linux arm64 are built only on a manual workflow dispatch and are not published yet. Every stable release from v0.1.50 onward goes through the signed workflow described below (v0.1.49 was a one-off manual unsigned preview published while the signing key was being set up; v0.1.26–v0.1.48 were unsigned previews).
 
 Navide uses semantic versions (`MAJOR.MINOR.PATCH`) and Git tags prefixed with
 `v`. `package.json` is the application version source of truth. The local build
@@ -21,20 +21,27 @@ configuration in `package.json`. Five seconds after startup, the Electron main
 process checks the stable releases in `nt-nerdtechnic/Navide`. The renderer can
 also start a manual check from the refresh button in the left sidebar.
 
-The application does not download or install silently. A user chooses
-**Update**, watches download progress, and then chooses **Restart**. The main
-process owns the updater state, so every open window sees the same result and a
-window opened later receives the current snapshot.
+Installing an update is always explicit: a user chooses **Update**, watches
+download progress, and then chooses **Restart**. Settings → Updates splits the
+flow into three toggles — automatic checks (on by default), automatic download
+of patch releases (on by default), and install-on-quit (off by default, because
+installing restarts the app and every CLI pane with it). The main process owns
+the updater state, so every open window sees the same result and a window
+opened later receives the current snapshot.
 
-GitHub Releases must contain all of these assets from the same signed build:
+GitHub Releases must contain all of these assets from the same build:
 
-- `Navide-<version>-arm64.dmg`
-- `Navide-<version>-arm64.zip`
-- DMG and ZIP `.blockmap` files
-- `latest-mac.yml`
+- macOS (signed and notarized): `Navide-<version>-arm64.dmg`,
+  `Navide-<version>-arm64.zip`, their `.blockmap` files, and `latest-mac.yml`
+- Windows x64 (not code-signed): `Navide-<version>-win-x64.exe`, its
+  `.blockmap`, and `latest.yml`
+- Linux x64: `Navide-<version>-x86_64.AppImage`, `Navide-<version>-amd64.deb`,
+  and `latest-linux.yml`
 
-The ZIP and `latest-mac.yml` are required for the macOS updater. Do not publish
-only the DMG.
+The ZIP and `latest-mac.yml` are required for the macOS updater, `latest.yml`
+for the Windows updater, and `latest-linux.yml` for the AppImage updater (the
+`.deb` updates through the package manager). Do not publish only the DMG. An
+arm64 Linux build, when published, adds `latest-linux-arm64.yml`.
 
 ## One-time GitHub setup
 
@@ -95,13 +102,14 @@ local development and must never be committed.
 4. Review the result, then answer the script's publish prompt. If you defer the
    push, publish later with `git push origin main` followed by
    `git push origin vX.Y.Z`.
-5. Watch the **Release macOS** Actions workflow. It installs locked
+5. Watch the **Release** Actions workflow. Its macOS job installs locked
    dependencies, verifies versions, runs frontend/backend tests, builds the
    backend, signs and notarizes Navide, validates every update asset, and only
-   then creates the public GitHub Release.
-6. Install the release DMG on a test Mac. Publish a newer patch release and use
-   the in-app flow to verify check, download, restart, and the resulting app
-   version.
+   then creates the public GitHub Release; the Linux x64 and Windows x64 jobs
+   run after it and add their installers and update manifests to that release.
+6. Install the release DMG on a test Mac and the installers on a test Windows
+   and Linux machine. Publish a newer patch release and use the in-app flow to
+   verify check, download, restart, and the resulting app version.
 
 For the first public release, also verify the documented clean-machine install path, onboarding flow, privacy statements, and supported-agent matrix. Add the actual release entry to `CHANGELOG.md` only after the GitHub Release and assets exist.
 
@@ -119,7 +127,7 @@ republishing an older release is not a rollback. If a release is broken:
 2. Fix or revert the defect on `main`.
 3. Publish a higher patch version through the normal signed workflow.
 4. Users who already installed the bad version receive that higher patch;
-   users unable to launch must reinstall from the new DMG.
+   users unable to launch must reinstall from the new release's installer.
 
 If signing credentials may be compromised, remove the Actions secrets, revoke
 the certificate/API key with Apple, and do not publish again until replacement

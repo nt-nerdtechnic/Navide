@@ -18,7 +18,7 @@ English | [繁體中文](../zh-TW/troubleshooting.md) | [日本語](../ja-JP/tro
 ## Backend health stays unavailable
 
 - Confirm another process is not blocking local loopback communication.
-- Check whether macOS security software denied the packaged Python backend.
+- Check whether operating-system security software (Gatekeeper, SmartScreen or Defender, an endpoint agent) denied the packaged Python backend.
 - In development, run `uv --project backend run python -m agent_team_backend` separately to expose startup errors.
 
 ## An agent CLI is missing
@@ -26,14 +26,14 @@ English | [繁體中文](../zh-TW/troubleshooting.md) | [日本語](../ja-JP/tro
 - Run the CLI's version command in a normal interactive terminal.
 - Restart Navide after installation so it receives the updated `PATH`.
 - Complete the CLI's own authentication flow before spawning it in Navide.
-- Confirm the executable name: `claude`, `codex`, `agy`, or `grok`.
+- Confirm the executable name: Settings → CLI Agents lists every supported CLI, shows the resolved path of each detected one, and offers the vendor's install command for a missing one.
 
 ## A CLI reports that its own auto-update failed
 
 A pane may show a vendor message such as `✘ Auto-update failed`. Several panes updating the same CLI at once can collide, because a CLI's installation directory is shared across every pane and profile.
 
 - Open Settings → CLI Agents. A failed update is reported there with the time, the versions involved, and which config home recorded it.
-- Use the update action on that row. It runs the CLI's own update command (`claude update`, `codex update`, `agy update`, `grok update`) in a terminal; Navide never updates a CLI itself. A CLI without an update subcommand links to its vendor documentation instead.
+- Use the update action on that row. It runs the CLI's own update command (for example `claude update`, `codex update`, `agy update`, `grok update`) in a terminal; Navide never updates a CLI itself. A CLI without an update subcommand links to its vendor documentation instead.
 - Set Auto-update to Manual for that CLI if collisions repeat. Navide then passes the vendor's own opt-out variable to every spawn, and you update from this panel instead.
 - A running session keeps the binary it started with; restart the pane after an update.
 
@@ -70,6 +70,15 @@ Codex, Antigravity, and Grok rely on log or database discovery to bind a new CLI
 
 Open **System Settings → Privacy & Security** and inspect Automation, Files and Folders, Accessibility, and Full Disk Access. Grant only permissions required for the specific CLI and workspace. Restart the affected application after changing permissions.
 
+## Windows blocks the first launch
+
+The Windows installer is not code-signed, so SmartScreen shows "Windows protected your PC" with the publisher listed as unknown. Choose **More info → Run anyway**. This is expected for every Navide installer until Windows code signing ships; it is not a sign of a tampered download — verify the file came from the GitHub release page if in doubt.
+
+## The Linux AppImage does not start
+
+- Make it executable first: `chmod +x Navide-<version>-x86_64.AppImage`. The AppImage bundles its own FUSE runtime, so no `libfuse` package is needed.
+- If you installed the `.deb`, launch `navide` from a terminal to see the startup error; updates for that package come from `apt`, not the in-app updater.
+
 ## Copy and paste behave oddly in a terminal pane
 
 - While a CLI has mouse reporting on, a plain drag is forwarded to the program and selects nothing. Hold **Option** (macOS) or **Shift** (Windows/Linux) while dragging to force a text selection.
@@ -92,7 +101,7 @@ Documentation injection is best-effort. Check the MCP configuration, package run
 Include:
 
 - Navide commit or version
-- macOS version and architecture
+- Operating system version and architecture
 - Agent CLI name and version
 - Reproduction steps
 - Expected and actual behavior

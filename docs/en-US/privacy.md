@@ -2,7 +2,7 @@
 
 English | [繁體中文](../zh-TW/privacy.md) | [日本語](../ja-JP/privacy.md) | [Documentation](README.md)
 
-Navide is **local-first**, not universally offline. Its Electron application, Python backend, terminal sessions, private project intelligence, workspace state, and orchestration logic run on your Mac. Data can leave the machine when you enable or use an external service.
+Navide is **local-first**, not universally offline. Its Electron application, Python backend, terminal sessions, private project intelligence, workspace state, and orchestration logic run on your machine. Data can leave the machine when you enable or use an external service.
 
 ## Data kept locally by Navide
 

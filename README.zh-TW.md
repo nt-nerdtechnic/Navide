@@ -13,7 +13,7 @@ Navide 是一套開源、AI-native 的軟體工程環境，專為一個人調度
 [下載 v0.2.2](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.2.2) | [開始使用](docs/zh-TW/getting-started.md) | [文件中心](docs/zh-TW/README.md) | [Roadmap](docs/zh-TW/roadmap.md)
 
 [![Latest release](https://img.shields.io/github/v/release/nt-nerdtechnic/Navide?sort=semver&label=release&logo=github)](https://github.com/nt-nerdtechnic/Navide/releases/latest)
-[![Electron](https://img.shields.io/badge/Electron-33-47848F?logo=electron)](https://www.electronjs.org/)
+[![Electron](https://img.shields.io/badge/Electron-44-47848F?logo=electron)](https://www.electronjs.org/)
 [![Vue 3](https://img.shields.io/badge/Vue-3-4FC08D?logo=vue.js)](https://vuejs.org/)
 [![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python)](https://python.org/)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)](docs/zh-TW/getting-started.md)
@@ -81,14 +81,14 @@ Navide 已經是創辦人持續開發這個專案時使用的主要工程環境�
 
 ## 目前已具備
 
-- **多 Agent Workspace：**在獨立 pane 中執行 13 種支援的 coding CLI（Aider、Antigravity CLI、Claude Code、Codex、Copilot CLI、Cursor CLI、Grok CLI、Kilo Code、Kimi Code、Muse Code、OpenCode、Pi、Qwen Code）或一般 Terminal。
+- **多 Agent Workspace：**在獨立 pane 中執行 14 種支援的 coding CLI（Aider、Antigravity CLI、Claude Code、Codex、Copilot CLI、Cursor CLI、Droid、Grok CLI、Kilo Code、Kimi Code、Muse Code、OpenCode、Pi、Qwen Code）或一般 Terminal。
 - **CLI 管理：**偵測已安裝的 Coding CLI、版本與安裝方式，並執行各 CLI 官方自己的更新與診斷指令。
 - **Session 生命週期：**偵測、保存、重建並恢復受支援的 CLI Session。
 - **可設定 Pipeline：**定義 Stage、平行 slot、Agent、角色、kickoff prompt、提問規則、文件查詢與完成 sentinel。
 - **Manager 協調：**路由結構化任務派發與 Worker 問題，並傳遞跨階段脈絡。
 - **自動化控制：**結合 Terminal 活動、Provider Log、Hook 與選用的本機分析，提供 Manual、Strict、Continuous、Full Auto 與 YOLO 模式。
 - **私有專案歷史：**在 `.agent-team/` 保存 Workspace 狀態、Run Event、Handoff 與相容的 Token 摘要。
-- **工程操作介面：**瀏覽與編輯檔案、檢視 Plan 與 Diff、處理衝突、使用 Terminal、Git、多 Repository 工作流、Issue、Review 與 AI Chat。
+- **工程操作介面：**瀏覽與編輯檔案、檢視 Plan 與 Diff、處理衝突、使用 Terminal、Git、多 Repository 工作流、Issue、Review 與內嵌的 AI Terminal。
 - **可觀察性：**依 Workspace、Stage、Pane 與 Run 檢視 History 及相容 CLI 的 Token 用量。
 
 ## 現在與目的地

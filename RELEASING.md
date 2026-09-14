@@ -1,8 +1,10 @@
 # Releasing Navide
 
-Navide ships as a signed + notarized macOS app. Users receive updates through
-the in-app updater (electron-updater), which downloads the full zip for every
-update — see "Updates are full downloads" below for why.
+Navide ships as a signed + notarized macOS app, an unsigned Windows x64
+installer, and a Linux x64 AppImage and `.deb`. Users receive updates through
+the in-app updater (electron-updater; the `.deb` updates through `apt`), which
+downloads the full zip for every update — see "Updates are full downloads"
+below for why.
 
 We use a **two-tier** model.
 
@@ -16,7 +18,8 @@ release (patch included), so the download point always reflects the latest
 version — no manual README edit is needed for any tier.
 
 Every release — patch or major — is fully built, signed, notarized, and
-published to GitHub Releases (with `latest-mac.yml`). There is no "hot patch"
+published to GitHub Releases (with `latest-mac.yml`, `latest.yml` and
+`latest-linux.yml`). There is no "hot patch"
 that skips the build; the difference between the tiers is only the **ceremony**
 around it, not the build itself.
 
@@ -41,13 +44,14 @@ Before running `./release.sh`, add a new entry to `src/renderer/src/lib/whatsNew
 `release.sh` bumps the version across all version files, runs the gates
 (typecheck + frontend + backend tests), builds locally, commits, tags, and
 (after you confirm) pushes `main` + the tag. The tag push triggers the
-**Release macOS** CI workflow, which signs, notarizes, and publishes the GitHub
-Release. Existing users' apps auto-check (startup + every 30 min), download the
+**Release** CI workflow: its macOS job signs, notarizes, and publishes the
+GitHub Release, then the Linux x64 and Windows x64 jobs add their installers.
+Existing users' apps auto-check (startup + every 30 min), download the
 update in the background, and prompt "Restart to update".
 
 That's the whole hotfix flow. `release.sh` already repointed the README
 download links (and the `latest-release` badge tracks the newest release), so
-new users downloading a DMG always get the latest version too.
+new users downloading an installer always get the latest version too.
 
 ## Minor / major flow
 
@@ -98,5 +102,6 @@ Recovery does not edit Plugin Storage or legacy seed data.
 - **First run after upgrade**: the backend backs up its JSON stores
   (`<app-data>/store-backups/<version>/`, last 2 kept) and forward-migrates the
   schema, so an upgrade never corrupts saved settings.
-- **Rollback**: users can download an older DMG from the Releases page; to pull
-  a bad auto-update, remove/replace its `latest-mac.yml` on the release.
+- **Rollback**: users can download an older installer from the Releases page; to
+  pull a bad auto-update, remove/replace its `latest-mac.yml` / `latest.yml` /
+  `latest-linux.yml` on the release.

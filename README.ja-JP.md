@@ -13,7 +13,7 @@ Navide は、一人の人間が複数の Coding Agent を指揮するための�
 [v0.2.2 をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.2.2) | [はじめに](docs/ja-JP/getting-started.md) | [ドキュメント](docs/ja-JP/README.md) | [ロードマップ](docs/ja-JP/roadmap.md)
 
 [![Latest release](https://img.shields.io/github/v/release/nt-nerdtechnic/Navide?sort=semver&label=release&logo=github)](https://github.com/nt-nerdtechnic/Navide/releases/latest)
-[![Electron](https://img.shields.io/badge/Electron-33-47848F?logo=electron)](https://www.electronjs.org/)
+[![Electron](https://img.shields.io/badge/Electron-44-47848F?logo=electron)](https://www.electronjs.org/)
 [![Vue 3](https://img.shields.io/badge/Vue-3-4FC08D?logo=vue.js)](https://vuejs.org/)
 [![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python)](https://python.org/)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)](docs/ja-JP/getting-started.md)
@@ -81,14 +81,14 @@ Navide はすでに、創設者がこのプロジェクトを進化させるた�
 
 ## 現在利用できる機能
 
-- **Multi-agent Workspace：** 対応する 13 種類のコーディング CLI（Aider、Antigravity CLI、Claude Code、Codex、Copilot CLI、Cursor CLI、Grok CLI、Kilo Code、Kimi Code、Muse Code、OpenCode、Pi、Qwen Code）または通常の Terminal を、それぞれ独立した Pane で実行できます。
+- **Multi-agent Workspace：** 対応する 14 種類のコーディング CLI（Aider、Antigravity CLI、Claude Code、Codex、Copilot CLI、Cursor CLI、Droid、Grok CLI、Kilo Code、Kimi Code、Muse Code、OpenCode、Pi、Qwen Code）または通常の Terminal を、それぞれ独立した Pane で実行できます。
 - **CLI 管理：** Install 済みの Coding CLI とそのバージョン・Install 方法を検出し、各 CLI 公式の更新コマンドと診断コマンドを実行できます。
 - **Session Lifecycle：** 対応 CLI の Session を検出、保存、再構築、再開できます。
 - **設定可能な Pipeline：** Stage、並列 Slot、Agent、Role、Kickoff Prompt、Question、Documentation Query、完了 Sentinel を定義できます。
 - **Manager Coordination：** 構造化された Dispatch と Worker Question を転送し、Stage 間で文脈を引き継ぎます。
 - **Automation Control：** Terminal Activity、Provider Log、Hook、任意の Local Analysis を、Manual、Strict、Continuous、Full Auto、YOLO Mode と組み合わせます。
 - **非公開の Project History：** Workspace ごとの状態、Run Event、Handoff、対応する Token Summary を `.agent-team/` に保持します。
-- **Engineering Surface：** ファイルの閲覧と編集、Plan と Diff の確認、競合解決、Terminal、Git と複数 Repository の Workflow、Issue 対応、変更 Review、AI Chat を利用できます。
+- **Engineering Surface：** ファイルの閲覧と編集、Plan と Diff の確認、競合解決、Terminal、Git と複数 Repository の Workflow、Issue 対応、変更 Review、組み込みの AI Terminal を利用できます。
 - **Observability：** Workspace、Stage、Pane、Run ごとに、History と対応 CLI の Token 使用量を確認できます。
 
 ## 現在地と目指す先

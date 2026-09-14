@@ -78,6 +78,6 @@ MCP servers and provider integrations execute according to their own configurati
 - External CLI permission semantics differ and may change between versions
 - Locally persisted API keys are not stored in an operating-system secret vault
 - Provider log readers depend on files or databases owned by external tools
-- Automatic update security depends on signed, notarized release artifacts and GitHub Release metadata
+- Automatic update security depends on signed, notarized release artifacts and GitHub Release metadata on macOS; Windows builds are not yet code-signed, so their updates install without signature verification
 
 The [Product Roadmap](docs/en-US/roadmap.md) defines policy, isolation, and secret handling as a dedicated long-term horizon. Documentation must not claim those controls have shipped before they are implemented and verified.

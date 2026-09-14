@@ -281,9 +281,9 @@ Probe が届いた場合にのみ存在します。Timeout 時、`reason` は似
 Turn のテキストを載せた `turn_complete` Event を発行します。**aider、antigravity、
 claude、codex、copilot、cursor、droid、grok、kilo、kimi、muse、opencode、pi、qwen** です。
 これらでは `cli_wait_idle` と `cli_get_status` の `last_activity.type` が正確な
-Turn 完了 Signal で解決します — ただし一点だけ但し書きがあります。**grok、kimi、
-pi、qwen** は自前の Turn 終了記録を持たず、Log の 8 秒の沈黙から `turn_complete`
-を合成するため、この四つでは Event 自体が推測であり、Turn の途中で十分に長い間が
+Turn 完了 Signal で解決します — ただし一点だけ但し書きがあります。**kimi、pi、
+qwen** は自前の Turn 終了記録を持たず、Log の 8 秒の沈黙から `turn_complete`
+を合成するため、この三つでは Event 自体が推測であり、Turn の途中で十分に長い間が
 空くと待機が早く終わることがあります。素の Terminal Pane にはそうした Signal が
 まったくありません —
 `cli_wait_idle` は新しい活動のない 10 秒の静穏期間から Idle を推測する方式に
@@ -294,8 +294,8 @@ pi、qwen** は自前の Turn 終了記録を持たず、Log の 8 秒の沈黙�
 
 これは、`cli_send_and_wait` の結果で読むべきフィールドが `source` である理由でも
 あります。どの CLI が生み出したものでも形は同じですが、確度は同じではありません。
-aider/antigravity/claude/codex/copilot/cursor/droid/kilo/muse/opencode からの
-`turn_complete` は Turn が終わったという CLI 自身の言明であり、grok/kimi/pi/qwen
+aider/antigravity/claude/codex/copilot/cursor/droid/grok/kilo/muse/opencode からの
+`turn_complete` は Turn が終わったという CLI 自身の言明であり、kimi/pi/qwen
 からの同じ値は上記の 8 秒沈黙による推測です。そして `quiet_period` — 素の
 Terminal Pane で唯一得られる結果 — は、Turn の終了を何も報告しなかったという
 意味なので、Signal を信用せず中身を確認してください。`target_lost` は四つ目の値で、

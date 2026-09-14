@@ -13,7 +13,7 @@ English | [繁體中文](README.zh-TW.md) | [日本語](README.ja-JP.md)
 [Download v0.2.2](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.2.2) | [Getting started](docs/en-US/getting-started.md) | [Documentation](docs/en-US/README.md) | [Roadmap](docs/en-US/roadmap.md)
 
 [![Latest release](https://img.shields.io/github/v/release/nt-nerdtechnic/Navide?sort=semver&label=release&logo=github)](https://github.com/nt-nerdtechnic/Navide/releases/latest)
-[![Electron](https://img.shields.io/badge/Electron-33-47848F?logo=electron)](https://www.electronjs.org/)
+[![Electron](https://img.shields.io/badge/Electron-44-47848F?logo=electron)](https://www.electronjs.org/)
 [![Vue 3](https://img.shields.io/badge/Vue-3-4FC08D?logo=vue.js)](https://vuejs.org/)
 [![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python)](https://python.org/)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)](docs/en-US/getting-started.md)
@@ -81,14 +81,14 @@ This is first-party dogfooding evidence, not independent customer validation. Th
 
 ## Available today
 
-- **Multi-agent workspaces:** run any of 13 supported coding CLIs — Aider, Antigravity CLI, Claude Code, Codex, Copilot CLI, Cursor CLI, Grok CLI, Kilo Code, Kimi Code, Muse Code, OpenCode, Pi, Qwen Code — or a plain terminal, each in its own pane.
+- **Multi-agent workspaces:** run any of 14 supported coding CLIs — Aider, Antigravity CLI, Claude Code, Codex, Copilot CLI, Cursor CLI, Droid, Grok CLI, Kilo Code, Kimi Code, Muse Code, OpenCode, Pi, Qwen Code — or a plain terminal, each in its own pane.
 - **CLI management:** detect installed coding CLIs, their versions and install methods, and run each CLI's own official update and diagnostic commands.
 - **Session lifecycle:** detect, persist, rebuild, and resume supported CLI sessions.
 - **Configurable pipelines:** define stages, parallel slots, agents, roles, kickoff prompts, questions, documentation queries, and completion sentinels.
 - **Manager coordination:** route structured dispatches and worker questions and carry context across stages.
 - **Automation controls:** combine terminal activity, provider logs, hooks, and optional local analysis through Manual, Strict, Continuous, Full Auto, and YOLO modes.
 - **Private project history:** retain workspace-scoped state, run events, handoffs, and compatible token summaries under `.agent-team/`.
-- **Engineering surfaces:** explore and edit files, inspect plans and diffs, resolve conflicts, use terminals, Git and multi-repository workflows, handle issues, review changes, and use AI Chat.
+- **Engineering surfaces:** explore and edit files, inspect plans and diffs, resolve conflicts, use terminals, Git and multi-repository workflows, handle issues, review changes, and use the embedded AI terminal.
 - **Observability:** inspect History and compatible CLI token usage by workspace, stage, pane, and run.
 
 ## Available today and the destination
