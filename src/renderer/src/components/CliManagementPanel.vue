@@ -10,6 +10,7 @@
 import { computed, defineAsyncComponent, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { useBackend } from '../composables/useBackend'
+import type { useCliProfiles } from '../composables/useCliProfiles'
 import { useOnboarding } from '../composables/useOnboarding'
 import type {
   AutoupdatePolicy, CliHealthEntry, CliUpdateRecord, MaintenanceAction, OnboardDep,
@@ -17,7 +18,21 @@ import type {
 
 const CliInstallDialog = defineAsyncComponent(() => import('./CliInstallDialog.vue'))
 
-const props = defineProps<{ backend: ReturnType<typeof useBackend> }>()
+const props = defineProps<{
+  backend: ReturnType<typeof useBackend>
+  /** Account store, so the install dialog's last step can tell "installed" from
+   *  "installed and signed in". Optional: without it the dialog simply never
+   *  shows a sign-in step, which is the same as today. */
+  cliProfiles?: ReturnType<typeof useCliProfiles>
+}>()
+const emit = defineEmits<{ login: [agentKey: string] }>()
+
+/** 'unknown' = this CLI keeps no credential file Navide can read. */
+function signInStateFor(depId: string): 'signed-in' | 'signed-out' | 'unknown' {
+  const identity = props.cliProfiles?.identityFor(depId, null)
+  if (!identity) return 'unknown'
+  return identity.signedIn ? 'signed-in' : 'signed-out'
+}
 const { t } = useI18n()
 
 const onboarding = useOnboarding(props.backend)
@@ -200,7 +215,9 @@ function formatTime(value: string): string {
       :backend="backend"
       :dep-id="installTarget"
       origin="settings"
+      :sign-in-state="signInStateFor(installTarget)"
       @close="closeInstall"
+      @login="(agentKey: string) => emit('login', agentKey)"
     />
   </div>
 </template>

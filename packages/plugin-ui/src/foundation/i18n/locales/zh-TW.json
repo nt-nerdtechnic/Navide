@@ -6598,6 +6598,10 @@
     "done-desc": "已偵測到版本 {version}。",
     "done-desc-no-version": "已偵測到，可以開始使用。",
     "relaunch": "重新啟動 {label}",
+    "signin-title": "{label} 已安裝，但尚未登入",
+    "signin-desc": "指令已經在 PATH 上，但後面還沒有帳號——現在開 pane 只會停在 {label} 自己的登入畫面。",
+    "signin": "登入 {label}",
+    "signin-hint": "這會開一個 pane 幫你跑登入。多數 CLI 接著會開啟瀏覽器，在那裡完成後回來即可。",
     "dont-ask": "不要再詢問 {label}"
   },
   "cli-manage": {

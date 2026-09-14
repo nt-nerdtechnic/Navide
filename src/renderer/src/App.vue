@@ -11689,6 +11689,33 @@ const cliInstallRequest = ref<{
 } | null>(null)
 /** Dep ids the user switched the prompt off for, mirrored from the backend. */
 const cliInstallPromptDismissed = ref<Set<string>>(new Set())
+/**
+ * Sign-in state of the CLI the install dialog is about, for its final step.
+ *
+ * `null` means "cannot be known" and is the answer for every CLI that keeps no
+ * credential file Navide can read — `identityFor` returns null for those, and
+ * that must not be shown as "signed out". Reading the account store rather
+ * than the dep probe keeps this a live value: the login lands, the store
+ * updates, and the dialog's derived phase moves on by itself.
+ */
+const cliInstallSignedIn = computed<'signed-in' | 'signed-out' | 'unknown'>(() => {
+  const depId = cliInstallRequest.value?.depId
+  if (!depId) return 'unknown'
+  const identity = cliProfilesApi.identityFor(depId, null)
+  if (!identity) return 'unknown'
+  return identity.signedIn ? 'signed-in' : 'signed-out'
+})
+
+/**
+ * A CLI that has just been installed has no identity in the account store yet
+ * — the store was loaded when that CLI did not exist, so `identityFor` answers
+ * null ("unknown") and the dialog would call it done without ever asking for
+ * the login. Re-read the accounts so the freshly installed CLI is graded like
+ * any other.
+ */
+function onCliInstalled(): void {
+  void cliProfilesApi.refresh()
+}
 
 // These three dialogs count as modals for the keybinding context too (⌘W/Esc
 // close them; pane shortcuts stay off behind them). Declared down here because
@@ -16516,8 +16543,11 @@ function paneIsCommander(p: ActivePane): boolean {
     :dep-id="cliInstallRequest.depId"
     :fallback-label="cliInstallRequest.label"
     :origin="cliInstallRequest.origin"
+    :sign-in-state="cliInstallSignedIn"
     @close="closeCliInstall"
+    @installed="onCliInstalled"
     @relaunch="relaunchAfterInstall"
+    @login="onCliLoginSpawn"
     @dismiss-changed="onCliInstallDismissChanged"
   />
   <RestoreScopeModal

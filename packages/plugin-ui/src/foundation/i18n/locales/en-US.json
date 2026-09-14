@@ -6598,6 +6598,10 @@
     "done-desc": "Version {version} detected.",
     "done-desc-no-version": "Detected and ready to use.",
     "relaunch": "Start {label} again",
+    "signin-title": "{label} is installed, but not signed in",
+    "signin-desc": "The command is on your PATH, but it has no account behind it yet — a pane would open on {label}\u2019s own sign-in prompt.",
+    "signin": "Sign in to {label}",
+    "signin-hint": "This opens a pane that runs the sign-in for you. Most CLIs then open your browser; finish there and come back.",
     "dont-ask": "Stop asking about {label}"
   },
   "cli-manage": {

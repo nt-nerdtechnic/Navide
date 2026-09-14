@@ -2610,7 +2610,12 @@ watch(activeTab, (tab) => {
             <p class="ap-hint">{{ $t('settings.pushChannels.restart-note') }}</p>
           </section>
           <section class="ap-section" data-settings-section="cli-agents-maintenance">
-            <CliManagementPanel v-if="activeTab === 'cliAgents'" :backend="props.backend" />
+            <CliManagementPanel
+              v-if="activeTab === 'cliAgents'"
+              :backend="props.backend"
+              :cli-profiles="cliProfilesApi"
+              @login="(agentKey: string) => emit('cli-login', agentKey)"
+            />
           </section>
         </div>
 
