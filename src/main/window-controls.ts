@@ -41,6 +41,21 @@ export function systemFrameUnlessMac(): { titleBarStyle?: 'hidden' } {
   return isMac() ? { titleBarStyle: 'hidden' } : {}
 }
 
+/**
+ * Title-bar options for a window that took the system's frame on every
+ * platform and is being brought in line with the rest of the app.
+ *
+ * The inverse of the above, and deliberately not the same as "what every other
+ * window does". Those windows hide the bar everywhere, which is free on macOS
+ * because the system still paints the traffic lights over them — but a window
+ * that ships with a system frame today would visibly change there, and macOS
+ * is explicitly staying as it is. So this hides the bar only where we draw the
+ * replacement, and leaves macOS alone.
+ */
+export function drawnFrameWhereNeeded(): { titleBarStyle?: 'hidden' } {
+  return isMac() ? {} : { titleBarStyle: 'hidden' }
+}
+
 function senderWindow(event: Electron.IpcMainInvokeEvent): BrowserWindow | null {
   // `fromWebContents` misses guests: a <webview> has its own WebContents whose
   // window is the host's, which is what `getOwnerBrowserWindow` resolves.

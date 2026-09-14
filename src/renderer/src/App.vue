@@ -19145,13 +19145,5 @@ body,
   background: var(--bg-inset);
 }
 
-:root {
-  /* Height of the app's custom titlebar. One source of truth: `.titlebar`'s
-     own height, the `.app` top padding that reserves room for it, and the
-     Welcome overlay that must start below it (so drawn window controls stay
-     reachable on Windows/Linux) all read this, so changing the bar's height
-     never leaves the three out of sync. */
-  --titlebar-height: 38px;
-}
 
 </style>
