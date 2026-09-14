@@ -49,13 +49,54 @@ jobs:
         run: |
           uv --project backend export --format requirements-txt --no-hashes --no-emit-project > /tmp/backend-requirements.txt
           uv --project backend run --with pip-audit pip-audit -r /tmp/backend-requirements.txt
+      - name: pip-audit (backend lock, Windows on Arm)
+        # The scan above resolves the lock on THIS runner, so every pin behind
+        # a `sys_platform == 'win32' and platform_machine == 'ARM64'` marker
+        # is never installed and never audited — the Windows arm64 build holds
+        # cryptography at 46.0.3 (no win_arm64 wheel past that), and the scan
+        # above reports on 50.0.1 instead. This one evaluates the markers as
+        # that platform would and audits the pins it actually installs, with
+        # no resolution (`--no-deps`) so Windows-only wheels need not exist
+        # here. It is expected to find the cryptography advisories; the gate
+        # reports it as a warning rather than hiding it behind an allowlist.
+        id: pip-audit-win-arm64
+        continue-on-error: true
+        run: |
+          uv --project backend run --with packaging python - <<'PY' > /tmp/backend-requirements-win-arm64.txt
+          from packaging.requirements import Requirement
+          env = {
+              "os_name": "nt", "sys_platform": "win32", "platform_system": "Windows",
+              "platform_machine": "ARM64", "platform_python_implementation": "CPython",
+              "implementation_name": "cpython", "python_version": "3.12",
+              "python_full_version": "3.12.10", "implementation_version": "3.12.10",
+              "platform_release": "10", "platform_version": "",
+          }
+          for line in open("/tmp/backend-requirements.txt"):
+              line = line.strip()
+              if not line or line.startswith(("#", "-")):
+                  continue
+              req = Requirement(line)
+              if req.marker is None or req.marker.evaluate(env):
+                  print(f"{req.name}{req.specifier}")
+          PY
+          grep -c . /tmp/backend-requirements-win-arm64.txt
+          grep '^cryptography==' /tmp/backend-requirements-win-arm64.txt
+          uv --project backend run --with pip-audit pip-audit --no-deps --disable-pip -r /tmp/backend-requirements-win-arm64.txt
       - name: Audit gate
         env:
           NPM_AUDIT: ${{ steps.npm-audit.outcome }}
           PIP_AUDIT: ${{ steps.pip-audit.outcome }}
+          PIP_AUDIT_WIN_ARM64: ${{ steps.pip-audit-win-arm64.outcome }}
         run: |
-          echo "npm audit:  $NPM_AUDIT"
-          echo "pip-audit:  $PIP_AUDIT"
+          echo "npm audit:                $NPM_AUDIT"
+          echo "pip-audit:                $PIP_AUDIT"
+          echo "pip-audit (win arm64):    $PIP_AUDIT_WIN_ARM64"
+          if [ "$PIP_AUDIT_WIN_ARM64" != success ]; then
+            # Known and accepted for now: the Windows arm64 backend pins
+            # cryptography 46.0.3 (backend/pyproject.toml explains why). Kept
+            # visible as a warning on every run so it is lifted, not forgotten.
+            echo "::warning title=Windows on Arm dependency audit::pip-audit found advisories in the win_arm64 resolution of backend/uv.lock (expected while cryptography is pinned to 46.0.3 there; see backend/pyproject.toml)"
+          fi
           if [ "$NPM_AUDIT" != success ] || [ "$PIP_AUDIT" != success ]; then
             exit 1
           fi

@@ -2,11 +2,11 @@
 
 English | [繁體中文](../zh-TW/getting-started.md) | [日本語](../ja-JP/getting-started.md) | [Documentation](README.md)
 
-Navide supports macOS 13 or newer on Apple silicon, Linux x64, and Windows x64. The [v0.2.1 GitHub release](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.2.1) provides DMG and ZIP downloads for macOS, signed with a Developer ID certificate and notarized by Apple.
+Navide supports macOS 13 or newer on Apple silicon, Linux x64, and Windows on x64 or Arm. The [v0.2.2 GitHub release](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.2.2) provides DMG and ZIP downloads for macOS, signed with a Developer ID certificate and notarized by Apple, an NSIS installer for Windows x64, and an AppImage and a `.deb` for Linux x64.
 
 To install on macOS, download the DMG and copy Navide to Applications, then open it normally — no Gatekeeper workaround is needed.
 
-Release CI also builds an AppImage and a `.deb` for Linux x64 and an NSIS installer for Windows x64, but no release has published them yet: they ship from the next release, so install from source on those platforms until then. The Windows build is not code-signed, so SmartScreen warns on first run.
+A native Windows on Arm installer is built by release CI and ships from the next release; until then Windows on Arm runs the x64 installer under emulation. The Windows build is not code-signed, so SmartScreen warns on first run.
 
 ## Install on Windows
 
@@ -21,7 +21,7 @@ Two packages are published for x64:
 
 ## What you need to install from source
 
-- macOS 13+ on Apple silicon, Linux x64, or Windows x64
+- macOS 13+ on Apple silicon, Linux x64, or Windows on x64 or Arm
 - Node.js 22.12+ (22.x)
 - pnpm 10+
 - Python 3.12+
