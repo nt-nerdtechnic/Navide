@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { needsDrawnWindowControls, setPlatformId } from '../../../../shared/osplat'
 
 /**
@@ -59,11 +59,53 @@ describe('W1: Welcome window controls on Windows/Linux', () => {
   })
 
   it('titlebar height has a single source of truth', () => {
-    const app = read('App.vue')
-    // Defined once…
-    expect(app).toMatch(/--titlebar-height:\s*38px/)
+    // Defined with the tokens, which every window loads — not in one window's
+    // stylesheet. It lived in App.vue, and that made it a single source only
+    // for the windows that imported App.vue: the Plans window does not, so the
+    // next window to need the number would have written 38px again.
+    const tokens = readFileSync(
+      join(rendererSrc, '../../../packages/plugin-ui/src/foundation/styles/tokens/semantic.css'),
+      'utf-8',
+    )
+    expect(tokens).toMatch(/--titlebar-height:\s*38px/)
+
+    // Once, and nowhere else. A second definition is what "single source of
+    // truth" is a claim against, so the test has to count rather than check
+    // that one exists.
+    // Kept as file + line rather than a `path:line` string: a Windows path
+    // starts `D:\`, so splitting one back apart on ':' loses the drive.
+    const definitions: { file: string; line: number }[] = []
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir)) {
+        const full = join(dir, entry)
+        if (statSync(full).isDirectory()) {
+          if (entry !== 'node_modules' && entry !== '__tests__') walk(full)
+          continue
+        }
+        if (!/\.(vue|css)$/.test(entry)) continue
+        readFileSync(full, 'utf-8').split('\n').forEach((line, i) => {
+          // A definition, not a `var(--titlebar-height)` read.
+          if (/(^|[;{\s])--titlebar-height\s*:/.test(line)) {
+            definitions.push({ file: full, line: i + 1 })
+          }
+        })
+      }
+    }
+    walk(rendererSrc)
+    walk(join(rendererSrc, '../../../packages/plugin-ui/src'))
+
+    expect(definitions.map((d) => `${d.file}:${d.line}`)).toHaveLength(1)
+    // Compared as a resolved path, never as text: `join` uses the platform
+    // separator, so `toContain('tokens/semantic.css')` matches nothing on
+    // Windows. (The stacking guard failed on Windows and only Windows for
+    // exactly this reason — not a mistake worth making twice.)
+    expect(resolve(definitions[0].file)).toBe(
+      resolve(rendererSrc, '../../../packages/plugin-ui/src/foundation/styles/tokens/semantic.css'),
+    )
+
     // …and consumed by both the bar and the padding that reserves room for it,
     // so the Welcome overlay can never drift from the bar it sits below.
+    const app = read('App.vue')
     expect(app).toMatch(/height:\s*var\(--titlebar-height\)/)
     expect(app).toMatch(/padding-top:\s*var\(--titlebar-height\)/)
     // The `.app` top padding is no longer a hardcoded 38px that could drift.

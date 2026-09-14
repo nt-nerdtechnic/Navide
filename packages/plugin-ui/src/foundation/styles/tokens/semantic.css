@@ -27,6 +27,13 @@
   --font-row-title: 15px;
   --font-row-desc: 13px;
 
+  /* Height of the title bar every window draws for itself. Defined here, with
+     the tokens, rather than in one window's stylesheet: the Plans window does
+     not load App.vue's styles, so a definition there was only a single source
+     of truth for the windows that happened to import it, and the next window
+     to need the number would have written 38px again. */
+  --titlebar-height: 38px;
+
   /* ── Font families ──────────────────────────────────────────── */
   --font-ui: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', 'PingFang TC', sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
