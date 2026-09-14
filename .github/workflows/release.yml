@@ -6,8 +6,9 @@ on:
       - 'v*.*.*'
   # Manual trigger to dry-run the whole chain without publishing a release:
   # macOS builds, signs, notarizes and verifies; Linux and Windows build and
-  # validate. All three attach their installers as workflow artifacts so a
-  # dry run still yields something to download and try.
+  # validate; the arm64 Linux job runs here and only here. Every one of them
+  # attaches its installers as workflow artifacts, so a dry run still yields
+  # something to download and try.
   workflow_dispatch:
 
 permissions:
@@ -21,8 +22,7 @@ jobs:
   release-macos-arm64:
     # v0.1.40, v0.1.41, and v0.1.49 are manually published unsigned previews
     # (v0.1.49: signing private key unavailable at release time).
-    # Packaging branch only: a manual dispatch here builds just the arm64 job.
-    if: github.event_name == 'push' && github.ref_name != 'v0.1.40' && github.ref_name != 'v0.1.41' && github.ref_name != 'v0.1.49'
+    if: github.ref_name != 'v0.1.40' && github.ref_name != 'v0.1.41' && github.ref_name != 'v0.1.49'
     name: Test, sign, notarize, and release macOS arm64
     runs-on: macos-14
     timeout-minutes: 60
