@@ -96,7 +96,10 @@ export function useAnalyzer(backend: ReturnType<typeof useBackend>) {
   const defaultModel = ref<string>('')
   const loading = ref<boolean>(false)
   const lastError = ref<string>('')
-  let lastHealthAt = 0
+  // When the last poll STARTED, whatever it returned. Keyed on success it
+  // never advanced while the backend was down or timing out, so the 30s
+  // spacing collapsed to every 5s tick — exactly when each poll was slowest.
+  let lastRefreshAt = 0
   // Pane ids currently queued behind a running llama-cli call (analyzer.py's
   // _llama_sem serialises inference; a queued call can wait 10-60s with no
   // other feedback, which otherwise looks like a hung/broken connection).
@@ -207,7 +210,6 @@ export function useAnalyzer(backend: ReturnType<typeof useBackend>) {
       if (resp.ok && resp.payload) {
         health.value = resp.payload
         defaultModel.value = resp.payload.default_model ?? defaultModel.value
-        lastHealthAt = Date.now()
         return resp.payload
       }
     } catch (err) {
@@ -321,6 +323,7 @@ export function useAnalyzer(backend: ReturnType<typeof useBackend>) {
   })
 
   async function refreshAll(): Promise<void> {
+    lastRefreshAt = Date.now()
     await refreshSettings()
     await refreshOllamaHealth()
     const h = await refreshHealth()
@@ -344,9 +347,7 @@ export function useAnalyzer(backend: ReturnType<typeof useBackend>) {
   let pollHandle: number | null = null
   pollHandle = window.setInterval(() => {
     if (backend.status.value !== 'connected') return
-    const stale = Date.now() - lastHealthAt > 30_000
-    const needModels = models.value.length === 0
-    if (stale || needModels) void refreshAll()
+    if (Date.now() - lastRefreshAt > 30_000) void refreshAll()
   }, 5_000)
 
   onScopeDispose(() => {

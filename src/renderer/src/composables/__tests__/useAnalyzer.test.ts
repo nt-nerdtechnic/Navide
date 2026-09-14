@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { useAnalyzer, type ClassifyResult } from '../useAnalyzer'
 import { createMockBackend, withScope, flush } from './mockBackend'
 
@@ -91,5 +91,47 @@ describe('useAnalyzer', () => {
     await result.classify('agent 列出了選項...', 'qwen', { paneId: 'p1' })
     expect(result.queuedPaneIds.value.has('p1')).toBe(false)
     scope.stop()
+  })
+
+  describe('health polling', () => {
+    afterEach(() => vi.useRealTimers())
+
+    const healthSends = (mock: ReturnType<typeof createMockBackend>) =>
+      mock.sent.filter((s) => s.type === 'analyzer.health').length
+
+    it('a failed health poll is not retried on the next 5s tick', async () => {
+      // The Windows stall: each poll timed out (8s), the "last health" stamp
+      // never advanced, and the 5s tick re-polled every time — 25 stalls in
+      // five minutes on the backend, each one a fresh SSL context.
+      vi.useFakeTimers()
+      const mock = createMockBackend('connected')
+      mock.setRejection('analyzer.health', 'request analyzer.health timeout')
+
+      const { scope } = withScope(() => useAnalyzer(mock.backend))
+      await vi.advanceTimersByTimeAsync(0)
+      expect(healthSends(mock)).toBe(1)
+
+      await vi.advanceTimersByTimeAsync(25_000)
+      expect(healthSends(mock)).toBe(1)
+
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(healthSends(mock)).toBe(2)
+      scope.stop()
+    })
+
+    it('an empty model list does not shorten the poll spacing either', async () => {
+      vi.useFakeTimers()
+      const mock = createMockBackend('connected')
+      mock.setResponse('analyzer.health', { ok: true, default_model: 'qwen' })
+      mock.setResponse('analyzer.models', { models: [], default: 'qwen' })
+
+      const { scope } = withScope(() => useAnalyzer(mock.backend))
+      await vi.advanceTimersByTimeAsync(0)
+      expect(healthSends(mock)).toBe(1)
+
+      await vi.advanceTimersByTimeAsync(25_000)
+      expect(healthSends(mock)).toBe(1)
+      scope.stop()
+    })
   })
 })
