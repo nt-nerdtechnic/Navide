@@ -21,7 +21,7 @@
 // written yet. The failure mode is "not covered", so the assertion has to be
 // about the whole tree, not about the files somebody remembered.
 import { readdirSync, readFileSync, statSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
@@ -80,7 +80,9 @@ function resolveZ(raw: string, vars: Map<string, number>): number | null {
   return null
 }
 
-type Layer = { file: string; line: number; raw: string; z: number | null }
+const CONTROLS = join(RENDERER, 'components/WindowControls.vue')
+
+type Layer = { file: string; line: number; raw: string; z: number | null; isControls: boolean }
 
 const stripComments = (css: string): string => css.replace(/\/\*[\s\S]*?\*\//g, '')
 
@@ -97,6 +99,17 @@ function walk(dir: string, out: string[] = []): string[] {
 }
 
 const lineOf = (source: string, index: number): number => source.slice(0, index).split('\n').length
+
+/**
+ * A path relative to the renderer root, always with forward slashes.
+ *
+ * `join` gives back the platform's separator, so on Windows these read
+ * `components\WindowControls.vue` — which silently broke the comparison that
+ * excludes the controls' own rule from the layers they must outrank, and made
+ * this test fail on Windows only. Normalised once, here, so no caller has to
+ * remember.
+ */
+const relative = (full: string): string => full.slice(RENDERER.length + 1).split(sep).join('/')
 
 /**
  * Every full-viewport-capable layer in the renderer: anything that combines
@@ -118,7 +131,13 @@ function layers(): Layer[] {
   const found: Layer[] = []
 
   for (const full of walk(RENDERER)) {
-    const file = full.slice(RENDERER.length + 1)
+    const file = relative(full)
+    // Identity by resolved path, never by how the path is spelled: `join` uses
+    // the platform separator, and excluding the controls' own rule by comparing
+    // `'components/WindowControls.vue'` matched nothing on Windows — so the
+    // rule was measured against itself and this test failed there and only
+    // there. Compare the absolute paths and the question stops being textual.
+    const isControls = resolve(full) === resolve(CONTROLS)
     const source = readFileSync(full, 'utf8')
 
     if (full.endsWith('.vue') || full.endsWith('.css')) {
@@ -145,6 +164,7 @@ function layers(): Layer[] {
             line: lineOf(source, block.offset + rule.index!),
             raw: z[1].trim(),
             z: resolveZ(z[1], vars),
+            isControls,
           })
         }
       }
@@ -162,14 +182,13 @@ function layers(): Layer[] {
         if (open < 0 || close < 0) continue
         const literal = source.slice(open, close)
         if (!/position\s*:\s*['"`]fixed['"`]/.test(literal)) continue
-        found.push({ file, line: lineOf(source, m.index!), raw: m[2].trim(), z: resolveZ(m[2], vars) })
+        found.push({ file, line: lineOf(source, m.index!), raw: m[2].trim(), z: resolveZ(m[2], vars), isControls })
       }
     }
   }
   return found
 }
 
-const CONTROLS = join(RENDERER, 'components/WindowControls.vue')
 const controlsSource = (): string => readFileSync(CONTROLS, 'utf8')
 
 describe('window controls outrank every overlay', () => {
@@ -194,7 +213,7 @@ describe('window controls outrank every overlay', () => {
   it('leaves nothing able to cover the minimise and close buttons', () => {
     const ceiling = tokens().get('--z-window-controls')!
     const over = layers()
-      .filter((l) => l.file !== 'components/WindowControls.vue')
+      .filter((l) => !l.isControls)
       .filter((l) => l.z !== null && l.z >= ceiling)
 
     // Anything listed here is a layer that, on Windows and Linux, leaves the
@@ -214,7 +233,7 @@ describe('window controls outrank every overlay', () => {
       const source = readFileSync(full, 'utf8')
       for (const m of source.matchAll(/z-?[iI]ndex['"]?\s*:\s*['"]?(\d{4,})/g)) {
         if (Number(m[1]) >= ceiling) {
-          big.push(`${full.slice(RENDERER.length + 1)}:${lineOf(source, m.index!)} → ${m[1]}`)
+          big.push(`${relative(full)}:${lineOf(source, m.index!)} → ${m[1]}`)
         }
       }
     }
