@@ -55,66 +55,105 @@ const toggleMaximize = async (): Promise<void> => {
 </script>
 
 <template>
-  <div v-if="shown" class="win-controls" role="group" aria-label="Window controls">
-    <button
-      class="win-control"
-      type="button"
-      title="Minimize"
-      aria-label="Minimize"
-      @mousedown.stop
-      @click="minimize"
-    >
-      <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-        <path d="M0 5h10" stroke="currentColor" stroke-width="1" fill="none" />
-      </svg>
-    </button>
-    <button
-      class="win-control"
-      type="button"
-      :title="maximized ? 'Restore' : 'Maximize'"
-      :aria-label="maximized ? 'Restore' : 'Maximize'"
-      @mousedown.stop
-      @click="toggleMaximize"
-    >
-      <svg v-if="!maximized" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-        <rect x="0.5" y="0.5" width="9" height="9" stroke="currentColor" stroke-width="1" fill="none" />
-      </svg>
-      <svg v-else width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-        <rect x="0.5" y="2.5" width="7" height="7" stroke="currentColor" stroke-width="1" fill="none" />
-        <path d="M2.5 2.5V0.5h7v7h-2" stroke="currentColor" stroke-width="1" fill="none" />
-      </svg>
-    </button>
-    <button
-      class="win-control win-control--close"
-      type="button"
-      title="Close"
-      aria-label="Close"
-      @mousedown.stop
-      @click="close"
-    >
-      <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-        <path d="M0 0l10 10M10 0L0 10" stroke="currentColor" stroke-width="1" fill="none" />
-      </svg>
-    </button>
-  </div>
+  <!-- Stays in the title bar even though the buttons no longer do. The bar's
+       own padding rule keys off this marker (`:has(> .win-controls-anchor)`),
+       so the room reserved on the right for the teleported cluster still
+       belongs to the bar that hosts it. Hidden from assistive tech: it is a
+       marker, not content. -->
+  <span v-if="shown" class="win-controls-anchor" aria-hidden="true"></span>
+
+  <!-- Out of the title bar's stacking context entirely.
+       `.titlebar` is `position: absolute; z-index: 200`, which makes it a
+       stacking context — a child of it cannot rise above anything outside it
+       however large its own z-index, and `position: fixed` does not escape one
+       either. Every full-screen overlay in this app (999 … 3100) therefore
+       covered the only buttons Windows and Linux have for closing the window:
+       open Settings and the window could be left only with Alt+F4. macOS never
+       showed it, because its traffic lights are painted by the OS above the
+       page. Teleporting to <body> puts the cluster in the root stacking
+       context, which is the only place `--z-window-controls` can mean what it
+       says. -->
+  <Teleport v-if="shown" to="body">
+    <div class="win-controls" role="group" aria-label="Window controls">
+      <button
+        class="win-control"
+        type="button"
+        title="Minimize"
+        aria-label="Minimize"
+        @mousedown.stop
+        @click="minimize"
+      >
+        <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+          <path d="M0 5h10" stroke="currentColor" stroke-width="1" fill="none" />
+        </svg>
+      </button>
+      <button
+        class="win-control"
+        type="button"
+        :title="maximized ? 'Restore' : 'Maximize'"
+        :aria-label="maximized ? 'Restore' : 'Maximize'"
+        @mousedown.stop
+        @click="toggleMaximize"
+      >
+        <svg v-if="!maximized" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+          <rect x="0.5" y="0.5" width="9" height="9" stroke="currentColor" stroke-width="1" fill="none" />
+        </svg>
+        <svg v-else width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+          <rect x="0.5" y="2.5" width="7" height="7" stroke="currentColor" stroke-width="1" fill="none" />
+          <path d="M2.5 2.5V0.5h7v7h-2" stroke="currentColor" stroke-width="1" fill="none" />
+        </svg>
+      </button>
+      <button
+        class="win-control win-control--close"
+        type="button"
+        title="Close"
+        aria-label="Close"
+        @mousedown.stop
+        @click="close"
+      >
+        <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+          <path d="M0 0l10 10M10 0L0 10" stroke="currentColor" stroke-width="1" fill="none" />
+        </svg>
+      </button>
+    </div>
+  </Teleport>
 </template>
 
 <style scoped>
+.win-controls-anchor {
+  /* Never rendered — `:has()` matches it in the DOM regardless, which is all
+     the bar's padding rule needs. `display: none` keeps a marker element from
+     becoming a flex item in a bar that centres its content. */
+  display: none;
+}
+
 .win-controls {
-  /* Pinned rather than a flex item: the title bars centre their content, and
-     a control cluster that drifts with the content is not a window control. */
-  position: absolute;
+  /* Pinned to the viewport, not to the bar: teleported to <body>, there is no
+     bar to be pinned to any more. The title bars all sit at the top of their
+     window and reserve room on the right for exactly this cluster, so the two
+     land on top of each other. */
+  position: fixed;
   top: 0;
   right: 0;
-  height: 100%;
+  /* Not `100%` — that is the viewport once this lives on <body>. The main
+     window publishes the bar's height as a variable; the editor window does
+     not load those styles, and its own bar is the fallback's 38px. */
+  height: var(--titlebar-height, 38px);
   display: flex;
   align-items: stretch;
+  /* Only the buttons take the pointer. The box is already exactly as wide as
+     the three of them, but a transparent fixed box that swallowed clicks would
+     take that slice of the title bar's drag region with it — the same bug as
+     an invisible full-screen overlay, in miniature. */
+  pointer-events: none;
   -webkit-app-region: no-drag;
-  z-index: 1;
+  z-index: var(--z-window-controls);
 }
 
 .win-control {
   width: 46px;
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
   border: 0;
   background: transparent;
   color: var(--text-muted, #9aa4b2);
@@ -151,27 +190,29 @@ const toggleMaximize = async (): Promise<void> => {
    depending on the window, and `.toolbar` is generic enough that naming it
    here would style bars that are not title bars.
 
-   Two things have to change on the bar that hosts the controls. It has to be
-   a positioning context for the absolutely positioned cluster. And the space
+   Matched on the marker the component leaves behind rather than on the cluster
+   itself, because the cluster is teleported to <body> and is no longer a child
+   of the bar at all.
+
+   One thing has to change on the bar that hosts the controls: the space
    reserved on the left for the macOS traffic lights (80-84px, depending on the
    bar) is dead where we draw our own controls, while the room is needed on the
-   right instead.
+   right instead, under the teleported cluster.
+
+   Note what is deliberately NOT here: a `position`. An earlier version made the
+   host bar a positioning context, because the cluster used to be absolutely
+   positioned inside it. That rule beat `.titlebar { position: absolute }` and
+   dragged the bar out of its overlay into the grid flow, leaving an empty band
+   above the content (Linux) and the drawn controls under the first-launch
+   Welcome overlay (Windows and Linux). Neutralising it with `:where()` fixed
+   the symptom; teleporting the cluster removes the reason it existed, so the
+   declaration is gone instead of defused. windowControlsStacking.test.ts
+   asserts it stays gone.
 
    Keyed off the attribute the renderer entry sets, so all of this is inert on
    macOS. */
-:root[data-window-controls='drawn'] :has(> .win-controls) {
+:root[data-window-controls='drawn'] :has(> .win-controls-anchor) {
   padding-left: 8px;
   padding-right: 146px;
-}
-/* The positioning context, in a `:where()` so it carries ZERO specificity: a
-   bar that is ALREADY positioned keeps its own position, and only a truly
-   static one falls through to `relative` here. This matters because the main
-   window's `.titlebar` is `position: absolute` — its overlay layout across the
-   top of the window depends on that. A plain (specific) `position: relative`
-   here beat it and dragged the titlebar out of its overlay into the grid flow,
-   which left an empty band above the content (Linux) and hid the drawn
-   controls under the first-launch Welcome overlay (Windows and Linux). */
-:where(:root[data-window-controls='drawn'] :has(> .win-controls)) {
-  position: relative;
 }
 </style>
