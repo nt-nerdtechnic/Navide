@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
+import sys
 
 import pytest
 
@@ -55,9 +56,13 @@ async def test_cancelling_a_claude_read_kills_the_probe_it_abandons() -> None:
 
     original_args = cv.USAGE_ARGS
     asyncio.create_subprocess_exec = spy
-    cv.USAGE_ARGS = ("30",)  # argv becomes ["sleep", "30"]
+    # The interpreter, not `sleep`: the probe resolves a bare name through the
+    # runner's own PATH, and on windows-latest that found something that is not
+    # a Windows executable (WinError 11). sys.executable is an absolute path to
+    # a real binary everywhere, and sleeps just as well.
+    cv.USAGE_ARGS = ("-c", "import time; time.sleep(30)")
     try:
-        task = asyncio.create_task(cv.read_usage_panel("sleep"))
+        task = asyncio.create_task(cv.read_usage_panel(sys.executable))
         for _ in range(40):  # wait for the spawn without racing on a fixed sleep
             if "pid" in spawned:
                 break
@@ -78,5 +83,7 @@ async def test_cancelling_a_claude_read_kills_the_probe_it_abandons() -> None:
         except ProcessLookupError:
             return  # reaped, which is the whole assertion
         await asyncio.sleep(0.05)
-    os.kill(pid, signal.SIGKILL)  # don't leave the test's own child behind
+    # SIGTERM, not SIGKILL: Windows has no SIGKILL, and reaching this line is
+    # already the failure — it must report it, not raise AttributeError.
+    os.kill(pid, signal.SIGTERM)  # don't leave the test's own child behind
     raise AssertionError(f"probe {pid} survived the cancellation")
