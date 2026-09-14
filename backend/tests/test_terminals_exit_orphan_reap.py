@@ -124,6 +124,11 @@ async def test_snapshot_loop_persists_descendants_to_registry(monkeypatch):
         terminals, "_ps_snapshot",
         lambda: {pid: (os.getpid(), pid, "L-child"), 900: (pid, 900, "L900")},
     )
+    # The fake table is still in force when kill_all runs below, so its
+    # breakaway sweep would take pid 900 for a verified grandchild and SIGKILL
+    # whatever real process holds that pid on the host (on a CI runner: the
+    # runner itself). Stub the kill; the sweep is not what this test is about.
+    monkeypatch.setattr(terminals, "_kill_breakaway", lambda pids: None)
     try:
         await asyncio.sleep(0.2)  # first snapshot tick runs on the fake table
         assert persisted and persisted[-1] == {pid: {900: "L900"}}
