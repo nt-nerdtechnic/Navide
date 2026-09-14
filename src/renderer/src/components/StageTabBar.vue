@@ -186,13 +186,13 @@ function onRenameKeydown(e: KeyboardEvent, key: string): void {
           <span
             v-if="tab.type !== 'manual' || tabs.length > 1"
             class="tab-close"
-            title="刪除此 tab"
+            :title="$t('stageTab.delete-tab')"
             @click.stop="onCloseClick($event, tab.key)"
           >✕</span>
         </template>
       </button>
     </template>
-    <button class="tab-add-btn" title="新增 Pipeline 區塊" @click="emit('add')">+</button>
+    <button class="tab-add-btn" :title="$t('stageTab.add-group')" @click="emit('add')">+</button>
     <button
       class="tab-rebuild-all-btn"
       :class="{ busy: rebuildingAll }"
@@ -210,8 +210,8 @@ function onRenameKeydown(e: KeyboardEvent, key: string): void {
   <Teleport to="body">
     <div v-if="actionMenu.show" class="tab-action-backdrop" @click="actionMenu.show = false" />
     <div v-if="actionMenu.show" class="tab-action-menu nv-popover" :style="{ top: actionMenu.y + 'px', left: actionMenu.x + 'px' }">
-      <button class="tab-action-item" @click="chooseMove()">移到其他分組</button>
-      <button class="tab-action-item danger" @click="chooseClose()">關閉所有 pane</button>
+      <button class="tab-action-item" @click="chooseMove()">{{ $t('stageTab.move-to-group') }}</button>
+      <button class="tab-action-item danger" @click="chooseClose()">{{ $t('stageTab.close-all-panes') }}</button>
     </div>
   </Teleport>
 </template>

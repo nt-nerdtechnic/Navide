@@ -402,7 +402,7 @@ async function confirmReset(scope: ResetScope): Promise<void> {
         <section class="block">
           <div class="block-hdr">
             <span class="block-title">{{ currentRun ? $t('label.current-run') : $t('label.current-session') }}</span>
-            <button class="reset-btn" title="Reset run counter" @click="confirmReset('run')">⟲</button>
+            <button class="reset-btn" :title="$t('action.reset-run-counter')" @click="confirmReset('run')">⟲</button>
           </div>
           <div v-if="currentRun" class="run-meta" :title="currentRun.task">
             <span class="run-id">{{ currentRun.run_id || '—' }}</span>
@@ -429,7 +429,7 @@ async function confirmReset(scope: ResetScope): Promise<void> {
         <section class="block">
           <div class="block-hdr">
             <span class="block-title">{{ $t('label.workspace-cumulative') }}</span>
-            <button class="reset-btn" title="Wipe workspace history" @click="confirmReset('workspace')">⟲</button>
+            <button class="reset-btn" :title="$t('action.wipe-workspace-history')" @click="confirmReset('workspace')">⟲</button>
           </div>
           <div class="totals">
             <div class="cell"><div class="big">{{ fmt(cumulative.input) }}</div><div class="lbl">{{ $t('label.in') }}</div></div>
@@ -443,7 +443,7 @@ async function confirmReset(scope: ResetScope): Promise<void> {
         <section class="block">
           <div class="block-hdr">
             <span class="block-title">{{ $t('label.all-time-global') }}</span>
-            <button class="reset-btn" title="Wipe global tally" @click="confirmReset('global')">⟲</button>
+            <button class="reset-btn" :title="$t('action.wipe-global-tally')" @click="confirmReset('global')">⟲</button>
           </div>
           <div class="totals">
             <div class="cell"><div class="big">{{ fmt(allTime.input) }}</div><div class="lbl">{{ $t('label.in') }}</div></div>

@@ -13,6 +13,7 @@
 import { describe, it, expect } from 'vitest'
 import { shallowMount, type VueWrapper } from '@vue/test-utils'
 import ControlPane from '../ControlPane.vue'
+import { i18n } from '@navide/plugin-ui/foundation'
 
 const gitContribution = {
   pluginId: 'navide.git',
@@ -50,6 +51,16 @@ function mountPane(props: Record<string, unknown> = {}): VueWrapper {
     props: { ...minimalProps, ...props },
     global: { mocks: { $t: (key: string) => key } }
   })
+}
+
+/** The stubbed $t echoes keys, so the shape check above cannot tell a live key
+ *  from a deleted one. This reads the real message catalogues instead. */
+function resolvesInBothLocales(...keys: string[]): void {
+  for (const key of keys) {
+    for (const locale of ['en-US', 'zh-TW'] as const) {
+      expect(i18n.global.t(key, {}, { locale })).not.toBe(key)
+    }
+  }
 }
 
 describe('ControlPane – left slot collapse', () => {
@@ -125,7 +136,11 @@ describe('ControlPane – left slot collapse', () => {
     // strip — while the ⌘n hints stay bound to the tab, not to the position.
     const w = mountPane({ collapsed: false, views: ['explorer', 'agents'] })
     const titles = w.findAll('.sidebar-tabs .tab-btn').map((b) => b.attributes('title'))
-    expect(titles).toEqual(['Explorer (⌘3)', 'Agents (⌘1)'])
+    // $t is stubbed to echo its key, so a localised title renders as
+    // "<key> (⌘n)". resolvesInBothLocales() below is what stops a deleted
+    // key from slipping through this shape check.
+    expect(titles).toEqual(['label.explorer (⌘3)', 'label.agents (⌘1)'])
+    resolvesInBothLocales('label.explorer', 'label.agents')
     w.unmount()
   })
 
@@ -141,7 +156,7 @@ describe('ControlPane – left slot collapse', () => {
     await w.vm.$nextTick()
     await w.setProps({ views: ['agents', 'git'] })
     const active = w.findAll('.sidebar-tabs .tab-btn').findIndex((b) => b.classes().includes('active'))
-    expect(w.findAll('.sidebar-tabs .tab-btn')[active].attributes('title')).toBe('Agents (⌘1)')
+    expect(w.findAll('.sidebar-tabs .tab-btn')[active].attributes('title')).toBe('label.agents (⌘1)')
     w.unmount()
   })
 

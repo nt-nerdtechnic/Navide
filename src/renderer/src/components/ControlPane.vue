@@ -1637,15 +1637,15 @@ function selectSidebarTab(tab: SidebarTab): void {
 // Rail entries mirror the tab strip. Emoji icons rather than the strip's inline
 // SVGs: the rail is 36px wide, and copying five <path> blobs to render them at
 // half size buys nothing over the icon convention TokenStatsPanel's rail set.
-// `title` keeps its shortcut hint: Cmd+1..5 are bound to SIDEBAR_TABS by
+// `shortcut` keeps its hint: Cmd+1..5 are bound to SIDEBAR_TABS by
 // position in that list, not by position in the strip, so reordering the strip
 // leaves the hints correct.
-const RAIL_TABS: { id: SidebarTab; icon?: string; label: string; title: string; path: string }[] = [
-  { id: 'agents', icon: '\u{1F916}', label: 'label.agents', title: 'Agents (\u23181)', path: 'M2 3.5a1.25 1.25 0 1 1 2.5 0 1.25 1.25 0 0 1-2.5 0Zm0 4.5a1.25 1.25 0 1 1 2.5 0A1.25 1.25 0 0 1 2 8Zm0 4.5a1.25 1.25 0 1 1 2.5 0 1.25 1.25 0 0 1-2.5 0ZM6.5 2.75A.75.75 0 0 1 7.25 2h7a.75.75 0 0 1 0 1.5h-7a.75.75 0 0 1-.75-.75Zm0 4.5A.75.75 0 0 1 7.25 6.5h7a.75.75 0 0 1 0 1.5h-7a.75.75 0 0 1-.75-.75Zm0 4.5a.75.75 0 0 1 .75-.75h7a.75.75 0 0 1 0 1.5h-7a.75.75 0 0 1-.75-.75Z' },
-  { id: 'pipeline', icon: '\u{1F500}', label: 'label.pipeline', title: 'Pipeline (\u23182)', path: 'M0 1.75C0 .784.784 0 1.75 0h3.5C6.216 0 7 .784 7 1.75v3.5A1.75 1.75 0 0 1 5.25 7H4v4a1 1 0 0 0 1 1h4v-1.25C9 9.784 9.784 9 10.75 9h3.5c.966 0 1.75.784 1.75 1.75v3.5A1.75 1.75 0 0 1 14.25 16h-3.5A1.75 1.75 0 0 1 9 14.25v-.75H5A2.5 2.5 0 0 1 2.5 11V7h-.75A1.75 1.75 0 0 1 0 5.25Zm1.75-.25a.25.25 0 0 0-.25.25v3.5c0 .138.112.25.25.25h3.5a.25.25 0 0 0 .25-.25v-3.5a.25.25 0 0 0-.25-.25Zm9 9a.25.25 0 0 0-.25.25v3.5c0 .138.112.25.25.25h3.5a.25.25 0 0 0 .25-.25v-3.5a.25.25 0 0 0-.25-.25Z' },
-  { id: 'explorer', icon: '\u{1F4C1}', label: 'label.explorer', title: 'Explorer (\u23183)', path: 'M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5L6.2 1.7A1.75 1.75 0 0 0 4.96 1H1.75Z' },
-  { id: 'git', label: 'label.git', title: 'Git (\u23184)', path: 'M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25z' },
-  { id: 'plans', icon: '\u{1F4CB}', label: 'label.plans', title: 'Plans (\u23185)', path: 'M5 2a1 1 0 0 0-1 1H2.75A1.75 1.75 0 0 0 1 4.75v9.5c0 .966.784 1.75 1.75 1.75h10.5A1.75 1.75 0 0 0 15 14.25v-9.5A1.75 1.75 0 0 0 13.25 3H12a1 1 0 0 0-1-1H5Zm0 2h6v1a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4Zm-2.25.5H4a2.5 2.5 0 0 0 2 1h4a2.5 2.5 0 0 0 2-1h1.25a.25.25 0 0 1 .25.25v9.5a.25.25 0 0 1-.25.25H2.75a.25.25 0 0 1-.25-.25v-9.5a.25.25 0 0 1 .25-.25Z' },
+const RAIL_TABS: { id: SidebarTab; icon?: string; label: string; shortcut: string; path: string }[] = [
+  { id: 'agents', icon: '\u{1F916}', label: 'label.agents', shortcut: '1', path: 'M2 3.5a1.25 1.25 0 1 1 2.5 0 1.25 1.25 0 0 1-2.5 0Zm0 4.5a1.25 1.25 0 1 1 2.5 0A1.25 1.25 0 0 1 2 8Zm0 4.5a1.25 1.25 0 1 1 2.5 0 1.25 1.25 0 0 1-2.5 0ZM6.5 2.75A.75.75 0 0 1 7.25 2h7a.75.75 0 0 1 0 1.5h-7a.75.75 0 0 1-.75-.75Zm0 4.5A.75.75 0 0 1 7.25 6.5h7a.75.75 0 0 1 0 1.5h-7a.75.75 0 0 1-.75-.75Zm0 4.5a.75.75 0 0 1 .75-.75h7a.75.75 0 0 1 0 1.5h-7a.75.75 0 0 1-.75-.75Z' },
+  { id: 'pipeline', icon: '\u{1F500}', label: 'label.pipeline', shortcut: '2', path: 'M0 1.75C0 .784.784 0 1.75 0h3.5C6.216 0 7 .784 7 1.75v3.5A1.75 1.75 0 0 1 5.25 7H4v4a1 1 0 0 0 1 1h4v-1.25C9 9.784 9.784 9 10.75 9h3.5c.966 0 1.75.784 1.75 1.75v3.5A1.75 1.75 0 0 1 14.25 16h-3.5A1.75 1.75 0 0 1 9 14.25v-.75H5A2.5 2.5 0 0 1 2.5 11V7h-.75A1.75 1.75 0 0 1 0 5.25Zm1.75-.25a.25.25 0 0 0-.25.25v3.5c0 .138.112.25.25.25h3.5a.25.25 0 0 0 .25-.25v-3.5a.25.25 0 0 0-.25-.25Zm9 9a.25.25 0 0 0-.25.25v3.5c0 .138.112.25.25.25h3.5a.25.25 0 0 0 .25-.25v-3.5a.25.25 0 0 0-.25-.25Z' },
+  { id: 'explorer', icon: '\u{1F4C1}', label: 'label.explorer', shortcut: '3', path: 'M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5L6.2 1.7A1.75 1.75 0 0 0 4.96 1H1.75Z' },
+  { id: 'git', label: 'label.git', shortcut: '4', path: 'M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25z' },
+  { id: 'plans', icon: '\u{1F4CB}', label: 'label.plans', shortcut: '5', path: 'M5 2a1 1 0 0 0-1 1H2.75A1.75 1.75 0 0 0 1 4.75v9.5c0 .966.784 1.75 1.75 1.75h10.5A1.75 1.75 0 0 0 15 14.25v-9.5A1.75 1.75 0 0 0 13.25 3H12a1 1 0 0 0-1-1H5Zm0 2h6v1a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4Zm-2.25.5H4a2.5 2.5 0 0 0 2 1h4a2.5 2.5 0 0 0 2-1h1.25a.25.25 0 0 1 .25.25v9.5a.25.25 0 0 1-.25.25H2.75a.25.25 0 0 1-.25-.25v-9.5a.25.25 0 0 1 .25-.25Z' },
 ]
 
 // Ordered by the slot, not by the table above: moving a view also reorders it.
@@ -2579,9 +2579,12 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
           { 'plugin-tab-btn': t.id === 'git' && !legacyGitRecovery && gitPluginTab },
           { active: sidebarTab === t.id || (t.id === 'git' && gitPluginTab?.tabId === sidebarTab) }
         ]"
+        :data-tab="t.id"
         :data-legacy-git-tab="t.id === 'git' && legacyGitRecovery ? '' : undefined"
         :data-plugin-contribution="t.id === 'git' && !legacyGitRecovery ? gitPluginTab?.contributionKey : undefined"
-        :title="t.id === 'git' && gitPluginTab ? `${gitPluginTab.title} (⌘4)` : t.title"
+        :title="t.id === 'git' && gitPluginTab
+          ? `${gitPluginTab.title} (⌘4)`
+          : `${$t(t.label)} (⌘${t.shortcut})`"
         @click="selectSidebarTab(t.id)"
       >
         <template v-if="t.id === 'git' && !legacyGitRecovery && gitPluginTab">
@@ -2757,7 +2760,7 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
     <section class="block panel-section">
       <div class="row between">
         <label class="lbl">{{ $t('label.pipelines') }}</label>
-        <button class="ghost manage-btn" title="Manage pipelines" @click="openPipelineManager()">⚙</button>
+        <button class="ghost manage-btn" :title="$t('action.manage-pipelines')" @click="openPipelineManager()">⚙</button>
       </div>
       <ul v-if="pipelines && pipelines.length && pipeline.state !== 'running' && pipeline.state !== 'aborted'" class="pipeline-list">
         <li
@@ -3216,7 +3219,7 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
               class="auto-name-mark"
               :title="$t('pane.terminal.auto-named-tooltip')"
             >◦</span>
-            <span v-if="p.isCommander" class="manager-inline" title="Stage manager — controls flow and decides ---STAGE-DONE---">🎯 Mgr</span>
+            <span v-if="p.isCommander" class="manager-inline" :title="$t('label.stage-manager-tooltip')">🎯 Mgr</span>
             <span v-if="!isRowExpanded(p.id)" class="agent-line-sub">{{ agentTypeLabel(p.agentKey) }} · {{ p.roleLabel || 'No role' }}</span>
             <span
               v-if="p.loopActive"
@@ -3225,7 +3228,7 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
               :title="$t('pane.terminal.loop-tag-tooltip')"
             >∞</span>
             <span v-if="p.isMuted" class="muted-tag" :title="$t('pane.terminal.muted-tooltip')"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8.7 3A6 6 0 0 1 18 8a21.3 21.3 0 0 0 .6 5"></path><path d="M17 17H3s3-2 3-9a4.67 4.67 0 0 1 .3-1.7"></path><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"></path><line x1="2" y1="2" x2="22" y2="22"></line></svg></span>
-            <span v-if="p.isMinimized" class="minimized-tag" title="Docked in sidebar">
+            <span v-if="p.isMinimized" class="minimized-tag" :title="$t('label.docked-in-sidebar')">
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line></svg>
               Docked
             </span>
@@ -3510,7 +3513,7 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
           <button class="ghost back-btn" @click="backToList">← Back</button>
           <span class="pipeline-detail-name">{{ openedPipeline?.name ?? openedPipelineId }}</span>
           <span v-if="openedPipelineId === activePipelineId" class="active-tag">{{ $t('label.default') }}</span>
-          <button class="ghost manage-btn" title="Manage pipelines" @click="openPipelineManager(openedPipelineId || undefined)">⚙</button>
+          <button class="ghost manage-btn" :title="$t('action.manage-pipelines')" @click="openPipelineManager(openedPipelineId || undefined)">⚙</button>
         </div>
       </section>
       <section class="block" :class="{ pipeline: pipelineOpen }">

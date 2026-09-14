@@ -1856,7 +1856,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
               <span class="folder-name" :title="row.dir">{{ row.name }}</span>
               <span class="folder-count">{{ row.fileCount }}</span>
               <div class="row-actions">
-                <button class="row-btn" title="Unstage folder" @click.stop="unstageFiles(filesUnderDir(row.dir!, true))">−</button>
+                <button class="row-btn" :title="$t('action.unstage-folder')" @click.stop="unstageFiles(filesUnderDir(row.dir!, true))">−</button>
               </div>
             </div>
             <template v-else>
@@ -1876,8 +1876,8 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
                     <button class="row-btn" title="Accept Theirs" @click.stop="doResolveTheirs(row.file!.path)">↱</button>
                   </template>
                   <template v-else>
-                    <button class="row-btn" title="File history + blame" @click.stop="toggleHistoryPanel(row.file!.path, true)">⊡</button>
-                    <button class="row-btn" title="Unstage" @click.stop="unstageFile(row.file!.path)">−</button>
+                    <button class="row-btn" :title="$t('action.file-history-blame')" @click.stop="toggleHistoryPanel(row.file!.path, true)">⊡</button>
+                    <button class="row-btn" :title="$t('action.unstage')" @click.stop="unstageFile(row.file!.path)">−</button>
                   </template>
                 </div>
               </div>
@@ -1926,7 +1926,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
                   <button class="row-btn" title="Accept Theirs" @click.stop="doResolveTheirs(f.path)">↱</button>
                 </template>
                 <template v-else>
-                  <button class="row-btn" title="File history + blame" @click.stop="toggleHistoryPanel(f.path, true)">⊡</button>
+                  <button class="row-btn" :title="$t('action.file-history-blame')" @click.stop="toggleHistoryPanel(f.path, true)">⊡</button>
                 </template>
               </div>
             </div>
@@ -2018,8 +2018,8 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
                 <span class="folder-name" :title="row.dir">{{ row.name }}</span>
                 <span class="folder-count">{{ row.fileCount }}</span>
                 <div class="row-actions">
-                  <button class="row-btn danger shrink" title="Discard folder" @click.stop="confirmDiscard(filesUnderDir(row.dir!, false))">↩</button>
-                  <button class="row-btn primary" title="Stage folder" @click.stop="stageFiles(filesUnderDir(row.dir!, false))">＋</button>
+                  <button class="row-btn danger shrink" :title="$t('action.discard-folder')" @click.stop="confirmDiscard(filesUnderDir(row.dir!, false))">↩</button>
+                  <button class="row-btn primary" :title="$t('action.stage-folder')" @click.stop="stageFiles(filesUnderDir(row.dir!, false))">＋</button>
                 </div>
               </div>
               <template v-else>
@@ -2034,9 +2034,9 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
                   <span class="file-status unstaged-st" :data-s="row.file!.status">{{ statusLabel(row.file!.status) }}</span>
                   <span class="file-name-only" :title="row.file!.path">{{ row.name }}</span>
                   <div class="row-actions">
-                    <button class="row-btn" title="File history + blame" @click.stop="toggleHistoryPanel(row.file!.path, false)">⊡</button>
-                    <button class="row-btn danger shrink" title="Discard" @click.stop="confirmDiscard([row.file!.path])">↩</button>
-                    <button class="row-btn primary" title="Stage" @click.stop="stageFile(row.file!.path)">＋</button>
+                    <button class="row-btn" :title="$t('action.file-history-blame')" @click.stop="toggleHistoryPanel(row.file!.path, false)">⊡</button>
+                    <button class="row-btn danger shrink" :title="$t('action.discard')" @click.stop="confirmDiscard([row.file!.path])">↩</button>
+                    <button class="row-btn primary" :title="$t('action.stage')" @click.stop="stageFile(row.file!.path)">＋</button>
                   </div>
                 </div>
                 <div v-if="fileHistoryPath === row.file!.path" class="subpanel blue-border">
@@ -2079,9 +2079,9 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
                 <span class="file-name-main" :title="f.path">{{ fileName(f.path) }}</span>
                 <span class="file-path-dim" :title="f.path">{{ fileDir(f.path) }}</span>
                 <div class="row-actions">
-                  <button class="row-btn" title="File history + blame" @click.stop="toggleHistoryPanel(f.path, false)">⊡</button>
-                  <button class="row-btn danger shrink" title="Discard" @click.stop="confirmDiscard([f.path])">↩</button>
-                  <button class="row-btn primary" title="Stage" @click.stop="stageFile(f.path)">＋</button>
+                  <button class="row-btn" :title="$t('action.file-history-blame')" @click.stop="toggleHistoryPanel(f.path, false)">⊡</button>
+                  <button class="row-btn danger shrink" :title="$t('action.discard')" @click.stop="confirmDiscard([f.path])">↩</button>
+                  <button class="row-btn primary" :title="$t('action.stage')" @click.stop="stageFile(f.path)">＋</button>
                 </div>
               </div>
               <div v-if="fileHistoryPath === f.path" class="subpanel blue-border">
@@ -2328,7 +2328,7 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
                   <template v-for="f in commitDetailData.files" :key="f">
                     <div class="cd-file cd-file-clickable cd-file-row" :title="f" @click="toggleCommitFileDiff(c.hash, f)">
                       <span class="cd-file-label"><span class="expand-caret">{{ commitDiffFile === f ? '▾' : '▸' }}</span> {{ f }}</span>
-                      <button class="row-btn cd-open-btn" title="Open diff in editor" @click.stop="openCommitFileDiffInIDE(c.hash, f)">
+                      <button class="row-btn cd-open-btn" :title="$t('action.open-diff-in-editor')" @click.stop="openCommitFileDiffInIDE(c.hash, f)">
                         <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor"><path d="M2 1.75C2 .784 2.784 0 3.75 0h6.586c.464 0 .909.184 1.237.513l2.914 2.914c.329.328.513.773.513 1.237v9.586A1.75 1.75 0 0 1 13.25 16h-9.5A1.75 1.75 0 0 1 2 14.25V1.75zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .138.112.25.25.25h9.5a.25.25 0 0 0 .25-.25V6h-2.75A1.75 1.75 0 0 1 9 4.25V1.5H3.75zm6.75.56v2.19c0 .138.112.25.25.25h2.19L10.5 2.06z"/></svg>
                       </button>
                     </div>
@@ -2370,8 +2370,8 @@ function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
           <span class="stash-ref">{{ s.ref }}</span>
           <span class="stash-msg">{{ s.message }}</span>
           <div class="row-actions always">
-            <button class="row-btn always" title="Apply (keep draft)" :disabled="stashBusy" @click.stop="doStashApply(s.index)">⎘</button>
-            <button class="row-btn always" title="Pop (apply &amp; remove)" :disabled="stashBusy" @click.stop="doStashPop(s.index)">↑</button>
+            <button class="row-btn always" :title="$t('action.stash-apply')" :disabled="stashBusy" @click.stop="doStashApply(s.index)">⎘</button>
+            <button class="row-btn always" :title="$t('action.stash-pop')" :disabled="stashBusy" @click.stop="doStashPop(s.index)">↑</button>
             <button class="row-btn always danger" title="Drop" :disabled="stashBusy" @click.stop="doStashDrop(s.index)">✕</button>
           </div>
         </div>

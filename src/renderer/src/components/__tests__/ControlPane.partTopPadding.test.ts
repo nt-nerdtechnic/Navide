@@ -69,11 +69,19 @@ function partTopClasses(wrapper: VueWrapper): string[] {
   return wrapper.get('.pane-split .part-top').classes()
 }
 
-async function clickTabTitled(wrapper: VueWrapper, title: string): Promise<void> {
+// `key` is a built-in tab's id (matched on data-tab) or a plugin tab's own
+// title. Built-in titles are now composed from a locale key and this file stubs
+// $t to echo keys, so matching their text would assert against the stub;
+// plugin titles come from the contribution and are unaffected.
+async function clickTab(wrapper: VueWrapper, key: string): Promise<void> {
   const button = wrapper
     .findAll('.sidebar-tabs .tab-btn, .sidebar-tabs .plugin-tab-btn')
-    .find((candidate) => candidate.attributes('title')?.includes(title))
-  expect(button, `no sidebar tab titled ${title}`).toBeDefined()
+    .find(
+      (candidate) =>
+        candidate.attributes('data-tab') === key ||
+        candidate.attributes('title')?.includes(key),
+    )
+  expect(button, `no sidebar tab for ${key}`).toBeDefined()
   await button!.trigger('click')
   await wrapper.vm.$nextTick()
 }
@@ -89,21 +97,21 @@ describe('ControlPane – shared split padding is scoped to the Plans panel', ()
 
   it('keeps the Git tab on the padded shared `.part-top`', async () => {
     wrapper = mountPane({ pluginContributions: [gitContribution, plansContribution] })
-    await clickTabTitled(wrapper, 'Source Control')
+    await clickTab(wrapper, 'Source Control')
 
     expect(partTopClasses(wrapper)).not.toContain('part-top-plugin')
   })
 
   it('keeps a generic plugin tab on the padded shared `.part-top`', async () => {
     wrapper = mountPane({ pluginContributions: [contribution(), plansContribution] })
-    await clickTabTitled(wrapper, 'Files')
+    await clickTab(wrapper, 'Files')
 
     expect(partTopClasses(wrapper)).not.toContain('part-top-plugin')
   })
 
   it('drops the padding for the packaged Plans panel', async () => {
     wrapper = mountPane({ pluginContributions: [gitContribution, plansContribution] })
-    await clickTabTitled(wrapper, 'Plans')
+    await clickTab(wrapper, 'plans')
 
     expect(partTopClasses(wrapper)).toContain('part-top-plugin')
   })
@@ -113,7 +121,7 @@ describe('ControlPane – shared split padding is scoped to the Plans panel', ()
       pluginContributions: [gitContribution, plansContribution],
       legacyPlansRecovery: true,
     })
-    await clickTabTitled(wrapper, 'Plans')
+    await clickTab(wrapper, 'plans')
 
     expect(partTopClasses(wrapper)).not.toContain('part-top-plugin')
   })
@@ -125,14 +133,14 @@ describe('ControlPane – shared split padding is scoped to the Plans panel', ()
       pluginContributions: [gitContribution, plansContribution],
       legacyGitRecovery: true,
     })
-    await clickTabTitled(wrapper, 'Plans')
+    await clickTab(wrapper, 'plans')
 
     expect(partTopClasses(wrapper)).toContain('part-top-plugin')
   })
 
   it('leaves the Explorer tab padded', async () => {
     wrapper = mountPane({ pluginContributions: [gitContribution, plansContribution] })
-    await clickTabTitled(wrapper, 'Explorer')
+    await clickTab(wrapper, 'explorer')
 
     expect(partTopClasses(wrapper)).not.toContain('part-top-plugin')
   })
