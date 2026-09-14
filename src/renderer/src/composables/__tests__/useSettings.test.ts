@@ -150,6 +150,17 @@ describe('useSettings — language bootstrap and persistence', () => {
     expect(broadcast).toHaveBeenCalledTimes(1)
   })
 
+  it('first launch with no choice anywhere follows the system locale and persists nothing', () => {
+    // A fresh project's backend backup is "" (never chosen). Adopting it as a
+    // choice is what used to flip an English first launch to zh-TW on restart.
+    const { language, loadLanguage } = useSettings()
+    loadLanguage({ language: '' })
+    const system = /^zh/i.test(navigator.language) ? 'zh-TW' : /^en/i.test(navigator.language) ? 'en-US' : 'zh-TW'
+    expect(language.value).toBe(system)
+    expect(i18n.global.locale.value).toBe(language.value)
+    expect(settingsGet('agent-team:language', null)).toBeNull()
+  })
+
   it('adopts backendFallback when settings cache is empty', () => {
     const { language, loadLanguage } = useSettings()
     loadLanguage({ language: 'en-US' })

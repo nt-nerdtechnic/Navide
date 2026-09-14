@@ -168,7 +168,11 @@ class Project:
     run_count: int = 0     # incremented on each successful pipeline completion
     theme: str = "dark-github"  # backup of the user-level theme (source of truth is the renderer's localStorage)
     theme_custom: dict[str, Any] = field(default_factory=dict)  # backup of custom CSS var overrides (key -> value)
-    language: str = "zh-TW"  # backup of the user-level language (source of truth is the renderer's localStorage)
+    # Backup of the user-level language (source of truth is the renderer's
+    # localStorage). Empty until the user picks one: the renderer adopts this
+    # backup as if it were a choice, and a "zh-TW" default here turned every
+    # English first launch Chinese on its second start.
+    language: str = ""
     tab_order: list[str] = field(default_factory=list)  # run-group tab order (ids); empty = frontend insertion order
     # Renderer-owned run-group tab records ({id, name, createdAt} dicts), stored
     # in display order. None = never persisted (frontend falls back to legacy
