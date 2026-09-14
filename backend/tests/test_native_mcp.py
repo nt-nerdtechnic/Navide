@@ -34,13 +34,7 @@ def test_scan_reads_every_shape(tmp_path: Path) -> None:
         (".codex", "config.toml"),
         '[mcp_servers.xmind]\nenabled = false\nurl = "https://app.xmind.com/mcp"\n',
     )
-    _write(
-        home,
-        (".grok", "user-settings.json"),
-        json.dumps(
-            {"mcp": {"servers": [{"id": "gk", "transport": "http", "url": "https://g/mcp"}]}}
-        ),
-    )
+    _write(home, (".grok", "config.toml"), '[mcp_servers.gk]\nurl = "https://g/mcp"\n')
 
     found = {(s.agent, s.name): s for s in native_mcp.scan(home)}
 
@@ -245,6 +239,25 @@ def test_both_accepted_filenames_are_read(tmp_path: Path) -> None:
     )
 
     assert sorted(s.name for s in native_mcp.scan(tmp_path)) == ["a", "b"]
+
+
+def test_a_list_shaped_container_is_still_read_by_its_key(tmp_path: Path) -> None:
+    """No shipping vendor is list-shaped since grok moved to config.toml, so
+    the branch that reads one is driven through a synthetic source. Deleting
+    the branch instead would make the next list-shaped CLI a rewrite."""
+    path = _write(
+        tmp_path,
+        (".listy", "servers.json"),
+        json.dumps({"mcp": {"servers": [{"id": "one", "url": "https://l/mcp"}, {"no": "id"}]}}),
+    )
+    source = native_mcp.NativeMcpSource(
+        "listy", (".listy", "servers.json"), "jsonc", ("mcp", "servers"), "id"
+    )
+
+    found = native_mcp._read_source(source, path)
+
+    # The record without the key is skipped, not guessed at.
+    assert [(s.agent, s.name, s.url) for s in found] == [("listy", "one", "https://l/mcp")]
 
 
 def test_native_sources_agree_with_vendor_wiring() -> None:

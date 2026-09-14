@@ -4,10 +4,12 @@ import json
 import os
 import stat
 import time
+import tomllib
 from pathlib import Path
 from typing import Any
 
 import pytest
+import tomli_w
 
 from agent_team_backend import osplat
 from agent_team_backend.mcp_server import pane_home, wiring as plan_mcp_wiring
@@ -35,7 +37,8 @@ def _config(home: Path, agent: str, pane: str) -> Path:
 
 
 def _load(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
+    raw = path.read_text(encoding="utf-8")
+    return tomllib.loads(raw) if path.suffix == ".toml" else json.loads(raw)
 
 
 # ---- kimi: config-dir shim, $HOME untouched ----
@@ -145,52 +148,55 @@ def test_home_shim_does_not_mirror_the_panes_root_into_itself(home: Path) -> Non
     assert not (Path(root) / ".navide-panes").exists()
 
 
-# ---- grok: HOME shim, list-shaped servers, credential in the same file ----
+# ---- grok: HOME shim, TOML config, its own settings in the same file ----
 
 
-def test_grok_shim_writes_a_list_entry_and_copies_the_settings_file(home: Path) -> None:
+def test_grok_shim_writes_a_toml_entry_and_copies_the_settings_file(home: Path) -> None:
     grok = home / ".grok"
     grok.mkdir()
-    (grok / "user-settings.json").write_text(
-        json.dumps({"apiKey": "xai-secret", "mcp": {"servers": [{"id": "mine"}]}}),
+    (grok / "config.toml").write_text(
+        tomli_w.dumps({"ui": {"yolo": False}, "mcp_servers": {"mine": {"command": "./mine"}}}),
         encoding="utf-8",
     )
     _, root = pane_home.prepare("grok", "p1", URL, SERVER, LABEL)  # type: ignore[misc]
     config = _config(home, "grok", "p1")
-    # The API key shares this file with the MCP servers, so it cannot be a
-    # symlink — the pane runs against a copy.
+    # The user's settings share this file with the MCP servers, so it cannot be
+    # a symlink — the pane runs against a copy.
     assert not config.is_symlink()
     document = _load(config)
-    assert document["apiKey"] == "xai-secret"
-    servers = document["mcp"]["servers"]
-    assert isinstance(servers, list)
-    assert [s["id"] for s in servers] == ["mine", SERVER]
-    ours = servers[-1]
-    assert ours["transport"] == "http" and ours["url"] == URL and ours["enabled"] is True
-    # The server's display name is the caller's, not this module's.
-    assert ours["label"] == LABEL
+    # Their own settings survive the re-emit, theirs and ours side by side.
+    assert document["ui"] == {"yolo": False}
+    servers = document["mcp_servers"]
+    assert sorted(servers) == sorted(["mine", SERVER])
+    assert servers["mine"] == {"command": "./mine"}
+    # A bare url is a streamable-HTTP server to grok; nothing else is written.
+    assert servers[SERVER] == {"url": URL}
 
 
 def test_grok_shim_replaces_our_entry_rather_than_appending(home: Path) -> None:
     (home / ".grok").mkdir()
     pane_home.prepare("grok", "p1", URL, SERVER, LABEL)
     pane_home.prepare("grok", "p1", URL + "&again=1", SERVER, LABEL)
-    servers = _load(_config(home, "grok", "p1"))["mcp"]["servers"]
-    assert [s["id"] for s in servers] == [SERVER]  # not accumulating per spawn
+    servers = _load(_config(home, "grok", "p1"))["mcp_servers"]
+    assert list(servers) == [SERVER]  # not accumulating per spawn
+    assert servers[SERVER]["url"].endswith("&again=1")  # the latest endpoint wins
 
 
-def test_grok_shim_drops_a_list_entry_left_by_a_former_server_name(home: Path) -> None:
+def test_grok_shim_drops_an_entry_left_by_a_former_server_name(home: Path) -> None:
     grok = home / ".grok"
     grok.mkdir()
     legacy = plan_mcp_wiring.LEGACY_SERVER_NAMES[0]
-    (grok / "user-settings.json").write_text(
-        json.dumps({"mcp": {"servers": [{"id": legacy, "url": "http://stale"}, {"id": "mine"}]}}),
+    (grok / "config.toml").write_text(
+        tomli_w.dumps(
+            {"mcp_servers": {legacy: {"url": "http://stale"}, "mine": {"command": "./mine"}}}
+        ),
         encoding="utf-8",
     )
     pane_home.prepare("grok", "p1", URL, SERVER, LABEL, plan_mcp_wiring.LEGACY_SERVER_NAMES)
-    servers = _load(_config(home, "grok", "p1"))["mcp"]["servers"]
-    # A list is matched on its key, so the old record has to go by id too.
-    assert [s["id"] for s in servers] == ["mine", SERVER]
+    servers = _load(_config(home, "grok", "p1"))["mcp_servers"]
+    # Both entries point at the same live endpoint, so the former name has to
+    # go or every tool would be loaded twice.
+    assert sorted(servers) == sorted(["mine", SERVER])
 
 
 @pytest.mark.skipif(not osplat.paths.enforces_posix_modes(), reason="POSIX mode bits")
@@ -296,12 +302,12 @@ def test_a_volatile_sidecar_is_discarded_rather_than_kept_on_conflict(home: Path
 
 def test_a_crashed_write_is_cleaned_up_not_adopted(home: Path) -> None:
     """A temp file left by a crash between mkstemp and replace holds grok's
-    API key; adopting it would strand that copy in the real home."""
+    own settings; adopting it would strand that copy in the real home."""
     grok = home / ".grok"
     grok.mkdir()
     _, root = pane_home.prepare("grok", "p1", URL, SERVER)  # type: ignore[misc]
     leftover = Path(root) / ".grok" / f"{pane_home.TMP_PREFIX}abc123"
-    leftover.write_text('{"apiKey": "xai-secret"}', encoding="utf-8")
+    leftover.write_text('api_key = "xai-secret"\n', encoding="utf-8")
 
     pane_home.prepare("grok", "p1", URL, SERVER)
 
@@ -341,29 +347,29 @@ def test_grok_sqlite_sidecars_are_linked_even_when_absent(home: Path) -> None:
         assert (Path(root) / ".grok" / name).is_symlink(), name
 
 
-def test_a_login_done_inside_the_pane_survives_the_next_spawn(home: Path) -> None:
-    """grok keeps its API key in the same file as its MCP servers. Rebuilding
-    that file from the real one every spawn would discard a token the pane
-    just refreshed, and the user would be asked to log in again."""
+def test_an_edit_made_inside_the_pane_survives_the_next_spawn(home: Path) -> None:
+    """grok keeps its own settings in the same file as its MCP servers.
+    Rebuilding that file from the real one every spawn would discard a change
+    the pane just made, and the user would have to make it again."""
     grok = home / ".grok"
     grok.mkdir()
-    real = grok / "user-settings.json"
-    real.write_text(json.dumps({"apiKey": "old"}), encoding="utf-8")
-    # The login happens after the real file was written. Say so explicitly: a
+    real = grok / "config.toml"
+    real.write_text(tomli_w.dumps({"cli": {"api_key": "old"}}), encoding="utf-8")
+    # The edit happens after the real file was written. Say so explicitly: a
     # tie goes to the real file by design, and coarse mtimes (one kernel tick
     # on Linux) make a tie out of two writes in the same instant.
     os.utime(real, (time.time() - 600, time.time() - 600))
     pane_home.prepare("grok", "p1", URL, SERVER)
     config = _config(home, "grok", "p1")
     rotated = _load(config)
-    rotated["apiKey"] = "rotated-inside-the-pane"
-    config.write_text(json.dumps(rotated), encoding="utf-8")
+    rotated["cli"]["api_key"] = "rotated-inside-the-pane"
+    config.write_text(tomli_w.dumps(rotated), encoding="utf-8")
 
     pane_home.prepare("grok", "p1", URL, SERVER)
 
     document = _load(config)
-    assert document["apiKey"] == "rotated-inside-the-pane"
-    assert [s["id"] for s in document["mcp"]["servers"]] == [SERVER]
+    assert document["cli"]["api_key"] == "rotated-inside-the-pane"
+    assert list(document["mcp_servers"]) == [SERVER]
 
 
 def test_a_newer_real_config_wins_over_the_shim_copy(home: Path) -> None:
@@ -371,16 +377,16 @@ def test_a_newer_real_config_wins_over_the_shim_copy(home: Path) -> None:
     the newer one and the pane picks it up on its next spawn."""
     grok = home / ".grok"
     grok.mkdir()
-    real = grok / "user-settings.json"
-    real.write_text(json.dumps({"apiKey": "first"}), encoding="utf-8")
+    real = grok / "config.toml"
+    real.write_text(tomli_w.dumps({"cli": {"api_key": "first"}}), encoding="utf-8")
     pane_home.prepare("grok", "p1", URL, SERVER)
     config = _config(home, "grok", "p1")
     os.utime(config, (time.time() - 600, time.time() - 600))
-    real.write_text(json.dumps({"apiKey": "switched"}), encoding="utf-8")
+    real.write_text(tomli_w.dumps({"cli": {"api_key": "switched"}}), encoding="utf-8")
 
     pane_home.prepare("grok", "p1", URL, SERVER)
 
-    assert _load(config)["apiKey"] == "switched"
+    assert _load(config)["cli"]["api_key"] == "switched"
 
 
 @pytest.mark.skipif(not osplat.paths.enforces_posix_modes(), reason="POSIX mode bits")

@@ -85,6 +85,18 @@ accounting, and the trap each CLI hides.
   tool-execution confirmation gate.
 - The integration reads the shared `~/.grok/grok.db` in a WAL-aware manner.
 
+**Superseded 2026-09-14 — the vendor now targets xAI's own grok-build CLI**
+(`curl -fsSL https://x.ai/cli/install.sh | bash`, docs.x.ai/build/cli), not the
+community CLI the research below describes. Both install to `~/.grok/bin/grok`,
+so `which grok` cannot tell them apart; the version string can — xAI's prints
+`grok <x.y.z> (<commit>)`, the community one a bare `1.1.7`. What changed for
+the integration: sign-in is `grok login` (browser OAuth at auth.x.ai), and MCP
+servers live in `~/.grok/config.toml` under `[mcp_servers.<name>]` — a TOML map
+keyed by the server's name, where a bare `url` means streamable HTTP — instead
+of a `mcp.servers` **list** in `~/.grok/user-settings.json`. Everything below
+still describes the community CLI and is kept as the record of how the
+integration was built.
+
 The following notes preserve the research that informed the integration.
 
 Source: https://grokcli.io/ → https://github.com/superagent-ai/grok-cli
