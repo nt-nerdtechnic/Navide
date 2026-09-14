@@ -4,6 +4,16 @@ All notable released changes to Navide will be documented in this file. The form
 
 ## [Unreleased]
 
+## [0.2.3] — 2026-09-15 — signed release
+
+- First release where macOS, Windows x64, Windows arm64 and Linux x64 ship from the same commit (v0.2.2's Windows and Linux assets were uploaded later from a different commit).
+- Windows: native arm64 installer (#100); ConPTY console host bundled and verified at build time (#86); backend follows the app into exit (#88); CLI panes receive their command directly, not through PowerShell (#87); two CI regressions fixed (#80).
+- Windows/Linux: drawn window controls always above every overlay (#94); Plans window gets a title bar (#96); confirm before the last window closes (#81).
+- Linux: package, binary and desktop entry renamed to navide (#85); hook works without curl (#83); backend follows the app into exit (#84).
+- Backend: outbound TLS context built once, off the event loop — fixes terminal panes timing out on Windows while the analyzer polled (#102).
+- MCP: cli_list_sessions and cli_place_pane; panes can resume an existing CLI conversation; sidebar drag-and-drop assigns pane lineage (#103, #104).
+- Language defaults to the system locale when unset (#82); update manifests present for every platform; docs brought back in line with what ships (#101).
+
 ## [0.2.2] — 2026-09-13 — signed release
 
 ### Added

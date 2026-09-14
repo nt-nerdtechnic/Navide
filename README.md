@@ -10,7 +10,7 @@ It is not another chat panel inside the traditional IDE. Navide is being built a
 
 English | [繁體中文](README.zh-TW.md) | [日本語](README.ja-JP.md)
 
-[Download v0.2.2](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.2.2) | [Getting started](docs/en-US/getting-started.md) | [Documentation](docs/en-US/README.md) | [Roadmap](docs/en-US/roadmap.md)
+[Download v0.2.3](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.2.3) | [Getting started](docs/en-US/getting-started.md) | [Documentation](docs/en-US/README.md) | [Roadmap](docs/en-US/roadmap.md)
 
 [![Latest release](https://img.shields.io/github/v/release/nt-nerdtechnic/Navide?sort=semver&label=release&logo=github)](https://github.com/nt-nerdtechnic/Navide/releases/latest)
 [![Electron](https://img.shields.io/badge/Electron-44-47848F?logo=electron)](https://www.electronjs.org/)
@@ -115,12 +115,13 @@ Read [Privacy and Data Flows](docs/en-US/privacy.md) and the [Security Policy](S
 
 ## Try Navide
 
-Navide supports macOS 13+ on Apple silicon, Linux x64, and Windows on x64 or Arm. The v0.2.2 release ships macOS builds signed with a Developer ID certificate and notarized by Apple, plus a Windows x64 installer and Linux x64 packages:
+Navide supports macOS 13+ on Apple silicon, Linux x64, and Windows on x64 or Arm. The v0.2.3 release ships macOS builds signed with a Developer ID certificate and notarized by Apple, plus a Windows x64 installer and Linux x64 packages:
 
-- [Download DMG](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.2/Navide-0.2.2-arm64.dmg)
-- [Download ZIP](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.2/Navide-0.2.2-arm64.zip)
-- [Download Windows x64 installer](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.2/Navide-0.2.2-win-x64.exe)
-- [Download Linux AppImage](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.2/Navide-0.2.2-x86_64.AppImage) · [Download Linux .deb](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.2/Navide-0.2.2-amd64.deb)
+- [Download DMG](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.3/Navide-0.2.3-arm64.dmg)
+- [Download ZIP](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.3/Navide-0.2.3-arm64.zip)
+- [Download Windows x64 installer](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.3/Navide-0.2.3-win-x64.exe)
+- [Download Windows Arm64 installer](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.3/Navide-0.2.3-win-arm64.exe)
+- [Download Linux AppImage](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.3/Navide-0.2.3-x86_64.AppImage) · [Download Linux .deb](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.3/Navide-0.2.3-amd64.deb)
 
 Copy Navide to Applications and open it normally — no Gatekeeper workaround is needed. In-app auto-update is available from this release onward.
 

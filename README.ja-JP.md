@@ -10,7 +10,7 @@ Navide は、一人の人間が複数の Coding Agent を指揮するための�
 
 [English](README.md) | [繁體中文](README.zh-TW.md) | 日本語
 
-[v0.2.2 をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.2.2) | [はじめに](docs/ja-JP/getting-started.md) | [ドキュメント](docs/ja-JP/README.md) | [ロードマップ](docs/ja-JP/roadmap.md)
+[v0.2.3 をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.2.3) | [はじめに](docs/ja-JP/getting-started.md) | [ドキュメント](docs/ja-JP/README.md) | [ロードマップ](docs/ja-JP/roadmap.md)
 
 [![Latest release](https://img.shields.io/github/v/release/nt-nerdtechnic/Navide?sort=semver&label=release&logo=github)](https://github.com/nt-nerdtechnic/Navide/releases/latest)
 [![Electron](https://img.shields.io/badge/Electron-44-47848F?logo=electron)](https://www.electronjs.org/)
@@ -115,12 +115,13 @@ Local-first は常に完全オフラインという意味ではありません�
 
 ## Navide を試す
 
-Navide は Apple silicon 上の macOS 13 以降、Linux x64、x64 および Arm 版 Windows をサポートします。v0.2.2 では Developer ID で署名され Apple の Notarization を通過した macOS 版に加え、Windows x64 Installer と Linux x64 Package を提供しています。
+Navide は Apple silicon 上の macOS 13 以降、Linux x64、x64 および Arm 版 Windows をサポートします。v0.2.3 では Developer ID で署名され Apple の Notarization を通過した macOS 版に加え、Windows x64 Installer と Linux x64 Package を提供しています。
 
-- [DMG をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.2/Navide-0.2.2-arm64.dmg)
-- [ZIP をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.2/Navide-0.2.2-arm64.zip)
-- [Windows x64 Installer をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.2/Navide-0.2.2-win-x64.exe)
-- [Linux AppImage をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.2/Navide-0.2.2-x86_64.AppImage)・[Linux .deb をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.2/Navide-0.2.2-amd64.deb)
+- [DMG をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.3/Navide-0.2.3-arm64.dmg)
+- [ZIP をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.3/Navide-0.2.3-arm64.zip)
+- [Windows x64 Installer をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.3/Navide-0.2.3-win-x64.exe)
+- [Windows ARM64 Installer をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.3/Navide-0.2.3-win-arm64.exe)
+- [Linux AppImage をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.3/Navide-0.2.3-x86_64.AppImage)・[Linux .deb をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.3/Navide-0.2.3-amd64.deb)
 
 Navide を Applications にコピーすればそのまま開けます。Gatekeeper の回避は不要です。このリリース以降、アプリ内自動アップデートが利用できます。
 
