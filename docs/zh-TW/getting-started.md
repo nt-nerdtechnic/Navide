@@ -2,11 +2,11 @@
 
 [English](../en-US/getting-started.md) | 繁體中文 | [日本語](../ja-JP/getting-started.md) | [文件中心](README.md)
 
-Navide 支援配備 Apple 晶片且執行 macOS 13 以上版本的 Mac，以及 Linux x64 與 x64／Arm 版 Windows。[v0.2.1 GitHub Release](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.2.1) 提供 macOS 的 DMG 與 ZIP 下載，並已經 Developer ID 簽章與 Apple Notarization。
+Navide 支援配備 Apple 晶片且執行 macOS 13 以上版本的 Mac，以及 Linux x64 與 x64／Arm 版 Windows。[v0.2.2 GitHub Release](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.2.2) 提供 macOS 的 DMG 與 ZIP 下載（已經 Developer ID 簽章與 Apple Notarization）、Windows x64 的 NSIS 安裝程式，以及 Linux x64 的 AppImage 與 `.deb`。
 
 若要在 macOS 安裝，請下載 DMG、將 Navide 複製到「應用程式」，接著正常開啟即可，無需繞過 Gatekeeper。
 
-Release CI 也會為 Linux x64 建置 AppImage 與 `.deb`、為 x64 與 Arm 版 Windows 各建置 NSIS 安裝程式，但尚未有任何版本發行這些檔案：它們將自下一個版本起隨發行提供，在此之前請於這兩個平台從原始碼安裝。Windows 版本尚未經過程式碼簽章，首次執行時 SmartScreen 會出現警告。
+Arm 版 Windows 的原生安裝程式由 Release CI 建置、自下一個版本起隨發行提供；在此之前 Arm 版 Windows 以模擬方式執行 x64 安裝程式。Windows 版本尚未經過程式碼簽章，首次執行時 SmartScreen 會出現警告。
 
 ## 從原始碼安裝的前置需求
 

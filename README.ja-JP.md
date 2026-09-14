@@ -115,14 +115,16 @@ Local-first は常に完全オフラインという意味ではありません�
 
 ## Navide を試す
 
-Navide は Apple silicon 上の macOS 13 以降をサポートします。v0.2.2 は Developer ID で署名され、Apple の Notarization を通過した正式版です。
+Navide は Apple silicon 上の macOS 13 以降、Linux x64、x64 および Arm 版 Windows をサポートします。v0.2.2 では Developer ID で署名され Apple の Notarization を通過した macOS 版に加え、Windows x64 Installer と Linux x64 Package を提供しています。
 
 - [DMG をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.2/Navide-0.2.2-arm64.dmg)
 - [ZIP をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.2/Navide-0.2.2-arm64.zip)
+- [Windows x64 Installer をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.2/Navide-0.2.2-win-x64.exe)
+- [Linux AppImage をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.2/Navide-0.2.2-x86_64.AppImage)・[Linux .deb をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.2/Navide-0.2.2-amd64.deb)
 
 Navide を Applications にコピーすればそのまま開けます。Gatekeeper の回避は不要です。このリリース以降、アプリ内自動アップデートが利用できます。
 
-Linux と Windows もサポートされ、macOS と同じ CI Gate を通過します。Release CI は Linux x64 向けに AppImage と `.deb` を、x64 と Arm 版 Windows 向けに NSIS Installer をビルドしますが、これらの Installer が配布されるのは次のリリースからです。v0.2.2 には macOS の Asset のみが含まれるため、それまでこの 2 つの Platform では Source からインストールしてください。Windows Build はまだ Code Signing されていないため初回起動時に SmartScreen が警告し、Executions ウィンドウはこの Platform では設計上一覧する対象がなく（読み取るのは User の crontab と macOS の launchd で、Windows Task Scheduler は意図的に統合していません——Navide 自身が Scheduled Job を作ることはなく、Task Scheduler が既にマシンの Task を管理しているためです）、Pane ごとの CLI Home と管理対象の Skills は Symbolic Link で構成されるため Windows の開発者モードまたは管理者権限での実行が必要で、CLI は停止を通知されずに終了されるため Pane が閉じる前に Transcript を書き出せない場合があります。
+Linux と Windows は macOS と同じ CI Gate を通過します。Arm 版 Windows のネイティブ Installer は Release CI でビルドされ、次のリリースから配布されます。それまで Arm 版 Windows では x64 Installer がエミュレーションで動作します。Windows Build はまだ Code Signing されていないため初回起動時に SmartScreen が警告し、Executions ウィンドウはこの Platform では設計上一覧する対象がなく（読み取るのは User の crontab と macOS の launchd で、Windows Task Scheduler は意図的に統合していません——Navide 自身が Scheduled Job を作ることはなく、Task Scheduler が既にマシンの Task を管理しているためです）、Pane ごとの CLI Home と管理対象の Skills は Symbolic Link で構成されるため Windows の開発者モードまたは管理者権限での実行が必要で、CLI は停止を通知されずに終了されるため Pane が閉じる前に Transcript を書き出せない場合があります。
 
 開発用 Checkout では、代わりに Source からインストールしてください。
 

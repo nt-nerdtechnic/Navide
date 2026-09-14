@@ -115,14 +115,16 @@ Read [Privacy and Data Flows](docs/en-US/privacy.md) and the [Security Policy](S
 
 ## Try Navide
 
-Navide supports macOS 13+ on Apple silicon. The v0.2.2 release is signed with a Developer ID certificate and notarized by Apple:
+Navide supports macOS 13+ on Apple silicon, Linux x64, and Windows on x64 or Arm. The v0.2.2 release ships macOS builds signed with a Developer ID certificate and notarized by Apple, plus a Windows x64 installer and Linux x64 packages:
 
 - [Download DMG](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.2/Navide-0.2.2-arm64.dmg)
 - [Download ZIP](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.2/Navide-0.2.2-arm64.zip)
+- [Download Windows x64 installer](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.2/Navide-0.2.2-win-x64.exe)
+- [Download Linux AppImage](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.2/Navide-0.2.2-x86_64.AppImage) · [Download Linux .deb](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.2/Navide-0.2.2-amd64.deb)
 
 Copy Navide to Applications and open it normally — no Gatekeeper workaround is needed. In-app auto-update is available from this release onward.
 
-Linux and Windows are supported and run the same CI gates as macOS; release CI builds an AppImage and a `.deb` for Linux x64 and NSIS installers for Windows x64 and Windows on Arm, and those installers ship from the next release — v0.2.2 carries macOS assets only, so install from source on those platforms until then. The Windows build is not code-signed yet, so SmartScreen warns on first run, the Executions window has nothing to list there by design (it reads the user crontab and macOS launchd; Windows Task Scheduler is deliberately not integrated, since Navide never creates scheduled jobs of its own and Task Scheduler already manages the machine's tasks), per-pane CLI homes and managed skills need Windows Developer Mode or an elevated Navide because they are built from symbolic links, and a CLI is terminated rather than asked to stop, so it may not flush its transcript before a pane closes.
+Linux and Windows run the same CI gates as macOS. A native Windows on Arm installer is built by release CI and ships from the next release; until then Windows on Arm runs the x64 installer under emulation. The Windows build is not code-signed yet, so SmartScreen warns on first run, the Executions window has nothing to list there by design (it reads the user crontab and macOS launchd; Windows Task Scheduler is deliberately not integrated, since Navide never creates scheduled jobs of its own and Task Scheduler already manages the machine's tasks), per-pane CLI homes and managed skills need Windows Developer Mode or an elevated Navide because they are built from symbolic links, and a CLI is terminated rather than asked to stop, so it may not flush its transcript before a pane closes.
 
 For a development checkout, install from source instead.
 
