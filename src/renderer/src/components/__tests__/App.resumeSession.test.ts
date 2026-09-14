@@ -77,6 +77,21 @@ describe('cli_open_agent(session_id) — the MCP resume path, station by station
     expect(body).toContain("if (!sessionId) return ''")
   })
 
+  it('refuses a session id that is not shell-safe before building any command', () => {
+    // Second layer of the backend's _SAFE_SESSION_ID check: the id goes into a
+    // shell command string. A caller supplying `abc; rm -rf ~` must get a
+    // fresh pane and a diagnostic, never that string on a command line.
+    const body = fn('mcpSpawnCommandOverride')
+    const guardAt = body.indexOf('if (!isShellSafeSessionId(sessionId))')
+    const buildAt = body.indexOf('buildResumeCommand(')
+    expect(guardAt).toBeGreaterThan(-1)
+    expect(buildAt).toBeGreaterThan(guardAt)
+    expect(body).toContain("code: 'spawn.resume-unsafe-id'")
+    // The refusal returns '' — an ordinary fresh spawn, byte for byte.
+    const refusal = body.slice(guardAt, buildAt)
+    expect(refusal).toContain("return ''")
+  })
+
   it('a vendor that cannot resume by id is recorded, never silently opened fresh', () => {
     const body = fn('mcpSpawnCommandOverride')
     // The tool refuses aider upstream, so this is a spec that changed under

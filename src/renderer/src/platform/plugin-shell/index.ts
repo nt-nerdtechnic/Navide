@@ -41,6 +41,7 @@ export {
   buildResumeCommand,
   cancelStalePendingCreate,
   dedupeRestorablePanes,
+  isShellSafeSessionId,
   normalizeResumeSessionId,
   paneBusyForRebuild,
   paneCanRebuild,
