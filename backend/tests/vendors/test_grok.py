@@ -17,6 +17,7 @@ import pytest
 
 from agent_team_backend import app as app_module
 from agent_team_backend.cli_vendors.grok import GrokLogReader
+from agent_team_backend.log_readers.watcher import _ACTIVITY_KEYS_PERSIST_LIMIT
 
 WS = "/Users/dev/proj"
 #: What grok names the group directory for WS.
@@ -79,6 +80,21 @@ def _append(path: Path, records: list[dict]) -> None:
     with path.open("a", encoding="utf-8") as fh:
         for r in records:
             fh.write(json.dumps(r) + "\n")
+
+
+def _persisted(bag: set[str]) -> set[str]:
+    """The bag as it comes back out of the watcher's checkpoint store.
+
+    _persist_activity_seen refuses an over-limit bag outright rather than
+    truncating it, so a reader that exceeds the limit gets an EMPTY bag on the
+    next start — the full replay of GitHub #28. Round-tripping through JSON
+    also catches a cursor that cannot survive serialization.
+    """
+    assert len(bag) <= _ACTIVITY_KEYS_PERSIST_LIMIT, (
+        f"bag of {len(bag)} keys exceeds the persist limit "
+        f"({_ACTIVITY_KEYS_PERSIST_LIMIT}); it would be dropped whole"
+    )
+    return {str(k) for k in json.loads(json.dumps(sorted(bag)))}
 
 
 # ── layout ──────────────────────────────────────────────────────────────────
@@ -291,12 +307,17 @@ def test_the_bag_stays_one_key_however_long_the_conversation(
 def test_a_restart_from_the_persisted_bag_replays_nothing(
     _grok_home: Path,
 ) -> None:
-    path = _write(_grok_home, [_user(1, "hi"), _agent(2, "yo"), _turn(3)])
+    """Through the real round-trip, not a copied set: a cursor that cannot
+    survive JSON would look fine in-process and replay everything on restart."""
+    records: list[dict] = []
+    for i in range(200):
+        records += [_user(i * 3, f"q{i}"), _agent(i * 3 + 1, f"a{i}"), _turn(i * 3 + 2)]
+    path = _write(_grok_home, records)
     seen: set[str] = set()
-    GrokLogReader().parse_activity(path, seen)
+    assert len(GrokLogReader().parse_activity(path, seen)) == 600
 
-    # A fresh reader with only the persisted bag — what a backend restart has.
-    assert GrokLogReader().parse_activity(path, set(seen)) == []
+    # A fresh reader holding only what the checkpoint store could keep.
+    assert GrokLogReader().parse_activity(path, _persisted(seen)) == []
 
 
 def test_appended_records_are_delivered_exactly_once(_grok_home: Path) -> None:
