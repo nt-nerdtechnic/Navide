@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import re
+from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
 import httpx
@@ -27,6 +28,7 @@ from .analyzer import (
     _clean_for_analysis,
     _safe_parse_json,
 )
+from .http_ssl import default_ssl_context
 
 log = logging.getLogger("agent_team_backend.analyzer_ollama")
 
@@ -37,8 +39,12 @@ _PLACEHOLDER_RE = re.compile(r"^<[^>]+>$")
 
 # ─── HTTP helpers ─────────────────────────────────────────────────────────────
 
-def _client(base_url: str, timeout: float) -> httpx.AsyncClient:
-    return httpx.AsyncClient(base_url=base_url.rstrip("/"), timeout=timeout)
+@asynccontextmanager
+async def _client(base_url: str, timeout: float) -> AsyncIterator[httpx.AsyncClient]:
+    async with httpx.AsyncClient(
+        base_url=base_url.rstrip("/"), timeout=timeout, verify=await default_ssl_context()
+    ) as c:
+        yield c
 
 
 async def _generate(
@@ -326,7 +332,7 @@ async def pull_model(
     Raises on HTTP error.
     """
     url = base_url.rstrip("/") + "/api/pull"
-    async with httpx.AsyncClient(timeout=timeout) as c:
+    async with httpx.AsyncClient(timeout=timeout, verify=await default_ssl_context()) as c:
         async with c.stream("POST", url, json={"name": name, "stream": True}) as resp:
             resp.raise_for_status()
             async for line in resp.aiter_lines():

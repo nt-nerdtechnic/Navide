@@ -33,6 +33,7 @@ from agent_team_backend.osplat import paths
 from agent_team_backend import commit_message_prompt
 from agent_team_backend.git_security import is_remote_helper_form
 from agent_team_backend.git_askpass_helper import ASKPASS_FLAG
+from agent_team_backend.http_ssl import default_ssl_context
 from agent_team_backend.host_shell import (
     run_allowlisted,
     run_allowlisted_capped,
@@ -3009,7 +3010,9 @@ async def generate_commit_message(
 
     # Default: Ollama path
     try:
-        async with httpx.AsyncClient(base_url=ollama_url.rstrip("/"), timeout=remaining) as client:
+        async with httpx.AsyncClient(
+            base_url=ollama_url.rstrip("/"), timeout=remaining, verify=await default_ssl_context()
+        ) as client:
             resp = await client.post("/api/generate", json={
                 "model": model,
                 "system": system,
