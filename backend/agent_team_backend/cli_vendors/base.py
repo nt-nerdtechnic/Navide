@@ -461,6 +461,17 @@ class VendorSpec:
     session_path: Callable[[str, str], Path | None] | None = None
     # (workspace_path: str, session_id: str) -> session exists on disk.
     session_exists: Callable[[str, str], bool] | None = None
+    # Can a launch NAME the conversation to continue? True for every CLI whose
+    # resume takes an id (the frontend spec's `resumeArgs`); False only for one
+    # that restores from a file with no id to name — aider, which resumes from
+    # a chat-history path instead.
+    #
+    # Deliberately NOT inferred from `session_exists is None`: a vendor that has
+    # not declared its own on-disk check still resumes fine (app._session_exists
+    # falls back to a path lookup for it), so reading absence as "cannot resume"
+    # would refuse grok and antigravity for a reason that is about this file's
+    # migration state rather than about the CLI.
+    supports_session_resume: bool = True
 
     # --- spawn environment ---
     # Vendor-specific defaults added only when neither the request nor the

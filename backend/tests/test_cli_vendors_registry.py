@@ -405,6 +405,52 @@ def test_model_capability_matches_the_frontend_agent_spec() -> None:
     )
 
 
+def test_session_resume_capability_matches_the_frontend_agent_spec() -> None:
+    """Same drift guard as the model one, for the capability cli_open_agent's
+    `session_id` is refused on.
+
+    The frontend owns the syntax (`resumeArgs` turns an id into the vendor's
+    resume command); the backend mirrors only whether an id can be named at
+    all. Drift here is silent in the worst direction: a vendor marked
+    resumable on the backend but with no `resumeArgs` accepts a session_id,
+    then opens a pane on a FRESH conversation — which reads exactly like a
+    successful resume until someone reads the transcript.
+    """
+    frontend_id_resume: set[str] = set()
+    for path in FRONTEND_AGENTS_DIR.glob("*.ts"):
+        if path.stem.startswith("_") or path.stem in {"index", "types"}:
+            continue
+        source = path.read_text(encoding="utf-8")
+        keys = set(re.findall(r"agentKey: '([a-z]+)'", source))
+        assert len(keys) == 1, f"{path.name} declares agentKeys {sorted(keys)}"
+        key = keys.pop()
+        # resumeArgs takes an id; resumeWithoutId (aider) restores from a file
+        # and has no id to be named.
+        if re.search(r"^\s+resumeArgs:", source, re.M):
+            frontend_id_resume.add(key)
+
+    backend_id_resume = {
+        k for k, s in registry.VENDORS.items() if s.supports_session_resume
+    }
+
+    assert backend_id_resume == frontend_id_resume, (
+        "session-resume support drifted between cli_vendors/<key>.py "
+        "(supports_session_resume) and agents/<key>.ts (resumeArgs): "
+        f"backend={sorted(backend_id_resume)} frontend={sorted(frontend_id_resume)}"
+    )
+
+
+def test_aider_is_the_only_vendor_without_session_ids() -> None:
+    """Asserted rather than left to review: it is the one vendor whose resume
+    takes a chat-history PATH, so cli_open_agent(session_id=...) has nothing to
+    name for it and refuses with `no-session-support`."""
+    assert registry.VENDORS["aider"].supports_session_resume is False
+    others = {
+        k for k, s in registry.VENDORS.items() if not s.supports_session_resume
+    }
+    assert others == {"aider"}, f"unexpected vendors without session ids: {sorted(others)}"
+
+
 def test_droid_is_never_given_an_effort_capability() -> None:
     """droid's interactive command — the one Navide spawns — reads `-r` as
     --resume; only `droid exec` reads it as --reasoning-effort. An effort flag

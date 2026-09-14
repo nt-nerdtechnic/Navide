@@ -7319,6 +7319,34 @@ async def pane_set_run_group(session: "Session", msg_id: str, msg_type: str, pay
     )
 
 
+@handler("pane.set_parent")
+async def pane_set_parent(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """Re-parent a pane in the project record — the lineage half of moving a
+    pane, next to pane.set_run_group. "" as spawned_by makes it a root."""
+    from . import app
+
+    outcome = app.project_store.set_pane_parent(
+        payload["workspace_path"],
+        pane_id=payload["pane_id"],
+        spawned_by=str(payload.get("spawned_by") or ""),
+    )
+    if isinstance(outcome, str):
+        # Say so rather than answering ok: the caller re-points the pane
+        # locally on this reply, which must not happen when nothing was
+        # written — and a cycle refused here would otherwise be shown as a
+        # tree that the record does not hold.
+        code, message = {
+            "not_found": ("PANE_NOT_FOUND", f"no pane record for {payload['pane_id']!r} in this workspace"),
+            "parent_not_found": ("PARENT_NOT_FOUND", f"no pane record for parent {payload.get('spawned_by')!r} in this workspace"),
+            "cycle": ("LINEAGE_CYCLE", "that parent is the pane itself or one of its descendants"),
+        }[outcome]
+        await session.send_json(make_error(msg_id, msg_type, code, message))
+        return
+    await session.send_json(
+        make_response(msg_id, msg_type, app._project_payload(outcome))
+    )
+
+
 # ── Reconnect lost conversations (workspace/pane.*) ──────────────────────────
 def _collect_orphan_sessions(workspace_path: str) -> list[dict]:
     """Enumerate this workspace's Claude transcripts that no live pane holds.

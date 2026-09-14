@@ -163,6 +163,21 @@ server = FastMCP(
         "sane advisory thresholds gets logged as a diagnostic warning (readable "
         "via ui_diagnostics) rather than refused.\n"
         "\n"
+        "Picking up an earlier conversation: a CLI session outlives the pane "
+        "that ran it — the pane closes, the app restarts, and the vendor's "
+        "transcript stays on disk. cli_list_sessions lists the ones this "
+        "workspace still has, and cli_open_agent(session_id=...) opens a pane "
+        "that starts with that conversation's memory rather than an empty "
+        "one, so `task` should be the follow-up and not a restatement of what "
+        "it already knows. Two flags decide whether a row is usable: "
+        "`resumable: false` is history — the transcript is gone and the id is "
+        "refused — and `live: true` means the pane that owns it is still "
+        "open, where resuming into a second pane forks the conversation and "
+        "cli_send to that pane is the right move instead. This is a different "
+        "call from reopening a pane Navide is itself holding: a "
+        "cli_list_targets row with `realized: false` is a restore placeholder, "
+        "woken with cli_open_agent(pane_id=...).\n"
+        "\n"
         "Checking on another pane: cli_read_log reads the tail of a pane's "
         "conversation log, cli_get_status reports whether it is busy and its "
         "last known activity, and cli_wait_idle blocks until it goes idle or a "
@@ -733,6 +748,91 @@ def _refuse_unsupported_model(agent_key: str, model: str, effort: str) -> str:
     return ""
 
 
+#: Characters a session id may contain. Every vendor's ids are drawn from this
+#: set — UUIDs (claude, cursor, copilot, qwen, pi), hex (grok), `ses_`-prefixed
+#: slugs (opencode, kilo), `session_<uuid>` directory names (kimi) — and codex's
+#: is a path, which is why `/` is in it.
+#:
+#: This is a SHELL SAFETY boundary, not a formatting preference. buildResumeCommand
+#: interpolates the id into a command string that is run as `[shell, '-ilc', cmd]`,
+#: so an id carrying `;` or a backtick is code, not an argument. The on-disk check
+#: below is not sufficient on its own: a filename may legally contain a semicolon
+#: and a space, so anything that can write into a vendor's session directory could
+#: otherwise turn a resume into arbitrary execution.
+_SAFE_SESSION_ID = re.compile(r"^[A-Za-z0-9._:/-]{1,255}$")
+
+
+def _refuse_unresumable_session(
+    agent_key: str, workspace_path: str, session_id: str
+) -> dict[str, Any] | None:
+    """Why this CLI cannot resume that session id, or None when it can.
+
+    Checked before the spawn is broadcast for the same reason the model guard
+    is: a pane that opens and silently starts a fresh conversation looks
+    exactly like a successful resume until someone reads the transcript, and by
+    then the caller has already sent a follow-up that makes no sense to a CLI
+    with no memory of what it follows.
+
+    The existence check is the vendor's own (``app._session_exists``), which is
+    what the renderer's resume preflight uses, so a refusal here and a greyed
+    out Rebuild button in the UI agree on what "resumable" means.
+    """
+    from agent_team_backend import app
+    from agent_team_backend.cli_vendors import registry
+
+    # Shape first, and regardless of which vendor is being asked: an id that
+    # could split into extra shell words is malformed no matter who receives
+    # it, and answering "unknown session" there would send the caller off to
+    # try the same string against another CLI.
+    if not _SAFE_SESSION_ID.match(session_id):
+        return {
+            "ok": False,
+            "error": (
+                "session_id may only contain letters, digits and . _ : / - — "
+                "it is interpolated into the launch command, so anything else "
+                "would be read as shell syntax rather than as an id"
+            ),
+            "error_code": "malformed-session-id",
+        }
+    spec = registry.VENDORS.get(agent_key)
+    if spec is None:
+        return None  # unknown agent key — the spawn gate reports that itself
+    # A vendor with no session ids cannot be asked for one. aider is the only
+    # such CLI: it restores from a chat-history FILE, so there is no id to name
+    # and nothing this argument could mean. Read from the declared capability,
+    # never from `session_exists is None` — several vendors resume perfectly
+    # well through app._session_exists' path fallback without declaring one.
+    if not spec.supports_session_resume:
+        return {
+            "ok": False,
+            "error": (
+                f"{agent_key} has no session ids to resume — it restores from a "
+                f"chat-history file instead. Open it without `session_id`."
+            ),
+            "error_code": "no-session-support",
+        }
+    if not workspace_path:
+        return {
+            "ok": False,
+            "error": (
+                "resuming a session needs a workspace to look it up in — pass "
+                "workspace_path"
+            ),
+            "error_code": "workspace-required",
+        }
+    if app._session_exists(agent_key, workspace_path, session_id):
+        return None
+    return {
+        "ok": False,
+        "error": (
+            f'{agent_key} has no session "{session_id}" in {workspace_path} — '
+            f"opening it would have started a fresh conversation that looks "
+            f"resumed. Read a current id from cli_list_sessions"
+        ),
+        "error_code": "unknown-session-id",
+    }
+
+
 @server.tool()
 async def cli_open_agent(
     agent: str,
@@ -743,6 +843,7 @@ async def cli_open_agent(
     model: str = "",
     effort: str = "",
     pane_id: str = "",
+    session_id: str = "",
 ) -> dict[str, Any]:
     """Open a new CLI pane and give it a task.
 
@@ -840,6 +941,25 @@ async def cli_open_agent(
     a new session with no memory of the earlier conversation. A pane that is
     already open answers reopened: false, reason "already-open" and is left
     alone. Unknown ids are refused with "unknown-pane-id".
+
+    `session_id` opens a NEW pane that RESUMES an existing conversation — the
+    CLI's own session id, not a Navide pane id. This is what `pane_id` cannot
+    do: a placeholder can only ever resume the one conversation its own record
+    remembers, while this takes any session the vendor still has on disk,
+    including one started outside Navide in a plain terminal. Read the ids from
+    cli_list_sessions. The pane opens with the vendor's own resume syntax
+    (`claude --resume <id>`, `codex resume <id>`, `opencode --session <id>`, …)
+    so it starts with the earlier conversation's memory intact, and `task` is
+    then typed into it as usual — send the follow-up, not a restatement of what
+    that conversation already knows.
+
+    The id is checked against the vendor's own session store before the pane
+    opens: an id with nothing on disk is REFUSED with "unknown-session-id"
+    rather than opening a pane that silently starts fresh, which is
+    indistinguishable from a successful resume until you read the transcript.
+    `session_id` and `pane_id` are mutually exclusive — one reopens a pane
+    Navide already holds, the other opens a new pane onto an old conversation.
+    aider has no session ids at all and is refused.
     """
     from agent_team_backend import agent_messaging, app
     from agent_team_backend.ipc import make_event
@@ -849,6 +969,17 @@ async def cli_open_agent(
     except CallerUnknown as err:
         return {"ok": False, "error": str(err)}
     reopen_id = (pane_id or "").strip()
+    resume_id = (session_id or "").strip()
+    if reopen_id and resume_id:
+        return {
+            "ok": False,
+            "error": (
+                "pane_id and session_id are mutually exclusive — pane_id reopens a "
+                "pane Navide already holds, session_id opens a new pane onto an "
+                "existing conversation. Pass one"
+            ),
+            "error_code": "conflicting-target",
+        }
     if reopen_id:
         return await _reopen_pane(reopen_id)
     agent_key = (agent or "").strip()
@@ -857,7 +988,11 @@ async def cli_open_agent(
         return {"ok": False, "error": "agent is required (e.g. \"claude\", \"codex\")"}
     if not pane_name:
         return {"ok": False, "error": "name is required — it doubles as the pane's address"}
-    if not (task or "").strip():
+    # A fresh pane with nothing to do is a mistake; a RESUMED one is not — the
+    # conversation already has its own context and the caller may only want it
+    # back on screen, talking to it later with cli_send. So an empty task is
+    # refused only when there is no session to resume.
+    if not (task or "").strip() and not resume_id:
         return {"ok": False, "error": "task is empty"}
     refusal = _refuse_unsupported_model(agent_key, (model or "").strip(), (effort or "").strip())
     if refusal:
@@ -873,6 +1008,24 @@ async def cli_open_agent(
                 "ok": False,
                 "error": "workspace_path is required for a caller with no pane identity",
             }
+    if resume_id:
+        # A pane caller's own workspace is where its sessions live, so it never
+        # has to name one; the fallback matches every other tool's default.
+        resume_workspace = target_workspace or _caller_workspace(caller)
+        # Off the loop: for claude this is an iterdir + a stat per project dir
+        # under ~/.claude/projects, for kimi a glob — the same call
+        # _session_rows already offloads for the same reason.
+        refusal = await asyncio.to_thread(
+            _refuse_unresumable_session, agent_key, resume_workspace, resume_id
+        )
+        if refusal:
+            return refusal
+        # Resuming is not opening a new pane under the caller — it is putting a
+        # conversation back where it was. Read the position the pane that last
+        # held it sat in; the window applies it instead of parenting to us.
+        lineage = await asyncio.to_thread(
+            _resume_lineage, resume_workspace, agent_key, resume_id
+        )
 
     request_id = f"{me or caller.kind}:spawn:{secrets.token_hex(8)}"
     loop = asyncio.get_running_loop()
@@ -896,6 +1049,17 @@ async def cli_open_agent(
             spawn_payload["model"] = model.strip()
         if (effort or "").strip():
             spawn_payload["effort"] = effort.strip()
+        # The window turns this into the vendor's own resume command; absent
+        # means a fresh conversation, which is what every older build does with
+        # a key it does not know.
+        if resume_id:
+            spawn_payload["session_id"] = resume_id
+            # Sent even when empty: "" for resume_spawned_by is the real answer
+            # for a conversation that was a root pane, and the window must put
+            # it back at the root rather than fall through to parenting it on
+            # the caller. Only the presence of session_id enables the branch.
+            spawn_payload["resume_spawned_by"] = lineage.get("spawned_by", "")
+            spawn_payload["resume_run_group_id"] = lineage.get("run_group_id", "")
         if target_workspace:
             # No parent pane owns this request — the owning window is decided
             # by workspace match instead (see App.vue's agent_spawn.request
@@ -955,6 +1119,19 @@ async def cli_open_agent(
     # be handed to ui.pane.close as if it addressed something.
     if new_pane_id:
         result["pane_id"] = new_pane_id
+    # Present only on the resume path, and it is the id that was ASKED for: the
+    # window was told to launch with it and the id was verified on disk before
+    # the broadcast, but whether the CLI actually reloaded that transcript is
+    # the CLI's own business and is not observable from here.
+    if resume_id:
+        result["resumed_session_id"] = resume_id
+        # Where it was put back. Absent keys would read as "lineage unknown";
+        # these are always present on a resume so the caller can see that the
+        # pane went back to its own parent and group rather than under them.
+        result["restored_lineage"] = {
+            "spawned_by": lineage.get("spawned_by", ""),
+            "run_group_id": lineage.get("run_group_id", ""),
+        }
     advisories = list(verdict.get("advisories") or [])
     # Two answers only. "unverified" is the window's honest word for "bytes
     # written, nothing seen" — to the caller that is a task that did not
@@ -1037,6 +1214,226 @@ async def _reopen_pane(pane_id: str) -> dict[str, Any]:
         "reason": opened["reason"],
         "reopened": True,
     }
+
+
+def _pane_records_by_session(workspace_path: str) -> dict[tuple[str, str], Any]:
+    """(agent, session_id) -> the pane record that conversation last lived in.
+
+    A pane's record OUTLIVES the pane: closing one sets spawn_status
+    "removed" rather than deleting it, so the lineage of a long-gone pane —
+    who opened it, which tab group it sat in — is still on disk and a resumed
+    conversation can be put back where it was.
+
+    Several records can name one session (every rebuild writes a fresh one);
+    the LAST wins, which is the pane that most recently held the conversation
+    and therefore the position it was last in.
+    """
+    from agent_team_backend import app
+
+    # peek, not load_or_create: the latter CREATES and saves a project document
+    # (and emits project_created) for a workspace that has none, and this is
+    # reached from cli_list_sessions — documented read-only and callable by an
+    # external client with any directory as workspace_path.
+    project = app.project_store.peek(workspace_path)
+    if project is None:
+        return {}
+    found: dict[tuple[str, str], Any] = {}
+    for pane in project.panes:
+        session_id = (getattr(pane, "session_id", "") or "").strip()
+        agent = (getattr(pane, "agent", "") or "").strip()
+        if session_id and agent:
+            found[(agent, session_id)] = pane
+    return found
+
+
+def _resume_lineage(workspace_path: str, agent_key: str, session_id: str) -> dict[str, str]:
+    """Where the pane that last held this conversation sat: its parent and tab
+    group, or empty strings when nothing is recorded.
+
+    Empty `spawned_by` is a real answer, not a missing one — it means that pane
+    was a root, and a resumed conversation belongs back at the root rather than
+    under whoever happened to ask for it.
+    """
+    record = _pane_records_by_session(workspace_path).get((agent_key, session_id))
+    if record is None:
+        return {}
+    return {
+        "spawned_by": (getattr(record, "spawned_by", "") or "").strip(),
+        "run_group_id": (getattr(record, "run_group_id", "") or "").strip(),
+    }
+
+
+#: How far back through the spawn history one cli_list_sessions call reads.
+#: The store keeps up to 5000 entries and most of them are long-dead panes, so
+#: a page is scanned and then filtered rather than the whole history — a
+#: workspace with years of panes would otherwise stat every one of them.
+_SESSION_SCAN_LIMIT = 400
+
+
+def _session_rows(
+    workspace_path: str, want_agent: str, limit: int, include_gone: bool
+) -> tuple[list[dict[str, Any]], int]:
+    """Resumable conversations for a workspace, newest first.
+
+    Runs whole in a worker thread: the history read opens the workspace db and
+    every row costs a filesystem check for the vendor's session file, which is
+    exactly the kind of work that must not sit on the event loop.
+    """
+    from agent_team_backend import agent_messaging, app
+    from agent_team_backend.cli_vendors import registry
+
+    # Read once for the whole page: the lineage lives in the project document,
+    # not in the spawn history, and opening it per row would be 400 reads.
+    lineage = _pane_records_by_session(workspace_path)
+    entries, _total = app.spawn_history_store.read_page(
+        workspace_path, offset=0, limit=_SESSION_SCAN_LIMIT
+    )
+    rows: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    scanned = 0
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        scanned += 1
+        session_id = str(entry.get("sessionId") or "").strip()
+        agent_key = str(entry.get("agentKey") or "").strip()
+        if not session_id or not agent_key:
+            continue  # a pane that never bound a session has nothing to resume
+        if want_agent and agent_key != want_agent:
+            continue
+        # One conversation, however many panes have pointed at it: a rebuilt or
+        # restored pane writes a new history entry with the SAME session id, and
+        # resuming any of them resumes the one conversation.
+        key = (agent_key, session_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        pane_id = str(entry.get("paneId") or "")
+        # `live` is the claim "a CLI is holding this conversation open, so a
+        # second reader would fork it". A registered entry is not enough: a
+        # cold-restore placeholder is registered with realized=False and has
+        # no CLI at all, and a closed pane lingers in the registry through
+        # its offline grace. Both would steer the caller to cli_send against
+        # a pane with no PTY.
+        current = agent_messaging.current(pane_id) if pane_id else None
+        live = current is not None and bool(getattr(current, "realized", True)) and not bool(
+            getattr(current, "offline", False)
+        )
+        if not include_gone and not live:
+            continue
+        rows.append(
+            {
+                "session_id": session_id,
+                "agent_key": agent_key,
+                "pane_id": pane_id,
+                "pane_name": str(entry.get("customName") or ""),
+                "spawned_at": str(entry.get("spawnedAt") or ""),
+                "removed_at": str(entry.get("removedAt") or ""),
+                "starred": bool(entry.get("starred")),
+                # Where this conversation sat. Resuming it puts a pane back in
+                # the same place rather than under whoever asked, so these say
+                # in advance where it will land; "" for spawned_by means it was
+                # a root pane, which is a position too.
+                "spawned_by": (
+                    getattr(lineage.get((agent_key, session_id)), "spawned_by", "") or ""
+                ),
+                "run_group_id": (
+                    getattr(lineage.get((agent_key, session_id)), "run_group_id", "") or ""
+                ),
+                # The pane that owned this conversation is still on screen. Its
+                # CLI is holding the session open, so resuming it into a SECOND
+                # pane is what forks or conflicts — talk to the live pane with
+                # cli_send instead.
+                "live": live,
+                # The vendor's own answer, the same check the Rebuild button
+                # uses — and the same capability gate cli_open_agent applies, so
+                # a row marked resumable is one that tool will actually accept.
+                # False means the transcript is gone from disk, or this CLI has
+                # no id-based resume (aider), and the id would be refused.
+                "resumable": (
+                    getattr(
+                        registry.VENDORS.get(agent_key), "supports_session_resume", True
+                    )
+                    and app._session_exists(agent_key, workspace_path, session_id)
+                ),
+            }
+        )
+        if len(rows) >= limit:
+            break
+    return rows, scanned
+
+
+@server.tool()
+async def cli_list_sessions(
+    ctx: Context,
+    agent: str = "",
+    workspace_path: str = "",
+    limit: int = 50,
+    include_gone: bool = True,
+) -> dict[str, Any]:
+    """Conversations in this workspace a new pane could be opened onto.
+
+    This is where the `session_id` cli_open_agent takes comes from. A CLI
+    session outlives the pane that ran it: the pane is closed, the app is
+    restarted, the pane is rebuilt — the vendor's transcript stays on disk, and
+    naming its id opens a pane that starts with that conversation's memory
+    rather than an empty one.
+
+    Newest first. Each row is `{session_id, agent_key, pane_id, pane_name,
+    spawned_at, removed_at, starred, live, resumable}`:
+
+    - `resumable` is the vendor's own on-disk check — the same one behind the
+      Rebuild button. **A row with `resumable: false` is history, not an
+      option**: the transcript is gone and cli_open_agent refuses the id.
+    - `live` says the pane that owned the conversation is still open. Resuming
+      a live session into a second pane is what forks or corrupts it, because
+      the CLI holding it does not expect a second reader — send to that pane
+      with cli_send instead. Pass `include_gone: false` to see only live ones.
+    - `pane_id` is the pane that owned it, and it may be gone; it is for
+      recognising the row, not for addressing anything. Reopening a *placeholder*
+      is cli_open_agent(pane_id=…), which is a different operation.
+
+    `agent` narrows to one vendor key ("claude", "codex", …). `limit` is capped
+    at 200, and one call scans the most recent few hundred panes rather than
+    the whole history, so `scanned` says how deep it actually went. One
+    conversation appears once however many panes pointed at it.
+
+    A pane caller's own workspace is the default; a host or external caller has
+    none and must pass `workspace_path`. Read-only — nothing here opens,
+    closes or changes a pane.
+    """
+    try:
+        caller = _resolve_caller(ctx)
+    except CallerUnknown as err:
+        return {"ok": False, "error": str(err)}
+    chosen = (workspace_path or "").strip() or _caller_workspace(caller)
+    if not chosen:
+        return {
+            "ok": False,
+            "error": (
+                "workspace_path is required for a caller with no pane identity — "
+                "sessions are per project. Read one from workspace_list"
+            ),
+            "error_code": "workspace-required",
+        }
+    try:
+        want = max(1, min(int(limit), 200))
+    except (TypeError, ValueError):
+        want = 50
+    rows, scanned = await asyncio.to_thread(
+        _session_rows, chosen, (agent or "").strip(), want, bool(include_gone)
+    )
+    result: dict[str, Any] = {
+        "ok": True,
+        "workspace_path": chosen,
+        "sessions": rows,
+        "count": len(rows),
+        "scanned": scanned,
+    }
+    warning = await asyncio.to_thread(_workspace_mismatch_warning, chosen)
+    if warning:
+        result["warning"] = warning
+    return result
 
 
 async def _send_to_device(
@@ -3320,6 +3717,105 @@ async def cli_interrupt(target: str, ctx: Context, pane_id: str = "") -> dict[st
     if advisories:
         answer["advisories"] = advisories
     return answer
+
+
+@server.tool()
+async def cli_place_pane(
+    target: str,
+    ctx: Context,
+    pane_id: str = "",
+    run_group_id: str | None = None,
+    spawned_by: str | None = None,
+) -> dict[str, Any]:
+    """Move a pane: change the tab group it sits in and/or the pane it is a
+    child of. The write half of the lineage cli_list_targets and
+    cli_list_sessions report.
+
+    Two independent halves, each optional — pass only what should change:
+
+    - `run_group_id`: the tab (run group) to move the pane to. `""` is the
+      ungrouped 手動 tab. Read group ids off cli_list_sessions rows or
+      ui_snapshot; an id no tab has is refused.
+    - `spawned_by`: the pane to make this one a child of, as a `pane_id`
+      (not a name — names are messaging addresses and can change). `""` makes
+      it a root. Refused when the parent is the pane itself or one of its own
+      descendants (the tree would loop), or a pane in another workspace.
+
+    Both take `""` as a real value, which is why a half you do not pass is
+    left alone rather than reset. Group is applied first, then parent, and the
+    answer's `applied` says which halves landed — a parent refusal does not
+    undo a group move that already did. Same write paths as dragging the pane
+    in the sidebar, so the record and the screen agree and a restart keeps
+    the position.
+
+    Use it to tidy up after a resume that landed somewhere unhelpful, to adopt
+    a pane opened by someone else into your own subtree, or to gather related
+    panes onto one tab. It does not touch the pane's CLI: nothing is sent,
+    interrupted or restarted. Local panes only — a `<device>/…` address is
+    refused, since another machine's tree is that machine's to arrange.
+    Returns `{ok, target, name, pane_id, applied, run_group_id, spawned_by}`
+    with the position as it is afterwards.
+    """
+    try:
+        caller = _resolve_caller(ctx)
+    except CallerUnknown as err:
+        return {"ok": False, "error": str(err)}
+    if run_group_id is None and spawned_by is None:
+        return {
+            "ok": False,
+            "error": "pass run_group_id and/or spawned_by — nothing to change",
+            "error_code": "nothing-to-change",
+        }
+    me = caller.pane_id if caller.kind == "pane" else ""
+    result, failure = _resolve_pane_target(caller, me, target, pane_id)
+    if failure is not None:
+        return failure
+    # _resolve_pane_target without allow_remote already refuses a
+    # `<device>/…` address, so only a local pane reaches here.
+    pane = result.pane
+    args: dict[str, Any] = {"paneId": pane.pane_id}
+    if run_group_id is not None:
+        args["runGroupId"] = run_group_id.strip()
+    if spawned_by is not None:
+        parent_id = spawned_by.strip()
+        # Accept an alias for the parent too: ids change across rebuilds and
+        # the caller may be holding one it read a while ago.
+        if parent_id:
+            current = agent_messaging_current(parent_id)
+            if current is not None:
+                parent_id = current.pane_id
+        args["spawnedBy"] = parent_id
+    reply = await _ui_request(
+        pane.workspace_path,
+        "invoke",
+        caller=_pane_caller(pane.pane_id),
+        action="ui.pane.place",
+        args=args,
+    )
+    if not reply.get("ok"):
+        return {
+            "ok": False,
+            "target": pane.qualified_name,
+            "error": str(reply.get("error") or "the window owning this pane did not answer"),
+            "error_code": str(reply.get("error_code") or "ui_action_failed"),
+        }
+    payload = reply.get("result") or {}
+    return {
+        "ok": True,
+        "target": pane.qualified_name,
+        "name": pane.name,
+        "pane_id": pane.pane_id,
+        "applied": payload.get("applied") or {},
+        "run_group_id": str(payload.get("runGroupId") or ""),
+        "spawned_by": str(payload.get("spawnedBy") or ""),
+    }
+
+
+def agent_messaging_current(pane_id: str) -> Any:
+    """Alias-aware pane lookup, split out so the tool body stays readable."""
+    from agent_team_backend import agent_messaging
+
+    return agent_messaging.current(pane_id)
 
 
 # How long to keep watching for the target to pick the message up before

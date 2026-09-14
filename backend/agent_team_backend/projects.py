@@ -1196,6 +1196,39 @@ class ProjectStore:
         self.save(project)
         return project
 
+    def set_pane_parent(
+        self,
+        workspace_path: str,
+        *,
+        pane_id: str,
+        spawned_by: str,
+    ) -> "Project | str":
+        """Re-parent a pane: make `spawned_by` its parent, or "" to make it a
+        root. The other half of the lineage next to set_pane_run_group.
+
+        Returns the project on success, or a short reason string on refusal —
+        a string rather than None because the three refusals need telling
+        apart by the caller: `not_found` (no such pane), `parent_not_found`
+        (the proposed parent is not in this workspace), `cycle` (the parent
+        is the pane itself or one of its descendants — the tree would loop,
+        and the sidebar's lineage walk would spin). A pane cannot be its own
+        parent for the same reason.
+        """
+        project = self.load_or_create(workspace_path)
+        pane = next((p for p in project.panes if p.pane_id == pane_id), None)
+        if pane is None:
+            return "not_found"
+        if spawned_by:
+            if spawned_by == pane_id:
+                return "cycle"
+            if not any(p.pane_id == spawned_by for p in project.panes):
+                return "parent_not_found"
+            if ProjectStore._would_cycle(project, pane_id, spawned_by):
+                return "cycle"
+        pane.spawned_by = spawned_by
+        self.save(project)
+        return project
+
     def set_pane_stopped(
         self,
         workspace_path: str,
