@@ -2,7 +2,7 @@
 
 [English](../en-US/privacy.md) | [繁體中文](../zh-TW/privacy.md) | 日本語 | [ドキュメント](README.md)
 
-Navide は **Local-first** ですが、常に完全オフラインという意味ではありません。Electron Application、Python Backend、Terminal Session、非公開の Project Intelligence、Workspace State、Orchestration Logic は Mac 上で動作します。外部 Service を有効化または利用すると、データが端末外へ送られる場合があります。
+Navide は **Local-first** ですが、常に完全オフラインという意味ではありません。Electron Application、Python Backend、Terminal Session、非公開の Project Intelligence、Workspace State、Orchestration Logic はお使いのマシン上で動作します。外部 Service を有効化または利用すると、データが端末外へ送られる場合があります。
 
 ## Navide がローカルに保存するデータ
 

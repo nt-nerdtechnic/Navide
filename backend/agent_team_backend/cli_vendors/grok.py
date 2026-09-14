@@ -684,19 +684,15 @@ SPEC = VendorSpec(
         skills_rel=(".agents", "skills"),
     ),
     label="Grok CLI",
-    # SUPERSEDED and currently inert. This describes the community grok-cli
-    # (superagent-ai), which kept MCP servers as a LIST under `mcp.servers` in
-    # ~/.grok/user-settings.json — the same file as its BYO API key, which is
-    # why the shim copies rather than links it. The official CLI reads neither:
-    # its servers are a MAP of `[mcp_servers.<name>]` tables in ~/.grok/
-    # config.toml (or a project-level .grok/config.toml), so a grok pane spawns
-    # unwired today. Left in place rather than half-migrated: the shim writer
-    # only emits JSON (pane_home._write_config), so pointing it at config.toml
-    # would corrupt the user's real settings. The migration wants `--plugin-dir
-    # <DIR>`, which the official CLI documents as always-trusted per-process
-    # plugin scope and which takes a plain `.mcp.json` — but that needs the
-    # spawn path to hand over a DIRECTORY, and McpWiring.flag only carries a
-    # config document or a claude-shaped path today.
+    # Wired through the per-pane HOME shim (mcp_server/pane_home.py): the
+    # official CLI reads its servers as a MAP of `[mcp_servers.<name>]` tables
+    # in ~/.grok/config.toml, and `config_file` + `section` below is the whole
+    # description of that — pane_home picks the serializer by suffix
+    # (`_is_toml` -> tomli_w) since f3d77f0d, so the TOML is written, not
+    # JSON. config.toml also holds the user's own settings and BYO API key,
+    # which is why the shim copies that one file instead of linking it. The
+    # community grok-cli this replaced kept a `mcp.servers` LIST in
+    # ~/.grok/user-settings.json; nothing reads that any more.
     mcp_wiring=McpWiring(
         # `[mcp_servers.<name>]` in TOML: a map keyed by the server's name, so
         # no list_key. A bare `url` is how the CLI's own `grok mcp add` writes

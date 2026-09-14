@@ -18,7 +18,7 @@
 ## Backend Health 持續顯示不可用
 
 - 確認沒有其他 Process 阻擋本機 Loopback 通訊。
-- 檢查 macOS Security Software 是否拒絕封裝後的 Python Backend。
+- 檢查作業系統的安全軟體（Gatekeeper、SmartScreen 或 Defender、端點防護程式）是否拒絕封裝後的 Python Backend。
 - 開發模式下，單獨執行 `uv --project backend run python -m agent_team_backend` 以顯示 Startup Error。
 
 ## 找不到 Agent CLI
@@ -26,14 +26,14 @@
 - 在一般 Interactive Terminal 中執行該 CLI 的 Version Command。
 - 安裝後重新啟動 Navide，使它取得更新後的 `PATH`。
 - 在 Navide 啟動 CLI 前，先完成該 CLI 自己的 Authentication Flow。
-- 確認 Executable Name：`claude`、`codex`、`agy` 或 `grok`。
+- 確認 Executable Name：Settings → CLI Agents 列出所有受支援的 CLI，已偵測到的會顯示解析後的路徑，缺少的則提供廠商的安裝指令。
 
 ## CLI 回報自己的 Auto-update 失敗
 
 Pane 內可能出現 CLI 自己的訊息，例如 `✘ Auto-update failed`。同一個 CLI 的安裝目錄由所有 Pane 與 Profile 共用，多個 Pane 同時更新時可能互相衝突。
 
 - 開啟 Settings → CLI Agents。失敗的更新會列在該 CLI 的那一列，含時間、版本與記錄該結果的 Config Home。
-- 使用該列的更新動作。它會在終端機執行 CLI 自己的更新指令（`claude update`、`codex update`、`agy update`、`grok update`）；Navide 不會自行更新 CLI。沒有更新子指令的 CLI 則改為連結到官方文件。
+- 使用該列的更新動作。它會在終端機執行 CLI 自己的更新指令（例如 `claude update`、`codex update`、`agy update`、`grok update`）；Navide 不會自行更新 CLI。沒有更新子指令的 CLI 則改為連結到官方文件。
 - 若衝突反覆發生，可把該 CLI 的 Auto-update 設為手動。Navide 會在每次 Spawn 帶入該 CLI 官方提供的關閉變數，改由這個面板更新。
 - 執行中的 Session 會沿用啟動時的 Binary；更新後請重新啟動該 Pane。
 
@@ -70,6 +70,15 @@ Codex、Antigravity 與 Grok 依賴 Log 或 Database Discovery，將新的 CLI S
 
 開啟 **System Settings → Privacy & Security**，檢查 Automation、Files and Folders、Accessibility 與 Full Disk Access。只授予特定 CLI 與 Workspace 實際需要的權限。修改權限後重新啟動受影響的應用程式。
 
+## Windows 擋住首次啟動
+
+Windows 安裝程式尚未程式碼簽章，SmartScreen 會顯示「Windows 已保護您的電腦」且發行者為「不明」。請點 **其他資訊 → 仍要執行**。在 Windows 簽章上線前，每個 Navide 安裝檔都會這樣，這不代表下載檔被竄改；有疑慮時請確認檔案來自 GitHub Release 頁面。
+
+## Linux 的 AppImage 無法啟動
+
+- 先給執行權限：`chmod +x Navide-<版本>-x86_64.AppImage`。AppImage 自帶 FUSE runtime，不需另裝 `libfuse`。
+- 若安裝的是 `.deb`，請在終端機執行 `navide` 以看到啟動錯誤；該套件的更新來自 `apt`，不是 App 內更新器。
+
 ## Terminal Pane 的複製貼上行為異常
 
 - CLI 啟用 Mouse Reporting 時，一般拖曳會被轉送給程式本身，劃不出任何選取。請按住 **Option**（macOS）或 **Shift**（Windows/Linux）再拖曳，強制進行文字選取。
@@ -92,7 +101,7 @@ Documentation Injection 採用 Best-effort。檢查 MCP Configuration、Package 
 請包含：
 
 - Navide Commit 或 Version
-- macOS Version 與 Architecture
+- 作業系統版本與 Architecture
 - Agent CLI 名稱與 Version
 - Reproduction Steps
 - Expected Behavior 與 Actual Behavior

@@ -19,7 +19,7 @@ Navide は Agent 時代のエンジニアリングツールです。一人の人
 
 | ドキュメント | 目的 |
 |---|---|
-| [はじめに](getting-started.md) | 未署名 Preview のダウンロード、または Source からのインストールと初回起動 |
+| [はじめに](getting-started.md) | 署名済み macOS ビルドまたは Windows／Linux Installer のダウンロード、または Source からのインストールと初回起動 |
 | [ユーザーガイド](user-guide.md) | Workspace、Pane、Pipeline、協調、Git、History、Editor Workflow の理解 |
 | [トラブルシューティング](troubleshooting.md) | 起動、権限、Agent Session、Analyzer、Token Tracking の問題解決 |
 

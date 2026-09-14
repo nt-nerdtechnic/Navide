@@ -6,6 +6,8 @@ via `useKeybindings` (capture-phase), with support for chord keys (e.g. `⌘K �
 and when-clause conditions.
 
 > **macOS symbols:** `⌘` Cmd · `⌥` Option/Alt · `⌃` Ctrl · `⇧` Shift · `↩` Enter
+>
+> On Windows and Linux read `⌘` as **Ctrl** and `⌥` as **Alt**: the rules are written with the platform-primary `mod` modifier, which resolves to Cmd on macOS and Ctrl elsewhere.
 
 Every binding below can be changed in **Settings → Shortcuts**; see
 [Customizing shortcuts](#customizing-shortcuts) for the file format and the

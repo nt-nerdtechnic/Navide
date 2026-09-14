@@ -101,7 +101,7 @@ Founder Dogfooding を Customer Validation と表現してはなりません。F
 ## 現在裏付け可能な主張
 
 - Navide は複数の独立した Coding Agent Pane と Terminal Pane をサポートします。
-- 現在の Registry は 13 種類のコーディング CLI（Aider、Antigravity CLI、Claude Code、Codex、Copilot CLI、Cursor CLI、Grok CLI、Kilo Code、Kimi Code、Muse Code、OpenCode、Pi、Qwen Code）と Plain Terminal Session をサポートします。
+- 現在の Registry は 14 種類のコーディング CLI（Aider、Antigravity CLI、Claude Code、Codex、Copilot CLI、Cursor CLI、Droid、Grok CLI、Kilo Code、Kimi Code、Muse Code、OpenCode、Pi、Qwen Code）と Plain Terminal Session をサポートします。
 - 対応 Session は検出、保存、再構築、再開できます。
 - Pipeline では Stage、Parallel Slot、Role、Prompt、Question、Documentation Query、Completion Sentinel を定義できます。
 - Workspace ごとの State、Run Event、Handoff、対応する Token Summary は `.agent-team/` に保存されます。
@@ -122,7 +122,7 @@ Founder Dogfooding を Customer Validation と表現してはなりません。F
 
 ## 現在は裏付けられない主張
 
-- すべての対応プラットフォームで署名済みまたは Notarization 済みのダウンロードがある（Windows ビルドは未署名で、Linux と Windows のインストーラーはまだ配布されていない）。
+- すべての対応プラットフォームで署名済みまたは Notarization 済みのダウンロードがある（Windows ビルドは未署名）。
 - Navide は完全な Workspace Sandbox を提供する。
 - Navide は常に完全オフラインである。
 - Navide によりエンジニアが特定倍率で速くなる。

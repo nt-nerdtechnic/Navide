@@ -18,7 +18,7 @@
 ## Backend Health が利用不可のままになる
 
 - 別 Process が Local Loopback Communication を Block していないか確認します。
-- macOS Security Software が Package 済み Python Backend を拒否していないか確認します。
+- OS の Security Software（Gatekeeper、SmartScreen や Defender、Endpoint Agent）が Package 済み Python Backend を拒否していないか確認します。
 - 開発時は `uv --project backend run python -m agent_team_backend` を別に実行して Startup Error を表示します。
 
 ## Agent CLI が見つからない
@@ -26,14 +26,14 @@
 - 通常の Interactive Terminal で CLI の Version Command を実行します。
 - Install 後に Navide を再起動し、更新された `PATH` を受け取らせます。
 - Navide で Spawn する前に CLI 独自の Authentication Flow を完了します。
-- Executable Name が `claude`、`codex`、`agy`、`grok` のいずれかであることを確認します。
+- Executable Name を確認します。Settings → CLI Agents は対応するすべての CLI を一覧し、検出済みのものは解決されたパスを表示し、未検出のものにはベンダーの Install Command を提示します。
 
 ## CLI が自身の Auto-update の失敗を報告する
 
 Pane に `✘ Auto-update failed` のような CLI 自身のメッセージが表示されることがあります。CLI の Installation Directory はすべての Pane と Profile で共有されるため、複数の Pane が同時に更新すると衝突する場合があります。
 
 - Settings → CLI Agents を開きます。失敗した更新は該当 CLI の行に、時刻・バージョン・記録した Config Home とともに表示されます。
-- その行の更新アクションを使用します。CLI 自身の更新コマンド（`claude update`、`codex update`、`agy update`、`grok update`）を Terminal で実行します。Navide が CLI を更新することはありません。更新サブコマンドを持たない CLI は、代わりに公式ドキュメントへリンクします。
+- その行の更新アクションを使用します。CLI 自身の更新コマンド（例：`claude update`、`codex update`、`agy update`、`grok update`）を Terminal で実行します。Navide が CLI を更新することはありません。更新サブコマンドを持たない CLI は、代わりに公式ドキュメントへリンクします。
 - 衝突が繰り返す場合は、その CLI の Auto-update を手動に設定します。Navide は Spawn ごとにベンダー自身の Opt-out 変数を渡し、更新はこのパネルから行います。
 - 実行中の Session は起動時の Binary を保持します。更新後は Pane を再起動してください。
 
@@ -70,6 +70,15 @@ Codex、Antigravity、Grok は、Log または Database Discovery を利用し�
 
 **システム設定 → プライバシーとセキュリティ**を開き、Automation、Files and Folders、Accessibility、Full Disk Access を確認します。特定の CLI と Workspace に必要な権限だけを付与してください。権限変更後は影響を受ける Application を再起動します。
 
+## Windows が初回起動を Block する
+
+Windows Installer は Code Signing されていないため、SmartScreen が「Windows によって PC が保護されました」と表示し、発行元は「不明」になります。**詳細情報 → 実行** を選んでください。Windows の Code Signing が整うまで、どの Navide Installer でも同じ表示になります。ダウンロードが改ざんされた印ではありません。不安な場合は GitHub Release ページから取得したファイルであることを確認してください。
+
+## Linux の AppImage が起動しない
+
+- まず実行権限を付けます：`chmod +x Navide-<version>-x86_64.AppImage`。AppImage は FUSE Runtime を同梱しているため、`libfuse` パッケージは不要です。
+- `.deb` をインストールした場合は、Terminal から `navide` を起動して Startup Error を確認してください。このパッケージの更新はアプリ内更新ではなく `apt` 経由です。
+
 ## Terminal Pane のコピー＆ペーストがおかしい
 
 - CLI が Mouse Reporting を有効にしている間、通常のドラッグはプログラム側に転送され、何も選択できません。**Option**（macOS）または **Shift**（Windows/Linux）を押しながらドラッグして、テキスト選択を強制してください。
@@ -92,7 +101,7 @@ Documentation Injection は Best-effort です。MCP Configuration、Package Run
 次を含めてください。
 
 - Navide の Commit または Version
-- macOS Version と Architecture
+- OS の Version と Architecture
 - Agent CLI Name と Version
 - Reproduction Step
 - Expected Behavior と Actual Behavior

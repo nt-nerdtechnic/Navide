@@ -101,7 +101,7 @@ Founder dogfooding must never be described as customer validation. Future direct
 ## Current supportable claims
 
 - Navide supports multiple independent coding-agent and terminal panes.
-- The current registry supports 13 coding CLIs — Aider, Antigravity CLI, Claude Code, Codex, Copilot CLI, Cursor CLI, Grok CLI, Kilo Code, Kimi Code, Muse Code, OpenCode, Pi, Qwen Code — plus plain terminal sessions.
+- The current registry supports 14 coding CLIs — Aider, Antigravity CLI, Claude Code, Codex, Copilot CLI, Cursor CLI, Droid, Grok CLI, Kilo Code, Kimi Code, Muse Code, OpenCode, Pi, Qwen Code — plus plain terminal sessions.
 - Supported sessions can be detected, persisted, rebuilt, and resumed.
 - Pipelines can define stages, parallel slots, roles, prompts, questions, documentation queries, and completion sentinels.
 - Workspace-scoped state, run events, handoffs, and compatible token summaries are stored under `.agent-team/`.
@@ -122,7 +122,7 @@ Use `product direction`, `long-term direction`, `destination`, or equivalent lan
 
 ## Claims that are not currently supportable
 
-- A signed or notarized download is available for every supported platform (the Windows build is not code-signed, and the Linux and Windows installers have not shipped yet).
+- A signed or notarized download is available for every supported platform (the Windows build is not code-signed).
 - Navide provides a complete workspace sandbox.
 - Navide is universally offline.
 - Navide makes an engineer a specific multiple faster.

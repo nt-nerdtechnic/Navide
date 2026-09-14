@@ -40,7 +40,7 @@ Navide 將個人私有 Project Intelligence 儲存在 Workspace 內的 `.agent-t
 - 將 Pane 最小化可以保留 PTY，同時避免占用主要 Layout。
 - 只有 Navide 偵測到可重用 Session ID 後，才進行 Rebuild 或 Resume。
 
-受支援的內建 Agent Key 涵蓋 13 種 coding CLI：Aider、Antigravity CLI、Claude Code、Codex、Copilot CLI、Cursor CLI、Grok CLI、Kilo Code、Kimi Code、Muse Code、OpenCode、Pi、Qwen Code。實際 CLI 行為與 Provider Billing 仍由各外部工具控制。
+受支援的內建 Agent Key 涵蓋 14 種 coding CLI：Aider、Antigravity CLI、Claude Code、Codex、Copilot CLI、Cursor CLI、Droid、Grok CLI、Kilo Code、Kimi Code、Muse Code、OpenCode、Pi、Qwen Code。實際 CLI 行為與 Provider Billing 仍由各外部工具控制。
 
 對 Kimi Code Pane，Navide 會提供 100 ms 的 Escape Sequence 重組時間，讓方向鍵在內嵌 Terminal 中仍能可靠導覽；若環境已有 `PI_TUI_ESC_TIMEOUT`，則仍以既有值為準。
 

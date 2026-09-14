@@ -1280,7 +1280,7 @@
             "autoReclaim": "30"
           }
         },
-        "intro": "What each of the sixteen settings tabs controls, how Navide Cloud links several machines into one private network, and the system surfaces that live outside the main screen — the menus, the standalone windows and resource upkeep.",
+        "intro": "What each of the seventeen settings tabs controls, how Navide Cloud links several machines into one private network, and the system surfaces that live outside the main screen — the menus, the standalone windows and resource upkeep.",
         "s1": {
           "title": "Settings overview",
           "p1": "The settings window opens with <kbd class=\"syh-kbd\">⌘,</kbd>; the gear button in the title bar is the same entry point. The left sidebar is split into five groups, <strong>17 tabs</strong> in total.",
@@ -1290,7 +1290,7 @@
             "title": "The search index is not exhaustive",
             "text": "The index is a hand-maintained list, and <strong>the CLI Agents, Layout and Extensions tabs have no entries at all</strong>, so nothing inside them is searchable — you have to open them yourself."
           },
-          "h2": "The sixteen tabs",
+          "h2": "The seventeen tabs",
           "tabTable": {
             "group": "Group",
             "tab": "Tab",
@@ -1439,7 +1439,7 @@
           "appearance": {
             "theme": "<strong>Theme</strong> — five built in: Dark (GitHub), Midnight, Forest, Light and High Contrast, with Dark (GitHub) as the default.",
             "colors": "<strong>Custom Colors</strong> — eight overridable color tokens (background, surface, text, secondary text, border, accent, success, danger). Overrides sit on top of the current theme and are <strong>kept when you switch themes</strong>; <em>↺ Reset to defaults</em> restores them.",
-            "language": "<strong>Language</strong> — <strong>only two</strong>: <code>繁體中文</code> and <code>English</code>. This is a user-level preference and applies to every workspace.",
+            "language": "<strong>Language</strong> — <strong>only two</strong>: <code>繁體中文</code> and <code>English</code>. Until you pick one, Navide follows the system language. This is a user-level preference and applies to every workspace.",
             "uiScale": "<strong>Interface Scale</strong> — scales the whole interface, in six steps (80%, 90%, 100%, 110%, 125%, 150%; 100% by default), on <kbd class=\"syh-kbd\">⇧⌘=</kbd> / <kbd class=\"syh-kbd\">⇧⌘-</kbd> / <kbd class=\"syh-kbd\">⇧⌘0</kbd>. It drives Electron's page zoom rather than a CSS variable, so text, icons, borders and spacing all move together, and the main process applies it to <strong>every window</strong>, plugin windows included. It is a <strong>separate axis</strong> from pane font size: <kbd class=\"syh-kbd\">⌘=</kbd> / <kbd class=\"syh-kbd\">⌘-</kbd> / <kbd class=\"syh-kbd\">⌘0</kbd> change only the terminal <strong>content</strong> font size (one value shared by every CLI pane in the window), while Interface Scale changes the shell around it — and the two <strong>multiply</strong>, the way a browser's page zoom multiplies with a site's own font size.",
             "restore": "<strong>Restore Windows</strong> — reopen the workspace windows that were open when you last quit."
           },
@@ -1728,7 +1728,7 @@
             "text": "Electron's built-in whole-window zoom (<em>Zoom In</em> / <em>Zoom Out</em> / <em>Actual Size</em>) was removed, because Navide has two zoom axes of its own: <kbd class=\"syh-kbd\">⌘=</kbd> / <kbd class=\"syh-kbd\">⌘-</kbd> / <kbd class=\"syh-kbd\">⌘0</kbd> change the terminal <strong>content</strong> font size, and <kbd class=\"syh-kbd\">⇧⌘=</kbd> / <kbd class=\"syh-kbd\">⇧⌘-</kbd> / <kbd class=\"syh-kbd\">⇧⌘0</kbd> change the <strong>interface scale</strong> (Settings ▸ Appearance ▸ Interface Scale). Left in place, the native roles' accelerators would fire ahead of both. <kbd class=\"syh-kbd\">⌘R</kbd> was also changed to \"rebuild the focused pane\", and reloading the whole window moved to <kbd class=\"syh-kbd\">⇧⌘R</kbd>, with a <em>Reload Window</em> item in the menu that carries no shortcut. <kbd class=\"syh-kbd\">⌘W</kbd> is reserved for \"close tab\" on macOS, so closing a window is left to the traffic lights or <kbd class=\"syh-kbd\">⌘Q</kbd>."
           },
           "h3": "Schedule — not a standalone window",
-          "p1": "This Mac's background schedules are listed in <strong>a tab in the right slot</strong>, named <strong>Schedule</strong> (🗓), and it can be moved to the top or bottom slot. It is not a window opened from the Window menu. Three sections:",
+          "p1": "This machine's background schedules are listed in <strong>a tab in the right slot</strong>, named <strong>Schedule</strong> (🗓), and it can be moved to the top or bottom slot. It is not a window opened from the Window menu. On macOS there are three sections; on Linux only the crontab section applies; on Windows the tab lists nothing by design — Navide never creates scheduled jobs of its own, and Task Scheduler already manages the machine's tasks.",
           "scheduleTable": {
             "section": "Section",
             "source": "Source",
@@ -2901,7 +2901,7 @@
             "protocolOnly": "Output protocol only"
           },
           "note1": "<strong>All fourteen can send</strong>; only the route differs. The output protocol works everywhere — Navide can tell when each agent has finished saying something, and what it said. MCP tools additionally need the CLI to offer a way in (a launch flag, one environment variable carrying the whole config document, or a per-pane mirror of the config directory); Aider, Droid, Muse Code and Pi offer none, so they use the output protocol only.",
-          "note2": "Two caveats in practice: <strong>Antigravity</strong> cannot send on the turn where the agent asks you a question (that turn carries no reply text) — ordinary answering turns are fine; and <strong>Qwen, Pi, Grok and Kimi</strong> have no explicit \"turn finished\" signal, so Navide infers it from 8 seconds of silence and the send goes out a little later."
+          "note2": "Two caveats in practice: <strong>Antigravity</strong> cannot send on the turn where the agent asks you a question (that turn carries no reply text) — ordinary answering turns are fine; and <strong>Qwen, Pi and Kimi</strong> have no explicit \"turn finished\" signal, so Navide infers it from 8 seconds of silence and the send goes out a little later."
         },
         "s4": {
           "title": "How to address the other side",
@@ -2943,7 +2943,7 @@
             "quiet": "No output for the last 2 seconds"
           },
           "p2": "If the conditions are not met the message queues; once they are, it goes out automatically. So while the target is on a long task your message waits for it to finish — that is deliberate. The message the target receives is prefixed with its source, so it knows who to reply to.",
-          "note": "A few CLIs (Qwen, Pi, Grok, Kimi) have no \"turn finished\" signal in their logs, so Navide cannot tell when they are done and treats \"quiet for 8 seconds\" as the end instead. Messages to those CLIs may therefore wait a little longer."
+          "note": "A few CLIs (Qwen, Pi, Kimi) have no \"turn finished\" signal in their logs, so Navide cannot tell when they are done and treats \"quiet for 8 seconds\" as the end instead. Messages to those CLIs may therefore wait a little longer."
         },
         "s6": {
           "title": "What you see on screen",
@@ -3572,7 +3572,7 @@
             "cli_usage": "How much quota each CLI has left; check before handing out work, or the message lands on a CLI that has already run out",
             "cli_token_stats": "This workspace's current token usage"
           },
-          "note3": "For how to use them, see the \"Inter-CLI Messaging\" topic. \"Wait for the other side to finish\" is best-effort: most CLIs (Cursor included) report the end of a turn themselves, while Kimi / Grok / Pi / Qwen are inferred from 8 seconds of silence. The returned <code>source</code> says how trustworthy this particular \"finished\" is — for those CLIs treat it as a hint, not a guarantee. If the target's window is closed or its pane killed mid-wait, <code>source</code> is <code>target_lost</code>: the message really was sent, there is simply no way left to confirm it finished — that is not a send failure, so do not resend.",
+          "note3": "For how to use them, see the \"Inter-CLI Messaging\" topic. \"Wait for the other side to finish\" is best-effort: most CLIs (Cursor included) report the end of a turn themselves, while Kimi / Pi / Qwen are inferred from 8 seconds of silence. The returned <code>source</code> says how trustworthy this particular \"finished\" is — for those CLIs treat it as a hint, not a guarantee. If the target's window is closed or its pane killed mid-wait, <code>source</code> is <code>target_lost</code>: the message really was sent, there is simply no way left to confirm it finished — that is not a send failure, so do not resend.",
           "note4": "One workspace can hold two panes with the same name, and a name alone then cannot say which one is meant, so the tools above refuse outright with <code>ambiguous-target</code> instead of picking one. To name a specific pane, pass the <code>pane_id</code> returned by <code>cli_list_targets</code> to <code>cli_send</code>, <code>cli_send_and_wait</code>, <code>cli_read_log</code>, <code>cli_get_status</code> or <code>cli_wait_idle</code>, and leave the address argument out. Names are more readable day to day; a pane reopened with a different CLI gets a new id, and on <code>unknown-pane-id</code> you simply look it up again. Panes on another device have no local id and can only be addressed by name.",
           "note5": "Giving <code>cli_send</code> the address <code>group</code> does not look for a pane called group: it broadcasts to the other panes <strong>in my own tab group</strong> (same workspace). That differs from the bare-line protocol's <code>all</code>: <code>all</code> is the whole window, regardless of grouping. Panes in no group share one implicit group, so they can reach each other rather than nobody. The reply's shape differs too: each recipient in <code>recipients</code> has its own <code>msg_key</code> to query separately with <code>cli_check_message</code>, and an empty <code>recipients</code> means nobody else is in your group, not a failure. The cost is the same as <code>all</code>: a pane actually named group can no longer be addressed by name.",
           "h4": "Which CLIs are wired up",
