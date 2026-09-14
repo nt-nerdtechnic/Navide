@@ -46,6 +46,11 @@ const cached = computed(() => snap.value?.stale === true)
 // Claude's panel boots a whole CLI, so this state can last the better part of
 // a minute — without saying so, the badge looks like the switch did nothing.
 const pending = computed(() => snap.value?.refreshPending === true)
+// Why the last read failed, verbatim from the backend. `refreshStatus` alone
+// collapses every failure into one word ("unavailable"), which reads as "the
+// account is broken" when it is usually the CLI probe timing out on a loaded
+// machine. The snapshot has carried the real sentence all along; this shows it.
+const refreshError = computed(() => (pending.value ? '' : (snap.value?.error ?? '')))
 // Claude's quota needs its CLI; without the binary there is nothing to read and
 // no cached figure to fall back to either, so the badge would render nothing at
 // all and the one actionable failure would be invisible.
@@ -403,6 +408,9 @@ function acctTitle(profileId: string | null): string {
         {{ $t('usage.cached-at', { time: formatResetAbsolute(snap.lastSuccessAt ?? snap.fetchedAt) }) }}
         · {{ $t('usage.refresh-status', { status: refreshStatusLabel(snap.refreshStatus) }) }}
       </div>
+      <div v-if="refreshError" class="usage-pop-reason">
+        {{ $t('usage.refresh-error', { reason: refreshError }) }}
+      </div>
       <div v-if="cached && snap.staleExpired" class="usage-pop-expired">
         {{ $t('usage.cached-reset-expired') }}
       </div>
@@ -595,6 +603,13 @@ function acctTitle(profileId: string | null): string {
   color: var(--accent-fg);
   font-weight: 600;
   margin-bottom: 6px;
+}
+/* The backend's own sentence — it can be long, so let it wrap rather than
+   widen the popover or clip the half that says what actually went wrong. */
+.usage-pop-reason {
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+  overflow-wrap: anywhere;
 }
 .usage-row {
   margin-bottom: 8px;

@@ -560,6 +560,15 @@ class UsageService:
         # CLI; comparing this counter tells it whether that answer is still
         # true before it writes anything based on it.
         self._switch_epoch = 0
+        # Claude reads currently out in the CLI, by slot. The epoch above keeps
+        # a mid-read switch from writing the wrong account's figure, but the
+        # cycle still has to wait for that doomed read to finish before the
+        # next one can start — and the poller awaits `poll_once` whole. So the
+        # announcement cancels them instead of outliving them; `_reads_cancelled`
+        # records which cancellations were ours, since a CancelledError from a
+        # shutdown must still propagate.
+        self._claude_reads: dict[str, asyncio.Task] = {}
+        self._reads_cancelled: set[str] = set()
         self._cache_path = cache_path
         self._active_claude_slot_reader = active_claude_slot_reader
         self._blocked_until: dict[object, float] = {}
@@ -890,11 +899,33 @@ class UsageService:
             account[slot]["refreshPending"] = True
         else:
             account[slot].pop("refreshPending", None)
+        self._cancel_claude_reads()
         self.request_refresh()
         from . import app
         from .ipc import make_event
 
         await app.broadcast(make_event("usage.changed", self.payload()))
+
+    def _cancel_claude_reads(self) -> None:
+        """Drop any Claude read still out in the CLI.
+
+        The epoch guard already stops a mid-read result from being filed under
+        the wrong account, but it only discards the answer *after* waiting for
+        it — and the probe's budget is minutes, not seconds. Left alone, a
+        switch that lands one second into a read pays that whole budget before
+        the read it actually asked for can start. Cancelling collapses that to
+        nothing; the `request_refresh` that follows queues the real one.
+
+        Never the caller's own task: an announcement raised from inside a read
+        would otherwise cancel the very coroutine making it, turning this into
+        a function that throws `CancelledError` at whoever called it. A read
+        that announces its own switch has already finished the work the cancel
+        exists to save, and the epoch guard covers what it writes."""
+        current = asyncio.current_task()
+        for slot_id, task in list(self._claude_reads.items()):
+            if task is not current and not task.done():
+                self._reads_cancelled.add(slot_id)
+                task.cancel()
 
     async def _harvest_active_slots(self) -> None:
         """Opportunistic harvest: (a) when an agent's ACTIVE account slot is
@@ -970,6 +1001,9 @@ class UsageService:
             key = ("claude", slot_id)
             if self._blocked_until.get(key, 0) <= now:
                 claude_tasks[slot_id] = asyncio.create_task(coro())
+        # Published so an account switch can cancel them rather than wait them
+        # out — see `_cancel_claude_reads`.
+        self._claude_reads = dict(claude_tasks)
 
         # Declaring `fetch_usage` in the vendor file is what puts a vendor in
         # the poll — adding one needs no edit here, which is the promise
@@ -989,6 +1023,16 @@ class UsageService:
         for slot_id, task in claude_tasks.items():
             try:
                 snap = await task
+            except asyncio.CancelledError:
+                # Ours (a switch landed) or the backend's (shutdown). Only the
+                # first is ours to swallow — swallowing the second would leave
+                # the poller running through a shutdown it was told to stop for.
+                if slot_id not in self._reads_cancelled:
+                    raise
+                self._reads_cancelled.discard(slot_id)
+                log.info("usage: cancelled the in-flight claude read for %s — "
+                         "the account switched and asked for a fresh one", slot_id)
+                continue
             except Exception as err:  # noqa: BLE001 — one account must not sink the rest
                 log.warning("usage poll failed for claude account %s: %s", slot_id, err)
                 snap = _snapshot("claude", "error", error=str(err))
@@ -1016,6 +1060,8 @@ class UsageService:
                          "switched mid-read", slot_id)
                 continue
             cache_changed = self._record_claude_snapshot(slot_id, snap) or cache_changed
+        self._claude_reads.clear()
+        self._reads_cancelled.clear()
         if self._switch_epoch == switch_epoch:
             # Any slot this cycle did not write cannot have a read in flight —
             # clear a mark left by an announcement the poller could not act on

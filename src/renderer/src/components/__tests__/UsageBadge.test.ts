@@ -218,6 +218,51 @@ describe('UsageBadge – badge rendering', () => {
     expect(wrapper.get('.usage-pop-cached').text()).toContain('rate limited')
   })
 
+  it('shows why the last refresh failed, not just that it did', async () => {
+    // "unavailable" is one word for a timed-out probe, a dead token and a CLI
+    // too old to understand `-p /usage`. The snapshot has carried the real
+    // sentence all along and nothing rendered it, so a loaded machine timing
+    // out read on screen as a broken account.
+    usage.usageFor.mockReturnValue(
+      snapshot({
+        stale: true,
+        lastSuccessAt: '2026-07-25T00:00:00Z',
+        refreshStatus: 'unavailable',
+        error: 'claude -p /usage timed out after 180s',
+      }),
+    )
+    wrapper = mountBadge(makeCliProfiles().fake)
+
+    await openPopover(wrapper)
+    expect(wrapper.get('.usage-pop-reason').text()).toContain('timed out after 180s')
+  })
+
+  it('does not offer a stale reason while the next read is in flight', async () => {
+    // The error belongs to the read that already finished. Showing it next to
+    // "reading now" would attribute a failure to the attempt still running.
+    usage.usageFor.mockReturnValue(
+      snapshot({
+        stale: true,
+        refreshPending: true,
+        lastSuccessAt: '2026-07-25T00:00:00Z',
+        refreshStatus: 'unavailable',
+        error: 'claude -p /usage timed out after 180s',
+      }),
+    )
+    wrapper = mountBadge(makeCliProfiles().fake)
+
+    await openPopover(wrapper)
+    expect(wrapper.find('.usage-pop-reason').exists()).toBe(false)
+  })
+
+  it('stays quiet when a healthy reading carries no error', async () => {
+    usage.usageFor.mockReturnValue(snapshot({ error: null }))
+    wrapper = mountBadge(makeCliProfiles().fake)
+
+    await openPopover(wrapper)
+    expect(wrapper.find('.usage-pop-reason').exists()).toBe(false)
+  })
+
   it('says a read is in flight rather than passing the old figure off as new', async () => {
     // The account just changed. The number on the badge is the incoming
     // account's PREVIOUS reading and the real one is tens of seconds away —

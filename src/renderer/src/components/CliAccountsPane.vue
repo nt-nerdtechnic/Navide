@@ -209,6 +209,7 @@ interface CardUsage {
   foot: string
   lastSuccess: string
   refreshStatus: string
+  refreshError: string
 }
 
 /** Display model for a card's quota area; undefined hides the area. */
@@ -231,6 +232,10 @@ function cardUsage(agentKey: string, profileId: string | null): CardUsage | unde
     resetExpired: cached && windows.length === 0 && snap.windows.length > 0,
     lastSuccess: formatResetAbsolute(snap.lastSuccessAt ?? snap.fetchedAt),
     refreshStatus,
+    // The backend's sentence for why the last read failed. `refreshStatus`
+    // collapses a timeout, a dead token and an outdated CLI into the same
+    // "unavailable"; this is the part that says which one it was.
+    refreshError: snap.refreshPending === true ? '' : (snap.error ?? ''),
   }
   if (!head)
     return {
@@ -512,6 +517,9 @@ onMounted(() => refreshUsage())
                 <div v-else-if="u.cached" class="cli-card-refresh">
                   {{ $t('usage.refresh-status', { status: u.refreshStatus }) }}
                 </div>
+                <div v-if="u.refreshError" class="cli-card-reason">
+                  {{ $t('usage.refresh-error', { reason: u.refreshError }) }}
+                </div>
               </template>
               <div
                 v-else-if="u || rowIdentity(spec.agentKey, p?.id ?? null)?.signedIn"
@@ -527,6 +535,9 @@ onMounted(() => refreshUsage())
                 </span>
                 <span v-else-if="u?.refreshStatus" class="cli-card-refresh">
                   {{ $t('usage.refresh-status', { status: u.refreshStatus }) }}
+                </span>
+                <span v-if="u?.refreshError" class="cli-card-reason">
+                  {{ $t('usage.refresh-error', { reason: u.refreshError }) }}
                 </span>
               </div>
             </template>
@@ -723,6 +734,13 @@ onMounted(() => refreshUsage())
 /* A read is in flight — the only line on the card that is about right now,
    so it must not read as quietly as the historical ones around it. */
 .cli-card-refresh.pending { color: var(--accent-fg); font-weight: 600; }
+/* The backend's own sentence; cards are narrow, so let it wrap instead of
+   clipping the half that names the failure. */
+.cli-card-reason {
+  font-size: var(--font-3xs);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
 .cli-card-expired { font-size: var(--font-2xs); font-weight: 600; color: var(--danger-fg); }
 .cli-card-none { display: flex; flex-direction: column; gap: 2px; }
 .cli-card-dash {

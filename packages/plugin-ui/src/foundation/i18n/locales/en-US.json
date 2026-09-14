@@ -6695,6 +6695,7 @@
     "reading-short": "reading",
     "reading-tooltip": "This account just became active. Reading its quota starts a Claude Code, so the numbers below are the previous reading until that finishes — up to about a minute.",
     "refresh-status": "Refresh: {status}",
+    "refresh-error": "Reason: {reason}",
     "refresh-status-ok": "up to date",
     "refresh-status-not-refreshed": "not refreshed yet",
     "refresh-status-no-credentials": "no credentials",

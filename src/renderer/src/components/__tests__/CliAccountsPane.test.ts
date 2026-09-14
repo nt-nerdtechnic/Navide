@@ -568,6 +568,65 @@ describe('CliAccountsPane', () => {
     expect(cards[1].get('.cli-card-foot').text()).toBe('Weekly 15%')
   })
 
+  it('names the failure on the card, not just that the refresh failed', () => {
+    // Every Claude read failure lands on the same word. A user looking at
+    // "unavailable" on a loaded machine reasonably concludes the account is
+    // broken and starts re-logging in; the backend knew it was a timeout.
+    usage.accountUsageFor.mockImplementation((key, profileId) =>
+      key === 'claude' && profileId === null
+        ? usageSnapshot({
+            stale: true,
+            refreshStatus: 'unavailable',
+            error: 'claude -p /usage timed out after 180s',
+          })
+        : undefined,
+    )
+    const api = makeApi({
+      identities: { claude: { __default__: { email: 'default@example.com', signedIn: true } } },
+    })
+    const w = mountPane(api)
+
+    const card = section(w, 0).findAll('.cli-card')[0]
+    expect(card.get('.cli-card-reason').text()).toContain('timed out after 180s')
+  })
+
+  it('keeps the reason off a card whose next read is still running', () => {
+    usage.accountUsageFor.mockImplementation((key, profileId) =>
+      key === 'claude' && profileId === null
+        ? usageSnapshot({
+            stale: true,
+            refreshPending: true,
+            refreshStatus: 'unavailable',
+            error: 'claude -p /usage timed out after 180s',
+          })
+        : undefined,
+    )
+    const api = makeApi({
+      identities: { claude: { __default__: { email: 'default@example.com', signedIn: true } } },
+    })
+    const w = mountPane(api)
+
+    const card = section(w, 0).findAll('.cli-card')[0]
+    expect(card.find('.cli-card-reason').exists()).toBe(false)
+    expect(card.get('.cli-card-refresh').classes()).toContain('pending')
+  })
+
+  it('adds no reason line to a parked account that simply was not measured', () => {
+    // A parked slot is not a failure: nothing tried to read it. `error` is
+    // null there, and a reason line would invent a problem.
+    usage.accountUsageFor.mockImplementation((key, profileId) =>
+      key === 'claude' && profileId === null
+        ? usageSnapshot({ stale: true, refreshStatus: 'not-measured', error: null })
+        : undefined,
+    )
+    const api = makeApi({
+      identities: { claude: { __default__: { email: 'default@example.com', signedIn: true } } },
+    })
+    const w = mountPane(api)
+
+    expect(section(w, 0).findAll('.cli-card')[0].find('.cli-card-reason').exists()).toBe(false)
+  })
+
   it('falls back to a providers-only snapshot for the active row only', () => {
     usage.accountUsageFor.mockReturnValue(undefined)
     usage.usageFor.mockImplementation((key) => (key === 'claude' ? usageSnapshot() : undefined))

@@ -584,8 +584,15 @@ USAGE_ARGS = (
     "--no-session-persistence",
     "-p", "/usage",
 )
-# ~2s idle; observed up to ~40s on a heavily loaded machine.
-USAGE_TIMEOUT_S = 90.0
+# ~2s idle, but that is the floor, not the shape: the probe boots a whole
+# Claude Code, so it scales with how busy the machine already is. Measured on a
+# machine running ~20 CLI panes: 21s, 25s, 26s, 52s for the same command back to
+# back. At 90s that left no headroom — a run of eight consecutive timeouts froze
+# the badge on a 2.5h-old reading, each one paying for a full CLI boot and
+# throwing the result away. The read is rate-limited to one per
+# CLAUDE_CLI_READ_INTERVAL either way, so waiting longer costs nothing a
+# failed read did not already cost; giving up early costs the whole reading.
+USAGE_TIMEOUT_S = 180.0
 
 _ENV_DROP = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CONFIG_DIR")
 
@@ -719,6 +726,7 @@ async def read_usage_panel(binary: str) -> str:
     Raises ``RuntimeError`` with a message fit for the badge's ``error`` field:
     a timeout, a non-zero exit with the CLI's first stderr line, or — when the
     exit carried no usage line at all — a note that the CLI needs updating."""
+    started = time.monotonic()
     proc = await asyncio.create_subprocess_exec(
         *osplat.paths.launch_argv(binary, USAGE_ARGS),
         stdin=asyncio.subprocess.DEVNULL,
@@ -728,6 +736,11 @@ async def read_usage_panel(binary: str) -> str:
     )
     try:
         out, err = await asyncio.wait_for(proc.communicate(), timeout=USAGE_TIMEOUT_S)
+        # A successful read used to leave no trace, so how close the probe was
+        # running to USAGE_TIMEOUT_S could only be guessed at after the fact —
+        # and guessing is what set the budget too low the first time.
+        log.info("claude /usage read ok in %.1fs (budget %.0fs)",
+                 time.monotonic() - started, USAGE_TIMEOUT_S)
     except asyncio.TimeoutError:
         await _kill_group(proc.pid)
         try:

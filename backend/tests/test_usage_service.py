@@ -11,6 +11,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from agent_team_backend import osplat
 from agent_team_backend import usage_service as us
 from agent_team_backend.cli_vendors import _protocols as protocols_vendor
@@ -3424,3 +3426,136 @@ async def test_usage_refresh_handler_forwards_the_card_scope(monkeypatch):
 
     assert calls == [("claude", "p1"), ("codex", None), (None, None)]
     assert [m["payload"]["ok"] for m in session.sent] == [True, True, True]
+
+
+
+def _mute_non_claude_vendors(svc: "us.UsageService") -> None:
+    """Keep a poll to its Claude leg only.
+
+    `poll_once` reaches the other vendors through `spec.fetch_usage`, which
+    holds the vendor module's own function — patching `us.fetch_<vendor>` does
+    not intercept it, and `fetch_cursor` really does shell out to
+    `/usr/bin/security`. A test that cancels a cycle mid-flight would orphan
+    those subprocesses. The cooldown gate is the supported way to skip a
+    provider, and Claude's key is a `(provider, slot)` tuple, so its own read
+    still runs."""
+    blocked = time.monotonic() + 3600
+    for provider in us._CLI_VENDORS:
+        svc._blocked_until[provider] = blocked
+
+
+async def test_a_switch_cancels_the_in_flight_claude_read_instead_of_waiting_it_out(
+    tmp_path, monkeypatch
+):
+    """A switch must not have to sit out the read that was already running.
+
+    The epoch guard throws that read's answer away, but only after awaiting it,
+    and the poller awaits `poll_once` whole — so the read the switch asked for
+    could not even start until the doomed one finished. That wait is the
+    Claude probe's whole budget (minutes, not seconds), which is exactly the
+    "I switched and nothing happened" the announcement exists to prevent."""
+    from agent_team_backend import app
+
+    monkeypatch.setattr(app, "broadcast", lambda event: _append([], event))
+    monkeypatch.setattr(us, "_get_profiles_store", lambda: None)
+    monkeypatch.setattr(us, "_get_credential_vault", lambda: None)
+
+    reading = asyncio.Event()
+    finished = False
+
+    async def slow_claude(home):
+        nonlocal finished
+        reading.set()
+        await asyncio.sleep(30)  # stands in for the CLI boot
+        finished = True
+        return us._snapshot("claude", "ok",
+                            windows=[us._window("session", "Session", 40, None)])
+
+    monkeypatch.setattr(us, "fetch_claude", slow_claude)
+
+    svc = us.UsageService(cache_path=tmp_path / "usage-cache.json")
+    svc.enabled = True
+    _mute_non_claude_vendors(svc)
+
+    poll = asyncio.create_task(svc.poll_once(tmp_path))
+    await asyncio.wait_for(reading.wait(), timeout=5)
+
+    await svc.announce_claude_switch("acct-new")
+
+    # The whole point: the cycle returns now, not in 30 seconds.
+    payload = await asyncio.wait_for(poll, timeout=5)
+
+    assert finished is False  # the read really was dropped, not awaited
+    assert svc._active_claude_slot == "acct-new"
+    # Nothing was filed for the cancelled read, under either slot.
+    assert svc._last_good.get("claude", {}).get("__default__") is None
+    assert payload["accounts"]["claude"]["acct-new"]["refreshPending"] is True
+    # The bookkeeping does not leak into the next cycle.
+    assert svc._claude_reads == {}
+    assert svc._reads_cancelled == set()
+
+
+async def test_a_cancellation_that_is_not_a_switch_still_propagates(
+    tmp_path, monkeypatch
+):
+    """Shutdown cancels the poller. Swallowing that the way a switch's own
+    cancellation is swallowed would leave the cycle running through a stop it
+    was told to obey, so only cancellations this service asked for are eaten."""
+    from agent_team_backend import app
+
+    monkeypatch.setattr(app, "broadcast", lambda event: _append([], event))
+    monkeypatch.setattr(us, "_get_profiles_store", lambda: None)
+    monkeypatch.setattr(us, "_get_credential_vault", lambda: None)
+
+    reading = asyncio.Event()
+
+    async def slow_claude(home):
+        reading.set()
+        await asyncio.sleep(30)
+        return us._snapshot("claude", "ok")
+
+    monkeypatch.setattr(us, "fetch_claude", slow_claude)
+
+    svc = us.UsageService(cache_path=tmp_path / "usage-cache.json")
+    svc.enabled = True
+    _mute_non_claude_vendors(svc)
+
+    poll = asyncio.create_task(svc.poll_once(tmp_path))
+    await asyncio.wait_for(reading.wait(), timeout=5)
+    poll.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await poll
+
+
+async def test_a_read_that_announces_its_own_switch_is_not_cancelled_by_it(
+    tmp_path, monkeypatch
+):
+    """`_cancel_claude_reads` must skip the caller's own task. Announcing from
+    inside a read would otherwise cancel the coroutine doing the announcing,
+    so `announce_claude_switch` would raise `CancelledError` at its caller —
+    and that caller is the account-switch WebSocket handler."""
+    from agent_team_backend import app
+
+    monkeypatch.setattr(app, "broadcast", lambda event: _append([], event))
+    monkeypatch.setattr(us, "_get_profiles_store", lambda: None)
+    monkeypatch.setattr(us, "_get_credential_vault", lambda: None)
+
+    returned = False
+
+    async def self_announcing_claude(home):
+        nonlocal returned
+        await svc.announce_claude_switch("acct-new")
+        returned = True
+        return us._snapshot("claude", "ok",
+                            windows=[us._window("session", "Session", 40, None)])
+
+    monkeypatch.setattr(us, "fetch_claude", self_announcing_claude)
+
+    svc = us.UsageService(cache_path=tmp_path / "usage-cache.json")
+    svc.enabled = True
+    _mute_non_claude_vendors(svc)
+
+    await asyncio.wait_for(svc.poll_once(tmp_path), timeout=5)
+
+    assert returned is True
