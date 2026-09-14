@@ -172,14 +172,34 @@ def test_kimi_shared_home_session_scanned_not_profile_home(
 
 # ── grok ──────────────────────────────────────────────────────────────────────
 
-def test_grok_dirs_single_default_root(
+def test_grok_scans_one_root_not_the_profile_homes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, profiles_root: Path
 ) -> None:
+    monkeypatch.delenv("GROK_HOME", raising=False)
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     # A profile home exists on disk but is not part of the scan set.
     (_profile_home(profiles_root, "grok", "acct1") / ".grok").mkdir(parents=True)
+    (tmp_path / ".grok" / "sessions").mkdir(parents=True)
+
     reader = GrokLogReader()
-    assert reader._grok_dirs() == [tmp_path / ".grok"]
+
+    assert reader._sessions_root() == tmp_path / ".grok" / "sessions"
+    assert reader.project_dirs() == [tmp_path / ".grok" / "sessions"]
+
+
+def test_grok_home_relocates_the_whole_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GROK_HOME is how a pane is isolated on the official CLI: it moves
+    sessions and credentials together, so the reader must follow it rather than
+    keep reading ~/.grok."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("GROK_HOME", str(tmp_path / "shim" / ".grok"))
+    (tmp_path / "shim" / ".grok" / "sessions").mkdir(parents=True)
+
+    reader = GrokLogReader()
+
+    assert reader.project_dirs() == [tmp_path / "shim" / ".grok" / "sessions"]
 
 
 # ── watcher ───────────────────────────────────────────────────────────────────

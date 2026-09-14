@@ -254,8 +254,12 @@ describe('buildResumeCommand', () => {
     expect(buildResumeCommand('antigravity', 'abc')).toBe('agy --conversation abc')
   })
 
-  it('uses grok -s for grok', () => {
-    expect(buildResumeCommand('grok', '1f9e02aabb3c')).toBe('grok -s 1f9e02aabb3c')
+  it('uses grok -r for grok', () => {
+    // `-s`/`--session-id` NAMES A NEW session on the official CLI and errors on
+    // an id that already exists, so resuming with it would silently start a
+    // fresh conversation. Ids are UUIDv7.
+    expect(buildResumeCommand('grok', '01a09f53-9ed8-7303-9e16-e4907f948d93'))
+      .toBe('grok -r 01a09f53-9ed8-7303-9e16-e4907f948d93')
   })
 
   it('grok resume with a blank id falls back to "" like other vendors', () => {

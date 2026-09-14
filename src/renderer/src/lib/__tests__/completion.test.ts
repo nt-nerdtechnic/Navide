@@ -377,9 +377,11 @@ const SPIN_TURNS = [
 
 describe('loopSettleMs', () => {
   const DEFAULT = 1500
-  const SILENCE_VENDORS = ['grok', 'kimi', 'pi', 'qwen']
+  // grok dropped out when it moved to the official xAI CLI, whose transcript
+  // carries an explicit `turn_completed` record.
+  const SILENCE_VENDORS = ['kimi', 'pi', 'qwen']
 
-  it('holds the verdict longer for the four vendors whose turn end is inferred from silence', () => {
+  it('holds the verdict longer for the vendors whose turn end is inferred from silence', () => {
     for (const key of SILENCE_VENDORS) {
       expect(VENDORS_WITHOUT_TURN_END.has(key)).toBe(true)
       expect(loopSettleMs(VENDORS_WITHOUT_TURN_END.has(key), DEFAULT)).toBe(LOOP_INFERRED_TURN_END_SETTLE_MS)

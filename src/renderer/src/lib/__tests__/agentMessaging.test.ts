@@ -578,15 +578,16 @@ describe('isTurnInFlight', () => {
 
   it('lists exactly the vendors whose logs carry no end-of-turn record', () => {
     // The test is where the boundary comes from, not whether a turn_complete
-    // arrives — every reader emits one. grok/kimi/pi/qwen synthesize theirs
-    // from a quiet window (_TURN_IDLE_SECONDS / _TURN_IDLE_MS in their backend
-    // vendor files) — inference one layer down. Vendors that read a real record
-    // stay out even when it is indirect: opencode (and kilo, on its reader) a
-    // `step-finish` reason, antigravity a completed step carrying a reply,
-    // cursor an assistant row in store.db. See turnEndInferredFromSilence in
-    // agents/types.ts.
+    // arrives — every reader emits one. kimi/pi/qwen synthesize theirs from a
+    // quiet window (_TURN_IDLE_MS in their backend vendor files) — inference
+    // one layer down. Vendors that read a real record stay out even when it is
+    // indirect: opencode (and kilo, on its reader) a `step-finish` reason,
+    // antigravity a completed step carrying a reply, cursor an assistant row in
+    // store.db, and grok a `turn_completed` record — the official xAI CLI
+    // writes one where the community grok-cli wrote none, which is why grok
+    // left this list. See turnEndInferredFromSilence in agents/types.ts.
     expect([...VENDORS_WITHOUT_TURN_END].sort()).toEqual([
-      'grok', 'kimi', 'pi', 'qwen',
+      'kimi', 'pi', 'qwen',
     ])
   })
 })
