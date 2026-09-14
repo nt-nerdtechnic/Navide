@@ -94,6 +94,8 @@ export function useStorageUsage(opts: {
   const cleanupFailures = ref<CleanupResult[]>([])
   const pendingConfirm = ref<StorageItem[] | null>(null)
   const homeDir = ref('')
+  /** Scan and cleanup both need the backend; the buttons read this. */
+  const connected = computed(() => opts.backend.status.value === 'connected')
 
   const allItems = computed<StorageItem[]>(() => (report.value?.groups ?? []).flatMap((g) => g.items))
 
@@ -150,6 +152,12 @@ export function useStorageUsage(opts: {
 
   async function scan(): Promise<void> {
     if (scanning.value) return
+    // Not queued for a backend that is away: the request would sit in the
+    // client's queue reading "Scanning…" until the 120s timeout said otherwise.
+    if (!connected.value) {
+      scanError.value = t('resource.storage.not-connected')
+      return
+    }
     scanning.value = true
     scanError.value = ''
     try {
@@ -274,6 +282,7 @@ export function useStorageUsage(opts: {
   }
 
   return {
+    connected,
     report,
     scanning,
     scanError,

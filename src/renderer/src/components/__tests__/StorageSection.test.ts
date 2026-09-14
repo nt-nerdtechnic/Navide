@@ -342,6 +342,108 @@ describe('StorageSection', () => {
     expect(mounted.mock.sent.filter((s) => s.type === 'storage.cleanup')).toHaveLength(0)
   })
 
+  it('opens for the first scan so the skeleton is visible, and requests the long timeout', async () => {
+    const mock = createMockBackend('connected')
+    let release: (() => void) | undefined
+    mock.setResponse('storage.usage', report())
+    const inner = mock.backend.send
+    ;(mock.backend as { send: typeof inner }).send = ((type: string, payload: Record<string, unknown>, timeoutMs?: number) =>
+      type === 'storage.usage'
+        ? new Promise((resolve) => { release = () => resolve(inner(type, payload, timeoutMs)) })
+        : inner(type, payload, timeoutMs)) as typeof inner
+    wrapper = mount(Host, { props: { backend: mock.backend }, global: { plugins: [i18n] } })
+    await wrapper.get('[data-act="rescan"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-part="storage"]').attributes('data-open')).toBe('true')
+    expect(wrapper.find('.su-skeleton').exists()).toBe(true)
+    release?.()
+    await flushPromises()
+    expect(wrapper.find('.su-skeleton').exists()).toBe(false)
+    // A full disk walk is far slower than the default request timeout.
+    expect(mock.sent.find((s) => s.type === 'storage.usage')?.timeoutMs).toBe(120_000)
+  })
+
+  it('reopens a collapsed section when a cleanup started from the header finishes', async () => {
+    ;(window as unknown as Record<string, unknown>).agentTeam = {
+      storage: { clearElectronCaches: vi.fn().mockResolvedValue({ ok: true, freedBytes: 0, error: null }) },
+    }
+    const mounted = await mountSection()
+    wrapper = mounted.wrapper
+    await wrapper.get('[data-act="toggle-storage"]').trigger('click')
+    expect(wrapper.get('[data-part="storage"]').attributes('data-open')).toBe('false')
+    await wrapper.get('[data-act="clean-safe"]').trigger('click')
+    await wrapper.get('.su-confirm-ok').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-part="storage"]').attributes('data-open')).toBe('true')
+    expect(wrapper.get('.su-result').text()).toContain('1.1 GB')
+    expect(mounted.mock.sent.find((s) => s.type === 'storage.cleanup')?.timeoutMs).toBe(120_000)
+  })
+
+  it('shows a failed rescan in the header even though the old report is kept', async () => {
+    const mounted = await mountSection()
+    wrapper = mounted.wrapper
+    mounted.mock.setResponse('storage.usage', {})
+    await wrapper.get('[data-act="rescan"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-part="storage-summary"]').text()).toContain('storage scan failed')
+    expect(wrapper.get('[data-part="storage-summary"]').classes()).toContain('su-sub-error')
+    expect(wrapper.findAll('.su-item')).toHaveLength(5)
+  })
+
+  it('refuses to scan while the backend is away', async () => {
+    const mock = createMockBackend('starting')
+    mock.setResponse('storage.usage', report())
+    wrapper = mount(Host, { props: { backend: mock.backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+    expect(wrapper.get('[data-act="rescan"]').attributes('disabled')).toBeDefined()
+    // Even a programmatic scan is refused rather than queued for 120s.
+    await wrapper.get('[data-act="rescan"]').trigger('click')
+    await flushPromises()
+    expect(mock.sent.filter((s) => s.type === 'storage.usage')).toHaveLength(0)
+  })
+
+  it('warns in the confirm when a danger item is included', async () => {
+    const r = report()
+    r.groups[2].items[0].risk = 'danger'
+    const mounted = await mountSection()
+    wrapper = mounted.wrapper
+    mounted.mock.setResponse('storage.usage', r)
+    await wrapper.get('[data-act="rescan"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-item-id="pipelineLogs"] .su-check').setValue(true)
+    await wrapper.get('[data-act="clean-selected"]').trigger('click')
+    expect(wrapper.find('.su-confirm-danger').exists()).toBe(true)
+    await wrapper.get('.su-confirm-cancel').trigger('click')
+    expect(wrapper.find('.su-confirm-danger').exists()).toBe(false)
+  })
+
+  it('drops the selection of an item a rescan no longer reports', async () => {
+    const mounted = await mountSection()
+    wrapper = mounted.wrapper
+    await wrapper.get('[data-item-id="pipelineLogs"] .su-check').setValue(true)
+    expect(wrapper.get('[data-act="clean-selected"]').attributes('disabled')).toBeUndefined()
+    const r = report()
+    r.groups = r.groups.slice(0, 2)
+    mounted.mock.setResponse('storage.usage', r)
+    await wrapper.get('[data-act="rescan"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-item-id="pipelineLogs"]').exists()).toBe(false)
+    expect(wrapper.get('[data-act="clean-selected"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('expands paths on request and collapses the home directory to ~', async () => {
+    ;(window as unknown as Record<string, unknown>).agentTeam = {
+      getHomeDir: vi.fn().mockResolvedValue('/Users/test'),
+    }
+    const mounted = await mountSection()
+    wrapper = mounted.wrapper
+    const item = wrapper.get('[data-item-id="pipelineLogs"]')
+    expect(item.find('.su-paths').exists()).toBe(false)
+    await item.get('.su-paths-toggle').trigger('click')
+    expect(wrapper.get('[data-item-id="pipelineLogs"] .su-paths').text()).toBe('~/code/demo/node_modules')
+    expect(wrapper.get('.su-warn-path').text()).toBe('~/Library/Caches/locked')
+  })
+
   it('rescans with the new threshold when staleDays changes', async () => {
     const mounted = await mountSection()
     wrapper = mounted.wrapper
@@ -360,9 +462,11 @@ describe('StorageSection', () => {
     wrapper = mount(Host, { props: { backend: mock.backend }, global: { plugins: [i18n] } })
     await wrapper.get('[data-act="rescan"]').trigger('click')
     await flushPromises()
-    // Nothing to open onto, so the error is in the header's summary slot.
-    expect(wrapper.get('[data-part="storage"]').attributes('data-open')).toBe('false')
+    // The first scan opened the section; the error shows in both places.
+    expect(wrapper.get('[data-part="storage"]').attributes('data-open')).toBe('true')
     expect(wrapper.get('[data-part="storage-summary"]').text()).toContain('storage scan failed')
+    expect(wrapper.get('.su-error').text()).toContain('storage scan failed')
+    expect(wrapper.find('.su-skeleton').exists()).toBe(false)
   })
 
   it('renders no untranslated i18n keys in either locale', async () => {

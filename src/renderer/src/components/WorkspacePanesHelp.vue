@@ -248,6 +248,8 @@ const shortcuts: ShortcutRow[] = [
         在面板上或側欄那一列按右鍵：<em>Focus</em>、<em>Rename</em>、<em>Send message</em>、
         <em>Interrupt</em>、<em>Reapply role</em>、<em>Remove</em>。其中 <em>Send message</em>
         會把那個面板的位址插進你目前焦點面板的輸入框——這是跨面板傳訊最快的入口。
+        底下有子面板（<code>▸</code>）的面板還會多一項 <em>Remove N sub-panes</em>：只關掉它派生出來的
+        子面板，它自己和其他面板都不動。
       </p>
 
       <h3 class="wph-h3">收合與佔位卡</h3>

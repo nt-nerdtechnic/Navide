@@ -4,7 +4,7 @@
 // the host creates the useStorageUsage instance so its Disk summary card can
 // read the same report — and only decides how to draw it.
 //
-// Collapsed until the first report lands: an unscanned section has nothing to
+// Collapsed until the first scan starts: an unscanned section has nothing to
 // show but the header, and expanding an empty body would just push the
 // process table up for no reason.
 import { ref, watch } from 'vue'
@@ -19,9 +19,26 @@ const props = defineProps<{
 const { t, te } = useI18n()
 
 const open = ref(false)
-watch(props.storage.report, (report, prior) => {
-  if (report && !prior) open.value = true
-})
+watch(
+  () => props.storage.scanning.value && !props.storage.report.value,
+  (firstScan) => {
+    if (firstScan) open.value = true
+  }
+)
+// The header's buttons work while the section is closed, so anything they
+// produce — freed bytes, a failed pass, a scan error — opens it; otherwise a
+// cleanup started from a closed section ends in silence.
+watch(
+  () => [
+    props.storage.cleanupFreed.value,
+    props.storage.cleanupError.value,
+    props.storage.cleanupWarning.value,
+    props.storage.scanError.value,
+  ],
+  ([freed, error, warning, scanError]) => {
+    if (freed !== null || error || warning || scanError) open.value = true
+  }
+)
 
 /** Item copy is keyed by backend id; unknown ids degrade to the raw id. */
 function itemLabel(id: string): string {
@@ -62,16 +79,16 @@ function groupShare(group: StorageGroup): string {
         <span class="su-caret" aria-hidden="true">{{ open ? '▾' : '▸' }}</span>
         <span class="su-title">{{ t('resource.storage.title') }}</span>
       </button>
-      <span class="su-sub" data-part="storage-summary" :class="{ 'su-sub-error': !storage.report.value && storage.scanError.value }">
+      <span class="su-sub" data-part="storage-summary" :class="{ 'su-sub-error': !storage.scanning.value && storage.scanError.value }">
         {{ storage.scanning.value
           ? t('resource.storage.scanning')
-          : storage.report.value
-            ? t('resource.storage.summary', {
-                used: formatBytes(storage.report.value.totalBytes),
-                safe: formatBytes(storage.safeCleanableBytes.value),
-              })
-            : storage.scanError.value
-              ? t('resource.storage.scan-failed', { message: storage.scanError.value })
+          : storage.scanError.value
+            ? t('resource.storage.scan-failed', { message: storage.scanError.value })
+            : storage.report.value
+              ? t('resource.storage.summary', {
+                  used: formatBytes(storage.report.value.totalBytes),
+                  safe: formatBytes(storage.safeCleanableBytes.value),
+                })
               : t('resource.storage.unscanned') }}
       </span>
       <span class="su-spacer" />
@@ -112,7 +129,7 @@ function groupShare(group: StorageGroup): string {
         type="button"
         class="su-btn su-rescan"
         data-act="rescan"
-        :disabled="storage.scanning.value || storage.cleaning.value"
+        :disabled="storage.scanning.value || storage.cleaning.value || !storage.connected.value"
         @click="void storage.scan()"
       >
         {{ storage.report.value ? t('resource.storage.rescan') : t('resource.storage.scan') }}
@@ -266,10 +283,12 @@ function groupShare(group: StorageGroup): string {
   border-top: 1px solid var(--border-muted);
   font-size: var(--font-2xs);
 }
-/* Open, the section splits the remaining height with the process table above
- * it; closed, it is the one header line the old disk strip used to be. */
+/* Open, the section takes what its content needs up to half the card and
+ * scrolls past that, so a short report does not push the process table down
+ * for nothing; closed, it is the one header line the old disk strip used to be. */
 .su-section[data-open='true'] {
-  flex: 1 1 50%;
+  flex: 0 1 auto;
+  max-height: 50%;
 }
 .su-head {
   display: flex;
@@ -530,7 +549,11 @@ function groupShare(group: StorageGroup): string {
 }
 
 /* Sits above the modal it belongs to: the overlay is its own stacking context
- * (see .rm-overlay), so this only needs to beat the card inside it. */
+ * (see .rm-overlay), so this only needs to beat the card inside it. It also
+ * relies on the overlay being the containing block for fixed descendants —
+ * .nv-modal-overlay's backdrop-filter makes it one — which is what keeps
+ * .rm-modal's overflow:hidden from clipping this. Drop that filter or the
+ * overlay's inset:0 and this box would need re-homing. */
 .su-confirm {
   position: fixed;
   inset: 0;

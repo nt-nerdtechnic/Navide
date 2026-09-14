@@ -646,7 +646,8 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
   },
   {
     // Storage lives in the Resource Manager now; the entry stays so "disk" and
-    // "cleanup" still find it from here.
+    // "cleanup" still find it from here. `tab` and `section` are never read
+    // for an `opens` item — openSettingsSearchResult leaves before using them.
     id: 'storage',
     tab: 'general',
     section: 'storage',
@@ -3561,7 +3562,6 @@ watch(activeTab, (tab) => {
           <LayoutSettingsPane />
         </div>
 
-        <!-- ── STORAGE TAB ───────────────────────────────────────────────── -->
         </div>
         <!-- /.s-content -->
 

@@ -49,7 +49,7 @@ interface StageRow {
   fallback: string
 }
 
-// ── 1 · 十七個分頁 ────────────────────────────────────────────────────────
+// ── 1 · 十六個分頁 ────────────────────────────────────────────────────────
 const tabs: TabRow[] = [
   {
     group: 'GENERAL',
@@ -221,17 +221,6 @@ const memoryCoverage: PairRow[] = [
   { key: 'Not mapped', value: 'Navide 不知道路徑的 CLI。目前是空的。' },
 ]
 
-// ── 7 · Storage（Resource Manager 內）────────────────────────────────────
-const storageCategories: PairRow[] = [
-  {
-    key: 'App data',
-    value: '輪替後的 backend 記錄檔、目前的記錄檔、Navide 資料庫、設定備份、執行期暫存、CLI 額度快取',
-  },
-  { key: 'Electron caches', value: 'Chromium 快取、已下載的更新包、瀏覽器狀態' },
-  { key: 'CLI agent homes', value: '封存的 CLI profile、profile 快取、CLI 對話歷史、孤兒 pane 家目錄' },
-  { key: 'Workspaces', value: '孤兒／過期的 agent 記錄、pipeline 歷史與執行記錄、計畫歷史' },
-]
-
 const updateStages: StageRow[] = [
   { stage: 'Check', stageSpan: 2, toggle: 'Automatically check for updates', fallback: '開' },
   {
@@ -307,6 +296,17 @@ const otherWindows: PairRow[] = [
   { key: '拖出來的工作區視窗', value: '把側欄的工作區列拖出去（視窗裡要有兩個以上工作區）' },
 ]
 
+// ── 7 · 資源與維護：Storage（Resource Manager 內）─────────────────────────
+const storageCategories: PairRow[] = [
+  {
+    key: 'App data',
+    value: '輪替後的 backend 記錄檔、目前的記錄檔、Navide 資料庫、設定備份、執行期暫存、CLI 額度快取',
+  },
+  { key: 'Electron caches', value: 'Chromium 快取、已下載的更新包、瀏覽器狀態' },
+  { key: 'CLI agent homes', value: '封存的 CLI profile、profile 快取、CLI 對話歷史、孤兒 pane 家目錄' },
+  { key: 'Workspaces', value: '孤兒／過期的 agent 記錄、pipeline 歷史與執行記錄、計畫歷史' },
+]
+
 // ── 7 · 維護速查 ─────────────────────────────────────────────────────────
 const maintenance: PairRow[] = [
   { key: '記憶體吃太兇', value: 'Resource Manager ▸ Reclaim；或設定 ▸ General 調低閒置門檻' },
@@ -324,7 +324,7 @@ const maintenance: PairRow[] = [
 <template>
   <div class="syh">
     <p class="syh-intro">
-      設定視窗的十七個分頁分別管什麼、Navide Cloud 怎麼把幾台機器接成一個私有網路，
+      設定視窗的十六個分頁分別管什麼、Navide Cloud 怎麼把幾台機器接成一個私有網路，
       以及選單、獨立視窗與資源維護這些散在主畫面之外的系統面。
     </p>
 
@@ -333,14 +333,15 @@ const maintenance: PairRow[] = [
       <h2 class="syh-h2"><span class="syh-num">1</span>設定總覽</h2>
       <p class="syh-p">
         設定視窗用 <kbd class="syh-kbd">⌘,</kbd> 開啟，標題列的齒輪鈕是同一個入口。
-        左側側欄分四組，共 <strong>17 個分頁</strong>。
+        左側側欄分四組，共 <strong>16 個分頁</strong>。
       </p>
 
       <h3 class="syh-h3">搜尋框</h3>
       <p class="syh-p">
         側欄標題底下有一個搜尋框，提示字是 <code>Search settings…</code>。
         它<strong>跨分頁</strong>比對設定項的標題、所屬區塊與關鍵字（中英文都收），最多列 8 筆；
-        點一筆會切到那個分頁並捲到對應區塊，沒命中時顯示 <code>No matching settings</code>。
+        點一筆會切到那個分頁並捲到對應區塊（「Storage」那筆例外：它會關掉設定、直接開 Resource Manager），
+        沒命中時顯示 <code>No matching settings</code>。
         <kbd class="syh-kbd">Esc</kbd> 清空。
       </p>
       <div class="syh-callout">
@@ -351,7 +352,7 @@ const maintenance: PairRow[] = [
         </div>
       </div>
 
-      <h3 class="syh-h3">十七個分頁</h3>
+      <h3 class="syh-h3">十六個分頁</h3>
       <div class="syh-tablewrap">
         <table class="syh-table">
           <thead>

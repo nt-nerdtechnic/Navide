@@ -12,7 +12,7 @@
 // note it never lists plain terminal panes), the figures from the host's sweep,
 // and the two row actions are relayed through the main process to whichever
 // window owns the pane, because focusing and reclaiming only exist there.
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { useBackend } from '../composables/useBackend'
 import type { useResourceUsage } from '../composables/useResourceUsage'
@@ -85,6 +85,15 @@ watch(
   },
   { immediate: true }
 )
+// The open→false branch above is the normal stop; an unmount while open (the
+// host tears the modal down) must not leave the interval polling a dead
+// instance.
+onBeforeUnmount(() => {
+  if (rosterTimer !== null) {
+    clearInterval(rosterTimer)
+    rosterTimer = null
+  }
+})
 
 // Recent CPU per pane, for the trend line. Kept only while the modal is open:
 // a sparkline is a "what just happened", and persisting it would mean sampling
@@ -360,7 +369,7 @@ const diskState = computed<'unscanned' | 'scanning' | 'failed' | 'scanned'>(() =
             v-if="!storage.report.value"
             class="rm-ghost rm-disk-scan"
             data-act="scan-disk"
-            :disabled="storage.scanning.value"
+            :disabled="storage.scanning.value || !storage.connected.value"
             @click="void storage.scan()"
           >
             {{ t('resource.disk-scan') }}
@@ -598,9 +607,9 @@ const diskState = computed<'unscanned' | 'scanning' | 'failed' | 'scanned'>(() =
 .rm-head-row .c-mem { text-align: right; }
 
 /* Shares the card's height with the Storage section below: closed, that is
- * one header line; open, the two split what is left and each scrolls. */
+ * one header line; open, it takes up to half and this keeps the rest. */
 .rm-rows {
-  flex: 1 1 50%;
+  flex: 1 1 auto;
   min-height: 120px;
   overflow-y: auto;
   padding-bottom: 8px;
