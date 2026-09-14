@@ -152,16 +152,26 @@ const toggleMaximize = async (): Promise<void> => {
    here would style bars that are not title bars.
 
    Two things have to change on the bar that hosts the controls. It has to be
-   a positioning context, because none of the three is one today and the
-   cluster is absolutely positioned. And the space reserved on the left for
-   the macOS traffic lights (80-84px, depending on the bar) is dead where we
-   draw our own controls, while the room is needed on the right instead.
+   a positioning context for the absolutely positioned cluster. And the space
+   reserved on the left for the macOS traffic lights (80-84px, depending on the
+   bar) is dead where we draw our own controls, while the room is needed on the
+   right instead.
 
    Keyed off the attribute the renderer entry sets, so all of this is inert on
    macOS. */
 :root[data-window-controls='drawn'] :has(> .win-controls) {
-  position: relative;
   padding-left: 8px;
   padding-right: 146px;
+}
+/* The positioning context, in a `:where()` so it carries ZERO specificity: a
+   bar that is ALREADY positioned keeps its own position, and only a truly
+   static one falls through to `relative` here. This matters because the main
+   window's `.titlebar` is `position: absolute` — its overlay layout across the
+   top of the window depends on that. A plain (specific) `position: relative`
+   here beat it and dragged the titlebar out of its overlay into the grid flow,
+   which left an empty band above the content (Linux) and hid the drawn
+   controls under the first-launch Welcome overlay (Windows and Linux). */
+:where(:root[data-window-controls='drawn'] :has(> .win-controls)) {
+  position: relative;
 }
 </style>

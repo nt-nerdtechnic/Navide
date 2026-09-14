@@ -69,4 +69,26 @@ describe('W1: Welcome window controls on Windows/Linux', () => {
     // The `.app` top padding is no longer a hardcoded 38px that could drift.
     expect(app).not.toMatch(/padding-top:\s*38px/)
   })
+
+  // W1/L2 shared root cause: the WindowControls `:has(> .win-controls)` rule
+  // makes a static host bar a positioning context for the absolute cluster, but
+  // a plain `position: relative` there beat `.titlebar { position: absolute }`
+  // and dragged the titlebar out of its overlay into the grid flow — the empty
+  // band above the content (L2) and the controls hidden under the Welcome
+  // overlay (W1). The fix: that `position` must carry zero specificity (`:where`)
+  // so an already-positioned bar keeps its own position.
+  it('the win-controls positioning context cannot override an absolute titlebar', () => {
+    const wc = read('components/WindowControls.vue')
+    // The `position` that turns a host bar into a positioning context must be
+    // inside a `:where()` (specificity 0), not a plain high-specificity rule.
+    expect(wc).toMatch(/:where\([^)]*:has\(>\s*\.win-controls\)\)\s*\{\s*position:\s*relative/)
+    // A bare `... :has(> .win-controls) { position: relative }` (no :where) would
+    // reintroduce the override, so it must not exist outside a :where.
+    const withoutWhere = wc.replace(/:where\([^{]*\)\s*\{[^}]*\}/g, '')
+    expect(withoutWhere).not.toMatch(/:has\(>\s*\.win-controls\)\s*\{[^}]*position:\s*relative/)
+
+    // …and the titlebar it must not override stays absolute.
+    const app = read('App.vue')
+    expect(app).toMatch(/\.titlebar\s*\{[^}]*position:\s*absolute/)
+  })
 })
