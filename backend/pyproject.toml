@@ -21,6 +21,9 @@ dependencies = [
     # image was too unreliable to release from (pyca/cryptography#14216), and
     # building the sdist would put a Rust + OpenSSL toolchain in the release
     # path. Lift this pin as soon as upstream ships win_arm64 wheels again.
+    # Every advisory against 46.0.3 sits in code this backend never calls
+    # (X.509 verification, PKCS#7/CMS, the `ec` module); any future use of
+    # those lands on the vulnerable version on Windows on Arm first.
     "cryptography==46.0.3; sys_platform == 'win32' and platform_machine == 'ARM64'",
     "fastapi>=0.115",
     "mammoth>=1.12.0",
