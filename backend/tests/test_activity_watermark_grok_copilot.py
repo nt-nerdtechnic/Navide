@@ -1,9 +1,9 @@
-"""grok and copilot activity dedup must fit the durable "@activity" bag.
+"""copilot activity dedup must fit the durable "@activity" bag.
 
-Both readers used to leave one key per item in the `seen_keys` bag
-parse_activity is handed — grok an `act:<session>:<seq>` per message row,
-copilot an `act:<line>` per JSONL line plus a `db_act:*` per store row. In a
-store that holds every session ever run, those bags cross the watcher's
+copilot's reader used to leave one key per item in the `seen_keys` bag
+parse_activity is handed — an `act:<line>` per JSONL line plus a `db_act:*` per
+store row. In a store that holds every session ever run, those bags cross the
+watcher's
 `_ACTIVITY_KEYS_PERSIST_LIMIT` within a handful of turns, and an over-limit bag
 is dropped whole rather than truncated. So nothing was ever written to the
 durable checkpoint and both vendors replayed their entire history — every
@@ -14,6 +14,11 @@ The fix is the same consolidation cursor/antigravity/opencode already use: one
 bounded watermark instead of per-item keys. These tests pin all three halves of
 that — the bag stays persistable, a restart resumes from it, and the watermark
 neither replays a row nor skips one.
+
+grok used to be tested here too, on the same SQLite store. The official xAI CLI
+keeps one JSONL transcript per session instead, so its half moved to
+tests/vendors/test_grok.py with the reader; only the shared dispatch check at
+the bottom still names it.
 """
 
 from __future__ import annotations
@@ -25,9 +30,8 @@ from pathlib import Path
 
 import pytest
 
-from agent_team_backend.cli_vendors import grok as grok_module
 from agent_team_backend.cli_vendors.copilot import CopilotLogReader
-from agent_team_backend.cli_vendors.grok import _TURN_IDLE_SECONDS, GrokLogReader
+from agent_team_backend.cli_vendors.grok import GrokLogReader
 from agent_team_backend.log_readers.watcher import _ACTIVITY_KEYS_PERSIST_LIMIT
 
 
@@ -47,232 +51,6 @@ def _persisted(bag: set[str]) -> set[str]:
         f"{sorted(bag)}"
     )
     return {str(k) for k in json.loads(json.dumps(sorted(bag)))}
-
-
-# ── grok fixtures ───────────────────────────────────────────────────────────
-
-def _grok_db(tmp_path: Path) -> Path:
-    path = tmp_path / ".grok" / "grok.db"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(path)
-    con.executescript(
-        """
-        CREATE TABLE workspaces (id TEXT PRIMARY KEY, scope_key TEXT NOT NULL,
-          canonical_path TEXT NOT NULL, git_root TEXT, display_name TEXT NOT NULL,
-          last_seen_at TEXT NOT NULL);
-        CREATE TABLE sessions (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL,
-          title TEXT, recap_text TEXT, recap_model TEXT, recap_updated_at TEXT,
-          model TEXT NOT NULL, mode TEXT NOT NULL, cwd_at_start TEXT NOT NULL,
-          cwd_last TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL,
-          updated_at TEXT NOT NULL);
-        CREATE TABLE messages (session_id TEXT NOT NULL, seq INTEGER NOT NULL,
-          role TEXT NOT NULL, message_json TEXT NOT NULL, created_at TEXT NOT NULL,
-          PRIMARY KEY (session_id, seq));
-        """
-    )
-    con.commit()
-    con.close()
-    return path
-
-
-def _grok_workspace(path: Path, ws_id: str, scope: str) -> None:
-    con = sqlite3.connect(path)
-    con.execute(
-        "INSERT OR IGNORE INTO workspaces VALUES (?,?,?,?,?,?)",
-        (ws_id, scope, scope, scope, ws_id, "2026-09-07T00:00:00Z"),
-    )
-    con.commit()
-    con.close()
-
-
-def _grok_session(path: Path, sid: str, ws_id: str) -> None:
-    con = sqlite3.connect(path)
-    con.execute(
-        "INSERT OR IGNORE INTO sessions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        (sid, ws_id, None, None, None, None, "grok-4", "agent", "/w", "/w",
-         "active", "2026-09-07T00:00:00Z", "2026-09-07T00:00:00Z"),
-    )
-    con.commit()
-    con.close()
-
-
-def _grok_msg(path: Path, sid: str, seq: int, role: str, text: str,
-              ts: str = "2026-09-07T00:00:00.000Z") -> None:
-    con = sqlite3.connect(path)
-    con.execute(
-        "INSERT INTO messages VALUES (?,?,?,?,?)",
-        (sid, seq, role, json.dumps({"content": [{"type": "text", "text": text}]}), ts),
-    )
-    con.commit()
-    con.close()
-
-
-def _old(seconds_ago: float = 3600.0) -> str:
-    """An ISO stamp far enough back that the idle flush fires this pass."""
-    return time.strftime(
-        "%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(time.time() - seconds_ago)
-    )
-
-
-def _now() -> str:
-    """An ISO stamp fresh enough that the idle flush leaves the turn open."""
-    return time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(time.time()))
-
-
-# ── grok: the bag ───────────────────────────────────────────────────────────
-
-def test_grok_bag_stays_persistable_across_many_sessions(tmp_path: Path) -> None:
-    """One db holds every session grok has ever run. The bag must not scale
-    with that: 40 sessions x 20 messages used to leave 800 `act:` keys."""
-    db = _grok_db(tmp_path)
-    _grok_workspace(db, "w1", "/repo")
-    # One connection and one commit: 840 connect/commit/close cycles take
-    # over 90 s on the Windows runner (each commit is an fsync there).
-    con = sqlite3.connect(db)
-    for s in range(40):
-        sid = f"sess{s:04d}"
-        con.execute(
-            "INSERT OR IGNORE INTO sessions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (sid, "w1", None, None, None, None, "grok-4", "agent", "/w", "/w",
-             "active", "2026-09-07T00:00:00Z", "2026-09-07T00:00:00Z"),
-        )
-        con.executemany(
-            "INSERT INTO messages VALUES (?,?,?,?,?)",
-            [(sid, seq, "user" if seq % 2 == 0 else "assistant",
-              json.dumps({"content": [{"type": "text", "text": f"m{seq}"}]}), _old())
-             for seq in range(20)],
-        )
-    con.commit()
-    con.close()
-
-    reader = GrokLogReader()
-    seen: set[str] = set()
-    events = reader.parse_activity(db, seen)
-
-    assert events, "the first walk must still deliver the history it read"
-    assert len(seen) <= _ACTIVITY_KEYS_PERSIST_LIMIT, sorted(seen)
-    _persisted(seen)
-
-
-def test_grok_restart_from_the_persisted_bag_replays_nothing(tmp_path: Path) -> None:
-    """The #28 regression for grok: bag through the checkpoint, memory gone."""
-    db = _grok_db(tmp_path)
-    _grok_workspace(db, "w1", "/repo")
-    _grok_session(db, "s1", "w1")
-    for seq in range(12):
-        _grok_msg(db, "s1", seq, "user" if seq % 2 == 0 else "assistant",
-                  f"m{seq}", _old())
-
-    first = GrokLogReader().parse_activity(db, (bag := set()))
-    assert first
-
-    # A different process, holding only what the checkpoint kept.
-    second = GrokLogReader().parse_activity(db, _persisted(bag))
-    assert second == [], f"replayed {len(second)} historic event(s)"
-
-
-def test_grok_delivers_every_row_exactly_once(tmp_path: Path) -> None:
-    """The correctness bar: the watermark may not skip a row or repeat one."""
-    db = _grok_db(tmp_path)
-    _grok_workspace(db, "w1", "/repo")
-    _grok_session(db, "s1", "w1")
-
-    reader = GrokLogReader()
-    bag: set[str] = set()
-    delivered: list[str] = []
-    for seq in range(10):
-        _grok_msg(db, "s1", seq, "user" if seq % 2 == 0 else "assistant",
-                  f"m{seq}", _old())
-        bag = _persisted(bag)  # restart before every poll
-        delivered += [
-            e.dedup_key for e in reader.parse_activity(db, bag)
-            if e.event_type == "agent_active"
-        ]
-
-    assert delivered == [f"act:s1:{n}" for n in range(10)]
-
-
-def test_grok_watermark_is_not_a_global_max_over_seq(tmp_path: Path) -> None:
-    """`seq` restarts at 0 for each session, so a single mark over seq would
-    swallow every row of a session started later. The mark is on rowid."""
-    db = _grok_db(tmp_path)
-    _grok_workspace(db, "w1", "/repo")
-    _grok_session(db, "old", "w1")
-    for seq in range(30):
-        _grok_msg(db, "old", seq, "assistant", f"o{seq}", _old())
-
-    reader = GrokLogReader()
-    bag: set[str] = set()
-    reader.parse_activity(db, bag)
-
-    # A brand new session: its seq numbers are all BELOW the old session's max.
-    _grok_session(db, "young", "w1")
-    _grok_msg(db, "young", 0, "user", "hello", _old())
-    _grok_msg(db, "young", 1, "assistant", "hi", _old())
-
-    keys = [e.dedup_key for e in reader.parse_activity(db, _persisted(bag))
-            if e.event_type == "agent_active"]
-    assert keys == ["act:young:0", "act:young:1"], keys
-
-
-def test_grok_idle_flush_survives_a_pass_with_no_new_rows(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The flush pass used to recompute cwd and last-written from a full table
-    scan. Reading only past the mark means a quiet session returns no rows at
-    all, so both have to be carried in the per-session state instead — a
-    turn_complete with an empty cwd never reaches its pane."""
-    db = _grok_db(tmp_path)
-    _grok_workspace(db, "w1", "/repo")
-    _grok_session(db, "s1", "w1")
-    _grok_msg(db, "s1", 0, "user", "do the thing", _now())
-
-    reader = GrokLogReader()
-    bag: set[str] = set()
-    # The message is fresh, so this pass leaves the turn open.
-    assert [e.event_type for e in reader.parse_activity(db, bag)] == ["agent_active"]
-
-    bag = _persisted(bag)
-    # The session then goes quiet past the idle window. No new rows at all, so
-    # the flush has only the persisted per-session state to go on.
-    later = time.time() + _TURN_IDLE_SECONDS + 60
-    monkeypatch.setattr(grok_module.time, "time", lambda: later)
-    done = [e for e in reader.parse_activity(db, bag)
-            if e.event_type == "turn_complete"]
-    assert done, "the open turn was never closed once the scan went incremental"
-    assert done[0].cwd == "/repo", f"lost the session's cwd: {done[0].cwd!r}"
-    assert done[0].session_id == "s1"
-
-
-def test_grok_re_anchors_to_zero_when_the_store_is_replaced(tmp_path: Path) -> None:
-    """rowids are handed out as max(rowid)+1, so they repeat once the newest
-    rows go — and a replaced db restarts them at 1 while the bag, keyed by
-    path, keeps the old mark. Rows already sitting BELOW that mark in the new
-    store have never been delivered under those ids, so re-anchoring to the new
-    max (rather than to 0) steps straight over them."""
-    db = _grok_db(tmp_path)
-    _grok_workspace(db, "w1", "/repo")
-    _grok_session(db, "s1", "w1")
-    for seq in range(9):
-        _grok_msg(db, "s1", seq, "assistant", f"m{seq}", _old())
-
-    reader = GrokLogReader()
-    bag: set[str] = set()
-    reader.parse_activity(db, bag)
-
-    # The db is replaced by a smaller one that ALREADY holds rows: its max
-    # rowid (3) is below the standing mark (9), and none of it has been sent.
-    db.unlink()
-    _grok_db(tmp_path)
-    _grok_workspace(db, "w1", "/repo")
-    _grok_session(db, "s2", "w1")
-    for seq in range(3):
-        _grok_msg(db, "s2", seq, "assistant", f"n{seq}", _old())
-
-    reader.parse_activity(db, bag)          # notices the shrink, re-anchors
-    keys = [e.dedup_key for e in reader.parse_activity(db, _persisted(bag))
-            if e.event_type == "agent_active"]
-    assert keys == ["act:s2:0", "act:s2:1", "act:s2:2"], keys
 
 
 # ── copilot fixtures ────────────────────────────────────────────────────────
@@ -524,9 +302,10 @@ def test_copilot_jsonl_steps_over_a_terminated_corrupt_line(tmp_path: Path) -> N
 
 @pytest.mark.parametrize("vendor", ["grok", "copilot"])
 def test_neither_vendor_declares_the_line_seeding_hook(vendor: str) -> None:
-    """Both are keyed on db row ids (and copilot's ONE reader serves both a
-    JSONL log and a SQLite store), so neither may claim
-    `activity_resumes_by_line` — the watcher would count newlines in a store
-    and drop a line number into a bag nothing consults."""
+    """Neither resumes by counting lines: copilot's ONE reader serves both a
+    JSONL log and a SQLite store, and grok's cursor is a byte offset because its
+    eventId sequence is not written in order. So neither may claim
+    `activity_resumes_by_line` — the watcher would count newlines and drop a
+    line number into a bag nothing consults."""
     reader = {"grok": GrokLogReader, "copilot": CopilotLogReader}[vendor]()
     assert reader.activity_resumes_by_line is False
