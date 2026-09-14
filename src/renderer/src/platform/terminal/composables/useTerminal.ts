@@ -611,6 +611,7 @@ export function expandHomePath(fp: string, home: string): string {
 
 // Moved to lib/paths so a caller that only wants the string helper does not
 // load this module. Re-exported because every existing import names it here.
+import { BOX_ONLY_LINE_RE } from '../../../lib/injectEcho'
 import { collapseHomePath } from '../lib/paths'
 export { collapseHomePath } from '../lib/paths'
 
@@ -688,10 +689,9 @@ export interface WrappedLineGroup {
   heuristicBreaks: number[]
 }
 
-// A line made of nothing but box-drawing glyphs and spaces — the frame of a
-// CLI's bottom input widget (╭──╮ / ╰──╯). At least one box char is required so
-// a plain blank line isn't matched here (blanks are handled separately).
-const BOX_ONLY_LINE_RE = /^[\s─-╿]*[─-╿][\s─-╿]*$/
+// The frame of a CLI's bottom input widget. Defined in lib/injectEcho, which
+// also has to find it — there by the frame's position rather than to skip it —
+// so the two cannot drift apart. See BOX_ONLY_LINE_RE's comment there.
 
 /** Serialize the RENDERED scrollback (what the user actually sees) as text.
  *  Unlike the raw-stream cleanBuffer, TUI repaints overwrite buffer lines in

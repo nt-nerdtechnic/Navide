@@ -98,6 +98,7 @@ from .tokens_store import TokensStore
 # shells, PTYs, Git hooks, and CLI helpers must not inherit a Host credential.
 _HOST_SESSION_TOKEN = os.environ.pop("NAVIDE_BACKEND_HOST_TOKEN", "")
 from .ui_settings import UiSettingsStore
+from .sync_engine import SyncStore
 from .history_store import HistoryStore
 from .agent_message_log import AgentMessageLog
 from .preview_log import MAX_ROWS as PREVIEW_MAX_ROWS, PreviewLog
@@ -200,6 +201,7 @@ skills_store = SkillsStore()
 analyzer_settings_store = AnalyzerSettingsStore(db=database)
 ai_chat_settings_store = AIChatSettingsStore(db=database)
 ui_settings_store = UiSettingsStore(db=database)
+sync_store = SyncStore(database)
 # Module-level stores share the same database handle.
 pty_registry.set_database(database)
 onboarding_deps.set_database(database)
