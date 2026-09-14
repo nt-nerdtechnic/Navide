@@ -181,6 +181,26 @@ export function loopContinueReady(s: TurnCompleteState): boolean {
   return turnCompleteDone(s) && s.lastActiveAt > s.armedAt
 }
 
+/** Settle window for the loop's continue verdict on a pane whose turn end is
+ *  INFERRED from silence — grok / kimi / pi / qwen, whose readers synthesize
+ *  turn_complete once the log has been quiet for 8 seconds (their
+ *  _TURN_IDLE_SECONDS). A tool call that runs longer than that without writing
+ *  a line ends the turn as far as the reader can tell, and the default 1.5s
+ *  settle would then inject "continue" into a CLI that is still working. The
+ *  loop reads none of the vendor flags itself (the delivery gate does, via
+ *  VENDORS_WITHOUT_TURN_END), so this is where the difference is paid for:
+ *  hold the verdict long enough for the CLI's next log line — the agent_active
+ *  that would overtake the inferred turn end — to arrive. Costs those four
+ *  vendors this much latency per loop turn; costs the other ten nothing. */
+export const LOOP_INFERRED_TURN_END_SETTLE_MS = 30_000
+
+/** The settle the loop passes to loopContinueReady for a pane: the caller's
+ *  default, or the longer inferred-turn-end window when the pane's vendor
+ *  cannot state where a turn ends. Never shorter than the default. */
+export function loopSettleMs(inferredFromSilence: boolean, settleMs: number): number {
+  return inferredFromSilence ? Math.max(settleMs, LOOP_INFERRED_TURN_END_SETTLE_MS) : settleMs
+}
+
 /** How long a non-zero pending-subagent count may hold the loop back before it
  *  is ignored. The count is maintained by hook events (Task PreToolUse up,
  *  SubagentStop down) and can drift: a subagent killed with its CLI never
@@ -310,8 +330,17 @@ export function loopWaitHonoured(s: LoopWaitState): boolean {
  *  resets the streak — the agent got somewhere, so the next wait starts its
  *  backoff from the bottom again. The spent budget is NOT reset: it bounds the
  *  whole run, which is what stops a marker-every-turn loop from waiting out
- *  the night in one-minute steps. */
-export function applyLoopWait(s: LoopWaitState, waited: boolean): LoopWaitState {
+ *  the night in one-minute steps.
+ *
+ *  `null` means the turn's text is UNKNOWN — an empty-text turn_complete —
+ *  and leaves the state alone, the same rule applyTurnProgress applies. Claude
+ *  reports one turn end twice, the Stop hook's copy without text; read as "any
+ *  other turn" it ended the streak the reader's LOOP_WAIT text then re-opened
+ *  at 1, so the hold never climbed past the first tier. The accepted cost: a
+ *  thinking-only turn, which did make progress, no longer ends a streak
+ *  either — it is indistinguishable from the hook copy here. */
+export function applyLoopWait(s: LoopWaitState, waited: boolean | null): LoopWaitState {
+  if (waited === null) return s
   if (!waited) return { consecutive: 0, totalWaitedMs: s.totalWaitedMs }
   const next = s.consecutive + 1
   return {
@@ -424,6 +453,12 @@ export interface LoopStallState {
   /** Normalized text of the last LOOP_RECENT_TURNS turns, newest first.
    *  Optional so a caller holding only the original two fields still works. */
   recentTurns?: string[]
+  /** Per armed turn (the watcher clears both on arm): the tool judgement has
+   *  already charged this turn on its EMPTY-text copy, ahead of the text. */
+  emptyCharged?: boolean
+  /** Per armed turn: the tool judgement has already run on this turn's text,
+   *  so a later empty-text copy of the same turn end adds nothing. */
+  toolJudged?: boolean
 }
 
 /** Fold a completed turn into the stall state, judging it on its text and —
@@ -433,7 +468,15 @@ export interface LoopStallState {
  *  claude/codex/copilot readers attach the turn's text, so for every other
  *  vendor each turn would otherwise look stalled and stop a perfectly healthy
  *  loop. `tools` is optional for the same reason — a caller that has no tool
- *  signals for this pane simply omits it and nothing changes. */
+ *  signals for this pane simply omits it and nothing changes.
+ *
+ *  Claude reports one turn end TWICE — the Stop hook without text, then the
+ *  reader with it (either order) — and both copies see the same per-turn tool
+ *  count. The tool judgement therefore charges at most once per armed turn:
+ *  the empty copy's charge is provisional and the text judgement replaces it
+ *  rather than adding to it; a text judgement already made silences a later
+ *  empty copy. `emptyCharged` / `toolJudged` carry that across the two calls
+ *  and are cleared by the watcher when the next turn arms. */
 export function applyTurnProgress(
   state: LoopStallState,
   text: string,
@@ -445,15 +488,32 @@ export function applyTurnProgress(
   // that touched no tool is the same do-nothing turn, just unreported.
   const noTools = tools !== undefined && turnUsedNoTools(tools)
   if (!normalized) {
-    if (!noTools) return state
-    return { ...state, stalledRuns: state.stalledRuns + 1 }
+    if (!noTools || state.emptyCharged || state.toolJudged) return state
+    return { ...state, stalledRuns: state.stalledRuns + 1, emptyCharged: true }
   }
   const history = state.recentTurns ?? (state.lastTurnText ? [state.lastTurnText] : [])
   const progressed = turnMadeProgress(text, history) && !noTools
+  const base = state.emptyCharged ? state.stalledRuns - 1 : state.stalledRuns
   return {
-    stalledRuns: progressed ? 0 : state.stalledRuns + 1,
+    stalledRuns: progressed ? 0 : base + 1,
     lastTurnText: normalized,
     recentTurns: [normalized, ...history].slice(0, LOOP_RECENT_TURNS),
+    ...(tools !== undefined ? { toolJudged: true } : {}),
+  }
+}
+
+/** Take back the provisional stall an empty-text copy of this turn charged,
+ *  and mark the turn judged so a later copy cannot charge it again. Used when
+ *  a turn's judgement comes from somewhere other than applyTurnProgress —
+ *  today an honoured LOOP_WAIT. Clamped at zero: the count is a number of
+ *  turns, and the three writers of it must never be able to drive it negative
+ *  between them. */
+export function clearProvisionalStall(s: LoopStallState): LoopStallState {
+  return {
+    ...s,
+    stalledRuns: s.emptyCharged ? Math.max(0, s.stalledRuns - 1) : s.stalledRuns,
+    emptyCharged: false,
+    toolJudged: true,
   }
 }
 

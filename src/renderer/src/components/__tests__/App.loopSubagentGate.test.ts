@@ -35,6 +35,15 @@ describe('the loop reads its own activity clock', () => {
     expect(call).not.toContain('lastActiveAt: paneLastActiveAt.get(paneId)')
   })
 
+  it('settles the verdict per vendor, not on the bare default', () => {
+    // grok/kimi/pi/qwen synthesize their turn end from an 8s quiet window, so
+    // the default 1.5s settle would continue into a CLI still running a tool.
+    // Reverting this to the bare constant reintroduces exactly that.
+    const body = startLoopWatcherBody()
+    const call = body.slice(body.indexOf('loopContinueReady({'))
+    expect(call).toContain('settleMs: loopSettleMs(')
+  })
+
   it('keeps stamping the SHARED clock unconditionally', () => {
     // Delivery gating, the done notification and the pipeline's stage verdict
     // all read paneLastActiveAt. Narrowing it instead of adding a second clock
@@ -88,6 +97,16 @@ describe('per-turn bookkeeping', () => {
     expect(body).not.toContain('toolSignalsSeen = false')
   })
 
+  it('clears the per-turn stall bookkeeping when a turn is armed', () => {
+    // Both flags exist to charge a talk-only turn ONCE across the two copies
+    // Claude reports. Left set across turns they cancel the next turn's charge
+    // instead, and a spinning loop never reaches the stall limit — fail-OPEN.
+    const start = appSource.indexOf('function armLoopTurn(')
+    const body = appSource.slice(start, appSource.indexOf('\n}\n', start))
+    expect(body).toContain('watcher.emptyCharged = false')
+    expect(body).toContain('watcher.toolJudged = false')
+  })
+
   it('drops the subagent count with the watcher that reads it', () => {
     // A count left above zero — the CLI exited while a subagent ran, so its
     // stop never arrived — would gate the NEXT loop on this pane.
@@ -135,8 +154,13 @@ describe('LOOP_WAIT wiring — the vendor-agnostic half', () => {
   })
 
   it('resets the streak on any other turn but keeps the spent budget', () => {
+    // The turn's text decides: a real other turn (false) ends the streak, an
+    // empty-text copy (null) is UNKNOWN and leaves it alone — Claude's Stop
+    // hook reports the turn without text ahead of the reader's LOOP_WAIT copy.
     const body = noteLoopWaitBody()
-    expect(body).toContain('applyLoopWait(watcher, false)')
+    expect(body).toContain('const waited = text ? turnEndsWithSentinel(text, LOOP_WAIT_MARKER) : null')
+    expect(body).toContain('applyLoopWait(watcher, waited)')
+    expect(body).not.toContain('applyLoopWait(watcher, false)')
   })
 })
 
