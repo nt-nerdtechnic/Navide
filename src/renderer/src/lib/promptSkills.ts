@@ -8,6 +8,7 @@
 // usable loop prompt where it expects one.
 import { DEFAULT_LOOP_PROMPT, LOOP_PROMPT_SETTING_KEY } from './loopPrompt'
 import { settingsGet, settingsSet } from '@navide/plugin-ui/shared'
+import { i18n } from '@navide/plugin-ui/foundation'
 
 export const PROMPT_SKILLS_SETTING_KEY = 'prompt-skills'
 
@@ -106,9 +107,9 @@ export function builtinPromptSkills(legacyPrompt = DEFAULT_LOOP_PROMPT): PromptS
   return [
     {
       id: 'advance',
-      name: '開發推進',
+      name: i18n.global.t('settings.prompts.builtin-name'),
       icon: 'advance',
-      description: '持續推進到完成度 100%，完成後產出 HTML 報告書。',
+      description: i18n.global.t('settings.prompts.builtin-description'),
       prompt: legacyPrompt,
       resumePrompt: '',
       maxTurns: 0,
@@ -169,7 +170,7 @@ export function normalizePromptSkills(raw: unknown, legacyPrompt = DEFAULT_LOOP_
     const e = entry as Record<string, unknown>
     const prompt = asString(e.prompt)
     if (!prompt.trim()) continue // a skill with nothing to send is not a skill
-    const name = asString(e.name).trim() || '未命名技能'
+    const name = asString(e.name).trim() || i18n.global.t('settings.prompts.untitled-name')
     const rawId = asString(e.id).trim()
     const id = rawId && !ids.includes(rawId) ? rawId : nextSkillId(ids, name)
     ids.push(id)

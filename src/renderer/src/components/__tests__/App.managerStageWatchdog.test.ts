@@ -12,6 +12,15 @@ import { describe, expect, it } from 'vitest'
 // against the source, because App.vue cannot be mounted in this suite.
 const appSource = readFileSync(resolve(process.cwd(), 'src/renderer/src/App.vue'), 'utf8')
 
+// The stall dialog's wording moved into the locale files, so the copy
+// assertions read the zh-TW strings the template now points at.
+const zhTW = JSON.parse(
+  readFileSync(
+    resolve(process.cwd(), 'packages/plugin-ui/src/foundation/i18n/locales/zh-TW.json'),
+    'utf8',
+  ),
+) as { hint: Record<string, string> }
+
 function body(startMarker: string, endMarker: string): string {
   const start = appSource.indexOf(startMarker)
   expect(start, `missing: ${startMarker}`).toBeGreaterThan(-1)
@@ -254,33 +263,33 @@ describe('the Manager-mode stall buttons act on the stage, not on one slot', () 
     // The quota branch was prepended to the chain, so the head of it is no
     // longer the Manager one — pin the new order explicitly rather than let the
     // slice quietly become empty.
+    // The copy itself now lives in the locale files, so the template is pinned
+    // on the branch order and the key each branch renders, and the wording is
+    // asserted on the zh-TW strings those keys resolve to.
     const hint = appSource.slice(
-      appSource.indexOf('<p v-if="stageStallPrompt.reason === \'quota\'"'),
+      appSource.indexOf('v-if="stageStallPrompt.reason === \'quota\'"'),
       appSource.indexOf('class="stall-auto"')
     )
     expect(hint).not.toBe('')
     expect(hint).toContain("v-else-if=\"stageStallPrompt.managerVerdict === 'manager-gone'\"")
     expect(hint).toContain('v-else-if="stageStallPrompt.managerVerdict"')
-    expect(hint).toContain('<p v-else class="stall-hint">')
+    expect(hint).toContain('<p v-else class="stall-hint"')
+    expect(hint.indexOf("hint.stall-quota")).toBeLessThan(hint.indexOf('hint.stall-manager-gone'))
+    expect(hint.indexOf('hint.stall-manager-gone')).toBeLessThan(hint.indexOf("hint.stall-manager'"))
+    expect(hint.indexOf("hint.stall-manager'")).toBeLessThan(hint.indexOf('hint.stall-strict'))
+
     // The gone-Manager branch has to say both things that changed.
-    const gone = hint.slice(
-      hint.indexOf("v-else-if=\"stageStallPrompt.managerVerdict === 'manager-gone'\""),
-      hint.indexOf('v-else-if="stageStallPrompt.managerVerdict"')
-    )
+    const gone = zhTW.hint['stall-manager-gone']
     expect(gone).toContain('整個 stage')
     expect(gone).toContain('最後一次提示')
     // The same verdict now also covers a commander that never spawned, so the
     // copy cannot assert that a pane disappeared.
     expect(gone).not.toContain('已消失')
     // The Manager cap branch says the stage-level thing too.
-    const capBranch = hint.slice(
-      hint.indexOf('v-else-if="stageStallPrompt.managerVerdict"'),
-      hint.indexOf('<p v-else ')
-    )
-    expect(capBranch).toContain('整個 stage')
-    expect(capBranch).not.toContain('標為完成')
+    expect(zhTW.hint['stall-manager']).toContain('整個 stage')
+    expect(zhTW.hint['stall-manager']).not.toContain('標為完成')
     // …and only the ordinary watcher stall keeps the slot-level wording.
-    expect(hint.slice(hint.indexOf('<p v-else '))).toContain('標為完成')
+    expect(zhTW.hint['stall-strict']).toContain('標為完成')
   })
 
   it('leaves an ordinary worker-slot force advance exactly as it was', () => {

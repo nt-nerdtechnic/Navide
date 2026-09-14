@@ -343,7 +343,7 @@ Host Wiring — だけです。Navide の CLI Pane から、その Pane 自身�
 
 | Action | Args | 効果 |
 |---|---|---|
-| `ui.settings.open` | `{tab?}`（`general`、`mcp`、`analyzer`、`updates`、`appearance`、`accounts`、`storage`、`keybindings` のいずれか） | Settings を開く。任意で特定のタブへ |
+| `ui.settings.open` | `{tab?}`（`general`、`mcp`、`analyzer`、`updates`、`appearance`、`accounts`、`keybindings` のいずれか） | Settings を開く。任意で特定のタブへ |
 | `ui.settings.close` | — | Settings を閉じる |
 | `ui.settings.yolo` | `{yolo?}` | CLI の権限バイパスのグローバルスイッチを読む。`yolo` を渡した場合は設定する。`{yolo, agents}` を返し、各 agent は `{agent, mode, skipFlag}`。Workspace スコープではありません: どのウィンドウでも答えられ、ベンダーごとの答えは `yolo` ではなく `skipFlag` です |
 | `ui.pane.create` | `{agent, name?, task?}` | ウィンドウが開いている Workspace に `agent` の Pane を Spawn。`task` を指定した場合は Kickoff Prompt として送られ、Role 注入はスキップされる |
@@ -355,6 +355,7 @@ Host Wiring — だけです。Navide の CLI Pane から、その Pane 自身�
 | `ui.tab.switch` | `{tabId}` | Active な Stage/Run-group タブを切り替え |
 | `ui.preview.show` | `{kind, …}` | 右レールのプレビューパネルにファイル・diff・インラインスニペットを表示 |
 | `ui.window.openPlans` | — | Plan ウィンドウを開く |
+| `ui.window.openResourceManager` | — | Resource Manager を開く（CPU／メモリ／ディスク使用量とストレージ整理） |
 | `ui.window.openGit` | — | 現在の Workspace の Git ウィンドウを開く |
 | `ui.window.openPipeline` | `{pipelineId?}` | Pipeline Manager ウィンドウを開く |
 | `ui.workspace.open` | `{path}` | `path` を Workspace として開く（生きている任意のウィンドウにルーティング — 上記参照） |

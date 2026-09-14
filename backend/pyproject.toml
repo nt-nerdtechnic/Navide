@@ -29,6 +29,11 @@ dependencies = [
     "pywinpty>=3.0; sys_platform == 'win32'",
     "pyyaml>=6.0",
     "send2trash>=2.1.0",
+    # TOML serialisation for the pane shims. tomllib reads (stdlib since 3.11)
+    # but has no writer, and grok's MCP servers live in its config.toml — the
+    # shim re-emits that whole document, so a hand-rolled emitter would have
+    # to round-trip the user's own settings.
+    "tomli-w>=1.0",
     # Windows has no system tz database; zoneinfo needs the package there.
     "tzdata; sys_platform == 'win32'",
     "uvicorn[standard]>=0.32",

@@ -291,6 +291,65 @@ async def test_get_status_includes_ui_when_the_window_answers(
     assert result["ui"] == {"status": "idle", "buffer": "$ "}
 
 
+def _ui_reply(status: str):
+    async def _reply(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {"ok": True, "result": {"status": status, "buffer": "$ "}, "error": None}
+    return _reply
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ui_status", ["running", "starting"])
+async def test_get_status_busy_follows_a_running_ui_badge(
+    monkeypatch: pytest.MonkeyPatch, ui_status: str
+) -> None:
+    """The renderer's badge knows things the backend's activity log cannot — a
+    delivered message the CLI has queued but not consumed shows RUNNING there
+    while the backend still says busy:false. One answer, not two that disagree."""
+    agent_messaging.register("pw", "worker", "/ws/alpha")
+    agent_messaging.register("other", "caller", "/ws/somewhere-else")
+    agent_messaging.set_busy("pw", False)
+    monkeypatch.setattr(plan_mcp, "_ui_request", _ui_reply(ui_status))
+
+    result = await plan_mcp.cli_get_status("alpha/worker", _ctx(pane_id="other"))
+
+    assert result["ui"]["status"] == ui_status
+    assert result["busy"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend_busy", [True, False])
+async def test_get_status_busy_is_backend_or_of_idle_ui(
+    monkeypatch: pytest.MonkeyPatch, backend_busy: bool
+) -> None:
+    agent_messaging.register("pw", "worker", "/ws/alpha")
+    agent_messaging.register("other", "caller", "/ws/somewhere-else")
+    agent_messaging.set_busy("pw", backend_busy)
+    monkeypatch.setattr(plan_mcp, "_ui_request", _ui_reply("idle"))
+
+    result = await plan_mcp.cli_get_status("alpha/worker", _ctx(pane_id="other"))
+
+    assert result["busy"] is backend_busy
+
+
+@pytest.mark.asyncio
+async def test_get_status_busy_is_backend_only_when_the_window_does_not_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agent_messaging.register("pw", "worker", "/ws/alpha")
+    agent_messaging.register("other", "caller", "/ws/somewhere-else")
+    agent_messaging.set_busy("pw", False)
+
+    async def _no_reply(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {"ok": False, "result": None, "error": "timed out"}
+
+    monkeypatch.setattr(plan_mcp, "_ui_request", _no_reply)
+
+    result = await plan_mcp.cli_get_status("alpha/worker", _ctx(pane_id="other"))
+
+    assert "ui" not in result
+    assert result["busy"] is False
+
+
 # ── cli_wait_idle ────────────────────────────────────────────────────────
 
 

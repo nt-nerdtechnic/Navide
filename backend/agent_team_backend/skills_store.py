@@ -13,6 +13,7 @@ file. Anything else found there is the user's, listed read-only.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import logging
@@ -547,6 +548,113 @@ class SkillsStore:
         self._refresh_runtime_projection()
         return {"name": name, "deleted": True}
 
+    # ── Content, for cross-device sync ─────────────────────────────────────
+    #
+    # Only skills carrying the marker take part. A shared-root entry the user
+    # put there themselves is listed and routed like any other, but its files
+    # are theirs: uploading them would make this feature a backup service for
+    # a directory it does not own, and writing them back on another machine
+    # would be the same mistake in the other direction.
+
+    #: A packed skill is one sync record, so the record limit is the real cap.
+    CONTENT_TOTAL_LIMIT = 512 * 1024
+    CONTENT_FILE_LIMIT = 256 * 1024
+    MAX_CONTENT_FILES = 64
+
+    def export_content(self, name: str) -> dict[str, dict[str, str]] | None:
+        """Every file of a managed skill, or None when it is not ours to send.
+
+        Text is carried as text so a diff of two versions stays readable;
+        anything that is not valid UTF-8 rides as base64.
+        """
+        name = self._validate_name(name)
+        skill_dir = self._skill_dir(name)
+        if not skill_dir.is_dir() or not self._is_managed(skill_dir):
+            return None
+        files: dict[str, dict[str, str]] = {}
+        total = 0
+        for path in sorted(skill_dir.rglob("*")):
+            if path.is_symlink() or not path.is_file():
+                continue
+            relative = path.relative_to(skill_dir).as_posix()
+            if relative == MARKER_FILE:
+                continue  # recreated on the far side; never carried
+            if _is_generated(relative):
+                continue
+            size = path.stat().st_size
+            if size > self.CONTENT_FILE_LIMIT:
+                log.warning("skill %s: %s is too large to sync", name, relative)
+                continue
+            total += size
+            if total > self.CONTENT_TOTAL_LIMIT or len(files) >= self.MAX_CONTENT_FILES:
+                log.warning("skill %s is too large to sync whole; not sending its files", name)
+                return None
+            raw = path.read_bytes()
+            try:
+                files[relative] = {"t": "text", "v": raw.decode("utf-8")}
+            except UnicodeDecodeError:
+                files[relative] = {"t": "b64", "v": base64.b64encode(raw).decode("ascii")}
+        return files if SKILL_FILE in files else None
+
+    def import_content(self, name: str, files: dict[str, Any]) -> bool:
+        """Write a skill that arrived from another device. Returns whether it landed.
+
+        Refuses, rather than merges, when a directory of that name is already
+        there and is not ours: displacing the user's own skill is the one
+        outcome this whole feature must never produce.
+        """
+        name = self._validate_name(name)
+        self._ensure_safe_root()
+        if not isinstance(files, dict) or SKILL_FILE not in files:
+            log.warning("skill %s arrived without %s; not written", name, SKILL_FILE)
+            return False
+        skill_dir = self._skill_dir(name)
+        if (skill_dir.exists() or skill_dir.is_symlink()) and not self._is_managed(skill_dir):
+            log.warning("skill %s already exists here and is not ours; leaving it alone", name)
+            return False
+        if self._native_conflict(name):
+            log.warning("skill %s collides with a native skill; leaving it alone", name)
+            return False
+
+        decoded: dict[str, bytes] = {}
+        for relative, entry in files.items():
+            safe = _safe_relative(relative)
+            if safe is None or not isinstance(entry, dict):
+                log.warning("skill %s: refusing the path %r", name, relative)
+                return False
+            kind, value = entry.get("t"), entry.get("v")
+            if not isinstance(value, str):
+                return False
+            try:
+                raw = value.encode("utf-8") if kind == "text" else base64.b64decode(value, validate=True)
+            except (ValueError, TypeError):
+                log.warning("skill %s: %s did not decode", name, safe)
+                return False
+            if len(raw) > self.CONTENT_FILE_LIMIT:
+                return False
+            decoded[safe] = raw
+
+        self._root.mkdir(parents=True, exist_ok=True)
+        staging = Path(tempfile.mkdtemp(prefix=f".{name}-", dir=self._root))
+        try:
+            (staging / MARKER_FILE).write_text("", encoding="utf-8")
+            for relative, raw in decoded.items():
+                target = staging / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(raw)
+            backup = self._root / f".{name}.old"
+            self._remove_tree(backup)
+            if skill_dir.exists() or skill_dir.is_symlink():
+                os.replace(skill_dir, backup)
+            os.replace(staging, skill_dir)
+            self._remove_tree(backup)
+        except Exception:
+            self._remove_tree(staging)
+            raise
+        self._refresh_runtime_projection()
+        log.info("wrote skill %s from another device", name)
+        return True
+
     def rebuild_runtime_projection(self) -> Path:
         """Atomically replace the enabled-only runtime directory."""
         self._ensure_safe_root()
@@ -857,3 +965,32 @@ class SkillsStore:
             path.unlink(missing_ok=True)
         elif path.exists():
             shutil.rmtree(path)
+
+
+def _is_generated(relative: str) -> bool:
+    return (
+        "__pycache__/" in f"{relative}/"
+        or relative.endswith(".pyc")
+        or relative.split("/")[-1] == ".DS_Store"
+    )
+
+
+def _safe_relative(relative: Any) -> str | None:
+    """``relative`` as a path that cannot leave the skill directory, or None.
+
+    Absolute paths, ``..`` segments, backslashes and empty parts are all
+    refused rather than sanitised: a path that needed fixing is a path whose
+    sender meant something this side should not guess at.
+    """
+    if not isinstance(relative, str) or not relative or len(relative) > 255:
+        return None
+    if relative.startswith("/") or "\\" in relative or "\x00" in relative:
+        return None
+    parts = relative.split("/")
+    if any(part in ("", ".", "..") for part in parts):
+        return None
+    # Every dotfile is refused, the marker included: this side writes its own
+    # marker, and nothing else hidden has a reason to travel between machines.
+    if any(part.startswith(".") for part in parts):
+        return None
+    return "/".join(parts)

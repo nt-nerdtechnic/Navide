@@ -97,11 +97,11 @@ import SettingsSystemHelp from './SettingsSystemHelp.vue'
 import IconReferenceHelp from './IconReferenceHelp.vue'
 import ExtensionsPane from './ExtensionsPane.vue'
 import ExecutionPolicyPane from './ExecutionPolicyPane.vue'
-import StorageUsagePane from './StorageUsagePane.vue'
 import LayoutSettingsPane from '../layout/LayoutSettingsPane.vue'
 import McpPane from './McpPane.vue'
 import SkillsPane from './SkillsPane.vue'
 import PromptSkillsPane from './PromptSkillsPane.vue'
+import SyncSettings from './SyncSettings.vue'
 import MemoryPane from './MemoryPane.vue'
 import StatusBadgeSettingsPane from './StatusBadgeSettingsPane.vue'
 import NavideCloudMark from './NavideCloudMark.vue'
@@ -128,12 +128,8 @@ const props = defineProps<{
   /** True when a workspace is open — CLI account sign-in needs one to spawn
    *  the login pane. */
   workspaceOpen?: boolean
-  /** Workspaces the app knows about — the Storage tab scans them for
-   *  reclaimable build output and logs. */
-  workspacePaths?: string[]
   /** The workspace currently open, empty when none is. The Memory tab edits
-   *  this project's instruction files, so it needs the open one by name
-   *  rather than the first of ``workspacePaths``. */
+   *  this project's instruction files. */
   workspacePath?: string
   stagesApi: ReturnType<typeof useStages>
   analyzerApi: ReturnType<typeof useAnalyzer>
@@ -165,6 +161,7 @@ const emit = defineEmits<{
   (e: 'update:idleReclaimEnabled', v: boolean): void
   (e: 'update:idleReclaimMinutes', v: string): void
   (e: 'reclaim-now'): void
+  (e: 'open-resource-manager'): void
 }>()
 const confirmBeforeCloseModel = computed({
   get: () => props.confirmBeforeClose ?? true,
@@ -202,7 +199,7 @@ const reclaimNowCount = computed(() => props.reclaimableNowCount ?? 0)
 const reclaimNowSize = computed(() => formatBytes(props.reclaimableNowBytes ?? 0))
 
 // ── Tab ───────────────────────────────────────────────────────────────────────
-type Tab = 'mcp' | 'skills' | 'prompts' | 'memory' | 'analyzer' | 'cliAgents' | 'general' | 'cross-device' | 'updates' | 'appearance' | 'statusBadges' | 'layout' | 'accounts' | 'extensions' | 'executionPolicy' | 'storage' | 'keybindings' | 'help'
+type Tab = 'mcp' | 'skills' | 'prompts' | 'memory' | 'analyzer' | 'cliAgents' | 'general' | 'cross-device' | 'updates' | 'appearance' | 'statusBadges' | 'layout' | 'accounts' | 'extensions' | 'executionPolicy' | 'keybindings' | 'help'
 
 /** Topics inside the Help tab — read-only reference material, no settings. */
 type HelpTopic =
@@ -387,6 +384,8 @@ function onCliDrop(k: string): void {
   cliOrder.value = keys
 }
 
+const { t } = useI18n()
+
 interface SettingsSearchItem {
   id: string
   tab: Tab
@@ -397,6 +396,8 @@ interface SettingsSearchItem {
   keywords: string
   mcpView?: MView
   helpTopic?: HelpTopic
+  /** A result that is a door out of Settings rather than a place in it. */
+  opens?: 'resource-manager'
 }
 
 const settingsSearchQuery = ref('')
@@ -405,18 +406,18 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
     id: 'mcp-installed',
     tab: 'mcp',
     section: 'mcp-installed',
-    title: 'Installed MCP Servers / 已安裝 MCP',
-    group: 'MCP',
-    summary: 'Refresh, open config, enable/disable, remove, inspect tools, edit command, args, and env vars.',
+    title: t('settings.search.item.mcp-installed.title'),
+    group: t('settings.nav.mcp'),
+    summary: t('settings.search.item.mcp-installed.summary'),
     keywords: 'mcp server servers tools command args env context7 enable disable config refresh 已安裝 工具 環境變數 設定檔',
   },
   {
     id: 'mcp-catalog',
     tab: 'mcp',
     section: 'mcp-catalog',
-    title: 'MCP Catalog / MCP 目錄',
-    group: 'MCP',
-    summary: 'Search and add context-reading MCP servers from the catalog.',
+    title: t('settings.search.item.mcp-catalog.title'),
+    group: t('settings.nav.mcp'),
+    summary: t('settings.search.item.mcp-catalog.summary'),
     keywords: 'mcp catalog add install search context reading 新增 安裝 搜尋 目錄',
     mcpView: 'catalog',
   },
@@ -425,243 +426,247 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
     tab: 'mcp',
     section: 'mcp-agents',
     mcpView: 'list',
-    title: "Every CLI's MCP / 各 CLI 的 MCP",
-    group: 'MCP',
-    summary: "Read-only view of the MCP servers each CLI keeps in its own config, and where each server is set up.",
+    title: t('settings.search.item.mcp-agents.title'),
+    group: t('settings.nav.mcp'),
+    summary: t('settings.search.item.mcp-agents.summary'),
     keywords: 'mcp native cli claude codex copilot cursor kimi grok reflect compare matrix 原生 對照 各家 設定檔 唯讀',
   },
   {
     id: 'skills',
     tab: 'skills',
     section: 'skills',
-    title: 'Skills / 技能',
-    group: 'Integrations',
-    summary: 'Create, edit, enable, disable, and inspect app-managed agent skills.',
+    title: t('settings.search.item.skills.title'),
+    group: t('settings.nav.group.integration'),
+    summary: t('settings.search.item.skills.summary'),
     keywords: 'skills skill agent instructions markdown enable disable attachments 技能 指令 啟用 停用 附件',
   },
   {
     id: 'prompts',
     tab: 'prompts',
     section: 'prompts',
-    title: 'Prompt Skills / Prompt 技能',
-    group: 'Integrations',
-    summary: 'Create and edit the prompt skills a CLI pane can cast from its loop button.',
+    title: t('settings.search.item.prompts.title'),
+    group: t('settings.nav.group.integration'),
+    summary: t('settings.search.item.prompts.summary'),
     keywords: 'prompt skills loop 技能 提示詞 迴圈 循環 按鈕 預設 preset resume 續跑 輪次 max turns',
   },
   {
     id: 'memory',
     tab: 'memory',
     section: 'memory',
-    title: 'Memory / 記憶',
-    group: 'Integrations',
-    summary: "View and edit the instruction files each CLI reads: CLAUDE.md, AGENTS.md, QWEN.md, .cursor rules.",
+    title: t('settings.search.item.memory.title'),
+    group: t('settings.nav.group.integration'),
+    summary: t('settings.search.item.memory.summary'),
     keywords: 'memory instructions claude.md agents.md qwen.md cursor rules mdc context 指示檔 記憶 規則 說明檔',
   },
   {
     id: 'analyzer-backend',
     tab: 'analyzer',
     section: 'analyzer-backend',
-    title: 'Inference Backend / 推論後端',
-    group: 'Analyzer',
-    summary: 'Switch Ollama REST or llama.cpp, set base URL, llama-cli path, and GGUF model path.',
+    title: t('settings.search.item.analyzer-backend.title'),
+    group: t('settings.nav.analyzer'),
+    summary: t('settings.search.item.analyzer-backend.summary'),
     keywords: 'analyzer inference backend 推論 分析器 ollama llama llama.cpp llama-cli gguf url base url health',
   },
   {
     id: 'analyzer-models',
     tab: 'analyzer',
     section: 'analyzer-models',
-    title: 'Models & Benchmark / 模型與基準測試',
-    group: 'Analyzer',
-    summary: 'Download/delete Ollama models and run model benchmark tasks.',
+    title: t('settings.search.item.analyzer-models.title'),
+    group: t('settings.nav.analyzer'),
+    summary: t('settings.search.item.analyzer-models.summary'),
     keywords: 'model models benchmark download delete pull ollama 模型 基準測試 下載 刪除',
   },
   {
     id: 'appearance-theme',
     tab: 'appearance',
     section: 'appearance-theme',
-    title: 'Theme & Custom Colors / 主題與自訂顏色',
-    group: 'Appearance',
-    summary: 'Built-in themes and semantic color overrides.',
+    title: t('settings.search.item.appearance-theme.title'),
+    group: t('settings.nav.appearance'),
+    summary: t('settings.search.item.appearance-theme.summary'),
     keywords: 'appearance theme custom colors color 外觀 主題 自訂顏色 背景 文字 邊框 accent high contrast',
   },
   {
     id: 'general-default-editor',
     tab: 'general',
     section: 'general-default-editor',
-    title: 'Default Editor / 預設編輯器',
-    group: 'General',
-    summary: 'Choose where files and folders open: Mini-IDE, the system default app, VS Code, Cursor, or a custom command.',
+    title: t('settings.search.item.general-default-editor.title'),
+    group: t('settings.nav.group.general'),
+    summary: t('settings.search.item.general-default-editor.summary'),
     keywords: 'default editor open with mini-ide system vscode visual studio code cursor sublime custom command placeholder 預設編輯器 開啟 外部編輯器 自訂命令 偵測',
   },
   {
     id: 'settings-management',
     tab: 'general',
     section: 'settings-management',
-    title: 'Settings Management / 設定管理',
-    group: 'General',
-    summary: 'Export/import the full settings bundle and inspect where settings are stored.',
+    title: t('settings.search.item.settings-management.title'),
+    group: t('settings.nav.group.general'),
+    summary: t('settings.search.item.settings-management.summary'),
     keywords: 'settings management export import bundle config path location scope user workspace 設定管理 匯出 匯入 全集 位置 路徑 層級',
   },
   {
     id: 'general-p2p',
     tab: 'cross-device',
     section: 'general-p2p',
-    title: 'Navide Cloud / 跨裝置傳訊',
-    group: 'Accounts & Agents',
-    summary: 'Join this machine to Navide Cloud so agents here can message agents on your other devices.',
+    title: t('settings.search.item.general-p2p.title'),
+    group: t('settings.nav.group.accountsAgents'),
+    summary: t('settings.search.item.general-p2p.summary'),
     keywords: 'navide cloud p2p cross device remote server url access token navide-server connect link relay 雲端 跨裝置 遠端 伺服器 網址 權杖 連線 傳訊',
   },
   {
     id: 'general-p2p-policy',
     tab: 'cross-device',
     section: 'general-p2p-policy',
-    title: 'Navide Cloud Authorization / 跨裝置授權',
-    group: 'Accounts & Agents',
-    summary: 'Choose which remote devices may send instructions to panes on this machine. Everything is refused until a rule allows it.',
+    title: t('settings.search.item.general-p2p-policy.title'),
+    group: t('settings.nav.group.accountsAgents'),
+    summary: t('settings.search.item.general-p2p-policy.summary'),
     keywords: 'navide cloud policy permission authorization allow rule deny default pane cross device remote rejected 雲端 政策 權限 授權 允許 規則 拒絕 跨裝置 被擋',
   },
   {
     id: 'appearance-language',
     tab: 'appearance',
     section: 'appearance-language',
-    title: 'Language / 語言',
-    group: 'Appearance',
-    summary: 'Switch between Traditional Chinese and English.',
+    title: t('settings.search.item.appearance-language.title'),
+    group: t('settings.nav.appearance'),
+    summary: t('settings.search.item.appearance-language.summary'),
     keywords: 'language locale 語言 繁體中文 english en-us zh-tw',
   },
   {
     id: 'appearance-ui-scale',
     tab: 'appearance',
     section: 'appearance-ui-scale',
-    title: 'Interface Scale / 介面縮放',
-    group: 'Appearance',
-    summary: 'Scale the whole interface — text, icons, and spacing — in every window.',
+    title: t('settings.search.item.appearance-ui-scale.title'),
+    group: t('settings.nav.appearance'),
+    summary: t('settings.search.item.appearance-ui-scale.summary'),
     keywords: 'ui scale zoom interface magnify enlarge shrink bigger smaller font size percent dpi 介面 縮放 放大 縮小 字級 字體 大小 百分比 老花',
   },
   {
     id: 'appearance-runtime',
     tab: 'appearance',
     section: 'appearance-runtime',
-    title: 'Restore Windows / 還原視窗',
-    group: 'Appearance',
-    summary: 'Restore editor windows on startup.',
+    title: t('settings.search.item.appearance-runtime.title'),
+    group: t('settings.nav.appearance'),
+    summary: t('settings.search.item.appearance-runtime.summary'),
     keywords: 'restore windows 還原視窗 startup 啟動',
   },
   {
     id: 'status-badges',
     tab: 'statusBadges',
     section: 'statusBadges',
-    title: 'Status Badges / 狀態徽章',
-    group: 'Appearance',
-    summary: 'Rename each pane status and pick its colour, per language.',
+    title: t('settings.search.item.status-badges.title'),
+    group: t('settings.nav.appearance'),
+    summary: t('settings.search.item.status-badges.summary'),
     keywords: 'status badge badges colour color rename label idle running awaiting starting stopped exited error 狀態 徽章 顏色 名稱 重新命名 閒置 執行中 等待回應 啟動中 已停止 已結束 錯誤',
   },
   {
     id: 'general-environment',
     tab: 'general',
     section: 'general-environment',
-    title: 'Environment / 環境檢測',
-    group: 'General',
-    summary: 'Rerun the environment check (onboarding).',
+    title: t('settings.search.item.general-environment.title'),
+    group: t('settings.nav.group.general'),
+    summary: t('settings.search.item.general-environment.summary'),
     keywords: 'environment onboarding env check rerun 環境檢測 重新檢測',
   },
   {
     id: 'general-backend-timeout',
     tab: 'general',
     section: 'general-backend-timeout',
-    title: 'Backend Timeout / 後端啟動逾時',
-    group: 'General',
-    summary: 'Set the backend startup health-check timeout.',
+    title: t('settings.search.item.general-backend-timeout.title'),
+    group: t('settings.nav.group.general'),
+    summary: t('settings.search.item.general-backend-timeout.summary'),
     keywords: 'backend timeout health check startup 啟動逾時 後端',
   },
   {
     id: 'updates',
     tab: 'updates',
     section: 'updates',
-    title: 'Updates / 更新',
-    group: 'Updates',
-    summary: 'Check for updates, auto-check/auto-download, and release channel.',
+    title: t('settings.search.item.updates.title'),
+    group: t('settings.nav.updates'),
+    summary: t('settings.search.item.updates.summary'),
     keywords: 'update updates version check auto download channel stable beta release notes 更新 版本 檢查 自動下載 頻道 穩定版 測試版',
   },
   {
     id: 'general-loop-prompt',
     tab: 'general',
     section: 'general-loop-prompt',
-    title: 'Loop Prompt / Loop 提示詞',
-    group: 'General',
-    summary: 'Edit the prompt sent to a CLI pane when its loop button is clicked, and the auto-resume prompt after a session-limit pause.',
+    title: t('settings.search.item.general-loop-prompt.title'),
+    group: t('settings.nav.group.general'),
+    summary: t('settings.search.item.general-loop-prompt.summary'),
     keywords: 'loop prompt 循環 提示詞 迴圈 continuous development 持續開發 pane button resume 續跑 session limit 上限',
   },
   {
     id: 'general-resume-behavior',
     tab: 'general',
     section: 'general-resume-behavior',
-    title: 'Resume on Open / 開啟時恢復對話',
-    group: 'General',
-    summary: 'Whether opening a workspace resumes its previous CLI panes, starts them fresh, or asks each time.',
+    title: t('settings.search.item.general-resume-behavior.title'),
+    group: t('settings.nav.group.general'),
+    summary: t('settings.search.item.general-resume-behavior.summary'),
     keywords: 'resume restore start fresh ask workspace open session conversation 恢復 還原 開新對話 詢問 開啟 工作區 對話 續接',
   },
   {
     id: 'general-usage-badge',
     tab: 'general',
     section: 'general-usage-badge',
-    title: 'CLI Quota Badge / CLI 額度徽章',
-    group: 'General',
-    summary: 'Show remaining CLI quota in pane headers (claude/codex/kimi/grok) and pick the refresh interval.',
+    title: t('settings.search.item.general-usage-badge.title'),
+    group: t('settings.nav.group.general'),
+    summary: t('settings.search.item.general-usage-badge.summary'),
     keywords: 'usage quota badge remaining limit rate window reset 額度 剩餘 用量 徽章 刷新 間隔 claude codex kimi grok',
   },
   {
     id: 'accounts',
     tab: 'accounts',
     section: 'accounts',
-    title: 'Git Accounts / Git 帳號',
-    group: 'Accounts',
-    summary: 'Add, edit, and remove encrypted Git host credentials and tokens.',
+    title: t('settings.search.item.accounts.title'),
+    group: t('settings.nav.accounts'),
+    summary: t('settings.search.item.accounts.summary'),
     keywords: 'git account accounts credential credentials token github safeStorage 帳號 憑證 金鑰 加密',
   },
   {
     id: 'cli-accounts',
     tab: 'accounts',
     section: 'cli-accounts',
-    title: 'CLI Accounts / CLI 帳號',
-    group: 'Accounts',
-    summary: 'Manage per-agent CLI login profiles (claude, codex, kimi, grok).',
+    title: t('settings.search.item.cli-accounts.title'),
+    group: t('settings.nav.accounts'),
+    summary: t('settings.search.item.cli-accounts.summary'),
     keywords: 'cli account accounts profile profiles login claude codex kimi grok agent 帳號 登入 切換帳號 profile',
   },
   {
     id: 'shortcuts',
     tab: 'keybindings',
     section: 'keybindings',
-    title: 'Keyboard Shortcuts Reference / 快捷鍵對照',
-    group: 'System',
-    summary: 'Every shortcut in one place: the editable rule table, plus read-only sections for terminal and native-menu keys.',
+    title: t('settings.search.item.shortcuts.title'),
+    group: t('settings.nav.group.system'),
+    summary: t('settings.search.item.shortcuts.summary'),
     keywords: 'keyboard shortcuts keys keybinding hotkey 快捷鍵 鍵盤 按鍵 workbench editor terminal cli ctrl cmd shift option',
   },
   {
     id: 'keybindings',
     tab: 'keybindings',
     section: 'keybindings',
-    title: 'Customize Shortcuts / 自訂快捷鍵',
-    group: 'System',
-    summary: 'Rebind, add or remove keyboard shortcuts. Records the keys you press, flags conflicts, and resets to defaults per row.',
+    title: t('settings.search.item.keybindings.title'),
+    group: t('settings.nav.group.system'),
+    summary: t('settings.search.item.keybindings.summary'),
     keywords: 'keybinding keybindings customize rebind remap shortcut shortcuts hotkey chord conflict reset 自訂 快捷鍵 改鍵 重新綁定 衝突 還原 keybindings.json',
   },
   {
+    // Storage lives in the Resource Manager now; the entry stays so "disk" and
+    // "cleanup" still find it from here. `tab` and `section` are never read
+    // for an `opens` item — openSettingsSearchResult leaves before using them.
     id: 'storage',
-    tab: 'storage',
+    tab: 'general',
     section: 'storage',
-    title: 'Storage / 儲存空間',
-    group: 'System',
-    summary: 'Scan disk usage across app data, Electron caches, CLI homes and workspaces, then clean up reclaimable space.',
-    keywords: 'storage disk space usage cache caches cleanup clean logs node_modules stale free 儲存 空間 磁碟 快取 清理 清除 日誌 佔用 釋出',
+    opens: 'resource-manager',
+    title: t('settings.search.item.storage.title'),
+    group: t('settings.nav.group.system'),
+    summary: t('settings.search.item.storage.summary'),
+    keywords: 'storage disk space usage cache caches cleanup clean logs node_modules stale free resource manager 儲存 空間 磁碟 快取 清理 清除 日誌 佔用 釋出 資源',
   },
   {
     id: 'execution-policy',
     tab: 'executionPolicy',
     section: 'execution-policy',
-    title: 'Execution Policy / 執行政策',
-    group: 'Plugins',
-    summary: 'Edit the global agent policy, choose workspace sources, review repository recommendations, and recover corrupt policy storage.',
+    title: t('settings.search.item.execution-policy.title'),
+    group: t('settings.nav.group.plugins'),
+    summary: t('settings.search.item.execution-policy.summary'),
     keywords: 'execution policy permission permissions allowlist denylist full shell executable system namespace source repository recommendation untrusted recovery rebuild security 執行政策 權限 允許清單 拒絕清單 完整模式 shell 可執行檔 系統命名空間 來源 repository 建議 不受信任 修復 重建 安全性',
   },
   {
@@ -669,9 +674,9 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
     tab: 'help',
     section: 'help',
     helpTopic: 'mcp',
-    title: 'MCP 說明 / How Navide uses MCP',
-    group: 'Help',
-    summary: 'The two directions MCP is used in: tools Navide offers CLI agents, and external servers Navide reads docs from.',
+    title: t('settings.search.item.help-mcp.title'),
+    group: t('settings.nav.help'),
+    summary: t('settings.search.item.help-mcp.summary'),
     keywords: 'mcp model context protocol tool tools plan cli agent server client context7 github filesystem 說明 介紹 工具 計畫 外部 文件 注入 怎麼用 為什麼用不到',
   },
   {
@@ -679,9 +684,9 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
     tab: 'help',
     section: 'help',
     helpTopic: 'messaging',
-    title: 'CLI 互傳訊息 / Inter-CLI Messaging',
-    group: 'Help',
-    summary: 'How one CLI agent sends an instruction to another — addressing, delivery timing, guard rails, and troubleshooting.',
+    title: t('settings.help.topic.messaging'),
+    group: t('settings.nav.help'),
+    summary: t('settings.search.item.help-cli-messaging.summary'),
     keywords: 'help guide messaging message send cli agent pane cross workspace address broadcast queue rate limit troubleshooting 說明 教學 訊息 傳訊 互傳 傳送 指令 位址 跨工作區 廣播 佇列 頻率 疑難排解 怎麼用',
   },
   {
@@ -689,9 +694,9 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
     tab: 'help',
     section: 'help',
     helpTopic: 'workspace',
-    title: '工作區與面板 / Workspace & Panes',
-    group: 'Help',
-    summary: 'What a workspace, pane and run group are, plus stage layouts, the sidebar tree and the status bar.',
+    title: t('settings.help.topic.workspace'),
+    group: t('settings.nav.help'),
+    summary: t('settings.search.item.help-workspace.summary'),
     keywords: 'help guide workspace pane run group sidebar layout grid spotlight fullscreen slot status bar placeholder idle reclaim lineage 說明 教學 工作區 專案 面板 群組 側欄 版面 排列 佔位卡 閒置 回收 血緣 狀態列 多選 拖曳 快捷鍵',
   },
   {
@@ -699,9 +704,9 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
     tab: 'help',
     section: 'help',
     helpTopic: 'cliAgents',
-    title: 'CLI Agent 與帳號 / CLI Agents & Accounts',
-    group: 'Help',
-    summary: 'Which CLIs are supported, how they are detected and installed, roles, account switching and usage badges.',
+    title: t('settings.help.topic.cliAgents'),
+    group: t('settings.nav.help'),
+    summary: t('settings.search.item.help-cli-agents.summary'),
     keywords: 'help guide cli agent vendor install detect role account switch login usage quota badge permission skip 說明 教學 安裝 偵測 角色 帳號 切換 登入 額度 用量 徽章 權限 多帳號 疑難排解',
   },
   {
@@ -709,9 +714,9 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
     tab: 'help',
     section: 'help',
     helpTopic: 'codeWorkflow',
-    title: '程式碼工作流 / Code Workflow',
-    group: 'Help',
-    summary: 'Git staging and branches, plan documents and their review tools, the editor window and file preview.',
+    title: t('settings.help.topic.codeWorkflow'),
+    group: t('settings.nav.help'),
+    summary: t('settings.search.item.help-code-workflow.summary'),
     keywords: 'help guide git stage commit branch remote conflict diff stash plan review approve todo editor monaco preview record track 說明 教學 暫存 提交 分支 遠端 衝突 差異 草稿 計畫 審閱 核准 編輯器 預覽 變更記錄',
   },
   {
@@ -719,9 +724,9 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
     tab: 'help',
     section: 'help',
     helpTopic: 'settingsSystem',
-    title: '設定與系統 / Settings & System',
-    group: 'Help',
-    summary: 'A map of all settings pages, plus Navide Cloud, the window menus, scheduled tasks and resource upkeep.',
+    title: t('settings.help.topic.settingsSystem'),
+    group: t('settings.nav.help'),
+    summary: t('settings.search.item.help-settings-system.summary'),
     keywords: 'help guide settings overview skills prompts memory storage shortcuts updates analyzer extensions navide cloud pairing device schedule resource 說明 教學 設定 總覽 技能 提示 記憶 儲存 快捷鍵 更新 跨裝置 配對 裝置 排程 資源',
   },
   {
@@ -729,9 +734,9 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
     tab: 'help',
     section: 'help',
     helpTopic: 'icons',
-    title: '介面圖示 / Icon Reference',
-    group: 'Help',
-    summary: 'Every button icon in the interface — what it is called, where it lives and what pressing it does.',
+    title: t('settings.help.topic.icons'),
+    group: t('settings.nav.help'),
+    summary: t('settings.search.item.help-icons.summary'),
     keywords: 'help guide icon button symbol glyph legend reference sidebar pane stage status bar git plan rail 說明 教學 圖示 按鈕 符號 對照 對照表 圖例 這是什麼 狀態色 色點',
   },
 ])
@@ -753,6 +758,11 @@ const settingsSearchResults = computed(() => {
 })
 
 async function openSettingsSearchResult(item: SettingsSearchItem): Promise<void> {
+  if (item.opens === 'resource-manager') {
+    settingsSearchQuery.value = ''
+    emit('open-resource-manager')
+    return
+  }
   activeTab.value = item.tab
   if (item.tab === 'mcp' && item.mcpView) mView.value = item.mcpView
   if (item.tab === 'help' && item.helpTopic) helpTopic.value = item.helpTopic
@@ -824,9 +834,12 @@ function onUiScaleChange(value: string): void {
   uiScaleModel.value = setUiScale(value)
 }
 
+// Both locales store each option under its own name (en-US.json:974 keeps
+// "繁體中文" as-is), which is how a language picker should read, so the labels
+// come from those keys rather than a second hardcoded copy.
 const SUPPORTED_LANGUAGES = [
-  { value: 'zh-TW', label: '繁體中文' },
-  { value: 'en-US', label: 'English' },
+  { value: 'zh-TW', labelKey: 'settings.appearance.language-zh-TW' },
+  { value: 'en-US', labelKey: 'settings.appearance.language-en-US' },
 ]
 
 function onHealthTimeoutChange(raw: string): void {
@@ -1039,7 +1052,6 @@ const settingsScopeNotes: Record<SettingsTab, { scope: string; storage: keyof Se
   accounts: { scope: 'User / Workspace bindings', storage: 'safeStorage' },
   extensions: { scope: 'User', storage: 'mainProcess' },
   executionPolicy: { scope: 'User / Workspace', storage: 'mainProcess' },
-  storage: { scope: 'User', storage: 'app_data_dir' },
   keybindings: { scope: 'User', storage: 'mainProcess' },
 }
 
@@ -1239,7 +1251,6 @@ const p2pDotClass = computed(() => {
 // readable while the link is down and writable only while it is up. Panes on
 // one machine never consult it, which is why the whole block only appears once
 // a server is configured.
-const { t } = useI18n()
 interface P2pPolicyDevice { deviceId: string; deviceName: string; paneCount: number }
 interface P2pPolicyState {
   state: string
@@ -1470,7 +1481,7 @@ async function azDetectCli() {
 }
 async function azPickCli() {
   const result = await window.agentTeam?.pickFile?.({
-    title: 'Select llama-cli executable',
+    title: t('settings.analyzer.select-llama-cli'),
     filters: [{ name: 'Executable', extensions: ['*'] }],
     defaultPath: '/opt/homebrew/bin',
   })
@@ -1480,7 +1491,7 @@ async function azPickCli() {
 }
 async function azPickGguf() {
   const result = await window.agentTeam?.pickFile?.({
-    title: 'Select GGUF model file',
+    title: t('settings.analyzer.select-gguf-model'),
     filters: [{ name: 'GGUF Model', extensions: ['gguf'] }, { name: 'All Files', extensions: ['*'] }],
   })
   if (result?.ok && result.path) {
@@ -1550,7 +1561,7 @@ let mEditVersion = 0
 
 const mFilteredCatalog = computed(() => {
   const q = mSearch.value.trim().toLowerCase()
-  return q ? MCP_CATALOG.filter(c => c.name.includes(q) || c.label.toLowerCase().includes(q) || c.description.includes(q))
+  return q ? MCP_CATALOG.filter(c => c.name.includes(q) || c.label.toLowerCase().includes(q) || t(c.descriptionKey).toLowerCase().includes(q))
            : MCP_CATALOG
 })
 
@@ -2018,11 +2029,6 @@ watch(activeTab, (tab) => {
 
             <div class="s-nav-group">
               <div class="s-nav-group-title">{{ $t('settings.nav.group.system') }}</div>
-              <SettingsNavItem :label="$t('settings.nav.storage')" :active="activeTab === 'storage'" @select="activeTab = 'storage'">
-                <template #icon>
-                  <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="8" cy="3.8" rx="5.2" ry="2"/><path d="M2.8 3.8v4.4c0 1.1 2.3 2 5.2 2s5.2-.9 5.2-2V3.8"/><path d="M2.8 8.2v4c0 1.1 2.3 2 5.2 2s5.2-.9 5.2-2v-4"/></svg>
-                </template>
-              </SettingsNavItem>
               <SettingsNavItem :label="$t('settings.nav.keybindings')" :active="activeTab === 'keybindings'" @select="activeTab = 'keybindings'">
                 <template #icon>
                   <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="1.3" y="3.8" width="13.4" height="8.4" rx="1.4"/><path d="M4 6.4h0.01M6.4 6.4h0.01M8.8 6.4h0.01M11.2 6.4h0.01M4 8.8h0.01M11.2 8.8h0.01M6 10.6h4"/></svg>
@@ -2158,7 +2164,7 @@ watch(activeTab, (tab) => {
               <div v-for="item in mFilteredCatalog" :key="item.name" class="mcp-catalog-card">
                 <div class="mcp-catalog-info">
                   <div class="mcp-catalog-name">{{ item.label }}</div>
-                  <div class="mcp-catalog-desc">{{ item.description }}</div>
+                  <div class="mcp-catalog-desc">{{ t(item.descriptionKey) }}</div>
                   <div v-if="item.requiresEnv?.length" class="mcp-catalog-note">
                     ⚠ Requires env vars: {{ item.requiresEnv.join(', ') }}
                   </div>
@@ -2993,6 +2999,7 @@ watch(activeTab, (tab) => {
             <span class="nvc-page-mark" aria-hidden="true"><NavideCloudMark /></span>
             {{ $t('settings.nav.crossDevice') }}
           </h1>
+          <SyncSettings :backend="props.backend" />
           <SettingsSection :label="$t('settings.p2p.title')">
             <SettingsCard>
               <div class="s-fullrow" data-settings-section="general-p2p">
@@ -3454,7 +3461,7 @@ watch(activeTab, (tab) => {
                       :class="['ap-lang-btn', { active: currentLanguage === lang.value }]"
                       @click="setLanguage(lang.value)"
                     >
-                      {{ lang.label }}
+                      {{ $t(lang.labelKey) }}
                       <span v-if="currentLanguage === lang.value" class="ap-check">✓</span>
                     </button>
                   </div>
@@ -3559,18 +3566,6 @@ watch(activeTab, (tab) => {
         <div v-show="activeTab === 'layout'" class="s-body layout-body" data-settings-section="layout">
           <h1 class="s-page-title">{{ $t('settings.nav.layout') }}</h1>
           <LayoutSettingsPane />
-        </div>
-
-        <!-- ── STORAGE TAB ───────────────────────────────────────────────── -->
-        <div v-show="activeTab === 'storage'" class="s-body storage-body" data-settings-section="storage">
-          <h1 class="s-page-title">{{ $t('settings.nav.storage') }}</h1>
-          <!-- Lazy-mounted: the scan is expensive, so it only runs once the
-               user actually opens this tab. -->
-          <StorageUsagePane
-            v-if="activeTab === 'storage'"
-            :backend="props.backend"
-            :workspace-paths="props.workspacePaths"
-          />
         </div>
 
         </div>
@@ -3962,11 +3957,8 @@ watch(activeTab, (tab) => {
 /* Accounts tab stacks two tall blocks (git + CLI accounts); scroll the tab so
    neither squeezes the other to zero height inside the overflow-hidden s-body. */
 .accounts-body { display: block; overflow-y: auto; }
-/* Storage tab is a two-column settings page like appearance/general: the bare
-   .s-body clips instead of scrolling, so it needs its own scroll + padding. */
-.storage-body { overflow-y: auto; padding: 18px 22px; }
-/* Same reason as storage: a stack of region cards needs the gutter and its own
-   scroll, which the bare .s-body (overflow:hidden, no padding) does not give. */
+/* A stack of region cards needs the gutter and its own scroll, which the bare
+   .s-body (overflow:hidden, no padding) does not give. */
 .layout-body { overflow-y: auto; padding: 18px 22px; }
 /* Same reason: a scrolling list of status rows needs the gutter and its own
    scroll, which the bare .s-body does not give. */

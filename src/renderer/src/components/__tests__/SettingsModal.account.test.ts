@@ -389,8 +389,13 @@ describe('the rules list after the UX pass', () => {
   })
 
   it('files the cross-device search entries under the page they are on', () => {
-    expect(SETTINGS).toMatch(/id: 'general-p2p',[\s\S]{0,200}group: 'Accounts & Agents'/)
-    expect(SETTINGS).toMatch(/id: 'general-p2p-policy',[\s\S]{0,260}group: 'Accounts & Agents'/)
+    // The group label is no longer a literal in the source — it reuses the
+    // sidebar's own group key — so assert both halves: that the rows point at
+    // that key, and that the key still reads "Accounts & Agents".
+    const GROUP_KEY = /group: t\('settings\.nav\.group\.accountsAgents'\)/.source
+    expect(SETTINGS).toMatch(new RegExp(`id: 'general-p2p',[\\s\\S]{0,200}${GROUP_KEY}`))
+    expect(SETTINGS).toMatch(new RegExp(`id: 'general-p2p-policy',[\\s\\S]{0,260}${GROUP_KEY}`))
+    expect(block('en-US', ['settings', 'nav', 'group']).accountsAgents).toBe('Accounts & Agents')
   })
 })
 

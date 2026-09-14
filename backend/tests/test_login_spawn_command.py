@@ -10,6 +10,10 @@ nothing).
 
 from __future__ import annotations
 
+import dataclasses
+
+import pytest
+
 from agent_team_backend.app import _login_spawn_command
 from agent_team_backend.cli_vendors.registry import VENDORS
 
@@ -27,9 +31,14 @@ def test_drops_yolo_flags_that_do_not_apply_to_auth() -> None:
     assert _login_spawn_command("claude", command) == "claude auth login"
 
 
-def test_empty_args_strip_flags_without_appending() -> None:
-    # grok has no auth subcommand: its TUI starts first-run auth on a bare
-    # launch. Empty must not behave like None (which would keep the flags).
+def test_empty_args_strip_flags_without_appending(monkeypatch: pytest.MonkeyPatch) -> None:
+    # For a CLI whose sign-in IS the bare binary, "" must not behave like None
+    # (which would keep the flags). No shipping vendor declares "" today — grok
+    # did until it moved to `grok login` — so the branch is driven through a
+    # stubbed spec rather than left uncovered.
+    spec = dataclasses.replace(VENDORS["grok"], login_command_args="")
+    monkeypatch.setitem(VENDORS, "grok", spec)
+
     assert _login_spawn_command("grok", "grok --yolo") == "grok"
 
 

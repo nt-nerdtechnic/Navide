@@ -1456,7 +1456,7 @@ async def test_terminal_create_login_profile_kimi_grok(
     ("claude", "claude auth login"),
     ("codex", "codex login"),
     ("kimi", "kimi login"),
-    ("grok", "grok"),  # no login subcommand; first run starts its auth flow
+    ("grok", "grok login"),  # browser OAuth at auth.x.ai; the pane waits
 ])
 async def test_terminal_create_login_pane_runs_direct_login_command(
     store: CliProfilesStore,

@@ -69,6 +69,7 @@ KEYS_FILENAME = "device-signing-key.json"
 #: payload can ever be made to read as another context's payload.
 _MESSAGE_CONTEXT = b"navide/cross-device-message-signature/v1"
 _POLICY_CONTEXT = b"navide/pane-policy-signature/v1"
+_SYNC_CONTEXT = b"navide/sync-record-signature/v1"
 _SEPARATOR = b"\x00"
 
 _KEY_LEN = 32
@@ -196,6 +197,26 @@ def message_payload(
     }
 
 
+def sync_payload(
+    *, scope: str, item_id: str, updated_at: str, deleted: bool, body: str
+) -> dict[str, Any]:
+    """The tuple a synced record's signature covers.
+
+    The server's ``rev`` is deliberately absent: it is assigned after the
+    signature is made, and a receiver that required it would be asking the
+    relay to certify its own numbering. What the signature states is "this
+    device wrote this body for this item at this time" — everything a peer
+    needs to refuse a record the relay rewrote or moved to another item.
+    """
+    return {
+        "scope": scope,
+        "itemId": item_id,
+        "updatedAt": updated_at,
+        "deleted": bool(deleted),
+        "body": _body_digest(body),
+    }
+
+
 def policy_payload(*, device_id: str, seq: int, document: Any) -> dict[str, Any]:
     """The tuple a policy signature covers.
 
@@ -281,6 +302,37 @@ def verify_policy(
     return _verify(
         _POLICY_CONTEXT,
         policy_payload(device_id=device_id, seq=seq, document=document),
+        signature,
+        public_key_b64,
+    )
+
+
+def sign_sync(
+    *, scope: str, item_id: str, updated_at: str, deleted: bool, body: str
+) -> str:
+    return _sign(
+        _SYNC_CONTEXT,
+        sync_payload(
+            scope=scope, item_id=item_id, updated_at=updated_at, deleted=deleted, body=body
+        ),
+    )
+
+
+def verify_sync(
+    signature: str,
+    *,
+    public_key_b64: str,
+    scope: str,
+    item_id: str,
+    updated_at: str,
+    deleted: bool,
+    body: str,
+) -> bool:
+    return _verify(
+        _SYNC_CONTEXT,
+        sync_payload(
+            scope=scope, item_id=item_id, updated_at=updated_at, deleted=deleted, body=body
+        ),
         signature,
         public_key_b64,
     )

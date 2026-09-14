@@ -16,6 +16,15 @@ import { describe, expect, it } from 'vitest'
 // the source the way the other App.*.test.ts files do.
 const appSource = readFileSync(resolve(process.cwd(), 'src/renderer/src/App.vue'), 'utf8')
 
+// The dialog's wording moved into the locale files, so the copy assertions read
+// the zh-TW strings the template now points at.
+const zhTW = JSON.parse(
+  readFileSync(
+    resolve(process.cwd(), 'packages/plugin-ui/src/foundation/i18n/locales/zh-TW.json'),
+    'utf8',
+  ),
+) as { label: Record<string, string>; hint: Record<string, string> }
+
 function body(startMarker: string, endMarker: string): string {
   const start = appSource.indexOf(startMarker)
   expect(start, `missing: ${startMarker}`).toBeGreaterThan(-1)
@@ -104,14 +113,18 @@ describe('the stall says which kind of stall it is', () => {
   it('renders a third reason label instead of falling into the timeout wording', () => {
     // The template ternary was binary: anything that was not 'idle' printed
     // "已達時間上限", so a quota stall would have claimed a timeout.
+    // The wording itself now lives in the locale files, so the template is
+    // asserted on the key and the copy on the zh-TW string behind it.
     expect(appSource).toContain("stageStallPrompt.reason === 'quota'")
-    expect(appSource).toContain('⛔ 額度已用完')
+    expect(appSource).toContain("label.stall-reason-quota")
+    expect(zhTW.label['stall-reason-quota']).toBe('額度已用完')
   })
 
   it('explains that waiting does not auto-resume', () => {
     // The residual this change does not fix: the window resets on its own but
     // nothing re-drives the stage, so the hint must not imply it will.
-    expect(appSource).toContain('重置後不會自動接續')
+    expect(appSource).toContain("hint.stall-quota")
+    expect(zhTW.hint['stall-quota']).toContain('重置後不會自動接續')
   })
 })
 

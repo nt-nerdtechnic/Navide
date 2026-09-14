@@ -83,18 +83,19 @@ SNAPSHOT = [{'id': 'claude',
   'install_cmds': {}},
  {'id': 'grok',
   'label': 'Grok CLI',
-  'description': 'superagent-ai Grok coding agent',
+  # Deliberate 2026-09-14 change: xAI's own grok-build CLI replaced the
+  # same-named community CLI (superagent-ai/grok-cli), which installs to the
+  # same ~/.grok/bin/grok. Not a drift for this snapshot to catch.
+  'description': 'xAI Grok coding agent',
   'group': 'agent_cli',
   'check_cmd': ['grok', '--version'],
   'version_regex': '(\\d+\\.\\d+\\.\\d+)',
   'alt_commands': [],
   'min_version': '',
-  'install_cmd': 'curl -fsSL '
-                 'https://raw.githubusercontent.com/superagent-ai/grok-cli/main/install.sh '
-                 '| bash',
+  'install_cmd': 'curl -fsSL https://x.ai/cli/install.sh | bash',
   'needs_terminal': True,
   'optional': True,
-  'docs_url': 'https://github.com/superagent-ai/grok-cli',
+  'docs_url': 'https://docs.x.ai/build/cli/reference',
   'requires_binaries': ['curl'],
   'update_cmd': 'grok update',
   'doctor_cmd': '',

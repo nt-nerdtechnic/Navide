@@ -2714,6 +2714,106 @@ async def memory_save(session: "Session", msg_id: str, msg_type: str, payload: d
     await session.send_json(make_response(msg_id, msg_type, result))
 
 
+# ── Cross-device sync (sync.*) ──────────────────────────────────────────────
+#
+# The engine lives on the server link, because a round is a conversation with
+# the server; these handlers are the Settings pane's view of it. Everything
+# here answers rather than raises when the link is down — a pane that cannot
+# say "off and not connected" apart from "broken" is a pane that makes people
+# re-enter credentials that were never wrong.
+@handler("sync.status")
+async def sync_status(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app, sync_engine, sync_keyring, sync_scopes
+
+    scopes = await asyncio.to_thread(sync_scopes.enabled_scopes)
+    # Reading the key touches the Keychain, which can block on a dialog.
+    has_key = await asyncio.to_thread(sync_keyring.has_account_key)
+    conflicts = await asyncio.to_thread(app.sync_store.conflicts, None)
+    await session.send_json(
+        make_response(
+            msg_id,
+            msg_type,
+            {
+                "available": list(sync_engine.SCOPES),
+                "scopes": scopes,
+                "hasKey": has_key,
+                "conflicts": len(conflicts),
+                "link": await server_link.status(),
+            },
+        )
+    )
+
+
+@handler("sync.set_scope")
+async def sync_set_scope(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import sync_engine, sync_scopes
+
+    scope = str(payload.get("scope") or "")
+    enabled = bool(payload.get("enabled"))
+    if scope not in sync_engine.SCOPES:
+        await session.send_json(
+            make_error(msg_id, msg_type, "SYNC_UNKNOWN_SCOPE", f"unknown scope {scope!r}")
+        )
+        return
+    scopes = await asyncio.to_thread(sync_scopes.set_scope_enabled, scope, enabled)
+    await session.send_json(make_response(msg_id, msg_type, {"scopes": scopes}))
+    if enabled:
+        # Turning a section on is a request to be up to date, not just a flag.
+        asyncio.create_task(_sync_after_enable(scope))
+
+
+async def _sync_after_enable(scope: str) -> None:
+    try:
+        await server_link.sync_now(scope)
+    except Exception as err:  # noqa: BLE001 - the flag is saved either way
+        app_log().warning("the first sync of %s did not run: %s", scope, err)
+
+
+def app_log():
+    from . import app
+
+    return app.log
+
+
+@handler("sync.now")
+async def sync_now(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    scope = str(payload.get("scope") or "")
+    try:
+        results = await server_link.sync_now(scope)
+    except Exception as err:  # noqa: BLE001 - report, never tear down the session
+        await session.send_json(make_error(msg_id, msg_type, "SYNC_FAILED", str(err)))
+        return
+    await session.send_json(make_response(msg_id, msg_type, {"results": results}))
+
+
+@handler("sync.conflicts")
+async def sync_conflicts(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    scope = str(payload.get("scope") or "")
+    rows = await asyncio.to_thread(server_link.sync_conflicts, scope)
+    await session.send_json(make_response(msg_id, msg_type, {"conflicts": rows}))
+
+
+@handler("sync.resolve")
+async def sync_resolve(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import sync_engine
+
+    scope = str(payload.get("scope") or "")
+    item_id = str(payload.get("itemId") or "")
+    keep = str(payload.get("keep") or "")
+    if keep not in (sync_engine.KEEP_LOCAL, sync_engine.KEEP_REMOTE):
+        await session.send_json(
+            make_error(msg_id, msg_type, "SYNC_BAD_CHOICE", "keep must be 'local' or 'remote'")
+        )
+        return
+    try:
+        await asyncio.to_thread(server_link.resolve_sync_conflict, scope, item_id, keep)
+    except Exception as err:  # noqa: BLE001 - a stale conflict is a normal race
+        await session.send_json(make_error(msg_id, msg_type, "SYNC_RESOLVE_FAILED", str(err)))
+        return
+    rows = await asyncio.to_thread(server_link.sync_conflicts, "")
+    await session.send_json(make_response(msg_id, msg_type, {"ok": True, "conflicts": rows}))
+
+
 # ── Recent workspaces (workspace.*) ─────────────────────────────────────────
 @handler("workspace.list_recent")
 async def workspace_list_recent(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
@@ -7622,6 +7722,29 @@ async def agent_spawn_result(session: "Session", msg_id: str, msg_type: str, pay
     if payload.get("advisories"):
         verdict["advisories"] = payload["advisories"]
     delivered = plan_mcp.resolve_spawn(request_id, verdict)
+    await session.send_json(make_response(msg_id, msg_type, {"ok": True, "delivered": delivered}))
+
+
+@handler("agent_spawn.kickoff")
+async def agent_spawn_kickoff(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """A window's kickoff verdict for an agent_spawn.request — whether the
+    task was observed landing in the new pane — handed to the cli_open_agent
+    call still waiting on it."""
+    from .mcp_server import server as plan_mcp
+
+    request_id = str(payload.get("request_id") or "")
+    if not request_id:
+        await session.send_json(
+            make_error(msg_id, msg_type, "BAD_REQUEST", "agent_spawn.kickoff needs request_id")
+        )
+        return
+    verdict: dict[str, Any] = {
+        "pane_id": str(payload.get("pane_id") or ""),
+        "kickoff": str(payload.get("kickoff") or ""),
+    }
+    if payload.get("reason"):
+        verdict["reason"] = str(payload["reason"])
+    delivered = plan_mcp.resolve_kickoff(request_id, verdict)
     await session.send_json(make_response(msg_id, msg_type, {"ok": True, "delivered": delivered}))
 
 

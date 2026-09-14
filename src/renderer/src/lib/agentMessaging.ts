@@ -506,6 +506,32 @@ export const VENDORS_WITHOUT_TURN_END: ReadonlySet<string> = new Set(
   AGENT_SPECS.filter((s) => s.turnEndInferredFromSilence).map((s) => s.agentKey)
 )
 
+/** CLIs whose log reader never surfaces the user's own prompt text on its
+ *  user-record events (agent_active with detail user / prompt / user_message).
+ *
+ *  Empty on purpose: all 14 shipped readers carry it. It exists for the
+ *  delivered-pending badge (useTerminal markDeliveredPending): a message Navide
+ *  injected is normally released when the recipient's log shows the envelope
+ *  as a user record, one per message. A vendor listed here has no such record
+ *  to wait for, so its next turn end is taken as "everything consumed"
+ *  instead. That fallback must stay static rather than learned from events —
+ *  a claude pane that has only ever run slash commands or image prompts gets
+ *  text="" on every user record (user_prompt_text drops `<…>` wrappers and
+ *  list content), so a learned set would misfile it here and clear its
+ *  deliveries on a turn_complete that arrives BEFORE the queued message is
+ *  dequeued. Add a vendor only after checking its reader in
+ *  backend/agent_team_backend/cli_vendors/. */
+export const VENDORS_WITHOUT_USER_TEXT: ReadonlySet<string> = new Set()
+
+/** Whether a turn end should release every delivered-pending message for this
+ *  vendor — only for {@link VENDORS_WITHOUT_USER_TEXT}. */
+export function turnEndConsumesDeliveries(
+  agentKey: string,
+  vendors: ReadonlySet<string> = VENDORS_WITHOUT_USER_TEXT,
+): boolean {
+  return vendors.has(agentKey)
+}
+
 /**
  * Whether a pane's CLI is still mid-turn, from its activity timestamps.
  *

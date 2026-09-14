@@ -1,6 +1,12 @@
+// happy-dom: promptSkills now pulls in the i18n instance, whose module
+// evaluation reads navigator.language for the initial locale.
+// @vitest-environment happy-dom
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const store: Record<string, unknown> = {}
+// vi.hoisted: the mock factory below is hoisted above this file's body, and
+// i18n calls settingsGet while the import graph is still evaluating — so the
+// store has to exist before then, not in the temporal dead zone.
+const store = vi.hoisted(() => ({}) as Record<string, unknown>)
 vi.mock('@navide/plugin-ui/shared', () => ({
   settingsGet: vi.fn((key: string, fallback: unknown) => (key in store ? store[key] : fallback)),
   settingsSet: vi.fn((key: string, value: unknown) => {

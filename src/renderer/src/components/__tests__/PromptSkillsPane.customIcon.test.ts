@@ -8,7 +8,9 @@ import { mount, type VueWrapper } from '@vue/test-utils'
 // puts the field back instead of blanking the icon, and that picking a builtin
 // clears the field again.
 
-const store: Record<string, unknown> = {}
+// vi.hoisted: the mock factory is hoisted above this body, and the i18n
+// instance reads settingsGet while the import graph is still evaluating.
+const store = vi.hoisted(() => ({}) as Record<string, unknown>)
 vi.mock('@navide/plugin-ui/shared', () => ({
   settingsGet: (key: string, fallback: unknown) => (key in store ? store[key] : fallback),
   settingsSet: (key: string, value: unknown) => {
@@ -16,7 +18,15 @@ vi.mock('@navide/plugin-ui/shared', () => ({
   },
   onSettingsChanged: () => {},
 }))
-vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
+// promptSkills seeds its builtin name through the shared i18n instance, so
+// this stub has to satisfy createI18n as well as useI18n.
+vi.mock('vue-i18n', () => ({
+  useI18n: () => ({ t: (key: string) => key }),
+  createI18n: () => ({
+    install() {},
+    global: { t: (key: string) => key, locale: { value: 'en-US' } },
+  }),
+}))
 
 import PromptSkillsPane from '../PromptSkillsPane.vue'
 import { PROMPT_SKILLS_SETTING_KEY, type PromptSkill } from '../../lib/promptSkills'

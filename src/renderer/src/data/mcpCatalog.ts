@@ -10,8 +10,10 @@ export interface McpCatalogEntry {
   name: string
   /** 顯示用標題 */
   label: string
-  /** 說明此 MCP 在 orchestrator pipeline 的用途 */
-  description: string
+  /** i18n key for the blurb shown on the catalog card. Held as a key, not
+   *  text, because this array is module scope — the render site resolves it
+   *  so a language switch re-renders. Never written to mcp_servers.json. */
+  descriptionKey: string
   /** 啟動指令 */
   command: string
   args: string[]
@@ -24,8 +26,7 @@ export const MCP_CATALOG: McpCatalogEntry[] = [
   {
     name: 'context7',
     label: 'Context7',
-    description:
-      '查詢版本正確的框架文件（Vue、React、FastAPI…），注入 kickoff 防止幻覺舊 API。預設已啟用。',
+    descriptionKey: 'settings.mcp.catalog-context7',
     command: 'npx',
     args: ['-y', '@upstash/context7-mcp'],
     env: {},
@@ -33,8 +34,7 @@ export const MCP_CATALOG: McpCatalogEntry[] = [
   {
     name: 'github',
     label: 'GitHub',
-    description:
-      '讀取 Issues、PR、Commit 內容，讓 orchestrator 將需求 / 任務背景注入 pipeline。',
+    descriptionKey: 'settings.mcp.catalog-github',
     command: 'npx',
     args: ['-y', '@modelcontextprotocol/server-github'],
     env: { GITHUB_PERSONAL_ACCESS_TOKEN: '' },
@@ -43,8 +43,7 @@ export const MCP_CATALOG: McpCatalogEntry[] = [
   {
     name: 'filesystem',
     label: 'Filesystem',
-    description:
-      '讀取 workspace 現有程式碼、README、config 等檔案，讓 orchestrator 將現況注入 kickoff，校正 agent 的起始認知。',
+    descriptionKey: 'settings.mcp.catalog-filesystem',
     command: 'npx',
     args: ['-y', '@modelcontextprotocol/server-filesystem'],
     env: {},
@@ -52,8 +51,7 @@ export const MCP_CATALOG: McpCatalogEntry[] = [
   {
     name: 'brave-search',
     label: 'Brave Search',
-    description:
-      '即時網路搜尋，讓 orchestrator 查詢最新技術決策或 API 變動後注入 agent。需 Brave API key。',
+    descriptionKey: 'settings.mcp.catalog-brave-search',
     command: 'npx',
     args: ['-y', '@modelcontextprotocol/server-brave-search'],
     env: { BRAVE_API_KEY: '' },
@@ -62,8 +60,7 @@ export const MCP_CATALOG: McpCatalogEntry[] = [
   {
     name: 'sentry',
     label: 'Sentry',
-    description:
-      '讀取 production 錯誤與 Stack trace，讓 orchestrator 將 bug 背景注入 debug stage。',
+    descriptionKey: 'settings.mcp.catalog-sentry',
     command: 'npx',
     args: ['-y', '@sentry/mcp-server@latest'],
     env: {},

@@ -52,7 +52,7 @@ import { useAgentMessaging, encodeReason, isBroadcastTarget, NOTICE_SENDER } fro
 import type { PushOutcome, RouteResult } from './composables/useAgentMessaging'
 import { createMessageLogPersistence } from './composables/useMessageLogPersistence'
 import type { ParsedAgentMessage } from './lib/agentMessaging'
-import { VENDORS_WITHOUT_TURN_END, hasUnparsedMessageAttempt, isInjectedMessageText, isTurnInFlight, normalizeMessagingName, parseMessages, parseSpawns, pushCooldownMs, renderFallbackReport, renderFormatNotice, renderSpawnKickoff, renderSpawnNotice } from './lib/agentMessaging'
+import { VENDORS_WITHOUT_TURN_END, hasUnparsedMessageAttempt, isInjectedMessageText, isTurnInFlight, normalizeMessagingName, parseMessages, parseSpawns, pushCooldownMs, renderFallbackReport, renderFormatNotice, renderSpawnKickoff, renderSpawnNotice, turnEndConsumesDeliveries } from './lib/agentMessaging'
 import {
   evaluateTurnSpawns,
   evaluateSpawnRequest,
@@ -110,7 +110,7 @@ import { evaluateManagerStage, fullAutoStallAction, type ManagerStageVerdict } f
 import { closeEndsTheRun } from './lib/workspaceCloseRun'
 import { droppedPrefix, remapCursor, type BufferObservation } from './lib/bufferCursor'
 import { i18n } from '@navide/plugin-ui/foundation'
-import { deriveAutoName } from './lib/autoName'
+import { deriveAutoName, stripCliSessionContext } from './lib/autoName'
 import { bootWorkspaceToRecord } from './lib/bootWorkspace'
 import { diagLog } from '@navide/terminal'
 import { reclaimBlockedBy, focusedForReclaim, idleReclaimDisabled, idleReclaimThresholdMs, RECLAIM_NOW_THRESHOLD_MS, type ReclaimCandidate } from './lib/idleReclaim'
@@ -135,7 +135,7 @@ import {
   CLI_PASTE_LINE_CAP
 } from '@navide/terminal'
 import { planDropPrompt, type PlanDragRef } from './lib/planDrag'
-import { activityMeansWorking, allSlotsFinished, applyLoopWait, applyTurnProgress, detailMeansToolUse, recordTurnComplete, paneSignalResetKeys, loopWaitBackoffMs, loopWaitHonoured, isReplayedTurnComplete, parseEventMs, turnTextFingerprint, loopBackoffMs, loopContinueReady, loopStallVerdict, loopWaitingOnSubagents, LOOP_STALL_LIMIT, turnCompleteDone, turnEndsWithSentinel, type SlotSignal, type LoopWaitState } from './lib/completion'
+import { activityMeansWorking, allSlotsFinished, applyLoopWait, applyTurnProgress, clearProvisionalStall, detailMeansToolUse, recordTurnComplete, paneSignalResetKeys, loopWaitBackoffMs, loopWaitHonoured, isReplayedTurnComplete, parseEventMs, turnTextFingerprint, loopBackoffMs, loopContinueReady, loopSettleMs, loopStallVerdict, loopWaitingOnSubagents, LOOP_STALL_LIMIT, turnCompleteDone, turnEndsWithSentinel, type SlotSignal, type LoopWaitState } from './lib/completion'
 import { reorderByIds, reorderStrings, sortByIdOrder } from './lib/paneOrder'
 import { computeRangeSelection } from './lib/paneSelection'
 import { resolveDragBatch, reorderBatchByIds } from './lib/paneBatchDrag'
@@ -149,10 +149,12 @@ import {
 import { pickReusablePane, runReportedDispatch, validatePlanDispatch, type PlanDispatchOutcome, type PlanDispatchPayload } from './lib/planDispatch'
 import { planExecutionPrompt } from './lib/planExecutePrompt'
 import {
-  echoEvidence, echoTimeoutFor, injectionVerified, normalizeForMatch,
-  submitEvidence, type EchoEvidence, type SubmitEvidence,
+  composerHoldsPayload, echoEvidence, echoTimeoutFor, normalizeForMatch,
+  submitBaseline, submitEvidence, type EchoEvidence, type SubmitEvidence,
   SUBMIT_CONFIRM_MS, SUBMIT_SCREEN_LINES, TAIL_MATCH_LEN
 } from './lib/injectEcho'
+import { failedInjectReleasesHold } from './lib/deliveryHold'
+import { createKickoffReporter, runKickoffAttempts } from './lib/spawnKickoff'
 import { recordDiagnostic, readDiagnostics, currentDiagnosticSeq } from './lib/uiDiagnostics'
 import { resetUiScale, stepUiScaleBy } from './lib/uiScale'
 import { injectStandaloneTask, type StandaloneTaskInjectionDeps } from './lib/standalonePaneTask'
@@ -1850,16 +1852,6 @@ const paneTurnCompleteSourceAt = new Map<string, number>()
 // model that replaces buffer-guessing.
 const paneLastActiveAt = new Map<string, number>()
 
-// Panes whose log reader has ever surfaced a user record WITH its text. Decides
-// which consume signal releases a delivered-pending message (see
-// deliverAgentMessage): a reader that carries user text shows the injected
-// envelope as a user record when the CLI picks it up, one record per message;
-// a reader that never does leaves the next turn end as the only signal. There
-// is no per-vendor flag for this, and grepping the readers is unreliable
-// (claude's emits `detail=str(rtype)`), so it is learned per pane from the
-// events themselves.
-const paneUserRecordSeen = new Set<string>()
-
 // Per-pane count of background subagents the CLI is still waiting on, as last
 // reported by a hook event, with the wall-clock time of that report. The
 // unattended loop reads it to tell a turn that ended DONE from one that ended
@@ -2031,12 +2023,25 @@ function unregisterPaneMessaging(paneId: string, opts: { keepPersisted?: boolean
  *  scanning never reads the envelope as the pane's own output (mirrors the
  *  handoff advance in onStageSlotCompleted). */
 async function deliverAgentMessage(paneId: string, text: string): Promise<boolean> {
-  const ok = await injectPane(paneId, text, 'agent-msg', true)
-  if (!ok) return false
-  // The CLI accepted it, but may only have queued it (Claude Code mid-turn).
-  // Hold the badge on RUNNING until the recipient's log shows it consumed —
-  // released in the agent.activity handler, fused inside useTerminal.
+  // Hold the badge on RUNNING until the recipient's log shows the message
+  // consumed — released in the agent.activity handler, fused inside
+  // useTerminal. Marked BEFORE the Enter, not after: an idle CLI writes the
+  // user record the moment it submits, and that record can reach the handler
+  // inside injectPane's 200ms submit poll; a consume that lands before its
+  // mark is dropped, and the mark then holds RUNNING for the whole fuse.
   paneRefs[paneId]?.markDeliveredPending?.()
+  const outcome: { leftInComposer?: boolean } = {}
+  const ok = await injectPane(paneId, text, 'agent-msg', true, undefined, outcome)
+  if (!ok) {
+    // Not when the text is visibly still in the composer: the user can submit
+    // it by hand, and the user record that follows releases the hold on its
+    // own. The hold is a counter, so releasing here as well would settle a
+    // different outstanding delivery early — see lib/deliveryHold.ts.
+    if (failedInjectReleasesHold(outcome.leftInComposer === true)) {
+      paneRefs[paneId]?.clearDeliveredPending?.()
+    }
+    return false
+  }
   await sleep(1500)
   const sw = watchers.get(paneId)
   if (sw && !sw.cancelled) {
@@ -2522,15 +2527,77 @@ function standaloneSpawnGateContext() {
   }
 }
 
-/** Wait for a freshly created pane's CLI to settle, then inject its task. Slow
- *  by nature: a cold CLI can take tens of seconds to print its first byte. */
+/** Upper bound on waiting for a fresh pane's prompt before the kickoff is
+ *  typed regardless. Past it the old behaviour (type and hope) is the only
+ *  option left, and a diagnostic says the gate never opened. */
+const KICKOFF_PROMPT_READY_TIMEOUT_MS = 30_000
+/** Clean-buffer silence a prompt-ready pane must show. The same window the
+ *  messaging gate calls `settling`: a TUI that is still painting its first
+ *  screen keeps producing clean output in bursts shorter than this. */
+const PROMPT_READY_QUIET_MS = 2000
+/** How many times a kickoff is typed before it is given up as failed. */
+const KICKOFF_MAX_ATTEMPTS = 2
+
+/** Wait until a freshly spawned pane's CLI is at its prompt: the status
+ *  machine reads `idle` (past booting, not latched running by its own startup
+ *  paint, not parked on a trust dialog or permission box) AND the clean buffer
+ *  has stopped growing for PROMPT_READY_QUIET_MS. One quiet second was the old
+ *  gate, and it opened between two bursts of a cold Claude Code painting its
+ *  banner, tip and version line — the task was typed into a TUI still
+ *  initialising and never reached the composer.
+ *
+ *  No vendor spec declares its composer prompt, so nothing here looks for a
+ *  prompt character; the state machine's idle verdict is the shared signal.
+ *  Resolves true when ready, false on timeout or a dead pane. */
+async function waitForPromptReady(paneId: string, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  let lastSize = paneCleanBytes(paneId)
+  let stableSince = Date.now()
+  while (Date.now() < deadline) {
+    if (!paneAlive(paneId)) return false
+    await sleep(250)
+    const ref = paneRefs[paneId]
+    if (!ref) return false
+    const size = paneCleanBytes(paneId)
+    if (size !== lastSize) {
+      lastSize = size
+      stableSince = Date.now()
+      continue
+    }
+    const status = ref.displayStatus as string | undefined
+    if (status === 'idle' && Date.now() - stableSince >= PROMPT_READY_QUIET_MS) return true
+  }
+  return false
+}
+
+/** Wait for a freshly created pane's CLI to reach its prompt, then inject its
+ *  task. Slow by nature: a cold CLI can take tens of seconds to print its
+ *  first byte.
+ *
+ *  `requestId` is set on the MCP path: cli_open_agent blocks on the
+ *  agent_spawn.kickoff verdict this emits, so every exit — settled, early
+ *  return, throw — must report one or the call waits out its 45s deadline. */
 async function kickoffRequestedPane(
   paneId: string,
   parentName: string,
   task: string,
+  requestId?: string,
 ): Promise<boolean> {
+  // Built before the pane lookup: that lookup has its own early return, and a
+  // caller blocked on the verdict would otherwise wait out the whole deadline
+  // for a pane that is already gone.
+  const emitKickoffVerdict = createKickoffReporter({
+    requestId,
+    paneId,
+    send: (payload) => {
+      backend.send('agent_spawn.kickoff', payload).catch(() => { /* the tool call times out and says so */ })
+    },
+  })
   const pane = panes.value.find((p) => p.id === paneId)
-  if (!pane) return false
+  if (!pane) {
+    emitKickoffVerdict('failed', 'the pane was gone before its task could be typed')
+    return false
+  }
   // The pane's own task has to land before anything else may type into it: a
   // CLI still booting can be sitting on a trust dialog, where an injected
   // message plus its newline would answer the prompt. The messaging idle gate
@@ -2543,34 +2610,82 @@ async function kickoffRequestedPane(
       await dismissStartupDialog(paneId, DISMISS_TIMEOUT_MS)
       await waitForStartupActivity(paneId)
     }
-    await waitForQuiet(paneId, 1000, 8000)
+    const promptReady = await waitForPromptReady(paneId, KICKOFF_PROMPT_READY_TIMEOUT_MS)
     if (!paneAlive(paneId)) return false
+    if (!promptReady) {
+      recordDiagnostic({
+        level: 'warn',
+        code: 'spawn.prompt-ready-timeout',
+        message:
+          `pane never read idle+quiet within ${KICKOFF_PROMPT_READY_TIMEOUT_MS}ms — ` +
+          'typing the kickoff anyway',
+        paneId,
+      })
+    }
     // Collect HOW the injection was verified, not just whether. On a pane that
     // is still painting its first screen the echo check passes on buffer growth
     // alone, so a `true` here can mean "we wrote bytes and cannot say where they
     // went" — which used to be reported as an outright success.
-    const evidence: { echo?: EchoEvidence | null; submit?: SubmitEvidence | null } = {}
-    const kicked = await injectPane(
-      paneId, renderSpawnKickoff(task, parentName), 'agent-spawn', true, undefined, evidence
-    )
-    const verified = kicked && injectionVerified(evidence.echo ?? null, evidence.submit ?? null)
-    const settled = paneRefs[paneId] ? panes.value.find((p) => p.id === paneId) : undefined
-    if (settled) {
-      settled.kickoffStatus = !kicked ? 'failed' : verified ? 'sent' : 'unverified'
+    const text = renderSpawnKickoff(task, parentName)
+    const tail = normalizeForMatch(text).slice(-TAIL_MATCH_LEN)
+    const screenTail = (): string => {
+      const read = paneRefs[paneId]?.readScreenTail as ((n: number) => string) | undefined
+      return read ? read(SUBMIT_SCREEN_LINES) : ''
     }
-    if (kicked && !verified) {
+    // The loop, the per-attempt decision and the one-shot report all live in
+    // lib/spawnKickoff.ts, where they can be driven under test — this function
+    // cannot be, so everything that only it can do (write to the PTY, read the
+    // screen, log a diagnostic) is handed over as a dependency and nothing
+    // else stays here.
+    const loop = await runKickoffAttempts({
+      maxAttempts: KICKOFF_MAX_ATTEMPTS,
+      promptReady,
+      inject: async () => {
+        const seen: { echo?: EchoEvidence | null; submit?: SubmitEvidence | null } = {}
+        const kicked = await injectPane(paneId, text, 'agent-spawn', true, undefined, seen)
+        return { injected: kicked, echo: seen.echo ?? null, submit: seen.submit ?? null }
+      },
+      // A vendor's empty-composer hint reads as blank; a collapsed-paste
+      // summary does not.
+      composerHolds: () => composerHoldsPayload(screenTail(), tail),
+      paneAlive: () => paneAlive(paneId),
+      onRetry: ({ attempt, echo, submit }) => recordDiagnostic({
+        level: 'warn',
+        code: 'spawn.kickoff-retry',
+        message:
+          `kickoff unverified on ${echo ?? 'no'} echo / ${submit ?? 'no'} submit ` +
+          `evidence and the composer is blank — typing it again (${attempt + 1}/${KICKOFF_MAX_ATTEMPTS})`,
+        paneId,
+      }),
+    })
+    if (!loop.settled) return false
+    const { outcome, retriedOut } = loop
+    const unverifiedReason =
+      `kickoff reported success on ${loop.echo ?? 'no'} echo / ` +
+      `${loop.submit ?? 'no'} submit evidence — growth alone cannot ` +
+      'distinguish our text from a booting CLI repainting'
+    const settled = paneRefs[paneId] ? panes.value.find((p) => p.id === paneId) : undefined
+    if (settled) settled.kickoffStatus = outcome
+    if (outcome === 'unverified') {
       // The one outcome that used to be invisible: no throw, no false, and no
       // notice — just a pane sitting idle with an empty prompt.
       recordDiagnostic({
         level: 'warn',
         code: 'spawn.kickoff-unverified',
-        message:
-          `kickoff reported success on ${evidence.echo ?? 'no'} echo / ` +
-          `${evidence.submit ?? 'no'} submit evidence — growth alone cannot ` +
-          'distinguish our text from a booting CLI repainting',
+        message: unverifiedReason,
         paneId,
       })
+      emitKickoffVerdict('unverified', unverifiedReason)
+    } else if (retriedOut) {
+      // Typed KICKOFF_MAX_ATTEMPTS times, never verified. (A plain injectPane
+      // failure already logged inject.failed itself.)
+      const reason = `kickoff typed ${KICKOFF_MAX_ATTEMPTS}× and never verified — ${unverifiedReason}`
+      recordDiagnostic({ level: 'warn', code: 'spawn.kickoff-failed', message: reason, paneId })
+      emitKickoffVerdict('failed', reason)
+    } else {
+      emitKickoffVerdict(outcome)
     }
+    const kicked = outcome !== 'failed'
     // Arm the fallback report only once the task is really in: a kickoff that
     // never landed leaves a pane with nothing to report on. `parentName` is
     // only a messaging handle when a live pane answers to it — the MCP path
@@ -2590,6 +2705,7 @@ async function kickoffRequestedPane(
     // and cli_get_status read, and resetting it to 'none' would erase it.
     const live = panes.value.find((p) => p.id === paneId)
     if (live?.kickoffStatus === 'pending') live.kickoffStatus = 'none'
+    emitKickoffVerdict('failed', 'kickoff never reached a verdict (pane gone or injection threw)')
   }
 }
 
@@ -2747,6 +2863,24 @@ async function handleMcpSpawnRequest(ev: {
     // returning paneId above. There is no parent pane to report back to, so
     // no kickoffRequestedPane / report-back marker either.
     report({ ok: true, paneId, name: childName, advisories: gate.advisories })
+    // cli_open_agent now blocks on a kickoff verdict after the spawn verdict;
+    // injectStandaloneTask already typed the task (a failure returned null
+    // above), so answer at once rather than letting the call wait out 45s.
+    //
+    // 'unverified', not 'sent': all injectStandaloneTask hands back is
+    // injectPane's boolean, and that says true on buffer growth alone — the
+    // same growth-only evidence the pane path refuses to call sent. Claiming
+    // 'sent' here made one word mean two different things depending on which
+    // path answered it, and the weaker one was the silent kind: the caller
+    // stopped looking. 'unverified' routes through the server's "read
+    // cli_get_status first" hint instead.
+    backend.send('agent_spawn.kickoff', {
+      request_id: ev.request_id,
+      pane_id: paneId,
+      kickoff: 'unverified',
+      reason: 'standalone injection reports success without payload-level evidence — '
+        + 'the task may be in the pane, read its prompt before resending',
+    }).catch(() => { /* the tool call times out and says so */ })
     return
   }
   // Shut the injection window before the caller learns this pane's name, not
@@ -2756,7 +2890,7 @@ async function handleMcpSpawnRequest(ev: {
   notifyRestore.toast(i18n.global.t('msg.spawn-toast', { parent: parentName, child: childName }))
   report({ ok: true, paneId, name: childName, advisories: gate.advisories })
 
-  void kickoffRequestedPane(paneId, parentName, gate.task)
+  void kickoffRequestedPane(paneId, parentName, gate.task, ev.request_id)
     .then((ok) => {
       if (!ok) {
         sendSpawnFeedback(parentName, 'partial', `pane「${childName}」已開啟，但任務注入失敗，請自行確認`)
@@ -3076,7 +3210,14 @@ async function injectText(
   // buffer changed size". A booting CLI repaints constantly, so growth-only
   // evidence is not evidence at all — see injectionVerified. Callers that only
   // need the yes/no simply omit it.
-  evidence?: { echo?: EchoEvidence | null; submit?: SubmitEvidence | null }
+  evidence?: {
+    echo?: EchoEvidence | null
+    submit?: SubmitEvidence | null
+    /** Set when this returns false with the payload visibly still in the
+     *  input box, as opposed to never having arrived there. The two owe the
+     *  caller different things — see lib/deliveryHold.ts. */
+    leftInComposer?: boolean
+  }
 ): Promise<boolean> {
   // Log the full injection text to the session's output log file BEFORE
   // chunking so the log file shows one readable block per send.
@@ -3208,6 +3349,15 @@ async function injectText(
     return false
   }
 
+  // Past this point the payload is confirmed to be IN the input box, so every
+  // remaining failure exit means "still sitting there, unsubmitted" rather
+  // than "never arrived". Recorded once, here, instead of at each exit: the
+  // Enter write can throw and the abort check can fire between polls, and a
+  // caller that releases its delivered-pending hold on the strength of this
+  // flag must not be told "never arrived" for text the user can still submit
+  // by hand. Only read when this function returns false.
+  if (evidence) evidence.leftInComposer = true
+
   // Submit. Baseline captured AFTER the box is ready. What counts as "it went"
   // is judged from the input box rather than from raw output — see
   // submitLanded(): a repainting TUI grows the buffer whether or not Enter took.
@@ -3219,6 +3369,11 @@ async function injectText(
   // Whether the composer is holding our tail RIGHT NOW decides which signal we
   // can trust below, so sample it before pressing Enter.
   const tailWasOnScreen = !!tail && normalizeForMatch(screenTail()).includes(tail)
+  // Sampled before Enter too: a queue hint already on screen from an earlier
+  // message must not vouch for this one — see submitEvidence's baseline branch.
+  // One read serves both: the input box is picked out of this same screen by
+  // its frame (composerFromScreen), not by a second, narrower read.
+  const baseline = submitBaseline({ screen: screenTail(), tail })
   const MAX_SUBMITS = 3
   for (let attempt = 1; attempt <= MAX_SUBMITS; attempt++) {
     if (shouldAbort?.()) return false
@@ -3240,7 +3395,8 @@ async function injectText(
         tailWasOnScreen,
         tail,
         screen: screenTail(),
-        grownBy: cleanBytes() - before
+        grownBy: cleanBytes() - before,
+        baseline
       })
       landed = how !== null
       if (landed && evidence) evidence.submit = how
@@ -3265,7 +3421,11 @@ async function injectPane(
   logLabel?: string,
   preserveNewlines = false,
   shouldAbort?: () => boolean,
-  evidence?: { echo?: EchoEvidence | null; submit?: SubmitEvidence | null }
+  evidence?: {
+    echo?: EchoEvidence | null
+    submit?: SubmitEvidence | null
+    leftInComposer?: boolean
+  }
 ): Promise<boolean> {
   const pane = panes.value.find((p) => p.id === paneId)
   if (!pane?.realized) return false
@@ -3808,6 +3968,8 @@ function noteLoopTurnProgress(paneId: string, text: string, timestamp: string): 
   watcher.stalledRuns = next.stalledRuns
   watcher.lastTurnText = next.lastTurnText
   watcher.recentTurns = next.recentTurns ?? []
+  watcher.emptyCharged = next.emptyCharged === true
+  watcher.toolJudged = next.toolJudged === true
 }
 
 /** A completed turn ended with LOOP_WAIT_MARKER: the CLI says it did nothing
@@ -3823,9 +3985,12 @@ function noteLoopTurnProgress(paneId: string, text: string, timestamp: string): 
 function noteLoopWait(paneId: string, text: string, timestamp: string): boolean {
   const watcher = loopLimitWatchers.get(paneId)
   if (!watcher) return false
-  if (!text || !turnEndsWithSentinel(text, LOOP_WAIT_MARKER)) {
+  // Empty text is UNKNOWN, not "another turn" (see applyLoopWait): Claude's
+  // Stop hook copy must not end a streak the reader's LOOP_WAIT text extends.
+  const waited = text ? turnEndsWithSentinel(text, LOOP_WAIT_MARKER) : null
+  if (waited !== true) {
     // Any other turn ends the streak; the spent budget deliberately stays.
-    const cleared = applyLoopWait(watcher, false)
+    const cleared = applyLoopWait(watcher, waited)
     watcher.consecutive = cleared.consecutive
     watcher.totalWaitedMs = cleared.totalWaitedMs
     return false
@@ -3841,6 +4006,13 @@ function noteLoopWait(paneId: string, text: string, timestamp: string): boolean 
   const next = applyLoopWait(watcher, true)
   watcher.consecutive = next.consecutive
   watcher.totalWaitedMs = next.totalWaitedMs
+  // An honoured wait is this turn's judgement. Its empty-text copy (Claude's
+  // Stop hook) may already have charged a provisional stall; take that back,
+  // and keep a later copy from charging one (see clearProvisionalStall).
+  const judged = clearProvisionalStall(watcher)
+  watcher.stalledRuns = judged.stalledRuns
+  watcher.emptyCharged = judged.emptyCharged === true
+  watcher.toolJudged = judged.toolJudged === true
   const holdMs = loopWaitBackoffMs(next.consecutive)
   watcher.nextContinueAt = Date.now() + holdMs
   console.info(`[loop] pane ${paneId}: agent reported it is waiting — holding ${holdMs / 1000}s (${next.consecutive} in a row)`)
@@ -3903,6 +4075,10 @@ function armLoopTurn(paneId: string): void {
   // Per-TURN counter: what the next turn does with tools says nothing about
   // what the last one did. toolSignalsSeen is per-PANE and deliberately kept.
   watcher.toolUsesThisTurn = 0
+  // Per-TURN too: the tool judgement charges once per armed turn, and the
+  // next turn's two copies (hook + reader) start from a clean slate.
+  watcher.emptyCharged = false
+  watcher.toolJudged = false
 }
 
 /** turn_complete carried LOOP_DONE_MARKER as its final line: stop the loop if
@@ -3971,6 +4147,12 @@ interface LoopLimitWatcher {
    *  "used none" rather than "this vendor never says". Self-calibrating: only
    *  vendors whose reader or hook names tools ever set it. */
   toolSignalsSeen: boolean
+  /** The tool judgement already charged this armed turn on its empty-text
+   *  turn_complete (Claude's Stop hook) — see applyTurnProgress. */
+  emptyCharged: boolean
+  /** The tool judgement already ran on this armed turn's text (or the turn
+   *  was honoured as a LOOP_WAIT), so a later empty copy adds nothing. */
+  toolJudged: boolean
   /** Consecutive turns that ended with LOOP_WAIT_MARKER (0 after any other). */
   consecutive: number
   /** Time this run has already granted to LOOP_WAIT holds, bounded by
@@ -4008,6 +4190,8 @@ function startLoopLimitWatcher(paneId: string): void {
     recentTurns: [],
     toolUsesThisTurn: 0,
     toolSignalsSeen: false,
+    emptyCharged: false,
+    toolJudged: false,
     consecutive: 0,
     totalWaitedMs: 0,
   }
@@ -4118,7 +4302,10 @@ function startLoopLimitWatcher(paneId: string): void {
         lastActiveAt: paneLastWorkingAt.get(paneId) ?? 0,
         armedAt: watcher.armedAt,
         now: Date.now(),
-        settleMs: TURN_COMPLETE_SETTLE_MS,
+        // grok/kimi/pi/qwen infer their turn end from an 8s quiet window, so
+        // a silent tool call reads as a finished turn; hold their verdict
+        // longer so the CLI's next log line can overtake it (see loopSettleMs).
+        settleMs: loopSettleMs(VENDORS_WITHOUT_TURN_END.has(pane.agentKey), TURN_COMPLETE_SETTLE_MS),
         // The quota branch above schedules a timed resume only when a reset
         // time was resolvable; when it was not it deliberately fails open and
         // leaves loopWaitUntil null. Without this the very next poll falls
@@ -6954,7 +7141,7 @@ watch(currentWorkspace, (workspacePath) => {
 // alone is not enough: asking for the tab you are already on leaves the prop
 // unchanged, so the modal's watcher never fires and the request is dropped.
 const settingsTabRequest = ref(0)
-const settingsInitialTab = ref<'general' | 'cross-device' | 'mcp' | 'analyzer' | 'updates' | 'appearance' | 'accounts' | 'storage' | 'keybindings' | 'prompts'>('general')
+const settingsInitialTab = ref<'general' | 'cross-device' | 'mcp' | 'analyzer' | 'updates' | 'appearance' | 'accounts' | 'keybindings' | 'prompts'>('general')
 // Needed to retarget an already-open modal: initialTab is only honoured on mount
 // and by its own watcher, so re-issuing the same tab is a no-op without this.
 const settingsModalRef = ref<{
@@ -6966,7 +7153,7 @@ function openSettingsAt(tab: typeof settingsInitialTab.value): void {
   if (showSettings.value) settingsModalRef.value?.setTab(tab)
   else showSettings.value = true
 }
-// Workspaces the Storage tab scans: the open one first, then the recents that
+// Workspaces the Resource Manager's storage scan walks: the open one first, then the recents that
 // still exist on disk.
 const knownWorkspacePaths = computed<string[]>(() => {
   const paths = [currentWorkspace.value, ...recentWorkspaces.value.filter((w) => w.exists).map((w) => w.path)]
@@ -7341,7 +7528,7 @@ registerCommand('workbench.action.focusPreviousPane', () => { cycleFocusedPane(-
 // ── External UI action bus (MCP-driven) ─────────────────────────────────────
 // Actions a UI-control MCP client can invoke via ui.invoke.request. See
 // useUiActionBus for the request/reply plumbing and ownership check.
-const UI_SETTINGS_TABS = ['general', 'mcp', 'analyzer', 'updates', 'appearance', 'accounts', 'storage', 'keybindings'] as const
+const UI_SETTINGS_TABS = ['general', 'mcp', 'analyzer', 'updates', 'appearance', 'accounts', 'keybindings'] as const
 registerCommand('ui.settings.open', (args) => {
   const tab = (args as { tab?: string } | undefined)?.tab
   if (tab && (UI_SETTINGS_TABS as readonly string[]).includes(tab)) {
@@ -7659,6 +7846,7 @@ registerCommand('workbench.action.focusPreview', () => {
   preview.focus()
 })
 registerCommand('ui.window.openPlans', () => { openPlansWindow() })
+registerCommand('ui.window.openResourceManager', () => { openResourceManager() })
 registerCommand('ui.window.openGit', async () => {
   if (!currentWorkspace.value) return
   await window.agentTeam?.openGitWindow?.({ workspace_path: currentWorkspace.value })
@@ -10964,12 +11152,12 @@ backend.on('agent.activity', (raw) => {
     }
     // Badge: authoritative turn end → drop the RUNNING hysteresis latch now.
     paneRefs[ev.pane_id]?.markTurnComplete?.()
-    // Delivered-pending fallback for readers that carry no user text: the next
-    // turn end is the only proof the CLI got to our message. NEVER for a reader
-    // that does carry it — Claude Code ends the current turn BEFORE dequeuing,
-    // so its turn_complete arrives while the message is still queued; there
-    // the user record itself releases the hold (agent_active branch below).
-    if (!paneUserRecordSeen.has(ev.pane_id)) paneRefs[ev.pane_id]?.clearDeliveredPending?.(true)
+    // Delivered-pending fallback for readers without user text. Never for one
+    // that has it: Claude ends the turn BEFORE dequeuing, so the user record
+    // itself is the consume signal (agent_active branch below).
+    if (turnEndConsumesDeliveries(panes.value.find((p) => p.id === ev.pane_id)?.agentKey ?? '')) {
+      paneRefs[ev.pane_id]?.clearDeliveredPending?.(true)
+    }
     if (!markerReply && !ev.superseded) scheduleDoneNotify(ev.pane_id, ev.timestamp ?? '')
     // Judge THIS turn's own text (not a retained map): an empty-text
     // turn_complete (Claude Stop hook, thinking-only record, Codex cross-batch)
@@ -11033,9 +11221,8 @@ backend.on('agent.activity', (raw) => {
     // Injected inter-CLI envelopes land in the CLI log as user records too —
     // never title a pane with one. Set-once lives inside setPaneAutoName.
     if ((ev.detail === 'user' || ev.detail === 'prompt' || ev.detail === 'user_message') && ev.text) {
-      // This reader carries user text, so the envelope itself is the consume
-      // signal for delivered-pending — one record releases one delivery.
-      paneUserRecordSeen.add(ev.pane_id)
+      // The envelope showing up as a user record is the consume signal for
+      // delivered-pending — one record releases one delivery.
       if (isInjectedMessageText(ev.text)) {
         paneRefs[ev.pane_id]?.clearDeliveredPending?.()
       } else {
@@ -11253,6 +11440,14 @@ backend.on('agent_msg.deliver', (raw) => {
   )
 })
 
+// Spawn request ids this window has already acted on, newest last. The
+// backend broadcasts each request once, but a window holding two sockets (a
+// connect() race) hears it twice: the first copy opens the pane, and the
+// second then trips the gate's name check against that very pane — refused as
+// "you already opened it" while the pane it opened is already running the task.
+const seenSpawnRequestIds = new Set<string>()
+const SEEN_SPAWN_REQUEST_IDS_CAP = 200
+
 // cli_open_agent wants a pane opened. Every window sees this; only the one
 // owning the requesting pane answers (handleMcpSpawnRequest bails otherwise).
 backend.on('agent_spawn.request', (raw) => {
@@ -11272,6 +11467,12 @@ backend.on('agent_spawn.request', (raw) => {
   // An external caller (no requesting pane) addresses this by target_workspace
   // instead — accept the event as long as one of the two identifies an owner.
   if (!ev?.request_id || (!ev.requester_pane_id && !ev.target_workspace)) return
+  if (seenSpawnRequestIds.has(ev.request_id)) return
+  seenSpawnRequestIds.add(ev.request_id)
+  if (seenSpawnRequestIds.size > SEEN_SPAWN_REQUEST_IDS_CAP) {
+    const oldest = seenSpawnRequestIds.values().next().value
+    if (oldest !== undefined) seenSpawnRequestIds.delete(oldest)
+  }
   void handleMcpSpawnRequest({
     request_id: ev.request_id,
     requester_pane_id: ev.requester_pane_id ?? '',
@@ -11378,14 +11579,16 @@ backend.on('session.detected', (raw) => {
   const histSd = spawnHistory.value.find((e) => e.paneId === ev.pane_id)
   if (histSd) histSd.sessionId = sessionId
   if (pane.origin !== 'pipeline') {
-    pipelineLog(`Manual ${pane.agentKey} 🔖 session 已綁定`)
+    pipelineLog(`Manual ${pane.agentKey} 🔖 ${i18n.global.t('label.pipeline-log-session-bound')}`)
     void persistPaneSession(pane, sessionId)
     return
   }
   if (!pane.slotLabel || pane.origin !== 'pipeline') return
   const stageIndex = stagesApi.stages.value.findIndex((s) => s.id === pane.stageId)
   if (stageIndex < 0) return
-  pipelineLog(`Stage ${pane.stageId}/${pane.slotLabel} 🔖 session 已綁定 (${pane.agentKey})`)
+  pipelineLog(
+    `Stage ${pane.stageId}/${pane.slotLabel} 🔖 ${i18n.global.t('label.pipeline-log-session-bound')} (${pane.agentKey})`,
+  )
   void persistPaneSession(pane, sessionId)
 })
 
@@ -11828,14 +12031,19 @@ async function triggerAutoAnswer(q: ActiveQuestion): Promise<void> {
       )
     } catch (sendErr) {
       // WebSocket send timeout or network error — log and fall through to manual.
-      pipelineLog(`Stage ${stage?.id ?? '?'} 🤖 auto-answer error: ${(sendErr as Error).message ?? sendErr} — 請手動回答`)
+      pipelineLog(
+        `Stage ${stage?.id ?? '?'} 🤖 auto-answer error: ${(sendErr as Error).message ?? sendErr}`
+          + ` — ${i18n.global.t('label.pipeline-log-answer-manually')}`,
+      )
       return
     }
     if (!resp.ok || !resp.payload?.ok || !resp.payload.answer) {
       // Log the raw error so users can diagnose "思考後沒有答案" cases.
       // Common causes: LLM format unrecognized, empty output, model unavailable.
       const detail = resp.error?.message ?? (resp.payload ? `payload.ok=${resp.payload.ok} answer="${resp.payload.answer}"` : 'null payload')
-      pipelineLog(`Stage ${stage?.id ?? '?'} 🤖 auto-answer failed (${detail}) — 請手動回答`)
+      pipelineLog(
+        `Stage ${stage?.id ?? '?'} 🤖 auto-answer failed (${detail}) — ${i18n.global.t('label.pipeline-log-answer-manually')}`,
+      )
       return
     }
     autoAnswerText.value = resp.payload.answer
@@ -12311,7 +12519,9 @@ async function managerRouterScan(stageIndex: number): Promise<void> {
     const cursor = router.armedCursors.get(router.managerPaneId) ?? 0
     if (findSentinel(buf, MANAGER_READY_SENTINEL, cursor) >= 0) {
       router.managerReady = true
-      pipelineLog(`Stage ${stage.id} 🎯 Manager READY — 開始控場（drain ${router.preReadyQueue.length} 則訊息）`)
+      pipelineLog(
+      `Stage ${stage.id} 🎯 Manager READY — ${i18n.global.t('label.pipeline-log-manager-ready', { count: router.preReadyQueue.length })}`,
+    )
       const drain = router.preReadyQueue.splice(0)
       for (const msg of drain) {
         await injectManagerPane(router, msg)
@@ -12330,7 +12540,9 @@ async function managerRouterScan(stageIndex: number): Promise<void> {
     for (const d of dispatches) {
       const target = matchWorkerByLabel(router, d.to)
       if (!target) {
-        pipelineLog(`Stage ${stage.id} 🎯 dispatch 找不到 slot "${d.to}" — skip`)
+        pipelineLog(
+          `Stage ${stage.id} 🎯 dispatch ${i18n.global.t('label.pipeline-log-slot-not-found', { slot: d.to })} — skip`,
+        )
         continue
       }
       const preview = d.message.slice(0, 50).replace(/\s+/g, ' ')
@@ -12348,7 +12560,9 @@ async function managerRouterScan(stageIndex: number): Promise<void> {
     const doneFrom = router.armedCursors.get(router.managerPaneId) ?? 0
     if (!router.finished && findSentinel(buf, MANAGER_STAGE_DONE_SENTINEL, doneFrom) >= 0) {
       router.finished = true
-      pipelineLog(`Stage ${stage.id} 🎯 Manager 印 ${MANAGER_STAGE_DONE_SENTINEL} — 收尾`)
+      pipelineLog(
+        `Stage ${stage.id} 🎯 ${i18n.global.t('label.pipeline-log-manager-done', { sentinel: MANAGER_STAGE_DONE_SENTINEL })}`,
+      )
       stageCompletions.delete(stageIndex)
       void onPipelineNext()
     }
@@ -12361,7 +12575,9 @@ async function managerRouterScan(stageIndex: number): Promise<void> {
 function queueOrRouteWorkerMsg(router: StageRouter, stageId: string, msg: PendingMessage): void {
   if (!router.managerReady) {
     router.preReadyQueue.push(msg)
-    pipelineLog(`Stage ${stageId} 🎯 ${msg.kind} from ${msg.fromLabel} 暫存（Manager 還沒 READY，已存 ${router.preReadyQueue.length} 則）`)
+    pipelineLog(
+    `Stage ${stageId} 🎯 ${msg.kind} from ${msg.fromLabel} ${i18n.global.t('label.pipeline-log-queued-pre-ready', { count: router.preReadyQueue.length })}`,
+  )
     return
   }
   void injectManagerPane(router, msg)
@@ -12464,7 +12680,7 @@ async function globalManagerRouterScan(): Promise<void> {
              p.slotLabel.toLowerCase() === d.to.toLowerCase()
     )
     if (!target) {
-      pipelineLog(`🎯 Global DISPATCH 找不到 slot "${d.to}" — skip`)
+      pipelineLog(`🎯 Global DISPATCH ${i18n.global.t('label.pipeline-log-slot-not-found', { slot: d.to })} — skip`)
       continue
     }
     pipelineLog(`🎯 Global → ${target.slotLabel} (Stage ${target.stageId}): ${d.message.slice(0, 50).replace(/\s+/g, ' ')}`)
@@ -12664,7 +12880,9 @@ function startStageWatcher(stageIndex: number, paneId: string, kickoffScanFrom?:
   const hasManager = !!stageCommanderSlot(stage)
   if (hasManager) {
     const label = panes.value.find((p) => p.id === paneId)?.slotLabel || paneId.slice(0, 8)
-    pipelineLog(`Stage ${stage.id} ⏸ slot watcher 跳過 ${label}（Manager 模式）`)
+    pipelineLog(
+      `Stage ${stage.id} ⏸ slot watcher ${i18n.global.t('label.pipeline-log-watcher-skipped', { label })}`,
+    )
     return
   }
 
@@ -15379,8 +15597,11 @@ const llmNameRequested = new Set<string>()
  * material rather than the heuristic title so the model sees the full request
  * instead of its own truncation.
  */
-function requestLlmPaneName(paneId: string, material: string): void {
+function requestLlmPaneName(paneId: string, rawMaterial: string): void {
   const pane = panes.value.find((p) => p.id === paneId)
+  // Same cut the heuristic makes: a dropped pane's context paste is not what
+  // this pane is for, and the model would otherwise title it from the excerpt.
+  const material = stripCliSessionContext(rawMaterial)
   if (!pane || !pane.workspacePath || !material.trim()) return
   if (pane.customName || pane.nameLocked || pane.autoNameSource === 'llm') return
   if (llmNameRequested.has(paneId)) return
@@ -16099,11 +16320,15 @@ const backendUrl = computed(() => backend.httpUrl.value)
  *  away — the pill is the only always-visible indicator once the boot overlay
  *  is gone, so that difference is the whole point of showing it. */
 const backendPillLabel = computed(() => {
-  if (backend.status.value === 'connected') return 'backend'
+  // i18n.global.t, not a local t: App.vue has no useI18n() binding. Inside a
+  // computed it still tracks the locale ref, so the pill re-renders on a switch.
+  if (backend.status.value === 'connected') return i18n.global.t('label.backend-pill-connected')
   const auto = backend.autoRestart.value
-  if (auto) return `restarting ${auto.attempt}/${auto.max}…`
-  if (backend.status.value === 'error') return 'backend down'
-  return 'connecting…'
+  if (auto) {
+    return i18n.global.t('label.backend-pill-restarting', { attempt: auto.attempt, max: auto.max })
+  }
+  if (backend.status.value === 'error') return i18n.global.t('label.backend-pill-down')
+  return i18n.global.t('label.backend-pill-connecting')
 })
 // Frozen at bundle time. Shown as the build-time row of the clock popover, so a
 // stale dev build is still identifiable — it is deliberately NOT a clock.
@@ -16180,7 +16405,7 @@ const analyzerStatus = computed<AnalyzerStatusView>(() => ({
  *  startup window (Context7 docs → spawn → settle → inject). */
 const latestPipelineLog = computed<string>(() => {
   const log = pipeline.log
-  if (!log.length) return '正在啟動…'
+  if (!log.length) return i18n.global.t('label.pipeline-log-waiting')
   // pipelineLog() prefixes "[HH:MM:SS] " — strip it for the spinner display.
   return log[log.length - 1].replace(/^\[[\d:]+\]\s*/, '')
 })
@@ -16456,7 +16681,7 @@ function paneIsCommander(p: ActivePane): boolean {
         <NavideCloudMark variant="solid" class="titlebar-account-mark" />
         <span v-if="p2pAccountLabel" class="titlebar-account-dot" :class="p2pAccountDotClass"></span>
       </button>
-      <button class="titlebar-gear" @mousedown.stop @click="showSettings = true" title="Settings (⌘,)">
+      <button class="titlebar-gear" @mousedown.stop @click="showSettings = true" :title="$t('label.titlebar-settings')">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="3"/>
           <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
@@ -16576,17 +16801,17 @@ function paneIsCommander(p: ActivePane): boolean {
         <div class="stall-card">
           <header>
             <span class="stall-dot"></span>
-            <strong>Stage {{ stageStallPrompt.stageId }} 似乎停滯了</strong>
+            <strong>{{ $t('label.stage-stalled', { stage: stageStallPrompt.stageId }) }}</strong>
             <span v-if="stageStallPrompt.slotLabel" class="stall-slot">· {{ stageStallPrompt.slotLabel }}</span>
           </header>
           <div class="stall-body">
             <div class="stall-title">{{ stageStallPrompt.stageTitle }}</div>
             <div class="stall-reason">
               {{ stageStallPrompt.reason === 'idle'
-                ? '⏸ 偵測到無輸出'
+                ? `⏸ ${$t('label.stall-reason-idle')}`
                 : stageStallPrompt.reason === 'quota'
-                  ? '⛔ 額度已用完'
-                  : '⏱ 已達時間上限' }}
+                  ? `⛔ ${$t('label.stall-reason-quota')}`
+                  : `⏱ ${$t('label.stall-reason-cap')}` }}
               — {{ stageStallPrompt.detail }}
             </div>
             <!-- Manager mode changes what both buttons do, so it changes what
@@ -16594,33 +16819,33 @@ function paneIsCommander(p: ActivePane): boolean {
                  count can end it — the workers have no watcher), and after a
                  gone Manager "keep waiting" resets nothing and is the last
                  prompt this stage will raise. -->
-            <p v-if="stageStallPrompt.reason === 'quota'" class="stall-hint">
-              這個 CLI 的額度已用完，現在送任何東西進去都會被擋下。
-              額度視窗會自己重置，但<strong>重置後不會自動接續</strong>——
-              選擇<strong>繼續等待</strong>會重置此階段的計時器（Full auto 也只會等，不會強制推進）；
-              <strong>強制推進</strong>會把它標為完成並前進，下一階段很可能是同一個帳號、同樣被擋。
-            </p>
-            <p v-else-if="stageStallPrompt.managerVerdict === 'manager-gone'" class="stall-hint">
-              Manager 模式：沒有活著的 Manager pane（已結束，或這個 slot 從未啟動成功），
-              沒有東西能再印出 ---STAGE-DONE---。
-              選擇<strong>繼續等待</strong>不會重置任何計時器，而且這是本階段最後一次提示——
-              之後的出口只剩中止整個 pipeline；<strong>強制推進</strong>會結束<strong>整個 stage</strong>並前進到下一階段。
-            </p>
-            <p v-else-if="stageStallPrompt.managerVerdict" class="stall-hint">
-              Manager 模式：未偵測到 ---STAGE-DONE---。
-              選擇<strong>繼續等待</strong>會重置此階段的時間上限；<strong>強制推進</strong>會結束<strong>整個 stage</strong>（不是單一 slot）。
-            </p>
-            <p v-else class="stall-hint">
-              嚴格模式：未偵測到 sentinel 或完成意圖。
-              選擇<strong>繼續等待</strong>會重置 idle 計時器；<strong>強制推進</strong>會把此 slot 標為完成。
-            </p>
+            <p
+              v-if="stageStallPrompt.reason === 'quota'"
+              class="stall-hint"
+              v-html="$t('hint.stall-quota')"
+            ></p>
+            <p
+              v-else-if="stageStallPrompt.managerVerdict === 'manager-gone'"
+              class="stall-hint"
+              v-html="$t('hint.stall-manager-gone')"
+            ></p>
+            <p
+              v-else-if="stageStallPrompt.managerVerdict"
+              class="stall-hint"
+              v-html="$t('hint.stall-manager')"
+            ></p>
+            <p v-else class="stall-hint" v-html="$t('hint.stall-strict')"></p>
             <div v-if="stageStallPrompt.autoAdvanceAt !== null" class="stall-auto">
-              🤖 Full auto: 5 秒後自動強制推進…
+              🤖 {{ $t('label.stall-auto-advance') }}
             </div>
           </div>
           <footer>
-            <button class="stall-btn primary" @click="continueWaitingStall">⏯ 繼續等待</button>
-            <button class="stall-btn danger" @click="forceAdvanceStall">⏭ 強制推進</button>
+            <button class="stall-btn primary" @click="continueWaitingStall">
+              ⏯ {{ $t('action.stall-keep-waiting') }}
+            </button>
+            <button class="stall-btn danger" @click="forceAdvanceStall">
+              ⏭ {{ $t('action.stall-force-advance') }}
+            </button>
           </footer>
         </div>
       </div>
@@ -16641,7 +16866,6 @@ function paneIsCommander(p: ActivePane): boolean {
       :cli-profiles-api="cliProfilesApi"
       :workspace-open="!!currentWorkspace"
       :workspace-path="currentWorkspace"
-      :workspace-paths="knownWorkspacePaths"
       :initial-tab="settingsInitialTab"
       :tab-request="settingsTabRequest"
       v-model:confirm-before-close="confirmBeforeClose"
@@ -16654,6 +16878,7 @@ function paneIsCommander(p: ActivePane): boolean {
       :reclaimable-now-bytes="reclaimableNowIds.length * RECLAIM_ESTIMATE_BYTES_PER_CLI"
       @reclaim-now="() => void reclaimPanesNow()"
       @close="showSettings = false; settingsInitialTab = 'general'"
+      @open-resource-manager="showSettings = false; settingsInitialTab = 'general'; openResourceManager()"
       @reopen-onboarding="() => { showSettings = false; reopenOnboarding() }"
       @cli-login="onCliLoginSpawn"
     />
@@ -16678,6 +16903,7 @@ function paneIsCommander(p: ActivePane): boolean {
       :local-rows="resourceRows"
       :auto-reclaim-on="idleReclaimEnabled"
       :auto-reclaim-minutes="idleReclaimMinutes"
+      :workspace-paths="knownWorkspacePaths"
       @close="showResourceManager = false"
     />
     <PipelineManagerModal
@@ -16803,11 +17029,11 @@ function paneIsCommander(p: ActivePane): boolean {
              Context7 doc fetch → CLI spawn → settle → role + kickoff inject. -->
         <div v-if="pipeline.state === 'running'" class="empty-card loading-card">
           <div class="spinner"></div>
-          <h2>啟動 Pipeline 中…</h2>
+          <h2>{{ $t('label.pipeline-starting') }}</h2>
           <p class="status">{{ latestPipelineLog }}</p>
           <p class="muted small">
-            首個 agent 可能要 10–30 秒（Context7 文件下載 + CLI 啟動 + role/kickoff 注入）。
-            <br />進度可在左下 pipeline log 觀察。
+            {{ $t('hint.pipeline-starting-time') }}
+            <br />{{ $t('hint.pipeline-starting-log') }}
           </p>
         </div>
         <div v-else class="empty-card">
@@ -16839,7 +17065,7 @@ function paneIsCommander(p: ActivePane): boolean {
           @mousedown.prevent="onGridHandleStart($event, 'row', i)"
         />
         <!-- Grid layout preset picker + pager (grid mode only) -->
-        <div v-if="effectiveLayoutMode === 'grid' && tabVisiblePanes.length > 1" class="grid-layout-bar" role="toolbar" aria-label="Grid layout">
+        <div v-if="effectiveLayoutMode === 'grid' && tabVisiblePanes.length > 1" class="grid-layout-bar" role="toolbar" :aria-label="$t('label.grid-toolbar')">
           <button
             v-for="opt in gridPresetOptions"
             :key="opt.key"
@@ -16855,7 +17081,7 @@ function paneIsCommander(p: ActivePane): boolean {
             type="number"
             min="1"
             max="9"
-            title="Custom columns"
+            :title="$t('label.grid-custom-columns')"
             @change="applyGridCustom"
             @keydown.enter="applyGridCustom"
           />
@@ -16866,15 +17092,15 @@ function paneIsCommander(p: ActivePane): boolean {
             type="number"
             min="1"
             max="9"
-            title="Custom rows"
+            :title="$t('label.grid-custom-rows')"
             @change="applyGridCustom"
             @keydown.enter="applyGridCustom"
           />
           <template v-if="gridPageTotal > 1">
             <span class="grid-page-sep" />
-            <button class="grid-page-btn" :disabled="gridPage <= 0" title="Previous page" @click="onUserChangeGridPage(gridPage - 1)">‹</button>
+            <button class="grid-page-btn" :disabled="gridPage <= 0" :title="$t('action.prev-page')" @click="onUserChangeGridPage(gridPage - 1)">‹</button>
             <span class="grid-page-label">{{ gridPage + 1 }}/{{ gridPageTotal }}</span>
-            <button class="grid-page-btn" :disabled="gridPage >= gridPageTotal - 1" title="Next page" @click="onUserChangeGridPage(gridPage + 1)">›</button>
+            <button class="grid-page-btn" :disabled="gridPage >= gridPageTotal - 1" :title="$t('action.next-page')" @click="onUserChangeGridPage(gridPage + 1)">›</button>
           </template>
         </div>
         <!-- Sidebar/auto mode vertical handle -->
@@ -16975,7 +17201,7 @@ function paneIsCommander(p: ActivePane): boolean {
             :class="{ 'meeting-item--active': p.id === effectiveFocusPaneId, 'meeting-item--selected': selectedPaneIds.has(p.id), 'pane-drag-over': auxiliaryDragOverPaneId === p.id, 'pane-dragging': auxiliaryDraggingBatchIds.includes(p.id) }"
             :style="{ marginLeft: paneListIndent(p.ancestors.length) }"
             draggable="true"
-            title="Drag to reorder or click to focus"
+            :title="$t('label.drag-reorder')"
             @dragstart="onAuxiliaryPaneDragStart($event, p.id)"
             @dragend="onAuxiliaryPaneDragEnd"
             @dragover="onAuxiliaryPaneDragOver($event, p.id)"
@@ -17069,7 +17295,7 @@ function paneIsCommander(p: ActivePane): boolean {
           class="spotlight-thumb"
           :class="{ 'spotlight-thumb--active': p.id === effectiveFocusPaneId, 'spotlight-thumb--selected': selectedPaneIds.has(p.id), 'pane-drag-over': auxiliaryDragOverPaneId === p.id, 'pane-dragging': auxiliaryDraggingBatchIds.includes(p.id) }"
           draggable="true"
-          title="Drag to reorder or click to focus"
+          :title="$t('label.drag-reorder')"
           @dragstart="onAuxiliaryPaneDragStart($event, p.id)"
           @dragend="onAuxiliaryPaneDragEnd"
           @dragover="onAuxiliaryPaneDragOver($event, p.id)"
@@ -17175,7 +17401,7 @@ function paneIsCommander(p: ActivePane): boolean {
             :class="{ 'meeting-item--active': p.id === effectiveFocusPaneId, 'meeting-item--selected': selectedPaneIds.has(p.id), 'pane-drag-over': auxiliaryDragOverPaneId === p.id, 'pane-dragging': auxiliaryDraggingBatchIds.includes(p.id) }"
             :style="{ marginLeft: paneListIndent(p.ancestors.length) }"
             draggable="true"
-            title="Drag to reorder or click to focus"
+            :title="$t('label.drag-reorder')"
             @dragstart="onAuxiliaryPaneDragStart($event, p.id)"
             @dragend="onAuxiliaryPaneDragEnd"
             @dragover="onAuxiliaryPaneDragOver($event, p.id)"
@@ -19031,7 +19257,9 @@ function paneIsCommander(p: ActivePane): boolean {
   color: var(--text-secondary);
   line-height: 1.6;
 }
-.stall-hint strong {
+/* The stall hints are v-html from the locale files, so their <strong> carries
+   no scoped data-v attribute — hence :deep(). */
+.stall-hint :deep(strong) {
   color: var(--text-bright);
 }
 .check-row { display: flex; align-items: center; gap: 6px; font-size: var(--font-xs); cursor: pointer; user-select: none; }

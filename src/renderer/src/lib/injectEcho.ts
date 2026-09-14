@@ -44,6 +44,77 @@ export type SubmitEvidence = 'tail-left' | 'queued' | 'growth'
  *  spaces and survives wrapping and frame characters. */
 export const QUEUED_HINT_RE = /pressupto(?:edit|selecta)queuedmessage/i
 
+/** A line made of nothing but box-drawing glyphs and spaces — the frame of a
+ *  CLI's bottom input widget (╭──╮ / ╰──╯). At least one box char is required
+ *  so a plain blank line isn't matched (blanks are handled separately).
+ *
+ *  Lives here, in the module with no imports, because two places need the same
+ *  answer and neither may depend on the other: serializeRenderedBuffer drops
+ *  these rows off the end of a screen read, and composerFromScreen below uses
+ *  them to find where the input box starts and ends. Two copies of a character
+ *  class is how the two quietly stop agreeing. */
+export const BOX_ONLY_LINE_RE = /^[\s─-╿]*[─-╿][\s─-╿]*$/
+
+/** Bottom rows treated as the composer when a screen has no frame to locate it
+ *  by — a plain shell, or a CLI that draws no input box. A guess, and the only
+ *  reason it is tolerable is that submitBaseline records whether the guess
+ *  actually found our text (composerHeldTail) and the verdict stays "not seen"
+ *  when it did not. */
+export const COMPOSER_FALLBACK_LINES = 3
+
+/** The input box's contents, picked out of a rendered screen read.
+ *
+ *  Located by the frame, not by counting rows. Counting was tried and is wrong
+ *  by construction: Claude Code's footer is a variable number of lines — the
+ *  accept-edits mode line, a model line, a quota warning, an update notice —
+ *  and every row it grows by pushes the composer out of a fixed window. That
+ *  is not a safe degradation. submitEvidence would answer "not submitted",
+ *  injectText would press Enter three times and report failure, and the sender
+ *  would resend into a queue that already holds the message: the antigravity
+ *  bug dc4b191e fixed, arriving from the other direction.
+ *
+ *  The frame does not move. Everything between the last closing box-only row
+ *  and the box-only row above it is the composer; the message a TUI redraws
+ *  once the Enter takes is drawn ABOVE the box and is therefore out of scope by
+ *  construction, whatever the footer is doing. Without a frame — a plain shell,
+ *  a CLI that draws no box — fall back to the bottom few rows. */
+export function composerFromScreen(screen: string): string {
+  const lines = screen.split('\n')
+  let close = -1
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (BOX_ONLY_LINE_RE.test(lines[i])) { close = i; break }
+  }
+  if (close > 0) {
+    for (let open = close - 1; open >= 0; open--) {
+      if (BOX_ONLY_LINE_RE.test(lines[open])) {
+        return lines.slice(open + 1, close).join('\n')
+      }
+    }
+  }
+  return lines.slice(-COMPOSER_FALLBACK_LINES).join('\n')
+}
+
+/** What the composer looked like BEFORE Enter, for the `queued` verdict. The
+ *  queue hint alone is ambiguous once a message is already queued: it stays on
+ *  screen whether or not this Enter took. So the caller samples it, plus
+ *  whether our tail was inside the narrow composer window — the one thing
+ *  whose disappearance means this Enter, and this Enter only. */
+export interface SubmitBaseline {
+  queuedHint: boolean
+  composerHeldTail: boolean
+}
+
+/** Sample the composer before pressing Enter. `screen` is the same read
+ *  (SUBMIT_SCREEN_LINES) the submitEvidence polls use — the input box is
+ *  picked out of it by composerFromScreen, so there is only ever one read. */
+export function submitBaseline(opts: { screen: string; tail: string }): SubmitBaseline {
+  return {
+    queuedHint: QUEUED_HINT_RE.test(normalizeForMatch(opts.screen)),
+    composerHeldTail:
+      !!opts.tail && normalizeForMatch(composerFromScreen(opts.screen)).includes(opts.tail),
+  }
+}
+
 /** Whether a pair of evidences is strong enough to call the injection verified.
  *  Growth-only on either half means we wrote bytes and cannot say where they
  *  went — an honest "unverified", not a success and not a failure. */
@@ -52,6 +123,32 @@ export function injectionVerified(
   submit: SubmitEvidence | null,
 ): boolean {
   return echo !== null && echo !== 'growth' && submit !== null && submit !== 'growth'
+}
+
+/** Whether a spawn kickoff landed. Strict evidence (injectionVerified) is
+ *  unreachable for the common case: Claude Code collapses a multi-line paste
+ *  to "[Pasted text #N +M lines]", so the tail is never on screen, Enter can
+ *  only be judged by growth, and every long kickoff read 'unverified' — which
+ *  the retry loop then retyped or reported failed with a resend hint, doubling
+ *  the task. Once the prompt-ready gate has opened (idle + quiet), the pane is
+ *  not painting anything of its own, so growth after Enter is the CLI
+ *  reacting to us and counts as the submit half.
+ *
+ *  The ECHO half still has to observe the payload — `tail` or the collapsed
+ *  paste's own summary. Growth there is 40 bytes for any payload over 80
+ *  characters (growthNeededFor caps at READY_GROWTH_MIN), which a periodic
+ *  repaint clears on its own: an update notice, a hook line, or the SIGWINCH
+ *  repaint the new pane's own layout reflow triggers. Accepting it would
+ *  report `kickoff: "sent"` for a paste the CLI never took — the exact
+ *  silence this verdict exists to end. Without the gate, growth stays what it
+ *  was: a booting TUI repainting. */
+export function kickoffVerified(
+  echo: EchoEvidence | null,
+  submit: SubmitEvidence | null,
+  promptReady: boolean,
+): boolean {
+  if (injectionVerified(echo, submit)) return true
+  return promptReady && echo !== null && echo !== 'growth' && submit !== null
 }
 
 /** Growth that counts as "echoed" for a payload of this size.
@@ -104,11 +201,9 @@ export function echoEvidence(
   normalizedLength: number,
 ): EchoEvidence | null {
   if (tail && normalizeForMatch(buffer).includes(tail)) return 'tail'
-  if (grownBy >= growthNeededFor(normalizedLength)) return 'growth'
-  // The collapsed-paste case. Both signals above measure the payload: one
-  // looks for it verbatim, the other for enough bytes to account for it — and
-  // a collapsed paste produces neither, because the summary is short and
-  // fixed-size no matter how long the payload was. So a long message read as
+  // The collapsed-paste case. A TUI that decides the paste is too big to show
+  // draws a short, fixed-size summary instead, so neither the tail nor enough
+  // bytes to account for the payload ever appear. A long message read as
   // "never arrived", was sent again, and again: three copies of one message
   // sat in antigravity's composer while the send reported failure, Enter never
   // pressed. Short messages were unaffected, which is why this looked like a
@@ -117,10 +212,32 @@ export function echoEvidence(
   // Only a summary inside the region that just grew counts. One left over from
   // an earlier paste would otherwise say "landed" while nothing of ours had,
   // and the Enter that follows would submit whatever the composer was holding.
-  if (grownBy <= 0) return null
-  return PASTE_PLACEHOLDER_RE.test(buffer.slice(-(grownBy + PLACEHOLDER_MARGIN)))
-    ? 'placeholder'
-    : null
+  //
+  // Asked BEFORE growth, which it used to sit behind. A collapsed paste grows
+  // the buffer too — the summary plus the composer repaint clears the 40-byte
+  // bar on its own — so growth answered first and this branch was unreachable
+  // in the one case it was written for. The label is load-bearing now that
+  // kickoffVerified trusts a payload-observing echo and refuses a growth-only
+  // one, and the two are only ever told apart here.
+  if (grownBy > 0 && PASTE_PLACEHOLDER_RE.test(buffer.slice(-(grownBy + PLACEHOLDER_MARGIN)))) {
+    return 'placeholder'
+  }
+  if (grownBy >= growthNeededFor(normalizedLength)) return 'growth'
+  return null
+}
+
+/** Is the composer holding OUR payload right now — either its normalized
+ *  `tail` verbatim, or the collapsed-paste summary a TUI draws in its place?
+ *
+ *  Asked before a spawn kickoff judged 'unverified' is typed a second time:
+ *  growth-only evidence cannot say whether the first copy landed, and typing
+ *  another on top of it would submit both as one prompt. A vendor's own
+ *  empty-composer hint ("Try \"fix lint errors\"") matches neither signal, so
+ *  it reads as blank — which it is, as far as our text goes. `screen` is the
+ *  rendered bottom of the visible screen (useTerminal.readScreenTail). */
+export function composerHoldsPayload(screen: string, tail: string): boolean {
+  if (!tail) return false
+  return normalizeForMatch(screen).includes(tail) || PASTE_PLACEHOLDER_RE.test(screen)
 }
 
 /** Lines at the bottom of the visible screen that hold the input box. Small
@@ -163,6 +280,9 @@ export function submitEvidence(opts: {
   tail: string
   screen: string
   grownBy: number
+  /** From submitBaseline(), sampled before Enter. Without it the hint alone
+   *  decides — the caller has not been wired for the snapshot yet. */
+  baseline?: SubmitBaseline
 }): SubmitEvidence | null {
   if (opts.tailWasOnScreen && opts.tail) {
     const screen = normalizeForMatch(opts.screen)
@@ -172,7 +292,34 @@ export function submitEvidence(opts: {
     // cannot fire. Its queue hint is the positive signal instead. Without it
     // every mid-turn delivery was reported as inject-failed after 3 Enters,
     // the sender resent, and the recipient's queue held 3–4 copies.
-    return QUEUED_HINT_RE.test(screen) ? 'queued' : null
+    if (!QUEUED_HINT_RE.test(screen)) return null
+    // A hint that was already up before this Enter proves nothing about THIS
+    // message. Only the input box can answer that: 'tail-left' fails here
+    // because the screen still shows the enqueued copy drawn above the box,
+    // while the box itself is empty. composerFromScreen is what separates the
+    // two — by the frame, never by a row count (see its comment).
+    //
+    // Counting copies of the tail in the clean buffer was tried and cannot
+    // work in either direction. The clean buffer is the raw output stream and
+    // an Ink TUI redraws its whole bottom region on every spinner frame, so
+    // the composer — still holding our tail — is copied several times a
+    // second whether or not the Enter took: an exact +1 was never met (every
+    // second mid-turn delivery read as unsubmitted after 3 Enters), and "one
+    // more, at least" is met by the repaint alone (every one of them reads as
+    // delivered, text still sitting in the box). The raw stream cannot tell a
+    // repaint from an addition; a rendered screen can, because it only ever
+    // holds the current state.
+    if (opts.baseline && opts.baseline.queuedHint) {
+      // Nothing to watch leave: this vendor draws no frame and the fallback
+      // rows did not hold our text either. The honest answer is "not seen" —
+      // the sender checks instead of being told a message that may still be
+      // sitting in the composer was delivered.
+      if (!opts.baseline.composerHeldTail) return null
+      return normalizeForMatch(composerFromScreen(opts.screen)).includes(opts.tail)
+        ? null
+        : 'queued'
+    }
+    return 'queued'
   }
   return opts.grownBy > 0 ? 'growth' : null
 }

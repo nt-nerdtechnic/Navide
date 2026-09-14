@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  echoEvidence, echoLanded, echoTimeoutFor, growthNeededFor, injectionVerified,
-  normalizeForMatch, submitEvidence, submitLanded, TAIL_MATCH_LEN
+  composerHoldsPayload, echoEvidence, echoLanded, echoTimeoutFor, growthNeededFor, injectionVerified,
+  composerFromScreen, kickoffVerified, normalizeForMatch, submitBaseline, submitEvidence,
+  submitLanded, TAIL_MATCH_LEN
 } from '../injectEcho'
 
 describe('normalizeForMatch', () => {
@@ -162,6 +163,17 @@ describe('echoEvidence', () => {
     expect(echoEvidence('[Pasted text #1 +40 lines]', 'nomatch', 5, 400)).toBe('placeholder')
   })
 
+  // The summary is what a collapsed paste looks like, and a collapsed paste
+  // grows the buffer too — the summary line plus the composer repaint clear
+  // the 40-byte bar on their own. Answering 'growth' first made the one
+  // payload-observing signal available in that case unreachable, and left the
+  // kickoff verdict with nothing to tell "the CLI took our paste" apart from
+  // "the CLI repainted".
+  it('prefers the placeholder over growth when both would answer', () => {
+    const buffer = 'a'.repeat(400) + '[Pasted text #1 +40 lines]'
+    expect(echoEvidence(buffer, 'nomatch', 400, 4_000)).toBe('placeholder')
+  })
+
   it('answers null when nothing landed', () => {
     expect(echoEvidence('quiet', 'nomatch', 0, 400)).toBeNull()
   })
@@ -172,6 +184,7 @@ describe('echoEvidence', () => {
       ['...please run the tests', 'runthetests', 0, 20],
       ['unrelated repaint output', 'nowherenearthis', 400, 40],
       ['[Pasted text #1 +40 lines]', 'nomatch', 5, 400],
+      ['a'.repeat(400) + '[Pasted text #1 +40 lines]', 'nomatch', 400, 4_000],
       ['quiet', 'nomatch', 0, 400],
     ]
     for (const c of cases) {
@@ -224,6 +237,92 @@ describe('submitEvidence', () => {
     }
   })
 
+  // The hint alone is ambiguous when a message was ALREADY queued before this
+  // Enter: it stays on screen whether or not this Enter took. The caller
+  // snapshots the composer before pressing Enter (submitBaseline); with that
+  // in hand 'queued' needs the hint to be NEW, or our tail to have LEFT the
+  // input box.
+  //
+  // The screen keeps showing our tail either way — that is the whole reason
+  // 'tail-left' cannot fire here: what a successful Enter does is redraw the
+  // message just above the box. Only the box itself answers the question, and
+  // composerFromScreen finds it by its frame rather than by counting rows.
+  const tail = 'runthetests'
+  const screenWith = (composer: string, above: string[]): string => [
+    ...above,
+    '╭────────────────────────────────╮',
+    composer,
+    '╰────────────────────────────────╯',
+    '  ⏵⏵ accept edits on (shift+tab to cycle)',
+    '  ? for shortcuts   Press up to edit queued messages',
+  ].join('\n')
+  const HOLDING = screenWith('│ > run the tests                │', ['> an earlier message'])
+  const SUBMITTED = screenWith(
+    '│ >                              │',
+    ['> an earlier message', '> run the tests'],
+  )
+
+  it('refuses queued while the input box still holds our tail', () => {
+    const baseline = submitBaseline({ screen: HOLDING, tail })
+    expect(baseline).toEqual({ queuedHint: true, composerHeldTail: true })
+    expect(
+      submitEvidence({ tailWasOnScreen: true, tail, screen: HOLDING, grownBy: 12, baseline }),
+    ).toBeNull()
+  })
+
+  // The failure the buffer-count guard could not see. An Ink TUI redraws its
+  // whole bottom region on every spinner frame, so the raw stream gains copies
+  // of the composer — our text still in it — several times a second, whether
+  // or not the Enter took. Counting them said "delivered" for a message that
+  // never left the box; the rendered box says what is actually there.
+  it('is not fooled by a repaint that copies the unsubmitted composer', () => {
+    const baseline = submitBaseline({ screen: HOLDING, tail })
+    expect(
+      submitEvidence({ tailWasOnScreen: true, tail, screen: HOLDING, grownBy: 4_000, baseline }),
+    ).toBeNull()
+  })
+
+  it('accepts queued once our tail has left the input box', () => {
+    const baseline = submitBaseline({ screen: HOLDING, tail })
+    expect(
+      submitEvidence({ tailWasOnScreen: true, tail, screen: SUBMITTED, grownBy: 40, baseline }),
+    ).toBe('queued')
+  })
+
+  // The message redrawn above the box is what still matches on the wide screen.
+  // Locating the composer by its frame is what keeps it out of the answer — a
+  // row count would have to guess how tall the footer is today.
+  it('does not count the copy redrawn above the box as the composer', () => {
+    expect(composerFromScreen(SUBMITTED)).toBe('│ >                              │')
+    expect(composerFromScreen(HOLDING)).toBe('│ > run the tests                │')
+  })
+
+  // A vendor that draws no box at all: the fallback rows are a guess, and when
+  // the guess never held our text the honest answer is "not seen" — the sender
+  // checks rather than being told a message still in the composer was sent.
+  it('answers null when a frameless screen never showed our tail near the bottom', () => {
+    const frameless = [
+      '> run the tests',
+      'working…',
+      'still working…',
+      '  Press up to edit queued messages',
+    ].join('\n')
+    const baseline = submitBaseline({ screen: frameless, tail })
+    expect(baseline).toEqual({ queuedHint: true, composerHeldTail: false })
+    expect(
+      submitEvidence({ tailWasOnScreen: true, tail, screen: frameless, grownBy: 40, baseline }),
+    ).toBeNull()
+  })
+
+  it('accepts queued when the hint was absent before this Enter', () => {
+    const baseline = submitBaseline({ screen: screenWith('│ > run the tests │', []).replace(
+      '  ? for shortcuts   Press up to edit queued messages', '  ? for shortcuts'), tail })
+    expect(baseline).toEqual({ queuedHint: false, composerHeldTail: true })
+    expect(
+      submitEvidence({ tailWasOnScreen: true, tail, screen: HOLDING, grownBy: 0, baseline }),
+    ).toBe('queued')
+  })
+
   it('still answers null when the tail stays and no queue hint is shown', () => {
     expect(
       submitEvidence({ tailWasOnScreen: true, tail: 'runthetests', screen: '> run the tests\n? for shortcuts', grownBy: 99 }),
@@ -264,5 +363,70 @@ describe('injectionVerified', () => {
   it('is false when either half found nothing', () => {
     expect(injectionVerified(null, 'tail-left')).toBe(false)
     expect(injectionVerified('tail', null)).toBe(false)
+  })
+})
+
+describe('composerHoldsPayload', () => {
+  // A spawn kickoff judged 'unverified' is only retyped when the composer is
+  // NOT holding the first copy — otherwise the second copy lands on top of it.
+  it('holds when the normalized tail of our text is on screen', () => {
+    expect(composerHoldsPayload('│ > run the tests\n│', 'runthetests')).toBe(true)
+  })
+
+  it('holds when the TUI collapsed the paste into its placeholder', () => {
+    expect(composerHoldsPayload('> [Pasted text #1 +40 lines]', 'runthetests')).toBe(true)
+  })
+
+  it('reads a vendor\'s empty-composer hint as blank', () => {
+    // Claude Code's idle composer shows a suggestion, not our text.
+    expect(composerHoldsPayload('> Try "fix lint errors"\n? for shortcuts', 'runthetests')).toBe(false)
+  })
+
+  it('reads an empty screen as blank', () => {
+    expect(composerHoldsPayload('', 'runthetests')).toBe(false)
+  })
+
+  it('never holds on an empty tail', () => {
+    expect(composerHoldsPayload('anything at all', '')).toBe(false)
+  })
+})
+
+describe('kickoffVerified', () => {
+  // Claude Code collapses a multi-line paste to "[Pasted text #N +M lines]":
+  // the tail is never on screen, so Enter can only ever be judged by growth
+  // and the strict check is unreachable for every long kickoff. Past the
+  // prompt-ready gate the pane paints nothing of its own, so growth is the
+  // CLI reacting to us.
+  it('is the strict verdict when that already passes', () => {
+    expect(kickoffVerified('tail', 'tail-left', false)).toBe(true)
+    expect(kickoffVerified('placeholder', 'queued', false)).toBe(true)
+  })
+
+  it('accepts a growth-only SUBMIT once the prompt-ready gate opened', () => {
+    expect(kickoffVerified('placeholder', 'growth', true)).toBe(true)
+    expect(kickoffVerified('tail', 'growth', true)).toBe(true)
+  })
+
+  // The gate is a snapshot — idle and quiet for 2s, once, before the paste.
+  // It does not stop the pane painting during the 6-8s echo window that
+  // follows, and 40 bytes is all growth needs there for any payload over 80
+  // characters: an update notice, a hook line, or the SIGWINCH repaint the new
+  // pane's own layout reflow triggers each clear it alone. A paste the CLI
+  // refused would then be reported as `kickoff: "sent"`, and the caller that
+  // trusts it never looks again.
+  it('refuses a growth-only ECHO however open the gate is', () => {
+    expect(kickoffVerified('growth', 'growth', true)).toBe(false)
+    expect(kickoffVerified('growth', 'queued', true)).toBe(false)
+  })
+
+  it('keeps growth-only evidence unverified when the gate never opened', () => {
+    expect(kickoffVerified('growth', 'growth', false)).toBe(false)
+    expect(kickoffVerified('placeholder', 'growth', false)).toBe(false)
+  })
+
+  it('never vouches for a missing half, gate or not', () => {
+    expect(kickoffVerified(null, 'growth', true)).toBe(false)
+    expect(kickoffVerified('growth', null, true)).toBe(false)
+    expect(kickoffVerified(null, null, true)).toBe(false)
   })
 })

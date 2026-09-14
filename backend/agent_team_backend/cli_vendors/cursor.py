@@ -137,6 +137,16 @@ _MAX_BLOBS_PER_PASS = 512
 # intent: enough for the messaging protocol, not a transcript dump).
 _MAX_TURN_TEXT = 8000
 
+
+def _cap_text(text: str) -> str:
+    """Head-and-tail cap, same shape as the other readers' _cap_text: the
+    loop's <<LOOP_DONE>> and the messaging ---MSG-END--- both sit on the reply's
+    LAST line, so a head-only slice of a long reply silently dropped them."""
+    if len(text) <= _MAX_TURN_TEXT:
+        return text
+    half = _MAX_TURN_TEXT // 2
+    return f"{text[:half]}\n…\n{text[-half:]}"
+
 # What the user actually typed, inside Cursor's prompt wrapper. Sampled rows:
 #
 #   <timestamp>Sunday, Aug 16, 2026, 10:33 AM (UTC+9)</timestamp>
@@ -453,7 +463,7 @@ class CursorLogReader(LogReader):
                     vendor="cursor", event_type="turn_complete", cwd=cwd,
                     session_id=session_id, file_path=str(path), dedup_key=key,
                     timestamp=stamp(), detail="assistant",
-                    text=join_text_blocks(content, "text")[:_MAX_TURN_TEXT],
+                    text=_cap_text(join_text_blocks(content, "text")),
                 ))
             elif role == "user":
                 # "user" is the cross-end contract detail panes are named

@@ -249,7 +249,7 @@ class GrokLogReader(LogReader):
         self, path: Path, seen_keys: set[str]
     ) -> list[TokenUsage]:
         # The watcher routes every .json/.db under ~/.grok here (e.g.
-        # user-settings.json); only the session db carries usage events.
+        # config.toml); only the session db carries usage events.
         if path.name != _DB_NAME:
             return []
         rows = self._query(path, _USAGE_SQL)
@@ -696,23 +696,21 @@ SPEC = VendorSpec(
     # keyed by id, not a map — and the file they share is the one holding the
     # BYO API key, which is why the caller cannot simply link it.
     mcp_wiring=McpWiring(
+        # `[mcp_servers.<name>]` in TOML: a map keyed by the server's name, so
+        # no list_key. A bare `url` is how the CLI's own `grok mcp add` writes
+        # a streamable-HTTP server (transport is inferred from the scheme), and
+        # `enabled` defaults to true.
         config=McpServerConfig(
-            section=("mcp", "servers"),
-            entry=(
-                ("id", McpValue.NAME),
-                ("label", McpValue.LABEL),
-                ("enabled", True),
-                ("transport", "http"),
-                ("url", McpValue.URL),
-            ),
-            list_key="id",
+            section=("mcp_servers",),
+            entry=(("url", McpValue.URL),),
         ),
         config_dir=".grok",
-        config_file=("user-settings.json",),
+        config_file=("config.toml",),
     ),
-    # Empty, not None: grok has no auth subcommand — its TUI prompts for
-    # sign-in on a bare launch — so the flags are stripped and nothing added.
-    login_command_args="",
+    # `grok login` defaults to the browser OAuth flow at auth.x.ai, which a PTY
+    # pane can carry: the CLI opens the browser and waits. `--device-auth` is
+    # the headless alternative and is not what a desktop pane needs.
+    login_command_args="login",
     live_file=(".grok", "auth.json"),
     slot_file="auth.json",
     login_home_secret_file=("home", ".grok", "auth.json"),
@@ -728,9 +726,14 @@ SPEC = VendorSpec(
         "GROK_DAEMON_CHILD",
     ),
     make_log_reader=GrokLogReader,
-    install_dep=Dep("grok", "Grok CLI", "superagent-ai Grok coding agent", "agent_cli",
+    # xAI's own grok-build CLI. A same-named community CLI (superagent-ai/
+    # grok-cli) installs to the same ~/.grok/bin/grok, so `which grok` cannot
+    # tell them apart — the version string can: this one prints
+    # "grok <x.y.z> (<commit>)", the community one a bare "1.1.7".
+    install_dep=Dep("grok", "Grok CLI", "xAI Grok coding agent", "agent_cli",
         ["grok", "--version"], r"(\d+\.\d+\.\d+)",
-        install_cmd="curl -fsSL https://raw.githubusercontent.com/superagent-ai/grok-cli/main/install.sh | bash",
-        needs_terminal=True, requires_binaries=("curl",), optional=True, docs_url="https://github.com/superagent-ai/grok-cli",
+        install_cmd="curl -fsSL https://x.ai/cli/install.sh | bash",
+        needs_terminal=True, requires_binaries=("curl",), optional=True,
+        docs_url="https://docs.x.ai/build/cli/reference",
         update_cmd="grok update"),
 )

@@ -65,6 +65,7 @@ from . import (
     osplat,
     pane_policy,
     remote_roster,
+    sync_keyring,
     trust_store,
 )
 
@@ -209,6 +210,18 @@ REASON_UNAUTHENTICATED = "unauthenticated"
 #: filled and the relay is not ours to change.
 PAIRING_WORKSPACE = "_navide"
 PAIRING_PANE = "_pairing"
+
+#: The account sync key travels between two ALREADY PAIRED devices on the same
+#: reserved address as the pairing exchange. It rides that channel rather than
+#: a new one because the signature check in front of it is the one that matters
+#: here — a frame from a pinned device is verified against the pinned key — and
+#: because the wrapped key inside is sealed to the recipient regardless of what
+#: carries it.
+SYNC_KEY_REQUEST = "sync-key-request"
+SYNC_KEY_OFFER = "sync-key-offer"
+
+#: How long a device with no key waits for a paired peer to hand one over.
+SYNC_KEY_WAIT_S = 8.0
 
 #: What a device that has never been paired with is told. Distinct from
 #: "policy-denied" on purpose: the rules are not what refused it, and the sender
@@ -641,6 +654,9 @@ class ServerLink:
         # the raw rows are kept here as well. None means "never received one",
         # which an empty directory must not be confused with.
         self._directory: list[dict[str, Any]] | None = None
+        #: Built on first use so a link that never connects never touches the
+        #: Keychain looking for a sync key.
+        self._sync_engine: Any = None
         # Device ids the server last reported online, or None while no
         # presence.changed has arrived. Kept apart from the per-session
         # ``hostOnline`` flag because the two facts arrive on different events
@@ -864,6 +880,12 @@ class ServerLink:
                 # so the cache is realigned from a full directory read once per
                 # connection and kept current by the push after that.
                 await self._refresh_directory()
+                # Everything written on other devices while this one was away
+                # is waiting behind a cursor, and no `sync.changed` will be
+                # re-sent for it. One catch-up round per connection; deliberately
+                # spawned rather than awaited, because a large first sync must
+                # not hold the session open before its reader starts.
+                self._spawn(self._sync_all())
                 reporter = asyncio.create_task(self._report_loop())
                 # Deliberately *not* in the wait below. That set means "the
                 # connection is over when any of these finishes", and this task
@@ -924,6 +946,9 @@ class ServerLink:
         if msg_type == "messages.acked":
             self._on_message_acked(message.get("payload"))
             return
+        if msg_type == "sync.changed":
+            self._spawn(self._on_sync_changed(message.get("payload")))
+            return
         if msg_type == "policy.changed":
             self._spawn(self._on_policy_changed(message.get("payload")))
             return
@@ -942,6 +967,144 @@ class ServerLink:
             self._spawn(self._on_account_verified())
             return
         log.debug("navide-server event %r is not wired yet; ignoring it", msg_type)
+
+    def sync_engine(self) -> Any:
+        """This link's sync engine, built once.
+
+        The engine is handed ``_request`` rather than the link itself: it has
+        no business reaching into the connection, and a plain callable is what
+        lets the tests drive it against a stub server.
+        """
+        if self._sync_engine is None:
+            from . import app, sync_engine as engine_mod, sync_scopes
+            from .ipc import make_event
+
+            def _broadcast(delta: dict[str, Any]) -> None:
+                # Same event ui.settings.set sends, so every open window
+                # converges on a synced change the way it does on a local one.
+                self._spawn(
+                    app.broadcast(make_event("ui.settings_changed", {"settings": delta}))
+                )
+
+            engine = engine_mod.SyncEngine(
+                app.sync_store,
+                self._request,
+                device_id=lambda: self._device_id,
+                enabled=sync_scopes.scope_enabled,
+            )
+            engine.register(sync_scopes.PromptsScope(broadcast=_broadcast))
+            engine.register(sync_scopes.McpScope())
+            engine.register(sync_scopes.SkillsStateScope())
+            engine.register(sync_scopes.MemoryScope())
+            self._sync_engine = engine
+        return self._sync_engine
+
+    async def _offer_sync_key(self, device_id: str) -> bool:
+        """Wrap this account's sync key for one paired device and send it."""
+        try:
+            if not await asyncio.to_thread(sync_keyring.has_account_key):
+                return False
+            recipient = remote_roster.public_key_for(device_id)
+            if not recipient:
+                log.info("cannot hand the sync key to %s: it has published no key", device_id)
+                return False
+            wrapped = await asyncio.to_thread(
+                sync_keyring.wrap_for,
+                recipient_public_key=recipient,
+                from_device=self._device_id,
+                to_device=device_id,
+            )
+        except Exception as err:  # noqa: BLE001 - never break pairing or a session
+            log.warning("could not wrap the sync key for %s: %s", device_id, err)
+            return False
+        return await self._send_pair_frame(device_id, SYNC_KEY_OFFER, wrapped=wrapped)
+
+    async def _adopt_sync_key(self, device_id: str, wrapped: str) -> None:
+        """Take the account key a paired device sealed for this one."""
+        try:
+            await asyncio.to_thread(
+                sync_keyring.accept_wrapped,
+                wrapped,
+                from_device=device_id,
+                to_device=self._device_id,
+            )
+        except sync_keyring.KeyConflict:
+            # Two keys exist for one account, which means one of them was
+            # minted while the other device was away. Said out loud rather than
+            # resolved here: whichever is dropped takes its records with it.
+            log.error(
+                "%s offered a different sync key; this machine keeps the one it has, "
+                "and the two will not read each other's synced records",
+                device_id,
+            )
+        except Exception as err:  # noqa: BLE001 - an unreadable offer is not fatal
+            log.warning("the sync key offered by %s did not open: %s", device_id, err)
+        else:
+            self._spawn(self._sync_all())
+
+    async def ensure_sync_key(self) -> bool:
+        """Make sure this machine holds the account key, without minting a second.
+
+        Minting is safe exactly once per account. A machine that mints while a
+        paired device is merely offline would write records that device can
+        never read — and the failure is silent, because both sides go on
+        working. So the rule is narrow: mint only when this machine has paired
+        with nobody. With peers present, ask them and wait; if none answers,
+        say so and sync nothing.
+        """
+        if await asyncio.to_thread(sync_keyring.has_account_key):
+            return True
+        try:
+            pins = (await asyncio.to_thread(trust_store.load)).get("pins") or {}
+        except Exception as err:  # noqa: BLE001 - an unreadable store is not "no peers"
+            log.warning("the trust store would not say who this machine is paired with: %s", err)
+            return False
+        peers = [device for device in pins if device != self._device_id]
+        if not peers:
+            await asyncio.to_thread(sync_keyring.ensure_account_key)
+            log.info("this is the first device of the account; minted its sync key")
+            return True
+        asked = 0
+        for device in peers:
+            if await self._send_pair_frame(device, SYNC_KEY_REQUEST):
+                asked += 1
+        if asked:
+            deadline = time.monotonic() + SYNC_KEY_WAIT_S
+            while time.monotonic() < deadline:
+                await asyncio.sleep(0.25)
+                if await asyncio.to_thread(sync_keyring.has_account_key):
+                    return True
+        log.info(
+            "no paired device answered with the account sync key; syncing nothing "
+            "until one of them is online"
+        )
+        return False
+
+    async def _sync_all(self) -> None:
+        """Catch up every enabled scope. Never raises into the session."""
+        try:
+            from . import sync_scopes
+
+            if not any(sync_scopes.enabled_scopes().values()):
+                return  # nothing is switched on: do not even look for a key
+            if not await self.ensure_sync_key():
+                return
+            await self.sync_engine().sync_all()
+        except Exception as err:  # noqa: BLE001 - sync is never load-bearing
+            log.warning("the sync catch-up round failed: %s", err)
+
+    async def _on_sync_changed(self, payload: Any) -> None:
+        """Another device wrote something; read that one scope."""
+        data = payload if isinstance(payload, dict) else {}
+        scope = str(data.get("scope") or "")
+        if not scope:
+            return
+        try:
+            if not await self.ensure_sync_key():
+                return
+            await self.sync_engine().sync(scope)
+        except Exception as err:  # noqa: BLE001 - same reason as above
+            log.warning("syncing %s after a change notice failed: %s", scope, err)
 
     async def _on_revoked(self, payload: Any) -> None:
         """The server withdrew this member's access mid-connection.
@@ -2549,6 +2712,19 @@ class ServerLink:
                 device_pairing.accept_response(
                     device_id, their_key=key, their_nonce=str(frame.get("nonce") or "")
                 )
+            elif kind in (SYNC_KEY_REQUEST, SYNC_KEY_OFFER):
+                # Only between devices that already paired. The pairing kinds
+                # exist to serve strangers; this one must not, so the pin is
+                # required here rather than assumed from the address.
+                if pin is None:
+                    log.info(
+                        "ignoring a %s from %s: that device is not paired with this one",
+                        kind, device_id,
+                    )
+                elif kind == SYNC_KEY_REQUEST:
+                    await self._offer_sync_key(device_id)
+                else:
+                    await self._adopt_sync_key(device_id, str(frame.get("wrapped") or ""))
             elif kind == device_pairing.PAIR_CONFIRM:
                 # Recorded first, completed second. They may have confirmed
                 # before this side's person did, in which case there is nothing
@@ -2613,6 +2789,11 @@ class ServerLink:
             device_name=pairing.device_name or self._device_name_for(device_id),
         )
         log.info("paired with device %s", device_id)
+        # A device that has just joined cannot read anything already synced
+        # until it holds the account key, and there is no better moment to hand
+        # it over: the two ends have just authenticated each other by a code a
+        # person compared. Failure is logged, not raised — pairing succeeded.
+        await self._offer_sync_key(device_id)
         return True
 
     async def start_pairing(self, device_id: str) -> dict[str, Any]:
@@ -3081,6 +3262,39 @@ async def reconfigure() -> None:
     """
     await stop()
     await start()
+
+
+async def sync_now(scope: str = "") -> list[dict[str, Any]]:
+    """Run a sync round now, for one scope or all of them.
+
+    Answers rather than raises when there is no link: "not connected" is an
+    ordinary state for a Settings pane to be told about, and the UI already
+    shows the link's own status beside it.
+    """
+    link = _link
+    if link is None or not link._authenticated:  # noqa: SLF001 - same module
+        return [{"scope": scope or "all", "skipped": "not-connected"}]
+    if not await link.ensure_sync_key():
+        return [{"scope": scope or "all", "skipped": "no-key"}]
+    engine = link.sync_engine()
+    if scope:
+        return [await engine.sync(scope)]
+    return await engine.sync_all()
+
+
+def sync_conflicts(scope: str = "") -> list[dict[str, Any]]:
+    """Unresolved conflicts, readable whether or not the link is up."""
+    from . import app
+
+    return app.sync_store.conflicts(scope or None)
+
+
+def resolve_sync_conflict(scope: str, item_id: str, keep: str) -> None:
+    """Answer one conflict. Needs the adapters, so it goes through the link."""
+    link = _link
+    if link is None:
+        raise ConnectionError("the navide-server link is not running")
+    link.sync_engine().resolve(scope, item_id, keep)
 
 
 async def status() -> dict[str, Any]:

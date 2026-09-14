@@ -296,7 +296,7 @@ Action —— `ui.pane.create`、`ui.preview.show`、`ui.window.openGit` —— 
 
 | Action | 參數 | 效果 |
 |---|---|---|
-| `ui.settings.open` | `{tab?}`（`general`、`mcp`、`analyzer`、`updates`、`appearance`、`accounts`、`storage`、`keybindings` 之一） | 開啟 Settings，可指定切到特定分頁 |
+| `ui.settings.open` | `{tab?}`（`general`、`mcp`、`analyzer`、`updates`、`appearance`、`accounts`、`keybindings` 之一） | 開啟 Settings，可指定切到特定分頁 |
 | `ui.settings.close` | — | 關閉 Settings |
 | `ui.settings.yolo` | `{yolo?}` | 讀取全域的 CLI 權限略過開關；有給 `yolo` 就設定它。回傳 `{yolo, agents}`，每個 agent 是 `{agent, mode, skipFlag}`。它不是 Workspace 範圍的：任何視窗都能回答，而且單一廠商的答案是 `skipFlag`，不是 `yolo` |
 | `ui.pane.create` | `{agent, name?, task?}` | 在該視窗已開啟的 Workspace 中為 `agent` Spawn 一個 Pane；若有給 `task`，會作為 Kickoff Prompt 送出並略過 Role 注入 |
@@ -308,6 +308,7 @@ Action —— `ui.pane.create`、`ui.preview.show`、`ui.window.openGit` —— 
 | `ui.tab.switch` | `{tabId}` | 切換作用中的 Stage／Run-group 分頁 |
 | `ui.preview.show` | `{kind, …}` | 在右側 rail 的預覽面板顯示檔案、diff 或內嵌片段 |
 | `ui.window.openPlans` | — | 開啟 Plan 視窗 |
+| `ui.window.openResourceManager` | — | 開啟 Resource Manager（CPU／記憶體／磁碟用量與儲存清理） |
 | `ui.window.openGit` | — | 為目前 Workspace 開啟 Git 視窗 |
 | `ui.window.openPipeline` | `{pipelineId?}` | 開啟 Pipeline Manager 視窗 |
 | `ui.workspace.open` | `{path}` | 將 `path` 開啟為 Workspace（路由到任一 Live 視窗 —— 見上文） |
