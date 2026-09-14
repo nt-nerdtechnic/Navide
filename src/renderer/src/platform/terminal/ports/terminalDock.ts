@@ -15,6 +15,11 @@ export interface TerminalSpawnOptions {
   restoreMode?: 'memory-resume' | 'fresh'
   skipReattach?: boolean
   loginProfileId?: string
+  /** The pane exists in order to sign in, so the backend runs the vendor's
+   *  sign-in trigger instead of the plain REPL. Independent of
+   *  `loginProfileId`, which only chooses an isolated home: a live login
+   *  (signing in to the already-active account) sets this and not that. */
+  isLogin?: boolean
 }
 
 export interface TerminalCreateRequest {
@@ -29,6 +34,7 @@ export interface TerminalCreateRequest {
   metadata: Record<string, unknown> | null
   outputLogFile: string | null
   loginProfileId: string | null
+  isLogin: boolean
   replacesTerminalId: string | null
 }
 

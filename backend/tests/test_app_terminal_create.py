@@ -1005,3 +1005,206 @@ async def test_terminal_create_antigravity_registers_session_marker(
         "session_marker": "at-pane:ag-pane",
         "session_home_id": "",
     }]
+
+
+_SHELL = "/bin/zsh"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("agent_key", "expected"),
+    [("claude", "claude auth login"), ("grok", "grok login"), ("codex", "codex login")],
+)
+async def test_live_login_spawn_rewrites_command_without_a_profile(
+    monkeypatch: pytest.MonkeyPatch,
+    agent_key: str,
+    expected: str,
+) -> None:
+    """A live login (the active account) carries no profile id, but still has
+    to jump straight into the vendor's sign-in trigger.
+
+    The rewrite used to hang off `login_profile_id`, so signing in to the
+    ACTIVE account opened a bare REPL instead of `<cli> login`. The command to
+    run and the home to run it in are separate decisions: `is_login` selects
+    the command, `login_profile_id` only selects the isolated home.
+    """
+    monkeypatch.setattr(app, "attribution", FakeAttribution())
+    monkeypatch.setattr(app, "_register_workspace_and_backfill", lambda _ws: None)
+    session = _session()
+
+    await app.handle_message(session, {
+        "id": "m1",
+        "type": "terminal.create",
+        "payload": {
+            "pane_id": "login-pane",
+            "agent_key": agent_key,
+            "command": [_SHELL, "-lc", f"{agent_key} --dangerously-skip-permissions"],
+            "cwd": "/ws",
+            "is_login": True,
+            "metadata": {"workspace_path": "/ws"},
+        },
+    })
+
+    created = session.terminals.created[0]  # type: ignore[attr-defined]
+    # The [shell, -lc, cmd] wrapper survives; only the command text is replaced,
+    # and the YOLO flag is dropped — it does not apply to an auth subcommand.
+    assert created["command"][-1] == expected
+    assert created["command"][:2] == [_SHELL, "-lc"]
+    # A live login must NOT be marked as an isolated login pane: it signs in to
+    # the live credentials on purpose.
+    assert "login_profile_id" not in created["metadata"]
+
+
+@pytest.mark.asyncio
+async def test_ordinary_spawn_is_not_rewritten(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Guard for the rewrite hoist: a normal pane keeps its command verbatim."""
+    monkeypatch.setattr(app, "attribution", FakeAttribution())
+    monkeypatch.setattr(app, "_register_workspace_and_backfill", lambda _ws: None)
+    session = _session()
+
+    await app.handle_message(session, {
+        "id": "m1",
+        "type": "terminal.create",
+        "payload": {
+            "pane_id": "normal-pane",
+            "agent_key": "claude",
+            "command": [_SHELL, "-lc", "claude --dangerously-skip-permissions"],
+            "cwd": "/ws",
+            "metadata": {"workspace_path": "/ws"},
+        },
+    })
+
+    created = session.terminals.created[0]  # type: ignore[attr-defined]
+    assert created["command"][-1] == "claude --dangerously-skip-permissions"
+
+
+def _stub_identity(monkeypatch: pytest.MonkeyPatch, signed_in: bool) -> None:
+    """Override only `identity` on the real vault — the spawn path also calls
+    switch_lock and friends, and a bare stub object would mask real wiring."""
+    monkeypatch.setattr(
+        app.credential_vault, "identity",
+        lambda _key, _slot=None: {"email": None, "signedIn": signed_in},
+    )
+
+
+def _events(session: app.Session, event_type: str) -> list[dict[str, Any]]:
+    return [
+        m["payload"] for m in session.websocket.sent  # type: ignore[attr-defined]
+        if m.get("type") == event_type
+    ]
+
+
+@pytest.mark.asyncio
+async def test_installed_but_signed_out_cli_announces_itself(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`cli.missing` says "not installed"; this says "installed, no credentials".
+
+    The probe is a --version smoke test, so it cannot tell the two apart, and
+    the pane would silently open on the vendor's own sign-in prompt. Advisory
+    only: unlike cli.missing the spawn is still valid and must go ahead.
+    """
+    monkeypatch.setattr(app, "attribution", FakeAttribution())
+    monkeypatch.setattr(app, "_register_workspace_and_backfill", lambda _ws: None)
+    _stub_identity(monkeypatch, False)
+    session = _session()
+
+    await app.handle_message(session, {
+        "id": "m1",
+        "type": "terminal.create",
+        "payload": {
+            "pane_id": "grok-pane",
+            "agent_key": "grok",
+            "command": [_SHELL, "-lc", "grok"],
+            "cwd": "/ws",
+            "metadata": {"workspace_path": "/ws"},
+        },
+    })
+
+    notices = _events(session, "cli.signed_out")
+    assert len(notices) == 1
+    assert notices[0]["agent_key"] == "grok"
+    assert notices[0]["pane_id"] == "grok-pane"
+    assert notices[0]["label"]
+    # Advisory, not fatal: the pane still spawns.
+    assert session.terminals.created  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_signed_in_cli_announces_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(app, "attribution", FakeAttribution())
+    monkeypatch.setattr(app, "_register_workspace_and_backfill", lambda _ws: None)
+    _stub_identity(monkeypatch, True)
+    session = _session()
+
+    await app.handle_message(session, {
+        "id": "m1",
+        "type": "terminal.create",
+        "payload": {
+            "pane_id": "grok-pane",
+            "agent_key": "grok",
+            "command": [_SHELL, "-lc", "grok"],
+            "cwd": "/ws",
+            "metadata": {"workspace_path": "/ws"},
+        },
+    })
+
+    assert _events(session, "cli.signed_out") == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("agent_key", ["qwen", "aider", "opencode", "cursor", "droid"])
+async def test_vendors_without_a_live_credential_file_are_never_reported(
+    monkeypatch: pytest.MonkeyPatch,
+    agent_key: str,
+) -> None:
+    """No live_file means nothing on disk to read.
+
+    `credential_vault.identity` answers signedIn=False for these by default,
+    which is absence of evidence, not evidence of absence — reporting it would
+    put a false "not signed in" notice on every CLI Navide cannot inspect.
+    """
+    monkeypatch.setattr(app, "attribution", FakeAttribution())
+    monkeypatch.setattr(app, "_register_workspace_and_backfill", lambda _ws: None)
+    _stub_identity(monkeypatch, False)
+    session = _session()
+
+    await app.handle_message(session, {
+        "id": "m1",
+        "type": "terminal.create",
+        "payload": {
+            "pane_id": f"{agent_key}-pane",
+            "agent_key": agent_key,
+            "command": [_SHELL, "-lc", agent_key],
+            "cwd": "/ws",
+            "metadata": {"workspace_path": "/ws"},
+        },
+    })
+
+    assert _events(session, "cli.signed_out") == []
+
+
+@pytest.mark.asyncio
+async def test_a_login_pane_is_not_told_it_is_signed_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Signing out is the premise of a login pane, not news."""
+    monkeypatch.setattr(app, "attribution", FakeAttribution())
+    monkeypatch.setattr(app, "_register_workspace_and_backfill", lambda _ws: None)
+    _stub_identity(monkeypatch, False)
+    session = _session()
+
+    await app.handle_message(session, {
+        "id": "m1",
+        "type": "terminal.create",
+        "payload": {
+            "pane_id": "grok-login",
+            "agent_key": "grok",
+            "command": [_SHELL, "-lc", "grok"],
+            "cwd": "/ws",
+            "is_login": True,
+            "metadata": {"workspace_path": "/ws"},
+        },
+    })
+
+    assert _events(session, "cli.signed_out") == []

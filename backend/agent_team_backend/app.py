@@ -2595,6 +2595,30 @@ def _login_spawn_command(agent_key: str, command: Any) -> Any:
     return replaced
 
 
+def _agent_signed_out(agent_key: str) -> bool:
+    """True when this CLI is installed but its live credentials are absent.
+
+    The spawn probe is a `--version` smoke test, so it can only answer "is it
+    installed" — a signed-out CLI passes it and then opens the pane on the
+    vendor's own sign-in prompt with nothing in Navide to explain why.
+
+    Only vendors that declare a `live_file` can be asked. For every other CLI
+    `credential_vault.identity` answers signedIn=False by default, which is
+    absence of evidence rather than evidence of absence; reporting it would put
+    a false "not signed in" notice on every CLI Navide cannot inspect.
+
+    Display-only, like `identity` itself: never raises, and False means "no
+    evidence of a signed-out state", not "signed in".
+    """
+    spec = cli_vendor(agent_key)
+    if spec is None or spec.live_file is None:
+        return False
+    try:
+        return not bool(credential_vault.identity(agent_key).get("signedIn"))
+    except Exception:  # noqa: BLE001 — advisory only, never fails a spawn
+        return False
+
+
 # Aligned with onboarding_deps' detection probe (was 3s here — too tight, so a
 # momentarily overloaded machine timed out and made EVERY CLI unlaunchable).
 _SPAWN_PROBE_TIMEOUT_S = 8

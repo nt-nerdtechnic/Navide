@@ -278,6 +278,7 @@ export function createHostTerminalDockPort(backend: HostBackend): TerminalDockPo
       metadata: request.metadata,
       output_log_file: request.outputLogFile,
       login_profile_id: request.loginProfileId,
+      is_login: request.isLogin,
       replaces_terminal_id: request.replacesTerminalId,
     }, timeoutMs),
     cancelCreate: (paneId, createGeneration) => send('terminal.create.cancel', {

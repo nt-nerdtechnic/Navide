@@ -10,10 +10,11 @@ nothing).
 
 from __future__ import annotations
 
-import dataclasses
+from types import SimpleNamespace
 
 import pytest
 
+from agent_team_backend import app as app_module
 from agent_team_backend.app import _login_spawn_command
 from agent_team_backend.cli_vendors.registry import VENDORS
 
@@ -31,15 +32,22 @@ def test_drops_yolo_flags_that_do_not_apply_to_auth() -> None:
     assert _login_spawn_command("claude", command) == "claude auth login"
 
 
-def test_empty_args_strip_flags_without_appending(monkeypatch: pytest.MonkeyPatch) -> None:
-    # For a CLI whose sign-in IS the bare binary, "" must not behave like None
-    # (which would keep the flags). No shipping vendor declares "" today — grok
-    # did until it moved to `grok login` — so the branch is driven through a
-    # stubbed spec rather than left uncovered.
-    spec = dataclasses.replace(VENDORS["grok"], login_command_args="")
-    monkeypatch.setitem(VENDORS, "grok", spec)
+def test_empty_args_strip_flags_without_appending(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`""` means "sign-in IS the bare binary": strip the flags, append nothing.
 
-    assert _login_spawn_command("grok", "grok --yolo") == "grok"
+    No shipping vendor declares `""` today (grok did while Navide targeted the
+    community grok-cli, which had no auth subcommand; the official xAI CLI has
+    `grok login`). The branch is still live, so it is driven through a stub
+    rather than pinned to whichever vendor happens to have that shape — a
+    vendor fact that has already changed once.
+    """
+    monkeypatch.setattr(
+        app_module, "cli_vendor", lambda _key: SimpleNamespace(login_command_args="")
+    )
+
+    assert _login_spawn_command("stub", "stub --yolo") == "stub"
 
 
 def test_vendor_without_a_sign_in_invocation_is_left_alone() -> None:

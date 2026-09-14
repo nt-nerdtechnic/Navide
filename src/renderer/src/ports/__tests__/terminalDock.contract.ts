@@ -32,6 +32,7 @@ function createRequest(): TerminalCreateRequest {
     metadata: { origin: 'contract' },
     outputLogFile: '/tmp/output.log',
     loginProfileId: 'profile-1',
+    isLogin: true,
     replacesTerminalId: 'old-session',
   }
 }
@@ -78,6 +79,7 @@ export function runTerminalDockContract(createHarness: () => TerminalDockContrac
             metadata: { origin: 'contract' },
             output_log_file: '/tmp/output.log',
             login_profile_id: 'profile-1',
+            is_login: true,
             replaces_terminal_id: 'old-session',
           },
           timeoutMs: 22,

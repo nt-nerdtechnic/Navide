@@ -136,6 +136,7 @@ export function createMockBackend(initialStatus: BackendStatus = 'connected') {
       metadata: payload.metadata,
       output_log_file: payload.outputLogFile,
       login_profile_id: payload.loginProfileId,
+      is_login: payload.isLogin,
       replaces_terminal_id: payload.replacesTerminalId,
     }, timeoutMs),
     cancelCreate: (paneId, createGeneration) => request('terminal.create.cancel', {

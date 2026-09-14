@@ -209,6 +209,7 @@ export function createPluginTerminalDockPort(sdk: PluginCapabilitySdk): Terminal
       metadata: requestBody.metadata,
       output_log_file: requestBody.outputLogFile,
       login_profile_id: requestBody.loginProfileId,
+      is_login: requestBody.isLogin,
       replaces_terminal_id: requestBody.replacesTerminalId,
     }, timeoutMs),
     cancelCreate: (paneId, createGeneration) => request('terminal.create.cancel', {

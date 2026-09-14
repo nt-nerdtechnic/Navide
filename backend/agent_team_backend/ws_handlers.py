@@ -5375,6 +5375,14 @@ async def _terminal_create_impl(
     # profile's slot (see credential_vault.harvest_login_home).
     env_remove: list[str] | None = None
     login_profile_id = str(payload.get("login_profile_id") or "")
+    # Two decisions that used to be one. `is_login` says the pane exists in
+    # order to sign in, and so selects the COMMAND; `login_profile_id` says
+    # where it signs in, and so selects the HOME. A live login — signing in to
+    # the account that is already active — carries the first and not the
+    # second, so keying the rewrite on the profile id left it sitting at a bare
+    # REPL. A profile id still implies a login on its own: an older frontend
+    # sends only that.
+    is_login = bool(payload.get("is_login")) or bool(login_profile_id)
     if login_profile_id:
         profile = app.cli_profiles_store.get(login_profile_id)
         if (
@@ -5398,10 +5406,25 @@ async def _terminal_create_impl(
         # live credentials, and the login-home harvest (on account switch)
         # must wait for it to exit (see _running_login_terminals).
         metadata["login_profile_id"] = login_profile_id
+    if is_login:
         # Run the CLI's direct sign-in trigger (e.g. `claude auth login`) so
         # the browser authorization opens by itself — the user never types a
-        # command in the login pane.
+        # command in the login pane. Ahead of the codex home block on purpose:
+        # the rewritten command carries no resume id, so a login pane takes the
+        # fresh-home path instead of being bound to a session's home.
         payload["command"] = app._login_spawn_command(agent_key, payload["command"])
+    elif app._agent_signed_out(agent_key):
+        # Installed, but with no credentials to run on — the counterpart to
+        # cli.missing, which only ever fires for a CLI that is not there at
+        # all. Advisory: unlike cli.missing the spawn is perfectly valid and
+        # goes ahead, and the vendor's own prompt stays the fallback. A login
+        # pane is skipped by the `elif`: being signed out is its premise.
+        dep = app.onboarding_deps.DEPS_BY_ID.get(agent_key)
+        await session.send_json(make_event("cli.signed_out", {
+            "agent_key": agent_key,
+            "label": dep.label if dep else agent_key,
+            "pane_id": str(payload.get("pane_id") or ""),
+        }))
     if agent_key == "codex" and not login_profile_id:
         # Compatibility: `codex resume <id>` only works inside the home
         # that recorded the session. Resume in whichever home owns it;

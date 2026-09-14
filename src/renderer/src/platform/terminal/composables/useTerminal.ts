@@ -4063,6 +4063,7 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
         metadata: opts.metadata ?? null,
         outputLogFile: opts.outputLogFile ?? null,
         loginProfileId: opts.loginProfileId ?? null,
+        isLogin: opts.isLogin ?? false,
         replacesTerminalId: replacesPtyId || null,
       }, TERMINAL_CREATE_TIMEOUT_MS)
       // A cancellation or replacement can land while the RPC is in flight.

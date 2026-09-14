@@ -5600,6 +5600,7 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
       restoreMode: opts.restoreMode,
       skipReattach: opts.restoreMode === 'fresh',
       loginProfileId: opts.loginProfileId,
+      isLogin: opts.isLogin,
     })
 
     // The path above is derived from THIS pane's id, but a spawn that
