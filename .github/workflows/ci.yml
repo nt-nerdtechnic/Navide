@@ -288,7 +288,7 @@ jobs:
     # discarded the log (verified again after the suite was green detached),
     # so backend/ci_windows_tests.py runs it detached under a Job Object.
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - name: Check out source
@@ -327,9 +327,9 @@ jobs:
         # pwsh, not bash: Start-Sleep is in-process, so this step has no
         # children at all and ends when the marker appears or at the cap.
         shell: pwsh
-        timeout-minutes: 25
+        timeout-minutes: 35
         run: |
-          $deadline = (Get-Date).AddMinutes(24)
+          $deadline = (Get-Date).AddMinutes(34)
           $seen = 0
           while (-not (Test-Path ci-windows-tests.done) -and (Get-Date) -lt $deadline) {
             Start-Sleep -Seconds 30

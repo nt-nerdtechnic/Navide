@@ -33,7 +33,12 @@ import psutil
 LOG = "pytest.log"
 WRAPPER_LOG = "ci-windows-tests.log"
 DONE = "ci-windows-tests.done"
-CAP_SECONDS = 20 * 60
+# The suite outgrew 20 minutes on 2026-09-14: main at 78954961 was killed here
+# with 5530 of ~5630 results in, while the same suite had finished in 16m30s on
+# a faster runner an hour earlier. Every layer above this has to stay longer
+# than it or the cap stops being the thing that decides: the waiting step polls
+# for 34 minutes with a 35-minute step timeout, inside a 45-minute job.
+CAP_SECONDS = 30 * 60
 REPORT_EVERY = 60
 RESULT_RE = re.compile(r" (PASSED|FAILED|SKIPPED|ERROR|XFAIL|XPASS)")
 
