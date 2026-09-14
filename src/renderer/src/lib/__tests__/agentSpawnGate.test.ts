@@ -68,6 +68,21 @@ describe('evaluateSpawnRequest', () => {
     }
   })
 
+  it('rejects an empty task on a fresh spawn', () => {
+    const res = evaluateSpawnRequest({ ...goodReq, task: '' }, ctx())
+    expect(res.ok).toBe(false)
+    if (!res.ok) expect(res.reason).toContain('task')
+  })
+
+  it('accepts an empty task when the request resumes a conversation', () => {
+    // A resumed conversation already has its own context; the caller may only
+    // want it back on screen and talk to it later with cli_send. A fresh pane
+    // with nothing to do is still refused above — this flag is the only thing
+    // that changes the answer.
+    const res = evaluateSpawnRequest({ ...goodReq, task: '', resumesSession: true }, ctx())
+    expect(res).toEqual({ ok: true, agentKey: 'claude', name: 'worker-2', task: '' })
+  })
+
   it('rejects a name collision without renaming', () => {
     const res = evaluateSpawnRequest(goodReq, ctx({ isNameTaken: (n) => n === 'worker-2' }))
     expect(res.ok).toBe(false)

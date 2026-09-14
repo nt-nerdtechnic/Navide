@@ -162,10 +162,13 @@ describe('every rebuild/restore spawnPane call site carries the model', () => {
   }
 
   it('finds every reconstruction call site', () => {
-    // onManualResume, rebuildPaneViaResume, rebuildPaneClean, spawnRestoredPane.
+    // onManualResume, rebuildPaneViaResume, rebuildPaneClean, spawnRestoredPane,
+    // plus the two cli_open_agent paths — createRequestedPane and
+    // createStandaloneRequestedPane declare isResume when `session_id` names a
+    // conversation to continue, which makes them reconstruction sites too.
     // Exact, not a floor: a new reconstruction path has to come here and be
     // added to the walk rather than quietly launching on the vendor default.
-    expect(rebuildSites.map(([where]) => where)).toHaveLength(4)
+    expect(rebuildSites.map(([where]) => where)).toHaveLength(6)
   })
 
   it.each(rebuildSites)('%s asks spawnPane for the pane\'s model', (_where, options) => {
@@ -249,7 +252,7 @@ describe('cli_open_agent — the MCP path from event to persistence', () => {
     expect(body).toContain('model: string')
     expect(body).toContain('effort: string')
     expect(body).toContain(
-      'evaluateSpawnRequest(\n    { agent: ev.agent_key, name: ev.name, task: ev.task, model: ev.model, effort: ev.effort },',
+      'evaluateSpawnRequest(\n    { agent: ev.agent_key, name: ev.name, task: ev.task, model: ev.model, effort: ev.effort, resumesSession:',
     )
   })
 
@@ -340,20 +343,46 @@ describe('a remote caller cannot supply a raw command', () => {
     })
   }
 
-  it('hardcodes an empty override on every externally reachable spawn', () => {
+  it('never lets an externally reachable spawn take a command from its caller', () => {
     // createRequestedPane / createStandaloneRequestedPane are cli_open_agent
     // (and the SPAWN block, which routes through the first). ui.pane.create is
     // reachable through ui_invoke. These three are the ways a caller that is
     // not sitting at this machine can open a pane.
+    //
+    // The property is about PROVENANCE, not emptiness: the string handed to
+    // spawnPane must be one this window built, never one that travelled in. The
+    // two cli_open_agent paths are allowed to build a resume command out of a
+    // session id (the `session_id` argument), because the id is checked for
+    // shape and existence in the backend tool and the vendor syntax around it
+    // is ours — see mcpSpawnCommandOverride and App.resumeSession.test.ts. What
+    // they must never do is take a command, or any part of one, off the event.
     const reachable = ['createRequestedPane', 'createStandaloneRequestedPane']
     for (const owner of reachable) {
       const site = sites.find((s) => s.owner === owner)
       expect(site, `${owner} no longer calls spawnPane`).toBeDefined()
-      expect(site?.override, `${owner} (App.vue:${site?.line})`).toBe("''")
+      // A variable, not the call inline — so the binding is pinned separately
+      // below. What matters is that the value is one this window computed.
+      expect(site?.override, `${owner} (App.vue:${site?.line})`).toBe('mcpCommand')
+      expect(fn(owner), `${owner} must derive its override from the builder`)
+        .toContain('const mcpCommand = mcpSpawnCommandOverride(req)')
     }
 
+    // The builder's only input is the session id; it composes the rest itself.
+    // A `command`/`commandOverride` reaching it would mean a caller-supplied
+    // string had found a way through after all.
+    const builder = fn('mcpSpawnCommandOverride')
+    expect(builder).toContain('buildResumeCommand(')
+    expect(builder).not.toMatch(/\breq\.command\b/)
+    expect(builder).not.toMatch(/\breq\.commandOverride\b/)
+
+    // And nothing hands a raw command to the MCP spawn entry point either.
+    const handler = fn('handleMcpSpawnRequest')
+    expect(handler).not.toMatch(/\bev\.command\b/)
+    expect(handler).not.toMatch(/\bev\.commandOverride\b/)
+
     // ui.pane.create is an arrow-function handler with no name to match on, so
-    // it is anchored on its own error text instead.
+    // it is anchored on its own error text instead. It has no resume path, so
+    // for that one the override is still hardcoded empty.
     const anchor = appSource.indexOf('ui.pane.create requires an agent')
     expect(anchor, 'ui.pane.create handler not found').toBeGreaterThan(-1)
     const call = appSource.indexOf('spawnPane({', anchor)
@@ -361,7 +390,7 @@ describe('a remote caller cannot supply a raw command', () => {
     expect(optionsAt(call)).toMatch(/\bcommandOverride:\s*''/)
   })
 
-  it('lets only local and restore paths supply one', () => {
+  it('lets only local, restore and verified-resume paths supply one', () => {
     // A site that passes anything other than '' has to appear here, so adding
     // one is a decision someone makes on purpose rather than a default they
     // inherit. If a new name shows up, the question to answer before adding it
@@ -371,6 +400,13 @@ describe('a remote caller cannot supply a raw command', () => {
     // is not a separate exit and does not belong here.
     const filled = sites.filter((s) => s.override !== "''").map((s) => s.owner)
     expect([...new Set(filled)].sort()).toEqual([
+      // MCP-reachable, and the answer to the question above is "yes, it can".
+      // Admitted deliberately: the caller supplies a session ID, never a
+      // command — the backend refuses an id that is not on disk or that
+      // carries shell syntax, and the command around it is built here by the
+      // same buildResumeCommand the two paths below use.
+      'createRequestedPane',
+      'createStandaloneRequestedPane',
       'onManualResume', // the user pressing resume, with their own binary choice
       'rebuildPaneViaResume', // rebuild of a live pane; buildResumeCommand made it
       'spawnRestoredPane', // restore; the override arrives already rebuilt

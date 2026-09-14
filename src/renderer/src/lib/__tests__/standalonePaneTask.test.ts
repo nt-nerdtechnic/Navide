@@ -39,6 +39,26 @@ describe('lib/standalonePaneTask injectStandaloneTask', () => {
     expect(d.onKill).not.toHaveBeenCalled()
   })
 
+  it('waits much longer for a RESUMED CLI to settle before injecting', async () => {
+    // A fresh CLI prints its banner and is ready. A resumed one reloads the
+    // transcript first — observed 20-30s of silence on a real session — and
+    // the 1s/8s wait injected into a CLI that was not listening, saw no echo,
+    // and killed the pane as a failed launch. Resume gets its own thresholds.
+    const d = deps()
+    const ok = await injectStandaloneTask('pane-1', 'carry on', 'mcp-task', d, { resume: true })
+    expect(ok).toBe(true)
+    expect(d.waitForQuiet).toHaveBeenCalledWith('pane-1', 3000, 60_000)
+    expect(d.waitForQuiet).not.toHaveBeenCalledWith('pane-1', 1000, 8000)
+    expect(d.injectPane).toHaveBeenCalledWith('pane-1', 'carry on', 'mcp-task', true)
+  })
+
+  it('a resume with no task still injects nothing', async () => {
+    const d = deps()
+    expect(await injectStandaloneTask('pane-1', '', 'mcp-task', d, { resume: true })).toBe(true)
+    expect(d.waitForQuiet).not.toHaveBeenCalled()
+    expect(d.injectPane).not.toHaveBeenCalled()
+  })
+
   it('skips the dialog-dismiss fallback when the marker bootstrap already settled the CLI', async () => {
     const d = deps({ sendSessionMarkerBootstrap: vi.fn(async () => true) })
     await injectStandaloneTask('pane-1', 'do the thing', 'mcp-task', d)

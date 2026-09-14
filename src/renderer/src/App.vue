@@ -7,6 +7,7 @@ import RestoredPanePlaceholder from './components/RestoredPanePlaceholder.vue'
 import { buildWorkspaceGroups } from './lib/workspaceGroups'
 import { workspaceAliasKey } from './lib/workspaceAlias'
 import { buildPaneLineage, withDescendants } from './lib/paneLineage'
+import { resolveLineageDrop, resolveRootDrop, type LineageDropDecision } from './lib/lineageDrop'
 import { ancestorTrail } from './lib/paneListView'
 import { subtreeSignals } from './lib/paneSubtreeStatus'
 import { closeAdvisoriesFor } from './lib/paneCloseAdvisories'
@@ -2385,21 +2386,97 @@ async function handleSpawnRequestsForTurn(
  *  quick and settles the pane's real identity, while the kickoff waits on the
  *  CLI to boot — a caller that needs to be told what it got should be told
  *  here, not tens of seconds later. */
+/** The launch command for an MCP spawn: '' for an ordinary fresh pane, and the
+ *  vendor's own resume command when cli_open_agent named a session to continue.
+ *
+ *  The id itself was already checked against the vendor's session store in the
+ *  backend tool, before the request was broadcast — this is the other half of
+ *  that guarantee, turning the id into `claude --resume <id>` / `codex resume
+ *  <id>` / … through the same builder every restore and Rebuild path uses.
+ *  commandWithSelectedBinary wraps it for the same reason those do: a custom
+ *  binary override has to survive a resume, or the pane reopens on the wrong
+ *  executable.
+ */
+function mcpSpawnCommandOverride(req: {
+  agentKey: string
+  model?: string
+  effort?: string
+  sessionId?: string
+}): string {
+  const sessionId = (req.sessionId ?? '').trim()
+  if (!sessionId) return ''
+  const spec = agentSpecs.find((s) => s.agentKey === req.agentKey)
+  const resume = buildResumeCommand(req.agentKey, sessionId, skipFlagFor(req.agentKey, spec), '', {
+    model: req.model ?? '',
+    effort: req.effort ?? '',
+  })
+  if (!resume) {
+    // Defensive: the tool refuses a vendor with no session store before it gets
+    // here, so this is a spec that changed under us. Fresh is the only thing
+    // left to open, but it must be recorded — a pane that silently starts empty
+    // when a conversation was asked for is the exact failure the id check
+    // upstream exists to prevent, and ui_diagnostics is where the caller can
+    // still find out.
+    recordDiagnostic({
+      level: 'warn',
+      code: 'spawn.resume-unavailable',
+      message: `${req.agentKey} has no id-based resume — opening a fresh pane instead of session ${sessionId}`,
+    })
+    return ''
+  }
+  return commandWithSelectedBinary(req.agentKey, resume)
+}
+
+/** A recorded run-group id, if that tab still exists in the workspace; ''
+ *  otherwise. The pane record outlives the tab it names — closeRunGroup drops
+ *  the group and leaves every record's run_group_id in place — and a pane
+ *  placed in a group no tab knows is invisible until adoptOrphanRunGroups
+ *  runs on the next workspace load. */
+function resumableGroupId(recorded: string | undefined, workspacePath: string): string {
+  const id = (recorded ?? '').trim()
+  if (!id) return ''
+  return runGroupsOf(workspacePath).some((g) => g.id === id) ? id : ''
+}
+
 async function createRequestedPane(
   parent: ActivePane,
-  req: { agentKey: string; name: string; model?: string; effort?: string },
+  req: { agentKey: string; name: string; model?: string; effort?: string; sessionId?: string; resumeSpawnedBy?: string; resumeRunGroupId?: string },
 ): Promise<string | null> {
+  const mcpCommand = mcpSpawnCommandOverride(req)
+  const mcpResumeId = mcpCommand ? (req.sessionId ?? '').trim() : ''
+  // Resuming is not opening a new pane under the caller — it is putting a
+  // conversation back where it was. A pane's record outlives the pane, so the
+  // backend read the parent and tab group this conversation last sat in; both
+  // are applied verbatim, INCLUDING an empty parent, because "" means that
+  // pane was a root and belongs back at the root rather than parented onto
+  // whoever happened to ask for it. Keyed off mcpResumeId, not sessionId, so a
+  // vendor that fell back to a fresh spawn is parented normally.
+  const resumeSpawnedBy = mcpResumeId ? (req.resumeSpawnedBy ?? '') : parent.id
+  // The recorded group is where the conversation last sat — but that tab may
+  // have been closed since (closeRunGroup drops the group; the pane record
+  // keeps its id). A pane placed in a group no tab knows is shown on neither
+  // 手動 nor any tab until the next restart, so fall back to the caller's.
+  const resumeRunGroupId = mcpResumeId
+    ? (resumableGroupId(req.resumeRunGroupId, parent.workspacePath) || parent.runGroupId)
+    : parent.runGroupId
   const paneId = await spawnPane({
     agentKey: req.agentKey,
     roleKey: '' as RoleKey,
     stageId: '' as StageId,
     customName: req.name,
-    commandOverride: '',
+    commandOverride: mcpCommand,
+    // A pane opened onto an existing conversation has to SAY it is a resume:
+    // spawnPane otherwise pins a fresh Claude --session-id on top of the
+    // `--resume <id>` this override already carries, and the CLI refuses both
+    // (exit 1 ~2s after spawn, before it boots). An empty override means the
+    // vendor had no id-based resume and we fell back to fresh — not a resume.
+    isResume: !!mcpResumeId,
+    resumeSessionId: mcpResumeId || undefined,
     workspacePath: parent.workspacePath,
     origin: 'mcp',
-    runGroupId: parent.runGroupId,
+    runGroupId: resumeRunGroupId,
     preferredMessagingName: req.name,
-    spawnedBy: parent.id,
+    spawnedBy: resumeSpawnedBy,
     model: req.model,
     effort: req.effort,
   })
@@ -2419,12 +2496,19 @@ async function createRequestedPane(
     // record alone.
     model: req.model ?? '',
     effort: req.effort ?? '',
-    session_id: panes.value.find((p) => p.id === paneId)?.pinnedSessionId ?? '',
+    // On the resume path the id is known before the CLI has said anything, and
+    // pinnedSessionId is only set once it does — so fall back to the id the
+    // pane was launched with, or the next restart reopens it fresh and loses
+    // the very conversation it was opened to continue.
+    session_id:
+      panes.value.find((p) => p.id === paneId)?.pinnedSessionId || (req.sessionId ?? ''),
     session_home_id: panes.value.find((p) => p.id === paneId)?.sessionHomeId ?? '',
-    run_group_id: parent.runGroupId ?? '',
+    run_group_id: resumeRunGroupId ?? '',
     output_log_file: panes.value.find((p) => p.id === paneId)?.outputLogFile ?? '',
     origin: 'mcp',
-    spawned_by: parent.id,
+    // Must agree with where the pane was actually placed, or the next restore
+    // pulls a resumed conversation back under the caller.
+    spawned_by: resumeSpawnedBy,
   })
   void sendQuiet('project.rename_pane', {
     workspace_path: parent.workspacePath,
@@ -2468,19 +2552,38 @@ function standaloneTaskDeps(): StandaloneTaskInjectionDeps {
  *  would never actually be injected. */
 async function createStandaloneRequestedPane(
   workspacePath: string,
-  req: { agentKey: string; name: string; task: string; model?: string; effort?: string },
+  req: { agentKey: string; name: string; task: string; model?: string; effort?: string; sessionId?: string; resumeSpawnedBy?: string; resumeRunGroupId?: string },
 ): Promise<string | null> {
-  const runGroupId = resolveManualSpawnGroupId(runGroups.value, activeTab.value)
+  const mcpCommand = mcpSpawnCommandOverride(req)
+  const mcpResumeId = mcpCommand ? (req.sessionId ?? '').trim() : ''
+  // Same rule as createRequestedPane: a resumed conversation goes back to the
+  // group it sat in and under the parent it had. A standalone spawn has no
+  // requesting pane, so a fresh one is a root in the active tab's group — but
+  // a resumed one must not be, or every resume from an external client would
+  // strand the conversation as an orphan at the root.
+  const runGroupId = mcpResumeId
+    ? (resumableGroupId(req.resumeRunGroupId, workspacePath)
+        || resolveManualSpawnGroupId(runGroups.value, activeTab.value))
+    : resolveManualSpawnGroupId(runGroups.value, activeTab.value)
+  const resumeSpawnedBy = mcpResumeId ? (req.resumeSpawnedBy ?? '') : ''
   const paneId = await spawnPane({
     agentKey: req.agentKey,
     roleKey: '' as RoleKey,
     stageId: '' as StageId,
     customName: req.name,
-    commandOverride: '',
+    commandOverride: mcpCommand,
+    // A pane opened onto an existing conversation has to SAY it is a resume:
+    // spawnPane otherwise pins a fresh Claude --session-id on top of the
+    // `--resume <id>` this override already carries, and the CLI refuses both
+    // (exit 1 ~2s after spawn, before it boots). An empty override means the
+    // vendor had no id-based resume and we fell back to fresh — not a resume.
+    isResume: !!mcpResumeId,
+    resumeSessionId: mcpResumeId || undefined,
     workspacePath,
     origin: 'mcp',
     runGroupId: runGroupId || undefined,
     preferredMessagingName: req.name,
+    spawnedBy: resumeSpawnedBy || undefined,
     model: req.model,
     effort: req.effort,
   })
@@ -2495,11 +2598,17 @@ async function createStandaloneRequestedPane(
     // the pane record. '' means "not requested" and does not overwrite.
     model: req.model ?? '',
     effort: req.effort ?? '',
-    session_id: panes.value.find((p) => p.id === paneId)?.pinnedSessionId ?? '',
+    // Same fallback as createRequestedPane: a resumed pane knows its id before
+    // the CLI has pinned one.
+    session_id:
+      panes.value.find((p) => p.id === paneId)?.pinnedSessionId || (req.sessionId ?? ''),
     session_home_id: panes.value.find((p) => p.id === paneId)?.sessionHomeId ?? '',
     run_group_id: runGroupId,
     output_log_file: panes.value.find((p) => p.id === paneId)?.outputLogFile ?? '',
     origin: 'mcp',
+    // Written so the record agrees with the tree; a failed resume that wrote
+    // '' here would otherwise become the "last position" of the conversation.
+    spawned_by: resumeSpawnedBy,
   })
   void sendQuiet('project.rename_pane', {
     workspace_path: workspacePath,
@@ -2508,7 +2617,9 @@ async function createStandaloneRequestedPane(
   })
   const pane = panes.value.find((p) => p.id === paneId)
   if (!pane || pane.preparationStatus === 'failed') return null
-  const injected = await injectStandaloneTask(paneId, req.task, 'mcp-task', standaloneTaskDeps())
+  const injected = await injectStandaloneTask(paneId, req.task, 'mcp-task', standaloneTaskDeps(), {
+    resume: !!mcpResumeId,
+  })
   if (!injected) return null
   return paneId
 }
@@ -2531,6 +2642,8 @@ function standaloneSpawnGateContext() {
  *  typed regardless. Past it the old behaviour (type and hope) is the only
  *  option left, and a diagnostic says the gate never opened. */
 const KICKOFF_PROMPT_READY_TIMEOUT_MS = 30_000
+// A resumed CLI reloads its transcript first (see kickoffRequestedPane).
+const KICKOFF_PROMPT_READY_TIMEOUT_RESUME_MS = 90_000
 /** Clean-buffer silence a prompt-ready pane must show. The same window the
  *  messaging gate calls `settling`: a TUI that is still painting its first
  *  screen keeps producing clean output in bursts shorter than this. */
@@ -2582,6 +2695,7 @@ async function kickoffRequestedPane(
   parentName: string,
   task: string,
   requestId?: string,
+  opts: { resume?: boolean } = {},
 ): Promise<boolean> {
   // Built before the pane lookup: that lookup has its own early return, and a
   // caller blocked on the verdict would otherwise wait out the whole deadline
@@ -2598,6 +2712,16 @@ async function kickoffRequestedPane(
     emitKickoffVerdict('failed', 'the pane was gone before its task could be typed')
     return false
   }
+  // A resumed conversation with no task: leave it exactly as it was. Typing
+  // renderSpawnKickoff('') would submit a bare report-back instruction into a
+  // conversation that was asked nothing, and the tool would then block on a
+  // verdict for a task that does not exist. The gate only lets an empty task
+  // through on a resume, so this branch is that case and nothing else.
+  if (!task) {
+    pane.kickoffStatus = 'none'
+    emitKickoffVerdict('sent', 'no task — the resumed conversation was left as it was')
+    return true
+  }
   // The pane's own task has to land before anything else may type into it: a
   // CLI still booting can be sitting on a trust dialog, where an injected
   // message plus its newline would answer the prompt. The messaging idle gate
@@ -2610,14 +2734,20 @@ async function kickoffRequestedPane(
       await dismissStartupDialog(paneId, DISMISS_TIMEOUT_MS)
       await waitForStartupActivity(paneId)
     }
-    const promptReady = await waitForPromptReady(paneId, KICKOFF_PROMPT_READY_TIMEOUT_MS)
+    // A resumed CLI reloads its transcript before it prints or listens —
+    // observed 20-30s of silence on a real claude session — so the deadline a
+    // fresh banner fits in would type the kickoff into a CLI not yet reading.
+    const promptReadyTimeoutMs = opts.resume
+      ? KICKOFF_PROMPT_READY_TIMEOUT_RESUME_MS
+      : KICKOFF_PROMPT_READY_TIMEOUT_MS
+    const promptReady = await waitForPromptReady(paneId, promptReadyTimeoutMs)
     if (!paneAlive(paneId)) return false
     if (!promptReady) {
       recordDiagnostic({
         level: 'warn',
         code: 'spawn.prompt-ready-timeout',
         message:
-          `pane never read idle+quiet within ${KICKOFF_PROMPT_READY_TIMEOUT_MS}ms — ` +
+          `pane never read idle+quiet within ${promptReadyTimeoutMs}ms — ` +
           'typing the kickoff anyway',
         paneId,
       })
@@ -2778,6 +2908,14 @@ async function handleMcpSpawnRequest(ev: {
   target_workspace?: string
   model: string
   effort: string
+  /** An existing CLI conversation this pane resumes instead of starting fresh.
+   *  Absent on every ordinary spawn; the backend verified the id against the
+   *  vendor's session store before broadcasting. */
+  session_id?: string
+  /** The position that conversation last occupied — parent pane and tab group.
+   *  An empty parent is a real answer (it was a root), not a missing one. */
+  resume_spawned_by?: string
+  resume_run_group_id?: string
 }): Promise<void> {
   const standalone = !!ev.target_workspace
   let parent: ActivePane | undefined
@@ -2819,7 +2957,7 @@ async function handleMcpSpawnRequest(ev: {
   }
 
   const gate = evaluateSpawnRequest(
-    { agent: ev.agent_key, name: ev.name, task: ev.task, model: ev.model, effort: ev.effort },
+    { agent: ev.agent_key, name: ev.name, task: ev.task, model: ev.model, effort: ev.effort, resumesSession: !!(ev.session_id ?? '').trim() },
     parent ? spawnGateContextFor(parent.id) : standaloneSpawnGateContext(),
   )
   if (!gate.ok) {
@@ -2839,9 +2977,12 @@ async function handleMcpSpawnRequest(ev: {
   }
   let paneId: string | null = null
   try {
+    // The gate decides identity (name collisions, model/effort); the session to
+    // resume is not its business, so it rides alongside rather than through it.
+    const spawnReq = { ...gate, sessionId: (ev.session_id ?? '').trim(), resumeSpawnedBy: ev.resume_spawned_by ?? '', resumeRunGroupId: ev.resume_run_group_id ?? '' }
     paneId = parent
-      ? await createRequestedPane(parent, gate)
-      : await createStandaloneRequestedPane(ev.target_workspace as string, gate)
+      ? await createRequestedPane(parent, spawnReq)
+      : await createStandaloneRequestedPane(ev.target_workspace as string, spawnReq)
   } catch (err) {
     report({ ok: false, error: err instanceof Error ? err.message : String(err) })
     return
@@ -2890,7 +3031,9 @@ async function handleMcpSpawnRequest(ev: {
   notifyRestore.toast(i18n.global.t('msg.spawn-toast', { parent: parentName, child: childName }))
   report({ ok: true, paneId, name: childName, advisories: gate.advisories })
 
-  void kickoffRequestedPane(paneId, parentName, gate.task, ev.request_id)
+  void kickoffRequestedPane(paneId, parentName, gate.task, ev.request_id, {
+    resume: !!(ev.session_id ?? '').trim(),
+  })
     .then((ok) => {
       if (!ok) {
         sendSpawnFeedback(parentName, 'partial', `pane「${childName}」已開啟，但任務注入失敗，請自行確認`)
@@ -3139,6 +3282,8 @@ function syncViews(): void {
       kickoffStatus: p.kickoffStatus,
       origin: p.origin,
       spawnedBy: p.spawnedBy,
+      workspacePath: p.workspacePath,
+      runGroupId: p.runGroupId,
       collapsed: collapsedPanes.value.has(p.id),
       isCommander: paneIsCommander(p),
       sessionId: p.pinnedSessionId,
@@ -7660,6 +7805,54 @@ registerCommand('ui.pane.focus', (args) => {
   if (!paneId) throw new Error(`ui.pane.focus requires ${PANE_ID_HINT}`)
   onFocusPane(paneId)
 })
+// Where a pane sits: its tab group and its parent. Both halves are optional
+// and independent — pass only what should change; a key that is absent is
+// left alone, and '' is a real value for each (the ungrouped 手動 tab, and
+// the root of the lineage). Group first, then parent: a parent refusal must
+// not undo a group move that already landed, and the answer says which half
+// was applied. Same write paths as dragging a pane in the sidebar.
+registerCommand('ui.pane.place', async (args) => {
+  const a = (args as { paneId?: string; runGroupId?: string; spawnedBy?: string } | undefined) ?? {}
+  if (!a.paneId) throw new Error(`ui.pane.place requires ${PANE_ID_HINT}`)
+  const pane = panes.value.find((p) => p.id === a.paneId)
+  if (!pane) throw new Error(`ui.pane.place: pane "${a.paneId}" not found`)
+  if (a.runGroupId === undefined && a.spawnedBy === undefined) {
+    throw new Error('ui.pane.place: pass runGroupId and/or spawnedBy — nothing to change')
+  }
+  const applied: { runGroupId?: string; spawnedBy?: string } = {}
+  if (a.runGroupId !== undefined) {
+    const targetGroupId = a.runGroupId
+    // Against the PANE's workspace, not the viewed one: a pane held in a
+    // non-viewed workspace of this window has its own tabs.
+    if (targetGroupId && !runGroupsOf(pane.workspacePath).some((g) => g.id === targetGroupId)) {
+      throw new Error(`ui.pane.place: unknown run group "${a.runGroupId}"`)
+    }
+    // This one pane only — not movePaneToGroup, which moves the whole sidebar
+    // multi-selection the pane may happen to be part of. An MCP caller named
+    // one pane; a UI selection it cannot see must not widen that.
+    if ((pane.runGroupId ?? '') !== targetGroupId) {
+      const previous = pane.runGroupId
+      pane.runGroupId = targetGroupId || undefined
+      // Same rollback as the drag path: a pane shown under a tab its record
+      // does not name is a move that did not happen.
+      if (!(await persistPaneRunGroup(pane, targetGroupId))) {
+        pane.runGroupId = previous
+        throw new Error('ui.pane.place: the group move did not persist')
+      }
+    }
+    applied.runGroupId = targetGroupId
+  }
+  if (a.spawnedBy !== undefined) {
+    await reparentPane(a.paneId, a.spawnedBy)
+    applied.spawnedBy = a.spawnedBy
+  }
+  return {
+    paneId: a.paneId,
+    applied,
+    runGroupId: pane.runGroupId ?? '',
+    spawnedBy: pane.spawnedBy ?? '',
+  }
+})
 // The official form of what ui.pane.focus does as a side effect: open a
 // cold-restore placeholder. Unlike focus it waits for the restore to finish,
 // reports why it did or did not open, and — because the caller named ONE pane
@@ -11464,6 +11657,14 @@ backend.on('agent_spawn.request', (raw) => {
     // would silently launch on the vendor default.
     model?: string
     effort?: string
+    // Likewise: dropped here and the pane opens on a FRESH conversation while
+    // the tool has already answered `resumed_session_id`, which is the one
+    // failure the id check in the backend exists to prevent.
+    session_id?: string
+    // Where the resumed conversation sat: the parent pane and tab group its
+    // own record remembers. Only meaningful alongside session_id.
+    resume_spawned_by?: string
+    resume_run_group_id?: string
   }
   // An external caller (no requesting pane) addresses this by target_workspace
   // instead — accept the event as long as one of the two identifies an owner.
@@ -11483,6 +11684,9 @@ backend.on('agent_spawn.request', (raw) => {
     target_workspace: ev.target_workspace,
     model: ev.model ?? '',
     effort: ev.effort ?? '',
+    session_id: ev.session_id ?? '',
+    resume_spawned_by: ev.resume_spawned_by ?? '',
+    resume_run_group_id: ev.resume_run_group_id ?? '',
   })
 })
 
@@ -13823,6 +14027,18 @@ function _cacheRunGroups(path: string, groups: readonly RunGroup[]): void {
   runGroupsByWorkspace.value = { ...runGroupsByWorkspace.value, [key]: [...groups] }
 }
 
+/** The run groups of ONE workspace this window holds — the live list for the
+ *  workspace on screen, the cached list for any other. A pane's group id is
+ *  only meaningful against its own workspace's list; checking it against
+ *  `runGroups` (the viewed workspace) refuses valid ids of a non-viewed pane
+ *  and accepts foreign ones — the cross-workspace write `_saveRunGroups`
+ *  guards against. */
+function runGroupsOf(workspacePath: string): readonly RunGroup[] {
+  const key = normWs(workspacePath)
+  if (!key || key === normWs(currentWorkspace.value)) return runGroups.value
+  return runGroupsByWorkspace.value[key] ?? []
+}
+
 /** Forget a workspace the window no longer holds, so taking it on again loads
  *  its records rather than showing the list it had when it was let go. */
 function _forgetRunGroups(path: string): void {
@@ -14145,6 +14361,43 @@ async function persistPaneRunGroup(pane: ActivePane, runGroupId: string): Promis
   return resp !== null
 }
 
+/** Make `spawnedBy` the parent of `paneId` ('' = make it a root), persisting
+ *  first and applying the in-memory change only once the record holds it. The
+ *  order matters: the sidebar draws lineage from the live pane objects, so a
+ *  tree shown here that the record does not hold would be undone by the next
+ *  restore without a word. The backend refuses a parent that is the pane
+ *  itself or one of its descendants (`LINEAGE_CYCLE`), a parent this workspace
+ *  does not hold (`PARENT_NOT_FOUND`), and an unknown pane — each surfaced as
+ *  the thrown error's message so a ui_invoke caller reads the reason rather
+ *  than `ok: false`. */
+async function reparentPane(paneId: string, spawnedBy: string): Promise<void> {
+  const pane = panes.value.find((p) => p.id === paneId)
+  if (!pane) throw new Error(`unknown pane ${paneId}`)
+  const ws = pane.workspacePath || currentWorkspace.value
+  if (!ws) throw new Error('reparentPane: no workspace')
+  if (spawnedBy) {
+    const parent = panes.value.find((p) => p.id === spawnedBy)
+    if (!parent) throw new Error(`unknown parent pane ${spawnedBy}`)
+    if (parent.workspacePath !== pane.workspacePath) {
+      throw new Error('a pane can only be parented to a pane in its own workspace')
+    }
+  }
+  if ((pane.spawnedBy ?? '') === spawnedBy) return
+  const resp = await backend.send('pane.set_parent', {
+    workspace_path: ws,
+    pane_id: paneId,
+    spawned_by: spawnedBy,
+  })
+  if (!resp?.ok) {
+    throw new Error(String(resp?.error?.message ?? resp?.error ?? 'reparent refused'))
+  }
+  pane.spawnedBy = spawnedBy || undefined
+  // The messaging registry is the only copy of spawned_by cli_whoami reads,
+  // and this mirror is the only writer of it — left alone, the child keeps
+  // answering with the old parent until its next rename or reconnect.
+  mirrorMessagingHandle(pane)
+}
+
 /** Persist the current pane order to project.json (survives restart). */
 async function persistPaneOrder(): Promise<void> {
   const ws = currentWorkspace.value
@@ -14458,6 +14711,57 @@ function reorderPane(fromId: string, toId: string): void {
   if (!reorderBatchByIds(panes.value, paneDragBatch(fromId), toId)) return
   syncViews() // reflect the new order in the Active Agents list immediately
   void persistPaneOrder()
+}
+
+/** Apply a lineage drop the helper accepted: parent changes first, then the
+ *  group moves that follow them, each through the write path that already
+ *  owns it. Parent BEFORE group — the opposite of ui.pane.place, whose two
+ *  halves are independent requests. Here the group move exists only to keep
+ *  the nested pane beside its new parent, and the helper's cycle check sees
+ *  this window's panes while the backend's walks the whole workspace record
+ *  (a detached window's panes included), so a parent the pre-check passed can
+ *  still be refused. Had the group moved first, that refusal would leave the
+ *  pane in the target's group without hanging under it. The first refused
+ *  parent write stops the rest — no group has moved yet, and any parent
+ *  written before it stays (each is a complete, valid nest on its own); a
+ *  failed group write skips only itself. Each write lands in the record before the pane
+ *  object changes, so a failure leaves that pane exactly as the sidebar
+ *  showed it. Both are logged rather than surfaced — the sidebar simply does
+ *  not move, which is what a refused drop looks like. */
+async function applyLineageDrop(decision: LineageDropDecision, what: string): Promise<void> {
+  if (!decision.ok) return
+  for (const w of decision.writes) {
+    try {
+      await reparentPane(w.paneId, w.spawnedBy)
+    } catch (err) {
+      pipelineLog(`✕ ${what}: ${w.paneId} → ${w.spawnedBy || 'root'} refused — ${String((err as Error)?.message ?? err)}`)
+      return
+    }
+  }
+  for (const w of decision.groupWrites) {
+    const pane = panes.value.find((p) => p.id === w.paneId)
+    if (!pane) continue
+    if (await persistPaneRunGroup(pane, w.runGroupId)) pane.runGroupId = w.runGroupId || undefined
+    else pipelineLog(`✕ ${what}: group move of ${w.paneId} did not persist`)
+  }
+}
+
+/** Sidebar drop on the middle of a row: `draggedId` — and the rest of its
+ *  multi-selection — becomes a child of `targetId`. */
+function nestPane(draggedId: string, targetId: string): void {
+  void applyLineageDrop(
+    resolveLineageDrop(paneDragBatch(draggedId), targetId, panes.value),
+    'nest pane',
+  )
+}
+
+/** Sidebar drop on a run group's header: the dragged batch becomes roots of
+ *  the lineage inside that group. */
+function rootPane(draggedId: string, workspacePath: string, runGroupId: string): void {
+  void applyLineageDrop(
+    resolveRootDrop(paneDragBatch(draggedId), workspacePath, runGroupId, panes.value),
+    'make pane root',
+  )
 }
 
 // The non-grid layouts render lightweight representations of panes outside
@@ -16797,6 +17101,8 @@ function paneIsCommander(p: ActivePane): boolean {
       @focus-pane="onSidebarFocusPane"
       @changes-count="gitChangesCount = $event"
       @reorder-pane="reorderPane"
+      @nest-pane="nestPane"
+      @root-pane="rootPane"
       @open-settings="showSettings = true"
       @open-pipeline-manager="openPipelineManager"
       @open-git-accounts="openSettingsAccounts"

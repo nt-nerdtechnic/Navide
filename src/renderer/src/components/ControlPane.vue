@@ -4,6 +4,7 @@ import type { PaneArgContext } from '@navide/plugin-shell'
 import { extractDropPaths, stabilizeDroppedPaths } from '../lib/drop'
 import { PANE_BATCH_MIME } from '@navide/terminal'
 import { resolveDragBatch } from '../lib/paneBatchDrag'
+import { resolveLineageDrop, resolveRootDrop } from '../lib/lineageDrop'
 import { setBatchDragImage } from '../lib/batchDragImage'
 import { paneStatusLabelText, type PaneStatusValue } from '../lib/paneStatusLabel'
 import { rollupPaneStatus } from '../lib/paneStatusRollup'
@@ -161,6 +162,14 @@ export interface ActivePaneView {
    *  verbatim — the tree itself is built in App's paneLineage, which is the
    *  structure layer this view model must not duplicate. */
   spawnedBy?: string
+  /** The workspace the pane runs in. Read by the nest-drop pre-check: a pane
+   *  can only be parented within its own workspace, and the row must not light
+   *  up for a drop the write would refuse. */
+  workspacePath: string
+  /** The pane's run group, absent for the ungrouped tab. Read by the
+   *  make-root pre-check: a root already sitting in the header's group has
+   *  nothing to gain from the drop, so its header must not light up. */
+  runGroupId?: string
   /** True when this pane's lineage subtree is folded in the lists. */
   collapsed?: boolean
   /** True when this pane corresponds to a slot marked is_commander=true in
@@ -1022,6 +1031,12 @@ const emit = defineEmits<{
   (e: 'pipeline-restart', payload: { task: string; workspacePath: string }): void
   (e: 'focus-pane', paneId: string, ev?: MouseEvent): void
   (e: 'reorder-pane', fromId: string, toId: string): void
+  /** A pane (and its multi-selection) dropped on the middle of another row:
+   *  make it that row's child. App resolves the batch and runs the writes. */
+  (e: 'nest-pane', draggedId: string, targetId: string): void
+  /** A pane dropped on a run group's header row: make it a root of the
+   *  lineage inside that group. */
+  (e: 'root-pane', draggedId: string, workspacePath: string, runGroupId: string): void
   (e: 'open-settings'): void
   (e: 'open-pipeline-manager', pipelineId?: string): void
   (e: 'open-history', workspacePath?: string): void
@@ -2459,11 +2474,46 @@ function onAgentDragEnd(e: DragEvent): void {
   draggingPaneId = ''
   draggingBatchIds.value = []
   reorderDragOverId.value = ''
+  nestDragOverId.value = ''
+  rootDragOverKey.value = ''
   // Cross-window handoff, same contract as TerminalPane's header dragend:
   // dropEffect 'none' ⇒ nothing in this window consumed the drag, so let main
   // route the pane to whatever window sits under the release point.
   if (!paneId || e.dataTransfer?.dropEffect !== 'none') return
   window.agentTeam?.cliPaneDragEnd?.(paneId, e.screenX, e.screenY, batch)
+}
+
+// A row is two drop targets stacked: its middle band nests the dragged pane
+// under it, its top and bottom edges keep the reorder that was here first.
+// The band is decided from the pointer's position over the row on every
+// dragover, so the same drag can slide from one meaning to the other.
+const nestDragOverId = ref('')
+/** True when the pointer sits in the nest band: 30%–70% of the row's NAME
+ *  line, not of the whole <li> — the focused row is expanded with detail
+ *  lines below the name, and measured whole its name sat in the top 30%, so
+ *  dropping on the focused pane's name could only ever reorder. */
+function inNestBand(e: DragEvent): boolean {
+  const li = e.currentTarget as HTMLElement
+  const rect = (li.querySelector('.agent-line') ?? li).getBoundingClientRect()
+  if (!rect.height) return false
+  const frac = (e.clientY - rect.top) / rect.height
+  return frac >= 0.3 && frac <= 0.7
+}
+/** Whether nesting this window's in-flight batch under `targetId` would be
+ *  accepted. Exact for a drag the sidebar started (the batch is known);
+ *  a drag from a pane header or a layout card carries an unreadable payload
+ *  during dragover, so it is allowed here and decided on drop. */
+function nestAllowed(targetId: string): boolean {
+  const batch = draggingBatchIds.value
+  if (!batch.length) return true
+  return resolveLineageDrop(batch, targetId, props.panes).ok
+}
+/** Same pre-check for the group header: the batch must belong to that
+ *  workspace, and must not already be roots of that group. */
+function rootAllowed(workspacePath: string, runGroupId: string): boolean {
+  const batch = draggingBatchIds.value
+  if (!batch.length) return true
+  return resolveRootDrop(batch, workspacePath, runGroupId, props.panes).ok
 }
 
 function onAgentDragOver(e: DragEvent, paneId: string): void {
@@ -2472,19 +2522,60 @@ function onAgentDragOver(e: DragEvent, paneId: string): void {
     || draggingBatchIds.value.includes(paneId)
     || !e.dataTransfer?.types.includes('application/x-pane-id')
   ) return
+  if (inNestBand(e)) {
+    reorderDragOverId.value = ''
+    if (!nestAllowed(paneId)) {
+      nestDragOverId.value = ''
+      return
+    }
+    nestDragOverId.value = paneId
+  } else {
+    nestDragOverId.value = ''
+    reorderDragOverId.value = paneId
+  }
   e.preventDefault()
-  reorderDragOverId.value = paneId
 }
 
 function onAgentDragLeave(paneId: string): void {
   if (reorderDragOverId.value === paneId) reorderDragOverId.value = ''
+  if (nestDragOverId.value === paneId) nestDragOverId.value = ''
 }
 
 function onAgentDrop(e: DragEvent, paneId: string): void {
   reorderDragOverId.value = ''
+  nestDragOverId.value = ''
   const draggedId = e.dataTransfer?.getData('application/x-pane-id') || ''
   if (!draggedId || draggedId === paneId) return
-  emit('reorder-pane', draggedId, paneId)
+  if (inNestBand(e)) emit('nest-pane', draggedId, paneId)
+  else emit('reorder-pane', draggedId, paneId)
+}
+
+// The group header is a third target: drop a pane on it to make it a root of
+// the lineage in that group. Only a workspace with real groups draws one, so
+// the ungrouped-only list has no make-root gesture.
+const rootDragOverKey = ref('')
+const groupDropKey = (workspacePath: string, runGroupId: string): string =>
+  `${workspacePath}/${runGroupId}`
+
+function onGroupDragOver(e: DragEvent, workspacePath: string, runGroupId: string): void {
+  if (!e.dataTransfer?.types.includes('application/x-pane-id')) return
+  if (!rootAllowed(workspacePath, runGroupId)) {
+    rootDragOverKey.value = ''
+    return
+  }
+  e.preventDefault()
+  rootDragOverKey.value = groupDropKey(workspacePath, runGroupId)
+}
+
+function onGroupDragLeave(workspacePath: string, runGroupId: string): void {
+  if (rootDragOverKey.value === groupDropKey(workspacePath, runGroupId)) rootDragOverKey.value = ''
+}
+
+function onGroupDrop(e: DragEvent, workspacePath: string, runGroupId: string): void {
+  rootDragOverKey.value = ''
+  const draggedId = e.dataTransfer?.getData('application/x-pane-id') || ''
+  if (!draggedId) return
+  emit('root-pane', draggedId, workspacePath, runGroupId)
 }
 
 function onWorkspaceDrop(e: DragEvent): void {
@@ -3137,7 +3228,12 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
           v-if="!g.bare"
           v-show="!ws?.collapsed"
           class="ws-grp"
+          :class="{ 'ws-grp--drop': rootDragOverKey === groupDropKey(ws?.path ?? '', g.id) }"
           :data-state="g.state"
+          @dragover="onGroupDragOver($event, ws?.path ?? '', g.id)"
+          @dragenter="onGroupDragOver($event, ws?.path ?? '', g.id)"
+          @dragleave="onGroupDragLeave(ws?.path ?? '', g.id)"
+          @drop.prevent="onGroupDrop($event, ws?.path ?? '', g.id)"
         >
           <button
             class="ws-grp-caret"
@@ -3177,7 +3273,7 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
           :key="p.id"
           class="agent-item"
           :style="depth ? { marginLeft: depth * 13 + 'px' } : undefined"
-          :class="{ 'in-group': !g.bare, 'in-group-last': !g.bare && gi === g.rows.length - 1, pipeline: p.origin === 'pipeline', manager: p.isCommander, minimized: p.isMinimized, 'agent-item--focus': p.id === props.focusPaneId, 'agent-item--selected': props.selectedPaneIds?.has(p.id), 'agent-item--dragging': draggingBatchIds.includes(p.id), 'drag-over': reorderDragOverId === p.id, expanded: isRowExpanded(p.id) }"
+          :class="{ 'in-group': !g.bare, 'in-group-last': !g.bare && gi === g.rows.length - 1, pipeline: p.origin === 'pipeline', manager: p.isCommander, minimized: p.isMinimized, 'agent-item--focus': p.id === props.focusPaneId, 'agent-item--selected': props.selectedPaneIds?.has(p.id), 'agent-item--dragging': draggingBatchIds.includes(p.id), 'drag-over': reorderDragOverId === p.id, 'agent-item--nest': nestDragOverId === p.id, expanded: isRowExpanded(p.id) }"
           @dragover="onAgentDragOver($event, p.id)"
           @dragenter="onAgentDragOver($event, p.id)"
           @dragleave="onAgentDragLeave(p.id)"
@@ -5499,6 +5595,30 @@ button.icon-btn.muted:hover {
 /* Reorder drop target feedback, matching .pane-header.drag-over in TerminalPane.vue. */
 .agent-item.drag-over {
   background: var(--accent-subtle);
+  box-shadow: inset 0 0 0 2px var(--accent-focus);
+}
+/* Nest drop target: the pointer is in the row's middle band, so the drop makes
+   the dragged pane this row's child. Distinct from the reorder ring above — a
+   filled tint plus the ↳ the child row will carry once it lands. */
+.agent-item--nest {
+  position: relative;
+  background: color-mix(in srgb, var(--accent-focus) 22%, transparent);
+  box-shadow: inset 2px 0 0 var(--accent-focus);
+}
+.agent-item--nest::after {
+  content: '↳';
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent-focus);
+  pointer-events: none;
+}
+/* Group header as drop target: the drop makes the dragged pane a root of this
+   group. Same ring as a reorder target so it reads as "drop here". */
+.ws-grp--drop {
   box-shadow: inset 0 0 0 2px var(--accent-focus);
 }
 .agent-line {

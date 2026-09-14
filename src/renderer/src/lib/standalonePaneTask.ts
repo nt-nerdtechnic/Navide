@@ -33,6 +33,7 @@ export async function injectStandaloneTask(
   task: string,
   logLabel: string,
   deps: StandaloneTaskInjectionDeps,
+  opts: { resume?: boolean } = {},
 ): Promise<boolean> {
   if (!task) return true
 
@@ -42,7 +43,14 @@ export async function injectStandaloneTask(
     await deps.dismissStartupDialog(paneId)
     await deps.waitForStartupActivity(paneId)
   }
-  await deps.waitForQuiet(paneId, 1000, 8000)
+  // A fresh CLI prints its banner and is ready; a RESUMED one reloads the
+  // transcript first, and while it does it prints nothing and accepts nothing.
+  // Observed: `claude --resume` on a real session sat silent for 20-30s before
+  // its prompt appeared, so the 1s/8s that suits a fresh pane injected into a
+  // CLI that was not listening, saw no echo, and killed the pane as a failed
+  // launch. A longer quiet threshold and a longer ceiling cover the reload.
+  if (opts.resume) await deps.waitForQuiet(paneId, 3000, 60_000)
+  else await deps.waitForQuiet(paneId, 1000, 8000)
   if (!deps.paneAlive(paneId)) {
     await deps.onKill(paneId)
     return false

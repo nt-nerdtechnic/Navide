@@ -149,7 +149,10 @@ export function evaluateSpawnRequest(
   if (ctx.isNameTaken(name)) {
     return { ok: false, reason: `名稱「${name}」已被其他 pane 使用，請換一個名稱` }
   }
-  if (!req.task) return { ok: false, reason: 'task 欄位不可為空' }
+  // A fresh pane with nothing to do is a mistake. A RESUMED one is not — the
+  // conversation already has its context, and the caller may only want it
+  // back on screen, talking to it later with cli_send.
+  if (!req.task && !req.resumesSession) return { ok: false, reason: 'task 欄位不可為空' }
 
   const model = (req.model ?? '').trim()
   const effort = (req.effort ?? '').trim()

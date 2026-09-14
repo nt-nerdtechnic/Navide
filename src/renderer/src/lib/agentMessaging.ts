@@ -225,6 +225,12 @@ export interface ParsedSpawnRequest {
   model?: string
   /** Reasoning-effort level, same provenance as {@link model}. */
   effort?: string
+  /** The request continues an existing conversation rather than starting one.
+   *  Same provenance as {@link model}: only the cli_open_agent path sets it,
+   *  when `session_id` was given. It changes one thing in the gate — an empty
+   *  task is allowed, because a resumed conversation already has its own
+   *  context and the caller may only want it back on screen. */
+  resumesSession?: boolean
 }
 
 const SPAWN_START_RE = /^---SPAWN-START---\s*$/

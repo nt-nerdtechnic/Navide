@@ -65,7 +65,7 @@ export interface SlotState {
 }
 
 export interface LayoutState {
-  version: 1
+  version: 2
   chrome: { titlebar: boolean; statusbar: boolean }
   slots: Record<SlotId, SlotState>
   /**
@@ -83,13 +83,24 @@ export interface LayoutState {
 export const LAYOUT_SETTINGS_KEY = 'agentTeam.layout'
 
 /**
+ * Stored-shape version.
+ *
+ * 1 → 2 normalises each slot's tab ORDER to the registry's declaration order.
+ * Nothing about the shape changed; the bump exists because a default-order
+ * change is otherwise invisible forever — `load()` accepts a stored document
+ * as-is, so every install that had ever opened the panel kept the order it
+ * happened to accumulate. See LAYOUT_VERSION's use in useLayoutStore.load.
+ */
+export const LAYOUT_VERSION = 2
+
+/**
  * The shipped arrangement: the three panels the shell has always had, with the
  * two new slots present but empty. An empty slot occupies no space, so this
  * renders pixel-identical to the pre-refactor three-column shell.
  */
 export function createDefaultLayout(): LayoutState {
   return {
-    version: 1,
+    version: 2,
     chrome: { titlebar: true, statusbar: true },
     hidden: [],
     slots: {

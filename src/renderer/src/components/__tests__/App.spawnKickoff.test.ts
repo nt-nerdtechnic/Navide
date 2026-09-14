@@ -32,7 +32,11 @@ const kickoff = () => block('async function kickoffRequestedPane(', '\n/** Spawn
 describe('kickoffRequestedPane waits for the prompt, not for one quiet second', () => {
   it('no longer gates on waitForQuiet(1s/8s) — that let a booting TUI eat the task', () => {
     expect(kickoff()).not.toContain('waitForQuiet(paneId, 1000, 8000)')
-    expect(kickoff()).toContain('await waitForPromptReady(paneId, KICKOFF_PROMPT_READY_TIMEOUT_MS)')
+    // The deadline is chosen per spawn now (a resumed CLI reloads its transcript
+    // first and needs longer), but a fresh spawn still gets the 30s constant.
+    expect(kickoff()).toContain('await waitForPromptReady(paneId, promptReadyTimeoutMs)')
+    expect(kickoff()).toContain('? KICKOFF_PROMPT_READY_TIMEOUT_RESUME_MS')
+    expect(kickoff()).toContain(': KICKOFF_PROMPT_READY_TIMEOUT_MS')
   })
 
   it('caps the prompt wait at 30s', () => {
@@ -99,7 +103,7 @@ describe('the kickoff verdict reaches the waiting cli_open_agent call', () => {
 
   it('the MCP spawn path hands its request_id to the kickoff', () => {
     const handler = block('async function handleMcpSpawnRequest(ev: {', '\nfunction describeSpawnRefusal(')
-    expect(handler).toContain('void kickoffRequestedPane(paneId, parentName, gate.task, ev.request_id)')
+    expect(handler).toContain('void kickoffRequestedPane(paneId, parentName, gate.task, ev.request_id, {')
   })
 
   // 'unverified', not 'sent': the standalone path has only injectPane's
