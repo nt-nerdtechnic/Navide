@@ -60,10 +60,10 @@ export interface AgentSpec {
    *  inferred from silence.
    *
    *  The test is where the boundary comes from, NOT whether a turn_complete
-   *  event arrives — every vendor's reader emits one. grok, pi and qwen
-   *  synthesize theirs from their own 8-second quiet window, and kimi flushes
-   *  the latest turn on the same timer when no following prompt closes it: the
-   *  same inference one layer down, so the flag is set for all four. A vendor
+   *  event arrives — every vendor's reader emits one. pi and qwen synthesize
+   *  theirs from their own 8-second quiet window, and kimi flushes the latest
+   *  turn on the same timer when no following prompt closes it: the same
+   *  inference one layer down, so the flag is set for those three. A vendor
    *  whose log states the boundary outright leaves it unset even when that
    *  statement is indirect: opencode (and kilo, which reuses its reader) reads
    *  a `step-finish` reason, antigravity a completed step carrying a reply,

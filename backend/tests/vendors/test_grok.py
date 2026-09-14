@@ -1,522 +1,423 @@
-"""GrokLogReader: usage_events token parsing + at-pane marker session binding.
+"""Grok CLI (xAI grok-build) reader — one directory per session under
+``$GROK_HOME/sessions/<url-encoded-cwd>/<session-id>/updates.jsonl``.
 
-Fixture schema mirrors grok-cli's src/storage/migrations.ts (v1.1.7):
-workspaces / sessions / messages / usage_events, single shared db at
-~/.grok/grok.db.
+Replaces the suite written against the community grok-cli, whose sessions all
+lived in one ``~/.grok/grok.db`` SQLite store. Guarantees that survived the
+move are re-stated here in the new shape; the ones that were about the shared
+store (row-id watermarks, per-session idle flushing, busy/locked handling) are
+gone with it.
 """
 
 from __future__ import annotations
 
 import json
-import sqlite3
 from pathlib import Path
 
-from agent_team_backend.log_readers import GrokLogReader, TokenUsage
-from agent_team_backend.log_readers.attribution import Attribution
+import pytest
 
-_SCHEMA = """
-CREATE TABLE workspaces (
-  id TEXT PRIMARY KEY,
-  scope_key TEXT NOT NULL UNIQUE,
-  canonical_path TEXT NOT NULL,
-  git_root TEXT,
-  display_name TEXT NOT NULL,
-  last_seen_at TEXT NOT NULL
-) STRICT;
+from agent_team_backend import app as app_module
+from agent_team_backend.cli_vendors.grok import GrokLogReader
 
-CREATE TABLE sessions (
-  id TEXT PRIMARY KEY,
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  title TEXT,
-  recap_text TEXT,
-  recap_model TEXT,
-  recap_updated_at TEXT,
-  model TEXT NOT NULL,
-  mode TEXT NOT NULL,
-  cwd_at_start TEXT NOT NULL,
-  cwd_last TEXT NOT NULL,
-  status TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-) STRICT;
-
-CREATE TABLE messages (
-  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-  seq INTEGER NOT NULL,
-  role TEXT NOT NULL,
-  message_json TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  PRIMARY KEY (session_id, seq)
-) STRICT;
-
-CREATE TABLE usage_events (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-  message_seq INTEGER,
-  source TEXT NOT NULL,
-  model TEXT NOT NULL,
-  input_tokens INTEGER NOT NULL DEFAULT 0,
-  output_tokens INTEGER NOT NULL DEFAULT 0,
-  total_tokens INTEGER NOT NULL DEFAULT 0,
-  cost_micros INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL
-) STRICT;
-"""
-
-_NOW = "2026-07-10T00:00:00.000Z"
+WS = "/Users/dev/proj"
+#: What grok names the group directory for WS.
+GROUP = "%2FUsers%2Fdev%2Fproj"
+SID = "01a09f53-9ed8-7303-9e16-e4907f948d93"
 
 
-def _reader_rooted_at(tmp_path: Path, monkeypatch) -> GrokLogReader:
-    monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    (tmp_path / ".grok").mkdir()
-    return GrokLogReader()
+@pytest.fixture(autouse=True)
+def _grok_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    monkeypatch.setenv("GROK_HOME", str(tmp_path / ".grok"))
+    return tmp_path / ".grok"
 
 
-def _create_db(path: Path, *, wal: bool = True) -> sqlite3.Connection:
-    con = sqlite3.connect(path)
-    if wal:
-        con.execute("PRAGMA journal_mode=WAL")
-    con.executescript(_SCHEMA)
-    con.commit()
-    return con
+def _record(kind: str, n: int, session_id: str = SID, **update) -> dict:
+    """One updates.jsonl notification, shaped like the real ones."""
+    return {
+        "method": "session/update",
+        "timestamp": 1789379453,
+        "params": {
+            "sessionId": session_id,
+            "_meta": {
+                "eventId": f"{session_id}-{n}",
+                "agentTimestampMs": 1789379453711 + n,
+            },
+            "update": {"sessionUpdate": kind, **update},
+        },
+    }
 
 
-def _add_workspace(con: sqlite3.Connection, ws_id: str, scope_key: str) -> None:
-    con.execute(
-        "INSERT INTO workspaces VALUES (?, ?, ?, ?, ?, ?)",
-        (ws_id, scope_key, scope_key, scope_key, Path(scope_key).name, _NOW),
-    )
-    con.commit()
+def _user(n: int, text: str, session_id: str = SID) -> dict:
+    return _record("user_message_chunk", n, session_id,
+                   content={"type": "text", "text": text})
 
 
-def _add_session(con: sqlite3.Connection, sid: str, ws_id: str, cwd: str) -> None:
-    con.execute(
-        "INSERT INTO sessions (id, workspace_id, model, mode, cwd_at_start,"
-        " cwd_last, status, created_at, updated_at)"
-        " VALUES (?, ?, 'grok-4.3', 'chat', ?, ?, 'active', ?, ?)",
-        (sid, ws_id, cwd, cwd, _NOW, _NOW),
-    )
-    con.commit()
+def _agent(n: int, text: str, session_id: str = SID) -> dict:
+    return _record("agent_message_chunk", n, session_id,
+                   content={"type": "text", "text": text})
 
 
-def _add_message(con: sqlite3.Connection, sid: str, seq: int, text: str) -> None:
-    con.execute(
-        "INSERT INTO messages VALUES (?, ?, 'user', ?, ?)",
-        (sid, seq, json.dumps({"role": "user", "content": text}), _NOW),
-    )
-    con.commit()
-
-
-def _add_usage(
-    con: sqlite3.Connection, sid: str, inp: int, out: int, model: str = "grok-4.3"
-) -> None:
-    con.execute(
-        "INSERT INTO usage_events (session_id, message_seq, source, model,"
-        " input_tokens, output_tokens, total_tokens, created_at)"
-        " VALUES (?, 1, 'agent', ?, ?, ?, ?, ?)",
-        (sid, model, inp, out, inp + out, _NOW),
-    )
-    con.commit()
-
-
-def _session_sink_usage(db: Path) -> TokenUsage:
-    """The placeholder usage app._on_session_file builds for a db change."""
-    return TokenUsage(
-        vendor="grok", input_tokens=0, output_tokens=0, cwd="",
-        session_id=db.stem, file_path=str(db), dedup_key="",
+def _turn(n: int, inp: int = 100, out: int = 10, model: str = "grok-4.6",
+          session_id: str = SID, stop: str = "end_turn") -> dict:
+    return _record(
+        "turn_completed", n, session_id, stop_reason=stop,
+        usage={"inputTokens": inp, "outputTokens": out,
+               "modelUsage": {model: {"inputTokens": inp, "outputTokens": out}}},
     )
 
 
-# ── tolerance ────────────────────────────────────────────────────────────────
+def _write(home: Path, records: list[dict], *, group: str = GROUP,
+           session: str = SID) -> Path:
+    path = home / "sessions" / group / session / "updates.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as fh:
+        for r in records:
+            fh.write(json.dumps(r) + "\n")
+    return path
 
-def test_missing_db_silently_skips(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    reader = GrokLogReader()  # no ~/.grok at all → CLI not installed
+
+def _append(path: Path, records: list[dict]) -> None:
+    with path.open("a", encoding="utf-8") as fh:
+        for r in records:
+            fh.write(json.dumps(r) + "\n")
+
+
+# ── layout ──────────────────────────────────────────────────────────────────
+
+def test_no_sessions_dir_is_empty(_grok_home: Path) -> None:
+    reader = GrokLogReader()
     assert reader.project_dirs() == []
     assert reader.session_files() == []
-    assert reader.parse_session_file(tmp_path / ".grok" / "grok.db", set()) == []
-    assert reader.find_sessions_by_marker(["at-pane:x"]) == {}
 
 
-def test_grok_dir_without_db_is_empty(tmp_path: Path, monkeypatch) -> None:
-    reader = _reader_rooted_at(tmp_path, monkeypatch)
-    assert reader.project_dirs() == [tmp_path / ".grok"]
-    assert reader.session_files() == []
-
-
-def test_non_session_files_under_grok_dir_are_ignored(
-    tmp_path: Path, monkeypatch
+def test_session_id_comes_from_the_directory_not_the_filename(
+    _grok_home: Path,
 ) -> None:
-    """The watcher routes any .json under ~/.grok here (user-settings.json)."""
-    reader = _reader_rooted_at(tmp_path, monkeypatch)
-    settings = tmp_path / ".grok" / "user-settings.json"
-    settings.write_text('{"apiKey": "x"}')
-    assert reader.parse_session_file(settings, set()) == []
+    # Every session names its transcript updates.jsonl, so the inherited
+    # filename-stem default would call them all "updates".
+    path = _write(_grok_home, [_user(1, "hi")])
+    assert GrokLogReader().session_id_from_path(path) == SID
 
 
-def test_locked_db_treated_as_no_new_data(tmp_path: Path, monkeypatch) -> None:
-    reader = _reader_rooted_at(tmp_path, monkeypatch)
-    db = tmp_path / ".grok" / "grok.db"
-    # Rollback-journal mode so BEGIN EXCLUSIVE actually blocks readers
-    # (WAL never blocks them — covered by the live-WAL parse tests).
-    con = _create_db(db, wal=False)
-    _add_workspace(con, "w" * 16, str(tmp_path / "ws"))
-    _add_session(con, "a" * 12, "w" * 16, str(tmp_path / "ws"))
-    _add_usage(con, "a" * 12, 10, 5)
-    con.execute("BEGIN EXCLUSIVE")
-    try:
-        seen: set[str] = set()
-        assert reader.parse_session_file(db, seen) == []
-        assert seen == set()  # nothing marked seen → retried next cycle
-    finally:
-        con.rollback()
-        con.close()
+def test_cwd_is_decoded_from_the_group_directory(_grok_home: Path) -> None:
+    path = _write(_grok_home, [_user(1, "hi")])
+    assert GrokLogReader().cwd_from_file(path) == WS
 
 
-# ── usage parsing + dedup ────────────────────────────────────────────────────
-
-def test_parse_usage_events(tmp_path: Path, monkeypatch) -> None:
-    reader = _reader_rooted_at(tmp_path, monkeypatch)
-    ws = tmp_path / "proj"
-    db = tmp_path / ".grok" / "grok.db"
-    con = _create_db(db)
-    _add_workspace(con, "1f2e3d4c5b6a7980", str(ws))
-    _add_session(con, "abc123def456", "1f2e3d4c5b6a7980", str(ws))
-    _add_usage(con, "abc123def456", 100, 40)
-    _add_usage(con, "abc123def456", 220, 9, model="grok-4.3-mini")
-
-    seen: set[str] = set()
-    events = reader.parse_session_file(db, seen)  # writer con still open (WAL)
-    con.close()
-
-    assert [(e.input_tokens, e.output_tokens) for e in events] == [(100, 40), (220, 9)]
-    for e in events:
-        assert e.vendor == "grok"
-        assert e.session_id == "abc123def456"
-        assert e.cwd == str(ws)  # workspaces.scope_key via sessions join
-        assert e.file_path == str(db)
-    assert events[0].model == "grok-4.3"
-    assert events[1].model == "grok-4.3-mini"
-    assert len({e.dedup_key for e in events}) == 2
+def test_a_shortened_group_reads_its_cwd_file(_grok_home: Path) -> None:
+    """Grok shortens a group name that would exceed 255 bytes and records the
+    real path in .cwd — the name cannot be decoded back then."""
+    path = _write(_grok_home, [_user(1, "hi")], group="proj-a1b2c3d4")
+    (path.parent.parent / ".cwd").write_text("/very/long/original/path\n")
+    assert GrokLogReader().cwd_from_file(path) == "/very/long/original/path"
 
 
-def test_parse_dedups_by_row_id_across_calls(tmp_path: Path, monkeypatch) -> None:
-    reader = _reader_rooted_at(tmp_path, monkeypatch)
-    ws = tmp_path / "proj"
-    db = tmp_path / ".grok" / "grok.db"
-    con = _create_db(db)
-    _add_workspace(con, "w" * 16, str(ws))
-    _add_session(con, "abc123def456", "w" * 16, str(ws))
-    _add_usage(con, "abc123def456", 10, 2)
+def test_only_the_transcript_is_parsed(_grok_home: Path) -> None:
+    """A session directory holds a dozen siblings that change every turn
+    (chat_history, signals, tool_definitions, lock files)."""
+    path = _write(_grok_home, [_user(1, "hi"), _turn(2)])
+    reader = GrokLogReader()
+    sibling = path.parent / "chat_history.jsonl"
+    sibling.write_text(json.dumps(_turn(9)) + "\n")
 
-    seen: set[str] = set()
-    assert len(reader.parse_session_file(db, seen)) == 1
-    # Same rows again → nothing new.
-    assert reader.parse_session_file(db, seen) == []
-    # A new turn lands → only the new row is emitted.
-    _add_usage(con, "abc123def456", 30, 7)
-    con.close()
-    events = reader.parse_session_file(db, seen)
-    assert [(e.input_tokens, e.output_tokens) for e in events] == [(30, 7)]
+    assert reader.session_files() == [path]
+    assert reader.accepts_watch_path(str(path)) is True
+    assert reader.accepts_watch_path(str(sibling)) is False
+    assert reader.parse_session_file(sibling, set()) == []
+    assert reader.parse_activity(sibling, set()) == []
 
 
-def test_zero_token_rows_are_skipped_but_marked_seen(
-    tmp_path: Path, monkeypatch
+def test_workspace_scoping_uses_the_group_directory(_grok_home: Path) -> None:
+    _write(_grok_home, [_turn(1)])
+    _write(_grok_home, [_turn(1)], group="%2Fother%2Fproj", session="other-sid")
+    reader = GrokLogReader()
+
+    assert len(reader.session_files()) == 2
+    assert [p.parent.name for p in reader.session_files_for_workspace(WS) or []] == [SID]
+    assert reader.session_files_for_workspace("/nope") == []
+
+
+def test_workspace_scoping_gives_up_when_a_group_was_shortened(
+    _grok_home: Path,
 ) -> None:
-    reader = _reader_rooted_at(tmp_path, monkeypatch)
-    ws = tmp_path / "proj"
-    db = tmp_path / ".grok" / "grok.db"
-    con = _create_db(db)
-    _add_workspace(con, "w" * 16, str(ws))
-    _add_session(con, "abc123def456", "w" * 16, str(ws))
-    _add_usage(con, "abc123def456", 0, 0)
-    con.close()
+    """One-way mapping: scoping must say "scan everything" rather than answer
+    "no sessions" for a workspace whose group name is a hash."""
+    path = _write(_grok_home, [_turn(1)], group="proj-a1b2c3d4")
+    (path.parent.parent / ".cwd").write_text(WS)
 
+    assert GrokLogReader().session_files_for_workspace("/some/other") is None
+
+
+# ── token usage ─────────────────────────────────────────────────────────────
+
+def test_usage_comes_from_the_turn_completed_record(_grok_home: Path) -> None:
+    path = _write(_grok_home, [_user(1, "hi"), _agent(2, "yo"), _turn(3, 120, 8)])
+
+    events = GrokLogReader().parse_session_file(path, set())
+
+    assert len(events) == 1
+    usage = events[0]
+    assert (usage.input_tokens, usage.output_tokens) == (120, 8)
+    assert usage.model == "grok-4.6"
+    assert usage.session_id == SID
+    assert usage.cwd == WS
+    # A real timestamp: the frontend treats an unparseable one as always-fresh
+    # and would resend a delivered turn.
+    assert usage.timestamp.startswith("2026-") and usage.timestamp.endswith("Z")
+
+
+def test_usage_dedups_across_calls(_grok_home: Path) -> None:
+    path = _write(_grok_home, [_turn(1), _turn(2)])
+    reader = GrokLogReader()
     seen: set[str] = set()
-    assert reader.parse_session_file(db, seen) == []
-    assert len(seen) == 1  # row consumed, not re-visited next cycle
+
+    assert len(reader.parse_session_file(path, seen)) == 2
+    assert reader.parse_session_file(path, seen) == []
 
 
-def test_incremental_parse_uses_row_id_watermark(tmp_path: Path, monkeypatch) -> None:
-    reader = _reader_rooted_at(tmp_path, monkeypatch)
-    ws = tmp_path / "proj"
-    db = tmp_path / ".grok" / "grok.db"
-    con = _create_db(db)
-    _add_workspace(con, "w" * 16, str(ws))
-    _add_session(con, "abc123def456", "w" * 16, str(ws))
-    _add_usage(con, "abc123def456", 10, 2)
-    first = reader.parse_incremental(db, {})
+def test_a_zero_token_turn_is_skipped(_grok_home: Path) -> None:
+    path = _write(_grok_home, [_turn(1, 0, 0), _turn(2, 5, 5)])
+
+    events = GrokLogReader().parse_session_file(path, set())
+
+    assert [(e.input_tokens, e.output_tokens) for e in events] == [(5, 5)]
+
+
+def test_incremental_reads_only_what_was_appended(_grok_home: Path) -> None:
+    path = _write(_grok_home, [_turn(1)])
+    reader = GrokLogReader()
+
+    first = reader.parse_incremental(path, {})
     assert len(first.events) == 1
-    assert first.checkpoint["row_id"] == 1
+    assert reader.parse_incremental(path, first.checkpoint).events == []
 
-    _add_usage(con, "abc123def456", 30, 7)
-    con.close()
-    second = reader.parse_incremental(db, first.checkpoint)
-    assert [(e.input_tokens, e.output_tokens) for e in second.events] == [(30, 7)]
-    assert second.checkpoint["row_id"] == 2
+    _append(path, [_turn(2, 7, 3)])
+    second = reader.parse_incremental(path, first.checkpoint)
+    assert [(e.input_tokens, e.output_tokens) for e in second.events] == [(7, 3)]
 
 
-def test_incremental_parse_resets_row_watermark_when_the_replacement_reuses_the_inode(
-    tmp_path: Path, monkeypatch
-) -> None:
-    # Linux hands a freed inode number to the next file created in its place,
-    # so the replacement can carry the very identity the checkpoint recorded.
-    reader = _reader_rooted_at(tmp_path, monkeypatch)
-    ws = tmp_path / "proj"
-    db = tmp_path / ".grok" / "grok.db"
-    con = _create_db(db)
-    _add_workspace(con, "w" * 16, str(ws))
-    _add_session(con, "abc123def456", "w" * 16, str(ws))
-    _add_usage(con, "abc123def456", 10, 2)
-    con.close()
-    first = reader.parse_incremental(db, {})
+def test_incremental_rescans_a_replaced_transcript(_grok_home: Path) -> None:
+    """A shorter replacement must not be read from the middle of a line."""
+    path = _write(_grok_home, [_turn(1), _turn(2), _turn(3)])
+    reader = GrokLogReader()
+    checkpoint = reader.parse_incremental(path, {}).checkpoint
 
-    db.unlink()
-    replacement = _create_db(db)
-    _add_workspace(replacement, "w" * 16, str(ws))
-    _add_session(replacement, "abc123def456", "w" * 16, str(ws))
-    _add_usage(replacement, "abc123def456", 30, 7)
-    replacement.close()
-    stat = db.stat()
-    same_inode = {**first.checkpoint, "identity": f"{stat.st_dev}:{stat.st_ino}"}
-    second = reader.parse_incremental(db, same_inode)
-    assert [(e.input_tokens, e.output_tokens) for e in second.events] == [(30, 7)]
+    _write(_grok_home, [_turn(9, 42, 4)])
+    again = reader.parse_incremental(path, checkpoint)
+
+    assert [(e.input_tokens, e.output_tokens) for e in again.events] == [(42, 4)]
 
 
-def test_incremental_parse_resets_row_watermark_for_replaced_db(
-    tmp_path: Path, monkeypatch
-) -> None:
-    reader = _reader_rooted_at(tmp_path, monkeypatch)
-    ws = tmp_path / "proj"
-    db = tmp_path / ".grok" / "grok.db"
-    con = _create_db(db)
-    _add_workspace(con, "w" * 16, str(ws))
-    _add_session(con, "abc123def456", "w" * 16, str(ws))
-    _add_usage(con, "abc123def456", 10, 2)
-    con.close()
-    first = reader.parse_incremental(db, {})
+# ── activity ────────────────────────────────────────────────────────────────
 
-    db.unlink()
-    replacement = _create_db(db)
-    _add_workspace(replacement, "w" * 16, str(ws))
-    _add_session(replacement, "abc123def456", "w" * 16, str(ws))
-    _add_usage(replacement, "abc123def456", 30, 7)
-    replacement.close()
-    second = reader.parse_incremental(db, first.checkpoint)
-    assert [(e.input_tokens, e.output_tokens) for e in second.events] == [(30, 7)]
-    # The checkpoint now describes the replacement. Do not assert the inode
-    # changed: ext4 hands a freed inode number to the next file created.
-    st = db.stat()
-    assert second.checkpoint["identity"] == f"{st.st_dev}:{st.st_ino}"
+def test_turn_complete_is_read_not_inferred(_grok_home: Path) -> None:
+    """The official CLI writes the boundary. The community CLI did not, which
+    is why the old reader waited 8 seconds of silence — and why a grok pane
+    took 8 seconds to hand a message to another CLI."""
+    path = _write(_grok_home, [_user(1, "say hi"), _agent(2, "Hi"), _turn(3)])
 
+    events = GrokLogReader().parse_activity(path, set())
 
-# ── marker detection / session binding ──────────────────────────────────────
-
-def test_marker_binding_announces_grok_session(tmp_path: Path, monkeypatch) -> None:
-    reader = _reader_rooted_at(tmp_path, monkeypatch)
-    ws = tmp_path / "ws"
-    ws.mkdir()
-    marker = "at-pane:pane-grok-1"
-    db = tmp_path / ".grok" / "grok.db"
-    con = _create_db(db)
-    _add_workspace(con, "w" * 16, str(ws))
-    _add_session(con, "1f9e02aabb3c", "w" * 16, str(ws))
-    _add_message(con, "1f9e02aabb3c", 1, f"kickoff…\nsession marker: {marker}\n")
-
-    attr = Attribution([reader], workspaces_path=tmp_path / "ws.json")
-    attr.register_pane(
-        "pane-grok-1", vendor="grok", cwd=str(ws),
-        workspace_path=str(ws), session_marker=marker,
-    )
-
-    binding = attr.maybe_announce_session(_session_sink_usage(db))
-    con.close()
-
-    assert binding is not None
-    assert binding.pane_id == "pane-grok-1"
-    # Resume id is the sessions.id (12-hex) that `grok -s <id>` accepts.
-    assert binding.resume_id == "1f9e02aabb3c"
-    assert binding.workspace_path == str(ws)
-    # Binding is a transition: the same db event never re-announces.
-    assert attr.maybe_announce_session(_session_sink_usage(db)) is None
-
-
-def test_marker_in_other_workspace_does_not_bind(tmp_path: Path, monkeypatch) -> None:
-    """A marker echoed in a session of ANOTHER project must not cross-bind."""
-    reader = _reader_rooted_at(tmp_path, monkeypatch)
-    pane_ws = tmp_path / "pane-ws"
-    pane_ws.mkdir()
-    other_ws = tmp_path / "other-ws"
-    marker = "at-pane:pane-grok-2"
-    db = tmp_path / ".grok" / "grok.db"
-    con = _create_db(db)
-    _add_workspace(con, "o" * 16, str(other_ws))
-    _add_session(con, "ffee00112233", "o" * 16, str(other_ws))
-    _add_message(con, "ffee00112233", 1, f"pasted text with {marker}")
-    con.close()
-
-    attr = Attribution([reader], workspaces_path=tmp_path / "ws.json")
-    attr.register_pane(
-        "pane-grok-2", vendor="grok", cwd=str(pane_ws),
-        workspace_path=str(pane_ws), session_marker=marker,
-    )
-
-    assert attr.maybe_announce_session(_session_sink_usage(db)) is None
-
-
-def test_two_panes_bind_their_own_markers(tmp_path: Path, monkeypatch) -> None:
-    reader = _reader_rooted_at(tmp_path, monkeypatch)
-    ws = tmp_path / "ws"
-    ws.mkdir()
-    db = tmp_path / ".grok" / "grok.db"
-    con = _create_db(db)
-    _add_workspace(con, "w" * 16, str(ws))
-    _add_session(con, "aaaaaaaaaaa1", "w" * 16, str(ws))
-    _add_session(con, "bbbbbbbbbbb2", "w" * 16, str(ws))
-    _add_message(con, "aaaaaaaaaaa1", 1, "kickoff at-pane:pane-a")
-    _add_message(con, "bbbbbbbbbbb2", 1, "kickoff at-pane:pane-b")
-    con.close()
-
-    attr = Attribution([reader], workspaces_path=tmp_path / "ws.json")
-    attr.register_pane("pane-a", vendor="grok", cwd=str(ws),
-                       workspace_path=str(ws), session_marker="at-pane:pane-a")
-    attr.register_pane("pane-b", vendor="grok", cwd=str(ws),
-                       workspace_path=str(ws), session_marker="at-pane:pane-b")
-
-    # One binding per db event; the watcher fires again on the next write.
-    first = attr.maybe_announce_session(_session_sink_usage(db))
-    second = attr.maybe_announce_session(_session_sink_usage(db))
-    assert first is not None and second is not None
-    bound = {b.pane_id: b.resume_id for b in (first, second)}
-    assert bound == {"pane-a": "aaaaaaaaaaa1", "pane-b": "bbbbbbbbbbb2"}
-    assert attr.maybe_announce_session(_session_sink_usage(db)) is None
-
-
-# ---- parse_activity: turn boundaries in a shared, multi-session db ----
-
-
-def _add_role_message(
-    con: sqlite3.Connection, sid: str, seq: int, role: str, text: str,
-    created_at: str = _NOW,
-) -> None:
-    con.execute(
-        "INSERT INTO messages VALUES (?, ?, ?, ?, ?)",
-        (sid, seq, role, json.dumps({"role": role, "content": text}), created_at),
-    )
-    con.commit()
-
-
-def _grok_db_with_session(tmp_path: Path, monkeypatch) -> tuple[GrokLogReader, Path, sqlite3.Connection]:
-    reader = _reader_rooted_at(tmp_path, monkeypatch)
-    db = tmp_path / ".grok" / "grok.db"
-    con = _create_db(db)
-    ws = tmp_path / "proj"
-    ws.mkdir(exist_ok=True)
-    _add_workspace(con, "w" * 16, str(ws))
-    _add_session(con, "aaaaaaaaaaa1", "w" * 16, str(ws))
-    return reader, db, con
-
-
-def _completes(events) -> list[tuple[str, str, str]]:
-    return [
-        (e.dedup_key, e.detail, e.text) for e in events
-        if e.event_type == "turn_complete"
+    kinds = [(e.event_type, e.detail) for e in events]
+    assert kinds == [
+        ("agent_active", "user"),
+        ("agent_active", "assistant"),
+        ("turn_complete", "end_turn"),
     ]
+    # The reply text is what carries an inter-CLI message.
+    assert events[-1].text == "Hi"
+    assert events[0].text == "say hi"
 
 
-def test_parse_activity_completes_a_turn_with_the_assistant_reply(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """Grok has no end-of-turn record, so the turn is closed by the session
-    going quiet — and must carry the reply for the messaging protocol."""
-    reader, db, con = _grok_db_with_session(tmp_path, monkeypatch)
-    _add_role_message(con, "aaaaaaaaaaa1", 1, "user", "ask reviewer to take over")
-    _add_role_message(con, "aaaaaaaaaaa1", 2, "assistant", "looking into it")
-    _add_role_message(con, "aaaaaaaaaaa1", 3, "assistant", "done, handing over")
-    con.close()
-    # _NOW is far in the past relative to the real clock, so the session reads
-    # as quiet without having to move time.
-    events = reader.parse_activity(db, set())
-    assert _completes(events) == [
-        ("turn:aaaaaaaaaaa1:0", "idle", "done, handing over")
-    ]
-    # A real timestamp is what the frontend dedups messaging turns by; an
-    # unparseable one reads as always-fresh and resends the turn.
-    completes = [e for e in events if e.event_type == "turn_complete"]
-    assert completes[0].timestamp == _NOW
+def test_a_reply_split_across_chunks_arrives_whole(_grok_home: Path) -> None:
+    path = _write(_grok_home, [_agent(1, "Hel"), _agent(2, "lo"), _turn(3)])
+
+    events = GrokLogReader().parse_activity(path, set())
+
+    assert [e for e in events if e.event_type == "turn_complete"][0].text == "Hello"
 
 
-def test_parse_activity_open_turn_stays_open_while_the_session_is_live(
-    tmp_path: Path, monkeypatch
-) -> None:
-    import agent_team_backend.cli_vendors.grok as grok_mod
-
-    reader, db, con = _grok_db_with_session(tmp_path, monkeypatch)
-    _add_role_message(con, "aaaaaaaaaaa1", 1, "user", "go")
-    _add_role_message(con, "aaaaaaaaaaa1", 2, "assistant", "working")
-    con.close()
-    # Pretend now is right after the messages were written.
-    monkeypatch.setattr(
-        grok_mod.time, "time", lambda: grok_mod._epoch(_NOW) + 1.0
-    )
-    assert _completes(reader.parse_activity(db, set())) == []
-
-
-def test_parse_activity_next_user_message_closes_the_previous_turn(
-    tmp_path: Path, monkeypatch
-) -> None:
-    import agent_team_backend.cli_vendors.grok as grok_mod
-
-    reader, db, con = _grok_db_with_session(tmp_path, monkeypatch)
-    _add_role_message(con, "aaaaaaaaaaa1", 1, "user", "first")
-    _add_role_message(con, "aaaaaaaaaaa1", 2, "assistant", "answer one")
-    _add_role_message(con, "aaaaaaaaaaa1", 3, "user", "second")
-    con.close()
-    monkeypatch.setattr(grok_mod.time, "time", lambda: grok_mod._epoch(_NOW) + 1.0)
-    assert _completes(reader.parse_activity(db, set())) == [
-        ("turn:aaaaaaaaaaa1:0", "boundary", "answer one")
-    ]
-
-
-def test_parse_activity_idle_is_per_session_not_per_file(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """One db holds every session. A session that is still being written to
-    must not keep another session's finished turn from completing, and the two
-    replies must not cross over."""
-    import agent_team_backend.cli_vendors.grok as grok_mod
-
-    reader, db, con = _grok_db_with_session(tmp_path, monkeypatch)
-    _add_session(con, "bbbbbbbbbbb2", "w" * 16, str(tmp_path / "proj"))
-    quiet, busy = _NOW, "2026-07-10T00:01:00.000Z"
-    _add_role_message(con, "aaaaaaaaaaa1", 1, "user", "old", quiet)
-    _add_role_message(con, "aaaaaaaaaaa1", 2, "assistant", "quiet reply", quiet)
-    _add_role_message(con, "bbbbbbbbbbb2", 1, "user", "new", busy)
-    _add_role_message(con, "bbbbbbbbbbb2", 2, "assistant", "busy reply", busy)
-    con.close()
-    # Now sits just after the busy session's last write: session a is long
-    # past the idle window, session b is still inside it.
-    monkeypatch.setattr(grok_mod.time, "time", lambda: grok_mod._epoch(busy) + 1.0)
-    assert _completes(reader.parse_activity(db, set())) == [
-        ("turn:aaaaaaaaaaa1:0", "idle", "quiet reply")
-    ]
-
-
-def test_parse_activity_reparse_does_not_reemit(tmp_path: Path, monkeypatch) -> None:
-    reader, db, con = _grok_db_with_session(tmp_path, monkeypatch)
-    _add_role_message(con, "aaaaaaaaaaa1", 1, "user", "go")
-    _add_role_message(con, "aaaaaaaaaaa1", 2, "assistant", "done")
-    con.close()
+def test_a_reply_split_across_passes_arrives_whole(_grok_home: Path) -> None:
+    """The chunks and the turn_completed can land in different polls, so the
+    partial text has to survive in the bag between them."""
+    path = _write(_grok_home, [_agent(1, "Par")])
+    reader = GrokLogReader()
     seen: set[str] = set()
-    assert len(_completes(reader.parse_activity(db, seen))) == 1
-    assert reader.parse_activity(db, seen) == []
+    reader.parse_activity(path, seen)
+
+    _append(path, [_agent(2, "tial"), _turn(3)])
+    events = reader.parse_activity(path, seen)
+
+    assert [e for e in events if e.event_type == "turn_complete"][0].text == "Partial"
 
 
-def test_parse_activity_ignores_non_session_files(
-    tmp_path: Path, monkeypatch
+def test_out_of_order_event_ids_are_not_swallowed(_grok_home: Path) -> None:
+    """eventId is allocated when a record is queued, not when it is written, so
+    a real transcript runs …4, 3, 50, 55, 51, 56. A high-water mark over that
+    sequence would drop every record that arrives out of order — which is why
+    the cursor is a byte offset instead.
+    """
+    path = _write(_grok_home, [
+        _record("hook_execution", 4, event_name="pre"),
+        _user(3, "out of order"),
+        _record("hook_execution", 55, event_name="post"),
+        _agent(51, "still delivered"),
+        _turn(56),
+    ])
+
+    events = GrokLogReader().parse_activity(path, set())
+
+    assert [e.detail for e in events] == ["user", "assistant", "end_turn"]
+    assert events[-1].text == "still delivered"
+
+
+def test_the_bag_stays_one_key_however_long_the_conversation(
+    _grok_home: Path,
 ) -> None:
-    reader = _reader_rooted_at(tmp_path, monkeypatch)
-    settings = tmp_path / ".grok" / "user-settings.json"
-    settings.parent.mkdir(parents=True, exist_ok=True)
-    settings.write_text("{}", encoding="utf-8")
-    assert reader.parse_activity(settings, set()) == []
+    """GitHub #28: one key per record grew the bag past the watcher's
+    persistence limit, so it was never written and the whole history replayed
+    on every backend start."""
+    records: list[dict] = []
+    for i in range(300):
+        records += [_user(i * 3, f"q{i}"), _agent(i * 3 + 1, f"a{i}"), _turn(i * 3 + 2)]
+    path = _write(_grok_home, records)
+    seen: set[str] = set()
+
+    events = GrokLogReader().parse_activity(path, seen)
+
+    assert len(events) == 900
+    assert len(seen) == 1
+
+
+def test_a_restart_from_the_persisted_bag_replays_nothing(
+    _grok_home: Path,
+) -> None:
+    path = _write(_grok_home, [_user(1, "hi"), _agent(2, "yo"), _turn(3)])
+    seen: set[str] = set()
+    GrokLogReader().parse_activity(path, seen)
+
+    # A fresh reader with only the persisted bag — what a backend restart has.
+    assert GrokLogReader().parse_activity(path, set(seen)) == []
+
+
+def test_appended_records_are_delivered_exactly_once(_grok_home: Path) -> None:
+    path = _write(_grok_home, [_user(1, "one"), _turn(2)])
+    reader = GrokLogReader()
+    seen: set[str] = set()
+    reader.parse_activity(path, seen)
+
+    _append(path, [_user(3, "two"), _turn(4)])
+    second = reader.parse_activity(path, seen)
+
+    assert [e.detail for e in second] == ["user", "end_turn"]
+    assert reader.parse_activity(path, seen) == []
+
+
+def test_a_half_written_line_is_left_for_the_next_poll(_grok_home: Path) -> None:
+    path = _write(_grok_home, [_user(1, "complete"), _turn(2)])
+    reader = GrokLogReader()
+    seen: set[str] = set()
+    reader.parse_activity(path, seen)
+
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(_user(3, "half"))[:40])
+    assert reader.parse_activity(path, seen) == []
+
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(_user(3, "half"))[40:] + "\n")
+    assert [e.detail for e in reader.parse_activity(path, seen)] == ["user"]
+
+
+def test_a_replaced_transcript_drops_a_half_built_reply(_grok_home: Path) -> None:
+    """Rescanning from zero must not splice the previous generation's partial
+    reply onto a turn it never belonged to."""
+    path = _write(_grok_home, [_agent(1, "stale half")])
+    reader = GrokLogReader()
+    seen: set[str] = set()
+    reader.parse_activity(path, seen)
+
+    _write(_grok_home, [_agent(1, "fresh"), _turn(2)])
+    events = reader.parse_activity(path, seen)
+
+    assert [e for e in events if e.event_type == "turn_complete"][0].text == "fresh"
+
+
+def test_an_unreadable_transcript_is_not_fatal(_grok_home: Path) -> None:
+    path = _write(_grok_home, [_turn(1)])
+    path.unlink()
+    reader = GrokLogReader()
+
+    assert reader.parse_session_file(path, set()) == []
+    assert reader.parse_activity(path, set()) == []
+    assert reader.parse_incremental(path, {}).events == []
+
+
+def test_a_malformed_line_does_not_stop_the_scan(_grok_home: Path) -> None:
+    path = _write(_grok_home, [_user(1, "before")])
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write("{not json\n")
+        fh.write(json.dumps(_turn(3)) + "\n")
+
+    events = GrokLogReader().parse_activity(path, set())
+
+    assert [e.detail for e in events] == ["user", "end_turn"]
+
+
+# ── marker binding ──────────────────────────────────────────────────────────
+
+def test_a_kickoff_marker_binds_its_session(_grok_home: Path) -> None:
+    _write(_grok_home, [_user(1, "at-pane:pane-7 do the thing")])
+
+    found = GrokLogReader().find_sessions_by_marker(["at-pane:pane-7"])
+
+    assert found == {"at-pane:pane-7": (SID, WS)}
+
+
+def test_a_marker_in_another_workspace_reports_that_workspace(
+    _grok_home: Path,
+) -> None:
+    """Binding carries the session's own cwd, so attribution's workspace gate
+    can reject a marker echoed in a different project."""
+    _write(_grok_home, [_user(1, "at-pane:pane-7 hi")],
+           group="%2Fother%2Fproj", session="other-sid")
+
+    found = GrokLogReader().find_sessions_by_marker(["at-pane:pane-7"])
+
+    assert found == {"at-pane:pane-7": ("other-sid", "/other/proj")}
+
+
+def test_two_panes_bind_their_own_markers(_grok_home: Path) -> None:
+    _write(_grok_home, [_user(1, "at-pane:pane-a hi")], session="sid-a")
+    _write(_grok_home, [_user(1, "at-pane:pane-b hi")], session="sid-b")
+
+    found = GrokLogReader().find_sessions_by_marker(["at-pane:pane-a", "at-pane:pane-b"])
+
+    assert found["at-pane:pane-a"][0] == "sid-a"
+    assert found["at-pane:pane-b"][0] == "sid-b"
+
+
+def test_no_markers_wanted_scans_nothing(_grok_home: Path) -> None:
+    assert GrokLogReader().find_sessions_by_marker([]) == {}
+
+
+# ── resume preflight ────────────────────────────────────────────────────────
+
+def test_resume_preflight_can_now_check_a_session(_grok_home: Path) -> None:
+    """Newly answerable: the community CLI's single shared store had no
+    per-id path, so the preflight could only assume "resumable"."""
+    _write(_grok_home, [_turn(1)])
+
+    assert app_module._session_exists("grok", WS, SID) is True
+    assert app_module._session_exists("grok", WS, "not-a-session") is False
+    assert app_module._session_lookup_path("grok", WS, SID).endswith(
+        f"{GROUP}/{SID}/updates.jsonl"
+    )
+
+
+def test_resume_preflight_assumes_resumable_when_a_group_was_shortened(
+    _grok_home: Path,
+) -> None:
+    path = _write(_grok_home, [_turn(1)], group="proj-a1b2c3d4")
+    (path.parent.parent / ".cwd").write_text(WS)
+
+    assert app_module._session_lookup_path("grok", WS, SID) == ""
+    assert app_module._session_exists("grok", WS, SID) is True
