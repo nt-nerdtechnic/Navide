@@ -2,15 +2,15 @@
 
 [English](../en-US/getting-started.md) | [繁體中文](../zh-TW/getting-started.md) | 日本語 | [ドキュメント](README.md)
 
-Navide は Apple silicon 上の macOS 13 以降、Linux x64、Windows x64 をサポートします。[v0.2.1 GitHub Release](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.2.1) では、macOS 向けの DMG と ZIP を提供しています。Developer ID で署名され、Apple の Notarization を通過しています。
+Navide は Apple silicon 上の macOS 13 以降、Linux x64、x64 および Arm 版 Windows をサポートします。[v0.2.1 GitHub Release](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.2.1) では、macOS 向けの DMG と ZIP を提供しています。Developer ID で署名され、Apple の Notarization を通過しています。
 
 macOS にインストールするには、DMG をダウンロードして Navide を Applications にコピーし、そのまま開きます。Gatekeeper の回避は不要です。
 
-Release CI は Linux x64 向けに AppImage と `.deb` を、Windows x64 向けに NSIS Installer もビルドしますが、まだどのリリースでも配布されていません。これらは次のリリースから配布されるため、それまでこの 2 つの Platform では Source からインストールしてください。Windows Build は Code Signing されていないため、初回起動時に SmartScreen が警告します。
+Release CI は Linux x64 向けに AppImage と `.deb` を、x64 と Arm 版 Windows 向けに NSIS Installer もビルドしますが、まだどのリリースでも配布されていません。これらは次のリリースから配布されるため、それまでこの 2 つの Platform では Source からインストールしてください。Windows Build は Code Signing されていないため、初回起動時に SmartScreen が警告します。
 
 ## Source からインストールするために必要なもの
 
-- Apple silicon 上の macOS 13+、Linux x64、または Windows x64
+- Apple silicon 上の macOS 13+、Linux x64、または x64 / Arm 版 Windows
 - Node.js 22.12+（22.x）
 - pnpm 10+
 - Python 3.12+

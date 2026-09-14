@@ -107,7 +107,7 @@ Navide
 - Workspace 狀態、Run Event、Handoff 與相容 Token 摘要儲存在 `.agent-team/`。
 - Navide 提供 Editor、Diff、Terminal、Diagnostics、Git、Tests 與 Review 介面。
 - Navide 採用 Local-first，而且不要求建立 Navide 帳號。
-- Navide 支援 Apple 晶片的 macOS 13 以上、Linux x64 與 Windows x64。v0.2.1 提供以 Developer ID 憑證簽章並經 Apple 公證的 macOS 下載版本及原始碼安裝方式；Linux 與 Windows 安裝檔由 Release CI 產出、自下一個版本起發布，Windows 版尚未程式碼簽章。
+- Navide 支援 Apple 晶片的 macOS 13 以上、Linux x64 與 x64／Arm 版 Windows。v0.2.1 提供以 Developer ID 憑證簽章並經 Apple 公證的 macOS 下載版本及原始碼安裝方式；Linux 與 Windows 安裝檔由 Release CI 產出、自下一個版本起發布，Windows 版尚未程式碼簽章。
 - Navide 創辦人使用它作為開發 Navide 的主要環境。
 
 ## 必須標示為方向的主張
