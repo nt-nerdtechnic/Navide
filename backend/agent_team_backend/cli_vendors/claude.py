@@ -699,6 +699,19 @@ def _panel_probe_env() -> dict[str, str]:
     return env
 
 
+def _kill_group_now(pid: int) -> None:
+    """Force-kill a probe's process group without awaiting anything.
+
+    The async `_kill_group` sleeps between its SIGTERM and its SIGKILL, and a
+    cancellation handler is not a safe place to await — the handler may never
+    resume, which is exactly how a process gets abandoned. A probe being
+    cancelled is being thrown away, so it goes straight to SIGKILL."""
+    try:
+        osplat.process_tree.kill_group(osplat.process_tree.group_of(pid), force=True)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+
+
 async def _kill_group(pid: int) -> None:
     # Async on purpose: this runs on the backend's only event loop, and a
     # blocking sleep here freezes every WebSocket session for its duration.
@@ -741,6 +754,15 @@ async def read_usage_panel(binary: str) -> str:
         # and guessing is what set the budget too low the first time.
         log.info("claude /usage read ok in %.1fs (budget %.0fs)",
                  time.monotonic() - started, USAGE_TIMEOUT_S)
+    except asyncio.CancelledError:
+        # An account switch abandons this read (UsageService.
+        # _cancel_claude_reads). The probe runs in its own session, so nothing
+        # reaps it once we stop waiting: without this an abandoned Claude Code
+        # keeps running for minutes — on the very machine whose load made the
+        # read slow enough to be worth abandoning. Same leak the timeout path
+        # was written to prevent; cancellation is just the second way in.
+        _kill_group_now(proc.pid)
+        raise
     except asyncio.TimeoutError:
         await _kill_group(proc.pid)
         try:

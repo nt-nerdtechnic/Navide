@@ -44,9 +44,19 @@ def test_copilot_path_is_the_session_events_file(monkeypatch):
     assert Path(p).as_posix().endswith("/.copilot/session-state/sid1/events.jsonl")
 
 
+def test_grok_path_is_the_per_cwd_group_plus_the_id(tmp_path, monkeypatch):
+    """Moved out of the no-single-path list by the switch to the official xAI
+    CLI: the community one kept every session in one ~/.grok/grok.db, so no
+    id named a file."""
+    monkeypatch.setenv("GROK_HOME", str(tmp_path / ".grok"))
+
+    p = _session_lookup_path("grok", "/ws", "sid1")
+
+    assert Path(p).as_posix().endswith("/.grok/sessions/%2Fws/sid1/updates.jsonl")
+
+
 def test_vendor_managed_agents_have_no_single_path():
     assert _session_lookup_path("codex", "/ws", "sid1") == ""
-    assert _session_lookup_path("grok", "/ws", "sid1") == ""
     assert _session_lookup_path("opencode", "/ws", "sid1") == ""
     assert _session_lookup_path("kilo", "/ws", "sid1") == ""
     # Pi's filename carries a timestamp prefix the id alone can't reconstruct.
