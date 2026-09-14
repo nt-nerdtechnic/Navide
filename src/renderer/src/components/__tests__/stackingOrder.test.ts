@@ -38,6 +38,12 @@ const level = (name: string) => Number(TOKENS.match(new RegExp(`--z-${name}: (\\
  * stacking context is fine and there are dozens of those. What is wrong is a
  * literal large enough to leave the band it belongs to, because such a number
  * is invisible to every rule expressed in tokens.
+ *
+ * `.ts` and `.js` count, spelled `zIndex`, because that is where the rule was
+ * being broken while this test was green: two `inset: 0` sheets in
+ * useTerminal.ts assigned `zIndex: '99999'` to `element.style`, and reading
+ * only stylesheets for only the hyphenated spelling meant this file promised
+ * something it was not checking.
  */
 function literals(): { file: string; line: number; value: number }[] {
   const found: { file: string; line: number; value: number }[] = []
@@ -48,9 +54,9 @@ function literals(): { file: string; line: number; value: number }[] {
         if (entry !== 'node_modules' && entry !== '__tests__') walk(full)
         continue
       }
-      if (!entry.endsWith('.vue') && !entry.endsWith('.css')) continue
+      if (!/\.(vue|css|ts|js)$/.test(entry)) continue
       readFileSync(full, 'utf8').split('\n').forEach((text, i) => {
-        const m = text.match(/z-index:\s*(\d+)/)
+        const m = text.match(/z-index:\s*(\d+)/) ?? text.match(/zIndex:\s*['"](\d+)['"]/)
         if (m) found.push({ file: full.slice(RENDERER.length + 1), line: i + 1, value: Number(m[1]) })
       })
     }

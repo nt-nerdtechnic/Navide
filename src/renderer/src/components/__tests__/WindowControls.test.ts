@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { mount } from '@vue/test-utils'
+import { mount, type VueWrapper } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { platformId, setPlatformId, type PlatformId } from '../../../../shared/osplat'
 import WindowControls from '../WindowControls.vue'
@@ -35,9 +35,28 @@ function installBridge(maximized = false): void {
   ;(window as unknown as { agentTeam: unknown }).agentTeam = { windowControls: bridge }
 }
 
+/**
+ * The cluster is teleported to <body>, so it is not inside the wrapper and
+ * `wrapper.find` cannot see it. Query the document instead, and unmount every
+ * wrapper afterwards or the teleported nodes outlive their test.
+ */
+let wrappers: VueWrapper[] = []
+const render = (): VueWrapper => {
+  const wrapper = mount(WindowControls)
+  wrappers.push(wrapper)
+  return wrapper
+}
+const controls = (): Element | null => document.body.querySelector('.win-controls')
+const buttons = (): HTMLElement[] =>
+  [...document.body.querySelectorAll<HTMLElement>('.win-controls button')]
+const button = (label: string): HTMLElement | null =>
+  document.body.querySelector(`.win-controls button[aria-label="${label}"]`)
+
 beforeEach(() => installBridge())
 
 afterEach(() => {
+  wrappers.forEach((w) => w.unmount())
+  wrappers = []
   setPlatformId(BASELINE)
   delete (window as unknown as { agentTeam?: unknown }).agentTeam
 })
@@ -49,28 +68,37 @@ describe('WindowControls', () => {
   // set of buttons there would be a duplicate, not a fix.
   it('draws nothing on macOS', () => {
     on('darwin')
-    const wrapper = mount(WindowControls)
-    expect(wrapper.find('.win-controls').exists()).toBe(false)
-    expect(wrapper.findAll('button')).toHaveLength(0)
+    const wrapper = render()
+    expect(controls()).toBeNull()
+    expect(buttons()).toHaveLength(0)
+    // Not even the marker the title bar's padding rule keys off — macOS keeps
+    // its own 80px traffic-light gutter, untouched.
+    expect(wrapper.find('.win-controls-anchor').exists()).toBe(false)
+    // No element at all — the template is two `v-if`s and nothing else, so on
+    // macOS this component contributes no node to any document.
+    expect(wrapper.findAll('*')).toHaveLength(0)
   })
 
   it.each(['win32', 'linux'] as PlatformId[])(
     'draws all three controls on %s',
     (platform) => {
       on(platform)
-      const wrapper = mount(WindowControls)
-      expect(wrapper.find('.win-controls').exists()).toBe(true)
-      expect(wrapper.findAll('button')).toHaveLength(3)
+      const wrapper = render()
+      expect(controls()).not.toBeNull()
+      expect(buttons()).toHaveLength(3)
+      // The marker stays behind in the bar; only the buttons travel.
+      expect(wrapper.find('.win-controls-anchor').exists()).toBe(true)
     }
   )
 
   it('routes each button to its own bridge call', async () => {
     on('linux')
-    const wrapper = mount(WindowControls)
-    const [minimize, maximize, close] = wrapper.findAll('button')
-    await minimize.trigger('click')
-    await maximize.trigger('click')
-    await close.trigger('click')
+    render()
+    const [minimize, maximize, close] = buttons()
+    minimize.click()
+    maximize.click()
+    close.click()
+    await Promise.resolve()
     expect(bridge.minimize).toHaveBeenCalledTimes(1)
     expect(bridge.toggleMaximize).toHaveBeenCalledTimes(1)
     expect(bridge.close).toHaveBeenCalledTimes(1)
@@ -80,42 +108,43 @@ describe('WindowControls', () => {
   // would move the window instead of pressing the button.
   it('keeps the cluster out of the drag region', () => {
     on('linux')
-    const wrapper = mount(WindowControls)
-    expect(wrapper.find('.win-controls').classes()).toContain('win-controls')
+    render()
     // mousedown is stopped so the frameless drag handler never sees it.
-    expect(wrapper.html()).toContain('aria-label="Minimize"')
+    expect(button('Minimize')).not.toBeNull()
+    expect(controls()!.className).toContain('win-controls')
   })
 
   it('asks for the current maximised state on mount and subscribes', async () => {
     on('win32')
     installBridge(true)
-    const wrapper = mount(WindowControls)
+    render()
     await vi.waitFor(() => expect(bridge.isMaximized).toHaveBeenCalled())
     expect(bridge.onMaximizeChanged).toHaveBeenCalledTimes(1)
-    await vi.waitFor(() =>
-      expect(wrapper.find('button[aria-label="Restore"]').exists()).toBe(true)
-    )
+    await vi.waitFor(() => expect(button('Restore')).not.toBeNull())
   })
 
   it('follows the state pushed from main', async () => {
     on('linux')
-    const wrapper = mount(WindowControls)
+    const wrapper = render()
     await vi.waitFor(() => expect(bridge.onMaximizeChanged).toHaveBeenCalled())
     const push = bridge.onMaximizeChanged.mock.calls[0][0] as (v: boolean) => void
     push(true)
     await wrapper.vm.$nextTick()
-    expect(wrapper.find('button[aria-label="Restore"]').exists()).toBe(true)
+    expect(button('Restore')).not.toBeNull()
     push(false)
     await wrapper.vm.$nextTick()
-    expect(wrapper.find('button[aria-label="Maximize"]').exists()).toBe(true)
+    expect(button('Maximize')).not.toBeNull()
   })
 
   it('unsubscribes when the window goes away', async () => {
     on('linux')
-    const wrapper = mount(WindowControls)
+    const wrapper = render()
     await vi.waitFor(() => expect(bridge.onMaximizeChanged).toHaveBeenCalled())
     wrapper.unmount()
     expect(disposed).toBe(1)
+    // …and the teleported cluster goes with it, rather than being left on
+    // <body> after the window root that owns it is gone.
+    expect(controls()).toBeNull()
   })
 
   // The plugin case, not a defensive one: EditorWindowApp is mounted both as a
@@ -126,8 +155,8 @@ describe('WindowControls', () => {
   it('draws nothing without the Host bridge, even on a platform that needs controls', () => {
     on('linux')
     delete (window as unknown as { agentTeam?: unknown }).agentTeam
-    const wrapper = mount(WindowControls)
-    expect(wrapper.find('.win-controls').exists()).toBe(false)
-    expect(wrapper.findAll('button')).toHaveLength(0)
+    render()
+    expect(controls()).toBeNull()
+    expect(buttons()).toHaveLength(0)
   })
 })

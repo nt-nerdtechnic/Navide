@@ -1818,8 +1818,15 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
 
     const root = document.createElement('div')
     root.className = 'term-mention-menu-root'
+    // Above every layer the app draws (the highest is 3100) so a menu opened
+    // from the terminal is not buried, but below --z-window-controls: this is
+    // an `inset: 0` sheet, and at its old hardcoded 99999 it sat over the
+    // minimise/close buttons Windows and Linux draw for themselves. Being
+    // transparent made that worse, not better — the buttons stayed visible and
+    // stopped responding.
     Object.assign(root.style, {
-      position: 'fixed', inset: '0', zIndex: '99999', background: 'transparent',
+      position: 'fixed', inset: '0', zIndex: 'calc(var(--z-toast) + 200)',
+      background: 'transparent',
     })
 
     const card = document.createElement('div')
@@ -2933,8 +2940,10 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
 
       const root = document.createElement('div')
       root.className = 'term-file-picker-root'
+      // Same band as the mention menu, and for the same reason: over every
+      // layer the app draws, under the window's own controls.
       Object.assign(root.style, {
-        position: 'fixed', inset: '0', zIndex: '99999',
+        position: 'fixed', inset: '0', zIndex: 'calc(var(--z-toast) + 200)',
         display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
         paddingTop: '80px', background: 'rgba(0,0,0,0.35)',
       })

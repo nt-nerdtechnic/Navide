@@ -16325,9 +16325,12 @@ function paneIsCommander(p: ActivePane): boolean {
   <div class="app" :style="{ '--token-panel-width': tokenPanelWidth, '--left-width': leftTrackWidth, '--up-height': upTrackHeight, '--down-height': downTrackHeight, '--rail-size': RAIL_SIZE + 'px', '--chrome-bottom': shellLayout.chrome.statusbar ? '24px' : '0px' }" :class="{ 'is-resizing-shell': isShellDragging, 'is-resizing-grid': isGridDragging }">
     <!-- Custom titlebar: traffic lights on left (via hiddenInset), name centre, gear right -->
     <div class="titlebar">
-      <!-- Absolutely positioned, so DOM order here does not affect the bar's
-           own layout. Renders nothing on macOS, where the system draws the
-           traffic lights over this window itself. -->
+      <!-- Leaves a `display: none` marker here and teleports the buttons
+           themselves to <body>, so DOM order here does not affect the bar's
+           own layout — and no overlay in the app can cover them, which one
+           inside this bar's stacking context could. Renders nothing at all on
+           macOS, where the system draws the traffic lights over this window
+           itself. -->
       <WindowControls />
       <!-- The path and the workspace switcher both used to live here; the
            sidebar's Workspace section carries them now (the path under each
