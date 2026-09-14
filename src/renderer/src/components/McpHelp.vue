@@ -1,365 +1,378 @@
 <script setup lang="ts">
+import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+import { MCP_CATALOG } from '../data/mcpCatalog'
+import MockCardRow from './helpMocks/MockCardRow.vue'
+import MockFigure from './helpMocks/MockFigure.vue'
+import MockPaneCard from './helpMocks/MockPaneCard.vue'
+import MockSettings from './helpMocks/MockSettings.vue'
+import MockSidebar from './helpMocks/MockSidebar.vue'
+import MockStage from './helpMocks/MockStage.vue'
+import MockTreeRow from './helpMocks/MockTreeRow.vue'
+import MockWindow from './helpMocks/MockWindow.vue'
+
 // Read-only reference for how MCP is used in Navide, shown inside Settings →
-// 說明. The two directions below are genuinely separate subsystems that happen
-// to share a protocol name; conflating them is the usual confusion.
+// Help. The three directions below are genuinely separate subsystems that
+// happen to share a protocol name; conflating them is the usual confusion.
+// All prose lives in the locale files under `settings.help.mcp.*`; the tool
+// names below are identifiers and stay here.
 
-interface ToolRow {
-  name: string
-  what: string
+const planTools = [
+  'plan_list',
+  'plan_read',
+  'plan_create',
+  'plan_update_stage',
+  'plan_update_todo',
+  'plan_add_note',
+] as const
+
+const cliTools = [
+  'cli_list_targets',
+  'cli_whoami',
+  'cli_send',
+  'cli_send_and_wait',
+  'cli_check_message',
+  'cli_open_agent',
+  'cli_read_incoming',
+  'cli_cancel_message',
+  'cli_read_log',
+  'cli_get_status',
+  'cli_wait_idle',
+  'cli_interrupt',
+  'cli_close_agent',
+  'cli_message_log',
+  'cli_usage',
+  'cli_token_stats',
+] as const
+
+const workspaceTools = [
+  'workspace_list',
+  'skills_list',
+  'memory_list',
+  'pipeline_list',
+  'pipeline_status',
+  'pipeline_start',
+  'pipeline_next',
+  'pipeline_resume',
+  'pipeline_abort',
+  'pipeline_reset',
+  'pipeline_restart',
+  'pipeline_define',
+  'stage_define',
+  'role_define',
+  'cli_permission_settings',
+  'preview_clear',
+] as const
+
+const uiTools = ['ui_list_actions', 'ui_invoke', 'ui_snapshot', 'ui_diagnostics'] as const
+
+// Row keys for the comparison and troubleshooting tables; the text for each
+// row is looked up under `settings.help.mcp.<section>.<table>.<key>`.
+const comparison = ['server', 'caller', 'config', 'when', 'what'] as const
+
+const { t } = useI18n()
+
+// ── Mock screenshots ────────────────────────────────────────────────────────
+// Two HTML pictures, drawn from the components they depict rather than
+// captured, so they follow the user's theme and never show anyone's real
+// project. Every word is a locale lookup, so an untranslated label is caught
+// by the en-US rendering test.
+
+const MARKS = ['\u2460', '\u2461', '\u2462']
+
+function mockLegend(figure: string, rows: string[]): { mark: string; label: string; text: string }[] {
+  return rows.map((row, i) => ({
+    mark: MARKS[i],
+    label: t(`settings.help.mcp.mock.${figure}.legend.${row}.label`),
+    text: t(`settings.help.mcp.mock.${figure}.legend.${row}.text`),
+  }))
 }
 
-interface CompareRow {
-  aspect: string
-  provide: string
-  consume: string
+/** Sample name, kept in the locale files so a picture never hard-codes prose. */
+function sample(key: string): string {
+  return t(`settings.help.mcp.mock.sample.${key}`)
 }
 
-const planTools: ToolRow[] = [
-  { name: 'plan_list', what: '列出這個工作區的所有計畫，含階段與待辦進度' },
-  { name: 'plan_read', what: '讀取一份計畫的完整內容' },
-  { name: 'plan_create', what: '建立新計畫（從草稿開始）' },
-  { name: 'plan_update_stage', what: '推進階段：草稿 → 審查中 → 已核准 → 進行中 → 完成' },
-  { name: 'plan_update_todo', what: '更新單一待辦的狀態' },
-  { name: 'plan_add_note', what: '寫入發現或決策的紀錄' },
-]
+/** The status word the pane pill and the sidebar dot share. */
+function statusWord(status: string): string {
+  return t(`paneStatus.${status}`)
+}
 
-const cliTools: ToolRow[] = [
-  { name: 'cli_list_targets', what: '有哪些 CLI pane 在線上、位址怎麼寫、對方是否忙碌' },
-  { name: 'cli_whoami', what: '我自己是誰：pane_id、名字、workspace、是誰開了我；pane_id 是對自己動作的前提' },
-  { name: 'cli_send', what: '把任意指令送給指定的 pane（同工作區或跨工作區視窗），回傳查詢用的 msg_key；位址填 group 則廣播給自己分頁群組裡的其他 pane' },
-  { name: 'cli_send_and_wait', what: '送出指令並等對方把這回合做完，順便帶回它最後說了什麼' },
-  { name: 'cli_check_message', what: '用 msg_key 查一則送出的訊息後來如何：排隊中、已送達、或失敗與原因（只留最近一小時）' },
-  { name: 'cli_open_agent', what: '開一個新的 CLI pane 並指派任務，完成後它會回報；可指定 model 與 effort，該 CLI 不支援時會拒絕而非忽略' },
-  { name: 'cli_read_incoming', what: '讀取寄給自己的訊息全文；預設讀了就不再注入輸入框，peek 可只讀不消費' },
-  { name: 'cli_cancel_message', what: '收回一則還沒送進去的訊息；已經開始投遞就收不回來，會告訴你它最終如何' },
-  { name: 'cli_read_log', what: '讀取另一個 pane 對話紀錄的結尾（預設 200 行），也可帶游標只讀新增的部分' },
-  { name: 'cli_get_status', what: '查另一個 pane 是否忙碌、最近一次活動' },
-  { name: 'cli_wait_idle', what: '等到另一個 pane 閒置或逾時（最長 120 秒）；逾時會說明是卡在權限提示、還在做事、還是連不上' },
-  { name: 'cli_interrupt', what: '送出該 CLI 的中斷鍵給本機 pane；這不等於停止，可能只是清空輸入框，結果要自己去確認' },
-  { name: 'cli_close_agent', what: '關掉另一個 pane，補上 cli_open_agent 的另一半；這會終止對方正在做的事且無法復原，先用 cli_get_status 確認它不忙' },
-  { name: 'cli_message_log', what: '自己收送過的訊息歷史；訊息一旦送達就從 inbox_summary 與 pending_incoming 消失，這裡是唯一還查得到的地方' },
-  { name: 'cli_usage', what: '各家 CLI 還剩多少額度；派工前先看，否則訊息會送達到一個已經用完額度的 CLI 手上' },
-  { name: 'cli_token_stats', what: '這個工作區目前的 token 用量' },
-]
+const settingsLegend = computed(() => mockLegend('settings', ['nav', 'actions', 'card']))
+const addressingLegend = computed(() => mockLegend('addressing', ['local', 'cross']))
 
-const workspaceTools: ToolRow[] = [
-  { name: 'workspace_list', what: '這台機器上已知的工作區，含哪些目前有活著的 pane；要對別的專案動作時用它取得合法路徑' },
-  { name: 'skills_list', what: 'Skill 庫有哪些、哪些投遞給了自己' },
-  { name: 'memory_list', what: '各 CLI 的指示檔（CLAUDE.md、AGENTS.md…）清單與內容；只讀，且只能讀掃描清單裡列出的檔案' },
-  { name: 'pipeline_list', what: '有哪些 pipeline、各自的階段與角色定義' },
-  { name: 'pipeline_status', what: '這個工作區目前的執行狀態，跑到第幾階段' },
-  { name: 'pipeline_start', what: '啟動一次 pipeline 執行；這會依階段開出多個 CLI pane 並消耗額度' },
-  { name: 'pipeline_next', what: '推進到下一階段；已在最後一階段時會拒絕，而不是把 run 收掉' },
-  { name: 'pipeline_resume', what: '接續一個中斷的 run' },
-  { name: 'pipeline_abort', what: '中止進行中的執行' },
-  { name: 'pipeline_reset', what: '清掉目前 run 的進度並拆除該視窗的所有 pane（含手動開的）；無法復原' },
-  { name: 'pipeline_restart', what: '砍掉現有 pipeline pane 後從頭再跑一次同一個任務；無法復原' },
-  { name: 'pipeline_define', what: '建立／改名／刪除 pipeline、設為使用中、重設內建；run 進行中時 delete 與 set_active 會被拒絕' },
-  { name: 'stage_define', what: '階段的新增修改／刪除／重新排序／重設；run 正在用那個 pipeline 時四個操作都會被拒絕' },
-  { name: 'role_define', what: '角色的新增修改／改名／刪除／重設；改名會連帶改寫所有引用它的 slot，仍被引用的角色不給刪' },
-  { name: 'cli_permission_settings', what: '讀寫 CLI 權限略過旗標（yolo）。這是全域設定，不是 pipeline 專屬，只影響之後開的 pane；某家 CLI 實際會不會帶旗標要看回傳的 agents[].skipFlag，不是只看全域值' },
-  { name: 'preview_clear', what: '清空預覽面板的變更記錄軌；刪掉的是你在畫面上看到的那些行，含檔案監看與你自己的操作，無法復原' },
-]
+// The Integrations group of the settings nav, in the order it draws them.
+const settingsNav = computed(() => [
+  { label: t('settings.nav.mcp'), active: true },
+  { label: t('settings.nav.skills') },
+  { label: t('settings.nav.prompts') },
+  { label: t('settings.nav.memory') },
+])
 
-const uiTools: ToolRow[] = [
-  { name: 'ui_list_actions', what: '列出目標視窗目前註冊的所有動作 id' },
-  { name: 'ui_invoke', what: '呼叫一個註冊動作（例如開新 pane、切分頁、開設定）' },
-  { name: 'ui_snapshot', what: '取得目標視窗目前的 UI 狀態快照（pane、分頁、焦點…）' },
-  { name: 'ui_diagnostics', what: '讀取該視窗記錄的 UI 動作診斷；工具回報成功但視窗內行為不對時，用它查真正發生什麼' },
-]
+const settingsActions = computed(() => [
+  t('action.add-mcp'),
+  t('settings.mcp.add-custom'),
+  t('action.refresh'),
+])
 
-const comparison: CompareRow[] = [
-  {
-    aspect: '誰是 server',
-    provide: 'Navide',
-    consume: '外部服務（Context7、GitHub…）',
-  },
-  {
-    aspect: '誰在呼叫',
-    provide: 'pane 裡的 CLI agent',
-    consume: 'Navide 後端',
-  },
-  {
-    aspect: '在哪設定',
-    provide: '不用設定，開 pane 就自動接上',
-    consume: '設定 → MCP',
-  },
-  {
-    aspect: '什麼時候作用',
-    provide: 'agent 想用的時候',
-    consume: '只在流程（pipeline）啟動時',
-  },
-  {
-    aspect: '做什麼',
-    provide: '操作 Navide：計畫、傳訊、開 agent',
-    consume: '讀取技術文件，附加到開場提示',
-  },
-]
+// Straight off MCP_CATALOG, so the picture cannot drift from the real list.
+// Context7 ships enabled, hence the Installed badge on the first row.
+const catalogRows = computed(() =>
+  MCP_CATALOG.slice(0, 3).map((entry, i) => ({
+    name: entry.name,
+    label: entry.label,
+    text: t(entry.descriptionKey),
+    installed: i === 0,
+  })),
+)
+
+// The sidebar's tab strip, in the order it draws them.
+const sidebarIcons = ['\u{1F916}', '\u{1F500}', '\u{1F4C1}', '\u{1F33F}', '\u{1F4CB}']
+
+// One run-group tab per window: every workspace has at least one, so an
+// empty tab bar would be a state the product never shows.
+const tabsA = computed(() => [{ label: sample('group'), count: 2, status: 'running' as const }])
+const tabsB = computed(() => [{ label: sample('group'), count: 1, status: 'idle' as const }])
+
+const troubleshooting = [
+  'noTools',
+  'serverUnused',
+  'planLoadFailed',
+  'staleIdentity',
+  'externalRejected',
+] as const
 </script>
 
 <template>
   <div class="mh">
-    <p class="mh-intro">
-      MCP（Model Context Protocol）是一套讓 AI agent 呼叫外部工具的通用協定。
-      Navide 用到它的地方有<strong>三個方向</strong>，彼此除了協定同名之外沒有關係——
-      這是最常見的誤解來源，所以先分清楚。
-    </p>
+    <p class="mh-intro" v-html="$t('settings.help.mcp.intro')"></p>
 
     <div class="mh-dirs">
-      <div class="mh-dir">
-        <div class="mh-dir-arrow">CLI agent → Navide</div>
-        <div class="mh-dir-title">Navide 提供工具</div>
-        <p class="mh-dir-text">
-          pane 裡的 agent 可以反過來操作 Navide：讀寫計畫、傳訊給其他 pane、開新的 agent。
-          <strong>不需要任何設定</strong>，開 pane 時自動接上。
-        </p>
-      </div>
-      <div class="mh-dir">
-        <div class="mh-dir-arrow">Navide → 外部服務</div>
-        <div class="mh-dir-title">Navide 取用文件</div>
-        <p class="mh-dir-text">
-          Navide 後端連到外部 MCP server 讀取技術文件，附加到流程的開場提示裡。
-          在<strong>設定 → MCP</strong> 設定，<strong>只在跑流程時作用</strong>。
-        </p>
-      </div>
-      <div class="mh-dir">
-        <div class="mh-dir-arrow">外部 client → Navide</div>
-        <div class="mh-dir-title">外部控制</div>
-        <p class="mh-dir-text">
-          Navide process 之外的 client（腳本、另一個 agent……）也能操作 Navide 本身。
-          <strong>預設關閉</strong>，要在<strong>設定 → MCP → External access</strong> 手動開啟。
-        </p>
+      <div v-for="dir in ['provide', 'consume', 'external']" :key="dir" class="mh-dir">
+        <div class="mh-dir-arrow">{{ $t(`settings.help.mcp.dirs.${dir}.arrow`) }}</div>
+        <div class="mh-dir-title">{{ $t(`settings.help.mcp.dirs.${dir}.title`) }}</div>
+        <p class="mh-dir-text" v-html="$t(`settings.help.mcp.dirs.${dir}.text`)"></p>
       </div>
     </div>
 
-    <!-- ── 方向一 ───────────────────────────────────────────────────── -->
+    <!-- ── Direction 1 ──────────────────────────────────────────────── -->
     <section class="mh-section">
-      <h2 class="mh-h2">方向一：Navide 提供給 CLI agent 的工具</h2>
-      <p class="mh-p">
-        pane 一啟動，agent 的工具清單裡就會多出這些。你不需要教它，也不用設定——
-        直接用中文交代就好，例如「幫我把這份計畫的第二階段標成完成」。
-      </p>
+      <h2 class="mh-h2">{{ $t('settings.help.mcp.s1.title') }}</h2>
+      <p class="mh-p">{{ $t('settings.help.mcp.s1.p1') }}</p>
 
-      <h3 class="mh-h3">計畫文件</h3>
+      <h3 class="mh-h3">{{ $t('settings.help.mcp.s1.h1') }}</h3>
       <div class="mh-tablewrap">
         <table class="mh-table">
           <tbody>
-            <tr v-for="t in planTools" :key="t.name">
-              <td class="mh-tool"><code>{{ t.name }}</code></td>
-              <td>{{ t.what }}</td>
+            <tr v-for="name in planTools" :key="name">
+              <td class="mh-tool"><code>{{ name }}</code></td>
+              <td>{{ $t(`settings.help.mcp.s1.planTools.${name}`) }}</td>
             </tr>
           </tbody>
         </table>
       </div>
-      <p class="mh-note">
-        計畫是 agent 用這些工具寫出來的 HTML，你在 Navide 的計畫視窗閱讀與核准。
-        agent 只有在階段推進到「已核准」之後才會開始寫程式。
-      </p>
+      <p class="mh-note">{{ $t('settings.help.mcp.s1.note1') }}</p>
 
-      <h3 class="mh-h3">工作區、Pipeline 編排與設定</h3>
+      <h3 class="mh-h3">{{ $t('settings.help.mcp.s1.h2') }}</h3>
       <div class="mh-tablewrap">
         <table class="mh-table">
           <tbody>
-            <tr v-for="t in workspaceTools" :key="t.name">
-              <td class="mh-tool"><code>{{ t.name }}</code></td>
-              <td>{{ t.what }}</td>
+            <tr v-for="name in workspaceTools" :key="name">
+              <td class="mh-tool"><code>{{ name }}</code></td>
+              <td>{{ $t(`settings.help.mcp.s1.workspaceTools.${name}`) }}</td>
             </tr>
           </tbody>
         </table>
       </div>
-      <p class="mh-note">
-        這幾個是 agent 用自己的工具做不到的事——額度、pipeline 狀態、skill 投遞對象都只有
-        Navide 知道。Git、檔案讀寫、shell 刻意<strong>沒有</strong>包成 MCP 工具：agent 本來就有
-        這些能力，包一層只會更難用，還要每個 pane 都付工具清單的 context 成本。
-      </p>
+      <p class="mh-note" v-html="$t('settings.help.mcp.s1.note2')"></p>
 
-      <h3 class="mh-h3">與其他 CLI 協作</h3>
+      <h3 class="mh-h3">{{ $t('settings.help.mcp.s1.h3') }}</h3>
       <div class="mh-tablewrap">
         <table class="mh-table">
           <tbody>
-            <tr v-for="t in cliTools" :key="t.name">
-              <td class="mh-tool"><code>{{ t.name }}</code></td>
-              <td>{{ t.what }}</td>
+            <tr v-for="name in cliTools" :key="name">
+              <td class="mh-tool"><code>{{ name }}</code></td>
+              <td>{{ $t(`settings.help.mcp.s1.cliTools.${name}`) }}</td>
             </tr>
           </tbody>
         </table>
       </div>
-      <p class="mh-note">
-        詳細用法見本頁的「CLI 互傳訊息」主題。
-        「等對方做完」是盡力而為：多數 CLI（含 Cursor）會自己回報回合結束，
-        Kimi／Grok／Pi／Qwen 是靠 8 秒沒動靜推論的。回傳的 <code>source</code> 就是在講
-        這次的「做完」有多可信，這幾家請當作參考而不是保證。
-        若等待途中對方的視窗被關掉、pane 被砍掉，<code>source</code> 會是
-        <code>target_lost</code>：訊息確實送出去了，只是已經無法確認它做完沒有——
-        這不是送出失敗，不要重送。
-      </p>
-      <p class="mh-note">
-        同一個工作區裡可以有兩個 pane 同名，這時候光靠名字說不清要找誰，
-        上面幾個工具會直接以 <code>ambiguous-target</code> 拒絕，而不是隨便挑一個。
-        要指定其中一個，就把 <code>cli_list_targets</code> 回傳的 <code>pane_id</code>
-        當參數傳給 <code>cli_send</code>、<code>cli_send_and_wait</code>、
-        <code>cli_read_log</code>、<code>cli_get_status</code> 或
-        <code>cli_wait_idle</code>，這時候位址參數就不用填了。
-        平常還是用名字比較好讀；pane 換了新的 CLI 重開之後 id 會換一個，
-        遇到 <code>unknown-pane-id</code> 重新查一次即可。跨裝置的 pane 沒有本機 id，
-        只能用名字定址。
-      </p>
-      <p class="mh-note">
-        <code>cli_send</code> 的位址填 <code>group</code>，不是去找名叫 group 的 pane，而是廣播給
-        <strong>自己所在分頁群組</strong>裡的其他 pane（同工作區）。這跟裸行協定的
-        <code>all</code> 不一樣：<code>all</code> 是整個視窗、不分群組。沒有分到任何
-        群組的 pane 共用同一個隱含群組，所以它們彼此送得到，而不是誰也送不到。
-        回傳的形狀也不一樣：<code>recipients</code> 裡每個收件者各有一個
-        <code>msg_key</code>，要分別拿去 <code>cli_check_message</code> 查；空的
-        <code>recipients</code> 代表你的群組裡沒有別人，不是失敗。代價與
-        <code>all</code> 相同：真的取名叫 group 的 pane 從此無法用名字定址。
-      </p>
+      <p class="mh-note" v-html="$t('settings.help.mcp.s1.note3')"></p>
+      <p class="mh-note" v-html="$t('settings.help.mcp.s1.note4')"></p>
+      <p class="mh-note" v-html="$t('settings.help.mcp.s1.note5')"></p>
 
-      <h3 class="mh-h3">哪些 CLI 接得到</h3>
-      <p class="mh-p">
-        十四家裡目前有 <strong>十家</strong>：Claude Code、Codex、Copilot CLI、Qwen Code、
-        OpenCode、Kilo Code、Kimi Code、Grok CLI、Antigravity CLI、Cursor CLI。
-        接法看那家 CLI 自己提供什麼介面——啟動參數（Claude Code、Codex、Copilot、Qwen）、
-        一個帶著整份設定的環境變數（OpenCode、Kilo），或一份只給這個 pane 用的設定目錄鏡像
-        （Kimi、Grok、Antigravity）。這三種都<strong>不會動到你自己的 MCP 設定檔</strong>。
-      </p>
-      <p class="mh-note">
-        <strong>Cursor 是唯一的例外</strong>：它只讀工作區裡的 <code>.cursor/mcp.json</code>，
-        所以 Navide 會合併寫入那個檔，並把它加進 <code>.git/info/exclude</code>，不會弄髒
-        你的 git 狀態。
-      </p>
-      <p class="mh-note">
-        還沒接上的是 <strong>Aider、Muse Code、Pi</strong>（這三家的 CLI 沒有 MCP 介面）
-        與 <strong>Droid</strong>（Navide 尚未接）。這些 pane 仍然可以用裸行輸出協定跟其他
-        pane 傳訊，只是沒有 MCP 工具可以呼叫。
-      </p>
-      <p class="mh-note">
-        接線是 <strong>pane 啟動當下</strong>做的。所以功能更新後，已經開著的 pane
-        還是舊的工具清單——關掉重開才會拿到新的。
-      </p>
+      <!-- Who a name reaches. Two windows side by side is the only way to show
+           that a bare name never leaves its own one. -->
+      <MockFigure
+        :caption="$t('settings.help.mcp.mock.addressing.caption')"
+        :legend="addressingLegend"
+      >
+        <div class="mh-mock-pair">
+          <MockWindow :title="sample('workspaceA')">
+            <MockSidebar :icons="sidebarIcons" :active="0" :mark="MARKS[0]">
+              <MockTreeRow kind="workspace" :label="sample('workspaceA')" :count="2" />
+              <MockTreeRow
+                kind="pane"
+                :label="sample('pane1')"
+                :sub="sample('sub1')"
+                status="running"
+                active
+              />
+              <MockTreeRow
+                kind="pane"
+                :label="sample('pane2')"
+                :sub="sample('sub2')"
+                status="idle"
+              />
+            </MockSidebar>
+            <MockStage :tabs="tabsA" :columns="1">
+              <MockPaneCard
+                :title="sample('pane1')"
+                status="running"
+                :status-label="statusWord('running')"
+                :lines="3"
+                focus
+              />
+            </MockStage>
+          </MockWindow>
+
+          <MockWindow :title="sample('workspaceB')" :mark="MARKS[1]">
+            <MockSidebar :icons="sidebarIcons" :active="0">
+              <MockTreeRow kind="workspace" :label="sample('workspaceB')" :count="1" />
+              <MockTreeRow
+                kind="pane"
+                :label="sample('pane2')"
+                :sub="sample('sub2')"
+                status="idle"
+              />
+            </MockSidebar>
+            <MockStage :tabs="tabsB" :columns="1">
+              <MockPaneCard
+                :title="sample('pane2')"
+                status="idle"
+                :status-label="statusWord('idle')"
+                :lines="3"
+              />
+            </MockStage>
+          </MockWindow>
+        </div>
+      </MockFigure>
+
+      <h3 class="mh-h3">{{ $t('settings.help.mcp.s1.h4') }}</h3>
+      <p class="mh-p" v-html="$t('settings.help.mcp.s1.p2')"></p>
+      <p class="mh-note" v-html="$t('settings.help.mcp.s1.note6')"></p>
+      <p class="mh-note" v-html="$t('settings.help.mcp.s1.note7')"></p>
+      <p class="mh-note" v-html="$t('settings.help.mcp.s1.note8')"></p>
     </section>
 
-    <!-- ── 方向二 ───────────────────────────────────────────────────── -->
+    <!-- ── Direction 2 ──────────────────────────────────────────────── -->
     <section class="mh-section">
-      <h2 class="mh-h2">方向二：Navide 取用外部 MCP</h2>
-      <p class="mh-p">
-        這是<strong>設定 → MCP</strong> 那一頁在管的東西。Navide 後端會連到你設定的 MCP server，
-        讀取跟當前任務相關的技術文件，把它附加在流程開場提示的前面，讓 agent 一開始就有正確的
-        API 參考。
-      </p>
-      <p class="mh-p">內建目錄裡的選項：</p>
+      <h2 class="mh-h2">{{ $t('settings.help.mcp.s2.title') }}</h2>
+      <p class="mh-p" v-html="$t('settings.help.mcp.s2.p1')"></p>
+      <p class="mh-p">{{ $t('settings.help.mcp.s2.p2') }}</p>
       <ul class="mh-list">
-        <li><code>context7</code> — 各種框架與函式庫的最新官方文件</li>
-        <li><code>github</code> — 讀取 repo、issue、PR 內容</li>
-        <li><code>filesystem</code> — 讀取指定目錄的檔案</li>
-        <li><code>brave-search</code> — 網路搜尋</li>
-        <li><code>sentry</code> — 讀取錯誤追蹤資料</li>
+        <li v-html="$t('settings.help.mcp.s2.catalog.context7')"></li>
+        <li v-html="$t('settings.help.mcp.s2.catalog.github')"></li>
+        <li v-html="$t('settings.help.mcp.s2.catalog.filesystem')"></li>
+        <li v-html="$t('settings.help.mcp.s2.catalog.brave-search')"></li>
+        <li v-html="$t('settings.help.mcp.s2.catalog.sentry')"></li>
       </ul>
+
+      <!-- The page those entries are added from. The rows come straight off
+           MCP_CATALOG, so the picture cannot drift from the real list. -->
+      <MockFigure
+        :caption="$t('settings.help.mcp.mock.settings.caption')"
+        :legend="settingsLegend"
+      >
+        <MockSettings
+          :nav-title="$t('settings.nav.title')"
+          :nav-group="$t('settings.nav.group.integration')"
+          :nav="settingsNav"
+          :page-title="$t('settings.mcp.all-title')"
+          :actions="settingsActions"
+          :nav-mark="MARKS[0]"
+        >
+          <MockCardRow
+            v-for="(row, i) in catalogRows"
+            :key="row.name"
+            :title="row.label"
+            :text="row.text"
+            :badge="row.installed ? $t('settings.help.mcp.mock.settings.installed') : undefined"
+            :action="row.installed ? undefined : $t('settings.help.mcp.mock.settings.add')"
+            :mark="i === 0 ? MARKS[2] : undefined"
+          />
+        </MockSettings>
+      </MockFigure>
+
       <div class="mh-warn">
-        <p>
-          <strong>這裡設定的 server 不會出現在 CLI agent 的工具清單裡。</strong>
-          它們只服務「讀取上下文 → 注入開場提示」這一件事，而且<strong>只在跑流程時</strong>觸發，
-          你手動開的 pane 完全不會用到。
-        </p>
-        <p>
-          想讓 Claude Code 或 Codex 自己能用某個 MCP server（例如讓它直接查 GitHub），
-          請用那個 CLI 自己的 MCP 設定，不是這裡。
-        </p>
+        <p v-html="$t('settings.help.mcp.s2.warn.p1')"></p>
+        <p>{{ $t('settings.help.mcp.s2.warn.p2') }}</p>
       </div>
     </section>
 
-    <!-- ── 方向三 ───────────────────────────────────────────────────── -->
+    <!-- ── Direction 3 ──────────────────────────────────────────────── -->
     <section class="mh-section">
-      <h2 class="mh-h2">方向三：外部 client 控制 Navide</h2>
-      <p class="mh-p">
-        跟方向一同一個端點（<code>/plan-mcp</code>），但開放給 <strong>Navide process 之外</strong>
-        的 client 連——外部腳本、跑在別處的 agent、任何 MCP client 都算。除了方向一那些工具，
-        還多了兩組：
-      </p>
+      <h2 class="mh-h2">{{ $t('settings.help.mcp.s3.title') }}</h2>
+      <p class="mh-p" v-html="$t('settings.help.mcp.s3.p1')"></p>
 
-      <h3 class="mh-h3">操作 Navide 介面</h3>
+      <h3 class="mh-h3">{{ $t('settings.help.mcp.s3.h1') }}</h3>
       <div class="mh-tablewrap">
         <table class="mh-table">
           <tbody>
-            <tr v-for="t in uiTools" :key="t.name">
-              <td class="mh-tool"><code>{{ t.name }}</code></td>
-              <td>{{ t.what }}</td>
+            <tr v-for="name in uiTools" :key="name">
+              <td class="mh-tool"><code>{{ name }}</code></td>
+              <td>{{ $t(`settings.help.mcp.s3.uiTools.${name}`) }}</td>
             </tr>
           </tbody>
         </table>
       </div>
-      <p class="mh-note">
-        <code>ui_invoke</code> 能呼叫的動作 id（例如 <code>ui.pane.create</code>、
-        <code>ui.settings.open</code>）要先用 <code>ui_list_actions</code> 查——它會列出目標視窗
-        當下註冊的所有 id，實際可用的以那份清單為準。
-      </p>
+      <p class="mh-note" v-html="$t('settings.help.mcp.s3.note')"></p>
 
       <div class="mh-warn">
-        <p><strong>開啟後，本機任何程式皆可控制 Navide。</strong>能做的事包括開關 pane、跨工作區傳訊、
-          讀取其他 pane 的對話紀錄、操作介面。連線網址（含一次性 token）在
-          <strong>設定 → MCP → External access</strong> 複製，「重新產生 token」會讓舊網址立即失效。</p>
-        <p>同一個面板裡的 <strong>Chrome DevTools Protocol</strong> 開關是另一條、更底層的逃生口——
-          給截圖或還沒註冊成動作的操作用，不是主要路徑。它一旦開啟，本機任何行程都能對 Navide
-          執行任意程式碼，且僅綁定 127.0.0.1，需要重啟 App 才生效。</p>
+        <p v-html="$t('settings.help.mcp.s3.warn.p1')"></p>
+        <p v-html="$t('settings.help.mcp.s3.warn.p2')"></p>
       </div>
     </section>
 
-    <!-- ── 對照 ─────────────────────────────────────────────────────── -->
+    <!-- ── Side by side ─────────────────────────────────────────────── -->
     <section class="mh-section">
-      <h2 class="mh-h2">方向一與方向二的對照</h2>
+      <h2 class="mh-h2">{{ $t('settings.help.mcp.s4.title') }}</h2>
       <div class="mh-tablewrap">
         <table class="mh-table">
           <thead>
             <tr>
               <th></th>
-              <th>Navide 提供工具</th>
-              <th>Navide 取用文件</th>
+              <th>{{ $t('settings.help.mcp.s4.table.provide') }}</th>
+              <th>{{ $t('settings.help.mcp.s4.table.consume') }}</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="row in comparison" :key="row.aspect">
-              <th class="mh-aspect">{{ row.aspect }}</th>
-              <td>{{ row.provide }}</td>
-              <td>{{ row.consume }}</td>
+            <tr v-for="key in comparison" :key="key">
+              <th class="mh-aspect">{{ $t(`settings.help.mcp.s4.comparison.${key}.aspect`) }}</th>
+              <td>{{ $t(`settings.help.mcp.s4.comparison.${key}.provide`) }}</td>
+              <td>{{ $t(`settings.help.mcp.s4.comparison.${key}.consume`) }}</td>
             </tr>
           </tbody>
         </table>
       </div>
     </section>
 
-    <!-- ── 疑難排解 ─────────────────────────────────────────────────── -->
+    <!-- ── Troubleshooting ──────────────────────────────────────────── -->
     <section class="mh-section">
-      <h2 class="mh-h2">出問題時</h2>
+      <h2 class="mh-h2">{{ $t('settings.help.mcp.s5.title') }}</h2>
       <div class="mh-tablewrap">
         <table class="mh-table">
           <thead>
-            <tr><th>症狀</th><th>原因與解法</th></tr>
+            <tr>
+              <th>{{ $t('settings.help.mcp.s5.table.symptom') }}</th>
+              <th>{{ $t('settings.help.mcp.s5.table.detail') }}</th>
+            </tr>
           </thead>
           <tbody>
-            <tr>
-              <td>agent 說它沒有計畫或傳訊的工具</td>
-              <td>那個 pane 開啟時還沒接上（功能更新前開的），或用的 CLI 屬於尚未接上 MCP 的四家
-                  （Aider／Droid／Muse Code／Pi）。前者關掉重開即可；後者請改用裸行輸出協定傳訊。</td>
-            </tr>
-            <tr>
-              <td>設定 → MCP 加了 server，但 agent 用不到</td>
-              <td>那是方向二，只給流程讀文件用。要讓 agent 自己能呼叫，得設定在那個 CLI 自己的
-                  MCP 設定裡。設定 → MCP 下半部的「各 CLI 的 MCP」會唯讀列出每家 CLI 自己
-                  設了哪些 server，可以直接對照確認。</td>
-            </tr>
-            <tr>
-              <td>agent 說計畫載入失敗</td>
-              <td>計畫工具都要指定工作區路徑。若 agent 傳的路徑跟 pane 實際的工作區不同，
-                  就會寫到 Navide 看不見的地方。請它改用 pane 的工作區路徑。</td>
-            </tr>
-            <tr>
-              <td>提示 pane 身分已失效</td>
-              <td>pane 被拆到別的視窗或視窗重新載入過，接線時記下的身分過期了。重開該 pane。</td>
-            </tr>
-            <tr>
-              <td>外部 client 連線被拒（external token rejected / disabled）</td>
-              <td>方向三預設關閉，要先在設定 → MCP → External access 開啟；或是網址裡的 token
-                  已經被「重新產生 token」換掉，複製最新的連線網址即可。</td>
+            <tr v-for="key in troubleshooting" :key="key">
+              <td>{{ $t(`settings.help.mcp.s5.troubleshooting.${key}.symptom`) }}</td>
+              <td>{{ $t(`settings.help.mcp.s5.troubleshooting.${key}.detail`) }}</td>
             </tr>
           </tbody>
         </table>
@@ -472,6 +485,16 @@ const comparison: CompareRow[] = [
   line-height: 1.6;
 }
 
+/* Two windows abreast inside a figure; they stack when the dialog is narrow. */
+.mh-mock-pair {
+  display: flex;
+  gap: 0.6em;
+  align-items: stretch;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.mh-mock-pair > * { flex: 1 1 15em; min-width: 0; }
+
 .mh-tablewrap {
   overflow-x: auto;
   border: 1px solid var(--border-muted);
@@ -505,7 +528,9 @@ const comparison: CompareRow[] = [
 }
 .mh-tool { white-space: nowrap; }
 
-.mh code {
+/* `code` also appears inside v-html prose, which carries no scoped data-v
+   attribute — hence :deep(). */
+.mh :deep(code) {
   font-family: ui-monospace, 'SF Mono', Menlo, monospace;
   font-size: 0.92em;
   background: var(--bg-inset);
