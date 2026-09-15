@@ -7075,13 +7075,19 @@ async def pipeline_slot_session(session: "Session", msg_id: str, msg_type: str, 
     )
 
 
-async def _sweep_pane_ptys(session: "Session", pane_id: str) -> None:
+async def _sweep_pane_ptys(session: "Session", pane_id: str, *, force: bool = True) -> None:
     """Take down any PTY still running under a pane whose record is going away.
 
     The renderer kills through its own terminal ref first and this then finds
     nothing; it is the panes without one — a restore placeholder, or a pane
     whose kill was refused — that would otherwise have their record removed
     while the process kept running with nothing left pointing at it.
+
+    force=False for a caller that keeps the record: the CLI it reaches is one
+    the renderer never managed to kill, so it is running normally, and the
+    record left behind promises a resume that reads the transcript it has not
+    finished writing. kill() escalates to SIGKILL after its own grace either
+    way, so the process still goes down.
     """
     from . import app
 
@@ -7090,7 +7096,7 @@ async def _sweep_pane_ptys(session: "Session", pane_id: str) -> None:
         # would match whatever the lookup returns for "no pane".
         return
     for term_session_id in session.terminals.live_session_ids_for_pane(pane_id):
-        await session.terminals.kill(term_session_id, force=True)
+        await session.terminals.kill(term_session_id, force=force)
         app._PTY_OWNERS.pop(term_session_id, None)
         app.attribution.unregister_pane(pane_id)
     for workspace_path in app.dev_time_store.pane_removed(pane_id):
@@ -7270,6 +7276,21 @@ async def manual_pane_unspawn(session: "Session", msg_id: str, msg_type: str, pa
     await session.send_json(
         make_response(msg_id, msg_type, app._project_payload(project))
     )
+
+
+@handler("manual_pane.release_pty")
+async def manual_pane_release_pty(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """End a pane's PTY while its record stays 'spawned'.
+
+    Closing a workspace ends the CLIs running in it but keeps the records, so
+    reopening it brings the panes back as resumable placeholders. The renderer
+    kills through its own terminal ref — and a pane that never realized has
+    none, which is why unspawn carried the sweep that reached it. A close that
+    keeps the record sends no unspawn, so it says this instead; without it the
+    placeholder's process would keep running with nothing pointing at it.
+    """
+    await _sweep_pane_ptys(session, payload["pane_id"], force=False)
+    await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
 
 
 @handler("manual_pane.session")

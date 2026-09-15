@@ -176,3 +176,45 @@ async def test_manual_pane_unspawn_spares_the_pty_of_a_live_pane_sharing_the_ses
     assert {p["pane_id"]: p["spawn_status"] for p in panes} == {
         "M1": "removed", "M2": "spawned",
     }
+
+
+@pytest.mark.asyncio
+async def test_release_pty_sweeps_without_retiring_the_record(tmp_path: Path) -> None:
+    """Closing a workspace keeps the record and still has to end the process.
+
+    The renderer kills through its own terminal ref, which a pane that never
+    realized does not have; unspawn carried the sweep that reached those, and a
+    close that keeps the record sends none.
+    """
+    ws = str(tmp_path)
+    app.project_store.record_manual_pane_spawn(ws, pane_id="M1", agent="claude")
+    terminals = FakeTerminals({"M1": ["term-m"]})
+    session = _session(terminals)
+
+    await app.handle_message(session, {
+        "id": "m1",
+        "type": "manual_pane.release_pty",
+        "payload": {"pane_id": "M1"},
+    })
+
+    # Graceful: this reaches a CLI the renderer failed to kill, and the record
+    # left behind promises a resume that reads its transcript.
+    assert terminals.killed == [("term-m", False)]
+    # The record is what the reopen restores from — the whole point of the call.
+    project = app.project_store.peek(ws)
+    assert project is not None
+    assert [(p.pane_id, p.spawn_status) for p in project.panes] == [("M1", "spawned")]
+
+
+@pytest.mark.asyncio
+async def test_release_pty_ignores_a_blank_pane_id(tmp_path: Path) -> None:
+    terminals = FakeTerminals({"": ["term-blank"]})
+    session = _session(terminals)
+
+    await app.handle_message(session, {
+        "id": "m1",
+        "type": "manual_pane.release_pty",
+        "payload": {"pane_id": ""},
+    })
+
+    assert terminals.killed == []
