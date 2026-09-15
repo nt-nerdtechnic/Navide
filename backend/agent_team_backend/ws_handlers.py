@@ -7088,6 +7088,12 @@ async def _sweep_pane_ptys(session: "Session", pane_id: str, *, force: bool = Tr
     record left behind promises a resume that reads the transcript it has not
     finished writing. kill() escalates to SIGKILL after its own grace either
     way, so the process still goes down.
+
+    Note for a future caller: this also closes the pane's dev-time interval and
+    drops its attribution registration, because every caller so far means "the
+    process behind this pane is ending" even when the record survives (a closed
+    workspace's panes come back as placeholders, which re-register on realize).
+    A caller that keeps the pane RUNNING on screen must not come through here.
     """
     from . import app
 
@@ -7275,6 +7281,42 @@ async def manual_pane_unspawn(session: "Session", msg_id: str, msg_type: str, pa
         await _sweep_pane_ptys(session, swept_id)
     await session.send_json(
         make_response(msg_id, msg_type, app._project_payload(project))
+    )
+
+
+@handler("pipeline.slot_unspawn_by_pane")
+async def pipeline_slot_unspawn_by_pane(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """Retire a pipeline pane's record by pane id, and take its PTY with it.
+
+    pipeline.slot_unspawn addresses a slot by (stage_index, slot_label), which
+    the renderer can only resolve against the pipeline its window is showing —
+    the wrong one when the workspace being closed ran a different pipeline, and
+    a wrong-but-valid index retires some other slot's record. The pane id is
+    shared verbatim between the live pane and the record, so it cannot drift.
+    """
+    from . import app
+
+    pane_id = payload["pane_id"]
+    # Sweep BEFORE the store: load_or_create raises when the workspace folder
+    # is gone (renamed, deleted, unmounted while Navide held it open), and the
+    # PTY of a pane that never realized has nothing else pointing at it — the
+    # renderer could not kill what it has no terminal ref for. Losing the
+    # record update to that is recoverable; losing the process is not.
+    await _sweep_pane_ptys(session, pane_id)
+    project, retired = app.project_store.record_pane_unspawn_by_id(
+        payload["workspace_path"], pane_id=pane_id
+    )
+    if not retired:
+        # Not an error — the record may already be removed. Worth a line all the
+        # same: the caller closed a workspace after telling the user these panes
+        # would not come back, and a miss here is how they come back anyway.
+        log.info(
+            "slot_unspawn_by_pane matched no live record: pane=%s workspace=%s",
+            pane_id,
+            payload["workspace_path"],
+        )
+    await session.send_json(
+        make_response(msg_id, msg_type, {**app._project_payload(project), "retired": retired})
     )
 
 

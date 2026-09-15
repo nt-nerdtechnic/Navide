@@ -114,6 +114,25 @@ describe('what a card shows', () => {
     expect(appSource).toContain(":title=\"$t('label.descendant-count', { count: p.descendantCount })\"")
   })
 
+  it('shows the count ahead of the name in every list, only on a parent', () => {
+    // The ↳ chip on the right only speaks up for a busy child, so a closed
+    // family of idle panes was invisible until this number. One count per
+    // list — sidebar cards, Spotlight strip, PiP rows — inside the same
+    // control that opens the family, which already renders only when there is
+    // something to count.
+    const counts = appSource.match(/<span class="pane-list-kids-count">\{\{ p\.descendantCount \}\}<\/span>/g) ?? []
+    expect(counts).toHaveLength(3)
+    const controls = appSource.match(/v-if="p\.descendantCount > 0"\s+class="pane-list-kids/g) ?? []
+    expect(controls).toHaveLength(3)
+    // Ahead of the name on the two card lists: the count sits in the control
+    // on the name row, and the name follows it — never after the label where
+    // it would read as part of the name. The Spotlight thumb has no name row.
+    const beforeName = [...appSource.matchAll(/<span class="pane-list-kids-count">/g)].filter((m) =>
+      appSource.slice(m.index, (m.index ?? 0) + 800).includes('class="meeting-name"')
+    )
+    expect(beforeName).toHaveLength(2)
+  })
+
   it('shows the dots only while the family is closed', () => {
     // Open — the default — the children are right underneath, so dots would
     // only repeat them. Closed, they are what stands in for the hidden rows.

@@ -2,6 +2,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { shallowMount, type VueWrapper } from '@vue/test-utils'
 import ControlPane from '../ControlPane.vue'
+import AddPaneIcon from '../AddPaneIcon.vue'
 
 // The workspace heading's fold button, and the Alt+click that reaches the same
 // action from the caret beside it.
@@ -187,6 +188,24 @@ describe('ControlPane – folding one workspace', () => {
     await wrapper.find('.ws-caret').trigger('click', { altKey: true })
     expect(wrapper.emitted('collapse-workspace-subtrees')).toBeUndefined()
     expect(wrapper.emitted('toggle-workspace')).toBeUndefined()
+  })
+
+  it('draws one mark for the two buttons that open the agent menu', () => {
+    // The heading's ＋ and the run group's ＋ open the same menu, differing
+    // only in scope. The heading's was redrawn from a full-width character
+    // into AddPaneIcon — a glyph takes its weight from the typeface and can
+    // never match the stroke icons beside it — and the group row was left
+    // behind, so one row showed an icon and the next showed a character.
+    wrapper = mountWith()
+    const heading = wrapper.find('.ws-add')
+    const group = wrapper.find('.ws-grp-add')
+    expect(heading.exists()).toBe(true)
+    expect(group.exists()).toBe(true)
+    for (const btn of [heading, group]) {
+      expect(btn.findComponent(AddPaneIcon).exists()).toBe(true)
+      // No stray character left beside the icon.
+      expect(btn.text()).toBe('')
+    }
   })
 
   it('folds only the workspace whose button was pressed', async () => {

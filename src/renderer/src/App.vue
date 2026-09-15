@@ -15346,12 +15346,30 @@ async function closeWorkspace(path: string): Promise<void> {
   // for the same reason reclaimIdlePane passes it: a graceful signal lets the
   // CLI finish writing the transcript the resume reads.
   //
-  // Pipeline panes are the exception. Their records are the run's slot state
-  // and the run is being aborted just above; left at 'spawned', a slot would
-  // read as still filled the next time the stage is activated.
+  // Pipeline panes are the exception: their records are the aborted run's slot
+  // state, and a slot that says 'spawned' comes back as a card for an agent
+  // whose run is over — which is also what the dialog tells the user. (It is
+  // NOT that a stale slot would break the next run: start_pipeline drops every
+  // pipeline pane record before it writes new ones.)
   for (const pane of doomed) {
     if (pane.origin === 'pipeline') {
-      await onKill(pane.id)
+      // markRemoved: false so onKill does not retire the record its own way:
+      // it addresses a slot by (stage index, slot label), and it resolves that
+      // index against the WINDOW's active stage list, which onWorkspaceCheck
+      // repoints at whatever workspace is on screen. Closing a project whose
+      // run used a different pipeline then misses — or worse, lands on a valid
+      // index here and retires a different slot, since labels repeat across
+      // stages. The pane id is shared verbatim with the record and cannot
+      // drift, so the retirement is asked for by that instead. It sweeps the
+      // PTY too, which is the safety net the branch below spells out.
+      //
+      // force stays at its default, unlike below: nothing offers to resume a
+      // slot whose run is over, so there is no transcript worth waiting for.
+      await onKill(pane.id, { markRemoved: false })
+      await sendQuiet<ProjectPayload>('pipeline.slot_unspawn_by_pane', {
+        workspace_path: pane.workspacePath,
+        pane_id: pane.id,
+      })
       continue
     }
     // onKill drops the persisted handle, and the restore reads it back as the
@@ -15361,6 +15379,11 @@ async function closeWorkspace(path: string): Promise<void> {
     // target that no longer exists. reclaimIdlePane keeps it for the same
     // reason; the live value first, since the persisted map is capped.
     const messagingName = (pane.messagingName as string | undefined) || persistedMessagingName(pane.id)
+    // No spawn-history take-back here, unlike reclaimIdlePane: spawnHistory
+    // holds only the workspace on screen (hydrateSpawnHistory's guard, and the
+    // currentWorkspace watch empties it on every switch), and this loop always
+    // runs against another one — the close switches away first. onKill's
+    // removedAt stamp therefore never finds an entry to set.
     await onKill(pane.id, { markRemoved: false, force: false })
     if (messagingName) persistMessagingName(pane.id, messagingName)
     // onKill can only kill through the pane's own terminal ref: a pane that
@@ -17766,10 +17789,12 @@ function paneIsCommander(p: ActivePane): boolean {
                   @dragover.stop
                   @dragenter.stop
                 >
-                  <!-- The caret alone: ahead of the name there is no room for
-                       the count or the status dots, and the full wording is on
-                       the control's title. -->
+                  <!-- The caret and the count, no status dots: a closed family
+                       must say how many panes it hides even when none of them
+                       is busy (the ↳ chip on the right only speaks up for a
+                       busy one). The full wording is on the control's title. -->
                   <span class="pane-list-kids-caret">{{ p.expanded ? '▾' : '▸' }}</span>
+                  <span class="pane-list-kids-count">{{ p.descendantCount }}</span>
                 </button>
                 <span v-if="p.origin === 'pipeline' && p.stageId" class="meeting-pipe-tag">P{{ p.stageId }}</span>
                 <input
@@ -17966,10 +17991,12 @@ function paneIsCommander(p: ActivePane): boolean {
                   @dragover.stop
                   @dragenter.stop
                 >
-                  <!-- The caret alone: ahead of the name there is no room for
-                       the count or the status dots, and the full wording is on
-                       the control's title. -->
+                  <!-- The caret and the count, no status dots: a closed family
+                       must say how many panes it hides even when none of them
+                       is busy (the ↳ chip on the right only speaks up for a
+                       busy one). The full wording is on the control's title. -->
                   <span class="pane-list-kids-caret">{{ p.expanded ? '▾' : '▸' }}</span>
+                  <span class="pane-list-kids-count">{{ p.descendantCount }}</span>
                 </button>
                 <span v-if="p.origin === 'pipeline' && p.stageId" class="meeting-pipe-tag">P{{ p.stageId }}</span>
                 <input

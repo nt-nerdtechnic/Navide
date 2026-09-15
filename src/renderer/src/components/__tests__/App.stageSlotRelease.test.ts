@@ -117,7 +117,9 @@ describe('closing a workspace ends the run its panes belonged to', () => {
     // closeRunGroup and closeAllSessions both guard; this one did not.
     expect(fn).toContain('tearDownPipelineOrchestration()')
     const abortAt = fn.indexOf('tearDownPipelineOrchestration()')
-    const killAt = fn.indexOf('await onKill(pane.id)')
+    // The pipeline branch's kill — the one whose slot release could advance a
+    // stage into the workspace being torn down.
+    const killAt = fn.indexOf('await onKill(pane.id, { markRemoved: false })')
     expect(abortAt).toBeGreaterThan(-1)
     expect(killAt).toBeGreaterThan(abortAt)
   })

@@ -906,6 +906,44 @@ class ProjectStore:
         )
         return project
 
+    def record_pane_unspawn_by_id(
+        self,
+        workspace_path: str,
+        *,
+        pane_id: str,
+    ) -> tuple["Project", bool]:
+        """Retire any pane record by its own id, pipeline slots included.
+
+        record_manual_pane_unspawn refuses pipeline records on purpose, so that
+        closing one manual pane can never retire a slot. Closing the whole
+        workspace does take the slots with it, and the pane id is the only key
+        that cannot drift on the way: a slot is otherwise addressed by
+        (stage_index, slot_label), a pair the renderer has to resolve against
+        whichever pipeline its window happens to be showing — which is not
+        necessarily the one this workspace ran.
+
+        Returns the project and whether a record was actually retired.
+        """
+        project = self.load_or_create(workspace_path)
+        matches = [
+            p for p in project.panes
+            if p.pane_id == pane_id and p.spawn_status != "removed"
+        ]
+        if not matches:
+            return project, False
+        for pane in matches:
+            self._adopt_orphans(project, pane)
+            pane.spawn_status = "removed"
+            pane.removed_at = _now_iso()
+            pane.kickoff_status = "none"
+        self.save(project)
+        self.append_event(
+            workspace_path,
+            {"event": "pane_unspawn_by_id", "pane_id": pane_id, "count": len(matches)},
+            log_file_name=project.log_file_name,
+        )
+        return project, True
+
     def record_manual_pane_unspawn(
         self,
         workspace_path: str,

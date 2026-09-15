@@ -218,3 +218,98 @@ async def test_release_pty_ignores_a_blank_pane_id(tmp_path: Path) -> None:
     })
 
     assert terminals.killed == []
+
+
+@pytest.mark.asyncio
+async def test_unspawn_by_pane_retires_a_slot_the_window_could_not_address(
+    tmp_path: Path,
+) -> None:
+    """The renderer resolves (stage_index, slot_label) against ITS pipeline.
+
+    Closing a workspace whose run used a different one leaves it with no usable
+    key — the pane id is the one it shares verbatim with the record.
+    """
+    ws = str(tmp_path)
+    _spawned_slot(ws, "P1")
+    terminals = FakeTerminals({"P1": ["term-p"]})
+    session = _session(terminals)
+
+    await app.handle_message(session, {
+        "id": "m1",
+        "type": "pipeline.slot_unspawn_by_pane",
+        "payload": {"workspace_path": ws, "pane_id": "P1"},
+    })
+
+    assert terminals.killed == [("term-p", True)]
+    project = app.project_store.peek(ws)
+    assert project is not None
+    assert [(p.pane_id, p.spawn_status) for p in project.panes] == [("P1", "removed")]
+
+
+@pytest.mark.asyncio
+async def test_unspawn_by_pane_leaves_other_records_alone(tmp_path: Path) -> None:
+    ws = str(tmp_path)
+    _spawned_slot(ws, "P1")
+    app.project_store.record_manual_pane_spawn(ws, pane_id="M1", agent="claude")
+    terminals = FakeTerminals({"M1": ["term-m"]})
+    session = _session(terminals)
+
+    await app.handle_message(session, {
+        "id": "m1",
+        "type": "pipeline.slot_unspawn_by_pane",
+        "payload": {"workspace_path": ws, "pane_id": "P1"},
+    })
+
+    assert terminals.killed == []
+    project = app.project_store.peek(ws)
+    assert project is not None
+    by_id = {p.pane_id: p.spawn_status for p in project.panes}
+    assert by_id == {"P1": "removed", "M1": "spawned"}
+
+
+@pytest.mark.asyncio
+async def test_unspawn_by_pane_on_an_unknown_id_is_a_noop(tmp_path: Path) -> None:
+    ws = str(tmp_path)
+    _spawned_slot(ws, "P1")
+    terminals = FakeTerminals({"P1": ["term-p"]})
+    session = _session(terminals)
+
+    await app.handle_message(session, {
+        "id": "m1",
+        "type": "pipeline.slot_unspawn_by_pane",
+        "payload": {"workspace_path": ws, "pane_id": "nope"},
+    })
+
+    project = app.project_store.peek(ws)
+    assert project is not None
+    assert [p.spawn_status for p in project.panes] == ["spawned"]
+    assert terminals.killed == []
+    # The miss is reported rather than answered as a success: the caller has
+    # already told the user those panes will not come back.
+    assert session.websocket.sent[0]["payload"]["retired"] is False  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_unspawn_by_pane_sweeps_even_when_the_workspace_folder_is_gone(
+    tmp_path: Path,
+) -> None:
+    """The PTY must go down even when the record cannot be updated.
+
+    load_or_create raises once the folder is renamed/deleted/unmounted, and an
+    unrealized pane's PTY has nothing else pointing at it — the renderer never
+    had a terminal ref to kill it through.
+    """
+    ws = str(tmp_path / "gone")
+    terminals = FakeTerminals({"P1": ["term-p"]})
+    session = _session(terminals)
+
+    await app.handle_message(session, {
+        "id": "m1",
+        "type": "pipeline.slot_unspawn_by_pane",
+        "payload": {"workspace_path": ws, "pane_id": "P1"},
+    })
+
+    # The store call fails (handle_message turns it into an error reply), but
+    # the process is down — which is the half that cannot be recovered later.
+    assert terminals.killed == [("term-p", True)]
+    assert "error" in session.websocket.sent[0]  # type: ignore[attr-defined]

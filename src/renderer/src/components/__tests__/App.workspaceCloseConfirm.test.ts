@@ -90,9 +90,41 @@ describe('closing a workspace asks before it takes the panes', () => {
     // here is what lost the panes for good. Ending the CLI is still right —
     // keeping its seat is what the reopen needs.
     expect(fn).toContain('await onKill(pane.id, { markRemoved: false, force: false })')
-    // Pipeline panes still go: their records are the slot state of the run the
-    // close aborts, and a slot left at 'spawned' reads as still filled.
-    expect(fn).toContain("if (pane.origin === 'pipeline') {")
+    // markRemoved is what decides it, so the branch must not send the message
+    // that retires a record for the panes it promises to bring back.
+    const kept = fn.slice(fn.indexOf('await onKill(pane.id, { markRemoved: false, force: false })'))
+    expect(kept).not.toContain("'manual_pane.unspawn'")
+    expect(kept).not.toContain("'pipeline.slot_unspawn'")
+  })
+
+  it('retires the pipeline records it says will not come back, by pane id', () => {
+    // The dialog names them, so the close has to actually retire them — and by
+    // a key that cannot drift. onKill addresses a slot by (stage index, slot
+    // label) and resolves the index against the WINDOW's active stage list,
+    // which onWorkspaceCheck repoints at the workspace on screen: closing a
+    // project whose run used another pipeline either misses, or lands on a
+    // valid index and retires a DIFFERENT slot, since labels repeat.
+    const slots = fn.slice(fn.indexOf("if (pane.origin === 'pipeline') {"), fn.indexOf('continue'))
+    expect(slots).toContain('await onKill(pane.id, { markRemoved: false })')
+    expect(slots).toContain("sendQuiet<ProjectPayload>('pipeline.slot_unspawn_by_pane'")
+    expect(slots).toContain('pane_id: pane.id')
+    // Neither half of the drifting key may be used here.
+    expect(slots).not.toContain('stage_index')
+    expect(slots).not.toContain('slot_label')
+    // No peek: the handler needs no index, so there is nothing to look up.
+    expect(fn).not.toContain("'project.peek'")
+  })
+
+  it('does not carry reclaimIdlePane\'s spawn-history take-back, which cannot fire here', () => {
+    // reclaimIdlePane undoes onKill's removedAt stamp because its pane stays.
+    // Copying that here looks right and does nothing: spawnHistory holds only
+    // the workspace on screen, and this loop always runs against another one,
+    // so the stamp never finds an entry. A take-back would be dead code with a
+    // source-scanning test that passes while exercising nothing.
+    expect(fn).not.toContain('histEntry')
+    expect(appSource).toContain(
+      'historyEntriesFor(spawnHistory.value, spawnHistoryWorkspaceIdentity(currentWorkspace.value))'
+    )
   })
 
   it('keeps the messaging handle the reopened pane is addressed by', () => {
@@ -101,7 +133,7 @@ describe('closing a workspace asks before it takes the panes', () => {
     // and senders that knew the old one are writing to nothing. Captured
     // before the kill, put back after it — the same order reclaimIdlePane uses.
     const capture = fn.indexOf('const messagingName =')
-    const kill = fn.indexOf('await onKill(pane.id, { markRemoved: false')
+    const kill = fn.indexOf('await onKill(pane.id, { markRemoved: false, force: false })')
     const restore = fn.indexOf('if (messagingName) persistMessagingName(pane.id, messagingName)')
     expect(capture).toBeGreaterThan(-1)
     expect(capture).toBeLessThan(kill)
@@ -114,9 +146,10 @@ describe('closing a workspace asks before it takes the panes', () => {
     // processes (and the ones whose kill was refused). Asked for after the
     // kill, which closes the session first, so a live PTY here means the kill
     // did not happen.
-    const sweep = fn.indexOf("sendQuiet<{ ok: boolean }>('manual_pane.release_pty', { pane_id: pane.id })")
-    expect(sweep).toBeGreaterThan(-1)
-    expect(sweep).toBeGreaterThan(fn.indexOf('await onKill(pane.id, { markRemoved: false'))
+    // Sliced from the kill, so containment IS the ordering claim — the pipeline
+    // branch above has a sweep of its own and indexOf would find that one.
+    const kept = fn.slice(fn.indexOf('await onKill(pane.id, { markRemoved: false, force: false })'))
+    expect(kept).toContain("sendQuiet<{ ok: boolean }>('manual_pane.release_pty', { pane_id: pane.id })")
   })
 
   it('records the opt-out only on a confirmed close', () => {
@@ -155,6 +188,18 @@ describe('closing a workspace asks before it takes the panes', () => {
 
   it('leaves detach unguarded — it hands the panes over rather than ending them', () => {
     expect(body(appSource, 'detachWorkspace')).not.toContain('confirm-close.sidebar-ws-title')
+  })
+
+  it('sends only messages the backend actually handles', () => {
+    // The message name is two independent strings: sendQuiet's literal here and
+    // @handler's in ws_handlers.py. Nothing else compares them — this file's
+    // tests scan renderer source, and the backend's call the handler by name —
+    // so a typo on either side ships as a silently dropped request.
+    const handlers = read('backend/agent_team_backend/ws_handlers.py')
+    for (const msg of ['manual_pane.release_pty', 'pipeline.slot_unspawn_by_pane']) {
+      expect(fn).toContain(`'${msg}'`)
+      expect(handlers).toContain(`@handler("${msg}")`)
+    }
   })
 
   it('ships the wording in both locales', () => {

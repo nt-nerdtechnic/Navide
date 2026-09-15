@@ -3420,7 +3420,7 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
             :title="`${$t('action.open-agent-in-group')} · ${pickedAgentLabel}`"
             :aria-label="$t('action.open-agent-in-group')"
             @click.stop="toggleAddMenu($event, ws.path, g.id)"
-          >＋</button>
+          ><AddPaneIcon /></button>
         </li>
         <li
           v-for="({ pane: p, depth, hasChildren, collapsed: folded }, gi) in g.rows"
@@ -5744,20 +5744,31 @@ button.icon-btn.muted:hover {
   white-space: nowrap;
 }
 /* Reserved space, not conditional space: the button keeps its box when hidden
-   so the count does not shift sideways as the pointer crosses the row. */
+   so the count does not shift sideways as the pointer crosses the row.
+   16px is what the full-width ＋ this replaced occupied (12px glyph + 2px each
+   side), so swapping the character for the icon moved nothing on the row. */
 .ws-grp-add {
   flex: none;
   margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
   border: none;
   background: none;
-  padding: 0 2px;
+  padding: 0;
   color: var(--text-muted);
-  font-size: 12px;
   line-height: 1;
   cursor: pointer;
   opacity: 0;
   transition: opacity var(--motion-fast) var(--ease-out);
 }
+/* The same 12px the workspace heading's ＋ renders at. Both buttons open the
+   same agent menu, so they are one mark at one size — the heading's used to be
+   a full-width character too, and this row was left behind when that one was
+   redrawn. */
+.ws-grp-add :deep(svg) { width: 12px; height: 12px; }
 .ws-grp:hover .ws-grp-add,
 .ws-grp-add:focus-visible,
 .ws-grp-add[aria-expanded='true'] { opacity: 1; }
