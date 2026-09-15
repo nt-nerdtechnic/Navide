@@ -223,6 +223,38 @@ describe('buildPaneStatusReply', () => {
       logPath: undefined
     })
   })
+
+  it('carries the launch identity when the pane record has it', () => {
+    const reply = buildPaneStatusReply(
+      {
+        agentLabel: 'Claude Code',
+        model: 'claude-opus-5',
+        effort: 'high',
+        profileId: '__default__',
+        loginExpired: true,
+        usageLimitUntil: 1789000000000
+      },
+      { displayStatus: 'idle', buffer: '' }
+    )
+    expect(reply.agentLabel).toBe('Claude Code')
+    expect(reply.model).toBe('claude-opus-5')
+    expect(reply.effort).toBe('high')
+    expect(reply.profileId).toBe('__default__')
+    expect(reply.loginExpired).toBe(true)
+    expect(reply.usageLimitUntil).toBe(1789000000000)
+  })
+
+  it('omits every identity key that has no value, never sending null or false', () => {
+    // A pane launched on the vendor default has no model; a healthy pane has
+    // no loginExpired and no usageLimitUntil (the field is null between hits).
+    const reply = buildPaneStatusReply(
+      { agentLabel: '', model: undefined, loginExpired: false, usageLimitUntil: null },
+      { displayStatus: 'idle', buffer: '' }
+    )
+    for (const key of ['agentLabel', 'model', 'effort', 'profileId', 'loginExpired', 'usageLimitUntil']) {
+      expect(key in reply).toBe(false)
+    }
+  })
 })
 
 describe('writeCliPaneDragPayload', () => {

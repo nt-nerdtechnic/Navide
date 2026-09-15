@@ -222,7 +222,7 @@ Diagnostics，可透過 `ui_diagnostics` 讀取。
 | Tool | 參數 | 功能 |
 |---|---|---|
 | `cli_read_log` | `target`、`tail_lines=200`、`since?`、`pane_id?` | Pane 對話記錄的尾端（≤512KB 且 ≤`tail_lines` 行）；回傳 `next_cursor` 與 `rotated` |
-| `cli_get_status` | `target`、`pane_id?` | `{busy, agent_key, last_activity?, ui?}` —— 當擁有該 Pane 的視窗有回應時，`ui` 鏡射 `ui.pane.getStatus`  **遠端 Pane**：答案來自名冊，帶 `remote: true` 與 `source: "roster_status"`——只有一個狀態字，沒有 `last_activity`、沒有 `ui` 區塊，且有 0.5 秒 debounce 與 30 秒掃描，所以是準即時而非即時。 |
+| `cli_get_status` | `target`、`pane_id?` | `{busy, agent_key, last_activity?, usage?, ui?}` —— 當擁有該 Pane 的視窗有回應時，`ui` 鏡射 `ui.pane.getStatus`，並在有值時帶上 Pane 的啟動身分：`agentLabel`、`model` / `effort`（Pane 啟動時指定的——在 CLI 裡打 `/model` 切換這裡看不到；缺席＝廠商預設）、`profileId`（帳號 pin，僅供記帳：每個 Pane 實際都跑 live 登入）、`loginExpired` / `usageLimitUntil`（只在 CLI 印出該訊息期間出現）。`usage` 是該廠商的**快取**額度快照——與 `cli_usage` 在 `providers[agent_key]` 回報的是同一列，本呼叫絕不刷新；看 `fetchedAt` / `stale` 判斷新舊。  **遠端 Pane**：答案來自名冊，帶 `remote: true` 與 `source: "roster_status"`——只有一個狀態字，沒有 `last_activity`、沒有 `ui` 區塊、也沒有 `usage`（本機快取講的是本機帳號），且有 0.5 秒 debounce 與 30 秒掃描，所以是準即時而非即時。 |
 | `cli_wait_idle` | `target`、`timeout_s=60`（上限 120）、`pane_id?` | 阻擋直到該 Pane 進入 Idle 或逾時；回傳 `{idle, source, waited_s, last_activity?, ui_status?}`，逾時再加上 `reason`  **遠端 Pane**：輪詢名冊的狀態字。`source` 是 `roster_status` 或 `roster_offline`，**絕不會是** `turn_complete`——遠端最強的觀察就只是「狀態字不再顯示忙碌」。停在提示上的 pane 會以 `reason: "awaiting_unclassified"` 逾時，因為名冊只帶一個字，無法分辨「卡在權限提示（等的是人）」與「agent 在問問題（其實可視為閒置）」。`offline` 是真正的第三種答案，會立刻回傳而不是等到逾時。 |
 | `cli_interrupt` | `target`、`pane_id` | 送出該 CLI 的中斷鍵給本機的 pane——codex 是 `ESC`，其餘是 `^C`。**這不等於停止**：依 CLI 而異，可能中止當前回合、可能只是清空輸入框、第二次按下甚至可能直接離開 CLI。它是一個按鍵，不是一道指令。用 `cli_get_status`／`cli_wait_idle` 確認結果；若那件工作可以讓它做完，改用 `cli_send` 傳話。回傳 `{ok, target, name, sent, status_before, advisories?}`——`sent: false` 代表根本沒送出（沒有 session，或視窗正在重連）。僅限本機 pane |
 | `cli_message_log` | `limit=50`（上限 200） | **僅限 CLI Pane。** 你自己的訊息歷史 —— 你送出過什麼、什麼送到了你這裡，最新的在最後。`cli_inbox_summary` 只回報你卡住的送出，`cli_pending_incoming` 只回報還沒送達的收件；訊息一旦落地就同時離開這兩者，Compaction 之後也從你的 Context 裡消失，所以「我們先前到底說了什麼」只有這裡答得出來。這是持久化的記錄，後端重啟後仍在，而且在這裡讀取永遠不會把任何訊息從別人的佇列上拿走。只會回傳屬於你的列：以你**目前**的傳訊名稱比對寄件者或收件者，所以排給某個你後來改掉的名字的訊息，就不再算是你的。回傳 `{ok, count, messages, scanned, truncated}`；每則訊息是 `{uid, created_at, status, sender, recipient, direction, excerpt}`，有值時再加上 `kind`／`reason`／`delivered_at`／`correlation_id`／`reply_to`／`remote`／`remote_workspace`。`excerpt` 是壓平空白後的 200 字元 —— 要全文請用 `cli_read_incoming`。`truncated` 代表較舊的訊息被截掉了，可能是被 `limit`、也可能是被這次掃描的近期列視窗切掉；`scanned` 是那個視窗掃了幾列 |
@@ -303,7 +303,7 @@ Action —— `ui.pane.create`、`ui.preview.show`、`ui.window.openGit` —— 
 | `ui.pane.close` | `{paneId}` | Kill 一個 Pane |
 | `ui.pane.focus` | `{paneId}` | 顯示並聚焦一個 Pane（必要時切換分頁） |
 | `ui.pane.open` | `{paneId}` | 打開一個還原用的 placeholder（`cli_list_targets` 列出 `realized: false` 的 Pane）並等它開完。回傳 `{realized, reason, paneId}`——`paneId` 是開完後這個 Pane 的 id，`reason` 是 `opened`、`fresh`（全新 session，不記得先前對話）、`already-open`，或它沒開起來的原因。Resume 行為設為 `ask` 時不會彈出 modal |
-| `ui.pane.getStatus` | `{paneId}` | 回傳該 Pane 的 `{status, buffer, logPath?}` |
+| `ui.pane.getStatus` | `{paneId}` | 回傳該 Pane 的 `{status, buffer, logPath?, awaitingKind?, kickoff?, agentLabel?, model?, effort?, profileId?, loginExpired?, usageLimitUntil?}`——身分類欄位只在該 Pane 有值時出現 |
 | `ui.pane.interrupt` | `{paneId}` | 對該 Pane 按下它的中斷鍵。回傳 `{sent, status, advisories?}` —— `status` 是在按下**之前**讀的，因為這一按會改變它自己要回報的那個狀態 |
 | `ui.tab.switch` | `{tabId}` | 切換作用中的 Stage／Run-group 分頁 |
 | `ui.preview.show` | `{kind, …}` | 在右側 rail 的預覽面板顯示檔案、diff 或內嵌片段 |

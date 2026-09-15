@@ -3149,21 +3149,64 @@ def _activity_summary(pane_id: str) -> dict[str, Any] | None:
     return last
 
 
+async def _cached_usage_snapshot(agent_key: str) -> dict[str, Any] | None:
+    """The quota row usage_service already holds for *agent_key*, or None.
+
+    Cache only — the same `payload()` cli_usage serves, off the loop for the
+    same reason (it walks stale snapshots to re-check reset windows). Never
+    asks for a refresh: cli_get_status sits under cli_wait_idle's poll, and a
+    vendor read there would turn a millisecond call into a multi-second one.
+    A payload failure is answered with None rather than failing the status
+    the rest of the reply already has — the same degraded answer `ui` gives.
+    """
+    from agent_team_backend.usage_service import service
+
+    try:
+        payload = await asyncio.to_thread(service.payload)
+    except Exception:  # noqa: BLE001 — status must still answer without quota
+        return None
+    snapshot = (payload.get("providers") or {}).get(agent_key)
+    return dict(snapshot) if isinstance(snapshot, dict) else None
+
+
 @server.tool()
 async def cli_get_status(target: str, ctx: Context, pane_id: str = "") -> dict[str, Any]:
     """Report whether a CLI pane is busy and its most recent activity.
 
     `target` uses the same addressing as cli_send, and `pane_id` names one
     exact pane instead. Returns {ok, name,
-    agent_key, busy, last_activity?, ui?}. `last_activity`, when known, is
-    {type: "agent_active"|"turn_complete", text? (turn_complete only),
+    agent_key, busy, last_activity?, usage?, ui?}. `last_activity`, when known,
+    is {type: "agent_active"|"turn_complete", text? (turn_complete only),
     age_seconds}. `ui`, when the owning Navide window answers in time, is
-    {status, buffer, logPath?, awaitingKind?, kickoff?} straight from the
+    {status, buffer, logPath?, awaitingKind?, kickoff?, agentLabel?, model?,
+    effort?, profileId?, loginExpired?, usageLimitUntil?} straight from the
     renderer; it is omitted (not a failure) when the window does not reply.
     `busy` is the backend's own activity verdict OR'd with that badge: true
     when `ui.status` is "running" or "starting", since the renderer sees
     things the activity log cannot (a delivered message the CLI has queued
     but not yet consumed). Without a `ui` block it is the backend's alone.
+
+    The identity keys in `ui` describe what the pane was LAUNCHED with, each
+    present only when it has a value: `agentLabel` is the vendor's display
+    name behind `agent_key`; `model` / `effort` are what cli_open_agent or the
+    spawn form asked for — absent means the vendor's own default, and a
+    `/model` switch typed inside the CLI is invisible here; `profileId` is
+    the account pin the pane was spawned on ("__default__" = the real home),
+    bookkeeping only — every pane runs on the vendor's live credentials, so
+    after an account switch it names the old login while the CLI already runs
+    on the new one; `loginExpired` (true) and `usageLimitUntil` (wall-clock
+    ms) appear only while the CLI has printed its expired-login / hit-your-
+    limit message — live detection from the pane's output, not a poll.
+
+    `usage` is the quota snapshot Navide holds for this pane's vendor, the
+    same row cli_usage reports under `providers[agent_key]` and unchanged from
+    what the vendor said: {provider, status, planType, windows, fetchedAt,
+    stale, …}. It is a CACHED read — nothing is refreshed on this call, which
+    cli_wait_idle polls every second — so `fetchedAt` / `stale` say how old it
+    is, and cli_usage or the window's own refresh is where a fresh number
+    comes from. For claude it is the ACTIVE account's snapshot, which is the
+    login every claude pane actually runs on (see `profileId` above). Absent
+    when Navide has no snapshot for that vendor at all.
 
     `ui.kickoff` is how this pane's spawn-time task injection ended, and it is
     the authoritative answer to "did cli_open_agent's task actually arrive":
@@ -3191,6 +3234,8 @@ async def cli_get_status(target: str, ctx: Context, pane_id: str = "") -> dict[s
     uploaded — near-live, not live. `offline` is its own answer, not a kind of
     busy: it means the far machine or its window is away, and the row you are
     reading is the last thing the server said about a pane nobody can reach.
+    There is no `usage` either: this machine's quota cache describes this
+    machine's logins, which is the wrong answer for a pane running elsewhere.
     """
 
     try:
@@ -3221,6 +3266,9 @@ async def cli_get_status(target: str, ctx: Context, pane_id: str = "") -> dict[s
     last = _activity_summary(pane.pane_id)
     if last is not None:
         status["last_activity"] = last
+    usage = await _cached_usage_snapshot(pane.agent_key)
+    if usage is not None:
+        status["usage"] = usage
 
     ui_result = await _ui_request(
         pane.workspace_path,
