@@ -41,3 +41,38 @@ export function closeEndsTheRun(probe: WorkspaceCloseProbe): boolean {
   if (probe.runWorkspacePath !== probe.closingWorkspacePath) return false
   return probe.doomedOrigins.includes('pipeline')
 }
+
+
+/** Does the window's pipeline run block restoring THIS workspace's panes?
+ *
+ *  A restore recreates panes from records, so it must not run for a workspace
+ *  whose panes are already on screen — which is what a live or paused run
+ *  means for the workspace it belongs to. Every OTHER workspace in the window
+ *  is a different question, and answering it window-wide is what made a run
+ *  paused in one project refuse to bring back another project's panes, whose
+ *  records a workspace close deliberately keeps.
+ *
+ *  `runWorkspacePath` must come from a field that names the RUN's workspace
+ *  and nothing else. `pipeline.workspacePath` is not that: onWorkspaceBrowse
+ *  reassigns it to whatever workspace is being entered, so passing it compares
+ *  a workspace with itself and blocks everything — the window-wide behaviour
+ *  this replaced, wearing a scope that looks narrower than it is.
+ *
+ *  An empty `runWorkspacePath` means the run's workspace is unknown, and an
+ *  unknown one blocks: restoring panes on top of live ones duplicates them,
+ *  while refusing costs a reopen.
+ */
+export interface RestoreRunProbe {
+  /** `pipeline.state`. Only 'running' and 'aborted' mean panes are alive. */
+  state: string
+  /** The run's own workspace, normalized. Empty when unknown. */
+  runWorkspacePath: string
+  /** The workspace whose panes are about to be restored, normalized. */
+  restoringWorkspacePath: string
+}
+
+export function restoreBlockedByRun(probe: RestoreRunProbe): boolean {
+  if (probe.state !== 'running' && probe.state !== 'aborted') return false
+  if (!probe.runWorkspacePath) return true
+  return probe.runWorkspacePath === probe.restoringWorkspacePath
+}

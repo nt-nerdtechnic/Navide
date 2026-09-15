@@ -212,3 +212,33 @@ describe('idle reclaim wiring', () => {
     expect(onRequest).toContain('pane.terminal.idle-reclaimed')
   })
 })
+
+// The pane right-click menu is the per-pane entry point, hand-written in the
+// template next to Interrupt and Reapply role. The decision it defers to is
+// already covered above; what rots here is the wiring between the two.
+describe('reclaim in the pane context menu', () => {
+  const menuItem = () => block("$t('action.reapply-role')", "$t('action.remove')")
+
+  it('offers a reclaim on the right-clicked pane', () => {
+    expect(menuItem()).toContain("$t('action.reclaim')")
+  })
+
+  // Any other source for the greyed-out state would let the menu offer a
+  // reclaim the sweep itself refuses — starting with the focused pane.
+  it('takes the greyed-out state from the reclaim candidate list', () => {
+    expect(menuItem()).toContain('disabled: !ctxReclaimable')
+    expect(block('const ctxReclaimable = computed', '// "Send message"')).toContain(
+      'reclaimableNowIds.value.includes('
+    )
+  })
+
+  // Calling reclaimPanesNow straight from the template swallows the refusal:
+  // queued messages and stage watchers live in plain Maps that never invalidate
+  // the candidate list, so a clickable item can still be turned down, and the
+  // count comes back 0 with nothing said.
+  it('reports a refused reclaim instead of looking like a no-op', () => {
+    expect(menuItem()).toContain('reclaimPaneFromMenu(')
+    const handler = block('async function reclaimPaneFromMenu(', '// "Send message"')
+    expect(handler).toContain('resource.reclaim-blocked')
+  })
+})

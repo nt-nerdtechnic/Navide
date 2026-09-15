@@ -3,10 +3,11 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-// Closing a workspace from the sidebar is the one workspace action a reopen
-// cannot undo: it marks every pane record removed, and restore only brings
-// back 'spawned' ones. The menu row says "close workspace" and nothing about
-// the panes, so it asks first — the same shape as closing an idle pane.
+// Closing a workspace from the sidebar ends every CLI running in it. The menu
+// row says "close workspace" and nothing about the panes, so it asks first —
+// the same shape as closing an idle pane. It used to also unspawn their
+// records, which made it the one workspace action a reopen could not undo;
+// now the records are kept and a reopen resumes them, and the dialog says so.
 //
 // Source-scanned, like the other App.*.test.ts files: App.vue cannot be
 // mounted, since backend and terminal lifecycles start on mount.
@@ -51,7 +52,64 @@ describe('closing a workspace asks before it takes the panes', () => {
     // gets the plain wording instead of "0 CLI panes".
     expect(fn).toContain('confirm-close.sidebar-ws-body')
     expect(fn).toContain('confirm-close.sidebar-ws-body-empty')
-    expect(fn).toContain("panes.value.filter((p) => normWs(p.workspacePath) === normWs(path)).length")
+    expect(fn).toContain("panes.value.filter((p) => normWs(p.workspacePath) === normWs(path))")
+    expect(fn).toContain('const count = inWorkspace.length')
+  })
+
+  it('does not promise a resume for the pipeline panes it unspawns', () => {
+    // The plain body now says every pane comes back. Pipeline panes take the
+    // markRemoved branch below, so a workspace holding any of them needs
+    // wording that says which ones do not.
+    expect(fn).toContain("const pipelineCount = inWorkspace.filter((p) => p.origin === 'pipeline').length")
+    expect(fn).toContain('confirm-close.sidebar-ws-body-pipeline')
+    const picks = fn.slice(fn.indexOf('const body = count === 0'), fn.indexOf('notifyRestore.confirm('))
+    // Empty first: with no panes at all neither count-bearing body applies.
+    expect(picks.indexOf('sidebar-ws-body-empty')).toBeLessThan(picks.indexOf('sidebar-ws-body-pipeline'))
+    // All-pipeline before mixed: the mixed wording opens by promising the panes
+    // the user opened come back, which describes nothing when there are none.
+    expect(picks).toContain('pipelineCount === count')
+    expect(picks.indexOf('sidebar-ws-body-pipeline-only')).toBeLessThan(
+      picks.indexOf("sidebar-ws-body-pipeline', { count, pipelineCount }")
+    )
+    for (const keys of [zh['confirm-close'], en['confirm-close']]) {
+      expect(keys['sidebar-ws-body-pipeline']).toContain('{count}')
+      expect(keys['sidebar-ws-body-pipeline']).toContain('{pipelineCount}')
+      expect(keys['sidebar-ws-body-pipeline-only']).toContain('{count}')
+    }
+  })
+
+  it('keeps the pane records so reopening the workspace can resume them', () => {
+    // Cold restore takes only spawn_status 'spawned' records, so unspawning
+    // here is what lost the panes for good. Ending the CLI is still right —
+    // keeping its seat is what the reopen needs.
+    expect(fn).toContain('await onKill(pane.id, { markRemoved: false, force: false })')
+    // Pipeline panes still go: their records are the slot state of the run the
+    // close aborts, and a slot left at 'spawned' reads as still filled.
+    expect(fn).toContain("if (pane.origin === 'pipeline') {")
+  })
+
+  it('keeps the messaging handle the reopened pane is addressed by', () => {
+    // onKill drops the persisted name; the restore reads it back as the pane's
+    // preferred name, so losing it re-derives a handle from the fallback chain
+    // and senders that knew the old one are writing to nothing. Captured
+    // before the kill, put back after it — the same order reclaimIdlePane uses.
+    const capture = fn.indexOf('const messagingName =')
+    const kill = fn.indexOf('await onKill(pane.id, { markRemoved: false')
+    const restore = fn.indexOf('if (messagingName) persistMessagingName(pane.id, messagingName)')
+    expect(capture).toBeGreaterThan(-1)
+    expect(capture).toBeLessThan(kill)
+    expect(restore).toBeGreaterThan(kill)
+  })
+
+  it('still ends the CLI of a pane that never realized', () => {
+    // onKill kills through the pane's terminal ref, which a placeholder does
+    // not have — the unspawn it no longer sends is what used to reach those
+    // processes (and the ones whose kill was refused). Asked for after the
+    // kill, which closes the session first, so a live PTY here means the kill
+    // did not happen.
+    const sweep = fn.indexOf("sendQuiet<{ ok: boolean }>('manual_pane.release_pty', { pane_id: pane.id })")
+    expect(sweep).toBeGreaterThan(-1)
+    expect(sweep).toBeGreaterThan(fn.indexOf('await onKill(pane.id, { markRemoved: false'))
   })
 
   it('records the opt-out only on a confirmed close', () => {
@@ -101,6 +159,11 @@ describe('closing a workspace asks before it takes the panes', () => {
     }
     expect(zh['confirm-close']['sidebar-ws-body']).toContain('{count}')
     expect(en['confirm-close']['sidebar-ws-body']).toContain('{count}')
+    // The body promised the panes were gone for good. It has to stop saying so
+    // now that a reopen brings them back, or the dialog talks a user out of a
+    // close that costs them nothing but the running turn.
+    expect(zh['confirm-close']['sidebar-ws-body']).toContain('接續')
+    expect(en['confirm-close']['sidebar-ws-body']).toMatch(/resume/i)
     expect(zh['confirm-close']['sidebar-ws-title']).toContain('{name}')
     expect(en['confirm-close']['sidebar-ws-title']).toContain('{name}')
   })

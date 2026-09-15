@@ -108,7 +108,7 @@ import {
 import { deriveGlobalManager, type GlobalManagerRef } from './lib/globalManager'
 import { registerStage, completeSlot, releaseSlot, type StageSlotTracker } from './lib/stageTracker'
 import { evaluateManagerStage, fullAutoStallAction, type ManagerStageVerdict } from './lib/managerStageWatchdog'
-import { closeEndsTheRun } from './lib/workspaceCloseRun'
+import { closeEndsTheRun, restoreBlockedByRun } from './lib/workspaceCloseRun'
 import { droppedPrefix, remapCursor, type BufferObservation } from './lib/bufferCursor'
 import { i18n } from '@navide/plugin-ui/foundation'
 import { deriveAutoName, stripCliSessionContext } from './lib/autoName'
@@ -7138,6 +7138,16 @@ const pipeline = reactive<PipelineRun>({
   globalManager: null
 })
 
+/** The workspace the window's pipeline run belongs to.
+ *
+ *  `pipeline.workspacePath` cannot answer this: onWorkspaceBrowse reassigns it
+ *  to whatever workspace is being entered, so once a run is paused it names the
+ *  project you are looking at rather than the one the run lives in. Written
+ *  only where a run becomes 'running' and cleared when the window stops
+ *  tracking one, so it stays the run's own identity across every switch.
+ */
+let pipelineRunWorkspace = ''
+
 const showCompletionModal = ref(false)
 const showSettings = ref(false)
 
@@ -9260,8 +9270,20 @@ watch(
  *  resumes (or fresh-spawns) one record at a time. Detached/group reattachments
  *  remain eager so their live PTYs reconnect immediately. */
 async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: string, onlyGroupId?: string, isStale?: () => boolean): Promise<ColdRestoreBatch | null> {
-  // Don't restore if pipeline is active or paused — panes are already alive.
-  if (pipeline.state === 'running' || pipeline.state === 'aborted') return null
+  // Don't restore the workspace the run is in — its panes are already alive.
+  //
+  // Asked of pipelineRunWorkspace, NOT pipeline.workspacePath: the latter is
+  // reassigned to whatever workspace is being entered (onWorkspaceBrowse), so
+  // scoping on it compares a workspace with itself and blocks everything, the
+  // same as asking window-wide. Window-wide is what this used to be, and it
+  // refused to bring back the panes of an unrelated project whose records a
+  // workspace close deliberately keeps. Unknown run workspace → block, which
+  // is the old behaviour.
+  if (restoreBlockedByRun({
+    state: pipeline.state,
+    runWorkspacePath: normWs(pipelineRunWorkspace),
+    restoringWorkspacePath: normWs(workspacePath),
+  })) return null
   if (isStale?.() || !isLocalWorkspace(workspacePath)) return null
 
   // Build unified pane list. Prefer project.panes[] (new format); fall back to
@@ -9342,7 +9364,12 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
     pipelineLog(`↩ Skipped ${beforeDedupe - toRestore.length} duplicate resume record(s)`)
   }
   if (toRestore.length > 0) pipelineLog(`↩ Restoring ${toRestore.length} pane(s)`)
-  pipeline.workspacePath = workspacePath
+  // Guarded like its sibling in onWorkspaceCheck. The gate above used to make
+  // this unreachable while a run was live; now a restore for ANOTHER workspace
+  // gets here, and overwriting the path would point the run at the wrong
+  // project — closeEndsTheRun would then miss the real one and let a stage
+  // advance into a workspace being torn down.
+  if (pipeline.state !== 'running') pipeline.workspacePath = workspacePath
 
   // Ghost/reconnect detection applies only to a full cold restore — a group
   // reattach or detached child window hands back panes whose PTYs are alive.
@@ -10017,6 +10044,7 @@ async function onPipelineResume(): Promise<void> {
   }
   pipeline.task = info.taskDescription
   pipeline.workspacePath = resumeWorkspacePath
+  pipelineRunWorkspace = resumeWorkspacePath
   pipeline.stageIndex = info.nextStageIndex
   pipeline.state = 'running'
   pipeline.log = []
@@ -10786,6 +10814,7 @@ async function onPipelineStart(payload: { task: string; workspacePath: string; p
   }
   pipeline.task = payload.task
   pipeline.workspacePath = payload.workspacePath
+  pipelineRunWorkspace = payload.workspacePath
   pipeline.stageIndex = 0
   pipeline.state = 'running'
   // Pipeline-created panes are grouped under a RunGroup tab named after the
@@ -10999,6 +11028,7 @@ async function onPipelineReset(paneIds?: readonly string[]): Promise<void> {
   pipeline.task = ''
   pipeline.stageIndex = -1
   pipeline.state = 'idle'
+  pipelineRunWorkspace = ''
   pipeline.log = []
   pipeline.projectId = ''
   pipeline.projectFile = ''
@@ -15190,16 +15220,26 @@ async function onRenameWorkspace(path: string, name: string): Promise<void> {
 async function closeWorkspace(path: string): Promise<void> {
   if (!path) return
   if (!workspaceOrder.value.some((w) => normWs(w) === normWs(path))) return
-  // Ask BEFORE anything is torn down. Closing marks every pane record removed
-  // and restore only brings back 'spawned' ones, so this is the one workspace
-  // action a reopen cannot undo — and the menu row alone does not say so.
+  // Ask BEFORE anything is torn down. Closing ends every CLI running in the
+  // workspace: the pane records survive it, so a reopen brings the panes back,
+  // but the turn each agent was in the middle of does not come with them — and
+  // the menu row alone does not say so.
   if (confirmBeforeCloseWorkspace.value) {
-    const count = panes.value.filter((p) => normWs(p.workspacePath) === normWs(path)).length
+    const inWorkspace = panes.value.filter((p) => normWs(p.workspacePath) === normWs(path))
+    const count = inWorkspace.length
+    // Pipeline panes are unspawned below, so the plain wording — which now
+    // promises every pane comes back — would be a false promise for them.
+    const pipelineCount = inWorkspace.filter((p) => p.origin === 'pipeline').length
     const name = wsDisplayName(path)
+    const body = count === 0
+      ? i18n.global.t('confirm-close.sidebar-ws-body-empty', { name })
+      : pipelineCount === count
+        ? i18n.global.t('confirm-close.sidebar-ws-body-pipeline-only', { count })
+        : pipelineCount > 0
+          ? i18n.global.t('confirm-close.sidebar-ws-body-pipeline', { count, pipelineCount })
+          : i18n.global.t('confirm-close.sidebar-ws-body', { count })
     const ok = await notifyRestore.confirm(
-      count > 0
-        ? i18n.global.t('confirm-close.sidebar-ws-body', { count })
-        : i18n.global.t('confirm-close.sidebar-ws-body-empty', { name }),
+      body,
       {
         title: i18n.global.t('confirm-close.sidebar-ws-title', { name }),
         confirmText: i18n.global.t('confirm-close.sidebar-ws-confirm'),
@@ -15251,7 +15291,57 @@ async function closeWorkspace(path: string): Promise<void> {
     tearDownPipelineOrchestration()
     if (abortPath) await sendQuiet('pipeline.abort', { workspace_path: abortPath, reason: 'user' })
   }
-  for (const pane of doomed) await onKill(pane.id)
+  // 'aborted' means paused WITH THE PANES ALIVE, and restoreWorkspacePanes
+  // reads it exactly that way: it refuses every later restore in this window,
+  // including the reopen these kept records exist for. The panes this close
+  // kills are gone either way, so the window stops tracking the run — the
+  // backend keeps it resumable on disk, and the Resume banner reads
+  // existingProject rather than this.
+  //
+  // Outside the branch above on purpose: that one only fires for a run still
+  // RUNNING in this workspace (its teardown parks it at 'aborted', so this
+  // catches it too), while a run the user paused earlier parks the window at
+  // 'aborted' without the close ever entering it. A run still running is left
+  // alone — it either ended above or lives in a workspace this close does not
+  // touch.
+  if (pipeline.state === 'aborted') {
+    pipeline.state = 'idle'
+    pipeline.workspacePath = ''
+    pipelineRunWorkspace = ''
+  }
+  // markRemoved: false — the records stay at spawn_status 'spawned', which is
+  // what the cold restore reads, so reopening this workspace brings each pane
+  // back as the click-to-resume placeholder an idle reclaim leaves in its seat.
+  // Unspawning them made closing the one workspace action a reopen could not
+  // undo, and closing a project is "not now" rather than "never". force: false
+  // for the same reason reclaimIdlePane passes it: a graceful signal lets the
+  // CLI finish writing the transcript the resume reads.
+  //
+  // Pipeline panes are the exception. Their records are the run's slot state
+  // and the run is being aborted just above; left at 'spawned', a slot would
+  // read as still filled the next time the stage is activated.
+  for (const pane of doomed) {
+    if (pane.origin === 'pipeline') {
+      await onKill(pane.id)
+      continue
+    }
+    // onKill drops the persisted handle, and the restore reads it back as the
+    // pane's preferred name — without this the reopened pane re-derives one
+    // from the fallback chain, so a pane addressed as `claude-2` can come back
+    // as `claude-3` and every sender that knew the old name is writing to a
+    // target that no longer exists. reclaimIdlePane keeps it for the same
+    // reason; the live value first, since the persisted map is capped.
+    const messagingName = (pane.messagingName as string | undefined) || persistedMessagingName(pane.id)
+    await onKill(pane.id, { markRemoved: false, force: false })
+    if (messagingName) persistMessagingName(pane.id, messagingName)
+    // onKill can only kill through the pane's own terminal ref: a pane that
+    // never realized has none, and a kill that failed leaves the process up.
+    // The unspawn this no longer sends is what used to sweep both, so the
+    // sweep is asked for on its own. A kill that worked closes the session
+    // before it answers, so this then finds nothing — it cannot turn the
+    // graceful signal above into a SIGKILL.
+    await sendQuiet<{ ok: boolean }>('manual_pane.release_pty', { pane_id: pane.id })
+  }
   workspaceOrder.value = workspaceOrder.value.filter((w) => normWs(w) !== normWs(path))
   persistExtraWorkspaces()
   _forgetRunGroups(path)
@@ -15711,6 +15801,27 @@ const ctxIsBatch = computed(() => ctxTargetIds.value.length > 1)
 const ctxDescendantIds = computed<string[]>(() =>
   paneCtxMenu.value ? descendantPaneIds(paneCtxMenu.value.paneId) : []
 )
+
+// "Reclaim": the per-pane release the Resource Manager already offers, on the
+// pane that was right-clicked. Greyed out under the conditions a sweep skips a
+// pane: focused, busy, unsent text, nothing to resume from.
+const ctxReclaimable = computed<boolean>(() => {
+  const m = paneCtxMenu.value
+  if (!m || ctxIsBatch.value) return false
+  return reclaimableNowIds.value.includes(m.paneId)
+})
+
+// Greying the item out is not the whole answer: part of what blocks a reclaim —
+// a message queued for the pane, a stage watching it — lives in plain Maps that
+// never invalidate the candidate list, so an item can read as reclaimable and
+// still be refused by the re-check inside reclaimPanesNow. Say so when that
+// happens, the same way the Resource Manager's own per-pane button does, rather
+// than leaving a click that appears to do nothing.
+async function reclaimPaneFromMenu(paneId: string): Promise<void> {
+  closePaneCtxMenu()
+  if (await reclaimPanesNow([paneId])) return
+  notifyRestore.toast(i18n.global.t('resource.reclaim-blocked'), { type: 'info' })
+}
 
 // "Send message": the address of the right-clicked pane, to be typed into the
 // pane the user is currently working in. Same string the @-menu completes, so
@@ -17963,6 +18074,12 @@ function paneIsCommander(p: ActivePane): boolean {
           :class="{ disabled: paneCtxView?.status !== 'running' || !paneCtxView?.roleKey }"
           @click="onReinject(paneCtxMenu!.paneId); closePaneCtxMenu()"
         >{{ $t('action.reapply-role') }}</div>
+        <div
+          class="pane-ctx-item"
+          :class="{ disabled: !ctxReclaimable }"
+          :title="$t('action.reclaim-title')"
+          @click="reclaimPaneFromMenu(paneCtxMenu!.paneId)"
+        >{{ $t('action.reclaim') }}</div>
         <div class="pane-ctx-sep"></div>
         <div
           v-if="ctxDescendantIds.length"

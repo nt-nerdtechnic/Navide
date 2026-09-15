@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { closeEndsTheRun } from '../workspaceCloseRun'
+import { closeEndsTheRun, restoreBlockedByRun } from '../workspaceCloseRun'
 
 const A = '/Users/x/projects/alpha'
 const B = '/Users/x/projects/beta'
@@ -66,6 +66,56 @@ describe('closeEndsTheRun', () => {
       runWorkspacePath: B + '/',
       closingWorkspacePath: B,
       doomedOrigins: ['pipeline'],
+    })).toBe(false)
+  })
+})
+
+describe('restoreBlockedByRun', () => {
+  it('blocks the workspace the run is in — its panes are already on screen', () => {
+    expect(restoreBlockedByRun({
+      state: 'running', runWorkspacePath: B, restoringWorkspacePath: B,
+    })).toBe(true)
+  })
+
+  it('blocks it while the run is merely PAUSED, because abort leaves panes alive', () => {
+    expect(restoreBlockedByRun({
+      state: 'aborted', runWorkspacePath: B, restoringWorkspacePath: B,
+    })).toBe(true)
+  })
+
+  it('does NOT block another workspace whose panes a close deliberately kept', () => {
+    // The regression this function exists for. A window holds A and B, a run in
+    // B is paused, and the user closes A from the sidebar: A's CLIs end but its
+    // records stay 'spawned' so the reopen can resume them. Asked window-wide,
+    // B's paused run refuses to restore A and the reopen comes back empty —
+    // after a dialog that promised the panes come back.
+    expect(restoreBlockedByRun({
+      state: 'aborted', runWorkspacePath: B, restoringWorkspacePath: A,
+    })).toBe(false)
+    expect(restoreBlockedByRun({
+      state: 'running', runWorkspacePath: B, restoringWorkspacePath: A,
+    })).toBe(false)
+  })
+
+  it('blocks nothing when no run is live or paused', () => {
+    for (const state of ['idle', 'completed']) {
+      expect(restoreBlockedByRun({
+        state, runWorkspacePath: B, restoringWorkspacePath: B,
+      })).toBe(false)
+    }
+  })
+
+  it('blocks when the run workspace is unknown, rather than guessing', () => {
+    // Restoring on top of live panes duplicates them; refusing costs a reopen.
+    // This is also the behaviour of the window-wide gate it replaced.
+    expect(restoreBlockedByRun({
+      state: 'aborted', runWorkspacePath: '', restoringWorkspacePath: A,
+    })).toBe(true)
+  })
+
+  it('compares paths as given, like closeEndsTheRun — callers normalize', () => {
+    expect(restoreBlockedByRun({
+      state: 'running', runWorkspacePath: `${B}/`, restoringWorkspacePath: B,
     })).toBe(false)
   })
 })
