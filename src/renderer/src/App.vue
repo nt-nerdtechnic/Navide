@@ -6,7 +6,7 @@ import WindowControls from './components/WindowControls.vue'
 import RestoredPanePlaceholder from './components/RestoredPanePlaceholder.vue'
 import { buildWorkspaceGroups } from './lib/workspaceGroups'
 import { workspaceAliasKey } from './lib/workspaceAlias'
-import { buildPaneLineage, withDescendants } from './lib/paneLineage'
+import { buildPaneLineage, effectiveParents, withDescendants } from './lib/paneLineage'
 import { resolveLineageDrop, resolveRootDrop, type LineageDropDecision } from './lib/lineageDrop'
 import { ancestorTrail } from './lib/paneListView'
 import { subtreeSignals } from './lib/paneSubtreeStatus'
@@ -108,7 +108,7 @@ import {
 import { deriveGlobalManager, type GlobalManagerRef } from './lib/globalManager'
 import { registerStage, completeSlot, releaseSlot, type StageSlotTracker } from './lib/stageTracker'
 import { evaluateManagerStage, fullAutoStallAction, type ManagerStageVerdict } from './lib/managerStageWatchdog'
-import { closeEndsTheRun, restoreBlockedByRun } from './lib/workspaceCloseRun'
+import { closeDialogBodyKey, closeEndsTheRun, restoreBlockedByRun } from './lib/workspaceCloseRun'
 import { droppedPrefix, remapCursor, type BufferObservation } from './lib/bufferCursor'
 import { i18n } from '@navide/plugin-ui/foundation'
 import { deriveAutoName, stripCliSessionContext } from './lib/autoName'
@@ -9421,8 +9421,22 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
     : null
   if (fullRestore) {
     reconnectedCount.value = 0
-    disconnectedPaneIds.value = []
-    reconnectBannerDismissed.value = false
+    // Only THIS workspace's ghosts. The list is window-global and the banner is
+    // the reconnect picker's only entry point, so clearing it wholesale while
+    // restoring another project left that project's ghosts unreachable. An id
+    // whose pane is gone belongs to nobody and goes with them, which is what
+    // clearing the whole list used to do for it.
+    disconnectedPaneIds.value = disconnectedPaneIds.value.filter((id) => {
+      const owner = panes.value.find((p) => p.id === id)?.workspacePath ?? workspacePath
+      return normWs(owner) !== normWs(workspacePath)
+    })
+    // The dismissal is NOT reset here. It used to be, back when the line above
+    // emptied the list: a restore then had no ghosts left to un-dismiss for.
+    // Now that another workspace's ghosts survive it, resetting would re-raise
+    // a banner the user dismissed — pointing, when clicked, at a pane in a
+    // project they are no longer looking at. It is reset where a ghost is
+    // actually added instead, which is the moment there is something new to
+    // say. See performRealizeRestoredPane.
 
     // Cold restore is deliberately split: persisted records become inert UI
     // rows now, while probes/decision/spawn happen only from explicit activation.
@@ -9957,7 +9971,12 @@ async function performRealizeRestoredPane(
       const revived = panes.value.find((p) => p.id === newId)
       if (revived) revived.resumeContinueAvailable = true
     }
-    if (wasDisconnected) disconnectedPaneIds.value = [...disconnectedPaneIds.value, newId]
+    if (wasDisconnected) {
+      disconnectedPaneIds.value = [...disconnectedPaneIds.value, newId]
+      // A ghost the user has not seen yet. Dismissing the banner answers the
+      // ghosts that were in it, not the ones that arrive afterwards.
+      reconnectBannerDismissed.value = false
+    }
     // First output normally clears this state. A restored CLI can be silent
     // indefinitely, so leave the terminal usable after a bounded grace period.
     window.setTimeout(() => onPaneFirstOutput(newId), 15_000)
@@ -15212,7 +15231,10 @@ async function onRenameWorkspace(path: string, name: string): Promise<void> {
  *
  *  Its panes go with it — they were started in it and belong to it, and
  *  leaving them behind would put panes in the list with no heading to sit
- *  under. Any workspace this window holds, including the one on screen: what
+ *  under. Their CLIs end, but their records do not: reopening the workspace
+ *  brings each pane back as a click-to-resume card, which is what the teardown
+ *  at the bottom of this function is arranged around. Any workspace this
+ *  window holds, including the one on screen: what
  *  a window is opened with stops mattering once it holds several, and being
  *  unable to close the project you are looking at only leaves you switching
  *  away first to do the same thing. The one thing it needs is somewhere to
@@ -15231,13 +15253,12 @@ async function closeWorkspace(path: string): Promise<void> {
     // promises every pane comes back — would be a false promise for them.
     const pipelineCount = inWorkspace.filter((p) => p.origin === 'pipeline').length
     const name = wsDisplayName(path)
-    const body = count === 0
-      ? i18n.global.t('confirm-close.sidebar-ws-body-empty', { name })
-      : pipelineCount === count
-        ? i18n.global.t('confirm-close.sidebar-ws-body-pipeline-only', { count })
-        : pipelineCount > 0
-          ? i18n.global.t('confirm-close.sidebar-ws-body-pipeline', { count, pipelineCount })
-          : i18n.global.t('confirm-close.sidebar-ws-body', { count })
+    // One interpolation for whichever sentence is true — vue-i18n ignores the
+    // params a key does not name, and the choice is behaviour-tested next to
+    // closeEndsTheRun rather than scanned for here.
+    const body = i18n.global.t(
+      closeDialogBodyKey({ count, pipelineCount }), { name, count, pipelineCount }
+    )
     const ok = await notifyRestore.confirm(
       body,
       {
@@ -15280,6 +15301,14 @@ async function closeWorkspace(path: string): Promise<void> {
   // leaves workspaceOrder. doCloseWorkspace avoids it for the same reason,
   // though it inlines only part of this teardown and leaves the rest to the
   // onPipelineReset that follows it.
+  //
+  // pipeline.workspacePath rather than pipelineRunWorkspace, which names the
+  // run's workspace everywhere else: this predicate answers false unless the
+  // state is 'running', and a window cannot be looking at another workspace
+  // while a run is live — onWorkspaceBrowse aborts one before it switches. So
+  // while the answer can be true, the two fields agree. Swapping in the other
+  // one would be correct too; reaching for it because it "looks safer" without
+  // this paragraph is how a teardown gets skipped.
   if (closeEndsTheRun({
     state: pipeline.state,
     runWorkspacePath: normWs(pipeline.workspacePath),
@@ -15304,7 +15333,7 @@ async function closeWorkspace(path: string): Promise<void> {
   // 'aborted' without the close ever entering it. A run still running is left
   // alone — it either ended above or lives in a workspace this close does not
   // touch.
-  if (pipeline.state === 'aborted') {
+  if (pipeline.state === 'aborted' && normWs(pipelineRunWorkspace) === normWs(path)) {
     pipeline.state = 'idle'
     pipeline.workspacePath = ''
     pipelineRunWorkspace = ''
@@ -15409,6 +15438,48 @@ function toggleWorkspaceCollapsed(path: string): void {
   if (next.has(path)) next.delete(path)
   else next.add(path)
   collapsedWorkspaces.value = next
+}
+
+/** Fold (or unfold) every lineage subtree inside ONE workspace.
+ *
+ *  What the workspace heading's fold button drives, and what Alt+clicking its
+ *  caret does. Deliberately NOT toggleWorkspaceCollapsed: that folds the
+ *  heading itself and hides the project, while this leaves the heading open
+ *  and empties what hangs below it — the explorer's "collapse folders"
+ *  gesture, scoped to one project rather than to the window.
+ *
+ *  Only panes that actually have children are written. A leaf carries no
+ *  subtree, so a persisted `collapsed` flag on one would record a state the
+ *  sidebar can never show, and would survive as a lie once that pane does
+ *  gain a child.
+ */
+function setWorkspaceSubtreesCollapsed(path: string, collapse: boolean): void {
+  const mine = panes.value.filter((p) => normWs(p.workspacePath) === normWs(path))
+  if (!mine.length) return
+  // effectiveParents rather than a raw spawnedBy scan: it is what the sidebar
+  // itself walks, so a pane whose parent is closed in another window — or one
+  // in a hand-edited cycle — is counted as the root the list actually draws.
+  const withChildren = new Set<string>()
+  for (const parent of effectiveParents(mine).values()) if (parent) withChildren.add(parent)
+  if (!withChildren.size) return
+  const next = new Set(collapsedPanes.value)
+  const changed: string[] = []
+  for (const id of withChildren) {
+    if (collapse === next.has(id)) continue
+    if (collapse) next.add(id)
+    else next.delete(id)
+    changed.push(id)
+  }
+  if (!changed.length) return
+  collapsedPanes.value = next
+  for (const id of changed) {
+    backend.send('project.set_pane_collapsed', {
+      workspace_path: path,
+      pane_id: id,
+      collapsed: collapse,
+    })
+  }
+  syncViews()
 }
 
 /** The sidebar's outer layer: one row per workspace, this window's first.
@@ -17201,6 +17272,7 @@ function paneIsCommander(p: ActivePane): boolean {
       @minimize="minimizePane"
       @toggle-collapsed="togglePaneCollapsed"
       @toggle-workspace="toggleWorkspaceCollapsed"
+      @collapse-workspace-subtrees="setWorkspaceSubtreesCollapsed"
       @open-workspace-picker="workspacePickerOpen = true"
       @switch-to-workspace="switchToWorkspace"
       @close-workspace="closeWorkspace"

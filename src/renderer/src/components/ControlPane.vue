@@ -1002,6 +1002,10 @@ const emit = defineEmits<{
   (e: 'toggle-collapsed', paneId: string): void
   /** Fold/unfold a whole workspace section. */
   (e: 'toggle-workspace', path: string): void
+  /** Fold/unfold every lineage subtree inside one workspace, leaving the
+   *  heading itself open. App owns the pane state and persists it, the same
+   *  way it owns 'toggle-collapsed'. */
+  (e: 'collapse-workspace-subtrees', path: string, collapse: boolean): void
   /** Bring a workspace to the front — focus its window if one has it open,
    *  otherwise open it. */
   /** Open a new agent in a workspace that is not this window's. */
@@ -1993,6 +1997,103 @@ function toggleGroup(wsPath: string, id: string): void {
   collapsedGroups.value = next
 }
 
+/** The run groups of one workspace that HAVE a heading to fold.
+ *
+ *  A workspace whose panes belong to no run group renders one nameless
+ *  section with no caret of its own (`bare` in groupSectionsOf). Counting it
+ *  would leave the fold button reading "expand" over a row that shows nothing
+ *  folded, because there is no heading on screen to have folded. */
+function foldableGroupsOf(ws: WorkspaceGroupRow): WorkspaceGroupRow['groups'] {
+  const bare = ws.groups.length <= 1 && (ws.groups[0]?.id ?? '') === ''
+  return bare ? [] : ws.groups
+}
+
+/** Whether one workspace already has everything below its heading folded.
+ *
+ *  Both layers, because the button folds both: the run group headings, and
+ *  every lineage subtree inside them. A leaf has no subtree to fold, so it
+ *  never keeps this false. */
+function isWorkspaceFolded(ws: WorkspaceGroupRow): boolean {
+  const groups = foldableGroupsOf(ws)
+  return (
+    groups.every((g) => isGroupCollapsed(ws.path, g.id)) &&
+    ws.groups.every((g) => g.rows.every((r) => !r.hasChildren || r.collapsed))
+  )
+}
+
+/** Whether this workspace has anything to fold at all — a group heading or a
+ *  pane with children. Flat projects get a disabled button rather than one
+ *  that looks broken when pressed. */
+function canFoldWorkspace(ws: WorkspaceGroupRow): boolean {
+  return foldableGroupsOf(ws).length > 0 || ws.groups.some((g) => g.rows.some((r) => r.hasChildren))
+}
+
+/** Fold or unfold everything below ONE workspace heading.
+ *
+ *  The per-workspace twin of toggleAllWorkspaces, and the same single-toggle
+ *  judgement: with everything already folded, a "collapse" that does nothing
+ *  is a button that looks broken, so the label and icon follow the state.
+ *
+ *  The heading itself is left alone on purpose. Folding it too would make this
+ *  button a slower duplicate of the caret beside it; what it does instead is
+ *  empty the project without hiding it. */
+function toggleWorkspaceFold(ws: WorkspaceGroupRow): void {
+  if (!canFoldWorkspace(ws)) return
+  const collapse = !isWorkspaceFolded(ws)
+  const next = new Set(collapsedGroups.value)
+  for (const g of foldableGroupsOf(ws)) {
+    const key = groupKey(ws.path, g.id)
+    if (collapse) next.add(key)
+    else next.delete(key)
+  }
+  collapsedGroups.value = next
+  // The subtrees live in App's collapsedPanes and are persisted per pane, so
+  // this half cannot be done here.
+  emit('collapse-workspace-subtrees', ws.path, collapse)
+}
+
+/** The heading caret's click, which carries two gestures.
+ *
+ *  Plain click folds the workspace itself. Alt/Option+click reaches the same
+ *  action the fold button runs — the explorer convention, kept as the fast
+ *  path for when the pointer is already on the caret. The button is what
+ *  makes the gesture discoverable; this is what makes it quick. */
+function onWsCaretClick(ws: WorkspaceGroupRow, ev: MouseEvent): void {
+  if (ev.altKey) {
+    toggleWorkspaceFold(ws)
+    return
+  }
+  emit('toggle-workspace', ws.path)
+}
+
+/** Which workspace heading has its ⋯ menu open; empty for none.
+ *
+ *  Rebuild-all and history moved in here to make room for the fold button
+ *  without taking width from the name, which at the sidebar's 240px minimum
+ *  is the part that runs out first. */
+const wsMoreMenuPath = ref<string>('')
+const wsMoreMenuStyle = ref<Record<string, string>>({})
+
+function toggleWsMoreMenu(ev: MouseEvent, path: string): void {
+  if (wsMoreMenuPath.value === path) {
+    closeWsMoreMenu()
+    return
+  }
+  // Mutually exclusive with the ＋ roster: both anchor to the same row, and
+  // two panels open over one heading is never what a click on either meant.
+  addMenuOpen.value = false
+  const btn = ev.currentTarget as HTMLElement | null
+  const box = btn?.getBoundingClientRect()
+  wsMoreMenuStyle.value = box
+    ? { top: `${Math.round(box.bottom + 4)}px`, left: `${Math.round(Math.max(8, box.right - 168))}px` }
+    : {}
+  wsMoreMenuPath.value = path
+}
+
+function closeWsMoreMenu(): void {
+  wsMoreMenuPath.value = ''
+}
+
 /** The heading a workspace drag is hovering, for the drop line. */
 const wsDragOverPath = ref<string>('')
 let draggingWorkspacePath = ''
@@ -2215,6 +2316,34 @@ onUnmounted(() => document.removeEventListener('keydown', onSpawnModalKeydown))
 function closeAddMenu(): void {
   addMenuOpen.value = false
 }
+
+// Same three dismissals the ＋ roster uses, for the same reasons: a click
+// anywhere else, Escape, and any scroll (captured — the pane list scrolls and
+// its events do not bubble, so without this the menu hangs over whatever
+// scrolled into the button's old place).
+function onWsMoreMenuKeydown(e: KeyboardEvent): void {
+  if (e.key === 'Escape') closeWsMoreMenu()
+}
+watch(wsMoreMenuPath, (path) => {
+  if (path) {
+    document.addEventListener('click', closeWsMoreMenu)
+    document.addEventListener('keydown', onWsMoreMenuKeydown)
+    document.addEventListener('scroll', closeWsMoreMenu, true)
+  } else {
+    document.removeEventListener('click', closeWsMoreMenu)
+    document.removeEventListener('keydown', onWsMoreMenuKeydown)
+    document.removeEventListener('scroll', closeWsMoreMenu, true)
+  }
+})
+onUnmounted(() => {
+  document.removeEventListener('click', closeWsMoreMenu)
+  document.removeEventListener('keydown', onWsMoreMenuKeydown)
+  document.removeEventListener('scroll', closeWsMoreMenu, true)
+})
+// The ＋ roster closes this one too, so opening either never leaves both up.
+watch(addMenuOpen, (open) => {
+  if (open) closeWsMoreMenu()
+})
 
 watch(addMenuOpen, (open) => {
   if (open) {
@@ -3154,8 +3283,8 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
         >
           <button
             class="ws-caret"
-            :title="ws.collapsed ? $t('action.expand-subtree') : $t('action.collapse-subtree')"
-            @click.stop="emit('toggle-workspace', ws.path)"
+            :title="`${ws.collapsed ? $t('action.expand-subtree') : $t('action.collapse-subtree')}${canFoldWorkspace(ws) ? ` · ${$t('action.fold-workspace-hint')}` : ''}`"
+            @click.stop="onWsCaretClick(ws, $event)"
           >{{ ws.collapsed ? '›' : '⌄' }}</button>
           <span class="ws-icon"><FolderIcon /></span>
           <!-- The hover title stays the FULL REAL PATH, on the name itself as
@@ -3190,17 +3319,33 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
             </span>
             <span class="ws-path">{{ ws.displayPath }}</span>
           </span>
+          <!-- Folds what hangs BELOW this heading, leaving the project itself
+               on screen — the caret beside the name is what hides the project.
+               Same glyph as the section header's fold-all so the two read as
+               the same gesture at two scopes. -->
           <button
-            class="ws-act"
-            :class="{ busy: rebuildingAll }"
-            :disabled="!wsCanRebuild(ws.path) || rebuildingAll"
-            :title="$t('action.rebuild-all-cli-panes')"
-            :aria-label="$t('action.rebuild-all-cli-panes')"
-            @click.stop="emit('rebuild-all', ws.path)"
+            class="ws-fold"
+            :disabled="!canFoldWorkspace(ws)"
+            :title="isWorkspaceFolded(ws) ? $t('action.expand-workspace-tree') : $t('action.collapse-workspace-tree')"
+            :aria-label="isWorkspaceFolded(ws) ? $t('action.expand-workspace-tree') : $t('action.collapse-workspace-tree')"
+            @click.stop="toggleWorkspaceFold(ws)"
           >
-            <RebuildIcon />
+            <svg
+              width="13"
+              height="13"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <rect x="4.5" y="1.5" width="10" height="10" rx="1" />
+              <rect x="1.5" y="4.5" width="10" height="10" rx="1" fill="var(--bg-base)" />
+              <path :d="isWorkspaceFolded(ws) ? 'M4 9.5h5M6.5 7v5' : 'M4 9.5h5'" />
+            </svg>
           </button>
-          <button class="ws-act" :title="$t('label.history')" @click.stop="emit('open-history', ws.path)"><HistoryIcon /></button>
           <!-- Opens the same CLI and role the spawn card holds, in THIS
                workspace — the menu remembers which heading opened it. -->
           <button
@@ -3210,6 +3355,16 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
             :title="canSpawn ? `${$t('action.add-to-grid')} · ${pickedAgentLabel}` : $t('label.set-workspace-first')"
             @click.stop="toggleAddMenu($event, ws.path)"
           ><AddPaneIcon /></button>
+          <!-- Rebuild-all and history live in here rather than on the row: at
+               the sidebar's 240px minimum a fourth button takes its width from
+               the project name, which is the part that runs out first. -->
+          <button
+            class="ws-more"
+            :aria-expanded="wsMoreMenuPath === ws.path"
+            :aria-label="$t('action.more-workspace-actions')"
+            :title="$t('action.more-workspace-actions')"
+            @click.stop="toggleWsMoreMenu($event, ws.path)"
+          >⋯</button>
         </li>
         <template v-for="g in groupSectionsOf(ws)" :key="`${ws?.path ?? ''}/${g.id}`">
         <!-- The group layer sits BESIDE the lineage rather than above it: a
@@ -3488,6 +3643,23 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
         </template>
       </div>
 
+      <!-- The heading's ⋯ overflow. Fixed and anchored to the button like the
+           ＋ roster, because the pane list scrolls and an absolutely placed
+           panel would scroll away from its own anchor. -->
+      <div v-if="wsMoreMenuPath" class="ws-more-menu" :style="wsMoreMenuStyle" @click.stop>
+        <button
+          class="ws-more-opt"
+          :disabled="!wsCanRebuild(wsMoreMenuPath) || rebuildingAll"
+          @click="emit('rebuild-all', wsMoreMenuPath); closeWsMoreMenu()"
+        >
+          <span class="ws-more-ico" :class="{ busy: rebuildingAll }"><RebuildIcon /></span>
+          <span>{{ $t('action.rebuild-all-cli-panes') }}</span>
+        </button>
+        <button class="ws-more-opt" @click="emit('open-history', wsMoreMenuPath); closeWsMoreMenu()">
+          <span class="ws-more-ico"><HistoryIcon /></span>
+          <span>{{ $t('label.history') }}</span>
+        </button>
+      </div>
       <div v-if="addMenuOpen" class="ws-add-menu" :style="addMenuStyle" @click.stop>
         <select v-model="pickedRole" class="ws-add-role">
           <option value="">{{ $t('label.select-role') }}</option>
@@ -5098,6 +5270,8 @@ button.icon-btn.muted:hover {
 .ws-head > .ws-caret,
 .ws-head > .ws-icon,
 .ws-head > .ws-act,
+.ws-head > .ws-fold,
+.ws-head > .ws-more,
 .ws-head > .ws-add { height: 16px; align-self: flex-start; }
 .ws-caret {
   flex: none;
@@ -5291,6 +5465,83 @@ button.icon-btn.muted:hover {
 .ws-add :deep(svg) { width: 12px; height: 12px; }
 .ws-head:hover .ws-add { opacity: 1; }
 .ws-add:hover { color: var(--text-bright); }
+
+/* Folds everything below this heading. Shares the row's button box with ＋ and
+   ⋯ so the three read as one group; the glyph is the section header's, because
+   it is the same gesture at a narrower scope. */
+.ws-fold {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--icon-btn-sm);
+  height: var(--icon-btn-sm);
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  line-height: 1;
+  color: var(--text-muted);
+  opacity: 0.65;
+}
+.ws-fold svg { display: block; }
+.ws-head:hover .ws-fold { opacity: 1; }
+.ws-fold:hover:not(:disabled) { color: var(--text-bright); }
+.ws-fold:disabled { opacity: 0.3; cursor: default; }
+
+/* The overflow that rebuild-all and history moved into. A glyph rather than an
+   icon, so it is legible at the row's 16px without competing with the two
+   stroke marks beside it. */
+.ws-more {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--icon-btn-sm);
+  height: var(--icon-btn-sm);
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: var(--font-sm);
+  line-height: 1;
+  color: var(--text-muted);
+  opacity: 0.65;
+}
+.ws-head:hover .ws-more { opacity: 1; }
+.ws-more:hover { color: var(--text-bright); }
+.ws-more[aria-expanded='true'] { opacity: 1; color: var(--text-bright); }
+
+.ws-more-menu {
+  position: fixed;
+  z-index: 60;
+  width: 168px;
+  max-width: calc(100vw - 24px);
+  padding: 5px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated, var(--bg-secondary));
+  box-shadow: 0 8px 24px rgb(0 0 0 / 45%);
+  font-size: var(--font-xs);
+}
+.ws-more-opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 10px;
+  border: none;
+  background: none;
+  color: var(--text-primary);
+  font-size: var(--font-xs);
+  text-align: left;
+  cursor: pointer;
+}
+.ws-more-opt:hover:not(:disabled) { background: var(--bg-hover, rgb(255 255 255 / 7%)); }
+.ws-more-opt:disabled { opacity: 0.4; cursor: default; }
+.ws-more-ico { flex: none; display: flex; align-items: center; color: var(--text-secondary); }
+.ws-more-ico :deep(svg) { width: 12px; height: 12px; display: block; }
+.ws-more-ico.busy :deep(svg) { animation: agent-rebuild-spin 0.8s linear infinite; }
 
 /* Rebuild-all and history, moved off the section header: both act on one
    workspace's panes. Sized to the row rather than the 32px header button. */

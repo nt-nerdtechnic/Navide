@@ -3,11 +3,16 @@ import { describe, it, expect, afterEach, vi } from 'vitest'
 import { shallowMount, type VueWrapper } from '@vue/test-utils'
 import ControlPane from '../ControlPane.vue'
 
-// Every workspace heading carries ↻ (rebuild this project's CLIs) and the
+// Every workspace heading offers ↻ (rebuild this project's CLIs) and the
 // history button. Both emitted no payload and App answered them from
 // currentWorkspace, so whichever heading you clicked, they acted on the
 // workspace on screen — and ↻'s enabled state came from there too. These pin
 // each heading to its own workspace.
+//
+// The two moved into the heading's ⋯ overflow when the fold button took a
+// place on the row; the binding they are pinned to is the menu's own
+// wsMoreMenuPath now, so the same substitution would still be invisible
+// without these.
 
 const A = '/Users/me/Desktop/alpha'
 const B = '/Users/me/Desktop/beta'
@@ -55,9 +60,14 @@ function mountWith(extra: Record<string, unknown> = {}): VueWrapper {
   })
 }
 
-/** [rebuild, history] for the nth workspace heading. */
-const actsOf = (wrapper: VueWrapper, n: number) =>
-  wrapper.findAll('.ws-head')[n].findAll('.ws-act')
+/** Open the nth heading's ⋯ menu and return its [rebuild, history] items.
+ *
+ *  One menu exists at a time and its contents follow the heading that opened
+ *  it, so every assertion below still reads "this heading's buttons". */
+const actsOf = async (wrapper: VueWrapper, n: number) => {
+  await wrapper.findAll('.ws-head')[n].find('.ws-more').trigger('click')
+  return wrapper.findAll('.ws-more-opt')
+}
 
 describe('ControlPane – the buttons on a workspace heading', () => {
   let wrapper: VueWrapper
@@ -65,43 +75,53 @@ describe('ControlPane – the buttons on a workspace heading', () => {
 
   it('rebuilds the workspace whose heading was clicked, not the one on screen', async () => {
     wrapper = mountWith({ rebuildableByWorkspace: { [A]: 1, [B]: 1 } })
-    await actsOf(wrapper, 1)[0].trigger('click')
+    await (await actsOf(wrapper, 1))[0].trigger('click')
     expect(wrapper.emitted('rebuild-all')).toEqual([[B]])
   })
 
   it('opens the history of the workspace whose heading was clicked', async () => {
     wrapper = mountWith({ rebuildableByWorkspace: { [A]: 1, [B]: 1 } })
-    await actsOf(wrapper, 1)[1].trigger('click')
+    await (await actsOf(wrapper, 1))[1].trigger('click')
     expect(wrapper.emitted('open-history')).toEqual([[B]])
   })
 
   it('names the viewed workspace too, rather than leaving it to a fallback', async () => {
     wrapper = mountWith({ rebuildableByWorkspace: { [A]: 1 } })
-    await actsOf(wrapper, 0)[0].trigger('click')
-    await actsOf(wrapper, 0)[1].trigger('click')
+    await (await actsOf(wrapper, 0))[0].trigger('click')
+    await (await actsOf(wrapper, 0))[1].trigger('click')
     expect(wrapper.emitted('rebuild-all')).toEqual([[A]])
     expect(wrapper.emitted('open-history')).toEqual([[A]])
   })
 
-  it('enables ↻ per workspace, so an empty project does not offer it', () => {
+  it('enables ↻ per workspace, so an empty project does not offer it', async () => {
     // One window-wide flag meant a project with nothing to rebuild showed the
     // button live, and one with panes to rebuild showed it dead.
     wrapper = mountWith({ rebuildableByWorkspace: { [B]: 2 } })
-    expect(actsOf(wrapper, 0)[0].attributes('disabled')).toBeDefined()
-    expect(actsOf(wrapper, 1)[0].attributes('disabled')).toBeUndefined()
+    expect((await actsOf(wrapper, 0))[0].attributes('disabled')).toBeDefined()
+    expect((await actsOf(wrapper, 1))[0].attributes('disabled')).toBeUndefined()
   })
 
-  it('treats a heading path with a trailing slash as the same workspace', () => {
+  it('treats a heading path with a trailing slash as the same workspace', async () => {
     wrapper = mountWith({
       workspaces: [wsRow(`${A}/`, 'alpha')],
       rebuildableByWorkspace: { [A]: 1 },
     })
-    expect(actsOf(wrapper, 0)[0].attributes('disabled')).toBeUndefined()
+    expect((await actsOf(wrapper, 0))[0].attributes('disabled')).toBeUndefined()
   })
 
-  it('disables ↻ everywhere while a rebuild batch is running', () => {
+  it('disables ↻ everywhere while a rebuild batch is running', async () => {
     wrapper = mountWith({ rebuildableByWorkspace: { [A]: 1, [B]: 1 }, rebuildingAll: true })
-    expect(actsOf(wrapper, 0)[0].attributes('disabled')).toBeDefined()
-    expect(actsOf(wrapper, 1)[0].attributes('disabled')).toBeDefined()
+    expect((await actsOf(wrapper, 0))[0].attributes('disabled')).toBeDefined()
+    expect((await actsOf(wrapper, 1))[0].attributes('disabled')).toBeDefined()
+  })
+
+  it('opens one heading\'s overflow at a time, so ⋯ never acts on the last row', async () => {
+    // The menu is a single element whose contents follow wsMoreMenuPath. If
+    // opening a second heading left the first bound, ↻ would rebuild whichever
+    // project was opened first — the exact substitution this file exists for.
+    wrapper = mountWith({ rebuildableByWorkspace: { [A]: 1, [B]: 1 } })
+    await actsOf(wrapper, 0)
+    await (await actsOf(wrapper, 1))[0].trigger('click')
+    expect(wrapper.emitted('rebuild-all')).toEqual([[B]])
   })
 })

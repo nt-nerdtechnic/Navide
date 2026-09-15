@@ -134,21 +134,32 @@ describe('ControlPane – workspace sections', () => {
     expect(own.attributes('disabled')).toBeDefined()
   })
 
-  it('moves rebuild-all and history onto the workspace row', async () => {
-    // Both act on one workspace's panes, so grouped they belong on its row —
-    // and the section header must not keep a second copy.
+  it('moves rebuild-all and history into the workspace row\'s ⋯ menu', async () => {
+    // Both act on one workspace's panes, so grouped they belong to its row —
+    // and the section header must not keep a second copy. They sit in the ⋯
+    // overflow rather than on the row itself: at the sidebar's 240px minimum a
+    // fourth button takes its width from the project name.
     wrapper = mountWith({ workspaces: [current()] })
-    const acts = wrapper.find('.ws-head--current').findAll('.ws-act')
-    expect(acts).toHaveLength(2)
+    const head = wrapper.find('.ws-head--current')
+    expect(head.findAll('.ws-act')).toHaveLength(0)
     expect(wrapper.find('.agent-header-actions').exists()).toBe(false)
-    await acts[1].trigger('click')
+    // Closed until asked for, so it costs the row no width.
+    expect(wrapper.find('.ws-more-menu').exists()).toBe(false)
+    await head.find('.ws-more').trigger('click')
+    const opts = wrapper.findAll('.ws-more-opt')
+    expect(opts).toHaveLength(2)
+    await opts[1].trigger('click')
     expect(wrapper.emitted('open-history')).toBeTruthy()
+    // Choosing an item dismisses the menu; leaving it up over a row whose
+    // action already ran reads as though nothing happened.
+    expect(wrapper.find('.ws-more-menu').exists()).toBe(false)
   })
 
   it('keeps them in the header while nothing is grouped', () => {
     wrapper = mountWith({})
     expect(wrapper.find('.agent-header-actions').exists()).toBe(true)
     expect(wrapper.findAll('.ws-act')).toHaveLength(0)
+    expect(wrapper.findAll('.ws-more')).toHaveLength(0)
   })
 
   it('offers neither opening nor switching in a detached window', async () => {
@@ -551,14 +562,19 @@ describe('ControlPane – workspace sections', () => {
   })
 
   it('the row controls keep working without switching', async () => {
-    // caret, rebuild, history and ＋ all stop propagation.
+    // caret, fold, ＋ and ⋯ all stop propagation — the row itself is the
+    // switch, so any of them leaking would change project as a side effect.
     const other = current({ path: '/Users/me/Desktop/Other', label: 'Other' })
     wrapper = mountWith({ workspace: '/Users/me/Desktop/Agent-Team', workspaces: [current(), other] })
     const row = wrapper.findAll('.ws-head--current')[1]
     await row.find('.ws-caret').trigger('click')
     expect(wrapper.emitted('toggle-workspace')?.[0]).toEqual(['/Users/me/Desktop/Other'])
     expect(wrapper.emitted('switch-to-workspace')).toBeUndefined()
-    await row.findAll('.ws-act')[1].trigger('click')
+    await row.find('.ws-fold').trigger('click')
+    expect(wrapper.emitted('switch-to-workspace')).toBeUndefined()
+    await row.find('.ws-more').trigger('click')
+    expect(wrapper.emitted('switch-to-workspace')).toBeUndefined()
+    await wrapper.findAll('.ws-more-opt')[1].trigger('click')
     expect(wrapper.emitted('open-history')).toBeTruthy()
     expect(wrapper.emitted('switch-to-workspace')).toBeUndefined()
   })
