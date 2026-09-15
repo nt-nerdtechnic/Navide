@@ -152,7 +152,7 @@ describe('closing a workspace ends the run its panes belonged to', () => {
     // compares a workspace with itself, because onWorkspaceBrowse has already
     // reassigned it to the one being entered.
     expect(call).not.toContain('pipeline.workspacePath')
-    expect(appSource).toContain("import { closeEndsTheRun, restoreBlockedByRun } from './lib/workspaceCloseRun'")
+    expect(appSource).toContain("restoreBlockedByRun } from './lib/workspaceCloseRun'")
   })
 
   it('writes the run identity only where a run becomes running, and clears it', () => {
@@ -182,11 +182,43 @@ describe('closing a workspace ends the run its panes belonged to', () => {
     // branch. A reset living inside it would leave exactly that close — the
     // one whose dialog promises the panes come back — unable to restore.
     const abortSend = fn.indexOf("reason: 'user' })")
-    const reset = fn.indexOf("if (pipeline.state === 'aborted') {")
+    const reset = fn.indexOf("if (pipeline.state === 'aborted' &&")
     expect(abortSend).toBeGreaterThan(-1)
     expect(reset).toBeGreaterThan(abortSend)
     // The branch closes between them.
     expect(fn.slice(abortSend, reset)).toContain('\n  }\n')
+  })
+
+  it('does not drop a paused run the close never touched', () => {
+    // Unconditional, it also cleared a run paused in ANOTHER workspace: its
+    // panel would vanish, and — worse — clearing pipelineRunWorkspace unblocks
+    // a cold restore of that workspace over panes that are still alive.
+    expect(fn).toContain("if (pipeline.state === 'aborted' && normWs(pipelineRunWorkspace) === normWs(path))")
+  })
+
+  it('leaves a dismissed reconnect banner dismissed until a ghost is new', () => {
+    // Paired with the filter below: once another workspace's ghosts survive a
+    // restore, un-dismissing the banner at restore time re-raises it over a
+    // project the user is no longer looking at — and its click target is
+    // disconnectedPaneIds[0], a pane in that other workspace.
+    const restore = appSource.slice(appSource.indexOf('async function restoreWorkspacePanes('))
+    const block = restore.slice(restore.indexOf('if (fullRestore) {'), restore.indexOf('for (const saved of toRestore)'))
+    expect(block).not.toContain('reconnectBannerDismissed.value = false')
+    // Reset where a ghost is actually added — the moment there is news.
+    const realize = appSource.slice(appSource.indexOf('disconnectedPaneIds.value = [...disconnectedPaneIds.value, newId]'))
+    expect(realize.slice(0, 300)).toContain('reconnectBannerDismissed.value = false')
+  })
+
+  it('takes only the closing workspace\'s ghosts out of the window-wide list', () => {
+    // disconnectedPaneIds is per window, and the banner it drives is the only
+    // way into the reconnect picker. The old gate made this unreachable during
+    // a run; now a restore for another project gets here, and clearing the
+    // whole list would strand the run's own ghosts.
+    const restore = appSource.slice(appSource.indexOf('async function restoreWorkspacePanes('))
+    const block = restore.slice(restore.indexOf('if (fullRestore) {'), restore.indexOf('reconnectBannerDismissed.value = false'))
+    expect(block).toContain('disconnectedPaneIds.value.filter((id) => {')
+    expect(block).toContain('normWs(owner) !== normWs(workspacePath)')
+    expect(block).not.toContain('disconnectedPaneIds.value = []')
   })
 
   it('asks whether THIS close ends THIS window\'s run, not just "any pipeline pane"', () => {

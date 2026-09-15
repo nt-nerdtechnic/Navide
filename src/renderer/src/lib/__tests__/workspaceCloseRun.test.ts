@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { closeEndsTheRun, restoreBlockedByRun } from '../workspaceCloseRun'
+import { closeDialogBodyKey, closeEndsTheRun, restoreBlockedByRun } from '../workspaceCloseRun'
 
 const A = '/Users/x/projects/alpha'
 const B = '/Users/x/projects/beta'
@@ -117,5 +117,43 @@ describe('restoreBlockedByRun', () => {
     expect(restoreBlockedByRun({
       state: 'running', runWorkspacePath: `${B}/`, restoringWorkspacePath: B,
     })).toBe(false)
+  })
+})
+
+describe('closeDialogBodyKey', () => {
+  it('speaks for every pane only when every pane comes back', () => {
+    expect(closeDialogBodyKey({ count: 3, pipelineCount: 0 }))
+      .toBe('confirm-close.sidebar-ws-body')
+  })
+
+  it('names the pipeline panes that will NOT come back', () => {
+    // They take the markRemoved branch with the run, so the plain body — which
+    // promises each pane returns as a card — would be a false promise.
+    expect(closeDialogBodyKey({ count: 3, pipelineCount: 1 }))
+      .toBe('confirm-close.sidebar-ws-body-pipeline')
+  })
+
+  it('stops describing survivors when there are none', () => {
+    // The mixed body opens with "the ones you opened come back", which
+    // describes nothing in a workspace holding only pipeline slots.
+    expect(closeDialogBodyKey({ count: 2, pipelineCount: 2 }))
+      .toBe('confirm-close.sidebar-ws-body-pipeline-only')
+  })
+
+  it('does not count panes when there are none to count', () => {
+    expect(closeDialogBodyKey({ count: 0, pipelineCount: 0 }))
+      .toBe('confirm-close.sidebar-ws-body-empty')
+  })
+
+  it('keeps the empty body ahead of the pipeline ones', () => {
+    // A count of zero cannot hold pipeline panes, but if the two ever
+    // disagreed the "0 CLI panes" wording is the one that must not ship.
+    expect(closeDialogBodyKey({ count: 0, pipelineCount: 2 }))
+      .toBe('confirm-close.sidebar-ws-body-empty')
+  })
+
+  it('treats more pipeline panes than panes as all of them', () => {
+    expect(closeDialogBodyKey({ count: 2, pipelineCount: 5 }))
+      .toBe('confirm-close.sidebar-ws-body-pipeline-only')
   })
 })

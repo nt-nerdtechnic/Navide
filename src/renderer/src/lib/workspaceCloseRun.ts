@@ -42,7 +42,6 @@ export function closeEndsTheRun(probe: WorkspaceCloseProbe): boolean {
   return probe.doomedOrigins.includes('pipeline')
 }
 
-
 /** Does the window's pipeline run block restoring THIS workspace's panes?
  *
  *  A restore recreates panes from records, so it must not run for a workspace
@@ -75,4 +74,26 @@ export function restoreBlockedByRun(probe: RestoreRunProbe): boolean {
   if (probe.state !== 'running' && probe.state !== 'aborted') return false
   if (!probe.runWorkspacePath) return true
   return probe.runWorkspacePath === probe.restoringWorkspacePath
+}
+
+/** Which confirm-close body the panes of a workspace call for.
+ *
+ *  Three sentences can be true of a close, and picking the wrong one makes the
+ *  dialog promise something the teardown does not do: manual and mcp panes
+ *  keep their records and come back as click-to-resume cards, while pipeline
+ *  panes are unspawned with the run — so a body that speaks for "every pane"
+ *  is only correct when the workspace holds none of the latter, and the body
+ *  that names the ones that will not come back reads as nonsense when it is
+ *  describing all of them.
+ *
+ *  Returns the full i18n key, so the caller interpolates once and the choice
+ *  itself is testable without mounting anything.
+ */
+export function closeDialogBodyKey(counts: { count: number, pipelineCount: number }): string {
+  if (counts.count <= 0) return 'confirm-close.sidebar-ws-body-empty'
+  // >= rather than ===: a count that somehow exceeds the total still means
+  // "nothing here survives the close", which is the sentence that stays true.
+  if (counts.pipelineCount >= counts.count) return 'confirm-close.sidebar-ws-body-pipeline-only'
+  if (counts.pipelineCount > 0) return 'confirm-close.sidebar-ws-body-pipeline'
+  return 'confirm-close.sidebar-ws-body'
 }

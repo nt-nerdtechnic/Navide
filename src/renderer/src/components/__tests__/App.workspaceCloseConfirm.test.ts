@@ -48,12 +48,12 @@ describe('closing a workspace asks before it takes the panes', () => {
   })
 
   it('counts the panes it is about to take down', () => {
-    // The body says how many panes go with the workspace; an empty workspace
-    // gets the plain wording instead of "0 CLI panes".
-    expect(fn).toContain('confirm-close.sidebar-ws-body')
-    expect(fn).toContain('confirm-close.sidebar-ws-body-empty')
+    // The body says how many panes go with the workspace, so the two counts it
+    // is chosen by have to be the panes this close actually takes. The keys
+    // themselves moved to closeDialogBodyKey; what stays here is the counting.
     expect(fn).toContain("panes.value.filter((p) => normWs(p.workspacePath) === normWs(path))")
     expect(fn).toContain('const count = inWorkspace.length')
+    expect(fn).toContain('i18n.global.t(')
   })
 
   it('does not promise a resume for the pipeline panes it unspawns', () => {
@@ -61,17 +61,24 @@ describe('closing a workspace asks before it takes the panes', () => {
     // markRemoved branch below, so a workspace holding any of them needs
     // wording that says which ones do not.
     expect(fn).toContain("const pipelineCount = inWorkspace.filter((p) => p.origin === 'pipeline').length")
-    expect(fn).toContain('confirm-close.sidebar-ws-body-pipeline')
-    const picks = fn.slice(fn.indexOf('const body = count === 0'), fn.indexOf('notifyRestore.confirm('))
-    // Empty first: with no panes at all neither count-bearing body applies.
-    expect(picks.indexOf('sidebar-ws-body-empty')).toBeLessThan(picks.indexOf('sidebar-ws-body-pipeline'))
-    // All-pipeline before mixed: the mixed wording opens by promising the panes
-    // the user opened come back, which describes nothing when there are none.
-    expect(picks).toContain('pipelineCount === count')
-    expect(picks.indexOf('sidebar-ws-body-pipeline-only')).toBeLessThan(
-      picks.indexOf("sidebar-ws-body-pipeline', { count, pipelineCount }")
+    // Which sentence is true of which workspace is behaviour-tested in
+    // lib/__tests__/workspaceCloseRun.test.ts — it got this wrong twice while
+    // it lived here as a nested ternary that only string-scanning covered.
+    // What has to hold here is the wiring and that every key it can return
+    // exists in both locales with the placeholders it interpolates.
+    expect(fn).toContain('closeDialogBodyKey({ count, pipelineCount })')
+    expect(fn).toContain('{ name, count, pipelineCount }')
+    expect(appSource).toContain(
+      "import { closeDialogBodyKey, closeEndsTheRun, restoreBlockedByRun } from './lib/workspaceCloseRun'"
     )
+    const lib = read('src/renderer/src/lib/workspaceCloseRun.ts')
+    const returned = [...lib.matchAll(/return '(confirm-close\.[a-z-]+)'/g)].map((m) => m[1])
+    expect(returned.length).toBe(4)
     for (const keys of [zh['confirm-close'], en['confirm-close']]) {
+      for (const full of returned) {
+        const k = full.replace('confirm-close.', '')
+        expect(typeof keys[k]).toBe('string')
+      }
       expect(keys['sidebar-ws-body-pipeline']).toContain('{count}')
       expect(keys['sidebar-ws-body-pipeline']).toContain('{pipelineCount}')
       expect(keys['sidebar-ws-body-pipeline-only']).toContain('{count}')
