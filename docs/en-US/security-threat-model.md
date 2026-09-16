@@ -33,11 +33,29 @@ token and the hook secret in 0600 files under the app data dir; the pane MCP
 token in each pane's command line (known exposure, see L1 in the audit
 reports).
 
+Portable CLI credentials (Settings → Accounts, `portable_credentials.py`) are
+the one secret the user hands Navide on purpose to carry elsewhere. Locally
+the value is AES-256-GCM ciphertext under a wrapping key in the credential
+vault (Keychain on macOS, DPAPI on Windows, a 0600 file on Linux — the
+platform's own protection, reported to the user as `keyStorage`); it reaches a
+CLI only as a variable in that pane's environment, never in a login file. When
+the `credentials` sync scope is on, the same value travels as a record sealed
+under the account key (`sync_keyring`) with the scope and item id as
+associated data, and lands on another device as ciphertext at rest
+(`sync_credential_items.sealed`, opened into memory on use) — the receiving
+device's vault and the CLI's files are never written. The scope is off by
+default, refuses to switch on while any paired device predates encryption-key
+pinning, never deletes by absence, fails a round rather than skip an
+unreadable record, and keeps conflict rows sealed with `{agentKey, slotId}` as
+the only readable part. Rotating the account key (Settings → Sync) re-seals
+every record and hands the new ring to paired devices; old keys stay
+readable so nothing goes dark.
+
 ## Attacker positions (who can go wrong)
 
 | # | Position | What they can reach | What must hold |
 |---|---|---|---|
-| 1 | **A controlled relay or a remote peer** — the Navide Cloud server, or a device on the same account, is hostile. | Every frame that crosses `server_link`; the directory of devices and keys; pairing frames. | The relay is a dumb pipe: it never gains trust. Pins are made by two people comparing a SAS; messages are signed by the sender's pinned key and sealed to the recipient; policy documents are signed and sequence-numbered; a paired device gets `RING_SELF`, an unpaired one gets the policy, an unknown one gets nothing. |
+| 1 | **A controlled relay or a remote peer** — the Navide Cloud server, or a device on the same account, is hostile. | Every frame that crosses `server_link`; the directory of devices and keys; pairing frames; every synced record, `credentials` included. | The relay is a dumb pipe: it never gains trust. Pins are made by two people comparing a SAS that covers both the signing and the X25519 encryption key; messages are signed by the sender's pinned key and sealed to the recipient; policy documents are signed and sequence-numbered; a paired device gets `RING_SELF`, an unpaired one gets the policy, an unknown one gets nothing. Synced records are ciphertext under the account key the relay never holds; a credential's item id is random, so the rows reveal neither vendor nor account count. |
 | 2 | **Another local OS account** on the same machine. | `127.0.0.1` ports; world-readable files (`~/.claude/settings.json` is 0644); `ps` output. | Nothing that authenticates may sit in a world-readable place or in argv. HTTP routes on the backend require the ws token or a per-workspace capability; hook endpoints require the 0600 header file. |
 | 3 | **A same-user process holding a token** — the MCP server driving a CLI agent (which may be taking instructions from position 1 or from repository content), or the plugin broker. Has the ws socket or a pane credential. | Every ws handler; every MCP tool; every `ui.*` renderer command. | Trust-changing actions need a confirmation only a window can mint (`confirm_token`, bound to action, device and subject). Pane-private data (an inbox) is served only to the pane it belongs to. Argument shapes that reach a command line are refused, not sanitised. Nothing reachable from here changes what a remote party may do. |
 | 4 | **Untrusted content inside a window** — a preview iframe, a plugin webview, a rendered message. | The renderer's DOM and whatever the preload exposes; IPC if the frame can reach `ipcRenderer`. | `contextIsolation` on, `nodeIntegration` off; sensitive IPC handlers accept only the top frame of a real BrowserWindow (`isAppWindowSender`); previews load through capability URLs the frame cannot forge; webview preferences are pinned in `will-attach-webview`. |

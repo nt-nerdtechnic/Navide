@@ -2856,7 +2856,7 @@ async def sync_status(session: "Session", msg_id: str, msg_type: str, payload: d
 
     scopes = await asyncio.to_thread(sync_scopes.enabled_scopes)
     # Reading the key touches the Keychain, which can block on a dialog.
-    has_key = await asyncio.to_thread(sync_keyring.has_account_key)
+    has_key, key_id, legacy_pending = await asyncio.to_thread(_sync_key_facts)
     conflicts = await asyncio.to_thread(app.sync_store.conflicts, None)
     await session.send_json(
         make_response(
@@ -2866,6 +2866,11 @@ async def sync_status(session: "Session", msg_id: str, msg_type: str, payload: d
                 "available": list(sync_engine.SCOPES),
                 "scopes": scopes,
                 "hasKey": has_key,
+                # The active key's id (never the key) so a person can see a
+                # rotation took, and whether a ring from before accounts were
+                # bound is waiting for someone to say whose it is.
+                "keyId": key_id,
+                "legacyRingPending": legacy_pending,
                 "conflicts": len(conflicts),
                 "link": await server_link.status(),
             },
@@ -2873,9 +2878,77 @@ async def sync_status(session: "Session", msg_id: str, msg_type: str, payload: d
     )
 
 
+def _sync_key_facts() -> tuple[bool, str, bool]:
+    from . import sync_keyring
+
+    has_key = sync_keyring.has_account_key()
+    key_id = (sync_keyring.active_key_id() or "") if has_key else ""
+    try:
+        legacy = bool(sync_keyring.legacy_ring_pending())
+    except Exception:  # noqa: BLE001 - an unreadable vault is "nothing pending"
+        legacy = False
+    return has_key, key_id, legacy
+
+
+@handler("sync.adopt_legacy_key")
+async def sync_adopt_legacy_key(
+    session: "Session", msg_id: str, msg_type: str, payload: dict
+) -> None:
+    """The person says the ring from before accounts were bound is this
+    account's. Explicit, once, never inferred: the module cannot tell whose
+    it was, and minting a fresh key instead would leave everything that ring
+    wrote unreadable."""
+    from . import sync_keyring
+
+    try:
+        await asyncio.to_thread(sync_keyring.adopt_legacy_ring)
+    except sync_keyring.KeyringError as err:
+        await session.send_json(make_error(msg_id, msg_type, "SYNC_KEY_REFUSED", str(err)))
+        return
+    try:
+        results = await server_link.sync_now()
+    except Exception as err:  # noqa: BLE001 - the key is adopted either way
+        results = [{"scope": "all", "error": str(err)}]
+    await session.send_json(make_response(msg_id, msg_type, {"results": results}))
+
+
+@handler("sync.rotate_key")
+async def sync_rotate_key(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """Retire the active sync key and re-seal every record under a new one.
+
+    The old keys stay readable, so nothing already on the server goes dark;
+    the round that follows pushes each unchanged item again under the new
+    key (the engine notices the key id changed). Paired devices receive the
+    new ring over the same signed channel that handed them the first one,
+    and until then write under the old key — which this device reads fine.
+    """
+    from . import sync_keyring
+
+    try:
+        key_id = await asyncio.to_thread(sync_keyring.rotate_account_key)
+    except sync_keyring.KeyringError as err:
+        await session.send_json(make_error(msg_id, msg_type, "SYNC_KEY_REFUSED", str(err)))
+        return
+    # Distribution is part of the rotation, not an extra: a reply that said
+    # "rotated" while every other device still wrote under the old key would
+    # be the leak continuing under a new name. So it is called by name, and
+    # its failure is reported in the reply rather than swallowed.
+    try:
+        offered: Any = await server_link.offer_sync_key_to_peers()
+    except Exception as err:  # noqa: BLE001 - said in the reply, see above
+        offered = {"error": str(err)}
+    try:
+        results = await server_link.sync_now()
+    except Exception as err:  # noqa: BLE001 - the key is rotated either way
+        results = [{"scope": "all", "error": str(err)}]
+    await session.send_json(
+        make_response(msg_id, msg_type, {"keyId": key_id, "results": results, "offered": offered})
+    )
+
+
 @handler("sync.set_scope")
 async def sync_set_scope(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
-    from . import sync_engine, sync_scopes
+    from . import app, sync_engine, sync_scopes
 
     scope = str(payload.get("scope") or "")
     enabled = bool(payload.get("enabled"))
@@ -2884,8 +2957,20 @@ async def sync_set_scope(session: "Session", msg_id: str, msg_type: str, payload
             make_error(msg_id, msg_type, "SYNC_UNKNOWN_SCOPE", f"unknown scope {scope!r}")
         )
         return
-    scopes = await asyncio.to_thread(sync_scopes.set_scope_enabled, scope, enabled)
+    try:
+        scopes = await asyncio.to_thread(sync_scopes.set_scope_enabled, scope, enabled)
+    except sync_engine.SyncError as err:
+        # A scope may refuse to be switched on (credentials, while a paired
+        # device predates encryption-key pinning); the reason is the message.
+        await session.send_json(make_error(msg_id, msg_type, "SYNC_SCOPE_REFUSED", str(err)))
+        return
     await session.send_json(make_response(msg_id, msg_type, {"scopes": scopes}))
+    # The settings store returns the delta but does not announce it; the
+    # renderer's cloud views listen for this key to drop what they show, so
+    # a successful change is broadcast here (a refused one above is not).
+    await app.broadcast(
+        make_event("ui.settings_changed", {"settings": {sync_scopes.SCOPES_SETTING: scopes}})
+    )
     if enabled:
         # Turning a section on is a request to be up to date, not just a flag.
         asyncio.create_task(_sync_after_enable(scope))

@@ -4839,7 +4839,17 @@
       "error-load": "讀不到同步設定。",
       "scope-hint-mcp": "你在 Navide 加的 MCP。其中的秘密會加密後才離開這台機器。",
       "scope-hint-skills": "哪些技能開著、各自送給哪幾家 CLI。技能檔案本身是下一步。",
-      "scope-hint-memory": "全域指示檔，例如 ~/.claude/CLAUDE.md。專案裡的那些留給 git。"
+      "scope-hint-memory": "全域指示檔，例如 ~/.claude/CLAUDE.md。專案裡的那些留給 git。",
+      "scope-credentials": "憑證",
+      "scope-hint-credentials": "你在「帳號」貼入的可攜 CLI 憑證。離開這台裝置前就已加密；在這台移除不會刪掉雲端或其他裝置上的那一份。",
+      "sealed": "（憑證——不顯示內容）",
+      "key-id": "同步金鑰 {id}",
+      "rotate": "更換金鑰",
+      "rotate-confirm": "立即更換",
+      "rotate-cancel": "取消",
+      "rotate-hint": "更換會讓現有金鑰退役：所有同步記錄改用新金鑰重新加密，其他裝置在下次交換金鑰時取得新的。懷疑金鑰外洩時使用。",
+      "legacy-key": "這台裝置上有一把帳號綁定之前的同步金鑰。將它採用為這個帳號的金鑰，才能繼續讀取用它同步過的內容。",
+      "legacy-key-adopt": "採用為此帳號的金鑰"
     },
     "sharing": {
       "intro": "把這四個區段搬到別台機器的兩條路：一份可以交出去的檔案，以及這些機器本來就共用的帳號。",

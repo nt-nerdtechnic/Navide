@@ -4839,7 +4839,17 @@
       "error-load": "Sync settings could not be read.",
       "scope-hint-mcp": "MCP servers you added in Navide. Their secrets are encrypted before they leave.",
       "scope-hint-skills": "Which skills are on and which CLIs each one goes to. Skill files themselves are a later step.",
-      "scope-hint-memory": "Global instruction files such as ~/.claude/CLAUDE.md. Files inside a project stay with git."
+      "scope-hint-memory": "Global instruction files such as ~/.claude/CLAUDE.md. Files inside a project stay with git.",
+      "scope-credentials": "Credentials",
+      "scope-hint-credentials": "Portable CLI credentials you pasted in Accounts. Encrypted on this device before they leave; removing one here never removes it from the cloud or your other devices.",
+      "sealed": "(credential — not shown)",
+      "key-id": "Sync key {id}",
+      "rotate": "Rotate key",
+      "rotate-confirm": "Rotate now",
+      "rotate-cancel": "Cancel",
+      "rotate-hint": "Rotating retires the current key: every synced record is re-sealed under a new one and your other devices receive it the next time they exchange keys. Use it if you suspect the key leaked.",
+      "legacy-key": "A sync key from before accounts were bound is on this device. Adopt it for this account to keep reading what was synced with it.",
+      "legacy-key-adopt": "Adopt for this account"
     },
     "sharing": {
       "intro": "Two ways to move these four sections between machines: a file you hand over, and the account they already share.",

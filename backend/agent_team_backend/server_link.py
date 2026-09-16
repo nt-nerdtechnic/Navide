@@ -216,9 +216,10 @@ PAIRING_PANE = "_pairing"
 #: a new one because the signature check in front of it is the one that matters
 #: here — a frame from a pinned device is verified against the pinned key — and
 #: because the wrapped key inside is sealed to the recipient regardless of what
-#: carries it.
-SYNC_KEY_REQUEST = "sync-key-request"
-SYNC_KEY_OFFER = "sync-key-offer"
+#: carries it. The kinds are device_pairing's, because that is what decides
+#: which kinds may be written and which are recognised on arrival.
+SYNC_KEY_REQUEST = device_pairing.SYNC_KEY_REQUEST
+SYNC_KEY_OFFER = device_pairing.SYNC_KEY_OFFER
 
 #: How long a device with no key waits for a paired peer to hand one over.
 SYNC_KEY_WAIT_S = 8.0
@@ -628,6 +629,8 @@ class ServerLink:
         # The member id pinned for *this link's* credential. Never the one the
         # last auth.hello asserted: that is the value C1 moved.
         self._own_member = ""
+        #: The keyring namespace this link bound, or None before identity settled.
+        self._sync_namespace: str | None = None
         self._tasks: set[asyncio.Task] = set()
         self._device_id = ""
         #: Whether the id being claimed replaces one the server just refused.
@@ -702,6 +705,9 @@ class ServerLink:
 
     async def stop(self) -> None:
         self._stopped = True
+        # No link, no account: the ring stays in the vault for the next
+        # sign-in to the same account, but nothing may read it meanwhile.
+        sync_keyring.unbind()
         task = self._task
         self._task = None
         for spawned in list(self._tasks):
@@ -996,6 +1002,9 @@ class ServerLink:
             engine.register(sync_scopes.McpScope())
             engine.register(sync_scopes.SkillsStateScope())
             engine.register(sync_scopes.MemoryScope())
+            # One instance, shared with the spawn and sign-out paths; see
+            # sync_scopes.credentials_scope.
+            engine.register(sync_scopes.credentials_scope())
             self._sync_engine = engine
         return self._sync_engine
 
@@ -1019,24 +1028,61 @@ class ServerLink:
             # pin taken before the encryption key was part of the exchange
             # has none, and is refused rather than completed from the
             # directory: pairing again is the fix, not trusting the relay once.
-            recipient = await asyncio.to_thread(trust_store.pinned_encryption_key, device_id)
+            pin = await asyncio.to_thread(trust_store.pin_for, device_id)
+            recipient = self._sync_key_peer(pin, device_id=device_id, kind=SYNC_KEY_OFFER)
             if not recipient:
-                log.warning(
-                    "not handing the sync key to %s: its pairing pinned no encryption "
-                    "key; pair the two machines again",
-                    device_id,
-                )
                 return False
             wrapped = await asyncio.to_thread(
                 sync_keyring.wrap_for,
                 recipient_public_key=recipient,
                 from_device=self._device_id,
                 to_device=device_id,
+                namespace=self._sync_namespace,
             )
             return await self._send_pair_frame(device_id, SYNC_KEY_OFFER, wrapped=wrapped)
         except Exception as err:  # noqa: BLE001 - pairing must survive this
             log.warning("could not hand the sync key to %s: %s", device_id, err)
             return False
+
+    def _sync_key_peer(self, pin: dict[str, Any] | None, *, device_id: str, kind: str) -> str:
+        """The encryption key the account sync key may travel to or from
+        *device_id*, or "" with the reason logged.
+
+        Paired is not enough. A pairing is a fact about *machines* — this one
+        and that one compared six digits — and pins exist for other people's
+        machines too, the ones the pane policy lets drive a pane here. The
+        account key is a fact about an *account*: it opens every synced
+        record, so it goes only to a device the pin says belongs to this
+        account's own member, approved, and whose pairing pinned an
+        encryption key. The member id in the pin was written by the pairing
+        from this machine's own credential context, never from the frame.
+        The same test guards both directions: a request from a device that
+        must not hold the key is not answered, and an offer from one is not
+        adopted, because an adopted key decides which records this machine
+        can read and whose it writes into.
+        """
+        if not isinstance(pin, dict):
+            log.info("ignoring a %s from %s: that device is not paired with this one", kind, device_id)
+            return ""
+        if pin.get("approved") is not True:
+            log.info("ignoring a %s from %s: that pairing was never approved", kind, device_id)
+            return ""
+        if not self._own_member or str(pin.get("memberId") or "") != self._own_member:
+            log.warning(
+                "refusing a %s with %s: that device is paired but belongs to another "
+                "account, and the sync key never leaves this one",
+                kind, device_id,
+            )
+            return ""
+        recipient = str(pin.get("encKey") or "")
+        if not recipient:
+            log.warning(
+                "refusing a %s with %s: its pairing pinned no encryption key; unpair "
+                "that device and pair it again",
+                kind, device_id,
+            )
+            return ""
+        return recipient
 
     async def _adopt_sync_key(self, device_id: str, wrapped: str) -> None:
         """Take the account key a paired device sealed for this one."""
@@ -1046,6 +1092,7 @@ class ServerLink:
                 wrapped,
                 from_device=device_id,
                 to_device=self._device_id,
+                namespace=self._sync_namespace,
             )
         except sync_keyring.KeyConflict:
             # Two keys exist for one account, which means one of them was
@@ -1060,6 +1107,31 @@ class ServerLink:
             log.warning("the sync key offered by %s did not open: %s", device_id, err)
         else:
             self._spawn(self._sync_all())
+
+    async def offer_sync_key_to_peers(self) -> dict[str, Any]:
+        """Hand the current ring to every device that may hold it — after a
+        rotation, so the others stop writing under the retired key without
+        waiting for their next request. Same gate as any offer
+        (``_sync_key_peer``); a device that fails it is listed as skipped, and
+        one the relay would not take the frame for likewise.
+        """
+        offered: list[str] = []
+        skipped: list[str] = []
+        try:
+            pins = (await asyncio.to_thread(trust_store.load)).get("pins") or {}
+        except Exception as err:  # noqa: BLE001 - an unreadable store offers to nobody
+            log.warning("cannot offer the sync key: the trust store would not answer: %s", err)
+            return {"offered": offered, "skipped": skipped, "error": str(err)}
+        for device_id, pin in pins.items():
+            if device_id == self._device_id:
+                continue
+            if not self._sync_key_peer(pin, device_id=device_id, kind=SYNC_KEY_OFFER):
+                skipped.append(device_id)
+            elif await self._offer_sync_key(device_id):
+                offered.append(device_id)
+            else:
+                skipped.append(device_id)
+        return {"offered": offered, "skipped": skipped}
 
     async def ensure_sync_key(self) -> bool:
         """Make sure this machine holds the account key, without minting a second.
@@ -1080,7 +1152,13 @@ class ServerLink:
             return False
         peers = [device for device in pins if device != self._device_id]
         if not peers:
-            await asyncio.to_thread(sync_keyring.ensure_account_key)
+            try:
+                await asyncio.to_thread(sync_keyring.ensure_account_key)
+            except sync_keyring.KeyringError as err:
+                # No account bound, or an older key waiting to be adopted:
+                # both mean "do not mint", and sync stays off until resolved.
+                log.warning("not minting a sync key: %s", err)
+                return False
             log.info("this is the first device of the account; minted its sync key")
             return True
         asked = 0
@@ -1337,17 +1415,70 @@ class ServerLink:
             # changes the store's answer has to make adoption run again. That is
             # why `p2p.trust.rebuild` reconnects rather than clearing a string.
             self._trust_locked = ""
+            await self._bind_sync_keyring(config, self.member_id)
         except trust_store.TrustStoreLocked as err:
             # The link stays up: the account view, the roster and the team
             # management calls do not depend on any of this, and dropping the
             # connection would hide the reason. Message traffic is what stops.
             self._trust_locked = str(err)
+            sync_keyring.unbind()
             log.error("cross-device traffic is refused on this machine: %s", err)
             await self._announce_trust_notices()
         except Exception as err:  # noqa: BLE001
             self._trust_locked = f"the device trust store could not be opened ({err})"
+            sync_keyring.unbind()
             log.error("cross-device traffic is refused on this machine: %s", err)
             await self._announce_trust_notices()
+
+    async def _bind_sync_keyring(self, config: ServerLinkConfig, member_id: str) -> None:
+        """Point the sync keyring at this account's ring, now that the pin says
+        which account this is.
+
+        The namespace is the address plus the pinned member, so signing out
+        and back in lands on the same ring and a different account lands on a
+        different one — which has none, and can read nothing written under
+        the first. The ring the first version stored had no account on it.
+        It is adopted here only when this credential is the only one this
+        machine has ever pinned — same server, same member, by construction —
+        so there is exactly one account it can belong to. Otherwise it is left where it is and said so, and the
+        keyring refuses to mint until somebody with more evidence decides;
+        a fresh key minted over it would orphan every record it wrote.
+        """
+        namespace = sync_keyring.namespace_for(config.url, member_id)
+        sync_keyring.bind(namespace)
+        # Named on every key operation this link dispatches off the loop, so
+        # one that starts after a sign-out and a different sign-in is refused
+        # rather than answered for the new account.
+        self._sync_namespace = namespace
+        await _note_account(namespace)
+        try:
+            if not await asyncio.to_thread(sync_keyring.legacy_ring_pending):
+                return
+            # Server and member both: the trust store's one pinned credential
+            # is this (address, token), so the old ring can only have been
+            # written while signed in here, as this member. A machine that
+            # pinned any second credential — another server, another account,
+            # or merely a second sign-in whose server the record does not
+            # name — has no such evidence and gets the explicit route.
+            sole = await asyncio.to_thread(
+                trust_store.only_credential_ever, config.url, config.token
+            )
+        except Exception as err:  # noqa: BLE001 - an unreadable answer is not evidence
+            log.warning("could not tell whether an older sync key needs adopting: %s", err)
+            return
+        if sole:
+            try:
+                await asyncio.to_thread(sync_keyring.adopt_legacy_ring)
+            except sync_keyring.KeyringError as err:
+                log.warning("the older sync key could not be adopted: %s", err)
+            return
+        log.warning(
+            "a sync key from before accounts were bound is stored here, and this "
+            "machine has pinned more than one credential; it is not attributed "
+            "to %s, and sync stays off for this account until it is adopted or "
+            "discarded explicitly",
+            member_id,
+        )
 
     # ---- roster reporting ----
 
@@ -2811,14 +2942,11 @@ class ServerLink:
                     their_nonce=str(frame.get("nonce") or ""),
                 )
             elif kind in (SYNC_KEY_REQUEST, SYNC_KEY_OFFER):
-                # Only between devices that already paired. The pairing kinds
-                # exist to serve strangers; this one must not, so the pin is
-                # required here rather than assumed from the address.
-                if pin is None:
-                    log.info(
-                        "ignoring a %s from %s: that device is not paired with this one",
-                        kind, device_id,
-                    )
+                # Only between this account's own approved devices. The
+                # pairing kinds exist to serve strangers; these two must not,
+                # and "paired" alone is not the test — see _sync_key_peer.
+                if not self._sync_key_peer(pin, device_id=device_id, kind=kind):
+                    pass
                 elif kind == SYNC_KEY_REQUEST:
                     await self._offer_sync_key(device_id)
                 else:
@@ -3334,12 +3462,43 @@ class ServerLink:
 _link: ServerLink | None = None
 
 
+#: The namespace of the account the last link settled on, or None when the
+#: process has never settled one or has since signed out. What tells "the
+#: same account reconnected" — which changes nothing — from "a different
+#: account signed in" or "signed out", both of which let go of everything the
+#: previous account imported. Kept at module level because the ServerLink
+#: instance is replaced on every reconfigure.
+_settled_account: str | None = None
+
+
+async def _note_account(namespace: str | None) -> None:
+    """Record which account is settled now; on a real change, tell the sync
+    scopes so imported credentials and the credentials scope's engine state
+    go with the account that owned them. The ring is not touched — it stays
+    under its own namespace for that account's next sign-in."""
+    global _settled_account
+    previous = _settled_account
+    _settled_account = namespace
+    if previous is None or previous == namespace:
+        return
+    try:
+        from . import sync_scopes
+
+        await asyncio.to_thread(sync_scopes.on_account_changed)
+    except Exception as err:  # noqa: BLE001 - the link is not what this protects
+        log.warning("could not clear the previous account's imported state: %s", err)
+
+
 async def start() -> None:
     """Start the process's one link, unless no server is configured."""
     global _link
     link = ServerLink()
     if await link.start():
         _link = link
+    else:
+        # Not configured: signed out, or never signed in. Either way whatever
+        # the previous account imported must not wait here for the next one.
+        await _note_account(None)
 
 
 async def stop() -> None:
@@ -3647,6 +3806,14 @@ def self_fingerprint() -> str:
     trust, and a person cannot tell a different format from a different key.
     """
     return device_signing.fingerprint(device_signing.public_key())
+
+
+async def offer_sync_key_to_peers() -> dict[str, Any]:
+    """Offer the current ring to every eligible paired device, or say that no
+    link is up. Used after ``sync_keyring.rotate_account_key``."""
+    if _link is None:
+        return {"offered": [], "skipped": [], "error": "not-connected"}
+    return await _link.offer_sync_key_to_peers()
 
 
 async def start_pairing(device_id: str) -> dict[str, Any] | None:

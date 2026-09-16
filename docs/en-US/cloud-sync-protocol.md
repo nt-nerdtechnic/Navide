@@ -29,6 +29,31 @@ One **item** is one logical row in one **scope**. Scopes are exactly:
 | `mcp` | Navide-owned MCP server records (never the native reflection) |
 | `skills` | skill enable/route state (content is Phase 4, not v1) |
 | `memory` | user-scope instruction-file records (never project scope) |
+| `credentials` | portable CLI credentials the user pasted in Settings → Accounts (see below) |
+
+The `credentials` scope is, to the server, indistinguishable from the other
+four: same tables, same handlers, same ciphertext-only `body`. What differs is
+on the client (`sync_scopes.CredentialsScope`, flagged `sensitive`):
+
+- `itemId` is `c-` plus 32 random hex characters, minted when a credential is
+  first pasted and carried unchanged by every device that imports it. It is
+  never derived from the vendor or slot — the server's rows say nothing about
+  which CLIs an account uses — and it does not change when the account key is
+  rotated.
+- The body is `{"v": 1, "agentKey", "slotId", "value"}` and nothing else, so
+  two devices that pasted the same token agree it is the same item.
+- **A client never pushes a tombstone by absence** for this scope. A credential
+  missing from a device's snapshot means "not set up here" or "removed here";
+  neither is a reason to sign every other device out. There is no cloud-delete
+  action in v1; removal is local. A device that removed a credential keeps a
+  secret-free *disabled* mark so a later pull does not quietly bring it back —
+  an explicit `pull_items` naming the item is what does.
+- A record that will not open fails the round rather than being skipped, so
+  the cursor never steps past a secret this device did not receive. A body
+  sealed under a key the device does not hold yet (`UnknownKeyId`) holds the
+  cursor at that row until a paired device hands over the newer ring.
+- Conflict rows are stored sealed and listed as `{agentKey, slotId}` only; the
+  inventory carries the same two fields as `meta` on each side.
 
 An item is `{itemId, rev, updatedAt, deviceId, deleted, body, sig}`:
 
@@ -40,6 +65,8 @@ An item is `{itemId, rev, updatedAt, deviceId, deleted, body, sig}`:
 - `deviceId` — origin device. The server rejects a push whose `deviceId` is not
   the connection's own device, so origin cannot be forged.
 - `deleted` — `0|1`. Deletes are tombstones so they propagate; `body` is null.
+  (The `credentials` client never emits one by absence — see the scope notes
+  above.)
 - `body` — base64 of the **ciphertext**. The server stores it opaquely and has
   no key. Everything readable lives inside it.
 - `sig` — the origin device's signature over the item, checked by receiving

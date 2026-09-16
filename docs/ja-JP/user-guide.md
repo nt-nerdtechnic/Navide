@@ -109,4 +109,8 @@ Editor は Monaco を使用し、File Editing、Diagnostics、Plan Rendering、D
 
 Settings は Role、Pipeline、MCP Server、Analyzer Behavior、AI Provider、Appearance、Keyboard Shortcut を扱います。CLI Agents では Install 済みの Coding CLI も管理します。バージョン、Install 方法、重複 Install、その CLI 自身の最後の更新結果を表示し、その CLI 公式の更新コマンドと診断コマンドを Terminal で実行できます。Navide はベンダーのコマンドを提示して実行するだけで、CLI 自体を更新することはありません。Export された Settings は API Key と Token を Redact します。Third-party Server を有効化する前に、MCP Command と Environment Variable を確認してください。
 
+**Accounts** では CLI Account ごとに 1 枚のカードを扱います。CLI 自身のサインインに加えて、カードには **Portable Credential** を保持できます。これは各ベンダーが「どの Machine でも使う」ために公式に用意した値（例：Claude Code の `claude setup-token`）です。一度貼り付けると、その CLI の新しい Pane が環境変数として受け取り、CLI 自身の Login File には触れません。CLI ごとに*使用中*の Credential は 1 つで、カードがどれかを示し、ローカルの Login File が優先されてしまう場合には警告します。削除はこの Device にのみ影響します。
+
+**Sync** セクション（Settings → Sync）は、これらの Credential を他の Device へ運べます。**Credentials** スイッチは既定で無効です。有効にすると Accounts のカードに Credential ごとの Cloud 行が現れ（同期済み、この Device のみ、Cloud にあるがここでは未使用、判断待ち）、別の Machine で貼り付けた Credential をワンクリックでここで使えるようにできます。ここで削除しても Cloud や他の Device からは削除されません。同じセクションは Sync Key の ID を表示し、漏洩が疑われるときに Rotate を提供します。すべての Record が再暗号化され、ペアリング済みの Device は新しい Key を受け取ります。
+
 `.agent-team/` は現在 Portability Mechanism ではありません。将来 Machine 間で移行する場合は Git Synchronization ではなく、Redaction と Retention Control を備えた明示的な Local Export/Import Flow を使用すべきです。

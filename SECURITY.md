@@ -39,7 +39,7 @@ Navide is local-first, not universally offline. External coding CLIs, cloud AI p
 
 ### Credentials
 
-- Coding-agent credentials remain in each external CLI's own configuration.
+- Coding-agent credentials remain in each external CLI's own configuration. The one exception is a **portable credential** you paste in Settings → Accounts on purpose: it is stored encrypted, reaches the CLI only through its pane's environment, and — only if you switch the Credentials sync section on — travels to your other devices as ciphertext under your account's sync key (see `docs/en-US/security-threat-model.md`).
 - Cloud AI keys entered in Navide are stored locally in the application data directory with restrictive file permissions (`0600` on supported systems).
 - Exported settings redact API keys and tokens.
 - Local file permissions are not protection against malware, a compromised account, unrestricted agents, backups, or another process running with equivalent authority.

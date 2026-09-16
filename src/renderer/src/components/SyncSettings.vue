@@ -29,6 +29,9 @@ interface Conflict {
   remoteRev: number
   remoteDevice: string
   seenAt: number
+  /** True for a scope whose payloads never reach the renderer: `local` and
+   *  `remote` are then metadata (or a placeholder), not the item. */
+  sealed?: boolean
 }
 
 const props = defineProps<{ backend: Backend }>()
@@ -37,6 +40,9 @@ const { t } = useI18n()
 const available = ref<string[]>([])
 const scopes = ref<Record<string, boolean>>({})
 const hasKey = ref(false)
+const keyId = ref('')
+const legacyRingPending = ref(false)
+const rotateArmed = ref(false)
 const linkState = ref('')
 const conflicts = ref<Conflict[]>([])
 const busy = ref('')
@@ -44,7 +50,7 @@ const error = ref('')
 
 /** Scopes whose adapter is not shipped yet still list, but cannot be turned on.
  *  Skill *content* is a later phase; what ships here is the decision layer. */
-const READY: ReadonlySet<string> = new Set(['prompts', 'mcp', 'skills', 'memory'])
+const READY: ReadonlySet<string> = new Set(['prompts', 'mcp', 'skills', 'memory', 'credentials'])
 
 const connected = computed(() => linkState.value === 'connected')
 
@@ -64,6 +70,8 @@ async function load(): Promise<void> {
       available?: unknown
       scopes?: unknown
       hasKey?: unknown
+      keyId?: unknown
+      legacyRingPending?: unknown
       link?: unknown
     }>('sync.status', {})
     if (!resp.ok) {
@@ -74,6 +82,8 @@ async function load(): Promise<void> {
     available.value = Array.isArray(payload?.available) ? payload.available.map(String) : []
     scopes.value = toScopes(payload?.scopes)
     hasKey.value = Boolean(payload?.hasKey)
+    keyId.value = typeof payload?.keyId === 'string' ? payload.keyId : ''
+    legacyRingPending.value = Boolean(payload?.legacyRingPending)
     linkState.value = isRecord(payload?.link) ? String(payload.link.state ?? '') : ''
     await loadConflicts()
   } catch (err) {
@@ -121,6 +131,45 @@ async function syncNow(): Promise<void> {
   }
 }
 
+/** Adopt the sync key from before accounts were bound as this account's.
+ *  Explicit and once: the backend cannot tell whose it was, and minting a
+ *  fresh key instead would leave everything that key wrote unreadable. */
+async function adoptLegacyKey(): Promise<void> {
+  busy.value = 'key'
+  error.value = ''
+  try {
+    const resp = await props.backend.send('sync.adopt_legacy_key', {}, 30_000)
+    if (!resp.ok) error.value = resp.error?.message ?? t('settings.sync.error-load')
+    await load()
+  } catch (err) {
+    error.value = String(err)
+  } finally {
+    busy.value = ''
+  }
+}
+
+/** Retire the active key: every record is re-sealed under a new one on the
+ *  next rounds; paired devices receive the new key over the paired channel.
+ *  Two clicks, because this is the stop-the-bleeding move and not a refresh. */
+async function rotateKey(): Promise<void> {
+  if (!rotateArmed.value) {
+    rotateArmed.value = true
+    return
+  }
+  rotateArmed.value = false
+  busy.value = 'key'
+  error.value = ''
+  try {
+    const resp = await props.backend.send<{ keyId?: unknown }>('sync.rotate_key', {}, 60_000)
+    if (!resp.ok) error.value = resp.error?.message ?? t('settings.sync.error-load')
+    await load()
+  } catch (err) {
+    error.value = String(err)
+  } finally {
+    busy.value = ''
+  }
+}
+
 async function resolve(conflict: Conflict, keep: 'local' | 'remote'): Promise<void> {
   busy.value = `${conflict.scope}/${conflict.itemId}`
   error.value = ''
@@ -143,8 +192,16 @@ async function resolve(conflict: Conflict, keep: 'local' | 'remote'): Promise<vo
   }
 }
 
-function preview(value: unknown): string {
+function preview(value: unknown, sealed = false): string {
   if (value === null || value === undefined) return t('settings.sync.deleted')
+  if (sealed) {
+    // The backend already redacted this half; what is left is which slot it
+    // is, and that is all a person needs to pick a side.
+    if (isRecord(value) && typeof value.agentKey === 'string' && typeof value.slotId === 'string') {
+      return `${value.agentKey} / ${value.slotId}`
+    }
+    return t('settings.sync.sealed')
+  }
   const text = JSON.stringify(value)
   return text.length > 160 ? `${text.slice(0, 160)}…` : text
 }
@@ -187,6 +244,28 @@ onMounted(load)
       </button>
     </div>
 
+    <!-- The account key: which one is active (by id, never the key), the
+         one-time adoption of a key from before accounts were bound, and
+         rotation. -->
+    <div v-if="connected" class="sync-key">
+      <p v-if="legacyRingPending && !hasKey" class="sync-note sync-key-legacy">
+        {{ t('settings.sync.legacy-key') }}
+        <button type="button" :disabled="busy === 'key'" @click="adoptLegacyKey">
+          {{ t('settings.sync.legacy-key-adopt') }}
+        </button>
+      </p>
+      <p v-if="hasKey" class="sync-note sync-key-row">
+        <span>{{ t('settings.sync.key-id', { id: keyId.slice(0, 8) || '—' }) }}</span>
+        <button type="button" :disabled="busy === 'key'" @click="rotateKey">
+          {{ rotateArmed ? t('settings.sync.rotate-confirm') : t('settings.sync.rotate') }}
+        </button>
+        <button v-if="rotateArmed" type="button" @click="rotateArmed = false">
+          {{ t('settings.sync.rotate-cancel') }}
+        </button>
+      </p>
+      <p v-if="hasKey" class="sync-hint">{{ t('settings.sync.rotate-hint') }}</p>
+    </div>
+
     <div v-if="conflicts.length" class="sync-conflicts">
       <h3>{{ t('settings.sync.conflicts-title', { count: conflicts.length }) }}</h3>
       <p class="sync-hint">{{ t('settings.sync.conflicts-hint') }}</p>
@@ -197,7 +276,7 @@ onMounted(load)
         </div>
         <div class="sync-conflict-side">
           <span class="sync-side-label">{{ t('settings.sync.this-device') }}</span>
-          <code class="sync-side-body">{{ preview(c.local) }}</code>
+          <code class="sync-side-body">{{ preview(c.local, c.sealed) }}</code>
           <button
             type="button"
             :disabled="busy === c.scope + '/' + c.itemId"
@@ -208,7 +287,7 @@ onMounted(load)
         </div>
         <div class="sync-conflict-side">
           <span class="sync-side-label">{{ c.remoteDevice || t('settings.sync.other-device') }}</span>
-          <code class="sync-side-body">{{ preview(c.remote) }}</code>
+          <code class="sync-side-body">{{ preview(c.remote, c.sealed) }}</code>
           <button
             type="button"
             :disabled="busy === c.scope + '/' + c.itemId"
@@ -237,6 +316,16 @@ onMounted(load)
 }
 .sync-actions {
   margin-top: 10px;
+}
+.sync-key {
+  margin-top: 12px;
+}
+.sync-key-row,
+.sync-key-legacy {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 .sync-conflicts {
   margin-top: 16px;

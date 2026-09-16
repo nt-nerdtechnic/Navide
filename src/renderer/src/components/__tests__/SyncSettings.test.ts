@@ -144,4 +144,118 @@ describe('SyncSettings', () => {
 
     expect(wrapper.find('.sync-note').text()).toContain('no sync key')
   })
+
+  it('lists credentials as a section that can be turned on', async () => {
+    const { backend, send } = mockBackend({
+      'sync.status': {
+        ok: true,
+        payload: {
+          available: ['prompts', 'mcp', 'skills', 'memory', 'credentials'],
+          scopes: { prompts: false, mcp: false, skills: false, memory: false, credentials: false },
+          hasKey: true,
+          conflicts: 0,
+          link: { state: 'connected' },
+        },
+      },
+    })
+    wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+
+    const switches = wrapper.findAll('button[role="switch"]')
+    expect(switches).toHaveLength(5)
+    expect(wrapper.text()).toContain('Credentials')
+    expect(wrapper.text()).toContain('never removes it from the cloud')
+    expect(switches[4].attributes('disabled')).toBeUndefined()
+    await switches[4].trigger('click')
+    await flushPromises()
+    expect(send).toHaveBeenCalledWith('sync.set_scope', { scope: 'credentials', enabled: true })
+  })
+
+  it('shows a sealed conflict by slot, never by content', async () => {
+    const { backend } = mockBackend({
+      'sync.conflicts': {
+        ok: true,
+        payload: {
+          conflicts: [
+            {
+              scope: 'credentials',
+              itemId: 'c-0123456789abcdef0123456789abcdef',
+              local: { agentKey: 'claude', slotId: '__default__' },
+              remote: { sealed: true },
+              remoteRev: 7,
+              remoteDevice: 'laptop',
+              seenAt: 1,
+              sealed: true,
+            },
+          ],
+        },
+      },
+    })
+    wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+
+    const bodies = wrapper.findAll('.sync-side-body').map((b) => b.text())
+    expect(bodies).toEqual(['claude / __default__', '(credential — not shown)'])
+    expect(wrapper.text()).not.toContain('agentKey')
+    expect(wrapper.findAll('.sync-conflict-side button')).toHaveLength(2)
+  })
+
+  it('shows the active key by id and rotates only on the second click', async () => {
+    const { backend, send } = mockBackend({
+      'sync.status': {
+        ok: true,
+        payload: {
+          available: ['prompts'],
+          scopes: { prompts: false },
+          hasKey: true,
+          keyId: 'abcdef0123456789',
+          legacyRingPending: false,
+          conflicts: 0,
+          link: { state: 'connected' },
+        },
+      },
+      'sync.rotate_key': { ok: true, payload: { keyId: 'fedcba9876543210', results: [] } },
+    })
+    wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+
+    const row = wrapper.get('.sync-key-row')
+    expect(row.text()).toContain('abcdef01')
+    expect(row.text()).not.toContain('abcdef0123456789') // the id is shortened, and it is only an id
+    const rotate = row.findAll('button')[0]
+    expect(rotate.text()).toBe('Rotate key')
+    await rotate.trigger('click')
+    expect(send).not.toHaveBeenCalledWith('sync.rotate_key', {}, 60_000)
+    expect(row.findAll('button')[0].text()).toBe('Rotate now')
+    await row.findAll('button')[0].trigger('click')
+    await flushPromises()
+    expect(send).toHaveBeenCalledWith('sync.rotate_key', {}, 60_000)
+  })
+
+  it('offers to adopt a key from before accounts were bound, and only then', async () => {
+    const { backend, send } = mockBackend({
+      'sync.status': {
+        ok: true,
+        payload: {
+          available: ['prompts'],
+          scopes: { prompts: false },
+          hasKey: false,
+          keyId: '',
+          legacyRingPending: true,
+          conflicts: 0,
+          link: { state: 'connected' },
+        },
+      },
+      'sync.adopt_legacy_key': { ok: true, payload: { results: [] } },
+    })
+    wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+
+    const legacy = wrapper.get('.sync-key-legacy')
+    expect(legacy.text()).toContain('before accounts were bound')
+    expect(wrapper.find('.sync-key-row').exists()).toBe(false) // nothing to rotate yet
+    await legacy.get('button').trigger('click')
+    await flushPromises()
+    expect(send).toHaveBeenCalledWith('sync.adopt_legacy_key', {}, 30_000)
+  })
 })

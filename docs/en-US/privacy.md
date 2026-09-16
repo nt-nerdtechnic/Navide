@@ -112,6 +112,10 @@ flows are governed by their own settings and configuration.
 
 Agent CLI credentials remain in each CLI's own configuration. If you enter cloud AI keys in Navide, Navide stores them locally so AI features (inline editing, code review) can use them. Settings export redacts API keys and tokens.
 
+**Portable CLI credentials** are the exception you opt into: a value a vendor documents for carrying between machines (for example the token `claude setup-token` prints) that you paste in Settings → Accounts. Navide stores it encrypted on this device and hands it to new panes of that CLI in their environment only; it never writes it into the CLI's own login files. Removing it from a device removes it from that device.
+
+If you switch on **Credentials** under Settings → Sync (off by default), each pasted credential is encrypted on your device with your account's sync key before it leaves and stored by Navide Cloud as ciphertext the service cannot open. Another device signed in to the same account decrypts it and keeps it encrypted at rest, again handing it to panes only. What the service can see is an opaque item id, a revision number, a timestamp and which device wrote the record — not which CLI or account the credential belongs to. Removing a credential on one device does not remove it from the cloud or your other devices, and nothing is uploaded until you switch the section on; switching accounts on a device drops what that device imported and switches the section off again.
+
 Local file permissions reduce accidental access by other users on the same machine but do not protect against malware, a compromised user account, unrestricted agents, backups, or processes with equivalent permissions.
 
 ## Agent permissions

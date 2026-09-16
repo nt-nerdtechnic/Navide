@@ -128,11 +128,22 @@ class Peer:
         from cryptography.hazmat.primitives import serialization
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+        from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+
         self.device_id = device_id
         self.name = name
         self._private = Ed25519PrivateKey.generate()
         self.sign_key = base64.b64encode(
             self._private.public_key().public_bytes(
+                encoding=serialization.Encoding.Raw,
+                format=serialization.PublicFormat.Raw,
+            )
+        ).decode("ascii")
+        # Its encryption key too: the pairing exchange carries and pins both,
+        # and a sync-key offer is sealed to this one.
+        self._enc_private = X25519PrivateKey.generate()
+        self.enc_key = base64.b64encode(
+            self._enc_private.public_key().public_bytes(
                 encoding=serialization.Encoding.Raw,
                 format=serialization.PublicFormat.Raw,
             )

@@ -113,4 +113,8 @@ Settings 涵蓋 Role、Pipeline、MCP Server、Analyzer Behavior、AI Provider�
 
 CLI Agents 另外管理已安裝的 Coding CLI：版本、安裝方式、重複安裝、該 CLI 上次自我更新的結果，以及在終端機執行該 CLI 官方更新與診斷指令的按鈕。開啟工作區時可設定恢復單一 CLI、第一個 Grid 頁面或目前分頁；即使上次不是 Grid layout，Grid 頁面仍會依 Grid preset 計算。Navide 只呈現並執行官方指令，不會自行更新 CLI。Exported Setting 會遮蔽 API Key 與 Token。啟用第三方 Server 前，請先檢查 MCP Command 與 Environment Variable。
 
+**帳號**分頁為每個 CLI 帳號放一張卡片。除了 CLI 自己的登入，卡片還能保存一份**可攜憑證**：各家官方為「在任何機器上使用」而設計的值（例如 Claude Code 的 `claude setup-token`）。貼入一次，該 CLI 的新 pane 會在環境變數裡拿到它，CLI 自己的登入檔不會被動到。每個 CLI 同時只有一份憑證在*使用中*；卡片會標示是哪一份，並在本機登入檔會蓋過它時提出警告。移除憑證只影響這台裝置。
+
+**同步**區段（設定 → 同步）可以把這些憑證帶到你的其他裝置。**憑證**開關預設關閉。開啟後，帳號卡片會為每份憑證多一行雲端狀態——已同步、只在這台、雲端有但這台未使用、或待你決定——而在別台機器貼入的憑證可以一鍵在這台啟用。在這台移除永遠不會刪掉雲端或其他裝置上的那一份。同一區段會顯示同步金鑰的 id，並在你懷疑外洩時提供更換：所有記錄重新加密，已配對的裝置會收到新金鑰。
+
 `.agent-team/` 目前不是可攜機制。未來在不同裝置間移轉時，應使用具有 Redaction 與 Retention Control 的明確本機 Export／Import，而不是透過 Git 同步。

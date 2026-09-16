@@ -806,14 +806,19 @@ async def test_a_failing_key_offer_cannot_break_pairing(monkeypatch, account_key
     """`_finish_pairing` awaits the offer as its last step, and the only except
     above it is a narrow PairingError — so anything escaping here would come out
     of the pairing exchange after the pin was already written."""
-    from agent_team_backend import remote_roster
+    from agent_team_backend import trust_store
 
     link = _bare_link()
     # Both of these must succeed, or the failure below is never reached: the
     # first version of this test passed a bogus public key, wrap_for raised
     # first, and the guard being tested was never entered. The mutation that
     # moves the send back outside the guard is what exposed it.
-    monkeypatch.setattr(remote_roster, "public_key_for", lambda _d: "valid-looking")
+    link._own_member = "m1"
+    monkeypatch.setattr(
+        trust_store,
+        "pin_for",
+        lambda _d: {"approved": True, "memberId": "m1", "encKey": "valid-looking"},
+    )
     monkeypatch.setattr(sync_keyring, "wrap_for", lambda **kw: "sealed")
 
     reached = []
