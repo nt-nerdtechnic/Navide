@@ -19,7 +19,8 @@ version — no manual README edit is needed for any tier.
 
 Every release — patch or major — is fully built, signed, notarized, and
 published to GitHub Releases (with `latest-mac.yml`, `latest.yml` and
-`latest-linux.yml`). There is no "hot patch"
+`latest-linux.yml`), then mirrored byte for byte to `dl.navide.dev` (see
+"Download mirror" below). There is no "hot patch"
 that skips the build; the difference between the tiers is only the **ceremony**
 around it, not the build itself.
 
@@ -28,7 +29,10 @@ around it, not the build itself.
 - Clean `main`, in sync with `origin/main` (`release.sh` enforces this).
 - Signing assets present and GitHub secrets set. See `~/navide-signing/README.md`
   (5 secrets: `CSC_LINK`, `CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_TEAM_ID`,
-  `APPLE_APP_SPECIFIC_PASSWORD`).
+  `APPLE_APP_SPECIFIC_PASSWORD`). The mirror job needs two more,
+  `NAVIDE_MIRROR_AWS_ACCESS_KEY_ID` and `NAVIDE_MIRROR_AWS_SECRET_ACCESS_KEY`
+  (IAM user `navide-release-upload`, AWS account NT-網域; it can only write
+  `releases/*` in the mirror bucket and invalidate its distribution).
 - `node`, `pnpm`, `uv`, `git` on PATH.
 
 ## Pre-release checklist
@@ -66,7 +70,22 @@ stall (#102). Walk this list before `./release.sh`; nothing here is automated.
 
 After the tag push: watch all four release jobs, then confirm the Release
 carries every asset listed under "Rollback" below plus a single `latest.yml`
-whose `files` list names both `win-x64` and `win-arm64`.
+whose `files` list names both `win-x64` and `win-arm64`. The fifth job,
+`mirror-release` (shown as *Mirror vX.Y.Z to dl.navide.dev*), runs once those
+four have published; when it is green, run
+
+```bash
+scripts/verify-release-mirror.sh vX.Y.Z
+```
+
+which checks every asset's sha256 against GitHub's own `digest` and confirms
+`releases/latest/` now names the new version. If the mirror job failed or was
+skipped, nothing is broken for users — the website and the updater fall back to
+GitHub on their own — but re-run it once the cause is fixed:
+
+```bash
+gh workflow run mirror.yml -R nt-nerdtechnic/Navide --ref main -f tag=vX.Y.Z -f refresh_latest=true
+```
 
 ## Pre-release step: Update What's New announcement
 
@@ -84,7 +103,8 @@ Before running `./release.sh`, add a new entry to `src/renderer/src/lib/whatsNew
 **Release** CI workflow: its macOS job signs, notarizes, and publishes the
 GitHub Release, then the Linux x64 and Windows x64 jobs add their installers,
 and the Windows arm64 job adds its installer and merges both Windows entries
-into one `latest.yml`.
+into one `latest.yml`. Last, the mirror job copies the finished Release to
+`dl.navide.dev`.
 Existing users' apps auto-check (startup + every 30 min), download the
 update in the background, and prompt "Restart to update".
 
@@ -111,6 +131,39 @@ The classic form still works unchanged:
 ```bash
 ./release.sh 0.3.0
 ```
+
+## Download mirror
+
+GitHub serves release assets through `release-assets.githubusercontent.com`
+with one-hour signed URLs. Some networks filter that host, and from Taiwan it
+has measured under 60 KB/s — below what a 200 MB installer needs to finish
+before its URL expires (2026-09-16, users could not download the DMG from
+GitHub or navide.dev, which linked the same URL). Every release is therefore
+also served from `https://dl.navide.dev`, a CloudFront distribution in front of
+the private S3 bucket `navide-releases` (AWS account NT-網域, which also holds
+the `navide.dev` zone).
+
+- **Who writes it**: `.github/workflows/mirror.yml`, called by `release.yml` as
+  its last job. It downloads the finished GitHub Release on the runner, uploads
+  it to `releases/<tag>/` (permanent) plus a `SHA256SUMS`, replaces
+  `releases/latest/` wholesale, invalidates CloudFront, then downloads every
+  file back from `dl.navide.dev` and fails on any sha256 mismatch. A release
+  missing one platform's manifest is not mirrored at all — a partial mirror
+  would send visitors to 404s.
+- **Who reads it**: the website probes `releases/<tag>/<file>` with a HEAD and
+  links there when it answers, GitHub otherwise (navide-web `src/release.ts`);
+  the in-app updater switches its feed to `releases/latest/` after a network
+  failure on GitHub (`src/main/updater-mirror-feed.ts`); the READMEs carry a
+  *mirror* link beside each download, which `release.sh` repoints together with
+  the GitHub ones.
+- **Backfill or re-run by hand**: `gh workflow run mirror.yml --ref main -f
+  tag=vX.Y.Z -f refresh_latest=<true|false>`. Pass `false` for an older
+  release so `releases/latest/` keeps pointing at the newest one.
+- **Verify**: `scripts/verify-release-mirror.sh vX.Y.Z` (add `--no-latest` for
+  a backfilled older release).
+- **Cost**: ~1.2 GB of S3 per release; CloudFront traffic has stayed inside the
+  free tier. Nothing expires; old releases stay downloadable from the mirror
+  as they do from GitHub.
 
 ## Git recovery switch
 
@@ -143,7 +196,12 @@ Recovery does not edit Plugin Storage or legacy seed data.
   schema, so an upgrade never corrupts saved settings.
 - **Rollback**: users can download an older installer from the Releases page; to
   pull a bad auto-update, remove/replace its `latest-mac.yml` / `latest.yml` /
-  `latest-linux.yml` on the release. A complete release carries
+  `latest-linux.yml` on the release **and** re-point the mirror's
+  `releases/latest/` at the previous release, since the updater falls back to
+  that prefix: `gh workflow run mirror.yml --ref main -f tag=<previous tag> -f
+  refresh_latest=true`. The bad version's own `releases/<tag>/` copy can stay —
+  nothing links to it once the website's release list moves on — or be
+  removed with `aws s3 rm --recursive`. A complete release carries
   `Navide-<v>-arm64.dmg` + `.zip` (+ `.blockmap`), `Navide-<v>-win-x64.exe`,
   `Navide-<v>-win-arm64.exe` (+ `.blockmap`), `Navide-<v>-x86_64.AppImage`,
   `Navide-<v>-amd64.deb`, and the three manifests.
