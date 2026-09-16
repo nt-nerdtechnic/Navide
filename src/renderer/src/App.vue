@@ -275,7 +275,11 @@ import {
   notificationMeansAwaiting,
   questionActionFor,
 } from './lib/cliAwaitingInput'
-import { hasDetectedCodexSession, markerTurnActionFor } from './lib/sessionMarkerTurn'
+import {
+  hasDetectedCodexSession,
+  markerTurnActionFor,
+  screenShowsBlockingDialog
+} from './lib/sessionMarkerTurn'
 import { entryBelongsToWorkspace, filterWorkspaceEntries, historyEntriesFor, historyEntryLabel, legacyHistoryLogPath, manualLogFileName, updateHistoryCustomName, type HistoryCleanupMode, type HistoryDeletePreview, type HistoryDeleteTarget, type SpawnHistoryEntry, type WorkspaceIdentity } from './lib/spawnHistory'
 import { executeCommand, initKeybindingsPort, useKeybindings, registerCommand, setContext } from '@navide/plugin-ui/shared'
 import { useUiActionBus } from './composables/useUiActionBus'
@@ -5211,6 +5215,32 @@ async function waitForQuiet(
   }
 }
 
+// How long the session-marker bootstrap holds for a keystroke-swallowing
+// startup dialog (Codex "Hooks need review") to be answered by the user. The
+// dialog is a decision only they can make, so this is generous; on timeout the
+// marker is simply not sent rather than pasted into the dialog.
+const BLOCKING_DIALOG_TIMEOUT_MS = 300_000
+
+function paneScreenBlocked(paneId: string): boolean {
+  const ref = paneRefs[paneId]
+  if (!ref?.readScreenTail) return false
+  try {
+    return screenShowsBlockingDialog(ref.readScreenTail(AWAITING_SCREEN_LINES) as unknown as string)
+  } catch {
+    return false
+  }
+}
+
+async function waitForBlockingDialogClear(paneId: string, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (!paneAlive(paneId)) return false
+    if (!paneScreenBlocked(paneId)) return true
+    await sleep(500)
+  }
+  return false
+}
+
 async function waitForStartupActivity(paneId: string, timeoutMs = 30_000): Promise<boolean> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
@@ -5617,6 +5647,18 @@ async function sendSessionMarkerBootstrap(pane: ActivePane, tag: string): Promis
     }
     await waitForQuiet(pane.id, 1000, 8000)
     if (!paneAlive(pane.id)) return false
+    // A dialog that only takes enter/esc (Codex "Hooks need review") would eat
+    // the paste and the marker would never reach the rollout. Hold until the
+    // user answers it, then let the redraw settle before typing.
+    if (paneScreenBlocked(pane.id)) {
+      pipelineLog(`${tag} ⏸ startup dialog on screen — holding session marker`)
+      if (!(await waitForBlockingDialogClear(pane.id, BLOCKING_DIALOG_TIMEOUT_MS))) {
+        pipelineLog(`${tag} ⚠ startup dialog not answered — session marker not sent`)
+        return false
+      }
+      await waitForQuiet(pane.id, 1000, 8000)
+      if (!paneAlive(pane.id)) return false
+    }
     // Path detection can finish during startup/quiet waits. Do not submit an
     // identity-only model turn after the real Codex session is already known.
     if (hasDetectedCodexSession(pane)) return true
@@ -10100,6 +10142,20 @@ async function performRealizeRestoredPane(
     if (isResume) {
       const revived = panes.value.find((p) => p.id === newId)
       if (revived) revived.resumeContinueAvailable = true
+    } else {
+      // A fresh restore starts a NEW conversation in a marker-camp CLI, and
+      // nothing else types the marker into it (manual spawn and rebuild do
+      // this themselves). Without it the new session never binds, so the
+      // pane comes back unresumable after every restart. Same gate as
+      // onManualSpawn: role panes carry the marker inside the role prompt.
+      const fresh = panes.value.find((p) => p.id === newId)
+      if (
+        fresh && fresh.agentKey !== 'terminal' &&
+        fresh.sessionMarker &&
+        !fresh.roleKey && !fresh.kickoffPrompt
+      ) {
+        void sendSessionMarkerBootstrap(fresh, `[pane ${fresh.id.slice(0, 8)}]`)
+      }
     }
     if (wasDisconnected) {
       disconnectedPaneIds.value = [...disconnectedPaneIds.value, newId]
@@ -19711,6 +19767,17 @@ function paneIsCommander(p: ActivePane): boolean {
   box-shadow: inset 0 0 0 1.5px var(--text-disabled);
 }
 .pane-list-kids-count { margin-left: 2px; }
+/* On the name row the count stands right against the name, so it gets a box
+   of its own — a bare "3" beside "收費" read as part of the label. The
+   Spotlight chip already draws a border around the whole control and is left
+   out: a box inside a box. */
+.pane-list-kids:not(.pane-list-kids--compact) .pane-list-kids-count {
+  padding: 0 3px;
+  border: 1px solid var(--border-default);
+  border-radius: 3px;
+  line-height: 1.3;
+  font-variant-numeric: tabular-nums;
+}
 
 /* The caret says which way the control goes. Fixed width so a name never
    shifts sideways as its family opens and closes. */

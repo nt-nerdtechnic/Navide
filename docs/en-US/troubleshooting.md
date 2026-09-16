@@ -61,6 +61,7 @@ For Codex, open `/hooks` to inspect pending hook reviews. An MCP startup failure
 - History search covers loaded entries. Load more entries to continue searching older conversations, even when the current search has no results; content search runs again for the newly loaded entries.
 - To resume a known conversation outside Navide, use its original `CODEX_HOME` and exact session ID. Do not choose the latest session when several conversations share that home.
 - Detected session IDs are now saved by the backend before notifying the UI and preserved when later snapshots omit them. This does not automatically recover older entries whose session identity was already lost.
+- A removed Codex entry with no **Session** line has no resume id, so History shows no **Resume** button. The common causes were a **Hooks need review** screen swallowing the session marker at startup and a restart that reopened the pane as a fresh conversation without one; both are fixed. The rollout still exists — find it by time and `cwd` under `sessions/` and run `codex resume <id>` with that `CODEX_HOME`.
 
 ## Token Stats is empty or duplicated
 

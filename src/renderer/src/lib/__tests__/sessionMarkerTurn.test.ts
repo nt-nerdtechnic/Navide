@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { hasDetectedCodexSession, markerTurnActionFor } from '../sessionMarkerTurn'
+import { hasDetectedCodexSession, markerTurnActionFor, screenShowsBlockingDialog } from '../sessionMarkerTurn'
 
 type Activity = { event_type?: string; detail?: string; text?: string }
 
@@ -112,5 +112,54 @@ describe('Codex identity arriving during startup', () => {
 
   it('does not change another vendor bootstrap policy', () => {
     expect(hasDetectedCodexSession({ agentKey: 'qwen', pinnedSessionId: 'known-id' })).toBe(false)
+  })
+})
+
+describe('screenShowsBlockingDialog', () => {
+  // Rendered by Codex 0.154 in a pane whose home mirrors untrusted hooks; the
+  // marker pasted into this screen was lost and the pane never got a resume
+  // id (2026-09-16, pane ccd2efbf). Lines as xterm renders them.
+  const hooksReview = [
+    'Hooks need review',
+    '8 hooks are new or changed.',
+    'Hooks can run outside the sandbox after you trust them.',
+    '',
+    '› 1. Review hooks',
+    '  2. Trust all and continue',
+    "  3. Continue without trusting (hooks won't run)",
+    '',
+    'Press enter to confirm or esc to go back'
+  ].join('\n')
+
+  it('holds on the Codex hook-trust screen', () => {
+    expect(screenShowsBlockingDialog(hooksReview)).toBe(true)
+  })
+
+  it('still matches when a narrow pane wraps the confirm line', () => {
+    const wrapped = hooksReview.replace(
+      'Press enter to confirm or esc to go back',
+      'Press enter to confirm or\n  esc to go back'
+    )
+    expect(screenShowsBlockingDialog(wrapped)).toBe(true)
+  })
+
+  it('lets the ordinary ready prompt through', () => {
+    const ready = [
+      '>_ OpenAI Codex (v0.154.0)',
+      'model:       loading   /model to change',
+      'directory:   ~/Desktop/Agent-Team',
+      'permissions: YOLO mode',
+      '',
+      '› Ask Codex to do anything',
+      '? for shortcuts'
+    ].join('\n')
+    expect(screenShowsBlockingDialog(ready)).toBe(false)
+  })
+
+  it('is not the workspace-trust prompt dismissStartupDialog answers itself', () => {
+    // "Press enter to continue" is auto-accepted elsewhere; this gate must
+    // not start holding on it, or trusted-workspace spawns would stall.
+    expect(screenShowsBlockingDialog('Do you trust the contents of this folder?\nPress enter to continue')).toBe(false)
+    expect(screenShowsBlockingDialog('')).toBe(false)
   })
 })

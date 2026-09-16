@@ -61,6 +61,7 @@ Codex 可開啟 `/hooks` 檢查待審核的 Hook。MCP 啟動失敗或第三方 
 - History 搜尋涵蓋已載入的項目。即使目前搜尋沒有結果，仍可載入更多項目以繼續搜尋較早的對話；內容搜尋會重新搜尋新載入的項目。
 - 若要在 Navide 外恢復已知對話，請使用原本的 `CODEX_HOME` 與確切的 Session ID。同一個 Home 有多段對話時，不要直接選擇最新的 Session。
 - 偵測到的 Session ID 現在由 Backend 在通知 UI 前保存，後續 Snapshot 未帶入 ID 時也會保留既有值。這不會自動找回先前已遺失 Session Identity 的舊項目。
+- 已移除的 Codex 項目若沒有 **Session** 列，代表沒有 resume id，History 就不會顯示 **Resume** 按鈕。常見原因是啟動時的 **Hooks need review** 畫面吃掉了 session marker，或重啟後 pane 以全新對話重開而沒有補打 marker；兩者皆已修正。原始 rollout 仍在——依時間與 `cwd` 在 `sessions/` 下找到它，用同一個 `CODEX_HOME` 執行 `codex resume <id>`。
 
 ## Token Stats 空白或重複
 

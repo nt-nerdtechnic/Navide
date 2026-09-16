@@ -133,6 +133,16 @@ describe('what a card shows', () => {
     expect(beforeName).toHaveLength(2)
   })
 
+  it('boxes the count on the name row, not inside the Spotlight chip', () => {
+    // A bare "3" beside the name read as part of the label. The Spotlight
+    // chip already has a border around the whole control, so boxing its count
+    // too would draw a box inside a box.
+    expect(appSource).toMatch(
+      /\.pane-list-kids:not\(\.pane-list-kids--compact\) \.pane-list-kids-count \{[^}]*border: 1px solid var\(--border-default\)/
+    )
+    expect(appSource).not.toMatch(/\n\.pane-list-kids-count \{[^}]*border/)
+  })
+
   it('shows the dots only while the family is closed', () => {
     // Open — the default — the children are right underneath, so dots would
     // only repeat them. Closed, they are what stands in for the hidden rows.

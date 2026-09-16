@@ -55,6 +55,27 @@ export function markerTurnActionFor(ev: {
   return 'disarm'
 }
 
+/** Startup screens that swallow keystrokes until the user answers them.
+ *
+ *  Codex 0.154 stops at "Hooks need review" (enter/esc only) whenever a pane
+ *  home carries hooks the user has not trusted under that path. Pasting the
+ *  session marker into that screen loses it: the rollout never carries the
+ *  marker, cwd matching refuses to guess between sibling panes, and the pane
+ *  ends up with no resume id. These are NOT the trust prompts
+ *  `dismissStartupDialog` answers with Enter — answering a hook-trust question
+ *  on the user's behalf is not ours to do; the bootstrap waits instead. */
+export const STARTUP_BLOCKING_DIALOG_PATTERNS: RegExp[] = [
+  /Hooks need review/i,
+  /Press enter to confirm or esc to go back/i
+]
+
+/** True while the rendered screen tail shows a keystroke-swallowing dialog.
+ *  Whitespace is collapsed so a prompt wrapped across lines still matches. */
+export function screenShowsBlockingDialog(screen: string): boolean {
+  const text = screen.replace(/\s+/g, ' ')
+  return STARTUP_BLOCKING_DIALOG_PATTERNS.some((re) => re.test(text))
+}
+
 /** A restore placeholder names the old conversation, not the current launch. */
 export function hasDetectedCodexSession(pane: {
   agentKey: string
