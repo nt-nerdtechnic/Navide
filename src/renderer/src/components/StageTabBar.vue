@@ -268,6 +268,7 @@ function onRenameKeydown(e: KeyboardEvent, key: string): void {
   background: var(--bg-hover);
 }
 .tab-btn.active {
+  background: var(--bg-base);
   color: var(--accent-bright);
   border-bottom-color: var(--accent-focus);
 }
@@ -328,7 +329,7 @@ function onRenameKeydown(e: KeyboardEvent, key: string): void {
   padding: 0 4px;
   border-radius: 8px;
   background: var(--bg-muted);
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-size: var(--font-3xs);
   font-variant-numeric: tabular-nums;
   transition: background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out);

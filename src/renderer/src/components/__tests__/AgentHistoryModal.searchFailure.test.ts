@@ -52,6 +52,48 @@ async function mountModal(
 }
 
 describe('AgentHistoryModal content-search failure', () => {
+  it('keeps older pages reachable when the loaded page has no search matches', async () => {
+    vi.useFakeTimers()
+    try {
+      const loadMoreHistory = vi.fn(async () => {})
+      const wrapper = await mountModal(async () => new Set<string>())
+      await wrapper.setProps({ historyHasMore: true, loadMoreHistory })
+      await wrapper.get('.agent-history-search-input').setValue('needle')
+      await vi.advanceTimersByTimeAsync(400)
+      await wrapper.get('.ah-load-more').trigger('click')
+      expect(loadMoreHistory).toHaveBeenCalledOnce()
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('searches newly loaded entries and ignores an older in-flight scan', async () => {
+    vi.useFakeTimers()
+    try {
+      let finishOldScan!: (ids: Set<string>) => void
+      const older = { ...entry(), paneId: 'older-pane', agentLabel: 'Older agent' }
+      const search = vi.fn<(entries: SpawnHistoryEntry[], q: string) => Promise<Set<string>>>()
+        .mockImplementationOnce(() => new Promise((resolve) => { finishOldScan = resolve }))
+        .mockResolvedValueOnce(new Set([older.paneId]))
+      const wrapper = await mountModal(search)
+      await wrapper.get('.agent-history-search-input').setValue('needle')
+      await vi.advanceTimersByTimeAsync(400)
+      await wrapper.setProps({ sessionHistory: [entry(), older] })
+      await vi.advanceTimersByTimeAsync(400)
+      expect(search).toHaveBeenCalledTimes(2)
+      expect(search.mock.calls[1][0]).toContainEqual(older)
+      expect(wrapper.find('.agent-history-list').text()).toContain('Older agent')
+
+      finishOldScan(new Set())
+      await flushPromises()
+      expect(wrapper.find('.agent-history-list').text()).toContain('Older agent')
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('warns that results are metadata-only when the log scan fails', async () => {
     vi.useFakeTimers()
     try {

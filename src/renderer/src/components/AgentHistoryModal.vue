@@ -227,10 +227,9 @@ defineExpose({ closeTopLayer })
 // (or no search API) cancels/skips it outright. contentSearchSeq is bumped on
 // every query change so a slow search for an outdated query can never
 // clobber the current results (stale-response guard). status/origin filter
-// changes also re-trigger the search because only entries passing those
-// gates are scanned (see runContentSearch) — broadening a filter must scan
-// the newly eligible entries.
-watch([searchQuery, statusFilter, originFilter, starredOnly], ([query]) => {
+// changes and newly loaded pages also re-trigger the search so newly eligible
+// entries are scanned (see runContentSearch).
+watch([searchQuery, statusFilter, originFilter, starredOnly, () => props.sessionHistory], ([query]) => {
   if (contentSearchDebounceTimer !== undefined) { window.clearTimeout(contentSearchDebounceTimer); contentSearchDebounceTimer = undefined }
   contentSearchSeq++
   const trimmed = query.trim()
@@ -746,7 +745,7 @@ async function copyLogText(): Promise<void> {
                   </button>
                 </template>
                 <button
-                  v-if="historyHasMore && filteredSessionHistory.length > 0"
+                  v-if="historyHasMore"
                   class="ah-load-more"
                   :disabled="loadingMore"
                   @click="onLoadMore"
