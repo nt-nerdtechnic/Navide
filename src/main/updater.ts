@@ -7,6 +7,7 @@ import {
   type RestoredUpdateState,
   type UpdaterService,
 } from './updater-service'
+import { withMirrorFeed } from './updater-mirror-feed'
 import { readUpdaterSettings, writeUpdaterSettings } from './updater-settings'
 import { readUpdaterState, writeUpdaterState } from './updater-state-store'
 import type { UpdateSettingsResult, UpdaterSettings, UpdateState, UpdateStatus } from '../shared/updater'
@@ -191,7 +192,8 @@ export function initUpdater(options: {
   persistedState = JSON.stringify(restored)
 
   service = createUpdaterService(
-    autoUpdater,
+    // GitHub first; dl.navide.dev when GitHub's asset host cannot be reached.
+    withMirrorFeed(autoUpdater),
     options.currentVersion,
     options.enabled,
     publishState,
