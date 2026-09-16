@@ -217,6 +217,8 @@ def test_parse_folds_cache_into_input_and_reasoning_into_output(
     assert e.file_path == str(db)
     assert e.model == "claude-sonnet-4-5"
     assert e.dedup_key == "msg:msg_a1"
+    # session.version names the CLI build that wrote the session.
+    assert e.cli_version == "1.15.12"
 
 
 def test_streaming_assistant_row_counted_only_once_completed(

@@ -36,11 +36,12 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import RLock
-from typing import Any
+from typing import Any, Callable
 
 from .applog import app_data_dir
 from .db import DB_FILENAME, Database
 from .log_readers.base import LogReader, TurnUsage
+from .pane_account_history import UNKNOWN_PROFILE_ID, normalize_profile_id, parse_event_time
 from .projects import PROJECT_DIR_NAME
 
 log = logging.getLogger("agent_team_backend.tokens")
@@ -124,6 +125,40 @@ def _create_tokens_schema(cur: sqlite3.Cursor) -> None:
     )
 
 
+# Per-account usage in fixed time slices, the sub-day resolution the quota
+# cycle ledger needs (a 5h window starts at an arbitrary minute). Bounded by
+# SLICE_RETENTION_S: a cycle's sums are frozen into quota_cycles when it
+# closes, so only open cycles (at most a week old) ever read from here.
+SLICE_S = 300
+SLICE_RETENTION_S = 21 * 86400
+
+
+def _create_slices_schema(cur: sqlite3.Cursor) -> None:
+    cur.execute(
+        "CREATE TABLE token_slices ("
+        " agent TEXT NOT NULL,"
+        " profile_id TEXT NOT NULL,"
+        " slice_start INTEGER NOT NULL,"  # unix ts, multiple of SLICE_S
+        " input INTEGER NOT NULL,"
+        " cache_read INTEGER NOT NULL,"
+        " cache_creation INTEGER NOT NULL,"
+        " output INTEGER NOT NULL,"
+        " calls INTEGER NOT NULL,"
+        " turns INTEGER NOT NULL,"
+        " PRIMARY KEY (agent, profile_id, slice_start))"
+    )
+
+
+_UPSERT_SLICE = (
+    "INSERT INTO token_slices (agent, profile_id, slice_start, input, cache_read,"
+    " cache_creation, output, calls, turns) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    " ON CONFLICT(agent, profile_id, slice_start) DO UPDATE SET"
+    " input = excluded.input, cache_read = excluded.cache_read,"
+    " cache_creation = excluded.cache_creation, output = excluded.output,"
+    " calls = excluded.calls, turns = excluded.turns"
+)
+
+
 def _ws_dir_name(workspace_path: str) -> str:
     """First 8 hex chars of sha256(abs_workspace_path).
 
@@ -158,6 +193,35 @@ def _add(into: dict[str, int], delta: dict[str, int]) -> None:
     into["input"] += int(delta.get("input", 0))
     into["output"] += int(delta.get("output", 0))
     into["calls"] += int(delta.get("calls", 0))
+
+
+_DETAIL_FIELDS = ("input", "cache_read", "cache_creation", "output", "calls", "turns")
+
+
+def _empty_detail_bucket() -> dict[str, int]:
+    """The per-account ledgers keep the four token counts apart (nothing
+    folded into input, like TurnUsage) plus calls and turns."""
+    return dict.fromkeys(_DETAIL_FIELDS, 0)
+
+
+def _add_detail(into: dict[str, int], delta: dict[str, int]) -> None:
+    for field in _DETAIL_FIELDS:
+        into[field] = int(into.get(field, 0)) + int(delta.get(field, 0))
+
+
+def _version_key(vendor: str, cli_version: str) -> str:
+    return f"{vendor}@{cli_version or 'unknown'}"
+
+
+def _event_time(timestamp: str) -> float:
+    """Epoch seconds of a usage event: its own stamp when the log has one,
+    else ingestion time."""
+    parsed = parse_event_time(timestamp)
+    return time.time() if parsed is None else parsed
+
+
+def _day_of(ts: float) -> str:
+    return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d")
 
 
 def _coerce_schema(value: Any) -> int:
@@ -226,6 +290,8 @@ def _empty_workspace_doc() -> dict[str, Any]:
             "by_vendor": {},
             "by_stage": {},
             "by_group": {},   # sidebar run group id → bucket; "" = ungrouped
+            "by_account": {},  # pane account pin (profile_id) → bucket
+            "by_version": {},  # "<vendor>@<cli_version>" → bucket
         },
     }
 
@@ -236,6 +302,11 @@ def _empty_global_doc() -> dict[str, Any]:
         "all_time": _empty_bucket(),
         "by_vendor": {},
         "by_day": {},
+        "by_account": {},
+        "by_version": {},
+        # agent → profile_id → UTC day → detail bucket (the monthly / yearly
+        # per-account statistics are summed from this at query time).
+        "by_account_day": {},
     }
 
 
@@ -302,6 +373,7 @@ class TokensStore:
 
         self._db = db or Database(data_root / DB_FILENAME)
         self._db.migrate("tokens", 1, _create_tokens_schema)
+        self._db.migrate("tokens", 2, _create_slices_schema)
 
         # RLock because reset() calls snapshot() while holding the lock.
         self._lock = RLock()
@@ -333,8 +405,14 @@ class TokensStore:
         self._delete_all_checkpoints = False
         self._dirty_legacy_keys = False
         self._dirty_recent_keys = False
+        # (agent, profile_id, slice_start) -> detail bucket; the in-memory
+        # mirror of token_slices within SLICE_RETENTION_S.
+        self._slices: dict[tuple[str, str, int], dict[str, int]] = {}
+        self._dirty_slices: set[tuple[str, str, int]] = set()
+        self._delete_all_slices = False
 
         self._import_legacy_json()
+        self._load_slices()
 
         self._global_data: dict[str, Any] = self._load_global()
         # In-memory checkpoint cache: path -> {"global": ckpt, "workspaces":
@@ -679,6 +757,8 @@ class TokensStore:
                 doc.setdefault(k, v)
             # by_group arrived after by_stage; docs persisted before it lack the key.
             doc["cumulative"].setdefault("by_group", {})
+            doc["cumulative"].setdefault("by_account", {})
+            doc["cumulative"].setdefault("by_version", {})
             if doc["current_run"]:
                 doc["current_run"].setdefault("by_group", {})
         self._workspace_cache[workspace_path] = doc
@@ -721,6 +801,28 @@ class TokensStore:
                 TOKENS_SCHEMA_VERSION,
             )
         return doc
+
+    def _load_slices(self) -> None:
+        """Mirror token_slices into memory, dropping rows past retention."""
+        cutoff = int(time.time()) - SLICE_RETENTION_S
+        with self._db.transaction() as cur:
+            cur.execute("DELETE FROM token_slices WHERE slice_start < ?", (cutoff,))
+            rows = cur.execute(
+                "SELECT agent, profile_id, slice_start, input, cache_read,"
+                " cache_creation, output, calls, turns FROM token_slices"
+            ).fetchall()
+        for row in rows:
+            key = (str(row["agent"]), str(row["profile_id"]), int(row["slice_start"]))
+            self._slices[key] = {field: int(row[field]) for field in _DETAIL_FIELDS}
+
+    def _prune_slices_locked(self) -> None:
+        cutoff = int(time.time()) - SLICE_RETENTION_S
+        stale = [key for key in self._slices if key[2] < cutoff]
+        for key in stale:
+            self._slices.pop(key, None)
+            self._dirty_slices.discard(key)
+        if stale:
+            self._dirty_slices.add(("", "", cutoff))  # sentinel: prune on flush
 
     def _load_checkpoints(self) -> None:
         with self._db.transaction() as cur:
@@ -769,6 +871,7 @@ class TokensStore:
         """
         with self._lock:
             self._prune_ingestion_files()
+            self._prune_slices_locked()
 
     def _flush_dirty(self) -> None:
         """Commit any dirty state (called from the save loop or flush())."""
@@ -815,6 +918,17 @@ class TokensStore:
             recent_payload = (
                 list(self._recent_event_keys) if self._dirty_recent_keys else None
             )
+            slice_rows: list[tuple[Any, ...]] = []
+            slice_prune_before: int | None = None
+            for key in self._dirty_slices:
+                if key[0] == "":
+                    slice_prune_before = max(slice_prune_before or 0, key[2])
+                    continue
+                bucket = self._slices.get(key)
+                if bucket is not None:
+                    slice_rows.append((*key, *(bucket[f] for f in _DETAIL_FIELDS)))
+            dirty_slices = set(self._dirty_slices)
+            delete_all_slices = self._delete_all_slices
             self._dirty_workspaces.clear()
             self._dirty_global = False
             self._dirty_checkpoints.clear()
@@ -823,6 +937,8 @@ class TokensStore:
             self._delete_all_checkpoints = False
             self._dirty_legacy_keys = False
             self._dirty_recent_keys = False
+            self._dirty_slices.clear()
+            self._delete_all_slices = False
         if not (
             ws_docs
             or global_doc is not None
@@ -832,6 +948,9 @@ class TokensStore:
             or delete_all
             or legacy_payload is not None
             or recent_payload is not None
+            or slice_rows
+            or slice_prune_before is not None
+            or delete_all_slices
         ):
             return
         try:
@@ -863,11 +982,22 @@ class TokensStore:
                     cur.execute(_UPSERT_CHECKPOINT, row)
                 for kv_key, payload in kv_payloads:
                     cur.execute(_UPSERT_KV, (kv_key, payload, now))
+                if delete_all_slices:
+                    cur.execute("DELETE FROM token_slices")
+                if slice_prune_before is not None:
+                    cur.execute(
+                        "DELETE FROM token_slices WHERE slice_start < ?",
+                        (slice_prune_before,),
+                    )
+                for slice_row in slice_rows:
+                    cur.execute(_UPSERT_SLICE, slice_row)
         except (sqlite3.Error, OSError, TypeError, ValueError) as err:
             log.warning("failed to commit token persistence batch: %s", err)
             # Re-mark everything so the next interval retries with the
             # newest in-memory state.
             with self._lock:
+                self._dirty_slices.update(dirty_slices)
+                self._delete_all_slices = self._delete_all_slices or delete_all_slices
                 self._dirty_workspaces.update(dirty_workspaces)
                 self._dirty_global = self._dirty_global or global_doc is not None
                 self._dirty_checkpoints.update(checkpoint_pairs)
@@ -1122,8 +1252,20 @@ class TokensStore:
         ingestion_checkpoint: dict[str, Any] | None = None,
         replay_workspace: str = "",
         legacy_dedup_key: str = "",
+        profile_id: str = UNKNOWN_PROFILE_ID,
+        cli_version: str = "",
+        cache_read_tokens: int = 0,
+        cache_creation_tokens: int = 0,
+        timestamp: str = "",
     ) -> bool:
         """Add a single token event. All numeric inputs are >= 0; zeros allowed.
+
+        profile_id / cli_version feed the by_account / by_version buckets
+        (and by_account_day + token_slices, globally). cache_read_tokens and
+        cache_creation_tokens are the parts of input_tokens the vendor kept
+        apart, so the per-account ledgers can show the four-way split; the
+        by_vendor-shaped buckets stay folded. timestamp (ISO) places the
+        event on its day / slice; empty means "now".
 
         workspace_path may be None (e.g. for an analyzer call made before any
         workspace was selected) — those still hit the global tally.
@@ -1142,6 +1284,18 @@ class TokensStore:
             "input": input_tokens,
             "output": output_tokens,
             "calls": 1,
+        }
+        profile = normalize_profile_id(profile_id)
+        version_key = _version_key(vendor, cli_version)
+        cache_read = min(max(0, int(cache_read_tokens)), input_tokens)
+        cache_creation = min(max(0, int(cache_creation_tokens)), input_tokens - cache_read)
+        detail = {
+            "input": input_tokens - cache_read - cache_creation,
+            "cache_read": cache_read,
+            "cache_creation": cache_creation,
+            "output": output_tokens,
+            "calls": 1,
+            "turns": 0,
         }
 
         with self._lock:
@@ -1207,6 +1361,8 @@ class TokensStore:
                     _add(cum["by_stage"].setdefault(stage_id, _empty_bucket()), delta)
                 # Always recorded — "" is the ungrouped bucket the panel shows too.
                 _add(cum["by_group"].setdefault(group_id, _empty_bucket()), delta)
+                _add(cum["by_account"].setdefault(profile, _empty_bucket()), delta)
+                _add(cum["by_version"].setdefault(version_key, _empty_bucket()), delta)
                 # The live per-session tally is deliberately NOT fed here: it is
                 # read straight from the vendor's session log (set_live_total),
                 # so a missed or deduped event can never make it drift.
@@ -1219,6 +1375,9 @@ class TokensStore:
                 _add(g["by_vendor"].setdefault(vendor, _empty_bucket()), delta)
                 day = _today()
                 _add(g["by_day"].setdefault(day, _empty_bucket()), delta)
+                _add(g["by_account"].setdefault(profile, _empty_bucket()), delta)
+                _add(g["by_version"].setdefault(version_key, _empty_bucket()), delta)
+                self._credit_account_detail_locked(vendor, profile, timestamp, detail)
                 self._dirty_global = True
 
             if ingestion_checkpoint:
@@ -1244,6 +1403,72 @@ class TokensStore:
             source, vendor, pane_id, stage_id, input_tokens, output_tokens,
         )
         return True
+
+    def _credit_account_detail_locked(
+        self, vendor: str, profile: str, timestamp: str, detail: dict[str, int]
+    ) -> None:
+        """Add one detail delta to by_account_day (the event's UTC day) and to
+        its 5-minute slice (skipped past retention). Caller holds _lock."""
+        when = _event_time(timestamp)
+        days = self._global_data.setdefault("by_account_day", {})
+        bucket = (
+            days.setdefault(vendor, {})
+            .setdefault(profile, {})
+            .setdefault(_day_of(when), _empty_detail_bucket())
+        )
+        _add_detail(bucket, detail)
+        slice_start = int(when // SLICE_S) * SLICE_S
+        if slice_start >= int(time.time()) - SLICE_RETENTION_S:
+            key = (vendor, profile, slice_start)
+            _add_detail(self._slices.setdefault(key, _empty_detail_bucket()), detail)
+            self._dirty_slices.add(key)
+
+    def record_turn(
+        self, vendor: str, profile_id: str, timestamp: str = ""
+    ) -> None:
+        """Count one finished turn (a reader's turn_complete) for the account
+        the pane was pinned to, on the event's day and slice."""
+        if not vendor:
+            return
+        profile = normalize_profile_id(profile_id)
+        with self._lock:
+            self._credit_account_detail_locked(
+                vendor, profile, timestamp, {"turns": 1}
+            )
+            self._dirty_global = True
+
+    def account_window_totals(
+        self, vendor: str, profile_id: str, start: float | None, end: float
+    ) -> dict[str, int]:
+        """Sum of the account's slices with slice_start in [start, end) — the
+        token side of a quota cycle. ``start`` None means "from the oldest
+        retained slice"."""
+        profile = normalize_profile_id(profile_id)
+        totals = _empty_detail_bucket()
+        with self._lock:
+            for (agent, prof, slice_start), bucket in self._slices.items():
+                if agent != vendor or prof != profile:
+                    continue
+                if start is not None and slice_start < start:
+                    continue
+                if slice_start >= end:
+                    continue
+                _add_detail(totals, bucket)
+        totals["total"] = (
+            totals["input"] + totals["cache_read"] + totals["cache_creation"] + totals["output"]
+        )
+        return totals
+
+    def account_day_rows(self) -> list[tuple[str, str, str, dict[str, int]]]:
+        """Every (agent, profile_id, day, detail bucket) of by_account_day."""
+        with self._lock:
+            days = self._global_data.get("by_account_day", {})
+            return [
+                (agent, profile, day, dict(bucket))
+                for agent, profiles in days.items()
+                for profile, by_day in profiles.items()
+                for day, bucket in by_day.items()
+            ]
 
     # ───────────────────────── Snapshot ─────────────────────────────
 
@@ -1347,9 +1572,14 @@ class TokensStore:
         session_id: str = "",
         *,
         include_calls: bool = False,
+        profile_resolver: Callable[[str | None], str] | None = None,
     ) -> dict[str, Any]:
         """Cut one session log into turns, shaped for the tokens.turns reply
-        (turns + totals). Cached on (path, mtime, size, session_id), 32 deep."""
+        (turns + totals). Cached on (path, mtime, size, session_id), 32 deep.
+
+        ``profile_resolver(started_at)`` names the account a turn ran on; it
+        is applied to the reply rows, never to the cached TurnUsage objects,
+        because the same log answers differently for different panes."""
         turns: list[TurnUsage] | None = None
         if reader.turns_method == "unsupported":
             turns = []  # no token usage in this vendor's log: nothing to read
@@ -1369,7 +1599,14 @@ class TokensStore:
                     self._turns_cache.popitem(last=False)
         totals = {"input": 0, "cache_read": 0, "cache_creation": 0, "output": 0, "total": 0, "calls": 0}
         rows: list[dict[str, Any]] = []
+        accounts: list[str] = []
         for turn in turns:
+            profile = (
+                normalize_profile_id(profile_resolver(turn.started_at))
+                if profile_resolver is not None else turn.profile_id
+            )
+            if profile not in accounts:
+                accounts.append(profile)
             row: dict[str, Any] = {
                 "turn_index": turn.turn_index,
                 "started_at": turn.started_at,
@@ -1381,13 +1618,15 @@ class TokensStore:
                 "output": turn.output,
                 "total": turn.total,
                 "calls": turn.call_count,
+                "profile_id": profile,
+                "cli_version": turn.cli_version,
             }
             if include_calls:
                 row["calls_detail"] = [
                     {
                         "ts": c.ts, "model": c.model, "input": c.input,
                         "cache_read": c.cache_read, "cache_creation": c.cache_creation,
-                        "output": c.output,
+                        "output": c.output, "cli_version": c.cli_version,
                     }
                     for c in turn.calls
                 ]
@@ -1395,7 +1634,10 @@ class TokensStore:
             for field in ("input", "cache_read", "cache_creation", "output", "total"):
                 totals[field] += row[field]
             totals["calls"] += turn.call_count
-        return {"method": reader.turns_method, "turns": rows, "totals": totals}
+        return {
+            "method": reader.turns_method, "turns": rows, "totals": totals,
+            "accounts": accounts,
+        }
 
     # ───────────────────────── Reset ────────────────────────────────
 
@@ -1430,6 +1672,9 @@ class TokensStore:
             elif scope == "global":
                 self._global_data = _empty_global_doc()
                 self._dirty_global = True
+                self._slices.clear()
+                self._dirty_slices.clear()
+                self._delete_all_slices = True
                 self._files.clear()
                 self._last_seen.clear()
                 self._dirty_checkpoints.clear()

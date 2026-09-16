@@ -239,8 +239,17 @@ class OpencodeLogReader(LogReader):
             log.debug("sqlite read %s failed: %s", path, err)
             return None
 
+    def _session_versions(self, path: Path) -> dict[str, str]:
+        """session id → the CLI version that wrote it (``session.version``).
+        A schema without the column (older CLIs) simply yields no versions;
+        the usage query itself must not depend on it."""
+        rows = self._query(path, "SELECT id, version FROM session")
+        if not rows:
+            return {}
+        return {str(sid): str(ver or "") for sid, ver in rows if sid}
+
     def _event_from_row(
-        self, path: Path, row: tuple
+        self, path: Path, row: tuple, versions: dict[str, str] | None = None
     ) -> tuple[TokenUsage | None, bool]:
         """(event, done) for one message row. done=False means the row is a
         still-streaming assistant message — retry it on a later cycle."""
@@ -267,6 +276,7 @@ class OpencodeLogReader(LogReader):
             dedup_key=f"msg:{message_id}",
             timestamp=str(completed),
             model=str(data.get("modelID") or ""),
+            cli_version=(versions or {}).get(str(session_id or ""), ""),
         ), True
 
     def parse_session_file(
@@ -279,12 +289,13 @@ class OpencodeLogReader(LogReader):
         rows = self._query(path, _USAGE_SQL.format(where=""))
         if rows is None:
             return []
+        versions = self._session_versions(path) if rows else {}
         out: list[TokenUsage] = []
         for row in rows:
             key = f"msg:{row[1]}"
             if key in seen_keys:
                 continue
-            event, done = self._event_from_row(path, row)
+            event, done = self._event_from_row(path, row, versions)
             if not done:
                 continue  # still streaming — not marked seen, retried next cycle
             seen_keys.add(key)
@@ -352,6 +363,7 @@ class OpencodeLogReader(LogReader):
 
         out: list[TokenUsage] = []
         next_row_id = last_row_id
+        versions = self._session_versions(path) if rows else {}
 
         def _cursor() -> dict:
             trimmed = sorted(pending)[-_PENDING_CAP:]
@@ -368,7 +380,7 @@ class OpencodeLogReader(LogReader):
             if row_id > next_row_id:
                 next_row_id = row_id
                 anchor = _anchor(row[1:3])
-            event, done = self._event_from_row(path, row)
+            event, done = self._event_from_row(path, row, versions)
             if not done:
                 pending.add(row_id)  # streaming assistant row — recheck later
                 continue

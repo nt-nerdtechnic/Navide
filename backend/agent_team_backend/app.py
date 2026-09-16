@@ -79,6 +79,8 @@ from .mcp_settings import (
 )
 from .plan_index import PlanIndex, resolve_plan_root
 from .plan_provisioning import ensure_plan_assets, plan_spec_exists
+from .pane_account_history import PaneAccountHistory, parse_event_time
+from .quota_ledger import QuotaLedger
 from .profile_migration import migrate_legacy_claude_homes
 from .profiles_store import CliProfilesStore
 from .skills_store import SkillsStore
@@ -182,6 +184,11 @@ recent_workspaces_store = RecentWorkspacesStore(db=database)
 roles_store = RolesStore(db=database)
 stages_store = StagesStore(db=database)
 tokens_store = TokensStore(db=database)
+# Which account each pane was pinned to, and when — global like the pane ids.
+pane_account_history = PaneAccountHistory(db=database)
+# Quota cycles per account: the usage poller files samples here; an open
+# cycle's token side is summed from the store's per-account slices.
+quota_ledger = QuotaLedger(db=database, totals_provider=tokens_store.account_window_totals)
 history_store = HistoryStore(databases=workspace_databases)
 plan_index = PlanIndex(databases=workspace_databases)
 preview_log = PreviewLog(databases=workspace_databases)
@@ -313,6 +320,9 @@ _readers = [
     if spec.make_log_reader is not None
 ]
 attribution = Attribution(_readers, db=database)
+# Every path that drops a pane's registration (kill, unspawn, PTY death after
+# the grace period) closes its account interval through this one hook.
+attribution.on_unregister = pane_account_history.release
 _log_watcher: LogWatcher | None = None
 _git_watcher: GitWatcher | None = None
 _credential_watcher: CredentialWatcher | None = None
@@ -1167,6 +1177,18 @@ async def _on_log_activity(event: ActivityEvent) -> None:
         _record_pane_activity(
             pane_id, "agent_active" if superseded else event.event_type, event.text
         )
+        if event.event_type == "turn_complete":
+            # The per-account turn count (by_account_day / quota cycles): the
+            # reader's turn end is the one signal every vendor emits, on the
+            # transcript's own clock. A superseded turn still finished in
+            # the log — only "the pane is free" is wrong about it.
+            tokens_store.record_turn(
+                event.vendor,
+                pane_account_history.profile_at(
+                    pane_id, parse_event_time(event.timestamp)
+                ),
+                event.timestamp,
+            )
         await broadcast(make_event("agent.activity", {
             "vendor": event.vendor,
             "event_type": event.event_type,
@@ -1456,6 +1478,10 @@ async def scan_session_turns(
     file that tally reads. A bare session id is looked up there too, and
     outside the registry needs `agent_key` to pick the reader. The parse runs
     on the live-scan pool (single worker), never on the shared executor.
+
+    Each turn is stamped with the account the session's pane was pinned to at
+    the turn's start (pane account history); a session with no pane, or a
+    turn from before the pane's first pin, reads "unknown".
     """
     workspace_path = ""
     session_file = ""
@@ -1468,11 +1494,17 @@ async def scan_session_turns(
         ),
         None,
     )
+    account_pane = pane_id
     if found is not None:
         (workspace_path, _session_key), state = found
         vendor = state["vendor"]
         session_id = state["session_id"]
         session_file = state["session_file"]
+        if not account_pane:
+            # A bare session id: the pane currently bound to it (a session
+            # has at most a handful; the newest binding names the account).
+            bound = sorted(state["panes"])
+            account_pane = bound[-1] if bound else ""
     # No pane, not in the registry, and nothing says which reader to try:
     # that is "no session to read", not an unknown vendor named "".
     if not session_id or not vendor:
@@ -1495,7 +1527,10 @@ async def scan_session_turns(
         if path is None:
             raise FileNotFoundError(session_id)
         return path, tokens_store.turns_for(
-            reader, path, session_id, include_calls=include_calls
+            reader, path, session_id, include_calls=include_calls,
+            profile_resolver=lambda started_at: pane_account_history.profile_at(
+                account_pane, parse_event_time(started_at or "")
+            ),
         )
 
     try:
@@ -1516,6 +1551,66 @@ async def scan_session_turns(
         "scanned_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
     })
     return reply
+
+
+def account_periods(agent_key: str, profile_id: str, granularity: str) -> dict[str, Any]:
+    """`tokens.account_periods`: by_account_day rolled up to months or years
+    per (agent, account), with the quota ledger's cycle counts joined in.
+    Runs off-loop (the ledger reads SQLite)."""
+    rows: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for agent, profile, day, bucket in tokens_store.account_day_rows():
+        if agent_key and agent != agent_key:
+            continue
+        if profile_id and profile != profile_id:
+            continue
+        period = day[:4] if granularity == "year" else day[:7]
+        row = rows.setdefault((period, agent, profile), {
+            "period": period, "agent_key": agent, "profile_id": profile,
+            "input": 0, "cache_read": 0, "cache_creation": 0, "output": 0,
+            "total": 0, "calls": 0, "turns": 0,
+            "cycles": 0, "exhausted": 0, "avg_total_exhausted": None,
+            "weekly_exhausted": 0,
+        })
+        for field in ("input", "cache_read", "cache_creation", "output", "calls", "turns"):
+            row[field] += int(bucket.get(field, 0))
+        row["total"] = row["input"] + row["cache_read"] + row["cache_creation"] + row["output"]
+    for key, stats in quota_ledger.period_stats(granularity).items():
+        period, agent, profile = key
+        if agent_key and agent != agent_key:
+            continue
+        if profile_id and profile != profile_id:
+            continue
+        row = rows.setdefault(key, {
+            "period": period, "agent_key": agent, "profile_id": profile,
+            "input": 0, "cache_read": 0, "cache_creation": 0, "output": 0,
+            "total": 0, "calls": 0, "turns": 0,
+            "cycles": 0, "exhausted": 0, "avg_total_exhausted": None,
+            "weekly_exhausted": 0,
+        })
+        row.update({
+            "cycles": stats["cycles"], "exhausted": stats["exhausted"],
+            "avg_total_exhausted": stats["avg_total_exhausted"],
+            "weekly_exhausted": stats["weekly_exhausted"],
+        })
+    # period newest first, then total descending within a period
+    ordered = sorted(rows.values(), key=lambda r: r["total"], reverse=True)
+    ordered.sort(key=lambda r: r["period"], reverse=True)
+    totals: dict[str, dict[str, Any]] = {}
+    for row in ordered:
+        entry = totals.setdefault(row["period"], {
+            "period": row["period"], "total": 0, "calls": 0, "turns": 0,
+        })
+        entry["total"] += row["total"]
+        entry["calls"] += row["calls"]
+        entry["turns"] += row["turns"]
+    return {
+        "ok": True,
+        "granularity": granularity,
+        "rows": ordered,
+        "totals_by_period": sorted(
+            totals.values(), key=lambda t: t["period"], reverse=True
+        ),
+    }
 
 
 # Historic-log backfill can enqueue hundreds of files; coalesce the per-file
@@ -1574,6 +1669,13 @@ async def _on_log_token_usage(usage: TokenUsage) -> TokenSinkResult:
         # Namespace the dedup key by vendor + file_path so collisions across
         # vendors (unlikely but possible) can't masquerade as the same event.
         composite_key = f"{usage.vendor}::{usage.file_path}::{usage.dedup_key}"
+        # The account this usage was made on: whatever the pane was pinned to
+        # at the event's own time (a resumed transcript's old turns belong to
+        # whoever ran them, not to the pane resuming it now). No pane, or no
+        # interval covering that moment → "unknown".
+        usage.profile_id = pane_account_history.profile_at(
+            attributed.pane_id or "", parse_event_time(usage.timestamp)
+        )
         handled = tokens_store.record(
             workspace_path,
             source="cli",
@@ -1592,6 +1694,11 @@ async def _on_log_token_usage(usage: TokenUsage) -> TokenSinkResult:
             ingestion_checkpoint=usage.checkpoint,
             replay_workspace=usage.replay_workspace,
             legacy_dedup_key=usage.dedup_key,
+            profile_id=usage.profile_id,
+            cli_version=usage.cli_version,
+            cache_read_tokens=usage.cache_read_tokens,
+            cache_creation_tokens=usage.cache_creation_tokens,
+            timestamp=usage.timestamp,
         )
         # The watcher just told us this session's log grew — the cheapest and
         # most timely rescan trigger there is, since it already carries the

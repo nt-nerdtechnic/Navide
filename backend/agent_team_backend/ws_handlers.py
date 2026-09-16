@@ -5383,6 +5383,80 @@ async def tokens_reset(session: "Session", msg_id: str, msg_type: str, payload: 
     await app.broadcast(make_event("tokens.changed", snap))
 
 
+@handler("tokens.quota_cycles")
+async def tokens_quota_cycles(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    # One account's quota cycles (contract-dimensions §3): newest reset first,
+    # open cycles summed live. Only an unknown vendor is an error; an account
+    # with nothing recorded answers ok with an empty list.
+    agent_key = str(payload.get("agent_key") or "")
+    profile_id = str(payload.get("profile_id") or "")
+    window_kind = str(payload.get("window_kind") or "") or None
+    if agent_key not in CLI_VENDORS:
+        await session.send_json(make_response(
+            msg_id, msg_type, {"ok": False, "error": "unknown-vendor"}))
+        return
+    cycles = await asyncio.to_thread(
+        app.quota_ledger.cycles, agent_key, profile_id, window_kind
+    )
+    await session.send_json(make_response(msg_id, msg_type, {
+        "ok": True,
+        "agent_key": agent_key,
+        "profile_id": profile_id or "unknown",
+        "cycles": cycles,
+        "summary": app.quota_ledger.summarize(cycles),
+    }))
+
+
+@handler("tokens.quota_exhausted")
+async def tokens_quota_exhausted(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+    from .pane_account_history import UNKNOWN_PROFILE_ID, parse_event_time
+
+    # The renderer saw the CLI's "hit your limit" message in a pane: stamp
+    # the account's open cycles with that moment when it beats the first
+    # 100 % sample. No account for the pane → nothing to stamp (ok, empty).
+    agent_key = str(payload.get("agent_key") or "")
+    pane_id = str(payload.get("pane_id") or "")
+    at = parse_event_time(str(payload.get("at") or ""))
+    if agent_key not in CLI_VENDORS:
+        await session.send_json(make_response(
+            msg_id, msg_type, {"ok": False, "error": "unknown-vendor"}))
+        return
+    profile_id = app.pane_account_history.profile_at(pane_id, at)
+    updated: list[str] = []
+    if at is not None and profile_id != UNKNOWN_PROFILE_ID:
+        updated = await asyncio.to_thread(
+            app.quota_ledger.mark_exhausted, agent_key, profile_id, at
+        )
+    await session.send_json(make_response(msg_id, msg_type, {"ok": True, "updated": updated}))
+    for window_kind in updated:
+        await app.broadcast(make_event("tokens.quota_cycles_changed", {
+            "agent_key": agent_key, "profile_id": profile_id, "window_kind": window_kind,
+        }))
+
+
+@handler("tokens.account_periods")
+async def tokens_account_periods(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    # Monthly / yearly per-account totals (contract-dimensions §4): the
+    # by_account_day ledger summed per period, joined with the quota cycle
+    # counts of the same period. Both filters optional.
+    agent_key = str(payload.get("agent_key") or "")
+    profile_id = str(payload.get("profile_id") or "")
+    granularity = "year" if payload.get("granularity") == "year" else "month"
+    if agent_key and agent_key not in CLI_VENDORS:
+        await session.send_json(make_response(
+            msg_id, msg_type, {"ok": False, "error": "unknown-vendor"}))
+        return
+    result = await asyncio.to_thread(
+        app.account_periods, agent_key, profile_id, granularity
+    )
+    await session.send_json(make_response(msg_id, msg_type, result))
+
+
 @handler("tokens.monitor")
 async def tokens_monitor(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     from .token_monitor import snapshot
@@ -6346,6 +6420,14 @@ async def _terminal_create_impl(
         # must not lose its fresh registration to a pending grace-period
         # cleanup from the previous PTY's exit.
         app._cancel_pane_unregister(term.pane_id)
+        # Open the pane's account interval now, before the CLI's first call
+        # can land: the bookkeeping message repeats the same pin (a no-op)
+        # a beat later. Non-account agents pin "unknown".
+        app.pane_account_history.pin(
+            term.pane_id,
+            _profile_pin_for_bookkeeping(
+                agent_key, term.pane_id, metadata.get("profile_id")),
+        )
         # register_pane's baseline scan enumerates the vendor's whole
         # session-file tree — run it off-loop (register_pane is
         # thread-safe via attribution._lock) so the create ack below
@@ -7748,6 +7830,8 @@ async def pipeline_stage_spawn(session: "Session", msg_id: str, msg_type: str, p
 async def pipeline_slot_spawn(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     from . import app
 
+    slot_pin = _profile_pin_for_bookkeeping(
+        payload.get("agent", ""), payload.get("pane_id"), payload.get("profile_id"))
     project = app.project_store.record_slot_spawn(
         payload["workspace_path"],
         stage_index=int(payload["stage_index"]),
@@ -7759,10 +7843,10 @@ async def pipeline_slot_spawn(session: "Session", msg_id: str, msg_type: str, pa
         # "" and persist later via pipeline.slot_session once detected.
         session_id=payload.get("session_id", ""),
         session_home_id=payload.get("session_home_id", ""),
-        profile_id=_profile_pin_for_bookkeeping(
-            payload.get("agent", ""), payload.get("pane_id"), payload.get("profile_id")),
+        profile_id=slot_pin,
         run_group_id=payload.get("run_group_id", ""),
     )
+    app.pane_account_history.pin(str(payload["pane_id"]), slot_pin)
     await session.send_json(
         make_response(msg_id, msg_type, app._project_payload(project))
     )
@@ -7949,6 +8033,8 @@ async def manual_pane_spawn(session: "Session", msg_id: str, msg_type: str, payl
         await session.send_json(make_error(msg_id, msg_type, "BAD_REQUEST", unsafe))
         return
 
+    manual_pin = _profile_pin_for_bookkeeping(
+        payload.get("agent", ""), payload.get("pane_id"), payload.get("profile_id"))
     project = app.project_store.record_manual_pane_spawn(
         payload["workspace_path"],
         pane_id=payload["pane_id"],
@@ -7960,13 +8046,13 @@ async def manual_pane_spawn(session: "Session", msg_id: str, msg_type: str, payl
         effort=payload.get("effort", ""),
         session_id=payload.get("session_id", ""),
         session_home_id=payload.get("session_home_id", ""),
-        profile_id=_profile_pin_for_bookkeeping(
-            payload.get("agent", ""), payload.get("pane_id"), payload.get("profile_id")),
+        profile_id=manual_pin,
         run_group_id=payload.get("run_group_id", ""),
         output_log_file=payload.get("output_log_file", ""),
         origin=payload.get("origin", ""),
         spawned_by=payload.get("spawned_by", ""),
     )
+    app.pane_account_history.pin(str(payload["pane_id"]), manual_pin)
     await session.send_json(
         make_response(msg_id, msg_type, app._project_payload(project))
     )

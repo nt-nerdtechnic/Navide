@@ -305,6 +305,9 @@ class ClaudeLogReader(LogReader):
                         dedup_key=dedup_key,
                         timestamp=str(rec.get("timestamp") or ""),
                         model=str(msg.get("model") or ""),
+                        cache_read_tokens=_int(usage.get("cache_read_input_tokens")),
+                        cache_creation_tokens=_int(usage.get("cache_creation_input_tokens")),
+                        cli_version=str(rec.get("version") or ""),
                     )
                 )
         return out
@@ -359,6 +362,9 @@ class ClaudeLogReader(LogReader):
                 timestamp=str(rec.get("timestamp") or ""),
                 model=str(msg.get("model") or ""),
                 checkpoint=event_checkpoint,
+                cache_read_tokens=_int(usage.get("cache_read_input_tokens")),
+                cache_creation_tokens=_int(usage.get("cache_creation_input_tokens")),
+                cli_version=str(rec.get("version") or ""),
             ))
 
         final_checkpoint["recent_keys"] = recent
@@ -427,6 +433,7 @@ class ClaudeLogReader(LogReader):
                     cache_read=_int(usage.get("cache_read_input_tokens")),
                     cache_creation=_int(usage.get("cache_creation_input_tokens")),
                     output=_int(usage.get("output_tokens")),
+                    cli_version=str(rec.get("version") or ""),
                 )
                 if call.input + call.cache_read + call.cache_creation + call.output == 0:
                     continue

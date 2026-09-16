@@ -33,7 +33,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from threading import Lock
-from typing import Iterable
+from typing import Callable, Iterable
 
 from ..applog import app_data_dir
 from ..db import DB_FILENAME, Database
@@ -113,6 +113,10 @@ class Attribution:
         self._unbound_markers: dict[str, str] = {}  # session_marker → pane_id (Codex/Antigravity)
         self._announced_session_keys: set[str] = set()
         self._lock = Lock()
+        # Called (outside the lock) with the pane id whenever a live
+        # registration is dropped — the pane account history closes its open
+        # interval there, so every kill / unspawn / PTY-death path counts.
+        self.on_unregister: Callable[[str], None] | None = None
         self._load_workspaces()
 
     # ───────────────────────── persistence ─────────────────────────────────
@@ -349,6 +353,11 @@ class Attribution:
                     del self._session_owner[sid]
             if reg.session_marker:
                 self._unbound_markers.pop(reg.session_marker, None)
+        if self.on_unregister is not None:
+            try:
+                self.on_unregister(pane_id)
+            except Exception as err:  # noqa: BLE001 — bookkeeping must not break the release
+                log.warning("pane unregister hook failed for %s: %s", pane_id, err)
 
     # ───────────────────────── attribution ─────────────────────────────────
 

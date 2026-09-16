@@ -738,6 +738,7 @@ class CopilotLogReader(LogReader):
         latest_in, latest_out = prev_in, prev_out
         latest_event: dict | None = None
         model = ""
+        cli_version = ""
         session_id = path.parent.name
         cwd = self.cwd_from_file(path)
 
@@ -754,6 +755,9 @@ class CopilotLogReader(LogReader):
                 data = rec.get("data")
                 if not isinstance(data, dict):
                     continue
+                # session.start names the CLI build (events.jsonl only; the
+                # session-store.db path has no version column).
+                cli_version = str(data.get("copilotVersion") or "") or cli_version
                 totals = _metrics_totals(data)
                 if totals is None:
                     continue
@@ -786,6 +790,7 @@ class CopilotLogReader(LogReader):
                 dedup_key=f"copilot_cumulative::{session_id}::{latest_in}::{latest_out}",
                 timestamp=str(latest_event.get("timestamp") or ""),
                 model=model,
+                cli_version=cli_version,
             )
         ]
 
@@ -819,6 +824,7 @@ class CopilotLogReader(LogReader):
         latest_in, latest_out = prev_in, prev_out
         model = "" if replaced else str(checkpoint.get("model") or "")
         cwd = "" if replaced else str(checkpoint.get("cwd") or "")
+        cli_version = "" if replaced else str(checkpoint.get("cli_version") or "")
         if not cwd:
             cwd = self.cwd_from_file(path)
         session_id = path.parent.name
@@ -831,6 +837,7 @@ class CopilotLogReader(LogReader):
             data = rec.get("data")
             if not isinstance(data, dict):
                 continue
+            cli_version = str(data.get("copilotVersion") or "") or cli_version
             totals = _metrics_totals(data)
             if totals is None:
                 continue
@@ -849,6 +856,7 @@ class CopilotLogReader(LogReader):
             "output_total": next_out,
             "cwd": cwd,
             "model": model,
+            "cli_version": cli_version,
         })
         if latest_event is None:
             return IncrementalParseResult([], next_checkpoint)
@@ -871,6 +879,7 @@ class CopilotLogReader(LogReader):
             timestamp=str(latest_event.get("timestamp") or ""),
             model=model,
             checkpoint=event_checkpoint,
+            cli_version=cli_version,
         )
         return IncrementalParseResult([event], next_checkpoint)
 

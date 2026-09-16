@@ -103,10 +103,12 @@ async def test_a_pane_resolves_to_its_live_session_and_the_reply_follows_the_con
     assert reply["turns"] == [{
         "turn_index": 1, "started_at": "2026-09-16T00:00:00Z", "ended_at": "2026-09-16T00:00:03Z",
         "prompt_excerpt": "hello", "input": 1, "cache_read": 20, "cache_creation": 3, "output": 4,
-        "total": 28, "calls": 1,
+        "total": 28, "calls": 1, "profile_id": "unknown", "cli_version": "",
         "calls_detail": [{"ts": "2026-09-16T00:00:01Z", "model": "m", "input": 1,
-                          "cache_read": 20, "cache_creation": 3, "output": 4}],
+                          "cache_read": 20, "cache_creation": 3, "output": 4,
+                          "cli_version": ""}],
     }]
+    assert reply["accounts"] == ["unknown"]
     assert reply["totals"] == {
         "input": 1, "cache_read": 20, "cache_creation": 3, "output": 4, "total": 28, "calls": 1,
     }

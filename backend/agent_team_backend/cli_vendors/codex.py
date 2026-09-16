@@ -254,6 +254,7 @@ class CodexLogReader(LogReader):
         latest_event: dict | None = None
         cwd = ""
         model = ""
+        cli_version = ""
         session_id = path.stem
 
         with fh:
@@ -273,6 +274,7 @@ class CodexLogReader(LogReader):
                     if isinstance(payload, dict):
                         cwd = str(payload.get("cwd") or cwd)
                         model = str(payload.get("model_provider") or payload.get("model") or model)
+                        cli_version = str(payload.get("cli_version") or cli_version)
                     continue
 
                 # Token count events are the only ones we care about
@@ -328,6 +330,7 @@ class CodexLogReader(LogReader):
                 dedup_key=f"codex_cumulative::{session_id}::{latest_in}::{latest_out}",
                 timestamp=str(latest_event.get("timestamp") or ""),
                 model=model,
+                cli_version=cli_version,
             )
         ]
 
@@ -348,6 +351,7 @@ class CodexLogReader(LogReader):
         latest_in, latest_out = prev_in, prev_out
         cwd = "" if replaced else str(checkpoint.get("cwd") or "")
         model = "" if replaced else str(checkpoint.get("model") or "")
+        cli_version = "" if replaced else str(checkpoint.get("cli_version") or "")
         session_id = path.stem if replaced else str(checkpoint.get("session_id") or path.stem)
         latest_event: dict | None = None
         latest_end = int(next_checkpoint.get("offset") or 0)
@@ -361,6 +365,7 @@ class CodexLogReader(LogReader):
                     cwd = str(payload.get("cwd") or cwd)
                     session_id = str(payload.get("id") or session_id)
                     model = str(payload.get("model_provider") or payload.get("model") or model)
+                    cli_version = str(payload.get("cli_version") or cli_version)
                 continue
             if rec.get("type") != "event_msg":
                 continue
@@ -382,6 +387,7 @@ class CodexLogReader(LogReader):
             "cwd": cwd,
             "model": model,
             "session_id": session_id,
+            "cli_version": cli_version,
         })
         if latest_event is None:
             return IncrementalParseResult([], next_checkpoint)
@@ -404,6 +410,7 @@ class CodexLogReader(LogReader):
             timestamp=str(latest_event.get("timestamp") or ""),
             model=model,
             checkpoint=event_checkpoint,
+            cli_version=cli_version,
         )
         return IncrementalParseResult([event], next_checkpoint)
 
@@ -428,6 +435,7 @@ class CodexLogReader(LogReader):
             return []
         sid = path.stem
         model = ""
+        cli_version = ""
         prev = (0, 0, 0)
         turns: list[TurnUsage] = []
         current: TurnUsage | None = None
@@ -448,6 +456,7 @@ class CodexLogReader(LogReader):
                 if rec.get("type") == "session_meta":
                     sid = str(payload.get("id") or sid)
                     model = str(payload.get("model_provider") or payload.get("model") or model)
+                    cli_version = str(payload.get("cli_version") or cli_version)
                     continue
                 if rec.get("type") != "event_msg":
                     continue
@@ -487,7 +496,7 @@ class CodexLogReader(LogReader):
                 current.add_call(TurnCall(
                     ts=ts, model=model,
                     input=max(0, delta[0] - delta[1]), cache_read=delta[1],
-                    cache_creation=0, output=delta[2],
+                    cache_creation=0, output=delta[2], cli_version=cli_version,
                 ))
                 current.ended_at = ts or current.ended_at
         # Either id names this rollout: the session_meta id (what the token

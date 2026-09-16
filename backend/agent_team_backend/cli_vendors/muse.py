@@ -371,9 +371,8 @@ class MuseLogReader(LogReader):
                 log.debug("glob %s failed: %s", root, err)
         return out
 
-    def cwd_from_file(self, path: Path) -> str:
-        """The session's exact cwd, from the ``runtime.session.metadata``
-        record's ``workspace_root`` (the log's first row)."""
+    def _metadata_record(self, path: Path) -> dict | None:
+        """The ``runtime.session.metadata`` record (the log's first row)."""
         try:
             with path.open(encoding="utf-8", errors="replace") as fh:
                 for _ in range(_METADATA_SCAN_LINES):
@@ -388,12 +387,22 @@ class MuseLogReader(LogReader):
                         continue
                     if rec.get("payload_type") != "runtime.session.metadata":
                         continue
-                    record = _payload_record(rec)
-                    if record is not None:
-                        return str(record.get("workspace_root") or "")
+                    return _payload_record(rec)
         except OSError as err:
             log.debug("open %s failed: %s", path, err)
-        return ""
+        return None
+
+    def cwd_from_file(self, path: Path) -> str:
+        """The session's exact cwd, from the ``runtime.session.metadata``
+        record's ``workspace_root`` (the log's first row)."""
+        record = self._metadata_record(path)
+        return str(record.get("workspace_root") or "") if record is not None else ""
+
+    def version_from_file(self, path: Path) -> str:
+        """The CLI build that wrote the session (metadata ``build.semver``)."""
+        record = self._metadata_record(path)
+        build = record.get("build") if record is not None else None
+        return str(build.get("semver") or "") if isinstance(build, dict) else ""
 
     def session_id_from_path(self, path: Path) -> str:
         """The session id is the DIRECTORY name — every log file is called
@@ -426,6 +435,7 @@ class MuseLogReader(LogReader):
     ) -> list[TokenUsage]:
         out: list[TokenUsage] = []
         cwd = self.cwd_from_file(path)
+        cli_version = self.version_from_file(path)
         session_id = self.session_id_from_path(path)
         try:
             fh = path.open(encoding="utf-8")
@@ -464,6 +474,7 @@ class MuseLogReader(LogReader):
                     file_path=str(path),
                     dedup_key=usage_id,
                     timestamp=_iso_from_micros(rec.get("recorded_at")),
+                    cli_version=cli_version,
                 ))
         return out
 
@@ -490,6 +501,7 @@ class MuseLogReader(LogReader):
         # The cwd lives in the log's FIRST record, which a tail read has
         # normally already passed — read the head separately for it.
         cwd = self.cwd_from_file(path)
+        cli_version = self.version_from_file(path)
 
         for end, rec in records:
             if rec is None:
@@ -519,6 +531,7 @@ class MuseLogReader(LogReader):
                 dedup_key=usage_id,
                 timestamp=_iso_from_micros(rec.get("recorded_at")),
                 checkpoint=event_checkpoint,
+                cli_version=cli_version,
             ))
 
         final_checkpoint["recent_keys"] = recent

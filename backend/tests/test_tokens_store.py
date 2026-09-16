@@ -558,7 +558,9 @@ def test_turns_for_shapes_the_reply_and_sums_totals(store: TokensStore, tmp_path
         "turn_index": 1, "started_at": "2026-09-16T00:00:00Z", "ended_at": "2026-09-16T00:00:05Z",
         "prompt_excerpt": "prompt 1", "input": 1, "cache_read": 10, "cache_creation": 0,
         "output": 2, "total": 13, "calls": 1,
+        "profile_id": "unknown", "cli_version": "",
     }
+    assert cut["accounts"] == ["unknown"]
     assert "calls_detail" not in cut["turns"][0]
     assert cut["totals"] == {
         "input": 6, "cache_read": 20, "cache_creation": 0, "output": 9, "total": 35, "calls": 2,
@@ -567,7 +569,7 @@ def test_turns_for_shapes_the_reply_and_sums_totals(store: TokensStore, tmp_path
     detailed = store.turns_for(reader, log, "s1", include_calls=True)
     assert detailed["turns"][1]["calls_detail"] == [{
         "ts": "2026-09-16T00:00:01Z", "model": "m", "input": 5,
-        "cache_read": 10, "cache_creation": 0, "output": 7,
+        "cache_read": 10, "cache_creation": 0, "output": 7, "cli_version": "",
     }]
 
 
@@ -600,6 +602,7 @@ def test_turns_for_reports_an_unsupported_vendor_as_empty(store: TokensStore, tm
     assert cut == {
         "method": "unsupported", "turns": [],
         "totals": {"input": 0, "cache_read": 0, "cache_creation": 0, "output": 0, "total": 0, "calls": 0},
+        "accounts": [],
     }
 
 

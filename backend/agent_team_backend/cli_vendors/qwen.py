@@ -290,6 +290,8 @@ class QwenLogReader(LogReader):
                         dedup_key=dedup_key,
                         timestamp=str(rec.get("timestamp") or ""),
                         model=str(rec.get("model") or ""),
+                        cli_version=str(rec.get("version") or ""),
+                        cache_read_tokens=_int(usage.get("cachedContentTokenCount")),
                     )
                 )
         return out
@@ -339,6 +341,8 @@ class QwenLogReader(LogReader):
                 timestamp=str(rec.get("timestamp") or ""),
                 model=str(rec.get("model") or ""),
                 checkpoint=event_checkpoint,
+                cli_version=str(rec.get("version") or ""),
+                cache_read_tokens=_int(usage.get("cachedContentTokenCount")),
             ))
 
         final_checkpoint["recent_keys"] = recent

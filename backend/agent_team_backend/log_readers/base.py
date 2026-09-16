@@ -37,6 +37,16 @@ class TokenUsage:
     checkpoint: dict[str, Any] = field(default_factory=dict, repr=False)
     replay_workspace: str = ""
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
+    #: The cache portions already folded into input_tokens, kept apart for the
+    #: per-account ledgers (0 when the vendor's log has no split).
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
+    #: CLI account pin of the pane this usage is attributed to. Readers never
+    #: set it (the log carries no account); the ingestion sink fills it from
+    #: the pane account history. "unknown" = could not be resolved.
+    profile_id: str = "unknown"
+    #: CLI version the log records for this event ("" when it has none).
+    cli_version: str = ""
 
     @property
     def total(self) -> int:
@@ -134,6 +144,7 @@ class TurnCall:
     cache_read: int
     cache_creation: int
     output: int
+    cli_version: str = ""      # CLI version the log records for this call
 
 
 @dataclass
@@ -153,6 +164,12 @@ class TurnUsage:
     #: Model-call count when the log states it without listing the calls
     #: (grok's modelCalls); None means len(calls).
     model_calls: int | None = None
+    #: Account pin resolved at query time from the pane account history
+    #: (readers leave it "unknown" — a transcript names no account).
+    profile_id: str = "unknown"
+    #: CLI version of the turn's calls; when they differ (an upgrade mid-turn)
+    #: the last call's version wins.
+    cli_version: str = ""
 
     @property
     def total(self) -> int:
@@ -168,6 +185,8 @@ class TurnUsage:
         self.cache_creation += call.cache_creation
         self.output += call.output
         self.calls.append(call)
+        if call.cli_version:
+            self.cli_version = call.cli_version
 
 
 def turn_excerpt(text: str) -> str:

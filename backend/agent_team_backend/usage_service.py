@@ -1098,7 +1098,46 @@ class UsageService:
             self.snapshots[provider] = snap
         if cache_changed:
             await asyncio.to_thread(self._save_cache)
+        await self._file_quota_samples()
         return self.payload()
+
+    async def _file_quota_samples(self) -> None:
+        """Hand every fresh snapshot to the quota cycle ledger and announce
+        the cycles it changed. Claude is filed per account slot; another
+        vendor's snapshot belongs to its active profile ("__default__" when
+        the vendor has no profiles). Best effort: the ledger is not allowed to
+        break the poll."""
+        try:
+            from . import app
+            from .ipc import make_event
+        except Exception:  # noqa: BLE001 — unit tests without the app
+            return
+        ledger = getattr(app, "quota_ledger", None)
+        if ledger is None:
+            return
+        readings: list[tuple[str, str, dict]] = [
+            ("claude", slot_id, snap)
+            for slot_id, snap in self.account_snapshots.get("claude", {}).items()
+        ]
+        for provider, snap in self.snapshots.items():
+            if provider == "claude":
+                continue
+            readings.append((provider, _active_profile_id(provider) or "__default__", snap))
+        try:
+            changed = await asyncio.to_thread(
+                lambda: [
+                    key
+                    for agent, profile_id, snap in readings
+                    for key in ledger.observe(agent, profile_id, snap)
+                ]
+            )
+        except Exception as err:  # noqa: BLE001
+            log.warning("quota ledger update failed: %s", err)
+            return
+        for agent, profile_id, window_kind in dict.fromkeys(changed):
+            await app.broadcast(make_event("tokens.quota_cycles_changed", {
+                "agent_key": agent, "profile_id": profile_id, "window_kind": window_kind,
+            }))
 
     def _next_sleep(self) -> float:
         """Regular interval, shortened to land just after the nearest window
