@@ -415,16 +415,23 @@ async def test_get_status_never_refreshes_usage(monkeypatch: pytest.MonkeyPatch)
     agent_messaging.register("pw", "worker", "/ws/alpha", agent_key="codex")
     agent_messaging.register("other", "caller", "/ws/somewhere-else")
     calls = _usage_payload(monkeypatch, {"codex": _USAGE_SNAPSHOT})
+    # Record, do not raise: a raise inside the tool's own try/except would be
+    # swallowed into "no usage" and this test would pass against a refresh.
+    refreshes: list[str] = []
+    monkeypatch.setattr(
+        usage_service.service, "request_refresh",
+        lambda *_a, **_k: refreshes.append("request_refresh"),
+    )
+    monkeypatch.setattr(
+        usage_service.service, "poll_once",
+        lambda *_a, **_k: refreshes.append("poll_once"),
+    )
 
-    def _forbidden(*_a: Any, **_k: Any) -> None:
-        raise AssertionError("cli_get_status must not refresh usage")
-
-    monkeypatch.setattr(usage_service.service, "request_refresh", _forbidden)
-    monkeypatch.setattr(usage_service.service, "poll_once", _forbidden)
-
-    await plan_mcp.cli_get_status("alpha/worker", _ctx(pane_id="other"))
+    result = await plan_mcp.cli_get_status("alpha/worker", _ctx(pane_id="other"))
 
     assert calls == [1]
+    assert refreshes == []
+    assert result["usage"] == _USAGE_SNAPSHOT
 
 
 @pytest.mark.asyncio
