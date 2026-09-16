@@ -1822,3 +1822,63 @@ def test_a_platform_without_a_keychain_still_uses_the_file(tmp_path, monkeypatch
     )
     vault.write_app_secret("navide-server-token", "tok")
     assert vault.read_app_secret("navide-server-token") == "tok"
+
+
+def test_a_secret_named_with_a_colon_is_stored_on_every_platform(tmp_path, monkeypatch):
+    """Windows has no Keychain, so this file IS the secret there — and a
+    filename holding a colon opens an NTFS alternate data stream instead of a
+    file, failing the write with "the parameter is incorrect".
+
+    `sync_keyring` names the account ring `<prefix>:<namespace>`, so on Windows
+    it could not keep a key at all: every test in test_sync_keyring.py errored
+    in setup, and a signed-in user would have hit exactly the same write.
+    """
+    monkeypatch.setenv("AGENT_TEAM_DATA_DIR", str(tmp_path / "data"))
+    vault = CredentialVault(
+        root=tmp_path / "vault", real_home=tmp_path / "home", platform="linux"
+    )
+    name = "navide-sync-account-key:https-example-com|m1"
+
+    vault.write_app_secret(name, "ring-json")
+
+    path = vault.app_secret_path(name)
+    assert not set(path.name) & set('<>:"/\\|?*'), path.name
+    assert path.exists()
+    assert vault.read_app_secret(name) == "ring-json"
+
+    vault.write_app_secret(name, None)
+    assert vault.read_app_secret(name) is None
+    assert not path.exists()
+
+
+def test_two_secret_names_that_escape_alike_stay_apart(tmp_path, monkeypatch):
+    """The escape has to be one-to-one, or two names would share one file and
+    the second write would silently take the first one's value."""
+    monkeypatch.setenv("AGENT_TEAM_DATA_DIR", str(tmp_path / "data"))
+    vault = CredentialVault(
+        root=tmp_path / "vault", real_home=tmp_path / "home", platform="linux"
+    )
+
+    vault.write_app_secret("navide-x:y", "colon")
+    vault.write_app_secret("navide-x%3Ay", "already-escaped")
+
+    assert vault.read_app_secret("navide-x:y") == "colon"
+    assert vault.read_app_secret("navide-x%3Ay") == "already-escaped"
+
+
+def test_the_fixed_secret_names_keep_the_file_they_already_have(tmp_path, monkeypatch):
+    """Escaping must not move a secret that is already stored: every name the
+    backend uses is a legal filename, so each one maps to itself."""
+    monkeypatch.setenv("AGENT_TEAM_DATA_DIR", str(tmp_path / "data"))
+    vault = CredentialVault(
+        root=tmp_path / "vault", real_home=tmp_path / "home", platform="linux"
+    )
+
+    for name in (
+        "navide-server-token",
+        "navide-device-trust",
+        "navide-sync-account-key",
+        "navide-portable-credential-key",
+        "navide-workspace-digest-salt",
+    ):
+        assert vault.app_secret_path(name).name == name

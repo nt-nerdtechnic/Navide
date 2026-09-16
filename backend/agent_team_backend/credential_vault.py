@@ -100,6 +100,31 @@ _SLOT_SERVICE_PREFIX = "Navide CLI account "
 _APP_SECRET_SERVICE_PREFIX = "Navide secret "
 _APP_SECRET_DIRNAME = "__secrets__"
 
+#: Characters a Windows filename may not hold. A secret's name is written by
+#: the caller, not by a person, and one of them carries an account namespace
+#: after a colon — which on NTFS opens an alternate data stream rather than a
+#: file, so the write failed with "the parameter is incorrect" and sync could
+#: not keep a key on Windows at all. The platform with no Keychain is the one
+#: where this file IS the secret, so the failure was total there.
+_FILENAME_RESERVED = '<>:"/\\|?*'
+
+
+def _filename_for(name: str) -> str:
+    """*name* as a filename every supported platform accepts.
+
+    Percent-escaped, and ``%`` with it so the mapping stays one-to-one. Every
+    name that is already a legal filename — which is all of the fixed ones —
+    maps to itself, so no stored secret moves.
+    """
+    out = []
+    for ch in name:
+        if ch == "%" or ch in _FILENAME_RESERVED or ord(ch) < 32:
+            out.append(f"%{ord(ch):02X}")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
 # Secret file name inside a slot directory, per agent.
 _SLOT_FILES = {
 }
@@ -481,7 +506,7 @@ class CredentialVault:
         it is read whenever the Keychain has no answer, and it is the whole
         story on a platform that has no Keychain.
         """
-        return self._root / (_APP_SECRET_DIRNAME + self._app_secret_suffix()) / name
+        return self._root / (_APP_SECRET_DIRNAME + self._app_secret_suffix()) / _filename_for(name)
 
     def app_secret_service(self, name: str) -> str:
         """Keychain service for a backend-owned secret, per data directory."""
