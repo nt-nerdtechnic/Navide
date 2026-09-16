@@ -1208,3 +1208,55 @@ async def test_a_login_pane_is_not_told_it_is_signed_out(
     })
 
     assert _events(session, "cli.signed_out") == []
+
+
+@pytest.mark.asyncio
+async def test_terminal_create_codex_seeds_hook_trust_for_the_final_codex_home(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Hook trust is carried over to whichever CODEX_HOME the pane spawns with."""
+
+    class SeedingHome(FakeCodexHomeManager):
+        def __init__(self, root: Path) -> None:
+            super().__init__(root)
+            self.seeded: list[Path] = []
+
+        def seed_hook_trust(self, pane_home: Path) -> int:
+            self.seeded.append(pane_home)
+            return 8
+
+    fake_home = SeedingHome(tmp_path / "codex-panes")
+    monkeypatch.setattr(app, "attribution", FakeAttribution())
+    monkeypatch.setattr(app, "codex_home_manager", fake_home)
+    monkeypatch.setattr(app, "_register_workspace_and_backfill", lambda _ws: None)
+    session = _session()
+
+    await app.handle_message(session, {
+        "id": "m-seed",
+        "type": "terminal.create",
+        "payload": {
+            "pane_id": "pane-seed",
+            "agent_key": "codex",
+            "command": "codex",
+            "cwd": "/ws",
+            "metadata": {"workspace_path": "/ws", "session_home_id": "stable-home"},
+        },
+    })
+
+    created = session.terminals.created[0]  # type: ignore[attr-defined]
+    assert fake_home.seeded == [Path(created["env"]["CODEX_HOME"])]
+
+    # A non-codex spawn never touches codex's trust store.
+    await app.handle_message(session, {
+        "id": "m-claude",
+        "type": "terminal.create",
+        "payload": {
+            "pane_id": "pane-claude",
+            "agent_key": "claude",
+            "command": "claude",
+            "cwd": "/ws",
+            "metadata": {"workspace_path": "/ws"},
+        },
+    })
+    assert len(fake_home.seeded) == 1
