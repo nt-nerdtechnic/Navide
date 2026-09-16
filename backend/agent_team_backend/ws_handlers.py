@@ -2814,6 +2814,82 @@ async def sync_resolve(session: "Session", msg_id: str, msg_type: str, payload: 
     await session.send_json(make_response(msg_id, msg_type, {"ok": True, "conflicts": rows}))
 
 
+@handler("sync.inventory")
+async def sync_inventory(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """The local/cloud comparison, for one scope or all four. Writes nothing.
+
+    Answers for a scope that is switched off too: somebody deciding whether to
+    turn one on wants to see what turning it on would bring down, and looking
+    is the one thing this cannot be dangerous for. ``scopeEnabled`` says which
+    are on, so the pane can show it without inferring it from an empty list.
+    """
+    scope = str(payload.get("scope") or "")
+    try:
+        result = await server_link.sync_inventory(scope)
+    except Exception as err:  # noqa: BLE001 - report, never tear down the session
+        await session.send_json(make_error(msg_id, msg_type, "SYNC_INVENTORY_FAILED", str(err)))
+        return
+    await session.send_json(make_response(msg_id, msg_type, result))
+
+
+@handler("sync.push_items")
+async def sync_push_items(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    item_ids = _sync_item_ids(payload)
+    scope = str(payload.get("scope") or "")
+    if not await _sync_selection_ok(session, msg_id, msg_type, scope, item_ids):
+        return
+    try:
+        results = await server_link.sync_push_items(scope, item_ids)
+    except Exception as err:  # noqa: BLE001 - a link that went down is not a crash
+        await session.send_json(make_error(msg_id, msg_type, "SYNC_PUSH_FAILED", str(err)))
+        return
+    await session.send_json(make_response(msg_id, msg_type, {"scope": scope, "results": results}))
+
+
+@handler("sync.pull_items")
+async def sync_pull_items(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    item_ids = _sync_item_ids(payload)
+    scope = str(payload.get("scope") or "")
+    if not await _sync_selection_ok(session, msg_id, msg_type, scope, item_ids):
+        return
+    try:
+        results = await server_link.sync_pull_items(scope, item_ids)
+    except Exception as err:  # noqa: BLE001 - same reason as the push above
+        await session.send_json(make_error(msg_id, msg_type, "SYNC_PULL_FAILED", str(err)))
+        return
+    await session.send_json(make_response(msg_id, msg_type, {"scope": scope, "results": results}))
+
+
+def _sync_item_ids(payload: dict) -> list[str]:
+    raw = payload.get("itemIds")
+    return [str(i) for i in raw if isinstance(i, str) and i] if isinstance(raw, list) else []
+
+
+async def _sync_selection_ok(
+    session: "Session", msg_id: str, msg_type: str, scope: str, item_ids: list[str]
+) -> bool:
+    """Refuse a selective move that names nothing, or names an invented scope.
+
+    An empty selection is a caller bug rather than a request to move
+    everything: ``sync.now`` is how "all of it" is asked for, and reading a
+    missing list as "all" would make a UI that failed to collect a tick box
+    upload the whole scope.
+    """
+    from . import sync_engine
+
+    if scope not in sync_engine.SCOPES:
+        await session.send_json(
+            make_error(msg_id, msg_type, "SYNC_UNKNOWN_SCOPE", f"unknown scope {scope!r}")
+        )
+        return False
+    if not item_ids:
+        await session.send_json(
+            make_error(msg_id, msg_type, "SYNC_NO_ITEMS", "itemIds must name at least one item")
+        )
+        return False
+    return True
+
+
 # ── Recent workspaces (workspace.*) ─────────────────────────────────────────
 @handler("workspace.list_recent")
 async def workspace_list_recent(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
@@ -4127,6 +4203,102 @@ async def settings_bundle_import(session: "Session", msg_id: str, msg_type: str,
         "applied": applied,
         "paths": app._settings_paths(),
     }))
+
+
+# ── Shareable settings bundles (share.*) ────────────────────────────────────
+#
+# A different document from settings.bundle.* above: four scopes (prompts, mcp,
+# skills, memory), built to be handed to another person, and stripped of every
+# secret on the way out. The whole of it lives in settings_bundle.py; these are
+# the wire endings. Every call reads files and SQLite, so all four hop off the
+# event loop.
+async def _share_call(
+    session: "Session",
+    msg_id: str,
+    msg_type: str,
+    work: Callable[[], Any],
+) -> Any:
+    """Run one settings_bundle call off the loop, answering an error itself."""
+    from . import settings_bundle
+
+    try:
+        return await asyncio.to_thread(work)
+    except settings_bundle.BundleError as err:
+        await session.send_json(make_error(msg_id, msg_type, err.code, err.message, err.details))
+        return None
+
+
+@handler("share.inventory")
+async def share_inventory(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import settings_bundle
+
+    scopes = await _share_call(session, msg_id, msg_type, settings_bundle.inventory)
+    if scopes is None:
+        return
+    await session.send_json(make_response(msg_id, msg_type, {"scopes": scopes}))
+
+
+@handler("share.export")
+async def share_export(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import settings_bundle
+
+    selection = payload.get("selection")
+    if not isinstance(selection, dict):
+        await session.send_json(
+            make_error(msg_id, msg_type, "INVALID_SELECTION", "selection must be an object")
+        )
+        return
+    name = payload.get("name") if isinstance(payload.get("name"), str) else ""
+    description = payload.get("description") if isinstance(payload.get("description"), str) else ""
+    bundle = await _share_call(
+        session,
+        msg_id,
+        msg_type,
+        lambda: settings_bundle.export_bundle(selection, name=name, description=description),
+    )
+    if bundle is None:
+        return
+    await session.send_json(make_response(msg_id, msg_type, {"bundle": bundle}))
+
+
+@handler("share.import_preview")
+async def share_import_preview(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import settings_bundle
+
+    bundle = payload.get("bundle")
+    rows = await _share_call(
+        session, msg_id, msg_type, lambda: settings_bundle.preview_import(bundle)
+    )
+    if rows is None:
+        return
+    await session.send_json(make_response(msg_id, msg_type, {"items": rows}))
+
+
+@handler("share.import_apply")
+async def share_import_apply(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app, settings_bundle
+
+    bundle = payload.get("bundle")
+    selection = payload.get("selection")
+    if not isinstance(selection, dict):
+        await session.send_json(
+            make_error(msg_id, msg_type, "INVALID_SELECTION", "selection must be an object")
+        )
+        return
+    outcome = await _share_call(
+        session, msg_id, msg_type, lambda: settings_bundle.apply_import(bundle, selection)
+    )
+    if outcome is None:
+        return
+    # The same event ui.settings.set sends, so every open window converges on an
+    # imported prompt the way it does on a locally edited one.
+    for delta in outcome["settings_deltas"]:
+        await app.broadcast(make_event("ui.settings_changed", {"settings": delta}))
+    if outcome["mcp_changed"]:
+        await app.mcp_manager.reload(app.mcp_settings_store.path)
+    await session.send_json(
+        make_response(msg_id, msg_type, {"ok": True, "items": outcome["results"]})
+    )
 
 
 # ── Roles registry (roles.*) ────────────────────────────────────────────────

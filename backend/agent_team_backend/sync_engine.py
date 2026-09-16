@@ -67,6 +67,23 @@ MAX_PUSH_BYTES = 768 * 1024
 KEEP_LOCAL = "local"
 KEEP_REMOTE = "remote"
 
+#: How one item's two halves stand in an inventory listing.
+STATE_IN_SYNC = "in-sync"
+STATE_LOCAL_ONLY = "local-only"
+STATE_REMOTE_ONLY = "remote-only"
+STATE_DIVERGED = "diverged"
+STATE_CONFLICT = "conflict"
+
+#: Whether a scope's cloud half could be listed at all. Kept apart from the
+#: items because "nothing is up there" and "this machine could not look" are
+#: different answers, and a pane that shows an empty list for both asks people
+#: to re-upload what is already synced.
+INVENTORY_OK = "ok"
+INVENTORY_NO_KEY = "no-key"
+INVENTORY_NOT_CONNECTED = "not-connected"
+INVENTORY_ERROR = "error"
+INVENTORY_UNKNOWN_SCOPE = "unknown-scope"
+
 
 class SyncError(Exception):
     """A sync round could not be completed. Always recoverable by retrying."""
@@ -464,11 +481,18 @@ class SyncEngine:
 
     # ── push ────────────────────────────────────────────────────────────
     async def _push(self, adapter: ScopeAdapter) -> int:
-        scope = adapter.scope
         # One hop for everything that reads disk or encrypts; what comes back is
         # ready to put on the wire.
         pending, built = await asyncio.to_thread(self._prepare_push, adapter)
+        return await self._send_all(adapter.scope, pending, built)
 
+    async def _send_all(
+        self,
+        scope: str,
+        pending: list[tuple[str, Any, str]],
+        built: list[tuple[dict[str, Any], int]],
+    ) -> int:
+        """Put prepared items on the wire, respecting both frame budgets."""
         # Two budgets, because either one alone is wrong: sixty-four tiny items
         # is a fine batch and two large ones is not, and the frame is what the
         # server actually refuses.
@@ -665,6 +689,287 @@ class SyncEngine:
         else:
             raise SyncError(f"{keep!r} is neither {KEEP_LOCAL!r} nor {KEEP_REMOTE!r}")
         self._store.clear_conflict(scope, item_id)
+
+    # ── inventory ───────────────────────────────────────────────────────
+    async def inventory(self, scope: str) -> dict[str, Any]:
+        """Line this machine's items up against the account's, item by item.
+
+        **Writes nothing.** No cursor, no agreed state, no conflict row, and the
+        adapter is only ever asked to describe itself — a person looking at the
+        two sides before deciding what to move must be able to look at a scope
+        they have not switched on and have no intention of switching on.
+
+        That also rules out ``ensure_sync_key``, which mints a key or asks a
+        paired device for one. Reading is all this does, so a machine without
+        the key says so and lists nothing rather than acquiring one to answer.
+
+        Bodies never leave: an item is reported by its fingerprint, because a
+        prompt or an MCP record is exactly the kind of thing that holds a
+        secret, and the question being asked is only "are these two the same".
+        """
+        adapter = self._adapters.get(scope)
+        if adapter is None:
+            raise SyncError(f"no adapter registered for {scope!r}")
+        if not await asyncio.to_thread(sync_keyring.has_account_key):
+            return {"scope": scope, "status": INVENTORY_NO_KEY, "items": []}
+        rows = await self._list_remote(scope)
+        items = await asyncio.to_thread(self._compare, adapter, rows)
+        return {"scope": scope, "status": INVENTORY_OK, "items": items}
+
+    async def _list_remote(self, scope: str) -> list[dict[str, Any]]:
+        """Every row the account holds for *scope*, tombstones included.
+
+        Reads from rev 0 and keeps the paging position in a local variable. The
+        stored cursor belongs to the sync round: moving it here would tell the
+        next round that rows it has never applied were already read.
+
+        Paging steps on the highest ``rev`` in the page rather than on the
+        reply's ``cursor``, which the protocol describes as the scope's current
+        maximum. Either reading pages correctly for a server that returns the
+        page's last rev; only this one also pages correctly for one that
+        returns the maximum, where stepping on the cursor would skip the rest.
+        """
+        rows: list[dict[str, Any]] = []
+        since = 0
+        while True:
+            reply = _payload(
+                await self._request(
+                    "sync.pull", {"scope": scope, "since": since, "limit": PULL_PAGE}
+                )
+            )
+            page = reply.get("items")
+            page = [r for r in page if isinstance(r, dict)] if isinstance(page, list) else []
+            rows.extend(page)
+            if not reply.get("more"):
+                break
+            highest = max((int(r.get("rev") or 0) for r in page), default=since)
+            if highest <= since:
+                # No progress and the server still says "more": stop rather than
+                # loop forever on a server that disagrees with itself.
+                log.warning("sync.pull on %s made no progress; stopping the listing", scope)
+                break
+            since = highest
+        return rows
+
+    def _compare(
+        self, adapter: ScopeAdapter, rows: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Pair the two halves up. Runs in a worker thread; reads disk freely.
+
+        An item neither side holds is left out: a tombstone whose local copy is
+        also gone is a row about nothing, and there is no answer a person could
+        give it. A tombstone the local copy outlived is kept — it reads as
+        ``local-only`` with ``deleted`` set, which is the whole story.
+        """
+        scope = adapter.scope
+        snapshot = adapter.snapshot()
+        blocked = self._store.conflict_ids(scope)
+        remote_rows = {
+            str(row.get("itemId") or ""): row for row in rows if row.get("itemId")
+        }
+        out: list[dict[str, Any]] = []
+        for item_id in sorted(set(snapshot) | set(remote_rows)):
+            local = (
+                {"present": True, "fingerprint": digest(snapshot[item_id])}
+                if item_id in snapshot
+                else None
+            )
+            remote = self._describe_remote(scope, item_id, remote_rows.get(item_id))
+            state = _item_state(item_id, local, remote, blocked)
+            if state is None:
+                continue
+            out.append({"itemId": item_id, "local": local, "remote": remote, "state": state})
+        return out
+
+    def _describe_remote(
+        self, scope: str, item_id: str, row: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        """One cloud row as the inventory reports it, or None when there is none.
+
+        ``readable`` is false for a record this machine's key will not open —
+        another device's key, or a body that was damaged in transit. Said out
+        loud rather than folded into "different", because the two call for
+        different answers and a fingerprint that could not be computed must not
+        read as one that did not match.
+        """
+        if row is None:
+            return None
+        deleted = bool(row.get("deleted"))
+        fingerprint: str | None = None
+        readable = True
+        if not deleted:
+            try:
+                fingerprint = digest(
+                    json.loads(
+                        sync_keyring.decrypt(
+                            str(row.get("body") or ""), scope=scope, item_id=item_id
+                        )
+                    )
+                )
+            except Exception as err:  # noqa: BLE001 - an unreadable record still lists
+                log.warning("the cloud copy of %s/%s did not open: %s", scope, item_id, err)
+                readable = False
+        return {
+            "present": not deleted,
+            "rev": int(row.get("rev") or 0),
+            "updatedAt": str(row.get("updatedAt") or ""),
+            "deviceId": str(row.get("deviceId") or ""),
+            "deleted": deleted,
+            "fingerprint": fingerprint,
+            "readable": readable,
+        }
+
+    # ── moving one item at a time ───────────────────────────────────────
+    async def push_items(self, scope: str, item_ids: Any) -> list[dict[str, Any]]:
+        """Send just these items, under every rule a whole push follows.
+
+        Selective, not privileged: an item the user has an unresolved conflict
+        on is still skipped, a body over the record limit is still refused, and
+        the batches still respect both frame budgets. Choosing what to send
+        changes which items go, never what the engine is willing to do.
+        """
+        adapter = self._require_adapter(scope)
+        await self._require_key()
+        wanted = _unique(item_ids)
+        blocked_before = self._store.conflict_ids(scope)
+        pending, built = await asyncio.to_thread(self._prepare_push, adapter)
+        chosen_pending = [entry for entry in pending if entry[0] in wanted]
+        chosen_built = [
+            entry for entry in built if str(entry[0].get("itemId") or "") in wanted
+        ]
+        if chosen_built:
+            await self._send_all(scope, chosen_pending, chosen_built)
+        return await asyncio.to_thread(
+            self._push_outcomes, scope, wanted, chosen_pending, chosen_built, blocked_before
+        )
+
+    def _push_outcomes(
+        self,
+        scope: str,
+        wanted: list[str],
+        pending: list[tuple[str, Any, str]],
+        built: list[tuple[dict[str, Any], int]],
+        blocked_before: set[str],
+    ) -> list[dict[str, Any]]:
+        """What became of each requested item, read back off the local record.
+
+        Read back rather than collected on the way out, because the record is
+        what the next round acts on: an item the server accepted and an item
+        whose acceptance was not written down are the same to the user and very
+        different to the engine, and only this direction can tell them apart.
+        """
+        hashes = {item_id: item_hash for item_id, _payload, item_hash in pending}
+        buildable = {str(item.get("itemId") or "") for item, _size in built}
+        states = self._store.states(scope)
+        blocked_now = self._store.conflict_ids(scope)
+        out: list[dict[str, Any]] = []
+        for item_id in wanted:
+            state = states.get(item_id)
+            if item_id in blocked_before or item_id in blocked_now:
+                result = "conflict"
+            elif item_id not in hashes:
+                result = "up-to-date" if state is not None else "unknown"
+            elif item_id not in buildable:
+                result = "too-large"
+            elif state is not None and state.synced_hash == hashes[item_id]:
+                result = "pushed"
+            else:
+                result = "failed"
+            row: dict[str, Any] = {"itemId": item_id, "result": result}
+            if result == "pushed" and state is not None:
+                row["rev"] = state.rev
+            out.append(row)
+        return out
+
+    async def pull_items(self, scope: str, item_ids: Any) -> list[dict[str, Any]]:
+        """Take just these items from the account, under a whole pull's rules.
+
+        The cursor stays where it was. This applies a few rows out of order, and
+        a cursor moved past them would tell the next round that everything below
+        it had been read — which is how one deliberate pull loses every change
+        that happened to sit beside it.
+        """
+        adapter = self._require_adapter(scope)
+        await self._require_key()
+        wanted = _unique(item_ids)
+        rows = await self._list_remote(scope)
+        by_id = {str(row.get("itemId") or ""): row for row in rows if row.get("itemId")}
+        return await asyncio.to_thread(self._apply_chosen, adapter, wanted, by_id)
+
+    def _apply_chosen(
+        self, adapter: ScopeAdapter, wanted: list[str], by_id: dict[str, dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Apply the chosen rows. Worker thread; one snapshot for the batch.
+
+        One snapshot, like ``_apply_page``: each row is a different item, so a
+        write does not change what the next comparison reads.
+        """
+        scope = adapter.scope
+        snapshot = adapter.snapshot()
+        blocked = self._store.conflict_ids(scope)
+        out: list[dict[str, Any]] = []
+        for item_id in wanted:
+            row = by_id.get(item_id)
+            if item_id in blocked:
+                out.append({"itemId": item_id, "result": "conflict"})
+            elif row is None:
+                out.append({"itemId": item_id, "result": "not-on-server"})
+            elif self._apply_one(adapter, row, snapshot, blocked):
+                out.append(
+                    {"itemId": item_id, "result": "pulled", "rev": int(row.get("rev") or 0)}
+                )
+            elif item_id in self._store.conflict_ids(scope):
+                out.append({"itemId": item_id, "result": "conflict"})
+            elif str(row.get("deviceId") or "") == self._device_id():
+                out.append({"itemId": item_id, "result": "own-write"})
+            else:
+                out.append({"itemId": item_id, "result": "skipped"})
+        return out
+
+    def _require_adapter(self, scope: str) -> ScopeAdapter:
+        adapter = self._adapters.get(scope)
+        if adapter is None:
+            raise SyncError(f"no adapter registered for {scope!r}")
+        return adapter
+
+    async def _require_key(self) -> None:
+        if not await asyncio.to_thread(sync_keyring.has_account_key):
+            raise SyncError("this machine does not hold the account sync key")
+
+
+def _item_state(
+    item_id: str,
+    local: dict[str, Any] | None,
+    remote: dict[str, Any] | None,
+    blocked: set[str],
+) -> str | None:
+    """How the two halves stand, or None for an item neither side holds.
+
+    An unreadable cloud copy counts as different rather than the same: the
+    fingerprints could not be compared, and claiming agreement on that is the
+    one answer that would let a real difference pass unnoticed.
+    """
+    if item_id in blocked:
+        return STATE_CONFLICT
+    if remote is None or not remote["present"]:
+        return STATE_LOCAL_ONLY if local else None
+    if local is None:
+        return STATE_REMOTE_ONLY
+    return (
+        STATE_IN_SYNC
+        if remote["fingerprint"] is not None and remote["fingerprint"] == local["fingerprint"]
+        else STATE_DIVERGED
+    )
+
+
+def _unique(item_ids: Any) -> list[str]:
+    """The requested ids, in the order asked for, without blanks or repeats."""
+    out: list[str] = []
+    for raw in item_ids if isinstance(item_ids, list) else []:
+        item_id = str(raw or "")
+        if item_id and item_id not in out:
+            out.append(item_id)
+    return out
 
 
 def _pinned_signing_key(device_id: str) -> str:

@@ -3290,6 +3290,120 @@ async def sync_now(scope: str = "") -> list[dict[str, Any]]:
     return await engine.sync_all()
 
 
+async def sync_inventory(scope: str = "") -> dict[str, Any]:
+    """What this machine and the account hold, side by side. Reads only.
+
+    Answers rather than raises when there is no link, for the same reason
+    ``sync_now`` does: "not connected" is an ordinary thing for a Settings pane
+    to be told, and it must not arrive looking like an empty cloud — that reads
+    as "nothing is synced" and invites somebody to upload what is already up
+    there.
+
+    The local half is left out when the link is down rather than listed on its
+    own: reaching the adapters means building the engine, which belongs to the
+    link. ``share.inventory`` already lists this machine's own items offline.
+    """
+    from . import sync_engine as engine_mod, sync_scopes
+
+    enabled = await asyncio.to_thread(sync_scopes.enabled_scopes)
+    link = _link
+    connected = link is not None and link._authenticated  # noqa: SLF001 - same module
+    wanted = [scope] if scope else list(engine_mod.SCOPES)
+    scopes: dict[str, Any] = {}
+    for name in wanted:
+        if name not in engine_mod.SCOPES:
+            scopes[name] = {
+                "scope": name,
+                "status": engine_mod.INVENTORY_UNKNOWN_SCOPE,
+                "items": [],
+            }
+        elif not connected or link is None:
+            scopes[name] = {
+                "scope": name,
+                "status": engine_mod.INVENTORY_NOT_CONNECTED,
+                "items": [],
+            }
+        else:
+            try:
+                scopes[name] = await link.sync_engine().inventory(name)
+            except Exception as err:  # noqa: BLE001 - one bad scope must still list
+                log.warning("the inventory of %s could not be read: %s", name, err)
+                scopes[name] = {
+                    "scope": name,
+                    "status": engine_mod.INVENTORY_ERROR,
+                    "error": str(err),
+                    "items": [],
+                }
+    return {
+        "status": engine_mod.INVENTORY_OK if connected else engine_mod.INVENTORY_NOT_CONNECTED,
+        "scopes": scopes,
+        "devices": _inventory_devices(scopes),
+        "scopeEnabled": enabled,
+    }
+
+
+def _inventory_devices(scopes: dict[str, Any]) -> list[dict[str, Any]]:
+    """The devices the listed cloud rows were written by, newest write first.
+
+    ``lastWriteAt`` is the newest ``updatedAt`` this account's rows carry for
+    that device — when it last *wrote*, not when it was last online. The two
+    are named apart because a machine that has been on all week and changed
+    nothing would otherwise look like one that went away in March.
+
+    ``deviceName`` is whatever the session directory happens to know, which
+    today is nothing: the server does not put a name on session rows, and the
+    directory only lists a device that has a live session. A machine that wrote
+    records and left is therefore named by its id — which is what addresses it
+    anyway. Filled in for real once the server can be asked.
+    """
+    names = {
+        str(row.get("deviceId") or ""): str(row.get("deviceName") or "")
+        for row in remote_roster.list_devices()
+    }
+    latest: dict[str, str] = {}
+    for scope_row in scopes.values():
+        for item in scope_row.get("items") or []:
+            remote = item.get("remote")
+            if not isinstance(remote, dict):
+                continue
+            device_id = str(remote.get("deviceId") or "")
+            written_at = str(remote.get("updatedAt") or "")
+            if device_id and written_at > latest.get(device_id, ""):
+                latest[device_id] = written_at
+    return sorted(
+        (
+            {
+                "deviceId": device_id,
+                "deviceName": names.get(device_id, ""),
+                "lastWriteAt": written_at,
+            }
+            for device_id, written_at in latest.items()
+        ),
+        key=lambda row: row["lastWriteAt"],
+        reverse=True,
+    )
+
+
+async def sync_push_items(scope: str, item_ids: Any) -> list[dict[str, Any]]:
+    """Send the chosen items of one scope and report what became of each."""
+    link = _link
+    if link is None or not link._authenticated:  # noqa: SLF001 - same module
+        raise ConnectionError("the navide-server link is not connected")
+    if not await link.ensure_sync_key():
+        raise ConnectionError("this machine does not hold the account sync key")
+    return await link.sync_engine().push_items(scope, item_ids)
+
+
+async def sync_pull_items(scope: str, item_ids: Any) -> list[dict[str, Any]]:
+    """Take the chosen items of one scope and report what became of each."""
+    link = _link
+    if link is None or not link._authenticated:  # noqa: SLF001 - same module
+        raise ConnectionError("the navide-server link is not connected")
+    if not await link.ensure_sync_key():
+        raise ConnectionError("this machine does not hold the account sync key")
+    return await link.sync_engine().pull_items(scope, item_ids)
+
+
 def sync_conflicts(scope: str = "") -> list[dict[str, Any]]:
     """Unresolved conflicts, readable whether or not the link is up."""
     from . import app
