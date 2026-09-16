@@ -145,9 +145,12 @@ def agent_targets() -> list[dict[str, Any]]:
     CLI has MCP -- a native config proves it -- but Navide has no wiring for
     it yet), ``unsupported`` (no MCP mechanism to wire). ``reflects`` says
     whether this scan can read that CLI's own servers, which is a separate
-    question from whether Navide can deliver to it.
+    question from whether Navide can deliver to it. ``blocked`` names why a
+    ``wired`` vendor still spawns unwired on *this* machine (a home shim
+    without symlink privilege); absent when nothing stands in the way.
     """
     from .cli_vendors.registry import VENDORS
+    from .mcp_server import pane_home
 
     reflected = {source.agent for source in NATIVE_SOURCES}
     agents: list[dict[str, Any]] = []
@@ -159,14 +162,16 @@ def agent_targets() -> list[dict[str, Any]]:
             state = "planned"
         else:
             state = "unsupported"
-        agents.append(
-            {
-                "key": key,
-                "label": spec.label,
-                "state": state,
-                "reflects": key in reflected,
-            }
-        )
+        agent: dict[str, Any] = {
+            "key": key,
+            "label": spec.label,
+            "state": state,
+            "reflects": key in reflected,
+        }
+        blocked = pane_home.unavailable_reason(key)
+        if blocked is not None:
+            agent["blocked"] = blocked
+        agents.append(agent)
     return agents
 
 

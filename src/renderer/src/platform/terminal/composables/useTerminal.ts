@@ -4096,6 +4096,9 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
         const duration = typeof probe.duration_ms === 'number' ? `, ${probe.duration_ms}ms` : ''
         term.writeln(`\x1b[2m[startup probe] ${probe.binary_path}${version}${duration}\x1b[0m`)
       }
+      for (const warning of resp.payload.wiring_warnings ?? []) {
+        term.writeln(`\x1b[33m[mcp] ${warning}\x1b[0m`)
+      }
       resizeCtrl.applyFit()  // sync the real size to the backend on first paint
       // The width measured above can still be a mid-layout snapshot (e.g. this
       // spawn's own pane is still settling into a freshly reflowed grid) that

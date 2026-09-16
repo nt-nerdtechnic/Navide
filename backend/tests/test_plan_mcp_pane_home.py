@@ -122,7 +122,8 @@ def test_antigravity_shim_shims_home_and_uses_server_url(home: Path) -> None:
     prepared = pane_home.prepare("antigravity", "p1", URL, SERVER)
     assert prepared is not None
     env_var, root = prepared
-    assert env_var == "HOME"  # no config-dir variable exists for this CLI
+    # No config-dir variable exists for this CLI: the home itself is relocated.
+    assert env_var == osplat.paths.home_env_var()
     assert (Path(root) / ".zshrc").is_symlink()  # shell config still the user's
     # url/httpUrl are rejected as legacy fields; a remote server is serverUrl.
     assert _load(_config(home, "antigravity", "p1")) == {
@@ -492,4 +493,47 @@ def test_no_symlinks_means_no_shim_and_no_files(home: Path, monkeypatch: pytest.
     (home / ".claude").mkdir()
     monkeypatch.setattr(osplat.paths, "symlinks_available", lambda: False)
     assert pane_home.prepare("claude", "p1", URL, SERVER) is None
+    assert not (home / pane_home.PANES_DIR_NAME).exists()
+
+
+def test_no_symlinks_tells_the_caller_why_and_leaves_env_alone(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #109: the pane looked healthy while every navide tool was missing.
+    The refusal now comes with a reason the spawn can print into the pane."""
+    monkeypatch.setattr(osplat.paths, "symlinks_available", lambda: False)
+    env: dict[str, str] = {}
+    warnings: list[str] = []
+    assert plan_mcp_wiring.wire_command(
+        "antigravity", "agy", 4567, "p1", env, warnings=warnings
+    ) == "agy"
+    assert env == {}
+    assert not (home / pane_home.PANES_DIR_NAME).exists()
+    assert len(warnings) == 1
+    assert "Developer Mode" in warnings[0]
+    assert pane_home.unavailable_reason("antigravity") is not None
+    assert pane_home.unavailable_reason("claude") is None  # no shim to block
+
+
+def test_home_shim_is_spelled_the_platform_way(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Issue #109: agy resolves its config root from USERPROFILE on Windows and
+    ignores HOME. A relocated home is handed over under both names; a CLI with
+    its own variable is unaffected."""
+    monkeypatch.setattr(osplat.paths, "home_env_var", lambda: "USERPROFILE")
+    (home / ".gemini").mkdir()
+    env: dict[str, str] = {}
+    plan_mcp_wiring.wire_command("antigravity", "agy", 4567, "p1", env)
+    root = str(home / pane_home.PANES_DIR_NAME / "antigravity" / "p1")
+    assert env == {"USERPROFILE": root, "HOME": root}
+    assert pane_home.SHIM_SPECS["antigravity"].env_var == "USERPROFILE"
+    assert pane_home.SHIM_SPECS["kimi"].spawn_env("/x") == {"KIMI_CODE_HOME": "/x"}
+
+
+def test_preset_platform_home_var_skips_the_shim(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The already-set check reads the same variable the shim would set, so an
+    account-isolated USERPROFILE is respected on Windows the way HOME is on POSIX."""
+    monkeypatch.setattr(osplat.paths, "home_env_var", lambda: "USERPROFILE")
+    env = {"USERPROFILE": "C:\\isolated"}
+    plan_mcp_wiring.wire_command("antigravity", "agy", 4567, "p1", env)
+    assert env == {"USERPROFILE": "C:\\isolated"}
     assert not (home / pane_home.PANES_DIR_NAME).exists()

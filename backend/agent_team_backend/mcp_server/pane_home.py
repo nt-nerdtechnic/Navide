@@ -108,7 +108,20 @@ class ShimSpec:
 
     @property
     def env_var(self) -> str:
-        return self.mcp.config_dir_env or "HOME"
+        """The variable the CLI reads for the directory: its own, or the
+        platform's spelling of the home (``USERPROFILE`` on Windows — agy
+        resolves its config root from it and ignores ``HOME``)."""
+        return self.mcp.config_dir_env or osplat.paths.home_env_var()
+
+    def spawn_env(self, root: str) -> dict[str, str]:
+        """Every variable handing ``root`` to the CLI. A relocated home is
+        spelled both ways: the platform's own for CLIs that resolve the home
+        natively, and ``HOME`` for the Node CLIs that consult it first (one key
+        on POSIX, where the two coincide)."""
+        env = {self.env_var: root}
+        if self.shims_home:
+            env["HOME"] = root
+        return env
 
 
 # Only the mirror's own knobs. The vendors are whichever ones the registry says
@@ -152,6 +165,25 @@ def real_home() -> Path:
 def panes_root() -> Path:
     """Parent of every shim home: ``~/.navide-panes/<agent>/<pane>``."""
     return real_home() / PANES_DIR_NAME
+
+
+def unavailable_reason(agent_key: str) -> str | None:
+    """Why no shim can be built for ``agent_key`` on this machine, or None.
+
+    A shim is a tree of links. Without the privilege (Windows before Developer
+    Mode) every entry would fail one by one, so the answer is known before any
+    filesystem work — and the caller can tell the pane, whose only other trace
+    of the degradation is a backend log line.
+    """
+    if agent_key not in SHIM_SPECS:
+        return None
+    if not osplat.paths.symlinks_available():
+        return (
+            "symbolic links are not available to this process, so the per-pane "
+            f"{agent_key} home cannot be built; enable Windows Developer Mode "
+            "(Settings > For developers) or run Navide elevated"
+        )
+    return None
 
 
 def shim_root(agent_key: str, pane_id: str) -> Path | None:
@@ -395,10 +427,9 @@ def prepare(
     root = shim_root(agent_key, pane_id)
     if spec is None or root is None:
         return None
-    if not osplat.paths.symlinks_available():
-        # A shim is a tree of links. Without the privilege (Windows before
-        # Developer Mode) every entry would fail one by one; one line, unwired.
-        log.warning("symbolic links unavailable: %s pane %s spawns unwired", agent_key, pane_id)
+    reason = unavailable_reason(agent_key)
+    if reason is not None:
+        log.warning("%s pane %s spawns unwired: %s", agent_key, pane_id, reason)
         return None
     home = real_home()
     if PANES_DIR_NAME in home.parts:

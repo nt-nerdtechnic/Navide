@@ -42,6 +42,8 @@ export interface TerminalCreateResult {
   terminal_session_id: string
   pid: number
   startup_probe?: TerminalStartupProbe | null
+  /** Why this machine could not wire the pane's MCP, one line each; absent when it could. */
+  wiring_warnings?: string[]
 }
 
 export interface TerminalOutputEvent {

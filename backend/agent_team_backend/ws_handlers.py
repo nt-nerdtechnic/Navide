@@ -5887,6 +5887,9 @@ async def _terminal_create_impl(
                 Path(env.get("CODEX_HOME") or app.codex_home_manager.real_home),
                 app.backend_port_file(), hook_auth.header_file(),
             )
+    # Lines the pane prints at startup when this machine cannot wire it (see
+    # wire_command): the only other trace is a backend log the user never sees.
+    wiring_warnings: list[str] = []
     if not login_profile_id:
         # Run plugin-registered spawn transformers over the command (e.g. the
         # builtin navide.plans plugin appends Plan-MCP flags for claude/codex);
@@ -5907,6 +5910,7 @@ async def _terminal_create_impl(
             str(payload.get("pane_id") or ""),
             env,
             str(payload.get("cwd") or ""),
+            warnings=wiring_warnings,
         )
         payload["command"] = await asyncio.to_thread(
             app.plugin_wiring.apply_spawn_wiring,
@@ -6154,6 +6158,8 @@ async def _terminal_create_impl(
         "startup_probe": startup_probe,
         "create_generation": generation,
     }
+    if wiring_warnings:
+        response_payload["wiring_warnings"] = wiring_warnings
     await session.send_json(make_response(msg_id, msg_type, response_payload))
     if session.dead or transaction["cancelled"]:
         raise _TerminalCreateCancelled

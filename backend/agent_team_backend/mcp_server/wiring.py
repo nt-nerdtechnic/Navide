@@ -408,6 +408,7 @@ def wire_command(
     cwd: str = "",
     *,
     claude_config: Path | None = None,
+    warnings: list[str] | None = None,
 ) -> Any:
     """Point a pane spawn at the Plan MCP endpoint, the way its CLI takes it.
 
@@ -428,6 +429,9 @@ def wire_command(
     configured by variable; None (or a variable already set) leaves it alone.
     ``cwd`` is the pane's working directory, needed only for a project config —
     without it the file cannot be located and the pane goes unwired.
+    ``warnings``, when given, collects a line for the pane whenever this
+    machine cannot wire it at all — the pane otherwise looks healthy while
+    every navide tool is missing from it.
     """
     if port is None:
         return command
@@ -469,6 +473,12 @@ def wire_command(
         # so a spawn we are going to leave alone does no filesystem work at all.
         shim = pane_home.SHIM_SPECS[agent_key]
         if pane_id and env is not None and shim.env_var not in env:
+            reason = pane_home.unavailable_reason(agent_key)
+            if reason is not None:
+                log.warning("%s pane %s spawns unwired: %s", agent_key, pane_id, reason)
+                if warnings is not None:
+                    warnings.append(f"navide MCP not wired: {reason}")
+                return command
             prepared = pane_home.prepare(
                 agent_key,
                 pane_id,
@@ -478,8 +488,8 @@ def wire_command(
                 LEGACY_SERVER_NAMES,
             )
             if prepared is not None:
-                env_var, root = prepared
-                env[env_var] = root
+                _, root = prepared
+                env.update(shim.spawn_env(root))
     return command
 
 

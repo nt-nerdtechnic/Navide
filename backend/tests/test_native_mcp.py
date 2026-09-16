@@ -4,6 +4,8 @@ import json
 import os
 from pathlib import Path
 
+import pytest
+
 from agent_team_backend import native_mcp
 from agent_team_backend.cli_vendors.registry import VENDORS
 
@@ -282,6 +284,22 @@ def test_agent_targets_separate_off_from_impossible() -> None:
     # aider has no MCP mechanism at all.
     assert by_key["aider"]["state"] == "unsupported"
     assert by_key["aider"]["reflects"] is False
+
+
+def test_agent_targets_name_what_blocks_a_wired_vendor_here(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Issue #109: `wired` is what the registry promises; without symlink
+    privilege the home-shim vendors still spawn unwired, and the listing says so."""
+    from agent_team_backend import osplat
+
+    monkeypatch.setattr(osplat.paths, "symlinks_available", lambda: False)
+    by_key = {agent["key"]: agent for agent in native_mcp.agent_targets()}
+    assert by_key["antigravity"]["state"] == "wired"
+    assert "Developer Mode" in by_key["antigravity"]["blocked"]
+    assert "blocked" not in by_key["claude"]  # wired by flag, no shim involved
+
+    monkeypatch.setattr(osplat.paths, "symlinks_available", lambda: True)
+    by_key = {agent["key"]: agent for agent in native_mcp.agent_targets()}
+    assert "blocked" not in by_key["antigravity"]
 def test_credentials_inside_a_url_are_redacted(tmp_path: Path) -> None:
     """A URL carries secrets in two places; neither may leave the backend."""
     _write(
