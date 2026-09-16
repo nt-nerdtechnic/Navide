@@ -504,6 +504,24 @@ describe('ControlPane – workspace sections', () => {
     expect(wrapper.emitted('close-workspace')?.[0]).toEqual(['/Users/me/Desktop/Other'])
   })
 
+  it('offers a close that leaves the CLIs running, beside the one that ends them', async () => {
+    // Two rows under the same guard. The plain one only drops the sidebar
+    // entry — the panes stay alive in the backend for a reopen — so it is the
+    // non-danger row and emits its own event; the danger row is the teardown.
+    const adopted = current({ path: '/Users/me/Desktop/Other', label: 'Other' })
+    wrapper = mountWith({ workspace: '/Users/me/Desktop/Agent-Team', workspaces: [current(), adopted] })
+    await wrapper.findAll('.ws-head--current')[1].trigger('contextmenu')
+    const rows = wrapper.findAll('.ws-ctx-opt')
+    // $t is mocked to return the key.
+    const keep = rows.find((r) => r.text() === 'action.close-workspace')
+    expect(keep?.exists()).toBe(true)
+    expect(keep!.classes()).not.toContain('danger')
+    expect(wrapper.find('.ws-ctx-opt.danger').text()).toBe('action.close-workspace-and-panes')
+    await keep!.trigger('click')
+    expect(wrapper.emitted('close-workspace-keep-panes')?.[0]).toEqual(['/Users/me/Desktop/Other'])
+    expect(wrapper.emitted('close-workspace')).toBeUndefined()
+  })
+
   it('reveals a workspace folder from that menu', async () => {
     // The titlebar button that used to do this is gone.
     wrapper = mountWith({ workspaces: [current()] })

@@ -1022,7 +1022,11 @@ const emit = defineEmits<{
   /** Open a new agent in a workspace that is not this window's. */
   (e: 'open-workspace-picker'): void
   (e: 'switch-to-workspace', path: string): void
+  /** End every CLI in the workspace and let go of it. */
   (e: 'close-workspace', path: string): void
+  /** Let go of the workspace and leave its CLIs running: the sidebar row goes,
+   *  the backend keeps the panes, and reopening picks them up alive. */
+  (e: 'close-workspace-keep-panes', path: string): void
   (e: 'detach-workspace', path: string, x: number, y: number): void
   (e: 'reorder-workspace', fromPath: string, toPath: string): void
   (e: 'reveal-workspace-folder', path: string): void
@@ -2229,12 +2233,13 @@ function startWorkspaceRenameFromMenu(): void {
   startWorkspaceRename(m.path)
 }
 
-function wsMenuAction(kind: 'reveal' | 'copy' | 'close'): void {
+function wsMenuAction(kind: 'reveal' | 'copy' | 'close' | 'close-keep-panes'): void {
   const m = wsMenu.value
   if (!m) return
   closeWsMenu()
   if (kind === 'reveal') emit('reveal-workspace-folder', m.path)
   else if (kind === 'copy') void navigator.clipboard?.writeText(m.path)
+  else if (kind === 'close-keep-panes') emit('close-workspace-keep-panes', m.path)
   else emit('close-workspace', m.path)
 }
 // Fixed, not absolute: the pane list scrolls under `overflow-y: auto`, which
@@ -3648,8 +3653,14 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
              instead. -->
         <template v-if="wsMenu.canClose">
           <div class="ws-add-div"></div>
-          <button class="ws-ctx-opt danger" @click="wsMenuAction('close')">
+          <!-- Two ways to let go. The plain row only drops the sidebar entry
+               and leaves every CLI running for a later reopen; the danger row
+               is the one that ends them. -->
+          <button class="ws-ctx-opt" @click="wsMenuAction('close-keep-panes')">
             {{ $t('action.close-workspace') }}
+          </button>
+          <button class="ws-ctx-opt danger" @click="wsMenuAction('close')">
+            {{ $t('action.close-workspace-and-panes') }}
           </button>
         </template>
       </div>

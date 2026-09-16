@@ -15438,9 +15438,10 @@ async function onRenameWorkspace(path: string, name: string): Promise<void> {
   )
 }
 
-/** Take a workspace back out of this window.
+/** Take a workspace back out of this window, ending its panes.
  *
- *  Its panes go with it — they were started in it and belong to it, and
+ *  The sidebar's "Close workspace and its panes"; the plain row is
+ *  closeWorkspaceKeepPanes. Its panes go with it — they were started in it and belong to it, and
  *  leaving them behind would put panes in the list with no heading to sit
  *  under. Their CLIs end, but their records do not: reopening the workspace
  *  brings each pane back as a click-to-resume card, which is what the teardown
@@ -15649,6 +15650,9 @@ async function detachWorkspace(path: string, x: number, y: number): Promise<void
     await switchToWorkspace(fallback)
     if (normWs(currentWorkspace.value) === normWs(path)) return
   }
+  // The panes are handed over, not left behind: still listed here they would
+  // be drawn on this window's stage next to the project on screen.
+  dropWorkspacePanes(path)
   workspaceOrder.value = workspaceOrder.value.filter((w) => normWs(w) !== normWs(path))
   _forgetRunGroups(path)
   const next = new Set(collapsedWorkspaces.value)
@@ -15659,6 +15663,68 @@ async function detachWorkspace(path: string, x: number, y: number): Promise<void
   persistExtraWorkspaces()
   const bounds = { x: Math.round(x), y: Math.round(y), width: 1200, height: 800 }
   await window.agentTeam?.detachWorkspace?.({ workspacePath: path, bounds })
+}
+
+/** Drop a workspace's panes from THIS window without killing them.
+ *
+ *  The workspace-scoped twin of handleGroupDetached, for the two ways a window
+ *  lets go of a workspace while its CLIs keep running: detaching it into its
+ *  own window, and the sidebar's plain "Close workspace". Both need it for the
+ *  same reason — panesInView only holds back the workspaces the window still
+ *  HOLDS, so panes of one it just let go of would surface on the stage of
+ *  whatever project is on screen, still listed and still drawn, with their
+ *  output gone to whichever window reattaches first. onScopeDispose keeps the
+ *  backend PTYs alive, and the persisted session id with them, so the reopen
+ *  or the new window reattaches rather than respawns. */
+function dropWorkspacePanes(path: string): void {
+  for (const p of panes.value) {
+    if (normWs(p.workspacePath) !== normWs(path)) continue
+    delete paneRefs[p.id]
+    // Keep the persisted name: the pane re-registers where it comes back.
+    unregisterPaneMessaging(p.id, { keepPersisted: true })
+    // Its pending-badge and mute entries here would otherwise keep counting
+    // for a pane nobody can see.
+    sysNotify.forgetPane(p.id)
+    setPaneMuted(p.id, false)
+  }
+  panes.value = panes.value.filter((p) => normWs(p.workspacePath) !== normWs(path))
+  syncViews()
+}
+
+/** Take a workspace out of this window and leave its CLIs running.
+ *
+ *  The sidebar's plain "Close workspace", next to closeWorkspace's "and its
+ *  panes": the row goes, nothing is killed, and reopening the workspace finds
+ *  the same PTYs alive in the backend — each pane comes back as a card whose
+ *  first click reattaches rather than respawns. The same hand-over detach does
+ *  for a new window, minus the window — see dropWorkspacePanes for why the
+ *  panes must still leave this window's list. */
+async function closeWorkspaceKeepPanes(path: string): Promise<void> {
+  if (!path) return
+  if (!workspaceOrder.value.some((w) => normWs(w) === normWs(path))) return
+  // Same landing rule as closeWorkspace: step off the one on screen first, and
+  // give up if there is nowhere to go or the switch declined.
+  if (normWs(path) === normWs(currentWorkspace.value)) {
+    const land = workspaceOrder.value.find((w) => normWs(w) !== normWs(path))
+    if (!land) return
+    await switchToWorkspace(land)
+    if (normWs(currentWorkspace.value) !== normWs(land)) return
+  }
+  dropWorkspacePanes(path)
+  // A run paused in this workspace would keep restoreBlockedByRun refusing the
+  // reopen these live panes exist for — the same reset closeWorkspace does,
+  // for the same reason: the panes are no longer this window's to duplicate.
+  if (pipeline.state === 'aborted' && normWs(pipelineRunWorkspace) === normWs(path)) {
+    pipeline.state = 'idle'
+    pipeline.workspacePath = ''
+    pipelineRunWorkspace = ''
+  }
+  workspaceOrder.value = workspaceOrder.value.filter((w) => normWs(w) !== normWs(path))
+  persistExtraWorkspaces()
+  _forgetRunGroups(path)
+  const next = new Set(collapsedWorkspaces.value)
+  next.delete(path)
+  collapsedWorkspaces.value = next
 }
 
 /** Reveal a workspace's folder — the titlebar button that used to do this is
@@ -17521,6 +17587,7 @@ function paneIsCommander(p: ActivePane): boolean {
       @open-workspace-picker="workspacePickerOpen = true"
       @switch-to-workspace="switchToWorkspace"
       @close-workspace="closeWorkspace"
+      @close-workspace-keep-panes="closeWorkspaceKeepPanes"
       @detach-workspace="detachWorkspace"
       @reorder-workspace="reorderWorkspace"
       @reveal-workspace-folder="revealWorkspaceFolder"

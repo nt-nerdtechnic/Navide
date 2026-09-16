@@ -161,8 +161,9 @@ describe('closing a workspace ends the run its panes belonged to', () => {
     // Written next to each 'running' transition and nowhere else, or it stops
     // naming the run and the gate starts answering about the wrong project.
     const writes = appSource.match(/(?<!let )pipelineRunWorkspace = /g) ?? []
-    // 2 starts (start + resume), 2 clears (pipeline reset, workspace close).
-    expect(writes.length).toBe(4)
+    // 2 starts (start + resume), 3 clears (pipeline reset, workspace close,
+    // workspace close that keeps its panes).
+    expect(writes.length).toBe(5)
     expect(appSource).toContain("let pipelineRunWorkspace = ''")
     expect(appSource).toContain("pipelineRunWorkspace = resumeWorkspacePath\n  pipeline.stageIndex = info.nextStageIndex\n  pipeline.state = 'running'")
     expect(appSource).toContain("pipelineRunWorkspace = payload.workspacePath\n  pipeline.stageIndex = 0\n  pipeline.state = 'running'")
