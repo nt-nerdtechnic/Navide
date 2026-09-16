@@ -807,3 +807,17 @@ jobs:
           # --clobber replaces the x64 job's latest.yml with the merged one it
           # was built from; this job runs after that one, so there is no race.
           gh release upload "${GITHUB_REF_NAME}" "${assets[@]}" --clobber
+
+  mirror-release:
+    # Runs last, after every platform has joined the GitHub Release, and copies
+    # the finished release to the S3 bucket behind dl.navide.dev (the steps
+    # live in mirror.yml so a past release can be backfilled by hand). Reading
+    # the assets back from GitHub rather than from each job's dist-release
+    # means the mirror carries exactly what GitHub serves — including the
+    # Windows latest.yml after the arm64 job merged itself into it.
+    if: github.event_name == 'push' && github.ref_name != 'v0.1.40' && github.ref_name != 'v0.1.41' && github.ref_name != 'v0.1.49'
+    needs: [release-macos-arm64, release-linux-x64, release-windows-arm64]
+    uses: ./.github/workflows/mirror.yml
+    with:
+      tag: ${{ github.ref_name }}
+    secrets: inherit
