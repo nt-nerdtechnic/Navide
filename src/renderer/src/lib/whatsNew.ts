@@ -68,6 +68,56 @@ export const WHATS_NEW_CHROME = {
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    version: '0.2.4',
+    title: {
+      'zh-TW': 'Token Monitor 與額度週期、設定分享、下載鏡像',
+      'en-US': 'Token Monitor & Quota Cycles, Settings Sharing, Download Mirror',
+    },
+    highlights: [
+      {
+        'zh-TW': '新增「視窗 → Token Monitor」獨立視窗：每輪 token 用量與模型分佈、5 小時／月／年額度週期彙總，以及 14／30／90 天的平均與中位數。額度觀測只讀既有輪詢資料，不會多送任何請求。',
+        'en-US': 'New Window → Token Monitor: per-turn token usage and model mix, 5-hour / monthly / yearly quota cycles, and 14/30/90-day averages and medians. Quota observations reuse existing polls and send no extra provider requests.',
+      },
+      {
+        'zh-TW': '新增「設定 → Sharing」：把設定打包匯出成一份檔案帶到另一台機器，或用雲端分享碼交給別人；分享前會標出可能夾帶憑證的欄位，並列出已配對的裝置。',
+        'en-US': 'New Settings → Sharing: export your settings as a bundle to carry to another machine, or hand them over with a cloud share code. Fields that may carry a token are flagged before anything leaves, and paired devices are listed.',
+      },
+      {
+        'zh-TW': '關閉工作區時可選擇保留 CLI 繼續在背景執行：右鍵選單分成「關閉工作區」與「關閉工作區與 CLI 視窗」，關掉畫面不再等於砍掉正在跑的 agent。',
+        'en-US': 'Closing a workspace can now leave its CLI panes running: the context menu separates "close workspace" from "close workspace and its CLI panes", so putting a project away no longer kills the agents working in it.',
+      },
+      {
+        'zh-TW': '下載改走鏡像 dl.navide.dev：GitHub 載點連不上或太慢時，官網會自動改用鏡像，App 內更新也會在 GitHub 失敗後改走鏡像重試一次。',
+        'en-US': 'Downloads now have a mirror at dl.navide.dev: the website switches to it automatically when GitHub is unreachable or slow, and the in-app updater retries there after a network failure on GitHub.',
+      },
+      {
+        'zh-TW': '終端機輸入在 CLI 大量輸出時不再卡住；工作區側邊欄支援子樹摺疊；Codex 面板重啟後能正確接回原本的對話。',
+        'en-US': 'Terminal input no longer stalls while a CLI floods the pane with output; the workspace sidebar folds subtrees; and Codex panes reconnect to their original conversation after a restart.',
+      },
+    ],
+  },
+  {
+    version: '0.2.3',
+    title: {
+      'zh-TW': '四平台同一版本、Windows ARM64 原生版',
+      'en-US': 'One Build for Four Platforms, Native Windows ARM64',
+    },
+    highlights: [
+      {
+        'zh-TW': 'macOS、Windows x64、Windows ARM64 與 Linux x64 首次由同一個 commit 出貨；Windows on Arm 有了原生安裝檔，不再靠模擬執行。',
+        'en-US': 'macOS, Windows x64, Windows ARM64 and Linux x64 ship from one commit for the first time, and Windows on Arm gets a native installer instead of running emulated.',
+      },
+      {
+        'zh-TW': '修正終端機面板在分析器輪詢期間逾時的問題（外連 TLS 內容改為只建一次且不佔用事件迴圈）。',
+        'en-US': 'Fixed terminal panes timing out while the analyzer polled: the outbound TLS context is now built once, off the event loop.',
+      },
+      {
+        'zh-TW': 'MCP 面板可接續既有的 CLI 對話；側邊欄拖放會建立面板血緣關係。',
+        'en-US': 'MCP panes can resume an existing CLI conversation, and sidebar drag-and-drop assigns pane lineage.',
+      },
+    ],
+  },
+  {
     version: '0.2.2',
     title: {
       'zh-TW': 'Windows 與 Linux 跨平台支援、Prompt Skills 自訂圖示與工作區別名',

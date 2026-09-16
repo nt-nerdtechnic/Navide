@@ -4,11 +4,16 @@ All notable released changes to Navide will be documented in this file. The form
 
 ## [Unreleased]
 
+## [0.2.4] — 2026-09-17 — signed release
+
 ### Fixed
 
 - Persist detected session identities before UI notification and preserve them across history registration and later snapshots; allow loading more History entries after an empty search and rerun content search for newly loaded entries.
 - Bind Codex sessions to their originating pane using verified resume IDs and launch-scoped first-turn hooks; preserve hook trust and marker fallback, and skip redundant markers when a session is already bound.
 - Hold the session marker while a keystroke-only startup dialog (Codex **Hooks need review**) is on screen instead of pasting into it, and type the marker into panes that a restart reopened as a fresh conversation; both cases left the pane without a resume id, so History showed no **Resume** button for it.
+- Keep the terminal responsive while a CLI floods a pane with output: PTY input is no longer blocked behind the flood, and the reader pauses safely when a write is blocked.
+- Wire per-pane home shims on Windows for MCP, and surface panes that could not be wired instead of failing silently.
+- Keep older History pages reachable after a search, and refine tab and terminal styling.
 
 ### Added
 
@@ -16,6 +21,13 @@ All notable released changes to Navide will be documented in this file. The form
 - Add **Window → Token Monitor**, a separate window for local Claude turn history, model filtering, per-turn trends, and average/median usage over 14, 30, or 90 days. Display incomplete scan coverage and unknown account attribution explicitly; keep the existing Turn Stats modal.
 - Keep local quota observations for the active Claude account slot using existing usage polls, with bounded retention and no extra provider requests. Quota observations are separate from transcript usage and do not estimate an official token allowance.
 - Add a **Credentials** cloud-sync section (off by default) that carries portable CLI credentials pasted in **Settings → Accounts** to your other devices as ciphertext under the account sync key: random item ids, no tombstone by absence (removal stays local), sealed conflict rows, a round that fails rather than skips an unreadable record, and a cursor that waits for a key another device has not handed over yet. Accounts cards gain a per-credential cloud line, one-click use of a credential pasted elsewhere, and cards for credentials imported into named accounts; Settings → Sync shows the sync key id and can rotate it (records are re-sealed and paired devices receive the new key) or adopt a key from before accounts were bound. Physical two-device acceptance and vendor billing checks are pending.
+- Add a **Quota Ledger** behind the token views: per-account quota cycles (the rolling 5-hour window, plus monthly and yearly aggregates), how often a cycle ran out, and which account each pane was bound to over time. A new **Quota Cycles** view charts them, and Turn Stats can be filtered by account and shows the CLI version each turn ran on.
+- Add a per-turn token usage modal (**Turn Stats**) reachable from the menu and from the token panel, with session turn parsing behind it.
+- Add **Settings → Sharing**: export the settings bundle to a file and import it on another machine, or hand it over with a cloud share code that works across accounts. Fields that may carry a credential are flagged before anything leaves the machine, and the pane lists the devices currently paired to the account.
+- Closing a workspace can leave its CLI panes running: the sidebar context menu separates **Close workspace** from **Close workspace and its CLI panes**, resumable pane records survive the close, and the confirmation dialog says which one is about to happen. Pipeline slots are retired by pane id on close, and rows show how many descendants a pane has.
+- Fold workspace subtrees in the sidebar, and collapse the per-row rebuild-all action into the row's overflow menu.
+- Add `manual_pane.release_pty`, which ends a pane's process while keeping its record so the pane can be restored later.
+- Report the cached vendor quota and the launch identity in `cli_get_status`.
 
 ## [0.2.3] — 2026-09-15 — signed release
 
