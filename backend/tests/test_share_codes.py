@@ -69,20 +69,57 @@ def test_dashed_share_id_is_normalized():
     assert share_codes.decode_share_code(share_codes.encode_share_code(dashed, key))[0] == SHARE_ID
 
 
-def test_one_wrong_character_is_caught_by_the_checksum():
-    """Every single-character substitution, not a sampled one."""
-    code = share_codes.encode_share_code(SHARE_ID, share_codes.new_key())
-    body = code[len("NVD-") :].replace("-", "")
-    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
 
+
+def _substitution_misses(key: bytes) -> int:
+    """How many single-character substitutions of this code decode anyway."""
+    code = share_codes.encode_share_code(SHARE_ID, key)
+    body = code[len("NVD-") :].replace("-", "")
+    missed = 0
     for index, original in enumerate(body):
-        for replacement in alphabet:
+        for replacement in _ALPHABET:
             if replacement == original:
                 continue
             typo = "NVD-" + body[:index] + replacement + body[index + 1 :]
-            with pytest.raises(share_codes.ShareCodeError) as caught:
+            try:
                 share_codes.decode_share_code(typo)
-            assert caught.value.code in {"SHARE_CODE_CHECKSUM", "BAD_SHARE_CODE"}
+            except share_codes.ShareCodeError as err:
+                assert err.code in {"SHARE_CODE_CHECKSUM", "BAD_SHARE_CODE"}
+            else:
+                missed += 1
+    return missed
+
+
+def test_a_mistyped_character_is_caught_about_as_often_as_the_checksum_allows():
+    """The checksum is two bytes, so "every typo is caught" is not true and a
+    test asserting it fails for roughly one code in twenty-five.
+
+    What is true is the rate. Each code has 80 characters and 31 wrong values
+    for each, and a wrong code passes only by matching 16 checksum bits, so
+    ~2480 / 65536 ≈ 0.038 substitutions per code get through. Fixed keys, so
+    the count is the same on every run and on every platform: this used to
+    take a release dry run red at random.
+
+    The bound is what a regression would break. Shortening the checksum to one
+    byte multiplies the misses by 256; dropping it entirely lets all 198_400
+    through.
+    """
+    keys = [bytes([(seed * 7 + i * 31) % 256 for i in range(32)]) for seed in range(50)]
+    total = sum(_substitution_misses(key) for key in keys)
+    attempts = 50 * 80 * 31
+
+    assert total < attempts / 1000, f"{total} of {attempts} mistyped codes decoded anyway"
+
+
+def test_most_codes_catch_every_single_character_typo():
+    """The per-code view of the same fact, and the one a user meets: retyping
+    one character wrong is caught, unless they are the 1-in-25 code."""
+    keys = [bytes([(seed * 11 + i * 17) % 256 for i in range(32)]) for seed in range(20)]
+
+    clean = sum(1 for key in keys if _substitution_misses(key) == 0)
+
+    assert clean >= 17, f"only {clean} of 20 codes caught every substitution"
 
 
 def test_truncated_code_is_refused():
