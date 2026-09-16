@@ -233,6 +233,9 @@ def cursor_project_hash(cwd: str) -> str:
 class CursorLogReader(LogReader):
     vendor: str = "cursor"
 
+    #: The log records no token usage, so there are no turns to cut.
+    turns_method: str = "unsupported"
+
     def _chats_root(self) -> Path:
         return cursor_chats_root()
 

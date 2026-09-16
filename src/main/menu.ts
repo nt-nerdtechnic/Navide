@@ -67,6 +67,8 @@ export interface AppMenuHooks {
   onOpenPipelineManager?: () => void
   /** Window menu: open the Resource Manager window (CPU + memory per CLI). */
   onOpenResourceManager?: () => void
+  /** Window menu: open the Turn Stats modal (per-turn token usage of a pane). */
+  onOpenTurnStats?: () => void
   /** Window menu: open the account window (sign in / create an account). */
   onOpenAccount?: () => void
   /** Help menu: open the Navide GitHub repo. */
@@ -315,6 +317,7 @@ export function installApplicationMenu(
         { type: 'separator' },
         { label: 'Pipeline Manager', click: () => hooks.onOpenPipelineManager?.() },
         { label: 'Resource Manager', click: () => hooks.onOpenResourceManager?.() },
+        { label: 'Turn Stats', click: () => hooks.onOpenTurnStats?.() },
         { type: 'separator' },
         { role: 'minimize' },
         // macOS "zoom" = maximize the window frame. Unrelated to content zoom,

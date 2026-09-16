@@ -53,8 +53,11 @@ from ..log_readers.base import (
     IncrementalParseResult,
     LogReader,
     TokenUsage,
+    TurnCall,
+    TurnUsage,
     activity_high_water,
     join_text_blocks,
+    merge_prompt_excerpt,
     read_jsonl_tail,
     set_activity_high_water,
     user_prompt_text,
@@ -168,6 +171,9 @@ def claude_projects_root() -> Path | None:
 
 class ClaudeLogReader(LogReader):
     vendor: str = "claude"
+
+    #: turns_for_session groups on the transcript's own promptId.
+    turns_method: str = "exact"
 
     #: parse_activity walks a dense ascending line counter and resumes from
     #: one high-water mark, so an old file can be seeded to EOF by counting
@@ -355,6 +361,80 @@ class ClaudeLogReader(LogReader):
 
         final_checkpoint["recent_keys"] = recent
         return IncrementalParseResult(out, final_checkpoint)
+
+    def turns_for_session(self, path: Path, session_id: str = "") -> list[TurnUsage]:
+        """One turn per `promptId`: every human `user` record (no
+        toolUseResult) carries the id of the prompt it belongs to, and the
+        assistant records that follow — which carry none — belong to the
+        latest one. Grouping on the id rather than on each user record keeps
+        a prompt's attachments, images and a compaction summary (all written
+        as extra user records under the same id) inside their turn, and a
+        resumed session that keeps appending to this file simply adds ids.
+
+        Same dedup as parse_session_file (message id + requestId, so a
+        streamed message split over several lines counts once), but the four
+        usage counters stay apart instead of folding cache into input.
+        """
+        try:
+            fh = path.open(encoding="utf-8")
+        except OSError as err:
+            log.debug("open %s failed: %s", path, err)
+            return []
+        sid = path.stem
+        turns: dict[str, TurnUsage] = {}
+        current: TurnUsage | None = None
+        seen: set[str] = set()
+        with fh:
+            for line_no, raw in enumerate(fh, 1):
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    rec = json.loads(raw)
+                except json.JSONDecodeError:
+                    log.debug("%s:%d malformed JSON, skipping", path.name, line_no)
+                    continue
+                rtype = rec.get("type")
+                msg = rec.get("message")
+                if not isinstance(msg, dict):
+                    continue
+                ts = str(rec.get("timestamp") or "") or None
+                if rtype == "user" and "toolUseResult" not in rec:
+                    key = str(rec.get("promptId") or f"line:{line_no}")
+                    current = turns.get(key)
+                    if current is None:
+                        current = turns[key] = TurnUsage(
+                            turn_index=0, session_id=sid,
+                            started_at=ts, ended_at=None, prompt_excerpt="",
+                        )
+                    content = msg.get("content")
+                    text = content if isinstance(content, str) else join_text_blocks(content, "text")
+                    current.prompt_excerpt = merge_prompt_excerpt(current.prompt_excerpt, text)
+                    continue
+                if rtype != "assistant" or current is None:
+                    continue
+                usage = msg.get("usage")
+                if not isinstance(usage, dict):
+                    continue
+                dedup_key = f"{msg.get('id') or ''}::{rec.get('requestId') or ''}"
+                if dedup_key == "::" or dedup_key in seen:
+                    continue
+                call = TurnCall(
+                    ts=ts, model=str(msg.get("model") or ""),
+                    input=_int(usage.get("input_tokens")),
+                    cache_read=_int(usage.get("cache_read_input_tokens")),
+                    cache_creation=_int(usage.get("cache_creation_input_tokens")),
+                    output=_int(usage.get("output_tokens")),
+                )
+                if call.input + call.cache_read + call.cache_creation + call.output == 0:
+                    continue
+                seen.add(dedup_key)
+                current.add_call(call)
+                current.ended_at = ts or current.ended_at
+        out = [t for t in turns.values() if t.calls]
+        for n, turn in enumerate(out, 1):
+            turn.turn_index = n
+        return out
 
     def parse_activity(
         self, path: Path, seen_keys: set[str]

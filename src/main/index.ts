@@ -608,6 +608,10 @@ function requestResourceManager(): void {
   requestMainWindowModal('menu:open-resource-manager')
 }
 
+function requestTurnStats(): void {
+  requestMainWindowModal('menu:open-turn-stats')
+}
+
 function backendInfoPayload() {
   if (!backend) {
     // A scheduled auto-restart outranks the crash message: the backend IS
@@ -3993,6 +3997,7 @@ app.whenReady().then(async () => {
     onNewWindow: () => void createWindow(),
     onOpenPipelineManager: () => requestPipelineManager(),
     onOpenResourceManager: () => requestResourceManager(),
+    onOpenTurnStats: () => requestTurnStats(),
     onOpenAccount: () => sendMenuAction('open-account'),
     onOpenRepo: () => void shell.openExternal('https://github.com/nt-nerdtechnic/Navide'),
     onReportIssue: () => void shell.openExternal('https://github.com/nt-nerdtechnic/Navide/issues'),

@@ -94,6 +94,7 @@ function makeHooks(): AppMenuHooks & { calls: string[] } {
     onNewWindow: () => calls.push('new-window'),
     onOpenPipelineManager: () => calls.push('pipeline-manager'),
     onOpenResourceManager: () => calls.push('resource-manager'),
+    onOpenTurnStats: () => calls.push('turn-stats'),
     onOpenAccount: () => calls.push('account'),
     onOpenRepo: () => calls.push('open-repo'),
     onReportIssue: () => calls.push('report-issue'),
@@ -219,6 +220,11 @@ describe('installApplicationMenu', () => {
   it('Window has Resource Manager wired to its hook', () => {
     fire(itemIn(submenuOf('Window'), 'Resource Manager'))
     expect(hooks.calls).toEqual(['resource-manager'])
+  })
+
+  it('Window has Turn Stats wired to its hook', () => {
+    fire(itemIn(submenuOf('Window'), 'Turn Stats'))
+    expect(hooks.calls).toEqual(['turn-stats'])
   })
 
   it('Window has Navide Cloud wired to its hook', () => {
@@ -430,5 +436,6 @@ describe('installApplicationMenu', () => {
     expect(() => fire(itemIn(menu, 'Settings…'))).not.toThrow()
     expect(() => fire(itemIn(submenuOf('Window'), 'Pipeline Manager'))).not.toThrow()
     expect(() => fire(itemIn(submenuOf('Window'), 'Resource Manager'))).not.toThrow()
+    expect(() => fire(itemIn(submenuOf('Window'), 'Turn Stats'))).not.toThrow()
   })
 })

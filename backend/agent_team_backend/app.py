@@ -1359,6 +1359,82 @@ def forget_pane_live_sessions(pane_id: str) -> None:
             tokens_store.drop_live_session(*key)
 
 
+async def scan_session_turns(
+    *,
+    pane_id: str = "",
+    session_id: str = "",
+    agent_key: str = "",
+    include_calls: bool = False,
+) -> dict[str, Any]:
+    """Per-turn split of one session log, for `tokens.turns`.
+
+    A pane resolves to its session through the live-scan registry — the same
+    binding the "THIS SESSION" tally uses, so the turns are cut from the very
+    file that tally reads. A bare session id is looked up there too, and
+    outside the registry needs `agent_key` to pick the reader. The parse runs
+    on the live-scan pool (single worker), never on the shared executor.
+    """
+    workspace_path = ""
+    session_file = ""
+    vendor = agent_key
+    found = next(
+        (
+            (key, state) for key, state in _live_scans.items()
+            if (pane_id and pane_id in state["panes"])
+            or (not pane_id and session_id and state["session_id"] == session_id)
+        ),
+        None,
+    )
+    if found is not None:
+        (workspace_path, _session_key), state = found
+        vendor = state["vendor"]
+        session_id = state["session_id"]
+        session_file = state["session_file"]
+    # No pane, not in the registry, and nothing says which reader to try:
+    # that is "no session to read", not an unknown vendor named "".
+    if not session_id or not vendor:
+        return {"ok": False, "error": "no-session"}
+    reader = next((r for r in _readers if r.vendor == vendor), None)
+    if reader is None:
+        return {"ok": False, "error": "unknown-vendor", "detail": vendor}
+
+    def _scan() -> tuple[Path, dict[str, Any]]:
+        if workspace_path:
+            path = _resolve_session_log(reader, workspace_path, session_id, session_file)
+        else:
+            path = next(
+                (
+                    p for p in reader.session_files()
+                    if reader.session_id_from_path(p) == session_id and p.exists()
+                ),
+                None,
+            )
+        if path is None:
+            raise FileNotFoundError(session_id)
+        return path, tokens_store.turns_for(
+            reader, path, session_id, include_calls=include_calls
+        )
+
+    try:
+        path, cut = await asyncio.get_running_loop().run_in_executor(_live_scan_pool, _scan)
+    except FileNotFoundError:
+        return {"ok": False, "error": "file-missing", "detail": session_id}
+    except Exception as err:  # noqa: BLE001 — reported to the caller, never fatal
+        log.warning("turn scan failed for session=%s: %s", session_id, err)
+        return {"ok": False, "error": "scan-failed", "detail": str(err)}
+    reply: dict[str, Any] = {"ok": True}
+    if pane_id:
+        reply["pane_id"] = pane_id
+    reply.update({
+        "session_id": session_id,
+        "vendor": vendor,
+        "file_path": str(path),
+        **cut,
+        "scanned_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+    })
+    return reply
+
+
 # Historic-log backfill can enqueue hundreds of files; coalesce the per-file
 # progress into at most one broadcast per workspace per window (same lesson as
 # the token burst above) so the indicator updates smoothly without flooding.

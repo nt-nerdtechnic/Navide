@@ -10,6 +10,7 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
+from datetime import datetime, timezone
 from typing import Any, BinaryIO
 
 log = logging.getLogger("agent_team_backend.log_readers")
@@ -116,6 +117,99 @@ class TokenSinkResult:
 
     handled: bool
     workspace_path: str = ""
+
+
+#: Cap for a turn's prompt excerpt (the user's words, for the Turn Stats list).
+TURN_EXCERPT_MAX_CHARS = 80
+
+
+@dataclass
+class TurnCall:
+    """One model call inside a turn. The four token counts are kept apart —
+    unlike TokenUsage, nothing is folded into input here."""
+
+    ts: str | None
+    model: str
+    input: int
+    cache_read: int
+    cache_creation: int
+    output: int
+
+
+@dataclass
+class TurnUsage:
+    """One user-facing turn of a session: prompt → reply finished."""
+
+    turn_index: int            # 1-based, in time order
+    session_id: str
+    started_at: str | None     # ISO 8601 when the log records one
+    ended_at: str | None
+    prompt_excerpt: str        # user's words, capped at TURN_EXCERPT_MAX_CHARS
+    input: int = 0
+    cache_read: int = 0
+    cache_creation: int = 0
+    output: int = 0
+    calls: list[TurnCall] = field(default_factory=list)
+    #: Model-call count when the log states it without listing the calls
+    #: (grok's modelCalls); None means len(calls).
+    model_calls: int | None = None
+
+    @property
+    def total(self) -> int:
+        return self.input + self.cache_read + self.cache_creation + self.output
+
+    @property
+    def call_count(self) -> int:
+        return len(self.calls) if self.model_calls is None else self.model_calls
+
+    def add_call(self, call: TurnCall) -> None:
+        self.input += call.input
+        self.cache_read += call.cache_read
+        self.cache_creation += call.cache_creation
+        self.output += call.output
+        self.calls.append(call)
+
+
+def turn_excerpt(text: str) -> str:
+    return " ".join(str(text or "").split())[:TURN_EXCERPT_MAX_CHARS]
+
+
+def merge_prompt_excerpt(current: str, text: str) -> str:
+    """Fold one more user record into a turn's excerpt: the first typed
+    prompt wins, and a "<"-prefixed injected wrapper (session marker, command
+    stub) only stands in until a typed one arrives."""
+    typed = user_prompt_text(text)
+    if typed:
+        return current if current and not current.startswith("<") else turn_excerpt(typed)
+    return current or turn_excerpt(text)
+
+
+def turn_timestamp(raw: str) -> str | None:
+    """Normalize a reader timestamp for the turn contract: epoch-ms strings
+    (kimi and friends) become ISO 8601, ISO passes through, "" becomes None."""
+    if not raw:
+        return None
+    try:
+        seconds = float(raw) / 1000.0
+    except ValueError:
+        return raw
+    stamp = datetime.fromtimestamp(seconds, tz=timezone.utc)
+    return stamp.strftime("%Y-%m-%dT%H:%M:%S") + f".{stamp.microsecond // 1000:03d}Z"
+
+
+def _turn_sort_key(raw: str) -> float | None:
+    """Seconds since epoch for either timestamp form a reader emits, or None
+    when the record carries none (such an event stays with the latest turn)."""
+    if not raw:
+        return None
+    try:
+        return float(raw) / 1000.0
+    except ValueError:
+        pass
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
 
 
 _ANCHOR_BYTES = 512
@@ -360,6 +454,12 @@ class LogReader(ABC):
     #: Session files feed the session sink (Agent History). Migrated
     #: replacement for membership in the watcher's vendor-name tuple.
     emits_session_sink: bool = False
+
+    #: How turns_for_session splits a session into turns: "exact" when the
+    #: log carries its own turn boundaries (a vendor override), "inferred"
+    #: for the generic cut on turn_complete timestamps below, "unsupported"
+    #: when the vendor records no token usage at all.
+    turns_method: str = "inferred"
 
     #: Binds via the shared-db marker path (one SQLite store for every
     #: session; grok/opencode/kilo/cursor). Migrated replacement for
@@ -606,3 +706,87 @@ class LogReader(ABC):
         mutate seen_keys in place for new ones.
         """
         return []
+
+    def turns_for_session(self, path: Path, session_id: str = "") -> list[TurnUsage]:
+        """Split one session's usage into user-facing turns.
+
+        Generic cut: every usage event this reader parses (one per model
+        call) is assigned to the first `turn_complete` from parse_activity
+        whose timestamp is not earlier than the call's; calls after the last
+        boundary form the still-open trailing turn, and a log with no
+        boundary at all is one turn. The prompt excerpt comes from the
+        user-prompt activity event (detail user/prompt/user_message) that
+        falls in the same window. Vendors whose transcript names its own
+        turn boundaries override this and set turns_method="exact".
+
+        TokenUsage folds cache into input, so here input carries the folded
+        number and both cache fields stay 0. `session_id` filters the vendors
+        whose sessions share one source; "" takes the whole file. Heavy —
+        callers MUST run it off the event loop.
+        """
+        if self.turns_method == "unsupported":
+            return []
+        usages = [
+            u for u in self.parse_session_file(path, set())
+            if not session_id or u.session_id == session_id
+        ]
+        activity = [
+            a for a in self.parse_activity(path, set())
+            if not session_id or a.session_id == session_id
+        ]
+        boundaries = sorted(
+            k for k in (
+                _turn_sort_key(a.timestamp)
+                for a in activity if a.event_type == "turn_complete"
+            ) if k is not None
+        )
+        prompts = sorted(
+            (k, a.timestamp, a.text) for k, a in (
+                (_turn_sort_key(a.timestamp), a)
+                for a in activity
+                if a.event_type == "agent_active"
+                and a.detail in ("user", "prompt", "user_message")
+                and a.text
+            ) if k is not None
+        )
+
+        def window(key: float | None) -> int:
+            if key is None:
+                return len(boundaries)
+            for i, edge in enumerate(boundaries):
+                if key <= edge:
+                    return i
+            return len(boundaries)
+
+        sid = session_id or (usages[0].session_id if usages else "")
+        turns: dict[int, TurnUsage] = {}
+
+        def turn_at(i: int) -> TurnUsage:
+            turn = turns.get(i)
+            if turn is None:
+                turn = turns[i] = TurnUsage(
+                    turn_index=0, session_id=sid,
+                    started_at=None, ended_at=None, prompt_excerpt="",
+                )
+            return turn
+
+        for key, stamp, text in prompts:
+            turn = turn_at(window(key))
+            if not turn.prompt_excerpt:
+                turn.prompt_excerpt = turn_excerpt(text)
+                turn.started_at = turn_timestamp(stamp)
+        for usage in sorted(usages, key=lambda u: _turn_sort_key(u.timestamp) or float("inf")):
+            turn = turn_at(window(_turn_sort_key(usage.timestamp)))
+            turn.add_call(TurnCall(
+                ts=turn_timestamp(usage.timestamp), model=usage.model,
+                input=int(usage.input_tokens), cache_read=0, cache_creation=0,
+                output=int(usage.output_tokens),
+            ))
+            stamp = turn_timestamp(usage.timestamp)
+            if stamp:
+                turn.started_at = turn.started_at or stamp
+                turn.ended_at = stamp
+        out = [turns[i] for i in sorted(turns) if turns[i].calls]
+        for n, turn in enumerate(out, 1):
+            turn.turn_index = n
+        return out

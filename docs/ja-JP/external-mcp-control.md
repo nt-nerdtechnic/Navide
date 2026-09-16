@@ -356,6 +356,7 @@ Host Wiring — だけです。Navide の CLI Pane から、その Pane 自身�
 | `ui.preview.show` | `{kind, …}` | 右レールのプレビューパネルにファイル・diff・インラインスニペットを表示 |
 | `ui.window.openPlans` | — | Plan ウィンドウを開く |
 | `ui.window.openResourceManager` | — | Resource Manager を開く（CPU／メモリ／ディスク使用量とストレージ整理） |
+| `ui.window.openTurnStats` | — | Turn Stats を開く（CLI ペイン 1 つのターンごとのトークン使用量） |
 | `ui.window.openGit` | — | 現在の Workspace の Git ウィンドウを開く |
 | `ui.window.openPipeline` | `{pipelineId?}` | Pipeline Manager ウィンドウを開く |
 | `ui.workspace.open` | `{path}` | `path` を Workspace として開く（生きている任意のウィンドウにルーティング — 上記参照） |

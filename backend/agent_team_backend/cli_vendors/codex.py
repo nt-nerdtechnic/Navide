@@ -37,10 +37,13 @@ from ..log_readers.base import (
     IncrementalParseResult,
     LogReader,
     TokenUsage,
+    TurnCall,
+    TurnUsage,
     activity_high_water,
     join_text_blocks,
     read_jsonl_tail,
     set_activity_high_water,
+    turn_excerpt,
     user_prompt_text,
 )
 
@@ -97,6 +100,9 @@ def _write_cumulative(seen_keys: set[str], input_total: int, output_total: int) 
 
 class CodexLogReader(LogReader):
     vendor: str = "codex"
+
+    #: turns_for_session cuts on the rollout's own user_message records.
+    turns_method: str = "exact"
 
     #: parse_activity walks a dense ascending line counter and resumes from
     #: one high-water mark, so an old file can be seeded to EOF by counting
@@ -400,6 +406,99 @@ class CodexLogReader(LogReader):
             checkpoint=event_checkpoint,
         )
         return IncrementalParseResult([event], next_checkpoint)
+
+    def turns_for_session(self, path: Path, session_id: str = "") -> list[TurnUsage]:
+        """A turn opens at each `user_message` event; every `token_count`
+        inside it is one model call, measured as the delta of the cumulative
+        `total_token_usage` against the previous one (the same counters
+        parse_session_file differences, kept apart instead of folded). A
+        rollout with no user_message record at all falls back to one turn
+        per token_count.
+
+        Codex's input_tokens already contains cached_input_tokens and its
+        output_tokens already contains reasoning_output_tokens (its
+        total_tokens is input + output), so input here is the uncached
+        remainder, output is taken as is, and the turn total equals the
+        CLI's own total_tokens.
+        """
+        try:
+            fh = path.open(encoding="utf-8")
+        except OSError as err:
+            log.debug("open %s failed: %s", path, err)
+            return []
+        sid = path.stem
+        model = ""
+        prev = (0, 0, 0)
+        turns: list[TurnUsage] = []
+        current: TurnUsage | None = None
+        saw_prompt = False
+        with fh:
+            for line_no, raw in enumerate(fh, 1):
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    rec = json.loads(raw)
+                except json.JSONDecodeError:
+                    log.debug("%s:%d malformed JSON, skipping", path.name, line_no)
+                    continue
+                payload = rec.get("payload") or {}
+                if not isinstance(payload, dict):
+                    continue
+                if rec.get("type") == "session_meta":
+                    sid = str(payload.get("id") or sid)
+                    model = str(payload.get("model_provider") or payload.get("model") or model)
+                    continue
+                if rec.get("type") != "event_msg":
+                    continue
+                ts = str(rec.get("timestamp") or "") or None
+                ptype = payload.get("type")
+                if ptype == "user_message":
+                    saw_prompt = True
+                    current = TurnUsage(
+                        turn_index=0, session_id=sid, started_at=ts, ended_at=None,
+                        prompt_excerpt=turn_excerpt(str(payload.get("message") or "")),
+                    )
+                    turns.append(current)
+                    continue
+                if ptype != "token_count":
+                    continue
+                info = payload.get("info")
+                totals = info.get("total_token_usage") if isinstance(info, dict) else None
+                if not isinstance(totals, dict):
+                    continue
+                cur = (
+                    _int(totals.get("input_tokens")),
+                    _int(totals.get("cached_input_tokens")),
+                    _int(totals.get("output_tokens")),
+                )
+                delta = tuple(c - p for c, p in zip(cur, prev))
+                prev = cur
+                if any(d < 0 for d in delta):
+                    continue  # totals shrank: rotated session, new baseline
+                if not any(delta):
+                    continue
+                if current is None or not saw_prompt:
+                    current = TurnUsage(
+                        turn_index=0, session_id=sid, started_at=ts, ended_at=None,
+                        prompt_excerpt="",
+                    )
+                    turns.append(current)
+                current.add_call(TurnCall(
+                    ts=ts, model=model,
+                    input=max(0, delta[0] - delta[1]), cache_read=delta[1],
+                    cache_creation=0, output=delta[2],
+                ))
+                current.ended_at = ts or current.ended_at
+        # Either id names this rollout: the session_meta id (what the token
+        # sink and the live registry carry) or the file stem (what
+        # session_id_from_path answers and a bare tokens.turns lookup uses).
+        if session_id and session_id not in (sid, path.stem):
+            return []
+        out = [t for t in turns if t.calls]
+        for n, turn in enumerate(out, 1):
+            turn.turn_index = n
+        return out
 
     def parse_activity(
         self, path: Path, seen_keys: set[str]

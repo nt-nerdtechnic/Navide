@@ -546,3 +546,100 @@ def test_deleted_rollout_drops_its_header_cache(fake_codex_session: Path) -> Non
     _expire_files_cache(reader)
     assert reader.session_files_for_workspace("/ws2") == [fake_codex_session]
     assert reader.session_files_for_workspace("/ws1") == []
+
+
+# ── turns_for_session (tokens.turns) ────────────────────────────────────────
+
+def _user_message(text: str, ts: str) -> dict:
+    return {"timestamp": ts, "type": "event_msg",
+            "payload": {"type": "user_message", "message": text, "images": []}}
+
+
+def _count(ts: str, input_t: int, cached_in: int, output_t: int, reasoning_out: int) -> dict:
+    ev = _token_count_event(input_t, cached_in, output_t, reasoning_out)
+    ev["timestamp"] = ts
+    return ev
+
+
+def test_turns_open_at_user_message_and_difference_every_token_count(
+    fake_codex_session: Path,
+) -> None:
+    """A real rollout fires token_count once per model call, many per turn
+    (21 for 2 prompts in the sample transcript), so the user_message record
+    is the turn boundary and each token_count delta is one call. Codex's
+    input_tokens already contains cached_input_tokens and output_tokens
+    already contains reasoning, so the counters are split, not added."""
+    reader = CodexLogReader()
+    _write_jsonl(fake_codex_session, [
+        {"type": "session_meta", "payload": {"cwd": "/x", "id": "thread-1", "model": "gpt-5"}},
+        {"timestamp": "2026-05-27T13:00:00Z", "type": "event_msg",
+         "payload": {"type": "token_count", "info": None}},  # rate-limit only
+        _user_message("幫我分析", "2026-05-27T13:00:01Z"),
+        _count("2026-05-27T13:00:05Z", 1000, 400, 50, 10),
+        _count("2026-05-27T13:00:09Z", 2500, 1600, 120, 30),
+        _user_message("再來", "2026-05-27T13:10:00Z"),
+        _count("2026-05-27T13:10:04Z", 2600, 1650, 130, 30),
+    ])
+    assert reader.turns_method == "exact"
+    turns = reader.turns_for_session(fake_codex_session)
+    assert [(t.turn_index, t.prompt_excerpt, t.call_count) for t in turns] == [
+        (1, "幫我分析", 2), (2, "再來", 1),
+    ]
+    first, second = turns
+    assert first.started_at == "2026-05-27T13:00:01Z"
+    assert first.ended_at == "2026-05-27T13:00:09Z"
+    assert [(c.input, c.cache_read, c.cache_creation, c.output) for c in first.calls] == [
+        (600, 400, 0, 50), (300, 1200, 0, 70),
+    ]
+    assert first.total == 2500 + 120
+    assert (second.input, second.cache_read, second.output) == (50, 50, 10)
+    assert first.calls[0].model == "gpt-5"
+    assert first.session_id == "thread-1"
+    # The whole file adds up to the CLI's own last cumulative total.
+    assert sum(t.total for t in turns) == 2600 + 130
+
+
+def test_turns_fall_back_to_one_per_token_count_without_user_messages(
+    fake_codex_session: Path,
+) -> None:
+    reader = CodexLogReader()
+    _write_jsonl(fake_codex_session, [
+        {"type": "session_meta", "payload": {"cwd": "/x"}},
+        _count("2026-05-27T13:00:05Z", 100, 0, 10, 0),
+        _count("2026-05-27T13:00:09Z", 250, 0, 30, 0),
+    ])
+    turns = reader.turns_for_session(fake_codex_session)
+    assert [(t.turn_index, t.prompt_excerpt, t.total) for t in turns] == [(1, "", 110), (2, "", 170)]
+
+
+def test_turns_skip_a_shrunk_total_instead_of_going_negative(
+    fake_codex_session: Path,
+) -> None:
+    reader = CodexLogReader()
+    _write_jsonl(fake_codex_session, [
+        {"type": "session_meta", "payload": {"cwd": "/x"}},
+        _user_message("a", "2026-05-27T13:00:01Z"),
+        _count("2026-05-27T13:00:05Z", 100, 0, 10, 0),
+        _count("2026-05-27T13:00:09Z", 40, 0, 4, 0),   # rotated: new baseline
+        _count("2026-05-27T13:00:12Z", 70, 0, 9, 0),
+    ])
+    turns = reader.turns_for_session(fake_codex_session)
+    assert [(c.input, c.output) for c in turns[0].calls] == [(100, 10), (30, 5)]
+
+
+def test_turns_answer_to_the_file_stem_as_well_as_the_session_meta_id(
+    fake_codex_session: Path,
+) -> None:
+    """A rollout has two names: session_meta's id (what the live registry
+    carries) and the file stem (what session_id_from_path answers, so what a
+    bare tokens.turns lookup finds the file by). Filtering on either must
+    return the rollout; a third id is not this session."""
+    reader = CodexLogReader()
+    _write_jsonl(fake_codex_session, [
+        {"type": "session_meta", "payload": {"cwd": "/x", "id": "thread-1"}},
+        _user_message("a", "2026-05-27T13:00:01Z"),
+        _count("2026-05-27T13:00:05Z", 100, 0, 10, 0),
+    ])
+    assert len(reader.turns_for_session(fake_codex_session, "thread-1")) == 1
+    assert len(reader.turns_for_session(fake_codex_session, "rollout-test")) == 1
+    assert reader.turns_for_session(fake_codex_session, "thread-9") == []

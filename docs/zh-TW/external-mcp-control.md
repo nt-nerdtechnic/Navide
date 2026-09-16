@@ -309,6 +309,7 @@ Action —— `ui.pane.create`、`ui.preview.show`、`ui.window.openGit` —— 
 | `ui.preview.show` | `{kind, …}` | 在右側 rail 的預覽面板顯示檔案、diff 或內嵌片段 |
 | `ui.window.openPlans` | — | 開啟 Plan 視窗 |
 | `ui.window.openResourceManager` | — | 開啟 Resource Manager（CPU／記憶體／磁碟用量與儲存清理） |
+| `ui.window.openTurnStats` | — | 開啟 Turn Stats（單一 CLI pane 的每輪 token 用量） |
 | `ui.window.openGit` | — | 為目前 Workspace 開啟 Git 視窗 |
 | `ui.window.openPipeline` | `{pipelineId?}` | 開啟 Pipeline Manager 視窗 |
 | `ui.workspace.open` | `{path}` | 將 `path` 開啟為 Workspace（路由到任一 Live 視窗 —— 見上文） |

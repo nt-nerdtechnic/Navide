@@ -202,3 +202,9 @@ def test_new_conversation_fallback_does_not_guess_between_two_antigravity_panes(
     )
 
     assert attr.maybe_announce_session(usage) is None
+
+
+def test_turns_are_unsupported_the_log_has_no_token_usage(tmp_path: Path) -> None:
+    reader = AntigravityLogReader()
+    assert reader.turns_method == "unsupported"
+    assert reader.turns_for_session(tmp_path / "missing.jsonl") == []

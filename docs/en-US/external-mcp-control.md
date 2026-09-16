@@ -366,6 +366,7 @@ documented argument shapes.
 | `ui.preview.show` | `{kind, …}` | Show a file, diff or inline snippet in the right rail's preview panel |
 | `ui.window.openPlans` | — | Open the Plan window |
 | `ui.window.openResourceManager` | — | Open the Resource Manager (CPU, memory and disk usage, with storage cleanup) |
+| `ui.window.openTurnStats` | — | Open Turn Stats (per-turn token usage of one CLI pane) |
 | `ui.window.openGit` | — | Open the Git window for the current workspace |
 | `ui.window.openPipeline` | `{pipelineId?}` | Open the Pipeline Manager window |
 | `ui.workspace.open` | `{path}` | Open `path` as a workspace (routed to any live window — see above) |

@@ -31,7 +31,7 @@ import os
 import sqlite3
 import threading
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -40,6 +40,7 @@ from typing import Any
 
 from .applog import app_data_dir
 from .db import DB_FILENAME, Database
+from .log_readers.base import LogReader, TurnUsage
 from .projects import PROJECT_DIR_NAME
 
 log = logging.getLogger("agent_team_backend.tokens")
@@ -68,6 +69,8 @@ RECENT_EVENT_KEYS_LIMIT = 512
 # a one-off global double count if its event ever replays.
 LEGACY_EVENT_KEYS_LIMIT = 4096
 LEGACY_EVENT_KEYS_TTL_DAYS = 14
+# Per-turn cuts kept in memory (tokens.turns); one entry per session log.
+TURNS_CACHE_LIMIT = 32
 # A session log untouched for this long will not be appended to again in
 # practice, so the per-file dedup window readers stash in its checkpoint is
 # dead weight. Stripping it is self-healing: the offset and identity stay, so
@@ -313,6 +316,12 @@ class TokensStore:
         # nothing here can drift from the file. Not persisted: the first scan
         # after a restart re-derives the whole total.
         self._live_by_session: dict[str, dict[str, dict[str, int]]] = {}
+        # Per-turn split of a session log, keyed on the file's identity at
+        # scan time (path, mtime, size) plus the session filter, so a log that
+        # grew is re-cut, an unchanged one is served from memory, and two
+        # sessions sharing one source (opencode/kilo SQLite) never see each
+        # other's cut. Never persisted.
+        self._turns_cache: OrderedDict[tuple[str, float, int, str], list[TurnUsage]] = OrderedDict()
 
         # Dirty tracking (mutated inside _lock, consumed by the flush path).
         self._dirty_workspaces: set[str] = set()
@@ -1324,6 +1333,69 @@ class TokensStore:
             buckets.pop(session_key, None)
             if not buckets:
                 self._live_by_session.pop(workspace_path, None)
+
+    # ──────────────────── Per-turn split (tokens.turns) ─────────────
+    #
+    # Like the live tally, derived from the session log on demand and never
+    # written to the store: the reader cuts the file into turns, this only
+    # caches the cut. Heavy — callers run it on the live-scan executor.
+
+    def turns_for(
+        self,
+        reader: LogReader,
+        path: Path,
+        session_id: str = "",
+        *,
+        include_calls: bool = False,
+    ) -> dict[str, Any]:
+        """Cut one session log into turns, shaped for the tokens.turns reply
+        (turns + totals). Cached on (path, mtime, size, session_id), 32 deep."""
+        turns: list[TurnUsage] | None = None
+        if reader.turns_method == "unsupported":
+            turns = []  # no token usage in this vendor's log: nothing to read
+        else:
+            st = path.stat()
+            key = (str(path), st.st_mtime, st.st_size, session_id)
+            with self._lock:
+                turns = self._turns_cache.get(key)
+                if turns is not None:
+                    self._turns_cache.move_to_end(key)
+        if turns is None:
+            turns = reader.turns_for_session(path, session_id)
+            with self._lock:
+                self._turns_cache[key] = turns
+                self._turns_cache.move_to_end(key)
+                while len(self._turns_cache) > TURNS_CACHE_LIMIT:
+                    self._turns_cache.popitem(last=False)
+        totals = {"input": 0, "cache_read": 0, "cache_creation": 0, "output": 0, "total": 0, "calls": 0}
+        rows: list[dict[str, Any]] = []
+        for turn in turns:
+            row: dict[str, Any] = {
+                "turn_index": turn.turn_index,
+                "started_at": turn.started_at,
+                "ended_at": turn.ended_at,
+                "prompt_excerpt": turn.prompt_excerpt,
+                "input": turn.input,
+                "cache_read": turn.cache_read,
+                "cache_creation": turn.cache_creation,
+                "output": turn.output,
+                "total": turn.total,
+                "calls": turn.call_count,
+            }
+            if include_calls:
+                row["calls_detail"] = [
+                    {
+                        "ts": c.ts, "model": c.model, "input": c.input,
+                        "cache_read": c.cache_read, "cache_creation": c.cache_creation,
+                        "output": c.output,
+                    }
+                    for c in turn.calls
+                ]
+            rows.append(row)
+            for field in ("input", "cache_read", "cache_creation", "output", "total"):
+                totals[field] += row[field]
+            totals["calls"] += turn.call_count
+        return {"method": reader.turns_method, "turns": rows, "totals": totals}
 
     # ───────────────────────── Reset ────────────────────────────────
 

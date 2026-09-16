@@ -21,6 +21,7 @@ import { formatCpuPercent, machineCpuShare, machineMemoryShare } from './lib/res
 import { useResourceUsage, type ResourceUsageWire } from './composables/useResourceUsage'
 import ResourceSummaryPanel, { type ResourceSummaryRow } from './components/ResourceSummaryPanel.vue'
 import ResourceManagerModal from './components/ResourceManagerModal.vue'
+import TurnStatsModal from './components/TurnStatsModal.vue'
 import AgentHistoryModal from './components/AgentHistoryModal.vue'
 import ReconnectSessionModal, { type OrphanSession } from './components/ReconnectSessionModal.vue'
 import ControlPane, {
@@ -155,6 +156,9 @@ import {
   SUBMIT_CONFIRM_MS, SUBMIT_SCREEN_LINES, TAIL_MATCH_LEN
 } from './lib/injectEcho'
 import { failedInjectReleasesHold } from './lib/deliveryHold'
+import {
+  awaitEcho, awaitInputUnblocked, createInputBlockTracker, needsInputWait, PROBE_SESSION_GONE
+} from './lib/ptyInputBlock'
 import { createKickoffReporter, runKickoffAttempts } from './lib/spawnKickoff'
 import { recordDiagnostic, readDiagnostics, currentDiagnosticSeq } from './lib/uiDiagnostics'
 import { resetUiScale, stepUiScaleBy } from './lib/uiScale'
@@ -365,6 +369,8 @@ onMounted(() => {
   })
   // Native application menu entry (menu:open-resource-manager).
   window.agentTeam?.onOpenResourceManager?.(() => openResourceManager())
+  // Native application menu entry (menu:open-turn-stats).
+  window.agentTeam?.onOpenTurnStats?.(() => openTurnStats())
   // Plan window "execute" dispatch routed to this workspace's window.
   window.agentTeam?.onPlanExecutionDispatch?.((payload) => { void onPlanExecutionDispatch(payload) })
   // Resource Manager row actions (jump / reclaim). That window is machine-wide
@@ -2024,7 +2030,11 @@ function unregisterPaneMessaging(paneId: string, opts: { keepPersisted?: boolean
  *  stage-watcher scan window past the injected text so sentinel/analyzer
  *  scanning never reads the envelope as the pane's own output (mirrors the
  *  handoff advance in onStageSlotCompleted). */
-async function deliverAgentMessage(paneId: string, text: string): Promise<boolean> {
+async function deliverAgentMessage(
+  paneId: string,
+  text: string,
+  shouldAbort?: () => boolean,
+): Promise<boolean> {
   // Hold the badge on RUNNING until the recipient's log shows the message
   // consumed — released in the agent.activity handler, fused inside
   // useTerminal. Marked BEFORE the Enter, not after: an idle CLI writes the
@@ -2033,7 +2043,12 @@ async function deliverAgentMessage(paneId: string, text: string): Promise<boolea
   // mark is dropped, and the mark then holds RUNNING for the whole fuse.
   paneRefs[paneId]?.markDeliveredPending?.()
   const outcome: { leftInComposer?: boolean } = {}
-  const ok = await injectPane(paneId, text, 'agent-msg', true, undefined, outcome)
+  // A PTY that stops reading holds the message on `pty-blocked` for as long
+  // as it takes; the hold is what cli_check_message shows the sender meanwhile.
+  const ok = await injectPane(
+    paneId, text, 'agent-msg', true, shouldAbort, outcome,
+    (held) => messaging.setDeliveringHold(paneId, held ? { key: 'pty-blocked' } : undefined),
+  )
   if (!ok) {
     // Not when the text is visibly still in the composer: the user can submit
     // it by hand, and the user record that follows releases the hold on its
@@ -2754,12 +2769,16 @@ async function kickoffRequestedPane(
       : KICKOFF_PROMPT_READY_TIMEOUT_MS
     const promptReady = await waitForPromptReady(paneId, promptReadyTimeoutMs)
     if (!paneAlive(paneId)) return false
-    if (!promptReady) {
+    // Sampled once, with the gate's answer: a pane that has printed nothing is
+    // still initialising and is not typed into (runKickoffAttempts); one that
+    // is printing but never read idle+quiet is typed into as before.
+    const paneStarting = paneRefs[paneId]?.displayStatus === 'starting'
+    if (!promptReady && !paneStarting) {
       recordDiagnostic({
         level: 'warn',
         code: 'spawn.prompt-ready-timeout',
         message:
-          `pane never read idle+quiet within ${promptReadyTimeoutMs}ms — ` +
+          `pane never read idle+quiet within ${promptReadyTimeoutMs}ms but is printing — ` +
           'typing the kickoff anyway',
         paneId,
       })
@@ -2782,6 +2801,7 @@ async function kickoffRequestedPane(
     const loop = await runKickoffAttempts({
       maxAttempts: KICKOFF_MAX_ATTEMPTS,
       promptReady,
+      paneStarting,
       inject: async () => {
         const seen: { echo?: EchoEvidence | null; submit?: SubmitEvidence | null } = {}
         const kicked = await injectPane(paneId, text, 'agent-spawn', true, undefined, seen)
@@ -2808,7 +2828,15 @@ async function kickoffRequestedPane(
       'distinguish our text from a booting CLI repainting'
     const settled = paneRefs[paneId] ? panes.value.find((p) => p.id === paneId) : undefined
     if (settled) settled.kickoffStatus = outcome
-    if (outcome === 'unverified') {
+    if (loop.untyped) {
+      // Not typed at all (see runKickoffAttempts): 'failed' is the verdict
+      // that tells the caller to resend, and here a resend is exactly right.
+      const reason =
+        `pane printed nothing within ${promptReadyTimeoutMs}ms — ` +
+        'the kickoff was not typed, a CLI still initialising flushes its input'
+      recordDiagnostic({ level: 'warn', code: 'spawn.prompt-ready-timeout', message: reason, paneId })
+      emitKickoffVerdict('failed', reason)
+    } else if (outcome === 'unverified') {
       // The one outcome that used to be invisible: no throw, no false, and no
       // notice — just a pane sitting idle with an empty prompt.
       recordDiagnostic({
@@ -3353,6 +3381,18 @@ function flattenForInjection(text: string): string {
 // whitespace — and its frame characters — on both sides before comparing.
 // See lib/injectEcho.ts for why the frame matters.
 
+/** Sessions whose PTY is not taking input right now, fed by the
+ *  terminal.input_blocked / input_unblocked events. */
+const inputBlocks = createInputBlockTracker()
+
+/** Kill-line for a composer holding text we gave up on. Ctrl-U is what ⌘⌫
+ *  sends from the terminal (useTerminal) and the canonical-mode kill character,
+ *  so it clears whichever side of the PTY ends up holding the payload — a
+ *  blocked PTY queues it behind the text, and it takes effect when the CLI
+ *  reads. Nothing before the injection clears the composer (the typing hold
+ *  keeps a draft out of the way instead), so this is the only clear. */
+const CLEAR_LINE = '\x15'
+
 async function injectText(
   sessionId: string,
   text: string,
@@ -3374,7 +3414,11 @@ async function injectText(
      *  input box, as opposed to never having arrived there. The two owe the
      *  caller different things — see lib/deliveryHold.ts. */
     leftInComposer?: boolean
-  }
+  },
+  // Told `true` while the payload is written but the PTY is not reading it
+  // (the message is held on `pty-blocked`), `false` once the wait ends either
+  // way. Only the messaging path cares; see lib/ptyInputBlock.ts.
+  onInputBlocked?: (held: boolean) => void
 ): Promise<boolean> {
   // Log the full injection text to the session's output log file BEFORE
   // chunking so the log file shows one readable block per send.
@@ -3421,20 +3465,51 @@ async function injectText(
         && paneId !== undefined
         && paneRefs[paneId]?.isBracketedPasteActive?.() === true)
   const chunks = injectionChunks(body, CHUNK, bracketed)
-  const sendChunks = async (): Promise<boolean> => {
+  // Resolves with the last ack's `pending` — bytes the backend is still holding
+  // because the PTY would not take them (0 from a backend too old to say) — or
+  // null when a send threw.
+  let wroteBytes = false
+  const sendChunks = async (): Promise<number | null> => {
+    let pending = 0
     for (let i = 0; i < chunks.length; i++) {
       try {
-        await backend.send('terminal.input', {
+        const resp = await backend.send<{ pending?: number }>('terminal.input', {
           terminal_session_id: sessionId,
           data: chunks[i]
         })
+        wroteBytes = true
+        pending = resp.payload?.pending ?? 0
+        // Nothing pending means nothing blocked, whatever the tracker still
+        // says: an unblocked event lost on the way must not wedge it.
+        if (pending === 0) inputBlocks.onUnblocked(sessionId)
       } catch (err) {
         console.error(`[injectText] content send failed at chunk ${i + 1}/${chunks.length}:`, err)
-        return false
+        return null
       }
     }
-    return true
+    return pending
   }
+  // Every failure exit after bytes went out must not leave them in the
+  // composer: the next thing the user or an agent submits would carry them.
+  // Best effort — a socket that just failed the send fails this too.
+  const giveUp = async (): Promise<false> => {
+    if (wroteBytes) {
+      await backend.send('terminal.input', { terminal_session_id: sessionId, data: CLEAR_LINE })
+        .catch(() => { /* nothing left to clear into */ })
+    }
+    return false
+  }
+  // The pane closing, being reclaimed or rebuilt under us hands its ref a
+  // different session (or none), and a CLI that exited leaves the ref with
+  // the dead session's id; the loop caller's own abort rides along.
+  const paneDead = (): boolean => {
+    if (paneId === undefined) return false
+    const ref = paneRefs[paneId]
+    if (ref?.sessionId !== sessionId) return true
+    const status = ref.displayStatus as string | undefined
+    return status === 'exited' || status === 'error'
+  }
+  const aborted = (): boolean => shouldAbort?.() === true || paneDead()
 
   // Tail of OUR text (whitespace-stripped) — the "input box received it" signal.
   const normalized = normalizeForMatch(text)
@@ -3444,66 +3519,114 @@ async function injectText(
   // Send content, then WAIT for the input box to be ready rather than betting on
   // a fixed gap: poll until the tail shows up in the echo (strong) OR the buffer
   // grows appreciably (covers TUIs that collapse a big paste into a placeholder
-  // so the tail never echoes verbatim). Neither within the window ⇒ the bytes
-  // never landed (e.g. dropped under back-pressure) ⇒ resend the whole content
-  // instead of pressing Enter on an empty box.
-  const MAX_CONTENT_SENDS = 3
+  // so the tail never echoes verbatim). Neither ⇒ never press Enter on an
+  // empty box.
+  //
+  // When the PTY is not READING — an ack with bytes still pending, or a
+  // blocked episode on this session — the CLI has not seen our text yet. That
+  // case waits, for as long as it takes, and the echo clock starts only once
+  // the CLI reads.
+  //
+  // The payload is never re-pasted, by any caller: dropped bytes only happen
+  // at raw-mode entry, which the kickoff gate owns (runKickoffAttempts re-types
+  // into a blank composer at its own level), and every other no-echo is a
+  // pane that is not reading yet — waited out (a message) or given up on (the
+  // rest), never doubled.
+  const MAX_CONTENT_SENDS = 1
   const readyTimeout = echoTimeoutFor(text.length)
   let ready = false
   for (let send = 1; send <= MAX_CONTENT_SENDS && !ready; send++) {
-    if (shouldAbort?.()) return false
-    // A previous attempt can land after we gave up waiting — a CLI still
-    // painting its startup screen accepts the bytes but echoes them late.
-    // Sending again then puts the instruction on screen twice, so look before
-    // repeating ourselves.
-    if (send > 1 && tail && normalizeForMatch(cleanBuf()).includes(tail)) {
-      ready = true
-      break
-    }
+    if (aborted()) return giveUp()
     const preBytes = cleanBytes()
-    if (!(await sendChunks())) return false
+    const ackPending = await sendChunks()
+    if (ackPending === null) return giveUp()
     if (paneId === undefined || preBytes < 0) {
       // Nothing observable — keep the old fixed-gap fallback and fire once.
       await sleep(Math.min(4_000, Math.max(1_500, Math.floor(text.length / 8))))
       ready = true
       break
     }
-    const deadline = Date.now() + readyTimeout
-    while (Date.now() < deadline) {
-      await sleep(200)
-      if (shouldAbort?.()) return false
-      const buf = cleanBuf()
-      const found = echoEvidence(buf, tail, cleanBytes() - preBytes, normalizedLen)
-      if (found !== null) {
-        if (evidence) evidence.echo = found
+    const echoed = (): EchoEvidence | null =>
+      echoEvidence(cleanBuf(), tail, cleanBytes() - preBytes, normalizedLen)
+    if (needsInputWait(ackPending, inputBlocks.get(sessionId) !== null)) {
+      const waited = await awaitInputUnblocked({
+        ackPending,
+        blocked: () => inputBlocks.get(sessionId) !== null,
+        // An empty write is side-effect free; its ack carries the live count.
+        probe: async () => {
+          try {
+            const resp = await backend.send<{ pending?: number }>('terminal.input', {
+              terminal_session_id: sessionId,
+              data: ''
+            })
+            // A refusal is the session being gone (unknown id); a transport
+            // failure is the only null.
+            if (!resp.ok) return PROBE_SESSION_GONE
+            return resp.payload?.pending ?? 0
+          } catch {
+            return null
+          }
+        },
+        drained: () => inputBlocks.onUnblocked(sessionId),
+        echoed,
+        aborted,
+        onHold: (held) => onInputBlocked?.(held),
+        sleep,
+        now: Date.now,
+      })
+      if (waited.outcome === 'aborted') return giveUp()
+      if (waited.outcome === 'ready') {
+        if (evidence) evidence.echo = waited.echo
         ready = true
         break
       }
     }
-    if (!ready && send < MAX_CONTENT_SENDS) {
-      console.warn(
-        `[injectText] content not echoed within ${readyTimeout}ms ` +
-        `(send ${send}/${MAX_CONTENT_SENDS}) — resending content`
-      )
-      recordDiagnostic({
-        level: 'warn',
-        code: 'inject.resend',
-        message: `content not echoed within ${readyTimeout}ms (send ${send}/${MAX_CONTENT_SENDS}) — resending`,
-        paneId
-      })
+    // Echo watch, in rounds (see awaitEcho). A round the pane spent SILENT
+    // an agent message waits out for as long as it takes, held on the same
+    // reason as a blocked PTY; any other caller gives up after two, so a CLI
+    // parked on a modal that neither echoes nor paints cannot hold a kickoff
+    // in `pending` for good. A round the pane spent PAINTING without our tail
+    // is given up on at once by those callers and after three by a message.
+    const watched = await awaitEcho({
+      echoed,
+      outputBytes: cleanBytes,
+      aborted,
+      onHold: (held) => {
+        if (held) {
+          recordDiagnostic({
+            level: 'warn',
+            code: 'inject.silent-wait',
+            message: `content not echoed within ${readyTimeout}ms and the pane printed nothing — waiting, not resending`,
+            paneId
+          })
+        }
+        onInputBlocked?.(held)
+      },
+      sleep,
+      now: Date.now,
+      roundMs: readyTimeout,
+      maxSilentRounds: onInputBlocked ? null : 2,
+    })
+    if (watched.outcome === 'aborted') return giveUp()
+    if (watched.outcome === 'ready') {
+      if (evidence) evidence.echo = watched.echo
+      ready = true
+      break
     }
+    // 'silent', 'unechoed' and 'resend' (nothing left to resend with) all
+    // fall through to the failure exit below.
   }
   if (!ready) {
-    // Content never reached the input box after retries — report honestly so
-    // the caller logs a truthful failure instead of a misleading "✓ sent".
-    console.error('[injectText] content never appeared in the input box after retries')
+    // Content never reached the input box — report honestly so the caller
+    // logs a truthful failure instead of a misleading "✓ sent".
+    console.error('[injectText] content never appeared in the input box')
     recordDiagnostic({
       level: 'error',
       code: 'inject.failed',
-      message: 'content never appeared in the input box after retries',
+      message: 'content never appeared in the input box',
       paneId
     })
-    return false
+    return giveUp()
   }
 
   // Past this point the payload is confirmed to be IN the input box, so every
@@ -3582,7 +3705,8 @@ async function injectPane(
     echo?: EchoEvidence | null
     submit?: SubmitEvidence | null
     leftInComposer?: boolean
-  }
+  },
+  onInputBlocked?: (held: boolean) => void
 ): Promise<boolean> {
   const pane = panes.value.find((p) => p.id === paneId)
   if (!pane?.realized) return false
@@ -3591,7 +3715,9 @@ async function injectPane(
   // Anything reaching the prompt ends the parked-after-resume state the continue
   // button exists for — including this button's own injection.
   pane.resumeContinueAvailable = false
-  return injectText(ref.sessionId, text, logLabel, preserveNewlines, shouldAbort, evidence)
+  return injectText(
+    ref.sessionId, text, logLabel, preserveNewlines, shouldAbort, evidence, onInputBlocked,
+  )
 }
 
 // Text of a pane worth SHARING with another pane / the AI Chat: the rendered
@@ -8063,6 +8189,7 @@ registerCommand('workbench.action.focusPreview', () => {
 })
 registerCommand('ui.window.openPlans', () => { openPlansWindow() })
 registerCommand('ui.window.openResourceManager', () => { openResourceManager() })
+registerCommand('ui.window.openTurnStats', () => { openTurnStats() })
 registerCommand('ui.window.openGit', async () => {
   if (!currentWorkspace.value) return
   await window.agentTeam?.openGitWindow?.({ workspace_path: currentWorkspace.value })
@@ -11887,6 +12014,20 @@ backend.on('terminal.exit', (raw) => {
   if (ev.exit_code === 127 && pane.agentKey !== 'terminal') {
     promptCliInstall(pane.agentKey, pane.agentLabel, pane.id)
   }
+})
+
+// The PTY stopped taking input and the backend is holding what we wrote. Keyed
+// by session, not pane: it is the write path that is blocked, and injectText
+// only ever knows the session it is writing to. See lib/ptyInputBlock.ts.
+backend.on('terminal.input_blocked', (raw) => {
+  const ev = raw as { session_id?: string; pending?: number }
+  if (!ev?.session_id) return
+  inputBlocks.onBlocked(ev.session_id, ev.pending ?? 0, Date.now())
+})
+backend.on('terminal.input_unblocked', (raw) => {
+  const ev = raw as { session_id?: string }
+  if (!ev?.session_id) return
+  inputBlocks.onUnblocked(ev.session_id)
 })
 
 // The backend's pre-spawn probe found no executable at all. This fires BEFORE
@@ -15869,6 +16010,16 @@ function openResourceManager(): void {
   showResourceManager.value = true
 }
 
+// Turn Stats (Window menu): per-turn token usage of one pane. Mounted only
+// once asked for, like the Resource Manager above.
+const showTurnStats = ref(false)
+const turnStatsEverOpened = ref(false)
+function openTurnStats(): void {
+  closePopover()
+  turnStatsEverOpened.value = true
+  showTurnStats.value = true
+}
+
 // Pane right-click context menu, shared by the agent list, spotlight thumbnails,
 // and pane headers. The menu is rendered once in this component; each surface only
 // raises an open request with the pane id and pointer coords.
@@ -17460,6 +17611,14 @@ function paneIsCommander(p: ActivePane): boolean {
       :auto-reclaim-minutes="idleReclaimMinutes"
       :workspace-paths="knownWorkspacePaths"
       @close="showResourceManager = false"
+    />
+    <TurnStatsModal
+      v-if="turnStatsEverOpened"
+      :open="showTurnStats"
+      :backend="backend"
+      :panes="paneViews"
+      :active-pane-id="effectiveFocusPaneId"
+      @close="showTurnStats = false"
     />
     <PipelineManagerModal
       v-if="pmEverOpened"

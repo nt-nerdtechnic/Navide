@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 from agent_team_backend import app as app_module
-from agent_team_backend.cli_vendors.grok import GrokLogReader
+from agent_team_backend.cli_vendors.grok import GrokLogReader, _iso
 from agent_team_backend.log_readers.watcher import _ACTIVITY_KEYS_PERSIST_LIMIT
 
 WS = "/Users/dev/proj"
@@ -444,3 +444,57 @@ def test_resume_preflight_assumes_resumable_when_a_group_was_shortened(
 
     assert app_module._session_lookup_path("grok", WS, SID) == ""
     assert app_module._session_exists("grok", WS, SID) is True
+
+
+# ── turns_for_session (tokens.turns) ────────────────────────────────────────
+
+def test_turns_come_from_the_turn_completed_usage(_grok_home: Path) -> None:
+    """One turn per turn_completed. inputTokens is the whole input with the
+    cache counters reported as parts of it (totalTokens = input + output), so
+    input is the uncached remainder and the turn total equals totalTokens.
+    modelCalls is the call count; modelUsage (per model) is the breakdown."""
+    reader = GrokLogReader()
+    path = _write(_grok_home, [
+        _user(1, "<!-- agent-team-session: at-pane:x -->"),
+        _user(2, "幫我看一下"),
+        _agent(3, "好"),
+        _record(
+            "turn_completed", 4, stop_reason="end_turn",
+            usage={"inputTokens": 99708, "outputTokens": 1064, "totalTokens": 100772,
+                   "cachedReadTokens": 61952, "cacheCreationTokens": 100,
+                   "reasoningTokens": 813, "modelCalls": 3,
+                   "modelUsage": {"grok-4.6": {
+                       "inputTokens": 99708, "outputTokens": 1064,
+                       "cachedReadTokens": 61952, "cacheCreationTokens": 100}}},
+        ),
+        _user(5, "再一次"),
+        _turn(6, inp=50, out=5),
+    ])
+    assert reader.turns_method == "exact"
+    turns = reader.turns_for_session(path)
+    assert [(t.turn_index, t.prompt_excerpt, t.call_count) for t in turns] == [
+        (1, "幫我看一下", 3), (2, "再一次", 1),
+    ]
+    first = turns[0]
+    assert (first.input, first.cache_read, first.cache_creation, first.output) == (
+        99708 - 61952 - 100, 61952, 100, 1064,
+    )
+    assert first.total == 100772
+    assert len(first.calls) == 1 and first.calls[0].model == "grok-4.6"
+    # started_at is the first user chunk (event 1), ended_at the turn_completed (event 4).
+    assert first.started_at == _iso(_user(1, "")["params"], _user(1, ""))
+    assert first.ended_at == _iso(_turn(4)["params"], _turn(4))
+    assert first.started_at.endswith(".711Z") and first.ended_at.endswith(".714Z")
+    assert first.session_id == SID
+    assert turns[1].total == 55
+
+
+def test_turns_filter_on_session_id(_grok_home: Path) -> None:
+    reader = GrokLogReader()
+    path = _write(_grok_home, [
+        _user(1, "mine"), _turn(2, inp=10, out=1),
+        _user(1, "other", session_id="other-session"),
+        _turn(2, inp=99, out=9, session_id="other-session"),
+    ])
+    assert [t.total for t in reader.turns_for_session(path, SID)] == [11]
+    assert [t.total for t in reader.turns_for_session(path, "other-session")] == [108]

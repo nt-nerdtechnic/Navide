@@ -230,6 +230,9 @@ def _step_timestamp(metadata: bytes) -> str:
 class AntigravityLogReader(LogReader):
     vendor: str = "antigravity"
 
+    #: The log records no token usage, so there are no turns to cut.
+    turns_method: str = "unsupported"
+
     def __init__(self) -> None:
         self._cwd_cache: dict[str, tuple[float, str]] = {}  # path → (mtime, cwd)
 

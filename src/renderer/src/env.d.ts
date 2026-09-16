@@ -125,6 +125,7 @@ declare global {
         cb: (values: LegacyPlansPreferenceProjection) => void,
       ) => () => void
       onOpenResourceManager: (handler: () => void) => () => void
+      onOpenTurnStats: (handler: () => void) => () => void
       requestPaneAction: (args: {
         paneId: string
         action: 'focus' | 'reclaim'

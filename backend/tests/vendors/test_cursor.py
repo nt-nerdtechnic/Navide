@@ -602,3 +602,9 @@ def test_long_reply_keeps_its_closing_sentinel(tmp_path: Path, monkeypatch) -> N
     assert len(text) < 20_000                       # still capped
     assert text.startswith("xxxx")                  # head kept
     assert text.rstrip().endswith("<<LOOP_DONE>>")  # tail kept
+
+
+def test_turns_are_unsupported_the_log_has_no_token_usage(tmp_path: Path) -> None:
+    reader = CursorLogReader()
+    assert reader.turns_method == "unsupported"
+    assert reader.turns_for_session(tmp_path / "missing.db") == []

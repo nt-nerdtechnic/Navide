@@ -290,6 +290,11 @@ contextBridge.exposeInMainWorld('agentTeam', {
     ipcRenderer.on('menu:open-resource-manager', listener)
     return () => ipcRenderer.removeListener('menu:open-resource-manager', listener)
   },
+  onOpenTurnStats: (handler: () => void): (() => void) => {
+    const listener = (): void => handler()
+    ipcRenderer.on('menu:open-turn-stats', listener)
+    return () => ipcRenderer.removeListener('menu:open-turn-stats', listener)
+  },
   openPlansWindow: (args: { workspace_path: string; rel_path?: string }): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke('window:openPlans', {
       workspace_path: args.workspace_path,

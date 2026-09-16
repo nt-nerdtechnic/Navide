@@ -489,3 +489,45 @@ def test_parse_activity_turn_and_text_sentinels_coexist_with_the_mark(
         e for e in reader.parse_activity(wire, seen) if e.event_type == "turn_complete"
     ]
     assert [(e.detail, e.text) for e in completes] == [("idle", "ready")]
+
+
+# ── turns_for_session: the generic cut on turn_complete timestamps ──────────
+
+def test_turns_are_cut_on_turn_complete_timestamps(fake_kimi_home: Path) -> None:
+    """Kimi has no override, so the base cut applies: each usage.record is
+    assigned to the first turn_complete not earlier than it (kimi stamps the
+    boundary with the previous turn's last usage time), the prompt event in
+    the same window names the turn, and TokenUsage's folded input rides as
+    `input` with the cache fields left 0."""
+    reader = KimiLogReader()
+    wire = _session(fake_kimi_home, "/x")
+    _write_jsonl(wire, [
+        _prompt("first question", time=1_000),
+        _usage(10, 100, 5, time=2_000),
+        _usage(20, 200, 8, time=3_000),
+        _usage(30, 300, 9, time=4_000),
+        _prompt("second question", time=10_000),
+        _usage(40, 0, 1, time=11_000),
+    ])
+    assert reader.turns_method == "inferred"
+    turns = reader.turns_for_session(wire, _SID)
+    assert [(t.turn_index, t.prompt_excerpt, t.call_count) for t in turns] == [
+        (1, "first question", 3), (2, "second question", 1),
+    ]
+    first, second = turns
+    assert (first.input, first.cache_read, first.cache_creation, first.output) == (660, 0, 0, 22)
+    assert first.started_at == "1970-01-01T00:00:01.000Z"   # epoch-ms → ISO
+    assert first.ended_at == "1970-01-01T00:00:04.000Z"
+    assert first.calls[0].model == "kimi-code/kimi-for-coding"
+    assert (second.input, second.output) == (40, 1)
+    assert second.started_at == "1970-01-01T00:00:10.000Z"
+    assert first.session_id == _SID
+
+
+def test_turns_without_any_boundary_are_one_turn(fake_kimi_home: Path) -> None:
+    reader = KimiLogReader()
+    wire = _session(fake_kimi_home, "/x")
+    # No turn.prompt → parse_activity never opens a turn → no turn_complete.
+    _write_jsonl(wire, [_usage(1, 0, 1, time=1), _usage(2, 0, 2, time=2)])
+    turns = reader.turns_for_session(wire)
+    assert [(t.turn_index, t.call_count, t.total, t.prompt_excerpt) for t in turns] == [(1, 2, 6, "")]

@@ -64,6 +64,9 @@ from ..log_readers.base import (
     IncrementalParseResult,
     LogReader,
     TokenUsage,
+    TurnCall,
+    TurnUsage,
+    merge_prompt_excerpt,
     read_jsonl_tail,
     user_prompt_text,
 )
@@ -206,6 +209,9 @@ class _Event:
 
 class GrokLogReader(LogReader):
     vendor: str = "grok"
+
+    #: turns_for_session reads the turn_completed record's own usage.
+    turns_method: str = "exact"
 
     # ---- layout ------------------------------------------------------------
 
@@ -378,6 +384,69 @@ class GrokLogReader(LogReader):
             if usage is not None:
                 out.append(usage)
         return IncrementalParseResult(out, next_checkpoint)
+
+    def turns_for_session(self, path: Path, session_id: str = "") -> list[TurnUsage]:
+        """One turn per `turn_completed` record, which carries the whole
+        turn's usage: inputTokens is the full input with cachedReadTokens /
+        cacheCreationTokens reported as parts of it (totalTokens is input +
+        output), so input here is the uncached remainder. The record has no
+        per-call breakdown — `modelCalls` is the count, and `modelUsage`
+        (one entry per model) is what calls_detail shows.
+        """
+        if path.name != _TRANSCRIPT:
+            return []
+        try:
+            records = self._read_records(path)
+        except OSError as err:
+            log.debug("grok transcript unreadable %s: %s", path, err)
+            return []
+        turns: list[TurnUsage] = []
+        pending_text = ""
+        pending_ts: str | None = None
+        for _offset, value in records:
+            event = _Event(value)
+            if session_id and event.session_id != session_id:
+                continue
+            if event.kind == "user_message_chunk":
+                if pending_ts is None:
+                    pending_ts = event.timestamp or None
+                pending_text = merge_prompt_excerpt(pending_text, _chunk_text(event.update))
+                continue
+            if event.kind != "turn_completed":
+                continue
+            usage = event.update.get("usage")
+            if not isinstance(usage, dict):
+                continue
+            turn = TurnUsage(
+                turn_index=0, session_id=event.session_id,
+                started_at=pending_ts, ended_at=event.timestamp or None,
+                prompt_excerpt=pending_text,
+                model_calls=_int(usage.get("modelCalls")) or None,
+            )
+            pending_text, pending_ts = "", None
+            per_model = usage.get("modelUsage")
+            parts = (
+                list(per_model.items())
+                if isinstance(per_model, dict) and per_model
+                else [("", usage)]
+            )
+            for model, counts in parts:
+                if not isinstance(counts, dict):
+                    continue
+                cache_read = _int(counts.get("cachedReadTokens"))
+                cache_creation = _int(counts.get("cacheCreationTokens"))
+                turn.add_call(TurnCall(
+                    ts=event.timestamp or None, model=str(model),
+                    input=max(0, _int(counts.get("inputTokens")) - cache_read - cache_creation),
+                    cache_read=cache_read, cache_creation=cache_creation,
+                    output=_int(counts.get("outputTokens")),
+                ))
+            if turn.total == 0:
+                continue
+            turns.append(turn)
+        for n, turn in enumerate(turns, 1):
+            turn.turn_index = n
+        return turns
 
     def parse_activity(
         self, path: Path, seen_keys: set[str]

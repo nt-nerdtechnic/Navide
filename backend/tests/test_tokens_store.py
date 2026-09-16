@@ -8,7 +8,8 @@ from pathlib import Path
 import pytest
 
 from agent_team_backend.db import Database
-from agent_team_backend.tokens_store import LEGACY_EVENT_KEYS_LIMIT, TokensStore
+from agent_team_backend.log_readers.base import LogReader, TurnCall, TurnUsage
+from agent_team_backend.tokens_store import LEGACY_EVENT_KEYS_LIMIT, TURNS_CACHE_LIMIT, TokensStore
 
 
 def _kv(tmp_path: Path, key: str):
@@ -503,3 +504,131 @@ def test_live_tally_is_not_persisted(tmp_path: Path) -> None:
 
 def test_snapshot_without_a_workspace_still_has_live_by_session(store: TokensStore) -> None:
     assert store.snapshot(None)["workspace"]["live_by_session"] == {}
+
+
+# ──────────────── turns_for (tokens.turns) ────────────────
+
+
+class _TurnsReader(LogReader):
+    """Reader whose cut is scripted; counts how often it is asked to cut."""
+
+    vendor = "fake"
+
+    def __init__(self, turns: list[TurnUsage], method: str = "exact") -> None:
+        self.turns_method = method
+        self._turns = turns
+        self.cuts = 0
+
+    def project_dirs(self) -> list[Path]:
+        return []
+
+    def session_files(self) -> list[Path]:
+        return []
+
+    def parse_session_file(self, path: Path, seen_keys: set[str]) -> list:
+        return []
+
+    def turns_for_session(self, path: Path, session_id: str = "") -> list[TurnUsage]:
+        self.cuts += 1
+        return self._turns
+
+
+def _turn(index: int, **counts: int) -> TurnUsage:
+    turn = TurnUsage(
+        turn_index=index, session_id="s1", started_at="2026-09-16T00:00:00Z",
+        ended_at="2026-09-16T00:00:05Z", prompt_excerpt=f"prompt {index}",
+    )
+    turn.add_call(TurnCall(
+        ts="2026-09-16T00:00:01Z", model="m", input=counts.get("input", 1),
+        cache_read=counts.get("cache_read", 10), cache_creation=counts.get("cache_creation", 0),
+        output=counts.get("output", 2),
+    ))
+    return turn
+
+
+def test_turns_for_shapes_the_reply_and_sums_totals(store: TokensStore, tmp_path: Path) -> None:
+    log = tmp_path / "s1.jsonl"
+    log.write_text("x\n", encoding="utf-8")
+    reader = _TurnsReader([_turn(1), _turn(2, input=5, output=7)])
+
+    cut = store.turns_for(reader, log, "s1")
+    assert cut["method"] == "exact"
+    assert [t["turn_index"] for t in cut["turns"]] == [1, 2]
+    assert cut["turns"][0] == {
+        "turn_index": 1, "started_at": "2026-09-16T00:00:00Z", "ended_at": "2026-09-16T00:00:05Z",
+        "prompt_excerpt": "prompt 1", "input": 1, "cache_read": 10, "cache_creation": 0,
+        "output": 2, "total": 13, "calls": 1,
+    }
+    assert "calls_detail" not in cut["turns"][0]
+    assert cut["totals"] == {
+        "input": 6, "cache_read": 20, "cache_creation": 0, "output": 9, "total": 35, "calls": 2,
+    }
+
+    detailed = store.turns_for(reader, log, "s1", include_calls=True)
+    assert detailed["turns"][1]["calls_detail"] == [{
+        "ts": "2026-09-16T00:00:01Z", "model": "m", "input": 5,
+        "cache_read": 10, "cache_creation": 0, "output": 7,
+    }]
+
+
+def test_turns_for_is_cached_on_the_files_identity(store: TokensStore, tmp_path: Path) -> None:
+    """Same path + mtime + size → served from memory; a log that grew is re-cut."""
+    log = tmp_path / "s1.jsonl"
+    log.write_text("x\n", encoding="utf-8")
+    reader = _TurnsReader([_turn(1)])
+    store.turns_for(reader, log, "s1")
+    store.turns_for(reader, log, "s1", include_calls=True)
+    assert reader.cuts == 1
+    log.write_text("x\ny\n", encoding="utf-8")
+    store.turns_for(reader, log, "s1")
+    assert reader.cuts == 2
+
+
+def test_turns_for_cache_is_bounded(store: TokensStore, tmp_path: Path) -> None:
+    reader = _TurnsReader([_turn(1)])
+    for i in range(TURNS_CACHE_LIMIT + 5):
+        log = tmp_path / f"s{i}.jsonl"
+        log.write_text("x\n", encoding="utf-8")
+        store.turns_for(reader, log, f"s{i}")
+    assert len(store._turns_cache) == TURNS_CACHE_LIMIT
+
+
+def test_turns_for_reports_an_unsupported_vendor_as_empty(store: TokensStore, tmp_path: Path) -> None:
+    log = tmp_path / "s1.jsonl"
+    log.write_text("x\n", encoding="utf-8")
+    cut = store.turns_for(_TurnsReader([], method="unsupported"), log, "s1")
+    assert cut == {
+        "method": "unsupported", "turns": [],
+        "totals": {"input": 0, "cache_read": 0, "cache_creation": 0, "output": 0, "total": 0, "calls": 0},
+    }
+
+
+def test_turns_for_counts_calls_the_log_states_without_listing(store: TokensStore, tmp_path: Path) -> None:
+    """grok writes modelCalls=3 with a single per-model breakdown: the count
+    is the log's, calls_detail is what is actually there."""
+    log = tmp_path / "s1.jsonl"
+    log.write_text("x\n", encoding="utf-8")
+    turn = _turn(1)
+    turn.model_calls = 3
+    cut = store.turns_for(_TurnsReader([turn]), log, "s1", include_calls=True)
+    assert cut["turns"][0]["calls"] == 3
+    assert len(cut["turns"][0]["calls_detail"]) == 1
+    assert cut["totals"]["calls"] == 3
+
+
+def test_turns_for_keeps_sessions_sharing_one_source_apart(store: TokensStore, tmp_path: Path) -> None:
+    """opencode/kilo keep every session in one SQLite file: the cache must be
+    keyed on the session filter too, or the second session served from the
+    same unchanged file gets the first session's cut."""
+    db = tmp_path / "shared.db"
+    db.write_text("x\n", encoding="utf-8")
+    reader = _TurnsReader([_turn(1)])
+    first = store.turns_for(reader, db, "s1")
+    reader._turns = [_turn(1), _turn(2)]
+    second = store.turns_for(reader, db, "s2")
+    assert reader.cuts == 2
+    assert len(first["turns"]) == 1 and len(second["turns"]) == 2
+    # Both cuts are then served from memory.
+    store.turns_for(reader, db, "s1")
+    store.turns_for(reader, db, "s2")
+    assert reader.cuts == 2
