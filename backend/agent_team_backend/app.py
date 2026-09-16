@@ -31,6 +31,7 @@ from . import ws_auth
 from . import loop_watchdog
 from . import mem_probe
 from . import osplat
+from . import portable_credentials
 from . import push_delivery
 from . import subagent_tracker
 from .analyzer import DEFAULT_MODEL as ANALYZER_DEFAULT_MODEL
@@ -1129,6 +1130,7 @@ def forget_pane_activity(pane_id: str) -> None:
     _pane_activity.pop(pane_id, None)
     hook_drain.forget_pane(pane_id)
     push_delivery.forget_pane(pane_id)
+    portable_credentials.forget_launch(pane_id)
     forget_pane_live_sessions(pane_id)
 
 
@@ -2789,6 +2791,12 @@ def _agent_signed_out(agent_key: str) -> bool:
     if spec is None or spec.live_file is None:
         return False
     try:
+        # A selected portable credential that can be put in effect is what
+        # the pane will run on, whatever the live login says. One that is
+        # missing or shadowed does not count: the spawn refuses it with the
+        # reason, and the native answer below stays the honest one.
+        if portable_credentials.selection_usable(agent_key, home=Path.home()):
+            return False
         return not bool(credential_vault.identity(agent_key).get("signedIn"))
     except Exception:  # noqa: BLE001 — advisory only, never fails a spawn
         return False
