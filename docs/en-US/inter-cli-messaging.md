@@ -148,7 +148,7 @@ A delivered message is typed into the target pane like this:
 ```
 [Navide MSG] from: builder-1
 Please review src/main.ts and reply with the blocking issues only.
-（回覆方式：第一行完整寫成 ---MSG-START--- to: builder-1 re: 4f2a…，下一行起為訊息內容，最後一行寫 ---MSG-END---；to: 必須與 ---MSG-START--- 同一行，不可換行；re 欄位請原樣帶回，三行都要頂格，不可縮排，也不可放進 code block）
+（回覆方式：第一行完整寫成 ---MSG-START--- to: builder-1 re: 4f2a…，下一行起為訊息內容，最後一行寫 ---MSG-END---；to: 必須與 ---MSG-START--- 同一行，不可換行；re 欄位請原樣帶回，三行都要頂格，不可縮排，也不可放進 code block。只是「收到」或沒有新資訊就不要回信，純確認請改用 cli_send 的 kind="ack"（不會打擾對方）；已用 cli_send 送出的內容不要再用 MSG 區塊重述）
 ```
 
 The first line always identifies the sender. The trailing hint is what teaches

@@ -315,6 +315,22 @@ describe('renderEnvelope', () => {
     expect(parseMessages(env)).toEqual([])
   })
 
+  it('tells the recipient when not to reply, on the same single line', () => {
+    // Regression guard for the ack ping-pong: one report produced four
+    // messages in 52s (report, bare-line restatement of the same report, ack,
+    // ack of the ack) because the hint only taught HOW to reply. The hint must
+    // name the two no-reply cases and point at kind="ack", without growing a
+    // second line that could parse as a marker.
+    const env = renderEnvelope('claude-1', 'hello', { correlationId: 'abc123:7' })
+    const lines = env.split('\n')
+    expect(lines).toHaveLength(3)
+    const hint = lines[2]
+    expect(hint).toContain('沒有新資訊就不要回信')
+    expect(hint).toContain('kind="ack"')
+    expect(hint).toContain('已用 cli_send 送出的內容不要再用 MSG 區塊重述')
+    expect(parseMessages(env)).toEqual([])
+  })
+
   it('omits the reply hint when disabled', () => {
     const env = renderEnvelope('claude-1', 'hello', { includeReplyHint: false })
     expect(env).toBe(`${MSG_ENVELOPE_PREFIX} claude-1\nhello`)

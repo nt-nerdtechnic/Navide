@@ -328,6 +328,12 @@ export function sanitizeMessageContent(content: string): string {
  * together, so a reply that breaks them apart is dropped silently — no queue
  * entry, no failure notice, nothing for either side to see.
  *
+ * The hint also says when NOT to reply. Without that, agents read it as "every
+ * message must be answered" and ack each other's acks, each ack costing the
+ * other pane a full turn, and restate a cli_send report as a bare-line block
+ * so the recipient gets it twice. `kind: "ack"` on cli_send is logged and never
+ * injected, which is the right shape for a bare acknowledgement.
+ *
  * `correlationId` is asked back verbatim in the reply's `re:` field, which is
  * what lets the reply be matched to this message instead of arriving as an
  * unrelated one. Omitting it renders exactly the pre-correlation hint.
@@ -346,7 +352,9 @@ export function renderEnvelope(
     lines.push(
       `（回覆方式：第一行完整寫成 ${MSG_START} ${head}，下一行起為訊息內容，` +
         `最後一行寫 ${MSG_END}；to: 必須與 ${MSG_START} 同一行，不可換行；` +
-        `${echo}三行都要頂格，不可縮排，也不可放進 code block）`,
+        `${echo}三行都要頂格，不可縮排，也不可放進 code block。` +
+        `只是「收到」或沒有新資訊就不要回信，純確認請改用 cli_send 的 kind="ack"（不會打擾對方）；` +
+        `已用 cli_send 送出的內容不要再用 MSG 區塊重述）`,
     )
   }
   return lines.join('\n')
