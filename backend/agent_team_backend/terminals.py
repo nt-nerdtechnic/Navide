@@ -128,6 +128,16 @@ def output_frame_session_id(frame: bytes) -> str | None:
 
 
 @dataclass
+class _InputBlock:
+    """One "pty input blocked" episode: from the first EAGAIN until the
+    session's _in_buffers drains to empty."""
+    since: float                # loop time of the first EAGAIN
+    timer: asyncio.TimerHandle | None = None  # pending _INPUT_BLOCK_NOTIFY_MS check
+    notified: bool = False      # terminal.input_blocked was sent
+    drained: int = 0            # bytes the PTY accepted during the episode
+
+
+@dataclass
 class TerminalSession:
     id: str
     pane_id: str
@@ -289,6 +299,25 @@ _COALESCE_MS = 2
 _ECHO_LAG_WARN_MS = 250
 _ECHO_LAG_MAX_MS = 5000
 _READER_SUSPEND_WARN_MS = 100
+# Upper bound on how long _flush_output keeps the PTY reader detached while a
+# drain is on the wire.  The pause is deliberate backpressure (a renderer that
+# cannot absorb output must not OOM the backend), but an unbounded one starves
+# the CLI's stdin: its stdout write blocks on the full PTY queue, it stops
+# reading input, and every message written to it sits in _in_buffers as "pty
+# input blocked".  Past this bound the reader resumes and the pressure lands on
+# our own output buffer instead (see _BUF_CAP's drop policy).
+_READER_PAUSE_MAX_MS = 1000
+# Output buffered per session before the OOM guard kicks in.  With no drain in
+# flight it forces an immediate flush; with one already stalled on the WS it
+# drops the OLDEST chunks instead, so memory stays bounded while the reader
+# keeps running.  A TUI loses a partial repaint until its next redraw; the CLI
+# itself never notices.
+_BUF_CAP = 5 * 1024 * 1024
+# Input blocked for longer than this is reported to the owning window as
+# terminal.input_blocked (and its release as terminal.input_unblocked) so the
+# renderer waits for the CLI instead of re-pasting.  Shorter blips — a TUI
+# briefly not reading while it repaints — stay silent.
+_INPUT_BLOCK_NOTIFY_MS = 500
 # Grace between a kill's SIGTERM and the SIGKILL escalation. Named so a test
 # can widen it: the CLI's SIGTERM handler is what flushes the transcript, and
 # on a loaded runner that flush can outlast a hard-coded window.
@@ -408,6 +437,24 @@ class TerminalService:
         # re-summing the whole buffer each time is quadratic in chunk count.
         self._out_buf_bytes: dict[str, int] = {}       # session_id -> buffered bytes
         self._out_handles: dict[str, asyncio.TimerHandle] = {}  # session_id -> timer
+        # One in-flight _flush_output drain per session; a flush that lands
+        # while it is on the wire leaves its chunks buffered for the drain to
+        # pick up when it finishes.
+        self._drain_tasks: dict[str, asyncio.Task[None]] = {}
+        # The _READER_PAUSE_MAX_MS timer that resumes the reader under a
+        # stalled drain.
+        self._pause_timers: dict[str, asyncio.TimerHandle] = {}
+        # Per-session lock held by drain_output: while held, nothing else
+        # starts a drain (the barrier emits the remainder itself), so a
+        # streaming CLI cannot keep the resize waiting — and the several
+        # resizes a drag sends run their barriers one after another instead
+        # of interleaving frames.
+        self._resize_barriers: dict[str, asyncio.Lock] = {}
+        # Bytes dropped from _out_buffers in the current overflow episode and
+        # not yet marked in the log mirror.  Present = the episode's warning
+        # was logged; cleared once the buffer has fully drained so the next
+        # overflow reports again.
+        self._out_dropped: dict[str, int] = {}
         # Per-session pending INPUT bytes not yet accepted by the non-blocking
         # PTY master (EAGAIN / partial write). Drained via add_writer.
         self._in_buffers: dict[str, bytearray] = {}    # session_id -> pending bytes
@@ -427,8 +474,9 @@ class TerminalService:
         # resetting the clock and the lag they are feeling would never report.
         self._echo_probe: dict[str, float] = {}
         # Sessions whose PTY refused input (kernel buffer full).  Tracked so the
-        # condition is logged on the transition rather than on every retry.
-        self._input_blocked: set[str] = set()
+        # condition is logged on the transition rather than on every retry,
+        # and so the release can report how long it lasted.
+        self._input_blocked: dict[str, _InputBlock] = {}
         # Background task keeping each live session's descendant snapshot
         # fresh, so the EOF path can reap orphans (see _reap_exit_orphans).
         # The wakeup event lets create() pull the next refresh forward.
@@ -655,10 +703,16 @@ class TerminalService:
             and extract_resume_id(s.command) == resume_id
         ]
 
-    def write(self, session_id: str, data: str) -> None:
+    def write(self, session_id: str, data: str) -> int:
+        """Queue `data` for the PTY and return the bytes still pending after
+        the flush attempt (0 = the kernel accepted everything)."""
         session = self._require(session_id)
         if session.closed:
-            return
+            return 0
+        if not data:
+            # A probe of the pending count (the renderer polls this while it
+            # waits out a blocked episode): no bytes, no timers, no flush.
+            return len(self._in_buffers.get(session_id) or b"")
         # Queue the bytes and try to drain now. The PTY master is non-blocking,
         # so a full kernel buffer raises EAGAIN. The old code dropped the chunk
         # on EAGAIN (silent data loss — the agent's input box stayed empty while
@@ -670,6 +724,7 @@ class TerminalService:
         buf = self._in_buffers.setdefault(session_id, bytearray())
         buf.extend(data.encode("utf-8"))
         self._flush_input(session)
+        return len(buf)
 
     def _flush_input(self, session: TerminalSession) -> None:
         """Drain a session's pending input into the PTY master without blocking.
@@ -680,6 +735,7 @@ class TerminalService:
         buf = self._in_buffers.get(session.id)
         if buf is None or session.closed:
             return
+        block = self._input_blocked.get(session.id)
         while buf:
             try:
                 n = session.handle.write(buf)
@@ -688,25 +744,90 @@ class TerminalService:
             except OSError as err:
                 log.warning("write to session %s failed: %s", session.id, err)
                 buf.clear()
+                self._end_input_block(session)
                 self._unwatch_writable(session)
                 return
             if n <= 0:
                 break
             del buf[:n]
+            if block is not None:
+                block.drained += n
         if buf:
             # The PTY's kernel buffer is full, i.e. the CLI has stopped reading
             # its stdin. The user sees typed characters simply not appear, so
             # this is worth a line even though it usually self-heals.
-            if session.id not in self._input_blocked:
-                self._input_blocked.add(session.id)
+            if block is None:
                 log.warning(
                     "pty input blocked session=%s agent=%s pending=%d bytes",
                     session.id, session.agent_key, len(buf),
                 )
+                self._input_blocked[session.id] = _InputBlock(
+                    since=self._loop.time(),
+                    timer=self._loop.call_later(
+                        _INPUT_BLOCK_NOTIFY_MS / 1000,
+                        self._notify_input_blocked,
+                        session,
+                    ),
+                )
             self._watch_writable(session)
         else:
-            self._input_blocked.discard(session.id)
+            self._end_input_block(session)
             self._unwatch_writable(session)
+
+    def _notify_input_blocked(self, session: TerminalSession) -> None:
+        """_INPUT_BLOCK_NOTIFY_MS after the first EAGAIN: still blocked, so
+        tell the owning window the CLI has not seen those bytes."""
+        block = self._input_blocked.get(session.id)
+        if block is None or session.closed:
+            return
+        block.timer = None
+        block.notified = True
+        buf = self._in_buffers.get(session.id)
+        self._emit_session_event(
+            session, "terminal.input_blocked", {"pending": len(buf) if buf else 0}
+        )
+
+    def _end_input_block(self, session: TerminalSession) -> None:
+        """Close the session's blocked episode, if any.  Only an episode the
+        window was told about gets the release event and the log line; short
+        blips that never crossed _INPUT_BLOCK_NOTIFY_MS stay silent.
+        `drained` is what the PTY actually accepted during the episode —
+        also on close or a write error, where the rest was discarded."""
+        block = self._input_blocked.pop(session.id, None)
+        if block is None:
+            return
+        if block.timer is not None:
+            block.timer.cancel()
+        if not block.notified:
+            return
+        drained = block.drained
+        duration_ms = (self._loop.time() - block.since) * 1000
+        log.warning(
+            "pty input unblocked session=%s agent=%s after=%.0fms drained=%d bytes",
+            session.id, session.agent_key, duration_ms, drained,
+        )
+        self._emit_session_event(
+            session,
+            "terminal.input_unblocked",
+            {"duration_ms": round(duration_ms), "drained": drained},
+        )
+
+    def _emit_session_event(
+        self, session: TerminalSession, type_: str, fields: dict[str, Any]
+    ) -> None:
+        """Route a per-session JSON event to the window that owns the PTY —
+        the same path terminal.exit takes (the sink keys on
+        terminal_session_id)."""
+        event = make_event(
+            type_,
+            {
+                "terminal_session_id": session.id,
+                "session_id": session.id,
+                "pane_id": session.pane_id,
+                **fields,
+            },
+        )
+        self._loop.create_task(self._emit(event))
 
     def _on_writable(self, session: TerminalSession) -> None:
         self._flush_input(session)
@@ -769,6 +890,39 @@ class TerminalService:
         session = self._sessions.get(session_id)
         if not session or session.closed:
             return
+        lock = self._resize_barriers.setdefault(session.id, asyncio.Lock())
+        try:
+            async with lock:
+                await self._drain_output_behind_barrier(session)
+        finally:
+            # Output read while the barrier held was deferred by the lock and
+            # its debounce timer may already have fired into nothing.  (A
+            # waiting barrier re-acquires on its next turn, so the lock reads
+            # free here; the drain this starts is what it will wait on.)
+            if not session.closed and not lock.locked() and self._out_buffers.get(session.id):
+                self._flush_output(session)
+
+    async def _drain_output_behind_barrier(self, session: TerminalSession) -> None:
+        if session.closed:
+            return
+        # 0. A batched drain already on the wire carries old-width bytes; let
+        #    it land first or it would follow the ack.  The barrier flag keeps
+        #    its finally (and any debounce timer) from starting another drain
+        #    with what queued behind it — that remainder is emitted below, so
+        #    this is one await even under a CLI that never stops printing.
+        task = self._drain_tasks.get(session.id)
+        if task is not None:
+            try:
+                await asyncio.shield(task)
+            except Exception as err:  # noqa: BLE001
+                log.warning(
+                    "resize barrier: in-flight drain for session %s failed: %s",
+                    session.id, err,
+                )
+            if session.closed:
+                self._out_buf_bytes.pop(session.id, None)
+                self._out_buffers.pop(session.id, None)
+                return
         # 1. Slurp any kernel-buffered bytes the reader hasn't picked up yet.
         #    Raw bytes — the frontend's streaming decoder handles any split
         #    multi-byte character.
@@ -798,7 +952,7 @@ class TerminalService:
         combined = b"".join(chunks)
         for piece in self._split_chunks(combined):
             await self._emit(self._build_output_frame(session, piece))
-        self._mirror_to_log(session, combined)
+        self._mirror_flush_to_log(session, combined)
 
     def interrupt(self, session_id: str) -> None:
         session = self._require(session_id)
@@ -1150,7 +1304,6 @@ class TerminalService:
         """Buffer one drained batch of raw bytes and schedule (or force) a
         flush. No decoding here — bytes ship verbatim in binary frames and the
         frontend's streaming decoder handles chunk-split multi-byte chars."""
-        _BUF_CAP = 5 * 1024 * 1024  # 5 MB — force an immediate flush if exceeded
         buf = self._out_buffers.setdefault(session.id, [])
         buf.append(chunk)
         window = self._recent_chunks.setdefault(session.id, deque(maxlen=512))
@@ -1158,7 +1311,28 @@ class TerminalService:
         window.append((now, nbytes))
         buf_size = self._out_buf_bytes.get(session.id, 0) + len(chunk)
         self._out_buf_bytes[session.id] = buf_size
-        if buf_size >= _BUF_CAP:
+        barrier = self._resize_barriers.get(session.id)
+        if buf_size >= _BUF_CAP and (
+            session.id in self._drain_tasks or (barrier is not None and barrier.locked())
+        ):
+            # A drain (or a resize barrier's inline emit) is already stalled
+            # on the WS and the reader was resumed so the CLI keeps running
+            # (see _READER_PAUSE_MAX_MS) — a flush would only defer, so the
+            # only place left for the pressure is our own buffer.  Drop the
+            # oldest chunks: the newest carry the TUI's current screen state.
+            dropped = 0
+            while buf_size >= _BUF_CAP and len(buf) > 1:
+                old = buf.pop(0)
+                buf_size -= len(old)
+                dropped += len(old)
+            self._out_buf_bytes[session.id] = buf_size
+            if session.id not in self._out_dropped:
+                log.warning(
+                    "pty output dropped session=%s agent=%s bytes=%d (ws not draining)",
+                    session.id, session.agent_key, dropped,
+                )
+            self._out_dropped[session.id] = self._out_dropped.get(session.id, 0) + dropped
+        elif buf_size >= _BUF_CAP:
             # Cancel the pending debounce timer and flush now to avoid OOM.
             existing = self._out_handles.pop(session.id, None)
             if existing:
@@ -1201,9 +1375,16 @@ class TerminalService:
         frame (large frames have been observed to trigger the crash).
         """
         self._out_handles.pop(session.id, None)
+        barrier = self._resize_barriers.get(session.id)
+        if session.id in self._drain_tasks or (barrier is not None and barrier.locked()):
+            # One drain on the wire per session: whatever is buffered now is
+            # picked up by that task when it finishes (see _drain's finally) —
+            # or by the resize barrier, which emits the remainder itself.
+            return
         self._out_buf_bytes.pop(session.id, None)
         chunks = self._out_buffers.pop(session.id, None)
         if not chunks:
+            self._out_dropped.pop(session.id, None)
             return
         combined = b"".join(chunks)
 
@@ -1221,32 +1402,92 @@ class TerminalService:
         # Suspend reading from the PTY while we drain the network buffer.
         # This provides natural backpressure so the CLI blocks when writing
         # instead of OOMing the Python backend or Electron WebSocket receiver.
+        # The hold is bounded (_READER_PAUSE_MAX_MS): a CLI blocked on its
+        # stdout stops reading its stdin, so past that the reader resumes and
+        # _absorb_output's drop policy takes over as the OOM guard.
         session.handle.pause_reading()
 
         suspended_at = self._loop.time()
+        resumed_at: float | None = None
+
+        def _resume_reader() -> None:
+            nonlocal resumed_at
+            if resumed_at is not None or session.closed:
+                return
+            resumed_at = self._loop.time()
+            try:
+                session.handle.resume_reading()
+            except (ValueError, OSError) as err:
+                log.warning("re-add reader for session %s failed: %s", session.id, err)
+
+        def _resume_early() -> None:
+            self._pause_timers.pop(session.id, None)
+            _resume_reader()
+
+        self._pause_timers[session.id] = self._loop.call_later(
+            _READER_PAUSE_MAX_MS / 1000, _resume_early
+        )
 
         async def _drain() -> None:
             try:
                 for piece in self._split_chunks(combined):
                     await self._emit(self._build_output_frame(session, piece))
             finally:
+                timer = self._pause_timers.pop(session.id, None)
+                if timer is not None:
+                    timer.cancel()
                 # Nothing is read from the PTY for this whole span, so a long
                 # one is the backpressure path reaching the CLI.
-                held_ms = (self._loop.time() - suspended_at) * 1000
+                held_until = resumed_at if resumed_at is not None else self._loop.time()
+                held_ms = (held_until - suspended_at) * 1000
                 if held_ms >= _READER_SUSPEND_WARN_MS:
                     log.warning(
                         "pty reader suspended session=%s agent=%s held=%.0fms bytes=%d",
                         session.id, session.agent_key, held_ms, len(combined),
                     )
-                if not session.closed:
-                    try:
-                        session.handle.resume_reading()
-                    except (ValueError, OSError) as err:
-                        log.warning("re-add reader for session %s failed: %s", session.id, err)
+                _resume_reader()
+                self._drain_tasks.pop(session.id, None)
+                if session.closed:
+                    # _close ran mid-drain: the fd is gone (its number may
+                    # already be reused), so no further pause/resume — drop
+                    # whatever was deferred to us.
+                    self._out_buffers.pop(session.id, None)
+                    self._out_buf_bytes.pop(session.id, None)
+                    self._out_dropped.pop(session.id, None)
+                    return
+                # Output that arrived while this drain was on the wire is
+                # still buffered (flushes defer to the in-flight drain).  Under
+                # a resize barrier _flush_output defers again and drain_output
+                # emits the remainder itself.
+                if self._out_buffers.get(session.id):
+                    pending = self._out_handles.pop(session.id, None)
+                    if pending:
+                        pending.cancel()
+                    self._flush_output(session)
+                else:
+                    # Fully drained: the next overflow is a new episode.
+                    self._out_dropped.pop(session.id, None)
 
-        self._loop.create_task(_drain())
+        self._drain_tasks[session.id] = self._loop.create_task(_drain())
 
         # Persist cleaned output to the conversation log (if one was opened).
+        self._mirror_flush_to_log(session, combined)
+
+    def _mirror_flush_to_log(self, session: TerminalSession, combined: bytes) -> None:
+        """Mirror one flushed payload into the log, marking any gap first.
+
+        Chunks dropped under a stalled drain never reach the log, so the gap
+        is marked ahead of the survivors (the count is final: drops only
+        happen while a drain is in flight, and a flush runs after it
+        finished).  The marker stays out of the live PTY stream the renderer
+        sees.
+        """
+        dropped = self._out_dropped.get(session.id)
+        if dropped:
+            self._out_dropped[session.id] = 0
+            self._mirror_to_log(
+                session, f"\r\n[navide: {dropped} bytes of output dropped]\r\n".encode()
+            )
         self._mirror_to_log(session, combined)
 
     def _mirror_to_log(self, session: TerminalSession, data: bytes) -> None:
@@ -1311,13 +1552,20 @@ class TerminalService:
         self._in_buffers.pop(session.id, None)
         self._recent_chunks.pop(session.id, None)
         self._echo_probe.pop(session.id, None)
-        self._input_blocked.discard(session.id)
+        # An open blocked episode ends here; the window still gets its release
+        # event (with what the PTY had accepted so far) if it was told about
+        # the block.
+        self._end_input_block(session)
         session.handle.close()
         # Cancel pending batch timer and flush any buffered output before the
         # exit event so the client sees all output in order.
         handle = self._out_handles.pop(session.id, None)
         if handle:
             handle.cancel()
+        timer = self._pause_timers.pop(session.id, None)
+        if timer:
+            timer.cancel()
+        self._resize_barriers.pop(session.id, None)
         self._flush_output(session)
         # The transport ships raw bytes, so nothing is ever held back there —
         # but the log-mirror decoder may still hold a final chunk that ended

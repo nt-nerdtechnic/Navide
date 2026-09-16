@@ -218,8 +218,11 @@ export interface RouteResult {
 
 export interface MessagingDeps {
   now: () => number
-  /** Inject text into a pane; resolves true when the injection verified OK. */
-  deliver: (paneId: string, text: string) => Promise<boolean>
+  /** Inject text into a pane; resolves true when the injection verified OK.
+   *  `shouldAbort` turns true when the user withdraws the message while the
+   *  pane's PTY is holding it unread (see cancelMessage); an injection that
+   *  honours it clears what it wrote and resolves false. */
+  deliver: (paneId: string, text: string, shouldAbort?: () => boolean) => Promise<boolean>
   /** True when the pane can accept an injection right now (idle + settled). */
   isPaneIdle: (paneId: string) => boolean
   /** Why isPaneIdle() said no, as an i18n key suffix under `msg.hold-*`. Must
@@ -454,6 +457,10 @@ const correlations = new Map<string, { id: number; sentAt: number }>()
 /** Messages a recipient has reserved but not yet consumed, by message id. See
  *  reserveIncoming(); `reservedAt` is what expireReadReservations() reads. */
 const readReserved = new Map<number, { paneId: string; reservedAt: number }>()
+/** Messages withdrawn while `delivering` on a `pty-blocked` hold — the one
+ *  in-flight state a cancel can still reach, because the pane has not read
+ *  the text yet. The injection polls this and clears what it wrote. */
+const cancelRequested = new Set<number>()
 /** How many times each queued message's push has come back `unclear`, by
  *  message id. Compared against {@link PUSH_UNCLEAR_LIMIT} in pumpPane();
  *  cleared when the message gets out or leaves the queue. */
@@ -1278,7 +1285,7 @@ async function pumpPane(paneId: string): Promise<void> {
   let ackReason: MessageReason | null = null
   let requeued = false
   try {
-    const ok = await deliverOnce(paneId, msg, envelope, push)
+    const ok = await deliverOnce(paneId, msg, envelope, push, () => cancelRequested.has(id))
     const stuck = ok === 'unclear'
       && (pushUnclearCount.get(id) ?? 0) + 1 >= PUSH_UNCLEAR_LIMIT
     if (stuck) {
@@ -1305,6 +1312,13 @@ async function pumpPane(paneId: string): Promise<void> {
       deps.persistUpdate?.([{ uid: msg.uid, status: 'delivered', delivered_at: msg.deliveredAt }])
       envelopes.delete(id)
       ackOk = true
+    } else if (cancelRequested.has(id)) {
+      ackReason = CANCELLED_REASON
+      markCancelled(msg)
+    } else if (msg.status !== 'delivering') {
+      // Settled from outside while the injection was still waiting on the
+      // pane — unregisterPane failed the whole queue as the pane closed, and
+      // told the sender. A second verdict here would tell it twice.
     } else {
       ackReason = { key: 'inject-failed' }
       failMessage(id, ackReason)
@@ -1317,6 +1331,7 @@ async function pumpPane(paneId: string): Promise<void> {
     failMessage(id, ackReason)
   } finally {
     delivering.delete(paneId)
+    cancelRequested.delete(id)
     if (!requeued) {
       q.shift()
       pushUnclearCount.delete(id)
@@ -1345,6 +1360,7 @@ async function deliverOnce(
   msg: AgentMessage,
   envelope: string,
   push: { kind: string } | null,
+  shouldAbort: () => boolean,
 ): Promise<boolean | null | 'unclear'> {
   if (!deps) return false
   if (push && deps.pushDeliver) {
@@ -1355,7 +1371,30 @@ async function deliverOnce(
     if (outcome === 'unclear') return 'unclear'
     if (!deps.isPaneIdle(paneId)) return null
   }
-  return deps.deliver(paneId, envelope)
+  return deps.deliver(paneId, envelope, shouldAbort)
+}
+
+/**
+ * Why the message being typed into `paneId` has not gone in yet — today only
+ * `pty-blocked`, reported by the injection while the pane's PTY holds the
+ * text unread. Same hold field and the same report to the backend as a queued
+ * message's, so cli_check_message shows it the same way; `undefined` clears it
+ * once the wait ends. No new status: the row stays `delivering`, which is what
+ * it is.
+ */
+function setDeliveringHold(paneId: string, hold: MessageHold | undefined): void {
+  const id = queues.get(paneId)?.[0]
+  if (id === undefined || !delivering.has(paneId)) return
+  const m = findMessage(id)
+  if (!m || m.status !== 'delivering') return
+  setHold(m, hold)
+}
+
+/** A `delivering` message the user may still withdraw: its pane has not read
+ *  the text (see setDeliveringHold), so aborting the injection and clearing
+ *  the composer leaves nothing behind. */
+function withdrawable(m: AgentMessage): boolean {
+  return m.status === 'delivering' && m.hold?.key === 'pty-blocked' && !cancelRequested.has(m.id)
 }
 
 /**
@@ -1713,7 +1752,15 @@ function outboundKeyOf(id: number): string | null {
  */
 function cancelMessage(id: number): boolean {
   const m = findMessage(id)
-  if (!m || m.status !== 'queued') return false
+  if (!m) return false
+  if (withdrawable(m)) {
+    // The injection settles it: pumpPane marks the row cancelled once the
+    // abort has cleared the pane, so the composer is never reported empty
+    // before it is.
+    cancelRequested.add(id)
+    return true
+  }
+  if (m.status !== 'queued') return false
   if (unqueue(id)) {
     markCancelled(m)
     // An inbound cross-workspace row's sender is still waiting on a verdict.
@@ -1745,6 +1792,10 @@ function cancelRemoteInbound(msgKey: string): boolean {
   for (const [id, key] of remoteInbound) {
     if (key !== msgKey) continue
     const m = findMessage(id)
+    if (m && withdrawable(m)) {
+      cancelRequested.add(id)
+      return true
+    }
     if (!m || m.status !== 'queued' || !unqueue(id)) return false
     markCancelled(m)
     ackInbound(id, false, CANCELLED_REASON)
@@ -1816,6 +1867,7 @@ export function _resetMessagingForTest(): void {
   correlations.clear()
   readReserved.clear()
   pushUnclearCount.clear()
+  cancelRequested.clear()
 }
 
 export function useAgentMessaging() {
@@ -1836,6 +1888,7 @@ export function useAgentMessaging() {
     retryMessage,
     cancelMessage,
     cancelRemoteInbound,
+    setDeliveringHold,
     acceptRemoteMessage,
     noteOutboundMessage,
     resolveRemoteDelivery,

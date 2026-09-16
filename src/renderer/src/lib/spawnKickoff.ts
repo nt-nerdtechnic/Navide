@@ -85,6 +85,11 @@ export interface KickoffLoopDeps {
    *  typing into, and re-reading it after we have typed would ask whether the
    *  pane is quiet while we are the reason it is not. */
   promptReady: boolean
+  /** Whether the pane had still printed nothing when the gate gave up —
+   *  sampled once, with `promptReady`. Only this pane is left untyped: a CLI
+   *  that is up but never matched idle+quiet (a cold start on a loaded host)
+   *  is typed into as before, and judged with the gate shut. */
+  paneStarting: boolean
   /** Type the payload. `attempt` is 1-based and is the loop's own counter. */
   inject: (attempt: number) => Promise<KickoffAttemptEvidence>
   composerHolds: () => boolean
@@ -107,6 +112,10 @@ export type KickoffLoopResult =
       /** Of the attempt that settled it — never an earlier one. */
       echo: EchoEvidence | null
       submit: SubmitEvidence | null
+      /** Failed without typing at all: the prompt-ready gate never opened
+       *  and the pane had printed nothing. The caller's resend is the right
+       *  cure here — nothing is in the composer to double. */
+      untyped?: boolean
     }
 
 /** Type a new pane's task, and type it again if the first copy cannot be
@@ -120,6 +129,15 @@ export type KickoffLoopResult =
  *  what lets this run under test at all: kickoffRequestedPane lives in a
  *  15K-line component the suite cannot mount. */
 export async function runKickoffAttempts(deps: KickoffLoopDeps): Promise<KickoffLoopResult> {
+  // A CLI that has printed nothing is still initialising, and raw-mode setup
+  // flushes the tty's input (tcsetattr with TCSAFLUSH) — text typed now is
+  // eaten, not queued. Typing it "anyway" reported that as a kickoff that was
+  // sent; say plainly that it was not. A pane that IS printing but never read
+  // idle+quiet is a different case: it is up, so type, with the gate's shut
+  // answer keeping growth-only evidence from counting as 'sent'.
+  if (!deps.promptReady && deps.paneStarting) {
+    return { settled: true, outcome: 'failed', retriedOut: false, echo: null, submit: null, untyped: true }
+  }
   let last: KickoffAttemptEvidence = { injected: false, echo: null, submit: null }
   for (let attempt = 1; attempt <= deps.maxAttempts; attempt++) {
     last = await deps.inject(attempt)

@@ -543,8 +543,9 @@ class _FakeTerminals:
         self._sessions = sessions
         self.written: list[tuple[str, str]] = []
 
-    def write(self, session_id: str, data: str) -> None:
+    def write(self, session_id: str, data: str) -> int:
         self.written.append((session_id, data))
+        return 0
 
     def get(self, session_id: str):
         return self._sessions.get(session_id)
@@ -588,7 +589,7 @@ async def test_terminal_input_beats_human_for_the_ptys_pane(wired, ws):
     session = make_session()
     term = SimpleNamespace(pane_id="pane-1", cwd="/elsewhere", metadata={"workspace_path": ws})
     session.terminals = _FakeTerminals({"tsid-1": term})  # type: ignore[assignment]
-    assert (await _call(app, session, "terminal.input", {"terminal_session_id": "tsid-1", "data": "x", "human": True})) == {"ok": True}
+    assert (await _call(app, session, "terminal.input", {"terminal_session_id": "tsid-1", "data": "x", "human": True})) == {"ok": True, "pending": 0}
     assert session.terminals.written == [("tsid-1", "x")]
     assert [e["type"] for e in broadcasts] == ["devtime.changed"]
     assert broadcasts[0]["payload"] == {"workspace_path": ws}

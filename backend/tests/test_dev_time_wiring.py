@@ -202,8 +202,9 @@ class _FakeTerminals:
         self.written: list[tuple[str, str]] = []
         self.killed: list[str] = []
 
-    def write(self, session_id: str, data: str) -> None:
+    def write(self, session_id: str, data: str) -> int:
         self.written.append((session_id, data))
+        return 0
 
     def get(self, session_id: str):
         return self._sessions.get(session_id)
@@ -258,7 +259,7 @@ async def test_terminal_input_survives_a_broken_store(store, ws, events, monkeyp
         payload = await _call(
             session, "terminal.input", {"terminal_session_id": "tsid-1", "data": data, "human": True}
         )
-        assert payload == {"ok": True}
+        assert payload == {"ok": True, "pending": 0}
     assert [d for _, d in session.terminals.written] == ["a", "b", "c"]
     # Exactly one response frame per message: no trailing INTERNAL_ERROR frame.
     assert len(session.websocket.sent) == 3

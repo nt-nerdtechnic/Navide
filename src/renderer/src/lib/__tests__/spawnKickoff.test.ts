@@ -94,6 +94,7 @@ describe('runKickoffAttempts', () => {
     return {
       maxAttempts: 2,
       promptReady: false,
+      paneStarting: false,
       inject: async (): Promise<KickoffAttemptEvidence> =>
         ({ injected: true, echo: 'growth', submit: 'growth' }),
       composerHolds: () => false,
@@ -159,6 +160,42 @@ describe('runKickoffAttempts', () => {
     await expect(runKickoffAttempts(deps({ inject, promptReady: false }))).resolves.toMatchObject({
       settled: true, outcome: 'failed', retriedOut: true,
     })
+  })
+
+  // A pane that has printed nothing when the gate gives up is a CLI still
+  // initialising, whose raw-mode setup flushes the tty input: typing "anyway"
+  // wrote bytes that were eaten and reported the kickoff as sent. Not one byte
+  // goes out, and the verdict is the one that tells the caller to resend.
+  it('types nothing into a pane still starting when the gate never opened', async () => {
+    const inject = vi.fn(async () => ({ injected: true, echo: 'tail', submit: 'tail-left' } as const))
+    const onRetry = vi.fn()
+    await expect(
+      runKickoffAttempts(deps({ inject, onRetry, promptReady: false, paneStarting: true })),
+    ).resolves.toEqual({
+      settled: true, outcome: 'failed', retriedOut: false, echo: null, submit: null, untyped: true,
+    })
+    expect(inject).not.toHaveBeenCalled()
+    expect(onRetry).not.toHaveBeenCalled()
+  })
+
+  // A pane that IS printing but never read idle+quiet — a cold CLI on a loaded
+  // host — is up, so it is typed into as before; only a starting pane is not.
+  it('still types into a printing pane whose prompt never read ready', async () => {
+    const inject = vi.fn(async () => ({ injected: true, echo: 'tail', submit: 'tail-left' } as const))
+    await expect(
+      runKickoffAttempts(deps({ inject, promptReady: false, paneStarting: false })),
+    ).resolves.toEqual({
+      settled: true, outcome: 'sent', retriedOut: false, echo: 'tail', submit: 'tail-left',
+    })
+    expect(inject).toHaveBeenCalledTimes(1)
+  })
+
+  it('types when the gate opened, whatever the pane looked like before', async () => {
+    const inject = vi.fn(async () => ({ injected: true, echo: 'tail', submit: 'tail-left' } as const))
+    await expect(
+      runKickoffAttempts(deps({ inject, promptReady: true, paneStarting: true })),
+    ).resolves.toMatchObject({ settled: true, outcome: 'sent' })
+    expect(inject).toHaveBeenCalledTimes(1)
   })
 
   it('never retypes over a composer that is holding the first copy', async () => {

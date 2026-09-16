@@ -4758,6 +4758,22 @@ async def tokens_snapshot(session: "Session", msg_id: str, msg_type: str, payloa
     await session.send_json(make_response(msg_id, msg_type, snap))
 
 
+@handler("tokens.turns")
+async def tokens_turns(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    # Per-turn cut of one session log, read on demand (contract: at least
+    # pane_id or session_id; the reply shape is fixed by the Turn Stats
+    # window, errors are ok:false + error code).
+    result = await app.scan_session_turns(
+        pane_id=str(payload.get("pane_id") or ""),
+        session_id=str(payload.get("session_id") or ""),
+        agent_key=str(payload.get("agent_key") or ""),
+        include_calls=bool(payload.get("include_calls")),
+    )
+    await session.send_json(make_response(msg_id, msg_type, result))
+
+
 @handler("tokens.reset")
 async def tokens_reset(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     from . import app
@@ -5763,12 +5779,15 @@ async def terminal_create_cancel(
 async def terminal_input(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     from . import app
 
-    session.terminals.write(payload["terminal_session_id"], payload["data"])
-    await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
+    # `pending` = bytes the kernel has not accepted yet; the renderer must not
+    # resend those (they are queued, not lost).  Empty data is a pure probe of
+    # that count and must leave no other trace.
+    pending = session.terminals.write(payload["terminal_session_id"], payload["data"])
+    await session.send_json(make_response(msg_id, msg_type, {"ok": True, "pending": pending}))
     # A keyboard frame (the renderer flags only those: not mouse/focus reports,
     # not paste or programmatic injection) is a human dev-time heartbeat for
     # the pane behind the PTY. human_input never raises.
-    if payload.get("human") is True:
+    if payload.get("human") is True and payload["data"]:
         term = session.terminals.get(payload["terminal_session_id"])
         if term is not None:
             workspace_path = str(term.metadata.get("workspace_path") or term.cwd)
