@@ -5827,6 +5827,7 @@ async def _terminal_create_impl(
             "pane_id": str(payload.get("pane_id") or ""),
         }))
     if agent_key == "codex" and not login_profile_id:
+        from . import codex_session_hooks, hook_auth
         # Compatibility: `codex resume <id>` only works inside the home
         # that recorded the session. Resume in whichever home owns it;
         # only unknown/fresh sessions get a (new) per-pane home.
@@ -5850,6 +5851,10 @@ async def _terminal_create_impl(
                     payload.get("command"), resume_id, repaired
                 )
                 resume_id = repaired
+            # Resume selectors (names/--last) are not a known thread UUID.
+            known_id = codex_session_hooks.resume_identity(resume_id)
+            if known_id:
+                metadata["explicit_session_id"] = known_id
         session_home = (
             await asyncio.to_thread(app.codex_home_manager.find_session_home, resume_id)
             if resume_id
@@ -5868,6 +5873,12 @@ async def _terminal_create_impl(
             metadata["session_home_id"] = session_home.name
         # else: session lives in the real ~/.codex — resume with the
         # default env so codex can find it.
+        if not is_login:
+            payload["command"] = await asyncio.to_thread(
+                codex_session_hooks.wire, payload["command"], env, metadata,
+                Path(env.get("CODEX_HOME") or app.codex_home_manager.real_home),
+                app.backend_port_file(), hook_auth.header_file(),
+            )
     if not login_profile_id:
         # Run plugin-registered spawn transformers over the command (e.g. the
         # builtin navide.plans plugin appends Plan-MCP flags for claude/codex);
@@ -5907,6 +5918,14 @@ async def _terminal_create_impl(
         payload["command"], push_channel = app.push_delivery.wire_spawn(
             agent_key, payload["command"], str(payload.get("pane_id") or ""), env
         )
+    # Skills wiring mirrors ~/.codex/hooks.json into the per-pane CODEX_HOME,
+    # and codex keys hook trust by that path — without this every spawn stops
+    # at "Hooks need review". CODEX_HOME is final only after all wiring above.
+    seeder = getattr(app.codex_home_manager, "seed_hook_trust", None)
+    if agent_key == "codex" and not login_profile_id and env.get("CODEX_HOME") and callable(seeder):
+        seeded = await asyncio.to_thread(seeder, Path(env["CODEX_HOME"]))
+        if seeded:
+            app.log.info("codex hook trust seeded for %s (%d hooks)", env["CODEX_HOME"], seeded)
     if transaction["cancelled"]:
         raise _TerminalCreateCancelled
     # The pane's previous PTY, when this create replaces it (restore/rebuild).
@@ -6080,6 +6099,10 @@ async def _terminal_create_impl(
         transaction["attribution_future"] = attribution_future
         transaction["attribution_started"] = True
         await asyncio.shield(attribution_future)
+        # A SessionStart callback can arrive before register_pane's baseline
+        # scan completes. Retry its already recorded transcript after claiming.
+        if metadata.get("codex_launch_token"):
+            await app._retry_codex_session_start(str(metadata["codex_launch_token"]))
         # The live "THIS SESSION" tally is read straight from the vendor log.
         # Now that the pane owns this session id, start tracking it and take
         # the first scan. Fire and forget — a multi-MB parse must not delay
@@ -6749,6 +6772,13 @@ async def project_set_ui_state(session: "Session", msg_id: str, msg_type: str, p
         if full_history is not None:
             prev = app.project_store.peek(ws_raw)
             if prev is not None:
+                # Discovery may precede the first renderer history snapshot.
+                # Keep the backend's durable identity when that snapshot has
+                # not received session.detected yet.
+                sessions = {p.pane_id: p.session_id for p in prev.panes if p.session_id}
+                for entry in full_history:
+                    if not entry.get("sessionId") and entry.get("paneId") in sessions:
+                        entry["sessionId"] = sessions[entry["paneId"]]
                 app.spawn_history_store.merge(
                     ws_raw, full_history, seed=prev.ui_spawn_history
                 )

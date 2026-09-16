@@ -532,6 +532,10 @@ class SpawnHistoryStore:
                     index[pane_id] = len(stored)
                     stored.append(entry)
                 else:
+                    # A renderer that missed discovery may still send its
+                    # pre-detection snapshot. Empty is not a new identity.
+                    if not entry.get("sessionId") and stored[i].get("sessionId"):
+                        entry = {**entry, "sessionId": stored[i]["sessionId"]}
                     stored[i] = entry
             if len(stored) > MAX_ENTRIES:
                 dropped = len(stored) - MAX_ENTRIES

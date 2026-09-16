@@ -41,6 +41,8 @@ A pane may show a vendor message such as `✘ Auto-update failed`. Several panes
 
 Codex, Antigravity, and Grok rely on log or database discovery to bind a new CLI session to a Navide pane.
 
+For Codex, open `/hooks` to inspect pending hook reviews. An MCP startup failure or a third-party `SessionEnd` timeout warning needs separate investigation and does not by itself indicate a session ID collision. Codex 0.154 queues `SessionStart` for the first turn; opening the TUI alone does not guarantee that event has run.
+
 - Send a normal message so the CLI persists the pane marker.
 - Confirm the CLI can write to its normal session directory.
 - Do not immediately rebuild or resume before the first session is detected.
@@ -52,6 +54,13 @@ Codex, Antigravity, and Grok rely on log or database discovery to bind a new CLI
 - Confirm the original CLI still has the session in its own history.
 - Check that the workspace path has not changed.
 - A CLI upgrade may change resume syntax or session storage; include CLI and Navide versions in a bug report.
+
+## Codex conversations are missing from History
+
+- Codex rollout files in the pane's isolated `~/.codex-panes/<session_home_id>/sessions` directory are separate from Navide's history metadata. A missing History entry does not mean the original conversation file was deleted.
+- History search covers loaded entries. Load more entries to continue searching older conversations, even when the current search has no results; content search runs again for the newly loaded entries.
+- To resume a known conversation outside Navide, use its original `CODEX_HOME` and exact session ID. Do not choose the latest session when several conversations share that home.
+- Detected session IDs are now saved by the backend before notifying the UI and preserved when later snapshots omit them. This does not automatically recover older entries whose session identity was already lost.
 
 ## Token Stats is empty or duplicated
 

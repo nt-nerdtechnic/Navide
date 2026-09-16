@@ -13,6 +13,7 @@ against its fast pid reuse by the parent's `identity` (pid + start time).
 from __future__ import annotations
 
 import os
+import json
 import subprocess
 import sys
 import threading
@@ -23,6 +24,64 @@ import pytest
 from agent_team_backend import osplat
 from agent_team_backend.__main__ import _watch_parent_for_shutdown
 from agent_team_backend.osplat import _posix, _windows
+
+
+def _isolated_backend_env(tmp_path):
+    from agent_team_backend.cli_vendors.registry import VENDORS
+
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ)
+    # A subprocess does not inherit conftest's in-process monkeypatches.
+    # Remove vendor overrides before using their isolated-home defaults.
+    for spec in VENDORS.values():
+        for name in spec.home_env_vars:
+            env.pop(name, None)
+    env.update(osplat.paths.isolated_home_env(home))
+    env.update({
+        "AGENT_TEAM_DATA_DIR": str(tmp_path),
+        "APPDATA": str(home / "AppData" / "Roaming"),
+        "LOCALAPPDATA": str(home / "AppData" / "Local"),
+        "XDG_CONFIG_HOME": str(home / ".config"),
+        "XDG_DATA_HOME": str(home / ".local" / "share"),
+        "XDG_STATE_HOME": str(home / ".local" / "state"),
+        "XDG_CACHE_HOME": str(home / ".cache"),
+    })
+    return env
+
+
+def test_backend_child_hook_installers_use_only_the_isolated_home(tmp_path, monkeypatch):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "settings.json"
+    sentinel.write_text('{"keep": "unchanged"}', encoding="utf-8")
+    for name in ("CLAUDE_CONFIG_DIR", "QWEN_HOME", "COPILOT_HOME", "CODEX_HOME",
+                 "APPDATA", "LOCALAPPDATA", "XDG_CONFIG_HOME"):
+        monkeypatch.setenv(name, str(outside))
+    child_env = _isolated_backend_env(tmp_path / "child")
+    script = (
+        "import json\n"
+        "from pathlib import Path\n"
+        "from agent_team_backend import claude_hooks, qwen_hooks, copilot_hooks\n"
+        "from agent_team_backend.applog import backend_port_file\n"
+        "paths = [claude_hooks.settings_path(), qwen_hooks.settings_path(), "
+        "copilot_hooks.hooks_dir() / 'agent-team.json']\n"
+        "for path in paths: path.parent.mkdir(parents=True, exist_ok=True)\n"
+        "for installer in (claude_hooks, qwen_hooks, copilot_hooks): "
+        "installer.install_hooks(str(backend_port_file()))\n"
+        "assert all(path.exists() for path in paths)\n"
+        "print(json.dumps([str(path) for path in paths]))\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script], env=child_env,
+        capture_output=True, text=True, check=True, timeout=30,
+    )
+    from pathlib import Path
+
+    assert all(Path(path).is_relative_to(tmp_path / "child" / "home")
+               for path in json.loads(result.stdout))
+    assert sentinel.read_text(encoding="utf-8") == '{"keep": "unchanged"}'
+    assert list(outside.iterdir()) == [sentinel]
 
 
 class _Server:
@@ -123,7 +182,7 @@ def test_a_backend_whose_parent_dies_exits_by_itself(tmp_path) -> None:
     backend with its own pid in AGENT_TEAM_PARENT_PID, gets killed, and the
     backend must be gone within the poll interval plus uvicorn's shutdown.
     Runs on Windows too now that the backend follows the pid there."""
-    env = dict(os.environ, AGENT_TEAM_DATA_DIR=str(tmp_path))
+    env = _isolated_backend_env(tmp_path)
     parent_script = (
         "import os, subprocess, sys, time\n"
         "child = subprocess.Popen(\n"

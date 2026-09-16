@@ -221,7 +221,7 @@ async def test_terminal_create_codex_legacy_resume_keeps_default_home(
 
     created = session.terminals.created[0]  # type: ignore[attr-defined]
     assert fake_home.prepared == []
-    assert created["env"] is None
+    assert "CODEX_HOME" not in created["env"]
 
 
 @pytest.mark.asyncio
@@ -329,7 +329,7 @@ async def test_terminal_create_codex_repairs_a_subagent_pin(
     })
 
     created = session.terminals.created[0]  # type: ignore[attr-defined]
-    assert created["command"][-1] == "codex resume parent-id"
+    assert created["command"][-1].startswith("codex resume parent-id -c ")
     # The home is the one recording the USER thread, not the sub-agent's pin.
     assert fake_home.looked_up == ["parent-id"]
     assert created["env"]["CODEX_HOME"] == str(owning_home)
@@ -362,7 +362,7 @@ async def test_terminal_create_codex_leaves_an_ordinary_pin_alone(
     })
 
     created = session.terminals.created[0]  # type: ignore[attr-defined]
-    assert created["command"][-1] == "codex resume plain-id"
+    assert created["command"][-1].startswith("codex resume plain-id -c ")
     assert fake_home.looked_up == ["plain-id"]
 
 

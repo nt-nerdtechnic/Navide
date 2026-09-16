@@ -41,6 +41,8 @@ Pane 內可能出現 CLI 自己的訊息，例如 `✘ Auto-update failed`。同
 
 Codex、Antigravity 與 Grok 依賴 Log 或 Database Discovery，將新的 CLI Session 綁定到 Navide Pane。
 
+Codex 可開啟 `/hooks` 檢查待審核的 Hook。MCP 啟動失敗或第三方 `SessionEnd` Timeout 警告需要分別調查，不能單憑這些訊息認定 Session ID 發生碰撞。Codex 0.154 會將 `SessionStart` 排入第一輪執行佇列；只開啟 TUI 並不保證該事件已執行。
+
 - 傳送一般訊息，讓 CLI 保存 Pane Marker。
 - 確認 CLI 能寫入其正常 Session Directory。
 - 第一次 Session 被偵測前，不要立即 Rebuild 或 Resume。
@@ -52,6 +54,13 @@ Codex、Antigravity 與 Grok 依賴 Log 或 Database Discovery，將新的 CLI S
 - 確認原始 CLI 的 History 中仍有該 Session。
 - 檢查 Workspace Path 是否改變。
 - CLI Upgrade 可能改變 Resume Syntax 或 Session Storage；Bug Report 應包含 CLI 與 Navide Version。
+
+## Codex 對話未出現在 History
+
+- Codex 的原始 Rollout 檔案位於 Pane 隔離的 `~/.codex-panes/<session_home_id>/sessions` 目錄，與 Navide 的歷史中繼資料分開保存。History 沒有列出，不代表原始對話檔案已被刪除。
+- History 搜尋涵蓋已載入的項目。即使目前搜尋沒有結果，仍可載入更多項目以繼續搜尋較早的對話；內容搜尋會重新搜尋新載入的項目。
+- 若要在 Navide 外恢復已知對話，請使用原本的 `CODEX_HOME` 與確切的 Session ID。同一個 Home 有多段對話時，不要直接選擇最新的 Session。
+- 偵測到的 Session ID 現在由 Backend 在通知 UI 前保存，後續 Snapshot 未帶入 ID 時也會保留既有值。這不會自動找回先前已遺失 Session Identity 的舊項目。
 
 ## Token Stats 空白或重複
 

@@ -61,6 +61,29 @@ What remains valid — and is recorded nowhere else — is the per-vendor
 research: install routes, resume syntax, session storage formats, token
 accounting, and the trap each CLI hides.
 
+### Codex session identity — updated 2026-09-16
+
+Codex generates the ID of a new interactive session; Navide does not pass a
+Claude-style `--session-id`. Existing conversations use `codex resume <id>`.
+Codex 0.154 queues `SessionStart` for the first turn: the event does not
+guarantee an ID callback immediately on opening the TUI. Log and marker
+discovery remain necessary; a hook does not remove the first-turn requirement.
+
+Navide accepts a trusted `SessionStart` callback only for its originating
+pane launch, using a per-launch token to reject stale or mismatched callbacks.
+The session-scoped hook configuration preserves user hooks, leaves global
+configuration unchanged, and does not bypass Codex hook review. After the
+existing startup wait, a pane already bound to a session skips the redundant
+marker; otherwise the existing marker flow continues without an extra wait.
+For an existing conversation, Navide explicitly binds the verified resume
+UUID rather than discovering a different session from shared storage.
+The hook handles startup and resume events only; clearing a conversation
+continues to use the existing log-discovery flow.
+
+Hook review, third-party `SessionEnd` timeout warnings, and MCP startup
+failures are separate from session identity. This integration does not approve
+unrelated hooks or repair failing MCP servers.
+
 ### Antigravity CLI (`agy`) — added 2026-07-05
 
 - Full integration: agentSpecs, resume via `agy --conversation <id>`,

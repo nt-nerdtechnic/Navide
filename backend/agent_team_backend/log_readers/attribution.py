@@ -719,6 +719,36 @@ class Attribution:
         )
         return binding
 
+    def bind_confirmed_session(
+        self, *, vendor: str, pane_id: str, resume_id: str, session_file: str,
+        session_id: str,
+    ) -> SessionBinding | None:
+        """Bind an authenticated, transcript-verified lifecycle callback.
+
+        Both the filename key and the real UUID are used by Codex readers.
+        Never steal either from another pane, including same-cwd siblings.
+        """
+        with self._lock:
+            reg = self._panes.get(pane_id)
+            if reg is None or reg.vendor != vendor:
+                return None
+            ids = {session_id, resume_id}
+            if any(self._session_owner.get(sid, pane_id) != pane_id for sid in ids):
+                return None
+            key = f"{vendor}:{session_id}:{resume_id}"
+            for sid in ids:
+                self._session_owner[sid] = pane_id
+                reg.claimed_session_ids.add(sid)
+            self._unbound_markers.pop(reg.session_marker, None)
+            if key in self._announced_session_keys:
+                return None
+            self._announced_session_keys.add(key)
+            return SessionBinding(
+                pane_id=pane_id, resume_id=resume_id,
+                workspace_path=reg.workspace_path, stage_id=reg.stage_id,
+                session_file=session_file,
+            )
+
     def pane_for_session(
         self, session_id: str
     ) -> tuple[str | None, str | None, str | None]:

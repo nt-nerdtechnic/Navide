@@ -404,3 +404,85 @@ def test_command_with_resume_id_rewrites_inside_the_shell_wrapper() -> None:
     # Nothing to swap, and degenerate shapes, pass through untouched.
     assert command_with_resume_id("codex", "child-id", "parent-id") == "codex"
     assert command_with_resume_id([], "child-id", "parent-id") == []
+
+
+def test_resolve_user_thread_id_uses_nested_source_parent_without_optional_fields(tmp_path: Path) -> None:
+    real = tmp_path / 'real'
+    root = real / 'sessions'
+    _rollout(root, 'parent-id', _meta('parent-id'))
+    child = json.dumps({'type':'session_meta','payload':{
+        'id':'child-id','cwd':'/ws','source':{'subagent':{'thread_spawn':{'parent_thread_id':'parent-id'}}}
+    }}) + '\n'
+    _rollout(root, 'child-id', child)
+    manager = CodexHomeManager(real_home=real, panes_root=tmp_path/'panes')
+    assert manager.resolve_user_thread_id('child-id') == 'parent-id'
+
+
+def _hook_trust_fixture(tmp_path: Path) -> tuple[CodexHomeManager, Path, Path]:
+    real = tmp_path / "real-codex"
+    real.mkdir()
+    (real / "hooks.json").write_text('{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "true"}]}]}}', encoding="utf-8")
+    (real / "config.toml").write_text(
+        'model = "x"\n\n[hooks.state]\n\n'
+        f'[hooks.state."{real}/hooks.json:stop:0:0"]\n'
+        'trusted_hash = "sha256:aaaa"\n\n'
+        f'[hooks.state."{real}/hooks.json:session_start:0:0"]\n'
+        'trusted_hash = "sha256:bbbb"\n\n'
+        '[hooks.state."codex@openai-codex:hooks/hooks.json:stop:0:0"]\n'
+        'trusted_hash = "sha256:cccc"\n',
+        encoding="utf-8",
+    )
+    manager = CodexHomeManager(real_home=real, panes_root=tmp_path / "panes")
+    pane = manager.prepare("pane-1")
+    (pane / "hooks.json").symlink_to(real / "hooks.json")
+    return manager, real, pane
+
+
+def test_seed_hook_trust_copies_real_home_entries_under_pane_path(tmp_path: Path) -> None:
+    import tomllib
+
+    manager, real, pane = _hook_trust_fixture(tmp_path)
+
+    assert manager.seed_hook_trust(pane) == 2
+
+    state = tomllib.loads((real / "config.toml").read_text(encoding="utf-8"))["hooks"]["state"]
+    assert state[f"{pane}/hooks.json:stop:0:0"] == {"trusted_hash": "sha256:aaaa"}
+    assert state[f"{pane}/hooks.json:session_start:0:0"] == {"trusted_hash": "sha256:bbbb"}
+    # Plugin-keyed entries are not path-bound and are left alone.
+    assert f"{pane}/hooks.json:hooks/hooks.json:stop:0:0" not in state
+    assert len(state) == 5
+    # Idempotent: a second spawn of the same home appends nothing.
+    assert manager.seed_hook_trust(pane) == 0
+    tomllib.loads((real / "config.toml").read_text(encoding="utf-8"))
+
+
+def test_seed_hook_trust_skips_missing_or_diverged_pane_hooks(tmp_path: Path) -> None:
+    manager, real, pane = _hook_trust_fixture(tmp_path)
+    before = (real / "config.toml").read_text(encoding="utf-8")
+
+    other = manager.prepare("pane-2")
+    assert manager.seed_hook_trust(other) == 0  # no hooks.json in that home
+
+    (pane / "hooks.json").unlink()
+    (pane / "hooks.json").write_text('{"hooks": {}}', encoding="utf-8")
+    assert manager.seed_hook_trust(pane) == 0  # different content ⇒ different hash
+
+    assert (real / "config.toml").read_text(encoding="utf-8") == before
+
+
+def test_seed_hook_trust_escapes_backslashes_in_toml_keys(tmp_path: Path) -> None:
+    import tomllib
+
+    from agent_team_backend.cli_vendors.codex import _toml_escape, _toml_unescape
+
+    key = 'C:\\Users\\x\\.codex\\hooks.json:stop:0:0'
+    assert _toml_unescape(_toml_escape(key)) == key
+    manager, real, pane = _hook_trust_fixture(tmp_path)
+    (real / "config.toml").write_text(
+        f'[hooks.state."{_toml_escape(str(real / "hooks.json"))}:stop:0:0"]\n'
+        'trusted_hash = "sha256:aaaa"\n',
+        encoding="utf-8",
+    )
+    assert manager.seed_hook_trust(pane) == 1
+    state = tomllib.loads((real / "config.toml").read_text(encoding="utf-8"))["hooks"]["state"]
+    assert state[f"{pane}/hooks.json:stop:0:0"] == {"trusted_hash": "sha256:aaaa"}

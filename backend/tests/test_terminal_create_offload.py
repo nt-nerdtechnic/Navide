@@ -39,17 +39,21 @@ class FakeTerminals:
 
 
 class FakeAttribution:
+    def __init__(self):
+        self.registered = []
+
     def register_pane(self, pane_id: str, **kwargs: Any) -> None:
-        pass
+        self.registered.append((pane_id, kwargs))
 
 
 class FakeCodexHomeManager:
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, default_home: bool = False) -> None:
+        self.default_home = default_home
         self.root = root
         self.real_home = root / "real"
 
-    def find_session_home(self, _resume_id: str) -> None:
-        return None
+    def find_session_home(self, _resume_id: str) -> Path | None:
+        return self.real_home if self.default_home else None
 
     def prepare(self, home_id: str, *, source_home: Path | None = None) -> Path:
         assert source_home is None
@@ -57,7 +61,9 @@ class FakeCodexHomeManager:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("default_home", [False, True])
 async def test_codex_home_lookup_prepare_and_spawn_wiring_use_to_thread(
+    default_home: bool,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -93,7 +99,7 @@ async def test_codex_home_lookup_prepare_and_spawn_wiring_use_to_thread(
     monkeypatch.setattr(app, "_probe_agent_cli_for_spawn", probe)
     monkeypatch.setattr(app, "attribution", FakeAttribution())
     monkeypatch.setattr(app, "_register_workspace_and_backfill", lambda _ws: None)
-    monkeypatch.setattr(app, "codex_home_manager", FakeCodexHomeManager(tmp_path / "homes"))
+    monkeypatch.setattr(app, "codex_home_manager", FakeCodexHomeManager(tmp_path / "homes", default_home))
     monkeypatch.setattr(
         app,
         "cli_profiles_store",
@@ -111,7 +117,7 @@ async def test_codex_home_lookup_prepare_and_spawn_wiring_use_to_thread(
             "payload": {
                 "pane_id": "codex-pane",
                 "agent_key": "codex",
-                "command": "codex resume session-1",
+                "command": "codex resume 12345678-1234-1234-1234-123456789abc",
                 "cwd": "/ws",
                 "metadata": {"workspace_path": "/ws"},
             },
@@ -121,11 +127,15 @@ async def test_codex_home_lookup_prepare_and_spawn_wiring_use_to_thread(
     # wire_command is core's own MCP wiring, offloaded the same way and run
     # ahead of the plugin transformers: the endpoint it hands the pane is
     # Navide's own, and a pane that misses it loses every navide tool.
-    assert threaded == ["probe", "find_session_home", "prepare", "wire_command", "wire"]
+    assert threaded == ["probe", "find_session_home", *([] if default_home else ["prepare"]), "wire", "wire_command", "wire"]
     # The probe runs in its own pool, never on asyncio's shared default one.
     assert probe_threads[0].startswith("cli-probe")
     created = session.terminals.created[0]  # type: ignore[attr-defined]
-    assert created["env"]["CODEX_HOME"] == str(tmp_path / "homes" / "codex-pane")
+    if default_home:
+        assert "CODEX_HOME" not in created["env"]
+    else:
+        assert created["env"]["CODEX_HOME"] == str(tmp_path / "homes" / "codex-pane")
+    assert app.attribution.registered[0][1]["explicit_session_id"] == "12345678-1234-1234-1234-123456789abc"
     assert session.websocket.sent[-1]["ok"] is True  # type: ignore[attr-defined]
 
 

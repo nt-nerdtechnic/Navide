@@ -947,12 +947,93 @@ async def _ownerless_pty_janitor() -> None:
             log.warning("ownerless-pty sweep failed: %s", err)
 
 
+# SessionStart is run at the first turn in Codex 0.154, not at TUI startup.
+# It complements the existing path/marker detector; nothing waits for a hook.
+from . import codex_session_hooks  # noqa: E402
+
+_codex_pending_starts = codex_session_hooks.PendingStarts()
+
+
+def _live_codex_hook_terms() -> dict[str, Any]:
+    live = {}
+    for terminal_id, owner in list(_PTY_OWNERS.items()):
+        term = owner.terminals.get(terminal_id)
+        if term and not term.closed and term.agent_key == "codex":
+            token = term.metadata.get("codex_launch_token")
+            if token:
+                live[str(token)] = term
+    return live
+
+
+async def _retry_codex_session_start(token: str) -> None:
+    if not _codex_pending_starts.has_pending(token):
+        return
+    term = _live_codex_hook_terms().get(token)
+    if term is None:
+        return
+    paths = _codex_pending_starts.paths(token)
+    if not paths:
+        paths = await asyncio.to_thread(
+            _codex_pending_starts.find_paths, token,
+            Path(term.metadata["codex_session_home"]),
+        )
+    for path in paths:
+        await _on_session_file("codex", path)
+
+
 async def _maybe_announce_session(usage: TokenUsage) -> None:
     """Codex/Antigravity/Grok/OpenCode: when a session file is first matched to its pane,
     tell the frontend so it can persist the id/path for resume-on-restart."""
-    bound = await asyncio.to_thread(attribution.maybe_announce_session, usage)
+    bound = None
+    if usage.vendor == "codex" and _codex_pending_starts.has_pending():
+        live = _live_codex_hook_terms()
+        matched = await asyncio.to_thread(
+            _codex_pending_starts.match, Path(usage.file_path),
+            {token: (term.pane_id, term.cwd) for token, term in live.items()},
+        )
+        if matched:
+            token, pane_id, resume_id = matched
+            # Recheck after disk IO: a respawn may have replaced this process.
+            term = _live_codex_hook_terms().get(token)
+            current_id = term.metadata.get("codex_current_session_id") if term else None
+            if term is None or current_id and current_id != resume_id:
+                _codex_pending_starts.consume(token, resume_id)
+                return
+            if term:
+                bound = attribution.bind_confirmed_session(
+                    vendor="codex", pane_id=pane_id, resume_id=resume_id,
+                    session_file=usage.file_path, session_id=usage.session_id,
+                )
+                if bound or attribution.pane_for_session(resume_id)[0] == pane_id:
+                    _codex_pending_starts.consume(token, resume_id)
+    if bound is None:
+        bound = await asyncio.to_thread(attribution.maybe_announce_session, usage)
     if not bound:
         return
+    pane_id = _current_pane_id(bound.pane_id)
+    workspace_path = bound.workspace_path or usage.cwd
+
+    def persist() -> None:
+        project = project_store.record_detected_session(
+            workspace_path, pane_id=pane_id, session_id=bound.resume_id,
+        )
+        spawn_history_store.patch_entry(
+            workspace_path, pane_id, {"sessionId": bound.resume_id},
+            seed=project.ui_spawn_history,
+        )
+
+    try:
+        await asyncio.to_thread(persist)
+    except OSError:
+        # Keep the renderer's existing persistence path available if a local
+        # write failed; a storage error must not suppress live discovery.
+        log.exception("could not persist detected session for pane=%s", pane_id)
+    if usage.vendor == "codex":
+        # Record log-driven changes too (for example /clear). A delayed first
+        # SessionStart must not put an earlier conversation back on the pane.
+        for term in _live_codex_hook_terms().values():
+            if term.pane_id == bound.pane_id:
+                term.metadata["codex_current_session_id"] = bound.resume_id
     # Second tracking hook, for the vendors that cannot pin a session id at
     # spawn (they bind here, at first match) and for a pane that switches to
     # another session mid-life. terminal.create's hook covers the pinned-id
@@ -968,7 +1049,7 @@ async def _maybe_announce_session(usage: TokenUsage) -> None:
     )
     await broadcast(make_event("session.detected", {
         "vendor": usage.vendor,
-        "pane_id": bound.pane_id,
+        "pane_id": pane_id,
         "session_id": bound.resume_id,  # the id/path `<cli> resume` actually needs
         "workspace_path": bound.workspace_path or usage.cwd,
         "session_file": bound.session_file,
@@ -2062,6 +2143,24 @@ def _record_hook_file_write(
         tool=tool_name,
     )
     return (record_root, row) if row is not None else None
+
+
+@app.post("/hooks/codex/session-start")
+async def codex_session_start_hook(request: Request) -> Response:
+    if not hook_auth.presented(request.headers.get(hook_auth.HEADER)):
+        return Response(status_code=403)
+    token = request.headers.get(codex_session_hooks.LAUNCH_HEADER, "")
+    if not token or token not in _live_codex_hook_terms():
+        return Response(status_code=403)
+    try:
+        payload = await request.json()
+    except ValueError:
+        return Response(status_code=400)
+    if not isinstance(payload, dict) or not _codex_pending_starts.add(token, payload):
+        return Response(status_code=400)
+    await _retry_codex_session_start(token)
+    # Hook stdout is empty: identity reporting adds no context or model turn.
+    return Response(status_code=200)
 
 
 @app.post("/hooks/{vendor}")

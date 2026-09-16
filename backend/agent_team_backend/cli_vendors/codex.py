@@ -816,6 +816,61 @@ class CodexHomeManager:
         elif path.exists():
             shutil.rmtree(path)
 
+    def seed_hook_trust(self, pane_home: Path) -> int:
+        """Carry the user's hooks.json trust over to a per-pane CODEX_HOME.
+
+        Codex (>= 0.15x) keys hook trust in the shared config.toml by the
+        *path* of the hooks.json that defines the hook —
+        ``[hooks.state."<CODEX_HOME>/hooks.json:<event>:<i>:<j>"]`` — with a
+        content hash as the value. A pane home mirrors ``~/.codex/hooks.json``
+        under its own path, so the same file lands under a key the user never
+        trusted and every spawn (resume included) stops at "Hooks need review".
+        Copy the real-home entries under the pane-home key; the hash is
+        content-only, so it stays valid. Only hooks the user already trusted
+        are seeded, and only when the pane file is byte-identical. Returns
+        the number of entries appended.
+        """
+        pane_hooks = pane_home / "hooks.json"
+        real_hooks = self.real_home / "hooks.json"
+        config = self.real_home / "config.toml"
+        try:
+            if not (pane_hooks.is_file() and real_hooks.is_file()):
+                return 0
+            if pane_hooks.read_bytes() != real_hooks.read_bytes():
+                return 0
+            text = config.read_text(encoding="utf-8")
+        except OSError:
+            return 0
+        real_prefix = f"{real_hooks}:"
+        pane_prefix = f"{pane_hooks}:"
+        keys = re.findall(r'^\[hooks\.state\."((?:[^"\\]|\\.)*)"\]\s*$', text, flags=re.MULTILINE)
+        # Header → the trusted_hash line that follows it.
+        blocks = re.findall(
+            r'^\[hooks\.state\."((?:[^"\\]|\\.)*)"\]\s*\n\s*trusted_hash\s*=\s*("[^"\n]*")',
+            text, flags=re.MULTILINE,
+        )
+        existing = {_toml_unescape(k) for k in keys}
+        additions = []
+        for key, hashed in blocks:
+            key = _toml_unescape(key)
+            if not key.startswith(real_prefix):
+                continue
+            new_key = pane_prefix + key[len(real_prefix):]
+            if new_key in existing:
+                continue
+            existing.add(new_key)
+            additions.append(f'[hooks.state."{_toml_escape(new_key)}"]\ntrusted_hash = {hashed}\n')
+        if not additions:
+            return 0
+        lead = "" if text.endswith("\n") else "\n"
+        try:
+            with config.open("a", encoding="utf-8") as f:
+                f.write(lead + "\n" + "\n".join(additions))
+        except OSError as err:
+            log.warning("seeding codex hook trust for %s failed: %s", pane_home, err)
+            return 0
+        return len(additions)
+
     def find_session_home(self, resume_id: str) -> Path | None:
         """Locate the CODEX_HOME that physically holds this session, if any.
 
@@ -905,16 +960,20 @@ class CodexHomeManager:
             except OSError:
                 return resume_id
             metas = _session_meta_payloads(text)
-            if not metas or metas[0].get("thread_source") != "subagent":
+            if not metas or not is_subagent_session_meta(metas[0]):
                 return rid  # already a user thread
             ancestor = next(
                 (str(m["id"]) for m in metas
-                 if m.get("thread_source") != "subagent" and m.get("id")),
+                 if not is_subagent_session_meta(m) and m.get("id")),
                 "",
             )
             if ancestor:
                 return ancestor
-            rid = str(metas[0].get("parent_thread_id") or "")
+            source = metas[0].get("source")
+            subagent = source.get("subagent") if isinstance(source, dict) else None
+            spawn = subagent.get("thread_spawn") if isinstance(subagent, dict) else None
+            nested_parent = spawn.get("parent_thread_id") if isinstance(spawn, dict) else None
+            rid = str(metas[0].get("parent_thread_id") or nested_parent or "")
         return resume_id
 
     def _rollout_path(self, resume_id: str) -> Path | None:
@@ -971,6 +1030,25 @@ class CodexHomeManager:
 _CODEX_PANES_ROOT_NAME = ".codex-panes"
 
 
+def _toml_escape(value: str) -> str:
+    """Quoted-key body for a TOML basic string (paths: backslash and quote)."""
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _toml_unescape(value: str) -> str:
+    return re.sub(r'\\(["\\])', r"\1", value)
+
+
+def is_subagent_session_meta(payload: dict) -> bool:
+    """Codex's optional thread_source is not the only subagent signal."""
+    source = payload.get("source")
+    return bool(
+        payload.get("thread_source") == "subagent"
+        or payload.get("parent_thread_id")
+        or isinstance(source, dict) and "subagent" in source
+    )
+
+
 def _session_meta_resume_id(text: str) -> str:
     """The session_meta record's payload.id — the id `codex resume` actually
     needs (the filename stem includes a timestamp prefix and is NOT accepted).
@@ -986,7 +1064,7 @@ def _session_meta_resume_id(text: str) -> str:
     keeps the binding.
     """
     for payload in _session_meta_payloads(text):
-        if payload.get("thread_source") == "subagent":
+        if is_subagent_session_meta(payload):
             return ""
         if payload.get("id"):
             return str(payload["id"])

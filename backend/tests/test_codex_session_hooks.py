@@ -1,0 +1,208 @@
+"""Codex startup identity is scoped to one launch, never just a cwd."""
+from __future__ import annotations
+
+import json
+
+from agent_team_backend import codex_session_hooks as hooks
+
+SID = '12345678-1234-1234-1234-123456789abc'
+
+
+def test_session_hook_is_stable_additive_and_keeps_user_files_untouched(tmp_path):
+    path = tmp_path / 'hooks.json'
+    path.write_text('{"user":true}')
+    env, metadata = {}, {}
+    result = hooks.wire('codex', env, metadata, tmp_path, tmp_path / 'port', tmp_path / 'auth')
+    second = hooks.wire('codex', {}, {}, tmp_path, tmp_path / 'port', tmp_path / 'auth')
+    assert result == second
+    assert metadata['codex_launch_token'] == env[hooks.LAUNCH_ENV]
+    assert env[hooks.LAUNCH_ENV] not in result
+    assert 'hooks.SessionStart' in result
+    assert 'bypass' not in result
+    assert path.read_text() == '{"user":true}'
+
+
+def test_custom_session_start_override_is_left_alone(tmp_path):
+    command = 'codex -c hooks.SessionStart=[]'
+    env, metadata = {}, {}
+    assert hooks.wire(command, env, metadata, tmp_path, tmp_path / 'port', tmp_path / 'auth') == command
+    assert env == {} and metadata == {}
+
+
+def test_pending_start_waits_for_meta_rejects_subagent_and_stale_launch(tmp_path):
+    pending = hooks.PendingStarts()
+    token = 'current-token'
+    pending.add(token, {'hook_event_name':'SessionStart','session_id': SID, 'source': 'startup', 'cwd': str(tmp_path)})
+    path = tmp_path / f'rollout-{SID}.jsonl'
+    path.write_text('')
+    assert pending.match(path, {token: ('pane-a', str(tmp_path))}) is None
+    path.write_text(json.dumps({'type':'session_meta','payload':{'id':SID,'cwd':str(tmp_path),'thread_source':'subagent'}})+'\n')
+    assert pending.match(path, {token: ('pane-a', str(tmp_path))}) is None
+    path.write_text(json.dumps({'type':'session_meta','payload':{'id':SID,'cwd':str(tmp_path)}})+'\n')
+    assert pending.match(path, {'new-token': ('pane-a', str(tmp_path))}) is None
+    assert pending.match(path, {token: ('pane-a', str(tmp_path))}) is None
+
+
+def test_same_cwd_different_panes_bind_only_corresponding_uuid(tmp_path):
+    pending = hooks.PendingStarts()
+    other = '87654321-1234-1234-1234-123456789abc'
+    pending.add('a', {'hook_event_name':'SessionStart','session_id':SID,'source':'startup','cwd':str(tmp_path)})
+    pending.add('b', {'hook_event_name':'SessionStart','session_id':other,'source':'startup','cwd':str(tmp_path)})
+    live = {'a': ('pane-a', str(tmp_path)), 'b': ('pane-b', str(tmp_path))}
+    for sid, pane in [(other,'pane-b'),(SID,'pane-a')]:
+        path = tmp_path / f'rollout-{sid}.jsonl'
+        path.write_text(json.dumps({'type':'session_meta','payload':{'id':sid,'cwd':str(tmp_path)}})+'\n')
+        assert pending.match(path, live) == ('a' if pane == 'pane-a' else 'b', pane, sid)
+        pending.consume('a' if pane == 'pane-a' else 'b', sid)
+        assert pending.match(path, live) is None
+
+
+def test_resume_claim_uses_repaired_uuid_not_name_or_option():
+    assert hooks.resume_identity(SID) == SID
+    assert hooks.resume_identity('--last') == ''
+    assert hooks.resume_identity('my-session') == ''
+
+
+def test_official_subagent_metadata_and_malformed_payload_are_rejected(tmp_path):
+    pending = hooks.PendingStarts()
+    base = {'hook_event_name':'SessionStart','session_id':SID,'source':'startup','cwd':str(tmp_path)}
+    assert not pending.add('a', {**base, 'cwd': []})
+    assert not pending.add('a', {**base, 'transcript_path': {}})
+    assert not pending.add('a', {**base, 'hook_event_name':'SubagentStart'})
+    assert pending.add('a', base)
+    path = tmp_path / f'rollout-{SID}.jsonl'
+    for extra in [{'source':{'subagent':{'thread_spawn':{'parent_thread_id':'parent'}}}}, {'parent_thread_id':'parent'}]:
+        path.write_text(json.dumps({'type':'session_meta','payload':{'id':SID,'cwd':str(tmp_path),**extra}})+'\n')
+        assert pending.match(path, {'a':('pane-a',str(tmp_path))}) is None
+
+
+def test_clear_is_left_to_log_detection_and_cannot_replay_initial_identity(tmp_path):
+    pending = hooks.PendingStarts()
+    base = {'hook_event_name':'SessionStart','session_id':SID,'source':'startup','cwd':str(tmp_path)}
+    assert pending.add('a', base)
+    other = '87654321-1234-1234-1234-123456789abc'
+    assert not pending.add('a', {**base, 'session_id': other})
+    assert not pending.add('a', {**base, 'source':'clear', 'session_id':other})
+    pending.consume('a', SID)
+    assert not pending.add('a', base)
+
+
+def test_endpoint_defers_before_registration_and_rejects_old_launch(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from fastapi.testclient import TestClient
+    from agent_team_backend import app, hook_auth
+    from agent_team_backend.log_readers.attribution import Attribution
+    from agent_team_backend.cli_vendors.codex import CodexLogReader
+    import asyncio
+
+    reader = CodexLogReader()
+    monkeypatch.setattr(reader, 'session_files_for_workspace', lambda _: [])
+    attr = Attribution([reader])
+    monkeypatch.setattr(app, 'attribution', attr)
+    monkeypatch.setattr(app, '_readers', [reader])
+    monkeypatch.setattr(app, '_codex_pending_starts', hooks.PendingStarts())
+    term = SimpleNamespace(pane_id='pane-a', agent_key='codex', closed=False, cwd=str(tmp_path),
+                           metadata={'codex_launch_token':'current','codex_session_home':str(tmp_path)})
+    owner = SimpleNamespace(terminals=SimpleNamespace(get=lambda _:term))
+    monkeypatch.setattr(app, '_PTY_OWNERS', {'pty':owner})
+    monkeypatch.setattr(app, 'track_live_session', lambda **_:None)
+    events = []
+    async def broadcast(event): events.append(event)
+    monkeypatch.setattr(app, 'broadcast', broadcast)
+    client = TestClient(app.app, base_url="http://127.0.0.1")
+    path = tmp_path / 'sessions' / f'rollout-{SID}.jsonl'
+    path.parent.mkdir()
+    payload = {'hook_event_name':'SessionStart','session_id':SID,'source':'startup','cwd':str(tmp_path),'transcript_path':str(path)}
+    headers = {hook_auth.HEADER:hook_auth.token(), hooks.LAUNCH_HEADER:'current'}
+    # SessionStart may precede a transcript file and the async pane baseline.
+    assert client.post('/hooks/codex/session-start', headers=headers, json=payload).status_code == 200
+    assert events == []
+    path.write_text(json.dumps({'type':'session_meta','payload':{'id':SID,'cwd':str(tmp_path),'source':'cli'}})+'\n')
+    attr.register_pane('pane-a',vendor='codex',cwd=str(tmp_path))
+    asyncio.run(app._retry_codex_session_start('current'))
+    detected = [e['payload'] for e in events if e['type']=='session.detected']
+    assert detected == [{'vendor':'codex','pane_id':'pane-a','session_id':SID,'workspace_path':str(tmp_path),'session_file':str(path)}]
+    assert attr.pane_for_session(SID)[0] == 'pane-a'
+    assert attr.pane_for_session(path.stem)[0] == 'pane-a'
+    # A log-driven /clear wins over an initial callback delivered late.
+    newer = '87654321-1234-1234-1234-123456789abc'
+    term.metadata['codex_current_session_id'] = newer
+    monkeypatch.setattr(app, '_codex_pending_starts', hooks.PendingStarts())
+    assert client.post('/hooks/codex/session-start', headers=headers, json=payload).status_code == 200
+    assert term.metadata['codex_current_session_id'] == newer
+    assert len(events) == 1
+    # A callback for an already announced fallback consumes its pending item
+    # and establishes the UUID alias without broadcasting twice.
+    term.metadata.pop('codex_current_session_id')
+    monkeypatch.setattr(app, '_codex_pending_starts', hooks.PendingStarts())
+    assert client.post('/hooks/codex/session-start', headers=headers, json=payload).status_code == 200
+    assert not app._codex_pending_starts.has_pending()
+    assert len(events) == 1
+    term.metadata['codex_launch_token'] = 'replacement'
+    assert client.post('/hooks/codex/session-start', headers=headers, json=payload).status_code == 403
+    assert len(events) == 1
+
+
+def test_hook_preserves_all_custom_session_hook_override_shapes(tmp_path):
+    for override in ["-c 'hooks={SessionStart=[]}'", "-c 'hooks.\"SessionStart\"=[]'", '--config=hooks.SessionStart=[]', '-chooks.SessionStart=[]']:
+        command = 'codex ' + override
+        assert hooks.wire(command, {}, {}, tmp_path, tmp_path/'port', tmp_path/'auth') == command
+
+
+def test_windows_hook_script_keeps_unicode_stdin(monkeypatch):
+    import base64
+    monkeypatch.setattr(hooks.osplat, 'platform_id', 'windows')
+    command=hooks.hook_command()
+    script=base64.b64decode(command.rsplit(' ',1)[1]).decode('utf-16-le')
+    assert '[Console]::InputEncoding = [Text.UTF8Encoding]::new($false)' in script
+    assert '$OutputEncoding = [Text.UTF8Encoding]::new($false)' in script
+    assert script.index('$OutputEncoding') < script.index('$body | curl.exe')
+
+
+def test_native_hook_posts_unicode_payload_and_launch_header(tmp_path, monkeypatch):
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    import pytest
+    from tests import hook_shell
+    from tests.test_claude_hooks import _run_to_completion
+
+    if hooks.osplat.paths.resolve_program('curl') is None:
+        pytest.skip('curl is unavailable for the Codex hook')
+    entry = {'command':hooks.hook_command()}
+    if hooks.osplat.platform_id == 'windows':
+        entry['shell'] = 'powershell'
+    argv = hook_shell.shell_argv(entry)
+    received = []
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            received.append((json.loads(self.rfile.read(int(self.headers['Content-Length']))), self.headers[hooks.LAUNCH_HEADER]))
+            self.send_response(200)
+            self.end_headers()
+        def log_message(self, *_): pass
+    server = HTTPServer(('127.0.0.1',0),Handler)
+    server.timeout = 8
+    port = tmp_path/'backend.port'
+    port.write_text(str(server.server_address[1]))
+    auth = tmp_path/'auth'
+    auth.write_text('X-Agent-Team-Hook: test-secret\n')
+    monkeypatch.setenv(hooks.LAUNCH_ENV,'test-launch')
+    monkeypatch.setenv('NAVIDE_CODEX_PORT_FILE',str(port))
+    monkeypatch.setenv('NAVIDE_CODEX_AUTH_FILE',str(auth))
+    payload = {'hook_event_name':'SessionStart','session_id':SID,'source':'startup','cwd':str(tmp_path/'中文工作區')}
+    thread=threading.Thread(target=server.handle_request,daemon=True)
+    thread.start()
+    try:
+        result = _run_to_completion(argv,json.dumps(payload,ensure_ascii=False),timeout=10)
+        thread.join(timeout=9)
+    finally:
+        server.server_close()
+    assert result.returncode == 0
+    assert result.stdout == ''
+    assert received == [(payload,'test-launch')]
+
+
+def test_fallback_reader_rejects_subagent_when_optional_thread_source_is_absent():
+    from agent_team_backend.cli_vendors.codex import _session_meta_resume_id
+    for shape in [{'source': {'subagent': {'thread_spawn': {}}}}, {'parent_thread_id':'parent'}]:
+        text = json.dumps({'type':'session_meta','payload':{'id':SID,'cwd':'/ws',**shape}})
+        assert _session_meta_resume_id(text) == ''

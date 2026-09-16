@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { markerTurnActionFor } from '../sessionMarkerTurn'
+import { hasDetectedCodexSession, markerTurnActionFor } from '../sessionMarkerTurn'
 
 type Activity = { event_type?: string; detail?: string; text?: string }
 
@@ -93,5 +93,24 @@ describe('session-marker gate sequences', () => {
       { event_type: 'turn_complete', detail: 'assistant', text: 'Anything else?' },
     ])
     expect(suppressed).toEqual([true, false])
+  })
+})
+
+describe('Codex identity arriving during startup', () => {
+  it('keeps bootstrap for a saved conversation placeholder until a real ID arrives', () => {
+    const pane = { agentKey: 'codex', pinnedSessionId: 'saved-id', pinnedFromRestore: true }
+    expect(hasDetectedCodexSession(pane)).toBe(false)
+    pane.pinnedSessionId = 'current-cli-id'
+    pane.pinnedFromRestore = false
+    expect(hasDetectedCodexSession(pane)).toBe(true)
+  })
+
+  it('keeps the existing fallback when hooks are absent or untrusted', () => {
+    expect(hasDetectedCodexSession({ agentKey: 'codex' })).toBe(false)
+    expect(hasDetectedCodexSession({ agentKey: 'codex', pinnedSessionId: '' })).toBe(false)
+  })
+
+  it('does not change another vendor bootstrap policy', () => {
+    expect(hasDetectedCodexSession({ agentKey: 'qwen', pinnedSessionId: 'known-id' })).toBe(false)
   })
 })

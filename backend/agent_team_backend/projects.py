@@ -1155,6 +1155,24 @@ class ProjectStore:
         self.save(project)
         return project
 
+    def record_detected_session(
+        self, workspace_path: str, *, pane_id: str, session_id: str,
+    ) -> Project:
+        """Persist log discovery even when no renderer receives the event."""
+        with self._save_lock:
+            project = self.load_or_create(workspace_path)
+            pane = next((p for p in project.panes if p.pane_id == pane_id), None)
+            if pane is None:
+                # Both manual and pipeline spawns adopt this pending stub.
+                pane = PaneRecord(pane_id=pane_id, origin="manual")
+                project.panes.append(pane)
+            pane.session_id = session_id
+            for entry in project.ui_spawn_history or []:
+                if entry.get("paneId") == pane_id:
+                    entry["sessionId"] = session_id
+            self.save(project)
+            return project
+
     def record_manual_pane_session(
         self,
         workspace_path: str,

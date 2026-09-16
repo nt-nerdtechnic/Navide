@@ -54,3 +54,12 @@ export function markerTurnActionFor(ev: {
   if (!ev.text || isInjectedMessageText(ev.text)) return null
   return 'disarm'
 }
+
+/** A restore placeholder names the old conversation, not the current launch. */
+export function hasDetectedCodexSession(pane: {
+  agentKey: string
+  pinnedSessionId?: string
+  pinnedFromRestore?: boolean
+}): boolean {
+  return pane.agentKey === 'codex' && !!pane.pinnedSessionId && !pane.pinnedFromRestore
+}

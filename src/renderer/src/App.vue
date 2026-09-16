@@ -275,7 +275,7 @@ import {
   notificationMeansAwaiting,
   questionActionFor,
 } from './lib/cliAwaitingInput'
-import { markerTurnActionFor } from './lib/sessionMarkerTurn'
+import { hasDetectedCodexSession, markerTurnActionFor } from './lib/sessionMarkerTurn'
 import { entryBelongsToWorkspace, filterWorkspaceEntries, historyEntriesFor, historyEntryLabel, legacyHistoryLogPath, manualLogFileName, updateHistoryCustomName, type HistoryCleanupMode, type HistoryDeletePreview, type HistoryDeleteTarget, type SpawnHistoryEntry, type WorkspaceIdentity } from './lib/spawnHistory'
 import { executeCommand, initKeybindingsPort, useKeybindings, registerCommand, setContext } from '@navide/plugin-ui/shared'
 import { useUiActionBus } from './composables/useUiActionBus'
@@ -5617,6 +5617,9 @@ async function sendSessionMarkerBootstrap(pane: ActivePane, tag: string): Promis
     }
     await waitForQuiet(pane.id, 1000, 8000)
     if (!paneAlive(pane.id)) return false
+    // Path detection can finish during startup/quiet waits. Do not submit an
+    // identity-only model turn after the real Codex session is already known.
+    if (hasDetectedCodexSession(pane)) return true
     const ref = paneRefs[pane.id]
     if (!ref?.sessionId) return false
     backend.send('terminal.log_sent', {
