@@ -88,6 +88,22 @@ def _types(events: list) -> list[str]:
     return [e["type"] for e in events if isinstance(e, dict)]
 
 
+def _payload(events: list, type_name: str) -> dict:
+    """The payload of the one named event of *type_name*.
+
+    By type, never by position: the list also carries whatever the spawned
+    process wrote, so an index that holds the unblock on a silent POSIX pty
+    holds something else the moment ConPTY repaints.
+    """
+    found = [e for e in events if isinstance(e, dict) and e.get("type") == type_name]
+    if len(found) != 1:
+        # Name what did arrive: this file is the one place a real pty's frames
+        # get mixed in, and a bare count would send the next reader back to CI.
+        seen = [e.get("type") if isinstance(e, dict) else type(e).__name__ for e in events]
+        raise AssertionError(f"expected one {type_name}, saw {seen}")
+    return found[0]["payload"]
+
+
 @pytest.mark.asyncio
 async def test_write_reports_pending_bytes_until_the_writer_callback_drains():
     svc, session, handle, _events = _make()
@@ -186,7 +202,7 @@ async def test_close_during_an_announced_episode_releases_it_with_partial_drain(
             "terminal.input_unblocked",
             "terminal.exit",
         ]
-        assert events[1]["payload"]["drained"] == 4
+        assert _payload(events, "terminal.input_unblocked")["drained"] == 4
         assert session.id not in svc._input_blocked
     finally:
         try:
