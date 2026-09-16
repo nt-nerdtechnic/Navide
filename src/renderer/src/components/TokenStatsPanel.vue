@@ -1,9 +1,12 @@
 <script setup lang="ts">
 import { computed, ref, watch, type Ref } from 'vue'
 import { CLI_AGENT_SPECS } from '@navide/plugin-shell'
-import { settingsGet, settingsSet } from '@navide/plugin-ui/shared'
+import { executeCommand, settingsGet, settingsSet } from '@navide/plugin-ui/shared'
 import { useTokens, type TokenBucket, type ResetScope } from '../composables/useTokens'
 import { buildTokenGroupRows } from '../lib/tokenGroups'
+import { accountUsageFor, formatRemaining, isExhausted, remainingPercent } from '../composables/useUsage'
+import type { useCliProfiles } from '../composables/useCliProfiles'
+import { DEFAULT_PROFILE_ID, UNKNOWN_PROFILE_ID, accountLabel } from '../lib/accountLabel'
 import { i18n, useNotify } from '@navide/plugin-ui/foundation'
 import type { useBackend } from '../composables/useBackend'
 import HistoryPanel from './HistoryPanel.vue'
@@ -52,6 +55,10 @@ interface Props {
    *  them" — the layout store supplies the real list. A view moved to another
    *  slot disappears from here, which is what keeps it a singleton. */
   views?: string[]
+  /** The accounts source the usage badge reads: names the BY ACCOUNT rows
+   *  and finds each account's own quota. Optional — without it the rows show
+   *  ids and no quota. */
+  cliProfiles?: ReturnType<typeof useCliProfiles>
 }
 
 const props = defineProps<Props>()
@@ -271,6 +278,40 @@ const groupRows = computed(() =>
   })
 )
 
+// BY ACCOUNT: one row per pinned account the workspace's cumulative ledger
+// has a bucket for. Real accounts largest first, then the built-in Default,
+// then the unknown bucket (records from before pinning existed, which must
+// never be folded into an account). The quota column is the account's own
+// slot reading — the same one the badge's switch list shows.
+const cumulativeByAccount = computed(
+  () => snapshot.value?.workspace?.cumulative?.by_account ?? {}
+)
+const accountRows = computed(() => {
+  const map = cumulativeByAccount.value
+  const t = (key: string): string => i18n.global.t(key)
+  const rows = Object.entries(map).map(([id, bucket]) => {
+    const agentKey = props.cliProfiles?.findProfile(id)?.agentKey ?? ''
+    const reserved = id === DEFAULT_PROFILE_ID || id === UNKNOWN_PROFILE_ID
+    const snap = agentKey ? accountUsageFor(agentKey, id) : undefined
+    let quota = '—'
+    if (isExhausted(snap)) quota = t('usage.exhausted-short')
+    else {
+      const remaining = remainingPercent(snap)
+      if (remaining !== null) quota = formatRemaining(remaining)
+    }
+    return {
+      key: id,
+      label: accountLabel(props.cliProfiles, agentKey, id, t),
+      unknown: id === UNKNOWN_PROFILE_ID,
+      bucket,
+      quota,
+      rank: id === UNKNOWN_PROFILE_ID ? 2 : id === DEFAULT_PROFILE_ID ? 1 : 0,
+      size: reserved ? 0 : bucket.input + bucket.output,
+    }
+  })
+  return rows.sort((a, b) => a.rank - b.rank || b.size - a.size || a.label.localeCompare(b.label))
+})
+
 const paneRows = computed(() => {
   const run = currentRun.value
   const map = run ? run.by_pane : liveBySession.value
@@ -330,6 +371,12 @@ async function confirmReset(scope: ResetScope): Promise<void> {
   }[scope]
   if (!(await notifyConfirm(msg, { title: 'Reset tokens', confirmText: 'Reset' }))) return
   await reset(scope)
+}
+
+// Per-turn breakdown is App's Turn Stats modal; the command is the same one
+// the Window menu and the palette run, so the three entries cannot drift.
+function openTurnStats(): void {
+  executeCommand('ui.window.openTurnStats')
 }
 </script>
 
@@ -402,6 +449,15 @@ async function confirmReset(scope: ResetScope): Promise<void> {
         <section class="block">
           <div class="block-hdr">
             <span class="block-title">{{ currentRun ? $t('label.current-run') : $t('label.current-session') }}</span>
+            <!-- Per-turn breakdown is the Turn Stats modal (Window → Turn Stats);
+                 this is the same entry, reachable from where the figures are. -->
+            <button
+              class="reset-btn open-turns-btn"
+              data-act="open-turn-stats"
+              :title="$t('turn-stats.open-window')"
+              :aria-label="$t('turn-stats.open-window')"
+              @click="openTurnStats"
+            >≡</button>
             <button class="reset-btn" :title="$t('action.reset-run-counter')" @click="confirmReset('run')">⟲</button>
           </div>
           <div v-if="currentRun" class="run-meta" :title="currentRun.task">
@@ -468,6 +524,26 @@ async function confirmReset(scope: ResetScope): Promise<void> {
                 <th></th><td>{{ $t('label.in') }}</td><td>{{ $t('label.out') }}</td><td class="dim">{{ $t('label.calls') }}</td>
               </tr>
 
+            </tbody>
+          </table>
+        </section>
+
+        <!-- By Account -->
+        <section class="block" data-block="by-account">
+          <div class="block-hdr"><span class="block-title">{{ $t('label.by-account') }}</span></div>
+          <div v-if="!accountRows.length" class="muted">{{ $t('label.no-accounts') }}</div>
+          <table v-else class="grid grid-accounts">
+            <tbody>
+              <tr v-for="row in accountRows" :key="row.key" data-row="account" :data-account="row.key" :class="{ unknown: row.unknown }">
+                <th :title="row.key">{{ row.label }}</th>
+                <td>{{ fmt(row.bucket.input) }}</td>
+                <td>{{ fmt(row.bucket.output) }}</td>
+                <td class="dim">{{ row.bucket.calls }}</td>
+                <td class="dim quota" data-part="quota">{{ row.quota }}</td>
+              </tr>
+              <tr class="head">
+                <th></th><td>{{ $t('label.in') }}</td><td>{{ $t('label.out') }}</td><td class="dim">{{ $t('label.calls') }}</td><td class="dim">{{ $t('label.quota') }}</td>
+              </tr>
             </tbody>
           </table>
         </section>
@@ -702,6 +778,7 @@ async function confirmReset(scope: ResetScope): Promise<void> {
   line-height: 1.7;
 }
 .reset-btn:hover { color: var(--danger-fg); border-color: var(--danger-fg); }
+.open-turns-btn:hover { color: var(--text-bright); border-color: var(--border-strong); }
 .run-meta {
   font-size: var(--font-3xs);
   color: var(--text-secondary);
@@ -774,4 +851,6 @@ async function confirmReset(scope: ResetScope): Promise<void> {
   white-space: nowrap;
 }
 .grid td.dim { color: var(--text-secondary); }
+.grid-accounts tr.unknown th { color: var(--text-muted); font-style: italic; }
+.grid-accounts td.quota { width: 5ch; }
 </style>

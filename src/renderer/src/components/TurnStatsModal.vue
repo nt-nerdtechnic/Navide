@@ -1,29 +1,36 @@
 <script setup lang="ts">
-// Turn Stats modal: one CLI pane's token usage cut per turn (a prompt sent →
-// the CLI done replying), with a total at the bottom. Hosted inside the main
-// window like the Resource Manager, and reached the same way (Window menu).
+// Turn Stats: per-turn token usage of one CLI pane, in the Settings shell —
+// pane list down the left, the turns table on the right. Hosted inside the
+// main window like the Resource Manager, reached from the Window menu, the
+// command palette (ui.window.openTurnStats) and the Token panel's ≡ button.
 //
-// It owns no pane state: the host passes this window's pane views in, and the
-// figures come from the backend's on-demand transcript scan (`tokens.turns`).
-// Nothing here is accumulated — every open or rescan re-reads the transcript,
-// which is why an old session still adds up as long as its file exists.
-import { computed, ref, watch } from 'vue'
+// It owns no pane state: the host passes its pane views in (which carry each
+// pane's resume session id and last quota hit), and the quota figures are the
+// usage badge's own snapshot (useUsage, per agent). Everything on the right
+// is TurnStatsView; this file is the shell and the picker.
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { CLI_AGENT_SPECS } from '@navide/plugin-shell'
 import type { useBackend } from '../composables/useBackend'
-import { useTokenTurns, type TokenTurn, type TurnMethod } from '../composables/useTokenTurns'
-
-/** The subset of ActivePaneView this modal reads. */
-export interface TurnStatsPane {
-  id: string
-  agentKey: string
-  /** Display name (custom or auto name, falling back to the vendor label). */
-  agentLabel: string
-  /** 'waiting' is a cold-restore placeholder — listed, since its transcript
-   *  is still on disk and the backend can resolve it by pane id. */
-  status: string
-  sessionId?: string
-}
+import type { useCliProfiles } from '../composables/useCliProfiles'
+import {
+  accountUsageFor,
+  formatRemaining,
+  isExhausted,
+  remainingPercent,
+  remainingTier,
+  usageFor,
+  type UsageSnapshot,
+} from '../composables/useUsage'
+import {
+  DEFAULT_PROFILE_ID,
+  UNKNOWN_PROFILE_ID,
+  accountKey,
+  accountLabel as resolveAccountLabel,
+  normalizeProfileId,
+} from '../lib/accountLabel'
+import TurnStatsView, { type TurnStatsPane } from './TurnStatsView.vue'
+import QuotaCycleView from './QuotaCycleView.vue'
 
 const props = defineProps<{
   open: boolean
@@ -31,304 +38,324 @@ const props = defineProps<{
   panes: TurnStatsPane[]
   /** The pane the user is looking at; preselected when the modal opens. */
   activePaneId?: string | null
+  /** The accounts source the usage badge reads: names each pane's pinned
+   *  account and lists the accounts the "Accounts" section offers. */
+  cliProfiles?: ReturnType<typeof useCliProfiles>
 }>()
 const emit = defineEmits<{ close: [] }>()
 
 const { t } = useI18n()
 
-// Vendors whose transcripts carry no token usage at all (protobuf blobs the
-// reader cannot read). Greyed out in the picker rather than hidden, so the
-// user learns why rather than wondering where the pane went.
+// Vendors whose transcripts carry no token usage at all — greyed out in the
+// list rather than hidden, so the user learns why rather than wondering
+// where the pane went. Same set as TurnStatsView's.
 const NO_TOKEN_VENDORS = new Set(['antigravity', 'cursor'])
 const VENDOR_LABEL: Record<string, string> = Object.fromEntries(
   CLI_AGENT_SPECS.map((s) => [s.agentKey, s.label])
 )
-
 function vendorLabel(agentKey: string): string {
   return VENDOR_LABEL[agentKey] ?? agentKey
 }
 function vendorUnsupported(agentKey: string): boolean {
   return NO_TOKEN_VENDORS.has(agentKey)
 }
+function isPlaceholder(p: TurnStatsPane): boolean {
+  return p.status === 'waiting'
+}
 
-// ── Pane picker ─────────────────────────────────────────────────────────────
+// ── The list ────────────────────────────────────────────────────────────────
 const cliPanes = computed(() => props.panes.filter((p) => p.agentKey !== 'terminal'))
+
+function workspaceLabel(path: string | undefined): string {
+  const trimmed = (path ?? '').replace(/[\\/]+$/, '')
+  const base = trimmed.split(/[\\/]/).pop()
+  return base || trimmed
+}
+/** Panes by workspace folder, in list order. */
+const groups = computed(() => {
+  const byLabel = new Map<string, TurnStatsPane[]>()
+  for (const p of cliPanes.value) {
+    const key = workspaceLabel(p.workspacePath)
+    const list = byLabel.get(key)
+    if (list) list.push(p)
+    else byLabel.set(key, [p])
+  }
+  return [...byLabel.entries()].map(([label, panes]) => ({ label, panes }))
+})
+
 const selectedPaneId = ref('')
+/** Key of the account picked in the Accounts section; '' = a pane is picked. */
+const selectedAccountKey = ref('')
 const selectedPane = computed(() => cliPanes.value.find((p) => p.id === selectedPaneId.value) ?? null)
 
+/** A pane the scan can read: a supported vendor, and either running or a
+ *  placeholder whose resume session id is known. */
+function readable(p: TurnStatsPane): boolean {
+  return !vendorUnsupported(p.agentKey) && (!isPlaceholder(p) || !!p.sessionId)
+}
+// Focused pane → first running supported pane → first placeholder with a
+// session → nothing (the empty state; a never-started pane is still clickable
+// and says why it has nothing to show).
 function defaultPaneId(): string {
-  const active = cliPanes.value.find((p) => p.id === props.activePaneId)
-  if (active && !vendorUnsupported(active.agentKey)) return active.id
-  return cliPanes.value.find((p) => !vendorUnsupported(p.agentKey))?.id ?? cliPanes.value[0]?.id ?? ''
+  const panes = cliPanes.value
+  const active = panes.find((p) => p.id === props.activePaneId)
+  if (active && readable(active)) return active.id
+  return (
+    panes.find((p) => !isPlaceholder(p) && !vendorUnsupported(p.agentKey))?.id ??
+    panes.find((p) => isPlaceholder(p) && readable(p))?.id ??
+    ''
+  )
 }
 
-function paneOptionLabel(p: TurnStatsPane): string {
-  const base = `${p.agentLabel} (${vendorLabel(p.agentKey)})`
-  if (vendorUnsupported(p.agentKey)) return `${base} · ${t('turn-stats.no-token-usage')}`
-  if (p.status === 'waiting') return `${base} · ${t('turn-stats.pane-placeholder')}`
-  return base
-}
-
-// ── The scan ────────────────────────────────────────────────────────────────
-const turnsApi = useTokenTurns(props.backend)
-const expanded = ref(new Set<number>())
-
-function rescan(): void {
-  expanded.value = new Set()
-  // Drop the previous answer first: figures for the pane the user just left
-  // must not sit under the new pane's name while the scan runs.
-  turnsApi.clear()
-  const pane = selectedPane.value
-  // A vendor without token usage is known ahead of time — no point asking
-  // the backend to open the file.
-  if (!pane || vendorUnsupported(pane.agentKey)) return
-  // Calls come along on the first request so expanding a row never waits on
-  // a second scan of a transcript this size.
-  void turnsApi.load({ paneId: pane.id, sessionId: pane.sessionId, agentKey: pane.agentKey }, { includeCalls: true })
-}
-
-// Opening picks the pane; the scan then follows (open, pane) as one watcher,
-// so an open that also changes the pick scans once, and reopening on the same
-// pane still rescans.
+// Opening picks the pane the user is looking at; while open, a pick that
+// disappears (pane closed) falls back to the default, but a pick that is
+// still listed is left alone — the host rebuilds the list every 400ms.
+// The view is handed the pick only while open: closing drops the table, so
+// reopening on the same pane rescans (its turns moved on meanwhile), and a
+// session id that changes on a closed modal starts no scan behind it.
+const viewPane = computed(() => (props.open && !selectedAccount.value ? selectedPane.value : null))
 watch(
   () => props.open,
   (open) => {
-    if (open) selectedPaneId.value = defaultPaneId()
+    if (open) {
+      selectedPaneId.value = defaultPaneId()
+      selectedAccountKey.value = ''
+    }
   },
   { immediate: true }
 )
-watch(
-  () => [props.open, selectedPaneId.value] as const,
-  ([open]) => {
-    if (open) rescan()
-  },
-  { immediate: true }
-)
-
-// ── Rows ────────────────────────────────────────────────────────────────────
-const result = computed(() => turnsApi.data.value)
-/** Newest first: the turn just finished is the one the user came to check. */
-const rows = computed<TokenTurn[]>(() => [...(result.value?.turns ?? [])].reverse())
-const method = computed<TurnMethod | ''>(() => result.value?.method ?? '')
-
-type Panel = 'no-panes' | 'unsupported' | 'loading' | 'error' | 'empty' | 'table'
-const panel = computed<Panel>(() => {
-  const pane = selectedPane.value
-  if (!pane) return 'no-panes'
-  if (vendorUnsupported(pane.agentKey)) return 'unsupported'
-  if (turnsApi.loading.value && !result.value) return 'loading'
-  if (turnsApi.error.value) return 'error'
-  if (!result.value || result.value.method === 'unsupported') return 'unsupported'
-  if (result.value.turns.length === 0) return 'empty'
-  return 'table'
-})
-
-const KNOWN_ERRORS = new Set(['no-session', 'file-missing', 'unknown-vendor', 'scan-failed'])
-const errorText = computed(() => {
-  const code = turnsApi.error.value
-  if (KNOWN_ERRORS.has(code)) return t(`turn-stats.error-${code}`)
-  return t('turn-stats.error-generic', { detail: turnsApi.errorDetail.value || code })
-})
-
-function toggle(turnIndex: number): void {
-  const next = new Set(expanded.value)
-  if (next.has(turnIndex)) next.delete(turnIndex)
-  else next.add(turnIndex)
-  expanded.value = next
-}
-
-// ── Formatting ──────────────────────────────────────────────────────────────
-function num(n: number): string {
-  return n.toLocaleString('en-US')
-}
-// Same tiers as the Token panel: the headline must not stretch past "1.5M".
-function compact(n: number): string {
-  if (n < 1000) return String(n)
-  if (n < 1_000_000) return (n / 1000).toFixed(n < 10_000 ? 1 : 0) + 'k'
-  if (n < 1_000_000_000) return (n / 1_000_000).toFixed(1) + 'M'
-  return (n / 1_000_000_000).toFixed(1) + 'B'
-}
-function clock(iso: string | null): string {
-  if (!iso) return '—'
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return '—'
-  const two = (v: number): string => String(v).padStart(2, '0')
-  return `${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`
-}
-const shortSession = computed(() => {
-  const id = result.value?.session_id ?? selectedPane.value?.sessionId ?? ''
-  return id.length > 8 ? id.slice(0, 8) + '…' : id
-})
-
-// ── CSV export ──────────────────────────────────────────────────────────────
-const CSV_HEADER = [
-  'turn', 'started_at', 'ended_at', 'prompt', 'input', 'cache_read', 'cache_creation', 'output', 'total', 'calls'
-]
-function csvCell(v: string | number | null): string {
-  const s = v === null ? '' : String(v)
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
-}
-/** Oldest first, the way the transcript reads; exported for the test. */
-function buildCsv(turns: TokenTurn[]): string {
-  const lines = [CSV_HEADER.join(',')]
-  for (const r of turns) {
-    lines.push(
-      [r.turn_index, r.started_at, r.ended_at, r.prompt_excerpt, r.input, r.cache_read, r.cache_creation, r.output, r.total, r.calls]
-        .map(csvCell)
-        .join(',')
-    )
+watch(cliPanes, (panes) => {
+  if (!props.open) return
+  if (selectedPaneId.value && !panes.some((p) => p.id === selectedPaneId.value)) {
+    selectedPaneId.value = defaultPaneId()
   }
-  return lines.join('\n') + '\n'
+})
+
+// ── Quota per row (the usage badge's data, per agent) ───────────────────────
+interface RowQuota {
+  /** 'spent' fills solid; otherwise the remaining % in the badge's tier colour. */
+  kind: 'spent' | 'remaining'
+  text: string
+  tier: 'ok' | 'warn' | 'crit'
 }
-function exportCsv(): void {
-  const res = result.value
-  if (!res || res.turns.length === 0) return
-  const blob = new Blob([buildCsv(res.turns)], { type: 'text/csv' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `turn-stats-${res.vendor}-${res.session_id.slice(0, 8)}.csv`
-  a.click()
-  URL.revokeObjectURL(url)
+/** The pane's own account's snapshot — the slot it is pinned to — falling
+ *  back to the agent-level reading (the active account's) for a pane from
+ *  before pinning existed. */
+function paneSnapshot(agentKey: string, profileId: string | undefined): UsageSnapshot | undefined {
+  if (!profileId) return usageFor(agentKey)
+  return accountUsageFor(agentKey, profileId === DEFAULT_PROFILE_ID ? null : profileId)
+    ?? (profileId === activeProfileId(agentKey) ? usageFor(agentKey) : undefined)
+}
+function quotaOf(snap: UsageSnapshot | undefined): RowQuota | null {
+  if (isExhausted(snap)) return { kind: 'spent', text: t('usage.exhausted-short'), tier: 'crit' }
+  const remaining = remainingPercent(snap)
+  if (remaining === null) return null
+  return { kind: 'remaining', text: formatRemaining(remaining), tier: remainingTier(remaining) }
+}
+function rowQuota(p: TurnStatsPane): RowQuota | null {
+  return quotaOf(paneSnapshot(p.agentKey, p.profileId))
+}
+/** A reading the poller could not refresh: shown faded, with its own clock. */
+function rowStale(p: TurnStatsPane): string {
+  const snap = paneSnapshot(p.agentKey, p.profileId)
+  if (!snap?.stale) return ''
+  return t('turn-stats.quota-as-of-stale', { time: clock(Date.parse(snap.fetchedAt)) })
+}
+function activeProfileId(agentKey: string): string {
+  return props.cliProfiles?.defaultProfileId(agentKey) ?? DEFAULT_PROFILE_ID
+}
+function accountLabel(agentKey: string, profileId: string | null | undefined): string {
+  return resolveAccountLabel(props.cliProfiles, agentKey, profileId, t)
+}
+/** Second line of a pane row: vendor, then the account it runs on (a pane
+ *  from before pinning has none to name). */
+function paneSub(p: TurnStatsPane): string {
+  const vendor = vendorLabel(p.agentKey)
+  return p.profileId ? `${vendor} · ${accountLabel(p.agentKey, p.profileId)}` : vendor
 }
 
-defineExpose({ buildCsv })
+// ── The accounts section ────────────────────────────────────────────────────
+// Every (agent, account) pair this window can speak for: the built-in
+// Default and each stored profile of every vendor that has a pane, any pin a
+// pane still carries for a profile since removed, and the unknown bucket
+// that holds records nobody can trace. Picking one swaps the right-hand
+// side for that account's quota cycles.
+interface AccountRow {
+  key: string
+  agentKey: string
+  profileId: string
+  label: string
+  removed: boolean
+}
+const accountRows = computed<AccountRow[]>(() => {
+  const rows: AccountRow[] = []
+  const seen = new Set<string>()
+  const push = (agentKey: string, profileId: string, removed = false): void => {
+    const key = accountKey(agentKey, profileId)
+    if (seen.has(key)) return
+    seen.add(key)
+    rows.push({ key, agentKey, profileId, label: accountLabel(agentKey, profileId), removed })
+  }
+  const agents = [...new Set(cliPanes.value.map((p) => p.agentKey))]
+  for (const agentKey of agents) {
+    push(agentKey, DEFAULT_PROFILE_ID)
+    for (const profile of props.cliProfiles?.profilesForAgent(agentKey) ?? []) push(agentKey, profile.id)
+    for (const p of cliPanes.value) {
+      if (p.agentKey !== agentKey || !p.profileId) continue
+      const id = normalizeProfileId(p.profileId)
+      if (id !== UNKNOWN_PROFILE_ID && !seen.has(accountKey(agentKey, id))) push(agentKey, id, true)
+    }
+    push(agentKey, UNKNOWN_PROFILE_ID)
+  }
+  return rows
+})
+const selectedAccount = computed(() => accountRows.value.find((a) => a.key === selectedAccountKey.value) ?? null)
+function pickPane(id: string): void {
+  selectedPaneId.value = id
+  selectedAccountKey.value = ''
+}
+function pickAccount(key: string): void {
+  selectedAccountKey.value = key
+}
+function accountQuota(a: AccountRow): RowQuota | null {
+  if (a.profileId === UNKNOWN_PROFILE_ID) return null
+  return quotaOf(paneSnapshot(a.agentKey, a.profileId))
+}
+const selectedAccountUsage = computed(() => {
+  const a = selectedAccount.value
+  return a ? paneSnapshot(a.agentKey, a.profileId) : undefined
+})
+/** "⛔ back HH:MM" while the pane's own limit hit has not lifted yet. */
+function rowLimit(p: TurnStatsPane): string {
+  const until = p.usageLimitUntil
+  if (p.usageLimitAt == null || until == null || until <= Date.now()) return ''
+  return t('turn-stats.limit-back', { time: clock(until) })
+}
+function clock(ms: number): string {
+  const d = new Date(ms)
+  const two = (v: number): string => String(v).padStart(2, '0')
+  return `${two(d.getHours())}:${two(d.getMinutes())}`
+}
+
+const selectedUsage = computed(() => {
+  const pane = selectedPane.value
+  return pane ? usageFor(pane.agentKey) : undefined
+})
+
+// Close on ESC, the way Settings does.
+function onKeyDown(e: KeyboardEvent): void {
+  if (!props.open || e.key !== 'Escape') return
+  emit('close')
+}
+onMounted(() => window.addEventListener('keydown', onKeyDown))
+onUnmounted(() => window.removeEventListener('keydown', onKeyDown))
 </script>
 
 <template>
   <Teleport to="body">
-    <div v-show="open" class="ts-overlay nv-modal-overlay" @click.self="emit('close')">
-      <div class="ts-modal nv-modal-shell nv-modal-shell--wide" @click.stop>
-        <div class="ts-head">
-          <span class="ts-title">{{ t('turn-stats.title') }}</span>
-          <button class="ts-close" data-act="close" :title="t('turn-stats.close')" @click="emit('close')">✕</button>
-        </div>
+    <div v-show="open" class="s-overlay nv-modal-overlay" @click.self="emit('close')">
+      <div class="s-modal nv-modal-shell nv-modal-shell--wide" @click.stop>
 
-        <div class="ts-toolbar">
-          <label class="ts-pick">
-            <span>{{ t('turn-stats.pane') }}</span>
-            <select v-model="selectedPaneId" data-act="pane" :disabled="cliPanes.length === 0">
-              <option
-                v-for="p in cliPanes"
+        <!-- ── Sidebar: the panes, grouped by workspace ─────────────────── -->
+        <aside class="s-sidebar">
+          <div class="s-ws-header">
+            <div class="s-ws-avatar" aria-hidden="true">≡</div>
+            <div class="s-ws-meta">
+              <span class="s-ws-name">{{ t('turn-stats.title') }}</span>
+            </div>
+          </div>
+
+          <nav class="s-nav" :aria-label="t('turn-stats.pane')">
+            <p v-if="cliPanes.length === 0" class="ts-nav-empty" data-state="no-panes">{{ t('turn-stats.empty-panes') }}</p>
+            <div v-for="g in groups" :key="g.label" class="s-nav-group" data-part="group" :data-workspace="g.label">
+              <div class="s-nav-group-title">{{ g.label }}</div>
+              <button
+                v-for="p in g.panes"
                 :key="p.id"
-                :value="p.id"
-                :disabled="vendorUnsupported(p.agentKey)"
+                type="button"
+                class="ts-nav-item"
+                data-act="pane"
+                :data-pane-id="p.id"
                 :data-vendor="p.agentKey"
+                :class="{ active: p.id === selectedPaneId && !selectedAccount, unsupported: vendorUnsupported(p.agentKey), placeholder: isPlaceholder(p) }"
+                :title="vendorUnsupported(p.agentKey) ? t('turn-stats.no-token-usage') : p.agentLabel"
+                :aria-current="p.id === selectedPaneId && !selectedAccount ? 'true' : undefined"
+                @click="pickPane(p.id)"
               >
-                {{ paneOptionLabel(p) }}
-              </option>
-            </select>
-          </label>
-          <span v-if="shortSession" class="ts-session" data-part="session" :title="result?.session_id">
-            {{ t('turn-stats.session') }} {{ shortSession }}
-          </span>
-          <span class="ts-spacer" />
-          <button class="ts-ghost" data-act="export" :disabled="panel !== 'table'" @click="exportCsv">
-            {{ t('turn-stats.export') }}
-          </button>
-          <button class="ts-ghost" data-act="rescan" :disabled="!selectedPane || turnsApi.loading.value" @click="rescan">
-            {{ t('turn-stats.rescan') }}
-          </button>
-        </div>
+                <span class="ts-nav-main">
+                  <span class="ts-nav-label">{{ p.agentLabel }}</span>
+                  <span class="ts-nav-sub" data-part="pane-sub">
+                    {{ paneSub(p) }}<template v-if="isPlaceholder(p)"> · {{ t('turn-stats.pane-placeholder') }}</template>
+                  </span>
+                </span>
+                <span class="ts-nav-trail">
+                  <span v-if="rowLimit(p)" class="ts-limit-pill" data-part="limit-pill">{{ rowLimit(p) }}</span>
+                  <span
+                    v-if="rowQuota(p)"
+                    class="ts-quota-pill"
+                    data-part="quota-pill"
+                    :data-stale="rowStale(p) ? 'true' : 'false'"
+                    :title="rowStale(p) || undefined"
+                    :class="[rowQuota(p)!.tier, { exhausted: rowQuota(p)!.kind === 'spent', stale: !!rowStale(p) }]"
+                  >{{ rowQuota(p)!.text }}</span>
+                </span>
+              </button>
+            </div>
 
-        <div v-if="result && panel === 'table'" class="ts-summary">
-          <span class="ts-summary-main" data-part="summary">
-            {{ t('turn-stats.summary', {
-              turns: result.turns.length,
-              calls: num(result.totals.calls),
-              total: compact(result.totals.total),
-            }) }}
-          </span>
-          <span class="ts-method" :data-method="method">
-            {{ method === 'exact' ? t('turn-stats.method-exact') : t('turn-stats.method-inferred') }}
-          </span>
-          <span v-if="method === 'inferred'" class="ts-method-note" data-part="method-note">
-            {{ t('turn-stats.method-inferred-note') }}
-          </span>
-        </div>
+            <!-- Accounts: one row per (vendor, account); picking one shows its quota cycles. -->
+            <div v-if="accountRows.length" class="s-nav-group" data-part="accounts">
+              <div class="s-nav-group-title">{{ t('turn-stats.accounts-section') }}</div>
+              <button
+                v-for="a in accountRows"
+                :key="a.key"
+                type="button"
+                class="ts-nav-item"
+                data-act="account"
+                :data-account-key="a.key"
+                :data-vendor="a.agentKey"
+                :data-profile-id="a.profileId"
+                :class="{ active: a.key === selectedAccountKey, unknown: a.profileId === UNKNOWN_PROFILE_ID }"
+                :title="a.profileId"
+                :aria-current="a.key === selectedAccountKey ? 'true' : undefined"
+                @click="pickAccount(a.key)"
+              >
+                <span class="ts-nav-main">
+                  <span class="ts-nav-label">{{ a.label }}</span>
+                  <span class="ts-nav-sub">
+                    {{ vendorLabel(a.agentKey) }}<template v-if="a.profileId === activeProfileId(a.agentKey)"> · {{ t('account-dim.active') }}</template>
+                  </span>
+                </span>
+                <span class="ts-nav-trail">
+                  <span
+                    v-if="accountQuota(a)"
+                    class="ts-quota-pill"
+                    data-part="account-quota-pill"
+                    :class="[accountQuota(a)!.tier, { exhausted: accountQuota(a)!.kind === 'spent' }]"
+                  >{{ accountQuota(a)!.text }}</span>
+                </span>
+              </button>
+            </div>
+          </nav>
+        </aside>
 
-        <div class="ts-body">
-          <p v-if="panel === 'no-panes'" class="ts-empty" data-state="no-panes">{{ t('turn-stats.empty-panes') }}</p>
-          <p v-else-if="panel === 'unsupported'" class="ts-empty" data-state="unsupported">
-            {{ t('turn-stats.method-unsupported') }}
-          </p>
-          <p v-else-if="panel === 'loading'" class="ts-empty" data-state="loading">{{ t('turn-stats.scanning') }}</p>
-          <p v-else-if="panel === 'error'" class="ts-empty ts-error" data-state="error">{{ errorText }}</p>
-          <p v-else-if="panel === 'empty'" class="ts-empty" data-state="empty">{{ t('turn-stats.empty-turns') }}</p>
-          <table v-else class="ts-table" data-state="table">
-            <thead>
-              <tr>
-                <th class="c-idx">#</th>
-                <th class="c-time">{{ t('turn-stats.col-time') }}</th>
-                <th class="c-prompt">{{ t('turn-stats.col-prompt') }}</th>
-                <th class="c-num">{{ t('turn-stats.col-input') }}</th>
-                <th class="c-num">{{ t('turn-stats.col-cache-read') }}</th>
-                <th class="c-num">{{ t('turn-stats.col-cache-write') }}</th>
-                <th class="c-num">{{ t('turn-stats.col-output') }}</th>
-                <th class="c-num c-total">{{ t('turn-stats.col-total') }}</th>
-                <th class="c-num">{{ t('turn-stats.col-calls') }}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <template v-for="r in rows" :key="r.turn_index">
-                <tr
-                  class="ts-row"
-                  data-row="turn"
-                  :data-turn="r.turn_index"
-                  :data-expanded="expanded.has(r.turn_index) ? 'true' : 'false'"
-                  @click="toggle(r.turn_index)"
-                >
-                  <td class="c-idx">{{ r.turn_index }}</td>
-                  <td class="c-time">{{ clock(r.started_at) }}</td>
-                  <td class="c-prompt" :title="r.prompt_excerpt">
-                    <span :class="{ 'ts-no-prompt': !r.prompt_excerpt }">
-                      {{ r.prompt_excerpt || t('turn-stats.no-prompt') }}
-                    </span>
-                  </td>
-                  <td class="c-num" data-part="input">{{ num(r.input) }}</td>
-                  <td class="c-num" data-part="cache-read">{{ num(r.cache_read) }}</td>
-                  <td class="c-num" data-part="cache-write">{{ num(r.cache_creation) }}</td>
-                  <td class="c-num" data-part="output">{{ num(r.output) }}</td>
-                  <td class="c-num c-total" data-part="total">{{ num(r.total) }}</td>
-                  <td class="c-num" data-part="calls">{{ num(r.calls) }}</td>
-                </tr>
-                <tr v-if="expanded.has(r.turn_index)" class="ts-detail" data-row="detail" :data-turn="r.turn_index">
-                  <td colspan="9">
-                    <p v-if="!r.calls_detail?.length" class="ts-detail-empty">{{ t('turn-stats.no-calls') }}</p>
-                    <table v-else class="ts-calls">
-                      <tbody>
-                        <tr v-for="(c, i) in r.calls_detail" :key="i" data-row="call">
-                          <td class="c-time">{{ clock(c.ts) }}</td>
-                          <td class="c-model">{{ c.model }}</td>
-                          <td class="c-num">{{ num(c.input) }}</td>
-                          <td class="c-num">{{ num(c.cache_read) }}</td>
-                          <td class="c-num">{{ num(c.cache_creation) }}</td>
-                          <td class="c-num">{{ num(c.output) }}</td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </td>
-                </tr>
-              </template>
-            </tbody>
-            <tfoot v-if="result">
-              <tr class="ts-total" data-row="totals">
-                <td class="c-idx" />
-                <td class="c-time" />
-                <td class="c-prompt">{{ t('turn-stats.row-total') }}</td>
-                <td class="c-num" data-part="input">{{ num(result.totals.input) }}</td>
-                <td class="c-num" data-part="cache-read">{{ num(result.totals.cache_read) }}</td>
-                <td class="c-num" data-part="cache-write">{{ num(result.totals.cache_creation) }}</td>
-                <td class="c-num" data-part="output">{{ num(result.totals.output) }}</td>
-                <td class="c-num c-total" data-part="total">{{ num(result.totals.total) }}</td>
-                <td class="c-num" data-part="calls">{{ num(result.totals.calls) }}</td>
-              </tr>
-            </tfoot>
-          </table>
-        </div>
-
-        <div class="ts-foot">
-          <span class="ts-foot-note" data-part="note">{{ t('turn-stats.note') }}</span>
+        <!-- ── Content ─────────────────────────────────────────────────────── -->
+        <div class="s-content">
+          <button class="s-close" data-act="close" :title="t('turn-stats.close')" @click="emit('close')">✕</button>
+          <div class="s-body">
+            <h1 class="s-page-title">{{ t('turn-stats.title') }}</h1>
+            <QuotaCycleView
+              v-if="open && selectedAccount"
+              :backend="backend"
+              :agent-key="selectedAccount.agentKey"
+              :profile-id="selectedAccount.profileId"
+              :label="selectedAccount.label"
+              :vendor-label="vendorLabel(selectedAccount.agentKey)"
+              :active="selectedAccount.profileId === activeProfileId(selectedAccount.agentKey)"
+              :usage="selectedAccountUsage"
+              :cli-profiles="cliProfiles"
+            />
+            <TurnStatsView v-else :backend="backend" :pane="viewPane" :usage="selectedUsage" :cli-profiles="cliProfiles" />
+          </div>
         </div>
       </div>
     </div>
@@ -336,193 +363,252 @@ defineExpose({ buildCsv })
 </template>
 
 <style scoped>
-/* `.nv-modal-overlay` only skins the scrim — every modal positions its own
- * overlay (see ResourceManagerModal for the shipped bug behind this). */
-.ts-overlay {
+/* The Settings shell, rule for rule (SettingsModal.vue is scoped, so the
+ * classes are shared by name and the rules copied). `.nv-modal-overlay` only
+ * skins the scrim — every modal positions its own overlay. */
+.s-overlay {
   position: fixed;
   inset: 0;
+  background: var(--modal-backdrop);
+  backdrop-filter: blur(var(--modal-backdrop-blur));
+  -webkit-backdrop-filter: blur(var(--modal-backdrop-blur));
   z-index: calc(var(--z-modal) + 120);
   display: flex;
   align-items: center;
   justify-content: center;
   -webkit-app-region: no-drag;
 }
-.ts-modal {
+.s-modal {
+  background: var(--bg-base);
+  color: var(--text-bright);
+  border: 1px solid var(--border-muted);
+  border-radius: var(--radius-lg);
   width: min(var(--modal-w-wide), 92vw);
-  height: min(760px, 86vh);
+  max-width: 1100px;
+  height: 88vh;
+  display: grid;
+  grid-template-columns: 232px minmax(0, 1fr);
+  overflow: hidden;
+  box-shadow: var(--shadow-modal);
+}
+.s-sidebar {
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--bg-inset);
+  border-right: 1px solid var(--border-default);
+  padding: var(--space-3, 12px) var(--space-2, 8px);
+  gap: var(--space-2, 8px);
+}
+.s-ws-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px var(--space-row-x);
+  min-width: 0;
+}
+.s-ws-avatar {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-selected);
+  color: var(--accent-fg);
+  font-size: var(--font-md);
+}
+.s-ws-meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.25;
+}
+.s-ws-name {
+  font-size: var(--font-sm);
+  font-weight: 600;
+  color: var(--text-bright);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.s-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+}
+.s-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 0;
+}
+.s-nav-group + .s-nav-group {
+  border-top: 1px solid var(--border-muted);
+}
+.s-nav-group-title {
+  padding: 4px var(--space-row-x) 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   color: var(--text-secondary);
-  font-size: var(--font-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.s-content {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
   overflow: hidden;
 }
-.ts-spacer { flex: 1; }
+.s-close {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  z-index: 30;
+  border: none;
+  background: var(--bg-base);
+  color: var(--text-secondary);
+  font-size: var(--font-lg);
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: var(--radius-control);
+  line-height: 1;
+}
+.s-close:hover { background: var(--bg-muted); color: var(--text-bright); }
+.s-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.s-page-title {
+  margin: 0;
+  padding: 18px 22px 12px;
+  font-size: var(--font-page-title);
+  font-weight: 700;
+  color: var(--text-bright);
+  flex-shrink: 0;
+}
 
-.ts-head {
+/* ── Pane rows: SettingsNavItem's look, with a trailing quota pill ───────── */
+.ts-nav-empty {
+  margin: 0;
+  padding: 8px var(--space-row-x);
+  font-size: var(--font-2xs);
+  color: var(--text-muted);
+}
+.ts-nav-item {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--border-muted);
-}
-.ts-title {
-  flex: 1;
-  font-weight: 600;
-  font-size: var(--font-md);
-  color: var(--text-bright);
-}
-.ts-close {
-  flex: none;
-  background: var(--bg-hover);
-  color: var(--text-secondary);
-  border: 1px solid var(--border-muted);
-  border-radius: var(--radius-sm);
-  padding: 3px 9px;
-  font-size: var(--font-2xs);
-  cursor: pointer;
-}
-.ts-close:hover { color: var(--text-bright); }
-
-.ts-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 16px;
-  border-bottom: 1px solid var(--border-muted);
-}
-.ts-pick {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  color: var(--text-muted);
-  font-size: var(--font-2xs);
-}
-.ts-pick select { max-width: 360px; }
-.ts-session {
-  color: var(--text-muted);
-  font-size: var(--font-2xs);
-  font-variant-numeric: tabular-nums;
-}
-.ts-ghost {
-  padding: 4px 10px;
-  border: 1px solid var(--border-muted);
-  border-radius: var(--radius-sm);
-  background: var(--bg-subtle);
-  color: var(--text-secondary);
-  font-size: var(--font-2xs);
-  cursor: pointer;
-}
-.ts-ghost:hover { color: var(--text-bright); }
-.ts-ghost:disabled { color: var(--text-disabled); cursor: default; }
-
-.ts-summary {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--border-muted);
-}
-.ts-summary-main {
-  color: var(--text-bright);
-  font-weight: 600;
-  font-size: var(--font-sm);
-  font-variant-numeric: tabular-nums;
-}
-.ts-method {
-  padding: 1px 8px;
-  border-radius: var(--radius-pill);
-  background: var(--accent-subtle);
-  color: var(--accent-fg);
-  font-size: var(--font-3xs);
-}
-.ts-method[data-method='inferred'] {
+  width: 100%;
+  padding: 6px var(--space-row-x);
+  border: none;
   background: transparent;
-  color: var(--warning-fg);
-  border: 1px solid var(--warning-fg);
-}
-.ts-method-note { color: var(--text-muted); font-size: var(--font-3xs); }
-
-.ts-body {
-  flex: 1 1 auto;
-  min-height: 120px;
-  overflow: auto;
-}
-.ts-empty {
-  margin: 0;
-  padding: 24px 16px;
-  color: var(--text-muted);
-  text-align: center;
-}
-.ts-error { color: var(--attention-fg); }
-
-.ts-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-variant-numeric: tabular-nums;
-}
-.ts-table th,
-.ts-table td {
-  padding: 6px 8px;
-  border-bottom: 1px solid var(--border-muted);
-  white-space: nowrap;
-}
-.ts-table th {
-  position: sticky;
-  top: 0;
-  background: var(--bg-subtle);
-  color: var(--text-muted);
-  font-weight: 400;
-  font-size: var(--font-3xs);
+  border-radius: var(--radius-control);
+  cursor: pointer;
   text-align: left;
+  color: var(--text-primary);
+  font-size: var(--font-row-title);
+  transition: background-color 120ms ease, color 120ms ease;
 }
-.ts-table th:first-child,
-.ts-table td:first-child { padding-left: 16px; }
-.ts-table th:last-child,
-.ts-table td:last-child { padding-right: 16px; }
-.c-idx { width: 3ch; color: var(--text-muted); text-align: right; }
-.c-time { width: 9ch; color: var(--text-muted); }
-.c-prompt {
-  max-width: 0;
-  width: 100%;
+.ts-nav-item:hover { background: var(--bg-hover); }
+.ts-nav-item:focus-visible {
+  outline: 2px solid var(--accent-focus);
+  outline-offset: -1px;
+}
+.ts-nav-item.active {
+  background: var(--bg-selected);
+  color: var(--accent-fg);
+  font-weight: 600;
+}
+.ts-nav-item.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 60%;
+  border-radius: 0 2px 2px 0;
+  background: var(--accent-emphasis);
+}
+.ts-nav-item.unsupported .ts-nav-main { color: var(--text-disabled); }
+.ts-nav-item.placeholder .ts-nav-label { font-style: italic; }
+.ts-nav-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.3;
+}
+.ts-nav-label {
   overflow: hidden;
   text-overflow: ellipsis;
-  color: var(--text-primary);
+  white-space: nowrap;
 }
-.ts-no-prompt { color: var(--text-muted); font-style: italic; }
-.ts-table th.c-num,
-.ts-table td.c-num { text-align: right; }
-.c-total { color: var(--text-bright); font-weight: 600; }
-.ts-row { cursor: pointer; }
-.ts-row:hover { background: var(--bg-hover-faint); }
-.ts-row[data-expanded='true'] { background: var(--bg-hover-faint); }
-
-.ts-detail td {
-  padding: 4px 16px 8px 40px;
-  background: var(--bg-subtle);
+.ts-nav-sub {
+  font-size: var(--font-3xs);
+  font-weight: 400;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.ts-detail-empty { margin: 0; color: var(--text-muted); font-size: var(--font-3xs); }
-.ts-calls { border-collapse: collapse; font-size: var(--font-3xs); }
-.ts-calls td { padding: 2px 10px 2px 0; border: 0; color: var(--text-muted); }
-.ts-calls .c-model { color: var(--text-secondary); }
-
-.ts-total td {
-  border-top: 1px solid var(--border-default);
-  border-bottom: 0;
-  color: var(--text-bright);
-  font-weight: 600;
-  background: var(--bg-subtle);
-}
-
-.ts-foot {
+.ts-nav-trail {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 8px 16px;
-  border-top: 1px solid var(--border-muted);
-  background: var(--bg-subtle);
-  font-size: var(--font-3xs);
-  color: var(--text-muted);
+  gap: 4px;
 }
-.ts-foot-note { line-height: 1.45; }
+/* The usage badge's pill and tiers (UsageBadge.vue), so a row reads the same
+ * as the pane header it stands for. */
+.ts-quota-pill {
+  font-size: 9px;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 1px 6px;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+  border: 1px solid var(--border-default);
+  color: var(--text-secondary);
+  background: var(--bg-subtle);
+}
+.ts-quota-pill.warn {
+  color: var(--attention-fg);
+  background: var(--attention-subtle);
+  border-color: var(--attention-muted);
+}
+.ts-quota-pill.crit {
+  color: var(--danger-fg);
+  background: var(--danger-deep);
+  border-color: var(--danger-fg);
+}
+.ts-quota-pill.exhausted {
+  color: var(--text-on-emphasis);
+  background: var(--danger-emphasis);
+  border-color: var(--danger-emphasis);
+}
+.ts-quota-pill.stale {
+  opacity: 0.6;
+  border-style: dashed;
+}
+.ts-nav-item.unknown .ts-nav-label { font-style: italic; color: var(--text-muted); }
+.ts-limit-pill {
+  font-size: 9px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--danger-fg);
+}
+
 </style>

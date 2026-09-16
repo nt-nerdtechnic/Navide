@@ -200,6 +200,17 @@ export interface ActivePaneView {
   /** True while App has a rebuild in flight for this pane's session — disables
    *  the rebuild control so a double-click cannot start a second kill/spawn. */
   rebuilding?: boolean
+  /** The pane's quota-hit state, copied from ActivePane (see its doc): when the
+   *  CLI's "hit your limit" message was last seen, when the quota is due back,
+   *  and the never-cleared detection high-water mark. Read by Turn Stats to
+   *  flag the turn that ran into the limit. */
+  usageLimitAt?: number | null
+  usageLimitUntil?: number | null
+  usageLimitSeenAt?: number | null
+  /** The CLI account the pane is pinned to ('__default__' = the real home;
+   *  absent on a pane from before pinning existed). Read by Turn Stats to
+   *  pick the account's own quota snapshot. */
+  profileId?: string
 }
 
 export interface SpawnPayload {

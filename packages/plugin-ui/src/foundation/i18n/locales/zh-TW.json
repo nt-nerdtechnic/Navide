@@ -859,10 +859,6 @@
           "title": "更新",
           "summary": "檢查更新、自動檢查與自動下載，以及發行頻道。"
         },
-        "general-loop-prompt": {
-          "title": "Loop 提示詞",
-          "summary": "編輯按下面板 loop 按鈕時送出的提示，以及額度用盡暫停後自動續跑用的提示。"
-        },
         "general-resume-behavior": {
           "title": "開啟時恢復對話",
           "summary": "開啟工作區時，要接續先前的 CLI 面板、全部重新開始，還是每次都問你。"
@@ -1150,9 +1146,6 @@
       "backend-timeout": "後端啟動逾時",
       "backend-timeout-hint": "啟動或重啟時等待後端變為健康狀態的時間，逾時就放棄。較慢的機器可拉長此值（15–120 秒）。",
       "backend-timeout-label": "逾時秒數",
-      "loop-prompt": "Loop 提示詞",
-      "loop-prompt-hint": "按下 pane 的 Loop 按鈕時自動送出的提示詞。之後每輪結束會自動繼續，直到 Agent 回報任務完成才停止。",
-      "loop-resume-hint": "每輪結束後自動送出以持續 Loop 的續跑提示詞；工作階段達上限暫停後，額度重置時也會自動送出。",
       "resume-behavior": "開啟工作區時恢復對話",
       "resume-behavior-hint": "開啟工作區時，先前已啟動的 CLI pane 要如何處理。",
       "resume-behavior-label": "開啟工作區時",
@@ -1309,7 +1302,7 @@
           },
           "tabs": {
             "general": {
-              "what": "關閉確認、閒置回收門檻、接續行為、預設編輯器、額度徽章、環境檢查、Backend 逾時、通知與音效、Loop 提示",
+              "what": "關閉確認、閒置回收門檻、接續行為、預設編輯器、額度徽章、環境檢查、Backend 逾時、通知與音效",
               "more": "本頁第 2 章"
             },
             "appearance": {
@@ -1438,10 +1431,6 @@
             },
             "backendTimeout": {
               "desc": "等 Backend 起來的秒數，15–120；機器慢就調高。",
-              "fallback": "—"
-            },
-            "loopPrompt": {
-              "desc": "按面板 ∞ 按鈕時送出的提示，以及每個 turn 結束後用來續跑的 resume 文字，兩個欄位分開填。",
               "fallback": "—"
             }
           },
@@ -5846,6 +5835,9 @@
     "no-stages": "沒有定義的階段。",
     "by-group": "依群組",
     "no-groups": "尚無群組",
+    "by-account": "依帳號",
+    "no-accounts": "尚無帳號",
+    "quota": "額度",
     "by-pane": "依面板",
     "no-active-panes": "沒有啟用中的面板。",
     "no-output-yet": "尚無輸出",
@@ -7051,7 +7043,7 @@
   },
   "turn-stats": {
     "title": "每輪消耗",
-    "close": "關閉",
+    "open-window": "開啟每輪消耗",
     "pane": "Pane",
     "pane-placeholder": "尚未啟動",
     "no-token-usage": "不提供 token 用量",
@@ -7082,7 +7074,84 @@
     "error-unknown-vendor": "沒有這個 CLI 的讀取器。",
     "error-scan-failed": "掃描無法執行。",
     "error-generic": "無法載入每輪資料：{detail}",
-    "note": "Claude 每輪都重讀整個 context，Cache R 會遠大於其他欄。CLI 底部 footer 的 tokens 是 context 大小，不是累計。"
+    "note": "Claude 每輪都重讀整個 context，Cache R 會遠大於其他欄。CLI 底部 footer 的 tokens 是 context 大小，不是累計。",
+    "close": "關閉",
+    "error-never-started": "這個 pane 尚未啟動過，沒有 session 可讀。",
+    "limit-back": "⛔ {time} 回復",
+    "quota-title": "額度",
+    "quota-resets": "{time} 重置",
+    "quota-none": "此 CLI 沒有額度讀數",
+    "quota-window-spend": "本額度視窗內消耗（{from}–{to}）：",
+    "quota-window-spend-unknown": "本額度視窗內消耗：—（此 CLI 未提供視窗起點）",
+    "quota-window-turns": "輪",
+    "limit-hit-row": "這一輪撞到額度上限（{time} 重置）",
+    "limit-hit-row-no-reset": "這一輪撞到額度上限",
+    "limit-hit-note": "⛔ 標在最近一次偵測到額度上限時進行中的那一輪；pane 只保留最近一次，且偵測每 5 秒輪詢，可能晚一輪。",
+    "version-toggle": "顯示或隱藏 CLI 版本欄",
+    "version-hide": "隱藏版本",
+    "version-show": "顯示版本",
+    "account-filter": "帳號篩選：",
+    "account-all": "全部",
+    "account-turns": "{turns} 輪",
+    "version-filter-clear": "清除版本篩選",
+    "col-account": "帳號",
+    "col-version": "版本",
+    "quota-as-of": "資料時間 {time}",
+    "quota-as-of-stale": "舊資料 · 截至 {time}",
+    "quota-unknown-account": "釘選記錄建立前的輪次，對不到帳號",
+    "quota-removed": "帳號已移除，沒有額度可讀",
+    "quota-last-turn": "最後一輪 {time}",
+    "version-samples": "{turns} 輪",
+    "version-chart-title": "各 CLI 版本平均每輪消耗",
+    "version-chart-hint": "升版有沒有變貴？點長條可篩選表格。",
+    "row-subtotal": "小計 · {account}（{turns} 輪）",
+    "empty-filtered": "沒有符合篩選的輪次。",
+    "accounts-section": "帳號"
+  },
+  "account-dim": {
+    "unknown": "未知",
+    "default": "Default",
+    "removed": "帳號已移除",
+    "active": "active",
+    "inactive": "非 active"
+  },
+  "quota-cycles": {
+    "in-progress": "進行中",
+    "tab-cycle": "週期",
+    "tab-month": "月度",
+    "tab-year": "年度",
+    "all-accounts": "全部帳號",
+    "summary": "共 {cycles} 個週期 · 耗完 {exhausted} 次",
+    "summary-avg": "耗完週期平均 {total}",
+    "chart-cycles": "每週期 token（長條）與最高 %（折線）",
+    "chart-cycles-hint": "紅點＝耗完；耗完的長條等高，代表容量估計可信。",
+    "empty": "這個帳號還沒有額度週期紀錄。",
+    "unknown-account": "對不到帳號的紀錄沒有額度視窗可看。",
+    "error-unknown-vendor": "此 CLI 沒有額度追蹤。",
+    "error-generic": "無法載入：{detail}",
+    "col-cycle": "週期（起 → 重置）",
+    "col-max": "最高 %",
+    "col-exhausted": "耗完",
+    "col-turns": "輪數",
+    "col-per-percent": "Total／%",
+    "row-exhausted-average": "耗完的 {count} 個週期平均",
+    "note": "週期起點＝重置時間 − 視窗長度，終點＝重置時間；週期內 token 是釘在這個帳號的所有 pane 加總。耗完時刻是第一個 100% 樣本，實際撞牆最多早 15 分鐘。",
+    "chart-month": "每月總量（依帳號）",
+    "chart-year": "每年總量（依帳號）",
+    "chart-periods-hint": "點長條可標示該期間。",
+    "empty-periods": "這段期間還沒有用量紀錄。",
+    "col-month": "月份",
+    "col-year": "年份",
+    "col-cycles": "5h 週期",
+    "col-exhausted-count": "耗完",
+    "col-avg-exhausted": "平均／耗完週期",
+    "col-weekly-exhausted": "Weekly 耗完",
+    "col-account": "帳號",
+    "col-share": "佔比",
+    "periods-note": "帳號維度從釘選記錄上線起記；之前的用量列在「未知」，不假裝有帳號。",
+    "no-detail": "切片記錄上線前結案：有額度樣本，沒有其間的 token 明細。",
+    "no-detail-short": "無 token 明細",
+    "average-detailed": "token 取有明細的 {detailed} 個"
   },
   "resource": {
     "title": "資源控管",

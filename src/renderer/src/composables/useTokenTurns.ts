@@ -14,6 +14,8 @@ export interface TurnCall {
   cache_read: number
   cache_creation: number
   output: number
+  /** CLI version that made the call; "" when the transcript carries none. */
+  cli_version?: string
 }
 
 export interface TokenTurn {
@@ -32,6 +34,12 @@ export interface TokenTurn {
   calls: number
   /** Present only when the request asked for `include_calls`. */
   calls_detail?: TurnCall[]
+  /** The account the pane was pinned to when the turn started:
+   *  "__default__" for the real home, "unknown" when it cannot be traced.
+   *  Absent from a backend that predates the account dimension. */
+  profile_id?: string
+  /** "" when the transcript carries no version. */
+  cli_version?: string
 }
 
 export interface TurnTotals {
@@ -59,6 +67,8 @@ export interface TokenTurnsResult {
   turns: TokenTurn[]
   totals: TurnTotals
   scanned_at: string
+  /** Profile ids this session touched, first seen first. */
+  accounts?: string[]
 }
 
 /** Domain failures the backend answers inside an ok envelope. */

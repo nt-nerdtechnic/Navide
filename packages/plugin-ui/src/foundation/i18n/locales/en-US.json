@@ -859,10 +859,6 @@
           "title": "Updates",
           "summary": "Check for updates, auto-check/auto-download, and release channel."
         },
-        "general-loop-prompt": {
-          "title": "Loop Prompt",
-          "summary": "Edit the prompt sent to a CLI pane when its loop button is clicked, and the auto-resume prompt after a session-limit pause."
-        },
         "general-resume-behavior": {
           "title": "Resume on Open",
           "summary": "Whether opening a workspace resumes its previous CLI panes, starts them fresh, or asks each time."
@@ -1150,9 +1146,6 @@
       "backend-timeout": "Backend Startup Timeout",
       "backend-timeout-hint": "How long to wait for the backend to become healthy on startup or restart before giving up. Raise this on slower machines (15–120 seconds).",
       "backend-timeout-label": "Timeout (seconds)",
-      "loop-prompt": "Loop Prompt",
-      "loop-prompt-hint": "Prompt sent to a CLI pane when its loop button is clicked. The loop keeps going on its own after each turn until the agent signals it is done.",
-      "loop-resume-hint": "Resume prompt sent automatically after each completed turn to keep the loop going, and after a session-limit pause once the quota resets.",
       "resume-behavior": "Resume conversations on open",
       "resume-behavior-hint": "What happens to a workspace's previously spawned CLI panes when you open it.",
       "resume-behavior-label": "On workspace open",
@@ -1309,7 +1302,7 @@
           },
           "tabs": {
             "general": {
-              "what": "Close confirmation, idle reclaim threshold, resume behavior, default editor, quota badge, environment check, backend timeout, notifications and sound, loop prompt",
+              "what": "Close confirmation, idle reclaim threshold, resume behavior, default editor, quota badge, environment check, backend timeout, notifications and sound",
               "more": "section 2 of this page"
             },
             "appearance": {
@@ -1438,10 +1431,6 @@
             },
             "backendTimeout": {
               "desc": "How many seconds to wait for the backend, 15–120; raise it on a slow machine.",
-              "fallback": "—"
-            },
-            "loopPrompt": {
-              "desc": "The prompt sent when you press a pane's ∞ button, plus the resume text used to continue after each turn ends; they are two separate fields.",
               "fallback": "—"
             }
           },
@@ -5846,6 +5835,9 @@
     "no-stages": "No stages defined.",
     "by-group": "By group",
     "no-groups": "No groups yet",
+    "by-account": "By account",
+    "no-accounts": "No accounts yet",
+    "quota": "Quota",
     "by-pane": "By pane",
     "no-active-panes": "No active panes.",
     "no-output-yet": "No output yet",
@@ -7051,7 +7043,7 @@
   },
   "turn-stats": {
     "title": "Turn Stats",
-    "close": "Close",
+    "open-window": "Open Turn Stats",
     "pane": "Pane",
     "pane-placeholder": "not started",
     "no-token-usage": "no token usage",
@@ -7082,7 +7074,84 @@
     "error-unknown-vendor": "No reader for this CLI.",
     "error-scan-failed": "The scan could not run.",
     "error-generic": "Could not load turns: {detail}",
-    "note": "Claude re-reads the whole context every turn, so Cache R is far larger than the other columns. The tokens figure in the CLI footer is the context size, not a running total."
+    "note": "Claude re-reads the whole context every turn, so Cache R is far larger than the other columns. The tokens figure in the CLI footer is the context size, not a running total.",
+    "close": "Close",
+    "error-never-started": "This pane has never been started, so there is no session to read.",
+    "limit-back": "⛔ back {time}",
+    "quota-title": "Quota",
+    "quota-resets": "resets {time}",
+    "quota-none": "no quota reading for this CLI",
+    "quota-window-spend": "Spent in this session window ({from}–{to}):",
+    "quota-window-spend-unknown": "Spent in this window: — (this CLI reports no window start)",
+    "quota-window-turns": "turns",
+    "limit-hit-row": "This turn ran into the quota limit (resets {time})",
+    "limit-hit-row-no-reset": "This turn ran into the quota limit",
+    "limit-hit-note": "⛔ marks the turn during which the last quota limit was detected; only the most recent hit is kept, and detection polls every 5s, so it can land one turn late.",
+    "version-toggle": "Show or hide the CLI version column",
+    "version-hide": "Hide version",
+    "version-show": "Show version",
+    "account-filter": "Account:",
+    "account-all": "All",
+    "account-turns": "{turns} turns",
+    "version-filter-clear": "Clear the version filter",
+    "col-account": "Account",
+    "col-version": "Version",
+    "quota-as-of": "as of {time}",
+    "quota-as-of-stale": "stale · as of {time}",
+    "quota-unknown-account": "turns from before pin history existed; no account to match",
+    "quota-removed": "account removed — no quota to read",
+    "quota-last-turn": "last turn {time}",
+    "version-samples": "{turns} turns",
+    "version-chart-title": "Average per turn by CLI version",
+    "version-chart-hint": "Did the upgrade get pricier? Click a bar to filter the table.",
+    "row-subtotal": "Subtotal · {account} ({turns} turns)",
+    "empty-filtered": "No turns match this filter.",
+    "accounts-section": "Accounts"
+  },
+  "account-dim": {
+    "unknown": "Unknown",
+    "default": "Default",
+    "removed": "account removed",
+    "active": "active",
+    "inactive": "not active"
+  },
+  "quota-cycles": {
+    "in-progress": "in progress",
+    "tab-cycle": "Cycles",
+    "tab-month": "Monthly",
+    "tab-year": "Yearly",
+    "all-accounts": "All accounts",
+    "summary": "{cycles} cycles · ran out {exhausted} times",
+    "summary-avg": "avg {total} per exhausted cycle",
+    "chart-cycles": "Tokens per cycle (bars) and peak % (line)",
+    "chart-cycles-hint": "Red dot = ran out. Bars of equal height at 100% mean the capacity estimate holds.",
+    "empty": "No quota cycles recorded for this account yet.",
+    "unknown-account": "Untraceable records have no quota windows to show.",
+    "error-unknown-vendor": "No quota tracking for this CLI.",
+    "error-generic": "Could not load: {detail}",
+    "col-cycle": "Cycle (start → reset)",
+    "col-max": "Peak %",
+    "col-exhausted": "Ran out",
+    "col-turns": "Turns",
+    "col-per-percent": "Total / %",
+    "row-exhausted-average": "Average of the {count} exhausted cycles",
+    "note": "A cycle starts at reset − window length and ends at the reset; tokens inside it are every pane pinned to this account. Ran out = the first sample at 100%, up to 15 min after the actual hit.",
+    "chart-month": "Monthly total by account",
+    "chart-year": "Yearly total by account",
+    "chart-periods-hint": "Click a bar to highlight that period.",
+    "empty-periods": "No usage recorded for this period yet.",
+    "col-month": "Month",
+    "col-year": "Year",
+    "col-cycles": "5h cycles",
+    "col-exhausted-count": "Ran out",
+    "col-avg-exhausted": "Avg / exhausted cycle",
+    "col-weekly-exhausted": "Weekly ran out",
+    "col-account": "Account",
+    "col-share": "Share",
+    "periods-note": "Per-account figures start from when pin history was introduced; earlier usage is listed as Unknown, not attributed.",
+    "no-detail": "Closed before token slices were kept: the quota samples exist, the spend behind them does not.",
+    "no-detail-short": "no token detail",
+    "average-detailed": "tokens from {detailed} with detail"
   },
   "resource": {
     "title": "Resource Manager",

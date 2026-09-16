@@ -252,8 +252,6 @@ const SlotMessages = defineAsyncComponent(() => import('./components/AgentMessag
 import { pickWhatsNew, type WhatsNewEntry } from './lib/whatsNew'
 import { initUsage, refreshUsage } from './composables/useUsage'
 import {
-  LOOP_PROMPT_SETTING_KEY,
-  DEFAULT_LOOP_PROMPT,
   LOOP_RESUME_SETTING_KEY,
   DEFAULT_LOOP_RESUME,
   LOOP_ESTIMATE_WINDOW_MS,
@@ -3338,7 +3336,11 @@ function syncViews(): void {
       loopWaitUntil: p.loopWaitUntil,
       rebuildVisible: p.realized && paneRebuildVisible(p),
       canRebuild: p.realized && paneCanRebuild(p),
-      rebuilding: p.realized && paneRebuilding(p)
+      rebuilding: p.realized && paneRebuilding(p),
+      usageLimitAt: p.usageLimitAt ?? null,
+      usageLimitUntil: p.usageLimitUntil ?? null,
+      usageLimitSeenAt: p.usageLimitSeenAt ?? null,
+      profileId: p.profileId
     }
   })
   // The tick is unconditional; the assignment must not be. Replacing the array
@@ -4677,6 +4679,15 @@ function checkPaneUsageLimit(
   // finished, and the anchor then post-dates that retry. See quotaTurnIsFresh
   // for that residual and for the two premises that do NOT hold.
   pane.usageLimitSeenAt = now
+  // Tell the quota ledger the wall was hit now: its own samples are a 15-min
+  // poll, so the pane's detection is the earlier of the two stamps for the
+  // cycle's exhausted_at. Once per hit — the early return above keeps a
+  // repaint of the same message from sending it again.
+  void sendQuiet('tokens.quota_exhausted', {
+    agent_key: pane.agentKey,
+    pane_id: pane.id,
+    at: new Date(now).toISOString()
+  })
   // The badge's figure is up to CLAUDE_CLI_READ_INTERVAL old, so it would go on
   // advertising quota that is gone. One refresh per hit, never per poll: the
   // read boots a whole Claude Code.
@@ -16069,8 +16080,9 @@ function openResourceManager(): void {
   showResourceManager.value = true
 }
 
-// Turn Stats (Window menu): per-turn token usage of one pane. Mounted only
-// once asked for, like the Resource Manager above.
+// Turn Stats (Window menu / command palette / Token panel): per-turn token
+// usage of one pane. Mounted only once asked for, like the Resource Manager
+// above.
 const showTurnStats = ref(false)
 const turnStatsEverOpened = ref(false)
 function openTurnStats(): void {
@@ -17647,6 +17659,15 @@ function paneIsCommander(p: ActivePane): boolean {
       @reopen-onboarding="() => { showSettings = false; reopenOnboarding() }"
       @cli-login="onCliLoginSpawn"
     />
+    <TurnStatsModal
+      v-if="turnStatsEverOpened"
+      :open="showTurnStats"
+      :backend="backend"
+      :panes="paneViews"
+      :cli-profiles="cliProfilesApi"
+      :active-pane-id="effectiveFocusPaneId"
+      @close="showTurnStats = false"
+    />
     <!-- A machine asking to pair, shown wherever the person happens to be.
          The same request is a card inside the account window; that card is the
          record and the way back in, this is what somebody actually sees. Both
@@ -17670,14 +17691,6 @@ function paneIsCommander(p: ActivePane): boolean {
       :auto-reclaim-minutes="idleReclaimMinutes"
       :workspace-paths="knownWorkspacePaths"
       @close="showResourceManager = false"
-    />
-    <TurnStatsModal
-      v-if="turnStatsEverOpened"
-      :open="showTurnStats"
-      :backend="backend"
-      :panes="paneViews"
-      :active-pane-id="effectiveFocusPaneId"
-      @close="showTurnStats = false"
     />
     <PipelineManagerModal
       v-if="pmEverOpened"
@@ -18306,6 +18319,7 @@ function paneIsCommander(p: ActivePane): boolean {
       :pipeline="pipelineView"
       :expanded="tokenPanelExpanded"
       :views="shellLayout.slots.right.views"
+      :cli-profiles="cliProfilesApi"
       @update:expanded="tokenPanelExpanded = $event"
     />
     <Welcome
