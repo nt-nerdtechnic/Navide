@@ -96,3 +96,9 @@ YOLO Mode 可能略過 CLI Confirmation 或 Sandbox 保護。只應在可信任�
 停止所有 Active Session 後，可以從 Workspace 的 `.agent-team/` 目錄移除私有專案智慧。刪除它可能會移除 Resumability、Run History、Attribution 與累積 Context，但不會刪除原始碼 Repository。整個應用程式的設定與歷史位於 Navide Application Data Directory。刪除前請備份需要保留的設定。
 
 回報 Vulnerability 請依照英文版 [Security Policy](../../SECURITY.md) 私下進行。
+
+## Token Monitor local records
+
+Token Monitor reads local Claude transcripts to summarize turn timestamps, session identifiers, models, and token counts. Its in-memory cache contains these summaries rather than prompt or response text. Local transcript records are not assigned to the current account because their account ownership cannot be verified.
+
+Successful observations from the existing Claude quota polling service are saved in the application data directory as `claude-quota-history.sqlite3`. Records contain an account-slot identifier, observation time, plan type, quota percentages, and reset-window metadata; they contain no credentials or conversation text. Recording prunes observations older than 180 days and limits the database to 50,000 samples. This history is local to this installation and is not uploaded by Token Monitor. Opening or refreshing the monitor adds no external API or CLI requests; the existing usage service retains its own polling behavior.

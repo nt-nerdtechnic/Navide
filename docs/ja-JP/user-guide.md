@@ -85,6 +85,14 @@ History は Pipeline、Stage、Pane、Question、Analyzer、Handoff、Warning Ev
 
 Token Stats は対応 Local CLI Log を Parse し、Usage を Workspace、Pane、Stage、Run に Attribution します。Observability Feature であり、Provider Invoice ではありません。Provider 側の Usage と Billing が正式な情報です。
 
+### Token Monitor
+
+Open **Window → Token Monitor** for a separate window showing local Claude turn history over 14, 30, or 90 days. Reopening the command focuses the existing monitor. The existing **Turn Stats** modal remains available for inspecting one pane. Model filters, per-turn trends, and per-turn averages and medians summarize the selected local records.
+
+Transcript records have **unknown account attribution**: a shared local Claude history cannot establish which signed-in account produced a turn. Other devices, web conversations, and subagent logs are outside this view. Missing history is not zero usage; partial scan coverage and errors are shown. Large histories are bounded, and refresh can reuse a scan for 60 seconds.
+
+Quota history records successful observations for the active Claude account slot through the existing usage polling service. It starts accumulating when those observations are available; it cannot reconstruct earlier quota windows. Disabled polling and an empty history are displayed explicitly. Opening the monitor does not make extra provider requests. Observed tokens and quota percentages do not establish an official token allowance, throttling, effort level, or separate thinking-token usage.
+
 ## Git と Review
 
 Marketplace Install が利用可能になるまで、Navide は削除可能な Official Git Factory Package を提供します。Active Package Version は Embedded Left View と Dedicated Git Window の両方を提供します。Extensions で Bundled Git を削除すると再起動後も削除状態が維持され、同じ画面の **Restore** で Factory Copy を復元できます。Verified Marketplace Version が存在する場合はそちらが優先されます。Git View は Repository Discovery、Working Tree Inspection、Staging、Commit、Branch、Remote、Issue、関連 Workflow をサポートし、Multi-repository Workspace では検出された Repository を切り替えられます。Repository Operation は Navide の Host／Backend Boundary 内に留まり、GitHub／GitLab Issue Detection は利用可能な場合に設定済みの `gh` または `glab` CLI を使用します。選択された v2 Package が Load、Mount、または Ready Report に失敗した場合、その Process では Retained Legacy Git Renderer を明示して使用します。Security／Trust／Permission Denial は Fallback を Trigger しません。

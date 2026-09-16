@@ -1,14 +1,22 @@
 # Changelog
 
-All notable released changes to Navide will be documented in this file. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow Semantic Versioning where practical during the pre-1.0 period.
+All notable released changes to Navide will be documented in this file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+### Fixed
+
+- Persist detected session identities before UI notification and preserve them across history registration and later snapshots; allow loading more History entries after an empty search and rerun content search for newly loaded entries.
+- Bind Codex sessions to their originating pane using verified resume IDs and launch-scoped first-turn hooks; preserve hook trust and marker fallback, and skip redundant markers when a session is already bound.
 
 ### Added
 
 - Fall back to the dl.navide.dev release mirror when GitHub's asset host cannot be reached: the updater switches its feed to the mirror after a network failure while checking or downloading and stays there for the session; a 404 or checksum failure is still reported as before. Every release is now mirrored (byte-for-byte, sha256-checked) by the release workflow, and the READMEs carry a mirror link beside each download.
+- Add **Window → Token Monitor**, a separate window for local Claude turn history, model filtering, per-turn trends, and average/median usage over 14, 30, or 90 days. Display incomplete scan coverage and unknown account attribution explicitly; keep the existing Turn Stats modal.
+- Keep local quota observations for the active Claude account slot using existing usage polls, with bounded retention and no extra provider requests. Quota observations are separate from transcript usage and do not estimate an official token allowance.
 
 ## [0.2.3] — 2026-09-15 — signed release
+
 
 - First release where macOS, Windows x64, Windows arm64 and Linux x64 ship from the same commit (v0.2.2's Windows and Linux assets were uploaded later from a different commit).
 - Windows: native arm64 installer (#100); ConPTY console host bundled and verified at build time (#86); backend follows the app into exit (#88); CLI panes receive their command directly, not through PowerShell (#87); two CI regressions fixed (#80).

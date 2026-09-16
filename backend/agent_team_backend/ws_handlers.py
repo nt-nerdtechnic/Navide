@@ -5169,6 +5169,14 @@ async def tokens_reset(session: "Session", msg_id: str, msg_type: str, payload: 
     await app.broadcast(make_event("tokens.changed", snap))
 
 
+@handler("tokens.monitor")
+async def tokens_monitor(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from .token_monitor import snapshot
+
+    result = await snapshot(payload.get("days", 30))
+    await session.send_json(make_response(msg_id, msg_type, result))
+
+
 @handler("devtime.snapshot")
 async def devtime_snapshot(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     from . import app

@@ -87,6 +87,14 @@ History 是 Pipeline、Stage、Pane、Question、Analyzer、Handoff 與 Warning 
 
 Token Stats 解析相容的本機 CLI Log，將 Usage 歸屬到 Workspace、Pane、Stage 與 Run。它是 Observability Feature，不是 Provider Invoice；Provider 端 Usage 與 Billing 才是最終依據。
 
+### Token Monitor
+
+Open **Window → Token Monitor** for a separate window showing local Claude turn history over 14, 30, or 90 days. Reopening the command focuses the existing monitor. The existing **Turn Stats** modal remains available for inspecting one pane. Model filters, per-turn trends, and per-turn averages and medians summarize the selected local records.
+
+Transcript records have **unknown account attribution**: a shared local Claude history cannot establish which signed-in account produced a turn. Other devices, web conversations, and subagent logs are outside this view. Missing history is not zero usage; partial scan coverage and errors are shown. Large histories are bounded, and refresh can reuse a scan for 60 seconds.
+
+Quota history records successful observations for the active Claude account slot through the existing usage polling service. It starts accumulating when those observations are available; it cannot reconstruct earlier quota windows. Disabled polling and an empty history are displayed explicitly. Opening the monitor does not make extra provider requests. Observed tokens and quota percentages do not establish an official token allowance, throttling, effort level, or separate thinking-token usage.
+
 ## Git 與 Review
 
 在 Marketplace 安裝功能完成前，Navide 會提供可移除的官方 Git Factory Package。其 Active Package Version 會同時提供嵌入式左側 View 與獨立 Git Window。在 Extensions 移除 Bundled Git 後，重新啟動也不會自動裝回；可在同一處按 **Restore** 恢復 Factory Copy。若存在已驗證的 Marketplace Version，會優先使用該版本。Git View 支援 Repository Discovery、Working Tree Inspection、Staging、Commit、Branch、Remote、Issue 與相關工作流；Multi-repository Workspace 可以在偵測到的 Repository 間切換。Discovery Scan 不會阻塞 Backend，並會在慢速 Filesystem 上經過受限的掃描時間後回傳部分結果。Repository Operation 仍經由 Navide Host／Backend 邊界處理；GitHub 與 GitLab Issue Detection 在可用時使用設定的 `gh` 或 `glab` CLI。若選定的 v2 Package 無法 Load、Mount 或回報 Ready，Navide 會明確標示並在該次 Process 使用保留的 Legacy Git Renderer；Security、Trust 或 Permission Denial 不會觸發 Fallback。

@@ -95,6 +95,7 @@ function makeHooks(): AppMenuHooks & { calls: string[] } {
     onOpenPipelineManager: () => calls.push('pipeline-manager'),
     onOpenResourceManager: () => calls.push('resource-manager'),
     onOpenTurnStats: () => calls.push('turn-stats'),
+    onOpenTokenMonitor: () => calls.push('token-monitor'),
     onOpenAccount: () => calls.push('account'),
     onOpenRepo: () => calls.push('open-repo'),
     onReportIssue: () => calls.push('report-issue'),
@@ -225,6 +226,11 @@ describe('installApplicationMenu', () => {
   it('Window has Turn Stats wired to its hook', () => {
     fire(itemIn(submenuOf('Window'), 'Turn Stats'))
     expect(hooks.calls).toEqual(['turn-stats'])
+  })
+
+  it('Window has Token Monitor wired to its hook', () => {
+    fire(itemIn(submenuOf('Window'), 'Token Monitor'))
+    expect(hooks.calls).toEqual(['token-monitor'])
   })
 
   it('Window has Navide Cloud wired to its hook', () => {
@@ -437,5 +443,6 @@ describe('installApplicationMenu', () => {
     expect(() => fire(itemIn(submenuOf('Window'), 'Pipeline Manager'))).not.toThrow()
     expect(() => fire(itemIn(submenuOf('Window'), 'Resource Manager'))).not.toThrow()
     expect(() => fire(itemIn(submenuOf('Window'), 'Turn Stats'))).not.toThrow()
+    expect(() => fire(itemIn(submenuOf('Window'), 'Token Monitor'))).not.toThrow()
   })
 })

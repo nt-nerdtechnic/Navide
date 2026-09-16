@@ -570,6 +570,12 @@ class UsageService:
         self._claude_reads: dict[str, asyncio.Task] = {}
         self._reads_cancelled: set[str] = set()
         self._cache_path = cache_path
+        from .token_monitor import QuotaHistory
+
+        self.quota_history = (
+            QuotaHistory(cache_path.with_name("claude-quota-history.sqlite3"))
+            if cache_path is not None else None
+        )
         self._active_claude_slot_reader = active_claude_slot_reader
         self._blocked_until: dict[object, float] = {}
         self._task: asyncio.Task | None = None
@@ -1060,6 +1066,13 @@ class UsageService:
                          "switched mid-read", slot_id)
                 continue
             cache_changed = self._record_claude_snapshot(slot_id, snap) or cache_changed
+            if self.quota_history is not None and snap.get("status") == "ok":
+                try:
+                    await asyncio.to_thread(
+                        self.quota_history.record, slot_id, self._cache_safe_snapshot(snap)
+                    )
+                except Exception as err:  # noqa: BLE001 — history cannot interrupt polling
+                    log.warning("quota history write failed: %s", err)
         self._claude_reads.clear()
         self._reads_cancelled.clear()
         if self._switch_epoch == switch_epoch:

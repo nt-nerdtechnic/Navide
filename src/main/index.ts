@@ -125,6 +125,7 @@ import {
 } from './permissions'
 import { resolveBackendDataDir, readUiSettingsText, UI_SETTINGS_FILE } from './ui-settings-bootstrap'
 import { PlanWindowRegistry } from './plan-windows'
+import { createTokenMonitorWindowOpener } from './token-monitor-window'
 import { warnMain } from './main-log'
 import { isAppWindowSender, UNTRUSTED_SENDER } from './ipcSender'
 import { drawnFrameWhereNeeded, installWindowControls } from './window-controls'
@@ -611,6 +612,13 @@ function requestResourceManager(): void {
 function requestTurnStats(): void {
   requestMainWindowModal('menu:open-turn-stats')
 }
+
+const requestTokenMonitor = createTokenMonitorWindowOpener({
+  preload: join(__dirname, '../preload/index.js'),
+  frame: drawnFrameWhereNeeded(),
+  locale: currentUiLocale,
+  load: loadWindow,
+})
 
 function backendInfoPayload() {
   if (!backend) {
@@ -3998,6 +4006,7 @@ app.whenReady().then(async () => {
     onOpenPipelineManager: () => requestPipelineManager(),
     onOpenResourceManager: () => requestResourceManager(),
     onOpenTurnStats: () => requestTurnStats(),
+    onOpenTokenMonitor: () => requestTokenMonitor(),
     onOpenAccount: () => sendMenuAction('open-account'),
     onOpenRepo: () => void shell.openExternal('https://github.com/nt-nerdtechnic/Navide'),
     onReportIssue: () => void shell.openExternal('https://github.com/nt-nerdtechnic/Navide/issues'),

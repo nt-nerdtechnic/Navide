@@ -98,3 +98,9 @@ Agent 間の Handoff には Task Context と前 Stage の Output が含まれる
 Active Session を停止した後、Workspace の `.agent-team/` Directory から Private Project Intelligence を削除できます。削除すると Source Repository は残りますが、Resumability、Run History、Attribution、蓄積 Context が失われる場合があります。Application 全体の Setting と History は Navide Application Data Directory にあります。保持したい Configuration は削除前に Backup してください。
 
 Vulnerability の報告については、[Security Policy（英語）](../../SECURITY.md)を参照してください。
+
+## Token Monitor local records
+
+Token Monitor reads local Claude transcripts to summarize turn timestamps, session identifiers, models, and token counts. Its in-memory cache contains these summaries rather than prompt or response text. Local transcript records are not assigned to the current account because their account ownership cannot be verified.
+
+Successful observations from the existing Claude quota polling service are saved in the application data directory as `claude-quota-history.sqlite3`. Records contain an account-slot identifier, observation time, plan type, quota percentages, and reset-window metadata; they contain no credentials or conversation text. Recording prunes observations older than 180 days and limits the database to 50,000 samples. This history is local to this installation and is not uploaded by Token Monitor. Opening or refreshing the monitor adds no external API or CLI requests; the existing usage service retains its own polling behavior.

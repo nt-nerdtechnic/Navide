@@ -87,6 +87,14 @@ History is an append-only timeline for pipeline, stage, pane, question, analyzer
 
 Token Stats parses compatible local CLI logs and attributes usage to workspaces, panes, stages, and runs. It is an observability feature, not a provider invoice. Provider-side usage and billing remain authoritative.
 
+### Token Monitor
+
+Open **Window → Token Monitor** for a separate window showing local Claude turn history over 14, 30, or 90 days. Reopening the command focuses the existing monitor. The existing **Turn Stats** modal remains available for inspecting one pane. Model filters, per-turn trends, and per-turn averages and medians summarize the selected local records.
+
+Transcript records have **unknown account attribution**: a shared local Claude history cannot establish which signed-in account produced a turn. Other devices, web conversations, and subagent logs are outside this view. Missing history is not zero usage; partial scan coverage and errors are shown. Large histories are bounded, and refresh can reuse a scan for 60 seconds.
+
+Quota history records successful observations for the active Claude account slot through the existing usage polling service. It starts accumulating when those observations are available; it cannot reconstruct earlier quota windows. Disabled polling and an empty history are displayed explicitly. Opening the monitor does not make extra provider requests. Observed tokens and quota percentages do not establish an official token allowance, throttling, effort level, or separate thinking-token usage.
+
 ## Git and review
 
 Navide includes a removable factory installation of the official Git package until Marketplace installation is available. Its active package version supplies both the embedded left view and the dedicated Git window. Removing Bundled Git in Extensions persists across restarts; use **Restore** there to install the factory copy again. A verified Marketplace version takes precedence when present. The view supports repository discovery, working-tree inspection, staging, commits, branches, remotes, issues, and related workflows; multi-repository workspaces can switch between discovered repositories. Discovery scans run without blocking the backend and return partial results after a bounded scan period on slow filesystems. Repository operations stay local to Navide's Host/backend boundary, and GitHub/GitLab issue detection uses the configured `gh` or `glab` CLI when available. If the selected v2 package cannot load, mount, or report ready, Navide labels and uses the retained legacy Git renderer for that process. Security, trust, or permission denials do not trigger fallback.
