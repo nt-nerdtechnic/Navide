@@ -1,6 +1,6 @@
 # Versioning and In-App Releases
 
-> **Current distribution status:** v0.2.2 is the current stable release. It ships a signed and notarized macOS arm64 DMG/ZIP, an unsigned Windows x64 NSIS installer, and a Linux x64 AppImage and `.deb`, all built and published by GitHub Actions; the macOS, Windows and AppImage builds are eligible for the in-app updater. Windows on Arm and Linux arm64 are built only on a manual workflow dispatch and are not published yet. Every stable release from v0.1.50 onward goes through the signed workflow described below (v0.1.49 was a one-off manual unsigned preview published while the signing key was being set up; v0.1.26–v0.1.48 were unsigned previews).
+> **Current distribution status:** v0.2.3 is the current stable release. It ships a signed and notarized macOS arm64 DMG/ZIP, unsigned Windows x64 and Arm64 NSIS installers, and a Linux x64 AppImage and `.deb`, all built and published by GitHub Actions and mirrored to `dl.navide.dev`; the macOS, Windows and AppImage builds are eligible for the in-app updater. Linux arm64 is built only on a manual workflow dispatch and is not published yet. Every stable release from v0.1.50 onward goes through the signed workflow described below (v0.1.49 was a one-off manual unsigned preview published while the signing key was being set up; v0.1.26–v0.1.48 were unsigned previews).
 
 Navide uses semantic versions (`MAJOR.MINOR.PATCH`) and Git tags prefixed with
 `v`. `package.json` is the application version source of truth. The local build
@@ -33,8 +33,9 @@ GitHub Releases must contain all of these assets from the same build:
 
 - macOS (signed and notarized): `Navide-<version>-arm64.dmg`,
   `Navide-<version>-arm64.zip`, their `.blockmap` files, and `latest-mac.yml`
-- Windows x64 (not code-signed): `Navide-<version>-win-x64.exe`, its
-  `.blockmap`, and `latest.yml`
+- Windows x64 and Arm64 (not code-signed): `Navide-<version>-win-x64.exe`,
+  `Navide-<version>-win-arm64.exe`, their `.blockmap` files, and a single
+  `latest.yml` listing both
 - Linux x64: `Navide-<version>-x86_64.AppImage`, `Navide-<version>-amd64.deb`,
   and `latest-linux.yml`
 
@@ -42,6 +43,17 @@ The ZIP and `latest-mac.yml` are required for the macOS updater, `latest.yml`
 for the Windows updater, and `latest-linux.yml` for the AppImage updater (the
 `.deb` updates through the package manager). Do not publish only the DMG. An
 arm64 Linux build, when published, adds `latest-linux-arm64.yml`.
+
+## Download mirror
+
+Every asset above is also served from `https://dl.navide.dev/releases/<tag>/`,
+with `releases/latest/` holding the newest release's files and manifests. The
+release workflow's final job writes it and fails unless the mirrored bytes
+match GitHub's. The updater keeps GitHub as its feed and switches to the
+mirror's `releases/latest/` only after a network failure on GitHub (a 404 or a
+checksum failure is reported as before); the website prefers the mirror when a
+HEAD probe answers. `RELEASING.md` covers re-running the mirror job, verifying
+it (`scripts/verify-release-mirror.sh`), and what a rollback must do to it.
 
 ## One-time GitHub setup
 
