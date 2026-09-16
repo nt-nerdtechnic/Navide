@@ -26,6 +26,11 @@ export interface QuotaCycle {
   calls: number
   turns: number
   samples: number
+  /** true = the cycle started after token slices were kept, so the token
+   *  figures are real (0 means nothing spent); false = closed before that,
+   *  the figures are not to be trusted. Absent from a backend that predates
+   *  the flag. */
+  detail_known?: boolean
 }
 
 export interface QuotaCycleSummary {

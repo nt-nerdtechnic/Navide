@@ -1701,6 +1701,15 @@ def _profile_pin_for_bookkeeping(
     return _profile_pin_for_spawn(agent_key, payload_profile_id)
 
 
+def _account_pin_for_history(pin: str) -> str:
+    """The id the pane account history records for a bookkeeping pin. A
+    non-account agent pins "" in its restore record, but its usage samples
+    are filed under the Default slot (usage_service._file_quota_samples), and
+    the quota cycle's token side only finds the pane's slices when both name
+    the same account — so the history gets DEFAULT_SLOT_ID for that pane."""
+    return pin or DEFAULT_SLOT_ID
+
+
 async def _broadcast_profiles_changed(
     reason: str,
     harvested_profile_ids: list[str] | None = None,
@@ -6422,11 +6431,11 @@ async def _terminal_create_impl(
         app._cancel_pane_unregister(term.pane_id)
         # Open the pane's account interval now, before the CLI's first call
         # can land: the bookkeeping message repeats the same pin (a no-op)
-        # a beat later. Non-account agents pin "unknown".
+        # a beat later. Non-account agents pin the Default slot.
         app.pane_account_history.pin(
             term.pane_id,
-            _profile_pin_for_bookkeeping(
-                agent_key, term.pane_id, metadata.get("profile_id")),
+            _account_pin_for_history(_profile_pin_for_bookkeeping(
+                agent_key, term.pane_id, metadata.get("profile_id"))),
         )
         # register_pane's baseline scan enumerates the vendor's whole
         # session-file tree — run it off-loop (register_pane is
@@ -7846,7 +7855,7 @@ async def pipeline_slot_spawn(session: "Session", msg_id: str, msg_type: str, pa
         profile_id=slot_pin,
         run_group_id=payload.get("run_group_id", ""),
     )
-    app.pane_account_history.pin(str(payload["pane_id"]), slot_pin)
+    app.pane_account_history.pin(str(payload["pane_id"]), _account_pin_for_history(slot_pin))
     await session.send_json(
         make_response(msg_id, msg_type, app._project_payload(project))
     )
@@ -8052,7 +8061,7 @@ async def manual_pane_spawn(session: "Session", msg_id: str, msg_type: str, payl
         origin=payload.get("origin", ""),
         spawned_by=payload.get("spawned_by", ""),
     )
-    app.pane_account_history.pin(str(payload["pane_id"]), manual_pin)
+    app.pane_account_history.pin(str(payload["pane_id"]), _account_pin_for_history(manual_pin))
     await session.send_json(
         make_response(msg_id, msg_type, app._project_payload(project))
     )

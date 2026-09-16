@@ -338,3 +338,62 @@ async def test_quota_exhausted_handler_stamps_the_panes_account(stores, monkeypa
     # Later detection: no change, no broadcast.
     again = await _call("tokens.quota_exhausted", agent_key="claude", pane_id="pane-1", at=iso(sample_at + 60))
     assert again == {"ok": True, "updated": []} and len(events) == 1
+
+
+@pytest.mark.asyncio
+async def test_non_account_vendor_pins_the_slot_its_usage_samples_are_filed_under(
+    stores, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A vendor without profiles (opencode, qwen, copilot…) records "" as its
+    restore pin, but the usage poller files its quota samples under the
+    Default slot. The history must pin that same id, or the cycle's token
+    side never finds the pane's slices (it would sum "__default__" while the
+    usage sat under "unknown")."""
+    from datetime import datetime, timezone
+
+    from agent_team_backend import usage_service as us
+
+    store, history, ledger, _attribution = stores
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    workspace = str(workspace_path)
+    # The real rule, not a stub: "" for a non-account agent.
+    assert ws_handlers._profile_pin_for_bookkeeping("opencode", "pane-oc", None) == ""
+    create = {
+        "pane_id": "pane-oc", "agent_key": "opencode", "command": "opencode", "cwd": workspace,
+        "metadata": {"workspace_path": workspace},
+    }
+    await app.handle_message(_session(), {"id": "c1", "type": "terminal.create", "payload": create})
+    [(profile, _since, until)] = history.intervals("pane-oc")
+    assert profile == "__default__" and until is None
+    assert history.profile_at("pane-oc", None) == "__default__"
+
+    # Usage on that pane lands on the same id and inside the cycle window.
+    import time
+    now = time.time()
+    now_iso = datetime.fromtimestamp(now, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    store.record(
+        workspace, source="cli", vendor="opencode", agent_key="opencode", pane_id="pane-oc",
+        session_id="s", input_tokens=40, output_tokens=2, dedup_key="oc::1",
+        profile_id=history.profile_at("pane-oc", now), timestamp=now_iso,
+    )
+    resets_iso = datetime.fromtimestamp(now + 3600, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    svc = us.UsageService()
+    svc.snapshots["opencode"] = {
+        "provider": "opencode", "status": "ok", "fetchedAt": now_iso,
+        "windows": [{"kind": "session", "label": "Session (5h)", "usedPercent": 12.0,
+                     "resetsAt": resets_iso}],
+    }
+    events: list[dict] = []
+
+    async def broadcast(event, **_kw):
+        events.append(event)
+
+    monkeypatch.setattr(app, "broadcast", broadcast)
+    await svc._file_quota_samples()
+    assert [e["payload"] for e in events] == [
+        {"agent_key": "opencode", "profile_id": "__default__", "window_kind": "session"}
+    ]
+    [cycle] = ledger.cycles("opencode", "__default__")
+    assert (cycle["input"], cycle["output"], cycle["calls"]) == (40, 2, 1)
+    assert ledger.cycles("opencode", "unknown") == []

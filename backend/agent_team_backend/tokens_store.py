@@ -128,9 +128,11 @@ def _create_tokens_schema(cur: sqlite3.Cursor) -> None:
 # Per-account usage in fixed time slices, the sub-day resolution the quota
 # cycle ledger needs (a 5h window starts at an arbitrary minute). Bounded by
 # SLICE_RETENTION_S: a cycle's sums are frozen into quota_cycles when it
-# closes, so only open cycles (at most a week old) ever read from here.
+# closes, so only open cycles ever read from here — and the longest open
+# window is a calendar month (copilot / grok / qwen monthly credits, up to 31
+# days back to the previous reset), so retention must cover more than that.
 SLICE_S = 300
-SLICE_RETENTION_S = 21 * 86400
+SLICE_RETENTION_S = 40 * 86400
 
 
 def _create_slices_schema(cur: sqlite3.Cursor) -> None:

@@ -122,10 +122,12 @@ function kindLabel(kind: string): string {
 const kindCycles = computed(() => cycles.value.filter((c) => c.window_kind === windowKind.value))
 const kindSummary = computed(() => cyclesApi.data.value?.summary?.[windowKind.value] ?? null)
 
-/** A closed cycle from before token slices were kept has quota samples but
- *  no spend behind them: every token figure is 0 and must read as "no
- *  detail", not as a free window. An open cycle at 0 has simply not spent. */
+/** A cycle from before token slices were kept has quota samples but no
+ *  spend behind them: its token figures must read as "no detail", not as a
+ *  free window. The backend says so with `detail_known: false`; a backend
+ *  without the flag is read the old way — a closed cycle at all zeros. */
 function noDetail(c: QuotaCycle): boolean {
+  if (c.detail_known !== undefined) return c.detail_known === false
   return c.closed && c.total === 0 && c.calls === 0 && c.turns === 0
 }
 function cell(c: QuotaCycle, value: number): string {
@@ -174,11 +176,13 @@ function avgCell(value: number): string {
 function perPercent(total: number, maxPercent: number): string {
   return maxPercent > 0 && total > 0 ? compact(Math.round(total / maxPercent)) : '—'
 }
-/** The backend's average is 0.0 (not null) when the exhausted cycles carry
- *  no detail; either way there is nothing to print. */
+/** The summary line prints the same average the footer row does — the
+ *  backend's `avg_total_exhausted` divides by every exhausted cycle, detail
+ *  or not, and would disagree with the footer on the same screen. Nothing
+ *  to print when no exhausted cycle carries detail. */
 const summaryAvg = computed<number | null>(() => {
-  const avg = kindSummary.value?.avg_total_exhausted ?? null
-  return avg ? avg : null
+  const avg = exhaustedAverage.value
+  return avg && avg.detailed > 0 ? avg.total : null
 })
 
 /** Oldest on the left. */
@@ -225,10 +229,11 @@ const granularity = computed<PeriodGranularity | null>(() =>
 const periodRows = computed<AccountPeriodRow[]>(() => periodsApi.data.value?.rows ?? [])
 const periodTotals = computed(() => periodsApi.data.value?.totals_by_period ?? [])
 
-/** "2026-09" / "2026" for now, so the open period can be marked. */
+/** "2026-09" / "2026" for now, so the open period can be marked. UTC, as
+ *  the backend keys its periods (by_account_day is a UTC calendar). */
 function currentPeriod(g: PeriodGranularity): string {
   const d = new Date()
-  return g === 'month' ? `${d.getFullYear()}-${two(d.getMonth() + 1)}` : String(d.getFullYear())
+  return g === 'month' ? `${d.getUTCFullYear()}-${two(d.getUTCMonth() + 1)}` : String(d.getUTCFullYear())
 }
 function periodOpen(period: string): boolean {
   return granularity.value !== null && period === currentPeriod(granularity.value)
@@ -489,7 +494,7 @@ defineExpose({ buildCyclesCsv, buildPeriodsCsv })
               <td class="c-num c-total" data-part="total">{{ cell(c, c.total) }}</td>
               <td class="c-num" data-part="calls">{{ cell(c, c.calls) }}</td>
               <td class="c-num" data-part="turns">{{ cell(c, c.turns) }}</td>
-              <td class="c-num" data-part="per-percent">{{ perPercent(c.total, c.max_percent) }}</td>
+              <td class="c-num" data-part="per-percent">{{ noDetail(c) ? '—' : perPercent(c.total, c.max_percent) }}</td>
             </tr>
           </tbody>
           <tfoot v-if="exhaustedAverage">

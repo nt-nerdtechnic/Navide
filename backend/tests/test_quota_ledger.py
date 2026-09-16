@@ -200,7 +200,13 @@ def test_codex_window_minutes_win_over_the_table(ledger: QuotaLedger) -> None:
     assert ledger.cycles("codex", "acct-c", now=T0 + 1)[0]["started_at"] == _iso(T0)
 
 
-def test_summary_and_period_stats(ledger: QuotaLedger, totals: _Totals) -> None:
+def test_summary_and_period_stats(tmp_path: Path, totals: _Totals) -> None:
+    from agent_team_backend.quota_ledger import SLICES_SINCE_KEY
+
+    # Slices have existed since T0, so every cycle below has known detail.
+    db = Database(tmp_path / "navide.db")
+    db.kv_set(SLICES_SINCE_KEY, T0, now=1)
+    ledger = QuotaLedger(db, totals)
     # Three 5h cycles, two exhausted, plus one exhausted weekly, all in 2026-09.
     for n, pct in enumerate((100.0, 100.0, 60.0)):
         start = T0 + n * 5 * H
@@ -220,6 +226,7 @@ def test_summary_and_period_stats(ledger: QuotaLedger, totals: _Totals) -> None:
         "cycles": 3, "exhausted": 2, "avg_total_exhausted": 1500.0, "weekly_exhausted": 1,
     }}
     assert set(ledger.period_stats("year", now=T0 + 12 * H)) == {("2026", "claude", "acct-a")}
+    db.close()
 
 
 def test_last_samples_survive_a_restart(tmp_path: Path, totals: _Totals) -> None:
@@ -259,3 +266,139 @@ def test_pane_detection_moves_exhausted_at_earlier_but_never_later(
     ledger.observe("claude", "acct-b", _snap(80.0, resets, T0 + H), now=T0 + H)
     assert ledger.mark_exhausted("claude", "acct-b", T0 + 2 * H) == ["session"]
     assert ledger.cycles("claude", "acct-b", now=T0 + 3 * H)[0]["exhausted_at"] == _iso(T0 + 2 * H)
+
+
+def test_close_expired_never_asks_for_totals_inside_a_transaction(tmp_path: Path) -> None:
+    """The totals provider takes the tokens store's lock; the store takes the
+    database lock while holding its own (a workspace cache miss inside
+    record()). Asking for the sums inside close_expired's transaction is a
+    lock-order inversion — with a provider that yields to a thread doing
+    exactly that, the old code deadlocked both threads."""
+    import threading
+
+    from agent_team_backend.tokens_store import TokensStore
+
+    db = Database(tmp_path / "navide.db")
+    store = TokensStore(global_path=tmp_path / "g.json", workspace_base_dir=tmp_path / "w", db=db)
+    in_totals = threading.Event()
+    other_holds_store_lock = threading.Event()
+
+    def totals(agent: str, profile: str, start: float | None, end: float) -> dict[str, int]:
+        in_totals.set()
+        other_holds_store_lock.wait(2)
+        return store.account_window_totals(agent, profile, start, end)
+
+    ledger = QuotaLedger(db, totals)
+    resets = T0 + 5 * H
+    ledger.observe("claude", "acct-a", _snap(50.0, resets, T0 + H), now=T0 + H)
+
+    def store_then_db() -> None:
+        in_totals.wait(2)
+        with store._lock:
+            other_holds_store_lock.set()
+            with db.transaction() as cur:
+                cur.execute("SELECT 1")
+
+    closer = threading.Thread(target=lambda: ledger.close_expired(resets + 1), daemon=True)
+    other = threading.Thread(target=store_then_db, daemon=True)
+    closer.start()
+    other.start()
+    closer.join(5)
+    other.join(5)
+    # Deadlocked threads hold the database lock, so close() would hang too:
+    # leave the daemon threads behind and fail plainly.
+    deadlocked = closer.is_alive() or other.is_alive()
+    if not deadlocked:
+        [cycle] = ledger.cycles("claude", "acct-a", now=resets + 1)
+        assert cycle["closed"] is True
+        db.close()
+    assert not deadlocked, "lock-order deadlock between the ledger and the tokens store"
+
+
+def test_weekly_model_is_keyed_by_label_even_when_it_is_the_only_row(ledger: QuotaLedger) -> None:
+    """The per-model weekly rows come and go (a promotional model's week);
+    keying by count would rename the same window when a second row appears
+    and open a duplicate cycle for it."""
+    weekly = T0 + 7 * 86400
+    single = _snap(5.0, T0 + 5 * H, T0 + 10, extra=[
+        {"kind": "weekly-model", "label": "Opus only", "usedPercent": 5.0, "resetsAt": _iso(weekly)},
+    ])
+    ledger.observe("claude", "acct-a", single, now=T0 + 10)
+    assert [c["window_kind"] for c in ledger.cycles("claude", "acct-a", now=T0 + 10)] == [
+        "weekly-model:Opus only", "session",
+    ]
+    both = _snap(5.0, T0 + 5 * H, T0 + 900, extra=[
+        {"kind": "weekly-model", "label": "Opus only", "usedPercent": 6.0, "resetsAt": _iso(weekly)},
+        {"kind": "weekly-model", "label": "Sonnet only", "usedPercent": 1.0, "resetsAt": _iso(weekly)},
+    ])
+    ledger.observe("claude", "acct-a", both, now=T0 + 900)
+    kinds = {c["window_kind"]: c for c in ledger.cycles("claude", "acct-a", now=T0 + 900)}
+    assert set(kinds) == {"weekly-model:Opus only", "weekly-model:Sonnet only", "session"}
+    # The same Opus window kept its cycle (two samples), not a second one.
+    assert kinds["weekly-model:Opus only"]["samples"] == 2
+    assert kinds["weekly-model:Opus only"]["max_percent"] == 6.0
+
+
+def test_detail_known_follows_the_slices_since_mark(tmp_path: Path, totals: _Totals) -> None:
+    from agent_team_backend.quota_ledger import SLICES_SINCE_KEY
+
+    db = Database(tmp_path / "navide.db")
+    try:
+        # An existing database without the mark gets "now", written once.
+        first = QuotaLedger(db, totals)
+        assert first.slices_since == pytest.approx(db.kv_get(SLICES_SINCE_KEY))
+        assert first.slices_since > T0
+        db.kv_set(SLICES_SINCE_KEY, T0 + 5 * H, now=1)
+        ledger = QuotaLedger(db, totals)
+        assert ledger.slices_since == T0 + 5 * H      # kept, not overwritten
+        # Cycle that started (and closed) before the mark → false.
+        ledger.observe("claude", "acct-a", _snap(100.0, T0 + 5 * H, T0 + H), now=T0 + H)
+        # Cycle starting exactly at the mark → true; a later one → true.
+        ledger.observe("claude", "acct-a", _snap(10.0, T0 + 10 * H, T0 + 6 * H), now=T0 + 6 * H)
+        # A calendar window with no start → false.
+        ledger.observe("grok", "__default__", {
+            "provider": "grok", "status": "ok", "fetchedAt": _iso(T0 + 6 * H),
+            "windows": [{"kind": "monthly", "label": "Monthly credits",
+                         "usedPercent": 1.0, "resetsAt": _iso(T0 + 40 * 86400)}],
+        }, now=T0 + 6 * H)
+        cycles = ledger.cycles("claude", "acct-a", now=T0 + 7 * H)
+        assert [(c["resets_at"], c["closed"], c["detail_known"]) for c in cycles] == [
+            (_iso(T0 + 10 * H), False, True), (_iso(T0 + 5 * H), True, False),
+        ]
+        [monthly] = ledger.cycles("grok", "__default__", now=T0 + 7 * H)
+        assert monthly["started_at"] is None and monthly["detail_known"] is False
+    finally:
+        db.close()
+
+
+def test_avg_total_exhausted_ignores_cycles_without_detail(tmp_path: Path, totals: _Totals) -> None:
+    from agent_team_backend.quota_ledger import SLICES_SINCE_KEY
+
+    db = Database(tmp_path / "navide.db")
+    try:
+        db.kv_set(SLICES_SINCE_KEY, T0 + 5 * H, now=1)   # slices exist from the 2nd cycle on
+        ledger = QuotaLedger(db, totals)
+        # Cycle 0: exhausted, started before the mark → detail_known False; its
+        # (unrecorded) usage must not drag the mean down.
+        ledger.observe("claude", "acct-a", _snap(100.0, T0 + 5 * H, T0 + H), now=T0 + H)
+        # Cycles 1 and 2: exhausted with known detail, 2000 and 4000 tokens.
+        for n, tokens in ((1, 2000), (2, 4000)):
+            start = T0 + n * 5 * H
+            ledger.observe("claude", "acct-a", _snap(100.0, start + 5 * H, start + H), now=start + H)
+            totals.add("claude", "acct-a", start + 2 * H, tokens)
+        # Cycle 3: known detail but not exhausted → not in the mean either.
+        start = T0 + 15 * H
+        ledger.observe("claude", "acct-a", _snap(30.0, start + 5 * H, start + H), now=start + H)
+        totals.add("claude", "acct-a", start + 2 * H, 999)
+
+        cycles = ledger.cycles("claude", "acct-a", now=start + 2 * H)
+        assert [c["detail_known"] for c in cycles] == [True, True, True, False]
+        summary = QuotaLedger.summarize(cycles)["session"]
+        assert summary == {"cycles": 4, "exhausted": 3, "avg_total_exhausted": 3000.0}
+        stats = ledger.period_stats("month", now=start + 2 * H)[("2026-09", "claude", "acct-a")]
+        assert (stats["cycles"], stats["exhausted"], stats["avg_total_exhausted"]) == (4, 3, 3000.0)
+
+        # Only the detail-less exhausted cycle → null, not 0.0.
+        assert QuotaLedger.summarize([cycles[-1]])["session"]["avg_total_exhausted"] is None
+    finally:
+        db.close()

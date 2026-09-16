@@ -72,7 +72,9 @@ function periodRow(over: Partial<AccountPeriodRow> = {}): AccountPeriodRow {
     calls: 20_318, turns: 2740, cycles: 44, exhausted: 11, avg_total_exhausted: 28_500_000, weekly_exhausted: 1, ...over,
   }
 }
-const NOW_MONTH = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}` })()
+// UTC, as the backend keys periods (a local calendar would miss the open
+// period for the first hours of a month east of Greenwich).
+const NOW_MONTH = (() => { const d = new Date(); return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}` })()
 function periodsAnswer(): AccountPeriodsResult {
   return {
     ok: true, granularity: 'month',
@@ -272,6 +274,11 @@ describe('QuotaCycleView cycles', () => {
     expect(avg.text()).toContain(i18n.global.t('quota-cycles.row-exhausted-average', { count: 2 }))
     expect(avg.get('[data-part="average-detailed"]').text()).toBe(i18n.global.t('quota-cycles.average-detailed', { detailed: 1 }))
     expect(avg.get('[data-part="total"]').text()).toBe('28,473,613')
+    // The summary line agrees with the footer, not with the backend's
+    // diluted average (28,473,613 / 2 exhausted cycles = 14.2M).
+    const summary = w.get('[data-part="cycle-summary"]').text()
+    expect(summary).toContain(i18n.global.t('quota-cycles.summary-avg', { total: '28.5M' }))
+    expect(summary).not.toContain('14.2M')
     w.unmount()
 
     // The backend reports 0.0 when none of the exhausted cycles carry detail.
@@ -282,6 +289,55 @@ describe('QuotaCycleView cycles', () => {
     const w2 = await mountView()
     expect(w2.get('[data-part="cycle-summary"]').text()).not.toContain(i18n.global.t('quota-cycles.summary-avg', { total: '0' }))
     expect(w2.get('[data-row="exhausted-average"] [data-part="total"]').text()).toBe('—')
+  })
+
+  it('detail_known false reads as "—" and is left out of the token averages even when the figures are non-zero', async () => {
+    const answer = cyclesAnswer()
+    answer.cycles.push(cycle({ started_at: '2026-09-15T21:05:00Z', resets_at: '2026-09-16T02:05:00Z', max_percent: 100, exhausted_at: '2026-09-16T01:12:00Z', total: 12, calls: 1, turns: 1, detail_known: false }))
+    wire.cycles = answer
+    const w = await mountView()
+    const bare = w.findAll('[data-row="cycle"]')[3]
+    expect(bare.attributes('data-no-detail')).toBe('true')
+    expect(bare.get('[data-part="no-detail"]').text()).toBe(i18n.global.t('quota-cycles.no-detail-short'))
+    expect(bare.get('[data-part="total"]').text()).toBe('—')
+    expect(bare.get('[data-part="per-percent"]').text()).toBe('—')
+    const avg = w.get('[data-row="exhausted-average"]')
+    expect(avg.text()).toContain(i18n.global.t('quota-cycles.row-exhausted-average', { count: 2 }))
+    expect(avg.get('[data-part="average-detailed"]').text()).toBe(i18n.global.t('quota-cycles.average-detailed', { detailed: 1 }))
+    expect(avg.get('[data-part="total"]').text()).toBe('28,473,613')
+  })
+
+  it('detail_known true with all-zero figures shows the zeros and counts in the average — nothing was spent', async () => {
+    const answer = cyclesAnswer()
+    answer.cycles = answer.cycles.map((c) => ({ ...c, detail_known: true }))
+    answer.cycles.push(cycle({ started_at: '2026-09-15T21:05:00Z', resets_at: '2026-09-16T02:05:00Z', max_percent: 100, exhausted_at: '2026-09-16T01:12:00Z', input: 0, cache_read: 0, cache_creation: 0, output: 0, total: 0, calls: 0, turns: 0, detail_known: true }))
+    wire.cycles = answer
+    const w = await mountView()
+    const zero = w.findAll('[data-row="cycle"]')[3]
+    expect(zero.attributes('data-no-detail')).toBe('false')
+    expect(zero.find('[data-part="no-detail"]').exists()).toBe(false)
+    expect(zero.get('[data-part="total"]').text()).toBe('0')
+    expect(zero.get('[data-part="calls"]').text()).toBe('0')
+    // Two exhausted cycles, both with detail: (28,473,613 + 0) / 2.
+    const avg = w.get('[data-row="exhausted-average"]')
+    expect(avg.find('[data-part="average-detailed"]').exists()).toBe(false)
+    expect(avg.get('[data-part="total"]').text()).toBe('14,236,807')
+  })
+
+  it('without the detail_known field a closed all-zero cycle is still read as no detail, an open one is not', async () => {
+    const answer = cyclesAnswer()
+    answer.cycles.push(
+      cycle({ started_at: '2026-09-15T21:05:00Z', resets_at: '2026-09-16T02:05:00Z', closed: true, max_percent: 50, input: 0, cache_read: 0, cache_creation: 0, output: 0, total: 0, calls: 0, turns: 0 }),
+      cycle({ started_at: '2026-09-15T16:05:00Z', resets_at: '2026-09-15T21:05:00Z', closed: false, max_percent: 1, input: 0, cache_read: 0, cache_creation: 0, output: 0, total: 0, calls: 0, turns: 0 }),
+    )
+    for (const c of answer.cycles) expect(c.detail_known).toBeUndefined()
+    wire.cycles = answer
+    const w = await mountView()
+    const rows = w.findAll('[data-row="cycle"]')
+    expect(rows[3].attributes('data-no-detail')).toBe('true')
+    expect(rows[3].get('[data-part="total"]').text()).toBe('—')
+    expect(rows[4].attributes('data-no-detail')).toBe('false')
+    expect(rows[4].get('[data-part="total"]').text()).toBe('0')
   })
 
   it('builds a cycles CSV with one row per cycle', async () => {

@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 from agent_team_backend.db import Database
-from agent_team_backend.tokens_store import SLICE_S, TokensStore
+from agent_team_backend.tokens_store import SLICE_RETENTION_S, SLICE_S, TokensStore
 
 
 @pytest.fixture
@@ -205,3 +205,40 @@ def test_old_documents_gain_the_new_buckets(tmp_path: Path, workspace: str) -> N
     cum = store.snapshot(workspace)["workspace"]["cumulative"]
     assert cum["by_account"] == {"unknown": {"input": 1, "output": 1, "calls": 1}}
     assert cum["by_version"] == {"claude@unknown": {"input": 1, "output": 1, "calls": 1}}
+
+
+def test_token_slices_conserve_by_vendor(store: TokensStore, workspace: str) -> None:
+    """The slices are the only source of a quota cycle's token side: summed
+    over every slice they must equal by_vendor exactly (input folded back
+    from the four-way split), for each vendor."""
+    now = time.time()
+    events = [
+        ("claude", "acct-a", 1000, 800, 100, 50, now - 3600),
+        ("claude", "acct-a", 2000, 1500, 0, 70, now - 1800),
+        ("claude", "acct-b", 300, 0, 0, 20, now - 900),
+        ("claude", "", 40, 0, 0, 5, now - 60),
+        ("codex", "acct-a", 500, 0, 0, 60, now - 120),
+    ]
+    for n, (vendor, profile, inp, cr, cc, out, ts) in enumerate(events):
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
+        assert store.record(
+            workspace, source="cli", vendor=vendor, input_tokens=inp, output_tokens=out,
+            dedup_key=f"s{n}", profile_id=profile, cache_read_tokens=cr,
+            cache_creation_tokens=cc, timestamp=stamp,
+        )
+    by_vendor = store.snapshot(workspace)["workspace"]["cumulative"]["by_vendor"]
+    for vendor in ("claude", "codex"):
+        folded = {"input": 0, "output": 0, "calls": 0}
+        for profile in ("acct-a", "acct-b", "unknown"):
+            bucket = store.account_window_totals(vendor, profile, None, now + 1)
+            folded["input"] += bucket["input"] + bucket["cache_read"] + bucket["cache_creation"]
+            folded["output"] += bucket["output"]
+            folded["calls"] += bucket["calls"]
+        assert folded == by_vendor[vendor], vendor
+
+
+def test_slice_retention_covers_a_calendar_window() -> None:
+    """A monthly credit window (copilot / grok / qwen) starts where the
+    previous reset landed — up to 31 days back. Its open cycle sums live
+    from the slices, so anything shorter silently undercounts the month."""
+    assert SLICE_RETENTION_S >= 32 * 86400

@@ -301,19 +301,23 @@ function windowsOf(snap: UsageSnapshot | undefined): QuotaWindowRow[] {
     .map((w) => ({ kind: w.kind, label: w.label, usedPercent: w.usedPercent, resetsAt: w.resetsAt, exhausted: w === spent }))
 }
 
-/** Claude's session window is a fixed 5 hours, so its start is resetsAt − 5h
- *  — the one vendor where "what did this window cost me" can be answered.
- *  The snapshot carries only resetsAt; nobody reports a window's start. */
-const CLAUDE_SESSION_WINDOW_MS = 5 * 60 * 60 * 1000
+/** A session window is a fixed 5 hours for these vendors (the backend's
+ *  quota_windows table), so its start is resetsAt − 5h — the vendors where
+ *  "what did this window cost me" can be answered. The snapshot carries
+ *  only resetsAt; nobody reports a window's start. */
+const SESSION_WINDOW_MS: Record<string, number> = Object.fromEntries(
+  ['claude', 'codex', 'kimi', 'opencode', 'qwen', 'antigravity', 'pi'].map((k) => [k, 5 * 60 * 60 * 1000])
+)
 type WindowSpend = Sum & { start: string; end: string; lastTurnAt: string | null }
 function windowSpendOf(turns: TokenTurn[], windows: QuotaWindowRow[]): WindowSpend | null {
   if (turns.length === 0) return null
-  if (props.pane?.agentKey !== 'claude') return null
+  const windowMs = SESSION_WINDOW_MS[props.pane?.agentKey ?? '']
+  if (!windowMs) return null
   const session = windows.find((w) => w.kind === 'session' && w.resetsAt)
   if (!session) return null
   const end = Date.parse(session.resetsAt as string)
   if (!Number.isFinite(end)) return null
-  const start = end - CLAUDE_SESSION_WINDOW_MS
+  const start = end - windowMs
   const sum = emptySum()
   for (const turn of turns) {
     const at = turn.started_at ? Date.parse(turn.started_at) : NaN

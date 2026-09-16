@@ -55,6 +55,10 @@ WEEKLY_KINDS = ("weekly", "weekly-model", "secondary")
 TotalsProvider = Callable[[str, str, "float | None", float], dict[str, int]]
 
 _TOKEN_FIELDS = ("input", "cache_read", "cache_creation", "output", "calls", "turns")
+#: kv key holding the epoch at which token slices started being recorded on
+#: this database — written once, on the ledger's first start. A cycle that
+#: started before it has no usage detail (its six sums are not to be trusted).
+SLICES_SINCE_KEY = "tokens.slices_since"
 
 
 def _create_schema(cur: sqlite3.Cursor) -> None:
@@ -109,10 +113,18 @@ def _period_of(ts: float, granularity: str) -> str:
     return when.strftime("%Y") if granularity == "year" else when.strftime("%Y-%m")
 
 
+#: Kinds that are one row per model / bucket rather than one per account
+#: and always carry their label in the cycle key. Keyed by the label even
+#: when a snapshot happens to hold a single row: a count-based rule would
+#: rename the key when a row appears or disappears (Claude's promotional
+#: "Fable only" week) and split one window into two cycles.
+LABELLED_KINDS = frozenset({"weekly-model"})
+
+
 def window_kinds_of(snapshot: dict) -> list[tuple[dict, str]]:
-    """(window, kind) pairs of a snapshot; a kind that appears more than once
-    (several ``weekly-model`` rows) is suffixed with its label so the rows do
-    not collapse into one cycle."""
+    """(window, kind) pairs of a snapshot; a labelled kind (``weekly-model``)
+    and any other kind that appears more than once are suffixed with the
+    label so the rows do not collapse into one cycle."""
     windows = [w for w in snapshot.get("windows", []) if isinstance(w, dict)]
     counts: dict[str, int] = {}
     for window in windows:
@@ -123,7 +135,7 @@ def window_kinds_of(snapshot: dict) -> list[tuple[dict, str]]:
         kind = str(window.get("kind") or "")
         if not kind:
             continue
-        if counts[kind] > 1:
+        if kind in LABELLED_KINDS or counts[kind] > 1:
             kind = f"{kind}:{window.get('label') or ''}"
         out.append((window, kind))
     return out
@@ -139,6 +151,11 @@ class QuotaLedger:
         # last sample written, the dedup rule for repeated identical readings.
         self._last_sample: dict[tuple[str, str, str], tuple[float, float]] = {}
         self._load_last_samples()
+        since = self._db.kv_get(SLICES_SINCE_KEY)
+        if not isinstance(since, (int, float)) or isinstance(since, bool):
+            since = time.time()
+            self._db.kv_set(SLICES_SINCE_KEY, since, now=int(since))
+        self.slices_since: float = float(since)
 
     def _load_last_samples(self) -> None:
         with self._db.transaction() as cur:
@@ -283,19 +300,24 @@ class QuotaLedger:
                     " FROM quota_cycles WHERE closed = 0 AND resets_at <= ?",
                     (wall,),
                 ).fetchall()
-                for row in rows:
-                    totals = self._totals(
-                        str(row["agent"]), str(row["profile_id"]),
-                        row["started_at"], float(row["resets_at"]),
-                    )
+            for row in rows:
+                # The totals provider takes the tokens store's lock, and the
+                # store takes the database lock while holding its own (a
+                # workspace cache miss inside record()) — so never ask for
+                # the sums inside a transaction, or the two threads deadlock.
+                totals = self._totals(
+                    str(row["agent"]), str(row["profile_id"]),
+                    row["started_at"], float(row["resets_at"]),
+                )
+                with self._db.transaction() as cur:
                     cur.execute(
                         "UPDATE quota_cycles SET input = ?, cache_read = ?, cache_creation = ?,"
                         " output = ?, calls = ?, turns = ?, closed = 1 WHERE id = ?",
                         (*(int(totals.get(f, 0)) for f in _TOKEN_FIELDS), int(row["id"])),
                     )
-                    closed.append(
-                        (str(row["agent"]), str(row["profile_id"]), str(row["window_kind"]))
-                    )
+                closed.append(
+                    (str(row["agent"]), str(row["profile_id"]), str(row["window_kind"]))
+                )
         return closed
 
     # ── readers ──────────────────────────────────────────────────────
@@ -349,26 +371,34 @@ class QuotaLedger:
             "calls": int(totals.get("calls", 0)),
             "turns": int(totals.get("turns", 0)),
             "samples": int(row["samples"]),
+            # False = the cycle started before slices existed on this
+            # database: the sums above are incomplete, not "nothing spent".
+            "detail_known": (
+                row["started_at"] is not None
+                and float(row["started_at"]) >= self.slices_since
+            ),
         }
 
     @staticmethod
     def summarize(cycles: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         """Per window kind: how many cycles, how many exhausted, and the mean
-        total of the exhausted ones (None without any)."""
+        total of the exhausted ones. Only cycles whose detail is known enter
+        the mean — a pre-slices cycle would dilute it with zeros — so it is
+        None when no exhausted cycle has known detail."""
         out: dict[str, dict[str, Any]] = {}
         for cycle in cycles:
             entry = out.setdefault(
-                cycle["window_kind"], {"cycles": 0, "exhausted": 0, "_sum": 0}
+                cycle["window_kind"], {"cycles": 0, "exhausted": 0, "_sum": 0, "_n": 0}
             )
             entry["cycles"] += 1
             if cycle["exhausted_at"] is not None:
                 entry["exhausted"] += 1
-                entry["_sum"] += cycle["total"]
+                if cycle.get("detail_known"):
+                    entry["_sum"] += cycle["total"]
+                    entry["_n"] += 1
         for entry in out.values():
-            total = entry.pop("_sum")
-            entry["avg_total_exhausted"] = (
-                total / entry["exhausted"] if entry["exhausted"] else None
-            )
+            total, n = entry.pop("_sum"), entry.pop("_n")
+            entry["avg_total_exhausted"] = total / n if n else None
         return out
 
     def period_stats(
@@ -394,7 +424,7 @@ class QuotaLedger:
                     str(row["agent"]), str(row["profile_id"]),
                 )
                 entry = stats.setdefault(key, {
-                    "cycles": 0, "exhausted": 0, "_sum": 0, "weekly_exhausted": 0,
+                    "cycles": 0, "exhausted": 0, "_sum": 0, "_n": 0, "weekly_exhausted": 0,
                 })
                 kind = str(row["window_kind"]).split(":", 1)[0]
                 exhausted = row["exhausted_at"] is not None
@@ -405,12 +435,13 @@ class QuotaLedger:
                 entry["cycles"] += 1
                 if exhausted:
                     entry["exhausted"] += 1
-                    entry["_sum"] += self._row_to_cycle(row, wall)["total"]
+                    cycle = self._row_to_cycle(row, wall)
+                    if cycle["detail_known"]:
+                        entry["_sum"] += cycle["total"]
+                        entry["_n"] += 1
             for entry in stats.values():
-                total = entry.pop("_sum")
-                entry["avg_total_exhausted"] = (
-                    total / entry["exhausted"] if entry["exhausted"] else None
-                )
+                total, n = entry.pop("_sum"), entry.pop("_n")
+                entry["avg_total_exhausted"] = total / n if n else None
             return stats
 
     def reset(self) -> None:

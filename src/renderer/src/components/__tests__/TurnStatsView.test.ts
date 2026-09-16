@@ -347,6 +347,18 @@ describe('TurnStatsView quota', () => {
     expect(w.get('[data-part="quota-spend"]').text()).not.toContain('1,130,734')
   })
 
+  it('sums a 5h session window for the other fixed-window vendors too (codex), not only Claude', async () => {
+    wire.answer = { ...exactAnswer(), vendor: 'codex' }
+    const w = await mountView({
+      pane: PANES[1],
+      usage: claudeUsage({ provider: 'codex', windows: [{ kind: 'session', label: '5h', usedPercent: 12, resetsAt: '2026-09-16T06:00:00Z' }] }),
+    })
+    // 06:00Z − 5h = 01:00Z: only turn 2 (01:01Z) is inside, as for Claude.
+    const spend = w.get('[data-part="quota-spend"]').text()
+    expect(spend).toContain('626,272')
+    expect(spend).not.toContain('1,130,734')
+  })
+
   it('says the window start is unknown for a vendor other than Claude, and says so when there is no reading', async () => {
     wire.answer = { ...exactAnswer(), vendor: 'codex' }
     const w = await mountView({
@@ -550,6 +562,30 @@ describe('TurnStatsView accounts', () => {
     expect(lines[1].startsWith('1,2026-09-16T00:54:02Z,2026-09-16T00:55:00Z,services@x.dev,slot-a,2.1.251,')).toBe(true)
     expect(lines[2].startsWith('2,2026-09-16T01:01:40Z,,me@x.dev,__default__,2.1.273,')).toBe(true)
     expect(lines[3].startsWith(`3,2026-09-16T01:10:00Z,,${i18n.global.t('account-dim.unknown')},unknown,,old,`)).toBe(true)
+  })
+
+  it('the export button writes only the rows the account filter leaves visible', async () => {
+    wire.answer = accountsAnswer()
+    const w = await mountView({ cliProfiles: profiles() })
+    const blobs: string[] = []
+    const createObjectURL = vi.fn((blob: Blob) => {
+      blobs.push(blob as unknown as string)
+      return 'blob:turn-stats'
+    })
+    vi.stubGlobal('URL', { ...URL, createObjectURL, revokeObjectURL: vi.fn() })
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    try {
+      await w.get('[data-act="account-chip"][data-account="slot-a"]').trigger('click')
+      await w.get('[data-act="export"]').trigger('click')
+      expect(createObjectURL).toHaveBeenCalledTimes(1)
+      const csv = await (blobs[0] as unknown as Blob).text()
+      const lines = csv.trimEnd().split('\n')
+      expect(lines).toHaveLength(2)
+      expect(lines[1].startsWith('1,2026-09-16T00:54:02Z,2026-09-16T00:55:00Z,services@x.dev,slot-a,')).toBe(true)
+    } finally {
+      click.mockRestore()
+      vi.unstubAllGlobals()
+    }
   })
 })
 
