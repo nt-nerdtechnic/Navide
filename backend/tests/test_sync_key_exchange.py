@@ -539,7 +539,15 @@ async def test_signing_back_in_to_the_same_account_reads_the_same_ring():
     sync_keyring._reset_for_test()
 
 
-async def test_the_older_unbound_ring_is_adopted_when_this_is_the_only_account_ever():
+async def test_the_older_unbound_ring_is_offered_not_adopted_on_sign_in():
+    """Signing in never adopts it, even when it can only be this account's.
+
+    Adoption deletes the bare-name secret the previous release reads, which
+    that release answers by minting a fresh key — orphaning every record the
+    old one wrote, with no way back. So a sign-in leaves it where it is and
+    ``legacy_ring_pending`` stays true for the Settings button, which is the
+    "explicit, once, never inferred" route ``sync.adopt_legacy_key`` documents.
+    """
     sync_keyring.unbind()
     raw = b"\x71" * 32
     app.credential_vault.write_app_secret(
@@ -548,6 +556,13 @@ async def test_the_older_unbound_ring_is_adopted_when_this_is_the_only_account_e
     server = FakeServer(policy=ALLOW_ALL_POLICY)
     link = await _connected(server)
     try:
+        assert sync_keyring.has_account_key() is False, "connecting must not adopt it"
+        assert _legacy_entry() is not None, "the bare-name secret is still readable"
+        assert sync_keyring.legacy_ring_pending() is True, "Settings can offer it"
+
+        # …and the explicit route still works, which is the whole point of
+        # leaving it pending rather than discarding it.
+        sync_keyring.adopt_legacy_ring()
         assert sync_keyring.account_key() == raw
         assert _legacy_entry() is None
         assert sync_keyring.legacy_ring_pending() is False

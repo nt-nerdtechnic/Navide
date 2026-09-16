@@ -831,3 +831,130 @@ async def test_a_failing_key_offer_cannot_break_pairing(monkeypatch, account_key
 
     assert await link._offer_sync_key("dev-b") is False  # swallowed, not raised
     assert reached, "the send was never attempted, so nothing was proven"
+
+
+# ── the upgrade must not re-seal what an older release still has to read ─────
+async def test_an_item_sealed_before_kids_were_recorded_is_not_pushed_again(
+    tmp_path, account_key
+):
+    """A blank sealed_kid means "v1 body, or unknown" — never "retired key".
+
+    Reading it as retired made the first sync after an upgrade re-seal and
+    re-push every item in every scope. A device still on the older release
+    cannot open a v2 body: it drops the record with a log line and advances
+    its cursor regardless, so that item silently never reaches it again.
+    """
+    server = FakeServer()
+    device = Device(tmp_path, server, "a", items={"p1": {"v": 1}})
+    assert (await device.sync())["pushed"] == 1
+    pushed_rev = device.store.state("prompts", "p1").rev
+
+    # Exactly the row an upgrade leaves behind: agreed, unchanged, and with no
+    # record of which key sealed it.
+    state = device.store.state("prompts", "p1")
+    device.store.set_state(
+        "prompts",
+        "p1",
+        rev=state.rev,
+        synced_hash=state.synced_hash,
+        deleted=False,
+        sealed_kid="",
+    )
+
+    assert (await device.sync())["pushed"] == 0, "an unchanged v1 body was re-sealed"
+    assert device.store.state("prompts", "p1").rev == pushed_rev
+
+
+async def test_a_rotation_still_pushes_what_the_retired_key_sealed(tmp_path, account_key):
+    """The sibling of the above: a concrete, non-active key id does re-push,
+    which is the one thing the rotation path asks of the engine."""
+    server = FakeServer()
+    device = Device(tmp_path, server, "a", items={"p1": {"v": 1}})
+    assert (await device.sync())["pushed"] == 1
+
+    state = device.store.state("prompts", "p1")
+    device.store.set_state(
+        "prompts",
+        "p1",
+        rev=state.rev,
+        synced_hash=state.synced_hash,
+        deleted=False,
+        sealed_kid="retired-kid",
+    )
+
+    assert (await device.sync())["pushed"] == 1
+
+
+# ── a scope that is off does not move items, however it was asked ────────────
+def _disabled_device(tmp_path, server, name, items=None):
+    device = Device(tmp_path, server, name, items=items)
+    device.engine._enabled = lambda _scope: False
+    return device
+
+
+async def test_push_items_refuses_a_scope_that_is_switched_off(tmp_path, account_key):
+    """`sync` skips a disabled scope but `push_items` used to check only that an
+    adapter and a key existed — so anything that could reach the local
+    WebSocket could send an item while the UI showed the scope switched off."""
+    server = FakeServer()
+    device = _disabled_device(tmp_path, server, "a", items={"p1": {"v": 1}})
+
+    with pytest.raises(sync_engine.SyncError, match="switched off"):
+        await device.engine.push_items("prompts", ["p1"])
+
+    assert server.rows == {}, "an item left the machine anyway"
+    assert server.pushes == 0
+
+
+async def test_pull_items_refuses_a_scope_that_is_switched_off(tmp_path, account_key):
+    """Taking a record down and putting it into use is the same decision as
+    sending one, and answers to the same switch."""
+    server = FakeServer()
+    source = Device(tmp_path, server, "src", items={"p1": {"v": 1}})
+    assert (await source.sync())["pushed"] == 1
+
+    device = _disabled_device(tmp_path, server, "b")
+    with pytest.raises(sync_engine.SyncError, match="switched off"):
+        await device.engine.pull_items("prompts", ["p1"])
+
+    assert device.adapter.items == {}, "an item was applied anyway"
+
+
+async def test_a_sensitive_scope_that_is_off_is_not_asked_to_describe_itself(
+    tmp_path, account_key
+):
+    """`inventory` answers a disabled scope on purpose — somebody deciding
+    whether to switch one on wants to see what it would bring down. That holds
+    while looking is free, and a sensitive adapter's snapshot is not: the
+    credentials one opens every stored secret to build it."""
+    server = FakeServer()
+    device = _disabled_device(tmp_path, server, "a", items={"p1": {"v": 1}})
+    device.adapter.sensitive = True
+    opened: list[str] = []
+    plain_snapshot = device.adapter.snapshot
+
+    def _watched_snapshot():
+        opened.append("snapshot")
+        return plain_snapshot()
+
+    device.adapter.snapshot = _watched_snapshot
+
+    result = await device.engine.inventory("prompts")
+
+    assert result["status"] == sync_engine.INVENTORY_DISABLED
+    assert result["items"] == []
+    assert opened == [], "the adapter was asked to open its secrets anyway"
+
+
+async def test_an_ordinary_scope_that_is_off_still_lists_its_two_sides(
+    tmp_path, account_key
+):
+    """The gate above is about secrets, not about being switched off: a scope
+    that holds none still answers, which is what the look-first flow needs."""
+    server = FakeServer()
+    device = _disabled_device(tmp_path, server, "a", items={"p1": {"v": 1}})
+
+    result = await device.engine.inventory("prompts")
+
+    assert result["status"] == sync_engine.INVENTORY_OK
+    assert [item["itemId"] for item in result["items"]] == ["p1"]

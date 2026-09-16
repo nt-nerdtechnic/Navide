@@ -8,6 +8,7 @@ All notable released changes to Navide will be documented in this file. The form
 
 ### Fixed
 
+- **Upgrading with two devices:** a device on 0.2.3 and one on 0.2.4 cannot complete a new pairing, in either direction. The pairing handshake now carries an encryption key and has no version negotiation, so the older side is refused before a code is shown. It fails closed — the two machines never show different codes and both believe them — but neither says why: they sit on "waiting for the other device" until the request times out. Pair only once both devices are on 0.2.4. Devices paired on 0.2.3 keep working for messaging; sharing a sync key between them is refused until they are unpaired and paired again.
 - Persist detected session identities before UI notification and preserve them across history registration and later snapshots; allow loading more History entries after an empty search and rerun content search for newly loaded entries.
 - Bind Codex sessions to their originating pane using verified resume IDs and launch-scoped first-turn hooks; preserve hook trust and marker fallback, and skip redundant markers when a session is already bound.
 - Hold the session marker while a keystroke-only startup dialog (Codex **Hooks need review**) is on screen instead of pasting into it, and type the marker into panes that a restart reopened as a fresh conversation; both cases left the pane without a resume id, so History showed no **Resume** button for it.

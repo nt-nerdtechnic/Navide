@@ -83,6 +83,9 @@ INVENTORY_NO_KEY = "no-key"
 INVENTORY_NOT_CONNECTED = "not-connected"
 INVENTORY_ERROR = "error"
 INVENTORY_UNKNOWN_SCOPE = "unknown-scope"
+#: A sensitive scope that is switched off: its snapshot opens secrets, so it
+#: is not taken to answer a look-before-you-decide question.
+INVENTORY_DISABLED = "disabled"
 
 
 class SyncError(Exception):
@@ -781,7 +784,19 @@ class SyncEngine:
                 # active one. That is the whole of what a rotation asks of the
                 # engine: every device re-seals what it holds, and whichever
                 # gets there first wins without a conflict (same content).
-                if state.sealed_kid == active_kid:
+                #
+                # An empty sealed_kid is not a retired key: per ItemState it
+                # means "v1 body, or unknown", which is what every row written
+                # before this column existed carries. Reading it as retired
+                # made the first sync after an upgrade re-seal and re-push
+                # every item in every scope — and a device still on the older
+                # release cannot read a v2 body, drops it with a log line, and
+                # advances its cursor anyway, so the record silently never
+                # arrives there again. Leaving v1 bodies alone costs nothing:
+                # this release reads them (sync_keyring falls back on the v1
+                # format), and a real rotation names a concrete key that
+                # differs from the active one.
+                if state.sealed_kid in (active_kid, ""):
                     continue
             pending.append((item_id, payload, item_hash))
 
@@ -1013,6 +1028,14 @@ class SyncEngine:
         adapter = self._adapters.get(scope)
         if adapter is None:
             raise SyncError(f"no adapter registered for {scope!r}")
+        if _sensitive(adapter) and not self._enabled(scope):
+            # "Writes nothing" is true of this method and false of a sensitive
+            # adapter's snapshot: the credentials one opens every stored secret
+            # and mints the row an unseen slot would travel under. Looking
+            # before deciding is worth answering a disabled scope for, but not
+            # at the price of decrypting credentials for a caller who only had
+            # to name the scope. Those describe themselves once switched on.
+            return {"scope": scope, "status": INVENTORY_DISABLED, "items": []}
         if not await asyncio.to_thread(sync_keyring.has_account_key):
             return {"scope": scope, "status": INVENTORY_NO_KEY, "items": []}
         rows = await self._list_remote(scope)
@@ -1140,8 +1163,14 @@ class SyncEngine:
         on is still skipped, a body over the record limit is still refused, and
         the batches still respect both frame budgets. Choosing what to send
         changes which items go, never what the engine is willing to do.
+
+        That includes the switch. A scope that is off does not send, however
+        the send was asked for — without this, anything that could reach the
+        local WebSocket could put a credential on the wire while the UI showed
+        the scope switched off and said nothing.
         """
         adapter = self._require_adapter(scope)
+        self._require_enabled(scope)
         await self._require_key()
         wanted = _unique(item_ids)
         blocked_before = self._store.conflict_ids(scope)
@@ -1201,8 +1230,13 @@ class SyncEngine:
         a cursor moved past them would tell the next round that everything below
         it had been read — which is how one deliberate pull loses every change
         that happened to sit beside it.
+
+        A scope that is off does not apply anything either: taking a credential
+        down and putting it into use on this machine is the same decision as
+        sending one, and it answers to the same switch.
         """
         adapter = self._require_adapter(scope)
+        self._require_enabled(scope)
         await self._require_key()
         wanted = _unique(item_ids)
         requested = getattr(adapter, "request_items", None)
@@ -1264,6 +1298,17 @@ class SyncEngine:
         if adapter is None:
             raise SyncError(f"no adapter registered for {scope!r}")
         return adapter
+
+    def _require_enabled(self, scope: str) -> None:
+        """Refuse an item-level transfer for a scope that is switched off.
+
+        ``sync`` reports this as a skip because a round covers every scope and
+        walking past the ones that are off is the normal outcome. Asking for
+        named items is a different act: the caller named a scope, so the answer
+        is an error rather than a quiet empty result.
+        """
+        if not self._enabled(scope):
+            raise SyncError(f"the {scope} section is switched off")
 
     async def _require_key(self) -> None:
         if not await asyncio.to_thread(sync_keyring.has_account_key):

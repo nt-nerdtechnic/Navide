@@ -1467,10 +1467,20 @@ class ServerLink:
             log.warning("could not tell whether an older sync key needs adopting: %s", err)
             return
         if sole:
-            try:
-                await asyncio.to_thread(sync_keyring.adopt_legacy_ring)
-            except sync_keyring.KeyringError as err:
-                log.warning("the older sync key could not be adopted: %s", err)
+            # Attributable, but not adopted here. Adoption moves the key out of
+            # the bare-name secret and deletes it, which an older release reads
+            # as "no key" and answers by minting a fresh one — orphaning every
+            # record the old key wrote, with no way back. A sign-in is not the
+            # moment to make a one-way change nobody asked for, and
+            # `sync.adopt_legacy_key` already exists for the moment somebody
+            # does: `legacy_ring_pending` stays true, so Settings → Sync offers
+            # it. That is also what this module says it does — "explicit, once,
+            # never inferred" — which this call did not.
+            log.info(
+                "a sync key from before accounts were bound is stored here and "
+                "belongs to %s; Settings offers adopting it",
+                member_id,
+            )
             return
         log.warning(
             "a sync key from before accounts were bound is stored here, and this "
