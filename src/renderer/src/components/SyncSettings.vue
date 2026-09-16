@@ -49,8 +49,16 @@ const busy = ref('')
 const error = ref('')
 
 /** Scopes whose adapter is not shipped yet still list, but cannot be turned on.
- *  Skill *content* is a later phase; what ships here is the decision layer. */
-const READY: ReadonlySet<string> = new Set(['prompts', 'mcp', 'skills', 'memory', 'credentials'])
+ *  Skill *content* is a later phase; what ships here is the decision layer.
+ *
+ *  'credentials' is held out of this set for v0.2.4: its adapter is complete
+ *  and tested, but its review is not, and it is the one scope that puts a CLI
+ *  credential on the wire. Leaving it off the list is the whole gate — the
+ *  Accounts pane reads the cloud side only when `scopes.credentials` is on
+ *  (useCliProfiles.refreshCloud), so with no way to switch it on, nothing
+ *  downstream can reach a credential either. Put it back once the review
+ *  lands. */
+const READY: ReadonlySet<string> = new Set(['prompts', 'mcp', 'skills', 'memory'])
 
 const connected = computed(() => linkState.value === 'connected')
 

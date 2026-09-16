@@ -145,7 +145,13 @@ describe('SyncSettings', () => {
     expect(wrapper.find('.sync-note').text()).toContain('no sync key')
   })
 
-  it('lists credentials as a section that can be turned on', async () => {
+  // The credentials adapter is complete and tested but its review is not, and
+  // it is the one scope that puts a CLI credential on the wire. Holding it out
+  // of READY is the whole gate: the Accounts pane reads the cloud side only
+  // while `scopes.credentials` is on, so a scope that cannot be switched on
+  // leaves nothing downstream able to reach a credential either. Re-adding it
+  // to READY without finishing that review is what this test exists to catch.
+  it('lists credentials but does not let it be turned on', async () => {
     const { backend, send } = mockBackend({
       'sync.status': {
         ok: true,
@@ -163,12 +169,44 @@ describe('SyncSettings', () => {
 
     const switches = wrapper.findAll('button[role="switch"]')
     expect(switches).toHaveLength(5)
+    // Still listed, so the section does not silently disappear…
     expect(wrapper.text()).toContain('Credentials')
-    expect(wrapper.text()).toContain('never removes it from the cloud')
-    expect(switches[4].attributes('disabled')).toBeUndefined()
+    // …but described as unavailable rather than by what it would sync.
+    expect(wrapper.text()).toContain('Not syncable yet.')
+    expect(wrapper.text()).not.toContain('never removes it from the cloud')
+    expect(switches[4].attributes('disabled')).toBeDefined()
+
     await switches[4].trigger('click')
     await flushPromises()
-    expect(send).toHaveBeenCalledWith('sync.set_scope', { scope: 'credentials', enabled: true })
+    expect(send).not.toHaveBeenCalledWith('sync.set_scope', {
+      scope: 'credentials',
+      enabled: true,
+    })
+  })
+
+  it('still lets the four reviewed scopes be turned on', async () => {
+    const { backend, send } = mockBackend({
+      'sync.status': {
+        ok: true,
+        payload: {
+          available: ['prompts', 'mcp', 'skills', 'memory', 'credentials'],
+          scopes: { prompts: false, mcp: false, skills: false, memory: false, credentials: false },
+          hasKey: true,
+          conflicts: 0,
+          link: { state: 'connected' },
+        },
+      },
+    })
+    wrapper = mount(SyncSettings, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+
+    const switches = wrapper.findAll('button[role="switch"]')
+    for (const [index, scope] of ['prompts', 'mcp', 'skills', 'memory'].entries()) {
+      expect(switches[index].attributes('disabled')).toBeUndefined()
+      await switches[index].trigger('click')
+      await flushPromises()
+      expect(send).toHaveBeenCalledWith('sync.set_scope', { scope, enabled: true })
+    }
   })
 
   it('shows a sealed conflict by slot, never by content', async () => {
