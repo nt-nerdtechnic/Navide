@@ -27,7 +27,11 @@ def _run_to_completion(
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
+        # Not a bare `text=True`: that decodes with the console code page, so a
+        # payload carrying a non-ASCII path raised UnicodeEncodeError on
+        # Windows before the hook was ever reached.
+        encoding="utf-8",
+        errors="replace",
     )
     try:
         stdout, stderr = process.communicate(payload, timeout=timeout)

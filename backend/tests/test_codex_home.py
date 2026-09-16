@@ -419,14 +419,21 @@ def test_resolve_user_thread_id_uses_nested_source_parent_without_optional_field
 
 
 def _hook_trust_fixture(tmp_path: Path) -> tuple[CodexHomeManager, Path, Path]:
+    from agent_team_backend.cli_vendors.codex import _toml_escape
+
     real = tmp_path / "real-codex"
     real.mkdir()
     (real / "hooks.json").write_text('{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "true"}]}]}}', encoding="utf-8")
+    # The key Codex itself writes is the hooks file's own path, so it carries
+    # the platform's separator and needs TOML escaping — a hand-joined "/"
+    # matches nothing on Windows, and a bare backslash is not a legal escape
+    # inside a TOML basic string.
+    real_key = _toml_escape(str(real / "hooks.json"))
     (real / "config.toml").write_text(
         'model = "x"\n\n[hooks.state]\n\n'
-        f'[hooks.state."{real}/hooks.json:stop:0:0"]\n'
+        f'[hooks.state."{real_key}:stop:0:0"]\n'
         'trusted_hash = "sha256:aaaa"\n\n'
-        f'[hooks.state."{real}/hooks.json:session_start:0:0"]\n'
+        f'[hooks.state."{real_key}:session_start:0:0"]\n'
         'trusted_hash = "sha256:bbbb"\n\n'
         '[hooks.state."codex@openai-codex:hooks/hooks.json:stop:0:0"]\n'
         'trusted_hash = "sha256:cccc"\n',
@@ -446,10 +453,11 @@ def test_seed_hook_trust_copies_real_home_entries_under_pane_path(tmp_path: Path
     assert manager.seed_hook_trust(pane) == 2
 
     state = tomllib.loads((real / "config.toml").read_text(encoding="utf-8"))["hooks"]["state"]
-    assert state[f"{pane}/hooks.json:stop:0:0"] == {"trusted_hash": "sha256:aaaa"}
-    assert state[f"{pane}/hooks.json:session_start:0:0"] == {"trusted_hash": "sha256:bbbb"}
+    pane_key = str(pane / "hooks.json")
+    assert state[f"{pane_key}:stop:0:0"] == {"trusted_hash": "sha256:aaaa"}
+    assert state[f"{pane_key}:session_start:0:0"] == {"trusted_hash": "sha256:bbbb"}
     # Plugin-keyed entries are not path-bound and are left alone.
-    assert f"{pane}/hooks.json:hooks/hooks.json:stop:0:0" not in state
+    assert f"{pane_key}:hooks/hooks.json:stop:0:0" not in state
     assert len(state) == 5
     # Idempotent: a second spawn of the same home appends nothing.
     assert manager.seed_hook_trust(pane) == 0
@@ -485,4 +493,4 @@ def test_seed_hook_trust_escapes_backslashes_in_toml_keys(tmp_path: Path) -> Non
     )
     assert manager.seed_hook_trust(pane) == 1
     state = tomllib.loads((real / "config.toml").read_text(encoding="utf-8"))["hooks"]["state"]
-    assert state[f"{pane}/hooks.json:stop:0:0"] == {"trusted_hash": "sha256:aaaa"}
+    assert state[f'{pane / "hooks.json"}:stop:0:0'] == {"trusted_hash": "sha256:aaaa"}

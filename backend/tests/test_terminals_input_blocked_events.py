@@ -78,7 +78,14 @@ def _make() -> tuple[TerminalService, SimpleNamespace, _BlockableHandle, list]:
 
 
 def _types(events: list) -> list[str]:
-    return [e["type"] for e in events]
+    """The named events, in order.
+
+    An EventSink takes terminal output as raw frames as well (terminals.py:99),
+    and the one test here that spawns a real PTY gets them: ConPTY writes a
+    repaint sequence as soon as it opens, where a POSIX pty stays silent for
+    `sleep`. Those frames are not what this file is about.
+    """
+    return [e["type"] for e in events if isinstance(e, dict)]
 
 
 @pytest.mark.asyncio
