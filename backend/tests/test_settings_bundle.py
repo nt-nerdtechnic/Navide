@@ -281,6 +281,72 @@ def test_a_secret_pasted_into_args_or_a_url_does_travel(settings, mcp_store, ski
 
     assert "SEKRIT-in-args" in serialized
     assert "SEKRIT-in-url" in serialized
+    # ... and the picker is told, because a value that travels unasked is a
+    # leak and one the user was warned about is a choice.
+    rows = {row["id"]: row for row in settings_bundle.inventory()["mcp"]}
+    assert rows["inline"]["mayLeakInArgsOrUrl"] is True
+    assert rows["query"]["mayLeakInArgsOrUrl"] is True
+
+
+def test_the_two_secret_flags_are_independent(settings, mcp_store, skills):
+    """hasSecrets = env/headers have values and will be stripped;
+    mayLeakInArgsOrUrl = args/url look like they carry a credential and will
+    not be. One record can be either, both, or neither."""
+    mcp_store.replace_servers(
+        [
+            {"name": "neither", "transport": "stdio", "command": "npx", "args": ["-y", "pkg"]},
+            {"name": "env-only", "transport": "stdio", "command": "npx", "env": {"API_KEY": "x"}},
+            {
+                "name": "args-only",
+                "transport": "stdio",
+                "command": "npx",
+                "args": ["--token=SEKRIT"],
+            },
+            {
+                "name": "both",
+                "transport": "http",
+                "url": "https://example.test/mcp?api_key=SEKRIT",
+                "headers": {"Authorization": "Bearer x"},
+            },
+        ]
+    )
+
+    rows = {row["id"]: row for row in settings_bundle.inventory()["mcp"]}
+
+    flags = {
+        name: (row["hasSecrets"], row["mayLeakInArgsOrUrl"]) for name, row in rows.items()
+    }
+    assert flags == {
+        "neither": (False, False),
+        "env-only": (True, False),
+        "args-only": (False, True),
+        "both": (True, True),
+    }
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "--api-key=abc",
+        "token: abc",
+        "Bearer abc",
+        "https://h.test/?secret=abc",
+        "https://h.test/?password=abc",
+        "0123456789abcdef0123456789abcdef",  # 32 hex — a typical API key
+        "ghp_" + "A" * 40,  # a long opaque run
+    ],
+)
+def test_token_like_text_in_args_or_url_is_flagged(text):
+    assert settings_bundle.may_leak_in_carried_fields({"args": [text]}) is True
+    assert settings_bundle.may_leak_in_carried_fields({"url": text}) is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["-y", "@upstash/context7-mcp", "https://example.test/mcp", "--port=8080", "run", "serve"],
+)
+def test_ordinary_arguments_are_not_flagged(text):
+    assert settings_bundle.may_leak_in_carried_fields({"args": [text], "url": text}) is False
 
 
 # ── partial failure ──────────────────────────────────────────────────────────

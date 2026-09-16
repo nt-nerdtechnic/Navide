@@ -274,7 +274,10 @@ onMounted(load)
           <li v-for="device in devices" :key="device.deviceId" class="sc-device">
             <span class="sc-device-name">{{ deviceLabel(device.deviceId, device.deviceName) }}</span>
             <span class="sc-device-when">
-              {{ t('settings.sharing.cloud.last-write', { when: device.lastWriteAt }) }}
+              {{ t('settings.sharing.cloud.last-write', { when: device.lastWriteAt || '—' }) }}
+            </span>
+            <span class="sc-device-when">
+              {{ t('settings.sharing.cloud.last-seen', { when: device.lastSeenAt || '—' }) }}
             </span>
           </li>
         </ul>
@@ -472,7 +475,8 @@ onMounted(load)
 .sc-device {
   display: flex;
   justify-content: space-between;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 4px 12px;
   padding: 3px 0;
   font-size: var(--font-row-desc);
   min-width: 0;

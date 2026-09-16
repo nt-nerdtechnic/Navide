@@ -59,7 +59,10 @@ const resultRows = ref<ImportResultRow[]>([])
 const stripped = ref<Set<string>>(new Set())
 
 const eligibleCount = computed(() =>
-  SHARE_SCOPES.reduce((n, scope) => n + items.value[scope].filter((i) => i.eligible).length, 0),
+  SHARE_SCOPES.reduce(
+    (n, scope) => n + items.value[scope].filter((i) => i.eligible && !i.mayLeakInArgsOrUrl).length,
+    0,
+  ),
 )
 const pickedCount = computed(() => picked.value.size)
 const importable = computed(() => previewRows.value.filter((row) => row.action !== 'skip'))
@@ -86,7 +89,11 @@ function pickAll(on: boolean): void {
   }
   const next = new Set<string>()
   for (const scope of SHARE_SCOPES) {
-    for (const item of items.value[scope]) if (item.eligible) next.add(keyOf(scope, item.id))
+    for (const item of items.value[scope]) {
+      // Never swept in: an item whose args/url may carry a token goes out
+      // unstripped, so it is only packed when ticked by hand.
+      if (item.eligible && !item.mayLeakInArgsOrUrl) next.add(keyOf(scope, item.id))
+    }
   }
   picked.value = next
 }
@@ -339,6 +346,9 @@ onMounted(load)
               <span v-if="item.hasSecrets" class="sh-tag sh-tag--secret">
                 {{ t('settings.sharing.bundle.has-secrets') }}
               </span>
+              <span v-if="item.mayLeakInArgsOrUrl" class="sh-tag sh-tag--leak">
+                {{ t('settings.sharing.bundle.may-leak') }}
+              </span>
               <span v-if="!item.eligible" class="sh-tag sh-tag--blocked">
                 {{ t('settings.sharing.bundle.not-eligible') }}
               </span>
@@ -346,6 +356,10 @@ onMounted(load)
             <span v-if="!item.eligible && item.reason" class="sh-item-reason">{{ item.reason }}</span>
             <span v-else-if="item.hasSecrets" class="sh-item-reason">
               {{ t('settings.sharing.bundle.secrets-hint') }}
+            </span>
+            <!-- Not neutral: this one is NOT stripped and goes out as it is. -->
+            <span v-if="item.eligible && item.mayLeakInArgsOrUrl" class="sh-item-warn">
+              {{ t('settings.sharing.bundle.may-leak-hint') }}
             </span>
           </label>
         </li>
@@ -603,6 +617,15 @@ onMounted(load)
 .sh-tag--secret {
   border-color: var(--border-warning, #b58a2b);
   color: var(--text-warning, #d8a63d);
+}
+.sh-tag--leak {
+  border-color: var(--border-danger, #a8533f);
+  color: var(--text-danger, #e07060);
+  font-weight: 600;
+}
+.sh-item-warn {
+  font-size: var(--font-row-desc);
+  color: var(--text-danger, #e07060);
 }
 .sh-tag--overwrite {
   border-color: var(--border-warning, #b58a2b);

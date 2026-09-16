@@ -336,3 +336,46 @@ async def test_pull_items_refuses_to_apply_over_an_unpushed_edit(tmp_path, accou
     assert results == [{"itemId": "p2", "result": "conflict"}]
     assert b.adapter.items["p2"] == {"id": "p2", "prompt": "only on b"}
     assert b.store.conflict_ids("prompts") == {"p2"}
+
+
+# ── the device list beside the items ─────────────────────────────────────────
+def _scopes_with_writes() -> dict:
+    def item(device: str, at: str) -> dict:
+        return {"itemId": f"i-{at}", "local": None, "state": "remote-only",
+                "remote": {"present": True, "deviceId": device, "updatedAt": at}}
+
+    return {
+        "prompts": {"items": [item("dev-a", "2026-09-01T00:00:00+00:00"),
+                              item("dev-a", "2026-09-03T00:00:00+00:00")]},
+        "mcp": {"items": [item("dev-b", "2026-09-02T00:00:00+00:00")]},
+    }
+
+
+def test_devices_carry_both_timestamps_when_the_server_answers():
+    from agent_team_backend import server_link
+
+    directory = {"ok": True, "payload": {"devices": [
+        {"deviceId": "dev-a", "deviceName": "Studio", "lastSeenAt": "2026-09-10T00:00:00+00:00"},
+        {"deviceId": "dev-b", "deviceName": "", "lastSeenAt": None},
+    ]}}
+
+    rows = server_link._inventory_devices(_scopes_with_writes(), directory)  # noqa: SLF001
+
+    assert rows == [
+        {"deviceId": "dev-a", "deviceName": "Studio",
+         "lastSeenAt": "2026-09-10T00:00:00+00:00", "lastWriteAt": "2026-09-03T00:00:00+00:00"},
+        {"deviceId": "dev-b", "deviceName": "",
+         "lastSeenAt": None, "lastWriteAt": "2026-09-02T00:00:00+00:00"},
+    ]
+
+
+@pytest.mark.parametrize("directory", [None, {"ok": False, "error": {"code": "AUTH_REQUIRED"}}])
+def test_devices_still_list_when_the_server_will_not_name_them(directory):
+    """A missing name is not a reason to hide the records that are there."""
+    from agent_team_backend import server_link
+
+    rows = server_link._inventory_devices(_scopes_with_writes(), directory)  # noqa: SLF001
+
+    assert [r["deviceId"] for r in rows] == ["dev-a", "dev-b"]
+    assert all(r["deviceName"] == "" and r["lastSeenAt"] is None for r in rows)
+    assert rows[0]["lastWriteAt"] == "2026-09-03T00:00:00+00:00"

@@ -1012,9 +1012,20 @@ class ServerLink:
         try:
             if not await asyncio.to_thread(sync_keyring.has_account_key):
                 return False
-            recipient = remote_roster.public_key_for(device_id)
+            # The recipient key comes from the pin the pairing wrote — the one
+            # the six digits covered — and never from the directory. The
+            # directory is the relay's word, and a relay that could name the
+            # recipient here would be handed every record in the account. A
+            # pin taken before the encryption key was part of the exchange
+            # has none, and is refused rather than completed from the
+            # directory: pairing again is the fix, not trusting the relay once.
+            recipient = await asyncio.to_thread(trust_store.pinned_encryption_key, device_id)
             if not recipient:
-                log.info("cannot hand the sync key to %s: it has published no key", device_id)
+                log.warning(
+                    "not handing the sync key to %s: its pairing pinned no encryption "
+                    "key; pair the two machines again",
+                    device_id,
+                )
                 return False
             wrapped = await asyncio.to_thread(
                 sync_keyring.wrap_for,
@@ -1678,6 +1689,59 @@ class ServerLink:
                 self.email_verified = True
         return reply
 
+    # ---- cross-account shares ----
+
+    async def _carry(self, msg_type: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """One request over the authenticated link, in the reply-frame shape.
+
+        Same contract as ``set_policy`` and ``resend_verification``: the
+        server's reply frame, or a locally minted error frame naming the link
+        state when the request cannot leave this machine. Nothing is retried
+        and nothing is interpreted — the server's own codes come through as
+        they are, so the handler can show them.
+        """
+        if self._ws is None or not self._authenticated:
+            return self._unavailable()
+        try:
+            return await self._request(msg_type, payload)
+        except Exception as err:  # noqa: BLE001
+            log.warning("navide-server %s failed: %s", msg_type, err)
+            return {
+                "ok": False,
+                "error": {
+                    "code": LINK_OFFLINE,
+                    "message": (
+                        f"the navide-server link failed mid-request ({err}); it "
+                        f"reconnects on its own, so retry shortly"
+                    ),
+                },
+            }
+
+    async def create_share(
+        self, *, blob: str, size_bytes: int, ttl_seconds: int
+    ) -> dict[str, Any]:
+        """Store one sealed bundle. The server sees the ciphertext and its size;
+        the key never appears in this payload because there is no field for it."""
+        return await self._carry(
+            "shares.create",
+            {"blob": blob, "sizeBytes": size_bytes, "ttlSeconds": ttl_seconds},
+        )
+
+    async def claim_share(self, share_id: str) -> dict[str, Any]:
+        """Fetch one sealed bundle by id. Opening it is the caller's job."""
+        return await self._carry("shares.claim", {"shareId": share_id})
+
+    async def list_shares(self) -> dict[str, Any]:
+        """The shares this account published and has not revoked."""
+        return await self._carry("shares.list", {})
+
+    async def revoke_share(self, share_id: str) -> dict[str, Any]:
+        return await self._carry("shares.revoke", {"shareId": share_id})
+
+    async def list_devices(self) -> dict[str, Any]:
+        """The account's devices as the server knows them, for the sharing view."""
+        return await self._carry("devices.list", {})
+
     async def _on_account_verified(self) -> None:
         """The server says this account's address is confirmed."""
         if self.email_verified:
@@ -2098,8 +2162,24 @@ class ServerLink:
         into cleartext, and nothing on either end would say so. Once a peer has
         been seen with a key, a message that cannot be sealed is refused
         instead.
+
+        *A pinned encryption key outranks the directory.* A completed pairing
+        pins the X25519 key the six digits covered, and for that device the
+        message is sealed to the pin. A directory that then advertises some
+        other key is the substitution the pin exists to catch, and the send is
+        refused rather than addressed to whoever the relay named. A pin taken
+        before the encryption key was part of the exchange holds none, and for
+        that device the two rules above still apply as they always did.
         """
         key = remote_roster.public_key_for(to_device)
+        pinned = await asyncio.to_thread(trust_store.pinned_encryption_key, to_device)
+        if pinned:
+            if key and key != pinned:
+                raise device_crypto.CryptoError(
+                    "the directory names a different encryption key for this device "
+                    "than the one its pairing pinned"
+                )
+            key = pinned
         if key:
             sealed = {
                 "cipher": device_crypto.seal(
@@ -2702,12 +2782,18 @@ class ServerLink:
             return
 
         name = self._device_name_for(device_id)
+        # Their encryption key, from the frame and only the frame. It is
+        # covered by the six digits exactly as the signing key is, and a
+        # frame without one is refused by device_pairing rather than
+        # completed from the directory.
+        their_enc_key = str(frame.get("encKey") or "")
         try:
             if kind == device_pairing.PAIR_REQUEST:
                 pairing = device_pairing.accept_request(
                     device_id,
                     device_name=name,
                     their_key=key,
+                    their_enc_key=their_enc_key,
                     their_nonce=str(frame.get("nonce") or ""),
                 )
                 await self._send_pair_frame(
@@ -2715,10 +2801,14 @@ class ServerLink:
                     device_pairing.PAIR_RESPONSE,
                     nonce=pairing.our_nonce,
                     signKey=await asyncio.to_thread(device_signing.public_key),
+                    encKey=await asyncio.to_thread(device_crypto.public_key),
                 )
             elif kind == device_pairing.PAIR_RESPONSE:
                 device_pairing.accept_response(
-                    device_id, their_key=key, their_nonce=str(frame.get("nonce") or "")
+                    device_id,
+                    their_key=key,
+                    their_enc_key=their_enc_key,
+                    their_nonce=str(frame.get("nonce") or ""),
                 )
             elif kind in (SYNC_KEY_REQUEST, SYNC_KEY_OFFER):
                 # Only between devices that already paired. The pairing kinds
@@ -2784,6 +2874,7 @@ class ServerLink:
                 trust_store.pin_paired_device,
                 device_id,
                 sign_key=pairing.their_key,
+                enc_key=pairing.their_enc_key,
                 member_id=member_id or member_id_for(device_id),
                 own_member_id=self._own_member,
             )
@@ -2835,6 +2926,7 @@ class ServerLink:
             device_pairing.PAIR_REQUEST,
             nonce=pairing.our_nonce,
             signKey=await asyncio.to_thread(device_signing.public_key),
+            encKey=await asyncio.to_thread(device_crypto.public_key),
         )
         if not sent:
             # Nothing is left half-started: the other side has heard nothing, so
@@ -2880,6 +2972,7 @@ class ServerLink:
     def pairing_rows(self) -> list[dict[str, Any]]:
         """The in-flight exchanges, as the account view draws them."""
         our_key = device_signing.public_key()
+        our_enc_key = device_crypto.public_key()
         rows = []
         for pairing in device_pairing.active():
             rows.append(
@@ -2888,7 +2981,9 @@ class ServerLink:
                     "deviceName": pairing.device_name or self._device_name_for(pairing.device_id),
                     "role": pairing.role,
                     "state": pairing.state,
-                    "code": device_pairing.code_for(pairing, our_key=our_key),
+                    "code": device_pairing.code_for(
+                        pairing, our_key=our_key, our_enc_key=our_enc_key
+                    ),
                     "fingerprint": device_signing.fingerprint(pairing.their_key),
                     "startedAt": pairing.started_at,
                 }
@@ -3334,32 +3429,50 @@ async def sync_inventory(scope: str = "") -> dict[str, Any]:
                     "error": str(err),
                     "items": [],
                 }
+    directory = await list_devices() if connected else None
     return {
         "status": engine_mod.INVENTORY_OK if connected else engine_mod.INVENTORY_NOT_CONNECTED,
         "scopes": scopes,
-        "devices": _inventory_devices(scopes),
+        "devices": _inventory_devices(scopes, directory),
         "scopeEnabled": enabled,
     }
 
 
-def _inventory_devices(scopes: dict[str, Any]) -> list[dict[str, Any]]:
+def _inventory_devices(
+    scopes: dict[str, Any], directory: dict[str, Any] | None
+) -> list[dict[str, Any]]:
     """The devices the listed cloud rows were written by, newest write first.
 
+    Two timestamps, named apart because they answer different questions.
     ``lastWriteAt`` is the newest ``updatedAt`` this account's rows carry for
-    that device — when it last *wrote*, not when it was last online. The two
-    are named apart because a machine that has been on all week and changed
-    nothing would otherwise look like one that went away in March.
+    the device — when it last *wrote* — and is derived here from the rows
+    themselves. ``lastSeenAt`` is when the server last saw the device online,
+    from ``devices.list``. A machine that has been on all week and changed
+    nothing has a fresh ``lastSeenAt`` and a stale ``lastWriteAt``; showing
+    only one of them would make it look like one that went away in March.
 
-    ``deviceName`` is whatever the session directory happens to know, which
-    today is nothing: the server does not put a name on session rows, and the
-    directory only lists a device that has a live session. A machine that wrote
-    records and left is therefore named by its id — which is what addresses it
-    anyway. Filled in for real once the server can be asked.
+    ``directory`` is the ``devices.list`` reply frame, or None when it could
+    not be asked. Then ``deviceName`` falls back to what the session directory
+    knows (today: nothing) and ``lastSeenAt`` to null; the rows are still
+    listed, because a name the server would not give is not a reason to hide
+    the records it did.
     """
     names = {
         str(row.get("deviceId") or ""): str(row.get("deviceName") or "")
         for row in remote_roster.list_devices()
     }
+    seen: dict[str, str | None] = {}
+    payload = directory.get("payload") if directory and directory.get("ok") else None
+    listed = payload.get("devices") if isinstance(payload, dict) else None
+    for row in listed if isinstance(listed, list) else []:
+        if not isinstance(row, dict):
+            continue
+        device_id = str(row.get("deviceId") or "")
+        if not device_id:
+            continue
+        if row.get("deviceName"):
+            names[device_id] = str(row["deviceName"])
+        seen[device_id] = str(row["lastSeenAt"]) if row.get("lastSeenAt") else None
     latest: dict[str, str] = {}
     for scope_row in scopes.values():
         for item in scope_row.get("items") or []:
@@ -3375,6 +3488,7 @@ def _inventory_devices(scopes: dict[str, Any]) -> list[dict[str, Any]]:
             {
                 "deviceId": device_id,
                 "deviceName": names.get(device_id, ""),
+                "lastSeenAt": seen.get(device_id),
                 "lastWriteAt": written_at,
             }
             for device_id, written_at in latest.items()
@@ -3647,6 +3761,38 @@ async def check_verification() -> dict[str, Any] | None:
     if _link is None:
         return None
     return await _link.check_verification()
+
+
+# Cross-account shares. None with no server configured, same as everything
+# above; every other outcome is a reply frame, the server's or a local one.
+async def create_share(*, blob: str, size_bytes: int, ttl_seconds: int) -> dict[str, Any] | None:
+    if _link is None:
+        return None
+    return await _link.create_share(blob=blob, size_bytes=size_bytes, ttl_seconds=ttl_seconds)
+
+
+async def claim_share(share_id: str) -> dict[str, Any] | None:
+    if _link is None:
+        return None
+    return await _link.claim_share(share_id)
+
+
+async def list_shares() -> dict[str, Any] | None:
+    if _link is None:
+        return None
+    return await _link.list_shares()
+
+
+async def revoke_share(share_id: str) -> dict[str, Any] | None:
+    if _link is None:
+        return None
+    return await _link.revoke_share(share_id)
+
+
+async def list_devices() -> dict[str, Any] | None:
+    if _link is None:
+        return None
+    return await _link.list_devices()
 
 
 def roster_changed() -> None:

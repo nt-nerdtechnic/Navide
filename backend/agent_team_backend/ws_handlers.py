@@ -4301,6 +4301,219 @@ async def share_import_apply(session: "Session", msg_id: str, msg_type: str, pay
     )
 
 
+# ── Cross-account shares (share.publish / claim / list / revoke) ─────────────
+# The four handlers above build and apply a bundle on this machine; these move
+# one through navide-server to a *different* account. The seam between the two
+# is the share code: publish seals a bundle under a key the server never sees
+# and hands the code back, claim turns a code back into the bundle and stops
+# there — the window takes it to share.import_preview, the same path a bundle
+# read from a file takes. Nothing here applies anything.
+_SHARE_TTL_DEFAULT_S = 24 * 3600
+
+
+async def _share_code_call(
+    session: "Session",
+    msg_id: str,
+    msg_type: str,
+    work: Callable[[], Any],
+) -> Any:
+    """Run one share_codes call off the loop, answering an error itself.
+
+    The same shape as ``_share_call``, for the other module: sealing gzips and
+    encrypts, opening does the reverse plus a JSON parse, and a bundle near the
+    limit is enough work to keep off the event loop.
+    """
+    from . import share_codes
+
+    try:
+        return await asyncio.to_thread(work)
+    except share_codes.ShareCodeError as err:
+        await session.send_json(make_error(msg_id, msg_type, err.code, err.message, err.details))
+        return None
+
+
+async def _share_link_reply(
+    session: "Session",
+    msg_id: str,
+    msg_type: str,
+    reply: dict | None,
+    fallback_code: str,
+) -> dict | None:
+    """Unwrap a server_link reply frame into its payload, answering errors itself.
+
+    None from the link means no server is configured — the same meaning it has
+    for every other ``server_link`` wrapper. The server's own codes come
+    through unchanged so the window can show them (a claim of a revoked share
+    is the server's word, not this side's guess).
+    """
+    if reply is None:
+        await session.send_json(
+            make_error(
+                msg_id,
+                msg_type,
+                "P2P_NOT_CONFIGURED",
+                "no navide-server is configured, so there is nowhere to send a share",
+            )
+        )
+        return None
+    if not reply.get("ok"):
+        error = reply.get("error") if isinstance(reply.get("error"), dict) else {}
+        await session.send_json(
+            make_error(
+                msg_id,
+                msg_type,
+                str(error.get("code") or fallback_code),
+                str(error.get("message") or "the navide-server refused the request"),
+            )
+        )
+        return None
+    result = reply.get("payload")
+    return result if isinstance(result, dict) else {}
+
+
+@handler("share.publish")
+async def share_publish(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """Seal one bundle, store the ciphertext on the server, hand back the code.
+
+    The size gate runs before the request leaves: over the server's frame
+    limit the connection is closed at the framing layer, which the user sees
+    as a disconnect and nothing else. The error minted here names the file
+    export as the way out instead.
+    """
+    from . import share_codes
+
+    bundle = payload.get("bundle")
+    if not isinstance(bundle, dict):
+        await session.send_json(
+            make_error(msg_id, msg_type, "INVALID_BUNDLE", "bundle must be an object")
+        )
+        return
+    ttl = payload.get("ttlSeconds")
+    if not isinstance(ttl, int) or isinstance(ttl, bool) or ttl <= 0:
+        ttl = _SHARE_TTL_DEFAULT_S
+
+    def seal() -> tuple[bytes, str]:
+        key = share_codes.new_key()
+        blob = share_codes.seal_bundle(bundle, key)
+        share_codes.ensure_blob_within_limit(blob)
+        return key, blob
+
+    sealed = await _share_code_call(session, msg_id, msg_type, seal)
+    if sealed is None:
+        return
+    key, blob = sealed
+    result = await _share_link_reply(
+        session,
+        msg_id,
+        msg_type,
+        await server_link.create_share(blob=blob, size_bytes=len(blob), ttl_seconds=ttl),
+        "SHARE_PUBLISH_FAILED",
+    )
+    if result is None:
+        return
+    share_id = str(result.get("shareId") or "")
+    code = await _share_code_call(
+        session, msg_id, msg_type, lambda: share_codes.encode_share_code(share_id, key)
+    )
+    if code is None:
+        return
+    await session.send_json(
+        make_response(
+            msg_id,
+            msg_type,
+            {
+                "code": code,
+                "shareId": share_codes.normalize_share_id(share_id),
+                "expiresAt": result.get("expiresAt"),
+            },
+        )
+    )
+
+
+@handler("share.claim")
+async def share_claim(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """Turn a share code back into the bundle it names, and stop there.
+
+    A mistyped code is refused by its checksum before anything is asked of the
+    server, so "no such share" only ever means the server said so.
+    """
+    from . import share_codes
+
+    code = payload.get("code")
+    if not isinstance(code, str) or not code.strip():
+        await session.send_json(
+            make_error(msg_id, msg_type, "INVALID_SHARE_CODE", "code must be a non-empty string")
+        )
+        return
+    decoded = await _share_code_call(
+        session, msg_id, msg_type, lambda: share_codes.decode_share_code(code)
+    )
+    if decoded is None:
+        return
+    share_id, key = decoded
+    result = await _share_link_reply(
+        session, msg_id, msg_type, await server_link.claim_share(share_id), "SHARE_CLAIM_FAILED"
+    )
+    if result is None:
+        return
+    blob = result.get("blob")
+    if not isinstance(blob, str) or not blob:
+        await session.send_json(
+            make_error(
+                msg_id, msg_type, "SHARE_CLAIM_FAILED", "the navide-server returned no document"
+            )
+        )
+        return
+    bundle = await _share_code_call(
+        session, msg_id, msg_type, lambda: share_codes.open_bundle(blob, key)
+    )
+    if bundle is None:
+        return
+    await session.send_json(
+        make_response(msg_id, msg_type, {"bundle": bundle, "shareId": share_id})
+    )
+
+
+@handler("share.list_published")
+async def share_list_published(
+    session: "Session", msg_id: str, msg_type: str, payload: dict
+) -> None:
+    result = await _share_link_reply(
+        session, msg_id, msg_type, await server_link.list_shares(), "SHARE_LIST_FAILED"
+    )
+    if result is None:
+        return
+    shares = result.get("shares")
+    await session.send_json(
+        make_response(msg_id, msg_type, {"shares": shares if isinstance(shares, list) else []})
+    )
+
+
+@handler("share.revoke_published")
+async def share_revoke_published(
+    session: "Session", msg_id: str, msg_type: str, payload: dict
+) -> None:
+    from . import share_codes
+
+    raw = payload.get("shareId")
+    if not isinstance(raw, str) or not raw.strip():
+        await session.send_json(
+            make_error(msg_id, msg_type, "BAD_SHARE_ID", "shareId must be a non-empty string")
+        )
+        return
+    try:
+        share_id = share_codes.normalize_share_id(raw)
+    except share_codes.ShareCodeError as err:
+        await session.send_json(make_error(msg_id, msg_type, err.code, err.message, err.details))
+        return
+    result = await _share_link_reply(
+        session, msg_id, msg_type, await server_link.revoke_share(share_id), "SHARE_REVOKE_FAILED"
+    )
+    if result is None:
+        return
+    await session.send_json(make_response(msg_id, msg_type, {"ok": True, "shareId": share_id}))
+
+
 # ── Roles registry (roles.*) ────────────────────────────────────────────────
 async def _broadcast_stage_role_changes(pipeline_ids: list[str], reason: str) -> None:
     """Publish the rewritten stages of every pipeline a role edit touched.

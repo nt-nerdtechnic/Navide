@@ -37,7 +37,10 @@ export interface ShareItem {
   id: string
   label: string
   size: number
+  /** env/header values are present and will be stripped on export. */
   hasSecrets: boolean
+  /** args or url look like they carry a token, and export sends them as-is. */
+  mayLeakInArgsOrUrl: boolean
   eligible: boolean
   reason: string
 }
@@ -53,6 +56,7 @@ export function readShareInventory(payload: unknown): Record<ShareScope, ShareIt
         label: str(row.label) || str(row.id),
         size: typeof row.size === 'number' ? row.size : 0,
         hasSecrets: Boolean(row.hasSecrets),
+        mayLeakInArgsOrUrl: Boolean(row.mayLeakInArgsOrUrl),
         // An item is shareable unless the backend says otherwise; a missing
         // flag must not silently grey out everything on an older backend.
         eligible: row.eligible === undefined ? true : Boolean(row.eligible),
@@ -194,6 +198,9 @@ export interface SyncScopeView {
 export interface SyncDevice {
   deviceId: string
   deviceName: string
+  /** Last time the server saw the device online; '' when it never said. */
+  lastSeenAt: string
+  /** Last time the device wrote a record to this account. */
   lastWriteAt: string
 }
 
@@ -253,9 +260,10 @@ export function readSyncInventory(payload: unknown): SyncInventoryView {
     .map((row) => ({
       deviceId: str(row.deviceId),
       deviceName: str(row.deviceName),
-      // The server does not name session rows yet, so this is routinely the
-      // only timestamp a device has; `lastSeen` is the older spelling.
-      lastWriteAt: str(row.lastWriteAt) || str(row.lastSeen),
+      // Two different questions, kept apart: a machine that has been online
+      // all week and changed nothing must not look like one that wrote today.
+      lastSeenAt: str(row.lastSeenAt),
+      lastWriteAt: str(row.lastWriteAt),
     }))
     // A device with no name is still a device. Dropping it here would hide
     // every machine on today's server, which names none of them.

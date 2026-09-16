@@ -31,6 +31,7 @@ import copy
 import json
 import logging
 import platform
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -54,6 +55,22 @@ MAX_BUNDLE_BYTES = 8 * 1024 * 1024
 
 #: Server fields whose *values* are secrets whatever they happen to be called.
 SECRET_FIELDS: tuple[str, ...] = ("env", "headers")
+
+#: Fields that travel verbatim because they are what makes a record runnable.
+#: They are only ever *inspected* for something that looks like a credential —
+#: a name that says "key=" or "token=", a bearer word, a long hex or base64 run
+#: — so the picker can warn. Never redacted: a heuristic that cleared a real
+#: argument would hand over a server that cannot start, and one that missed a
+#: token would hand over a false "this is clean". A warning that is sometimes
+#: unneeded is the cheaper mistake.
+CARRIED_FIELDS: tuple[str, ...] = ("args", "url")
+_SECRET_HINT_RE = re.compile(
+    r"(?:api[_-]?key|secret|token|passw(?:or)?d|auth|credential|bearer)\s*[=:]"
+    r"|\bbearer\b"
+    r"|(?<![0-9a-fA-F])[0-9a-fA-F]{32,}(?![0-9a-fA-F])"
+    r"|(?<![A-Za-z0-9+/_-])[A-Za-z0-9+/_-]{40,}={0,2}(?![A-Za-z0-9+/_-])",
+    re.IGNORECASE,
+)
 
 CREATE = "create"
 OVERWRITE = "overwrite"
@@ -82,6 +99,8 @@ class Candidate:
     payload: dict[str, Any] | None = None
     #: Field paths whose values were stripped on the way in.
     redacted: tuple[str, ...] = ()
+    #: Something in args or url looks like a credential and will travel as-is.
+    may_leak: bool = False
     eligible: bool = True
     reason: str = ""
 
@@ -95,6 +114,7 @@ class Candidate:
             "label": self.label,
             "size": self.size,
             "hasSecrets": bool(self.redacted),
+            "mayLeakInArgsOrUrl": self.may_leak,
             "eligible": self.eligible,
             "reason": self.reason,
         }
@@ -147,6 +167,7 @@ def _collect_mcp() -> list[Candidate]:
                 label=name,
                 payload=payload,
                 redacted=redacted,
+                may_leak=may_leak_in_carried_fields(raw),
             )
         )
     return out
@@ -236,6 +257,20 @@ def strip_secrets(server: dict[str, Any]) -> tuple[dict[str, Any], tuple[str, ..
                 redacted.append(f"{field_name}.{key}")
             values[key] = ""
     return record, tuple(redacted)
+
+
+def may_leak_in_carried_fields(server: dict[str, Any]) -> bool:
+    """Whether args or url carry something that reads like a credential.
+
+    A warning, not a verdict: the fields are sent verbatim either way (see
+    ``CARRIED_FIELDS``), and this only decides whether the picker says so.
+    """
+    for field_name in CARRIED_FIELDS:
+        value = server.get(field_name)
+        parts = value if isinstance(value, list) else [value]
+        if any(isinstance(part, str) and _SECRET_HINT_RE.search(part) for part in parts):
+            return True
+    return False
 
 
 # ── export ───────────────────────────────────────────────────────────────────
