@@ -184,3 +184,24 @@ describe('an account switch lets go of the quota flag', () => {
     }
   })
 })
+
+describe('a limit hit is reported to the quota ledger once', () => {
+  it('sends tokens.quota_exhausted on the first detection, after the early return for an already-flagged pane', () => {
+    // The backend's own exhausted_at comes from a 15-minute usage poll; the
+    // pane's detection is earlier and so is the truer stamp for the cycle.
+    // It must sit below the `usageLimitAt != null` return so a repaint of the
+    // same message never re-sends it, and above the refresh so it goes out
+    // even when the refresh path bails.
+    const check = appSource.slice(appSource.indexOf('function checkPaneUsageLimit('))
+    const flagged = check.indexOf('if (pane.usageLimitAt != null) {')
+    const send = check.indexOf("sendQuiet('tokens.quota_exhausted'")
+    const refresh = check.indexOf('refreshUsage(pane.agentKey')
+    expect(flagged).toBeGreaterThan(-1)
+    expect(send).toBeGreaterThan(flagged)
+    expect(send).toBeLessThan(refresh)
+    const payload = check.slice(send, check.indexOf('})', send))
+    expect(payload).toContain('agent_key: pane.agentKey')
+    expect(payload).toContain('pane_id: pane.id')
+    expect(payload).toContain('at: new Date(now).toISOString()')
+  })
+})

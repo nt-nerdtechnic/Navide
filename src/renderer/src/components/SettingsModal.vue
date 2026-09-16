@@ -68,12 +68,6 @@ import {
   type PolicyDocument,
 } from '../lib/panePolicy'
 import { CLI_AGENT_SPECS } from '@navide/plugin-shell'
-import {
-  LOOP_PROMPT_SETTING_KEY,
-  DEFAULT_LOOP_PROMPT,
-  LOOP_RESUME_SETTING_KEY,
-  DEFAULT_LOOP_RESUME,
-} from '../lib/loopPrompt'
 import { useUpdater } from '../composables/useUpdater'
 import { updateStages } from '../lib/updaterStages'
 import type { UpdateChannel } from '../../../shared/updater'
@@ -103,7 +97,6 @@ import SkillsPane from './SkillsPane.vue'
 import PromptSkillsPane from './PromptSkillsPane.vue'
 import SyncSettings from './SyncSettings.vue'
 import MemoryPane from './MemoryPane.vue'
-import SharingPane from './SharingPane.vue'
 import StatusBadgeSettingsPane from './StatusBadgeSettingsPane.vue'
 import NavideCloudMark from './NavideCloudMark.vue'
 import SettingsNavItem from './settings/SettingsNavItem.vue'
@@ -200,7 +193,7 @@ const reclaimNowCount = computed(() => props.reclaimableNowCount ?? 0)
 const reclaimNowSize = computed(() => formatBytes(props.reclaimableNowBytes ?? 0))
 
 // ── Tab ───────────────────────────────────────────────────────────────────────
-type Tab = 'mcp' | 'skills' | 'prompts' | 'memory' | 'sharing' | 'analyzer' | 'cliAgents' | 'general' | 'cross-device' | 'updates' | 'appearance' | 'statusBadges' | 'layout' | 'accounts' | 'extensions' | 'executionPolicy' | 'keybindings' | 'help'
+type Tab = 'mcp' | 'skills' | 'prompts' | 'memory' | 'analyzer' | 'cliAgents' | 'general' | 'cross-device' | 'updates' | 'appearance' | 'statusBadges' | 'layout' | 'accounts' | 'extensions' | 'executionPolicy' | 'keybindings' | 'help'
 
 /** Topics inside the Help tab — read-only reference material, no settings. */
 type HelpTopic =
@@ -586,15 +579,6 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
     keywords: 'update updates version check auto download channel stable beta release notes 更新 版本 檢查 自動下載 頻道 穩定版 測試版',
   },
   {
-    id: 'general-loop-prompt',
-    tab: 'general',
-    section: 'general-loop-prompt',
-    title: t('settings.search.item.general-loop-prompt.title'),
-    group: t('settings.nav.group.general'),
-    summary: t('settings.search.item.general-loop-prompt.summary'),
-    keywords: 'loop prompt 循環 提示詞 迴圈 continuous development 持續開發 pane button resume 續跑 session limit 上限',
-  },
-  {
     id: 'general-resume-behavior',
     tab: 'general',
     section: 'general-resume-behavior',
@@ -848,17 +832,6 @@ function onHealthTimeoutChange(raw: string): void {
   if (Number.isFinite(n)) setHealthCheckTimeoutSec(n)
 }
 
-// Loop prompt sent to a CLI pane when its loop button is clicked, and the
-// resume prompt auto-sent after a session-limit pause once the quota resets.
-const loopPromptText = ref(settingsGet(LOOP_PROMPT_SETTING_KEY, DEFAULT_LOOP_PROMPT))
-function onLoopPromptChange(): void {
-  settingsSet(LOOP_PROMPT_SETTING_KEY, loopPromptText.value)
-}
-const loopResumeText = ref(settingsGet(LOOP_RESUME_SETTING_KEY, DEFAULT_LOOP_RESUME))
-function onLoopResumeChange(): void {
-  settingsSet(LOOP_RESUME_SETTING_KEY, loopResumeText.value)
-}
-
 // Per-CLI quota badge (pane headers): on/off + backend poll interval.
 const usageEnabledModel = ref(settingsGet<boolean>(USAGE_ENABLED_KEY, true) !== false)
 function onUsageEnabledChange(): void {
@@ -1030,16 +1003,13 @@ const settingsBundleError = ref('')
  *  it has no scope badge and no settings file to reveal. */
 type SettingsTab = Exclude<Tab, 'help'>
 
-const settingsScopeNotes: Record<SettingsTab, { scope: string; storage: keyof SettingsPaths | 'localStorage' | 'mainProcess' | 'safeStorage' | 'cliFiles' | 'scopeStores' }> = {
+const settingsScopeNotes: Record<SettingsTab, { scope: string; storage: keyof SettingsPaths | 'localStorage' | 'mainProcess' | 'safeStorage' | 'cliFiles' }> = {
   mcp: { scope: 'User', storage: 'mcp' },
   skills: { scope: 'User', storage: 'skills' },
   prompts: { scope: 'User', storage: 'localStorage' },
   // The CLIs' own instruction files: each one lives where its CLI looks for
   // it, so the pane shows per-file paths and this tab has none of its own.
   memory: { scope: 'User / Workspace', storage: 'cliFiles' },
-  // Two halves with two homes: the bundle is a file the user names, and the
-  // cloud comparison is the account's, so neither is a local settings path.
-  sharing: { scope: 'User / Account', storage: 'scopeStores' },
   analyzer: { scope: 'User', storage: 'analyzer' },
   cliAgents: { scope: 'User', storage: 'localStorage' },
   general: { scope: 'User', storage: 'localStorage' },
@@ -1072,9 +1042,6 @@ function pathForTab(tab: SettingsTab): string {
   if (storage === 'mainProcess') return 'Electron main process userData'
   if (storage === 'safeStorage') return 'Encrypted local safeStorage registry'
   if (storage === 'cliFiles') return "Each CLI's own instruction files"
-  // Sharing owns no store: it packs and compares the four above, each of which
-  // stays where its own tab keeps it.
-  if (storage === 'scopeStores') return 'The Prompts, MCP, Skills and Memory stores'
   return settingsPaths.value[storage] ?? ''
 }
 
@@ -2018,13 +1985,6 @@ watch(activeTab, (tab) => {
                   <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.2 2.6h6.1l3.5 3.5v7.3H3.2Z"/><path d="M9.1 2.7v3.5h3.5"/><path d="M5.4 8.4h5.2M5.4 10.7h3.4"/></svg>
                 </template>
               </SettingsNavItem>
-              <!-- Below the four it packs, not inside any of them: one answer
-                   about all four at once. -->
-              <SettingsNavItem :label="$t('settings.nav.sharing')" :active="activeTab === 'sharing'" @select="activeTab = 'sharing'">
-                <template #icon>
-                  <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="4" cy="8" r="1.9"/><circle cx="12" cy="3.9" r="1.9"/><circle cx="12" cy="12.1" r="1.9"/><path d="M5.7 7.1 10.3 4.8M5.7 8.9l4.6 2.3"/></svg>
-                </template>
-              </SettingsNavItem>
             </div>
 
             <div class="s-nav-group">
@@ -2262,16 +2222,6 @@ watch(activeTab, (tab) => {
             :backend="props.backend"
             :workspace-path="props.workspacePath ?? ''"
           />
-        </div>
-
-        <!-- ── SHARING TAB ──────────────────────────────────────────────── -->
-        <div v-show="activeTab === 'sharing'" class="s-body s-body--bleed" data-settings-section="sharing">
-          <h1 class="s-page-title">{{ $t('settings.nav.sharing') }}</h1>
-          <div class="settings-meta-row">
-            <span class="scope-badge">{{ settingsScopeNotes.sharing.scope }}</span>
-            <span class="settings-path" :title="pathForTab('sharing')">{{ pathForTab('sharing') }}</span>
-          </div>
-          <SharingPane :backend="props.backend" />
         </div>
 
         <!-- ── ANALYZER TAB ─────────────────────────────────────────────── -->
@@ -2980,17 +2930,6 @@ watch(activeTab, (tab) => {
                   <button class="ap-reset" @click="perms.openSettings('notifications')">{{ $t('onboard.open-settings') }}</button>
                 </template>
               </SettingRow>
-            </SettingsCard>
-          </SettingsSection>
-
-          <SettingsSection :label="$t('settings.appearance.loop-prompt')">
-            <SettingsCard>
-              <div class="s-fullrow" data-settings-section="general-loop-prompt">
-                <p class="ap-hint">{{ $t('settings.appearance.loop-prompt-hint') }}</p>
-                <textarea v-model="loopPromptText" rows="4" spellcheck="false" @change="onLoopPromptChange"></textarea>
-                <p class="ap-hint">{{ $t('settings.appearance.loop-resume-hint') }}</p>
-                <textarea v-model="loopResumeText" rows="2" spellcheck="false" @change="onLoopResumeChange"></textarea>
-              </div>
             </SettingsCard>
           </SettingsSection>
 

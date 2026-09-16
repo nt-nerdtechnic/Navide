@@ -73,7 +73,6 @@ const generalSettings = [
   { key: 'quotaBadge', name: 'CLI quota badge' },
   { key: 'environment', name: 'Environment' },
   { key: 'backendTimeout', name: 'Backend Startup Timeout' },
-  { key: 'loopPrompt', name: 'Loop Prompt' },
 ] as const
 
 const statusBadges: StatusRow[] = [

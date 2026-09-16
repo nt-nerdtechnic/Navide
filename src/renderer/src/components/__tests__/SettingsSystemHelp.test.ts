@@ -25,7 +25,7 @@ const LITERAL_OPTION = '繁體中文'
 // Row counts per table, in template order.
 // The first table is the settings nav: seventeen pages in five groups,
 // counted from SettingsModal.vue:1941-2043 rather than from the prose.
-const TABLE_ROWS = [17, 14, 9, 4, 3, 6, 2, 4, 3, 8, 4, 9]
+const TABLE_ROWS = [17, 13, 9, 4, 3, 6, 2, 4, 3, 8, 4, 9]
 
 function unexpectedWarnings(warn: ReturnType<typeof vi.spyOn>): unknown[][] {
   return warn.mock.calls.filter(([first]) => !String(first).startsWith(HTML_ADVISORY))
