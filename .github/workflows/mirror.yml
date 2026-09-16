@@ -51,7 +51,10 @@ jobs:
       - name: Verify mirror credentials
         run: |
           aws sts get-caller-identity --query Arn --output text
-          aws s3 ls "s3://${MIRROR_BUCKET}/releases/"
+          # s3api, not `s3 ls`: the latter exits 1 on an empty prefix, which
+          # is exactly what the very first mirror run sees.
+          aws s3api list-objects-v2 --bucket "${MIRROR_BUCKET}" --prefix releases/ \
+            --max-keys 50 --query 'Contents[].Key' --output text
 
       - name: Download the published release
         env:
