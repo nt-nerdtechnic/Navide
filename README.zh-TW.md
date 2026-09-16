@@ -117,11 +117,13 @@ Local-first 不代表所有情況都完全離線。使用外部 Agent CLI、雲�
 
 Navide 支援配備 Apple 晶片且執行 macOS 13 以上版本的 Mac、Linux x64，以及 x64／Arm 版 Windows。v0.2.3 提供經 Developer ID 簽章並通過 Apple Notarization 的 macOS 版本，以及 Windows x64 安裝程式與 Linux x64 套件：
 
-- [下載 DMG](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.3/Navide-0.2.3-arm64.dmg)
-- [下載 ZIP](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.3/Navide-0.2.3-arm64.zip)
-- [下載 Windows x64 安裝程式](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.3/Navide-0.2.3-win-x64.exe)
-- [下載 Windows ARM64 安裝程式](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.3/Navide-0.2.3-win-arm64.exe)
-- [下載 Linux AppImage](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.3/Navide-0.2.3-x86_64.AppImage)・[下載 Linux .deb](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.3/Navide-0.2.3-amd64.deb)
+- [下載 DMG](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.3/Navide-0.2.3-arm64.dmg) ([鏡像](https://dl.navide.dev/releases/v0.2.3/Navide-0.2.3-arm64.dmg))
+- [下載 ZIP](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.3/Navide-0.2.3-arm64.zip) ([鏡像](https://dl.navide.dev/releases/v0.2.3/Navide-0.2.3-arm64.zip))
+- [下載 Windows x64 安裝程式](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.3/Navide-0.2.3-win-x64.exe) ([鏡像](https://dl.navide.dev/releases/v0.2.3/Navide-0.2.3-win-x64.exe))
+- [下載 Windows ARM64 安裝程式](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.3/Navide-0.2.3-win-arm64.exe) ([鏡像](https://dl.navide.dev/releases/v0.2.3/Navide-0.2.3-win-arm64.exe))
+- [下載 Linux AppImage](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.3/Navide-0.2.3-x86_64.AppImage) ([鏡像](https://dl.navide.dev/releases/v0.2.3/Navide-0.2.3-x86_64.AppImage))・[下載 Linux .deb](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.3/Navide-0.2.3-amd64.deb) ([鏡像](https://dl.navide.dev/releases/v0.2.3/Navide-0.2.3-amd64.deb))
+
+GitHub 下載很慢或失敗時，改點旁邊的「鏡像」連結——同一個檔案、逐位元相同，由 dl.navide.dev 提供（發版流程同時發佈兩邊並比對 checksum）。
 
 將 Navide 複製到「應用程式」後即可正常開啟，無需繞過 Gatekeeper。自此版本起支援 App 內自動更新。
 

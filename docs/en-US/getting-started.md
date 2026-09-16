@@ -2,7 +2,7 @@
 
 English | [繁體中文](../zh-TW/getting-started.md) | [日本語](../ja-JP/getting-started.md) | [Documentation](README.md)
 
-Navide supports macOS 13 or newer on Apple silicon, Linux x64, and Windows on x64 or Arm. The [v0.2.2 GitHub release](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.2.2) provides DMG and ZIP downloads for macOS, signed with a Developer ID certificate and notarized by Apple, an NSIS installer for Windows x64, and an AppImage and a `.deb` for Linux x64.
+Navide supports macOS 13 or newer on Apple silicon, Linux x64, and Windows on x64 or Arm. The [latest GitHub release](https://github.com/nt-nerdtechnic/Navide/releases/latest) provides DMG and ZIP downloads for macOS, signed with a Developer ID certificate and notarized by Apple, an NSIS installer for Windows x64, and an AppImage and a `.deb` for Linux x64. If a GitHub download stalls or fails, the same files are served from the dl.navide.dev mirror — the README's download list carries a *mirror* link beside every file, and navide.dev switches to it automatically when it is reachable.
 
 To install on macOS, download the DMG and copy Navide to Applications, then open it normally — no Gatekeeper workaround is needed.
 
