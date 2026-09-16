@@ -1,7 +1,7 @@
 # Releasing Navide
 
-Navide ships as a signed + notarized macOS app, an unsigned Windows x64
-installer, and a Linux x64 AppImage and `.deb`. Users receive updates through
+Navide ships as a signed + notarized macOS app, unsigned Windows x64 and
+arm64 installers, and a Linux x64 AppImage and `.deb`. Users receive updates through
 the in-app updater (electron-updater; the `.deb` updates through `apt`), which
 downloads the full zip for every update — see "Updates are full downloads"
 below for why.
@@ -31,6 +31,43 @@ around it, not the build itself.
   `APPLE_APP_SPECIFIC_PASSWORD`).
 - `node`, `pnpm`, `uv`, `git` on PATH.
 
+## Pre-release checklist
+
+CI proves that every platform compiles, passes its unit tests and packages. It
+does not prove the installed app works: v0.2.3's arm64 build passed every job
+and still could not open a terminal pane until a VM run caught an event-loop
+stall (#102). Walk this list before `./release.sh`; nothing here is automated.
+
+1. **`main` is green on all three platforms** — the last CI run on `origin/main`
+   passed Frontend and Backend checks for macOS, Linux and Windows. A PR whose
+   Windows job was skipped or rerun-to-green does not count.
+2. **Dry-run the release workflow** — trigger `Release` with
+   `workflow_dispatch` on `main`. It builds every platform (macOS, Linux x64,
+   Linux arm64, Windows x64, Windows arm64) without publishing. All jobs must
+   pass, including the Windows `--self-check conpty` and `check-pe-machine`
+   steps; download the Windows artifacts from the run for step 3.
+3. **Smoke-test the installers on a real OS** — on a clean Windows and a clean
+   Linux machine or VM (restore a snapshot; never test over an old install):
+   install the dry-run artifact, launch, open one Terminal pane and type into
+   it, open one CLI pane and reach its login prompt.
+   Read `backend.log` for `loop_watchdog` stalls while doing so. Windows on Arm
+   must run the arm64 build natively — verify with
+   `GetProcessInformation(ProcessMachineTypeInfo)` and the absence of
+   `xtajit64.dll`, not `IsWow64Process2`, which reports x64 emulation as native.
+4. **Dependency audit warnings** — the Windows-on-Arm pass of the Dependency
+   audit job only warns. Read its output; the `cryptography` pin for win_arm64
+   is a known, accepted item until upstream ships newer wheels.
+5. **What's New and CHANGELOG** — add the `whatsNew.ts` entry (below) and the
+   `CHANGELOG.md` section for the new version. `release.sh` bumps versions and
+   README download links but writes neither of these.
+6. **Signing status** — macOS signs and notarizes in CI; Windows is unsigned
+   and shows SmartScreen's "Unknown publisher" prompt. Do not describe a Windows
+   build as signed anywhere until that changes.
+
+After the tag push: watch all four release jobs, then confirm the Release
+carries every asset listed under "Rollback" below plus a single `latest.yml`
+whose `files` list names both `win-x64` and `win-arm64`.
+
 ## Pre-release step: Update What's New announcement
 
 Before running `./release.sh`, add a new entry to `src/renderer/src/lib/whatsNew.ts` for the target version (e.g. `0.1.70`). Include title and bullet points in both `'zh-TW'` and `'en-US'`. This ensures that when users launch the newly updated app, the in-app What's New modal (`WhatsNewModal`) automatically pops up with the new features and fixes.
@@ -45,7 +82,9 @@ Before running `./release.sh`, add a new entry to `src/renderer/src/lib/whatsNew
 (typecheck + frontend + backend tests), builds locally, commits, tags, and
 (after you confirm) pushes `main` + the tag. The tag push triggers the
 **Release** CI workflow: its macOS job signs, notarizes, and publishes the
-GitHub Release, then the Linux x64 and Windows x64 jobs add their installers.
+GitHub Release, then the Linux x64 and Windows x64 jobs add their installers,
+and the Windows arm64 job adds its installer and merges both Windows entries
+into one `latest.yml`.
 Existing users' apps auto-check (startup + every 30 min), download the
 update in the background, and prompt "Restart to update".
 
@@ -104,4 +143,7 @@ Recovery does not edit Plugin Storage or legacy seed data.
   schema, so an upgrade never corrupts saved settings.
 - **Rollback**: users can download an older installer from the Releases page; to
   pull a bad auto-update, remove/replace its `latest-mac.yml` / `latest.yml` /
-  `latest-linux.yml` on the release.
+  `latest-linux.yml` on the release. A complete release carries
+  `Navide-<v>-arm64.dmg` + `.zip` (+ `.blockmap`), `Navide-<v>-win-x64.exe`,
+  `Navide-<v>-win-arm64.exe` (+ `.blockmap`), `Navide-<v>-x86_64.AppImage`,
+  `Navide-<v>-amd64.deb`, and the three manifests.
