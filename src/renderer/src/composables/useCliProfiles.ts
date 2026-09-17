@@ -288,7 +288,9 @@ export function useCliProfiles(backend: ReturnType<typeof useBackend>) {
         const message =
           code === 'PROFILE_SWAP_FAILED'
             ? i18n.global.t('cli-account.swap-failed')
-            : (resp.error?.message ?? 'set default failed')
+            : code === 'LOGIN_IN_PROGRESS'
+              ? i18n.global.t('settings.accounts.cli.login-in-progress-error')
+              : (resp.error?.message ?? 'set default failed')
         error.value = message
         return { ok: false, code, message }
       }

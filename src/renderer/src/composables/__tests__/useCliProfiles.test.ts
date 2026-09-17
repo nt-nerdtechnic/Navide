@@ -133,6 +133,33 @@ describe('useCliProfiles', () => {
     scope.stop()
   })
 
+  it('set_default maps LOGIN_IN_PROGRESS to the string delete() already localizes', async () => {
+    // Every sibling refusal on this path is localized; this one used to fall
+    // through to the backend's untranslated English. Since 599d79bc the pane
+    // toasts whatever message it gets, so the raw string would surface as-is.
+    const mock = createMockBackend('connected')
+    mock.setResponse('cli_profiles.list', { profiles: [], defaults: {}, supported_agents: SUPPORTED })
+    mock.setResponse('cli_profiles.set_default', null as unknown as object, {
+      ok: false,
+      error: {
+        code: 'LOGIN_IN_PROGRESS',
+        message: 'a claude sign-in for this account is still running; finish or close its pane first',
+      },
+    })
+    const { result, scope } = withScope(() => useCliProfiles(mock.backend))
+    await flush()
+
+    const res = await result.setDefault('claude', 'p1')
+    expect(res.ok).toBe(false)
+    if (!res.ok) {
+      expect(res.code).toBe('LOGIN_IN_PROGRESS')
+      expect(res.message).toBeTruthy()
+      expect(res.message).not.toContain('finish or close its pane first')
+      expect(result.error.value).toBe(res.message)
+    }
+    scope.stop()
+  })
+
   it('set_default maps PROFILE_SWAP_FAILED to a localized error', async () => {
     const mock = createMockBackend('connected')
     mock.setResponse('cli_profiles.list', { profiles: [], defaults: {}, supported_agents: SUPPORTED })
