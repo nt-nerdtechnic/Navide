@@ -266,7 +266,7 @@ import {
 import { isLoopSkill, resolvePromptSkill } from './lib/promptSkills'
 import { usePromptSkills } from './composables/usePromptSkills'
 import { loginCommandFor, matchLoginExpired } from './lib/cliLoginExpired'
-import { detectUsageLimit, usageLimitDue } from './lib/cliUsageLimit'
+import { detectUsageLimit, isDismissedUsageLimit, usageLimitDue } from './lib/cliUsageLimit'
 import {
   awaitingClearsOnMiss,
   hasAwaitingPattern,
@@ -4631,6 +4631,10 @@ interface PaneHealthWatcher {
   /** The quota half's own baseline. The two matchers cannot share one:
    *  whichever consumed it first would hide the same text from the other. */
   limitBaseline: number
+  /** Reset time of the last limit cleared by hand or by an account switch.
+   *  The TUI repaints the old banner into NEW bytes, past limitBaseline, so a
+   *  detection resolving to this same reset is that repaint, not a new hit. */
+  dismissedLimitUntil: number | null
   /** False until the initial output (spawn banner / reattach scrollback replay)
    *  has settled; matching is suppressed while false so stale historical text
    *  can't spuriously light a badge. */
@@ -4676,6 +4680,7 @@ function checkPaneUsageLimit(
   if (hit === null) return
   // Consume the matched region so a later poll can't re-match the same text.
   watcher.limitBaseline = bytes
+  if (isDismissedUsageLimit(watcher.dismissedLimitUntil, hit.resumeAt)) return
   pane.usageLimitAt = now
   pane.usageLimitUntil = hit.resumeAt
   // The anchor the quota gate compares turn timestamps against. Stamped on
@@ -4736,14 +4741,31 @@ function checkPaneUsageLimit(
 function clearPaneUsageLimits(agentKey: string): void {
   for (const pane of panes.value) {
     if (pane.agentKey !== agentKey || pane.usageLimitAt == null) continue
-    const waitingOnThisLimit =
-      pane.loopActive && pane.loopWaitUntil != null && pane.loopWaitUntil === pane.usageLimitUntil
-    pane.usageLimitAt = null
-    pane.usageLimitUntil = null
-    const w = paneHealthWatchers.get(pane.id)
-    if (w) w.limitBaseline = paneCleanBytes(pane.id)
-    if (waitingOnThisLimit) void fireLoopResume(pane.id, 'account-switch')
+    clearPaneUsageLimit(pane, 'account-switch')
   }
+}
+
+/** One pane's half of clearPaneUsageLimits, shared with the badge dismiss.
+ *  The cleared reset is remembered so a repaint of the same banner can't
+ *  re-light the flag (an unknown reset can't be told apart, so none is). */
+function clearPaneUsageLimit(pane: ActivePane, logLabel: string): void {
+  const waitingOnThisLimit =
+    pane.loopActive && pane.loopWaitUntil != null && pane.loopWaitUntil === pane.usageLimitUntil
+  const w = paneHealthWatchers.get(pane.id)
+  if (w) {
+    w.limitBaseline = paneCleanBytes(pane.id)
+    w.dismissedLimitUntil = pane.usageLimitUntil ?? null
+  }
+  pane.usageLimitAt = null
+  pane.usageLimitUntil = null
+  if (waitingOnThisLimit) void fireLoopResume(pane.id, logLabel)
+}
+
+/** Quota badge dismissed by the user (TerminalPane already confirmed). */
+function dismissPaneUsageLimit(paneId: string): void {
+  const pane = panes.value.find((p) => p.id === paneId)
+  if (!pane || pane.usageLimitAt == null) return
+  clearPaneUsageLimit(pane, 'usage-limit-dismiss')
 }
 
 /** Always-on per-pane output watch: the CLI's expired-login message (for the
@@ -4760,6 +4782,7 @@ function startPaneHealthWatcher(paneId: string): void {
     timer: 0,
     baseline: paneCleanBytes(paneId),
     limitBaseline: paneCleanBytes(paneId),
+    dismissedLimitUntil: null,
     warmedUp: false,
   }
   watcher.timer = window.setInterval(() => {
@@ -18104,6 +18127,7 @@ function paneIsCommander(p: ActivePane): boolean {
           @toggle-loop="(skillId?: string) => togglePaneLoop(p.id, skillId)"
           @loop-resume-now="resumeLoopNow(p.id)"
           @fix-login="fixPaneLogin(p.id)"
+          @usage-limit-dismiss="dismissPaneUsageLimit(p.id)"
           @toggle-mute="togglePaneMuted(p.id)"
           @continue-resume="continueRestoredPane(p.id)"
           @user-resume="persistPaneStopped(p.id, false)"

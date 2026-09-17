@@ -127,6 +127,9 @@ const emit = defineEmits<{
   /** Login-expired badge clicked — App.vue sends the CLI's login command into
    *  this pane and clears the badge. */
   (e: 'fix-login'): void
+  /** Quota badge clicked and the confirm accepted — App.vue clears the pane's
+   *  quota flag and resumes a loop that was parked on that limit. */
+  (e: 'usage-limit-dismiss'): void
   /** Continue button clicked on a resumed pane — App.vue injects the resume
    *  prompt once so the interrupted work carries on. */
   (e: 'continue-resume'): void
@@ -551,6 +554,12 @@ function onLoopBadgeClick(e: MouseEvent): void {
   else emit('toggle-loop')
 }
 
+/** The quota badge can be wrong (or already moot) — let the user drop it. */
+function onUsageLimitBadgeClick(): void {
+  if (!window.confirm(i18n.global.t('pane.terminal.usage-limit-dismiss-confirm'))) return
+  emit('usage-limit-dismiss')
+}
+
 onMounted(() => {
   if (containerRef.value) terminal.mount(containerRef.value)
 })
@@ -641,9 +650,11 @@ onMounted(() => {
         <span
           v-if="usageLimitHit"
           class="usage-limit-inline"
+          role="button"
           :title="usageLimitUntil != null
             ? $t('pane.terminal.usage-limit-tooltip', { time: formatLoopTime(usageLimitUntil) })
             : $t('pane.terminal.usage-limit-tooltip-unknown')"
+          @click.stop="onUsageLimitBadgeClick"
         >{{ usageLimitUntil != null
           ? $t('pane.terminal.usage-limit-badge', { time: formatLoopTime(usageLimitUntil) })
           : $t('pane.terminal.usage-limit-badge-unknown') }}</span>
@@ -928,9 +939,8 @@ onMounted(() => {
 .login-expired-inline:hover {
   border-color: var(--attention-fg);
 }
-/* Quota exhausted. Deliberately louder than the login badge and not a button:
-   a re-login is something the user can do here, waiting out a quota window is
-   not — the badge only says when work can start again. */
+/* Quota exhausted. Deliberately louder than the login badge. Clicking it
+   (after a confirm) dismisses the flag, e.g. when it is stale or moot. */
 .usage-limit-inline {
   font-size: var(--font-3xs);
   font-weight: 600;
@@ -942,7 +952,7 @@ onMounted(() => {
   letter-spacing: 0.2px;
   white-space: nowrap;
   flex-shrink: 0;
-  cursor: default;
+  cursor: pointer;
 }
 .loop-btn {
   font-size: var(--font-3xs);

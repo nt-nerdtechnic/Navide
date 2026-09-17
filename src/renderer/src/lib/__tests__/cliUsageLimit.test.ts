@@ -4,6 +4,7 @@ import { ref } from 'vue'
 import {
   USAGE_LIMIT_UNKNOWN_TTL_MS,
   detectUsageLimit,
+  isDismissedUsageLimit,
   usageLimitDue,
   usageResumeAt
 } from '../cliUsageLimit'
@@ -199,5 +200,30 @@ describe('usageLimitDue', () => {
     const fourHoursAgo = NOW - 4 * 60 * 60_000
     expect(usageLimitDue(fourHoursAgo, null, NOW)).toBe(false)
     expect(usageLimitDue(fourHoursAgo, null, NOW + 61 * 60_000)).toBe(true)
+  })
+})
+
+describe('isDismissedUsageLimit', () => {
+  const until = Date.UTC(2026, 8, 17, 7, 32, 0, 412)
+
+  it('matches a repaint of the same banner re-resolved a poll later', () => {
+    expect(isDismissedUsageLimit(until, until)).toBe(true)
+    expect(isDismissedUsageLimit(until, until + 873)).toBe(true)
+    expect(isDismissedUsageLimit(until, until - 873)).toBe(true)
+  })
+
+  it('matches the same clock time rolled to the next day once it has passed', () => {
+    expect(isDismissedUsageLimit(until, until + 24 * 3600_000 + 500)).toBe(true)
+  })
+
+  it('lets a hit with a different reset time through', () => {
+    expect(isDismissedUsageLimit(until, until + 60 * 60_000)).toBe(false)
+    expect(isDismissedUsageLimit(until, until + 2 * 60_000)).toBe(false)
+  })
+
+  it('never suppresses when either reset time is unknown', () => {
+    expect(isDismissedUsageLimit(null, until)).toBe(false)
+    expect(isDismissedUsageLimit(until, null)).toBe(false)
+    expect(isDismissedUsageLimit(null, null)).toBe(false)
   })
 })

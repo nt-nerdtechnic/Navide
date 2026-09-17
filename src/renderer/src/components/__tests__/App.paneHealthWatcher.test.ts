@@ -157,13 +157,36 @@ describe('an account switch lets go of the quota flag', () => {
     const start = appSource.indexOf('function clearPaneUsageLimits(')
     expect(start).toBeGreaterThan(-1)
     const body = appSource.slice(start, appSource.indexOf('\n}\n', start))
-    expect(body).toContain('pane.usageLimitAt = null')
-    expect(body).toContain('pane.usageLimitUntil = null')
+    expect(body).toContain("clearPaneUsageLimit(pane, 'account-switch')")
+    const helperStart = appSource.indexOf('function clearPaneUsageLimit(')
+    expect(helperStart).toBeGreaterThan(-1)
+    const helper = appSource.slice(helperStart, appSource.indexOf('\n}\n', helperStart))
+    expect(helper).toContain('pane.usageLimitAt = null')
+    expect(helper).toContain('pane.usageLimitUntil = null')
     // Without this the limit banner still in the buffer re-matches on the
     // next poll and re-lights the flag one interval after the switch.
-    expect(body).toContain('w.limitBaseline = paneCleanBytes(pane.id)')
+    expect(helper).toContain('w.limitBaseline = paneCleanBytes(pane.id)')
+    // A TUI repaint lands the same banner in NEW bytes past the baseline; the
+    // remembered reset is what keeps it from re-lighting the flag.
+    expect(helper).toContain('w.dismissedLimitUntil = pane.usageLimitUntil ?? null')
     // A loop parked on this limit resumes the way the badge click does.
-    expect(body).toContain("fireLoopResume(pane.id, 'account-switch')")
+    expect(helper).toContain('fireLoopResume(pane.id, logLabel)')
+  })
+
+  it('lets the user dismiss the badge through the same per-pane clear', () => {
+    expect(appSource).toContain('@usage-limit-dismiss="dismissPaneUsageLimit(p.id)"')
+    const start = appSource.indexOf('function dismissPaneUsageLimit(')
+    expect(start).toBeGreaterThan(-1)
+    const body = appSource.slice(start, appSource.indexOf('\n}\n', start))
+    expect(body).toContain("clearPaneUsageLimit(pane, 'usage-limit-dismiss')")
+  })
+
+  it('ignores a repaint of the cleared limit after consuming it', () => {
+    const check = appSource.slice(appSource.indexOf('function checkPaneUsageLimit('))
+    const consume = check.indexOf('watcher.limitBaseline = bytes\n  if (isDismissedUsageLimit(')
+    const flag = check.indexOf('pane.usageLimitAt = now')
+    expect(consume).toBeGreaterThan(-1)
+    expect(flag).toBeGreaterThan(consume)
   })
 
   it('keeps the pane badge wired to the flag', () => {
@@ -178,7 +201,7 @@ describe('an account switch lets go of the quota flag', () => {
       const locale = JSON.parse(
         readFileSync(resolve(process.cwd(), `packages/plugin-ui/src/foundation/i18n/locales/${lang}.json`), 'utf8')
       )
-      for (const key of ['usage-limit-badge', 'usage-limit-badge-unknown', 'usage-limit-tooltip', 'usage-limit-tooltip-unknown']) {
+      for (const key of ['usage-limit-badge', 'usage-limit-badge-unknown', 'usage-limit-tooltip', 'usage-limit-tooltip-unknown', 'usage-limit-dismiss-confirm']) {
         expect(locale.pane.terminal[key], `${lang} pane.terminal.${key}`).toBeTypeOf('string')
       }
     }

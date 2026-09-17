@@ -38,6 +38,23 @@ export function usageLimitDue(at: number, until: number | null, now: number): bo
   return now >= (until ?? at + USAGE_LIMIT_UNKNOWN_TTL_MS)
 }
 
+const DAY_MS = 24 * 3600_000
+
+/** True when a fresh detection is the limit the user already dismissed (or an
+ *  account switch already cleared), re-read from a TUI repaint of the old
+ *  banner rather than a new hit.
+ *
+ *  The reset is re-resolved against the poll's own clock, so the same banner
+ *  lands up to a second apart between polls — and a day later once its clock
+ *  time has passed ("resets 3:30pm" read at 3:40pm means tomorrow). Both count
+ *  as the same limit. An unknown reset on either side never matches: with no
+ *  clock there is nothing to tell an old banner from a new hit by. */
+export function isDismissedUsageLimit(dismissedUntil: number | null, until: number | null): boolean {
+  if (dismissedUntil == null || until == null) return false
+  const offset = (((until - dismissedUntil) % DAY_MS) + DAY_MS) % DAY_MS
+  return Math.min(offset, DAY_MS - offset) < 60_000
+}
+
 export interface UsageLimitHit {
   /** The matched message, whitespace-collapsed. */
   message: string
