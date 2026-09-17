@@ -55,6 +55,12 @@ def test_workspace_path_follows_a_moved_folder(tmp_path, monkeypatch):
     # load_or_create leaves the workspace database open. peek reopens it.
     databases.close_all()
     moved = tmp_path / "moved"
+    # Close the workspace database first: creating the project opened
+    # .agent-team/navide.db inside this folder, and Windows refuses to rename a
+    # directory that still holds an open handle (WinError 5), where POSIX does
+    # not care. Renaming a folder out from under a running backend is not what
+    # this test is about — it is about what peek() reports afterwards.
+    store._databases.close_all()
     original.rename(moved)
     project = store.peek(str(moved))
     assert project is not None
