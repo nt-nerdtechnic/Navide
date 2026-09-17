@@ -197,7 +197,7 @@ function onLogDividerEnd(): void {
   <div class="history">
     <div class="run-info">
       <div v-if="pipeline.projectId" class="paths-actions">
-        <button class="ghost" :title="pipeline.projectFile" @click="openPath(pipeline.projectFile)">📄 {{ pipeline.projectFile.split(/[\\/]/).pop() }}</button>
+        <button v-if="pipeline.projectFile" class="ghost" :title="pipeline.projectFile" @click="openPath(pipeline.projectFile)">📄 {{ pipeline.projectFile.split(/[\\/]/).pop() }}</button>
         <button class="ghost" :title="pipeline.pipelineLogFile" @click="openPath(pipeline.pipelineLogFile)">📜 pipeline.log</button>
         <button class="ghost" :title="pipeline.backendLogFile" @click="openPath(pipeline.backendLogFile)">🪵 backend.log</button>
       </div>

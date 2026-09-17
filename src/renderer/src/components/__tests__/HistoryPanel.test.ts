@@ -72,6 +72,14 @@ describe('HistoryPanel', () => {
     }
   })
 
+  it('drops the button when there is no project file to open', async () => {
+    // paths can be absent while the project itself is not; a lone "📄" opening
+    // nothing is worse than the wrong name it used to show.
+    const { w } = await mountPanel([], { projectId: 'p1', projectFile: '' })
+    expect(w.findAll('.paths-actions button').map((b) => b.text())).not.toContain('📄')
+    w.unmount()
+  })
+
   it('renders the timeline from the snapshot and appends live events', async () => {
     const { w, emit } = await mountPanel([ev({ id: 'a', summary: 'first' })])
     expect(rows(w)).toEqual(['first'])

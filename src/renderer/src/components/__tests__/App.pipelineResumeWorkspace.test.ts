@@ -23,7 +23,7 @@ function block(startMarker: string, endMarker: string): string {
 }
 
 describe('resuming a pipeline run spawns into the workspace directory', () => {
-  const resume = block('async function onPipelineResume(', '\nasync function ')
+  const resume = block('async function runPipelineResume(', '\nasync function ')
 
   it('takes the workspace from the backend record', () => {
     expect(resume).toContain('const resumeWorkspacePath = info.workspacePath')
@@ -47,7 +47,7 @@ describe('a resume the backend refuses stops before spawning anything', () => {
   // sendQuiet returns null when the backend errors or never answers. The
   // function used to carry on regardless: activateStage spawned the next
   // stage into a run the backend never resumed.
-  const resume = block('async function onPipelineResume(', '\nasync function ')
+  const resume = block('async function runPipelineResume(', '\nasync function ')
   const at = (needle: string): number => {
     const i = resume.indexOf(needle)
     expect(i, `${needle} should be in onPipelineResume`).toBeGreaterThan(-1)
@@ -74,17 +74,34 @@ describe('a resume the backend refuses stops before spawning anything', () => {
     expect(bail).toBeLessThan(at('await activateStage(info.nextStageIndex)'))
   })
 
-  it('puts back every field it overwrote, including the run workspace', () => {
+  it('puts back exactly what it overwrote — no field may be added without one', () => {
+    // Set equality, not a fixed list: an overwrite added later with no matching
+    // restore is precisely how a resumed run kept a value it should not have.
+    const attempt = resume.slice(at('const before = {'), at("sendQuiet<ProjectPayload>('pipeline.resume'"))
     const branch = resume.slice(at('if (!resp) {'), resume.indexOf('return', at('if (!resp) {')))
-    for (const restore of [
-      'pipeline.task = before.task',
-      'pipeline.workspacePath = before.workspacePath',
-      'pipelineRunWorkspace = before.runWorkspace',
-      'pipeline.stageIndex = before.stageIndex',
-      'pipeline.state = before.state',
-      'pipeline.log = before.log',
-      'pipeline.globalManager = before.globalManager',
-    ]) expect(branch).toContain(restore)
+    const names = (text: string, rhs: RegExp): string[] =>
+      [...text.matchAll(new RegExp(String.raw`(?:^|\n)\s*(pipeline\.\w+|pipelineRunWorkspace) = ${rhs.source}`, 'g'))]
+        .map((m) => m[1]).sort()
+    const overwritten = [...new Set(names(attempt, /(?!before\.)/))]
+    const restored = [...new Set(names(branch, /before\./))]
+    expect(overwritten.length).toBeGreaterThan(0)
+    // pipeline.log is overwritten on purpose and deliberately NOT restored: it
+    // carries the reason the resume failed (see the comment on `before`).
+    expect(restored).toEqual(overwritten.filter((n) => n !== 'pipeline.log'))
+  })
+
+  it('serializes resumes, since the button is still clickable during the switch', () => {
+    const wrapper = block('async function onPipelineResume(', 'async function runPipelineResume(')
+    expect(wrapper).toContain('if (pipelineResumeInFlight) return')
+    expect(wrapper).toContain('pipelineResumeInFlight = true')
+    expect(wrapper).toContain('} finally {')
+    expect(wrapper).toContain('pipelineResumeInFlight = false')
+  })
+
+  it('logs why it aborted while the workspace still routes the log to disk', () => {
+    const branch = resume.slice(at('if (!resp) {'), resume.indexOf('return', at('if (!resp) {')))
+    expect(branch.indexOf('pipelineLog(')).toBeLessThan(branch.indexOf('pipeline.workspacePath = before.workspacePath'))
+    expect(branch).not.toContain('backend.log')
   })
 })
 

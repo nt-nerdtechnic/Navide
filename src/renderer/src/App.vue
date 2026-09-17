@@ -10326,7 +10326,24 @@ async function onPipelineRestart(payload: { task: string; workspacePath: string 
   await onPipelineStart(payload)
 }
 
+/** Serializes resumes. The body turns the pipeline to 'running' — which hides
+ *  the Resume button — only after switching pipeline and reloading stages, two
+ *  round trips during which the button is still there to click again. A second
+ *  run would spawn the stage twice, or roll back to a snapshot the first one
+ *  had already moved on from. */
+let pipelineResumeInFlight = false
+
 async function onPipelineResume(): Promise<void> {
+  if (pipelineResumeInFlight) return
+  pipelineResumeInFlight = true
+  try {
+    await runPipelineResume()
+  } finally {
+    pipelineResumeInFlight = false
+  }
+}
+
+async function runPipelineResume(): Promise<void> {
   const info = existingProject.value
   if (!info) return
   if (info.nextStageIndex < 0) return
@@ -10359,15 +10376,17 @@ async function onPipelineResume(): Promise<void> {
     }
   }
   // What the lines below overwrite, so a refused resume can put it back. The
-  // state flips to 'running' BEFORE the backend call on purpose: that hides the
-  // Resume button, so a second click cannot start a second resume meanwhile.
+  // log is deliberately NOT in here: sendQuiet writes the reason a call failed
+  // into it, and other paths log into it while this one awaits — restoring the
+  // array threw all of that away and left the user with an abort line and no
+  // cause. pipelineResumeInFlight, not the 'running' flip, is what stops a
+  // second resume.
   const before = {
     task: pipeline.task,
     workspacePath: pipeline.workspacePath,
     runWorkspace: pipelineRunWorkspace,
     stageIndex: pipeline.stageIndex,
     state: pipeline.state,
-    log: pipeline.log,
     globalManager: pipeline.globalManager,
   }
   pipeline.task = info.taskDescription
@@ -10384,18 +10403,21 @@ async function onPipelineResume(): Promise<void> {
     workspace_path: pipeline.workspacePath
   })
   if (!resp) {
-    // The backend refused the resume or never answered (sendQuiet has logged
-    // why). Carrying on used to spawn the next stage into a run the backend
-    // never resumed, so a bad input surfaced only later as a pane's spawn
-    // error. Put the pipeline back — the Resume banner stays, for a retry.
+    // The backend refused the resume or never answered; sendQuiet has already
+    // logged which. Carrying on used to spawn the next stage into a run the
+    // backend never resumed, so a bad input surfaced only later as a pane's
+    // spawn error. Put the pipeline back — the Resume banner stays, for a
+    // retry, and the resume is idempotent if the call did land after all.
+    //
+    // Logged BEFORE the rollback: pipelineLog only writes through to
+    // pipeline.log on disk while workspacePath still names the run.
+    pipelineLog('Resume aborted: the backend did not resume this run — see the line above')
     pipeline.task = before.task
     pipeline.workspacePath = before.workspacePath
     pipelineRunWorkspace = before.runWorkspace
     pipeline.stageIndex = before.stageIndex
     pipeline.state = before.state
-    pipeline.log = before.log
     pipeline.globalManager = before.globalManager
-    pipelineLog('Resume aborted: the backend did not resume this run — see backend.log')
     return
   }
   applyProjectPaths(resp)

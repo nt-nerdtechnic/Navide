@@ -23,6 +23,15 @@ async def test_a_file_is_reported_as_not_a_directory(tmp_path):
         TerminalService(_noop_emit).create(pane_id="p1", agent_key=None, command=["/bin/sh"], cwd=str(db))
 
 
+async def test_a_broken_symlink_is_not_reported_as_missing(tmp_path):
+    """It is there, and it is not a directory. os.path.exists follows the link
+    and says "missing", which sends the reader looking for the wrong thing."""
+    link = tmp_path / "link"
+    link.symlink_to(tmp_path / "gone")
+    with pytest.raises(FileNotFoundError, match=r"^cwd is not a directory: .*link$"):
+        TerminalService(_noop_emit).create(pane_id="p1", agent_key=None, command=["/bin/sh"], cwd=str(link))
+
+
 async def test_a_missing_path_is_still_reported_as_missing(tmp_path):
     missing = tmp_path / "gone"
     with pytest.raises(FileNotFoundError, match=r"^cwd does not exist: .*gone$"):

@@ -168,8 +168,8 @@ describe('closing a workspace ends the run its panes belonged to', () => {
     // The rollback is legitimate only because it undoes a 'running' write that
     // never took: it must live in the refused-resume branch and nowhere else.
     const rollback = appSource.indexOf('pipelineRunWorkspace = before.runWorkspace')
-    const refused = appSource.lastIndexOf('if (!resp) {', rollback)
     expect(rollback).toBeGreaterThan(-1)
+    const refused = appSource.lastIndexOf('if (!resp) {', rollback)
     expect(refused).toBeGreaterThan(appSource.lastIndexOf("sendQuiet<ProjectPayload>('pipeline.resume'", rollback))
     expect(appSource.indexOf('pipelineRunWorkspace = before.runWorkspace', rollback + 1)).toBe(-1)
     expect(appSource).toContain("let pipelineRunWorkspace = ''")
