@@ -506,7 +506,11 @@ class TerminalService:
     ) -> TerminalSession:
         argv = self._resolve_command(command)
         if not os.path.isdir(cwd):
-            raise FileNotFoundError(f"cwd does not exist: {cwd}")
+            # A path that exists as a file is a different mistake from a
+            # missing one — a resumed pipeline once spawned into its own
+            # navide.db and was told the file "does not exist".
+            problem = "is not a directory" if os.path.exists(cwd) else "does not exist"
+            raise FileNotFoundError(f"cwd {problem}: {cwd}")
         if not shutil.which(argv[0]):
             raise FileNotFoundError(f"executable not found: {argv[0]}")
 

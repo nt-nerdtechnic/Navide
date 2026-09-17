@@ -5947,7 +5947,7 @@
     "recent": "🕓 Recent",
     "no-recent-workspaces": "No recent workspaces yet. Click <strong>Browse…</strong> to open a project folder.",
     "restart-title": "↺ Start pipeline over from Stage 01?",
-    "restart-preserved": "Existing pipeline.log is preserved (events keep appending). project.json's stage records will be reset to pending.",
+    "restart-preserved": "Existing pipeline.log is preserved (events keep appending). The stage records in the project database (navide.db) will be reset to pending.",
     "pin": "Pin",
     "unpin": "Unpin",
     "two-ways-title": "Two ways to drive the team",

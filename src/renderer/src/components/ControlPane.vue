@@ -303,7 +303,9 @@ export interface ExistingProjectInfo {
   stagesCompleted: number
   nextStageIndex: number // -1 if all done
   updatedAt: string
-  projectFile: string
+  /** The workspace directory, as the backend resolved it. Resume spawns into
+   *  this; never derive it from `paths.project_file`, a file inside it. */
+  workspacePath: string
   pipelineId: string
   runCount: number
 }

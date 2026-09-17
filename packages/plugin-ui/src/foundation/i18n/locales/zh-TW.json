@@ -5947,7 +5947,7 @@
     "recent": "🕓 最近",
     "no-recent-workspaces": "尚無最近的工作區。點擊 <strong>瀏覽…</strong> 以開啟專案資料夾。",
     "restart-title": "↺ 從第 01 階段重新執行流程？",
-    "restart-preserved": "現有 pipeline.log 保留（事件持續附加）。project.json 的階段記錄將重設為待執行。",
+    "restart-preserved": "現有 pipeline.log 保留（事件持續附加）。專案資料庫（navide.db）中的階段記錄將重設為待執行。",
     "pin": "固定",
     "unpin": "取消固定",
     "two-ways-title": "兩種驅動團隊的方式",

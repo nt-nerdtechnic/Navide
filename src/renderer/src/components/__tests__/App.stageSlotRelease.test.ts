@@ -161,9 +161,17 @@ describe('closing a workspace ends the run its panes belonged to', () => {
     // Written next to each 'running' transition and nowhere else, or it stops
     // naming the run and the gate starts answering about the wrong project.
     const writes = appSource.match(/(?<!let )pipelineRunWorkspace = /g) ?? []
-    // 2 starts (start + resume), 3 clears (pipeline reset, workspace close,
+    // 2 starts (start + resume), 1 rollback (a resume the backend refused puts
+    // back what it had just written), 3 clears (pipeline reset, workspace close,
     // workspace close that keeps its panes).
-    expect(writes.length).toBe(5)
+    expect(writes.length).toBe(6)
+    // The rollback is legitimate only because it undoes a 'running' write that
+    // never took: it must live in the refused-resume branch and nowhere else.
+    const rollback = appSource.indexOf('pipelineRunWorkspace = before.runWorkspace')
+    const refused = appSource.lastIndexOf('if (!resp) {', rollback)
+    expect(rollback).toBeGreaterThan(-1)
+    expect(refused).toBeGreaterThan(appSource.lastIndexOf("sendQuiet<ProjectPayload>('pipeline.resume'", rollback))
+    expect(appSource.indexOf('pipelineRunWorkspace = before.runWorkspace', rollback + 1)).toBe(-1)
     expect(appSource).toContain("let pipelineRunWorkspace = ''")
     expect(appSource).toContain("pipelineRunWorkspace = resumeWorkspacePath\n  pipeline.stageIndex = info.nextStageIndex\n  pipeline.state = 'running'")
     expect(appSource).toContain("pipelineRunWorkspace = payload.workspacePath\n  pipeline.stageIndex = 0\n  pipeline.state = 'running'")

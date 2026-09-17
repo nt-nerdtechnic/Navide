@@ -60,6 +60,18 @@ describe('HistoryPanel', () => {
     __resetSettingsForTest()
   })
 
+  // The project document moved into the workspace database; a hard-coded
+  // "project.json" label named a file that no longer exists.
+  it("labels the project-file button with the file it opens", async () => {
+    for (const projectFile of ['/ws/.agent-team/navide.db', 'C:\\ws\\.agent-team\\navide.db']) {
+      const { w } = await mountPanel([], { projectId: 'p1', projectFile })
+      const button = w.findAll('.paths-actions button').find((b) => b.attributes('title') === projectFile)
+      expect(button, `a button titled ${projectFile}`).toBeDefined()
+      expect(button!.text()).toBe('📄 navide.db')
+      w.unmount()
+    }
+  })
+
   it('renders the timeline from the snapshot and appends live events', async () => {
     const { w, emit } = await mountPanel([ev({ id: 'a', summary: 'first' })])
     expect(rows(w)).toEqual(['first'])

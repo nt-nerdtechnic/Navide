@@ -9246,7 +9246,7 @@ function buildExistingProjectInfo(payload: ProjectPayload | null): ExistingProje
     stagesCompleted: completed,
     nextStageIndex: nextIdx,
     updatedAt: proj.updated_at ?? '',
-    projectFile: payload.paths.project_file,
+    workspacePath: proj.workspace_path,
     pipelineId: (proj.pipeline_id as string | undefined) ?? '',
     runCount: (proj.run_count as number | undefined) ?? 0
   }
@@ -10302,7 +10302,13 @@ async function onPipelineResume(): Promise<void> {
   if (info.nextStageIndex < 0) return
   // Wire the local pipeline state from the existing project, then call the
   // backend's resume endpoint and spawn the resume stage.
-  const resumeWorkspacePath = info.projectFile.replace(/\/\.agent-team\/project\.json$/, '')
+  //
+  // The workspace comes from the backend's own record of it. It used to be
+  // derived by stripping `/.agent-team/project.json` off `projectFile` — but
+  // since the SQLite migration that file is `.agent-team/navide.db`, the regex
+  // matched nothing, and the DATABASE FILE became the workspace: every pane the
+  // resumed stage spawned failed with "cwd does not exist: …/navide.db".
+  const resumeWorkspacePath = info.workspacePath
   // The recorded run belongs to ONE pipeline. Resuming it against whatever
   // pipeline happens to be active read the WRONG stage list — a shorter one
   // made activateStage a no-op (state left 'running' with zero panes), a longer
@@ -10322,6 +10328,18 @@ async function onPipelineResume(): Promise<void> {
       return
     }
   }
+  // What the lines below overwrite, so a refused resume can put it back. The
+  // state flips to 'running' BEFORE the backend call on purpose: that hides the
+  // Resume button, so a second click cannot start a second resume meanwhile.
+  const before = {
+    task: pipeline.task,
+    workspacePath: pipeline.workspacePath,
+    runWorkspace: pipelineRunWorkspace,
+    stageIndex: pipeline.stageIndex,
+    state: pipeline.state,
+    log: pipeline.log,
+    globalManager: pipeline.globalManager,
+  }
   pipeline.task = info.taskDescription
   pipeline.workspacePath = resumeWorkspacePath
   pipelineRunWorkspace = resumeWorkspacePath
@@ -10335,7 +10353,22 @@ async function onPipelineResume(): Promise<void> {
   const resp = await sendQuiet<ProjectPayload>('pipeline.resume', {
     workspace_path: pipeline.workspacePath
   })
-  applyProjectPaths(resp ?? undefined)
+  if (!resp) {
+    // The backend refused the resume or never answered (sendQuiet has logged
+    // why). Carrying on used to spawn the next stage into a run the backend
+    // never resumed, so a bad input surfaced only later as a pane's spawn
+    // error. Put the pipeline back — the Resume banner stays, for a retry.
+    pipeline.task = before.task
+    pipeline.workspacePath = before.workspacePath
+    pipelineRunWorkspace = before.runWorkspace
+    pipeline.stageIndex = before.stageIndex
+    pipeline.state = before.state
+    pipeline.log = before.log
+    pipeline.globalManager = before.globalManager
+    pipelineLog('Resume aborted: the backend did not resume this run — see backend.log')
+    return
+  }
+  applyProjectPaths(resp)
   // Refresh the peek so the banner disappears now that we're running.
   existingProject.value = null
   // Cold restore keeps pipeline panes as placeholders; an explicit pipeline
@@ -11120,7 +11153,7 @@ async function onPipelineStart(payload: { task: string; workspacePath: string; p
   })
   applyProjectPaths(resp ?? undefined)
   if (resp?.paths) {
-    pipelineLog(`project.json → ${resp.paths.project_file}`)
+    pipelineLog(`${resp.paths.project_file.split(/[\\/]/).pop()} → ${resp.paths.project_file}`)
     pipelineLog(`pipeline.log → ${resp.paths.pipeline_log}`)
   }
   // Clear any stale Resume banner since we just overwrote project state.
