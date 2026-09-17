@@ -3774,10 +3774,11 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
         <button
           class="ws-more-opt"
           :disabled="!wsCanRebuild(wsMoreMenuPath) || rebuildingAll"
+          :title="$t('action.rebuild-all-cli-panes')"
           @click="emit('rebuild-all', wsMoreMenuPath); closeWsMoreMenu()"
         >
           <span class="ws-more-ico" :class="{ busy: rebuildingAll }"><RebuildIcon /></span>
-          <span>{{ $t('action.rebuild-all-cli-panes') }}</span>
+          <span>{{ $t('action.rebuild-all-cli-panes-label') }}</span>
         </button>
         <button class="ws-more-opt" @click="emit('open-history', wsMoreMenuPath); closeWsMoreMenu()">
           <span class="ws-more-ico"><HistoryIcon /></span>

@@ -525,6 +525,7 @@
     "more-options": "More options",
     "rebuild-tab-cli-panes": "Rebuild every resumable CLI pane in the active tab. This interrupts in-progress turns and reprints each conversation.",
     "rebuild-all-cli-panes": "Rebuild every resumable CLI pane across all tabs. This interrupts in-progress turns and reprints each conversation.",
+    "rebuild-all-cli-panes-label": "Rebuild all panes",
     "discard-all": "Discard All Changes",
     "dismiss": "Dismiss",
     "save-draft-title": "Save as Draft (label optional)",
