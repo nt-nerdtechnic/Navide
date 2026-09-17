@@ -297,6 +297,7 @@ interface ChildGeneration {
   outputQueue: Buffer[]
   outputQueueBytes: number
   outputWriting: boolean
+  droppedNotifications: number
   resolveExit?: () => void
   terminationTask?: Promise<void>
   listeners: {
@@ -1728,6 +1729,7 @@ export class PluginBackendSupervisor {
       outputQueue: [],
       outputQueueBytes: 0,
       outputWriting: false,
+      droppedNotifications: 0,
       exitPromise: new Promise<void>((resolve) => {
         resolveExit = resolve
       }),
@@ -1878,6 +1880,9 @@ export class PluginBackendSupervisor {
         if (!stderrText) {
           this.emitDiagnostic(exitCause, generation)
         }
+      } else {
+        exitCause = new Error('Child process exited cleanly while ready (exit code 0)')
+        this.emitDiagnostic(exitCause, generation)
       }
       this.failProcess(generation, isProtocolError ? 'PROTOCOL_ERROR' : 'BACKEND_UNAVAILABLE', false, exitCause)
     }
@@ -2117,7 +2122,7 @@ export class PluginBackendSupervisor {
       return
     }
     try {
-      this.writeFrame(pending.generation, encoded)
+      this.writeFrame(pending.generation, encoded, 'notification')
     } catch {
       /* The generation has already failed or is being terminated. */
     }
@@ -2637,8 +2642,20 @@ export class PluginBackendSupervisor {
     }
   }
 
-  /** Serialize all Host→child frames and keep the internal Bridge bounded. */
-  private writeFrame(generation: ChildGeneration, frame: Buffer): void {
+  /**
+   * Serialize all Host→child frames and keep the internal Bridge bounded.
+   *
+   * A 'control' frame - a request, a response, a cancellation - is part of a
+   * settled protocol exchange, so an overflow there stays fatal. A
+   * 'notification' frame carries a Host event nobody is waiting on; a backlog
+   * of those is backpressure, not a dead child, so it is dropped and counted
+   * instead of taking the whole generation down.
+   */
+  private writeFrame(
+    generation: ChildGeneration,
+    frame: Buffer,
+    kind: 'control' | 'notification' = 'control',
+  ): void {
     if (
       this.currentGeneration !== generation ||
       generation.exited ||
@@ -2646,6 +2663,18 @@ export class PluginBackendSupervisor {
       generation.child.stdin.writableEnded
     ) throw new Error('closed')
     if (generation.outputQueueBytes + frame.length > MAX_BACKEND_BRIDGE_QUEUE_BYTES) {
+      if (kind === 'notification') {
+        generation.droppedNotifications += 1
+        if (generation.droppedNotifications === 1) {
+          this.emitDiagnostic(
+            new Error(
+              'Host event notification dropped: output queue limit reached. Further drops for this child are counted but not reported.',
+            ),
+            generation,
+          )
+        }
+        return
+      }
       const overflow = new Error('output queue limit reached')
       this.failProcess(generation, 'BACKEND_UNAVAILABLE', false, overflow)
       throw overflow
