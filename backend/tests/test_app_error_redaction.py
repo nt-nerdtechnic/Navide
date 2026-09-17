@@ -21,3 +21,10 @@ def test_redacts_the_home_prefix() -> None:
 
 def test_leaves_a_message_without_a_home_path_alone() -> None:
     assert _redact_home("profile not found: p1") == "profile not found: p1"
+
+
+def test_does_not_eat_a_sibling_directory_sharing_the_prefix() -> None:
+    # /Users/neil is a prefix of /Users/neilson; a plain str.replace would
+    # rewrite an unrelated user's path to "~son".
+    sibling = f"{Path.home()}2"
+    assert _redact_home(f"cannot open '{sibling}'") == f"cannot open '{sibling}'"

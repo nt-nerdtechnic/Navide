@@ -3149,6 +3149,8 @@ def _probe_agent_cli_for_spawn(agent_key: str, requested_command: Any = None) ->
 
 
 _HOME_PREFIX = str(Path.home())
+# A whole path component only: /Users/neil must not eat /Users/neilson.
+_HOME_RE = re.compile(re.escape(_HOME_PREFIX) + r"(?![\w.-])")
 
 
 def _redact_home(text: str) -> str:
@@ -3160,7 +3162,7 @@ def _redact_home(text: str) -> str:
     """
     if not _HOME_PREFIX or _HOME_PREFIX == os.sep:
         return text
-    return text.replace(_HOME_PREFIX, "~")
+    return _HOME_RE.sub("~", text)
 
 
 async def handle_message(session: Session, msg: dict[str, Any]) -> None:
