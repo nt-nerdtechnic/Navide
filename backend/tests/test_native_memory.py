@@ -233,12 +233,16 @@ def test_every_vendor_is_mapped_or_configured(tmp_path: Path) -> None:
     by_agent = {target["agent"]: target for target in native_memory.agent_targets()}
 
     assert set(by_agent) == set(VENDORS)
-    assert {t["state"] for t in by_agent.values()} <= {"mapped", "configured"}
+    assert {t["state"] for t in by_agent.values()} <= {"mapped", "configured", "n/a"}
     assert by_agent["claude"]["state"] == "mapped"
     assert by_agent["claude"]["scopes"] == ["project", "user"]
     # aider knows no filename of its own; .aider.conf.yml's read: names them.
     assert by_agent["aider"]["state"] == "configured"
     assert by_agent["aider"]["scopes"] == ["user", "project"]
+    # cliproxyapi never opens a project/workspace — it's a background proxy,
+    # not a coding agent — so no instruction-file concept applies to it.
+    assert by_agent["cliproxyapi"]["state"] == "n/a"
+    assert by_agent["cliproxyapi"]["scopes"] == []
 
 
 def test_aider_lists_the_files_its_config_names(tmp_path: Path) -> None:

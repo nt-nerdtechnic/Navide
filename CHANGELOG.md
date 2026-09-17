@@ -4,6 +4,10 @@ All notable released changes to Navide will be documented in this file. The form
 
 ## [Unreleased]
 
+### Added
+
+- Add CLIProxyAPI (`router-for-me/CLIProxyAPI`) as an installable CLI in **Settings → CLI Agents**. It's a background multi-provider proxy rather than a coding agent, so the integration is deliberately narrow: install detection and a launchable `--tui` management console, with no account-slot switching, session resume or conversation log (see `docs/en-US/cli-extension-guide.md` for why).
+
 ### Fixed
 
 - Reopen the Plans, Git and Token Monitor windows after a clean quit, alongside the workspace windows that already came back. A Plans or Git window returns only when its workspace's main window did, so a workspace held back by the restore failure breaker cannot be let in through one of them. One-shot viewers — diff, branch diff and the editor — stay closed on purpose: reopening a diff of a change you have long since dealt with is noise, not restore. Their size and position come back with them.

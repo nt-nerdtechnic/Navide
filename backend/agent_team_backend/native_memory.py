@@ -193,6 +193,12 @@ MEMORY_SOURCES: tuple[MemorySource, ...] = (
 #: official docs suggest -- the code does not know it.
 _CONFIGURED: frozenset[str] = frozenset({"aider"})
 
+#: cliproxyapi is not a coding agent: it never opens a project/workspace
+#: directory, so "reads instruction files from it" does not apply — distinct
+#: from the "unknown" state the module docstring says is gone, which meant
+#: "not yet verified" for a CLI the mechanism did apply to.
+_NOT_PROJECT_SCOPED: frozenset[str] = frozenset({"cliproxyapi"})
+
 #: aider's config file, searched in the home and in the project (the git root
 #: and cwd both resolve to the workspace for a Navide pane).
 AIDER_CONFIG = ".aider.conf.yml"
@@ -241,13 +247,20 @@ def agent_targets() -> list[dict[str, Any]]:
     Two states: ``mapped`` (the table names the paths) and ``configured``
     (the CLI has the mechanism but no filename of its own, so the files are
     whatever the user's config names -- aider, and only aider). Every vendor
-    in the registry is one or the other; a third "unknown" state existed while
-    four CLIs were still unverified and is deliberately gone.
+    in the registry is one of those, ``n/a`` for the one vendor the concept
+    does not apply to at all (see ``_NOT_PROJECT_SCOPED``), or a third
+    "unknown" state that existed while four CLIs were still unverified and is
+    deliberately gone.
     """
     mapped = {source.agent for source in MEMORY_SOURCES}
     targets: list[dict[str, Any]] = []
     for key, spec in sorted(VENDORS.items()):
-        state = "configured" if key in _CONFIGURED else "mapped" if key in mapped else "unknown"
+        state = (
+            "n/a" if key in _NOT_PROJECT_SCOPED
+            else "configured" if key in _CONFIGURED
+            else "mapped" if key in mapped
+            else "unknown"
+        )
         scopes = sorted({s.scope for s in MEMORY_SOURCES if s.agent == key})
         if key in _CONFIGURED:
             scopes = [USER_SCOPE, PROJECT_SCOPE]

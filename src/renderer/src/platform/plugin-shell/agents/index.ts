@@ -8,6 +8,7 @@ import type { AgentSpec } from './types'
 import { SPEC as aider } from './aider'
 import { SPEC as antigravity } from './antigravity'
 import { SPEC as claude } from './claude'
+import { SPEC as cliproxyapi } from './cliproxyapi'
 import { SPEC as codex } from './codex'
 import { SPEC as copilot } from './copilot'
 import { SPEC as cursor } from './cursor'
@@ -39,6 +40,7 @@ const ORDERED = [
   aider,
   muse,
   droid,
+  cliproxyapi,
   terminal
 ] as const
 

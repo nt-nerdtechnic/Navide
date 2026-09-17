@@ -28,8 +28,8 @@ FRONTEND_AGENTS_DIR = (
 )
 
 EXPECTED_KEYS = {
-    "aider", "antigravity", "claude", "codex", "copilot", "cursor",
-    "droid", "grok", "kilo", "kimi", "muse", "opencode", "pi", "qwen",
+    "aider", "antigravity", "claude", "cliproxyapi", "codex", "copilot",
+    "cursor", "droid", "grok", "kilo", "kimi", "muse", "opencode", "pi", "qwen",
 }
 
 # DEPS entries that are infrastructure, not CLI vendors.
@@ -136,6 +136,8 @@ def _backend_infers_turn_end_from_silence() -> set[str]:
     """
     inferring: set[str] = set()
     for key, spec in registry.VENDORS.items():
+        if spec.make_log_reader is None:
+            continue  # writes no local log to infer a turn end from (cliproxyapi)
         parse_activity = type(spec.make_log_reader()).parse_activity
         module = sys.modules[parse_activity.__module__]
         declared = {n for n in vars(module) if _IDLE_CONST_RE.fullmatch(n)}
@@ -440,15 +442,20 @@ def test_session_resume_capability_matches_the_frontend_agent_spec() -> None:
     )
 
 
-def test_aider_is_the_only_vendor_without_session_ids() -> None:
-    """Asserted rather than left to review: it is the one vendor whose resume
-    takes a chat-history PATH, so cli_open_agent(session_id=...) has nothing to
-    name for it and refuses with `no-session-support`."""
+def test_vendors_without_session_ids() -> None:
+    """Asserted rather than left to review, for two distinct reasons:
+    aider's resume takes a chat-history PATH, so cli_open_agent(session_id=...)
+    has nothing to name for it and refuses with `no-session-support`; cliproxyapi
+    is not a coding agent at all — its default command has no conversation to
+    resume in the first place (see cli_vendors/cliproxyapi.py)."""
     assert registry.VENDORS["aider"].supports_session_resume is False
+    assert registry.VENDORS["cliproxyapi"].supports_session_resume is False
     others = {
         k for k, s in registry.VENDORS.items() if not s.supports_session_resume
     }
-    assert others == {"aider"}, f"unexpected vendors without session ids: {sorted(others)}"
+    assert others == {"aider", "cliproxyapi"}, (
+        f"unexpected vendors without session ids: {sorted(others)}"
+    )
 
 
 def test_droid_is_never_given_an_effort_capability() -> None:

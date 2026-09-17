@@ -257,3 +257,18 @@ Record shapes came from droid's own zod schemas and read loops inside the
 250MB bundle, cross-checked against a real session file. `verifiedTurnText`
 stays unset: no authenticated session has exercised the assistant/outcome path
 yet.
+
+### CLIProxyAPI (`cliproxyapi`, router-for-me/CLIProxyAPI) — added 2026-09-17
+
+Deliberately the narrowest integration in this file: it's a background proxy
+server that multiplexes several providers' OAuth accounts (Claude, Codex,
+Antigravity, Kimi, xAI, Devin, Meta) behind one OpenAI/Gemini/Claude-compatible
+endpoint and round-robins across whichever accounts it has loaded — not an
+interactive coding agent, and not a single signed-in identity the way every
+other vendor in this table is.
+
+| Aspect | What holds for cliproxyapi |
+|---|---|
+| Account model | Many provider accounts loaded into one server process at once (its own auths directory, `~/.cli-proxy-api` by default), not a single active identity — the account-slot fields the other vendors use (`live_file`, `slot_file`, `identity_from_secret`, `resumeArgs`) all assume the latter and are left unset. `supports_session_resume` is explicitly `False` for a second, distinct reason from aider's (see `test_vendors_without_session_ids`): there's no conversation to resume in the first place. |
+| Default command | `CLIProxyAPI --tui` — confirmed in `cmd/server/main.go` to start an embedded standalone server and attach an interactive TUI client to it, the closest thing the binary has to a session. The bare binary instead runs the server as a plain foreground process with no interaction. |
+| Provider logins | `--claude-login` / `--codex-login` / `--antigravity-login` / `--kimi-login` / `--xai-login` / `--devin-login` / `--meta-login` each run one provider's OAuth flow and exit (confirmed: they're mutually exclusive with the server-start branch in `main()`), matching Navide's isolated-login-pane expectation. None is wired as *the* vendor's sign-in command — with seven providers and no single "the" login, that choice is left to the user via a launch-command override rather than picked for them. |
