@@ -3030,8 +3030,9 @@ def _probe_agent_cli_for_spawn(agent_key: str, requested_command: Any = None) ->
         # shell, which reads the rc files that put nvm, volta and npm-global
         # on PATH. Blocking here made "runs in Terminal, unlaunchable in
         # Navide" the norm for every CLI installed by `npm install -g`.
-        # Degrade: let the shell have its say, and report not_found so the
-        # window can still offer the guided install for a real absence.
+        # Degrade: let the shell have its say. A real absence then exits 127,
+        # which the window answers with the guided install (see
+        # ws_handlers._terminal_create_impl for why no cli.missing goes out).
         log.warning(
             "%s startup probe found no %s on the backend PATH — spawning anyway, "
             "the pane's login shell may still resolve it",

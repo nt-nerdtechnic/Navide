@@ -120,10 +120,11 @@ export function loginShellFlags(shell: string): string[] {
  * backend; keep the two lists the same.
  *
  * One asymmetry is deliberate: the backend drops the nvm bins when PATH
- * already names one, because it re-runs its merge against a PATH that may
- * carry the user's `nvm use` choice, and these dirs are prepended. Here there
- * is no such choice to protect — main calls this ONLY when the login-shell
- * probe returned nothing, so every version is a candidate.
+ * already resolves a node, because it re-runs its merge against a PATH that
+ * may carry the user's own node (an `nvm use` pick, Homebrew's), and these
+ * dirs are prepended. Here there is no such choice to protect — main calls
+ * this ONLY when the login-shell probe returned nothing, so every version is
+ * a candidate.
  */
 export function loginPathFallbacks(home: string, nvmBins: string[] = []): string[] {
   const local = `${home}/.local/bin`
@@ -131,7 +132,7 @@ export function loginPathFallbacks(home: string, nvmBins: string[] = []): string
     case 'darwin':
       return [
         local,
-        `${home}/.local/share/pnpm`,
+        `${home}/Library/pnpm`,
         `${home}/.npm-global/bin`,
         `${home}/.volta/bin`,
         `${home}/.bun/bin`,

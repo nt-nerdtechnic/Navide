@@ -257,22 +257,34 @@ class _FakeWebSocket:
 
 class _StopHere(Exception):
     """Sentinel ending the impl just past the probe block, which is all these
-    tests drive. A not_found probe no longer raises, so nothing else would."""
+    tests drive. A spawn the probe lets through would otherwise run on."""
 
 
-async def _run_create(session: object, monkeypatch: pytest.MonkeyPatch, reason: str) -> None:
+# What each probe outcome looks like on the command shape that produces it: a
+# miss RAISES only when the spawn execs the CLI directly (a bare argv — the
+# plugin ai.cli.start path, a Windows agent pane) and DEGRADES when a shell
+# stands in front of it. Pairing the outcome with its real shape keeps these
+# tests from exercising a combination production never builds.
+_PROBE_CASES = {
+    "raise_not_found": (["qwen"], "raise", "not_found"),
+    "degrade_not_found": (["/bin/zsh", "-ilc", "qwen"], "degrade", "not_found"),
+    "nonzero_exit": (["/bin/zsh", "-ilc", "qwen"], "raise", "nonzero_exit"),
+}
+
+
+async def _run_create(session: object, monkeypatch: pytest.MonkeyPatch, case: str) -> None:
     """Drive terminal.create's impl to the point where the spawn probe runs."""
     from agent_team_backend import ws_handlers
+
+    command, outcome, reason = _PROBE_CASES[case]
 
     async def noop(*_a: object, **_k: object) -> None:
         return None
 
     def probe(*_a: object, **_k: object) -> dict[str, object]:
-        # not_found degrades to a warning the impl carries on from; every other
-        # reason is still definitive and raises.
-        if reason == "not_found":
-            return {"reason": "not_found", "degraded": True, "binary_path": ""}
-        raise app_mod.AgentCliProbeError("no executable", {"reason": reason})
+        if outcome == "degrade":
+            return {"agent_key": "qwen", "reason": reason, "degraded": True, "binary_path": ""}
+        raise app_mod.AgentCliProbeError("probe failed", {"reason": reason})
 
     def stop(*_a: object, **_k: object) -> dict[str, str]:
         raise _StopHere
@@ -285,30 +297,46 @@ async def _run_create(session: object, monkeypatch: pytest.MonkeyPatch, reason: 
     await ws_handlers._terminal_create_impl(
         session,  # type: ignore[arg-type]
         "m1", "terminal.create",
-        {"pane_id": "pane-1", "agent_key": "qwen", "command": "qwen", "cwd": "/tmp"},
+        {"pane_id": "pane-1", "agent_key": "qwen", "command": command, "cwd": "/tmp"},
         {}, "gen-1",
     )
 
 
+def _missing_events(session: object) -> list[dict]:
+    return [m for m in session.websocket.sent if m["type"] == "cli.missing"]  # type: ignore[attr-defined]
+
+
 @pytest.mark.asyncio
-async def test_spawn_probe_miss_announces_the_cli_but_lets_the_spawn_go_on(
+async def test_spawn_probe_miss_announces_the_cli_before_failing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # The window needs this to open the guided install: a probe miss happens
-    # BEFORE any PTY exists, so exit 127 never fires and nothing else would say
-    # what went wrong beyond red text in a dead pane. It no longer CANCELS the
-    # spawn, though — the probe reads this process's PATH, and the pane's
-    # interactive login shell reads rc files this process never saw — so the
-    # announcement carries blocking: False.
+    # The window needs this to open the guided install: a probe miss on a spawn
+    # that execs the CLI directly happens BEFORE any PTY exists, so exit 127
+    # never fires and nothing else would say what went wrong beyond red text in
+    # a dead pane.
     session = app_mod.Session(_FakeWebSocket())  # type: ignore[arg-type]
-    with pytest.raises(_StopHere):  # got past the probe block, into the spawn
-        await _run_create(session, monkeypatch, "not_found")
-    events = [m for m in session.websocket.sent if m["type"] == "cli.missing"]  # type: ignore[attr-defined]
+    with pytest.raises(app_mod.AgentCliProbeError):
+        await _run_create(session, monkeypatch, "raise_not_found")
+    events = _missing_events(session)
     assert len(events) == 1
     assert events[0]["payload"] == {
-        "agent_key": "qwen", "label": "Qwen Code", "pane_id": "pane-1",
-        "reason": "not_found", "blocking": False,
+        "agent_key": "qwen", "label": "Qwen Code", "pane_id": "pane-1", "reason": "not_found",
     }
+
+
+@pytest.mark.asyncio
+async def test_a_spawn_let_through_on_a_miss_does_not_announce_it_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The window opens the install wizard on cli.missing unconditionally. When
+    # the probe misses but a shell stands in front of the CLI, the spawn goes
+    # ahead and the CLI may well run — announcing it missing would put the
+    # wizard over a working pane. A real absence exits 127 instead, and the
+    # window's terminal.exit handler offers the install then.
+    session = app_mod.Session(_FakeWebSocket())  # type: ignore[arg-type]
+    with pytest.raises(_StopHere):  # got past the probe block, into the spawn
+        await _run_create(session, monkeypatch, "degrade_not_found")
+    assert _missing_events(session) == []
 
 
 @pytest.mark.asyncio
@@ -320,7 +348,7 @@ async def test_other_probe_failures_do_not_offer_an_install(
     session = app_mod.Session(_FakeWebSocket())  # type: ignore[arg-type]
     with pytest.raises(app_mod.AgentCliProbeError):
         await _run_create(session, monkeypatch, "nonzero_exit")
-    assert not [m for m in session.websocket.sent if m["type"] == "cli.missing"]  # type: ignore[attr-defined]
+    assert _missing_events(session) == []
 
 
 @pytest.mark.asyncio

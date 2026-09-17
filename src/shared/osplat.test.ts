@@ -164,7 +164,7 @@ describe('loginPathFallbacks', () => {
     asPlatform('darwin', () => {
       expect(loginPathFallbacks('/Users/x')).toEqual([
         '/Users/x/.local/bin',
-        '/Users/x/.local/share/pnpm',
+        '/Users/x/Library/pnpm',
         '/Users/x/.npm-global/bin',
         '/Users/x/.volta/bin',
         '/Users/x/.bun/bin',

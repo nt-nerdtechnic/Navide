@@ -12089,10 +12089,25 @@ backend.on('session.detected', (raw) => {
 // installed, so offer guided install via the onboarding dep registry (dep ids
 // match agentKeys).
 backend.on('terminal.exit', (raw) => {
-  const ev = raw as { pane_id?: string; exit_code?: number | null }
+  const ev = raw as {
+    pane_id?: string
+    exit_code?: number | null
+    startup_probe?: { agent_key?: string; reason?: string } | null
+  }
   if (!ev?.pane_id) return
   const pane = panes.value.find((p) => p.id === ev.pane_id)
-  if (!pane) return
+  if (!pane) {
+    // An embedded CLI dock (the Pipeline Manager's) shares this window's
+    // session but owns no pane entry, so the 127 check below never reaches
+    // it. It used to get cli.missing instead; the backend no longer sends that
+    // for a spawn it let through on a probe miss, so answer the shell's own
+    // verdict here. The probe's agent key is the only one the event carries.
+    const agentKey = ev.startup_probe?.agent_key
+    if (ev.exit_code === 127 && ev.startup_probe?.reason === 'not_found' && agentKey && agentKey !== 'terminal') {
+      promptCliInstall(agentKey, agentKey, ev.pane_id)
+    }
+    return
+  }
   // A dead PTY can't loop: stop the limit watcher and drop the loop badge state.
   if (pane.loopActive || pane.loopWaitUntil != null || pane.loopEstimateResetAt != null) {
     stopLoopLimitWatcher(ev.pane_id)

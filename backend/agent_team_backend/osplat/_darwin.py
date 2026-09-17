@@ -10,6 +10,7 @@ asked.
 from __future__ import annotations
 
 import os
+import shutil
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -101,23 +102,23 @@ class DarwinLayout(DarwinPaths):
         # its installer puts in ~/.local/bin, resolved fine.
         #
         # nvm's bins come with a condition. These dirs are PREPENDED to PATH,
-        # and nvm keeps one bin per installed version, so offering all of them
-        # to a process whose PATH already names the version the user selected
-        # puts a different node ahead of that choice — `nvm use 20` silently
-        # became v22 for every pane. Offer them only when nothing on PATH
-        # speaks for nvm yet, which is exactly the case they exist for.
-        nvm_root = str(home / ".nvm" / "versions" / "node")
-        version_chosen = any(
-            entry.startswith(nvm_root)
-            for entry in os.environ.get("PATH", "").split(os.pathsep)
-        )
+        # and nvm keeps one bin per installed version, so offering them to a
+        # process that already has a node puts a different one ahead of it:
+        # `nvm use 20` silently became v22, and someone who moved to Homebrew's
+        # node but kept ~/.nvm got an old nvm node ahead of /opt/homebrew/bin.
+        # Offer them only when PATH resolves no node at all — the launchd-bare
+        # PATH a failed login-shell probe leaves, which is the case they are for.
+        node_chosen = shutil.which("node", path=os.environ.get("PATH", "")) is not None
         return [
             str(home / ".local" / "bin"),
-            str(home / ".local" / "share" / "pnpm"),
+            # `pnpm setup` on darwin: ~/Library/pnpm, per pnpm's getDataDir.
+            # ~/.local/share/pnpm is its Linux default and appears on a Mac
+            # only under XDG_DATA_HOME, which the login shell already exports.
+            str(home / "Library" / "pnpm"),
             str(home / ".npm-global" / "bin"),
             str(home / ".volta" / "bin"),
             str(home / ".bun" / "bin"),
-            *([] if version_chosen else _posix_paths.nvm_node_bins(home)),
+            *([] if node_chosen else _posix_paths.nvm_node_bins(home)),
             "/usr/local/bin",
             "/opt/homebrew/bin",
             "/opt/homebrew/sbin",

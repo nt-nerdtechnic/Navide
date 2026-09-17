@@ -6057,26 +6057,33 @@ async def _terminal_create_impl(
     payload["command"] = app._command_with_installed_cli_alias(
         agent_key, payload.get("command")
     )
-    startup_probe = await asyncio.get_running_loop().run_in_executor(
-        _CLI_PROBE_EXECUTOR,
-        app._probe_agent_cli_for_spawn, agent_key, payload.get("command"),
-    )
-    if startup_probe:
-        metadata["startup_probe"] = startup_probe
-        if startup_probe.get("reason") == "not_found":
-            # Nothing on the backend's PATH answers to this CLI. The spawn goes
-            # ahead anyway — the pane's login shell reads rc files this process
-            # never saw — but tell the window, so a CLI that really is missing
-            # can still open the guided install instead of leaving the user
-            # with a bare `command not found` in the pane.
+    try:
+        startup_probe = await asyncio.get_running_loop().run_in_executor(
+            _CLI_PROBE_EXECUTOR,
+            app._probe_agent_cli_for_spawn, agent_key, payload.get("command"),
+        )
+    except app.AgentCliProbeError as probe_error:
+        # A CLI that simply is not installed is not an error the user can act on
+        # from a dead pane full of red text — tell the window so it can open the
+        # guided install. The error still propagates and cancels the spawn.
+        if probe_error.details.get("reason") == "not_found":
             dep = app.onboarding_deps.DEPS_BY_ID.get(agent_key)
             await session.send_json(make_event("cli.missing", {
                 "agent_key": agent_key,
                 "label": dep.label if dep else agent_key,
                 "pane_id": str(payload.get("pane_id") or ""),
                 "reason": "not_found",
-                "blocking": False,
             }))
+        raise
+    if startup_probe:
+        # A degraded not_found probe deliberately sends no cli.missing. The
+        # spawn goes ahead because the pane's login shell may well find the
+        # CLI, and the window opens the install wizard on cli.missing
+        # unconditionally — announcing "not installed" for a CLI about to run
+        # puts that wizard over a working pane. One that really is absent exits
+        # 127, and the window's terminal.exit handler offers the install then,
+        # once the shell has confirmed it.
+        metadata["startup_probe"] = startup_probe
     # The vendor's own auto-update switch, only when the user opted out of it.
     env.update(app.onboarding_deps.spawn_env_for(agent_key))
     # CLI accounts share the real home — regular spawns get no profile env

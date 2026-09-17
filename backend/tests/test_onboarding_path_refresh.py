@@ -284,14 +284,28 @@ def test_linux_fallbacks_without_nvm(tmp_path):
     assert "/snap/bin" in dirs
 
 
-def test_macos_fallbacks_name_the_node_manager_dirs_too(tmp_path):
+def _node_in(directory):
+    """Put an executable `node` in `directory`, so PATH resolves one there."""
+    directory.mkdir(parents=True, exist_ok=True)
+    node = directory / "node"
+    node.write_text("#!/bin/sh\n")
+    node.chmod(0o755)
+    return directory
+
+
+def test_macos_fallbacks_name_the_node_manager_dirs_too(tmp_path, monkeypatch):
     """`npm install -g` (codex, qwen, kilo) lands under a version manager, not
-    under a Homebrew prefix; nvm's per-version bins come newest first."""
+    under a Homebrew prefix; nvm's per-version bins come newest first. PATH is
+    an empty dir so no node resolves — what a failed login-shell probe leaves,
+    and independent of whatever node the machine running this has."""
     for v in ("v18.20.4", "v22.11.0", "v20.19.0"):
         (tmp_path / ".nvm" / "versions" / "node" / v / "bin").mkdir(parents=True)
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    monkeypatch.setenv("PATH", str(bare))
     assert _darwin.paths.login_path_fallbacks(tmp_path) == [
         str(tmp_path / ".local" / "bin"),
-        str(tmp_path / ".local" / "share" / "pnpm"),
+        str(tmp_path / "Library" / "pnpm"),
         str(tmp_path / ".npm-global" / "bin"),
         str(tmp_path / ".volta" / "bin"),
         str(tmp_path / ".bun" / "bin"),
@@ -310,25 +324,48 @@ def test_macos_fallbacks_without_nvm(tmp_path):
     assert dirs[0] == str(tmp_path / ".local" / "bin")
 
 
+# The three below are one experiment: same ~/.nvm on disk, and the ONLY thing
+# that changes is whether PATH resolves a node. Skipped where there is no
+# login-shell PATH flow to protect (Windows), which is also where an
+# extensionless `node` would not resolve at all.
+
+
+@_needs_login_shell_probe
 def test_macos_fallbacks_stand_back_once_a_node_version_is_chosen(tmp_path, monkeypatch):
     """The regression this guards: these dirs are PREPENDED, and nvm keeps one
     bin per version, so offering every version to a PATH that already names the
     one `nvm use` picked put a different node ahead of the user's choice."""
-    chosen = tmp_path / ".nvm" / "versions" / "node" / "v20.19.0" / "bin"
     for v in ("v20.19.0", "v22.11.0"):
         (tmp_path / ".nvm" / "versions" / "node" / v / "bin").mkdir(parents=True)
-    monkeypatch.setenv("PATH", f"{chosen}{os.pathsep}/usr/bin")
+    chosen = _node_in(tmp_path / ".nvm" / "versions" / "node" / "v20.19.0" / "bin")
+    monkeypatch.setenv("PATH", str(chosen))
     dirs = _darwin.paths.login_path_fallbacks(tmp_path)
     assert not any(".nvm" in d for d in dirs)  # nothing may outrank the choice
     assert dirs[0] == str(tmp_path / ".local" / "bin")  # the rest still offered
 
 
-def test_macos_fallbacks_offer_nvm_when_path_is_silent_about_it(tmp_path, monkeypatch):
-    """The control for the test above: same disk, a PATH that names no nvm bin
+@_needs_login_shell_probe
+def test_macos_fallbacks_stand_back_for_a_node_nvm_did_not_install(tmp_path, monkeypatch):
+    """Someone who moved to Homebrew's node but never deleted ~/.nvm. A guard
+    keyed on "PATH names an nvm bin" missed this: PATH names none, so every old
+    nvm version went in AHEAD of /opt/homebrew/bin."""
+    for v in ("v18.20.4", "v22.11.0"):
+        (tmp_path / ".nvm" / "versions" / "node" / v / "bin").mkdir(parents=True)
+    brew = _node_in(tmp_path / "homebrew" / "bin")
+    monkeypatch.setenv("PATH", str(brew))
+    dirs = _darwin.paths.login_path_fallbacks(tmp_path)
+    assert not any(".nvm" in d for d in dirs)
+
+
+@_needs_login_shell_probe
+def test_macos_fallbacks_offer_nvm_when_path_resolves_no_node(tmp_path, monkeypatch):
+    """The control for the two above: same disk, a PATH that resolves no node
     — the case the fallback exists for — and every version is offered."""
     for v in ("v20.19.0", "v22.11.0"):
         (tmp_path / ".nvm" / "versions" / "node" / v / "bin").mkdir(parents=True)
-    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    monkeypatch.setenv("PATH", str(bare))
     dirs = _darwin.paths.login_path_fallbacks(tmp_path)
     assert [d for d in dirs if ".nvm" in d] == [
         str(tmp_path / ".nvm" / "versions" / "node" / "v22.11.0" / "bin"),
