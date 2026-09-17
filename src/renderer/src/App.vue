@@ -4635,6 +4635,9 @@ interface PaneHealthWatcher {
    *  The TUI repaints the old banner into NEW bytes, past limitBaseline, so a
    *  detection resolving to this same reset is that repaint, not a new hit. */
   dismissedLimitUntil: number | null
+  /** Default account of the agent when the current/last flag lit — the account
+   *  that is exhausted. Only a switch back to it lifts the suppression. */
+  limitProfileId: string | null
   /** False until the initial output (spawn banner / reattach scrollback replay)
    *  has settled; matching is suppressed while false so stale historical text
    *  can't spuriously light a badge. */
@@ -4680,9 +4683,10 @@ function checkPaneUsageLimit(
   if (hit === null) return
   // Consume the matched region so a later poll can't re-match the same text.
   watcher.limitBaseline = bytes
-  if (isDismissedUsageLimit(watcher.dismissedLimitUntil, hit.resumeAt)) return
+  if (isDismissedUsageLimit(watcher.dismissedLimitUntil, hit.resumeAt, now)) return
   pane.usageLimitAt = now
   pane.usageLimitUntil = hit.resumeAt
+  watcher.limitProfileId = cliProfilesApi.defaultProfileId(pane.agentKey)
   // The anchor the quota gate compares turn timestamps against. Stamped on
   // DETECTION rather than on the lift: the lift is a later moment, and
   // anchoring there rejected any retry that finished before it.
@@ -4738,9 +4742,18 @@ function checkPaneUsageLimit(
  *  cannot re-light the flag on the next poll. A loop parked on this very
  *  limit resumes the way the badge click does — switching IS the quota
  *  coming back. */
-function clearPaneUsageLimits(agentKey: string): void {
+function clearPaneUsageLimits(agentKey: string, newDefaultId: string | null): void {
   for (const pane of panes.value) {
-    if (pane.agentKey !== agentKey || pane.usageLimitAt == null) continue
+    if (pane.agentKey !== agentKey) continue
+    if (pane.usageLimitAt == null) {
+      // A pane that is not flagged may still hold the suppression from an
+      // earlier clear. Switching back to the exhausted account makes a later
+      // banner with that same reset a genuine hit, so drop it then — and only
+      // then: on any other account the old banner is still just a repaint.
+      const w = paneHealthWatchers.get(pane.id)
+      if (w && w.limitProfileId === newDefaultId) w.dismissedLimitUntil = null
+      continue
+    }
     clearPaneUsageLimit(pane, 'account-switch')
   }
 }
@@ -4783,6 +4796,7 @@ function startPaneHealthWatcher(paneId: string): void {
     baseline: paneCleanBytes(paneId),
     limitBaseline: paneCleanBytes(paneId),
     dismissedLimitUntil: null,
+    limitProfileId: null,
     warmedUp: false,
   }
   watcher.timer = window.setInterval(() => {
@@ -12225,6 +12239,7 @@ backend.on('cli_profiles.changed', (raw) => {
     forced?: boolean
     harvestedProfileIds?: string[]
     identities?: Record<string, Record<string, { email?: string | null }>>
+    defaults?: Record<string, string | null>
   }
   // Forced account switch: credentials were swapped under live panes. Every
   // main window receives this broadcast and restarts its own panes for the
@@ -12233,7 +12248,9 @@ backend.on('cli_profiles.changed', (raw) => {
   // never touches panes.
   // Any account switch, quiet or forced, moves this agent's panes onto
   // quota that is not the exhausted one (see clearPaneUsageLimits).
-  if (ev?.reason === 'set_default' && ev.agent_key) clearPaneUsageLimits(ev.agent_key)
+  if (ev?.reason === 'set_default' && ev.agent_key) {
+    clearPaneUsageLimits(ev.agent_key, ev.defaults?.[ev.agent_key] ?? null)
+  }
   const restartKey = forcedRestartAgentKey(ev)
   if (restartKey) {
     void restartAgentPanes(restartKey)

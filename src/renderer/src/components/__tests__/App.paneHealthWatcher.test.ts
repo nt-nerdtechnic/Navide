@@ -146,7 +146,7 @@ describe('an account switch lets go of the quota flag', () => {
 
   it('clears every pane of the switched agent on set_default, quiet or forced', () => {
     const body = switchHandlerBody()
-    const clear = body.indexOf("if (ev?.reason === 'set_default' && ev.agent_key) clearPaneUsageLimits(ev.agent_key)")
+    const clear = body.indexOf('clearPaneUsageLimits(ev.agent_key, ev.defaults?.[ev.agent_key] ?? null)')
     const forced = body.indexOf('forcedRestartAgentKey(ev)')
     expect(clear).toBeGreaterThan(-1)
     // Before the forced-restart early return, or a forced switch skips it.
@@ -158,6 +158,12 @@ describe('an account switch lets go of the quota flag', () => {
     expect(start).toBeGreaterThan(-1)
     const body = appSource.slice(start, appSource.indexOf('\n}\n', start))
     expect(body).toContain("clearPaneUsageLimit(pane, 'account-switch')")
+    // An unflagged pane drops an earlier suppression only on a switch back to
+    // the exhausted account; on any other account the old banner is a repaint.
+    expect(body).toContain('if (w && w.limitProfileId === newDefaultId) w.dismissedLimitUntil = null')
+    // The exhausted account is stamped when the flag lights.
+    const check = appSource.slice(appSource.indexOf('function checkPaneUsageLimit('))
+    expect(check).toContain('watcher.limitProfileId = cliProfilesApi.defaultProfileId(pane.agentKey)')
     const helperStart = appSource.indexOf('function clearPaneUsageLimit(')
     expect(helperStart).toBeGreaterThan(-1)
     const helper = appSource.slice(helperStart, appSource.indexOf('\n}\n', helperStart))
