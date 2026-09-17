@@ -195,28 +195,7 @@ jobs:
           test "${#assets[@]}" -ge 4
           # Idempotent publish: if the release already exists (e.g. published
           # manually or by a rerun), upload/replace assets instead of failing.
-          if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            gh release create "${GITHUB_REF_NAME}" --verify-tag --generate-notes --title "Navide ${GITHUB_REF_NAME}"
-          fi
-          # One asset per call, with retries. A single call carrying two
-          # ~200 MB files is what took v0.2.5's Linux job down twice and a
-          # manual retry once, with a different code each time — HTTP 400,
-          # then 404, then 500 — from uploads.github.com. Uploading the same
-          # two files one at a time succeeded first try. --clobber keeps the
-          # whole loop idempotent, so a rerun replaces rather than duplicates.
-          for asset in "${assets[@]}"; do
-            for attempt in 1 2 3; do
-              if gh release upload "${GITHUB_REF_NAME}" "${asset}" --clobber; then
-                break
-              fi
-              if [ "${attempt}" -eq 3 ]; then
-                echo "::error::failed to upload ${asset} after 3 attempts"
-                exit 1
-              fi
-              echo "upload of ${asset} failed (attempt ${attempt}); retrying"
-              sleep $((attempt * 20))
-            done
-          done
+          scripts/publish-release-assets.sh "${GITHUB_REF_NAME}" "${assets[@]}"
 
   release-linux-x64:
     if: github.ref_name != 'v0.1.40' && github.ref_name != 'v0.1.41' && github.ref_name != 'v0.1.49'
@@ -367,28 +346,7 @@ jobs:
           test "${#assets[@]}" -eq 3
           # The macOS job normally created the release already; the create
           # branch only fires on a manual rerun of this job alone.
-          if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            gh release create "${GITHUB_REF_NAME}" --verify-tag --generate-notes --title "Navide ${GITHUB_REF_NAME}"
-          fi
-          # One asset per call, with retries. A single call carrying two
-          # ~200 MB files is what took v0.2.5's Linux job down twice and a
-          # manual retry once, with a different code each time — HTTP 400,
-          # then 404, then 500 — from uploads.github.com. Uploading the same
-          # two files one at a time succeeded first try. --clobber keeps the
-          # whole loop idempotent, so a rerun replaces rather than duplicates.
-          for asset in "${assets[@]}"; do
-            for attempt in 1 2 3; do
-              if gh release upload "${GITHUB_REF_NAME}" "${asset}" --clobber; then
-                break
-              fi
-              if [ "${attempt}" -eq 3 ]; then
-                echo "::error::failed to upload ${asset} after 3 attempts"
-                exit 1
-              fi
-              echo "upload of ${asset} failed (attempt ${attempt}); retrying"
-              sleep $((attempt * 20))
-            done
-          done
+          scripts/publish-release-assets.sh "${GITHUB_REF_NAME}" "${assets[@]}"
 
   package-linux-arm64:
     # Manual dry runs only: this build exists so the Linux port can be tried
@@ -663,28 +621,7 @@ jobs:
           test "${#assets[@]}" -ge 2
           # The macOS job normally created the release already; the create
           # branch only fires on a manual rerun of this job alone.
-          if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            gh release create "${GITHUB_REF_NAME}" --verify-tag --generate-notes --title "Navide ${GITHUB_REF_NAME}"
-          fi
-          # One asset per call, with retries. A single call carrying two
-          # ~200 MB files is what took v0.2.5's Linux job down twice and a
-          # manual retry once, with a different code each time — HTTP 400,
-          # then 404, then 500 — from uploads.github.com. Uploading the same
-          # two files one at a time succeeded first try. --clobber keeps the
-          # whole loop idempotent, so a rerun replaces rather than duplicates.
-          for asset in "${assets[@]}"; do
-            for attempt in 1 2 3; do
-              if gh release upload "${GITHUB_REF_NAME}" "${asset}" --clobber; then
-                break
-              fi
-              if [ "${attempt}" -eq 3 ]; then
-                echo "::error::failed to upload ${asset} after 3 attempts"
-                exit 1
-              fi
-              echo "upload of ${asset} failed (attempt ${attempt}); retrying"
-              sleep $((attempt * 20))
-            done
-          done
+          scripts/publish-release-assets.sh "${GITHUB_REF_NAME}" "${assets[@]}"
 
   release-windows-arm64:
     if: github.ref_name != 'v0.1.40' && github.ref_name != 'v0.1.41' && github.ref_name != 'v0.1.49'
@@ -857,25 +794,7 @@ jobs:
           test "${#assets[@]}" -ge 2
           # --clobber replaces the x64 job's latest.yml with the merged one it
           # was built from; this job runs after that one, so there is no race.
-          # One asset per call, with retries. A single call carrying two
-          # ~200 MB files is what took v0.2.5's Linux job down twice and a
-          # manual retry once, with a different code each time — HTTP 400,
-          # then 404, then 500 — from uploads.github.com. Uploading the same
-          # two files one at a time succeeded first try. --clobber keeps the
-          # whole loop idempotent, so a rerun replaces rather than duplicates.
-          for asset in "${assets[@]}"; do
-            for attempt in 1 2 3; do
-              if gh release upload "${GITHUB_REF_NAME}" "${asset}" --clobber; then
-                break
-              fi
-              if [ "${attempt}" -eq 3 ]; then
-                echo "::error::failed to upload ${asset} after 3 attempts"
-                exit 1
-              fi
-              echo "upload of ${asset} failed (attempt ${attempt}); retrying"
-              sleep $((attempt * 20))
-            done
-          done
+          scripts/publish-release-assets.sh "${GITHUB_REF_NAME}" "${assets[@]}"
 
   mirror-release:
     # Runs last, after every platform has joined the GitHub Release, and copies
