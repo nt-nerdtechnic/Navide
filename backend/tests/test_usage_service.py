@@ -2106,12 +2106,18 @@ async def test_refresh_during_poll_runs_next_cycle_with_new_active_account(
 
     monkeypatch.setattr(app, "broadcast", record_broadcast)
     task = asyncio.create_task(svc._run())
-    await asyncio.wait_for(started.wait(), timeout=1)
+    # 5s, the ceiling this file already uses for a wait on real coroutine work.
+    # These three were 1s, which is generous on a developer machine and is not
+    # on a loaded Windows runner: the same suite takes ~3 minutes here and took
+    # 19.5 there, and this test went red on the 0.2.5 dry run with the code
+    # working. Waits on an event that should be set in milliseconds, so a real
+    # hang still fails quickly.
+    await asyncio.wait_for(started.wait(), timeout=5)
     store.set_default("claude", second["id"])
     svc.request_refresh()
     release_first_poll.set()
-    await asyncio.wait_for(completed.wait(), timeout=1)
-    await asyncio.wait_for(task, timeout=1)
+    await asyncio.wait_for(completed.wait(), timeout=5)
+    await asyncio.wait_for(task, timeout=5)
 
     assert len(broadcasts) == 2
     first_payload = broadcasts[0]["payload"]
