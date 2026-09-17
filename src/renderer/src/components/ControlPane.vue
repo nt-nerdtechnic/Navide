@@ -59,6 +59,14 @@ const PlanPane = defineAsyncComponent(() => import('../editor/PlanPane.vue'))
 import type { AgentSpec } from '@navide/plugin-shell'
 export type { AgentSpec } from '@navide/plugin-shell'
 import { CLI_AGENT_SPECS } from '@navide/plugin-shell'
+import {
+  cliModelKey,
+  modelArgsFor,
+  parseCliModelDefault,
+  supportsEffort,
+  supportsModel,
+} from '@navide/plugin-shell'
+import { describeModelRefusal } from '../lib/agentSpawnGate'
 
 /** CLIs YOLO mode actually affects: the ones declaring a bypass flag. Derived,
  *  because the hand-written hint here listed three while eight qualified. */
@@ -219,6 +227,13 @@ export interface SpawnPayload {
   stageId: StageId
   workspacePath: string
   customName?: string
+  /** Model id to launch on ('' / absent = the vendor default). Only set for a
+   *  CLI whose spec declares `modelArgs`; the plain-shell spawns below leave
+   *  both out, because a shell has no model to be told about. */
+  model?: string
+  /** Reasoning-effort level, for the vendors with a flag separate from the
+   *  model id. Set only alongside a vendor that declares `effortArgs`. */
+  effort?: string
   /** Run group to open the pane in. Set only by the sidebar's per-group ＋,
    *  which knows which group the user is pointing at; every other entry point
    *  leaves it unset and the pane lands in the group the active tab names. */
@@ -1752,6 +1767,58 @@ const modalAgent = ref<string>(pickedAgent.value)
 const activeSpawnAgent = computed(() =>
   manualSpawnOpen.value ? modalAgent.value : pickedAgent.value
 )
+
+// ── Model / reasoning effort for the next spawn ───────────────────────────────
+// Which fields appear is answered by the vendor spec, never by a list kept
+// here: a CLI that declares no `modelArgs` gets no Model field, and one with no
+// `effortArgs` no Effort field. droid and aider declare neither and so show
+// nothing — droid accepts an unknown --model and ignores it, so offering the
+// control would be a promise the spawn cannot keep.
+//
+// Effort is a select because `knownEfforts` is a small closed vocabulary the
+// spec states outright. Model is free text because model ids change with every
+// vendor release: a build-time list here would reject valid ids the day after
+// it shipped, which is the same reason modelArgsFor refuses to validate them.
+const pickedModel = ref<string>('')
+const pickedEffort = ref<string>('')
+
+/** The spec behind the dialog's current pick, for the capability questions. */
+const spawnModelSpec = computed(() =>
+  manualAgentSpecs.value.find((s) => s.agentKey === activeSpawnAgent.value)
+)
+const canPickModel = computed(() => supportsModel(spawnModelSpec.value))
+const canPickEffort = computed(() => supportsEffort(spawnModelSpec.value))
+const effortOptions = computed<readonly string[]>(() => spawnModelSpec.value?.knownEfforts ?? [])
+
+/** The stored per-vendor default, which is what a pane starts on when nothing
+ *  is typed in the dialog. Read fresh rather than cached: Settings writes this
+ *  key from another surface, and a stale copy would launch the old pick. */
+function storedModelDefault(agentKey: string): { model: string; effort: string } {
+  return parseCliModelDefault(settingsGet<unknown>(cliModelKey(agentKey), null))
+}
+
+/** Seed the dialog's fields from the vendor's stored default. Called whenever
+ *  the dialog's CLI changes, because a model id belongs to one vendor's
+ *  namespace — carrying `opus-5` over to codex would spawn a refusal. */
+function seedModelPick(agentKey: string): void {
+  const stored = storedModelDefault(agentKey)
+  pickedModel.value = stored.model
+  pickedEffort.value = stored.effort
+}
+watch([manualSpawnOpen, modalAgent], () => {
+  if (manualSpawnOpen.value) seedModelPick(modalAgent.value)
+})
+
+/** Why the current pick cannot be launched, or '' when it can. Uses the same
+ *  helper the spawn command is built from, so the gate and the argv can never
+ *  disagree about what this vendor accepts. */
+const modelRefusal = computed<string>(() => {
+  const request = { model: pickedModel.value.trim(), effort: pickedEffort.value.trim() }
+  if (!request.model && !request.effort) return ''
+  const chosen = modelArgsFor({ spec: spawnModelSpec.value, request })
+  if (chosen.ok) return ''
+  return describeModelRefusal(activeSpawnAgent.value, chosen.refusal, request.effort)
+})
 const pipelineOpen = ref<boolean>(true)
 // Manual spawn used to be a card, and a spawn-mode workspace opened with it
 // already expanded. As a dialog that same default means it appears over the
@@ -1874,12 +1941,22 @@ const spawnWorkspaceOverride = ref<string>('')
 const spawnGroupOverride = ref<string>('')
 
 function emitSpawn(agentKey: string): void {
+  // The dialog's fields are the pick only while the dialog is open and is
+  // showing THIS agent. Every other entry point (the ＋ menu, the heading
+  // button) spawns without the dialog ever rendering, so it takes the vendor's
+  // stored default — reading the fields there would launch whichever CLI's
+  // model happened to be left in them.
+  const pick = manualSpawnOpen.value && agentKey === activeSpawnAgent.value
+    ? { model: pickedModel.value.trim(), effort: pickedEffort.value.trim() }
+    : storedModelDefault(agentKey)
   emit('spawn', {
     agentKey,
     roleKey: pickedRole.value,
     stageId: '',
     workspacePath: spawnWorkspaceOverride.value || workspacePath.value,
-    runGroupId: spawnGroupOverride.value || undefined
+    runGroupId: spawnGroupOverride.value || undefined,
+    model: pick.model || undefined,
+    effort: pick.effort || undefined
   })
   spawnWorkspaceOverride.value = ''
   spawnGroupOverride.value = ''
@@ -3741,8 +3818,30 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
               <option v-for="r in roles" :key="r.key" :value="r.key">{{ r.label }}</option>
             </select>
           </div>
+          <!-- Labelled, unlike the row above: either field can be absent for a
+               vendor, so a bare control would leave the remaining one
+               unidentified. -->
+          <div v-if="canPickModel || canPickEffort" class="row two-col">
+            <label v-if="canPickModel" class="spawn-field">
+              <span class="spawn-field-lb">{{ $t('spawn.model.label') }}</span>
+              <input
+                v-model="pickedModel"
+                type="text"
+                spellcheck="false"
+                :placeholder="$t('spawn.model.placeholder')"
+              />
+            </label>
+            <label v-if="canPickEffort" class="spawn-field">
+              <span class="spawn-field-lb">{{ $t('spawn.model.effort-label') }}</span>
+              <select v-model="pickedEffort">
+                <option value="">{{ $t('spawn.model.effort-default') }}</option>
+                <option v-for="e in effortOptions" :key="e" :value="e">{{ e }}</option>
+              </select>
+            </label>
+          </div>
+          <p v-if="modelRefusal" class="hint warn">{{ modelRefusal }}</p>
           <div class="row spawn-actions">
-            <button class="primary wide" :disabled="!canSpawn" @click="spawn()">{{ $t('action.add-to-grid') }}</button>
+            <button class="primary wide" :disabled="!canSpawn || !!modelRefusal" @click="spawn()">{{ $t('action.add-to-grid') }}</button>
             <button class="ghost wide terminal-btn" :disabled="!canSpawn" @click="openTerminal">{{ $t('action.open-terminal') }}</button>
           </div>
           <div class="row resume-actions">
@@ -4368,6 +4467,24 @@ textarea.drag-over {
   flex-direction: column;
   gap: 4px;
   align-items: stretch;
+}
+/* One labelled control per grid column. min-width:0 because a grid item
+   defaults to its content's min size, and the input inside would otherwise
+   push the 1fr 1fr track wider than the card. */
+.spawn-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.spawn-field-lb {
+  color: var(--text-muted);
+  font-size: var(--font-3xs);
+}
+/* A vendor with only one of the two flags leaves one track empty; span both so
+   the lone field fills the card instead of sitting at half width. */
+.row.two-col > .spawn-field:only-child {
+  grid-column: 1 / -1;
 }
 .terminal-btn {
   opacity: 0.6;

@@ -146,7 +146,8 @@ import {
   orderedAgentKeys,
   isAgentEnabled,
   useCliAgentPrefs,
-  loadCliAgentPrefsFromProject
+  loadCliAgentPrefsFromProject,
+  applyingRemoteCliAgentPrefs
 } from './composables/useCliAgentPrefs'
 import { pickReusablePane, runReportedDispatch, validatePlanDispatch, type PlanDispatchOutcome, type PlanDispatchPayload } from './lib/planDispatch'
 import { planExecutionPrompt } from './lib/planExecutePrompt'
@@ -237,6 +238,7 @@ import {
 } from './lib/resumeBehavior'
 import { flushSettingsOnExit, initSettingsBackend, settingsGet, settingsSet } from '@navide/plugin-ui/shared'
 import { cliPermissionKey, parseCliPermissionMode, skipPermissionFlagFor } from '@navide/plugin-shell'
+import { cliCommandKey, cliEnvKey, spawnEnvOverride } from '@navide/plugin-shell'
 import { useLayoutStore } from './layout/useLayoutStore'
 import { RAIL_SIZE } from './layout/slots'
 import SlotContainer from './layout/SlotContainer.vue'
@@ -1134,8 +1136,14 @@ function resolveCommand(
   modelRequest: CliModelRequest = NO_MODEL_REQUEST
 ): string {
   const spec = agentSpecs.find((s) => s.agentKey === agentKey)
-  const trimmed = override.trim()
-  // If user supplied an override, trust it verbatim.
+  // A caller's override (a rebuilt resume command, an MCP-supplied command)
+  // outranks the stored one: it is this launch's command, while the setting is
+  // only what a launch that names none should start from.
+  const trimmed = override.trim() || settingsGet(cliCommandKey(agentKey), '').trim()
+  // If user supplied an override, trust it verbatim. Nothing below runs — the
+  // permission flag, the pane argument and the model/effort are all things
+  // Navide adds, and an override means the user is writing the line instead.
+  // Settings → CLI Agents says so where the override is typed.
   if (trimmed) return commandWithSelectedBinary(agentKey, trimmed)
   const parts = [spec?.defaultCommand ?? agentKey]
   const paneArg = paneArgCtx && spec?.paneArg ? spec.paneArg(paneArgCtx) : ''
@@ -5914,6 +5922,13 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
       command: shellCommandArgv(userShell, command, { agentPane: opts.agentKey !== 'terminal' }),
       cwd: opts.workspacePath,
       agentKey: opts.agentKey,
+      // Settings → CLI Agents → this vendor's env table. Undefined when the
+      // vendor has none, so a spawn nobody configured reaches the backend
+      // exactly as it did before. These land FIRST in the backend's merge
+      // chain: a later source (a login profile, a per-pane CLI home, portable
+      // credentials) can still win a name, and cli.env_ignored below reports
+      // it when one does.
+      env: spawnEnvOverride(settingsGet<unknown>(cliEnvKey(opts.agentKey), null)),
       metadata: {
         roleKey: opts.roleKey,
         stageId: opts.stageId,
@@ -6020,6 +6035,12 @@ async function onManualSpawn(payload: SpawnPayload): Promise<string | null> {
     stageId: payload.stageId,
     customName: payload.customName,
     commandOverride: '',
+    // The spawn card's pick. resolveCommand turns these into argv, and
+    // spawnPane records them on the pane so a REBUILD can reproduce the
+    // launch; the manual_pane.spawn below is what carries them across an
+    // App restart.
+    model: payload.model,
+    effort: payload.effort,
     workspacePath: payload.workspacePath,
     origin: 'manual',
     runGroupId: spawnGroupId || undefined,
@@ -6038,6 +6059,12 @@ async function onManualSpawn(payload: SpawnPayload): Promise<string | null> {
       // call would race this spawn and silently noop on the backend).
       session_id: panes.value.find((p) => p.id === paneId)?.pinnedSessionId ?? '',
       session_home_id: panes.value.find((p) => p.id === paneId)?.sessionHomeId ?? '',
+      // Without these the record has no model column, and the cold-restore
+      // path reads `saved.model` as absent — the pane comes back on the
+      // vendor default after a restart, silently. The backend writes them
+      // only when non-empty, so '' leaves an existing value alone.
+      model: payload.model ?? '',
+      effort: payload.effort ?? '',
       run_group_id: spawnGroupId,
       output_log_file: panes.value.find((p) => p.id === paneId)?.outputLogFile ?? '',
     })
@@ -12113,6 +12140,42 @@ backend.on('cli.missing', (raw) => {
   promptCliInstall(ev.agent_key, pane?.agentLabel || ev.label || ev.agent_key, ev.pane_id)
 })
 
+// Some of this window's env settings never reached the CLI. Sent only to the
+// session that asked for the spawn (like cli.signed_out), and only once the PTY
+// is up, so a spawn that rolled back is never reported on. Nothing arrives when
+// every variable went through untouched.
+//
+// The two lists are different failures and get different sentences: `denied` was
+// refused on the way in and the value never existed in the pane's environment,
+// while `overridden` was accepted and then replaced or deleted by a
+// higher-priority source — the setting looks applied and is not.
+backend.on('cli.env_ignored', (raw) => {
+  const ev = raw as {
+    agent_key?: string
+    label?: string
+    pane_id?: string
+    denied?: string[]
+    overridden?: string[]
+  }
+  if (!ev?.agent_key) return
+  const pane = ev.pane_id ? panes.value.find((p) => p.id === ev.pane_id) : undefined
+  const label = pane?.agentLabel || ev.label || ev.agent_key
+  const denied = ev.denied ?? []
+  const overridden = ev.overridden ?? []
+  if (denied.length > 0) {
+    notifyRestore.toast(
+      i18n.global.t('cli-env.denied', { label, keys: denied.join(', ') }),
+      { type: 'error', duration: 8000 }
+    )
+  }
+  if (overridden.length > 0) {
+    notifyRestore.toast(
+      i18n.global.t('cli-env.overridden', { label, keys: overridden.join(', ') }),
+      { type: 'info', duration: 8000 }
+    )
+  }
+})
+
 // CLI account login: the backend harvested a profile's isolated login home
 // the moment the browser sign-in completed. Close the disposable login pane
 // and confirm with the signed-in identity. Only the window that spawned the
@@ -14341,7 +14404,10 @@ function _saveRunGroups(): void {
 const applyingRemoteCliPrefs = ref(false)
 
 function _saveCliAgentPrefs(): void {
-  if (applyingRemoteCliPrefs.value || isDetachedWindow) return
+  // applyingRemoteCliAgentPrefs covers the other inbound path: a peer window
+  // that edited the global KV rather than this workspace's ui_state. Writing
+  // its value back out would make the two windows trade writes.
+  if (applyingRemoteCliPrefs.value || applyingRemoteCliAgentPrefs.value || isDetachedWindow) return
   const ws = currentWorkspace.value
   if (!ws) return
   void sendQuiet('project.set_ui_state', {

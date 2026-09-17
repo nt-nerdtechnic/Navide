@@ -413,3 +413,28 @@ describe('a remote caller cannot supply a raw command', () => {
     ])
   })
 })
+
+describe('onManualSpawn — the spawn card\'s pick reaches both destinations', () => {
+  // Two destinations, and forgetting either is silent. spawnPane turns the
+  // pick into argv AND records it on the pane (which is what an in-session
+  // rebuild reads); manual_pane.spawn writes the project record (which is
+  // what a COLD restore reads). A pane wired to only the first comes back on
+  // the vendor default after an App restart and looks like it resumed fine.
+  const body = fn('onManualSpawn')
+
+  it('hands the pick to spawnPane', () => {
+    expect(body).toContain('model: payload.model')
+    expect(body).toContain('effort: payload.effort')
+  })
+
+  it('persists it on the project record too', () => {
+    // Sent as '' rather than omitted when unset: the backend guards these
+    // writes with `if model:`, so an empty string leaves an existing value
+    // alone instead of erasing a pick made before a rebuild.
+    expect(body).toContain("model: payload.model ?? ''")
+    expect(body).toContain("effort: payload.effort ?? ''")
+    const spawnCall = body.indexOf("'manual_pane.spawn'")
+    expect(spawnCall).toBeGreaterThan(-1)
+    expect(body.indexOf("model: payload.model ?? ''")).toBeGreaterThan(spawnCall)
+  })
+})

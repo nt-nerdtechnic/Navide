@@ -87,8 +87,12 @@ export function spawnAdvisoriesFor(
 
 /** Turn a {@link modelArgsFor} refusal into user/agent-facing text. Says what
  *  this vendor DOES accept, not just what it rejected — a caller told only
- *  "not supported" retries with the same shape. */
-function describeModelRefusal(
+ *  "not supported" retries with the same shape.
+ *
+ *  Exported so the spawn card's own gate says the same sentence the MCP tool
+ *  says. A second wording in the renderer would be a second thing to keep in
+ *  step with the vendor specs, and the one most likely to go stale. */
+export function describeModelRefusal(
   agentKey: string,
   refusal: Exclude<ReturnType<typeof modelArgsFor>, { ok: true }>['refusal'],
   effort: string,
