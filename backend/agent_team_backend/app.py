@@ -3137,6 +3137,21 @@ def _probe_agent_cli_for_spawn(agent_key: str, requested_command: Any = None) ->
     return details
 
 
+_HOME_PREFIX = str(Path.home())
+
+
+def _redact_home(text: str) -> str:
+    """Swap the user's home directory for ``~`` in a message bound for the UI.
+
+    ``OSError.__str__`` embeds the filename, so an unhandled FileNotFoundError
+    puts an absolute path -- and the account name inside it -- into UI text
+    that gets screenshotted into bug reports.
+    """
+    if not _HOME_PREFIX or _HOME_PREFIX == os.sep:
+        return text
+    return text.replace(_HOME_PREFIX, "~")
+
+
 async def handle_message(session: Session, msg: dict[str, Any]) -> None:
     msg_id: str = msg.get("id", "")
     msg_type: str = msg.get("type", "")
@@ -3157,7 +3172,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
         )
     except FileNotFoundError as err:
         await session.send_json(
-            make_error(msg_id, msg_type, "SETUP_ERROR", str(err))
+            make_error(msg_id, msg_type, "SETUP_ERROR", _redact_home(str(err)))
         )
     except KeyError as err:
         await session.send_json(
@@ -3167,5 +3182,5 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
         log.exception("handle_message failed for type=%s", msg_type)
         if not session.dead:
             await session.send_json(
-                make_error(msg_id, msg_type, "INTERNAL_ERROR", str(err))
+                make_error(msg_id, msg_type, "INTERNAL_ERROR", _redact_home(str(err)))
             )
