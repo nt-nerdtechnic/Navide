@@ -12,6 +12,7 @@ relies on, so neither can drift back into the other's shape.
 import os
 
 from agent_team_backend import app
+from agent_team_backend.db import WorkspaceDatabases
 from agent_team_backend.projects import ProjectStore
 
 
@@ -44,11 +45,15 @@ def test_workspace_path_follows_a_moved_folder(tmp_path, monkeypatch):
     moved or renamed since must resume into where it is NOW — peek overwrites
     the stored value with the directory it was asked about. Without that, the
     tests above still pass (stored and asked-for paths coincide there)."""
-    store = ProjectStore()
+    databases = WorkspaceDatabases()
+    store = ProjectStore(databases)
     monkeypatch.setattr(app, "project_store", store)
     original = tmp_path / "original"
     original.mkdir()
     store.load_or_create(str(original))
+    # Windows refuses to rename a directory while a file inside it is open, and
+    # load_or_create leaves the workspace database open. peek reopens it.
+    databases.close_all()
     moved = tmp_path / "moved"
     original.rename(moved)
     project = store.peek(str(moved))
