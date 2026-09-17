@@ -422,6 +422,11 @@ async def test_a_sync_key_offer_from_a_paired_device_is_adopted_over_the_wire():
         await _until(lambda: sync_keyring.has_account_key(), timeout=10)
 
         assert sync_keyring.account_key() == theirs
+        # The ack is not ordered against the key landing, so wait for it in its
+        # own right — as the four other ack assertions in this file do. Reading
+        # acks[0] straight after the key arrived passed on every runner except
+        # Windows on Arm, where it was simply the slower of the two.
+        await _until(lambda: bool(conn.acks))
         assert conn.acks[0]["state"] == "delivered"
     finally:
         sync_keyring.forget_account_key()
