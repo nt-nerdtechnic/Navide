@@ -279,6 +279,25 @@ describe('buildResumeCommand', () => {
     )
   })
 
+  it('takes the binary from the spec, not the vendor key, on the default branch', () => {
+    // The key is an id; the command is the spec's. They coincide for every
+    // shipped vendor only because each happens to be lower case, so a vendor
+    // whose binary is not spelled like its key would resume a command that
+    // does not exist on a case-sensitive filesystem.
+    const stub = {
+      agentKey: 'stubvendor',
+      label: 'StubVendor',
+      defaultCommand: 'StubVendor',
+      hint: 'test-only',
+    } as unknown as (typeof AGENT_SPECS)[number]
+    AGENT_SPECS.push(stub)
+    try {
+      expect(buildResumeCommand('stubvendor', 'abc123')).toBe('StubVendor --resume abc123')
+    } finally {
+      AGENT_SPECS.splice(AGENT_SPECS.indexOf(stub), 1)
+    }
+  })
+
   it('uses the default --resume branch for qwen (UUID id)', () => {
     expect(buildResumeCommand('qwen', '4d4a11fe-b08a-46df-9f86-685589531e65')).toBe(
       'qwen --resume 4d4a11fe-b08a-46df-9f86-685589531e65'

@@ -260,8 +260,13 @@ export function buildResumeCommand(
   if (!id) return '' // no id → caller falls back to a fresh spawn
   // The binary comes from the spec's defaultCommand — never a hardcoded name
   // here. (Custom-binary overrides thread through the caller's baseCommand.)
+  // Both branches take the binary from the spec: the vendor key is an id, not
+  // a command, and the two only coincide because every shipped vendor happens
+  // to be lower case. `||`, not `??`: a spec with an empty defaultCommand has
+  // no binary to offer, so the key is still the better guess.
+  const binary = spec?.defaultCommand || agentKey
   const base = spec?.resumeArgs
-    ? `${spec.defaultCommand} ${spec.resumeArgs(id)}`
-    : `${agentKey} --resume ${id}`
+    ? `${binary} ${spec.resumeArgs(id)}`
+    : `${binary} --resume ${id}`
   return flag ? `${base} ${flag}` : base
 }

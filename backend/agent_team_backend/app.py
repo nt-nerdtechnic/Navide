@@ -3122,7 +3122,18 @@ def _probe_agent_cli_for_spawn(agent_key: str, requested_command: Any = None) ->
         "signal": signal_name,
         "version": version,
     }
-    if proc.returncode != 0:
+    if proc.returncode != 0 and version:
+        # The binary ran and identified itself; the exit code is the probe
+        # command's own business. `--version`/`--help` are not always declared
+        # flags — Go's stdlib `flag` exits 0 on ErrHelp, pflag and cobra do not
+        # — and onboarding_deps._probe_one already counts a parsed version as
+        # installed whatever the code was. Disagreeing here is what would show
+        # a CLI as installed in Settings while every pane spawn refused it.
+        log.info(
+            "%s startup probe exited with code %s but reported version %s — accepting",
+            dep.label, proc.returncode, version,
+        )
+    elif proc.returncode != 0:
         cause = f"was terminated by {signal_name}" if signal_name else f"exited with code {proc.returncode}"
         message = f"{dep.label} startup probe {cause} after {duration_ms}ms ({executable_display})"
         error_details = {**details, "reason": "signal" if signal_name else "nonzero_exit"}

@@ -42,6 +42,59 @@ def test_agent_cli_probe_reports_resolved_binary_and_version(
     assert result["exit_code"] == 0
 
 
+def test_agent_cli_probe_accepts_a_nonzero_exit_that_still_named_a_version(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The two probes have to agree on what "installed" means.
+
+    A version probe is not always a declared flag — Go's stdlib `flag` exits 0
+    on ErrHelp while pflag and cobra exit non-zero — so a binary can identify
+    itself and still exit 1. onboarding_deps._probe_one counts that as
+    installed; if this one refused it, Settings would list the CLI while every
+    pane spawn failed.
+    """
+    binary = tmp_path / "somecli"
+    binary.write_text("#!/bin/sh\n")
+    _resolves_to(monkeypatch, str(binary))
+    monkeypatch.setattr(
+        app.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=1,
+            stdout="2.1.210 (Claude Code)\n",
+            stderr="",
+        ),
+    )
+
+    result = app._probe_agent_cli_for_spawn("claude")
+
+    assert result is not None
+    assert result["version"] == "2.1.210"
+    assert result["exit_code"] == 1
+
+
+def test_agent_cli_probe_still_refuses_a_nonzero_exit_that_said_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The guard above is about a binary that ran and identified itself. One
+    that exits non-zero with no version is still what the probe exists for."""
+    binary = tmp_path / "claude"
+    binary.write_text("#!/bin/sh\n")
+    _resolves_to(monkeypatch, str(binary))
+    monkeypatch.setattr(
+        app.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=1, stdout="", stderr="command not found\n"
+        ),
+    )
+
+    with pytest.raises(app.AgentCliProbeError) as caught:
+        app._probe_agent_cli_for_spawn("claude")
+
+    assert caught.value.details["reason"] == "nonzero_exit"
+
+
 @pytest.mark.skipif(not hasattr(signal, "SIGKILL"), reason="no POSIX SIGKILL to name")
 def test_agent_cli_probe_surfaces_sigkill_with_structured_details(
     monkeypatch: pytest.MonkeyPatch,
