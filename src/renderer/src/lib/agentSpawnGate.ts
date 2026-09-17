@@ -39,6 +39,10 @@ export interface SpawnGateContext {
    *  authoritative check, so a drift between the two cannot launch a pane on
    *  the wrong model. Undefined for an unknown key. */
   modelCapabilityFor: (agentKey: string) => CliModelCapability | undefined
+  /** True when a fresh pane of this agent launches on the user's stored
+   *  launch command (Settings → CLI Agents). That line is used verbatim, so a
+   *  model or effort could not reach argv. */
+  launchCommandOverridden: (agentKey: string) => boolean
 }
 
 /** An accepted request. `model` / `effort` are present only when the caller
@@ -165,6 +169,18 @@ export function evaluateSpawnRequest(
     request: { model, effort },
   })
   if (!chosen.ok) return { ok: false, reason: describeModelRefusal(req.agent, chosen.refusal, effort) }
+  // Refused, not dropped: the caller named a model, and a pane that opens on
+  // the vendor default looks exactly like one that got it. A resume is exempt —
+  // its command is rebuilt from the vendor's own syntax, model included, and
+  // never reads the stored launch command.
+  if ((model || effort) && !req.resumesSession && ctx.launchCommandOverridden(req.agent)) {
+    return {
+      ok: false,
+      reason:
+        `「${req.agent}」設了自訂啟動指令（設定 → CLI Agents），整條命令照原樣執行，` +
+        `Navide 不會再加上 model / effort — 請拿掉這兩個參數，或先清空該啟動指令`,
+    }
+  }
 
   const advisories = spawnAdvisoriesFor(ctx)
 

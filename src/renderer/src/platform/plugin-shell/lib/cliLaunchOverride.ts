@@ -40,6 +40,33 @@ export function cliEnvKey(agentKey: string): string {
   return `agentTeam.cliEnv.${agentKey}`
 }
 
+/** Where a launch's command line came from. `stored` is the one case where
+ *  Navide appended nothing — no model, effort, permission flag or pane
+ *  argument — so a caller must not claim any of those reached the CLI. */
+export type LaunchCommandSource = 'caller' | 'stored' | 'none'
+
+/**
+ * Pick the command a launch starts from.
+ *
+ * A caller's command (a rebuilt resume line, an MCP resume) outranks the
+ * stored override: it is this launch's command. A LOGIN pane never takes the
+ * stored override — the backend keeps only the first token and appends the
+ * vendor's sign-in subcommand, so a wrapper line (`npx …`, `ccr code`,
+ * `FOO=1 claude`) would become `npx auth login`. The custom binary
+ * (`agentTeam.cliBinary.<key>`) is not this setting and still applies to it.
+ */
+export function chooseLaunchCommand(input: {
+  callerCommand: string
+  storedCommand: string
+  isLogin: boolean
+}): { command: string; source: LaunchCommandSource } {
+  const caller = input.callerCommand.trim()
+  if (caller) return { command: caller, source: 'caller' }
+  const stored = input.isLogin ? '' : input.storedCommand.trim()
+  if (stored) return { command: stored, source: 'stored' }
+  return { command: '', source: 'none' }
+}
+
 /** A name a process environment can actually hold: letters, digits and
  *  underscores, never starting with a digit. Checked in the UI so a row that
  *  can never work is refused while it is being typed rather than dropped

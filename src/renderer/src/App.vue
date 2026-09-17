@@ -238,7 +238,7 @@ import {
 } from './lib/resumeBehavior'
 import { flushSettingsOnExit, initSettingsBackend, settingsGet, settingsSet } from '@navide/plugin-ui/shared'
 import { cliPermissionKey, parseCliPermissionMode, skipPermissionFlagFor } from '@navide/plugin-shell'
-import { cliCommandKey, cliEnvKey, spawnEnvOverride } from '@navide/plugin-shell'
+import { chooseLaunchCommand, cliCommandKey, cliEnvKey, spawnEnvOverride, type LaunchCommandSource } from '@navide/plugin-shell'
 import { useLayoutStore } from './layout/useLayoutStore'
 import { RAIL_SIZE } from './layout/slots'
 import SlotContainer from './layout/SlotContainer.vue'
@@ -1129,22 +1129,40 @@ async function savedHistoryFile(
  *  passes, so their command comes out byte-for-byte as before. */
 const NO_MODEL_REQUEST: CliModelRequest = { model: '', effort: '' }
 
+/** Whether a fresh, non-login pane of this agent would launch on the stored
+ *  launch command — the question the spawn gate asks before accepting a model. */
+function storedLaunchCommandApplies(agentKey: string): boolean {
+  return chooseLaunchCommand({
+    callerCommand: '',
+    storedCommand: settingsGet(cliCommandKey(agentKey), ''),
+    isLogin: false,
+  }).source === 'stored'
+}
+
 function resolveCommand(
   agentKey: string,
   override: string,
   paneArgCtx?: PaneArgContext,
-  modelRequest: CliModelRequest = NO_MODEL_REQUEST
-): string {
+  modelRequest: CliModelRequest = NO_MODEL_REQUEST,
+  isLogin = false
+): { command: string; source: LaunchCommandSource } {
   const spec = agentSpecs.find((s) => s.agentKey === agentKey)
   // A caller's override (a rebuilt resume command, an MCP-supplied command)
   // outranks the stored one: it is this launch's command, while the setting is
-  // only what a launch that names none should start from.
-  const trimmed = override.trim() || settingsGet(cliCommandKey(agentKey), '').trim()
+  // only what a launch that names none should start from. A login pane skips
+  // the setting — see chooseLaunchCommand.
+  const launch = chooseLaunchCommand({
+    callerCommand: override,
+    storedCommand: settingsGet(cliCommandKey(agentKey), ''),
+    isLogin,
+  })
   // If user supplied an override, trust it verbatim. Nothing below runs — the
   // permission flag, the pane argument and the model/effort are all things
   // Navide adds, and an override means the user is writing the line instead.
   // Settings → CLI Agents says so where the override is typed.
-  if (trimmed) return commandWithSelectedBinary(agentKey, trimmed)
+  if (launch.source !== 'none') {
+    return { command: commandWithSelectedBinary(agentKey, launch.command), source: launch.source }
+  }
   const parts = [spec?.defaultCommand ?? agentKey]
   const paneArg = paneArgCtx && spec?.paneArg ? spec.paneArg(paneArgCtx) : ''
   if (paneArg) parts.push(paneArg)
@@ -1168,7 +1186,7 @@ function resolveCommand(
       + `effort="${modelRequest.effort}" (${chosen.refusal.kind}); launching on the vendor default`
     )
   }
-  return commandWithSelectedBinary(agentKey, parts.join(' '))
+  return { command: commandWithSelectedBinary(agentKey, parts.join(' ')), source: 'none' }
 }
 
 interface RunGroup {
@@ -2530,9 +2548,10 @@ async function createRequestedPane(
     // The only write of these two on the MCP spawn path: without them the pane
     // record keeps the vendor default and the next restart reopens on the wrong
     // model. The backend writes them only when non-empty, so '' leaves the
-    // record alone.
-    model: req.model ?? '',
-    effort: req.effort ?? '',
+    // record alone. Read back from the pane, not the request: spawnPane drops
+    // a model that a stored launch command kept off argv.
+    model: panes.value.find((p) => p.id === paneId)?.model ?? '',
+    effort: panes.value.find((p) => p.id === paneId)?.effort ?? '',
     // On the resume path the id is known before the CLI has said anything, and
     // pinnedSessionId is only set once it does — so fall back to the id the
     // pane was launched with, or the next restart reopens it fresh and loses
@@ -2633,8 +2652,8 @@ async function createStandaloneRequestedPane(
     command: '',
     // Same as createRequestedPane: the only place an MCP spawn's model reaches
     // the pane record. '' means "not requested" and does not overwrite.
-    model: req.model ?? '',
-    effort: req.effort ?? '',
+    model: panes.value.find((p) => p.id === paneId)?.model ?? '',
+    effort: panes.value.find((p) => p.id === paneId)?.effort ?? '',
     // Same fallback as createRequestedPane: a resumed pane knows its id before
     // the CLI has pinned one.
     session_id:
@@ -2672,6 +2691,7 @@ function standaloneSpawnGateContext() {
     parentChildCount: 0,
     cliPaneCount: panes.value.filter((p) => p.agentKey !== 'terminal').length,
     modelCapabilityFor: (agentKey: string) => agentSpecs.find((s) => s.agentKey === agentKey),
+    launchCommandOverridden: storedLaunchCommandApplies,
   }
 }
 
@@ -2940,6 +2960,7 @@ function spawnGateContextFor(parentPaneId: string) {
     parentChildCount: panes.value.filter((p) => p.spawnedBy === parentPaneId).length,
     cliPaneCount: panes.value.filter((p) => p.agentKey !== 'terminal').length,
     modelCapabilityFor: (agentKey: string) => agentSpecs.find((s) => s.agentKey === agentKey),
+    launchCommandOverridden: storedLaunchCommandApplies,
   }
 }
 
@@ -5756,10 +5777,17 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
   const paneArgCtx: PaneArgContext | undefined = spec.paneArg && opts.workspacePath
     ? { paneId: id, historyRoot: await paneHistoryRootFor(opts.agentKey, opts.workspacePath) }
     : undefined
-  let command = resolveCommand(opts.agentKey, opts.commandOverride, paneArgCtx, {
+  const launch = resolveCommand(opts.agentKey, opts.commandOverride, paneArgCtx, {
     model: opts.model ?? '',
     effort: opts.effort ?? '',
-  })
+  }, !!(opts.isLogin || opts.loginProfileId))
+  let command = launch.command
+  // A stored launch command is the user's whole line, so no model or effort
+  // reached argv. Recording the request anyway would make the pane (and every
+  // record and rebuild built from it) claim a model the CLI never received.
+  const launchedModel: CliModelRequest = launch.source === 'stored'
+    ? NO_MODEL_REQUEST
+    : { model: opts.model ?? '', effort: opts.effort ?? '' }
   const userShell = backend.shell.value || 'bash'
 
   if (opts.agentKey === 'terminal' && !command) {
@@ -5855,8 +5883,8 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
     sessionHomeId: sessionHomeId || undefined,
     profileId: opts.profileId || undefined,
     sessionMarker: sessionMarker || undefined,
-    model: opts.model || undefined,
-    effort: opts.effort || undefined,
+    model: launchedModel.model || undefined,
+    effort: launchedModel.effort || undefined,
     spawnedBy: opts.spawnedBy,
     formerPaneIds: opts.formerPaneIds?.length ? [...opts.formerPaneIds] : undefined,
   }
@@ -6099,9 +6127,11 @@ async function onManualSpawn(payload: SpawnPayload): Promise<string | null> {
       // Without these the record has no model column, and the cold-restore
       // path reads `saved.model` as absent — the pane comes back on the
       // vendor default after a restart, silently. The backend writes them
-      // only when non-empty, so '' leaves an existing value alone.
-      model: payload.model ?? '',
-      effort: payload.effort ?? '',
+      // only when non-empty, so '' leaves an existing value alone. Read back
+      // from the pane: spawnPane drops a pick a stored launch command kept off
+      // argv, and the record must say what the CLI actually runs on.
+      model: panes.value.find((p) => p.id === paneId)?.model ?? '',
+      effort: panes.value.find((p) => p.id === paneId)?.effort ?? '',
       run_group_id: spawnGroupId,
       output_log_file: panes.value.find((p) => p.id === paneId)?.outputLogFile ?? '',
     })
@@ -12226,9 +12256,11 @@ backend.on('cli.missing', (raw) => {
 })
 
 // Some of this window's env settings never reached the CLI. Sent only to the
-// session that asked for the spawn (like cli.signed_out), and only once the PTY
-// is up, so a spawn that rolled back is never reported on. Nothing arrives when
-// every variable went through untouched.
+// session that asked for the spawn (like cli.signed_out), once the PTY exists —
+// the same point agent_msg.push_state goes out. That is not yet a committed
+// create: attribution, a cancel, or a CLI that exits at once can still roll the
+// spawn back afterwards, so this toast may accompany a pane that then fails to
+// open. Nothing arrives when every variable went through untouched.
 //
 // The two lists are different failures and get different sentences: `denied` was
 // refused on the way in and the value never existed in the pane's environment,

@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
   SPAWN_ENV_RESERVED_KEYS,
+  chooseLaunchCommand,
   cliCommandKey,
   cliEnvKey,
   isReservedSpawnEnvKey,
@@ -17,6 +18,36 @@ describe('settings keys', () => {
   it('mirror the per-vendor shape the other CLI settings use', () => {
     expect(cliCommandKey('claude')).toBe('agentTeam.cliCommand.claude')
     expect(cliEnvKey('claude')).toBe('agentTeam.cliEnv.claude')
+  })
+})
+
+describe('chooseLaunchCommand', () => {
+  it('uses the stored command when the caller named none', () => {
+    expect(chooseLaunchCommand({ callerCommand: '', storedCommand: ' ccr code ', isLogin: false }))
+      .toEqual({ command: 'ccr code', source: 'stored' })
+  })
+
+  it('lets the caller win, so a rebuilt resume command is not replaced by the setting', () => {
+    // Reading the setting first would throw the resume line away and reopen
+    // the pane on a fresh session — losing the conversation.
+    expect(chooseLaunchCommand({ callerCommand: 'claude --resume abc', storedCommand: 'ccr code', isLogin: false }))
+      .toEqual({ command: 'claude --resume abc', source: 'caller' })
+  })
+
+  it('never gives a login pane the stored command', () => {
+    // The backend keeps only the first token and appends `auth login`, so a
+    // wrapper line would become `npx auth login` / `ccr auth login`. 'none'
+    // sends the login down the default-command path, where the custom binary
+    // (agentTeam.cliBinary.<key>) still applies.
+    for (const storedCommand of ['npx @anthropic-ai/claude-code', 'ccr code', 'FOO=1 claude']) {
+      expect(chooseLaunchCommand({ callerCommand: '', storedCommand, isLogin: true }))
+        .toEqual({ command: '', source: 'none' })
+    }
+  })
+
+  it('reads a blank setting as none', () => {
+    expect(chooseLaunchCommand({ callerCommand: '  ', storedCommand: '   ', isLogin: false }))
+      .toEqual({ command: '', source: 'none' })
   })
 })
 

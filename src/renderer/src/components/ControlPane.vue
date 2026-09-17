@@ -60,6 +60,8 @@ import type { AgentSpec } from '@navide/plugin-shell'
 export type { AgentSpec } from '@navide/plugin-shell'
 import { CLI_AGENT_SPECS } from '@navide/plugin-shell'
 import {
+  chooseLaunchCommand,
+  cliCommandKey,
   cliModelKey,
   modelArgsFor,
   parseCliModelDefault,
@@ -1803,10 +1805,27 @@ function storedModelDefault(agentKey: string): { model: string; effort: string }
  *  the dialog's CLI changes, because a model id belongs to one vendor's
  *  namespace — carrying `opus-5` over to codex would spawn a refusal. */
 function seedModelPick(agentKey: string): void {
-  const stored = storedModelDefault(agentKey)
+  commandShadowsModel.value = launchesOnStoredCommand(agentKey)
+  // Nothing to seed when the stored launch command wins: the fields are
+  // disabled, and showing the stored model in them would read as applied.
+  const stored = commandShadowsModel.value ? { model: '', effort: '' } : storedModelDefault(agentKey)
   pickedModel.value = stored.model
   pickedEffort.value = stored.effort
 }
+
+/** Whether a fresh pane of this agent launches on the user's stored launch
+ *  command (Settings → CLI Agents). That line runs verbatim, so a model or
+ *  effort picked here could not reach the CLI — the fields say so instead of
+ *  taking a pick that would be dropped. Read fresh, like storedModelDefault. */
+function launchesOnStoredCommand(agentKey: string): boolean {
+  return chooseLaunchCommand({
+    callerCommand: '',
+    storedCommand: settingsGet<string>(cliCommandKey(agentKey), ''),
+    isLogin: false,
+  }).source === 'stored'
+}
+/** Set with the seed, when the dialog opens or changes CLI. */
+const commandShadowsModel = ref<boolean>(false)
 watch([manualSpawnOpen, modalAgent], () => {
   if (manualSpawnOpen.value) seedModelPick(modalAgent.value)
 })
@@ -1948,9 +1967,13 @@ function emitSpawn(agentKey: string): void {
   // button) spawns without the dialog ever rendering, so it takes the vendor's
   // stored default — reading the fields there would launch whichever CLI's
   // model happened to be left in them.
-  const pick = manualSpawnOpen.value && agentKey === activeSpawnAgent.value
-    ? { model: pickedModel.value.trim(), effort: pickedEffort.value.trim() }
-    : storedModelDefault(agentKey)
+  // A stored launch command sends neither — it would be dropped on the way to
+  // argv, and a spawn must never carry a pick the CLI does not receive.
+  const pick = launchesOnStoredCommand(agentKey)
+    ? { model: '', effort: '' }
+    : manualSpawnOpen.value && agentKey === activeSpawnAgent.value
+      ? { model: pickedModel.value.trim(), effort: pickedEffort.value.trim() }
+      : storedModelDefault(agentKey)
   emit('spawn', {
     agentKey,
     roleKey: pickedRole.value,
@@ -3830,17 +3853,19 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
                 v-model="pickedModel"
                 type="text"
                 spellcheck="false"
+                :disabled="commandShadowsModel"
                 :placeholder="$t('spawn.model.placeholder')"
               />
             </label>
             <label v-if="canPickEffort" class="spawn-field">
               <span class="spawn-field-lb">{{ $t('spawn.model.effort-label') }}</span>
-              <select v-model="pickedEffort">
+              <select v-model="pickedEffort" :disabled="commandShadowsModel">
                 <option value="">{{ $t('spawn.model.effort-default') }}</option>
                 <option v-for="e in effortOptions" :key="e" :value="e">{{ e }}</option>
               </select>
             </label>
           </div>
+          <p v-if="commandShadowsModel && (canPickModel || canPickEffort)" class="hint model-shadowed">{{ $t('spawn.model.shadowed-by-command') }}</p>
           <p v-if="modelRefusal" class="hint warn">{{ modelRefusal }}</p>
           <div class="row spawn-actions">
             <button class="primary wide" :disabled="!canSpawn || !!modelRefusal" @click="spawn()">{{ $t('action.add-to-grid') }}</button>

@@ -2,7 +2,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { shallowMount, type VueWrapper } from '@vue/test-utils'
 import ControlPane from '../ControlPane.vue'
-import { cliModelKey } from '@navide/plugin-shell'
+import { cliCommandKey, cliModelKey } from '@navide/plugin-shell'
 import { seedSettings } from '@navide/plugin-ui/shared'
 
 // The Manual spawn dialog's Model / Effort controls.
@@ -28,6 +28,15 @@ const specs = [
     agentKey: 'modelonlycli',
     label: 'ModelOnlyCLI',
     modelArgs: (m: string) => `--model ${m}`,
+  },
+  {
+    // claude's shape again, reserved for the stored-launch-command tests so
+    // the command they seed (settings are a module cache) touches no other.
+    agentKey: 'launchcli',
+    label: 'LaunchCLI',
+    modelArgs: (m: string) => `--model ${m}`,
+    effortArgs: (e: string) => `--effort ${e}`,
+    knownEfforts: ['low', 'high'],
   },
   {
     // droid / aider: neither flag. Offering a control here would be a promise
@@ -224,6 +233,56 @@ describe('ControlPane – the spawn dialog\'s model pick', () => {
     expect(wrapper.emitted('spawn')?.[0]?.[0]).toMatchObject({
       agentKey: 'modelonlycli',
       model: 'stored-9',
+    })
+  })
+
+  describe('when a stored launch command is set', () => {
+    // The trap to avoid: the dialog seeds the stored model default, so
+    // "override + model = refuse" would block EVERY dialog spawn for a user
+    // who set both. The fields step aside instead, and the spawn carries no
+    // pick the CLI could not receive.
+    const seedBoth = () => seedSettings({
+      [cliCommandKey('launchcli')]: 'ccr code',
+      [cliModelKey('launchcli')]: { model: 'opus-5', effort: 'high' },
+    })
+
+    it('disables both fields, leaves them unseeded and says why', async () => {
+      seedBoth()
+      wrapper = mountWith()
+      await openDialog(wrapper)
+      await pickAgent(wrapper, 'launchcli')
+      expect(modelInput(wrapper).attributes('disabled')).toBeDefined()
+      expect(effortSelect(wrapper)[0].attributes('disabled')).toBeDefined()
+      expect((modelInput(wrapper).element as HTMLInputElement).value).toBe('')
+      expect(wrapper.find('.spawn-card--modal .model-shadowed').text())
+        .toBe('spawn.model.shadowed-by-command')
+    })
+
+    it('still spawns — the stored model default does not turn into a refusal', async () => {
+      seedBoth()
+      wrapper = mountWith()
+      await openDialog(wrapper)
+      await pickAgent(wrapper, 'launchcli')
+      const button = wrapper.find('.spawn-card--modal button.primary')
+      expect(button.attributes('disabled')).toBeUndefined()
+      await button.trigger('click')
+      const payload = wrapper.emitted('spawn')?.[0]?.[0] as Record<string, unknown>
+      expect(payload.agentKey).toBe('launchcli')
+      expect(payload.model).toBeUndefined()
+      expect(payload.effort).toBeUndefined()
+    })
+
+    it('sends no stored default from the ＋ menu either', async () => {
+      seedBoth()
+      wrapper = mountWith()
+      await wrapper.find('.ws-add').trigger('click')
+      const option = wrapper
+        .findAll('.ws-add-scroll .ws-add-opt')
+        .find((o) => o.text().includes('LaunchCLI'))
+      await option?.trigger('click')
+      const payload = wrapper.emitted('spawn')?.[0]?.[0] as Record<string, unknown>
+      expect(payload.agentKey).toBe('launchcli')
+      expect(payload.model).toBeUndefined()
     })
   })
 

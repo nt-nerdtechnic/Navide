@@ -24,6 +24,7 @@ export type { CliModelDefault } from './lib/cliModelDefault'
 
 export {
   SPAWN_ENV_RESERVED_KEYS,
+  chooseLaunchCommand,
   cliCommandKey,
   cliEnvKey,
   isReservedSpawnEnvKey,
@@ -32,7 +33,7 @@ export {
   serializeCliEnvOverride,
   spawnEnvOverride,
 } from './lib/cliLaunchOverride'
-export type { CliEnvEntry } from './lib/cliLaunchOverride'
+export type { CliEnvEntry, LaunchCommandSource } from './lib/cliLaunchOverride'
 
 export { modelArgsFor, supportsEffort, supportsModel } from './lib/cliModel'
 export type {

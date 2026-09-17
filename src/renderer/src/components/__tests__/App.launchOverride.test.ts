@@ -32,27 +32,56 @@ function handler(event: string): string {
 describe('resolveCommand — the stored launch-command override', () => {
   const body = fn('resolveCommand')
 
-  it('falls back to agentTeam.cliCommand.<key> when the caller named no command', () => {
-    expect(body).toContain("override.trim() || settingsGet(cliCommandKey(agentKey), '').trim()")
-  })
-
-  it('lets the caller win, so a rebuilt resume command is not replaced by the setting', () => {
-    // Resume / restore / MCP paths pass a fully built command as the override.
-    // Reading the setting first would throw that command away and reopen the
-    // pane on a fresh session — losing the conversation, which is far worse
-    // than the override not applying. This precedence is the reason the
-    // settings page has to disclose the limitation instead of hiding it.
-    const idx = body.indexOf('const trimmed =')
-    expect(idx).toBeGreaterThan(-1)
-    expect(body.slice(idx)).toMatch(/override\.trim\(\)\s*\|\|\s*settingsGet\(cliCommandKey/)
+  // The precedence itself (caller > stored > none, login skips stored) is
+  // pinned executably in cliLaunchOverride.test.ts; these pin that resolveCommand
+  // delegates to it with the right inputs.
+  it('asks chooseLaunchCommand, with the caller override, the stored setting and the login flag', () => {
+    expect(body).toMatch(
+      /chooseLaunchCommand\(\{\s*callerCommand: override,\s*storedCommand: settingsGet\(cliCommandKey\(agentKey\), ''\),\s*isLogin,\s*\}\)/,
+    )
   })
 
   it('still returns an override verbatim, so model and effort are skipped', () => {
     // This is what the settings page has to warn about: an override means the
     // user writes the whole line and nothing below is appended.
-    const overrideIdx = body.indexOf('if (trimmed) return commandWithSelectedBinary(agentKey, trimmed)')
+    const overrideIdx = body.indexOf("if (launch.source !== 'none') {")
     expect(overrideIdx).toBeGreaterThan(-1)
     expect(body.indexOf('modelArgsFor(')).toBeGreaterThan(overrideIdx)
+    expect(body).toContain('command: commandWithSelectedBinary(agentKey, launch.command), source: launch.source')
+  })
+
+  it('keeps the custom binary on the no-override path — the one a login pane takes', () => {
+    // A login pane gets source 'none', so it must fall through to the vendor's
+    // own default command still wrapped by commandWithSelectedBinary: the
+    // `agentTeam.cliBinary.<key>` path setting applies to logins too.
+    expect(body).toContain("return { command: commandWithSelectedBinary(agentKey, parts.join(' ')), source: 'none' }")
+  })
+})
+
+describe('spawnPane — a login pane never launches on the stored command', () => {
+  const body = fn('spawnPane')
+
+  it('passes isLogin for both login shapes (isolated profile and live)', () => {
+    // The backend keeps only the first token of a login command and appends the
+    // sign-in subcommand, so `npx …` would become `npx auth login`.
+    expect(body).toMatch(
+      /resolveCommand\(opts\.agentKey, opts\.commandOverride, paneArgCtx, \{[^}]*\}, !!\(opts\.isLogin \|\| opts\.loginProfileId\)\)/,
+    )
+  })
+})
+
+describe('the spawn gate knows about the stored launch command', () => {
+  it('wires launchCommandOverridden into both gate contexts', () => {
+    for (const name of ['spawnGateContextFor', 'standaloneSpawnGateContext']) {
+      expect(fn(name), name).toContain('launchCommandOverridden: storedLaunchCommandApplies')
+    }
+  })
+
+  it('answers for a fresh, non-login pane from the same helper resolveCommand uses', () => {
+    const body = fn('storedLaunchCommandApplies')
+    expect(body).toMatch(
+      /chooseLaunchCommand\(\{\s*callerCommand: '',\s*storedCommand: settingsGet\(cliCommandKey\(agentKey\), ''\),\s*isLogin: false,\s*\}\)\.source === 'stored'/,
+    )
   })
 })
 

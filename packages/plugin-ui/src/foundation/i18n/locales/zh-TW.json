@@ -4,7 +4,8 @@
       "label": "模型",
       "placeholder": "廠商預設",
       "effort-label": "推理強度",
-      "effort-default": "廠商預設"
+      "effort-default": "廠商預設",
+      "shadowed-by-command": "這個 CLI 設了啟動指令（設定 → CLI Agents），整條命令照原樣執行，Navide 不會再加上模型與 effort，所以這裡無法選。要指定模型，請寫進該啟動指令，或清空它。"
     }
   },
   "ai-cli": {

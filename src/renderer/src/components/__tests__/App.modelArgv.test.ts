@@ -53,7 +53,7 @@ describe('resolveCommand — model/effort on a fresh spawn', () => {
   it('still returns a user command override verbatim, untouched by any flag', () => {
     // An override is trusted literally; the resume paths rebuild their own
     // flags into the override before it gets here.
-    const overrideIdx = body.indexOf('if (trimmed) return commandWithSelectedBinary(agentKey, trimmed)')
+    const overrideIdx = body.indexOf("if (launch.source !== 'none') {")
     expect(overrideIdx).toBeGreaterThan(-1)
     expect(body.indexOf('modelArgsFor(')).toBeGreaterThan(overrideIdx)
   })
@@ -78,8 +78,17 @@ describe('spawnPane — the one place argv is assembled', () => {
 
   it('records them on the pane so a later rebuild can reproduce the launch', () => {
     const body = fn('spawnPane')
-    expect(body).toContain('model: opts.model || undefined')
-    expect(body).toContain('effort: opts.effort || undefined')
+    expect(body).toContain('model: launchedModel.model || undefined')
+    expect(body).toContain('effort: launchedModel.effort || undefined')
+  })
+
+  it('records none when the stored launch command kept them off argv', () => {
+    // The pane, every record read back from it and every rebuild built on it
+    // must say what the CLI runs on — a stored launch command appends nothing.
+    const body = fn('spawnPane')
+    expect(body).toMatch(
+      /const launchedModel: CliModelRequest = launch\.source === 'stored'\s*\?\s*NO_MODEL_REQUEST\s*:\s*\{ model: opts\.model \?\? '', effort: opts\.effort \?\? '' \}/,
+    )
   })
 })
 
@@ -287,8 +296,10 @@ describe('cli_open_agent — the MCP path from event to persistence', () => {
       // restart silently reopens on the wrong model. onManualResume writes the
       // same two fields on the resume path (see its own describe); these two
       // are the only writes a cli_open_agent spawn ever gets.
-      expect(payload).toContain("model: req.model ?? ''")
-      expect(payload).toContain("effort: req.effort ?? ''")
+      // Read back from the pane rather than the request, so a model spawnPane
+      // dropped is not written to the record either.
+      expect(payload).toContain("model: panes.value.find((p) => p.id === paneId)?.model ?? ''")
+      expect(payload).toContain("effort: panes.value.find((p) => p.id === paneId)?.effort ?? ''")
     },
   )
 })
@@ -431,10 +442,13 @@ describe('onManualSpawn — the spawn card\'s pick reaches both destinations', (
     // Sent as '' rather than omitted when unset: the backend guards these
     // writes with `if model:`, so an empty string leaves an existing value
     // alone instead of erasing a pick made before a rebuild.
-    expect(body).toContain("model: payload.model ?? ''")
-    expect(body).toContain("effort: payload.effort ?? ''")
+    // Read back from the pane: spawnPane drops a pick that a stored launch
+    // command kept off argv, and the record must not claim it.
+    const recorded = "model: panes.value.find((p) => p.id === paneId)?.model ?? ''"
+    expect(body).toContain(recorded)
+    expect(body).toContain("effort: panes.value.find((p) => p.id === paneId)?.effort ?? ''")
     const spawnCall = body.indexOf("'manual_pane.spawn'")
     expect(spawnCall).toBeGreaterThan(-1)
-    expect(body.indexOf("model: payload.model ?? ''")).toBeGreaterThan(spawnCall)
+    expect(body.indexOf(recorded)).toBeGreaterThan(spawnCall)
   })
 })
