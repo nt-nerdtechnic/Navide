@@ -68,6 +68,39 @@ export const WHATS_NEW_CHROME = {
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    version: '0.2.5',
+    title: {
+      'zh-TW': '每個 CLI 的啟動設定、一次關掉整組面板',
+      'en-US': 'Per-CLI Launch Settings, Closing a Whole Branch at Once',
+    },
+    highlights: [
+      {
+        'zh-TW': '「設定 → CLI Agents」現在把每個 CLI 的東西收在同一頁：預設模型與 reasoning effort、自訂啟動指令、額外環境變數、權限略過、推送通道、安裝引導。手動開 pane 的對話框也多了 Model 與 Effort 欄位。注意：填了自訂啟動指令就等於完全接管命令列，Navide 不會再往上加任何參數（包含預設模型與權限略過）。',
+        'en-US': 'Settings → CLI Agents now holds everything about a CLI in one place: a default model and reasoning effort, a custom launch command, extra environment variables, permission bypass, push channels and guided install. The manual spawn dialog gains Model and Effort fields. Note: a custom launch command takes the command line over completely — Navide adds nothing to it, including the default model and the permission-bypass flag.',
+      },
+      {
+        'zh-TW': '面板右鍵選單新增「一次關掉這個與它衍生的全部代理」，不必再看著子代理重新掛到別的父節點上。',
+        'en-US': 'A pane\u2019s context menu can now close it together with every agent it spawned, instead of leaving the children to reattach to another parent.',
+      },
+      {
+        'zh-TW': '額度用盡的 ⛔ 徽章可以點掉了（會先確認），正在等額度的 loop 會立刻續跑；也修好了「關掉一次之後，隔天或切回該帳號再次撞到額度卻完全沒有提示」的問題。',
+        'en-US': 'The out-of-quota badge can be dismissed (with a confirmation), and a loop waiting on quota resumes at once. It also no longer swallows the next real limit the following day, or when you switch back to the account that ran out.',
+      },
+      {
+        'zh-TW': '修好用 npm -g／nvm／volta／pnpm／bun 安裝的 CLI 從 Finder 啟動時開不了 pane（「在終端機跑得動、在 Navide 開不起來」），安裝引導也改成 shell 真的回報找不到指令才提示。',
+        'en-US': 'Fixed panes refusing to open for a CLI installed through npm -g, nvm, volta, pnpm or bun when Navide was started from Finder — the "works in Terminal, will not open in Navide" case. Guided install now waits until the shell actually reports the command is missing.',
+      },
+      {
+        'zh-TW': 'macOS 上 nvm 的路徑順序改了：你用 nvm use 選的 node 版本不會再被換掉。若你原本（無意間）依賴 Navide 把 nvm 的 node 排到最前面，現在拿到的會是你自己 shell PATH 裡的那一個。',
+        'en-US': 'On macOS the nvm directories now come after your own PATH, so the node you selected with nvm use is no longer replaced. If you were relying on Navide putting an nvm node first, you will now get the one your shell would.',
+      },
+      {
+        'zh-TW': 'Pipeline 的「繼續執行」修好了——原本每個開出來的 pane 都會以「cwd does not exist」失敗；連點兩次也不會再重複開。',
+        'en-US': 'Resuming a pipeline stage works again — every pane it opened used to fail with "cwd does not exist" — and pressing Resume twice no longer spawns the stage twice.',
+      },
+    ],
+  },
+  {
     version: '0.2.4',
     title: {
       'zh-TW': 'Token Monitor 與額度週期、設定分享、下載鏡像',
