@@ -537,6 +537,28 @@ describe('CliAccountsPane', () => {
     expect(usage.refreshUsage).toHaveBeenCalledTimes(1) // mount only
   })
 
+  it('a generic swap failure (e.g. PROFILE_SWAP_FAILED) also toasts its message', async () => {
+    // Before this fix only PANES_RUNNING/SWITCH_RATE_LIMITED toasted; every
+    // other refusal relied solely on the composable's banner, which sits
+    // above the per-agent sections and scrolls out of view — the click
+    // looked like it did nothing (2026-09-17).
+    const api = makeApi({ profiles: [profile('p1', 'claude', 'Account 2')] })
+    const setDefault = api.setDefault as ReturnType<typeof vi.fn>
+    setDefault.mockResolvedValue({
+      ok: false,
+      code: 'PROFILE_SWAP_FAILED',
+      message: 'swap failed',
+    })
+    const w = mountPane(api)
+
+    await buttonByText(section(w, 0), 'Set as default')!.trigger('click')
+    await flushPromises()
+
+    expect(setDefault).toHaveBeenCalledTimes(1)
+    expect(notify.toast).toHaveBeenCalledTimes(1)
+    expect(notify.toast.mock.calls[0][0]).toBe('swap failed')
+  })
+
   // ── remove ─────────────────────────────────────────────────────────────────
 
   it('removes a profile only after the inline two-step confirmation', async () => {
