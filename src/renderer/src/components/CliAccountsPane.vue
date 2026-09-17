@@ -165,10 +165,13 @@ async function requestSetDefault(agentKey: string, profileId: string | null): Pr
       refreshUsage()
       return true
     }
-    // Expected refusals skip the composable's banner and carry a ready message
-    // — toast it, or the click looks like it did nothing. A declined confirm
-    // has no message (stay silent).
-    if (res.message && (res.code === 'PANES_RUNNING' || res.code === 'SWITCH_RATE_LIMITED')) {
+    // Every refusal with a message gets toasted — including ones the
+    // composable also mirrors into its banner (PROFILE_SWAP_FAILED and other
+    // faults). The banner sits above the per-agent sections and scrolls out
+    // of view once you're looking at a specific agent's row, so relying on it
+    // alone left the click looking like it did nothing (2026-09-17). A
+    // declined confirm has no message (stay silent).
+    if (res.message) {
       toast(res.message, { type: 'error' })
     }
     return false

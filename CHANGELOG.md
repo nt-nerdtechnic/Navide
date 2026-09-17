@@ -6,6 +6,7 @@ All notable released changes to Navide will be documented in this file. The form
 
 ### Fixed
 
+- Toast every CLI account switch failure that carries a message, not only `PANES_RUNNING` and `SWITCH_RATE_LIMITED`. The other refusals (e.g. `PROFILE_SWAP_FAILED`) only ever reached the accounts panel's own banner, which sits above the per-agent sections and scrolls out of view once you're looking at one agent's row — clicking **Set as default** on a failing switch looked like it did nothing.
 - Reopen the Plans, Git and Token Monitor windows after a clean quit, alongside the workspace windows that already came back. A Plans or Git window returns only when its workspace's main window did, so a workspace held back by the restore failure breaker cannot be let in through one of them. One-shot viewers — diff, branch diff and the editor — stay closed on purpose: reopening a diff of a change you have long since dealt with is noise, not restore. Their size and position come back with them.
 - Stop a workspace being dropped from restore after three short sessions. Each launch charges every restored workspace one attempt up front, and only a backend that stayed up for a full minute paid it back — so three quick launches in a row spent a workspace's whole budget and it was quietly skipped from then on, without any of them having gone wrong. Reaching a clean quit now settles the charge too. A run whose backend could not be kept alive still counts against the workspace.
 
