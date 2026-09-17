@@ -35,6 +35,23 @@ export interface WindowEntry {
   adopted_workspaces?: string[]
 }
 
+/** The long-lived windows that live beside the workspace windows and are worth
+ *  bringing back: the Plans review window, the unified Git window (its History
+ *  view included — same window), and the machine-wide Token Monitor.
+ *
+ *  Deliberately NOT here: Diff, Branch Diff and the Editor. Those are one-shot
+ *  viewers opened for a change the user has long since dealt with, so
+ *  reopening them on the next launch is noise, not restore. Git Left is not a
+ *  window at all — it is a contribution embedded in the main window. */
+export type AuxWindowKind = 'plans' | 'git' | 'token-monitor'
+
+export interface AuxWindowEntry {
+  kind: AuxWindowKind
+  /** Owning workspace for the per-workspace kinds; absent for machine-wide ones. */
+  workspace_path?: string
+  bounds?: WindowBounds
+}
+
 export interface RegistryDoc {
   version: 1
   cleanExit: boolean
@@ -43,6 +60,13 @@ export interface RegistryDoc {
    *  separate from `windows` (live tracking) so the per-window remove() calls
    *  during the quit sequence can't wipe it. */
   snapshot: WindowEntry[]
+  /** Auxiliary windows currently open — the `windows` equivalent for the kinds
+   *  in AuxWindowKind, kept in its own list because they carry a kind instead
+   *  of being defined by their workspace. */
+  aux: AuxWindowEntry[]
+  /** Auxiliary windows open at the last clean exit, frozen for the same reason
+   *  `snapshot` is. */
+  auxSnapshot: AuxWindowEntry[]
   /** User setting: reopen the last clean-exit windows on next launch. */
   restoreOnLaunch: boolean
   /** Consecutive restore attempts charged to each workspace path that the
@@ -79,6 +103,34 @@ function sanitizeEntries(list: unknown): WindowEntry[] {
     }))
 }
 
+const AUX_WINDOW_KINDS: readonly AuxWindowKind[] = ['plans', 'git', 'token-monitor']
+
+/** Keep only well-formed auxiliary entries (used for both aux and auxSnapshot).
+ *
+ *  An unknown kind is dropped rather than carried: a downgrade must not hand
+ *  the restore loop a kind it has no opener for. The per-workspace kinds need
+ *  their workspace or there is nothing to open them against, and the
+ *  machine-wide one has its workspace_path stripped even when the file carries
+ *  one — an older or hand-edited doc must not make the restore filter treat
+ *  the Token Monitor as belonging to a workspace. */
+function sanitizeAuxEntries(list: unknown): AuxWindowEntry[] {
+  if (!Array.isArray(list)) return []
+  const out: AuxWindowEntry[] = []
+  for (const raw of list) {
+    if (typeof raw !== 'object' || raw === null) continue
+    const entry = raw as AuxWindowEntry
+    if (!AUX_WINDOW_KINDS.includes(entry.kind)) continue
+    const workspacePath = typeof entry.workspace_path === 'string' ? entry.workspace_path : ''
+    if (entry.kind !== 'token-monitor' && !workspacePath) continue
+    out.push({
+      kind: entry.kind,
+      ...(entry.kind === 'token-monitor' ? {} : { workspace_path: workspacePath }),
+      ...(entry.bounds ? { bounds: entry.bounds } : {}),
+    })
+  }
+  return out
+}
+
 /** The adopted-workspace list of a stored entry, or [] when it is missing or
  *  malformed. Non-string and empty items are dropped rather than failing the
  *  whole entry: the window still restores, just without that one workspace. */
@@ -102,7 +154,8 @@ function sanitizeFailures(value: unknown): Record<string, number> {
 /** Parse a registry file's text, tolerating missing/corrupt content. */
 export function parseRegistryDoc(text: string | null): RegistryDoc {
   const empty: RegistryDoc = {
-    version: 1, cleanExit: true, windows: [], snapshot: [], restoreOnLaunch: true, restoreFailures: {},
+    version: 1, cleanExit: true, windows: [], snapshot: [], aux: [], auxSnapshot: [],
+    restoreOnLaunch: true, restoreFailures: {},
   }
   if (!text) return empty
   try {
@@ -113,6 +166,10 @@ export function parseRegistryDoc(text: string | null): RegistryDoc {
       cleanExit: data.cleanExit === true,
       windows: sanitizeEntries(data.windows),
       snapshot: sanitizeEntries(data.snapshot),
+      // Missing keys (doc written before auxiliary windows were tracked) →
+      // empty lists, same tolerance the ledger below gets.
+      aux: sanitizeAuxEntries(data.aux),
+      auxSnapshot: sanitizeAuxEntries(data.auxSnapshot),
       // Missing/undefined defaults to true (feature on); only explicit false disables.
       restoreOnLaunch: data.restoreOnLaunch !== false,
       // Missing key (doc written before the breaker existed) → empty ledger.
@@ -134,8 +191,11 @@ export class WindowRegistry {
   private entries = new Map<number, WindowEntry>()
   private cleanExit = false
   private snapshot: WindowEntry[] = []
+  private auxEntries = new Map<number, AuxWindowEntry>()
+  private auxSnapshot: AuxWindowEntry[] = []
   private restoreOnLaunch = true
   private lastCleanRestore: WindowEntry[] = []
+  private lastCleanAuxRestore: AuxWindowEntry[] = []
   private restoreFailures = new Map<string, number>()
   private persistTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -165,6 +225,7 @@ export class WindowRegistry {
     // finished paying off.
     this.restoreFailures = new Map(Object.entries(doc.restoreFailures))
     this.lastCleanRestore = (doc.cleanExit && doc.restoreOnLaunch) ? doc.snapshot : []
+    this.lastCleanAuxRestore = (doc.cleanExit && doc.restoreOnLaunch) ? doc.auxSnapshot : []
     const pending = pendingFromDoc(doc)
     this.persistNow()
     return pending
@@ -175,6 +236,16 @@ export class WindowRegistry {
    *  setting is off, or nothing was open. */
   cleanExitRestore(): WindowEntry[] {
     return this.lastCleanRestore
+  }
+
+  /** Auxiliary windows to auto-restore after a clean exit. Same validity rules
+   *  as cleanExitRestore(), and deliberately NOT run through beginRestore():
+   *  the per-workspace kinds are only reopened for a workspace whose main
+   *  window this launch actually restored, so a workspace the breaker skipped
+   *  can never be let back in through its Plans or Git window. The machine-wide
+   *  kind loads no workspace at all, so it has nothing to charge. */
+  cleanExitAuxRestore(): AuxWindowEntry[] {
+    return this.lastCleanAuxRestore
   }
 
   /** Charge every candidate workspace one restore attempt BEFORE any window is
@@ -268,8 +339,44 @@ export class WindowRegistry {
     this.persistDebounced()
   }
 
+  /** Start tracking an auxiliary window. Unlike setWorkspace there is nothing
+   *  to merge: the kind and workspace are fixed for the window's whole life. */
+  addAux(winId: number, entry: AuxWindowEntry): void {
+    this.auxEntries.set(winId, { ...entry })
+    this.persistNow()
+  }
+
+  setAuxBounds(winId: number, bounds: WindowBounds): void {
+    const entry = this.auxEntries.get(winId)
+    if (!entry) return
+    entry.bounds = bounds
+    this.persistDebounced()
+  }
+
+  /** Re-point a tracked auxiliary window at another workspace.
+   *
+   *  Only the shared kinds need this. The Git window is keyed by its
+   *  contribution alone, not by workspace, so opening Git for a second project
+   *  re-targets the one window instead of creating another — and the entry has
+   *  to follow, or a restore reopens Git on whichever workspace happened to
+   *  create it. Ignores an untracked id and the machine-wide kind, which has no
+   *  workspace to move. */
+  setAuxWorkspace(winId: number, workspacePath: string): void {
+    const entry = this.auxEntries.get(winId)
+    if (!entry || entry.kind === 'token-monitor' || !workspacePath) return
+    if (entry.workspace_path === workspacePath) return
+    entry.workspace_path = workspacePath
+    this.persistNow()
+  }
+
   remove(winId: number): void {
-    if (!this.entries.delete(winId)) return
+    // Both maps, unconditionally: window ids are unique across the process, so
+    // at most one of them holds this id, and returning early on the first miss
+    // would leave every auxiliary window in the doc forever — it would look
+    // open at the next launch and be restored on top of nothing.
+    const removed = this.entries.delete(winId)
+    const removedAux = this.auxEntries.delete(winId)
+    if (!removed && !removedAux) return
     this.persistNow()
   }
 
@@ -284,6 +391,14 @@ export class WindowRegistry {
     // the quit paths that close windows before before-quit reach this twice.
     if (this.entries.size || !this.snapshot.length) {
       this.snapshot = [...this.entries.values()]
+    }
+    // Same guard, on its own count: an auxiliary window can outlive the last
+    // workspace window (a Plans window left open after the main one closed), so
+    // borrowing `entries.size` here would refuse to freeze a list that is
+    // genuinely there — and, on the second call, would happily overwrite a good
+    // aux snapshot with an empty one.
+    if (this.auxEntries.size || !this.auxSnapshot.length) {
+      this.auxSnapshot = [...this.auxEntries.values()]
     }
     this.persistNow()
   }
@@ -315,6 +430,8 @@ export class WindowRegistry {
       cleanExit: this.cleanExit,
       windows: [...this.entries.values()],
       snapshot: this.snapshot,
+      aux: [...this.auxEntries.values()],
+      auxSnapshot: this.auxSnapshot,
       restoreOnLaunch: this.restoreOnLaunch,
       restoreFailures: Object.fromEntries(this.restoreFailures),
     }

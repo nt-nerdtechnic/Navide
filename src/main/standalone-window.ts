@@ -16,6 +16,9 @@ export interface StandaloneWindowOptions {
   frame: Pick<BrowserWindowConstructorOptions, 'titleBarStyle'>
   locale: () => string
   load: (window: BrowserWindow, params: Record<string, string>) => void
+  /** Called once with each freshly created window (not on a focus-only reopen),
+   *  so the host can track it for restore. */
+  onWindowCreated?: (window: BrowserWindow) => void
 }
 
 /**
@@ -54,6 +57,9 @@ export function createStandaloneWindowOpener(
       },
     })
     current = win
+    // Before ready-to-show, so a host that restores saved bounds moves the
+    // window while it is still hidden rather than after it is on screen.
+    options.onWindowCreated?.(win)
     win.once('ready-to-show', () => {
       if (!win.isDestroyed()) {
         win.show()

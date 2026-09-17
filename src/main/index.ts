@@ -17,7 +17,7 @@ import { abandonPendingBackends } from './backend-pending'
 import { installApplicationMenu, type AppMenuHooks, type RecentMenuEntry } from './menu'
 import { LEGAL_LINKS, isLegalRoute } from '../shared/legalLinks'
 import { openNoopPluginView, openFsProbePluginView, openMiniIdePluginView, devMiniIdePluginDescriptor, openPlansPluginView, devPlansPluginDescriptor, devPlansV2PluginBundle, openGitPluginView, openGitLeftPluginView, updateGitLeftPluginView, closeGitLeftPluginView, registerBundledMiniIde, registerBundledPlans, registerLegacyBundledGit, hasCompletePlansContributions, frontendPluginManager } from './plugins/frontendPluginManager'
-import { plansBackendActivation } from './plugins/frontendPluginManager'
+import { plansBackendActivation, PLANS_PLUGIN_ID } from './plugins/frontendPluginManager'
 import {
   isTrustedPluginManagementSender,
   registerPluginIpc,
@@ -72,7 +72,7 @@ import { clampUiScale, UI_SCALE_SETTING_KEY } from '../shared/uiScale'
 import { installContextMenu, registerTerminalContextMenu } from './context-menu'
 import { inAppUpdateSupported, initUpdater } from './updater'
 import { withDeadline } from './deadline'
-import { MAX_RESTORE_ATTEMPTS, WindowRegistry, type WindowBounds, type WindowEntry } from './window-registry'
+import { MAX_RESTORE_ATTEMPTS, WindowRegistry, type AuxWindowEntry, type AuxWindowKind, type WindowBounds, type WindowEntry } from './window-registry'
 import { registeredGitLeftWorkspace, trustedGitLeftWindow } from './gitLeftIpc'
 import { setWindowDockTileBadge } from './dock-tile-badge'
 import { writeTempTextArtifact } from './temp-text-artifact'
@@ -350,6 +350,26 @@ installWindowControls()
 // detected and offered for restore on the next launch (see window-registry.ts).
 // Path resolved lazily — dev re-points userData (…-dev) below, after imports.
 const windowRegistry = new WindowRegistry(() => join(app.getPath('userData'), 'open-windows.json'))
+// Notified with each auxiliary window as it is created, and only while the
+// startup restore is driving an opener. The openers (the plans router, the
+// contribution window host, the standalone opener) all answer with a boolean,
+// and threading a bounds argument down through those three layers to serve one
+// caller would change four signatures for one launch-time concern — so the
+// tracker below, which every auxiliary window already passes through, hands the
+// window to whoever is listening instead.
+let auxWindowCreatedHook: ((win: BrowserWindow) => void) | null = null
+// Track a long-lived auxiliary window (Plans, Git, Token Monitor) so a clean
+// exit can bring it back. Called from the one spot that owns the window, and
+// only for a genuinely new window — the openers focus an existing one instead,
+// and a second addAux for the same window is not what that means.
+function trackAuxWindow(win: BrowserWindow, entry: AuxWindowEntry): void {
+  const winId = win.id // captured — win.id is not readable after destroy
+  windowRegistry.addAux(winId, entry)
+  win.on('moved', () => { if (!win.isDestroyed()) windowRegistry.setAuxBounds(winId, win.getBounds()) })
+  win.on('resized', () => { if (!win.isDestroyed()) windowRegistry.setAuxBounds(winId, win.getBounds()) })
+  win.on('closed', () => windowRegistry.remove(winId))
+  auxWindowCreatedHook?.(win)
+}
 // Health-check timeout: user-configurable via Settings, persisted here so
 // startBackend() (called before any renderer window exists) can read it.
 // Path resolved lazily for the same reason as windowRegistry's, above.
@@ -618,6 +638,9 @@ const requestTokenMonitor = createTokenMonitorWindowOpener({
   frame: drawnFrameWhereNeeded(),
   locale: currentUiLocale,
   load: loadWindow,
+  // Machine-wide: no workspace_path, so the restore filter reopens it without
+  // asking which workspace came back.
+  onWindowCreated: (win) => trackAuxWindow(win, { kind: 'token-monitor' }),
 })
 
 function backendInfoPayload() {
@@ -1262,17 +1285,41 @@ function watchBackendCrash(b: BackendHandle): void {
 // stop against a start.
 let backendBusy = false
 
+// Set once the bounded respawn budget below is spent: this run really did fail
+// to keep a backend alive, so nothing about it may vindicate the workspaces it
+// restored. Read by markCleanExitAndSettleRestores().
+let backendGaveUp = false
+
 // Bounded respawn of a crashed backend (see backend-autorestart.ts for why it
 // is bounded and why a stability window guards the reset).
 const backendAutoRestart = createBackendAutoRestart({
   restart: () => { void autoRestartBackend() },
   onGiveUp: (attempts) => {
+    backendGaveUp = true
     console.error(`[main] backend auto-restart gave up after ${attempts} attempts`)
   },
   // A backend that survived the stability window vindicates whatever
   // workspaces this launch restored — pay back their attempt charges.
   onStable: () => { windowRegistry.clearRestoreFailures() },
 })
+
+/** Mark a clean exit and, with it, pay back whatever restore attempts this run
+ *  charged.
+ *
+ *  beginRestore() charges every restored workspace up front and only the 60s
+ *  stability window pays it back, so three sessions that ended before that
+ *  window elapsed — an update test, a quick relaunch, a glance at the app and
+ *  a quit — burned a workspace's whole budget and got it silently skipped from
+ *  then on, without a single one of them being a restore that broke anything.
+ *
+ *  Reaching a clean exit proves the same thing surviving the stability window
+ *  proves: the app came up and it was the user who ended it. The one exception
+ *  is a run where the auto-restart budget ran out — that run genuinely failed
+ *  to hold a backend, so its charges stand. */
+function markCleanExitAndSettleRestores(): void {
+  windowRegistry.markCleanExit()
+  if (!backendGaveUp) windowRegistry.clearRestoreFailures()
+}
 
 /** One scheduled respawn attempt. A deliberate restart/stop already in flight
  *  wins: it either brings a backend up itself or intends none to be running. */
@@ -2380,6 +2427,15 @@ ipcMain.handle('window:openDiff', (event, args: Record<string, string>) => {
   return { ok: true }
 })
 
+// The contribution windows worth restoring, by the key that opens them. Both
+// of the restorable per-workspace kinds come through this one host, so the
+// mapping lives here rather than in each caller — and a contribution absent
+// from it (a future one-shot viewer) is simply not tracked.
+const AUX_KIND_BY_CONTRIBUTION: Record<string, AuxWindowKind> = {
+  [`${PLANS_PLUGIN_ID}.window`]: 'plans',
+  'navide.git.window': 'git',
+}
+
 // The standalone Git client plugin view — its own dedicated window (mini-IDE
 // parity), opened from the main window's "open standalone Git" entry. Resolves
 // the backend HTTP base + current theme like openMiniIdeEditor.
@@ -2442,6 +2498,21 @@ async function openCatalogContributionWindow(
       hostWindow.close()
     }
     return result
+  }
+  // Only a window this call created is tracked: the reopen path above focuses
+  // an already-tracked window, and it is only now, past the failure branch,
+  // that the window is one the user will actually see.
+  const auxKind = AUX_KIND_BY_CONTRIBUTION[contributionKey]
+  if (auxKind && !hostWindow.isDestroyed()) {
+    if (created) {
+      trackAuxWindow(hostWindow, { kind: auxKind, workspace_path: workspacePath })
+    } else {
+      // Reused window. Git is keyed by contribution alone (getContributionWindowKey
+      // only scopes Plans per workspace), so this call has just re-targeted the
+      // one Git window at another project — the tracked workspace follows it,
+      // or the restore reopens Git on whichever workspace first created it.
+      windowRegistry.setAuxWorkspace(hostWindow.id, workspacePath)
+    }
   }
   if (!hostWindow.isDestroyed()) {
     if (hostWindow.isMinimized()) hostWindow.restore()
@@ -2904,6 +2975,9 @@ async function openLegacyPlanWindow(workspacePath: string, relPath?: string): Pr
     }
   })
   planWindows.set(workspacePath, win)
+  // Restored as a plain Plans window: which of the two implementations serves
+  // it next launch is decided then, by the router, exactly as it is here.
+  trackAuxWindow(win, { kind: 'plans', workspace_path: workspacePath })
   // Registered before the renderer subscribes to plan:open-doc. Track the plan
   // this window was launched for; a click on a different plan during load
   // overwrites it, and did-finish-load re-sends the final choice if it differs.
@@ -4069,7 +4143,7 @@ app.whenReady().then(async () => {
     // window, so by then each window's 'closed' has already remove()d its
     // entry and the snapshot would be frozen empty. This is the only hook the
     // update path offers that still runs while the windows are open.
-    onInstallStarting: () => { quitConfirmed = true; windowRegistry.markCleanExit() },
+    onInstallStarting: () => { quitConfirmed = true; markCleanExitAndSettleRestores() },
     // The install did not take the app down (bad precondition, error, or
     // timeout) — restore the confirmation gate the waiver above disabled.
     // ...and the snapshot freeze above goes back with it: the app is still
@@ -4144,6 +4218,10 @@ app.whenReady().then(async () => {
   for (const p of launchPaths) {
     if (openWorkspaceFromPath(p)) openedAny = true
   }
+  // Workspaces whose main window this launch actually put back, normalized so
+  // a snapshot's spelling can be compared against it. Gates the per-workspace
+  // auxiliary windows below.
+  const restoredWorkspaces = new Set<string>()
   // Clean-exit auto-restore: when nothing was launched explicitly (no Quick
   // Action / CLI path), reopen the windows that were open at the last clean
   // quit — each in its workspace with its saved bounds. Gated by the
@@ -4173,6 +4251,7 @@ app.whenReady().then(async () => {
       for (const entry of [...mainEntries, ...detachedEntries]) {
         if (entry.detached_group) {
           await reopenDetachedGroup(entry.workspace_path, entry.detached_group, entry.bounds)
+          restoredWorkspaces.add(normalizeWorkspacePath(entry.workspace_path))
           openedAny = true
           continue
         }
@@ -4183,11 +4262,45 @@ app.whenReady().then(async () => {
         if (entry.adopted_workspaces?.length) {
           pendingAdoptedWorkspaces.set(restored.id, entry.adopted_workspaces)
         }
+        restoredWorkspaces.add(normalizeWorkspacePath(entry.workspace_path))
         // Only a window that actually opened counts — when every workspace is
         // skipped this stays false and the empty Welcome window below runs, so
         // the app is never left with no window at all.
         openedAny = true
       }
+    }
+  }
+  // Auxiliary windows (Plans, Git, Token Monitor) from the same clean exit.
+  // Runs after the main windows on purpose: a Plans or Git window only comes
+  // back when its workspace's main window did. That keeps a workspace the
+  // failure breaker skipped from being let in through a side door — reopening
+  // its Git window would load the very backend the breaker is protecting the
+  // app from — and it keeps an orphan Plans window, whose workspace has no
+  // window to hand anything to, from appearing on its own. The machine-wide
+  // Token Monitor belongs to no workspace, so nothing gates it.
+  //
+  // None of this touches openedAny: three auxiliary windows and no main window
+  // still needs the Welcome window below.
+  const auxRestore = windowRegistry.cleanExitAuxRestore()
+  for (const entry of auxRestore) {
+    const ownerPath = entry.workspace_path ?? ''
+    if (entry.kind !== 'token-monitor') {
+      const owner = normalizeWorkspacePath(ownerPath)
+      if (!owner || !restoredWorkspaces.has(owner)) continue
+    }
+    // The openers answer with a boolean, so the window itself arrives through
+    // this hook — set only for the one call, and only when there are bounds to
+    // put back (the openers' own defaults are right for a first-time window).
+    const bounds = entry.bounds
+    auxWindowCreatedHook = bounds
+      ? (win) => { if (!win.isDestroyed()) win.setBounds(bounds) }
+      : null
+    try {
+      if (entry.kind === 'token-monitor') requestTokenMonitor()
+      else if (entry.kind === 'plans') await openPlanWindow(ownerPath)
+      else await openGitWindow(ownerPath)
+    } finally {
+      auxWindowCreatedHook = null
     }
   }
   if (!openedAny) await createWindow()
@@ -4330,7 +4443,7 @@ app.on('before-quit', async (e) => {
   // Non-dialog path (disabled, or re-entrant after quitConfirmed).
   // A user-initiated quit is a clean exit — nothing to restore next launch.
   // Must run before the early return below (backend may already be gone).
-  windowRegistry.markCleanExit()
+  markCleanExitAndSettleRestores()
   // Nothing to tear down means the native quit can proceed. hasBackendActivity()
   // now reports live plugin backends only - bound views, headless MCP instances
   // and in-flight calls - so a packaged launch that merely registered the bundled

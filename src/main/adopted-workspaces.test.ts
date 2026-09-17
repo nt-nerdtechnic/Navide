@@ -90,8 +90,9 @@ describe('adopted workspaces', () => {
     // windows open, which is why the freeze has to happen there too.
     const at = mainSource.indexOf('onInstallStarting:')
     expect(at).toBeGreaterThan(-1)
+    // ...via the wrapper that also settles this run's restore charges.
     expect(mainSource.slice(at, mainSource.indexOf('\n', at)))
-      .toContain('windowRegistry.markCleanExit()')
+      .toContain('markCleanExitAndSettleRestores()')
   })
 
   it('are handed to the window restored for them, once', () => {
