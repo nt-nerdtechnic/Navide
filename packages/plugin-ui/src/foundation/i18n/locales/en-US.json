@@ -598,6 +598,8 @@
     "remove-selected": "Remove selected",
     "remove-children": "Remove {count} sub-panes",
     "remove-children-title": "Close only the agents this pane spawned; the pane itself stays",
+    "remove-with-children": "Remove all {count} panes",
+    "remove-with-children-title": "Close this pane together with every agent it spawned",
     "run-pipeline": "▶ Run pipeline",
     "reset": "Reset",
     "wipe-restart": "↺ Wipe & restart",

@@ -7359,6 +7359,13 @@ async function killDescendants(paneId: string): Promise<void> {
   for (const id of descendantPaneIds(paneId)) await onKill(id)
 }
 
+// "Remove with sub-panes": the whole family in one click. Descendants go first
+// so the sidebar never re-roots them onto a parent that is about to go too.
+async function killWithDescendants(paneId: string): Promise<void> {
+  await killDescendants(paneId)
+  await onKill(paneId)
+}
+
 async function batchRebuild(ids: string[]): Promise<void> {
   // Rebuild replaces pane ids, so capture the resumable subset up front.
   const targets = panes.value.filter((p) => ids.includes(p.id) && paneCanRebuild(p)).map((p) => p.id)
@@ -18695,6 +18702,12 @@ function paneIsCommander(p: ActivePane): boolean {
           @click="killDescendants(paneCtxMenu!.paneId); closePaneCtxMenu()"
         >{{ $t('action.remove-children', { count: ctxDescendantIds.length }) }}</div>
         <div class="pane-ctx-item danger" @click="onKill(paneCtxMenu!.paneId); closePaneCtxMenu()">{{ $t('action.remove') }}</div>
+        <div
+          v-if="ctxDescendantIds.length"
+          class="pane-ctx-item danger"
+          :title="$t('action.remove-with-children-title')"
+          @click="killWithDescendants(paneCtxMenu!.paneId); closePaneCtxMenu()"
+        >{{ $t('action.remove-with-children', { count: ctxDescendantIds.length + 1 }) }}</div>
         </template>
       </div>
     </Teleport>
