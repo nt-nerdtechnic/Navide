@@ -1257,6 +1257,9 @@ class WindowsDiscoveryLayout(WindowsLayout):
         # Nothing the registry PATH would be missing.
         return []
 
+    def login_path_tail_fallbacks(self, home: Path) -> list[str]:
+        return []
+
     def git_subprocess_env(self, askpass: str) -> dict[str, str]:
         # GIT_ASKPASS only, as before: whether the bundled OpenSSH execs the
         # `.cmd` launcher as SSH_ASKPASS is unverified, and git's own prompts

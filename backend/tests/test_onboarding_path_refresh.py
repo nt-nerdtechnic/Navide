@@ -39,6 +39,17 @@ def _reset_path_probe_cache(monkeypatch):
     monkeypatch.setattr(onboarding_deps, "_path_refreshed_at", None)
 
 
+@pytest.fixture(autouse=True)
+def _no_tail_by_default(monkeypatch):
+    """The tail list is this machine's real ~/.nvm on macOS; appended to PATH it
+    would leak into every exact-PATH assertion here. Tests of the tail set it.
+
+    Patched on the consumer, not on `osplat.paths`: on macOS that object IS
+    `_darwin.paths`, so stubbing it would also stub the implementation the tail
+    tests below call directly."""
+    monkeypatch.setattr(onboarding_deps, "_tail_path_dirs", lambda: [])
+
+
 MARKER = osplat.spec.LOGIN_PATH_MARKER
 
 
@@ -284,34 +295,28 @@ def test_linux_fallbacks_without_nvm(tmp_path):
     assert "/snap/bin" in dirs
 
 
-def _node_in(directory):
-    """Put an executable `node` in `directory`, so PATH resolves one there."""
+def _exe(directory, *names):
+    """Executables named `names` in `directory` (created), so PATH resolves them."""
     directory.mkdir(parents=True, exist_ok=True)
-    node = directory / "node"
-    node.write_text("#!/bin/sh\n")
-    node.chmod(0o755)
+    for name in names:
+        f = directory / name
+        f.write_text("#!/bin/sh\n")
+        f.chmod(0o755)
     return directory
 
 
-def test_macos_fallbacks_name_the_node_manager_dirs_too(tmp_path, monkeypatch):
+def test_macos_fallbacks_name_the_node_manager_dirs_too(tmp_path):
     """`npm install -g` (codex, qwen, kilo) lands under a version manager, not
-    under a Homebrew prefix; nvm's per-version bins come newest first. PATH is
-    an empty dir so no node resolves — what a failed login-shell probe leaves,
-    and independent of whatever node the machine running this has."""
-    for v in ("v18.20.4", "v22.11.0", "v20.19.0"):
+    under a Homebrew prefix. nvm's per-version bins are on disk here and still
+    absent: they belong to the tail list, never to this prepended one."""
+    for v in ("v18.20.4", "v22.11.0"):
         (tmp_path / ".nvm" / "versions" / "node" / v / "bin").mkdir(parents=True)
-    bare = tmp_path / "bare"
-    bare.mkdir()
-    monkeypatch.setenv("PATH", str(bare))
     assert _darwin.paths.login_path_fallbacks(tmp_path) == [
         str(tmp_path / ".local" / "bin"),
         str(tmp_path / "Library" / "pnpm"),
         str(tmp_path / ".npm-global" / "bin"),
         str(tmp_path / ".volta" / "bin"),
         str(tmp_path / ".bun" / "bin"),
-        str(tmp_path / ".nvm" / "versions" / "node" / "v22.11.0" / "bin"),
-        str(tmp_path / ".nvm" / "versions" / "node" / "v20.19.0" / "bin"),
-        str(tmp_path / ".nvm" / "versions" / "node" / "v18.20.4" / "bin"),
         "/usr/local/bin",
         "/opt/homebrew/bin",
         "/opt/homebrew/sbin",
@@ -324,53 +329,83 @@ def test_macos_fallbacks_without_nvm(tmp_path):
     assert dirs[0] == str(tmp_path / ".local" / "bin")
 
 
-# The three below are one experiment: same ~/.nvm on disk, and the ONLY thing
-# that changes is whether PATH resolves a node. Skipped where there is no
-# login-shell PATH flow to protect (Windows), which is also where an
-# extensionless `node` would not resolve at all.
-
-
-@_needs_login_shell_probe
-def test_macos_fallbacks_stand_back_once_a_node_version_is_chosen(tmp_path, monkeypatch):
-    """The regression this guards: these dirs are PREPENDED, and nvm keeps one
-    bin per version, so offering every version to a PATH that already names the
-    one `nvm use` picked put a different node ahead of the user's choice."""
-    for v in ("v20.19.0", "v22.11.0"):
+def test_macos_tail_is_the_nvm_bins_newest_first(tmp_path):
+    for v in ("v18.20.4", "v22.11.0", "v20.19.0"):
         (tmp_path / ".nvm" / "versions" / "node" / v / "bin").mkdir(parents=True)
-    chosen = _node_in(tmp_path / ".nvm" / "versions" / "node" / "v20.19.0" / "bin")
-    monkeypatch.setenv("PATH", str(chosen))
-    dirs = _darwin.paths.login_path_fallbacks(tmp_path)
-    assert not any(".nvm" in d for d in dirs)  # nothing may outrank the choice
-    assert dirs[0] == str(tmp_path / ".local" / "bin")  # the rest still offered
-
-
-@_needs_login_shell_probe
-def test_macos_fallbacks_stand_back_for_a_node_nvm_did_not_install(tmp_path, monkeypatch):
-    """Someone who moved to Homebrew's node but never deleted ~/.nvm. A guard
-    keyed on "PATH names an nvm bin" missed this: PATH names none, so every old
-    nvm version went in AHEAD of /opt/homebrew/bin."""
-    for v in ("v18.20.4", "v22.11.0"):
-        (tmp_path / ".nvm" / "versions" / "node" / v / "bin").mkdir(parents=True)
-    brew = _node_in(tmp_path / "homebrew" / "bin")
-    monkeypatch.setenv("PATH", str(brew))
-    dirs = _darwin.paths.login_path_fallbacks(tmp_path)
-    assert not any(".nvm" in d for d in dirs)
-
-
-@_needs_login_shell_probe
-def test_macos_fallbacks_offer_nvm_when_path_resolves_no_node(tmp_path, monkeypatch):
-    """The control for the two above: same disk, a PATH that resolves no node
-    — the case the fallback exists for — and every version is offered."""
-    for v in ("v20.19.0", "v22.11.0"):
-        (tmp_path / ".nvm" / "versions" / "node" / v / "bin").mkdir(parents=True)
-    bare = tmp_path / "bare"
-    bare.mkdir()
-    monkeypatch.setenv("PATH", str(bare))
-    dirs = _darwin.paths.login_path_fallbacks(tmp_path)
-    assert [d for d in dirs if ".nvm" in d] == [
-        str(tmp_path / ".nvm" / "versions" / "node" / "v22.11.0" / "bin"),
-        str(tmp_path / ".nvm" / "versions" / "node" / "v20.19.0" / "bin"),
+    assert _darwin.paths.login_path_tail_fallbacks(tmp_path) == [
+        str(tmp_path / ".nvm" / "versions" / "node" / v / "bin")
+        for v in ("v22.11.0", "v20.19.0", "v18.20.4")
     ]
+
+
+def test_linux_and_windows_have_no_tail(tmp_path):
+    """Linux keeps nvm in its prepended list, as before; Windows has no merge."""
+    (tmp_path / ".nvm" / "versions" / "node" / "v22.11.0" / "bin").mkdir(parents=True)
+    assert _linux.paths.login_path_tail_fallbacks(tmp_path) == []
+    assert _windows.paths.login_path_tail_fallbacks(tmp_path) == []
+
+
+# The merge itself, on the macOS lists, with a disk laid out per case. The
+# system dirs the prepend list names are put on the login PATH up front so the
+# merge skips them: otherwise the host's own /opt/homebrew/bin/node would win
+# and these would measure the machine, not the merge. Skipped where there is no
+# login-shell merge (Windows) — also where an extensionless fake would not run.
+
+
+def _merge_as_macos(monkeypatch, home, login_path, *, probe_ok=True):
+    monkeypatch.setattr(onboarding_deps, "_fallback_path_dirs",
+                        lambda: _darwin.paths.login_path_fallbacks(home))
+    monkeypatch.setattr(onboarding_deps, "_tail_path_dirs",
+                        lambda: _darwin.paths.login_path_tail_fallbacks(home))
+    monkeypatch.setenv("PATH", login_path)
+    if probe_ok:
+        with patch("subprocess.run", return_value=_make_run_result(_probe_output(login_path))):
+            _refresh_path_from_login_shell()
+    else:
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("zsh", 3)):
+            _refresh_path_from_login_shell()
+    return os.environ["PATH"]
+
+
+_SYSTEM = "/usr/local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/bin:/bin"
+
+
+@_needs_login_shell_probe
+def test_merge_keeps_the_nvm_version_the_user_chose(tmp_path, monkeypatch):
+    nvm = tmp_path / ".nvm" / "versions" / "node"
+    _exe(nvm / "v22.11.0" / "bin", "node")
+    v20 = _exe(nvm / "v20.19.0" / "bin", "node")
+    merged = _merge_as_macos(monkeypatch, tmp_path, f"{v20}:{_SYSTEM}")
+    assert shutil.which("node", path=merged) == str(v20 / "node")
+
+
+@_needs_login_shell_probe
+def test_merge_keeps_homebrew_node_over_a_leftover_nvm(tmp_path, monkeypatch):
+    _exe(tmp_path / ".nvm" / "versions" / "node" / "v22.11.0" / "bin", "node")
+    brew = _exe(tmp_path / "brew", "node")
+    merged = _merge_as_macos(monkeypatch, tmp_path, f"{brew}:{_SYSTEM}")
+    assert shutil.which("node", path=merged) == str(brew / "node")
+
+
+@_needs_login_shell_probe
+def test_merge_finds_a_cli_only_a_lazily_loaded_nvm_provides(tmp_path, monkeypatch):
+    """zsh-nvm lazy load plus a Homebrew node hands the backend exactly the PATH
+    the leftover case above does — no nvm bin on it. Guarding on "PATH resolves
+    a node" lost codex here; appending keeps it and still keeps Homebrew first."""
+    nvm_bin = _exe(tmp_path / ".nvm" / "versions" / "node" / "v22.11.0" / "bin", "node", "codex")
+    brew = _exe(tmp_path / "brew", "node")
+    merged = _merge_as_macos(monkeypatch, tmp_path, f"{brew}:{_SYSTEM}")
+    assert shutil.which("codex", path=merged) == str(nvm_bin / "codex")
+    assert shutil.which("node", path=merged) == str(brew / "node")
+
+
+@_needs_login_shell_probe
+def test_merge_finds_an_nvm_cli_when_the_probe_times_out(tmp_path, monkeypatch):
+    """The customer's case: a heavy ~/.zshrc times the probe out, leaving the
+    launchd PATH. codex lives only under nvm."""
+    nvm_bin = _exe(tmp_path / ".nvm" / "versions" / "node" / "v22.11.0" / "bin", "node", "codex")
+    merged = _merge_as_macos(monkeypatch, tmp_path, "/usr/bin:/bin:/usr/sbin:/sbin", probe_ok=False)
+    assert shutil.which("codex", path=merged) == str(nvm_bin / "codex")
 
 
 def test_windows_has_no_fallbacks(tmp_path):

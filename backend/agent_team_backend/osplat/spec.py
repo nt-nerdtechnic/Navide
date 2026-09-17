@@ -185,6 +185,19 @@ class Paths(Protocol):
         """
         ...
 
+    def login_path_tail_fallbacks(self, home: Path) -> list[str]:
+        """Tool dirs that may only ever FOLLOW the user's own `PATH`.
+
+        `login_path_fallbacks` is prepended, which is right for a dir holding
+        one copy of a tool and wrong for a version manager's per-version bins:
+        ahead of `PATH` they outrank the interpreter the user actually chose.
+        Appended, they still make a CLI installed under one of them findable
+        (nothing earlier provides it) without displacing anything the user's
+        shell put first. Entries that do not exist on disk are the caller's to
+        drop.
+        """
+        ...
+
     def backend_entry_on_disk(self, entry: str) -> str:
         """The file a plugin manifest's bare `backend.entry` names on disk.
 

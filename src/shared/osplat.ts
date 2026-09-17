@@ -116,15 +116,14 @@ export function loginShellFlags(shell: string): string[] {
  *
  * `nvmBins` is nvm's `~/.nvm/versions/node/<v>/bin` list, newest first —
  * enumerated by the caller because this module has no `fs` (see
- * listNvmNodeBins in main). Mirrors `Paths.login_path_fallbacks` on the
- * backend; keep the two lists the same.
+ * listNvmNodeBins in main). Mirrors `Paths.login_path_fallbacks` plus
+ * `Paths.login_path_tail_fallbacks` on the backend; keep them the same.
  *
- * One asymmetry is deliberate: the backend drops the nvm bins when PATH
- * already resolves a node, because it re-runs its merge against a PATH that
- * may carry the user's own node (an `nvm use` pick, Homebrew's), and these
- * dirs are prepended. Here there is no such choice to protect — main calls
- * this ONLY when the login-shell probe returned nothing, so every version is
- * a candidate.
+ * On macOS the nvm bins come LAST, after Homebrew's prefixes: nvm keeps one
+ * bin per version, and ahead of /opt/homebrew/bin an old one outranks the
+ * node of someone who moved to Homebrew but kept ~/.nvm. Last, a CLI only nvm
+ * provides is still found. The backend appends them after PATH for the same
+ * reason. Linux keeps its original order.
  */
 export function loginPathFallbacks(home: string, nvmBins: string[] = []): string[] {
   const local = `${home}/.local/bin`
@@ -136,10 +135,10 @@ export function loginPathFallbacks(home: string, nvmBins: string[] = []): string
         `${home}/.npm-global/bin`,
         `${home}/.volta/bin`,
         `${home}/.bun/bin`,
-        ...nvmBins,
         '/usr/local/bin',
         '/opt/homebrew/bin',
         '/opt/homebrew/sbin',
+        ...nvmBins,
       ]
     case 'linux':
       return [

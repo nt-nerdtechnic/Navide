@@ -204,12 +204,15 @@ describe('loginPathFallbacks', () => {
     })
   })
 
-  it('slots the nvm bins ahead of the system dirs on macOS too', () => {
+  // Ahead of /opt/homebrew/bin an old nvm node would outrank the node of
+  // someone who moved to Homebrew but kept ~/.nvm; last, a CLI only nvm
+  // provides is still found.
+  it('puts the nvm bins after the Homebrew prefixes on macOS', () => {
     asPlatform('darwin', () => {
       const nvm = ['/Users/x/.nvm/versions/node/v22.11.0/bin', '/Users/x/.nvm/versions/node/v20.19.0/bin']
       const dirs = loginPathFallbacks('/Users/x', nvm)
-      expect(dirs.slice(5, 7)).toEqual(nvm)
-      expect(dirs.at(-3)).toBe('/usr/local/bin')
+      expect(dirs.slice(-2)).toEqual(nvm)
+      expect(dirs.indexOf('/opt/homebrew/bin')).toBeLessThan(dirs.indexOf(nvm[0]))
     })
   })
 

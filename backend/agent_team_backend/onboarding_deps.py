@@ -231,6 +231,11 @@ def _fallback_path_dirs() -> list[str]:
     return osplat.paths.login_path_fallbacks(Path.home())
 
 
+def _tail_path_dirs() -> list[str]:
+    """Dirs merged at the END of PATH — see `Paths.login_path_tail_fallbacks`."""
+    return osplat.paths.login_path_tail_fallbacks(Path.home())
+
+
 # The login-shell probe costs ~1-3s (interactive zsh reads the full rc chain),
 # and its result only changes when an installer writes a new PATH export — so
 # cache it. Wizard flows that just ran an installer pass force=True (wired from
@@ -279,8 +284,13 @@ def _refresh_path_from_login_shell(force: bool = False) -> None:
         if p and p not in current_set and p not in seen:
             seen.add(p)
             new_paths.append(p)
-    if new_paths:
-        os.environ["PATH"] = os.pathsep.join(new_paths + current_paths)
+    tail_paths: list[str] = []
+    for p in _tail_path_dirs():
+        if p and p not in current_set and p not in seen and os.path.isdir(p):
+            seen.add(p)
+            tail_paths.append(p)
+    if new_paths or tail_paths:
+        os.environ["PATH"] = os.pathsep.join(new_paths + current_paths + tail_paths)
 
 
 def _parse_version(text: str, regex: str) -> str:

@@ -9,8 +9,6 @@ asked.
 
 from __future__ import annotations
 
-import os
-import shutil
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -100,15 +98,7 @@ class DarwinLayout(DarwinPaths):
         # ~/.local prefix; a Finder launch whose login-shell probe timed out
         # therefore reported an installed codex as missing while claude, which
         # its installer puts in ~/.local/bin, resolved fine.
-        #
-        # nvm's bins come with a condition. These dirs are PREPENDED to PATH,
-        # and nvm keeps one bin per installed version, so offering them to a
-        # process that already has a node puts a different one ahead of it:
-        # `nvm use 20` silently became v22, and someone who moved to Homebrew's
-        # node but kept ~/.nvm got an old nvm node ahead of /opt/homebrew/bin.
-        # Offer them only when PATH resolves no node at all — the launchd-bare
-        # PATH a failed login-shell probe leaves, which is the case they are for.
-        node_chosen = shutil.which("node", path=os.environ.get("PATH", "")) is not None
+        # nvm's per-version bins are NOT here: see login_path_tail_fallbacks.
         return [
             str(home / ".local" / "bin"),
             # `pnpm setup` on darwin: ~/Library/pnpm, per pnpm's getDataDir.
@@ -118,11 +108,21 @@ class DarwinLayout(DarwinPaths):
             str(home / ".npm-global" / "bin"),
             str(home / ".volta" / "bin"),
             str(home / ".bun" / "bin"),
-            *([] if node_chosen else _posix_paths.nvm_node_bins(home)),
             "/usr/local/bin",
             "/opt/homebrew/bin",
             "/opt/homebrew/sbin",
         ]
+
+    def login_path_tail_fallbacks(self, home: Path) -> list[str]:
+        # nvm keeps one bin per installed version. Prepended, they outranked
+        # the node the user chose: `nvm use 20` became v22, and someone who
+        # moved to Homebrew's node but kept ~/.nvm got an old nvm node ahead of
+        # /opt/homebrew/bin. Gating them on "PATH has no node yet" fixed that
+        # and broke the opposite case — a lazily loaded nvm (zsh-nvm) with a
+        # Homebrew node shows the backend the same PATH, and a codex installed
+        # under nvm went undetected. Appended, both hold: the user's node stays
+        # first, and a CLI that only nvm provides is still found.
+        return _posix_paths.nvm_node_bins(home)
 
     def backend_entry_on_disk(self, entry: str) -> str:
         return _posix_paths.backend_entry_on_disk(entry)

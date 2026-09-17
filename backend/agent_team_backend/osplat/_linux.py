@@ -270,6 +270,9 @@ class LinuxLayout(LinuxPaths):
             "/snap/bin",
         ]
 
+    def login_path_tail_fallbacks(self, home: Path) -> list[str]:
+        return []
+
     def backend_entry_on_disk(self, entry: str) -> str:
         return _posix_paths.backend_entry_on_disk(entry)
 
