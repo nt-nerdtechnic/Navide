@@ -73,6 +73,22 @@ describe('Settings — push channels', () => {
     expect(settingsGet<string[]>(PUSH_DISABLED_KEY, []).sort()).toEqual(['claude', 'kilo'])
   })
 
+  it('spells out what all-off costs, in both locales', async () => {
+    // Switching every channel off stays allowed, so the page has to say what
+    // changes instead of blocking it: delivery degrades to typed-in behind the
+    // idle gate, claude's rewake goes with it, and open panes keep the channel
+    // they started with.
+    const { i18n } = await import('@navide/plugin-ui/foundation')
+    for (const locale of ['en-US', 'zh-TW'] as const) {
+      const messages = i18n.global.getLocaleMessage(locale) as Record<string, any>
+      const block = messages.settings?.pushChannels
+      for (const key of ['all-off-title', 'all-off-delivery', 'all-off-rewake', 'all-off-restart']) {
+        expect(block?.[key], `${locale}/${key}`).toBeTruthy()
+      }
+      expect(block['all-off-rewake']).toContain('rewake')
+    }
+  })
+
   it('has a cost line for every vendor it offers', async () => {
     const { i18n } = await import('@navide/plugin-ui/foundation')
     for (const locale of ['en-US', 'zh-TW'] as const) {
