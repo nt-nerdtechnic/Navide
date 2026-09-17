@@ -10,7 +10,7 @@ Navide 是一套開源、AI-native 的軟體工程環境，專為一個人調度
 
 [English](README.md) | 繁體中文 | [日本語](README.ja-JP.md)
 
-[下載 v0.2.4](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.2.4) | [開始使用](docs/zh-TW/getting-started.md) | [文件中心](docs/zh-TW/README.md) | [Roadmap](docs/zh-TW/roadmap.md)
+[下載 v0.2.5](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.2.5) | [開始使用](docs/zh-TW/getting-started.md) | [文件中心](docs/zh-TW/README.md) | [Roadmap](docs/zh-TW/roadmap.md)
 
 [![Latest release](https://img.shields.io/github/v/release/nt-nerdtechnic/Navide?sort=semver&label=release&logo=github)](https://github.com/nt-nerdtechnic/Navide/releases/latest)
 [![Electron](https://img.shields.io/badge/Electron-44-47848F?logo=electron)](https://www.electronjs.org/)
@@ -115,13 +115,13 @@ Local-first 不代表所有情況都完全離線。使用外部 Agent CLI、雲�
 
 ## 試用 Navide
 
-Navide 支援配備 Apple 晶片且執行 macOS 13 以上版本的 Mac、Linux x64，以及 x64／Arm 版 Windows。v0.2.4 提供經 Developer ID 簽章並通過 Apple Notarization 的 macOS 版本，以及 Windows x64 安裝程式與 Linux x64 套件：
+Navide 支援配備 Apple 晶片且執行 macOS 13 以上版本的 Mac、Linux x64，以及 x64／Arm 版 Windows。v0.2.5 提供經 Developer ID 簽章並通過 Apple Notarization 的 macOS 版本，以及 Windows x64 安裝程式與 Linux x64 套件：
 
-- [下載 DMG](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.4/Navide-0.2.4-arm64.dmg) ([鏡像](https://dl.navide.dev/releases/v0.2.4/Navide-0.2.4-arm64.dmg))
-- [下載 ZIP](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.4/Navide-0.2.4-arm64.zip) ([鏡像](https://dl.navide.dev/releases/v0.2.4/Navide-0.2.4-arm64.zip))
-- [下載 Windows x64 安裝程式](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.4/Navide-0.2.4-win-x64.exe) ([鏡像](https://dl.navide.dev/releases/v0.2.4/Navide-0.2.4-win-x64.exe))
-- [下載 Windows ARM64 安裝程式](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.4/Navide-0.2.4-win-arm64.exe) ([鏡像](https://dl.navide.dev/releases/v0.2.4/Navide-0.2.4-win-arm64.exe))
-- [下載 Linux AppImage](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.4/Navide-0.2.4-x86_64.AppImage) ([鏡像](https://dl.navide.dev/releases/v0.2.4/Navide-0.2.4-x86_64.AppImage))・[下載 Linux .deb](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.4/Navide-0.2.4-amd64.deb) ([鏡像](https://dl.navide.dev/releases/v0.2.4/Navide-0.2.4-amd64.deb))
+- [下載 DMG](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.5/Navide-0.2.5-arm64.dmg) ([鏡像](https://dl.navide.dev/releases/v0.2.5/Navide-0.2.5-arm64.dmg))
+- [下載 ZIP](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.5/Navide-0.2.5-arm64.zip) ([鏡像](https://dl.navide.dev/releases/v0.2.5/Navide-0.2.5-arm64.zip))
+- [下載 Windows x64 安裝程式](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.5/Navide-0.2.5-win-x64.exe) ([鏡像](https://dl.navide.dev/releases/v0.2.5/Navide-0.2.5-win-x64.exe))
+- [下載 Windows ARM64 安裝程式](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.5/Navide-0.2.5-win-arm64.exe) ([鏡像](https://dl.navide.dev/releases/v0.2.5/Navide-0.2.5-win-arm64.exe))
+- [下載 Linux AppImage](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.5/Navide-0.2.5-x86_64.AppImage) ([鏡像](https://dl.navide.dev/releases/v0.2.5/Navide-0.2.5-x86_64.AppImage))・[下載 Linux .deb](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.5/Navide-0.2.5-amd64.deb) ([鏡像](https://dl.navide.dev/releases/v0.2.5/Navide-0.2.5-amd64.deb))
 
 GitHub 下載很慢或失敗時，改點旁邊的「鏡像」連結——同一個檔案、逐位元相同，由 dl.navide.dev 提供（發版流程同時發佈兩邊並比對 checksum）。
 
