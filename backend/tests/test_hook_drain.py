@@ -64,6 +64,21 @@ def events(monkeypatch) -> list[dict]:
     return captured
 
 
+def _last_activity(events: list[dict]) -> dict:
+    """The newest agent.activity payload, found by type rather than position.
+
+    `events` collects every broadcast, and a devtime.changed tick lands in it
+    whenever one happens to fire during the request — its payload carries a
+    workspace_path and no event_type, so reading events[-1] raised KeyError on
+    the runs where the tick came last. Which broadcast is last is timing; which
+    one these assertions are about is not.
+    """
+    for event in reversed(events):
+        if event.get("type") == "agent.activity":
+            return event["payload"]
+    raise AssertionError(f"no agent.activity broadcast among {[e.get('type') for e in events]}")
+
+
 @pytest.fixture(autouse=True)
 def clean_state(monkeypatch):
     agent_messaging._reset_for_test()
@@ -113,7 +128,7 @@ def test_a_blocked_stop_is_not_reported_as_the_turn_ending(
 
     _stop(client)
 
-    payload = events[-1]["payload"]
+    payload = _last_activity(events)
     assert payload["event_type"] == "agent_active"
     assert payload["detail"] == "hook:stop-blocked"
     assert app_module._pane_activity["pane-1"]["event_type"] == "agent_active"
@@ -131,7 +146,7 @@ def test_nothing_queued_leaves_the_hook_with_no_decision_to_report(
 
     assert resp.status_code == 200
     assert resp.content == b""
-    assert events[-1]["payload"]["event_type"] == "turn_complete"
+    assert _last_activity(events)["event_type"] == "turn_complete"
 
 
 def test_a_window_that_never_answers_lets_the_turn_end(
@@ -143,7 +158,7 @@ def test_a_window_that_never_answers_lets_the_turn_end(
     resp = _stop(client)
 
     assert resp.content == b""
-    assert events[-1]["payload"]["event_type"] == "turn_complete"
+    assert _last_activity(events)["event_type"] == "turn_complete"
 
 
 def test_a_pane_running_another_cli_is_never_asked(
@@ -158,7 +173,7 @@ def test_a_pane_running_another_cli_is_never_asked(
 
     assert window.requests == []
     assert resp.content == b""
-    assert events[-1]["payload"]["event_type"] == "turn_complete"
+    assert _last_activity(events)["event_type"] == "turn_complete"
 
 
 def test_an_unattributed_session_is_never_asked(client: TestClient, events: list[dict], monkeypatch) -> None:
@@ -264,7 +279,7 @@ def _patch_attribution(monkeypatch, pane_id: str = "pane-1") -> None:
 async def _emit_activity(events: list[dict], pane_id: str = "pane-1") -> dict:
     event, _attributed = _activity(pane_id)
     await app_module._on_log_activity(event)
-    return events[-1]["payload"]
+    return _last_activity(events)
 
 
 def _run_activity(monkeypatch, events: list[dict], pane_id: str = "pane-1") -> dict:
