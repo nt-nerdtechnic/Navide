@@ -156,10 +156,18 @@ describe('loginShellFlags', () => {
 })
 
 describe('loginPathFallbacks', () => {
-  it('names the Homebrew prefixes on macOS', () => {
+  // The bug this closes: `npm install -g @openai/codex` puts the binary under
+  // whichever version manager owns npm, so a Finder launch whose login-shell
+  // probe timed out reported an installed codex as missing — while claude,
+  // whose installer writes ~/.local/bin, resolved fine.
+  it('names the Homebrew prefixes and the Node manager dirs on macOS', () => {
     asPlatform('darwin', () => {
       expect(loginPathFallbacks('/Users/x')).toEqual([
         '/Users/x/.local/bin',
+        '/Users/x/.local/share/pnpm',
+        '/Users/x/.npm-global/bin',
+        '/Users/x/.volta/bin',
+        '/Users/x/.bun/bin',
         '/usr/local/bin',
         '/opt/homebrew/bin',
         '/opt/homebrew/sbin',
@@ -196,9 +204,17 @@ describe('loginPathFallbacks', () => {
     })
   })
 
-  it('never adds nvm bins on macOS or Windows', () => {
+  it('slots the nvm bins ahead of the system dirs on macOS too', () => {
+    asPlatform('darwin', () => {
+      const nvm = ['/Users/x/.nvm/versions/node/v22.11.0/bin', '/Users/x/.nvm/versions/node/v20.19.0/bin']
+      const dirs = loginPathFallbacks('/Users/x', nvm)
+      expect(dirs.slice(5, 7)).toEqual(nvm)
+      expect(dirs.at(-3)).toBe('/usr/local/bin')
+    })
+  })
+
+  it('never adds nvm bins on Windows', () => {
     const nvm = ['/Users/x/.nvm/versions/node/v22.11.0/bin']
-    asPlatform('darwin', () => expect(loginPathFallbacks('/Users/x', nvm)).not.toContain(nvm[0]))
     asPlatform('win32', () => expect(loginPathFallbacks('C:\\Users\\x', nvm)).toEqual([]))
   })
 

@@ -6036,7 +6036,15 @@ async def _terminal_create_impl(
 
     metadata = payload.get("metadata") or {}
     agent_key = payload.get("agent_key") or ""
-    env = dict(payload.get("env") or {})
+    # The window's per-vendor env settings, first in the chain on purpose: the
+    # vendor defaults below use setdefault, while onboarding, login profiles,
+    # home management, wiring and portable credentials all update over the top,
+    # so a user value can never displace something the backend must control.
+    # It is also the only untrusted source in the chain — filter it here, and
+    # keep what survived so the window can be told which of its settings a
+    # later source went on to replace (see `cli.env_ignored` after the spawn).
+    env, denied_env_keys = app.filter_spawn_env_request(dict(payload.get("env") or {}))
+    requested_env = dict(env)
     vendor_spec = cli_vendor(agent_key)
     if vendor_spec is not None:
         for key, value in vendor_spec.spawn_env_defaults:
@@ -6049,26 +6057,26 @@ async def _terminal_create_impl(
     payload["command"] = app._command_with_installed_cli_alias(
         agent_key, payload.get("command")
     )
-    try:
-        startup_probe = await asyncio.get_running_loop().run_in_executor(
-            _CLI_PROBE_EXECUTOR,
-            app._probe_agent_cli_for_spawn, agent_key, payload.get("command"),
-        )
-    except app.AgentCliProbeError as probe_error:
-        # A CLI that simply is not installed is not an error the user can act on
-        # from a dead pane full of red text — tell the window so it can open the
-        # guided install. The error still propagates and cancels the spawn.
-        if probe_error.details.get("reason") == "not_found":
+    startup_probe = await asyncio.get_running_loop().run_in_executor(
+        _CLI_PROBE_EXECUTOR,
+        app._probe_agent_cli_for_spawn, agent_key, payload.get("command"),
+    )
+    if startup_probe:
+        metadata["startup_probe"] = startup_probe
+        if startup_probe.get("reason") == "not_found":
+            # Nothing on the backend's PATH answers to this CLI. The spawn goes
+            # ahead anyway — the pane's login shell reads rc files this process
+            # never saw — but tell the window, so a CLI that really is missing
+            # can still open the guided install instead of leaving the user
+            # with a bare `command not found` in the pane.
             dep = app.onboarding_deps.DEPS_BY_ID.get(agent_key)
             await session.send_json(make_event("cli.missing", {
                 "agent_key": agent_key,
                 "label": dep.label if dep else agent_key,
                 "pane_id": str(payload.get("pane_id") or ""),
                 "reason": "not_found",
+                "blocking": False,
             }))
-        raise
-    if startup_probe:
-        metadata["startup_probe"] = startup_probe
     # The vendor's own auto-update switch, only when the user opted out of it.
     env.update(app.onboarding_deps.spawn_env_for(agent_key))
     # CLI accounts share the real home — regular spawns get no profile env
@@ -6391,6 +6399,23 @@ async def _terminal_create_impl(
     else:
         portable_credentials.note_launch(str(payload["pane_id"]), "")
         term = _spawn_and_claim()
+    # What became of the window's own env settings. Only now is the answer
+    # final: `env` is written by six later sources and `env_remove` (applied
+    # last of all, in terminals.spawn) can still delete a key that survived
+    # them. Advisory like cli.signed_out — the pane is already running; this
+    # only tells the window which of its settings never reached the CLI.
+    overridden_env_keys = app.spawn_env_overridden_keys(requested_env, env, env_remove)
+    if denied_env_keys or overridden_env_keys:
+        dep = app.onboarding_deps.DEPS_BY_ID.get(agent_key)
+        await session.send_json(make_event("cli.env_ignored", {
+            "agent_key": agent_key,
+            "label": dep.label if dep else agent_key,
+            "pane_id": str(payload.get("pane_id") or ""),
+            # Refused on the way in: Navide owns these (credentials, CLI homes).
+            "denied": sorted(denied_env_keys),
+            # Accepted, then replaced or removed by a higher-priority source.
+            "overridden": overridden_env_keys,
+        }))
     # Announced only now the PTY exists. Wiring the channel is a spawn-time
     # decision, but advertising it before the CLI is actually running would tell
     # the window it can push into a pane that may still fail to start — and a

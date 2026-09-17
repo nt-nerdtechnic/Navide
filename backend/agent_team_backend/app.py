@@ -82,7 +82,7 @@ from .plan_provisioning import ensure_plan_assets, plan_spec_exists
 from .pane_account_history import PaneAccountHistory, parse_event_time
 from .quota_ledger import QuotaLedger
 from .profile_migration import migrate_legacy_claude_homes
-from .profiles_store import CliProfilesStore
+from .profiles_store import CLAUDE_ENV_OVERRIDES, CliProfilesStore
 from .skills_store import SkillsStore
 from .projects import ProjectStore
 from .spawn_history import SpawnHistoryStore
@@ -1798,6 +1798,58 @@ def _inherited_cli_home_vars() -> tuple[str, ...]:
     return tuple(merged)
 
 
+def spawn_env_deny_list() -> frozenset[str]:
+    """Env var names a spawn REQUEST may not set.
+
+    The existing lists are all removal lists — things stripped on the way out.
+    This is the one input filter, and it is deliberately their union rather
+    than a fourth rule, so a var can never be denied here and allowed there:
+
+    * ``CLAUDE_ENV_OVERRIDES`` — API-key vars that displace a managed
+      account's OAuth login.
+    * ``_inherited_cli_home_vars()`` — the legacy table plus every vendor's
+      declared home/config relocators and runtime markers, i.e. exactly what
+      is stripped from the backend's own inherited environment.
+
+    ``cli_vendors.claude._ENV_DROP`` needs no third source: its three names
+    (the two above plus CLAUDE_CONFIG_DIR, which is in claude's
+    ``home_env_vars``) are already covered by the union.
+    """
+    return frozenset(CLAUDE_ENV_OVERRIDES) | frozenset(_inherited_cli_home_vars())
+
+
+def filter_spawn_env_request(requested: dict[str, str]) -> tuple[dict[str, str], list[str]]:
+    """Soft-block: drop the denied keys, keep the rest, name what was dropped.
+
+    Soft because the spawn still goes ahead — a user-configured env var that
+    happens to collide with a home relocator is a misconfiguration to report,
+    not a reason to refuse the pane.
+    """
+    deny = spawn_env_deny_list()
+    denied = [key for key in requested if key in deny]
+    kept = {key: value for key, value in requested.items() if key not in deny}
+    return kept, denied
+
+
+def spawn_env_overridden_keys(
+    requested: dict[str, str],
+    final_env: dict[str, str],
+    env_remove: list[str] | None,
+) -> list[str]:
+    """Requested keys that a later source in the spawn chain went on to win.
+
+    Answerable only once the whole chain has run: vendor defaults, onboarding,
+    login profiles, CLI home management, MCP/plugin/push wiring and portable
+    credentials all write after the request, and ``env_remove`` — applied last
+    of all, in ``terminals.spawn`` — can still delete a key that survived them.
+    """
+    removed = set(env_remove or ())
+    return sorted(
+        key for key, value in requested.items()
+        if key in removed or final_env.get(key) != value
+    )
+
+
 def _sanitize_inherited_cli_env() -> None:
     """Drop CLI home-relocating vars inherited from whatever launched us.
 
@@ -2768,6 +2820,28 @@ async def _ensure_fresh_path_for_spawn(agent_key: str) -> None:
     )
 
 
+def _spawn_execs_the_cli_directly(command: Any, known_names: "tuple[str, ...]") -> bool:
+    """Whether the spawn will exec the CLI itself, with no shell in between.
+
+    Decides whether a probe miss is a hint or a verdict. An agent pane runs
+    `zsh -ilc '<cli> ...'`, so argv[0] is the shell and the name gets resolved
+    a second time against rc files this process never read — a miss there is
+    worth spawning through. Two paths exec the CLI directly instead: the
+    plugin `ai.cli.start` capability (aiCliCommand builds a bare argv) and
+    Windows agent panes (shellCommandArgv returns the plain command). No
+    second opinion is coming on those, so a miss is final.
+    """
+    if isinstance(command, list):
+        head = str(command[0]) if command else ""
+    else:
+        try:
+            parts = osplat.terminal_backend.parse_command(str(command or ""))
+        except (ValueError, OSError):
+            return False
+        head = parts[0] if parts else ""
+    return bool(head) and _names_a_known_command(head, known_names)
+
+
 class AgentCliProbeError(RuntimeError):
     def __init__(self, message: str, details: dict[str, Any]) -> None:
         super().__init__(message)
@@ -2937,15 +3011,42 @@ def _probe_agent_cli_for_spawn(agent_key: str, requested_command: Any = None) ->
         executable = osplat.paths.resolve_program(requested_executable)
     executable = executable or onboarding_deps.resolve_executable(dep)
     if not executable:
-        raise AgentCliProbeError(
-            f"{dep.label} startup probe failed: executable not found ({dep.check_cmd[0]})",
-            {
-                "agent_key": agent_key,
-                "binary_path": "",
-                "probe_command": dep.check_cmd,
-                "reason": "not_found",
-            },
+        if _spawn_execs_the_cli_directly(requested_command, known_names):
+            # No shell will get a second look at the name, so the miss is a
+            # verdict. Block, and keep the specific error: letting this run on
+            # would only reach terminals.create's own which() and surface as a
+            # bare FileNotFoundError with none of these details.
+            raise AgentCliProbeError(
+                f"{dep.label} startup probe failed: executable not found ({dep.check_cmd[0]})",
+                {
+                    "agent_key": agent_key,
+                    "binary_path": "",
+                    "probe_command": dep.check_cmd,
+                    "reason": "not_found",
+                },
+            )
+        # Otherwise not definitive. This probe sees only the backend's own
+        # PATH, while the pane runs the CLI through an interactive login
+        # shell, which reads the rc files that put nvm, volta and npm-global
+        # on PATH. Blocking here made "runs in Terminal, unlaunchable in
+        # Navide" the norm for every CLI installed by `npm install -g`.
+        # Degrade: let the shell have its say, and report not_found so the
+        # window can still offer the guided install for a real absence.
+        log.warning(
+            "%s startup probe found no %s on the backend PATH — spawning anyway, "
+            "the pane's login shell may still resolve it",
+            dep.label, dep.check_cmd[0],
         )
+        return {
+            "agent_key": agent_key,
+            "binary_path": "",
+            "resolved_path": "",
+            "probe_command": list(dep.check_cmd),
+            "duration_ms": 0,
+            "reason": "not_found",
+            "degraded": True,
+            "version": None,
+        }
     resolved = os.path.realpath(executable)
     executable_display = (
         f"{executable} → {resolved}" if resolved != executable else executable

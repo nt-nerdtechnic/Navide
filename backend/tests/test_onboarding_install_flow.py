@@ -255,6 +255,11 @@ class _FakeWebSocket:
         self.sent.append(payload)
 
 
+class _StopHere(Exception):
+    """Sentinel ending the impl just past the probe block, which is all these
+    tests drive. A not_found probe no longer raises, so nothing else would."""
+
+
 async def _run_create(session: object, monkeypatch: pytest.MonkeyPatch, reason: str) -> None:
     """Drive terminal.create's impl to the point where the spawn probe runs."""
     from agent_team_backend import ws_handlers
@@ -262,13 +267,21 @@ async def _run_create(session: object, monkeypatch: pytest.MonkeyPatch, reason: 
     async def noop(*_a: object, **_k: object) -> None:
         return None
 
-    def boom(*_a: object, **_k: object) -> None:
+    def probe(*_a: object, **_k: object) -> dict[str, object]:
+        # not_found degrades to a warning the impl carries on from; every other
+        # reason is still definitive and raises.
+        if reason == "not_found":
+            return {"reason": "not_found", "degraded": True, "binary_path": ""}
         raise app_mod.AgentCliProbeError("no executable", {"reason": reason})
+
+    def stop(*_a: object, **_k: object) -> dict[str, str]:
+        raise _StopHere
 
     monkeypatch.setattr(app_mod, "_ensure_fresh_path_for_spawn", noop)
     monkeypatch.setattr(app_mod, "_command_with_persisted_cli_binary", lambda _k, c: c)
     monkeypatch.setattr(app_mod, "_command_with_installed_cli_alias", lambda _k, c: c)
-    monkeypatch.setattr(app_mod, "_probe_agent_cli_for_spawn", boom)
+    monkeypatch.setattr(app_mod, "_probe_agent_cli_for_spawn", probe)
+    monkeypatch.setattr(ob, "spawn_env_for", stop)
     await ws_handlers._terminal_create_impl(
         session,  # type: ignore[arg-type]
         "m1", "terminal.create",
@@ -278,19 +291,23 @@ async def _run_create(session: object, monkeypatch: pytest.MonkeyPatch, reason: 
 
 
 @pytest.mark.asyncio
-async def test_spawn_probe_miss_announces_the_cli_before_failing(
+async def test_spawn_probe_miss_announces_the_cli_but_lets_the_spawn_go_on(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # The window needs this to open the guided install: a probe miss happens
     # BEFORE any PTY exists, so exit 127 never fires and nothing else would say
-    # what went wrong beyond red text in a dead pane.
+    # what went wrong beyond red text in a dead pane. It no longer CANCELS the
+    # spawn, though — the probe reads this process's PATH, and the pane's
+    # interactive login shell reads rc files this process never saw — so the
+    # announcement carries blocking: False.
     session = app_mod.Session(_FakeWebSocket())  # type: ignore[arg-type]
-    with pytest.raises(app_mod.AgentCliProbeError):
+    with pytest.raises(_StopHere):  # got past the probe block, into the spawn
         await _run_create(session, monkeypatch, "not_found")
     events = [m for m in session.websocket.sent if m["type"] == "cli.missing"]  # type: ignore[attr-defined]
     assert len(events) == 1
     assert events[0]["payload"] == {
-        "agent_key": "qwen", "label": "Qwen Code", "pane_id": "pane-1", "reason": "not_found",
+        "agent_key": "qwen", "label": "Qwen Code", "pane_id": "pane-1",
+        "reason": "not_found", "blocking": False,
     }
 
 

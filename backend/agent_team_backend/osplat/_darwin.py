@@ -9,6 +9,7 @@ asked.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -92,9 +93,31 @@ class DarwinLayout(DarwinPaths):
 
     def login_path_fallbacks(self, home: Path) -> list[str]:
         # Homebrew's two prefixes plus ~/.local/bin, where Claude Code's
-        # installer and uv put their binaries.
+        # installer and uv put their binaries, and the Node version managers'
+        # global bins. `npm install -g` — how OpenAI ships codex — puts the
+        # binary inside whichever manager owns npm, never in a Homebrew or
+        # ~/.local prefix; a Finder launch whose login-shell probe timed out
+        # therefore reported an installed codex as missing while claude, which
+        # its installer puts in ~/.local/bin, resolved fine.
+        #
+        # nvm's bins come with a condition. These dirs are PREPENDED to PATH,
+        # and nvm keeps one bin per installed version, so offering all of them
+        # to a process whose PATH already names the version the user selected
+        # puts a different node ahead of that choice — `nvm use 20` silently
+        # became v22 for every pane. Offer them only when nothing on PATH
+        # speaks for nvm yet, which is exactly the case they exist for.
+        nvm_root = str(home / ".nvm" / "versions" / "node")
+        version_chosen = any(
+            entry.startswith(nvm_root)
+            for entry in os.environ.get("PATH", "").split(os.pathsep)
+        )
         return [
             str(home / ".local" / "bin"),
+            str(home / ".local" / "share" / "pnpm"),
+            str(home / ".npm-global" / "bin"),
+            str(home / ".volta" / "bin"),
+            str(home / ".bun" / "bin"),
+            *([] if version_chosen else _posix_paths.nvm_node_bins(home)),
             "/usr/local/bin",
             "/opt/homebrew/bin",
             "/opt/homebrew/sbin",

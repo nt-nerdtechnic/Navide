@@ -284,12 +284,55 @@ def test_linux_fallbacks_without_nvm(tmp_path):
     assert "/snap/bin" in dirs
 
 
-def test_macos_fallbacks_are_the_homebrew_prefixes(tmp_path):
+def test_macos_fallbacks_name_the_node_manager_dirs_too(tmp_path):
+    """`npm install -g` (codex, qwen, kilo) lands under a version manager, not
+    under a Homebrew prefix; nvm's per-version bins come newest first."""
+    for v in ("v18.20.4", "v22.11.0", "v20.19.0"):
+        (tmp_path / ".nvm" / "versions" / "node" / v / "bin").mkdir(parents=True)
     assert _darwin.paths.login_path_fallbacks(tmp_path) == [
         str(tmp_path / ".local" / "bin"),
+        str(tmp_path / ".local" / "share" / "pnpm"),
+        str(tmp_path / ".npm-global" / "bin"),
+        str(tmp_path / ".volta" / "bin"),
+        str(tmp_path / ".bun" / "bin"),
+        str(tmp_path / ".nvm" / "versions" / "node" / "v22.11.0" / "bin"),
+        str(tmp_path / ".nvm" / "versions" / "node" / "v20.19.0" / "bin"),
+        str(tmp_path / ".nvm" / "versions" / "node" / "v18.20.4" / "bin"),
         "/usr/local/bin",
         "/opt/homebrew/bin",
         "/opt/homebrew/sbin",
+    ]
+
+
+def test_macos_fallbacks_without_nvm(tmp_path):
+    dirs = _darwin.paths.login_path_fallbacks(tmp_path)
+    assert not any(".nvm" in d for d in dirs)
+    assert dirs[0] == str(tmp_path / ".local" / "bin")
+
+
+def test_macos_fallbacks_stand_back_once_a_node_version_is_chosen(tmp_path, monkeypatch):
+    """The regression this guards: these dirs are PREPENDED, and nvm keeps one
+    bin per version, so offering every version to a PATH that already names the
+    one `nvm use` picked put a different node ahead of the user's choice."""
+    chosen = tmp_path / ".nvm" / "versions" / "node" / "v20.19.0" / "bin"
+    for v in ("v20.19.0", "v22.11.0"):
+        (tmp_path / ".nvm" / "versions" / "node" / v / "bin").mkdir(parents=True)
+    monkeypatch.setenv("PATH", f"{chosen}{os.pathsep}/usr/bin")
+    dirs = _darwin.paths.login_path_fallbacks(tmp_path)
+    assert not any(".nvm" in d for d in dirs)  # nothing may outrank the choice
+    assert dirs[0] == str(tmp_path / ".local" / "bin")  # the rest still offered
+
+
+def test_macos_fallbacks_offer_nvm_when_path_is_silent_about_it(tmp_path, monkeypatch):
+    """The control for the test above: same disk, a PATH that names no nvm bin
+    — the case the fallback exists for — and every version is offered."""
+    for v in ("v20.19.0", "v22.11.0"):
+        (tmp_path / ".nvm" / "versions" / "node" / v / "bin").mkdir(parents=True)
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    dirs = _darwin.paths.login_path_fallbacks(tmp_path)
+    assert [d for d in dirs if ".nvm" in d] == [
+        str(tmp_path / ".nvm" / "versions" / "node" / "v22.11.0" / "bin"),
+        str(tmp_path / ".nvm" / "versions" / "node" / "v20.19.0" / "bin"),
     ]
 
 

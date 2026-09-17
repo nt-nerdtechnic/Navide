@@ -59,13 +59,51 @@ def test_exec_error_degrades(fake_claude, monkeypatch):
     assert result["degraded"] is True
 
 
-def test_missing_binary_still_blocks(monkeypatch):
+def test_missing_binary_degrades_and_lets_the_shell_try(monkeypatch):
+    """The probe reads the backend's PATH; the pane runs an interactive login
+    shell, which reads the rc files that put nvm/volta/npm-global on PATH. A
+    miss here is a hint, not a verdict — blocking made every `npm install -g`
+    CLI unlaunchable on a macOS box whose login-shell probe had timed out."""
+    monkeypatch.setattr(
+        app.osplat.paths, "resolve_program", lambda _name, *, path=None: None
+    )
+    result = _probe_agent_cli_for_spawn("claude")
+    assert result is not None
+    assert result["reason"] == "not_found"
+    assert result["degraded"] is True
+    assert result["binary_path"] == ""  # nothing resolved, so nothing to report
+
+
+@pytest.mark.parametrize("command", [
+    ["/bin/zsh", "-ilc", "claude --version"],   # AiCliDock, POSIX agent pane
+    ["/bin/bash", "-lc", "claude resume abc"],  # same, non-zsh login shell
+])
+def test_shell_wrapped_spawns_degrade(monkeypatch, command):
+    """argv[0] is the shell, which resolves the name again against rc files
+    this process never read — so the miss is a hint, not a verdict."""
+    monkeypatch.setattr(
+        app.osplat.paths, "resolve_program", lambda _name, *, path=None: None
+    )
+    result = _probe_agent_cli_for_spawn("claude", command)
+    assert result is not None and result["degraded"] is True
+
+
+@pytest.mark.parametrize("command", [
+    ["claude", "--dangerously-skip-permissions"],  # plugin ai.cli.start argv
+    "claude --dangerously-skip-permissions",       # Windows agent pane string
+])
+def test_direct_exec_spawns_still_block(monkeypatch, command):
+    """No shell stands between the spawn and the CLI on these two paths, so
+    nothing will re-resolve the name — the miss IS the verdict. Degrading here
+    would only hand the user terminals.create's bare FileNotFoundError in
+    place of an error naming the CLI and the probe command."""
     monkeypatch.setattr(
         app.osplat.paths, "resolve_program", lambda _name, *, path=None: None
     )
     with pytest.raises(app.AgentCliProbeError) as ei:
-        _probe_agent_cli_for_spawn("claude")
+        _probe_agent_cli_for_spawn("claude", command)
     assert ei.value.details["reason"] == "not_found"
+    assert ei.value.details["probe_command"] == ["claude", "--version"]
 
 
 def test_nonzero_exit_still_blocks(fake_claude, monkeypatch):

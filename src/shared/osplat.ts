@@ -107,21 +107,39 @@ export function loginShellFlags(shell: string): string[] {
  *
  * Prepended to PATH so a tool installed to one of these is found even when
  * the shell would not answer (a heavy rc file timing out, an exotic shell).
- * Each list is the platform's own convention: Homebrew's prefixes on macOS;
- * on Linux the XDG-adjacent dirs the pnpm, uv and `npm config set prefix`
- * installers use, the Rust and bun toolchains, nvm's per-version bins, and
- * snap's bin which most distributions do not put on the session PATH.
+ * Each list is the platform's own convention: on macOS Homebrew's prefixes
+ * plus the Node version managers' global bins, where an `npm install -g` CLI
+ * such as codex lands; on Linux the XDG-adjacent dirs the pnpm, uv and
+ * `npm config set prefix` installers use, the Rust and bun toolchains, nvm's
+ * per-version bins, and snap's bin which most distributions do not put on the
+ * session PATH.
  *
  * `nvmBins` is nvm's `~/.nvm/versions/node/<v>/bin` list, newest first —
  * enumerated by the caller because this module has no `fs` (see
  * listNvmNodeBins in main). Mirrors `Paths.login_path_fallbacks` on the
  * backend; keep the two lists the same.
+ *
+ * One asymmetry is deliberate: the backend drops the nvm bins when PATH
+ * already names one, because it re-runs its merge against a PATH that may
+ * carry the user's `nvm use` choice, and these dirs are prepended. Here there
+ * is no such choice to protect — main calls this ONLY when the login-shell
+ * probe returned nothing, so every version is a candidate.
  */
 export function loginPathFallbacks(home: string, nvmBins: string[] = []): string[] {
   const local = `${home}/.local/bin`
   switch (platformId()) {
     case 'darwin':
-      return [local, '/usr/local/bin', '/opt/homebrew/bin', '/opt/homebrew/sbin']
+      return [
+        local,
+        `${home}/.local/share/pnpm`,
+        `${home}/.npm-global/bin`,
+        `${home}/.volta/bin`,
+        `${home}/.bun/bin`,
+        ...nvmBins,
+        '/usr/local/bin',
+        '/opt/homebrew/bin',
+        '/opt/homebrew/sbin',
+      ]
     case 'linux':
       return [
         local,
