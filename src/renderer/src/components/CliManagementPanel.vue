@@ -11,7 +11,7 @@ import { computed, defineAsyncComponent, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { useBackend } from '../composables/useBackend'
 import type { useCliProfiles } from '../composables/useCliProfiles'
-import { useOnboarding } from '../composables/useOnboarding'
+import type { useOnboarding } from '../composables/useOnboarding'
 import type {
   AutoupdatePolicy, CliHealthEntry, CliUpdateRecord, MaintenanceAction, OnboardDep,
 } from '../composables/useOnboarding'
@@ -20,6 +20,11 @@ const CliInstallDialog = defineAsyncComponent(() => import('./CliInstallDialog.v
 
 const props = defineProps<{
   backend: ReturnType<typeof useBackend>
+  /** The owner's onboarding instance. It is passed in rather than created here
+   *  because the settings page shows the same probe in its CLI list, and a
+   *  second useOnboarding() would mean a second `onboarding.status` round trip
+   *  — which shells out once per dep. */
+  onboarding: ReturnType<typeof useOnboarding>
   /** Account store, so the install dialog's last step can tell "installed" from
    *  "installed and signed in". Optional: without it the dialog simply never
    *  shows a sign-in step, which is the same as today. */
@@ -35,7 +40,7 @@ function signInStateFor(depId: string): 'signed-in' | 'signed-out' | 'unknown' {
 }
 const { t } = useI18n()
 
-const onboarding = useOnboarding(props.backend)
+const onboarding = props.onboarding
 const { cliDeps, cliHealth, loading, maintaining } = onboarding
 const message = ref('')
 /** Dep id whose guided install dialog is open ('' = none). */

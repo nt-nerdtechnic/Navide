@@ -57,6 +57,29 @@ import {
   type DetectedEditor,
 } from '../lib/defaultEditor'
 import { useCliAgentPrefs } from '../composables/useCliAgentPrefs'
+import { useOnboarding } from '../composables/useOnboarding'
+import {
+  pushChannelEnabled,
+  togglePushChannel,
+  usePushChannelPrefs,
+} from '../composables/usePushChannelPrefs'
+import { cliAgentRowChips } from '../lib/cliAgentRow'
+import { describeModelRefusal } from '../lib/agentSpawnGate'
+import {
+  SPAWN_ENV_RESERVED_KEYS,
+  cliCommandKey,
+  cliEnvKey,
+  cliModelKey,
+  isReservedSpawnEnvKey,
+  isValidEnvName,
+  modelArgsFor,
+  parseCliEnvOverride,
+  parseCliModelDefault,
+  serializeCliEnvOverride,
+  serializeCliModelDefault,
+  type CliEnvEntry,
+  type CliModelDefault,
+} from '@navide/plugin-shell'
 import {
   ANY as POLICY_ANY,
   addRule as addPolicyRuleTo,
@@ -263,13 +286,215 @@ defineExpose({
 // ── CLI Agents (enable/disable + reorder for the manual spawn dropdown) ────────
 const { order: cliOrder, disabled: cliDisabled } = useCliAgentPrefs()
 
+// The single onboarding instance for this window. It used to be created inside
+// CliManagementPanel; the list rows above it need the same probe, and a second
+// useOnboarding() would be a second `onboarding.status` round trip — which
+// shells out once per dep — rather than a second reader of this one.
+const onboarding = useOnboarding(props.backend)
+
+/** vue-i18n's `t` is overloaded, and neither overload alone accepts the
+ *  "params or nothing" shape the chip builder is written against. */
+const translateChip = (key: string, params?: Record<string, unknown>): string =>
+  params ? t(key, params) : t(key)
+
+/** `agentTeam.cliBinary.<key>` is a plain settings read, so it is snapshotted
+ *  when the tab is opened rather than watched. */
+const cliBinaryOverrides = ref<Record<string, boolean>>({})
+function refreshCliBinaryOverrides(): void {
+  cliBinaryOverrides.value = Object.fromEntries(
+    CLI_AGENT_SPECS.map((s) => [
+      s.agentKey,
+      !!settingsGet(`agentTeam.cliBinary.${s.agentKey}`, '').trim(),
+    ])
+  )
+}
+
+// ── Per-vendor launch overrides: model, effort, command line, environment ────
+// All four are global-scope keys (`agentTeam.cliModel.*`, `.cliCommand.*`,
+// `.cliEnv.*`), snapshotted when the tab opens for the same reason
+// cliBinaryOverrides is: they are plain settings reads, not reactive stores.
+// The editor is an accordion — one vendor open at a time — because an env table
+// per vendor rendered flat would be fourteen tables down one page.
+const expandedLaunchKey = ref('')
+const launchModels = ref<Record<string, CliModelDefault>>({})
+const launchCommands = ref<Record<string, string>>({})
+const launchEnvs = ref<Record<string, CliEnvEntry[]>>({})
+/** The refusal text for a vendor whose typed model/effort cannot be honoured,
+ *  keyed by agent key. Present = the value was NOT written. */
+const launchModelErrors = ref<Record<string, string>>({})
+
+function refreshLaunchOverrides(): void {
+  launchModels.value = Object.fromEntries(
+    CLI_AGENT_SPECS.map((s) => [
+      s.agentKey,
+      parseCliModelDefault(settingsGet<unknown>(cliModelKey(s.agentKey), null)),
+    ])
+  )
+  launchCommands.value = Object.fromEntries(
+    CLI_AGENT_SPECS.map((s) => [s.agentKey, settingsGet(cliCommandKey(s.agentKey), '')])
+  )
+  launchEnvs.value = Object.fromEntries(
+    CLI_AGENT_SPECS.map((s) => [
+      s.agentKey,
+      parseCliEnvOverride(settingsGet<unknown>(cliEnvKey(s.agentKey), null)),
+    ])
+  )
+  launchModelErrors.value = {}
+}
+
+function toggleLaunchRow(k: string): void {
+  expandedLaunchKey.value = expandedLaunchKey.value === k ? '' : k
+  envDraftName.value = ''
+  envDraftValue.value = ''
+}
+
+function launchModelFor(k: string): CliModelDefault {
+  return launchModels.value[k] ?? { model: '', effort: '' }
+}
+
+/** What a collapsed row carries, or '' when it carries nothing — otherwise the
+ *  only way to find which of fourteen vendors is configured is to open them. */
+function launchSummary(k: string): string {
+  const parts: string[] = []
+  const picked = launchModelFor(k)
+  if (picked.model) parts.push(picked.model)
+  if (picked.effort) parts.push(picked.effort)
+  if ((launchCommands.value[k] ?? '').trim()) parts.push(t('settings.cliLaunch.summary-command'))
+  const envCount = (launchEnvs.value[k] ?? []).length
+  if (envCount > 0) parts.push(t('settings.cliLaunch.summary-env', { count: envCount }))
+  return parts.join(' · ')
+}
+
+/** Write a model/effort pair only if the vendor can actually be told it. The
+ *  check and the wording both come from the spawn path's own modules, so the
+ *  sentence here is the one the spawn card and the MCP tool give. A refused
+ *  pair stays on screen with its reason rather than being silently discarded. */
+function applyLaunchModel(k: string, next: CliModelDefault): void {
+  const spec = CLI_AGENT_SPECS.find((s) => s.agentKey === k)
+  const chosen = modelArgsFor({ spec, request: next })
+  if (!chosen.ok) {
+    // The refused value is NOT kept in launchModels: that map is also what the
+    // list above reads its "model x" chip from, and a chip for a pick the spawn
+    // would never make is worse than the field snapping back with a reason.
+    launchModelErrors.value = {
+      ...launchModelErrors.value,
+      [k]: describeModelRefusal(k, chosen.refusal, next.effort),
+    }
+    return
+  }
+  const { [k]: _dropped, ...rest } = launchModelErrors.value
+  launchModelErrors.value = rest
+  launchModels.value = { ...launchModels.value, [k]: next }
+  settingsSet(cliModelKey(k), serializeCliModelDefault(next))
+}
+
+function onLaunchModelInput(k: string, e: Event): void {
+  applyLaunchModel(k, { ...launchModelFor(k), model: (e.target as HTMLInputElement).value.trim() })
+}
+function onLaunchEffortSelect(k: string, e: Event): void {
+  applyLaunchModel(k, { ...launchModelFor(k), effort: (e.target as HTMLSelectElement).value })
+}
+
+function onLaunchCommandInput(k: string, e: Event): void {
+  const value = (e.target as HTMLInputElement).value
+  launchCommands.value = { ...launchCommands.value, [k]: value }
+  // An empty override is the absence of one, so it clears the key rather than
+  // storing '' — which resolveCommand would read the same way anyway.
+  settingsSet(cliCommandKey(k), value.trim() || null)
+}
+
+function commitLaunchEnv(k: string, entries: CliEnvEntry[]): void {
+  launchEnvs.value = { ...launchEnvs.value, [k]: entries }
+  settingsSet(cliEnvKey(k), serializeCliEnvOverride(entries))
+}
+function onLaunchEnvValueInput(k: string, index: number, e: Event): void {
+  const entries = [...(launchEnvs.value[k] ?? [])]
+  if (!entries[index]) return
+  entries[index] = { ...entries[index], value: (e.target as HTMLInputElement).value }
+  commitLaunchEnv(k, entries)
+}
+function removeLaunchEnv(k: string, index: number): void {
+  commitLaunchEnv(k, (launchEnvs.value[k] ?? []).filter((_, i) => i !== index))
+}
+
+// One draft pair, not one per vendor: only the open row can be typed into.
+const envDraftName = ref('')
+const envDraftValue = ref('')
+/** Blocked while the name is unusable or already in the table — adding a second
+ *  row for the same name would silently discard the first on save. */
+const envDraftBlocked = computed(() => {
+  const name = envDraftName.value.trim()
+  if (!isValidEnvName(name)) return true
+  return (launchEnvs.value[expandedLaunchKey.value] ?? []).some((e) => e.name === name)
+})
+function addLaunchEnv(k: string): void {
+  if (envDraftBlocked.value) return
+  commitLaunchEnv(k, [
+    ...(launchEnvs.value[k] ?? []),
+    { name: envDraftName.value.trim(), value: envDraftValue.value },
+  ])
+  envDraftName.value = ''
+  envDraftValue.value = ''
+}
+
 const cliAgentRows = computed(() => {
   const rank = (k: string) => {
     const i = cliOrder.value.indexOf(k)
     return i < 0 ? Number.MAX_SAFE_INTEGER : i
   }
-  return [...CLI_AGENT_SPECS].sort((a, b) => rank(a.agentKey) - rank(b.agentKey))
+  const deps = new Map(onboarding.cliDeps.value.map((dep) => [dep.id, dep]))
+  return [...CLI_AGENT_SPECS]
+    .sort((a, b) => rank(a.agentKey) - rank(b.agentKey))
+    .map((spec) => {
+      const dep = deps.get(spec.agentKey)
+      const identity = props.cliProfilesApi.identityFor(spec.agentKey, null)
+      return {
+        agentKey: spec.agentKey,
+        label: spec.label,
+        hint: spec.hint ?? '',
+        chips: cliAgentRowChips(
+          {
+            install: dep ? { status: dep.status, version: dep.version } : null,
+            hasPermissionFlag: !!spec.skipPermissionFlag,
+            permissionMode: cliPermissionMode(spec.agentKey),
+            pushKind: spec.pushChannel?.kind ?? '',
+            pushEnabled: pushChannelEnabled(spec.agentKey),
+            supportsModel: !!spec.modelArgs,
+            modelDefault: launchModelFor(spec.agentKey),
+            signedIn: identity ? identity.signedIn : null,
+            // The built-in Default slot is an account too, so a vendor with no
+            // extra profile still has one.
+            accountCount: props.cliProfilesApi.profilesForAgent(spec.agentKey).length + 1,
+            binaryOverride: !!cliBinaryOverrides.value[spec.agentKey],
+            commandOverride: !!(launchCommands.value[spec.agentKey] ?? '').trim(),
+            envOverrideCount: (launchEnvs.value[spec.agentKey] ?? []).length,
+          },
+          translateChip
+        ),
+      }
+    })
 })
+/** The launch-override editor's rows, in the list's own order so the two
+ *  sections read the same way down the page. What each vendor may be told is
+ *  taken from its spec — declaring `modelArgs` is what puts a Model field on a
+ *  row, and there is no model list anywhere: ids change every release, so the
+ *  field is free text and `modelArgsFor` judges it. */
+const launchRows = computed(() =>
+  cliAgentRows.value.map((row) => {
+    const spec = CLI_AGENT_SPECS.find((s) => s.agentKey === row.agentKey)
+    return {
+      agentKey: row.agentKey,
+      label: row.label,
+      supportsModel: !!spec?.modelArgs,
+      supportsEffort: !!spec?.effortArgs,
+      knownEfforts: spec?.knownEfforts ?? [],
+    }
+  })
+)
+/** Named in the section's footnote so a marked row points at a list rather
+ *  than leaving the rule implicit. */
+const reservedEnvKeyList = SPAWN_ENV_RESERVED_KEYS.join(', ')
+
 const cliEnabledCount = computed(
   () => CLI_AGENT_SPECS.filter((s) => !cliDisabled.value.includes(s.agentKey)).length
 )
@@ -287,27 +512,18 @@ function toggleCliAgent(k: string): void {
   cliDisabled.value = [...set]
 }
 // ── Push channels (which CLIs may be handed a message without typing) ────────
-// A negative list, like cliDisabled above: every declared channel is on until
-// the user says otherwise, so a vendor that gains one later needs no migration.
-// The backend reads the same key and is the only place the switch is applied.
-const PUSH_DISABLED_KEY = 'pushChannelsDisabled'
-const pushDisabled = ref<string[]>(settingsGet<string[]>(PUSH_DISABLED_KEY, []))
+// The list itself lives in usePushChannelPrefs — a module-scoped ref, so a
+// second window editing this page repaints this one instead of leaving it on a
+// stale copy until reload.
+const { pushDisabled } = usePushChannelPrefs()
 const pushChannelRows = computed(() =>
   CLI_AGENT_SPECS.filter((s) => s.pushChannel)
 )
-function pushChannelEnabled(k: string): boolean {
-  return !pushDisabled.value.includes(k)
-}
-function togglePushChannel(k: string): void {
-  const set = new Set(pushDisabled.value)
-  // No "keep at least one" rule here, unlike the CLI list: turning every
-  // channel off is a valid choice — messages are simply typed in, which is
-  // what every pane did before channels existed.
-  if (set.has(k)) set.delete(k)
-  else set.add(k)
-  pushDisabled.value = [...set]
-  settingsSet(PUSH_DISABLED_KEY, pushDisabled.value)
-}
+/** Every channel off is allowed, but it costs something the page has to say. */
+const allPushChannelsOff = computed(() =>
+  pushChannelRows.value.length > 0
+  && pushChannelRows.value.every((s) => pushDisabled.value.includes(s.agentKey))
+)
 
 // ── Permission bypass (global toggle + per-vendor override) ──────────────────
 // The global flag is owned by App.vue (ControlPane edits the same ref), so it
@@ -396,6 +612,51 @@ interface SettingsSearchItem {
 
 const settingsSearchQuery = ref('')
 const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
+  {
+    id: 'cli-agents-list',
+    tab: 'cliAgents',
+    section: 'cli-agents-list',
+    title: t('settings.search.item.cli-agents-list.title'),
+    group: t('settings.nav.cliAgents'),
+    summary: t('settings.search.item.cli-agents-list.summary'),
+    keywords: 'cli agent agents enable disable reorder order spawn dropdown install version permission account binary claude codex cursor aider 啟用 停用 排序 安裝 權限 帳號 執行檔',
+  },
+  {
+    id: 'cli-agents-launch',
+    tab: 'cliAgents',
+    section: 'cli-agents-launch',
+    title: t('settings.search.item.cli-agents-launch.title'),
+    group: t('settings.nav.cliAgents'),
+    summary: t('settings.search.item.cli-agents-launch.summary'),
+    keywords: 'model effort launch command override env environment variable proxy opus sonnet gpt reasoning 模型 強度 啟動指令 覆寫 環境變數 代理',
+  },
+  {
+    id: 'cli-agents-permissions',
+    tab: 'cliAgents',
+    section: 'cli-agents-permissions',
+    title: t('settings.search.item.cli-agents-permissions.title'),
+    group: t('settings.nav.cliAgents'),
+    summary: t('settings.search.item.cli-agents-permissions.summary'),
+    keywords: 'permission bypass yolo skip prompt dangerously-skip-permissions unattended per-vendor override 權限 略過 免詢問 覆寫',
+  },
+  {
+    id: 'cli-agents-push',
+    tab: 'cliAgents',
+    section: 'cli-agents-push',
+    title: t('settings.search.item.cli-agents-push.title'),
+    group: t('settings.nav.cliAgents'),
+    summary: t('settings.search.item.cli-agents-push.summary'),
+    keywords: 'push channel channels rewake tui-http input-file message delivery idle typed 推送 通道 喚醒 訊息 送達',
+  },
+  {
+    id: 'cli-agents-maintenance',
+    tab: 'cliAgents',
+    section: 'cli-agents-maintenance',
+    title: t('settings.search.item.cli-agents-maintenance.title'),
+    group: t('settings.nav.cliAgents'),
+    summary: t('settings.search.item.cli-agents-maintenance.summary'),
+    keywords: 'install update detect version binary path duplicate which npm homebrew doctor 安裝 更新 偵測 版本 執行檔 路徑 重複',
+  },
   {
     id: 'mcp-installed',
     tab: 'mcp',
@@ -1011,7 +1272,9 @@ const settingsScopeNotes: Record<SettingsTab, { scope: string; storage: keyof Se
   // it, so the pane shows per-file paths and this tab has none of its own.
   memory: { scope: 'User / Workspace', storage: 'cliFiles' },
   analyzer: { scope: 'User', storage: 'analyzer' },
-  cliAgents: { scope: 'User', storage: 'localStorage' },
+  // Order and the disabled list are persisted per workspace (project.json),
+  // with the global KV as the fallback default — so this page is both.
+  cliAgents: { scope: 'User / Workspace', storage: 'localStorage' },
   general: { scope: 'User', storage: 'localStorage' },
   // Neither half of this page is a local setting: the access token is in
   // the credential vault and the authorization rules live on the server,
@@ -1428,12 +1691,18 @@ function onKeyDown(e: KeyboardEvent) {
 }
 onMounted(() => {
   window.addEventListener('keydown', onKeyDown)
+  refreshCliBinaryOverrides()
+  refreshLaunchOverrides()
   void loadSettingsPaths()
   void loadDetectedEditors()
   void perms.refresh()
 })
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeyDown)
+  // The onboarding instance is this component's now, so its timers are too:
+  // an install watched from the CLI management panel keeps a poll and an
+  // elapsed-seconds ticker running, and closing Settings has to stop them.
+  onboarding.dispose()
   if (previewTimer) { clearTimeout(previewTimer); previewTimer = null }
   if (p2pTimer) { clearInterval(p2pTimer); p2pTimer = null }
 })
@@ -1863,6 +2132,10 @@ watch(activeTab, (tab) => {
   if (tab === 'mcp') { void eaLoad(); void cdpLoad() }
   if (tab === 'appearance') void loadAutoRestore()
   if (tab === 'accounts') void accountsApi.refresh()
+  if (tab === 'cliAgents') {
+    refreshCliBinaryOverrides()
+    refreshLaunchOverrides()
+  }
 })
 
 </script>
@@ -2509,30 +2782,200 @@ watch(activeTab, (tab) => {
             <p class="ap-hint">{{ $t('settings.cliAgents.hint') }}</p>
             <ul class="cli-agent-list">
               <li
-                v-for="spec in cliAgentRows"
-                :key="spec.agentKey"
-                class="cli-agent-row"
-                :class="{ 'drag-over': cliDragOverKey === spec.agentKey, 'is-disabled': !cliAgentEnabled(spec.agentKey) }"
+                v-for="row in cliAgentRows"
+                :key="row.agentKey"
+                class="cli-agent-row cli-agent-row--stacked"
+                :class="{ 'drag-over': cliDragOverKey === row.agentKey, 'is-disabled': !cliAgentEnabled(row.agentKey) }"
                 draggable="true"
-                @dragstart="onCliDragStart($event, spec.agentKey)"
-                @dragover="onCliDragOver($event, spec.agentKey)"
-                @dragenter="onCliDragOver($event, spec.agentKey)"
-                @dragleave="onCliDragLeave(spec.agentKey)"
-                @drop.prevent="onCliDrop(spec.agentKey)"
+                @dragstart="onCliDragStart($event, row.agentKey)"
+                @dragover="onCliDragOver($event, row.agentKey)"
+                @dragenter="onCliDragOver($event, row.agentKey)"
+                @dragleave="onCliDragLeave(row.agentKey)"
+                @drop.prevent="onCliDrop(row.agentKey)"
               >
                 <span class="cli-agent-grip" :title="$t('settings.cliAgents.drag-hint')">⠿</span>
-                <label class="cli-agent-toggle">
-                  <input
-                    type="checkbox"
-                    :checked="cliAgentEnabled(spec.agentKey)"
-                    :disabled="cliAgentEnabled(spec.agentKey) && cliEnabledCount <= 1"
-                    @change="toggleCliAgent(spec.agentKey)"
-                  />
-                  <span class="cli-agent-label">{{ spec.label }}</span>
-                </label>
-                <span v-if="spec.hint" class="cli-agent-hint">{{ spec.hint }}</span>
+                <div class="cli-agent-stack">
+                  <div class="cli-agent-line">
+                    <label class="cli-agent-toggle">
+                      <input
+                        type="checkbox"
+                        :checked="cliAgentEnabled(row.agentKey)"
+                        :disabled="cliAgentEnabled(row.agentKey) && cliEnabledCount <= 1"
+                        @change="toggleCliAgent(row.agentKey)"
+                      />
+                      <span class="cli-agent-label">{{ row.label }}</span>
+                    </label>
+                    <span v-if="row.hint" class="cli-agent-hint">{{ row.hint }}</span>
+                  </div>
+                  <div v-if="row.chips.length" class="cli-agent-chips">
+                    <span
+                      v-for="chip in row.chips"
+                      :key="chip.id"
+                      class="cli-chip"
+                      :class="`cli-chip--${chip.tone}`"
+                    >{{ chip.label }}</span>
+                  </div>
+                </div>
               </li>
             </ul>
+            <div class="cli-agent-chips cli-agent-legend">
+              <span class="cli-chip cli-chip--ok">{{ $t('settings.cliAgents.legend.ok') }}</span>
+              <span class="cli-chip cli-chip--warn">{{ $t('settings.cliAgents.legend.warn') }}</span>
+              <span class="cli-chip cli-chip--bad">{{ $t('settings.cliAgents.legend.bad') }}</span>
+              <span class="cli-chip">{{ $t('settings.cliAgents.legend.neutral') }}</span>
+            </div>
+          </section>
+          <section class="ap-section" data-settings-section="cli-agents-launch">
+            <h3 class="ap-title">{{ $t('settings.cliLaunch.title') }}</h3>
+            <p class="ap-hint">{{ $t('settings.cliLaunch.hint') }}</p>
+            <ul class="cli-agent-list">
+              <li
+                v-for="row in launchRows"
+                :key="row.agentKey"
+                class="cli-agent-row launch-row"
+                :class="{ 'launch-open': expandedLaunchKey === row.agentKey }"
+              >
+                <button
+                  type="button"
+                  class="launch-head"
+                  :aria-expanded="expandedLaunchKey === row.agentKey"
+                  @click="toggleLaunchRow(row.agentKey)"
+                >
+                  <span class="launch-caret">{{ expandedLaunchKey === row.agentKey ? '▾' : '▸' }}</span>
+                  <span class="cli-agent-label">{{ row.label }}</span>
+                  <span class="cli-agent-hint launch-summary">{{ launchSummary(row.agentKey) }}</span>
+                </button>
+                <div v-if="expandedLaunchKey === row.agentKey" class="launch-body">
+                  <div v-if="row.supportsModel" class="launch-field">
+                    <span class="launch-field-label">{{ $t('settings.cliLaunch.model-label') }}</span>
+                    <input
+                      type="text"
+                      class="launch-input"
+                      :value="launchModelFor(row.agentKey).model"
+                      :placeholder="$t('settings.cliLaunch.model-placeholder')"
+                      :aria-label="$t('settings.cliLaunch.model-label')"
+                      @change="onLaunchModelInput(row.agentKey, $event)"
+                    />
+                  </div>
+                  <div v-if="row.supportsEffort" class="launch-field">
+                    <span class="launch-field-label">{{ $t('settings.cliLaunch.effort-label') }}</span>
+                    <select
+                      v-if="row.knownEfforts.length"
+                      class="launch-input"
+                      :value="launchModelFor(row.agentKey).effort"
+                      :aria-label="$t('settings.cliLaunch.effort-label')"
+                      @change="onLaunchEffortSelect(row.agentKey, $event)"
+                    >
+                      <option value="">{{ $t('settings.cliLaunch.effort-vendor-default') }}</option>
+                      <option v-for="level in row.knownEfforts" :key="level" :value="level">{{ level }}</option>
+                    </select>
+                    <!-- A vendor may declare effortArgs with no vocabulary, in
+                         which case there is nothing to list and the value goes
+                         through as typed. -->
+                    <input
+                      v-else
+                      type="text"
+                      class="launch-input"
+                      :value="launchModelFor(row.agentKey).effort"
+                      :aria-label="$t('settings.cliLaunch.effort-label')"
+                      @change="onLaunchEffortSelect(row.agentKey, $event)"
+                    />
+                  </div>
+                  <p v-if="!row.supportsModel && !row.supportsEffort" class="ap-hint launch-note">
+                    {{ $t('settings.cliLaunch.no-model-args') }}
+                  </p>
+                  <p v-if="launchModelErrors[row.agentKey]" class="launch-error">
+                    {{ launchModelErrors[row.agentKey] }}
+                  </p>
+
+                  <div class="launch-field">
+                    <span class="launch-field-label">{{ $t('settings.cliLaunch.command-label') }}</span>
+                    <input
+                      type="text"
+                      class="launch-input"
+                      :value="launchCommands[row.agentKey] ?? ''"
+                      :placeholder="$t('settings.cliLaunch.command-placeholder')"
+                      :aria-label="$t('settings.cliLaunch.command-label')"
+                      @change="onLaunchCommandInput(row.agentKey, $event)"
+                    />
+                  </div>
+                  <div v-if="(launchCommands[row.agentKey] ?? '').trim()" class="launch-warn">
+                    <p>{{ $t('settings.cliLaunch.command-shadows-model') }}</p>
+                    <p>{{ $t('settings.cliLaunch.command-shadows-resume') }}</p>
+                  </div>
+
+                  <div class="launch-env-title">{{ $t('settings.cliLaunch.env-title') }}</div>
+                  <table class="launch-env-table">
+                    <thead>
+                      <tr>
+                        <th>{{ $t('settings.cliLaunch.env-col-name') }}</th>
+                        <th>{{ $t('settings.cliLaunch.env-col-value') }}</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="(entry, index) in (launchEnvs[row.agentKey] ?? [])" :key="entry.name">
+                        <td class="env-name">
+                          <code>{{ entry.name }}</code>
+                          <span
+                            v-if="isReservedSpawnEnvKey(entry.name)"
+                            class="cli-chip cli-chip--bad"
+                          >{{ $t('settings.cliLaunch.env-reserved-chip') }}</span>
+                        </td>
+                        <td>
+                          <input
+                            type="text"
+                            class="launch-input"
+                            :value="entry.value"
+                            :aria-label="entry.name"
+                            @change="onLaunchEnvValueInput(row.agentKey, index, $event)"
+                          />
+                        </td>
+                        <td>
+                          <button type="button" class="env-remove" @click="removeLaunchEnv(row.agentKey, index)">
+                            {{ $t('settings.cliLaunch.env-remove') }}
+                          </button>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td>
+                          <input
+                            v-model="envDraftName"
+                            type="text"
+                            class="launch-input"
+                            :placeholder="$t('settings.cliLaunch.env-name-placeholder')"
+                            :aria-label="$t('settings.cliLaunch.env-col-name')"
+                          />
+                        </td>
+                        <td>
+                          <input
+                            v-model="envDraftValue"
+                            type="text"
+                            class="launch-input"
+                            :placeholder="$t('settings.cliLaunch.env-value-placeholder')"
+                            :aria-label="$t('settings.cliLaunch.env-col-value')"
+                            @keyup.enter="addLaunchEnv(row.agentKey)"
+                          />
+                        </td>
+                        <td>
+                          <button
+                            type="button"
+                            class="env-add"
+                            :disabled="envDraftBlocked"
+                            @click="addLaunchEnv(row.agentKey)"
+                          >{{ $t('settings.cliLaunch.env-add') }}</button>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  <p v-if="isReservedSpawnEnvKey(envDraftName)" class="launch-warn">
+                    {{ $t('settings.cliLaunch.env-reserved-warn') }}
+                  </p>
+                </div>
+              </li>
+            </ul>
+            <p class="ap-hint">{{ $t('settings.cliLaunch.reserved-note', { list: reservedEnvKeyList }) }}</p>
+            <p class="ap-hint">{{ $t('settings.cliLaunch.restart-note') }}</p>
           </section>
           <section class="ap-section" data-settings-section="cli-agents-permissions">
             <h3 class="ap-title">{{ $t('settings.cliPermission.title') }}</h3>
@@ -2581,12 +3024,21 @@ watch(activeTab, (tab) => {
                 <span class="cli-agent-hint">{{ $t(`settings.pushChannels.cost-${spec.agentKey}`) }}</span>
               </li>
             </ul>
+            <div v-if="allPushChannelsOff" class="push-all-off">
+              <div class="push-all-off-title">{{ $t('settings.pushChannels.all-off-title') }}</div>
+              <ul class="push-all-off-list">
+                <li>{{ $t('settings.pushChannels.all-off-delivery') }}</li>
+                <li>{{ $t('settings.pushChannels.all-off-rewake') }}</li>
+                <li>{{ $t('settings.pushChannels.all-off-restart') }}</li>
+              </ul>
+            </div>
             <p class="ap-hint">{{ $t('settings.pushChannels.restart-note') }}</p>
           </section>
           <section class="ap-section" data-settings-section="cli-agents-maintenance">
             <CliManagementPanel
               v-if="activeTab === 'cliAgents'"
               :backend="props.backend"
+              :onboarding="onboarding"
               :cli-profiles="cliProfilesApi"
               @login="(agentKey: string) => emit('cli-login', agentKey)"
             />
@@ -3804,6 +4256,74 @@ watch(activeTab, (tab) => {
 .cli-agent-toggle { display: flex; align-items: center; gap: 8px; flex: 1; cursor: pointer; margin: 0; }
 .cli-agent-label { font-size: var(--font-sm); font-weight: 600; }
 .cli-agent-hint { font-size: var(--font-2xs); color: var(--text-secondary); }
+/* A row that also summarises the vendor's current settings: name line on top,
+   status chips underneath, the grip staying level with the name. */
+.cli-agent-row--stacked { align-items: flex-start; }
+.cli-agent-row--stacked .cli-agent-grip { padding-top: 1px; }
+.cli-agent-stack { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 0; }
+.cli-agent-line { display: flex; align-items: center; gap: 10px; }
+.cli-agent-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.cli-agent-legend { margin-top: 10px; }
+.cli-chip {
+  font-size: var(--font-2xs); font-weight: 600; line-height: 1.6;
+  padding: 0 8px; border-radius: 99px; white-space: nowrap;
+  border: 1px solid var(--border-default); background: var(--bg-muted); color: var(--text-secondary);
+}
+.cli-chip--ok { color: #2b8a3e; border-color: transparent; }
+.cli-chip--warn { color: #c77400; border-color: transparent; }
+.cli-chip--bad { color: #c0392b; border-color: transparent; }
+.cli-chip--info { color: var(--accent-fg, #3b5bdb); border-color: transparent; }
+/* Launch overrides: an accordion, one vendor open at a time, so fourteen env
+   tables do not all sit on the page at once. */
+.launch-row { flex-direction: column; align-items: stretch; padding: 0; }
+.launch-head {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 8px 12px; background: none; border: 0; cursor: pointer;
+  color: inherit; text-align: left; font: inherit;
+}
+.launch-caret { color: var(--text-secondary); width: 10px; flex: 0 0 auto; }
+.launch-summary { margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.launch-row.launch-open { border-color: var(--accent-focus); }
+.launch-body {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 4px 12px 12px 32px; border-top: 1px solid var(--border-default);
+}
+.launch-field { display: flex; align-items: center; gap: 10px; }
+.launch-field-label { flex: 0 0 96px; font-size: var(--font-2xs); color: var(--text-secondary); }
+.launch-input { flex: 1; min-width: 0; font-size: var(--font-2xs); }
+.launch-note { margin: 0; }
+.launch-error { margin: 0; font-size: var(--font-2xs); color: var(--danger-fg); }
+.launch-warn {
+  padding: 6px 10px; border-radius: var(--radius-md);
+  border: 1px solid var(--border-default); border-left: 3px solid #c77400;
+  background: var(--bg-muted); font-size: var(--font-2xs); color: var(--text-secondary);
+}
+.launch-warn p { margin: 0; }
+.launch-warn p + p { margin-top: 5px; }
+.launch-env-title { margin-top: 4px; font-size: var(--font-2xs); font-weight: 700; }
+.launch-env-table { width: 100%; border-collapse: collapse; }
+.launch-env-table th {
+  font-size: var(--font-2xs); font-weight: 600; color: var(--text-secondary);
+  text-align: left; padding: 0 6px 2px 0;
+}
+.launch-env-table td { padding: 2px 6px 2px 0; vertical-align: middle; }
+.launch-env-table td:last-child, .launch-env-table th:last-child { width: 1%; padding-right: 0; }
+.env-name { display: flex; align-items: center; gap: 6px; font-size: var(--font-2xs); }
+.env-remove, .env-add {
+  font-size: var(--font-2xs); padding: 2px 8px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border-default); background: var(--bg-elevated);
+  color: var(--text-secondary); cursor: pointer; white-space: nowrap;
+}
+.env-add:disabled { opacity: 0.45; cursor: default; }
+/* Push channels: what switching every one of them off actually costs. */
+.push-all-off {
+  margin-top: 10px; padding: 10px 14px; border-radius: var(--radius-md);
+  border: 1px solid var(--border-default); border-left: 3px solid #c77400;
+  background: var(--bg-muted);
+}
+.push-all-off-title { font-size: var(--font-xs); font-weight: 700; margin-bottom: 4px; }
+.push-all-off-list { margin: 0; padding-left: 1.2em; font-size: var(--font-2xs); color: var(--text-secondary); }
+.push-all-off-list li { margin-bottom: 2px; }
 /* Permission overrides: name | flag | mode picker, the flag column taking the
    slack so the pickers line up down the list. */
 .perm-global { margin: 4px 0 10px; }

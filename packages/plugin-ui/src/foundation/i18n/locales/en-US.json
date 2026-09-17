@@ -1,4 +1,12 @@
 {
+  "spawn": {
+    "model": {
+      "label": "Model",
+      "placeholder": "Vendor default",
+      "effort-label": "Effort",
+      "effort-default": "Vendor default"
+    }
+  },
   "ai-cli": {
     "label": "AI CLI",
     "title": "AI CLI",
@@ -780,6 +788,26 @@
     "search": {
       "placeholder": "Search settings…",
       "item": {
+        "cli-agents-list": {
+          "title": "CLI Agents List",
+          "summary": "Enable, disable and reorder the CLI agents, and read each one's install, permission, push and account state off its row."
+        },
+        "cli-agents-launch": {
+          "title": "Launch Overrides",
+          "summary": "Per-CLI default model and effort, a launch command you write yourself, and extra environment variables."
+        },
+        "cli-agents-permissions": {
+          "title": "Permission Bypass",
+          "summary": "The global switch for skipping a CLI's permission prompts, and the per-CLI override of it."
+        },
+        "cli-agents-push": {
+          "title": "Push Channels",
+          "summary": "Per-CLI switches for handing a message straight to a pane instead of typing it in."
+        },
+        "cli-agents-maintenance": {
+          "title": "CLI Installation",
+          "summary": "Detect, install and update each CLI, and point one at a specific executable when several are installed."
+        },
         "mcp-installed": {
           "title": "Installed MCP Servers",
           "summary": "Refresh, open config, enable/disable, remove, inspect tools, edit command, args, and env vars."
@@ -5220,8 +5248,60 @@
     },
     "cliAgents": {
       "title": "CLI Agents",
-      "hint": "Enable, disable, and reorder which CLI agents appear in the manual spawn dropdown. At least one must stay enabled.",
-      "drag-hint": "Drag to reorder"
+      "hint": "Enable, disable, and reorder which CLI agents appear in the manual spawn dropdown; each row also reads back how that agent is currently set up. At least one must stay enabled.",
+      "drag-hint": "Drag to reorder",
+      "legend": {
+        "ok": "Green = normal / on",
+        "warn": "Amber = a deviation worth noticing",
+        "bad": "Red = unusable or switched off",
+        "neutral": "Grey = a neutral fact"
+      },
+      "chip": {
+        "installed": "Installed {version}",
+        "installed-unknown": "Installed",
+        "outdated": "Update available {version}",
+        "not-installed": "Not installed",
+        "no-model-args": "No model flag",
+        "perm-inherit": "Permissions inherited",
+        "perm-force-on": "Permissions forced on",
+        "perm-force-off": "Permissions forced off",
+        "push": "push {kind}",
+        "push-off": "push off",
+        "no-push": "no push",
+        "accounts": "{count} accounts",
+        "signed-out": "Signed out",
+        "custom-binary": "Custom binary",
+        "model": "model {model}",
+        "effort": "effort {effort}",
+        "custom-command": "Custom launch command",
+        "custom-env": "{count} custom env"
+      }
+    },
+    "cliLaunch": {
+      "title": "Launch overrides",
+      "hint": "What a newly spawned pane of each CLI starts on. Open a row to set its default model and effort, replace the launch command outright, or hand it extra environment variables. Everything here is per CLI and applies to every window.",
+      "summary-command": "custom command",
+      "summary-env": "{count} env",
+      "model-label": "Default model",
+      "model-placeholder": "Vendor default — e.g. opus-5",
+      "effort-label": "Default effort",
+      "effort-vendor-default": "Vendor default",
+      "no-model-args": "This CLI cannot be told which model to run at launch, so there is nothing to choose — switch model inside the CLI instead.",
+      "command-label": "Launch command",
+      "command-placeholder": "Leave empty to use the default",
+      "command-shadows-model": "A launch command means you are writing the whole line, so Navide stops adding to it: the model and effort above, the permission-bypass flag and any per-pane argument are all left off. Clear this field to get them back.",
+      "command-shadows-resume": "It also applies to a FRESH pane only. Rebuilding a pane, or restoring one after a restart, has to rebuild the resume command from the vendor's own syntax — so those panes launch on the default command, not this one. Navide cannot merge the two: it has no way to know where an id belongs inside a line you wrote.",
+      "env-title": "Environment variables",
+      "env-col-name": "Variable",
+      "env-col-value": "Value",
+      "env-remove": "Remove",
+      "env-add": "Add",
+      "env-name-placeholder": "New variable…",
+      "env-value-placeholder": "Value",
+      "env-reserved-chip": "Not passed through",
+      "env-reserved-warn": "Navide manages this variable itself, so a value set here never reaches the CLI. You can still save it — it starts working the day Navide stops managing it.",
+      "reserved-note": "Variables Navide manages itself and will not pass through: {list}",
+      "restart-note": "All of this is fixed into a pane when it starts. Changing anything here affects panes spawned afterwards; a pane already running keeps what it started with until it is rebuilt or restored."
     },
     "cliPermission": {
       "title": "Permission bypass",
@@ -5657,7 +5737,11 @@
       "cost-opencode": "Opens a local port with no password — anything running as you can drive the pane. The message still goes into the input box.",
       "cost-kilo": "Opens a local port protected by a per-pane password. The message still goes into the input box.",
       "cost-qwen": "Keeps a per-pane file in Navide's data directory; each message is written to it in the clear until the pane closes. Never touches the input box.",
-      "cost-claude": "Installs a background hook that waits on Navide, so an idle agent can be woken. Never touches the input box."
+      "cost-claude": "Installs a background hook that waits on Navide, so an idle agent can be woken. Never touches the input box.",
+      "all-off-title": "All channels off — messages still arrive, by a different route",
+      "all-off-delivery": "A message now waits for the receiving pane to go idle and is then typed into it, so it takes longer to land.",
+      "all-off-rewake": "Claude Code's rewake is the only way to wake an idle agent; with it off, there is nothing to do but wait for the agent to come back to idle on its own.",
+      "all-off-restart": "A pane already running keeps the channel it started with until it is restarted."
     }
   },
   "label": {
@@ -6697,6 +6781,10 @@
     "confirm": "Close all {count} session(s) and their tabs? Agent history is kept — this only frees the resources used by this project.",
     "confirmBtn": "Close all",
     "done": "Closed {count} session(s)"
+  },
+  "cli-env": {
+    "denied": "{label}: Navide manages {keys} itself, so the value you set never reached the CLI.",
+    "overridden": "{label}: {keys} was accepted but then replaced by Navide's own setting, so your value is not in effect in this pane."
   },
   "cli-install": {
     "kicker": "Guided install",

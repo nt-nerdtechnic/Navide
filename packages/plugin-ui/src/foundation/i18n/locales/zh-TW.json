@@ -1,4 +1,12 @@
 {
+  "spawn": {
+    "model": {
+      "label": "模型",
+      "placeholder": "廠商預設",
+      "effort-label": "推理強度",
+      "effort-default": "廠商預設"
+    }
+  },
   "ai-cli": {
     "label": "AI CLI",
     "title": "AI CLI",
@@ -780,6 +788,26 @@
     "search": {
       "placeholder": "搜尋設定…",
       "item": {
+        "cli-agents-list": {
+          "title": "CLI Agents 清單",
+          "summary": "啟用、停用與排序 CLI agent，並在每列直接看到安裝、權限、push 與帳號現況。"
+        },
+        "cli-agents-launch": {
+          "title": "啟動覆寫",
+          "summary": "逐家設定預設模型與 effort、自己寫的啟動指令，以及額外的環境變數。"
+        },
+        "cli-agents-permissions": {
+          "title": "權限略過",
+          "summary": "略過 CLI 權限提示的全域開關，以及逐家的覆寫。"
+        },
+        "cli-agents-push": {
+          "title": "推送通道",
+          "summary": "逐家開關：直接把訊息交給 pane，而不是把字打進去。"
+        },
+        "cli-agents-maintenance": {
+          "title": "CLI 安裝",
+          "summary": "偵測、安裝與更新各家 CLI；裝了多份時指定要用哪一個執行檔。"
+        },
         "mcp-installed": {
           "title": "已安裝 MCP",
           "summary": "重新整理、開啟設定檔、啟用／停用、移除、檢視工具，以及編輯命令、參數與環境變數。"
@@ -5220,8 +5248,60 @@
     },
     "cliAgents": {
       "title": "CLI Agents",
-      "hint": "啟用、停用並排序主視窗手動生成（manual spawn）下拉選單中出現的 CLI agent，順序也會套用到 Ctrl+數字快捷鍵。至少須保留一個啟用。",
-      "drag-hint": "拖曳以排序"
+      "hint": "啟用、停用並排序主視窗手動生成（manual spawn）下拉選單中出現的 CLI agent，順序也會套用到 Ctrl+數字快捷鍵；每列也會顯示該 agent 目前的設定現況。至少須保留一個啟用。",
+      "drag-hint": "拖曳以排序",
+      "legend": {
+        "ok": "綠 = 正常／已啟用",
+        "warn": "黃 = 偏離預設，值得注意",
+        "bad": "紅 = 不可用或被關閉",
+        "neutral": "灰 = 中性事實"
+      },
+      "chip": {
+        "installed": "已安裝 {version}",
+        "installed-unknown": "已安裝",
+        "outdated": "可更新 {version}",
+        "not-installed": "未安裝",
+        "no-model-args": "不支援模型參數",
+        "perm-inherit": "權限 繼承",
+        "perm-force-on": "權限 強制開",
+        "perm-force-off": "權限 強制關",
+        "push": "push {kind}",
+        "push-off": "push 已關",
+        "no-push": "無 push",
+        "accounts": "{count} 帳號",
+        "signed-out": "未登入",
+        "custom-binary": "自訂執行檔",
+        "model": "模型 {model}",
+        "effort": "effort {effort}",
+        "custom-command": "自訂啟動指令",
+        "custom-env": "自訂 env {count}"
+      }
+    },
+    "cliLaunch": {
+      "title": "啟動覆寫",
+      "hint": "每家 CLI 新開 pane 時的起始狀態。展開一列可設定它的預設模型與 effort、整條改寫啟動指令，或塞入額外的環境變數。這裡全部是逐家設定，且對所有視窗生效。",
+      "summary-command": "自訂指令",
+      "summary-env": "env {count}",
+      "model-label": "預設模型",
+      "model-placeholder": "廠商預設 — 例如 opus-5",
+      "effort-label": "預設 effort",
+      "effort-vendor-default": "廠商預設",
+      "no-model-args": "這家 CLI 無法在啟動時指定模型，所以沒有東西可選——請在 CLI 裡自己切換模型。",
+      "command-label": "啟動指令",
+      "command-placeholder": "留空＝使用預設",
+      "command-shadows-model": "設了啟動指令，就等於整條命令由你自己寫，Navide 不會再往裡面加東西：上面的模型與 effort、權限略過旗標、以及各 pane 專屬參數全都不會加上去。清空這一欄即可恢復。",
+      "command-shadows-resume": "另外它只對「新開的 pane」生效。對 pane 按 rebuild、或重啟後還原 pane，都必須依該廠商的語法重組 resume 指令，所以那些 pane 會用預設指令啟動，不會用這一條。Navide 無法把兩者合併：它無從得知 session id 該插進你寫的這條指令的哪個位置。",
+      "env-title": "環境變數",
+      "env-col-name": "變數",
+      "env-col-value": "值",
+      "env-remove": "移除",
+      "env-add": "加入",
+      "env-name-placeholder": "新增變數…",
+      "env-value-placeholder": "值",
+      "env-reserved-chip": "不會傳進去",
+      "env-reserved-warn": "這個變數由 Navide 自己管理，所以在這裡設的值不會進到 CLI。你仍然可以存起來——哪天 Navide 不再管它，它就會開始生效。",
+      "reserved-note": "由 Navide 自己管理、不會傳進 CLI 的變數：{list}",
+      "restart-note": "以上全部都是在 pane 啟動當下定案的。這裡的改動只影響之後開的 pane；已經在跑的 pane 會維持啟動時的設定，直到它被 rebuild 或還原。"
     },
     "cliPermission": {
       "title": "權限略過",
@@ -5657,7 +5737,11 @@
       "cost-opencode": "會開一個沒有密碼的本機埠 — 同一台機器上以你身分執行的程式都能驅動該 pane。訊息仍會進入輸入框。",
       "cost-kilo": "會開一個帶每 pane 密碼的本機埠。訊息仍會進入輸入框。",
       "cost-qwen": "會在 Navide 資料目錄放一個每 pane 檔案，每則訊息以明文寫入，直到 pane 關閉。完全不碰輸入框。",
-      "cost-claude": "會裝一支停在 Navide 上等待的背景 hook，讓閒置的 agent 可以被喚醒。完全不碰輸入框。"
+      "cost-claude": "會裝一支停在 Navide 上等待的背景 hook，讓閒置的 agent 可以被喚醒。完全不碰輸入框。",
+      "all-off-title": "已全部關閉 — 訊息仍會送達，但方式改變了",
+      "all-off-delivery": "訊息會排隊等收件的 pane 回到閒置，再用打字的方式注入，因此延遲變大。",
+      "all-off-rewake": "Claude Code 的 rewake 是喚醒閒置 agent 的唯一手段，關閉後只能等它自己回到閒置。",
+      "all-off-restart": "已經開著的 pane 會保留原本的通道，直到重新啟動。"
     }
   },
   "label": {
@@ -6697,6 +6781,10 @@
     "confirm": "要關閉全部 {count} 個 session 與分頁嗎？Agent 紀錄會保留，只釋放本專案佔用的資源。",
     "confirmBtn": "全部關閉",
     "done": "已關閉 {count} 個 session"
+  },
+  "cli-env": {
+    "denied": "{label}：{keys} 由 Navide 自己管理，你設的值沒有進到 CLI。",
+    "overridden": "{label}：{keys} 收下了，但被 Navide 自己的設定蓋過去，所以這個 pane 裡實際沒有生效。"
   },
   "cli-install": {
     "kicker": "引導安裝",

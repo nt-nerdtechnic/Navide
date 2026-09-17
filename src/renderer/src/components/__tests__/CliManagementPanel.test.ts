@@ -4,6 +4,7 @@ import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import CliManagementPanel from '../CliManagementPanel.vue'
 import { i18n } from '@navide/plugin-ui/foundation'
 import { createMockBackend } from '../../composables/__tests__/mockBackend'
+import { useOnboarding } from '../../composables/useOnboarding'
 import type { OnboardDep, OnboardStatus } from '../../composables/useOnboarding'
 
 const depBase = {
@@ -85,7 +86,10 @@ describe('CliManagementPanel', () => {
     const mock = createMockBackend('connected')
     mock.setResponse('onboarding.status', status())
     mock.setResponse('onboarding.cli_maintenance', { ok: true, needs_terminal: true, command: 'claude update' })
-    wrapper = mount(CliManagementPanel, { props: { backend: mock.backend }, global: { plugins: [i18n] } })
+    wrapper = mount(CliManagementPanel, {
+      props: { backend: mock.backend, onboarding: useOnboarding(mock.backend) },
+      global: { plugins: [i18n] },
+    })
     await flushPromises()
     return mock
   }
@@ -122,7 +126,10 @@ describe('CliManagementPanel', () => {
     const payload = status()
     payload.cli_health.entries[0].update_state[0].outcome = 'cancelled'
     mock.setResponse('onboarding.status', payload)
-    wrapper = mount(CliManagementPanel, { props: { backend: mock.backend }, global: { plugins: [i18n] } })
+    wrapper = mount(CliManagementPanel, {
+      props: { backend: mock.backend, onboarding: useOnboarding(mock.backend) },
+      global: { plugins: [i18n] },
+    })
     await flushPromises()
 
     expect(wrapper.get('.cm-update').text()).toContain('cancelled')
@@ -162,7 +169,10 @@ describe('CliManagementPanel', () => {
     const payload = status()
     payload.deps = [{ ...kimi, status: 'missing', version: '' }]
     mock.setResponse('onboarding.status', payload)
-    wrapper = mount(CliManagementPanel, { props: { backend: mock.backend }, global: { plugins: [i18n] } })
+    wrapper = mount(CliManagementPanel, {
+      props: { backend: mock.backend, onboarding: useOnboarding(mock.backend) },
+      global: { plugins: [i18n] },
+    })
     await flushPromises()
 
     const install = wrapper.findAll('button').find(
