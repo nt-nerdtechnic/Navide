@@ -83,6 +83,14 @@ function withPlatform<T>(platform: NodeJS.Platform, fn: () => T): T {
   }
 }
 
+// Every test here shells out to `uv run python`, and the helper already
+// budgets 60s for that. Vitest's own per-test default is 5s, and that is the
+// one that governs: on a Windows runner a cold `uv` (venv resolution, then an
+// interpreter start) took the file 5573ms and the first test was killed
+// mid-call (main f9e7a3b7). Say the same number on both sides, so the outcome
+// stops depending on how busy the runner was.
+const PYTHON_PROBE_TIMEOUT_MS = 60_000
+
 describe('ws token path parity (main reads where the backend writes)', () => {
   afterEach(() => {
     electron.isPackaged = true
@@ -93,7 +101,7 @@ describe('ws token path parity (main reads where the backend writes)', () => {
     const expected = pythonWsTokenPath('host', { HOME: home })
     const actual = withPlatform(process.platform, () => wsTokenPath(backendDataDir({})))
     expect(actual).toBe(expected)
-  })
+  }, PYTHON_PROBE_TIMEOUT_MS)
 
   it.skipIf(process.platform === 'win32')('agrees with the Linux layout, default XDG', () => {
     const expected = pythonWsTokenPath('linux', { HOME: HOME.posix })
@@ -101,14 +109,14 @@ describe('ws token path parity (main reads where the backend writes)', () => {
     expect(actual).toBe(expected)
     // The bug this guards: main used to read under appData (~/.config).
     expect(actual).not.toContain('/.config/')
-  })
+  }, PYTHON_PROBE_TIMEOUT_MS)
 
   it.skipIf(process.platform === 'win32')('agrees with the Linux layout when XDG_DATA_HOME is set', () => {
     const xdg = '/mnt/state/xdg-data'
     const expected = pythonWsTokenPath('linux', { HOME: HOME.posix, XDG_DATA_HOME: xdg })
     const actual = withPlatform('linux', () => wsTokenPath(backendDataDir({ XDG_DATA_HOME: xdg })))
     expect(actual).toBe(expected)
-  })
+  }, PYTHON_PROBE_TIMEOUT_MS)
 
   it('honours AGENT_TEAM_DATA_DIR on both sides (the dev-mode contract)', () => {
     const override = process.platform === 'win32' ? 'C:\\navide-dev-state' : '/tmp/navide-dev-state'
@@ -119,5 +127,5 @@ describe('ws token path parity (main reads where the backend writes)', () => {
       wsTokenPath(backendDataDir({ AGENT_TEAM_DATA_DIR: override }))
     )
     expect(actual).toBe(expected)
-  })
+  }, PYTHON_PROBE_TIMEOUT_MS)
 })
