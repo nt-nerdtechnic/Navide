@@ -2,15 +2,15 @@
 
 [English](../en-US/getting-started.md) | 繁體中文 | [日本語](../ja-JP/getting-started.md) | [文件中心](README.md)
 
-Navide 支援配備 Apple 晶片且執行 macOS 13 以上版本的 Mac，以及 Linux x64 與 x64／Arm 版 Windows。[最新的 GitHub Release](https://github.com/nt-nerdtechnic/Navide/releases/latest) 提供 macOS 的 DMG 與 ZIP 下載（已經 Developer ID 簽章與 Apple Notarization）、Windows x64 的 NSIS 安裝程式，以及 Linux x64 的 AppImage 與 `.deb`。GitHub 下載很慢或失敗時，同一批檔案也由 dl.navide.dev 鏡像提供——README 的下載清單每個檔案旁都有「鏡像」連結，navide.dev 官網在鏡像可達時會自動改用它。
+Navide 支援配備 Apple 晶片且執行 macOS 13 以上版本的 Mac，以及 Linux x64 與 x64／Arm 版 Windows。[最新的 GitHub Release](https://github.com/nt-nerdtechnic/Navide/releases/latest) 提供 macOS 的 DMG 與 ZIP 下載（已經 Developer ID 簽章與 Apple Notarization）、Windows x64 與 Arm64 的 NSIS 安裝程式，以及 Linux x64 的 AppImage 與 `.deb`。GitHub 下載很慢或失敗時，同一批檔案也由 dl.navide.dev 鏡像提供——README 的下載清單每個檔案旁都有「鏡像」連結，navide.dev 官網在鏡像可達時會自動改用它。
 
 若要在 macOS 安裝，請下載 DMG、將 Navide 複製到「應用程式」，接著正常開啟即可，無需繞過 Gatekeeper。
 
-Arm 版 Windows 的原生安裝程式由 Release CI 建置、自下一個版本起隨發行提供；在此之前 Arm 版 Windows 以模擬方式執行 x64 安裝程式。Windows 版本尚未經過程式碼簽章，首次執行時 SmartScreen 會出現警告。
+Windows 版本尚未經過程式碼簽章，首次執行時 SmartScreen 會出現警告。
 
 ## 在 Windows 安裝
 
-從 Release 下載 `Navide-<版本>-win-x64.exe` 並執行。安裝程式尚未程式碼簽章，首次執行時 SmartScreen 會顯示「Windows 已保護您的電腦」：請點 **其他資訊 → 仍要執行**。Windows 簽章已決定暫緩，在簽章上線前每個新安裝檔都會出現這個提示。Windows 上的 App 內更新可以使用，但同樣不會驗證簽章。
+從 Release 下載 `Navide-<版本>-win-x64.exe`（Arm 版 Windows 請下載 `Navide-<版本>-win-arm64.exe`）並執行。安裝程式尚未程式碼簽章，首次執行時 SmartScreen 會顯示「Windows 已保護您的電腦」：請點 **其他資訊 → 仍要執行**。Windows 簽章已決定暫緩，在簽章上線前每個新安裝檔都會出現這個提示。Windows 上的 App 內更新可以使用，但同樣不會驗證簽章。
 
 ## 在 Linux 安裝
 

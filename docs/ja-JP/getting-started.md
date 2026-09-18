@@ -2,15 +2,15 @@
 
 [English](../en-US/getting-started.md) | [繁體中文](../zh-TW/getting-started.md) | 日本語 | [ドキュメント](README.md)
 
-Navide は Apple silicon 上の macOS 13 以降、Linux x64、x64 および Arm 版 Windows をサポートします。[最新の GitHub Release](https://github.com/nt-nerdtechnic/Navide/releases/latest) では、Developer ID で署名され Apple の Notarization を通過した macOS 向けの DMG と ZIP、Windows x64 向けの NSIS Installer、Linux x64 向けの AppImage と `.deb` を提供しています。GitHub からのダウンロードが遅い、または失敗する場合は、同じファイルを dl.navide.dev のミラーからも配信しています。README のダウンロード一覧には各ファイルの隣に「ミラー」リンクがあり、navide.dev はミラーに到達できるとき自動的にそちらへ切り替えます。
+Navide は Apple silicon 上の macOS 13 以降、Linux x64、x64 および Arm 版 Windows をサポートします。[最新の GitHub Release](https://github.com/nt-nerdtechnic/Navide/releases/latest) では、Developer ID で署名され Apple の Notarization を通過した macOS 向けの DMG と ZIP、Windows x64 および Arm64 向けの NSIS Installer、Linux x64 向けの AppImage と `.deb` を提供しています。GitHub からのダウンロードが遅い、または失敗する場合は、同じファイルを dl.navide.dev のミラーからも配信しています。README のダウンロード一覧には各ファイルの隣に「ミラー」リンクがあり、navide.dev はミラーに到達できるとき自動的にそちらへ切り替えます。
 
 macOS にインストールするには、DMG をダウンロードして Navide を Applications にコピーし、そのまま開きます。Gatekeeper の回避は不要です。
 
-Arm 版 Windows のネイティブ Installer は Release CI でビルドされ、次のリリースから配布されます。それまで Arm 版 Windows では x64 Installer がエミュレーションで動作します。Windows Build は Code Signing されていないため、初回起動時に SmartScreen が警告します。
+Windows Build は Code Signing されていないため、初回起動時に SmartScreen が警告します。
 
 ## Windows へのインストール
 
-リリースから `Navide-<version>-win-x64.exe` をダウンロードして実行します。Installer は Code Signing されていないため、初回起動時に SmartScreen が「Windows によって PC が保護されました」と表示します。**詳細情報 → 実行** を選んでください。Windows の Code Signing は保留中のため、署名が整うまでは新しい Installer ごとにこの警告が出ます。Windows でもアプリ内更新は動作しますが、同じ理由で署名検証なしでインストールされます。
+リリースから `Navide-<version>-win-x64.exe`（Arm 版 Windows では `Navide-<version>-win-arm64.exe`）をダウンロードして実行します。Installer は Code Signing されていないため、初回起動時に SmartScreen が「Windows によって PC が保護されました」と表示します。**詳細情報 → 実行** を選んでください。Windows の Code Signing は保留中のため、署名が整うまでは新しい Installer ごとにこの警告が出ます。Windows でもアプリ内更新は動作しますが、同じ理由で署名検証なしでインストールされます。
 
 ## Linux へのインストール
 

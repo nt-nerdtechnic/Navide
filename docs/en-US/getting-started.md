@@ -2,15 +2,15 @@
 
 English | [繁體中文](../zh-TW/getting-started.md) | [日本語](../ja-JP/getting-started.md) | [Documentation](README.md)
 
-Navide supports macOS 13 or newer on Apple silicon, Linux x64, and Windows on x64 or Arm. The [latest GitHub release](https://github.com/nt-nerdtechnic/Navide/releases/latest) provides DMG and ZIP downloads for macOS, signed with a Developer ID certificate and notarized by Apple, an NSIS installer for Windows x64, and an AppImage and a `.deb` for Linux x64. If a GitHub download stalls or fails, the same files are served from the dl.navide.dev mirror — the README's download list carries a *mirror* link beside every file, and navide.dev switches to it automatically when it is reachable.
+Navide supports macOS 13 or newer on Apple silicon, Linux x64, and Windows on x64 or Arm. The [latest GitHub release](https://github.com/nt-nerdtechnic/Navide/releases/latest) provides DMG and ZIP downloads for macOS, signed with a Developer ID certificate and notarized by Apple, NSIS installers for Windows x64 and Arm64, and an AppImage and a `.deb` for Linux x64. If a GitHub download stalls or fails, the same files are served from the dl.navide.dev mirror — the README's download list carries a *mirror* link beside every file, and navide.dev switches to it automatically when it is reachable.
 
 To install on macOS, download the DMG and copy Navide to Applications, then open it normally — no Gatekeeper workaround is needed.
 
-A native Windows on Arm installer is built by release CI and ships from the next release; until then Windows on Arm runs the x64 installer under emulation. The Windows build is not code-signed, so SmartScreen warns on first run.
+The Windows build is not code-signed, so SmartScreen warns on first run.
 
 ## Install on Windows
 
-Download `Navide-<version>-win-x64.exe` from the release and run it. The installer is not code-signed, so SmartScreen shows "Windows protected your PC" on first run: choose **More info → Run anyway**. Code signing for Windows is deferred, so expect this prompt on every new installer until it ships. In-app updates work on Windows, but they install without signature verification for the same reason.
+Download `Navide-<version>-win-x64.exe` (or `Navide-<version>-win-arm64.exe` on Windows on Arm) from the release and run it. The installer is not code-signed, so SmartScreen shows "Windows protected your PC" on first run: choose **More info → Run anyway**. Code signing for Windows is deferred, so expect this prompt on every new installer until it ships. In-app updates work on Windows, but they install without signature verification for the same reason.
 
 ## Install on Linux
 
