@@ -42,7 +42,7 @@ import {
   getContributionWindowConfig,
   getContributionWindowKey,
 } from './plansWindowRouting'
-import { HostLocaleManager, readPersistedLocaleFromSettings } from './hostLocale'
+import { HostLocaleManager, readPersistedLocaleFromSettings, type SupportedLocale } from './hostLocale'
 import {
   activateFactoryGitWithLegacyFallback,
   assertFactoryGitRestoreAllowed,
@@ -341,7 +341,7 @@ function sendMenuAction(action: string): void {
 let appMenuHooks: AppMenuHooks = {}
 let lastRecents: RecentMenuEntry[] = []
 function rebuildAppMenu(): void {
-  installApplicationMenu(appMenuHooks, lastRecents)
+  installApplicationMenu(appMenuHooks, lastRecents, currentUiLocale())
 }
 // Registered once for the process: `ipcMain.handle` throws on a second
 // registration, and rebuildAppMenu above runs again on every recents change.
@@ -1561,7 +1561,9 @@ function currentUiTheme(): string {
   return typeof theme === 'string' ? theme : ''
 }
 
-function currentUiLocale(): string {
+// Returns the narrow union, not `string`: the native menu indexes its string
+// table by it. Every other caller takes a string and is unaffected.
+function currentUiLocale(): SupportedLocale {
   return hostLocaleManager.getLocale()
 }
 
@@ -3665,6 +3667,9 @@ ipcMain.on('settings:language-changed', (_event, locale: string) => {
     frontendPluginManager.dispatchHostSettingsChanged({
       settings: { 'agent-team:language': normalizedLocale },
     })
+    // The native menu is built once at startup; Electron has no API to
+    // re-label it in place, so a language change has to install a new one.
+    rebuildAppMenu()
   }
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {

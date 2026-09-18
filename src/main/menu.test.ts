@@ -31,6 +31,7 @@ vi.mock('electron', () => ({
 }))
 
 import { installApplicationMenu, type AppMenuHooks } from './menu'
+import { MENU_STRINGS } from './menuStrings'
 import { LEGAL_LABELS, LEGAL_ROUTES } from '../shared/legalLinks'
 
 const clipboardWrites = h.clipboardWrites
@@ -136,7 +137,7 @@ describe('installApplicationMenu', () => {
   /** Rebuild the menu as `platform` would see it. */
   function installOn(platform: PlatformId): void {
     setPlatformId(platform)
-    installApplicationMenu(hooks)
+    installApplicationMenu(hooks, [], 'en-US')
   }
 
   it.each([
@@ -169,10 +170,14 @@ describe('installApplicationMenu', () => {
   })
 
   it('File > Open Recent lists the recents; missing folders are disabled and clicking opens by path', () => {
-    installApplicationMenu(hooks, [
-      { path: '/a/one', name: 'one', exists: true },
-      { path: '/b/two', name: 'two', exists: false }
-    ])
+    installApplicationMenu(
+      hooks,
+      [
+        { path: '/a/one', name: 'one', exists: true },
+        { path: '/b/two', name: 'two', exists: false }
+      ],
+      'en-US'
+    )
     const openRecent = itemIn(submenuOf('File'), 'Open Recent')
     const sub = openRecent.submenu as MenuItemConstructorOptions[]
     expect(sub.map((i) => i.label)).toEqual(['one', 'two'])
@@ -183,7 +188,7 @@ describe('installApplicationMenu', () => {
   })
 
   it('File > Open Recent shows a disabled placeholder when there are no recents', () => {
-    installApplicationMenu(hooks)
+    installApplicationMenu(hooks, [], 'en-US')
     const sub = itemIn(submenuOf('File'), 'Open Recent').submenu as MenuItemConstructorOptions[]
     expect(sub).toHaveLength(1)
     expect(sub[0].label).toBe('No Recent Workspaces')
@@ -437,12 +442,97 @@ describe('installApplicationMenu', () => {
     ['linux', 'File'],
   ] as const)('builds and clicks safely with no hooks at all on %s', (platform, top) => {
     setPlatformId(platform)
-    expect(() => installApplicationMenu()).not.toThrow()
+    expect(() => installApplicationMenu({}, [], 'en-US')).not.toThrow()
     const menu = submenuOf(top)
     expect(() => fire(itemIn(menu, 'Settings…'))).not.toThrow()
     expect(() => fire(itemIn(submenuOf('Window'), 'Pipeline Manager'))).not.toThrow()
     expect(() => fire(itemIn(submenuOf('Window'), 'Resource Manager'))).not.toThrow()
     expect(() => fire(itemIn(submenuOf('Window'), 'Turn Stats'))).not.toThrow()
     expect(() => fire(itemIn(submenuOf('Window'), 'Token Monitor'))).not.toThrow()
+  })
+})
+
+// The locale arm. `installApplicationMenu` takes the locale as a required
+// argument precisely so a caller cannot silently fall back to English, so the
+// zh-TW menu is asserted from the same template capture as the English one.
+describe('application menu — locale', () => {
+  const hooks = makeHooks()
+
+  beforeEach(() => {
+    h.template = []
+    hooks.calls.length = 0
+  })
+
+  afterEach(() => {
+    setPlatformId(BASELINE)
+  })
+
+  it('labels the top-level menus in the requested locale', () => {
+    setPlatformId('linux')
+    installApplicationMenu(hooks, [], 'zh-TW')
+    const tops = h.template.map((i) => i.label).filter(Boolean)
+    expect(tops).toContain('檔案')
+    expect(tops).toContain('編輯')
+    expect(tops).toContain('檢視')
+    expect(tops).toContain('視窗')
+    expect(tops).not.toContain('File')
+  })
+
+  it('translates the Navide-specific items a zh-TW user reaches for', () => {
+    setPlatformId('linux')
+    installApplicationMenu(hooks, [], 'zh-TW')
+    const file = submenuOf('檔案')
+    expect(() => itemIn(file, '開新視窗')).not.toThrow()
+    expect(() => itemIn(file, '開啟工作區…')).not.toThrow()
+    expect(itemIn(itemIn(file, '開啟最近使用').submenu as MenuItemConstructorOptions[], '沒有最近使用的工作區').enabled).toBe(false)
+    const window = submenuOf('視窗')
+    for (const label of ['流程管理', '資源控管', '每輪消耗', 'Token 監看']) {
+      expect(() => itemIn(window, label)).not.toThrow()
+    }
+    fire(itemIn(window, '流程管理'))
+    expect(hooks.calls).toEqual(['pipeline-manager'])
+  })
+
+  it('translates the Help menu legal entries and still routes them by route', () => {
+    setPlatformId('linux')
+    installApplicationMenu(hooks, [], 'zh-TW')
+    const help = h.template.find((i) => i.role === 'help')
+    if (!help || !Array.isArray(help.submenu)) throw new Error('no Help menu with submenu')
+    const menu = help.submenu as MenuItemConstructorOptions[]
+    expect(menu.map((i) => i.label)).toContain('隱私權')
+    for (const route of LEGAL_ROUTES) fire(itemIn(menu, MENU_STRINGS['zh-TW'].legal[route]))
+    expect(hooks.calls).toEqual(LEGAL_ROUTES.map((r) => 'legal:' + r))
+  })
+
+  // Chromium labels a `role` item in the SYSTEM locale, and Electron cannot
+  // re-localize it. Supplying our own label would silently take those items
+  // out of the OS's hands, so no role may carry one.
+  it('leaves every role item unlabeled so the OS keeps wording them', () => {
+    for (const locale of ['en-US', 'zh-TW'] as const) {
+      for (const platform of ['darwin', 'linux'] as const) {
+        setPlatformId(platform)
+        installApplicationMenu(hooks, [], locale)
+        const labeledRoles: string[] = []
+        const walk = (items: MenuItemConstructorOptions[]): void => {
+          for (const item of items) {
+            if (item.role && item.label) labeledRoles.push(`${locale}/${platform}:${item.role}`)
+            if (Array.isArray(item.submenu)) walk(item.submenu as MenuItemConstructorOptions[])
+          }
+        }
+        walk(h.template)
+        expect(labeledRoles).toEqual([])
+      }
+    }
+  })
+
+  it('keeps both locale tables filled with the same keys', () => {
+    const en = MENU_STRINGS['en-US']
+    const zh = MENU_STRINGS['zh-TW']
+    expect(Object.keys(zh).sort()).toEqual(Object.keys(en).sort())
+    expect(Object.keys(zh.legal).sort()).toEqual([...LEGAL_ROUTES].sort())
+    for (const [key, value] of Object.entries(zh)) {
+      if (typeof value === 'string') expect(value.trim()).not.toBe('')
+      expect(key in en).toBe(true)
+    }
   })
 })
