@@ -253,10 +253,21 @@ export function isExhausted(snap: UsageSnapshot | undefined): boolean {
  *  "don't know" and answers false, so a veto built on it can only ever fire
  *  on evidence. */
 export function hasHeadlineHeadroom(snap: UsageSnapshot | undefined): boolean {
-  if (!snap || snap.status !== 'ok') return false
-  if (snap.stale || snap.staleExpired || snap.refreshPending) return false
-  const headline = snap.windows.filter((w) => !w.expired && HEADLINE_KINDS.has(w.kind))
+  if (!readingIsCurrent(snap)) return false
+  const headline = snap!.windows.filter((w) => !w.expired && HEADLINE_KINDS.has(w.kind))
   return headline.length > 0 && headline.every((w) => w.usedPercent < EXHAUSTED_USED_PCT)
+}
+
+/** True when this snapshot is a reading, rather than something standing in for
+ *  one. `status !== 'ok'` is not enough on its own: a refresh that failed, and
+ *  the cached figures an account switch publishes before its first read lands,
+ *  both keep `status: 'ok'` and carry windows that look exactly like measured
+ *  ones. Callers that decide something FROM the reading — either direction —
+ *  share this, so "not known yet" cannot pass for an answer at one end while
+ *  being rejected at the other. */
+export function readingIsCurrent(snap: UsageSnapshot | undefined): boolean {
+  if (!snap || snap.status !== 'ok') return false
+  return !snap.stale && !snap.staleExpired && !snap.refreshPending
 }
 
 /** Severity by REMAINING quota: >40 ok (grey), 15–40 warn (orange), <15 crit (red). */

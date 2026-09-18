@@ -252,7 +252,7 @@ const SlotHistory = defineAsyncComponent(() => import('./components/HistoryPanel
 const SlotTasker = defineAsyncComponent(() => import('./components/TaskerPanel.vue'))
 const SlotMessages = defineAsyncComponent(() => import('./components/AgentMessagesPanel.vue'))
 import { pickWhatsNew, type WhatsNewEntry } from './lib/whatsNew'
-import { exhaustedWindow, hasHeadlineHeadroom, initUsage, refreshUsage, usageFor } from './composables/useUsage'
+import { exhaustedWindow, hasHeadlineHeadroom, initUsage, readingIsCurrent, refreshUsage, usageFor } from './composables/useUsage'
 import {
   LOOP_RESUME_SETTING_KEY,
   DEFAULT_LOOP_RESUME,
@@ -266,7 +266,7 @@ import {
 import { isLoopSkill, resolvePromptSkill } from './lib/promptSkills'
 import { usePromptSkills } from './composables/usePromptSkills'
 import { loginCommandFor, matchLoginExpired } from './lib/cliLoginExpired'
-import { detectUsageLimit, isDismissedUsageLimit, usageLimitDue, usageResumeAt } from './lib/cliUsageLimit'
+import { QUOTA_READING_VETO, detectUsageLimit, isDismissedUsageLimit, usageLimitDue, usageResumeAt } from './lib/cliUsageLimit'
 import {
   awaitingClearsOnMiss,
   hasAwaitingPattern,
@@ -4715,14 +4715,31 @@ function checkPaneUsageLimit(
     // for hours over a CLI that is answering normally underneath it.
     //
     // Through the shared clear, not by nulling the fields here: that path is
-    // what resumes a loop parked on this very limit, advances the consumed
-    // baseline so the banner still on screen cannot re-light the flag, and
-    // records the reset as dismissed for the same reason.
-    if (hasHeadlineHeadroom(usageFor(pane.agentKey))) clearPaneUsageLimit(pane, 'quota-back')
+    // what resumes a loop parked on this very limit and advances the consumed
+    // baseline. Without its third part, though — the reset is NOT recorded as
+    // judged, or one reading under the line would leave the pane unflaggable
+    // until that reset passed. See clearPaneUsageLimit.
+    if (hasHeadlineHeadroom(usageFor(pane.agentKey))) {
+      clearPaneUsageLimit(pane, 'quota-back', false)
+    }
     return
   }
   const tail = unseenTail(buf, bytes, watcher.limitBaseline, PANE_HEALTH_TAIL_CHARS)
   const hit = detectUsageLimit(pane.agentKey, tail, now)
+  if (hit === QUOTA_READING_VETO) {
+    // Judged, so consume it: an overruled sentence left unconsumed is re-judged
+    // every poll, and a later change of state promotes minutes-old prose to a
+    // hit whose 12-hour clock then re-resolves to the next day.
+    watcher.limitBaseline = bytes
+    // Then re-read what overruled it. The reading can be a quarter of an hour
+    // old and the sentence was printed seconds ago, so without this the veto
+    // also suppresses the one refresh that could lift it — it would stand
+    // until the next natural poll, with the loop still feeding an exhausted
+    // CLI. Once per sentence, not per poll: the consume above is what bounds
+    // it, and the read boots a whole Claude Code.
+    refreshUsage(pane.agentKey, cliProfilesApi.defaultProfileId(pane.agentKey))
+    return
+  }
   if (hit === null) {
     raiseFromQuotaReading(pane, watcher, now)
     return
@@ -4788,9 +4805,10 @@ function checkPaneUsageLimit(
  *
  *  - It does not stamp `usageLimitSeenAt`. That anchor is how quotaTurnIsFresh
  *    tells a turn that DIED on the quota from one that finished, and it is
- *    stamped on detection for a reason: moving it onto a 15-minute poll would
- *    keep pushing it forward and turn a gate that fails open into one that
- *    never opens.
+ *    stamped on detection for a reason. This runs on the five-second health
+ *    poll, so stamping here would walk the anchor forward every tick for as
+ *    long as the account stays spent, and nothing could ever be newer than it
+ *    — a gate built to fail OPEN would never open again.
  *  - It does not send `tokens.quota_exhausted`. That event earns its keep by
  *    being EARLIER than the usage poll, so sending it from the poll tells the
  *    ledger nothing its own samples do not already say.
@@ -4805,7 +4823,14 @@ function checkPaneUsageLimit(
  *  No notification either: this observes a state that may have been true for a
  *  quarter of an hour, and every notification the pane has says "just now". */
 function raiseFromQuotaReading(pane: ActivePane, watcher: PaneHealthWatcher, now: number): void {
-  if (exhaustedWindow(usageFor(pane.agentKey)) === undefined) return
+  const snap = usageFor(pane.agentKey)
+  // Same freshness bar the lowering side answers to. Without it the two ends
+  // disagree about what "not known yet" means, and the case that exposes it is
+  // an account switch: the incoming account publishes cached figures carrying
+  // refreshPending, still `status: 'ok'`, so this would re-light the badge one
+  // tick later from a reading nobody has taken — defeating the switch's own
+  // clear and making the claim in clearPaneUsageLimits untrue.
+  if (!readingIsCurrent(snap) || exhaustedWindow(snap) === undefined) return
   const resumeAt = usageResumeAt(pane.agentKey, now)
   if (resumeAt == null) return
   if (isDismissedUsageLimit(watcher.dismissedLimitUntil, resumeAt, now)) return
@@ -4848,14 +4873,25 @@ function clearPaneUsageLimits(agentKey: string, newDefaultId: string | null): vo
 
 /** One pane's half of clearPaneUsageLimits, shared with the badge dismiss.
  *  The cleared reset is remembered so a repaint of the same banner can't
- *  re-light the flag (an unknown reset can't be told apart, so none is). */
-function clearPaneUsageLimit(pane: ActivePane, logLabel: string): void {
+ *  re-light the flag (an unknown reset can't be told apart, so none is).
+ *
+ *  `remember` exists because that record is a statement about a JUDGEMENT —
+ *  the user said this badge is wrong, or the account it belonged to is gone —
+ *  and it suppresses every later sighting of the same reset for the rest of
+ *  the window. A clear driven by a reading is not a judgement, it is the
+ *  reading's current value: writing the record there means one poll that
+ *  happens to come back under the line leaves the pane unflaggable until that
+ *  reset passes, however exhausted the account then gets. The reading is its
+ *  own guard in that case — while it says there is quota, detectUsageLimit
+ *  overrules any banner anyway, and when it says otherwise the flag is
+ *  supposed to come back. */
+function clearPaneUsageLimit(pane: ActivePane, logLabel: string, remember = true): void {
   const waitingOnThisLimit =
     pane.loopActive && pane.loopWaitUntil != null && pane.loopWaitUntil === pane.usageLimitUntil
   const w = paneHealthWatchers.get(pane.id)
   if (w) {
     w.limitBaseline = paneCleanBytes(pane.id)
-    w.dismissedLimitUntil = pane.usageLimitUntil ?? null
+    if (remember) w.dismissedLimitUntil = pane.usageLimitUntil ?? null
   }
   pane.usageLimitAt = null
   pane.usageLimitUntil = null

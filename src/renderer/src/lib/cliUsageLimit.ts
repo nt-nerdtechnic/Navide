@@ -58,6 +58,23 @@ export function isDismissedUsageLimit(
   return Math.abs(until - dismissedUntil) < 60_000
 }
 
+/** A clocked limit sentence the account's reading overruled.
+ *
+ *  The caller has to tell this apart from "nothing here", because the sentence
+ *  is real text sitting in the buffer and a verdict was reached on it. Left
+ *  indistinguishable from null it is never consumed, so it is re-judged every
+ *  poll until it scrolls out of the scanned tail — and any later change of
+ *  state (the reading errors, the account is parked, the window flips) then
+ *  promotes prose that is minutes old to a fresh hit, whose bare 12-hour clock
+ *  parseLimitReset re-resolves against the CURRENT time and rolls to the next
+ *  day. A sentence saying "resets 4:30pm" can that way park a loop until
+ *  4:30pm tomorrow.
+ *
+ *  It also tells the caller the reading disagreed with the buffer, which is
+ *  worth a re-read: the sentence was printed seconds ago, the reading it lost
+ *  to can be a quarter of an hour old. */
+export const QUOTA_READING_VETO = 'quota-reading-veto'
+
 export interface UsageLimitHit {
   /** The matched message, whitespace-collapsed. */
   message: string
@@ -98,17 +115,22 @@ export function usageResumeAt(
  *  and the badge it lights then stands for the whole window while the CLI
  *  answers normally right underneath it. So a reading that positively says
  *  quota remains vetoes the sentence. Only a positive one: an absent, stale
- *  or errored reading leaves the buffer as the only witness there is, which
- *  is also the permanent case for the vendors that expose no quota command
- *  at all. */
+ *  or errored reading leaves the buffer as the only witness there is.
+ *
+ *  For some vendors that is the permanent state, and the boundary is not the
+ *  one it looks like. It is not "has a quota command": cursor, kilo and pi all
+ *  report usage, but in windows of kind cycle / on-demand / credits / period,
+ *  and only session, weekly and monthly speak for the account (HEADLINE_KINDS).
+ *  So for those three the reading never says anything either way and the
+ *  buffer decides alone, exactly as it did before. */
 export function detectUsageLimit(
   agentKey: string | undefined | null,
   tail: string,
   now: number = Date.now()
-): UsageLimitHit | null {
+): UsageLimitHit | typeof QUOTA_READING_VETO | null {
   const clocked = matchSessionLimit(tail)
   if (clocked !== null) {
-    if (hasHeadlineHeadroom(usageFor(agentKey))) return null
+    if (hasHeadlineHeadroom(usageFor(agentKey))) return QUOTA_READING_VETO
     return {
       message: clocked,
       resumeAt: parseLimitReset(clocked, now) ?? usageResumeAt(agentKey, now)

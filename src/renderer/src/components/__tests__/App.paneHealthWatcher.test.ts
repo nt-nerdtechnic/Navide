@@ -31,6 +31,19 @@ function loopWatcherBody(): string {
   return appSource.slice(start, end)
 }
 
+
+/** The body of checkPaneUsageLimit ALONE. Slicing to end-of-file, as the older
+ *  blocks here do, makes every ordering assertion depend on the first match
+ *  happening to land inside the function — so a regression that moves a check
+ *  out of it reads as a pass. */
+function checkUsageLimitBody(): string {
+  const start = appSource.indexOf('function checkPaneUsageLimit(')
+  expect(start).toBeGreaterThan(-1)
+  const end = appSource.indexOf('\nfunction ', start + 1)
+  expect(end).toBeGreaterThan(start)
+  return appSource.slice(start, end)
+}
+
 describe('quota-limit detection is not gated on the loop', () => {
   it('arms the health watcher for every spawned pane', () => {
     // The regression this exists to stop: re-gating the arming call, which is
@@ -221,10 +234,13 @@ describe('a limit hit is reported to the quota ledger once', () => {
     // It must sit below the `usageLimitAt != null` return so a repaint of the
     // same message never re-sends it, and above the refresh so it goes out
     // even when the refresh path bails.
-    const check = appSource.slice(appSource.indexOf('function checkPaneUsageLimit('))
+    const check = checkUsageLimitBody()
     const flagged = check.indexOf('if (pane.usageLimitAt != null) {')
     const send = check.indexOf("sendQuiet('tokens.quota_exhausted'")
-    const refresh = check.indexOf('refreshUsage(pane.agentKey')
+    // Searched from the send onward: the overruled-sentence branch has a
+    // refreshUsage of its own, earlier in the function, and it is not the one
+    // this ordering is about.
+    const refresh = check.indexOf('refreshUsage(pane.agentKey', send)
     expect(flagged).toBeGreaterThan(-1)
     expect(send).toBeGreaterThan(flagged)
     expect(send).toBeLessThan(refresh)
@@ -241,7 +257,7 @@ describe('a limit hit is reported to the quota ledger once', () => {
 // the paneUsageLimited docblock, which records that withdrawal).
 describe('the account reading can lower the flag before its stated reset', () => {
   it('lifts a standing flag when the reading says the quota is back', () => {
-    const check = appSource.slice(appSource.indexOf('function checkPaneUsageLimit('))
+    const check = checkUsageLimitBody()
     const flagged = check.indexOf('if (pane.usageLimitAt != null) {')
     const due = check.indexOf('usageLimitDue(pane.usageLimitAt')
     const headroom = check.indexOf('hasHeadlineHeadroom(usageFor(pane.agentKey))')
@@ -255,11 +271,25 @@ describe('the account reading can lower the flag before its stated reset', () =>
     // deadline (clearPaneUsageLimit is what compares them), leave the banner
     // still on screen able to re-light the flag on the next poll, and lose the
     // dismissed-reset record that stops exactly that.
-    const check = appSource.slice(appSource.indexOf('function checkPaneUsageLimit('))
+    const check = checkUsageLimitBody()
     const headroom = check.indexOf('hasHeadlineHeadroom(usageFor(pane.agentKey))')
-    expect(check.slice(headroom, check.indexOf('\n', headroom))).toContain(
-      "clearPaneUsageLimit(pane, 'quota-back')"
+    expect(check.slice(headroom, headroom + 200)).toContain(
+      "clearPaneUsageLimit(pane, 'quota-back', false)"
     )
+  })
+
+  it('does not record the reset as judged, the way a dismiss does', () => {
+    // The record suppresses every later sighting of the same reset until it
+    // passes. A dismiss earns that (the user said the badge is wrong); one
+    // poll coming back under the line does not — it would leave the pane
+    // unflaggable for the rest of the window however exhausted it then gets.
+    const clear = appSource.slice(appSource.indexOf('function clearPaneUsageLimit('))
+    expect(clear.slice(0, clear.indexOf('\n}'))).toContain(
+      'if (remember) w.dismissedLimitUntil = pane.usageLimitUntil ?? null'
+    )
+    // The two paths that ARE a judgement keep the default.
+    expect(appSource).toContain("clearPaneUsageLimit(pane, 'account-switch')")
+    expect(appSource).toContain("clearPaneUsageLimit(pane, 'usage-limit-dismiss')")
   })
 })
 
@@ -270,7 +300,7 @@ describe('the account reading can raise the flag with nothing in the buffer', ()
   )
 
   it('is reached only when the buffer matched nothing', () => {
-    const check = appSource.slice(appSource.indexOf('function checkPaneUsageLimit('))
+    const check = checkUsageLimitBody()
     const hit = check.indexOf('const hit = detectUsageLimit(')
     const call = check.indexOf('raiseFromQuotaReading(pane, watcher, now)')
     expect(call).toBeGreaterThan(hit)
@@ -312,5 +342,50 @@ describe('the account reading can raise the flag with nothing in the buffer', ()
     expect(raise).toContain(
       'watcher.limitProfileId = cliProfilesApi.defaultProfileId(pane.agentKey)'
     )
+  })
+})
+
+// A clocked sentence the reading overruled is a verdict on real text, not an
+// absence of one. Treating it as "nothing here" leaves it unconsumed and leaves
+// the reading that beat it unchecked.
+describe('an overruled limit sentence is still dealt with', () => {
+  it('consumes it, so it cannot be re-judged or promoted later', () => {
+    // Unconsumed, it is re-matched every poll until it scrolls out of the
+    // 2000-character tail; any later change of state then promotes prose that
+    // is minutes old, and parseLimitReset re-resolves its bare 12-hour clock
+    // against the current time — rolling a stale "resets 4:30pm" to tomorrow.
+    const check = checkUsageLimitBody()
+    const veto = check.indexOf('if (hit === QUOTA_READING_VETO) {')
+    expect(veto).toBeGreaterThan(-1)
+    const branch = check.slice(veto, check.indexOf('if (hit === null) {', veto))
+    expect(branch).toContain('watcher.limitBaseline = bytes')
+  })
+
+  it('re-reads the account that overruled it', () => {
+    // The sentence was printed seconds ago; the reading that beat it can be a
+    // quarter of an hour old. Without this the veto suppresses the one refresh
+    // that could lift it, and stands until the next natural poll with the loop
+    // still feeding an exhausted CLI.
+    const check = checkUsageLimitBody()
+    const veto = check.indexOf('if (hit === QUOTA_READING_VETO) {')
+    const branch = check.slice(veto, check.indexOf('if (hit === null) {', veto))
+    expect(branch).toContain(
+      'refreshUsage(pane.agentKey, cliProfilesApi.defaultProfileId(pane.agentKey))'
+    )
+  })
+})
+
+describe('both ends of the flag answer to the same freshness bar', () => {
+  it('will not raise from a reading nobody has taken', () => {
+    // The case: an account switch publishes the incoming account's CACHED
+    // figures with refreshPending and status 'ok'. The lowering side rejects
+    // that as "not known yet"; if the raising side accepted it, the badge would
+    // come back one tick after the switch cleared it, from a reading that
+    // measured nothing — and clearPaneUsageLimits' docblock would be a lie.
+    const raise = appSource.slice(
+      appSource.indexOf('function raiseFromQuotaReading('),
+      appSource.indexOf('/** Account switch:')
+    )
+    expect(raise).toContain('if (!readingIsCurrent(snap) || exhaustedWindow(snap) === undefined) return')
   })
 })
