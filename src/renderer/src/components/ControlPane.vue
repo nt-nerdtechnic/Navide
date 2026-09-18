@@ -5,6 +5,7 @@ import { extractDropPaths, stabilizeDroppedPaths } from '../lib/drop'
 import { PANE_BATCH_MIME } from '@navide/terminal'
 import { resolveDragBatch } from '../lib/paneBatchDrag'
 import { resolveLineageDrop, resolveRootDrop } from '../lib/lineageDrop'
+import { withDescendants } from '../lib/paneLineage'
 import { setBatchDragImage } from '../lib/batchDragImage'
 import { paneStatusLabelText, type PaneStatusValue } from '../lib/paneStatusLabel'
 import { rollupPaneStatus } from '../lib/paneStatusRollup'
@@ -1075,6 +1076,11 @@ const emit = defineEmits<{
   /** A pane dropped on a run group's header row: make it a root of the
    *  lineage inside that group. */
   (e: 'root-pane', draggedId: string, workspacePath: string, runGroupId: string): void
+  /** Replace the App-owned multi-selection with exactly these panes. Fired
+   *  when a drag starts on a folded row: the hidden subtree travels with it,
+   *  and App resolves every drop from the selection, so the selection must
+   *  hold the subtree before the drop lands. */
+  (e: 'select-panes', paneIds: string[]): void
   (e: 'open-settings'): void
   (e: 'open-pipeline-manager', pipelineId?: string): void
   (e: 'open-history', workspacePath?: string): void
@@ -2742,9 +2748,16 @@ let draggingPaneId = ''
 // Rendered as dragging, and excluded from being a drop target for itself.
 const draggingBatchIds = ref<string[]>([])
 
-function onAgentDragStart(e: DragEvent, paneId: string): void {
+function onAgentDragStart(e: DragEvent, paneId: string, folded = false): void {
   if (!e.dataTransfer) return
-  const batch = resolveDragBatch(paneId, props.selectedPaneIds, props.panes.map((p) => p.id))
+  let batch = resolveDragBatch(paneId, props.selectedPaneIds, props.panes.map((p) => p.id))
+  // A folded row stands for its whole subtree, so the drag carries the hidden
+  // descendants as if they had been multi-selected — otherwise a tab or window
+  // drop moves the parent alone and the children it was hiding stay behind.
+  if (folded) {
+    batch = withDescendants(batch, props.panes)
+    if (batch.length > 1) emit('select-panes', batch)
+  }
   e.dataTransfer.setData('application/x-pane-id', paneId)
   // Only a real batch writes the MIME — its presence is what marks a batch drag
   // for drop targets, including ones in another window.
@@ -3596,7 +3609,7 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
           @dragleave="onAgentDragLeave(p.id)"
           @drop.prevent="onAgentDrop($event, p.id)"
         >
-          <div class="agent-line" role="button" title="Focus pane" draggable="true" @dragstart="onAgentDragStart($event, p.id)" @dragend="onAgentDragEnd" @click="onAgentLineClick(p.id, $event)" @contextmenu.prevent="emit('context-menu', p.id, $event)">
+          <div class="agent-line" role="button" title="Focus pane" draggable="true" @dragstart="onAgentDragStart($event, p.id, hasChildren && folded)" @dragend="onAgentDragEnd" @click="onAgentLineClick(p.id, $event)" @contextmenu.prevent="emit('context-menu', p.id, $event)">
             <button
               v-if="hasChildren"
               class="lineage-caret"

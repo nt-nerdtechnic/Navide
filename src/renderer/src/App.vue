@@ -17907,6 +17907,7 @@ function paneIsCommander(p: ActivePane): boolean {
       @reorder-pane="reorderPane"
       @nest-pane="nestPane"
       @root-pane="rootPane"
+      @select-panes="selectedPaneIds = new Set($event)"
       @open-settings="showSettings = true"
       @open-pipeline-manager="openPipelineManager"
       @open-git-accounts="openSettingsAccounts"
