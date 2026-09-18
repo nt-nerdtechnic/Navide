@@ -592,6 +592,24 @@ def test_the_probe_timeout_matches_the_electron_main_one(monkeypatch):
 # ── npm prefix: read the setting instead of guessing directory names ──────────
 
 
+@pytest.fixture(autouse=True)
+def _no_inherited_npm_prefix(monkeypatch):
+    """Start every test in this module from a machine with no npm_config_prefix.
+
+    Autouse, so it covers the whole file rather than the group it sits in; no
+    test here wants an inherited one.
+
+    npm_prefix_bins reads that variable before the rc file — correctly, since
+    npm itself does — so a machine that exports it makes every rc-file case
+    resolve somewhere else and return []. The GitHub Windows runner is such a
+    machine: `Backend checks (Windows)` failed on main at f6e31785 with these
+    five tests and nothing else, and exporting any npm_config_prefix locally
+    reproduces exactly that set. The two tests that are about the variable set
+    it themselves and are unaffected.
+    """
+    monkeypatch.delenv("npm_config_prefix", raising=False)
+
+
 def test_npm_prefix_bins_reads_the_configured_prefix(tmp_path):
     """One report had `prefix=~/.npm`, so codex landed in ~/.npm/bin while the
     fallback list knew only ~/.npm-global/bin."""
