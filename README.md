@@ -117,13 +117,13 @@ Read [Privacy and Data Flows](docs/en-US/privacy.md) and the [Security Policy](S
 
 Navide supports macOS 13+ on Apple silicon, Linux x64, and Windows on x64 or Arm. The v0.2.6 release ships macOS builds signed with a Developer ID certificate and notarized by Apple, plus Windows x64 and Arm64 installers and Linux x64 packages:
 
-- [Download DMG](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.6/Navide-0.2.6-arm64.dmg) ([mirror](https://dl.navide.dev/releases/v0.2.6/Navide-0.2.6-arm64.dmg))
-- [Download ZIP](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.6/Navide-0.2.6-arm64.zip) ([mirror](https://dl.navide.dev/releases/v0.2.6/Navide-0.2.6-arm64.zip))
-- [Download Windows x64 installer](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.6/Navide-0.2.6-win-x64.exe) ([mirror](https://dl.navide.dev/releases/v0.2.6/Navide-0.2.6-win-x64.exe))
-- [Download Windows Arm64 installer](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.6/Navide-0.2.6-win-arm64.exe) ([mirror](https://dl.navide.dev/releases/v0.2.6/Navide-0.2.6-win-arm64.exe))
-- [Download Linux AppImage](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.6/Navide-0.2.6-x86_64.AppImage) ([mirror](https://dl.navide.dev/releases/v0.2.6/Navide-0.2.6-x86_64.AppImage)) · [Download Linux .deb](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.6/Navide-0.2.6-amd64.deb) ([mirror](https://dl.navide.dev/releases/v0.2.6/Navide-0.2.6-amd64.deb))
+- [Download DMG](https://dl.navide.dev/releases/v0.2.6/Navide-0.2.6-arm64.dmg) ([GitHub](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.6/Navide-0.2.6-arm64.dmg))
+- [Download ZIP](https://dl.navide.dev/releases/v0.2.6/Navide-0.2.6-arm64.zip) ([GitHub](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.6/Navide-0.2.6-arm64.zip))
+- [Download Windows x64 installer](https://dl.navide.dev/releases/v0.2.6/Navide-0.2.6-win-x64.exe) ([GitHub](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.6/Navide-0.2.6-win-x64.exe))
+- [Download Windows Arm64 installer](https://dl.navide.dev/releases/v0.2.6/Navide-0.2.6-win-arm64.exe) ([GitHub](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.6/Navide-0.2.6-win-arm64.exe))
+- [Download Linux AppImage](https://dl.navide.dev/releases/v0.2.6/Navide-0.2.6-x86_64.AppImage) ([GitHub](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.6/Navide-0.2.6-x86_64.AppImage)) · [Download Linux .deb](https://dl.navide.dev/releases/v0.2.6/Navide-0.2.6-amd64.deb) ([GitHub](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.6/Navide-0.2.6-amd64.deb))
 
-If a GitHub download stalls or fails, take the *mirror* link beside it — the same file, byte for byte, served from dl.navide.dev (the release workflow publishes both and checks their checksums match).
+Links go to dl.navide.dev, the same host the app updates itself from; the *GitHub* link beside each one is the same file, byte for byte, on the GitHub Release (the release workflow publishes both and checks their checksums match).
 
 Copy Navide to Applications and open it normally — no Gatekeeper workaround is needed. In-app auto-update is available from this release onward.
 

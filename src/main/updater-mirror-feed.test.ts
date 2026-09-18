@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { isNetworkFailure, MIRROR_FEED_URL, withMirrorFeed, type MirrorCapableUpdater } from './updater-mirror-feed'
+import { GITHUB_FEED, isNetworkFailure, MIRROR_FEED_URL, withMirrorFeed, type MirrorCapableUpdater } from './updater-mirror-feed'
 import { createUpdaterService } from './updater-service'
 import type { UpdateState } from '../shared/updater'
 
@@ -33,36 +33,37 @@ function fakeUpdater() {
   return { updater: updater as unknown as MirrorCapableUpdater, raw: updater, emit, failing }
 }
 
-const dns = new Error('getaddrinfo ENOTFOUND release-assets.githubusercontent.com')
+const dns = new Error('getaddrinfo ENOTFOUND dl.navide.dev')
 const notFound = new Error('HttpError: 404 Not Found')
 
 describe('isNetworkFailure', () => {
-  it('recognises the shapes a mirror can route around', () => {
+  it('recognises the shapes the other feed can route around', () => {
     expect(isNetworkFailure(dns)).toBe(true)
     expect(isNetworkFailure(new Error('read ECONNRESET'))).toBe(true)
     expect(isNetworkFailure(new Error('net::ERR_CONNECTION_TIMED_OUT'))).toBe(true)
     expect(isNetworkFailure(new Error('HttpError: 502 Bad Gateway'))).toBe(true)
   })
 
-  it('leaves failures the mirror would repeat alone', () => {
+  it('leaves failures the other feed would repeat alone', () => {
     expect(isNetworkFailure(notFound)).toBe(false)
     expect(isNetworkFailure(new Error('sha512 checksum mismatch'))).toBe(false)
   })
 })
 
 describe('withMirrorFeed', () => {
-  it('passes a healthy primary check straight through without touching the feed', async () => {
+  it('points the feed at the mirror up front and passes a healthy check straight through', async () => {
     const { updater, raw } = fakeUpdater()
     const client = withMirrorFeed(updater, { log: vi.fn() })
 
     const result = await client.checkForUpdates()
 
     expect(result?.updateInfo?.version).toBe('2.0.0')
-    expect(raw.setFeedURL).not.toHaveBeenCalled()
+    expect(raw.setFeedURL).toHaveBeenCalledTimes(1)
+    expect(raw.setFeedURL).toHaveBeenCalledWith({ provider: 'generic', url: MIRROR_FEED_URL, channel: 'latest' })
     expect(raw.checkForUpdates).toHaveBeenCalledTimes(1)
   })
 
-  it('switches to the mirror feed when the primary check fails on the network', async () => {
+  it('switches to the GitHub feed when the mirror check fails on the network', async () => {
     const { updater, raw, failing } = fakeUpdater()
     raw.checkForUpdates
       .mockImplementationOnce(failing(dns))
@@ -75,14 +76,14 @@ describe('withMirrorFeed', () => {
     const result = await client.checkForUpdates()
 
     expect(result?.updateInfo?.version).toBe('2.0.0')
-    expect(raw.setFeedURL).toHaveBeenCalledWith({ provider: 'generic', url: MIRROR_FEED_URL, channel: 'latest' })
+    expect(raw.setFeedURL).toHaveBeenLastCalledWith(GITHUB_FEED)
     expect(raw.checkForUpdates).toHaveBeenCalledTimes(2)
-    // The primary's error event never reached the service.
+    // The mirror's error event never reached the service.
     expect(errors).toEqual([])
     expect(log).toHaveBeenCalledTimes(1)
   })
 
-  it('stays on the mirror for the rest of the session', async () => {
+  it('stays on GitHub for the rest of the session', async () => {
     const { updater, raw, failing } = fakeUpdater()
     raw.checkForUpdates.mockImplementationOnce(failing(dns))
     const client = withMirrorFeed(updater, { log: vi.fn() })
@@ -90,7 +91,8 @@ describe('withMirrorFeed', () => {
     await client.checkForUpdates()
     await client.checkForUpdates()
 
-    expect(raw.setFeedURL).toHaveBeenCalledTimes(1)
+    // once for the mirror up front, once for the switch
+    expect(raw.setFeedURL).toHaveBeenCalledTimes(2)
     expect(raw.checkForUpdates).toHaveBeenCalledTimes(3)
   })
 
@@ -104,23 +106,23 @@ describe('withMirrorFeed', () => {
     await expect(client.checkForUpdates()).rejects.toBe(notFound)
 
     expect(errors).toEqual([notFound])
-    expect(raw.setFeedURL).not.toHaveBeenCalled()
+    expect(raw.setFeedURL).toHaveBeenCalledTimes(1)
   })
 
-  it('lets a failure on the mirror itself reach the service', async () => {
+  it('lets a failure on GitHub itself reach the service', async () => {
     const { updater, raw, failing } = fakeUpdater()
-    const mirrorDown = new Error('getaddrinfo ENOTFOUND dl.navide.dev')
-    raw.checkForUpdates.mockImplementationOnce(failing(dns)).mockImplementationOnce(failing(mirrorDown))
+    const githubDown = new Error('getaddrinfo ENOTFOUND release-assets.githubusercontent.com')
+    raw.checkForUpdates.mockImplementationOnce(failing(dns)).mockImplementationOnce(failing(githubDown))
     const errors: Error[] = []
     const client = withMirrorFeed(updater, { log: vi.fn() })
     client.on('error', (error) => errors.push(error))
 
-    await expect(client.checkForUpdates()).rejects.toBe(mirrorDown)
+    await expect(client.checkForUpdates()).rejects.toBe(githubDown)
 
-    expect(errors).toEqual([mirrorDown])
+    expect(errors).toEqual([githubDown])
   })
 
-  it('re-checks on the mirror before retrying a download that failed on the network', async () => {
+  it('re-checks on GitHub before retrying a download that failed on the network', async () => {
     const { updater, raw, failing } = fakeUpdater()
     raw.downloadUpdate.mockImplementationOnce(failing(new Error('read ETIMEDOUT'))).mockResolvedValueOnce(['/tmp/x'])
     const client = withMirrorFeed(updater, { log: vi.fn() })
@@ -128,8 +130,8 @@ describe('withMirrorFeed', () => {
     const files = await client.downloadUpdate()
 
     expect(files).toEqual(['/tmp/x'])
-    expect(raw.setFeedURL).toHaveBeenCalledTimes(1)
-    // check (on the mirror) happens between the two download attempts
+    expect(raw.setFeedURL).toHaveBeenLastCalledWith(GITHUB_FEED)
+    // check (on GitHub) happens between the two download attempts
     const order = [
       ...raw.downloadUpdate.mock.invocationCallOrder.map((n) => [n, 'download'] as const),
       ...raw.checkForUpdates.mock.invocationCallOrder.map((n) => [n, 'check'] as const),
@@ -153,7 +155,7 @@ describe('withMirrorFeed', () => {
     expect(raw.quitAndInstall).toHaveBeenCalledWith(true, false)
   })
 
-  it('lets the updater service complete a check that only the mirror could answer', async () => {
+  it('lets the updater service complete a check that only GitHub could answer', async () => {
     const { updater, raw, failing } = fakeUpdater()
     raw.checkForUpdates
       .mockImplementationOnce(failing(dns))

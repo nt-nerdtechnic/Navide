@@ -49,10 +49,10 @@ arm64 Linux build, when published, adds `latest-linux-arm64.yml`.
 Every asset above is also served from `https://dl.navide.dev/releases/<tag>/`,
 with `releases/latest/` holding the newest release's files and manifests. The
 release workflow's final job writes it and fails unless the mirrored bytes
-match GitHub's. The updater keeps GitHub as its feed and switches to the
-mirror's `releases/latest/` only after a network failure on GitHub (a 404 or a
-checksum failure is reported as before); the website prefers the mirror when a
-HEAD probe answers. `RELEASING.md` covers re-running the mirror job, verifying
+match GitHub's. The updater reads the mirror's `releases/latest/` as its feed
+and switches to GitHub only after a network failure on the mirror (a 404 or a
+checksum failure is reported as before); the website likewise prefers the
+mirror when a HEAD probe answers. `RELEASING.md` covers re-running the mirror job, verifying
 it (`scripts/verify-release-mirror.sh`), and what a rollback must do to it.
 
 ## One-time GitHub setup

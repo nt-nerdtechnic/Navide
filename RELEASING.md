@@ -152,10 +152,13 @@ the `navide.dev` zone).
   would send visitors to 404s.
 - **Who reads it**: the website probes `releases/<tag>/<file>` with a HEAD and
   links there when it answers, GitHub otherwise (navide-web `src/release.ts`);
-  the in-app updater switches its feed to `releases/latest/` after a network
-  failure on GitHub (`src/main/updater-mirror-feed.ts`); the READMEs carry a
-  *mirror* link beside each download, which `release.sh` repoints together with
-  the GitHub ones.
+  the in-app updater reads `releases/latest/` as its feed and switches to the
+  GitHub Release only after a network failure on the mirror
+  (`src/main/updater-mirror-feed.ts`) — so a red `mirror-release` job leaves
+  every client on the previous version until the mirror is re-run, which is why
+  the verify step below is part of every release; the READMEs link the mirror
+  first with a *GitHub* link beside each download, and `release.sh` repoints
+  both.
 - **Backfill or re-run by hand**: `gh workflow run mirror.yml --ref main -f
   tag=vX.Y.Z -f refresh_latest=<true|false>`. Pass `false` for an older
   release so `releases/latest/` keeps pointing at the newest one.

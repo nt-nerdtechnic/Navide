@@ -192,7 +192,7 @@ export function initUpdater(options: {
   persistedState = JSON.stringify(restored)
 
   service = createUpdaterService(
-    // GitHub first; dl.navide.dev when GitHub's asset host cannot be reached.
+    // dl.navide.dev first, like the website; GitHub when the mirror cannot be reached.
     withMirrorFeed(autoUpdater),
     options.currentVersion,
     options.enabled,

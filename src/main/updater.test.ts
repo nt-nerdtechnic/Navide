@@ -20,6 +20,7 @@ const h = vi.hoisted(() => {
     checkForUpdates: vi.fn(),
     downloadUpdate: vi.fn(),
     quitAndInstall: vi.fn(),
+    setFeedURL: vi.fn(),
   }
   return { listeners, ipcHandlers, appHandlers, autoUpdater, userData: { dir: '' } }
 })
@@ -314,7 +315,10 @@ describe('initUpdater lifecycle', () => {
     emit('update-available', { version: '1.0.1' })
     await flush()
     await flush()
-    expect(h.autoUpdater.downloadUpdate).toHaveBeenCalledTimes(1)
+    // Two attempts, not one: the first network failure is spent switching the
+    // feed from the mirror to GitHub (see updater-mirror-feed), which is a
+    // feed change, not a retry.
+    expect(h.autoUpdater.downloadUpdate).toHaveBeenCalledTimes(2)
   })
 
   it('retries a failed download as many times as the user asked for', async () => {
@@ -325,13 +329,14 @@ describe('initUpdater lifecycle', () => {
     h.autoUpdater.downloadUpdate.mockRejectedValue(new Error('ECONNRESET'))
     emit('update-available', { version: '1.0.1' })
     await flush()
-    expect(h.autoUpdater.downloadUpdate).toHaveBeenCalledTimes(1)
+    // mirror attempt + the immediate GitHub attempt the feed switch makes
+    expect(h.autoUpdater.downloadUpdate).toHaveBeenCalledTimes(2)
 
     await vi.advanceTimersByTimeAsync(5000)
-    expect(h.autoUpdater.downloadUpdate).toHaveBeenCalledTimes(2)
+    expect(h.autoUpdater.downloadUpdate).toHaveBeenCalledTimes(3)
     // One retry was all that was asked for.
     await vi.advanceTimersByTimeAsync(60_000)
-    expect(h.autoUpdater.downloadUpdate).toHaveBeenCalledTimes(2)
+    expect(h.autoUpdater.downloadUpdate).toHaveBeenCalledTimes(3)
   })
 
   it('uses the configured install timeout to release a stuck install', async () => {

@@ -117,13 +117,13 @@ Local-first は常に完全オフラインという意味ではありません�
 
 Navide は Apple silicon 上の macOS 13 以降、Linux x64、x64 および Arm 版 Windows をサポートします。v0.2.6 では Developer ID で署名され Apple の Notarization を通過した macOS 版に加え、Windows x64 Installer と Linux x64 Package を提供しています。
 
-- [DMG をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.6/Navide-0.2.6-arm64.dmg) ([ミラー](https://dl.navide.dev/releases/v0.2.6/Navide-0.2.6-arm64.dmg))
-- [ZIP をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.6/Navide-0.2.6-arm64.zip) ([ミラー](https://dl.navide.dev/releases/v0.2.6/Navide-0.2.6-arm64.zip))
-- [Windows x64 Installer をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.6/Navide-0.2.6-win-x64.exe) ([ミラー](https://dl.navide.dev/releases/v0.2.6/Navide-0.2.6-win-x64.exe))
-- [Windows ARM64 Installer をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.6/Navide-0.2.6-win-arm64.exe) ([ミラー](https://dl.navide.dev/releases/v0.2.6/Navide-0.2.6-win-arm64.exe))
-- [Linux AppImage をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.6/Navide-0.2.6-x86_64.AppImage) ([ミラー](https://dl.navide.dev/releases/v0.2.6/Navide-0.2.6-x86_64.AppImage))・[Linux .deb をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.6/Navide-0.2.6-amd64.deb) ([ミラー](https://dl.navide.dev/releases/v0.2.6/Navide-0.2.6-amd64.deb))
+- [DMG をダウンロード](https://dl.navide.dev/releases/v0.2.6/Navide-0.2.6-arm64.dmg) ([GitHub](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.6/Navide-0.2.6-arm64.dmg))
+- [ZIP をダウンロード](https://dl.navide.dev/releases/v0.2.6/Navide-0.2.6-arm64.zip) ([GitHub](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.6/Navide-0.2.6-arm64.zip))
+- [Windows x64 Installer をダウンロード](https://dl.navide.dev/releases/v0.2.6/Navide-0.2.6-win-x64.exe) ([GitHub](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.6/Navide-0.2.6-win-x64.exe))
+- [Windows ARM64 Installer をダウンロード](https://dl.navide.dev/releases/v0.2.6/Navide-0.2.6-win-arm64.exe) ([GitHub](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.6/Navide-0.2.6-win-arm64.exe))
+- [Linux AppImage をダウンロード](https://dl.navide.dev/releases/v0.2.6/Navide-0.2.6-x86_64.AppImage) ([GitHub](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.6/Navide-0.2.6-x86_64.AppImage))・[Linux .deb をダウンロード](https://dl.navide.dev/releases/v0.2.6/Navide-0.2.6-amd64.deb) ([GitHub](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.6/Navide-0.2.6-amd64.deb))
 
-GitHub からのダウンロードが遅い、または失敗する場合は、隣の「ミラー」リンクをご利用ください。dl.navide.dev から配信される、バイト単位で同一のファイルです（リリースワークフローが両方に公開し、チェックサムの一致を確認しています）。
+リンク先は dl.navide.dev で、アプリの自動更新と同じ配信元です。隣の「GitHub」リンクは GitHub Release 上の同じファイル（バイト単位で同一。リリースワークフローが両方に公開し、チェックサムの一致を確認しています）。
 
 Navide を Applications にコピーすればそのまま開けます。Gatekeeper の回避は不要です。このリリース以降、アプリ内自動アップデートが利用できます。
 
