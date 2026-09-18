@@ -33,7 +33,10 @@ const cliTools = [
   'cli_send',
   'cli_send_and_wait',
   'cli_check_message',
+  'cli_inbox_summary',
+  'cli_pending_incoming',
   'cli_open_agent',
+  'cli_list_sessions',
   'cli_read_incoming',
   'cli_cancel_message',
   'cli_read_log',
@@ -41,6 +44,7 @@ const cliTools = [
   'cli_wait_idle',
   'cli_interrupt',
   'cli_close_agent',
+  'cli_place_pane',
   'cli_message_log',
   'cli_usage',
   'cli_token_stats',
@@ -48,8 +52,12 @@ const cliTools = [
 
 const workspaceTools = [
   'workspace_list',
+  'workspace_open',
+  'workspace_switch',
   'skills_list',
+  'prompt_list',
   'memory_list',
+  'mcp_list',
   'pipeline_list',
   'pipeline_status',
   'pipeline_start',
@@ -62,6 +70,15 @@ const workspaceTools = [
   'stage_define',
   'role_define',
   'cli_permission_settings',
+] as const
+
+// The Preview panel's four verbs: record adds to the feed, show pushes to it,
+// list reads it and clear takes things off. Kept apart from the workspace
+// group because they are one surface, not four unrelated settings.
+const previewTools = [
+  'preview_record',
+  'preview_show',
+  'preview_list',
   'preview_clear',
 ] as const
 
@@ -140,6 +157,8 @@ const troubleshooting = [
   'serverUnused',
   'planLoadFailed',
   'staleIdentity',
+  'staleTools',
+  'unknownSession',
   'externalRejected',
 ] as const
 </script>
@@ -187,6 +206,18 @@ const troubleshooting = [
       </div>
       <p class="mh-note" v-html="$t('settings.help.mcp.s1.note2')"></p>
 
+      <h3 class="mh-h3">{{ $t('settings.help.mcp.s1.h5') }}</h3>
+      <div class="mh-tablewrap">
+        <table class="mh-table">
+          <tbody>
+            <tr v-for="name in previewTools" :key="name">
+              <td class="mh-tool"><code>{{ name }}</code></td>
+              <td>{{ $t(`settings.help.mcp.s1.previewTools.${name}`) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
       <h3 class="mh-h3">{{ $t('settings.help.mcp.s1.h3') }}</h3>
       <div class="mh-tablewrap">
         <table class="mh-table">
@@ -201,6 +232,7 @@ const troubleshooting = [
       <p class="mh-note" v-html="$t('settings.help.mcp.s1.note3')"></p>
       <p class="mh-note" v-html="$t('settings.help.mcp.s1.note4')"></p>
       <p class="mh-note" v-html="$t('settings.help.mcp.s1.note5')"></p>
+      <p class="mh-note" v-html="$t('settings.help.mcp.s1.note9')"></p>
 
       <!-- Who a name reaches. Two windows side by side is the only way to show
            that a bare name never leaves its own one. -->

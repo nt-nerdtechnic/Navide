@@ -33,26 +33,28 @@ const paneActions: { key: string; how: string }[] = [
   { key: 'cycle', how: 'Ctrl+Tab / Ctrl+⇧+Tab' },
 ]
 
-// Mode and preset names are the UI's own labels and stay untranslated.
-const stageModes: { key: string; mode: string }[] = [
-  { key: 'grid', mode: 'Grid ⊞' },
-  { key: 'sidebar', mode: 'Sidebar ◧' },
-  { key: 'spotlight', mode: 'Spotlight ◎' },
-  { key: 'fullscreen', mode: 'Fullscreen ⧉' },
+// Mode, preset and tab names are the UI's own labels, so they are read from
+// the very keys the UI renders rather than copied here: a rename in the
+// product cannot leave this table quoting a label that no longer exists.
+const stageModes: { key: string; glyph: string }[] = [
+  { key: 'grid', glyph: '⊞' },
+  { key: 'sidebar', glyph: '◧' },
+  { key: 'spotlight', glyph: '◎' },
+  { key: 'fullscreen', glyph: '⧉' },
 ]
 
-const layoutPresets: { key: string; preset: string }[] = [
-  { key: 'default', preset: 'Default' },
-  { key: 'focus', preset: 'Focus' },
-  { key: 'bottomPanel', preset: 'Bottom panel' },
+const layoutPresets: { key: string; labelKey: string }[] = [
+  { key: 'default', labelKey: 'layout.preset.default' },
+  { key: 'focus', labelKey: 'layout.preset.focus' },
+  { key: 'bottomPanel', labelKey: 'layout.preset.bottom-panel' },
 ]
 
-const sidebarTabs: { key: string; tab: string }[] = [
-  { key: 'agents', tab: '🤖 Agents' },
-  { key: 'pipeline', tab: '🔀 Pipeline' },
-  { key: 'explorer', tab: '📁 Explorer' },
-  { key: 'git', tab: '🌿 Git' },
-  { key: 'plans', tab: '📋 Plans' },
+const sidebarTabs: { key: string; icon: string; labelKey: string }[] = [
+  { key: 'agents', icon: '🤖', labelKey: 'label.agents' },
+  { key: 'pipeline', icon: '🔀', labelKey: 'label.pipeline' },
+  { key: 'explorer', icon: '📁', labelKey: 'label.explorer' },
+  { key: 'git', icon: '🌿', labelKey: 'label.git' },
+  { key: 'plans', icon: '📋', labelKey: 'label.plans' },
 ]
 
 const dropTargets = ['pane', 'tab', 'window'] as const
@@ -80,6 +82,14 @@ function mockLegend(figure: string, rows: string[]): { mark: string; label: stri
 /** Sample name, kept in the locale files so a picture never hard-codes prose. */
 function sample(key: string): string {
   return t(`settings.help.workspace.mock.sample.${key}`)
+}
+
+/**
+ * The stage's arrangement buttons carry a glyph and no text; their name lives
+ * only in the button tooltip, ahead of the dash (`Grid — show all panes`).
+ */
+function modeName(key: string): string {
+  return t(`label.view-mode-${key}`).split(' — ')[0]
 }
 
 /** The status word the pane pill and the sidebar dot share. */
@@ -309,7 +319,7 @@ const shortcuts: { key: string; keys: string }[] = [
           </thead>
           <tbody>
             <tr v-for="row in stageModes" :key="row.key">
-              <td class="wph-nowrap"><strong>{{ row.mode }}</strong></td>
+              <td class="wph-nowrap"><strong>{{ modeName(row.key) }} {{ row.glyph }}</strong></td>
               <td>{{ $t(`settings.help.workspace.s4.stageModes.${row.key}.behavior`) }}</td>
             </tr>
           </tbody>
@@ -393,7 +403,7 @@ const shortcuts: { key: string; keys: string }[] = [
           </thead>
           <tbody>
             <tr v-for="row in layoutPresets" :key="row.key">
-              <td class="wph-nowrap"><strong>{{ row.preset }}</strong></td>
+              <td class="wph-nowrap"><strong>{{ $t(row.labelKey) }}</strong></td>
               <td>{{ $t(`settings.help.workspace.s4.layoutPresets.${row.key}.effect`) }}</td>
             </tr>
           </tbody>
@@ -417,7 +427,7 @@ const shortcuts: { key: string; keys: string }[] = [
           </thead>
           <tbody>
             <tr v-for="row in sidebarTabs" :key="row.key">
-              <td class="wph-nowrap">{{ row.tab }}</td>
+              <td class="wph-nowrap">{{ row.icon }} {{ $t(row.labelKey) }}</td>
               <td>{{ $t(`settings.help.workspace.s5.sidebarTabs.${row.key}.content`) }}</td>
               <td class="wph-nowrap">
                 <kbd class="wph-kbd">{{ $t(`settings.help.workspace.s5.sidebarTabs.${row.key}.keys`) }}</kbd>

@@ -15,8 +15,10 @@ import MockWindow from './helpMocks/MockWindow.vue'
 // is drawn with the same path data the real surface uses, so the shapes match
 // what is on screen. Static mirror — if a surface changes its icon, this file
 // has to be updated by hand. All prose lives in the locale files under
-// `settings.help.icons.*`; icon names and tooltip strings are the product's
-// own English and stay in the template untranslated.
+// `settings.help.icons.*`; a tooltip or button label quoted here is read from
+// the product's own locale key, so it follows the interface into whatever
+// language the reader has set. Only status IDENTIFIERS (`running`, `awaiting`
+// — the values, not their labels) stay in the template untranslated.
 //
 // Most rows keep their icon cell in the template, because the icon column is
 // sometimes an inline SVG, sometimes a Unicode glyph, sometimes a colour dot,
@@ -25,31 +27,36 @@ import MockWindow from './helpMocks/MockWindow.vue'
 
 interface StageBadgeRow {
   key: string
+  /** The product's own locale key for the badge, not a literal: the badge on
+   *  screen is translated, so a hard-coded 'Draft' here would describe a
+   *  product the reader is not looking at. */
   badge: string
 }
 
 interface TextButtonRow {
   key: string
-  name: string
+  /** Locale keys, one per label — a control offering two of them
+   *  ("Pause delivery / Resume delivery") stays a single row. */
+  name: string[]
 }
 
 // Plan stage badges. The progress bar under the badge uses the same palette,
 // so the two are always consistent.
 const stageBadges: StageBadgeRow[] = [
-  { key: 'draft', badge: 'Draft' },
-  { key: 'inReview', badge: 'In Review' },
-  { key: 'approved', badge: 'Approved' },
-  { key: 'inProgress', badge: 'In Progress' },
-  { key: 'done', badge: 'Done' },
-  { key: 'abandoned', badge: 'Abandoned' },
+  { key: 'draft', badge: 'pane.plans.stage-draft' },
+  { key: 'inReview', badge: 'pane.plans.stage-in-review' },
+  { key: 'approved', badge: 'pane.plans.stage-approved' },
+  { key: 'inProgress', badge: 'pane.plans.stage-in-progress' },
+  { key: 'done', badge: 'pane.plans.stage-done' },
+  { key: 'abandoned', badge: 'pane.plans.stage-abandoned' },
 ]
 
 // The Messages panel has no icons at all — every control is a text button.
 const messageButtons: TextButtonRow[] = [
-  { key: 'pauseResume', name: 'Pause delivery / Resume delivery' },
-  { key: 'clearLog', name: 'Clear log' },
-  { key: 'withdraw', name: 'Withdraw' },
-  { key: 'resend', name: 'Resend' },
+  { key: 'pauseResume', name: ['msg.pause', 'msg.resume'] },
+  { key: 'clearLog', name: ['msg.clear-log'] },
+  { key: 'withdraw', name: ['msg.cancel'] },
+  { key: 'resend', name: ['msg.retry'] },
 ]
 
 const { t } = useI18n()
@@ -60,8 +67,8 @@ const { t } = useI18n()
 // region is, and the callout above asks the reader to start by naming the
 // region. So the marks here are the chapter numbers, not ①②③ — the picture is
 // a table of contents for the main window. Chapters 5 (Git pane) and 6 (Plan
-// window) are separate surfaces and 8 is about colour, so they are absent
-// rather than faked.
+// window) are separate surfaces, 8 is about colour and 9 about the icons a
+// prompt skill can wear, so they are absent rather than faked.
 const LOCATOR_CHAPTERS = ['1', '2', '3', '4', '7'] as const
 
 /** Sample name, kept in the locale files so the picture hard-codes no prose. */
@@ -276,7 +283,7 @@ const locatorStatusRight = computed(() => [sample('clock')])
               <td class="irh-icocell">
                 <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 3.5v4h-4M2.5 12.5v-4h4M12.7 7A5 5 0 0 0 4 4.5L2.5 6M3.3 9A5 5 0 0 0 12 11.5l1.5-1.5"/></svg>
               </td>
-              <td><code>Rebuild every resumable CLI pane…</code></td>
+              <td><code>{{ $t('action.rebuild-all-cli-panes') }}</code></td>
               <td>{{ $t('settings.help.icons.s1.ws.rebuildAll.where') }}</td>
               <td>{{ $t('settings.help.icons.s1.ws.rebuildAll.what') }}</td>
             </tr>
@@ -338,7 +345,7 @@ const locatorStatusRight = computed(() => [sample('clock')])
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">◦</span></td>
-              <td><code>Named automatically from this session's first instruction…</code></td>
+              <td><code>{{ $t('pane.terminal.auto-named-tooltip') }}</code></td>
               <td>{{ $t('settings.help.icons.s1.group.autoNamed.where') }}</td>
               <td>{{ $t('settings.help.icons.s1.group.autoNamed.what') }}</td>
             </tr>
@@ -366,7 +373,7 @@ const locatorStatusRight = computed(() => [sample('clock')])
               <td class="irh-icocell">
                 <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 3.5v4h-4M2.5 12.5v-4h4M12.7 7A5 5 0 0 0 4 4.5L2.5 6M3.3 9A5 5 0 0 0 12 11.5l1.5-1.5"/></svg>
               </td>
-              <td><code>Rebuild (resume the conversation) ⌘R</code></td>
+              <td><code>{{ $t('pane.terminal.rebuild-tooltip') }}</code></td>
               <td>{{ $t('settings.help.icons.s1.group.rebuild.where') }}</td>
               <td>{{ $t('settings.help.icons.s1.group.rebuild.what') }}</td>
             </tr>
@@ -414,7 +421,7 @@ const locatorStatusRight = computed(() => [sample('clock')])
               <td class="irh-icocell">
                 <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 3.5v4h-4M2.5 12.5v-4h4M12.7 7A5 5 0 0 0 4 4.5L2.5 6M3.3 9A5 5 0 0 0 12 11.5l1.5-1.5"/></svg>
               </td>
-              <td><code>Rebuild (resume the conversation) ⌘R</code></td>
+              <td><code>{{ $t('pane.terminal.rebuild-tooltip') }}</code></td>
               <td>{{ $t('settings.help.icons.s2.titleBar.rebuild.where') }}</td>
               <td v-html="$t('settings.help.icons.s2.titleBar.rebuild.what')"></td>
             </tr>
@@ -432,7 +439,7 @@ const locatorStatusRight = computed(() => [sample('clock')])
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">🎯</span></td>
-              <td><code>Global Manager — coordinates across stages…</code></td>
+              <td><code>{{ $t('pane.terminal.commander-tooltip') }}</code></td>
               <td v-html="$t('settings.help.icons.s2.titleBar.globalManager.where')"></td>
               <td>{{ $t('settings.help.icons.s2.titleBar.globalManager.what') }}</td>
             </tr>
@@ -440,7 +447,7 @@ const locatorStatusRight = computed(() => [sample('clock')])
               <td class="irh-icocell"><span class="irh-glyph">∞</span></td>
               <td v-html="$t('settings.help.icons.s2.titleBar.loop.name')"></td>
               <td>{{ $t('settings.help.icons.s2.titleBar.loop.where') }}</td>
-              <td>{{ $t('settings.help.icons.s2.titleBar.loop.what') }}</td>
+              <td v-html="$t('settings.help.icons.s2.titleBar.loop.what')"></td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">∞</span></td>
@@ -521,7 +528,7 @@ const locatorStatusRight = computed(() => [sample('clock')])
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">◦</span></td>
-              <td><code>Named automatically…</code></td>
+              <td><code>{{ $t('pane.terminal.auto-named-tooltip') }}</code></td>
               <td>{{ $t('settings.help.icons.s2.placeholder.autoNamed.where') }}</td>
               <td>{{ $t('settings.help.icons.s2.placeholder.autoNamed.what') }}</td>
             </tr>
@@ -662,7 +669,7 @@ const locatorStatusRight = computed(() => [sample('clock')])
               <td class="irh-icocell">
                 <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 3.5v4h-4M2.5 12.5v-4h4M12.7 7A5 5 0 0 0 4 4.5L2.5 6M3.3 9A5 5 0 0 0 12 11.5l1.5-1.5"/></svg>
               </td>
-              <td><code>Rebuild every resumable CLI pane in the active tab…</code></td>
+              <td><code>{{ $t('action.rebuild-tab-cli-panes') }}</code></td>
               <td>{{ $t('settings.help.icons.s3.tabBar.rebuildTab.where') }}</td>
               <td>{{ $t('settings.help.icons.s3.tabBar.rebuildTab.what') }}</td>
             </tr>
@@ -1214,7 +1221,7 @@ const locatorStatusRight = computed(() => [sample('clock')])
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">💬</span></td>
-              <td><code>Review Notes · N unresolved</code></td>
+              <td><code>{{ $t('pane.plans.review-notes') }} · {{ $t('pane.plans.review-unresolved', { count: 'N' }) }}</code></td>
               <td>{{ $t('settings.help.icons.s6.toolbar.reviewNotes.where') }}</td>
               <td v-html="$t('settings.help.icons.s6.toolbar.reviewNotes.what')"></td>
             </tr>
@@ -1271,7 +1278,7 @@ const locatorStatusRight = computed(() => [sample('clock')])
           </thead>
           <tbody>
             <tr v-for="row in stageBadges" :key="row.key">
-              <td><code>{{ row.badge }}</code></td>
+              <td><code>{{ $t(row.badge) }}</code></td>
               <td class="irh-nowrap">{{ $t(`settings.help.icons.s6.stageBadges.${row.key}.color`) }}</td>
               <td>{{ $t(`settings.help.icons.s6.stageBadges.${row.key}.meaning`) }}</td>
               <td class="irh-nowrap">{{ $t(`settings.help.icons.s6.stageBadges.${row.key}.canStart`) }}</td>
@@ -1373,7 +1380,7 @@ const locatorStatusRight = computed(() => [sample('clock')])
           <tbody>
             <tr v-for="row in messageButtons" :key="row.key">
               <td class="irh-icocell"><span class="irh-plain">{{ $t('settings.help.icons.s7.messages.sample') }}</span></td>
-              <td><code>{{ row.name }}</code></td>
+              <td><code>{{ row.name.map((k) => $t(k)).join(' / ') }}</code></td>
               <td>{{ $t(`settings.help.icons.s7.messageButtons.${row.key}.where`) }}</td>
               <td>{{ $t(`settings.help.icons.s7.messageButtons.${row.key}.effect`) }}</td>
             </tr>
@@ -1493,6 +1500,14 @@ const locatorStatusRight = computed(() => [sample('clock')])
         <div class="irh-callout-text">{{ $t('settings.help.icons.s8.callout.text') }}</div>
       </div>
 
+      <h3 class="irh-h3">{{ $t('settings.help.icons.s8.h4') }}</h3>
+      <p class="irh-p" v-html="$t('settings.help.icons.s8.p4')"></p>
+
+      <div class="irh-callout">
+        <div class="irh-callout-title">{{ $t('settings.help.icons.s8.callout2.title') }}</div>
+        <div class="irh-callout-text" v-html="$t('settings.help.icons.s8.callout2.text')"></div>
+      </div>
+
       <h3 class="irh-h3">{{ $t('settings.help.icons.s8.h3') }}</h3>
       <div class="irh-tablewrap">
         <table class="irh-table">
@@ -1526,6 +1541,196 @@ const locatorStatusRight = computed(() => [sample('clock')])
           </tbody>
         </table>
       </div>
+    </section>
+
+    <!-- ── 9 · Prompt skill icons ───────────────────────────────────── -->
+    <section class="irh-section">
+      <h2 class="irh-h2">9 · {{ $t('settings.help.icons.s9.title') }}</h2>
+      <p class="irh-p" v-html="$t('settings.help.icons.s9.p1')"></p>
+
+      <div class="irh-tablewrap">
+        <table class="irh-table">
+          <thead>
+            <tr>
+              <th>{{ $t('settings.help.icons.table.icon') }}</th>
+              <th>{{ $t('settings.help.icons.s9.nameCol') }}</th>
+              <th>{{ $t('settings.help.icons.s9.useCol') }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.6 3.8 7 8l-4.4 4.2zM8.6 3.8 13 8l-4.4 4.2z"/></svg>
+              </td>
+              <td><code>advance</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.advance.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.9" /><path d="M5.4 8.2 7.2 10l3.4-3.9"/></svg>
+              </td>
+              <td><code>green</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.green.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.3" /><path d="M10.2 10.2 13.6 13.6"/></svg>
+              </td>
+              <td><code>scan</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.scan.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.2h5l3 3v8.6H4zM9 2.2v3.1h3M6 9.2h4M6 11.2h2.6"/></svg>
+              </td>
+              <td><code>doc</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.doc.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.2 8a5.2 5.2 0 1 1-1.6-3.7M13.2 2.4v2.6h-2.6"/></svg>
+              </td>
+              <td><code>refactor</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.refactor.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M11.1 2.5 13.5 4.9 6.2 12.2l-3.2 0.8 0.8-3.2zM9.9 3.7l2.4 2.4"/></svg>
+              </td>
+              <td><code>edit</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.edit.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.3 6.4a2.7 2.7 0 0 1 5.4 0v2.3a2.7 2.7 0 0 1-5.4 0zM6.4 4.7 5.3 3.2M9.6 4.7l1.1-1.5M5.3 7.2H2.8M10.7 7.2h2.5M5.7 9.8 3.6 11.3M10.3 9.8l2.1 1.5"/></svg>
+              </td>
+              <td><code>bug</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.bug.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M6.5 2.3v3.9L3.4 11.8a1.3 1.3 0 0 0 1.1 2h7a1.3 1.3 0 0 0 1.1-2L9.5 6.2V2.3M5.5 2.3h5M5.1 9.2h5.8"/></svg>
+              </td>
+              <td><code>test</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.test.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.9c2.1 1.8 3.2 4.1 3.2 6.4L8 11.4 4.8 8.3C4.8 6 5.9 3.7 8 1.9zM6.3 10.9 4.8 13.8l2.2-1M9.7 10.9l1.5 2.9-2.2-1M6.9 7.4a1.1 1.1 0 1 0 2.2 0a1.1 1.1 0 1 0-2.2 0"/></svg>
+              </td>
+              <td><code>rocket</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.rocket.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2 13 4v3.5c0 3-2 5.4-5 6.5-3-1.1-5-3.5-5-6.5V4z"/></svg>
+              </td>
+              <td><code>shield</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.shield.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M9.3 1.8 4.3 9h3.1l-.7 5.2L11.7 7H8.6z"/></svg>
+              </td>
+              <td><code>bolt</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.bolt.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.7 2.1 6.8 5l2.9 1.1-2.9 1.1-1.1 2.9-1.1-2.9L1.7 6.1 4.6 5zM11.5 8.6l.7 1.9 1.9.7-1.9.7-.7 1.9-.7-1.9-1.9-.7 1.9-.7z"/></svg>
+              </td>
+              <td><code>sparkle</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.sparkle.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.8 2.1a1.4 1.4 0 1 0 0 2.8a1.4 1.4 0 1 0 0-2.8M4.8 11.1a1.4 1.4 0 1 0 0 2.8a1.4 1.4 0 1 0 0-2.8M11.2 2.1a1.4 1.4 0 1 0 0 2.8a1.4 1.4 0 1 0 0-2.8M4.8 4.9v6.2M4.8 8.2h3.2a3.2 3.2 0 0 0 3.2-3.2"/></svg>
+              </td>
+              <td><code>branch</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.branch.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.3 4.1c0-1.1 2.1-2 4.7-2s4.7.9 4.7 2-2.1 2-4.7 2-4.7-.9-4.7-2zM3.3 4.1v7.8c0 1.1 2.1 2 4.7 2s4.7-.9 4.7-2V4.1M3.3 8c0 1.1 2.1 2 4.7 2s4.7-.9 4.7-2"/></svg>
+              </td>
+              <td><code>database</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.database.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.4 3h11.2v10H2.4zM4.9 6.2 7 8.3l-2.1 2.1M8.7 10.6h2.9"/></svg>
+              </td>
+              <td><code>terminal</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.terminal.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.1 8a5.9 5.9 0 1 0 11.8 0a5.9 5.9 0 1 0-11.8 0M2.3 8h11.4M8 2.1c1.6 1.6 2.5 3.7 2.5 5.9S9.6 12.3 8 13.9C6.4 12.3 5.5 10.2 5.5 8S6.4 3.7 8 2.1z"/></svg>
+              </td>
+              <td><code>globe</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.globe.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.7 13.3h10.6M4.9 11V7.3M8 11V3.7M11.1 11V6.1"/></svg>
+              </td>
+              <td><code>chart</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.chart.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.1 8a5.9 5.9 0 1 0 11.8 0a5.9 5.9 0 1 0-11.8 0M8 4.7V8l2.4 1.6"/></svg>
+              </td>
+              <td><code>clock</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.clock.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.1 7h7.8v6.5H4.1zM5.9 7V5.1a2.1 2.1 0 0 1 4.2 0V7M8 9.4v1.7"/></svg>
+              </td>
+              <td><code>lock</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.lock.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.2 13.5 5v6L8 13.8 2.5 11V5zM2.5 5 8 7.8 13.5 5M8 7.8v6"/></svg>
+              </td>
+              <td><code>package</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.package.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.1 8a5.9 5.9 0 1 0 11.8 0a5.9 5.9 0 1 0-11.8 0M6.3 6.3a1.8 1.8 0 0 1 3.5.5c0 1.2-1.8 1.4-1.8 2.7M8 11.5v.1"/></svg>
+              </td>
+              <td><code>question</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.question.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 4.2h8.1M5.5 8h8.1M5.5 11.8h8.1M2.6 4.2h.1M2.6 8h.1M2.6 11.8h.1"/></svg>
+              </td>
+              <td><code>list</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.list.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.8 8s2.4-4.3 6.2-4.3S14.2 8 14.2 8s-2.4 4.3-6.2 4.3S1.8 8 1.8 8zM6.1 8a1.9 1.9 0 1 0 3.8 0a1.9 1.9 0 1 0-3.8 0"/></svg>
+              </td>
+              <td><code>eye</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.eye.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.2 9.8 5.9l4 .6-2.9 2.8.7 4L8 11.4l-3.6 1.9.7-4L2.2 6.5l4-.6z"/></svg>
+              </td>
+              <td><code>star</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.star.what') }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p class="irh-note" v-html="$t('settings.help.icons.s9.p2')"></p>
     </section>
   </div>
 </template>

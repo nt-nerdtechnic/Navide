@@ -54,7 +54,7 @@ describe('CodeWorkflowHelp', () => {
     expectNoChineseText(text)
     expect(text).toContain('The three work surfaces')
     expect(text).toContain('Shortcut cheat sheet')
-    expect(wrapper.findAll('.cwh-h2')).toHaveLength(9)
+    expect(wrapper.findAll('.cwh-h2')).toHaveLength(10)
     expect(rowCounts(wrapper)).toEqual(TABLE_ROWS)
 
     // Placeholder prose, not interpolations — the escapes must survive.
@@ -71,7 +71,7 @@ describe('CodeWorkflowHelp', () => {
     expect(text).toContain('三個工作面')
     expect(text).toContain('Git：暫存與提交')
     expect(text).toContain('快捷鍵速查')
-    expect(wrapper.findAll('.cwh-h2')).toHaveLength(9)
+    expect(wrapper.findAll('.cwh-h2')).toHaveLength(10)
     expect(rowCounts(wrapper)).toEqual(TABLE_ROWS)
 
     expect(text).toContain('{done}/{total} done')

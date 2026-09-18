@@ -61,6 +61,7 @@ const addressing = [
   { key: 'folder', example: 'Agent-Team/reviewer' },
   { key: 'suffix', example: 'work/proj/reviewer' },
   { key: 'absolute', example: '/Users/me/proj/reviewer' },
+  { key: 'device', example: 'mac-studio/Agent-Team/reviewer' },
 ] as const
 
 const spawnLimits = ['children', 'total', 'depth'] as const
@@ -73,6 +74,8 @@ const troubleshooting = [
   'unknownWorkspace',
   'ambiguous',
   'stuckQueued',
+  'kickoffFailed',
+  'deviceOffline',
   'rateLimit',
   'paused',
 ] as const
@@ -181,6 +184,8 @@ const logRows = computed(() => [
           <li v-html="$t('settings.help.messaging.s2.mcp.tools.list')"></li>
           <li v-html="$t('settings.help.messaging.s2.mcp.tools.send')"></li>
           <li v-html="$t('settings.help.messaging.s2.mcp.tools.spawn')"></li>
+          <li v-html="$t('settings.help.messaging.s2.mcp.tools.ack')"></li>
+          <li v-html="$t('settings.help.messaging.s2.mcp.tools.pending')"></li>
         </ul>
         <p class="cmh-note" v-html="$t('settings.help.messaging.s2.mcp.note')"></p>
       </div>
@@ -245,6 +250,7 @@ const logRows = computed(() => [
         <li v-html="$t('settings.help.messaging.s4.list.noSlash')"></li>
         <li v-html="$t('settings.help.messaging.s4.list.ambiguous')"></li>
         <li v-html="$t('settings.help.messaging.s4.list.broadcast')"></li>
+        <li v-html="$t('settings.help.messaging.s4.list.device')"></li>
       </ul>
     </section>
 
@@ -254,6 +260,7 @@ const logRows = computed(() => [
       <p class="cmh-p" v-html="$t('settings.help.messaging.s5.p1')"></p>
       <ul class="cmh-list">
         <li>{{ $t('settings.help.messaging.s5.list.alive') }}</li>
+        <li>{{ $t('settings.help.messaging.s5.list.noTyping') }}</li>
         <li>{{ $t('settings.help.messaging.s5.list.noTurn') }}</li>
         <li>{{ $t('settings.help.messaging.s5.list.quiet') }}</li>
       </ul>
@@ -296,6 +303,7 @@ const logRows = computed(() => [
         <li v-html="$t('settings.help.messaging.s6.list.crossWorkspace')"></li>
         <li v-html="$t('settings.help.messaging.s6.list.mention')"></li>
         <li v-html="$t('settings.help.messaging.s6.list.drag')"></li>
+        <li v-html="$t('settings.help.messaging.s6.list.wake')"></li>
       </ul>
 
       <!-- The panel those list items point at. -->
@@ -319,7 +327,10 @@ const logRows = computed(() => [
       <ul class="cmh-list">
         <li>{{ $t('settings.help.messaging.s7.list.name') }}</li>
         <li v-html="$t('settings.help.messaging.s7.list.report')"></li>
+        <li v-html="$t('settings.help.messaging.s7.list.kickoff')"></li>
+        <li v-html="$t('settings.help.messaging.s7.list.duplicate')"></li>
         <li v-html="$t('settings.help.messaging.s7.list.rejected')"></li>
+        <li v-html="$t('settings.help.messaging.s7.list.resume')"></li>
       </ul>
       <div class="cmh-tablewrap">
         <table class="cmh-table">
@@ -338,6 +349,7 @@ const logRows = computed(() => [
         </table>
       </div>
       <p class="cmh-note" v-html="$t('settings.help.messaging.s7.note')"></p>
+      <p class="cmh-note" v-html="$t('settings.help.messaging.s7.note2')"></p>
     </section>
 
     <!-- ── Guardrails ───────────────────────────────────────────────── -->
@@ -396,7 +408,34 @@ const logRows = computed(() => [
         <li v-html="$t('settings.help.messaging.s10.list.detached')"></li>
         <li v-html="$t('settings.help.messaging.s10.list.queueFull')"></li>
         <li v-html="$t('settings.help.messaging.s10.list.noPermission')"></li>
+        <li v-html="$t('settings.help.messaging.s10.list.ackLocal')"></li>
       </ul>
+    </section>
+
+    <!-- ── Across devices ───────────────────────────────────────────── -->
+    <section class="cmh-section">
+      <h2 class="cmh-h2">{{ $t('settings.help.messaging.s11.title') }}</h2>
+      <p class="cmh-p" v-html="$t('settings.help.messaging.s11.p1')"></p>
+      <ul class="cmh-list">
+        <li v-html="$t('settings.help.messaging.s11.list.address')"></li>
+        <li v-html="$t('settings.help.messaging.s11.list.works')"></li>
+        <li v-html="$t('settings.help.messaging.s11.list.notWorks')"></li>
+        <li v-html="$t('settings.help.messaging.s11.list.offline')"></li>
+      </ul>
+      <p class="cmh-note" v-html="$t('settings.help.messaging.s11.note')"></p>
+    </section>
+
+    <!-- ── What the sender is told afterwards ───────────────────────── -->
+    <section class="cmh-section">
+      <h2 class="cmh-h2">{{ $t('settings.help.messaging.s12.title') }}</h2>
+      <p class="cmh-p">{{ $t('settings.help.messaging.s12.p1') }}</p>
+      <ul class="cmh-list">
+        <li v-html="$t('settings.help.messaging.s12.list.notice')"></li>
+        <li v-html="$t('settings.help.messaging.s12.list.stale')"></li>
+        <li v-html="$t('settings.help.messaging.s12.list.check')"></li>
+        <li v-html="$t('settings.help.messaging.s12.list.busy')"></li>
+      </ul>
+      <p class="cmh-note">{{ $t('settings.help.messaging.s12.note') }}</p>
     </section>
 
     <p class="cmh-tip">{{ $t('settings.help.messaging.tip') }}</p>

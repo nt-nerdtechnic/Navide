@@ -12,117 +12,157 @@ import MockToolbar from './helpMocks/MockToolbar.vue'
 // Static mirror of the shipped UI — a prose copy of the "Settings & system"
 // manual. Purely presentational: no props, no emits, no state. All prose lives
 // in the locale files under `settings.help.settingsSystem.*`; the tables below
-// keep only their row keys and the literal labels that are identical in every
-// language.
+// keep their row keys plus, for every visible label, the i18n key the real
+// surface renders. Nothing here is a display literal: the settings nav, the
+// setting titles, the Window menu and the storage groups are all translated in
+// the product, so a literal would print English on a zh screen — which is
+// exactly the bug this replaced.
 
+// Every display label below is an i18n key, never a literal: the nav names,
+// the setting titles, the Window menu items and the storage groups are all
+// translated in the product, so a literal here would show English on a zh
+// screen. Each `*Key` is the key the real surface renders — renaming a row in
+// the product renames it here.
 interface TabRow {
   key: string
   /** Only set on the first row of a group; drives the rowspan cell. */
-  group?: string
+  groupKey?: string
   groupSpan?: number
-  tab: string
+  navKey: string
 }
 
 interface StatusRow {
   state: string
-  color: string
+  colorKey: string
 }
 
 interface StageRow {
   key: string
-  stage?: string
+  stageKey?: string
   stageSpan?: number
 }
 
 // ── 1 · The seventeen tabs ───────────────────────────────────────────────
 const tabs: TabRow[] = [
-  { key: 'general', group: 'GENERAL', groupSpan: 5, tab: 'General' },
-  { key: 'appearance', tab: 'Appearance' },
-  { key: 'statusBadges', tab: 'Status badges' },
-  { key: 'layout', tab: 'Layout' },
-  { key: 'cloud', tab: 'Navide Cloud' },
-  { key: 'accounts', group: 'ACCOUNTS & AGENTS', groupSpan: 3, tab: 'Accounts' },
-  { key: 'cliAgents', tab: 'CLI Agents' },
-  { key: 'analyzer', tab: 'Analyzer' },
-  { key: 'mcp', group: 'INTEGRATIONS', groupSpan: 4, tab: 'MCP' },
-  { key: 'skills', tab: 'Skills' },
-  { key: 'prompts', tab: 'Prompts' },
-  { key: 'memory', tab: 'Memory' },
-  // Extensions belongs to PLUGINS, not INTEGRATIONS, and Execution Policy sits
-  // beside it — both read off SettingsModal.vue:2015-2027, where the fourth
-  // `.s-nav-group` holds exactly these two.
-  { key: 'extensions', group: 'PLUGINS', groupSpan: 2, tab: 'Extensions' },
-  { key: 'executionPolicy', tab: 'Execution Policy' },
-  { key: 'shortcuts', group: 'SYSTEM', groupSpan: 3, tab: 'Shortcuts' },
-  { key: 'updates', tab: 'Updates' },
-  { key: 'help', tab: 'Help' },
+  { key: 'general', groupKey: 'settings.nav.group.general', groupSpan: 4, navKey: 'settings.nav.general' },
+  { key: 'appearance', navKey: 'settings.nav.appearance' },
+  { key: 'statusBadges', navKey: 'settings.nav.statusBadges' },
+  { key: 'layout', navKey: 'settings.nav.layout' },
+  { key: 'accounts', groupKey: 'settings.nav.group.accountsAgents', groupSpan: 4, navKey: 'settings.nav.accounts' },
+  { key: 'cliAgents', navKey: 'settings.nav.cliAgents' },
+  { key: 'analyzer', navKey: 'settings.nav.analyzer' },
+  { key: 'cloud', navKey: 'settings.nav.crossDevice' },
+  { key: 'mcp', groupKey: 'settings.nav.group.integration', groupSpan: 4, navKey: 'settings.nav.mcp' },
+  { key: 'skills', navKey: 'settings.nav.skills' },
+  { key: 'prompts', navKey: 'settings.nav.prompts' },
+  { key: 'memory', navKey: 'settings.nav.memory' },
+  // Extensions belongs to PLUGINS, not INTEGRATIONS, and Marketplace sits
+  // beside it — both read off the fourth `.s-nav-group` in SettingsModal.vue,
+  // which holds exactly these two. The execution policy is not a page of its
+  // own: it is the editable block at the top of Extensions.
+  { key: 'extensions', groupKey: 'settings.nav.group.plugins', groupSpan: 2, navKey: 'settings.nav.extensions' },
+  { key: 'marketplace', navKey: 'settings.nav.marketplace' },
+  { key: 'shortcuts', groupKey: 'settings.nav.group.system', groupSpan: 3, navKey: 'settings.nav.keybindings' },
+  { key: 'updates', navKey: 'settings.nav.updates' },
+  { key: 'help', navKey: 'settings.nav.help' },
 ]
 
 // ── 2 · General ──────────────────────────────────────────────────────────
+// Row titles, keyed to the SettingsModal.vue rows they describe. Two of them
+// are namespaced `settings.appearance.*` for historical reasons while the row
+// itself sits on the General tab; the key name is not the tab.
 const generalSettings = [
-  { key: 'confirmClose', name: 'Confirm before closing a pane' },
-  { key: 'confirmCloseWorkspace', name: 'Confirm before closing a workspace' },
-  { key: 'reclaimIdle', name: 'Reclaim idle CLIs' },
-  { key: 'reclaimAfter', name: 'Reclaim after' },
-  { key: 'reclaimNow', name: 'Reclaim now' },
-  { key: 'resumeOnOpen', name: 'Resume conversations on open' },
-  { key: 'resumeScope', name: 'Resume scope' },
-  { key: 'resumeAfterRestart', name: 'Resume sessions after a backend restart' },
-  { key: 'concurrentResume', name: 'Concurrent resume limit' },
-  { key: 'defaultEditor', name: 'Default editor' },
-  { key: 'quotaBadge', name: 'CLI quota badge' },
-  { key: 'environment', name: 'Environment' },
-  { key: 'backendTimeout', name: 'Backend Startup Timeout' },
+  { key: 'confirmClose', nameKey: 'settings.general.confirm-close-pane' },
+  { key: 'confirmCloseWorkspace', nameKey: 'settings.general.confirm-close-workspace' },
+  { key: 'reclaimIdle', nameKey: 'settings.general.idle-reclaim' },
+  { key: 'reclaimAfter', nameKey: 'settings.general.idle-reclaim-after' },
+  { key: 'reclaimNow', nameKey: 'settings.general.idle-reclaim-now' },
+  { key: 'resumeOnOpen', nameKey: 'settings.appearance.resume-behavior' },
+  { key: 'resumeScope', nameKey: 'settings.appearance.restore-scope' },
+  { key: 'resumeAfterRestart', nameKey: 'settings.general.auto-resume-reconnect' },
+  { key: 'concurrentResume', nameKey: 'settings.appearance.resume-concurrency' },
+  { key: 'defaultEditor', nameKey: 'settings.general.default-editor' },
+  { key: 'quotaBadge', nameKey: 'usage.settings-title' },
+  { key: 'environment', nameKey: 'settings.appearance.environment' },
+  { key: 'backendTimeout', nameKey: 'settings.appearance.backend-timeout' },
+  { key: 'settingsBundle', nameKey: 'settings.management.title' },
 ] as const
 
 const statusBadges: StatusRow[] = [
-  { state: 'starting', color: 'Blue' },
-  { state: 'running', color: 'Green' },
-  { state: 'idle', color: 'Yellow' },
-  { state: 'awaiting', color: 'Orange' },
-  { state: 'stopped', color: 'Ink' },
-  { state: 'exited', color: 'Grey' },
-  { state: 'error', color: 'Red' },
-  { state: 'waiting', color: 'Grey' },
-  { state: 'disconnected', color: 'Yellow' },
+  { state: 'starting', colorKey: 'statusBadges.color.blue' },
+  { state: 'running', colorKey: 'statusBadges.color.green' },
+  { state: 'idle', colorKey: 'statusBadges.color.yellow' },
+  { state: 'awaiting', colorKey: 'statusBadges.color.orange' },
+  { state: 'stopped', colorKey: 'statusBadges.color.ink' },
+  { state: 'exited', colorKey: 'statusBadges.color.gray' },
+  { state: 'error', colorKey: 'statusBadges.color.red' },
+  { state: 'waiting', colorKey: 'statusBadges.color.gray' },
+  { state: 'disconnected', colorKey: 'statusBadges.color.yellow' },
 ]
 
 // ── 3 · Skills / Memory ──────────────────────────────────────────────────
 const skillMatrix = ['on', 'native', 'none', 'pending'] as const
 
 const memoryCoverage = [
-  { key: 'mapped', label: 'Mapped' },
-  { key: 'configured', label: 'Set in your config' },
-  { key: 'unmapped', label: 'Not mapped' },
+  { key: 'mapped', labelKey: 'settings.memory.agents-mapped' },
+  { key: 'configured', labelKey: 'settings.memory.agents-configured' },
+  { key: 'unmapped', labelKey: 'settings.memory.agents-unknown' },
 ] as const
 
 const updateStages: StageRow[] = [
-  { key: 'autoCheck', stage: 'Check', stageSpan: 2 },
+  { key: 'autoCheck', stageKey: 'updater.stage.check', stageSpan: 2 },
   { key: 'checkFailures' },
-  { key: 'autoDownload', stage: 'Download', stageSpan: 2 },
+  { key: 'autoDownload', stageKey: 'updater.stage.download', stageSpan: 2 },
   { key: 'retryDownload' },
-  { key: 'installOnQuit', stage: 'Install', stageSpan: 2 },
+  { key: 'installOnQuit', stageKey: 'updater.stage.install', stageSpan: 2 },
   { key: 'installTimeout' },
 ]
 
-// ── 5 · Navide Cloud ─────────────────────────────────────────────────────
-const needsYou = [
-  { key: 'pairing', label: 'Pairing' },
-  { key: 'accessRequest', label: 'Access request' },
+// The execution-policy block at the top of the Extensions page, in the order
+// ExecutionPolicyPane.vue stacks it: effective policy, the two editable
+// policies, the workspace source, then recovery.
+const policyRows = [
+  'hostDefault',
+  'user',
+  'highRisk',
+  'source',
+  'recovery',
+  'failClosed',
 ] as const
 
+// ── 5 · Navide Cloud ─────────────────────────────────────────────────────
+const needsYou = [
+  { key: 'pairing', labelKey: 'settings.p2p.trust.kind-device' },
+  { key: 'accessRequest', labelKey: 'settings.p2p.trust.kind-access' },
+] as const
+
+// The Sync block, which is the first section of the Navide Cloud settings
+// page rather than a tab of its own.
+const syncRows = ['scopes', 'credentials', 'states', 'key', 'legacy', 'conflicts'] as const
+
 // ── 6 · Menus and windows ────────────────────────────────────────────────
+// The Window menu is built in the main process, which has no i18n and keeps
+// its own per-locale table (src/main/menuStrings.ts). Four of these items have
+// an equivalent key in the renderer's locale and read it here; the last two do
+// not, so the topic owns their wording:
+//   - tokenMonitor: the window's own title lives in TokenMonitorApp's local
+//     i18n, outside the shared locale files.
+//   - standard: Minimize / Zoom / Bring All to Front are Electron roles, so the
+//     OS supplies the label in the OS's language, not Navide's. Left in English
+//     rather than asserting a translation Navide does not control.
 const windowMenu = [
-  { key: 'cloud', label: 'Navide Cloud' },
-  { key: 'pipeline', label: 'Pipeline Manager' },
-  { key: 'resource', label: 'Resource Manager' },
-  { key: 'standard', label: 'Minimize / Zoom / Bring All to Front' },
+  { key: 'cloud', labelKey: 'settings.nav.crossDevice' },
+  { key: 'pipeline', labelKey: 'label.pipeline-manager' },
+  { key: 'resource', labelKey: 'resource.title' },
+  { key: 'turnStats', labelKey: 'turn-stats.title' },
+  { key: 'tokenMonitor', labelKey: 'settings.help.settingsSystem.s6.windowMenu.tokenMonitor.label' },
+  { key: 'standard', labelKey: 'settings.help.settingsSystem.s6.windowMenu.standard.label' },
 ] as const
 
 const scheduleSections = [
-  { key: 'crontab', label: 'System crontab' },
-  { key: 'agents', label: 'macOS Agents' },
-  { key: 'daemons', label: 'macOS Daemons' },
+  { key: 'crontab', labelKey: 'executions.crontab.title' },
+  { key: 'agents', labelKey: 'executions.launchagents.title' },
+  { key: 'daemons', labelKey: 'executions.daemons.title' },
 ] as const
 
 const otherWindows = [
@@ -138,10 +178,10 @@ const otherWindows = [
 
 // ── 7 · Resources and upkeep ─────────────────────────────────────────────
 const storageCategories = [
-  { key: 'appData', label: 'App data' },
-  { key: 'electron', label: 'Electron caches' },
-  { key: 'cliHomes', label: 'CLI agent homes' },
-  { key: 'workspaces', label: 'Workspaces' },
+  { key: 'appData', labelKey: 'resource.storage.group.appData' },
+  { key: 'electron', labelKey: 'resource.storage.group.electron' },
+  { key: 'cliHomes', labelKey: 'resource.storage.group.cliHomes' },
+  { key: 'workspaces', labelKey: 'resource.storage.group.workspaces' },
 ] as const
 
 const maintenance = [
@@ -154,7 +194,20 @@ const maintenance = [
   'remoteAgent',
   'background',
   'moveSettings',
+  'tokenSpend',
 ] as const
+// ── 8 · Usage surfaces ───────────────────────────────────────────────────
+// Which of the three usage views is which. They are separate surfaces with
+// separate data sources. Turn Stats has a title key of its own; the other two
+// do not — Token Monitor's title lives in its window's local i18n, and "quota
+// cycles" is this topic's name for the view (it has no title of its own, being
+// headed by the account you picked), so the topic owns both strings.
+const usageSurfaces = [
+  { key: 'tokenMonitor', labelKey: 'settings.help.settingsSystem.s8.surfaces.tokenMonitor.label' },
+  { key: 'turnStats', labelKey: 'turn-stats.title' },
+  { key: 'quotaCycles', labelKey: 'settings.help.settingsSystem.s8.surfaces.quotaCycles.label' },
+] as const
+
 const { t } = useI18n()
 
 // ── Mock screenshots ────────────────────────────────────────────────────────
@@ -199,7 +252,6 @@ const settingsGroups = computed(() => [
       { label: t('settings.nav.appearance') },
       { label: t('settings.nav.statusBadges') },
       { label: t('settings.nav.layout') },
-      { label: t('settings.nav.crossDevice') },
     ],
   },
   {
@@ -208,6 +260,7 @@ const settingsGroups = computed(() => [
       { label: t('settings.nav.accounts') },
       { label: t('settings.nav.cliAgents') },
       { label: t('settings.nav.analyzer') },
+      { label: t('settings.nav.crossDevice') },
     ],
   },
   {
@@ -223,7 +276,7 @@ const settingsGroups = computed(() => [
     title: t('settings.nav.group.plugins'),
     items: [
       { label: t('settings.nav.extensions') },
-      { label: t('settings.nav.executionPolicy') },
+      { label: t('settings.nav.marketplace') },
     ],
   },
   {
@@ -328,8 +381,8 @@ const resourceRows = computed(() => [
           </thead>
           <tbody>
             <tr v-for="row in tabs" :key="row.key">
-              <td v-if="row.group" :rowspan="row.groupSpan" class="syh-group">{{ row.group }}</td>
-              <td class="syh-nowrap"><strong>{{ row.tab }}</strong></td>
+              <td v-if="row.groupKey" :rowspan="row.groupSpan" class="syh-group">{{ $t(row.groupKey) }}</td>
+              <td class="syh-nowrap"><strong>{{ $t(row.navKey) }}</strong></td>
               <td>{{ $t(`settings.help.settingsSystem.s1.tabs.${row.key}.what`) }}</td>
               <td class="syh-muted">{{ $t(`settings.help.settingsSystem.s1.tabs.${row.key}.more`) }}</td>
             </tr>
@@ -355,7 +408,7 @@ const resourceRows = computed(() => [
           </thead>
           <tbody>
             <tr v-for="row in generalSettings" :key="row.key">
-              <td><strong>{{ row.name }}</strong></td>
+              <td><strong>{{ $t(row.nameKey) }}</strong></td>
               <td>{{ $t(`settings.help.settingsSystem.s2.generalSettings.${row.key}.desc`) }}</td>
               <td class="syh-nowrap">
                 {{ $t(`settings.help.settingsSystem.s2.generalSettings.${row.key}.fallback`) }}
@@ -393,7 +446,7 @@ const resourceRows = computed(() => [
             <tr v-for="row in statusBadges" :key="row.state">
               <td><code>{{ row.state }}</code></td>
               <td>{{ $t(`settings.help.settingsSystem.s2.statusBadges.${row.state}.when`) }}</td>
-              <td class="syh-nowrap">{{ row.color }}</td>
+              <td class="syh-nowrap">{{ $t(row.colorKey) }}</td>
             </tr>
           </tbody>
         </table>
@@ -464,7 +517,7 @@ const resourceRows = computed(() => [
           </thead>
           <tbody>
             <tr v-for="row in memoryCoverage" :key="row.key">
-              <td class="syh-nowrap"><strong>{{ row.label }}</strong></td>
+              <td class="syh-nowrap"><strong>{{ $t(row.labelKey) }}</strong></td>
               <td>{{ $t(`settings.help.settingsSystem.s3.memoryCoverage.${row.key}.value`) }}</td>
             </tr>
           </tbody>
@@ -510,7 +563,7 @@ const resourceRows = computed(() => [
           </thead>
           <tbody>
             <tr v-for="row in updateStages" :key="row.key">
-              <td v-if="row.stage" :rowspan="row.stageSpan" class="syh-group">{{ row.stage }}</td>
+              <td v-if="row.stageKey" :rowspan="row.stageSpan" class="syh-group">{{ $t(row.stageKey) }}</td>
               <td>{{ $t(`settings.help.settingsSystem.s4.updateStages.${row.key}.toggle`) }}</td>
               <td class="syh-nowrap">
                 {{ $t(`settings.help.settingsSystem.s4.updateStages.${row.key}.fallback`) }}
@@ -521,6 +574,7 @@ const resourceRows = computed(() => [
       </div>
       <p class="syh-p" v-html="$t('settings.help.settingsSystem.s4.p3')"></p>
       <p class="syh-p" v-html="$t('settings.help.settingsSystem.s4.p4')"></p>
+      <p class="syh-p" v-html="$t('settings.help.settingsSystem.s4.mirror')"></p>
 
       <h3 class="syh-h3">{{ $t('settings.help.settingsSystem.s4.h3') }}</h3>
       <p class="syh-p" v-html="$t('settings.help.settingsSystem.s4.p5')"></p>
@@ -531,8 +585,14 @@ const resourceRows = computed(() => [
       </ul>
 
       <h3 class="syh-h3">{{ $t('settings.help.settingsSystem.s4.h4') }}</h3>
+      <p class="syh-p" v-html="$t('settings.help.settingsSystem.s4.policyIntro')"></p>
+      <ul class="syh-list">
+        <li v-for="key in policyRows" :key="key" v-html="$t(`settings.help.settingsSystem.s4.policy.${key}`)"></li>
+      </ul>
+      <p class="syh-note" v-html="$t('settings.help.settingsSystem.s4.policyNote')"></p>
       <p class="syh-p" v-html="$t('settings.help.settingsSystem.s4.p6')"></p>
       <p class="syh-p" v-html="$t('settings.help.settingsSystem.s4.p7')"></p>
+      <p class="syh-note" v-html="$t('settings.help.settingsSystem.s4.extNote')"></p>
     </section>
 
     <!-- ── 5 · Navide Cloud ─────────────────────────────────────────── -->
@@ -581,7 +641,7 @@ const resourceRows = computed(() => [
           </thead>
           <tbody>
             <tr v-for="row in needsYou" :key="row.key">
-              <td class="syh-nowrap"><strong>{{ row.label }}</strong></td>
+              <td class="syh-nowrap"><strong>{{ $t(row.labelKey) }}</strong></td>
               <td>{{ $t(`settings.help.settingsSystem.s5.needsYou.${row.key}.content`) }}</td>
               <td>{{ $t(`settings.help.settingsSystem.s5.needsYou.${row.key}.actions`) }}</td>
             </tr>
@@ -611,6 +671,12 @@ const resourceRows = computed(() => [
         <div class="syh-callout-title">{{ $t('settings.help.settingsSystem.s5.callout3.title') }}</div>
         <div class="syh-callout-text" v-html="$t('settings.help.settingsSystem.s5.callout3.text')"></div>
       </div>
+
+      <h3 class="syh-h3">{{ $t('settings.help.settingsSystem.s5.h6') }}</h3>
+      <p class="syh-p" v-html="$t('settings.help.settingsSystem.s5.p11')"></p>
+      <ul class="syh-list">
+        <li v-for="key in syncRows" :key="key" v-html="$t(`settings.help.settingsSystem.s5.sync.${key}`)"></li>
+      </ul>
     </section>
 
     <!-- ── 6 · Menus, standalone windows and schedules ──────────────── -->
@@ -628,7 +694,7 @@ const resourceRows = computed(() => [
           </thead>
           <tbody>
             <tr v-for="row in windowMenu" :key="row.key">
-              <td><strong>{{ row.label }}</strong></td>
+              <td><strong>{{ $t(row.labelKey) }}</strong></td>
               <td>{{ $t(`settings.help.settingsSystem.s6.windowMenu.${row.key}.value`) }}</td>
             </tr>
           </tbody>
@@ -666,7 +732,7 @@ const resourceRows = computed(() => [
           </thead>
           <tbody>
             <tr v-for="row in scheduleSections" :key="row.key">
-              <td class="syh-nowrap"><strong>{{ row.label }}</strong></td>
+              <td class="syh-nowrap"><strong>{{ $t(row.labelKey) }}</strong></td>
               <td><code>{{ $t(`settings.help.settingsSystem.s6.scheduleSections.${row.key}.source`) }}</code></td>
               <td>{{ $t(`settings.help.settingsSystem.s6.scheduleSections.${row.key}.actions`) }}</td>
             </tr>
@@ -771,7 +837,7 @@ const resourceRows = computed(() => [
           </thead>
           <tbody>
             <tr v-for="row in storageCategories" :key="row.key">
-              <td class="syh-nowrap"><strong>{{ row.label }}</strong></td>
+              <td class="syh-nowrap"><strong>{{ $t(row.labelKey) }}</strong></td>
               <td>{{ $t(`settings.help.settingsSystem.s7.storageCategories.${row.key}.value`) }}</td>
             </tr>
           </tbody>
@@ -807,6 +873,67 @@ const resourceRows = computed(() => [
             </tr>
           </tbody>
         </table>
+      </div>
+    </section>
+
+    <!-- ── 8 · Usage: Token Monitor, Turn Stats, quota cycles ───────── -->
+    <section class="syh-section">
+      <h2 class="syh-h2"><span class="syh-num">8</span>{{ $t('settings.help.settingsSystem.s8.title') }}</h2>
+      <p class="syh-p" v-html="$t('settings.help.settingsSystem.s8.p1')"></p>
+      <div class="syh-tablewrap">
+        <table class="syh-table">
+          <thead>
+            <tr>
+              <th>{{ $t('settings.help.settingsSystem.s8.whichTable.surface') }}</th>
+              <th>{{ $t('settings.help.settingsSystem.s8.whichTable.where') }}</th>
+              <th>{{ $t('settings.help.settingsSystem.s8.whichTable.scope') }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="row in usageSurfaces" :key="row.key">
+              <td class="syh-nowrap"><strong>{{ $t(row.labelKey) }}</strong></td>
+              <td v-html="$t(`settings.help.settingsSystem.s8.surfaces.${row.key}.where`)"></td>
+              <td v-html="$t(`settings.help.settingsSystem.s8.surfaces.${row.key}.scope`)"></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 class="syh-h3">{{ $t('settings.help.settingsSystem.s8.h1') }}</h3>
+      <p class="syh-p" v-html="$t('settings.help.settingsSystem.s8.p2')"></p>
+      <ul class="syh-list">
+        <li v-html="$t('settings.help.settingsSystem.s8.tokenMonitor.controls')"></li>
+        <li v-html="$t('settings.help.settingsSystem.s8.tokenMonitor.stats')"></li>
+        <li v-html="$t('settings.help.settingsSystem.s8.tokenMonitor.comparison')"></li>
+        <li v-html="$t('settings.help.settingsSystem.s8.tokenMonitor.charts')"></li>
+        <li v-html="$t('settings.help.settingsSystem.s8.tokenMonitor.table')"></li>
+        <li v-html="$t('settings.help.settingsSystem.s8.tokenMonitor.quota')"></li>
+      </ul>
+      <div class="syh-callout syh-callout--warn">
+        <div class="syh-callout-title">{{ $t('settings.help.settingsSystem.s8.callout1.title') }}</div>
+        <div class="syh-callout-text" v-html="$t('settings.help.settingsSystem.s8.callout1.text')"></div>
+      </div>
+
+      <h3 class="syh-h3">{{ $t('settings.help.settingsSystem.s8.h2') }}</h3>
+      <p class="syh-p" v-html="$t('settings.help.settingsSystem.s8.p3')"></p>
+      <ul class="syh-list">
+        <li v-html="$t('settings.help.settingsSystem.s8.turnStats.columns')"></li>
+        <li v-html="$t('settings.help.settingsSystem.s8.turnStats.account')"></li>
+        <li v-html="$t('settings.help.settingsSystem.s8.turnStats.version')"></li>
+        <li v-html="$t('settings.help.settingsSystem.s8.turnStats.export')"></li>
+      </ul>
+      <p class="syh-note" v-html="$t('settings.help.settingsSystem.s8.note1')"></p>
+
+      <h3 class="syh-h3">{{ $t('settings.help.settingsSystem.s8.h3') }}</h3>
+      <p class="syh-p" v-html="$t('settings.help.settingsSystem.s8.p4')"></p>
+      <ul class="syh-list">
+        <li v-html="$t('settings.help.settingsSystem.s8.quotaCycles.tabs')"></li>
+        <li v-html="$t('settings.help.settingsSystem.s8.quotaCycles.cycle')"></li>
+        <li v-html="$t('settings.help.settingsSystem.s8.quotaCycles.periods')"></li>
+      </ul>
+      <div class="syh-callout syh-callout--warn">
+        <div class="syh-callout-title">{{ $t('settings.help.settingsSystem.s8.callout2.title') }}</div>
+        <div class="syh-callout-text" v-html="$t('settings.help.settingsSystem.s8.callout2.text')"></div>
       </div>
     </section>
   </div>

@@ -112,6 +112,7 @@ import CliAgentsHelp from './CliAgentsHelp.vue'
 import CodeWorkflowHelp from './CodeWorkflowHelp.vue'
 import SettingsSystemHelp from './SettingsSystemHelp.vue'
 import IconReferenceHelp from './IconReferenceHelp.vue'
+import CrossPlatformHelp from './CrossPlatformHelp.vue'
 import ExtensionsPane from './ExtensionsPane.vue'
 import ExecutionPolicyPane from './ExecutionPolicyPane.vue'
 import LayoutSettingsPane from '../layout/LayoutSettingsPane.vue'
@@ -227,6 +228,7 @@ type HelpTopic =
   | 'codeWorkflow'
   | 'settingsSystem'
   | 'icons'
+  | 'crossPlatform'
 const helpTopic = ref<HelpTopic>('workspace')
 // Topic order is the reading order: what the main window is made of, then the
 // agents in it, then how they talk, then the code surfaces, then settings.
@@ -238,6 +240,7 @@ const helpTopicComponents: Record<HelpTopic, Component> = {
   codeWorkflow: CodeWorkflowHelp,
   settingsSystem: SettingsSystemHelp,
   icons: IconReferenceHelp,
+  crossPlatform: CrossPlatformHelp,
 }
 const helpTopicOrder: HelpTopic[] = [
   'workspace',
@@ -247,6 +250,7 @@ const helpTopicOrder: HelpTopic[] = [
   'codeWorkflow',
   'settingsSystem',
   'icons',
+  'crossPlatform',
 ]
 const activeTab = ref<Tab>(props.initialTab ?? 'general')
 // initialTab is only read once at mount by the ref initializer above; when the
@@ -988,6 +992,16 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
   },
 ])
 
+  {
+    id: 'help-cross-platform',
+    tab: 'help',
+    section: 'help',
+    helpTopic: 'crossPlatform',
+    title: t('settings.help.topic.crossPlatform'),
+    group: t('settings.nav.help'),
+    summary: t('settings.search.item.help-cross-platform.summary'),
+    keywords: 'help guide windows linux macos platform install installer nsis appimage deb arm64 mirror download update shortcut modifier ctrl titlebar conpty dpapi keyring 說明 教學 跨平台 視窗 安裝 安裝檔 鏡像 下載 更新 修飾鍵 標題列 憑證 金鑰庫 多台 機器',
+  },
 const settingsSearchResults = computed(() => {
   const q = settingsSearchQuery.value.trim().toLowerCase()
   if (!q) return []
@@ -2209,13 +2223,6 @@ watch(activeTab, (tab) => {
                   <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M5.5 2.5v11M14.5 6h-9"/></svg>
                 </template>
               </SettingsNavItem>
-              <SettingsNavItem :label="$t('settings.nav.crossDevice')" :active="activeTab === 'cross-device'" @select="activeTab = 'cross-device'">
-                <template #icon>
-                  <!-- The same mark as the titlebar and the page header: this
-                       row is how most people will first reach Navide Cloud. -->
-                  <NavideCloudMark variant="solid" class="nvc-nav-mark" />
-                </template>
-              </SettingsNavItem>
             </div>
 
             <div class="s-nav-group">
@@ -2266,6 +2273,13 @@ watch(activeTab, (tab) => {
               <SettingsNavItem :label="$t('settings.nav.extensions')" :active="activeTab === 'extensions'" @select="activeTab = 'extensions'">
                 <template #icon>
                   <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6.4 2.6h3.2v1.5a1.3 1.3 0 0 0 2.4 0V2.6h1.4v3.2h-1.5a1.3 1.3 0 0 0 0 2.4h1.5v3.2H6.4v-1.5a1.3 1.3 0 0 0-2.4 0v1.5H2.6V8.2h1.5a1.3 1.3 0 0 0 0-2.4H2.6V2.6h3.8Z"/></svg>
+                </template>
+              </SettingsNavItem>
+              <SettingsNavItem :label="$t('settings.nav.crossDevice')" :active="activeTab === 'cross-device'" @select="activeTab = 'cross-device'">
+                <template #icon>
+                  <!-- The same mark as the titlebar and the page header: this
+                       row is how most people will first reach Navide Cloud. -->
+                  <NavideCloudMark variant="solid" class="nvc-nav-mark" />
                 </template>
               </SettingsNavItem>
               <SettingsNavItem :label="$t('settings.nav.executionPolicy')" :active="activeTab === 'executionPolicy'" @select="activeTab = 'executionPolicy'">

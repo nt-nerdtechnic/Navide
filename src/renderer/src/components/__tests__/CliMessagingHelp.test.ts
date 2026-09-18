@@ -47,15 +47,15 @@ describe('CliMessagingHelp', () => {
     expect(text).toContain('How it works')
     expect(text).toContain('Which CLIs can send')
     expect(text).toContain('Known limits')
-    expect(wrapper.findAll('.cmh-h2')).toHaveLength(10)
+    expect(wrapper.findAll('.cmh-h2')).toHaveLength(12)
 
     const tables = wrapper.findAll('.cmh-table')
     expect(tables).toHaveLength(5)
     expect(tables[0].findAll('tbody tr')).toHaveLength(14) // coverage
-    expect(tables[1].findAll('tbody tr')).toHaveLength(4) // addressing
+    expect(tables[1].findAll('tbody tr')).toHaveLength(5) // addressing
     expect(tables[2].findAll('tbody tr')).toHaveLength(3) // spawn guidelines
     expect(tables[3].findAll('tbody tr')).toHaveLength(4) // guardrails
-    expect(tables[4].findAll('tbody tr')).toHaveLength(7) // troubleshooting
+    expect(tables[4].findAll('tbody tr')).toHaveLength(9) // troubleshooting
 
     // The two mock screenshots. Their own text is checked separately: the
     // page-wide Chinese check would still pass if a picture failed to render
@@ -87,7 +87,7 @@ describe('CliMessagingHelp', () => {
     expect(text).toContain('哪些 CLI 送得出訊息')
     expect(text).toContain('已知限制')
     expect(text).toContain('僅輸出協定')
-    expect(wrapper.findAll('.cmh-h2')).toHaveLength(10)
+    expect(wrapper.findAll('.cmh-h2')).toHaveLength(12)
     expect(wrapper.findAll('.cmh-table').at(0)!.findAll('tbody tr')).toHaveLength(14)
     expect(wrapper.findAll('.mk-fig')).toHaveLength(2)
 

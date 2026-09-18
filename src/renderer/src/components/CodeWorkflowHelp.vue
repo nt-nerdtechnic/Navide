@@ -12,13 +12,17 @@ import MockToolbar from './helpMocks/MockToolbar.vue'
 // manual, book 4 — every button label, menu item and shortcut below was
 // verified against the real components; keep them in sync if those change.
 // All prose lives in the locale files under `settings.help.codeWorkflow.*`;
-// the tables below keep only their row keys and the literal glyphs, labels and
-// key combinations that are identical in every language.
+// the tables below keep only their row keys, the literal glyphs and the key
+// combinations, which are identical in every language. Every button LABEL is
+// read from the product's own locale key, so the help page and the button it
+// describes are always saying the same word.
 
 interface FileButtonRow {
   key: string
   glyph: string
-  meaning: string
+  /** The product's own locale keys for this button — one per label, so a row
+   *  that offers two of them ("Accept Ours / Accept Theirs") stays one row. */
+  meaning: string[]
 }
 
 interface EditorSectionRow {
@@ -41,27 +45,32 @@ interface ShortcutRow {
 
 // Git: the buttons on a file row.
 //
-// Glyph columns — and prose that quotes a button on screen — use the exact
-// character the product paints, so `＋` here is U+FF0B, matching GitPane.vue:1974
-// (Stage All), :2028, :2045 and :2090. Only a pure separator gets folded to
-// ASCII; never "normalise" a glyph, because then the table stops describing
-// what the user is looking at.
+// Glyph columns use the exact character the product paints, so `＋` here is
+// U+FF0B, matching GitPane.vue:1974 (Stage All), :2028, :2045 and :2090. Only
+// a pure separator gets folded to ASCII; never "normalise" a glyph, because
+// then the table stops describing what the user is looking at.
+//
+// The label beside the glyph is NOT a literal: it is the product's own locale
+// key, resolved at render time. A help page that says "Stage" while the button
+// under the reader's cursor says 暫存 is describing a different product, and a
+// hard-coded English literal here would drift the moment either side moved.
 const fileButtons: FileButtonRow[] = [
-  { key: 'stage', glyph: '＋', meaning: 'Stage' },
-  { key: 'discard', glyph: '↩', meaning: 'Discard' },
-  { key: 'unstage', glyph: '−', meaning: 'Unstage' },
-  { key: 'history', glyph: '⊡', meaning: 'File history + blame' },
-  { key: 'conflict', glyph: '↰ / ↱', meaning: 'Accept Ours / Accept Theirs' },
+  { key: 'stage', glyph: '＋', meaning: ['action.stage'] },
+  { key: 'discard', glyph: '↩', meaning: ['action.discard'] },
+  { key: 'unstage', glyph: '−', meaning: ['action.unstage'] },
+  { key: 'history', glyph: '⊡', meaning: ['action.file-history-blame'] },
+  { key: 'conflict', glyph: '↰ / ↱', meaning: ['action.accept-ours', 'action.accept-theirs'] },
 ]
 
-// Git: the ▾ menu next to the Commit button.
+// Git: the ▾ menu next to the Commit button. Glyph painted here, label read
+// from the same key the menu item itself uses.
 const commitMenu = [
-  { key: 'commit', item: '✓ Commit' },
-  { key: 'amend', item: '✎ Amend Commit' },
-  { key: 'push', item: '↑ Commit & Push' },
-  { key: 'sync', item: '⇅ Commit & Sync' },
-  { key: 'undo', item: '↺ Undo Last Commit' },
-  { key: 'auto', item: '✦ Auto Commit' },
+  { key: 'commit', glyph: '✓', label: 'action.commit' },
+  { key: 'amend', glyph: '✎', label: 'action.amend-commit' },
+  { key: 'push', glyph: '↑', label: 'action.commit-and-push' },
+  { key: 'sync', glyph: '⇅', label: 'action.commit-and-sync' },
+  { key: 'undo', glyph: '↺', label: 'action.undo-last-commit' },
+  { key: 'auto', glyph: '✦', label: 'action.auto-commit' },
 ] as const
 
 // Git: the remote action row. Both columns are prose, so only the row order
@@ -73,19 +82,20 @@ const diffViews = ['file', 'branch', 'inline', 'history'] as const
 
 // Plans: the review toolbar.
 const planTools = [
-  { key: 'todos', tool: '☑ Todos' },
-  { key: 'notes', tool: '💬 Review Notes' },
-  { key: 'execute', tool: '▶ Execute' },
-  { key: 'approve', tool: '✓ Approve' },
-  { key: 'more', tool: '⋯ More actions' },
+  { key: 'todos', glyph: '☑', label: 'pane.plans.todos' },
+  { key: 'notes', glyph: '💬', label: 'pane.plans.review-notes' },
+  { key: 'execute', glyph: '▶', label: 'pane.plans.execute' },
+  { key: 'approve', glyph: '✓', label: 'pane.plans.review-approve' },
+  { key: 'more', glyph: '⋯', label: 'pane.plans.more-actions' },
 ] as const
 
-// Mini-IDE: the four sections in the left rail.
+// Mini-IDE: the four sections in the left rail, named by the same keys the
+// activity bar's own tooltips use (EditorWindowApp.vue:1965-1990).
 const editorSections: EditorSectionRow[] = [
-  { key: 'explorer', section: 'Explorer', shortcut: '⌘⇧E' },
-  { key: 'search', section: 'Search', shortcut: '⌘⇧F' },
-  { key: 'scm', section: 'Source Control', shortcut: '⌘⇧G' },
-  { key: 'problems', section: 'Problems', shortcut: '⌘⇧M' },
+  { key: 'explorer', section: 'pane.explorer.title', shortcut: '⌘⇧E' },
+  { key: 'search', section: 'pane.search.title', shortcut: '⌘⇧F' },
+  { key: 'scm', section: 'pane.git.tab', shortcut: '⌘⇧G' },
+  { key: 'problems', section: 'pane.problems.title', shortcut: '⌘⇧M' },
 ]
 
 // Mini-IDE: the common editing actions. `note` marks the rows that carry a
@@ -284,7 +294,7 @@ const conflictLines = [
           <tbody>
             <tr v-for="row in fileButtons" :key="row.key">
               <td class="cwh-nowrap"><code>{{ row.glyph }}</code></td>
-              <td>{{ row.meaning }}</td>
+              <td>{{ row.meaning.map((k) => $t(k)).join(' / ') }}</td>
               <td>{{ $t(`settings.help.codeWorkflow.s2.fileButtons.${row.key}.where`) }}</td>
             </tr>
           </tbody>
@@ -311,7 +321,7 @@ const conflictLines = [
           </thead>
           <tbody>
             <tr v-for="row in commitMenu" :key="row.key">
-              <td class="cwh-nowrap"><code>{{ row.item }}</code></td>
+              <td class="cwh-nowrap"><code>{{ row.glyph }} {{ $t(row.label) }}</code></td>
               <td>{{ $t(`settings.help.codeWorkflow.s2.commitMenu.${row.key}.what`) }}</td>
             </tr>
           </tbody>
@@ -505,8 +515,8 @@ const conflictLines = [
           </thead>
           <tbody>
             <tr v-for="row in planTools" :key="row.key">
-              <td class="cwh-nowrap">{{ row.tool }}</td>
-              <td>{{ $t(`settings.help.codeWorkflow.s6.planTools.${row.key}.opens`) }}</td>
+              <td class="cwh-nowrap">{{ row.glyph }} {{ $t(row.label) }}</td>
+              <td v-html="$t(`settings.help.codeWorkflow.s6.planTools.${row.key}.opens`)"></td>
             </tr>
           </tbody>
         </table>
@@ -529,6 +539,21 @@ const conflictLines = [
       <p class="cwh-p">{{ $t('settings.help.codeWorkflow.s6.p3') }}</p>
     </section>
 
+    <!-- ── 10 · Plans runs as a bundled plugin ──────────────────────── -->
+    <section class="cwh-section">
+      <h2 class="cwh-h2">{{ $t('settings.help.codeWorkflow.s10.title') }}</h2>
+      <p class="cwh-p" v-html="$t('settings.help.codeWorkflow.s10.p1')"></p>
+      <p class="cwh-p">{{ $t('settings.help.codeWorkflow.s10.p2') }}</p>
+
+      <h3 class="cwh-h3">{{ $t('settings.help.codeWorkflow.s10.h1') }}</h3>
+      <p class="cwh-p" v-html="$t('settings.help.codeWorkflow.s10.p3')"></p>
+      <ul class="cwh-list">
+        <li v-html="$t('settings.help.codeWorkflow.s10.list.retry')"></li>
+        <li v-html="$t('settings.help.codeWorkflow.s10.list.repair')"></li>
+      </ul>
+      <p class="cwh-note" v-html="$t('settings.help.codeWorkflow.s10.p4')"></p>
+    </section>
+
     <!-- ── 7 · The editor window ────────────────────────────────────── -->
     <section class="cwh-section">
       <h2 class="cwh-h2">{{ $t('settings.help.codeWorkflow.s7.title') }}</h2>
@@ -546,7 +571,7 @@ const conflictLines = [
           </thead>
           <tbody>
             <tr v-for="row in editorSections" :key="row.key">
-              <td class="cwh-nowrap">{{ row.section }}</td>
+              <td class="cwh-nowrap">{{ $t(row.section) }}</td>
               <td class="cwh-nowrap"><kbd class="cwh-kbd">{{ row.shortcut }}</kbd></td>
               <td>{{ $t(`settings.help.codeWorkflow.s7.editorSections.${row.key}.note`) }}</td>
             </tr>

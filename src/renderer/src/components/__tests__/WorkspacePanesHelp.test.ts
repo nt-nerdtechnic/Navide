@@ -20,6 +20,83 @@ function mountHelp(): VueWrapper {
 // Row counts per table, in document order.
 const TABLE_ROWS = [6, 4, 3, 5, 3, 4, 15]
 
+// Every interface label this topic quotes, paired with the key the product
+// renders it from. The topic must print whatever that key says — in either
+// locale — so a label renamed in the product can never leave a second, stale
+// wording behind in the manual. `params` is for the labels that carry a count;
+// the topic writes N where the interface substitutes a number.
+const QUOTED_LABELS: ReadonlyArray<{ key: string; params?: Record<string, string> }> = [
+  { key: 'action.browse' },                    // welcome card
+  { key: 'action.new-workspace' },
+  { key: 'action.open-home' },
+  { key: 'action.open-in-default-editor' },    // recent-entry context menu
+  { key: 'action.reveal-in-finder' },
+  { key: 'action.copy-path' },
+  { key: 'label.all-workspaces' },             // workspace-rail flyout
+  { key: 'label.select-role' },                // ＋ menu
+  { key: 'label.manual-spawn' },
+  { key: 'action.focus' },                     // pane context menu
+  { key: 'action.rename' },
+  { key: 'action.send-message' },
+  { key: 'action.interrupt' },
+  { key: 'action.reapply-role' },
+  { key: 'action.remove' },
+  { key: 'action.remove-children', params: { count: 'N' } },
+  { key: 'action.restore' },                   // expanded docked row
+  { key: 'pane.terminal.click-to-resume' },    // placeholder card
+  { key: 'action.interrupt-selected' },        // batch context menu
+  { key: 'action.rebuild-selected' },
+  { key: 'action.minimize-selected' },
+  { key: 'action.restore-selected' },
+  { key: 'action.remove-selected' },
+  { key: 'action.open-in-finder' },            // workspace-row context menu
+  { key: 'action.close-workspace' },
+  { key: 'action.close-workspace-and-panes' },
+  { key: 'label.agents' },                     // the views, named as the UI names them
+  { key: 'label.pipeline' },
+  { key: 'label.explorer' },
+  { key: 'label.git' },
+  { key: 'label.plans' },
+  { key: 'label.history' },
+  { key: 'label.time' },
+  { key: 'label.tokens' },
+  { key: 'label.tasker' },
+  { key: 'label.messages' },
+  { key: 'label.preview' },
+  { key: 'layout.preset.default' },            // Settings ▸ Layout
+  { key: 'layout.preset.focus' },
+  { key: 'layout.preset.bottom-panel' },
+  { key: 'layout.reset' },
+  { key: 'settings.nav.layout' },
+  { key: 'announce.mark-all-read' },           // status-bar popovers
+  { key: 'updater.download' },
+  { key: 'updater.install' },
+  { key: 'announce.load-more', params: { count: 'N' } },
+  { key: 'resource.reclaim-action', params: { count: 'N' } },
+]
+
+// The four stage-mode buttons are glyph-only; the topic takes their name from
+// the part of the tooltip before the dash, so the separator has to be there.
+const VIEW_MODE_KEYS = [
+  'label.view-mode-grid',
+  'label.view-mode-sidebar',
+  'label.view-mode-spotlight',
+  'label.view-mode-fullscreen',
+]
+
+function quotesEveryLabel(text: string): void {
+  const missing: string[] = []
+  for (const { key, params } of QUOTED_LABELS) {
+    const label = i18n.global.t(key, params ?? {})
+    // A dropped placeholder renders as nothing, not as a literal {count} —
+    // the double space it leaves behind is the only visible trace.
+    expect(label, `${key} lost a placeholder`).not.toContain('  ')
+    if (!text.includes(label)) missing.push(`${key} → "${label}"`)
+  }
+  expect(missing, `labels the topic no longer quotes as the UI writes them:\n${missing.join('\n')}`)
+    .toEqual([])
+}
+
 describe('WorkspacePanesHelp', () => {
   const originalLocale = i18n.global.locale.value
   let warn: ReturnType<typeof vi.spyOn>
@@ -57,6 +134,11 @@ describe('WorkspacePanesHelp', () => {
     expect(text).toContain('三個名詞')
     expect(text).toContain('閒置自動回收')
     expect(text).toContain('快捷鍵速查')
+    // The interface labels the prose quotes turn Chinese along with it.
+    expect(text).toContain('傳送訊息')
+    expect(text).toContain('關閉工作區與 CLI 視窗')
+    expect(text).toContain('格狀')
+    expect(text).toContain('排程')
     expect(wrapper.findAll('.wph-h2')).toHaveLength(7)
     expect(wrapper.findAll('.wph-table').map((t) => t.findAll('tbody tr').length)).toEqual(
       TABLE_ROWS,
@@ -99,6 +181,29 @@ describe('WorkspacePanesHelp', () => {
     expect(mockText).toContain('執行中')
     // Sample project and pane names stay identical in both locales.
     expect(mockText).toContain('my-project')
+
+    expect(unexpectedWarnings(warn)).toEqual([])
+  })
+
+  it('quotes every interface label exactly as the product writes it, in both locales', () => {
+    for (const locale of ['en-US', 'zh-TW'] as const) {
+      i18n.global.locale.value = locale
+      quotesEveryLabel(mountHelp().text())
+    }
+
+    expect(unexpectedWarnings(warn)).toEqual([])
+  })
+
+  it('names the stage modes from the tooltips the buttons themselves carry', () => {
+    for (const locale of ['en-US', 'zh-TW'] as const) {
+      i18n.global.locale.value = locale
+      const text = mountHelp().text()
+      for (const key of VIEW_MODE_KEYS) {
+        const tooltip = i18n.global.t(key)
+        expect(tooltip, `${key} (${locale}) lost its "name — description" shape`).toContain(' — ')
+        expect(text).toContain(tooltip.split(' — ')[0])
+      }
+    }
 
     expect(unexpectedWarnings(warn)).toEqual([])
   })

@@ -24,8 +24,9 @@ const LITERAL_OPTION = '繁體中文'
 
 // Row counts per table, in template order.
 // The first table is the settings nav: seventeen pages in five groups,
-// counted from SettingsModal.vue:1941-2043 rather than from the prose.
-const TABLE_ROWS = [17, 13, 9, 4, 3, 6, 2, 4, 3, 8, 4, 9]
+// counted from SettingsModal.vue's `.s-nav-group` blocks rather than from the
+// prose. The last one is section 8's which-surface-is-which table.
+const TABLE_ROWS = [17, 14, 9, 4, 3, 6, 2, 6, 3, 8, 4, 10, 3]
 
 function unexpectedWarnings(warn: ReturnType<typeof vi.spyOn>): unknown[][] {
   return warn.mock.calls.filter(([first]) => !String(first).startsWith(HTML_ADVISORY))
@@ -62,7 +63,11 @@ describe('SettingsSystemHelp', () => {
     expectNoChineseText(text, { allowLiterals: [LITERAL_OPTION] })
     expect(text).toContain('Settings overview')
     expect(text).toContain('Resources and upkeep')
-    expect(wrapper.findAll('.syh-h2')).toHaveLength(7)
+    expect(text).toContain('Token Monitor')
+    expect(text).toContain('Status badges')
+    expect(text).toContain('Confirm before closing a pane')
+    expect(text).toContain('Pipeline Manager')
+    expect(wrapper.findAll('.syh-h2')).toHaveLength(8)
     expect(rowCounts(wrapper)).toEqual(TABLE_ROWS)
 
     // Placeholder prose, not interpolations — the escapes must survive.
@@ -80,9 +85,14 @@ describe('SettingsSystemHelp', () => {
 
     const text = wrapper.text()
     expect(text).toContain('設定總覽')
-    expect(text).toContain('Skills、Prompts、Memory')
+    expect(text).toContain('技能、Prompt 技能、記憶')
     expect(text).toContain('資源與維護')
-    expect(wrapper.findAll('.syh-h2')).toHaveLength(7)
+    expect(text).toContain('Token 監看')
+    // Table labels now read the product's own keys, so they translate too.
+    expect(text).toContain('狀態徽章')
+    expect(text).toContain('關閉 pane 前確認')
+    expect(text).toContain('流程管理')
+    expect(wrapper.findAll('.syh-h2')).toHaveLength(8)
     expect(rowCounts(wrapper)).toEqual(TABLE_ROWS)
 
     expect(text).toContain('{file}')
@@ -117,7 +127,7 @@ describe('SettingsSystemHelp', () => {
     // The box shows the typed query, the way the real one does once it has
     // something in it; the placeholder only shows while it is empty.
     expect(mockText).toContain('reclaim')
-    expect(mockText).toContain('Execution Policy')
+    expect(mockText).toContain('Marketplace')
     expect(mockText).toContain('Resource Manager')
 
     expect(unexpectedWarnings(warn)).toEqual([])
@@ -130,7 +140,7 @@ describe('SettingsSystemHelp', () => {
     const mockText = wrapper.findAll('.mk-fig').map((f) => f.text()).join(' ')
     expect(mockText.length).toBeGreaterThan(200)
     expect(mockText).toContain('reclaim')
-    expect(mockText).toContain('執行政策')
+    expect(mockText).toContain('市集')
     expect(mockText).toContain('資源控管')
     // Pane names and figures are the same in both locales.
     expect(mockText).toContain('reviewer')

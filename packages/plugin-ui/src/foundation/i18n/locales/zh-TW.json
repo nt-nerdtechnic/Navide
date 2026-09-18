@@ -952,6 +952,9 @@
         "help-settings-system": {
           "summary": "所有設定分頁的地圖，加上 Navide Cloud、視窗選單、排程工作與資源維護。"
         },
+        "help-cross-platform": {
+          "summary": "在 Windows、Linux 與 macOS 上取得、更新與使用 Navide 的差別，以及同一個人用好幾台機器時會遇到的事。"
+        },
         "help-icons": {
           "summary": "介面上每一顆按鈕圖示——它叫什麼名字、出現在哪裡、按下去會發生什麼事。"
         }
@@ -1325,15 +1328,15 @@
             "autoReclaim": "30"
           }
         },
-        "intro": "設定視窗的十七個分頁分別管什麼、Navide Cloud 怎麼把幾台機器接成一個私有網路，以及選單、獨立視窗與資源維護這些散在主畫面之外的系統面。",
+        "intro": "設定視窗的十七個分頁分別管什麼、Navide Cloud 怎麼把幾台機器接成一個私有網路，以及選單、獨立視窗、用量統計與資源維護這些散在主畫面之外的系統面。",
         "s1": {
           "title": "設定總覽",
           "p1": "設定視窗用 <kbd class=\"syh-kbd\">⌘,</kbd> 開啟，標題列的齒輪鈕是同一個入口。左側側欄分五組，共 <strong>17 個分頁</strong>。",
           "h1": "搜尋框",
-          "p2": "側欄標題底下有一個搜尋框，提示字是 <code>Search settings…</code>。它<strong>跨分頁</strong>比對設定項的標題、所屬區塊與關鍵字（中英文都收），最多列 8 筆；點一筆會切到那個分頁並捲到對應區塊（「Storage」那筆例外：它會關掉設定、直接開 Resource Manager），沒命中時顯示 <code>No matching settings</code>。<kbd class=\"syh-kbd\">Esc</kbd> 清空。",
+          "p2": "側欄標題底下有一個搜尋框，提示字是 <code>搜尋設定…</code>。它<strong>跨分頁</strong>比對設定項的標題、所屬區塊與關鍵字（中英文都收），最多列 8 筆；點一筆會切到那個分頁並捲到對應區塊（「儲存空間」那筆例外：它會關掉設定、直接開「資源控管」），沒命中時顯示 <code>找不到相符設定</code>。<kbd class=\"syh-kbd\">Esc</kbd> 清空。",
           "callout": {
             "title": "搜尋索引不是全覆蓋",
-            "text": "索引是一份人工維護的清單，<strong>CLI Agents、Layout、Extensions 這三個分頁沒有任何條目</strong>，搜尋不到它們裡面的東西，得自己點進去。"
+            "text": "索引是一份人工維護的清單，<strong>CLI Agents、版面、擴充功能 這三個分頁沒有任何條目</strong>，搜尋不到它們裡面的東西，得自己點進去。"
           },
           "h2": "十七個分頁",
           "tabTable": {
@@ -1344,7 +1347,7 @@
           },
           "tabs": {
             "general": {
-              "what": "關閉確認、閒置回收門檻、接續行為、預設編輯器、額度徽章、環境檢查、Backend 逾時、通知與音效",
+              "what": "關閉確認、閒置回收門檻、接續行為、預設編輯器、額度徽章、環境檢查、Backend 逾時、通知與音效，以及設定全集的匯出／匯入",
               "more": "本頁第 2 章"
             },
             "appearance": {
@@ -1392,12 +1395,12 @@
               "more": "本頁第 3 章"
             },
             "extensions": {
-              "what": "已安裝的外掛與市集安裝",
+              "what": "外掛執行時套用的執行政策，以及隨附與已安裝的外掛",
               "more": "本頁第 4 章"
             },
-            "executionPolicy": {
-              "what": "外掛可以執行哪些指令：完整／允許清單／拒絕清單三種模式，以及每個工作區套用哪一份政策（Host 預設或使用者政策）",
-              "more": "本手冊尚未涵蓋"
+            "marketplace": {
+              "what": "搜尋擴充功能登錄庫並從中安裝",
+              "more": "本頁第 4 章"
             },
             "shortcuts": {
               "what": "快捷鍵改綁、匯入匯出",
@@ -1408,15 +1411,15 @@
               "more": "本頁第 4 章"
             },
             "help": {
-              "what": "唯讀參考：跨面板傳訊、MCP 與本篇說明",
+              "what": "唯讀參考：用上方的主題頁籤切換本面板的每一篇說明",
               "more": "就是你現在看的這個分頁"
             }
           },
-          "note": "Help 分頁沒有任何設定項，只有幾篇對照文件——你正在看的就是其中一篇。設定視窗底部另有 <em>Export bundle</em>／<em>Import bundle</em>，可以把整包設定搬到別台機器。"
+          "note": "說明分頁自己沒有任何設定項：它只有一排<strong>主題頁籤</strong>，一個主題一頁，你現在看的就是其中的「設定與系統」。<strong>不是每個設定分頁各自有說明</strong>——全部集中在這裡。設定搜尋命中說明類條目時，會切到說明分頁<strong>並自動跳到對應主題</strong>；反過來，主視窗與原生選單都<strong>沒有</strong>直達說明分頁的入口，只能從設定進來。至於把整包設定搬到另一台機器，入口在 <strong>一般 ▸ 設定管理</strong>（見第 2 章），不在視窗底部。"
         },
         "s2": {
-          "title": "General、Appearance、Status badges",
-          "h1": "General",
+          "title": "一般、外觀、狀態徽章",
+          "h1": "一般",
           "generalTable": {
             "name": "設定",
             "desc": "說明",
@@ -1444,12 +1447,12 @@
               "fallback": "—"
             },
             "resumeOnOpen": {
-              "desc": "開啟工作區時舊面板怎麼辦：Always resume／Always start fresh／Ask each time。",
+              "desc": "開啟工作區時舊面板怎麼辦：總是恢復／一律開新對話／每次詢問。",
               "fallback": "Always"
             },
             "resumeScope": {
-              "desc": "接續範圍：One CLI／Current Grid page／Active tab／All CLIs。",
-              "fallback": "One CLI"
+              "desc": "接續範圍：單一 CLI／目前 Grid 頁面／目前分頁／全部 CLI。",
+              "fallback": "單一 CLI"
             },
             "resumeAfterRestart": {
               "desc": "Backend 掛掉會帶走所有 CLI 行程；開著的話它回來後自動接續畫面上的面板。",
@@ -1474,21 +1477,25 @@
             "backendTimeout": {
               "desc": "等 Backend 起來的秒數，15–120；機器慢就調高。",
               "fallback": "—"
+            },
+            "settingsBundle": {
+              "desc": "「匯出設定全集」／「匯入設定全集」兩顆鈕，旁邊是層級徽章與設定檔路徑。匯出內容是 Roles、Pipelines、MCP、Analyzer 與外觀偏好；API key 與 token 會被遮蔽，匯入時不覆蓋你現有的值。這是純本機的檔案交換，沒有分享碼，也不需要登入或連線。",
+              "fallback": "—"
             }
           },
-          "h2": "Appearance",
+          "h2": "外觀",
           "appearance": {
-            "theme": "<strong>Theme</strong> — 五種內建：Dark (GitHub)、Midnight、Forest、Light、High Contrast，預設是 Dark (GitHub)。",
-            "colors": "<strong>Custom Colors</strong> — 八個可覆寫的色彩 token（背景、表面、文字、次要文字、邊框、強調、成功、危險）。覆寫疊在目前主題之上，<strong>換主題時保留</strong>；<em>↺ Reset to defaults</em> 還原。",
-            "language": "<strong>Language</strong> — <strong>只有兩種</strong>：<code>繁體中文</code> 與 <code>English</code>。沒選過之前，Navide 跟隨系統語言。這是使用者層級偏好，套用到所有工作區。",
-            "uiScale": "<strong>Interface Scale</strong> — 整體介面縮放，六段 80%／90%／100%／110%／125%／150%，預設 100%，快捷鍵 <kbd class=\"syh-kbd\">⇧⌘=</kbd>／<kbd class=\"syh-kbd\">⇧⌘-</kbd>／<kbd class=\"syh-kbd\">⇧⌘0</kbd>。它走的是 Electron 的頁面縮放而不是 CSS 變數，所以文字、圖示、邊框、間距會一起變，而且由主行程套用到<strong>每一個視窗</strong>，外掛視窗也算。它和面板字級是<strong>兩條獨立的軸</strong>：<kbd class=\"syh-kbd\">⌘=</kbd>／<kbd class=\"syh-kbd\">⌘-</kbd>／<kbd class=\"syh-kbd\">⌘0</kbd> 只改終端機<strong>內容</strong>的字級（整個視窗的 CLI 面板共用同一個值），Interface Scale 改的是外面那層殼；兩者是<strong>相乘</strong>的，就像瀏覽器的頁面縮放疊在網站自己的字級上。",
-            "restore": "<strong>Restore Windows</strong> — 下次啟動時重開上次結束時開著的工作區視窗。"
+            "theme": "<strong>主題</strong> — 五種內建：Dark (GitHub)、Midnight、Forest、Light、High Contrast，預設是 Dark (GitHub)。",
+            "colors": "<strong>自訂顏色</strong> — 八個可覆寫的色彩 token（背景、表面、文字、次要文字、邊框、強調、成功、危險）。覆寫疊在目前主題之上，<strong>換主題時保留</strong>；<em>↺ 重設為預設值</em> 還原。",
+            "language": "<strong>語言</strong> — <strong>只有兩種</strong>：<code>繁體中文</code> 與 <code>English</code>。沒選過之前，Navide 跟隨系統語言。這是使用者層級偏好，套用到所有工作區。",
+            "uiScale": "<strong>介面縮放</strong> — 在 <strong>外觀 ▸ 其他</strong> 區塊的第一列，控制項是<strong>下拉選單</strong>而不是滑桿，六段 80%／90%／100%／110%／125%／150%，預設 100%，快捷鍵 <kbd class=\"syh-kbd\">⇧⌘=</kbd>／<kbd class=\"syh-kbd\">⇧⌘-</kbd>／<kbd class=\"syh-kbd\">⇧⌘0</kbd>。它走的是 Electron 的頁面縮放而不是 CSS 變數，所以文字、圖示、邊框、間距會一起變，而且由主行程套用到<strong>每一個視窗</strong>，外掛視窗也算。它和面板字級是<strong>兩條獨立的軸</strong>：<kbd class=\"syh-kbd\">⌘=</kbd>／<kbd class=\"syh-kbd\">⌘-</kbd>／<kbd class=\"syh-kbd\">⌘0</kbd> 只改終端機<strong>內容</strong>的字級（整個視窗的 CLI 面板共用同一個值），介面縮放改的是外面那層殼；兩者是<strong>相乘</strong>的，就像瀏覽器的頁面縮放疊在網站自己的字級上。",
+            "restore": "<strong>還原視窗</strong> — 下次啟動時重開上次結束時開著的工作區視窗。"
           },
           "callout": {
-            "title": "通知與音效在 General 分頁",
-            "text": "通知開關是有的，只是不在 Appearance，而在 <strong>General 分頁的 Notifications 區塊</strong>，共三項：<em>System notifications</em>（Navide 在背景時，CLI 完成回合或需要你輸入會送出桌面通知；Dock 徽章的計數不受這個開關影響）、<em>Notification sound</em>（回合完成播一聲短提示音，CLI 等你回覆時播兩聲），以及 <em>Notification permission</em>——macOS 不會把真實授權狀態回報給 Navide，所以這一項只能送一則測試通知、由你確認它有沒有出現；沒出現就到「系統設定 → 通知」允許 Navide。最後這一項只在適用的平台上才出現。"
+            "title": "通知與音效在一般分頁",
+            "text": "通知開關是有的，只是不在外觀，而在 <strong>一般分頁的通知區塊</strong>，共三項：<em>系統通知</em>（Navide 在背景時，CLI 完成回合或需要你輸入會送出桌面通知；Dock 徽章的計數不受這個開關影響）、<em>提示音</em>（回合完成播一聲短提示音，CLI 等你回覆時播兩聲），以及 <em>通知權限</em>——macOS 不會把真實授權狀態回報給 Navide，所以這一項只能送一則測試通知、由你確認它有沒有出現；沒出現就到「系統設定 → 通知」允許 Navide。最後這一項只在適用的平台上才出現。"
           },
-          "h3": "Status badges",
+          "h3": "狀態徽章",
           "p1": "把九種面板狀態各自<strong>改名並選顏色</strong>。中英文名稱可以分開填（各限 24 字，留空就退回內建翻譯）。改完之後面板徽章、側欄、會議條與資源面板全部跟著變。<strong>設定存在你的帳號上，不跟著專案走。</strong>",
           "statusTable": {
             "state": "狀態",
@@ -1524,17 +1531,17 @@
               "when": "後端 session 掉了（只出現在清單）"
             }
           },
-          "note": "顏色十種（Green／Yellow／Orange／Red／Blue／Purple／Pink／Cyan／Grey／Ink），都走主題 token，在任何主題下都讀得出來。單列 <em>Reset</em>、整頁 <em>Reset all</em>。"
+          "note": "顏色十種（Green／Yellow／Orange／Red／Blue／Purple／Pink／Cyan／Grey／Ink），都走主題 token，在任何主題下都讀得出來。單列 <em>還原</em>、整頁 <em>全部還原</em>。"
         },
         "s3": {
-          "title": "Skills、Prompts、Memory",
-          "h1": "Skills — 共用技能庫",
-          "p1": "技能是一個資料夾，裡面有一份 <code>SKILL.md</code>，寫著「遇到某類任務時照這樣做」。這一頁（標題 <em>Managed Skills</em>）做三件事：看見所有 CLI 手上的技能、決定<strong>誰收到哪一個</strong>、以及建立新技能。",
+          "title": "技能、Prompt 技能、記憶",
+          "h1": "技能 — 共用技能庫",
+          "p1": "技能是一個資料夾，裡面有一份 <code>SKILL.md</code>，寫著「遇到某類任務時照這樣做」。這一頁（標題 <em>受管 Skills</em>）做三件事：看見所有 CLI 手上的技能、決定<strong>誰收到哪一個</strong>、以及建立新技能。",
           "callout1": {
             "title": "共用根目錄",
-            "text": "Navide 建立的技能一律放在 <code>~/.agents/skills</code>。這一頁<strong>不會搬動或改寫</strong>各家 CLI 自己資料夾裡的技能——那些只是被反射出來讓你看見，並且可以投遞給別家。（有一個明確的 <em>Move into shared library</em> 動作是例外，它會搬檔並留下 symlink，可以還原。）"
+            "text": "Navide 建立的技能一律放在 <code>~/.agents/skills</code>。這一頁<strong>不會搬動或改寫</strong>各家 CLI 自己資料夾裡的技能——那些只是被反射出來讓你看見，並且可以投遞給別家。（有一個明確的 <em>移入共用庫</em> 動作是例外，它會搬檔並留下 symlink，可以還原。）"
           },
-          "p2": "頁面有 <strong>Browse</strong>（卡片瀏覽）與 <strong>Route</strong>（投遞矩陣）兩種檢視。矩陣橫軸是 14 家 CLI，直軸是技能，每格四種狀態，每一列還有 <em>All</em>／<em>None</em> 兩顆批次鈕：",
+          "p2": "頁面有 <strong>瀏覽</strong>（卡片瀏覽）與 <strong>投遞</strong>（投遞矩陣）兩種檢視。矩陣橫軸是 14 家 CLI，直軸是技能，每格四種狀態，每一列還有 <em>全選</em>／<em>全不選</em> 兩顆批次鈕：",
           "matrixTable": {
             "cell": "格子",
             "meaning": "意思",
@@ -1547,41 +1554,41 @@
               "who": "11 家：antigravity、claude、codex、copilot、cursor、grok、kimi、muse、opencode、pi、qwen"
             },
             "native": {
-              "cell": "● already reads it",
+              "cell": "● 自己就讀得到",
               "meaning": "它自己就會讀 ~/.agents/skills，不經過 Navide 投遞，因此也無法對它單獨關掉（格子不可點）。",
               "who": "6 家：codex、copilot、cursor、grok、muse、opencode"
             },
             "none": {
-              "cell": "— no skills mechanism",
+              "cell": "— 無 skills 機制",
               "meaning": "那家 CLI 根本沒有技能這回事，接不上。",
               "who": "3 家：aider、kilo、droid"
             },
             "pending": {
-              "cell": "· supported, not wired yet",
+              "cell": "· 支援但尚未接線",
               "meaning": "有技能機制但 Navide 還沒接上。",
               "who": "目前沒有"
             }
           },
-          "p3": "點一個技能會開抽屜。Navide 自己建立的技能可完整編輯：<em>Description</em>、<em>User invocable</em>（允許使用者直接叫用）、<em>Model invocation</em>（允許模型自己挑）、<em>Instructions (Markdown)</em>，以及 <em>Advanced agent fields</em>（allowed／disallowed tools、model、effort、context）。附件唯讀，要管理就按 <em>Open folder</em>。已知欄位可改，其他 frontmatter 原樣保留；刪除是 <em>Move to Trash</em>。同名技能若 CLI 自己也有一份，會標 <em>Native skill wins</em>——它自己的那份優先。",
-          "h2": "Prompts — 提示技能庫",
-          "p4": "和上面的 Skills 是<strong>兩件不同的事</strong>。提示技能是一整段可重複使用的指令，由面板標題列的 <code>∞</code> 按鈕施放。<strong>一個技能就是一整段完整提示——挑一個技能是「換掉」提示，不是接在別的後面。</strong>",
+          "p3": "點一個技能會開抽屜。Navide 自己建立的技能可完整編輯：<em>說明</em>、<em>允許使用者呼叫</em>（允許使用者直接叫用）、<em>允許模型呼叫</em>（允許模型自己挑）、<em>指令（Markdown）</em>，以及 <em>進階 agent 欄位</em>（allowed／disallowed tools、model、effort、context）。附件唯讀，要管理就按 <em>開啟資料夾</em>。已知欄位可改，其他 frontmatter 原樣保留；刪除是 <em>移至垃圾桶</em>。同名技能若 CLI 自己也有一份，會標 <em>原生 skill 優先</em>——它自己的那份優先。",
+          "h2": "Prompt 技能 — 提示技能庫",
+          "p4": "和上面的技能是<strong>兩件不同的事</strong>。提示技能是一整段可重複使用的指令，由面板標題列的 <code>∞</code> 按鈕施放。<strong>一個技能就是一整段完整提示——挑一個技能是「換掉」提示，不是接在別的後面。</strong>",
           "prompts": {
-            "cast": "<code>∞</code> <strong>直接按下去</strong>，施放的是預設技能（清單上標 <em>★ Default</em> 的那個）。",
+            "cast": "<code>∞</code> <strong>直接按下去</strong>，施放的是預設技能（清單上標 <em>★ 預設</em> 的那個）。",
             "ring": "滑鼠<strong>停在 <code>∞</code> 上約 0.3 秒</strong>，其餘技能會在按鈕下方<strong>展開成一圈</strong>讓你挑；游標移向那一圈時有短暫寬限，不會馬上收掉。",
             "overflow": "可選技能<strong>超過 5 個</strong>，或面板太窄（小於 320px）時，改成直式清單，技能與按鍵完全一樣。",
             "preview": "指向任一個會顯示預覽卡：圖示、名稱、<strong>完整的提示內容</strong>，以及 turn 上限。",
             "keyboard": "鍵盤：在 <code>∞</code> 上按 <kbd class=\"syh-kbd\">↓</kbd> 展開，方向鍵移動，<kbd class=\"syh-kbd\">1</kbd>–<kbd class=\"syh-kbd\">9</kbd> 直接施放，<kbd class=\"syh-kbd\">Esc</kbd> 收起。",
             "disabled": "停用的技能留在設定頁裡，但<strong>從那一圈裡消失</strong>。"
           },
-          "note": "每個技能可設 <em>Name</em>、<em>Icon</em>、<em>Summary</em>、<em>Prompt sent on cast</em>、<em>Resume text</em>（留空就用全域續跑文字）、<em>Turn cap</em>（0 = 不限）、<em>Category</em>；每一筆有 <em>Set as default</em>、<em>Enable</em>／<em>Disable</em>、<em>Duplicate</em>、<em>Delete</em>。",
-          "h3": "Memory — 各家 CLI 的指示檔",
+          "note": "每個技能可設 <em>名稱</em>、<em>圖示</em>、<em>摘要</em>、<em>施放時送出的 prompt</em>、<em>續跑詞</em>（留空就用全域續跑文字）、<em>Turn cap</em>（0 = 不限）、<em>分類</em>；每一筆有 <em>設為預設</em>、<em>啟用</em>／<em>停用</em>、<em>複製</em>、<em>刪除</em>。",
+          "h3": "記憶 — 各家 CLI 的指示檔",
           "p5": "每家 CLI 動工前都會先讀一份指示檔——<code>CLAUDE.md</code>、<code>AGENTS.md</code>、<code>QWEN.md</code>、<code>.cursor</code> 規則。這一頁列的單位是<strong>檔案不是 CLI</strong>：一個檔案列一次，後面掛著所有會讀它的 CLI，並且可以就地編輯。",
           "memory": {
-            "levels": "分 <strong>User level</strong>（家目錄）與 <strong>Project level</strong>（目前工作區）兩段。沒開資料夾時只列使用者層級。",
-            "notCreated": "還不存在的檔案標 <em>Not created</em>——按存檔就會建立它，連同上層缺的資料夾。",
-            "reload": "編輯中若檔案被別的程式改掉，會擋下來要你先 <em>Reload from disk</em>，不會直接覆蓋你或對方的內容。"
+            "levels": "分 <strong>使用者層級</strong>（家目錄）與 <strong>專案層級</strong>（目前工作區）兩段。沒開資料夾時只列使用者層級。",
+            "notCreated": "還不存在的檔案標 <em>尚未建立</em>——按存檔就會建立它，連同上層缺的資料夾。",
+            "reload": "編輯中若檔案被別的程式改掉，會擋下來要你先 <em>重新載入（會捨棄你的草稿）</em>，不會直接覆蓋你或對方的內容。"
           },
-          "p6": "底部的 <strong>CLI coverage</strong> 把 14 家分成三類：",
+          "p6": "底部的 <strong>CLI 涵蓋範圍</strong> 把 14 家分成三類：",
           "coverageTable": {
             "category": "分類",
             "meaning": "意思"
@@ -1603,22 +1610,22 @@
           }
         },
         "s4": {
-          "title": "Shortcuts、Updates、Analyzer、Extensions",
-          "h1": "Shortcuts",
-          "p1": "表格四欄：<em>Command</em>、<em>Shortcut</em>、<em>Active when</em>（生效情境）、<em>Source</em>。",
+          "title": "快捷鍵、更新、分析器、擴充功能",
+          "h1": "快捷鍵",
+          "p1": "表格四欄：<em>命令</em>、<em>快捷鍵</em>、<em>生效條件</em>（生效情境）、<em>來源</em>。",
           "shortcuts": {
             "record": "點一顆按鍵方塊就地開始<strong>錄製</strong>；<code>+</code> 加第二組綁定；<code>✕</code> 移除一組。和弦最多兩段。",
             "instant": "改動<strong>立即寫進 <code>keybindings.json</code></strong> 並套用到每一個開著的視窗，沒有存檔鈕。",
-            "search": "搜尋框同時比對命令名稱與按鍵寫法（<code>cmd+shift+p</code> 和 <kbd class=\"syh-kbd\">⌘⇧P</kbd> 都找得到）；三個篩選器 <em>All</em>／<em>Customized</em>／<em>Conflicts</em>。",
-            "conflicts": "<em>Conflicts</em> 會標出互相打架的綁定，並說明是誰永遠贏、還是靠 <em>Active when</em> 分開的。",
-            "reset": "單列 <em>Reset to default</em>，整頁 <em>Reset all</em>。<em>Export</em>／<em>Import</em> 搬設定，<strong>匯入是取代不是合併</strong>，會先告訴你幾條被丟棄、幾條被匯入，被拒絕的條目也會列出來。"
+            "search": "搜尋框同時比對命令名稱與按鍵寫法（<code>cmd+shift+p</code> 和 <kbd class=\"syh-kbd\">⌘⇧P</kbd> 都找得到）；三個篩選器 <em>全部</em>／<em>已自訂</em>／<em>衝突</em>。",
+            "conflicts": "<em>衝突</em> 會標出互相打架的綁定，並說明是誰永遠贏、還是靠 <em>生效條件</em> 分開的。",
+            "reset": "單列 <em>還原成預設</em>，整頁 <em>全部還原</em>。<em>匯出</em>／<em>匯入</em> 搬設定，<strong>匯入是取代不是合併</strong>，會先告訴你幾條被丟棄、幾條被匯入，被拒絕的條目也會列出來。"
           },
           "callout": {
             "title": "兩個拆不掉的鍵，和一類拆了也沒用的鍵",
             "text": "「開啟設定」與「開啟快捷鍵設定」是回到設定的唯一路，最後一組綁定上是 🔒 不是 ✕——<strong>可以改綁到別的鍵，但不能解除</strong>。另外，被應用程式選單佔用的按鍵會標 ⚠：那些鍵在 app 看到之前就被選單接走了，<strong>在這裡解除綁定並不會讓它停手</strong>。"
           },
           "note": "用 <code>✕</code> 解除的綁定，在 <code>keybindings.json</code> 裡是記成一條 <code>-command</code>（命令名稱前加減號）的規則。手改檔案時就是用這個寫法。頁面最下方另有「終端機」與「應用程式選單」兩份唯讀對照表。",
-          "h2": "Updates",
+          "h2": "更新",
           "p2": "更新拆成三段，各自有開關，所以可以組出「自動檢查但不自動下載」這種行為：",
           "updateTable": {
             "stage": "階段",
@@ -1627,23 +1634,23 @@
           },
           "updateStages": {
             "autoCheck": {
-              "toggle": "Automatically check for updates",
+              "toggle": "自動檢查更新",
               "fallback": "開"
             },
             "checkFailures": {
-              "toggle": "Tell me when update checks keep failing ＋ 連續失敗幾次才提醒（1–10）",
+              "toggle": "檢查更新持續失敗時提醒我 ＋ 連續失敗幾次才提醒（1–10）",
               "fallback": "開，3 次"
             },
             "autoDownload": {
-              "toggle": "Automatically download updates",
+              "toggle": "自動下載更新",
               "fallback": "開"
             },
             "retryDownload": {
-              "toggle": "Retry failed downloads ＋ 重試次數（0–5）",
+              "toggle": "下載失敗時自動重試 ＋ 重試次數（0–5）",
               "fallback": "開，3 次"
             },
             "installOnQuit": {
-              "toggle": "Install updates when you quit",
+              "toggle": "結束 App 時安裝更新",
               "fallback": "關"
             },
             "installTimeout": {
@@ -1651,18 +1658,30 @@
               "fallback": "20 秒"
             }
           },
-          "p3": "<em>Install updates when you quit</em> 預設關是刻意的：<strong>安裝一定會重開 app</strong>，所以留著關就是「每次自己決定」。頁面上有目前版本、<em>Check for updates</em>，以及一條 Check → Download → Install 的三段進度軌。更新頻道下拉目前只有 Stable 可選，Beta 標著「not available yet」。",
-          "p4": "狀態列的更新徽章對應這幾種狀態：<code>v{'{'}版本{'}'} ready</code>、下載中的百分比、<code>Update failed</code>、<code>Update check failed</code>。<strong>公告中心裡也能直接按 <em>Download</em> 或 <em>Install</em></strong>（見本面板的「工作區與面板」分頁第 6 章）。",
-          "h3": "Analyzer",
+          "p3": "<em>結束 App 時安裝更新</em> 預設關是刻意的：<strong>安裝一定會重開 app</strong>，所以留著關就是「每次自己決定」。頁面上有目前版本、<em>檢查更新</em>，以及一條 Check → Download → Install 的三段進度軌。更新頻道下拉目前只有 Stable 可選，Beta 標著「not available yet」。",
+          "p4": "狀態列的更新徽章對應這幾種狀態：<code>v{'{'}版本{'}'} ready</code>、下載中的百分比、<code>更新失敗</code>、<code>更新檢查失敗</code>。<strong>公告中心裡也能直接按 <em>下載</em> 或 <em>重新啟動以安裝</em></strong>（見本面板的「工作區與面板」分頁第 6 章）。",
+          "h3": "分析器",
           "p5": "這裡設定的是<strong>本機小模型</strong>，Navide 拿它做 pipeline 的意圖判讀，跟你在面板裡用的 CLI agent 無關。三段：",
           "analyzer": {
             "backend": "<strong>Inference backend</strong> — 先選 <em>Ollama REST</em> 或 <em>llama.cpp</em> 兩種後端。選 llama.cpp 要填 <code>llama-cli</code> 路徑（有自動偵測鈕與檔案瀏覽器）與選用的 GGUF 模型路徑；選 Ollama 則填推論網址（預設 <code>http://localhost:11434</code>）。兩者旁邊都有健康指示燈。",
-            "models": "<strong>Model manager</strong>（Ollama 模式） — 輸入模型名稱按 <em>Download</em> 下載，有進度條；下方列出已安裝的模型（名稱、參數量、大小），可逐一刪除。",
+            "models": "<strong>Model manager</strong>（Ollama 模式） — 輸入模型名稱按 <em>⬇ 下載</em> 下載，有進度條；下方列出已安裝的模型（名稱、參數量、大小），可逐一刪除。",
             "benchmark": "<strong>Model benchmark</strong> — 對所有本機模型跑四項任務：技術棧偵測（輸出 JSON）、工作區一句話摘要、從文件清單挑最相關的一筆、解析 CLI 輸出並抽出問題與選項。結果表逐項打勾並附耗時，<strong>四題至少過三題（≥75%）</strong>才算通過；沒過的模型會從模型下拉選單裡藏起來。"
           },
-          "h4": "Extensions",
-          "p6": "三段：<strong>Bundled</strong>（隨附套件，例如 Bundled Git，可停用後再 <em>Restore</em>）、<strong>Installed</strong>（自行安裝的，列出敏感能力與相依，可 <em>Remove</em>）、<strong>Marketplace</strong>（搜尋並安裝）。",
-          "p7": "安裝是<strong>兩道確認</strong>，而且在確認之前不會寫入任何檔案：先是「信任發佈者」——畫面明說<em>有效的簽章只證明套件沒被竄改，不代表你願意執行這個發佈者的程式</em>；接著是「確認外掛權限」，列出它要求的敏感能力，並在帶有原生後端執行檔時特別警告。"
+          "h4": "擴充功能",
+          "p6": "政策那一塊底下才是外掛清單，分<strong>兩段</strong>：<strong>內建</strong>（隨附套件，例如 內建 Git，可停用後再 <em>還原</em>）與 <strong>已安裝</strong>（自行安裝的，列出敏感能力與相依，可 <em>移除</em>）。兩段的每一列底下都會多一行<em>Manifest Permissions</em> 與 <em>Package-version Grant</em>，寫明這個版本實際被授予什麼；對不到授權時寫「沒有相符的 Grant」。<strong>搜尋登錄庫並安裝新套件已經是另一個分頁「市集」</strong>，不在這裡。",
+          "p7": "安裝是<strong>兩道確認</strong>，而且在確認之前不會寫入任何檔案：先是「信任發佈者」——畫面明說<em>有效的簽章只證明套件沒被竄改，不代表你願意執行這個發佈者的程式</em>；接著是「確認外掛權限」，列出它要求的敏感能力，並在帶有原生後端執行檔時特別警告。",
+          "mirror": "<strong>下載鏡像</strong>：每個版本的檔案同時放在 GitHub Release 與 <code>dl.navide.dev</code>（同樣的位元，附 sha256 可比對）。檢查或下載時遇到<strong>網路層失敗</strong>（連不上、逾時、5xx／429），app 會自動把 feed 換成鏡像重試，換過之後<strong>這個 session 就一直用鏡像</strong>。<strong>404 與簽章／checksum 錯誤不會轉鏡像</strong>——鏡像放的是同一份檔，換過去只會同樣失敗，照原樣回報才有用。",
+          "policyIntro": "<strong>執行政策</strong>決定外掛的後端可以執行什麼。它<strong>不是獨立分頁</strong>，而是擴充功能分頁最上面那一塊，帶自己的層級徽章（使用者＋工作區）與政策檔路徑。最上面先顯示<em>目前生效的政策</em>：來源、模式，以及狀態 <em>生效中</em>／<em>已過期</em>／<em>無法使用</em>／<em>損壞</em>。",
+          "policy": {
+            "hostDefault": "<strong>Host 預設值</strong> — 內建的最小權限基準，標著<strong>唯讀</strong>。即使使用者政策的儲存區整個不見了它仍然可用，所以永遠有一條退路。",
+            "user": "<strong>使用者政策</strong> — 全域那一份，工作區選 User 來源時用的就是它，沒建過會寫「尚未建立」。三種模式：<em>完整</em>、<em>允許清單</em>、<em>拒絕清單</em>；可設「系統命名空間」與「Shell 可執行檔」，後者<strong>只收最上層可執行檔名稱</strong>，不接受路徑或 shell 運算式。",
+            "highRisk": "<strong>完整與拒絕清單都要勾一個確認框才能存</strong>，而且畫面把理由寫出來：完整模式允許任意可執行檔（包含高風險工具）與系統能力；拒絕清單模式是<strong>預設放行</strong>——列出名稱並不會縮小它實際授予的範圍，所以 Navide 一律把它當高風險選擇。",
+            "source": "<strong>工作區政策來源</strong> — 每個工作區各自選 Host 預設值／使用者政策／Repository 政策。<strong>Repository 建議在你親自檢視並按下「接受 Repository 政策」之前都標成「不受信任」</strong>，切換來源還要指紋精確相符；你看過之後它又被改動就變成「檢視後已變更」，得再按一次「再次檢查」。沒開工作區時這一塊不能選。",
+            "recovery": "<strong>全域政策儲存區</strong> — 狀態有正常／遺失／損壞／不安全的項目／不安全或無法使用的資料夾。損壞時可以<strong>重建全域政策</strong>，但要勾確認；重建只換全域政策與 revision 檔，工作區的來源選擇與 repository 政策檔案都保留。儲存區被判定為<strong>不安全</strong>時自動重建會停用，畫面要你自己去修它列出來的那幾個 Host-owned 路徑。",
+            "failClosed": "任何一種不健康狀態都是<strong>失敗關閉</strong>：在你明確選一個可用來源或修好它之前，什麼都不會被放行。連「存不確定」也一樣——訊息是「無法確認政策變更結果。政策仍維持失敗關閉，請重新檢查」。"
+          },
+          "policyNote": "要一次清掉所有 repository 來源 pin，用「重設所有政策來源選擇」，同樣要勾確認。它<strong>不會</strong>修改或刪除任何 repository 政策檔案，只是讓每個工作區之後重新依全域 Host 預設值或使用者政策解析。",
+          "extNote": "外掛後端出狀況時的分界：<strong>只有協定訊框（request／response／cancel）滿了才會終止那個後端</strong>；Host 通知滿了只是丟棄並計數，不會把整個外掛拖垮。乾淨結束的後端會把原因記下來，不再無聲消失。"
         },
         "s5": {
           "title": "Navide Cloud",
@@ -1672,29 +1691,29 @@
             "settings": "<strong>設定 ▸ Navide Cloud</strong> — 連線狀態、本機指紋，以及授權規則。<strong>登入相關的動作在這一頁是唯讀的</strong>，頁面自己會提示你去標題列那顆按鈕。"
           },
           "h1": "登入",
-          "p2": "帳號視窗未登入時有三個分頁：<em>Sign in</em>、<em>Create account</em>、<em>Use a token</em>。",
-          "p3": "用的是 <strong>Email + 密碼</strong>（至少 8 碼），<strong>沒有 magic link 登入</strong>，顯示名稱可留空。註冊後會寄一封<strong>驗證信</strong>，視窗上有 <em>Check now</em> 與 <em>Resend</em>；驗證是軟性的——沒驗證不會擋你用，只有要邀請別人時才要求先驗證。<em>Use a token</em> 是進階路徑：貼上伺服器發的 access token，<strong>存進系統 keychain 之後不再顯示</strong>。",
+          "p2": "帳號視窗未登入時有三個分頁：<em>登入</em>、<em>建立帳號</em>、<em>使用 Token</em>。",
+          "p3": "用的是 <strong>Email + 密碼</strong>（至少 8 碼），<strong>沒有 magic link 登入</strong>，顯示名稱可留空。註冊後會寄一封<strong>驗證信</strong>，視窗上有 <em>立即檢查</em> 與 <em>重新寄送</em>；驗證是軟性的——沒驗證不會擋你用，只有要邀請別人時才要求先驗證。<em>使用 Token</em> 是進階路徑：貼上伺服器發的 access token，<strong>存進系統 keychain 之後不再顯示</strong>。",
           "callout1": {
             "title": "目前沒有密碼重設",
             "text": "建立帳號的頁面自己就寫著這件事：密碼還沒有重設流程，請自己存好。"
           },
-          "p4": "伺服器位址是<strong>寫死的</strong>，設定裡沒有可改的欄位，帳號視窗只以唯讀的 <em>Server</em> 一列顯示它。連線狀態有六種：<code>Not signed in</code>、<code>Connecting…</code>、<code>Waiting for Keychain</code>、<code>Connected</code>、<code>Cannot reach the server</code>、<code>Access token rejected</code>。<em>Your network</em> 區塊有一個 <em>Turn off</em>／<em>Turn on</em> 開關可以暫時離線，帳號與設定都留著。",
+          "p4": "伺服器位址是<strong>寫死的</strong>，設定裡沒有可改的欄位，帳號視窗只以唯讀的 <em>伺服器</em> 一列顯示它。連線狀態有六種：<code>尚未登入</code>、<code>連線中…</code>、<code>等待鑰匙圈</code>、<code>已連線</code>、<code>無法連上伺服器</code>、<code>存取權杖遭拒</code>。<em>你的網路</em> 區塊有一個 <em>關閉</em>／<em>開啟</em> 開關可以暫時離線，帳號與設定都留著。",
           "h2": "配對兩台裝置",
-          "p5": "兩台機器都登入<strong>同一個帳號</strong>之後，對方會出現在 <em>Your network</em> 清單裡（含 Online／Offline、上次出現時間、開著幾個面板）。",
+          "p5": "兩台機器都登入<strong>同一個帳號</strong>之後，對方會出現在 <em>你的網路</em> 清單裡（含 Online／Offline、上次出現時間、開著幾個面板）。",
           "pairing": {
-            "step1": "在對方那一列按 <strong>Pair</strong>。",
+            "step1": "在對方那一列按 <strong>配對</strong>。",
             "step2": "兩邊螢幕各自跳出<strong>同一組六位數字</strong>，並列出對方的指紋。",
             "step3": "畫面寫著「Check that {'{'}裝置{'}'} is showing these same six digits.」——<strong>你要親眼比對兩台螢幕上的數字</strong>。",
-            "step4": "發起方按 <em>They match</em> / <em>They do not match</em>；接收方按 <em>Allow pairing</em> / <em>They do not match</em>。兩邊都可以按 <em>Later</em> 先擱著。",
-            "step5": "<strong>兩邊都確認之後才真的配對。</strong>單邊確認只會顯示「You confirmed. Waiting for the other device.」"
+            "step4": "發起方按 <em>一致</em> / <em>不一致</em>；接收方按 <em>允許配對</em> / <em>不一致</em>。兩邊都可以按 <em>稍後再說</em> 先擱著。",
+            "step5": "<strong>兩邊都確認之後才真的配對。</strong>單邊確認只會顯示「你已確認，等待對方確認。」"
           },
           "callout2": {
             "title": "數字不一樣就是有東西夾在中間",
             "text": "介面的原話是：「Different digits on the two screens means something is in between. Refuse, and nothing pairs.」這一步是整套信任的地基，不要因為麻煩就隨手按 match。"
           },
-          "note1": "配對碼有時效（約五分鐘），而且只存在記憶體裡——Backend 重啟會忘掉進行到一半的配對，重來即可。接收方不需要主動開什麼，請求會自己跳到畫面右上角。<em>Pair</em> 按鈕只在對方上線、尚未配對、而且是<strong>你自己帳號</strong>底下的裝置時才出現；別人的裝置得先敲門。",
+          "note1": "配對碼有時效（約五分鐘），而且只存在記憶體裡——Backend 重啟會忘掉進行到一半的配對，重來即可。接收方不需要主動開什麼，請求會自己跳到畫面右上角。<em>配對</em> 按鈕只在對方上線、尚未配對、而且是<strong>你自己帳號</strong>底下的裝置時才出現；別人的裝置得先敲門。",
           "h3": "信任、封鎖與解除配對",
-          "p6": "每台裝置三種狀態：<strong>Paired</strong>（已配對）、<strong>Not paired</strong>（尚未配對）、<strong>Blocked</strong>（已封鎖）；自己這台永遠標成 <em>This device</em>。帳號視窗上方的 <strong>Needs you</strong> 收兩種待辦：",
+          "p6": "每台裝置三種狀態：<strong>已配對</strong>（已配對）、<strong>尚未配對</strong>（尚未配對）、<strong>已封鎖</strong>（已封鎖）；自己這台永遠標成 <em>這台裝置</em>。帳號視窗上方的 <strong>Needs you</strong> 收兩種待辦：",
           "needsYouTable": {
             "kind": "種類",
             "content": "內容",
@@ -1703,33 +1722,43 @@
           "needsYou": {
             "pairing": {
               "content": "有裝置來敲門但還沒核准。",
-              "actions": "Not my device — block、Later"
+              "actions": "不是我的裝置，封鎖、稍後再說"
             },
             "accessRequest": {
               "content": "「{'{'}裝置{'}'} 想要碰 {'{'}工作區{'}'} 裡的 {'{'}面板{'}'}」，附嘗試次數。",
-              "actions": "Approve、Dismiss、Block"
+              "actions": "核准、略過、封鎖"
             }
           },
-          "p7": "<em>Approve</em> 的授權範圍很窄——介面明說「Approving writes a rule for exactly this pane. Nothing else on this device is granted.」<em>Later</em> 只是把它從清單收起來，對方下次再嘗試就會回來。",
+          "p7": "<em>核准</em> 的授權範圍很窄——介面明說「Approving writes a rule for exactly this pane. Nothing else on this device is granted.」<em>稍後再說</em> 只是把它從清單收起來，對方下次再嘗試就會回來。",
           "trust": {
-            "block": "<strong>封鎖</strong>：<em>Blocked</em> 區塊列出被封鎖的裝置，按 <em>Unblock</em> 解除。封鎖<strong>排在所有規則前面，連你自己的其他裝置也擋</strong>。",
-            "unpair": "<strong>解除配對</strong>：裝置列上的 <em>Unpair</em>，說明是「Forget this device. It is not blocked.」——忘掉這台，但不等於封鎖；下次它再出現會被當成第一次見到，對方那邊也會收到通知。對方離線時一樣可以解除。"
+            "block": "<strong>封鎖</strong>：<em>已封鎖</em> 區塊列出被封鎖的裝置，按 <em>解除封鎖</em> 解除。封鎖<strong>排在所有規則前面，連你自己的其他裝置也擋</strong>。",
+            "unpair": "<strong>解除配對</strong>：裝置列上的 <em>解除配對</em>，說明是「忘掉這台裝置。這不等於封鎖。」——忘掉這台，但不等於封鎖；下次它再出現會被當成第一次見到，對方那邊也會收到通知。對方離線時一樣可以解除。"
           },
-          "p8": "<strong>Device identity</strong> 區塊貼出身分異常的告示，最該注意的一則是<strong>金鑰換了</strong>：它的訊息會直接被拒收，畫面同時列出「記住的指紋」與「這次送來的指紋」，而且<strong>刻意不放任何按鈕</strong>——介面要你先去跟那台機器的擁有者當面對過再說。另外，若某台裝置一直都是加密傳訊、突然送來一則明文，那則也會被擋下並留下紀錄。",
+          "p8": "<strong>裝置身分</strong> 區塊貼出身分異常的告示，最該注意的一則是<strong>金鑰換了</strong>：它的訊息會直接被拒收，畫面同時列出「記住的指紋」與「這次送來的指紋」，而且<strong>刻意不放任何按鈕</strong>——介面要你先去跟那台機器的擁有者當面對過再說。另外，若某台裝置一直都是加密傳訊、突然送來一則明文，那則也會被擋下並留下紀錄。",
           "h4": "誰可以命令這台機器",
-          "p9": "設定 ▸ Navide Cloud 裡的規則卡，標題是 <em>Who may command panes on this device</em>。它<strong>只管從別台裝置進來的訊息</strong>，本機 agent 之間不受影響。",
+          "p9": "設定 ▸ Navide Cloud 裡的規則卡，標題是 <em>誰可以對這台裝置上的 pane 下指令</em>。它<strong>只管從別台裝置進來的訊息</strong>，本機 agent 之間不受影響。",
           "rules": {
             "denyAll": "<strong>預設全拒</strong>：「Nothing is allowed by default: a message is refused unless a rule below matches it.」",
-            "shape": "一條規則就是「<em>From</em>（哪個帳號／哪台裝置）→ <em>May reach</em>（哪個工作區／哪個面板）」，欄位<strong>留空表示不限</strong>。",
-            "ownDevices": "有一個現成的開關 <strong>Allow my own other devices</strong>：登入同一帳號的任何裝置都能碰這裡的任何面板，包含之後才加入的。",
+            "shape": "一條規則就是「<em>來源</em>（哪個帳號／哪台裝置）→ <em>可存取</em>（哪個工作區／哪個面板）」，欄位<strong>留空表示不限</strong>。",
+            "ownDevices": "有一個現成的開關 <strong>允許我自己的其他裝置</strong>：登入同一帳號的任何裝置都能碰這裡的任何面板，包含之後才加入的。",
             "online": "規則存在伺服器上，<strong>只有連線時才能改</strong>；離線時顯示的是最後收到的那一份。",
-            "signed": "規則用這台裝置的金鑰簽章。若出現「Your rules could not be verified」，在驗證前什麼都不會被接受，按 <em>Sign rules now</em> 重簽。"
+            "signed": "規則用這台裝置的金鑰簽章。若出現「你的規則驗證不過」，在驗證前什麼都不會被接受，按 <em>立即簽署規則</em> 重簽。"
           },
           "h5": "跨裝置傳訊",
           "p10": "位址是三段式 <code>&lt;裝置&gt;/&lt;工作區&gt;/&lt;面板&gt;</code>。兩段 <code>&lt;工作區&gt;/&lt;面板&gt;</code> 是同一台機器，一段就是自己工作區裡的面板名。<strong>本機解析永遠優先</strong>，本機找不到才去問跨裝置名冊。裝置那一段可以寫裝置 ID 或它的名字；名字如果對到不只一台，會直接回報歧義而不是猜一個。",
           "callout3": {
             "title": "這是給 agent 用的位址",
             "text": "面板輸入框的 <code>{'@'}</code> 提及選單只列<strong>本機</strong>的面板（含同一台機器上其他視窗的），沒有插入跨裝置位址的按鈕。跨裝置位址是寫在 agent 的 <code>to:</code> 那一行、或由 MCP 工具送出的（見本面板的「Agent 協作」分頁）。送不到時的回覆是 <code>device-offline</code>、<code>unknown-target</code>、<code>link-offline</code> 或 <code>link-unauthorized</code>；另外，回覆串接不跨機器。"
+          },
+          "h6": "同步（讓幾台機器的設定一致）",
+          "p11": "設定 ▸ Navide Cloud 最上面那一塊叫「同步」。<strong>它不是獨立分頁</strong>，就是這一頁的第一個區塊。每個可同步的範圍一列一個開關；打開之後那一塊會在登入<strong>同一個帳號</strong>的每台裝置上保持一致，內容<strong>在本機加密</strong>，伺服器只存它沒有金鑰的密文。",
+          "sync": {
+            "scopes": "<strong>可以打開的有四個</strong>：<em>提示詞</em>（提示技能與 Loop 提示詞）、<em>MCP</em>（你在 Navide 加的 server，其中的秘密加密後才離開這台機器）、<em>技能</em>（哪些技能開著、各自送給哪幾家 CLI；技能檔案本身還沒做）、<em>記憶</em>（全域指示檔例如 <code>~/.claude/CLAUDE.md</code>；專案裡的那些留給 git）。",
+            "credentials": "<strong>憑證</strong>這一列<strong>列出來但停用</strong>，說明寫的是「尚未支援同步」。它不是「預設關閉、等你去打開」——現在按不動。",
+            "states": "兩種狀態會寫在區塊底下：<em>未連線</em>（已開的範圍會在連線恢復後自動補上）與<em>這台裝置還沒有同步金鑰</em>（拿到之前不會上傳任何東西）。另有一顆<em>立即同步</em>，只有連線時能按。",
+            "key": "<strong>同步金鑰只顯示 id 的前 8 碼</strong>，金鑰本身永遠不出現。<em>更換金鑰</em>是<strong>兩段式</strong>：按第一次會變成<em>立即更換</em>，旁邊多一顆<em>取消</em>。更換會讓現有金鑰退役、所有同步記錄改用新金鑰重新加密，其他裝置在下次交換金鑰時取得新的——懷疑金鑰外洩時才用它。",
+            "legacy": "只有在「這台裝置上有一把帳號綁定之前的舊金鑰、而這個帳號還沒有金鑰」時，才會出現<em>採用為此帳號的金鑰</em>。它是一次性的：不採用就讀不到當初用那把金鑰同步過的內容，而直接發一把新的會讓那些記錄永久解不開。",
+            "conflicts": "兩台裝置改了同一項時<strong>沒有任何一邊被覆蓋</strong>，而是列成「需要你決定」，兩邊內容並排、由你按<em>保留這邊</em>或<em>保留那邊</em>。憑證類的衝突只顯示是哪個槽位（<code>廠商 / 槽位</code>），不顯示內容。"
           }
         },
         "s6": {
@@ -1750,26 +1779,34 @@
               "value": "資源控管介面（本頁第 7 章）。"
             },
             "standard": {
-              "value": "標準 macOS 視窗操作。Zoom 是把視窗框放到最大，跟面板內容的字級縮放無關。"
+              "value": "標準 macOS 視窗操作。Zoom 是把視窗框放到最大，跟面板內容的字級縮放無關。",
+              "label": "Minimize / Zoom / Bring All to Front"
+            },
+            "turnStats": {
+              "value": "開「每輪消耗」對話框（本頁第 8 章）。"
+            },
+            "tokenMonitor": {
+              "value": "開「Token 監看」獨立視窗（本頁第 8 章）。",
+              "label": "Token 監看"
             }
           },
-          "note1": "Pipeline Manager 與 Resource Manager 是<strong>在主視窗裡開的對話框</strong>，不是另外的作業系統視窗。Window 選單這四項都沒有快捷鍵。",
+          "note1": "流程管理、資源控管與每輪消耗是<strong>在主視窗裡開的對話框</strong>，不是另外的作業系統視窗；<strong>Token 監看才是真正的獨立原生視窗</strong>（1200×800），它不隨工作區視窗關掉。Window 選單這幾項<strong>都沒有快捷鍵</strong>。",
           "pipeline": {
-            "p1": "兩個分頁。<strong>Pipelines</strong> 一條流程由數個 stage 組成，stage 可設 ID、標題、<em>Sentinel</em>（結束標記，例如 <code>---DONE---</code>）與是否 <em>Pause for user answers</em>；每個 stage 底下至少掛一個 slot，slot 要指定 <em>Agent</em>、<em>Role Key</em>、顯示名稱與 <em>Kickoff Body</em>（開場提示），並可勾 <strong>Designate as global manager</strong>——被指定的 slot 做完自己的事之後轉為跨 stage 的協調者，<strong>一條流程只能有一個</strong>。內建流程被改壞了可以按 <em>Reset to factory stages</em> 還原（會先確認，不可復原）。",
-            "p2": "<strong>Roles</strong> 分頁管角色本身（Key、Label、一句話摘要、System prompt），並註明<strong>改動只影響之後新開的面板</strong>。兩個分頁都有 <em>⬇ Export JSON</em>／<em>⬆ Import JSON</em>／<em>↺ Reset to Defaults</em>。"
+            "p1": "兩個分頁。<strong>流程</strong> 一條流程由數個 stage 組成，stage 可設 ID、標題、<em>終止標記</em>（結束標記，例如 <code>---DONE---</code>）與是否 <em>暫停以等待使用者回答</em>；每個 stage 底下至少掛一個 slot，slot 要指定 <em>Agent</em>、<em>角色識別碼</em>、顯示名稱與 <em>啟動提示</em>（開場提示），並可勾 <strong>🎯 指定為全域管理者</strong>——被指定的 slot 做完自己的事之後轉為跨 stage 的協調者，<strong>一條流程只能有一個</strong>。內建流程被改壞了可以按 <em>重設為原廠階段</em> 還原（會先確認，不可復原）。",
+            "p2": "<strong>角色</strong> 分頁管角色本身（識別碼、名稱、一句話摘要、系統提示詞），並註明<strong>改動只影響之後新開的面板</strong>。兩個分頁都有 <em>⬇ 匯出 JSON</em>／<em>⬆ 匯入 JSON</em>／<em>↺ 還原預設值</em>。"
           },
           "h2": "Help 選單",
           "helpMenu": {
-            "github": "<strong>Navide on GitHub</strong>、<strong>Report an Issue…</strong> — 開到 GitHub 專案與 issue 頁。",
-            "shortcuts": "<strong>Keyboard Shortcuts</strong> — 開設定的 Shortcuts 分頁。這個選單項<strong>不帶快捷鍵標示</strong>，鍵盤走的是 <kbd class=\"syh-kbd\">⌘K</kbd> <kbd class=\"syh-kbd\">⌘S</kbd> 這組和弦。",
-            "legal": "法律頁面六條，依序 <em>Privacy</em>、<em>Security Policy</em>、<em>Code of Conduct</em>、<em>Boundaries</em>、<em>Licenses</em>、<em>Legal</em>，都開到 navide.dev 上對應的頁。（<strong>沒有服務條款</strong>，這是刻意的。）"
+            "github": "<strong>在 GitHub 上的 Navide</strong>、<strong>回報問題…</strong> — 開到 GitHub 專案與 issue 頁。",
+            "shortcuts": "<strong>鍵盤快捷鍵</strong> — 開設定的快捷鍵分頁。這個選單項<strong>不帶快捷鍵標示</strong>，鍵盤走的是 <kbd class=\"syh-kbd\">⌘K</kbd> <kbd class=\"syh-kbd\">⌘S</kbd> 這組和弦。",
+            "legal": "法律頁面六條，依序 <em>隱私權</em>、<em>安全性政策</em>、<em>行為準則</em>、<em>使用界線</em>、<em>授權條款</em>、<em>法律資訊</em>，都開到 navide.dev 上對應的頁。（<strong>沒有服務條款</strong>，這是刻意的。）"
           },
           "callout1": {
             "title": "View 選單少了幾個東西是故意的",
-            "text": "Electron 內建的整窗縮放（<em>Zoom In</em>／<em>Zoom Out</em>／<em>Actual Size</em>）被拿掉了，因為 Navide 自己有兩條縮放軸：<kbd class=\"syh-kbd\">⌘=</kbd>／<kbd class=\"syh-kbd\">⌘-</kbd>／<kbd class=\"syh-kbd\">⌘0</kbd> 改終端機<strong>內容</strong>的字級，<kbd class=\"syh-kbd\">⇧⌘=</kbd>／<kbd class=\"syh-kbd\">⇧⌘-</kbd>／<kbd class=\"syh-kbd\">⇧⌘0</kbd> 改<strong>整體介面縮放</strong>（設定 ▸ Appearance ▸ Interface Scale）。原生 role 留著的話，它們的 accelerator 會搶在這兩者前面。<kbd class=\"syh-kbd\">⌘R</kbd> 也改成「重建焦點面板」，重新載入整個視窗改用 <kbd class=\"syh-kbd\">⇧⌘R</kbd>，選單裡則是一個不帶快捷鍵的 <em>Reload Window</em>。<kbd class=\"syh-kbd\">⌘W</kbd> 在 macOS 上留給了「關閉分頁」，所以關視窗只剩紅綠燈或 <kbd class=\"syh-kbd\">⌘Q</kbd>。"
+            "text": "Electron 內建的整窗縮放（<em>Zoom In</em>／<em>Zoom Out</em>／<em>Actual Size</em>）被拿掉了，因為 Navide 自己有兩條縮放軸：<kbd class=\"syh-kbd\">⌘=</kbd>／<kbd class=\"syh-kbd\">⌘-</kbd>／<kbd class=\"syh-kbd\">⌘0</kbd> 改終端機<strong>內容</strong>的字級，<kbd class=\"syh-kbd\">⇧⌘=</kbd>／<kbd class=\"syh-kbd\">⇧⌘-</kbd>／<kbd class=\"syh-kbd\">⇧⌘0</kbd> 改<strong>整體介面縮放</strong>（設定 ▸ 外觀 ▸ 介面縮放）。原生 role 留著的話，它們的 accelerator 會搶在這兩者前面。<kbd class=\"syh-kbd\">⌘R</kbd> 也改成「重建焦點面板」，重新載入整個視窗改用 <kbd class=\"syh-kbd\">⇧⌘R</kbd>，選單裡則是一個不帶快捷鍵的 <em>重新載入視窗</em>。<kbd class=\"syh-kbd\">⌘W</kbd> 在 macOS 上留給了「關閉分頁」，所以關視窗只剩紅綠燈或 <kbd class=\"syh-kbd\">⌘Q</kbd>。"
           },
           "h3": "Schedule（排程）— 不是獨立視窗",
-          "p1": "這台機器的背景排程列在<strong>右側槽的一個分頁</strong>裡，分頁名稱是 <strong>Schedule</strong>（🗓），也可以搬到上下兩槽。它不是從 Window 選單開的視窗。macOS 上分三段；Linux 只有 crontab 一段；Windows 依設計什麼都不列——Navide 本身從不建立排程工作，而工作排程器已經在管理機器上的工作。",
+          "p1": "這台機器的背景排程列在<strong>右側槽的一個分頁</strong>裡，分頁名稱是 <strong>排程</strong>（🗓），也可以搬到上下兩槽。它不是從 Window 選單開的視窗。macOS 上分三段；Linux 只有 crontab 一段；Windows 依設計什麼都不列——Navide 本身從不建立排程工作，而工作排程器已經在管理機器上的工作。",
           "scheduleTable": {
             "section": "區塊",
             "source": "來源",
@@ -1789,8 +1826,8 @@
               "actions": "整段唯讀"
             }
           },
-          "p2": "系統層唯讀是因為動它們需要 root，而 Navide 從不要求——後端也擋著，不只是介面不給按。這也是為什麼 daemon 自成一段：它們的狀態多半只能顯示成 <code>State unknown (requires root)</code>。每一列可展開看 Schedule／Command／Raw line，或 Label／Scope／Plist path／Last exit code／State。移除 LaunchAgent 會<strong>卸載並永久刪除它的 plist</strong>，會先跳確認。",
-          "note2": "這裡<strong>沒有「立刻執行」也沒有「在 Finder 顯示」</strong>，只有停用／啟用與移除兩種動作。上方有 <em>Rescan</em> 與上次掃描時間。",
+          "p2": "系統層唯讀是因為動它們需要 root，而 Navide 從不要求——後端也擋著，不只是介面不給按。這也是為什麼 daemon 自成一段：它們的狀態多半只能顯示成 <code>狀態未知（需 root）</code>。每一列可展開看 排程／指令／原始內容，或 Label／層級／plist 路徑／上次結束碼／狀態。移除 LaunchAgent 會<strong>卸載並永久刪除它的 plist</strong>，會先跳確認。",
+          "note2": "這裡<strong>沒有「立刻執行」也沒有「在 Finder 顯示」</strong>，只有停用／啟用與移除兩種動作。上方有 <em>重新掃描</em> 與上次掃描時間。",
           "h4": "其他從 UI 開的視窗",
           "otherTable": {
             "window": "視窗",
@@ -1799,7 +1836,7 @@
           "otherWindows": {
             "mainWindow": {
               "window": "新的主視窗",
-              "how": "File ▸ New Window（⌘N）"
+              "how": "檔案 ▸ 開新視窗（⌘N）"
             },
             "editor": {
               "window": "編輯器（Mini-IDE）視窗",
@@ -1807,7 +1844,7 @@
             },
             "git": {
               "window": "Git 視窗",
-              "how": "Git 面板標題列的 Open in New Window，或 ⌘⇧G"
+              "how": "Git 面板標題列的 在新視窗開啟，或 ⌘⇧G"
             },
             "diff": {
               "window": "差異檢視",
@@ -1823,7 +1860,7 @@
             },
             "draggedGroup": {
               "window": "拖出來的群組視窗",
-              "how": "把上方的 tab 拖到視窗外放開；標題列的 Merge back 併回去（見本面板的「工作區與面板」分頁第 5 章）"
+              "how": "把上方的 tab 拖到視窗外放開；標題列的 收回主視窗 併回去（見本面板的「工作區與面板」分頁第 5 章）"
             },
             "draggedWorkspace": {
               "window": "拖出來的工作區視窗",
@@ -1832,29 +1869,29 @@
           },
           "callout2": {
             "title": "兩個容易誤會的地方",
-            "text": "<strong>Git History 沒有自己的視窗</strong>——「View full history」開的是 Git 視窗裡的歷史檢視。<strong><kbd class=\"syh-kbd\">⌘⇧D</kbd> 也不再開視窗</strong>，它只是把左側側欄切到 Plans 分頁；要開 Plan 視窗得從計畫文件本身開。"
+            "text": "<strong>Git History 沒有自己的視窗</strong>——「查看完整歷史」開的是 Git 視窗裡的歷史檢視。<strong><kbd class=\"syh-kbd\">⌘⇧D</kbd> 也不再開視窗</strong>，它只是把左側側欄切到 Plans 分頁；要開 Plan 視窗得從計畫文件本身開。"
           },
           "note3": "同一個工作區已經在別的視窗開著時，Navide 不會再開一份，而是把那個視窗叫到前面。"
         },
         "s7": {
           "title": "資源與維護",
           "h1": "資源控管",
-          "p1": "兩個入口看同一份資料：狀態列的資源藥丸（小面板），與 <strong>Window ▸ Resource Manager</strong>（完整介面）。列的是<strong>整台機器</strong>的 CLI，不只這個視窗的。",
+          "p1": "兩個入口看同一份資料：狀態列的資源藥丸（小面板），與 <strong>視窗 ▸ 資源控管</strong>（完整介面）。列的是<strong>整台機器</strong>的 CLI，不只這個視窗的。",
           "resource": {
-            "columns": "欄位：<em>Name</em>、<em>Trend</em>（最近走勢的小折線）、<em>CPU</em>、<em>Memory</em>；閒置與否只看名稱前面那顆圓點的顏色，沒有文字標籤。",
-            "totals": "上方是 CPU 與記憶體總量，各附一行「佔這台機器多少」，以及 <em>Refresh</em>。",
-            "filters": "篩選 <em>All</em>／<em>Running</em>／<em>Idle</em>，排序 Memory／CPU／Name。",
-            "actions": "<strong>每列只有兩個動作</strong>：點名稱＝跳到那個面板（並關掉這個介面），或按 <em>Reclaim</em> 回收它。<strong>沒有強制結束</strong>。",
-            "autoReclaim": "底下一行寫著目前的自動回收設定（開／關、幾分鐘），旁邊 <em>Settings</em> 直接跳過去調。",
-            "disk": "上方第三張卡 <strong>Disk</strong> 與底下的 <strong>Storage</strong> 區段是同一份掃描（見下一節）；掃描只在按下 <em>Scan</em> 時才跑，開啟介面不會自動掃。"
+            "columns": "欄位：<em>名稱</em>、<em>走勢</em>（最近走勢的小折線）、<em>CPU</em>、<em>記憶體</em>；閒置與否只看名稱前面那顆圓點的顏色，沒有文字標籤。",
+            "totals": "上方是 CPU 與記憶體總量，各附一行「佔這台機器多少」，以及 <em>重新整理</em>。",
+            "filters": "篩選 <em>全部</em>／<em>執行中</em>／<em>閒置</em>，排序 記憶體／CPU／名稱。",
+            "actions": "<strong>每列只有兩個動作</strong>：點名稱＝跳到那個面板（並關掉這個介面），或按 <em>回收</em> 回收它。<strong>沒有強制結束</strong>。",
+            "autoReclaim": "底下一行寫著目前的自動回收設定（開／關、幾分鐘），旁邊 <em>設定</em> 直接跳過去調。",
+            "disk": "上方第三張卡 <strong>磁碟 · 本 app 佔用</strong> 與底下的 <strong>儲存空間</strong> 區段是同一份掃描（見下一節）；掃描只在按下 <em>掃描</em> 時才跑，開啟介面不會自動掃。"
           },
-          "note1": "數字是<strong>整棵行程樹</strong>一起算的。正在忙的面板按回收會被跳過並回報 <code>Still busy — reclaim skipped.</code>；面板已經關掉則回報 <code>That pane is no longer open.</code>",
+          "note1": "數字是<strong>整棵行程樹</strong>一起算的。正在忙的面板按回收會被跳過並回報 <code>還在忙，這次略過回收。</code>；面板已經關掉則回報 <code>這個 pane 已經不在了。</code>",
           "callout1": {
             "title": "記憶體是啟動地板，不是慢慢長出來的",
             "text": "一個閒著的 CLI 仍然抓著它啟動時要走的記憶體，<strong>常常是每個 200–300 MB</strong>。這是啟動成本，不會因為你「定期重啟它」而變少——重啟只是把同樣的地板重新付一次。真正能把記憶體拿回來的手段只有<strong>回收</strong>：結束那個行程，面板變成點一下就繼續的佔位卡，對話從 CLI 自己的 transcript 接回來（見本面板的「工作區與面板」分頁第 3 章）。"
           },
-          "h2": "Storage（磁碟用量與清理）",
-          "p2": "Resource Manager 進程表下方的 <strong>Storage</strong> 區段（點標題展開／收合）。掃描這個 app、各家 CLI 的家目錄、以及你開過的工作區佔了多少磁碟，共 <strong>25 個項目分四大類</strong>，其中 17 項可清理。",
+          "h2": "儲存空間（磁碟用量與清理）",
+          "p2": "資源控管進程表下方的 <strong>儲存空間</strong> 區段（點標題展開／收合）。掃描這個 app、各家 CLI 的家目錄、以及你開過的工作區佔了多少磁碟，共 <strong>25 個項目分四大類</strong>，其中 17 項可清理。",
           "storageTable": {
             "category": "分類",
             "examples": "內容舉例"
@@ -1873,17 +1910,17 @@
               "value": "孤兒／過期的 agent 記錄、pipeline 歷史與執行記錄、計畫歷史"
             }
           },
-          "p3": "每一項標一個風險等級 <strong>Safe</strong>／<strong>Caution</strong>／<strong>Danger</strong>，動不得的標 <em>Not removable</em>；<em>Paths</em> 可展開看實際路徑。標題列的 <em>Stale threshold</em>（7／30／90 天，預設 30）決定「多久沒動過才算過期、才可清理」。",
-          "p4": "標題列的兩顆清理鈕：<em>Clean safe items</em> 一次清掉所有安全項；<em>Clean selected</em> 清你自己勾的。兩者都會跳確認框寫明大約釋出多少空間，勾到 Danger 項時另外警告。",
+          "p3": "每一項標一個風險等級 <strong>安全</strong>／<strong>注意</strong>／<strong>危險</strong>，動不得的標 <em>無法移除</em>；<em>路徑</em> 可展開看實際路徑。標題列的 <em>陳舊判定天數</em>（7／30／90 天，預設 30）決定「多久沒動過才算過期、才可清理」。",
+          "p4": "標題列的兩顆清理鈕：<em>清理安全項目</em> 一次清掉所有安全項；<em>清理已選項目</em> 清你自己勾的。兩者都會跳確認框寫明大約釋出多少空間，勾到「危險」項時另外警告。",
           "callout2": {
             "title": "刪掉就沒了",
-            "text": "確認鈕寫的是 <em>Delete permanently</em>——不是丟到垃圾桶。真正需要用到 <em>Clean selected</em> 的只有一項：<strong>CLI conversation history</strong>（各家 CLI 的對話歷史），它是唯一既標 Danger 又可清理的項目。清掉之後那些對話就接不回來了。"
+            "text": "確認鈕寫的是 <em>永久刪除</em>——不是丟到垃圾桶。真正需要用到 <em>清理已選項目</em> 的只有一項：<strong>CLI 對話歷史</strong>（各家 CLI 的對話歷史），它是唯一既標「危險」又可清理的項目。清掉之後那些對話就接不回來了。"
           },
           "h3": "孤兒行程與 Backend",
           "orphans": {
-            "leftover": "<strong>殘留的 CLI 行程</strong> — 狀態列出現 <code>⚠ N leftover</code> 時點開，會問「Found N leftover CLI process(es) from a previous run — they can exhaust memory. Clean them up?」，按 <em>Clean up</em> 清掉、<em>Dismiss</em> 略過。這些是上一輪執行沒收乾淨的行程。",
-            "backend": "<strong>Backend</strong> — 狀態列的 Backend 藥丸點開有位址、PID，以及兩顆鈕：<em>Restart</em>（沒連上時顯示 <em>Start</em>）與 <em>Stop</em>（只有連上時能按）。<strong>重啟 Backend 會一併帶走所有 CLI 行程</strong>；想讓它回來之後自動接續對話，就把 General 分頁的 <em>Resume sessions after a backend restart</em> 打開。",
-            "timeout": "Backend 起太慢而報錯時，調 Appearance 分頁的 <em>Backend Startup Timeout</em>（15–120 秒）。"
+            "leftover": "<strong>殘留的 CLI 行程</strong> — 狀態列出現 <code>⚠ N 殘留</code> 時點開，會問「偵測到 N 個先前殘留的 CLI 程序 — 可能耗盡記憶體。要清理嗎？」，按 <em>清理</em> 清掉、<em>關閉</em> 略過。這些是上一輪執行沒收乾淨的行程。",
+            "backend": "<strong>Backend</strong> — 狀態列的 Backend 藥丸點開有位址、PID，以及兩顆鈕：<em>Restart</em>（沒連上時顯示 <em>Start</em>）與 <em>Stop</em>（只有連上時能按）。<strong>重啟 Backend 會一併帶走所有 CLI 行程</strong>；想讓它回來之後自動接續對話，就把一般分頁的 <em>後端重啟後自動接回工作階段</em> 打開。",
+            "timeout": "Backend 起太慢而報錯時，調一般分頁的 <em>後端啟動逾時</em>（15–120 秒）。"
           },
           "h4": "維護動作速查",
           "maintenanceTable": {
@@ -1893,15 +1930,15 @@
           "maintenance": {
             "memory": {
               "symptom": "記憶體吃太兇",
-              "where": "Resource Manager ▸ Reclaim；或設定 ▸ General 調低閒置門檻"
+              "where": "資源控管 ▸ 回收；或設定 ▸ 一般，調低閒置門檻"
             },
             "disk": {
               "symptom": "磁碟滿了",
-              "where": "Window ▸ Resource Manager ▸ Storage ▸ Clean safe items"
+              "where": "視窗 ▸ 資源控管 ▸ 儲存空間 ▸ 清理安全項目"
             },
             "leftover": {
-              "symptom": "狀態列有 ⚠ N leftover",
-              "where": "點它，按 Clean up"
+              "symptom": "狀態列有 ⚠ N 殘留",
+              "where": "點它，按「清理」"
             },
             "unresponsive": {
               "symptom": "面板全部沒反應",
@@ -1909,7 +1946,7 @@
             },
             "shortcutClash": {
               "symptom": "快捷鍵互相打架",
-              "where": "設定 ▸ Shortcuts ▸ Conflicts 篩選器"
+              "where": "設定 ▸ 快捷鍵 ▸ 衝突 篩選器"
             },
             "stubbornKey": {
               "symptom": "某個鍵怎麼改都沒用",
@@ -1925,8 +1962,71 @@
             },
             "moveSettings": {
               "symptom": "設定要搬到另一台機器",
-              "where": "設定視窗底部 ▸ Export bundle"
+              "where": "設定 ▸ 一般 ▸ 設定管理 ▸ 匯出設定全集"
+            },
+            "tokenSpend": {
+              "symptom": "想知道 token 花在哪一輪",
+              "where": "Window ▸ 每輪消耗；整台機器的 Claude 歷史看 Window ▸ Token 監看"
             }
+          }
+        },
+        "s8": {
+          "title": "用量：Token 監看、每輪消耗與額度週期",
+          "p1": "三個看用量的介面很容易搞混，先把歸屬分清楚——它們的<strong>資料來源不同、看的範圍不同，也不在同一個地方開</strong>。",
+          "whichTable": {
+            "surface": "介面",
+            "where": "在哪裡開",
+            "scope": "看的是什麼"
+          },
+          "surfaces": {
+            "tokenMonitor": {
+              "where": "只有 <strong>Window ▸ Token 監看</strong>一個入口，開出來是獨立原生視窗",
+              "scope": "這台機器上的 Claude 歷史（掃 session 記錄檔）。<strong>沒有帳號維度。</strong>",
+              "label": "Token 監看"
+            },
+            "turnStats": {
+              "where": "Window ▸ 每輪消耗、命令 <code>ui.window.openTurnStats</code>，或右側 TOKENS 面板的 <code>≡</code> 鈕——三個入口都是主視窗裡的同一個對話框",
+              "scope": "你選的<strong>單一面板</strong>的 transcript，即時掃描；有帳號篩選與每一回合的 CLI 版本"
+            },
+            "quotaCycles": {
+              "where": "沒有自己的入口：在每輪消耗左側清單的<strong>「帳號」區段</strong>點一個帳號，右半邊就換成它",
+              "scope": "那個帳號的額度視窗——每個週期的消耗、最高 %、有沒有耗完——以及月度與年度彙總",
+              "label": "額度週期"
+            }
+          },
+          "h1": "Token 監看（獨立視窗）",
+          "p2": "視窗標題是 <strong>Claude Token 監看</strong>，1200×800，<strong>單頁往下捲、沒有分頁</strong>。副標直接把界線寫出來：<strong>本機 Claude 歷史 · 帳號歸屬未知</strong>。它只認 Claude，別家 CLI 不在這裡。",
+          "tokenMonitor": {
+            "controls": "上方兩個下拉：<strong>天數</strong> 14／30／90，以及<strong>模型</strong>（可選全部）。旁邊是<em>重新整理</em>，後端沒連上時按不動。",
+            "stats": "五個數字：<strong>輪數、總 Token、每輪平均、中位數、每輪平均輸出</strong>。底下一行寫已掃描／可用 session 數與資料時間。",
+            "comparison": "<strong>最近 7 天與前 7 天</strong>的輸出比較：樣本數、平均、中位數與變化百分比。兩期各<strong>至少 10 輪</strong>、且前期不為零才算得出來，否則寫「樣本不足」。畫面自己註明這只是描述觀察到的變化——<strong>Effort 與任務難度未知，下降不能證明額度被縮減</strong>。",
+            "charts": "五張<strong>每回合</strong>趨勢圖。強調色那條是<strong>最近 10 輪的移動平均</strong>，灰色是各輪原值；<strong>橫軸是依時間排序的輪次、等距，不是經過時間</strong>。",
+            "table": "本機 Claude 回合歷史表，<strong>每頁 100 列</strong>，欄位是時間、session（id 前 8 碼／輪次）、模型、各項 token 與呼叫次數。",
+            "quota": "最下面是額度散點圖，<strong>按 reset window 分群</strong>、一個週期一張。百分比來自供應商，圖上寫明橫軸是「依記錄順序排列的快照」，也寫明<strong>不能把本機 token 換算成帳號額度上限</strong>。還沒有樣本時它會告訴你要在設定裡開 Claude 額度輪詢並讓 Navide 持續執行——<strong>歷史上限無法從 token 記錄反推</strong>。"
+          },
+          "callout1": {
+            "title": "這個視窗刻意沒有帳號維度",
+            "text": "副標寫的就是<strong>「帳號歸屬未知」</strong>：它掃的是這台機器上的 Claude session 記錄檔，而那些 session 可能屬於不同帳號；額度快照也只涵蓋 Navide 執行期間的<strong>目前設定槽</strong>，而槽位不等於已驗證的帳號身分。要按帳號看，去<strong>每輪消耗</strong>那邊。另外，掃描被截斷或有讀取錯誤時，畫面會掛出<strong>「歷史資料不完整」</strong>並把輸出比較鎖起來——不給你一個算在半份資料上的百分比。"
+          },
+          "h2": "每輪消耗（主視窗對話框）",
+          "p3": "左邊是依<strong>工作區分組</strong>的面板清單，每列寫廠商與工作區，並可能掛額度藥丸或 <code>⛔</code> 上限標記；<strong>不提供 token 用量的 CLI（antigravity、cursor）灰掉但不隱藏</strong>，滑上去寫「不提供 token 用量」。從沒啟動過的佔位面板標「尚未啟動」。清單最下面另有一個<strong>「帳號」區段</strong>（見下一節）。",
+          "turnStats": {
+            "columns": "右邊是那個面板的逐輪表格：時間、提示摘要、In／Cache R／Cache W／Out／總計、呼叫，再加上<strong>帳號</strong>與<strong>版本</strong>兩欄。標題列寫著這份資料是<em>精確</em>還是<em>推斷</em>——推斷是以 turn 結束訊號切的，長工具呼叫可能被切成兩輪。",
+            "account": "<strong>帳號 chip 篩選</strong>在表格上方（含「全部」），各附輪數；切換後表格會分帳號小計。對不到帳號的輪次列在<strong>「未知」</strong>，畫面直接寫「釘選記錄建立前的輪次，對不到帳號」——不假裝有帳號。",
+            "version": "<strong>版本欄預設顯示</strong>，可用標題列的鈕收起。另有一張「<strong>各 CLI 版本平均每輪消耗</strong>」長條圖，<strong>預設折疊</strong>，用來回答「升版有沒有變貴」；點長條會把表格篩成那個版本，旁邊有清除鈕。",
+            "export": "<em>匯出 CSV</em> 會把版本一起帶出去，<em>重新掃描</em>重讀 transcript。讀不到時的訊息分得很細：沒有可讀的 session、記錄檔已不在磁碟上、沒有這個 CLI 的讀取器、從沒啟動過。"
+          },
+          "note1": "<code>⛔</code> 標的是<strong>最近一次</strong>偵測到額度上限時進行中的那一輪。每個面板只留最近一次，而偵測是<strong>每 5 秒輪詢</strong>，所以它可能晚一輪。另外別把 CLI 底部 footer 的 tokens 當累計——那是 context 大小；Claude 每輪重讀整個 context，所以 Cache R 會遠大於其他欄。",
+          "h3": "額度週期（在每輪消耗裡面）",
+          "p4": "在左側「帳號」區段點一個帳號，右半邊就從逐輪表換成這個帳號的額度週期，標題帶廠商與是不是 <em>active</em>。三個分頁：<strong>週期</strong>、<strong>月度</strong>、<strong>年度</strong>。",
+          "quotaCycles": {
+            "tabs": "「週期」分頁上方用 <strong>chip 選視窗種類</strong>：滾動 5 小時的那個 chip 寫 <code>Session (5h)</code>，另外還有 <code>weekly</code>、<code>weekly-model</code>（只算某個模型）、<code>monthly</code>、<code>cycle</code>。有哪幾個 chip 取決於這個帳號實際有哪幾種週期。",
+            "cycle": "週期表一列一個視窗：<strong>起 → 重置</strong>、最高 %、耗完時刻、token 明細（In／Cache R／Cache W／Out／總計）、呼叫、輪數；摘要寫「共 N 個週期 · 耗完 M 次」。<strong>週期起點是「重置時間 − 視窗長度」</strong>，週期內的 token 是<strong>釘在這個帳號的所有面板加總</strong>；耗完時刻取第一個 100% 樣本，所以<strong>實際撞牆最多早 15 分鐘</strong>。長條圖上紅點＝耗完，耗完的長條等高代表容量估計可信。",
+            "periods": "「月度」與「年度」表的欄位是 <strong>5h 週期數</strong>、耗完次數、平均／耗完週期、<strong>Weekly 耗完</strong>，並附一張依帳號分色的總量長條圖（點長條可標示那一期）。同一頁另有一張<strong>「全部帳號」佔比表</strong>。切片記錄上線前就結案的週期會標「無 token 明細」——有額度樣本，但沒有其間的 token 明細，平均只取有明細的那幾個。"
+          },
+          "callout2": {
+            "title": "帳號維度有起算點，畫面會說",
+            "text": "帳號歸屬是<strong>從釘選記錄上線那天起</strong>才有的。之前的用量一律列在<strong>「未知」</strong>，畫面上的原話是「帳號維度從釘選記錄上線起記；之前的用量列在『未知』，不假裝有帳號」，以及逐輪表那句「釘選記錄建立前的輪次，對不到帳號」。所以看到早期資料全掛在「未知」底下，那不是壞了。另外，「未知」這一列<strong>沒有額度視窗可看</strong>——點它只會告訴你對不到帳號的紀錄沒有額度視窗。"
           }
         }
       },
@@ -2008,9 +2108,9 @@
           "p1": "Agent 把程式改完之後，你要做的事有三件：看它改了什麼、決定要不要收、把計畫推到下一步。Navide 為此準備了三個面，各自都能當側欄分頁用，也都能開成<strong>獨立視窗</strong>。",
           "cards": {
             "git": {
-              "title": "Git（Source Control）",
+              "title": "Git（原始碼控制）",
               "tag": "側欄第 4 個分頁",
-              "text": "工具提示寫著 <em>Git (⌘4)</em>。在主視窗按 <kbd class=\"cwh-kbd\">⌘⇧G</kbd> 會直接開<strong>獨立的 Git 視窗</strong>；面板標題列的 <em>Open in New Window</em> 也一樣。"
+              "text": "工具提示寫著 <em>Git (⌘4)</em>。在主視窗按 <kbd class=\"cwh-kbd\">⌘⇧G</kbd> 會直接開<strong>獨立的 Git 視窗</strong>；面板標題列的 <em>在新視窗開啟</em> 也一樣。"
             },
             "plans": {
               "title": "Plans（計畫文件）",
@@ -2020,18 +2120,18 @@
             "ide": {
               "title": "Mini-IDE（內建編輯器）",
               "tag": "只以獨立視窗存在",
-              "text": "<kbd class=\"cwh-kbd\">⌘⇧I</kbd> 開啟，或在 Explorer 點一下檔案。標題是 <code>&lt;檔名&gt; — Mini-IDE</code>，有未存檔時前面加 <code>●</code>。"
+              "text": "<kbd class=\"cwh-kbd\">⌘⇧I</kbd> 開啟，或在 檔案總管 點一下檔案。標題是 <code>&lt;檔名&gt; — Mini-IDE</code>，有未存檔時前面加 <code>●</code>。"
             }
           },
           "callout": {
-            "title": "三個視窗都掛著同一個 AI Terminal",
-            "text": "Git 視窗、Plan 視窗、Mini-IDE 的右緣都有一條窄軌，點開就是 <strong>AI Terminal</strong>——一個真正的 CLI agent 面板（不是 API 聊天視窗），可以選 agent、<em>Start</em>、<em>Interrupt</em>、<em>Stop</em>。它會把當下的情境（工作區路徑、開著的計畫、選取的程式碼）自動注入給 agent，所以你可以邊看 diff 邊叫它改。"
+            "title": "三個視窗都掛著同一個 AI 終端機",
+            "text": "Git 視窗、Plan 視窗、Mini-IDE 的右緣都有一條窄軌，點開就是 <strong>AI 終端機</strong>——一個真正的 CLI agent 面板（不是 API 聊天視窗），可以選 agent、<em>啟動</em>、<em>中斷</em>、<em>停止</em>。它會把當下的情境（工作區路徑、開著的計畫、選取的程式碼）自動注入給 agent，所以你可以邊看 diff 邊叫它改。"
           }
         },
         "s2": {
           "title": "Git：暫存與提交",
           "h1": "兩段式清單",
-          "p1": "面板標題是 <strong>SOURCE CONTROL</strong>，底下分成 <strong>Staged Changes</strong> 與 <strong>Changes</strong> 兩段（開了「顯示忽略檔案」還會多一段 <strong>Ignored</strong>）。點一列開 diff；<kbd class=\"cwh-kbd\">⇧</kbd> 或 <kbd class=\"cwh-kbd\">⌘</kbd> 點可以多選，上方會出現「N selected」與一顆 <code>✕</code>。",
+          "p1": "面板標題是 <strong>原始碼控制</strong>，底下分成 <strong>已暫存的變更</strong> 與 <strong>變更</strong> 兩段（開了<em>顯示忽略的檔案</em>還會多一段 <strong>已忽略</strong>）。點一列開 diff；<kbd class=\"cwh-kbd\">⇧</kbd> 或 <kbd class=\"cwh-kbd\">⌘</kbd> 點可以多選，上方會出現「N selected」與一顆 <code>✕</code>。",
           "fileTable": {
             "glyph": "鈕",
             "meaning": "意思",
@@ -2039,13 +2139,13 @@
           },
           "fileButtons": {
             "stage": {
-              "where": "Changes 的每一列"
+              "where": "變更 那一段的每一列"
             },
             "discard": {
-              "where": "Changes 的每一列"
+              "where": "變更 那一段的每一列"
             },
             "unstage": {
-              "where": "Staged 的每一列"
+              "where": "已暫存的變更 那一段的每一列"
             },
             "history": {
               "where": "兩段都有"
@@ -2054,14 +2154,14 @@
               "where": "衝突中的檔案"
             }
           },
-          "p2": "段落標題右邊是整段的操作：Staged 那段只有一顆 <code>−</code>（<em>Unstage All Changes</em>）；Changes 那段是 <code>↩</code>（<em>Discard All Changes</em>）與 <code>＋</code>（<em>Stage All</em>）。<strong>在段落標題上按右鍵</strong>還會多出 <em>Save Draft</em>。",
+          "p2": "段落標題右邊是整段的操作：<strong>已暫存的變更</strong> 那段只有一顆 <code>−</code>（<em>取消暫存所有變更</em>）；<strong>變更</strong> 那段是 <code>↩</code>（<em>捨棄所有變更</em>）與 <code>＋</code>（<em>暫存全部</em>）。<strong>在段落標題上按右鍵</strong>還會多出 <em>儲存草稿</em>。",
           "callout": {
             "title": "清單模式少一顆鈕",
-            "text": "切成 <em>View as Tree</em> 時，資料夾那一列本身也有 <code>＋</code> / <code>↩</code> / <code>−</code>，可以整包暫存或捨棄。但在 <em>View as List</em> 模式下，已暫存的那一列<strong>只剩 <code>⊡</code></strong>——要取消暫存得用段落標題的 <em>Unstage All Changes</em>、右鍵選單，或先切回樹狀檢視。"
+            "text": "切成 <em>檢視為樹狀</em> 時，資料夾那一列本身也有 <code>＋</code> / <code>↩</code> / <code>−</code>，可以整包暫存或捨棄。但在 <em>檢視為清單</em> 模式下，已暫存的那一列<strong>只剩 <code>⊡</code></strong>——要取消暫存得用段落標題的 <em>取消暫存所有變更</em>、右鍵選單，或先切回樹狀檢視。"
           },
           "h2": "寫 commit message",
-          "p3": "輸入框的提示文字是 <em>Message (⌘↩ to commit)</em>，按 <kbd class=\"cwh-kbd\">⌘↩</kbd> 就送出。旁邊那顆 <code>✦</code> 是 <strong>AI commit message</strong>——讀目前暫存的內容，替你生一段訊息（跑的時候變成 <code>⟳</code>）。",
-          "p4": "主鈕寫著 <strong>✓ Commit</strong>，右邊的 <code>▾</code>（<em>More options</em>）展開後由上而下是：",
+          "p3": "輸入框的提示文字是 <em>訊息（⌘↩ 提交）</em>，按 <kbd class=\"cwh-kbd\">⌘↩</kbd> 就送出。旁邊那顆 <code>✦</code> 是 <strong>AI 提交訊息</strong>——讀目前暫存的內容，替你生一段訊息（跑的時候變成 <code>⟳</code>）。",
+          "p4": "主鈕寫著 <strong>✓ 提交</strong>，右邊的 <code>▾</code>（<em>更多選項</em>）展開後由上而下是：",
           "commitTable": {
             "item": "項目",
             "what": "做什麼"
@@ -2071,7 +2171,7 @@
               "what": "一般提交。"
             },
             "amend": {
-              "what": "併進上一個 commit；輸入框提示會換成 Amend message…。"
+              "what": "併進上一個 commit；輸入框提示會換成 修改提交訊息…。"
             },
             "push": {
               "what": "提交後直接推。"
@@ -2083,24 +2183,24 @@
               "what": "把上一個 commit 拆回工作區。"
             },
             "auto": {
-              "what": "開關，右邊帶 ON / OFF 徽章。"
+              "what": "開關，右邊帶 開 / 關 徽章。"
             }
           },
-          "p5": "<strong>Auto Commit</strong> 打開之後，狀態列會照著跑一輪：<em>Auto Commit waiting — triggers in {'{'}n{'}'}s</em> → <em>Staging all changes…</em> → <em>Running lint check…</em> → <em>Generating AI commit message…</em> → <em>Committing…</em>。這條路上沒有你按確認的機會，開之前先想清楚。",
+          "p5": "<strong>自動提交</strong> 打開之後，狀態列會照著跑一輪：<em>自動提交等待中 — {'{'}count{'}'} 秒後觸發</em> → <em>暫存所有變更中…</em> → <em>執行 lint 檢查中…</em> → <em>生成 AI 提交訊息中…</em> → <em>提交中…</em>。這條路上沒有你按確認的機會，開之前先想清楚。",
           "h3": "<code>···</code> 檢視選單",
-          "p6": "標題列的 <code>···</code>（<em>More options</em>）裡有三組：<em>View as List</em> / <em>View as Tree</em>、<strong>Sort by</strong> 的 <em>Name</em> / <em>Path</em> / <em>Status</em>，以及 <em>Show Ignored Files</em>。目前生效的那一項前面有 <code>✓</code>。清單／樹狀也另外做成標題列上的獨立按鈕。",
+          "p6": "標題列的 <code>···</code>（<em>更多選項</em>）裡有三組：<em>檢視為清單</em> / <em>檢視為樹狀</em>、<strong>排序方式</strong> 的 <em>名稱</em> / <em>路徑</em> / <em>狀態</em>，以及 <em>顯示忽略的檔案</em>。目前生效的那一項前面有 <code>✓</code>。清單／樹狀也另外做成標題列上的獨立按鈕。",
           "h4": "還不是 Git 儲存庫的資料夾",
-          "p7": "會看到 <strong>Not a Git repository</strong> 卡片，提供 <em>Initialize Repository</em>、<em>Initialize (without .gitignore)</em>、<em>Initialize in a specific folder…</em>，下面還可以貼一個網址走 <em>Connect to Remote</em>。若子資料夾裡有別的 repo，會列出 <em>Found {'{'}n{'}'} Git repo(s) in subfolders</em>；一個工作區有多個 repo 時，面板頂端會長出一排 repo 分頁（工作區根目錄那個標成 <code>⌂</code>，每個分頁帶分支名與變更數）。"
+          "p7": "會看到 <strong>非 Git 儲存庫</strong> 卡片，提供 <em>初始化儲存庫</em>、<em>初始化（不含 .gitignore）</em>、<em>選擇指定資料夾並初始化…</em>，下面還可以貼一個網址走 <em>連接到遠端</em>。若子資料夾裡有別的 repo，會列出 <em>在子資料夾中找到 {'{'}n{'}'} 個 Git 儲存庫</em>；一個工作區有多個 repo 時，面板頂端會長出一排 repo 分頁（工作區根目錄那個標成 <code>⌂</code>，每個分頁帶分支名與變更數）。"
         },
         "s3": {
           "title": "Git：分支與遠端",
           "h1": "分支面板",
           "p1": "面板最底下那顆藥丸顯示目前分支（分離 HEAD 時直接寫 <code>(detached)</code>）與領先／落後數，點一下展開分支面板。",
           "list": {
-            "create": "最上面是建立分支的輸入框，提示 <em>New branch name…</em>，右邊 <code>＋</code> 送出。",
-            "localRow": "本地分支每一列有四顆鈕：<code>⇔</code> <em>Compare</em>、<code>⇡</code> <em>Rebase onto</em>、<code>⇣</code> <em>Merge into current</em>、<code>↵</code> <em>Switch</em>。目前分支只顯示 <code>✓</code>，沒有按鈕。",
-            "context": "在分支列按右鍵：<em>Merge current branch into {'{'}branch{'}'}</em>、<em>Merge current branch into {'{'}branch{'}'} &amp; push</em>、<em>Delete Branch</em>。",
-            "remote": "<code>⇅</code> 切換 <em>Show remote branches</em> / <em>Hide remote branches</em>；遠端分支每列一顆 <code>⬇</code> <em>Checkout locally</em>。"
+            "create": "最上面是建立分支的輸入框，提示 <em>新分支名稱…</em>，右邊 <code>＋</code> 送出。",
+            "localRow": "本地分支每一列有四顆鈕：<code>⇔</code> <em>比較</em>、<code>⇡</code> <em>Rebase 到此分支</em>、<code>⇣</code> <em>合併到目前分支</em>、<code>↵</code> <em>切換</em>。目前分支只顯示 <code>✓</code>，沒有按鈕。",
+            "context": "在分支列按右鍵：<em>將目前分支合併到 {'{'}branch{'}'}</em>、<em>將目前分支合併到 {'{'}branch{'}'} 並推送</em>、<em>刪除分支</em>。",
+            "remote": "<code>⇅</code> 切換 <em>顯示遠端分支</em> / <em>隱藏遠端分支</em>；遠端分支每列一顆 <code>⬇</code> <em>在本地檢出</em>。"
           },
           "p2": "按 <code>⇔</code> 之後結果直接展在面板裡，標成 <code>{'{'}branch{'}'} ↔ {'{'}current{'}'}</code>，附統計行與檔案清單。",
           "h2": "遠端操作列",
@@ -2111,57 +2211,57 @@
           "remoteActions": {
             "account": {
               "control": "帳號藥丸",
-              "behavior": "Account for this workspace——這個工作區用哪個 Git 帳號。沒綁時顯示 No account，選單裡可以挑已存的帳號或 + Add new account…。"
+              "behavior": "此工作區使用的帳號——這個工作區用哪個 Git 帳號。沒綁時顯示 未綁定帳號，選單裡可以挑已存的帳號或 + 新增帳號…。"
             },
             "publish": {
-              "control": "↑ Publish",
-              "behavior": "Publish Branch。只在分支還沒有 upstream 時出現。"
+              "control": "↑ 發佈",
+              "behavior": "發佈分支。只在分支還沒有 upstream 時出現。"
             },
             "fetch": {
               "control": "重新整理圖示",
-              "behavior": "Fetch。"
+              "behavior": "抓取。"
             },
             "pull": {
               "control": "↓",
-              "behavior": "Pull。"
+              "behavior": "拉取。"
             },
             "push": {
               "control": "↑",
-              "behavior": "Push，右上角以上標顯示領先幾個 commit。"
+              "behavior": "推送，右上角以上標顯示領先幾個 commit。"
             },
             "sync": {
               "control": "⇅",
-              "behavior": "Sync（pull --rebase + push）。"
+              "behavior": "同步（pull --rebase + push）。"
             },
             "more": {
               "control": "▾",
-              "behavior": "More pull/push options，見下。"
+              "behavior": "更多拉取／推送選項，見下。"
             }
           },
-          "p3": "<code>▾</code> 裡是 <em>↓ Pull</em>、<em>↓ Pull (Rebase)</em>、<em>↑ Push</em>、<em>↑ Push (Force with lease)</em>；設了不只一個 remote 時，最後還會多一組 <strong>Push to remote</strong>，每個 remote 一列。",
+          "p3": "<code>▾</code> 裡是 <em>↓ 拉取</em>、<em>↓ 拉取（Rebase）</em>、<em>↑ 推送</em>、<em>↑ 推送（Force with lease）</em>；設了不只一個 remote 時，最後還會多一組 <strong>推送到遠端</strong>，每個 remote 一列。",
           "callout": {
             "title": "認證失敗先查帳號綁定",
-            "text": "推不上去時，優先看帳號藥丸綁的是不是對的帳號，而不是重設遠端。憑證失效時面板會直接提示到「設定 › Accounts」更新。密碼欄位要貼的是 Personal Access Token，不是登入密碼。"
+            "text": "推不上去時，優先看帳號藥丸綁的是不是對的帳號，而不是重設遠端。憑證失效時面板會直接提示到「設定 › 帳號」更新。密碼欄位要貼的是 Personal Access Token，不是登入密碼。"
           }
         },
         "s4": {
           "title": "Git：衝突、草稿與歷史",
           "h1": "衝突",
-          "p1": "merge / rebase / cherry-pick 進行中時，面板頂端會出現橫幅 <code>⚠ {'{'}op{'}'} in progress</code> 加上衝突檔案數，右邊一顆 <em>Abort merge</em>（或 <em>Abort rebase</em> / <em>Abort cherry-pick</em>）。另有一個對話框標成 <strong>Merge conflict ({'{'}n{'}'} file(s))</strong>，提供 <em>Abort merge</em> 與 <em>Resolve conflicts</em> 兩條路。全部解完之後橫幅換成 <em>✓ All conflicts resolved — ready to commit merge</em>，附一顆 <em>Go to commit</em>。",
+          "p1": "merge / rebase / cherry-pick 進行中時，面板頂端會出現橫幅 <code>⚠ {'{'}op{'}'} 進行中</code> 加上衝突檔案數，右邊一顆 <em>中止 {'{'}op{'}'}</em>（{'{'}op{'}'} 是進行中的那個動作）。另有一個對話框標成 <strong>合併衝突（{'{'}count{'}'} 個檔案）</strong>，提供 <em>中止合併</em> 與 <em>解決衝突</em> 兩條路。全部解完之後橫幅換成 <em>✓ 所有衝突已解決 — 可以提交合併了</em>，附一顆 <em>前往提交</em>。",
           "p2": "單純的整檔取捨用檔案列上的 <code>↰</code> / <code>↱</code> 就好。要逐段處理就進 <strong>ConflictPane</strong>：",
           "conflictList": {
-            "badge": "標題掛 <strong>CONFLICT</strong> 徽章，旁邊寫 <em>{'{'}n{'}'} / {'{'}m{'}'} resolved</em>。",
-            "choices": "每一段衝突可選 <em>Accept Ours</em>、<em>Accept Theirs</em>、<em>Accept Both</em>、<em>Accept Base</em>，或 <em>Edit</em> 手改（改完 <em>Confirm</em> / <em>Cancel</em>）。",
-            "base": "<em>Base</em> 開關會把共同祖先那一版也叫出來對照。",
+            "badge": "標題掛 <strong>衝突</strong> 徽章，旁邊寫 <em>{'{'}n{'}'} / {'{'}m{'}'} resolved</em>。",
+            "choices": "每一段衝突可選 <em>採用我們的版本</em>、<em>採用他們的版本</em>、<em>全部採用</em>、<em>採用共同基準版本</em>，或 <em>編輯</em> 手改（改完 <em>確認</em> / <em>取消</em>）。",
+            "base": "<em>共同基準</em> 開關會把共同祖先那一版也叫出來對照。",
             "apply": "全部處理完按 <strong>Apply &amp; Stage</strong> 寫回並暫存。",
             "binary": "二進位檔不能三方合併，會直接說 <em>Binary conflict</em>，只能整檔取捨。",
-            "agent": "Git 視窗裡另外有一顆 <strong>Resolve with agent</strong>，把衝突整包丟給 CLI agent 去解。"
+            "agent": "Git 視窗裡另外有一顆 <strong>交給 CLI agent 解衝突</strong>，把衝突整包丟給 CLI agent 去解。"
           },
-          "h2": "Draft（stash）",
-          "p3": "Navide 把 stash 叫做 <strong>Draft</strong>，卡片就在下半部，空的時候寫 <em>No draft</em>。",
+          "h2": "草稿（stash）",
+          "p3": "Navide 把 stash 叫做 <strong>草稿</strong>，卡片就在下半部，空的時候寫 <em>No draft</em>。",
           "draftList": {
-            "save": "<strong>存進去</strong>：Changes 段落標題<strong>右鍵</strong> → <em>Save Draft</em>，或單一檔案右鍵 → <em>Save File as Draft</em>。對話框標題 <em>Save as Draft (label optional)</em>，標籤可留空。",
-            "restore": "<strong>拿回來</strong>：每一列三顆鈕——<code>⎘</code> <em>Apply (keep draft)</em>、<code>↑</code> <em>Pop (apply &amp; remove)</em>、<code>✕</code> <em>Drop</em>。"
+            "save": "<strong>存進去</strong>：<strong>變更</strong> 段落標題<strong>右鍵</strong> → <em>儲存草稿</em>，或單一檔案右鍵 → <em>將檔案存為草稿</em>。對話框標題 <em>儲存為草稿（標籤可選）</em>，標籤可留空。",
+            "restore": "<strong>拿回來</strong>：每一列三顆鈕——<code>⎘</code> <em>套用（保留 stash）</em>、<code>↑</code> <em>取出（套用並移除）</em>、<code>✕</code> <em>Drop</em>。"
           },
           "note": "工具列上沒有這顆鈕，只走右鍵選單——第一次找不到是正常的。",
           "h3": "看變更：四種 diff",
@@ -2172,46 +2272,46 @@
           "diffViews": {
             "file": {
               "how": "點一列檔案",
-              "what": "DiffPane：單檔的工作區／已暫存／某個 commit 的差異，可以逐 hunk Stage、Unstage、Discard。看 commit 時是唯讀的。"
+              "what": "DiffPane：單檔的工作區／已暫存／某個 commit 的差異，可以逐 hunk 暫存、取消暫存、捨棄。看 commit 時是唯讀的。"
             },
             "branch": {
-              "how": "分支列的 ⇔，或 Mini-IDE 標題列的 Diff Review",
-              "what": "BranchDiffPane：兩個分支整體比對，檔案清單加並排 hunk，附 AI Review 開關與 Expand All / Collapse All。Diff Review 一按就是開新視窗。"
+              "how": "分支列的 ⇔，或 Mini-IDE 標題列的 差異審查",
+              "what": "BranchDiffPane：兩個分支整體比對，檔案清單加並排 hunk，附 AI 審查 開關與 Expand All / Collapse All。差異審查 一按就是開新視窗。"
             },
             "inline": {
               "how": "檔案列的 ⊡",
               "what": "就地展開兩層小面板：這個檔案的 commit 紀錄，再往下是 diff + blame。不是另開視窗。"
             },
             "history": {
-              "how": "History 卡片的 View full history",
+              "how": "History 卡片的 查看完整歷史",
               "what": "獨立的 Git History 視窗。"
             }
           },
-          "p4": "面板裡的 History 卡片本身就畫著 SVG 泳道圖，HEAD 那顆點會被標亮。Git History 視窗則是完整表格：<strong>Graph / Description / Author / Date / Commit</strong> 五欄，可切 <em>All branches</em> 或 <em>Current Branch</em>、<em>Date order</em> 或 <em>Ancestor order</em>、<em>Show Remote Branches</em>，上方能 <em>Search commits…</em>，下方 <em>Load more</em>。在任一個 commit 上按右鍵：<em>Checkout (detached)</em>、<em>Create Branch…</em>、<em>Create Tag</em>、<em>Merge into current</em>、<em>Cherry-pick</em>、<em>Revert</em>、<em>Reset Current Branch to This Commit…</em>、<em>Copy Commit ID</em>、<em>Copy Commit Message</em>。",
+          "p4": "面板裡的 History 卡片本身就畫著 SVG 泳道圖，HEAD 那顆點會被標亮。Git History 視窗則是完整表格：<strong>Graph / Description / Author / Date / Commit</strong> 五欄，可切 <em>所有分支</em> 或 <em>目前分支</em>、<em>Date order</em> 或 <em>Ancestor order</em>、<em>顯示遠端分支</em>，上方能 <em>搜尋提交…</em>，下方 <em>載入更多</em>。在任一個 commit 上按右鍵：<em>檢出（分離 HEAD）</em>、<em>建立分支…</em>、<em>Create Tag</em>、<em>合併到目前分支</em>、<em>揀選（Cherry-pick）</em>、<em>還原（Revert）</em>、<em>將目前分支重設到此提交…</em>、<em>複製提交 ID</em>、<em>複製提交訊息</em>。",
           "callout": {
-            "title": "AI Review 會流進 Problems",
-            "text": "BranchDiffPane 裡的 <em>AI Review</em> 產生的意見不是只顯示在旁邊——它們會被寫進編輯器的診斷，所以同一批意見在 Mini-IDE 的 <strong>Problems</strong> 分頁（<kbd class=\"cwh-kbd\">⌘⇧M</kbd>）也看得到，可以一條一條跳過去修。"
+            "title": "AI 審查 會流進 問題",
+            "text": "BranchDiffPane 裡的 <em>AI 審查</em> 產生的意見不是只顯示在旁邊——它們會被寫進編輯器的診斷，所以同一批意見在 Mini-IDE 的 <strong>問題</strong> 分頁（<kbd class=\"cwh-kbd\">⌘⇧M</kbd>）也看得到，可以一條一條跳過去修。"
           }
         },
         "s5": {
           "title": "計畫文件：清單與生命週期",
           "h1": "計畫檔放在哪",
-          "p1": "計畫是工作區底下 <code>.agent-team/plans/</code> 裡的檔案，兩種格式都算數：HTML 用 <code>&lt;kebab-slug&gt;_&lt;6 位十六進位&gt;.html</code>，Markdown 用 <code>&lt;kebab-slug&gt;.plan.md</code>。底線開頭的檔案（像 <code>_spec.md</code>、<code>_template.html</code>）是基礎建設，清單不會列。",
+          "p1": "計畫不只放在一個資料夾。Navide 會掃工作區底下這<strong>七個目錄</strong>：<code>.agent-team/plans</code>、<code>.agent-team/reports</code>、<code>.claude/loop-reports</code>、<code>.claude/plans</code>、<code>.cursor/plans</code>、<code>docs/plans</code>、<code>docs/reports</code>；工作區裡<strong>最多兩層深</strong>的巢狀 Git 儲存庫，同樣這七個目錄也會被掃到。收三種副檔名 <code>.html</code>、<code>.plan.md</code>、<code>.md</code>：HTML 計畫用 <code>&lt;kebab-slug&gt;_&lt;6 位十六進位&gt;.html</code>，Markdown 計畫用 <code>&lt;kebab-slug&gt;.plan.md</code>。以底線或點開頭的檔案（像 <code>_spec.md</code>、<code>_template.html</code>）是基礎建設，清單不會列。",
           "p2": "這些檔案<strong>由 agent 寫、也由 agent 更新</strong>——你在計畫視窗裡按的每一個動作（改 todo 狀態、留審查意見、核准），最後都落回同一個檔案。你要做的是叫 agent「幫我建一份計畫」，然後在視窗裡審。",
           "h2": "清單",
-          "p3": "側欄 <strong>Plans</strong> 分頁（<kbd class=\"cwh-kbd\">⌘5</kbd>）與 Plan 視窗左欄用的是同一份清單。至少有一份計畫時才會出現工具列：",
+          "p3": "側欄 <strong>計畫</strong> 分頁（<kbd class=\"cwh-kbd\">⌘5</kbd>）與 Plan 視窗左欄用的是同一份清單。至少有一份計畫時才會出現工具列：",
           "listTools": {
-            "search": "搜尋框 <em>Search plans…</em>，比對標題、檔名與 overview。",
-            "stage": "Stage 篩選：<em>All stages</em> / Draft / In Review / Approved / In Progress / Done / Abandoned。",
-            "sort": "排序 <em>Sort by</em>：<strong>Title</strong>、<strong>Last updated</strong>、<strong>Progress</strong> 三種，旁邊 <code>↑</code>／<code>↓</code> 換升冪降冪。",
+            "search": "搜尋框 <em>搜尋計畫…</em>，比對標題、檔名與 overview。",
+            "stage": "依階段篩選：<em>全部階段</em> / 草稿 / 審查中 / 已核准 / 進行中 / 已完成 / 已放棄。",
+            "sort": "排序 <em>排序方式</em>：<strong>標題</strong>、<strong>最後更新</strong>、<strong>進度</strong> 三種，旁邊 <code>↑</code>／<code>↓</code> 換升冪降冪。",
             "group": "<code>☰</code> 在「依 stage 分群」與「單一清單」之間切換。"
           },
-          "p4": "這四個選擇會<strong>按工作區各自記住</strong>。分區有 <strong>Recent</strong>（最多 5 筆，釘選的排最前，也只有這一區有釘選鈕）、<strong>All plans</strong>、各個 stage 群組、<strong>Archived</strong>（預設收合），以及底部的 <strong>Completed</strong> 動作列（<em>Archive all done</em> / <em>Delete all</em>）。每一列會顯示 stage 標籤、<em>{'{'}done{'}'}/{'{'}total{'}'} done</em> 進度條、格式標籤 <code>html</code> / <code>markdown</code>，還有 <em>{'{'}count{'}'} for you</em>——只有你能清掉的項目數。",
+          "p4": "這四個選擇會<strong>按工作區各自記住</strong>。分區由上而下是 <strong>最近</strong>（最多 5 筆，釘選的排最前）、依階段分組時的 <strong>文件</strong> 區與各個 stage 群組（單一清單模式下合併成一個 <strong>全部計畫</strong>）、<strong>已封存</strong>，以及底部的完成動作列（<em>封存所有已完成</em> / <em>全部刪除</em>）。每一列會顯示 stage 藥丸、<em>{'{'}done{'}'}/{'{'}total{'}'} 已完成</em> 進度條、格式標籤 <code>HTML</code> / <code>Markdown</code>，還有 <em>{'{'}count{'}'} 件待你</em>——只有你能清掉的項目數。<strong>每一列右側都有釘選鈕 <code>📌</code> 與刪除鈕 <code>✕</code></strong>（已封存那一區只有刪除）。",
           "callout1": {
-            "title": "「Active」不是「進行中」",
-            "text": "清單裡的 <strong>Active</strong> 分區收的是<strong>沒有計畫 metadata 的純文件</strong>（每一列都帶 <code>doc</code> 標籤），跟 stage 是不是 <em>in-progress</em> 無關。要把這種檔案升級成真正的計畫，在它上面按右鍵選 <strong>Promote to Plan</strong>。"
+            "title": "沒有 metadata 的文件自成一區",
+            "text": "依階段分組時，<strong>沒有計畫 metadata 的純文件</strong>收在 <strong>文件</strong> 這一區，每一列都帶 <code>文件</code> 藥丸——跟 stage 是不是 <em>進行中</em> 無關。要把這種檔案升級成真正的計畫，在它上面按右鍵選 <strong>升級為計畫</strong>；升級只是補上一層草稿信封，<strong>不會改寫原本的內文</strong>。"
           },
-          "p5": "列上按右鍵，由上而下：<em>Open</em>、<em>Copy path</em>、（HTML 才有）<em>Share to Git</em> 與 <em>Rename</em>、<em>Archive</em>／<em>Unarchive</em>、（純文件才有）<em>Promote to Plan</em>、<em>Delete</em>。改名要照 <code>kebab-slug_6hex.html</code> 的格式，不合規會被擋下。計畫列還可以<strong>直接拖到一個 CLI 面板上</strong>，把目標注入給那個 agent。",
+          "p5": "列上按右鍵，由上而下：<em>在編輯器中開啟</em>、<em>複製路徑</em>、<em>選取</em>、（HTML 才有）<em>重新命名</em> 與 <em>分享到 Git</em>、（已是計畫才有）<em>封存</em>／<em>取消封存</em>、（純文件才有）<em>升級為計畫</em>、<em>刪除</em>。<strong><em>在編輯器中開啟</em> 是唯一會把檔案送進編輯器的入口</strong>——點一列本身只會開計畫視窗，不會蓋掉你正開著的編輯器分頁。改名要照 <code>kebab-slug_6hex.html</code> 的格式，不合規會被擋下。計畫列還可以<strong>直接拖到一個 CLI 面板上</strong>，把目標注入給那個 agent。",
           "h3": "Stage 與 archived 是兩回事",
           "p6": "生命週期是 <code>draft → in-review → approved → in-progress → done</code>，外加一個岔路 <code>abandoned</code>。",
           "callout2": {
@@ -2220,49 +2320,49 @@
           },
           "p7": "還有一條硬規則：<strong>agent 只有在 stage 到了 <code>approved</code>（或更後面）才會動手寫程式。</strong>所以「開始」這兩個字的實際意思是——把 stage 推到 approved。",
           "h4": "開起來長什麼樣",
-          "p8": "點清單任一列，會彈出獨立的 <strong>Plan Review 視窗</strong>：左邊計畫清單、中間文件、右邊 AI Terminal。<strong>同一個工作區只會有一個這種視窗</strong>——已經開著的時候再點別份，是把那個視窗<strong>換頁</strong>，不會再開一個。",
+          "p8": "點清單任一列，會彈出獨立的 <strong>Plan Review 視窗</strong>：左邊計畫清單、中間文件、右邊 AI 終端機。<strong>同一個工作區只會有一個這種視窗</strong>——已經開著的時候再點別份，是把那個視窗<strong>換頁</strong>，不會再開一個。",
           "p9": "文件本體依格式分流：<code>.agent-team/plans/</code> 裡的 HTML 走互動式預覽（沙箱 iframe，可以就地編輯章節、對章節留言、點 todo 換狀態）；帶 metadata 的 Markdown 走 <strong>PlanMarkdownBody</strong>（章節可編輯、todo 可切、mermaid 會畫出來）；沒有 metadata 的 Markdown 是唯讀的，也就不會有工具列。"
         },
         "s6": {
           "title": "計畫文件：審閱工具箱",
-          "p1": "Plan 視窗上方那條工具列不分格式，左邊是 stage 藥丸、<em>Archived</em> 藥丸（封存時才出現）與 <em>{'{'}done{'}'}/{'{'}total{'}'} done</em> 進度條，右邊是一排只有圖示的按鈕。視窗變窄時它們會依序收進 <code>⋯</code>。",
+          "p1": "Plan 視窗上方那條工具列不分格式，左邊是 stage 藥丸、<em>已封存</em> 藥丸（封存時才出現）與 <em>{'{'}done{'}'}/{'{'}total{'}'} done</em> 進度條，右邊是一排只有圖示的按鈕。視窗變窄時它們會依序收進 <code>⋯</code>。",
           "toolsTable": {
             "tool": "鈕",
             "opens": "展開什麼"
           },
           "planTools": {
             "todos": {
-              "opens": "待辦清單。左鍵點狀態會循環 pending → in-progress → done → pending；右鍵才是切換 skipped。每列可 Edit / Delete，底下有 Add a todo… 加新的。"
+              "opens": "待辦清單。左鍵點狀態會循環 <code>pending</code> → <code>in-progress</code> → <code>done</code> → <code>pending</code>；右鍵才是切換 <code>skipped</code>。每列可 編輯 / 刪除，底下有 新增待辦… 加新的。"
             },
             "notes": {
-              "opens": "審查意見。有未解決的才會出現在工具列上（否則收在 ⋯ 裡）。可以掛在某個章節上——章節旁的 Comment 按鈕就是這樣用的。動作有 Edit、Delete、Resolve。"
+              "opens": "審查意見。有未解決的才會出現在工具列上（否則收在 ⋯ 裡）。可以掛在某個章節上——章節旁的 <em>留言</em> 按鈕就是這樣用的。動作有 編輯、刪除、解決。"
             },
             "execute": {
-              "opens": "只在 stage 是 approved 時出現。Choose an agent to execute this plan，挑一家 CLI 就把整份計畫派工出去，同時把 stage 推到 in-progress。"
+              "opens": "只在 stage 是 approved 時出現。選擇執行此計畫的 agent，挑一家 CLI 就把整份計畫派工出去，同時把 stage 推到 in-progress。"
             },
             "approve": {
               "opens": "主鈕。"
             },
             "more": {
-              "opens": "Outline / Review Notes / History，以及 Share to Git、Open in Browser、Reopen、Archive、Abandon、Delete。"
+              "opens": "<em>大綱</em> / <em>審查留言</em> / <em>歷史</em>，以及 <em>分享到 Git</em>、<em>瀏覽器開啟</em>、<em>重開</em>、<em>封存</em>、<em>放棄</em>、<em>刪除</em>。"
             }
           },
           "callout": {
-            "title": "Approve 按不下去的兩個原因",
-            "text": "它只在 stage 是 <strong>draft 或 in-review</strong>、而且<strong>所有審查意見都已 Resolve</strong> 時才亮。停用時的提示就寫著 <em>Requires draft or in-review stage with all notes resolved</em>。另外注意：draft 是<strong>直接跳到 approved</strong> 的，工具列上沒有「送審」這顆鈕。"
+            "title": "核准 按不下去的兩個原因",
+            "text": "它只在 stage 是 <strong>draft 或 in-review</strong>、而且<strong>所有審查意見都已 Resolve</strong> 時才亮。停用時的提示就寫著 <em>須為草稿或審查中，且所有留言皆已解決</em>。另外注意：draft 是<strong>直接跳到 approved</strong> 的，工具列上沒有「送審」這顆鈕。"
           },
           "p2": "<code>⋯</code> 裡還有兩個值得單獨講的：",
           "moreList": {
-            "outline": "<strong>Outline</strong>——展開成一列一個章節標題，點了就捲到那一段。文件有標題時才出現。",
-            "history": "<strong>History</strong>——歷次快照，新的在上，每列一顆 <em>Preview</em>（用唯讀模式開舊版，上方有 <em>Back to current plan</em> 可以回來）與一顆 <em>Diff</em>（就地列出跟現行版的差異：stage 怎麼變、哪個 todo 換了狀態、增刪幾條、review note 差幾則、增減幾行）。"
+            "outline": "<strong>大綱</strong>——展開成一列一個章節標題，點了就捲到那一段。文件有標題時才出現。",
+            "history": "<strong>歷史</strong>——歷次快照，新的在上，每列一顆 <em>預覽</em>（用唯讀模式開舊版，上方有 <em>回到目前計畫</em> 可以回來）與一顆 <em>差異</em>（就地列出跟現行版的差異：stage 怎麼變、哪個 todo 換了狀態、增刪幾條、review note 差幾則、增減幾行）。"
           },
-          "note": "審查意見的<strong>回覆是 agent 寫的</strong>，介面上只讀不寫——你留意見、按 Resolve，回覆由 agent 補上。",
-          "h1": "右邊那條 AI Terminal",
+          "note": "審查意見的<strong>回覆是 agent 寫的</strong>，介面上只讀不寫——你留意見、按 解決，回覆由 agent 補上。",
+          "h1": "右邊那條 AI 終端機",
           "p3": "新開一個 agent 時，Navide 會自動先餵給它：工作區路徑、目前開著的計畫檔、它的名稱／stage／每個 todo 的狀態，以及計畫內容本身。所以你可以直接問「這份計畫第三階段的風險是什麼」，不必再貼一次檔案。"
         },
         "s7": {
           "title": "編輯器視窗",
-          "p1": "<kbd class=\"cwh-kbd\">⌘⇧I</kbd> 開啟，或在 Explorer 點一下檔案。分頁式的 Monaco 編輯器，<kbd class=\"cwh-kbd\">⌘1</kbd>…<kbd class=\"cwh-kbd\">⌘9</kbd> 切分頁（超出範圍會落到最後一個分頁）。",
+          "p1": "<kbd class=\"cwh-kbd\">⌘⇧I</kbd> 開啟，或在 檔案總管 點一下檔案。分頁式的 Monaco 編輯器，<kbd class=\"cwh-kbd\">⌘1</kbd>…<kbd class=\"cwh-kbd\">⌘9</kbd> 切分頁（超出範圍會落到最後一個分頁）。",
           "h1": "左側四個區塊",
           "sectionTable": {
             "section": "區塊",
@@ -2280,10 +2380,10 @@
               "note": "就是 Git 面板的嵌入版，帶變更數徽章。"
             },
             "problems": {
-              "note": "診斷清單，帶錯誤數徽章；AI Review 的意見也會落在這裡。"
+              "note": "診斷清單，帶錯誤數徽章；AI 審查 的意見也會落在這裡。"
             }
           },
-          "note1": "這個區塊叫 <strong>Source Control</strong>，不叫 Git——在 Mini-IDE 裡 <kbd class=\"cwh-kbd\">⌘⇧G</kbd> 是聚焦到它；同一個組合鍵在主視窗則是開獨立 Git 視窗。",
+          "note1": "這個區塊叫 <strong>原始碼控制</strong>，不叫 Git——在 Mini-IDE 裡 <kbd class=\"cwh-kbd\">⌘⇧G</kbd> 是聚焦到它；同一個組合鍵在主視窗則是開獨立 Git 視窗。",
           "h2": "常用編輯動作",
           "actionTable": {
             "action": "動作",
@@ -2317,7 +2417,7 @@
               "action": "選下一個相同的 / 全部"
             },
             "quickFix": {
-              "action": "Quick Fix"
+              "action": "快速修復"
             },
             "aiRewrite": {
               "action": "AI 就地改寫"
@@ -2326,21 +2426,21 @@
               "action": "AI 接續補完（ghost）"
             },
             "aiTerminal": {
-              "action": "開關 AI Terminal",
+              "action": "開關 AI 終端機",
               "note": "（或 ⌘⇧A）"
             },
             "sendSelection": {
-              "action": "把選取的程式碼丟給 AI Terminal",
+              "action": "把選取的程式碼丟給 AI 終端機",
               "note": "（游標不在編輯區時）"
             },
             "quickOpen": {
               "action": "Quick Open / 命令面板"
             }
           },
-          "note2": "取代刻意不用 <kbd class=\"cwh-kbd\">⌘H</kbd>，把那個組合留給 macOS 的「隱藏視窗」。全部快捷鍵可在設定 ▸ Shortcuts 改，<kbd class=\"cwh-kbd\">⌘K ⌘S</kbd> 開速查表。",
+          "note2": "取代刻意不用 <kbd class=\"cwh-kbd\">⌘H</kbd>，把那個組合留給 macOS 的「隱藏視窗」。全部快捷鍵可在設定 ▸ 快捷鍵 改，<kbd class=\"cwh-kbd\">⌘K ⌘S</kbd> 開速查表。",
           "h3": "換掉預設編輯器",
-          "p2": "不想用內建編輯器的話，到<strong>設定 ▸ General ▸ Default editor</strong> 改路由。選項依序是 <em>Mini-IDE (built in)</em>（預設）、<em>System default application</em>、<em>Visual Studio Code</em>、<em>Cursor</em>、<em>Custom command…</em>。偵測不到的會變灰並標上「未安裝」，旁邊 <em>Re-detect</em> 可以重掃。",
-          "p3": "<em>Custom command…</em> 填的是 argv，直接執行、不經 shell，可用的佔位符是 <code>{'{'}file{'}'}</code>、<code>{'{'}dir{'}'}</code>、<code>{'{'}line{'}'}</code>、<code>{'{'}workspace{'}'}</code>，並附三組現成模板。留空的話仍會用 Mini-IDE 開。",
+          "p2": "不想用內建編輯器的話，到<strong>設定 ▸ 一般 ▸ 預設編輯器</strong> 改路由。選項依序是 <em>Mini-IDE（內建）</em>（預設）、<em>系統預設程式</em>、<em>Visual Studio Code</em>、<em>Cursor</em>、<em>自訂命令…</em>。偵測不到的會變灰並標上「未安裝」，旁邊 <em>重新偵測</em> 可以重掃。",
+          "p3": "<em>自訂命令…</em> 填的是 argv，直接執行、不經 shell，可用的佔位符是 <code>{'{'}file{'}'}</code>、<code>{'{'}dir{'}'}</code>、<code>{'{'}line{'}'}</code>、<code>{'{'}workspace{'}'}</code>，並附三組現成模板。留空的話仍會用 Mini-IDE 開。",
           "callout": {
             "title": "macOS 上 code / cursor 預設不在 PATH",
             "text": "裝了 VS Code 或 Cursor 不等於 <code>code</code> / <code>cursor</code> 指令可用——那是另一個要手動做的安裝步驟。Navide 會先查 PATH，查不到就去 <code>/Applications/&lt;App&gt;.app/…/bin/</code> 找。真的啟動失敗時它會<strong>自動退回 Mini-IDE</strong>，並跳一次 <em>Editor unavailable</em> 提示（同一個編輯器每個 session 只提醒一次）。"
@@ -2359,7 +2459,7 @@
           "previewTypes": {
             "image": {
               "ext": "png jpg jpeg gif bmp webp ico svg avif apng",
-              "how": "圖片，可 Fit to window / Actual size。"
+              "how": "圖片，可 符合視窗大小 / 實際大小。"
             },
             "video": {
               "ext": "mp4 webm mov m4v mkv ogv",
@@ -2375,7 +2475,7 @@
             },
             "html": {
               "ext": "html htm",
-              "how": "沙箱 iframe，標著 sandboxed · no scripts。預設開原始碼，用 Preview / Raw 切換。"
+              "how": "沙箱 iframe，標著 <em>沙箱 · 不執行腳本</em>。預設開原始碼，用 <em>預覽</em> / <em>原始</em> 切換。"
             },
             "csv": {
               "ext": "csv tsv",
@@ -2387,7 +2487,7 @@
             },
             "archive": {
               "ext": "zip tar tgz（含 .tar.gz）",
-              "how": "列出壓縮檔內容，兩欄 Name / Size。"
+              "how": "列出壓縮檔內容，兩欄 名稱 / 大小。"
             },
             "notebook": {
               "ext": "ipynb",
@@ -2402,20 +2502,20 @@
               "how": "資訊卡加 hex dump，最多前 64 KB。"
             }
           },
-          "p2": "Markdown 不在這張表裡，它走另一條路：<code>.md</code> 用 MarkdownPreview，但 <code>.plan.md</code> 會被導去計畫視圖。",
+          "p2": "Markdown 不在這張表裡，它走另一條路：<code>.md</code> 用 Markdown預覽，但 <code>.plan.md</code> 會被導去計畫視圖。",
           "callout1": {
             "title": "只有 html 與 csv 不自動預覽",
-            "text": "上表其他類型點開<strong>直接是預覽</strong>；html 與 csv 刻意先給你原始碼，要按 <em>Preview</em> 才切過去。另外 <code>docx</code>、<code>xlsx</code>、<code>zip</code>、<code>woff</code> 這些同時也在二進位清單裡，但字型、壓縮檔、Office 的判斷排在二進位前面，所以會拿到專屬的呈現，不會退成 hex dump。"
+            "text": "上表其他類型點開<strong>直接是預覽</strong>；html 與 csv 刻意先給你原始碼，要按 <em>預覽</em> 才切過去。另外 <code>docx</code>、<code>xlsx</code>、<code>zip</code>、<code>woff</code> 這些同時也在二進位清單裡，但字型、壓縮檔、Office 的判斷排在二進位前面，所以會拿到專屬的呈現，不會退成 hex dump。"
           },
           "h2": "變更記錄軌",
-          "p3": "右槽 <strong>Preview</strong> 分頁（<kbd class=\"cwh-kbd\">⌘⌥V</kbd>）的下半部是 <strong>Recent changes</strong>——這個工作區最近被動過什麼。每一列四欄：",
+          "p3": "右槽 <strong>預覽</strong> 分頁（<kbd class=\"cwh-kbd\">⌘⌥V</kbd>）的下半部是 <strong>最近的變更</strong>——這個工作區最近被動過什麼。每一列四欄：",
           "trackList": {
-            "time": "<strong>時間</strong>——相對值（<em>now</em> / <em>{'{'}n{'}'}m</em> / <em>{'{'}n{'}'}h</em> / <em>{'{'}n{'}'}d</em>）。",
-            "action": "<strong>動作</strong>——<code>+</code> created、<code>~</code> modified、<code>−</code> deleted、<code>▸</code> shown。",
+            "time": "<strong>時間</strong>——相對值（<em>剛剛</em> / <em>{'{'}n{'}'}m</em> / <em>{'{'}n{'}'}h</em> / <em>{'{'}n{'}'}d</em>）。",
+            "action": "<strong>動作</strong>——<code>+</code> 新增、<code>~</code> 修改、<code>−</code> 刪除、<code>▸</code> 顯示。",
             "path": "<strong>路徑</strong>——太長時中間省略。",
             "who": "<strong>誰做的</strong>——agent 名稱；沒有歸屬資訊時就寫 <code>—</code>，<strong>不會猜</strong>。"
           },
-          "p4": "上方四顆篩選鈕：<em>All</em> / <em>You</em> / <em>Agent</em> / <em>Watcher</em>。點一列可以把那個檔案或 diff 叫回上半部的預覽區（已刪除的列點不動）。",
+          "p4": "上方四顆篩選鈕：<em>全部</em> / <em>你</em> / <em>Agent</em> / <em>監看</em>。點一列可以把那個檔案或 diff 叫回上半部的預覽區（已刪除的列點不動）。",
           "callout2": {
             "title": "關掉視窗也還在",
             "text": "這份記錄由後端寫進工作區自己的資料庫（<code>&lt;工作區&gt;/.agent-team/navide.db</code>），<strong>每個工作區各留最新 300 筆</strong>，關掉視窗、重開 app 都還在。它在 app 啟動時就載好，不必先打開右槽。同一個變更如果被檔案監看與 agent 各報一次，兩筆會合併成一筆，並以有歸屬的那筆為準——所以你不會看到同一件事出現兩次。"
@@ -2441,7 +2541,7 @@
               "action": "側欄 Git 分頁"
             },
             "plansTab": {
-              "action": "側欄 Plans 分頁"
+              "action": "側欄 計畫 分頁"
             },
             "gitWindow": {
               "action": "開獨立 Git 視窗"
@@ -2450,28 +2550,28 @@
               "action": "開編輯器視窗"
             },
             "previewTab": {
-              "action": "右槽 Preview 分頁"
+              "action": "右槽 預覽 分頁"
             },
             "commit": {
-              "action": "Commit / Amend"
+              "action": "提交 / 修改提交"
             },
             "aiMessage": {
-              "action": "產生 AI commit message"
+              "action": "產生 AI 提交訊息"
             },
             "stageAll": {
-              "action": "Stage all / Unstage all"
+              "action": "全部暫存 / 全部取消暫存"
             },
             "fetchPull": {
-              "action": "Fetch / Pull"
+              "action": "抓取 / 拉取"
             },
             "pushSync": {
-              "action": "Push / Sync"
+              "action": "推送 / 同步"
             },
             "refresh": {
               "action": "重新整理"
             },
             "gotoAiTerminal": {
-              "action": "跳到 AI Terminal"
+              "action": "跳到 AI 終端機"
             },
             "quickOpenPlan": {
               "action": "快速開啟計畫"
@@ -2480,10 +2580,10 @@
               "action": "依序取消編輯／關選單／退出快照／關視窗"
             },
             "explorerSearch": {
-              "action": "Explorer / Search"
+              "action": "檔案總管 / 搜尋"
             },
             "scmProblems": {
-              "action": "Source Control / Problems"
+              "action": "原始碼控制 / 問題"
             },
             "fileTabs": {
               "action": "切到第 N 個檔案分頁（⌘1…⌘9）"
@@ -2492,13 +2592,13 @@
               "action": "分割編輯區"
             },
             "quickFix": {
-              "action": "Quick Fix"
+              "action": "快速修復"
             },
             "aiRewriteComplete": {
               "action": "AI 改寫 / AI 補完"
             },
             "aiTerminal": {
-              "action": "開關 AI Terminal"
+              "action": "開關 AI 終端機"
             },
             "cheatsheet": {
               "action": "快捷鍵速查表"
@@ -2506,8 +2606,20 @@
           },
           "callout": {
             "title": "同一個組合鍵在不同視窗做不同的事",
-            "text": "<kbd class=\"cwh-kbd\">⌘⇧G</kbd>、<kbd class=\"cwh-kbd\">⌘⇧M</kbd>、<kbd class=\"cwh-kbd\">⌘⇧F</kbd>、<kbd class=\"cwh-kbd\">⌘1</kbd>–<kbd class=\"cwh-kbd\">⌘9</kbd> 都被三個視窗各自認領過，上表的「在哪個視窗」欄不是補充說明，是判斷條件。另外，Git 視窗與 Plan 視窗裡的 AI Terminal 一旦取得焦點，這些鍵全部讓給 CLI，不會被視窗攔走。"
+            "text": "<kbd class=\"cwh-kbd\">⌘⇧G</kbd>、<kbd class=\"cwh-kbd\">⌘⇧M</kbd>、<kbd class=\"cwh-kbd\">⌘⇧F</kbd>、<kbd class=\"cwh-kbd\">⌘1</kbd>–<kbd class=\"cwh-kbd\">⌘9</kbd> 都被三個視窗各自認領過，上表的「在哪個視窗」欄不是補充說明，是判斷條件。另外，Git 視窗與 Plan 視窗裡的 AI 終端機 一旦取得焦點，這些鍵全部讓給 CLI，不會被視窗攔走。"
           }
+        },
+        "s10": {
+          "title": "Plans 是一個外掛程式（以及它失敗時的樣子）",
+          "p1": "側欄的 Plans 分頁與 Plan 視窗都由打包外掛程式 <code>navide.plans</code> 繪製，在<strong>設定 ▸ 擴充功能</strong>的 <em>內建</em> 區列得到它：id、版本、啟用中／已移除／無法使用 徽章、manifest 權限與套件版本。介面上任何地方都不會寫 “v2” 這兩個字——唯一的例外是下面這塊復原面板。",
+          "p2": "切換 App 主題時 Plans 的畫面會即時跟著換，不必重開視窗。",
+          "h1": "Plans 起不來時：Legacy recovery",
+          "p3": "外掛程式這次啟動失敗時，Plans 分頁會換成灰底的 <strong>Legacy recovery</strong> 標籤，底下掛回舊版計畫面板，中間一行寫著原因：<em>本次啟動已停用 Plans v2（{'{'}原因{'}'}）。</em>常見的原因字串有 <code>forced</code>（環境變數 <code>NAVIDE_PLANS_RECOVERY=legacy</code> 指定的）、<code>storage-migration-failure</code>（存放紀錄讀不到或轉不過去），以及後端啟動失敗的訊息。",
+          "list": {
+            "retry": "<strong>重試 Plans v2</strong>——把外掛程式重新武裝，下一次開 Plans 時再生一次後端。<strong>整個 session 只有 2 次額度，而且是先扣再試</strong>：按下去就算一次，成敗都不退。額度用完後這個 session 就固定留在舊版面板，要再試只能重開 app。",
+            "repair": "<strong>修復儲存紀錄</strong>——只有原因是 <code>storage-migration-failure</code> 時才出現。修好之後畫面<strong>仍然留在復原狀態</strong>，訊息會寫 <em>儲存紀錄已修復，重啟 Navide 即可離開舊版復原模式。</em>；本來就沒壞的話會回 <em>儲存紀錄可正常讀取，無需修復。</em>"
+          },
+          "p4": "被 <code>NAVIDE_PLANS_RECOVERY=legacy</code> 強制、或這個 session 沒有完整的 v2 套件時，「重試」會直接拒絕並把原因寫在旁邊，不會浪費額度。"
         }
       },
       "topic": {
@@ -2517,6 +2629,7 @@
         "mcp": "MCP",
         "codeWorkflow": "程式碼工作流",
         "settingsSystem": "設定與系統",
+        "crossPlatform": "Windows、Linux 與跨裝置",
         "icons": "介面圖示"
       },
       "cliAgents": {
@@ -2556,7 +2669,7 @@
             }
           },
           "settings": {
-            "caption": "設定 ▸ CLI Agents 的上半：清單與權限略過。",
+            "caption": "設定 ▸ CLI Agents 的前三段：清單、啟動覆寫、權限略過。",
             "legend": {
               "grip": {
                 "label": "拖曳握把",
@@ -2569,6 +2682,10 @@
               "perm": {
                 "label": "權限三態",
                 "text": "每一家可以各自跟隨全域、一律略過、或一律不略過；沒有略過旗標的那幾家不會出現在這裡。"
+              },
+              "launch": {
+                "label": "啟動覆寫",
+                "text": "欄位要展開那一家才看得到，而且一次只展開一家。紅色的「不會傳進去」代表那個變數由 Navide 自己管，值不會到 CLI 手上。"
               }
             }
           },
@@ -2607,10 +2724,13 @@
             "acct1": "work",
             "acct2": "personal",
             "acctPct1": "62%",
-            "acctPct2": "9%"
+            "acctPct2": "9%",
+            "model": "opus-5",
+            "effort": "high",
+            "envName": "CLAUDE_CONFIG_DIR"
           }
         },
-        "intro": "十四家 CLI agent 怎麼裝、怎麼調、怎麼掛多個帳號，以及額度與成本各自從哪裡來。名詞（工作區、面板、群組）沿用「工作區與面板」分頁。",
+        "intro": "十四家 CLI agent 怎麼裝、怎麼調、怎麼掛多個帳號，以及額度與成本各自從哪裡來。設定 ▸ CLI Agents 現在分成五段，其中「啟動覆寫」決定每家 CLI 新開的面板從哪一條命令列起跑。名詞（工作區、面板、群組）沿用「工作區與面板」分頁。",
         "s1": {
           "title": "支援哪些 CLI",
           "p1": "目前內建 <strong>14 家</strong> CLI agent。下表的順序就是 ＋ 選單與 <kbd class=\"cah-kbd\">Ctrl</kbd>+<kbd class=\"cah-kbd\">1</kbd>…<kbd class=\"cah-kbd\">9</kbd> 的預設順序（可在設定裡拖曳調整，見第 4 章）。",
@@ -2626,17 +2746,17 @@
           "note": "「額度」＝ Navide 讀得到剩餘用量（第 6 章）。「多帳號」＝ 可以在設定裡掛多組登入並切換（第 5 章）。三家沒有略過權限旗標的 CLI（Grok CLI、OpenCode、Pi）是因為它們本身就沒有這個旗標，不是 Navide 沒接。「登入指令」＝ 在設定 ▸ 帳號按「登入」時，Navide 實際會執行的指令；標示「在 CLI 內登入」的那幾家沒有獨立的登入指令，按下去就是照常啟動該 CLI，登入在它自己的畫面裡完成。",
           "callout": {
             "title": "第 15 個選項不是 agent",
-            "text": "＋ 選單最下方的 <strong>Terminal</strong> 是一般 shell，不掛任何 agent，也不會注入角色。它刻意獨立放在清單外，不會被 CLI 清單的捲動吃掉。"
+            "text": "＋ 選單最下方的 <strong>>_ 開啟 Terminal</strong> 是一般 shell，不掛任何 agent，也不會注入角色。它刻意獨立放在清單外，不會被 CLI 清單的捲動吃掉。"
           }
         },
         "s2": {
           "title": "安裝與偵測",
           "p1": "Navide 不自己下載或安裝任何 CLI，它只執行各家原廠自己的指令，而且執行前一定先把完整指令印給你看。",
           "h1": "沒安裝的 CLI 長什麼樣",
-          "p2": "＋ 選單與 Manual spawn 的 agent 下拉裡，偵測不到執行檔的那幾家名稱後面會多一個後綴：<code>Kimi Code（未安裝）</code>。除此之外<strong>沒有變灰、也沒有被停用</strong>——選項照樣可以點。",
-          "p3": "偵測結果有 10 秒節流，並在這幾個時機重新整理：backend 連上、＋ 選單打開、Manual spawn 的 agent 下拉取得焦點。",
+          "p2": "＋ 選單與「啟動Agent」的 agent 下拉裡，偵測不到執行檔的那幾家名稱後面會多一個後綴：<code>Kimi Code（未安裝）</code>。除此之外<strong>沒有變灰、也沒有被停用</strong>——選項照樣可以點。",
+          "p3": "偵測結果有 10 秒節流，並在這幾個時機重新整理：backend 連上、＋ 選單打開、啟動Agent 的 agent 下拉取得焦點。",
           "h2": "點下去會發生什麼",
-          "p4": "點一個標示未安裝的 CLI，Navide 會先重新偵測一次（可能你剛剛在別的地方裝好了）；如果確定還是缺，就不會開一個注定死掉的面板，而是直接叫出安裝引導對話框。",
+          "p4": "點一個標示未安裝的 CLI，Navide 會先重新偵測一次（可能你剛剛在別的地方裝好了）；如果確定還是缺，就不會開一個注定死掉的面板，而是直接叫出安裝引導對話框。引導只在三種情形出現：面板以 exit 127 結束、後端在啟動前的探測回報找不到執行檔、或你自己從 ＋ 選單或手動開面板選了未安裝的那一家。它以前也會蓋在一個其實開得起來的面板上，現在不會。",
           "h3": "安裝引導對話框",
           "p5": "三個入口共用同一個對話框，差別只在來源：",
           "table": {
@@ -2645,10 +2765,10 @@
           },
           "dialogSources": {
             "spawn": {
-              "when": "你在 ＋ 選單或 Manual spawn 選了一個沒安裝的 CLI。"
+              "when": "你在 ＋ 選單或 啟動Agent 選了一個沒安裝的 CLI。"
             },
             "pane": {
-              "when": "面板真的開起來但 CLI 找不到——PTY 以 127 結束；或後端啟動前的探測直接回報找不到執行檔（涵蓋 Open Agent、Resume、Handle Issue、pipeline 階段）。"
+              "when": "面板真的開起來但 CLI 找不到——PTY 以 127 結束；或後端啟動前的探測直接回報找不到執行檔（涵蓋「開啟 Agent」、「↻ 接續」、問題處理流程開出的面板、pipeline 階段）。"
             },
             "settings": {
               "when": "設定 ▸ CLI Agents 底部「安裝與更新」清單裡按「安裝」。"
@@ -2664,6 +2784,16 @@
           "callout": {
             "title": "「暫時不要」不等於「不要再問」",
             "text": "關掉對話框或按<em>暫時不要</em>不會記住任何事，下次還是會問。要真的關掉，得勾底部的 <strong>不要再詢問 {'{'}CLI{'}'}</strong>。這個勾選<strong>只擋自動彈出</strong>（面板死掉、啟動前探測失敗這兩種）；你自己從 ＋ 選單點那家 CLI 的時候，對話框永遠會開——那是你主動要求的。勾選是逐家記錄、永久保存，直到你自己取消勾選；沒有時效。"
+          },
+          "h4": "裝好了卻開不起來：PATH 怎麼找",
+          "p8": "用 <code>npm -g</code>、nvm、volta、pnpm 或 bun 裝的 CLI，以前從 Finder 啟動 Navide 時，後端的 PATH 探測看不到它們，於是<strong>在開面板之前就先擋下來</strong>——讀起來就是「在終端機跑得動、在 Navide 開不起來」。現在探測找不到<strong>不再擋</strong>，交給面板自己的 login shell 再找一次。另外 <code>--version</code> 回傳非零但印得出版本也算已安裝，只有完全印不出版本才判定為缺。",
+          "p9": "macOS 上還有一個順序上的取捨：nvm 的各個版本目錄現在排在<strong>你自己的 PATH 之後</strong>，而不是最前面，所以 Navide 不會再悄悄換掉你用 <code>nvm use</code> 選的 node。如果你以前（無意間）靠 Navide 把 nvm 的 node 排到前面，現在拿到的會是你 shell PATH 裡的那一個。pnpm 在 macOS 上的家目錄是 <code>~/Library/pnpm</code>。",
+          "h5": "未登入也會被指出來",
+          "p10": "啟動前的探測只是一次 <code>--version</code> 的煙霧測試：它答得出「裝了沒」，答不出「登入了沒」。所以開面板時若偵測到<strong>有未登入的證據</strong>，Navide 會先講出來，而不是讓面板默默停在 CLI 自己的登入畫面。判準刻意是「有未登入的證據」而不是「已登入」——Navide 讀不到憑證檔的那幾家一律不報，寧可不說也不誤報。所以<strong>沒看到公告不等於已經登入</strong>。",
+          "p11": "安裝引導對話框也多了一種結局：裝好了但還沒登入時，最後一步顯示<strong>「{'{'}CLI{'}'} 已安裝，但尚未登入」</strong>，附上說明、執行檔路徑，以及一顆<em>登入</em>按鈕——按下去會開一個面板替你跑登入指令，多數 CLI 接著會開瀏覽器。（首次啟動的設定精靈本身沒有新增登入步驟，仍然是開發環境、Agent CLI、系統權限、完成四步。）",
+          "callout2": {
+            "title": "Grok CLI 換成官方的 xAI CLI",
+            "text": "安裝方式改成官方的安裝腳本（用 <code>curl</code> 抓 <code>https://x.ai/cli/install.sh</code> 交給 bash 執行），不再是 npm 套件——所以它需要 <code>curl</code>，也需要一個真正的終端機視窗；更新指令是 <code>grok update</code>；設定檔換成 <code>~/.grok/config.toml</code>，MCP 以 TOML 寫入，舊社群版的 <code>user-settings.json</code> 不再讀。它<strong>沒有診斷指令</strong>（官方沒提供，設定頁改成指向官方文件），也沒有 effort 欄與權限略過旗標。同名的社群版 CLI 會裝在同一個路徑，<code>which grok</code> 分不出來，只能靠版本字串的形狀分辨。"
           }
         },
         "s3": {
@@ -2672,14 +2802,14 @@
           "p1": "一個角色就是<strong>一段系統提示詞</strong>，加上識別碼、名稱、一行摘要。就這四個欄位——<strong>角色不綁定 CLI、不帶顏色、不帶參數</strong>。",
           "p2": "內建五個預設角色：<code>pm</code>、<code>backend</code>、<code>frontend</code>、<code>mobile</code>、<code>qa</code>。",
           "h2": "在哪裡編輯",
-          "p3": "<strong>Pipeline Manager 視窗</strong>（選單 Window ▸ Pipeline Manager）的 <strong>Roles</strong> 分頁。左邊是角色清單，右邊編輯四個欄位。可以新增、刪除、重設為預設值，以及匯出／匯入 JSON。",
+          "p3": "<strong>流程管理視窗</strong>（選單 視窗 ▸ 流程管理）的 <strong>角色</strong> 分頁。左邊是角色清單，右邊編輯四個欄位。可以新增、刪除、重設為預設值，以及匯出／匯入 JSON。",
           "note": "改了角色不會影響已經在跑的面板——編輯區底下就寫著「變更僅套用於之後新啟動的 agent」。設定視窗只是讀取同一份角色清單，它自己沒有編輯介面。",
           "h3": "開面板時怎麼套用",
-          "p4": "＋ 選單最上方與 Manual spawn 對話框各有一個 <strong>Role</strong> 下拉，兩者共用同一個選擇。Manual spawn 裡還可以展開預覽該角色的一行摘要與完整提示詞。",
+          "p4": "＋ 選單最上方與「啟動Agent」對話框各有一個 <strong>選擇角色…</strong> 下拉，兩者共用同一個選擇。「啟動Agent」裡還可以展開預覽該角色的一行摘要與完整提示詞。",
           "p5": "套用的機制很直白：<strong>把角色的系統提示詞當成你自己打的字，貼進 CLI 的輸入框並按 Enter</strong>。不是改參數、不是寫設定檔。實際貼進去的內容是角色提示詞加上一段固定的待命後綴（要求 agent 回覆「準備就緒，等待任務」後停下來），再加上該面板的 session 標記。",
           "p6": "面板在這個階段的狀態會顯示<strong>注入角色中</strong>。注入前 Navide 會先自動關掉 CLI 的啟動信任對話框（送一個 Enter），並等畫面安靜下來再貼。",
           "callout": {
-            "title": "Terminal 沒有角色",
+            "title": "一般終端機沒有角色",
             "text": "從 ＋ 選單開的一般終端機不帶角色。原因就是上面那句：角色是打進 CLI 提示框的文字，shell 只會把它原樣印出來。"
           },
           "h4": "重新套用角色",
@@ -2688,10 +2818,10 @@
         },
         "s4": {
           "title": "設定 ▸ CLI Agents",
-          "p1": "這個分頁由四段組成。",
+          "p1": "這個分頁由五段組成，由上而下是：清單、啟動覆寫、權限略過、推送通道、安裝與更新。",
           "h1": "1 · CLI Agents 清單",
-          "p2": "逐家勾選要不要出現在 ＋ 選單與 Manual spawn 下拉裡，並用左邊的 <code>⠿</code> 拖曳排序——這個順序同時決定 <kbd class=\"cah-kbd\">Ctrl</kbd>+<kbd class=\"cah-kbd\">1</kbd>…<kbd class=\"cah-kbd\">9</kbd> 對應哪一家。至少要保留一家啟用。",
-          "h2": "2 · 權限略過",
+          "p2": "逐家勾選要不要出現在 ＋ 選單與 啟動Agent 下拉裡，並用左邊的 <code>⠿</code> 拖曳排序——這個順序同時決定 <kbd class=\"cah-kbd\">Ctrl</kbd>+<kbd class=\"cah-kbd\">1</kbd>…<kbd class=\"cah-kbd\">9</kbd> 對應哪一家。至少要保留一家啟用。",
+          "h2": "2 · 啟動覆寫",
           "p3": "多數 CLI 有一個「略過權限提示」的旗標，讓 agent 無人值守地跑下去。這裡是兩層設定：",
           "list": {
             "global": "最上面一顆<strong>全域開關</strong>：<em>預設略過權限提示（YOLO 模式）</em>。",
@@ -2702,9 +2832,9 @@
             "title": "改了不會影響正在跑的面板",
             "text": "旗標是在面板<strong>啟動的那一刻</strong>就寫進它的命令列的。這裡的變更只影響之後開的面板；已經在跑的會保留它啟動時的設定，直到你重建或還原它。"
           },
-          "h3": "3 · 推送通道",
-          "p5": "四家 CLI（Claude Code、Kilo Code、OpenCode、Qwen Code）可以直接收下訊息，不必把字打進輸入框。逐家開關，每一列都寫著那家的代價（開本機埠、寫明文暫存檔、裝背景 hook…）。細節見「CLI 互傳訊息」與「MCP」分頁。",
-          "h4": "4 · 安裝與更新",
+          "h3": "延伸：「啟動Agent」對話框的模型與推理強度",
+          "p5": "四家 CLI（Claude Code、Kilo Code、OpenCode、Qwen Code）可以直接收下訊息，不必把字打進輸入框。逐家開關，每一列都寫著那家的代價（開一個沒有密碼的本機埠、開一個帶每面板密碼的本機埠、寫明文的暫存檔、裝一個背景 hook）。改一次，所有已經開著的視窗會同步，不必重開設定。細節見「CLI 互傳訊息」與「MCP」分頁。",
+          "h4": "3 · 權限略過",
           "p6": "每家 CLI 一列，顯示狀態徽章（已安裝／未安裝／版本過舊）、版本號、安裝來源（npm / Homebrew / 官方安裝程式 / 官方安裝腳本）與執行檔完整路徑。可用的動作：",
           "table": {
             "action": "動作",
@@ -2736,15 +2866,109 @@
           "note": "更新會替換執行檔；已經在執行中的面板要重新啟動才會用到新版本。",
           "callout2": {
             "title": "這裡沒有的東西",
-            "text": "<strong>沒有「預設參數」欄位</strong>，也<strong>沒有模型選擇的介面</strong>。執行檔的指定不是打路徑，而是在偵測到多套安裝時從候選裡挑一套。模型與 reasoning effort 只有在<strong>由 agent 透過 MCP 開面板</strong>時才能指定——12 家接受指定模型，Aider 與 Droid 不行；要求它們指定模型的呼叫會被明確拒絕，而不是悄悄用預設值開起來。"
-          }
+            "text": "仍然<strong>沒有「預設參數」欄位</strong>——啟動指令是<em>整條取代</em>，不是在預設命令後面追加。<strong>執行檔的指定也不是打路徑</strong>，而是在偵測到多套實體安裝時從候選裡挑一套（挑過之後清單那一列會出現「自訂執行檔」chip）。模型與 reasoning effort 則<strong>不再只有 MCP 那一條路</strong>：現在啟動覆寫就有正式的欄位，手動開面板的對話框也有。"
+          },
+          "chipsIntro": "每一列除了名字，右邊還有一排 chip，把那家 CLI 目前的設定現況直接讀回來。順序是固定的，照著「它是什麼 → 它會用什麼跑 → 怎麼找得到它」排：",
+          "chipsTable": {
+            "chip": "Chip",
+            "shows": "顯示什麼"
+          },
+          "chips": {
+            "install": {
+              "chip": "安裝狀態",
+              "shows": "已安裝（含版本）／可更新／未安裝。還沒探測過的那一刻不畫 chip——「還沒問過」和「找不到」不是同一件事，不會被塗成紅色。"
+            },
+            "model": {
+              "chip": "模型與 effort",
+              "shows": "只有你在啟動覆寫<strong>挑過</strong>才會出現「模型 …」「effort …」；維持廠商預設不會有 chip。不能在啟動時指定模型的那幾家固定顯示「不支援模型參數」。"
+            },
+            "permission": {
+              "chip": "權限模式",
+              "shows": "權限 繼承／強制開／強制關。沒有略過旗標的那幾家不畫。"
+            },
+            "push": {
+              "chip": "推送通道",
+              "shows": "push（含種類）／push 已關／無 push。"
+            },
+            "account": {
+              "chip": "登入與帳號數",
+              "shows": "未登入，或掛了幾個帳號。Navide 查不到登入狀態的那幾家不畫。"
+            },
+            "binary": {
+              "chip": "自訂執行檔",
+              "shows": "你在多套實體安裝裡挑了一套，不是預設的那一套。"
+            },
+            "command": {
+              "chip": "自訂啟動指令",
+              "shows": "這一列設了啟動指令。它刻意是黃的，因為它同時把上面的模型與 effort 關掉。"
+            },
+            "env": {
+              "chip": "自訂 env",
+              "shows": "這一列加了幾個環境變數。"
+            }
+          },
+          "chipsLegend": "顏色是一致的：綠＝正常或已啟用，黃＝偏離預設、值得注意，紅＝不可用或被關掉，灰＝中性事實。",
+          "launchIntro": "這一段決定每家 CLI <strong>新開的面板</strong>從哪一條命令列起跑。它是一個手風琴，<strong>一次只展開一家</strong>——十四家的環境變數表攤平在同一頁會變成十四張表。設定是逐家、逐台機器的，不隨專案走，而且對所有視窗生效。收合起來的那一列會用一行摘要（模型、effort、自訂指令、幾個 env）告訴你這一家被動過什麼。",
+          "launchTable": {
+            "field": "欄位",
+            "detail": "做什麼"
+          },
+          "launchFields": {
+            "model": {
+              "field": "預設模型",
+              "detail": "自由輸入的文字框（留空＝廠商預設）。模型 id 每次改版都在變，所以不做成下拉。只有能在啟動時指定模型的 CLI 才有這一欄。"
+            },
+            "effort": {
+              "field": "預設 effort",
+              "detail": "能列舉出可用強度的那幾家是下拉，其餘是文字框。廠商不接受的組合會<strong>當場被拒絕、不會存下去</strong>，並寫出它到底接受哪些值。"
+            },
+            "command": {
+              "field": "啟動指令",
+              "detail": "留空＝用預設。填了就整條由你自己寫——見下面的警告。"
+            },
+            "env": {
+              "field": "環境變數",
+              "detail": "逐列的變數／值，可新增可移除。變數名只接受字母、數字與底線，且不能以數字開頭（帶空白或等號的名稱根本放不進行程環境）。"
+            }
+          },
+          "callout3": {
+            "title": "填了啟動指令，Navide 就什麼都不加",
+            "text": "這是這一段最容易誤會的地方。只要啟動指令非空，<strong>上面的預設模型與 effort、權限略過旗標、以及各面板專屬的參數全都不會被加上去</strong>——整條命令照你寫的原樣執行。唯一仍然生效的是<strong>自訂執行檔</strong>（那是另一個設定），而且它只換得掉開頭那一個 token：寫成 <code>npx claude</code> 這種包裝式的一行，開頭不是 <code>claude</code>，執行檔就不會被換。清空這一欄，上面那些就全部回來。"
+          },
+          "launchResume": "另外兩條路徑<strong>不吃</strong>這個設定。對面板按 rebuild、或重啟後還原面板，都必須依廠商自己的語法重組 resume 指令，所以那些面板會用預設指令啟動；登入面板也一樣——後端只留命令的第一個 token 再接上廠商的登入子指令，一條包裝式的指令會被截成類似 <code>npx auth login</code> 的東西。Navide 無法把兩者合併：它無從得知 session id 該插進你寫的那條指令的哪個位置。",
+          "launchReject": "同時指定模型會被<strong>硬拒絕</strong>，而不是悄悄忽略。由 agent 透過 MCP 開面板時，只要那家 CLI 設了自訂啟動指令又帶了 model 或 effort，整個請求會被擋下並說明原因（<strong>resume 是例外</strong>——它的指令是依廠商語法重組的，本來就不讀這個設定）。理由是：模型悄悄落回預設值時，開出來的面板和拿到指定模型的面板長得一模一樣。",
+          "launchEnv": "環境變數這一欄有一份 Navide 自己管的<strong>保留名單</strong>（寫這份說明時是 24 個，區塊底下會逐字列出全部，以那一份為準）。保留變數<strong>不是不准填</strong>：你照樣存得起來，列上只會多一個紅色的「不會傳進去」——哪天 Navide 不再管那個變數，它就會開始生效。真正被丟掉是在開面板的時候，而且會在你按下開啟的那個視窗跳一則提示。提示分兩種：<strong>被擋下</strong>（值從來沒進到面板的環境裡）與<strong>被蓋掉</strong>（進去了，但後面被 Navide 自己的設定改寫或刪掉——看起來像套用了，其實沒有）。兩種都不會阻止面板開起來。",
+          "launchEnvNote": "保留名單是全域的，不分廠商——在 Claude Code 那一列填 <code>CODEX_HOME</code> 一樣會被擋。它會隨著 Navide 自己管的東西增減，所以不要背數字，看區塊底下那一份。",
+          "spawnIntro": "「啟動Agent」對話框多了 <strong>模型</strong> 與 <strong>推理強度</strong> 兩欄，預設值就是該 CLI 在啟動覆寫設的那一組（每次打開對話框重讀一次，不吃快取）。模型是自由輸入，推理強度是下拉、選項來自那家 CLI 自己列出的強度。兩欄出現與否<strong>不是硬編的名單</strong>，而是看廠商 spec 有沒有宣告對應的啟動參數：",
+          "spawnTable": {
+            "group": "出現哪幾欄",
+            "vendors": "哪幾家"
+          },
+          "spawnGroups": {
+            "both": {
+              "group": "模型與推理強度都有（5 家）",
+              "vendors": "Claude Code、Antigravity CLI、Copilot CLI、Muse Code、Pi"
+            },
+            "modelOnly": {
+              "group": "只有模型（7 家）",
+              "vendors": "Codex、Cursor CLI、Grok CLI、Kilo Code、Kimi Code、OpenCode、Qwen Code"
+            },
+            "neither": {
+              "group": "兩欄都沒有（3 項）",
+              "vendors": "Aider、Droid，以及 Terminal（它不是 agent）"
+            }
+          },
+          "spawnNote": "「只有模型」的那七家並不是沒有思考強度可調，而是那個旋鈕不在啟動參數上：有的寫在模型 id 裡（例如結尾的 <code>-high</code>），有的在設定檔，有的要進 CLI 後用它自己的指令切。打的值不合規矩時（模型 id 帶空白、或以「-」開頭）對話框會當場說明原因並把送出鈕停用。如果那家 CLI 設了自訂啟動指令，這兩欄會直接停用並寫上原因——那條命令照原樣執行，Navide 不會往裡面加模型。",
+          "h5": "4 · 推送通道",
+          "h6": "5 · 安裝與更新",
+          "pushAllOff": "<strong>全部關掉是合法的選擇</strong>，這裡沒有「至少留一家」的規則。全關時頁面會直接列出三項代價：訊息改成等對方面板閒置之後再打進輸入框，所以比較慢才會到；Claude Code 的 rewake 是唯一能叫醒閒置 agent 的手段，關掉之後只能等它自己回到閒置；已經開著的面板會保留它啟動時的通道，直到重新啟動為止。"
         },
         "s5": {
           "title": "帳號",
-          "p1": "設定 ▸ <strong>Accounts</strong> 一頁裝了兩塊互不相干的東西：上半是 Git 帳號，下半是 CLI 帳號。",
+          "p1": "設定 ▸ <strong>帳號</strong> 一頁裝了兩塊互不相干的東西：上半是 Git 帳號，下半是 CLI 帳號。",
           "h1": "CLI 帳號",
-          "p2": "14 家都會列出標題，但只有 <strong>5 家支援多帳號</strong>：Claude Code、Codex、Kimi Code、Grok CLI、Kilo Code。其餘只印一行「此 agent 不支援多帳號」，連新增按鈕都沒有。",
-          "p3": "每家底下第一張卡片永遠是內建的 <strong>Default</strong>（你原本的登入憑證），後面才是你自己加的帳號。卡片上顯示登入身分的 email、<em>預設</em> 標籤，以及該帳號的剩餘額度。",
+          "p2": "14 家都會列出標題，但只有 <strong>5 家支援多帳號</strong>：Claude Code、Codex、Kimi Code、Grok CLI、Kilo Code。其餘只印一行「此 agent 不支援多帳號。」，連新增按鈕都沒有。",
+          "p3": "每家底下第一張卡片永遠是內建的 <strong>預設</strong>（你原本的登入憑證），後面才是你自己加的帳號。卡片上顯示登入身分的 email、<em>預設</em> 標籤，以及該帳號的剩餘額度。",
           "table": {
             "action": "操作",
             "behavior": "行為"
@@ -2773,7 +2997,7 @@
           },
           "note1": "這個面板<strong>沒有改名功能</strong>。帳號名稱是自動產生的（Account 1、Account 2…），卡片上顯示的是登入身分，名字只是內部識別。",
           "p4": "兩種刪不掉的情況會被擋下並說明原因：帳號<strong>目前使用中</strong>（請先切到別的帳號），或該帳號的<strong>登入程序還在跑</strong>（請先完成或關掉它的登入面板）。",
-          "p5": "<strong>切換時正在跑的 CLI 會怎樣？</strong>Navide 不會砍掉它們。預設行為是<strong>拒絕切換</strong>並告訴你「有 N 個運行中的 CLI pane 正在使用此帳號」。如果你堅持，會跳一個確認框：<em>切換帳號將重啟 N 個運行中的 {'{'}CLI{'}'} pane，繼續？</em> 按下「切換並重啟」後，那些面板是被 <strong>resume 重建</strong>（接回原本的對話），不是被殺掉。有面板重建失敗會出一則摘要通知。",
+          "p5": "<strong>切換時正在跑的 CLI 會怎樣？</strong>Navide 不會砍掉它們。預設行為是<strong>拒絕切換</strong>並告訴你「有 N 個運行中的 CLI pane 正在使用此帳號，請先關閉再切換。」如果你堅持，會跳一個確認框：<em>切換帳號將重啟 N 個運行中的 {'{'}CLI{'}'} pane，繼續？</em> 按下「切換並重啟」後，那些面板是被 <strong>resume 重建</strong>（接回原本的對話），不是被殺掉。有面板重建失敗會出一則摘要通知。",
           "p6": "Claude Code 是例外：它每次請求前都重讀憑證，所以切換是熱替換——不跳確認框、也不重啟任何面板。",
           "p7": "切換太頻繁會被擋（每家 CLI 60 秒最多 3 次），確認強制切換也繞不過去。",
           "callout1": {
@@ -2781,20 +3005,25 @@
             "text": "面板上的說明就寫著：「已開啟的 pane 在重開前仍使用原帳號」。所有帳號共用你真實的家目錄（session 與歷史是共通的），切換帳號是<strong>就地替換儲存的憑證</strong>。"
           },
           "h2": "在終端機外部登入，Navide 會知道",
-          "p8": "你在自己的終端機直接跑 <code>claude /login</code> 之類的指令，Navide 有一個憑證監看器盯著各家 CLI 的憑證檔目錄。檔案變動後約 <strong>0.8 秒</strong>讀一次「身分指紋」，指紋沒變就什麼都不做；變了就把「預設」指標移到對應的帳號，並順手觸發一次額度重讀。Accounts 面板上的 email、<em>預設</em> 標籤與額度徽章會跟著即時更新。",
+          "p8": "你在自己的終端機直接跑 <code>claude /login</code> 之類的指令，Navide 有一個憑證監看器盯著各家 CLI 的憑證檔目錄。檔案變動後約 <strong>0.8 秒</strong>讀一次「身分指紋」，指紋沒變就什麼都不做；變了就把「預設」指標移到對應的帳號，並順手觸發一次額度重讀。帳號 面板上的 email、<em>預設</em> 標籤與額度徽章會跟著即時更新。",
           "p9": "如果 live 憑證對不到任何已登記的帳號，Navide 會<strong>自動用該 email 建一筆 profile</strong>。整個過程不會動你的憑證檔，也<strong>不會重啟你的面板</strong>。",
           "note2": "限制：如果某家 CLI 從來沒登入過（憑證目錄還不存在），要重開 Navide 之後才會開始監看。",
           "h3": "Git 帳號",
-          "p10": "四個欄位：<strong>名稱、Host</strong>（預設 <code>github.com</code>）<strong>、Username、Token</strong>。清單上每列顯示 <code>host · username · ••••後四碼</code>——Token 本體不會回傳給介面。編輯時 Token 留空表示沿用舊的。",
+          "p10": "四個欄位：<strong>名稱、主機</strong>（預設 <code>github.com</code>）<strong>、使用者名稱、Token</strong>。清單上每列顯示 <code>host · username · ••••後四碼</code>——Token 本體不會回傳給介面。編輯時 Token 留空表示沿用舊的。",
           "p11": "Token 透過作業系統金鑰鏈（safeStorage）加密後存在本機，解密只發生在主行程。金鑰鏈不可用時會出現黃色提示，新增按鈕整個不顯示、編輯被停用。",
           "callout2": {
             "title": "綁定不在這裡做",
             "text": "「這個工作區要用哪個 Git 帳號」是在<strong>側欄的 Git 面板</strong>上那顆帳號膠囊選的。設定頁只負責帳號本身的增刪改。刪掉一個帳號時，指向它的綁定會一起清掉。"
-          }
+          },
+          "hPortable": "可攜憑證",
+          "portable1": "帳號卡片上多了一欄<strong>可攜憑證</strong>：跑一次該 CLI 官方的取得指令，把結果貼進來即可。目前<strong>只有 Claude Code 宣告了可攜憑證</strong>（指令是 <code>claude setup-token</code>），其餘十三家沒有這一欄。貼上的值在本機加密保存，之後開的<strong>新面板</strong>會用環境變數把它交給 CLI，<strong>不會寫進 CLI 自己的憑證檔</strong>。",
+          "portable2": "卡片會標示<em>未設定</em>／<em>已設定</em>，並在憑證被壓過時直說「未生效」以及是哪一份設定壓過它——因為多數 CLI 會把自己的登入檔、金鑰或企業政策目錄排在環境變數之前。要讓貼上的憑證生效，得先在那個 CLI 登出。",
+          "portableNote": "卡片上另外有「來自雲端」「使用中」這類標記，那是給雲端同步來的憑證用的。Navide Cloud 的「憑證」範圍目前<strong>列得出來但不能開啟</strong>，所以「用另一台貼過的憑證」這條路現在還走不通——貼上的憑證只留在這台機器上。",
+          "switchToast": "<strong>切換失敗現在一定看得到。</strong>以前只有「有面板在跑」和「切太頻繁」這兩種拒絕會跳提示，其他失敗（例如憑證交換本身失敗）只寫進帳號面板自己的橫幅——而你在看某一家的列時，那條橫幅早就捲出畫面了，按下「設為預設」看起來像什麼都沒發生。現在每一種切換失敗都會跳提示。"
         },
         "s6": {
           "title": "額度顯示",
-          "p1": "額度徽章長在 <strong>CLI 面板的標題列</strong>上（不是狀態列），顯示剩餘百分比；滑鼠停留展開詳細視窗，裡面有各個計量窗口、重置時間，以及帳號切換入口。設定 ▸ Accounts 的帳號卡片讀的是同一份資料。",
+          "p1": "額度徽章長在 <strong>CLI 面板的標題列</strong>上（不是狀態列），顯示剩餘百分比；滑鼠停留展開詳細視窗，裡面有各個計量窗口、重置時間，以及帳號切換入口。「設定 ▸ 帳號」的帳號卡片讀的是同一份資料。",
           "h1": "涵蓋哪幾家",
           "p2": "<strong>11 家</strong>：Claude Code、Codex、Kimi Code、Grok CLI、Antigravity CLI、OpenCode、Qwen Code、Kilo Code、Pi、Copilot CLI、Cursor CLI。Aider、Muse Code、Droid 沒有可讀的額度來源。",
           "h2": "資料從哪來",
@@ -2832,16 +3061,23 @@
             "noData": {
               "display": "尚無額度資料",
               "meaning": "還沒讀過。"
+            },
+            "limit": {
+              "display": "⛔ 幾點回來",
+              "meaning": "CLI 自己報告額度用盡。讀不到重設時間就只寫「額度用盡」。這個徽章點得掉，見下一節。"
             }
           },
-          "p3": "徽章的開關與刷新間隔在<strong>設定 ▸ General</strong>（不在 CLI Agents 分頁）。詳細視窗裡的「刷新：…」一行會直說這次為什麼沒更新：找不到憑證、憑證已過期、受到速率限制、無官方查詢途徑、未量測、失敗。"
+          "p3": "徽章的開關與刷新間隔在<strong>設定 ▸ 一般</strong>（不在 CLI Agents 分頁）。詳細視窗裡的「刷新：…」一行會直說這次為什麼沒更新：找不到憑證、憑證已過期、受到速率限制、無官方查詢途徑、未量測、失敗；失敗時下面還會多一行「原因：…」，把實際的錯誤講出來，而不是只丟一句無法取得。",
+          "h4": "額度用盡的 ⛔ 徽章",
+          "p4": "CLI 自己印出額度上限的訊息時，面板上會直接出現一個 <strong>⛔ 徽章與重設倒數</strong>（讀不到重設時間就只寫「額度用盡」），同時發一則通知。這和上面那個百分比徽章是兩回事：百分比是 Navide 去查來的，這一個是 CLI 自己說的。",
+          "p5": "徽章<strong>點得掉</strong>。確認框會先提醒你：如果 Loop 正在等額度恢復，關掉之後它會立刻繼續。關掉的抑制只維持到<strong>那一次的重設時間</strong>為止（比對時留 60 秒容差，因為每次輪詢都用自己的時鐘重算一次），過了就失效——隔天再撞到額度、哪怕時鐘上的時間字面相同，也算新的一次。抑制還<strong>綁在當初撞到額度的那個帳號</strong>上：切到別的帳號仍然抑制，切回該帳號才解除。讀不到重設時間時<strong>完全不抑制</strong>（沒有時鐘就無從分辨舊提示與新事件），徽章改由一個五小時的保險期限自動收掉。"
         },
         "s7": {
           "title": "閒置回收與 CLI 成本",
           "p1": "每個跑著的 CLI 都佔著一塊<strong>啟動就配置、之後不再釋放</strong>的記憶體——設定頁上的說法是「每個常是 200–300 MB」。開十幾個面板，這件事就會變成整台機器的問題。",
-          "p2": "所以 Navide 預設會把太久沒動靜的面板降級回<strong>佔位卡</strong>：結束那個行程，位子、名字、訊息位址全部留著，點一下就從 CLI 自己的紀錄接回對話。",
+          "p2": "所以 Navide 預設會把太久沒動靜的面板降級回<strong>佔位卡</strong>：結束那個行程，位子、名字、訊息位址全部留著，卡片上寫著「點擊以續接」，按下去就從 CLI 自己的紀錄接回對話。",
           "list": {
-            "threshold": "門檻可選 15 分鐘 / 30 分鐘 / 1 小時 / 3 小時 / 8 小時 / 永不回收（預設 30 分鐘），在設定 ▸ General。",
+            "threshold": "門檻可選 15 分鐘 / 30 分鐘 / 1 小時 / 3 小時 / 8 小時 / 永不回收（預設 30 分鐘），在設定 ▸ 一般。",
             "exempt": "目前聚焦中的、正在等你回答的、輸入框裡有未送出文字的面板，都不會被回收。",
             "now": "同一段設定裡有一顆 <strong>立即回收</strong>，會先告訴你現在有幾個面板符合條件、大約佔多少。"
           },
@@ -2883,10 +3119,10 @@
             "quotaStale": {
               "symptom": "額度顯示不更新",
               "cause": "剛切完帳號（Claude 要開一次 CLI，最多約一分鐘）；或這次讀取失敗，正在顯示快取；或那家 CLI 根本沒有可讀的額度來源。",
-              "fix": "先看徽章詳細視窗裡的「刷新：…」——它會直接說出原因。要立刻重讀就按設定 ▸ Accounts 頁首的「重新偵測額度」（會略過失敗後的等待時間）。注意只有 CLI 目前登入的那個帳號讀得到；停放中的帳號只能顯示快取。"
+              "fix": "先看徽章詳細視窗裡的「刷新：…」——它會直接說出原因。要立刻重讀就按「設定 ▸ 帳號」頁首的「重新偵測額度」（會略過失敗後的等待時間）。注意只有 CLI 目前登入的那個帳號讀得到；停放中的帳號只能顯示快取。"
             },
             "panesRunning": {
-              "symptom": "「有 N 個運行中的 CLI pane 正在使用此帳號」",
+              "symptom": "「有 N 個運行中的 CLI pane 正在使用此帳號，請先關閉再切換。」",
               "cause": "非 Claude 的 CLI 在有面板跑著時不允許就地換憑證。",
               "fix": "關掉那些面板再切；或在確認框選「切換並重啟」，讓 Navide 用 resume 重建它們。太頻繁切換會被 60 秒 3 次的限制擋下，等一下再試。"
             },
@@ -2894,6 +3130,31 @@
               "symptom": "調了權限略過，正在跑的面板沒反應",
               "cause": "旗標在面板啟動當下就寫死進命令列了。",
               "fix": "重建（⌘R）或還原那個面板。"
+            },
+            "notOnPath": {
+              "symptom": "在終端機跑得動，從 Navide 開卻起不來",
+              "cause": "以前後端的 PATH 探測看不到 nvm／volta／pnpm／bun／npm -g 裝的執行檔，就在開面板前直接擋下來。",
+              "fix": "現在探測找不到不再擋，面板自己的 login shell 會再找一次。若仍失敗，到設定 ▸ CLI Agents 按「重新偵測」。另外 macOS 上 nvm 目錄現在排在你自己的 PATH 之後，nvm use 選的版本不會再被 Navide 換掉。"
+            },
+            "signedOut": {
+              "symptom": "面板一開就停在 CLI 自己的登入畫面",
+              "cause": "CLI 裝好了但沒登入——啟動前的探測只驗得出「裝了沒」。",
+              "fix": "Navide 會先公告這件事；安裝引導對話框的最後一步也有一顆登入按鈕，按下去開一個面板替你跑登入。注意 Navide 讀不到憑證檔的那幾家不會報，所以沒看到公告不代表已經登入。"
+            },
+            "launchCommand": {
+              "symptom": "設了預設模型，開出來的面板卻沒照著跑",
+              "cause": "那家 CLI 同時設了自訂啟動指令。整條命令照原樣執行，Navide 不會再加模型、effort 或權限略過旗標。",
+              "fix": "清空啟動指令，或把模型直接寫進你那一條指令裡。由 agent 透過 MCP 指定模型時會被直接拒絕並說明原因；手動開面板對話框的兩欄會停用。"
+            },
+            "envIgnored": {
+              "symptom": "在啟動覆寫加的環境變數沒生效",
+              "cause": "它在 Navide 自己管的保留名單裡，或是進去之後被更高優先的來源蓋掉。",
+              "fix": "開面板時跳出的提示會指名是哪幾個變數、屬於哪一種：被擋下＝從來沒進去，被蓋掉＝進去了又被改寫或刪掉。保留名單就印在啟動覆寫區塊底下。名稱不在名單裡卻仍被蓋掉，通常是憑證或 CLI 家目錄的管理路徑寫在你後面。"
+            },
+            "resumeIgnoresCommand": {
+              "symptom": "rebuild 或還原之後，面板沒照我的啟動指令跑",
+              "cause": "resume 指令必須依廠商自己的語法重組，Navide 無從得知 session id 該插進你寫的那條指令的哪個位置。",
+              "fix": "這是刻意的，不是壞掉。需要那些參數的話，改回廠商預設指令，用預設模型與 effort 兩個欄位來設定。"
             }
           }
         }
@@ -2916,11 +3177,13 @@
             "title": "MCP 工具",
             "tag": "手動開的 pane 用這個",
             "p1": "agent 啟動時就會在自己的工具清單裡看到，不需要任何人教它。它可以先查詢有哪些對象在線上，再把指令送過去。",
-            "p2": "工具有三個：",
+            "p2": "常用的有這幾個（完整清單見「MCP」主題）：",
             "tools": {
               "list": "<strong>查詢對象</strong> — 有誰在線上、位址怎麼寫、對方現在是不是忙碌中。",
               "send": "<strong>送出指令</strong> — 把任意文字送給指定的 pane。",
-              "spawn": "<strong>開新 agent 並派工</strong> — 請 Navide 開一個新的 CLI pane、指定用哪家 CLI、給它任務。新 pane 完成後應該會用訊息回報給呼叫者，但那是子 agent 自己輸出的，不是 Navide 的保證：呼叫者忙碌時會排隊，子 agent 沒照格式輸出時則不會送達。"
+              "spawn": "<strong>開新 agent 並派工</strong> — 請 Navide 開一個新的 CLI pane、指定用哪家 CLI、給它任務。新 pane 完成後應該會用訊息回報給呼叫者，但那是子 agent 自己輸出的，不是 Navide 的保證：呼叫者忙碌時會排隊，子 agent 沒照格式輸出時則不會送達。",
+              "ack": "<strong>純確認回覆</strong> — 「收到」「做完了」這種不需要對方動作的回信。它會寫進訊息記錄給你看（面板上標成「僅記錄」），但<strong>不會打進對方的輸入框</strong>，所以不打斷、也不吵醒對方；反過來說，需要對方看到或處理的事就不能用這種。",
+              "pending": "<strong>查有沒有人在等我</strong> — 忙碌中的 pane 收不到注入，所以 agent 可以自己回頭查：有哪些訊息正排隊等我閒下來、以及自己寄出去的訊息是不是卡住了。"
             },
             "note": "十四家裡有 <strong>十家</strong>接上了這組工具（見下一節的表）。沒接上的是 Aider、Droid、Muse Code、Pi，它們改走下面的輸出協定。"
           },
@@ -2969,12 +3232,17 @@
             "absolute": {
               "form": "<絕對路徑>/<pane 名稱>",
               "meaning": "最精確的寫法"
+            },
+            "device": {
+              "form": "<裝置>/<工作區>/<pane 名稱>",
+              "meaning": "另一台機器上的 pane（兩台都要登入 Navide Cloud）"
             }
           },
           "list": {
             "noSlash": "<strong>不帶斜線就永遠出不了自己的工作區。</strong>想跨專案一定要明寫。",
             "ambiguous": "<strong>找不到或有歧義一律拒絕，不猜。</strong>把指令送到錯的 CLI，比不送更糟。",
-            "broadcast": "<strong>廣播（<code>all</code>）不會跨工作區。</strong>跨專案永遠是明確指名的動作。"
+            "broadcast": "<strong>廣播（<code>all</code>）不會跨工作區。</strong>跨專案永遠是明確指名的動作。",
+            "device": "<strong>跨裝置位址要從清單複製，不要自己拼。</strong>第一段可能是機器 id、也可能是機器名稱，只有 id 保證不會跟本機某個工作區路徑撞名。"
           }
         },
         "s5": {
@@ -2982,19 +3250,21 @@
           "p1": "不是立刻。Navide 會等對方<strong>真的閒下來</strong>才打字進去，避免打斷它正在做的事：",
           "list": {
             "alive": "對方的 CLI 還活著，而且已經過了啟動階段",
+            "noTyping": "沒有人正在那個 pane 裡打字（輸入框有草稿、或四秒內按過鍵，就先等）",
             "noTurn": "沒有正在跑的回合",
             "quiet": "最近 2 秒沒有任何輸出"
           },
-          "p2": "條件不滿足就先排隊，滿足了自動送出。所以對方正在跑長任務時，你的訊息會等它做完 — 這是刻意的。對方收到的訊息開頭會標明來源，它才知道要回覆給誰。",
+          "p2": "條件不滿足就先排隊，滿足了自動送出。所以對方正在跑長任務時，你的訊息會等它做完 — 這是刻意的。「CLI 互傳訊息」面板會直接寫出是哪一個條件擋著：「目標 pane 未在執行」「目標 pane 仍在啟動中」「使用者正在該 pane 輸入中」「目標 agent 正在執行中」「等待目標靜置」，所以「一直沒送出去」永遠查得到原因。對方收到的訊息開頭會標明來源，它才知道要回覆給誰。",
           "note": "少數 CLI（Qwen、Pi、Kimi）的紀錄裡沒有「回合結束」這個訊號，Navide 無從得知它們何時做完，改以「安靜 8 秒」當作結束。所以送給這幾種 CLI 的訊息可能會多等一會兒。"
         },
         "s6": {
           "title": "你在畫面上看得到什麼",
           "list": {
-            "panel": "<strong>狀態列的「訊息」按鈕</strong> — 開啟「CLI 互傳訊息」面板，看每一則的來源、目標、狀態與內容；跨工作區的會多一個徽章。也可以在這裡暫停投遞。",
+            "panel": "<strong>右側欄的「訊息」分頁（✉）</strong> — 開啟「CLI 互傳訊息」面板，看每一則的來源、目標、狀態與<strong>卡住的原因</strong>；跨工作區的會多一個「跨工作區」徽章。還沒送進去的可以「撤回」，失敗的可以「重送」，整批投遞則用「暫停投遞」停下來。",
             "crossWorkspace": "<strong>收到跨工作區指令時</strong> — 目標視窗會跳出提示，讓你知道這段指令不是你自己下的。",
             "mention": "<strong>輸入框打 <code>{'@'}</code></strong> — 跳出可選名單，包含其他工作區視窗的位址。",
-            "drag": "<strong>把 pane 拖到另一個 pane 上</strong> — 游標剛好停在 <code>{'@'}</code> 後面會插入對方的位址；否則貼上對方的畫面內容摘要。"
+            "drag": "<strong>把 pane 拖到另一個 pane 上</strong> — 游標剛好停在 <code>{'@'}</code> 後面會插入對方的位址；否則貼上對方的畫面內容摘要。",
+            "wake": "<strong>「點擊以續接」的佔位卡</strong> — 重開工作區後，pane 會先回來成沒有 CLI 在跑的卡片。送訊息給這種 pane 時，agent 可以要求 Navide <strong>先把它叫起來再投遞</strong>，不必你先手動點；叫起來的若是全新對話，它會在回覆裡說明，因為那個 agent 不記得先前談過什麼。"
           }
         },
         "s7": {
@@ -3003,7 +3273,10 @@
           "list": {
             "name": "新 pane 的名稱就是它的位址，取角色名最好用。",
             "report": "任務完成後，新 pane 會<strong>主動用訊息回報</strong>給開它的那個 agent。",
-            "rejected": "被拒絕的原因<strong>只跟寫錯有關</strong>：CLI 名稱不存在、名稱重複或不合法、任務空白、指定了那家 CLI 無法接受的模型或思考強度。"
+            "rejected": "被拒絕的原因<strong>只跟寫錯有關</strong>：CLI 名稱不存在、名稱重複或不合法、任務空白、指定了那家 CLI 無法接受的模型或思考強度。",
+            "kickoff": "<strong>第一段任務有沒有真的送進去，會一併回報。</strong>Navide 會等到 CLI 開機、出現提示字元、把任務打進去為止才回答。沒能確認送達時，它會說「先查狀態再決定」而不是叫你重送——盲目重送等於把同一份工作派兩次。",
+            "duplicate": "<strong>同一個請求重複開面板會被擋下來</strong>，所以 agent 因為等太久而再送一次時，不會多出一個 pane。",
+            "resume": "<strong>也可以接續舊對話開新 pane。</strong>agent 先列出這個工作區還留著的 CLI 對話，再指定其中一個開起來，新 pane 帶著那段對話的記憶開始（連在一般終端機裡開的也算）。對話 id 會先對那家 CLI 的紀錄檔查證，查不到就直接拒絕，不會默默開成一個空的。"
           },
           "table": {
             "suggestion": "建議值",
@@ -3023,7 +3296,8 @@
               "value": "2 層"
             }
           },
-          "note": "這些是<strong>建議值，不是上限</strong>——超過不會擋下來，只會在回覆裡附一則提醒，讓 agent 轉達或記錄，用意是提醒它別遞迴開下去把機器塞爆。流程（pipeline）的 pane 也可以用 <code>---SPAWN---</code> 區塊做同一件事，走的是同一套建議值。"
+          "note": "這些是<strong>建議值，不是上限</strong>——超過不會擋下來，只會在回覆裡附一則提醒，讓 agent 轉達或記錄，用意是提醒它別遞迴開下去把機器塞爆。流程（pipeline）的 pane 也可以用 <code>---SPAWN---</code> 區塊做同一件事，走的是同一套建議值。",
+          "note2": "接續對話這件事<strong>你自己一直都做得到</strong>：手動開 pane 的卡片上有「↻ 接續」，Agent 記錄裡也有「↻ 接續 Session」。這裡新增的是 agent 那一側——它現在也能自己列出有哪些對話可以接。"
         },
         "s8": {
           "title": "護欄",
@@ -3051,7 +3325,7 @@
             },
             "pause": {
               "limit": "暫停開關",
-              "value": "訊息面板",
+              "value": "「CLI 互傳訊息」面板",
               "why": "你隨時可以喊停，訊息會排隊但不送出"
             }
           }
@@ -3090,14 +3364,24 @@
               "fix": "正常現象，等它做完；真的卡住 30 分鐘會自動標為失敗"
             },
             "rateLimit": {
-              "symptom": "提示超出頻率限制",
+              "symptom": "面板寫出「頻率上限：同兩個 pane 之間每 60 秒最多 5 則」",
               "cause": "同一組來源 → 目標 60 秒內超過 5 則",
               "fix": "通常代表兩個 agent 在無效往返，去看看它們在聊什麼"
             },
             "paused": {
               "symptom": "訊息面板一則都沒動",
-              "cause": "投遞被暫停了",
-              "fix": "在訊息面板按「恢復投遞」"
+              "cause": "面板寫出「投遞已暫停」",
+              "fix": "在「CLI 互傳訊息」面板按「恢復投遞」"
+            },
+            "kickoffFailed": {
+              "symptom": "派出去的 agent 好像沒開始做事",
+              "cause": "開 pane 成功了，但第一段任務沒能打進去（CLI 剛開機時畫面還在重畫，Navide 無法確認）",
+              "fix": "<strong>pane 已經開了，不要再開一次</strong>。看一下那個 pane 的畫面：輸入框是空的就把任務用訊息補送過去"
+            },
+            "deviceOffline": {
+              "symptom": "device-offline / link-offline / unknown-device",
+              "cause": "三個都是跨裝置才會出現：對方那台機器完全沒連線／這台機器沒連上 Navide Cloud／這台機器根本沒設定過 Navide Cloud",
+              "fix": "只有第一種值得等。後兩種去「Navide Cloud」視窗看連線狀態；顯示「存取權杖遭拒」就是要重新登入"
             }
           }
         },
@@ -3107,55 +3391,78 @@
             "terminalPane": "<strong>純終端機 pane 不能當收發對象</strong> — 只有 CLI agent pane 才有名稱。",
             "receiveOnly": "<strong>四家沒有 MCP 工具</strong> — 十四家都送得出訊息，但 Aider、Droid、Muse Code、Pi 只能走裸行輸出協定，見上方「哪些 CLI 送得出訊息」。",
             "detached": "<strong>pane 被拆到獨立視窗、或視窗重新載入後</strong>，MCP 工具那條路要重開 pane 才恢復；輸出協定不受影響。",
-            "queueFull": "<strong>對方佇列滿的時候</strong>，送出端會顯示成功但訊息其實被丟棄 — 遞送是非同步的，送出當下無從得知。要確認就去看對方視窗的訊息面板。",
-            "noPermission": "<strong>沒有權限確認</strong> — 跨工作區傳訊不會跳確認框，只會在收到時提示。這是刻意的取捨。"
+            "queueFull": "<strong>對方佇列滿的時候（最多 10 則）訊息會被丟棄</strong>，但不再是無聲的：面板會寫出「目標已有 10 則訊息在排隊」，失敗也會以通知的形式打回寄件的那個 pane，寄件的 agent 同樣查得到自己那則的下場。只是遞送是非同步的，<strong>送出的那一瞬間</strong>仍然不知道結果。",
+            "noPermission": "<strong>沒有權限確認</strong> — 跨工作區傳訊不會跳確認框，只會在收到時提示。這是刻意的取捨。",
+            "ackLocal": "<strong>純確認（ack）不跨裝置</strong> — 中繼不保證訊息在別人的機器上不會進到輸入框，所以跨裝置的 ack 直接被拒絕，要傳就當一般訊息傳。"
           }
         },
         "tip": "小訣竅：先幫 pane 改個角色名（「reviewer」「架構師」），標題就是位址，之後交代事情會順很多。",
-          "mock": {
-            "delivery": {
-              "caption": "同一則訊息的兩端。左邊是寄件的 pane，右邊是收件的 pane——Navide 把訊息直接打進它的終端機並自動送出，所以你看到的就是它已經開始做事。訊息第一行永遠是 [Navide MSG] from:，收件方靠這一行就知道「有人找我」而不是「我的訊息退回來了」。",
-              "legend": {
-                "envelope": {
-                  "label": "收件方看到的",
-                  "text": "開頭標明來源，接著是訊息本文，最後一行是回覆格式說明——收件的 agent 靠它知道要回給誰。"
-                },
-                "status": {
-                  "label": "收件 pane 的狀態",
-                  "text": "訊息送進去的當下 pane 就從閒置轉為執行中；沒有等人按 Enter 這一步。"
-                }
+        "mock": {
+          "delivery": {
+            "caption": "同一則訊息的兩端。左邊是寄件的 pane，右邊是收件的 pane——Navide 把訊息直接打進它的終端機並自動送出，所以你看到的就是它已經開始做事。訊息第一行永遠是 [Navide MSG] from:，收件方靠這一行就知道「有人找我」而不是「我的訊息退回來了」。",
+            "legend": {
+              "envelope": {
+                "label": "收件方看到的",
+                "text": "開頭標明來源，接著是訊息本文，最後一行是回覆格式說明——收件的 agent 靠它知道要回給誰。"
+              },
+              "status": {
+                "label": "收件 pane 的狀態",
+                "text": "訊息送進去的當下 pane 就從閒置轉為執行中；沒有等人按 Enter 這一步。"
               }
-            },
-            "panel": {
-              "caption": "右側欄的訊息面板（✉）。每一列一則訊息：來源 → 目標、時間、狀態，跨工作區的多一個徽章。整批投遞可以在這裡暫停。",
-              "legend": {
-                "actions": {
-                  "label": "標題列",
-                  "text": "暫停投遞會讓之後的訊息排隊但不送出；清除記錄只清畫面，不影響已送達的訊息。"
-                },
-                "route": {
-                  "label": "來源 → 目標",
-                  "text": "跨工作區的那一列會多帶資料夾名前綴，並標上 cross-workspace 徽章。"
-                },
-                "status": {
-                  "label": "狀態",
-                  "text": "排隊中 → 投遞中 → 已送達；失敗的那一列會出現重送鈕，還在排隊的則可以撤回。"
-                }
-              }
-            },
-            "sample": {
-              "workspaceB": "navide-web",
-              "pane1": "架構師",
-              "pane2": "reviewer",
-              "body": "幫我跑一下 pnpm test:run，把失敗清單回報給我",
-              "hint": "（回覆方式：第一行完整寫成 ---MSG-START--- to: 架構師 …）",
-              "preview2": "審查完成，兩個問題已修，測試全綠",
-              "preview3": "把首頁的載入時間量一下",
-              "t1": "14:20",
-              "t2": "14:22",
-              "t3": "14:23"
             }
+          },
+          "panel": {
+            "caption": "右側欄的「訊息」分頁（✉）。每一列一則訊息：來源 → 目標、時間、狀態，跨工作區的多一個「跨工作區」徽章。整批投遞可以在這裡用「暫停投遞」停下來。",
+            "legend": {
+              "actions": {
+                "label": "標題列",
+                "text": "「暫停投遞」會讓之後的訊息排隊但不送出；「清除記錄」只清畫面，不影響已送達的訊息。"
+              },
+              "route": {
+                "label": "來源 → 目標",
+                "text": "跨工作區的那一列會多帶資料夾名前綴，並標上「跨工作區」徽章。"
+              },
+              "status": {
+                "label": "狀態",
+                "text": "「佇列中」→「投遞中」→「已投遞」；失敗的那一列會出現「重送」鈕，還在排隊的則可以「撤回」。"
+              }
+            }
+          },
+          "sample": {
+            "workspaceB": "navide-web",
+            "pane1": "架構師",
+            "pane2": "reviewer",
+            "body": "幫我跑一下 pnpm test:run，把失敗清單回報給我",
+            "hint": "（回覆方式：第一行完整寫成 ---MSG-START--- to: 架構師 …）",
+            "preview2": "審查完成，兩個問題已修，測試全綠",
+            "preview3": "把首頁的載入時間量一下",
+            "t1": "14:20",
+            "t2": "14:22",
+            "t3": "14:23"
           }
+        },
+        "s11": {
+          "title": "跨裝置傳訊",
+          "p1": "這台機器登入 Navide Cloud 之後，agent 的對象清單裡會多出一份<strong>其他機器上的 pane</strong>。它們跟本機的對象分開列，因為條件不一樣：訊息要經過伺服器中繼，所以會有本機不可能出現的失敗方式。",
+          "list": {
+            "address": "<strong>位址是三段式</strong>：裝置／工作區／pane 名稱。從清單複製，不要自己拼。",
+            "works": "<strong>送得到、也等得到</strong> — 可以交代事情、可以問問題、可以等它閒下來。",
+            "notWorks": "<strong>讀不到、也停不了</strong> — 讀對方的對話紀錄、送中斷鍵、關掉對方的 pane，這三件事都需要那台機器自己來，所以跨裝置一律拒絕。",
+            "offline": "<strong>對方的忙碌狀態是「接近即時」，不是即時</strong> — 那是對方視窗最後一次上傳給伺服器的字。另外還有一個 <code>offline</code> 欄位，意思是那台機器或那個視窗現在聯絡不上，你讀到的是伺服器對一個沒人接得到的 pane 所留的最後印象。"
+          },
+          "note": "沒有登入 Navide Cloud 時，對象清單裡<strong>根本不會出現這一區</strong>——不是空的，是整塊不存在。所以「看不到別台機器」有兩種可能：沒登入 Navide Cloud，或是登入了但別台機器現在沒有開著任何 pane。"
+        },
+        "s12": {
+          "title": "寄出之後，Navide 會回頭告訴誰",
+          "p1": "遞送是非同步的，所以「送出成功」只代表 Navide 收下了這則訊息。真正的結果會用三種方式回到寄件方：",
+          "list": {
+            "notice": "<strong>失敗會打回寄件的 pane</strong> — 以 Navide 的名義寫一則通知進去（面板上標成「系統通知」），等那個 pane 閒下來才寫，所以忙碌中的 agent 不會被打斷。",
+            "stale": "<strong>卡住超過兩分鐘也會通知一次</strong> — 只通知一次，所以對方忙一小時不會變成一小時的洗版；通知裡會說是被什麼擋著。",
+            "check": "<strong>agent 可以自己查</strong> — 每一次送出都拿得到一組查詢用的代號，之後隨時查得到那則訊息的下場（只保留最近一小時）。也可以在送出時就等上一段時間，直接把結果帶回來。",
+            "busy": "<strong>忙到收不到通知的，就自己回頭查</strong> — 通知要等 pane 閒下來才寫得進去，所以連續忙一小時的 agent 一則也收不到。它可以在自己的工作之間主動查一次有沒有卡住的寄件。"
+          },
+          "note": "只有寄件方是本機 pane 時才有通知可打；從外部 client 送出的訊息沒有 pane 可以寫，只能自己查。"
+        }
       },
       "workspace": {
         "intro": "主畫面的四個構件——工作區、面板、舞台版面、側欄——各自是什麼、怎麼操作。這是整套說明的第一部分，其餘章節建立在這裡定義的名詞上。",
@@ -3242,7 +3549,7 @@
           },
           "callout": {
             "title": "層級關係",
-            "text": "一個視窗可以擺多個工作區；一個工作區底下有多個群組；一個群組底下有多個面板。側欄的 Agents 分頁就是照這個順序由上而下排的。"
+            "text": "一個視窗可以擺多個工作區；一個工作區底下有多個群組；一個群組底下有多個面板。側欄的「代理」分頁就是照這個順序由上而下排的。"
           }
         },
         "s2": {
@@ -3250,14 +3557,14 @@
           "h1": "開啟第一個工作區",
           "p1": "還沒開任何專案時，畫面是一張全螢幕的歡迎卡：",
           "welcome": {
-            "browse": "<strong>Browse</strong>——選一個資料夾當工作區。",
-            "newWorkspace": "<strong>New workspace</strong>——建一個新資料夾並直接開啟。",
-            "openHome": "<strong>Open home</strong>——直接用家目錄。",
-            "recent": "下方是最近開過的清單，可以 pin 常用的。在清單項目上按右鍵有 <em>Open in default editor</em>、<em>Reveal in Finder</em>、<em>Copy path</em>。"
+            "browse": "<strong>瀏覽…</strong>——選一個資料夾當工作區。",
+            "newWorkspace": "<strong>新增…</strong>——建一個新資料夾並直接開啟。",
+            "openHome": "<strong>家目錄</strong>——直接用家目錄。",
+            "recent": "下方是最近開過的清單，可以把常用的固定起來。在清單項目上按右鍵有 <em>用預設編輯器開啟</em>、<em>在 Finder 中顯示</em>、<em>複製路徑</em>。"
           },
-          "p2": "之後隨時可以從選單 <strong>File ▸ Open Workspace…</strong>（<kbd class=\"wph-kbd\">⌘O</kbd>）、<strong>File ▸ Open Recent</strong>，或 <strong>File ▸ New Window</strong>（<kbd class=\"wph-kbd\">⌘N</kbd>）開新視窗。",
+          "p2": "之後隨時可以從選單 <strong>檔案 ▸ 開啟工作區…</strong>（<kbd class=\"wph-kbd\">⌘O</kbd>）、<strong>檔案 ▸ 開啟最近使用</strong>，或 <strong>檔案 ▸ 開新視窗</strong>（<kbd class=\"wph-kbd\">⌘N</kbd>）開新視窗。",
           "h2": "同一個視窗擺多個工作區",
-          "p3": "不必為第二個專案另開視窗。在側欄 Agents 分頁裡，工作區區段標題右邊有一顆 <strong>＋</strong>，按下去會把同一個選擇器叫回來；選中的專案會被收進<strong>同一個視窗</strong>，側欄多出一列工作區標題。",
+          "p3": "不必為第二個專案另開視窗。在側欄「代理」分頁裡，工作區區段標題右邊有一顆 <strong>＋</strong>，按下去會把同一個選擇器叫回來；選中的專案會被收進<strong>同一個視窗</strong>，側欄多出一列工作區標題。",
           "p4": "點該列標題即切換視野。關鍵在於：<strong>被切走的工作區，它的 agent 繼續在跑</strong>，那一列也還在側欄上，只是舞台上暫時不顯示它的面板。",
           "callout": {
             "title": "切換時會換掉什麼",
@@ -3265,18 +3572,18 @@
           },
           "p5": "同一個資料夾如果已經在別的視窗開著，Navide 不會重複開一份，而是把那個視窗叫到最前面。",
           "h3": "工作區群組（左緣色軌）",
-          "p6": "側欄最左緣有一條 8px 寬的色軌。滑鼠移上去會展開飛出選單，可以新增／改名／刪除工作區群組、把工作區拖進群組、或選 <strong>All</strong> 看全部。這一層是給「同時管很多專案」的情況用的，只有一兩個專案時可以完全忽略。"
+          "p6": "側欄最左緣有一條 8px 寬的色軌。滑鼠移上去會展開飛出選單，可以新增／改名／刪除工作區群組、把工作區拖進群組、或選 <strong>全部</strong> 看全部。這一層是給「同時管很多專案」的情況用的，只有一兩個專案時可以完全忽略。"
         },
         "s3": {
           "title": "面板",
           "h1": "開一個新面板",
           "p1": "入口是 <strong>＋</strong> 按鈕，側欄的工作區標題列和每個群組標題列上各有一顆（差別只在新面板落在哪個群組）。按下去會開一個小選單：",
           "addMenu": {
-            "role": "最上面是 <strong>Role</strong> 下拉——選一個預設角色。",
+            "role": "最上面是 <strong>選擇角色…</strong> 下拉——選一個預設角色。",
             "cliList": "中間是 CLI 清單，沒安裝的會標示出來。",
-            "terminal": "最下面是 <strong>Terminal</strong>（開一般終端機，不掛 agent）與 <strong>Manual spawn…</strong>。"
+            "terminal": "最下面是 <strong>Terminal</strong>（開一般終端機，不掛 agent）與 <strong>啟動Agent…</strong>。"
           },
-          "p2": "<em>Manual spawn…</em> 開的是完整對話框，可以指定 agent 與角色、決定要不要加進舞台、要不要同時開終端機，也可以貼一個 session id 直接接續舊對話。",
+          "p2": "<em>啟動Agent…</em> 開的是完整對話框，可以指定 agent 與角色、決定要不要加進舞台、要不要同時開終端機，也可以貼一個 session id 直接接續舊對話。",
           "table": {
             "action": "操作",
             "how": "做法"
@@ -3290,7 +3597,7 @@
             },
             "rename": {
               "action": "改名",
-              "how": "面板標題雙擊（側欄那一列的 badge 雙擊也可，或右鍵 ▸ Rename）"
+              "how": "面板標題雙擊（側欄那一列的 badge 雙擊也可，或右鍵 ▸ 重新命名）"
             },
             "close": {
               "action": "關閉焦點面板"
@@ -3304,10 +3611,10 @@
           },
           "note": "自動取名的面板，標題後面會有一個小小的 <code>◦</code> 記號；手動改過名字的就沒有。",
           "h2": "右鍵選單",
-          "p3": "在面板上或側欄那一列按右鍵：<em>Focus</em>、<em>Rename</em>、<em>Send message</em>、<em>Interrupt</em>、<em>Reapply role</em>、<em>Remove</em>。其中 <em>Send message</em> 會把那個面板的位址插進你目前焦點面板的輸入框——這是跨面板傳訊最快的入口。底下有子面板（<code>▸</code>）的面板還會多一項 <em>Remove N sub-panes</em>：只關掉它派生出來的子面板，它自己和其他面板都不動。",
+          "p3": "在面板上或側欄那一列按右鍵：<em>聚焦</em>、<em>重新命名</em>、<em>傳送訊息</em>、<em>中斷</em>、<em>重新套用角色</em>、<em>移除</em>。其中 <em>傳送訊息</em> 會把那個面板的位址插進你目前焦點面板的輸入框——這是跨面板傳訊最快的入口。底下有子面板（<code>▸</code>）的面板還會多一項 <em>移除旗下 N 個子面板</em>：只關掉它派生出來的子面板，它自己和其他面板都不動。",
           "h3": "收合與佔位卡",
-          "p4": "面板右上角的 <code>⊟</code> 是最小化。收起來之後側欄那一列會標上 <strong>Docked</strong>，展開後有 <em>Restore</em> 與 <em>Remove</em>。",
-          "p5": "另外有一種狀態叫<strong>佔位卡</strong>：位子還在，但顯示一張「↩ 點一下就繼續」的卡片，標題、副標、群組標籤全部保留。重開 app、或被閒置回收之後，面板就是這個樣子。點卡片任一處，CLI 會接著原本的對話繼續。",
+          "p4": "面板右上角的 <code>⊟</code> 是最小化。收起來之後側欄那一列會標上 <strong>Docked</strong>，展開後有 <em>↑ 還原</em> 與 <em>移除</em>。",
+          "p5": "另外有一種狀態叫<strong>佔位卡</strong>：位子還在，但顯示一張「↩ 點擊以續接」的卡片，標題、副標、群組標籤全部保留。重開 app、或被閒置回收之後，面板就是這個樣子。點卡片任一處，CLI 會接著原本的對話繼續。",
           "h4": "閒置自動回收",
           "p6": "每個跑著的 CLI 都佔著記憶體與 GPU。Navide 預設會把太久沒動靜的面板降級回佔位卡：",
           "reclaim": {
@@ -3316,7 +3623,7 @@
             "notClose": "<strong>這不是關閉</strong>：座位、名字、訊息位址、session 全部留著，點一下就回來。",
             "exempt": "正在被 pipeline 讀取、輸入框裡有草稿、有訊息排隊等著送進來、或正在焦點上的面板，都不會被回收。"
           },
-          "note2": "回收發生時，狀態列會出現 <code>♻ reclaimed N idle CLI pane(s) — click to resume</code>。"
+          "note2": "回收發生時，歷史記錄面板的 pipeline log 會出現 <code>♻ reclaimed N idle CLI pane(s) — click to resume</code>。"
         },
         "s4": {
           "title": "版面",
@@ -3341,21 +3648,21 @@
             }
           },
           "p2": "另外有一個不用選的行為叫 <strong>dual-focus</strong>：當剛好有兩個面板在跑，它們會自動左右對開，中間那條分隔線可以拖。",
-          "h2": "Grid 工具列",
-          "p3": "面板超過一個時，Grid 模式下會出現一排比例按鈕：<code>∞</code>（自動）、<code>2×1</code>、<code>2×2</code>、<code>3×3</code>，右邊還有一組自訂的<strong>欄 × 列</strong>輸入框（1–9）。選了固定尺寸之後，放不下的面板會分頁，右側出現 <code>‹ 1/3 ›</code> 翻頁。欄與列之間的分隔線可以直接拖。",
+          "h2": "格狀工具列",
+          "p3": "面板超過一個時，格狀模式下會出現一排比例按鈕：<code>∞</code>（自動）、<code>2×1</code>、<code>2×2</code>、<code>3×3</code>，右邊還有一組自訂的<strong>欄 × 列</strong>輸入框（1–9）。選了固定尺寸之後，放不下的面板會分頁，右側出現 <code>‹ 1/3 ›</code> 翻頁。欄與列之間的分隔線可以直接拖。",
           "h3": "五槽外殼",
           "p4": "整個視窗被切成五格：<code>up</code>、<code>left</code>、<code>main</code>、<code>right</code>、<code>down</code>。",
           "slots": {
             "main": "<code>main</code> 永遠是 CLI 舞台，不能搬、不能收。",
-            "left": "<code>left</code> 可放：Agents、Pipeline、Explorer、Git、Plans。",
-            "right": "<code>right</code> 可放：History、Tokens、Tasker、Messages、Preview。",
-            "updown": "<code>up</code> 與 <code>down</code> 可收 History、Tasker、Messages。"
+            "left": "<code>left</code> 可放：代理、流程、檔案、Git、計畫。",
+            "right": "<code>right</code> 可放：歷史記錄、時間、Tokens、排程、訊息、預覽。",
+            "updown": "<code>up</code> 與 <code>down</code> 可收歷史記錄、排程、訊息。"
           },
           "p5": "每一槽有自己的 tab 條和一顆收合箭頭，收起來會變成 36px 寬的細軌（點細軌上的圖示可以再展開）。槽的邊界可以拖曳改大小。",
           "h4": "用設定調版面",
-          "p6": "細部調整在 <strong>設定 ▸ Layout</strong>：每個 view 一列，可以指定它去哪一槽、隱藏或還原、設為該槽的預設分頁，也能直接填槽寬數值，另有標題列與狀態列的開關和 <em>Reset layout</em>。三個現成的 preset：",
+          "p6": "細部調整在 <strong>設定 ▸ 版面</strong>：每個 view 一列，可以指定它去哪一槽、隱藏或還原、設為該槽的預設分頁，也能直接填槽寬數值，另有標題列與狀態列的開關和 <em>重設版面</em>。三個現成的版面預設：",
           "presetTable": {
-            "preset": "Preset",
+            "preset": "版面預設",
             "effect": "效果"
           },
           "layoutPresets": {
@@ -3366,7 +3673,7 @@
               "effect": "左右兩槽全收成細軌，畫面留給舞台。"
             },
             "bottomPanel": {
-              "effect": "History 與 Messages 移到下方橫槽。"
+              "effect": "歷史記錄與訊息移到下方橫槽。"
             }
           }
         },
@@ -3401,16 +3708,16 @@
             }
           },
           "note": "<kbd class=\"wph-kbd\">⌘B</kbd> 收合整條側欄。安裝的外掛可能再增加分頁。",
-          "h2": "Agents 分頁的三層結構",
+          "h2": "「代理」分頁的三層結構",
           "p1": "由上而下是<strong>工作區列 → 群組列 → 面板列</strong>。",
           "rows": {
-            "workspace": "<strong>工作區列</strong>：摺疊箭頭、專案名與路徑、面板數，右邊有 <code>↻</code>（重建全部）、History、<code>＋</code>。右鍵有 <em>Open in Finder</em>、<em>Copy path</em>、移到某個工作區群組、<em>Close workspace</em>（只移除這一列，CLI 繼續跑，之後重開會接回）、<em>Close workspace and its panes</em>（結束全部 CLI）。",
+            "workspace": "<strong>工作區列</strong>：摺疊箭頭、專案名與路徑、面板數，右邊有 <code>↻</code>（重建全部）、歷史記錄、<code>＋</code>。右鍵有 <em>用 Finder 開啟此資料夾</em>、<em>複製路徑</em>、移到某個工作區群組、<em>關閉工作區</em>（只移除這一列，CLI 繼續跑，之後重開會接回）、<em>關閉工作區與 CLI 視窗</em>（結束全部 CLI）。",
             "group": "<strong>群組列</strong>：黏在頂端捲動，顯示狀態色點、群組名、成員數，以及一顆「在這個群組裡開 agent」的 <code>＋</code>。成員列的左緣有一條中性色細軌，表示它們同屬一群。",
             "pane": "<strong>面板列</strong>：名稱、狀態、Docked 標籤等。"
           },
           "callout": {
             "title": "群組的改名與刪除不在側欄",
-            "text": "群組的 rename / delete / detach 是在<strong>上方 tab 列</strong>那個分頁上操作的，側欄的群組列只負責顯示與新增面板。"
+            "text": "群組的重新命名／刪除／拖出成獨立視窗是在<strong>上方 tab 列</strong>那個分頁上操作的，側欄的群組列只負責顯示與新增面板。"
           },
           "h3": "血緣縮排",
           "p2": "由 agent 或 MCP 開出來的子面板，會以每層 13px 的縮排掛在父面板底下，父列前面有 <code>▾</code> / <code>▸</code> 可以收合整棵子樹。<strong>沒有另外的標籤</strong>——縮排本身就代表「這是別人開的，不是你手動開的」。",
@@ -3418,7 +3725,7 @@
           "multiselect": {
             "cmdClick": "<kbd class=\"wph-kbd\">⌘</kbd> 點：加選單一列。",
             "shiftClick": "<kbd class=\"wph-kbd\">⇧</kbd> 點：選整段區間（依畫面上實際顯示的順序，不是內部順序）。",
-            "batchMenu": "多選之後按右鍵，選單會變成批次版：<em>Interrupt</em>、<em>Rebuild</em>、<em>Minimize</em>、<em>Restore</em>、<em>Remove selected</em>。"
+            "batchMenu": "多選之後按右鍵，選單會變成批次版：<em>中斷所選</em>、<em>重建所選</em>、<em>最小化所選</em>、<em>還原所選</em>、<em>移除所選</em>。"
           },
           "p3": "拖曳任何一個被選中的面板，<strong>整批</strong>會一起被帶走。放在哪決定結果：",
           "dropTable": {
@@ -3442,17 +3749,17 @@
         },
         "s6": {
           "title": "狀態列",
-          "p1": "視窗最底那一條。可以在設定 ▸ Layout 關掉。",
+          "p1": "視窗最底那一條。可以在設定 ▸ 版面 關掉。",
           "h1": "左半：環境狀態",
           "left": {
-            "git": "Git 分支名，有未提交變更時加 <code>*</code>，後面接 <code>↓behind ↑ahead</code>。",
+            "git": "Git 分支名，有未提交變更時加 <code>*</code>，後面接落後與超前遠端的數量 <code>N↓ N↑</code>（各自為 0 時不顯示）。",
             "backend": "<strong>Backend 藥丸</strong>——狀態燈加上位址，可點開。",
             "resource": "<strong>資源藥丸</strong>——CPU 與記憶體，有面板在跑時才出現，可點開。",
             "update": "<strong>更新徽章</strong>——有新版／下載中百分比／已下載待重啟／檢查失敗，可點。"
           },
           "h2": "右半：進行中的事",
           "right": {
-            "pipeline": "Pipeline 進度，例如 <code>Stage 2 / 5</code>。",
+            "pipeline": "流程進度，例如 <code>Stage 2 / 5</code>。",
             "tidying": "<code>↻ 整理 token 歷史… 剩 N 檔</code>——背景整理中。",
             "leftover": "<code>⚠ N 殘留</code>——殘留的孤兒終端機行程，點一下清掉。",
             "disconnected": "<code>⚡ 偵測到 N 段對話可能已斷開，點此復原</code>——點開重連挑選器，或按 <code>✕</code> 忽略。",
@@ -3472,7 +3779,7 @@
             },
             "announcements": {
               "where": "📢 公告徽章",
-              "what": "公告中心：更新說明與通知條目，可展開內容、Mark all read、直接按 Download / Install 觸發更新、Load more 看更早的。"
+              "what": "公告中心：更新說明與通知條目，可展開內容、按「全部標為已讀」、按「下載」或「重新啟動以安裝」直接觸發更新、用「載入更多（還有 N 則）」看更早的。"
             },
             "clock": {
               "where": "時鐘",
@@ -3480,7 +3787,7 @@
             },
             "resource": {
               "where": "資源藥丸",
-              "what": "每個面板的 CPU 與記憶體、總計，可以直接 Reclaim、跳到該面板，或開啟資源控管視窗（見「設定與系統」分頁）。"
+              "what": "每個面板的 CPU 與記憶體、總計，可以直接按「立即回收 N 個」、跳到該面板，或開啟資源控管視窗（見「設定與系統」分頁）。"
             }
           },
           "callout": {
@@ -3490,7 +3797,7 @@
         },
         "s7": {
           "title": "快捷鍵速查",
-          "p1": "本章涉及的按鍵。完整清單與自訂方式在<strong>設定 ▸ Shortcuts</strong>。",
+          "p1": "本章涉及的按鍵。完整清單與自訂方式在<strong>設定 ▸ 快捷鍵</strong>。",
           "table": {
             "keys": "按鍵",
             "action": "動作"
@@ -3524,13 +3831,13 @@
               "action": "切換側欄分頁"
             },
             "explorer": {
-              "action": "Explorer"
+              "action": "檔案"
             },
             "pipeline": {
-              "action": "Pipeline"
+              "action": "流程"
             },
             "plans": {
-              "action": "Plans"
+              "action": "計畫"
             },
             "gitWindow": {
               "action": "開啟獨立的 Git 視窗（不是切側欄分頁）"
@@ -3539,7 +3846,7 @@
               "action": "開啟編輯器視窗"
             },
             "preview": {
-              "action": "Preview 分頁"
+              "action": "預覽分頁"
             }
           }
         }
@@ -3560,22 +3867,22 @@
           "external": {
             "arrow": "外部 client → Navide",
             "title": "外部控制",
-            "text": "Navide process 之外的 client（腳本、另一個 agent……）也能操作 Navide 本身。<strong>預設關閉</strong>，要在<strong>設定 → MCP → 外部存取</strong> 手動開啟。"
+            "text": "Navide process 之外的 client（腳本、另一個 agent……）也能操作 Navide 本身。<strong>預設關閉</strong>，要在<strong>設定 → MCP → 外部存取</strong>手動打開「允許外部 MCP client」。"
           }
         },
         "s1": {
           "title": "方向一：Navide 提供給 CLI agent 的工具",
-          "p1": "pane 一啟動，agent 的工具清單裡就會多出這些。你不需要教它，也不用設定——直接用中文交代就好，例如「幫我把這份計畫的第二階段標成完成」。",
+          "p1": "pane 一啟動，agent 的工具清單裡就會多出這些。你不需要教它，也不用設定——直接用中文交代就好，例如「幫我把這份計畫的第二階段標成完成」。目前一共 <strong>53 個</strong>（核心 47 個，加上計畫外掛註冊的 6 個），另外還有 3 份唯讀資源與 3 個提示樣板。",
           "h1": "計畫文件",
           "planTools": {
             "plan_list": "列出這個工作區的所有計畫，含階段與待辦進度",
             "plan_read": "讀取一份計畫的完整內容",
             "plan_create": "建立新計畫（從草稿開始）",
-            "plan_update_stage": "推進階段：草稿 → 審查中 → 已核准 → 進行中 → 完成",
+            "plan_update_stage": "推進階段：草稿 → 審查中 → 已核准 → 進行中 → 已完成",
             "plan_update_todo": "更新單一待辦的狀態",
             "plan_add_note": "寫入發現或決策的紀錄"
           },
-          "note1": "計畫是 agent 用這些工具寫出來的 HTML，你在 Navide 的計畫視窗閱讀與核准。agent 只有在階段推進到「已核准」之後才會開始寫程式。",
+          "note1": "計畫是 agent 用這些工具寫出來的 HTML，你在 Navide 的「計畫」視圖裡閱讀與核准。agent 只有在階段推進到「已核准」之後才會開始寫程式。",
           "h2": "工作區、Pipeline 編排與設定",
           "workspaceTools": {
             "workspace_list": "這台機器上已知的工作區，含哪些目前有活著的 pane；要對別的專案動作時用它取得合法路徑",
@@ -3593,27 +3900,34 @@
             "stage_define": "階段的新增修改／刪除／重新排序／重設；run 正在用那個 pipeline 時四個操作都會被拒絕",
             "role_define": "角色的新增修改／改名／刪除／重設；改名會連帶改寫所有引用它的 slot，仍被引用的角色不給刪",
             "cli_permission_settings": "讀寫 CLI 權限略過旗標（yolo）。這是全域設定，不是 pipeline 專屬，只影響之後開的 pane；某家 CLI 實際會不會帶旗標要看回傳的 agents[].skipFlag，不是只看全域值",
-            "preview_clear": "清空預覽面板的變更記錄軌；刪掉的是你在畫面上看到的那些行，含檔案監看與你自己的操作，無法復原"
+            "workspace_open": "在 Navide 裡開啟一個專案；要開成新視窗還是併進已經開著它的視窗，由 Navide 決定",
+            "workspace_switch": "把自己所在的視窗切到它本來就持有的另一個專案；被切走的專案，它的 pane 會繼續跑。視窗裡有 pipeline 正在跑時會拒絕，因為切換會中止它",
+            "prompt_list": "使用者在「設定 → Prompt 技能」存的提示技能有哪些；唯讀，新增與編輯是使用者的事",
+            "mcp_list": "Navide 自己連的 MCP server 與各家 CLI 自己設定的 server 各有哪些，含連線狀態與工具數量；唯讀，跟「設定 → MCP」看到的是同一份"
           },
           "note2": "這幾個是 agent 用自己的工具做不到的事——額度、pipeline 狀態、skill 投遞對象都只有 Navide 知道。Git、檔案讀寫、shell 刻意<strong>沒有</strong>包成 MCP 工具：agent 本來就有這些能力，包一層只會更難用，還要每個 pane 都付工具清單的 context 成本。",
           "h3": "與其他 CLI 協作",
           "cliTools": {
             "cli_list_targets": "有哪些 CLI pane 在線上、位址怎麼寫、對方是否忙碌",
-            "cli_whoami": "我自己是誰：pane_id、名字、workspace、是誰開了我；pane_id 是對自己動作的前提",
-            "cli_send": "把任意指令送給指定的 pane（同工作區或跨工作區視窗），回傳查詢用的 msg_key；位址填 group 則廣播給自己分頁群組裡的其他 pane",
+            "cli_whoami": "我自己是誰：pane_id、名字、workspace、是誰開了我；pane_id 是對自己動作的前提。另外會告訴我此刻有誰卡在等我回答（等太久的人快逾時了，值得先收尾），以及這台機器有沒有登入 Navide Cloud——那決定了別台機器上的 pane 能不能被定址",
+            "cli_send": "把任意指令送給指定的 pane（同工作區、跨工作區視窗，或另一台機器），回傳查詢用的 msg_key；位址填 group 則廣播給自己分頁群組裡的其他 pane。可以指定「純確認」不進對方輸入框、可以掛在對方寄來的那則下面當回覆、可以先把冷還原的佔位 pane 叫起來再投遞，也可以就地等一段時間把投遞結果帶回來",
             "cli_send_and_wait": "送出指令並等對方把這回合做完，順便帶回它最後說了什麼",
             "cli_check_message": "用 msg_key 查一則送出的訊息後來如何：排隊中、已送達、或失敗與原因（只留最近一小時）",
-            "cli_open_agent": "開一個新的 CLI pane 並指派任務，完成後它會回報；可指定 model 與 effort，該 CLI 不支援時會拒絕而非忽略",
+            "cli_open_agent": "開一個新的 CLI pane 並指派任務，完成後它會回報；可指定 model 與 effort，該 CLI 不支援時會拒絕而非忽略。回傳會說第一段任務有沒有真的送進去——沒能確認時它會叫你先查狀態，而不是重送。另外兩種開法：把冷還原的佔位 pane 就地叫回來，或指定一個舊的 CLI 對話 id，讓新 pane 帶著那段對話的記憶開場",
             "cli_read_incoming": "讀取寄給自己的訊息全文；預設讀了就不再注入輸入框，peek 可只讀不消費",
             "cli_cancel_message": "收回一則還沒送進去的訊息；已經開始投遞就收不回來，會告訴你它最終如何",
             "cli_read_log": "讀取另一個 pane 對話紀錄的結尾（預設 200 行），也可帶游標只讀新增的部分",
-            "cli_get_status": "查另一個 pane 是否忙碌、最近一次活動",
+            "cli_get_status": "查另一個 pane 是否忙碌、最近一次活動，外加兩樣東西：這個 pane 是<strong>被啟動時</strong>帶的身分（哪家 CLI、哪個模型、哪個思考強度、有沒有登入過期或撞到額度上限），以及那家 CLI 的額度快照。額度是<strong>唯讀快取、絕不刷新</strong>，回傳裡的取得時間與過期旗標就是在講它有多舊；要新數字得另外呼叫查額度的工具。身分講的是啟動當下：在 CLI 裡自己打指令換模型，這裡看不到",
             "cli_wait_idle": "等到另一個 pane 閒置或逾時（最長 120 秒）；逾時會說明是卡在權限提示、還在做事、還是連不上",
             "cli_interrupt": "送出該 CLI 的中斷鍵給本機 pane；這不等於停止，可能只是清空輸入框，結果要自己去確認",
             "cli_close_agent": "關掉另一個 pane，補上 cli_open_agent 的另一半；這會終止對方正在做的事且無法復原，先用 cli_get_status 確認它不忙",
             "cli_message_log": "自己收送過的訊息歷史；訊息一旦送達就從 inbox_summary 與 pending_incoming 消失，這裡是唯一還查得到的地方",
             "cli_usage": "各家 CLI 還剩多少額度；派工前先看，否則訊息會送達到一個已經用完額度的 CLI 手上",
-            "cli_token_stats": "這個工作區目前的 token 用量"
+            "cli_token_stats": "這個工作區目前的 token 用量",
+            "cli_list_sessions": "這個工作區還留得住、可以接續的 CLI 對話有哪些——對話比 pane 活得久，pane 關掉、App 重開、pane 重建過，紀錄都還在磁碟上。每一列會說它還接不接得起來，以及當初擁有它的 pane 是不是還開著：還開著的別去接，那會分岔或弄壞它，直接傳訊給那個 pane 就好",
+            "cli_place_pane": "搬動一個 pane：換分頁群組、或改掛在另一個 pane 底下（等同你在側欄拖放，走同一組寫入路徑，所以重開也還在原位）。兩半各自獨立，回傳會說哪一半成功了。不會動到那個 pane 的 CLI——不送訊息、不中斷、不重啟。只能搬本機的 pane",
+            "cli_inbox_summary": "我寄出去的訊息裡，卡住（排隊超過兩分鐘）或已經失敗的有哪些。失敗通知要等寄件的 pane 閒下來才打得進去，所以連續忙一小時的 agent 一則也收不到——這是它自己回頭查的方式",
+            "cli_pending_incoming": "正在排隊等著送進我這裡、還沒進來的訊息有哪些。訊息只在回合之間才會被打進 pane，所以一直忙的 agent 正好就是最無從得知的那個；答案不是空的，就是該收個尾讓訊息進來"
           },
           "note3": "詳細用法見本頁的「CLI 互傳訊息」主題。「等對方做完」是盡力而為：多數 CLI（含 Cursor）會自己回報回合結束，Kimi／Pi／Qwen 是靠 8 秒沒動靜推論的。回傳的 <code>source</code> 就是在講這次的「做完」有多可信，這幾家請當作參考而不是保證。若等待途中對方的視窗被關掉、pane 被砍掉，<code>source</code> 會是 <code>target_lost</code>：訊息確實送出去了，只是已經無法確認它做完沒有——這不是送出失敗，不要重送。",
           "note4": "同一個工作區裡可以有兩個 pane 同名，這時候光靠名字說不清要找誰，上面幾個工具會直接以 <code>ambiguous-target</code> 拒絕，而不是隨便挑一個。要指定其中一個，就把 <code>cli_list_targets</code> 回傳的 <code>pane_id</code> 當參數傳給 <code>cli_send</code>、<code>cli_send_and_wait</code>、<code>cli_read_log</code>、<code>cli_get_status</code> 或 <code>cli_wait_idle</code>，這時候位址參數就不用填了。平常還是用名字比較好讀；pane 換了新的 CLI 重開之後 id 會換一個，遇到 <code>unknown-pane-id</code> 重新查一次即可。跨裝置的 pane 沒有本機 id，只能用名字定址。",
@@ -3622,7 +3936,15 @@
           "p2": "十四家裡目前有 <strong>十家</strong>：Claude Code、Codex、Copilot CLI、Qwen Code、OpenCode、Kilo Code、Kimi Code、Grok CLI、Antigravity CLI、Cursor CLI。接法看那家 CLI 自己提供什麼介面——啟動參數（Claude Code、Codex、Copilot、Qwen）、一個帶著整份設定的環境變數（OpenCode、Kilo），或一份只給這個 pane 用的設定目錄鏡像（Kimi、Grok、Antigravity）。這三種都<strong>不會動到你自己的 MCP 設定檔</strong>。",
           "note6": "<strong>Cursor 是唯一的例外</strong>：它只讀工作區裡的 <code>.cursor/mcp.json</code>，所以 Navide 會合併寫入那個檔，並把它加進 <code>.git/info/exclude</code>，不會弄髒你的 git 狀態。",
           "note7": "還沒接上的是 <strong>Aider、Muse Code、Pi</strong>（這三家的 CLI 沒有 MCP 介面）與 <strong>Droid</strong>（Navide 尚未接）。這些 pane 仍然可以用裸行輸出協定跟其他 pane 傳訊，只是沒有 MCP 工具可以呼叫。",
-          "note8": "接線是 <strong>pane 啟動當下</strong>做的。所以功能更新後，已經開著的 pane 還是舊的工具清單——關掉重開才會拿到新的。"
+          "note8": "接線是 <strong>pane 啟動當下</strong>做的。所以功能更新後，已經開著的 pane 還是舊的工具清單——關掉重開才會拿到新的。",
+          "h5": "「預覽」面板",
+          "previewTools": {
+            "preview_record": "回報自己剛剛新增／修改／刪除了哪個檔案，記到這個工作區的變更記錄軌；記錄跟著工作區存起來，重開也還在",
+            "preview_show": "把一個檔案、一份 diff 或一段內容直接推到使用者眼前的「預覽」面板；只有擁有這個工作區的視窗確認收下了，才會記成「已顯示」",
+            "preview_list": "讀回這個工作區的變更記錄軌——別的 agent、使用者、以及檔案監看各自做了什麼，最新的在前；可以帶時間游標只讀新增的部分",
+            "preview_clear": "清空變更記錄軌；刪掉的是使用者在「預覽」面板上看到的那些行，含檔案監看與使用者自己的操作，無法復原。可以只清某個時間點以前的"
+          },
+          "note9": "<strong>跨裝置只有四個工具走得通</strong>：傳訊、傳訊並等待、查狀態、等對方閒下來。讀對方的對話紀錄、送中斷鍵、關掉對方的 pane 都需要那台機器自己來，所以一律拒絕。而且遠端 pane <strong>沒有本機 id</strong>，三段式名稱是唯一的把手；它的狀態是對方視窗最後一次上傳給 Navide Cloud 的字，接近即時但不是即時，也沒有額度快照（本機的額度快照講的是本機的登入，對別台機器上的 pane 是錯的答案）。"
         },
         "s2": {
           "title": "方向二：Navide 取用外部 MCP",
@@ -3642,7 +3964,7 @@
         },
         "s3": {
           "title": "方向三：外部 client 控制 Navide",
-          "p1": "跟方向一同一個端點（<code>/plan-mcp</code>），但開放給 <strong>Navide process 之外</strong>的 client 連——外部腳本、跑在別處的 agent、任何 MCP client 都算。除了方向一那些工具，還多了兩組：",
+          "p1": "跟方向一<strong>同一個端點</strong>（<code>/plan-mcp</code>）、也是<strong>同一組工具</strong>，差別只在誰可以連：這一頁開的是 <strong>Navide process 之外</strong>的 client——外部腳本、跑在別處的 agent、任何 MCP client。下面這組操作介面的工具常被誤會成外部專用，其實 pane 裡的 agent 也叫得到；列在這裡是因為外部 client 沒有自己的視窗，只能靠它們動 Navide 的介面。",
           "h1": "操作 Navide 介面",
           "uiTools": {
             "ui_list_actions": "列出目標視窗目前註冊的所有動作 id",
@@ -3650,10 +3972,10 @@
             "ui_snapshot": "取得目標視窗目前的 UI 狀態快照（pane、分頁、焦點…）",
             "ui_diagnostics": "讀取該視窗記錄的 UI 動作診斷；工具回報成功但視窗內行為不對時，用它查真正發生什麼"
           },
-          "note": "<code>ui_invoke</code> 能呼叫的動作 id（例如 <code>ui.pane.create</code>、<code>ui.settings.open</code>）要先用 <code>ui_list_actions</code> 查——它會列出目標視窗當下註冊的所有 id，實際可用的以那份清單為準。",
+          "note": "<code>ui_invoke</code> 能呼叫的動作 id（例如 <code>ui.pane.create</code>、<code>ui.settings.open</code>）要先用 <code>ui_list_actions</code> 查——它會列出目標視窗當下註冊的所有 id，實際可用的以那份清單為準。從 pane 呼叫時，請求會直接送到<strong>承載這個 pane 的那個視窗</strong>，不管它有沒有被聚焦；但若那個視窗已經切到別的專案，會直接報錯而不是對錯的專案執行。",
           "warn": {
-            "p1": "<strong>開啟後，本機任何程式皆可控制 Navide。</strong>能做的事包括開關 pane、跨工作區傳訊、讀取其他 pane 的對話紀錄、操作介面。連線網址（含一次性 token）在<strong>設定 → MCP → 外部存取</strong> 複製，「重新產生 token」會讓舊網址立即失效。",
-            "p2": "同一個面板裡的 <strong>Chrome DevTools Protocol</strong> 開關是另一條、更底層的逃生口——給截圖或還沒註冊成動作的操作用，不是主要路徑。它一旦開啟，本機任何行程都能對 Navide 執行任意程式碼，且僅綁定 127.0.0.1，需要重啟 App 才生效。"
+            "p1": "<strong>開啟後，本機任何程式皆可控制 Navide。</strong>能做的事包括開關 pane、跨工作區傳訊、讀取其他 pane 的對話紀錄、操作介面。連線網址（含一次性 token）在<strong>設定 → MCP → 外部存取</strong>複製，「重新產生 token」會讓舊網址立即失效。",
+            "p2": "同一個面板裡的 <strong>Chrome DevTools Protocol（CDP）</strong> 開關是另一條、更底層的逃生口——給截圖或還沒註冊成動作的操作用，不是主要路徑。開啟後，本機任何行程皆可對 Navide 執行任意程式碼。需重啟 App 才會生效；僅綁定 127.0.0.1。"
           }
         },
         "s4": {
@@ -3715,7 +4037,15 @@
             },
             "externalRejected": {
               "symptom": "外部 client 連線被拒（external token rejected / disabled）",
-              "detail": "方向三預設關閉，要先在設定 → MCP → 外部存取開啟；或是網址裡的 token 已經被「重新產生 token」換掉，複製最新的連線網址即可。"
+              "detail": "方向三預設關閉，要先在設定 → MCP → 外部存取打開「允許外部 MCP client」；或是網址裡的 token 已經被「重新產生 token」換掉，複製最新的連線網址即可。"
+            },
+            "unknownSession": {
+              "symptom": "unknown-session-id",
+              "detail": "agent 想接續一段舊對話，但那家 CLI 的紀錄裡已經沒有這個 id 了。這是刻意拒絕的：否則會開出一個看起來成功、實際上從零開始的 pane，不讀對話紀錄根本分不出來。請它重新列一次可接續的對話。"
+            },
+            "staleTools": {
+              "symptom": "工具清單看起來是舊的（新工具呼叫不到）",
+              "detail": "接線是 pane 啟動當下做的，而且 MCP 的工具清單<strong>不會熱更新</strong>。所以更新之後，已經開著的 pane 仍然握著舊清單——關掉重開那個 pane 才會拿到新的。"
             }
           }
         },
@@ -3725,11 +4055,11 @@
             "legend": {
               "nav": {
                 "label": "設定側欄",
-                "text": "MCP 在「整合」這一組底下，與 Skills、Prompts、Memory 並列。"
+                "text": "MCP 在「整合」這一組底下，與技能、Prompt 技能、記憶並列。"
               },
               "actions": {
                 "label": "頂列動作",
-                "text": "從內建目錄新增、手動加一個自訂 server、重新讀取設定檔。"
+                "text": "「新增 MCP +」從內建目錄加、「新增自訂」手動加一個 server、「重新整理」重新讀取設定檔。"
               },
               "card": {
                 "label": "目錄卡片",
@@ -3737,7 +4067,7 @@
               }
             },
             "installed": "已安裝",
-            "add": "＋ 新增"
+            "add": "+ 新增"
           },
           "addressing": {
             "caption": "同一台機器上的兩個工作區視窗。pane 的名稱就是它的位址，跨不跨工作區只差在要不要加資料夾名。",
@@ -3828,9 +4158,9 @@
               "name": "<code>歷史記錄</code>"
             },
             "openAgent": {
-              "name": "<code>Open Agent</code>（後面接目前選定的 CLI 名稱）",
+              "name": "<code>開啟 Agent</code>（後面接目前選定的 CLI 名稱）",
               "where": "工作區列最右",
-              "what": "開新面板的主入口。按下去彈出 Role 下拉＋CLI 清單＋Terminal／Manual spawn。 工作區路徑還沒設定時會變成 <code>Set workspace path first</code> 且不可按。"
+              "what": "開新面板的主入口。按下去彈出 角色 下拉＋CLI 清單＋Terminal／啟動Agent。 工作區路徑還沒設定時會變成 <code>請先設定工作區路徑</code> 且不可按。"
             },
             "newGroup": {
               "where": "側欄最左緣色軌的飛出選單",
@@ -3869,7 +4199,7 @@
             "expandRow": {
               "name": "（無提示字串）",
               "where": "面板列右側",
-              "what": "展開這一列的詳細資訊（session id、Interrupt 等）。展開後箭頭轉 90 度朝下。"
+              "what": "展開這一列的詳細資訊（session id、中斷 等）。展開後箭頭轉 90 度朝下。"
             },
             "rebuild": {
               "where": "面板列右側",
@@ -3882,7 +4212,7 @@
             },
             "managePipelines": {
               "where": "Pipeline 分頁標題列",
-              "what": "打開 Roles / Pipelines 管理視窗。"
+              "what": "打開 角色 / 流程 管理視窗。"
             },
             "startOver": {
               "where": "Pipeline 的 Resume 卡片，按鈕文字 <code>↺ Start over</code>",
@@ -3918,7 +4248,7 @@
             },
             "loop": {
               "where": "標題列",
-              "what": "開始／停止自動循環：每回合結束就自動把設定好的 loop 提示再送一次。滑鼠停在上面會浮出提示技能環。",
+              "what": "送出提示技能。滑鼠停在上面一下，會浮出<strong>技能環</strong>（最多 5 個槽，技能太多或面板太窄時改成直列清單），每個槽都預覽它實際會送出的整段文字。<strong>只有標成「預設」的那個技能會進 ∞ 迴圈</strong>——每回合結束自動再送一次；其他技能是<strong>單次送出</strong>：送一次就結束，沒有 LOOP 徽章、不自動續跑、也沒有回合上限。",
               "name": "<code>Loop — 將設定的 Loop 提示詞送入此 pane</code>"
             },
             "loopActive": {
@@ -3927,7 +4257,7 @@
               "what": "顯示循環狀態；等待中會顯示倒數。點一下處理目前的等待。"
             },
             "loginExpired": {
-              "name": "<code>⚠ Login expired</code> ／ 提示 <code>The CLI's login has expired — click to send its login command</code>",
+              "name": "<code>⚠ 登入過期</code> ／ 提示 <code>CLI 登入已過期 — 點擊送出其登入指令重新登入</code>",
               "where": "標題列",
               "what": "這個 CLI 的登入過期了。<strong>點一下會直接把登入指令送進面板。</strong>"
             },
@@ -3938,7 +4268,7 @@
             },
             "quota": {
               "where": "標題列最右",
-              "what": "剩餘額度。滑鼠移上去展開帳號清單。讀取中顯示 <code>reading</code>； 快取值會有 <code>Cached quota</code> 的提示。",
+              "what": "剩餘額度。滑鼠移上去展開帳號清單。讀取中顯示 <code>讀取中</code>； 快取值會有 <code>Cached quota</code> 的提示。",
               "sample": "數字",
               "name": "<code>剩餘額度 — 滑鼠停留看詳細</code>"
             },
@@ -3958,14 +4288,14 @@
               "name": "<code>新增／管理帳號…</code>"
             },
             "continue": {
-              "name": "<code>↻ Continue</code> ／ 提示 <code>This session was restored and is waiting at the prompt…</code>",
+              "name": "<code>↻ 繼續</code> ／ 提示 <code>This session was restored and is waiting at the prompt…</code>",
               "where": "終端機畫面下方",
               "what": "面板是重啟後還原的、停在提示符不動時才出現。按下去送出 <em>continue</em>，把工作接回去。"
             }
           },
           "placeholder": {
             "resume": {
-              "name": "<code>Click to resume</code>（進行中變 <code>Resuming…</code>）",
+              "name": "<code>點擊以續接</code>（進行中變 <code>續接中…</code>）",
               "where": "卡片正中央",
               "what": "把 CLI 叫回來、接著原本的對話繼續。<strong>點卡片任何一處都有效</strong>，不必瞄準這顆按鈕。"
             },
@@ -4172,15 +4502,15 @@
           },
           "files": {
             "stage": {
-              "where": "Changes 區的單檔列／資料夾列／區段標題",
+              "where": "變更 區的單檔列／資料夾列／區段標題",
               "what": "把這個檔案、這個資料夾底下全部、或全部變更加入暫存。"
             },
             "unstage": {
-              "where": "Staged Changes 區對應位置",
+              "where": "已暫存的變更 區對應位置",
               "what": "把已暫存的內容退回未暫存。"
             },
             "discard": {
-              "where": "Changes 區對應位置",
+              "where": "變更 區對應位置",
               "what": "<strong>丟掉修改</strong>，把檔案還原成上一次提交的樣子。會先確認。"
             },
             "blame": {
@@ -4209,7 +4539,7 @@
           },
           "commit": {
             "moreOptions": {
-              "where": "Commit 按鈕右邊",
+              "where": "提交 按鈕右邊",
               "what": "展開下表六個動作。",
               "name": "<code>更多選項</code>"
             },
@@ -4243,7 +4573,7 @@
             },
             "generating": {
               "name": "（無提示字串）",
-              "where": "Commit 訊息欄",
+              "where": "提交 訊息欄",
               "what": "純顯示：AI 正在幫你生成 commit 訊息。"
             }
           },
@@ -4270,7 +4600,7 @@
             },
             "push": {
               "where": "遠端動作列",
-              "what": "推上去。後面的數字是領先幾個 commit；分支還沒有遠端時變成 Publish。",
+              "what": "推上去。後面的數字是領先幾個 commit；分支還沒有遠端時變成 發佈。",
               "name": "<code>推送</code> / <code>發佈分支</code>"
             },
             "sync": {
@@ -4280,7 +4610,7 @@
             },
             "morePushOptions": {
               "where": "遠端動作列最右",
-              "what": "展開 Pull、Pull (rebase)、Push、Push (force with lease)，以及多個 remote 的個別推送。",
+              "what": "展開 拉取、拉取（rebase）、推送、推送 (force with lease)，以及多個 remote 的個別推送。",
               "name": "<code>更多拉取／推送選項</code>"
             },
             "compare": {
@@ -4329,12 +4659,12 @@
               "name": "<code>丟棄</code>"
             },
             "openRemoteUrl": {
-              "where": "Remotes 卡片",
+              "where": "遠端 卡片",
               "what": "在瀏覽器打開這個 remote 的網址。",
               "name": "<code>開啟遠端網址</code>"
             },
             "openInNewWindow": {
-              "where": "Worktrees 卡片的每一列",
+              "where": "工作樹 卡片的每一列",
               "what": "用新視窗打開那個 worktree。",
               "name": "<code>在新視窗開啟</code>"
             },
@@ -4371,20 +4701,20 @@
           },
           "title": "Git 面板",
           "h1": "面板頂端工具列",
-          "h2": "檔案列（Changes / Staged Changes）",
-          "h3": "Commit 區",
+          "h2": "檔案列（變更 / 已暫存的變更）",
+          "h3": "提交 區",
           "h4": "分支列與遠端列",
           "h5": "Stash 與 Worktree",
           "p1": "這一區的按鈕全是符號，同一顆符號在「資料夾列」「單檔列」「區段標題」上重複出現，作用範圍不同而已。",
           "callout": {
             "title": "同一顆符號在不同區意思不同",
-            "text": "<code>↑</code> 在遠端列是 Push、在 Stash 列是 Pop；<code>⇅</code> 在遠端列是 Sync、在分支面板頂端是「顯示遠端分支」；<code>✕</code> 在 Stash 是丟棄草稿、在 Worktree 是移除 worktree。先確認你在哪一區，再對照。"
+            "text": "<code>↑</code> 在遠端列是 推送、在 Stash 列是 Pop；<code>⇅</code> 在遠端列是 同步、在分支面板頂端是「顯示遠端分支」；<code>✕</code> 在 Stash 是丟棄草稿、在 Worktree 是移除 worktree。先確認你在哪一區，再對照。"
           }
         },
         "s6": {
           "toolbar": {
             "stageBadge": {
-              "name": "stage 徽章（<code>Draft</code> / <code>In Review</code> / <code>Approved</code> / <code>In Progress</code> / <code>Done</code> / <code>Abandoned</code>）",
+              "name": "stage 徽章（<code>草稿</code> / <code>審查中</code> / <code>已核准</code> / <code>進行中</code> / <code>已完成</code> / <code>已放棄</code>）",
               "where": "工具列最左",
               "what": "純顯示：這份計畫走到哪個階段。顏色見下表。",
               "sample": "文字"
@@ -4399,18 +4729,18 @@
               "what": "開關審查留言面板。<strong>只有還有未解決留言時才出現這顆</strong>； 沒有未解決留言時，入口在 <code>⋯</code> 選單裡。"
             },
             "execute": {
-              "name": "<code>Execute</code> ／ 提示 <code>Dispatch this approved plan to a CLI agent</code>",
+              "name": "<code>執行</code> ／ 提示 <code>將此核准計畫派工給 CLI agent 執行</code>",
               "where": "工具列",
               "what": "展開 CLI agent 選擇面板，把這份計畫派給某個 agent 執行。 <strong>只有 stage 是 approved 時才出現。</strong>"
             },
             "approve": {
-              "name": "<code>Approve</code>（不可按時提示 <code>Requires draft or in-review stage with all notes resolved</code>）",
+              "name": "<code>核准</code>（不可按時提示 <code>須為草稿或審查中，且所有留言皆已解決</code>）",
               "where": "工具列",
               "what": "把 stage 改成 approved 並蓋上核准時間。留言沒清完、或階段不對就是灰的。"
             },
             "moreActions": {
               "where": "工具列最右，永遠都在",
-              "what": "溢位選單：Outline、Review Notes、History、Share to Git、Open in Browser、 Reopen、Archive／Unarchive、Abandon、Delete，以及被收進來的常駐按鈕。",
+              "what": "溢位選單：大綱、審查留言、歷史、分享到 Git、瀏覽器開啟、 重開、封存／取消封存、放棄、刪除，以及被收進來的常駐按鈕。",
               "name": "<code>更多動作</code>"
             },
             "outline": {
@@ -4432,7 +4762,7 @@
           },
           "title": "計畫視窗",
           "h1": "stage 徽章的顏色",
-          "p1": "計畫文件上方那條工具列。<strong>這裡全部是符號，沒有一顆是圖檔。</strong>視窗變窄時按鈕會由右往左收進 <code>⋯</code> 選單——Todos 最先被收、Approve 最後——所以同一份文件在不同寬度下看到的按鈕數量不一樣。",
+          "p1": "計畫文件上方那條工具列。<strong>這裡全部是符號，沒有一顆是圖檔。</strong>視窗變窄時按鈕會由右往左收進 <code>⋯</code> 選單——待辦 最先被收、核准 最後——所以同一份文件在不同寬度下看到的按鈕數量不一樣。",
           "note": "徽章下方的進度條用同一組顏色，兩者永遠一致。",
           "stageTable": {
             "badge": "徽章",
@@ -4476,7 +4806,7 @@
         "s7": {
           "rail": {
             "history": {
-              "name": "<code>History</code>（細軌上是 📜）",
+              "name": "<code>歷史記錄</code>（細軌上是 📜）",
               "where": "右側 rail 第 1 個",
               "what": "看過去的 agent 對話紀錄。"
             },
@@ -4486,17 +4816,17 @@
               "what": "token 用量統計。細軌上這一顆旁邊的小數字就是目前累計量。"
             },
             "schedule": {
-              "name": "<code>Schedule</code>（細軌上是 🗓）",
+              "name": "<code>排程</code>（細軌上是 🗓）",
               "where": "rail 第 3 個",
               "what": "排程任務。<strong>介面上寫的是 Schedule，不是 Tasker。</strong>"
             },
             "messages": {
-              "name": "<code>Messages</code>（細軌上是 ✉）",
+              "name": "<code>訊息</code>（細軌上是 ✉）",
               "where": "rail 第 4 個",
               "what": "跨面板訊息的收送紀錄。"
             },
             "preview": {
-              "name": "<code>Preview</code>（細軌上是 👁）",
+              "name": "<code>預覽</code>（細軌上是 👁）",
               "where": "rail 第 5 個",
               "what": "檔案預覽與變更記錄軌。"
             },
@@ -4510,13 +4840,13 @@
               "what": "把該範圍的統計歸零。三顆的作用範圍不同：本次執行、這個工作區、全域。會先確認。"
             }
           },
-          "title": "右側 rail 與 Messages",
+          "title": "右側 rail 與 訊息",
           "h1": "右側五個分頁",
-          "h2": "Messages 面板",
+          "h2": "訊息 面板",
           "p1": "同一批分頁有兩種長相：<strong>收合成細軌時是 emoji</strong>，<strong>展開後的分頁列是線稿圖示</strong>。兩欄放在一起對照。",
           "callout": {
             "title": "這一區沒有圖示",
-            "text": "Messages 面板上的按鈕<strong>全部是文字按鈕</strong>，沒有任何符號或圖示可以比對。要找的話認文字："
+            "text": "訊息 面板上的按鈕<strong>全部是文字按鈕</strong>，沒有任何符號或圖示可以比對。要找的話認文字："
           },
           "messages": {
             "sample": "文字"
@@ -4532,7 +4862,7 @@
             },
             "withdraw": {
               "where": "還在排隊的訊息列上",
-              "effect": "撤回這則訊息。只在它還沒送達前有效。提示字串是 Take this message back before it reaches the target pane。"
+              "effect": "撤回這則訊息。只在它還沒送達前有效。提示字串是 在訊息送進目標 pane 之前收回。"
             },
             "resend": {
               "where": "送失敗或已撤回的訊息列上",
@@ -4624,7 +4954,7 @@
           "h3": "其他記號",
           "p1": "這些不是按鈕，但是使用者最常問「這個點是什麼顏色代表什麼」的地方。",
           "p2": "圓形、8px。顏色<strong>可以在設定裡自訂</strong>，下表是出廠預設。",
-          "p3": "圓角方形、7px，跟上面的圓點<strong>刻意做成不同形狀</strong>，因為它講的是一整群、不是單一面板。側欄群組列與上方 tab 用的是同一套規則、同一組顏色，共四態；<strong>橘色排在綠色之前</strong>——一群裡只要有一個面板在等你回應，整群就顯示橘，即使旁邊還有面板在跑：",
+          "p3": "圓角方形、7px，跟上面的圓點<strong>刻意做成不同形狀</strong>，因為它講的是一整群、不是單一面板。側欄群組列與上方 tab 用的是同一套規則、同一組顏色，共四態；<strong>橘色排在綠色之前</strong>——一群裡只要有一個面板在等你回應，整群就顯示橘，即使旁邊還有面板在跑。這兩顆方點<strong>也跟著狀態徽章分頁的自訂色盤走</strong>：",
           "callout": {
             "title": "三態，不是兩態",
             "text": "綠與藍是「有東西在裡面」的兩種狀態；灰是第三態——這一群全部都還沒真的開起來（或根本沒有面板）。看到灰點不代表壞掉。"
@@ -4645,6 +4975,12 @@
             "name": "名稱",
             "where": "位置",
             "meaning": "意思"
+          },
+          "h4": "工作區標題上的數量藥丸",
+          "p4": "工作區那一列名稱右邊的數字藥丸<strong>本身就是一盞狀態燈</strong>：它用的是上面第一張表那套面板狀態色（同樣吃狀態徽章分頁的自訂色盤），顏色代表這個工作區底下<strong>最需要你的那一個</strong>面板。排序不是「誰最嚴重」而是「誰正卡著等我」：<code>awaiting</code> → <code>error</code> → <code>running</code> → <code>starting</code> → <code>idle</code> → <code>disconnected</code> → <code>stopped</code> → <code>exited</code> → <code>waiting</code>。滑鼠停上去會把那個狀態的名字寫出來。",
+          "callout2": {
+            "title": "群組列的數字是刻意留成灰的",
+            "text": "同一顆藥丸在<strong>群組列</strong>上沒有顏色，因為那一列名稱旁邊已經有方點在講執行狀態了；方點只有四態、面板狀態有九態，兩個不同刻度擺在一起只會像兩個互相矛盾的訊號。工作區標題沒有方點，而它常常是整段收合之後螢幕上唯一剩下的那一列——所以顏色給了它。"
           }
         },
         "intro": "按鈕圖示查詢表：看到介面上某顆按鈕，來這裡查它叫什麼、在哪一區、按下去會發生什麼。每一顆都對應程式碼裡實際存在的圖示，名稱欄保留原始的英文 <code>title</code> / <code>aria-label</code>。",
@@ -4694,6 +5030,278 @@
             "branch": "main",
             "backend": "backend",
             "clock": "14:20"
+          }
+        },
+        "s9": {
+          "title": "Prompt 技能圖示",
+          "p1": "每個提示技能自己帶一顆圖示，會出現在三個地方：面板標題列 ∞ 鈕浮出的<strong>技能環</strong>槽位、環旁邊的預覽卡標題，以及<strong>設定 ▸ Prompt 技能</strong>的編輯抽屜。下面這 <strong>24 顆</strong>是內建的向量圖示，圖形與程式碼裡的完全同一份。",
+          "nameCol": "名稱（設定裡就是這個字）",
+          "useCol": "畫的是什麼、適合什麼",
+          "p2": "不想用內建的，就在圖示列最後那個輸入框直接打一個字元或貼一個 emoji。<strong>只會取第一個字元</strong>（emoji 的 ZWJ 組合與國旗算一個）——貼進去一長串也只留第一個，因為環上的槽位只有一個字的位置。",
+          "builtin": {
+            "advance": {
+              "what": "快轉——一路往前推進的工作。"
+            },
+            "green": {
+              "what": "圈起來的勾——驗證、把測試跑成綠的。"
+            },
+            "scan": {
+              "what": "放大鏡——只盤點、不動任何東西。"
+            },
+            "doc": {
+              "what": "折角的紙——寫文件或報告。"
+            },
+            "refactor": {
+              "what": "循環箭頭——一輪一輪重構、整理。"
+            },
+            "edit": {
+              "what": "鉛筆——當場寫的一次性指令。"
+            },
+            "bug": {
+              "what": "甲蟲——找出並修掉缺陷。"
+            },
+            "test": {
+              "what": "燒瓶——寫測試或跑測試。"
+            },
+            "rocket": {
+              "what": "火箭——出貨、發版。"
+            },
+            "shield": {
+              "what": "盾牌——安全審查、加固。"
+            },
+            "bolt": {
+              "what": "閃電——效能工作。"
+            },
+            "sparkle": {
+              "what": "兩顆火花——清理、收尾打磨。"
+            },
+            "branch": {
+              "what": "git 分岔圖——開分支、rebase、合併。"
+            },
+            "database": {
+              "what": "圓柱——schema、查詢、資料遷移。"
+            },
+            "terminal": {
+              "what": "命令提示字元——在 shell 裡跑東西。"
+            },
+            "globe": {
+              "what": "地球——翻譯與多語系。"
+            },
+            "chart": {
+              "what": "長條圖——量測、分析、出數字。"
+            },
+            "clock": {
+              "what": "時鐘——跟排程或時間有關的事。"
+            },
+            "lock": {
+              "what": "掛鎖——驗證、權限、機密。"
+            },
+            "package": {
+              "what": "箱子——相依套件、打包、bundle。"
+            },
+            "question": {
+              "what": "問號——動手前先問。"
+            },
+            "list": {
+              "what": "條列——計畫、盤點、檢查清單。"
+            },
+            "eye": {
+              "what": "眼睛——只看不碰的審查。"
+            },
+            "star": {
+              "what": "星星——最重要的那一個。"
+            }
+          }
+        }
+      },
+      "crossPlatform": {
+        "intro": "Navide 在 macOS、Windows 與 Linux 上都跑得起來，但其他七個分頁寫的畫面都是 macOS 的。這一頁只講三個平台之間真正不一樣的地方：該下載哪一個檔案、更新怎麼走、畫面上哪幾顆按鈕換了位置，以及底層換了做法之後對你有什麼影響。這一頁沒提到的部分，就照其他分頁寫的走。",
+        "s1": {
+          "title": "取得與安裝",
+          "p1": "每一個版本都同時出 macOS、Windows 與 Linux 的安裝檔，挑你的平台那一個就好。",
+          "table": {
+            "platform": "平台",
+            "file": "下載哪一個",
+            "how": "怎麼裝"
+          },
+          "downloads": {
+            "macos": {
+              "platform": "macOS",
+              "file": "Navide-<版本>-arm64.dmg",
+              "how": "拖進「應用程式」直接開。已用 Developer ID 簽章並經 Apple 公證，不需要任何繞過 Gatekeeper 的步驟。需要 macOS 13 以上、Apple silicon。"
+            },
+            "winX64": {
+              "platform": "Windows x64",
+              "file": "Navide-<版本>-win-x64.exe",
+              "how": "一般的 Intel 或 AMD 機器用這一個。"
+            },
+            "winArm": {
+              "platform": "Windows on Arm",
+              "file": "Navide-<版本>-win-arm64.exe",
+              "how": "Arm 架構的 Windows 機器用這一個。這是原生版本，不是靠模擬跑 x64。"
+            },
+            "linuxAppImage": {
+              "platform": "Linux（AppImage）",
+              "file": "Navide-<版本>-x86_64.AppImage",
+              "how": "先 chmod +x 再直接執行。它自己帶了 FUSE，不需要另外安裝 libfuse。"
+            },
+            "linuxDeb": {
+              "platform": "Linux（.deb）",
+              "file": "Navide-<版本>-amd64.deb",
+              "how": "用 sudo apt install 裝。程式落在 /opt/Navide/navide，PATH 上會有一個 navide 指令，也會建立桌面項目。"
+            }
+          },
+          "note": "同一個版本裡還有 .zip 與幾個 .yml 檔，那些是自動更新在用的。手動安裝只需要上面五個其中一個。",
+          "h1": "Windows 的安裝程式",
+          "p2": "它不是按一下就裝完的那種：會問你要裝在哪個資料夾，而且<strong>只裝給目前這個 Windows 使用者</strong>、不是整台機器，所以不需要系統管理員權限。桌面捷徑的名字是 Navide。",
+          "callout": {
+            "title": "第一次執行會被 SmartScreen 擋下來",
+            "text": "Windows 的安裝檔目前還沒有做程式碼簽章，所以 SmartScreen 會顯示「Windows 已保護您的電腦」、發行者寫著不明。選「其他資訊」再選「仍要執行」。每一個新版本的安裝檔都會再問一次，這不是檔案被動過手腳的跡象。"
+          },
+          "h2": "目前沒有出的組合",
+          "p3": "macOS 只出 Apple silicon 版，沒有 Intel 版。Linux 只出 x64；arm64 只有在手動觸發建置時才會建，還沒正式發佈。"
+        },
+        "s2": {
+          "title": "下載來源：GitHub 與 dl.navide.dev",
+          "p1": "同一份檔案有兩個來源：GitHub Releases，以及 Navide 自己的下載鏡像 <code>dl.navide.dev</code>。兩邊不是「主要與備用」的關係，而是同一批位元組的兩個出口。",
+          "list": {
+            "readme": "<strong>README 的下載清單</strong>每一行旁邊都有一個 <em>mirror</em> 連結，指向鏡像上的同一個檔案。哪一邊慢就換另一邊。",
+            "identical": "兩邊<strong>逐位元相同</strong>。發版流程在寫完鏡像之後，會把每一個檔案從 <code>dl.navide.dev</code> 重新抓回來比對 sha256，對不上就讓那一步失敗——所以鏡像不會是舊的，也不會是只上傳一半的。",
+            "website": "<strong>官網</strong>的下載按鈕會先去探測鏡像，探得到就給鏡像的連結，探不到才回頭指向 GitHub。"
+          },
+          "h1": "App 內的更新走哪一邊",
+          "p2": "更新<strong>預設仍然看 GitHub</strong>。只有遇到網路層的失敗（找不到主機、連不上、逾時、伺服器 5xx）時才會改走鏡像，而且一旦切過去，這次啟動剩下的時間都會留在鏡像上。",
+          "note": "<strong>404 或 checksum 不符不會切</strong>。鏡像上是同一份檔案，切過去只會用同樣的方式失敗；照原樣回報反而讓真正的問題看得出來。"
+        },
+        "s3": {
+          "title": "自動更新在各平台",
+          "p1": "App 內更新不是每一種安裝方式都有。差別在安裝方式，不在作業系統。",
+          "table": {
+            "install": "安裝方式",
+            "updates": "App 內更新"
+          },
+          "channels": {
+            "mac": {
+              "install": "macOS 的 .dmg 或 .zip",
+              "updates": "有。"
+            },
+            "win": {
+              "install": "Windows 的 .exe 安裝檔",
+              "updates": "有。但因為安裝檔還沒做程式碼簽章，更新也是在不驗證簽章的情況下裝上去的。"
+            },
+            "appimage": {
+              "install": "Linux 的 AppImage",
+              "updates": "有。"
+            },
+            "deb": {
+              "install": "Linux 的 .deb",
+              "updates": "沒有。這個裝法的更新由 apt 管，跟系統上其他套件一起來。"
+            }
+          },
+          "h1": "三段開關在三個平台是一樣的",
+          "p2": "設定 ▸ Updates 把更新拆成<strong>檢查</strong>、<strong>下載</strong>、<strong>安裝</strong>三段，三段的行為不隨平台改變：自動檢查預設開、自動下載預設開但只對修補版生效、結束時安裝預設關。按下安裝一定會重開 App，連同所有 CLI 面板一起——按鈕上寫的就是「重新啟動以安裝」。",
+          "callout": {
+            "title": "用 .deb 裝的話，那一頁長什麼樣",
+            "text": "「檢查更新」按鈕是暗的，狀態列寫著「此組建不支援自動更新。」，三段進度條是空白的。這不是壞掉，是這個安裝方式本來就把更新交給套件管理員。"
+          }
+        },
+        "s4": {
+          "title": "操作上的差異",
+          "h1": "視窗控制鈕與選單列",
+          "p1": "Navide 的標題列是自己畫的。macOS 上系統仍然會把紅綠燈畫在上面，Windows 與 Linux 不會——Linux 上的無框視窗真的就是一顆按鈕都沒有——所以在這兩個平台，Navide 自己畫了最小化、最大化／還原、關閉三顆按鈕，放在標題列的右上角。",
+          "list": {
+            "controls": "這三顆按鈕<strong>永遠在最上層</strong>，包含還沒開任何專案時的歡迎畫面在內，沒有任何浮層蓋得住它們。",
+            "menubar": "Windows 與 Linux 的<strong>原生選單列預設是收起來的</strong>，按 <kbd class=\"cph-kbd\">Alt</kbd> 叫出來，免得跟自繪的標題列疊成上下兩條。",
+            "appMenu": "這兩個平台沒有 macOS 那種 App 選單，所以 <em>Settings…</em>、<em>Check for Updates…</em>、<em>Quit</em> 都改放在 <strong>File</strong> 選單裡。",
+            "closeItem": "<strong>Window</strong> 選單多一項 <em>Close</em> 用來關視窗。macOS 沒有這一項，因為那裡的 <kbd class=\"cph-kbd\">⌘W</kbd> 留給了關閉面板。",
+            "pluginWindows": "由外掛畫出來的視窗（Git 視窗是其中之一）在 Windows 與 Linux 上用的是<strong>系統原生的視窗框</strong>，不是自繪的那一組：那些視窗裡跑的是外掛自己的內容，接不到主程式的橋接，畫不出自己的按鈕。"
+          },
+          "h2": "關掉最後一個視窗會先問你",
+          "p2": "在 Windows 與 Linux 上，關掉最後一個視窗等於結束整個 App。所以 Navide 在視窗真的關掉<strong>之前</strong>就先問一次，這樣按取消才還來得及——等視窗關掉才問的話，取消只會留下一個沒有視窗、卻還在跑的程式。對話框裡有「不再顯示此提醒」，勾了就不會再問，之後可以在設定裡的「關閉前確認」把它打開回來。",
+          "callout": {
+            "title": "macOS 不一樣",
+            "text": "macOS 上關掉視窗不等於結束 App，程式會留在 Dock 裡，所以那裡沒有這一問；確認是在按 ⌘Q 的時候才出現，而且那時候視窗還在畫面上。另外要注意：這道守衛掛在<strong>每一個</strong>視窗上，不只主視窗——留著沒關的 Plans 或 Git 視窗，也算「最後一個」。"
+          },
+          "h3": "修飾鍵與快捷鍵",
+          "p3": "選單上帶快捷鍵的項目會照平台走：macOS 是 ⌘，Windows 與 Linux 是 <kbd class=\"cph-kbd\">Ctrl</kbd>。面板與編輯器層的每一條規則都可以在<strong>設定 ▸ Shortcuts</strong> 裡逐條改掉，所以哪一組在你的鍵盤上不順手，就在那裡換成你要的組合。",
+          "h4": "在終端機裡選字",
+          "p4": "CLI 開著滑鼠回報的時候，直接拖曳會被送進程式裡，什麼都選不到。macOS 要按住 <kbd class=\"cph-kbd\">Option</kbd> 拖，Windows 與 Linux 要按住 <kbd class=\"cph-kbd\">Shift</kbd>。"
+        },
+        "s5": {
+          "title": "底下換了做法，對你意味著什麼",
+          "h1": "Windows 的終端機",
+          "p1": "Windows 的面板走的是系統的 ConPTY，而 ConPTY 需要一個 console host 執行檔——那個檔案不會自己被打包工具找到，所以 Navide 明確把它收進安裝包，<strong>而且每一次發版都在打包好的執行檔裡真的開一次 ConPTY</strong>，開不起來就讓那次建置失敗。少了它不是偶爾出錯，是每個面板一開就立刻死掉，所以 x64 與 Arm64 兩種建置各驗一次。",
+          "p2": "Windows 上的 CLI 面板是<strong>直接拿到指令</strong>的，不經過 PowerShell。PowerShell 的 <code>-Command</code> 會把字串當成 PowerShell 程式碼重新解讀：MCP 設定那一長段 JSON 的大括號被當成程式區塊、網址裡的 <code>&amp;</code> 被當成呼叫運算子，結果是每一個接了 MCP 的面板一開就掛在語法錯誤上。純終端機面板（不是 CLI agent 的那一種）維持原樣，還是走 PowerShell。",
+          "h2": "憑證放在哪裡",
+          "credTable": {
+            "platform": "平台",
+            "store": "存在哪裡",
+            "means": "對你的意思"
+          },
+          "creds": {
+            "macos": {
+              "store": "Keychain",
+              "means": "Navide 讀取憑證時，macOS 可能跳出授權對話框要你按「允許」。Navide Cloud 連線卡在那裡不動，通常就是這個框在等你回應。"
+            },
+            "windows": {
+              "store": "DPAPI 加密過的檔案",
+              "means": "檔案綁在你的 Windows 帳號上：同一台機器的其他帳號打不開，複製到別台機器也解不開。讀寫過程不會跳任何對話框。"
+            },
+            "linux": {
+              "store": "權限 0600 的檔案",
+              "means": "擋在前面的只有檔案權限本身，沒有作業系統層的保險箱。"
+            }
+          },
+          "p3": "Git 帳號的存取權杖是另外一套，走作業系統的金鑰庫，磁碟上只留密文。如果這台機器叫不出金鑰庫，設定裡就不會有「新增帳號」這顆按鈕、現有帳號也不能編輯，並直接寫明這個系統無法使用加密功能。",
+          "h3": "關掉之後誰負責收拾",
+          "p4": "Windows 上每個面板的子行程都被放進一個 <em>Job Object</em>：關掉面板就等於關掉那個把手，核心會把整棵行程樹一起帶走，連 Navide 自己非正常結束的情況也一樣。代價是 Windows 沒有溫和的結束訊號可用——CLI 是被直接終止的，<strong>可能來不及把對話記錄寫完</strong>。",
+          "p5": "macOS 與 Linux 相反：子行程自己開一個 session，不會被順手帶走。所以 Navide 在關閉時掃一遍，下次啟動時再掃一遍上一輪沒收乾淨的，發現殘留就在狀態列顯示一個 leftover 的提醒讓你決定要不要清。這兩個平台送的是 SIGTERM，CLI 有機會把記錄寫完再走。",
+          "p6": "後端行程在三個平台都會跟著 App 一起結束：App 啟動後端的時候把自己的行程編號告訴它，後端盯著那個編號，看到它消失就自己收工。",
+          "h4": "找不找得到你的 CLI",
+          "p7": "從 Finder 或桌面啟動器點開的程式，拿到的 PATH 不是你在終端機裡看到的那一份，而各家 CLI 的安裝程式偏偏都是把路徑寫進 shell 的設定檔。所以在 macOS 與 Linux 上，Navide 會另外問一次登入 shell、要它印出 PATH，問不到再退回一份常見安裝位置的清單。Windows 不做這件事，因為那裡的 PATH 存在登錄檔裡，程式拿到的本來就是完整的。",
+          "p8": "Claude Code 的 hook 在 Linux 上<strong>沒有 curl 也能跑</strong>：安裝 hook 的當下會看這台機器有沒有 curl，沒有就改用 python3 寫出同一個請求。Ubuntu 桌面版預設就是沒有 curl 的，而一個靜悄悄失敗的 hook 會把所有靠 hook 的功能一起帶走。"
+        },
+        "s6": {
+          "title": "已知的平台限制",
+          "h1": "Windows",
+          "win": {
+            "signing": "<strong>安裝檔沒有程式碼簽章。</strong>每一個新版本都會再被 SmartScreen 警告一次，而且 App 內更新也是在不驗證簽章的情況下裝上去的。",
+            "symlinks": "<strong>每個面板一份的 CLI 家目錄、以及受管技能，是用符號連結做出來的</strong>，而 Windows 預設不讓一般程式建立符號連結。要嘛開啟 Windows 的開發人員模式（<em>Settings ▸ For developers</em>），要嘛用系統管理員身分執行 Navide。沒開也不會無聲失敗：受影響的面板會在啟動後印一行黃色的 <code>[mcp]</code> 說明告訴你原因。會碰到這件事的是靠設定檔接 MCP 的那幾家——Antigravity CLI、Grok CLI、Kimi Code。",
+            "schedule": "<strong>Schedule 分頁什麼都不會列。</strong>Navide 讀的是使用者的 crontab 與 macOS 的 launchd，Windows 兩者都沒有；工作排程器（taskschd.msc）是刻意沒有接進來的，因為 Navide 從來不自己建立排程工作，而工作排程器本來就在管這台機器上的工作。畫面會直接把這件事寫出來，而不是給你一份空清單。"
+          },
+          "h2": "Linux",
+          "linux": {
+            "deb": "<strong>用 .deb 裝的沒有 App 內更新</strong>，更新走 apt。想要 App 自己更新就用 AppImage。",
+            "arm64": "<strong>arm64 還沒發佈。</strong>它只在手動觸發建置時才會建出來，不會出現在 Release 頁面上。",
+            "terminal": "<strong>「在終端機開啟」要靠偵測。</strong>Linux 沒有單一的預設終端機，Navide 會依序看 <code>$TERMINAL</code>、<code>xdg-terminal-exec</code>，再試一份常見終端機的清單；都沒中的時候會回報失敗，而不是安靜地什麼都不做。"
+          },
+          "h3": "三個平台一起看",
+          "common": {
+            "macPerms": "macOS 那組隱私權限對話框（自動化、檔案與資料夾、完整取用磁碟）<strong>在 Windows 與 Linux 上沒有對應的東西</strong>。其他分頁裡談到「去系統設定裡授權」的段落，只適用於 macOS。"
+          }
+        },
+        "s7": {
+          "title": "同一個人、好幾台機器",
+          "p1": "把兩台不同作業系統的機器接起來這件事本身不分平台：Navide Cloud 的登入、配對與跨裝置傳訊，在三個平台上是同一套，寫在<strong>「設定與系統」</strong>那一頁。這裡只補上跨作業系統時會不一樣的部分。",
+          "p2": "<strong>設定 ▸ Navide Cloud</strong> 的同步清單上，目前可以打開的是 Prompt 技能、MCP、技能、記憶這四項。<em>憑證</em>會列在清單上，但開關是暗的、說明寫著尚未支援同步——它列出來是讓你知道有這回事，不是等著讓你開。",
+          "note": "本來就不會跟著機器走的東西：各家 CLI 自己的安裝與登入、憑證（存在各平台自己的保險箱裡，格式互不相通），以及所有絕對路徑。第二台機器要自己把 CLI 裝好、自己登入一次。"
+        },
+        "mock": {
+          "controls": {
+            "caption": "同一條標題列在兩邊的樣子。這是用 HTML 畫的示意圖，配色跟著你的主題走。",
+            "legend": {
+              "mac": {
+                "label": "macOS",
+                "text": "左上角是系統畫的紅綠燈，標題列左側因此留了一段空位給它們。"
+              },
+              "drawn": {
+                "label": "Windows 與 Linux",
+                "text": "左側不留空位，改在右上角放 Navide 自己畫的三顆按鈕：最小化、最大化／還原、關閉。"
+              }
+            },
+            "sample": {
+              "title": "my-project"
+            }
           }
         }
       }

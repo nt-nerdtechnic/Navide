@@ -75,12 +75,14 @@ describe('CliAgentsHelp', () => {
 
     const figures = wrapper.findAll('.mk-fig')
     expect(figures).toHaveLength(4)
-    // Three marked regions per picture.
-    expect(figures.map((f) => f.findAll('.mk-fig-legend li').length)).toEqual([3, 3, 3, 3])
+    // Three marked regions per picture; the settings one also marks the
+    // launch-override accordion, which the list and permission rows sit around.
+    expect(figures.map((f) => f.findAll('.mk-fig-legend li').length)).toEqual([3, 3, 4, 3])
     // + menu, install dialog, settings rows, quota bars — one per figure.
     expect(figures.map((f) => f.findAll('.mk-menu').length)).toEqual([1, 0, 0, 0])
     expect(figures.map((f) => f.findAll('.mk-dlg').length)).toEqual([0, 1, 0, 0])
-    expect(figures.map((f) => f.findAll('.mk-frow').length)).toEqual([0, 4, 6, 2])
+    // Settings: three list rows, four launch-override rows, three permission rows.
+    expect(figures.map((f) => f.findAll('.mk-frow').length)).toEqual([0, 4, 10, 2])
     expect(figures.map((f) => f.findAll('.mk-meter').length)).toEqual([0, 0, 0, 2])
 
     // The pictures reuse the product's own strings, so they turn English with

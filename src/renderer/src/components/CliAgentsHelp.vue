@@ -64,21 +64,49 @@ const vendors: VendorRow[] = [
 // The three entry points share one guided-install dialog; only the source differs.
 const dialogSources = ['spawn', 'pane', 'settings'] as const
 
+// Status chips on a CLI Agents row, in the order cliAgentRow.ts emits them:
+// what it is, what it runs as, how it is reached. `model` covers both the
+// model and the effort chip, which always travel together.
+const chips = [
+  'install',
+  'model',
+  'permission',
+  'push',
+  'account',
+  'binary',
+  'command',
+  'env',
+] as const
+
+// The fields one expanded vendor row of the launch-override accordion offers.
+const launchFields = ['model', 'effort', 'command', 'env'] as const
+
+// Which fields the Manual spawn dialog shows, decided by whether the vendor
+// spec declares `modelArgs` / `effortArgs` — not by a hard-coded list. Counted
+// against the specs in platform/plugin-shell/agents on 2026-09-18: 5 / 7 / 3,
+// the last group being aider, droid and terminal.
+const spawnGroups = ['both', 'modelOnly', 'neither'] as const
+
 const installActions = ['update', 'doctor', 'install', 'autoUpdate', 'redetect'] as const
 
 const accountActions = ['add', 'login', 'setDefault', 'refreshQuota', 'delete'] as const
 
-const badgeStates = ['percent', 'reading', 'cached', 'expired', 'cliMissing', 'noData'] as const
+const badgeStates = ['percent', 'reading', 'cached', 'expired', 'limit', 'cliMissing', 'noData'] as const
 
 const troubleshooting = [
   'notInstalled',
   'notDetected',
+  'notOnPath',
+  'signedOut',
   'loginExpired',
   'parkedExpired',
   'detectingSession',
   'quotaStale',
   'panesRunning',
   'permissionFlag',
+  'launchCommand',
+  'envIgnored',
+  'resumeIgnoresCommand',
 ] as const
 const { t } = useI18n()
 
@@ -106,7 +134,7 @@ function sample(key: string): string {
 
 const menuLegend = computed(() => mockLegend('menu', ['role', 'pick', 'missing']))
 const installLegend = computed(() => mockLegend('install', ['steps', 'chain', 'command']))
-const settingsLegend = computed(() => mockLegend('settings', ['grip', 'toggle', 'perm']))
+const settingsLegend = computed(() => mockLegend('settings', ['grip', 'toggle', 'launch', 'perm']))
 const usageLegend = computed(() => mockLegend('usage', ['windows', 'reset', 'accounts']))
 
 // The + menu, with the fourth vendor in its "binary not found" form.
@@ -261,6 +289,19 @@ const installChain = computed(() => [sample('chain1'), sample('chain2'), sample(
         <div class="cah-callout-title">{{ $t('settings.help.cliAgents.s2.callout.title') }}</div>
         <div class="cah-callout-text" v-html="$t('settings.help.cliAgents.s2.callout.text')"></div>
       </div>
+
+      <h3 class="cah-h3">{{ $t('settings.help.cliAgents.s2.h4') }}</h3>
+      <p class="cah-p" v-html="$t('settings.help.cliAgents.s2.p8')"></p>
+      <p class="cah-p" v-html="$t('settings.help.cliAgents.s2.p9')"></p>
+
+      <h3 class="cah-h3">{{ $t('settings.help.cliAgents.s2.h5') }}</h3>
+      <p class="cah-p" v-html="$t('settings.help.cliAgents.s2.p10')"></p>
+      <p class="cah-p" v-html="$t('settings.help.cliAgents.s2.p11')"></p>
+
+      <div class="cah-callout">
+        <div class="cah-callout-title">{{ $t('settings.help.cliAgents.s2.callout2.title') }}</div>
+        <div class="cah-callout-text" v-html="$t('settings.help.cliAgents.s2.callout2.text')"></div>
+      </div>
     </section>
 
     <!-- ── 3 · Roles ───────────────────────────────────────────────── -->
@@ -297,8 +338,75 @@ const installChain = computed(() => [sample('chain1'), sample('chain2'), sample(
 
       <h3 class="cah-h3">{{ $t('settings.help.cliAgents.s4.h1') }}</h3>
       <p class="cah-p" v-html="$t('settings.help.cliAgents.s4.p2')"></p>
+      <p class="cah-p">{{ $t('settings.help.cliAgents.s4.chipsIntro') }}</p>
+      <div class="cah-tablewrap">
+        <table class="cah-table">
+          <thead>
+            <tr>
+              <th>{{ $t('settings.help.cliAgents.s4.chipsTable.chip') }}</th>
+              <th>{{ $t('settings.help.cliAgents.s4.chipsTable.shows') }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="key in chips" :key="key">
+              <td class="cah-nowrap"><strong>{{ $t(`settings.help.cliAgents.s4.chips.${key}.chip`) }}</strong></td>
+              <td v-html="$t(`settings.help.cliAgents.s4.chips.${key}.shows`)"></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="cah-note">{{ $t('settings.help.cliAgents.s4.chipsLegend') }}</p>
 
       <h3 class="cah-h3">{{ $t('settings.help.cliAgents.s4.h2') }}</h3>
+      <p class="cah-p" v-html="$t('settings.help.cliAgents.s4.launchIntro')"></p>
+      <div class="cah-tablewrap">
+        <table class="cah-table">
+          <thead>
+            <tr>
+              <th>{{ $t('settings.help.cliAgents.s4.launchTable.field') }}</th>
+              <th>{{ $t('settings.help.cliAgents.s4.launchTable.detail') }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="key in launchFields" :key="key">
+              <td class="cah-nowrap"><strong>{{ $t(`settings.help.cliAgents.s4.launchFields.${key}.field`) }}</strong></td>
+              <td v-html="$t(`settings.help.cliAgents.s4.launchFields.${key}.detail`)"></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="cah-callout cah-callout--warn">
+        <div class="cah-callout-title">{{ $t('settings.help.cliAgents.s4.callout3.title') }}</div>
+        <div class="cah-callout-text" v-html="$t('settings.help.cliAgents.s4.callout3.text')"></div>
+      </div>
+
+      <p class="cah-p" v-html="$t('settings.help.cliAgents.s4.launchResume')"></p>
+      <p class="cah-p" v-html="$t('settings.help.cliAgents.s4.launchReject')"></p>
+      <p class="cah-p" v-html="$t('settings.help.cliAgents.s4.launchEnv')"></p>
+      <p class="cah-note" v-html="$t('settings.help.cliAgents.s4.launchEnvNote')"></p>
+
+      <h3 class="cah-h3">{{ $t('settings.help.cliAgents.s4.h3') }}</h3>
+      <p class="cah-p" v-html="$t('settings.help.cliAgents.s4.spawnIntro')"></p>
+      <div class="cah-tablewrap">
+        <table class="cah-table">
+          <thead>
+            <tr>
+              <th>{{ $t('settings.help.cliAgents.s4.spawnTable.group') }}</th>
+              <th>{{ $t('settings.help.cliAgents.s4.spawnTable.vendors') }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="key in spawnGroups" :key="key">
+              <td class="cah-nowrap"><strong>{{ $t(`settings.help.cliAgents.s4.spawnGroups.${key}.group`) }}</strong></td>
+              <td>{{ $t(`settings.help.cliAgents.s4.spawnGroups.${key}.vendors`) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="cah-note" v-html="$t('settings.help.cliAgents.s4.spawnNote')"></p>
+
+      <h3 class="cah-h3">{{ $t('settings.help.cliAgents.s4.h4') }}</h3>
       <p class="cah-p">{{ $t('settings.help.cliAgents.s4.p3') }}</p>
       <ul class="cah-list">
         <li v-html="$t('settings.help.cliAgents.s4.list.global')"></li>
@@ -314,6 +422,19 @@ const installChain = computed(() => [sample('chain1'), sample('chain2'), sample(
           <MockFormRow grip check="on" :label="sample('vendorA')" />
           <MockFormRow grip check="on" :label="sample('vendorB')" />
           <MockFormRow grip check="off" :label="sample('vendorC')" dim />
+        </MockPanel>
+        <MockPanel :label="$t('settings.cliLaunch.title')">
+          <MockFormRow :label="sample('vendorA')" :mark="MARKS[2]" />
+          <MockFormRow :label="$t('settings.cliLaunch.model-label')" :code="sample('model')" />
+          <MockFormRow
+            :label="$t('settings.cliLaunch.effort-label')"
+            :select="sample('effort')"
+          />
+          <MockFormRow
+            :label="sample('envName')"
+            :badge="$t('settings.cliLaunch.env-reserved-chip')"
+            badge-tone="crit"
+          />
         </MockPanel>
         <MockPanel :label="$t('settings.cliPermission.title')">
           <MockFormRow
@@ -338,10 +459,11 @@ const installChain = computed(() => [sample('chain1'), sample('chain2'), sample(
         <div class="cah-callout-text" v-html="$t('settings.help.cliAgents.s4.callout1.text')"></div>
       </div>
 
-      <h3 class="cah-h3">{{ $t('settings.help.cliAgents.s4.h3') }}</h3>
+      <h3 class="cah-h3">{{ $t('settings.help.cliAgents.s4.h5') }}</h3>
       <p class="cah-p">{{ $t('settings.help.cliAgents.s4.p5') }}</p>
+      <p class="cah-p" v-html="$t('settings.help.cliAgents.s4.pushAllOff')"></p>
 
-      <h3 class="cah-h3">{{ $t('settings.help.cliAgents.s4.h4') }}</h3>
+      <h3 class="cah-h3">{{ $t('settings.help.cliAgents.s4.h6') }}</h3>
       <p class="cah-p">{{ $t('settings.help.cliAgents.s4.p6') }}</p>
       <div class="cah-tablewrap">
         <table class="cah-table">
@@ -399,11 +521,17 @@ const installChain = computed(() => [sample('chain1'), sample('chain2'), sample(
       <p class="cah-p" v-html="$t('settings.help.cliAgents.s5.p5')"></p>
       <p class="cah-p">{{ $t('settings.help.cliAgents.s5.p6') }}</p>
       <p class="cah-p">{{ $t('settings.help.cliAgents.s5.p7') }}</p>
+      <p class="cah-p" v-html="$t('settings.help.cliAgents.s5.switchToast')"></p>
 
       <div class="cah-callout cah-callout--warn">
         <div class="cah-callout-title">{{ $t('settings.help.cliAgents.s5.callout1.title') }}</div>
         <div class="cah-callout-text" v-html="$t('settings.help.cliAgents.s5.callout1.text')"></div>
       </div>
+
+      <h3 class="cah-h3">{{ $t('settings.help.cliAgents.s5.hPortable') }}</h3>
+      <p class="cah-p" v-html="$t('settings.help.cliAgents.s5.portable1')"></p>
+      <p class="cah-p" v-html="$t('settings.help.cliAgents.s5.portable2')"></p>
+      <p class="cah-note" v-html="$t('settings.help.cliAgents.s5.portableNote')"></p>
 
       <h3 class="cah-h3">{{ $t('settings.help.cliAgents.s5.h2') }}</h3>
       <p class="cah-p" v-html="$t('settings.help.cliAgents.s5.p8')"></p>
@@ -477,6 +605,10 @@ const installChain = computed(() => [sample('chain1'), sample('chain2'), sample(
         </table>
       </div>
       <p class="cah-p" v-html="$t('settings.help.cliAgents.s6.p3')"></p>
+
+      <h3 class="cah-h3">{{ $t('settings.help.cliAgents.s6.h4') }}</h3>
+      <p class="cah-p" v-html="$t('settings.help.cliAgents.s6.p4')"></p>
+      <p class="cah-p" v-html="$t('settings.help.cliAgents.s6.p5')"></p>
     </section>
 
     <!-- ── 7 · Idle reclaim & CLI cost ─────────────────────────────── -->

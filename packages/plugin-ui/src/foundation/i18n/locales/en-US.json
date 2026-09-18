@@ -952,6 +952,9 @@
         "help-settings-system": {
           "summary": "A map of all settings pages, plus Navide Cloud, the window menus, scheduled tasks and resource upkeep."
         },
+        "help-cross-platform": {
+          "summary": "How getting, updating and using Navide differs on Windows, Linux and macOS, and what to expect across several machines."
+        },
         "help-icons": {
           "summary": "Every button icon in the interface — what it is called, where it lives and what pressing it does."
         }
@@ -1325,7 +1328,7 @@
             "autoReclaim": "30"
           }
         },
-        "intro": "What each of the seventeen settings tabs controls, how Navide Cloud links several machines into one private network, and the system surfaces that live outside the main screen — the menus, the standalone windows and resource upkeep.",
+        "intro": "What each of the seventeen settings tabs controls, how Navide Cloud links several machines into one private network, and the system surfaces that live outside the main screen — the menus, the standalone windows, the usage views and resource upkeep.",
         "s1": {
           "title": "Settings overview",
           "p1": "The settings window opens with <kbd class=\"syh-kbd\">⌘,</kbd>; the gear button in the title bar is the same entry point. The left sidebar is split into five groups, <strong>17 tabs</strong> in total.",
@@ -1344,7 +1347,7 @@
           },
           "tabs": {
             "general": {
-              "what": "Close confirmation, idle reclaim threshold, resume behavior, default editor, quota badge, environment check, backend timeout, notifications and sound",
+              "what": "Close confirmation, idle reclaim threshold, resume behavior, default editor, quota badge, environment check, backend timeout, notifications and sound, plus exporting and importing the whole settings bundle",
               "more": "section 2 of this page"
             },
             "appearance": {
@@ -1392,12 +1395,12 @@
               "more": "section 3 of this page"
             },
             "extensions": {
-              "what": "Installed plugins and marketplace installs",
+              "what": "The execution policy plugins run under, plus the bundled and installed plugins",
               "more": "section 4 of this page"
             },
-            "executionPolicy": {
-              "what": "Which commands a plugin may run: Full, Allowlist or Denylist, plus which policy each workspace uses (the host default or your own)",
-              "more": "not covered in this manual yet"
+            "marketplace": {
+              "what": "Searching the extension registry and installing from it",
+              "more": "section 4 of this page"
             },
             "shortcuts": {
               "what": "Rebinding shortcuts, import and export",
@@ -1408,11 +1411,11 @@
               "more": "section 4 of this page"
             },
             "help": {
-              "what": "Read-only reference: cross-pane messaging, MCP and these very pages",
+              "what": "Read-only reference: the topic tabs along the top switch between the manual pages",
               "more": "the tab you are reading right now"
             }
           },
-          "note": "The Help tab holds no settings at all, only a few reference documents — you are reading one of them. At the bottom of the settings window there is also <em>Export bundle</em> / <em>Import bundle</em>, which moves the whole set of settings to another machine."
+          "note": "The Help tab holds no settings at all: it is a row of <strong>topic tabs</strong>, one page per topic, and the one you are reading is \"Settings &amp; System\". <strong>Individual settings tabs do not carry help of their own</strong> — all of it lives here. When settings search matches a help entry it switches to the Help tab <strong>and jumps to the matching topic</strong>; in the other direction, neither the main window nor the native menus has an entry point straight to it, so settings is the only way in. Moving the whole set of settings to another machine lives in <strong>General ▸ Settings management</strong> (section 2), not at the bottom of the window."
         },
         "s2": {
           "title": "General, Appearance, Status badges",
@@ -1474,6 +1477,10 @@
             "backendTimeout": {
               "desc": "How many seconds to wait for the backend, 15–120; raise it on a slow machine.",
               "fallback": "—"
+            },
+            "settingsBundle": {
+              "desc": "Two buttons, Export Settings Bundle and Import Settings Bundle, with a scope badge and the config file path beside them. The bundle carries Roles, Pipelines, MCP, Analyzer and appearance preferences; API keys and tokens are redacted, and an import never overwrites a value you already have. It is a plain local file exchange — no share code, no sign-in, no connection needed.",
+              "fallback": "—"
             }
           },
           "h2": "Appearance",
@@ -1481,7 +1488,7 @@
             "theme": "<strong>Theme</strong> — five built in: Dark (GitHub), Midnight, Forest, Light and High Contrast, with Dark (GitHub) as the default.",
             "colors": "<strong>Custom Colors</strong> — eight overridable color tokens (background, surface, text, secondary text, border, accent, success, danger). Overrides sit on top of the current theme and are <strong>kept when you switch themes</strong>; <em>↺ Reset to defaults</em> restores them.",
             "language": "<strong>Language</strong> — <strong>only two</strong>: <code>繁體中文</code> and <code>English</code>. Until you pick one, Navide follows the system language. This is a user-level preference and applies to every workspace.",
-            "uiScale": "<strong>Interface Scale</strong> — scales the whole interface, in six steps (80%, 90%, 100%, 110%, 125%, 150%; 100% by default), on <kbd class=\"syh-kbd\">⇧⌘=</kbd> / <kbd class=\"syh-kbd\">⇧⌘-</kbd> / <kbd class=\"syh-kbd\">⇧⌘0</kbd>. It drives Electron's page zoom rather than a CSS variable, so text, icons, borders and spacing all move together, and the main process applies it to <strong>every window</strong>, plugin windows included. It is a <strong>separate axis</strong> from pane font size: <kbd class=\"syh-kbd\">⌘=</kbd> / <kbd class=\"syh-kbd\">⌘-</kbd> / <kbd class=\"syh-kbd\">⌘0</kbd> change only the terminal <strong>content</strong> font size (one value shared by every CLI pane in the window), while Interface Scale changes the shell around it — and the two <strong>multiply</strong>, the way a browser's page zoom multiplies with a site's own font size.",
+            "uiScale": "<strong>Interface Scale</strong> — the first row of the <strong>Appearance ▸ Other</strong> block, and a <strong>dropdown</strong> rather than a slider: six steps (80%, 90%, 100%, 110%, 125%, 150%; 100% by default), on <kbd class=\"syh-kbd\">⇧⌘=</kbd> / <kbd class=\"syh-kbd\">⇧⌘-</kbd> / <kbd class=\"syh-kbd\">⇧⌘0</kbd>. It drives Electron's page zoom rather than a CSS variable, so text, icons, borders and spacing all move together, and the main process applies it to <strong>every window</strong>, plugin windows included. It is a <strong>separate axis</strong> from pane font size: <kbd class=\"syh-kbd\">⌘=</kbd> / <kbd class=\"syh-kbd\">⌘-</kbd> / <kbd class=\"syh-kbd\">⌘0</kbd> change only the terminal <strong>content</strong> font size (one value shared by every CLI pane in the window), while Interface Scale changes the shell around it — and the two <strong>multiply</strong>, the way a browser's page zoom multiplies with a site's own font size.",
             "restore": "<strong>Restore Windows</strong> — reopen the workspace windows that were open when you last quit."
           },
           "callout": {
@@ -1579,7 +1586,7 @@
           "memory": {
             "levels": "Split into <strong>User level</strong> (the home directory) and <strong>Project level</strong> (the current workspace). With no folder open, only the user level is listed.",
             "notCreated": "A file that does not exist yet is marked <em>Not created</em> — saving creates it, along with any missing parent directories.",
-            "reload": "If another program changes the file while you are editing, it stops and asks you to <em>Reload from disk</em> first, rather than overwriting your work or theirs."
+            "reload": "If another program changes the file while you are editing, it stops and asks you to <em>Reload from disk (discards your draft)</em> first, rather than overwriting your work or theirs."
           },
           "p6": "The <strong>CLI coverage</strong> block at the bottom sorts the 14 CLIs into three groups:",
           "coverageTable": {
@@ -1652,17 +1659,29 @@
             }
           },
           "p3": "<em>Install updates when you quit</em> defaults to off on purpose: <strong>installing always restarts the app</strong>, so leaving it off means \"I decide every time\". The page shows the current version, <em>Check for updates</em>, and a three-stage Check → Download → Install progress track. The update channel dropdown currently offers Stable only, with Beta marked \"not available yet\".",
-          "p4": "The update badge in the status bar covers these states: <code>v{'{'}version{'}'} ready</code>, a download percentage, <code>Update failed</code> and <code>Update check failed</code>. <strong>The announcement center also offers <em>Download</em> and <em>Install</em> directly</strong> (see section 6 of the \"Workspaces & panes\" topic).",
+          "p4": "The update badge in the status bar covers these states: <code>v{'{'}version{'}'} ready</code>, a download percentage, <code>Update failed</code> and <code>Update check failed</code>. <strong>The announcement center also offers <em>Download</em> and <em>Restart to install</em> directly</strong> (see section 6 of the \"Workspaces & panes\" topic).",
           "h3": "Analyzer",
           "p5": "What you configure here is a <strong>small local model</strong> that Navide uses to read intent for pipelines; it has nothing to do with the CLI agents you use in panes. Three parts:",
           "analyzer": {
             "backend": "<strong>Inference backend</strong> — first pick one of two backends, <em>Ollama REST</em> or <em>llama.cpp</em>. llama.cpp needs the <code>llama-cli</code> path (with an auto-detect button and a file browser) and an optional GGUF model path; Ollama needs the inference URL (<code>http://localhost:11434</code> by default). Both have a health indicator next to them.",
-            "models": "<strong>Model manager</strong> (Ollama mode) — type a model name and press <em>Download</em>, with a progress bar; below it the installed models are listed (name, parameter count, size) and can be deleted one by one.",
+            "models": "<strong>Model manager</strong> (Ollama mode) — type a model name and press <em>⬇ Download</em>, with a progress bar; below it the installed models are listed (name, parameter count, size) and can be deleted one by one.",
             "benchmark": "<strong>Model benchmark</strong> — runs four tasks against every local model: tech-stack detection (JSON output), a one-sentence workspace summary, picking the most relevant entry from a document list, and parsing CLI output into a question and its options. The results table ticks each item off with its duration, and <strong>at least three of the four (≥75%)</strong> must pass; models that do not pass are hidden from the model dropdown."
           },
           "h4": "Extensions",
-          "p6": "Three parts: <strong>Bundled</strong> (packages shipped with the app, such as Bundled Git, which can be disabled and then <em>Restore</em>d), <strong>Installed</strong> (ones you installed yourself, listing their sensitive capabilities and dependencies, with <em>Remove</em>), and <strong>Marketplace</strong> (search and install).",
-          "p7": "Installing takes <strong>two confirmations</strong>, and nothing is written to disk before them: first \"trust the publisher\" — the screen says plainly that <em>a valid signature only proves the package was not tampered with, not that you are willing to run this publisher's code</em>; then \"confirm the plugin's permissions\", which lists the sensitive capabilities it asks for and warns specifically when it ships a native backend executable."
+          "p6": "Below the policy block sits the plugin inventory, in <strong>two parts</strong>: <strong>Bundled</strong> (packages shipped with the app, such as Bundled Git, which can be disabled and then <em>Restore</em>d) and <strong>Installed</strong> (ones you installed yourself, listing their sensitive capabilities and dependencies, with <em>Remove</em>). Every row in both parts carries an extra line with its <em>Manifest Permissions</em> and <em>Package-version Grant</em>, spelling out what this version was actually granted; with no matching grant it says so. <strong>Searching the registry and installing new packages is now its own tab, Marketplace</strong> — not here.",
+          "p7": "Installing takes <strong>two confirmations</strong>, and nothing is written to disk before them: first \"trust the publisher\" — the screen says plainly that <em>a valid signature only proves the package was not tampered with, not that you are willing to run this publisher's code</em>; then \"confirm the plugin's permissions\", which lists the sensitive capabilities it asks for and warns specifically when it ships a native backend executable.",
+          "mirror": "<strong>The download mirror</strong>: every release's files are published twice, on the GitHub Release and on <code>dl.navide.dev</code> — the same bytes, with sha256 sums to check them against. When a check or a download hits a <strong>network-shaped failure</strong> (unreachable host, timeout, 5xx/429), the app switches the feed to the mirror and tries again, and <strong>stays on the mirror for the rest of the session</strong>. <strong>A 404 or a signature/checksum error is never retried on the mirror</strong> — it carries the same files, so it would fail the same way, and reporting the failure as it is helps more than hiding it.",
+          "policyIntro": "The <strong>execution policy</strong> decides what a plugin's backend may execute. It is <strong>not a tab of its own</strong>: it is the block at the top of the Extensions page, with its own scope badge (per user and per workspace) and policy file path. The top of it shows the <em>effective policy</em> — its source, its mode, and its status: <em>active</em>, <em>stale</em>, <em>unavailable</em> or <em>corrupt</em>.",
+          "policy": {
+            "hostDefault": "<strong>Host default</strong> — the built-in least-privilege baseline, marked <strong>read-only</strong>. It stays usable even if the user policy store is gone entirely, so there is always a way back.",
+            "user": "<strong>User policy</strong> — the global one, used wherever a workspace selects the User source; it reads \"not created\" until you make it. Three modes: <em>full</em>, <em>allowlist</em>, <em>denylist</em>. You can set the system namespaces and the shell executables, and the latter takes <strong>top-level executable names only</strong> — no paths, no shell expressions.",
+            "highRisk": "<strong>Full and denylist both need an explicit checkbox before they save</strong>, and the screen says why: full mode allows arbitrary executables (high-risk tools included) and system capabilities, while denylist mode is <strong>allow-by-default</strong> — listing names does not narrow what it actually grants, which is why Navide treats it as a high-risk choice too.",
+            "source": "<strong>Workspace policy source</strong> — each workspace picks Host default, User policy or Repository policy. <strong>A repository recommendation is labelled \"untrusted\" until you have read it and pressed \"Accept repository policy\"</strong>, and switching sources requires an exact fingerprint match; if it changes after you reviewed it, it becomes \"changed since review\" and has to be re-checked. With no workspace open, this block cannot be used.",
+            "recovery": "<strong>Global policy store</strong> — its state is healthy, missing, corrupt, unsafe entry, or an unsafe/unavailable directory. A corrupt store can be <strong>rebuilt</strong> behind a confirmation checkbox; a rebuild replaces only the global policy and revision files and keeps every workspace source selection and repository policy file. When the store is judged <strong>unsafe</strong>, automatic rebuilding is disabled and the screen asks you to fix the host-owned paths it lists yourself.",
+            "failClosed": "Every unhealthy state is <strong>fail-closed</strong>: nothing is permitted until you pick a usable source or repair the broken one. That includes an uncertain save — the message reads \"the result of the policy change could not be confirmed; the policy stays fail-closed, please re-check\"."
+          },
+          "policyNote": "To clear every repository source pin at once, use \"Reset all policy source selections\", also behind a confirmation checkbox. It <strong>does not</strong> modify or delete any repository policy file; it only makes each workspace resolve against the global host default or user policy again.",
+          "extNote": "Where a misbehaving plugin backend stops: <strong>only an overflow of protocol frames (request / response / cancel) is fatal to that backend</strong>. An overflow of host notifications is dropped and counted instead, so one noisy backend no longer takes the whole plugin down, and a backend that exits cleanly records why rather than vanishing silently."
         },
         "s5": {
           "title": "Navide Cloud",
@@ -1730,6 +1749,16 @@
           "callout3": {
             "title": "This address is for agents",
             "text": "The <code>{'@'}</code> mention menu in the pane input lists <strong>local</strong> panes only (including those in other windows on this machine), and has no button for inserting a cross-device address. Cross-device addresses are written on the agent's <code>to:</code> line, or sent by an MCP tool (see the \"Agent collaboration\" topic). When delivery fails the reply is <code>device-offline</code>, <code>unknown-target</code>, <code>link-offline</code> or <code>link-unauthorized</code>; note also that reply threading does not cross machines."
+          },
+          "h6": "Sync (keeping several machines the same)",
+          "p11": "The first block on Settings ▸ Navide Cloud is called Sync. <strong>It is not a separate tab</strong> — it is the top section of this one page. Each syncable scope gets a row with a toggle; turn one on and that scope stays the same on every device signed in to the <strong>same account</strong>. Records are <strong>encrypted on this machine</strong>, and the server only stores ciphertext it has no key for.",
+          "sync": {
+            "scopes": "<strong>Four scopes can be turned on</strong>: <em>Prompts</em> (prompt skills and the loop prompt), <em>MCP</em> (the servers you added in Navide; their secrets are encrypted before they leave), <em>Skills</em> (which skills are on and which CLIs each one goes to — the skill files themselves are a later step), and <em>Memory</em> (global instruction files such as <code>~/.claude/CLAUDE.md</code>; the ones inside a project stay with git).",
+            "credentials": "The <strong>Credentials</strong> row is <strong>listed but disabled</strong>, and its line reads \"not syncable yet\". This is not \"off by default, waiting for you to turn it on\" — the toggle does not move.",
+            "states": "Two states are spelled out under the block: <em>not connected</em> (scopes you turned on catch up once the link is back) and <em>this device has no sync key yet</em> (nothing is uploaded until it has one). There is also a <em>Sync now</em> button, enabled only while connected.",
+            "key": "<strong>The sync key is shown as the first 8 characters of its id</strong>, never as the key itself. <em>Rotate key</em> takes <strong>two clicks</strong>: the first turns it into <em>Rotate now</em> and adds a <em>Cancel</em> beside it. Rotating retires the current key, re-seals every synced record under a new one, and hands the new key to your other devices the next time they exchange keys — it is the move for a key you think has leaked.",
+            "legacy": "<em>Adopt for this account</em> appears only when this device holds a sync key from before accounts were bound <em>and</em> this account has no key yet. It is a one-time choice: without adopting it you cannot read what was synced under that key, and minting a fresh key instead would leave those records permanently unreadable.",
+            "conflicts": "When two devices change the same item, <strong>neither side is overwritten</strong>. It is listed under \"Needs your decision\" with both versions side by side, and you press <em>Keep this one</em> or <em>Keep theirs</em>. A credential conflict shows only which slot it is (<code>vendor / slot</code>), never the contents."
           }
         },
         "s6": {
@@ -1750,12 +1779,20 @@
               "value": "The resource management interface (section 7 of this page)."
             },
             "standard": {
-              "value": "Standard macOS window actions. Zoom maximizes the window frame and has nothing to do with the font size of pane content."
+              "value": "Standard macOS window actions. Zoom maximizes the window frame and has nothing to do with the font size of pane content.",
+              "label": "Minimize / Zoom / Bring All to Front"
+            },
+            "turnStats": {
+              "value": "Opens the Turn Stats dialog (section 8 of this page)."
+            },
+            "tokenMonitor": {
+              "value": "Opens the Token Monitor, a standalone window (section 8 of this page).",
+              "label": "Token Monitor"
             }
           },
-          "note1": "Pipeline Manager and Resource Manager are <strong>dialogs opened inside the main window</strong>, not separate operating-system windows. None of the four Window menu items has a shortcut.",
+          "note1": "Pipeline Manager, Resource Manager and Turn Stats are <strong>dialogs opened inside the main window</strong>, not separate operating-system windows; <strong>Token Monitor is the one that really is a standalone native window</strong> (1200×800), and closing a workspace window does not take it with it. <strong>None</strong> of these Window menu items has a shortcut.",
           "pipeline": {
-            "p1": "Two tabs. Under <strong>Pipelines</strong>, one flow is made of several stages; a stage takes an ID, a title, a <em>Sentinel</em> (its end marker, e.g. <code>---DONE---</code>) and whether to <em>Pause for user answers</em>. Every stage carries at least one slot, and a slot needs an <em>Agent</em>, a <em>Role Key</em>, a display name and a <em>Kickoff Body</em> (the opening prompt); it can also be marked <strong>Designate as global manager</strong> — such a slot becomes a cross-stage coordinator once it has finished its own work, and <strong>one flow may only have one</strong>. A built-in flow you have broken can be restored with <em>Reset to factory stages</em> (it confirms first, and cannot be undone).",
+            "p1": "Two tabs. Under <strong>Pipelines</strong>, one flow is made of several stages; a stage takes an ID, a title, a <em>Sentinel</em> (its end marker, e.g. <code>---DONE---</code>) and whether to <em>Pause for user answers</em>. Every stage carries at least one slot, and a slot needs an <em>Agent</em>, a <em>Role Key</em>, a display name and a <em>Kickoff Body</em> (the opening prompt); it can also be marked <strong>🎯 Designate as global manager</strong> — such a slot becomes a cross-stage coordinator once it has finished its own work, and <strong>one flow may only have one</strong>. A built-in flow you have broken can be restored with <em>Reset to factory stages</em> (it confirms first, and cannot be undone).",
             "p2": "The <strong>Roles</strong> tab manages the roles themselves (Key, Label, a one-line summary, System prompt) and notes that <strong>changes only affect panes opened afterwards</strong>. Both tabs offer <em>⬇ Export JSON</em> / <em>⬆ Import JSON</em> / <em>↺ Reset to Defaults</em>."
           },
           "h2": "The Help menu",
@@ -1925,8 +1962,71 @@
             },
             "moveSettings": {
               "symptom": "Settings need to move to another machine",
-              "where": "The bottom of the settings window ▸ Export bundle"
+              "where": "Settings ▸ General ▸ Settings management ▸ Export Settings Bundle"
+            },
+            "tokenSpend": {
+              "symptom": "Wondering which turns the tokens went to",
+              "where": "Window ▸ Turn Stats; for this machine's whole Claude history, Window ▸ Token Monitor"
             }
+          }
+        },
+        "s8": {
+          "title": "Usage: Token Monitor, Turn Stats and quota cycles",
+          "p1": "Three surfaces show usage and they are easy to mix up, so start with which is which: they <strong>read different data, cover different scopes, and open from different places</strong>.",
+          "whichTable": {
+            "surface": "Surface",
+            "where": "Where it opens",
+            "scope": "What it covers"
+          },
+          "surfaces": {
+            "tokenMonitor": {
+              "where": "<strong>Window ▸ Token Monitor</strong>, its only entry point; it opens as a standalone native window",
+              "scope": "The Claude history on this machine, scanned from session transcripts. <strong>No account dimension.</strong>",
+              "label": "Token Monitor"
+            },
+            "turnStats": {
+              "where": "Window ▸ Turn Stats, the <code>ui.window.openTurnStats</code> command, or the <code>≡</code> button on the TOKENS panel — three entry points to the same dialog inside the main window",
+              "scope": "The transcript of <strong>one pane</strong> you pick, scanned live, with an account filter and the CLI version of every turn"
+            },
+            "quotaCycles": {
+              "where": "No entry point of its own: pick an account under the <strong>Accounts</strong> heading in the Turn Stats sidebar and it replaces the right-hand side",
+              "scope": "That account's quota windows — spend per cycle, peak %, whether it ran out — plus monthly and yearly roll-ups",
+              "label": "Quota cycles"
+            }
+          },
+          "h1": "Token Monitor (standalone window)",
+          "p2": "The window is titled <strong>Claude Token Monitor</strong>, 1200×800, and is <strong>one scrolling page with no tabs</strong>. Its subtitle states the boundary outright: <strong>local Claude history · account attribution unknown</strong>. It covers Claude only; other CLIs are not here.",
+          "tokenMonitor": {
+            "controls": "Two dropdowns at the top: <strong>days</strong> (14 / 30 / 90) and <strong>model</strong> (all, or one). <em>Refresh</em> sits beside them and is disabled while the backend is not connected.",
+            "stats": "Five figures: <strong>turns, total tokens, mean per turn, median per turn, mean output per turn</strong>. A line under them gives sessions scanned / available and when the data is from.",
+            "comparison": "An output comparison of the <strong>last 7 days against the 7 before</strong>: sample counts, means, medians and a percentage change. It needs <strong>at least 10 turns in each period</strong> and a nonzero baseline, otherwise it says the samples are insufficient. The page notes that this only describes an observed change — <strong>effort and task difficulty are unknown, and a decline does not establish that an allowance was cut</strong>.",
+            "charts": "Five <strong>per-turn</strong> trend charts. The accent line is the <strong>trailing 10-turn mean</strong> and the gray one is each turn; the <strong>horizontal axis is turns in chronological order, equally spaced — not elapsed time</strong>.",
+            "table": "A table of local Claude turns, <strong>100 rows per page</strong>: time, session (first 8 characters of the id / turn index), model, each token column, and calls.",
+            "quota": "At the bottom, quota scatter plots <strong>grouped by reset window</strong>, one figure per window. The percentages are provider-reported; the page states that the horizontal axis is \"samples in recorded order\" and that <strong>local tokens cannot be converted into an allowance ceiling</strong>. With no samples yet it tells you to enable Claude usage polling in settings and leave Navide running — <strong>past limits cannot be reconstructed from token logs</strong>."
+          },
+          "callout1": {
+            "title": "This window has no account dimension, on purpose",
+            "text": "The subtitle says it: <strong>account attribution unknown</strong>. It scans the Claude session transcripts on this machine, and those sessions may belong to different accounts; the quota samples cover only the <strong>profile slot active while Navide was running</strong>, and a slot is not a verified account identity. For a per-account view, go to <strong>Turn Stats</strong>. And when the scan was truncated or hit read errors, the page raises <strong>\"partial history\"</strong> and locks the output comparison rather than handing you a percentage computed on half the data."
+          },
+          "h2": "Turn Stats (a dialog in the main window)",
+          "p3": "The left side lists panes <strong>grouped by workspace</strong>, each row naming its vendor and workspace and possibly carrying a quota pill or a <code>⛔</code> limit marker. <strong>CLIs that report no token usage (antigravity, cursor) are greyed out rather than hidden</strong>, with \"no token usage\" on hover, and a placeholder that was never started reads \"not started\". At the bottom of the list is an <strong>Accounts</strong> section (see the next part).",
+          "turnStats": {
+            "columns": "The right side is that pane's per-turn table: time, prompt, In / Cache R / Cache W / Out / Total, calls, plus an <strong>Account</strong> and a <strong>Version</strong> column. The header says whether the figures are <em>exact</em> or <em>inferred</em> — inferred means cut at turn-end signals, where a long tool call can be split into two turns.",
+            "account": "An <strong>account chip filter</strong> sits above the table (including \"All\"), each chip with its turn count; picking one makes the table subtotal per account. Turns that cannot be attributed are listed under <strong>Unknown</strong>, and the screen says plainly that turns from before the pinned records existed cannot be matched to an account — it does not invent one.",
+            "version": "The <strong>version column is shown by default</strong> and can be hidden from the header. There is also a <strong>mean spend per CLI version</strong> bar chart, <strong>collapsed by default</strong>, for the question \"did the upgrade get more expensive?\"; clicking a bar filters the table to that version, with a button to clear it.",
+            "export": "<em>Export CSV</em> includes the version column, and <em>Rescan</em> re-reads the transcript. The failure messages are deliberately specific: no session to read yet, the transcript is no longer on disk, no reader for this CLI, or the pane was never started."
+          },
+          "note1": "<code>⛔</code> marks the turn during which the <strong>most recent</strong> quota limit was detected. Only that one hit is kept per pane, and detection <strong>polls every 5 seconds</strong>, so it can land one turn late. Also, do not read the tokens figure in the CLI footer as a running total — it is the context size; Claude re-reads the whole context every turn, which is why Cache R dwarfs the other columns.",
+          "h3": "Quota cycles (inside Turn Stats)",
+          "p4": "Pick an account under the Accounts heading and the right-hand side switches from the per-turn table to that account's quota cycles, headed by its vendor and whether it is <em>active</em>. Three tabs: <strong>Cycles</strong>, <strong>Monthly</strong>, <strong>Yearly</strong>.",
+          "quotaCycles": {
+            "tabs": "The Cycles tab picks a <strong>window kind with chips</strong>: the rolling five-hour one is the chip labelled <code>Session (5h)</code>, and the others are <code>weekly</code>, <code>weekly-model</code> (one model only), <code>monthly</code> and <code>cycle</code>. Which chips appear depends on which window kinds this account actually has.",
+            "cycle": "One row per window: <strong>start → reset</strong>, peak %, when it ran out, the token breakdown (In / Cache R / Cache W / Out / Total), calls and turns, summarised as \"N cycles · exhausted M times\". <strong>A cycle starts at \"reset time minus window length\"</strong>, and its tokens are the <strong>sum over every pane pinned to that account</strong>. The exhaustion time is the first 100% sample, so <strong>the real wall was hit up to 15 minutes earlier</strong>. On the chart a red dot means exhausted, and equal-height exhausted bars mean the capacity estimate holds up.",
+            "periods": "The Monthly and Yearly tables carry <strong>5h cycles</strong>, times exhausted, mean per exhausted cycle and <strong>weekly exhaustions</strong>, with a per-account totals bar chart (click a bar to highlight that period) and an <strong>all-accounts share table</strong> on the same page. A cycle that closed before the per-slice records existed is marked \"no token breakdown\" — it has quota samples but no token detail from within it, and the mean is taken over only the cycles that do."
+          },
+          "callout2": {
+            "title": "The account dimension has a start date, and the screen says so",
+            "text": "Account attribution only exists <strong>from the day the pinned records shipped</strong>. Everything before that is listed under <strong>Unknown</strong>: the screen says the account dimension is counted from when pinned records went live, that earlier usage sits under \"Unknown\", and that it does not pretend to have an account — and the per-turn table repeats that turns from before the pinned records cannot be matched. So early data hanging entirely under \"Unknown\" is not a fault. The Unknown row also has <strong>no quota windows to show</strong>: picking it only tells you that unattributed records have none."
           }
         }
       },
@@ -2031,7 +2131,7 @@
         "s2": {
           "title": "Git: staging and committing",
           "h1": "A two-part list",
-          "p1": "The panel is titled <strong>SOURCE CONTROL</strong> and is split into <strong>Staged Changes</strong> and <strong>Changes</strong> (turning on \"show ignored files\" adds an <strong>Ignored</strong> section as well). Click a row to open its diff; <kbd class=\"cwh-kbd\">⇧</kbd> or <kbd class=\"cwh-kbd\">⌘</kbd> click selects several, and a \"N selected\" label plus an <code>✕</code> appears above.",
+          "p1": "The panel is titled <strong>SOURCE CONTROL</strong> and is split into <strong>Staged Changes</strong> and <strong>Changes</strong> (turning on <em>Show Ignored Files</em> adds an <strong>Ignored</strong> section as well). Click a row to open its diff; <kbd class=\"cwh-kbd\">⇧</kbd> or <kbd class=\"cwh-kbd\">⌘</kbd> click selects several, and a \"N selected\" label plus an <code>✕</code> appears above.",
           "fileTable": {
             "glyph": "Button",
             "meaning": "Means",
@@ -2045,7 +2145,7 @@
               "where": "every row under Changes"
             },
             "unstage": {
-              "where": "every row under Staged"
+              "where": "every row under Staged Changes"
             },
             "history": {
               "where": "both sections"
@@ -2054,7 +2154,7 @@
               "where": "conflicted files"
             }
           },
-          "p2": "To the right of a section header sit the whole-section actions: Staged has only a <code>−</code> (<em>Unstage All Changes</em>); Changes has <code>↩</code> (<em>Discard All Changes</em>) and <code>＋</code> (<em>Stage All</em>). <strong>Right-clicking a section header</strong> adds <em>Save Draft</em> on top of that.",
+          "p2": "To the right of a section header sit the whole-section actions: Staged Changes has only a <code>−</code> (<em>Unstage All Changes</em>); Changes has <code>↩</code> (<em>Discard All Changes</em>) and <code>＋</code> (<em>Stage All</em>). <strong>Right-clicking a section header</strong> adds <em>Save Draft</em> on top of that.",
           "callout": {
             "title": "List mode is one button short",
             "text": "In <em>View as Tree</em> a folder row carries its own <code>＋</code> / <code>↩</code> / <code>−</code>, so you can stage or discard a whole subtree. In <em>View as List</em>, however, a staged row <strong>keeps only <code>⊡</code></strong> — to unstage it use <em>Unstage All Changes</em> in the section header, the context menu, or switch back to the tree view first."
@@ -2086,7 +2186,7 @@
               "what": "A toggle, with an ON / OFF badge on the right."
             }
           },
-          "p5": "With <strong>Auto Commit</strong> on, the status bar walks through one round: <em>Auto Commit waiting — triggers in {'{'}n{'}'}s</em> → <em>Staging all changes…</em> → <em>Running lint check…</em> → <em>Generating AI commit message…</em> → <em>Committing…</em>. There is no confirmation step anywhere along that path, so think before you turn it on.",
+          "p5": "With <strong>Auto Commit</strong> on, the status bar walks through one round: <em>Auto Commit waiting — triggers in {'{'}count{'}'}s</em> → <em>Staging all changes…</em> → <em>Running lint check…</em> → <em>Generating AI commit message…</em> → <em>Committing…</em>. There is no confirmation step anywhere along that path, so think before you turn it on.",
           "h3": "The <code>···</code> view menu",
           "p6": "The <code>···</code> in the header (<em>More options</em>) holds three groups: <em>View as List</em> / <em>View as Tree</em>; <strong>Sort by</strong> with <em>Name</em> / <em>Path</em> / <em>Status</em>; and <em>Show Ignored Files</em>. Whichever option is in effect is marked with a <code>✓</code>. List and tree are also exposed as their own buttons in the header.",
           "h4": "Folders that are not a Git repository yet",
@@ -2147,7 +2247,7 @@
         "s4": {
           "title": "Git: conflicts, drafts and history",
           "h1": "Conflicts",
-          "p1": "While a merge, rebase or cherry-pick is in progress a banner appears at the top of the panel reading <code>⚠ {'{'}op{'}'} in progress</code> plus the number of conflicted files, with an <em>Abort merge</em> (or <em>Abort rebase</em> / <em>Abort cherry-pick</em>) on the right. There is also a dialog titled <strong>Merge conflict ({'{'}n{'}'} file(s))</strong> offering the two routes <em>Abort merge</em> and <em>Resolve conflicts</em>. Once everything is resolved the banner becomes <em>✓ All conflicts resolved — ready to commit merge</em> with a <em>Go to commit</em> button.",
+          "p1": "While a merge, rebase or cherry-pick is in progress a banner appears at the top of the panel reading <code>⚠ {'{'}op{'}'} in progress</code> plus the number of conflicted files, with an <em>Abort {'{'}op{'}'}</em> on the right. There is also a dialog titled <strong>Merge conflict ({'{'}count{'}'} file(s))</strong> offering the two routes <em>Abort merge</em> and <em>Resolve conflicts</em>. Once everything is resolved the banner becomes <em>✓ All conflicts resolved — ready to commit merge</em> with a <em>Go to commit</em> button.",
           "p2": "For a plain whole-file decision the <code>↰</code> / <code>↱</code> on the file row is enough. To work hunk by hunk, open <strong>ConflictPane</strong>:",
           "conflictList": {
             "badge": "The title carries a <strong>CONFLICT</strong> badge with <em>{'{'}n{'}'} / {'{'}m{'}'} resolved</em> next to it.",
@@ -2161,7 +2261,7 @@
           "p3": "Navide calls a stash a <strong>Draft</strong>; the card sits in the lower half and reads <em>No draft</em> when empty.",
           "draftList": {
             "save": "<strong>Saving one</strong>: <strong>right-click</strong> the Changes section header → <em>Save Draft</em>, or right-click a single file → <em>Save File as Draft</em>. The dialog is titled <em>Save as Draft (label optional)</em> and the label may be left blank.",
-            "restore": "<strong>Getting it back</strong>: three buttons per row — <code>⎘</code> <em>Apply (keep draft)</em>, <code>↑</code> <em>Pop (apply &amp; remove)</em>, <code>✕</code> <em>Drop</em>."
+            "restore": "<strong>Getting it back</strong>: three buttons per row — <code>⎘</code> <em>Apply (keep stash)</em>, <code>↑</code> <em>Pop (apply &amp; remove)</em>, <code>✕</code> <em>Drop</em>."
           },
           "note": "There is no toolbar button for this, only the context menu — not finding it the first time is normal.",
           "h3": "Seeing changes: four kinds of diff",
@@ -2187,7 +2287,7 @@
               "what": "The separate Git History window."
             }
           },
-          "p4": "The History card in the panel draws its own SVG swim-lane graph with the HEAD dot highlighted. The Git History window is the full table: five columns, <strong>Graph / Description / Author / Date / Commit</strong>, switchable between <em>All branches</em> and <em>Current Branch</em>, <em>Date order</em> and <em>Ancestor order</em>, plus <em>Show Remote Branches</em>, with <em>Search commits…</em> above and <em>Load more</em> below. Right-click any commit for <em>Checkout (detached)</em>, <em>Create Branch…</em>, <em>Create Tag</em>, <em>Merge into current</em>, <em>Cherry-pick</em>, <em>Revert</em>, <em>Reset Current Branch to This Commit…</em>, <em>Copy Commit ID</em> and <em>Copy Commit Message</em>.",
+          "p4": "The History card in the panel draws its own SVG swim-lane graph with the HEAD dot highlighted. The Git History window is the full table: five columns, <strong>Graph / Description / Author / Date / Commit</strong>, switchable between <em>All branches</em> and <em>Current Branch</em>, <em>Date order</em> and <em>Ancestor order</em>, plus <em>Show Remote Branches</em>, with <em>Search commits…</em> above and <em>Load more</em> below. Right-click any commit for <em>Checkout (Detached)</em>, <em>Create Branch…</em>, <em>Create Tag</em>, <em>Merge into current</em>, <em>Cherry-pick</em>, <em>Revert</em>, <em>Reset Current Branch to This Commit…</em>, <em>Copy Commit ID</em> and <em>Copy Commit Message</em>.",
           "callout": {
             "title": "AI Review flows into Problems",
             "text": "The notes produced by <em>AI Review</em> in BranchDiffPane are not just shown alongside the diff — they are written into the editor's diagnostics, so the same batch shows up in the Mini-IDE's <strong>Problems</strong> tab (<kbd class=\"cwh-kbd\">⌘⇧M</kbd>) where you can jump through them one by one."
@@ -2196,7 +2296,7 @@
         "s5": {
           "title": "Plan documents: the list and the lifecycle",
           "h1": "Where plan files live",
-          "p1": "Plans are files under <code>.agent-team/plans/</code> in the workspace, in either of two formats: HTML as <code>&lt;kebab-slug&gt;_&lt;6 hex digits&gt;.html</code>, Markdown as <code>&lt;kebab-slug&gt;.plan.md</code>. Files starting with an underscore (such as <code>_spec.md</code> and <code>_template.html</code>) are infrastructure and are not listed.",
+          "p1": "Plans do not all live in one folder. Navide scans <strong>seven directories</strong> under the workspace: <code>.agent-team/plans</code>, <code>.agent-team/reports</code>, <code>.claude/loop-reports</code>, <code>.claude/plans</code>, <code>.cursor/plans</code>, <code>docs/plans</code> and <code>docs/reports</code> — plus the same seven inside any nested Git repository <strong>at most two levels deep</strong>. Three suffixes count: <code>.html</code>, <code>.plan.md</code> and <code>.md</code>. An HTML plan is named <code>&lt;kebab-slug&gt;_&lt;6 hex digits&gt;.html</code>, a Markdown plan <code>&lt;kebab-slug&gt;.plan.md</code>. Files beginning with an underscore or a dot (<code>_spec.md</code>, <code>_template.html</code>) are scaffolding and never appear in the list.",
           "p2": "These files are <strong>written and updated by agents</strong> — every action you take in the plan window (changing a todo's status, leaving a review note, approving) lands back in the same file. Your part is to ask an agent to \"create a plan for me\" and then review it in the window.",
           "h2": "The list",
           "p3": "The sidebar <strong>Plans</strong> tab (<kbd class=\"cwh-kbd\">⌘5</kbd>) and the left column of the Plan window use the same list. The toolbar only appears once there is at least one plan:",
@@ -2206,12 +2306,12 @@
             "sort": "<em>Sort by</em>: <strong>Title</strong>, <strong>Last updated</strong> or <strong>Progress</strong>, with <code>↑</code> / <code>↓</code> next to it for ascending or descending.",
             "group": "<code>☰</code> switches between \"group by stage\" and a single flat list."
           },
-          "p4": "All four choices are <strong>remembered per workspace</strong>. The sections are <strong>Recent</strong> (at most 5, pinned ones first — and this is the only section with a pin button), <strong>All plans</strong>, one group per stage, <strong>Archived</strong> (collapsed by default), and a <strong>Completed</strong> action row at the bottom (<em>Archive all done</em> / <em>Delete all</em>). Each row shows the stage label, a <em>{'{'}done{'}'}/{'{'}total{'}'} done</em> progress bar, the format label <code>html</code> or <code>markdown</code>, and <em>{'{'}count{'}'} for you</em> — the number of items only you can clear.",
+          "p4": "All four choices are <strong>remembered per workspace</strong>. The sections, top to bottom: <strong>Recent</strong> (5 at most, pinned ones first); then — grouped by stage — a <strong>Documents</strong> section plus one section per stage, which a flat list collapses into a single <strong>All plans</strong>; then <strong>Archived</strong>; and at the bottom a completed-actions row (<em>Archive all done</em> / <em>Delete all</em>). Every row carries its stage pill, a <em>{'{'}done{'}'}/{'{'}total{'}'} done</em> progress bar, a <code>HTML</code> / <code>Markdown</code> format tag, and <em>{'{'}count{'}'} for you</em> — the items only you can clear. <strong>Every row also has a pin <code>📌</code> and a delete <code>✕</code> on its right</strong> (archived rows get the delete only).",
           "callout1": {
-            "title": "\"Active\" does not mean \"in progress\"",
-            "text": "The <strong>Active</strong> section of the list collects <strong>plain documents with no plan metadata</strong> (every such row carries a <code>doc</code> label); it has nothing to do with whether a stage is <em>in-progress</em>. To promote such a file into a real plan, right-click it and choose <strong>Promote to Plan</strong>."
+            "title": "Documents without metadata get their own section",
+            "text": "When the list is grouped by stage, <strong>plain documents that carry no plan metadata</strong> collect in a <strong>Documents</strong> section and each row is tagged <code>Document</code> — which has nothing to do with whether a stage is <em>in-progress</em>. To turn such a file into a real plan, right-click it and choose <strong>Promote to Plan</strong>: that adds a draft plan envelope and <strong>does not rewrite the body</strong>."
           },
-          "p5": "Right-click a row, top to bottom: <em>Open</em>, <em>Copy path</em>, (HTML only) <em>Share to Git</em> and <em>Rename</em>, <em>Archive</em> / <em>Unarchive</em>, (plain documents only) <em>Promote to Plan</em>, <em>Delete</em>. A rename must follow the <code>kebab-slug_6hex.html</code> shape or it is rejected. A plan row can also be <strong>dragged straight onto a CLI pane</strong> to inject the goal into that agent.",
+          "p5": "Right-click a row, top to bottom: <em>Open in editor</em>, <em>Copy path</em>, <em>Select</em>, (HTML only) <em>Rename</em> and <em>Share to Git</em>, (plans only) <em>Archive</em> / <em>Unarchive</em>, (plain documents only) <em>Promote to Plan</em>, <em>Delete</em>. <strong><em>Open in editor</em> is the only entry that hands the file to an editor</strong> — clicking a row itself opens the Plan window and never replaces the editor tab you have open. A rename must match <code>kebab-slug_6hex.html</code> or it is refused. A plan row can also be <strong>dragged straight onto a CLI pane</strong> to hand that agent the goal.",
           "h3": "Stage and archived are two different things",
           "p6": "The lifecycle is <code>draft → in-review → approved → in-progress → done</code>, with <code>abandoned</code> as a side exit.",
           "callout2": {
@@ -2232,7 +2332,7 @@
           },
           "planTools": {
             "todos": {
-              "opens": "The todo list. Left-clicking a status cycles pending → in-progress → done → pending; right-click is what toggles skipped. Each row offers Edit / Delete, and Add a todo… at the bottom adds a new one."
+              "opens": "The todo list. Left-clicking a status cycles <code>pending</code> → <code>in-progress</code> → <code>done</code> → <code>pending</code>; right-click is what toggles <code>skipped</code>. Each row offers Edit / Delete, and Add a todo… at the bottom adds a new one."
             },
             "notes": {
               "opens": "Review notes. It only appears in the toolbar while some are unresolved (otherwise it hides inside ⋯). A note can be attached to a section — that is what the Comment button next to a section is for. The actions are Edit, Delete and Resolve."
@@ -2508,6 +2608,18 @@
             "title": "The same combination does different things in different windows",
             "text": "<kbd class=\"cwh-kbd\">⌘⇧G</kbd>, <kbd class=\"cwh-kbd\">⌘⇧M</kbd>, <kbd class=\"cwh-kbd\">⌘⇧F</kbd> and <kbd class=\"cwh-kbd\">⌘1</kbd>–<kbd class=\"cwh-kbd\">⌘9</kbd> are each claimed by all three windows, so the \"in which window\" column above is a condition, not a remark. Also, once the AI Terminal inside the Git or Plan window has focus, all these keys go to the CLI and are not intercepted by the window."
           }
+        },
+        "s10": {
+          "title": "Plans is a plugin — and what it looks like when it fails",
+          "p1": "Both the sidebar Plans tab and the Plan window are drawn by the bundled plugin <code>navide.plans</code>, listed under <em>Bundled</em> in <strong>Settings ▸ Extensions</strong> with its id, version, Active/Removed/Unavailable badge, manifest permissions and package version. Nothing in the interface calls it \"v2\" — the one exception is the recovery panel below.",
+          "p2": "Switching the app theme repaints Plans immediately; no window needs reopening.",
+          "h1": "When Plans cannot start: Legacy recovery",
+          "p3": "If the plugin fails to start this session, the Plans tab is replaced by a grey <strong>Legacy recovery</strong> label with the previous plan pane below it, and a line naming the cause: <em>Plans v2 was withdrawn this session ({'{'}reason{'}'}).</em> Reasons you are likely to see: <code>forced</code> (the environment variable <code>NAVIDE_PLANS_RECOVERY=legacy</code> asked for it), <code>storage-migration-failure</code> (the durable storage record could not be read or migrated), and the backend’s own start-up failure text.",
+          "list": {
+            "retry": "<strong>Retry Plans v2</strong> re-arms the plugin so the next Plans open spawns its backend again. <strong>Two attempts per session, and the budget is spent up front</strong>: pressing it costs one whether or not it works. Once they are gone the session stays on the legacy pane until you restart the app.",
+            "repair": "<strong>Repair storage record</strong> appears only when the reason is <code>storage-migration-failure</code>. A successful repair <strong>leaves you in recovery</strong> and says <em>Storage record repaired. Restart Navide to leave legacy recovery.</em>; a record that was never broken answers <em>The storage record is readable — nothing to repair.</em>"
+          },
+          "p4": "When <code>NAVIDE_PLANS_RECOVERY=legacy</code> forced recovery, or no complete v2 package is registered this session, Retry refuses outright and prints why beside the button — no attempt is spent."
         }
       },
       "topic": {
@@ -2517,6 +2629,7 @@
         "mcp": "MCP",
         "codeWorkflow": "Code Workflow",
         "settingsSystem": "Settings & System",
+        "crossPlatform": "Windows, Linux & Cross-Device",
         "icons": "Icon Reference"
       },
       "cliAgents": {
@@ -2556,7 +2669,7 @@
             }
           },
           "settings": {
-            "caption": "The top half of Settings ▸ CLI Agents: the list, and permission bypass.",
+            "caption": "The first three parts of Settings ▸ CLI Agents: the list, launch overrides, and permission bypass.",
             "legend": {
               "grip": {
                 "label": "Drag grip",
@@ -2569,6 +2682,10 @@
               "perm": {
                 "label": "Three-state bypass",
                 "text": "Each CLI can follow the global setting, always bypass, or never bypass. The CLIs with no bypass flag of their own are not listed here."
+              },
+              "launch": {
+                "label": "Launch overrides",
+                "text": "The fields only appear once a vendor is expanded, and only one opens at a time. A red \"Not passed through\" means Navide manages that variable itself, so the value never reaches the CLI."
               }
             }
           },
@@ -2607,10 +2724,13 @@
             "acct1": "work",
             "acct2": "personal",
             "acctPct1": "62%",
-            "acctPct2": "9%"
+            "acctPct2": "9%",
+            "model": "opus-5",
+            "effort": "high",
+            "envName": "CLAUDE_CONFIG_DIR"
           }
         },
-        "intro": "How the fourteen CLI agents are installed, tuned and given multiple accounts, and where quota and cost figures come from. Terms (workspace, pane, group) follow the \"Workspace & Panes\" topic.",
+        "intro": "How the fourteen CLI agents are installed, tuned and given multiple accounts, and where quota and cost figures come from. Settings ▸ CLI Agents now has five parts, and the \"Launch overrides\" one decides which command line a newly spawned pane of each CLI starts on. Terms (workspace, pane, group) follow the \"Workspace & Panes\" topic.",
         "s1": {
           "title": "Supported CLIs",
           "p1": "<strong>14</strong> CLI agents are built in. The order below is the default order of the + menu and of <kbd class=\"cah-kbd\">Ctrl</kbd>+<kbd class=\"cah-kbd\">1</kbd>…<kbd class=\"cah-kbd\">9</kbd> (drag to reorder in Settings, see chapter 4).",
@@ -2626,7 +2746,7 @@
           "note": "\"Quota\" = Navide can read the remaining usage (chapter 6). \"Multi-account\" = several sign-ins can be kept in Settings and switched (chapter 5). The three CLIs without a permission-bypass flag (Grok CLI, OpenCode, Pi) simply have no such flag — it is not something Navide left out. \"Sign-in command\" = what Navide actually runs when you press Sign in under Settings ▸ Accounts; the CLIs marked \"Inside the CLI\" declare no separate sign-in command, so the button launches them as usual and signing in happens on their own screen.",
           "callout": {
             "title": "The 15th entry is not an agent",
-            "text": "<strong>Terminal</strong> at the bottom of the + menu is a plain shell: no agent is attached and no role is injected. It sits deliberately outside the list so the CLI list's scrolling never hides it."
+            "text": "<strong>>_ Open Terminal</strong> at the bottom of the + menu is a plain shell: no agent is attached and no role is injected. It sits deliberately outside the list so the CLI list's scrolling never hides it."
           }
         },
         "s2": {
@@ -2636,7 +2756,7 @@
           "p2": "In the + menu and the Manual spawn agent dropdown, vendors whose binary is not detected get a suffix: <code>Kimi Code — not installed</code>. Nothing else changes — <strong>not greyed out, not disabled</strong> — the entry can still be clicked.",
           "p3": "Detection is throttled to 10 seconds and refreshed at these moments: the backend connects, the + menu opens, the Manual spawn agent dropdown receives focus.",
           "h2": "What happens when you click one",
-          "p4": "Clicking a CLI marked as not installed makes Navide re-detect first (you may have just installed it elsewhere). If it is still missing, no doomed pane is opened — the guided install dialog appears instead.",
+          "p4": "Clicking a CLI marked as not installed makes Navide re-detect first (you may have just installed it elsewhere). If it is still missing, no doomed pane is opened — the guided install dialog appears instead. There are exactly three ways it appears: the pane exited with 127, the backend’s pre-launch probe reported the binary missing, or you picked a CLI that is not installed from the + menu or Manual spawn yourself. It no longer lands on top of a pane that would in fact have started.",
           "h3": "The guided install dialog",
           "p5": "Three entry points share one dialog; only the source differs:",
           "table": {
@@ -2648,7 +2768,7 @@
               "when": "You picked a CLI that is not installed from the + menu or Manual spawn."
             },
             "pane": {
-              "when": "The pane actually opened but the CLI was not found — the PTY exited with 127; or the backend's pre-launch probe reported the binary missing (covers Open Agent, Resume, Handle Issue and pipeline stages)."
+              "when": "The pane actually opened but the CLI was not found — the PTY exited with 127; or the backend's pre-launch probe reported the binary missing (covers Open Agent, ↻ Resume, a pane opened by the issue-handling flow, and pipeline stages)."
             },
             "settings": {
               "when": "You pressed \"Install\" in the \"Installation and updates\" list at the bottom of Settings ▸ CLI Agents."
@@ -2664,6 +2784,16 @@
           "callout": {
             "title": "\"Not now\" is not \"stop asking\"",
             "text": "Closing the dialog or pressing <em>Not now</em> remembers nothing; it will ask again next time. To really silence it, tick <strong>Stop asking about {'{'}CLI{'}'}</strong> at the bottom. That tick <strong>only blocks the automatic pop-up</strong> (pane died, pre-launch probe failed); when you pick that CLI from the + menu yourself the dialog always opens — you asked for it. The tick is recorded per vendor and kept forever, until you untick it; it never expires."
+          },
+          "h4": "Installed but will not start: how PATH is searched",
+          "p8": "A CLI installed with <code>npm -g</code>, nvm, volta, pnpm or bun used to be invisible to the backend’s PATH probe when Navide was launched from Finder, and the spawn was <strong>refused before the pane even opened</strong> — which read as \"it runs in my terminal but not in Navide\". A probe that finds nothing <strong>no longer blocks</strong>; the pane’s own login shell gets to look again. A <code>--version</code> that exits non-zero but still prints a version now counts as installed too; only printing no version at all is treated as missing.",
+          "p9": "One ordering trade-off on macOS: nvm’s version directories now sit <strong>after your own PATH</strong> rather than in front of it, so Navide no longer quietly replaces the node you picked with <code>nvm use</code>. If you were (unknowingly) relying on Navide to put nvm’s node first, you now get whichever one your shell PATH names. On macOS pnpm’s home is <code>~/Library/pnpm</code>.",
+          "h5": "Being signed out is called out too",
+          "p10": "The pre-launch probe is a <code>--version</code> smoke test: it can answer \"is it installed\", not \"is it signed in\". So when a spawn finds <strong>evidence that a CLI is signed out</strong>, Navide says so up front instead of letting the pane sit silently on the vendor’s own sign-in screen. The test is deliberately \"evidence of being signed out\", not \"evidence of being signed in\" — vendors whose credential files Navide cannot inspect are never reported, because a false \"not signed in\" on every one of them would be worse than silence. <strong>No notice therefore does not mean you are signed in.</strong>",
+          "p11": "The guided install dialog gained an outcome to match: when the binary is there but no account is behind it, the last step reads <strong>\"{'{'}CLI{'}'} is installed, but not signed in\"</strong>, with an explanation, the binary path and a <em>Sign in</em> button — which opens a pane that runs the sign-in for you, after which most CLIs open your browser. (The first-run setup wizard itself gained no sign-in step; it is still Environment, Agents, Permissions, Ready.)",
+          "callout2": {
+            "title": "Grok CLI is now xAI’s official one",
+            "text": "It installs from the vendor’s own script (<code>curl</code> fetches <code>https://x.ai/cli/install.sh</code> and hands it to bash) rather than from npm — so it needs <code>curl</code> and a real Terminal window. The update command is <code>grok update</code>, and the config file is now <code>~/.grok/config.toml</code>, with MCP written as TOML; the community build’s <code>user-settings.json</code> is no longer read. It has <strong>no diagnose command</strong> (the vendor ships none, so Settings links the official docs instead), no effort field and no permission-bypass flag. The same-named community CLI installs to the same path, so <code>which grok</code> cannot tell them apart — only the shape of the version string can."
           }
         },
         "s3": {
@@ -2675,11 +2805,11 @@
           "p3": "The <strong>Roles</strong> tab of the <strong>Pipeline Manager window</strong> (menu Window ▸ Pipeline Manager). The role list is on the left, the four fields on the right. You can add, delete, reset to defaults, and export / import JSON.",
           "note": "Editing a role does not affect panes already running — the editor says so right underneath: \"Changes apply to new spawns only\". The Settings window only reads the same role list; it has no editor of its own.",
           "h3": "How a role is applied when a pane opens",
-          "p4": "The top of the + menu and the Manual spawn dialog each have a <strong>Role</strong> dropdown; both share one selection. Manual spawn can also expand a preview of the role's summary and full prompt.",
+          "p4": "The top of the + menu and the Manual spawn dialog each have a <strong>Select role…</strong> dropdown; both share one selection. Manual spawn can also expand a preview of the role's summary and full prompt.",
           "p5": "The mechanism is plain: <strong>the role's system prompt is pasted into the CLI's input box as if you typed it, then Enter is pressed</strong>. No flag is changed and no config file is written. What is actually pasted is the role prompt plus a fixed standby suffix (asking the agent to reply \"ready, awaiting task\" and stop), plus the pane's session marker.",
           "p6": "During this stage the pane status reads <strong>injecting role</strong>. Before injecting, Navide automatically dismisses the CLI's startup trust dialog (by sending one Enter) and waits for the screen to settle.",
           "callout": {
-            "title": "Terminal has no role",
+            "title": "A plain terminal has no role",
             "text": "A plain terminal opened from the + menu carries no role. The reason is the sentence above: a role is text typed into the CLI prompt, and a shell would just echo it back."
           },
           "h4": "Reapply role",
@@ -2688,10 +2818,10 @@
         },
         "s4": {
           "title": "Settings ▸ CLI Agents",
-          "p1": "This tab has four parts.",
+          "p1": "This tab has five parts, top to bottom: the list, launch overrides, permission bypass, push channels, and installation and updates.",
           "h1": "1 · CLI Agents list",
           "p2": "Tick per vendor whether it appears in the + menu and the Manual spawn dropdown, and drag the <code>⠿</code> handle on the left to reorder — that order also decides which vendor <kbd class=\"cah-kbd\">Ctrl</kbd>+<kbd class=\"cah-kbd\">1</kbd>…<kbd class=\"cah-kbd\">9</kbd> maps to. At least one must stay enabled.",
-          "h2": "2 · Permission bypass",
+          "h2": "2 · Launch overrides",
           "p3": "Most CLIs have a flag that skips their permission prompts so the agent runs unattended. The setting has two layers:",
           "list": {
             "global": "A <strong>global switch</strong> at the top: <em>Bypass permission prompts by default (YOLO mode)</em>.",
@@ -2702,9 +2832,9 @@
             "title": "Changes do not reach running panes",
             "text": "The flag is written into a pane's command line <strong>the moment it starts</strong>. Changes here only affect panes spawned afterwards; a running pane keeps what it started with until you rebuild or restore it."
           },
-          "h3": "3 · Push channels",
-          "p5": "Four CLIs (Claude Code, Kilo Code, OpenCode, Qwen Code) can receive messages directly instead of having text typed into their input box. Each has its own switch, and every row states that vendor's cost (a local port, a plaintext temp file, a background hook…). Details are in the \"Inter-CLI Messaging\" and \"MCP\" topics.",
-          "h4": "4 · Installation and updates",
+          "h3": "Also: Model and Effort in the Manual spawn dialog",
+          "p5": "Four CLIs (Claude Code, Kilo Code, OpenCode, Qwen Code) can be handed a message directly instead of having it typed into their input box. Each has its own switch, and every row states that vendor’s cost (a local port with no password, a local port with a per-pane password, a plaintext temp file, a background hook). Changing one updates every open window at once. Details are in the \"Inter-CLI Messaging\" and \"MCP\" topics.",
+          "h4": "3 · Permission bypass",
           "p6": "One row per CLI, showing a status badge (installed / not installed / outdated), the version, the install method (npm / Homebrew / official installer / official install script) and the full binary path. Available actions:",
           "table": {
             "action": "Action",
@@ -2736,8 +2866,102 @@
           "note": "Updates replace the binary; panes already running must restart to pick up the new version.",
           "callout2": {
             "title": "What is not here",
-            "text": "<strong>There is no \"default arguments\" field</strong> and <strong>no model picker</strong>. The binary is not chosen by typing a path but by picking one of the candidates when several installations are detected. Model and reasoning effort can only be set <strong>when an agent opens a pane through MCP</strong> — 12 vendors accept a model, Aider and Droid do not; a call asking them for a model is rejected explicitly rather than silently started with the default."
-          }
+            "text": "There is still <strong>no \"default arguments\" field</strong> — a launch command <em>replaces</em> the line rather than appending to the default. <strong>The binary is still not chosen by typing a path</strong>, but by picking one of the candidates when several physical installations are detected (after which the list row gains a \"Custom binary\" chip). Model and reasoning effort, though, are <strong>no longer MCP-only</strong>: launch overrides has proper fields for them, and so does the Manual spawn dialog."
+          },
+          "chipsIntro": "Besides the name, each row carries a strip of chips that read back how that CLI is currently set up. The order is fixed, and follows \"what it is → what it runs as → how it is reached\":",
+          "chipsTable": {
+            "chip": "Chip",
+            "shows": "What it reads back"
+          },
+          "chips": {
+            "install": {
+              "chip": "Install state",
+              "shows": "Installed (with version) / update available / not installed. Nothing is drawn while a CLI has not been probed yet — \"not asked\" is not \"not found\", and is never painted red."
+            },
+            "model": {
+              "chip": "Model and effort",
+              "shows": "\"model …\" and \"effort …\" appear only once you have <strong>chosen</strong> one under launch overrides; the vendor default gets no chip. CLIs that cannot be told which model to run at launch always show \"No model flag\"."
+            },
+            "permission": {
+              "chip": "Permission mode",
+              "shows": "Permissions inherited / forced on / forced off. Not drawn for the CLIs with no bypass flag."
+            },
+            "push": {
+              "chip": "Push channel",
+              "shows": "push (with its kind) / push off / no push."
+            },
+            "account": {
+              "chip": "Sign-in and accounts",
+              "shows": "Signed out, or how many accounts are attached. Not drawn for CLIs whose sign-in state Navide cannot read."
+            },
+            "binary": {
+              "chip": "Custom binary",
+              "shows": "You picked one of several physical installations rather than the default."
+            },
+            "command": {
+              "chip": "Custom launch command",
+              "shows": "This row has a launch command set. It is deliberately amber, because it also switches off the model and effort above it."
+            },
+            "env": {
+              "chip": "Custom env",
+              "shows": "How many environment variables this row adds."
+            }
+          },
+          "chipsLegend": "The colours are consistent: green = normal or on, amber = a deviation worth noticing, red = unusable or switched off, grey = a neutral fact.",
+          "launchIntro": "This part decides which command line a <strong>newly spawned</strong> pane of each CLI starts on. It is an accordion and <strong>only one vendor opens at a time</strong> — fourteen environment-variable tables laid out flat would be fourteen tables down one page. Everything here is per CLI and per machine, not per project, and applies to every window. A collapsed row summarises in one line (model, effort, custom command, how many env) what has been changed.",
+          "launchTable": {
+            "field": "Field",
+            "detail": "What it does"
+          },
+          "launchFields": {
+            "model": {
+              "field": "Default model",
+              "detail": "A free-text box (empty = vendor default). Model ids change with every vendor release, so this is not a dropdown. Only CLIs that can be told a model at launch have this field."
+            },
+            "effort": {
+              "field": "Default effort",
+              "detail": "A dropdown for the vendors that publish a closed list of levels, a text box for the rest. A combination the vendor cannot honour is <strong>refused on the spot and not saved</strong>, naming the values it does accept."
+            },
+            "command": {
+              "field": "Launch command",
+              "detail": "Empty = use the default. Fill it in and you are writing the whole line — see the warning below."
+            },
+            "env": {
+              "field": "Environment variables",
+              "detail": "One row per variable and value, add or remove at will. A name may only use letters, digits and underscores and may not start with a digit (a name with a space or an equals sign cannot go into a process environment at all)."
+            }
+          },
+          "callout3": {
+            "title": "A launch command means Navide adds nothing",
+            "text": "This is the easiest thing to get wrong here. The moment the launch command is non-empty, <strong>the default model and effort above it, the permission-bypass flag and any per-pane argument are all left off</strong> — the line runs exactly as you wrote it. The one thing that still applies is the <strong>custom binary</strong> (a separate setting), and it only replaces the leading token: a wrapper line such as <code>npx claude</code> does not start with <code>claude</code>, so nothing is swapped. Clear the field and everything above comes back."
+          },
+          "launchResume": "Two other paths <strong>ignore</strong> this setting. Rebuilding a pane, or restoring one after a restart, has to rebuild the resume command from the vendor’s own syntax, so those panes launch on the default command. A login pane is the same: the backend keeps only the first token of the command and appends the vendor’s sign-in subcommand, so a wrapper line would become something like <code>npx auth login</code>. Navide cannot merge the two — it has no way to know where a session id belongs inside a line you wrote.",
+          "launchReject": "Asking for a model at the same time is <strong>refused outright</strong> rather than silently dropped. When an agent opens a pane through MCP, a request naming a model or effort for a CLI that has a custom launch command is rejected with the reason (<strong>a resume is the exception</strong> — its command is rebuilt from the vendor’s syntax and never reads this setting). The reasoning: a pane that quietly fell back to the default model looks exactly like one that got the model you asked for.",
+          "launchEnv": "The environment table has a <strong>reserved list</strong> of names Navide manages itself (24 of them as this was written; the full list is printed verbatim under the section, and that is the one to trust). A reserved name is <strong>not forbidden</strong>: you can still save it, the row just gains a red \"Not passed through\" — and it starts working the day Navide stops managing that variable. The dropping happens at spawn time, and the window that asked for the pane gets a notice. There are two kinds: <strong>denied</strong> (the value never existed in the pane’s environment at all) and <strong>superseded</strong> (it went in, then a higher-priority source of Navide’s own rewrote or deleted it — it looks applied and is not). Neither stops the pane from opening.",
+          "launchEnvNote": "The reserved list is global, not per vendor — setting <code>CODEX_HOME</code> on the Claude Code row is refused too. It grows and shrinks with what Navide manages, so do not memorise the count; read the list printed under the section.",
+          "spawnIntro": "The Manual spawn dialog gained a <strong>Model</strong> and an <strong>Effort</strong> field, prefilled from whatever that CLI has under launch overrides (re-read each time the dialog opens, never cached). Model is free text; Effort is a dropdown whose options come from the levels that vendor publishes. Which fields appear is <strong>not a hard-coded list</strong> — it follows whether the vendor spec declares the matching launch argument:",
+          "spawnTable": {
+            "group": "Fields shown",
+            "vendors": "Which CLIs"
+          },
+          "spawnGroups": {
+            "both": {
+              "group": "Both Model and Effort (5)",
+              "vendors": "Claude Code, Antigravity CLI, Copilot CLI, Muse Code, Pi"
+            },
+            "modelOnly": {
+              "group": "Model only (7)",
+              "vendors": "Codex, Cursor CLI, Grok CLI, Kilo Code, Kimi Code, OpenCode, Qwen Code"
+            },
+            "neither": {
+              "group": "Neither (3)",
+              "vendors": "Aider, Droid, and Terminal (which is not an agent)"
+            }
+          },
+          "spawnNote": "The seven \"Model only\" CLIs are not short of a reasoning knob; the knob just is not a launch argument. For some it is baked into the model id (a trailing <code>-high</code>, say), for others it lives in a config file or behind an in-session command. A value that breaks the rules (a model id containing a space, or starting with \"-\") is explained on the spot and disables the submit button. And if that CLI has a custom launch command, both fields are disabled with the reason spelled out — that line runs as written and Navide adds no model to it.",
+          "h5": "4 · Push channels",
+          "h6": "5 · Installation and updates",
+          "pushAllOff": "<strong>Turning all of them off is a legitimate choice</strong> — there is no \"keep at least one\" rule here. With all of them off the page lists the three costs outright: a message now waits for the receiving pane to go idle and is then typed in, so it takes longer to land; Claude Code’s rewake is the only way to wake an idle agent, and with it off there is nothing to do but wait for the agent to come back to idle on its own; and a pane already running keeps the channel it started with until it is restarted."
         },
         "s5": {
           "title": "Accounts",
@@ -2773,7 +2997,7 @@
           },
           "note1": "This panel <strong>has no rename</strong>. Account names are generated (Account 1, Account 2…); the card shows the signed-in identity and the name is only an internal id.",
           "p4": "Two cases refuse deletion and say why: the account is <strong>currently active</strong> (switch to another one first), or its <strong>sign-in is still running</strong> (finish or close its login pane first).",
-          "p5": "<strong>What happens to running CLIs when you switch?</strong> Navide does not kill them. The default is to <strong>refuse the switch</strong> and tell you \"N running CLI pane(s) are using this account\". If you insist, a confirmation appears: <em>Switching accounts will restart N running {'{'}CLI{'}'} pane(s). Continue?</em> After \"Switch & restart\", those panes are <strong>rebuilt with resume</strong> (reconnecting the original conversation), not killed. If any pane fails to rebuild, a summary notification appears.",
+          "p5": "<strong>What happens to running CLIs when you switch?</strong> Navide does not kill them. The default is to <strong>refuse the switch</strong> and tell you \"N running CLI pane(s) are using this account — close them before switching.\" If you insist, a confirmation appears: <em>Switching accounts will restart N running {'{'}CLI{'}'} pane(s). Continue?</em> After \"Switch & restart\", those panes are <strong>rebuilt with resume</strong> (reconnecting the original conversation), not killed. If any pane fails to rebuild, a summary notification appears.",
           "p6": "Claude Code is the exception: it re-reads its credentials before every request, so the switch is a hot swap — no confirmation and no pane restart.",
           "p7": "Switching too often is blocked (at most 3 times per 60 seconds per CLI); confirming a forced switch does not bypass this.",
           "callout1": {
@@ -2785,12 +3009,17 @@
           "p9": "If the live credentials match no registered account, Navide <strong>creates a profile for that email automatically</strong>. Nothing touches your credential files and <strong>no pane is restarted</strong>.",
           "note2": "Limitation: if a CLI has never signed in (its credential directory does not exist yet), watching only starts after Navide is relaunched.",
           "h3": "Git accounts",
-          "p10": "Four fields: <strong>Name, Host</strong> (default <code>github.com</code>)<strong>, Username, Token</strong>. Each row in the list shows <code>host · username · ••••last four</code> — the token itself is never returned to the UI. Leaving Token empty while editing keeps the old one.",
+          "p10": "Four fields: <strong>Label, Host</strong> (default <code>github.com</code>)<strong>, Username, Token</strong>. Each row in the list shows <code>host · username · ••••last four</code> — the token itself is never returned to the UI. Leaving Token empty while editing keeps the old one.",
           "p11": "Tokens are encrypted with the OS keychain (safeStorage) and stored locally; decryption happens only in the main process. When the keychain is unavailable a yellow notice appears, the add button is hidden entirely and editing is disabled.",
           "callout2": {
             "title": "Binding is done elsewhere",
             "text": "\"Which Git account this workspace uses\" is chosen with the account pill on the <strong>Git panel in the sidebar</strong>. The Settings page only adds, edits and deletes accounts. Deleting an account also clears any binding that pointed to it."
-          }
+          },
+          "hPortable": "Portable credentials",
+          "portable1": "Account cards gained a <strong>Portable credential</strong> field: run the vendor’s own command to obtain one and paste the result in. Today <strong>only Claude Code declares a portable credential</strong> (the command is <code>claude setup-token</code>); the other thirteen have no such field. What you paste is encrypted on this machine and handed to <strong>newly spawned panes</strong> through their environment — it is <strong>never written into the CLI’s own credential files</strong>.",
+          "portable2": "The card shows <em>Not set</em> or <em>Set</em>, and when the credential is outranked it says so plainly — \"not in effect\", naming what ranks above it — because most CLIs put their own login file, a key helper or an administrator’s policy directory ahead of the environment. To make a pasted credential take effect, sign out of the CLI there first.",
+          "portableNote": "The card also carries marks such as \"From cloud\" and \"In use\"; those belong to credentials that arrived through cloud sync. Navide Cloud’s Credentials scope is currently <strong>listed but not switchable</strong>, so reusing a credential pasted on another device is not reachable yet — what you paste stays on this machine.",
+          "switchToast": "<strong>A failed switch is now always visible.</strong> Only two refusals used to raise a toast — \"panes are running\" and \"switching too often\". Everything else, a failed credential swap included, went into the Accounts panel’s own banner, which had long scrolled out of view while you were looking at one vendor’s rows; pressing \"Set as default\" looked like nothing happened at all. Every kind of switch failure raises a toast now."
         },
         "s6": {
           "title": "Quota display",
@@ -2832,14 +3061,21 @@
             "noData": {
               "display": "No quota data yet",
               "meaning": "Never read."
+            },
+            "limit": {
+              "display": "⛔ back …",
+              "meaning": "The CLI itself reported it is out of quota. With no readable reset time it just says \"out of quota\". This badge can be dismissed — see below."
             }
           },
-          "p3": "The badge switch and refresh interval are in <strong>Settings ▸ General</strong> (not the CLI Agents tab). The \"Refresh: …\" line in the details says why this read did not update: no credentials, credentials expired, rate limited, unavailable, Not measured, failed."
+          "p3": "The badge switch and refresh interval are in <strong>Settings ▸ General</strong> (not the CLI Agents tab). The \"Refresh: …\" line in the details says why this read did not update: no credentials, credentials expired, rate limited, unavailable, Not measured, failed. When it failed, a \"Reason: …\" line underneath gives the actual error instead of leaving you with a bare \"unavailable\".",
+          "h4": "The ⛔ out-of-quota badge",
+          "p4": "When the CLI prints its own out-of-quota message, the pane gets a <strong>⛔ badge with a countdown to the reset</strong> (or just \"out of quota\" when no reset time can be read), and a notification goes out. This is a different thing from the percentage badge above: the percentage is what Navide queried, this one is what the CLI said.",
+          "p5": "The badge <strong>can be clicked away</strong>. The confirmation warns you first: if a loop is waiting for the quota to come back, dismissing it resumes the loop now. The dismissal only holds until <strong>that particular reset</strong> (matched with a 60-second tolerance, because each poll re-resolves the reset against its own clock), and expires with it — hitting the limit again the next day counts as a new event even if the clock time reads identically. The dismissal is also <strong>tied to the account that ran out</strong>: switching to another account keeps it suppressed, switching back to that one lifts it. When no reset time can be read there is <strong>no suppression at all</strong> (with no clock there is nothing to tell an old banner from a new hit by), and the badge is cleared instead by a five-hour fallback."
         },
         "s7": {
           "title": "Idle reclaim & CLI cost",
           "p1": "Every running CLI holds a block of memory that is <strong>allocated at startup and never released</strong> — the Settings page puts it at \"often 200–300 MB each\". With a dozen panes open, that becomes a whole-machine problem.",
-          "p2": "So by default Navide demotes panes that have been quiet too long to a <strong>placeholder</strong>: the process ends, but the slot, name and messaging address all stay, and one click resumes the conversation from the CLI's own transcript.",
+          "p2": "So by default Navide demotes panes that have been quiet too long to a <strong>placeholder</strong>: the process ends, but the slot, name and messaging address all stay, the card reads <em>Click to resume</em>, and pressing it brings the conversation back from the CLI's own transcript.",
           "list": {
             "threshold": "The threshold is 15 minutes / 30 minutes / 1 hour / 3 hours / 8 hours / Never (default 30 minutes), in Settings ▸ General.",
             "exempt": "The focused pane, a pane awaiting your answer, and a pane with unsent text in its input box are never reclaimed.",
@@ -2886,7 +3122,7 @@
               "fix": "Check the \"Refresh: …\" line in the badge details first — it states the reason. To re-read immediately, press \"Refresh quota\" at the top of Settings ▸ Accounts (it skips the wait after a failed read). Note that only the account the CLI is signed in as can be read; parked accounts only show the cache."
             },
             "panesRunning": {
-              "symptom": "\"N running CLI pane(s) are using this account\"",
+              "symptom": "\"N running CLI pane(s) are using this account — close them before switching.\"",
               "cause": "Non-Claude CLIs do not allow the credentials to be swapped in place while a pane is running.",
               "fix": "Close those panes and switch again; or choose \"Switch & restart\" in the confirmation so Navide rebuilds them with resume. Switching too often is blocked by the 3-per-60-seconds limit — wait a moment and retry."
             },
@@ -2894,6 +3130,31 @@
               "symptom": "Changed permission bypass, running panes do not react",
               "cause": "The flag was fixed into the command line when the pane started.",
               "fix": "Rebuild (⌘R) or restore that pane."
+            },
+            "notOnPath": {
+              "symptom": "It runs in my terminal but will not start from Navide",
+              "cause": "The backend’s PATH probe could not see a binary installed by nvm / volta / pnpm / bun / npm -g, and refused the spawn before the pane opened.",
+              "fix": "A probe that finds nothing no longer blocks; the pane’s own login shell looks again. If it still fails, press \"Re-detect\" in Settings ▸ CLI Agents. Note that on macOS nvm’s directories now sit after your own PATH, so the version you picked with nvm use is no longer replaced by Navide."
+            },
+            "signedOut": {
+              "symptom": "The pane opens straight onto the CLI’s own sign-in screen",
+              "cause": "The CLI is installed but signed out — the pre-launch probe can only tell whether it is installed.",
+              "fix": "Navide announces this first; the last step of the guided install dialog also has a Sign in button that opens a pane and runs the sign-in for you. Vendors whose credential files Navide cannot read are never reported, so the absence of a notice does not mean you are signed in."
+            },
+            "launchCommand": {
+              "symptom": "A default model is set but the pane did not use it",
+              "cause": "That CLI also has a custom launch command. The line runs as written, and Navide adds no model, effort or permission-bypass flag to it.",
+              "fix": "Clear the launch command, or put the model into the line yourself. An agent asking for a model through MCP is refused with the reason; in the Manual spawn dialog both fields are disabled."
+            },
+            "envIgnored": {
+              "symptom": "An environment variable set under launch overrides had no effect",
+              "cause": "It is on the reserved list Navide manages itself, or it went in and was then overwritten by a higher-priority source.",
+              "fix": "The notice raised at spawn names the variables and which case they fell into: denied = it never went in, superseded = it went in and was then rewritten or deleted. The reserved list is printed under the launch-overrides section. A name that is not on the list and is still superseded usually lost to credential or CLI-home management, which writes after your request."
+            },
+            "resumeIgnoresCommand": {
+              "symptom": "After a rebuild or a restore the pane ignored my launch command",
+              "cause": "A resume command has to be rebuilt from the vendor’s own syntax, and Navide has no way to know where the session id belongs inside a line you wrote.",
+              "fix": "This is deliberate, not a fault. If you need those arguments, go back to the vendor’s default command and set them through the default model and effort fields instead."
             }
           }
         }
@@ -2916,11 +3177,13 @@
             "title": "MCP tools",
             "tag": "what manually opened panes use",
             "p1": "The agent sees them in its own tool list the moment it starts, so nobody has to teach it. It can look up who is online first, then send the instruction.",
-            "p2": "There are three tools:",
+            "p2": "The ones it reaches for most (the full list is in the \"MCP\" topic):",
             "tools": {
               "list": "<strong>List targets</strong> — who is online, how their address is written, and whether they are busy right now.",
               "send": "<strong>Send an instruction</strong> — deliver arbitrary text to a named pane.",
-              "spawn": "<strong>Open a new agent and hand it work</strong> — ask Navide to open a new CLI pane, choose which CLI it runs, and give it a task. The new pane should report back to the caller with a message once it finishes, but that is the sub-agent's own output, not something Navide guarantees: it queues while the caller is busy, and it never arrives if the sub-agent does not follow the format."
+              "spawn": "<strong>Open a new agent and hand it work</strong> — ask Navide to open a new CLI pane, choose which CLI it runs, and give it a task. The new pane should report back to the caller with a message once it finishes, but that is the sub-agent's own output, not something Navide guarantees: it queues while the caller is busy, and it never arrives if the sub-agent does not follow the format.",
+              "ack": "<strong>A pure acknowledgement</strong> — \"got it\", \"done\", anything the other side need not act on. It is written to the message log for you to read (badged \"ack only\") but is <strong>never typed into the other agent's input box</strong>, so it neither interrupts nor wakes it — which also means anything the other side has to read or act on cannot go this way.",
+              "pending": "<strong>Check who is waiting on me</strong> — a busy pane cannot be typed into, so the agent can ask the question itself: what is queued waiting for it to go idle, and whether anything it sent is stuck."
             },
             "note": "<strong>Ten</strong> of the fourteen CLIs are wired to this tool set (see the table in the next section). The ones that are not — Aider, Droid, Muse Code, Pi — use the output protocol below instead."
           },
@@ -2969,12 +3232,17 @@
             "absolute": {
               "form": "<absolute path>/<pane name>",
               "meaning": "The most precise form"
+            },
+            "device": {
+              "form": "<device>/<workspace>/<pane name>",
+              "meaning": "A pane on another machine (both must be signed in to Navide Cloud)"
             }
           },
           "list": {
             "noSlash": "<strong>Without a slash it never leaves your own workspace.</strong> Crossing projects always has to be spelled out.",
             "ambiguous": "<strong>Not found or ambiguous is always refused — never guessed.</strong> Sending an instruction to the wrong CLI is worse than not sending it.",
-            "broadcast": "<strong>Broadcast (<code>all</code>) does not cross workspaces.</strong> Crossing projects is always a deliberate, named act."
+            "broadcast": "<strong>Broadcast (<code>all</code>) does not cross workspaces.</strong> Crossing projects is always a deliberate, named act.",
+            "device": "<strong>Copy a cross-device address from the list rather than assembling it.</strong> The first segment may be the machine's id or its name, and only the id is guaranteed not to collide with one of this machine's own workspace paths."
           }
         },
         "s5": {
@@ -2982,19 +3250,21 @@
           "p1": "Not immediately. Navide waits until the target is <strong>genuinely idle</strong> before typing into it, so it never interrupts what it is doing:",
           "list": {
             "alive": "Its CLI is still alive and past the startup phase",
+            "noTyping": "Nobody is typing in that pane (a draft in the box, or a keystroke in the last four seconds, makes it wait)",
             "noTurn": "No turn is currently running",
             "quiet": "No output for the last 2 seconds"
           },
-          "p2": "If the conditions are not met the message queues; once they are, it goes out automatically. So while the target is on a long task your message waits for it to finish — that is deliberate. The message the target receives is prefixed with its source, so it knows who to reply to.",
+          "p2": "If the conditions are not met the message queues; once they are, it goes out automatically. So while the target is on a long task your message waits for it to finish — that is deliberate. The Inter-CLI Messages panel names which condition is holding it — \"Target pane is not running\", \"Target pane is still starting up\", \"Someone is typing in the target pane\", \"Target agent is mid-turn\", \"Waiting for the target to settle\" — so \"it never went out\" always has a findable reason. The message the target receives is prefixed with its source, so it knows who to reply to.",
           "note": "A few CLIs (Qwen, Pi, Kimi) have no \"turn finished\" signal in their logs, so Navide cannot tell when they are done and treats \"quiet for 8 seconds\" as the end instead. Messages to those CLIs may therefore wait a little longer."
         },
         "s6": {
           "title": "What you see on screen",
           "list": {
-            "panel": "<strong>The \"Messages\" button in the status bar</strong> — opens the Inter-CLI Messages panel, showing the source, target, status and content of every message; cross-workspace ones carry an extra badge. You can also pause delivery here.",
+            "panel": "<strong>The \"Messages\" tab (✉) on the right rail</strong> — opens the Inter-CLI Messages panel, showing each message's source, target, status and <strong>what is holding it</strong>; cross-workspace ones carry an extra \"cross-workspace\" badge. Anything not yet delivered can be taken back with \"Withdraw\", a failed one sent again with \"Resend\", and delivery as a whole stopped with \"Pause delivery\".",
             "crossWorkspace": "<strong>When a cross-workspace instruction arrives</strong> — the target window raises a notice so you know the instruction was not one of yours.",
             "mention": "<strong>Typing <code>{'@'}</code> in the input box</strong> — brings up a picker that includes addresses in other workspace windows.",
-            "drag": "<strong>Dragging one pane onto another</strong> — if the caret sits right after an <code>{'@'}</code> the other pane's address is inserted; otherwise a summary of its screen content is pasted."
+            "drag": "<strong>Dragging one pane onto another</strong> — if the caret sits right after an <code>{'@'}</code> the other pane's address is inserted; otherwise a summary of its screen content is pasted.",
+            "wake": "<strong>The \"Click to resume\" placeholder card</strong> — after a workspace is reopened, a pane comes back as a card with no CLI behind it. When messaging one of those, the agent can ask Navide to <strong>open it first and then deliver</strong>, so you need not click it yourself; if it comes up on a fresh session the reply says so, because that agent remembers none of the earlier conversation."
           }
         },
         "s7": {
@@ -3003,7 +3273,10 @@
           "list": {
             "name": "The new pane's name is its address, so a role name works best.",
             "report": "Once the task is done the new pane <strong>reports back with a message</strong> to the agent that opened it.",
-            "rejected": "A rejection <strong>only ever comes from getting the request wrong</strong>: no such CLI name, a duplicate or invalid name, an empty task, or a model or reasoning effort that CLI cannot accept."
+            "rejected": "A rejection <strong>only ever comes from getting the request wrong</strong>: no such CLI name, a duplicate or invalid name, an empty task, or a model or reasoning effort that CLI cannot accept.",
+            "kickoff": "<strong>Whether the opening task actually went in is reported too.</strong> Navide waits for the CLI to boot, for its prompt to appear and for the task to be typed before answering. When it could not confirm delivery it says \"check the status first\" rather than \"resend\" — a blind resend dispatches the same work twice.",
+            "duplicate": "<strong>A repeated request for the same spawn is blocked</strong>, so an agent that gives up waiting and asks again does not end up with a second pane.",
+            "resume": "<strong>A new pane can also be opened onto an old conversation.</strong> The agent lists the CLI conversations this workspace still holds and names one; the new pane starts with that conversation's memory intact (including one started in a plain terminal). The id is checked against that CLI's own session store first, and an id with nothing behind it is refused rather than quietly opened empty."
           },
           "table": {
             "suggestion": "Guideline",
@@ -3023,7 +3296,8 @@
               "value": "2 levels"
             }
           },
-          "note": "These are <strong>guidelines, not hard limits</strong> — going over is never blocked, it only attaches a reminder to the reply for the agent to pass on or note, the point being to stop it recursing until the machine chokes. Panes in a pipeline can do the same thing with a <code>---SPAWN---</code> block, under the same guidelines."
+          "note": "These are <strong>guidelines, not hard limits</strong> — going over is never blocked, it only attaches a reminder to the reply for the agent to pass on or note, the point being to stop it recursing until the machine chokes. Panes in a pipeline can do the same thing with a <code>---SPAWN---</code> block, under the same guidelines.",
+          "note2": "Resuming a conversation is <strong>something you could always do yourself</strong>: the manual-spawn card has \"↻ Resume\", and the Agent History panel has \"↻ Resume session\". What is new is the agent's side — it can now list the resumable conversations itself."
         },
         "s8": {
           "title": "Guardrails",
@@ -3047,11 +3321,11 @@
             "timeout": {
               "limit": "No result after sending",
               "value": "Marked failed after 30 minutes",
-              "why": "When the target window is closed, a message must not sit in \"queued\" forever"
+              "why": "When the target window is closed, a message must not sit in \"Queued\" forever"
             },
             "pause": {
               "limit": "Pause switch",
-              "value": "Messages panel",
+              "value": "The Inter-CLI Messages panel",
               "why": "You can stop delivery at any time; messages queue instead of going out"
             }
           }
@@ -3085,19 +3359,29 @@
               "fix": "Use the full path; for duplicate pane names, rename one of them"
             },
             "stuckQueued": {
-              "symptom": "The message stays \"queued\" forever",
+              "symptom": "The message stays \"Queued\" forever",
               "cause": "The target is on a long task and has not gone idle yet",
               "fix": "Normal — wait for it to finish; if it really is stuck, it is marked failed after 30 minutes"
             },
             "rateLimit": {
-              "symptom": "It reports the rate limit was exceeded",
+              "symptom": "The panel says \"Rate limit: at most 5 messages per 60s between the same two panes\"",
               "cause": "More than 5 messages for one source → target pair within 60 seconds",
               "fix": "Usually two agents stuck in a pointless loop — go and see what they are talking about"
             },
             "paused": {
               "symptom": "Nothing moves in the messages panel",
-              "cause": "Delivery is paused",
-              "fix": "Press \"Resume delivery\" in the messages panel"
+              "cause": "The panel says \"Delivery is paused\"",
+              "fix": "Press \"Resume delivery\" in the Inter-CLI Messages panel"
+            },
+            "kickoffFailed": {
+              "symptom": "The agent you sent out never seems to start",
+              "cause": "The pane opened, but the opening task could not be typed in (a CLI still painting its first screen gives Navide nothing to confirm against)",
+              "fix": "<strong>The pane is open — do not open it again.</strong> Look at that pane: if its input box is empty, send the task over as a message"
+            },
+            "deviceOffline": {
+              "symptom": "device-offline / link-offline / unknown-device",
+              "cause": "All three are cross-device only: the far machine has no connection at all / this machine is not connected to Navide Cloud / this machine has never been set up with Navide Cloud",
+              "fix": "Only the first is worth waiting out. For the other two, check the link state in the Navide Cloud window; \"Access token rejected\" means somebody has to sign in again"
             }
           }
         },
@@ -3107,55 +3391,78 @@
             "terminalPane": "<strong>A plain terminal pane cannot send or receive</strong> — only CLI agent panes have a name.",
             "receiveOnly": "<strong>Four CLIs have no MCP tools</strong> — all fourteen can send, but Aider, Droid, Muse Code and Pi can only use the bare-line output protocol; see \"Which CLIs can send\" above.",
             "detached": "<strong>After a pane is detached to its own window, or the window reloads</strong>, the MCP tool route only comes back once the pane is reopened; the output protocol is unaffected.",
-            "queueFull": "<strong>When the target's queue is full</strong> the sender is shown success while the message is actually dropped — delivery is asynchronous and there is no way to know at send time. To be sure, check the messages panel in the other window.",
-            "noPermission": "<strong>There is no permission prompt</strong> — cross-workspace messaging raises no confirmation dialog, only a notice on arrival. That is a deliberate trade-off."
+            "queueFull": "<strong>When the target's queue is full (10 at most) the message is dropped</strong> — but no longer silently: the panel says \"The target already has 10 messages waiting\", the failure is typed back into the sending pane as a notice, and the sending agent can equally look up what became of its own message. Delivery is still asynchronous, so nothing is known <strong>at the instant of sending</strong>.",
+            "noPermission": "<strong>There is no permission prompt</strong> — cross-workspace messaging raises no confirmation dialog, only a notice on arrival. That is a deliberate trade-off.",
+            "ackLocal": "<strong>A pure acknowledgement does not cross devices</strong> — the relay cannot promise the message stays out of an input box on someone else's machine, so a cross-device ack is refused outright; send it as an ordinary message if it has to travel."
           }
         },
         "tip": "Tip: give panes role names first (\"reviewer\", \"architect\") — the title is the address, and everything afterwards reads much more naturally.",
-          "mock": {
-            "delivery": {
-              "caption": "Both ends of one message. The sending pane is on the left, the receiving pane on the right — Navide types the message straight into its terminal and submits it, so what you see is it already working. The first line is always [Navide MSG] from:, which is how the recipient tells \"someone messaged me\" from \"my message bounced\".",
-              "legend": {
-                "envelope": {
-                  "label": "What the recipient sees",
-                  "text": "The source on the opening line, then the message itself, then the reply format — that last line is how the receiving agent knows who to answer."
-                },
-                "status": {
-                  "label": "The recipient's status",
-                  "text": "The pane goes from idle to running the moment the message lands; there is no step where someone presses Enter."
-                }
+        "mock": {
+          "delivery": {
+            "caption": "Both ends of one message. The sending pane is on the left, the receiving pane on the right — Navide types the message straight into its terminal and submits it, so what you see is it already working. The first line is always [Navide MSG] from:, which is how the recipient tells \"someone messaged me\" from \"my message bounced\".",
+            "legend": {
+              "envelope": {
+                "label": "What the recipient sees",
+                "text": "The source on the opening line, then the message itself, then the reply format — that last line is how the receiving agent knows who to answer."
+              },
+              "status": {
+                "label": "The recipient's status",
+                "text": "The pane goes from idle to running the moment the message lands; there is no step where someone presses Enter."
               }
-            },
-            "panel": {
-              "caption": "The Messages panel on the right rail (✉). One row per message: source → target, time and status, with an extra badge on the cross-workspace ones. Delivery as a whole can be paused here.",
-              "legend": {
-                "actions": {
-                  "label": "Title bar",
-                  "text": "Pausing delivery queues later messages instead of sending them; clearing the log only clears the display and leaves delivered messages alone."
-                },
-                "route": {
-                  "label": "Source → target",
-                  "text": "A cross-workspace row carries the folder name as a prefix and is marked with the cross-workspace badge."
-                },
-                "status": {
-                  "label": "Status",
-                  "text": "Queued → delivering → delivered. A failed row grows a Resend button; one still queued can be withdrawn."
-                }
-              }
-            },
-            "sample": {
-              "workspaceB": "navide-web",
-              "pane1": "architect",
-              "pane2": "reviewer",
-              "body": "Run pnpm test:run for me and report the list of failures back",
-              "hint": "(To reply: first line exactly ---MSG-START--- to: architect …)",
-              "preview2": "Review done, two issues fixed, tests all green",
-              "preview3": "Measure the home page load time",
-              "t1": "14:20",
-              "t2": "14:22",
-              "t3": "14:23"
             }
+          },
+          "panel": {
+            "caption": "The \"Messages\" tab (✉) on the right rail. One row per message: source → target, time and status, with an extra \"cross-workspace\" badge on the cross-workspace ones. Delivery as a whole can be stopped here with \"Pause delivery\".",
+            "legend": {
+              "actions": {
+                "label": "Title bar",
+                "text": "\"Pause delivery\" queues later messages instead of sending them; \"Clear log\" only clears the display and leaves delivered messages alone."
+              },
+              "route": {
+                "label": "Source → target",
+                "text": "A cross-workspace row carries the folder name as a prefix and is marked with the \"cross-workspace\" badge."
+              },
+              "status": {
+                "label": "Status",
+                "text": "\"Queued\" → \"Delivering\" → \"Delivered\". A failed row grows a \"Resend\" button; one still queued can be taken back with \"Withdraw\"."
+              }
+            }
+          },
+          "sample": {
+            "workspaceB": "navide-web",
+            "pane1": "architect",
+            "pane2": "reviewer",
+            "body": "Run pnpm test:run for me and report the list of failures back",
+            "hint": "(To reply: first line exactly ---MSG-START--- to: architect …)",
+            "preview2": "Review done, two issues fixed, tests all green",
+            "preview3": "Measure the home page load time",
+            "t1": "14:20",
+            "t2": "14:22",
+            "t3": "14:23"
           }
+        },
+        "s11": {
+          "title": "Messaging across devices",
+          "p1": "Once this machine is signed in to Navide Cloud, the agent's target list grows a second section of <strong>panes on other machines</strong>. They are listed apart from local ones because the deal is different: the message travels through the server, so it can fail in ways a local one never could.",
+          "list": {
+            "address": "<strong>The address has three parts</strong>: device / workspace / pane name. Copy it from the list rather than assembling it.",
+            "works": "<strong>You can tell it something, ask it something, and wait for it</strong> — those all work.",
+            "notWorks": "<strong>You cannot read it, interrupt it or close it</strong> — reading another pane's transcript, sending an interrupt key and closing a pane all need that pane's own machine, so a cross-device address is refused for all three.",
+            "offline": "<strong>A remote pane's busy state is near-live, not live</strong> — it is the word the far window last uploaded to the server. There is also a separate <code>offline</code> field, meaning that machine or its window is away right now and what you are reading is the server's last impression of a pane nobody can reach."
+          },
+          "note": "With no Navide Cloud link the section is <strong>absent from the target list entirely</strong> — not empty, gone. So \"I cannot see my other machine\" has two readings: not signed in to Navide Cloud, or signed in and no other machine currently has a pane open."
+        },
+        "s12": {
+          "title": "What Navide tells the sender afterwards",
+          "p1": "Delivery is asynchronous, so \"sent\" only means Navide accepted the message. The real outcome comes back to the sender three ways:",
+          "list": {
+            "notice": "<strong>A failure is typed back into the sending pane</strong> — as a notice under Navide's own name (badged \"system notice\"), written only once that pane is idle, so a busy agent is never interrupted by one.",
+            "stale": "<strong>Being stuck for more than two minutes also earns one notice</strong> — one, so a target that stays busy for an hour does not turn into an hour of noise; the notice names what is holding it.",
+            "check": "<strong>The agent can look it up itself</strong> — every send hands back a key it can use to ask what became of that message (kept for the last hour). It can also wait a while at send time and have the outcome returned directly.",
+            "busy": "<strong>An agent too busy to be told goes and asks</strong> — a notice can only be written while the pane is idle, so one that works solidly for an hour receives none. It can check between pieces of its own work whether anything it sent is stuck."
+          },
+          "note": "There is only a pane to write a notice into when the sender is a local pane; a message sent from an external client has none, so looking it up is the only route."
+        }
       },
       "workspace": {
         "intro": "What the main window's four building blocks — workspace, pane, stage layout and sidebar — are, and how to work with them. This is the first part of the manual; every later chapter builds on the terms defined here.",
@@ -3250,14 +3557,14 @@
           "h1": "Opening your first workspace",
           "p1": "Before any project is open, the window is a full-screen welcome card:",
           "welcome": {
-            "browse": "<strong>Browse</strong> — pick a folder to use as the workspace.",
-            "newWorkspace": "<strong>New workspace</strong> — create a new folder and open it straight away.",
-            "openHome": "<strong>Open home</strong> — just use the home directory.",
+            "browse": "<strong>Browse…</strong> — pick a folder to use as the workspace.",
+            "newWorkspace": "<strong>New…</strong> — create a new folder and open it straight away.",
+            "openHome": "<strong>Home</strong> — just use the home directory.",
             "recent": "Below that is the recently-opened list, where frequently used entries can be pinned. Right-clicking an entry offers <em>Open in default editor</em>, <em>Reveal in Finder</em> and <em>Copy path</em>."
           },
           "p2": "Afterwards you can always use the menu: <strong>File ▸ Open Workspace…</strong> (<kbd class=\"wph-kbd\">⌘O</kbd>), <strong>File ▸ Open Recent</strong>, or <strong>File ▸ New Window</strong> (<kbd class=\"wph-kbd\">⌘N</kbd>) for a new window.",
           "h2": "Several workspaces in one window",
-          "p3": "You do not need a second window for a second project. In the sidebar's Agents tab, the workspace section header has a <strong>+</strong> on its right that brings the same picker back; the project you choose is taken into the <strong>same window</strong>, adding one more workspace header row to the sidebar.",
+          "p3": "You do not need a second window for a second project. In the sidebar's Agents tab, the workspace section header has a <strong>＋</strong> on its right that brings the same picker back; the project you choose is taken into the <strong>same window</strong>, adding one more workspace header row to the sidebar.",
           "p4": "Click that header row to switch the view. The key point: <strong>a workspace you switch away from keeps its agents running</strong>, its row stays in the sidebar, and only its panes are hidden from the stage for now.",
           "callout": {
             "title": "What a switch replaces",
@@ -3270,9 +3577,9 @@
         "s3": {
           "title": "Panes",
           "h1": "Opening a new pane",
-          "p1": "The entry point is the <strong>+</strong> button — there is one on the sidebar's workspace header row and one on every group header row (the only difference is which group the new pane lands in). Pressing it opens a small menu:",
+          "p1": "The entry point is the <strong>＋</strong> button — there is one on the sidebar's workspace header row and one on every group header row (the only difference is which group the new pane lands in). Pressing it opens a small menu:",
           "addMenu": {
-            "role": "At the top is the <strong>Role</strong> dropdown — pick a preset role.",
+            "role": "At the top is the <strong>Select role…</strong> dropdown — pick a preset role.",
             "cliList": "In the middle is the CLI list, with the ones that are not installed marked as such.",
             "terminal": "At the bottom are <strong>Terminal</strong> (a plain terminal with no agent attached) and <strong>Manual spawn…</strong>."
           },
@@ -3306,8 +3613,8 @@
           "h2": "The context menu",
           "p3": "Right-click a pane or its sidebar row: <em>Focus</em>, <em>Rename</em>, <em>Send message</em>, <em>Interrupt</em>, <em>Reapply role</em>, <em>Remove</em>. Of these, <em>Send message</em> inserts that pane's address into the input box of the pane you currently have focused — the fastest way into cross-pane messaging. A pane with sub-panes below it (<code>▸</code>) also gets a <em>Remove N sub-panes</em> item: it closes only what that pane spawned, leaving the pane itself and every other pane alone.",
           "h3": "Minimizing and the placeholder card",
-          "p4": "The <code>⊟</code> in a pane's top-right corner minimizes it. Once collapsed, its sidebar row is marked <strong>Docked</strong>, and expanding that row offers <em>Restore</em> and <em>Remove</em>.",
-          "p5": "There is also a third state, the <strong>placeholder card</strong>: the slot is still there but shows a \"↩ click to resume\" card, keeping the title, subtitle and group label. After restarting the app, or after an idle reclaim, a pane looks like this. Click anywhere on the card and the CLI carries on with the same conversation.",
+          "p4": "The <code>⊟</code> in a pane's top-right corner minimizes it. Once collapsed, its sidebar row is marked <strong>Docked</strong>, and expanding that row offers <em>↑ Restore</em> and <em>Remove</em>.",
+          "p5": "There is also a third state, the <strong>placeholder card</strong>: the slot is still there but shows a \"↩ Click to resume\" card, keeping the title, subtitle and group label. After restarting the app, or after an idle reclaim, a pane looks like this. Click anywhere on the card and the CLI carries on with the same conversation.",
           "h4": "Idle auto-reclaim",
           "p6": "Every running CLI holds on to memory and GPU. By default Navide demotes panes that have been quiet for too long back to a placeholder card:",
           "reclaim": {
@@ -3316,7 +3623,7 @@
             "notClose": "<strong>This is not a close</strong>: the slot, the name, the message address and the session are all kept — one click brings it back.",
             "exempt": "Panes a pipeline is reading, panes with a draft in the input box, panes with messages queued for delivery, and the focused pane are never reclaimed."
           },
-          "note2": "When a reclaim happens, the status bar shows <code>♻ reclaimed N idle CLI pane(s) — click to resume</code>."
+          "note2": "When a reclaim happens, the History view's pipeline log shows <code>♻ reclaimed N idle CLI pane(s) — click to resume</code>."
         },
         "s4": {
           "title": "Layout",
@@ -3348,8 +3655,8 @@
           "slots": {
             "main": "<code>main</code> is always the CLI stage — it cannot be moved or collapsed.",
             "left": "<code>left</code> can hold: Agents, Pipeline, Explorer, Git, Plans.",
-            "right": "<code>right</code> can hold: History, Tokens, Tasker, Messages, Preview.",
-            "updown": "<code>up</code> and <code>down</code> can take History, Tasker and Messages."
+            "right": "<code>right</code> can hold: History, Time, Tokens, Schedule, Messages, Preview.",
+            "updown": "<code>up</code> and <code>down</code> can take History, Schedule and Messages."
           },
           "p5": "Each slot has its own tab strip and a collapse arrow; collapsed, it becomes a 36px-wide rail (clicking an icon on the rail expands it again). Slot boundaries can be dragged to resize.",
           "h4": "Tuning the layout in Settings",
@@ -3404,8 +3711,8 @@
           "h2": "The three levels of the Agents tab",
           "p1": "Top to bottom: <strong>workspace row → group row → pane row</strong>.",
           "rows": {
-            "workspace": "<strong>Workspace row</strong>: collapse arrow, project name and path, pane count, and on the right <code>↻</code> (rebuild all), History and <code>+</code>. The context menu has <em>Open in Finder</em>, <em>Copy path</em>, moving it into a workspace group, <em>Close workspace</em> (drops the row and leaves its CLIs running for a later reopen) and <em>Close workspace and its panes</em> (ends them).",
-            "group": "<strong>Group row</strong>: sticks to the top while scrolling and shows a status dot, the group name, the member count, and a <code>+</code> that opens an agent inside that group. Member rows carry a neutral-colored rail along their left edge to show they belong to one group.",
+            "workspace": "<strong>Workspace row</strong>: collapse arrow, project name and path, pane count, and on the right <code>↻</code> (rebuild all), History and <code>＋</code>. The context menu has <em>Open this folder in Finder</em>, <em>Copy path</em>, moving it into a workspace group, <em>Close workspace</em> (drops the row and leaves its CLIs running for a later reopen) and <em>Close workspace and its panes</em> (ends them).",
+            "group": "<strong>Group row</strong>: sticks to the top while scrolling and shows a status dot, the group name, the member count, and a <code>＋</code> that opens an agent inside that group. Member rows carry a neutral-colored rail along their left edge to show they belong to one group.",
             "pane": "<strong>Pane row</strong>: name, status, the Docked label and so on."
           },
           "callout": {
@@ -3418,7 +3725,7 @@
           "multiselect": {
             "cmdClick": "<kbd class=\"wph-kbd\">⌘</kbd> click: add a single row to the selection.",
             "shiftClick": "<kbd class=\"wph-kbd\">⇧</kbd> click: select a whole range (in the order shown on screen, not the internal order).",
-            "batchMenu": "Right-clicking with several rows selected turns the menu into its batch form: <em>Interrupt</em>, <em>Rebuild</em>, <em>Minimize</em>, <em>Restore</em>, <em>Remove selected</em>."
+            "batchMenu": "Right-clicking with several rows selected turns the menu into its batch form: <em>Interrupt selected</em>, <em>Rebuild selected</em>, <em>Minimize selected</em>, <em>Restore selected</em>, <em>Remove selected</em>."
           },
           "p3": "Dragging any one of the selected panes takes <strong>the whole batch</strong> with it. Where you drop decides what happens:",
           "dropTable": {
@@ -3445,7 +3752,7 @@
           "p1": "The strip along the bottom of the window. It can be turned off in Settings ▸ Layout.",
           "h1": "Left half: environment state",
           "left": {
-            "git": "The Git branch name, with a <code>*</code> when there are uncommitted changes, followed by <code>↓behind ↑ahead</code>.",
+            "git": "The Git branch name, with a <code>*</code> when there are uncommitted changes, followed by how far it is behind and ahead of the remote, as <code>N↓ N↑</code> (each shown only when it is not zero).",
             "backend": "<strong>Backend pill</strong> — a status light plus the address; clickable.",
             "resource": "<strong>Resource pill</strong> — CPU and memory, shown only while panes are running; clickable.",
             "update": "<strong>Update badge</strong> — new version available / download percentage / downloaded and waiting for a restart / check failed; clickable."
@@ -3472,7 +3779,7 @@
             },
             "announcements": {
               "where": "📢 Announcement badge",
-              "what": "The announcement center: release notes and notification entries, which can be expanded, marked with Mark all read, updated straight from Download / Install, and extended with Load more for older ones."
+              "what": "The announcement center: release notes and notification entries, which can be expanded, marked with Mark all read, updated straight from Download / Restart to install, and extended with Load more (N left) for older ones."
             },
             "clock": {
               "where": "Clock",
@@ -3480,7 +3787,7 @@
             },
             "resource": {
               "where": "Resource pill",
-              "what": "CPU and memory per pane plus the total, with Reclaim, jump-to-pane, and opening the Resource Manager window (see the \"Settings and system\" topic)."
+              "what": "CPU and memory per pane plus the total, with Reclaim N now, jump-to-pane, and opening the Resource Manager window (see the \"Settings and system\" topic)."
             }
           },
           "callout": {
@@ -3560,22 +3867,22 @@
           "external": {
             "arrow": "External client → Navide",
             "title": "External control",
-            "text": "Clients outside the Navide process (a script, another agent…) can drive Navide itself. <strong>Off by default</strong>; turn it on by hand in <strong>Settings → MCP → External access</strong>."
+            "text": "Clients outside the Navide process (a script, another agent…) can drive Navide itself. <strong>Off by default</strong>; switch on \"Allow external MCP clients\" by hand in <strong>Settings → MCP → External access</strong>."
           }
         },
         "s1": {
           "title": "Direction 1: the tools Navide gives CLI agents",
-          "p1": "The moment a pane starts, these appear in the agent's tool list. You do not have to teach it and there is nothing to configure — just say what you want in plain language, e.g. \"mark phase two of this plan as done\".",
+          "p1": "The moment a pane starts, these appear in the agent's tool list. You do not have to teach it and there is nothing to configure — just say what you want in plain language, e.g. \"mark phase two of this plan as done\". There are <strong>53</strong> of them today (47 core, plus the 6 the plans plugin registers), alongside 3 read-only resources and 3 prompt templates.",
           "h1": "Plan documents",
           "planTools": {
             "plan_list": "List every plan in this workspace, with its stage and todo progress",
             "plan_read": "Read one plan in full",
             "plan_create": "Create a new plan (starting as a draft)",
-            "plan_update_stage": "Advance the stage: draft → in-review → approved → in-progress → done",
+            "plan_update_stage": "Advance the stage: Draft → In Review → Approved → In Progress → Done",
             "plan_update_todo": "Update the status of a single todo",
             "plan_add_note": "Record a finding or a decision"
           },
-          "note1": "Plans are HTML the agent writes with these tools; you read and approve them in Navide's plan window. The agent only starts writing code once the stage has advanced to \"approved\".",
+          "note1": "Plans are HTML the agent writes with these tools; you read and approve them in Navide's Plans view. The agent only starts writing code once the stage has advanced to \"Approved\".",
           "h2": "Workspace, pipeline orchestration and settings",
           "workspaceTools": {
             "workspace_list": "Workspaces known on this machine, including which ones have live panes; use it to get a valid path before acting on another project",
@@ -3593,27 +3900,34 @@
             "stage_define": "Add, edit, delete, reorder or reset stages; all four are refused while a run is using that pipeline",
             "role_define": "Add, edit, rename, delete or reset roles; a rename rewrites every slot referencing it, and a role still referenced cannot be deleted",
             "cli_permission_settings": "Read and write the CLI permission-bypass flag (yolo). It is a global setting, not pipeline-specific, and only affects panes opened afterwards; whether a given CLI actually carries the flag is in the returned agents[].skipFlag, not the global value alone",
-            "preview_clear": "Clear the preview panel's change record track; what is deleted is the lines you see on screen, including file watches and your own actions, and it cannot be undone"
+            "workspace_open": "Open a project as a workspace in Navide; whether that is a new window or one that already has the project open is Navide's decision",
+            "workspace_switch": "Switch my own window to another project it already holds; panes of the project being left keep running. Refused while a pipeline is running in that window, because switching would abort it",
+            "prompt_list": "The prompt skills the user keeps in Settings → Prompts; read-only, since creating and editing them is the user's job",
+            "mcp_list": "Which MCP servers Navide connects to and which each CLI keeps in its own config, with live state and tool counts; read-only, and the same list Settings → MCP shows"
           },
           "note2": "These are the things an agent cannot do with its own tools — quota, pipeline state and skill delivery are known only to Navide. Git, file access and the shell are deliberately <strong>not</strong> wrapped as MCP tools: the agent already has those abilities, a wrapper only makes them harder to use, and every pane would pay the context cost of a longer tool list.",
           "h3": "Working with other CLIs",
           "cliTools": {
             "cli_list_targets": "Which CLI panes are online, how their address is written, and whether they are busy",
-            "cli_whoami": "Who I am: pane_id, name, workspace, who opened me; pane_id is the prerequisite for acting on myself",
-            "cli_send": "Send any instruction to a named pane (same workspace or another workspace window) and get back a msg_key to query it with; address \"group\" broadcasts to the other panes in my own tab group",
+            "cli_whoami": "Who I am: pane_id, name, workspace, who opened me; pane_id is the prerequisite for acting on myself. It also names who is blocked waiting on me right now (a long waiter is about to time out, which is worth wrapping up for), and whether this machine is signed in to Navide Cloud — which decides whether panes on other machines can be addressed at all",
+            "cli_send": "Send any instruction to a named pane (same workspace, another workspace window, or another machine) and get back a msg_key to query it with; address \"group\" broadcasts to the other panes in my own tab group. It can be marked as a pure acknowledgement that never enters the other input box, threaded onto the message it answers, told to open a cold restore placeholder before delivering, and made to wait a while and bring the delivery outcome back",
             "cli_send_and_wait": "Send an instruction, wait for the target to finish that turn, and bring back what it said last",
             "cli_check_message": "Use a msg_key to see what became of a sent message: queued, delivered, or failed and why (kept for the last hour only)",
-            "cli_open_agent": "Open a new CLI pane and assign it a task; it reports back when done. A model and effort can be given, and a CLI that does not support them refuses rather than ignores them",
+            "cli_open_agent": "Open a new CLI pane and assign it a task; it reports back when done. A model and effort can be given, and a CLI that does not support them refuses rather than ignores them. The reply says whether the opening task actually went in — when that could not be confirmed it tells you to check the status rather than resend. Two other ways to open: reviving a cold restore placeholder in place, or naming an old CLI session id so the new pane starts with that conversation's memory",
             "cli_read_incoming": "Read the full text of messages sent to me; by default reading consumes them so they are no longer injected into the input box, and peek reads without consuming",
             "cli_cancel_message": "Withdraw a message that has not gone in yet; once delivery has begun it cannot be recalled, and the reply says how it ended up",
             "cli_read_log": "Read the tail of another pane's transcript (200 lines by default), optionally with a cursor to read only what is new",
-            "cli_get_status": "Check whether another pane is busy, and when it was last active",
+            "cli_get_status": "Check whether another pane is busy and when it was last active, plus two more things: the identity it was <strong>launched with</strong> (which CLI, which model, which reasoning effort, whether its login has expired or it has hit a usage limit), and that CLI's quota snapshot. The quota is a <strong>cached read that is never refreshed</strong> — the returned fetch time and stale flag are exactly how old it is, and a fresh number needs the quota tool. The identity describes launch time: a model switched by typing inside the CLI is invisible here",
             "cli_wait_idle": "Wait until another pane goes idle or the wait times out (120 seconds at most); a timeout says whether it is stuck on a permission prompt, still working, or unreachable",
             "cli_interrupt": "Send that CLI's interrupt key to a local pane; this is not the same as stopping it — it may only clear the input box, so check the result yourself",
             "cli_close_agent": "Close another pane, the other half of cli_open_agent; this kills whatever it was doing and cannot be undone, so check with cli_get_status that it is not busy first",
             "cli_message_log": "The history of messages I sent and received; once delivered a message disappears from inbox_summary and pending_incoming, and this is the only place left to find it",
             "cli_usage": "How much quota each CLI has left; check before handing out work, or the message lands on a CLI that has already run out",
-            "cli_token_stats": "This workspace's current token usage"
+            "cli_token_stats": "This workspace's current token usage",
+            "cli_list_sessions": "The CLI conversations in this workspace a new pane could be opened onto — a conversation outlives the pane that ran it: close the pane, restart the app, rebuild the pane, and the transcript stays on disk. Each row says whether it is still resumable and whether the pane that owned it is still open: do not resume a live one, which forks or corrupts it — message that pane instead",
+            "cli_place_pane": "Move a pane: change the tab group it sits in, or make it a child of another pane (the same thing as dragging it in the sidebar, through the same write path, so the position survives a restart). The two halves are independent and the reply says which landed. It does not touch that pane's CLI — nothing is sent, interrupted or restarted. Local panes only",
+            "cli_inbox_summary": "Which of the messages I sent are stale (queued for more than two minutes) or have failed. A failure notice can only be typed into the sending pane while it is idle, so an agent that works solidly for an hour receives none — this is how it goes and asks",
+            "cli_pending_incoming": "Which messages are queued for me and have not gone in yet. A message is typed into a pane only between turns, so an agent that stays busy is precisely the one that cannot be told; a non-empty answer is grounds to wrap up the turn so it can land"
           },
           "note3": "For how to use them, see the \"Inter-CLI Messaging\" topic. \"Wait for the other side to finish\" is best-effort: most CLIs (Cursor included) report the end of a turn themselves, while Kimi / Pi / Qwen are inferred from 8 seconds of silence. The returned <code>source</code> says how trustworthy this particular \"finished\" is — for those CLIs treat it as a hint, not a guarantee. If the target's window is closed or its pane killed mid-wait, <code>source</code> is <code>target_lost</code>: the message really was sent, there is simply no way left to confirm it finished — that is not a send failure, so do not resend.",
           "note4": "One workspace can hold two panes with the same name, and a name alone then cannot say which one is meant, so the tools above refuse outright with <code>ambiguous-target</code> instead of picking one. To name a specific pane, pass the <code>pane_id</code> returned by <code>cli_list_targets</code> to <code>cli_send</code>, <code>cli_send_and_wait</code>, <code>cli_read_log</code>, <code>cli_get_status</code> or <code>cli_wait_idle</code>, and leave the address argument out. Names are more readable day to day; a pane reopened with a different CLI gets a new id, and on <code>unknown-pane-id</code> you simply look it up again. Panes on another device have no local id and can only be addressed by name.",
@@ -3622,7 +3936,15 @@
           "p2": "<strong>Ten</strong> of the fourteen so far: Claude Code, Codex, Copilot CLI, Qwen Code, OpenCode, Kilo Code, Kimi Code, Grok CLI, Antigravity CLI, Cursor CLI. How they are wired depends on the interface each CLI offers — a launch flag (Claude Code, Codex, Copilot, Qwen), one environment variable carrying the whole config document (OpenCode, Kilo), or a per-pane mirror of the config directory (Kimi, Grok, Antigravity). None of the three <strong>touches your own MCP config file</strong>.",
           "note6": "<strong>Cursor is the one exception</strong>: it only reads <code>.cursor/mcp.json</code> inside the workspace, so Navide merges its entry into that file and adds it to <code>.git/info/exclude</code>, leaving your git status clean.",
           "note7": "Not yet wired are <strong>Aider, Muse Code and Pi</strong> (those three CLIs have no MCP interface) and <strong>Droid</strong> (Navide has not wired it yet). Those panes can still message other panes over the bare-line output protocol; they just have no MCP tools to call.",
-          "note8": "The wiring happens <strong>the moment the pane starts</strong>. So after an update, panes already open still hold the old tool list — close and reopen one to get the new one."
+          "note8": "The wiring happens <strong>the moment the pane starts</strong>. So after an update, panes already open still hold the old tool list — close and reopen one to get the new one.",
+          "h5": "The Preview panel",
+          "previewTools": {
+            "preview_record": "Report a file I just created, modified or deleted onto this workspace's change record track; the record is stored with the workspace and survives a restart",
+            "preview_show": "Push a file, a diff or inline content straight into the user's Preview panel; it is only recorded as shown once the window owning the workspace confirms it took it",
+            "preview_list": "Read the change record track back — what other agents, the user and the file watcher each did, newest first; a timestamp cursor reads only what is new",
+            "preview_clear": "Empty the change record track; what goes is the lines the user sees in the Preview panel, the file watcher's and the user's own included, and it cannot be undone. It can also clear only what is older than a given point"
+          },
+          "note9": "<strong>Only four tools cross devices</strong>: send, send-and-wait, get status, and wait for idle. Reading another pane's transcript, sending an interrupt key and closing a pane all need that pane's own machine, so all three are refused. A remote pane also has <strong>no local id</strong>, making the three-part name the only handle there is; its status is the word the far window last uploaded to Navide Cloud — near-live, not live — and there is no quota snapshot either (this machine's quota cache describes this machine's logins, which is the wrong answer for a pane running elsewhere)."
         },
         "s2": {
           "title": "Direction 2: Navide consuming external MCP",
@@ -3642,7 +3964,7 @@
         },
         "s3": {
           "title": "Direction 3: external clients controlling Navide",
-          "p1": "The same endpoint as direction 1 (<code>/plan-mcp</code>), but open to clients <strong>outside the Navide process</strong> — external scripts, agents running elsewhere, any MCP client. On top of direction 1's tools it adds two more groups:",
+          "p1": "The <strong>same endpoint</strong> as direction 1 (<code>/plan-mcp</code>) and the <strong>same set of tools</strong>; what differs is who may connect. This page opens it to clients <strong>outside the Navide process</strong> — external scripts, agents running elsewhere, any MCP client. The interface-driving tools below are often taken for external-only ones; an agent in a pane can call them too. They are listed here because an external client has no window of its own and these are all it has to drive Navide's interface with.",
           "h1": "Driving the Navide interface",
           "uiTools": {
             "ui_list_actions": "List every action id currently registered in the target window",
@@ -3650,10 +3972,10 @@
             "ui_snapshot": "Get a snapshot of the target window's current UI state (panes, tabs, focus…)",
             "ui_diagnostics": "Read the UI action diagnostics that window recorded; use it when a tool reports success but the window behaves differently, to find out what really happened"
           },
-          "note": "The action ids <code>ui_invoke</code> can call (<code>ui.pane.create</code>, <code>ui.settings.open</code> and so on) have to be looked up with <code>ui_list_actions</code> first — it lists every id the target window has registered right now, and that list is what is actually available.",
+          "note": "The action ids <code>ui_invoke</code> can call (<code>ui.pane.create</code>, <code>ui.settings.open</code> and so on) have to be looked up with <code>ui_list_actions</code> first — it lists every id the target window has registered right now, and that list is what is actually available. Called from a pane, the request goes straight to <strong>the window hosting that pane</strong>, focused or not; but if that window has since switched to another project it errors rather than running against the wrong one.",
           "warn": {
-            "p1": "<strong>Once enabled, any program on this machine can control Navide.</strong> That includes opening and closing panes, messaging across workspaces, reading other panes' transcripts and driving the interface. The connection URL (which carries a one-time token) is copied from <strong>Settings → MCP → External access</strong>, and \"Regenerate token\" invalidates the old URL immediately.",
-            "p2": "The <strong>Chrome DevTools Protocol</strong> switch in the same panel is a second, lower-level escape hatch — for screenshots or for actions not yet registered, not the main route. Once enabled, any process on this machine can run arbitrary code against Navide; it binds to 127.0.0.1 only and needs an app restart to take effect."
+            "p1": "<strong>Anything running on this machine can control Navide while this is on.</strong> That includes opening and closing panes, messaging across workspaces, reading other panes' transcripts and driving the interface. The connection URL (which carries a one-time token) is copied from <strong>Settings → MCP → External access</strong>, and \"Regenerate token\" invalidates the old URL immediately.",
+            "p2": "The <strong>Chrome DevTools Protocol (CDP)</strong> switch in the same panel is a second, lower-level escape hatch — for screenshots or for actions not yet registered, not the main route. Anything running on this machine can execute arbitrary code in Navide while this is on. Requires an app restart to take effect. Binds to 127.0.0.1 only."
           }
         },
         "s4": {
@@ -3715,7 +4037,15 @@
             },
             "externalRejected": {
               "symptom": "An external client is refused (external token rejected / disabled)",
-              "detail": "Direction 3 is off by default and has to be enabled in Settings → MCP → External access first; or the token in the URL was replaced by \"Regenerate token\", in which case copy the latest connection URL."
+              "detail": "Direction 3 is off by default and \"Allow external MCP clients\" has to be switched on in Settings → MCP → External access first; or the token in the URL was replaced by \"Regenerate token\", in which case copy the latest connection URL."
+            },
+            "unknownSession": {
+              "symptom": "unknown-session-id",
+              "detail": "The agent tried to resume an old conversation whose id that CLI no longer has on disk. The refusal is deliberate: otherwise it would open a pane that looks like a successful resume and has actually started from nothing, which is indistinguishable without reading the transcript. Ask it to list the resumable conversations again."
+            },
+            "staleTools": {
+              "symptom": "The tool list looks old (a new tool cannot be called)",
+              "detail": "Wiring happens the moment a pane starts, and an MCP tool list <strong>does not hot-reload</strong>. So after an update a pane already open still holds the old list — close and reopen that pane to get the new one."
             }
           }
         },
@@ -3729,7 +4059,7 @@
               },
               "actions": {
                 "label": "Top bar actions",
-                "text": "Add from the built-in catalog, add a custom server by hand, or re-read the config file."
+                "text": "\"Add MCP +\" adds one from the built-in catalog, \"Add custom\" adds one by hand, and \"Refresh\" re-reads the config file."
               },
               "card": {
                 "label": "Catalog card",
@@ -3918,7 +4248,7 @@
             },
             "loop": {
               "where": "Title bar",
-              "what": "Start or stop the automatic loop: at the end of every turn the configured loop prompt is sent again. Hovering it floats the prompt skill ring.",
+              "what": "Casts a prompt skill. Rest the pointer on it and a <strong>ring of skills</strong> fans out (5 slots at most; a longer list or a narrow pane switches to a vertical list), each slot previewing the exact text it would send. <strong>Only the skill marked default enters the ∞ loop</strong> and is re-sent at the end of every turn; every other skill <strong>sends once</strong> — no LOOP badge, no auto-continue, no turn cap.",
               "name": "<code>Loop — send the configured loop prompt to this pane</code>"
             },
             "loopActive": {
@@ -4624,7 +4954,7 @@
           "h3": "Other marks",
           "p1": "These are not buttons, but they are what users ask about most: \"what does this colored dot mean?\"",
           "p2": "A circle, 8px. The colors <strong>can be customized in Settings</strong>; the table below is the factory default.",
-          "p3": "A rounded square, 7px, <strong>deliberately a different shape</strong> from the dot above, because it speaks for a whole group rather than a single pane. Sidebar group rows and the tabs at the top follow the same rules and the same colors, in four states; <strong>orange ranks ahead of green</strong> — if a single pane in the group is waiting on you the whole group shows orange, even with other panes still running:",
+          "p3": "A 7px rounded square, <strong>deliberately a different shape</strong> from the dot above, because it speaks for a whole group rather than one pane. The sidebar group row and the tab bar follow the same rule and the same colours, in four states; <strong>amber outranks green</strong> — one pane waiting on you paints the whole group amber even while its neighbours are still running. Both squares <strong>also follow the palette you set in the Status badges page</strong>:",
           "callout": {
             "title": "Three states, not two",
             "text": "Green and blue are the two \"there is something in here\" states; gray is the third — nothing in this group has actually started yet (or there are no panes at all). A gray dot does not mean something is broken."
@@ -4645,6 +4975,12 @@
             "name": "Name",
             "where": "Where",
             "meaning": "Meaning"
+          },
+          "h4": "The count pill on a workspace heading",
+          "p4": "The number pill to the right of a workspace name <strong>is itself a status light</strong>. It uses the pane-status palette from the first table above (and honours the same Status badges override), and its colour names the <strong>one pane under that heading that most wants you</strong>. The order is \"what is stuck on me\", not \"what is worst\": <code>awaiting</code> → <code>error</code> → <code>running</code> → <code>starting</code> → <code>idle</code> → <code>disconnected</code> → <code>stopped</code> → <code>exited</code> → <code>waiting</code>. Hovering spells the status out.",
+          "callout2": {
+            "title": "The group row’s number is grey on purpose",
+            "text": "The same pill stays colourless on a <strong>group row</strong>, because that row already says its run state in the square beside the name. The square has four states and a pane status has nine; two different scales side by side just read as two signals disagreeing. A workspace heading has no square, and it is often the only row left on screen once its section is folded — so it is the one that gets the colour."
           }
         },
         "intro": "A lookup table for button icons: spot a button in the interface and come here for its name, which area it lives in, and what pressing it does. Every one of them matches an icon that really exists in the code, and the name column keeps the original English <code>title</code> / <code>aria-label</code>.",
@@ -4694,6 +5030,278 @@
             "branch": "main",
             "backend": "backend",
             "clock": "14:20"
+          }
+        },
+        "s9": {
+          "title": "Prompt skill icons",
+          "p1": "Every prompt skill carries its own icon, and it shows up in three places: the slots of the <strong>skill ring</strong> that fans out of the title bar’s ∞ button, the heading of the preview card beside that ring, and the editing drawer in <strong>Settings ▸ Prompts</strong>. These <strong>24</strong> are the built-in vector icons, drawn from the same shapes the product uses.",
+          "nameCol": "Name (what Settings calls it)",
+          "useCol": "What it draws, and what it suits",
+          "p2": "To use something else, type a character or paste an emoji into the last box of the icon row. <strong>Only the first character is kept</strong> (a ZWJ emoji sequence or a flag counts as one) — paste a whole string and the rest is dropped, because a ring slot has room for exactly one glyph.",
+          "builtin": {
+            "advance": {
+              "what": "Fast-forward — work that keeps pushing ahead."
+            },
+            "green": {
+              "what": "Check in a circle — verify, get the suite to green."
+            },
+            "scan": {
+              "what": "Magnifier — survey without changing anything."
+            },
+            "doc": {
+              "what": "Page with a folded corner — docs and reports."
+            },
+            "refactor": {
+              "what": "Cycle arrow — refactor and tidy in rounds."
+            },
+            "edit": {
+              "what": "Pencil — a one-off prompt written on the spot."
+            },
+            "bug": {
+              "what": "Beetle — hunt and fix a defect."
+            },
+            "test": {
+              "what": "Flask — write or run tests."
+            },
+            "rocket": {
+              "what": "Rocket — ship it, cut a release."
+            },
+            "shield": {
+              "what": "Shield — security review and hardening."
+            },
+            "bolt": {
+              "what": "Lightning — performance work."
+            },
+            "sparkle": {
+              "what": "Two sparks — clean up and polish."
+            },
+            "branch": {
+              "what": "Git graph — branch, rebase, merge."
+            },
+            "database": {
+              "what": "Cylinder — schema, queries, migrations."
+            },
+            "terminal": {
+              "what": "Prompt — run something in a shell."
+            },
+            "globe": {
+              "what": "Globe — translation and locales."
+            },
+            "chart": {
+              "what": "Bars — measure, analyse, report numbers."
+            },
+            "clock": {
+              "what": "Clock — anything scheduled or timed."
+            },
+            "lock": {
+              "what": "Padlock — auth, permissions, secrets."
+            },
+            "package": {
+              "what": "Box — dependencies, bundling, packaging."
+            },
+            "question": {
+              "what": "Question mark — ask before acting."
+            },
+            "list": {
+              "what": "Bulleted lines — plan, inventory, checklist."
+            },
+            "eye": {
+              "what": "Eye — review and watch without touching."
+            },
+            "star": {
+              "what": "Star — the one that matters most."
+            }
+          }
+        }
+      },
+      "crossPlatform": {
+        "intro": "Navide runs on macOS, Windows and Linux, but the other seven topics all describe the macOS window. This page covers only what genuinely differs between the three: which file to download, how updating works, which buttons moved, and what the platform-specific machinery underneath means for you in practice. Anything not mentioned here behaves as the other topics describe.",
+        "s1": {
+          "title": "Getting it and installing it",
+          "p1": "Every release ships macOS, Windows and Linux installers at the same time. Take the one for your platform.",
+          "table": {
+            "platform": "Platform",
+            "file": "What to download",
+            "how": "How to install it"
+          },
+          "downloads": {
+            "macos": {
+              "platform": "macOS",
+              "file": "Navide-<version>-arm64.dmg",
+              "how": "Drag it to Applications and open it normally. It is signed with a Developer ID certificate and notarized by Apple, so no Gatekeeper workaround is needed. Requires macOS 13 or newer on Apple silicon."
+            },
+            "winX64": {
+              "platform": "Windows x64",
+              "file": "Navide-<version>-win-x64.exe",
+              "how": "For the usual Intel or AMD machine."
+            },
+            "winArm": {
+              "platform": "Windows on Arm",
+              "file": "Navide-<version>-win-arm64.exe",
+              "how": "For an Arm-based Windows machine. This is a native build, not x64 under emulation."
+            },
+            "linuxAppImage": {
+              "platform": "Linux (AppImage)",
+              "file": "Navide-<version>-x86_64.AppImage",
+              "how": "chmod +x it, then run it. It carries its own FUSE runtime, so no libfuse package is needed."
+            },
+            "linuxDeb": {
+              "platform": "Linux (.deb)",
+              "file": "Navide-<version>-amd64.deb",
+              "how": "Install it with sudo apt install. It lands in /opt/Navide/navide, puts a navide command on PATH, and adds a desktop entry."
+            }
+          },
+          "note": "Each release also carries a .zip and a few .yml manifests. Those are what the in-app updater reads; installing by hand needs only one of the five files above.",
+          "h1": "The Windows installer",
+          "p2": "It is not a one-click installer: it asks which directory to install into, and it installs <strong>for the current Windows user</strong> rather than for the whole machine, so it needs no administrator rights. The shortcut it creates is called Navide.",
+          "callout": {
+            "title": "SmartScreen blocks the first run",
+            "text": "The Windows installer is not code-signed yet, so SmartScreen shows \"Windows protected your PC\" with the publisher listed as unknown. Choose <strong>More info</strong>, then <strong>Run anyway</strong>. Every new installer asks again; it is not a sign that the download was tampered with."
+          },
+          "h2": "Combinations that are not published",
+          "p3": "macOS ships for Apple silicon only — there is no Intel build. Linux ships x64 only; an arm64 build exists but is produced solely on a manual build run and is not published yet."
+        },
+        "s2": {
+          "title": "Where downloads come from: GitHub and dl.navide.dev",
+          "p1": "The same file is served from two places: GitHub Releases, and Navide's own download mirror at <code>dl.navide.dev</code>. They are not primary and backup — they are two outlets for the same bytes.",
+          "list": {
+            "readme": "<strong>The README's download list</strong> carries a <em>mirror</em> link beside every line, pointing at the same file on the mirror. Whichever side is slow for you, take the other.",
+            "identical": "The two are <strong>byte for byte identical</strong>. After writing the mirror, the release pipeline downloads every file back from <code>dl.navide.dev</code> and compares sha256 sums, failing the step on any mismatch — so the mirror is never stale and never half-uploaded.",
+            "website": "<strong>The website's</strong> download buttons probe the mirror first and link there when it answers, falling back to GitHub only when it does not."
+          },
+          "h1": "Which side in-app updates use",
+          "p2": "Updating still <strong>reads GitHub by default</strong>. It switches to the mirror only on a network-level failure — host not found, connection refused, timeout, a 5xx from the server — and once it has switched, it stays on the mirror for the rest of that run.",
+          "note": "<strong>A 404 or a checksum mismatch does not trigger the switch.</strong> The mirror holds the same file, so switching would fail the same way; reporting the error as-is is what makes the real problem visible."
+        },
+        "s3": {
+          "title": "Auto-update across platforms",
+          "p1": "In-app updating is not available for every way of installing. What decides it is the install shape, not the operating system.",
+          "table": {
+            "install": "How it was installed",
+            "updates": "In-app updates"
+          },
+          "channels": {
+            "mac": {
+              "install": "macOS .dmg or .zip",
+              "updates": "Yes."
+            },
+            "win": {
+              "install": "Windows .exe installer",
+              "updates": "Yes — but because the installer is not code-signed, updates are installed without signature verification for the same reason."
+            },
+            "appimage": {
+              "install": "Linux AppImage",
+              "updates": "Yes."
+            },
+            "deb": {
+              "install": "Linux .deb",
+              "updates": "No. Updates for that install come from apt, alongside the rest of the system's packages."
+            }
+          },
+          "h1": "The three stages behave identically everywhere",
+          "p2": "Settings ▸ Updates splits updating into <strong>Check</strong>, <strong>Download</strong> and <strong>Install</strong>, and none of the three changes with the platform: automatic checks are on by default, automatic download is on by default but applies only to patch releases, and install-on-quit is off by default. Installing always restarts the app, and every CLI pane with it — which is exactly what the button says: \"Restart to install\".",
+          "callout": {
+            "title": "What that page looks like on a .deb install",
+            "text": "The Check for updates button is disabled, the status line reads \"Automatic updates aren't available in this build.\", and the three-stage track is blank. Nothing is broken — that install shape hands updating to the package manager by design."
+          }
+        },
+        "s4": {
+          "title": "Differences you will actually notice",
+          "h1": "Window controls and the menu bar",
+          "p1": "Navide draws its own title bar. On macOS the system still paints the traffic lights over it; on Windows and Linux it does not — a frameless window on Linux genuinely has no buttons at all — so on those two platforms Navide draws its own minimize, maximize/restore and close buttons at the top right.",
+          "list": {
+            "controls": "Those three buttons <strong>always sit above everything else</strong>, including the welcome screen you see before any project is open. No overlay can cover them.",
+            "menubar": "On Windows and Linux the <strong>native menu bar is hidden by default</strong> — press <kbd class=\"cph-kbd\">Alt</kbd> to reveal it — so it does not stack a second bar on top of the drawn title bar.",
+            "appMenu": "Neither platform has the macOS application menu, so <em>Settings…</em>, <em>Check for Updates…</em> and <em>Quit</em> live under <strong>File</strong> instead.",
+            "closeItem": "The <strong>Window</strong> menu gains a <em>Close</em> item for closing the window. macOS has no such item, because there <kbd class=\"cph-kbd\">⌘W</kbd> is reserved for closing a pane.",
+            "pluginWindows": "Windows drawn by a plugin — the Git window among them — use the <strong>system's own frame</strong> on Windows and Linux rather than the drawn controls: what runs inside them is the plugin's own content, which has no bridge to the host and so cannot draw the buttons itself."
+          },
+          "h2": "Closing the last window asks first",
+          "p2": "On Windows and Linux, closing the last window quits the whole application. So Navide asks <strong>before</strong> the window actually closes, which is the only moment Cancel can still do anything — asked afterwards, Cancel would leave a running process with no window to get back into. The dialog offers \"Don't show this reminder again\"; ticking it stops the question, and \"Confirm before closing\" in Settings brings it back.",
+          "callout": {
+            "title": "macOS works differently",
+            "text": "On macOS, closing a window does not quit the app — it stays in the Dock — so there is no such question there; the confirmation appears on ⌘Q instead, with the window still on screen. One thing to watch on Windows and Linux: the guard is attached to <strong>every</strong> window, not just the main one, so a Plans or Git window you left open counts as the last one."
+          },
+          "h3": "Modifiers and shortcuts",
+          "p3": "Menu items with accelerators follow the platform: ⌘ on macOS, <kbd class=\"cph-kbd\">Ctrl</kbd> on Windows and Linux. Every rule at the pane and editor level can be rebound one by one in <strong>Settings ▸ Shortcuts</strong>, so if a combination is awkward on your keyboard, change it there.",
+          "h4": "Selecting text in a terminal",
+          "p4": "While a CLI has mouse reporting on, a plain drag is forwarded to the program and selects nothing. Hold <kbd class=\"cph-kbd\">Option</kbd> on macOS, or <kbd class=\"cph-kbd\">Shift</kbd> on Windows and Linux, to force a text selection."
+        },
+        "s5": {
+          "title": "What the machinery underneath means for you",
+          "h1": "The terminal on Windows",
+          "p1": "Panes on Windows run on the system's ConPTY, which needs a console host executable that the packaging tools do not find on their own. Navide therefore collects it into the bundle explicitly — and <strong>every release opens a real ConPTY inside the packaged executable</strong> and fails the build if it cannot. Without that file the failure is not occasional: every pane dies the instant it opens. The x64 and Arm64 builds are each checked separately.",
+          "p2": "CLI panes on Windows <strong>receive their command directly</strong>, not through PowerShell. PowerShell's <code>-Command</code> re-parses the string as PowerShell code: the braces of the MCP configuration JSON are read as a script block and an <code>&amp;</code> in a URL as the call operator, so every MCP-wired pane used to die at launch on a parser error. Plain terminal panes — the ones that are not a CLI agent — are unchanged and still go through PowerShell.",
+          "h2": "Where credentials are kept",
+          "credTable": {
+            "platform": "Platform",
+            "store": "Stored in",
+            "means": "What that means for you"
+          },
+          "creds": {
+            "macos": {
+              "store": "The Keychain",
+              "means": "Reading a credential can raise a macOS permission dialog asking you to Allow it. A Navide Cloud connection that sits there going nowhere is usually that dialog waiting for an answer."
+            },
+            "windows": {
+              "store": "A file encrypted with DPAPI",
+              "means": "The file is tied to your Windows account: no other account on the machine can open it, and copying it to another machine will not work either. Nothing ever prompts during a read or write."
+            },
+            "linux": {
+              "store": "A file with 0600 permissions",
+              "means": "File permissions are the only thing protecting it — there is no operating-system vault in the way."
+            }
+          },
+          "p3": "Git account tokens are a separate store, kept through the operating system's keychain with only ciphertext on disk. If this machine cannot reach that keychain, the Add account button disappears, existing accounts become read-only, and the page says outright that encryption is unavailable on this system.",
+          "h3": "Who clears up afterwards",
+          "p4": "On Windows every pane's child processes go into a <em>Job Object</em>: closing the pane closes that handle, and the kernel takes the whole process tree with it — even when Navide itself exits abnormally. The price is that Windows offers no graceful termination signal, so a CLI is terminated outright and <strong>may not finish writing its transcript</strong>.",
+          "p5": "macOS and Linux are the other way round: a child starts its own session, so nothing takes it down for free. Navide therefore sweeps on shutdown and sweeps again on the next launch for whatever the previous run missed, and shows a leftover-process warning in the status bar so you can decide whether to clear them. On those two platforms the signal is SIGTERM, which gives a CLI the chance to finish its transcript first.",
+          "p6": "On all three platforms the backend follows the app out: the app tells the backend its own process id at startup, and the backend watches that id and shuts itself down when it disappears.",
+          "h4": "Whether your CLIs can be found",
+          "p7": "A program started from Finder or a desktop launcher inherits a PATH that is not the one you see in a terminal — and every coding CLI's installer writes its directory into a shell startup file. So on macOS and Linux, Navide additionally asks a login shell to print its PATH, and falls back to a list of the usual install locations when the shell will not answer. Windows does none of this: its PATH lives in the registry, so the process already has the complete one.",
+          "p8": "Claude Code hooks on Linux <strong>work without curl</strong>: when the hook is installed, Navide checks whether the machine has curl and writes the same request with python3 when it does not. Ubuntu Desktop ships without curl, and a hook that fails quietly takes every hook-driven feature down with it."
+        },
+        "s6": {
+          "title": "Known platform limitations",
+          "h1": "Windows",
+          "win": {
+            "signing": "<strong>The installer is not code-signed.</strong> Every new version is flagged by SmartScreen again, and in-app updates are installed without signature verification for the same reason.",
+            "symlinks": "<strong>Per-pane CLI homes and managed skills are built from symbolic links</strong>, which Windows does not let an ordinary process create. Either turn on Windows Developer Mode (<em>Settings ▸ For developers</em>) or run Navide elevated. Without it nothing fails silently: the affected pane prints a yellow <code>[mcp]</code> line explaining why once it starts. This only reaches the CLIs whose MCP wiring is a file in their config directory — Antigravity CLI, Grok CLI and Kimi Code.",
+            "schedule": "<strong>The Schedule tab lists nothing.</strong> Navide reads the user crontab and macOS launchd jobs, and Windows has neither; Task Scheduler (taskschd.msc) is deliberately not integrated, because Navide never creates scheduled jobs of its own and Task Scheduler already manages the machine's. The screen says so rather than showing you an empty list."
+          },
+          "h2": "Linux",
+          "linux": {
+            "deb": "<strong>The .deb install has no in-app updates</strong> — they come through apt. Use the AppImage if you want the app to update itself.",
+            "arm64": "<strong>arm64 is not published.</strong> It is built only on a manual build run and does not appear on the release page.",
+            "terminal": "<strong>\"Open in terminal\" relies on detection.</strong> Linux has no single default terminal, so Navide tries <code>$TERMINAL</code>, then <code>xdg-terminal-exec</code>, then a list of the common emulators; when none of them works it reports a failure rather than quietly doing nothing."
+          },
+          "h3": "Across all three",
+          "common": {
+            "macPerms": "The macOS privacy prompts — Automation, Files and Folders, Full Disk Access — <strong>have no equivalent on Windows or Linux</strong>. Wherever another topic tells you to grant something in System Settings, that applies to macOS only."
+          }
+        },
+        "s7": {
+          "title": "One person, several machines",
+          "p1": "Connecting two machines running different operating systems is not itself a platform matter: signing in to Navide Cloud, pairing, and cross-device messaging work the same way on all three, and are covered in <strong>Settings &amp; System</strong>. This section only adds what changes when the machines are not the same platform.",
+          "p2": "In <strong>Settings ▸ Navide Cloud</strong>, the sync list currently lets you turn on four things: prompt skills, MCP, skills and memory. <em>Credentials</em> is listed too, but its switch is disabled and its description says syncing is not supported yet — it is there so you know the scope exists, not so you can turn it on.",
+          "note": "Things that never travel with you anyway: each CLI's own installation and sign-in, credentials (held in each platform's own vault, in formats that do not interchange), and every absolute path. A second machine needs its CLIs installed and signed in on its own."
+        },
+        "mock": {
+          "controls": {
+            "caption": "The same title bar on either side. Drawn in HTML, so it follows your theme.",
+            "legend": {
+              "mac": {
+                "label": "macOS",
+                "text": "The system paints the traffic lights at the top left, so the title bar reserves a strip on that side for them."
+              },
+              "drawn": {
+                "label": "Windows and Linux",
+                "text": "Nothing is reserved on the left. Instead Navide draws its own three buttons at the top right: minimize, maximize/restore and close."
+              }
+            },
+            "sample": {
+              "title": "my-project"
+            }
           }
         }
       }
