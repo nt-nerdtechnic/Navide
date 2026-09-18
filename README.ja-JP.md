@@ -10,7 +10,7 @@ Navide は、一人の人間が複数の Coding Agent を指揮するための�
 
 [English](README.md) | [繁體中文](README.zh-TW.md) | 日本語
 
-[v0.2.5 をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.2.5) | [はじめに](docs/ja-JP/getting-started.md) | [ドキュメント](docs/ja-JP/README.md) | [ロードマップ](docs/ja-JP/roadmap.md)
+[v0.2.6 をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.2.6) | [はじめに](docs/ja-JP/getting-started.md) | [ドキュメント](docs/ja-JP/README.md) | [ロードマップ](docs/ja-JP/roadmap.md)
 
 [![Latest release](https://img.shields.io/github/v/release/nt-nerdtechnic/Navide?sort=semver&label=release&logo=github)](https://github.com/nt-nerdtechnic/Navide/releases/latest)
 [![Electron](https://img.shields.io/badge/Electron-44-47848F?logo=electron)](https://www.electronjs.org/)
@@ -115,13 +115,13 @@ Local-first は常に完全オフラインという意味ではありません�
 
 ## Navide を試す
 
-Navide は Apple silicon 上の macOS 13 以降、Linux x64、x64 および Arm 版 Windows をサポートします。v0.2.5 では Developer ID で署名され Apple の Notarization を通過した macOS 版に加え、Windows x64 Installer と Linux x64 Package を提供しています。
+Navide は Apple silicon 上の macOS 13 以降、Linux x64、x64 および Arm 版 Windows をサポートします。v0.2.6 では Developer ID で署名され Apple の Notarization を通過した macOS 版に加え、Windows x64 Installer と Linux x64 Package を提供しています。
 
-- [DMG をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.5/Navide-0.2.5-arm64.dmg) ([ミラー](https://dl.navide.dev/releases/v0.2.5/Navide-0.2.5-arm64.dmg))
-- [ZIP をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.5/Navide-0.2.5-arm64.zip) ([ミラー](https://dl.navide.dev/releases/v0.2.5/Navide-0.2.5-arm64.zip))
-- [Windows x64 Installer をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.5/Navide-0.2.5-win-x64.exe) ([ミラー](https://dl.navide.dev/releases/v0.2.5/Navide-0.2.5-win-x64.exe))
-- [Windows ARM64 Installer をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.5/Navide-0.2.5-win-arm64.exe) ([ミラー](https://dl.navide.dev/releases/v0.2.5/Navide-0.2.5-win-arm64.exe))
-- [Linux AppImage をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.5/Navide-0.2.5-x86_64.AppImage) ([ミラー](https://dl.navide.dev/releases/v0.2.5/Navide-0.2.5-x86_64.AppImage))・[Linux .deb をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.5/Navide-0.2.5-amd64.deb) ([ミラー](https://dl.navide.dev/releases/v0.2.5/Navide-0.2.5-amd64.deb))
+- [DMG をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.6/Navide-0.2.6-arm64.dmg) ([ミラー](https://dl.navide.dev/releases/v0.2.6/Navide-0.2.6-arm64.dmg))
+- [ZIP をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.6/Navide-0.2.6-arm64.zip) ([ミラー](https://dl.navide.dev/releases/v0.2.6/Navide-0.2.6-arm64.zip))
+- [Windows x64 Installer をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.6/Navide-0.2.6-win-x64.exe) ([ミラー](https://dl.navide.dev/releases/v0.2.6/Navide-0.2.6-win-x64.exe))
+- [Windows ARM64 Installer をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.6/Navide-0.2.6-win-arm64.exe) ([ミラー](https://dl.navide.dev/releases/v0.2.6/Navide-0.2.6-win-arm64.exe))
+- [Linux AppImage をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.6/Navide-0.2.6-x86_64.AppImage) ([ミラー](https://dl.navide.dev/releases/v0.2.6/Navide-0.2.6-x86_64.AppImage))・[Linux .deb をダウンロード](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.6/Navide-0.2.6-amd64.deb) ([ミラー](https://dl.navide.dev/releases/v0.2.6/Navide-0.2.6-amd64.deb))
 
 GitHub からのダウンロードが遅い、または失敗する場合は、隣の「ミラー」リンクをご利用ください。dl.navide.dev から配信される、バイト単位で同一のファイルです（リリースワークフローが両方に公開し、チェックサムの一致を確認しています）。
 
