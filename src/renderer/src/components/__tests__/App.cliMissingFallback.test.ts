@@ -70,6 +70,16 @@ describe('cli.missing is still handled for a spawn the probe blocks', () => {
   // its only route to the install prompt.
   it('keeps the listener that opens the install wizard', () => {
     const listener = block("backend.on('cli.missing', (raw) => {", '\n})\n')
-    expect(listener).toContain('promptCliInstall(ev.agent_key, pane?.agentLabel || ev.label || ev.agent_key, ev.pane_id)')
+    expect(listener).toContain('promptCliInstall(ev.agent_key, pane?.agentLabel || ev.label || ev.agent_key, paneId)')
+  })
+
+  // promptCliInstall reads a falsy pane id as "no pane at all", which is the
+  // branch that skips the don't-ask-again opt-out. An empty string is falsy
+  // and used to arrive here, so a spawn that named no pane opted the user's
+  // choice out of the decision. The backend no longer sends one; this
+  // normalizes whatever still does.
+  it('normalizes an empty pane id, so it cannot bypass the opt-out', () => {
+    const listener = block("backend.on('cli.missing', (raw) => {", '\n})\n')
+    expect(listener).toContain('const paneId = ev.pane_id || undefined')
   })
 })

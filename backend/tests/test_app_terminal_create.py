@@ -1260,3 +1260,60 @@ async def test_terminal_create_codex_seeds_hook_trust_for_the_final_codex_home(
         },
     })
     assert len(fake_home.seeded) == 1
+
+
+def _missing_probe(_agent_key: str, _command: object = None) -> None:
+    raise app.AgentCliProbeError("codex is not installed", {"reason": "not_found"})
+
+
+@pytest.mark.asyncio
+async def test_cli_missing_omits_an_empty_pane_id_rather_than_sending_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty pane id is not "no pane id" — but to the window it looks alike.
+
+    The renderer reads a falsy pane id as "no pane at all", which is the branch
+    that skips the don't-ask-again opt-out. Sending "" would therefore re-ask a
+    user who had switched the prompt off. terminal.create requires the key, so
+    only a caller that passes an empty one can produce this.
+    """
+    monkeypatch.setattr(app, "_probe_agent_cli_for_spawn", _missing_probe)
+    session = _session()
+
+    await app.handle_message(session, {
+        "id": "empty-pane",
+        "type": "terminal.create",
+        "payload": {"pane_id": "", "agent_key": "codex", "command": "codex", "cwd": "/ws"},
+    })
+
+    missing = _events(session, "cli.missing")
+    assert len(missing) == 1
+    assert missing[0]["agent_key"] == "codex"
+    assert missing[0]["reason"] == "not_found"
+    assert "pane_id" not in missing[0]
+
+
+@pytest.mark.asyncio
+async def test_cli_missing_still_carries_a_real_pane_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The opt-out only applies to a prompt that belongs to a pane, and an
+    embedded CLI dock owns a pane id without owning a pane entry — dropping it
+    is what would bypass the opt-out."""
+    monkeypatch.setattr(app, "_probe_agent_cli_for_spawn", _missing_probe)
+    session = _session()
+
+    await app.handle_message(session, {
+        "id": "with-pane",
+        "type": "terminal.create",
+        "payload": {
+            "pane_id": "codex-pane",
+            "agent_key": "codex",
+            "command": "codex",
+            "cwd": "/ws",
+        },
+    })
+
+    missing = _events(session, "cli.missing")
+    assert len(missing) == 1
+    assert missing[0]["pane_id"] == "codex-pane"

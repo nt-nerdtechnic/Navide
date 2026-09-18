@@ -5747,6 +5747,16 @@ async def onboarding_install_prompt(session: "Session", msg_id: str, msg_type: s
         bool(payload.get("dismissed", True)),
     )
     await session.send_json(make_response(msg_id, msg_type, result))
+    # The opt-out is a per-user setting stored once in the backend, but each
+    # window keeps its own mirror of it and only loads that mirror at startup.
+    # Without this a second window keeps prompting for a CLI the user just
+    # switched off. Broadcasting the whole list rather than the one flip keeps
+    # every mirror idempotent — a window that missed an earlier event is
+    # repaired by the next one.
+    if result.get("ok"):
+        await app.broadcast(make_event("cli.install_prompt_changed", {
+            "dismissed_ids": app.onboarding_deps.install_prompt_dismissals(),
+        }))
 
 
 @handler("onboarding.cli_health.dismiss")
@@ -6068,12 +6078,19 @@ async def _terminal_create_impl(
         # guided install. The error still propagates and cancels the spawn.
         if probe_error.details.get("reason") == "not_found":
             dep = app.onboarding_deps.DEPS_BY_ID.get(agent_key)
-            await session.send_json(make_event("cli.missing", {
+            missing: dict[str, Any] = {
                 "agent_key": agent_key,
                 "label": dep.label if dep else agent_key,
-                "pane_id": str(payload.get("pane_id") or ""),
                 "reason": "not_found",
-            }))
+            }
+            # Carry the pane id only when there really is one. An empty string
+            # used to go out for a spawn that named no pane, and the window
+            # reads a falsy pane id as "no pane at all" — the branch that
+            # bypasses the don't-ask-again opt-out (see promptCliInstall).
+            pane_id = str(payload.get("pane_id") or "")
+            if pane_id:
+                missing["pane_id"] = pane_id
+            await session.send_json(make_event("cli.missing", missing))
         raise
     if startup_probe:
         # A degraded not_found probe deliberately sends no cli.missing. The

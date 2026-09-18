@@ -9,6 +9,7 @@ share (the config and state roots) stays in each module.
 from __future__ import annotations
 
 import logging
+import os
 import shlex
 import stat
 import sys

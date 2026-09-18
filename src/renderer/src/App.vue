@@ -451,6 +451,7 @@ async function checkOnboarding(): Promise<void> {
     )
     onboardingComplete.value = resp.payload?.complete ?? true
     cliInstallPromptDismissed.value = new Set(resp.payload?.install_prompt_dismissed ?? [])
+    cliInstallPromptDismissedLoaded.value = true
     const health = resp.payload?.cli_health
     // One-time migration for selections made by renderer versions that stored
     // only UI settings. Persist the same path + fingerprint in the backend so
@@ -478,6 +479,12 @@ async function checkOnboarding(): Promise<void> {
     cliHealthGuide.value = cliHealthGuideForLaunch(resp.payload)
   } catch {
     // If the check fails, don't lock the user out — fail open.
+    //
+    // Failing open is right for the wizard and wrong for the opt-out list:
+    // `cliInstallPromptDismissed` stays empty here, and an empty set reads as
+    // "nothing dismissed", so a user who switched the prompt off would be
+    // asked again for the rest of the session. It is left unloaded instead,
+    // and promptCliInstall fetches it before it decides.
     onboardingComplete.value = true
   }
 }
@@ -581,6 +588,9 @@ watch(
   () => backend.status.value,
   (s) => {
     if (s === 'connected' && onboardingComplete.value === null) void checkOnboarding()
+    // A reconnect is the cheapest retry point for an opt-out list that failed
+    // to load; the loader no-ops once it holds one.
+    else if (s === 'connected') void loadCliInstallPromptDismissed()
     if (s === 'connected') { booting.value = false; bootError.value = false; void refreshOrphanCount() }
     // On a hard failure, keep the overlay and show an error + Retry (the app is
     // non-functional without a backend anyway). 'disconnected' is transient
@@ -12233,7 +12243,7 @@ backend.on('terminal.exit', (raw) => {
     // verdict here. The probe's agent key is the only one the event carries.
     const agentKey = ev.startup_probe?.agent_key
     if (ev.exit_code === 127 && ev.startup_probe?.reason === 'not_found' && agentKey && agentKey !== 'terminal') {
-      promptCliInstall(agentKey, agentKey, ev.pane_id)
+      void promptCliInstall(agentKey, agentKey, ev.pane_id)
     }
     return
   }
@@ -12253,7 +12263,7 @@ backend.on('terminal.exit', (raw) => {
     syncViews()
   }
   if (ev.exit_code === 127 && pane.agentKey !== 'terminal') {
-    promptCliInstall(pane.agentKey, pane.agentLabel, pane.id)
+    void promptCliInstall(pane.agentKey, pane.agentLabel, pane.id)
   }
 })
 
@@ -12277,11 +12287,27 @@ backend.on('terminal.input_unblocked', (raw) => {
 backend.on('cli.missing', (raw) => {
   const ev = raw as { agent_key?: string; label?: string; pane_id?: string }
   if (!ev?.agent_key || ev.agent_key === 'terminal') return
-  const pane = ev.pane_id ? panes.value.find((p) => p.id === ev.pane_id) : undefined
+  // An absent pane id and an empty one mean the same thing here, and only one
+  // of the two survives promptCliInstall's truthiness test. Normalize so a
+  // spawn that named no pane cannot arrive looking like a pane that has one.
+  const paneId = ev.pane_id || undefined
+  const pane = paneId ? panes.value.find((p) => p.id === paneId) : undefined
   // Pass the event's pane id, not the matched pane's: embedded CLI docks (e.g.
   // the Pipeline Manager) share this window's session but own no pane entry, and
   // dropping their id would bypass the "don't ask again" opt-out.
-  promptCliInstall(ev.agent_key, pane?.agentLabel || ev.label || ev.agent_key, ev.pane_id)
+  void promptCliInstall(ev.agent_key, pane?.agentLabel || ev.label || ev.agent_key, paneId)
+})
+
+// Another window switched the guided-install prompt off (or back on) for a
+// CLI. The opt-out is one per-user setting in the backend, but every window
+// keeps its own mirror and only loads it at startup — without this, the window
+// that did not do the switching keeps prompting. The event carries the whole
+// list, so adopting it also repairs a mirror that missed an earlier event.
+backend.on('cli.install_prompt_changed', (raw) => {
+  const ev = raw as { dismissed_ids?: string[] }
+  if (!Array.isArray(ev?.dismissed_ids)) return
+  cliInstallPromptDismissed.value = new Set(ev.dismissed_ids)
+  cliInstallPromptDismissedLoaded.value = true
 })
 
 // Some of this window's env settings never reached the CLI. Sent only to the
@@ -12378,6 +12404,43 @@ const cliInstallRequest = ref<{
 /** Dep ids the user switched the prompt off for, mirrored from the backend. */
 const cliInstallPromptDismissed = ref<Set<string>>(new Set())
 /**
+ * False until the set above has actually been read from the backend.
+ *
+ * An empty set means "nothing dismissed" only once this is true; before that
+ * it means "not known yet", and the two must never be confused — conflating
+ * them is how a failed onboarding.status turns into prompting a user who
+ * opted out.
+ */
+const cliInstallPromptDismissedLoaded = ref(false)
+/** In-flight load, so racing triggers make one request instead of several. */
+let cliInstallPromptDismissedLoad: Promise<void> | null = null
+
+/**
+ * Read the opt-out list on its own, for when checkOnboarding could not.
+ *
+ * Uses status_quick rather than onboarding.status: the backend answers it
+ * inline from filesystem stats, off the single-worker onboarding executor, so
+ * it cannot queue behind a full 18-dep probe — which is the timeout that left
+ * the list unloaded in the first place. Retries are driven by reconnects and
+ * by prompts that actually want to open; there is deliberately no polling.
+ */
+function loadCliInstallPromptDismissed(): Promise<void> {
+  if (cliInstallPromptDismissedLoaded.value) return Promise.resolve()
+  cliInstallPromptDismissedLoad ??= backend
+    .send<OnboardStatus>('onboarding.status_quick', {})
+    .then((resp) => {
+      cliInstallPromptDismissed.value = new Set(resp.payload?.install_prompt_dismissed ?? [])
+      cliInstallPromptDismissedLoaded.value = true
+    })
+    .catch(() => {
+      // Stays unloaded so the next trigger retries.
+    })
+    .finally(() => {
+      cliInstallPromptDismissedLoad = null
+    })
+  return cliInstallPromptDismissedLoad
+}
+/**
  * Sign-in state of the CLI the install dialog is about, for its final step.
  *
  * `null` means "cannot be known" and is the answer for every CLI that keeps no
@@ -12411,12 +12474,22 @@ function onCliInstalled(): void {
 // mainModalOpen with the sibling watches above.
 watch([reconnectPickerOpen, cliInstallRequest, whatsNewEntry], () => setContext('modalOpen', mainModalOpen()))
 
-function promptCliInstall(agentKey: string, agentLabel: string, paneId?: string): void {
+async function promptCliInstall(agentKey: string, agentLabel: string, paneId?: string): Promise<void> {
   if (cliInstallRequest.value) return
   // The opt-out only silences the AUTOMATIC prompt (a pane dying with 127).
   // Picking the CLI in the spawn dropdown is the user asking for it, so that
   // path always opens — declining once is not the same as opting out.
-  if (paneId && cliInstallPromptDismissed.value.has(agentKey)) return
+  if (paneId) {
+    // Decide against the real list, not against an empty one that was never
+    // loaded. Still unloaded after this means the backend is unreachable —
+    // hold the prompt rather than risk asking someone who opted out. Nothing
+    // is lost by waiting: a CLI cannot be spawned over a dead backend either.
+    if (!cliInstallPromptDismissedLoaded.value) await loadCliInstallPromptDismissed()
+    if (!cliInstallPromptDismissedLoaded.value) return
+    if (cliInstallPromptDismissed.value.has(agentKey)) return
+    // The await gave another trigger time to open the dialog.
+    if (cliInstallRequest.value) return
+  }
   cliInstallRequest.value = {
     depId: agentKey,
     label: agentLabel,
@@ -17836,7 +17909,7 @@ function paneIsCommander(p: ActivePane): boolean {
       @spawn-for-issue="onHandleIssue"
       @rename-pane="setPaneCustomName"
       @rename-workspace="onRenameWorkspace"
-      @install-cli="(p) => promptCliInstall(p.agentKey, p.label)"
+      @install-cli="(p) => void promptCliInstall(p.agentKey, p.label)"
       :collapsed="leftPanelCollapsed"
       :views="shellLayout.slots.left.views"
       @update:collapsed="setLeftCollapsed"
