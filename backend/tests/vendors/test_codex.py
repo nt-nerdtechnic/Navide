@@ -28,6 +28,12 @@ def fake_codex_session(tmp_path: Path, set_home) -> Path:
     return fake_home / ".codex" / "sessions" / "2026" / "05" / "27" / "rollout-test.jsonl"
 
 
+def _task_complete_event(last_agent_message: str = "", ts: str = "2026-05-27T13:18:04Z") -> dict:
+    return {"timestamp": ts, "type": "event_msg",
+            "payload": {"type": "task_complete", "turn_id": "u",
+                        "last_agent_message": last_agent_message}}
+
+
 def _token_count_event(input_t: int, cached_in: int, output_t: int, reasoning_out: int) -> dict:
     return {
         "timestamp": "2026-05-27T13:18:03.369Z",
@@ -257,6 +263,7 @@ def test_parse_activity_token_count_carries_last_assistant_text(
             },
         },
         _token_count_event(100, 0, 50, 0),
+        _task_complete_event(),
     ])
     reader = CodexLogReader()
     seen: set[str] = set()
@@ -286,6 +293,7 @@ def test_parse_activity_text_rides_user_events_and_turn_complete(
             "payload": {"type": "agent_message", "message": "Reply body"},
         },
         _token_count_event(100, 0, 50, 0),
+        _task_complete_event(),
     ])
     reader = CodexLogReader()
     seen: set[str] = set()
@@ -306,7 +314,7 @@ def test_parse_activity_text_rides_user_events_and_turn_complete(
 def test_parse_activity_last_text_persists_across_poll_batches(
     fake_codex_session: Path,
 ) -> None:
-    # The assistant message and its token_count boundary can land in different
+    # The assistant message and its task_complete boundary can land in different
     # poll batches; the persisted last_text must still reach turn_complete.
     _write_jsonl(fake_codex_session, [
         {
@@ -323,9 +331,9 @@ def test_parse_activity_last_text_persists_across_poll_batches(
     # Batch 1: only the assistant message is present yet.
     first = reader.parse_activity(fake_codex_session, seen)
     assert not [e for e in first if e.event_type == "turn_complete"]
-    # Batch 2: the token_count boundary appends later.
+    # Batch 2: the task_complete boundary appends later.
     with fake_codex_session.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(_token_count_event(100, 0, 50, 0)) + "\n")
+        f.write(json.dumps(_task_complete_event()) + "\n")
     second = reader.parse_activity(fake_codex_session, seen)
     turns = [e for e in second if e.event_type == "turn_complete"]
     assert len(turns) == 1
@@ -360,6 +368,80 @@ def test_parse_activity_user_message_carries_prompt_text(
     ]
 
 
+def _item_completed_user(text: str | None, ts: str, *, image: bool = False) -> dict:
+    """The prompt record shape codex-cli 0.155 writes: no `user_message`
+    event; the prompt completes as an `item_completed` with a `UserMessage`
+    item whose text sits in `content` blocks (images as `local_image`)."""
+    content: list[dict] = []
+    if image:
+        content.append({"type": "local_image", "path": "/tmp/shot.png"})
+    if text is not None:
+        content.append({"type": "text", "text": text, "text_elements": []})
+    return {"timestamp": ts, "type": "event_msg",
+            "payload": {"type": "item_completed", "thread_id": "t", "turn_id": "u",
+                        "item": {"type": "UserMessage", "id": "m", "content": content}}}
+
+
+def test_parse_activity_item_completed_user_message_carries_prompt_text(
+    fake_codex_session: Path,
+) -> None:
+    """Rollouts written by codex-cli 0.155 have no `user_message` event at
+    all — the typed prompt only appears as an `item_completed` UserMessage —
+    so the pane went unnamed for every Codex session. That shape must reach
+    the frontend under the same detail ("user_message") it keys on, with the
+    same "<"-stub filter; an image-only prompt and a completed AgentMessage
+    stay text-less."""
+    _write_jsonl(fake_codex_session, [
+        _item_completed_user("Fix the login bug", "2026-09-18T15:00:00Z"),
+        _item_completed_user("<!-- agent-team-session: at-pane:x -->", "2026-09-18T15:00:01Z"),
+        _item_completed_user("[Image #1] 為什麼沒有反應", "2026-09-18T15:00:02Z", image=True),
+        _item_completed_user(None, "2026-09-18T15:00:03Z", image=True),
+        {"timestamp": "2026-09-18T15:00:04Z", "type": "event_msg",
+         "payload": {"type": "item_completed", "item": {
+             "type": "AgentMessage", "id": "a",
+             "content": [{"type": "Text", "text": "Reply body"}]}}},
+    ])
+    reader = CodexLogReader()
+    events = reader.parse_activity(fake_codex_session, set())
+    assert [(e.detail, e.text) for e in events] == [
+        ("user_message", "Fix the login bug"),
+        ("user_message", ""),
+        ("user_message", "[Image #1] 為什麼沒有反應"),
+        ("user_message", ""),
+        ("item_completed", ""),
+    ]
+
+
+def test_parse_activity_turn_ends_at_task_complete_not_token_count(
+    fake_codex_session: Path,
+) -> None:
+    """token_count fires once per model call — after every tool call inside
+    a turn — so ending the turn there raised "done" mid-turn. The turn ends
+    at task_complete (text: the stashed assistant reply, else the event's
+    own last_agent_message) or at turn_aborted (Esc; nothing to judge)."""
+    _write_jsonl(fake_codex_session, [
+        {"timestamp": "2026-09-18T15:00:00Z", "type": "event_msg",
+         "payload": {"type": "task_started", "turn_id": "u1"}},
+        _token_count_event(100, 0, 50, 0),
+        {"timestamp": "2026-09-18T15:00:02Z", "type": "response_item",
+         "payload": {"type": "custom_tool_call", "name": "shell"}},
+        _token_count_event(200, 0, 80, 0),
+        _token_count_event(300, 0, 90, 0),
+        _task_complete_event("Only in the event", ts="2026-09-18T15:00:05Z"),
+        {"timestamp": "2026-09-18T15:00:06Z", "type": "event_msg",
+         "payload": {"type": "agent_message", "message": "Partial"}},
+        {"timestamp": "2026-09-18T15:00:07Z", "type": "event_msg",
+         "payload": {"type": "turn_aborted", "turn_id": "u2", "reason": "interrupted"}},
+    ])
+    reader = CodexLogReader()
+    events = reader.parse_activity(fake_codex_session, set())
+    turns = [e for e in events if e.event_type == "turn_complete"]
+    assert [(e.detail, e.text, e.timestamp) for e in turns] == [
+        ("task_complete", "Only in the event", "2026-09-18T15:00:05Z"),
+        ("turn_aborted", "", "2026-09-18T15:00:07Z"),
+    ]
+
+
 # ── parse_activity: the seen_keys bag stays O(1) ─────────────────────────────
 # It lives as long as the rollout does, so a walk must leave one high-water
 # mark in it, never a key per line (GitHub #23).
@@ -380,6 +462,7 @@ def _long_rollout(path: Path, turns: int) -> int:
             "payload": {"type": "agent_message", "message": f"reply {i}"},
         })
         records.append(_token_count_event(100, 0, 50, 0))
+        records.append(_task_complete_event(f"reply {i}"))
     _write_jsonl(path, records)
     return len(records)
 
@@ -445,7 +528,7 @@ def test_parse_activity_last_text_sentinel_coexists_with_the_mark(
     assert seen == {"act_hw::1", "__lasttext__:Reply body"}
 
     with fake_codex_session.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(_token_count_event(100, 0, 50, 0)) + "\n")
+        f.write(json.dumps(_task_complete_event()) + "\n")
     turns = [
         e for e in reader.parse_activity(fake_codex_session, seen)
         if e.event_type == "turn_complete"
@@ -559,6 +642,26 @@ def _count(ts: str, input_t: int, cached_in: int, output_t: int, reasoning_out: 
     ev = _token_count_event(input_t, cached_in, output_t, reasoning_out)
     ev["timestamp"] = ts
     return ev
+
+
+def test_turns_open_at_item_completed_user_message(
+    fake_codex_session: Path,
+) -> None:
+    """The 0.155 prompt shape cuts turns exactly like the old user_message
+    event did — without it every call would collapse into one prompt-less
+    turn."""
+    reader = CodexLogReader()
+    _write_jsonl(fake_codex_session, [
+        {"type": "session_meta", "payload": {"cwd": "/x", "id": "thread-1", "model": "gpt-5"}},
+        _item_completed_user("幫我分析", "2026-09-18T13:00:01Z"),
+        _count("2026-09-18T13:00:05Z", 1000, 400, 50, 10),
+        _item_completed_user("再來", "2026-09-18T13:10:00Z", image=True),
+        _count("2026-09-18T13:10:04Z", 1100, 450, 60, 10),
+    ])
+    turns = reader.turns_for_session(fake_codex_session)
+    assert [(t.turn_index, t.prompt_excerpt, t.call_count) for t in turns] == [
+        (1, "幫我分析", 1), (2, "再來", 1),
+    ]
 
 
 def test_turns_open_at_user_message_and_difference_every_token_count(

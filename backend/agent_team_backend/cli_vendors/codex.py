@@ -53,7 +53,7 @@ log = logging.getLogger("agent_team_backend.log_readers.codex")
 # per-file seen_keys set (avoids needing a separate state dict).
 _CUM_PREFIX = "__cum__:"
 # Prefix for stashing the last assistant text inside seen_keys, so a turn whose
-# assistant message and token_count boundary land in different poll batches
+# assistant message and task_complete boundary land in different poll batches
 # still delivers the text on its turn_complete (Codex's per-turn boundary).
 _TEXT_PREFIX = "__lasttext__:"
 
@@ -76,6 +76,36 @@ def _int(v) -> int:  # noqa: ANN001
         return max(0, int(v))
     except (TypeError, ValueError):
         return 0
+
+
+def _typed_prompt(payload: dict) -> str | None:
+    """The user's typed prompt carried by an `event_msg` payload, or None when
+    the record is not a user prompt at all.
+
+    Two shapes, because Codex changed the rollout format: up to mid-2026 the
+    prompt was its own `user_message` event with a `message` string; rollouts
+    written since (codex-cli 0.155 observed) have no `user_message` record and
+    instead complete the prompt as an `item_completed` whose `item.type` is
+    `UserMessage`, with the text spread over `content` blocks of type `text`
+    (images ride as `local_image` blocks with no text). An empty string means
+    a prompt record with nothing typed in it.
+    """
+    ptype = payload.get("type")
+    if ptype == "user_message":
+        return str(payload.get("message") or "")
+    if ptype != "item_completed":
+        return None
+    item = payload.get("item")
+    if not isinstance(item, dict) or item.get("type") != "UserMessage":
+        return None
+    content = item.get("content")
+    if not isinstance(content, list):
+        return ""
+    return "\n".join(
+        str(block.get("text") or "")
+        for block in content
+        if isinstance(block, dict) and block.get("type") == "text"
+    )
 
 
 def _read_cumulative(seen_keys: set[str]) -> tuple[int, int]:
@@ -101,7 +131,7 @@ def _write_cumulative(seen_keys: set[str], input_total: int, output_total: int) 
 class CodexLogReader(LogReader):
     vendor: str = "codex"
 
-    #: turns_for_session cuts on the rollout's own user_message records.
+    #: turns_for_session cuts on the rollout's own user prompt records.
     turns_method: str = "exact"
 
     #: parse_activity walks a dense ascending line counter and resumes from
@@ -415,11 +445,11 @@ class CodexLogReader(LogReader):
         return IncrementalParseResult([event], next_checkpoint)
 
     def turns_for_session(self, path: Path, session_id: str = "") -> list[TurnUsage]:
-        """A turn opens at each `user_message` event; every `token_count`
+        """A turn opens at each user prompt record (see _typed_prompt); every `token_count`
         inside it is one model call, measured as the delta of the cumulative
         `total_token_usage` against the previous one (the same counters
         parse_session_file differences, kept apart instead of folded). A
-        rollout with no user_message record at all falls back to one turn
+        rollout with no prompt record at all falls back to one turn
         per token_count.
 
         Codex's input_tokens already contains cached_input_tokens and its
@@ -462,11 +492,12 @@ class CodexLogReader(LogReader):
                     continue
                 ts = str(rec.get("timestamp") or "") or None
                 ptype = payload.get("type")
-                if ptype == "user_message":
+                prompt = _typed_prompt(payload)
+                if prompt is not None:
                     saw_prompt = True
                     current = TurnUsage(
                         turn_index=0, session_id=sid, started_at=ts, ended_at=None,
-                        prompt_excerpt=turn_excerpt(str(payload.get("message") or "")),
+                        prompt_excerpt=turn_excerpt(prompt),
                     )
                     turns.append(current)
                     continue
@@ -514,9 +545,8 @@ class CodexLogReader(LogReader):
     ) -> list[ActivityEvent]:
         """Emit `agent_active` for assistant + event_msg lines.
 
-        Codex doesn't have a clean "turn end" sentinel like Claude; we use the
-        token_count event (which Codex emits at conversation boundaries) as
-        a proxy for `turn_complete`.
+        `task_complete` (and `turn_aborted`) is the turn end; `token_count`
+        is per model call and is only counted, never used as a boundary.
         """
         out: list[ActivityEvent] = []
         session_id = path.stem
@@ -602,26 +632,38 @@ class CodexLogReader(LogReader):
                                 last_text = msg_text
                                 text_changed = True
                         # Turn text rides only on turn_complete (the event the
-                        # frontend judges). The one exception: a user_message's
-                        # typed prompt rides on its own agent_active event so the
+                        # frontend judges). The one exception: the user's typed
+                        # prompt rides on its own agent_active event so the
                         # frontend can name the pane from the first user text.
+                        # Both rollout shapes (see _typed_prompt) surface as
+                        # detail "user_message" — the frontend keys on it.
                         # "<...>"-wrapped records are injected instruction/context
                         # stubs, not typed prompts.
                         text = ""
-                        if ptype == "user_message":
-                            text = user_prompt_text(str(payload.get("message") or ""))
+                        detail = ptype
+                        prompt = _typed_prompt(payload)
+                        if prompt is not None:
+                            detail = "user_message"
+                            text = user_prompt_text(prompt)
                         out.append(ActivityEvent(
                             vendor="codex", event_type="agent_active",
                             cwd=cwd, session_id=session_id, file_path=str(path),
-                            dedup_key=key, timestamp=ts, detail=ptype, text=text,
+                            dedup_key=key, timestamp=ts, detail=detail, text=text,
                         ))
-                        # token_count typically fires once per turn end in Codex.
-                        if ptype == "token_count":
+                        # task_complete is the turn's real end. token_count is
+                        # NOT: it fires once per model call, i.e. after every
+                        # tool call inside a turn, so ending the turn there
+                        # fired "done" mid-turn. turn_aborted (Esc) ends the
+                        # turn too, with nothing completed to judge.
+                        if ptype in ("task_complete", "turn_aborted"):
+                            text = ""
+                            if ptype == "task_complete":
+                                text = last_text or str(payload.get("last_agent_message") or "")
                             out.append(ActivityEvent(
                                 vendor="codex", event_type="turn_complete",
                                 cwd=cwd, session_id=session_id, file_path=str(path),
                                 dedup_key=f"turn:{line_no}", timestamp=ts,
-                                detail="token_count", text=last_text,
+                                detail=ptype, text=text,
                             ))
                             # Turn consumed the text; reset so the next turn's
                             # empty-text boundary can't reuse it.
