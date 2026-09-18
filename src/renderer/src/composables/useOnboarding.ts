@@ -166,6 +166,17 @@ const INSTALL_TIMEOUT_MS = 910_000
 
 // An external-terminal install finishes outside the app, so nothing tells us
 // when it is done. Poll instead of leaving the card stuck at "not installed".
+/**
+ * Deadline for `onboarding.status`, which wsClient would otherwise default to
+ * 10s. The backend probes 18 deps behind one executor, each with an 8s
+ * ceiling, and a `fresh` pass re-runs the login-shell PATH probe first — a
+ * heavy ~/.zshrc alone has been measured at 13s+. At the default, the re-detect
+ * button and the pass that runs right after an install both reject before the
+ * answer arrives, leaving the freshly installed CLI displayed as missing.
+ * App.vue:443 gives its own call the same 45s for the same reason.
+ */
+const STATUS_TIMEOUT_MS = 45_000
+
 const WATCH_INTERVAL_MS = 5_000
 const WATCH_MAX_TICKS = 60 // ≈5 minutes, then the user re-detects manually
 
@@ -314,7 +325,8 @@ export function useOnboarding(backend: ReturnType<typeof useBackend>) {
       // installer just ran and may have written a new PATH export.
       const resp = await backend.send<OnboardStatus>(
         'onboarding.status',
-        opts?.fresh ? { fresh: true } : {}
+        opts?.fresh ? { fresh: true } : {},
+        STATUS_TIMEOUT_MS
       )
       if (resp.payload) status.value = resp.payload
     } catch (e) {

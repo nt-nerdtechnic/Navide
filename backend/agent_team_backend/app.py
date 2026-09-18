@@ -2814,9 +2814,17 @@ async def _ensure_fresh_path_for_spawn(agent_key: str) -> None:
     # Same dedicated pool as the spawn probe: a login-shell subprocess is the
     # same kind of heavy pre-spawn work and must stay off the shared default
     # executor (see ws_handlers._CLI_PROBE_EXECUTOR).
+    # A tight ceiling on purpose: terminal.create has 30s and has already
+    # promised 25s of it to the credential switch lock, so a probe that waits
+    # longer than this turns the lock's named timeout into a generic
+    # "request terminal.create timeout" the user cannot act on. The probe is
+    # speculative here anyway — whatever it misses, the pane's own login shell
+    # still resolves.
     await asyncio.get_running_loop().run_in_executor(
         ws_handlers._CLI_PROBE_EXECUTOR,
-        onboarding_deps._refresh_path_from_login_shell,
+        lambda: onboarding_deps._refresh_path_from_login_shell(
+            timeout_s=onboarding_deps._PATH_PROBE_TIMEOUT_SPAWN_S
+        ),
     )
 
 

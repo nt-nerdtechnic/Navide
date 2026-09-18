@@ -569,11 +569,7 @@ def test_an_empty_answer_counts_as_no_answer(monkeypatch):
     assert onboarding_deps._path_probe_answered is False
 
 
-@_needs_login_shell_probe
-def test_the_probe_timeout_matches_the_electron_main_one(monkeypatch):
-    """A heavy ~/.zshrc was measured at 13s+ (see src/main/backend.ts). At the
-    3s this used to allow, such a machine reported every CLI outside the
-    fallback list as not installed."""
+def _probe_timeout_used(monkeypatch, **call_kwargs) -> float:
     monkeypatch.setenv("PATH", "/usr/bin:/bin")
     _no_fallbacks(monkeypatch)
     seen: dict[str, object] = {}
@@ -583,10 +579,59 @@ def test_the_probe_timeout_matches_the_electron_main_one(monkeypatch):
         return _make_run_result(_probe_output("/usr/bin:/bin"))
 
     with patch("subprocess.run", side_effect=capture):
-        _refresh_path_from_login_shell()
+        _refresh_path_from_login_shell(**call_kwargs)
+    return float(seen["timeout"])
 
-    assert seen["timeout"] == onboarding_deps._PATH_PROBE_TIMEOUT_S
-    assert onboarding_deps._PATH_PROBE_TIMEOUT_S >= 15.0
+
+@_needs_login_shell_probe
+def test_the_probe_ceiling_is_per_caller_not_global(monkeypatch):
+    """One global ceiling cannot satisfy every caller's budget.
+
+    A heavy ~/.zshrc needs more than the 3s this once allowed, but the passive
+    status pass rides a 10s wsClient deadline and the pre-spawn refresh sits
+    inside a 30s terminal.create budget that already promises 25s to the
+    credential switch lock. So the ceiling belongs to the caller.
+    """
+    monkeypatch.setattr(onboarding_deps, "_path_refreshed_at", None)
+    assert _probe_timeout_used(monkeypatch) == onboarding_deps._PATH_PROBE_TIMEOUT_S
+
+    monkeypatch.setattr(onboarding_deps, "_path_refreshed_at", None)
+    forced = _probe_timeout_used(monkeypatch, force=True)
+    assert forced == onboarding_deps._PATH_PROBE_TIMEOUT_FORCED_S
+
+    monkeypatch.setattr(onboarding_deps, "_path_refreshed_at", None)
+    spawn = _probe_timeout_used(monkeypatch, timeout_s=onboarding_deps._PATH_PROBE_TIMEOUT_SPAWN_S)
+    assert spawn == onboarding_deps._PATH_PROBE_TIMEOUT_SPAWN_S
+
+
+def test_the_probe_ceilings_respect_the_deadlines_around_them():
+    """Guards the three numbers against being "tidied" back into one.
+
+    Passive must clear the wsClient default (10s) that onboarding.status rides
+    on when no explicit timeout is passed; pre-spawn plus the switch lock's 25s
+    must stay under the frontend's 30s terminal.create timeout; forced is the
+    only one the user is actively waiting on, and App.vue gives it 45s.
+    """
+    assert onboarding_deps._PATH_PROBE_TIMEOUT_S < 10.0
+    assert onboarding_deps._PATH_PROBE_TIMEOUT_SPAWN_S + 25.0 < 30.0
+    assert (
+        onboarding_deps._PATH_PROBE_TIMEOUT_SPAWN_S
+        < onboarding_deps._PATH_PROBE_TIMEOUT_S
+        < onboarding_deps._PATH_PROBE_TIMEOUT_FORCED_S
+    )
+    # Still generous enough to reach a shell measured at 6.9s here.
+    assert onboarding_deps._PATH_PROBE_TIMEOUT_S > 6.9
+
+
+def test_a_relative_npm_prefix_is_refused(tmp_path, monkeypatch):
+    """A relative PATH entry resolves against the CHILD's cwd, which for a CLI
+    pane is the user's workspace — a repo shipping its own `<prefix>/bin/node`
+    would outrank the real one for everything Navide spawns."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "relbin" / "bin").mkdir(parents=True)
+    (tmp_path / ".npmrc").write_text("prefix=relbin\n", encoding="utf-8")
+    monkeypatch.delenv("npm_config_prefix", raising=False)
+    assert _posix_paths.npm_prefix_bins(tmp_path) == []
 
 
 # ── npm prefix: read the setting instead of guessing directory names ──────────

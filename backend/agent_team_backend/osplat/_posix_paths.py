@@ -9,7 +9,6 @@ share (the config and state roots) stays in each module.
 from __future__ import annotations
 
 import logging
-import os
 import shlex
 import stat
 import sys
@@ -182,6 +181,12 @@ def npm_prefix_bins(home: Path) -> list[str]:
         # npm expands both, and a prefix written as ~/.npm or ${HOME}/.npm is
         # a literal directory name to everyone else.
         bin_dir = Path(os.path.expandvars(raw)).expanduser() / "bin"
+        # Absolute only. A relative PATH entry resolves against each child's
+        # cwd, which for a CLI pane is the user's workspace — a repo carrying
+        # its own `<prefix>/bin/node` would then outrank the real one for
+        # everything Navide spawns.
+        if not bin_dir.is_absolute():
+            return []
         return [str(bin_dir)] if bin_dir.is_dir() else []
     except (OSError, ValueError, RuntimeError):
         # RuntimeError: expanduser on a "~user" that the passwd db has no home for.

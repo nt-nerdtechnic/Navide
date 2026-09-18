@@ -222,8 +222,8 @@ def _parse_login_path(stdout: str) -> list[str]:
 
 def _fallback_path_dirs() -> list[str]:
     """Standard install prefixes merged into PATH even when the login-shell
-    probe fails (slow shell config hits the 3s timeout, GUI launches get the
-    session's minimal PATH) — otherwise brew itself is invisible to detection
+    probe fails (slow shell config outruns the per-caller timeout, GUI launches
+    get the session's minimal PATH) — otherwise brew itself is invisible to detection
     and installs, and a CLI whose installer exported its dir from a shell rc
     file (aider, opencode, cursor, kimi into ~/.local/bin; nvm and bun on
     Linux) still reads as missing right after installing. Which dirs those
@@ -246,11 +246,24 @@ _PATH_REFRESH_TTL_S = 300.0
 # which is a list of guesses. Retry sooner than a success — but not on every
 # status read, because each attempt pays the timeout below.
 _PATH_RETRY_TTL_S = 60.0
-# Matches the Electron main probe (src/main/backend.ts, 15s there, whose
-# comment records a heavy ~/.zshrc measured at 13s+). The 3s this used to
-# allow turned a slow shell into a machine where every CLI outside the
-# fallback list reads as not installed.
-_PATH_PROBE_TIMEOUT_S = 15.0
+# The probe is the same work everywhere; the budget around it is not, so the
+# ceiling is per caller. One global 15s broke two deadlines at once: the
+# wsClient default of 10s that onboarding.status rides on, and the 30s
+# terminal.create budget that already promises 25s of it to the credential
+# switch lock (see ws_handlers._SWITCH_LOCK_TIMEOUT_SEC).
+#
+# A heavy ~/.zshrc was measured at 13s+ (src/main/backend.ts) and at 6.9s on a
+# developer machine here, so the 3s this used to allow was too short to reach
+# either — but only the caller the user is actually waiting on can afford to
+# wait that long.
+_PATH_PROBE_TIMEOUT_S = 8.0
+# The user asked for a re-detect, or an installer just ran: they are watching a
+# spinner, and App.vue gives this path 45s.
+_PATH_PROBE_TIMEOUT_FORCED_S = 15.0
+# Pre-spawn, where the probe is speculative and 25s of the 30s budget is
+# already spoken for. Anything this misses the pane's own login shell still
+# resolves, so a miss here costs nothing.
+_PATH_PROBE_TIMEOUT_SPAWN_S = 3.0
 _path_refreshed_at: float | None = None
 # Whether the last probe actually returned a PATH. Distinguishes "we know what
 # the login shell exports" from "we fell back to guessing", which decides
@@ -258,7 +271,9 @@ _path_refreshed_at: float | None = None
 _path_probe_answered = False
 
 
-def _refresh_path_from_login_shell(force: bool = False) -> None:
+def _refresh_path_from_login_shell(
+    force: bool = False, *, timeout_s: float | None = None
+) -> None:
     """Merge PATH from a login shell into os.environ so newly-installed CLIs are visible.
 
     Best-effort: all failures are swallowed silently. A platform with no
@@ -275,13 +290,16 @@ def _refresh_path_from_login_shell(force: bool = False) -> None:
     if (not force and _path_refreshed_at is not None
             and now - _path_refreshed_at < ttl):
         return
+    probe_timeout = timeout_s if timeout_s is not None else (
+        _PATH_PROBE_TIMEOUT_FORCED_S if force else _PATH_PROBE_TIMEOUT_S
+    )
     shell_paths: list[str] = []
     try:
         proc = subprocess.run(
             probe,
             capture_output=True,
             text=True,
-            timeout=_PATH_PROBE_TIMEOUT_S,
+            timeout=probe_timeout,
         )
         # Only the marked line: rc files print banners, and an interactive
         # bash's last line was a motd on more than one machine.

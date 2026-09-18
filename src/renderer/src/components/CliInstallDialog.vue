@@ -468,13 +468,8 @@ function signIn(): void {
       </main>
 
       <footer class="ci-footer">
-        <!-- Rendered before `dep` arrives too, disabled. Waiting for it used to
-             leave the footer without this checkbox for as long as the status
-             took, so anyone who pressed "Not now" in that window opted out of
-             nothing. Only an agent_cli dep can be opted out of, which a loaded
-             `dep` still decides. -->
-        <label v-if="!dep || dep.group === 'agent_cli'" class="ci-dont-ask">
-          <input v-model="dontAsk" type="checkbox" :disabled="!dep" @change="toggleDontAsk" />
+        <label v-if="dep?.group === 'agent_cli'" class="ci-dont-ask">
+          <input v-model="dontAsk" type="checkbox" @change="toggleDontAsk" />
           {{ $t('cli-install.dont-ask', { label }) }}
         </label>
         <span />

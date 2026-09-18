@@ -12481,11 +12481,20 @@ async function promptCliInstall(agentKey: string, agentLabel: string, paneId?: s
   // path always opens — declining once is not the same as opting out.
   if (paneId) {
     // Decide against the real list, not against an empty one that was never
-    // loaded. Still unloaded after this means the backend is unreachable —
-    // hold the prompt rather than risk asking someone who opted out. Nothing
-    // is lost by waiting: a CLI cannot be spawned over a dead backend either.
+    // loaded: an empty set reads as "nothing dismissed", which is how a user
+    // who opted out gets asked again.
     if (!cliInstallPromptDismissedLoaded.value) await loadCliInstallPromptDismissed()
-    if (!cliInstallPromptDismissedLoaded.value) return
+    if (!cliInstallPromptDismissedLoaded.value) {
+      // Still unloaded: hold the prompt rather than risk overriding an opt-out
+      // we cannot see. Say so — this branch is reachable while the backend is
+      // alive and answering (cli.missing is something it just sent us), so a
+      // silent return would leave a dead pane with no explanation and no way
+      // to reach the installer.
+      pipelineLog(
+        `⚠ install prompt for ${agentLabel} held — could not read the "don't ask again" list`
+      )
+      return
+    }
     if (cliInstallPromptDismissed.value.has(agentKey)) return
     // The await gave another trigger time to open the dialog.
     if (cliInstallRequest.value) return

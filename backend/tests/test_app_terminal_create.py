@@ -865,9 +865,11 @@ async def test_terminal_create_aider_registers_without_resume_claim(
 async def test_spawn_path_refresh_throttles(monkeypatch: pytest.MonkeyPatch) -> None:
     """Agent-CLI spawns refresh the backend PATH (so a just-installed CLI is
     found), but at most once per interval — the probe shells out."""
-    calls: list[int] = []
+    calls: list[float | None] = []
     monkeypatch.setattr(
-        app.onboarding_deps, "_refresh_path_from_login_shell", lambda: calls.append(1)
+        app.onboarding_deps,
+        "_refresh_path_from_login_shell",
+        lambda *_a, **kw: calls.append(kw.get("timeout_s")),
     )
     monkeypatch.setattr(app, "_last_path_refresh", 0.0)
 
@@ -875,6 +877,10 @@ async def test_spawn_path_refresh_throttles(monkeypatch: pytest.MonkeyPatch) -> 
     await app._ensure_fresh_path_for_spawn("claude")  # inside throttle window
 
     assert len(calls) == 1
+    # The pre-spawn ceiling, not the passive one: terminal.create has 30s and
+    # has already promised 25s of it to the credential switch lock, so a longer
+    # probe here would replace that lock's named timeout with a generic one.
+    assert calls[0] == app.onboarding_deps._PATH_PROBE_TIMEOUT_SPAWN_S
 
 
 @pytest.mark.asyncio
@@ -883,7 +889,9 @@ async def test_spawn_path_refresh_skips_plain_terminal(
 ) -> None:
     calls: list[int] = []
     monkeypatch.setattr(
-        app.onboarding_deps, "_refresh_path_from_login_shell", lambda: calls.append(1)
+        app.onboarding_deps,
+        "_refresh_path_from_login_shell",
+        lambda *_a, **_kw: calls.append(1),
     )
     monkeypatch.setattr(app, "_last_path_refresh", 0.0)
 
