@@ -4,6 +4,27 @@ All notable released changes to Navide will be documented in this file. The form
 
 ## [Unreleased]
 
+## [0.2.6] — 2026-09-18 — signed release
+
+### Added
+
+- Give **Marketplace** its own page under Settings → Extensions. Searching the registry, installing, and the publisher-trust and permission dialogs move there from the Extensions page, which now holds only what is installed. **Execution policy is no longer a page of its own**: it is the block at the top of the Extensions page, with its scope badge and storage path, and searching Settings for it opens that page scrolled to the block. Both pages read one plugin inventory, so an install made on Marketplace shows on Extensions without reopening Settings.
+- Translate the native application menu (File, Edit, View, Window…) and rebuild it when the UI language changes. Items with a system role keep the system's own label.
+- Put the actions that needed a right-click into a workspace's **⋯** menu: reveal in Finder, copy path, rename, open in its own window, and — when the window still holds another workspace — close the workspace, with or without its panes. The context menu keeps them all as a second entry point.
+- Dragging a folded pane row now carries its hidden subtree with it, to another tab or another window. Only the row being dragged expands into its subtree; other folded rows in a multi-selection still move alone.
+- Sign in to Copilot CLI and Muse Code from **Settings → Accounts** with their own `login` commands, instead of opening a REPL to sign in inside.
+- Help gains **Windows, Linux and cross-device** as a topic, a **Usage** section under Settings and System covering Token Monitor, Turn Stats and quota cycles, a note that Plans ships as a plugin, the 24 prompt-skill icons in the icon reference, and the full list of 53 MCP tools. Interface labels in help text are now read from the same locale keys the interface renders, which corrected twenty descriptions that had drifted. **Navide Cloud** moves from the General group of the Settings navigation to Accounts & Agents.
+- Localize the model and effort refusal shown by the spawn dialog and Settings → CLI Agents; it read Chinese under the English interface.
+
+### Fixed
+
+- Stop a Claude or Kilo sign-in pane dying on `error: unknown option '--mcp-config'`. Signing in to the current account from Settings → Accounts has no login profile id, which is what the "is this a sign-in pane" check used to look at, so the pane was wired with MCP, skills and push flags that the login subcommand rejects. The check now asks whether the command was actually rewritten to a login subcommand; a vendor with no login subcommand keeps its ordinary REPL and its wiring.
+- Stop grok being detected, spawned and updated as Cursor CLI. grok installs `~/.grok/bin/agent` — the name Cursor's binary uses — and `grok 1.0.34` satisfied a bare version pattern, so Settings showed Cursor CLI 1.0.34 installed, a Cursor pane ran grok, and **Update Cursor CLI** updated grok. Cursor now declares what its version output looks like; a candidate that fails that probe yields to the next name (`cursor-agent`), and the update command runs on the binary that was actually found. A machine with grok and no Cursor now correctly shows Cursor as not installed.
+- Stop a Codex pane asking **Hooks need review** on every open, on Codex builds that gate `-c hooks.SessionStart` from the command line. After the prompt is seen once, no later Codex pane on this machine injects the hook; session binding falls back to log and marker detection, which is slower but complete, and Pipeline Log says so. **This switch is permanent and per machine; there is no UI to turn it back on yet.**
+- Stop the usage-limit badge lighting on text that is not a limit — a replayed transcript, a quoted message, a pane writing *about* limits — and staying lit for hours while the CLI answered normally. A limit sentence in the terminal is now overruled by a fresh `/usage` reading that shows headroom (and triggers one refresh); conversely the badge lights from the reading alone when the account is spent, including a weekly wall with no reset time, shown without a clock. A badge you dismiss stays down until the next new reading. Also: the session-limit pattern no longer joins two unrelated sentences, and a cached reading no longer relights the badge right after an account switch. Cursor, Kilo and Pi keep the terminal-text-only behaviour.
+- Detect CLIs on machines with a slow login shell, and CLIs installed under a custom npm prefix. The PATH probe timed out at 3 s and cached the timeout as an answer for five minutes; `npm config set prefix` was ignored. The probe now has a ceiling per caller — 8 s for status, 15 s for **Re-detect** and post-install rescans, 3 s before a pane opens — retries a failure after 60 s, and reads `prefix` from `npm_config_prefix` or `~/.npmrc` (absolute paths only). Settings waits up to 45 s for the first status instead of 10.
+- Sync **Don't ask again** for the install prompt across windows, and stop asking when the opt-out list could not be loaded. A second window kept offering to install a CLI you had opted out of, and a status timeout was read as "never opted out". The prompt is now held when the list is unavailable, with a line in Pipeline Log.
+
 ## [0.2.5] — 2026-09-17 — signed release
 
 ### Added

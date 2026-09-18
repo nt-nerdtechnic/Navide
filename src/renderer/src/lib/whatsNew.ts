@@ -68,6 +68,39 @@ export const WHATS_NEW_CHROME = {
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    version: '0.2.6',
+    title: {
+      'zh-TW': 'Marketplace 獨立分頁、原生選單跟隨語言、用量徽章不再誤亮',
+      'en-US': 'Marketplace Page, Localized Native Menu, Usage Badge That Stays Honest',
+    },
+    highlights: [
+      {
+        'zh-TW': '「設定 → 外掛程式」現在是兩頁：搜尋與安裝擴充功能請到新的「市集」；「擴充功能」頁只剩已安裝清單，而原本獨立的「執行政策」分頁變成這一頁最上方的區塊，沒有消失。「Navide Cloud」也從「一般」群組搬到「帳號與代理」。',
+        'en-US': 'Settings → Extensions is now two pages: search and install on the new Marketplace page; Extensions keeps what is installed, with the former Execution Policy tab folded into a block at its top. Navide Cloud moves from General to Accounts & Agents.',
+      },
+      {
+        'zh-TW': 'Electron 原生選單（檔案／編輯／檢視／視窗）跟隨介面語言，切換語言時即時重建。專案標題的 ⋯ 選單收進了原本只有右鍵才有的動作（在 Finder 開啟、複製路徑、重新命名、獨立視窗、關閉工作區）。',
+        'en-US': 'The native application menu follows the UI language and rebuilds when you switch. A workspace\u2019s ⋯ menu gains the actions that used to need a right-click: reveal in Finder, copy path, rename, open in its own window, close.',
+      },
+      {
+        'zh-TW': '用量上限徽章改以帳號的 /usage 讀數為準：終端裡出現的「已達上限」句子若與新讀數矛盾會被否決，不再因為重播歷史或討論額度而誤亮好幾個小時；反過來帳號真的用完時即使 CLI 沒印任何字也會亮。',
+        'en-US': 'The usage-limit badge now trusts the account\u2019s /usage reading: a limit sentence in the terminal that contradicts a fresh reading is overruled, so a replayed transcript or a conversation about quotas no longer lights it for hours; and it lights from the reading alone when the account really is spent.',
+      },
+      {
+        'zh-TW': '裝了 xAI grok 的機器不會再把它當成 Cursor CLI（同名的 agent 執行檔）；從「設定 → 帳號」登入現用 Claude／Kilo 帳號時 pane 不再秒退；Copilot 與 Muse 的登入按鈕現在直接執行各自的 login 指令。',
+        'en-US': 'grok is no longer detected or launched as Cursor CLI (same `agent` binary name); signing in to the current Claude or Kilo account from Settings → Accounts no longer kills the pane; Copilot and Muse sign in with their own login commands.',
+      },
+      {
+        'zh-TW': 'Codex 若每次開 pane 都跳「Hooks need review」，看過一次後這台機器就不再注入該 hook——session 綁定改走 log 偵測，功能不缺但目前沒有 UI 可以重新開啟。',
+        'en-US': 'If Codex asks "Hooks need review" on every pane, seeing it once now stops the hook being injected on this machine; session binding falls back to log detection, and there is no UI yet to turn it back on.',
+      },
+      {
+        'zh-TW': '說明中心新增「Windows、Linux 與跨裝置」主題與「用量」章節，介面標籤改由產品自身的翻譯鍵引用，修正了二十處寫錯的說明。側欄拖曳已折疊的父列會連同隱藏的子樹一起搬。',
+        'en-US': 'Help gains a Windows, Linux & cross-device topic and a Usage section; interface labels in help text now come from the same keys the UI renders, correcting twenty descriptions. Dragging a folded pane row carries its hidden subtree along.',
+      },
+    ],
+  },
+  {
     version: '0.2.5',
     title: {
       'zh-TW': '每個 CLI 的啟動設定、一次關掉整組面板',
