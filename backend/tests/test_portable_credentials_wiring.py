@@ -166,6 +166,9 @@ class FakeAttribution:
     def register_pane(self, pane_id: str, **kwargs: Any) -> None:
         pass
 
+    def scan_pane_baseline(self, pane_id: str) -> None:
+        pass
+
     def unregister_pane(self, pane_id: str, **kwargs: Any) -> None:
         pass
 
@@ -550,6 +553,9 @@ async def test_spawn_metadata_carries_the_slot_but_never_the_token(_wired, monke
     class Attribution:
         def register_pane(self, pane_id: str, **kwargs: Any) -> None:
             recorded.append({"pane_id": pane_id, **kwargs})
+
+        def scan_pane_baseline(self, pane_id: str) -> None:
+            pass
 
     monkeypatch.setattr(app, "attribution", Attribution())
     pc.store("claude", "a1b2c3d4", TOKEN)

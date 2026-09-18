@@ -82,6 +82,9 @@ class FakeAttribution:
     def register_pane(self, pane_id: str, **kwargs: Any) -> None:
         self.registered.append({"pane_id": pane_id, **kwargs})
 
+    def scan_pane_baseline(self, pane_id: str) -> None:
+        pass
+
 
 class FakeCodexHomeManager:
     def __init__(self, root: Path) -> None:

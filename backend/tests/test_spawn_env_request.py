@@ -50,6 +50,9 @@ class FakeAttribution:
     def register_pane(self, pane_id: str, **kwargs: Any) -> None:
         return None
 
+    def scan_pane_baseline(self, pane_id: str) -> None:
+        return None
+
 
 _SHELL = "/bin/zsh"
 

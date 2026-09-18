@@ -46,6 +46,9 @@ class FakeAttribution:
     def register_pane(self, pane_id: str, **kwargs: Any) -> None:
         self.registered.append({"pane_id": pane_id, **kwargs})
 
+    def scan_pane_baseline(self, pane_id: str) -> None:
+        pass
+
 
 class FakeCodexHomeManager:
     def __init__(self, root: Path, session_homes: dict[str, Path] | None = None) -> None:
@@ -134,6 +137,7 @@ async def test_terminal_create_codex_prepares_home_and_registers_home_id(
         "explicit_session_id": "",
         "session_marker": "",
         "session_home_id": "stable-home",
+        "defer_baseline": True,
     }]
     assert session.websocket.sent[0]["payload"]["pane_id"] == "live-pane"
 
@@ -1012,6 +1016,7 @@ async def test_terminal_create_antigravity_registers_session_marker(
         "explicit_session_id": "",
         "session_marker": "at-pane:ag-pane",
         "session_home_id": "",
+        "defer_baseline": True,
     }]
 
 

@@ -51,19 +51,48 @@ class FakeTerminals:
         return []
 
 class BlockingAttribution:
+    """Registration is instant; the baseline scan (run off-loop after the
+    ack) blocks until the test releases it."""
+
     def __init__(self) -> None:
         self.started = threading.Event()
         self.release = threading.Event()
         self.registered: list[str] = []
+        self.scanned: list[str] = []
         self.unregistered: list[str] = []
 
     def register_pane(self, pane_id: str, **_kwargs: Any) -> None:
+        self.registered.append(pane_id)
+
+    def scan_pane_baseline(self, pane_id: str) -> None:
         self.started.set()
         self.release.wait(timeout=5)
-        self.registered.append(pane_id)
+        self.scanned.append(pane_id)
 
     def unregister_pane(self, pane_id: str) -> None:
         self.unregistered.append(pane_id)
+
+
+class AckGatedSocket(RecordingSocket):
+    """Parks the terminal.create ack until the test opens the gate — the one
+    await left between the PTY spawn and the commit where a cancel can land."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.parked = asyncio.Event()
+        self.gate = asyncio.Event()
+
+    async def send_json(self, payload: dict[str, Any]) -> None:
+        if payload.get("id") == "create-request" and payload.get("ok"):
+            self.parked.set()
+            await self.gate.wait()
+        await super().send_json(payload)
+
+async def _until(condition: Any, timeout: float = 2.0) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not condition():
+        assert asyncio.get_running_loop().time() < deadline, "condition never held"
+        await asyncio.sleep(0.01)
 
 def make_session(socket: RecordingSocket | None = None) -> app.Session:
     session = app.Session(socket or RecordingSocket())  # type: ignore[arg-type]
@@ -120,9 +149,13 @@ async def test_cancel_before_popen_tombstones_generation() -> None:
     assert session.websocket.sent[1]["error"]["code"] == "CREATE_CANCELLED"  # type: ignore[attr-defined]
 
 @pytest.mark.asyncio
-async def test_cancel_after_popen_waits_for_attribution_then_rolls_back(
+async def test_ack_does_not_wait_for_the_baseline_scan(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """The scan used to sit between popen and the ack; on a large session
+    tree it outlived the renderer's deadline (#118). Now the create commits
+    with the scan still running, and a cancel that arrives after that is the
+    usual post-commit no-op."""
     attribution = BlockingAttribution()
     monkeypatch.setattr(app, "attribution", attribution)
     session = make_session()
@@ -131,19 +164,55 @@ async def test_cancel_after_popen_waits_for_attribution_then_rolls_back(
         app.handle_message(session, create_message(agent="claude"))
     )
     assert await asyncio.to_thread(attribution.started.wait, 2)
+    await asyncio.wait_for(create_task, timeout=2)
+    assert session.websocket.sent[-1]["ok"] is True  # type: ignore[attr-defined]
+    assert attribution.registered == ["pane-1"]
+    assert attribution.scanned == []
+
+    await app.handle_message(session, cancel_message())
+    attribution.release.set()
+    await asyncio.to_thread(attribution.release.wait, 2)
+
+    terminals = session.terminals  # type: ignore[assignment]
+    assert session.websocket.sent[-1]["payload"]["cancelled"] is False  # type: ignore[attr-defined]
+    assert terminals.killed == []
+    assert attribution.unregistered == []
+    assert "term-1" in app._PTY_OWNERS
+
+
+@pytest.mark.asyncio
+async def test_cancel_before_commit_waits_for_the_scan_then_rolls_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attribution = BlockingAttribution()
+    monkeypatch.setattr(app, "attribution", attribution)
+    socket = AckGatedSocket()
+    session = make_session(socket)
+
+    create_task = asyncio.create_task(
+        app.handle_message(session, create_message(agent="claude"))
+    )
+    await asyncio.wait_for(socket.parked.wait(), timeout=2)
+    assert await asyncio.to_thread(attribution.started.wait, 2)
     cancel_task = asyncio.create_task(app.handle_message(session, cancel_message()))
-    await asyncio.sleep(0)
-    assert not cancel_task.done()
+    await asyncio.sleep(0.05)
+    assert attribution.unregistered == []  # rollback is parked behind the scan
 
     attribution.release.set()
+    await _until(lambda: attribution.unregistered == ["pane-1"])
+    # The cancel's own response queues behind the parked ack on the session's
+    # send lock, so the gate opens before either task is awaited.
+    socket.gate.set()
     await asyncio.gather(create_task, cancel_task)
 
     terminals = session.terminals  # type: ignore[assignment]
     assert terminals.killed == [("term-1", True)]
     assert attribution.registered == ["pane-1"]
+    assert attribution.scanned == ["pane-1"]
     assert attribution.unregistered == ["pane-1"]
     assert "term-1" not in app._PTY_OWNERS
     assert terminals._sessions == {}
+    assert session.websocket.sent[-1]["error"]["code"] == "CREATE_CANCELLED"  # type: ignore[attr-defined]
 
 @pytest.mark.asyncio
 async def test_send_failure_marks_dead_and_rolls_back_uncommitted_terminal() -> None:
@@ -166,15 +235,17 @@ async def test_already_dead_session_rolls_back_before_commit() -> None:
     assert session.terminals.killed == [("term-1", True)]  # type: ignore[attr-defined]
 
 @pytest.mark.asyncio
-async def test_handler_cancellation_during_attribution_rolls_back(
+async def test_handler_cancellation_before_commit_rolls_back(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     attribution = BlockingAttribution()
     monkeypatch.setattr(app, "attribution", attribution)
-    session = make_session()
+    socket = AckGatedSocket()
+    session = make_session(socket)
     create_task = asyncio.create_task(
         app.handle_message(session, create_message(agent="claude"))
     )
+    await asyncio.wait_for(socket.parked.wait(), timeout=2)
     assert await asyncio.to_thread(attribution.started.wait, 2)
 
     create_task.cancel()
@@ -319,15 +390,18 @@ async def test_a_cancelled_create_takes_the_channel_with_it(
 ) -> None:
     attribution = BlockingAttribution()
     monkeypatch.setattr(app, "attribution", attribution)
-    session = make_session()
+    socket = AckGatedSocket()
+    session = make_session(socket)
 
     create_task = asyncio.create_task(
         app.handle_message(session, create_message(agent="qwen"))
     )
-    assert await asyncio.to_thread(attribution.started.wait, 2)
+    await asyncio.wait_for(socket.parked.wait(), timeout=2)
     cancel_task = asyncio.create_task(app.handle_message(session, cancel_message()))
     await asyncio.sleep(0)
     attribution.release.set()
+    await _until(lambda: attribution.unregistered == ["pane-1"])
+    socket.gate.set()
     await asyncio.gather(create_task, cancel_task)
 
     assert push_delivery.get("pane-1") is None

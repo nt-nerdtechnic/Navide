@@ -6026,6 +6026,23 @@ class _TerminalCreateCancelled(Exception):
     pass
 
 
+async def _finish_pane_attribution(
+    attribution_future: "asyncio.Future[None]", pane_id: str, codex_launch_token: str
+) -> None:
+    """Tail of terminal.create's attribution, detached from the ack."""
+    from . import app
+
+    try:
+        await asyncio.shield(attribution_future)
+    except Exception as err:  # noqa: BLE001 — the pane is already running; only its baseline is lost
+        app.log.warning("baseline scan for pane %s failed: %s", pane_id, err)
+        return
+    # A SessionStart callback can arrive before the baseline scan completes.
+    # Retry its already recorded transcript after claiming.
+    if codex_launch_token:
+        await app._retry_codex_session_start(codex_launch_token)
+
+
 async def _rollback_terminal_create(
     session: "Session", transaction: dict[str, Any]
 ) -> None:
@@ -6534,34 +6551,51 @@ async def _terminal_create_impl(
             _account_pin_for_history(_profile_pin_for_bookkeeping(
                 agent_key, term.pane_id, metadata.get("profile_id"))),
         )
-        # register_pane's baseline scan enumerates the vendor's whole
-        # session-file tree — run it off-loop (register_pane is
-        # thread-safe via attribution._lock) so the create ack below
-        # isn't delayed past the frontend's timeout. Awaited so the
-        # pane is registered before the ack, as before.
-        attribution_future = asyncio.get_running_loop().run_in_executor(
-            None,
-            app.functools.partial(
-                app.attribution.register_pane,
-                term.pane_id,
-                vendor=agent_key,
-                cwd=payload["cwd"],
-                workspace_path=ws_for_pane,
-                stage_id=metadata.get("stage_id") or metadata.get("stageId"),
-                slot_key=app._stable_pane_key(metadata, ""),
-                group_id=str(metadata.get("run_group_id") or ""),
-                explicit_session_id=explicit_session_id,
-                session_marker=str(metadata.get("session_marker") or ""),
-                session_home_id=str(metadata.get("session_home_id") or ""),
-            ),
+        # Register now — a lock and a dict insert — so the pane owns its
+        # identity before the ack below; the frontend's next messages
+        # (manual_pane.spawn, pane.set_run_group) and the CLI's first
+        # session-file event all expect it. The baseline scan is the
+        # expensive half: it enumerates the vendor's session tree (Codex
+        # opens every rollout under ~/.codex/sessions and every
+        # ~/.codex-panes/*/sessions to read its header), and awaiting it
+        # here held the ack past the renderer's 30s deadline on large trees
+        # while the CLI itself sat at its prompt (issue #118). It runs
+        # off-loop after the ack; until it lands the pane binds only through
+        # the deterministic paths (explicit id, per-pane home, marker).
+        app.attribution.register_pane(
+            term.pane_id,
+            vendor=agent_key,
+            cwd=payload["cwd"],
+            workspace_path=ws_for_pane,
+            stage_id=metadata.get("stage_id") or metadata.get("stageId"),
+            slot_key=app._stable_pane_key(metadata, ""),
+            group_id=str(metadata.get("run_group_id") or ""),
+            explicit_session_id=explicit_session_id,
+            session_marker=str(metadata.get("session_marker") or ""),
+            session_home_id=str(metadata.get("session_home_id") or ""),
+            defer_baseline=True,
         )
-        transaction["attribution_future"] = attribution_future
         transaction["attribution_started"] = True
-        await asyncio.shield(attribution_future)
-        # A SessionStart callback can arrive before register_pane's baseline
-        # scan completes. Retry its already recorded transcript after claiming.
-        if metadata.get("codex_launch_token"):
-            await app._retry_codex_session_start(str(metadata["codex_launch_token"]))
+        attribution_future = asyncio.get_running_loop().run_in_executor(
+            None, app.attribution.scan_pane_baseline, term.pane_id
+        )
+        # Kept on the transaction so a rollback (cancel, dead socket) waits
+        # for the scan before unregistering — scan_pane_baseline itself
+        # refuses to revive a registration that is gone.
+        transaction["attribution_future"] = attribution_future
+        # Tracked so the task stays reachable (CPython drops an unreferenced
+        # task). The scan itself runs in the executor and installs its result
+        # regardless; a disconnect only cancels the codex retry behind it.
+        tail = asyncio.create_task(
+            _finish_pane_attribution(
+                attribution_future,
+                term.pane_id,
+                str(metadata.get("codex_launch_token") or ""),
+            ),
+            name=f"pane-baseline:{term.pane_id[:8]}",
+        )
+        session._handler_tasks.add(tail)
+        tail.add_done_callback(session._handler_tasks.discard)
         # The live "THIS SESSION" tally is read straight from the vendor log.
         # Now that the pane owns this session id, start tracking it and take
         # the first scan. Fire and forget — a multi-MB parse must not delay

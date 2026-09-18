@@ -545,6 +545,9 @@ class FakeAttribution:
     def register_pane(self, pane_id: str, **kwargs: Any) -> None:
         pass
 
+    def scan_pane_baseline(self, pane_id: str) -> None:
+        pass
+
 
 @pytest.mark.asyncio
 async def test_terminal_create_wires_claude_pane(

@@ -82,6 +82,11 @@ class _PaneRegistration:
     group_id: str = ""        # sidebar run group ("" = ungrouped); live-updated by set_pane_group
     registered_at: float = field(default_factory=time.time)
     baseline_files: set[Path] = field(default_factory=set)
+    # True while the baseline is still being scanned (register_pane with
+    # defer_baseline=True). Until scan_pane_baseline fills it in, the pane is
+    # not a candidate for the first-come claims that read baseline_files —
+    # only the deterministic paths (explicit id, per-pane home, marker) bind.
+    baseline_pending: bool = False
     claimed_session_ids: set[str] = field(default_factory=set)
     session_home_id: str = ""
     # Codex/Antigravity only: unique string embedded in this pane's kickoff so the
@@ -267,11 +272,20 @@ class Attribution:
         explicit_session_id: str = "",
         session_marker: str = "",
         session_home_id: str = "",
+        defer_baseline: bool = False,
     ) -> None:
         """Bind a current-run pane to its expected log-file vendor + cwd.
 
         Also implicitly registers the workspace so the pane's sessions count
         toward the workspace tally.
+
+        `defer_baseline`: register now (cheap, lock only) and leave the
+        baseline scan to a later scan_pane_baseline call. The scan enumerates
+        the vendor's session tree — for Codex it opens every rollout under
+        ~/.codex/sessions and ~/.codex-panes/*/sessions to read its header —
+        and on a large tree that takes long enough to push terminal.create's
+        ack past the renderer's deadline (issue #118). The caller runs the
+        scan off-loop after acking the spawn.
 
         `explicit_session_id` (Claude `--session-id`): when the pane was launched
         with a pinned session id, we bind session→pane RIGHT NOW. The first event
@@ -292,25 +306,14 @@ class Attribution:
             log.debug("register_pane: unknown vendor %s, pane attribution skipped", vendor)
             return
 
-        reader = self._readers[vendor]
-        try:
-            # Scope the baseline to THIS pane's workspace folder when the reader
-            # can (Claude/Kimi/Antigravity/Codex map a workspace to one dir). A
-            # pane only ever claims sessions under its own cwd, so the whole-tree
-            # enumeration was pure waste — on a large ~/.claude it stat'd ~1500
-            # files per spawn. Grok (shared DB) / missing ws → None → full tree.
-            scoped = reader.session_files_for_workspace(ws) if ws else None
-            files = scoped if scoped is not None else reader.session_files()
-            baseline = set(files)
-        except Exception as err:  # noqa: BLE001
-            log.warning("baseline scan failed for vendor=%s: %s", vendor, err)
-            baseline = set()
+        baseline = set() if defer_baseline else self._scan_baseline(vendor, ws)
 
         reg = _PaneRegistration(
             pane_id=pane_id, vendor=vendor, cwd=cwd,
             workspace_path=ws, stage_id=stage_id, slot_key=slot_key,
             group_id=group_id,
-            baseline_files=baseline, session_marker=session_marker,
+            baseline_files=baseline, baseline_pending=defer_baseline,
+            session_marker=session_marker,
             session_home_id=session_home_id,
         )
         with self._lock:
@@ -323,6 +326,48 @@ class Attribution:
                 self._unbound_markers[session_marker] = pane_id
         log.debug("registered pane=%s vendor=%s cwd=%s baseline=%d files marker=%s",
                   pane_id, vendor, cwd, len(baseline), session_marker or "(none)")
+
+    def _scan_baseline(self, vendor: str, ws: str) -> set[Path]:
+        """The vendor's session files that exist now — files a pane registered
+        at this moment must never claim as its own. Blocking (disk)."""
+        reader = self._readers[vendor]
+        try:
+            # Scope the baseline to THIS pane's workspace folder when the reader
+            # can (Claude/Kimi/Antigravity/Codex map a workspace to one dir). A
+            # pane only ever claims sessions under its own cwd, so the whole-tree
+            # enumeration was pure waste — on a large ~/.claude it stat'd ~1500
+            # files per spawn. Grok (shared DB) / missing ws → None → full tree.
+            scoped = reader.session_files_for_workspace(ws) if ws else None
+            files = scoped if scoped is not None else reader.session_files()
+            return set(files)
+        except Exception as err:  # noqa: BLE001
+            log.warning("baseline scan failed for vendor=%s: %s", vendor, err)
+            return set()
+
+    def scan_pane_baseline(self, pane_id: str) -> None:
+        """Fill in the baseline a register_pane(defer_baseline=True) left
+        pending. Blocking (disk) — run it in an executor. A no-op when the
+        pane was unregistered meanwhile or never deferred, so a late scan can
+        never revive a dead registration."""
+        with self._lock:
+            reg = self._panes.get(pane_id)
+            if reg is None or not reg.baseline_pending:
+                return
+            vendor, ws = reg.vendor, reg.workspace_path or reg.cwd
+        started = time.monotonic()
+        baseline = self._scan_baseline(vendor, ws)
+        with self._lock:
+            if self._panes.get(pane_id) is not reg:
+                return
+            reg.baseline_files = baseline
+            reg.baseline_pending = False
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        # Slow scans are the #118 signature; keep them visible in backend.log.
+        log.log(
+            logging.WARNING if elapsed_ms >= 2000 else logging.DEBUG,
+            "baseline scan pane=%s vendor=%s files=%d took %dms",
+            pane_id, vendor, len(baseline), elapsed_ms,
+        )
 
     def slot_key_for(self, pane_id: str) -> str:
         """The registered pane's tokens_store bucket key ("" when unknown).
@@ -668,6 +713,7 @@ class Attribution:
                 reg for reg in self._panes.values()
                 if reg.vendor == usage.vendor
                 and self._cwd_matches(reg.cwd, usage, reg.pane_id)
+                and not reg.baseline_pending
                 and file_path not in reg.baseline_files
                 and not reg.claimed_session_ids
             ]
@@ -843,6 +889,7 @@ class Attribution:
             reg for reg in self._panes.values()
             if reg.vendor == usage.vendor
             and self._cwd_matches(reg.cwd, usage, reg.pane_id)
+            and not reg.baseline_pending
             and file_path not in reg.baseline_files
             and not reg.claimed_session_ids
         ]

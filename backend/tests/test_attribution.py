@@ -290,6 +290,38 @@ def test_register_pane_falls_back_to_full_tree_when_unscopable(claude_attr: tupl
     assert f in attr._panes["p"].baseline_files
 
 
+def test_deferred_baseline_blocks_claims_until_the_scan_lands(claude_attr: tuple[Attribution, Path]) -> None:
+    """register_pane(defer_baseline=True) is the terminal.create shape: the
+    pane owns its identity at once, but until scan_pane_baseline fills the
+    baseline in, the first-come claim must not fire — a pre-existing session
+    replayed during that window would otherwise be adopted as the pane's own."""
+    attr, root = claude_attr
+    cwd = "/x"
+    proj = root / "-x"; proj.mkdir()
+    old = proj / "old.jsonl"; old.write_text("")
+    attr.register_pane("p", vendor="claude", cwd=cwd, workspace_path=cwd, defer_baseline=True)
+    reg = attr._panes["p"]
+    assert reg.baseline_pending is True and reg.baseline_files == set()
+    assert attr.attribute(_make_usage("claude", session_id="old", file_path=str(old))).pane_id is None
+
+    attr.scan_pane_baseline("p")
+    assert reg.baseline_pending is False
+    assert old in reg.baseline_files
+    # Still not claimable — the scan proved it predates the pane.
+    assert attr.attribute(_make_usage("claude", session_id="old", file_path=str(old))).pane_id is None
+    fresh = proj / "fresh.jsonl"; fresh.write_text("")
+    assert attr.attribute(_make_usage("claude", session_id="fresh", file_path=str(fresh))).pane_id == "p"
+
+
+def test_scan_pane_baseline_never_revives_an_unregistered_pane(claude_attr: tuple[Attribution, Path]) -> None:
+    attr, root = claude_attr
+    (root / "-x").mkdir()
+    attr.register_pane("p", vendor="claude", cwd="/x", workspace_path="/x", defer_baseline=True)
+    attr.unregister_pane("p")
+    attr.scan_pane_baseline("p")  # the create was rolled back while the scan was queued
+    assert "p" not in attr._panes
+
+
 def test_two_unclaimed_panes_same_workspace_claim_nothing(claude_attr: tuple[Attribution, Path]) -> None:
     """Several unclaimed same-cwd panes = ambiguous provenance. Pre-fix the
     oldest registration claimed the session (a guess that could route one
