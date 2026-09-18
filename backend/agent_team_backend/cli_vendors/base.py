@@ -80,6 +80,13 @@ class Dep:
     # old name on older installs). Probed in order only when check_cmd[0] is not
     # on PATH, so a machine carrying the legacy binary is not reported missing.
     alt_commands: tuple[str, ...] = ()
+    # Output `check_cmd` must produce for a resolved binary to be THIS tool.
+    # Needed only when the name is generic enough for another vendor to ship
+    # it: `agent` is Cursor's, but xAI's grok installs ~/.grok/bin/agent as a
+    # symlink to itself, and `grok 1.0.34 (...)` satisfies any plain version
+    # pattern — so Navide detected grok as Cursor and spawned it as Cursor.
+    # '' = the name is unambiguous and no probe is run (every other dep).
+    identity_regex: str = ""
     min_version: str = ""            # '' = any version is fine
     install_cmd: str = ""            # shell command (whitelist); '' = no auto-install
     needs_terminal: bool = False     # interactive (sudo / OAuth) → external Terminal

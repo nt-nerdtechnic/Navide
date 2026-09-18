@@ -47,7 +47,7 @@ def test_quick_status_spawns_no_subprocess(monkeypatch):
 
 def test_quick_and_full_agree_on_missing(monkeypatch):
     # Force every resolve to fail so both passes see the same world.
-    monkeypatch.setattr(od, "resolve_executable", lambda dep: "")
+    monkeypatch.setattr(od, "resolve_executable", lambda dep, quick=False: "")
     quick = {d["id"]: d["status"] for d in od.quick_status()["deps"]}
     assert set(quick.values()) == {"missing"}
 

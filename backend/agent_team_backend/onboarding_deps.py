@@ -19,6 +19,7 @@ import hashlib
 import logging
 import os
 import re
+import shlex
 import signal
 import sqlite3
 import subprocess
@@ -374,17 +375,67 @@ def _install_method(resolved_path: str) -> str:
     return "unknown"
 
 
-def resolve_executable(dep: Dep) -> str:
+# Identity probes are a subprocess each, so the answer is remembered for the
+# life of the process, keyed by the resolved path. A binary that changes under
+# a running Navide is what the wizard's "re-detect" is for.
+_IDENTITY_CACHE: dict[str, bool] = {}
+_IDENTITY_TIMEOUT_S = 5.0
+
+
+def _is_that_tool(dep: Dep, binary_path: str) -> bool:
+    """Whether `binary_path` really is dep's tool, for deps that can be confused.
+
+    Only deps declaring `identity_regex` are probed; every other dep answers
+    True without spawning anything. A probe that cannot run (missing, slow,
+    crashing) also answers True: refusing a binary on a failed probe would
+    hide an installed CLI, which is worse than the ambiguity this guards.
+    """
+    if not dep.identity_regex:
+        return True
+    cached = _IDENTITY_CACHE.get(binary_path)
+    if cached is not None:
+        return cached
+    try:
+        proc = subprocess.run(  # noqa: S603 - argv from the registry, never user input
+            [binary_path, *dep.check_cmd[1:]],
+            capture_output=True,
+            text=True,
+            timeout=_IDENTITY_TIMEOUT_S,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return True
+    ok = re.search(dep.identity_regex, proc.stdout + proc.stderr) is not None
+    _IDENTITY_CACHE[binary_path] = ok
+    return ok
+
+
+def resolve_executable(dep: Dep, quick: bool = False) -> str:
     """PATH location of the dep's binary — its primary name, else an alternate.
 
     A vendor rename (cursor's `cursor-agent` → `agent`) otherwise reports an
     installed CLI as missing and blocks its spawn.
+
+    A generic name can also be taken by a DIFFERENT vendor — xAI's grok ships
+    `~/.grok/bin/agent`, the name Cursor uses — which had Navide detecting and
+    spawning grok as Cursor. So a candidate that fails the dep's identity probe
+    steps aside for a later one; if none identifies, the first name that
+    resolved is still returned, keeping a format change from hiding a CLI that
+    really is installed.
+
+    quick=True is quick_status's no-subprocess contract: the probe is skipped
+    and the first name on PATH wins, exactly as before. That paint only answers
+    "present or missing", which the squatter does not change, and the full
+    pass that follows grades the binary properly.
     """
+    fallback = ""
     for name in (dep.check_cmd[0], *dep.alt_commands):
         found = osplat.paths.resolve_program(name)
-        if found:
+        if not found:
+            continue
+        if quick or _is_that_tool(dep, found):
             return found
-    return ""
+        fallback = fallback or found
+    return fallback
 
 
 def detect_dep(dep: Dep, quick: bool = False) -> dict[str, Any]:
@@ -394,7 +445,7 @@ def detect_dep(dep: Dep, quick: bool = False) -> dict[str, Any]:
     (version empty) until a full pass can grade it. Used by quick_status for
     the wizard's first paint — missing is exact either way.
     """
-    binary_path = resolve_executable(dep)
+    binary_path = resolve_executable(dep, quick=quick)
     exit_code: int | None = None
     signal_name = ""
     duration_ms: int | None = None
@@ -917,10 +968,30 @@ def maintenance_command(dep_id: str, action: str) -> dict[str, Any]:
             "error": f"{dep.label} has no official {action} command",
             "docs_url": dep.docs_url,
         }
+    command = _command_on_the_resolved_binary(dep, command)
     # Always interactive: an update may prompt, authenticate or need sudo, so it
     # belongs in a terminal the user can see and answer.
     return {"ok": True, "needs_terminal": True, "command": command, "docs_url": dep.docs_url}
 
+
+
+def _command_on_the_resolved_binary(dep: Dep, command: str) -> str:
+    """Point a maintenance command at the binary detection actually resolved.
+
+    `update_cmd` and friends are stored as plain strings naming the CLI
+    (`agent update`), and they are handed to a terminal verbatim. When the name
+    they use is one another vendor also ships, running the string runs the
+    wrong tool — `agent update` on a machine carrying xAI's grok updates grok,
+    not Cursor. Rewriting only the leading token, and only when it is one of
+    this dep's own names, leaves every argument the vendor documented intact.
+    """
+    head, _, rest = command.partition(" ")
+    if head not in (dep.check_cmd[0], *dep.alt_commands):
+        return command
+    resolved = resolve_executable(dep)
+    if not resolved or os.path.basename(resolved) == head:
+        return command
+    return f"{shlex.quote(resolved)} {rest}".strip()
 
 # ── Install (whitelist-driven) ────────────────────────────────────────────────
 INSTALL_TIMEOUT_S = 900

@@ -845,8 +845,13 @@ SPEC = VendorSpec(
     # alternate so a machine still carrying the legacy binary is detected and
     # spawnable instead of being reported as not installed.
     install_dep=Dep("cursor", "Cursor CLI", "Cursor terminal coding agent CLI", "agent_cli",
-        ["agent", "--version"], r"(\d+\.\d+\.\d+)",
+        ["agent", "--version"], r"^(\d+\.\d+\.\d+)",
         alt_commands=("cursor-agent",),
+        # Cursor prints a bare version (`2026.08.25-3e8eec8`); a squatter on
+        # the `agent` name prints its own name first. Anchoring the version
+        # pattern and asking for the same shape here is what tells the two
+        # apart — measured against both binaries on 2026-09-18.
+        identity_regex=r"^\d+\.\d+",
         install_cmd="curl https://cursor.com/install -fsS | bash",
         needs_terminal=True, requires_binaries=("curl",), optional=True,
         docs_url="https://cursor.com/docs/cli",
