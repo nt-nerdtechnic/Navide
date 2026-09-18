@@ -69,7 +69,7 @@ import {
   supportsEffort,
   supportsModel,
 } from '@navide/plugin-shell'
-import { describeModelRefusal } from '../lib/agentSpawnGate'
+import { modelRefusalMessage } from '../lib/agentSpawnGate'
 
 /** CLIs YOLO mode actually affects: the ones declaring a bypass flag. Derived,
  *  because the hand-written hint here listed three while eight qualified. */
@@ -1844,7 +1844,8 @@ const modelRefusal = computed<string>(() => {
   if (!request.model && !request.effort) return ''
   const chosen = modelArgsFor({ spec: spawnModelSpec.value, request })
   if (chosen.ok) return ''
-  return describeModelRefusal(activeSpawnAgent.value, chosen.refusal, request.effort)
+  const { key, params } = modelRefusalMessage(activeSpawnAgent.value, chosen.refusal, request.effort)
+  return i18n.global.t(key, params)
 })
 const pipelineOpen = ref<boolean>(true)
 // Manual spawn used to be a card, and a spawn-mode workspace opened with it

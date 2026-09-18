@@ -5,7 +5,14 @@
       "placeholder": "廠商預設",
       "effort-label": "推理強度",
       "effort-default": "廠商預設",
-      "shadowed-by-command": "這個 CLI 設了啟動指令（設定 → CLI Agents），整條命令照原樣執行，Navide 不會再加上模型與 effort，所以這裡無法選。要指定模型，請寫進該啟動指令，或清空它。"
+      "shadowed-by-command": "這個 CLI 設了啟動指令（設定 → CLI Agents），整條命令照原樣執行，Navide 不會再加上模型與 effort，所以這裡無法選。要指定模型，請寫進該啟動指令，或清空它。",
+      "refuse": {
+        "model-unsupported": "「{agent}」無法在啟動時指定模型，這樣開會落回它的預設模型 — 請拿掉 model 參數，改在 CLI 裡自己切換模型",
+        "effort-unsupported": "「{agent}」沒有獨立的 effort 參數 — 請拿掉 effort；若這家 CLI 是把強度寫在模型 id 裡（例如 gpt-5.3-codex-high），請改寫進 model",
+        "model-malformed": "model 只能是單一的模型 id — 不可含空白，也不可用「-」開頭。帶空白的值會被拆成兩個參數，等於多塞了一個旗標給 CLI",
+        "effort-malformed": "effort 只能是單一個字 — 不可含空白，也不可用「-」開頭",
+        "effort-invalid": "「{agent}」的 effort 只接受：{accepted}，收到的是「{effort}」"
+      }
     }
   },
   "ai-cli": {

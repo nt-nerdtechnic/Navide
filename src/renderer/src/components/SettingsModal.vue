@@ -64,7 +64,7 @@ import {
   usePushChannelPrefs,
 } from '../composables/usePushChannelPrefs'
 import { cliAgentRowChips } from '../lib/cliAgentRow'
-import { describeModelRefusal } from '../lib/agentSpawnGate'
+import { modelRefusalMessage } from '../lib/agentSpawnGate'
 import {
   SPAWN_ENV_RESERVED_KEYS,
   cliCommandKey,
@@ -378,9 +378,10 @@ function applyLaunchModel(k: string, next: CliModelDefault): void {
     // would never make is worse than the field snapping back with a reason.
     launchModelErrors.value = {
       ...launchModelErrors.value,
-      [k]: describeModelRefusal(k, chosen.refusal, next.effort),
+      [k]: t(refusal.key, refusal.params),
     }
     return
+    const refusal = modelRefusalMessage(k, chosen.refusal, next.effort)
   }
   const { [k]: _dropped, ...rest } = launchModelErrors.value
   launchModelErrors.value = rest

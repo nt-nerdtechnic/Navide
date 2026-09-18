@@ -8,7 +8,7 @@
 // advisory thresholds below still succeed; the caller just gets an
 // `advisories` note back to relay or log.
 
-import { modelArgsFor, type AgentKey, type CliModelCapability } from '@navide/plugin-shell'
+import { modelArgsFor, type AgentKey, type CliModelCapability, type CliModelRefusal } from '@navide/plugin-shell'
 import { normalizeMessagingName, type ParsedSpawnRequest } from './agentMessaging'
 
 /** Advisory threshold for live child panes one pane has spawned — crossing it
@@ -89,13 +89,10 @@ export function spawnAdvisoriesFor(
   return advisories
 }
 
-/** Turn a {@link modelArgsFor} refusal into user/agent-facing text. Says what
- *  this vendor DOES accept, not just what it rejected — a caller told only
- *  "not supported" retries with the same shape.
- *
- *  Exported so the spawn card's own gate says the same sentence the MCP tool
- *  says. A second wording in the renderer would be a second thing to keep in
- *  step with the vendor specs, and the one most likely to go stale. */
+/** Turn a {@link modelArgsFor} refusal into agent-facing text (protocol
+ *  language, see the header). Says what this vendor DOES accept, not just what
+ *  it rejected — a caller told only "not supported" retries with the same
+ *  shape. Surfaces a user reads take {@link modelRefusalMessage} instead. */
 export function describeModelRefusal(
   agentKey: string,
   refusal: Exclude<ReturnType<typeof modelArgsFor>, { ok: true }>['refusal'],
@@ -126,6 +123,29 @@ export function describeModelRefusal(
     `「${agentKey}」的 effort 只接受：${refusal.accepted.join('、')}，` +
     `收到的是「${effort}」`
   )
+}
+
+const MODEL_REFUSAL_I18N_KEY: Record<CliModelRefusal['kind'], string> = {
+  'model-unsupported': 'spawn.model.refuse.model-unsupported',
+  'effort-unsupported': 'spawn.model.refuse.effort-unsupported',
+  'model-malformed': 'spawn.model.refuse.model-malformed',
+  'effort-malformed': 'spawn.model.refuse.effort-malformed',
+  'effort-invalid': 'spawn.model.refuse.effort-invalid',
+}
+
+/** The same refusal as an i18n message descriptor, for the surfaces a user
+ *  reads (spawn dialog, Settings → CLI Agents). This module has no i18n
+ *  access, so the caller resolves it with its own `t(key, params)`. Kept next
+ *  to {@link describeModelRefusal} so the two wordings drift together, not
+ *  apart. */
+export function modelRefusalMessage(
+  agentKey: string,
+  refusal: CliModelRefusal,
+  effort: string,
+): { key: string; params: Record<string, string> } {
+  const params: Record<string, string> = { agent: agentKey, effort }
+  if (refusal.kind === 'effort-invalid') params.accepted = refusal.accepted.join(', ')
+  return { key: MODEL_REFUSAL_I18N_KEY[refusal.kind], params }
 }
 
 /** The same agent-key whitelist check evaluateSpawnRequest does, pulled out
