@@ -48,7 +48,8 @@ const panes = [
   { ...basePane, id: 'parent' },
   { ...basePane, id: 'child', spawnedBy: 'parent' },
   { ...basePane, id: 'grandchild', spawnedBy: 'child' },
-  { ...basePane, id: 'other' }
+  { ...basePane, id: 'other' },
+  { ...basePane, id: 'other-kid', spawnedBy: 'other' }
 ]
 
 function dragStart(): { ev: Event; data: Map<string, string> } {
@@ -69,11 +70,11 @@ function dragStart(): { ev: Event; data: Map<string, string> } {
 describe('ControlPane – dragging a folded row carries its subtree', () => {
   let wrapper: VueWrapper
 
-  function mount(collapsed: string[]): void {
+  function mount(collapsed: string[], selected: string[] = []): void {
     sessionStorage.setItem('agentTeam.sidebarTab', 'agents')
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     wrapper = shallowMount(ControlPane as any, {
-      props: makeProps(panes, collapsed),
+      props: { ...makeProps(panes, collapsed), selectedPaneIds: new Set(selected) },
       global: { mocks: { $t: (key: string) => key } }
     })
   }
@@ -104,5 +105,41 @@ describe('ControlPane – dragging a folded row carries its subtree', () => {
     await wrapper.vm.$nextTick()
     expect(data.has(PANE_BATCH_MIME)).toBe(false)
     expect(wrapper.emitted('select-panes')).toBeUndefined()
+  })
+
+  it('adds only the dragged row\'s subtree to an existing multi-selection', async () => {
+    // 'other' is an expanded parent in the selection: its child must NOT be
+    // swept in — only the folded row being dragged stands for its subtree.
+    mount(['parent'], ['other', 'parent'])
+    const { ev, data } = dragStart()
+    line(0).dispatchEvent(ev)
+    await wrapper.vm.$nextTick()
+    expect(data.get(PANE_BATCH_MIME)).toBe('parent\nchild\ngrandchild\nother')
+    expect(wrapper.emitted('select-panes')).toEqual([[['parent', 'child', 'grandchild', 'other']]])
+  })
+
+  it('does not re-emit when the selection already holds the subtree', async () => {
+    mount(['parent'], ['parent', 'child', 'grandchild'])
+    const { ev, data } = dragStart()
+    line(0).dispatchEvent(ev)
+    await wrapper.vm.$nextTick()
+    expect(data.get(PANE_BATCH_MIME)).toBe('parent\nchild\ngrandchild')
+    expect(wrapper.emitted('select-panes')).toBeUndefined()
+  })
+
+  it('hands the whole subtree to the cross-window dragend handoff', async () => {
+    const cliPaneDragEnd = vi.fn()
+    ;(window as unknown as { agentTeam: unknown }).agentTeam = { cliPaneDragEnd }
+    try {
+      mount(['parent'])
+      line(0).dispatchEvent(dragStart().ev)
+      const end = new Event('dragend', { bubbles: true })
+      Object.assign(end, { dataTransfer: { dropEffect: 'none' }, screenX: 10, screenY: 20 })
+      line(0).dispatchEvent(end)
+      await wrapper.vm.$nextTick()
+      expect(cliPaneDragEnd).toHaveBeenCalledWith('parent', 10, 20, ['parent', 'child', 'grandchild'])
+    } finally {
+      delete (window as unknown as { agentTeam?: unknown }).agentTeam
+    }
   })
 })

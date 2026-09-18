@@ -2750,13 +2750,19 @@ const draggingBatchIds = ref<string[]>([])
 
 function onAgentDragStart(e: DragEvent, paneId: string, folded = false): void {
   if (!e.dataTransfer) return
-  let batch = resolveDragBatch(paneId, props.selectedPaneIds, props.panes.map((p) => p.id))
+  const orderedIds = props.panes.map((p) => p.id)
+  let batch = resolveDragBatch(paneId, props.selectedPaneIds, orderedIds)
   // A folded row stands for its whole subtree, so the drag carries the hidden
   // descendants as if they had been multi-selected — otherwise a tab or window
   // drop moves the parent alone and the children it was hiding stay behind.
+  // Only THIS row's subtree joins: an expanded parent elsewhere in the
+  // selection keeps the single-row drag it always had.
   if (folded) {
-    batch = withDescendants(batch, props.panes)
-    if (batch.length > 1) emit('select-panes', batch)
+    const carried = new Set([...batch, ...withDescendants([paneId], props.panes)])
+    if (carried.size > batch.length) {
+      batch = orderedIds.filter((id) => carried.has(id))
+      emit('select-panes', batch)
+    }
   }
   e.dataTransfer.setData('application/x-pane-id', paneId)
   // Only a real batch writes the MIME — its presence is what marks a batch drag
