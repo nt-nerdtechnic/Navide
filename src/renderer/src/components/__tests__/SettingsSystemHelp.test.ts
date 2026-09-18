@@ -23,10 +23,10 @@ const HTML_ADVISORY = '[intlify] Detected HTML in '
 const LITERAL_OPTION = '繁體中文'
 
 // Row counts per table, in template order.
-// The first table is the settings nav: seventeen pages in five groups,
+// The first table is the settings nav: eighteen pages in four groups,
 // counted from SettingsModal.vue's `.s-nav-group` blocks rather than from the
 // prose. The last one is section 8's which-surface-is-which table.
-const TABLE_ROWS = [17, 14, 9, 4, 3, 6, 2, 6, 3, 8, 4, 10, 3]
+const TABLE_ROWS = [18, 14, 9, 4, 3, 6, 2, 6, 3, 8, 4, 10, 3]
 
 function unexpectedWarnings(warn: ReturnType<typeof vi.spyOn>): unknown[][] {
   return warn.mock.calls.filter(([first]) => !String(first).startsWith(HTML_ADVISORY))
@@ -109,9 +109,9 @@ describe('SettingsSystemHelp', () => {
     const figures = wrapper.findAll('.mk-fig')
     expect(figures).toHaveLength(2)
     expect(figures.map((f) => f.findAll('.mk-fig-legend li').length)).toEqual([3, 3])
-    // The nav picture draws the real sidebar: five groups, seventeen pages.
-    expect(figures[0].findAll('.mk-set-grouptitle')).toHaveLength(5)
-    expect(figures[0].findAll('.mk-set-navitem')).toHaveLength(17)
+    // The nav picture draws the real sidebar: four groups, eighteen pages.
+    expect(figures[0].findAll('.mk-set-grouptitle')).toHaveLength(4)
+    expect(figures[0].findAll('.mk-set-navitem')).toHaveLength(18)
     // ...and the search box with the two hits it drops down.
     expect(figures[0].findAll('.mk-set-result')).toHaveLength(2)
     // The resource picture: a header row plus one row per pane.

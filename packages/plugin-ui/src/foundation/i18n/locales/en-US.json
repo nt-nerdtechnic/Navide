@@ -1283,12 +1283,12 @@
         "general": "General",
         "accountsAgents": "Accounts & Agents",
         "integration": "Integrations",
-        "system": "System",
-        "plugins": "Plugins"
+        "system": "System"
       },
       "general": "General",
       "appearance": "Appearance",
       "layout": "Layout",
+      "notifications": "Notifications",
       "crossDevice": "Navide Cloud",
       "accounts": "Accounts",
       "cliAgents": "CLI Agents",
@@ -1367,17 +1367,17 @@
             "autoReclaim": "30"
           }
         },
-        "intro": "What each of the seventeen settings tabs controls, how Navide Cloud links several machines into one private network, and the system surfaces that live outside the main screen — the menus, the standalone windows, the usage views and resource upkeep.",
+        "intro": "What each of the eighteen settings tabs controls, how Navide Cloud links several machines into one private network, and the system surfaces that live outside the main screen — the menus, the standalone windows, the usage views and resource upkeep.",
         "s1": {
           "title": "Settings overview",
-          "p1": "The settings window opens with <kbd class=\"syh-kbd\">⌘,</kbd>; the gear button in the title bar is the same entry point. The left sidebar is split into five groups, <strong>17 tabs</strong> in total.",
+          "p1": "The settings window opens with <kbd class=\"syh-kbd\">⌘,</kbd>; the gear button in the title bar is the same entry point. The left sidebar is split into four groups, <strong>18 tabs</strong> in total.",
           "h1": "The search field",
           "p2": "Below the sidebar heading is a search field with the placeholder <code>Search settings…</code>. It matches setting titles, their section and their keywords <strong>across tabs</strong> (in both languages), listing at most 8 results; clicking one switches to that tab and scrolls to the section (with one exception: \"Storage\" closes settings and opens the Resource Manager directly). With no match it shows <code>No matching settings</code>. <kbd class=\"syh-kbd\">Esc</kbd> clears it.",
           "callout": {
             "title": "The search index is not exhaustive",
-            "text": "The index is a hand-maintained list, and <strong>the CLI Agents, Layout and Extensions tabs have no entries at all</strong>, so nothing inside them is searchable — you have to open them yourself."
+            "text": "The index is a hand-maintained list, and <strong>the CLI Agents, Layout, Notifications and Extensions tabs have no entries at all</strong>, so nothing inside them is searchable — you have to open them yourself."
           },
-          "h2": "The seventeen tabs",
+          "h2": "The eighteen tabs",
           "tabTable": {
             "group": "Group",
             "tab": "Tab",
@@ -1386,7 +1386,7 @@
           },
           "tabs": {
             "general": {
-              "what": "Close confirmation, idle reclaim threshold, resume behavior, default editor, quota badge, environment check, backend timeout, notifications and sound, plus exporting and importing the whole settings bundle",
+              "what": "Close confirmation, idle reclaim threshold, resume behavior, default editor, quota badge, environment check, backend timeout, plus exporting and importing the whole settings bundle",
               "more": "section 2 of this page"
             },
             "appearance": {
@@ -1400,6 +1400,10 @@
             "layout": {
               "what": "The five-slot shell, which slot each view lands in, layout presets",
               "more": "section 4 of the \"Workspaces & panes\" topic"
+            },
+            "notifications": {
+              "what": "Desktop notifications and the completion chime for CLI turns, plus the macOS permission check",
+              "more": "section 2 of this page"
             },
             "cloud": {
               "what": "Cross-device link status, this machine's fingerprint, who may command this machine",
@@ -1531,8 +1535,8 @@
             "restore": "<strong>Restore Windows</strong> — reopen the workspace windows that were open when you last quit."
           },
           "callout": {
-            "title": "Notifications and sound live on the General tab",
-            "text": "The notification toggles do exist — they are simply not on Appearance but in the <strong>Notifications block of the General tab</strong>, three of them: <em>System notifications</em> (a desktop notification when a CLI finishes its turn or needs your input while Navide is in the background; the Dock badge keeps counting either way), <em>Notification sound</em> (a short chime on turn completion and a double ping while a CLI waits for you), and <em>Notification permission</em> — macOS does not report the real authorization to Navide, so this one can only send a test notification for you to confirm it appears; if it does not, allow Navide under System Settings → Notifications. That last row only appears on platforms where it applies."
+            "title": "Notifications and sound live on the Notifications tab",
+            "text": "The notification toggles do exist — they are simply not on Appearance but on the <strong>Notifications tab</strong>, three of them: <em>System notifications</em> (a desktop notification when a CLI finishes its turn or needs your input while Navide is in the background; the Dock badge keeps counting either way), <em>Notification sound</em> (a short chime on turn completion and a double ping while a CLI waits for you), and <em>Notification permission</em> — macOS does not report the real authorization to Navide, so this one can only send a test notification for you to confirm it appears; if it does not, allow Navide under System Settings → Notifications. That last row only appears on platforms where it applies."
           },
           "h3": "Status badges",
           "p1": "<strong>Rename and recolor</strong> each of the nine pane states. The Chinese and English names are filled in separately (24 characters each; leave one blank to fall back to the built-in translation). Once changed, the pane badges, the sidebar, the meeting bar and the resource panel all follow. <strong>The setting lives on your account, not with the project.</strong>",

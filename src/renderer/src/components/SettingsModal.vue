@@ -218,7 +218,7 @@ const reclaimNowCount = computed(() => props.reclaimableNowCount ?? 0)
 const reclaimNowSize = computed(() => formatBytes(props.reclaimableNowBytes ?? 0))
 
 // ── Tab ───────────────────────────────────────────────────────────────────────
-type Tab = 'mcp' | 'skills' | 'prompts' | 'memory' | 'analyzer' | 'cliAgents' | 'general' | 'cross-device' | 'updates' | 'appearance' | 'statusBadges' | 'layout' | 'accounts' | 'extensions' | 'marketplace' | 'keybindings' | 'help'
+type Tab = 'mcp' | 'skills' | 'prompts' | 'memory' | 'analyzer' | 'cliAgents' | 'general' | 'cross-device' | 'updates' | 'appearance' | 'statusBadges' | 'layout' | 'notifications' | 'accounts' | 'extensions' | 'marketplace' | 'keybindings' | 'help'
 
 /** Topics inside the Help tab — read-only reference material, no settings. */
 type HelpTopic =
@@ -919,7 +919,7 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
     tab: 'extensions',
     section: 'execution-policy',
     title: t('settings.search.item.execution-policy.title'),
-    group: t('settings.nav.group.plugins'),
+    group: t('settings.nav.group.integration'),
     summary: t('settings.search.item.execution-policy.summary'),
     keywords: 'execution policy permission permissions allowlist denylist full shell executable system namespace source repository recommendation untrusted recovery rebuild security 執行政策 權限 允許清單 拒絕清單 完整模式 shell 可執行檔 系統命名空間 來源 repository 建議 不受信任 修復 重建 安全性',
   },
@@ -928,7 +928,7 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
     tab: 'marketplace',
     section: 'marketplace',
     title: t('settings.search.item.marketplace.title'),
-    group: t('settings.nav.group.plugins'),
+    group: t('settings.nav.group.integration'),
     summary: t('settings.search.item.marketplace.summary'),
     keywords: 'marketplace extension extensions plugin plugins registry search browse install publisher signed unsigned trust 市集 擴充 擴充功能 外掛 搜尋 瀏覽 安裝 發佈者 簽章 信任',
   },
@@ -1317,6 +1317,8 @@ const settingsScopeNotes: Record<SettingsTab, { scope: SettingsScope; storage: k
   statusBadges: { scope: 'user', storage: 'localStorage' },
   // One arrangement for every workspace, shared live across windows.
   layout: { scope: 'user', storage: 'localStorage' },
+  // The two notification toggles are localStorage flags like General's.
+  notifications: { scope: 'user', storage: 'localStorage' },
   accounts: { scope: 'userWorkspaceBindings', storage: 'safeStorage' },
   extensions: { scope: 'user', storage: 'mainProcess' },
   // Browsing the registry reads nothing of the user's, so this page has no
@@ -2256,6 +2258,11 @@ watch(activeTab, (tab) => {
                   <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M5.5 2.5v11M14.5 6h-9"/></svg>
                 </template>
               </SettingsNavItem>
+              <SettingsNavItem :label="$t('settings.nav.notifications')" :active="activeTab === 'notifications'" @select="activeTab = 'notifications'">
+                <template #icon>
+                  <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.2a3.6 3.6 0 0 0-3.6 3.6v2.4L3 10.4v.8h10v-.8l-1.4-2.2V5.8A3.6 3.6 0 0 0 8 2.2Z"/><path d="M6.6 13a1.4 1.4 0 0 0 2.8 0"/></svg>
+                </template>
+              </SettingsNavItem>
             </div>
 
             <div class="s-nav-group">
@@ -2306,10 +2313,6 @@ watch(activeTab, (tab) => {
                   <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.2 2.6h6.1l3.5 3.5v7.3H3.2Z"/><path d="M9.1 2.7v3.5h3.5"/><path d="M5.4 8.4h5.2M5.4 10.7h3.4"/></svg>
                 </template>
               </SettingsNavItem>
-            </div>
-
-            <div class="s-nav-group">
-              <div class="s-nav-group-title">{{ $t('settings.nav.group.plugins') }}</div>
               <SettingsNavItem :label="$t('settings.nav.extensions')" :active="activeTab === 'extensions'" @select="activeTab = 'extensions'">
                 <template #icon>
                   <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6.4 2.6h3.2v1.5a1.3 1.3 0 0 0 2.4 0V2.6h1.4v3.2h-1.5a1.3 1.3 0 0 0 0 2.4h1.5v3.2H6.4v-1.5a1.3 1.3 0 0 0-2.4 0v1.5H2.6V8.2h1.5a1.3 1.3 0 0 0 0-2.4H2.6V2.6h3.8Z"/></svg>
@@ -3382,54 +3385,6 @@ watch(activeTab, (tab) => {
             </SettingsCard>
           </SettingsSection>
 
-          <SettingsSection :label="$t('settings.section.notifications')">
-            <SettingsCard>
-              <SettingRow
-                data-settings-section="general-system-notify"
-                :title="$t('settings.general.system-notify')"
-                :description="$t('settings.general.system-notify-hint')"
-              >
-                <template #control>
-                  <ToggleSwitch
-                    v-model="systemNotifyEnabledModel"
-                    :aria-label="$t('settings.general.system-notify')"
-                    @update:modelValue="onSystemNotifyEnabledChange"
-                  />
-                </template>
-              </SettingRow>
-
-              <SettingRow
-                data-settings-section="general-notify-sound"
-                :title="$t('settings.general.notify-sound')"
-                :description="$t('settings.general.notify-sound-hint')"
-              >
-                <template #control>
-                  <ToggleSwitch
-                    v-model="notifySoundEnabledModel"
-                    :aria-label="$t('settings.general.notify-sound')"
-                    @update:modelValue="onNotifySoundEnabledChange"
-                  />
-                </template>
-              </SettingRow>
-
-              <SettingRow
-                v-if="notifyPermissionApplicable"
-                data-settings-section="general-notify-permission"
-                :title="$t('settings.general.notify-permission')"
-                :description="$t(`settings.general.notify-permission-status.${notifyPermissionStatus}`) + ' ' + $t('settings.general.notify-permission-hint')"
-              >
-                <template #control>
-                  <button
-                    class="ap-reset"
-                    :disabled="!!perms.requesting.value"
-                    @click="sendTestNotification"
-                  >{{ perms.requesting.value === 'notifications' ? $t('onboard.requesting') : $t('settings.general.notify-permission-test') }}</button>
-                  <button class="ap-reset" @click="perms.openSettings('notifications')">{{ $t('onboard.open-settings') }}</button>
-                </template>
-              </SettingRow>
-            </SettingsCard>
-          </SettingsSection>
-
           <SettingsSection :label="$t('settings.section.settings-management')">
             <SettingsCard data-settings-section="settings-management">
               <SettingRow
@@ -4046,6 +4001,59 @@ watch(activeTab, (tab) => {
           <LayoutSettingsPane />
         </div>
 
+        <!-- ── NOTIFICATIONS TAB ─────────────────────────────────────────── -->
+        <div v-show="activeTab === 'notifications'" class="s-body notifications-body" data-settings-section="notifications">
+          <h1 class="s-page-title">{{ $t('settings.nav.notifications') }}</h1>
+
+          <SettingsSection :label="$t('settings.section.notifications')">
+            <SettingsCard>
+              <SettingRow
+                data-settings-section="general-system-notify"
+                :title="$t('settings.general.system-notify')"
+                :description="$t('settings.general.system-notify-hint')"
+              >
+                <template #control>
+                  <ToggleSwitch
+                    v-model="systemNotifyEnabledModel"
+                    :aria-label="$t('settings.general.system-notify')"
+                    @update:modelValue="onSystemNotifyEnabledChange"
+                  />
+                </template>
+              </SettingRow>
+
+              <SettingRow
+                data-settings-section="general-notify-sound"
+                :title="$t('settings.general.notify-sound')"
+                :description="$t('settings.general.notify-sound-hint')"
+              >
+                <template #control>
+                  <ToggleSwitch
+                    v-model="notifySoundEnabledModel"
+                    :aria-label="$t('settings.general.notify-sound')"
+                    @update:modelValue="onNotifySoundEnabledChange"
+                  />
+                </template>
+              </SettingRow>
+
+              <SettingRow
+                v-if="notifyPermissionApplicable"
+                data-settings-section="general-notify-permission"
+                :title="$t('settings.general.notify-permission')"
+                :description="$t(`settings.general.notify-permission-status.${notifyPermissionStatus}`) + ' ' + $t('settings.general.notify-permission-hint')"
+              >
+                <template #control>
+                  <button
+                    class="ap-reset"
+                    :disabled="!!perms.requesting.value"
+                    @click="sendTestNotification"
+                  >{{ perms.requesting.value === 'notifications' ? $t('onboard.requesting') : $t('settings.general.notify-permission-test') }}</button>
+                  <button class="ap-reset" @click="perms.openSettings('notifications')">{{ $t('onboard.open-settings') }}</button>
+                </template>
+              </SettingRow>
+            </SettingsCard>
+          </SettingsSection>
+        </div>
+
         </div>
         <!-- /.s-content -->
 
@@ -4506,6 +4514,7 @@ watch(activeTab, (tab) => {
 /* A stack of region cards needs the gutter and its own scroll, which the bare
    .s-body (overflow:hidden, no padding) does not give. */
 .layout-body { overflow-y: auto; padding: 18px 22px; }
+.notifications-body { overflow-y: auto; padding: 18px 22px; }
 /* Same reason: a scrolling list of status rows needs the gutter and its own
    scroll, which the bare .s-body does not give. */
 .status-badges-body { overflow-y: auto; padding: 18px 22px; }

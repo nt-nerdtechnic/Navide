@@ -42,25 +42,26 @@ interface StageRow {
   stageSpan?: number
 }
 
-// ── 1 · The seventeen tabs ───────────────────────────────────────────────
+// ── 1 · The eighteen tabs ────────────────────────────────────────────────
 const tabs: TabRow[] = [
-  { key: 'general', groupKey: 'settings.nav.group.general', groupSpan: 4, navKey: 'settings.nav.general' },
+  { key: 'general', groupKey: 'settings.nav.group.general', groupSpan: 5, navKey: 'settings.nav.general' },
   { key: 'appearance', navKey: 'settings.nav.appearance' },
   { key: 'statusBadges', navKey: 'settings.nav.statusBadges' },
   { key: 'layout', navKey: 'settings.nav.layout' },
+  { key: 'notifications', navKey: 'settings.nav.notifications' },
   { key: 'accounts', groupKey: 'settings.nav.group.accountsAgents', groupSpan: 4, navKey: 'settings.nav.accounts' },
   { key: 'cliAgents', navKey: 'settings.nav.cliAgents' },
   { key: 'analyzer', navKey: 'settings.nav.analyzer' },
   { key: 'cloud', navKey: 'settings.nav.crossDevice' },
-  { key: 'mcp', groupKey: 'settings.nav.group.integration', groupSpan: 4, navKey: 'settings.nav.mcp' },
+  { key: 'mcp', groupKey: 'settings.nav.group.integration', groupSpan: 6, navKey: 'settings.nav.mcp' },
   { key: 'skills', navKey: 'settings.nav.skills' },
   { key: 'prompts', navKey: 'settings.nav.prompts' },
   { key: 'memory', navKey: 'settings.nav.memory' },
-  // Extensions belongs to PLUGINS, not INTEGRATIONS, and Marketplace sits
-  // beside it — both read off the fourth `.s-nav-group` in SettingsModal.vue,
-  // which holds exactly these two. The execution policy is not a page of its
-  // own: it is the editable block at the top of Extensions.
-  { key: 'extensions', groupKey: 'settings.nav.group.plugins', groupSpan: 2, navKey: 'settings.nav.extensions' },
+  // Extensions and Marketplace sit in INTEGRATIONS after Memory — all six
+  // read off the third `.s-nav-group` in SettingsModal.vue. The execution
+  // policy is not a page of its own: it is the editable block at the top of
+  // Extensions.
+  { key: 'extensions', navKey: 'settings.nav.extensions' },
   { key: 'marketplace', navKey: 'settings.nav.marketplace' },
   { key: 'shortcuts', groupKey: 'settings.nav.group.system', groupSpan: 3, navKey: 'settings.nav.keybindings' },
   { key: 'updates', navKey: 'settings.nav.updates' },
@@ -252,6 +253,7 @@ const settingsGroups = computed(() => [
       { label: t('settings.nav.appearance') },
       { label: t('settings.nav.statusBadges') },
       { label: t('settings.nav.layout') },
+      { label: t('settings.nav.notifications') },
     ],
   },
   {
@@ -270,11 +272,6 @@ const settingsGroups = computed(() => [
       { label: t('settings.nav.skills') },
       { label: t('settings.nav.prompts') },
       { label: t('settings.nav.memory') },
-    ],
-  },
-  {
-    title: t('settings.nav.group.plugins'),
-    items: [
       { label: t('settings.nav.extensions') },
       { label: t('settings.nav.marketplace') },
     ],
