@@ -146,9 +146,14 @@ describe('ControlPane – workspace sections', () => {
     // Closed until asked for, so it costs the row no width.
     expect(wrapper.find('.ws-more-menu').exists()).toBe(false)
     await head.find('.ws-more').trigger('click')
+    // Addressed by label rather than position: the menu has since taken in the
+    // actions that used to need a right-click, and an index would have to be
+    // renumbered every time it grows again.
     const opts = wrapper.findAll('.ws-more-opt')
-    expect(opts).toHaveLength(2)
-    await opts[1].trigger('click')
+    expect(opts.map((o) => o.text())).toContain('action.rebuild-all-cli-panes-label')
+    const history = opts.find((o) => o.text() === 'label.history')
+    expect(history).toBeDefined()
+    await history!.trigger('click')
     expect(wrapper.emitted('open-history')).toBeTruthy()
     // Choosing an item dismisses the menu; leaving it up over a row whose
     // action already ran reads as though nothing happened.

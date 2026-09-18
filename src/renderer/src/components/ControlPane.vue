@@ -2211,6 +2211,39 @@ function closeWsMoreMenu(): void {
   wsMoreMenuPath.value = ''
 }
 
+/** Same floor as the right-click menu's: a window must keep one workspace, so
+ *  the close rows only appear for a project that has somewhere to land. */
+const wsMoreCanClose = computed(
+  () => !!wsMoreMenuPath.value && (wsMoreMenuPath.value !== workspacePath.value || canCloseCurrent.value)
+)
+
+function wsMoreAction(kind: WorkspaceActionKind): void {
+  const path = wsMoreMenuPath.value
+  if (!path) return
+  closeWsMoreMenu()
+  workspaceAction(kind, path)
+}
+
+/** Rename from the ⋯ menu, for the same reason the context menu has its own
+ *  route: double-clicking the name would switch to that workspace first, which
+ *  restores a whole project's panes — far more than "rename" asked for. */
+function wsMoreRename(): void {
+  const path = wsMoreMenuPath.value
+  if (!path) return
+  closeWsMoreMenu()
+  startWorkspaceRename(path)
+}
+
+/** Detach without the drag. The drag hands over where it was released; from a
+ *  menu the click is the only position we have, which puts the new window at
+ *  the pointer — the same place the gesture would have left it. */
+function wsMoreDetach(ev: MouseEvent): void {
+  const path = wsMoreMenuPath.value
+  if (!path || !canDetachWorkspace.value) return
+  closeWsMoreMenu()
+  emit('detach-workspace', path, ev.screenX, ev.screenY)
+}
+
 /** The heading a workspace drag is hovering, for the drop line. */
 const wsDragOverPath = ref<string>('')
 let draggingWorkspacePath = ''
@@ -2335,14 +2368,25 @@ function startWorkspaceRenameFromMenu(): void {
   startWorkspaceRename(m.path)
 }
 
-function wsMenuAction(kind: 'reveal' | 'copy' | 'close' | 'close-keep-panes'): void {
+type WorkspaceActionKind = 'reveal' | 'copy' | 'close' | 'close-keep-panes'
+
+/** The action itself, addressed by path so both of a heading's menus can run
+ *  it: the row's right-click menu and the ⋯ overflow. Kept apart from either
+ *  menu's state — the two open from different gestures and close themselves
+ *  differently, and a shared action that read one of their refs would do the
+ *  right thing from one menu and nothing from the other. */
+function workspaceAction(kind: WorkspaceActionKind, path: string): void {
+  if (kind === 'reveal') emit('reveal-workspace-folder', path)
+  else if (kind === 'copy') void navigator.clipboard?.writeText(path)
+  else if (kind === 'close-keep-panes') emit('close-workspace-keep-panes', path)
+  else emit('close-workspace', path)
+}
+
+function wsMenuAction(kind: WorkspaceActionKind): void {
   const m = wsMenu.value
   if (!m) return
   closeWsMenu()
-  if (kind === 'reveal') emit('reveal-workspace-folder', m.path)
-  else if (kind === 'copy') void navigator.clipboard?.writeText(m.path)
-  else if (kind === 'close-keep-panes') emit('close-workspace-keep-panes', m.path)
-  else emit('close-workspace', m.path)
+  workspaceAction(kind, m.path)
 }
 // Fixed, not absolute: the pane list scrolls under `overflow-y: auto`, which
 // would clip a menu positioned inside it.
@@ -3784,6 +3828,66 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
           <span class="ws-more-ico"><HistoryIcon /></span>
           <span>{{ $t('label.history') }}</span>
         </button>
+
+        <!-- Everything below already existed, reachable only by right-clicking
+             the row or by a drag nobody guesses. The right-click menu keeps
+             them too: this is a second door, not a move. -->
+        <div class="ws-add-div"></div>
+        <button class="ws-more-opt" @click="wsMoreAction('reveal')">
+          <span class="ws-more-ico"><FolderIcon /></span>
+          <span>{{ $t('action.open-in-finder') }}</span>
+        </button>
+        <button class="ws-more-opt" @click="wsMoreAction('copy')">
+          <span class="ws-more-ico">
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <rect x="5.5" y="5.5" width="8" height="9" rx="1.5" />
+              <path d="M10.5 5.5v-2a1.5 1.5 0 0 0-1.5-1.5H4a1.5 1.5 0 0 0-1.5 1.5V10a1.5 1.5 0 0 0 1.5 1.5h1.5" />
+            </svg>
+          </span>
+          <span>{{ $t('action.copy-path') }}</span>
+        </button>
+        <button class="ws-more-opt" @click="wsMoreRename()">
+          <span class="ws-more-ico">
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M11.5 2.5l2 2-7.5 7.5-2.5.5.5-2.5z" />
+              <path d="M2.5 14h11" />
+            </svg>
+          </span>
+          <span>{{ $t('action.rename-workspace') }}</span>
+        </button>
+        <button v-if="canDetachWorkspace" class="ws-more-opt" @click="wsMoreDetach($event)">
+          <span class="ws-more-ico">
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M8 2.5H3.5A1.5 1.5 0 0 0 2 4v8.5A1.5 1.5 0 0 0 3.5 14H12a1.5 1.5 0 0 0 1.5-1.5V8" />
+              <path d="M10 2.5h3.5V6M13.5 2.5L8 8" />
+            </svg>
+          </span>
+          <span>{{ $t('action.detach-workspace') }}</span>
+        </button>
+
+        <!-- Last, behind their own rule, and in danger colour: the two rows
+             that take something away. Right-click hid them behind a gesture;
+             here they sit one click from Rebuild, so they have to read as the
+             end of the list rather than one more item in it. -->
+        <template v-if="wsMoreCanClose">
+          <div class="ws-add-div"></div>
+          <button class="ws-more-opt" @click="wsMoreAction('close-keep-panes')">
+            <span class="ws-more-ico">
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M4 4l8 8M12 4l-8 8" />
+              </svg>
+            </span>
+            <span>{{ $t('action.close-workspace') }}</span>
+          </button>
+          <button class="ws-more-opt danger" @click="wsMoreAction('close')">
+            <span class="ws-more-ico">
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M4 4l8 8M12 4l-8 8" />
+              </svg>
+            </span>
+            <span>{{ $t('action.close-workspace-and-panes') }}</span>
+          </button>
+        </template>
       </div>
       <div v-if="addMenuOpen" class="ws-add-menu" :style="addMenuStyle" @click.stop>
         <select v-model="pickedRole" class="ws-add-role">
@@ -5706,8 +5810,22 @@ button.icon-btn.muted:hover {
 }
 .ws-more-opt:hover:not(:disabled) { background: var(--bg-hover, rgb(255 255 255 / 7%)); }
 .ws-more-opt:disabled { opacity: 0.4; cursor: default; }
+/* Same treatment the right-click menu gives its closing rows. */
+.ws-more-opt.danger { color: var(--danger-bright, #e05252); }
+.ws-more-opt.danger:hover:not(:disabled) { background: var(--danger-subtle, rgb(224 82 82 / 12%)); }
 .ws-more-ico { flex: none; display: flex; align-items: center; color: var(--text-secondary); }
 .ws-more-ico :deep(svg) { width: 12px; height: 12px; display: block; }
+/* The rows added later draw their glyph inline rather than as a component —
+   one use each. They inherit the sizing above; this is the stroke styling the
+   icon components carry in their own scoped block. */
+.ws-more-ico > svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.ws-more-opt.danger .ws-more-ico { color: inherit; }
 .ws-more-ico.busy :deep(svg) { animation: agent-rebuild-spin 0.8s linear infinite; }
 
 /* Rebuild-all and history, moved off the section header: both act on one

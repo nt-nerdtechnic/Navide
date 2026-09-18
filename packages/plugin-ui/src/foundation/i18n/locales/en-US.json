@@ -666,6 +666,7 @@
     "double-click-rename": "Double-click to rename",
     "close-workspace": "Close workspace",
     "close-workspace-and-panes": "Close workspace and its panes",
+    "detach-workspace": "Open in its own window",
     "open-workspace-picker": "Open workspace…",
     "switch-workspace": "Switch / close workspace (back to Welcome)",
     "discard-progress": "Discard all stage progress and re-run from Stage 01",

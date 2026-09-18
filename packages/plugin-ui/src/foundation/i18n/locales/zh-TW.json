@@ -666,6 +666,7 @@
     "double-click-rename": "雙擊重新命名",
     "close-workspace": "關閉工作區",
     "close-workspace-and-panes": "關閉工作區與 CLI 視窗",
+    "detach-workspace": "在自己的視窗開啟",
     "open-workspace-picker": "開啟工作區…",
     "switch-workspace": "切換／關閉工作區（返回歡迎頁）",
     "discard-progress": "捨棄所有階段進度並從第 01 階段重新執行",

@@ -77,6 +77,9 @@ describe('closing a workspace while keeping its panes', () => {
 
   it('is what the sidebar row emits to', () => {
     expect(appSource).toContain('@close-workspace-keep-panes="closeWorkspaceKeepPanes"')
-    expect(paneSource).toContain("emit('close-workspace-keep-panes', m.path)")
+    // Both of a heading's menus — the right-click one and the ⋯ overflow —
+    // reach it through one path-addressed action, so the emit no longer reads
+    // the right-click menu's own state.
+    expect(paneSource).toContain("emit('close-workspace-keep-panes', path)")
   })
 })

@@ -66,7 +66,28 @@ function mountWith(extra: Record<string, unknown> = {}): VueWrapper {
  *  it, so every assertion below still reads "this heading's buttons". */
 const actsOf = async (wrapper: VueWrapper, n: number) => {
   await wrapper.findAll('.ws-head')[n].find('.ws-more').trigger('click')
-  return wrapper.findAll('.ws-more-opt')
+  const opts = wrapper.findAll('.ws-more-opt')
+  // By label, not by index: the menu has since taken in the actions that used
+  // to need a right-click, and a position would be renumbered by the next one.
+  const byLabel = (key: string) => {
+    const hit = opts.find((o) => o.text() === key)
+    if (!hit) throw new Error(`no ⋯ item "${key}"; menu reads: ${opts.map((o) => o.text()).join(' | ')}`)
+    return hit
+  }
+  // Getters, not values: `detach` is absent from a window holding one
+  // workspace, and looking every row up eagerly would throw there before the
+  // test that asserts its absence could run.
+  return {
+    all: opts,
+    get rebuild() { return byLabel('action.rebuild-all-cli-panes-label') },
+    get history() { return byLabel('label.history') },
+    get reveal() { return byLabel('action.open-in-finder') },
+    get copyPath() { return byLabel('action.copy-path') },
+    get rename() { return byLabel('action.rename-workspace') },
+    get detach() { return byLabel('action.detach-workspace') },
+    get close() { return byLabel('action.close-workspace') },
+    get closeWithPanes() { return byLabel('action.close-workspace-and-panes') },
+  }
 }
 
 describe('ControlPane – the buttons on a workspace heading', () => {
@@ -75,20 +96,20 @@ describe('ControlPane – the buttons on a workspace heading', () => {
 
   it('rebuilds the workspace whose heading was clicked, not the one on screen', async () => {
     wrapper = mountWith({ rebuildableByWorkspace: { [A]: 1, [B]: 1 } })
-    await (await actsOf(wrapper, 1))[0].trigger('click')
+    await (await actsOf(wrapper, 1)).rebuild.trigger('click')
     expect(wrapper.emitted('rebuild-all')).toEqual([[B]])
   })
 
   it('opens the history of the workspace whose heading was clicked', async () => {
     wrapper = mountWith({ rebuildableByWorkspace: { [A]: 1, [B]: 1 } })
-    await (await actsOf(wrapper, 1))[1].trigger('click')
+    await (await actsOf(wrapper, 1)).history.trigger('click')
     expect(wrapper.emitted('open-history')).toEqual([[B]])
   })
 
   it('names the viewed workspace too, rather than leaving it to a fallback', async () => {
     wrapper = mountWith({ rebuildableByWorkspace: { [A]: 1 } })
-    await (await actsOf(wrapper, 0))[0].trigger('click')
-    await (await actsOf(wrapper, 0))[1].trigger('click')
+    await (await actsOf(wrapper, 0)).rebuild.trigger('click')
+    await (await actsOf(wrapper, 0)).history.trigger('click')
     expect(wrapper.emitted('rebuild-all')).toEqual([[A]])
     expect(wrapper.emitted('open-history')).toEqual([[A]])
   })
@@ -97,8 +118,8 @@ describe('ControlPane – the buttons on a workspace heading', () => {
     // One window-wide flag meant a project with nothing to rebuild showed the
     // button live, and one with panes to rebuild showed it dead.
     wrapper = mountWith({ rebuildableByWorkspace: { [B]: 2 } })
-    expect((await actsOf(wrapper, 0))[0].attributes('disabled')).toBeDefined()
-    expect((await actsOf(wrapper, 1))[0].attributes('disabled')).toBeUndefined()
+    expect((await actsOf(wrapper, 0)).rebuild.attributes('disabled')).toBeDefined()
+    expect((await actsOf(wrapper, 1)).rebuild.attributes('disabled')).toBeUndefined()
   })
 
   it('treats a heading path with a trailing slash as the same workspace', async () => {
@@ -106,13 +127,13 @@ describe('ControlPane – the buttons on a workspace heading', () => {
       workspaces: [wsRow(`${A}/`, 'alpha')],
       rebuildableByWorkspace: { [A]: 1 },
     })
-    expect((await actsOf(wrapper, 0))[0].attributes('disabled')).toBeUndefined()
+    expect((await actsOf(wrapper, 0)).rebuild.attributes('disabled')).toBeUndefined()
   })
 
   it('disables ↻ everywhere while a rebuild batch is running', async () => {
     wrapper = mountWith({ rebuildableByWorkspace: { [A]: 1, [B]: 1 }, rebuildingAll: true })
-    expect((await actsOf(wrapper, 0))[0].attributes('disabled')).toBeDefined()
-    expect((await actsOf(wrapper, 1))[0].attributes('disabled')).toBeDefined()
+    expect((await actsOf(wrapper, 0)).rebuild.attributes('disabled')).toBeDefined()
+    expect((await actsOf(wrapper, 1)).rebuild.attributes('disabled')).toBeDefined()
   })
 
   it('opens one heading\'s overflow at a time, so ⋯ never acts on the last row', async () => {
@@ -121,7 +142,69 @@ describe('ControlPane – the buttons on a workspace heading', () => {
     // project was opened first — the exact substitution this file exists for.
     wrapper = mountWith({ rebuildableByWorkspace: { [A]: 1, [B]: 1 } })
     await actsOf(wrapper, 0)
-    await (await actsOf(wrapper, 1))[0].trigger('click')
+    await (await actsOf(wrapper, 1)).rebuild.trigger('click')
     expect(wrapper.emitted('rebuild-all')).toEqual([[B]])
   })
+  // The rows folded in from the right-click menu. Same substitution risk as
+  // ↻ and history: the menu is one element whose contents follow
+  // wsMoreMenuPath, so an action reading anything else would act on the wrong
+  // project while looking correct.
+  it('reveals the folder of the heading that was clicked', async () => {
+    wrapper = mountWith()
+    await (await actsOf(wrapper, 1)).reveal.trigger('click')
+    expect(wrapper.emitted('reveal-workspace-folder')).toEqual([[B]])
+  })
+
+  it('copies the path of the heading that was clicked', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    // happy-dom leaves navigator.clipboard undefined; the action optional-chains
+    // through it, so without this the assertion would pass on a no-op.
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    wrapper = mountWith()
+    await (await actsOf(wrapper, 1)).copyPath.trigger('click')
+    expect(writeText).toHaveBeenCalledWith(B)
+  })
+
+  it('renames in place rather than switching to that workspace first', async () => {
+    // Double-clicking the name would switch to the project before opening the
+    // editor, which restores a whole project's panes — far more than rename
+    // asked for. The menu route opens the box where the row already is.
+    wrapper = mountWith()
+    await (await actsOf(wrapper, 1)).rename.trigger('click')
+    // On THAT row — an editor opened over the workspace on screen instead
+    // would look just as correct from a document-wide `find`.
+    const heads = wrapper.findAll('.ws-head')
+    expect(heads[1].find('.ws-rename-input').exists()).toBe(true)
+    expect(heads[0].find('.ws-rename-input').exists()).toBe(false)
+    expect(wrapper.emitted('switch-workspace')).toBeUndefined()
+  })
+
+  it('detaches the heading that was clicked, at the pointer', async () => {
+    wrapper = mountWith()
+    const menu = await actsOf(wrapper, 1)
+    await menu.detach.trigger('click', { screenX: 640, screenY: 480 })
+    expect(wrapper.emitted('detach-workspace')).toEqual([[B, 640, 480]])
+  })
+
+  it('closes the heading that was clicked, keeping or ending its panes', async () => {
+    wrapper = mountWith()
+    await (await actsOf(wrapper, 1)).close.trigger('click')
+    expect(wrapper.emitted('close-workspace-keep-panes')).toEqual([[B]])
+    expect(wrapper.emitted('close-workspace')).toBeUndefined()
+
+    await (await actsOf(wrapper, 0)).closeWithPanes.trigger('click')
+    expect(wrapper.emitted('close-workspace')).toEqual([[A]])
+  })
+
+  it('hides detach when the window would be left with nothing', async () => {
+    // Pulling out the only workspace empties this window to fill a new one.
+    wrapper = mountWith({ workspaces: [wsRow(A, 'alpha')] })
+    await wrapper.findAll('.ws-head')[0].find('.ws-more').trigger('click')
+    const labels = wrapper.findAll('.ws-more-opt').map((o) => o.text())
+    expect(labels).not.toContain('action.detach-workspace')
+    // The rest of the menu still stands — this is one row hidden, not a
+    // collapsed menu.
+    expect(labels).toContain('action.open-in-finder')
+  })
+
 })
