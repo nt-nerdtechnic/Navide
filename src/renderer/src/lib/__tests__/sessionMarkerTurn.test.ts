@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { hasDetectedCodexSession, markerTurnActionFor, screenShowsBlockingDialog } from '../sessionMarkerTurn'
+import {
+  hasDetectedCodexSession,
+  markerTurnActionFor,
+  screenShowsBlockingDialog,
+  screenShowsHookTrustPrompt
+} from '../sessionMarkerTurn'
 
 type Activity = { event_type?: string; detail?: string; text?: string }
 
@@ -161,5 +166,31 @@ describe('screenShowsBlockingDialog', () => {
     // not start holding on it, or trusted-workspace spawns would stall.
     expect(screenShowsBlockingDialog('Do you trust the contents of this folder?\nPress enter to continue')).toBe(false)
     expect(screenShowsBlockingDialog('')).toBe(false)
+  })
+})
+
+describe('screenShowsHookTrustPrompt', () => {
+  // Acting on this switches the injected Codex hook off for every later pane,
+  // so it has to identify OUR hook as the thing blocking the pane — not any
+  // confirm prompt that happens to be on screen.
+  it('matches the hook approval screen, wrapped or not', () => {
+    expect(screenShowsHookTrustPrompt('Hooks need review')).toBe(true)
+    expect(screenShowsHookTrustPrompt('  hooks   need\n  review before they can run.  ')).toBe(true)
+    expect(
+      screenShowsHookTrustPrompt('1. Review hooks\n2. Trust all and continue\nHooks need review')
+    ).toBe(true)
+  })
+
+  it('does not match the other blocking dialogs', () => {
+    // screenShowsBlockingDialog is deliberately broader. If this narrower one
+    // matched the same things, answering an unrelated confirm prompt would
+    // disable the hook.
+    const confirm = 'Press enter to confirm or esc to go back'
+    expect(screenShowsBlockingDialog(confirm)).toBe(true)
+    expect(screenShowsHookTrustPrompt(confirm)).toBe(false)
+
+    expect(screenShowsHookTrustPrompt('Do you trust the contents of this folder?')).toBe(false)
+    expect(screenShowsHookTrustPrompt('> Ask Codex to do anything')).toBe(false)
+    expect(screenShowsHookTrustPrompt('')).toBe(false)
   })
 })

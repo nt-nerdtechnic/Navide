@@ -5759,6 +5759,37 @@ async def onboarding_install_prompt(session: "Session", msg_id: str, msg_type: s
         }))
 
 
+@handler("codex.hook_trust_blocked")
+async def codex_hook_trust_blocked(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """The window saw Codex demand approval for the hook Navide injects.
+
+    Reported rather than predicted: whether a Codex build gates a command-line
+    hook behind its trust screen cannot be read off a version number, and a
+    machine where it does would otherwise open every pane onto a modal. Later
+    spawns leave the hook out; nothing in the user's environment is written.
+    Idempotent — the window may report the same screen more than once.
+    """
+    from . import codex_session_hooks
+
+    blocked = bool(payload.get("blocked", True))
+    changed = await asyncio.to_thread(codex_session_hooks.set_trust_gate_blocked, blocked)
+    if changed:
+        log.info(
+            "codex hook injection %s: trust screen %s",
+            "disabled" if blocked else "re-enabled",
+            "reported by a pane" if blocked else "cleared",
+        )
+        await app_broadcast_hook_trust(blocked)
+    await session.send_json(make_response(msg_id, msg_type, {"ok": True, "blocked": blocked, "changed": changed}))
+
+
+async def app_broadcast_hook_trust(blocked: bool) -> None:
+    """Tell every window, so a second one does not report the same screen."""
+    from . import app
+
+    await app.broadcast(make_event("codex.hook_trust_changed", {"blocked": blocked}))
+
+
 @handler("onboarding.cli_health.dismiss")
 async def onboarding_cli_health_dismiss(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     from . import app

@@ -43,6 +43,12 @@ Codex, Antigravity, and Grok rely on log or database discovery to bind a new CLI
 
 For Codex, open `/hooks` to inspect pending hook reviews. An MCP startup failure or a third-party `SessionEnd` timeout warning needs separate investigation and does not by itself indicate a session ID collision. Codex 0.154 queues `SessionStart` for the first turn; opening the TUI alone does not guarantee that event has run.
 
+Some Codex builds treat the `SessionStart` hook Navide passes on the command line as an unreviewed hook and raise **Hooks need review** on every pane. A version number does not say which do — 0.155 does not here, 0.154 was reported doing so — so Navide observes instead: the first pane that shows the screen records it, every later Codex pane opens without that hook, and the Pipeline Log says so.
+
+- Navide does **not** write your `~/.codex/config.toml`, and does **not** pass `--dangerously-bypass-hook-trust` — that flag would also exempt the hooks in your own `hooks.json` from review.
+- Dropping the hook costs only a shortcut for matching a pane to its session. Sessions are still identified from logs and markers, so nothing stops working.
+- If the screen is already up, answer it for that pane (`2` = trust all and continue) or close the pane; it will not block again.
+
 - Send a normal message so the CLI persists the pane marker.
 - Confirm the CLI can write to its normal session directory.
 - Do not immediately rebuild or resume before the first session is detected.

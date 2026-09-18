@@ -3,6 +3,13 @@
 The command is stable across launches: per-process identity lives in the
 spawn environment, not the hook definition that Codex asks the user to trust.
 No user config is written and no hook-trust bypass is requested.
+
+That stability is what should keep the trust screen to a one-off, and on some
+Codex builds it does not — the screen returns for every pane and the user
+cannot get past it without answering. Rather than write their config or pass
+`--dangerously-bypass-hook-trust` (which would exempt the user's own hooks
+too), Navide stops injecting on a machine where that screen has been seen; see
+`trust_gate_blocks_injection`.
 """
 from __future__ import annotations
 
@@ -11,6 +18,7 @@ import json
 import re
 import secrets
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -50,8 +58,60 @@ $body | curl.exe -fsS -m 2 -o NUL -X POST -H 'Content-Type: application/json' -H
     )
 
 
+_HOOKS_KV_KEY = 'codex_hooks'
+_TRUST_BLOCKED_FIELD = 'session_start_trust_blocked'
+
+
+def _hooks_state() -> dict[str, Any]:
+    # Imported here, not at module scope: onboarding_deps owns the Database
+    # handle and importing it up top would close an import cycle through
+    # cli_vendors.
+    from .onboarding_deps import _get_db
+    try:
+        data = _get_db().kv_get(_HOOKS_KV_KEY)
+    except Exception:  # noqa: BLE001 - a hook is optional; never block a spawn
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def trust_gate_blocks_injection() -> bool:
+    """Whether this machine's Codex hides our injected hook behind a trust screen.
+
+    Codex makes the user approve a hook it has not seen before. Some builds
+    apply that to a hook passed on the command line, which turns every pane
+    Navide opens into a modal someone has to clear; others do not, and which
+    is which cannot be read off a version number — 0.155 here runs the same
+    injection without asking, while 0.154 was reported asking every time.
+
+    So it is observed rather than predicted: the window reports the screen the
+    first time it sees it (`codex.hook_trust_blocked`) and every later spawn
+    leaves the hook out. Nothing about the user's environment is touched —
+    only Navide's own behaviour changes, and the hook is an accuracy
+    optimisation that log and marker discovery already cover without it.
+    """
+    return bool(_hooks_state().get(_TRUST_BLOCKED_FIELD))
+
+
+def set_trust_gate_blocked(blocked: bool) -> bool:
+    """Record (or clear) that verdict. Returns whether the value changed."""
+    from .onboarding_deps import _get_db
+    state = _hooks_state()
+    if bool(state.get(_TRUST_BLOCKED_FIELD)) == blocked:
+        return False
+    state[_TRUST_BLOCKED_FIELD] = blocked
+    try:
+        _get_db().kv_set(_HOOKS_KV_KEY, state, now=int(time.time()))
+    except Exception:  # noqa: BLE001 - losing the note only costs one retry
+        return False
+    return True
+
+
 def wire(command: Any, env: dict, metadata: dict, home: Path, port_file: Path, auth_file: Path) -> Any:
     """Append a session-layer hook; Codex appends lower-layer user hooks too."""
+    # A Codex that gates this hook behind its trust screen would stop the pane
+    # on a modal instead of starting it. Seen once, never injected again.
+    if trust_gate_blocks_injection():
+        return command
     text = str(command[-1]) if isinstance(command, list) and command else str(command or '')
     # A custom session-layer SessionStart override belongs to the user. Adding
     # the same override twice would replace that layer's array, so leave it.

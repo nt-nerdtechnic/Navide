@@ -43,6 +43,12 @@ Codex、Antigravity 與 Grok 依賴 Log 或 Database Discovery，將新的 CLI S
 
 Codex 可開啟 `/hooks` 檢查待審核的 Hook。MCP 啟動失敗或第三方 `SessionEnd` Timeout 警告需要分別調查，不能單憑這些訊息認定 Session ID 發生碰撞。Codex 0.154 會將 `SessionStart` 排入第一輪執行佇列；只開啟 TUI 並不保證該事件已執行。
 
+某些 Codex 版本會把 Navide 以命令列注入的 `SessionStart` Hook 當成未審核的 Hook，每開一個 Pane 都跳出 **Hooks need review**。是否如此無法從版本號判斷（0.155 實測不會，0.154 有回報會），因此 Navide 改為**觀察**：第一次看到該畫面就記下來，之後開的 Codex Pane 一律不注入該 Hook，並在 Pipeline Log 說明。
+
+- Navide **不會**修改你的 `~/.codex/config.toml`，也**不會**加上 `--dangerously-bypass-hook-trust`——那個旗標會連你自己 `hooks.json` 裡的 Hook 也一併跳過審查。
+- 停用該 Hook 只損失「Pane 對應 Session」的一條捷徑，Session 仍由 Log 與 Marker 辨識，功能不受影響。
+- 目前這個畫面若已出現，對該 Pane 按 `2`（Trust all and continue）或直接關閉 Pane 即可；不會再擋第二次。
+
 - 傳送一般訊息，讓 CLI 保存 Pane Marker。
 - 確認 CLI 能寫入其正常 Session Directory。
 - 第一次 Session 被偵測前，不要立即 Rebuild 或 Resume。

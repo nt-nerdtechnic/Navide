@@ -206,3 +206,74 @@ def test_fallback_reader_rejects_subagent_when_optional_thread_source_is_absent(
     for shape in [{'source': {'subagent': {'thread_spawn': {}}}}, {'parent_thread_id':'parent'}]:
         text = json.dumps({'type':'session_meta','payload':{'id':SID,'cwd':'/ws',**shape}})
         assert _session_meta_resume_id(text) == ''
+
+
+# ── trust-gate fallback ──────────────────────────────────────────────────────
+#
+# Whether a Codex build hides a command-line hook behind its trust screen is
+# not something a version number answers: 0.155 runs the same injection without
+# asking, while 0.154 was reported asking on every pane. So it is observed and
+# remembered rather than predicted, and the fallback touches only Navide's own
+# behaviour — never the user's Codex config, and never the bypass flag, which
+# would exempt the user's own hooks too.
+
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _clear_trust_gate():
+    """The verdict lives in the shared kv, so leaving it set would leak."""
+    hooks.set_trust_gate_blocked(False)
+    yield
+    hooks.set_trust_gate_blocked(False)
+
+
+def _wire(tmp_path):
+    env, metadata = {}, {}
+    command = hooks.wire('codex --foo', env, metadata, tmp_path, tmp_path / 'port', tmp_path / 'auth')
+    return command, env, metadata
+
+
+def test_the_hook_is_injected_until_the_trust_screen_is_reported(tmp_path):
+    assert hooks.trust_gate_blocks_injection() is False
+    command, env, metadata = _wire(tmp_path)
+    assert 'hooks.SessionStart' in command
+    assert env[hooks.LAUNCH_ENV] and metadata['codex_launch_token']
+
+
+def test_a_reported_trust_screen_stops_the_injection_entirely(tmp_path):
+    hooks.set_trust_gate_blocked(True)
+    command, env, metadata = _wire(tmp_path)
+
+    # Not a disabled hook — no hook, and no launch identity to go with it.
+    assert command == 'codex --foo'
+    assert env == {} and metadata == {}
+
+
+def test_the_verdict_is_idempotent_and_reversible(tmp_path):
+    assert hooks.set_trust_gate_blocked(True) is True
+    assert hooks.set_trust_gate_blocked(True) is False  # already recorded
+    assert hooks.trust_gate_blocks_injection() is True
+
+    assert hooks.set_trust_gate_blocked(False) is True
+    assert hooks.set_trust_gate_blocked(False) is False
+    assert 'hooks.SessionStart' in _wire(tmp_path)[0]
+
+
+def test_the_fallback_never_asks_codex_to_bypass_its_own_trust(tmp_path):
+    """--dangerously-bypass-hook-trust would exempt the user's hooks.json too,
+    so it stays out of the command in both states."""
+    for blocked in (False, True):
+        hooks.set_trust_gate_blocked(blocked)
+        assert 'bypass-hook-trust' not in _wire(tmp_path)[0]
+
+
+def test_an_unreadable_store_leaves_the_hook_injected(tmp_path, monkeypatch):
+    """A kv failure must not silently switch the feature off for everyone."""
+    monkeypatch.setattr(hooks, '_hooks_state', lambda: (_ for _ in ()).throw(RuntimeError('db gone')))
+    with pytest.raises(RuntimeError):
+        hooks._hooks_state()
+    monkeypatch.setattr(hooks, '_hooks_state', lambda: {})
+    assert hooks.trust_gate_blocks_injection() is False
+    assert 'hooks.SessionStart' in _wire(tmp_path)[0]

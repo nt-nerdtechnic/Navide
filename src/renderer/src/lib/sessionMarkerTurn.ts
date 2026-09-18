@@ -76,6 +76,19 @@ export function screenShowsBlockingDialog(screen: string): boolean {
   return STARTUP_BLOCKING_DIALOG_PATTERNS.some((re) => re.test(text))
 }
 
+/** Codex asking the user to approve a hook it has not seen before.
+ *
+ *  Deliberately narrower than the list above: the other pattern there is any
+ *  confirm prompt, while this one identifies the hook Navide itself injected
+ *  as the thing standing in front of the pane. Acting on the broader match
+ *  would switch the hook off because the user happened to be answering
+ *  something else. */
+const HOOK_TRUST_PROMPT = /Hooks need review/i
+
+export function screenShowsHookTrustPrompt(screen: string): boolean {
+  return HOOK_TRUST_PROMPT.test(screen.replace(/\s+/g, ' '))
+}
+
 /** A restore placeholder names the old conversation, not the current launch. */
 export function hasDetectedCodexSession(pane: {
   agentKey: string

@@ -278,7 +278,8 @@ import {
 import {
   hasDetectedCodexSession,
   markerTurnActionFor,
-  screenShowsBlockingDialog
+  screenShowsBlockingDialog,
+  screenShowsHookTrustPrompt
 } from './lib/sessionMarkerTurn'
 import { entryBelongsToWorkspace, filterWorkspaceEntries, historyEntriesFor, historyEntryLabel, legacyHistoryLogPath, manualLogFileName, updateHistoryCustomName, type HistoryCleanupMode, type HistoryDeletePreview, type HistoryDeleteTarget, type SpawnHistoryEntry, type WorkspaceIdentity } from './lib/spawnHistory'
 import { executeCommand, initKeybindingsPort, useKeybindings, registerCommand, setContext } from '@navide/plugin-ui/shared'
@@ -5374,11 +5375,61 @@ function paneScreenBlocked(paneId: string): boolean {
   }
 }
 
+/**
+ * Whether this window has already told the backend that Codex gates the hook.
+ *
+ * Once is enough: the backend stops injecting for every later spawn, and the
+ * broadcast below keeps sibling windows from reporting the same screen.
+ */
+let codexHookTrustReported = false
+
+/**
+ * Switch the injected Codex hook off when Codex turns out to gate it.
+ *
+ * Whether a Codex build puts a command-line hook behind its trust screen is
+ * not something a version number answers — 0.155 runs the same injection
+ * without asking. So it is observed: the first pane that shows the screen says
+ * so, and later panes open without the hook. Session identity falls back to
+ * log and marker discovery, which is where it came from before the hook
+ * existed. Nothing in the user's Codex config is written.
+ */
+function reportCodexHookTrustPrompt(paneId: string): void {
+  if (codexHookTrustReported) return
+  if (panes.value.find((p) => p.id === paneId)?.agentKey !== 'codex') return
+  const ref = paneRefs[paneId]
+  if (!ref) return
+  let screen = ''
+  try {
+    screen = (ref.readScreenTail(AWAITING_SCREEN_LINES) as unknown as string) ?? ''
+  } catch {
+    return
+  }
+  if (!screenShowsHookTrustPrompt(screen)) return
+  codexHookTrustReported = true
+  // Said in full rather than as a status word: switching a feature off behind
+  // someone's back is worse than the screen that caused it. What changed, what
+  // it costs, and how to get it back.
+  pipelineLog(
+    '⚠ Codex asked to approve the session hook Navide adds. Answer it once for this pane '
+    + '(2 = trust all and continue), or close the pane — either way it will not block again.'
+  )
+  pipelineLog(
+    'ℹ Later Codex panes will open without that hook. Sessions are still identified from the '
+    + 'logs, so nothing stops working; only the pane-to-session match loses a shortcut. '
+    + 'Navide changed nothing in your Codex configuration.'
+  )
+  void backend.send('codex.hook_trust_blocked', { blocked: true }).catch(() => {
+    // Unreported is the safe state: the next pane that hits the screen retries.
+    codexHookTrustReported = false
+  })
+}
+
 async function waitForBlockingDialogClear(paneId: string, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     if (!paneAlive(paneId)) return false
     if (!paneScreenBlocked(paneId)) return true
+    reportCodexHookTrustPrompt(paneId)
     await sleep(500)
   }
   return false
@@ -12364,6 +12415,15 @@ backend.on('cli.install_prompt_changed', (raw) => {
   if (!Array.isArray(ev?.dismissed_ids)) return
   cliInstallPromptDismissed.value = new Set(ev.dismissed_ids)
   cliInstallPromptDismissedLoaded.value = true
+})
+
+// Another window already told the backend that Codex gates the injected hook.
+// Adopting its verdict keeps this window from reporting the same screen, and
+// lets a re-enable elsewhere arm this window to report again.
+backend.on('codex.hook_trust_changed', (raw) => {
+  const ev = raw as { blocked?: boolean }
+  if (typeof ev?.blocked !== 'boolean') return
+  codexHookTrustReported = ev.blocked
 })
 
 // Some of this window's env settings never reached the CLI. Sent only to the
