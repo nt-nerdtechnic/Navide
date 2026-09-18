@@ -103,8 +103,8 @@ export const WHATS_NEW: WhatsNewEntry[] = [
   {
     version: '0.2.4',
     title: {
-      'zh-TW': 'Token Monitor 與額度週期、設定分享、下載鏡像',
-      'en-US': 'Token Monitor & Quota Cycles, Settings Sharing, Download Mirror',
+      'zh-TW': 'Token Monitor 與額度週期、下載鏡像',
+      'en-US': 'Token Monitor & Quota Cycles, Download Mirror',
     },
     highlights: [
       {
@@ -112,8 +112,8 @@ export const WHATS_NEW: WhatsNewEntry[] = [
         'en-US': 'New Window → Token Monitor: per-turn token usage and model mix, 5-hour / monthly / yearly quota cycles, and 14/30/90-day averages and medians. Quota observations reuse existing polls and send no extra provider requests.',
       },
       {
-        'zh-TW': '新增「設定 → Sharing」：把設定打包匯出成一份檔案帶到另一台機器，或用雲端分享碼交給別人；分享前會標出可能夾帶憑證的欄位，並列出已配對的裝置。',
-        'en-US': 'New Settings → Sharing: export your settings as a bundle to carry to another machine, or hand them over with a cloud share code. Fields that may carry a token are flagged before anything leaves, and paired devices are listed.',
+        'zh-TW': '更正：原本預告的「設定 → Sharing」分頁在 0.2.4 出貨前已移除、等待重新設計。匯出／匯入設定全集仍可在「設定 → General → 設定管理」使用；雲端分享碼與已配對裝置清單尚未推出。',
+        'en-US': 'Correction: the Settings → Sharing page announced for this release was removed before 0.2.4 shipped and is awaiting a redesign. Exporting and importing the settings bundle is still available under Settings → General → Settings Management; the cloud share code and paired-device list did not ship.',
       },
       {
         'zh-TW': '關閉工作區時可選擇保留 CLI 繼續在背景執行：右鍵選單分成「關閉工作區」與「關閉工作區與 CLI 視窗」，關掉畫面不再等於砍掉正在跑的 agent。',
