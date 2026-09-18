@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from agent_team_backend import app, osplat
+from agent_team_backend.cli_vendors.registry import vendor as cli_vendor
 from agent_team_backend.plugins import wiring as plugin_wiring
 from agent_team_backend.mcp_server import auth as plan_mcp_auth, wiring as plan_mcp_wiring
 
@@ -592,3 +593,130 @@ async def test_terminal_create_wires_claude_pane(
     )
     assert "pane=pane-1" in inline
     assert plan_mcp_wiring.caller_token() in inline
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("agent_key", "expected", "shim_env"),
+    [
+        ("claude", "claude auth login", None),
+        ("codex", "codex login", None),
+        # grok and kimi have no MCP flag: their wiring is a per-pane home shim
+        # (mcp_server/pane_home.py), pointed at by the variable named here.
+        # grok has no config-dir variable, so its shim moves HOME itself.
+        ("grok", "grok login", "HOME"),
+        ("kimi", "kimi login", "KIMI_CODE_HOME"),
+        # kilo's push channel appends `--port N --hostname 127.0.0.1`; an
+        # exact-match assertion pins that it stays off the auth subcommand too.
+        ("kilo", "kilo auth login", None),
+    ],
+)
+async def test_terminal_create_leaves_a_login_pane_unwired(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    agent_key: str,
+    expected: str,
+    shim_env: str | None,
+) -> None:
+    """A live login pane gets no MCP flags — its subcommand rejects them.
+
+    `is_login` rewrites the command to the vendor's sign-in subcommand, and
+    a subcommand takes none of the top-level flags this wiring appends:
+    measured against claude 2.1.275, `claude auth login --mcp-config …`
+    exits 1 with `error: unknown option '--mcp-config'`. The guard used to
+    key on `login_profile_id`, which a live login (the active account) does
+    not carry, so the pane died the moment it spawned.
+
+    Both wired vendors are covered: claude takes the config as a flag, codex
+    as `--config` overrides. codex tolerates the flag where claude does not,
+    but a login pane has no business starting MCP servers either way.
+    """
+    (tmp_path / "backend-port").write_text("4567", encoding="utf-8")
+    plan_mcp_wiring.write_claude_config(4567)
+    monkeypatch.setattr(app, "attribution", FakeAttribution())
+    monkeypatch.setattr(app, "_register_workspace_and_backfill", lambda _ws: None)
+
+    async def _no_path_refresh(_agent_key: str) -> None:
+        pass
+
+    monkeypatch.setattr(app, "_ensure_fresh_path_for_spawn", _no_path_refresh)
+    monkeypatch.setattr(app, "_probe_agent_cli_for_spawn", lambda *_a, **_k: None)
+    session = app.Session(FakeWebSocket())  # type: ignore[arg-type]
+    session.terminals = FakeTerminals()  # type: ignore[assignment]
+
+    plugin_wiring.startup(app.plugin_host)
+    try:
+        await app.handle_message(session, {
+            "id": "m1",
+            "type": "terminal.create",
+            "payload": {
+                "pane_id": "login-pane",
+                "agent_key": agent_key,
+                "command": ["/bin/zsh", "-ilc", f"{agent_key} --dangerously-skip-permissions"],
+                "cwd": "/ws",
+                "is_login": True,
+                "metadata": {"workspace_path": "/ws"},
+            },
+        })
+    finally:
+        plugin_wiring.shutdown(app.plugin_host)
+
+    created = session.terminals.created[0]  # type: ignore[attr-defined]
+    assert created["command"][2] == expected
+    # A LIVE login must land in the vendor's real home: signing in under a
+    # shimmed home would write the new credential into the shim instead of
+    # ~/.grok or ~/.kimi-code, leaving the account signed out where it counts.
+    if shim_env is not None:
+        assert shim_env not in (created["env"] or {})
+
+
+@pytest.mark.asyncio
+async def test_terminal_create_still_wires_a_login_pane_that_keeps_its_repl(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`is_login` for a vendor with no sign-in invocation leaves a REPL — wire it.
+
+    Nine vendors declare no `login_command_args`, so `_login_spawn_command`
+    hands their command back unchanged and the pane is an ordinary working
+    pane. `is_login` reaches the backend straight from a request body
+    (`pluginSurfacePorts.ts`), so a caller can set it for any agent; keying
+    the wiring skip on `is_login` would silently strip such a pane's MCP,
+    skills and push wiring. The skip is keyed on the subcommand instead.
+    """
+    (tmp_path / "backend-port").write_text("4567", encoding="utf-8")
+    plan_mcp_wiring.write_claude_config(4567)
+    monkeypatch.setattr(app, "attribution", FakeAttribution())
+    monkeypatch.setattr(app, "_register_workspace_and_backfill", lambda _ws: None)
+
+    async def _no_path_refresh(_agent_key: str) -> None:
+        pass
+
+    monkeypatch.setattr(app, "_ensure_fresh_path_for_spawn", _no_path_refresh)
+    monkeypatch.setattr(app, "_probe_agent_cli_for_spawn", lambda *_a, **_k: None)
+    session = app.Session(FakeWebSocket())  # type: ignore[arg-type]
+    session.terminals = FakeTerminals()  # type: ignore[assignment]
+
+    # qwen: no login_command_args, and its MCP wiring is an appended flag, so
+    # the wiring is observable in the command itself.
+    assert cli_vendor("qwen").login_command_args is None
+
+    plugin_wiring.startup(app.plugin_host)
+    try:
+        await app.handle_message(session, {
+            "id": "m1",
+            "type": "terminal.create",
+            "payload": {
+                "pane_id": "login-pane",
+                "agent_key": "qwen",
+                "command": ["/bin/zsh", "-ilc", "qwen --yolo"],
+                "cwd": "/ws",
+                "is_login": True,
+                "metadata": {"workspace_path": "/ws"},
+            },
+        })
+    finally:
+        plugin_wiring.shutdown(app.plugin_host)
+
+    created = session.terminals.created[0]  # type: ignore[attr-defined]
+    assert created["command"][2].startswith("qwen --yolo ")
+    assert "--mcp-config " in created["command"][2]

@@ -26,6 +26,9 @@ VENDORS_DIR = REPO_ROOT / "backend" / "agent_team_backend" / "cli_vendors"
 FRONTEND_AGENTS_DIR = (
     REPO_ROOT / "src" / "renderer" / "src" / "platform" / "plugin-shell" / "agents"
 )
+CLI_AGENTS_HELP = (
+    REPO_ROOT / "src" / "renderer" / "src" / "components" / "CliAgentsHelp.vue"
+)
 
 EXPECTED_KEYS = {
     "aider", "antigravity", "claude", "codex", "copilot", "cursor",
@@ -308,6 +311,54 @@ def test_push_channel_matches_the_frontend_agent_spec() -> None:
             f"hold would be applied to a channel that does not need it, or "
             f"skipped for one that does"
         )
+
+
+def test_help_panel_sign_in_column_matches_login_command_args() -> None:
+    """Settings ▸ Help prints, per vendor, the command the Accounts pane's
+    sign-in button runs. That table is a hand-maintained mirror, so it can
+    quietly start telling users to expect a flow the button never triggers —
+    which is precisely what this column exists to prevent. `binary + signIn`
+    must therefore reproduce what `_login_spawn_command` actually builds from
+    `login_command_args`; an empty `signIn` means the vendor declares none and
+    the button launches the CLI unchanged."""
+    source = CLI_AGENTS_HELP.read_text(encoding="utf-8")
+    rows = re.findall(
+        r"\{ name: '[^']+', bin: '([^']+)',[^\n]*?signIn: '([^']*)' \}", source
+    )
+    assert len(rows) == len(registry.VENDORS), (
+        f"{CLI_AGENTS_HELP.name} lists {len(rows)} vendors, the registry has "
+        f"{len(registry.VENDORS)} — a vendor was added or removed on one side only"
+    )
+
+    # The table is keyed by binary, the registry by vendor key; the frontend
+    # agent specs are the only place the two are tied together.
+    bin_to_key: dict[str, str] = {}
+    for path in FRONTEND_AGENTS_DIR.glob("*.ts"):
+        if path.stem.startswith("_") or path.stem in {"index", "types", "terminal"}:
+            continue
+        spec_source = path.read_text(encoding="utf-8")
+        key = re.search(r"agentKey: '([a-z]+)'", spec_source)
+        command = re.search(r"defaultCommand: '([^']+)'", spec_source)
+        assert key and command, f"{path.name} declares no agentKey/defaultCommand"
+        bin_to_key[command.group(1)] = key.group(1)
+
+    help_panel = {}
+    for binary, sign_in in rows:
+        assert binary in bin_to_key, (
+            f"{CLI_AGENTS_HELP.name} lists binary {binary!r}, which no agent "
+            f"spec declares as its defaultCommand"
+        )
+        help_panel[bin_to_key[binary]] = sign_in
+    backend = {
+        key: (spec.login_command_args or "")
+        for key, spec in registry.VENDORS.items()
+    }
+
+    assert help_panel == backend, (
+        "the sign-in column drifted from login_command_args — Settings ▸ Help "
+        "would name a sign-in command the button does not run: "
+        f"help={help_panel} backend={backend}"
+    )
 
 
 def test_vendor_modules_import_only_allowed_modules() -> None:

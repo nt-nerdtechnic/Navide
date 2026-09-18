@@ -2612,9 +2612,11 @@
             "bin": "執行檔",
             "flag": "略過權限旗標",
             "usage": "額度",
-            "multi": "多帳號"
+            "multi": "多帳號",
+            "signIn": "登入指令",
+            "signInInside": "在 CLI 內登入"
           },
-          "note": "「額度」＝ Navide 讀得到剩餘用量（第 6 章）。「多帳號」＝ 可以在設定裡掛多組登入並切換（第 5 章）。三家沒有略過權限旗標的 CLI（Grok CLI、OpenCode、Pi）是因為它們本身就沒有這個旗標，不是 Navide 沒接。",
+          "note": "「額度」＝ Navide 讀得到剩餘用量（第 6 章）。「多帳號」＝ 可以在設定裡掛多組登入並切換（第 5 章）。三家沒有略過權限旗標的 CLI（Grok CLI、OpenCode、Pi）是因為它們本身就沒有這個旗標，不是 Navide 沒接。「登入指令」＝ 在設定 ▸ 帳號按「登入」時，Navide 實際會執行的指令；標示「在 CLI 內登入」的那幾家沒有獨立的登入指令，按下去就是照常啟動該 CLI，登入在它自己的畫面裡完成。",
           "callout": {
             "title": "第 15 個選項不是 agent",
             "text": "＋ 選單最下方的 <strong>Terminal</strong> 是一般 shell，不掛任何 agent，也不會注入角色。它刻意獨立放在清單外，不會被 CLI 清單的捲動吃掉。"

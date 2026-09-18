@@ -710,6 +710,11 @@ SPEC = VendorSpec(
         skills_rel=(".agents", "skills"),
     ),
     label="Muse Code",
+    # `muse login` signs in with a Meta account by having the user approve a
+    # code in the browser — a flow a PTY pane can carry. Note META_API_KEY
+    # still takes priority over the account login if it is set in the
+    # environment. Verified against `muse login --help`, 2026-09-18.
+    login_command_args="login",
     resume_id_from_command=_resume_id_from_command,
     session_exists=_session_exists,
     make_log_reader=MuseLogReader,

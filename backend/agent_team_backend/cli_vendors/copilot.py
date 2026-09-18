@@ -1323,6 +1323,12 @@ SPEC = VendorSpec(
         discovery_home=((".agents", "skills"),),
     ),
     label="Copilot CLI",
+    # `copilot login` authenticates over OAuth. On a local desktop it opens
+    # the browser and captures the result on a loopback callback — exactly
+    # what a login pane carries; the device-code flow it falls back to for
+    # SSH/headless is auto-detected, so neither --web-flow nor --device-code
+    # is forced here. Verified against `copilot login --help`, 2026-09-18.
+    login_command_args="login",
     # Same inline `mcpServers` document claude takes, under a flag documented
     # as augmenting ~/.copilot/mcp-config.json for the session and repeatable —
     # so a user's own --additional-mcp-config is augmented rather than stepped

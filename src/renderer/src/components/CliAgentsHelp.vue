@@ -23,27 +23,38 @@ interface VendorRow {
   skipFlag: string
   usage: boolean
   multiAccount: boolean
+  /** Arguments the Accounts pane's sign-in button appends to `bin`, mirroring
+   *  the vendor's `login_command_args`. Empty = the vendor declares none, so
+   *  the button launches the CLI as usual and signing in happens inside it. */
+  signIn: string
 }
 
 // Default order of the + menu and Ctrl+1…9. "usage" = Navide can read the
 // remaining quota; "multiAccount" = several sign-ins can be kept in Settings
 // and switched. The three vendors without a permission-bypass flag (Grok CLI,
 // OpenCode, Pi) simply have no such flag in the CLI itself.
+//
+// "signIn" mirrors each vendor's `login_command_args` (cli_vendors/*.py), which
+// is what `_login_spawn_command` appends when the Accounts pane's sign-in
+// button spawns a login pane. Checked against the registry on 2026-09-18; the
+// seven vendors that declare none launch normally and sign in inside the CLI.
+// test_help_panel_sign_in_column_matches_login_command_args keeps the two in
+// step, so this table cannot quietly drift from what the button runs.
 const vendors: VendorRow[] = [
-  { name: 'Claude Code', bin: 'claude', skipFlag: '--dangerously-skip-permissions', usage: true, multiAccount: true },
-  { name: 'Codex', bin: 'codex', skipFlag: '--dangerously-bypass-approvals-and-sandbox', usage: true, multiAccount: true },
-  { name: 'Antigravity CLI', bin: 'agy', skipFlag: '--dangerously-skip-permissions', usage: true, multiAccount: false },
-  { name: 'Grok CLI', bin: 'grok', skipFlag: '', usage: true, multiAccount: true },
-  { name: 'Kimi Code', bin: 'kimi', skipFlag: '--yolo', usage: true, multiAccount: true },
-  { name: 'OpenCode', bin: 'opencode', skipFlag: '', usage: true, multiAccount: false },
-  { name: 'Qwen Code', bin: 'qwen', skipFlag: '--yolo', usage: true, multiAccount: false },
-  { name: 'Kilo Code', bin: 'kilo', skipFlag: '--auto', usage: true, multiAccount: true },
-  { name: 'Pi', bin: 'pi', skipFlag: '', usage: true, multiAccount: false },
-  { name: 'Copilot CLI', bin: 'copilot', skipFlag: '--yolo', usage: true, multiAccount: false },
-  { name: 'Cursor CLI', bin: 'agent', skipFlag: '--force', usage: true, multiAccount: false },
-  { name: 'Aider', bin: 'aider', skipFlag: '--yes-always', usage: false, multiAccount: false },
-  { name: 'Muse Code', bin: 'muse', skipFlag: '--disable-approval', usage: false, multiAccount: false },
-  { name: 'Droid', bin: 'droid', skipFlag: '--auto high', usage: false, multiAccount: false },
+  { name: 'Claude Code', bin: 'claude', skipFlag: '--dangerously-skip-permissions', usage: true, multiAccount: true, signIn: 'auth login' },
+  { name: 'Codex', bin: 'codex', skipFlag: '--dangerously-bypass-approvals-and-sandbox', usage: true, multiAccount: true, signIn: 'login' },
+  { name: 'Antigravity CLI', bin: 'agy', skipFlag: '--dangerously-skip-permissions', usage: true, multiAccount: false, signIn: '' },
+  { name: 'Grok CLI', bin: 'grok', skipFlag: '', usage: true, multiAccount: true, signIn: 'login' },
+  { name: 'Kimi Code', bin: 'kimi', skipFlag: '--yolo', usage: true, multiAccount: true, signIn: 'login' },
+  { name: 'OpenCode', bin: 'opencode', skipFlag: '', usage: true, multiAccount: false, signIn: '' },
+  { name: 'Qwen Code', bin: 'qwen', skipFlag: '--yolo', usage: true, multiAccount: false, signIn: '' },
+  { name: 'Kilo Code', bin: 'kilo', skipFlag: '--auto', usage: true, multiAccount: true, signIn: 'auth login' },
+  { name: 'Pi', bin: 'pi', skipFlag: '', usage: true, multiAccount: false, signIn: '' },
+  { name: 'Copilot CLI', bin: 'copilot', skipFlag: '--yolo', usage: true, multiAccount: false, signIn: 'login' },
+  { name: 'Cursor CLI', bin: 'agent', skipFlag: '--force', usage: true, multiAccount: false, signIn: '' },
+  { name: 'Aider', bin: 'aider', skipFlag: '--yes-always', usage: false, multiAccount: false, signIn: '' },
+  { name: 'Muse Code', bin: 'muse', skipFlag: '--disable-approval', usage: false, multiAccount: false, signIn: 'login' },
+  { name: 'Droid', bin: 'droid', skipFlag: '--auto high', usage: false, multiAccount: false, signIn: '' },
 ]
 
 // Row keys for the prose tables; the text for each row is looked up under
@@ -137,6 +148,7 @@ const installChain = computed(() => [sample('chain1'), sample('chain2'), sample(
               <th>{{ $t('settings.help.cliAgents.s1.table.flag') }}</th>
               <th>{{ $t('settings.help.cliAgents.s1.table.usage') }}</th>
               <th>{{ $t('settings.help.cliAgents.s1.table.multi') }}</th>
+              <th>{{ $t('settings.help.cliAgents.s1.table.signIn') }}</th>
             </tr>
           </thead>
           <tbody>
@@ -150,6 +162,10 @@ const installChain = computed(() => [sample('chain1'), sample('chain2'), sample(
               <td :class="row.usage ? 'cah-yes' : 'cah-no'">{{ row.usage ? '✓' : '—' }}</td>
               <td :class="row.multiAccount ? 'cah-yes' : 'cah-no'">
                 {{ row.multiAccount ? '✓' : '—' }}
+              </td>
+              <td>
+                <code v-if="row.signIn">{{ row.bin }} {{ row.signIn }}</code>
+                <span v-else>{{ $t('settings.help.cliAgents.s1.table.signInInside') }}</span>
               </td>
             </tr>
           </tbody>

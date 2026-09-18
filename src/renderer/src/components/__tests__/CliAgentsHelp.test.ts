@@ -108,6 +108,58 @@ describe('CliAgentsHelp', () => {
     expect(unexpectedWarnings(warn)).toEqual([])
   })
 
+  it('names the sign-in command each vendor actually runs', () => {
+    i18n.global.locale.value = 'en-US'
+    const wrapper = mountHelp()
+
+    const table = wrapper.findAll('.cah-table').at(0)!
+    expect(table.findAll('thead th')).toHaveLength(6)
+    expect(table.findAll('thead th').at(5)!.text()).toBe('Sign-in command')
+
+    // Mirrors `login_command_args` in backend/agent_team_backend/cli_vendors/.
+    // A vendor that declares none launches normally, so the cell says so
+    // instead of showing a command the sign-in button never runs.
+    const cells = table.findAll('tbody tr').map((row) => row.findAll('td').at(5)!)
+    const rendered = cells.map((c) => c.text())
+    expect(rendered).toEqual([
+      'claude auth login',
+      'codex login',
+      'Inside the CLI',
+      'grok login',
+      'kimi login',
+      'Inside the CLI',
+      'Inside the CLI',
+      'kilo auth login',
+      'Inside the CLI',
+      'copilot login',
+      'Inside the CLI',
+      'Inside the CLI',
+      'muse login',
+      'Inside the CLI',
+    ])
+    // A real command is typeset as one; the fallback is prose, not a command.
+    expect(cells.map((c) => c.find('code').exists())).toEqual([
+      true, true, false, true, true, false, false, true, false, true, false, false, true, false,
+    ])
+
+    expect(unexpectedWarnings(warn)).toEqual([])
+  })
+
+  it('translates the sign-in column under zh-TW', () => {
+    i18n.global.locale.value = 'zh-TW'
+    const wrapper = mountHelp()
+
+    const table = wrapper.findAll('.cah-table').at(0)!
+    expect(table.findAll('thead th').at(5)!.text()).toBe('登入指令')
+    const rendered = table.findAll('tbody tr').map((row) => row.findAll('td').at(5)!.text())
+    // Commands stay verbatim; only the fallback is prose and gets translated.
+    expect(rendered.at(0)).toBe('claude auth login')
+    expect(rendered.at(2)).toBe('在 CLI 內登入')
+    expect(rendered.at(3)).toBe('grok login')
+
+    expect(unexpectedWarnings(warn)).toEqual([])
+  })
+
   it('injects the inline markup from the locale strings', () => {
     i18n.global.locale.value = 'en-US'
     const wrapper = mountHelp()

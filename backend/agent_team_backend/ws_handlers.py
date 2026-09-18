@@ -6127,12 +6127,21 @@ async def _terminal_create_impl(
         # live credentials, and the login-home harvest (on account switch)
         # must wait for it to exit (see _running_login_terminals).
         metadata["login_profile_id"] = login_profile_id
+    # True only when the rewrite below really turns the command into an auth
+    # SUBCOMMAND. That, not `is_login` on its own, is what makes the spawn
+    # wiring inapplicable further down — a subcommand takes none of the
+    # top-level flags it appends. Nine vendors declare no sign-in invocation
+    # (`login_command_args is None`, see _login_spawn_command) and keep their
+    # ordinary command: such a pane is a working REPL and must stay wired.
+    login_subcommand = False
     if is_login:
         # Run the CLI's direct sign-in trigger (e.g. `claude auth login`) so
         # the browser authorization opens by itself — the user never types a
         # command in the login pane. Ahead of the codex home block on purpose:
         # the rewritten command carries no resume id, so a login pane takes the
         # fresh-home path instead of being bound to a session's home.
+        login_spec = cli_vendor(agent_key)
+        login_subcommand = bool(login_spec is not None and login_spec.login_command_args)
         payload["command"] = app._login_spawn_command(agent_key, payload["command"])
     elif app._agent_signed_out(agent_key):
         # Installed, but with no credentials to run on — the counterpart to
@@ -6202,7 +6211,13 @@ async def _terminal_create_impl(
     # Lines the pane prints at startup when this machine cannot wire it (see
     # wire_command): the only other trace is a backend log the user never sees.
     wiring_warnings: list[str] = []
-    if not login_profile_id:
+    # Keyed on the sign-in SUBCOMMAND, not on `login_profile_id` (which a live
+    # login does not carry) nor on `is_login` (which a REPL-launching vendor
+    # also sets): a subcommand rejects the top-level flags wired below —
+    # `--mcp-config` from the MCP endpoint, `--add-dir` from skills. An unwired
+    # login pane costs nothing (it signs in and exits); a wired one dies on
+    # `unknown option`, measured against claude 2.1.275.
+    if not login_subcommand:
         # Run plugin-registered spawn transformers over the command (e.g. the
         # builtin navide.plans plugin appends Plan-MCP flags for claude/codex);
         # no-op with no plugins, and a failing transformer never breaks a spawn.
@@ -6236,9 +6251,11 @@ async def _terminal_create_impl(
     # Give the pane whatever its push channel needs (a port to serve on, a file
     # to watch) so a message can later reach it without being typed in. Last,
     # so the flags it adds cannot be displaced by MCP or skills wiring; a CLI
-    # with no push channel — most of them — is left untouched.
+    # with no push channel — most of them — is left untouched. Skipped for a
+    # login pane for the same reason as the MCP wiring above: its subcommand
+    # takes no top-level flags.
     push_channel = None
-    if not login_profile_id:
+    if not login_subcommand:
         payload["command"], push_channel = app.push_delivery.wire_spawn(
             agent_key, payload["command"], str(payload.get("pane_id") or ""), env
         )
