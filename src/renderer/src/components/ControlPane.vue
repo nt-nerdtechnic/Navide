@@ -2001,10 +2001,11 @@ const pickedAgentLabel = computed(
 )
 
 // ── The ＋ menu on this window's workspace heading ────────────────────────────
-// The default CLI and role for a one-click spawn: it reads and writes
-// pickedAgent/pickedRole, which is what its ✓ marks. The Manual spawn dialog
-// keeps its own CLI pick (modalAgent) instead — it is where you go to run
-// something other than the default, and doing so must not reset the default.
+// The default CLI and role for a one-click spawn: it reads pickedAgent/pickedRole,
+// which is what its ✓ marks. Picking another CLI from the menu opens it once
+// without moving the default. The Manual spawn dialog keeps its own CLI pick
+// (modalAgent) instead — it is where you go to run something other than the
+// default, and doing so must not reset the default either.
 const addMenuOpen = ref<boolean>(false)
 /** Which workspace heading opened the menu, so a pick starts there. */
 const addMenuWorkspace = ref<string>('')
@@ -2429,11 +2430,11 @@ function toggleAddMenu(ev: MouseEvent, wsPath = '', groupId = ''): void {
   addMenuOpen.value = true
 }
 
-/** Pick a CLI from the menu and open it. Writing pickedAgent first means the
- *  card agrees with what just happened, and that spawn() takes its usual path —
- *  including the guided install for a CLI that is not there. */
+/** Pick a CLI from the menu and open it. This is a one-off: pickedAgent stays
+ *  as it is, so the ✓ and what ＋ opens next time do not follow the pick.
+ *  spawn() still takes its usual path — including the guided install for a CLI
+ *  that is not there. */
 function spawnAs(agentKey: string): void {
-  pickedAgent.value = agentKey
   spawnWorkspaceOverride.value = addMenuWorkspace.value
   spawnGroupOverride.value = addMenuGroup.value
   addMenuOpen.value = false

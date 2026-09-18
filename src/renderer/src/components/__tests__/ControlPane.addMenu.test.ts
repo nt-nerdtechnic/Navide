@@ -196,14 +196,18 @@ describe('ControlPane – the ＋ menu', () => {
     expect(wrapper.emitted('spawn')?.[0]?.[0]).toMatchObject({ agentKey: 'codex' })
   })
 
-  it('writes the pick back to the card so the two never disagree', async () => {
+  it('leaves the menu default alone when a menu pick opens another CLI', async () => {
     wrapper = mountWith()
     await openMenu(wrapper)
     await wrapper.findAll('.ws-add-scroll .ws-add-opt')[1].trigger('click')
-    // Reopen the menu, go into the full dialog, and read its dropdown.
+    expect(wrapper.emitted('spawn')?.[0]?.[0]).toMatchObject({ agentKey: 'codex' })
+    // The ✓ still marks claude, and the dialog still opens on claude.
     await openMenu(wrapper)
+    const checks = wrapper.findAll('.ws-add-scroll .ws-add-opt .ws-add-ck')
+    expect(checks[0].text()).toBe('✓')
+    expect(checks[1].text()).toBe('')
     await wrapper.find('.ws-add-card').trigger('click')
-    expect((wrapper.find('.spawn-card-body select').element as HTMLSelectElement).value).toBe('codex')
+    expect((wrapper.find('.spawn-card-body select').element as HTMLSelectElement).value).toBe('claude')
   })
 
   it('leaves the menu default alone when the dialog picks another CLI', async () => {
