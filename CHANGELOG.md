@@ -4,9 +4,18 @@ All notable released changes to Navide will be documented in this file. The form
 
 ## [Unreleased]
 
+## [0.2.7] — 2026-09-19 — signed release
+
 ### Changed
 
 - The in-app updater now reads its feed from the dl.navide.dev mirror, the same host the website's download buttons use, and falls back to the GitHub Release only when the mirror cannot be reached on the network. Until now it was the other way round. The READMEs' download links point at the mirror as well, with the GitHub link beside each.
+- Fold the Plugins group of the Settings sidebar into Integrations: **Extensions** and **Marketplace** now sit there after Memory, and the group wrapper is gone. **Notifications** leaves the middle of the long General page for a tab of its own, after Layout. The sidebar is four groups and eighteen tabs; searching Settings still finds every row where it was.
+- Picking another CLI from a workspace heading's **＋** menu now opens it once without making it the default. The ✓ and what ＋ opens next time stay where you left them — only Ctrl+1…9 and Settings change the default.
+
+### Fixed
+
+- A Codex pane no longer reports **failed** about 30 seconds after starting while Codex itself sits at its prompt (#118). Creating a terminal waited for the attribution baseline scan, which opens every rollout file under the vendor's session tree to read its header; on a large tree that ran past the renderer's 30-second deadline. The pane is acknowledged as soon as its PTY is up and the scan runs behind it.
+- Restore Codex pane naming and turn detection under Codex CLI 0.155, whose rollout log dropped the `user_message` event and moved the prompt into `item_completed`. Turns now end at `task_complete` / `turn_aborted` instead of at a per-tool-call `token_count`, so a long turn is no longer reported as finished each time Codex calls a tool.
 
 ## [0.2.6] — 2026-09-18 — signed release
 

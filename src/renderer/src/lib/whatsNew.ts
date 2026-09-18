@@ -68,6 +68,35 @@ export const WHATS_NEW_CHROME = {
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    version: '0.2.7',
+    title: {
+      'zh-TW': 'Codex pane 不再誤判失敗、更新改走自家載點',
+      'en-US': 'Codex Panes Stop Failing, Updates Come From Our Own Mirror',
+    },
+    highlights: [
+      {
+        'zh-TW': 'Codex pane 開起來約 30 秒後被判「失敗」、但 Codex 自己明明還停在提示字元——這個已修。原因是建立終端機時要先掃完該廠商的整棵 session 樹（Codex 會逐一打開每個 rollout 檔讀檔頭），樹一大就超過前端 30 秒的等待上限。現在 PTY 一起來就先回報成功，掃描在背後跑。',
+        'en-US': 'A Codex pane that reported failed about 30 seconds after starting — while Codex itself sat at its prompt — is fixed. Creating a terminal waited for a scan that opens every rollout file in the vendor\u2019s session tree; on a large tree it ran past the renderer\u2019s 30-second deadline. The pane now reports success as soon as its PTY is up, and the scan runs behind it.',
+      },
+      {
+        'zh-TW': 'Codex CLI 0.155 改了日誌格式，pane 命名因此空白、每呼叫一次工具就誤報回合結束——已跟上新格式，命名恢復，回合以 task_complete 為準。',
+        'en-US': 'Codex CLI 0.155 changed its rollout log, leaving pane names blank and reporting a turn finished on every tool call. The reader now follows the new format: names come back, and a turn ends at task_complete.',
+      },
+      {
+        'zh-TW': 'App 內自動更新改成優先向 dl.navide.dev 取得，和官網下載按鈕同一個載點，連不上時才退回 GitHub。GitHub 的檔案主機在部分網路下只有數十 KB/s，200 MB 的安裝檔常常下不完。',
+        'en-US': 'In-app updates now come from dl.navide.dev first — the same host the website\u2019s download buttons use — and fall back to GitHub only when the mirror cannot be reached. GitHub\u2019s asset host runs at tens of KB/s on some networks, too slow to finish a 200 MB installer.',
+      },
+      {
+        'zh-TW': '「設定」側欄的「外掛程式」群組併入「整合」：擴充功能與市集移到記憶體之後；「通知」從冗長的一般頁獨立成自己的分頁，排在版面之後。搜尋設定仍然找得到每一列。',
+        'en-US': 'The Settings sidebar folds its Plugins group into Integrations — Extensions and Marketplace now sit after Memory — and Notifications leaves the long General page for a tab of its own after Layout. Searching Settings still finds every row.',
+      },
+      {
+        'zh-TW': '從專案標題的 ＋ 選單點另一個 CLI，現在只是「開這一次」，不會把它改成預設。要換預設請用 Ctrl+1～9 或設定。',
+        'en-US': 'Picking another CLI from a workspace heading\u2019s ＋ menu now opens it once instead of changing the default. Ctrl+1\u20269 and Settings still set the default.',
+      },
+    ],
+  },
+  {
     version: '0.2.6',
     title: {
       'zh-TW': 'Marketplace 獨立分頁、原生選單跟隨語言、用量徽章不再誤亮',
