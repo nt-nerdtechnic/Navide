@@ -252,7 +252,7 @@ const SlotHistory = defineAsyncComponent(() => import('./components/HistoryPanel
 const SlotTasker = defineAsyncComponent(() => import('./components/TaskerPanel.vue'))
 const SlotMessages = defineAsyncComponent(() => import('./components/AgentMessagesPanel.vue'))
 import { pickWhatsNew, type WhatsNewEntry } from './lib/whatsNew'
-import { initUsage, refreshUsage } from './composables/useUsage'
+import { exhaustedWindow, hasHeadlineHeadroom, initUsage, refreshUsage, usageFor } from './composables/useUsage'
 import {
   LOOP_RESUME_SETTING_KEY,
   DEFAULT_LOOP_RESUME,
@@ -266,7 +266,7 @@ import {
 import { isLoopSkill, resolvePromptSkill } from './lib/promptSkills'
 import { usePromptSkills } from './composables/usePromptSkills'
 import { loginCommandFor, matchLoginExpired } from './lib/cliLoginExpired'
-import { detectUsageLimit, isDismissedUsageLimit, usageLimitDue } from './lib/cliUsageLimit'
+import { detectUsageLimit, isDismissedUsageLimit, usageLimitDue, usageResumeAt } from './lib/cliUsageLimit'
 import {
   awaitingClearsOnMiss,
   hasAwaitingPattern,
@@ -4706,12 +4706,26 @@ function checkPaneUsageLimit(
     if (usageLimitDue(pane.usageLimitAt, pane.usageLimitUntil ?? null, now)) {
       pane.usageLimitAt = null
       pane.usageLimitUntil = null
+      return
     }
+    // The account outranks the deadline the buffer named. A reading that
+    // positively says the quota is back ends the block now instead of at a
+    // clock some sentence printed — the case this fixes is a badge standing
+    // for hours over a CLI that is answering normally underneath it.
+    //
+    // Through the shared clear, not by nulling the fields here: that path is
+    // what resumes a loop parked on this very limit, advances the consumed
+    // baseline so the banner still on screen cannot re-light the flag, and
+    // records the reset as dismissed for the same reason.
+    if (hasHeadlineHeadroom(usageFor(pane.agentKey))) clearPaneUsageLimit(pane, 'quota-back')
     return
   }
   const tail = unseenTail(buf, bytes, watcher.limitBaseline, PANE_HEALTH_TAIL_CHARS)
   const hit = detectUsageLimit(pane.agentKey, tail, now)
-  if (hit === null) return
+  if (hit === null) {
+    raiseFromQuotaReading(pane, watcher, now)
+    return
+  }
   // Consume the matched region so a later poll can't re-match the same text.
   watcher.limitBaseline = bytes
   if (isDismissedUsageLimit(watcher.dismissedLimitUntil, hit.resumeAt, now)) return
@@ -4763,6 +4777,42 @@ function checkPaneUsageLimit(
   )
 }
 
+/** The second way the flag goes up: the account's own reading says the quota
+ *  is spent, with nothing in the buffer to match. Without this the flag can
+ *  only ever come from a sentence a CLI happened to print, so a vendor that
+ *  prints none — or a pane that was not watching when it did — stays dark
+ *  while the account is demonstrably out.
+ *
+ *  Deliberately does LESS than the buffer path, on three counts:
+ *
+ *  - It does not stamp `usageLimitSeenAt`. That anchor is how quotaTurnIsFresh
+ *    tells a turn that DIED on the quota from one that finished, and it is
+ *    stamped on detection for a reason: moving it onto a 15-minute poll would
+ *    keep pushing it forward and turn a gate that fails open into one that
+ *    never opens.
+ *  - It does not send `tokens.quota_exhausted`. That event earns its keep by
+ *    being EARLIER than the usage poll, so sending it from the poll tells the
+ *    ledger nothing its own samples do not already say.
+ *  - It does not call refreshUsage on a reading it just read.
+ *
+ *  A resolvable reset is required. Without one the flag would fall back to the
+ *  five-hour unknown TTL — five hours of badge bought with one poll — and the
+ *  dismissed-reset suppression, which needs two clocks to compare, could not
+ *  hold either, so a dismissed badge would come straight back on the next
+ *  poll. The buffer path still covers the clockless case.
+ *
+ *  No notification either: this observes a state that may have been true for a
+ *  quarter of an hour, and every notification the pane has says "just now". */
+function raiseFromQuotaReading(pane: ActivePane, watcher: PaneHealthWatcher, now: number): void {
+  if (exhaustedWindow(usageFor(pane.agentKey)) === undefined) return
+  const resumeAt = usageResumeAt(pane.agentKey, now)
+  if (resumeAt == null) return
+  if (isDismissedUsageLimit(watcher.dismissedLimitUntil, resumeAt, now)) return
+  pane.usageLimitAt = now
+  pane.usageLimitUntil = resumeAt
+  watcher.limitProfileId = cliProfilesApi.defaultProfileId(pane.agentKey)
+}
+
 /** Account switch: the quota flag belongs to the account that hit the limit,
  *  not to the pane, so every pane of the switched agent lets go of it here —
  *  badge, stage quota gate and loop wait alike. This is the ONLY switch-time
@@ -4772,7 +4822,13 @@ function checkPaneUsageLimit(
  *  watcher's consumed baseline advances so the old limit text still on screen
  *  cannot re-light the flag on the next poll. A loop parked on this very
  *  limit resumes the way the badge click does — switching IS the quota
- *  coming back. */
+ *  coming back.
+ *
+ *  Clearing stays unconditional even though the new account may be just as
+ *  spent. Deciding that here would need the incoming account's reading, which
+ *  at this instant is marked refreshPending — "not known yet", not "has
+ *  quota". So the answer is left to the health poll, which re-raises the flag
+ *  from that reading within one tick once it lands. One writer, one clock. */
 function clearPaneUsageLimits(agentKey: string, newDefaultId: string | null): void {
   for (const pane of panes.value) {
     if (pane.agentKey !== agentKey) continue

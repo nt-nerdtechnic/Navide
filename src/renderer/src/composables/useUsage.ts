@@ -242,6 +242,23 @@ export function isExhausted(snap: UsageSnapshot | undefined): boolean {
   return exhaustedWindow(snap) !== undefined
 }
 
+/** True when the account's own reading POSITIVELY says general quota remains:
+ *  a successful, current read that measured at least one headline window and
+ *  found none of them spent.
+ *
+ *  The inverse of `isExhausted` would not do. That one answers false for an
+ *  account nobody has read, and callers that treat "not exhausted" as "has
+ *  quota" turn every unread account into a healthy one. This is the third
+ *  state — a reading that is absent, errored, stale or still in flight is
+ *  "don't know" and answers false, so a veto built on it can only ever fire
+ *  on evidence. */
+export function hasHeadlineHeadroom(snap: UsageSnapshot | undefined): boolean {
+  if (!snap || snap.status !== 'ok') return false
+  if (snap.stale || snap.staleExpired || snap.refreshPending) return false
+  const headline = snap.windows.filter((w) => !w.expired && HEADLINE_KINDS.has(w.kind))
+  return headline.length > 0 && headline.every((w) => w.usedPercent < EXHAUSTED_USED_PCT)
+}
+
 /** Severity by REMAINING quota: >40 ok (grey), 15–40 warn (orange), <15 crit (red). */
 export function remainingTier(remaining: number): 'ok' | 'warn' | 'crit' {
   if (remaining < 15) return 'crit'

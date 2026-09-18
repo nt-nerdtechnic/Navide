@@ -16,7 +16,11 @@ type Handler = (raw: unknown) => void
 
 /** Seed the usage store the way the backend does — the detector reads it as a
  *  second, out-of-buffer signal, so it has to come from the real store. */
-function seedUsage(windows: UsageSnapshot['windows'], status: UsageSnapshot['status'] = 'ok'): void {
+function seedUsage(
+  windows: UsageSnapshot['windows'],
+  status: UsageSnapshot['status'] = 'ok',
+  extra: Partial<UsageSnapshot> = {}
+): void {
   const handlers = new Map<string, Handler>()
   const backend = {
     status: ref('connected'),
@@ -35,7 +39,8 @@ function seedUsage(windows: UsageSnapshot['windows'], status: UsageSnapshot['sta
         planType: null,
         windows,
         fetchedAt: '2026-09-07T00:00:00Z',
-        error: null
+        error: null,
+        ...extra
       }
     }
   })
@@ -139,6 +144,74 @@ describe('detectUsageLimit', () => {
       { kind: 'session', label: 'Session (5h)', usedPercent: 100, resetsAt: '2026-09-07T10:50:00Z' }
     ])
     expect(detectUsageLimit('claude', 'Current session: 100% used', NOW)).toBeNull()
+  })
+
+  // The account's state outranks the buffer: a clocked sentence is trusted on
+  // its own, but not over a reading that says the quota is there.
+  const CLOCKED = "You've hit your session limit · resets 4:30pm (Asia/Taipei)"
+
+  it('vetoes a clocked limit message when the reading says quota remains', () => {
+    // The exact shape seen in the wild: the pane prints the sentence (a replay,
+    // a quote, its own prose), the account has quota, and the CLI goes on
+    // answering underneath a badge that would otherwise stand for hours.
+    seedUsage([
+      { kind: 'session', label: 'Session (5h)', usedPercent: 39, resetsAt: '2026-09-07T10:50:00Z' }
+    ])
+    expect(detectUsageLimit('claude', CLOCKED, NOW)).toBeNull()
+  })
+
+  it('still believes a clocked limit message when the reading agrees', () => {
+    seedUsage([
+      { kind: 'session', label: 'Session (5h)', usedPercent: 100, resetsAt: '2026-09-07T10:50:00Z' }
+    ])
+    expect(detectUsageLimit('claude', CLOCKED, NOW)).not.toBeNull()
+  })
+
+  it.each([
+    ['absent', () => seedUsage([])],
+    ['errored', () => seedUsage([{ kind: 'session', label: 'S', usedPercent: 10, resetsAt: null }], 'error')],
+    [
+      'stale',
+      () =>
+        seedUsage(
+          [{ kind: 'session', label: 'S', usedPercent: 10, resetsAt: null }],
+          'ok',
+          { stale: true }
+        )
+    ],
+    [
+      'in flight',
+      () =>
+        seedUsage(
+          [{ kind: 'session', label: 'S', usedPercent: 10, resetsAt: null }],
+          'ok',
+          { refreshPending: true }
+        )
+    ]
+  ])('lets a clocked limit message stand when the reading is %s', (_label, seed) => {
+    // "Don't know" must not veto — and for a vendor with no quota command at
+    // all, "don't know" is the permanent state.
+    seed()
+    expect(detectUsageLimit('claude', CLOCKED, NOW)).not.toBeNull()
+  })
+
+  it('does not let a per-model bucket with headroom veto a clocked message', () => {
+    // Mirror of the confirmation rule: per-model windows never speak for the
+    // account, in either direction. The spent headline window decides.
+    seedUsage([
+      { kind: 'session', label: 'Session (5h)', usedPercent: 100, resetsAt: '2026-09-07T10:50:00Z' },
+      { kind: 'weekly-model', label: 'Weekly (Fable)', usedPercent: 5, resetsAt: '2026-09-09T21:00:00Z' }
+    ])
+    expect(detectUsageLimit('claude', CLOCKED, NOW)).not.toBeNull()
+  })
+
+  it('does not join a limit phrase to an unrelated reset clock further down', () => {
+    // The two halves are one message or they are nothing. Before the bound,
+    // any "hit your … limit" plus any later "resets <clock>" in the same 2000
+    // character tail matched, however far apart.
+    seedUsage([])
+    const tail = `I hit your usage limit question earlier.${' x'.repeat(200)} The cache resets 3:00pm (Asia/Taipei) daily.`
+    expect(detectUsageLimit('claude', tail, NOW)).toBeNull()
   })
 })
 

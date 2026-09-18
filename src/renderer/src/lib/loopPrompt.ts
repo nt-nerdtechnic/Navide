@@ -42,9 +42,17 @@ export function withLoopDoneInstruction(prompt: string): string {
 }
 
 /** CLI session-limit message, e.g.
- *  "You've hit your session limit · resets 4:30am (Asia/Taipei)". */
+ *  "You've hit your session limit · resets 4:30am (Asia/Taipei)".
+ *
+ *  Both gaps are BOUNDED. The matcher collapses whitespace runs before it
+ *  runs, so newlines are gone by then and an unbounded `.*?` between the two
+ *  halves would span the whole scanned tail — "hit your … limit" anywhere and
+ *  a "resets <clock>" anywhere else would join into a match that no single
+ *  message ever printed. In the real message the two halves are separated by
+ *  " · "; 80 characters leaves room for a reworded separator without letting
+ *  unrelated prose in between. */
 export const SESSION_LIMIT_RE =
-  /hit your .{0,40}limit.*?resets\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*\(([^)]+)\)/i
+  /hit your .{0,40}limit.{0,80}?resets\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*\(([^)]+)\)/i
 
 /** Match the session-limit message in `text`, tolerating the TUI's hard
  *  line-wrapping in narrow panes (cleanBuffer keeps the wrap `\n`, which the

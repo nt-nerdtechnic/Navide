@@ -234,3 +234,83 @@ describe('a limit hit is reported to the quota ledger once', () => {
     expect(payload).toContain('at: new Date(now).toISOString()')
   })
 })
+
+// The account's reading is the primary source and the buffer is the auxiliary
+// one. Both halves of that live inside checkPaneUsageLimit — the ONE writer —
+// so the flag never grows a second clock the way an earlier attempt did (see
+// the paneUsageLimited docblock, which records that withdrawal).
+describe('the account reading can lower the flag before its stated reset', () => {
+  it('lifts a standing flag when the reading says the quota is back', () => {
+    const check = appSource.slice(appSource.indexOf('function checkPaneUsageLimit('))
+    const flagged = check.indexOf('if (pane.usageLimitAt != null) {')
+    const due = check.indexOf('usageLimitDue(pane.usageLimitAt')
+    const headroom = check.indexOf('hasHeadlineHeadroom(usageFor(pane.agentKey))')
+    expect(flagged).toBeGreaterThan(-1)
+    expect(headroom).toBeGreaterThan(due)
+    expect(headroom).toBeLessThan(check.indexOf('const tail ='))
+  })
+
+  it('lifts it through the shared clear, so a parked loop resumes', () => {
+    // Nulling the two fields inline would leave loopWaitUntil armed on the old
+    // deadline (clearPaneUsageLimit is what compares them), leave the banner
+    // still on screen able to re-light the flag on the next poll, and lose the
+    // dismissed-reset record that stops exactly that.
+    const check = appSource.slice(appSource.indexOf('function checkPaneUsageLimit('))
+    const headroom = check.indexOf('hasHeadlineHeadroom(usageFor(pane.agentKey))')
+    expect(check.slice(headroom, check.indexOf('\n', headroom))).toContain(
+      "clearPaneUsageLimit(pane, 'quota-back')"
+    )
+  })
+})
+
+describe('the account reading can raise the flag with nothing in the buffer', () => {
+  const raise = appSource.slice(
+    appSource.indexOf('function raiseFromQuotaReading('),
+    appSource.indexOf('/** Account switch:')
+  )
+
+  it('is reached only when the buffer matched nothing', () => {
+    const check = appSource.slice(appSource.indexOf('function checkPaneUsageLimit('))
+    const hit = check.indexOf('const hit = detectUsageLimit(')
+    const call = check.indexOf('raiseFromQuotaReading(pane, watcher, now)')
+    expect(call).toBeGreaterThan(hit)
+    expect(check.slice(hit, call)).toContain('if (hit === null) {')
+  })
+
+  it('requires the reading to name a reset it can resolve', () => {
+    // Without one the flag falls back to the five-hour unknown TTL — five
+    // hours of badge bought with a single poll — and the dismissed-reset
+    // suppression, which compares two clocks, cannot hold either, so a
+    // dismissed badge returns on the very next poll.
+    expect(raise).toContain('const resumeAt = usageResumeAt(pane.agentKey, now)')
+    expect(raise).toContain('if (resumeAt == null) return')
+  })
+
+  it('still honours a badge the user dismissed', () => {
+    expect(raise).toContain(
+      'isDismissedUsageLimit(watcher.dismissedLimitUntil, resumeAt, now)'
+    )
+  })
+
+  it('does not stamp the freshness anchor, send to the ledger, or re-refresh', () => {
+    // The three things this path must NOT inherit from the buffer path.
+    // usageLimitSeenAt is stamped on DETECTION (App.stageQuotaGate.test.ts
+    // pins that); moving it onto a 15-minute poll walks the anchor forward
+    // until quotaTurnIsFresh, which is built to fail OPEN, never opens.
+    // tokens.quota_exhausted is worth sending only because the pane beats the
+    // poll to the wall. And refreshing the reading it just read costs a whole
+    // Claude Code start for nothing.
+    expect(raise).not.toContain('usageLimitSeenAt')
+    expect(raise).not.toContain('tokens.quota_exhausted')
+    expect(raise).not.toContain('refreshUsage')
+    expect(raise).not.toContain('notifyPaneState')
+  })
+
+  it('records which account the flag belongs to, as the buffer path does', () => {
+    // clearPaneUsageLimits compares this against the incoming default to
+    // decide whether switching BACK makes an old banner a genuine hit again.
+    expect(raise).toContain(
+      'watcher.limitProfileId = cliProfilesApi.defaultProfileId(pane.agentKey)'
+    )
+  })
+})

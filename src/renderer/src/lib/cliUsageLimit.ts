@@ -12,7 +12,7 @@ import {
   matchSessionLimit,
   parseLimitReset
 } from './loopPrompt'
-import { exhaustedWindow, usageFor } from '../composables/useUsage'
+import { exhaustedWindow, hasHeadlineHeadroom, usageFor } from '../composables/useUsage'
 
 /** The limit announcement stripped of its reset clock, e.g. a wrapped or
  *  reworded "You've hit your usage limit" with no time attached.
@@ -23,7 +23,8 @@ import { exhaustedWindow, usageFor } from '../composables/useUsage'
  *  spec avoids by requiring two co-occurring parts. There is no second part
  *  here, so the second signal comes from outside the buffer — the account's
  *  own `/usage` reading must independently say the quota is spent. The clocked
- *  form (matchSessionLimit) carries its own proof and needs no confirmation. */
+ *  form (matchSessionLimit) is trusted without that, but not against it: see
+ *  detectUsageLimit for the veto. */
 export const BARE_LIMIT_RE = /hit your .{0,40}limit/i
 
 /** How long a hit whose reset nothing could resolve stands before the flag is
@@ -89,7 +90,17 @@ export function usageResumeAt(
  *  Returns null when there is none, or when a clockless phrase was not
  *  corroborated by the account's quota reading. `tail` is matched
  *  whitespace-collapsed, tolerating the TUI hard-wrap a narrow pane inserts
- *  mid-phrase (same normalization as matchSessionLimit / matchLoginExpired). */
+ *  mid-phrase (same normalization as matchSessionLimit / matchLoginExpired).
+ *
+ *  The account's state outranks the buffer. A pane prints the limit sentence
+ *  for reasons that are not the limit — replaying a past one, quoting it,
+ *  writing about it (this feature was built in a pane that did all three) —
+ *  and the badge it lights then stands for the whole window while the CLI
+ *  answers normally right underneath it. So a reading that positively says
+ *  quota remains vetoes the sentence. Only a positive one: an absent, stale
+ *  or errored reading leaves the buffer as the only witness there is, which
+ *  is also the permanent case for the vendors that expose no quota command
+ *  at all. */
 export function detectUsageLimit(
   agentKey: string | undefined | null,
   tail: string,
@@ -97,6 +108,7 @@ export function detectUsageLimit(
 ): UsageLimitHit | null {
   const clocked = matchSessionLimit(tail)
   if (clocked !== null) {
+    if (hasHeadlineHeadroom(usageFor(agentKey))) return null
     return {
       message: clocked,
       resumeAt: parseLimitReset(clocked, now) ?? usageResumeAt(agentKey, now)
