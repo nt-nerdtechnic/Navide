@@ -4667,6 +4667,12 @@ interface PaneHealthWatcher {
    *  The TUI repaints the old banner into NEW bytes, past limitBaseline, so a
    *  detection resolving to this same reset is that repaint, not a new hit. */
   dismissedLimitUntil: number | null
+  /** `fetchedAt` of the usage reading current when the flag was last cleared
+   *  by hand or by an account switch. The reading-driven raise has no reset
+   *  clock to compare when the exhausted window carries none, so this is its
+   *  dismiss key instead: the SAME reading that was already judged wrong does
+   *  not re-light the flag; the next reading, being new evidence, may. */
+  dismissedReadingAt: string | null
   /** Default account of the agent when the current/last flag lit — the account
    *  that is exhausted. Only a switch back to it lifts the suppression. */
   limitProfileId: string | null
@@ -4814,11 +4820,18 @@ function checkPaneUsageLimit(
  *    ledger nothing its own samples do not already say.
  *  - It does not call refreshUsage on a reading it just read.
  *
- *  A resolvable reset is required. Without one the flag would fall back to the
- *  five-hour unknown TTL — five hours of badge bought with one poll — and the
- *  dismissed-reset suppression, which needs two clocks to compare, could not
- *  hold either, so a dismissed badge would come straight back on the next
- *  poll. The buffer path still covers the clockless case.
+ *  A reset the reading cannot name is reported as unknown, not guessed. The
+ *  spent window may carry no reset (Claude's panel prints one only sometimes)
+ *  while the session window does; borrowing that one would print "back at
+ *  16:32" over a weekly wall that stands for days and wake a parked loop into
+ *  it — a badge with a false clock, the very thing this feature exists to
+ *  stop. Unknown lights the clockless badge, bounded by the unknown TTL and
+ *  by the reading itself, which lowers the flag the moment it shows headroom.
+ *
+ *  Dismissing an unknown-reset flag needs its own key, because the reset
+ *  suppression compares two clocks and has none here: the reading's
+ *  `fetchedAt`. The same reading that was judged wrong does not re-light the
+ *  flag; the next one, being new evidence, may.
  *
  *  No notification either: this observes a state that may have been true for a
  *  quarter of an hour, and every notification the pane has says "just now". */
@@ -4831,8 +4844,8 @@ function raiseFromQuotaReading(pane: ActivePane, watcher: PaneHealthWatcher, now
   // tick later from a reading nobody has taken — defeating the switch's own
   // clear and making the claim in clearPaneUsageLimits untrue.
   if (!readingIsCurrent(snap) || exhaustedWindow(snap) === undefined) return
+  if (snap!.fetchedAt === watcher.dismissedReadingAt) return
   const resumeAt = usageResumeAt(pane.agentKey, now)
-  if (resumeAt == null) return
   if (isDismissedUsageLimit(watcher.dismissedLimitUntil, resumeAt, now)) return
   pane.usageLimitAt = now
   pane.usageLimitUntil = resumeAt
@@ -4864,7 +4877,10 @@ function clearPaneUsageLimits(agentKey: string, newDefaultId: string | null): vo
       // banner with that same reset a genuine hit, so drop it then — and only
       // then: on any other account the old banner is still just a repaint.
       const w = paneHealthWatchers.get(pane.id)
-      if (w && w.limitProfileId === newDefaultId) w.dismissedLimitUntil = null
+      if (w && w.limitProfileId === newDefaultId) {
+        w.dismissedLimitUntil = null
+        w.dismissedReadingAt = null
+      }
       continue
     }
     clearPaneUsageLimit(pane, 'account-switch')
@@ -4891,7 +4907,10 @@ function clearPaneUsageLimit(pane: ActivePane, logLabel: string, remember = true
   const w = paneHealthWatchers.get(pane.id)
   if (w) {
     w.limitBaseline = paneCleanBytes(pane.id)
-    if (remember) w.dismissedLimitUntil = pane.usageLimitUntil ?? null
+    if (remember) {
+      w.dismissedLimitUntil = pane.usageLimitUntil ?? null
+      w.dismissedReadingAt = usageFor(pane.agentKey)?.fetchedAt ?? null
+    }
   }
   pane.usageLimitAt = null
   pane.usageLimitUntil = null
@@ -4920,6 +4939,7 @@ function startPaneHealthWatcher(paneId: string): void {
     baseline: paneCleanBytes(paneId),
     limitBaseline: paneCleanBytes(paneId),
     dismissedLimitUntil: null,
+    dismissedReadingAt: null,
     limitProfileId: null,
     warmedUp: false,
   }

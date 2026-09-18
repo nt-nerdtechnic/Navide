@@ -173,7 +173,8 @@ describe('an account switch lets go of the quota flag', () => {
     expect(body).toContain("clearPaneUsageLimit(pane, 'account-switch')")
     // An unflagged pane drops an earlier suppression only on a switch back to
     // the exhausted account; on any other account the old banner is a repaint.
-    expect(body).toContain('if (w && w.limitProfileId === newDefaultId) w.dismissedLimitUntil = null')
+    expect(body).toContain('if (w && w.limitProfileId === newDefaultId) {')
+    expect(body).toContain('w.dismissedLimitUntil = null')
     // The exhausted account is stamped when the flag lights.
     const check = appSource.slice(appSource.indexOf('function checkPaneUsageLimit('))
     expect(check).toContain('watcher.limitProfileId = cliProfilesApi.defaultProfileId(pane.agentKey)')
@@ -285,7 +286,10 @@ describe('the account reading can lower the flag before its stated reset', () =>
     // unflaggable for the rest of the window however exhausted it then gets.
     const clear = appSource.slice(appSource.indexOf('function clearPaneUsageLimit('))
     expect(clear.slice(0, clear.indexOf('\n}'))).toContain(
-      'if (remember) w.dismissedLimitUntil = pane.usageLimitUntil ?? null'
+      'if (remember) {'
+    )
+    expect(clear.slice(0, clear.indexOf('\n}'))).toContain(
+      'w.dismissedLimitUntil = pane.usageLimitUntil ?? null'
     )
     // The two paths that ARE a judgement keep the default.
     expect(appSource).toContain("clearPaneUsageLimit(pane, 'account-switch')")
@@ -307,19 +311,50 @@ describe('the account reading can raise the flag with nothing in the buffer', ()
     expect(check.slice(hit, call)).toContain('if (hit === null) {')
   })
 
-  it('requires the reading to name a reset it can resolve', () => {
-    // Without one the flag falls back to the five-hour unknown TTL — five
-    // hours of badge bought with a single poll — and the dismissed-reset
-    // suppression, which compares two clocks, cannot hold either, so a
-    // dismissed badge returns on the very next poll.
+  it('lights the clockless badge when the spent window names no reset', () => {
+    // Claude's panel prints a reset for a window only sometimes. A spent
+    // weekly window without one, next to a session window with one, must NOT
+    // borrow the session clock: that prints "back at 16:32" over a wall that
+    // stands for days and wakes a parked loop into it. usageResumeAt already
+    // answers null for that shape; the raise passes it through as unknown
+    // instead of refusing to light.
     expect(raise).toContain('const resumeAt = usageResumeAt(pane.agentKey, now)')
-    expect(raise).toContain('if (resumeAt == null) return')
+    expect(raise).not.toContain('if (resumeAt == null) return')
+    expect(raise).toContain('pane.usageLimitUntil = resumeAt')
   })
 
-  it('still honours a badge the user dismissed', () => {
+  it('still honours a badge the user dismissed, by reset clock when there is one', () => {
     expect(raise).toContain(
       'isDismissedUsageLimit(watcher.dismissedLimitUntil, resumeAt, now)'
     )
+  })
+
+  it('honours a dismissed unknown-reset badge by the reading that was judged', () => {
+    // The reset suppression compares two clocks and has none here, so the
+    // dismiss key is the reading itself: the same fetchedAt does not re-light
+    // the flag, the next reading (new evidence) may. Recorded only where a
+    // judgement was made — dismiss and account switch — never by the
+    // reading-driven clear, for the same reason dismissedLimitUntil is not.
+    expect(raise).toContain('if (snap!.fetchedAt === watcher.dismissedReadingAt) return')
+    const clear = appSource.slice(appSource.indexOf('function clearPaneUsageLimit('))
+    const clearBody = clear.slice(0, clear.indexOf('\n}'))
+    const remember = clearBody.indexOf('if (remember) {')
+    expect(remember).toBeGreaterThan(-1)
+    expect(clearBody.slice(remember)).toContain(
+      'w.dismissedReadingAt = usageFor(pane.agentKey)?.fetchedAt ?? null'
+    )
+  })
+
+  it('lifts the reading key with the reset key when switching back to the exhausted account', () => {
+    const body = appSource.slice(
+      appSource.indexOf('function clearPaneUsageLimits('),
+      appSource.indexOf('function clearPaneUsageLimit(')
+    )
+    const lift = body.indexOf('if (w && w.limitProfileId === newDefaultId) {')
+    expect(lift).toBeGreaterThan(-1)
+    const block = body.slice(lift, body.indexOf('continue', lift))
+    expect(block).toContain('w.dismissedLimitUntil = null')
+    expect(block).toContain('w.dismissedReadingAt = null')
   })
 
   it('does not stamp the freshness anchor, send to the ledger, or re-refresh', () => {
