@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import subprocess
 import threading
@@ -340,6 +341,26 @@ def test_the_waiter_names_the_secret_file_and_never_the_secret(tmp_path) -> None
     assert "?t=" not in hook["command"]
 
 
+# A ceiling on a hung waiter, not an expected duration: once the shell is up
+# the one-shot server answers in milliseconds. The shell is the whole cost —
+# PowerShell 5.1 cold-starts in well under a second on x64 but takes tens of
+# seconds on the emulated Windows arm64 runners, where the flat 20s cap this
+# replaces timed out during the 0.2.7 release dry run with the waiter itself
+# fine. Raising it only makes a genuine hang slower to report, never invisible:
+# the assertions are on the exit code and the stderr, not on the elapsed time.
+_WAITER_TIMEOUT_S = 120.0 if os.name == "nt" else 20.0
+# The listener has to outlive that ceiling. With the shorter one it used to
+# have, a slow shell reached a closed port, curl failed, and the waiter exited
+# 0 with no body — which is exactly what the quiet half asserts, so the test
+# would have passed for the wrong reason instead of reporting the slow start.
+_WAITER_LISTEN_S = _WAITER_TIMEOUT_S + 10.0
+
+
+def test_the_waiter_harness_outlives_its_client() -> None:
+    """The ordering above is the whole reason the quiet half means anything."""
+    assert _WAITER_LISTEN_S > _WAITER_TIMEOUT_S
+
+
 def test_the_waiter_exits_zero_when_the_backend_has_nothing_to_say(tmp_path) -> None:
     """Exit 2 is the wake signal, so it must be reachable only with a body.
 
@@ -384,7 +405,7 @@ def _fire_waiter(home, body: bytes):
             pass
 
     server = HTTPServer(("127.0.0.1", 0), Handler)
-    server.timeout = 15
+    server.timeout = _WAITER_LISTEN_S
     thread = threading.Thread(target=server.handle_request)
     thread.start()
     port_file.write_text(str(server.server_port), encoding="utf-8")
@@ -394,11 +415,11 @@ def _fire_waiter(home, body: bytes):
             input='{"hook_event_name":"SessionStart","session_id":"session-1"}',
             text=True,
             capture_output=True,
-            timeout=20,
+            timeout=_WAITER_TIMEOUT_S,
             check=False,
         )
     finally:
-        thread.join(timeout=16)
+        thread.join(timeout=_WAITER_LISTEN_S + 5)
         server.server_close()
 
 
