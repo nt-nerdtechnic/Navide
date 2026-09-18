@@ -38,12 +38,13 @@ in-repo docs above.
 5. **Giant files** — any file over ~2K lines: Grep tool to locate → Read with
    offset/limit → batch edits through one subagent. Never whole-file Read,
    never bash/python inline search. The largest are `src/renderer/src/App.vue`
-   (~15.3K lines), `backend/agent_team_backend/ws_handlers.py` (~6.5K),
-   `src/renderer/src/components/SettingsModal.vue` (~4.7K),
-   `src/renderer/src/composables/useTerminal.ts` (~4.2K),
-   `src/renderer/src/components/ControlPane.vue` (~3.8K),
-   `src/renderer/src/components/GitPane.vue` (~3.5K),
-   `backend/agent_team_backend/git_service.py` (~3.0K), and
+   (~20.7K lines), `backend/agent_team_backend/ws_handlers.py` (~9.4K),
+   `src/renderer/src/components/ControlPane.vue` (~6.8K),
+   `src/renderer/src/components/SettingsModal.vue` (~5.2K),
+   `src/renderer/src/platform/terminal/composables/useTerminal.ts` (~4.7K),
+   `src/renderer/src/components/GitPane.vue` (~3.6K, and a second copy at
+   `plugins/navide-git/src/components/GitPane.vue`),
+   `backend/agent_team_backend/git_service.py` (~3.2K), and
    `src/renderer/src/EditorWindowApp.vue` (~2.9K). Check with `wc -l`
    rather than trusting this list — it drifts. Per-vendor CLI code lives in
    `backend/agent_team_backend/cli_vendors/` (one file per vendor; see
