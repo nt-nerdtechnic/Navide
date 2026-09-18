@@ -115,6 +115,7 @@ import IconReferenceHelp from './IconReferenceHelp.vue'
 import CrossPlatformHelp from './CrossPlatformHelp.vue'
 import ExtensionsPane from './ExtensionsPane.vue'
 import ExecutionPolicyPane from './ExecutionPolicyPane.vue'
+import MarketplacePane from './MarketplacePane.vue'
 import LayoutSettingsPane from '../layout/LayoutSettingsPane.vue'
 import McpPane from './McpPane.vue'
 import SkillsPane from './SkillsPane.vue'
@@ -217,7 +218,7 @@ const reclaimNowCount = computed(() => props.reclaimableNowCount ?? 0)
 const reclaimNowSize = computed(() => formatBytes(props.reclaimableNowBytes ?? 0))
 
 // ── Tab ───────────────────────────────────────────────────────────────────────
-type Tab = 'mcp' | 'skills' | 'prompts' | 'memory' | 'analyzer' | 'cliAgents' | 'general' | 'cross-device' | 'updates' | 'appearance' | 'statusBadges' | 'layout' | 'accounts' | 'extensions' | 'executionPolicy' | 'keybindings' | 'help'
+type Tab = 'mcp' | 'skills' | 'prompts' | 'memory' | 'analyzer' | 'cliAgents' | 'general' | 'cross-device' | 'updates' | 'appearance' | 'statusBadges' | 'layout' | 'accounts' | 'extensions' | 'marketplace' | 'keybindings' | 'help'
 
 /** Topics inside the Help tab — read-only reference material, no settings. */
 type HelpTopic =
@@ -227,8 +228,8 @@ type HelpTopic =
   | 'mcp'
   | 'codeWorkflow'
   | 'settingsSystem'
-  | 'icons'
   | 'crossPlatform'
+  | 'icons'
 const helpTopic = ref<HelpTopic>('workspace')
 // Topic order is the reading order: what the main window is made of, then the
 // agents in it, then how they talk, then the code surfaces, then settings.
@@ -239,8 +240,8 @@ const helpTopicComponents: Record<HelpTopic, Component> = {
   mcp: McpHelp,
   codeWorkflow: CodeWorkflowHelp,
   settingsSystem: SettingsSystemHelp,
-  icons: IconReferenceHelp,
   crossPlatform: CrossPlatformHelp,
+  icons: IconReferenceHelp,
 }
 const helpTopicOrder: HelpTopic[] = [
   'workspace',
@@ -249,8 +250,8 @@ const helpTopicOrder: HelpTopic[] = [
   'mcp',
   'codeWorkflow',
   'settingsSystem',
-  'icons',
   'crossPlatform',
+  'icons',
 ]
 const activeTab = ref<Tab>(props.initialTab ?? 'general')
 // initialTab is only read once at mount by the ref initializer above; when the
@@ -371,8 +372,8 @@ function launchSummary(k: string): string {
 
 /** Write a model/effort pair only if the vendor can actually be told it. The
  *  check and the wording both come from the spawn path's own modules, so the
- *  sentence here is the one the spawn card and the MCP tool give. A refused
- *  pair stays on screen with its reason rather than being silently discarded. */
+ *  sentence here is the one the spawn card gives. A refused pair stays on
+ *  screen with its reason rather than being silently discarded. */
 function applyLaunchModel(k: string, next: CliModelDefault): void {
   const spec = CLI_AGENT_SPECS.find((s) => s.agentKey === k)
   const chosen = modelArgsFor({ spec, request: next })
@@ -380,12 +381,12 @@ function applyLaunchModel(k: string, next: CliModelDefault): void {
     // The refused value is NOT kept in launchModels: that map is also what the
     // list above reads its "model x" chip from, and a chip for a pick the spawn
     // would never make is worse than the field snapping back with a reason.
+    const refusal = modelRefusalMessage(k, chosen.refusal, next.effort)
     launchModelErrors.value = {
       ...launchModelErrors.value,
       [k]: t(refusal.key, refusal.params),
     }
     return
-    const refusal = modelRefusalMessage(k, chosen.refusal, next.effort)
   }
   const { [k]: _dropped, ...rest } = launchModelErrors.value
   launchModelErrors.value = rest
@@ -912,13 +913,24 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
     keywords: 'storage disk space usage cache caches cleanup clean logs node_modules stale free resource manager 儲存 空間 磁碟 快取 清理 清除 日誌 佔用 釋出 資源',
   },
   {
+    // The policy editor is a block on the Extensions page now, so the hit opens
+    // that page and scrolls to the block; the section id is unchanged.
     id: 'execution-policy',
-    tab: 'executionPolicy',
+    tab: 'extensions',
     section: 'execution-policy',
     title: t('settings.search.item.execution-policy.title'),
     group: t('settings.nav.group.plugins'),
     summary: t('settings.search.item.execution-policy.summary'),
     keywords: 'execution policy permission permissions allowlist denylist full shell executable system namespace source repository recommendation untrusted recovery rebuild security 執行政策 權限 允許清單 拒絕清單 完整模式 shell 可執行檔 系統命名空間 來源 repository 建議 不受信任 修復 重建 安全性',
+  },
+  {
+    id: 'marketplace',
+    tab: 'marketplace',
+    section: 'marketplace',
+    title: t('settings.search.item.marketplace.title'),
+    group: t('settings.nav.group.plugins'),
+    summary: t('settings.search.item.marketplace.summary'),
+    keywords: 'marketplace extension extensions plugin plugins registry search browse install publisher signed unsigned trust 市集 擴充 擴充功能 外掛 搜尋 瀏覽 安裝 發佈者 簽章 信任',
   },
   {
     id: 'help-mcp',
@@ -981,6 +993,16 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
     keywords: 'help guide settings overview skills prompts memory storage shortcuts updates analyzer extensions navide cloud pairing device schedule resource 說明 教學 設定 總覽 技能 提示 記憶 儲存 快捷鍵 更新 跨裝置 配對 裝置 排程 資源',
   },
   {
+    id: 'help-cross-platform',
+    tab: 'help',
+    section: 'help',
+    helpTopic: 'crossPlatform',
+    title: t('settings.help.topic.crossPlatform'),
+    group: t('settings.nav.help'),
+    summary: t('settings.search.item.help-cross-platform.summary'),
+    keywords: 'help guide windows linux macos platform install installer nsis appimage deb arm64 mirror download update shortcut modifier ctrl titlebar conpty dpapi keyring 說明 教學 跨平台 視窗 安裝 安裝檔 鏡像 下載 更新 修飾鍵 標題列 憑證 金鑰庫 多台 機器',
+  },
+  {
     id: 'help-icons',
     tab: 'help',
     section: 'help',
@@ -992,16 +1014,6 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
   },
 ])
 
-  {
-    id: 'help-cross-platform',
-    tab: 'help',
-    section: 'help',
-    helpTopic: 'crossPlatform',
-    title: t('settings.help.topic.crossPlatform'),
-    group: t('settings.nav.help'),
-    summary: t('settings.search.item.help-cross-platform.summary'),
-    keywords: 'help guide windows linux macos platform install installer nsis appimage deb arm64 mirror download update shortcut modifier ctrl titlebar conpty dpapi keyring 說明 教學 跨平台 視窗 安裝 安裝檔 鏡像 下載 更新 修飾鍵 標題列 憑證 金鑰庫 多台 機器',
-  },
 const settingsSearchResults = computed(() => {
   const q = settingsSearchQuery.value.trim().toLowerCase()
   if (!q) return []
@@ -1279,33 +1291,49 @@ const settingsBundleError = ref('')
  *  it has no scope badge and no settings file to reveal. */
 type SettingsTab = Exclude<Tab, 'help'>
 
-const settingsScopeNotes: Record<SettingsTab, { scope: string; storage: keyof SettingsPaths | 'localStorage' | 'mainProcess' | 'safeStorage' | 'cliFiles' }> = {
-  mcp: { scope: 'User', storage: 'mcp' },
-  skills: { scope: 'User', storage: 'skills' },
-  prompts: { scope: 'User', storage: 'localStorage' },
+// The scope is stored as a key, not as prose: the badge is resolved through
+// `scopeLabel()` at render time so it follows a language switch.
+type SettingsScope = 'user' | 'userWorkspace' | 'accountServer' | 'userWorkspaceBindings' | ''
+
+const settingsScopeNotes: Record<SettingsTab, { scope: SettingsScope; storage: keyof SettingsPaths | 'localStorage' | 'mainProcess' | 'safeStorage' | 'cliFiles' }> = {
+  mcp: { scope: 'user', storage: 'mcp' },
+  skills: { scope: 'user', storage: 'skills' },
+  prompts: { scope: 'user', storage: 'localStorage' },
   // The CLIs' own instruction files: each one lives where its CLI looks for
   // it, so the pane shows per-file paths and this tab has none of its own.
-  memory: { scope: 'User / Workspace', storage: 'cliFiles' },
-  analyzer: { scope: 'User', storage: 'analyzer' },
+  memory: { scope: 'userWorkspace', storage: 'cliFiles' },
+  analyzer: { scope: 'user', storage: 'analyzer' },
   // Order and the disabled list are persisted per workspace (project.json),
   // with the global KV as the fallback default — so this page is both.
-  cliAgents: { scope: 'User / Workspace', storage: 'localStorage' },
-  general: { scope: 'User', storage: 'localStorage' },
+  cliAgents: { scope: 'userWorkspace', storage: 'localStorage' },
+  general: { scope: 'user', storage: 'localStorage' },
   // Neither half of this page is a local setting: the access token is in
   // the credential vault and the authorization rules live on the server,
   // which is why the cards say so themselves rather than showing a path.
-  'cross-device': { scope: 'Account / Server', storage: 'safeStorage' },
-  updates: { scope: 'User', storage: 'mainProcess' },
-  appearance: { scope: 'User', storage: 'localStorage' },
+  'cross-device': { scope: 'accountServer', storage: 'safeStorage' },
+  updates: { scope: 'user', storage: 'mainProcess' },
+  appearance: { scope: 'user', storage: 'localStorage' },
   // The user's own names and colours for the pane status badges.
-  statusBadges: { scope: 'User', storage: 'localStorage' },
+  statusBadges: { scope: 'user', storage: 'localStorage' },
   // One arrangement for every workspace, shared live across windows.
-  layout: { scope: 'User', storage: 'localStorage' },
-  accounts: { scope: 'User / Workspace bindings', storage: 'safeStorage' },
-  extensions: { scope: 'User', storage: 'mainProcess' },
-  executionPolicy: { scope: 'User / Workspace', storage: 'mainProcess' },
-  keybindings: { scope: 'User', storage: 'mainProcess' },
+  layout: { scope: 'user', storage: 'localStorage' },
+  accounts: { scope: 'userWorkspaceBindings', storage: 'safeStorage' },
+  extensions: { scope: 'user', storage: 'mainProcess' },
+  // Browsing the registry reads nothing of the user's, so this page has no
+  // scope badge; the entry exists because the map covers every nav page.
+  marketplace: { scope: '', storage: 'mainProcess' },
+  keybindings: { scope: 'user', storage: 'mainProcess' },
 }
+
+function scopeLabel(scope: SettingsScope): string {
+  return scope ? t(`settings.scope.${scope}`) : ''
+}
+
+// The execution policy block sits inside the Extensions page but carries its
+// own scope: the policy is per user and per workspace, the plugin inventory
+// next to it is not. It is a block, not a nav page, so it stays out of
+// `settingsScopeNotes` — that map is one entry per page.
+const executionPolicyScopeNote = { scope: 'userWorkspace', storage: 'mainProcess' } as const
 
 async function loadSettingsPaths(): Promise<void> {
   try {
@@ -1314,13 +1342,18 @@ async function loadSettingsPaths(): Promise<void> {
   } catch { /* non-fatal */ }
 }
 
-function pathForTab(tab: SettingsTab): string {
-  const storage = settingsScopeNotes[tab].storage
-  if (storage === 'localStorage') return 'ui_settings.json (app data) + workspace backup'
-  if (storage === 'mainProcess') return 'Electron main process userData'
-  if (storage === 'safeStorage') return 'Encrypted local safeStorage registry'
-  if (storage === 'cliFiles') return "Each CLI's own instruction files"
+type SettingsStorage = (typeof settingsScopeNotes)[SettingsTab]['storage']
+
+function pathForStorage(storage: SettingsStorage): string {
+  if (storage === 'localStorage') return t('settings.storage.localStorage')
+  if (storage === 'mainProcess') return t('settings.storage.mainProcess')
+  if (storage === 'safeStorage') return t('settings.storage.safeStorage')
+  if (storage === 'cliFiles') return t('settings.storage.cliFiles')
   return settingsPaths.value[storage] ?? ''
+}
+
+function pathForTab(tab: SettingsTab): string {
+  return pathForStorage(settingsScopeNotes[tab].storage)
 }
 
 async function openSettingsPath(path?: string): Promise<void> {
@@ -1339,7 +1372,7 @@ async function exportSettingsBundle(): Promise<void> {
   try {
     const resp = await props.backend.send<{ bundle: Record<string, unknown> }>('settings.bundle.export', {})
     if (!resp.ok || !resp.payload?.bundle) {
-      settingsBundleError.value = resp.error?.message ?? 'Export failed'
+      settingsBundleError.value = resp.error?.message ?? t('settings.management.export-failed')
       return
     }
     const bundle = {
@@ -1353,13 +1386,13 @@ async function exportSettingsBundle(): Promise<void> {
       },
     }
     const result = await window.agentTeam.saveJson({
-      title: 'Export settings bundle',
+      title: t('settings.management.export-dialog-title'),
       defaultName: `agent-team-settings-${stampForFile()}.json`,
       content: JSON.stringify(bundle, null, 2),
     })
-    if (result.ok) settingsBundleSummary.value = 'Settings bundle exported'
+    if (result.ok) settingsBundleSummary.value = t('settings.management.exported')
   } catch (err) {
-    settingsBundleError.value = err instanceof Error ? err.message : 'Export failed'
+    settingsBundleError.value = err instanceof Error ? err.message : t('settings.management.export-failed')
   } finally {
     settingsBundleBusy.value = false
   }
@@ -1370,12 +1403,12 @@ async function importSettingsBundle(): Promise<void> {
   settingsBundleBusy.value = true
   settingsBundleError.value = ''
   try {
-    const result = await window.agentTeam.openJson({ title: 'Import settings bundle JSON' })
+    const result = await window.agentTeam.openJson({ title: t('settings.management.import-dialog-title') })
     if (!result.ok || !result.content) return
     const bundle = JSON.parse(result.content) as Record<string, unknown>
     const resp = await props.backend.send<{ applied: string[]; paths: SettingsPaths }>('settings.bundle.import', { bundle })
     if (!resp.ok) {
-      settingsBundleError.value = resp.error?.message ?? 'Import failed'
+      settingsBundleError.value = resp.error?.message ?? t('settings.management.import-failed')
       return
     }
     const appearance = bundle.appearance as Record<string, unknown> | undefined
@@ -1400,9 +1433,9 @@ async function importSettingsBundle(): Promise<void> {
     ])
     const applied = resp.payload?.applied ?? []
     if (shouldReloadMcpAfterBundleImport(applied)) await mLoad(true)
-    settingsBundleSummary.value = `Imported: ${applied.join(', ') || 'appearance'}`
+    settingsBundleSummary.value = t('settings.management.imported', { items: applied.join(', ') || 'appearance' })
   } catch (err) {
-    settingsBundleError.value = err instanceof Error ? err.message : 'Import failed'
+    settingsBundleError.value = err instanceof Error ? err.message : t('settings.management.import-failed')
   } finally {
     settingsBundleBusy.value = false
   }
@@ -1740,7 +1773,7 @@ async function azDetectCli() {
 async function azPickCli() {
   const result = await window.agentTeam?.pickFile?.({
     title: t('settings.analyzer.select-llama-cli'),
-    filters: [{ name: 'Executable', extensions: ['*'] }],
+    filters: [{ name: t('settings.analyzer.filter-executable'), extensions: ['*'] }],
     defaultPath: '/opt/homebrew/bin',
   })
   if (result?.ok && result.path) {
@@ -1750,7 +1783,7 @@ async function azPickCli() {
 async function azPickGguf() {
   const result = await window.agentTeam?.pickFile?.({
     title: t('settings.analyzer.select-gguf-model'),
-    filters: [{ name: 'GGUF Model', extensions: ['gguf'] }, { name: 'All Files', extensions: ['*'] }],
+    filters: [{ name: t('settings.analyzer.filter-gguf'), extensions: ['gguf'] }, { name: t('settings.analyzer.filter-all-files'), extensions: ['*'] }],
   })
   if (result?.ok && result.path) {
     await props.analyzerApi.saveSettings({ gguf_path: result.path })
@@ -2200,7 +2233,7 @@ watch(activeTab, (tab) => {
             </div>
           </div>
 
-          <nav class="s-nav" aria-label="Settings sections">
+          <nav class="s-nav" :aria-label="$t('settings.nav.sections-label')">
             <div class="s-nav-group">
               <div class="s-nav-group-title">{{ $t('settings.nav.group.general') }}</div>
               <SettingsNavItem :label="$t('settings.nav.general')" :active="activeTab === 'general'" @select="activeTab = 'general'">
@@ -2242,6 +2275,13 @@ watch(activeTab, (tab) => {
                   <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3.2C6.6 2.2 4.2 2.8 4.2 4.8 2.7 5.1 2.7 7.3 4.2 7.8c0 2 1.9 2.6 3.8 2.1"/><path d="M8 3.2c1.4-1 3.8-.4 3.8 1.6 1.5.3 1.5 2.5 0 3 0 2-1.9 2.6-3.8 2.1"/><path d="M8 3.2v9.6"/></svg>
                 </template>
               </SettingsNavItem>
+              <SettingsNavItem :label="$t('settings.nav.crossDevice')" :active="activeTab === 'cross-device'" @select="activeTab = 'cross-device'">
+                <template #icon>
+                  <!-- The same mark as the titlebar and the page header: this
+                       row is how most people will first reach Navide Cloud. -->
+                  <NavideCloudMark variant="solid" class="nvc-nav-mark" />
+                </template>
+              </SettingsNavItem>
             </div>
 
             <div class="s-nav-group">
@@ -2275,16 +2315,9 @@ watch(activeTab, (tab) => {
                   <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6.4 2.6h3.2v1.5a1.3 1.3 0 0 0 2.4 0V2.6h1.4v3.2h-1.5a1.3 1.3 0 0 0 0 2.4h1.5v3.2H6.4v-1.5a1.3 1.3 0 0 0-2.4 0v1.5H2.6V8.2h1.5a1.3 1.3 0 0 0 0-2.4H2.6V2.6h3.8Z"/></svg>
                 </template>
               </SettingsNavItem>
-              <SettingsNavItem :label="$t('settings.nav.crossDevice')" :active="activeTab === 'cross-device'" @select="activeTab = 'cross-device'">
+              <SettingsNavItem :label="$t('settings.nav.marketplace')" :active="activeTab === 'marketplace'" @select="activeTab = 'marketplace'">
                 <template #icon>
-                  <!-- The same mark as the titlebar and the page header: this
-                       row is how most people will first reach Navide Cloud. -->
-                  <NavideCloudMark variant="solid" class="nvc-nav-mark" />
-                </template>
-              </SettingsNavItem>
-              <SettingsNavItem :label="$t('settings.nav.executionPolicy')" :active="activeTab === 'executionPolicy'" @select="activeTab = 'executionPolicy'">
-                <template #icon>
-                  <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.8 13 3.7v3.7c0 3.1-2 5.7-5 6.8-3-1.1-5-3.7-5-6.8V3.7L8 1.8Z"/><path d="m5.7 8 1.5 1.5 3.2-3.2"/></svg>
+                  <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.6 5.4h10.8l-.8 7.1a1.2 1.2 0 0 1-1.2 1.1H4.6a1.2 1.2 0 0 1-1.2-1.1L2.6 5.4Z"/><path d="M5.8 7.2V4.6a2.2 2.2 0 0 1 4.4 0v2.6"/></svg>
                 </template>
               </SettingsNavItem>
             </div>
@@ -2312,7 +2345,7 @@ watch(activeTab, (tab) => {
 
         <!-- ── Content (close button + all tab bodies) ───────────────────── -->
         <div class="s-content">
-          <button class="s-close" @click="emit('close')" title="Close (ESC)">✕</button>
+          <button class="s-close" @click="emit('close')" :title="$t('action.close-esc')">✕</button>
 
         <!-- ── MCP TAB ───────────────────────────────────────────────────── -->
         <div v-show="activeTab === 'mcp'" class="s-body s-body--bleed mcp-body">
@@ -2330,7 +2363,7 @@ watch(activeTab, (tab) => {
               </div>
             </div>
             <div class="settings-meta-row">
-              <span class="scope-badge">{{ settingsScopeNotes.mcp.scope }}</span>
+              <span class="scope-badge">{{ scopeLabel(settingsScopeNotes.mcp.scope) }}</span>
               <span class="settings-path" :title="pathForTab('mcp')">{{ pathForTab('mcp') }}</span>
               <button class="settings-path-btn" :disabled="!settingsPaths.mcp" @click="openSettingsPath(settingsPaths.mcp)">{{ $t('action.open') }}</button>
             </div>
@@ -2409,17 +2442,17 @@ watch(activeTab, (tab) => {
           <!-- ── CATALOG VIEW ────────────────────────────────────────────── -->
           <template v-else-if="mView === 'catalog'">
             <div class="mcp-topbar" data-settings-section="mcp-catalog">
-              <button class="mcp-back-btn nv-btn" @click="mView = 'list'">← Back</button>
-              <span class="mcp-page-title">Add MCP Servers</span>
+              <button class="mcp-back-btn nv-btn" @click="mView = 'list'">← {{ $t('action.back') }}</button>
+              <span class="mcp-page-title">{{ $t('settings.mcp.catalog-title') }}</span>
             </div>
 
             <div class="mcp-search-wrap">
-              <input v-model="mSearch" type="text" placeholder="Search MCP servers by name" class="mcp-search" spellcheck="false" />
+              <input v-model="mSearch" type="text" :placeholder="$t('settings.mcp.catalog-search')" class="mcp-search" spellcheck="false" />
               <span class="mcp-search-icon">🔍</span>
             </div>
 
             <div class="mcp-catalog-hint">
-              💡 This catalog lists only <strong>"Orchestrator context-reading"</strong> MCPs — tools that read workspace / docs / external service data and inject it into kickoff prompts to ground agent knowledge. Execution actions (tests, browser automation, etc.) are handled by the CLI agents themselves.
+              💡 <span v-html="$t('settings.mcp.catalog-hint')"></span>
             </div>
 
             <div class="mcp-catalog-list">
@@ -2428,13 +2461,13 @@ watch(activeTab, (tab) => {
                   <div class="mcp-catalog-name">{{ item.label }}</div>
                   <div class="mcp-catalog-desc">{{ t(item.descriptionKey) }}</div>
                   <div v-if="item.requiresEnv?.length" class="mcp-catalog-note">
-                    ⚠ Requires env vars: {{ item.requiresEnv.join(', ') }}
+                    ⚠ {{ $t('settings.mcp.catalog-requires-env', { vars: item.requiresEnv.join(', ') }) }}
                   </div>
                 </div>
-                <button v-if="mIsInstalled(item.name)" class="mcp-installed-badge" disabled>Installed</button>
-                <button v-else class="mcp-add-btn nv-btn nv-btn--primary" @click="mAddFromCatalog(item)" :disabled="mSaving">+ Add</button>
+                <button v-if="mIsInstalled(item.name)" class="mcp-installed-badge" disabled>{{ $t('label.installed') }}</button>
+                <button v-else class="mcp-add-btn nv-btn nv-btn--primary" @click="mAddFromCatalog(item)" :disabled="mSaving">+ {{ $t('action.add') }}</button>
               </div>
-              <div v-if="mFilteredCatalog.length === 0" class="mcp-empty">No matching MCP servers found</div>
+              <div v-if="mFilteredCatalog.length === 0" class="mcp-empty">{{ $t('settings.mcp.catalog-empty') }}</div>
             </div>
           </template>
 
@@ -2462,7 +2495,7 @@ watch(activeTab, (tab) => {
                 <input v-model="mCustomCommand" required spellcheck="false" placeholder="npx" />
               </div>
               <div v-else class="field">
-                <label class="lbl">URL</label>
+                <label class="lbl">{{ $t('label.url') }}</label>
                 <input v-model="mCustomUrl" required type="url" spellcheck="false" placeholder="https://example.com/mcp" />
               </div>
               <div class="mcp-custom-actions">
@@ -2482,7 +2515,7 @@ watch(activeTab, (tab) => {
         <div v-show="activeTab === 'skills'" class="s-body s-body--bleed" data-settings-section="skills">
           <h1 class="s-page-title">{{ $t('settings.nav.skills') }}</h1>
           <div class="settings-meta-row">
-            <span class="scope-badge">{{ settingsScopeNotes.skills.scope }}</span>
+            <span class="scope-badge">{{ scopeLabel(settingsScopeNotes.skills.scope) }}</span>
             <span class="settings-path" :title="pathForTab('skills')">{{ pathForTab('skills') }}</span>
             <button class="settings-path-btn" :disabled="!settingsPaths.skills" @click="openSettingsPath(settingsPaths.skills)">{{ $t('action.open') }}</button>
           </div>
@@ -2493,7 +2526,7 @@ watch(activeTab, (tab) => {
         <div v-show="activeTab === 'prompts'" class="s-body s-body--bleed" data-settings-section="prompts">
           <h1 class="s-page-title">{{ $t('settings.nav.prompts') }}</h1>
           <div class="settings-meta-row">
-            <span class="scope-badge">{{ settingsScopeNotes.prompts.scope }}</span>
+            <span class="scope-badge">{{ scopeLabel(settingsScopeNotes.prompts.scope) }}</span>
           </div>
           <PromptSkillsPane />
         </div>
@@ -2502,7 +2535,7 @@ watch(activeTab, (tab) => {
         <div v-show="activeTab === 'memory'" class="s-body s-body--bleed" data-settings-section="memory">
           <h1 class="s-page-title">{{ $t('settings.nav.memory') }}</h1>
           <div class="settings-meta-row">
-            <span class="scope-badge">{{ settingsScopeNotes.memory.scope }}</span>
+            <span class="scope-badge">{{ scopeLabel(settingsScopeNotes.memory.scope) }}</span>
           </div>
           <!-- Project files belong to the folder that is actually open; the
                first known workspace is the current one whenever there is one. -->
@@ -2516,11 +2549,11 @@ watch(activeTab, (tab) => {
         <div v-show="activeTab === 'analyzer'" class="s-body s-body--bleed analyzer-body">
           <h1 class="s-page-title">{{ $t('settings.nav.analyzer') }}</h1>
           <div class="settings-meta-row">
-            <span class="scope-badge">{{ settingsScopeNotes.analyzer.scope }}</span>
+            <span class="scope-badge">{{ scopeLabel(settingsScopeNotes.analyzer.scope) }}</span>
             <span class="settings-path" :title="settingsPaths.analyzer">{{ settingsPaths.analyzer }}</span>
             <button class="settings-path-btn" :disabled="!settingsPaths.analyzer" @click="openSettingsPath(settingsPaths.analyzer)">{{ $t('action.open') }}</button>
             <span class="settings-path-divider">·</span>
-            <span class="settings-path" :title="settingsPaths.ai_chat">AI keys: {{ settingsPaths.ai_chat }}</span>
+            <span class="settings-path" :title="settingsPaths.ai_chat">{{ $t('settings.analyzer.ai-keys-label') }} {{ settingsPaths.ai_chat }}</span>
             <button class="settings-path-btn" :disabled="!settingsPaths.ai_chat" @click="openSettingsPath(settingsPaths.ai_chat)">{{ $t('action.open') }}</button>
           </div>
 
@@ -2548,7 +2581,7 @@ watch(activeTab, (tab) => {
                   <input
                     class="az-input"
                     type="text"
-                    placeholder="e.g. llama-cli or /usr/local/bin/llama-completion"
+                    :placeholder="$t('settings.analyzer.llama-cli-placeholder')"
                     :value="props.analyzerApi.analyzerSettings.value.llama_cli"
                     @change="props.analyzerApi.saveSettings({ llama_cli: ($event.target as HTMLInputElement).value })"
                   />
@@ -2593,15 +2626,12 @@ watch(activeTab, (tab) => {
                   <div class="az-status-row">
                     <span class="az-status-dot" :class="props.analyzerApi.health.value?.gguf_warning ? 'err' : 'ok'"></span>
                     <span class="az-version" v-if="props.analyzerApi.health.value?.ok && !props.analyzerApi.health.value?.gguf_warning">
-                      File found · {{ props.analyzerApi.health.value?.gguf_size ? ((props.analyzerApi.health.value.gguf_size as number) / 1e9).toFixed(1) + ' GB' : '' }}
+                      {{ $t('settings.analyzer.gguf-file-found') }} · {{ props.analyzerApi.health.value?.gguf_size ? ((props.analyzerApi.health.value.gguf_size as number) / 1e9).toFixed(1) + ' GB' : '' }}
                     </span>
-                    <span class="az-version offline" v-else>{{ (props.analyzerApi.health.value as any)?.gguf_warning ?? 'Not yet detected' }}</span>
+                    <span class="az-version offline" v-else>{{ (props.analyzerApi.health.value as any)?.gguf_warning ?? $t('settings.analyzer.gguf-not-detected') }}</span>
                   </div>
                 </template>
-                <div class="az-gguf-hint">
-                  Download a <code>.gguf</code> file from <a class="az-link" href="https://huggingface.co/models?library=gguf" target="_blank">HuggingFace</a>
-                  and enter the full path here. Leave blank to use the Ollama model selected in the model manager.
-                </div>
+                <div class="az-gguf-hint" v-html="$t('settings.analyzer.gguf-hint')"></div>
               </div>
             </template>
 
@@ -3415,7 +3445,7 @@ watch(activeTab, (tab) => {
               </SettingRow>
               <div class="s-fullrow">
                 <div class="settings-meta-row inline">
-                  <span class="scope-badge">{{ settingsScopeNotes.general.scope }}</span>
+                  <span class="scope-badge">{{ scopeLabel(settingsScopeNotes.general.scope) }}</span>
                   <span class="settings-path" :title="pathForTab('general')">{{ pathForTab('general') }}</span>
                 </div>
                 <p v-if="settingsBundleSummary" class="summary-ok">{{ settingsBundleSummary }}</p>
@@ -3940,23 +3970,13 @@ watch(activeTab, (tab) => {
         <div v-show="activeTab === 'accounts'" class="s-body s-body--bleed accounts-body" data-settings-section="accounts">
           <h1 class="s-page-title">{{ $t('settings.nav.accounts') }}</h1>
           <div class="settings-meta-row">
-            <span class="scope-badge">{{ settingsScopeNotes.accounts.scope }}</span>
+            <span class="scope-badge">{{ scopeLabel(settingsScopeNotes.accounts.scope) }}</span>
             <span class="settings-path">{{ pathForTab('accounts') }}</span>
           </div>
           <GitAccountsPane :api="accountsApi" />
           <div data-settings-section="cli-accounts" style="margin: 4px 22px 22px; padding-top: 22px; border-top: 1px solid var(--border-default);">
             <CliAccountsPane :api="cliProfilesApi" :workspace-open="workspaceOpen ?? false" @login="(agentKey: string, loginProfileId?: string) => emit('cli-login', agentKey, loginProfileId)" />
           </div>
-        </div>
-
-        <!-- ── EXECUTION POLICY TAB ─────────────────────────────────────── -->
-        <div v-show="activeTab === 'executionPolicy'" class="s-body s-body--bleed execution-policy-body" data-settings-section="execution-policy">
-          <h1 class="s-page-title">{{ $t('settings.nav.executionPolicy') }}</h1>
-          <div class="settings-meta-row">
-            <span class="scope-badge">{{ settingsScopeNotes.executionPolicy.scope }}</span>
-            <span class="settings-path">{{ pathForTab('executionPolicy') }}</span>
-          </div>
-          <ExecutionPolicyPane :workspace-path="props.workspacePath" />
         </div>
 
         <!-- ── KEYBOARD SHORTCUTS TAB ────────────────────────────────────── -->
@@ -3986,9 +4006,32 @@ watch(activeTab, (tab) => {
         </div>
 
         <!-- ── EXTENSIONS TAB (flag-gated) ───────────────────────────────── -->
-        <div v-show="activeTab === 'extensions'" class="s-body s-body--bleed" data-settings-section="extensions">
+        <!-- One page, two things that belong together: the policy that decides
+             what an extension may execute, then the extensions it applies to.
+             The scope badge sits on the policy block rather than the page,
+             because the policy is the part that is per user and per workspace —
+             the inventory below it is not. -->
+        <div v-show="activeTab === 'extensions'" class="s-body s-body--bleed extensions-body" data-settings-section="extensions">
           <h1 class="s-page-title">{{ $t('settings.nav.extensions') }}</h1>
-          <ExtensionsPane :workspace-path="props.workspacePath" />
+          <div class="extensions-scroll">
+            <section class="ext-policy-block" data-settings-section="execution-policy">
+              <h2 class="ext-policy-block-title">{{ $t('settings.nav.executionPolicy') }}</h2>
+              <div class="settings-meta-row inline">
+                <span class="scope-badge">{{ scopeLabel(executionPolicyScopeNote.scope) }}</span>
+                <span class="settings-path">{{ pathForStorage(executionPolicyScopeNote.storage) }}</span>
+              </div>
+              <ExecutionPolicyPane :workspace-path="props.workspacePath" />
+            </section>
+            <ExtensionsPane />
+          </div>
+        </div>
+
+        <!-- ── MARKETPLACE TAB ───────────────────────────────────────────── -->
+        <div v-show="activeTab === 'marketplace'" class="s-body s-body--bleed marketplace-body" data-settings-section="marketplace">
+          <h1 class="s-page-title">{{ $t('settings.nav.marketplace') }}</h1>
+          <div class="marketplace-scroll">
+            <MarketplacePane />
+          </div>
         </div>
 
         <!-- ── STATUS BADGES TAB ─────────────────────────────────────────── -->
@@ -4475,6 +4518,25 @@ watch(activeTab, (tab) => {
    The page title carries it instead, matching the 18px/22px inset the padded tab
    bodies above apply to their whole content. */
 .s-body--bleed > .s-page-title { padding: 18px 22px 0; flex-shrink: 0; }
+/* The Extensions page stacks the execution-policy editor on top of the plugin
+   inventory, so the page owns the one scrollbar and both panes inside it are
+   plain blocks. Marketplace matches it so the two plugin pages scroll alike. */
+.extensions-scroll,
+.marketplace-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.ext-policy-block { margin-bottom: var(--space-group); }
+.ext-policy-block-title {
+  /* Side margins, not padding or a width: these panels have no border-box, so
+     a width here would push the block past its grid track. */
+  margin: 0 22px;
+  font-size: var(--font-md);
+  font-weight: 600;
+  color: var(--text-bright);
+}
+.ext-policy-block > .settings-meta-row.inline { margin: 8px 22px 14px; }
 .settings-meta-row {
   display: flex;
   align-items: center;
@@ -4911,9 +4973,9 @@ button.ghost:hover:not(:disabled) { background: var(--bg-muted); }
 .az-pct { font-weight: 600; color: var(--text-bright); margin-left: 6px; }
 .az-size-info { color: var(--text-muted); font-size: var(--font-2xs); margin-left: 4px; }
 .az-gguf-hint { font-size: var(--font-2xs); color: var(--text-muted); margin-top: 6px; line-height: var(--lh-base); }
-.az-gguf-hint code { background: var(--bg-subtle); padding: 1px 4px; border-radius: var(--radius-xs); color: var(--text-bright); }
-.az-link { color: var(--accent-fg); text-decoration: none; }
-.az-link:hover { text-decoration: underline; }
+.az-gguf-hint :deep(code) { background: var(--bg-subtle); padding: 1px 4px; border-radius: var(--radius-xs); color: var(--text-bright); }
+.az-gguf-hint :deep(.az-link) { color: var(--accent-fg); text-decoration: none; }
+.az-gguf-hint :deep(.az-link:hover) { text-decoration: underline; }
 .az-code { background: var(--bg-subtle); padding: 1px 5px; border-radius: var(--radius-xs); font-size: var(--font-2xs); color: var(--text-bright); font-family: var(--font-mono); }
 .az-url-row { display: flex; gap: 6px; align-items: center; }
 .az-url-row .az-input { flex: 1; }

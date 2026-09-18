@@ -933,6 +933,10 @@
           "title": "Execution Policy",
           "summary": "Edit the global agent policy, choose workspace sources, review repository recommendations, and recover corrupt policy storage."
         },
+        "marketplace": {
+          "title": "Marketplace",
+          "summary": "Search the extension registry and install an extension, with publisher trust and capability confirmation."
+        },
         "help-mcp": {
           "title": "How Navide uses MCP",
           "summary": "The two directions MCP is used in: tools Navide offers CLI agents, and external servers Navide reads docs from."
@@ -965,7 +969,13 @@
       "title": "Settings Management",
       "export-bundle": "Export Settings Bundle",
       "import-bundle": "Import Settings Bundle",
-      "bundle-hint": "Exports Roles, Pipelines, MCP, Analyzer, non-sensitive AI Chat settings, and appearance preferences. API keys and tokens are redacted and are not overwritten on import."
+      "bundle-hint": "Exports Roles, Pipelines, MCP, Analyzer, non-sensitive AI Chat settings, and appearance preferences. API keys and tokens are redacted and are not overwritten on import.",
+      "export-dialog-title": "Export settings bundle",
+      "exported": "Settings bundle exported",
+      "export-failed": "Export failed",
+      "import-dialog-title": "Import settings bundle JSON",
+      "imported": "Imported: {items}",
+      "import-failed": "Import failed"
     },
     "executionPolicy": {
       "unavailable": "Execution Policy is unavailable. Check the Navide host and try again.",
@@ -1099,22 +1109,37 @@
       "rebuildConfirm": "Confirm rebuild",
       "cancel": "Cancel"
     },
-    "extensionsPolicy": {
-      "title": "Agent Execution Policy",
-      "separation": "The selected policy controls what an agent may execute. It is separate from each plugin's declared Manifest Permissions and package-version Grant.",
-      "effectiveSource": "Effective source",
-      "mode": "Mode",
-      "systemNamespaces": "System namespaces",
-      "shellExecutables": "Shell executables",
-      "status": "Status",
-      "source": {
-        "default": "Host default",
-        "user": "User policy",
-        "repository": "Repository policy",
+    "extensions": {
+      "bundled": "Bundled",
+      "bundledGit": "Bundled Git",
+      "state": {
+        "active": "Active",
+        "removed": "Removed",
         "unavailable": "Unavailable"
       },
+      "restore": "Restore",
+      "installed": "Installed",
+      "sensitive": "sensitive",
+      "remove": "Remove",
+      "empty": "No plugins installed.",
+      "searchPlaceholder": "Search extensions",
+      "search": "Search",
+      "install": "Install",
+      "trust": {
+        "publisherTitle": "Trust publisher",
+        "permissionsTitle": "Confirm plugin permissions",
+        "publisherRisk": "Trust publisher {publisher} for {id}. A valid Registry signature proves package integrity, not that you want to run this publisher's code.",
+        "backendRisk": "{name} contains a native backend executable that can run with your user account's operating-system permissions.",
+        "sensitiveRisk": "{name} requests sensitive capabilities: {capabilities}.",
+        "signed": "Signed & verified",
+        "unsigned": "Unsigned — not cryptographically verified",
+        "confirmPublisher": "Trust publisher",
+        "confirmInstall": "Confirm and install",
+        "cancel": "Cancel"
+      }
+    },
+    "extensionsPolicy": {
       "none": "none",
-      "unavailable": "Execution Policy is unavailable.",
       "system": "system",
       "shell": "shell",
       "version": "version",
@@ -1125,6 +1150,18 @@
       "manifestPermissions": "Manifest Permissions",
       "packageVersionGrant": "Package-version Grant",
       "noMatchingGrant": "No matching grant"
+    },
+    "scope": {
+      "user": "User",
+      "userWorkspace": "User / Workspace",
+      "accountServer": "Account / Server",
+      "userWorkspaceBindings": "User / Workspace bindings"
+    },
+    "storage": {
+      "localStorage": "ui_settings.json (app data) + workspace backup",
+      "mainProcess": "Electron main process userData",
+      "safeStorage": "Encrypted local safeStorage registry",
+      "cliFiles": "Each CLI's own instruction files"
     },
     "general": {
       "auto-resume-reconnect": "Resume sessions after a backend restart",
@@ -1241,6 +1278,7 @@
     },
     "nav": {
       "title": "Settings",
+      "sections-label": "Settings sections",
       "group": {
         "general": "General",
         "accountsAgents": "Accounts & Agents",
@@ -1263,6 +1301,7 @@
       "sharing": "Sharing",
       "analyzer": "Analyzer",
       "extensions": "Extensions",
+      "marketplace": "Marketplace",
       "executionPolicy": "Execution Policy",
       "statusBadges": "Status badges",
       "keybindings": "Shortcuts",
@@ -5366,7 +5405,12 @@
       "catalog-github": "Read issues, PRs and commits so the orchestrator can inject the requirement or task background into the pipeline.",
       "catalog-filesystem": "Read the workspace's existing code, README and config files so the orchestrator can inject the current state into the kickoff and correct the agent's starting assumptions.",
       "catalog-brave-search": "Live web search, so the orchestrator can look up the latest technical decisions or API changes and inject them into the agent. Needs a Brave API key.",
-      "catalog-sentry": "Read production errors and stack traces so the orchestrator can inject the bug background into the debug stage."
+      "catalog-sentry": "Read production errors and stack traces so the orchestrator can inject the bug background into the debug stage.",
+      "catalog-title": "Add MCP Servers",
+      "catalog-search": "Search MCP servers by name",
+      "catalog-hint": "This catalog lists only <strong>\"Orchestrator context-reading\"</strong> MCPs — tools that read workspace / docs / external service data and inject it into kickoff prompts to ground agent knowledge. Execution actions (tests, browser automation, etc.) are handled by the CLI agents themselves.",
+      "catalog-requires-env": "Requires env vars: {vars}",
+      "catalog-empty": "No matching MCP servers found"
     },
     "skills": {
       "title": "Managed Skills",
@@ -6351,7 +6395,15 @@
       "col-verdict": "Verdict",
       "badge-pass": "Pass",
       "badge-excluded": "Excluded",
-      "gguf-path-placeholder": "e.g. /Users/me/models/qwen.gguf"
+      "gguf-path-placeholder": "e.g. /Users/me/models/qwen.gguf",
+      "ai-keys-label": "AI keys:",
+      "llama-cli-placeholder": "e.g. llama-cli or /usr/local/bin/llama-completion",
+      "gguf-file-found": "File found",
+      "gguf-not-detected": "Not yet detected",
+      "gguf-hint": "Download a <code>.gguf</code> file from <a class=\"az-link\" href=\"https://huggingface.co/models?library=gguf\" target=\"_blank\">HuggingFace</a> and enter the full path here. Leave blank to use the Ollama model selected in the model manager.",
+      "filter-executable": "Executable",
+      "filter-gguf": "GGUF Model",
+      "filter-all-files": "All Files"
     },
     "pushChannels": {
       "title": "Push channels",
