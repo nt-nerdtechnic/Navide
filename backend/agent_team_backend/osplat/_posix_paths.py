@@ -144,6 +144,50 @@ def nvm_node_bins(home: Path) -> list[str]:
     return [str(d / "bin") for d in sorted(entries, key=key, reverse=True)]
 
 
+def _npmrc_prefix(home: Path) -> str:
+    """The `prefix` setting in `~/.npmrc`, or "" when it sets none.
+
+    A hand-rolled read of one key rather than `npm config get prefix`: that
+    needs npm on PATH, which is precisely what is missing whenever this is
+    asked. npm's own ini parser lets a later line win, so this keeps the last.
+    """
+    try:
+        text = (home / ".npmrc").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    found = ""
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped[0] in ";#[":
+            continue
+        key, sep, value = stripped.partition("=")
+        if sep and key.strip() == "prefix":
+            found = value.strip().strip("\"'")
+    return found
+
+
+def npm_prefix_bins(home: Path) -> list[str]:
+    """`<prefix>/bin` when npm is configured to install globally somewhere else.
+
+    `npm install -g` is how OpenAI ships codex, and `npm config set prefix`
+    can point it anywhere. One report had `prefix=~/.npm`, putting codex in
+    `~/.npm/bin` while the fallback list knew only `~/.npm-global/bin` — one
+    letter apart and undetectable. No list of guessed directory names can
+    cover a value the user chose, so read the value instead.
+    """
+    raw = (os.environ.get("npm_config_prefix") or "").strip() or _npmrc_prefix(home)
+    if not raw:
+        return []
+    try:
+        # npm expands both, and a prefix written as ~/.npm or ${HOME}/.npm is
+        # a literal directory name to everyone else.
+        bin_dir = Path(os.path.expandvars(raw)).expanduser() / "bin"
+        return [str(bin_dir)] if bin_dir.is_dir() else []
+    except (OSError, ValueError, RuntimeError):
+        # RuntimeError: expanduser on a "~user" that the passwd db has no home for.
+        return []
+
+
 def backend_entry_on_disk(entry: str) -> str:
     return entry
 

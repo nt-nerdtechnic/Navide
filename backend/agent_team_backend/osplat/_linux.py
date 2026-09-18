@@ -263,6 +263,9 @@ class LinuxLayout(LinuxPaths):
             str(home / ".local" / "bin"),
             str(home / ".local" / "share" / "pnpm"),
             str(home / ".npm-global" / "bin"),
+            # Where npm was actually told to install, when that is not the one
+            # guessed above. See `npm_prefix_bins`.
+            *_posix_paths.npm_prefix_bins(home),
             str(home / ".cargo" / "bin"),
             str(home / ".bun" / "bin"),
             *_posix_paths.nvm_node_bins(home),

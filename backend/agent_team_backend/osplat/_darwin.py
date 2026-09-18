@@ -106,6 +106,9 @@ class DarwinLayout(DarwinPaths):
             # only under XDG_DATA_HOME, which the login shell already exports.
             str(home / "Library" / "pnpm"),
             str(home / ".npm-global" / "bin"),
+            # Where npm was actually told to install, when that is neither of
+            # the two guessed above. See `npm_prefix_bins`.
+            *_posix_paths.npm_prefix_bins(home),
             str(home / ".volta" / "bin"),
             str(home / ".bun" / "bin"),
             "/usr/local/bin",

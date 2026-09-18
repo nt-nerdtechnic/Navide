@@ -35,8 +35,14 @@ _needs_login_shell_probe = pytest.mark.skipif(
 
 @pytest.fixture(autouse=True)
 def _reset_path_probe_cache(monkeypatch):
-    """Each test assumes its call actually probes — clear the TTL cache."""
+    """Each test assumes its call actually probes — clear the TTL cache.
+
+    Both halves of it: which TTL applies depends on whether the last probe
+    answered, so a test that leaves that flag set would shorten or lengthen
+    the next one's cache window.
+    """
     monkeypatch.setattr(onboarding_deps, "_path_refreshed_at", None)
+    monkeypatch.setattr(onboarding_deps, "_path_probe_answered", False)
 
 
 @pytest.fixture(autouse=True)
@@ -493,3 +499,173 @@ def test_detection_missing_to_ok_after_refresh(monkeypatch, tmp_path):
     result_after = detect_dep(dep)
     assert result_after["status"] == "ok"
     assert result_after["version"] == "1.2.3"
+
+
+# ── negative caching: a failed probe must not be remembered as a good one ─────
+
+
+@_needs_login_shell_probe
+def test_a_timed_out_probe_is_retried_sooner_than_a_successful_one(monkeypatch):
+    """The timestamp used to be stamped BEFORE the probe ran, so a timeout was
+    cached exactly like a success and detection spent the next five minutes on
+    a PATH the probe had contributed nothing to."""
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    _no_fallbacks(monkeypatch)
+
+    with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="zsh", timeout=15)):
+        _refresh_path_from_login_shell()
+
+    assert onboarding_deps._path_refreshed_at is not None
+    assert onboarding_deps._path_probe_answered is False
+
+    # Still inside the retry window: no second probe.
+    monkeypatch.setattr(onboarding_deps, "_path_refreshed_at", onboarding_deps.time.monotonic())
+    with patch("subprocess.run", side_effect=AssertionError("probed inside the retry TTL")):
+        _refresh_path_from_login_shell()
+
+    # Past the retry window but well inside the success window: probes again,
+    # which is the whole point — a success would still be cached here.
+    assert onboarding_deps._PATH_RETRY_TTL_S < onboarding_deps._PATH_REFRESH_TTL_S
+    monkeypatch.setattr(
+        onboarding_deps,
+        "_path_refreshed_at",
+        onboarding_deps.time.monotonic() - onboarding_deps._PATH_RETRY_TTL_S - 1,
+    )
+    with patch("subprocess.run", return_value=_make_run_result(_probe_output("/opt/x:/usr/bin:/bin"))):
+        _refresh_path_from_login_shell()
+    assert "/opt/x" in os.environ["PATH"].split(os.pathsep)
+    assert onboarding_deps._path_probe_answered is True
+
+
+@_needs_login_shell_probe
+def test_a_successful_probe_holds_for_the_full_ttl(monkeypatch):
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    _no_fallbacks(monkeypatch)
+
+    with patch("subprocess.run", return_value=_make_run_result(_probe_output("/opt/y:/usr/bin:/bin"))):
+        _refresh_path_from_login_shell()
+    assert onboarding_deps._path_probe_answered is True
+
+    # Past the retry TTL, inside the success TTL: a success is NOT re-probed.
+    monkeypatch.setattr(
+        onboarding_deps,
+        "_path_refreshed_at",
+        onboarding_deps.time.monotonic() - onboarding_deps._PATH_RETRY_TTL_S - 1,
+    )
+    with patch("subprocess.run", side_effect=AssertionError("re-probed a cached success")):
+        _refresh_path_from_login_shell()
+
+
+@_needs_login_shell_probe
+def test_an_empty_answer_counts_as_no_answer(monkeypatch):
+    """A shell that printed no marked line told us nothing about PATH, even
+    though it exited fine — that is a fallback-list run, not a known PATH."""
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    _no_fallbacks(monkeypatch)
+
+    with patch("subprocess.run", return_value=_make_run_result("some rc banner\n")):
+        _refresh_path_from_login_shell()
+
+    assert onboarding_deps._path_probe_answered is False
+
+
+@_needs_login_shell_probe
+def test_the_probe_timeout_matches_the_electron_main_one(monkeypatch):
+    """A heavy ~/.zshrc was measured at 13s+ (see src/main/backend.ts). At the
+    3s this used to allow, such a machine reported every CLI outside the
+    fallback list as not installed."""
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    _no_fallbacks(monkeypatch)
+    seen: dict[str, object] = {}
+
+    def capture(*args, **kwargs):
+        seen.update(kwargs)
+        return _make_run_result(_probe_output("/usr/bin:/bin"))
+
+    with patch("subprocess.run", side_effect=capture):
+        _refresh_path_from_login_shell()
+
+    assert seen["timeout"] == onboarding_deps._PATH_PROBE_TIMEOUT_S
+    assert onboarding_deps._PATH_PROBE_TIMEOUT_S >= 15.0
+
+
+# ── npm prefix: read the setting instead of guessing directory names ──────────
+
+
+def test_npm_prefix_bins_reads_the_configured_prefix(tmp_path):
+    """One report had `prefix=~/.npm`, so codex landed in ~/.npm/bin while the
+    fallback list knew only ~/.npm-global/bin."""
+    (tmp_path / ".npmrc").write_text("prefix=~/.npm\n", encoding="utf-8")
+    expected = tmp_path / ".npm" / "bin"
+    expected.mkdir(parents=True)
+    with patch.object(Path, "expanduser", lambda self: Path(str(self).replace("~", str(tmp_path), 1))):
+        assert _posix_paths.npm_prefix_bins(tmp_path) == [str(expected)]
+
+
+def test_npm_prefix_bins_takes_an_absolute_prefix_as_written(tmp_path):
+    prefix = tmp_path / "elsewhere"
+    (prefix / "bin").mkdir(parents=True)
+    (tmp_path / ".npmrc").write_text(f"prefix={prefix}\n", encoding="utf-8")
+    assert _posix_paths.npm_prefix_bins(tmp_path) == [str(prefix / "bin")]
+
+
+def test_npm_prefix_bins_ignores_a_prefix_whose_bin_does_not_exist(tmp_path):
+    (tmp_path / ".npmrc").write_text(f"prefix={tmp_path / 'ghost'}\n", encoding="utf-8")
+    assert _posix_paths.npm_prefix_bins(tmp_path) == []
+
+
+def test_npm_prefix_bins_is_empty_without_an_npmrc(tmp_path):
+    assert _posix_paths.npm_prefix_bins(tmp_path) == []
+
+
+def test_npm_prefix_bins_ignores_comments_and_other_keys(tmp_path):
+    prefix = tmp_path / "real"
+    (prefix / "bin").mkdir(parents=True)
+    (tmp_path / ".npmrc").write_text(
+        "; prefix=/commented/out\n"
+        "# prefix=/also/not/this\n"
+        "registry=https://registry.npmjs.org/\n"
+        "prefix-is-not-prefix=/nope\n"
+        f"prefix={prefix}\n",
+        encoding="utf-8",
+    )
+    assert _posix_paths.npm_prefix_bins(tmp_path) == [str(prefix / "bin")]
+
+
+def test_npm_prefix_bins_lets_the_last_prefix_win(tmp_path):
+    """npm's own ini parser does, so a stale earlier line must not win here."""
+    winner = tmp_path / "second"
+    (winner / "bin").mkdir(parents=True)
+    (tmp_path / "first" / "bin").mkdir(parents=True)
+    (tmp_path / ".npmrc").write_text(
+        f"prefix={tmp_path / 'first'}\nprefix={winner}\n", encoding="utf-8"
+    )
+    assert _posix_paths.npm_prefix_bins(tmp_path) == [str(winner / "bin")]
+
+
+def test_npm_prefix_bins_prefers_the_environment_variable(tmp_path, monkeypatch):
+    """npm_config_prefix outranks the rc file for npm, so it does here too."""
+    env_prefix = tmp_path / "from-env"
+    (env_prefix / "bin").mkdir(parents=True)
+    (tmp_path / "from-rc" / "bin").mkdir(parents=True)
+    (tmp_path / ".npmrc").write_text(f"prefix={tmp_path / 'from-rc'}\n", encoding="utf-8")
+    monkeypatch.setenv("npm_config_prefix", str(env_prefix))
+    assert _posix_paths.npm_prefix_bins(tmp_path) == [str(env_prefix / "bin")]
+
+
+def test_npm_prefix_bins_expands_a_variable_in_the_prefix(tmp_path, monkeypatch):
+    prefix = tmp_path / "expanded"
+    (prefix / "bin").mkdir(parents=True)
+    monkeypatch.setenv("NPM_TEST_ROOT", str(tmp_path))
+    (tmp_path / ".npmrc").write_text("prefix=${NPM_TEST_ROOT}/expanded\n", encoding="utf-8")
+    assert _posix_paths.npm_prefix_bins(tmp_path) == [str(prefix / "bin")]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX fallback lists only")
+def test_the_configured_npm_prefix_reaches_the_platform_fallback_list(tmp_path, monkeypatch):
+    """The unit above is only useful if the list actually calls it."""
+    prefix = tmp_path / "npm-somewhere"
+    (prefix / "bin").mkdir(parents=True)
+    monkeypatch.setenv("npm_config_prefix", str(prefix))
+    impl = _darwin.paths if sys.platform == "darwin" else _linux.paths
+    assert str(prefix / "bin") in impl.login_path_fallbacks(tmp_path)

@@ -242,7 +242,20 @@ def _tail_path_dirs() -> list[str]:
 # the frontend's fresh flag); passive status reads reuse the merged PATH, which
 # persists in os.environ anyway. Benign race: two threads may double-probe.
 _PATH_REFRESH_TTL_S = 300.0
+# A probe that answered nothing leaves detection running on the fallback list,
+# which is a list of guesses. Retry sooner than a success — but not on every
+# status read, because each attempt pays the timeout below.
+_PATH_RETRY_TTL_S = 60.0
+# Matches the Electron main probe (src/main/backend.ts, 15s there, whose
+# comment records a heavy ~/.zshrc measured at 13s+). The 3s this used to
+# allow turned a slow shell into a machine where every CLI outside the
+# fallback list reads as not installed.
+_PATH_PROBE_TIMEOUT_S = 15.0
 _path_refreshed_at: float | None = None
+# Whether the last probe actually returned a PATH. Distinguishes "we know what
+# the login shell exports" from "we fell back to guessing", which decides
+# which of the two TTLs above applies.
+_path_probe_answered = False
 
 
 def _refresh_path_from_login_shell(force: bool = False) -> None:
@@ -253,28 +266,33 @@ def _refresh_path_from_login_shell(force: bool = False) -> None:
     `~/.local/bin` fallbacks included — they are POSIX layouts and would only
     ever be missing directories there.
     """
-    global _path_refreshed_at
+    global _path_refreshed_at, _path_probe_answered
     probe = _path_probe_command()
     if probe is None:
         return
     now = time.monotonic()
+    ttl = _PATH_REFRESH_TTL_S if _path_probe_answered else _PATH_RETRY_TTL_S
     if (not force and _path_refreshed_at is not None
-            and now - _path_refreshed_at < _PATH_REFRESH_TTL_S):
+            and now - _path_refreshed_at < ttl):
         return
-    _path_refreshed_at = now
     shell_paths: list[str] = []
     try:
         proc = subprocess.run(
             probe,
             capture_output=True,
             text=True,
-            timeout=3,
+            timeout=_PATH_PROBE_TIMEOUT_S,
         )
         # Only the marked line: rc files print banners, and an interactive
         # bash's last line was a motd on more than one machine.
         shell_paths = _parse_login_path(proc.stdout or "")
     except Exception:  # noqa: BLE001
         pass
+    # Stamped after the probe, never before. Stamping first recorded a timeout
+    # exactly like a success, so one slow shell at startup put the next five
+    # minutes of detection on a PATH the probe had contributed nothing to.
+    _path_refreshed_at = time.monotonic()
+    _path_probe_answered = bool(shell_paths)
     shell_paths.extend(d for d in _fallback_path_dirs() if os.path.isdir(d))
     current_paths = os.environ.get("PATH", "").split(os.pathsep)
     current_set = set(current_paths)
