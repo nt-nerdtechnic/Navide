@@ -9,6 +9,7 @@ type ManifestPermissionsSummary = import('../../shared/executionPolicy').Manifes
 type PackageVersionGrantSummary = import('../../shared/executionPolicy').PackageVersionGrantSummary
 type LegacyPlansPreferenceProjection = import('../../shared/plansPreferences').LegacyPlansPreferenceProjection
 type LegalRoute = import('../../shared/legalLinks').LegalRoute
+type NewWorkspaceResult = import('../../shared/workspaceCreate').NewWorkspaceResult
 
 interface BackendInfo {
   status: 'starting' | 'ready' | 'error'
@@ -88,7 +89,7 @@ declare global {
       setRecentWorkspaces: (list: { path: string; name: string; exists: boolean }[]) => void
       openMainWindow: (args?: { workspace_path?: string }) => Promise<{ ok: boolean }>
       pickWorkspace: (defaultPath?: string) => Promise<string | null>
-      newWorkspace: () => Promise<string | null>
+      newWorkspace: () => Promise<NewWorkspaceResult>
       getHomeDir: () => Promise<string>
       listOpenWorkspaces: () => Promise<string[]>
       focusWorkspaceWindow: (workspacePath: string) => Promise<boolean>

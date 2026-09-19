@@ -3601,7 +3601,7 @@
           "p1": "還沒開任何專案時，畫面是一張全螢幕的歡迎卡：",
           "welcome": {
             "browse": "<strong>瀏覽…</strong>——選一個資料夾當工作區。",
-            "newWorkspace": "<strong>新增…</strong>——建一個新資料夾並直接開啟。",
+            "newWorkspace": "<strong>新增…</strong>——選位置並為資料夾命名，建好後直接開啟。",
             "openHome": "<strong>家目錄</strong>——直接用家目錄。",
             "recent": "下方是最近開過的清單，可以把常用的固定起來。在清單項目上按右鍵有 <em>用預設編輯器開啟</em>、<em>在 Finder 中顯示</em>、<em>複製路徑</em>。"
           },
@@ -7032,6 +7032,9 @@
     "statusbar-note": "狀態列上的資訊窗會一起消失"
   },
   "error": {
+    "workspace-create-exists": "該位置已有名為「{name}」的項目，請換個名稱。",
+    "workspace-create-denied": "沒有權限在 {path} 建立資料夾。",
+    "workspace-create-failed": "無法在 {path} 建立工作區資料夾。",
     "create-failed": "建立失敗",
     "set-default-failed": "設為預設失敗",
     "rename-failed": "重新命名失敗",

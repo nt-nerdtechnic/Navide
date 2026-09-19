@@ -3601,7 +3601,7 @@
           "p1": "Before any project is open, the window is a full-screen welcome card:",
           "welcome": {
             "browse": "<strong>Browse…</strong> — pick a folder to use as the workspace.",
-            "newWorkspace": "<strong>New…</strong> — create a new folder and open it straight away.",
+            "newWorkspace": "<strong>New…</strong> — choose a location, name the folder, and it opens straight away.",
             "openHome": "<strong>Home</strong> — just use the home directory.",
             "recent": "Below that is the recently-opened list, where frequently used entries can be pinned. Right-clicking an entry offers <em>Open in default editor</em>, <em>Reveal in Finder</em> and <em>Copy path</em>."
           },
@@ -7032,6 +7032,9 @@
     "statusbar-note": "its popovers go with it"
   },
   "error": {
+    "workspace-create-exists": "An item named “{name}” is already there. Pick another name.",
+    "workspace-create-denied": "No permission to create a folder at {path}.",
+    "workspace-create-failed": "Could not create the workspace folder at {path}.",
     "create-failed": "Create failed",
     "set-default-failed": "Set default failed",
     "rename-failed": "Rename failed",

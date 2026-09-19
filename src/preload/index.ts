@@ -13,6 +13,7 @@ import type {
 } from '../shared/executionPolicy'
 import type { LegacyPlansPreferenceProjection } from '../shared/plansPreferences'
 import { LEGAL_LINKS, type LegalRoute } from '../shared/legalLinks'
+import type { NewWorkspaceResult } from '../shared/workspaceCreate'
 
 /** Which Electron-owned cache groups to clear. Never touches user state. */
 export interface ClearElectronCachesOptions {
@@ -239,7 +240,7 @@ contextBridge.exposeInMainWorld('agentTeam', {
     ipcRenderer.send('menu:setRecents', list),
   pickWorkspace: (defaultPath?: string): Promise<string | null> =>
     ipcRenderer.invoke('workspace:pick', defaultPath),
-  newWorkspace: (): Promise<string | null> => ipcRenderer.invoke('workspace:new'),
+  newWorkspace: (): Promise<NewWorkspaceResult> => ipcRenderer.invoke('workspace:new'),
   getHomeDir: (): Promise<string> => ipcRenderer.invoke('app:home-dir'),
   listOpenWorkspaces: (): Promise<string[]> => ipcRenderer.invoke('workspace:listOpen'),
   focusWorkspaceWindow: (workspacePath: string): Promise<boolean> =>

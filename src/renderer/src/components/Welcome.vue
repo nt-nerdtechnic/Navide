@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { NEW_WORKSPACE_ERROR_KEYS } from '../../../shared/workspaceCreate'
 import type { useBackend } from '../composables/useBackend'
 import { useEditorTargets } from '../composables/useEditorTargets'
 import { useRecentWorkspaces, type RecentWorkspace } from '../composables/useRecentWorkspaces'
@@ -30,8 +32,12 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onDismissKey))
 
 const { recent, loaded, error, touch, pin, unpin, remove } = useRecentWorkspaces(props.backend)
 
+const { t } = useI18n()
+
 const picking = ref(false)
 const creating = ref(false)
+/** Why the last "New…" attempt made no folder; '' once it succeeds or is retried. */
+const createError = ref('')
 
 // Workspaces open in other windows (this window shows Welcome, so it has
 // none itself). Fed by main's registry; refreshed on workspace:openChanged.
@@ -125,9 +131,22 @@ async function browse(): Promise<void> {
 async function newWorkspace(): Promise<void> {
   if (!window.agentTeam) return
   creating.value = true
+  createError.value = ''
   try {
-    const picked = await window.agentTeam.newWorkspace()
-    if (picked) await openWorkspace(picked)
+    const result = await window.agentTeam.newWorkspace()
+    if (result.ok) {
+      await openWorkspace(result.path)
+      return
+    }
+    // A cancelled dialog is the user's own doing and needs no message. The
+    // rest used to fail silently, back when main named the folder itself and
+    // could always find a free name.
+    if (result.reason === 'canceled') return
+    const path = result.path ?? ''
+    createError.value = t(NEW_WORKSPACE_ERROR_KEYS[result.reason], {
+      path,
+      name: path.split(/[\\/]/).pop() || path
+    })
   } finally {
     creating.value = false
   }
@@ -234,6 +253,7 @@ function ctxCopyPath(): void {
             {{ $t('action.open-home') }}
           </button>
         </div>
+        <p v-if="createError" class="w-error" role="alert">{{ createError }}</p>
       </section>
 
       <section class="w-recent">
@@ -402,6 +422,10 @@ button.link:focus-visible,
 .w-open-btns {
   display: flex;
   gap: 10px;
+}
+/* Only the message under the buttons; the one in Recent sits in its own flow. */
+.w-open .w-error {
+  margin: 10px 0 0;
 }
 button.primary {
   background: var(--success-emphasis);

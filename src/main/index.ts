@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, nativeImage, Notification, powerMo
 import { createGuestAttachHooks, type MutableWebPreferences } from './plugins/pluginGuestAttach'
 import { guardLastWindowClose } from './last-window-close'
 import { join, dirname } from 'node:path'
-import { writeFile, readFile, mkdir } from 'node:fs/promises'
+import { writeFile, readFile } from 'node:fs/promises'
 import { readFileSync, statSync, existsSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { spawn } from 'node:child_process'
@@ -16,6 +16,8 @@ import {
 import { abandonPendingBackends } from './backend-pending'
 import { installApplicationMenu, type AppMenuHooks, type RecentMenuEntry } from './menu'
 import { LEGAL_LINKS, isLegalRoute } from '../shared/legalLinks'
+import { createWorkspaceFolder } from './workspace-create'
+import type { NewWorkspaceResult } from '../shared/workspaceCreate'
 import { openNoopPluginView, openFsProbePluginView, openMiniIdePluginView, devMiniIdePluginDescriptor, openPlansPluginView, devPlansPluginDescriptor, devPlansV2PluginBundle, openGitPluginView, openGitLeftPluginView, updateGitLeftPluginView, closeGitLeftPluginView, registerBundledMiniIde, registerBundledPlans, registerLegacyBundledGit, hasCompletePlansContributions, frontendPluginManager } from './plugins/frontendPluginManager'
 import { plansBackendActivation, PLANS_PLUGIN_ID } from './plugins/frontendPluginManager'
 import {
@@ -1476,38 +1478,34 @@ ipcMain.handle('workspace:pick', async (_event, defaultPath?: string) => {
   return result.filePaths[0]
 })
 
-ipcMain.handle('workspace:new', async () => {
-  const opts: Electron.OpenDialogOptions = {
-    title: 'Choose where to create the workspace',
-    defaultPath: app.getPath('home'),
-    properties: ['openDirectory', 'createDirectory'],
-    buttonLabel: 'Create here'
+ipcMain.handle('workspace:new', async (): Promise<NewWorkspaceResult> => {
+  // A save dialog rather than a directory picker: it is the one native dialog
+  // that asks for a location and a name at once, so the user names the
+  // workspace in the same step that places it. `defaultPath` seeds both — the
+  // home directory and an editable placeholder name.
+  const opts: Electron.SaveDialogOptions = {
+    title: 'Create workspace folder',
+    defaultPath: join(app.getPath('home'), 'navide-workspace'),
+    nameFieldLabel: 'Workspace name:',
+    buttonLabel: 'Create',
+    // `showOverwriteConfirmation` is Linux-only and deliberately left off:
+    // nothing here overwrites, so asking "replace it?" would promise something
+    // the mkdir below refuses to do. macOS and Windows ask anyway and cannot
+    // be talked out of it — their panel returns the path without deleting
+    // anything, mkdir then fails EEXIST, so that message stays worded for an
+    // "item" rather than a folder: what the name is taken by may be a file.
+    properties: ['createDirectory']
   }
 
   const result = mainWindow
-    ? await dialog.showOpenDialog(mainWindow, opts)
-    : await dialog.showOpenDialog(opts)
+    ? await dialog.showSaveDialog(mainWindow, opts)
+    : await dialog.showSaveDialog(opts)
 
-  if (result.canceled || result.filePaths.length === 0) return null
+  if (result.canceled || !result.filePath) return { ok: false, reason: 'canceled' }
 
-  // Create a fresh empty folder inside the chosen location. mkdir without
-  // `recursive` fails with EEXIST on a taken name, so bumping the suffix never
-  // adopts a folder that already holds someone else's files.
-  const parent = result.filePaths[0]
-  const base = 'navide-workspace'
-  for (let n = 1; n <= 100; n++) {
-    const dir = join(parent, n === 1 ? base : `${base}-${n}`)
-    try {
-      await mkdir(dir)
-      return dir
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'EEXIST') continue
-      console.error('[workspace:new] failed to create', dir, err)
-      return null
-    }
-  }
-  console.error('[workspace:new] no free workspace folder name under', parent)
-  return null
+  const created = await createWorkspaceFolder(result.filePath)
+  if (!created.ok) console.error('[workspace:new] failed to create', created.path, created.detail)
+  return created
 })
 
 ipcMain.handle('app:home-dir', () => app.getPath('home'))
