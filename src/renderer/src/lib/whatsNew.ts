@@ -68,6 +68,35 @@ export const WHATS_NEW_CHROME = {
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    version: '0.2.8',
+    title: {
+      'zh-TW': '摺疊群組、整個專案一次回收、Claude 往上滑的先前提示回來了',
+      'en-US': 'Fold a Group, Reclaim a Whole Project, and Claude\u2019s Scroll-Back Row Returns',
+    },
+    highlights: [
+      {
+        'zh-TW': '群組可以整個摺疊起來，側欄與專案標題都能操作。摺疊後拖曳那一列，被藏起來的子代會跟著走——以前只有父列會動，孩子留在原地。多選時只有你抓的那一列會展開成子樹，其他摺疊列仍單獨移動。',
+        'en-US': 'A group folds up everything under it, from the sidebar or the workspace heading. Drag a folded row and the hidden descendants travel with it — before, the parent moved alone and left its children behind. In a multi-selection only the row you grabbed expands into its subtree.',
+      },
+      {
+        'zh-TW': 'Claude Code 全螢幕時往上滑會顯示先前提示的那一列深色橫幅，之前會莫名消失。原因是 Navide 關 pane 時直接強制終止，claude 來不及跑自己的退出處理，在設定檔留下殘跡；累積兩次它就自己把全螢幕關掉。現在 macOS 與 Linux 會先送 SIGTERM 並等它收尾。**Windows 尚未支援**，追蹤於 #120。',
+        'en-US': 'Claude Code\u2019s dim row of previous prompts — the one that appears when you scroll up in fullscreen — stopped showing for some people. Navide was terminating the pane outright, so claude never ran its own exit handler and left a trace behind; two of those and it turns fullscreen off itself. macOS and Linux now send SIGTERM and wait. **Not on Windows yet** — tracked in #120.',
+      },
+      {
+        'zh-TW': '側欄可以一次回收整個專案的 CLI，每個 pane 變成點一下就能接續的佔位。正在使用的、等你回答的、有未送出文字的、還有無法接續的，都不會被收走。',
+        'en-US': 'Reclaim a whole project\u2019s CLIs from the sidebar; each pane becomes a click-to-resume placeholder. The focused pane, one awaiting your answer, one holding unsent text and one that cannot be resumed are left alone.',
+      },
+      {
+        'zh-TW': '在一個視窗裡開多個專案時，切換途中開的 pane 會被歸到「正要離開的那個專案」的群組底下，嚴重時還會把一個專案的群組記錄蓋掉另一個。這版修好了。**如果你在 0.2.7 已經遇到，舊資料要手動清**：關掉 Navide 後執行 scripts/repair-run-group-ids.py（預設乾跑、寫入前自動備份）。',
+        'en-US': 'With two workspaces in one window, a pane opened mid-switch filed itself under the workspace being left, and saving could write one workspace\u2019s groups over another\u2019s. Fixed. **If 0.2.7 already mixed your rows**, the fix only stops new ones — close Navide and run scripts/repair-run-group-ids.py to clean up (dry-runs by default, backs up first).',
+      },
+      {
+        'zh-TW': 'Navide Cloud 的 pane 清單改成依裝置 → 狀態 → 專案分層，可摺疊、可搜尋，不再是一長串。Welcome 的「New…」現在可以直接命名新資料夾，不必再靠系統對話框改名。',
+        'en-US': 'The Navide Cloud pane list nests by device, state and workspace, foldable and searchable, instead of one flat run of rows. Welcome\u2019s New… now asks for a name rather than leaving you to rename in the file picker.',
+      },
+    ],
+  },
+  {
     version: '0.2.7',
     title: {
       'zh-TW': 'Codex pane 不再誤判失敗、更新改走自家載點',

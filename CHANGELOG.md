@@ -4,6 +4,26 @@ All notable released changes to Navide will be documented in this file. The form
 
 ## [Unreleased]
 
+## [0.2.8] — 2026-09-20 — signed release
+
+### Added
+
+- Fold a group and it closes up everything under it, from the sidebar and from the workspace heading. A folded row now stands for the family it hides when you drag it: the hidden descendants travel with it to another tab or another window, instead of the parent moving alone and leaving its children behind. Only the row you grabbed expands into its subtree — other folded rows in a multi-selection still move alone.
+- Reclaim a whole project's CLIs at once. Every reclaimable pane in it becomes a click-to-resume placeholder, skipping the focused pane, one awaiting your answer, one holding unsent text and one that cannot be resumed.
+- **Navide Cloud**'s pane list is grouped by device, then by state (running / idle / not opened), then by workspace, each group foldable, with a search box over pane, workspace and device names and a height cap so the dialog stops growing with the roster.
+- Welcome's **New…** asks for a location and a name and creates that folder, instead of opening a picker and taking whatever it made. A name already taken, no permission to write there, and anything else now come back as their own message.
+
+### Changed
+
+- A group row's fold button appears when the pointer crosses the row, like the ＋ beside it. The workspace heading keeps its buttons visible — a heading is a landmark you aim at, a group row is one of many.
+
+### Fixed
+
+- Closing a claude pane on **macOS and Linux** now sends SIGTERM and waits before the kill, so claude runs its own exit handler. Without that the entry it writes into `~/.claude.json` on a fullscreen start outlived the process; a pane that did not live long enough to clear it — one opened and closed straight away, one ended moments after the app restored it, one taken by idle reclaim or a rebuild — left a strike behind, and two strikes turn claude's fullscreen renderer off. That is what makes the dim row of previous prompts stop appearing when you scroll up. **On Windows this does not apply yet**: the platform has no SIGTERM and Navide's kill path there terminates outright, tracked in [#120](https://github.com/nt-nerdtechnic/Navide/issues/120).
+- A pane spawned during a workspace switch no longer files itself under the group of the workspace being left, and saving run groups can no longer write one workspace's groups over another's. If you kept two workspaces in one window on 0.2.7 you may already hold mixed rows: the fix only stops new ones, and `scripts/repair-run-group-ids.py` cleans up what is there (it dry-runs by default, backs the database up before writing, and refuses to run while Navide is open).
+- Resuming an old session keeps its place in the pane tree. Pane records are pruned and history is not, so history now carries its own copy of the parent pointer instead of pointing at a record that may be gone.
+- A create that has to reap a previous PTY first refuses to start a second CLI when that reap times out, rather than spawning over a process that may still be alive and letting two of them append to one session file.
+
 ## [0.2.7] — 2026-09-19 — signed release
 
 ### Changed
