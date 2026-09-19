@@ -68,7 +68,7 @@ describe('account modal — your network', () => {
     // The window is generous because what sits between the loop and the name
     // is comment, and this is not the test that pins the row's shape — that is
     // AccountModal.deviceRow.test.ts, which renders it.
-    expect(MODAL).toMatch(/v-for="device in devices"[\s\S]{0,1400}deviceLabel\(device\)/)
+    expect(MODAL).toMatch(/v-for="device in devices"[\s\S]{0,2200}deviceLabel\(device\)/)
     expect(MODAL).toMatch(/class="dot"\s*:class="device\.online \? 'ok' : 'idle'"/)
     expect(MODAL).toContain('paneCountLabel(device.paneCount)')
     // The label falls back to the id, shortened — a server that sends no
@@ -81,12 +81,53 @@ describe('account modal — your network', () => {
     expect(MODAL).toMatch(/v-if="device\.isLocal"[\s\S]{0,160}settings\.p2p\.network\.this-device/)
   })
 
-  it('renders the panes under each device with a status pill', () => {
-    expect(MODAL).toMatch(/v-for="pane in device\.panes"[\s\S]{0,700}pane\.agentKey/)
-    expect(MODAL).toMatch(/pane-name">\{\{ pane\.title \}\}/)
-    expect(MODAL).toMatch(/pane-ws">\{\{ pane\.workspace \}\}/)
-    expect(MODAL).toMatch(/class="pane-pill" :class="'st-' \+ pane\.status"/)
-    expect(MODAL).toContain('statusLabel(pane.status)')
+  it('files the panes into folding sections instead of one flat list', () => {
+    // This replaced a flat `v-for="pane in device.panes"`: seventy-four rows in
+    // which the two that were running sat between sixty-three that had never
+    // been opened, distinguishable only by a pill read one row at a time.
+    expect(MODAL).toMatch(/v-for="group in visibleGroups\(device\)"/)
+    expect(MODAL).toMatch(/v-for="row in group\.rows"/)
+    expect(MODAL).toMatch(/pane-name" :title="row\.pane\.title">\{\{ row\.pane\.title \}\}/)
+    // The section header is the status, so the rows below carry no pill. A pill
+    // reappearing here would be the repetition this structure removed.
+    const grouped = MODAL.slice(
+      MODAL.indexOf('v-for="group in visibleGroups(device)"'),
+      MODAL.indexOf('<p v-if="!device.panes.length"'),
+    )
+    expect(grouped).not.toContain('pane-pill')
+    // `pane-wsrule` is the boundary caption and is expected; the repeated
+    // per-row workspace column is what must not come back.
+    expect(grouped).not.toContain('class="pane-ws"')
+  })
+
+  it('says the state on a search hit, which has no section to say it', () => {
+    // The one rule that keeps dropping the pill honest: out of its section a
+    // row has nothing else reporting what state it is in, so the flat search
+    // list puts the pill and the workspace back.
+    const flat = MODAL.slice(MODAL.indexOf('v-if="searching"'), MODAL.indexOf('v-else class="pane-roster"'))
+    expect(flat).toMatch(/class="pane-pill" :class="'st-' \+ badgeOf\(hit\.pane\.status\)"/)
+    expect(flat).toContain('statusLabel(hit.pane.status)')
+    expect(flat).toContain('hit.pane.workspace')
+    // Across every machine: a hit means something regardless of which device
+    // holds it, and the sections are per-device.
+    expect(MODAL).toMatch(/for \(const device of devices\.value\)[\s\S]{0,400}hits\.push/)
+  })
+
+  it('folds what the user did not come for, and remembers the choice', () => {
+    // Defaults carry the whole benefit: the panes that were never opened were
+    // 85% of the list, and another machine's roster is context, not the thing
+    // this dialog was opened for.
+    expect(MODAL).toMatch(/group === 'not-opened'/)
+    expect(MODAL).toMatch(/folded\(deviceFoldKey\(device\), !device\.isLocal\)/)
+    // A blocked or corrupt store must not take the list with it.
+    expect(MODAL).toMatch(/localStorage\.getItem\(FOLD_STORE\)[\s\S]{0,200}catch/)
+  })
+
+  it('gives the roster a ceiling', () => {
+    // There was none: seventy-four rows grew the card until the dialog was as
+    // tall as the screen, and the only scroll was the whole modal body.
+    expect(MODAL).toMatch(/\.pane-roster[^{]*\{[^}]*max-height/)
+    expect(MODAL).toMatch(/\.pane-roster[^{]*\{[^}]*overflow-y: auto/)
   })
 
   it('has every state word the wire can carry', () => {
@@ -123,7 +164,13 @@ describe('account modal — your network', () => {
     // `paneStatus.*` in the sidebar) with a test asserting they matched; they
     // did not, and could not, because they were maintained separately: the
     // sidebar said "idle", this said "Waiting", for the same pane.
-    expect(MODAL).toMatch(/`paneStatus\.\$\{WIRE_TO_BADGE\[value\] \?\? value\}`/)
+    // The mapping is now applied in exactly one function, `badgeOf`, which the
+    // label, the pill class and the section a pane is filed under all call — so
+    // they cannot disagree. They did: the pill was built from the raw wire word
+    // while the text was built from the mapped one.
+    expect(MODAL).toMatch(/function badgeOf\(value: string\): string \{\s*return WIRE_TO_BADGE\[value\] \?\? value/)
+    expect(MODAL).toMatch(/`paneStatus\.\$\{badgeOf\(value\)\}`/)
+    expect(MODAL.match(/WIRE_TO_BADGE\[/g)?.length, 'the mapping is applied once').toBe(1)
 
     // The regression line. Reintroducing a private copy of the vocabulary is
     // exactly how the two drifted apart the first time, and it would pass every
@@ -173,7 +220,11 @@ describe('account modal — your network', () => {
 
   it('colours the pills by state', () => {
     expect(MODAL).toMatch(/\.pane-pill\.st-running \{[^}]*--success-fg/)
-    expect(MODAL).toMatch(/\.pane-pill\.st-waiting \{[^}]*--attention-fg/)
+    // `waiting` is the badge word for "not opened" — a restore placeholder, the
+    // quietest thing on the list. It used to wear the loud attention pill,
+    // because the class was built from the raw wire word, where `waiting` means
+    // a live idle pane. Now both ends read the mapped word, so it is hollow.
+    expect(MODAL).toMatch(/\.pane-pill\.st-waiting,[\s\S]{0,200}background: none; border-color/)
     expect(MODAL).toMatch(/\.pane-pill\.st-disconnected \{[^}]*border-color/)
     // A pane holding a prompt open is the reason to look at another machine's
     // list at all, so it is loud rather than hollow.
@@ -190,7 +241,10 @@ describe('account modal — your network', () => {
         new RegExp(`\\.pane-pill\\.st-${quiet}[,\\s]`),
       )
     }
-    expect(MODAL).toMatch(/\.pane-pill\.st-not-opened \{[^}]*border-color/)
+    // `st-not-opened` is gone on purpose: the class is built from the badge
+    // word now, and `not-opened` maps to `waiting`, which the hollow rule above
+    // covers. A rule keyed on the wire word would never match again.
+    expect(MODAL).not.toContain('.pane-pill.st-not-opened {')
   })
 
   // ---- the trust surface ----------------------------------------------------
@@ -636,8 +690,10 @@ describe('account modal — your network', () => {
     // The user's normal state, and the one a blank box would fail.
     expect(MODAL).toMatch(/soloDevice = computed\([\s\S]{0,120}devices\.value\[0\]\.isLocal/)
     expect(MODAL).toMatch(/v-if="soloDevice"[\s\S]{0,120}settings\.p2p\.network\.solo/)
-    // A device with no panes is not an empty section either.
-    expect(MODAL).toMatch(/v-else class="hint net-note">\{\{ t\('settings\.p2p\.network\.no-panes'\)/)
+    // A device with no panes is not an empty section either. It now hangs off
+    // the pane count rather than off a v-else, because the sections between
+    // them are a v-for that simply produces nothing.
+    expect(MODAL).toMatch(/v-if="!device\.panes\.length" class="hint net-note">[\s\S]{0,80}settings\.p2p\.network\.no-panes/)
   })
 
   it('has a waiting state and a not-linked state, not a blank box', () => {

@@ -125,6 +125,11 @@ interface NetworkPane {
   /** running | waiting | exited | disconnected | not-opened — or anything a newer server invents. */
   status: string
   hostOnline: boolean
+  /** When the session started, ISO-8601, or '' when the directory did not say.
+   *  The backend has always sent it; nothing read it, so every row was silent
+   *  about age. It is a start time and is labelled as one — the roster carries
+   *  no last-activity stamp, and printing one would be a claim we cannot make. */
+  startedAt?: string
 }
 
 interface NetworkDevice {
@@ -764,8 +769,17 @@ function reviewPending(): void {
   })
 }
 
+/** The badge word for a wire state. The one place the mapping is applied, so a
+ *  pane's label, its pill colour and the section it is filed under can never
+ *  disagree — they used to: the pill keyed off the raw wire word while the text
+ *  keyed off the mapped one, so a pane reading "idle" wore the loud
+ *  attention-coloured pill meant for one that is holding a prompt open. */
+function badgeOf(value: string): string {
+  return WIRE_TO_BADGE[value] ?? value
+}
+
 function statusLabel(value: string): string {
-  const key = `paneStatus.${WIRE_TO_BADGE[value] ?? value}`
+  const key = `paneStatus.${badgeOf(value)}`
   // A machine running a build newer than this one can send a word we have no
   // label for. Showing the raw word is better than showing the key, and far
   // better than hiding the pane.
@@ -817,6 +831,220 @@ function deviceMetaTitle(device: NetworkDevice): string {
 }
 
 const devices = computed<NetworkDevice[]>(() => network.value?.devices ?? [])
+
+/**
+ * The three sections a pane can be filed under, in the order they are drawn.
+ *
+ * The list used to be flat: seventy-four rows in which the two that were
+ * running sat between sixty-three that had never been opened, and the only
+ * thing separating them was a pill the eye had to read one row at a time. The
+ * sections answer "is anything running" before the first row is read.
+ */
+const GROUP_ORDER = ['running', 'idle', 'not-opened'] as const
+type PaneGroupKey = (typeof GROUP_ORDER)[number]
+
+/** Which section a wire state belongs to. `not-opened` is decided on the wire
+ *  word, not the badge word: the badge word for it is `waiting`, which is also
+ *  what an old machine sends for a perfectly live idle pane. */
+function paneGroupOf(status: string): PaneGroupKey {
+  if (status === 'not-opened') return 'not-opened'
+  return badgeOf(status) === 'running' ? 'running' : 'idle'
+}
+
+/** One line in a section: either a pane, or the workspace rule above the first
+ *  pane of a run. The rule is not a third level of folding — it is a caption on
+ *  the boundary, so a pane is always two clicks from the top, never three. */
+interface PaneRow {
+  key: string
+  /** Non-empty on a workspace rule; `pane` is null on those rows. */
+  divider: string
+  pane: NetworkPane | null
+}
+
+interface PaneGroup {
+  key: PaneGroupKey
+  count: number
+  rows: PaneRow[]
+}
+
+/**
+ * Split one device's panes into the three sections, with workspace rules.
+ *
+ * The backend already sorts by (workspace, title), so filing into buckets keeps
+ * each section sorted by workspace and a run of equal workspaces is contiguous
+ * — the rules only have to watch for the value changing.
+ */
+function groupsFor(device: NetworkDevice): PaneGroup[] {
+  const buckets: Record<PaneGroupKey, NetworkPane[]> = {
+    running: [],
+    idle: [],
+    'not-opened': [],
+  }
+  for (const pane of device.panes) buckets[paneGroupOf(pane.status)].push(pane)
+
+  const out: PaneGroup[] = []
+  for (const key of GROUP_ORDER) {
+    const panes = buckets[key]
+    if (!panes.length) continue
+    // A section that spans one workspace does not need to say so on every
+    // boundary — there are none. Drawing the rule anyway is the same repetition
+    // the workspace column was, one line further up.
+    const spans = new Set(panes.map((pane) => pane.workspace)).size > 1
+    const rows: PaneRow[] = []
+    let seen: string | null = null
+    for (const pane of panes) {
+      if (spans && pane.workspace !== seen) {
+        seen = pane.workspace
+        // A rule with nothing to say is a blank line with a hairline through
+        // it. The server can send an empty workspace, and the pane still sorts
+        // and renders — it just gets no caption.
+        if (seen) rows.push({ key: `ws:${key}:${seen}`, divider: seen, pane: null })
+      }
+      rows.push({ key: pane.sessionId || pane.paneId, divider: '', pane })
+    }
+    out.push({ key, count: panes.length, rows })
+  }
+  return out
+}
+
+/** The counts on the three tiles: every device, because the tiles sit above the
+ *  device list and a number that only counted one machine would be a lie on a
+ *  paired account. */
+const paneTotals = computed<Record<PaneGroupKey, number>>(() => {
+  const totals: Record<PaneGroupKey, number> = { running: 0, idle: 0, 'not-opened': 0 }
+  for (const device of devices.value) {
+    for (const pane of device.panes) totals[paneGroupOf(pane.status)] += 1
+  }
+  return totals
+})
+
+const paneTotal = computed(() => {
+  const totals = paneTotals.value
+  return totals.running + totals.idle + totals['not-opened']
+})
+
+/** Which section the tiles have narrowed the list to; '' is all three. */
+const paneFilter = ref<PaneGroupKey | ''>('')
+
+function toggleFilter(key: PaneGroupKey): void {
+  paneFilter.value = paneFilter.value === key ? '' : key
+}
+
+const paneQuery = ref('')
+
+/**
+ * Searching abandons the sections on purpose.
+ *
+ * A hit is meaningful across devices and across states, and once a row is out
+ * of its section the section is no longer saying what state it is in — so these
+ * rows carry the pill and the workspace back, the two things the grouped view
+ * can leave out precisely because position says them.
+ */
+interface PaneHit {
+  key: string
+  pane: NetworkPane
+  device: string
+}
+
+const paneHits = computed<PaneHit[]>(() => {
+  const needle = paneQuery.value.trim().toLowerCase()
+  if (!needle) return []
+  const hits: PaneHit[] = []
+  for (const device of devices.value) {
+    const name = deviceLabel(device)
+    const deviceMatches = name.toLowerCase().includes(needle)
+    for (const pane of device.panes) {
+      const hay = `${pane.title} ${pane.workspace} ${pane.agentKey}`.toLowerCase()
+      if (deviceMatches || hay.includes(needle)) {
+        hits.push({ key: `${device.deviceId}:${pane.sessionId || pane.paneId}`, pane, device: name })
+      }
+    }
+  }
+  return hits
+})
+
+const searching = computed(() => paneQuery.value.trim().length > 0)
+
+/**
+ * Folded sections, by key.
+ *
+ * Stored as explicit overrides rather than as "the set of folded things", so a
+ * device that has not been touched still follows the default — and the defaults
+ * are the whole point: the sixty-three panes that were never opened start
+ * folded, and so does every machine that is not this one.
+ */
+const FOLD_STORE = 'navide.cloud.paneFolds'
+const folds = ref<Record<string, boolean>>(readFolds())
+
+function readFolds(): Record<string, boolean> {
+  try {
+    const raw = localStorage.getItem(FOLD_STORE)
+    const parsed = raw ? JSON.parse(raw) : null
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, boolean>) : {}
+  } catch {
+    // A blocked or corrupt store is not a reason to render nothing; the
+    // defaults below are perfectly usable on their own.
+    return {}
+  }
+}
+
+function writeFolds(): void {
+  try {
+    localStorage.setItem(FOLD_STORE, JSON.stringify(folds.value))
+  } catch {
+    /* the fold still applies for this session */
+  }
+}
+
+function deviceFoldKey(device: NetworkDevice): string {
+  return `dev:${device.deviceId}`
+}
+
+function groupFoldKey(device: NetworkDevice, group: PaneGroupKey): string {
+  return `${device.deviceId}:${group}`
+}
+
+function folded(key: string, fallback: boolean): boolean {
+  const set = folds.value[key]
+  return set === undefined ? fallback : set
+}
+
+function toggleFold(key: string, fallback: boolean): void {
+  folds.value = { ...folds.value, [key]: !folded(key, fallback) }
+  writeFolds()
+}
+
+/** This machine is what the user came to look at; the others start closed. */
+function deviceFolded(device: NetworkDevice): boolean {
+  return folded(deviceFoldKey(device), !device.isLocal)
+}
+
+/** Panes that were restored but never opened are history, not work in progress.
+ *  Shown by default they were 85% of the list. */
+function groupFolded(device: NetworkDevice, group: PaneGroupKey): boolean {
+  return folded(groupFoldKey(device, group), group === 'not-opened')
+}
+
+/** Sections left after the tiles have had their say. */
+function visibleGroups(device: NetworkDevice): PaneGroup[] {
+  const groups = groupsFor(device)
+  return paneFilter.value ? groups.filter((group) => group.key === paneFilter.value) : groups
+}
+
+/** "started 12 minutes ago" — the only new fact on a pane row, and the reason
+ *  the workspace column could be given up without the row losing information. */
+function startedLabel(pane: NetworkPane): string {
+  const at = pane.startedAt ? Date.parse(pane.startedAt) : Number.NaN
+  if (!Number.isFinite(at)) return ''
+  const { unit, count } = relativeTime(at, Date.now())
+  return t(`time.ago-${unit}`, { count })
+}
+
+function startedTitle(pane: NetworkPane): string {
+  const at = pane.startedAt ? Date.parse(pane.startedAt) : Number.NaN
+  if (!Number.isFinite(at)) return ''
+  return t('settings.p2p.network.started-at', { at: new Date(at).toLocaleString() })
+}
 const accessRequests = computed<AccessRequest[]>(() => network.value?.accessRequests ?? [])
 const blocked = computed<BlockedEntry[]>(() => network.value?.blocked ?? [])
 
@@ -1773,8 +2001,76 @@ onUnmounted(() => {
               {{ t('settings.p2p.network.loading') }}
             </p>
             <template v-else>
+              <!-- Three numbers before the first row, because "is anything
+                   running" was the question the list was being scrolled to
+                   answer. They are also the filter: a fourth row of chips
+                   saying the same three words would be the repetition this
+                   redesign exists to remove. -->
+              <div v-if="paneTotal" class="pane-tiles">
+                <button
+                  v-for="key in GROUP_ORDER"
+                  :key="key"
+                  type="button"
+                  class="pane-tile"
+                  :class="[`tile-${key}`, { on: paneFilter === key }]"
+                  :aria-pressed="paneFilter === key"
+                  @click="toggleFilter(key)"
+                >
+                  <span class="tile-n">{{ paneTotals[key] }}</span>
+                  <span class="tile-l">
+                    <span class="dot" :class="key === 'running' ? 'ok' : 'idle'"></span>
+                    {{ t(`settings.p2p.network.group-${key}`) }}
+                  </span>
+                </button>
+              </div>
+              <div v-if="paneTotal" class="pane-search">
+                <input
+                  v-model="paneQuery"
+                  type="search"
+                  class="pane-search-input"
+                  :placeholder="t('settings.p2p.network.search-placeholder')"
+                  :aria-label="t('settings.p2p.network.search-placeholder')"
+                />
+              </div>
+
+              <!-- Searching drops the sections: a hit means something across
+                   every machine and every state, and a section that has been
+                   filtered down to one row is no longer grouping anything. -->
+              <template v-if="searching">
+                <ul v-if="paneHits.length" class="panes flat">
+                  <li v-for="hit in paneHits" :key="hit.key" class="pane">
+                    <span class="pane-agent">{{ hit.pane.agentKey || '—' }}</span>
+                    <span class="pane-name" :title="hit.pane.title">{{ hit.pane.title }}</span>
+                    <span class="pane-ws">{{ hit.device }} · {{ hit.pane.workspace }}</span>
+                    <!-- The pill comes back here and only here: out of its
+                         section, the row has nothing else saying what state it
+                         is in. -->
+                    <span class="pane-pill" :class="'st-' + badgeOf(hit.pane.status)">
+                      {{ statusLabel(hit.pane.status) }}
+                    </span>
+                  </li>
+                </ul>
+                <p v-else class="hint net-note">{{ t('settings.p2p.network.no-match') }}</p>
+              </template>
+
+              <!-- The one thing the old list did not have: a ceiling. Seventy-
+                   four rows had nothing to stop them, so the roster grew until
+                   the dialog was as tall as the screen. -->
+              <div v-else class="pane-roster">
               <div v-for="device in devices" :key="device.deviceId" class="dev">
                 <div class="dev-head">
+                  <!-- The whole machine folds. On a paired account the other
+                       machines' rosters are context, not the thing you opened
+                       this for, so they start closed. -->
+                  <button
+                    type="button"
+                    class="dev-fold"
+                    :aria-expanded="!deviceFolded(device)"
+                    :title="t(deviceFolded(device) ? 'settings.p2p.network.expand' : 'settings.p2p.network.collapse')"
+                    @click="toggleFold(deviceFoldKey(device), !device.isLocal)"
+                  >
+                    {{ deviceFolded(device) ? '▸' : '▾' }}
+                  </button>
                   <span
                     class="dot"
                     :class="device.online ? 'ok' : 'idle'"
@@ -1855,17 +2151,52 @@ onUnmounted(() => {
                     {{ t('settings.p2p.trust.unpair') }}
                   </button>
                 </div>
-                <ul v-if="device.panes.length" class="panes">
-                  <li v-for="pane in device.panes" :key="pane.sessionId" class="pane">
-                    <span class="pane-agent">{{ pane.agentKey || '—' }}</span>
-                    <span class="pane-name">{{ pane.title }}</span>
-                    <span class="pane-ws">{{ pane.workspace }}</span>
-                    <span class="pane-pill" :class="'st-' + pane.status">
-                      {{ statusLabel(pane.status) }}
-                    </span>
-                  </li>
-                </ul>
-                <p v-else class="hint net-note">{{ t('settings.p2p.network.no-panes') }}</p>
+                <template v-if="!deviceFolded(device)">
+                  <!-- One block per state, each foldable. The pane rows below
+                       carry no status pill: the section they are in is the
+                       status, and saying it again on every row is how the old
+                       list spent a fifth of its width repeating itself. -->
+                  <div
+                    v-for="group in visibleGroups(device)"
+                    :key="group.key"
+                    class="pane-group"
+                  >
+                    <button
+                      type="button"
+                      class="grp-head"
+                      :class="`grp-${group.key}`"
+                      :aria-expanded="!groupFolded(device, group.key)"
+                      @click="toggleFold(groupFoldKey(device, group.key), group.key === 'not-opened')"
+                    >
+                      <span class="grp-caret">{{ groupFolded(device, group.key) ? '▸' : '▾' }}</span>
+                      <span class="dot" :class="group.key === 'running' ? 'ok' : 'idle'"></span>
+                      <span class="grp-name">{{ t(`settings.p2p.network.group-${group.key}`) }}</span>
+                      <span class="grp-count">{{ group.count }}</span>
+                    </button>
+                    <ul v-if="!groupFolded(device, group.key)" class="panes">
+                      <template v-for="row in group.rows" :key="row.key">
+                        <!-- Not a third fold, a caption on the boundary: the
+                             workspace used to be a column repeated on all
+                             seventy-four rows. -->
+                        <li v-if="!row.pane" class="pane-wsrule">{{ row.divider }}</li>
+                        <li v-else class="pane">
+                          <span class="pane-agent">{{ row.pane.agentKey || '—' }}</span>
+                          <!-- `title` because the longest name is the one
+                               carrying the most information, and it was the one
+                               being clipped. -->
+                          <span class="pane-name" :title="row.pane.title">{{ row.pane.title }}</span>
+                          <span class="pane-time" :title="startedTitle(row.pane)">
+                            {{ startedLabel(row.pane) }}
+                          </span>
+                        </li>
+                      </template>
+                    </ul>
+                  </div>
+                  <p v-if="!device.panes.length" class="hint net-note">
+                    {{ t('settings.p2p.network.no-panes') }}
+                  </p>
+                </template>
+              </div>
               </div>
             </template>
           </div>
@@ -2214,14 +2545,74 @@ input:focus {
   background: var(--bg-inset); color: var(--text-secondary); flex: none;
 }
 .dev-count { margin-left: auto; font-size: 11px; color: var(--text-secondary); flex-shrink: 0; }
-.panes { list-style: none; margin: 6px 0 0; padding: 0; }
+/* Three numbers and the filter, in one control each. `aria-pressed` rather than
+   a checked input: they are toggles over a list, not a form. */
+.pane-roster, .panes.flat { max-height: 260px; overflow-y: auto; }
+.pane-tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 8px; }
+.pane-tile {
+  display: block; text-align: left; cursor: pointer;
+  padding: 6px 8px; border: 1px solid var(--border-muted); border-radius: var(--radius-md, 8px);
+  background: var(--bg-inset); color: var(--text-primary);
+  transition: border-color var(--motion-fast, 120ms) var(--ease-out, ease);
+}
+.pane-tile:hover { border-color: var(--border-default); }
+.pane-tile.on { border-color: var(--accent-emphasis); background: var(--accent-subtle); }
+.pane-tile .tile-n {
+  display: block; font-size: 17px; font-weight: 600; line-height: 1.15;
+  font-variant-numeric: tabular-nums; color: var(--text-bright);
+}
+.pane-tile.tile-running .tile-n { color: var(--success-fg); }
+.pane-tile .tile-l {
+  display: flex; align-items: center; font-size: var(--font-3xs); color: var(--text-secondary);
+}
+.pane-tile .tile-l .dot { width: 6px; height: 6px; margin-right: 5px; }
+.pane-search { margin-bottom: 8px; }
+/* Only the size. Background, border, radius and the focus ring come from this
+   modal's own `input` rule above — a second set of values here is how one field
+   ends up looking like it belongs to a different dialog. */
+.pane-search-input { padding: 4px 8px; font-size: 11.5px; }
+/* The section header is the status, which is why the rows below carry no pill. */
+.grp-head {
+  display: flex; align-items: center; gap: 6px; width: 100%; cursor: pointer;
+  margin-top: 6px; padding: 2px 0 2px 2px; border: 0; background: none;
+  font-size: 11.5px; color: var(--text-secondary); text-align: left;
+}
+.grp-head:hover .grp-name { color: var(--text-bright); }
+.grp-caret { width: 9px; font-size: 9px; color: var(--text-secondary); flex: none; }
+.grp-head .dot { margin-right: 0; }
+.grp-name { flex: 1 1 auto; min-width: 0; font-weight: 500; }
+.grp-count { flex: none; font-variant-numeric: tabular-nums; }
+/* Same shape as the group caret so the two folds read as one mechanism. */
+.dev-fold {
+  width: 14px; padding: 0; border: 0; background: none; cursor: pointer;
+  font-size: 9px; color: var(--text-secondary); flex: none;
+}
+.panes { list-style: none; margin: 2px 0 0; padding: 0; }
 .pane {
   display: flex; align-items: center; gap: 8px; padding: 3px 0 3px 14px; font-size: 11.5px;
 }
+/* A caption on a boundary, not a row: it only appears where the workspace
+   changes, and only in a section that spans more than one. */
+.pane-wsrule {
+  display: flex; align-items: center; gap: 8px; margin: 5px 0 1px; padding-left: 14px;
+  font-size: var(--font-3xs); letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--text-secondary);
+}
+.pane-wsrule::after { content: ''; flex: 1; height: 1px; background: var(--border-muted); }
 .pane-agent { color: var(--text-secondary); flex-shrink: 0; }
-.pane-name { color: var(--text-bright); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pane-ws {
-  color: var(--text-secondary); font-size: 11px; margin-left: auto; min-width: 0;
+/* The only element that may take the space it needs. It used to share the row
+   with a workspace column repeated on every line and was clipped instead. */
+.pane-name {
+  flex: 1 1 auto; color: var(--text-bright); min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pane-time {
+  flex: none; font-size: 11px; color: var(--text-secondary); font-variant-numeric: tabular-nums;
+}
+/* Search results only: there the row is out of its section, so the workspace
+   and the device have to be said again. */
+.panes.flat .pane-ws {
+  color: var(--text-secondary); font-size: 11px; min-width: 0; flex: 0 1 auto;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 /* Capsule, like every other pill. This was the 4px square the report named. */
@@ -2235,7 +2626,11 @@ input:focus {
    is the whole reason to look at another machine's list. */
 .pane-pill.st-running { background: var(--success-fg); color: var(--text-on-emphasis); }
 .pane-pill.st-awaiting { background: var(--attention-fg); color: var(--text-on-emphasis); }
-.pane-pill.st-waiting { background: var(--attention-fg); color: var(--text-on-emphasis); }
+/* `waiting` is the badge word for "not opened" — a restore placeholder, the
+   quietest thing on the list. It wore the loud attention pill because the class
+   was built from the raw wire word, where `waiting` means a live idle pane;
+   both ends now read the same mapped word, so the colour matches the label. */
+.pane-pill.st-waiting,
 .pane-pill.st-idle,
 .pane-pill.st-starting,
 .pane-pill.st-disconnected { background: none; border-color: var(--border-default); }
@@ -2343,9 +2738,8 @@ input:focus {
 .locked-acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .locked-go { color: var(--danger-fg); border-color: var(--danger-fg); }
 .locked-go:hover { background: var(--danger-subtle); }
-/* Same hollow treatment as disconnected: neither pane is doing anything, and
-   the eye should skip both to find the ones that are. */
-.pane-pill.st-not-opened { background: none; border-color: var(--border-default); }
+/* `st-not-opened` used to be here. The pill is now keyed on the badge word, and
+   `not-opened` maps to `waiting` — the hollow rule above covers it. */
 .status { display: flex; align-items: center; margin: 0; font-size: 12.5px; color: var(--text-secondary); }
 .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 7px; flex-shrink: 0; }
 .dot.ok { background: var(--success-fg); }
