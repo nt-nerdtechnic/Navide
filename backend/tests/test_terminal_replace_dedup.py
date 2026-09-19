@@ -32,6 +32,8 @@ class FakeTerminals:
         # The reap sites wait out a graceful shutdown before spawning; record
         # the waits so a test can assert the old PTY was gone first.
         self.reap_waits: list[str] = []
+        # What that wait answers; False is a child that outlived its SIGKILL.
+        self.reap_result = True
         self.live = live or []
 
     def create(self, **kwargs: Any) -> SimpleNamespace:
@@ -47,9 +49,11 @@ class FakeTerminals:
         self.killed.append((session_id, force))
         self.live = [s for s in self.live if s.id != session_id]
 
-    async def wait_until_reaped(self, session_id: str, timeout: float = 8.0) -> bool:
+    async def wait_until_reaped(
+        self, session_id: str, timeout: float | None = None
+    ) -> bool:
         self.reap_waits.append(session_id)
-        return True
+        return self.reap_result
 
     def get(self, session_id: str) -> SimpleNamespace | None:
         return next((s for s in self.live if s.id == session_id), None)
@@ -119,6 +123,28 @@ async def test_replaces_kills_same_pane_predecessor() -> None:
     # reap exists to prevent.
     assert terminals.reap_waits == ["t-old"]
     assert len(terminals.created) == 1
+
+
+async def test_replaces_refuses_to_spawn_when_the_reap_times_out() -> None:
+    """The predecessor outlived its kill, so the replacement is not started.
+
+    The reap ceiling covers the vendor grace, the SIGKILL escalation and the
+    zombie wait, so running out means the old CLI survived a SIGKILL. Spawning
+    the replacement on top of it is the overlap this reap exists to stop — and
+    the old code did it silently, having thrown the answer away.
+    """
+    terminals = FakeTerminals(live=[_live_pty("t-old", "pane-1")])
+    terminals.reap_result = False
+    session = _session(terminals)
+    await _create(session, pane_id="pane-1", replaces_terminal_id="t-old")
+
+    assert terminals.reap_waits == ["t-old"]
+    assert terminals.created == []
+    sent = session.websocket.sent  # type: ignore[attr-defined]
+    errors = [m for m in sent if m.get("error")]
+    assert errors, f"the failure was silent: {sent}"
+    assert errors[-1]["error"]["code"] == "CREATE_REAP_TIMEOUT"
+    assert errors[-1]["error"]["details"]["terminal_session_id"] == "t-old"
 
 
 async def test_replaces_kills_ownerless_leftover_across_pane_ids() -> None:

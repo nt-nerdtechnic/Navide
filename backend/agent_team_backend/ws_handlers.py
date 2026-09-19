@@ -6016,6 +6016,26 @@ async def terminal_create(session: "Session", msg_id: str, msg_type: str, payloa
                         {"pane_id": pane_id, "create_generation": generation},
                     )
                 )
+        except _TerminalCreateReapTimeout as err:
+            # Its own code, not CREATE_CANCELLED: nobody cancelled this, and a
+            # retry is the right response — the previous CLI has to be gone
+            # first, and saying "cancelled" would hide that from the user.
+            await _rollback_terminal_create(session, transaction)
+            if not session.dead:
+                await session.send_json(
+                    make_error(
+                        msg_id,
+                        msg_type,
+                        "CREATE_REAP_TIMEOUT",
+                        "the previous CLI did not exit; refusing to start a "
+                        "second one on the same session",
+                        {
+                            "pane_id": pane_id,
+                            "create_generation": generation,
+                            "terminal_session_id": err.terminal_id,
+                        },
+                    )
+                )
         except BaseException:
             await _rollback_terminal_create(session, transaction)
             session._terminal_create_transactions.pop(key, None)
@@ -6024,6 +6044,22 @@ async def terminal_create(session: "Session", msg_id: str, msg_type: str, payloa
 
 class _TerminalCreateCancelled(Exception):
     pass
+
+
+class _TerminalCreateReapTimeout(Exception):
+    """A PTY this create had to reap first outlived its kill.
+
+    Raised instead of spawning. The reap ceiling covers the vendor's grace,
+    the SIGKILL escalation and the wait that reaps the zombie, so reaching it
+    means the old CLI survived a SIGKILL — and spawning the replacement then
+    is the two-CLIs-on-one-session-file corruption both reap sites exist to
+    prevent. Failing the create is recoverable (the user retries, or opens a
+    fresh session); a corrupted transcript is not.
+    """
+
+    def __init__(self, terminal_id: str) -> None:
+        super().__init__(terminal_id)
+        self.terminal_id = terminal_id
 
 
 async def _finish_pane_attribution(
@@ -6359,7 +6395,14 @@ async def _terminal_create_impl(
                 # by a background task, so kill() alone no longer means the
                 # old CLI is gone — and the spawn below would overlap it.
                 # Returns immediately for every other vendor.
-                await session.terminals.wait_until_reaped(replaces_tid)
+                if not await session.terminals.wait_until_reaped(replaces_tid):
+                    app.log.error(
+                        "terminal.create: replaced PTY %s outlived its kill "
+                        "— refusing to spawn over it for pane %s",
+                        replaces_tid,
+                        create_pane_id,
+                    )
+                    raise _TerminalCreateReapTimeout(replaces_tid)
             else:
                 app.log.warning(
                     "terminal.create: replaces_terminal_id %s is another live "
@@ -6388,8 +6431,18 @@ async def _terminal_create_impl(
             await session.terminals.kill(stale.id, force=True)
             # Two CLIs appending to one session file is exactly what this loop
             # exists to prevent, so wait out a graceful shutdown before the
-            # --resume spawn below rather than only signalling it.
-            await session.terminals.wait_until_reaped(stale.id)
+            # --resume spawn below rather than only signalling it — and if the
+            # wait runs out, do not spawn at all. Proceeding here would hand
+            # the user the corruption this loop was written to stop.
+            if not await session.terminals.wait_until_reaped(stale.id):
+                app.log.error(
+                    "terminal.create: stale PTY %s resuming %s/%s outlived "
+                    "its kill — refusing to spawn a second one",
+                    stale.id,
+                    agent_key,
+                    resume_dedup_id,
+                )
+                raise _TerminalCreateReapTimeout(stale.id)
     def _spawn_and_claim() -> Any:
         term = session.terminals.create(
             pane_id=payload["pane_id"],

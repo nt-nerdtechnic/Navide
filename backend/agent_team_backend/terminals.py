@@ -322,12 +322,52 @@ _INPUT_BLOCK_NOTIFY_MS = 500
 # can widen it: the CLI's SIGTERM handler is what flushes the transcript, and
 # on a loaded runner that flush can outlast a hard-coded window.
 _KILL_ESCALATION_GRACE_S = 1.0
-# Ceiling on wait_until_reaped(). Must cover the largest vendor grace_s plus
-# _KILL_ESCALATION_GRACE_S plus the executor wait that reaps the zombie; the
-# slack is what keeps a caller that must not spawn over a live child from
-# giving up early. A caller that hits it logs and proceeds — a create that
-# hangs forever is worse than one that races.
-_REAP_WAIT_TIMEOUT_S = 8.0
+# How long _escalate_kill's post-SIGKILL `proc.wait` can hold the reap.
+_REAP_CONFIRM_S = 1.0
+# Slack on top of the bounded work wait_until_reaped() covers: two executor
+# hops (`proc.wait`, and the poll loops' scheduling) that can queue behind
+# other lifecycle calls on a loaded machine. Not a budget for a full-system
+# `ps` — that sweep is deliberately outside the wait, see _escalate_kill.
+_REAP_WAIT_SLACK_S = 3.0
+
+
+def _max_vendor_grace_s() -> float:
+    """The largest grace any vendor asks for, read from the registry.
+
+    Derived rather than written down: the ceiling below has to cover whatever
+    the specs declare, and a vendor that later asks for a longer grace must
+    widen the ceiling with it instead of silently overrunning one. Cheap
+    enough to call per wait (a dict scan over 14 entries).
+    """
+    from .cli_vendors.registry import VENDORS
+
+    return max(
+        (
+            spec.shutdown.grace_s
+            for spec in VENDORS.values()
+            if spec.shutdown is not None and spec.shutdown.graceful
+        ),
+        default=0.0,
+    )
+
+
+def _reap_wait_timeout_s() -> float:
+    """Ceiling on wait_until_reaped().
+
+    Covers exactly the work that runs between the SIGTERM and the moment the
+    child is confirmed down: the vendor's grace, the SIGKILL escalation's own
+    grace, the wait that reaps the zombie, and slack for executor queueing.
+    The breakaway-grandchild sweep is NOT in here — it is a full-system `ps`
+    with a 5s budget of its own, it says nothing about whether this child is
+    down, and leaving it inside made the ceiling smaller than the work under
+    it. A caller that hits this ceiling has a child that survived a SIGKILL.
+    """
+    return (
+        _max_vendor_grace_s()
+        + _KILL_ESCALATION_GRACE_S
+        + _REAP_CONFIRM_S
+        + _REAP_WAIT_SLACK_S
+    )
 # Only a keystroke-sized write arms the echo timer.  Role injection and pastes
 # are bulk writes whose echo is legitimately slower and would only add noise.
 _ECHO_PROBE_MAX_INPUT_CHARS = 16
@@ -463,6 +503,10 @@ class TerminalService:
         # and a caller that must not spawn over a live child awaits the event
         # through wait_until_reaped().
         self._graceful_kills: dict[str, asyncio.Event] = {}
+        # Live _kill_gracefully tasks. Strong references, because the loop
+        # keeps only weak ones; discarded by the done-callback that logs
+        # whatever the task raised.
+        self._kill_tasks: set[asyncio.Task[None]] = set()
         # Bytes dropped from _out_buffers in the current overflow episode and
         # not yet marked in the log mirror.  Present = the episode's warning
         # was logged; cleared once the buffer has fully drained so the next
@@ -1060,11 +1104,18 @@ class TerminalService:
             # A task, not an await: kill()'s own latency gates pane close and
             # the spawn path's replace-a-stale-terminal step, and holding
             # either open for the grace would be a visible regression.
-            self._loop.create_task(
+            task = self._loop.create_task(
                 self._kill_gracefully(
                     session, fg_pgid, force, shutdown, descendants
                 )
             )
+            # kill() has already told its caller the kill is under way, so a
+            # task that dies has nobody to raise to: without this the
+            # traceback surfaces only as asyncio's "Task exception was never
+            # retrieved" at GC time, on stderr rather than in the log. Holding
+            # the reference also keeps the loop's weak set from dropping it.
+            self._kill_tasks.add(task)
+            task.add_done_callback(self._on_graceful_kill_done)
             return
 
         log.info(
@@ -1104,7 +1155,7 @@ class TerminalService:
         )
 
     async def wait_until_reaped(
-        self, session_id: str, timeout: float = _REAP_WAIT_TIMEOUT_S
+        self, session_id: str, timeout: float | None = None
     ) -> bool:
         """Block until a graceful kill of ``session_id`` has put the child down.
 
@@ -1118,20 +1169,34 @@ class TerminalService:
 
         Returns True when there is nothing in flight (the common case, and an
         immediate return) or the reap finished, False when the wait ran out.
+        False means the child outlived a SIGKILL — the ceiling covers every
+        other bounded step (see _reap_wait_timeout_s), so a caller that must
+        not spawn over a live CLI can treat it as one rather than as noise.
         """
         done = self._graceful_kills.get(session_id)
         if done is None:
             return True
+        if timeout is None:
+            timeout = _reap_wait_timeout_s()
         try:
             await asyncio.wait_for(done.wait(), timeout)
         except TimeoutError:
             log.warning(
                 "terminal kill: reap wait timed out session=%s timeout=%.1fs "
-                "— the caller proceeds while the child may still be alive",
+                "— the child survived the escalation and may still be alive",
                 session_id, timeout,
             )
             return False
         return True
+
+    def _on_graceful_kill_done(self, task: "asyncio.Task[None]") -> None:
+        """Log what a graceful-kill task raised, and let go of it."""
+        self._kill_tasks.discard(task)
+        if task.cancelled():
+            return
+        err = task.exception()
+        if err is not None:
+            log.error("terminal kill: graceful task failed: %r", err, exc_info=err)
 
     def _shutdown_spec(self, session: TerminalSession) -> "Any | None":
         """This session's vendor ShutdownSpec, or None — for an unknown key,
@@ -1159,13 +1224,20 @@ class TerminalService:
         takes the far end of its stdout away mid-hook.
         """
         started = self._loop.time()
+        done = self._graceful_kills.get(session.id)
+        # Everything below is inside the try: this task owns the only entry in
+        # _graceful_kills for this session, and kill() short-circuits on that
+        # entry. An exception escaping before the finally would leave it there
+        # forever — the session never closed, the child never killable again,
+        # and every reap site burning its full ceiling to learn nothing.
         try:
-            pgid = osplat.process_tree.group_of(session.proc.pid)
-        except ProcessLookupError:
-            # Already gone; the close and escalation below still run so the
-            # session is unregistered and its crash-recovery record dropped.
-            pgid = 0
-        try:
+            try:
+                pgid = osplat.process_tree.group_of(session.proc.pid)
+            except (ProcessLookupError, PermissionError):
+                # Already gone, or not ours to ask about; the close and
+                # escalation below still run so the session is unregistered
+                # and its crash-recovery record dropped.
+                pgid = 0
             # Job control puts the CLI in a group the login shell's pgid does
             # not cover. Same guard as the direct path.
             for target in (pgid, fg_pgid if fg_pgid != pgid else 0):
@@ -1204,12 +1276,16 @@ class TerminalService:
                         pass
             self._close(session, reason="killed")
             await self._escalate_kill(
-                session, pgid, _KILL_ESCALATION_GRACE_S, descendants=descendants
+                session, pgid, _KILL_ESCALATION_GRACE_S,
+                descendants=descendants, reaped=done,
             )
         finally:
-            done = self._graceful_kills.pop(session.id, None)
-            if done is not None:
-                done.set()
+            # Also the failure release: _escalate_kill sets the event the
+            # moment the child is confirmed down, and this catches every path
+            # that never got there. Event.set() twice is a no-op.
+            stale = self._graceful_kills.pop(session.id, None)
+            if stale is not None:
+                stale.set()
 
     async def _put_down_error_survivor(self, session: TerminalSession) -> None:
         """Kill a child whose PTY master died on a read error while the child
@@ -1233,6 +1309,7 @@ class TerminalService:
         pgid: int,
         grace: float = 1.0,
         descendants: dict[int, str] | None = None,
+        reaped: asyncio.Event | None = None,
     ) -> None:
         deadline = self._loop.time() + grace
         # ASYNC110 suppressed: bounded poll (<= grace) with awaited sleeps —
@@ -1260,6 +1337,14 @@ class TerminalService:
                 )
             except subprocess.TimeoutExpired:
                 pass
+        # This child is now as down as this path can make it, which is the
+        # whole of what wait_until_reaped() promises. Release its waiters here
+        # rather than after the sweep below: that sweep is about OTHER
+        # processes (grandchildren that left the group), it is a full-system
+        # `ps` with a 5s budget, and holding the reap across it made the
+        # ceiling smaller than the work under it.
+        if reaped is not None:
+            reaped.set()
         # Reap breakaway grandchildren that escaped the process group via setsid.
         await asyncio.to_thread(_kill_breakaway, descendants or {})
         if session.proc.poll() is not None:
@@ -1427,7 +1512,25 @@ class TerminalService:
                     osplat.process_tree.kill_group(fg_pgid, force=False)
                 except (ProcessLookupError, PermissionError):
                     pass
-        deadline = self._loop.time() + grace
+        # A vendor that declared a grace asked for it because its SIGTERM
+        # handler needs that long to finish — and quitting the app is when
+        # every one of its panes runs that handler at once, against the same
+        # file. Honouring only kill()'s grace here left the exact stale-state
+        # bug the ShutdownSpec exists to prevent alive on the quit path.
+        # The poll below waits on all targets together, so widening this costs
+        # the LARGEST declared grace once, not one per pane.
+        effective = grace
+        for session, _pgid in targets:
+            spec = self._shutdown_spec(session)
+            if spec is not None and spec.graceful:
+                effective = max(effective, spec.grace_s)
+        if effective != grace:
+            log.info(
+                "terminal kill_all: grace widened %.1fs -> %.1fs for %d "
+                "session(s) with a declared shutdown",
+                grace, effective, len(targets),
+            )
+        deadline = self._loop.time() + effective
         # ASYNC110 suppressed: bounded poll with awaited sleeps, as above.
         while (  # noqa: ASYNC110
             any(s.proc.poll() is None for s, _ in targets)

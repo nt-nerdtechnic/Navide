@@ -11,7 +11,9 @@ declares nothing must take the path that has always run, byte for byte.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -302,3 +304,255 @@ async def test_wait_until_reaped_returns_at_once_with_nothing_in_flight() -> Non
 
     await svc.kill(session.id, force=True)
     assert await svc.wait_until_reaped(session.id, timeout=0.0) is True
+
+
+# --- the reap ceiling ---------------------------------------------------
+
+
+def test_the_reap_ceiling_is_derived_from_the_declared_graces() -> None:
+    """Written-down ceilings go stale; this one has to follow the specs.
+
+    It must cover every bounded step between the SIGTERM and the moment the
+    child is confirmed down — the vendor's grace, the escalation's own grace,
+    and the wait that reaps the zombie — or a caller that must not spawn over
+    a live CLI gives up while the kill is still running normally.
+    """
+    assert terminals_module._max_vendor_grace_s() == vendor("claude").shutdown.grace_s
+    floor = (
+        terminals_module._max_vendor_grace_s()
+        + terminals_module._KILL_ESCALATION_GRACE_S
+        + terminals_module._REAP_CONFIRM_S
+    )
+    assert terminals_module._reap_wait_timeout_s() > floor
+
+
+def test_a_longer_vendor_grace_widens_the_ceiling_with_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The regression a hard-coded number cannot survive: a vendor asks for a
+    # longer grace and the ceiling silently stops covering it.
+    from agent_team_backend.cli_vendors.base import ShutdownSpec
+    from agent_team_backend.cli_vendors import registry
+
+    before = terminals_module._reap_wait_timeout_s()
+    stretched = dataclasses.replace(
+        registry.VENDORS["claude"],
+        shutdown=ShutdownSpec(graceful=True, grace_s=30.0, defer_master_close=True),
+    )
+    monkeypatch.setitem(registry.VENDORS, "claude", stretched)
+
+    assert terminals_module._max_vendor_grace_s() == 30.0
+    assert terminals_module._reap_wait_timeout_s() == before + 27.0
+
+
+@pytest.mark.asyncio
+async def test_the_breakaway_ps_sweep_runs_outside_the_reap_wait() -> None:
+    """The sweep is a full-system `ps` with a 5s budget of its own.
+
+    Held inside the wait it made the ceiling smaller than the work under it:
+    grace 3 + escalation 1 + zombie wait 1 + ps 5 = 10s under an 8s ceiling,
+    so a claude pane with any recorded descendant could report "not reaped"
+    on a loaded machine while the child was in fact long dead. The sweep is
+    about OTHER processes (grandchildren that left the group) and says nothing
+    about this child, so the reap is released before it runs.
+    """
+    svc = TerminalService(emit=_noop_emit)
+    session = svc.create(
+        pane_id="p1", agent_key="claude", command=_ignore_term_script(), cwd="/"
+    )
+    await asyncio.sleep(0.3)
+
+    real_descendants = terminals_module._descendant_pids
+    real_snapshot = terminals_module._ps_snapshot
+    swept = threading.Event()
+
+    # A claude pane with one recorded descendant, so the sweep really runs.
+    terminals_module._descendant_pids = lambda pid: {999999: "999999:fake"}
+
+    def slow_ps() -> dict:
+        swept.set()
+        time.sleep(5.0)          # exactly what _posix._ps_snapshot budgets
+        return {}
+
+    terminals_module._ps_snapshot = slow_ps
+    try:
+        await svc.kill(session.id, force=True)
+        started = time.monotonic()
+        reaped = await svc.wait_until_reaped(session.id)
+        waited = time.monotonic() - started
+    finally:
+        terminals_module._descendant_pids = real_descendants
+        terminals_module._ps_snapshot = real_snapshot
+        if session.proc.poll() is None:
+            session.proc.kill()
+
+    assert reaped is True, f"the ps sweep was inside the wait ({waited:.2f}s)"
+    assert session.proc.poll() is not None, "released before the child was down"
+    # The whole point: the answer came back on the child's timetable (grace +
+    # escalation), not the sweep's.
+    assert waited < terminals_module._reap_wait_timeout_s()
+    assert swept.is_set(), "the sweep never ran — the test proved nothing"
+
+
+@pytest.mark.asyncio
+async def test_a_reap_that_never_completes_still_reports_false() -> None:
+    """The ceiling has to stay reachable, or the reap sites' refusal to spawn
+    is dead code. A grace whose event never fires stands in for the only thing
+    that reaches it now: a child that outlived its SIGKILL."""
+    svc = TerminalService(emit=_noop_emit)
+    svc._graceful_kills["never-finishes"] = asyncio.Event()
+
+    assert await svc.wait_until_reaped("never-finishes", timeout=0.2) is False
+    # And the same id answers True the moment the reap completes.
+    svc._graceful_kills["never-finishes"].set()
+    assert await svc.wait_until_reaped("never-finishes", timeout=0.2) is True
+
+
+# --- shutdown sweep ------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_kill_all_honours_a_declared_grace() -> None:
+    """Quitting the app is when every claude pane runs its SIGTERM handler at
+    once, against the same ~/.claude.json. kill_all's own 1s grace ignored the
+    3s the vendor asked for, so the exact stale-entry bug the ShutdownSpec
+    exists to prevent survived on the quit path."""
+    svc = TerminalService(emit=_noop_emit)
+    session = svc.create(
+        pane_id="p1", agent_key="claude", command=_ignore_term_script(), cwd="/"
+    )
+    await asyncio.sleep(0.3)
+
+    started = time.monotonic()
+    await svc.kill_all()
+    waited = time.monotonic() - started
+
+    grace = vendor("claude").shutdown.grace_s
+    assert waited >= grace * 0.8, (
+        f"claude got {waited:.2f}s, not the {grace}s it declared"
+    )
+    assert session.proc.poll() is not None
+
+
+@pytest.mark.asyncio
+async def test_kill_all_leaves_a_vendor_without_a_spec_on_the_old_grace() -> None:
+    # The other half: nobody who declared nothing pays for this.
+    svc = TerminalService(emit=_noop_emit)
+    session = svc.create(
+        pane_id="p1", agent_key="codex", command=_ignore_term_script(), cwd="/"
+    )
+    await asyncio.sleep(0.3)
+
+    started = time.monotonic()
+    await svc.kill_all()
+    waited = time.monotonic() - started
+
+    assert waited < 2.5, f"a spec-less vendor waited {waited:.2f}s"
+    assert session.proc.poll() is not None
+
+
+@pytest.mark.asyncio
+async def test_kill_all_waits_the_longest_grace_once_not_once_per_pane() -> None:
+    """The cost of honouring the grace has to be the maximum, not the sum —
+    Electron kills the backend if quit drags, and a workspace has tens of
+    panes. kill_all signals every target first and then polls them together,
+    so three TERM-ignoring claudes cost one grace between them."""
+    svc = TerminalService(emit=_noop_emit)
+    sessions = [
+        svc.create(
+            pane_id=f"p{i}", agent_key="claude",
+            command=_ignore_term_script(), cwd="/",
+        )
+        for i in range(3)
+    ]
+    await asyncio.sleep(0.4)
+
+    started = time.monotonic()
+    await svc.kill_all()
+    waited = time.monotonic() - started
+
+    grace = vendor("claude").shutdown.grace_s
+    assert waited < grace * 2, (
+        f"three panes took {waited:.2f}s — the waits stacked instead of "
+        f"overlapping (one grace is {grace}s)"
+    )
+    assert all(s.proc.poll() is not None for s in sessions)
+
+
+# --- failure release -----------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_task_that_blows_up_still_releases_the_session() -> None:
+    """_graceful_kills is the in-flight guard: while an id sits in it, kill()
+    short-circuits. An exception escaping the task without popping it left the
+    session registered, never closed, its child alive and every later kill a
+    silent no-op — with the traceback surfacing only as asyncio's "Task
+    exception was never retrieved" at GC time.
+    """
+    svc = TerminalService(emit=_noop_emit)
+    session = svc.create(
+        pane_id="p1", agent_key="claude", command=["sleep", "30"], cwd="/"
+    )
+    await asyncio.sleep(0.3)
+
+    real_close = svc._close
+    # Anything the body can raise. _close is inside the try either way; what
+    # this proves is that the release is a finally, not a lucky code path.
+    def boom(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("kaboom")
+
+    svc._close = boom  # type: ignore[assignment]
+    try:
+        await svc.kill(session.id, force=True)
+        assert await _wait_for(lambda: not svc._graceful_kills, 8.0), (
+            "the session stayed in _graceful_kills — it can never be killed again"
+        )
+        # The waiters were released rather than left to burn the full ceiling.
+        assert await svc.wait_until_reaped(session.id, timeout=0.1) is True
+    finally:
+        svc._close = real_close  # type: ignore[assignment]
+        if session.proc.poll() is None:
+            session.proc.kill()
+        real_close(session, reason="killed")
+
+
+@pytest.mark.asyncio
+async def test_group_of_raising_does_not_strand_the_session() -> None:
+    """group_of() used to sit outside the try that owns the release.
+
+    os.getpgid is documented to raise EPERM as well as ESRCH, and the call is
+    one line above a finally it was not covered by. Anything it raised that
+    was not ProcessLookupError escaped before the release, and from then on
+    the id was poisoned: still in _graceful_kills, so kill() short-circuited
+    on it forever; never closed, so still in _sessions; child still alive.
+    """
+    svc = TerminalService(emit=_noop_emit)
+    session = svc.create(
+        pane_id="p1", agent_key="claude", command=["sleep", "30"], cwd="/"
+    )
+    await asyncio.sleep(0.3)
+
+    real_group_of = osplat.process_tree.group_of
+    calls: list[int] = []
+
+    def raises_once(pid: int) -> int:
+        calls.append(pid)
+        if len(calls) == 1:
+            raise PermissionError(1, "Operation not permitted")
+        return real_group_of(pid)
+
+    osplat.process_tree.group_of = raises_once  # type: ignore[assignment]
+    try:
+        await svc.kill(session.id, force=True)
+        assert await _wait_for(lambda: not svc._graceful_kills, 8.0), (
+            "the id stayed in _graceful_kills — kill() is now a no-op for it"
+        )
+        assert await _wait_for(lambda: session.closed)
+        assert session.id not in svc._sessions
+        # EPERM only costs the pgid; the escalation still puts the child down.
+        assert await _wait_for(lambda: session.proc.poll() is not None)
+    finally:
+        osplat.process_tree.group_of = real_group_of  # type: ignore[assignment]
+        if session.proc.poll() is None:
+            session.proc.kill()
