@@ -6220,12 +6220,15 @@ button.icon-btn.muted:hover {
 .ws-grp-add[aria-expanded='true'] { opacity: 1; }
 .ws-grp-add:hover { color: var(--text-bright); }
 @media (prefers-reduced-motion: reduce) {
-  .ws-grp-add { transition: none; }
+  .ws-grp-add,
+  .ws-grp-fold { transition: none; }
 }
-/* The workspace fold button one level down. Visible at rest rather than on
-   hover like the ＋ beside it: it is the same control as .ws-fold and has to
-   be as findable here as it is there. The auto margin moves to this button
-   when it is present, so the two stay one pair at the right edge. */
+/* The workspace fold button one level down. Hidden at rest and revealed with
+   the row, like the ＋ beside it — unlike .ws-fold on the heading above, which
+   stays visible: a heading is a landmark you aim at, a group row is one of
+   many and reads more quietly with only its name and count at rest. The auto
+   margin moves to this button when it is present, so the two stay one pair at
+   the right edge. */
 .ws-grp-fold {
   flex: none;
   margin-left: auto;
@@ -6240,10 +6243,12 @@ button.icon-btn.muted:hover {
   cursor: pointer;
   line-height: 1;
   color: var(--text-muted);
-  opacity: 0.65;
+  opacity: 0;
+  transition: opacity var(--motion-fast) var(--ease-out);
 }
 .ws-grp-fold svg { display: block; }
-.ws-grp:hover .ws-grp-fold { opacity: 1; }
+.ws-grp:hover .ws-grp-fold,
+.ws-grp-fold:focus-visible { opacity: 1; }
 .ws-grp-fold:hover { color: var(--text-bright); }
 .ws-grp-fold + .ws-grp-add { margin-left: 0; }
 /* A rail down the rows — but read the history before touching its colour.
