@@ -2,7 +2,7 @@
  *  peer window deleted the group this window was viewing). Keeps the current tab
  *  if it still exists or is the special 'manual' tab; otherwise falls back to the
  *  last remaining group, or 'manual' when no groups remain. */
-export function resolveActiveTab(groups: { id: string }[], current: string): string {
+export function resolveActiveTab(groups: readonly { id: string }[], current: string): string {
   if (current === 'manual') return current
   if (groups.some((g) => g.id === current)) return current
   return groups[groups.length - 1]?.id ?? 'manual'
@@ -31,6 +31,27 @@ export function resolveSpawnGroupId(
 ): string {
   if (askedGroupId && groups.some((group) => group.id === askedGroupId)) return askedGroupId
   return resolveManualSpawnGroupId(groups, activeTab)
+}
+
+/** The group a spawn should land in, given that the window may not yet hold
+ *  the groups of the workspace it is spawning into.
+ *
+ *  `groupsReady` is false for the stretch of a workspace switch between
+ *  currentWorkspace changing and the entered workspace's groups arriving. The
+ *  ids on screen during it belong to the workspace being LEFT, and a spawn that
+ *  took one wrote it into the entered workspace's pane record for good: one id
+ *  ended up owned by three projects, and each one rebuilt it as a `Run N` group
+ *  of its own. No id lands the pane on the manual tab instead — visible,
+ *  draggable into the right tab, and claiming nothing that has to be undone.
+ */
+export function resolveReadySpawnGroupId(
+  groups: { id: string }[],
+  activeTab: string,
+  groupsReady: boolean,
+  askedGroupId = ''
+): string {
+  if (!groupsReady) return ''
+  return resolveSpawnGroupId(groups, activeTab, askedGroupId)
 }
 
 /** The creation time to give a group record being rebuilt from the id its panes

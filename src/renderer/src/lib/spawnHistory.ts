@@ -35,6 +35,22 @@ export interface SpawnHistoryEntry extends HistoryTitleEntry {
   restoreMode?: 'memory-resume' | 'fresh'
   sessionHomeId?: string
   runGroupId?: string
+  /** pane_id of the parent that opened this pane; '' / absent = root.
+   *
+   *  The pane record carries the same pointer and is the better source while
+   *  it lasts — the backend re-keys it — but records are pruned and history
+   *  is not, so resuming an old session needs its own durable copy. Kept in
+   *  step with the record by rekeyLineage, which repoints both whenever a pane
+   *  is given a new id. Absent on every entry written before this field
+   *  existed, which reads as "parent unknown", never as "root".
+   *
+   *  Limit: rekeyLineage can only repoint the page the renderer has LOADED
+   *  (MAX_SPAWN_HISTORY). An entry older than that keeps an id retired long
+   *  ago, and since the backend merge is upsert-only nothing repairs it later.
+   *  That degrades safely — resumableParentId validates the pointer against
+   *  the live panes and falls back to root — but it is why the pane record,
+   *  not this, is read first. */
+  spawnedBy?: string
   outputLogFile?: string
   /** User favorite. Persisted across restarts; bulk cleanup skips starred
    *  entries (explicit single delete still removes them). */

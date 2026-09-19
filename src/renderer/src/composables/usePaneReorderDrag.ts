@@ -10,8 +10,10 @@ import { i18n } from '@navide/plugin-ui/foundation'
 interface PaneReorderDragOptions {
   payloadFor: (paneId: string) => CliContextPayload | null
   /** Pane ids a drag started on `paneId` carries — the whole multi-selection
-   *  when that pane is part of one. Defaults to the dragged pane alone. */
-  batchFor?: (paneId: string) => string[]
+   *  when that pane is part of one. `folded` says the row was grabbed with its
+   *  family closed up, so the caller can carry the hidden descendants too.
+   *  Defaults to the dragged pane alone. */
+  batchFor?: (paneId: string, folded: boolean) => string[]
   reorder: (fromId: string, toId: string) => void
   handOff: (paneId: string, screenX: number, screenY: number) => void
 }
@@ -25,10 +27,10 @@ export function usePaneReorderDrag(options: PaneReorderDragOptions) {
    *  part of a multi-selection), so all of them can render as dragging. */
   const draggingBatchIds = ref<string[]>([])
 
-  function onDragStart(e: DragEvent, paneId: string): void {
+  function onDragStart(e: DragEvent, paneId: string, folded = false): void {
     const payload = options.payloadFor(paneId)
     if (!payload || !e.dataTransfer) return
-    const batch = options.batchFor?.(paneId) ?? [paneId]
+    const batch = options.batchFor?.(paneId, folded) ?? [paneId]
     writeCliPaneDragPayload(e.dataTransfer, payload, batch)
     setBatchDragImage(
       e.dataTransfer,

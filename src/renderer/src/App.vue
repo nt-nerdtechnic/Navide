@@ -140,7 +140,7 @@ import { planDropPrompt, type PlanDragRef } from './lib/planDrag'
 import { activityMeansWorking, allSlotsFinished, applyLoopWait, applyTurnProgress, clearProvisionalStall, detailMeansToolUse, recordTurnComplete, paneSignalResetKeys, loopWaitBackoffMs, loopWaitHonoured, isReplayedTurnComplete, parseEventMs, turnTextFingerprint, loopBackoffMs, loopContinueReady, loopSettleMs, loopStallVerdict, loopWaitingOnSubagents, LOOP_STALL_LIMIT, turnCompleteDone, turnEndsWithSentinel, type SlotSignal, type LoopWaitState } from './lib/completion'
 import { reorderByIds, reorderStrings, sortByIdOrder } from './lib/paneOrder'
 import { computeRangeSelection } from './lib/paneSelection'
-import { resolveDragBatch, reorderBatchByIds } from './lib/paneBatchDrag'
+import { resolveDragBatch, reorderBatchByIds, withFoldedSubtree } from './lib/paneBatchDrag'
 import { AGENT_SPECS, type PaneArgContext } from '@navide/plugin-shell'
 import {
   orderedAgentKeys,
@@ -212,8 +212,7 @@ import { planPaneCycle, type CycleDirection } from './lib/paneCycle'
 import {
   parseLegacyRunGroups,
   resolveActiveTab,
-  resolveManualSpawnGroupId,
-  resolveSpawnGroupId,
+  resolveReadySpawnGroupId,
   runGroupCreatedAt,
   groupPeers,
 } from './lib/runGroups'
@@ -2630,8 +2629,8 @@ async function createStandaloneRequestedPane(
   // strand the conversation as an orphan at the root.
   const runGroupId = mcpResumeId
     ? (resumableGroupId(req.resumeRunGroupId, workspacePath)
-        || resolveManualSpawnGroupId(runGroups.value, activeTab.value))
-    : resolveManualSpawnGroupId(runGroups.value, activeTab.value)
+        || resolveReadySpawnGroupId(runGroups.value, activeTab.value, runGroupsReady.value))
+    : resolveReadySpawnGroupId(runGroups.value, activeTab.value, runGroupsReady.value)
   const resumeSpawnedBy = mcpResumeId ? (req.resumeSpawnedBy ?? '') : ''
   const paneId = await spawnPane({
     agentKey: req.agentKey,
@@ -5080,7 +5079,7 @@ async function onHandleIssue(payload: {
 }): Promise<void> {
   const { agentKey, mode, issue, provider } = payload
   const kickoff = buildIssueKickoff(issue, provider, mode)
-  const spawnGroupId = resolveManualSpawnGroupId(runGroups.value, activeTab.value)
+  const spawnGroupId = resolveReadySpawnGroupId(runGroups.value, activeTab.value, runGroupsReady.value)
   const paneId = await spawnPane({
     agentKey: agentKey as AgentKey,
     roleKey: '' as RoleKey,
@@ -5850,8 +5849,9 @@ interface SpawnInternal {
    *  Only ever the immediate predecessor is needed — the backend flattens the
    *  chain, so A→B→C leaves both A and B pointing at C. */
   formerPaneIds?: string[]
-  /** Parent pane id for an agent-requested spawn (SPAWN block). Runtime-only
-   *  lineage for the spawn-depth/quota gate; never persisted. */
+  /** Parent pane id for an agent-requested spawn (SPAWN block). Drives the
+   *  spawn-depth/quota gate, and is mirrored into the pane record and the
+   *  spawn-history entry so the tree survives a restart. */
   spawnedBy?: string
   /** CLI account profile id for an isolated LOGIN pane: the backend spawns the
    *  CLI inside that profile's login home so signing in never touches the live
@@ -6127,6 +6127,10 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
       restoreMode: opts.restoreMode,
       sessionHomeId: pane.sessionHomeId,
       runGroupId: pane.runGroupId,
+      // Durable copy of the lineage. The pane record holds the authoritative
+      // one, but it does not outlive a pruned record — and resuming from
+      // Agent History is exactly the case where the record may be long gone.
+      spawnedBy: pane.spawnedBy,
     })
   } else {
     console.warn(
@@ -6265,7 +6269,7 @@ async function onManualSpawn(payload: SpawnPayload): Promise<string | null> {
   const target = payload.workspacePath || currentWorkspace.value
   const onScreen = normWs(target) === normWs(currentWorkspace.value)
   const spawnGroupId = onScreen
-    ? resolveSpawnGroupId(runGroups.value, activeTab.value, payload.runGroupId ?? '')
+    ? resolveReadySpawnGroupId(runGroups.value, activeTab.value, runGroupsReady.value, payload.runGroupId ?? '')
     : ''
   const paneId = await spawnPane({
     agentKey: payload.agentKey,
@@ -6423,7 +6427,7 @@ async function dispatchPlanToPane(relPath: string, agentKey: string): Promise<Pl
   // spawnPane via resolveCommand), then AWAIT the session-marker bootstrap
   // (onManualSpawn fires it void) so the marker protocol lands before —
   // never interleaved with — the plan prompt, and finally inject the prompt.
-  const spawnGroupId = resolveManualSpawnGroupId(runGroups.value, activeTab.value)
+  const spawnGroupId = resolveReadySpawnGroupId(runGroups.value, activeTab.value, runGroupsReady.value)
   const paneId = await spawnPane({
     agentKey,
     roleKey: '' as RoleKey,
@@ -6469,6 +6473,28 @@ async function dispatchPlanToPane(relPath: string, agentKey: string): Promise<Pl
     return { ok: false, reason: 'inject-failed' }
   }
   return { ok: true }
+}
+
+/** The parent a resumed conversation belongs back under, or '' when it was a
+ *  root.
+ *
+ *  Applied verbatim, exactly like the MCP resume path (createRequestedPane):
+ *  the id is scoped to this workspace's own records, and _rekey_spawned_by
+ *  keeps it pointing at the parent's CURRENT id across restores and rebuilds.
+ *  It is deliberately NOT filtered against the live pane list — a parent this
+ *  window cannot resolve may be live in another one, buildPaneLineage already
+ *  renders an unresolvable parent as a root, and the record has to keep naming
+ *  it or the next restore cannot put the pane back. */
+async function resumableParentId(historyPaneId: string, workspacePath: string): Promise<string> {
+  const resp = await sendQuiet<ProjectPayload>('project.peek', { workspace_path: workspacePath })
+  const recorded = (resp?.project?.panes ?? [])
+    .find((rec) => rec.pane_id === historyPaneId)?.spawned_by
+    // Only when the RECORD is missing, never when it says ''. An empty
+    // spawned_by is a positive statement that the pane was a root, and must
+    // not be overridden by a history entry written before it was re-parented.
+    ?? spawnHistory.value.find((e) => e.paneId === historyPaneId)?.spawnedBy
+    ?? ''
+  return recorded
 }
 
 // Resume an existing agent session by id (Manual Spawn → Resume button). Reuses
@@ -6519,7 +6545,14 @@ async function onManualResume(payload: { agentKey: string, workspacePath: string
     agentKey,
     buildResumeCommand(agentKey, sessionId, skipFlag, chatHistoryFile, modelRequest)
   )
-  const spawnGroupId = resolveManualSpawnGroupId(runGroups.value, activeTab.value)
+  const spawnGroupId = resolveReadySpawnGroupId(runGroups.value, activeTab.value, runGroupsReady.value)
+  // Resuming is putting a conversation back where it was, and where it was
+  // includes who opened it. Only Agent History knows which pane the session
+  // belonged to; the ad-hoc Resume field does not, and passes no id, so those
+  // resumes stay roots exactly as before.
+  const resumeSpawnedBy = payload.historyPaneId
+    ? await resumableParentId(payload.historyPaneId, workspacePath)
+    : ''
   const paneId = await spawnPane({
     agentKey: agentKey as AgentKey,
     roleKey: '' as RoleKey,
@@ -6530,6 +6563,7 @@ async function onManualResume(payload: { agentKey: string, workspacePath: string
     commandOverride,
     workspacePath,
     origin: 'manual',
+    spawnedBy: resumeSpawnedBy || undefined,
     runGroupId: runGroupId || spawnGroupId || undefined,
     isResume: true,
     skipRoleInjection: true,
@@ -6555,6 +6589,10 @@ async function onManualResume(payload: { agentKey: string, workspacePath: string
       session_home_id: panes.value.find((p) => p.id === paneId)?.sessionHomeId ?? '',
       run_group_id: runGroupId || spawnGroupId || undefined,
       output_log_file: panes.value.find((p) => p.id === paneId)?.outputLogFile ?? '',
+      // Must agree with where the pane was actually placed, or the next
+      // restore brings the resumed conversation back as a root. The backend
+      // writes this only when non-empty, so '' leaves the new record alone.
+      spawned_by: resumeSpawnedBy,
     })
     // The auto-title is the displayed name whenever there is no custom one, so
     // it has to survive the resume the same way custom names do — spawnPane
@@ -8209,7 +8247,7 @@ registerCommand('ui.pane.create', async (args) => {
       throw new Error(`名稱「${name}」已被其他 pane 使用，請換一個名稱`)
     }
   }
-  const runGroupId = resolveManualSpawnGroupId(runGroups.value, activeTab.value)
+  const runGroupId = resolveReadySpawnGroupId(runGroups.value, activeTab.value, runGroupsReady.value)
   const paneId = await spawnPane({
     agentKey,
     roleKey: '' as RoleKey,
@@ -9239,6 +9277,20 @@ function rekeyLineage(oldId: string, newId: string): void {
   for (const p of panes.value) {
     if (p.spawnedBy === oldId) p.spawnedBy = p.id === newId ? undefined : newId
   }
+  // Agent History keeps its own durable copy of the same pointer, and it
+  // outlives the pane record. Left behind, it would still name an id retired
+  // restarts ago — so a resume that fell back to history would rebuild the
+  // tree against a pane that no longer exists, which reads as "no parent" and
+  // flattens the branch. Reassigned rather than mutated in place so the
+  // persistence watcher sees the change and writes it to the workspace.
+  let touched = false
+  for (const e of spawnHistory.value) {
+    if (e.spawnedBy === oldId) {
+      e.spawnedBy = e.paneId === newId ? undefined : newId
+      touched = true
+    }
+  }
+  if (touched) spawnHistory.value = [...spawnHistory.value]
 }
 
 async function spawnRestoredPane(opts: RestoredPaneSpawnOptions): Promise<RestoredPaneSpawnResult | null> {
@@ -9473,11 +9525,16 @@ function buildExistingProjectInfo(payload: ProjectPayload | null): ExistingProje
 let lastWorkspaceCheck = { path: '', at: 0 }
 const WORKSPACE_RECHECK_MS = 1500
 
-async function onWorkspaceCheck(path: string): Promise<void> {
+async function onWorkspaceCheck(path: string, opts?: { force?: boolean }): Promise<void> {
   if (!path && currentWorkspace.value) return
   if (path) {
     const now = Date.now()
-    if (path === lastWorkspaceCheck.path && now - lastWorkspaceCheck.at < WORKSPACE_RECHECK_MS) return
+    // A switch's own check is never the repeat this guard is for: dropping it
+    // skips the group load, the pane restore and the orphan adoption together,
+    // leaving the window on the left workspace's groups with no later call
+    // obliged to fix it. Only the debounced twin is dropped — the record below
+    // still happens on the forced path, which is what drops it.
+    if (!opts?.force && path === lastWorkspaceCheck.path && now - lastWorkspaceCheck.at < WORKSPACE_RECHECK_MS) return
     lastWorkspaceCheck = { path, at: now }
   }
   const seq = ++workspaceCheckSeq
@@ -9832,6 +9889,44 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
   // reattach or detached child window hands back panes whose PTYs are alive.
   const fullRestore = onlyGroupId === undefined && !isDetachedWindow
 
+  // The run group a restored pane belongs in, following the lineage up when
+  // its own is empty.
+  //
+  // workspaceGroups sections the sidebar by run group and relies on an
+  // invariant set at spawn time: a child inherits its parent's group, so
+  // grouping can never separate the two. Records written before the group
+  // existed (or whose group was dropped) break it — and the fallbacks below
+  // then send parent and child to DIFFERENT sections (a pipeline parent to the
+  // restore group, an mcp child to ungrouped), which splits the tree on screen
+  // even though the lineage itself survived. Walking up restores the
+  // invariant; a pane with no parent is unaffected, and `seen` stops a record
+  // whose spawned_by chain loops.
+  const savedByPaneId = new Map(toRestore.map((rec) => [rec.pane_id, rec]))
+  const inheritedGroupId = (saved: ProjectPane): string => {
+    const own = (saved.run_group_id ?? '').trim()
+    if (own) return own
+    // An empty run_group_id does NOT mean "never assigned". Dragging a pane to
+    // the 手動 tab writes '' on purpose (movePaneToGroup), and so does
+    // deleting the last tab — the record cannot tell the two apart. Inheriting
+    // on every empty value would therefore undo the user's own placement on the
+    // next restart, silently. So this is limited to the one case whose fallback
+    // was already arbitrary: a pipeline pane with no group lands in
+    // ensureRestoreGroup(), a tab it never chose either way. Manual and mcp
+    // panes keep landing in the 手動 tab, which may be exactly where they
+    // were put.
+    if (saved.origin !== 'pipeline') return ''
+    const seen = new Set<string>([saved.pane_id])
+    let cur: ProjectPane | undefined =
+      saved.spawned_by ? savedByPaneId.get(saved.spawned_by) : undefined
+    while (cur && !seen.has(cur.pane_id)) {
+      seen.add(cur.pane_id)
+      const gid = (cur.run_group_id ?? '').trim()
+      if (gid) return gid
+      cur = cur.spawned_by ? savedByPaneId.get(cur.spawned_by) : undefined
+    }
+    return ''
+  }
+
   // Lazily create one group to house restored pipeline panes whose saved
   // run_group_id no longer maps to an existing tab (e.g. localStorage cleared
   // while project.json survived, or records predating run_group_id). Created
@@ -9910,7 +10005,7 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
       const sessionHomeId = sessionHomeIdFor(
         saved.agent, saved.pane_id, saved.session_home_id,
       )
-      const savedGid = saved.run_group_id || ''
+      const savedGid = inheritedGroupId(saved)
       const runGroupId = savedGid
         ? ensureSavedGroup(savedGid)
         : (saved.origin === 'pipeline' ? ensureRestoreGroup() : '')
@@ -9986,7 +10081,7 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
       // A pane with a saved group keeps it, recreating the tab if it is missing
       // (ensureSavedGroup). Only panes that never had a group fall back: pipeline
       // panes collapse into one restore group, manual panes go to the first tab.
-      const savedGid = saved.run_group_id || ''
+      const savedGid = inheritedGroupId(saved)
       const runGroupId = savedGid
         ? ensureSavedGroup(savedGid)
         : (saved.origin === 'pipeline' ? ensureRestoreGroup() : '')
@@ -10046,6 +10141,18 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
       if (saved.stopped) paneRefs[paneId]?.setStopped(true)
     }))
 
+    // rekeyLineage runs once per spawn, but these spawns are PARALLEL: a parent
+    // that finished first re-pointed only the children already in panes.value,
+    // and a child landing afterwards kept the retired id — a dead pointer no
+    // later pass would fix, which buildPaneLineage shows as a root. Re-key once
+    // more now that every restored pane is present and the old→new map is
+    // complete. Idempotent: the per-spawn call already handled whatever it saw,
+    // and rekeyLineage is a no-op for an id nothing points at any more.
+    toRestore.forEach((saved, idx) => {
+      const newId = restoredPaneIds[idx]
+      if (newId) rekeyLineage(saved.pane_id, newId)
+    })
+
     // The parallel spawns above push into panes.value in completion order, which
     // is nondeterministic — re-sort the restored panes back to the saved
     // project.panes order (toRestore mirrors it). Panes outside this restore
@@ -10083,6 +10190,9 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
       removedAt: saved.removed_at || undefined,
       removedTimeUnknown: !saved.removed_at || undefined,
       outputLogFile: saved.output_log_file || undefined,
+      // The record is being read right here, so take its lineage with it:
+      // this is the last point at which a closed pane's parent is known.
+      spawnedBy: saved.spawned_by || undefined,
     })
     backfilledIds.add(saved.pane_id)
   }
@@ -10804,6 +10914,10 @@ async function onConfirmReconnect(sessionId: string): Promise<void> {
     nameLocked: pane.nameLocked,
     autoName: pane.autoName,
     runGroupId: pane.runGroupId,
+    // A reconnect replaces the pane, so it has to carry the lineage across the
+    // same way a history resume does — without this the reattached pane comes
+    // back a root and onKill below hands its children to their grandparent.
+    historyPaneId: paneId,
   })
   if (ok) {
     await onKill(paneId)
@@ -11693,6 +11807,9 @@ async function onWorkspaceBrowse(path: string, opts?: { keepPanes?: boolean }): 
   currentMode.value = 'spawn'
   pipeline.workspacePath = path
   currentWorkspace.value = path
+  // Same tick, no await in between: the pair "which workspace / whose groups"
+  // must never be readable in disagreement.
+  _adoptGroupsForEnteredWorkspace(path)
   try {
     sessionStorage.setItem(WS_PATH_KEY, path)
     sessionStorage.setItem(WS_SELECTED_KEY, '1')
@@ -14502,6 +14619,16 @@ function projectPaneFromActive(pane: ActivePane): ProjectPane {
     auto_name_source: pane.autoNameSource,
     is_minimized: minimizedPanes.value.has(pane.id),
     is_muted: isPaneMuted(pane.id),
+    // Parity only: realize passes the live `placeholder.spawnedBy`, which
+    // shadows the value here, and nothing on that path reads `collapsed`. Both
+    // are written because this function claims to mirror the cold-restore
+    // record, and a claim that holds only by accident of another guard is one
+    // bad refactor from being false — the same reason `stopped` is set above.
+    // (The collapsed state genuinely IS lost across a reclaim, but the fix for
+    // that belongs in performRealizeRestoredPane, which moves minimized and
+    // muted onto the new id and not this.)
+    spawned_by: pane.spawnedBy,
+    collapsed: collapsedPanes.value.has(pane.id),
     output_log_file: pane.outputLogFile,
     // The realize path rebuilds the launch flags from these two. Leaving them
     // out is silent — the pane comes back on the vendor default, which looks
@@ -14674,6 +14801,36 @@ async function reclaimPanesNow(paneIds?: string[]): Promise<number> {
   return reclaimed
 }
 
+/** The reclaimable count per workspace, for the sidebar's project menus.
+ *
+ *  Window-wide counts would be wrong on a heading: this window can hold several
+ *  projects, and the menu opens on one of them — the same reason the rebuild
+ *  count is keyed by path. */
+const reclaimableByWorkspace = computed<Record<string, number>>(() => {
+  const out: Record<string, number> = {}
+  const ids = new Set(reclaimableNowIds.value)
+  for (const p of panes.value) {
+    if (!ids.has(p.id)) continue
+    const key = normWs(p.workspacePath)
+    out[key] = (out[key] ?? 0) + 1
+  }
+  return out
+})
+
+/** "Reclaim this project's CLIs": every reclaimable pane in one workspace.
+ *
+ *  Same re-check and same refusal notice as the per-pane menu item — the count
+ *  behind the label comes from a computed that a queued message or a stage
+ *  watcher never invalidates, so a row can look live and still be turned down. */
+async function onReclaimWorkspacePanes(path: string): Promise<void> {
+  const key = normWs(path)
+  const ids = reclaimableNowIds.value.filter(
+    (id) => normWs(panes.value.find((p) => p.id === id)?.workspacePath ?? '') === key
+  )
+  if (ids.length && (await reclaimPanesNow(ids))) return
+  notifyRestore.toast(i18n.global.t('resource.reclaim-blocked'), { type: 'info' })
+}
+
 onMounted(() => {
   _idleReclaimTimer = window.setInterval(() => { void sweepIdlePanes() }, IDLE_RECLAIM_SWEEP_MS)
 })
@@ -14747,6 +14904,20 @@ const applyingRemote = ref(false)
 // the window every time.
 const runGroupsOwner = ref<string>('')
 
+/** True while runGroups is known to describe the workspace on screen.
+ *
+ *  False for the stretch of a switch the owner has not been claimed for — the
+ *  same window _saveRunGroups refuses to write in. A spawn reads this before
+ *  stamping a group onto a pane: the ids on screen belong to the workspace
+ *  being left, and that stamp is persisted into the entered workspace's pane
+ *  record, where nothing later can tell it apart from a real assignment.
+ */
+const runGroupsReady = computed(
+  () =>
+    !!currentWorkspace.value &&
+    normWs(runGroupsOwner.value) === normWs(currentWorkspace.value),
+)
+
 /** Every held workspace's run groups, keyed by normWs(path).
  *
  *  runGroups only ever describes the workspace on screen. The sidebar lists
@@ -14787,12 +14958,48 @@ function _forgetRunGroups(path: string): void {
   runGroupsByWorkspace.value = next
 }
 
+/** Hand the on-screen group state to the workspace being entered, in the same
+ *  tick currentWorkspace starts naming it.
+ *
+ *  Everything that draws the tab strip is a computed over runGroups, so the
+ *  gap between the two assignments is not dead time: the first read inside it
+ *  crosses the entered workspace's panes with the left workspace's groups, and
+ *  that is what the tab strip renders until the load lands. This window's own
+ *  cache of the entered workspace is the closest true answer available that
+ *  early — and where there is none, an empty list is still an honest one.
+ *
+ *  Ownership deliberately stays unclaimed. The cache can be empty (a workspace
+ *  this window has never viewed) or behind a peer window's edit, and claiming
+ *  it here would let _saveRunGroups write that back — [] included, which is
+ *  the wipe the owner guard exists to prevent. Readable, not writable, until
+ *  _loadRunGroups brings the authoritative list and claims the owner itself.
+ */
+function _adoptGroupsForEnteredWorkspace(path: string): void {
+  const cached = runGroupsByWorkspace.value[normWs(path)] ?? []
+  runGroupsOwner.value = ''
+  runGroups.value = [...cached]
+  currentRunGroupId.value = cached[cached.length - 1]?.id ?? ''
+  // Not resolveActiveTab(cached, activeTab.value): keeping the left
+  // workspace's tab is the same leak by another route, since a spawn stamps
+  // the active tab's id onto the pane it creates.
+  activeTab.value = resolveActiveTab(cached, '')
+}
+
 function _saveRunGroups(): void {
   if (applyingRemote.value || isDetachedWindow) return
   const ws = currentWorkspace.value
   if (!ws) return
-  // Never write one workspace's groups into another's record.
-  if (normWs(runGroupsOwner.value) !== normWs(ws)) return
+  // Never write one workspace's groups into another's record. Dropped saves
+  // are indistinguishable from saves that worked until the next load
+  // contradicts them, so leave a trace rather than a silent return.
+  if (normWs(runGroupsOwner.value) !== normWs(ws)) {
+    recordDiagnostic({
+      level: 'warn',
+      code: 'runGroups.ownerMismatch',
+      message: `run groups not saved: loaded for "${runGroupsOwner.value || '(none)'}", viewing "${ws}"`,
+    })
+    return
+  }
   // Every group edit funnels through here, so mirroring the write is what
   // keeps the sidebar's copy of this workspace true after you switch away.
   _cacheRunGroups(ws, runGroups.value)
@@ -15133,6 +15340,16 @@ async function reparentPane(paneId: string, spawnedBy: string): Promise<void> {
     throw new Error(String(resp?.error?.message ?? resp?.error ?? 'reparent refused'))
   }
   pane.spawnedBy = spawnedBy || undefined
+  // Agent History keeps its own durable copy of the same pointer, and that is
+  // what a resume reads once the pane record has been pruned. Left unwritten,
+  // a pane dragged out to the root would quietly reappear under its OLD parent
+  // the next time it was resumed from history — the drag would look like it
+  // had been undone. Reassigned so the persistence watcher writes it out.
+  const histEntry = spawnHistory.value.find((e) => e.paneId === paneId)
+  if (histEntry) {
+    histEntry.spawnedBy = spawnedBy || undefined
+    spawnHistory.value = [...spawnHistory.value] // trigger save
+  }
   // The messaging registry is the only copy of spawned_by cli_whoami reads,
   // and this mirror is the only writer of it — left alone, the child keeps
   // answering with the old parent until its next rename or reconnect.
@@ -15158,6 +15375,11 @@ async function persistPaneOrder(): Promise<void> {
 async function persistTabOrder(): Promise<void> {
   const ws = currentWorkspace.value
   if (!ws) return
+  // The order is read off runGroups, so it is only this workspace's order once
+  // the list is. Writing it unowned would file the order of a list this
+  // workspace has not been shown to hold — and its companion _saveRunGroups
+  // would have declined, leaving the two records disagreeing.
+  if (!runGroupsReady.value) return
   await sendQuiet('project.set_tab_order', {
     workspace_path: ws,
     tab_order: runGroups.value.map((g) => g.id),
@@ -15401,7 +15623,14 @@ async function onUserSelectTab(tabId: string): Promise<void> {
 watch(activeTab, (v) => {
   // Detached child windows never own the shared activeTab state; a
   // remote-applied runGroups change must not echo its tab fallback back.
-  if (!isDetachedWindow && !applyingRemote.value && v && currentWorkspace.value) {
+  //
+  // runGroupsReady for the same reason _saveRunGroups checks the owner, and it
+  // is the tab that made the cost concrete: mid-switch this fired with the tab
+  // of the workspace being LEFT and filed it under the one being entered,
+  // racing the very read that was fetching the real one. Handing the entered
+  // workspace its own cached tab instead only changes which wrong value gets
+  // written — the write itself has to wait for the load.
+  if (!isDetachedWindow && !applyingRemote.value && v && currentWorkspace.value && runGroupsReady.value) {
     void sendQuiet('project.set_ui_state', {
       workspace_path: currentWorkspace.value,
       active_tab: v,
@@ -15440,6 +15669,25 @@ function restorePane(id: string): void {
  *  arrangement wherever it lands. */
 function paneDragBatch(paneId: string): string[] {
   return resolveDragBatch(paneId, selectedPaneIds.value, panes.value.map((p) => p.id))
+}
+
+/** The batch for a drag started in one of the auxiliary lists (Auto, Spotlight,
+ *  Fullscreen PiP). A folded row stands for the family it hides, so grabbing it
+ *  carries the whole subtree — otherwise a reorder or a drop in another window
+ *  moves the parent alone and leaves the children it was hiding behind.
+ *
+ *  The carried set also becomes the selection, the same way the sidebar's
+ *  folded rows do it: every drop consumer (reorderPane, the tab drop,
+ *  cliPaneDragEnd) re-derives the batch from `selectedPaneIds`, so the
+ *  selection is what makes the descendants travel rather than the payload.
+ *  Only THIS row's subtree joins — an expanded parent elsewhere in the
+ *  selection keeps the single-row drag it always had. */
+function auxiliaryDragBatch(paneId: string, folded: boolean): string[] {
+  const batch = paneDragBatch(paneId)
+  if (!folded) return batch
+  const full = withFoldedSubtree(paneId, batch, panes.value)
+  if (full !== batch) selectedPaneIds.value = new Set(full)
+  return full
 }
 
 /** Drag-reorder: move the pane `fromId` — and the rest of its multi-selection,
@@ -15531,7 +15779,7 @@ const {
       conversationLogPath: pane.outputLogFile,
     }
   },
-  batchFor: paneDragBatch,
+  batchFor: auxiliaryDragBatch,
   reorder: reorderPane,
   handOff: (paneId, screenX, screenY) => {
     window.agentTeam?.cliPaneDragEnd?.(paneId, screenX, screenY, paneDragBatch(paneId))
@@ -15857,7 +16105,10 @@ async function switchToWorkspace(path: string): Promise<void> {
     // workspace with the old run groups, so every tab filter misses and the list
     // and grid blink empty on the way through. The debounced call still arrives
     // and is a no-op by then.
-    await onWorkspaceCheck(path)
+    //
+    // Forced past the repeat-check guard: switching A→B→A inside its 1.5s
+    // window made this call the repeat it drops, and the load never happened.
+    await onWorkspaceCheck(path, { force: true })
     // The focused pane is very likely one this window just stopped showing.
     // Keep it if it survived the filter — the switch stayed within one pane's
     // world and nothing needs to move. Otherwise select nothing: entering a
@@ -16234,6 +16485,41 @@ function setWorkspaceSubtreesCollapsed(path: string, collapse: boolean): void {
   const next = new Set(collapsedPanes.value)
   const changed: string[] = []
   for (const id of withChildren) {
+    if (collapse === next.has(id)) continue
+    if (collapse) next.add(id)
+    else next.delete(id)
+    changed.push(id)
+  }
+  if (!changed.length) return
+  collapsedPanes.value = next
+  for (const id of changed) {
+    backend.send('project.set_pane_collapsed', {
+      workspace_path: path,
+      pane_id: id,
+      collapsed: collapse,
+    })
+  }
+  syncViews()
+}
+
+/** The same fold, one level down: the run group heading's button.
+ *
+ *  It is handed the ids rather than deriving them. Grouping is the sidebar's
+ *  own layer — App has no list of which panes a heading drew — so the rows
+ *  that heading actually showed are what travel here. Kept beside its
+ *  workspace twin rather than folded into it: the two differ only in how the
+ *  parents are chosen, and sharing the write would put the workspace path's
+ *  guarantees behind a second caller's argument.
+ *
+ *  Only parents arrive, for the reason spelled out above: a leaf carries no
+ *  subtree, so a persisted flag on one records a state the sidebar can never
+ *  show.
+ */
+function setPaneSubtreesCollapsed(path: string, paneIds: string[], collapse: boolean): void {
+  if (!paneIds.length) return
+  const next = new Set(collapsedPanes.value)
+  const changed: string[] = []
+  for (const id of paneIds) {
     if (collapse === next.has(id)) continue
     if (collapse) next.add(id)
     else next.delete(id)
@@ -18044,6 +18330,7 @@ function paneIsCommander(p: ActivePane): boolean {
       :selected-pane-ids="selectedPaneIds"
       :can-rebuild-all="rebuildableAllPaneCount > 0"
       :rebuildable-by-workspace="rebuildableByWorkspace"
+      :reclaimable-by-workspace="reclaimableByWorkspace"
       :rebuilding-all="rebuildingTabPanes"
       :detached-window="isDetachedWindow"
       @spawn="onManualSpawn"
@@ -18053,10 +18340,12 @@ function paneIsCommander(p: ActivePane): boolean {
       @toggle-collapsed="togglePaneCollapsed"
       @toggle-workspace="toggleWorkspaceCollapsed"
       @collapse-workspace-subtrees="setWorkspaceSubtreesCollapsed"
+      @collapse-pane-subtrees="setPaneSubtreesCollapsed"
       @open-workspace-picker="workspacePickerOpen = true"
       @switch-to-workspace="switchToWorkspace"
       @close-workspace="closeWorkspace"
       @close-workspace-keep-panes="closeWorkspaceKeepPanes"
+      @reclaim-workspace-panes="onReclaimWorkspacePanes"
       @detach-workspace="detachWorkspace"
       @reorder-workspace="reorderWorkspace"
       @reveal-workspace-folder="revealWorkspaceFolder"
@@ -18526,7 +18815,7 @@ function paneIsCommander(p: ActivePane): boolean {
             :style="{ marginLeft: paneListIndent(p.ancestors.length) }"
             draggable="true"
             :title="$t('label.drag-reorder')"
-            @dragstart="onAuxiliaryPaneDragStart($event, p.id)"
+            @dragstart="onAuxiliaryPaneDragStart($event, p.id, p.descendantCount !== 0 && !p.expanded)"
             @dragend="onAuxiliaryPaneDragEnd"
             @dragover="onAuxiliaryPaneDragOver($event, p.id)"
             @dragenter="onAuxiliaryPaneDragOver($event, p.id)"
@@ -18622,7 +18911,7 @@ function paneIsCommander(p: ActivePane): boolean {
           :class="{ 'spotlight-thumb--active': p.id === effectiveFocusPaneId, 'spotlight-thumb--selected': selectedPaneIds.has(p.id), 'pane-drag-over': auxiliaryDragOverPaneId === p.id, 'pane-dragging': auxiliaryDraggingBatchIds.includes(p.id) }"
           draggable="true"
           :title="$t('label.drag-reorder')"
-          @dragstart="onAuxiliaryPaneDragStart($event, p.id)"
+          @dragstart="onAuxiliaryPaneDragStart($event, p.id, p.descendantCount !== 0 && !p.expanded)"
           @dragend="onAuxiliaryPaneDragEnd"
           @dragover="onAuxiliaryPaneDragOver($event, p.id)"
           @dragenter="onAuxiliaryPaneDragOver($event, p.id)"
@@ -18728,7 +19017,7 @@ function paneIsCommander(p: ActivePane): boolean {
             :style="{ marginLeft: paneListIndent(p.ancestors.length) }"
             draggable="true"
             :title="$t('label.drag-reorder')"
-            @dragstart="onAuxiliaryPaneDragStart($event, p.id)"
+            @dragstart="onAuxiliaryPaneDragStart($event, p.id, p.descendantCount !== 0 && !p.expanded)"
             @dragend="onAuxiliaryPaneDragEnd"
             @dragover="onAuxiliaryPaneDragOver($event, p.id)"
             @dragenter="onAuxiliaryPaneDragOver($event, p.id)"
@@ -18943,13 +19232,13 @@ function paneIsCommander(p: ActivePane): boolean {
           :class="{ disabled: paneCtxView?.status !== 'running' || !paneCtxView?.roleKey }"
           @click="onReinject(paneCtxMenu!.paneId); closePaneCtxMenu()"
         >{{ $t('action.reapply-role') }}</div>
+        <div class="pane-ctx-sep"></div>
         <div
           class="pane-ctx-item"
           :class="{ disabled: !ctxReclaimable }"
           :title="$t('action.reclaim-title')"
           @click="reclaimPaneFromMenu(paneCtxMenu!.paneId)"
         >{{ $t('action.reclaim') }}</div>
-        <div class="pane-ctx-sep"></div>
         <div
           v-if="ctxDescendantIds.length"
           class="pane-ctx-item danger"

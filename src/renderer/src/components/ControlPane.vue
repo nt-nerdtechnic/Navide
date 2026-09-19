@@ -370,6 +370,10 @@ interface Props {
    *  canRebuildAll above answers for the one on screen, which is what the
    *  toolbar's copy of the button means. */
   rebuildableByWorkspace?: Record<string, number>
+  /** Reclaimable pane counts keyed by workspace path, trimmed the same way.
+   *  Per workspace for the same reason the rebuild count is: the menu sits on
+   *  one heading and must answer for that project, not the one on screen. */
+  reclaimableByWorkspace?: Record<string, number>
   rebuildingAll?: boolean
   /** Issue dispatch/handle status — forwarded to GitPane for badges. */
   issueHandoffs?: Record<string, { paneId: string; mode: string; state: string }>
@@ -929,6 +933,14 @@ function wsCanRebuild(path: string): boolean {
   return (props.rebuildableByWorkspace?.[key] ?? 0) > 0
 }
 
+/** How many CLIs in this workspace a reclaim would take right now. Drives both
+ *  the menu item's count and its greyed-out state; the guards behind the number
+ *  live in idleReclaim.ts, and App owns the count. */
+function wsReclaimableCount(path: string): number {
+  const key = (path ?? '').replace(/\/+$/, '')
+  return props.reclaimableByWorkspace?.[key] ?? 0
+}
+
 /** One workspace's rows, split into run groups and resolved to panes.
  *
  *  A single ungrouped section renders WITHOUT a heading: a workspace where
@@ -1037,6 +1049,10 @@ const emit = defineEmits<{
    *  heading itself open. App owns the pane state and persists it, the same
    *  way it owns 'toggle-collapsed'. */
   (e: 'collapse-workspace-subtrees', path: string, collapse: boolean): void
+  /** Fold/unfold every lineage subtree inside ONE run group. The rows are
+   *  named rather than derived from the workspace: grouping is the sidebar's
+   *  own layer, so App has no list of its own to re-derive them from. */
+  (e: 'collapse-pane-subtrees', path: string, paneIds: string[], collapse: boolean): void
   /** Bring a workspace to the front — focus its window if one has it open,
    *  otherwise open it. */
   /** Open a new agent in a workspace that is not this window's. */
@@ -1055,6 +1071,8 @@ const emit = defineEmits<{
   /** From a workspace heading: that workspace. From the toolbar: undefined,
    *  meaning the workspace on screen. */
   (e: 'rebuild-all', workspacePath?: string): void
+  /** Reclaim every reclaimable CLI in this workspace at once. */
+  (e: 'reclaim-workspace-panes', workspacePath: string): void
   (e: 'restore', paneId: string): void
   (e: 'context-menu', paneId: string, ev: MouseEvent): void
   (e: 'pipeline-start', payload: { task: string; workspacePath: string; pipelineId?: string }): void
@@ -2122,6 +2140,64 @@ function toggleGroup(wsPath: string, id: string): void {
   collapsedGroups.value = next
 }
 
+/** One run-group section as the list draws it. */
+type GroupSection = ReturnType<typeof groupSectionsOf>[number]
+
+/** The rows of one run group that HAVE a subtree to fold.
+ *
+ *  The same judgement foldableGroupsOf makes one level up: a leaf carries no
+ *  subtree, so counting it would leave the button reading "expand" over a
+ *  group where nothing on screen is folded. */
+function foldableRowsOf(g: GroupSection): GroupSection['rows'] {
+  return g.rows.filter((r) => r.hasChildren)
+}
+
+/** Whether this group already has every subtree inside it folded. */
+function isGroupFolded(g: GroupSection): boolean {
+  const rows = foldableRowsOf(g)
+  return rows.length > 0 && rows.every((r) => r.collapsed)
+}
+
+/** Whether this group has anything to fold at all. A group of leaves gets no
+ *  button rather than one that does nothing when pressed. */
+function canFoldGroup(g: GroupSection): boolean {
+  return foldableRowsOf(g).length > 0
+}
+
+/** Fold or unfold every lineage subtree inside ONE run group.
+ *
+ *  The run-group twin of toggleWorkspaceFold, and the same single-toggle
+ *  judgement: with everything already folded, a "collapse" that does nothing
+ *  is a button that looks broken, so the label and icon follow the state.
+ *
+ *  The heading itself is left alone on purpose — the caret beside it is what
+ *  hides the group; this empties the group without hiding it.
+ *
+ *  It names the rows rather than letting App re-derive them: these are the
+ *  rows the list actually drew under this heading, so a pane that has moved
+ *  to another group cannot be folded by the group it left. */
+function toggleGroupFold(ws: WorkspaceGroupRow | null, g: GroupSection): void {
+  if (!ws || !canFoldGroup(g)) return
+  const collapse = !isGroupFolded(g)
+  emit(
+    'collapse-pane-subtrees',
+    ws.path,
+    foldableRowsOf(g).map((r) => r.pane.id),
+    collapse
+  )
+}
+
+/** The group caret's click, carrying the same two gestures as the workspace
+ *  caret one level up: plain click folds the group itself, Alt/Option+click
+ *  reaches the fold button beside it. */
+function onGrpCaretClick(ws: WorkspaceGroupRow | null, g: GroupSection, ev: MouseEvent): void {
+  if (ev.altKey) {
+    toggleGroupFold(ws, g)
+    return
+  }
+  toggleGroup(ws?.path ?? '', g.id)
+}
+
 /** The run groups of one workspace that HAVE a heading to fold.
  *
  *  A workspace whose panes belong to no run group renders one nameless
@@ -2376,7 +2452,7 @@ function startWorkspaceRenameFromMenu(): void {
   startWorkspaceRename(m.path)
 }
 
-type WorkspaceActionKind = 'reveal' | 'copy' | 'close' | 'close-keep-panes'
+type WorkspaceActionKind = 'reveal' | 'copy' | 'close' | 'close-keep-panes' | 'reclaim'
 
 /** The action itself, addressed by path so both of a heading's menus can run
  *  it: the row's right-click menu and the ⋯ overflow. Kept apart from either
@@ -2387,6 +2463,7 @@ function workspaceAction(kind: WorkspaceActionKind, path: string): void {
   if (kind === 'reveal') emit('reveal-workspace-folder', path)
   else if (kind === 'copy') void navigator.clipboard?.writeText(path)
   else if (kind === 'close-keep-panes') emit('close-workspace-keep-panes', path)
+  else if (kind === 'reclaim') emit('reclaim-workspace-panes', path)
   else emit('close-workspace', path)
 }
 
@@ -3575,10 +3652,10 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
         >
           <button
             class="ws-grp-caret"
-            :title="isGroupCollapsed(ws?.path ?? '', g.id)
+            :title="`${isGroupCollapsed(ws?.path ?? '', g.id)
               ? $t('action.expand-subtree')
-              : $t('action.collapse-subtree')"
-            @click.stop="toggleGroup(ws?.path ?? '', g.id)"
+              : $t('action.collapse-subtree')}${canFoldGroup(g) ? ` · ${$t('action.fold-workspace-hint')}` : ''}`"
+            @click.stop="onGrpCaretClick(ws, g, $event)"
           >{{ isGroupCollapsed(ws?.path ?? '', g.id) ? '›' : '⌄' }}</button>
           <span
             class="ws-grp-key"
@@ -3591,6 +3668,35 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
                here — on a different scale, since the key has four states and a
                status has nine — reads as two signals disagreeing. -->
           <span class="ws-count">{{ g.rows.length }}</span>
+          <!-- Folds what hangs BELOW this heading, leaving the group itself on
+               screen — the twin of the workspace heading's fold button, same
+               glyph, one level down. Unlike that one it is absent rather than
+               disabled where there is nothing to fold: a group of leaves is
+               the common case at this depth, and the row can spare a button's
+               width only while it is doing something. -->
+          <button
+            v-if="ws && canFoldGroup(g)"
+            class="ws-grp-fold"
+            :title="isGroupFolded(g) ? $t('action.expand-group-tree') : $t('action.collapse-group-tree')"
+            :aria-label="isGroupFolded(g) ? $t('action.expand-group-tree') : $t('action.collapse-group-tree')"
+            @click.stop="toggleGroupFold(ws, g)"
+          >
+            <svg
+              width="13"
+              height="13"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <rect x="4.5" y="1.5" width="10" height="10" rx="1" />
+              <rect x="1.5" y="4.5" width="10" height="10" rx="1" fill="var(--bg-base)" />
+              <path :d="isGroupFolded(g) ? 'M4 9.5h5M6.5 7v5' : 'M4 9.5h5'" />
+            </svg>
+          </button>
           <!-- The sidebar's own entry point: ＋ here opens an agent in THIS
                group, which the stage tab bar cannot express — it can only open
                into whichever group it is currently showing. Management (rename,
@@ -3815,6 +3921,21 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
             <span>{{ r.name }}</span>
           </button>
         </template>
+        <!-- Free the whole project's memory without letting go of it: every
+             idle CLI here ends and leaves a click-to-resume placeholder. Its
+             own section, above the closing rows, because it is the one row
+             that takes nothing away permanently. -->
+        <div class="ws-add-div"></div>
+        <button
+          class="ws-ctx-opt"
+          :disabled="wsReclaimableCount(wsMenu.path) === 0"
+          :title="$t('action.reclaim-workspace-title')"
+          @click="wsMenuAction('reclaim')"
+        >
+          {{ wsReclaimableCount(wsMenu.path) > 0
+            ? $t('action.reclaim-workspace-count', { count: wsReclaimableCount(wsMenu.path) })
+            : $t('action.reclaim-workspace') }}
+        </button>
         <!-- The primary workspace is what this window was opened with; closing
              it would leave the window with no root. Switch or close the window
              instead. -->
@@ -3884,6 +4005,24 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
             </svg>
           </span>
           <span>{{ $t('action.detach-workspace') }}</span>
+        </button>
+
+        <div class="ws-add-div"></div>
+        <button
+          class="ws-more-opt"
+          :disabled="wsReclaimableCount(wsMoreMenuPath) === 0"
+          :title="$t('action.reclaim-workspace-title')"
+          @click="wsMoreAction('reclaim')"
+        >
+          <span class="ws-more-ico">
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M13 8a5 5 0 1 1-1.6-3.7" />
+              <path d="M13.5 2v3h-3" />
+            </svg>
+          </span>
+          <span>{{ wsReclaimableCount(wsMoreMenuPath) > 0
+            ? $t('action.reclaim-workspace-count', { count: wsReclaimableCount(wsMoreMenuPath) })
+            : $t('action.reclaim-workspace') }}</span>
         </button>
 
         <!-- Last, behind their own rule, and in danger colour: the two rows
@@ -5962,7 +6101,8 @@ button.icon-btn.muted:hover {
   text-align: left;
   cursor: pointer;
 }
-.ws-ctx-opt:hover { background: var(--bg-hover, rgb(255 255 255 / 7%)); }
+.ws-ctx-opt:hover:not(:disabled) { background: var(--bg-hover, rgb(255 255 255 / 7%)); }
+.ws-ctx-opt:disabled { opacity: 0.4; cursor: default; }
 /* A menu row, not a button. `button.danger` elsewhere paints a filled red
    background with light text; this selector is more specific and was only
    overriding the colour, leaving red on red — the label vanished. */
@@ -5970,7 +6110,7 @@ button.icon-btn.muted:hover {
   background: none;
   color: var(--danger-bright, #e05252);
 }
-.ws-ctx-opt.danger:hover { background: var(--danger-subtle, rgb(224 82 82 / 12%)); }
+.ws-ctx-opt.danger:hover:not(:disabled) { background: var(--danger-subtle, rgb(224 82 82 / 12%)); }
 /* ── Run group layer ────────────────────────────────────────────────────────
    Still not another step of indentation — indentation is already spent on
    parent/child panes, and a third level would push an MCP child's name past
@@ -6082,6 +6222,30 @@ button.icon-btn.muted:hover {
 @media (prefers-reduced-motion: reduce) {
   .ws-grp-add { transition: none; }
 }
+/* The workspace fold button one level down. Visible at rest rather than on
+   hover like the ＋ beside it: it is the same control as .ws-fold and has to
+   be as findable here as it is there. The auto margin moves to this button
+   when it is present, so the two stay one pair at the right edge. */
+.ws-grp-fold {
+  flex: none;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  line-height: 1;
+  color: var(--text-muted);
+  opacity: 0.65;
+}
+.ws-grp-fold svg { display: block; }
+.ws-grp:hover .ws-grp-fold { opacity: 1; }
+.ws-grp-fold:hover { color: var(--text-bright); }
+.ws-grp-fold + .ws-grp-add { margin-left: 0; }
 /* A rail down the rows — but read the history before touching its colour.
    The first attempt was a COLOURED stripe, meant to tell you which group you
    were in once its heading had scrolled away. Then the colour became the

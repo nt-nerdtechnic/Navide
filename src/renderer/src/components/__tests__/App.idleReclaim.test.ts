@@ -242,3 +242,42 @@ describe('reclaim in the pane context menu', () => {
     expect(handler).toContain('resource.reclaim-blocked')
   })
 })
+
+// The project-level entry point: one row on a workspace heading's menus that
+// reclaims every reclaimable CLI in THAT project. It spans two files, so what
+// rots is the wiring between them — the count App publishes, the prop the menu
+// reads, and the event that comes back.
+describe('reclaim a whole workspace from the sidebar', () => {
+  const controlPane = readFileSync(
+    resolve(__dirname, '../ControlPane.vue'),
+    'utf8'
+  )
+
+  it('counts reclaimable panes per workspace, not window-wide', () => {
+    const counts = block('const reclaimableByWorkspace = computed', '/** "Reclaim this project')
+    expect(counts).toContain('reclaimableNowIds.value')
+    expect(counts).toContain('normWs(p.workspacePath)')
+    expect(appSource).toContain(':reclaimable-by-workspace="reclaimableByWorkspace"')
+  })
+
+  // Reclaiming another project's panes from this heading would be the bug the
+  // per-workspace rebuild count was added to fix.
+  it('reclaims only the panes of the workspace that was clicked', () => {
+    const handler = block('async function onReclaimWorkspacePanes(', 'onMounted(() => {')
+    expect(handler).toContain('reclaimableNowIds.value.filter(')
+    expect(handler).toContain('normWs(panes.value.find')
+    expect(handler).toContain('reclaimPanesNow(ids)')
+    // Same refusal notice the per-pane item shows: the count can go stale.
+    expect(handler).toContain('resource.reclaim-blocked')
+    expect(appSource).toContain('@reclaim-workspace-panes="onReclaimWorkspacePanes"')
+  })
+
+  it('offers the row in both of a heading\'s menus, greyed out at zero', () => {
+    expect(controlPane).toContain("reclaimableByWorkspace?: Record<string, number>")
+    expect(controlPane).toContain("(e: 'reclaim-workspace-panes', workspacePath: string): void")
+    expect(controlPane).toContain("wsMenuAction('reclaim')")
+    expect(controlPane).toContain("wsMoreAction('reclaim')")
+    expect(controlPane).toContain('wsReclaimableCount(wsMenu.path) === 0')
+    expect(controlPane).toContain('wsReclaimableCount(wsMoreMenuPath) === 0')
+  })
+})

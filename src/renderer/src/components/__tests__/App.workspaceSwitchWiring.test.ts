@@ -30,9 +30,12 @@ function body(name: string, endMarker?: string): string {
 
 describe('workspace switch — how the parts fit together', () => {
   it('picks the focus only after restore has put the panes back', () => {
+    // Forced: the switch's own check must outlive the repeat-check guard, or
+    // A→B→A inside 1.5s enters a workspace whose groups never load.
     const sw = body('switchToWorkspace')
-    expect(sw.indexOf('await onWorkspaceCheck(path)')).toBeGreaterThan(-1)
-    expect(sw.indexOf('await onWorkspaceCheck(path)')).toBeLessThan(sw.indexOf('tabVisiblePanes.value'))
+    const checkAt = sw.indexOf('await onWorkspaceCheck(path, { force: true })')
+    expect(checkAt).toBeGreaterThan(-1)
+    expect(checkAt).toBeLessThan(sw.indexOf('tabVisiblePanes.value'))
   })
 
   it('drops the second check of one switch', () => {

@@ -208,3 +208,74 @@ describe('ControlPane – the buttons on a workspace heading', () => {
   })
 
 })
+
+// "Reclaim this project's CLIs" — the batch the pane menu's Reclaim does one at
+// a time. It is on both of a heading's menus, and both must answer for the
+// heading they hang off: a window can hold several projects, and reclaiming
+// the wrong one's CLIs is the same class of bug the two tests above pin down
+// for ↻ and history.
+describe('ControlPane – reclaim a whole workspace', () => {
+  let wrapper: VueWrapper
+  afterEach(() => wrapper?.unmount())
+
+  /** Right-click the nth heading and read its menu rows by label. */
+  const ctxOf = async (w: VueWrapper, n: number) => {
+    await w.findAll('.ws-head')[n].trigger('contextmenu')
+    const opts = w.findAll('.ws-ctx-opt')
+    const byLabel = (key: string) => {
+      const hit = opts.find((o) => o.text() === key)
+      if (!hit) throw new Error(`no row "${key}"; menu reads: ${opts.map((o) => o.text()).join(' | ')}`)
+      return hit
+    }
+    return {
+      all: opts,
+      get reclaim() { return byLabel('action.reclaim-workspace-count') },
+      get reclaimEmpty() { return byLabel('action.reclaim-workspace') },
+    }
+  }
+  const moreReclaim = async (w: VueWrapper, n: number) => {
+    const acts = await actsOf(w, n)
+    const hit = acts.all.find((o) => o.text().startsWith('action.reclaim-workspace'))
+    if (!hit) throw new Error(`no ⋯ reclaim row; menu reads: ${acts.all.map((o) => o.text()).join(' | ')}`)
+    return hit
+  }
+
+  it('reclaims the workspace whose heading was clicked, from the ⋯ menu', async () => {
+    wrapper = mountWith({ reclaimableByWorkspace: { [A]: 1, [B]: 2 } })
+    await (await moreReclaim(wrapper, 1)).trigger('click')
+    expect(wrapper.emitted('reclaim-workspace-panes')).toEqual([[B]])
+  })
+
+  it('reclaims the workspace whose heading was right-clicked', async () => {
+    wrapper = mountWith({ reclaimableByWorkspace: { [A]: 1, [B]: 2 } })
+    await (await ctxOf(wrapper, 1)).reclaim.trigger('click')
+    expect(wrapper.emitted('reclaim-workspace-panes')).toEqual([[B]])
+  })
+
+  // Both sides in one mount: B has panes to reclaim and A has none, so a row
+  // that ignored its own workspace would fail whichever way it was wired.
+  it('enables the row per workspace, in both menus', async () => {
+    wrapper = mountWith({ reclaimableByWorkspace: { [B]: 2 } })
+    expect((await moreReclaim(wrapper, 0)).attributes('disabled')).toBeDefined()
+    expect((await moreReclaim(wrapper, 1)).attributes('disabled')).toBeUndefined()
+    expect((await ctxOf(wrapper, 0)).reclaimEmpty.attributes('disabled')).toBeDefined()
+    expect((await ctxOf(wrapper, 1)).reclaim.attributes('disabled')).toBeUndefined()
+  })
+
+  // The count is the only thing that tells you what the row is about to take.
+  it('labels the row with that workspace\'s own count', async () => {
+    wrapper = mountWith({ reclaimableByWorkspace: { [B]: 2 } })
+    expect((await ctxOf(wrapper, 1)).all.map((o) => o.text()))
+      .toContain('action.reclaim-workspace-count')
+    expect((await ctxOf(wrapper, 0)).all.map((o) => o.text()))
+      .toContain('action.reclaim-workspace')
+  })
+
+  // A workspace absent from the map is "nothing to reclaim", not a crash — App
+  // only publishes keys for workspaces that have some.
+  it('treats a missing entry as zero', async () => {
+    wrapper = mountWith({})
+    expect((await moreReclaim(wrapper, 0)).attributes('disabled')).toBeDefined()
+    expect((await ctxOf(wrapper, 0)).reclaimEmpty.attributes('disabled')).toBeDefined()
+  })
+})

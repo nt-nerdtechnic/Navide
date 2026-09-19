@@ -1368,3 +1368,50 @@ async def test_star_spawn_history_handler_patches_store_and_mirror(
     fresh = ProjectStore().peek(str(tmp_path))
     assert fresh is not None
     assert "starred" not in (fresh.ui_spawn_history or [])[0]
+
+
+# ── lineage round-trip ───────────────────────────────────────────────────────
+
+
+def test_merge_persists_the_lineage_pointer(tmp_path: Path) -> None:
+    """spawnedBy survives a restart.
+
+    The pane record in project.json carries the authoritative parent pointer,
+    but records are pruned and history is not — so resuming an old session out
+    of Agent History has to be able to read the parent back from here. The
+    store keeps entries as opaque dicts precisely so the renderer can own the
+    shape; this pins that the field is not dropped on the way through.
+    """
+    store = SpawnHistoryStore()
+    store.merge(str(tmp_path), [_entry("child", spawnedBy="parent"), _entry("parent")])
+
+    stored = {e["paneId"]: e for e in _stored_entries(tmp_path)}
+    assert stored["child"]["spawnedBy"] == "parent"
+    # A root records no parent at all rather than an empty string, so an entry
+    # written before the field existed stays distinguishable from a real root.
+    assert "spawnedBy" not in stored["parent"]
+
+
+def test_merge_can_clear_the_lineage_pointer(tmp_path: Path) -> None:
+    """Dragging a pane out to the root must not leave the old parent behind.
+
+    merge replaces an entry outright (the renderer snapshot is authoritative),
+    which is what lets a removed field actually disappear — the same mechanism
+    that clears a reset customName.
+    """
+    store = SpawnHistoryStore()
+    store.merge(str(tmp_path), [_entry("child", spawnedBy="parent")])
+    store.merge(str(tmp_path), [_entry("child")])
+
+    stored = {e["paneId"]: e for e in _stored_entries(tmp_path)}
+    assert "spawnedBy" not in stored["child"]
+
+
+def test_read_page_returns_the_lineage_pointer(tmp_path: Path) -> None:
+    """The renderer hydrates history through read_page, not the raw table."""
+    store = SpawnHistoryStore()
+    store.merge(str(tmp_path), [_entry("parent"), _entry("child", spawnedBy="parent")])
+
+    page, _ = store.read_page(str(tmp_path), offset=0, limit=10)
+    by_id = {e["paneId"]: e for e in page}
+    assert by_id["child"]["spawnedBy"] == "parent"
