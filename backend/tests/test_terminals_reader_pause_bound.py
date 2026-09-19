@@ -91,14 +91,61 @@ def _make(emit, *, log_fp=None) -> tuple[TerminalService, SimpleNamespace, _Fake
     return svc, session, handle
 
 
-async def _settle(svc: TerminalService, session_id: str, timeout_s: float = 2.0) -> None:
-    """Wait until no drain is on the wire and nothing is buffered."""
-    deadline = svc._loop.time() + timeout_s
-    while svc._loop.time() < deadline:
-        if session_id not in svc._drain_tasks and not svc._out_buffers.get(session_id):
-            return
+# A budget here bounds being STUCK; it is never a guess at how long the work
+# takes. These tests push a 5 MB buffer out in 64 KB pieces and every piece
+# costs one event loop iteration: milliseconds on an idle laptop, seconds on a
+# CI runner that hands this process a slice at a time. A fixed wall-clock
+# budget turns that difference into a red test, so the clock below is reset by
+# progress — a frame handed to the WS, a byte drained, a drain task coming or
+# going — and only a session that has stopped moving fails.
+_NO_PROGRESS_S = 2.0
+# Nothing here should livelock, but a test that keeps moving forever still has
+# to fail rather than hang the suite.
+_CAP_S = 30.0
+
+
+def _progress(svc: TerminalService, session_id: str) -> tuple:
+    """Everything that changes while output is still moving for a session."""
+    session = svc._sessions.get(session_id)
+    return (
+        session.sequence if session is not None else -1,  # frames on the wire
+        svc._out_buf_bytes.get(session_id, 0),
+        len(svc._out_buffers.get(session_id) or ()),
+        session_id in svc._drain_tasks,
+    )
+
+
+async def _while_moving(svc: TerminalService, session_id: str, done, what: str) -> None:
+    """Poll until `done()`, failing only once the session stops moving."""
+    last = _progress(svc, session_id)
+    started = still_since = svc._loop.time()
+    while not done():
         await asyncio.sleep(0.005)
-    raise AssertionError("drain never settled")
+        now = svc._loop.time()
+        current = _progress(svc, session_id)
+        if current != last:
+            last, still_since = current, now
+        elif now - still_since >= _NO_PROGRESS_S:
+            raise AssertionError(f"{what} (nothing moved for {_NO_PROGRESS_S}s)")
+        if now - started >= _CAP_S:
+            raise AssertionError(f"{what} (still moving after {_CAP_S}s)")
+
+
+async def _settle(svc: TerminalService, session_id: str) -> None:
+    """Wait until no drain is on the wire and nothing is buffered."""
+    await _while_moving(
+        svc,
+        session_id,
+        lambda: session_id not in svc._drain_tasks
+        and not svc._out_buffers.get(session_id),
+        "drain never settled",
+    )
+
+
+async def _finish(svc: TerminalService, session_id: str, fut, what: str = "barrier"):
+    """Await a resize barrier, failing only once its session stops moving."""
+    await _while_moving(svc, session_id, fut.done, f"{what} never finished")
+    return await fut
 
 
 @pytest.mark.asyncio
@@ -274,7 +321,7 @@ async def test_drain_output_waits_for_the_inflight_drain():
     assert emit.frames == [emit.frames[0]] and emit.frames[0].endswith(b"old-width")
 
     emit.gate.set()
-    await asyncio.wait_for(barrier, 2)
+    await _finish(svc, session.id, barrier)
     # Everything is out, in order, and nothing is left for a later flush.
     assert len(emit.frames) == 2
     assert emit.frames[0].endswith(b"old-width")
@@ -336,7 +383,7 @@ async def test_resize_barrier_is_one_await_under_a_streaming_cli():
     assert handle.calls.count("pause") == 1
 
     emit.gate.set()
-    await asyncio.wait_for(barrier, 2)
+    await _finish(svc, session.id, barrier)
     # Exactly the one drain that was in flight ran while the barrier was up;
     # the barrier emitted the rest itself.  Old-width bytes come first, and
     # nothing sneaked in ahead of what the barrier flushed.  (The barrier's
@@ -374,7 +421,7 @@ async def test_resize_barrier_survives_a_failing_drain():
     await asyncio.sleep(0)
     svc._absorb_output(session, b"after", 5)
 
-    await asyncio.wait_for(svc.drain_output(session.id), 2)
+    await _finish(svc, session.id, asyncio.ensure_future(svc.drain_output(session.id)))
     assert calls == 2
     assert not svc._out_buffers.get(session.id)
     assert session.id not in svc._drain_tasks
@@ -403,7 +450,7 @@ async def test_overlapping_resize_barriers_keep_drains_out_until_both_finish():
 
     # Let the wire move one frame at a time: only barriers emit, no _drain.
     emit.gate.set()
-    await asyncio.wait_for(asyncio.gather(first, second), 2)
+    await _finish(svc, session.id, asyncio.gather(first, second), "barriers")
     assert handle.calls.count("pause") == 1
     # The first barrier flushed everything queued behind the drain in one
     # payload; the second found nothing left and emitted nothing.
@@ -430,10 +477,14 @@ async def test_resize_barrier_writes_the_gap_marker_too(tmp_path):
 
         barrier = asyncio.ensure_future(svc.drain_output(session.id))
         emit.gate.set()
-        await asyncio.wait_for(barrier, 2)
+        await _finish(svc, session.id, barrier)
         # The survivors went out through the barrier, not a _drain.
         assert handle.calls.count("pause") == 1
-        assert svc._out_dropped.get(session.id) == 0
+        # The barrier consumed the drop count, so no later flush marks the
+        # same gap twice.  Consumed is 0 here and absent once a flush finds
+        # nothing buffered — that pop rides a debounce timer, so which of the
+        # two is on show is a race the drop count itself does not care about.
+        assert not svc._out_dropped.get(session.id)
     text = log_path.read_text(encoding="utf-8")
     marker = f"[navide: {dropped} bytes of output dropped]"
     assert text.count("[navide:") == 1
@@ -462,7 +513,7 @@ async def test_overlapping_resize_barriers_do_not_interleave_frames():
     second = asyncio.ensure_future(svc.drain_output(session.id))
     await asyncio.sleep(0.02)
     emit.gate.set()
-    await asyncio.wait_for(asyncio.gather(first, second), 2)
+    await _finish(svc, session.id, asyncio.gather(first, second), "barriers")
     await _settle(svc, session.id)
 
     tails = [f[-4:] for f in emit.frames]
@@ -492,5 +543,5 @@ async def test_held_barrier_on_a_stalled_emit_still_caps_the_buffer(caplog):
     assert session.id not in svc._drain_tasks
 
     emit.gate.set()
-    await asyncio.wait_for(barrier, 2)
+    await _finish(svc, session.id, barrier)
     await _settle(svc, session.id)
