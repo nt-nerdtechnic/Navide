@@ -1,0 +1,304 @@
+"""Per-vendor graceful shutdown: SIGTERM before the shared force logic.
+
+claude clears ~/.claude.json's fullscreenBootPending entry from a SIGTERM
+handler. A SIGKILL skips it, the next start counts a strike, and two strikes
+disable its fullscreen TUI (the dim header row of previous prompts). So the
+claude VendorSpec declares a ShutdownSpec and its kill leads with SIGTERM.
+
+The regression this file mainly guards is the other direction: a vendor that
+declares nothing must take the path that has always run, byte for byte.
+"""
+from __future__ import annotations
+
+import asyncio
+import threading
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from agent_team_backend import osplat, terminals as terminals_module
+from agent_team_backend.cli_vendors.registry import vendor
+from agent_team_backend.terminals import TerminalService
+
+
+async def _noop_emit(event: dict[str, Any]) -> None:
+    return None
+
+
+def _trap_term_script(marker: Path) -> list[str]:
+    """A child that records the fact it was SIGTERMed, then exits. HUP is left
+    alone: with defer_master_close the master stays open, and the vendors
+    without a spec are SIGKILLed before any HUP can reach them."""
+    return ["sh", "-c", f'trap "touch {marker}; exit 0" TERM; sleep 30']
+
+
+def _ignore_term_script() -> list[str]:
+    """A child that refuses SIGTERM, so a grace provably runs its full length.
+    HUP is left alone: defer_master_close keeps the master open, so no HUP is
+    sent and the escalation is what finally puts it down."""
+    return ["sh", "-c", 'trap "" TERM; sleep 30']
+
+
+async def _wait_for(predicate: Any, timeout_s: float = 8.0) -> bool:
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + timeout_s
+    while loop.time() < deadline:
+        if predicate():
+            return True
+        await asyncio.sleep(0.05)
+    return predicate()
+
+
+@pytest.fixture()
+def recorded_signals(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, bool]]:
+    calls: list[tuple[int, bool]] = []
+    real = osplat.process_tree.kill_group
+
+    def spy(gid: int, *, force: bool) -> None:
+        calls.append((gid, force))
+        real(gid, force=force)
+
+    monkeypatch.setattr(osplat.process_tree, "kill_group", spy)
+    return calls
+
+
+def test_only_claude_declares_a_shutdown_spec() -> None:
+    # The whole point of the field is that it changes nothing for anyone who
+    # has not opted in. If another vendor grows one, that vendor needs its own
+    # coverage below before this line is updated.
+    assert vendor("claude").shutdown is not None
+    for key in (
+        "codex", "cursor", "copilot", "kimi", "grok", "qwen", "opencode",
+        "kilo", "aider", "droid", "muse", "pi", "antigravity",
+    ):
+        assert vendor(key).shutdown is None, key
+
+
+@pytest.mark.asyncio
+async def test_vendor_without_spec_keeps_the_existing_kill_path(
+    tmp_path: Path, recorded_signals: list[tuple[int, bool]]
+) -> None:
+    marker = tmp_path / "termed"
+    svc = TerminalService(emit=_noop_emit)
+    session = svc.create(
+        pane_id="p1", agent_key="codex", command=_trap_term_script(marker), cwd="/"
+    )
+    await asyncio.sleep(0.3)  # let the shell install its trap
+
+    await svc.kill(session.id, force=True)
+
+    # Unchanged behavior: the session is closed and gone the moment kill()
+    # returns, and the very first signal is the caller's SIGKILL.
+    assert session.closed is True
+    assert session.id not in svc._sessions
+    assert recorded_signals, "no signal was sent"
+    assert recorded_signals[0][1] is True
+    assert all(force is True for _, force in recorded_signals)
+    await _wait_for(lambda: session.proc.poll() is not None)
+    assert session.proc.poll() is not None
+    assert not marker.exists(), "a vendor without a spec must not get a SIGTERM"
+
+
+@pytest.mark.asyncio
+async def test_claude_gets_sigterm_first_even_when_force_is_requested(
+    tmp_path: Path, recorded_signals: list[tuple[int, bool]]
+) -> None:
+    marker = tmp_path / "termed"
+    svc = TerminalService(emit=_noop_emit)
+    session = svc.create(
+        pane_id="p1", agent_key="claude", command=_trap_term_script(marker), cwd="/"
+    )
+    await asyncio.sleep(0.3)
+
+    await svc.kill(session.id, force=True)
+
+    # defer_master_close: the PTY master is still open and the session still
+    # registered when kill() returns — the grace runs in a task so pane close
+    # and respawn keep their current latency.
+    assert session.closed is False
+    assert session.id in svc._sessions
+
+    assert await _wait_for(lambda: bool(recorded_signals)), "no signal was sent"
+    assert recorded_signals[0][1] is False, "first signal must be SIGTERM"
+    assert await _wait_for(marker.exists), "the child never saw a SIGTERM"
+    # The grace ran its course: the session is closed and the in-flight guard
+    # released, so a later kill of the same id is not silently swallowed.
+    assert await _wait_for(lambda: not svc._graceful_kills)
+    assert session.id not in svc._sessions
+    assert session.closed is True
+    assert session.proc.poll() is not None
+
+
+@pytest.mark.asyncio
+async def test_wait_until_reaped_blocks_until_the_graceful_kill_finishes(
+    tmp_path: Path,
+) -> None:
+    """terminal.create reaps the PTY it replaces (and any stale PTY resuming
+    the same session id) and then spawns. kill() returning early would let two
+    claudes append to one session file, which is what that reap prevents — so
+    those callers wait here."""
+    marker = tmp_path / "termed"
+    svc = TerminalService(emit=_noop_emit)
+    session = svc.create(
+        pane_id="p1", agent_key="claude", command=_trap_term_script(marker), cwd="/"
+    )
+    await asyncio.sleep(0.3)
+
+    await svc.kill(session.id, force=True)
+    assert session.proc.poll() is None, "kill() must not have waited"
+
+    assert await svc.wait_until_reaped(session.id) is True
+    # The contract the reap sites rely on: once this returns, the child is gone.
+    assert session.proc.poll() is not None
+    assert session.closed is True
+
+
+@pytest.mark.asyncio
+async def test_rebuild_shaped_double_kill_still_waits_for_the_first_reap(
+    recorded_signals: list[tuple[int, bool]]
+) -> None:
+    """A rebuild closes the pane and then spawns a new one with the SAME
+    --resume id, so terminal.create's resume dedup finds the still-live PTY and
+    kills it a second time. That second kill is a no-op (the first grace owns
+    it), which means the dedup's guarantee rests entirely on the wait: without
+    it the rebuild would spawn over a live claude, and two of them would append
+    to one session file.
+
+    The child ignores SIGTERM so the first grace is provably still running when
+    the second kill arrives — with a child that exits at once the two would
+    race and the test would only sometimes exercise the guard.
+    """
+    svc = TerminalService(emit=_noop_emit)
+    session = svc.create(
+        pane_id="p1", agent_key="claude", command=_ignore_term_script(), cwd="/"
+    )
+    await asyncio.sleep(0.3)
+
+    await svc.kill(session.id, force=True)          # the pane close
+    assert session.id in svc._graceful_kills
+    first = svc._graceful_kills[session.id]
+
+    # The dedup still sees it: not closed, same agent, same resume id.
+    assert session in svc.find_live_by_resume_id(
+        "claude", "abc", lambda _cmd: "abc"
+    )
+    await svc.kill(session.id, force=True)          # the dedup's reap
+    # Guarded: no second grace, and the first one's completion event survives.
+    assert svc._graceful_kills.get(session.id) is first
+
+    assert await svc.wait_until_reaped(session.id) is True
+    # A TERM-ignoring child only goes down because the grace escalated. Both
+    # counts are read here, once the reap is over: the second kill is answered
+    # without awaiting anything, so reading them straight after it would only
+    # catch whatever the first grace had managed to send by then.
+    assert session.proc.poll() is not None
+    signalled = [force for _, force in recorded_signals]
+    assert signalled.count(False) == 1, "a second round of signalling"
+    assert True in signalled, "the escalation never fired"
+
+
+@pytest.mark.asyncio
+async def test_the_unspawn_sweeps_redundant_kill_costs_no_ps_snapshot() -> None:
+    """Closing a pane kills its PTY and then sends manual_pane.unspawn, whose
+    sweep addresses the same pane. The grace keeps the session registered, so
+    that sweep now reaches kill() where it used to find nothing. It must answer
+    before the descendant snapshot: that is a full-system `ps` with a 5s
+    budget, and one per pane close to reach the same no-op is waste.
+    """
+    svc = TerminalService(emit=_noop_emit)
+    session = svc.create(
+        pane_id="p1", agent_key="claude", command=_ignore_term_script(), cwd="/"
+    )
+    await asyncio.sleep(0.3)
+
+    snapshots: list[int] = []
+    real_snapshot = terminals_module._descendant_pids
+
+    def counted(pid: int) -> dict[int, str]:
+        snapshots.append(pid)
+        return real_snapshot(pid)
+
+    terminals_module._descendant_pids = counted  # type: ignore[assignment]
+    try:
+        await svc.kill(session.id, force=True)        # the pane close
+        assert len(snapshots) == 1
+        # What manual_pane.unspawn's sweep does, addressing the same pane.
+        assert svc.live_session_ids_for_pane("p1") == [session.id]
+        for tid in svc.live_session_ids_for_pane("p1"):
+            await svc.kill(tid, force=True)
+        assert snapshots == snapshots[:1], "the redundant kill took a ps snapshot"
+
+        assert await svc.wait_until_reaped(session.id) is True
+    finally:
+        terminals_module._descendant_pids = real_snapshot  # type: ignore[assignment]
+        if session.proc.poll() is None:
+            session.proc.kill()
+    assert session.proc.poll() is not None
+
+
+@pytest.mark.asyncio
+async def test_a_kill_parked_in_the_ps_snapshot_starts_no_second_grace() -> None:
+    """kill() snapshots the descendant tree with a full-system `ps` off the
+    loop (5s budget). A kill that entered before that await and resumed after
+    the child had already gone must not start a grace on the strength of what
+    it read beforehand: the foreground group it captured came from a handle
+    that is now closed, and the kernel may have handed that pgid to someone
+    else's process group.
+    """
+    svc = TerminalService(emit=_noop_emit)
+    session = svc.create(
+        pane_id="p1", agent_key="claude", command=["sleep", "30"], cwd="/"
+    )
+    await asyncio.sleep(0.2)
+
+    # Park the snapshot, exactly where the real `ps` parks, and record every
+    # signal the kill would send from the far side of it.
+    gate = threading.Event()
+    signals: list[tuple[int, bool]] = []
+    real_snapshot = terminals_module._descendant_pids
+
+    def parked(pid: int) -> dict[int, str]:
+        gate.wait(5.0)
+        return real_snapshot(pid)
+
+    terminals_module._descendant_pids = parked  # type: ignore[assignment]
+    real_kill_group = osplat.process_tree.kill_group
+
+    def spy(gid: int, *, force: bool) -> None:
+        signals.append((gid, force))
+        real_kill_group(gid, force=force)
+
+    osplat.process_tree.kill_group = spy  # type: ignore[assignment]
+    try:
+        straggler = asyncio.create_task(svc.kill(session.id, force=True))
+        await asyncio.sleep(0.2)          # it is now inside the snapshot
+        assert not straggler.done()
+
+        # The child's own EOF closes the session while the kill is parked.
+        svc._close(session, reason="exit")
+
+        gate.set()
+        await straggler
+    finally:
+        terminals_module._descendant_pids = real_snapshot  # type: ignore[assignment]
+        osplat.process_tree.kill_group = real_kill_group  # type: ignore[assignment]
+        if session.proc.poll() is None:
+            session.proc.kill()
+
+    assert svc._graceful_kills == {}, "a second grace was registered"
+    assert signals == [], "signalled a pgid read from a closed handle"
+
+
+@pytest.mark.asyncio
+async def test_wait_until_reaped_returns_at_once_with_nothing_in_flight() -> None:
+    # No graceful kill in flight — every vendor without a ShutdownSpec, and any
+    # id already reaped. Must not cost the caller a single tick of waiting.
+    svc = TerminalService(emit=_noop_emit)
+    session = svc.create(pane_id="p1", agent_key="codex", command=["sleep", "30"], cwd="/")
+
+    assert await svc.wait_until_reaped(session.id, timeout=0.0) is True
+    assert await svc.wait_until_reaped("no-such-session", timeout=0.0) is True
+
+    await svc.kill(session.id, force=True)
+    assert await svc.wait_until_reaped(session.id, timeout=0.0) is True

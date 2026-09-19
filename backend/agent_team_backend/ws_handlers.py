@@ -6355,6 +6355,11 @@ async def _terminal_create_impl(
                     create_pane_id,
                 )
                 await session.terminals.kill(replaces_tid, force=True)
+                # A vendor with a graceful ShutdownSpec (claude) is put down
+                # by a background task, so kill() alone no longer means the
+                # old CLI is gone — and the spawn below would overlap it.
+                # Returns immediately for every other vendor.
+                await session.terminals.wait_until_reaped(replaces_tid)
             else:
                 app.log.warning(
                     "terminal.create: replaces_terminal_id %s is another live "
@@ -6381,6 +6386,10 @@ async def _terminal_create_impl(
                 resume_dedup_id,
             )
             await session.terminals.kill(stale.id, force=True)
+            # Two CLIs appending to one session file is exactly what this loop
+            # exists to prevent, so wait out a graceful shutdown before the
+            # --resume spawn below rather than only signalling it.
+            await session.terminals.wait_until_reaped(stale.id)
     def _spawn_and_claim() -> Any:
         term = session.terminals.create(
             pane_id=payload["pane_id"],

@@ -29,6 +29,9 @@ class FakeTerminals:
     def __init__(self, live: list[SimpleNamespace] | None = None) -> None:
         self.created: list[dict[str, Any]] = []
         self.killed: list[tuple[str, bool]] = []
+        # The reap sites wait out a graceful shutdown before spawning; record
+        # the waits so a test can assert the old PTY was gone first.
+        self.reap_waits: list[str] = []
         self.live = live or []
 
     def create(self, **kwargs: Any) -> SimpleNamespace:
@@ -43,6 +46,10 @@ class FakeTerminals:
     async def kill(self, session_id: str, force: bool = False) -> None:
         self.killed.append((session_id, force))
         self.live = [s for s in self.live if s.id != session_id]
+
+    async def wait_until_reaped(self, session_id: str, timeout: float = 8.0) -> bool:
+        self.reap_waits.append(session_id)
+        return True
 
     def get(self, session_id: str) -> SimpleNamespace | None:
         return next((s for s in self.live if s.id == session_id), None)
@@ -107,6 +114,10 @@ async def test_replaces_kills_same_pane_predecessor() -> None:
     session = _session(terminals)
     await _create(session, pane_id="pane-1", replaces_terminal_id="t-old")
     assert ("t-old", True) in terminals.killed
+    # A graceful vendor's kill() returns before the child is down, so the reap
+    # must also wait for it — spawning over a live predecessor is the bug this
+    # reap exists to prevent.
+    assert terminals.reap_waits == ["t-old"]
     assert len(terminals.created) == 1
 
 

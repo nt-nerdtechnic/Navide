@@ -322,6 +322,12 @@ _INPUT_BLOCK_NOTIFY_MS = 500
 # can widen it: the CLI's SIGTERM handler is what flushes the transcript, and
 # on a loaded runner that flush can outlast a hard-coded window.
 _KILL_ESCALATION_GRACE_S = 1.0
+# Ceiling on wait_until_reaped(). Must cover the largest vendor grace_s plus
+# _KILL_ESCALATION_GRACE_S plus the executor wait that reaps the zombie; the
+# slack is what keeps a caller that must not spawn over a live child from
+# giving up early. A caller that hits it logs and proceeds — a create that
+# hangs forever is worse than one that races.
+_REAP_WAIT_TIMEOUT_S = 8.0
 # Only a keystroke-sized write arms the echo timer.  Role injection and pastes
 # are bulk writes whose echo is legitimately slower and would only add noise.
 _ECHO_PROBE_MAX_INPUT_CHARS = 16
@@ -450,6 +456,13 @@ class TerminalService:
         # resizes a drag sends run their barriers one after another instead
         # of interleaving frames.
         self._resize_barriers: dict[str, asyncio.Lock] = {}
+        # Sessions whose vendor asked for a SIGTERM-first shutdown and whose
+        # grace is still running, each mapped to the event its task sets when
+        # the child is finally down. The session stays in _sessions across the
+        # grace, so without this a second kill() would start a second grace —
+        # and a caller that must not spawn over a live child awaits the event
+        # through wait_until_reaped().
+        self._graceful_kills: dict[str, asyncio.Event] = {}
         # Bytes dropped from _out_buffers in the current overflow episode and
         # not yet marked in the log mirror.  Present = the episode's warning
         # was logged; cleared once the buffer has fully drained so the next
@@ -978,6 +991,24 @@ class TerminalService:
         if not session or session.closed:
             return
 
+        # A graceful reap already owns this session. Closing a pane kills it and
+        # then sends manual_pane.unspawn, whose sweep addresses the same pane —
+        # and that sweep reaches kill() only because the grace keeps the session
+        # registered (before it, _close had already popped it, so the sweep
+        # found nothing). The sweep stays: it is the only signal for a pane the
+        # renderer had no ref to kill through, and the net under a kill that
+        # failed. Answering here rather than after the snapshot below is the
+        # point — that snapshot is a full-system `ps` with a 5s budget, and one
+        # per pane close to arrive at the same no-op is pure waste. Never
+        # populated for a vendor without a ShutdownSpec.
+        if session_id in self._graceful_kills:
+            log.debug(
+                "terminal kill: graceful already in flight session=%s pane=%s "
+                "vendor=%s",
+                session.id, session.pane_id, session.agent_key,
+            )
+            return
+
         # Snapshot the descendant tree BEFORE close: killpg below only reaches
         # the child's own process group, so a grandchild that called setsid
         # would survive. Capture the tree now — after the child dies its
@@ -989,6 +1020,59 @@ class TerminalService:
         descendants = await asyncio.to_thread(_descendant_pids, session.proc.pid)
         # Read the foreground group BEFORE _close() shuts the master fd.
         fg_pgid = session.handle.foreground_group()
+
+        # A vendor that declares a ShutdownSpec gets a SIGTERM-first prefix in
+        # front of everything below; every other vendor (13 of 14) falls
+        # straight through to the path that has always run here.
+        shutdown = self._shutdown_spec(session)
+        if shutdown is not None and shutdown.graceful:
+            # Re-read the two guards: the descendant snapshot above is a
+            # full-system `ps` off the loop, and across it the child can exit
+            # on its own (its EOF closes the session and pops it) or another
+            # kill can claim the grace. Acting on the pre-await state would
+            # start a second grace whose fg_pgid was read from a handle that
+            # is now closed — a pgid the kernel may already have recycled to
+            # someone else's process group.
+            if session.closed or session.id not in self._sessions:
+                log.info(
+                    "terminal kill: graceful skipped, session already down "
+                    "session=%s pane=%s vendor=%s",
+                    session.id, session.pane_id, session.agent_key,
+                )
+                return
+            if session.id in self._graceful_kills:
+                # The same no-op as the fast path above, reached when a grace
+                # started while this call was in the snapshot.
+                log.debug(
+                    "terminal kill: graceful already in flight session=%s "
+                    "pane=%s vendor=%s",
+                    session.id, session.pane_id, session.agent_key,
+                )
+                return
+            self._graceful_kills[session.id] = asyncio.Event()
+            log.info(
+                "terminal kill: path=graceful session=%s pane=%s vendor=%s "
+                "signal=SIGTERM grace=%.1fs defer_master_close=%s "
+                "force_fallback=%s",
+                session.id, session.pane_id, session.agent_key,
+                shutdown.grace_s, shutdown.defer_master_close, force,
+            )
+            # A task, not an await: kill()'s own latency gates pane close and
+            # the spawn path's replace-a-stale-terminal step, and holding
+            # either open for the grace would be a visible regression.
+            self._loop.create_task(
+                self._kill_gracefully(
+                    session, fg_pgid, force, shutdown, descendants
+                )
+            )
+            return
+
+        log.info(
+            "terminal kill: path=legacy session=%s pane=%s vendor=%s "
+            "signal=%s grace=%.1fs",
+            session.id, session.pane_id, session.agent_key,
+            "SIGKILL" if force else "SIGTERM", _KILL_ESCALATION_GRACE_S,
+        )
         try:
             pgid = osplat.process_tree.group_of(session.proc.pid)
             osplat.process_tree.kill_group(pgid, force=force)
@@ -1019,6 +1103,114 @@ class TerminalService:
             )
         )
 
+    async def wait_until_reaped(
+        self, session_id: str, timeout: float = _REAP_WAIT_TIMEOUT_S
+    ) -> bool:
+        """Block until a graceful kill of ``session_id`` has put the child down.
+
+        kill() returns before the grace is over so that closing a pane stays
+        instant, but a caller that spawns a replacement — terminal.create's
+        replaces_terminal_id reap and its resume-id dedup — needs the old CLI
+        gone first, or two of them briefly append to one session file. Those
+        callers await this; nobody else has to, and the direct kill path is
+        still synchronous, so every other caller and every vendor without a
+        ShutdownSpec is unaffected.
+
+        Returns True when there is nothing in flight (the common case, and an
+        immediate return) or the reap finished, False when the wait ran out.
+        """
+        done = self._graceful_kills.get(session_id)
+        if done is None:
+            return True
+        try:
+            await asyncio.wait_for(done.wait(), timeout)
+        except TimeoutError:
+            log.warning(
+                "terminal kill: reap wait timed out session=%s timeout=%.1fs "
+                "— the caller proceeds while the child may still be alive",
+                session_id, timeout,
+            )
+            return False
+        return True
+
+    def _shutdown_spec(self, session: TerminalSession) -> "Any | None":
+        """This session's vendor ShutdownSpec, or None — for an unknown key,
+        a plain terminal, or a vendor that declares no shutdown behavior."""
+        from .cli_vendors.registry import vendor
+
+        spec = vendor(session.agent_key or "")
+        return spec.shutdown if spec is not None else None
+
+    async def _kill_gracefully(
+        self,
+        session: TerminalSession,
+        fg_pgid: int,
+        force: bool,
+        shutdown: Any,
+        descendants: dict[int, str],
+    ) -> None:
+        """SIGTERM first, then the same close-and-escalate the direct path runs.
+
+        claude rewrites ~/.claude.json from a SIGTERM handler; a SIGKILL skips
+        it and leaves a stale fullscreenBootPending entry, and two of those
+        make claude disable its own fullscreen TUI. So the signal order is
+        inverted for vendors that ask, and with defer_master_close the PTY
+        master stays open across the grace — closing it HUPs the child and
+        takes the far end of its stdout away mid-hook.
+        """
+        started = self._loop.time()
+        try:
+            pgid = osplat.process_tree.group_of(session.proc.pid)
+        except ProcessLookupError:
+            # Already gone; the close and escalation below still run so the
+            # session is unregistered and its crash-recovery record dropped.
+            pgid = 0
+        try:
+            # Job control puts the CLI in a group the login shell's pgid does
+            # not cover. Same guard as the direct path.
+            for target in (pgid, fg_pgid if fg_pgid != pgid else 0):
+                if target <= 0:
+                    continue
+                try:
+                    osplat.process_tree.kill_group(target, force=False)
+                except (ProcessLookupError, PermissionError):
+                    pass
+            if not shutdown.defer_master_close:
+                self._close(session, reason="killed")
+            deadline = self._loop.time() + shutdown.grace_s
+            # ASYNC110 suppressed: bounded poll (<= grace_s) with awaited
+            # sleeps, as in _escalate_kill.
+            while (  # noqa: ASYNC110
+                session.proc.poll() is None and self._loop.time() < deadline
+            ):
+                await asyncio.sleep(0.05)
+            waited_ms = int((self._loop.time() - started) * 1000)
+            timed_out = session.proc.poll() is None
+            log.info(
+                "terminal kill: graceful grace ended session=%s pane=%s "
+                "vendor=%s exited=%s after=%dms grace=%.1fs timed_out=%s",
+                session.id, session.pane_id, session.agent_key,
+                not timed_out, waited_ms, shutdown.grace_s, timed_out,
+            )
+            if timed_out:
+                # Still there — hand it back to the caller's own force choice,
+                # exactly as the direct path would have signalled it.
+                for target in (pgid, fg_pgid if fg_pgid != pgid else 0):
+                    if target <= 0:
+                        continue
+                    try:
+                        osplat.process_tree.kill_group(target, force=force)
+                    except (ProcessLookupError, PermissionError):
+                        pass
+            self._close(session, reason="killed")
+            await self._escalate_kill(
+                session, pgid, _KILL_ESCALATION_GRACE_S, descendants=descendants
+            )
+        finally:
+            done = self._graceful_kills.pop(session.id, None)
+            if done is not None:
+                done.set()
+
     async def _put_down_error_survivor(self, session: TerminalSession) -> None:
         """Kill a child whose PTY master died on a read error while the child
         itself is still alive. The session is already closed and popped from
@@ -1048,7 +1240,15 @@ class TerminalService:
         # child-exit here.
         while session.proc.poll() is None and self._loop.time() < deadline:  # noqa: ASYNC110
             await asyncio.sleep(0.05)
-        if session.proc.poll() is None and pgid > 0:
+        escalated = session.proc.poll() is None and pgid > 0
+        log.info(
+            "terminal kill: escalation session=%s pane=%s vendor=%s "
+            "waited=%dms grace=%.1fs escalated_sigkill=%s",
+            session.id, session.pane_id, session.agent_key,
+            int((self._loop.time() - (deadline - grace)) * 1000), grace,
+            escalated,
+        )
+        if escalated:
             try:
                 osplat.process_tree.kill_group(pgid, force=True)
             except (ProcessLookupError, PermissionError):

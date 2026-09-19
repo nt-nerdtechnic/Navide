@@ -488,6 +488,28 @@ class PortableCredential:
 
 
 @dataclass(frozen=True)
+class ShutdownSpec:
+    """How a kill should treat this CLI on its way out.
+
+    The shared kill path is SIGKILL-first for almost every caller (the
+    frontend defaults ``force`` to true), which is correct for a CLI that
+    keeps no state outside its transcript. A CLI that runs an exit hook needs
+    the other order, and this is where it says so. The defaults spell out the
+    current behavior, so a vendor that declares nothing keeps it exactly.
+    """
+
+    # Send SIGTERM and wait ``grace_s`` before the existing force logic runs.
+    # False = the kill path is untouched for this vendor.
+    graceful: bool = False
+    # How long the SIGTERM is given. Only read when ``graceful``.
+    grace_s: float = 1.0
+    # Hold the PTY master open across the grace. Closing it HUPs the child and
+    # drops the other end of its stdout, which can cut an exit hook off
+    # mid-write; a vendor whose hook touches a file on disk wants this true.
+    defer_master_close: bool = False
+
+
+@dataclass(frozen=True)
 class VendorSpec:
     """Everything the shared orchestration knows about one CLI vendor.
 
@@ -633,3 +655,8 @@ class VendorSpec:
     # the hooks at startup and admits the vendor to that endpoint, so a vendor
     # cannot be one without the other. None = no hook mechanism.
     install_hooks: Callable[[str], Any] | None = None
+
+    # --- shutdown ---
+    # How a kill treats this CLI. None = the shared kill path runs unchanged,
+    # which is what 13 of the 14 vendors want.
+    shutdown: ShutdownSpec | None = None

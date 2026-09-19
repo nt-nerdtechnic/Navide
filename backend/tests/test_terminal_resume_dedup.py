@@ -23,6 +23,9 @@ class FakeTerminals:
     def __init__(self, live: list[SimpleNamespace] | None = None) -> None:
         self.created: list[dict[str, Any]] = []
         self.killed: list[tuple[str, bool]] = []
+        # The reap sites wait out a graceful shutdown before spawning; record
+        # the waits so a test can assert the old PTY was gone first.
+        self.reap_waits: list[str] = []
         self.live = live or []
 
     def create(self, **kwargs: Any) -> SimpleNamespace:
@@ -37,6 +40,10 @@ class FakeTerminals:
     async def kill(self, session_id: str, force: bool = False) -> None:
         self.killed.append((session_id, force))
         self.live = [s for s in self.live if s.id != session_id]
+
+    async def wait_until_reaped(self, session_id: str, timeout: float = 8.0) -> bool:
+        self.reap_waits.append(session_id)
+        return True
 
     def find_live_by_resume_id(
         self, agent_key: str, resume_id: str, extract: Any
@@ -136,6 +143,10 @@ async def test_resume_spawn_reaps_live_duplicate_first(
     await _create(session, ["/bin/zsh", "-lc", "claude --resume abc-123"])
 
     assert terminals.killed == [("term-stale", True)]
+    # Signalling the stale PTY is not enough for a vendor whose shutdown is
+    # graceful: two claudes appending to one session file is precisely what
+    # this dedup prevents, so the reap waits for the child to be gone.
+    assert terminals.reap_waits == ["term-stale"]
     assert len(terminals.created) == 1
 
 

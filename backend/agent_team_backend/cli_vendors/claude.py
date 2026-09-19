@@ -40,6 +40,7 @@ from .base import (
     McpWiring,
     PortableCredential,
     PushChannel,
+    ShutdownSpec,
     SkillsWiring,
     SlotKind,
     VendorSpec,
@@ -1389,4 +1390,13 @@ SPEC = VendorSpec(
         update_state_file=".last-update-result.json",
         config_home_env="CLAUDE_CONFIG_DIR", config_home_default=".claude",
         autoupdate_env="DISABLE_AUTOUPDATER"),
+    # claude writes fullscreenBootPending[pid] into ~/.claude.json when it
+    # starts in fullscreen and clears it from a SIGTERM handler on the way out.
+    # A SIGKILL never runs that handler, so the entry survives; the next start
+    # sees a pending entry whose pid is gone, counts a strike, and at two
+    # strikes writes fullscreenAutoDisabled — which is how the dim header row
+    # (previous prompts shown when scrolling up) disappears. 3s is the room the
+    # handler needs for a read-modify-write of that file, and the master stays
+    # open across it because a HUP mid-write is the same lost entry.
+    shutdown=ShutdownSpec(graceful=True, grace_s=3.0, defer_master_close=True),
 )
