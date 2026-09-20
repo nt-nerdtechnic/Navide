@@ -102,7 +102,9 @@ const savedDraft = ref('')
 const draftDirty = computed(() => draft.value !== null && draftFingerprint(draft.value) !== savedDraft.value)
 const query = ref('')
 const loading = ref(false)
-const busy = ref(false)
+const mutating = ref(false)
+const selecting = ref(false)
+const busy = computed(() => mutating.value || selecting.value)
 const error = ref('')
 const conflict = ref(false)
 const creating = ref(false)
@@ -265,7 +267,9 @@ function isConflictResponse(resp: ResponseLike): boolean {
   return payload?.conflict === true || resp.error?.code === 'SKILL_CONFLICT'
 }
 
+let listRequest = 0
 async function loadSkills(preferredName = selectedName.value, external = false): Promise<void> {
+  const request = ++listRequest
   if (!external) {
     loading.value = true
     error.value = ''
@@ -282,6 +286,7 @@ async function loadSkills(preferredName = selectedName.value, external = false):
       ok?: boolean
       error?: string
     }>('skills.list', {})
+    if (request !== listRequest) return
     if (!resp.ok || resp.payload?.ok === false) {
       error.value = responseMessage(resp, t('settings.skills.error-load'))
       return
@@ -311,27 +316,28 @@ async function loadSkills(preferredName = selectedName.value, external = false):
     if (next) await selectSkill(next, external)
     else if (!matrixRows.value.some((row) => row.key === selectedKey.value)) closeDrawer()
   } catch (err) {
-    error.value = err instanceof Error ? err.message : String(err)
+    if (request === listRequest) error.value = err instanceof Error ? err.message : String(err)
   } finally {
-    if (!external) loading.value = false
+    if (request === listRequest) loading.value = false
   }
 }
 
 let selectionRequest = 0
 async function selectSkill(name: string, external = false): Promise<void> {
+  if (external && busy.value) return
   const previousDraft = draft.value
-  const request = external ? selectionRequest : ++selectionRequest
+  const request = ++selectionRequest
   if (!external) {
     selectedKey.value = `shared:${name}`
     selectedName.value = name
     draft.value = null
-    busy.value = true
+    selecting.value = true
     error.value = ''
     conflict.value = false
   }
   try {
     const resp = await props.backend.send<{ skill?: unknown; ok?: boolean; error?: string }>('skills.get', { name })
-    if (selectedName.value !== name || (!external && request !== selectionRequest)) return
+    if (selectedName.value !== name || request !== selectionRequest) return
     if (external && (draft.value !== previousDraft || draftDirty.value || busy.value)) return
     if (!resp.ok || resp.payload?.ok === false) {
       error.value = responseMessage(resp, t('settings.skills.error-load-one'))
@@ -345,9 +351,11 @@ async function selectSkill(name: string, external = false): Promise<void> {
     draft.value = next
     savedDraft.value = draftFingerprint(next)
   } catch (err) {
-    error.value = err instanceof Error ? err.message : String(err)
+    if (selectedName.value === name && request === selectionRequest) {
+      error.value = err instanceof Error ? err.message : String(err)
+    }
   } finally {
-    if (!external && request === selectionRequest) busy.value = false
+    if (!external && request === selectionRequest) selecting.value = false
   }
 }
 
@@ -363,7 +371,7 @@ function askWriteConsent(root: string): boolean {
 async function createSkill(): Promise<void> {
   const name = newName.value.trim()
   if (!name || busy.value) return
-  busy.value = true
+  mutating.value = true
   error.value = ''
   try {
     let consent = writeConsented.value
@@ -399,13 +407,13 @@ async function createSkill(): Promise<void> {
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
   } finally {
-    busy.value = false
+    mutating.value = false
   }
 }
 
 async function saveSkill(): Promise<void> {
   if (!draft.value || busy.value) return
-  busy.value = true
+  mutating.value = true
   error.value = ''
   conflict.value = false
   const current = draft.value
@@ -450,6 +458,7 @@ async function saveSkill(): Promise<void> {
       }
     )
     if (!resp.ok || resp.payload?.ok === false) {
+      if (draft.value !== current) return
       conflict.value = isConflictResponse(resp)
       error.value = responseMessage(
         resp,
@@ -459,19 +468,19 @@ async function saveSkill(): Promise<void> {
     }
     const savedSkill = isRecord(resp.payload?.skill) ? resp.payload.skill : null
     current.revision = stringValue(savedSkill?.revision, current.revision ?? '') || current.revision
-    savedDraft.value = submittedDraft
+    if (draft.value === current) savedDraft.value = submittedDraft
     const summary = skills.value.find((skill) => skill.name === current.name)
     if (summary) summary.description = current.description
   } catch (err) {
-    error.value = err instanceof Error ? err.message : String(err)
+    if (draft.value === current) error.value = err instanceof Error ? err.message : String(err)
   } finally {
-    busy.value = false
+    mutating.value = false
   }
 }
 
 async function setEnabled(skill: SkillSummary, enabled: boolean): Promise<void> {
   if (busy.value) return
-  busy.value = true
+  mutating.value = true
   error.value = ''
   try {
     const resp = await props.backend.send<{ ok?: boolean; error?: string }>('skills.set_enabled', {
@@ -487,7 +496,7 @@ async function setEnabled(skill: SkillSummary, enabled: boolean): Promise<void> 
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
   } finally {
-    busy.value = false
+    mutating.value = false
   }
 }
 
@@ -495,7 +504,7 @@ async function deleteSkill(): Promise<void> {
   if (!draft.value || busy.value) return
   const name = draft.value.name
   if (!window.confirm(t('settings.skills.delete-confirm', { name }))) return
-  busy.value = true
+  mutating.value = true
   error.value = ''
   try {
     const resp = await props.backend.send<{ ok?: boolean; error?: string }>('skills.delete', { name })
@@ -507,7 +516,7 @@ async function deleteSkill(): Promise<void> {
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
   } finally {
-    busy.value = false
+    mutating.value = false
   }
 }
 
@@ -665,7 +674,7 @@ function editableAgents(row: MatrixRow): SkillAgent[] {
 
 async function setTargets(skill: SkillSummary, next: string[] | null): Promise<void> {
   if (busy.value) return
-  busy.value = true
+  mutating.value = true
   error.value = ''
   const previous = skill.targets
   skill.targets = next
@@ -684,13 +693,13 @@ async function setTargets(skill: SkillSummary, next: string[] | null): Promise<v
     skill.targets = previous
     error.value = err instanceof Error ? err.message : String(err)
   } finally {
-    busy.value = false
+    mutating.value = false
   }
 }
 
 async function setNativeTargets(skill: NativeSkill, next: string[]): Promise<void> {
   if (busy.value) return
-  busy.value = true
+  mutating.value = true
   error.value = ''
   const previous = skill.targets
   skill.targets = next
@@ -707,7 +716,7 @@ async function setNativeTargets(skill: NativeSkill, next: string[]): Promise<voi
     skill.targets = previous
     error.value = err instanceof Error ? err.message : String(err)
   } finally {
-    busy.value = false
+    mutating.value = false
   }
 }
 
@@ -754,7 +763,7 @@ async function migrateNative(skill: NativeSkill): Promise<void> {
     t('settings.skills.migrate-body', { name: skill.name, from: skill.path, root: rootPath.value, agent: skill.source })
   )
   if (!ok) return
-  busy.value = true
+  mutating.value = true
   error.value = ''
   try {
     const resp = await props.backend.send<{ ok?: boolean; error?: string }>('skills.migrate_native', {
@@ -769,7 +778,7 @@ async function migrateNative(skill: NativeSkill): Promise<void> {
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
   } finally {
-    busy.value = false
+    mutating.value = false
   }
 }
 
@@ -778,7 +787,7 @@ async function restoreNative(skill: SkillSummary): Promise<void> {
   if (busy.value || !skill.migratedFrom) return
   const ok = window.confirm(t('settings.skills.restore-body', { name: skill.name, to: skill.migratedFrom }))
   if (!ok) return
-  busy.value = true
+  mutating.value = true
   error.value = ''
   try {
     const resp = await props.backend.send<{ ok?: boolean; error?: string }>('skills.restore_native', {
@@ -792,7 +801,7 @@ async function restoreNative(skill: SkillSummary): Promise<void> {
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
   } finally {
-    busy.value = false
+    mutating.value = false
   }
 }
 

@@ -268,6 +268,105 @@ describe('SkillsPane', () => {
     expect((wrapper.get('.skill-body').element as HTMLTextAreaElement).value).toBe(otherSkill.body)
   })
 
+  it('applies the latest external editor refresh when earlier responses finish first', async () => {
+    const { backend, send, listeners } = mockBackend()
+    wrapper = mount(SkillsPane, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+    await openCard(wrapper, skill.name)
+    const originalSend = send.getMockImplementation()!
+    const finishRefresh: Array<(value: unknown) => void> = []
+    send.mockImplementation((type, payload) => type === 'skills.get'
+      ? new Promise((resolve) => { finishRefresh.push(resolve) })
+      : originalSend(type, payload))
+
+    listeners.get('skills.changed')!()
+    await flushPromises()
+    listeners.get('skills.changed')!()
+    await flushPromises()
+    expect(finishRefresh).toHaveLength(2)
+    finishRefresh[0]({ ok: true, payload: { skill: { ...skill, body: 'Earlier external edit', revision: 'rev-2' } } })
+    await flushPromises()
+    finishRefresh[1]({ ok: true, payload: { skill: { ...skill, body: 'Latest external edit', revision: 'rev-3' } } })
+    await flushPromises()
+
+    expect((wrapper.get('.skill-body').element as HTMLTextAreaElement).value).toBe('Latest external edit')
+  })
+
+  it.each([true, false])('keeps a newly selected skill independent of an earlier save result: %s', async (saved) => {
+    const otherSkill = { ...skill, name: 'other-skill', body: 'Other instructions' }
+    const { backend, send, responses, listeners } = mockBackend({
+      'skills.list': { ok: true, payload: { skills: [skill, otherSkill], agents } },
+    })
+    const originalSend = send.getMockImplementation()!
+    let finishSave: ((value: unknown) => void) | undefined
+    send.mockImplementation((type, payload) => type === 'skills.save'
+      ? new Promise((resolve) => { finishSave = resolve })
+      : originalSend(type, payload))
+    wrapper = mount(SkillsPane, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+    await openCard(wrapper, skill.name)
+    await wrapper.get('.skill-body').setValue('Saved first skill')
+    await wrapper.get('.skill-editor-actions .primary').trigger('click')
+    responses['skills.get'] = { ok: true, payload: { skill: otherSkill } }
+    await openCard(wrapper, otherSkill.name)
+    finishSave!(saved
+      ? { ok: true, payload: { skill: { ...skill, revision: 'rev-2' } } }
+      : { ok: false, error: { code: 'SKILL_CONFLICT', message: 'Earlier skill changed' } })
+    await flushPromises()
+    expect(wrapper.find('.skills-conflict').exists()).toBe(false)
+
+    responses['skills.get'] = { ok: true, payload: { skill: { ...otherSkill, body: 'Latest other instructions', revision: 'other-rev-2' } } }
+    listeners.get('skills.changed')!()
+    await flushPromises()
+
+    expect(wrapper.get('.skills-drawer h3').text()).toBe(otherSkill.name)
+    expect((wrapper.get('.skill-body').element as HTMLTextAreaElement).value).toBe('Latest other instructions')
+  })
+
+  it('keeps mutation controls busy while selecting another skill during a save', async () => {
+    const otherSkill = { ...skill, name: 'other-skill' }
+    const { backend, send, responses } = mockBackend({
+      'skills.list': { ok: true, payload: { skills: [skill, otherSkill], agents } },
+    })
+    const originalSend = send.getMockImplementation()!
+    let finishSave: ((value: unknown) => void) | undefined
+    send.mockImplementation((type, payload) => type === 'skills.save'
+      ? new Promise((resolve) => { finishSave = resolve })
+      : originalSend(type, payload))
+    wrapper = mount(SkillsPane, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+    await openCard(wrapper, skill.name)
+    await wrapper.get('.skill-editor-actions .primary').trigger('click')
+    responses['skills.get'] = { ok: true, payload: { skill: otherSkill } }
+    await openCard(wrapper, otherSkill.name)
+
+    expect(wrapper.get('.skill-editor-actions .primary').attributes('disabled')).toBeDefined()
+    finishSave!({ ok: true, payload: { skill: { ...skill, revision: 'rev-2' } } })
+    await flushPromises()
+    expect(wrapper.get('.skill-editor-actions .primary').attributes('disabled')).toBeUndefined()
+  })
+
+  it('does not replace a newer library snapshot with an older list response', async () => {
+    const { backend, send, listeners } = mockBackend()
+    wrapper = mount(SkillsPane, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+    const originalSend = send.getMockImplementation()!
+    const finishList: Array<(value: unknown) => void> = []
+    send.mockImplementation((type, payload) => type === 'skills.list'
+      ? new Promise((resolve) => { finishList.push(resolve) })
+      : originalSend(type, payload))
+    listeners.get('skills.changed')!()
+    listeners.get('skills.changed')!()
+    await flushPromises()
+
+    finishList[1]({ ok: true, payload: { skills: [skill, { ...skill, name: 'latest-install' }], agents } })
+    await flushPromises()
+    finishList[0]({ ok: true, payload: { skills: [skill], agents } })
+    await flushPromises()
+
+    expect(wrapper.findAll('.skill-card strong').map((card) => card.text())).toContain('latest-install')
+  })
+
   it.each(['close', 'native'])('releases a pending shared selection after %s navigation', async (navigation) => {
     const { backend, send } = mockBackend({
       'skills.list': { ok: true, payload: { skills: [skill], native: [nativeSkill], agents } },
