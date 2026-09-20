@@ -15,7 +15,7 @@
     h2 { margin-top: 36px; font-size: 1.35rem; }
     h3 { font-size: 1rem; }
     .meta, .note { color: #526075; }
-    .status { border-left: 4px solid #a15a00; background: #fff4de; padding: 16px 20px; margin: 26px 0; }
+    .status { border-left: 4px solid #215b32; background: #e7f4eb; padding: 16px 20px; margin: 26px 0; }
     .status p { margin: 0; }
     .table-scroll { overflow-x: auto; }
     table { width: 100%; border-collapse: collapse; margin: 14px 0; text-align: left; }
@@ -55,7 +55,7 @@
   </header>
 
   <aside class="status" aria-label="Verification status" id="overall-status">
-    <p><strong>Verification pending.</strong> This report records the approved implementation scope. Automated results and review findings will be added after the checks complete. Manual desktop acceptance has not been performed.</p>
+    <p><strong>Initial and follow-up automated checks passed.</strong> Initial full validation and the viewport correction's targeted tests, renderer type check, application build, and independent review are recorded separately below. Manual desktop acceptance has not been performed.</p>
   </aside>
 
   <section aria-labelledby="problem-heading">
@@ -113,19 +113,19 @@
   </section>
 
   <section aria-labelledby="evidence-heading">
-    <h2 id="evidence-heading">Automated evidence</h2>
+    <h2 id="evidence-heading">Initial full validation</h2>
+    <p>The following results cover the initial pane-menu and project-menu contrast implementation. At the start of the follow-up inspection, the original menu blocks and tests matched the validated <code>1b3c40aa</code> revision. These full-suite, full-typecheck, and canonical-build results precede the viewport correction recorded in the next section; they do not establish that unrelated shared-checkout code stayed unchanged afterward.</p>
     <div class="table-scroll">
       <table id="verification-results">
-        <caption>Check results — pending execution</caption>
+        <caption>Initial implementation checks and their limits</caption>
         <thead><tr><th scope="col">Check</th><th scope="col">Result</th><th scope="col">Evidence / limitation</th></tr></thead>
         <tbody>
           <tr><th scope="row">Regression reproduction and focused tests</th><td><span class="pill pass">Passed</span></td><td>The new regression file failed all 16 original tests before implementation (exit 1). After implementation, the six-file targeted suite passed all 106 tests (exit 0). A later focused run with one additional deleted-target case passed all 17 tests (exit 0).</td></tr>
-          <tr><th scope="row">Project-menu regression and contrast</th><td><span class="pill pass">Passed</span></td><td>Three workspace-action suites passed all 82 tests (exit 0). An isolated HappyDOM computed-style check reproduced the original light-theme red-on-red pair at 1.47:1. Calculations across all five shipped themes give a minimum danger text/icon contrast of 6.42:1 at rest and 6.60:1 on hover/focus; light is 7.87:1 and 6.86:1 respectively. The minimum focus-ring contrast is 4.13:1. Final-state isolated DOM style probing was inconclusive because of CSS-engine handling of <code>background: none</code> and <code>color: inherit</code>; the theme-token calculations do not verify desktop rendering.</td></tr>
-          <tr><th scope="row">Broader frontend regression suite</th><td><span class="pill">Rerun running</span></td><td>The first <code>pnpm test:run --maxWorkers=2</code> attempt exited 1 after 995.03 seconds: 668 files and 9,981 tests passed, with 1 file and 15 tests skipped. There were no assertion failures, but two unhandled Vitest worker <code>Timeout calling "onTaskUpdate"</code> errors prevented a clean pass. The full rerun is now running after the completed build, without concurrent build/typecheck work from this task.</td></tr>
+          <tr><th scope="row">Project-menu regression and contrast</th><td><span class="pill pass">Passed</span></td><td>Three workspace-action suites passed all 82 tests (exit 0). An isolated HappyDOM computed-style check reproduced the original light-theme red-on-red pair at 1.47:1. Calculations across all five shipped themes give a minimum enabled destructive-row text/icon contrast of 6.42:1 at rest and 6.60:1 on hover/focus; light is 7.87:1 and 6.86:1 respectively. The minimum focus-ring contrast is 4.13:1. Final-state isolated DOM style probing was inconclusive because of CSS-engine handling of <code>background: none</code> and <code>color: inherit</code>; the theme-token calculations do not verify desktop rendering.</td></tr>
+          <tr><th scope="row">Broader frontend regression suite</th><td><span class="pill pass">Passed</span></td><td>The final <code>pnpm test:run --maxWorkers=2</code> rerun exited 0 in 404.97 seconds: 668 files and 9,987 tests passed, with 1 file and 15 tests skipped, and no unhandled errors. This run followed the completed build without concurrent build/typecheck work from this task. The first attempt exited 1 after 995.03 seconds with 9,981 tests passed and two unhandled Vitest worker <code>Timeout calling "onTaskUpdate"</code> errors, despite no assertion failures.</td></tr>
           <tr><th scope="row">Type checking</th><td><span class="pill pass">Passed</span></td><td><code>pnpm typecheck</code> exited 0 across all six stages: node, integration, plugin-git, plugin-plans, web, and public.</td></tr>
-          <tr><th scope="row">Application build</th><td><span class="pill pass">Passed</span></td><td>Canonical <code>pnpm build</code> exited 0 with the finalized code, including all official plugins, the packaged Plans backend, Git legacy, and Electron main, preload, and renderer outputs. The renderer build transformed 4,050 modules.</td></tr>
-          <tr><th scope="row">Independent code review</th><td><span class="pill pass">Passed</span></td><td>No remaining findings attributable to this change. Reviewed live selection filtering, selection snapshots, per-pane eligibility rechecks, consistent mute/unmute state, persistence, existing action handlers, and menu font/height/scroll styling. Scoped <code>git diff --check</code> exited 0.</td></tr>
-          <tr><th scope="row">HTML and change hygiene</th><td><span class="pill pass">Passed</span></td><td>Python HTMLParser check exited 0: balanced tags, 9 unique IDs, 8 accessible references, 9 valid local links, and 4 no-op preview buttons with no scripts or event handlers. <code>git diff --check</code> for the report, three user guides, and changelog exited 0.</td></tr>
+          <tr><th scope="row">Application build</th><td><span class="pill pass">Passed</span></td><td>Canonical <code>pnpm build</code> exited 0 with the initial implementation, including all official plugins, the packaged Plans backend, Git legacy, and Electron main, preload, and renderer outputs. The renderer build transformed 4,050 modules.</td></tr>
+          <tr><th scope="row">Independent code review</th><td><span class="pill pass">Passed</span></td><td>No remaining findings attributable to this change. Reviewed live selection filtering, selection snapshots, per-pane eligibility rechecks, consistent mute/unmute state, persistence, existing action handlers, and menu font/height/scroll styling. The project-menu change is scoped CSS only; its template and handlers are unchanged. Scoped <code>git diff --check</code> exited 0.</td></tr>
         </tbody>
       </table>
     </div>
@@ -141,6 +141,43 @@
     <p class="note">Automated tests establish behavior within their test environments. They do not establish desktop appearance, real CLI process acceptance, or physical input behavior.</p>
   </section>
 
+  <section aria-labelledby="followup-heading">
+    <h2 id="followup-heading">Follow-up code inspection and viewport correction</h2>
+    <p>The fresh inspection found no regression in selection scope, reclaim protections, notification state, or the original action handlers. It did find an existing project-menu positioning issue: the overflow menu always opened below its trigger and had no viewport height cap or scrolling, so its final rows could be clipped near the bottom of a short window.</p>
+    <div class="table-scroll">
+      <table>
+        <caption>Code inspection findings</caption>
+        <thead><tr><th scope="col">Area</th><th scope="col">Confirmed boundary</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">Selection and reclaim guards</th><td>Actions retain a snapshot of the selected live pane IDs. Reclaim uses the existing eligibility checks and rechecks each pane before acting; unselected panes and protected sessions stay outside the action.</td></tr>
+          <tr><th scope="row">Notifications and persistence</th><td>A mixed selection receives one desired muted state; an entirely muted selection is unmuted. Each changed pane is persisted under its own workspace, with one view synchronization for the batch.</td></tr>
+          <tr><th scope="row">Session retention and existing actions</th><td>Reclaim retains the existing resumable placeholder path. Interrupt, Rebuild, Minimize, Restore, Remove, and workspace-close confirmation semantics remain unchanged.</td></tr>
+          <tr><th scope="row">CSS scope</th><td>The danger-background correction stays within the project overflow menu's scoped selectors; it does not change the shared danger-button styling elsewhere.</td></tr>
+          <tr><th scope="row">Viewport correction</th><td>The project menu measures its rendered height after opening, preserves normal placement below the trigger, and clamps its position inside an 8 px window margin. Its height is capped at <code>100vh - 16px</code>; internal menu scrolling keeps it open, while outside scrolling dismisses it. An opening-identity check ignores stale close/reopen measurements. Its existing adjacent-menu stacking level keeps it above the status bar.</td></tr>
+        </tbody>
+      </table>
+      <table>
+        <caption>Verification after the viewport correction</caption>
+        <thead><tr><th scope="col">Check</th><th scope="col">Result</th><th scope="col">Evidence / limitation</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">Focused regression tests</th><td><span class="pill pass">Passed</span></td><td>Before the fix, the six new mounted-component cases produced 3 failures and 3 passes (exit 1). After the fix, four suites passed all 88 tests (exit 0). The six cases cover ordinary placement, the bottom edge, oversized menus and internal scrolling, outside-scroll dismissal, close-before-render, and close/reopen races. Geometry is supplied as unit-test input; actual desktop clipping remains a manual check.</td></tr>
+          <tr><th scope="row">Renderer type checking</th><td><span class="pill pass">Passed</span></td><td><code>pnpm run typecheck:web</code> exited 0 with the follow-up correction in the current checkout.</td></tr>
+          <tr><th scope="row">Application build</th><td><span class="pill pass">Passed</span></td><td><code>pnpm exec electron-vite build</code> exited 0 after the correction: main transformed 384 modules, preload 4, and renderer 4,050. This follow-up application build is separate from the earlier canonical <code>pnpm build</code> that also packaged plugins and the Plans backend.</td></tr>
+          <tr><th scope="row">Independent follow-up review</th><td><span class="pill pass">Passed</span></td><td>No remaining findings attributable to the viewport correction. Reviewed measured placement, height limits, internal versus outside scrolling, stale opening callbacks, and stacking above the status bar. The original menu actions and confirmation handlers remain unchanged.</td></tr>
+          <tr><th scope="row">Report integrity and documentation hygiene</th><td><span class="pill pass">Passed</span></td><td>HTML and whitespace validation exited 0: balanced tags, 10 unique IDs, 9 accessible references, 10 valid local links, and 4 no-op preview buttons with no scripts or event handlers. Scoped <code>git diff --check</code> exited 0.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <details>
+      <summary>Exact viewport regression commands</summary>
+      <p>Reproduction before the fix: 3 failed and 3 passed, exit 1.</p>
+      <pre><code>pnpm test:run src/renderer/src/components/__tests__/ControlPane.workspaceMenuPlacement.test.ts --maxWorkers=2</code></pre>
+      <p>After the fix: 4 files and 88 tests passed, exit 0.</p>
+      <pre><code>pnpm test:run src/renderer/src/components/__tests__/ControlPane.workspaceMenuPlacement.test.ts src/renderer/src/components/__tests__/ControlPane.workspaceActions.test.ts src/renderer/src/components/__tests__/ControlPane.workspaces.test.ts src/renderer/src/components/__tests__/App.closeWorkspaceTeardown.test.ts --maxWorkers=2</code></pre>
+    </details>
+    <p class="note">The initial full-suite result above is not a full-suite rerun after this additional correction. Follow-up results are recorded separately to keep the tested scope clear.</p>
+  </section>
+
   <section aria-labelledby="manual-heading">
     <h2 id="manual-heading">Manual desktop acceptance</h2>
     <p><strong>Status: not performed.</strong> Repository instructions prohibit UI automation and reserve desktop testing for the user. The following checks remain explicit manual acceptance items:</p>
@@ -151,7 +188,7 @@
       <li>Restore selected placeholders and confirm that their expected CLI sessions resume.</li>
       <li>Select muted and unmuted panes together. Mute selected notifications should mute all of them; reopening the menu should offer Unmute selected notifications, which restores notifications for the selection.</li>
       <li>Confirm that single-pane menus and the existing Interrupt, Rebuild, Minimize, Restore, and Remove workflows behave as before.</li>
-      <li>Open the project overflow menu in light and dark themes. Check that “Close workspace and its panes” and its icon are readable at rest, on hover, and when focused; check that the existing confirmation still appears before closing.</li>
+      <li>Open the project overflow menu in light and dark themes. Check that “Close workspace and its panes” and its icon are readable at rest, on hover, and when focused; check that the existing confirmation still appears before closing. Open it near the bottom of a short window and confirm that all rows remain reachable.</li>
     </ol>
   </section>
 
@@ -162,6 +199,7 @@
       <li><a href="../../src/renderer/src/components/ControlPane.vue">Project overflow menu styles</a></li>
       <li><a href="../../src/renderer/src/lib/idleReclaim.ts">Existing reclaim eligibility rules</a></li>
       <li><a href="../../src/renderer/src/components/__tests__/App.batchMenuActions.test.ts">New selection action regressions</a> and <a href="../../src/renderer/src/components/__tests__/App.multiSelectBatch.test.ts">existing multi-selection and locale contract tests</a></li>
+      <li><a href="../../src/renderer/src/components/__tests__/ControlPane.workspaceMenuPlacement.test.ts">Mounted project-menu placement and scrolling regressions</a></li>
       <li><a href="../en-US/user-guide.md">English user guide</a>, <a href="../zh-TW/user-guide.md">Traditional Chinese guide</a>, and <a href="../ja-JP/user-guide.md">Japanese guide</a></li>
       <li><a href="../../CHANGELOG.md">Unreleased changelog entry</a></li>
     </ul>

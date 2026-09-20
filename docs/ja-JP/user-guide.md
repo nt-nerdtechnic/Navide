@@ -40,7 +40,7 @@ Source Code と明示的に共有された Documentation は、Repository にお
 - Main Layout を占有せず PTY を維持するには Pane を Minimize します。
 - Navide が再利用可能な Session ID を検出した後にのみ Rebuild または Resume します。
 
-Select multiple pane headers with Cmd/Ctrl-click or Shift-click, then right-click a selected pane to open the batch menu. Its groups contain Interrupt/Rebuild, Minimize/Restore/Reclaim, notification controls, and Remove. **Restore selected** also opens selected panes that have not yet been opened or were reclaimed.
+Select multiple pane headers with Cmd/Ctrl-click or Shift-click, then right-click a selected pane to open the batch menu. Its groups contain Interrupt/Rebuild, Minimize/Restore/Reclaim, notification controls, and Remove. **Restore selected** also opens selected panes that have not yet been opened or were reclaimed. Pane and project overflow menus stay within the window; long menus scroll so their final actions remain reachable.
 
 **Reclaim selected (N)** shows how many selected panes are eligible, releases their CLI processes, and keeps click-to-resume placeholders. It skips protected panes, including running panes, the focused pane, panes awaiting an answer or holding unsent text, and panes without a resumable session. The action stays visible but is disabled when none of the selected panes can be reclaimed. **Mute selected notifications** mutes the entire selection, including a mix of muted and unmuted panes; when every selected pane is muted, **Unmute selected notifications** restores notifications for all of them. These batch actions affect only the selected panes.
 
@@ -118,7 +118,7 @@ Editor は Monaco を使用し、File Editing、Diagnostics、Plan Rendering、D
 3. 指示全文、ファイル一覧、スクリプト警告、出所と digest を確認し、preview ID、同じ digest、明示的な targets で `skills_install` を呼びます。共有ルートへの初回書き込みには、別途ユーザーの許可を `consent` で渡します。digest や Agent が設定した boolean は許可の証拠ではありません。同名の管理対象、ユーザー所有、native skill は拒否します。宛先を排他的に作成し、添付ファイルと metadata の後に `SKILL.md` を公開するため、不完全なパッケージが検出されません。ディレクトリ全体の atomic rename ではありません。
 4. 配信設定の変更には ID と最新の `delivery_revision` を `skills_set_delivery` に渡します。古い revision は失敗し、別の呼び出し元の判断を上書きしません。このフローは追加専用で、既存インストールの更新や再取得は行いません。
 
-準備した bytes は認証済み呼び出し元に結び付けられ、15 分後または backend 再起動時に失効します。インストール時にローカルの再読込や再ダウンロードは行いません。許可の再試行には有効な preview を再利用でき、再試行用の記録が残っている間だけ、成功後の再送は元の結果を返し、再書き込みしません。有効な準備は最大 8 パッケージで、内容を持たない軽量な完了記録を別に最大 8 件保持します。記録は元の preview の期限で失効し、上限に達すると古いものから先に破棄される場合があります。失効または破棄後の再送は missing/expired を返し、再インストールしません。GitHub archive は圧縮 10 MiB、展開 32 MiB、4,096 entries が上限で、選んだ skill は 64 ファイル、各 256 KiB、合計 512 KiB までです。危険なパス、リンク、特殊ファイル、予約 metadata、不正な manifest は黙って除外せず拒否します。
+準備した bytes は認証済み呼び出し元に結び付けられ、15 分後または backend 再起動時に失効します。インストール時にローカルの再読込や再ダウンロードは行いません。許可の再試行には有効な preview を再利用でき、再試行用の記録が残っている間だけ、成功後の再送は元の結果を返し、再書き込みしません。有効な準備は最大 8 パッケージで、内容を持たない軽量な完了記録を別に最大 8 件保持します。インストールが成功すると、パッケージ bytes と有効な準備枠を解放します。記録は元の preview の期限で失効し、上限に達するとインストール成功が最も古い記録から破棄します。失効または破棄後の再送は missing/expired を返し、再インストールしません。GitHub archive は圧縮 10 MiB、展開 32 MiB、4,096 entries が上限で、選んだ skill は 64 ファイル、各 256 KiB、合計 512 KiB までです。危険なパス、リンク、特殊ファイル、予約 metadata、不正な manifest は黙って除外せず拒否します。
 
 共有 skill の `targets: null` は全 wired vendor、`targets: []` は Navide の追加配信なしを意味します。Native skill の targets は他の CLI への追加配信を指定し、空配列や `null` はそれを解除します。共有ルートを直接読む CLI は Navide の targets や有効スイッチに関係なく skill を発見できます。これらの設定は隔離境界ではありません。
 

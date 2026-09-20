@@ -82,6 +82,9 @@ constitute authenticated, end-to-end acceptance of every vendor:
   their explicit session IDs to the existing duplicate-PTY reaping path.
   Grok title-based resume is still not parsed as a session ID. Both vendors
   retain file-based session existence checks through `session_path`.
+  Duplicate detection accepts literal CLI invocations and known shell wrappers;
+  it does not infer IDs from compound shell commands, other executables or
+  positional text after `--`.
 - Grok's first session directory is shared with its per-pane home shim even
   when the real home had no sessions directory before launch.
 - Kimi streaming records postpone inferred idle completion. New assistant
@@ -98,6 +101,10 @@ constitute authenticated, end-to-end acceptance of every vendor:
   effort. If the pane record was pruned, durable history supplies those
   choices; older records without them retain the vendor default. An older
   client's omitted fields no longer erase recorded choices.
+  When resuming history viewed from another workspace, a pruned pane's saved
+  parent is restored only if that parent still exists in the target workspace.
+  Missing parents remain roots, and a record explicitly marked as a root stays
+  a root.
 
 ### Codex session identity — updated 2026-09-16
 

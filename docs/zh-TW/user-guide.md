@@ -40,7 +40,7 @@ Navide 將個人私有 Project Intelligence 儲存在 Workspace 內的 `.agent-t
 - 將 Pane 最小化可以保留 PTY，同時避免占用主要 Layout。
 - 只有 Navide 偵測到可重用 Session ID 後，才進行 Rebuild 或 Resume。
 
-Select multiple pane headers with Cmd/Ctrl-click or Shift-click, then right-click a selected pane to open the batch menu. Its groups contain Interrupt/Rebuild, Minimize/Restore/Reclaim, notification controls, and Remove. **Restore selected** also opens selected panes that have not yet been opened or were reclaimed.
+Select multiple pane headers with Cmd/Ctrl-click or Shift-click, then right-click a selected pane to open the batch menu. Its groups contain Interrupt/Rebuild, Minimize/Restore/Reclaim, notification controls, and Remove. **Restore selected** also opens selected panes that have not yet been opened or were reclaimed. Pane and project overflow menus stay within the window; long menus scroll so their final actions remain reachable.
 
 **Reclaim selected (N)** shows how many selected panes are eligible, releases their CLI processes, and keeps click-to-resume placeholders. It skips protected panes, including running panes, the focused pane, panes awaiting an answer or holding unsent text, and panes without a resumable session. The action stays visible but is disabled when none of the selected panes can be reclaimed. **Mute selected notifications** mutes the entire selection, including a mix of muted and unmuted panes; when every selected pane is muted, **Unmute selected notifications** restores notifications for all of them. These batch actions affect only the selected panes.
 
@@ -120,7 +120,7 @@ Editor 使用 Monaco，並提供 File Editing、Diagnostics、Plan Rendering、D
 3. 檢視完整指示、檔案清單、腳本警示、來源與 digest，再以 preview ID、相同 digest 及明確 targets 呼叫 `skills_install`。首次寫入共用根另須由 `consent` 表達使用者許可；digest 或 Agent 自填的布林值不代表已獲授權。任何同名受管、使用者或原生 skill 都會拒絕。安裝獨占建立目的目錄，寫完附件與 metadata 後才發布 `SKILL.md`，讓掃描不會讀到半套內容；這不是整個目錄的原子 rename。
 4. 之後用 skill ID 與最新 `delivery_revision` 呼叫 `skills_set_delivery`。過時 revision 會失敗，不覆蓋其他呼叫端的決定。此流程只新增 skill，不更新或重新取得既有安裝。
 
-準備的 bytes 綁定已驗證的呼叫端，15 分鐘後或 backend 重啟時失效；安裝不重讀本機來源或再次下載。許可重試可沿用尚未到期的 preview；重試收據仍保留時，成功重送只回傳原結果，不重複寫入。同時最多 8 份有效準備，另有最多 8 份不含套件內容的輕量完成收據。收據沿用原 preview 到期時間，快取滿時也可能提早淘汰；到期或淘汰後重送回傳 missing/expired，不重新安裝。GitHub archive 限壓縮 10 MiB、展開 32 MiB、4,096 個 entries；選定 skill 限 64 檔、每檔 256 KiB、總量 512 KiB。不安全路徑、連結、特殊檔、保留 metadata 與無效 manifest 直接拒絕，不靜默略過。
+準備的 bytes 綁定已驗證的呼叫端，15 分鐘後或 backend 重啟時失效；安裝不重讀本機來源或再次下載。許可重試可沿用尚未到期的 preview；重試收據仍保留時，成功重送只回傳原結果，不重複寫入。同時最多 8 份有效準備，另有最多 8 份不含套件內容的輕量完成收據。安裝成功即釋放套件 bytes 與有效準備名額。收據沿用原 preview 到期時間；快取滿時，最早安裝成功的收據優先淘汰。到期或淘汰後重送回傳 missing/expired，不重新安裝。GitHub archive 限壓縮 10 MiB、展開 32 MiB、4,096 個 entries；選定 skill 限 64 檔、每檔 256 KiB、總量 512 KiB。不安全路徑、連結、特殊檔、保留 metadata 與無效 manifest 直接拒絕，不靜默略過。
 
 共用 skill 的 `targets: null` 代表所有 wired vendor，`targets: []` 停止 Navide 額外投遞。原生 skill 的 targets 指定其他 CLI，空陣列或 `null` 清除額外路由。自行掃描共用根的 CLI 仍可能讀到 skill，不受 Navide targets 或啟用開關全面限制；這些設定不是隔離界線。
 
