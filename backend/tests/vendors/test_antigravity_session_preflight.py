@@ -1,6 +1,4 @@
-"""Characterization tests for antigravity's resume preflight — written
-against the legacy behavior BEFORE the R5 migration, required to pass
-unchanged after it."""
+"""Antigravity resume identity and on-disk preflight."""
 
 from __future__ import annotations
 
@@ -9,13 +7,11 @@ from pathlib import Path
 from agent_team_backend import app as app_module
 
 
-def test_backend_has_no_resume_extractor() -> None:
-    # `agy --conversation <id>` parsing lives frontend-side today; the
-    # backend deliberately claims nothing. Pinned so the migration doesn't
-    # accidentally introduce claiming behavior.
+def test_backend_claims_an_explicit_resume_but_not_a_fresh_launch() -> None:
     assert app_module._resume_id_for_agent(
         "antigravity", "agy --conversation abc123"
-    ) == ""
+    ) == "abc123"
+    assert app_module._resume_id_for_agent("antigravity", "agy") == ""
 
 
 def test_lookup_path_names_the_conversation_db() -> None:

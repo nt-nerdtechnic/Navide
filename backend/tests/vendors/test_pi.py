@@ -251,6 +251,15 @@ def test_has_session_verifies_header_id(fake_pi_root: Path) -> None:
     assert reader.has_session("missing") is False
 
 
+def test_resume_preflight_requires_the_target_workspace(fake_pi_root: Path) -> None:
+    from agent_team_backend.cli_vendors.pi import SPEC
+
+    _write_jsonl(_session_file(fake_pi_root), [_header()])
+    assert SPEC.session_exists(_CWD, _SID) is True
+    assert SPEC.session_exists(_CWD + "-other", _SID) is False
+    assert SPEC.session_exists(_CWD, "missing") is False
+
+
 # ─────────────────────────── incremental parsing ─────────────────────────────
 
 def test_incremental_parse_offset_advances(fake_pi_root: Path) -> None:

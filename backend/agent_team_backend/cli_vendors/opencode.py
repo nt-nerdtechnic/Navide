@@ -555,11 +555,12 @@ OPENCODE_MINIMAX_USAGE_URL = "https://api.minimax.io/v1/token_plan/remains"
 
 
 def read_opencode_credentials(home: Path) -> dict | None:
-    """Parse ``~/.local/share/opencode/auth.json``: a map of providerID ->
+    """Parse ``<XDG_DATA_HOME|~/.local/share>/opencode/auth.json``: providerID ->
     credential entry ({type: "api", key} or {type: "oauth", access, refresh,
     expires}). Returns the dict-valued entries, or None when the file is
     absent/malformed/empty."""
-    path = home.joinpath(*OPENCODE_AUTH_FILE_REL)
+    xdg = os.environ.get("XDG_DATA_HOME")
+    path = Path(xdg) / "opencode" / "auth.json" if xdg else home.joinpath(*OPENCODE_AUTH_FILE_REL)
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):

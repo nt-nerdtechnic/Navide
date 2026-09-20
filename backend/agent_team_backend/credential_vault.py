@@ -350,6 +350,9 @@ class CredentialVault:
         return f"{_SLOT_SERVICE_PREFIX}{agent_key}-{slot_id}"
 
     def _live_file(self, agent_key: str) -> Path:
+        spec = _cli_vendor_spec(agent_key)
+        if spec is not None and spec.live_file_resolver is not None:
+            return spec.live_file_resolver(self._real_home)
         return self._real_home.joinpath(*_LIVE_FILES[agent_key])
 
     def _claude_config_json(self) -> Path:

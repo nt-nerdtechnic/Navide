@@ -396,7 +396,7 @@ class KimiLogReader(LogReader):
                             text=user_prompt_text(join_text_blocks(rec.get("input"), "text")),
                         ))
                     elif rtype == "usage.record":
-                        if state is not None:
+                        if state is not None and not state.get("flushed"):
                             state["last_ms"] = max(int(state.get("last_ms") or 0), tms)
                         out.append(ActivityEvent(
                             vendor="kimi", event_type="agent_active",
@@ -404,6 +404,10 @@ class KimiLogReader(LogReader):
                             dedup_key=key, timestamp=ts, detail="usage",
                         ))
                     elif rtype == "context.append_loop_event":
+                        if state is not None and state.get("cancelled"):
+                            continue
+                        if state is not None and not state.get("flushed"):
+                            state["last_ms"] = max(int(state.get("last_ms") or 0), tms)
                         # The assistant's visible reply: content.part carries both
                         # `think` and `text` parts, and only the latter is what the
                         # user (and the messaging protocol) sees. Later parts in a
@@ -411,10 +415,16 @@ class KimiLogReader(LogReader):
                         event = rec.get("event")
                         if isinstance(event, dict) and event.get("type") == "content.part":
                             part = event.get("part")
-                            if isinstance(part, dict) and part.get("type") == "text":
+                            if isinstance(part, dict) and part.get("type") in ("text", "think"):
                                 text = str(part.get("text") or "").strip()
                                 if text:
-                                    last_text = _cap_text(text)
+                                    # New content disproves an inferred idle
+                                    # end; late accounting alone does not.
+                                    if state is None or state.get("flushed"):
+                                        idx = (int(state["idx"]) + 1) if state is not None else 0
+                                        state = {"idx": idx, "last_ms": tms, "flushed": False}
+                                    if part.get("type") == "text":
+                                        last_text = _cap_text(text)
                     elif rtype == "turn.cancel":
                         if state is not None and not state.get("flushed"):
                             out.append(_complete(
@@ -422,6 +432,8 @@ class KimiLogReader(LogReader):
                                 max(int(state.get("last_ms") or 0), tms), "cancel",
                             ))
                             state["flushed"] = True
+                        if state is not None:
+                            state["cancelled"] = True
                             last_text = ""
 
                 # The latest (still-open) turn has no following prompt; flush it once

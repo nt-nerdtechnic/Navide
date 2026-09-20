@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import re
+import shlex
 import sqlite3
 from collections import Counter
 from pathlib import Path
@@ -31,7 +32,7 @@ import os
 import sys
 import time
 
-from .base import Dep, McpServerConfig, McpValue, McpWiring, SkillsWiring, VendorSpec
+from .base import Dep, McpServerConfig, McpValue, McpWiring, SkillsWiring, VendorSpec, command_text
 from ..usage_common import (
     HTTP_TIMEOUT,
     _KEYCHAIN_COOLDOWN_S,
@@ -94,6 +95,8 @@ _BUSY_TIMEOUT_MS = 250
 # `idx` is a monotonic primary key, so it plays the role a byte offset plays
 # for a JSONL reader.
 _IDX_PREFIX = "agy_idx::"
+# An unfinished assistant row can be updated in place after the idx advances.
+_PENDING_PREFIX = "agy_pending::"
 
 # Steps read per pass. A resumed conversation can be thousands of rows deep;
 # the watcher only needs the recent tail to decide "working" vs "done".
@@ -342,18 +345,37 @@ class AntigravityLogReader(LogReader):
             if newest is not None:
                 remember(newest)
             return []
-        rows = self._read_steps(path, int(prev))
+        pending_raw = next(
+            (key[len(_PENDING_PREFIX):] for key in seen_keys
+             if key.startswith(_PENDING_PREFIX)), "[]",
+        )
+        pending = set(json.loads(pending_raw))
+        rows = self._read_steps(path, int(prev), pending)
         if not rows:
             return []
-        remember(rows[-1][0])
+        newest = max(int(prev), rows[-1][0])
+        remember(newest)
         cwd = self.cwd_from_file(path)
-        return [
-            ev
-            for i, row in enumerate(rows)
-            for ev in self._step_event(
-                path, session_id, cwd, row, is_last=i == len(rows) - 1
-            )
-        ]
+        events: list[ActivityEvent] = []
+        for row in rows:
+            idx, step_type, status, _, _ = row
+            if step_type == _STEP_ASSISTANT and status != _STATUS_DONE:
+                if idx in pending:
+                    continue  # still streaming; do not repeat the active event
+                pending.add(idx)
+            else:
+                pending.discard(idx)
+            events.extend(self._step_event(
+                path, session_id, cwd, row, is_last=idx == newest
+            ))
+        # One sentinel stays under the watcher's persisted-key count limit,
+        # even when several assistant rows are unfinished at the same time.
+        seen_keys.difference_update(
+            {key for key in seen_keys if key.startswith(_PENDING_PREFIX)}
+        )
+        if pending:
+            seen_keys.add(_PENDING_PREFIX + json.dumps(sorted(pending)))
+        return events
 
     def _max_step_idx(self, path: Path) -> int | None:
         """Highest `steps.idx` in the conversation (None when unreadable)."""
@@ -370,18 +392,23 @@ class AntigravityLogReader(LogReader):
         return int(row[0]) if row and row[0] is not None else None
 
     def _read_steps(
-        self, path: Path, after_idx: int
+        self, path: Path, after_idx: int, pending: set[int] | None = None,
     ) -> list[tuple[int, int, int, bytes, bytes]]:
-        """(idx, step_type, status, metadata, step_payload) rows after
-        `after_idx`, oldest first ([] when the db cannot be read)."""
+        """New rows and pending assistant rows, oldest first
+        ([] when the db cannot be read)."""
         try:
             con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
             try:
                 con.execute(f"PRAGMA busy_timeout = {_BUSY_TIMEOUT_MS}")
+                pending_ids = sorted(pending or ())
+                pending_clause = (
+                    f" OR idx IN ({','.join('?' for _ in pending_ids)})"
+                    if pending_ids else ""
+                )
                 rows = con.execute(
                     "SELECT idx, step_type, status, metadata, step_payload "
-                    "FROM steps WHERE idx > ? ORDER BY idx LIMIT ?",
-                    (after_idx, _MAX_STEPS_PER_PASS),
+                    f"FROM steps WHERE idx > ?{pending_clause} ORDER BY idx LIMIT ?",
+                    (after_idx, *pending_ids, _MAX_STEPS_PER_PASS),
                 ).fetchall()
             finally:
                 con.close()
@@ -752,10 +779,27 @@ async def fetch_antigravity(home: Path) -> dict:
 
 # ---- session ---------------------------------------------------------------
 
+def _resume_id_from_command(command) -> str:
+    try:
+        args = shlex.split(command_text(command))
+    except ValueError:
+        return ""
+    if not args or args[0] != "agy":
+        return ""
+    for index, arg in enumerate(args[1:], 1):
+        if arg == "--conversation" and index + 1 < len(args):
+            value = args[index + 1]
+        elif arg.startswith("--conversation="):
+            value = arg.partition("=")[2]
+        else:
+            continue
+        return value if value and not value.startswith("-") else ""
+    return ""
+
+
 def _session_path(workspace_path: str, session_id: str) -> Path:
     # Each conversation is a SQLite db; the id is the filename stem accepted
-    # by `agy --conversation <id>`. (`agy --conversation` parsing itself
-    # lives frontend-side today — the backend deliberately claims nothing.)
+    # by `agy --conversation <id>`.
     return (Path.home() / ".gemini" / "antigravity-cli" / "conversations"
             / f"{session_id}.db")
 
@@ -790,6 +834,7 @@ SPEC = VendorSpec(
     ),
     # Late-bound (module global at call time) so tests can monkeypatch.
     fetch_usage=lambda home: fetch_antigravity(home),
+    resume_id_from_command=_resume_id_from_command,
     session_path=_session_path,
     make_log_reader=AntigravityLogReader,
     install_dep=Dep("antigravity", "Antigravity", "Google Antigravity CLI", "agent_cli",

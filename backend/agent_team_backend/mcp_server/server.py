@@ -5375,15 +5375,21 @@ def _skills_inventory(agent_key: str) -> dict[str, Any]:
     delivery target, so the "mine" half is omitted rather than guessed at.
     """
     from agent_team_backend import app as _app
+    from agent_team_backend.plugins.builtin.navide_skills.skills_tools import delivery_context, skill_id
 
     listing = _app.skills_store.list_skills()
     result: dict[str, Any] = {
-        "skills": [_pick(skill, _SKILL_FIELDS) for skill in listing.get("skills") or []],
+        "skills": [
+            {**_pick(skill, _SKILL_FIELDS), "id": skill_id(skill)}
+            for skill in listing.get("skills") or []
+        ],
         "native": [
-            _pick(skill, _NATIVE_SKILL_FIELDS) for skill in listing.get("native") or []
+            {**_pick(skill, _NATIVE_SKILL_FIELDS), "id": skill_id(skill, native=True)}
+            for skill in listing.get("native") or []
         ],
         "root": listing.get("root", ""),
         "agents": listing.get("agents") or [],
+        **delivery_context(listing.get("agents") or []),
     }
     if agent_key:
         result["delivered_to_me"] = {
@@ -5391,31 +5397,45 @@ def _skills_inventory(agent_key: str) -> dict[str, Any]:
             "skills": _app.skills_store.targets_for(agent_key),
             "native_paths": _app.skills_store.native_targets_for(agent_key),
         }
+        result["configured_for_me"] = {
+            **result["delivered_to_me"],
+            "materialized_in_current_session": None,
+            "loaded_in_current_session": None,
+            "activation": "new_session",
+        }
     return result
 
 
 @server.tool()
 async def skills_list(ctx: Context) -> dict[str, Any]:
-    """List the skills Navide manages, and which of them reach you.
+    """List known skills and configured delivery, not proof of CLI loading.
 
     A skill is a folder of instructions a CLI loads on demand. Navide keeps a
     shared library the user can deliver to any vendor, and also reflects the
     ones each CLI keeps in its own directory. Read this to find out what is
     available before writing an instruction yourself, or to tell the user which
-    skill would cover what they are asking for. Read-only — delivering a skill
-    is the user's decision, made in Settings.
+    skill would cover what they are asking for. Read-only. Use skills_inspect
+    with a listed id for instructions and a delivery revision; authorized
+    changes use skills_set_delivery. Install through skills_prepare_install
+    then skills_install after reviewing the preview.
 
     Returns {skills, native, root, agents}. Each shared skill is {name,
-    description, enabled, targets, managed, valid, native_conflict}: `targets`
+    id, description, enabled, targets, managed, valid, native_conflict}: `targets`
     null means every vendor receives it, a list means only those vendors, and
-    `enabled` false means nobody does. Each native entry is {name, description,
+    `enabled` false disables Navide's projected delivery; automatic shared-root
+    discovery is unaffected. Each native entry is {name, description,
     source, owner_agent, real_path, valid} — a skill some CLI already owns.
     `agents` is every vendor with its delivery support (wired / planned /
     unsupported), so "not delivered" and "cannot be delivered" stay apart.
 
-    `delivered_to_me` is the half about you: {agent_key, skills, native_paths},
-    the names your own CLI is actually given. It is absent for a caller with no
-    pane identity, which is nobody's delivery target.
+    `configured_for_me` contains the current routing decision for your vendor.
+    `delivered_to_me` is its legacy alias: both describe configuration, not a
+    spawn snapshot or proof the running CLI loaded it. Current-session
+    materialization and loading are explicitly unknown; changes take effect in
+    a new session. Both are absent without pane identity.
+    Shared-root readers in `automatic_agents` discover original shared files
+    regardless of Navide routing. `skills_sync_enabled` reports whether managed
+    content and routing are eligible for the user's cross-device Skills sync.
 
     Names and descriptions only. A skill's instructions are read from its own
     folder when you use it, not from here.

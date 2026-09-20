@@ -486,6 +486,7 @@ async def test_skills_list_summarises_the_library_without_the_instructions(
 
     assert result["skills"] == [
         {
+            "id": "shared:verify",
             "name": "verify",
             "description": "How to drive this repo's surfaces",
             "enabled": True,
@@ -495,8 +496,11 @@ async def test_skills_list_summarises_the_library_without_the_instructions(
             "native_conflict": False,
         }
     ]
+    from agent_team_backend.plugins.builtin.navide_skills.skills_tools import skill_id
+
     assert result["native"] == [
         {
+            "id": skill_id({"real_path": "/home/u/.claude/skills/notebooklm"}, native=True),
             "name": "notebooklm",
             "description": "NotebookLM API",
             "source": "claude",
@@ -524,6 +528,23 @@ async def test_skills_list_marks_what_is_delivered_to_the_calling_pane(
         "native_paths": ["/home/u/.claude/skills/notebooklm"],
     }
     assert skills.targets_calls == ["codex"]
+
+
+@pytest.mark.asyncio
+async def test_skills_list_distinguishes_configuration_from_cli_loading(
+    skills: _FakeSkillsStore,
+) -> None:
+    agent_messaging.register("pa", "reviewer", "/ws/alpha", agent_key="codex")
+
+    result = await plan_mcp.skills_list(_ctx())
+
+    assert result["configured_for_me"]["skills"] == ["verify"]
+    assert result["configured_for_me"]["materialized_in_current_session"] is None
+    assert result["configured_for_me"]["loaded_in_current_session"] is None
+    assert result["configured_for_me"]["activation"] == "new_session"
+    assert result["delivery_semantics"] == "configuration_only"
+    assert result["skills"][0]["id"] == "shared:verify"
+    assert result["native"][0]["id"].startswith("native:")
 
 
 @pytest.mark.asyncio

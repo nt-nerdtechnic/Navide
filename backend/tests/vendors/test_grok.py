@@ -422,6 +422,25 @@ def test_no_markers_wanted_scans_nothing(_grok_home: Path) -> None:
 
 # ── resume preflight ────────────────────────────────────────────────────────
 
+def test_resume_command_claims_ids_but_not_titles_or_new_session_ids() -> None:
+    from agent_team_backend.cli_vendors.grok import SPEC
+
+    parse = SPEC.resume_id_from_command
+    assert parse is not None
+    for command in (
+        f"grok -r {SID}",
+        f"grok --model test --resume='{SID}'",
+        ["/bin/sh", "-lc", f"grok --resume {SID}"],
+    ):
+        assert parse(command) == SID
+        assert app_module._resume_id_for_agent("grok", command) == SID
+    for command in (
+        "grok", "grok --continue", "grok --resume --model test",
+        "grok --resume 'my session title'", f"grok --session-id {SID}",
+    ):
+        assert parse(command) == ""
+
+
 def test_resume_preflight_can_now_check_a_session(_grok_home: Path) -> None:
     """Newly answerable: the community CLI's single shared store had no
     per-id path, so the preflight could only assume "resumable"."""

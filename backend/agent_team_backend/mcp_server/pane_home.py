@@ -133,6 +133,7 @@ _MIRROR_EXTRAS: dict[str, dict[str, tuple[str, ...]]] = {
     # grok shim lists them explicitly: they are absent after a clean shutdown,
     # so "link it only if it already exists" would leave them pane-local.
     "grok": {
+        "seeded_dirs": ("sessions",),
         "seeded_files": ("grok.db", "grok.db-wal", "grok.db-shm"),
         "volatile": ("grok.db-wal", "grok.db-shm"),
     },
@@ -330,7 +331,7 @@ def _read_config_object(path: Path) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def _seed_link_targets(spec: ShimSpec, real_vendor: Path) -> None:
+def _seed_link_targets(spec: ShimSpec, real_vendor: Path, shim_vendor: Path) -> None:
     """Create the empty real targets the seeded names need to be linkable."""
     if not real_vendor.is_dir():
         # The CLI has never run. Creating its config directory here would put
@@ -341,6 +342,11 @@ def _seed_link_targets(spec: ShimSpec, real_vendor: Path) -> None:
     for name in spec.seeded_dirs:
         target = real_vendor / name
         if target.exists() or target.is_symlink():
+            continue
+        existing = shim_vendor / name
+        if existing.is_dir() and not existing.is_symlink():
+            # The next mirror pass adopts this directory. An empty seed here
+            # would turn the older pane's only session tree into a conflict.
             continue
         try:
             target.mkdir(parents=True, exist_ok=True)
@@ -445,7 +451,6 @@ def prepare(
         # even briefly.
         for directory in (panes_root(), root.parent, root):
             secret_files.make_private_dir(directory)
-        _seed_link_targets(spec, real_vendor)
         if spec.shims_home:
             # PANES_DIR_NAME is skipped alongside the vendor dir: it lives in
             # the real home too, and mirroring it would point every shim at the
@@ -454,6 +459,7 @@ def prepare(
             vendor_root = root / spec.vendor_dir
         else:
             vendor_root = root
+        _seed_link_targets(spec, real_vendor, vendor_root)
         # Rebuild each directory on the way to the config file, so only the
         # leaf is ours and every sibling stays a link to the user's.
         src, dst = real_vendor, vendor_root

@@ -92,6 +92,7 @@ def _int(value) -> int:  # noqa: ANN001
 #: already accounted for. Kept off the per-event dedup keys deliberately —
 #: see log_readers.base on unbounded seen_keys growth.
 _TOKEN_MARK_PREFIX = "droid_tok::"
+_TEXT_MARK_PREFIX = "droid_text::"
 
 
 def _token_mark(seen_keys: set[str]) -> tuple[int, int]:
@@ -298,11 +299,11 @@ class DroidLogReader(LogReader):
 
         high_water = activity_high_water(seen_keys)
         last_line = high_water
-        # Turn text is best-effort: the outcome record names no message, so the
-        # most recent assistant text in this scan is the closest thing to "what
-        # the turn said". A resumed scan that starts past that line carries no
-        # text rather than guessing.
-        last_assistant_text = ""
+        # The outcome can arrive in a later poll than its assistant message.
+        last_assistant_text = next(
+            (key[len(_TEXT_MARK_PREFIX):] for key in seen_keys
+             if key.startswith(_TEXT_MARK_PREFIX)), ""
+        )
 
         try:
             with fh:
@@ -338,6 +339,7 @@ class DroidLogReader(LogReader):
                             dedup_key=f"turn:{line_no}", timestamp=ts,
                             detail=reason, text=last_assistant_text,
                         ))
+                        last_assistant_text = ""
                         continue
 
                     if rtype != "message":
@@ -371,6 +373,7 @@ class DroidLogReader(LogReader):
                         and not _is_hook_record(msg)
                         and not _has_block(content, "tool_result")
                     ):
+                        last_assistant_text = ""
                         text = user_prompt_text(join_text_blocks(content, "text"))
                     out.append(ActivityEvent(
                         vendor="droid",
@@ -381,6 +384,11 @@ class DroidLogReader(LogReader):
                     ))
         finally:
             set_activity_high_water(seen_keys, last_line)
+            seen_keys.difference_update(
+                {key for key in seen_keys if key.startswith(_TEXT_MARK_PREFIX)}
+            )
+            if last_assistant_text:
+                seen_keys.add(_TEXT_MARK_PREFIX + last_assistant_text)
         return out
 
 

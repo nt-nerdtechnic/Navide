@@ -1154,6 +1154,24 @@ def test_kilo_switch_swaps_the_live_auth_file(tmp_path: Path) -> None:
         '{"kilo": {"type": "api", "key": "A"}}'
 
 
+def test_kilo_switch_uses_xdg_live_credentials(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+    vault = _file_vault(tmp_path)
+    live = tmp_path / "xdg" / "kilo" / "auth.json"
+    fallback = tmp_path / "home" / ".local" / "share" / "kilo" / "auth.json"
+    outgoing = '{"kilo": {"type": "api", "key": "A"}}'
+    incoming = '{"kilo": {"type": "api", "key": "B"}}'
+    _write(live, outgoing)
+    _write(fallback, "unrelated fallback credentials")
+    vault.write_slot("kilo", "b", LiveCredentials(secret=incoming))
+
+    vault.switch("kilo", DEFAULT_SLOT_ID, "b")
+
+    assert live.read_text(encoding="utf-8") == incoming
+    assert vault.read_slot("kilo", DEFAULT_SLOT_ID).secret == outgoing
+    assert fallback.read_text(encoding="utf-8") == "unrelated fallback credentials"
+
+
 def test_login_spawn_env_kilo_has_no_isolation(tmp_path: Path) -> None:
     """kilo has no config-home variable, so its sign-in runs against the real
     home: no env override and — just as important — no login home directory,

@@ -71,7 +71,8 @@ def _watch_targets(
         spec = VENDORS.get(agent_key)
         if spec is None or spec.live_file is None:
             continue
-        live = real_home.joinpath(*spec.live_file)
+        live = (spec.live_file_resolver(real_home) if spec.live_file_resolver
+                else real_home.joinpath(*spec.live_file))
         targets.setdefault(live.parent, {})[live.name] = agent_key
     if "claude" in agent_keys:
         targets.setdefault(real_home, {})[CLAUDE_CONFIG_FILENAME] = "claude"

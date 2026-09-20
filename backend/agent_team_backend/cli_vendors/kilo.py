@@ -359,17 +359,9 @@ SPEC = VendorSpec(
     # file — `kilo auth list` prints the path itself, and it is the same tuple
     # the quota reader already resolves against.
     #
-    # KNOWN LIMIT: XDG_DATA_HOME is NOT honoured here. CredentialVault resolves
-    # a live file as <real home>/<live_file> (_live_file), while _kilo_auth_file
-    # above follows kilo and prefers $XDG_DATA_HOME/kilo/auth.json. A user who
-    # sets XDG_DATA_HOME therefore has account switching read and write
-    # ~/.local/share/kilo/auth.json while the CLI keeps using the XDG copy, so
-    # the switch silently does nothing (the quota badge, which does follow XDG,
-    # keeps reporting the account that is really live). Left as is on purpose:
-    # _live_file is the shared resolution for every vendor, and teaching it
-    # env-var lookups for this one rare setup would change path resolution for
-    # claude/codex/kimi/grok too.
+    # The vault follows the same XDG path as the CLI and quota reader.
     live_file=KILO_AUTH_FILE_REL,
+    live_file_resolver=lambda home: _kilo_auth_file(home, os.environ),
     slot_file="auth.json",
     identity_from_secret=identity_from_secret,
     # login_home_env / login_home_secret_file stay unset: kilo has no dedicated

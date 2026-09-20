@@ -70,6 +70,7 @@ a = Analysis(
         # test_pyinstaller_spec.py holds these names to what exists on disk.
         'agent_team_backend.plugins.builtin.navide_plans.plan_tools',
         'agent_team_backend.plugins.builtin.navide_skills.skills_wiring',
+        'agent_team_backend.plugins.builtin.navide_skills.skills_tools',
         # uvicorn internals that are resolved at runtime, not import-time.
         'uvicorn.main',
         'uvicorn.lifespan.on',

@@ -524,6 +524,16 @@ def test_vendors_without_session_ids() -> None:
     )
 
 
+def test_resumable_vendors_declare_a_resume_command_parser() -> None:
+    # Without a parser the shared spawn path cannot claim an explicit id or
+    # reap a still-live PTY resuming that same conversation.
+    missing = [
+        key for key, spec in registry.VENDORS.items()
+        if spec.supports_session_resume and spec.resume_id_from_command is None
+    ]
+    assert missing == []
+
+
 def test_droid_is_never_given_an_effort_capability() -> None:
     """droid's interactive command — the one Navide spawns — reads `-r` as
     --resume; only `droid exec` reads it as --reasoning-effort. An effort flag

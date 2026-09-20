@@ -1,12 +1,12 @@
 """Placeholder — mcode ships no log reader yet.
 
 Every registered vendor needs a module here (``test_cli_vendors_registry``
-asserts this package's module set equals the registry's key set). The other
-thirteen re-export a reader from their vendor module; mcode has none to
+asserts this package's module set equals the registry's key set). Vendors with
+readers re-export them from their vendor module; mcode has none to
 re-export, so this file is deliberately empty of exports.
 
-mcode does keep its conversations locally, but in SQLite rather than the
-JSONL-per-session layout every existing reader is built around:
+mcode keeps its conversations in SQLite. Its row payloads still need an
+authenticated session fixture before a reader can be implemented:
 
     <data-dir>/v2/sqlite/runtime-state.sqlite   (WAL mode)
       local_runtime_sessions      session_id, workspace_dir, title, status,

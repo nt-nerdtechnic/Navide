@@ -348,6 +348,58 @@ def test_grok_sqlite_sidecars_are_linked_even_when_absent(home: Path) -> None:
         assert (Path(root) / ".grok" / name).is_symlink(), name
 
 
+def test_grok_first_session_is_visible_outside_the_home_shim(home: Path, monkeypatch) -> None:
+    from agent_team_backend.cli_vendors.grok import GrokLogReader
+
+    real = home / ".grok"
+    real.mkdir()
+    env_var, root = pane_home.prepare("grok", "p1", URL, SERVER)  # type: ignore[misc]
+    assert env_var == pane_home.SHIM_SPECS["grok"].env_var
+    sessions = Path(root) / ".grok" / "sessions"
+    assert sessions.is_symlink()
+    transcript = sessions / "%2Fworkspace" / "session-id" / "updates.jsonl"
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text("{}\n")
+    reader = GrokLogReader()
+    monkeypatch.setattr(reader, "_home", lambda: real)
+    assert reader.session_files() == [real / "sessions" / "%2Fworkspace" / "session-id" / "updates.jsonl"]
+
+
+def test_grok_existing_shim_sessions_are_adopted_before_seeding(home: Path) -> None:
+    real = home / ".grok"
+    real.mkdir()
+    root = pane_home.shim_root("grok", "p1")
+    assert root is not None
+    sessions = root / ".grok" / "sessions"
+    transcript = sessions / "group" / "session-id" / "updates.jsonl"
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text("existing transcript\n")
+
+    pane_home.prepare("grok", "p1", URL, SERVER)
+
+    assert sessions.is_symlink()
+    assert (real / "sessions" / "group" / "session-id" / "updates.jsonl").read_text() == "existing transcript\n"
+    assert transcript.read_text() == "existing transcript\n"
+
+
+def test_grok_conflicting_session_trees_remain_untouched(home: Path) -> None:
+    real = home / ".grok" / "sessions"
+    real.mkdir(parents=True)
+    (real / "real-session").write_text("real")
+    root = pane_home.shim_root("grok", "p1")
+    assert root is not None
+    sessions = root / ".grok" / "sessions"
+    sessions.mkdir(parents=True)
+    (sessions / "pane-session").write_text("pane")
+
+    pane_home.prepare("grok", "p1", URL, SERVER)
+
+    assert not sessions.is_symlink()
+    assert (real / "real-session").read_text() == "real"
+    assert (sessions / "pane-session").read_text() == "pane"
+    assert not (real / "pane-session").exists()
+
+
 def test_an_edit_made_inside_the_pane_survives_the_next_spawn(home: Path) -> None:
     """grok keeps its own settings in the same file as its MCP servers.
     Rebuilding that file from the real one every spawn would discard a change

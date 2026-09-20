@@ -526,6 +526,9 @@ class VendorSpec:
     # Path parts of the live credential file under the real home,
     # e.g. (".codex", "auth.json").
     live_file: tuple[str, ...] | None = None
+    # Resolve a vendor's environment-dependent live credential path from the
+    # real home. Unset retains the fixed live_file layout above.
+    live_file_resolver: Callable[[Path], Path] | None = None
     # Filename of the parked copy inside the vendor's slot directory.
     slot_file: str | None = None
     # Path parts of the secret inside an isolated login home; None for

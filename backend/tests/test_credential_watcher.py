@@ -23,9 +23,20 @@ import pytest
 from agent_team_backend import app, ws_handlers
 from agent_team_backend.credential_watcher import (
     CredentialWatcher,
+    _watch_targets,
     reconcile_live_account,
 )
 from agent_team_backend.profiles_store import CliProfilesStore
+
+
+def test_watch_targets_follow_kilo_xdg_path(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+    home = tmp_path / "home"
+    targets = _watch_targets(home, ("kilo", "codex"))
+    assert targets == {
+        tmp_path / "xdg" / "kilo": {"auth.json": "kilo"},
+        home / ".codex": {"auth.json": "codex"},
+    }
 
 
 def _codex_auth(email: str) -> str:

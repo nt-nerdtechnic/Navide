@@ -69,10 +69,10 @@ SPEC = VendorSpec(
     # unlike aider, this is a missing reader, not a missing concept.
     supports_session_resume=False,
     # Relocates the entire data root — config, auth, session SQLite. The CLI
-    # also honours MAVIS_DATA_DIR as a legacy fallback; Navide sets only the
-    # current name, so a stale MAVIS_DATA_DIR in the user's environment can
-    # never win over what Navide exports.
-    home_env_vars=("MINIMAX_DATA_DIR",),
+    # also honours MAVIS_DATA_DIR as a legacy fallback. Navide strips rather
+    # than injects these variables, so both names must be guarded or the
+    # fallback can redirect a pane to a different account and session store.
+    home_env_vars=("MINIMAX_DATA_DIR", "MAVIS_DATA_DIR"),
     # `mcode login` (add `--region global` for a non-mainland account, which
     # is a choice the user makes in the CLI's own flow, not something Navide
     # can pick for them).

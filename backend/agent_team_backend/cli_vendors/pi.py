@@ -798,9 +798,13 @@ def _resume_id_from_command(command) -> str:
 
 
 def _session_exists(workspace_path: str, session_id: str) -> bool:
-    # Filenames carry a timestamp prefix the id alone can't reconstruct;
-    # ask the reader so a stale persisted id fails preflight.
-    return PiLogReader().has_session(session_id)
+    # --session-id only resumes within the launch workspace; finding the id
+    # in another project would make Pi create a new empty session instead.
+    reader = PiLogReader()
+    return bool(session_id) and any(
+        reader.session_id_from_path(path) == session_id
+        for path in reader.session_files_for_workspace(workspace_path)
+    )
 
 
 # ---- vendor spec -----------------------------------------------------------

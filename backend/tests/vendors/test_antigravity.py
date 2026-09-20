@@ -15,6 +15,24 @@ from agent_team_backend.cli_vendors.antigravity import _extract_cwd
 from agent_team_backend.log_readers.attribution import Attribution
 
 
+def test_resume_command_claims_the_explicit_conversation() -> None:
+    from agent_team_backend import app
+    from agent_team_backend.cli_vendors.antigravity import SPEC
+
+    parse = SPEC.resume_id_from_command
+    assert parse is not None
+    sid = "21fdfc1b-883a-47ce-b547-e9179ba62eef"
+    for command in (
+        f"agy --conversation {sid}",
+        f"agy --model test --conversation='{sid}'",
+        ["/bin/sh", "-lc", f"agy --conversation {sid}"],
+    ):
+        assert parse(command) == sid
+        assert app._resume_id_for_agent("antigravity", command) == sid
+    for command in ("agy", "agy --continue", "agy --conversation --model test"):
+        assert parse(command) == ""
+
+
 def _make_conversation_db(path: Path, workspace: Path, extra_blob: bytes = b"") -> None:
     """Minimal conversation db: trajectory_metadata_blob with a file:// URI.
 

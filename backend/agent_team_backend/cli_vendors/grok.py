@@ -50,14 +50,16 @@ import asyncio
 import json
 import logging
 import os
+import shlex
 import time
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote
+from uuid import UUID
 
 from .. import osplat
-from .base import Dep, McpServerConfig, McpValue, McpWiring, SkillsWiring, VendorSpec
+from .base import Dep, McpServerConfig, McpValue, McpWiring, SkillsWiring, VendorSpec, command_text
 from ..usage_common import _num, _snapshot, _window
 from ..log_readers.base import (
     ActivityEvent,
@@ -558,6 +560,30 @@ GrokLogReader.workspace_match = _workspace_match
 GrokLogReader.pane_cwd_match = _pane_cwd_match
 
 
+def _resume_id_from_command(command) -> str:
+    try:
+        args = shlex.split(command_text(command))
+    except ValueError:
+        return ""
+    if not args or args[0] != "grok":
+        return ""
+    for index, arg in enumerate(args[1:], 1):
+        if arg in ("-r", "--resume") and index + 1 < len(args):
+            value = args[index + 1]
+        elif arg.startswith("--resume="):
+            value = arg.partition("=")[2]
+        else:
+            continue
+        # Grok also accepts titles. Only a UUID identifies the transcript for
+        # attribution and duplicate-PTY reaping without asking the CLI.
+        try:
+            session_id = str(UUID(value))
+        except ValueError:
+            return ""
+        return session_id if session_id == value.lower() else ""
+    return ""
+
+
 def _session_path(workspace_path: str, session_id: str) -> Path | None:
     """The transcript the resume preflight checks, or None when it cannot be
     named.
@@ -799,6 +825,7 @@ SPEC = VendorSpec(
         "GROK_DAEMON_CHILD",
     ),
     make_log_reader=GrokLogReader,
+    resume_id_from_command=_resume_id_from_command,
     # Newly answerable: sessions live at a path derived from the cwd and the
     # id, so a resume preflight can check instead of assuming.
     session_path=_session_path,

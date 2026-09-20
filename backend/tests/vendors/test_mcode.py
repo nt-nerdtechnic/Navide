@@ -9,6 +9,10 @@ edit to this spec is to "fix the omission" — which would break every pane.
 
 from __future__ import annotations
 
+import os
+
+import pytest
+
 from agent_team_backend.cli_vendors import registry
 
 SPEC = registry.VENDORS["mcode"]
@@ -33,11 +37,28 @@ def test_data_dir_is_declared_as_a_guarded_home_var() -> None:
     guard, not an injection: it joins the set the backend strips from inherited
     env and refuses in a spawn request (spawn_env_deny_list), with
     SPAWN_ENV_RESERVED_KEYS as the frontend mirror."""
-    assert SPEC.home_env_vars == ("MINIMAX_DATA_DIR",)
+    assert SPEC.home_env_vars == ("MINIMAX_DATA_DIR", "MAVIS_DATA_DIR")
     dep = SPEC.install_dep
     assert dep is not None
     assert dep.config_home_env == "MINIMAX_DATA_DIR"
     assert dep.config_home_default == ".minimax"
+
+
+@pytest.mark.parametrize("name", ["MINIMAX_DATA_DIR", "MAVIS_DATA_DIR"])
+def test_data_dir_overrides_are_removed_from_requests_and_inherited_env(
+    name: str, monkeypatch: pytest.MonkeyPatch, tmp_path,
+) -> None:
+    from agent_team_backend import app
+
+    data_dir = str(tmp_path / "other-account")
+    kept, denied = app.filter_spawn_env_request({name: data_dir, "PROJECT_MODE": "test"})
+    assert kept == {"PROJECT_MODE": "test"}
+    assert denied == [name]
+
+    # Isolate all removals so sanitizing cannot alter the test process's real env.
+    monkeypatch.setattr(os, "environ", {name: data_dir, "PROJECT_MODE": "test"})
+    app._sanitize_inherited_cli_env()
+    assert dict(os.environ) == {"PROJECT_MODE": "test"}
 
 
 def test_no_model_or_effort_capability() -> None:
