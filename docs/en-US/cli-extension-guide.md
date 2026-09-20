@@ -10,7 +10,7 @@ have since moved.
 
 Current built-in agent keys are `claude`, `codex`, `antigravity`, `grok`,
 `kimi`, `opencode`, `qwen`, `kilo`, `pi`, `copilot`, `cursor`, `aider`,
-`muse`, and `droid`. One key identifies a vendor on both sides — `agentKey`
+`muse`, `droid`, and `mcode`. One key identifies a vendor on both sides — `agentKey`
 in the frontend, `agent_key` in the backend.
 
 ---
@@ -60,6 +60,44 @@ exist as described, and the per-layer instructions are superseded by Part 1.
 What remains valid — and is recorded nowhere else — is the per-vendor
 research: install routes, resume syntax, session storage formats, token
 accounting, and the trap each CLI hides.
+
+### MiniMax Code (`mcode`) — added 2026-09-20
+
+The integration supports install detection, interactive launch and `mcode login`.
+Session discovery, transcripts, resume, token/quota reporting, account switching,
+MCP and skills wiring are not implemented. Model, effort and permission-bypass
+flags are omitted because the verified interactive CLI does not accept them.
+Navide strips both `MINIMAX_DATA_DIR` and its legacy fallback `MAVIS_DATA_DIR`
+from inherited environments and refuses them in launch overrides; it does not
+create an isolated MiniMax home per pane.
+
+### CLI reliability corrections — 2026-09-20
+
+These corrections are covered by isolated regression tests; they do not
+constitute authenticated, end-to-end acceptance of every vendor:
+
+- Antigravity rechecks unfinished SQLite assistant rows when their status is
+  updated in place, so a later completion is not lost behind the row watermark.
+- Antigravity `--conversation` and Grok `-r` / `--resume` commands now expose
+  their explicit session IDs to the existing duplicate-PTY reaping path.
+  Grok title-based resume is still not parsed as a session ID. Both vendors
+  retain file-based session existence checks through `session_path`.
+- Grok's first session directory is shared with its per-pane home shim even
+  when the real home had no sessions directory before launch.
+- Kimi streaming records postpone inferred idle completion. New assistant
+  content after an inferred idle boundary can produce its final reply under
+  a fresh completion key.
+- OpenCode quota credentials and Kilo account switching follow
+  `XDG_DATA_HOME`; Kilo's credential watcher uses the same resolved path.
+- Pi resume preflight checks the target workspace, matching `--session-id`:
+  finding that ID only in another workspace must not permit an empty new
+  conversation to look like a successful resume.
+- Droid retains assistant text across log polls until its outcome arrives,
+  then clears it so later turns cannot reuse the previous reply.
+- Resuming a closed pane from Agent History restores its recorded model and
+  effort. If the pane record was pruned, durable history supplies those
+  choices; older records without them retain the vendor default. An older
+  client's omitted fields no longer erase recorded choices.
 
 ### Codex session identity — updated 2026-09-16
 

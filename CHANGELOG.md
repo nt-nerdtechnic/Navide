@@ -4,6 +4,27 @@ All notable released changes to Navide will be documented in this file. The form
 
 ## [Unreleased]
 
+### Changed
+
+- Use the app's font in pane context menus so detached menu rendering does not fall back to a browser serif font.
+- Keep destructive project-menu actions readable with a transparent default background, subtle danger color on hover or focus, and a visible keyboard focus outline, while preserving the existing close actions and confirmations.
+- Move the language picker from Appearance to its own **Settings → Language** page. Settings search opens the new page, and the language preference still applies to every workspace.
+- Replace repeated agent lists in **Settings → CLI Agents** with searchable, filterable cards and a single-agent settings drawer. Cards retain enable controls and drag ordering; the drawer groups Overview, Launch, Permissions, Push, and Install, preserves automatic setting persistence, and closes before Settings when Escape is pressed.
+
+### Added
+
+- Add **Reclaim selected** and selection-wide notification mute/unmute to the multi-pane context menu, with grouped actions. Reclaim keeps existing protection checks, affects only eligible selected panes, and is disabled when none are eligible; muting a mixed selection mutes all of it.
+- Add a Skills MCP workflow for inspection, bounded previews, add-only installation from local packages or public GitHub, and revision-checked delivery settings. Caller-bound previews pin exact content; local provenance survives restart, and delivery responses distinguish configuration from unknown current-session loading. Skills views refresh after committed changes and reconnects while retaining unsaved content and its original revision.
+- Add MiniMax Code (`mcode`) to CLI selection, install detection and sign-in. Session history, resume, token/quota reporting, account switching, MCP and skills wiring remain unsupported.
+
+### Fixed
+
+- Block MiniMax Code's legacy `MAVIS_DATA_DIR` data-root override alongside `MINIMAX_DATA_DIR`, including the reserved-variable notice in CLI launch settings.
+- Keep CLI completion and message text across incremental updates: Antigravity rechecks assistant rows completed in place, Kimi streaming postpones inferred idle completion and can finish after new assistant content arrives, and Droid retains reply text when its outcome arrives in a later log poll.
+- Recognize explicit Antigravity and Grok resume IDs when reaping a duplicate CLI process before replacement, and keep Grok's first session visible outside its per-pane home shim. Grok title-based resume remains outside ID-based duplicate detection.
+- Reject Pi resume IDs that exist only in another workspace, where the CLI would otherwise start a new empty conversation. Honor `XDG_DATA_HOME` for OpenCode quota credentials and Kilo account switching and credential watching.
+- Preserve recorded model and effort when resuming a closed pane from Agent History, including when its original pane record has been pruned. Missing fields in older clients no longer erase those recorded choices; legacy records without choices keep the vendor default.
+
 ## [0.2.8] — 2026-09-20 — signed release
 
 ### Added

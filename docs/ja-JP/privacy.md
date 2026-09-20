@@ -35,6 +35,7 @@ Navide は Project Telemetry Service を運営せず、Navide Account を必要�
 | Git Operation と Issue Detection | 設定された Git Host。Local `git`、`gh`、`glab` CLI 経由 | Repository/Issue Data と、CLI または Host Account Flow が扱う Credential |
 | Update Check | GitHub Releases | Application Version と通常の Network Metadata |
 | Plugin Registry Trust Refresh | 選択した Official Registry、または明示的に承認した self-hosted Registry | インストール済み marketplace plugin の namespace/name。Refresh では Plugin Source や Archive を送信しない |
+| Skills package retrieval | GitHub API and codeload | Requested repository/ref and normal network metadata; downloads a public archive without uploading local skill contents |
 | MCP Server | 設定された MCP Server と、それが利用する Service | Server の Tool と Configuration に全面的に依存 |
 
 Private Code や規制対象 Data を送信する前に、各 Provider の Policy を確認してください。
@@ -108,3 +109,11 @@ Vulnerability の報告については、[Security Policy（英語）](../../SEC
 Token Monitor reads local Claude transcripts to summarize turn timestamps, session identifiers, models, and token counts. Its in-memory cache contains these summaries rather than prompt or response text. Local transcript records are not assigned to the current account because their account ownership cannot be verified.
 
 Successful observations from the existing Claude quota polling service are saved in the application data directory as `claude-quota-history.sqlite3`. Records contain an account-slot identifier, observation time, plan type, quota percentages, and reset-window metadata; they contain no credentials or conversation text. Recording prunes observations older than 180 days and limits the database to 50,000 samples. This history is local to this installation and is not uploaded by Token Monitor. Opening or refreshing the monitor adds no external API or CLI requests; the existing usage service retains its own polling behavior.
+
+### MCP による Skills インストール
+
+GitHub public skill の準備では、repository、ref と通常の接続 metadata を `api.github.com` に送り、解決した commit の archive を `codeload.github.com` から取得します。入力は `owner/repo` または HTTPS の `github.com/owner/repo` URL です。Private repository、任意のダウンロード URL、redirect は拒否します。GitHub の認証情報を追加せず、取得時にローカル skill 内容をアップロードしません。システムの proxy 設定は適用される場合があります。ローカルの準備は指定した skill ディレクトリだけを読み、GitHub へ接続しません。
+
+準備した bytes は backend メモリに保持され、15 分後または再起動時に失効します。有効なパッケージは最大 8 件で、メモリには別に最大 8 件の軽量な完了記録を保持します。インストールは確認済み snapshot を使用し、元のファイルを再読込せず既存の共有 Skills ルートに書き込みます。スクリプトや plugin hooks は実行しません。記録が残っている間の再送は元の結果だけを返し、再書き込みしません。記録は元の preview の期限で失効するか、それより先に破棄される場合があります。その後の再送は missing/expired を返し、再インストールしません。Inspect／prepare は skill の文章、ファイル情報、出所パスを要求した coding agent に返すため、CLI 自身のデータポリシーに従いモデルプロバイダーへ送られる可能性があります。パッケージに秘密情報を含めないでください。
+
+Skills sync が有効なら、条件を満たす内容と配信設定を既存フローでペアリング済みデバイスへ同期できます。選んだパッケージは Skills 内容 export と同じ上限（64 ファイル、各 256 KiB、合計 512 KiB）を使用しますが、上限内であることは同期完了を保証しません。Backend が生成した source、digest、時刻の記録はローカルの Navide marker に残り、編集や再起動後も保持されます。Export／Skills sync には含まれません。

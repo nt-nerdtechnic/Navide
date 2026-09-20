@@ -40,6 +40,10 @@ Source Code と明示的に共有された Documentation は、Repository にお
 - Main Layout を占有せず PTY を維持するには Pane を Minimize します。
 - Navide が再利用可能な Session ID を検出した後にのみ Rebuild または Resume します。
 
+Select multiple pane headers with Cmd/Ctrl-click or Shift-click, then right-click a selected pane to open the batch menu. Its groups contain Interrupt/Rebuild, Minimize/Restore/Reclaim, notification controls, and Remove. **Restore selected** also opens selected panes that have not yet been opened or were reclaimed.
+
+**Reclaim selected (N)** shows how many selected panes are eligible, releases their CLI processes, and keeps click-to-resume placeholders. It skips protected panes, including running panes, the focused pane, panes awaiting an answer or holding unsent text, and panes without a resumable session. The action stays visible but is disabled when none of the selected panes can be reclaimed. **Mute selected notifications** mutes the entire selection, including a mix of muted and unmuted panes; when every selected pane is muted, **Unmute selected notifications** restores notifications for all of them. These batch actions affect only the selected panes.
+
 組み込みで対応する Agent Key は 14 種類のコーディング CLI（Aider、Antigravity CLI、Claude Code、Codex、Copilot CLI、Cursor CLI、Droid、Grok CLI、Kilo Code、Kimi Code、Muse Code、OpenCode、Pi、Qwen Code）です。正確な CLI Behavior と Provider Billing は各 External Tool が引き続き管理します。
 
 ## Pipeline
@@ -104,6 +108,25 @@ Marketplace Install が利用可能になるまで、Navide は削除可能な O
 Editor は Monaco を使用し、File Editing、Diagnostics、Plan Rendering、Diff、Conflict、AI-assisted Workflow を提供します。右側の AI パネルは実際の Coding Agent CLI Terminal（メインウィンドウと同じ Agent）を組み込み、起動時に Editor の Context を注入します。
 
 これらの Tool は、より広い Engineering Environment における Intervention Surface です。Navide は最終的に、従来の IDE を主要環境として必要としない完全な Professional Workflow を提供することを目指します。
+
+## Navide MCP で Skills を管理する
+
+許可を受けた Agent は **Settings → Skills** と同じライブラリを利用できます。
+
+1. `skills_list` の ID を `skills_inspect` に渡し、指示、ファイル、所有者、出所の記録と現在の `delivery_revision` を確認します。
+2. `skills_prepare_install` には `owner/repo`、HTTPS の `github.com/owner/repo` URL、またはローカル skill フォルダの絶対パス（`~` 展開対応）を指定します。GitHub の `ref` と `subdir` は別引数です。`subdir: "."` は repository のルートを選びます。候補が複数なら `selection_required` と `candidates` を返し、インストール用 preview ID は発行しません。パスを選んで再度 prepare してください。Private repository、任意の URL、GitHub tree URL は対象外です。
+3. 指示全文、ファイル一覧、スクリプト警告、出所と digest を確認し、preview ID、同じ digest、明示的な targets で `skills_install` を呼びます。共有ルートへの初回書き込みには、別途ユーザーの許可を `consent` で渡します。digest や Agent が設定した boolean は許可の証拠ではありません。同名の管理対象、ユーザー所有、native skill は拒否します。宛先を排他的に作成し、添付ファイルと metadata の後に `SKILL.md` を公開するため、不完全なパッケージが検出されません。ディレクトリ全体の atomic rename ではありません。
+4. 配信設定の変更には ID と最新の `delivery_revision` を `skills_set_delivery` に渡します。古い revision は失敗し、別の呼び出し元の判断を上書きしません。このフローは追加専用で、既存インストールの更新や再取得は行いません。
+
+準備した bytes は認証済み呼び出し元に結び付けられ、15 分後または backend 再起動時に失効します。インストール時にローカルの再読込や再ダウンロードは行いません。許可の再試行には有効な preview を再利用でき、再試行用の記録が残っている間だけ、成功後の再送は元の結果を返し、再書き込みしません。有効な準備は最大 8 パッケージで、内容を持たない軽量な完了記録を別に最大 8 件保持します。記録は元の preview の期限で失効し、上限に達すると古いものから先に破棄される場合があります。失効または破棄後の再送は missing/expired を返し、再インストールしません。GitHub archive は圧縮 10 MiB、展開 32 MiB、4,096 entries が上限で、選んだ skill は 64 ファイル、各 256 KiB、合計 512 KiB までです。危険なパス、リンク、特殊ファイル、予約 metadata、不正な manifest は黙って除外せず拒否します。
+
+共有 skill の `targets: null` は全 wired vendor、`targets: []` は Navide の追加配信なしを意味します。Native skill の targets は他の CLI への追加配信を指定し、空配列や `null` はそれを解除します。共有ルートを直接読む CLI は Navide の targets や有効スイッチに関係なく skill を発見できます。これらの設定は隔離境界ではありません。
+
+`materialized_in_current_session: null` と `loaded_in_current_session: null` は現在の session の実配信とロードが未確認であることを示します。互換フィールド `delivered_to_me` も設定情報です。配信変更後は新しい CLI session を開いて確認してください。インストールや設定変更の成功だけでは、実行中の CLI が新しい内容をロードしたとはいえません。
+
+ローカルの出所記録には source、準備時 digest、時刻が含まれ、編集、切り替え、再起動後も inspect で読めます。digest はインストールした snapshot を表し、後のローカル編集を表しません。管理 marker と出所記録は既存の export／Skills sync に含まれず、デバイス間の保持は保証しません。Skills sync が有効なら条件を満たす内容と配信設定は既存フローで同期できますが、サイズ上限を満たすことは同期完了の証拠ではありません。
+
+Skills 画面は backend の変更成功と再接続で更新されます。未保存の内容と元の revision を保持するため、古い保存は引き続き conflict になります。他のツールによる直接のファイル変更は手動更新が必要です。準備とインストールは添付スクリプトや plugin hooks を実行しません。後の利用には CLI 自身のツール権限が適用されます。
 
 ## Settings と Portability
 

@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Pane and project context menus — implementation and verification report</title>
+  <style>
+    :root { color: #202b3b; background: #f1f4f7; font-family: system-ui, sans-serif; line-height: 1.65; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    main { max-width: 1040px; margin: 40px auto; padding: 42px; background: white; border: 1px solid #d9e1e8; border-radius: 16px; }
+    .eyebrow { margin: 0; color: #395779; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; font-size: .8rem; }
+    h1 { max-width: 800px; margin: 10px 0; font-size: clamp(2rem, 5vw, 3rem); line-height: 1.15; }
+    h2 { margin-top: 36px; font-size: 1.35rem; }
+    h3 { font-size: 1rem; }
+    .meta, .note { color: #526075; }
+    .status { border-left: 4px solid #a15a00; background: #fff4de; padding: 16px 20px; margin: 26px 0; }
+    .status p { margin: 0; }
+    .table-scroll { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; margin: 14px 0; text-align: left; }
+    caption { text-align: left; font-weight: 600; margin-bottom: 8px; }
+    th { background: #f1f4f7; }
+    td, th { padding: 12px; border-bottom: 1px solid #d9e1e8; vertical-align: top; }
+    code { font-family: ui-monospace, monospace; font-size: .87em; overflow-wrap: anywhere; }
+    pre { max-width: 100%; overflow-x: auto; padding: 14px; background: #f1f4f7; border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    summary { cursor: pointer; font-weight: 650; }
+    a { color: #075db1; text-underline-offset: .18em; }
+    a:focus-visible { outline: 3px solid #075db1; outline-offset: 3px; }
+    li { margin: 8px 0; }
+    .pill { display: inline-block; padding: 2px 9px; border-radius: 30px; background: #fff4de; color: #784500; font-weight: 650; white-space: nowrap; }
+    .pill.pass { background: #e7f4eb; color: #215b32; }
+    .previews { display: flex; flex-wrap: wrap; gap: 28px; padding-bottom: 16px; }
+    .preview-light { --pv-bg: #ffffff; --pv-text: #1f2328; --pv-icon: #59636e; --pv-danger: #a40e26; --pv-tint: #ffebe9; --pv-focus: #0969da; --pv-border: #d1d9e0; --pv-hover: rgba(31, 35, 40, .06); --pv-shadow: 0 8px 28px rgba(31, 35, 40, .3); }
+    .preview-dark { --pv-bg: #1c2128; --pv-text: #c9d1d9; --pv-icon: #8b949e; --pv-danger: #ff7b72; --pv-tint: #3d0d0d; --pv-focus: #388bfd; --pv-border: #30363d; --pv-hover: rgba(177, 186, 196, .08); --pv-shadow: 0 8px 28px rgba(0, 0, 0, .6); }
+    .menu-preview { width: 168px; padding: 5px 4px; border: 1px solid var(--pv-border); border-radius: 8px; background: var(--pv-bg); box-shadow: var(--pv-shadow); font: 12px/1.3 -apple-system, BlinkMacSystemFont, 'Helvetica Neue', 'PingFang TC', sans-serif; }
+    .menu-preview button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 5px 8px; border: 0; border-radius: 4px; background: none; color: var(--pv-text); font: inherit; text-align: left; cursor: pointer; }
+    .menu-preview button:hover, .menu-preview button:focus-visible { background: var(--pv-hover); }
+    .menu-preview button:focus-visible { outline: 2px solid var(--pv-focus); outline-offset: -2px; }
+    .menu-preview svg { flex: none; width: 12px; height: 12px; display: block; fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; color: var(--pv-icon); }
+    .menu-preview .preview-danger, .menu-preview .preview-danger svg { color: var(--pv-danger); }
+    .menu-preview .preview-danger:hover, .menu-preview .preview-danger:focus-visible { background: var(--pv-tint); }
+    footer { border-top: 1px solid #d9e1e8; margin-top: 36px; padding-top: 16px; font-size: .88rem; color: #526075; }
+    @media (max-width: 680px) { main { margin: 0; border-radius: 0; border: 0; padding: 24px 18px; } td, th { padding: 9px; } }
+    @media print { :root { background: white; } main { max-width: none; margin: 0; padding: 0; border: 0; } h2, h3 { break-after: avoid; } tr, .status { break-inside: avoid; } a { color: inherit; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <p class="eyebrow">Navide · Development report</p>
+    <h1>Pane and project context menus</h1>
+    <p class="meta">21 September 2026 · Local working tree · Implementation and verification</p>
+    <p>Make resource reclamation and notification control available for selected panes, group actions clearly, and improve the readability of destructive actions in the project menu.</p>
+  </header>
+
+  <aside class="status" aria-label="Verification status" id="overall-status">
+    <p><strong>Verification pending.</strong> This report records the approved implementation scope. Automated results and review findings will be added after the checks complete. Manual desktop acceptance has not been performed.</p>
+  </aside>
+
+  <section aria-labelledby="problem-heading">
+    <h2 id="problem-heading">Problem and change</h2>
+    <p>The multi-selection branch of the context menu contained Interrupt, Rebuild, Minimize, Restore, and Remove. Reclaim was available for individual panes and project-wide use, but the selection menu did not expose it.</p>
+    <p>The change adds <strong>Reclaim selected</strong> and a notification action that applies one consistent state to the whole selection. Existing separators group process actions, visibility/resource actions, notifications, and removal. The detached context menu also uses the app's font instead of falling back to a browser serif font.</p>
+    <p>The longer menu is limited to the window height with a small margin and scrolls when necessary. Existing menu positioning continues to keep it within the visible window.</p>
+    <p>The project overflow menu's “Close workspace and its panes” row inherited a solid red background from the shared <code>button.danger</code> rule, while <code>.ws-more-opt.danger</code> changed only its text color. The two rules produced the reported red-on-red text and icon.</p>
+    <p>The scoped correction uses a transparent default background, the theme's subtle danger background on hover or focus, bright danger text and icons, and an inset keyboard focus outline. The menu uses the existing theme font, line-height, shadow, and border tokens with light inset spacing. Its width, action handlers, and close confirmations stay unchanged.</p>
+    <div class="table-scroll">
+      <table>
+        <caption>Menu behavior</caption>
+        <thead><tr><th scope="col">Action</th><th scope="col">Selection behavior</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">Interrupt / Rebuild</th><td>Keep the existing batch actions and their behavior.</td></tr>
+          <tr><th scope="row">Minimize / Restore</th><td>Keep the existing batch actions. Restore also opens unrealized and reclaimed selected panes.</td></tr>
+          <tr><th scope="row">Reclaim selected (N)</th><td>Show the eligible selected count, reclaim only those panes, and retain click-to-resume placeholders. Keep the action visible but disabled when the eligible count is zero.</td></tr>
+          <tr><th scope="row">Mute selected notifications</th><td>If any selected pane is unmuted, mute every selected pane. Already muted panes stay muted.</td></tr>
+          <tr><th scope="row">Unmute selected notifications</th><td>When every selected pane is muted, unmute every selected pane.</td></tr>
+          <tr><th scope="row">Remove selected</th><td>Keep the existing removal behavior in its own final group.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section aria-labelledby="preview-heading">
+    <h2 id="preview-heading">Project menu design preview</h2>
+    <p id="preview-note">These two rows use the production light and GitHub dark theme values. Hover or focus a row to inspect the subtle danger treatment. The buttons perform no action. This is a design preview, not an app screenshot or manual acceptance evidence.</p>
+    <div class="previews">
+      <div class="preview-light">
+        <h3>Light</h3>
+        <div class="menu-preview" role="group" aria-label="Light project menu preview" aria-describedby="preview-note">
+          <button type="button"><svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M4 4l8 8M12 4l-8 8"></path></svg><span>Close workspace</span></button>
+          <button type="button" class="preview-danger"><svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M4 4l8 8M12 4l-8 8"></path></svg><span>Close workspace and its panes</span></button>
+        </div>
+      </div>
+      <div class="preview-dark">
+        <h3>GitHub dark</h3>
+        <div class="menu-preview" role="group" aria-label="Dark project menu preview" aria-describedby="preview-note">
+          <button type="button"><svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M4 4l8 8M12 4l-8 8"></path></svg><span>Close workspace</span></button>
+          <button type="button" class="preview-danger"><svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M4 4l8 8M12 4l-8 8"></path></svg><span>Close workspace and its panes</span></button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="boundary-heading">
+    <h2 id="boundary-heading">Scope and protections</h2>
+    <ul>
+      <li>Reclaim uses the existing manual-reclaim eligibility rules. Protected panes include running panes, the focused pane, panes waiting for an answer, panes holding unsent text, and panes without a resumable session.</li>
+      <li>Both new actions operate on the selected pane IDs. Other panes and unselected descendants are outside the action.</li>
+      <li>A separate Start/Resume button is unnecessary because Restore selected already opens placeholder panes.</li>
+      <li>No new backend command, dependency, or persistence format is required. Existing unrelated worktree changes are preserved.</li>
+    </ul>
+  </section>
+
+  <section aria-labelledby="evidence-heading">
+    <h2 id="evidence-heading">Automated evidence</h2>
+    <div class="table-scroll">
+      <table id="verification-results">
+        <caption>Check results — pending execution</caption>
+        <thead><tr><th scope="col">Check</th><th scope="col">Result</th><th scope="col">Evidence / limitation</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">Regression reproduction and focused tests</th><td><span class="pill pass">Passed</span></td><td>The new regression file failed all 16 original tests before implementation (exit 1). After implementation, the six-file targeted suite passed all 106 tests (exit 0). A later focused run with one additional deleted-target case passed all 17 tests (exit 0).</td></tr>
+          <tr><th scope="row">Project-menu regression and contrast</th><td><span class="pill pass">Passed</span></td><td>Three workspace-action suites passed all 82 tests (exit 0). An isolated HappyDOM computed-style check reproduced the original light-theme red-on-red pair at 1.47:1. Calculations across all five shipped themes give a minimum danger text/icon contrast of 6.42:1 at rest and 6.60:1 on hover/focus; light is 7.87:1 and 6.86:1 respectively. The minimum focus-ring contrast is 4.13:1. Final-state isolated DOM style probing was inconclusive because of CSS-engine handling of <code>background: none</code> and <code>color: inherit</code>; the theme-token calculations do not verify desktop rendering.</td></tr>
+          <tr><th scope="row">Broader frontend regression suite</th><td><span class="pill">Rerun running</span></td><td>The first <code>pnpm test:run --maxWorkers=2</code> attempt exited 1 after 995.03 seconds: 668 files and 9,981 tests passed, with 1 file and 15 tests skipped. There were no assertion failures, but two unhandled Vitest worker <code>Timeout calling "onTaskUpdate"</code> errors prevented a clean pass. The full rerun is now running after the completed build, without concurrent build/typecheck work from this task.</td></tr>
+          <tr><th scope="row">Type checking</th><td><span class="pill pass">Passed</span></td><td><code>pnpm typecheck</code> exited 0 across all six stages: node, integration, plugin-git, plugin-plans, web, and public.</td></tr>
+          <tr><th scope="row">Application build</th><td><span class="pill pass">Passed</span></td><td>Canonical <code>pnpm build</code> exited 0 with the finalized code, including all official plugins, the packaged Plans backend, Git legacy, and Electron main, preload, and renderer outputs. The renderer build transformed 4,050 modules.</td></tr>
+          <tr><th scope="row">Independent code review</th><td><span class="pill pass">Passed</span></td><td>No remaining findings attributable to this change. Reviewed live selection filtering, selection snapshots, per-pane eligibility rechecks, consistent mute/unmute state, persistence, existing action handlers, and menu font/height/scroll styling. Scoped <code>git diff --check</code> exited 0.</td></tr>
+          <tr><th scope="row">HTML and change hygiene</th><td><span class="pill pass">Passed</span></td><td>Python HTMLParser check exited 0: balanced tags, 9 unique IDs, 8 accessible references, 9 valid local links, and 4 no-op preview buttons with no scripts or event handlers. <code>git diff --check</code> for the report, three user guides, and changelog exited 0.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <details>
+      <summary>Exact focused verification commands</summary>
+      <p>Initial reproduction: 16 failures, exit 1. Final focused run with the additional case: 17 passed, exit 0.</p>
+      <pre><code>pnpm test:run src/renderer/src/components/__tests__/App.batchMenuActions.test.ts --maxWorkers=2</code></pre>
+      <p>Six-file regression run: 106 passed, exit 0.</p>
+      <pre><code>pnpm test:run src/renderer/src/components/__tests__/App.batchMenuActions.test.ts src/renderer/src/components/__tests__/App.multiSelectBatch.test.ts src/renderer/src/components/__tests__/App.idleReclaim.test.ts src/renderer/src/components/__tests__/App.paneMute.test.ts src/renderer/src/lib/__tests__/idleReclaim.test.ts packages/plugin-ui/src/foundation/i18n/__tests__/locales.test.ts --maxWorkers=2</code></pre>
+      <p>Project close-action regression run: 82 passed, exit 0.</p>
+      <pre><code>pnpm test:run src/renderer/src/components/__tests__/ControlPane.workspaceActions.test.ts src/renderer/src/components/__tests__/ControlPane.workspaces.test.ts src/renderer/src/components/__tests__/App.closeWorkspaceTeardown.test.ts --maxWorkers=2</code></pre>
+    </details>
+    <p class="note">Automated tests establish behavior within their test environments. They do not establish desktop appearance, real CLI process acceptance, or physical input behavior.</p>
+  </section>
+
+  <section aria-labelledby="manual-heading">
+    <h2 id="manual-heading">Manual desktop acceptance</h2>
+    <p><strong>Status: not performed.</strong> Repository instructions prohibit UI automation and reserve desktop testing for the user. The following checks remain explicit manual acceptance items:</p>
+    <ol>
+      <li>Select multiple panes and open their context menu. Verify the action groups, readable app font, and labels in English and Traditional Chinese. In a short window, scroll the menu and confirm that the final Remove action remains reachable.</li>
+      <li>Select eligible and protected panes together. Reclaim the selection; only eligible selected panes should become placeholders. Confirm that an unselected pane and unselected descendants remain intact.</li>
+      <li>Select only protected panes. Verify that Reclaim selected remains visible and disabled.</li>
+      <li>Restore selected placeholders and confirm that their expected CLI sessions resume.</li>
+      <li>Select muted and unmuted panes together. Mute selected notifications should mute all of them; reopening the menu should offer Unmute selected notifications, which restores notifications for the selection.</li>
+      <li>Confirm that single-pane menus and the existing Interrupt, Rebuild, Minimize, Restore, and Remove workflows behave as before.</li>
+      <li>Open the project overflow menu in light and dark themes. Check that “Close workspace and its panes” and its icon are readable at rest, on hover, and when focused; check that the existing confirmation still appears before closing.</li>
+    </ol>
+  </section>
+
+  <section aria-labelledby="artifacts-heading">
+    <h2 id="artifacts-heading">Review artifacts</h2>
+    <ul>
+      <li><a href="../../src/renderer/src/App.vue">Renderer menu and action handlers</a></li>
+      <li><a href="../../src/renderer/src/components/ControlPane.vue">Project overflow menu styles</a></li>
+      <li><a href="../../src/renderer/src/lib/idleReclaim.ts">Existing reclaim eligibility rules</a></li>
+      <li><a href="../../src/renderer/src/components/__tests__/App.batchMenuActions.test.ts">New selection action regressions</a> and <a href="../../src/renderer/src/components/__tests__/App.multiSelectBatch.test.ts">existing multi-selection and locale contract tests</a></li>
+      <li><a href="../en-US/user-guide.md">English user guide</a>, <a href="../zh-TW/user-guide.md">Traditional Chinese guide</a>, and <a href="../ja-JP/user-guide.md">Japanese guide</a></li>
+      <li><a href="../../CHANGELOG.md">Unreleased changelog entry</a></li>
+    </ul>
+  </section>
+
+  <footer>
+    This is a standalone implementation report, not a plan or release record. Commit, deployment, and manual UI acceptance are not claimed.
+  </footer>
+</main>
+</body>
+</html>

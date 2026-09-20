@@ -43,6 +43,7 @@ Consumer：Git Preference 使用驗證過的 Package／Workspace Storage Partiti
 | Git Operation 與 Issue Detection | 設定的 Git Host，透過本機 `git`、`gh` 或 `glab` CLI | Repository／Issue 資料，以及由 CLI 或 Host Account Flow 處理的憑證 |
 | Update Check | GitHub Releases | 應用程式版本與一般網路 Metadata |
 | Plugin Registry Trust Refresh | 所選的 Official Registry，或明確核准的 self-hosted Registry | 已安裝 marketplace plugin 的 namespace/name；Refresh 不會傳送 Plugin Source 或 Archive |
+| Skills package retrieval | GitHub API and codeload | Requested repository/ref and normal network metadata; downloads a public archive without uploading local skill contents |
 | MCP Server | 設定的 MCP Server 與它使用的服務 | 完全取決於該 Server 的 Tool 與設定 |
 
 傳送私人程式碼或受規範資料前，請先閱讀各 Provider 政策。
@@ -106,3 +107,11 @@ YOLO Mode 可能略過 CLI Confirmation 或 Sandbox 保護。只應在可信任�
 Token Monitor reads local Claude transcripts to summarize turn timestamps, session identifiers, models, and token counts. Its in-memory cache contains these summaries rather than prompt or response text. Local transcript records are not assigned to the current account because their account ownership cannot be verified.
 
 Successful observations from the existing Claude quota polling service are saved in the application data directory as `claude-quota-history.sqlite3`. Records contain an account-slot identifier, observation time, plan type, quota percentages, and reset-window metadata; they contain no credentials or conversation text. Recording prunes observations older than 180 days and limits the database to 50,000 samples. This history is local to this installation and is not uploaded by Token Monitor. Opening or refreshing the monitor adds no external API or CLI requests; the existing usage service retains its own polling behavior.
+
+### 透過 MCP 安裝 Skills
+
+準備 GitHub public skill 時，Navide 將 repository、ref 與一般連線 metadata 傳給 `api.github.com`，再從 `codeload.github.com` 下載解析後的確切 commit archive。來源可用 `owner/repo` 或 HTTPS `github.com/owner/repo` URL；私人 repository、任意下載 URL 與 redirect 會拒絕。取得時不加入 GitHub 授權憑證、不上傳本機 skill 內容；系統 proxy 設定仍可能生效。本機套件準備只讀取指定 skill 目錄，不發 GitHub 請求。
+
+準備好的 bytes 保存在 backend 記憶體，15 分鐘後或重啟時失效，同時最多 8 份有效套件，另在記憶體保留最多 8 份輕量完成重試收據。安裝使用已檢視的快照，不重讀來源，寫入既有共用 Skills 根目錄，且不執行腳本或 plugin hooks。收據仍保留時，重試只回傳原結果而不再寫入；它沿用原 preview 到期時間，也可能提早被淘汰。到期或淘汰後重送回傳 missing/expired，不重新安裝。Inspect／prepare 會把 skill 文字、檔案資訊與來源路徑回傳給請求的 coding agent，其模型供應商可能依 CLI 自身資料政策接收這些結果；套件中應避免放入秘密資料。
+
+開啟 Skills sync 時，符合限制的安裝內容與投遞設定可透過既有流程傳到配對裝置。選定套件與 Skills 內容 export 使用相同限制：64 檔、每檔 256 KiB、總量 512 KiB；符合限制不保證同步已完成。後端產生的來源、digest 與時間紀錄存於本機 Navide marker，編輯與重啟後保留，但不進入 export／Skills sync。

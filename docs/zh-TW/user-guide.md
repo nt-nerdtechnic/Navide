@@ -40,6 +40,10 @@ Navide 將個人私有 Project Intelligence 儲存在 Workspace 內的 `.agent-t
 - 將 Pane 最小化可以保留 PTY，同時避免占用主要 Layout。
 - 只有 Navide 偵測到可重用 Session ID 後，才進行 Rebuild 或 Resume。
 
+Select multiple pane headers with Cmd/Ctrl-click or Shift-click, then right-click a selected pane to open the batch menu. Its groups contain Interrupt/Rebuild, Minimize/Restore/Reclaim, notification controls, and Remove. **Restore selected** also opens selected panes that have not yet been opened or were reclaimed.
+
+**Reclaim selected (N)** shows how many selected panes are eligible, releases their CLI processes, and keeps click-to-resume placeholders. It skips protected panes, including running panes, the focused pane, panes awaiting an answer or holding unsent text, and panes without a resumable session. The action stays visible but is disabled when none of the selected panes can be reclaimed. **Mute selected notifications** mutes the entire selection, including a mix of muted and unmuted panes; when every selected pane is muted, **Unmute selected notifications** restores notifications for all of them. These batch actions affect only the selected panes.
+
 受支援的內建 Agent Key 涵蓋 14 種 coding CLI：Aider、Antigravity CLI、Claude Code、Codex、Copilot CLI、Cursor CLI、Droid、Grok CLI、Kilo Code、Kimi Code、Muse Code、OpenCode、Pi、Qwen Code。實際 CLI 行為與 Provider Billing 仍由各外部工具控制。
 
 對 Kimi Code Pane，Navide 會提供 100 ms 的 Escape Sequence 重組時間，讓方向鍵在內嵌 Terminal 中仍能可靠導覽；若環境已有 `PI_TUI_ESC_TIMEOUT`，則仍以既有值為準。
@@ -107,11 +111,34 @@ Editor 使用 Monaco，並提供 File Editing、Diagnostics、Plan Rendering、D
 
 這些工具是更大工程環境的 Intervention 介面。Navide 的目標，是最終提供完整專業工作流，而不必使用傳統 IDE 作為主要環境。
 
+## 透過 Navide MCP 管理 Skills
+
+已獲授權的 Agent 可使用與 **設定 → Skills** 相同的共用庫：
+
+1. 呼叫 `skills_list`，再把回傳的 ID 傳給 `skills_inspect`，讀取指示、檔案、所有權、來源紀錄與目前的 `delivery_revision`。
+2. 呼叫 `skills_prepare_install`，來源可用 `owner/repo`、HTTPS `github.com/owner/repo` URL 或本機 skill 資料夾的絕對路徑（支援展開 `~`）。GitHub 的 `ref` 與 `subdir` 分開提供；`subdir: "."` 選擇 repository 根目錄。多個候選會回傳 `selection_required` 與 `candidates`，不產生可安裝的 preview ID；選好路徑後重新 prepare。不支援私人 repository、任意 URL 或 GitHub tree URL。
+3. 檢視完整指示、檔案清單、腳本警示、來源與 digest，再以 preview ID、相同 digest 及明確 targets 呼叫 `skills_install`。首次寫入共用根另須由 `consent` 表達使用者許可；digest 或 Agent 自填的布林值不代表已獲授權。任何同名受管、使用者或原生 skill 都會拒絕。安裝獨占建立目的目錄，寫完附件與 metadata 後才發布 `SKILL.md`，讓掃描不會讀到半套內容；這不是整個目錄的原子 rename。
+4. 之後用 skill ID 與最新 `delivery_revision` 呼叫 `skills_set_delivery`。過時 revision 會失敗，不覆蓋其他呼叫端的決定。此流程只新增 skill，不更新或重新取得既有安裝。
+
+準備的 bytes 綁定已驗證的呼叫端，15 分鐘後或 backend 重啟時失效；安裝不重讀本機來源或再次下載。許可重試可沿用尚未到期的 preview；重試收據仍保留時，成功重送只回傳原結果，不重複寫入。同時最多 8 份有效準備，另有最多 8 份不含套件內容的輕量完成收據。收據沿用原 preview 到期時間，快取滿時也可能提早淘汰；到期或淘汰後重送回傳 missing/expired，不重新安裝。GitHub archive 限壓縮 10 MiB、展開 32 MiB、4,096 個 entries；選定 skill 限 64 檔、每檔 256 KiB、總量 512 KiB。不安全路徑、連結、特殊檔、保留 metadata 與無效 manifest 直接拒絕，不靜默略過。
+
+共用 skill 的 `targets: null` 代表所有 wired vendor，`targets: []` 停止 Navide 額外投遞。原生 skill 的 targets 指定其他 CLI，空陣列或 `null` 清除額外路由。自行掃描共用根的 CLI 仍可能讀到 skill，不受 Navide targets 或啟用開關全面限制；這些設定不是隔離界線。
+
+`materialized_in_current_session: null` 與 `loaded_in_current_session: null` 表示目前 session 的實際投遞與載入尚未驗證；相容欄位 `delivered_to_me` 也只表示設定。改投遞後開新 CLI session 並在其中確認，安裝或路由回覆不能證明執行中的 CLI 已載入新內容。
+
+本機來源收據記錄來源、準備時 digest 與時間，編輯、切換及重啟後仍可由 inspect 取得。digest 代表安裝快照，不代表之後的本機編輯。管理 marker 與來源收據不進入既有 export／Skills sync，不保證跨裝置保存來源。開啟 Skills sync 時，符合限制的內容與投遞決定仍可透過既有流程同步；符合套件限制不等於同步已完成。
+
+Skills 畫面在 backend 成功變更與重新連線後刷新，保留未儲存內容及原 revision，讓過時儲存繼續產生衝突。其他程式直接改檔案仍需手動刷新。準備與安裝不執行夾帶腳本或 plugin hooks；日後使用 skill 仍受 CLI 工具與授權規則控制。
+
 ## Settings 與可攜性
+
+**設定 → 語言** 是側欄中位於「外觀」之後的獨立頁面。可選擇繁體中文或 English；這項使用者層級偏好套用到所有工作區。
 
 Settings 涵蓋 Role、Pipeline、MCP Server、Analyzer Behavior、AI Provider、Appearance、Keyboard Shortcut，以及獨立的 **Execution Policy** 分頁。該分頁會顯示唯讀的 Host 預設值，讓你建立或編輯一個全域的 `full`、`allowlist` 或 `denylist` 使用者政策，並將第一層系統命名空間與最上層 Shell 可執行檔名稱分開管理。完整模式需要明確的高風險確認。開啟工作區後，也會顯示不受信任的 Repository 建議，讓你明確選擇 Host 預設值、使用者政策或接受後的 Repository 政策。全域政策損壞時，可透過獨立確認的重建保留工作區來源選擇；政策資料夾不安全或無法使用時，則必須手動修復。Extensions 會將 Plugin 的 Manifest Permissions、精確 package-version Grant，以及目前選定 Agent 的 Execution Policy 分開顯示。
 
-CLI Agents 另外管理已安裝的 Coding CLI：版本、安裝方式、重複安裝、該 CLI 上次自我更新的結果，以及在終端機執行該 CLI 官方更新與診斷指令的按鈕。開啟工作區時可設定恢復單一 CLI、第一個 Grid 頁面或目前分頁；即使上次不是 Grid layout，Grid 頁面仍會依 Grid preset 計算。Navide 只呈現並執行官方指令，不會自行更新 CLI。Exported Setting 會遮蔽 API Key 與 Token。啟用第三方 Server 前，請先檢查 MCP Command 與 Environment Variable。
+**設定 → CLI Agents** 以每個 Agent 一張卡片呈現。使用搜尋及「全部」、「已啟用」或「需注意」篩選找到 Agent，切換啟用狀態。要調整順序，請選擇「全部」並清空搜尋，再拖曳卡片或使用上下移動按鈕；篩選或搜尋期間無法重新排序。至少必須保留一個已啟用的 Agent。選擇「管理」會開啟該 Agent 的側邊抽屜，提供總覽、啟動設定、權限、推送及安裝分頁。設定沿用自動儲存方式，不需要另外按下儲存。關閉抽屜或按 Escape 會先返回卡片，不會直接關閉整個設定視窗。
+
+安裝分頁管理已安裝的 Coding CLI：版本、安裝方式、重複安裝、該 CLI 上次自我更新的結果，以及在終端機執行該 CLI 官方更新與診斷指令的按鈕。開啟工作區時可設定恢復單一 CLI、第一個 Grid 頁面或目前分頁；即使上次不是 Grid layout，Grid 頁面仍會依 Grid preset 計算。Navide 只呈現並執行官方指令，不會自行更新 CLI。Exported Setting 會遮蔽 API Key 與 Token。啟用第三方 Server 前，請先檢查 MCP Command 與 Environment Variable。
 
 **帳號**分頁為每個 CLI 帳號放一張卡片。除了 CLI 自己的登入，卡片還能保存一份**可攜憑證**：各家官方為「在任何機器上使用」而設計的值（例如 Claude Code 的 `claude setup-token`）。貼入一次，該 CLI 的新 pane 會在環境變數裡拿到它，CLI 自己的登入檔不會被動到。每個 CLI 同時只有一份憑證在*使用中*；卡片會標示是哪一份，並在本機登入檔會蓋過它時提出警告。移除憑證只影響這台裝置。
 

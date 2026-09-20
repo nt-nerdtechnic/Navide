@@ -24,11 +24,13 @@ that reproduce each table, so a stale entry is always cheap to catch.
 | Backend registry | 15 | `cli_vendors/registry.py` — the `_ALL` tuple, then `VENDORS` |
 | Frontend specs | 15 + `terminal` | `src/renderer/src/platform/plugin-shell/agents/index.ts` — the `ORDERED` array |
 
-There is no third list. Everything else in the app derives from `VENDORS` or
-from `ORDERED`: install detection (`onboarding_deps.py`), quota polling
+Runtime registries derive from `VENDORS` or `ORDERED`: install detection
+(`onboarding_deps.py`), quota polling
 (`usage_service.py`), skills (`skills_store.py`), profiles
 (`profiles_store.py`), credential watching (`credential_watcher.py`), log
 reader collection (`app.py`), and the `AgentKey` union on the frontend.
+The Help table, retained plans-plugin specs and frontend environment deny list
+are manually synchronized mirrors; see the [vendor checklist](../adding-a-cli-vendor.md).
 
 `terminal` is a plain shell, not a vendor: it carries an empty
 `defaultCommand` and is filtered out of `CLI_AGENT_SPECS`. Files whose name
@@ -89,8 +91,8 @@ statement, not a gap to fill in from a guess.
 |---|---|---|---|---|---|---|---|---|
 | `claude` | ✅ | ✅ | — *(see note)* | ✅ | ✅ | ✅ | ✅ | ✅ |
 | `codex` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | — |
-| `antigravity` | ✅ | ✅ | ✅ | ✅ *(path only)* | ✅ | ✅ | — | — |
-| `grok` | ✅ | ✅ | ✅ | ✅ *(path only)* | ✅ | — | — | — |
+| `antigravity` | ✅ | ✅ | ✅ | ✅ *(path preflight)* | ✅ | ✅ | — | — |
+| `grok` | ✅ | ✅ | ✅ | ✅ *(path preflight)* | ✅ | — | — | — |
 | `kimi` | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | — |
 | `opencode` | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | — |
 | `qwen` | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ |
@@ -121,15 +123,16 @@ Notes on the cells that are easy to misread:
   has no session id concept at all — its resume takes a chat-history path — and
   the frontend excludes it from rebuild for the same reason. `mcode` does have
   ids (`--session <id>`), but nothing can yet learn the id of a session Navide
-  started, because its history lives in SQLite and no reader reads it; that
+  started, because its SQLite reader is not implemented; that
   entry should disappear when the reader lands.
-- **Resume shape varies.** `antigravity` and `grok` declare `session_path`
-  without `resume_id_from_command` or `session_exists`, so resume works off the
-  path alone; the other eleven resolve an id.
+- **Resume shape varies.** `antigravity` and `grok` parse explicit session IDs
+  through `resume_id_from_command`, while existence checks still use
+  `session_path` without a custom `session_exists`. Grok title-based resume
+  does not produce a parsed session ID.
 - **Every vendor declares `install_dep`.** All but `mcode` also ship a log
   reader (`make_log_reader`); `mcode` carries the empty `log_readers/`
-  placeholder the contract allows, because its conversations are in SQLite
-  rather than per-session JSONL.
+  placeholder the contract allows, pending authenticated session fixtures to
+  validate a reader for its SQLite message payloads.
 - **`portable_credential` is `claude`-only.** No other vendor declares a
   portable credential today.
 
@@ -157,10 +160,11 @@ Read from each `agents/<key>.ts`. These fields shape the argv Navide builds.
 | `droid` | `--auto high` | `--resume <id>` | ✅ | — |
 | `mcode` | — *(setting, not a flag)* | — *(needs a reader)* | — | — |
 
-The three vendors with no bypass flag each carry a comment explaining why, so
+The four vendors with no bypass flag each carry a comment explaining why, so
 the blank is not mistaken for an oversight: `grok` has `--always-approve` but
-Navide deliberately does not pass it, `opencode`'s TUI has no such flag, and
-`pi` has no permission system to bypass.
+Navide deliberately does not pass it, `opencode`'s TUI has no such flag,
+`pi` has no permission system to bypass, and `mcode` controls permission mode
+through its settings instead of an interactive launch flag.
 
 ---
 
