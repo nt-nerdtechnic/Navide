@@ -128,6 +128,28 @@ def _write_cumulative(seen_keys: set[str], input_total: int, output_total: int) 
     seen_keys.add(f"{_CUM_PREFIX}in={input_total},out={output_total}")
 
 
+def _dedupe_resolved(roots: list[Path]) -> list[Path]:
+    """Drop roots that resolve to a path an earlier root already covers.
+
+    Pane homes made before 9ab9e87c mirror `sessions` as a symlink back to
+    ~/.codex/sessions, so each of them re-listed the whole default tree (#121:
+    39k rollouts x 27 homes ≈ 6 min per scan). Order is kept so the default
+    root, listed first, is the spelling that survives.
+    """
+    out: list[Path] = []
+    seen: set[Path] = set()
+    for root in roots:
+        try:
+            key = root.resolve()
+        except OSError:
+            key = root
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(root)
+    return out
+
+
 class CodexLogReader(LogReader):
     vendor: str = "codex"
 
@@ -184,7 +206,7 @@ class CodexLogReader(LogReader):
                 )
             except OSError as err:
                 log.debug("enumerate %s failed: %s", panes_root, err)
-        return roots
+        return _dedupe_resolved(roots)
 
     def watch_dirs(self) -> list[Path]:
         roots: list[Path] = []
@@ -194,7 +216,7 @@ class CodexLogReader(LogReader):
         panes_root = Path.home() / ".codex-panes"
         if panes_root.is_dir():
             roots.append(panes_root)
-        return roots
+        return _dedupe_resolved(roots)
 
     def session_files(self) -> list[Path]:
         with self._discovery_lock:
@@ -679,6 +701,13 @@ class CodexLogReader(LogReader):
 # ---- per-pane CODEX_HOME management (merged from codex_home.py) ------------
 
 _SAFE_HOME_ID = re.compile(r"^[A-Za-z0-9_.:-]+$")
+# Home ids Navide itself generates: a pane's crypto.randomUUID(), or a plugin
+# window's `<8 hex>-<surface>-ai-terminal` (aiTerminalPaneId). Reclaim only
+# touches these — anything else under ~/.codex-panes was put there by hand.
+_NAVIDE_HOME_ID = re.compile(
+    r"^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+    r"|[0-9a-f]{8}-[a-z]+-ai-terminal)$"
+)
 
 # CODEX_HOME *routing* lookup only: which home physically holds a rollout.
 # `sessions` is nested {Y}/{M}/{D}; `codex archive` moves a rollout into the
@@ -1050,6 +1079,77 @@ class CodexHomeManager:
                 if found is not None:
                     return found
         return None
+
+    def owns_session(self, pane_home: Path) -> bool:
+        """True when this home physically holds a rollout.
+
+        `codex resume <id>` only works from the home that recorded the rollout
+        (its file plus that home's own state db), so a home holding one must
+        outlive its pane. A symlinked `sessions` (the pre-9ab9e87c mirror back
+        to ~/.codex/sessions) owns nothing: those rollouts live in the real
+        home and `find_session_home` already routes them there. Archived
+        rollouts count too — `codex unarchive` needs the same home. Fails
+        closed: a subdir that cannot be read is treated as owning a session.
+        """
+        for name in _SESSION_SUBDIRS:
+            subdir = pane_home / name
+            if subdir.is_symlink() or not subdir.is_dir():
+                continue
+            try:
+                if next(subdir.rglob("rollout-*.jsonl"), None) is not None:
+                    return True
+            except OSError:
+                return True
+        return False
+
+    def reclaim(self, home_id: str) -> bool:
+        """Remove a pane home its pane no longer needs. Returns True on removal.
+
+        Refuses anything that is not a Navide-shaped id, a home that still
+        owns a session (see `owns_session`), and a home holding a real (not
+        symlinked) auth.json — a fresh-install login that
+        `promote_stranded_auth` has not adopted yet. A home that is itself a
+        symlink is unlinked, never followed; nested symlinks (the shared
+        config entries) are removed as links by rmtree.
+        """
+        safe_id = self._safe_home_id(home_id)
+        if not _NAVIDE_HOME_ID.match(safe_id):
+            return False
+        pane_home = self.panes_root / safe_id
+        if pane_home.is_symlink():
+            pane_home.unlink()
+            return True
+        if not pane_home.is_dir():
+            return False
+        if self.owns_session(pane_home):
+            return False
+        auth = pane_home / "auth.json"
+        if auth.is_file() and not auth.is_symlink():
+            return False
+        shutil.rmtree(pane_home)
+        return True
+
+    def sweep_orphans(self) -> list[str]:
+        """Reclaim every pane home no pane needs. Runs once at backend start,
+        when no pane is live, so the only homes it keeps are the ones
+        `reclaim` refuses. Returns the ids it removed."""
+        if not self.panes_root.is_dir():
+            return []
+        try:
+            names = sorted(p.name for p in self.panes_root.iterdir())
+        except OSError as err:
+            log.warning("enumerating %s failed: %s", self.panes_root, err)
+            return []
+        reclaimed: list[str] = []
+        for name in names:
+            if not _NAVIDE_HOME_ID.match(name):
+                continue
+            try:
+                if self.reclaim(name):
+                    reclaimed.append(name)
+            except OSError as err:
+                log.warning("reclaiming codex pane home %s failed: %s", name, err)
+        return reclaimed
 
     def cleanup(self, home_id: str) -> bool:
         safe_id = self._safe_home_id(home_id)

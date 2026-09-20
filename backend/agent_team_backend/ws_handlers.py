@@ -1576,6 +1576,22 @@ async def git_push_force(session: "Session", msg_id: str, msg_type: str, payload
 
 
 # ── Codex home cleanup (codex_home.cleanup) ─────────────────────────────────
+async def _reclaim_codex_home(home_id: str) -> None:
+    """Drop a pane home its pane no longer needs (#121). reclaim() keeps any
+    home that still owns a resumable session, so this is safe to call for
+    every pane that goes away; a manager without it (test fakes) is a no-op."""
+    from . import app
+
+    reclaim = getattr(app.codex_home_manager, "reclaim", None)
+    if not home_id or not callable(reclaim):
+        return
+    try:
+        if await asyncio.to_thread(reclaim, home_id):
+            app.log.info("reclaimed codex pane home %s", home_id)
+    except Exception as err:  # noqa: BLE001 — the pane is already gone; only disk is lost
+        app.log.warning("reclaiming codex pane home %s failed: %s", home_id, err)
+
+
 @handler("codex_home.cleanup")
 async def codex_home_cleanup(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     from . import app
@@ -6008,6 +6024,7 @@ async def terminal_create(session: "Session", msg_id: str, msg_type: str, payloa
             "attribution_future": None,
             "attribution_started": False,
             "cleanup_task": None,
+            "codex_home_id": "",
         }
         session._terminal_create_transactions[key] = transaction
         try:
@@ -6119,6 +6136,10 @@ async def _rollback_terminal_create(
             if app._PTY_OWNERS.get(term_id) is session:
                 app._PTY_OWNERS.pop(term_id, None)
             await session.terminals.kill(term_id, force=True)
+        # The per-pane CODEX_HOME this create prepared: without a rollout in
+        # it there is nothing to resume, and a failed spawn used to leave one
+        # behind every time (#121).
+        await _reclaim_codex_home(str(transaction.get("codex_home_id") or ""))
         # The push channel was wired before the spawn, so a rolled-back create
         # would otherwise leave a registered channel — and a watch file — for a
         # pane that never came to exist.
@@ -6311,6 +6332,7 @@ async def _terminal_create_impl(
             )
             env["CODEX_HOME"] = str(codex_home)
             metadata["session_home_id"] = home_id
+            transaction["codex_home_id"] = home_id
         elif session_home != app.codex_home_manager.real_home:
             env["CODEX_HOME"] = str(session_home)
             metadata["session_home_id"] = session_home.name
@@ -6547,6 +6569,7 @@ async def _terminal_create_impl(
                         },
                     )
                 )
+                await _reclaim_codex_home(str(transaction.get("codex_home_id") or ""))
                 return
             if injection is not None:
                 env.update(injection.env)
@@ -8291,6 +8314,15 @@ async def manual_pane_unspawn(session: "Session", msg_id: str, msg_type: str, pa
     for swept_id in dict.fromkeys([pane_id, *removed_pane_ids]):
         await _sweep_pane_ptys(session, swept_id)
         portable_credentials.forget_launch(str(swept_id))
+    # A Codex pane's home is named after its pane id, or after the id a
+    # restored pane kept using (session_home_id). Its PTY is down by now.
+    for home_id in dict.fromkeys([
+        pane_id,
+        *removed_pane_ids,
+        *(p.session_home_id for p in project.panes
+          if p.pane_id in removed_pane_ids and p.session_home_id),
+    ]):
+        await _reclaim_codex_home(str(home_id))
     await session.send_json(
         make_response(msg_id, msg_type, app._project_payload(project))
     )

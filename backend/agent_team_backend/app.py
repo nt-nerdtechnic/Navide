@@ -1863,6 +1863,24 @@ def _sanitize_inherited_cli_env() -> None:
             log.info("dropped inherited %s from backend environment", key)
 
 
+async def _reclaim_orphan_codex_homes() -> None:
+    """Startup sweep of ``~/.codex-panes``: closed panes and failed spawns
+    accumulated one home each with nothing to resume (#121). Every removal
+    goes through ``CodexHomeManager.reclaim``, which keeps any home that
+    still holds a rollout."""
+    started = time.monotonic()
+    try:
+        reclaimed = await asyncio.to_thread(codex_home_manager.sweep_orphans)
+    except Exception as err:  # noqa: BLE001
+        log.warning("codex pane home sweep failed: %s", err)
+        return
+    if reclaimed:
+        log.info(
+            "reclaimed %d orphan codex pane home(s) in %.0fms",
+            len(reclaimed), (time.monotonic() - started) * 1000,
+        )
+
+
 @app.on_event("startup")
 async def _start_log_watcher() -> None:
     _sanitize_inherited_cli_env()
@@ -1923,6 +1941,11 @@ async def _start_log_watcher() -> None:
         await asyncio.to_thread(pty_registry.reap_stale)
     except Exception as err:  # noqa: BLE001
         log.warning("pty orphan reap failed: %s", err)
+
+    # Codex pane homes nothing can resume from (#121). Awaited, after the
+    # reap above and before any renderer can connect: no pane is live, so a
+    # home is kept only because it still owns a rollout.
+    await _reclaim_orphan_codex_homes()
 
     # Kill PTYs whose owning WebSocket never came back (see janitor above).
     global _ownerless_sweeper_task

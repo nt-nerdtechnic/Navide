@@ -27,6 +27,7 @@ All notable released changes to Navide will be documented in this file. The form
 - Keep CLI completion and message text across incremental updates: Antigravity rechecks assistant rows completed in place, Kimi streaming postpones inferred idle completion and can finish after new assistant content arrives, and Droid retains reply text when its outcome arrives in a later log poll.
 - Recognize explicit Antigravity and Grok resume IDs when reaping a duplicate CLI process before replacement, and keep Grok's first session visible outside its per-pane home shim. Grok title-based resume remains outside ID-based duplicate detection.
 - Reject Pi resume IDs that exist only in another workspace, where the CLI would otherwise start a new empty conversation. Honor `XDG_DATA_HOME` for OpenCode quota credentials and Kilo account switching and credential watching.
+- Scan the Codex session tree once per pass instead of once per pane home: pane homes whose `sessions` is a symlink back to `~/.codex/sessions` no longer re-enumerate the same rollouts. Reclaim `~/.codex-panes/<id>` when its pane is closed or its spawn fails, and sweep leftover homes at backend start; a home that still holds a rollout is always kept so `codex resume` keeps working (#121).
 - Preserve recorded model and effort when resuming a closed pane from Agent History, including when its original pane record has been pruned. Missing fields in older clients no longer erase those recorded choices; legacy records without choices keep the vendor default.
 
 ## [0.2.8] — 2026-09-20 — signed release

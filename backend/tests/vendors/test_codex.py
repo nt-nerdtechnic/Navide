@@ -160,6 +160,40 @@ def test_project_dirs_scan_pane_sessions_but_watch_stable_parent(
     assert pane_sessions not in reader.watch_dirs()
 
 
+def test_project_dirs_scan_the_default_tree_once_across_symlinked_pane_homes(
+    tmp_path: Path,
+    set_home,
+) -> None:
+    """Issue #121: a legacy pane home mirrors `sessions` as a symlink back to
+    ~/.codex/sessions. Every such home used to add the whole default tree to
+    the scan again (39k rollouts x 27 homes on the reporter's machine)."""
+    fake_home = tmp_path / "home"
+    set_home(fake_home)
+    default_sessions = fake_home / ".codex" / "sessions"
+    _write_jsonl(default_sessions / "2026" / "05" / "27" / "rollout-a.jsonl", [
+        {"type": "session_meta", "payload": {"cwd": "/w"}},
+    ])
+    panes = fake_home / ".codex-panes"
+    for pane in ("pane-link-1", "pane-link-2"):
+        (panes / pane).mkdir(parents=True)
+        (panes / pane / "sessions").symlink_to(default_sessions, target_is_directory=True)
+    own_sessions = panes / "pane-own" / "sessions"
+    _write_jsonl(own_sessions / "2026" / "05" / "27" / "rollout-b.jsonl", [
+        {"type": "session_meta", "payload": {"cwd": "/w"}},
+    ])
+
+    reader = CodexLogReader()
+    roots = reader.project_dirs()
+    files = reader.session_files()
+
+    assert [r for r in roots if r.resolve() == default_sessions.resolve()] == [default_sessions]
+    assert own_sessions in roots
+    resolved = [f.resolve() for f in files]
+    assert len(resolved) == len(set(resolved)) == 2
+    watched = [w.resolve() for w in reader.watch_dirs()]
+    assert len(watched) == len(set(watched))
+
+
 def test_malformed_lines_do_not_abort(fake_codex_session: Path) -> None:
     reader = CodexLogReader()
     fake_codex_session.parent.mkdir(parents=True, exist_ok=True)
