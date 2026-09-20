@@ -89,6 +89,38 @@ describe('detectUsageLimit', () => {
     expect(hit.resumeAt).toBe(Date.parse('2026-09-07T08:30:00Z') + LIMIT_RESET_BUFFER_MS)
   })
 
+  it('reports the reset the message stated, unbuffered, as resetAt', () => {
+    // resetAt is what tells the ledger WHICH of the account's windows ran
+    // out. It is the message's own clock and nothing else: the reading here
+    // says the session window resets at 10:50Z, and a resetAt taken from it
+    // could not distinguish the window the message was about.
+    seedUsage([
+      { kind: 'session', label: 'Session (5h)', usedPercent: 100, resetsAt: '2026-09-07T10:50:00Z' }
+    ])
+    const hit = expectHit(detectUsageLimit(
+      'claude',
+      "You've hit your weekly limit · resets 4:30pm (Asia/Taipei)",
+      NOW
+    ))
+    expect(hit.resetAt).toBe(Date.parse('2026-09-07T08:30:00Z'))
+    expect(hit.resumeAt).toBe(hit.resetAt! + LIMIT_RESET_BUFFER_MS)
+  })
+
+  it('leaves resetAt null when the message carried no readable clock', () => {
+    seedUsage([
+      { kind: 'session', label: 'Session (5h)', usedPercent: 100, resetsAt: '2026-09-07T10:50:00Z' }
+    ])
+    // Clockless, and the unreadable-timezone form: neither names a window,
+    // so neither may stamp one, even though both still resume off the reading.
+    expect(expectHit(detectUsageLimit('claude', 'You have hit your usage limit', NOW)).resetAt)
+      .toBeNull()
+    expect(expectHit(detectUsageLimit(
+      'claude',
+      "You've hit your session limit · resets 4:30pm (Middle/Earth)",
+      NOW
+    )).resetAt).toBeNull()
+  })
+
   it('falls back to the /usage reading when the message time is unreadable', () => {
     seedUsage([
       { kind: 'session', label: 'Session (5h)', usedPercent: 100, resetsAt: '2026-09-07T10:50:00Z' }

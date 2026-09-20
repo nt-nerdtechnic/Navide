@@ -81,6 +81,14 @@ export interface UsageLimitHit {
   /** Epoch ms to resume at (reset + safety buffer), or null when neither
    *  source could resolve a reset time — callers fail open. */
   resumeAt: number | null
+  /** The reset epoch ms the MESSAGE itself stated, without the resume buffer,
+   *  or null when it carried no clock. This is the only part of the hit that
+   *  says WHICH window was hit — an account has a 5-hour one, a weekly one and
+   *  a per-model weekly one open at once, and they run out separately. Unlike
+   *  resumeAt it never falls back to the account's reading, because a stamp
+   *  derived from the reading cannot then be used to tell which window the
+   *  reading was about. */
+  resetAt: number | null
 }
 
 /** Resume time taken from the account's own `/usage` reading: the spent
@@ -131,12 +139,14 @@ export function detectUsageLimit(
   const clocked = matchSessionLimit(tail)
   if (clocked !== null) {
     if (hasHeadlineHeadroom(usageFor(agentKey))) return QUOTA_READING_VETO
+    const parsed = parseLimitReset(clocked, now)
     return {
       message: clocked,
-      resumeAt: parseLimitReset(clocked, now) ?? usageResumeAt(agentKey, now)
+      resumeAt: parsed ?? usageResumeAt(agentKey, now),
+      resetAt: parsed === null ? null : parsed - LIMIT_RESET_BUFFER_MS
     }
   }
   const bare = BARE_LIMIT_RE.exec(tail.replace(/\s+/g, ' '))
   if (!bare || exhaustedWindow(usageFor(agentKey)) === undefined) return null
-  return { message: bare[0], resumeAt: usageResumeAt(agentKey, now) }
+  return { message: bare[0], resumeAt: usageResumeAt(agentKey, now), resetAt: null }
 }

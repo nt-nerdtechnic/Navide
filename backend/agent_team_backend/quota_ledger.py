@@ -48,6 +48,12 @@ _COMPONENT = "quota_ledger"
 #: same cycle (claude's panel prints the reset to the minute; a parked slot
 #: replays its cached figure with the same stamp).
 RESET_MATCH_TOLERANCE_S = 120.0
+#: How far the reset clock a pane's limit message states may sit from a
+#: cycle's own reset before the two describe different windows. Wider than
+#: RESET_MATCH_TOLERANCE_S because these are not the same measurement: the
+#: cycle's reset is the panel's, to the minute, while the message states a
+#: wall clock the CLI prints with the minutes sometimes left off.
+EXHAUSTED_MATCH_TOLERANCE_S = 3600.0
 #: Window kinds counted as "weekly" in the period statistics; everything
 #: else (session/5h, monthly credits, …) is the "cycles" column.
 WEEKLY_KINDS = ("weekly", "weekly-model", "secondary")
@@ -260,32 +266,54 @@ class QuotaLedger:
             (new_max, new_exhausted, int(row["id"])),
         )
 
-    def mark_exhausted(self, agent: str, profile_id: str, at: float) -> list[str]:
-        """The pane's own ⛔ detection (`tokens.quota_exhausted`): for every
-        open cycle of the account whose window contains ``at``, move
-        ``exhausted_at`` to ``at`` when it is unset or later — the pane sees
-        the wall up to 15 minutes before the next usage sample does. A later
-        detection never overrides an earlier sample. Returns the window kinds
-        updated."""
+    def mark_exhausted(
+        self, agent: str, profile_id: str, at: float, resets_at: float | None = None
+    ) -> list[str]:
+        """The pane's own ⛔ detection (`tokens.quota_exhausted`): move the
+        stated cycle's ``exhausted_at`` to ``at`` when it is unset or later —
+        the pane sees the wall up to 15 minutes before the next usage sample
+        does. A later detection never overrides an earlier sample. Returns the
+        window kinds updated.
+
+        ``resets_at`` is the reset clock the message itself printed, and it is
+        the only thing that says WHICH window was hit. An account runs its
+        5-hour, weekly and per-model weekly windows at once and they run out
+        separately, so a detection that cannot name one stamps nothing and
+        leaves the cycle to the first 100 % sample, at most 15 minutes later.
+
+        Stamping all of them, which this did before, was wrong in both
+        directions: one weekly message marked the 5-hour cycle spent, and
+        rows whose peak never passed 9 % carry a "ran out" time to this day.
+        The message names one wall."""
+        if resets_at is None:
+            return []
         profile = normalize_profile_id(profile_id)
         updated: list[str] = []
         with self._lock:
             with self._db.transaction() as cur:
-                rows = cur.execute(
+                # The open cycle resetting closest to the stated clock. Weekly
+                # and weekly-model share a reset to the second, so the
+                # tie-break is how full the window was: the one that ran out
+                # is not the one sitting at 9 %.
+                row = cur.execute(
                     "SELECT id, window_kind, exhausted_at FROM quota_cycles"
                     " WHERE agent = ? AND profile_id = ? AND closed = 0"
-                    " AND resets_at > ? AND (started_at IS NULL OR started_at <= ?)",
-                    (agent, profile, at, at),
-                ).fetchall()
-                for row in rows:
-                    current = row["exhausted_at"]
-                    if current is not None and float(current) <= at:
-                        continue
-                    cur.execute(
-                        "UPDATE quota_cycles SET exhausted_at = ? WHERE id = ?",
-                        (at, int(row["id"])),
-                    )
-                    updated.append(str(row["window_kind"]))
+                    " AND resets_at > ? AND (started_at IS NULL OR started_at <= ?)"
+                    " AND ABS(resets_at - ?) <= ?"
+                    " ORDER BY ABS(resets_at - ?), max_percent DESC, id LIMIT 1",
+                    (agent, profile, at, at, resets_at,
+                     EXHAUSTED_MATCH_TOLERANCE_S, resets_at),
+                ).fetchone()
+                if row is None:
+                    return []
+                current = row["exhausted_at"]
+                if current is not None and float(current) <= at:
+                    return []
+                cur.execute(
+                    "UPDATE quota_cycles SET exhausted_at = ? WHERE id = ?",
+                    (at, int(row["id"])),
+                )
+                updated.append(str(row["window_kind"]))
         return updated
 
     def close_expired(self, now: float | None = None) -> list[tuple[str, str, str]]:

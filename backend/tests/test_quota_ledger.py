@@ -252,20 +252,65 @@ def test_pane_detection_moves_exhausted_at_earlier_but_never_later(
     sample_at = T0 + 4 * H + 35 * 60
     seen_at = T0 + 4 * H + 31 * 60
     ledger.observe("claude", "acct-a", _snap(100.0, resets, sample_at), now=sample_at)
-    assert ledger.mark_exhausted("claude", "acct-a", seen_at) == ["session"]
+    assert ledger.mark_exhausted("claude", "acct-a", seen_at, resets) == ["session"]
     assert ledger.cycles("claude", "acct-a", now=sample_at + 1)[0]["exhausted_at"] == _iso(seen_at)
     # A detection AFTER the sample does not override it; neither does a
     # detection outside the window, an unknown account, or a closed cycle.
-    assert ledger.mark_exhausted("claude", "acct-a", sample_at + 60) == []
+    assert ledger.mark_exhausted("claude", "acct-a", sample_at + 60, resets) == []
     assert ledger.cycles("claude", "acct-a", now=sample_at + 1)[0]["exhausted_at"] == _iso(seen_at)
-    assert ledger.mark_exhausted("claude", "acct-a", resets + 10) == []
-    assert ledger.mark_exhausted("claude", "unknown", seen_at) == []
+    assert ledger.mark_exhausted("claude", "acct-a", resets + 10, resets) == []
+    assert ledger.mark_exhausted("claude", "unknown", seen_at, resets) == []
     ledger.close_expired(now=resets)
-    assert ledger.mark_exhausted("claude", "acct-a", seen_at - 60) == []
+    assert ledger.mark_exhausted("claude", "acct-a", seen_at - 60, resets) == []
     # Without any sample at 100 % the detection sets exhausted_at on its own.
     ledger.observe("claude", "acct-b", _snap(80.0, resets, T0 + H), now=T0 + H)
-    assert ledger.mark_exhausted("claude", "acct-b", T0 + 2 * H) == ["session"]
+    assert ledger.mark_exhausted("claude", "acct-b", T0 + 2 * H, resets) == ["session"]
     assert ledger.cycles("claude", "acct-b", now=T0 + 3 * H)[0]["exhausted_at"] == _iso(T0 + 2 * H)
+
+
+def test_pane_detection_stamps_only_the_window_the_message_named(
+    ledger: QuotaLedger,
+) -> None:
+    """One limit message means one wall. The account runs three windows at
+    once and they run out separately, so the reset clock the message printed
+    is what picks the cycle — the 5-hour row must not be marked spent because
+    the weekly one was, and a per-model weekly row sitting at 9 % must not be
+    marked spent at all. Both happened: the shipped database carries rows
+    whose peak never passed 9 % under a "ran out" stamp."""
+    weekly_resets = T0 + 7 * 86400
+    extra = [
+        {"kind": "weekly", "label": "Weekly (all models)", "usedPercent": 94.0,
+         "resetsAt": _iso(weekly_resets)},
+        {"kind": "weekly-model", "label": "Weekly (Fable)", "usedPercent": 9.0,
+         "resetsAt": _iso(weekly_resets)},
+    ]
+    session_resets = T0 + 5 * H
+    seen_at = T0 + 51 * 60
+    ledger.observe("claude", "acct-a", _snap(89.0, session_resets, T0 + 10, extra=extra),
+                   now=T0 + 10)
+
+    # The weekly wall: only the weekly cycle is stamped. weekly-model shares
+    # the reset to the second, and loses the tie on how full it was.
+    assert ledger.mark_exhausted("claude", "acct-a", seen_at, weekly_resets) == ["weekly"]
+    by_kind = {c["window_kind"]: c for c in ledger.cycles("claude", "acct-a", now=seen_at + 1)}
+    assert by_kind["weekly"]["exhausted_at"] == _iso(seen_at)
+    assert by_kind["session"]["exhausted_at"] is None
+    assert by_kind["weekly-model:Weekly (Fable)"]["exhausted_at"] is None
+
+    # The session wall is a separate message with its own clock, and the CLI
+    # may print it with the minutes left off — an hour of slack still lands on
+    # the right window because no other one resets anywhere near it.
+    assert ledger.mark_exhausted(
+        "claude", "acct-a", seen_at, session_resets - 10 * 60
+    ) == ["session"]
+    assert ledger.cycles("claude", "acct-a", window_kind="session", now=seen_at + 1)[0][
+        "exhausted_at"
+    ] == _iso(seen_at)
+
+    # A clock that names no open window of this account stamps nothing, and
+    # so does a message that carried no clock at all.
+    assert ledger.mark_exhausted("claude", "acct-a", seen_at, T0 + 3 * 86400) == []
+    assert ledger.mark_exhausted("claude", "acct-a", seen_at) == []
 
 
 def test_close_expired_never_asks_for_totals_inside_a_transaction(tmp_path: Path) -> None:

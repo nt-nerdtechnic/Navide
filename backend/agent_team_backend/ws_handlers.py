@@ -5424,11 +5424,14 @@ async def tokens_quota_exhausted(session: "Session", msg_id: str, msg_type: str,
     from .pane_account_history import UNKNOWN_PROFILE_ID, parse_event_time
 
     # The renderer saw the CLI's "hit your limit" message in a pane: stamp
-    # the account's open cycles with that moment when it beats the first
+    # the cycle that message named with that moment when it beats the first
     # 100 % sample. No account for the pane → nothing to stamp (ok, empty).
+    # Same for a message with no reset clock in it: which window ran out is
+    # then unknown, and the ledger declines to guess.
     agent_key = str(payload.get("agent_key") or "")
     pane_id = str(payload.get("pane_id") or "")
     at = parse_event_time(str(payload.get("at") or ""))
+    resets_at = parse_event_time(str(payload.get("resets_at") or ""))
     if agent_key not in CLI_VENDORS:
         await session.send_json(make_response(
             msg_id, msg_type, {"ok": False, "error": "unknown-vendor"}))
@@ -5437,7 +5440,7 @@ async def tokens_quota_exhausted(session: "Session", msg_id: str, msg_type: str,
     updated: list[str] = []
     if at is not None and profile_id != UNKNOWN_PROFILE_ID:
         updated = await asyncio.to_thread(
-            app.quota_ledger.mark_exhausted, agent_key, profile_id, at
+            app.quota_ledger.mark_exhausted, agent_key, profile_id, at, resets_at
         )
     await session.send_json(make_response(msg_id, msg_type, {"ok": True, "updated": updated}))
     for window_kind in updated:

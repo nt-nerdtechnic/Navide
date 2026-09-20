@@ -323,20 +323,29 @@ async def test_quota_exhausted_handler_stamps_the_panes_account(stores, monkeypa
 
     monkeypatch.setattr(app, "broadcast", broadcast)
 
-    bad = await _call("tokens.quota_exhausted", agent_key="nope", pane_id="pane-1", at=iso(seen_at))
+    bad = await _call("tokens.quota_exhausted", agent_key="nope", pane_id="pane-1",
+                      at=iso(seen_at), resets_at=iso(resets))
     assert bad == {"ok": False, "error": "unknown-vendor"}
     # A pane with no account resolves to nothing to stamp.
-    none = await _call("tokens.quota_exhausted", agent_key="claude", pane_id="ghost", at=iso(seen_at))
+    none = await _call("tokens.quota_exhausted", agent_key="claude", pane_id="ghost",
+                       at=iso(seen_at), resets_at=iso(resets))
     assert none == {"ok": True, "updated": []} and events == []
+    # Neither does a message that named no window: which of the account's
+    # windows hit the wall is then unknown, and the 100 % sample owns the stamp.
+    blind = await _call("tokens.quota_exhausted", agent_key="claude", pane_id="pane-1",
+                        at=iso(seen_at))
+    assert blind == {"ok": True, "updated": []} and events == []
 
-    reply = await _call("tokens.quota_exhausted", agent_key="claude", pane_id="pane-1", at=iso(seen_at))
+    reply = await _call("tokens.quota_exhausted", agent_key="claude", pane_id="pane-1",
+                        at=iso(seen_at), resets_at=iso(resets))
     assert reply == {"ok": True, "updated": ["session"]}
     assert [e["type"] for e in events] == ["tokens.quota_cycles_changed"]
     assert events[0]["payload"] == {"agent_key": "claude", "profile_id": "acct-a", "window_kind": "session"}
     cycles = await _call("tokens.quota_cycles", agent_key="claude", profile_id="acct-a")
     assert cycles["cycles"][0]["exhausted_at"] == iso(seen_at)
     # Later detection: no change, no broadcast.
-    again = await _call("tokens.quota_exhausted", agent_key="claude", pane_id="pane-1", at=iso(sample_at + 60))
+    again = await _call("tokens.quota_exhausted", agent_key="claude", pane_id="pane-1",
+                        at=iso(sample_at + 60), resets_at=iso(resets))
     assert again == {"ok": True, "updated": []} and len(events) == 1
 
 

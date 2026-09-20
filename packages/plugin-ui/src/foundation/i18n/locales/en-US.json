@@ -7919,7 +7919,7 @@
     "col-turns": "Turns",
     "col-per-percent": "Total / %",
     "row-exhausted-average": "Average of the {count} exhausted cycles",
-    "note": "A cycle starts at reset − window length and ends at the reset; tokens inside it are every pane pinned to this account. Ran out = the first sample at 100%, up to 15 min after the actual hit.",
+    "note": "A cycle starts at reset − window length and ends at the reset; tokens inside it are every pane pinned to this account. Ran out = the first sample at 100%, or the moment a pane printed the limit message for this window — up to 15 min earlier than the sample.",
     "chart-month": "Monthly total by account",
     "chart-year": "Yearly total by account",
     "chart-periods-hint": "Click a bar to highlight that period.",

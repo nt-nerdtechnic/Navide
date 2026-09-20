@@ -4768,10 +4768,16 @@ function checkPaneUsageLimit(
   // poll, so the pane's detection is the earlier of the two stamps for the
   // cycle's exhausted_at. Once per hit — the early return above keeps a
   // repaint of the same message from sending it again.
+  //
+  // resets_at is what says which of the account's open cycles was hit. The
+  // ledger stamps nothing without it: the account runs a 5-hour window, a
+  // weekly one and a per-model weekly one at the same time, and a stamp that
+  // cannot name one of them used to land on all three.
   void sendQuiet('tokens.quota_exhausted', {
     agent_key: pane.agentKey,
     pane_id: pane.id,
-    at: new Date(now).toISOString()
+    at: new Date(now).toISOString(),
+    resets_at: hit.resetAt === null ? null : new Date(hit.resetAt).toISOString()
   })
   // The badge's figure is up to CLAUDE_CLI_READ_INTERVAL old, so it would go on
   // advertising quota that is gone. One refresh per hit, never per poll: the
