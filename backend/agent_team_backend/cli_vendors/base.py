@@ -21,7 +21,8 @@ modules — those import the registry, and a back-edge would be a cycle.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import shlex
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -44,6 +45,38 @@ def command_text(command: Any) -> str:
     if isinstance(command, list):
         return str(command[-1]) if command else ""
     return str(command or "")
+
+
+def simple_command_args(command: Any) -> list[str]:
+    """Parse a literal CLI invocation for destructive resume deduplication.
+
+    Unlike command_text, only unwrap known shell command argv. Complex shell
+    overrides remain unclaimed rather than guessing which process they start.
+    """
+    if isinstance(command, list):
+        if len(command) < 3:
+            return []
+        shell = str(command[0]).replace("\\", "/").rsplit("/", 1)[-1].lower()
+        flags = tuple(str(arg) for arg in command[1:-1])
+        posix = shell in {"sh", "bash", "zsh", "dash", "ksh", "fish"} and flags in {
+            ("-c",), ("-lc",), ("-ilc",),
+        }
+        windows_flags = tuple(arg.lower() for arg in flags)
+        windows = shell in {"cmd", "cmd.exe"} and windows_flags in {
+            ("/c",), ("/k",), ("/d", "/s", "/c"), ("/d", "/c"),
+        }
+        powershell = shell in {"powershell", "powershell.exe", "pwsh", "pwsh.exe"} and windows_flags in {
+            ("-command",), ("-nologo", "-noexit", "-command"),
+        }
+        if not (posix or windows or powershell):
+            return []
+    text = command_text(command)
+    if any(char in text for char in ";&|<>`$%#()\n\r"):
+        return []
+    try:
+        return shlex.split(text)
+    except ValueError:
+        return []
 
 
 @dataclass(frozen=True)
@@ -510,6 +543,27 @@ class ShutdownSpec:
 
 
 @dataclass(frozen=True)
+class VendorRuntimeContext:
+    """Nonsecret launch snapshot for risk declarations, after pane isolation.
+
+    ``home`` is the effective child home; ``env`` contains only declared
+    path values and presence markers for network overrides. Never put the
+    full spawn environment here or reconstruct it from the backend process.
+    """
+
+    home: Path
+    env: Mapping[str, str] = field(repr=False)
+    cwd: Path
+
+    def path(self, value: str | Path) -> Path:
+        """Make a runtime path absolute without reading or resolving symlinks."""
+        path = Path(value)
+        if not self.cwd.is_absolute() or not self.home.is_absolute():
+            raise ValueError("Risk runtime home and cwd must be absolute")
+        return path if path.is_absolute() else self.cwd / path
+
+
+@dataclass(frozen=True)
 class VendorSpec:
     """Everything the shared orchestration knows about one CLI vendor.
 
@@ -663,3 +717,18 @@ class VendorSpec:
     # How a kill treats this CLI. None = the shared kill path runs unchanged,
     # which is what 13 of the 14 vendors want.
     shutdown: ShutdownSpec | None = None
+
+    # --- observational risk signals (backend only) ---
+    # Concrete DNS names/IPs for a declared default service profile; no URLs,
+    # wildcards or claim of exhaustive CLI/tool traffic. Empty = unsupported.
+    # Dispatch through registry.expected_hosts_for_context to honor overrides.
+    expected_hosts: tuple[str, ...] = ()
+    # Pure resolver for the active pane's absolute data roots. None/empty =
+    # unsupported. The observer, not the declaration, owns filesystem access.
+    data_dirs: Callable[[VendorRuntimeContext], tuple[Path, ...]] | None = None
+    # Only these environment path values may enter the risk context.
+    data_dir_env_vars: tuple[str, ...] = ()
+    # These values are captured ONLY as presence markers. Any nonempty
+    # override disables this vendor's default network profile; it is never
+    # interpreted as a trusted endpoint or persisted as a credential URL.
+    network_override_env_vars: tuple[str, ...] = ()

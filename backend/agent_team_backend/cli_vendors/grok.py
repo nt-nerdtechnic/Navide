@@ -50,7 +50,6 @@ import asyncio
 import json
 import logging
 import os
-import shlex
 import time
 from collections.abc import Iterable
 from pathlib import Path
@@ -59,7 +58,7 @@ from urllib.parse import quote, unquote
 from uuid import UUID
 
 from .. import osplat
-from .base import Dep, McpServerConfig, McpValue, McpWiring, SkillsWiring, VendorSpec, command_text
+from .base import Dep, McpServerConfig, McpValue, McpWiring, SkillsWiring, VendorSpec, simple_command_args
 from ..usage_common import _num, _snapshot, _window
 from ..log_readers.base import (
     ActivityEvent,
@@ -561,13 +560,12 @@ GrokLogReader.pane_cwd_match = _pane_cwd_match
 
 
 def _resume_id_from_command(command) -> str:
-    try:
-        args = shlex.split(command_text(command))
-    except ValueError:
-        return ""
+    args = simple_command_args(command)
     if not args or args[0] != "grok":
         return ""
     for index, arg in enumerate(args[1:], 1):
+        if arg == "--":
+            break
         if arg in ("-r", "--resume") and index + 1 < len(args):
             value = args[index + 1]
         elif arg.startswith("--resume="):
@@ -766,6 +764,11 @@ async def fetch_grok(home: Path, env: dict | None = None) -> dict:
 
 SPEC = VendorSpec(
     key="grok",
+    # auth.x.ai proves login routing only; grok-build service hosts unverified.
+    expected_hosts=(),
+    # GrokLogReader._home layout, including GROK_HOME and the HOME shim.
+    data_dirs=lambda ctx: (ctx.path(ctx.env.get("GROK_HOME") or ctx.home / ".grok"),),
+    data_dir_env_vars=("GROK_HOME",),
     supports_model=True,
     # ~/.agents/skills is still a scanned tier on the official CLI (docs
     # 08-skills.md lists .agents/skills alongside .grok/skills at every level),

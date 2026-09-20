@@ -430,6 +430,7 @@ def test_resume_command_claims_ids_but_not_titles_or_new_session_ids() -> None:
     for command in (
         f"grok -r {SID}",
         f"grok --model test --resume='{SID}'",
+        f"'grok' '--resume' '{SID}'",
         ["/bin/sh", "-lc", f"grok --resume {SID}"],
     ):
         assert parse(command) == SID
@@ -439,6 +440,19 @@ def test_resume_command_claims_ids_but_not_titles_or_new_session_ids() -> None:
         "grok --resume 'my session title'", f"grok --session-id {SID}",
     ):
         assert parse(command) == ""
+
+
+def test_resume_command_does_not_claim_shell_or_positional_text() -> None:
+    from agent_team_backend.cli_vendors.grok import SPEC
+
+    for separator in ("&&", "||", ";", "|", "\n", "#"):
+        assert SPEC.resume_id_from_command(
+            f"grok --help {separator} echo --resume {SID}"
+        ) == ""
+    assert SPEC.resume_id_from_command(f"grok -- --resume {SID}") == ""
+    assert SPEC.resume_id_from_command(f"echo --resume {SID}") == ""
+    assert SPEC.resume_id_from_command(["/bin/sh", "-lc", f"printf --resume {SID}"]) == ""
+    assert SPEC.resume_id_from_command(["echo", f"grok --resume {SID}"]) == ""
 
 
 def test_resume_preflight_can_now_check_a_session(_grok_home: Path) -> None:

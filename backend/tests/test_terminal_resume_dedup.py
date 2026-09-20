@@ -164,8 +164,15 @@ async def test_resume_spawn_reaps_live_duplicate_first(
     ("antigravity", "agy", "--conversation"),
     ("grok", "grok", "--resume"),
 ])
+@pytest.mark.parametrize("wrapper", [
+    ["/bin/sh", "-lc"],
+    ["/bin/zsh", "-ilc"],
+    ["cmd.exe", "/d", "/s", "/c"],
+    ["powershell.exe", "-NoLogo", "-NoExit", "-Command"],
+])
 async def test_resume_spawn_reaps_grok_and_antigravity_duplicates(
     monkeypatch: pytest.MonkeyPatch, agent_key: str, cli: str, flag: str,
+    wrapper: list[str],
 ) -> None:
     from agent_team_backend.mcp_server import wiring
 
@@ -173,7 +180,7 @@ async def test_resume_spawn_reaps_grok_and_antigravity_duplicates(
     monkeypatch.setattr(app, "_register_workspace_and_backfill", lambda _ws: None)
     monkeypatch.setattr(wiring, "wire_command", lambda _agent, command, *_args, **_kwargs: command)
     sid = "21fdfc1b-883a-47ce-b547-e9179ba62eef"
-    command = ["/bin/sh", "-lc", f"{cli} {flag} {sid}"]
+    command = [*wrapper, f"{cli} {flag} {sid}"]
     stale = _live_pty("term-stale", agent_key, command)
     terminals = FakeTerminals(live=[stale])
     session = _session(terminals)
@@ -182,6 +189,34 @@ async def test_resume_spawn_reaps_grok_and_antigravity_duplicates(
 
     assert terminals.killed == [("term-stale", True)]
     assert terminals.reap_waits == ["term-stale"]
+    assert len(terminals.created) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("agent_key,cli,flag", [
+    ("antigravity", "agy", "--conversation"),
+    ("grok", "grok", "--resume"),
+])
+@pytest.mark.parametrize("command_tail", ["--help && echo", "--help;echo", "--", "non-shell-argv"])
+async def test_non_resume_command_preserves_running_vendor_session(
+    monkeypatch: pytest.MonkeyPatch, agent_key: str, cli: str, flag: str,
+    command_tail: str,
+) -> None:
+    from agent_team_backend.mcp_server import wiring
+
+    monkeypatch.setattr(app, "attribution", FakeAttribution())
+    monkeypatch.setattr(app, "_register_workspace_and_backfill", lambda _ws: None)
+    monkeypatch.setattr(wiring, "wire_command", lambda _agent, command, *_args, **_kwargs: command)
+    sid = "21fdfc1b-883a-47ce-b547-e9179ba62eef"
+    stale = _live_pty("term-stale", agent_key, ["/bin/sh", "-lc", f"{cli} {flag} {sid}"])
+    terminals = FakeTerminals(live=[stale])
+
+    command = (["echo", f"{cli} {flag} {sid}"] if command_tail == "non-shell-argv"
+               else ["/bin/sh", "-lc", f"{cli} {command_tail} {flag} {sid}"])
+    await _create(_session(terminals), command, agent_key=agent_key)
+
+    assert terminals.killed == []
+    assert terminals.reap_waits == []
     assert len(terminals.created) == 1
 
 

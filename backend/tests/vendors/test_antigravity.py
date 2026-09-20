@@ -25,12 +25,27 @@ def test_resume_command_claims_the_explicit_conversation() -> None:
     for command in (
         f"agy --conversation {sid}",
         f"agy --model test --conversation='{sid}'",
+        f"'agy' '--conversation' '{sid}'",
         ["/bin/sh", "-lc", f"agy --conversation {sid}"],
     ):
         assert parse(command) == sid
         assert app._resume_id_for_agent("antigravity", command) == sid
     for command in ("agy", "agy --continue", "agy --conversation --model test"):
         assert parse(command) == ""
+
+
+def test_resume_command_does_not_claim_shell_or_positional_text() -> None:
+    from agent_team_backend.cli_vendors.antigravity import SPEC
+
+    sid = "21fdfc1b-883a-47ce-b547-e9179ba62eef"
+    for separator in ("&&", "||", ";", "|", "\n", "#"):
+        assert SPEC.resume_id_from_command(
+            f"agy --help {separator} echo --conversation {sid}"
+        ) == ""
+    assert SPEC.resume_id_from_command(f"agy -- --conversation {sid}") == ""
+    assert SPEC.resume_id_from_command(f"echo --conversation {sid}") == ""
+    assert SPEC.resume_id_from_command(["/bin/sh", "-lc", f"printf --conversation {sid}"]) == ""
+    assert SPEC.resume_id_from_command(["echo", f"agy --conversation {sid}"]) == ""
 
 
 def _make_conversation_db(path: Path, workspace: Path, extra_blob: bytes = b"") -> None:

@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import logging
 import re
-import shlex
 import sqlite3
 from collections import Counter
 from pathlib import Path
@@ -32,7 +31,7 @@ import os
 import sys
 import time
 
-from .base import Dep, McpServerConfig, McpValue, McpWiring, SkillsWiring, VendorSpec, command_text
+from .base import Dep, McpServerConfig, McpValue, McpWiring, SkillsWiring, VendorSpec, simple_command_args
 from ..usage_common import (
     HTTP_TIMEOUT,
     _KEYCHAIN_COOLDOWN_S,
@@ -780,13 +779,12 @@ async def fetch_antigravity(home: Path) -> dict:
 # ---- session ---------------------------------------------------------------
 
 def _resume_id_from_command(command) -> str:
-    try:
-        args = shlex.split(command_text(command))
-    except ValueError:
-        return ""
+    args = simple_command_args(command)
     if not args or args[0] != "agy":
         return ""
     for index, arg in enumerate(args[1:], 1):
+        if arg == "--":
+            break
         if arg == "--conversation" and index + 1 < len(args):
             value = args[index + 1]
         elif arg.startswith("--conversation="):
@@ -808,6 +806,10 @@ def _session_path(workspace_path: str, session_id: str) -> Path:
 
 SPEC = VendorSpec(
     key="antigravity",
+    # Quota/OAuth constants above do not establish CLI service expectations.
+    expected_hosts=(),
+    # Conversation root from AntigravityLogReader; honor the pane HOME shim.
+    data_dirs=lambda ctx: (ctx.path(ctx.home / ".gemini" / "antigravity-cli"),),
     supports_model=True,
     supports_effort=True,
     known_efforts=('low', 'medium', 'high'),
