@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import tarfile
+from types import SimpleNamespace
 
 import pytest
 
@@ -250,6 +251,25 @@ def test_receipts_do_not_consume_active_preview_capacity(library):
     assert "preview_id" in prepare(installer, source)
 
 
+def test_oldest_success_receipt_is_evicted_not_oldest_preparation(library):
+    store, installer, source = library
+    delayed = prepare(installer, source)
+    receipts = []
+    for index in range(8):
+        (source / "SKILL.md").write_bytes(SKILL.replace(b"example", f"example-{index}".encode()))
+        item = prepare(installer, source)
+        commit(installer, item)
+        receipts.append(item)
+
+    commit(installer, delayed)
+    assert commit(installer, delayed)["changed"] is False
+    with pytest.raises(SkillValidationError, match="expired"):
+        commit(installer, receipts[0])
+    assert commit(installer, receipts[1])["changed"] is False
+    assert len(installer._previews) == 8
+    assert len(store.list_skills()["skills"]) == 9
+
+
 @pytest.mark.parametrize("replace_subdirectory", [False, True])
 def test_replaced_publication_directory_never_receives_skill_files(library, monkeypatch, replace_subdirectory):
     if not skills_store._DIRECTORY_FDS:
@@ -308,3 +328,60 @@ def test_path_fallback_installs_on_platforms_without_directory_descriptors(libra
     commit(installer, prepare(installer, source))
     assert (store.root / "example" / "SKILL.md").read_bytes() == SKILL
     assert store.write_consented() is True
+
+
+def _stat_with(info, **changes):
+    values = {name: getattr(info, name) for name in (
+        "st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns", "st_ctime_ns",
+    )}
+    return SimpleNamespace(**{**values, **changes})
+
+
+@pytest.mark.parametrize("field", ["st_mode", "st_mtime_ns", "st_ctime_ns"])
+def test_local_snapshot_accepts_stable_path_handle_metadata_differences(library, monkeypatch, field):
+    store, installer, source = library
+    original = module.os.fstat
+    def fstat(fd):
+        info = original(fd)
+        value = info.st_mode ^ 0o100 if field == "st_mode" else getattr(info, field) + 100
+        return _stat_with(info, **{field: value})
+    # Windows path and handle queries need not represent every metadata field
+    # identically. Their individual before/after values remain stable here.
+    monkeypatch.setattr(module.os, "fstat", fstat)
+    item = prepare(installer, source)
+    commit(installer, item)
+    assert (store.root / "example" / "SKILL.md").read_bytes() == SKILL
+
+
+@pytest.mark.parametrize("field", ["st_size", "st_mtime_ns", "st_ctime_ns"])
+def test_local_snapshot_rejects_handle_metadata_changes_during_read(library, monkeypatch, field):
+    store, installer, source = library
+    original = module.os.fstat
+    calls = 0
+    def fstat(fd):
+        nonlocal calls
+        calls += 1
+        info = original(fd)
+        return _stat_with(info, **{field: getattr(info, field) + 1}) if calls == 2 else info
+    monkeypatch.setattr(module.os, "fstat", fstat)
+    with pytest.raises(SkillValidationError, match="changed"):
+        prepare(installer, source)
+    assert not store.root.exists()
+
+
+def test_local_snapshot_rejects_replacement_between_path_stat_and_open(library, monkeypatch):
+    store, installer, source = library
+    original = module.os.open
+    skill_file = source / "SKILL.md"
+    replaced = False
+    def open_file(path, flags, *args, **kwargs):
+        nonlocal replaced
+        if Path(path) == skill_file and not replaced:
+            replaced = True
+            skill_file.rename(source / "previous")
+            skill_file.write_bytes(SKILL)
+        return original(path, flags, *args, **kwargs)
+    monkeypatch.setattr(module.os, "open", open_file)
+    with pytest.raises(SkillValidationError, match="changed"):
+        prepare(installer, source)
+    assert not store.root.exists()

@@ -174,6 +174,10 @@ class SkillInstaller:
             record.pop("bundle")
             record.pop("skill_md")
             record["size"] = 0
+            # Receipt age starts at successful installation, which may occur
+            # in a different order than preparation. Keep the original expiry.
+            self._previews.pop(preview_id)
+            self._previews[preview_id] = record
             receipts = [key for key, value in self._previews.items() if value["result"] is not None]
             for key in receipts[:-MAX_PREVIEWS]:
                 self._previews.pop(key)["timer"].cancel()
@@ -232,7 +236,9 @@ class SkillInstaller:
                     if not stat.S_ISREG(opened.st_mode) or (info.st_dev, info.st_ino) != (opened.st_dev, opened.st_ino):
                         raise SkillValidationError("source changed while reading")
                     data = handle.read(MAX_FILE_BYTES + 1)
-                    if signature(info) != signature(os.fstat(handle.fileno())):
+                    # Compare handle metadata with itself: Windows path and
+                    # handle queries can represent timestamps/mode differently.
+                    if signature(opened) != signature(os.fstat(handle.fileno())):
                         raise SkillValidationError("source changed while reading")
                 total += len(data)
                 if len(data) > MAX_FILE_BYTES or total > MAX_TOTAL_BYTES:

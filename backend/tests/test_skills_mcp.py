@@ -39,7 +39,7 @@ def library(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[SkillsStor
     store.create_skill("verify", "Useful checks", consent=True)
     native = native_root / "native-check"
     native.mkdir()
-    (native / "SKILL.md").write_text("---\nname: native-check\ndescription: Native checks\n---\nReview first.\n")
+    (native / "SKILL.md").write_bytes(b"---\nname: native-check\ndescription: Native checks\n---\nReview first.\n")
     monkeypatch.setattr(backend_app, "skills_store", store)
     notifications: list[tuple[str, str]] = []
 
