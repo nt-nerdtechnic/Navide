@@ -10,6 +10,7 @@ from agent_team_backend import native_skills, osplat
 from agent_team_backend.cli_vendors.base import SkillsWiring
 from agent_team_backend.cli_vendors.registry import VENDORS
 from agent_team_backend.plugins.builtin.navide_skills import skills_wiring
+from agent_team_backend.skills_store import SkillsStore, agent_targets
 
 
 def _skill(root: Path, name: str) -> Path:
@@ -159,7 +160,7 @@ def test_wire_command_is_idempotent_and_preserves_shell_wrapper(
     once = skills_wiring.wire_command("claude", command, None)
     twice = skills_wiring.wire_command("claude", once, None)
 
-    expected = str(view / ".claude" / "skills")
+    expected = str(view)
     assert once[:-1] == command[:-1]
     assert once[-1] == f"claude resume abc --add-dir {osplat.paths.quote_arg(expected)}"
     assert twice == once
@@ -290,6 +291,108 @@ def test_every_vendor_declares_its_skills_capability() -> None:
             assert wiring.skills_rel, key
         if wiring.replaces_discovery:
             assert wiring.discovery_home or wiring.discovery_project, key
+
+
+@pytest.mark.parametrize("agent_key", sorted(VENDORS))
+def test_registered_vendor_materializes_its_declared_delivery_surface(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, agent_key: str,
+) -> None:
+    """Exercise real wiring without a real home, CLI process or loading claim."""
+    home = tmp_path / "home"
+    home.mkdir()
+    workspace = tmp_path / "workspace"
+    (workspace / ".git" / "info").mkdir(parents=True)
+    panes = tmp_path / "panes"
+    views = tmp_path / "views"
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setattr(skills_wiring, "real_home", lambda: home)
+    monkeypatch.setattr(skills_wiring, "panes_root", lambda: panes)
+    monkeypatch.setattr(skills_wiring, "views_root", lambda: views)
+    monkeypatch.setattr(native_skills, "native_roots", lambda home=None: [])
+    store = SkillsStore(root=home / ".agents" / "skills", state_path=tmp_path / "state.json",
+                        runtime_root=tmp_path / "runtime", native_roots=[])
+    store.create_skill("shared-example", "Shared instructions", consent=True)
+    native = _native(tmp_path, "native-example", owner="fixture-owner")
+    monkeypatch.setattr(store, "native_skills", lambda: [native])
+    store.set_native_targets(native.real_path, [agent_key])
+    monkeypatch.setattr(skills_wiring, "SkillsStore", lambda: store)
+
+    spec = VENDORS[agent_key]
+    wiring = spec.skills_wiring
+    env = {"UNRELATED_SETTING": "preserved"}
+    # The MCP transformer runs first for vendors whose home shim it owns.
+    if wiring and wiring.root_env and skills_wiring.owns_its_shim(agent_key):
+        shim = panes / agent_key / "registry-pane"
+        shim.mkdir(parents=True)
+        env[wiring.root_env] = str(shim)
+    if agent_key == "opencode":
+        env["OPENCODE_CONFIG_CONTENT"] = json.dumps({"mcp": {"existing": {"type": "remote"}}})
+    command = f"{agent_key} resume example"
+    actual = skills_wiring.wire_command(agent_key, command, None, "registry-pane", env, str(workspace))
+    assert env["UNRELATED_SETTING"] == "preserved"
+    capability = next(row for row in agent_targets() if row["key"] == agent_key)
+    if wiring is None:
+        assert capability["state"] in {"planned", "unsupported"}
+        assert actual == command
+        assert env == {"UNRELATED_SETTING": "preserved"}
+        assert not views.exists() and not panes.exists()
+        assert not (workspace / ".cursor").exists()
+        return
+    assert capability["state"] == "wired"
+
+    root_surfaces = {
+        "codex": ("CODEX_HOME", ("skills",)),
+        "copilot": ("COPILOT_HOME", ("skills",)),
+        "qwen": ("QWEN_HOME", ("skills",)),
+        "grok": ("HOME", (".agents", "skills")),
+        "muse": ("HOME", (".agents", "skills")),
+        "antigravity": ("HOME", (".gemini", "skills")),
+    }
+    if agent_key in root_surfaces:
+        variable, layout = root_surfaces[agent_key]
+        assert actual == command
+        assert Path(env[variable]).is_relative_to(panes)
+        leaf = Path(env[variable]).joinpath(*layout)
+    elif agent_key == "cursor":
+        assert actual == command
+        leaf = workspace / ".cursor" / "skills"
+        assert "/.cursor/skills/" in (workspace / ".git" / "info" / "exclude").read_text()
+    elif agent_key == "opencode":
+        assert actual == command
+        document = json.loads(env["OPENCODE_CONFIG_CONTENT"])
+        assert document["mcp"] == {"existing": {"type": "remote"}}
+        assert document["skills"]["paths"] == [str(views / agent_key)]
+        leaf = views / agent_key
+    elif agent_key == "claude":
+        # --add-dir receives a project root; its .claude/skills child is
+        # the discovery location, not another project root to pass instead.
+        assert actual == f"{command} --add-dir {osplat.paths.quote_arg(str(views / agent_key))}"
+        leaf = views / agent_key / ".claude" / "skills"
+    elif agent_key == "kimi":
+        leaf = views / agent_key
+        assert actual == (
+            f"{command} --skills-dir {osplat.paths.quote_arg(str(leaf))}"
+            f" --skills-dir {osplat.paths.quote_arg(str(home / '.agents' / 'skills'))}"
+        )
+    elif agent_key == "pi":
+        leaf = views / agent_key
+        assert actual == command + "".join(
+            f" --skill {osplat.paths.quote_arg(str(leaf / name))}"
+            for name in ("native-example", "shared-example")
+        )
+    else:
+        pytest.fail(f"Add the documented delivery contract for wired vendor {agent_key}")
+
+    delivered = leaf / "native-example"
+    assert delivered.is_symlink()
+    assert delivered.resolve() == Path(native.real_path)
+    assert (delivered / "SKILL.md").read_bytes() == (Path(native.real_path) / "SKILL.md").read_bytes()
+    if not wiring.reads_shared_root or agent_key == "copilot":
+        # Copilot's relocated home suppresses shared discovery; wiring must
+        # preserve that original root through its explicit discovery links.
+        assert (leaf / "shared-example" / "SKILL.md").read_bytes() == (
+            store.root / "shared-example" / "SKILL.md"
+        ).read_bytes()
 
 
 # ── Config-home surface (codex, copilot, qwen, grok, antigravity, muse) ──────

@@ -1239,7 +1239,7 @@ class SkillsStore:
                 if strict:
                     raise SkillValidationError("skill attachments must not contain symlinks")
                 continue  # the user's own layout; listed, never followed
-            if path.is_file() and path.name not in (SKILL_FILE, MARKER_FILE):
+            if path.is_file() and path != skill_dir / SKILL_FILE and path.name != MARKER_FILE:
                 attachments.append(
                     {"path": path.relative_to(skill_dir).as_posix(), "size": path.stat().st_size}
                 )

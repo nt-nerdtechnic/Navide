@@ -119,7 +119,7 @@ def _native_document(store: Any, row: dict[str, Any]) -> dict[str, Any]:
         if index >= 256:
             truncated = True
             break
-        if entry.is_symlink() or not entry.is_file() or entry.name in {"SKILL.md", ".navide"}:
+        if entry.is_symlink() or not entry.is_file() or entry == path or entry.name == ".navide":
             continue
         files.append({"path": entry.relative_to(root).as_posix(), "size": entry.stat().st_size})
     return {

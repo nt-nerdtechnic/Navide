@@ -121,7 +121,7 @@ def flag_values(wiring: SkillsWiring, view: Path, cwd: str) -> list[str]:
             return []
         paths = [str(entry) for entry in entries]
     else:
-        paths = [str(leaf)]
+        paths = [str(view)]
     return paths + [str(root) for root in discovery_roots(wiring, cwd)]
 
 
