@@ -2274,6 +2274,7 @@ function onWsCaretClick(ws: WorkspaceGroupRow, ev: MouseEvent): void {
  *  is the part that runs out first. */
 const wsMoreMenuPath = ref<string>('')
 const wsMoreMenuStyle = ref<Record<string, string>>({})
+const wsMoreMenuEl = ref<HTMLElement | null>(null)
 
 function toggleWsMoreMenu(ev: MouseEvent, path: string): void {
   if (wsMoreMenuPath.value === path) {
@@ -2289,6 +2290,18 @@ function toggleWsMoreMenu(ev: MouseEvent, path: string): void {
     ? { top: `${Math.round(box.bottom + 4)}px`, left: `${Math.round(Math.max(8, box.right - 168))}px` }
     : {}
   wsMoreMenuPath.value = path
+  if (!box) return
+  const openingStyle = wsMoreMenuStyle.value
+  void nextTick(() => {
+    const menu = wsMoreMenuEl.value
+    // A close/reopen of the same workspace must not reuse the older anchor.
+    if (!menu || wsMoreMenuPath.value !== path || wsMoreMenuStyle.value !== openingStyle) return
+    const height = menu.getBoundingClientRect().height
+    wsMoreMenuStyle.value = {
+      ...openingStyle,
+      top: `${Math.round(Math.max(8, Math.min(box.bottom + 4, window.innerHeight - height - 8)))}px`,
+    }
+  })
 }
 
 function closeWsMoreMenu(): void {
@@ -2565,27 +2578,31 @@ function closeAddMenu(): void {
 }
 
 // Same three dismissals the ＋ roster uses, for the same reasons: a click
-// anywhere else, Escape, and any scroll (captured — the pane list scrolls and
-// its events do not bubble, so without this the menu hangs over whatever
-// scrolled into the button's old place).
+// anywhere else, Escape, and scroll outside the menu (captured — the pane
+// list scrolls and its events do not bubble, so without this the menu hangs
+// over whatever scrolled into the button's old place).
 function onWsMoreMenuKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape') closeWsMoreMenu()
+}
+function onWsMoreMenuScroll(e: Event): void {
+  if (e.target instanceof Node && wsMoreMenuEl.value?.contains(e.target)) return
+  closeWsMoreMenu()
 }
 watch(wsMoreMenuPath, (path) => {
   if (path) {
     document.addEventListener('click', closeWsMoreMenu)
     document.addEventListener('keydown', onWsMoreMenuKeydown)
-    document.addEventListener('scroll', closeWsMoreMenu, true)
+    document.addEventListener('scroll', onWsMoreMenuScroll, true)
   } else {
     document.removeEventListener('click', closeWsMoreMenu)
     document.removeEventListener('keydown', onWsMoreMenuKeydown)
-    document.removeEventListener('scroll', closeWsMoreMenu, true)
+    document.removeEventListener('scroll', onWsMoreMenuScroll, true)
   }
 })
 onUnmounted(() => {
   document.removeEventListener('click', closeWsMoreMenu)
   document.removeEventListener('keydown', onWsMoreMenuKeydown)
-  document.removeEventListener('scroll', closeWsMoreMenu, true)
+  document.removeEventListener('scroll', onWsMoreMenuScroll, true)
 })
 // The ＋ roster closes this one too, so opening either never leaves both up.
 watch(addMenuOpen, (open) => {
@@ -3956,7 +3973,7 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
       <!-- The heading's ⋯ overflow. Fixed and anchored to the button like the
            ＋ roster, because the pane list scrolls and an absolutely placed
            panel would scroll away from its own anchor. -->
-      <div v-if="wsMoreMenuPath" class="ws-more-menu" :style="wsMoreMenuStyle" @click.stop>
+      <div v-if="wsMoreMenuPath" ref="wsMoreMenuEl" class="ws-more-menu" :style="wsMoreMenuStyle" @click.stop>
         <button
           class="ws-more-opt"
           :disabled="!wsCanRebuild(wsMoreMenuPath) || rebuildingAll"
@@ -5945,10 +5962,12 @@ button.icon-btn.muted:hover {
 
 .ws-more-menu {
   position: fixed;
-  z-index: 60;
+  z-index: 300;
   box-sizing: border-box;
   width: 168px;
   max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
   padding: 5px 4px;
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
