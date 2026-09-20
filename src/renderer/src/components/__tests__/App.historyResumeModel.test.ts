@@ -10,7 +10,7 @@ const source = readFileSync(resolve(process.cwd(), 'src/renderer/src/App.vue'), 
 // Execute the actual orchestration with fake I/O; mounting App would start
 // unrelated workspace and terminal services.
 function resumeHarness(record?: Record<string, unknown>, live?: Record<string, unknown>) {
-  const functions = ['onManualResume', 'resumablePaneState'].map((name) => {
+  const functions = ['onManualResume', 'resumablePaneState', 'onResumeHistoryAgent'].map((name) => {
     const start = source.indexOf(`async function ${name}(`)
     return source.slice(start, source.indexOf('\n}\n', start) + 2)
   }).join('\n')
@@ -28,17 +28,54 @@ function resumeHarness(record?: Record<string, unknown>, live?: Record<string, u
     commandWithSelectedBinary: (_agent: string, command: string) => command,
     resolveReadySpawnGroupId: () => '',
     runGroups: { value: [] }, activeTab: { value: '' }, runGroupsReady: { value: true },
+    revivingHistoryPaneId: { value: '' }, historyViewWorkspace: { value: '/foreign' },
+    unavailableHistoryPaneIds: { value: new Set<string>() },
   }
   const javascript = ts.transpileModule(functions, {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },
   }).outputText
-  const resume = new Function(...Object.keys(deps), `${javascript}; return onManualResume`)(...Object.values(deps))
-  return { resume, spawnPane, sendQuiet }
+  const { resume, resumeHistory } = new Function(...Object.keys(deps), `${javascript}; return { resume: onManualResume, resumeHistory: onResumeHistoryAgent }`)(...Object.values(deps))
+  return { resume, resumeHistory, spawnPane, sendQuiet }
 }
 
 const payload = { agentKey: 'claude', workspacePath: '/workspace', sessionId: 'session-1', historyPaneId: 'old-pane' }
 
 describe('closed history resume model and effort', () => {
+  it('keeps a foreign history parent when the child record was pruned but the parent survives there', async () => {
+    const { resumeHistory, spawnPane, sendQuiet } = resumeHarness({ pane_id: 'foreign-parent' })
+    await resumeHistory({
+      paneId: 'old-pane', agentKey: 'claude', workspacePath: '/foreign', sessionId: 'session-1',
+      spawnedBy: 'foreign-parent', model: 'history-model', effort: 'high',
+    })
+    expect(spawnPane).toHaveBeenCalledWith(expect.objectContaining({
+      workspacePath: '/foreign', spawnedBy: 'foreign-parent', model: 'history-model', effort: 'high',
+    }))
+    expect(sendQuiet).toHaveBeenCalledWith('manual_pane.spawn', expect.objectContaining({
+      workspace_path: '/foreign', spawned_by: 'foreign-parent',
+    }))
+  })
+
+  it.each([undefined, { pane_id: 'unrelated-parent' }])('does not restore a history parent absent from its workspace (%j)', async (record) => {
+    const { resumeHistory, spawnPane } = resumeHarness(record, { id: 'foreign-parent' })
+    await resumeHistory({
+      paneId: 'old-pane', agentKey: 'claude', workspacePath: '/foreign', sessionId: 'session-1',
+      spawnedBy: 'foreign-parent',
+    })
+    expect(spawnPane).toHaveBeenCalledWith(expect.objectContaining({ spawnedBy: undefined }))
+  })
+
+  it('keeps an explicit root record ahead of the history parent fallback', async () => {
+    const { resumeHistory, spawnPane, sendQuiet } = resumeHarness()
+    sendQuiet.mockResolvedValueOnce({ project: { panes: [
+      { pane_id: 'old-pane', spawned_by: '' }, { pane_id: 'foreign-parent' },
+    ] } })
+    await resumeHistory({
+      paneId: 'old-pane', agentKey: 'claude', workspacePath: '/foreign', sessionId: 'session-1',
+      spawnedBy: 'foreign-parent',
+    })
+    expect(spawnPane).toHaveBeenCalledWith(expect.objectContaining({ spawnedBy: undefined }))
+  })
+
   it('restores the original pane record and persists its choices onto the new pane', async () => {
     const { resume, spawnPane, sendQuiet } = resumeHarness({
       pane_id: 'old-pane', model: 'original-model', effort: 'high', spawned_by: 'parent',

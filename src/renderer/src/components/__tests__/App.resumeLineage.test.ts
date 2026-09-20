@@ -42,14 +42,14 @@ describe('lineage survives a resume', () => {
     // App.resumeSession.test.ts pins the same rule for createRequestedPane:
     // the record must agree with where the pane was placed.
     const fn = bodyOf('async function resumablePaneState')
-    expect(fn).toContain("spawnedBy: recorded?.spawned_by ?? history?.spawnedBy ?? ''")
+    expect(fn).toContain('spawnedBy: recorded?.spawned_by ?? history?.spawnedBy ?? fallbackParent')
     expect(fn).not.toContain('panes.value.some(')
   })
 
   it('puts a history resume back under its parent', () => {
     const fn = bodyOf('async function onManualResume')
     expect(fn).toContain('payload.historyPaneId')
-    expect(fn).toContain('resumablePaneState(payload.historyPaneId, workspacePath)')
+    expect(fn).toContain('resumablePaneState(payload.historyPaneId, workspacePath, payload.spawnedBy)')
     // Into the live pane...
     expect(fn).toContain('spawnedBy: resumeSpawnedBy || undefined')
     // ...and into the NEW record, or the next restart flattens it again. The
@@ -134,7 +134,7 @@ describe('lineage is persisted in the workspace', () => {
     // pane is a root. Treating it as "unknown" would let a stale history entry
     // re-parent a pane the user deliberately dragged out.
     const fn = bodyOf('async function resumablePaneState')
-    expect(fn).toContain("spawnedBy: recorded?.spawned_by ?? history?.spawnedBy ?? ''")
+    expect(fn).toContain('spawnedBy: recorded?.spawned_by ?? history?.spawnedBy ?? fallbackParent')
     expect(fn).not.toContain("?.spawned_by ?? ''")
   })
 })

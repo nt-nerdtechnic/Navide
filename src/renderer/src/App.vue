@@ -18,7 +18,7 @@ import { schedulePrewarm } from './lib/prewarm'
 import { flattenSidebarOrder, resolveFocusedPane } from './lib/paneFocus'
 import { formatBytes } from './lib/formatBytes'
 import { formatCpuPercent, machineCpuShare, machineMemoryShare } from './lib/resourceSampling'
-import { useResourceUsage, type ResourceUsageWire } from './composables/useResourceUsage'
+import { cliRiskKey, useResourceUsage, type ResourceUsageWire } from './composables/useResourceUsage'
 import ResourceSummaryPanel, { type ResourceSummaryRow } from './components/ResourceSummaryPanel.vue'
 import ResourceManagerModal from './components/ResourceManagerModal.vue'
 import TurnStatsModal from './components/TurnStatsModal.vue'
@@ -6493,16 +6493,20 @@ async function dispatchPlanToPane(relPath: string, agentKey: string): Promise<Pl
  *  window cannot resolve may be live in another one, buildPaneLineage already
  *  renders an unresolvable parent as a root, and the record has to keep naming
  *  it or the next restore cannot put the pane back. */
-async function resumablePaneState(historyPaneId: string, workspacePath: string): Promise<{ spawnedBy: string; model?: string; effort?: string }> {
+async function resumablePaneState(historyPaneId: string, workspacePath: string, historyParent?: string): Promise<{ spawnedBy: string; model?: string; effort?: string }> {
   const resp = await sendQuiet<ProjectPayload>('project.peek', { workspace_path: workspacePath })
   const recorded = (resp?.project?.panes ?? [])
     .find((rec) => rec.pane_id === historyPaneId)
   const history = spawnHistory.value.find((e) => e.paneId === historyPaneId)
+  // Foreign history has its own buffer. Only adopt its fallback parent when
+  // that parent still belongs to the target workspace's persisted records.
+  const fallbackParent = historyParent && (resp?.project?.panes ?? [])
+    .some((rec) => rec.pane_id === historyParent) ? historyParent : ''
   return {
     // Only when the RECORD is missing, never when it says ''. An empty
     // spawned_by is a positive statement that the pane was a root, and must
     // not be overridden by a history entry written before it was re-parented.
-    spawnedBy: recorded?.spawned_by ?? history?.spawnedBy ?? '',
+    spawnedBy: recorded?.spawned_by ?? history?.spawnedBy ?? fallbackParent,
     model: recorded?.model ?? history?.model,
     effort: recorded?.effort ?? history?.effort,
   }
@@ -6515,7 +6519,7 @@ async function resumablePaneState(historyPaneId: string, workspacePath: string):
 // `historyPaneId`: the id of the pane whose per-pane files this resume belongs
 // to (Agent History knows it; the ad-hoc Resume field does not). Without it an
 // aider resume falls back to whatever the history root already holds.
-async function onManualResume(payload: { agentKey: string, workspacePath: string, sessionId: string, customName?: string, nameLocked?: boolean, autoName?: string, runGroupId?: string, historyPaneId?: string, model?: string, effort?: string }): Promise<boolean> {
+async function onManualResume(payload: { agentKey: string, workspacePath: string, sessionId: string, customName?: string, nameLocked?: boolean, autoName?: string, runGroupId?: string, historyPaneId?: string, model?: string, effort?: string, spawnedBy?: string }): Promise<boolean> {
   const { agentKey, workspacePath, runGroupId } = payload
   const sessionId = normalizeResumeSessionId(agentKey, payload.sessionId)
   if (!sessionId) return false
@@ -6536,7 +6540,7 @@ async function onManualResume(payload: { agentKey: string, workspacePath: string
   // A closed pane's original choices live in its record, or in history after
   // that record is pruned. Never replace them with today's vendor settings.
   const historyState = payload.historyPaneId
-    ? await resumablePaneState(payload.historyPaneId, workspacePath)
+    ? await resumablePaneState(payload.historyPaneId, workspacePath, payload.spawnedBy)
     : undefined
   const historyPane = payload.historyPaneId
     ? panes.value.find((p) => p.id === payload.historyPaneId)
@@ -9058,6 +9062,7 @@ async function onResumeHistoryAgent(entry: SpawnHistoryEntry): Promise<void> {
       historyPaneId: entry.paneId,
       model: entry.model,
       effort: entry.effort,
+      spawnedBy: entry.spawnedBy,
     })
     if (resumed) {
       return
@@ -16775,9 +16780,11 @@ const realizedPaneCount = computed(() => panes.value.filter((p) => p.realized).l
 
 const resourceUsage = useResourceUsage({
   request: () => sendQuiet<ResourceUsageWire>('terminal.resource_usage', {}),
+  requestCliRiskAction: (payload) => send('terminal.cli_risk_action', payload),
   paneCount: realizedPaneCount,
   panelOpen: resourcePanelOpen,
 })
+provide(cliRiskKey, resourceUsage)
 
 const resourceRows = computed<ResourceSummaryRow[]>(() => {
   const statusById = new Map(paneViews.value.map((v) => [v.id, v.status]))
