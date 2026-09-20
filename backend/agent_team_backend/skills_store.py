@@ -20,7 +20,12 @@ import logging
 import os
 import re
 import shutil
+import stat
 import tempfile
+import unicodedata
+from datetime import datetime, timezone
+import threading
+from functools import wraps
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +49,10 @@ SKILL_FILE_SIZE_LIMIT = 1_000_000
 _STATE_FILE_SIZE_LIMIT = 1_000_000
 _NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 _AGENT_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
+_DIRECTORY_FDS = hasattr(os, "O_DIRECTORY") and all(
+    operation in os.supports_dir_fd
+    for operation in (os.open, os.mkdir, os.link, os.stat, os.unlink, os.rmdir)
+)
 _FRONTMATTER_RE = re.compile(
     r"\A---[ \t]*\r?\n(?P<yaml>.*?)^---[ \t]*(?:\r?\n|\Z)(?P<body>.*)\Z",
     re.MULTILINE | re.DOTALL,
@@ -131,6 +140,15 @@ class SkillConsentRequired(SkillsStoreError):
         super().__init__(f"writing to {root} needs the user's consent")
 
 
+def _serialized(operation):
+    """Keep UI, MCP and sync updates on one store from losing each other's state."""
+    @wraps(operation)
+    def run(self, *args, **kwargs):
+        with self._lock:
+            return operation(self, *args, **kwargs)
+    return run
+
+
 class SkillsStore:
     def __init__(
         self,
@@ -139,6 +157,7 @@ class SkillsStore:
         runtime_root: Path | None = None,
         native_roots: list[Path] | tuple[Path, ...] | None = None,
     ) -> None:
+        self._lock = threading.RLock()
         data_root = app_data_dir()
         requested_root = root or _real_home().joinpath(*SHARED_ROOT)
         self._root = requested_root.parent.resolve() / requested_root.name
@@ -228,6 +247,7 @@ class SkillsStore:
         self._ensure_safe_root()
         return {"skill": self._read_skill(name, self._read_state(), self._read_targets())}
 
+    @_serialized
     def create_skill(
         self, name: str, description: str = "", *, consent: bool = False
     ) -> dict[str, Any]:
@@ -265,6 +285,7 @@ class SkillsStore:
         self._refresh_runtime_projection()
         return self.get_skill(name)
 
+    @_serialized
     def save_skill(
         self,
         name: str,
@@ -296,6 +317,7 @@ class SkillsStore:
         self._refresh_runtime_projection()
         return self.get_skill(name)
 
+    @_serialized
     def set_enabled(self, name: str, enabled: bool) -> dict[str, Any]:
         self._ensure_safe_root()
         name = self._validate_name(name)
@@ -308,6 +330,7 @@ class SkillsStore:
         self._refresh_runtime_projection()
         return self.get_skill(name)
 
+    @_serialized
     def set_targets(self, name: str, agents: list[str] | None) -> dict[str, Any]:
         """Restrict ``name`` to ``agents``, or to every wired agent when None.
 
@@ -352,6 +375,7 @@ class SkillsStore:
     # directory. Nothing here reads or writes the native directories
     # themselves; only ``skills.json`` changes.
 
+    @_serialized
     def set_native_targets(self, real_path: str, agents: list[str] | None) -> None:
         """Deliver the native skill at ``real_path`` to ``agents``; None = to none.
 
@@ -368,6 +392,80 @@ class SkillsStore:
         else:
             native[real_path] = self._validate_agents(agents)
         self._write_state(self._read_state(), self._read_targets(), native)
+
+    @_serialized
+    def get_delivery_revision(self, *, name: str = "", real_path: str = "") -> str:
+        """A compare-and-set token for routing, distinct from SKILL.md's revision."""
+        if bool(name) == bool(real_path):
+            raise SkillValidationError("name or real_path is required, exclusively")
+        if name:
+            skill = self.get_skill(name)["skill"]
+            value = [name, skill["revision"], skill["enabled"], skill["targets"]]
+        else:
+            native = next((s for s in self.native_skills() if s.real_path == real_path), None)
+            if native is None:
+                raise SkillNotFoundError("native skill is no longer present")
+            if not native.valid:
+                raise SkillValidationError("native skill is invalid")
+            value = [real_path, self._read_native_targets().get(real_path, [])]
+        return hashlib.sha256(json.dumps(value, sort_keys=True).encode("utf-8")).hexdigest()
+
+    @_serialized
+    def set_delivery(
+        self,
+        *,
+        name: str = "",
+        real_path: str = "",
+        targets: list[str] | None,
+        expected_revision: str,
+        enabled: bool | None = None,
+    ) -> dict[str, Any]:
+        """Apply one routing decision atomically, preserving other skills' decisions."""
+        before = self.get_delivery_revision(name=name, real_path=real_path)
+        if not isinstance(expected_revision, str) or not expected_revision:
+            raise SkillValidationError("expected_revision is required")
+        if expected_revision != before:
+            raise SkillConflictError("skill delivery changed; inspect it again before retrying")
+        if enabled is not None and not isinstance(enabled, bool):
+            raise SkillValidationError("enabled must be a boolean")
+        if real_path and enabled is not None:
+            raise SkillValidationError("a native skill's enabled state belongs to its CLI")
+        clean = None if targets is None else self._validate_agents(targets)
+        capabilities = {row["key"]: row for row in agent_targets()}
+        for target in clean or []:
+            if target not in capabilities or capabilities[target]["state"] != "wired":
+                raise SkillValidationError(f"skill delivery is unsupported for agent: {target}")
+        state = self._read_state()
+        shared = self._read_targets()
+        native = self._read_native_targets()
+        if name:
+            if enabled is not None:
+                state[name] = enabled
+            if clean is None:
+                shared.pop(name, None)
+            else:
+                shared[name] = clean
+            changed = (
+                (enabled is not None and enabled != self._read_state().get(name, True))
+                or clean != self._read_targets().get(name)
+            )
+        else:
+            changed = (clean or []) != native.get(real_path, [])
+            if clean:
+                native[real_path] = clean
+            else:
+                native.pop(real_path, None)
+        if changed:
+            self._write_state(state, shared, native)
+            if name and enabled is not None:
+                self._refresh_runtime_projection()
+        return {
+            "name": name or Path(real_path).name,
+            "targets": clean if name else (clean or []),
+            "enabled": state.get(name, True) if name else None,
+            "revision": self.get_delivery_revision(name=name, real_path=real_path),
+            "changed": changed,
+        }
 
     def write_consented(self) -> bool:
         """Whether the user has once allowed Navide to write into the shared root."""
@@ -389,6 +487,7 @@ class SkillsStore:
     # ordered so an interruption leaves the skill readable from at least one
     # place, and every failure unwinds back to exactly the original layout.
 
+    @_serialized
     def migrate_native(self, real_path: str, *, consent: bool = False) -> dict[str, Any]:
         """Move the native skill at ``real_path`` into the shared root and
         leave a symlink in its place, so the owning CLI keeps reading it.
@@ -444,6 +543,7 @@ class SkillsStore:
         self._refresh_runtime_projection()
         return {"skill": self._read_skill(name, state, self._read_targets()), "from": str(source)}
 
+    @_serialized
     def restore_native(self, name: str) -> dict[str, Any]:
         """Undo ``migrate_native``: move the skill back where it came from and
         remove the link. Refuses unless the skill's marker records an origin
@@ -524,6 +624,7 @@ class SkillsStore:
         elif path.exists():
             shutil.rmtree(path)
 
+    @_serialized
     def delete_skill(self, name: str) -> dict[str, Any]:
         self._ensure_safe_root()
         name = self._validate_name(name)
@@ -596,6 +697,175 @@ class SkillsStore:
                 files[relative] = {"t": "b64", "v": base64.b64encode(raw).decode("ascii")}
         return files if SKILL_FILE in files else None
 
+    def install_bundle(
+        self, name: str, files: dict[str, Any], *, targets: list[str] | None,
+        consent: bool = False, provenance: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Install reviewed bytes without replacing any existing skill.
+
+        Unlike device sync, installation is add-only and records consent and
+        delivery state together. A failed write restores the previous state.
+        """
+        with self._lock:
+            self._ensure_safe_root()
+            name = self._validate_name(name)
+            targets = None if targets is None else self._validate_agents(targets)
+            supported = {agent["key"] for agent in agent_targets() if agent["state"] == "wired"}
+            if targets is not None and any(agent not in supported for agent in targets):
+                raise SkillValidationError("skill target is not wired for delivery")
+            if not self.write_consented() and consent is not True:
+                raise SkillConsentRequired(str(self._root))
+            destination = self._skill_dir(name)
+            if destination.exists() or destination.is_symlink() or self._native_conflict(name):
+                raise SkillConflictError(f"skill already exists: {name}")
+            if not isinstance(files, dict) or "SKILL.md" not in files or len(files) > self.MAX_CONTENT_FILES:
+                raise SkillValidationError("invalid skill bundle")
+            _validate_bundle_paths(files)
+            total = 0
+            for relative, entry in files.items():
+                if _safe_relative(relative) is None or ":" in relative or not isinstance(entry, dict):
+                    raise SkillValidationError("invalid skill bundle path")
+                data = entry.get("data")
+                if not isinstance(data, bytes) or len(data) > self.CONTENT_FILE_LIMIT:
+                    raise SkillValidationError("invalid skill bundle file")
+                if not isinstance(entry.get("executable"), bool):
+                    raise SkillValidationError("invalid executable flag")
+                total += len(data)
+            if total > self.CONTENT_TOTAL_LIMIT:
+                raise SkillValidationError("skill bundle exceeds size limit")
+            try:
+                fields, _ = self._parse_skill_file(files["SKILL.md"]["data"].decode("utf-8"))
+            except UnicodeDecodeError as exc:
+                raise SkillValidationError("SKILL.md must be UTF-8") from exc
+            if fields["name"] != name:
+                raise SkillValidationError("skill name does not match bundle")
+            receipt = None
+            if provenance is not None:
+                receipt = {**provenance, "installed_at": datetime.now(timezone.utc).isoformat()}
+                if not _valid_installation_receipt(receipt):
+                    raise SkillValidationError("invalid installation provenance")
+            state = self._read_state()
+            routes = self._read_targets()
+            native = self._read_native_targets()
+            previous_state = self._state_path.read_bytes() if self._state_path.exists() else None
+            self._root.mkdir(parents=True, exist_ok=True)
+            staging = Path(tempfile.mkdtemp(prefix=f".{name}-install-", dir=self._root))
+            claimed = False
+            published: list[tuple[Path, os.stat_result]] = []
+            created_dirs: list[Path] = []
+            directory_ids: dict[Path, os.stat_result] = {}
+            directory_fds: dict[Path, int] = {}
+
+            def check_directories() -> None:
+                for directory, original in directory_ids.items():
+                    current = directory.lstat()
+                    if not stat.S_ISDIR(current.st_mode) or (
+                        current.st_dev, current.st_ino
+                    ) != (original.st_dev, original.st_ino):
+                        raise SkillConflictError("skill directory changed during installation")
+
+            def claim_directory(directory: Path) -> None:
+                if _DIRECTORY_FDS:
+                    parent_fd = directory_fds[directory.parent]
+                    os.mkdir(directory.name, dir_fd=parent_fd)
+                    created_dirs.append(directory)
+                    directory_ids[directory] = os.stat(directory.name, dir_fd=parent_fd, follow_symlinks=False)
+                    directory_fds[directory] = os.open(
+                        directory.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd,
+                    )
+                else:
+                    directory.mkdir()
+                    created_dirs.append(directory)
+                    directory_ids[directory] = directory.lstat()
+                check_directories()
+
+            try:
+                (staging / MARKER_FILE).write_text(
+                    json.dumps({"installation": receipt}, ensure_ascii=False) + "\n" if receipt else "",
+                    encoding="utf-8",
+                )
+                for relative, entry in files.items():
+                    path = staging / relative
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    with path.open("xb") as handle:
+                        handle.write(entry["data"])
+                    path.chmod(0o755 if entry["executable"] else 0o644)
+                # mkdir is an exclusive claim even if an external writer raced
+                # the earlier existence check. Never replace their directory.
+                if _DIRECTORY_FDS:
+                    directory_fds[self._root] = os.open(self._root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                    directory_ids[self._root] = os.fstat(directory_fds[self._root])
+                else:
+                    directory_ids[self._root] = self._root.lstat()
+                claim_directory(destination)
+                claimed = True
+                # Automatic CLI discovery must not see instructions before
+                # their bundled helpers are present. This is not a filesystem
+                # transaction for other observers; SKILL.md is published last.
+                for child in sorted(staging.rglob("*"), key=lambda path: (path == staging / SKILL_FILE, len(path.parts), str(path))):
+                    check_directories()
+                    target = destination / child.relative_to(staging)
+                    if child.is_dir():
+                        claim_directory(target)
+                    else:
+                        # Same-filesystem hard links publish complete file
+                        # bytes atomically and fail if an entry raced us.
+                        if _DIRECTORY_FDS:
+                            os.link(child, target.name, dst_dir_fd=directory_fds[target.parent])
+                        else:
+                            os.link(child, target)
+                        published.append((target, child.stat()))
+                        check_directories()
+                state[name] = True
+                if targets is not None:
+                    routes[name] = targets
+                else:
+                    routes.pop(name, None)
+                self._write_state(state, routes, native, consented=True)
+                result = self.get_skill(name)
+                self.rebuild_runtime_projection()
+            except Exception:
+                if claimed or created_dirs:
+                    # Remove only our own entries. A file another writer
+                    # added or replaced during publication is not ours.
+                    for path, original in reversed(published):
+                        try:
+                            current = os.stat(path.name, dir_fd=directory_fds[path.parent], follow_symlinks=False) if _DIRECTORY_FDS else path.lstat()
+                            if (current.st_dev, current.st_ino) == (original.st_dev, original.st_ino):
+                                if _DIRECTORY_FDS:
+                                    os.unlink(path.name, dir_fd=directory_fds[path.parent])
+                                else:
+                                    path.unlink()
+                        except FileNotFoundError:
+                            pass
+                    for directory in reversed(created_dirs):
+                        try:
+                            original = directory_ids.get(directory)
+                            if original is None:
+                                continue
+                            current = os.stat(directory.name, dir_fd=directory_fds[directory.parent], follow_symlinks=False) if _DIRECTORY_FDS else directory.lstat()
+                            if not stat.S_ISDIR(current.st_mode) or (current.st_dev, current.st_ino) != (original.st_dev, original.st_ino):
+                                continue
+                            if _DIRECTORY_FDS:
+                                os.rmdir(directory.name, dir_fd=directory_fds[directory.parent])
+                            else:
+                                directory.rmdir()
+                        except OSError:
+                            pass  # preserve concurrently added foreign files
+                    if previous_state is None:
+                        self._state_path.unlink(missing_ok=True)
+                    else:
+                        self._atomic_write(self._state_path, previous_state)
+                    self._refresh_runtime_projection()
+                raise
+            finally:
+                for fd in reversed(list(directory_fds.values())):
+                    os.close(fd)
+                shutil.rmtree(staging, ignore_errors=True)
+            return {**result, "name": name, "path": str(destination),
+                    "revision": result["skill"]["revision"], "changed": True}
+
+    @_serialized
     def import_content(self, name: str, files: dict[str, Any]) -> bool:
         """Write a skill that arrived from another device. Returns whether it landed.
 
@@ -721,6 +991,7 @@ class SkillsStore:
         if fields.get("name") != name:
             raise SkillValidationError("frontmatter name must match the skill directory")
         attachments = self._list_attachments(skill_dir)
+        provenance = self._installation_provenance(skill_dir)
         return {
             "name": name,
             "description": fields.get("description", ""),
@@ -737,7 +1008,26 @@ class SkillsStore:
             "valid": True,
             "path": str(skill_dir),
             "attachments": attachments,
+            **({"provenance": provenance} if provenance is not None else {}),
         }
+
+    @staticmethod
+    def _installation_provenance(skill_dir: Path) -> dict[str, Any] | None:
+        marker = skill_dir / MARKER_FILE
+        try:
+            if marker.is_symlink() or marker.stat().st_size > 16 * 1024:
+                return None
+            for line in marker.read_text(encoding="utf-8").splitlines():
+                if not line.startswith("{"):
+                    continue
+                document = json.loads(line)
+                receipt = document.get("installation") if isinstance(document, dict) else None
+                if _valid_installation_receipt(receipt):
+                    return receipt
+            return None
+        except (OSError, UnicodeError, ValueError):
+            # Empty ownership markers and migrated-from text remain valid.
+            return None
 
     def _parse_skill_file(self, text: str) -> tuple[dict[str, Any], str]:
         match = _FRONTMATTER_RE.match(text)
@@ -975,7 +1265,68 @@ def _is_generated(relative: str) -> bool:
     )
 
 
-def _safe_relative(relative: Any) -> str | None:
+def _valid_installation_receipt(receipt: Any) -> bool:
+    if not isinstance(receipt, dict) or not {"source", "digest", "installed_at"} <= set(receipt):
+        return False
+    if set(receipt) - {"source", "digest", "installed_at", "schema_version", "prepared_at"}:
+        return False
+    if "schema_version" in receipt and receipt["schema_version"] != 1:
+        return False
+    if not isinstance(receipt["digest"], str) or not re.fullmatch(r"[0-9a-f]{64}", receipt["digest"]):
+        return False
+    try:
+        if datetime.fromisoformat(receipt["installed_at"]).tzinfo is None:
+            return False
+        if "prepared_at" in receipt and datetime.fromisoformat(receipt["prepared_at"]).tzinfo is None:
+            return False
+    except (ValueError, TypeError):
+        return False
+    source = receipt["source"]
+    if not isinstance(source, dict):
+        return False
+    if source.get("kind") == "local":
+        return set(source) == {"kind", "path"} and isinstance(source["path"], str) and os.path.isabs(source["path"])
+    if source.get("kind") == "github":
+        return (
+            {"kind", "repository", "commit", "subdir"} <= set(source)
+            and not set(source) - {"kind", "repository", "commit", "subdir", "requested_ref"}
+            and isinstance(source.get("requested_ref", ""), str)
+            and isinstance(source["repository"], str)
+            and re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", source["repository"]) is not None
+            and isinstance(source["commit"], str)
+            and re.fullmatch(r"[0-9a-f]{40}", source["commit"]) is not None
+            and isinstance(source["subdir"], str)
+            and all(part not in {".", ".."} and "\\" not in part and ":" not in part for part in source["subdir"].split("/"))
+        )
+    return False
+
+
+def _validate_bundle_paths(paths: Any, *, directories: Any = (), allow_hidden: bool = False) -> None:
+    """Reject filenames that cannot retain distinct identities on all hosts."""
+    spellings: dict[str, str] = {}
+    files = set(paths)
+    directories = set(directories)
+    if files & directories:
+        raise SkillValidationError("skill path is both a file and directory")
+    reserved = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)),
+                *(f"lpt{i}" for i in range(1, 10))}
+    for relative in files | directories:
+        if _safe_relative(relative, allow_hidden=allow_hidden) is None or ":" in relative:
+            raise SkillValidationError("invalid skill bundle path")
+        parts = relative.split("/")
+        for index, part in enumerate(parts):
+            if part.endswith((".", " ")) or part.split(".")[0].casefold() in reserved:
+                raise SkillValidationError(f"nonportable skill path: {relative}")
+            prefix = "/".join(parts[:index + 1])
+            key = unicodedata.normalize("NFC", prefix).casefold()
+            if key in spellings and spellings[key] != prefix:
+                raise SkillValidationError(f"skill paths alias on some filesystems: {relative}")
+            spellings[key] = prefix
+            if index < len(parts) - 1 and prefix in files:
+                raise SkillValidationError(f"skill path is both a file and directory: {prefix}")
+
+
+def _safe_relative(relative: Any, *, allow_hidden: bool = False) -> str | None:
     """``relative`` as a path that cannot leave the skill directory, or None.
 
     Absolute paths, ``..`` segments, backslashes and empty parts are all
@@ -991,6 +1342,6 @@ def _safe_relative(relative: Any) -> str | None:
         return None
     # Every dotfile is refused, the marker included: this side writes its own
     # marker, and nothing else hidden has a reason to travel between machines.
-    if any(part.startswith(".") for part in parts):
+    if not allow_hidden and any(part.startswith(".") for part in parts):
         return None
     return "/".join(parts)

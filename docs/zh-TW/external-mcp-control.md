@@ -399,6 +399,8 @@ watcher 兜底，以 `source: "watcher"` 且無歸屬的形式記錄。因此 `p
 
 ### Workspace、Skills 與指示檔
 
+Skills 工作流另提供經使用者授權的安裝與投遞變更；mutation annotations 會將這些操作與下方唯讀清單區分。
+
 五個唯讀盤點。它們各自回答一個上面那些 Tool 預設你已經知道答案的問題：哪些路徑
 是 Workspace、寫指示給某個 CLI 之前它本來就拿到了什麼、這個專案本身已經說過
 什麼、設定了哪些 MCP Server、以及使用者存了哪些 Prompt。
@@ -406,7 +408,11 @@ watcher 兜底，以 `source: "watcher"` 且無歸屬的形式記錄。因此 `p
 | Tool | 參數 | 功能 |
 |---|---|---|
 | `workspace_list` | — | Navide 知道的專案，最近開啟的在前 —— `plan_create`、`preview_record`、`cli_open_agent` 都要一個專案根目錄的絕對路徑，而這就是那份清單。回傳 `{workspaces, live_pane_workspaces}`。每個 Workspace 帶著 Store 自己的紀錄（`path`、`name`、`last_opened_at`、`pinned`、`exists`），外加 `has_live_panes`：現在真的有 CLI Pane 跑在裡面時為真。優先挑這種 —— `has_live_panes` 為 false 的 Workspace 沒有任何 Navide 視窗在看它，寫進去的 Plan 或預覽根本不會呈現給使用者；`exists` 為 false 更嚴重，那是資料夾已經從磁碟上消失了。`live_pane_workspaces` 是那個 Live 集合本身（已解析）：Pane 可能跑在使用者從來沒從歡迎畫面開過的專案裡，那仍然是完全合法的 `workspace_path`，只是最近清單不會提到它 |
-| `skills_list` | — | Navide 管理的 Skills，以及其中哪些會送到你手上。Skill 是一包按需載入的指示資料夾；Navide 保有一個共用庫（使用者可以投遞給任何廠商），同時也反射各家 CLI 自己目錄裡的那些。自己動手寫指示之前先讀這個，或用它告訴使用者哪個 Skill 剛好涵蓋他問的事。回傳 `{skills, native, root, agents}`。每個共用 Skill 是 `{name, description, enabled, targets, managed, valid, native_conflict}` —— `targets` 為 null 代表每家廠商都收得到，是清單就代表只有那幾家，`enabled` 為 false 代表誰都收不到。每個 native 條目是 `{name, description, source, owner_agent, real_path, valid}`，也就是某家 CLI 本來就有的 Skill。`agents` 是每家廠商與它的投遞支援程度（`wired`／`planned`／`unsupported`），讓「沒有投遞」和「無法投遞」不會混在一起。`delivered_to_me` 是關於你的那一半 —— `{agent_key, skills, native_paths}`，也就是你自己的 CLI 實際被給了哪些；沒有 Pane 身分的呼叫端不會有這個欄位，因為它不是任何人的投遞對象。只有名稱與描述：Skill 的指示內容是你要用它的時候從它自己的資料夾讀，不是從這裡。唯讀 —— 要不要投遞某個 Skill 是使用者在 Settings 裡的決定 |
+| `skills_list` | — | 唯讀清單回傳 `{skills, native, root, agents}` 與供 `skills_inspect` 使用的穩定 ID。共用項目列出 enabled／targets／所有權，原生項目列出所屬 CLI 與來源路徑；vendor 能力來自 registry。`delivered_to_me` 與 `delivery_semantics: configuration_only` 只表示路由設定，不是執行中 pane 快照。Navide 停用仍無法阻止原生共用根掃描；目前 session 是否實際投遞／載入保持未知。 |
+| `skills_inspect` | `skill_id` | 讀取指示、檔案、所有權、本機持久來源紀錄與 `delivery_revision`。ID 必須來自目前共用庫，不接受任意檔案路徑。第三方指示是待檢視資料，不是執行授權；原生檔案清單可能由 `files_truncated` 標記截斷。 |
+| `skills_prepare_install` | `source`, `ref=""`, `subdir=""` | 由 `owner/repo`、GitHub public HTTPS repository URL 或本機 skill 絕對路徑準備不可變內容。多候選回傳 `selection_required`／`candidates`，不發 token；指定 `subdir` 後重試（`.` 為 repository 根目錄）。選定 preview 回傳 `preview_id`、相同內容的 `digest`、來源／commit、完整 `skill_md`、檔案清單及到期時間。不執行內容、不寫共用根；preview 綁定呼叫端，15 分鐘後或重啟失效。 |
+| `skills_install` | `preview_id`, `expected_digest`, `targets`, `consent=false` | 經使用者授權後只新增 prepared bytes，不重讀或下載來源。Digest 必須相同，首次共用根寫入須沿用既有同意。任何同名受管、原生或使用者項目都拒絕；重試收據仍保留時，成功重送只回傳原結果，不重複寫入。最多 8 份有效準備，另保留最多 8 份輕量完成收據；到期或提早淘汰後重送回傳 missing/expired，不重新安裝。來源紀錄只留本機，不進入 export／sync。`targets: null` 為所有 wired vendor，`[]` 為不額外投遞。 |
+| `skills_set_delivery` | `skill_id`, `targets`, `expected_revision`, `enabled=null` | 經使用者授權，以 inspect 的 `delivery_revision` 更新設定；過時版本回 `SKILL_CONFLICT`。原生 skill 的空／null targets 清除額外投遞，禁止設定 `enabled`。不影響所屬 CLI 或共用根的自動掃描；實際載入須另開 session 驗證。限制詳見 [Skills 工作流](user-guide.md)。 |
 | `memory_list` | `workspace_path`、`path=""` | 這裡的 CLI 會載入的指示檔 —— `CLAUDE.md`、`AGENTS.md`、`GEMINI.md` 等等，包含這個專案裡的與使用者家目錄裡的。不帶 `path` 時只列 Metadata：`{workspace_path, files, agents}`，每個檔案是 `scope`（`user` 或 `project`）、`path`、`relative`、`readers`（會載入它的廠商鍵）、`canonical`、`exists`、`size`、`modified`、`error`。還不存在的檔案一樣會被列出來，因為它標示的是「某個慣例該寫在哪裡」；`agents` 是每家廠商與 Navide 找它檔案的方式（`mapped` 或 `configured`）。帶 `path` 時回傳那一個檔案：`{workspace_path, file, path, text, exists, modified}` —— 而且路徑必須是這份清單報過的，其他一律拒絕，所以這不是一條讀任意檔案的路。唯讀：編輯指示檔是使用者在 Settings 裡的決定，這裡沒有對應的 Tool。沒有 Workspace 時只會列出 user 範圍的檔案 |
 | `workspace_open` | `path` | 將 `path` 開啟為 Workspace —— 開新視窗或用既有視窗，由 Navide 決定。`path` 必須是專案根目錄的絕對路徑，也就是 `workspace_list` 回報的那種。等同 `ui_invoke` 帶 action `ui.workspace.open`，但不必先查 action；路由到任一 Live 視窗，所以只有完全沒有視窗開著時才會出錯。回傳 `{ok, path}` |
 | `workspace_switch` | `path` | 把承載呼叫 Pane 的那個視窗切換到它已持有的另一個 Workspace（一視窗多專案）；Pane 不受影響。視窗未持有 `path` 時回錯誤並指向 `workspace_open`；該視窗有 Pipeline 在跑時也會拒絕（先 `pipeline_abort`，或從側欄切換）。只限 Pane 呼叫 —— host 或外部呼叫者沒有自己的視窗，會得到 `ok: false`（改用 `ui_invoke` 帶 `workspace_path` 與 action `ui.workspace.switch`）。回傳 `{ok, path}`，`path` 是現在畫面上的 Workspace |

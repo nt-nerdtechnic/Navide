@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { useBackend } from '../composables/useBackend'
 import ToggleSwitch from './settings/ToggleSwitch.vue'
@@ -98,6 +98,8 @@ const selectedName = ref('')
 /** Row key of whatever is open in the detail drawer (shared or native). */
 const selectedKey = ref('')
 const draft = ref<SkillDraft | null>(null)
+const savedDraft = ref('')
+const draftDirty = computed(() => draft.value !== null && draftFingerprint(draft.value) !== savedDraft.value)
 const query = ref('')
 const loading = ref(false)
 const busy = ref(false)
@@ -106,6 +108,14 @@ const conflict = ref(false)
 const creating = ref(false)
 const newName = ref('')
 const newDescription = ref('')
+
+function draftFingerprint(value: SkillDraft): string {
+  return JSON.stringify([
+    value.name, value.description, value.body, value.userInvocable,
+    value.disableModelInvocation, value.allowedTools, value.disallowedTools,
+    value.model, value.effort, value.context,
+  ])
+}
 
 
 async function openNativeFolder(skill: NativeSkill): Promise<void> {
@@ -255,10 +265,12 @@ function isConflictResponse(resp: ResponseLike): boolean {
   return payload?.conflict === true || resp.error?.code === 'SKILL_CONFLICT'
 }
 
-async function loadSkills(preferredName = selectedName.value): Promise<void> {
-  loading.value = true
-  error.value = ''
-  conflict.value = false
+async function loadSkills(preferredName = selectedName.value, external = false): Promise<void> {
+  if (!external) {
+    loading.value = true
+    error.value = ''
+    conflict.value = false
+  }
   try {
     const resp = await props.backend.send<{
       skills?: unknown[]
@@ -286,28 +298,41 @@ async function loadSkills(preferredName = selectedName.value): Promise<void> {
     })
     rootPath.value = stringValue(resp.payload?.root)
     writeConsented.value = booleanValue(resp.payload?.write_consented, false)
+    // A notification may arrive while the user edits or awaits a save. Keep
+    // the draft and its revision so the existing save conflict check applies.
+    if (external && draft.value && (draftDirty.value || busy.value)) {
+      if (!skills.value.some((skill) => skill.name === draft.value?.name)) conflict.value = true
+      return
+    }
     // Keep whatever was open if it still exists; otherwise the drawer stays
     // closed. Auto-opening the first skill made a read-only entry look like
     // the page's main content.
-    const next = skills.value.find((skill) => skill.name === preferredName)?.name ?? ''
-    if (next) await selectSkill(next)
-    else if (selectedRow.value === null) closeDrawer()
+    const next = skills.value.find((skill) => skill.name === (external ? selectedName.value : preferredName))?.name ?? ''
+    if (next) await selectSkill(next, external)
+    else if (!matrixRows.value.some((row) => row.key === selectedKey.value)) closeDrawer()
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
   } finally {
-    loading.value = false
+    if (!external) loading.value = false
   }
 }
 
-async function selectSkill(name: string): Promise<void> {
-  selectedKey.value = `shared:${name}`
-  selectedName.value = name
-  draft.value = null
-  busy.value = true
-  error.value = ''
-  conflict.value = false
+let selectionRequest = 0
+async function selectSkill(name: string, external = false): Promise<void> {
+  const previousDraft = draft.value
+  const request = external ? selectionRequest : ++selectionRequest
+  if (!external) {
+    selectedKey.value = `shared:${name}`
+    selectedName.value = name
+    draft.value = null
+    busy.value = true
+    error.value = ''
+    conflict.value = false
+  }
   try {
     const resp = await props.backend.send<{ skill?: unknown; ok?: boolean; error?: string }>('skills.get', { name })
+    if (selectedName.value !== name || (!external && request !== selectionRequest)) return
+    if (external && (draft.value !== previousDraft || draftDirty.value || busy.value)) return
     if (!resp.ok || resp.payload?.ok === false) {
       error.value = responseMessage(resp, t('settings.skills.error-load-one'))
       return
@@ -318,10 +343,11 @@ async function selectSkill(name: string): Promise<void> {
       return
     }
     draft.value = next
+    savedDraft.value = draftFingerprint(next)
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
   } finally {
-    busy.value = false
+    if (!external && request === selectionRequest) busy.value = false
   }
 }
 
@@ -383,6 +409,7 @@ async function saveSkill(): Promise<void> {
   error.value = ''
   conflict.value = false
   const current = draft.value
+  const submittedDraft = draftFingerprint(current)
   try {
     const fields: Record<string, unknown> = {
       name: current.name,
@@ -432,6 +459,7 @@ async function saveSkill(): Promise<void> {
     }
     const savedSkill = isRecord(resp.payload?.skill) ? resp.payload.skill : null
     current.revision = stringValue(savedSkill?.revision, current.revision ?? '') || current.revision
+    savedDraft.value = submittedDraft
     const summary = skills.value.find((skill) => skill.name === current.name)
     if (summary) summary.description = current.description
   } catch (err) {
@@ -544,7 +572,10 @@ const sourceChips = computed(() => {
 })
 
 const selectedRow = computed<MatrixRow | null>(
-  () => matrixRows.value.find((row) => row.key === selectedKey.value) ?? null
+  () => matrixRows.value.find((row) => row.key === selectedKey.value)
+    ?? (draft.value && draftDirty.value && selectedKey.value === `shared:${draft.value.name}`
+      ? { kind: 'shared', key: selectedKey.value, skill: draft.value }
+      : null)
 )
 
 /** Open the drawer for a row; shared rows also load their editor draft. */
@@ -775,7 +806,18 @@ function rowSourceLabel(row: MatrixRow): string {
   return t('settings.skills.source-native', { agent: row.skill.source })
 }
 
-onMounted(() => void loadSkills())
+let offChanged: (() => void) | undefined
+onMounted(() => {
+  offChanged = props.backend.on('skills.changed', () => void loadSkills(selectedName.value, true))
+  void loadSkills()
+})
+onUnmounted(() => offChanged?.())
+watch(
+  () => props.backend.status.value,
+  (status, previous) => {
+    if (status === 'connected' && previous !== 'connected') void loadSkills(selectedName.value, true)
+  }
+)
 </script>
 
 <template>

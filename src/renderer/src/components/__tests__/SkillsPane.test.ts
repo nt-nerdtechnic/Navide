@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
+import { ref } from 'vue'
 import { i18n } from '@navide/plugin-ui/foundation'
 import SkillsPane from '../SkillsPane.vue'
 
@@ -58,7 +59,14 @@ function mockBackend(overrides: Record<string, unknown> = {}) {
     ...overrides,
   }
   const send = vi.fn(async (type: string, _payload?: unknown) => responses[type])
-  return { backend: { send } as never, send }
+  const status = ref('connected')
+  const listeners = new Map<string, () => void>()
+  const off = vi.fn()
+  const on = vi.fn((type: string, callback: () => void) => {
+    listeners.set(type, callback)
+    return () => { listeners.delete(type); off() }
+  })
+  return { backend: { send, on, status } as never, send, responses, listeners, off, status }
 }
 
 /** In the merged layout nothing is selected on load: click a card to open the drawer. */
@@ -129,6 +137,197 @@ describe('SkillsPane', () => {
       description: 'A new skill',
       consent: true,
     })
+  })
+
+  it('refreshes external changes without replacing an unsaved editor draft', async () => {
+    const { backend, send, responses, listeners } = mockBackend()
+    wrapper = mount(SkillsPane, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+    await openCard(wrapper, skill.name)
+    await wrapper.get('.skill-body').setValue('Unsaved local instructions')
+    responses['skills.list'] = {
+      ok: true,
+      payload: { skills: [skill, { ...skill, name: 'installed-externally' }], agents },
+    }
+    responses['skills.save'] = { ok: false, error: { code: 'SKILL_CONFLICT', message: 'stale revision' } }
+
+    expect(listeners.has('skills.changed')).toBe(true)
+    listeners.get('skills.changed')!()
+    await flushPromises()
+
+    expect(wrapper.findAll('.skill-card strong').map((card) => card.text())).toContain('installed-externally')
+    expect((wrapper.get('.skill-body').element as HTMLTextAreaElement).value).toBe('Unsaved local instructions')
+    expect(send.mock.calls.filter(([type]) => type === 'skills.get')).toHaveLength(1)
+    await wrapper.get('.skill-editor-actions .primary').trigger('click')
+    await flushPromises()
+    expect(send).toHaveBeenCalledWith('skills.save', expect.objectContaining({ expected_revision: 'rev-1' }))
+    expect(wrapper.find('.skills-conflict').exists()).toBe(true)
+    expect((wrapper.get('.skill-body').element as HTMLTextAreaElement).value).toBe('Unsaved local instructions')
+  })
+
+  it('keeps a dirty draft visible when another client deletes its skill', async () => {
+    const { backend, responses, listeners } = mockBackend()
+    wrapper = mount(SkillsPane, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+    await openCard(wrapper, skill.name)
+    await wrapper.get('.skill-body').setValue('Keep these instructions')
+    responses['skills.list'] = { ok: true, payload: { skills: [], agents } }
+
+    expect(listeners.has('skills.changed')).toBe(true)
+    listeners.get('skills.changed')!()
+    await flushPromises()
+
+    expect(wrapper.findAll('.skill-card')).toHaveLength(0)
+    expect((wrapper.get('.skill-body').element as HTMLTextAreaElement).value).toBe('Keep these instructions')
+    expect(wrapper.find('.skills-conflict').exists()).toBe(true)
+  })
+
+  it('reloads an unchanged editor and removes its event listener on unmount', async () => {
+    const { backend, responses, listeners, off } = mockBackend()
+    wrapper = mount(SkillsPane, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+    await openCard(wrapper, skill.name)
+    responses['skills.get'] = { ok: true, payload: { skill: { ...skill, body: 'External edit', revision: 'rev-2' } } }
+
+    expect(listeners.has('skills.changed')).toBe(true)
+    listeners.get('skills.changed')!()
+    await flushPromises()
+    expect((wrapper.get('.skill-body').element as HTMLTextAreaElement).value).toBe('External edit')
+
+    wrapper.unmount()
+    wrapper = undefined
+    expect(off).toHaveBeenCalledOnce()
+    expect(listeners.has('skills.changed')).toBe(false)
+  })
+
+  it('preserves edits typed while a save is awaiting its response', async () => {
+    const { backend, send, listeners } = mockBackend()
+    const originalSend = send.getMockImplementation()!
+    let finishSave: ((value: unknown) => void) | undefined
+    send.mockImplementation((type, payload) => type === 'skills.save'
+      ? new Promise((resolve) => { finishSave = resolve })
+      : originalSend(type, payload))
+    wrapper = mount(SkillsPane, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+    await openCard(wrapper, skill.name)
+    await wrapper.get('.skill-body').setValue('Submitted instructions')
+    await wrapper.get('.skill-editor-actions .primary').trigger('click')
+    await wrapper.get('.skill-body').setValue('New unsaved instructions')
+    finishSave!({ ok: true, payload: { skill: { ...skill, revision: 'rev-2' } } })
+    await flushPromises()
+
+    listeners.get('skills.changed')!()
+    await flushPromises()
+
+    expect((wrapper.get('.skill-body').element as HTMLTextAreaElement).value).toBe('New unsaved instructions')
+    expect(send.mock.calls.filter(([type]) => type === 'skills.get')).toHaveLength(1)
+  })
+
+  it('keeps edits typed while an external editor refresh is awaiting its response', async () => {
+    const { backend, send, listeners } = mockBackend()
+    wrapper = mount(SkillsPane, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+    await openCard(wrapper, skill.name)
+    const originalSend = send.getMockImplementation()!
+    let finishRefresh: ((value: unknown) => void) | undefined
+    send.mockImplementation((type, payload) => type === 'skills.get'
+      ? new Promise((resolve) => { finishRefresh = resolve })
+      : originalSend(type, payload))
+    listeners.get('skills.changed')!()
+    await flushPromises()
+
+    await wrapper.get('.skill-body').setValue('Typed during external refresh')
+    finishRefresh!({ ok: true, payload: { skill: { ...skill, body: 'External instructions', revision: 'rev-2' } } })
+    await flushPromises()
+
+    expect((wrapper.get('.skill-body').element as HTMLTextAreaElement).value).toBe('Typed during external refresh')
+  })
+
+  it('does not replace a different selected skill with a late external refresh', async () => {
+    const otherSkill = { ...skill, name: 'other-skill', body: 'Other instructions' }
+    const { backend, send, listeners } = mockBackend({
+      'skills.list': { ok: true, payload: { skills: [skill, otherSkill], agents } },
+    })
+    wrapper = mount(SkillsPane, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+    await openCard(wrapper, skill.name)
+    const originalSend = send.getMockImplementation()!
+    let finishRefresh: ((value: unknown) => void) | undefined
+    send.mockImplementation((type, payload) => {
+      if (type !== 'skills.get') return originalSend(type, payload)
+      if ((payload as { name: string }).name === otherSkill.name) return Promise.resolve({ ok: true, payload: { skill: otherSkill } })
+      return new Promise((resolve) => { finishRefresh = resolve })
+    })
+    listeners.get('skills.changed')!()
+    await flushPromises()
+    await openCard(wrapper, otherSkill.name)
+    finishRefresh!({ ok: true, payload: { skill: { ...skill, body: 'Late instructions' } } })
+    await flushPromises()
+
+    expect(wrapper.get('.skills-drawer h3').text()).toBe(otherSkill.name)
+    expect((wrapper.get('.skill-body').element as HTMLTextAreaElement).value).toBe(otherSkill.body)
+  })
+
+  it.each(['close', 'native'])('releases a pending shared selection after %s navigation', async (navigation) => {
+    const { backend, send } = mockBackend({
+      'skills.list': { ok: true, payload: { skills: [skill], native: [nativeSkill], agents } },
+    })
+    const originalSend = send.getMockImplementation()!
+    let finishSelection: ((value: unknown) => void) | undefined
+    send.mockImplementation((type, payload) => type === 'skills.get'
+      ? new Promise((resolve) => { finishSelection = resolve })
+      : originalSend(type, payload))
+    wrapper = mount(SkillsPane, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+    await openCard(wrapper, skill.name)
+    if (navigation === 'close') await wrapper.get('.skill-drawer-close').trigger('click')
+    else await openCard(wrapper, nativeSkill.name)
+    finishSelection!({ ok: true, payload: { skill } })
+    await flushPromises()
+
+    expect(wrapper.get('.skills-toolbar .primary').attributes('disabled')).toBeUndefined()
+    expect(wrapper.find('.skill-body').exists()).toBe(false)
+  })
+
+  it.each([false, true])('refreshes missed changes on reconnect and preserves a dirty draft: %s', async (dirty) => {
+    const { backend, send, status, responses } = mockBackend()
+    wrapper = mount(SkillsPane, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+    await openCard(wrapper, skill.name)
+    if (dirty) await wrapper.get('.skill-body').setValue('Unsaved before reconnect')
+    status.value = 'disconnected'
+    await flushPromises()
+    responses['skills.list'] = { ok: true, payload: { skills: [skill, { ...skill, name: 'missed-install' }], agents } }
+    responses['skills.get'] = { ok: true, payload: { skill: { ...skill, body: 'Changed while disconnected', revision: 'rev-2' } } }
+    status.value = 'connected'
+    await flushPromises()
+
+    expect(wrapper.findAll('.skill-card strong').map((card) => card.text())).toContain('missed-install')
+    expect((wrapper.get('.skill-body').element as HTMLTextAreaElement).value).toBe(
+      dirty ? 'Unsaved before reconnect' : 'Changed while disconnected'
+    )
+    if (dirty) {
+      responses['skills.save'] = { ok: false, error: { code: 'SKILL_CONFLICT', message: 'stale revision' } }
+      await wrapper.get('.skill-editor-actions .primary').trigger('click')
+      await flushPromises()
+      expect(send).toHaveBeenCalledWith('skills.save', expect.objectContaining({ expected_revision: 'rev-1' }))
+      expect(wrapper.find('.skills-conflict').exists()).toBe(true)
+      expect((wrapper.get('.skill-body').element as HTMLTextAreaElement).value).toBe('Unsaved before reconnect')
+    }
+  })
+
+  it('does not treat a saved enabled toggle as unsaved editor content', async () => {
+    const { backend, responses, listeners } = mockBackend()
+    wrapper = mount(SkillsPane, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+    await openCard(wrapper, skill.name)
+    await wrapper.get('.skill-drawer-toggle [role="switch"]').trigger('click')
+    await flushPromises()
+    responses['skills.get'] = { ok: true, payload: { skill: { ...skill, body: 'External after toggle', revision: 'rev-2' } } }
+    listeners.get('skills.changed')!()
+    await flushPromises()
+
+    expect((wrapper.get('.skill-body').element as HTMLTextAreaElement).value).toBe('External after toggle')
   })
 
   it('sends a known-field patch and keeps the draft visible on conflict', async () => {
