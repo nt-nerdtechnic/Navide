@@ -27,7 +27,7 @@ describe('lineage survives a resume', () => {
     // The pane record is the authoritative source: it outlives the pane, and
     // the backend re-keys its spawned_by to the parent's CURRENT id. History
     // keeps a durable copy too, but only as the fallback below.
-    const fn = bodyOf('async function resumableParentId')
+    const fn = bodyOf('async function resumablePaneState')
     expect(fn).toContain("sendQuiet<ProjectPayload>('project.peek'")
     expect(fn).toContain('rec.pane_id === historyPaneId')
     expect(fn).toContain('spawned_by')
@@ -41,15 +41,15 @@ describe('lineage survives a resume', () => {
     // real relationship the next full restore would have put back.
     // App.resumeSession.test.ts pins the same rule for createRequestedPane:
     // the record must agree with where the pane was placed.
-    const fn = bodyOf('async function resumableParentId')
-    expect(fn).toContain('return recorded')
+    const fn = bodyOf('async function resumablePaneState')
+    expect(fn).toContain("spawnedBy: recorded?.spawned_by ?? history?.spawnedBy ?? ''")
     expect(fn).not.toContain('panes.value.some(')
   })
 
   it('puts a history resume back under its parent', () => {
     const fn = bodyOf('async function onManualResume')
     expect(fn).toContain('payload.historyPaneId')
-    expect(fn).toContain('resumableParentId(payload.historyPaneId, workspacePath)')
+    expect(fn).toContain('resumablePaneState(payload.historyPaneId, workspacePath)')
     // Into the live pane...
     expect(fn).toContain('spawnedBy: resumeSpawnedBy || undefined')
     // ...and into the NEW record, or the next restart flattens it again. The
@@ -65,8 +65,8 @@ describe('lineage survives a resume', () => {
     // Manual Spawn → Resume passes no historyPaneId. It has no pane to
     // inherit from, and must not fall back to whoever is focused.
     const fn = bodyOf('async function onManualResume')
-    expect(fn).toMatch(/payload\.historyPaneId\s*\n?\s*\?\s*await resumableParentId/)
-    expect(fn).toContain(": ''")
+    expect(fn).toMatch(/payload\.historyPaneId\s*\n?\s*\?\s*await resumablePaneState/)
+    expect(fn).toContain("const resumeSpawnedBy = historyState?.spawnedBy ?? ''")
   })
 
   it('re-keys the whole eager restore once every pane has landed', () => {
@@ -133,8 +133,8 @@ describe('lineage is persisted in the workspace', () => {
     // An empty spawned_by on a live record is a positive statement that the
     // pane is a root. Treating it as "unknown" would let a stale history entry
     // re-parent a pane the user deliberately dragged out.
-    const fn = bodyOf('async function resumableParentId')
-    expect(fn).toContain('?? spawnHistory.value.find((e) => e.paneId === historyPaneId)?.spawnedBy')
+    const fn = bodyOf('async function resumablePaneState')
+    expect(fn).toContain("spawnedBy: recorded?.spawned_by ?? history?.spawnedBy ?? ''")
     expect(fn).not.toContain("?.spawned_by ?? ''")
   })
 })

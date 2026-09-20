@@ -19,6 +19,9 @@ export interface SpawnHistoryEntry extends HistoryTitleEntry {
   roleKey: RoleKey
   roleLabel: string
   command: string
+  /** Original launch choices; absent on older history entries. */
+  model?: string
+  effort?: string
   sessionId?: string
   origin: 'manual' | 'pipeline' | 'mcp'
   stageId: StageId
@@ -47,7 +50,7 @@ export interface SpawnHistoryEntry extends HistoryTitleEntry {
    *  Limit: rekeyLineage can only repoint the page the renderer has LOADED
    *  (MAX_SPAWN_HISTORY). An entry older than that keeps an id retired long
    *  ago, and since the backend merge is upsert-only nothing repairs it later.
-   *  That degrades safely — resumableParentId validates the pointer against
+   *  That degrades safely — resumablePaneState validates the pointer against
    *  the live panes and falls back to root — but it is why the pane record,
    *  not this, is read first. */
   spawnedBy?: string

@@ -181,13 +181,36 @@ async def test_ack_does_not_wait_for_the_baseline_scan(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("response_order", ["natural", "cancel-first", "create-error-first"])
 async def test_cancel_before_commit_waits_for_the_scan_then_rolls_back(
     monkeypatch: pytest.MonkeyPatch,
+    response_order: str,
 ) -> None:
     attribution = BlockingAttribution()
     monkeypatch.setattr(app, "attribution", attribution)
     socket = AckGatedSocket()
     session = make_session(socket)
+    # Both handlers share rollback, but their result frames have no ordering
+    # contract. Exercise either legal completion order before taking the send
+    # lock, so correctness is tied to request identity rather than scheduling.
+    create_error_sent = asyncio.Event()
+    cancel_sent = asyncio.Event()
+    original_send = session.send_json
+
+    async def ordered_send(frame: dict[str, Any]) -> None:
+        is_create_error = frame.get("id") == "create-request" and not frame.get("ok")
+        is_cancel = frame.get("id") == "cancel-request"
+        if response_order == "cancel-first" and is_create_error:
+            await asyncio.wait_for(cancel_sent.wait(), timeout=2)
+        if response_order == "create-error-first" and is_cancel:
+            await asyncio.wait_for(create_error_sent.wait(), timeout=2)
+        await original_send(frame)
+        if is_create_error:
+            create_error_sent.set()
+        if is_cancel:
+            cancel_sent.set()
+
+    monkeypatch.setattr(session, "send_json", ordered_send)
 
     create_task = asyncio.create_task(
         app.handle_message(session, create_message(agent="claude"))
@@ -212,7 +235,17 @@ async def test_cancel_before_commit_waits_for_the_scan_then_rolls_back(
     assert attribution.unregistered == ["pane-1"]
     assert "term-1" not in app._PTY_OWNERS
     assert terminals._sessions == {}
-    assert session.websocket.sent[-1]["error"]["code"] == "CREATE_CANCELLED"  # type: ignore[attr-defined]
+    create_errors = [frame for frame in socket.sent if frame.get("id") == "create-request" and frame.get("ok") is False]
+    cancel_results = [frame for frame in socket.sent if frame.get("id") == "cancel-request"]
+    assert len(create_errors) == 1
+    assert create_errors[0]["error"]["code"] == "CREATE_CANCELLED"
+    assert len(cancel_results) == 1
+    assert cancel_results[0]["ok"] is True
+    assert cancel_results[0]["payload"]["cancelled"] is True
+    if response_order == "cancel-first":
+        assert socket.sent.index(cancel_results[0]) < socket.sent.index(create_errors[0])
+    elif response_order == "create-error-first":
+        assert socket.sent.index(create_errors[0]) < socket.sent.index(cancel_results[0])
 
 @pytest.mark.asyncio
 async def test_send_failure_marks_dead_and_rolls_back_uncommitted_terminal() -> None:

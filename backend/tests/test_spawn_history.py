@@ -52,6 +52,26 @@ def test_merge_upserts_existing_entry_in_place(tmp_path: Path) -> None:
     assert entries[0]["sessionId"] == "s-1"
 
 
+def test_legacy_snapshot_preserves_history_model_and_effort(tmp_path: Path) -> None:
+    store = SpawnHistoryStore()
+    store.merge(str(tmp_path), [_entry("p1", model="original-model", effort="high")])
+    store.merge(str(tmp_path), [_entry("p1", customName="Renamed")])
+
+    page, _ = SpawnHistoryStore().read_page(str(tmp_path), offset=0, limit=10)
+    assert page[0]["model"] == "original-model"
+    assert page[0]["effort"] == "high"
+
+
+def test_explicit_default_replaces_history_model_and_effort(tmp_path: Path) -> None:
+    store = SpawnHistoryStore()
+    store.merge(str(tmp_path), [_entry("p1", model="original-model", effort="high")])
+    store.merge(str(tmp_path), [_entry("p1", model="", effort="")])
+
+    page, _ = SpawnHistoryStore().read_page(str(tmp_path), offset=0, limit=10)
+    assert page[0]["model"] == ""
+    assert page[0]["effort"] == ""
+
+
 def test_merge_replacement_clears_fields_the_renderer_removed(tmp_path: Path) -> None:
     """A reset customName is dropped from the entry JSON — replacement must not
     resurrect it from the stored copy."""

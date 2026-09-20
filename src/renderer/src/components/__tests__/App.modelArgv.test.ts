@@ -195,8 +195,8 @@ describe('onManualResume — launching on the model is not enough', () => {
   const body = fn('onManualResume')
 
   it('launches the resumed pane on the source pane\'s model', () => {
-    expect(body).toContain("model: historyPane?.model ?? ''")
-    expect(body).toContain("effort: historyPane?.effort ?? ''")
+    expect(body).toContain("model: historyPane?.model ?? historyState?.model ?? payload.model ?? ''")
+    expect(body).toContain("effort: historyPane?.effort ?? historyState?.effort ?? payload.effort ?? ''")
     expect(body).toContain('model: modelRequest.model || undefined')
     expect(body).toContain('effort: modelRequest.effort || undefined')
   })
@@ -207,6 +207,18 @@ describe('onManualResume — launching on the model is not enough', () => {
     const payload = body.slice(spawnIdx)
     expect(payload).toContain('model: modelRequest.model')
     expect(payload).toContain('effort: modelRequest.effort')
+  })
+
+  it('carries original choices through history recording, backfill and resume', () => {
+    const spawn = fn('spawnPane')
+    expect(spawn).toContain("model: pane.model ?? ''")
+    expect(spawn).toContain("effort: pane.effort ?? ''")
+    const backfill = appSource.slice(appSource.indexOf('for (const saved of removedManual) {'))
+    expect(backfill).toContain("model: saved.model ?? ''")
+    expect(backfill).toContain("effort: saved.effort ?? ''")
+    const resume = fn('onResumeHistoryAgent')
+    expect(resume).toContain('model: entry.model')
+    expect(resume).toContain('effort: entry.effort')
   })
 })
 

@@ -536,6 +536,11 @@ class SpawnHistoryStore:
                     # pre-detection snapshot. Empty is not a new identity.
                     if not entry.get("sessionId") and stored[i].get("sessionId"):
                         entry = {**entry, "sessionId": stored[i]["sessionId"]}
+                    # Older renderers never sent launch choices. Missing is
+                    # unknown; an explicit empty string means vendor default.
+                    for field in ("model", "effort"):
+                        if field not in entry and field in stored[i]:
+                            entry = {**entry, field: stored[i][field]}
                     stored[i] = entry
             if len(stored) > MAX_ENTRIES:
                 dropped = len(stored) - MAX_ENTRIES

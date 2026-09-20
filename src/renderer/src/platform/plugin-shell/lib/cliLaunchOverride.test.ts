@@ -139,6 +139,11 @@ describe('isReservedSpawnEnvKey', () => {
   it('leaves an ordinary name alone', () => {
     expect(isReservedSpawnEnvKey('HTTPS_PROXY')).toBe(false)
   })
+
+  it('marks both MiniMax data-root aliases as reserved', () => {
+    expect(isReservedSpawnEnvKey('MINIMAX_DATA_DIR')).toBe(true)
+    expect(isReservedSpawnEnvKey('MAVIS_DATA_DIR')).toBe(true)
+  })
 })
 
 // ── The one thing in this file that is not local knowledge ──────────────────

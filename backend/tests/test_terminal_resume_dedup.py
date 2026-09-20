@@ -96,13 +96,15 @@ def _live_pty(term_id: str, agent_key: str, command: list[str]) -> SimpleNamespa
     return SimpleNamespace(id=term_id, agent_key=agent_key, command=command, closed=False)
 
 
-async def _create(session: app.Session, command: Any, pane_id: str = "pane-1") -> None:
+async def _create(
+    session: app.Session, command: Any, pane_id: str = "pane-1", agent_key: str = "claude",
+) -> None:
     await app.handle_message(session, {
         "id": "m1",
         "type": "terminal.create",
         "payload": {
             "pane_id": pane_id,
-            "agent_key": "claude",
+            "agent_key": agent_key,
             "command": command,
             "cwd": "/ws",
             "metadata": {"workspace_path": "/ws"},
@@ -153,6 +155,32 @@ async def test_resume_spawn_reaps_live_duplicate_first(
     # Signalling the stale PTY is not enough for a vendor whose shutdown is
     # graceful: two claudes appending to one session file is precisely what
     # this dedup prevents, so the reap waits for the child to be gone.
+    assert terminals.reap_waits == ["term-stale"]
+    assert len(terminals.created) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("agent_key,cli,flag", [
+    ("antigravity", "agy", "--conversation"),
+    ("grok", "grok", "--resume"),
+])
+async def test_resume_spawn_reaps_grok_and_antigravity_duplicates(
+    monkeypatch: pytest.MonkeyPatch, agent_key: str, cli: str, flag: str,
+) -> None:
+    from agent_team_backend.mcp_server import wiring
+
+    monkeypatch.setattr(app, "attribution", FakeAttribution())
+    monkeypatch.setattr(app, "_register_workspace_and_backfill", lambda _ws: None)
+    monkeypatch.setattr(wiring, "wire_command", lambda _agent, command, *_args, **_kwargs: command)
+    sid = "21fdfc1b-883a-47ce-b547-e9179ba62eef"
+    command = ["/bin/sh", "-lc", f"{cli} {flag} {sid}"]
+    stale = _live_pty("term-stale", agent_key, command)
+    terminals = FakeTerminals(live=[stale])
+    session = _session(terminals)
+
+    await _create(session, command, agent_key=agent_key)
+
+    assert terminals.killed == [("term-stale", True)]
     assert terminals.reap_waits == ["term-stale"]
     assert len(terminals.created) == 1
 
