@@ -47,7 +47,7 @@ describe('CliAgentsHelp', () => {
     expect(text).toContain('Supported CLIs')
     expect(text).toContain('Troubleshooting')
     expect(wrapper.findAll('.cah-h2')).toHaveLength(8)
-    expect(wrapper.findAll('.cah-table').at(0)!.findAll('tbody tr')).toHaveLength(14)
+    expect(wrapper.findAll('.cah-table').at(0)!.findAll('tbody tr')).toHaveLength(15)
 
     // `{CLI}` is placeholder prose, not an interpolation — the escape must survive.
     expect(text).toContain('{CLI}')
@@ -63,7 +63,7 @@ describe('CliAgentsHelp', () => {
     expect(text).toContain('疑難排解')
     expect(text).toContain('取得 Session ID 中')
     expect(wrapper.findAll('.cah-h2')).toHaveLength(8)
-    expect(wrapper.findAll('.cah-table').at(0)!.findAll('tbody tr')).toHaveLength(14)
+    expect(wrapper.findAll('.cah-table').at(0)!.findAll('tbody tr')).toHaveLength(15)
 
     expect(text).toContain('{CLI}')
     expect(unexpectedWarnings(warn)).toEqual([])
@@ -138,10 +138,12 @@ describe('CliAgentsHelp', () => {
       'Inside the CLI',
       'muse login',
       'Inside the CLI',
+      'mcode login',
     ])
     // A real command is typeset as one; the fallback is prose, not a command.
     expect(cells.map((c) => c.find('code').exists())).toEqual([
       true, true, false, true, true, false, false, true, false, true, false, false, true, false,
+      true,
     ])
 
     expect(unexpectedWarnings(warn)).toEqual([])

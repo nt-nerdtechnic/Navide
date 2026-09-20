@@ -15,4 +15,5 @@ export const CLI_AGENT_SPECS = [
   { agentKey: 'aider', label: 'Aider', hint: 'generalist' },
   { agentKey: 'muse', label: 'Muse Code', hint: 'generalist' },
   { agentKey: 'droid', label: 'Droid', hint: 'generalist' },
+  { agentKey: 'mcode', label: 'MiniMax Code', hint: 'generalist' },
 ] as const

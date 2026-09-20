@@ -55,6 +55,7 @@ const vendors: VendorRow[] = [
   { name: 'Aider', bin: 'aider', skipFlag: '--yes-always', usage: false, multiAccount: false, signIn: '' },
   { name: 'Muse Code', bin: 'muse', skipFlag: '--disable-approval', usage: false, multiAccount: false, signIn: 'login' },
   { name: 'Droid', bin: 'droid', skipFlag: '--auto high', usage: false, multiAccount: false, signIn: '' },
+  { name: 'MiniMax Code', bin: 'mcode', skipFlag: '', usage: false, multiAccount: false, signIn: 'login' },
 ]
 
 // Row keys for the prose tables; the text for each row is looked up under

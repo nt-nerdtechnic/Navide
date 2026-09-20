@@ -83,7 +83,7 @@ def test_every_declared_trigger_still_produces_a_command() -> None:
     # rewrite, so a typo'd or misplaced value cannot pass silently.
     declared = [k for k, s in VENDORS.items() if s.login_command_args is not None]
 
-    assert set(declared) == {"claude", "codex", "kimi", "grok", "kilo", "copilot", "muse"}
+    assert set(declared) == {"claude", "codex", "kimi", "grok", "kilo", "copilot", "muse", "mcode"}
     for key in declared:
         rewritten = _login_spawn_command(key, f"{key} --some-flag")
         assert rewritten.startswith(key), key

@@ -15,6 +15,7 @@ import { SPEC as droid } from './droid'
 import { SPEC as grok } from './grok'
 import { SPEC as kilo } from './kilo'
 import { SPEC as kimi } from './kimi'
+import { SPEC as mcode } from './mcode'
 import { SPEC as muse } from './muse'
 import { SPEC as opencode } from './opencode'
 import { SPEC as pi } from './pi'
@@ -39,6 +40,7 @@ const ORDERED = [
   aider,
   muse,
   droid,
+  mcode,
   terminal
 ] as const
 

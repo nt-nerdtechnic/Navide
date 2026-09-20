@@ -32,7 +32,8 @@ CLI_AGENTS_HELP = (
 
 EXPECTED_KEYS = {
     "aider", "antigravity", "claude", "codex", "copilot", "cursor",
-    "droid", "grok", "kilo", "kimi", "muse", "opencode", "pi", "qwen",
+    "droid", "grok", "kilo", "kimi", "mcode", "muse", "opencode", "pi",
+    "qwen",
 }
 
 # DEPS entries that are infrastructure, not CLI vendors.
@@ -125,7 +126,11 @@ def _reader_sources() -> dict[str, str]:
     """
     sources: dict[str, str] = {}
     for key, spec in registry.VENDORS.items():
-        assert spec.make_log_reader is not None, f"{key} has no make_log_reader"
+        # Reader-less vendors have no parse_activity to attribute. This runs
+        # only while the caller is already building a failure message, so an
+        # assert here would replace that message with its own.
+        if spec.make_log_reader is None:
+            continue
         parse_activity = type(spec.make_log_reader()).parse_activity
         sources[key] = parse_activity.__module__.rsplit(".", 1)[-1]
     return sources
@@ -139,6 +144,11 @@ def _backend_infers_turn_end_from_silence() -> set[str]:
     """
     inferring: set[str] = set()
     for key, spec in registry.VENDORS.items():
+        # A vendor may ship no reader at all (docs/adding-a-cli-vendor.md
+        # allows an empty log_readers placeholder); it cannot infer a turn end
+        # from silence when it reads nothing.
+        if spec.make_log_reader is None:
+            continue
         parse_activity = type(spec.make_log_reader()).parse_activity
         module = sys.modules[parse_activity.__module__]
         declared = {n for n in vars(module) if _IDLE_CONST_RE.fullmatch(n)}
@@ -491,15 +501,27 @@ def test_session_resume_capability_matches_the_frontend_agent_spec() -> None:
     )
 
 
-def test_aider_is_the_only_vendor_without_session_ids() -> None:
-    """Asserted rather than left to review: it is the one vendor whose resume
-    takes a chat-history PATH, so cli_open_agent(session_id=...) has nothing to
-    name for it and refuses with `no-session-support`."""
+def test_vendors_without_session_ids() -> None:
+    """Asserted rather than left to review, for two different reasons.
+
+    aider is the vendor whose resume takes a chat-history PATH: it has no
+    session id concept at all, so cli_open_agent(session_id=...) has nothing
+    to name for it and refuses with `no-session-support`.
+
+    mcode DOES have session ids (`--session <id>` on its interactive command),
+    but Navide cannot yet learn the id of a session it started, because mcode
+    keeps its history in SQLite and no reader has been written against it. Its
+    entry here is a missing reader, not a missing concept, and should go away
+    when that reader lands.
+    """
     assert registry.VENDORS["aider"].supports_session_resume is False
+    assert registry.VENDORS["mcode"].supports_session_resume is False
     others = {
         k for k, s in registry.VENDORS.items() if not s.supports_session_resume
     }
-    assert others == {"aider"}, f"unexpected vendors without session ids: {sorted(others)}"
+    assert others == {"aider", "mcode"}, (
+        f"unexpected vendors without session ids: {sorted(others)}"
+    )
 
 
 def test_droid_is_never_given_an_effort_capability() -> None:
