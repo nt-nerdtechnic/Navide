@@ -218,7 +218,7 @@ const reclaimNowCount = computed(() => props.reclaimableNowCount ?? 0)
 const reclaimNowSize = computed(() => formatBytes(props.reclaimableNowBytes ?? 0))
 
 // ── Tab ───────────────────────────────────────────────────────────────────────
-type Tab = 'mcp' | 'skills' | 'prompts' | 'memory' | 'analyzer' | 'cliAgents' | 'general' | 'cross-device' | 'updates' | 'appearance' | 'statusBadges' | 'layout' | 'notifications' | 'accounts' | 'extensions' | 'marketplace' | 'keybindings' | 'help'
+type Tab = 'mcp' | 'skills' | 'prompts' | 'memory' | 'analyzer' | 'cliAgents' | 'general' | 'cross-device' | 'updates' | 'appearance' | 'language' | 'statusBadges' | 'layout' | 'notifications' | 'accounts' | 'extensions' | 'marketplace' | 'keybindings' | 'help'
 
 /** Topics inside the Help tab — read-only reference material, no settings. */
 type HelpTopic =
@@ -279,6 +279,7 @@ defineExpose({
   // for one, which it used to do in prose and with nowhere to click.
   setSection: async (tab: Tab, section: string): Promise<void> => {
     activeTab.value = tab
+    if (tab === 'cliAgents') await openCliSection(section)
     await nextTick()
     requestAnimationFrame(() => {
       document
@@ -318,8 +319,7 @@ function refreshCliBinaryOverrides(): void {
 // All four are global-scope keys (`agentTeam.cliModel.*`, `.cliCommand.*`,
 // `.cliEnv.*`), snapshotted when the tab opens for the same reason
 // cliBinaryOverrides is: they are plain settings reads, not reactive stores.
-// The editor is an accordion — one vendor open at a time — because an env table
-// per vendor rendered flat would be fourteen tables down one page.
+// The drawer edits one vendor at a time; drafts never cross agent boundaries.
 const expandedLaunchKey = ref('')
 const launchModels = ref<Record<string, CliModelDefault>>({})
 const launchCommands = ref<Record<string, string>>({})
@@ -347,27 +347,8 @@ function refreshLaunchOverrides(): void {
   launchModelErrors.value = {}
 }
 
-function toggleLaunchRow(k: string): void {
-  expandedLaunchKey.value = expandedLaunchKey.value === k ? '' : k
-  envDraftName.value = ''
-  envDraftValue.value = ''
-}
-
 function launchModelFor(k: string): CliModelDefault {
   return launchModels.value[k] ?? { model: '', effort: '' }
-}
-
-/** What a collapsed row carries, or '' when it carries nothing — otherwise the
- *  only way to find which of fourteen vendors is configured is to open them. */
-function launchSummary(k: string): string {
-  const parts: string[] = []
-  const picked = launchModelFor(k)
-  if (picked.model) parts.push(picked.model)
-  if (picked.effort) parts.push(picked.effort)
-  if ((launchCommands.value[k] ?? '').trim()) parts.push(t('settings.cliLaunch.summary-command'))
-  const envCount = (launchEnvs.value[k] ?? []).length
-  if (envCount > 0) parts.push(t('settings.cliLaunch.summary-env', { count: envCount }))
-  return parts.join(' · ')
 }
 
 /** Write a model/effort pair only if the vendor can actually be told it. The
@@ -458,6 +439,10 @@ const cliAgentRows = computed(() => {
         agentKey: spec.agentKey,
         label: spec.label,
         hint: spec.hint ?? '',
+        version: dep?.version ?? '',
+        needsAttention: dep?.status === 'missing' || dep?.status === 'outdated'
+          || identity?.signedIn === false
+          || !!onboarding.cliHealth.value?.findings.some((finding) => finding.agent_key === spec.agentKey),
         chips: cliAgentRowChips(
           {
             install: dep ? { status: dep.status, version: dep.version } : null,
@@ -562,17 +547,136 @@ function setCliPermissionMode(k: string, mode: CliPermissionMode): void {
 function onPermissionSelect(k: string, e: Event): void {
   setCliPermissionMode(k, parseCliPermissionMode((e.target as HTMLSelectElement).value))
 }
-/** Named in the footnote so the list's absences are explained rather than
- *  looking like an oversight. */
-const flaglessVendors = computed(() =>
-  CLI_AGENT_SPECS.filter((s) => !s.skipPermissionFlag)
-    .map((s) => s.label)
-    .join(' / ')
-)
+type CliDrawerTab = 'overview' | 'launch' | 'permissions' | 'push' | 'install'
+const cliDrawerTabs: CliDrawerTab[] = ['overview', 'launch', 'permissions', 'push', 'install']
+const cliFilter = ref<'all' | 'enabled' | 'attention'>('all')
+const cliFilterQuery = ref('')
+const selectedCliKey = ref('')
+const lastManagedCliKey = ref('')
+const cliDrawerTab = ref<CliDrawerTab>('overview')
+const cliDrawerRef = ref<HTMLElement | null>(null)
+const cliGridRef = ref<HTMLElement | null>(null)
+const cliPanelRef = ref<InstanceType<typeof CliManagementPanel> | null>(null)
+const cliInstallOpen = ref(false)
+let cliDrawerTrigger: HTMLElement | null = null
+const selectedCli = computed(() => cliAgentRows.value.find((row) => row.agentKey === selectedCliKey.value))
+const selectedLaunchRows = computed(() => launchRows.value.filter((row) => row.agentKey === selectedCliKey.value))
+const selectedPermissionRows = computed(() => permissionRows.value.filter((row) => row.agentKey === selectedCliKey.value))
+const selectedPushRows = computed(() => pushChannelRows.value.filter((row) => row.agentKey === selectedCliKey.value))
+const cliCanReorder = computed(() => cliFilter.value === 'all' && !cliFilterQuery.value.trim())
+const filteredCliRows = computed(() => {
+  const query = cliFilterQuery.value.trim().toLowerCase()
+  return cliAgentRows.value.filter((row) =>
+    (!query || `${row.label} ${row.agentKey}`.toLowerCase().includes(query))
+    && (cliFilter.value !== 'enabled' || cliAgentEnabled(row.agentKey))
+    && (cliFilter.value !== 'attention' || row.needsAttention)
+  )
+})
+
+async function openCliDrawer(key: string, tab: CliDrawerTab = 'overview', trigger?: EventTarget | null): Promise<void> {
+  if (!CLI_AGENT_SPECS.some((spec) => spec.agentKey === key)) return
+  cliDrawerTrigger = trigger instanceof HTMLElement
+    ? trigger.closest('.cli-agent-card')?.querySelector<HTMLElement>('.cli-agent-manage') ?? trigger
+    : document.activeElement as HTMLElement | null
+  selectedCliKey.value = key
+  lastManagedCliKey.value = key
+  expandedLaunchKey.value = key
+  cliDrawerTab.value = tab
+  envDraftName.value = ''
+  envDraftValue.value = ''
+  await nextTick()
+  cliDrawerRef.value?.querySelector<HTMLButtonElement>('.cli-drawer-close')?.focus()
+}
+
+async function closeCliDrawer(restoreFocus = true): Promise<void> {
+  if (cliInstallOpen.value) return
+  const key = selectedCliKey.value
+  selectedCliKey.value = ''
+  expandedLaunchKey.value = ''
+  envDraftName.value = ''
+  envDraftValue.value = ''
+  await nextTick()
+  if (restoreFocus && activeTab.value === 'cliAgents') {
+    if (cliDrawerTrigger?.isConnected) cliDrawerTrigger.focus()
+    else {
+      const card = [...(cliGridRef.value?.querySelectorAll<HTMLElement>('.cli-agent-card') ?? [])]
+        .find((element) => element.dataset.agentKey === key)
+      const target = card?.querySelector<HTMLElement>('.cli-agent-manage')
+        ?? cliGridRef.value?.querySelector<HTMLInputElement>('.cli-agent-filter-search')
+      target?.focus()
+    }
+  }
+  cliDrawerTrigger = null
+}
+
+function closeSettingsLayer(): void {
+  if (cliInstallOpen.value) { cliPanelRef.value?.closeInstallDialog(); return }
+  if (selectedCliKey.value) { void closeCliDrawer(); return }
+  emit('close')
+}
+
+async function openCliSection(section: string, query = ''): Promise<void> {
+  const sectionTabs: Record<string, CliDrawerTab> = {
+    'cli-agents-launch': 'launch',
+    'cli-agents-permissions': 'permissions',
+    'cli-agents-push': 'push',
+    'cli-agents-maintenance': 'install',
+  }
+  const tab = sectionTabs[section]
+  if (!tab) { await closeCliDrawer(false); return }
+  const candidates = cliAgentRows.value.filter((row) =>
+    tab === 'permissions' ? permissionRows.value.some((spec) => spec.agentKey === row.agentKey)
+      : tab === 'push' ? pushChannelRows.value.some((spec) => spec.agentKey === row.agentKey) : true)
+  const text = ` ${query.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()} `
+  // Match whole names before choosing a supported default: "Copilot" must not
+  // select Pi, and explicitly requesting Codex Push must explain its absence.
+  const namedAgent = [...cliAgentRows.value]
+    .sort((a, b) => b.label.length - a.label.length)
+    .find((row) => [row.agentKey, row.label].some((name) =>
+      text.includes(` ${name.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()} `)))
+  const agent = namedAgent
+    ?? candidates.find((row) => row.agentKey === lastManagedCliKey.value) ?? candidates[0]
+  if (agent) await openCliDrawer(agent.agentKey, tab)
+}
+
+function moveCliAgent(key: string, direction: -1 | 1): void {
+  if (!cliCanReorder.value) return
+  const keys = cliAgentRows.value.map((row) => row.agentKey)
+  const index = keys.indexOf(key)
+  const target = index + direction
+  if (index < 0 || target < 0 || target >= keys.length) return
+  keys.splice(target, 0, keys.splice(index, 1)[0])
+  cliOrder.value = keys
+}
+
+function trapCliDrawerFocus(event: KeyboardEvent): void {
+  const root = cliInstallOpen.value
+    ? cliDrawerRef.value?.querySelector<HTMLElement>('.ci-dialog')
+    : cliDrawerRef.value
+  if (!root) return
+  const controls = [...root.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex="0"]')]
+    .filter((element) => {
+      for (let parent: HTMLElement | null = element; parent && parent !== root; parent = parent.parentElement) {
+        if (parent.hidden || parent.hasAttribute('inert') || getComputedStyle(parent).display === 'none') return false
+      }
+      return true
+    })
+  const first = controls[0]
+  const last = controls[controls.length - 1]
+  if (!first) { event.preventDefault(); root.focus(); return }
+  if (!root.contains(document.activeElement) || (event.shiftKey && document.activeElement === first)) {
+    event.preventDefault()
+    ;(event.shiftKey ? last : first).focus()
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault()
+    first.focus()
+  }
+}
 
 const cliDragKey = ref('')
 const cliDragOverKey = ref('')
 function onCliDragStart(e: DragEvent, k: string): void {
+  if (!cliCanReorder.value) { e.preventDefault(); return }
   cliDragKey.value = k
   if (e.dataTransfer) {
     e.dataTransfer.effectAllowed = 'move'
@@ -591,7 +695,7 @@ function onCliDrop(k: string): void {
   const from = cliDragKey.value
   cliDragOverKey.value = ''
   cliDragKey.value = ''
-  if (!from || from === k) return
+  if (!cliCanReorder.value || !from || from === k) return
   const keys = cliAgentRows.value.map((s) => s.agentKey)
   const fi = keys.indexOf(from)
   const ti = keys.indexOf(k)
@@ -784,10 +888,10 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
   },
   {
     id: 'appearance-language',
-    tab: 'appearance',
+    tab: 'language',
     section: 'appearance-language',
     title: t('settings.search.item.appearance-language.title'),
-    group: t('settings.nav.appearance'),
+    group: t('settings.nav.language'),
     summary: t('settings.search.item.appearance-language.summary'),
     keywords: 'language locale 語言 繁體中文 english en-us zh-tw',
   },
@@ -1037,6 +1141,7 @@ async function openSettingsSearchResult(item: SettingsSearchItem): Promise<void>
     return
   }
   activeTab.value = item.tab
+  if (item.tab === 'cliAgents') await openCliSection(item.section, settingsSearchQuery.value)
   if (item.tab === 'mcp' && item.mcpView) mView.value = item.mcpView
   if (item.tab === 'help' && item.helpTopic) helpTopic.value = item.helpTopic
   settingsSearchQuery.value = ''
@@ -1084,7 +1189,7 @@ const {
   resetCustom,
 } = useTheme()
 
-// ── Appearance (language) ─────────────────────────────────────────────────────
+// ── Language ──────────────────────────────────────────────────────────────────
 const { language: currentLanguage, setLanguage, healthCheckTimeoutSec, setHealthCheckTimeoutSec } = useSettings()
 
 // Auto-restore workspace windows on next launch (main-process setting, stored in
@@ -1313,6 +1418,7 @@ const settingsScopeNotes: Record<SettingsTab, { scope: SettingsScope; storage: k
   'cross-device': { scope: 'accountServer', storage: 'safeStorage' },
   updates: { scope: 'user', storage: 'mainProcess' },
   appearance: { scope: 'user', storage: 'localStorage' },
+  language: { scope: 'user', storage: 'localStorage' },
   // The user's own names and colours for the pane status badges.
   statusBadges: { scope: 'user', storage: 'localStorage' },
   // One arrangement for every workspace, shared live across windows.
@@ -1736,13 +1842,25 @@ watch(activeTab, (tab) => {
 
 // Close on ESC.
 function onKeyDown(e: KeyboardEvent) {
+  if (selectedCliKey.value && activeTab.value === 'cliAgents') {
+    if (e.key === 'Tab') { trapCliDrawerFocus(e); return }
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      if (cliInstallOpen.value) cliPanelRef.value?.closeInstallDialog()
+      else void closeCliDrawer()
+      return
+    }
+  }
   if (e.key !== 'Escape') return
+  if (e.defaultPrevented) return
   emit('close')
 }
 onMounted(() => {
   window.addEventListener('keydown', onKeyDown)
   refreshCliBinaryOverrides()
   refreshLaunchOverrides()
+  if (activeTab.value === 'cliAgents') void onboarding.refresh()
   void loadSettingsPaths()
   void loadDetectedEditors()
   void perms.refresh()
@@ -2185,6 +2303,10 @@ watch(activeTab, (tab) => {
   if (tab === 'cliAgents') {
     refreshCliBinaryOverrides()
     refreshLaunchOverrides()
+    void onboarding.refresh()
+  } else {
+    cliInstallOpen.value = false
+    void closeCliDrawer(false)
   }
 })
 
@@ -2193,11 +2315,11 @@ watch(activeTab, (tab) => {
 <template>
   <Teleport to="body">
     <!-- Overlay -->
-    <div class="s-overlay nv-modal-overlay" @click.self="emit('close')">
+    <div class="s-overlay nv-modal-overlay" @click.self="closeSettingsLayer()">
       <div class="s-modal nv-modal-shell nv-modal-shell--wide">
 
         <!-- ── Sidebar (title + search + grouped nav) ────────────────────── -->
-        <aside class="s-sidebar">
+        <aside class="s-sidebar" :inert="!!selectedCliKey">
           <div class="s-ws-header">
             <div class="s-ws-avatar" aria-hidden="true">
               <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v1.8M8 12.7v1.8M14.5 8h-1.8M3.3 8H1.5M12.6 3.4l-1.3 1.3M4.7 11.3l-1.3 1.3M12.6 12.6l-1.3-1.3M4.7 4.7 3.4 3.4"/></svg>
@@ -2246,6 +2368,11 @@ watch(activeTab, (tab) => {
               <SettingsNavItem :label="$t('settings.nav.appearance')" :active="activeTab === 'appearance'" @select="activeTab = 'appearance'">
                 <template #icon>
                   <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10.5 2.5 13.5 5.5 6.5 12.5 3.5 12.5 3.5 9.5 10.5 2.5Z"/><path d="M9 4l3 3"/></svg>
+                </template>
+              </SettingsNavItem>
+              <SettingsNavItem :label="$t('settings.nav.language')" :active="activeTab === 'language'" @select="activeTab = 'language'">
+                <template #icon>
+                  <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6.5"/><ellipse cx="8" cy="8" rx="2.7" ry="6.5"/><path d="M1.5 8h13"/></svg>
                 </template>
               </SettingsNavItem>
               <SettingsNavItem :label="$t('settings.nav.statusBadges')" :active="activeTab === 'statusBadges'" @select="activeTab = 'statusBadges'">
@@ -2348,7 +2475,7 @@ watch(activeTab, (tab) => {
 
         <!-- ── Content (close button + all tab bodies) ───────────────────── -->
         <div class="s-content">
-          <button class="s-close" @click="emit('close')" :title="$t('action.close-esc')">✕</button>
+          <button class="s-close" :inert="!!selectedCliKey" @click="emit('close')" :title="$t('action.close-esc')">✕</button>
 
         <!-- ── MCP TAB ───────────────────────────────────────────────────── -->
         <div v-show="activeTab === 'mcp'" class="s-body s-body--bleed mcp-body">
@@ -2824,75 +2951,90 @@ watch(activeTab, (tab) => {
 
         <!-- ══ CLI AGENTS TAB ══ -->
         <div v-show="activeTab === 'cliAgents'" class="s-body cli-agents-body">
+          <div ref="cliGridRef" class="cli-agent-roster" :inert="!!selectedCliKey">
           <h1 class="s-page-title">{{ $t('settings.nav.cliAgents') }}</h1>
           <section class="ap-section" data-settings-section="cli-agents-list">
-            <h3 class="ap-title">{{ $t('settings.cliAgents.title') }}</h3>
             <p class="ap-hint">{{ $t('settings.cliAgents.hint') }}</p>
-            <ul class="cli-agent-list">
+            <div class="cli-agent-toolbar">
+              <input v-model="cliFilterQuery" type="search" class="cli-agent-filter-search" :placeholder="$t('settings.cliAgents.search')" :aria-label="$t('settings.cliAgents.search')" />
+              <div class="cli-agent-filters" :aria-label="$t('settings.cliAgents.filter-label')">
+                <button v-for="filter in (['all', 'enabled', 'attention'] as const)" :key="filter" type="button" :data-cli-filter="filter" :aria-pressed="cliFilter === filter" @click="cliFilter = filter">{{ $t(`settings.cliAgents.filter-${filter}`) }}</button>
+              </div>
+              <button type="button" :disabled="onboarding.loading.value" @click="onboarding.refresh({ fresh: true })">{{ $t('cli-manage.redetect') }}</button>
+            </div>
+            <p class="ap-hint cli-agent-count">{{ $t('settings.cliAgents.count', { visible: filteredCliRows.length, total: cliAgentRows.length, enabled: cliEnabledCount }) }} · {{ $t(cliCanReorder ? 'settings.cliAgents.drag-hint' : 'settings.cliAgents.reorder-filtered') }}</p>
+            <ul class="cli-agent-grid">
               <li
-                v-for="row in cliAgentRows"
+                v-for="(row, index) in filteredCliRows"
                 :key="row.agentKey"
-                class="cli-agent-row cli-agent-row--stacked"
+                class="cli-agent-card"
+                :data-agent-key="row.agentKey"
                 :class="{ 'drag-over': cliDragOverKey === row.agentKey, 'is-disabled': !cliAgentEnabled(row.agentKey) }"
-                draggable="true"
+                :draggable="cliCanReorder"
                 @dragstart="onCliDragStart($event, row.agentKey)"
                 @dragover="onCliDragOver($event, row.agentKey)"
                 @dragenter="onCliDragOver($event, row.agentKey)"
                 @dragleave="onCliDragLeave(row.agentKey)"
                 @drop.prevent="onCliDrop(row.agentKey)"
+                @dragend="cliDragKey = ''; cliDragOverKey = ''"
+                @click="openCliDrawer(row.agentKey, 'overview', $event.currentTarget)"
               >
-                <span class="cli-agent-grip" :title="$t('settings.cliAgents.drag-hint')">⠿</span>
-                <div class="cli-agent-stack">
-                  <div class="cli-agent-line">
-                    <label class="cli-agent-toggle">
-                      <input
-                        type="checkbox"
-                        :checked="cliAgentEnabled(row.agentKey)"
-                        :disabled="cliAgentEnabled(row.agentKey) && cliEnabledCount <= 1"
-                        @change="toggleCliAgent(row.agentKey)"
-                      />
-                      <span class="cli-agent-label">{{ row.label }}</span>
-                    </label>
-                    <span v-if="row.hint" class="cli-agent-hint">{{ row.hint }}</span>
-                  </div>
-                  <div v-if="row.chips.length" class="cli-agent-chips">
-                    <span
-                      v-for="chip in row.chips"
-                      :key="chip.id"
-                      class="cli-chip"
-                      :class="`cli-chip--${chip.tone}`"
-                    >{{ chip.label }}</span>
-                  </div>
+                <div class="cli-card-heading">
+                  <span class="cli-card-icon" aria-hidden="true">{{ row.label.slice(0, 2).toUpperCase() }}</span>
+                  <span class="cli-agent-label">{{ row.label }}</span>
+                  <span v-if="row.needsAttention" class="cli-card-attention" :title="$t('settings.cliAgents.filter-attention')" :aria-label="$t('settings.cliAgents.filter-attention')">!</span>
+                </div>
+                <div class="cli-card-status">
+                  <span v-for="chip in row.chips.filter((chip) => chip.id === 'install' || chip.id === 'account' || chip.id === 'push')" :key="chip.id" class="cli-chip" :class="`cli-chip--${chip.tone}`">{{ chip.label }}</span>
+                  <span v-if="!row.chips.some((chip) => chip.id === 'install')" class="cli-agent-hint">{{ $t('settings.cliAgents.not-detected') }}</span>
+                </div>
+                <div class="cli-card-footer">
+                  <label class="cli-agent-toggle" @click.stop>
+                    <input type="checkbox" :checked="cliAgentEnabled(row.agentKey)" :disabled="cliAgentEnabled(row.agentKey) && cliEnabledCount <= 1" :aria-label="$t('settings.cliAgents.enable-agent', { agent: row.label })" @change="toggleCliAgent(row.agentKey)" />
+                    <span>{{ $t('settings.cliAgents.enabled') }}</span>
+                  </label>
+                  <button type="button" class="cli-agent-manage" :aria-label="$t('settings.cliAgents.manage-agent', { agent: row.label })" @click.stop="openCliDrawer(row.agentKey, 'overview', $event.currentTarget)">{{ $t('settings.cliAgents.manage') }} ›</button>
+                </div>
+                <div class="cli-card-order" @click.stop>
+                  <span class="cli-agent-grip" aria-hidden="true">⠿</span>
+                  <button type="button" :disabled="!cliCanReorder || index === 0" :aria-label="$t('settings.cliAgents.move-up', { agent: row.label })" @click="moveCliAgent(row.agentKey, -1)">↑</button>
+                  <button type="button" :disabled="!cliCanReorder || index === filteredCliRows.length - 1" :aria-label="$t('settings.cliAgents.move-down', { agent: row.label })" @click="moveCliAgent(row.agentKey, 1)">↓</button>
                 </div>
               </li>
             </ul>
-            <div class="cli-agent-chips cli-agent-legend">
-              <span class="cli-chip cli-chip--ok">{{ $t('settings.cliAgents.legend.ok') }}</span>
-              <span class="cli-chip cli-chip--warn">{{ $t('settings.cliAgents.legend.warn') }}</span>
-              <span class="cli-chip cli-chip--bad">{{ $t('settings.cliAgents.legend.bad') }}</span>
-              <span class="cli-chip">{{ $t('settings.cliAgents.legend.neutral') }}</span>
-            </div>
+            <p v-if="!filteredCliRows.length" class="cli-agent-empty">{{ $t('settings.cliAgents.no-results') }}</p>
           </section>
-          <section class="ap-section" data-settings-section="cli-agents-launch">
+          </div>
+          <Transition name="cli-drawer">
+          <div v-if="selectedCli" class="cli-drawer-layer">
+            <div class="cli-drawer-scrim" @click="closeCliDrawer()"></div>
+            <section ref="cliDrawerRef" class="cli-agent-drawer" role="dialog" aria-modal="true" aria-labelledby="cli-drawer-title" :data-agent-key="selectedCli.agentKey" tabindex="-1">
+              <header class="cli-drawer-header" :inert="cliInstallOpen">
+                <div><h2 id="cli-drawer-title">{{ selectedCli.label }}</h2><p class="cli-agent-hint">{{ selectedCli.version }}</p></div>
+                <button type="button" class="cli-drawer-close" :aria-label="$t('settings.cliAgents.close-drawer')" @click="closeCliDrawer()">✕</button>
+              </header>
+              <div class="cli-drawer-tabs" role="tablist" :aria-label="$t('settings.cliAgents.agent-settings')" :inert="cliInstallOpen">
+                <button v-for="tab in cliDrawerTabs" :id="`cli-tab-${tab}`" :key="tab" type="button" role="tab" :data-cli-tab="tab" :aria-selected="cliDrawerTab === tab" :aria-controls="`cli-panel-${tab}`" @click="cliDrawerTab = tab">{{ $t(`settings.cliAgents.tab-${tab}`) }}</button>
+              </div>
+              <div class="cli-drawer-content">
+              <section v-show="cliDrawerTab === 'overview'" id="cli-panel-overview" class="ap-section cli-overview" role="tabpanel" aria-labelledby="cli-tab-overview">
+                <h3 class="ap-title">{{ $t('settings.cliAgents.tab-overview') }}</h3>
+                <p v-if="selectedCli.hint" class="ap-hint">{{ selectedCli.hint }}</p>
+                <div class="cli-agent-chips"><span v-for="chip in selectedCli.chips" :key="chip.id" class="cli-chip" :class="`cli-chip--${chip.tone}`">{{ chip.label }}</span></div>
+                <label class="cli-agent-toggle"><input type="checkbox" :checked="cliAgentEnabled(selectedCli.agentKey)" :disabled="cliAgentEnabled(selectedCli.agentKey) && cliEnabledCount <= 1" @change="toggleCliAgent(selectedCli.agentKey)" />{{ $t('settings.cliAgents.enabled') }}</label>
+                <p class="ap-hint">{{ $t('settings.cliAgents.overview-hint') }}</p>
+                <div class="cli-overview-links"><button v-for="tab in cliDrawerTabs.filter((tab) => tab !== 'overview')" :key="tab" type="button" @click="cliDrawerTab = tab">{{ $t(`settings.cliAgents.tab-${tab}`) }} →</button></div>
+              </section>
+          <section v-show="cliDrawerTab === 'launch'" id="cli-panel-launch" class="ap-section" data-settings-section="cli-agents-launch" role="tabpanel" aria-labelledby="cli-tab-launch">
             <h3 class="ap-title">{{ $t('settings.cliLaunch.title') }}</h3>
             <p class="ap-hint">{{ $t('settings.cliLaunch.hint') }}</p>
             <ul class="cli-agent-list">
               <li
-                v-for="row in launchRows"
+                v-for="row in selectedLaunchRows"
                 :key="row.agentKey"
                 class="cli-agent-row launch-row"
                 :class="{ 'launch-open': expandedLaunchKey === row.agentKey }"
               >
-                <button
-                  type="button"
-                  class="launch-head"
-                  :aria-expanded="expandedLaunchKey === row.agentKey"
-                  @click="toggleLaunchRow(row.agentKey)"
-                >
-                  <span class="launch-caret">{{ expandedLaunchKey === row.agentKey ? '▾' : '▸' }}</span>
-                  <span class="cli-agent-label">{{ row.label }}</span>
-                  <span class="cli-agent-hint launch-summary">{{ launchSummary(row.agentKey) }}</span>
-                </button>
                 <div v-if="expandedLaunchKey === row.agentKey" class="launch-body">
                   <div v-if="row.supportsModel" class="launch-field">
                     <span class="launch-field-label">{{ $t('settings.cliLaunch.model-label') }}</span>
@@ -3025,7 +3167,7 @@ watch(activeTab, (tab) => {
             <p class="ap-hint">{{ $t('settings.cliLaunch.reserved-note', { list: reservedEnvKeyList }) }}</p>
             <p class="ap-hint">{{ $t('settings.cliLaunch.restart-note') }}</p>
           </section>
-          <section class="ap-section" data-settings-section="cli-agents-permissions">
+          <section v-show="cliDrawerTab === 'permissions'" id="cli-panel-permissions" class="ap-section" data-settings-section="cli-agents-permissions" role="tabpanel" aria-labelledby="cli-tab-permissions">
             <h3 class="ap-title">{{ $t('settings.cliPermission.title') }}</h3>
             <p class="ap-hint">{{ $t('settings.cliPermission.hint') }}</p>
             <label class="cli-agent-toggle perm-global">
@@ -3034,7 +3176,7 @@ watch(activeTab, (tab) => {
             </label>
             <ul class="cli-agent-list">
               <li
-                v-for="spec in permissionRows"
+                v-for="spec in selectedPermissionRows"
                 :key="spec.agentKey"
                 class="cli-agent-row perm-row"
                 :class="{ 'perm-overridden': cliPermissionMode(spec.agentKey) !== 'inherit' }"
@@ -3053,14 +3195,14 @@ watch(activeTab, (tab) => {
                 </select>
               </li>
             </ul>
-            <p class="ap-hint">{{ $t('settings.cliPermission.flagless-note', { list: flaglessVendors }) }}</p>
+            <p v-if="!selectedPermissionRows.length" class="ap-hint">{{ $t('settings.cliPermission.flagless-note', { list: selectedCli.label }) }}</p>
             <p class="ap-hint">{{ $t('settings.cliPermission.restart-note') }}</p>
           </section>
-          <section class="ap-section" data-settings-section="cli-agents-push">
+          <section v-show="cliDrawerTab === 'push'" id="cli-panel-push" class="ap-section" data-settings-section="cli-agents-push" role="tabpanel" aria-labelledby="cli-tab-push">
             <h3 class="ap-title">{{ $t('settings.pushChannels.title') }}</h3>
             <p class="ap-hint">{{ $t('settings.pushChannels.hint') }}</p>
             <ul class="cli-agent-list">
-              <li v-for="spec in pushChannelRows" :key="spec.agentKey" class="cli-agent-row">
+              <li v-for="spec in selectedPushRows" :key="spec.agentKey" class="cli-agent-row">
                 <label class="cli-agent-toggle">
                   <input
                     type="checkbox"
@@ -3072,6 +3214,7 @@ watch(activeTab, (tab) => {
                 <span class="cli-agent-hint">{{ $t(`settings.pushChannels.cost-${spec.agentKey}`) }}</span>
               </li>
             </ul>
+            <p v-if="!selectedPushRows.length" class="ap-hint">{{ $t('settings.cliAgents.no-push-channel') }}</p>
             <div v-if="allPushChannelsOff" class="push-all-off">
               <div class="push-all-off-title">{{ $t('settings.pushChannels.all-off-title') }}</div>
               <ul class="push-all-off-list">
@@ -3082,15 +3225,22 @@ watch(activeTab, (tab) => {
             </div>
             <p class="ap-hint">{{ $t('settings.pushChannels.restart-note') }}</p>
           </section>
-          <section class="ap-section" data-settings-section="cli-agents-maintenance">
+          <section v-show="cliDrawerTab === 'install'" id="cli-panel-install" class="ap-section" data-settings-section="cli-agents-maintenance" role="tabpanel" aria-labelledby="cli-tab-install">
             <CliManagementPanel
               v-if="activeTab === 'cliAgents'"
+              ref="cliPanelRef"
+              :agent-key="selectedCli.agentKey"
               :backend="props.backend"
               :onboarding="onboarding"
               :cli-profiles="cliProfilesApi"
               @login="(agentKey: string) => emit('cli-login', agentKey)"
+              @install-open-change="cliInstallOpen = $event"
             />
           </section>
+              </div>
+            </section>
+          </div>
+          </Transition>
         </div>
 
         <!-- ══ GENERAL TAB ══ -->
@@ -3866,30 +4016,6 @@ watch(activeTab, (tab) => {
             </div>
           </SettingsSection>
 
-          <SettingsSection :label="$t('settings.section.language')">
-            <SettingsCard>
-              <SettingRow
-                data-settings-section="appearance-language"
-                :title="$t('settings.appearance.language')"
-                :description="$t('settings.appearance.language-hint')"
-              >
-                <template #control>
-                  <div class="ap-lang-row">
-                    <button
-                      v-for="lang in SUPPORTED_LANGUAGES"
-                      :key="lang.value"
-                      :class="['ap-lang-btn', { active: currentLanguage === lang.value }]"
-                      @click="setLanguage(lang.value)"
-                    >
-                      {{ $t(lang.labelKey) }}
-                      <span v-if="currentLanguage === lang.value" class="ap-check">✓</span>
-                    </button>
-                  </div>
-                </template>
-              </SettingRow>
-            </SettingsCard>
-          </SettingsSection>
-
           <SettingsSection :label="$t('settings.section.other')">
             <SettingsCard>
               <SettingRow
@@ -3920,6 +4046,35 @@ watch(activeTab, (tab) => {
             </SettingsCard>
           </SettingsSection>
 
+        </div>
+
+        <!-- ══ LANGUAGE TAB ══ -->
+        <div v-show="activeTab === 'language'" class="s-body appearance-body">
+          <h1 class="s-page-title">{{ $t('settings.nav.language') }}</h1>
+
+          <SettingsSection :label="$t('settings.section.language')">
+            <SettingsCard>
+              <SettingRow
+                data-settings-section="appearance-language"
+                :title="$t('settings.appearance.language')"
+                :description="$t('settings.appearance.language-hint')"
+              >
+                <template #control>
+                  <div class="ap-lang-row">
+                    <button
+                      v-for="lang in SUPPORTED_LANGUAGES"
+                      :key="lang.value"
+                      :class="['ap-lang-btn', { active: currentLanguage === lang.value }]"
+                      @click="setLanguage(lang.value)"
+                    >
+                      {{ $t(lang.labelKey) }}
+                      <span v-if="currentLanguage === lang.value" class="ap-check">✓</span>
+                    </button>
+                  </div>
+                </template>
+              </SettingRow>
+            </SettingsCard>
+          </SettingsSection>
         </div>
 
         <div v-show="activeTab === 'accounts'" class="s-body s-body--bleed accounts-body" data-settings-section="accounts">
@@ -4309,27 +4464,79 @@ watch(activeTab, (tab) => {
 .setting-row-control select { width: auto; min-width: 120px; }
 .setting-row-control input[type='number'] { width: 96px; }
 
-/* CLI Agents tab — enable/disable + drag-reorder list */
+/* CLI Agents cards and the selected agent's contained drawer. */
+.cli-agent-roster { flex: 1; min-height: 0; overflow-y: auto; padding: 18px 22px; }
+.cli-agent-toolbar, .cli-agent-filters { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.cli-agent-toolbar input { flex: 1; min-width: 130px; }
+.cli-agent-toolbar button, .cli-card-order button, .cli-agent-manage, .cli-overview-links button {
+  border: 1px solid var(--border-default); border-radius: var(--radius-sm);
+  background: var(--bg-elevated); color: var(--text-primary); padding: 5px 9px; font: inherit; font-size: var(--font-xs); cursor: pointer;
+}
+.cli-agent-toolbar button[aria-pressed='true'] { color: var(--accent-fg); background: var(--accent-subtle); border-color: var(--accent-focus); }
+.cli-agent-toolbar button:disabled, .cli-card-order button:disabled { opacity: .4; cursor: default; }
+.cli-agent-count { margin: 10px 0 14px; }
+.cli-agent-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(210px, 100%), 1fr)); gap: 12px; list-style: none; padding: 0; margin: 0; }
+.cli-agent-card { display: flex; flex-direction: column; gap: 12px; min-width: 0; padding: 14px; border: 1px solid var(--border-default); border-radius: var(--radius-md); background: var(--bg-elevated); cursor: pointer; }
+.cli-agent-card:hover { border-color: var(--border-strong); }
+.cli-agent-card.drag-over { box-shadow: inset 0 0 0 2px var(--accent-focus); }
+.cli-agent-card.is-disabled { background: var(--bg-muted); }
+.cli-agent-card.is-disabled .cli-card-heading { opacity: .6; }
+.cli-card-heading { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.cli-card-heading .cli-agent-label { overflow-wrap: anywhere; }
+.cli-card-icon { display: grid; place-items: center; width: 30px; height: 30px; flex: 0 0 30px; border-radius: 8px; background: var(--bg-muted); color: var(--text-secondary); font-size: var(--font-xs); font-weight: 700; }
+.cli-card-attention { margin-left: auto; color: var(--warning-fg, #c77400); font-weight: 700; }
+.cli-card-status { display: flex; align-items: flex-start; flex-direction: column; gap: 4px; min-height: 42px; }
+.cli-card-status .cli-chip { max-width: 100%; overflow: hidden; text-overflow: ellipsis; box-sizing: border-box; }
+.cli-card-footer { display: flex; align-items: center; gap: 8px; margin-top: auto; font-size: var(--font-xs); }
+.cli-card-order { display: flex; align-items: center; gap: 5px; border-top: 1px solid var(--border-muted); padding-top: 7px; }
+.cli-card-order .cli-agent-grip { margin-right: auto; }
+.cli-card-order button { padding: 1px 7px; }
+.cli-agent-empty { color: var(--text-secondary); text-align: center; padding: 30px 10px; }
+.cli-drawer-layer { position: absolute; inset: 0; z-index: 20; }
+.cli-drawer-scrim { position: absolute; inset: 0; background: rgb(0 0 0 / .25); }
+.cli-agent-drawer { position: absolute; inset: 0 0 0 auto; width: min(600px, 100%); display: flex; flex-direction: column; background: var(--bg-base); border-left: 1px solid var(--border-default); box-shadow: var(--shadow-modal); min-width: 0; }
+.cli-drawer-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 18px 20px 12px; }
+.cli-drawer-header h2 { margin: 0; font-size: var(--font-lg); }
+.cli-drawer-header p { margin: 3px 0 0; }
+.cli-drawer-close { border: 0; background: none; color: var(--text-secondary); cursor: pointer; font-size: var(--font-md); padding: 4px 8px; }
+.cli-drawer-tabs { display: flex; flex: 0 0 auto; gap: 3px; overflow-x: auto; padding: 0 14px; border-bottom: 1px solid var(--border-default); }
+.cli-drawer-tabs button { border: 0; border-bottom: 2px solid transparent; background: none; color: var(--text-secondary); padding: 9px 8px; white-space: nowrap; font-size: var(--font-xs); cursor: pointer; }
+.cli-drawer-tabs button[aria-selected='true'] { color: var(--accent-fg); border-bottom-color: var(--accent-focus); }
+.cli-drawer-content { flex: 1; min-height: 0; overflow-y: auto; padding: 18px 20px; }
+.cli-drawer-content .ap-section { margin: 0; }
+.cli-overview > .cli-agent-toggle { margin: 18px 0; }
+.cli-overview-links { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.cli-agent-drawer .launch-body { padding: 12px; border-top: 0; }
+.cli-agent-drawer .launch-field { align-items: flex-start; flex-direction: column; gap: 4px; }
+.cli-agent-drawer .launch-field-label { flex: none; }
+.cli-agent-drawer .launch-field .launch-input { width: 100%; box-sizing: border-box; }
+.cli-agent-drawer .perm-row { flex-wrap: wrap; }
+.cli-agent-drawer .perm-name { display: none; }
+.cli-agent-drawer .perm-flag { flex-basis: 100%; }
+.cli-agent-drawer .launch-env-table { table-layout: fixed; }
+.cli-agent-drawer .launch-env-table td:last-child, .cli-agent-drawer .launch-env-table th:last-child { width: 62px; }
+.cli-agent-drawer .launch-env-table .launch-input { width: 100%; box-sizing: border-box; }
+.cli-agent-drawer .env-name { display: table-cell; overflow-wrap: anywhere; }
+.cli-drawer-enter-active .cli-agent-drawer, .cli-drawer-leave-active .cli-agent-drawer { transition: transform .18s ease; }
+.cli-drawer-enter-from .cli-agent-drawer, .cli-drawer-leave-to .cli-agent-drawer { transform: translateX(100%); }
+@media (max-width: 960px) {
+  .cli-agent-drawer { width: 100%; border-left: 0; }
+  .cli-agent-roster { padding: 16px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cli-drawer-enter-active .cli-agent-drawer, .cli-drawer-leave-active .cli-agent-drawer { transition: none; }
+}
 .cli-agent-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .cli-agent-row {
   display: flex; align-items: center; gap: 10px;
   padding: 8px 12px; border: 1px solid var(--border-default); border-radius: var(--radius-md);
   background: var(--bg-elevated);
 }
-.cli-agent-row.drag-over { box-shadow: inset 0 0 0 2px var(--accent-focus); background: var(--accent-subtle); }
-.cli-agent-row.is-disabled { opacity: 0.55; }
 .cli-agent-grip { color: var(--text-secondary); cursor: grab; user-select: none; font-size: var(--font-md); }
 .cli-agent-toggle { display: flex; align-items: center; gap: 8px; flex: 1; cursor: pointer; margin: 0; }
 .cli-agent-label { font-size: var(--font-sm); font-weight: 600; }
 .cli-agent-hint { font-size: var(--font-2xs); color: var(--text-secondary); }
-/* A row that also summarises the vendor's current settings: name line on top,
-   status chips underneath, the grip staying level with the name. */
-.cli-agent-row--stacked { align-items: flex-start; }
-.cli-agent-row--stacked .cli-agent-grip { padding-top: 1px; }
-.cli-agent-stack { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 0; }
-.cli-agent-line { display: flex; align-items: center; gap: 10px; }
 .cli-agent-chips { display: flex; flex-wrap: wrap; gap: 5px; }
-.cli-agent-legend { margin-top: 10px; }
 .cli-chip {
   font-size: var(--font-2xs); font-weight: 600; line-height: 1.6;
   padding: 0 8px; border-radius: 99px; white-space: nowrap;
@@ -4339,16 +4546,8 @@ watch(activeTab, (tab) => {
 .cli-chip--warn { color: #c77400; border-color: transparent; }
 .cli-chip--bad { color: #c0392b; border-color: transparent; }
 .cli-chip--info { color: var(--accent-fg, #3b5bdb); border-color: transparent; }
-/* Launch overrides: an accordion, one vendor open at a time, so fourteen env
-   tables do not all sit on the page at once. */
+/* Launch overrides for the selected agent. */
 .launch-row { flex-direction: column; align-items: stretch; padding: 0; }
-.launch-head {
-  display: flex; align-items: center; gap: 10px; width: 100%;
-  padding: 8px 12px; background: none; border: 0; cursor: pointer;
-  color: inherit; text-align: left; font: inherit;
-}
-.launch-caret { color: var(--text-secondary); width: 10px; flex: 0 0 auto; }
-.launch-summary { margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .launch-row.launch-open { border-color: var(--accent-focus); }
 .launch-body {
   display: flex; flex-direction: column; gap: 8px;
@@ -4506,7 +4705,7 @@ watch(activeTab, (tab) => {
   min-height: 0;
   overflow: hidden;
 }
-.cli-agents-body { overflow-y: auto; padding: 18px 22px; }
+.cli-agents-body { position: relative; }
 .updates-body { overflow-y: auto; padding: 18px 22px; }
 /* Accounts tab stacks two tall blocks (git + CLI accounts); scroll the tab so
    neither squeezes the other to zero height inside the overflow-hidden s-body. */

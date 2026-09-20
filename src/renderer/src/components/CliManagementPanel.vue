@@ -7,7 +7,7 @@
  * user can see. It never wraps, parses or substitutes a vendor command, and it
  * never downloads or installs anything itself.
  */
-import { computed, defineAsyncComponent, onMounted, ref } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { useBackend } from '../composables/useBackend'
 import type { useCliProfiles } from '../composables/useCliProfiles'
@@ -29,8 +29,10 @@ const props = defineProps<{
    *  "installed and signed in". Optional: without it the dialog simply never
    *  shows a sign-in step, which is the same as today. */
   cliProfiles?: ReturnType<typeof useCliProfiles>
+  /** A drawer shows one agent and uses its owner's already refreshed probe. */
+  agentKey?: string
 }>()
-const emit = defineEmits<{ login: [agentKey: string] }>()
+const emit = defineEmits<{ login: [agentKey: string]; 'install-open-change': [open: boolean] }>()
 
 /** 'unknown' = this CLI keeps no credential file Navide can read. */
 function signInStateFor(depId: string): 'signed-in' | 'signed-out' | 'unknown' {
@@ -45,8 +47,31 @@ const { cliDeps, cliHealth, loading, maintaining } = onboarding
 const message = ref('')
 /** Dep id whose guided install dialog is open ('' = none). */
 const installTarget = ref('')
+const panelRef = ref<HTMLElement | null>(null)
+const displayedDeps = computed(() => props.agentKey
+  ? cliDeps.value.filter((dep) => dep.id === props.agentKey)
+  : cliDeps.value)
+let installTrigger: HTMLElement | null = null
 
-onMounted(() => { void onboarding.refresh() })
+onMounted(() => { if (!props.agentKey) void onboarding.refresh() })
+onUnmounted(() => emit('install-open-change', false))
+watch(() => props.agentKey, () => { installTarget.value = ''; message.value = '' })
+watch(installTarget, async (target) => {
+  emit('install-open-change', !!target)
+  if (target) {
+    installTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  } else {
+    await nextTick()
+    if (installTrigger?.isConnected) installTrigger.focus()
+  }
+})
+
+function closeInstallDialog(): boolean {
+  if (!installTarget.value) return false
+  closeInstall()
+  return true
+}
+defineExpose({ closeInstallDialog })
 
 function closeInstall(): void {
   installTarget.value = ''
@@ -121,7 +146,7 @@ function formatTime(value: string): string {
 </script>
 
 <template>
-  <div class="cm">
+  <div ref="panelRef" class="cm">
     <div class="cm-head">
       <div>
         <h3 class="cm-title">{{ $t('cli-manage.title') }}</h3>
@@ -134,7 +159,7 @@ function formatTime(value: string): string {
 
     <p v-if="message" class="cm-message">{{ message }}</p>
 
-    <div v-for="dep in cliDeps" :key="dep.id" class="cm-row">
+    <div v-for="dep in displayedDeps" :key="dep.id" class="cm-row" :data-agent-key="dep.id">
       <div class="cm-row-head">
         <span class="cm-name">{{ dep.label }}</span>
         <span :class="['cm-badge', dep.status]">{{ $t(`cli-manage.status.${dep.status}`) }}</span>
@@ -223,6 +248,7 @@ function formatTime(value: string): string {
       :sign-in-state="signInStateFor(installTarget)"
       @close="closeInstall"
       @login="(agentKey: string) => emit('login', agentKey)"
+      @vue:mounted="() => nextTick(() => panelRef?.querySelector<HTMLElement>('.ci-dialog .ci-close')?.focus())"
     />
   </div>
 </template>

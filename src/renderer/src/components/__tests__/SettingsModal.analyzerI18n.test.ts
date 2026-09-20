@@ -52,7 +52,7 @@ describe('Settings — remaining hard-coded strings', () => {
     ['settings.analyzer.filter-all-files', "{ name: t('settings.analyzer.filter-all-files'), extensions: ['*'] }", 'All Files', '所有檔案'],
     // C. Shell
     ['settings.nav.sections-label', "<nav class=\"s-nav\" :aria-label=\"$t('settings.nav.sections-label')\">", 'Settings sections', '設定分區'],
-    ['action.close-esc', "<button class=\"s-close\" @click=\"emit('close')\" :title=\"$t('action.close-esc')\">", 'Close (ESC)', '關閉（ESC）'],
+    ['action.close-esc', ":title=\"$t('action.close-esc')\"", 'Close (ESC)', '關閉（ESC）'],
   ]
 
   it.each(KEYS)('%s is referenced from the template and resolves per locale', (key, reference, en, zh) => {

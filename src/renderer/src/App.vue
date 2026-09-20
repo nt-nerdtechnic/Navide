@@ -6125,6 +6125,8 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
       roleKey: pane.roleKey,
       roleLabel: roleLabel(pane.roleKey),
       command: pane.command,
+      model: pane.model ?? '',
+      effort: pane.effort ?? '',
       sessionId: pane.pinnedSessionId,
       origin: pane.origin,
       stageId: pane.stageId,
@@ -6491,16 +6493,19 @@ async function dispatchPlanToPane(relPath: string, agentKey: string): Promise<Pl
  *  window cannot resolve may be live in another one, buildPaneLineage already
  *  renders an unresolvable parent as a root, and the record has to keep naming
  *  it or the next restore cannot put the pane back. */
-async function resumableParentId(historyPaneId: string, workspacePath: string): Promise<string> {
+async function resumablePaneState(historyPaneId: string, workspacePath: string): Promise<{ spawnedBy: string; model?: string; effort?: string }> {
   const resp = await sendQuiet<ProjectPayload>('project.peek', { workspace_path: workspacePath })
   const recorded = (resp?.project?.panes ?? [])
-    .find((rec) => rec.pane_id === historyPaneId)?.spawned_by
+    .find((rec) => rec.pane_id === historyPaneId)
+  const history = spawnHistory.value.find((e) => e.paneId === historyPaneId)
+  return {
     // Only when the RECORD is missing, never when it says ''. An empty
     // spawned_by is a positive statement that the pane was a root, and must
     // not be overridden by a history entry written before it was re-parented.
-    ?? spawnHistory.value.find((e) => e.paneId === historyPaneId)?.spawnedBy
-    ?? ''
-  return recorded
+    spawnedBy: recorded?.spawned_by ?? history?.spawnedBy ?? '',
+    model: recorded?.model ?? history?.model,
+    effort: recorded?.effort ?? history?.effort,
+  }
 }
 
 // Resume an existing agent session by id (Manual Spawn → Resume button). Reuses
@@ -6510,7 +6515,7 @@ async function resumableParentId(historyPaneId: string, workspacePath: string): 
 // `historyPaneId`: the id of the pane whose per-pane files this resume belongs
 // to (Agent History knows it; the ad-hoc Resume field does not). Without it an
 // aider resume falls back to whatever the history root already holds.
-async function onManualResume(payload: { agentKey: string, workspacePath: string, sessionId: string, customName?: string, nameLocked?: boolean, autoName?: string, runGroupId?: string, historyPaneId?: string }): Promise<boolean> {
+async function onManualResume(payload: { agentKey: string, workspacePath: string, sessionId: string, customName?: string, nameLocked?: boolean, autoName?: string, runGroupId?: string, historyPaneId?: string, model?: string, effort?: string }): Promise<boolean> {
   const { agentKey, workspacePath, runGroupId } = payload
   const sessionId = normalizeResumeSessionId(agentKey, payload.sessionId)
   if (!sessionId) return false
@@ -6528,22 +6533,17 @@ async function onManualResume(payload: { agentKey: string, workspacePath: string
   const chatHistoryFile = payload.historyPaneId
     ? await savedHistoryFile(agentKey, workspacePath, payload.historyPaneId)
     : ''
-  // Model/effort come from the pane this session belongs to when it is still
-  // open (Agent History knows its id), and this path both launches on them and
-  // writes them onto the new pane record below — the resume gets a fresh pane
-  // id with no previous_pane_id, so the backend creates a NEW record and
-  // nothing else would ever fill its model in.
-  //
-  // Known limitation: resuming a session whose pane is already CLOSED (the
-  // common case from Agent History) has no in-memory source, so it reopens on
-  // the vendor default. The old pane's record on disk still carries the model,
-  // but no path reads it back here.
+  // A closed pane's original choices live in its record, or in history after
+  // that record is pruned. Never replace them with today's vendor settings.
+  const historyState = payload.historyPaneId
+    ? await resumablePaneState(payload.historyPaneId, workspacePath)
+    : undefined
   const historyPane = payload.historyPaneId
     ? panes.value.find((p) => p.id === payload.historyPaneId)
     : undefined
   const modelRequest: CliModelRequest = {
-    model: historyPane?.model ?? '',
-    effort: historyPane?.effort ?? '',
+    model: historyPane?.model ?? historyState?.model ?? payload.model ?? '',
+    effort: historyPane?.effort ?? historyState?.effort ?? payload.effort ?? '',
   }
   // Custom-binary override applies to resume too — the spec guarantees the
   // command starts with defaultCommand, which this replaces when overridden.
@@ -6556,9 +6556,7 @@ async function onManualResume(payload: { agentKey: string, workspacePath: string
   // includes who opened it. Only Agent History knows which pane the session
   // belonged to; the ad-hoc Resume field does not, and passes no id, so those
   // resumes stay roots exactly as before.
-  const resumeSpawnedBy = payload.historyPaneId
-    ? await resumableParentId(payload.historyPaneId, workspacePath)
-    : ''
+  const resumeSpawnedBy = historyState?.spawnedBy ?? ''
   const paneId = await spawnPane({
     agentKey: agentKey as AgentKey,
     roleKey: '' as RoleKey,
@@ -9058,6 +9056,8 @@ async function onResumeHistoryAgent(entry: SpawnHistoryEntry): Promise<void> {
       autoName: entry.autoName,
       runGroupId: entry.runGroupId,
       historyPaneId: entry.paneId,
+      model: entry.model,
+      effort: entry.effort,
     })
     if (resumed) {
       return
@@ -10184,6 +10184,8 @@ async function restoreWorkspacePanes(payload: ProjectPayload, workspacePath: str
       roleKey: saved.role as RoleKey,
       roleLabel: roleLabel(saved.role),
       command: saved.command ?? '',
+      model: saved.model ?? '',
+      effort: saved.effort ?? '',
       sessionId: (saved.session_id ?? '').trim() || undefined,
       origin: backfillOrigin(saved.origin),
       stageId: '' as StageId,
@@ -16954,6 +16956,14 @@ const ctxReclaimable = computed<boolean>(() => {
   return reclaimableNowIds.value.includes(m.paneId)
 })
 
+const ctxReclaimableIds = computed<string[]>(() => {
+  const reclaimable = new Set(reclaimableNowIds.value)
+  return ctxTargetIds.value.filter((id) => reclaimable.has(id))
+})
+const ctxAllMuted = computed(() =>
+  ctxTargetIds.value.length > 0 && ctxTargetIds.value.every((id) => isPaneMuted(id))
+)
+
 // Greying the item out is not the whole answer: part of what blocks a reclaim —
 // a message queued for the pane, a stage watching it — lives in plain Maps that
 // never invalidate the candidate list, so an item can read as reclaimable and
@@ -16964,6 +16974,24 @@ async function reclaimPaneFromMenu(paneId: string): Promise<void> {
   closePaneCtxMenu()
   if (await reclaimPanesNow([paneId])) return
   notifyRestore.toast(i18n.global.t('resource.reclaim-blocked'), { type: 'info' })
+}
+
+async function reclaimSelectedFromMenu(): Promise<void> {
+  const ids = [...ctxTargetIds.value]
+  closePaneCtxMenu()
+  if (await reclaimPanesNow(ids)) return
+  notifyRestore.toast(i18n.global.t('resource.reclaim-blocked'), { type: 'info' })
+}
+
+function setSelectedPaneMutedFromMenu(): void {
+  const ids = [...ctxTargetIds.value]
+  const muted = !ctxAllMuted.value
+  closePaneCtxMenu()
+  for (const id of ids) {
+    setPaneMuted(id, muted)
+    persistPaneMuted(id, muted)
+  }
+  syncViews()
 }
 
 // "Send message": the address of the right-clicked pane, to be typed into the
@@ -19202,8 +19230,17 @@ function paneIsCommander(p: ActivePane): boolean {
           <div class="pane-ctx-header">{{ $t('action.selected-count', { count: ctxTargetIds.length }) }}</div>
           <div class="pane-ctx-item" @click="batchInterrupt(ctxTargetIds); closePaneCtxMenu()">{{ $t('action.interrupt-selected') }}</div>
           <div class="pane-ctx-item" @click="batchRebuild(ctxTargetIds); closePaneCtxMenu()">{{ $t('action.rebuild-selected') }}</div>
+          <div class="pane-ctx-sep"></div>
           <div class="pane-ctx-item" @click="batchMinimize(ctxTargetIds); closePaneCtxMenu()">{{ $t('action.minimize-selected') }}</div>
           <div class="pane-ctx-item" @click="batchRestore(ctxTargetIds); closePaneCtxMenu()">{{ $t('action.restore-selected') }}</div>
+          <div
+            class="pane-ctx-item"
+            :class="{ disabled: !ctxReclaimableIds.length }"
+            :title="$t('action.reclaim-selected-title')"
+            @click="reclaimSelectedFromMenu()"
+          >{{ $t('action.reclaim-selected', { count: ctxReclaimableIds.length }) }}</div>
+          <div class="pane-ctx-sep"></div>
+          <div class="pane-ctx-item" @click="setSelectedPaneMutedFromMenu()">{{ ctxAllMuted ? $t('action.unmute-selected') : $t('action.mute-selected') }}</div>
           <div class="pane-ctx-sep"></div>
           <div class="pane-ctx-item danger" @click="batchKill(ctxTargetIds); closePaneCtxMenu()">{{ $t('action.remove-selected') }}</div>
         </template>
@@ -20970,12 +21007,16 @@ function paneIsCommander(p: ActivePane): boolean {
 .pane-ctx {
   position: fixed;
   z-index: 1000;
+  box-sizing: border-box;
+  font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
   background: var(--bg-subtle);
   border: 1px solid var(--border-default);
   border-radius: 6px;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
   padding: 4px 0;
   min-width: 170px;
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
   user-select: none;
 }
 .pane-ctx-header {

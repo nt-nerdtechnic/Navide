@@ -134,6 +134,10 @@ describe('App CLI-pane multi-select + batch context menu', () => {
       expect(json.action['rebuild-selected']).toBeTruthy()
       expect(json.action['minimize-selected']).toBeTruthy()
       expect(json.action['restore-selected']).toBeTruthy()
+      expect(json.action['reclaim-selected']).toContain('{count}')
+      expect(json.action['reclaim-selected-title']).toBeTruthy()
+      expect(json.action['mute-selected']).toBeTruthy()
+      expect(json.action['unmute-selected']).toBeTruthy()
       expect(json.action['remove-selected']).toBeTruthy()
     }
   })

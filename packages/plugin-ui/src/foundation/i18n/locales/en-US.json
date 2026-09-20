@@ -605,6 +605,10 @@
     "mute": "Mute notifications",
     "unmute": "Unmute notifications",
     "restore-selected": "Restore selected",
+    "reclaim-selected": "Reclaim selected ({count})",
+    "reclaim-selected-title": "Free memory from eligible selected CLIs; panes stay as click-to-resume placeholders. Busy or focused panes, unsent input, and sessions that cannot resume are skipped.",
+    "mute-selected": "Mute selected notifications",
+    "unmute-selected": "Unmute selected notifications",
     "remove-selected": "Remove selected",
     "remove-children": "Remove {count} sub-panes",
     "remove-children-title": "Close only the agents this pane spawned; the pane itself stays",
@@ -1292,6 +1296,7 @@
       },
       "general": "General",
       "appearance": "Appearance",
+      "language": "Language",
       "layout": "Layout",
       "notifications": "Notifications",
       "crossDevice": "Navide Cloud",
@@ -1372,17 +1377,17 @@
             "autoReclaim": "30"
           }
         },
-        "intro": "What each of the eighteen settings tabs controls, how Navide Cloud links several machines into one private network, and the system surfaces that live outside the main screen — the menus, the standalone windows, the usage views and resource upkeep.",
+        "intro": "What each of the nineteen settings tabs controls, how Navide Cloud links several machines into one private network, and the system surfaces that live outside the main screen — the menus, the standalone windows, the usage views and resource upkeep.",
         "s1": {
           "title": "Settings overview",
-          "p1": "The settings window opens with <kbd class=\"syh-kbd\">⌘,</kbd>; the gear button in the title bar is the same entry point. The left sidebar is split into four groups, <strong>18 tabs</strong> in total.",
+          "p1": "The settings window opens with <kbd class=\"syh-kbd\">⌘,</kbd>; the gear button in the title bar is the same entry point. The left sidebar is split into four groups, <strong>19 tabs</strong> in total.",
           "h1": "The search field",
           "p2": "Below the sidebar heading is a search field with the placeholder <code>Search settings…</code>. It matches setting titles, their section and their keywords <strong>across tabs</strong> (in both languages), listing at most 8 results; clicking one switches to that tab and scrolls to the section (with one exception: \"Storage\" closes settings and opens the Resource Manager directly). With no match it shows <code>No matching settings</code>. <kbd class=\"syh-kbd\">Esc</kbd> clears it.",
           "callout": {
             "title": "The search index is not exhaustive",
             "text": "The index is a hand-maintained list, and <strong>the CLI Agents, Layout, Notifications and Extensions tabs have no entries at all</strong>, so nothing inside them is searchable — you have to open them yourself."
           },
-          "h2": "The eighteen tabs",
+          "h2": "The nineteen tabs",
           "tabTable": {
             "group": "Group",
             "tab": "Tab",
@@ -1395,7 +1400,11 @@
               "more": "section 2 of this page"
             },
             "appearance": {
-              "what": "Theme and custom colors, language, interface scale, restore windows",
+              "what": "Theme and custom colors, interface scale, restore windows",
+              "more": "section 2 of this page"
+            },
+            "language": {
+              "what": "Interface language for every workspace: Traditional Chinese or English",
               "more": "section 2 of this page"
             },
             "statusBadges": {
@@ -2778,10 +2787,10 @@
             "envName": "CLAUDE_CONFIG_DIR"
           }
         },
-        "intro": "How the fourteen CLI agents are installed, tuned and given multiple accounts, and where quota and cost figures come from. Settings ▸ CLI Agents now has five parts, and the \"Launch overrides\" one decides which command line a newly spawned pane of each CLI starts on. Terms (workspace, pane, group) follow the \"Workspace & Panes\" topic.",
+        "intro": "How the supported CLI agents are installed, tuned and given multiple accounts, and where quota and cost figures come from. Settings ▸ CLI Agents shows agent cards; Manage opens an agent's Overview, Launch, Permissions, Push, and Install tabs. Launch decides which command line a newly spawned pane starts on. Terms (workspace, pane, group) follow the \"Workspace & Panes\" topic.",
         "s1": {
           "title": "Supported CLIs",
-          "p1": "<strong>14</strong> CLI agents are built in. The order below is the default order of the + menu and of <kbd class=\"cah-kbd\">Ctrl</kbd>+<kbd class=\"cah-kbd\">1</kbd>…<kbd class=\"cah-kbd\">9</kbd> (drag to reorder in Settings, see chapter 4).",
+          "p1": "The table lists the built-in CLI agents. The order below is the default order of the + menu and of <kbd class=\"cah-kbd\">Ctrl</kbd>+<kbd class=\"cah-kbd\">1</kbd>…<kbd class=\"cah-kbd\">9</kbd> (drag to reorder in Settings, see chapter 4).",
           "table": {
             "name": "Display name",
             "bin": "Binary",
@@ -2985,7 +2994,7 @@
           },
           "launchResume": "Two other paths <strong>ignore</strong> this setting. Rebuilding a pane, or restoring one after a restart, has to rebuild the resume command from the vendor’s own syntax, so those panes launch on the default command. A login pane is the same: the backend keeps only the first token of the command and appends the vendor’s sign-in subcommand, so a wrapper line would become something like <code>npx auth login</code>. Navide cannot merge the two — it has no way to know where a session id belongs inside a line you wrote.",
           "launchReject": "Asking for a model at the same time is <strong>refused outright</strong> rather than silently dropped. When an agent opens a pane through MCP, a request naming a model or effort for a CLI that has a custom launch command is rejected with the reason (<strong>a resume is the exception</strong> — its command is rebuilt from the vendor’s syntax and never reads this setting). The reasoning: a pane that quietly fell back to the default model looks exactly like one that got the model you asked for.",
-          "launchEnv": "The environment table has a <strong>reserved list</strong> of names Navide manages itself (24 of them as this was written; the full list is printed verbatim under the section, and that is the one to trust). A reserved name is <strong>not forbidden</strong>: you can still save it, the row just gains a red \"Not passed through\" — and it starts working the day Navide stops managing that variable. The dropping happens at spawn time, and the window that asked for the pane gets a notice. There are two kinds: <strong>denied</strong> (the value never existed in the pane’s environment at all) and <strong>superseded</strong> (it went in, then a higher-priority source of Navide’s own rewrote or deleted it — it looks applied and is not). Neither stops the pane from opening.",
+          "launchEnv": "The environment table has a <strong>reserved list</strong> of names Navide manages itself (the full current list is printed verbatim under the section, and that is the one to trust). A reserved name is <strong>not forbidden</strong>: you can still save it, the row just gains a red \"Not passed through\" — and it starts working the day Navide stops managing that variable. The dropping happens at spawn time, and the window that asked for the pane gets a notice. There are two kinds: <strong>denied</strong> (the value never existed in the pane’s environment at all) and <strong>superseded</strong> (it went in, then a higher-priority source of Navide’s own rewrote or deleted it — it looks applied and is not). Neither stops the pane from opening.",
           "launchEnvNote": "The reserved list is global, not per vendor — setting <code>CODEX_HOME</code> on the Claude Code row is refused too. It grows and shrinks with what Navide manages, so do not memorise the count; read the list printed under the section.",
           "spawnIntro": "The Manual spawn dialog gained a <strong>Model</strong> and an <strong>Effort</strong> field, prefilled from whatever that CLI has under launch overrides (re-read each time the dialog opens, never cached). Model is free text; Effort is a dropdown whose options come from the levels that vendor publishes. Which fields appear is <strong>not a hard-coded list</strong> — it follows whether the vendor spec declares the matching launch argument:",
           "spawnTable": {
@@ -3773,7 +3782,7 @@
           "multiselect": {
             "cmdClick": "<kbd class=\"wph-kbd\">⌘</kbd> click: add a single row to the selection.",
             "shiftClick": "<kbd class=\"wph-kbd\">⇧</kbd> click: select a whole range (in the order shown on screen, not the internal order).",
-            "batchMenu": "Right-clicking with several rows selected turns the menu into its batch form: <em>Interrupt selected</em>, <em>Rebuild selected</em>, <em>Minimize selected</em>, <em>Restore selected</em>, <em>Remove selected</em>."
+            "batchMenu": "Right-clicking with several rows selected turns the menu into its batch form: <em>Interrupt selected</em>, <em>Rebuild selected</em>, <em>Minimize selected</em>, <em>Restore selected</em>, <em>Reclaim selected</em> (shows the eligible count), <em>Mute selected notifications</em> (or unmute when all selected panes are muted), and <em>Remove selected</em>. Reclaim keeps panes available to resume and skips protected panes."
           },
           "p3": "Dragging any one of the selected panes takes <strong>the whole batch</strong> with it. Where you drop decides what happens:",
           "dropTable": {
@@ -5932,8 +5941,32 @@
     },
     "cliAgents": {
       "title": "CLI Agents",
-      "hint": "Enable, disable, and reorder which CLI agents appear in the manual spawn dropdown; each row also reads back how that agent is currently set up. At least one must stay enabled.",
+      "hint": "Enable and reorder the CLI agents in the manual spawn dropdown. Open a card to manage that agent. At least one must stay enabled.",
       "drag-hint": "Drag to reorder",
+      "search": "Find an agent…",
+      "filter-label": "Filter CLI agents",
+      "filter-all": "All",
+      "filter-enabled": "Enabled",
+      "filter-attention": "Needs attention",
+      "count": "{visible} of {total} agents · {enabled} enabled",
+      "reorder-filtered": "Clear search and choose All to reorder",
+      "enabled": "Enabled",
+      "enable-agent": "Enable {agent}",
+      "manage": "Manage",
+      "manage-agent": "Manage {agent}",
+      "move-up": "Move {agent} earlier",
+      "move-down": "Move {agent} later",
+      "not-detected": "Not checked yet",
+      "no-results": "No agents match these filters.",
+      "close-drawer": "Close agent settings",
+      "agent-settings": "Agent settings",
+      "tab-overview": "Overview",
+      "tab-launch": "Launch",
+      "tab-permissions": "Permissions",
+      "tab-push": "Push",
+      "tab-install": "Install",
+      "overview-hint": "Choose a tab to adjust this agent. Changes save automatically. Launch settings apply to newly started panes.",
+      "no-push-channel": "This agent does not declare a push channel. Messages use the normal terminal input path.",
       "legend": {
         "ok": "Green = normal / on",
         "warn": "Amber = a deviation worth noticing",
@@ -5952,7 +5985,7 @@
         "push": "push {kind}",
         "push-off": "push off",
         "no-push": "no push",
-        "accounts": "{count} accounts",
+        "accounts": "{count} accounts | {count} account | {count} accounts",
         "signed-out": "Signed out",
         "custom-binary": "Custom binary",
         "model": "model {model}",
@@ -5963,7 +5996,7 @@
     },
     "cliLaunch": {
       "title": "Launch overrides",
-      "hint": "What a newly spawned pane of each CLI starts on. Open a row to set its default model and effort, replace the launch command outright, or hand it extra environment variables. Everything here is per CLI and applies to every window.",
+      "hint": "Set this CLI's default model and effort, replace its launch command, or add environment variables. These per-CLI settings apply to newly started panes in every window.",
       "summary-command": "custom command",
       "summary-env": "{count} env",
       "model-label": "Default model",

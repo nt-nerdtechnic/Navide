@@ -605,6 +605,10 @@
     "mute": "靜音通知",
     "unmute": "取消靜音",
     "restore-selected": "還原所選",
+    "reclaim-selected": "回收所選（{count} 個）",
+    "reclaim-selected-title": "回收所選中符合條件的 CLI 以釋放記憶體，面板會保留為可點擊接續的卡片；忙碌、聚焦、有未送出輸入或無法接續的面板會略過。",
+    "mute-selected": "靜音所選通知",
+    "unmute-selected": "取消所選通知靜音",
     "remove-selected": "移除所選",
     "remove-children": "移除旗下 {count} 個子面板",
     "remove-children-title": "只關閉這個面板派生出的子面板，本身保留",
@@ -1292,6 +1296,7 @@
       },
       "general": "一般",
       "appearance": "外觀",
+      "language": "語言",
       "layout": "版面",
       "notifications": "通知",
       "crossDevice": "Navide Cloud",
@@ -1372,17 +1377,17 @@
             "autoReclaim": "30"
           }
         },
-        "intro": "設定視窗的十八個分頁分別管什麼、Navide Cloud 怎麼把幾台機器接成一個私有網路，以及選單、獨立視窗、用量統計與資源維護這些散在主畫面之外的系統面。",
+        "intro": "設定視窗的十九個分頁分別管什麼、Navide Cloud 怎麼把幾台機器接成一個私有網路，以及選單、獨立視窗、用量統計與資源維護這些散在主畫面之外的系統面。",
         "s1": {
           "title": "設定總覽",
-          "p1": "設定視窗用 <kbd class=\"syh-kbd\">⌘,</kbd> 開啟，標題列的齒輪鈕是同一個入口。左側側欄分四組，共 <strong>18 個分頁</strong>。",
+          "p1": "設定視窗用 <kbd class=\"syh-kbd\">⌘,</kbd> 開啟，標題列的齒輪鈕是同一個入口。左側側欄分四組，共 <strong>19 個分頁</strong>。",
           "h1": "搜尋框",
           "p2": "側欄標題底下有一個搜尋框，提示字是 <code>搜尋設定…</code>。它<strong>跨分頁</strong>比對設定項的標題、所屬區塊與關鍵字（中英文都收），最多列 8 筆；點一筆會切到那個分頁並捲到對應區塊（「儲存空間」那筆例外：它會關掉設定、直接開「資源控管」），沒命中時顯示 <code>找不到相符設定</code>。<kbd class=\"syh-kbd\">Esc</kbd> 清空。",
           "callout": {
             "title": "搜尋索引不是全覆蓋",
             "text": "索引是一份人工維護的清單，<strong>CLI Agents、版面、通知、擴充功能 這四個分頁沒有任何條目</strong>，搜尋不到它們裡面的東西，得自己點進去。"
           },
-          "h2": "十八個分頁",
+          "h2": "十九個分頁",
           "tabTable": {
             "group": "分組",
             "tab": "分頁",
@@ -1395,7 +1400,11 @@
               "more": "本頁第 2 章"
             },
             "appearance": {
-              "what": "主題與自訂顏色、語言、介面縮放、重開視窗",
+              "what": "主題與自訂顏色、介面縮放、重開視窗",
+              "more": "本頁第 2 章"
+            },
+            "language": {
+              "what": "所有工作區共用的介面語言：繁體中文或 English",
               "more": "本頁第 2 章"
             },
             "statusBadges": {
@@ -2778,10 +2787,10 @@
             "envName": "CLAUDE_CONFIG_DIR"
           }
         },
-        "intro": "十四家 CLI agent 怎麼裝、怎麼調、怎麼掛多個帳號，以及額度與成本各自從哪裡來。設定 ▸ CLI Agents 現在分成五段，其中「啟動覆寫」決定每家 CLI 新開的面板從哪一條命令列起跑。名詞（工作區、面板、群組）沿用「工作區與面板」分頁。",
+        "intro": "支援的 CLI agent 怎麼裝、怎麼調、怎麼掛多個帳號，以及額度與成本各自從哪裡來。設定 ▸ CLI Agents 以卡片呈現 agent；點「管理」開啟該 agent 的總覽、啟動、權限、推送與安裝分頁。「啟動」決定新開面板的命令列。名詞（工作區、面板、群組）沿用「工作區與面板」分頁。",
         "s1": {
           "title": "支援哪些 CLI",
-          "p1": "目前內建 <strong>14 家</strong> CLI agent。下表的順序就是 ＋ 選單與 <kbd class=\"cah-kbd\">Ctrl</kbd>+<kbd class=\"cah-kbd\">1</kbd>…<kbd class=\"cah-kbd\">9</kbd> 的預設順序（可在設定裡拖曳調整，見第 4 章）。",
+          "p1": "下表列出內建的 CLI agent，順序就是 ＋ 選單與 <kbd class=\"cah-kbd\">Ctrl</kbd>+<kbd class=\"cah-kbd\">1</kbd>…<kbd class=\"cah-kbd\">9</kbd> 的預設順序（可在設定裡拖曳調整，見第 4 章）。",
           "table": {
             "name": "顯示名稱",
             "bin": "執行檔",
@@ -2985,7 +2994,7 @@
           },
           "launchResume": "另外兩條路徑<strong>不吃</strong>這個設定。對面板按 rebuild、或重啟後還原面板，都必須依廠商自己的語法重組 resume 指令，所以那些面板會用預設指令啟動；登入面板也一樣——後端只留命令的第一個 token 再接上廠商的登入子指令，一條包裝式的指令會被截成類似 <code>npx auth login</code> 的東西。Navide 無法把兩者合併：它無從得知 session id 該插進你寫的那條指令的哪個位置。",
           "launchReject": "同時指定模型會被<strong>硬拒絕</strong>，而不是悄悄忽略。由 agent 透過 MCP 開面板時，只要那家 CLI 設了自訂啟動指令又帶了 model 或 effort，整個請求會被擋下並說明原因（<strong>resume 是例外</strong>——它的指令是依廠商語法重組的，本來就不讀這個設定）。理由是：模型悄悄落回預設值時，開出來的面板和拿到指定模型的面板長得一模一樣。",
-          "launchEnv": "環境變數這一欄有一份 Navide 自己管的<strong>保留名單</strong>（寫這份說明時是 24 個，區塊底下會逐字列出全部，以那一份為準）。保留變數<strong>不是不准填</strong>：你照樣存得起來，列上只會多一個紅色的「不會傳進去」——哪天 Navide 不再管那個變數，它就會開始生效。真正被丟掉是在開面板的時候，而且會在你按下開啟的那個視窗跳一則提示。提示分兩種：<strong>被擋下</strong>（值從來沒進到面板的環境裡）與<strong>被蓋掉</strong>（進去了，但後面被 Navide 自己的設定改寫或刪掉——看起來像套用了，其實沒有）。兩種都不會阻止面板開起來。",
+          "launchEnv": "環境變數這一欄有一份 Navide 自己管的<strong>保留名單</strong>（區塊底下會逐字列出目前的完整清單，以那一份為準）。保留變數<strong>不是不准填</strong>：你照樣存得起來，列上只會多一個紅色的「不會傳進去」——哪天 Navide 不再管那個變數，它就會開始生效。真正被丟掉是在開面板的時候，而且會在你按下開啟的那個視窗跳一則提示。提示分兩種：<strong>被擋下</strong>（值從來沒進到面板的環境裡）與<strong>被蓋掉</strong>（進去了，但後面被 Navide 自己的設定改寫或刪掉——看起來像套用了，其實沒有）。兩種都不會阻止面板開起來。",
           "launchEnvNote": "保留名單是全域的，不分廠商——在 Claude Code 那一列填 <code>CODEX_HOME</code> 一樣會被擋。它會隨著 Navide 自己管的東西增減，所以不要背數字，看區塊底下那一份。",
           "spawnIntro": "「啟動Agent」對話框多了 <strong>模型</strong> 與 <strong>推理強度</strong> 兩欄，預設值就是該 CLI 在啟動覆寫設的那一組（每次打開對話框重讀一次，不吃快取）。模型是自由輸入，推理強度是下拉、選項來自那家 CLI 自己列出的強度。兩欄出現與否<strong>不是硬編的名單</strong>，而是看廠商 spec 有沒有宣告對應的啟動參數：",
           "spawnTable": {
@@ -3773,7 +3782,7 @@
           "multiselect": {
             "cmdClick": "<kbd class=\"wph-kbd\">⌘</kbd> 點：加選單一列。",
             "shiftClick": "<kbd class=\"wph-kbd\">⇧</kbd> 點：選整段區間（依畫面上實際顯示的順序，不是內部順序）。",
-            "batchMenu": "多選之後按右鍵，選單會變成批次版：<em>中斷所選</em>、<em>重建所選</em>、<em>最小化所選</em>、<em>還原所選</em>、<em>移除所選</em>。"
+            "batchMenu": "多選之後按右鍵，選單會變成批次版：<em>中斷所選</em>、<em>重建所選</em>、<em>最小化所選</em>、<em>還原所選</em>、<em>回收所選</em>（顯示可回收數量）、<em>靜音所選通知</em>（全部已靜音時改為取消靜音）及<em>移除所選</em>。回收會保留可接續的面板，並略過受保護的面板。"
           },
           "p3": "拖曳任何一個被選中的面板，<strong>整批</strong>會一起被帶走。放在哪決定結果：",
           "dropTable": {
@@ -5932,8 +5941,32 @@
     },
     "cliAgents": {
       "title": "CLI Agents",
-      "hint": "啟用、停用並排序主視窗手動生成（manual spawn）下拉選單中出現的 CLI agent，順序也會套用到 Ctrl+數字快捷鍵；每列也會顯示該 agent 目前的設定現況。至少須保留一個啟用。",
+      "hint": "啟用並排序手動生成選單中的 CLI agent；順序也會套用到 Ctrl+數字快捷鍵。開啟卡片即可管理該 agent，至少須保留一個啟用。",
       "drag-hint": "拖曳以排序",
+      "search": "搜尋 agent…",
+      "filter-label": "篩選 CLI agent",
+      "filter-all": "全部",
+      "filter-enabled": "已啟用",
+      "filter-attention": "需要注意",
+      "count": "顯示 {visible} / {total} 個 agent · {enabled} 個已啟用",
+      "reorder-filtered": "清除搜尋並選擇「全部」後即可排序",
+      "enabled": "已啟用",
+      "enable-agent": "啟用 {agent}",
+      "manage": "管理",
+      "manage-agent": "管理 {agent}",
+      "move-up": "將 {agent} 向前移",
+      "move-down": "將 {agent} 向後移",
+      "not-detected": "尚未偵測",
+      "no-results": "沒有符合篩選條件的 agent。",
+      "close-drawer": "關閉 agent 設定",
+      "agent-settings": "Agent 設定",
+      "tab-overview": "總覽",
+      "tab-launch": "啟動",
+      "tab-permissions": "權限",
+      "tab-push": "推送",
+      "tab-install": "安裝",
+      "overview-hint": "選擇分頁調整此 agent。變更會自動儲存；啟動設定會套用到之後新開的 pane。",
+      "no-push-channel": "此 agent 未宣告推送通道，訊息會透過一般終端機輸入送達。",
       "legend": {
         "ok": "綠 = 正常／已啟用",
         "warn": "黃 = 偏離預設，值得注意",
@@ -5963,7 +5996,7 @@
     },
     "cliLaunch": {
       "title": "啟動覆寫",
-      "hint": "每家 CLI 新開 pane 時的起始狀態。展開一列可設定它的預設模型與 effort、整條改寫啟動指令，或塞入額外的環境變數。這裡全部是逐家設定，且對所有視窗生效。",
+      "hint": "設定此 CLI 的預設模型與 effort、改寫啟動指令，或加入環境變數。這些逐家設定會套用到所有視窗之後新開的 pane。",
       "summary-command": "自訂指令",
       "summary-env": "env {count}",
       "model-label": "預設模型",

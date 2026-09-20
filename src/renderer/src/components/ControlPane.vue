@@ -5946,13 +5946,15 @@ button.icon-btn.muted:hover {
 .ws-more-menu {
   position: fixed;
   z-index: 60;
+  box-sizing: border-box;
   width: 168px;
   max-width: calc(100vw - 24px);
-  padding: 5px 0;
-  border: 1px solid var(--border);
+  padding: 5px 4px;
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
   background: var(--bg-elevated, var(--bg-secondary));
-  box-shadow: 0 8px 24px rgb(0 0 0 / 45%);
+  box-shadow: var(--shadow-popover);
+  font-family: var(--font-ui);
   font-size: var(--font-xs);
 }
 .ws-more-opt {
@@ -5960,19 +5962,31 @@ button.icon-btn.muted:hover {
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 4px 10px;
+  padding: 5px 8px;
   border: none;
   background: none;
   color: var(--text-primary);
+  font-family: inherit;
   font-size: var(--font-xs);
+  line-height: var(--lh-tight);
   text-align: left;
   cursor: pointer;
 }
-.ws-more-opt:hover:not(:disabled) { background: var(--bg-hover, rgb(255 255 255 / 7%)); }
+.ws-more-opt:hover:not(:disabled),
+.ws-more-opt:focus-visible:not(:disabled) { background: var(--bg-hover, rgb(255 255 255 / 7%)); }
+.ws-more-opt:focus-visible {
+  outline: 2px solid var(--accent-focus);
+  outline-offset: -2px;
+}
 .ws-more-opt:disabled { opacity: 0.4; cursor: default; }
-/* Same treatment the right-click menu gives its closing rows. */
-.ws-more-opt.danger { color: var(--danger-bright, #e05252); }
-.ws-more-opt.danger:hover:not(:disabled) { background: var(--danger-subtle, rgb(224 82 82 / 12%)); }
+/* Override the filled button.danger background as well as its text colour. */
+.ws-more-opt.danger {
+  background: none;
+  color: var(--danger-bright, #e05252);
+}
+.ws-more-opt.danger:hover:not(:disabled),
+.ws-more-opt.danger:focus-visible:not(:disabled) { background: var(--danger-subtle, rgb(224 82 82 / 12%)); }
+.ws-more-opt.danger:disabled { background: none; }
 .ws-more-ico { flex: none; display: flex; align-items: center; color: var(--text-secondary); }
 .ws-more-ico :deep(svg) { width: 12px; height: 12px; display: block; }
 /* The rows added later draw their glyph inline rather than as a component —

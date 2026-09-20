@@ -42,10 +42,11 @@ interface StageRow {
   stageSpan?: number
 }
 
-// ── 1 · The eighteen tabs ────────────────────────────────────────────────
+// ── 1 · The nineteen tabs ────────────────────────────────────────────────
 const tabs: TabRow[] = [
-  { key: 'general', groupKey: 'settings.nav.group.general', groupSpan: 5, navKey: 'settings.nav.general' },
+  { key: 'general', groupKey: 'settings.nav.group.general', groupSpan: 6, navKey: 'settings.nav.general' },
   { key: 'appearance', navKey: 'settings.nav.appearance' },
+  { key: 'language', navKey: 'settings.nav.language' },
   { key: 'statusBadges', navKey: 'settings.nav.statusBadges' },
   { key: 'layout', navKey: 'settings.nav.layout' },
   { key: 'notifications', navKey: 'settings.nav.notifications' },
@@ -238,8 +239,8 @@ function sample(key: string): string {
 const navLegend = computed(() => mockLegend('nav', ['search', 'groups', 'active']))
 const resourceLegend = computed(() => mockLegend('resource', ['totals', 'rows', 'actions']))
 
-// The nav exactly as SettingsModal.vue renders it (:1941-2043): five groups,
-// seventeen pages, in this order. Labels come from the same `settings.nav.*`
+// The nav exactly as SettingsModal.vue renders it: four groups,
+// nineteen pages, in this order. Labels come from the same `settings.nav.*`
 // keys the real nav reads, so renaming a page renames it here.
 //
 // Drawing this is what caught the prose claiming four groups and sixteen
@@ -251,6 +252,7 @@ const settingsGroups = computed(() => [
     items: [
       { label: t('settings.nav.general'), active: true },
       { label: t('settings.nav.appearance') },
+      { label: t('settings.nav.language') },
       { label: t('settings.nav.statusBadges') },
       { label: t('settings.nav.layout') },
       { label: t('settings.nav.notifications') },
@@ -419,7 +421,6 @@ const resourceRows = computed(() => [
       <ul class="syh-list">
         <li v-html="$t('settings.help.settingsSystem.s2.appearance.theme')"></li>
         <li v-html="$t('settings.help.settingsSystem.s2.appearance.colors')"></li>
-        <li v-html="$t('settings.help.settingsSystem.s2.appearance.language')"></li>
         <li v-html="$t('settings.help.settingsSystem.s2.appearance.uiScale')"></li>
         <li v-html="$t('settings.help.settingsSystem.s2.appearance.restore')"></li>
       </ul>
@@ -427,6 +428,9 @@ const resourceRows = computed(() => [
         <div class="syh-callout-title">{{ $t('settings.help.settingsSystem.s2.callout.title') }}</div>
         <div class="syh-callout-text" v-html="$t('settings.help.settingsSystem.s2.callout.text')"></div>
       </div>
+
+      <h3 class="syh-h3">{{ $t('settings.nav.language') }}</h3>
+      <p class="syh-p" v-html="$t('settings.help.settingsSystem.s2.appearance.language')"></p>
 
       <h3 class="syh-h3">{{ $t('settings.help.settingsSystem.s2.h3') }}</h3>
       <p class="syh-p" v-html="$t('settings.help.settingsSystem.s2.p1')"></p>

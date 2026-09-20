@@ -161,6 +161,54 @@ describe('CliManagementPanel', () => {
     expect(wrapper!.findAll('.cm-policy')).toHaveLength(1)
   })
 
+  it('shows all vendors without a filter and only the selected vendor when filtered', async () => {
+    await mountPanel()
+    expect(wrapper!.findAll('.cm-name').map((row) => row.text())).toEqual(['Claude Code', 'Kimi Code'])
+
+    await wrapper!.setProps({ agentKey: 'claude' })
+    expect(wrapper!.findAll('.cm-name').map((row) => row.text())).toEqual(['Claude Code'])
+    expect(wrapper!.find('.cm-policy').exists()).toBe(true)
+
+    await wrapper!.setProps({ agentKey: 'kimi' })
+    expect(wrapper!.findAll('.cm-name').map((row) => row.text())).toEqual(['Kimi Code'])
+    expect(wrapper!.find('.cm-policy').exists()).toBe(false)
+    expect(wrapper!.find('.cm-update').exists()).toBe(false)
+
+    await wrapper!.setProps({ agentKey: undefined })
+    expect(wrapper!.findAll('.cm-row')).toHaveLength(2)
+  })
+
+  it('runs maintenance for the newly selected vendor, without reprobing on every switch', async () => {
+    stubTerminal()
+    const mock = createMockBackend('connected')
+    mock.setResponse('onboarding.status', status())
+    mock.setResponse('onboarding.cli_maintenance', { ok: true, needs_terminal: true, command: 'kimi doctor' })
+    const onboarding = useOnboarding(mock.backend)
+    await onboarding.refresh()
+    wrapper = mount(CliManagementPanel, {
+      props: { backend: mock.backend, onboarding, agentKey: 'claude' },
+      global: { plugins: [i18n] },
+    })
+    await flushPromises()
+    await wrapper.setProps({ agentKey: 'kimi' })
+    expect(mock.sent.filter((entry) => entry.type === 'onboarding.status')).toHaveLength(1)
+
+    await wrapper.get('button[title="kimi doctor"]').trigger('click')
+    await flushPromises()
+    expect(mock.sent).toContainEqual({
+      type: 'onboarding.cli_maintenance',
+      payload: { agent_key: 'kimi', action: 'doctor' },
+    })
+    expect(opened).toEqual(['kimi doctor'])
+    onboarding.dispose()
+  })
+
+  it('never falls back to other vendors for an unknown selected key', async () => {
+    await mountPanel()
+    await wrapper!.setProps({ agentKey: 'unregistered-agent' })
+    expect(wrapper!.findAll('.cm-row')).toHaveLength(0)
+  })
+
   it('opens the guided install dialog instead of a bare terminal handoff', async () => {
     // Installing from Settings used to differ from the wizard: it only opened
     // a terminal and reported nothing afterwards.
@@ -184,5 +232,49 @@ describe('CliManagementPanel', () => {
 
     expect(wrapper.find('.ci-dialog').exists()).toBe(true)
     expect(mock.sent.some((s) => s.type === 'onboarding.cli_maintenance')).toBe(false)
+    expect(wrapper.emitted('install-open-change')).toEqual([[true]])
+
+    const panel = wrapper.vm as unknown as { closeInstallDialog: () => boolean }
+    expect(panel.closeInstallDialog()).toBe(true)
+    await flushPromises()
+    expect(wrapper.find('.ci-dialog').exists()).toBe(false)
+    expect(wrapper.emitted('install-open-change')).toEqual([[true], [false]])
+    expect(panel.closeInstallDialog()).toBe(false)
+  })
+
+  it('focuses an enabled installer control while dependency detection is still pending', async () => {
+    stubTerminal()
+    const mock = createMockBackend('connected')
+    const payload = status()
+    payload.deps = [{ ...kimi, status: 'missing', version: '' }]
+    mock.setResponse('onboarding.status', payload)
+    wrapper = mount(CliManagementPanel, {
+      attachTo: document.body,
+      props: { backend: mock.backend, onboarding: useOnboarding(mock.backend) },
+      global: { plugins: [i18n] },
+    })
+    await flushPromises()
+
+    let releaseProbe!: () => void
+    const probeGate = new Promise<void>((resolve) => { releaseProbe = resolve })
+    const originalSend = mock.backend.send
+    const pendingProbe = vi.spyOn(mock.backend, 'send').mockImplementationOnce(async (...args) => {
+      await probeGate
+      return originalSend(...args)
+    })
+    try {
+      const install = wrapper.findAll('button').find((button) => button.text() === i18n.global.t('cli-manage.install'))!
+      ;(install.element as HTMLButtonElement).focus()
+      await install.trigger('click')
+      await vi.dynamicImportSettled()
+      await flushPromises()
+
+      expect(wrapper.get('.ci-redetect').attributes('disabled')).toBeDefined()
+      expect(document.activeElement).toBe(wrapper.get('.ci-close').element)
+    } finally {
+      releaseProbe()
+      await flushPromises()
+      pendingProbe.mockRestore()
+    }
   })
 })

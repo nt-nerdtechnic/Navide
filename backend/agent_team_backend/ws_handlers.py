@@ -57,6 +57,7 @@ from .mcp_settings import (
 from .plan_index import resolve_plan_root
 from .plan_provisioning import SPEC_FILENAME, TEMPLATE_FILENAME, ensure_plan_assets
 from .profiles_store import SUPPORTED_AGENT_KEYS as PROFILE_AGENT_KEYS
+from .skills_events import notify_skills_changed
 from .skills_store import (
     SkillConflictError,
     SkillConsentRequired,
@@ -2525,7 +2526,14 @@ async def _run_skill_operation(
     kwargs: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     try:
-        return await asyncio.to_thread(operation, *args, **(kwargs or {}))
+        result = await asyncio.to_thread(operation, *args, **(kwargs or {}))
+        if msg_type in {
+            "skills.create", "skills.save", "skills.set_enabled", "skills.set_targets",
+            "skills.set_native_targets", "skills.migrate_native", "skills.restore_native",
+            "skills.delete",
+        }:
+            await notify_skills_changed(name, msg_type.removeprefix("skills."))
+        return result
     except SkillNotFoundError as err:
         await session.send_json(
             make_error(
@@ -2710,6 +2718,7 @@ async def skills_set_native_targets(
         app.skills_store,
         real_path,
         agents,
+        name=Path(real_path).name,
     )
     if result is not None:
         await session.send_json(make_response(msg_id, msg_type, result))
@@ -2731,6 +2740,7 @@ async def skills_migrate_native(
         msg_type,
         app.skills_store.migrate_native,
         real_path,
+        name=Path(real_path).name,
         kwargs={"consent": payload.get("consent") is True},
     )
     if result is not None:
