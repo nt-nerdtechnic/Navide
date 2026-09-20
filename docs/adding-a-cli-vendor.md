@@ -17,12 +17,25 @@ You never need to read or modify the shared orchestration code.
    vendor needs a module there — a re-export shim when you wrote a reader
    (copy any existing one), an empty placeholder when you did not. If you
    wrote one, also list its class in `log_readers/__init__.py`
-   (`_MIGRATED_READERS` and `__all__`).
-5. Add `backend/tests/vendors/test_<key>.py` covering what you implemented.
-6. Add your key to two hardcoded lists in the tests: `EXPECTED_KEYS` in
+   (`_MIGRATED_READERS` and `__all__`). Shipping no reader has one consequence
+   worth knowing up front: Navide cannot learn the id of a session it started,
+   so set `supports_session_resume=False` (it defaults to **True**) and leave
+   `resumeArgs` out of the frontend spec — the two sides are cross-checked.
+5. Add a row to `MEMORY_SOURCES` in
+   `backend/agent_team_backend/native_memory.py` naming the instruction file
+   your CLI reads (`AGENTS.md` for most). Every vendor must be mapped there or
+   listed in `_CONFIGURED`; otherwise `test_native_memory` fails with a vendor
+   in state `unknown`.
+6. Add `backend/tests/vendors/test_<key>.py` covering what you implemented.
+7. Add your key to the hardcoded lists in the tests: `EXPECTED_KEYS` in
    `backend/tests/test_cli_vendors_registry.py`, and the `SNAPSHOT` in
-   `backend/tests/vendors/test_install_deps_snapshot.py` (append your entry
-   last unless you also added the key to `_AGENT_CLI_ORDER`).
+   `backend/tests/vendors/test_install_deps_snapshot.py`. The snapshot is
+   ordered by `DEPS`, which is `_AGENT_CLI_ORDER` first and then the remaining
+   keys in **registry order** — so unless you add your key to
+   `_AGENT_CLI_ORDER`, your entry goes where the key sorts among the others,
+   which is usually *not* the end. Run the test and let the diff place it.
+8. Only if your spec sets `login_command_args`: add the key to the expected set
+   in `backend/tests/test_login_spawn_command.py`.
 
 ## Frontend
 
@@ -31,7 +44,25 @@ You never need to read or modify the shared orchestration code.
    flags — the template lists every optional field with pointers to the
    full docs in `agents/types.ts`).
 2. Register it in `agents/index.ts` (one line, display order).
-3. Run `pnpm vitest run src/renderer/src/platform/plugin-shell/agents` — the structural tests there
+3. Add a row to `vendors` in `src/renderer/src/components/CliAgentsHelp.vue`
+   (Settings ▸ Help). It is a hand-maintained mirror, and
+   `test_help_panel_sign_in_column_matches_login_command_args` compares its
+   `signIn` column against every spec's `login_command_args`.
+4. Update `src/renderer/src/components/__tests__/CliAgentsHelp.test.ts`: the
+   table row count (asserted twice, once per locale), the sign-in command
+   list, and the list of which cells render a `<code>` element.
+5. Append your `{ agentKey, label, hint }` to
+   `plugins/navide-plans/src/retained/agentSpecs.ts` — the plans plugin keeps a
+   retained copy that a test compares against the live list.
+6. Only if your spec declares `home_env_vars`: add each one to
+   `SPAWN_ENV_RESERVED_KEYS` in
+   `src/renderer/src/platform/plugin-shell/lib/cliLaunchOverride.ts`. This is
+   product code, not a test list: a home relocator Navide sets itself must not
+   be offered as a user-editable spawn env var, or the page promises an
+   override that gets overwritten.
+7. Only if your spec has no `skipPermissionFlag`: update the flagless-vendor
+   list in `src/renderer/src/platform/plugin-shell/lib/cliPermission.test.ts`.
+8. Run `pnpm vitest run src/renderer/src/platform/plugin-shell/agents` — the structural tests there
    check your spec against the rules the template states (key matches the
    filename, the file is registered, `resumeCommandPattern` matches the
    command Navide builds for you, no `/g` on a matcher). They need no edit
