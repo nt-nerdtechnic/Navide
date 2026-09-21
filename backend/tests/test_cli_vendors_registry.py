@@ -52,7 +52,9 @@ ALLOWED_LOCAL_IMPORTS = {
     "usage_common",
 }
 VENDOR_IMPORT_EXEMPTIONS = {"kilo": {"opencode"}}
-ALLOWED_THIRD_PARTY = {"httpx", "yaml"}
+# psutil is a leaf (codex reads CODEX_HOME off running processes to keep a
+# live pane home out of the startup sweep).
+ALLOWED_THIRD_PARTY = {"httpx", "psutil", "yaml"}
 
 
 def test_registry_matches_expected_vendor_set() -> None:

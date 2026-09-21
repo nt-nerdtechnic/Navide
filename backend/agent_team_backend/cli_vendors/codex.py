@@ -24,8 +24,11 @@ import os
 import tempfile
 import re
 import shutil
+import sqlite3
 import threading
 import time
+
+import psutil
 
 from .base import Dep, McpWiring, SkillsWiring, VendorRuntimeContext, VendorSpec, command_text
 from ..applog import app_data_dir
@@ -1094,24 +1097,75 @@ class CodexHomeManager:
         return None
 
     def owns_session(self, pane_home: Path) -> bool:
-        """True when this home physically holds a rollout.
+        """True when a rollout can only be resumed through this home.
 
         `codex resume <id>` only works from the home that recorded the rollout
         (its file plus that home's own state db), so a home holding one must
-        outlive its pane. A symlinked `sessions` (the pre-9ab9e87c mirror back
-        to ~/.codex/sessions) owns nothing: those rollouts live in the real
-        home and `find_session_home` already routes them there. Archived
-        rollouts count too — `codex unarchive` needs the same home. Fails
-        closed: a subdir that cannot be read is treated as owning a session.
+        outlive its pane. Archived rollouts count too — `codex unarchive`
+        needs the same home. Fails closed: a subdir that cannot be read is
+        treated as owning a session.
+
+        A symlinked `sessions` (a mirror back to ~/.codex/sessions) holds no
+        file of its own, but codex 0.155 resolves a resume through the
+        `rollout_path` in its state db — and a rollout written through the
+        link was recorded under THIS home's path. Removing the home leaves
+        that pointer dangling ("no rollout found for thread id") even though
+        the file survives in the real home, so a mirrored home is owned by
+        every thread the real home's state db still keys on it.
         """
         for name in _SESSION_SUBDIRS:
             subdir = pane_home / name
-            if subdir.is_symlink() or not subdir.is_dir():
+            if subdir.is_symlink():
+                if self._state_db_references(pane_home):
+                    return True
+                continue
+            if not subdir.is_dir():
                 continue
             try:
                 if next(subdir.rglob("rollout-*.jsonl"), None) is not None:
                     return True
             except OSError:
+                return True
+        return False
+
+    def _state_db_references(self, pane_home: Path) -> bool:
+        """True when the real home's state db keys a rollout on ``pane_home``.
+
+        Fails closed: a db that exists but cannot be queried — a schema this
+        code does not know included — counts as a reference. No db at all
+        means codex never wrote there.
+        """
+        prefix = f"{pane_home}{os.sep}"
+        if not self.real_home.is_dir():
+            return False
+        try:
+            dbs = [
+                p for p in self.real_home.iterdir()
+                if p.name.startswith("state_") and p.suffix == ".sqlite"
+            ]
+        except OSError:
+            return True
+        for db in dbs:
+            try:
+                # A plain connection: read-only mode cannot create the -shm a
+                # WAL database needs when its writer is not around. `_` in a
+                # home path is a LIKE wildcard; a false match only keeps a home.
+                conn = sqlite3.connect(db, timeout=5)
+                try:
+                    row = conn.execute(
+                        "SELECT 1 FROM threads WHERE rollout_path LIKE ? LIMIT 1",
+                        (prefix + "%",),
+                    ).fetchone()
+                finally:
+                    conn.close()
+            except sqlite3.Error as err:
+                # Includes "no such table": codex renames its files and moves
+                # tables across schema bumps (state_4 -> state_5,
+                # thread_history split out), and a bump that moves `threads`
+                # must not read as "nothing references this home".
+                log.warning("cannot read codex state db %s: %s", db, err)
+                return True
+            if row is not None:
                 return True
         return False
 
@@ -1143,9 +1197,13 @@ class CodexHomeManager:
         return True
 
     def sweep_orphans(self) -> list[str]:
-        """Reclaim every pane home no pane needs. Runs once at backend start,
-        when no pane is live, so the only homes it keeps are the ones
-        `reclaim` refuses. Returns the ids it removed."""
+        """Reclaim every pane home no pane needs. Runs once at backend start.
+
+        This backend has no live pane then, but another Navide on the same
+        machine (a packaged build beside `pnpm dev`) may: its codex processes
+        carry CODEX_HOME in their environment, and a home one of them runs in
+        is skipped. Otherwise the only homes kept are the ones `reclaim`
+        refuses. Returns the ids it removed."""
         if not self.panes_root.is_dir():
             return []
         try:
@@ -1153,9 +1211,12 @@ class CodexHomeManager:
         except OSError as err:
             log.warning("enumerating %s failed: %s", self.panes_root, err)
             return []
+        live = self._live_codex_homes()
         reclaimed: list[str] = []
         for name in names:
             if not _NAVIDE_HOME_ID.match(name):
+                continue
+            if name in live:
                 continue
             try:
                 if self.reclaim(name):
@@ -1163,6 +1224,28 @@ class CodexHomeManager:
             except OSError as err:
                 log.warning("reclaiming codex pane home %s failed: %s", name, err)
         return reclaimed
+
+    def _live_codex_homes(self) -> set[str]:
+        """Names of the pane homes some running process has as CODEX_HOME.
+
+        Only this user's processes expose their environment; anything else
+        is skipped, not treated as live. Read once per sweep."""
+        root = self.panes_root.resolve()
+        live: set[str] = set()
+        for proc in psutil.process_iter():
+            try:
+                home = proc.environ().get("CODEX_HOME")
+            except (psutil.Error, OSError):
+                continue
+            if not home:
+                continue
+            try:
+                path = Path(home).resolve()
+            except OSError:
+                continue
+            if path.parent == root:
+                live.add(path.name)
+        return live
 
     def cleanup(self, home_id: str) -> bool:
         safe_id = self._safe_home_id(home_id)

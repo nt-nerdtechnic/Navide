@@ -1879,8 +1879,9 @@ async def _reclaim_orphan_codex_homes() -> None:
         return
     if reclaimed:
         log.info(
-            "reclaimed %d orphan codex pane home(s) in %.0fms",
+            "reclaimed %d orphan codex pane home(s) in %.0fms: %s",
             len(reclaimed), (time.monotonic() - started) * 1000,
+            " ".join(reclaimed),
         )
 
 

@@ -9,12 +9,14 @@ the rollout, so a home that still holds one is never touched.
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from agent_team_backend import app
+from agent_team_backend.cli_vendors import codex as codex_vendor
 from agent_team_backend.codex_home import CodexHomeManager
 
 PANE_A = "0a1b2c3d-1111-4222-8333-444455556666"
@@ -64,12 +66,26 @@ def test_reclaim_keeps_a_home_that_owns_a_rollout(tmp_path: Path, subdir: str) -
     assert rollout.exists()
 
 
+def _state_db(real: Path, rollout_paths: list[str]) -> Path:
+    db = real / "state_5.sqlite"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL)")
+    conn.executemany(
+        "INSERT INTO threads VALUES (?, ?)",
+        [(f"thread-{i}", path) for i, path in enumerate(rollout_paths)],
+    )
+    conn.commit()
+    conn.close()
+    return db
+
+
 def test_reclaim_treats_a_symlinked_sessions_dir_as_unowned(tmp_path: Path) -> None:
     """The legacy mirror: `sessions` links back to ~/.codex/sessions. Those
     rollouts belong to the real home (find_session_home routes there), so the
     pane home owns nothing — and the link is removed, never its target."""
     manager, real, _panes = _manager(tmp_path)
     real_rollout = _rollout(real)
+    _state_db(real, [str(real_rollout)])
     home = manager.prepare(PANE_A)
     (home / "sessions").symlink_to(real / "sessions", target_is_directory=True)
 
@@ -77,6 +93,48 @@ def test_reclaim_treats_a_symlinked_sessions_dir_as_unowned(tmp_path: Path) -> N
 
     assert not home.exists()
     assert real_rollout.exists()
+
+
+def test_reclaim_keeps_a_mirrored_home_the_state_db_still_keys_on(tmp_path: Path) -> None:
+    """codex 0.155 resumes through `threads.rollout_path` in its state db. A
+    rollout written through the mirror link was recorded under the PANE path,
+    so removing the home strands the thread ("no rollout found for thread
+    id") although the file lives on in the real home (2026-09-21)."""
+    manager, real, _panes = _manager(tmp_path)
+    real_rollout = _rollout(real)
+    home = manager.prepare(PANE_A)
+    (home / "sessions").symlink_to(real / "sessions", target_is_directory=True)
+    _state_db(real, [str(home / "sessions" / real_rollout.relative_to(real / "sessions"))])
+
+    assert manager.reclaim(PANE_A) is False
+
+    assert (home / "sessions").is_symlink()
+    assert real_rollout.exists()
+
+
+def test_reclaim_keeps_a_mirrored_home_when_the_state_db_is_unreadable(tmp_path: Path) -> None:
+    manager, real, _panes = _manager(tmp_path)
+    (real / "state_5.sqlite").write_text("not a database", encoding="utf-8")
+    home = manager.prepare(PANE_A)
+    (home / "sessions").symlink_to(real / "sessions", target_is_directory=True)
+
+    assert manager.reclaim(PANE_A) is False
+    assert home.exists()
+
+
+def test_reclaim_keeps_a_mirrored_home_when_the_state_db_has_no_threads_table(
+    tmp_path: Path,
+) -> None:
+    """A schema bump that moves `threads` elsewhere must read as "unknown",
+    not "unreferenced" — the latter would reclaim every mirrored home at once
+    and look exactly like a clean sweep."""
+    manager, real, _panes = _manager(tmp_path)
+    sqlite3.connect(real / "state_5.sqlite").close()
+    home = manager.prepare(PANE_A)
+    (home / "sessions").symlink_to(real / "sessions", target_is_directory=True)
+
+    assert manager.reclaim(PANE_A) is False
+    assert home.exists()
 
 
 def test_reclaim_only_touches_navide_shaped_home_ids(tmp_path: Path) -> None:
@@ -141,6 +199,38 @@ def test_sweep_orphans_reclaims_unowned_homes_and_keeps_the_rest(tmp_path: Path)
     assert not linked.exists()
     assert owning.exists()
     assert foreign.exists()
+
+
+def test_sweep_orphans_skips_a_home_a_running_codex_uses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Another Navide on this machine (a packaged build beside `pnpm dev`)
+    still has panes when this backend starts. Its codex processes carry the
+    home in CODEX_HOME; sweeping one from under them cost the user every
+    shared link in it and the thread pointer (2026-09-21, 79 + 27 homes)."""
+    manager, _real, _panes = _manager(tmp_path)
+    live = manager.prepare(PANE_A)
+    idle = manager.prepare(PANE_B)
+
+    class _Proc:
+        def __init__(self, env: dict[str, str] | None) -> None:
+            self._env = env
+
+        def environ(self) -> dict[str, str]:
+            if self._env is None:
+                raise codex_vendor.psutil.AccessDenied(pid=1)
+            return self._env
+
+    monkeypatch.setattr(
+        codex_vendor.psutil, "process_iter",
+        lambda: [_Proc(None), _Proc({}), _Proc({"CODEX_HOME": str(live)})],
+    )
+
+    reclaimed = manager.sweep_orphans()
+
+    assert reclaimed == [PANE_B]
+    assert live.exists()
+    assert not idle.exists()
 
 
 def test_sweep_orphans_without_a_panes_root_is_a_noop(tmp_path: Path) -> None:
