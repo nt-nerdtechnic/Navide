@@ -34,6 +34,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .. import osplat
 from .base import (
+    AccountSwitchSpec,
     Dep,
     McpServerConfig,
     McpValue,
@@ -1346,6 +1347,12 @@ SPEC = VendorSpec(
     ),
     login_command_args="auth login",
     install_hooks=_install_hooks,
+    # The usage-limit banner Claude Code prints ("You've hit your … limit ·
+    # resets 3pm (Asia/Taipei)"); the same detector the frontend spec's
+    # ``quotaExhausted`` carries, so a cli-text report matches on both sides.
+    quota_exhausted_patterns=(
+        r"hit your .{0,40}limit.{0,80}?resets\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)\s*\([^)]+\)",
+    ),
     classify_secret=classify_secret,
     # `claude setup-token` mints a one-year OAuth token that "authenticates
     # with your Claude subscription" and is documented for exactly this use:
@@ -1380,6 +1387,27 @@ SPEC = VendorSpec(
     live_file=(".claude", ".credentials.json"),
     slot_file=".credentials.json",
     profile_home_secret_file=(".credentials.json",),
+    # The one CLI that re-reads its credential per request: a swap of the
+    # live Keychain item (file elsewhere) takes effect in running panes
+    # without a restart. The vault's HOT_SWAP path has shipped and been used
+    # on real accounts, but the Claude Code version of that acceptance was
+    # never recorded, so the evidence stays "source" until an A -> B -> A
+    # round-trip is logged against a named version. No ``expires_at``: the
+    # stored ``expiresAt`` is the ACCESS token's, which Claude Code refreshes
+    # on its own — reporting it would mark a valid parked account expired.
+    account_switch=AccountSwitchSpec(
+        auth_scope="claude",
+        method="hot",
+        store="keychain",
+        evidence="source",
+        verified_version="2.1.278",
+        keychain_items=(("Claude Code-credentials", ""),),
+        # An API key / auth token in the environment, or Navide's own
+        # portable long-lived token, replaces the OAuth login entirely.
+        shadowing_env=("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"),
+        resume="native",
+        todo="hot swap shipped and used on real accounts; record an A -> B -> A round-trip against 2.1.278",
+    ),
     # login_home_secret_file stays None: claude's login-home secret lives in
     # a path-hashed Keychain item, not a peekable file (see credential_vault).
     # The vault's claude behavior branches (Keychain dual-track, oauthAccount,

@@ -34,6 +34,23 @@ function update(action?: 'download' | 'install'): Announcement {
   }
 }
 
+function quota(actions?: Announcement['actions']): Announcement {
+  return {
+    id: 'quota:inc-1',
+    kind: 'quota',
+    title: 'Claude Code: dev@example.com has run out of quota',
+    highlights: ['Affects 2 workspace(s), 3 pane(s)', 'work@example.com — quota available'],
+    note: 'dev@example.com is expected back around 15:00 (not verified).',
+    createdAt: Date.parse('2026-09-21T10:00:00.000Z'),
+    read: false,
+    actions,
+  }
+}
+
+const SWITCH = { kind: 'quota-switch', incidentId: 'inc-1', agentKey: 'claude', epoch: 7, slotId: 'slot-b', label: 'work@example.com', tier: 'fresh-headroom' } as const
+const BACK = { kind: 'quota-switch-back', incidentId: 'inc-1', agentKey: 'claude', epoch: 7, slotId: 'slot-a', label: 'dev@example.com' } as const
+const RETRY = { kind: 'quota-retry-resume', incidentId: 'inc-1', agentKey: 'claude', epoch: 7 } as const
+
 function mountPanel(items: Announcement[]): VueWrapper {
   return mount(AnnouncementsPanel, { props: { items }, global: { plugins: [i18n] } })
 }
@@ -105,6 +122,56 @@ describe('AnnouncementsPanel', () => {
     wrapper.unmount()
     wrapper = mountPanel([update()])
     expect(wrapper.findAll('.an-acts')).toHaveLength(0)
+  })
+
+  it('renders a quota row with one typed button per action, carrying slot and epoch', async () => {
+    wrapper = mountPanel([quota([SWITCH, BACK, RETRY]), update('download')])
+
+    const row = wrapper.get('[data-ann-id="quota:inc-1"]')
+    expect(row.attributes('data-ann-kind')).toBe('quota')
+    const buttons = row.findAll('.an-acts button')
+    expect(buttons.map((b) => b.attributes('data-act'))).toEqual(['quota-switch', 'quota-switch-back', 'quota-retry-resume'])
+    expect(buttons[0].attributes('data-slot')).toBe('slot-b')
+    expect(buttons[0].attributes('data-epoch')).toBe('7')
+    expect(buttons[0].text()).toContain('work@example.com')
+    expect(buttons[1].text()).toContain('dev@example.com')
+    expect(buttons[2].attributes('data-slot')).toBeUndefined()
+
+    await buttons[0].trigger('click')
+    await buttons[1].trigger('click')
+    await buttons[2].trigger('click')
+    // The whole typed action goes out, untouched — ids and epoch are what
+    // the backend re-validates against. Nothing else is emitted for it.
+    expect(wrapper.emitted('quota-action')).toEqual([[SWITCH], [BACK], [RETRY]])
+    expect(wrapper.emitted('download')).toBeUndefined()
+    expect(wrapper.emitted('install')).toBeUndefined()
+    // Acting on the row must not also toggle it open.
+    expect(wrapper.findAll('.an-detail')).toHaveLength(0)
+
+    // The update row's button still emits its own event, not quota-action.
+    await wrapper.get('[data-act="download"]').trigger('click')
+    expect(wrapper.emitted('download')).toHaveLength(1)
+    expect(wrapper.emitted('quota-action')).toHaveLength(3)
+  })
+
+  it('a quota row without actions shows no button strip, and expands to its lines', async () => {
+    wrapper = mountPanel([quota()])
+    expect(wrapper.findAll('.an-acts')).toHaveLength(0)
+
+    await wrapper.get('[data-ann-id="quota:inc-1"]').trigger('click')
+    const detail = wrapper.get('[data-ann-id="quota:inc-1"] .an-detail')
+    expect(detail.text()).toContain('work@example.com — quota available')
+    expect(detail.text()).toContain('not verified')
+    // A quota row is not an update row: no "release notes" heading.
+    expect(detail.findAll('.an-sub')).toHaveLength(0)
+    expect(wrapper.emitted('read')).toEqual([['quota:inc-1']])
+    expect(wrapper.html()).not.toContain('announce.')
+  })
+
+  it('an update row listing its action in `actions` renders one button, not two', () => {
+    wrapper = mountPanel([{ ...update('install'), actions: [{ kind: 'install' }] }])
+    expect(wrapper.findAll('.an-acts button')).toHaveLength(1)
+    expect(wrapper.get('[data-act="install"]').text()).toBe(i18n.global.t('updater.install'))
   })
 
   it('pages the feed behind a load-more button instead of rendering it all', async () => {

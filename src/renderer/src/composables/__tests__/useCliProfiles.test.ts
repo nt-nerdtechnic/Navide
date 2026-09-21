@@ -180,6 +180,123 @@ describe('useCliProfiles', () => {
     scope.stop()
   })
 
+  it('create forwards the provider scope the caller picked, never one of its own', async () => {
+    const mock = createMockBackend('connected')
+    mock.setResponse('cli_profiles.list', {
+      profiles: [], defaults: {}, supported_agents: [...SUPPORTED, 'opencode'],
+      account_capabilities: {
+        opencode: { agentKey: 'opencode', supported: true, authScope: 'opencode', method: 'restart', evidence: 'source', platforms: ['darwin'], scopes: ['anthropic', 'openai'], resume: 'native', todo: '' },
+      },
+    })
+    const created = { ...profile('p9', 'opencode', 'Account 2'), scope: 'openai' }
+    mock.setResponse('cli_profiles.create', { profile: created, profiles: [created], defaults: {} })
+    const { result, scope } = withScope(() => useCliProfiles(mock.backend))
+    await flush()
+
+    expect(result.scopesFor('opencode')).toEqual(['anthropic', 'openai'])
+    expect(result.scopesFor('claude')).toEqual([])
+    expect(result.capabilityFor('opencode')?.platforms).toEqual(['darwin'])
+    await result.create('opencode', 'Account 2', 'openai')
+    expect(mock.sent.find((s) => s.type === 'cli_profiles.create')?.payload).toEqual({ agent_key: 'opencode', name: 'Account 2', scope: 'openai' })
+    mock.sent.length = 0
+    await result.create('codex', 'Personal', null)
+    expect(mock.sent.find((s) => s.type === 'cli_profiles.create')?.payload).toEqual({ agent_key: 'codex', name: 'Personal' })
+    scope.stop()
+  })
+
+  it.each([
+    ['UNKNOWN_SCOPE', {}, 'cli-account.preflight-unknown-scope'],
+    ['SHADOWED_BY_ENV', { shadowedBy: ['ANTHROPIC_API_KEY'] }, 'cli-account.preflight-shadowed-by-env'],
+    ['PLATFORM_UNSUPPORTED', {}, 'cli-account.preflight-platform-unsupported'],
+    ['UNSUPPORTED', {}, 'cli-account.preflight-unsupported'],
+    ['IDENTITY_UNKNOWN', {}, 'cli-account.preflight-identity-unknown'],
+    ['UNRECONCILED_STATE', { transactionId: 'tx' }, 'cli-account.preflight-unreconciled'],
+    ['CREDENTIAL_SOURCE_UNKNOWN', { reason: 'uncertain_env' }, 'cli-account.preflight-credential-source-unknown'],
+  ])('set_default turns a %s preflight refusal into a sentence, never the raw code', async (code, details, key) => {
+    const { i18n } = await import('@navide/plugin-ui/foundation')
+    const mock = createMockBackend('connected')
+    mock.setResponse('cli_profiles.list', { profiles: [], defaults: {}, supported_agents: SUPPORTED })
+    mock.setResponse('cli_profiles.set_default', null as unknown as object, {
+      ok: false, error: { code, message: code, details },
+    })
+    const { result, scope } = withScope(() => useCliProfiles(mock.backend))
+    await flush()
+
+    const res = await result.setDefault('claude', 'p1')
+    expect(res.ok).toBe(false)
+    if (!res.ok) {
+      expect(res.code).toBe(code)
+      const expected = i18n.global.t(key, { agent: 'Claude Code', vars: 'ANTHROPIC_API_KEY' })
+      expect(res.message).toBe(expected)
+      expect(res.message).not.toContain(code)
+      expect(res.message).not.toContain('cli-account.')
+      expect(result.error.value).toBe(expected)
+    }
+    scope.stop()
+  })
+
+  it('set_default: LOGIN_IN_PROGRESS with a state, LIVE_DRIFT and adoptedLiveLogin are surfaced as sentences / flags', async () => {
+    const { i18n } = await import('@navide/plugin-ui/foundation')
+    const mock = createMockBackend('connected')
+    mock.setResponse('cli_profiles.list', { profiles: [], defaults: {}, supported_agents: SUPPORTED })
+    const { result, scope } = withScope(() => useCliProfiles(mock.backend))
+    await flush()
+
+    mock.setResponse('cli_profiles.set_default', null as unknown as object, {
+      ok: false, error: { code: 'LOGIN_IN_PROGRESS', message: 'LOGIN_IN_PROGRESS', details: { agentKey: 'kilo', profileId: null, state: 'running' } },
+    })
+    let res = await result.setDefault('kilo', 'p1')
+    expect(res.ok).toBe(false)
+    if (!res.ok) {
+      expect(res.message).toBe(i18n.global.t('cli-account.login-in-progress', { agent: 'Kilo Code', state: 'running' }))
+      expect(res.message).not.toContain('LOGIN_IN_PROGRESS')
+    }
+
+    mock.setResponse('cli_profiles.set_default', null as unknown as object, {
+      ok: false, error: { code: 'LIVE_DRIFT', message: 'LIVE_DRIFT', details: { currentSlotId: '__default__', targetSlotId: 'p1' } },
+    })
+    res = await result.setDefault('kilo', 'p1')
+    expect(res.ok).toBe(false)
+    if (!res.ok) expect(res.message).toBe(i18n.global.t('cli-account.live-drift', { agent: 'Kilo Code' }))
+
+    mock.setResponse('cli_profiles.set_default', { defaults: { kilo: 'p1' }, adoptedLiveLogin: true })
+    res = await result.setDefault('kilo', 'p1')
+    expect(res).toEqual({ ok: true, needsLogin: false, needsLoginReason: undefined, adoptedLiveLogin: true })
+    scope.stop()
+  })
+
+  it('a Copilot plaintext token store is named as such, whatever the error code', async () => {
+    const { i18n } = await import('@navide/plugin-ui/foundation')
+    const mock = createMockBackend('connected')
+    mock.setResponse('cli_profiles.list', { profiles: [], defaults: {}, supported_agents: [...SUPPORTED, 'copilot'] })
+    mock.setResponse('cli_profiles.set_default', null as unknown as object, {
+      ok: false, error: { code: 'PROFILE_SWAP_FAILED', message: 'CredentialVaultError: copilot storeTokenPlaintext is enabled; refusing to touch the token file' },
+    })
+    const { result, scope } = withScope(() => useCliProfiles(mock.backend))
+    await flush()
+    const res = await result.setDefault('copilot', 'p1')
+    expect(res.ok).toBe(false)
+    if (!res.ok) expect(res.message).toBe(i18n.global.t('cli-account.plaintext-token-store'))
+    scope.stop()
+  })
+
+  it('loginIsGlobal reads the backend capability and is false when unknown', async () => {
+    const mock = createMockBackend('connected')
+    mock.setResponse('cli_profiles.list', {
+      profiles: [], defaults: {}, supported_agents: [...SUPPORTED, 'kilo'],
+      account_capabilities: {
+        kilo: { agentKey: 'kilo', supported: true, authScope: 'kilo', method: 'restart', evidence: 'source', platforms: [], scopes: [], resume: 'native', todo: '', loginIsolation: 'global' },
+        claude: { agentKey: 'claude', supported: true, authScope: 'claude', method: 'hot', evidence: 'source', platforms: [], scopes: [], resume: 'native', todo: '', loginIsolation: 'isolated' },
+      },
+    })
+    const { result, scope } = withScope(() => useCliProfiles(mock.backend))
+    await flush()
+    expect(result.loginIsGlobal('kilo')).toBe(true)
+    expect(result.loginIsGlobal('claude')).toBe(false)
+    expect(result.loginIsGlobal('codex')).toBe(false)
+    scope.stop()
+  })
+
   it('syncs cache from a cli_profiles.changed broadcast', async () => {
     const mock = createMockBackend('connected')
     mock.setResponse('cli_profiles.list', { profiles: [], defaults: {}, supported_agents: SUPPORTED })
@@ -412,6 +529,107 @@ describe('createCliAccountSwitchHandler', () => {
     const res = await handler('claude', 'p1')
     expect(res).toEqual({ ok: false, code: 'PROFILE_SWAP_FAILED', message: 'swap failed' })
     expect(caps.confirm).not.toHaveBeenCalled()
+  })
+})
+
+describe('createCliAccountSwitchHandler — unverifiable live drift', () => {
+  const DRIFT: SetDefaultResult = { ok: false, code: 'LIVE_DRIFT', message: 'drift', liveDrift: { verified: false, currentSlotId: '__default__', epoch: 4, liveFingerprint: 'fp-1' } }
+  function driftApi(sequence: SetDefaultResult[]) {
+    const setDefault = vi.fn(async () => sequence.shift() ?? ({ ok: true } as SetDefaultResult))
+    return { setDefault }
+  }
+  const caps = () => ({
+    confirm: vi.fn(async () => true),
+    agentLabel: (k: string) => k,
+    accountLabel: (_k: string, id: string | null) => (id ?? 'Default'),
+    startLogin: vi.fn(),
+  })
+
+  it('asks the user (naming the account the BACKEND reported current) and resends with that slot + epoch as the expected state', async () => {
+    const api = driftApi([DRIFT, { ok: true }])
+    const c = caps()
+    const res = await createCliAccountSwitchHandler(api, c)('kilo', 'p1')
+    expect(res).toEqual({ ok: true })
+    expect(c.confirm).toHaveBeenCalledTimes(1)
+    const [body, opts] = c.confirm.mock.calls[0] as unknown as [string, { confirmText: string }]
+    expect(body).toContain('no identity')
+    expect(body).toContain('Default')
+    expect(body).toContain('p1')
+    expect(opts.confirmText).toContain('Default')
+    expect(api.setDefault).toHaveBeenNthCalledWith(1, 'kilo', 'p1')
+    expect(api.setDefault).toHaveBeenNthCalledWith(2, 'kilo', 'p1', {
+      assumeLiveIsCurrent: { expectedCurrentSlotId: '__default__', expectedEpoch: 4, liveFingerprint: 'fp-1' },
+    })
+  })
+
+  it('a decline resends nothing and returns the refusal', async () => {
+    const api = driftApi([DRIFT])
+    const c = caps()
+    c.confirm.mockResolvedValueOnce(false)
+    const res = await createCliAccountSwitchHandler(api, c)('kilo', 'p1')
+    expect(res).toMatchObject({ ok: false, code: 'LIVE_DRIFT' })
+    expect(api.setDefault).toHaveBeenCalledTimes(1)
+  })
+
+  it('a verified drift is returned as-is: no confirm, no assumption', async () => {
+    const api = driftApi([{ ...DRIFT, liveDrift: { verified: true, currentSlotId: '__default__', epoch: 4, liveFingerprint: 'fp-1' } } as SetDefaultResult])
+    const c = caps()
+    const res = await createCliAccountSwitchHandler(api, c)('kilo', 'p1')
+    expect(res).toMatchObject({ ok: false, code: 'LIVE_DRIFT' })
+    expect(c.confirm).not.toHaveBeenCalled()
+    expect(api.setDefault).toHaveBeenCalledTimes(1)
+  })
+
+  it('a refusal missing the current slot, the epoch or the fingerprint gets no assumption: refusal shown, nothing resent', async () => {
+    for (const drift of [
+      { verified: false, currentSlotId: null, epoch: 4, liveFingerprint: 'fp-1' },
+      { verified: false, currentSlotId: '__default__', epoch: null, liveFingerprint: 'fp-1' },
+      { verified: false, currentSlotId: '__default__', epoch: 4, liveFingerprint: null },
+    ]) {
+      const api = driftApi([{ ok: false, code: 'LIVE_DRIFT', message: 'drift', liveDrift: drift } as SetDefaultResult])
+      const c = caps()
+      const res = await createCliAccountSwitchHandler(api, c)('kilo', 'p1')
+      expect(res).toMatchObject({ ok: false, code: 'LIVE_DRIFT' })
+      expect(c.confirm).not.toHaveBeenCalled()
+      expect(api.setDefault).toHaveBeenCalledTimes(1)
+    }
+  })
+
+  it('a stale refusal on the resend (the account or its epoch moved while the dialog was open, A→C→A included) is returned, never forced or re-asked', async () => {
+    const api = driftApi([DRIFT, { ok: false, code: 'STALE_EPOCH', message: 'epoch moved' }])
+    const c = caps()
+    const res = await createCliAccountSwitchHandler(api, c)('kilo', 'p1')
+    expect(res).toMatchObject({ ok: false, code: 'STALE_EPOCH' })
+    expect(api.setDefault).toHaveBeenCalledTimes(2)
+    expect(api.setDefault).not.toHaveBeenCalledWith('kilo', 'p1', expect.objectContaining({ force: true }))
+    expect(c.confirm).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('setDefault — LIVE_DRIFT payload', () => {
+  it('carries verified and sends assume_live_is_current only when asked', async () => {
+    const mock = createMockBackend('connected')
+    mock.setResponse('cli_profiles.list', { profiles: [], defaults: {}, supported_agents: [...SUPPORTED, 'kilo'] })
+    mock.setResponse('cli_profiles.set_default', null as unknown as object, {
+      ok: false, error: { code: 'LIVE_DRIFT', message: 'LIVE_DRIFT', details: { currentSlotId: '__default__', targetSlotId: 'p1', verified: false, liveIdentity: { email: null, signedIn: true } } },
+    })
+    const { result, scope } = withScope(() => useCliProfiles(mock.backend))
+    await flush()
+    const res = await result.setDefault('kilo', 'p1')
+    expect(res).toMatchObject({ ok: false, code: 'LIVE_DRIFT', liveDrift: { verified: false, currentSlotId: '__default__', epoch: null, liveFingerprint: null } })
+    expect(mock.sent.find((s) => s.type === 'cli_profiles.set_default')?.payload).toEqual({ agent_key: 'kilo', profile_id: 'p1' })
+    mock.sent.length = 0
+    await result.setDefault('kilo', 'p1', { assumeLiveIsCurrent: { expectedCurrentSlotId: '__default__', expectedEpoch: 4, liveFingerprint: 'fp-1' } })
+    expect(mock.sent.find((s) => s.type === 'cli_profiles.set_default')?.payload).toEqual({
+      agent_key: 'kilo', profile_id: 'p1', assume_live_is_current: true, expected_current_slot_id: '__default__', expected_epoch: 4, live_fingerprint: 'fp-1',
+    })
+    // The backend's epoch and fingerprint are carried back verbatim when it
+    // reports them.
+    mock.setResponse('cli_profiles.set_default', null as unknown as object, {
+      ok: false, error: { code: 'LIVE_DRIFT', message: 'LIVE_DRIFT', details: { currentSlotId: 'p2', targetSlotId: 'p1', verified: false, epoch: 9, liveFingerprint: 'fp-9' } },
+    })
+    expect(await result.setDefault('kilo', 'p1')).toMatchObject({ liveDrift: { verified: false, currentSlotId: 'p2', epoch: 9, liveFingerprint: 'fp-9' } })
+    scope.stop()
   })
 })
 

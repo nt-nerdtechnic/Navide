@@ -1,6 +1,6 @@
 import { onScopeDispose, ref, type InjectionKey } from 'vue'
 import { i18n } from '@navide/plugin-ui/foundation'
-import { paneCanRebuild } from '@navide/plugin-shell'
+import { AGENT_SPECS, paneCanRebuild } from '@navide/plugin-shell'
 import type { useBackend } from './useBackend'
 
 // A CLI account profile: a stored credential slot for one agent CLI so the
@@ -13,6 +13,131 @@ export interface CliProfile {
   agentKey: string
   name: string
   createdAt: string
+  /** Provider entry this slot binds to, for a CLI whose credential store
+   *  holds several providers (opencode, pi, …). Absent = the whole store. */
+  scope?: string | null
+}
+
+/** What a vendor declares about switching accounts, as the backend reports it
+ *  (`cli_profiles.list` → account_capabilities; the same object as
+ *  quota_failover.get_state → capabilities). `supported` is not "automatic"
+ *  and not "verified": `evidence` says whether a real account round-trip was
+ *  ever recorded, `platforms` where the adapter is expected to work, `scopes`
+ *  which providers a new slot must pick from. */
+export interface CliAccountCapability {
+  agentKey: string
+  supported: boolean
+  /** How a new sign-in reaches this vendor. "isolated": in a private home,
+   *  the live credential untouched. "global": the CLI has one credential
+   *  store, so signing in temporarily replaces the live one (restored when
+   *  the sign-in completes; the new account is used only on switch). Read
+   *  from the backend, never inferred from the vendor's env handling. */
+  loginIsolation?: 'isolated' | 'global'
+  authScope: string | null
+  method: 'hot' | 'restart' | 'manual' | null
+  store?: string | null
+  evidence: 'live' | 'source' | 'docs' | null
+  verifiedVersion?: string
+  platforms: string[]
+  scopes: string[]
+  hasExpiry?: boolean
+  hasIdentity?: boolean
+  resume: 'native' | 'lossy' | 'none'
+  todo: string
+  loginCommand?: boolean
+}
+
+/** A switch or slot refusal the backend explains by code; each has a
+ *  sentence of its own so the user never sees the raw code. */
+export const PREFLIGHT_REASON_CODES = new Set([
+  'UNKNOWN_SCOPE',
+  'SCOPE_UNKNOWN',
+  'SHADOWED_BY_ENV',
+  'CREDENTIAL_OVERRIDE',
+  'PLATFORM_UNSUPPORTED',
+  'UNSUPPORTED',
+  'IDENTITY_UNKNOWN',
+  'SCOPE_MISMATCH',
+  'UNRECONCILED_STATE',
+  'LIVE_DRIFT',
+  'LOGIN_BLOCKED_BY_LIVE_PANES',
+  'CREDENTIAL_SOURCE_UNKNOWN',
+])
+
+/** Locale keys of the global-login batch are not in the catalog yet (frozen
+ *  for a parity window); until they land, the English below is shown rather
+ *  than the raw key. Same shape as useAnnouncements' fallback. */
+export const LOGIN_I18N_FALLBACK: Readonly<Record<string, string>> = Object.freeze({
+  'cli-account.login-in-progress': 'A {agent} sign-in is {state} — switch after it completes.',
+  'cli-account.login-blocked-by-live-panes': '{count} running {agent} pane(s) block signing in — close or finish them first.',
+  'cli-account.live-drift': 'The live {agent} credential is not the current account and the target slot is not empty — reconcile from the announcement first.',
+  'cli-account.adopted-live-login': 'The live sign-in already was the selected account; it was adopted into its slot without a swap.',
+  'settings.accounts.cli.global-login-title': 'Sign in on the live credential?',
+  'settings.accounts.cli.global-login-body': '{agent} has no isolated sign-in. During sign-in its live credential is temporarily replaced by the new account; when the sign-in completes the current account ({current}) is restored, and the new account is used only when you switch to it. Running {agent} panes block this — close or finish them first.',
+  'settings.accounts.cli.global-login-confirm': 'Sign in',
+  'settings.accounts.cli.global-login-cancel': 'Cancel',
+  'cli-account.plaintext-token-store': 'This Copilot installation stores its token in plain text (storeTokenPlaintext); Navide cannot switch its accounts safely, so nothing was changed.',
+  'cli-account.live-drift-unverified': "{agent}'s live credential changed and its identity cannot be verified — nothing was switched.",
+  'cli-account.live-drift-confirm-title': 'Is the live credential still the current account?',
+  'cli-account.live-drift-confirm-body': "{agent}'s live credential changed since it was last saved, and this CLI stores no identity Navide could check it against. Continue only if you are certain it is still {current} (a normal token refresh, not another sign-in). If you continue, Navide keeps the live credential as {current} and switches to {target}.",
+  'cli-account.live-drift-confirm-confirm': 'It is still {current} — continue',
+  'cli-account.live-drift-confirm-cancel': 'Cancel',
+})
+
+export function tLogin(key: string, params: Record<string, string | number> = {}): string {
+  if (i18n.global.te(key)) return i18n.global.t(key, params)
+  const fallback = LOGIN_I18N_FALLBACK[key] ?? key
+  return fallback.replace(/\{(\w+)\}/g, (_, name: string) => String(params[name] ?? ''))
+}
+
+/** The user-facing sentence for a preflight refusal, or null for codes that
+ *  are not one. `vars` are the environment variables the backend names for
+ *  SHADOWED_BY_ENV / CREDENTIAL_OVERRIDE. */
+/** A Copilot installed with `storeTokenPlaintext: true` keeps its token in
+ *  clear text; the vault refuses to touch it (zero mutation) and says so in
+ *  the error text. Shown as that fact, not as a generic failure. */
+export function plaintextTokenStoreMessage(message: string | undefined): string | null {
+  if (!message || !message.includes('storeTokenPlaintext')) return null
+  return tLogin('cli-account.plaintext-token-store')
+}
+
+export function preflightMessage(
+  code: string | undefined,
+  details: Record<string, unknown> | undefined,
+  agentLabel: string,
+  message?: string,
+): string | null {
+  const plaintext = plaintextTokenStoreMessage(message)
+  if (plaintext) return plaintext
+  if (!code || !PREFLIGHT_REASON_CODES.has(code)) return null
+  const t = i18n.global.t
+  const vars = Array.isArray(details?.shadowedBy) ? (details!.shadowedBy as string[]).join(', ') : ''
+  switch (code) {
+    case 'UNKNOWN_SCOPE':
+    case 'SCOPE_UNKNOWN':
+      return t('cli-account.preflight-unknown-scope', { agent: agentLabel })
+    case 'SCOPE_MISMATCH':
+      return t('cli-account.preflight-scope-mismatch', { agent: agentLabel })
+    case 'SHADOWED_BY_ENV':
+    case 'CREDENTIAL_OVERRIDE':
+      return t('cli-account.preflight-shadowed-by-env', { vars: vars || 'env' })
+    case 'PLATFORM_UNSUPPORTED':
+      return t('cli-account.preflight-platform-unsupported', { agent: agentLabel })
+    case 'IDENTITY_UNKNOWN':
+      return t('cli-account.preflight-identity-unknown', { agent: agentLabel })
+    case 'UNRECONCILED_STATE':
+      return t('cli-account.preflight-unreconciled', { agent: agentLabel })
+    case 'LIVE_DRIFT':
+      return details?.verified === false
+        ? tLogin('cli-account.live-drift-unverified', { agent: agentLabel })
+        : tLogin('cli-account.live-drift', { agent: agentLabel })
+    case 'CREDENTIAL_SOURCE_UNKNOWN':
+      return t('cli-account.preflight-credential-source-unknown', { agent: agentLabel })
+    case 'LOGIN_BLOCKED_BY_LIVE_PANES':
+      return tLogin('cli-account.login-blocked-by-live-panes', { agent: agentLabel, count: Number(details?.count ?? 0) })
+    default:
+      return t('cli-account.preflight-unsupported', { agent: agentLabel })
+  }
 }
 
 // Outcome of `setDefault`. `count` is set for PANES_RUNNING refusals — the
@@ -25,8 +150,28 @@ export interface CliProfile {
 export type CliLoginReason = 'signed-out' | 'expired'
 
 export type SetDefaultResult =
-  | { ok: true; needsLogin?: boolean; needsLoginReason?: CliLoginReason }
-  | { ok: false; code?: string; message?: string; count?: number }
+  | { ok: true; needsLogin?: boolean; needsLoginReason?: CliLoginReason; adoptedLiveLogin?: boolean }
+  | {
+      ok: false
+      code?: string
+      message?: string
+      count?: number
+      /** LIVE_DRIFT only. `verified: true` = the live credential is known to
+       *  be another account (reconcile / manual only). `verified: false` =
+       *  the live payload changed but the vendor stores no identity to tell
+       *  a token refresh from another sign-in — a MANUAL switch may resend
+       *  with `assumeLiveIsCurrent` after the user confirms it is still the
+       *  current account. `currentSlotId` / `epoch` are what the backend saw
+       *  when it refused; the resend hands them back as the expected state
+       *  and the backend honours the assumption only while both still match
+       *  under its lock (STALE_STATE / STALE_EPOCH otherwise — A→C→A is an
+       *  epoch change too). `liveFingerprint` (an HMAC digest of the live
+       *  credential, not a secret, never shown) goes back too and must still
+       *  match — a CLI that rewrote its live credential during the dialog is
+       *  not the account the user vouched for even with the epoch unchanged.
+       *  Any of the three absent (older backend) = no resend possible. */
+      liveDrift?: { verified: boolean; currentSlotId: string | null; epoch: number | null; liveFingerprint: string | null }
+    }
 
 // Map of agentKey -> default profile id, or null for the built-in Default
 // (the user's real home directory).
@@ -134,6 +279,7 @@ export function useCliProfiles(backend: ReturnType<typeof useBackend>) {
   const error = ref<string>('')
   const portable = ref<CliPortableCredentials>({})
   const portableSupported = ref<string[]>([])
+  const accountCapabilities = ref<Record<string, CliAccountCapability>>({})
   const cloud = ref<CliCloudCredentials>({})
   const cloudStatus = ref<CloudCredentialStatus>('off')
   const cloudError = ref<string>('')
@@ -159,6 +305,7 @@ export function useCliProfiles(backend: ReturnType<typeof useBackend>) {
         supported_agents: string[]
         portable_credentials?: CliPortableCredentials
         portable_supported?: string[]
+        account_capabilities?: Record<string, CliAccountCapability>
       }>('cli_profiles.list', {})
       if (!resp.ok || !resp.payload) {
         error.value = resp.error?.message ?? 'failed to load CLI profiles'
@@ -171,6 +318,7 @@ export function useCliProfiles(backend: ReturnType<typeof useBackend>) {
       supportedAgents.value = resp.payload.supported_agents
       portable.value = resp.payload.portable_credentials ?? {}
       portableSupported.value = resp.payload.portable_supported ?? []
+      accountCapabilities.value = resp.payload.account_capabilities ?? {}
       loaded.value = true
     } catch (err) {
       error.value = String((err as Error).message ?? err)
@@ -179,15 +327,22 @@ export function useCliProfiles(backend: ReturnType<typeof useBackend>) {
     }
   }
 
-  async function create(agentKey: string, name: string): Promise<CliProfile | null> {
+  /** Create an empty slot. `scope` names the provider entry for a vendor
+   *  whose capability lists `scopes`; it is the caller's pick from that list
+   *  — never guessed here, the backend refuses an unknown one. */
+  async function create(agentKey: string, name: string, scope?: string | null): Promise<CliProfile | null> {
     try {
+      const payload: Record<string, unknown> = { agent_key: agentKey, name }
+      if (scope) payload.scope = scope
       const resp = await backend.send<{
         profile: CliProfile
         profiles: CliProfile[]
         defaults: CliProfileDefaults
-      }>('cli_profiles.create', { agent_key: agentKey, name })
+      }>('cli_profiles.create', payload)
       if (!resp.ok || !resp.payload) {
-        error.value = resp.error?.message ?? 'create failed'
+        error.value =
+          preflightMessage(resp.error?.code, resp.error?.details, agentLabelOf(agentKey), resp.error?.message) ??
+          (resp.error?.message ?? 'create failed')
         return null
       }
       profiles.value = resp.payload.profiles
@@ -247,7 +402,14 @@ export function useCliProfiles(backend: ReturnType<typeof useBackend>) {
   async function setDefault(
     agentKey: string,
     profileId: string | null,
-    opts?: { force?: boolean },
+    opts?: {
+      force?: boolean
+      /** Only after the user confirmed an unverified live drift (see
+       *  createCliAccountSwitchHandler); never on an automatic path. Carries
+       *  the state the first refusal reported, which the backend checks
+       *  under its lock before honouring the assumption. */
+      assumeLiveIsCurrent?: { expectedCurrentSlotId: string; expectedEpoch: number; liveFingerprint: string }
+    },
   ): Promise<SetDefaultResult> {
     try {
       const payload: Record<string, unknown> = {
@@ -255,10 +417,17 @@ export function useCliProfiles(backend: ReturnType<typeof useBackend>) {
         profile_id: profileId,
       }
       if (opts?.force) payload.force = true
+      if (opts?.assumeLiveIsCurrent) {
+        payload.assume_live_is_current = true
+        payload.expected_current_slot_id = opts.assumeLiveIsCurrent.expectedCurrentSlotId
+        payload.expected_epoch = opts.assumeLiveIsCurrent.expectedEpoch
+        payload.live_fingerprint = opts.assumeLiveIsCurrent.liveFingerprint
+      }
       const resp = await backend.send<{
         defaults: CliProfileDefaults
         needsLogin?: boolean
         needsLoginReason?: CliLoginReason | null
+        adoptedLiveLogin?: boolean
       }>('cli_profiles.set_default', payload, 30_000)
       if (!resp.ok || !resp.payload) {
         const code = resp.error?.code
@@ -286,12 +455,29 @@ export function useCliProfiles(backend: ReturnType<typeof useBackend>) {
           }
         }
         const message =
-          code === 'PROFILE_SWAP_FAILED'
+          preflightMessage(code, resp.error?.details, agentLabelOf(agentKey), resp.error?.message) ??
+          (code === 'PROFILE_SWAP_FAILED'
             ? i18n.global.t('cli-account.swap-failed')
             : code === 'LOGIN_IN_PROGRESS'
-              ? i18n.global.t('settings.accounts.cli.login-in-progress-error')
-              : (resp.error?.message ?? 'set default failed')
+              ? (resp.error?.details?.state
+                  ? tLogin('cli-account.login-in-progress', { agent: agentLabelOf(agentKey), state: String(resp.error.details.state) })
+                  : i18n.global.t('settings.accounts.cli.login-in-progress-error'))
+              : (resp.error?.message ?? 'set default failed'))
         error.value = message
+        if (code === 'LIVE_DRIFT') {
+          const d = resp.error?.details ?? {}
+          return {
+            ok: false,
+            code,
+            message,
+            liveDrift: {
+              verified: d.verified !== false,
+              currentSlotId: typeof d.currentSlotId === 'string' ? d.currentSlotId : null,
+              epoch: typeof d.epoch === 'number' && Number.isFinite(d.epoch) ? d.epoch : null,
+              liveFingerprint: typeof d.liveFingerprint === 'string' && d.liveFingerprint ? d.liveFingerprint : null,
+            },
+          }
+        }
         return { ok: false, code, message }
       }
       defaults.value = resp.payload.defaults
@@ -301,6 +487,8 @@ export function useCliProfiles(backend: ReturnType<typeof useBackend>) {
         // A backend that predates the reason field still says `needsLogin`;
         // fall back to the reading it used to imply.
         needsLoginReason: resp.payload.needsLoginReason ?? undefined,
+        // The live sign-in already was this account: adopted, nothing swapped.
+        ...(resp.payload.adoptedLiveLogin === true ? { adoptedLiveLogin: true } : {}),
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'set default failed'
@@ -320,6 +508,28 @@ export function useCliProfiles(backend: ReturnType<typeof useBackend>) {
   }
 
   /** The configured default profile id for an agent, or null (built-in Default). */
+  function agentLabelOf(agentKey: string): string {
+    return AGENT_SPECS.find((s) => s.agentKey === agentKey)?.label ?? agentKey
+  }
+
+  /** The vendor's switch capability as the backend last reported it. */
+  function capabilityFor(agentKey: string): CliAccountCapability | undefined {
+    return accountCapabilities.value[agentKey]
+  }
+
+  /** Provider scopes a new slot of this vendor must choose from ([] = the
+   *  store is one credential; no choice to make). */
+  function scopesFor(agentKey: string): string[] {
+    return capabilityFor(agentKey)?.scopes ?? []
+  }
+
+  /** True when a sign-in for this vendor replaces the live credential while
+   *  it runs (see CliAccountCapability.loginIsolation). Unknown = not global:
+   *  the warning is only shown on the backend's word. */
+  function loginIsGlobal(agentKey: string): boolean {
+    return capabilityFor(agentKey)?.loginIsolation === 'global'
+  }
+
   function defaultProfileId(agentKey: string): string | null {
     return defaults.value[agentKey] ?? null
   }
@@ -578,6 +788,10 @@ export function useCliProfiles(backend: ReturnType<typeof useBackend>) {
   })
 
   return {
+    accountCapabilities,
+    capabilityFor,
+    scopesFor,
+    loginIsGlobal,
     profiles,
     defaults,
     identities,
@@ -683,6 +897,9 @@ export interface CliAccountSwitchCaps {
   ) => Promise<boolean>
   /** Display label for the agent in the confirm copy. */
   agentLabel: (agentKey: string) => string
+  /** Display label of an account slot (null = built-in Default), for the
+   *  live-drift confirm which names the account the user vouches for. */
+  accountLabel?: (agentKey: string, profileId: string | null) => string
   /** Start a live sign-in for the agent — used when the switch landed on an
    *  account whose stored credentials cannot authenticate. The account is
    *  already active by then, so this is a LIVE login (not an isolated one).
@@ -712,6 +929,45 @@ export function createCliAccountSwitchHandler(
 
   return async (agentKey, profileId) => {
     const first = await api.setDefault(agentKey, profileId)
+    if (!first.ok && first.code === 'LIVE_DRIFT' && first.liveDrift?.verified === false) {
+      // The live credential changed and the vendor stores no identity to
+      // check it against: only the user can say whether it is still the
+      // current account (a token refresh) or someone else's sign-in. A
+      // verified drift never reaches here — that one is reconcile-only — and
+      // the automatic path never calls this handler.
+      //
+      // The account the user vouches for is the one the BACKEND reported as
+      // current in its refusal, not a value read here (a delayed broadcast
+      // could show something else). That slot and epoch go back with the
+      // resend as the expected state, with the live credential's fingerprint
+      // exactly as the refusal reported it (never re-read after the dialog),
+      // and the backend honours the assumption only while all three still
+      // match under its lock — a switch by another window in the meantime,
+      // even A→C→A, is STALE_STATE / STALE_EPOCH, and a credential the CLI
+      // rewrote during the dialog is LIVE_DRIFT once more. A refusal missing
+      // any of the three (older backend) gives no such proof: nothing is
+      // resent and the refusal stands.
+      const drift = first.liveDrift
+      if (drift.currentSlotId === null || drift.epoch === null || drift.liveFingerprint === null) return first
+      const label = (id: string | null): string => caps.accountLabel?.(agentKey, id) ?? (id ?? 'Default')
+      const currentId = drift.currentSlotId === DEFAULT_SLOT_ID ? null : drift.currentSlotId
+      const agent = caps.agentLabel(agentKey)
+      const confirmed = await caps.confirm(
+        tLogin('cli-account.live-drift-confirm-body', { agent, current: label(currentId), target: label(profileId) }),
+        {
+          title: tLogin('cli-account.live-drift-confirm-title'),
+          confirmText: tLogin('cli-account.live-drift-confirm-confirm', { current: label(currentId) }),
+          cancelText: tLogin('cli-account.live-drift-confirm-cancel'),
+        },
+      )
+      if (!confirmed) return first
+      return afterSwitch(
+        agentKey,
+        await api.setDefault(agentKey, profileId, {
+          assumeLiveIsCurrent: { expectedCurrentSlotId: drift.currentSlotId, expectedEpoch: drift.epoch, liveFingerprint: drift.liveFingerprint },
+        }),
+      )
+    }
     if (first.ok || first.code !== 'PANES_RUNNING') return afterSwitch(agentKey, first)
     const t = i18n.global.t
     const confirmed = await caps.confirm(

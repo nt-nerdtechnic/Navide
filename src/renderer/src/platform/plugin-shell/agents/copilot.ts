@@ -32,5 +32,7 @@ export const SPEC = {
   // Measured on a real PTY: the CLI itself emits `ESC[?1049h` during startup
   // (probe read 333 bytes of startup output) and keeps the conversation there.
   fullScreenTui: true,
-  hint: 'generalist'
+  hint: 'generalist',
+  // Quota failover: copilot.py reports one monthly premium-requests window.
+  quotaSemantics: { hard: ['monthly'], required: ['monthly'] },
 } as const satisfies AgentSpec

@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from .base import (
+    AccountSwitchSpec,
     Dep,
     McpServerConfig,
     McpValue,
@@ -30,6 +31,8 @@ from .base import (
     PushChannel,
     VendorSpec,
     command_text,
+    provider_map_extract,
+    provider_map_merge,
 )
 from .opencode import OpencodeLogReader  # vendor→vendor: sanctioned fork inheritance
 from ..usage_common import (
@@ -109,7 +112,12 @@ def identity_from_secret(secret):
             data = json.loads(secret)
         except ValueError:
             data = None
-    entry = data.get("kilo") if isinstance(data, dict) else None
+    # Either the whole auth.json (legacy whole-file slots, the live file) or
+    # the bare "kilo" entry a scoped slot holds (see ``provider_map_extract``).
+    if isinstance(data, dict) and "type" in data and "kilo" not in data:
+        entry = data
+    else:
+        entry = data.get("kilo") if isinstance(data, dict) else None
     return {"email": None, "signedIn": _kilo_entry_credentials(entry) is not None}
 
 
@@ -369,6 +377,27 @@ SPEC = VendorSpec(
     live_file_resolver=lambda home: _kilo_auth_file(home, os.environ),
     slot_file="auth.json",
     identity_from_secret=identity_from_secret,
+    # ``auth.json`` is an OpenCode-shaped provider map; only the "kilo" entry
+    # is the account, so a switch rewrites that one key and leaves any other
+    # provider the user added in place. Slots parked before this split hold
+    # the whole file, which the extract reads the same way (it is the same
+    # shape), so nothing stored is invalidated. Kilo loads the file at
+    # startup, hence restart.
+    account_switch=AccountSwitchSpec(
+        auth_scope="kilo",
+        method="restart",
+        store="compound-file",
+        evidence="source",
+        verified_version="7.4.22",
+        scopes=("kilo",),
+        extract=provider_map_extract,
+        merge=provider_map_merge,
+        # The 7.4.22 binary's provider table: kilo's key is KILO_API_KEY; the
+        # OpenCode-derived loader's env-vs-auth.json precedence is unverified.
+        uncertain_env_by_scope=(("kilo", ("KILO_API_KEY",)),),
+        resume="native",
+        todo="no A -> B -> A round-trip on two real accounts recorded",
+    ),
     # login_home_env / login_home_secret_file stay unset: kilo has no dedicated
     # config-home variable (`kilo debug paths` reports only the generic XDG
     # dirs), so a login pane cannot be given its own credential file without

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useQuotaFailover } from '../composables/useQuotaFailover'
 
 import MockDialog from './helpMocks/MockDialog.vue'
 import MockFigure from './helpMocks/MockFigure.vue'
@@ -20,8 +21,12 @@ import MockPanel from './helpMocks/MockPanel.vue'
 interface VendorRow {
   name: string
   bin: string
+  /** Registry key, to look the vendor up in the backend's switch capabilities. */
+  agentKey: string
   skipFlag: string
   usage: boolean
+  /** Static fallback for the multi-account column, used only until the
+   *  backend's capabilities have loaded (see multiAccountCell). */
   multiAccount: boolean
   /** Arguments the Accounts pane's sign-in button appends to `bin`, mirroring
    *  the vendor's `login_command_args`. Empty = the vendor declares none, so
@@ -31,8 +36,11 @@ interface VendorRow {
 
 // Default order of the + menu and Ctrl+1…9. "usage" = Navide can read the
 // remaining quota; "multiAccount" = several sign-ins can be kept in Settings
-// and switched. The three vendors without a permission-bypass flag (Grok CLI,
-// OpenCode, Pi) simply have no such flag in the CLI itself.
+// and switched — rendered from the backend's account-switch capabilities
+// (quota_failover.get_state → capabilities, one entry per registry key) once
+// they have loaded, so the column follows every vendor's declaration instead
+// of a list kept here. The three vendors without a permission-bypass flag
+// (Grok CLI, OpenCode, Pi) simply have no such flag in the CLI itself.
 //
 // "signIn" mirrors each vendor's `login_command_args` (cli_vendors/*.py), which
 // is what `_login_spawn_command` appends when the Accounts pane's sign-in
@@ -41,22 +49,34 @@ interface VendorRow {
 // test_help_panel_sign_in_column_matches_login_command_args keeps the two in
 // step, so this table cannot quietly drift from what the button runs.
 const vendors: VendorRow[] = [
-  { name: 'Claude Code', bin: 'claude', skipFlag: '--dangerously-skip-permissions', usage: true, multiAccount: true, signIn: 'auth login' },
-  { name: 'Codex', bin: 'codex', skipFlag: '--dangerously-bypass-approvals-and-sandbox', usage: true, multiAccount: true, signIn: 'login' },
-  { name: 'Antigravity CLI', bin: 'agy', skipFlag: '--dangerously-skip-permissions', usage: true, multiAccount: false, signIn: '' },
-  { name: 'Grok CLI', bin: 'grok', skipFlag: '', usage: true, multiAccount: true, signIn: 'login' },
-  { name: 'Kimi Code', bin: 'kimi', skipFlag: '--yolo', usage: true, multiAccount: true, signIn: 'login' },
-  { name: 'OpenCode', bin: 'opencode', skipFlag: '', usage: true, multiAccount: false, signIn: '' },
-  { name: 'Qwen Code', bin: 'qwen', skipFlag: '--yolo', usage: true, multiAccount: false, signIn: '' },
-  { name: 'Kilo Code', bin: 'kilo', skipFlag: '--auto', usage: true, multiAccount: true, signIn: 'auth login' },
-  { name: 'Pi', bin: 'pi', skipFlag: '', usage: true, multiAccount: false, signIn: '' },
-  { name: 'Copilot CLI', bin: 'copilot', skipFlag: '--yolo', usage: true, multiAccount: false, signIn: 'login' },
-  { name: 'Cursor CLI', bin: 'agent', skipFlag: '--force', usage: true, multiAccount: false, signIn: '' },
-  { name: 'Aider', bin: 'aider', skipFlag: '--yes-always', usage: false, multiAccount: false, signIn: '' },
-  { name: 'Muse Code', bin: 'muse', skipFlag: '--disable-approval', usage: false, multiAccount: false, signIn: 'login' },
-  { name: 'Droid', bin: 'droid', skipFlag: '--auto high', usage: false, multiAccount: false, signIn: '' },
-  { name: 'MiniMax Code', bin: 'mcode', skipFlag: '', usage: false, multiAccount: false, signIn: 'login' },
+  { name: 'Claude Code', bin: 'claude', agentKey: 'claude', skipFlag: '--dangerously-skip-permissions', usage: true, multiAccount: true, signIn: 'auth login' },
+  { name: 'Codex', bin: 'codex', agentKey: 'codex', skipFlag: '--dangerously-bypass-approvals-and-sandbox', usage: true, multiAccount: true, signIn: 'login' },
+  { name: 'Antigravity CLI', bin: 'agy', agentKey: 'antigravity', skipFlag: '--dangerously-skip-permissions', usage: true, multiAccount: false, signIn: '' },
+  { name: 'Grok CLI', bin: 'grok', agentKey: 'grok', skipFlag: '', usage: true, multiAccount: true, signIn: 'login' },
+  { name: 'Kimi Code', bin: 'kimi', agentKey: 'kimi', skipFlag: '--yolo', usage: true, multiAccount: true, signIn: 'login' },
+  { name: 'OpenCode', bin: 'opencode', agentKey: 'opencode', skipFlag: '', usage: true, multiAccount: false, signIn: 'auth login' },
+  { name: 'Qwen Code', bin: 'qwen', agentKey: 'qwen', skipFlag: '--yolo', usage: true, multiAccount: false, signIn: '' },
+  { name: 'Kilo Code', bin: 'kilo', agentKey: 'kilo', skipFlag: '--auto', usage: true, multiAccount: true, signIn: 'auth login' },
+  { name: 'Pi', bin: 'pi', agentKey: 'pi', skipFlag: '', usage: true, multiAccount: false, signIn: '' },
+  { name: 'Copilot CLI', bin: 'copilot', agentKey: 'copilot', skipFlag: '--yolo', usage: true, multiAccount: false, signIn: 'login' },
+  { name: 'Cursor CLI', bin: 'agent', agentKey: 'cursor', skipFlag: '--force', usage: true, multiAccount: false, signIn: '' },
+  { name: 'Aider', bin: 'aider', agentKey: 'aider', skipFlag: '--yes-always', usage: false, multiAccount: false, signIn: '' },
+  { name: 'Muse Code', bin: 'muse', agentKey: 'muse', skipFlag: '--disable-approval', usage: false, multiAccount: false, signIn: 'login' },
+  { name: 'Droid', bin: 'droid', agentKey: 'droid', skipFlag: '--auto high', usage: false, multiAccount: false, signIn: '' },
+  { name: 'MiniMax Code', bin: 'mcode', agentKey: 'mcode', skipFlag: '', usage: false, multiAccount: false, signIn: 'login' },
 ]
+
+// Backend truth for the multi-account column. `supported` alone is not
+// "automatic" and not "verified": the cell names the switch method and marks
+// a layout nobody has exercised on a real account.
+const failoverCaps = computed(() => useQuotaFailover().state.value?.capabilities ?? null)
+function multiAccountCell(row: VendorRow): { yes: boolean; text: string } {
+  const cap = failoverCaps.value?.[row.agentKey]
+  if (!cap) return { yes: row.multiAccount, text: row.multiAccount ? '✓' : '—' }
+  if (!cap.supported) return { yes: false, text: '—' }
+  const method = t(`usage.failover-switch-${cap.switchMode}`)
+  return { yes: true, text: cap.evidence === 'live' ? method : `${method} · ${t('usage.failover-unverified')}` }
+}
 
 // Row keys for the prose tables; the text for each row is looked up under
 // `settings.help.cliAgents.<section>.<table>.<key>` so both locales stay in
@@ -189,8 +209,8 @@ const installChain = computed(() => [sample('chain1'), sample('chain2'), sample(
                 <span v-else class="cah-no">—</span>
               </td>
               <td :class="row.usage ? 'cah-yes' : 'cah-no'">{{ row.usage ? '✓' : '—' }}</td>
-              <td :class="row.multiAccount ? 'cah-yes' : 'cah-no'">
-                {{ row.multiAccount ? '✓' : '—' }}
+              <td :class="multiAccountCell(row).yes ? 'cah-yes' : 'cah-no'">
+                {{ multiAccountCell(row).text }}
               </td>
               <td>
                 <code v-if="row.signIn">{{ row.bin }} {{ row.signIn }}</code>

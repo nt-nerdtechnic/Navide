@@ -112,7 +112,16 @@ import sys
 import time
 
 from .. import osplat
-from .base import Dep, McpServerConfig, McpValue, McpWiring, SkillsWiring, VendorSpec, command_text
+from .base import (
+    AccountSwitchSpec,
+    Dep,
+    McpServerConfig,
+    McpValue,
+    McpWiring,
+    SkillsWiring,
+    VendorSpec,
+    command_text,
+)
 from ..usage_common import (
     HTTP_TIMEOUT,
     _num,
@@ -1051,6 +1060,139 @@ COPILOT_ENV_KEYS = ("GH_TOKEN", "GITHUB_TOKEN")
 COPILOT_GH_TOKEN_TIMEOUT = 5.0
 
 
+COPILOT_ACCOUNT_SCOPE = "github"
+
+
+COPILOT_PLAINTEXT_SETTING = "storeTokenPlaintext"
+
+
+def _setting_flag(path: Path, key: str) -> bool:
+    """A boolean setting out of a JSONC settings/config file; False when the
+    file is absent, malformed or does not set it."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    body = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("//"))
+    try:
+        data = json.loads(body)
+    except ValueError:
+        return False
+    return isinstance(data, dict) and data.get(key) is True
+
+
+def copilot_stores_token_plaintext(root: Path) -> bool:
+    """``storeTokenPlaintext`` (1.0.81: "Store auth token in plaintext (less
+    secure)", offered when no system keychain is available) — read from
+    settings.json, or the legacy config.json which the CLI says takes
+    precedence. In that mode the token is NOT in the keyring, and where the
+    CLI keeps it and whether ``lastLoggedInUser`` selects the matching
+    plaintext token could not be established from the 1.0.81 bundle (the
+    storage lives in the native runtime). Flipping the pointer there could
+    leave the pane on another account's token, so that mode is refused."""
+    return _setting_flag(root / "settings.json", COPILOT_PLAINTEXT_SETTING) or _setting_flag(
+        root / "config.json", COPILOT_PLAINTEXT_SETTING
+    )
+
+
+def _copilot_config_file(home: Path, env: dict | None = None) -> Path:
+    env = os.environ if env is None else env
+    root = Path(env["COPILOT_HOME"]) if env.get("COPILOT_HOME") else home / ".copilot"
+    if copilot_stores_token_plaintext(root):
+        raise ValueError(
+            "copilot keeps its token in plaintext (storeTokenPlaintext); which token "
+            "lastLoggedInUser selects in that mode is not established — account "
+            "switching is refused for this installation"
+        )
+    return root / "config.json"
+
+
+def _split_jsonc(document: str) -> tuple[list[str], str]:
+    """The ``//`` comment lines the CLI writes above its JSON body, and the
+    body. Only leading comment lines are recognised — that is the shape the
+    CLI writes ("// User settings belong in settings.json. // This file is
+    managed automatically.")."""
+    lines = document.splitlines()
+    header: list[str] = []
+    for line in lines:
+        if line.lstrip().startswith("//") or not line.strip():
+            header.append(line)
+            continue
+        break
+    body = "\n".join(lines[len(header):])
+    return header, body
+
+
+def copilot_pointer_extract(document: str | None, scope: str) -> str | None:
+    """The account the CLI is using: ``lastLoggedInUser`` ({host, login}) as
+    JSON text. The token itself lives in the OS keyring under
+    (service "copilot-cli", account "<host>:<login>") and is never read."""
+    if document is None or scope != COPILOT_ACCOUNT_SCOPE:
+        return None
+    _, body = _split_jsonc(document)
+    try:
+        data = json.loads(body)
+    except ValueError:
+        return None
+    user = data.get("lastLoggedInUser") if isinstance(data, dict) else None
+    if not isinstance(user, dict):
+        return None
+    login, host = user.get("login"), user.get("host")
+    if not (isinstance(login, str) and login and isinstance(host, str) and host):
+        return None
+    return json.dumps({"host": host, "login": login}, separators=(",", ":"), sort_keys=True)
+
+
+def copilot_pointer_merge(document: str | None, scope: str, portion: str | None) -> str:
+    """Point the CLI at another of its logins: rewrite ``lastLoggedInUser``
+    only. The comment header and every other key (``loggedInUsers``,
+    ``firstLaunchAt``, ...) are carried through; the body is re-serialised
+    with the CLI's two-space indent. In the CLI's own config (one carrying
+    ``loggedInUsers``) a login absent from that list is refused: the CLI has
+    no token for it and the pointer would dangle. A slot document — the
+    vault's parked copy, which holds the pointer alone — has no list and is
+    not subject to that check."""
+    if scope != COPILOT_ACCOUNT_SCOPE:
+        raise ValueError(f"copilot has no credential scope {scope!r}")
+    header, body = _split_jsonc(document or "")
+    data = json.loads(body) if body.strip() else {}
+    if not isinstance(data, dict):
+        raise ValueError("config.json body is not a JSON object")
+    if portion is None:
+        data.pop("lastLoggedInUser", None)
+    else:
+        user = json.loads(portion)
+        if not (isinstance(user, dict) and isinstance(user.get("login"), str)
+                and isinstance(user.get("host"), str)):
+            raise ValueError("copilot credential portion must be {host, login}")
+        known = data.get("loggedInUsers")
+        if isinstance(known, list) and not any(
+            isinstance(u, dict) and u.get("login") == user["login"] and u.get("host") == user["host"]
+            for u in known
+        ):
+            raise ValueError(
+                f"copilot has no stored login for {user['host']}:{user['login']}; "
+                "run `copilot login` for that account first"
+            )
+        data["lastLoggedInUser"] = {"host": user["host"], "login": user["login"]}
+    text = json.dumps(data, indent=2)
+    return "\n".join([*header, text]) if header else text
+
+
+def identity_from_secret(secret):
+    """A parked slot holds ``{host, login}``. The GitHub login is the
+    identity the accounts UI shows and groups on."""
+    data = None
+    if secret is not None:
+        try:
+            data = json.loads(secret)
+        except ValueError:
+            data = None
+    login = data.get("login") if isinstance(data, dict) else None
+    login = login if isinstance(login, str) and login else None
+    return {"email": login, "signedIn": login is not None}
+
+
 def read_copilot_config(home: Path) -> dict | None:
     """Parse ``~/.copilot/config.json`` (JSONC: ``//`` comment lines before the
     JSON body). Returns {host, login} for ``lastLoggedInUser`` (host reduced to
@@ -1334,6 +1476,33 @@ SPEC = VendorSpec(
     # SSH/headless is auto-detected, so neither --web-flow nor --device-code
     # is forced here. Verified against `copilot login --help`, 2026-09-18.
     login_command_args="login",
+    # Multi-account: the CLI keeps EVERY login it has done (config.json
+    # ``loggedInUsers``, one keyring item each under service "copilot-cli",
+    # account "<host>:<login>") and ``lastLoggedInUser`` selects the one in
+    # use — so a switch is a pointer flip in config.json and Navide never
+    # touches the keyring. A second account is added with a plain `copilot
+    # login` against the real home (COPILOT_HOME would relocate config.json
+    # away from the loggedInUsers list, so it is not used as a login home).
+    # The token is resolved at startup: restart, then ``copilot --resume``.
+    live_file=COPILOT_CONFIG_FILE_REL,
+    live_file_resolver=lambda home: _copilot_config_file(home),
+    slot_file="account.json",
+    identity_from_secret=identity_from_secret,
+    account_switch=AccountSwitchSpec(
+        auth_scope="copilot",
+        method="restart",
+        store="pointer",
+        evidence="source",
+        verified_version="1.0.81",
+        scopes=(COPILOT_ACCOUNT_SCOPE,),
+        extract=copilot_pointer_extract,
+        merge=copilot_pointer_merge,
+        # `sandbox.auth.gh` docs: GH_TOKEN / GITHUB_TOKEN authenticate ahead
+        # of the stored login.
+        shadowing_env=COPILOT_ENV_KEYS,
+        resume="native",
+        todo="that the CLI reads lastLoggedInUser at startup is inferred from the 1.0.81 bundle (authGetLastLoggedInUserForContext), not seen live; storeTokenPlaintext mode is refused (its token location is not readable from the bundle); no real-account round-trip recorded",
+    ),
     # Same inline `mcpServers` document claude takes, under a flag documented
     # as augmenting ~/.copilot/mcp-config.json for the session and repeatable —
     # so a user's own --additional-mcp-config is augmented rather than stepped

@@ -21,7 +21,7 @@ from pathlib import Path
 
 import re
 
-from .base import Dep, McpServerConfig, McpValue, McpWiring, SkillsWiring, VendorSpec, command_text
+from .base import AccountSwitchSpec, Dep, McpServerConfig, McpValue, McpWiring, SkillsWiring, VendorSpec, command_text
 from ..usage_common import HTTP_TIMEOUT, _epoch_to_iso, _num, _snapshot, _window, parse_retry_after
 from ..log_readers.base import (
     ActivityEvent,
@@ -631,6 +631,21 @@ SPEC = VendorSpec(
     login_home_secret_file=("credentials", "kimi-code.json"),
     profile_home_secret_file=("credentials", "kimi-code.json"),
     login_home_env="KIMI_CODE_HOME",
+    # Whole-file swap of the OAuth credential; the CLI loads it at startup,
+    # so affected panes restart and resume. The layout is read from the
+    # installed CLI and exercised by the quota reader, but no A -> B -> A
+    # round-trip on two real accounts is on record — "source" until then.
+    account_switch=AccountSwitchSpec(
+        auth_scope="kimi",
+        method="restart",
+        store="file",
+        evidence="source",
+        verified_version="0.39.0",
+        # read_kimi_credentials: KIMI_CODE_API_KEY wins over the OAuth file.
+        shadowing_env=("KIMI_CODE_API_KEY",),
+        resume="native",
+        todo="A -> B -> A round-trip on two real accounts not yet recorded",
+    ),
     # Late-bound (module global at call time) so tests can monkeypatch.
     fetch_usage=lambda home: fetch_kimi(home),
     resume_id_from_command=_resume_id_from_command,

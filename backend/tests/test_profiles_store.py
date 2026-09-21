@@ -33,8 +33,9 @@ def test_supported_agents_are_the_vendors_declaring_a_slot_file() -> None:
     one, so it must be here — and after the four originally-ordered keys."""
     from agent_team_backend.cli_vendors.registry import VENDORS
 
-    assert profiles_mod.SUPPORTED_AGENT_KEYS == (
-        "claude", "codex", "kimi", "grok", "kilo",
+    assert profiles_mod.SUPPORTED_AGENT_KEYS[:4] == ("claude", "codex", "kimi", "grok")
+    assert profiles_mod.SUPPORTED_AGENT_KEYS[4:] == tuple(
+        sorted(profiles_mod.SUPPORTED_AGENT_KEYS[4:])
     )
     assert {k for k, s in VENDORS.items() if s.slot_file is not None} == set(
         profiles_mod.SUPPORTED_AGENT_KEYS
@@ -52,16 +53,14 @@ def test_create_and_list(tmp_path: Path) -> None:
 
     doc = store.list()
     assert doc["profiles"] == [profile]
-    assert doc["defaults"] == {
-        "claude": None, "codex": None, "kimi": None, "grok": None, "kilo": None,
-    }
+    assert doc["defaults"] == {key: None for key in profiles_mod.SUPPORTED_AGENT_KEYS}
     assert store.get(profile["id"]) == profile
     # Stored document carries the schema version.
     stored = store._db.kv_get(profiles_mod._KV_KEY)
     assert stored["schemaVersion"] == 1
 
 
-@pytest.mark.parametrize("agent_key", ["antigravity", "terminal", "", "gemini"])
+@pytest.mark.parametrize("agent_key", ["terminal", "", "gemini"])
 def test_create_rejects_unsupported_agent(tmp_path: Path, agent_key: str) -> None:
     store = _store(tmp_path)
     with pytest.raises(ValueError):
@@ -184,7 +183,7 @@ def test_set_default_validates_agent_and_profile(tmp_path: Path) -> None:
     store = _store(tmp_path)
     claude_profile = store.create(agent_key="claude", name="Work")
     with pytest.raises(ValueError):
-        store.set_default("antigravity", None)
+        store.set_default("terminal", None)
     with pytest.raises(KeyError):
         store.set_default("claude", "nope1234")
     with pytest.raises(ValueError):
@@ -197,9 +196,7 @@ def test_corrupt_registry_starts_empty(tmp_path: Path) -> None:
     legacy.write_text("{not json", encoding="utf-8")
     assert store.list() == {
         "profiles": [],
-        "defaults": {
-            "claude": None, "codex": None, "kimi": None, "grok": None, "kilo": None,
-        },
+        "defaults": {key: None for key in profiles_mod.SUPPORTED_AGENT_KEYS},
     }
 
 

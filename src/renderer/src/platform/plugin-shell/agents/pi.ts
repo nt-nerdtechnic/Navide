@@ -25,5 +25,8 @@ export const SPEC = {
   // project session ID, creating it if missing", so a pin that never gets
   // replaced still resumes/claims a real session instead of dead-ending.
   supportsRestorePin: true,
-  hint: 'generalist'
+  hint: 'generalist',
+  // Quota failover: pi.py reports OpenRouter credits with usage/limit; a
+  // null limit is an uncapped pool and says nothing about headroom.
+  quotaSemantics: { hard: ['credits'], required: ['credits'] },
 } as const satisfies AgentSpec

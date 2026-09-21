@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { inject, onMounted, onUnmounted, ref, watch } from 'vue'
 import { CLI_AGENT_SPECS } from '@navide/plugin-shell'
-import { cliAccountSwitchKey, type useCliProfiles, type CliProfile } from '../composables/useCliProfiles'
+import { cliAccountSwitchKey, tLogin, type useCliProfiles, type CliProfile } from '../composables/useCliProfiles'
 import PortableCredentialBlock from './PortableCredentialBlock.vue'
 import { useNotify } from '@navide/plugin-ui/foundation'
 import {
@@ -92,10 +92,43 @@ function requireWorkspace(): boolean {
 
 // ── Add account: create an empty slot, then start its isolated CLI login ────
 const saving = ref(false)
+/** Provider picked per multi-scope vendor (opencode, pi, …); empty = not yet
+ *  chosen. The list comes from the backend's capability — never typed here. */
+const newAccountScope = ref<Record<string, string>>({})
+
+function scopeChoices(agentKey: string): string[] {
+  return props.api.scopesFor(agentKey)
+}
+
+/** A vendor whose sign-in replaces the live credential while it runs asks
+ *  first: the user is told what moves (the live credential, temporarily),
+ *  what comes back (the current account, when the sign-in completes) and
+ *  what does not happen (no switch until they switch). Isolated sign-ins
+ *  ask nothing. The backend still refuses while panes of the CLI run or a
+ *  sign-in is already going; nothing here forces past that. */
+async function confirmGlobalLogin(agentKey: string): Promise<boolean> {
+  if (!props.api.loginIsGlobal(agentKey)) return true
+  const agent = CLI_AGENT_SPECS.find((s) => s.agentKey === agentKey)?.label ?? agentKey
+  const activeId = props.api.defaultProfileId(agentKey)
+  const current = rowName(agentKey, activeId ? (props.api.findProfile(activeId) ?? null) : null)
+  return confirm(tLogin('settings.accounts.cli.global-login-body', { agent, current }), {
+    title: tLogin('settings.accounts.cli.global-login-title'),
+    confirmText: tLogin('settings.accounts.cli.global-login-confirm'),
+    cancelText: tLogin('settings.accounts.cli.global-login-cancel'),
+  })
+}
 
 async function addAccount(agentKey: string): Promise<void> {
   if (saving.value) return
   if (!requireWorkspace()) return
+  // Before the row exists: a declined warning must leave no orphan slot.
+  if (!(await confirmGlobalLogin(agentKey))) return
+  const scopes = scopeChoices(agentKey)
+  const scope = scopes.length > 0 ? (newAccountScope.value[agentKey] || scopes[0]) : null
+  if (scopes.length > 0 && !scopes.includes(scope ?? '')) {
+    toast(t('cli-account.preflight-unknown-scope', { agent: agentKey }), { type: 'error' })
+    return
+  }
   saving.value = true
   try {
     // Auto-named — rows display the signed-in identity, names are internal.
@@ -109,7 +142,7 @@ async function addAccount(agentKey: string): Promise<void> {
       .filter((m): m is RegExpExecArray => m !== null)
       .map((m) => Number(m[1]))
     const name = `Account ${nums.length ? Math.max(...nums) + 1 : 2}`
-    const created = await props.api.create(agentKey, name)
+    const created = await props.api.create(agentKey, name, scope)
     if (!created) return
     emit('login', agentKey, created.id)
   } finally {
@@ -122,8 +155,11 @@ async function signIn(agentKey: string, profileId: string | null): Promise<void>
   if (!requireWorkspace()) return
   const activeId = props.api.defaultProfileId(agentKey)
   if (profileId !== null && profileId !== activeId) {
-    // Non-active profile: isolated login — no account switch, running panes
-    // keep their credentials.
+    // Non-active profile: no account switch. For an isolated vendor the
+    // sign-in runs in a private home and running panes keep their
+    // credentials; for a global one the live credential is replaced for the
+    // duration, which the user is asked about first.
+    if (!(await confirmGlobalLogin(agentKey))) return
     emit('login', agentKey, profileId)
     return
   }
@@ -137,7 +173,7 @@ async function signIn(agentKey: string, profileId: string | null): Promise<void>
 }
 
 // ── Set default ──────────────────────────────────────────────────────────────
-const { toast } = useNotify()
+const { toast, confirm } = useNotify()
 const t = i18n.global.t
 
 // Main window provides the quiescence-aware switch (confirm + force + pane
@@ -432,6 +468,16 @@ onMounted(() => void props.api.refreshCloud())
     <section v-for="spec in CLI_AGENT_SPECS" :key="spec.agentKey" class="cli-agent">
       <div class="cli-agent-head">
         <span class="cli-agent-name">{{ spec.label }}</span>
+        <select
+          v-if="supported(spec.agentKey) && scopeChoices(spec.agentKey).length > 0"
+          class="cli-scope-select"
+          :data-scope-for="spec.agentKey"
+          :aria-label="$t('settings.accounts.cli.new-account-scope')"
+          :value="newAccountScope[spec.agentKey] || scopeChoices(spec.agentKey)[0]"
+          @change="newAccountScope[spec.agentKey] = ($event.target as HTMLSelectElement).value"
+        >
+          <option v-for="scope in scopeChoices(spec.agentKey)" :key="scope" :value="scope">{{ scope }}</option>
+        </select>
         <button
           v-if="supported(spec.agentKey)"
           class="cli-btn ghost sm"

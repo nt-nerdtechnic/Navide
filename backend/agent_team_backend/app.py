@@ -81,6 +81,7 @@ from .plan_index import PlanIndex, resolve_plan_root
 from .plan_provisioning import ensure_plan_assets, plan_spec_exists
 from .pane_account_history import PaneAccountHistory, parse_event_time
 from .quota_ledger import QuotaLedger
+from .quota_failover import QuotaFailoverService
 from .profile_migration import migrate_legacy_claude_homes
 from .profiles_store import CLAUDE_ENV_OVERRIDES, CliProfilesStore
 from .skills_store import SkillsStore
@@ -191,6 +192,9 @@ pane_account_history = PaneAccountHistory(db=database)
 # Quota cycles per account: the usage poller files samples here; an open
 # cycle's token side is summed from the store's per-account slices.
 quota_ledger = QuotaLedger(db=database, totals_provider=tokens_store.account_window_totals)
+# Account-switch failover authority (policy, incidents, persisted auto budget,
+# switch transactions) — global like the profiles it switches.
+quota_failover = QuotaFailoverService(db=database)
 history_store = HistoryStore(databases=workspace_databases)
 plan_index = PlanIndex(databases=workspace_databases)
 preview_log = PreviewLog(databases=workspace_databases)
@@ -1126,15 +1130,37 @@ def pane_activity(pane_id: str) -> dict[str, Any] | None:
     return _pane_activity.get(_current_pane_id(pane_id))
 
 
-def _record_pane_activity(pane_id: str, event_type: str, text: str) -> None:
+def _record_pane_activity(
+    pane_id: str, event_type: str, text: str, *, detail: str = ""
+) -> None:
     if not pane_id:
         return
-    _pane_activity[_current_pane_id(pane_id)] = {
+    key = _current_pane_id(pane_id)
+    now = time.monotonic()
+    prior = _pane_activity.get(key)
+    # When the turn this event belongs to began: the first agent_active after
+    # the previous turn ended opens a turn, later events of the same turn
+    # carry that start forward, and the turn_complete closes it. The account
+    # failover reads the pair (start, complete) to tell a turn that ran
+    # entirely under the new account from one that began under the old.
+    if prior is not None and prior["event_type"] != "turn_complete":
+        turn_started = prior.get("turn_started_monotonic", prior["ts_monotonic"])
+    elif event_type == "turn_complete":
+        # A turn end with no observed start (the reader saw only the end, or
+        # the pane is new): when it began is unknown, not "now".
+        turn_started = None
+    else:
+        turn_started = now
+    _pane_activity[key] = {
         "event_type": event_type,
         # Same cap as the broadcast path — this dict must not become the one
         # place an unbounded turn_complete text is retained.
         "text": _cap_activity_text(text) if event_type == "turn_complete" else "",
-        "ts_monotonic": time.monotonic(),
+        "ts_monotonic": now,
+        "turn_started_monotonic": turn_started,
+        # The reader's structured detail (a stop reason such as droid's
+        # ``model_usage_exhausted``) — kept only for turn ends, bounded.
+        "detail": (detail or "")[:200] if event_type == "turn_complete" else "",
     }
 
 
@@ -1178,7 +1204,8 @@ async def _on_log_activity(event: ActivityEvent) -> None:
             pane_id
         )
         _record_pane_activity(
-            pane_id, "agent_active" if superseded else event.event_type, event.text
+            pane_id, "agent_active" if superseded else event.event_type, event.text,
+            detail=event.detail,
         )
         if event.event_type == "turn_complete":
             # The per-account turn count (by_account_day / quota cycles): the

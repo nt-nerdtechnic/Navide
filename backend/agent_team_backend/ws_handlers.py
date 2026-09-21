@@ -37,6 +37,7 @@ from . import (
     osplat,
     pane_policy,
     portable_credentials,
+    quota_failover,
     remote_roster,
     server_link,
     storage_service,
@@ -1783,6 +1784,9 @@ async def cli_profiles_list(session: "Session", msg_id: str, msg_type: str, payl
                 "supported_agents": list(PROFILE_AGENT_KEYS),
                 "portable_credentials": portable,
                 "portable_supported": portable_credentials.supported_agent_keys(),
+                # Per vendor: hot/restart/manual, the credential pool, the
+                # provider scopes a new profile may bind to, resume ability.
+                "account_capabilities": quota_failover.capabilities(),
             },
         )
     )
@@ -1880,10 +1884,15 @@ async def cli_profiles_portable_clear(session: "Session", msg_id: str, msg_type:
 async def cli_profiles_create(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     from . import app
 
+    # ``scope``: the provider a profile of a per-provider vendor (opencode,
+    # pi …) binds to; the store validates it against the vendor's declared
+    # scopes and refuses a multi-scope vendor without one.
+    raw_scope = payload.get("scope")
     try:
         profile = app.cli_profiles_store.create(
             agent_key=str(payload.get("agent_key") or ""),
             name=str(payload.get("name") or ""),
+            scope=str(raw_scope) if raw_scope else None,
         )
     except ValueError as err:
         await session.send_json(
@@ -2031,6 +2040,55 @@ async def cli_profiles_delete(session: "Session", msg_id: str, msg_type: str, pa
             {"profiles": doc["profiles"], "defaults": doc["defaults"]},
         )
     )
+
+
+def _live_login_pending(agent_key: str) -> bool:
+    """Has a non-isolated sign-in of any profile of this agent started and
+    not been harvested or discarded yet? Read off the vault's pre-login
+    snapshot, so it survives a backend restart. Blocking — thread it."""
+    from . import app
+
+    vault = app.credential_vault
+    isolated = getattr(vault, "_login_isolated", None)
+    if callable(isolated) and isolated(agent_key):
+        return False
+    try:
+        profiles = app.cli_profiles_store.list()["profiles"]
+    except Exception:  # noqa: BLE001
+        return False
+    for profile in profiles:
+        if profile.get("agentKey") != agent_key or not profile.get("id"):
+            continue
+        slot_id = str(profile["id"])
+        if quota_failover.login_pending(vault, agent_key, slot_id) and not (
+            vault.login_home_path(agent_key, slot_id).is_dir()
+        ):
+            return True
+    return False
+
+
+def _running_live_login_terminals(agent_key: str) -> list[str]:
+    """Terminal ids of the agent's running sign-in panes that write the LIVE
+    credential store (a vendor with no login isolation; marked ``live_login``
+    at spawn). While one runs, the live credential is not any account's own
+    yet: no switch may capture it and no regular pane may be pinned to the
+    store's default on it."""
+    from . import app
+
+    running: list[str] = []
+    for tid, owner in list(app._PTY_OWNERS.items()):
+        # An owner may be another window's opaque handle (no terminals): on
+        # the terminal.create hot path this guard must never raise.
+        lookup = getattr(getattr(owner, "terminals", None), "get", None)
+        term = lookup(tid) if callable(lookup) else None
+        if (
+            term is not None
+            and not getattr(term, "closed", False)
+            and getattr(term, "agent_key", None) == agent_key
+            and getattr(term, "metadata", {}).get("live_login")
+        ):
+            running.append(tid)
+    return running
 
 
 def _running_login_terminals(agent_key: str, profile_id: str) -> list[tuple[str, "Session"]]:
@@ -2211,7 +2269,72 @@ async def cli_profiles_set_default(session: "Session", msg_id: str, msg_type: st
     # a slot. Reading current_id inside the lock is essential — a second waiter
     # must see the first switch's persisted result.
     async with app.credential_vault.switch_lock(agent_key):
+        pending = app.quota_failover.unreconciled(agent_key)
+        if pending is not None:
+            # A failover swap moved the credentials but could not persist the
+            # default: the store's "current" is not who is live. Capturing
+            # the live account into that slot would destroy the slot's own
+            # credentials. Refuse until quota_failover.reconcile has run.
+            await session.send_json(
+                make_error(
+                    msg_id, msg_type, "UNRECONCILED_STATE",
+                    "an earlier account switch is not reconciled; finish it before "
+                    "switching again",
+                    dict(pending),
+                )
+            )
+            return
         current_id = app.cli_profiles_store.list()["defaults"].get(agent_key)
+        # Optional optimistic-concurrency fields, mandatory when the caller
+        # is confirming an unverifiable live credential (assume_live_is_current):
+        # the answer must be about the state the user was shown. Compared
+        # here, under the lock and before any harvest, capture or write.
+        # ``expected_epoch`` is the agent's failover epoch (quota_failover
+        # State.epochs), which moves on every credential swap and reconcile —
+        # A -> C -> A leaves the account the same but not the epoch.
+        assume = bool(payload.get("assume_live_is_current"))
+        has_expected = (
+            "expected_current_slot_id" in payload and "expected_epoch" in payload
+            and bool(str(payload.get("live_fingerprint") or ""))
+        )
+        if assume and not has_expected:
+            # The epoch cannot see a CLI rewriting the live store during the
+            # dialog; the fingerprint from the refusal can. All three or none.
+            await session.send_json(
+                make_error(
+                    msg_id, msg_type, "BAD_REQUEST",
+                    "assume_live_is_current requires expected_current_slot_id, "
+                    "expected_epoch and live_fingerprint from the refusal it answers",
+                )
+            )
+            return
+        if "expected_current_slot_id" in payload and \
+                str(payload.get("expected_current_slot_id") or DEFAULT_SLOT_ID) != (current_id or DEFAULT_SLOT_ID):
+            await session.send_json(
+                make_error(
+                    msg_id, msg_type, "STALE_STATE",
+                    "the active account changed since this was proposed",
+                    {"currentSlotId": current_id or DEFAULT_SLOT_ID},
+                )
+            )
+            return
+        if "expected_epoch" in payload:
+            try:
+                expected_epoch = int(payload.get("expected_epoch"))
+            except (TypeError, ValueError):
+                await session.send_json(
+                    make_error(msg_id, msg_type, "BAD_REQUEST", "expected_epoch must be an integer")
+                )
+                return
+            if expected_epoch != app.quota_failover.epoch(agent_key):
+                await session.send_json(
+                    make_error(
+                        msg_id, msg_type, "STALE_EPOCH",
+                        "an account switch already happened",
+                        {"epoch": app.quota_failover.epoch(agent_key)},
+                    )
+                )
+                return
         if current_id == profile_id:
             # Already active — nothing to swap, nothing changed.
             await session.send_json(
@@ -2221,6 +2344,23 @@ async def cli_profiles_set_default(session: "Session", msg_id: str, msg_type: st
             )
             return
 
+        # The provider entry a per-provider vendor's swap moves: the profile
+        # on whichever side has one (the built-in default has no record and
+        # takes the other side's). Two profiles must name the same provider.
+        # Whole-file vendors get None, the vault's "the whole file" answer.
+        current_profile = app.cli_profiles_store.get(current_id) if current_id else None
+        target_profile = app.cli_profiles_store.get(profile_id) if profile_id else None
+        scope_from = quota_failover.profile_scope(agent_key, current_profile)
+        scope_to = quota_failover.profile_scope(agent_key, target_profile)
+        if current_profile is not None and target_profile is not None and scope_from != scope_to:
+            await session.send_json(
+                make_error(
+                    msg_id, msg_type, "SCOPE_MISMATCH",
+                    "the two accounts belong to different provider credential pools",
+                )
+            )
+            return
+        switch_scope = scope_to if target_profile is not None else scope_from
         # Rate limit: keeps account switching a manual action (see the
         # SWITCH_RATE_* constants). Checked before anything is touched, and
         # deliberately NOT bypassable by force — force means "I accept the pane
@@ -2256,27 +2396,35 @@ async def cli_profiles_set_default(session: "Session", msg_id: str, msg_type: st
                 )
                 return
 
-        # A pending isolated login home for the target profile must land in
-        # its slot BEFORE restore() — restoring the still-empty slot would
-        # sign the live state out and the next capture() would erase the
-        # completed login. While the login pane's CLI is still running the
-        # home cannot be harvested safely (token rotation, config home
-        # deleted under a live CLI), so refuse the switch (LOGIN_IN_PROGRESS).
-        if profile_id is not None and await vault_to_thread(
-            app.credential_vault.login_home_path(agent_key, profile_id).is_dir
-        ):
-            if _running_login_terminals(agent_key, profile_id):
-                await session.send_json(
-                    make_error(
-                        msg_id, msg_type, "LOGIN_IN_PROGRESS",
-                        f"a {agent_key} sign-in for this account is still running; "
-                        "finish or close its pane first",
-                    )
+        # A running sign-in pane means a credential is still being written:
+        # the target's (its login home, or the live store itself for a vendor
+        # with no login isolation), or — for a live-store sign-in of ANY
+        # profile — the very credential this switch would capture as the
+        # outgoing account's. Refuse for every vendor, home or no home.
+        if (profile_id is not None and _running_login_terminals(agent_key, profile_id)) \
+                or _running_live_login_terminals(agent_key):
+            await session.send_json(
+                make_error(
+                    msg_id, msg_type, "LOGIN_IN_PROGRESS",
+                    f"a {agent_key} sign-in is still running; finish or close its pane first",
                 )
-                return
+            )
+            return
+        # A started, unharvested sign-in for the target must land in its slot
+        # BEFORE restore() — restoring the still-empty slot would sign the
+        # live state out and the next capture() would erase the completed
+        # login. ``login_pending`` covers both the isolated login home and a
+        # non-isolated sign-in's parked pre-login snapshot (the vault then
+        # parks the new credential and puts the outgoing one back live).
+        if profile_id is not None and await vault_to_thread(
+            quota_failover.login_pending, app.credential_vault, agent_key, profile_id
+        ):
             try:
                 await vault_to_thread(
-                    app.credential_vault.harvest_login_home, agent_key, profile_id
+                    functools.partial(
+                        app.credential_vault.harvest_login_home, agent_key, profile_id,
+                        scope=switch_scope,
+                    )
                 )
             except Exception as err:  # noqa: BLE001 — credentials untouched, refuse cleanly
                 await session.send_json(
@@ -2292,18 +2440,103 @@ async def cli_profiles_set_default(session: "Session", msg_id: str, msg_type: st
             _slot_login_reason, agent_key, profile_id or DEFAULT_SLOT_ID
         )
 
-        try:
-            await vault_to_thread(
-                app.credential_vault.switch,
-                agent_key,
-                current_id or DEFAULT_SLOT_ID,
-                profile_id or DEFAULT_SLOT_ID,
+        # Is the live credential still the outgoing account's? switch()
+        # begins by capturing live into the outgoing slot; if a sign-in
+        # against the live store (a vendor with no login isolation) already
+        # replaced it, that capture would overwrite the outgoing account's
+        # only copy with someone else's credential. When the target slot is
+        # empty the live credential can only be the target's fresh sign-in:
+        # park it there and bring nothing else live. Otherwise refuse — the
+        # user has to say which account is live (quota_failover.reconcile).
+        drift = await vault_to_thread(
+            quota_failover.live_drift, app.credential_vault, agent_key,
+            current_id or DEFAULT_SLOT_ID, scope_from,
+        )
+        adopted = False
+        if drift == "unverifiable":
+            # The live payload changed but nothing says whose it is (a vendor
+            # with no readable identity): a token refresh and a foreign
+            # sign-in look alike. Neither is assumed — the user confirms
+            # ``assume_live_is_current`` to proceed as a normal switch, and
+            # that word is bound to what they were shown: the resend must
+            # name the same active account and the same live payload
+            # (``live_fingerprint`` from the refusal), or it is asked again.
+            fingerprint = await vault_to_thread(
+                quota_failover.live_fingerprint, app.credential_vault, agent_key, scope_from,
             )
-        except Exception as err:  # noqa: BLE001 — switch() already rolled the live state back
-            await session.send_json(
-                make_error(msg_id, msg_type, "PROFILE_SWAP_FAILED", _profile_error(err))
+            # expected_current_slot_id / expected_epoch were already enforced
+            # above; the fingerprint from the refusal must still be the live
+            # payload — a CLI rewriting the live store during the dialog does
+            # not move the epoch, only this catches it.
+            offered_fp = str(payload.get("live_fingerprint") or "")
+            confirmed = assume and bool(fingerprint) and offered_fp == fingerprint
+            if not confirmed:
+                await session.send_json(
+                    make_error(
+                        msg_id, msg_type, "LIVE_DRIFT",
+                        f"the live {agent_key} credential changed and carries no identity to "
+                        "compare; confirm it is still the current account before switching",
+                        {"currentSlotId": current_id or DEFAULT_SLOT_ID,
+                         "targetSlotId": profile_id or DEFAULT_SLOT_ID, "verified": False,
+                         "epoch": app.quota_failover.epoch(agent_key),
+                         "liveIdentity": await vault_to_thread(app.credential_vault.identity, agent_key),
+                         "liveFingerprint": fingerprint},
+                    )
+                )
+                return
+        if drift == "drifted":
+            target_slot = profile_id or DEFAULT_SLOT_ID
+            target_empty = await vault_to_thread(
+                lambda: app.credential_vault.read_slot(
+                    agent_key, target_slot, **({"scope": switch_scope} if switch_scope else {})
+                ).secret is None
             )
-            return
+            if not target_empty:
+                await session.send_json(
+                    make_error(
+                        msg_id, msg_type, "LIVE_DRIFT",
+                        f"the live {agent_key} credential is no longer the active "
+                        "account's; say which account is signed in before switching",
+                        {"currentSlotId": current_id or DEFAULT_SLOT_ID,
+                         "targetSlotId": target_slot, "verified": True,
+                         "epoch": app.quota_failover.epoch(agent_key),
+                         "liveIdentity": await vault_to_thread(app.credential_vault.identity, agent_key),
+                         "liveFingerprint": await vault_to_thread(
+                             quota_failover.live_fingerprint, app.credential_vault, agent_key, scope_from,
+                         )},
+                    )
+                )
+                return
+            try:
+                await vault_to_thread(
+                    functools.partial(
+                        app.credential_vault.capture, agent_key, target_slot,
+                        **({"scope": switch_scope} if switch_scope else {}),
+                    )
+                )
+            except Exception as err:  # noqa: BLE001 — nothing moved; refuse cleanly
+                await session.send_json(
+                    make_error(msg_id, msg_type, "PROFILE_SWAP_FAILED", _profile_error(err))
+                )
+                return
+            adopted = True
+            login_reason = None
+        else:
+            try:
+                await vault_to_thread(
+                    functools.partial(
+                        app.credential_vault.switch,
+                        agent_key,
+                        current_id or DEFAULT_SLOT_ID,
+                        profile_id or DEFAULT_SLOT_ID,
+                        scope=switch_scope,
+                    )
+                )
+            except Exception as err:  # noqa: BLE001 — switch() already rolled the live state back
+                await session.send_json(
+                    make_error(msg_id, msg_type, "PROFILE_SWAP_FAILED", _profile_error(err))
+                )
+                return
 
         # The credentials moved — count it, whatever happens to the bookkeeping
         # below (a persisted-default failure still leaves the new account live).
@@ -2319,6 +2552,9 @@ async def cli_profiles_set_default(session: "Session", msg_id: str, msg_type: st
         await session.send_json(
             make_response(msg_id, msg_type, {
                 "defaults": defaults,
+                # True when the live credential was already the target's fresh
+                # sign-in and was parked into its slot instead of swapped.
+                "adoptedLiveLogin": adopted,
                 "needsLogin": login_reason is not None,
                 # Which of the two is on screen decides whether the sign-in
                 # pane reads as "you were logged out" or "this needs
@@ -2334,6 +2570,13 @@ async def cli_profiles_set_default(session: "Session", msg_id: str, msg_type: st
         agent_key=agent_key,
         forced=agent_key not in HOT_SWAP_AGENTS and bool(payload.get("force")),
     )
+    # The user switched by hand: any automatic proposal still pending for this
+    # agent is withdrawn and the failover epoch moves, so a stale proposal
+    # cannot commit against the account the user just chose.
+    try:
+        await app.quota_failover.on_manual_switch(agent_key, profile_id)
+    except Exception:  # noqa: BLE001 — the switch itself succeeded and was answered
+        app.log.exception("quota_failover: manual switch hook failed")
     # The usage badges read the active account's credentials — force the poller
     # to re-fetch now so the badge reflects the switch immediately.
     from .usage_service import service
@@ -2354,6 +2597,134 @@ async def cli_profiles_set_default(session: "Session", msg_id: str, msg_type: st
             app.log.exception("usage: failed to announce the claude account switch")
     else:
         service.request_refresh()
+
+
+# ── Quota failover (quota_failover.*) ────────────────────────────────────────
+# Thin adapters over quota_failover.QuotaFailoverService — the authority for
+# off/notify/auto, incidents, candidates, the persisted automatic budget and
+# switch transactions. See that module's docstring and the plan
+# quota-exhaustion-auto-switch_7b3e91.
+
+async def _failover_call(
+    session: "Session", msg_id: str, msg_type: str, call, *, shape
+) -> None:
+    """Run one authority call and answer it; a FailoverRefused becomes the WS
+    error it names."""
+    try:
+        result = await call()
+    except quota_failover.FailoverRefused as refused:
+        await session.send_json(
+            make_error(msg_id, msg_type, refused.code, refused.message, refused.details)
+        )
+        return
+    await session.send_json(make_response(msg_id, msg_type, shape(result)))
+
+
+@handler("quota_failover.get_state")
+async def quota_failover_get_state(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    await session.send_json(make_response(msg_id, msg_type, app.quota_failover.state()))
+
+
+@handler("quota_failover.set_policy")
+async def quota_failover_set_policy(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    mode = str(payload.get("mode") or "")
+
+    async def call():
+        await app.quota_failover.set_policy(mode)
+        return app.quota_failover.state()
+
+    await _failover_call(session, msg_id, msg_type, call, shape=lambda state: state)
+
+
+@handler("quota_failover.report")
+async def quota_failover_report(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    await _failover_call(
+        session, msg_id, msg_type, lambda: app.quota_failover.report(payload),
+        shape=lambda result: {"incident": result[0].to_dict(), "created": result[1]},
+    )
+
+
+@handler("quota_failover.candidates")
+async def quota_failover_candidates(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    agent_key = str(payload.get("agent_key") or "")
+    await _failover_call(
+        session, msg_id, msg_type, lambda: app.quota_failover.candidates(agent_key),
+        shape=lambda rows: {"agentKey": agent_key, "candidates": rows},
+    )
+
+
+@handler("quota_failover.switch")
+async def quota_failover_switch(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    await _failover_call(
+        session, msg_id, msg_type, lambda: app.quota_failover.begin_switch(payload),
+        shape=lambda tx: {"transaction": tx.to_dict()},
+    )
+
+
+@handler("quota_failover.confirm")
+async def quota_failover_confirm(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    tx_id = str(payload.get("transaction_id") or "")
+    await _failover_call(
+        session, msg_id, msg_type, lambda: app.quota_failover.confirm(tx_id),
+        shape=lambda tx: {"transaction": tx.to_dict()},
+    )
+
+
+@handler("quota_failover.ack")
+async def quota_failover_ack(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    await _failover_call(
+        session, msg_id, msg_type, lambda: app.quota_failover.ack(payload),
+        shape=lambda tx: {"transaction": tx.to_dict()},
+    )
+
+
+@handler("quota_failover.settle")
+async def quota_failover_settle(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    await _failover_call(
+        session, msg_id, msg_type, lambda: app.quota_failover.settle(payload),
+        shape=lambda tx: {"transaction": tx.to_dict()},
+    )
+
+
+@handler("quota_failover.reconcile")
+async def quota_failover_reconcile(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    agent_key = str(payload.get("agent_key") or "")
+    tx_id = str(payload.get("transaction_id") or "")
+    live = payload.get("live_slot_id")
+    await _failover_call(
+        session, msg_id, msg_type,
+        lambda: app.quota_failover.reconcile(agent_key, tx_id, str(live) if live else None),
+        shape=lambda result: result,
+    )
+
+
+@handler("quota_failover.cancel")
+async def quota_failover_cancel(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    tx_id = str(payload.get("transaction_id") or "")
+    await _failover_call(
+        session, msg_id, msg_type, lambda: app.quota_failover.cancel(tx_id),
+        shape=lambda tx: {"transaction": tx.to_dict()},
+    )
 
 
 # ── Agent session / orphans (agent.*) ───────────────────────────────────────
@@ -6253,15 +6624,58 @@ async def _terminal_create_impl(
                 )
             )
             return
-        login_set, login_remove = await asyncio.to_thread(
-            app.credential_vault.login_spawn_env, agent_key, login_profile_id
-        )
+        try:
+            login_set, login_remove = await asyncio.to_thread(
+                functools.partial(
+                    app.credential_vault.login_spawn_env, agent_key, login_profile_id,
+                    **quota_failover.scope_kwargs(
+                        app.credential_vault.login_spawn_env, agent_key, profile),
+                )
+            )
+        except Exception as err:  # noqa: BLE001 — the vault refused before any write
+            # e.g. copilot's plaintext-token mode, or a multi-provider profile
+            # with no scope: the vault cannot say where the sign-in would land,
+            # so no pane opens and nothing was touched.
+            await session.send_json(
+                make_error(
+                    msg_id, msg_type, "LOGIN_UNAVAILABLE", _profile_error(err),
+                    {"agent_key": agent_key, "profile_id": login_profile_id},
+                )
+            )
+            await _reclaim_codex_home(str(transaction.get("codex_home_id") or ""))
+            return
         env.update(login_set)
         env_remove = login_remove or None
-        # Mark the terminal as an isolated LOGIN pane: it cannot touch the
-        # live credentials, and the login-home harvest (on account switch)
-        # must wait for it to exit (see _running_login_terminals).
+        # Mark the terminal as a LOGIN pane: the login harvest (on account
+        # switch) must wait for it to exit (see _running_login_terminals).
         metadata["login_profile_id"] = login_profile_id
+        if not login_set and not login_remove:
+            # No isolation: this sign-in rewrites the LIVE credential store.
+            # The vault has just parked the pre-login credential; still, a
+            # pane already working on the live credential would be switched
+            # under the user's feet, so refuse while any runs — and give the
+            # parked snapshot back, since no sign-in will happen. A second
+            # live-store sign-in at the same time is refused the same way.
+            running = _running_regular_terminals(agent_key) + _running_live_login_terminals(agent_key)
+            if running:
+                discard = getattr(app.credential_vault, "discard_pending_login", None)
+                if callable(discard):
+                    try:
+                        await vault_to_thread(functools.partial(
+                            discard, agent_key, login_profile_id,
+                            **quota_failover.scope_kwargs(discard, agent_key, profile)))
+                    except Exception:  # noqa: BLE001 — the watch discards it later
+                        app.log.exception("login: discard of the pre-login snapshot failed")
+                await session.send_json(
+                    make_error(
+                        msg_id, msg_type, "LOGIN_BLOCKED_BY_LIVE_PANES",
+                        f"{len(running)} running {agent_key} pane(s) use the live "
+                        "credential this sign-in would replace; finish or close them first",
+                        {"count": len(running), "agent_key": agent_key},
+                    )
+                )
+                return
+            metadata["live_login"] = True
     # True only when the rewrite below really turns the command into an auth
     # SUBCOMMAND. That, not `is_login` on its own, is what makes the spawn
     # wiring inapplicable further down — a subcommand takes none of the
@@ -6497,6 +6911,30 @@ async def _terminal_create_impl(
         app._PTY_OWNERS[term.id] = session
         return term
 
+    # The account this launch is pinned to, resolved ONCE (under the switch
+    # lock, below) and reused by the history pin after the spawn: two reads
+    # could straddle a switch and file the pane under two accounts.
+    history_pin: str | None = None
+    if agent_key in PROFILE_AGENT_KEYS and not login_profile_id and (
+        _running_live_login_terminals(agent_key)
+        or await vault_to_thread(_live_login_pending, agent_key)
+    ):
+        # A sign-in against the live credential store is under way (or has
+        # written a credential nobody has parked yet): a pane started now
+        # would run on that temporary credential while being pinned to the
+        # store's default — every usage figure it produced would be filed
+        # under the wrong account. Refuse until the sign-in is harvested or
+        # discarded.
+        await session.send_json(
+            make_error(
+                msg_id, msg_type, "LOGIN_IN_PROGRESS",
+                f"a {agent_key} sign-in is rewriting the live credential; wait for it "
+                "to finish before opening a new pane",
+                {"agent_key": agent_key},
+            )
+        )
+        await _reclaim_codex_home(str(transaction.get("codex_home_id") or ""))
+        return
     if agent_key in PROFILE_AGENT_KEYS and not login_profile_id:
         # A regular pane of a profile agent starts on the live credentials —
         # the very state an account switch swaps. Spawning under the agent's
@@ -6580,6 +7018,27 @@ async def _terminal_create_impl(
             # login or native launch writes "" and retires any earlier fact.
             portable_credentials.note_launch(
                 str(payload["pane_id"]), injection.slot_id if injection else "")
+            # Launch provenance for the account-switch authority: the profile
+            # this pane starts on and the credential pool it resolves to,
+            # decided under the same lock as the credentials themselves. The
+            # failover transaction reads only this to tell which live panes a
+            # swap of that pool touches — never the default of the moment.
+            launch_pin = _profile_pin_for_bookkeeping(
+                agent_key, payload["pane_id"], metadata.get("profile_id"))
+            history_pin = launch_pin
+            launch_profile = (
+                app.cli_profiles_store.get(launch_pin)
+                if launch_pin and launch_pin != DEFAULT_SLOT_ID else None
+            )
+            provenance = quota_failover.pane_auth_scope(
+                agent_key, launch_profile, env=env, env_remove=env_remove or (),
+                portable_slot_id=injection.slot_id if injection else None,
+            )
+            metadata["launch_profile_id"] = provenance["profileId"]
+            metadata["profile_scope"] = provenance["scope"]
+            metadata["auth_scope"] = provenance["authScope"]
+            metadata["credential_source"] = provenance["credentialSource"]
+            metadata["credential_env"] = provenance["credentialEnv"]
             term = _spawn_and_claim()
         finally:
             switch_lock.release()
@@ -6646,8 +7105,10 @@ async def _terminal_create_impl(
         # a beat later. Non-account agents pin the Default slot.
         app.pane_account_history.pin(
             term.pane_id,
-            _account_pin_for_history(_profile_pin_for_bookkeeping(
-                agent_key, term.pane_id, metadata.get("profile_id"))),
+            _account_pin_for_history(
+                history_pin if history_pin is not None else _profile_pin_for_bookkeeping(
+                    agent_key, term.pane_id, metadata.get("profile_id"))
+            ),
         )
         # Register now — a lock and a dict insert — so the pane owns its
         # identity before the ack below; the frontend's next messages

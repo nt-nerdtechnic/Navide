@@ -223,6 +223,32 @@ export interface AgentSpec {
     flag: string
     handwritten: RegExp
   }
+  /** What this CLI's usage windows (the backend's `fetch_usage` output) mean
+   *  for quota-exhaustion failover — which kinds are account-level limits,
+   *  which must be present before a reading counts as "has quota", which
+   *  pool substitutes for a spent one, which are per-model. Undefined = not
+   *  declared: a reading may show a spent window but never counts as
+   *  positive headroom (per-model or per-provider vendors, and vendors with
+   *  no usage fetcher). Read by lib/quotaFailover.ts. */
+  quotaSemantics?: {
+    hard: readonly string[]
+    required: readonly string[]
+    alternate?: readonly string[]
+    scoped?: readonly string[]
+  }
+  /** This CLI's own out-of-quota notice, as it prints it, matched on a
+   *  whitespace-collapsed buffer tail. The one piece of free text that counts
+   *  as an explicit exhaustion signal for the vendor; generic wording never
+   *  does. Undefined = no verified notice text (the vendor reports exhaustion
+   *  through its usage windows, or its text has not been captured yet). */
+  quotaExhausted?: {
+    /** The notice as printed in the pane. */
+    pattern: RegExp
+    /** A structured signal instead of (or besides) text: the `detail` a
+     *  turn_complete carries when this CLI's own log names the turn's
+     *  outcome (droid's agent_turn_outcome.reason). Compared verbatim. */
+    turnDetail?: string
+  }
   /** A pane whose saved session left no transcript ("ghost") can be repointed
    *  at a real one from the same workspace instead of silently starting over.
    *  Requires a vendor whose sessions are attributable by cwd. Only claude. */

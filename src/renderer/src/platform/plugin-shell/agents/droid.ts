@@ -49,5 +49,17 @@ export const SPEC = {
   // verifiedTurnText stays unset: the reader carries turn text, but it has not
   // been validated against a real authenticated session yet — the same bar the
   // other eleven unflagged vendors are held to.
-  hint: 'generalist'
+  hint: 'generalist',
+  // Quota failover, from droid 0.206.0's bundle (vendor-owner source read,
+  // not reproduced on a live account): the session JSONL records
+  // agent_turn_outcome.reason, and the reader hands it over as the
+  // turn_complete `detail`. "model_usage_exhausted" is exhaustion; its
+  // neighbours (model_authentication_failed, model_request_rejected,
+  // model_provider_unreachable, prompt_rejected) and the retry classes
+  // (overloaded, rate_limited, timeout, network) are not and are left out.
+  // The TUI strings are the same event as text.
+  quotaExhausted: {
+    pattern: /(Standard Usage limit reached|standard credit limits are exhausted|usage quota is exhausted\. Limits reset at)/i,
+    turnDetail: 'model_usage_exhausted',
+  },
 } as const satisfies AgentSpec

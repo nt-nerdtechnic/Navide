@@ -131,7 +131,15 @@ from ..log_readers.base import (
     set_activity_high_water,
     user_prompt_text,
 )
-from .base import Dep, SkillsWiring, VendorSpec, command_text
+from .base import (
+    AccountSwitchSpec,
+    Dep,
+    SkillsWiring,
+    VendorSpec,
+    command_text,
+    provider_map_extract,
+    provider_map_merge,
+)
 
 log = logging.getLogger("agent_team_backend.log_readers.muse")
 
@@ -695,6 +703,52 @@ def _session_exists(workspace_path: str, session_id: str) -> bool:
 
 # ---- vendor spec -----------------------------------------------------------
 
+# Credential store, from Meta's own launcher script (`muse` 1.3.0 is a bash
+# launcher that reads the file read-only before delegating to the binary):
+# ``$XDG_CONFIG_HOME/muse/auth.json``, default ``~/.config/muse/auth.json``,
+# overridable with ``MUSE_AUTH_PATH``; document ``{"providers": {"meta":
+# {"mechanism": "oauth", "access_token": ..., "expires_at": <epoch s>}}}``.
+# Only the ``meta`` provider is an account, so that is the one scope; other
+# ``providers`` keys are left alone by a switch.
+MUSE_AUTH_FILE_REL = (".config", "muse", "auth.json")
+MUSE_AUTH_PATH_ENV = "MUSE_AUTH_PATH"
+
+
+def _muse_auth_file(home: Path, env: dict | None = None) -> Path:
+    env = os.environ if env is None else env
+    explicit = env.get(MUSE_AUTH_PATH_ENV)
+    if explicit:
+        return Path(explicit)
+    xdg = env.get("XDG_CONFIG_HOME")
+    return Path(xdg) / "muse" / "auth.json" if xdg else home.joinpath(*MUSE_AUTH_FILE_REL)
+
+
+def _muse_extract(document: str | None, scope: str) -> str | None:
+    return provider_map_extract(document, scope, path=("providers",))
+
+
+def _muse_merge(document: str | None, scope: str, portion: str | None) -> str:
+    return provider_map_merge(document, scope, portion, path=("providers",))
+
+
+def identity_from_secret(secret):
+    """A scoped slot holds the ``providers.meta`` entry: signed in when it
+    is an oauth entry with an access token. The file carries no email."""
+    data = None
+    if secret is not None:
+        try:
+            data = json.loads(secret)
+        except ValueError:
+            data = None
+    signed_in = (
+        isinstance(data, dict)
+        and data.get("mechanism") == "oauth"
+        and isinstance(data.get("access_token"), str)
+        and bool(data["access_token"])
+    )
+    return {"email": None, "signedIn": signed_in}
+
+
 SPEC = VendorSpec(
     key="muse",
     # Login/usage observations do not establish Muse's CLI service host set.
@@ -720,6 +774,36 @@ SPEC = VendorSpec(
     # still takes priority over the account login if it is set in the
     # environment. Verified against `muse login --help`, 2026-09-18.
     login_command_args="login",
+    # Quota exhaustion text from the 1.3.0 binary's error/goal-status strings
+    # ("usage limit reached" is a distinct class from "rate limited") and the
+    # quota_hit session failure entry. Source-read only.
+    quota_exhausted_patterns=(
+        r"(usage limit reached|limited by budget|provider_tier_limit|quota_hit)",
+    ),
+    # Multi-account: the ``providers.meta`` entry of the launcher-documented
+    # auth.json is the account. ``MUSE_AUTH_PATH`` names a FILE, not a home,
+    # so it cannot serve as ``login_home_env`` (the vault hands a directory
+    # over) — a sign-in runs against the real file and is captured after.
+    # The launcher reads the file once per run: restart, then
+    # ``muse --resume <id>``.
+    live_file=MUSE_AUTH_FILE_REL,
+    live_file_resolver=lambda home: _muse_auth_file(home),
+    slot_file="auth.json",
+    identity_from_secret=identity_from_secret,
+    account_switch=AccountSwitchSpec(
+        auth_scope="muse",
+        method="restart",
+        store="compound-file",
+        evidence="source",
+        verified_version="1.3.0",
+        scopes=("meta",),
+        extract=_muse_extract,
+        merge=_muse_merge,
+        # `muse login --help`: META_API_KEY takes priority over the login.
+        shadowing_env=("META_API_KEY",),
+        resume="native",
+        todo="layout from Meta's launcher script only (the binary's own writer not inspected); META_API_KEY in the pane env shadows the file; no real-account round-trip recorded",
+    ),
     resume_id_from_command=_resume_id_from_command,
     session_exists=_session_exists,
     make_log_reader=MuseLogReader,

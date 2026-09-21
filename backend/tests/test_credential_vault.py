@@ -1138,20 +1138,53 @@ def test_identity_kilo_slot_snapshot_and_missing_file(tmp_path: Path) -> None:
     assert vault.identity("kilo", "missing") == {"email": None, "signedIn": False}
 
 
-def test_kilo_switch_swaps_the_live_auth_file(tmp_path: Path) -> None:
-    """End to end over the generic file path: capture the live credential into
-    the outgoing slot, publish the target slot to ~/.local/share/kilo."""
+def test_kilo_switch_swaps_only_the_kilo_entry(tmp_path: Path) -> None:
+    """kilo's auth.json is a provider map. A switch rewrites the "kilo" entry
+    and nothing else: the user's other provider keys stay byte-for-byte the
+    same values, and the outgoing entry lands in the default slot."""
     vault = _file_vault(tmp_path)
     live = tmp_path / "home" / ".local" / "share" / "kilo" / "auth.json"
-    _write(live, '{"kilo": {"type": "api", "key": "A"}}')
-    vault.write_slot("kilo", "b", LiveCredentials(
-        secret='{"kilo": {"type": "api", "key": "B"}}'))
+    _write(live, json.dumps({
+        "kilo": {"type": "api", "key": "A"},
+        "anthropic": {"type": "oauth", "access": "keep-me", "refresh": "r"},
+    }))
+    vault.write_slot("kilo", "b", LiveCredentials(secret='{"type": "api", "key": "B"}'))
 
     vault.switch("kilo", DEFAULT_SLOT_ID, "b")
 
-    assert live.read_text(encoding="utf-8") == '{"kilo": {"type": "api", "key": "B"}}'
-    assert vault.read_slot("kilo", DEFAULT_SLOT_ID).secret == \
-        '{"kilo": {"type": "api", "key": "A"}}'
+    after = json.loads(live.read_text(encoding="utf-8"))
+    assert after["kilo"] == {"type": "api", "key": "B"}
+    assert after["anthropic"] == {"type": "oauth", "access": "keep-me", "refresh": "r"}
+    assert json.loads(vault.read_slot("kilo", DEFAULT_SLOT_ID).secret) == {
+        "type": "api", "key": "A",
+    }
+    # The parked document has the vendor's own shape, keyed by scope, and
+    # carries nothing but the kilo entry.
+    parked = json.loads(
+        (vault.slot_dir("kilo", DEFAULT_SLOT_ID) / "auth.json").read_text(encoding="utf-8")
+    )
+    assert parked == {"kilo": {"type": "api", "key": "A"}}
+
+
+def test_kilo_legacy_whole_file_slot_still_restores(tmp_path: Path) -> None:
+    """Slots parked before the per-provider split hold the whole auth.json;
+    its "kilo" entry is what a restore now publishes, and any other provider
+    that was parked with it stays parked (never pushed over the live one)."""
+    vault = _file_vault(tmp_path)
+    live = tmp_path / "home" / ".local" / "share" / "kilo" / "auth.json"
+    _write(live, '{"kilo": {"type": "api", "key": "A"}, "google": {"type": "api", "key": "G"}}')
+    slot_file = vault.slot_dir("kilo", "b") / "auth.json"
+    slot_file.parent.mkdir(parents=True)
+    slot_file.write_text(
+        '{"kilo": {"type": "oauth", "access": "B"}, "google": {"type": "api", "key": "OLD"}}',
+        encoding="utf-8",
+    )
+
+    vault.switch("kilo", DEFAULT_SLOT_ID, "b")
+
+    after = json.loads(live.read_text(encoding="utf-8"))
+    assert after == {"kilo": {"type": "oauth", "access": "B"}, "google": {"type": "api", "key": "G"}}
+    assert vault.identity("kilo", "b") == {"email": None, "signedIn": True}
 
 
 def test_kilo_switch_uses_xdg_live_credentials(tmp_path: Path, monkeypatch) -> None:
@@ -1159,17 +1192,24 @@ def test_kilo_switch_uses_xdg_live_credentials(tmp_path: Path, monkeypatch) -> N
     vault = _file_vault(tmp_path)
     live = tmp_path / "xdg" / "kilo" / "auth.json"
     fallback = tmp_path / "home" / ".local" / "share" / "kilo" / "auth.json"
-    outgoing = '{"kilo": {"type": "api", "key": "A"}}'
-    incoming = '{"kilo": {"type": "api", "key": "B"}}'
-    _write(live, outgoing)
+    _write(live, '{"kilo": {"type": "api", "key": "A"}}')
     _write(fallback, "unrelated fallback credentials")
-    vault.write_slot("kilo", "b", LiveCredentials(secret=incoming))
+    vault.write_slot("kilo", "b", LiveCredentials(secret='{"type": "api", "key": "B"}'))
 
     vault.switch("kilo", DEFAULT_SLOT_ID, "b")
 
-    assert live.read_text(encoding="utf-8") == incoming
-    assert vault.read_slot("kilo", DEFAULT_SLOT_ID).secret == outgoing
+    assert json.loads(live.read_text(encoding="utf-8")) == {"kilo": {"type": "api", "key": "B"}}
+    assert json.loads(vault.read_slot("kilo", DEFAULT_SLOT_ID).secret) == {"type": "api", "key": "A"}
     assert fallback.read_text(encoding="utf-8") == "unrelated fallback credentials"
+
+
+def test_kilo_rejects_a_foreign_scope(tmp_path: Path) -> None:
+    vault = _file_vault(tmp_path)
+    with pytest.raises(CredentialVaultError):
+        vault.read_live("kilo", scope="anthropic")
+    # Whole-file vendors take no scope at all.
+    with pytest.raises(CredentialVaultError):
+        vault.read_live("codex", scope="kilo")
 
 
 def test_login_spawn_env_kilo_has_no_isolation(tmp_path: Path) -> None:

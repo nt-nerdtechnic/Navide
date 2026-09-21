@@ -26,5 +26,7 @@ export const SPEC = {
   bracketedPaste: true,
   resumeCommandPattern: /^grok\s+-r\s+\S+/,
   supportsRebuild: true,
-  hint: 'generalist'
+  hint: 'generalist',
+  // Quota failover: grok.py reports one "Monthly credits" window.
+  quotaSemantics: { hard: ['monthly'], required: ['monthly'] },
 } as const satisfies AgentSpec

@@ -80,6 +80,7 @@ from ..log_readers.base import (
     user_prompt_text,
 )
 from .base import (
+    AccountSwitchSpec,
     Dep,
     McpServerConfig,
     McpValue,
@@ -87,6 +88,7 @@ from .base import (
     SkillsWiring,
     VendorSpec,
     command_text,
+    keychain_payload_items,
     platform_paths,
 )
 from ..usage_common import (
@@ -566,6 +568,8 @@ CursorLogReader.pane_cwd_match = _pane_cwd_match
 # ---- usage quota -----------------------------------------------------------
 
 CURSOR_KEYCHAIN_SERVICE = "cursor-access-token"
+CURSOR_REFRESH_KEYCHAIN_SERVICE = "cursor-refresh-token"
+CURSOR_KEYCHAIN_ACCOUNT = "cursor-user"
 #: Where Cursor keeps `state.vscdb` *below* its own application-support
 #: directory. The part above it differs per platform — `~/Library/Application
 #: Support` on macOS, `~/.config` on Linux, `%APPDATA%` on Windows — so it is
@@ -590,6 +594,16 @@ def _cursor_jwt_claims(token: str) -> dict | None:
     except (ValueError, UnicodeDecodeError):
         return None
     return data if isinstance(data, dict) else None
+
+
+def identity_from_secret(secret):
+    """A parked slot holds both Keychain items (access + refresh). Signed in
+    when the access token is a decodable session JWT; its ``sub`` user id is
+    surfaced as the identity (no email is stored beside the token)."""
+    items = keychain_payload_items(secret)
+    access = items.get(f"{CURSOR_KEYCHAIN_SERVICE}|{CURSOR_KEYCHAIN_ACCOUNT}")
+    user = cursor_user_id(access) if access else None
+    return {"email": user, "signedIn": user is not None}
 
 
 def cursor_user_id(token: str) -> str | None:
@@ -823,6 +837,31 @@ SPEC = VendorSpec(
         reads_shared_root=True,
     ),
     label="Cursor CLI",
+    # Multi-account: cursor-agent keeps its session in two macOS Keychain
+    # items (access + refresh, account "cursor-user"), swapped as a pair. No
+    # config-dir variable isolates a login, so a sign-in runs against the
+    # real Keychain and is captured afterwards. The display ``authInfo`` in
+    # cli-config.json is the CLI's own cache and is left alone (it re-derives
+    # it from the token). Non-macOS storage not established from source.
+    # Restart, then ``cursor-agent --resume=<uuid>``.
+    slot_file="credential.json",
+    identity_from_secret=identity_from_secret,
+    account_switch=AccountSwitchSpec(
+        auth_scope="cursor",
+        method="restart",
+        store="keychain",
+        evidence="source",
+        verified_version="2026.08.25-3e8eec8",
+        platforms=("darwin",),
+        keychain_items=(
+            (CURSOR_KEYCHAIN_SERVICE, CURSOR_KEYCHAIN_ACCOUNT),
+            (CURSOR_REFRESH_KEYCHAIN_SERVICE, CURSOR_KEYCHAIN_ACCOUNT),
+        ),
+        # `cursor-agent` honours CURSOR_API_KEY over the stored session.
+        shadowing_env=("CURSOR_API_KEY",),
+        resume="native",
+        todo="cli-config.json authInfo shows the previous account until the CLI refreshes it; non-macOS storage unknown; no real-account round-trip recorded",
+    ),
     # The one CLI with no spawn-time surface — no MCP flag, no config
     # variable — so its per-project config file is the only way in. A bare
     # "url" is read as a remote server (stdio is the shape that names its

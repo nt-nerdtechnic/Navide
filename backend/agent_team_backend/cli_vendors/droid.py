@@ -41,7 +41,7 @@ import os
 import re
 from pathlib import Path
 
-from .base import Dep, VendorSpec, command_text
+from .base import AccountSwitchSpec, Dep, VendorSpec, command_text
 from ..log_readers.base import (
     ActivityEvent,
     LogReader,
@@ -65,6 +65,57 @@ def encode_droid_cwd(cwd: str) -> str:
     text = re.sub(r"[\\/]+$", "", cwd)
     text = re.sub(r"^/+", "", text)
     return "-" + re.sub(r"/+", "-", text)
+
+
+# Credential store (droid 0.206.0 bundle, class XlH): the login is an
+# ENCRYPTED blob file under the factory home. Read from the bundle:
+#
+# * blob = ``<iv>:<tag>:<ciphertext>`` (base64), AES-256-GCM with no AAD and
+#   nothing path-bound (functions BkR/eAR);
+# * key = 32 random bytes (``randomBytes(32)``) generated once and kept in the
+#   OS keyring under service "Factory CLI" with a FIXED account name —
+#   "auth-encryption-key-security-cli" when stored through the macOS
+#   `security` CLI (blob file ``auth.v2.loginkeychain``), "auth-encryption-key"
+#   when stored through keytar (blob file ``auth.v2.keyring``); a "-dev"
+#   suffix on non-production tiers. Neither the account name nor the key
+#   derivation involves the base directory, so a blob written under
+#   ``FACTORY_HOME_OVERRIDE`` (a login home) decrypts in the real home, and
+#   two accounts' blobs are interchangeable files. Navide never reads the key.
+# * ``FACTORY_DISABLE_KEYRING`` switches to a key FILE (``auth.v2.key``) beside
+#   the blob (``auth.v2.file``) — per directory, so a login-home blob would NOT
+#   decrypt in the real home. That mode is refused, not swapped.
+DROID_AUTH_FILES = ("auth.v2.loginkeychain", "auth.v2.keyring")
+DROID_KEYFILE_MODE_FILES = ("auth.v2.key", "auth.v2.file")
+DROID_HOME_ENV = "FACTORY_HOME_OVERRIDE"
+
+
+def _droid_home(home: Path, env: dict | None = None) -> Path:
+    env = os.environ if env is None else env
+    override = env.get(DROID_HOME_ENV)
+    return Path(override) if override else home / ".factory"
+
+
+def _droid_credential_file(home: Path, env: dict | None = None) -> Path:
+    """Whichever keyring-backed blob exists; the `security`-backed name when
+    neither does yet. A home in key-file mode (``auth.v2.key`` present) has
+    no swappable blob — the vault is told so rather than handed a file
+    another directory's key encrypted."""
+    root = _droid_home(home, env)
+    if (root / DROID_KEYFILE_MODE_FILES[0]).is_file():
+        raise ValueError(
+            "droid stores its login with a per-directory key file "
+            "(FACTORY_DISABLE_KEYRING); the blob cannot be moved between homes"
+        )
+    for name in DROID_AUTH_FILES:
+        if (root / name).is_file():
+            return root / name
+    return root / DROID_AUTH_FILES[0]
+
+
+def identity_from_secret(secret):
+    """The blob is encrypted with a key Navide never reads: presence is all
+    that can be reported. No email, no user id."""
+    return {"email": None, "signedIn": bool(secret and secret.strip())}
 
 
 def droid_sessions_root() -> Path | None:
@@ -443,6 +494,38 @@ SPEC = VendorSpec(
     data_dirs=lambda ctx: (ctx.path(ctx.env.get("FACTORY_HOME_OVERRIDE") or ctx.home / ".factory"),),
     data_dir_env_vars=("FACTORY_HOME_OVERRIDE",),
     label="Droid",
+    # Quota exhaustion, read from the 0.206.0 bundle (not reproduced live):
+    # the structured ``agent_turn_outcome.reason`` value (the reader passes
+    # it as the turn_complete detail) plus the TUI banners. Neighbours such
+    # as model_authentication_failed / rate_limited are deliberately absent.
+    quota_exhausted_patterns=(
+        r"^model_usage_exhausted$",
+        r"(Standard Usage limit reached|standard credit limits are exhausted|usage quota is exhausted\. Limits reset at)",
+    ),
+    # Multi-account: the encrypted login blob is swapped as a file (see
+    # DROID_AUTH_FILES). A login pane runs under FACTORY_HOME_OVERRIDE, where
+    # `droid` writes a fresh blob with the same machine-wide key. Both keyring
+    # branches use fixed key names, so the swap is platform-independent; the
+    # keytar branch has only been read, not seen running. Restart, then
+    # ``droid --resume <uuid>``.
+    live_file=(".factory", DROID_AUTH_FILES[0]),
+    live_file_resolver=lambda home: _droid_credential_file(home),
+    slot_file="auth.v2.blob",
+    login_home_secret_file=(DROID_AUTH_FILES[0],),
+    login_home_env=DROID_HOME_ENV,
+    identity_from_secret=identity_from_secret,
+    account_switch=AccountSwitchSpec(
+        auth_scope="droid",
+        method="restart",
+        store="file",
+        evidence="source",
+        verified_version="0.206.0",
+        # FACTORY_API_KEY is verified ahead of the stored login;
+        # FACTORY_DISABLE_KEYRING puts the CLI in key-file mode (see above).
+        shadowing_env=("FACTORY_API_KEY", "FACTORY_DISABLE_KEYRING"),
+        resume="native",
+        todo="key/blob layout read from the 0.206.0 bundle (machine-wide keyring key, no path binding); identity unreadable; keytar branch (Linux/Windows) not seen running; no real-account round-trip recorded",
+    ),
     resume_id_from_command=_resume_id_from_command,
     session_path=_session_path,
     session_exists=_session_exists,

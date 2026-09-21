@@ -60,5 +60,8 @@ export const SPEC = {
   awaitingInput: {
     pattern: /Would you like to (run|make|grant) |No, and tell Codex what to do differently/,
   },
-  hint: 'implementer'
+  hint: 'implementer',
+  // Quota failover: _codex_windows resolves primary/secondary by length to
+  // session (5h) / weekly; the weekly window is not always reported.
+  quotaSemantics: { hard: ['session', 'weekly'], required: ['session'] },
 } as const satisfies AgentSpec

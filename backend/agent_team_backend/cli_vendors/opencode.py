@@ -41,6 +41,7 @@ from pathlib import Path
 import re
 
 from .base import (
+    AccountSwitchSpec,
     Dep,
     McpServerConfig,
     McpValue,
@@ -49,6 +50,9 @@ from .base import (
     SkillsWiring,
     VendorSpec,
     command_text,
+    provider_entry_identity,
+    provider_map_extract,
+    provider_map_merge,
 )
 from . import _protocols
 from ..usage_common import HTTP_TIMEOUT, _epoch_to_iso, _num, _snapshot, _window, parse_retry_after
@@ -551,6 +555,30 @@ OpencodeLogReader.pane_cwd_match = _pane_cwd_match
 # have no readable quota and map to unavailable.
 
 OPENCODE_AUTH_FILE_REL = (".local", "share", "opencode", "auth.json")
+# Providers whose ``auth.json`` entry is an account of its own — the ids the
+# CLI's ``auth login`` offers (its ordering map in 1.15.12 lists opencode,
+# openai, github-copilot, google, anthropic, openrouter, vercel; the ChatGPT
+# OAuth is stored under "openai") plus the MiniMax coding-plan key the quota
+# reader already understands. Any other provider id stays untouched by a
+# switch: it is not a scope a profile can bind to.
+OPENCODE_ACCOUNT_SCOPES = (
+    "anthropic",
+    "openai",
+    "github-copilot",
+    "google",
+    "opencode",
+    "openrouter",
+    "vercel",
+    "minimax-coding-plan",
+)
+
+
+def _opencode_auth_file(home: Path, env: dict | None = None) -> Path:
+    """The CLI's own rule (1.15.12): ``$XDG_DATA_HOME/opencode/auth.json``
+    when the variable is set, else ``~/.local/share/opencode/auth.json``."""
+    env = os.environ if env is None else env
+    xdg = env.get("XDG_DATA_HOME")
+    return Path(xdg) / "opencode" / "auth.json" if xdg else home.joinpath(*OPENCODE_AUTH_FILE_REL)
 OPENCODE_MINIMAX_USAGE_URL = "https://api.minimax.io/v1/token_plan/remains"
 
 
@@ -761,6 +789,46 @@ SPEC = VendorSpec(
         append_path="/tui/append-prompt",
         submit_path="/tui/submit-prompt",
         clear_path="/tui/clear-prompt",
+    ),
+    # `opencode auth login [url]` (verified against `opencode auth --help`,
+    # 1.15.12) opens the provider picker, then the chosen provider's own
+    # OAuth or key prompt — a flow a PTY pane carries.
+    login_command_args="auth login",
+    # Multi-account: ``auth.json`` is a provider map, so a profile binds to
+    # ONE provider entry (``scopes``) and a switch rewrites that entry only.
+    # The data dir follows XDG_DATA_HOME alone — no dedicated variable to
+    # give a login pane its own file — so a sign-in runs against the real
+    # home and is captured afterwards (as kilo). The CLI loads the file at
+    # startup: restart, then ``opencode --session <id>``.
+    live_file=OPENCODE_AUTH_FILE_REL,
+    live_file_resolver=lambda home: _opencode_auth_file(home),
+    slot_file="auth.json",
+    identity_from_secret=provider_entry_identity,
+    account_switch=AccountSwitchSpec(
+        auth_scope="opencode",
+        method="restart",
+        store="compound-file",
+        evidence="source",
+        verified_version="1.15.12",
+        scopes=OPENCODE_ACCOUNT_SCOPES,
+        extract=provider_map_extract,
+        merge=provider_map_merge,
+        # Per-provider env keys from the 1.15.12 binary's provider table. The
+        # loader consults env and auth.json both (source "env" / "api"); which
+        # wins when both exist is not readable from the minified code, so a
+        # pane carrying THIS provider's key is credential-source-unknown.
+        uncertain_env_by_scope=(
+            ("anthropic", ("ANTHROPIC_API_KEY",)),
+            ("openai", ("OPENAI_API_KEY",)),
+            ("github-copilot", ("GITHUB_TOKEN",)),
+            ("google", ("GOOGLE_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY", "GEMINI_API_KEY")),
+            ("opencode", ("OPENCODE_API_KEY",)),
+            ("openrouter", ("OPENROUTER_API_KEY",)),
+            ("vercel", ("AI_GATEWAY_API_KEY",)),
+            ("minimax-coding-plan", ("MINIMAX_API_KEY",)),
+        ),
+        resume="native",
+        todo="layout from the 1.15.12 binary; no A -> B -> A round-trip on two real accounts recorded",
     ),
     # Late-bound (module global at call time) so tests can monkeypatch.
     fetch_usage=lambda home: fetch_opencode(home),

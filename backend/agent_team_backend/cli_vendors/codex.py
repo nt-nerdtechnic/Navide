@@ -30,7 +30,7 @@ import time
 
 import psutil
 
-from .base import Dep, McpWiring, SkillsWiring, VendorRuntimeContext, VendorSpec, command_text
+from .base import AccountSwitchSpec, Dep, McpWiring, SkillsWiring, VendorRuntimeContext, VendorSpec, command_text
 from ..applog import app_data_dir
 from ..skills_store import SkillsStore
 from . import _protocols
@@ -1611,6 +1611,27 @@ SPEC = VendorSpec(
     profile_home_secret_file=("auth.json",),
     login_home_env="CODEX_HOME",
     identity_from_secret=identity_from_secret,
+    # ``auth.json`` is read at startup, so a swap needs the pane restarted and
+    # resumed (``codex resume <id>``). Multi-account switching has run on real
+    # accounts through the vault's restart path, but not against a recorded
+    # codex version — "source" until a round-trip is logged. No
+    # ``expires_at``: the JWT ``exp`` is the access token's and codex
+    # refreshes it itself.
+    account_switch=AccountSwitchSpec(
+        auth_scope="codex",
+        method="restart",
+        store="file",
+        evidence="source",
+        verified_version="0.155.1",
+        # The 0.155.1 binary accepts a credential from these ("provide an API
+        # key through a supported auth env var", "auth is provided by
+        # environment"); whether one outranks a ChatGPT login in auth.json is
+        # not readable from the binary, so a pane carrying one is reported as
+        # credential-source-unknown, not swapped.
+        uncertain_env=("OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"),
+        resume="native",
+        todo="restart switch used on real accounts; record an A -> B -> A round-trip against 0.155.1; env-vs-auth.json precedence unverified",
+    ),
     # Late-bound (module global at call time) so tests can monkeypatch. The
     # wham endpoint reads the EFFECTIVE codex home ($CODEX_HOME override,
     # else <home>/.codex) — the same resolution the poller used inline.

@@ -5,6 +5,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ref } from 'vue'
 import type { UpdateState } from '../../../../shared/updater'
+import type { QuotaIncidentNotice } from '../useAnnouncements'
 
 const store = vi.hoisted(() => new Map<string, unknown>())
 
@@ -199,6 +200,220 @@ describe('useAnnouncements', () => {
   it('exposes the release id used by the What is New modal', async () => {
     const { releaseAnnouncementId } = await load()
     expect(releaseAnnouncementId('0.1.77')).toBe('release:0.1.77')
+  })
+
+  describe('quota incidents', () => {
+    const T0 = Date.parse('2026-09-21T10:00:00.000Z')
+
+    function notice(patch: Partial<QuotaIncidentNotice> = {}): QuotaIncidentNotice {
+      return {
+        incidentId: 'inc-1',
+        agentKey: 'claude',
+        agentLabel: 'Claude Code',
+        authScope: 'anthropic',
+        epoch: 7,
+        status: 'detected',
+        cause: 'quota-exhausted',
+        sourceLabel: 'dev@example.com',
+        affected: { workspaces: 2, panes: 3 },
+        candidates: [
+          { slotId: 'slot-b', label: 'work@example.com', tier: 'fresh-headroom', detail: '5h 78% left' },
+          { slotId: '__default__', label: 'Default', tier: 'unknown' },
+        ],
+        excluded: [{ label: 'spare@example.com', reason: 'signed-out' }],
+        observedAt: T0,
+        updatedAt: T0,
+        ...patch,
+      }
+    }
+
+    it('tops the feed with the incident and one typed switch button per candidate', async () => {
+      store.set(READ_IDS_KEY, [])
+      const { useAnnouncements, quotaAnnouncementId } = await load()
+      const a = useAnnouncements()
+      a.setUpdateSource(updateState({ status: 'available', availableVersion: '0.1.78' }))
+
+      a.noteQuotaIncident(notice())
+
+      const top = a.items.value[0]
+      expect(top.id).toBe(quotaAnnouncementId('inc-1'))
+      expect(top.kind).toBe('quota')
+      expect(top.read).toBe(false)
+      expect(top.createdAt).toBe(T0)
+      expect(top.title).toContain('dev@example.com')
+      expect(top.title).toContain('Claude Code')
+      expect(top.highlights.join('\n')).toContain('work@example.com')
+      expect(top.highlights.join('\n')).toContain('spare@example.com')
+      expect(top.actions).toEqual([
+        { kind: 'quota-switch', incidentId: 'inc-1', agentKey: 'claude', epoch: 7, slotId: 'slot-b', label: 'work@example.com', tier: 'fresh-headroom' },
+        { kind: 'quota-switch', incidentId: 'inc-1', agentKey: 'claude', epoch: 7, slotId: '__default__', label: 'Default', tier: 'unknown' },
+      ])
+      // The updater row and its download button are untouched underneath.
+      expect(a.items.value[1]).toMatchObject({ id: 'update:0.1.78', action: 'download', actions: [{ kind: 'download' }] })
+      // No raw i18n key leaks while the locale files lack the quota entries.
+      expect(top.title + top.highlights.join() + (top.note ?? '')).not.toContain('announce.')
+      expect(a.unreadCount.value).toBeGreaterThan(0)
+    })
+
+    it('updates the same incident in place — one row however many windows relay it', async () => {
+      store.set(READ_IDS_KEY, [])
+      const { useAnnouncements } = await load()
+      const a = useAnnouncements()
+
+      a.noteQuotaIncident(notice())
+      a.noteQuotaIncident(notice())
+      a.noteQuotaIncident(notice({ status: 'switching', targetLabel: 'work@example.com', candidates: [], updatedAt: T0 + 1000 }))
+
+      const rows = a.items.value.filter((i) => i.kind === 'quota')
+      expect(rows).toHaveLength(1)
+      expect(rows[0].title).toContain('work@example.com')
+      expect(rows[0].actions).toBeUndefined()
+    })
+
+    it('drops an update older than the one on screen', async () => {
+      store.set(READ_IDS_KEY, [])
+      const { useAnnouncements } = await load()
+      const a = useAnnouncements()
+
+      a.noteQuotaIncident(notice({ status: 'switching', targetLabel: 'work@example.com', candidates: [], updatedAt: T0 + 1000 }))
+      a.noteQuotaIncident(notice({ updatedAt: T0 }))
+
+      expect(a.items.value[0].quota?.status).toBe('switching')
+    })
+
+    it('read marks are per status and epoch, and never reach the shared settings document', async () => {
+      store.set(READ_IDS_KEY, [])
+      const { useAnnouncements, quotaAnnouncementId } = await load()
+      const a = useAnnouncements()
+      const id = quotaAnnouncementId('inc-1')
+
+      a.noteQuotaIncident(notice())
+      a.markRead(id)
+      expect(a.items.value[0].read).toBe(true)
+      expect(store.get(READ_IDS_KEY)).toEqual([])
+
+      // A new status is news again; so is the same status under a new epoch.
+      a.noteQuotaIncident(notice({ status: 'ready', targetLabel: 'work@example.com', reason: 'quota-confirmed', updatedAt: T0 + 1000 }))
+      expect(a.items.value[0].read).toBe(false)
+      a.markRead(id)
+      expect(a.items.value[0].read).toBe(true)
+      a.noteQuotaIncident(notice({ status: 'ready', targetLabel: 'work@example.com', reason: 'quota-confirmed', epoch: 8, updatedAt: T0 + 2000 }))
+      expect(a.items.value[0].read).toBe(false)
+
+      a.markAllRead()
+      expect(a.items.value[0].read).toBe(true)
+      expect(store.get(READ_IDS_KEY)).not.toContain(id)
+    })
+
+    it('a new epoch replaces every button with ones carrying the new epoch', async () => {
+      store.set(READ_IDS_KEY, [])
+      const { useAnnouncements } = await load()
+      const a = useAnnouncements()
+
+      a.noteQuotaIncident(notice())
+      a.noteQuotaIncident(notice({ epoch: 8, candidates: [{ slotId: 'slot-c', label: 'c@example.com', tier: 'stale-headroom' }], updatedAt: T0 + 1000 }))
+
+      expect(a.items.value[0].actions).toEqual([
+        { kind: 'quota-switch', incidentId: 'inc-1', agentKey: 'claude', epoch: 8, slotId: 'slot-c', label: 'c@example.com', tier: 'stale-headroom' },
+      ])
+    })
+
+    it('invalidating withdraws the buttons but keeps the row, until the next state', async () => {
+      store.set(READ_IDS_KEY, [])
+      const { useAnnouncements } = await load()
+      const a = useAnnouncements()
+
+      a.noteQuotaIncident(notice())
+      a.invalidateQuotaActions('inc-1')
+      expect(a.items.value[0].actions).toBeUndefined()
+      expect(a.items.value[0].note).toBeTruthy()
+      // Same state re-sent: still withdrawn.
+      a.noteQuotaIncident(notice({ updatedAt: T0 + 500 }))
+      expect(a.items.value[0].actions).toBeUndefined()
+      // A new state is a fresh offer.
+      a.noteQuotaIncident(notice({ status: 'notify-stopped', reason: 'swap-failed', targetLabel: 'work@example.com', updatedAt: T0 + 1000 }))
+      expect(a.items.value[0].actions).toHaveLength(2)
+      expect(a.items.value[0].note).toContain('work@example.com')
+      // Unknown incident: no-op.
+      a.invalidateQuotaActions('nope')
+    })
+
+    it('dismissing removes the row and forgets its marks', async () => {
+      store.set(READ_IDS_KEY, [])
+      const { useAnnouncements, quotaAnnouncementId } = await load()
+      const a = useAnnouncements()
+
+      a.noteQuotaIncident(notice())
+      a.markRead(quotaAnnouncementId('inc-1'))
+      a.dismissQuotaIncident('inc-1')
+      expect(a.items.value.some((i) => i.kind === 'quota')).toBe(false)
+      a.noteQuotaIncident(notice())
+      expect(a.items.value[0].read).toBe(false)
+    })
+
+    it('an untrusted incident informs and offers nothing', async () => {
+      store.set(READ_IDS_KEY, [])
+      const { useAnnouncements } = await load()
+      const a = useAnnouncements()
+
+      a.noteQuotaIncident(notice({ untrusted: true, reason: 'usage-window-disagrees' }))
+
+      expect(a.items.value[0].actions).toBeUndefined()
+      expect(a.items.value[0].note).toContain('nothing was switched')
+    })
+
+    it('offers switch-back after a switch and retry after a partial resume, with ids and epoch', async () => {
+      store.set(READ_IDS_KEY, [])
+      const { useAnnouncements } = await load()
+      const a = useAnnouncements()
+
+      a.noteQuotaIncident(notice({
+        status: 'ready',
+        targetLabel: 'work@example.com',
+        reason: 'turn-complete',
+        candidates: [],
+        switchBack: { slotId: 'slot-a', label: 'dev@example.com' },
+        resetExpectedAt: T0 + 3_600_000,
+        updatedAt: T0 + 1000,
+      }))
+      expect(a.items.value[0].actions).toEqual([
+        { kind: 'quota-switch-back', incidentId: 'inc-1', agentKey: 'claude', epoch: 7, slotId: 'slot-a', label: 'dev@example.com' },
+      ])
+      // "Expected back" is an estimate and says so; turn-complete is not a
+      // verified quota reading and says so.
+      expect(a.items.value[0].note).toContain('not verified')
+      expect(a.items.value[0].note).toContain('was not read')
+
+      a.noteQuotaIncident(notice({
+        status: 'partial',
+        targetLabel: 'work@example.com',
+        candidates: [],
+        retryResume: true,
+        switchBack: { slotId: 'slot-a', label: 'dev@example.com' },
+        updatedAt: T0 + 2000,
+      }))
+      expect(a.items.value[0].actions?.map((x) => x.kind)).toEqual(['quota-retry-resume', 'quota-switch-back'])
+      // Candidates are only offered while the incident is open for a choice.
+      a.noteQuotaIncident(notice({ status: 'settling', targetLabel: 'work@example.com', updatedAt: T0 + 3000 }))
+      expect(a.items.value[0].actions).toBeUndefined()
+    })
+
+    it('prints an unknown backend reason verbatim rather than hiding it', async () => {
+      store.set(READ_IDS_KEY, [])
+      const { useAnnouncements } = await load()
+      const a = useAnnouncements()
+
+      a.noteQuotaIncident(notice({ status: 'notify-stopped', reason: 'some-new-reason', candidates: [] }))
+      expect(a.items.value[0].note).toContain('some-new-reason')
+    })
+
+    it('exposes the locale keys the rows read, each with its English fallback', async () => {
+      const { QUOTA_I18N_KEYS } = await load()
+      expect(QUOTA_I18N_KEYS['announce.quota.status.ready']).toContain('{target}')
+      expect(QUOTA_I18N_KEYS['announce.quota.reason.no-candidate']).toBeTruthy()
+      expect(QUOTA_I18N_KEYS['announce.quota.excluded.exhausted']).toBeTruthy()
+      expect(Object.keys(QUOTA_I18N_KEYS).every((k) => k.startsWith('announce.quota.'))).toBe(true)
+    })
   })
 
   describe('backend upgrade', () => {

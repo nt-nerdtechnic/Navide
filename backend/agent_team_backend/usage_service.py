@@ -87,6 +87,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import copy
+import functools
 import json
 import logging
 import os
@@ -314,6 +315,18 @@ LOGIN_WATCH_TIMEOUT_SEC = 600.0
 _login_watches: dict[tuple[str, str], asyncio.Task] = {}
 
 
+def _login_pending(vault, agent_key: str, profile_id: str) -> bool:
+    """Is a sign-in for this profile started and not yet harvested? The
+    vault's ``login_pending`` covers both shapes — an isolated login home that
+    still exists, and a non-isolated sign-in whose pre-login snapshot is still
+    parked. A vault without the predicate (an older fake) is read the old
+    way, by the login home alone."""
+    pending = getattr(vault, "login_pending", None)
+    if callable(pending):
+        return bool(pending(agent_key, profile_id))
+    return vault.login_home_path(agent_key, profile_id).is_dir()
+
+
 def _login_pane_running(agent_key: str, profile_id: str) -> bool:
     """True while the profile's isolated login pane still runs its CLI.
     Harvesting under a running login CLI is unsafe: the CLI can rotate its
@@ -392,6 +405,49 @@ def _dedupe_harvested_login(vault, agent_key: str, profile_id: str) -> str | Non
     return keep_id
 
 
+def _scope_kwargs(fn, agent_key: str, profile_id: str) -> dict:
+    """``{"scope": <provider>}`` for a vault call about a per-provider
+    vendor's profile, ``{}`` for whole-file vendors — and ``{}`` for a vault
+    (a test fake) whose method takes no ``scope``."""
+    import inspect
+
+    try:
+        if "scope" not in inspect.signature(fn).parameters:
+            return {}
+    except (TypeError, ValueError):
+        return {}
+    store = _get_profiles_store()
+    profile = store.get(profile_id) if store is not None else None
+    from .quota_failover import profile_scope
+
+    scope = profile_scope(agent_key, profile)
+    return {"scope": scope} if scope else {}
+
+
+def _login_against_live_store(vault, agent_key: str) -> bool:
+    """Does this vendor's sign-in rewrite the live credential store (no
+    login isolation)? False when the vault cannot say."""
+    isolated = getattr(vault, "_login_isolated", None)
+    try:
+        return callable(isolated) and not isolated(agent_key)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+async def _discard_pending_login_locked(vault, agent_key: str, profile_id: str) -> bool:
+    """Abandon a sign-in that never completed (``vault.discard_pending_login``
+    under the agent's switch lock). False when the vault has nothing to
+    discard or no such method."""
+    discard = getattr(vault, "discard_pending_login", None)
+    if not callable(discard):
+        return False
+    async with vault.switch_lock(agent_key):
+        return bool(await vault_to_thread(
+            functools.partial(discard, agent_key, profile_id,
+                              **_scope_kwargs(discard, agent_key, profile_id))
+        ))
+
+
 async def _harvest_login_home_locked(vault, agent_key: str, profile_id: str) -> bool:
     """Harvest the profile's pending login home under the agent's switch lock.
     Skipped (False) while the profile's login pane CLI is still running. When
@@ -410,10 +466,16 @@ async def _harvest_login_home_locked(vault, agent_key: str, profile_id: str) -> 
         # back into a profile that already had credentials is the user
         # re-logging a slot they arranged themselves — never ours to remove.
         slot_was_empty = await vault_to_thread(
-            vault.slot_is_empty, agent_key, profile_id
+            functools.partial(
+                vault.slot_is_empty, agent_key, profile_id,
+                **_scope_kwargs(vault.slot_is_empty, agent_key, profile_id),
+            )
         )
         harvested = await vault_to_thread(
-            vault.harvest_login_home, agent_key, profile_id
+            functools.partial(
+                vault.harvest_login_home, agent_key, profile_id,
+                **_scope_kwargs(vault.harvest_login_home, agent_key, profile_id),
+            )
         )
         if not harvested:
             return False
@@ -446,8 +508,8 @@ async def _harvest_pending_login_homes(store, vault) -> list[str]:
             continue
         try:
             # Cheap pre-check outside the lock: most profiles have no
-            # pending login home.
-            if not vault.login_home_path(agent_key, profile_id).is_dir():
+            # pending sign-in.
+            if not _login_pending(vault, agent_key, profile_id):
                 continue
             if await _harvest_login_home_locked(vault, agent_key, profile_id):
                 harvested_ids.append(profile_id)
@@ -521,10 +583,19 @@ async def _login_watch(agent_key: str, profile_id: str) -> None:
         if vault is None:
             continue
         try:
-            if not vault.login_home_path(agent_key, profile_id).is_dir():
+            if not _login_pending(vault, agent_key, profile_id):
                 return  # harvested elsewhere (usage poll) or profile deleted
             if vault.login_secret_present(agent_key, profile_id):
                 await _kill_completed_login_panes(agent_key, profile_id)
+            elif _login_against_live_store(vault, agent_key) and not _login_pane_running(
+                agent_key, profile_id
+            ):
+                # A live-store sign-in whose pane is gone with nothing written:
+                # the user cancelled or the CLI failed. Give the pre-login
+                # credential back and stop. (An isolated login home is left
+                # for the switch to harvest, as before.)
+                if await _discard_pending_login_locked(vault, agent_key, profile_id):
+                    return
             harvested = await _harvest_login_home_locked(vault, agent_key, profile_id)
         except Exception:  # noqa: BLE001 — retry on the next tick
             continue
@@ -560,6 +631,10 @@ class UsageService:
         # CLI; comparing this counter tells it whether that answer is still
         # true before it writes anything based on it.
         self._switch_epoch = 0
+        # The same, per non-Claude vendor: an account switch of codex must
+        # drop a codex read that started before it, and must not touch a
+        # kimi read in flight at the same time.
+        self._agent_epochs: dict[str, int] = {}
         # Claude reads currently out in the CLI, by slot. The epoch above keeps
         # a mid-read switch from writing the wrong account's figure, but the
         # cycle still has to wait for that doomed read to finish before the
@@ -892,25 +967,68 @@ class UsageService:
 
         The epoch bump is what stops a poll cycle already in flight from
         undoing all of this — see `poll_once`."""
+        await self.announce_switch("claude", slot_id, reading=reading)
+
+    def begin_switch_epoch(
+        self, agent_key: str, slot_id: str | None, *, reading: bool = True
+    ) -> None:
+        """The synchronous half of an account-switch announcement: move the
+        active pointer, bump the vendor's epoch, mark the incoming snapshot as
+        being read and drop reads in flight. Callable from inside the
+        credential switch lock — no await, no broadcast — so a poll that
+        started under the outgoing account is invalidated before the lock is
+        released, not in the gap after it."""
         slot = slot_id or "__default__"
-        self._active_claude_slot = slot
-        self._switch_epoch += 1
-        account = self.account_snapshots.setdefault("claude", {})
+        if agent_key == "claude":
+            self._active_claude_slot = slot
+            self._switch_epoch += 1
+            account = self.account_snapshots.setdefault("claude", {})
+            if slot not in account:
+                # Never polled (or polled before this account existed): give it
+                # the same last-good-or-nothing snapshot a parked slot gets, so
+                # the card has something to carry the mark.
+                self._record_parked_claude_slot(slot)
+            if self.enabled and reading:
+                account[slot]["refreshPending"] = True
+            else:
+                account[slot].pop("refreshPending", None)
+            self._cancel_claude_reads()
+            self.request_refresh()
+            return
+        self._agent_epochs[agent_key] = self._agent_epochs.get(agent_key, 0) + 1
+        account = self.account_snapshots.setdefault(agent_key, {})
         if slot not in account:
-            # Never polled (or polled before this account existed): give it the
-            # same last-good-or-nothing snapshot a parked slot gets, so the card
-            # has something to carry the mark.
-            self._record_parked_claude_slot(slot)
+            account[slot] = _snapshot(agent_key, "not-measured")
         if self.enabled and reading:
             account[slot]["refreshPending"] = True
         else:
             account[slot].pop("refreshPending", None)
-        self._cancel_claude_reads()
-        self.request_refresh()
+        self.request_refresh(agent_key)
+
+    async def announce_switch(
+        self, agent_key: str, slot_id: str | None, *, reading: bool = True, mark: bool = True
+    ) -> None:
+        """``announce_claude_switch`` for any vendor. ``mark=False`` when the
+        caller already ran ``begin_switch_epoch`` under the switch lock and
+        only the broadcast is left."""
+        if mark:
+            self.begin_switch_epoch(agent_key, slot_id, reading=reading)
         from . import app
         from .ipc import make_event
 
         await app.broadcast(make_event("usage.changed", self.payload()))
+
+    def _notify_failover(self, agent_key: str, slot_id: str, snap: dict) -> None:
+        """Hand a reading this cycle KEPT to the failover authority (a reading
+        dropped for a mid-read switch never gets here). Best effort."""
+        try:
+            from . import app
+
+            failover = getattr(app, "quota_failover", None)
+            if failover is not None:
+                failover.observe_usage(agent_key, slot_id, snap)
+        except Exception as err:  # noqa: BLE001 — settling must not break polling
+            log.warning("usage: failover observe failed for %s: %s", agent_key, err)
 
     def _cancel_claude_reads(self) -> None:
         """Drop any Claude read still out in the CLI.
@@ -956,7 +1074,12 @@ class UsageService:
                 # Same lock as the switch handler: a harvest must not interleave
                 # with a live credential swap for this agent.
                 async with vault.switch_lock(agent_key):
-                    harvested = await vault_to_thread(vault.harvest, agent_key, profile_id) or harvested
+                    harvested = await vault_to_thread(
+                        functools.partial(
+                            vault.harvest, agent_key, profile_id,
+                            **_scope_kwargs(vault.harvest, agent_key, profile_id),
+                        )
+                    ) or harvested
             except Exception:  # noqa: BLE001
                 pass
         login_harvested_ids = await _harvest_pending_login_homes(store, vault)
@@ -985,6 +1108,7 @@ class UsageService:
         # Capture the epoch first: if a switch lands while the cycle is out
         # reading the CLI, the answer is stale and must not be written back.
         switch_epoch = self._switch_epoch
+        agent_epochs = dict(self._agent_epochs)
         claude_accounts = await self._claude_credentials_by_slot()
         cache_changed = False
         # Claude quota comes from the CLI's own `/usage` panel — Claude Code
@@ -1066,6 +1190,7 @@ class UsageService:
                          "switched mid-read", slot_id)
                 continue
             cache_changed = self._record_claude_snapshot(slot_id, snap) or cache_changed
+            self._notify_failover("claude", slot_id, snap)
             if self.quota_history is not None and snap.get("status") == "ok":
                 try:
                     await asyncio.to_thread(
@@ -1095,7 +1220,30 @@ class UsageService:
                 (RATE_LIMIT_COOLDOWN if snap["status"] == "unavailable" else None)
             if cooldown:
                 self._blocked_until[provider] = time.monotonic() + cooldown
+            if self._agent_epochs.get(provider, 0) != agent_epochs.get(provider, 0):
+                # This vendor's account switched while the read was out. The
+                # CLI reports whoever is signed in *now*; the figure belongs to
+                # neither the account the read started under nor, reliably,
+                # the new one. Drop it — the switch already asked for another
+                # cycle — however fresh its fetchedAt looks.
+                log.info("usage: discarding %s read — account switched mid-read", provider)
+                continue
             self.snapshots[provider] = snap
+            # Per-account view for vendors other than Claude: the reading is
+            # the active profile's ("__default__" without profiles). Parked
+            # accounts keep whatever they last measured for themselves.
+            active_slot = _active_profile_id(provider) or "__default__"
+            account = self.account_snapshots.setdefault(provider, {})
+            account[active_slot] = {**copy.deepcopy(snap), "stale": False}
+            if snap.get("status") == "ok":
+                account[active_slot]["lastSuccessAt"] = snap.get("fetchedAt")
+            self._notify_failover(provider, active_slot, snap)
+        for provider, epoch in agent_epochs.items():
+            if provider not in tasks and self._agent_epochs.get(provider, 0) == epoch:
+                # Skipped this cycle (cooldown) with no switch since: nothing
+                # is being read, so no snapshot may say it is.
+                for snapshot in self.account_snapshots.get(provider, {}).values():
+                    snapshot.pop("refreshPending", None)
         if cache_changed:
             await asyncio.to_thread(self._save_cache)
         await self._file_quota_samples()

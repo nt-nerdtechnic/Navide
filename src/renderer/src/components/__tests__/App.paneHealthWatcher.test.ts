@@ -159,18 +159,22 @@ describe('an account switch lets go of the quota flag', () => {
 
   it('clears every pane of the switched agent on set_default, quiet or forced', () => {
     const body = switchHandlerBody()
-    const clear = body.indexOf('clearPaneUsageLimits(ev.agent_key, ev.defaults?.[ev.agent_key] ?? null)')
+    const clear = body.indexOf('clearPaneUsageLimits(ev.agent_key, ev.defaults?.[ev.agent_key] ?? null, {')
     const forced = body.indexOf('forcedRestartAgentKey(ev)')
     expect(clear).toBeGreaterThan(-1)
     // Before the forced-restart early return, or a forced switch skips it.
     expect(forced).toBeGreaterThan(clear)
+    // A switch the quota-failover transaction made clears the flag the same
+    // way but must not resume a parked loop (no automatic continue); a manual
+    // switch keeps the resume it always had.
+    expect(body.slice(clear, forced)).toContain('resumeLoop: !quotaFailover.agentHasActiveTransaction(ev.agent_key)')
   })
 
   it('drops both halves of the flag and consumes the old limit text', () => {
     const start = appSource.indexOf('function clearPaneUsageLimits(')
     expect(start).toBeGreaterThan(-1)
     const body = appSource.slice(start, appSource.indexOf('\n}\n', start))
-    expect(body).toContain("clearPaneUsageLimit(pane, 'account-switch')")
+    expect(body).toContain("clearPaneUsageLimit(pane, 'account-switch', true, opts)")
     // An unflagged pane drops an earlier suppression only on a switch back to
     // the exhausted account; on any other account the old banner is a repaint.
     expect(body).toContain('if (w && w.limitProfileId === newDefaultId) {')
@@ -189,8 +193,12 @@ describe('an account switch lets go of the quota flag', () => {
     // A TUI repaint lands the same banner in NEW bytes past the baseline; the
     // remembered reset is what keeps it from re-lighting the flag.
     expect(helper).toContain('w.dismissedLimitUntil = pane.usageLimitUntil ?? null')
-    // A loop parked on this limit resumes the way the badge click does.
-    expect(helper).toContain('fireLoopResume(pane.id, logLabel)')
+    // A loop parked on this limit resumes the way the badge click does —
+    // unless the clear came from a quota-failover switch, which offers the
+    // continue button instead of sending anything.
+    expect(helper).toContain('if (waitingOnThisLimit) void fireLoopResume(pane.id, logLabel)')
+    expect(helper).toContain('if (waitingOnThisLimit && !opts.resumeLoop) {')
+    expect(helper).toContain('pane.resumeContinueAvailable = true')
   })
 
   it('lets the user dismiss the badge through the same per-pane clear', () => {
@@ -292,7 +300,7 @@ describe('the account reading can lower the flag before its stated reset', () =>
       'w.dismissedLimitUntil = pane.usageLimitUntil ?? null'
     )
     // The two paths that ARE a judgement keep the default.
-    expect(appSource).toContain("clearPaneUsageLimit(pane, 'account-switch')")
+    expect(appSource).toContain("clearPaneUsageLimit(pane, 'account-switch', true, opts)")
     expect(appSource).toContain("clearPaneUsageLimit(pane, 'usage-limit-dismiss')")
   })
 })

@@ -92,5 +92,16 @@ export const SPEC = {
     // hook raised. See the field's own doc comment.
     clearsOnMiss: false,
   },
-  hint: 'planner + reviewer'
+  hint: 'planner + reviewer',
+  // Quota failover (lib/quotaFailover.ts). Windows from the backend's
+  // normalize_claude: five_hour → session, seven_day → weekly, both always
+  // present; per-model seven_day_* / weekly_scoped → weekly-model, which is
+  // never a veto (a spent promotional bucket does not block the account).
+  quotaSemantics: { hard: ['session', 'weekly'], required: ['session', 'weekly'], scoped: ['weekly-model'] },
+  // Claude Code's own limit banner, with the reset clock that names WHICH
+  // window ran out (loopPrompt.SESSION_LIMIT_RE parses it). The clockless
+  // "hit your limit" alone is prose until the account's reading agrees.
+  quotaExhausted: {
+    pattern: /hit your .{0,40}limit.{0,80}?resets\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)\s*\([^)]+\)/i,
+  },
 } as const satisfies AgentSpec

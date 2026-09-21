@@ -82,11 +82,17 @@ describe('the flag lifecycle', () => {
   it('is not offered for a rebuild the user asked for', () => {
     // ⌘R, the rebuild button, the account-switch batch and the post-install
     // relaunch are all deliberate actions; none of them needs a second one.
+    // The two that DO offer it are rebuilds nobody asked for: the backend
+    // outage (flushPtyLostResumes) and the quota-failover switch that stopped
+    // the pane at a turn boundary (quotaRestartPane) — that switch sends no
+    // prompt or continue of its own, so the button is its only continuation.
     const calls = (appSource.match(/rebuildPaneViaResume\([^)]*\{[^}]*\}/gs) ?? []).filter(
       (c) => !c.includes('paneId: string') // drop the declaration itself
     )
-    expect(calls.length).toBeGreaterThan(1)
-    expect(calls.filter((c) => c.includes('offerContinue'))).toHaveLength(1)
+    expect(calls.length).toBeGreaterThan(2)
+    expect(calls.filter((c) => c.includes('offerContinue'))).toHaveLength(2)
+    expect(fn('flushPtyLostResumes')).toContain('offerContinue: true')
+    expect(fn('quotaRestartPane')).toContain('offerContinue: true')
   })
 
   it('is put out by any injection reaching the prompt', () => {
@@ -97,8 +103,11 @@ describe('the flag lifecycle', () => {
   it('is put out when the agent starts working on its own', () => {
     // A pane that woke up is no longer parked where the restore left it, even
     // if the button was never clicked.
-    const activeBranch = appSource.slice(appSource.indexOf("ev.event_type === 'agent_active'"))
-    expect(activeBranch.slice(0, 800)).toContain('resumeContinueAvailable = false')
+    // The whole agent_active branch of the activity handler, not a fixed
+    // prefix of it: the branch grew a turn-start stamp ahead of this line.
+    const start = appSource.indexOf("ev.event_type === 'agent_active'")
+    const activeBranch = appSource.slice(start, appSource.indexOf('\n  }\n', start))
+    expect(activeBranch).toContain('resumeContinueAvailable = false')
   })
 
   it('is runtime-only — the backend pane record never learns about it', () => {

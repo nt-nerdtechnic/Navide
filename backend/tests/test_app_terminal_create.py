@@ -1166,7 +1166,7 @@ async def test_signed_in_cli_announces_nothing(monkeypatch: pytest.MonkeyPatch) 
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("agent_key", ["qwen", "aider", "opencode", "cursor", "droid"])
+@pytest.mark.parametrize("agent_key", ["cursor"])
 async def test_vendors_without_a_live_credential_file_are_never_reported(
     monkeypatch: pytest.MonkeyPatch,
     agent_key: str,

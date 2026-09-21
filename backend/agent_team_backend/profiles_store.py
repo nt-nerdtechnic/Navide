@@ -50,6 +50,33 @@ def _supported_agent_keys() -> tuple[str, ...]:
 
 
 SUPPORTED_AGENT_KEYS = _supported_agent_keys()
+
+
+def declared_scopes(agent_key: str) -> tuple[str, ...]:
+    """Provider scopes a profile of ``agent_key`` may bind to — the vendor's
+    ``account_switch.scopes``; () for a whole-file vendor."""
+    from .cli_vendors.registry import vendor
+
+    spec = vendor(agent_key)
+    switch = spec.account_switch if spec is not None else None
+    return switch.scopes if switch is not None else ()
+
+
+def profile_scope(profile: dict[str, Any] | None, agent_key: str | None = None) -> str | None:
+    """The provider scope a profile's credentials belong to, as the vault
+    wants it: the profile's stored ``scope``; for a vendor declaring exactly
+    one scope the profile may predate the field and still means that one;
+    None for whole-file vendors. A profile of a multi-scope vendor with no
+    stored scope stays None — the vault then refuses to guess, which is the
+    intended fail-closed answer for an unattributable credential."""
+    key = agent_key or (str(profile.get("agentKey")) if profile else "")
+    scopes = declared_scopes(key) if key else ()
+    if not scopes:
+        return None
+    stored = profile.get("scope") if profile else None
+    if isinstance(stored, str) and stored in scopes:
+        return stored
+    return scopes[0] if len(scopes) == 1 else None
 # Env vars that override Claude Code's OAuth login when they leak in from the
 # parent environment — they must never reach a spawn while a managed claude
 # account (a non-null default profile) is active.
@@ -211,11 +238,24 @@ class CliProfilesStore:
                 return p
         return None
 
-    def create(self, *, agent_key: str, name: str) -> dict[str, Any]:
+    def create(
+        self, *, agent_key: str, name: str, scope: str | None = None
+    ) -> dict[str, Any]:
         self._validate_agent_key(agent_key)
         clean_name = name.strip()
         if not clean_name:
             raise ValueError("profile name is required")
+        scopes = declared_scopes(agent_key)
+        if scopes:
+            if scope is None and len(scopes) == 1:
+                scope = scopes[0]
+            if scope not in scopes:
+                raise ValueError(
+                    f"profile scope for {agent_key!r} must be one of "
+                    f"{', '.join(scopes)}; got {scope!r}"
+                )
+        elif scope:
+            raise ValueError(f"agent {agent_key!r} takes no profile scope")
         with self._lock:
             doc = self._read()
             existing = {p.get("id") for p in doc["profiles"]}
@@ -228,6 +268,8 @@ class CliProfilesStore:
                 "name": clean_name,
                 "createdAt": _now_iso(),
             }
+            if scope:
+                profile["scope"] = scope
             doc["profiles"].append(profile)
             self._write(doc)
             return profile

@@ -14,6 +14,11 @@ export interface TerminalSpawnOptions {
   isResume?: boolean
   restoreMode?: 'memory-resume' | 'fresh'
   skipReattach?: boolean
+  /** Serialized scrollback (from another pane's `serializeScrollback()`) to
+   *  write into this pane's xterm before its PTY starts — the handoff a
+   *  quota-failover restart uses so the conversation's history stays in the
+   *  replacement pane. Display only: never reaches the PTY. */
+  replayScrollback?: string
   loginProfileId?: string
   /** The pane exists in order to sign in, so the backend runs the vendor's
    *  sign-in trigger instead of the plain REPL. Independent of

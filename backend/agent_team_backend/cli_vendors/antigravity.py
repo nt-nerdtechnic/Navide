@@ -31,7 +31,17 @@ import os
 import sys
 import time
 
-from .base import Dep, McpServerConfig, McpValue, McpWiring, SkillsWiring, VendorSpec, simple_command_args
+from .base import (
+    AccountSwitchSpec,
+    Dep,
+    McpServerConfig,
+    McpValue,
+    McpWiring,
+    SkillsWiring,
+    VendorSpec,
+    keychain_payload_items,
+    simple_command_args,
+)
 from ..usage_common import (
     HTTP_TIMEOUT,
     _KEYCHAIN_COOLDOWN_S,
@@ -589,6 +599,16 @@ def read_antigravity_credentials_file(home: Path) -> str | None:
     return _antigravity_refresh_token(raw)
 
 
+def identity_from_secret(secret):
+    """A parked slot holds the vault's keychain payload (macOS) or the bare
+    token file (elsewhere). Signed in when a refresh token can be read out
+    of it; the blob names no account, so ``email`` stays None."""
+    items = keychain_payload_items(secret)
+    raw = next(iter(items.values()), None) if items else secret
+    signed_in = raw is not None and _antigravity_refresh_token(raw) is not None
+    return {"email": None, "signedIn": signed_in}
+
+
 _agy_keychain_failed_at: float | None = None
 
 
@@ -822,6 +842,29 @@ SPEC = VendorSpec(
         skills_rel=(".gemini", "skills"),
     ),
     label="Antigravity",
+    # Multi-account: the refresh token is one fixed-name macOS Keychain item
+    # (service "gemini", account "antigravity" — go-keyring, base64 JSON),
+    # with the token file below as the stale copy the reader falls back to.
+    # There is no config-dir variable, so a login pane cannot be isolated:
+    # `agy` signs in against the real Keychain and the result is captured.
+    # Only macOS is declared — which of the two locations is authoritative
+    # elsewhere has not been established from source. The CLI mints its
+    # access token at startup from the refresh token: restart, then
+    # ``agy --conversation <id>``.
+    live_file=ANTIGRAVITY_TOKEN_FILE_REL,
+    slot_file="credential.json",
+    identity_from_secret=identity_from_secret,
+    account_switch=AccountSwitchSpec(
+        auth_scope="antigravity",
+        method="restart",
+        store="keychain",
+        evidence="source",
+        verified_version="1.2.7",
+        platforms=("darwin",),
+        keychain_items=((ANTIGRAVITY_KEYCHAIN_SERVICE, ANTIGRAVITY_KEYCHAIN_ACCOUNT),),
+        resume="native",
+        todo="Keychain item/file precedence outside macOS not established; the stale token file is left as is after a swap; no real-account round-trip recorded",
+    ),
     # No flag, no config variable, and no config-dir variable either — the
     # config root is hardcoded under the home directory, shared with the
     # Antigravity IDE. "url"/"httpUrl" are rejected as legacy: a remote server

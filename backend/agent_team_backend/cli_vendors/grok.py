@@ -58,7 +58,7 @@ from urllib.parse import quote, unquote
 from uuid import UUID
 
 from .. import osplat
-from .base import Dep, McpServerConfig, McpValue, McpWiring, SkillsWiring, VendorSpec, simple_command_args
+from .base import AccountSwitchSpec, Dep, McpServerConfig, McpValue, McpWiring, SkillsWiring, VendorSpec, simple_command_args
 from ..usage_common import _num, _snapshot, _window
 from ..log_readers.base import (
     ActivityEvent,
@@ -812,6 +812,23 @@ SPEC = VendorSpec(
     login_home_secret_file=("home", ".grok", "auth.json"),
     profile_home_secret_file=(".grok", "auth.json"),
     identity_from_secret=identity_from_secret,
+    # Whole-file swap of ``~/.grok/auth.json`` (a map keyed by scope URL —
+    # one file per account, so it is swapped whole); the CLI reads it at
+    # startup, so affected panes restart and resume (``grok -r <id>``). Layout
+    # from the installed CLI; no two-account round-trip on record yet.
+    account_switch=AccountSwitchSpec(
+        auth_scope="grok",
+        method="restart",
+        store="file",
+        evidence="source",
+        verified_version="1.0.34",
+        # The 1.0.34 binary reports "You are using XAI_API_KEY." / "Auth
+        # method: API key (XAI_API_KEY)" when the variable is set: the key
+        # replaces the OAuth login for that process.
+        shadowing_env=("XAI_API_KEY",),
+        resume="native",
+        todo="A -> B -> A round-trip on two real accounts not yet recorded",
+    ),
     # Late-bound (module global at call time) so tests can monkeypatch.
     fetch_usage=lambda home: fetch_grok(home),
     home_env_vars=(

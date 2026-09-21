@@ -91,6 +91,8 @@ import {
   type PolicyDocument,
 } from '../lib/panePolicy'
 import { CLI_AGENT_SPECS } from '@navide/plugin-shell'
+import { useQuotaFailover, type FailoverMode } from '../composables/useQuotaFailover'
+import { platformId } from '../../../shared/osplat'
 import { useUpdater } from '../composables/useUpdater'
 import { updateStages } from '../lib/updaterStages'
 import type { UpdateChannel } from '../../../shared/updater'
@@ -968,6 +970,15 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
     keywords: 'usage quota badge remaining limit rate window reset 額度 剩餘 用量 徽章 刷新 間隔 claude codex kimi grok',
   },
   {
+    id: 'general-quota-failover',
+    tab: 'general',
+    section: 'general-quota-failover',
+    title: t('settings.search.item.general-quota-failover.title'),
+    group: t('settings.nav.group.general'),
+    summary: t('settings.search.item.general-quota-failover.summary'),
+    keywords: 'quota exhausted account switch failover auto notify off hot restart resume 額度 耗盡 切換 帳號 自動 通知 關閉 熱切 重啟 接續',
+  },
+  {
     id: 'accounts',
     tab: 'accounts',
     section: 'accounts',
@@ -1238,6 +1249,54 @@ function onUsageRefreshChange(raw: string): void {
     setUsageRefreshSec(n)
   }
 }
+
+// Quota-exhaustion account switching: the policy the backend persists
+// (off / notify / auto) and what each CLI can do about it, both read from
+// the switch authority itself (quota_failover.get_state, mirrored by the
+// singleton) so this page cannot disagree with the switch it describes.
+// Evidence and platform are shown as facts; only the backend decides what a
+// vendor may do automatically.
+const quotaFailover = useQuotaFailover()
+const FAILOVER_MODES: readonly FailoverMode[] = ['off', 'notify', 'auto']
+const failoverMode = computed<FailoverMode>(() => quotaFailover.state.value?.policy.mode ?? 'notify')
+const failoverBusy = ref(false)
+async function onFailoverModeChange(raw: string): Promise<void> {
+  if (!(FAILOVER_MODES as readonly string[]).includes(raw) || failoverBusy.value) return
+  failoverBusy.value = true
+  try {
+    await quotaFailover.setPolicy(raw as FailoverMode)
+  } finally {
+    failoverBusy.value = false
+  }
+}
+interface FailoverCapabilityRow {
+  agentKey: string
+  label: string
+  switchMode: 'hot' | 'restart' | 'manual' | 'unsupported'
+  resume: 'native' | 'lossy' | 'none'
+  /** Not exercised on a real account on any build ("source" / "docs"). */
+  unverified: boolean
+  /** Declared for other platforms only. */
+  platformUnsupported: boolean
+  todo: string
+}
+const failoverRows = computed<FailoverCapabilityRow[]>(() => {
+  const caps = quotaFailover.state.value?.capabilities
+  if (!caps) return []
+  const here = platformId()
+  return CLI_AGENT_SPECS.map((spec) => {
+    const cap = caps[spec.agentKey]
+    return {
+      agentKey: spec.agentKey,
+      label: spec.label,
+      switchMode: cap?.supported ? cap.switchMode : 'unsupported',
+      resume: cap?.resume ?? 'none',
+      unverified: !!cap?.supported && cap.evidence !== 'live',
+      platformUnsupported: !!cap?.supported && Array.isArray(cap.platforms) && cap.platforms.length > 0 && !cap.platforms.includes(here),
+      todo: cap?.todo ?? '',
+    }
+  })
+})
 
 // Whether opening a workspace resumes its previous CLI panes, starts them
 // fresh, or asks. Read at restore time in App.vue.
@@ -3475,6 +3534,52 @@ watch(activeTab, (tab) => {
               </SettingRow>
 
               <SettingRow
+                data-settings-section="general-quota-failover"
+                :title="$t('usage.failover-title')"
+                :description="$t('usage.failover-hint')"
+              >
+                <template #control>
+                  <select
+                    data-testid="quota-failover-mode"
+                    :value="failoverMode"
+                    :disabled="failoverBusy || !quotaFailover.state.value"
+                    @change="onFailoverModeChange(($event.target as HTMLSelectElement).value)"
+                  >
+                    <option v-for="mode in FAILOVER_MODES" :key="mode" :value="mode">
+                      {{ $t(`usage.failover-mode-${mode}`) }}
+                    </option>
+                  </select>
+                </template>
+              </SettingRow>
+              <div v-if="quotaFailover.state.value" class="failover-caps" data-settings-section="general-quota-failover-caps">
+                <p v-if="quotaFailover.state.value.auditDegraded" class="failover-warn">
+                  {{ $t('usage.failover-audit-degraded') }}
+                </p>
+                <table class="az-table failover-table">
+                  <thead>
+                    <tr>
+                      <th>{{ $t('usage.failover-col-cli') }}</th>
+                      <th>{{ $t('usage.failover-col-switch') }}</th>
+                      <th>{{ $t('usage.failover-col-resume') }}</th>
+                      <th>{{ $t('usage.failover-col-notes') }}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="row in failoverRows" :key="row.agentKey" :data-failover-agent="row.agentKey">
+                      <td>{{ row.label }}</td>
+                      <td>{{ $t(`usage.failover-switch-${row.switchMode}`) }}</td>
+                      <td>{{ $t(`usage.failover-resume-${row.resume}`) }}</td>
+                      <td class="failover-notes">
+                        <span v-if="row.platformUnsupported" class="failover-tag">{{ $t('usage.failover-platform-unsupported') }}</span>
+                        <span v-if="row.unverified" class="failover-tag">{{ $t('usage.failover-unverified') }}</span>
+                        <span v-if="row.switchMode === 'unsupported' && row.todo" class="failover-todo">{{ row.todo }}</span>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <SettingRow
                 v-if="isDev"
                 data-settings-section="general-antigravity-secrets"
                 :title="$t('usage.settings-signing-title')"
@@ -5316,6 +5421,19 @@ button.ghost:hover:not(:disabled) { background: var(--bg-muted); }
 .az-td-verdict { text-align: center; }
 .az-elapsed { font-size: var(--font-3xs); color: var(--text-secondary); margin-left: 3px; }
 .az-na { color: var(--text-disabled); }
+.failover-caps { padding: 0 var(--space-row-x) var(--space-row-y); }
+.failover-table td { font-size: var(--font-2xs); }
+.failover-notes { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.failover-tag {
+  font-size: var(--font-3xs);
+  border-radius: 99px;
+  padding: 0 6px;
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.failover-todo { font-size: var(--font-3xs); color: var(--text-muted); }
+.failover-warn { margin: 0 0 6px; font-size: var(--font-2xs); color: var(--attention-fg); }
 .az-row-fail td { color: var(--text-disabled); }
 .az-row-fail .az-td-model { color: var(--text-muted); }
 .az-badge-pass {

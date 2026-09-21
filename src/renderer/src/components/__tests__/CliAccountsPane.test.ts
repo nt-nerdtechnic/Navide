@@ -66,6 +66,10 @@ interface ApiOptions {
   portableSupported?: string[]
   cloud?: CliCloudCredentials
   cloudStatus?: CloudCredentialStatus
+  /** Provider scopes per agent (the backend capability's `scopes`). */
+  scopes?: Record<string, string[]>
+  /** Agents whose capability says loginIsolation === 'global'. */
+  globalLogin?: string[]
 }
 
 // Fake `api` prop mirroring the useCliProfiles return shape (refs + fns),
@@ -92,11 +96,14 @@ function makeApi(opts: ApiOptions = {}) {
     loading: ref(false),
     error,
     refresh: vi.fn(async () => {}),
-    create: vi.fn(async (agentKey: string, name: string): Promise<CliProfile | null> => {
-      const profile: CliProfile = { id: 'created-id', agentKey, name, createdAt: '2026-07-25' }
+    create: vi.fn(async (agentKey: string, name: string, scope?: string | null): Promise<CliProfile | null> => {
+      const profile: CliProfile = { id: 'created-id', agentKey, name, createdAt: '2026-07-25', scope: scope ?? null }
       profiles.value = [...profiles.value, profile]
       return profile
     }),
+    scopesFor: (agentKey: string) => opts.scopes?.[agentKey] ?? [],
+    capabilityFor: () => undefined,
+    loginIsGlobal: (agentKey: string) => opts.globalLogin?.includes(agentKey) ?? false,
     rename: vi.fn(async () => null),
     remove: vi.fn(async () => true),
     setDefault: vi.fn(async () => ({ ok: true as const })),
@@ -323,10 +330,66 @@ describe('CliAccountsPane', () => {
     await buttonByText(section(w, 0), '+ New account')!.trigger('click')
     await flushPromises()
 
-    // 1 existing claude profile -> "Account 3".
-    expect(api.create).toHaveBeenCalledWith('claude', 'Account 3')
+    // 1 existing claude profile -> "Account 3". No scope: claude's store is
+    // one credential, so none is sent.
+    expect(api.create).toHaveBeenCalledWith('claude', 'Account 3', null)
     expect(api.setDefault).not.toHaveBeenCalled()
     expect(w.emitted('login')).toEqual([['claude', 'created-id']])
+  })
+
+  it('a global-login vendor asks before a new account is created, and a decline leaves no row', async () => {
+    const api = makeApi({ globalLogin: ['kimi'] })
+    const w = mountPane(api)
+    const kimi = section(w, 4)
+
+    notify.confirm.mockResolvedValueOnce(false)
+    await buttonByText(kimi, '+ New account')!.trigger('click')
+    await flushPromises()
+    expect(notify.confirm).toHaveBeenCalledTimes(1)
+    const [body, opts] = notify.confirm.mock.calls[0] as [string, { title?: string }]
+    // The warning says what moves and what comes back, and names the CLI.
+    expect(body).toContain('Kimi Code')
+    expect(body).toContain('temporarily replaced')
+    expect(body).toContain('restored')
+    expect(opts.title).toBeTruthy()
+    expect(body).not.toContain('settings.accounts.')
+    expect(api.create).not.toHaveBeenCalled()
+    expect(w.emitted('login')).toBeUndefined()
+
+    notify.confirm.mockResolvedValueOnce(true)
+    await buttonByText(kimi, '+ New account')!.trigger('click')
+    await flushPromises()
+    expect(api.create).toHaveBeenCalledWith('kimi', 'Account 2', null)
+    expect(w.emitted('login')).toEqual([['kimi', 'created-id']])
+  })
+
+  it('an isolated-login vendor asks nothing (unchanged flow)', async () => {
+    const api = makeApi({ globalLogin: ['kimi'] })
+    const w = mountPane(api)
+    await buttonByText(section(w, 0), '+ New account')!.trigger('click')
+    await flushPromises()
+    expect(notify.confirm).not.toHaveBeenCalled()
+    expect(api.create).toHaveBeenCalledWith('claude', 'Account 2', null)
+  })
+
+  it('a multi-provider vendor gets a provider picker whose choice goes to create; none is guessed', async () => {
+    const api = makeApi({ supported: [...SUPPORTED, 'opencode'], scopes: { opencode: ['anthropic', 'openai'] } })
+    const w = mountPane(api)
+    const sec = w.findAll('section.cli-agent').find((s) => s.text().includes('OpenCode'))!
+    // Only the multi-provider vendor shows the picker.
+    expect(w.findAll('[data-scope-for]').map((el) => el.attributes('data-scope-for'))).toEqual(['opencode'])
+    const select = sec.get('[data-scope-for="opencode"]')
+    expect(select.findAll('option').map((o) => o.attributes('value'))).toEqual(['anthropic', 'openai'])
+
+    // Default pick is the first declared scope.
+    await buttonByText(sec, '+ New account')!.trigger('click')
+    await flushPromises()
+    expect(api.create).toHaveBeenLastCalledWith('opencode', 'Account 2', 'anthropic')
+
+    await select.setValue('openai')
+    await buttonByText(sec, '+ New account')!.trigger('click')
+    await flushPromises()
+    expect(api.create).toHaveBeenLastCalledWith('opencode', 'Account 3', 'openai')
   })
 
   it('addAccount never reuses a deleted auto name (max existing N + 1)', async () => {
@@ -339,7 +402,7 @@ describe('CliAccountsPane', () => {
     await buttonByText(section(w, 4), '+ New account')!.trigger('click')
     await flushPromises()
 
-    expect(api.create).toHaveBeenCalledWith('kimi', 'Account 4')
+    expect(api.create).toHaveBeenCalledWith('kimi', 'Account 4', null)
   })
 
   it('addAccount starts at "Account 2" when no existing name matches the pattern', async () => {
@@ -349,7 +412,7 @@ describe('CliAccountsPane', () => {
     await buttonByText(section(w, 4), '+ New account')!.trigger('click')
     await flushPromises()
 
-    expect(api.create).toHaveBeenCalledWith('kimi', 'Account 2')
+    expect(api.create).toHaveBeenCalledWith('kimi', 'Account 2', null)
   })
 
   // ── no-workspace guard (login pane needs a workspace to spawn into) ────────

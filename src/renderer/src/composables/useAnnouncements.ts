@@ -2,27 +2,46 @@ import { computed, ref, shallowRef, type ComputedRef, type Ref } from 'vue'
 import { i18n } from '@navide/plugin-ui/foundation'
 import { settingsGet, settingsSet } from '@navide/plugin-ui/shared'
 import { WHATS_NEW, cmpSemver, pickText } from '../lib/whatsNew'
+import type { CandidateTier, ExclusionReason, FailureCause } from '../lib/quotaFailover'
 import type { UpdateState } from '../../../shared/updater'
 
 /**
  * Announcements centre — the status-bar feed of version news.
  *
- * Three sources, normalised into one list: the curated release notes in
+ * Four sources, normalised into one list: the curated release notes in
  * whatsNew.ts (everything up to the running version), the live updater state (a
- * pending update, or a run of failed background checks), and what the backend
- * reports about its own start. Read state is a bounded id set in ui_settings,
- * so it follows the user across windows.
+ * pending update, or a run of failed background checks), what the backend
+ * reports about its own start, and quota-exhaustion incidents (an account ran
+ * out; here is what happened next and what the user can do). Read state is a
+ * bounded id set in ui_settings, so it follows the user across windows —
+ * except for quota incidents, which are live state the backend re-publishes,
+ * so their read marks stay in this window.
  *
  * Module-level singleton state, like useNotify — the status-bar item and the
  * popover read the same feed without prop drilling.
  */
 
-export type AnnouncementKind = 'release' | 'update'
+export type AnnouncementKind = 'release' | 'update' | 'quota'
 /** The button an update row offers, when its status affords one. */
 export type AnnouncementAction = 'download' | 'install'
 
+/** A button on a quota incident. Every one names the incident, the account
+ *  and the credential epoch it was offered under, so the backend can refuse a
+ *  click that outlived the state it was made for. There is deliberately no
+ *  general "run this command" shape — a row can only ask for one of these. */
+export type QuotaAnnouncementAction =
+  | { kind: 'quota-switch'; incidentId: string; agentKey: string; slotId: string; epoch: number; label: string; tier: CandidateTier }
+  | { kind: 'quota-retry-resume'; incidentId: string; agentKey: string; epoch: number }
+  | { kind: 'quota-switch-back'; incidentId: string; agentKey: string; slotId: string; epoch: number; label: string }
+  /** Complete a switch whose bookkeeping did not: tell the backend which
+   *  account is really live (`liveSlotId` null = the backend already knows). */
+  | { kind: 'quota-reconcile'; incidentId: string; agentKey: string; transactionId: string; liveSlotId: string | null; label: string }
+
+export type AnnouncementActionSpec = { kind: AnnouncementAction } | QuotaAnnouncementAction
+
 export interface Announcement {
-  /** Stable across renders: `release:<version>`, `update:<version>`, `update-failed`. */
+  /** Stable across renders: `release:<version>`, `update:<version>`,
+   *  `update-failed`, `quota:<incidentId>`. */
   id: string
   kind: AnnouncementKind
   version?: string
@@ -33,7 +52,102 @@ export interface Announcement {
   /** Only set where a real timestamp exists — never fabricated. */
   createdAt?: number
   read: boolean
+  /** The single update button (kept for the updater rows and their handler). */
   action?: AnnouncementAction
+  /** Typed buttons, in display order. Update rows carry their `action` here
+   *  too; quota rows carry only these. */
+  actions?: AnnouncementActionSpec[]
+  /** Quota rows: the incident behind the row, for the popover's detail. */
+  quota?: QuotaIncidentNotice
+}
+
+// ── Quota incidents ─────────────────────────────────────────────────────────
+
+/** Where an incident is: the backend's Incident.state (quota_failover
+ *  contract), plus two transaction states the row has to show on its own —
+ *  `awaiting-confirmation` (a manual switch onto a CLI that cannot resume,
+ *  waiting for the user to accept a new conversation) and `partial`
+ *  (committed, at least one pane did not resume). The renderer only labels
+ *  these; it never advances them. */
+export type QuotaIncidentStatus =
+  | 'detected'
+  | 'awaiting-confirmation'
+  | 'waiting-safe'
+  | 'switching'
+  | 'settling'
+  | 'ready'
+  | 'partial'
+  | 'notify-stopped'
+  /** Not an incident state: a switch whose bookkeeping needs the user. */
+  | 'unreconciled'
+
+/** Incident.reason from the backend, shown on `notify-stopped` and `ready`
+ *  rows. The known values get a sentence; anything else is shown verbatim
+ *  rather than hidden — the backend's word is the record. */
+export type QuotaIncidentReason = string
+
+export interface QuotaCandidateOffer {
+  slotId: string
+  /** Display name of the account (email or slot name), already resolved. */
+  label: string
+  tier: CandidateTier
+  /** Already localized reading summary ("5h 78% left · 4 min ago"), if any. */
+  detail?: string
+}
+
+/** Why the backend left a slot out: its Candidate.excluded value, or the
+ *  finer-grained reasons of the pure ranker. */
+export type QuotaExcludedReason = ExclusionReason | 'exhausted'
+
+export interface QuotaExcludedOffer {
+  label: string
+  reason: QuotaExcludedReason
+}
+
+/** One quota incident as the feed shows it. The caller (App.vue, from the
+ *  backend's `quota_failover` events) hands in a full notice on every change;
+ *  the same `incidentId` updates the same row. */
+export interface QuotaIncidentNotice {
+  incidentId: string
+  agentKey: string
+  /** Vendor display name ("Claude Code"). */
+  agentLabel: string
+  authScope: string
+  /** Credential epoch the notice — and every button on it — belongs to. */
+  epoch: number
+  status: QuotaIncidentStatus
+  cause: FailureCause
+  /** Incident.reason — why it stopped, or what made it ready. */
+  reason?: QuotaIncidentReason
+  /** Incident.trusted === false: the backend could not attribute or verify
+   *  the signal, so the row only informs and offers nothing. */
+  untrusted?: boolean
+  /** The exhausted account, already labelled. */
+  sourceLabel: string
+  /** The account switched (or being switched) to, once one is chosen. */
+  targetLabel?: string
+  affected: { workspaces: number; panes: number }
+  candidates?: QuotaCandidateOffer[]
+  excluded?: QuotaExcludedOffer[]
+  /** When the exhausted window is expected back — an estimate, never a
+   *  verified recovery. */
+  resetExpectedAt?: number | null
+  /** Offered after a switch: the original account, for a manual switch back. */
+  switchBack?: { slotId: string; label: string }
+  /** Offered after a partial resume: retry attaching the panes that failed. */
+  retryResume?: boolean
+  /** Panes the swap could not reach (their credential comes from the
+   *  environment); shown as not switched. */
+  notSwitchedPanes?: number
+  /** Set while the backend refuses every switch for this vendor (a previous
+   *  switch is unreconciled): the row shows why and offers no switch. */
+  blockedReason?: string
+  /** Reconciliation offers, when this row is the unreconciled switch itself:
+   *  one entry with liveSlotId null when the backend knows the live account,
+   *  else one per account the user has to choose between. */
+  reconcile?: { transactionId: string; choices: { slotId: string | null; label: string }[] }
+  observedAt: number
+  updatedAt: number
 }
 
 const READ_IDS_KEY = 'agentTeam.announcements.readIds'
@@ -129,6 +243,7 @@ function updateItems(state: UpdateState | null): Announcement[] {
       createdAt: Number.isNaN(checkedAt) ? undefined : checkedAt,
       read: false,
       action,
+      actions: action ? [{ kind: action }] : undefined,
     })
   }
   return items
@@ -165,6 +280,320 @@ function backendItems(): Announcement[] {
   ]
 }
 
+/** Live quota incidents by id, newest update first when listed. Not
+ *  persisted: the backend owns the incidents and re-publishes them on
+ *  connect, and a stale copy in ui_settings would offer buttons for an epoch
+ *  that is gone. */
+const quotaIncidents = ref<Map<string, QuotaIncidentNotice>>(new Map())
+/** Incidents whose buttons were withdrawn without the row going away. */
+const quotaInvalidated = ref<Set<string>>(new Set())
+/** Per-window read marks for quota rows: `<status>@<epoch>` the user last
+ *  read, so a status change or a new epoch surfaces the row unread again. */
+const quotaReadMarks = ref<Map<string, string>>(new Map())
+
+const QUOTA_ID_PREFIX = 'quota:'
+
+export function quotaAnnouncementId(incidentId: string): string {
+  return `${QUOTA_ID_PREFIX}${incidentId}`
+}
+
+function quotaReadKey(notice: QuotaIncidentNotice): string {
+  return `${notice.status}@${notice.epoch}`
+}
+
+/** i18n with an English fallback for keys the locale files do not carry yet:
+ *  vue-i18n prints the raw key for a missing one, and a status line reading
+ *  "announce.quota.status.ready" is worse than English. The fallback set is
+ *  what the locale files are expected to grow (see QUOTA_I18N_KEYS). */
+function tq(key: string, fallback: string, params: Record<string, string | number> = {}): string {
+  if (i18n.global.te(key)) return i18n.global.t(key, params)
+  return fallback.replace(/\{(\w+)\}/g, (_, name: string) => String(params[name] ?? ''))
+}
+
+const QUOTA_STATUS_FALLBACK: Record<QuotaIncidentStatus, string> = {
+  detected: '{agent}: {source} has run out of quota',
+  'awaiting-confirmation': '{agent}: switching to {target} needs your confirmation',
+  'waiting-safe': '{agent}: waiting for a safe moment to switch to {target}',
+  switching: '{agent}: switching to {target}',
+  settling: '{agent}: switched to {target}, verifying quota',
+  ready: '{agent}: switched to {target}',
+  partial: '{agent}: switched to {target}, some panes did not resume',
+  'notify-stopped': '{agent}: automatic switch stopped',
+  unreconciled: '{agent}: an account switch was not reconciled',
+}
+
+/** Sentences for the backend's Incident.reason values. Keyed by the enum
+ *  verbatim; an unlisted value is printed as-is. */
+const QUOTA_REASON_FALLBACK: Record<string, string> = {
+  // notify-stopped
+  unsupported: '{agent} has no account switching yet.',
+  'manual-only': '{agent} can only be switched manually.',
+  'unverified-adapter': '{agent}\'s account switching is not verified on this platform; switch manually.',
+  'no-resume': '{agent} cannot resume its conversation automatically. Switch manually to keep this window and open a new conversation.',
+  'no-candidate': 'No account to switch to. Sign in to another account or wait for the reset.',
+  auto_budget_exhausted: 'Automatic switch limit reached. Switch manually or wait for the window to pass.',
+  'chained-exhaustion': '{target} ran out as well. Nothing else was tried.',
+  'pane-unowned': 'A pane in this switch belongs to no open window.',
+  'pane-no-session': 'A pane has no session to resume, so nothing was switched.',
+  'pane-not-resumable': 'A pane cannot be resumed, so nothing was switched.',
+  'pane-refused': 'A pane refused the switch, so nothing was switched.',
+  'pane-unsupported': 'A pane cannot take part in a switch, so nothing was switched.',
+  'pane-input-pending': 'A pane holds unsent input, so nothing was switched.',
+  'pane-permission-pending': 'A pane is waiting on a permission prompt, so nothing was switched.',
+  'pane-resume-data-missing': 'A pane could not name the session to resume, so nothing was switched.',
+  'pane-idle-unverified': 'A pane\'s idle state could not be verified, so nothing was switched.',
+  'platform-unsupported': '{agent}\'s account switching is not available on this platform.',
+  'identity-unknown': 'The account behind the current sign-in could not be identified, so nothing was switched.',
+  'credential-override': 'The panes take their credential from the environment; a switch would not reach them.',
+  'pane-scope-unknown': 'A pane\'s provider scope is unknown, so nothing was switched.',
+  'credential-source-unknown': 'Where {agent}\'s credential comes from could not be determined (environment variable or provider scope), so nothing was switched.',
+  'live-drift': 'The live credential belongs to another account and the target slot is not empty; reconcile before switching.',
+  'live-drift-unverified': 'The live credential changed and its identity cannot be verified; nothing was switched. Switch manually to confirm which account is live.',
+  'audit-write-failed': 'Credentials were switched but the audit record could not be written; automatic switching pauses until it can.',
+  'incident-closed': 'The incident was closed before the switch completed.',
+  'interrupted-swap': 'A credential swap was interrupted; which account is live is unknown. Pick the live one to reconcile.',
+  'unreconciled': 'An earlier switch left the saved default and the live account out of step; reconcile before switching again.',
+  'identity-mismatch': 'The account you picked does not match the credential that is live ({identity}).',
+  'persist-failed': 'The default could not be saved again; the switch stays unreconciled.',
+  'prepare-timeout': 'Not every pane answered in time, so nothing was switched.',
+  'wait-timeout': 'Panes stayed busy for 30 minutes, so nothing was switched.',
+  'stale-state': 'The account changed underneath the switch, so it was dropped.',
+  'new-pane-during-prepare': 'A new pane opened during the switch, so it was dropped.',
+  'pane-became-busy': 'A pane became busy during the switch, so it was dropped.',
+  'login-pending': 'A sign-in is in progress; switch after it completes.',
+  'login-harvest-failed': 'The current sign-in could not be saved, so nothing was switched.',
+  'target-signed-out': '{target} is not signed in.',
+  'target-expired': '{target}\'s sign-in has expired.',
+  'target-login-pending': '{target} is still signing in.',
+  'swap-failed': 'Switching to {target} failed; {source} is still active. Nothing else was tried.',
+  'default-persist-failed': 'Credentials were switched but the default could not be saved; check Settings before continuing.',
+  'resume-failed': 'Switched to {target}, but resuming failed. Panes keep their state; nothing was replayed.',
+  'target-exhausted': '{target} is out of quota too. Nothing else was tried.',
+  'quota-unconfirmed': 'Switched to {target}, but no reading confirmed its quota within 120 s. Later readings only update this row.',
+  'manual-switch': 'A manual switch took over.',
+  'policy-changed': 'Automatic switching was turned off during the switch.',
+  'user-cancelled': 'Cancelled.',
+  // ready
+  'quota-confirmed': '{target}\'s quota was read and has headroom.',
+  'turn-complete': '{target} completed a turn after the switch; its quota was not read.',
+  'outgoing-recovered': '{source} recovered on its own; no switch was needed.',
+  // untrusted
+  unattributed: 'The signal could not be tied to an account, so nothing was switched.',
+  'usage-window-disagrees': 'The account\'s own reading does not show the quota as spent, so nothing was switched.',
+  'no-declared-detector': '{agent} declares no exhaustion signal, so this text only informs.',
+  'text-did-not-match': 'The text did not match {agent}\'s declared exhaustion signal, so nothing was switched.',
+}
+
+const QUOTA_CAUSE_FALLBACK: Record<FailureCause, string> = {
+  'quota-exhausted': 'Quota exhausted',
+  'rate-limited': 'Rate limited (temporary)',
+  auth: 'Sign-in problem',
+  network: 'Network error',
+  context: 'Context window full',
+  payment: 'Billing problem',
+  'low-quota-warning': 'Quota running low',
+  unknown: 'Unclassified failure',
+}
+
+const QUOTA_TIER_FALLBACK: Record<CandidateTier, string> = {
+  'fresh-headroom': 'quota available',
+  'reset-expected': 'reset expected, unverified',
+  'stale-headroom': 'had quota at last reading',
+  unknown: 'no reading',
+}
+
+const QUOTA_EXCLUDED_FALLBACK: Record<QuotaExcludedReason, string> = {
+  current: 'current account',
+  'signed-out': 'not signed in',
+  expired: 'sign-in expired',
+  'login-pending': 'signing in',
+  'limit-not-reset': 'a limit has not reset',
+  exhausted: 'a limit has not reset',
+  tried: 'already tried this round',
+  'wrong-scope': 'different authentication scope',
+}
+
+/** The locale keys the quota rows read, for the integration step that adds
+ *  them to en-US.json / zh-TW.json. Each maps to the English used meanwhile. */
+export const QUOTA_I18N_KEYS: Readonly<Record<string, string>> = Object.freeze({
+  ...Object.fromEntries(Object.entries(QUOTA_STATUS_FALLBACK).map(([k, v]) => [`announce.quota.status.${k}`, v])),
+  ...Object.fromEntries(Object.entries(QUOTA_REASON_FALLBACK).map(([k, v]) => [`announce.quota.reason.${k}`, v])),
+  ...Object.fromEntries(Object.entries(QUOTA_CAUSE_FALLBACK).map(([k, v]) => [`announce.quota.cause.${k}`, v])),
+  ...Object.fromEntries(Object.entries(QUOTA_TIER_FALLBACK).map(([k, v]) => [`announce.quota.tier.${k}`, v])),
+  ...Object.fromEntries(Object.entries(QUOTA_EXCLUDED_FALLBACK).map(([k, v]) => [`announce.quota.excluded.${k}`, v])),
+  'announce.quota.scope': 'Affects {workspaces} workspace(s), {panes} pane(s) · {scope}',
+  'announce.quota.candidate': '{label} — {tier}',
+  'announce.quota.candidate-detail': '{label} — {tier} · {detail}',
+  'announce.quota.excluded-line': '{label} — {reason}',
+  'announce.quota.reset-expected': '{source} is expected back around {time} (not verified). No automatic switch back.',
+  'announce.quota.actions-withdrawn': 'These options are no longer current.',
+  'announce.quota.untrusted': 'Not verified: no switch was started.',
+  'announce.quota.not-switched': '{count} pane(s) not switched: their credential comes from the environment.',
+  'announce.quota.blocked': 'Account switching for this CLI is paused until the earlier switch is reconciled.',
+  'announce.quota.reconcile': 'Complete reconciliation',
+  'announce.quota.reconcile-as': 'The live account is {label}',
+  'announce.quota.switch-to': 'Switch to {label}',
+  'announce.quota.retry-resume': 'Retry resume',
+  'announce.quota.switch-back': 'Switch back to {label}',
+  'announce.quota.switch-refused': 'Account switch refused ({code}): {message}',
+  'announce.quota.confirm-new-conversation-title': 'Open a new conversation?',
+  'announce.quota.confirm-new-conversation-body': '{agent} cannot resume its conversation on another account. Switching to {target} keeps this pane as it is (on the old account, not resumed) and opens a new conversation on {target}. Credentials change only if you confirm.',
+  'announce.quota.confirm-new-conversation-confirm': 'Keep this pane and open a new conversation',
+  'announce.quota.confirm-new-conversation-cancel': 'Cancel, keep the current account',
+})
+
+function quotaActionsFor(notice: QuotaIncidentNotice): QuotaAnnouncementAction[] {
+  if (quotaInvalidated.value.has(notice.incidentId)) return []
+  const actions: QuotaAnnouncementAction[] = []
+  if (notice.reconcile) {
+    for (const choice of notice.reconcile.choices) {
+      actions.push({
+        kind: 'quota-reconcile',
+        incidentId: notice.incidentId,
+        agentKey: notice.agentKey,
+        transactionId: notice.reconcile.transactionId,
+        liveSlotId: choice.slotId,
+        label: choice.label,
+      })
+    }
+    return actions
+  }
+  if (notice.blockedReason) return []
+  const base = { incidentId: notice.incidentId, agentKey: notice.agentKey, epoch: notice.epoch }
+  if (notice.untrusted) return []
+  if (notice.status === 'detected' || notice.status === 'notify-stopped') {
+    for (const c of notice.candidates ?? []) {
+      actions.push({ kind: 'quota-switch', ...base, slotId: c.slotId, label: c.label, tier: c.tier })
+    }
+  }
+  if (notice.retryResume && notice.status === 'partial') {
+    actions.push({ kind: 'quota-retry-resume', ...base })
+  }
+  if (notice.switchBack && (notice.status === 'ready' || notice.status === 'partial' || notice.status === 'notify-stopped')) {
+    actions.push({ kind: 'quota-switch-back', ...base, slotId: notice.switchBack.slotId, label: notice.switchBack.label })
+  }
+  return actions
+}
+
+function quotaItems(): Announcement[] {
+  const notices = [...quotaIncidents.value.values()].sort((a, b) => b.updatedAt - a.updatedAt)
+  return notices.map((notice) => {
+    const params = { agent: notice.agentLabel, source: notice.sourceLabel, target: notice.targetLabel ?? '' }
+    const highlights: string[] = [
+      tq('announce.quota.scope', QUOTA_I18N_KEYS['announce.quota.scope'], {
+        workspaces: notice.affected.workspaces,
+        panes: notice.affected.panes,
+        scope: notice.authScope,
+      }),
+      tq(`announce.quota.cause.${notice.cause}`, QUOTA_CAUSE_FALLBACK[notice.cause]),
+    ]
+    for (const c of notice.candidates ?? []) {
+      const tier = tq(`announce.quota.tier.${c.tier}`, QUOTA_TIER_FALLBACK[c.tier])
+      highlights.push(
+        c.detail
+          ? tq('announce.quota.candidate-detail', QUOTA_I18N_KEYS['announce.quota.candidate-detail'], { label: c.label, tier, detail: c.detail })
+          : tq('announce.quota.candidate', QUOTA_I18N_KEYS['announce.quota.candidate'], { label: c.label, tier }),
+      )
+    }
+    for (const e of notice.excluded ?? []) {
+      highlights.push(
+        tq('announce.quota.excluded-line', QUOTA_I18N_KEYS['announce.quota.excluded-line'], {
+          label: e.label,
+          reason: tq(`announce.quota.excluded.${e.reason}`, QUOTA_EXCLUDED_FALLBACK[e.reason]),
+        }),
+      )
+    }
+    const notes: string[] = []
+    if (notice.untrusted) {
+      notes.push(tq('announce.quota.untrusted', QUOTA_I18N_KEYS['announce.quota.untrusted']))
+    }
+    if (notice.reason) {
+      notes.push(tq(`announce.quota.reason.${notice.reason}`, QUOTA_REASON_FALLBACK[notice.reason] ?? notice.reason, params))
+    }
+    if (notice.resetExpectedAt) {
+      notes.push(
+        tq('announce.quota.reset-expected', QUOTA_I18N_KEYS['announce.quota.reset-expected'], {
+          source: notice.sourceLabel,
+          time: new Date(notice.resetExpectedAt).toLocaleString(),
+        }),
+      )
+    }
+    if (notice.blockedReason) {
+      notes.push(tq(`announce.quota.reason.${notice.blockedReason}`, QUOTA_REASON_FALLBACK[notice.blockedReason] ?? notice.blockedReason, params))
+      notes.push(tq('announce.quota.blocked', QUOTA_I18N_KEYS['announce.quota.blocked']))
+    }
+    if (notice.notSwitchedPanes) {
+      notes.push(tq('announce.quota.not-switched', QUOTA_I18N_KEYS['announce.quota.not-switched'], { count: notice.notSwitchedPanes }))
+    }
+    if (quotaInvalidated.value.has(notice.incidentId)) {
+      notes.push(tq('announce.quota.actions-withdrawn', QUOTA_I18N_KEYS['announce.quota.actions-withdrawn']))
+    }
+    const actions = quotaActionsFor(notice)
+    return {
+      id: quotaAnnouncementId(notice.incidentId),
+      kind: 'quota' as const,
+      title: tq(`announce.quota.status.${notice.status}`, QUOTA_STATUS_FALLBACK[notice.status], params),
+      highlights,
+      note: notes.length > 0 ? notes.join(' ') : undefined,
+      createdAt: notice.observedAt,
+      read: quotaReadMarks.value.get(notice.incidentId) === quotaReadKey(notice),
+      actions: actions.length > 0 ? actions : undefined,
+      quota: notice,
+    }
+  })
+}
+
+/** Insert or update the row for `notice.incidentId`. An update older than
+ *  the one on screen (two windows relaying the same backend event out of
+ *  order) is dropped; a status or epoch change surfaces the row unread and
+ *  replaces every button, so nothing offered under the old state survives. */
+function noteQuotaIncident(notice: QuotaIncidentNotice): void {
+  const current = quotaIncidents.value.get(notice.incidentId)
+  if (current && notice.updatedAt < current.updatedAt) return
+  const next = new Map(quotaIncidents.value)
+  next.set(notice.incidentId, notice)
+  quotaIncidents.value = next
+  if (current && (current.epoch !== notice.epoch || current.status !== notice.status) && quotaInvalidated.value.has(notice.incidentId)) {
+    // A withdrawal applied to the previous state; the new state's buttons
+    // are the backend's fresh offer.
+    const cleared = new Set(quotaInvalidated.value)
+    cleared.delete(notice.incidentId)
+    quotaInvalidated.value = cleared
+  }
+}
+
+/** Withdraw the buttons of an incident whose row should stay (a candidate
+ *  was deleted, a manual switch overtook it) without a new notice. */
+function invalidateQuotaActions(incidentId: string): void {
+  if (!quotaIncidents.value.has(incidentId) || quotaInvalidated.value.has(incidentId)) return
+  quotaInvalidated.value = new Set(quotaInvalidated.value).add(incidentId)
+}
+
+/** Drop the row entirely (the backend closed the incident). */
+function dismissQuotaIncident(incidentId: string): void {
+  if (!quotaIncidents.value.has(incidentId)) return
+  const next = new Map(quotaIncidents.value)
+  next.delete(incidentId)
+  quotaIncidents.value = next
+  const marks = new Map(quotaReadMarks.value)
+  marks.delete(incidentId)
+  quotaReadMarks.value = marks
+  const cleared = new Set(quotaInvalidated.value)
+  cleared.delete(incidentId)
+  quotaInvalidated.value = cleared
+}
+
+function markQuotaRead(id: string): boolean {
+  if (!id.startsWith(QUOTA_ID_PREFIX)) return false
+  const incidentId = id.slice(QUOTA_ID_PREFIX.length)
+  const notice = quotaIncidents.value.get(incidentId)
+  if (!notice) return true
+  const key = quotaReadKey(notice)
+  if (quotaReadMarks.value.get(incidentId) === key) return true
+  quotaReadMarks.value = new Map(quotaReadMarks.value).set(incidentId, key)
+  return true
+}
+
 const items: ComputedRef<Announcement[]> = computed(() => {
   // Read the locale so a language switch re-localizes the whole feed.
   const locale = i18n.global.locale.value
@@ -173,8 +602,9 @@ const items: ComputedRef<Announcement[]> = computed(() => {
     ...backendItems(),
     ...updateItems(updateSource.value?.state.value ?? null),
     ...releaseItems(locale, appVersion.value),
-  ]
-  return merged.map((item) => ({ ...item, read: seen.has(item.id) }))
+  ].map((item) => ({ ...item, read: seen.has(item.id) }))
+  // Quota rows first: they are the only ones that ask for a decision now.
+  return [...quotaItems(), ...merged]
 })
 
 const unreadCount = computed(() => items.value.filter((item) => !item.read).length)
@@ -185,6 +615,7 @@ function persist(ids: string[]): void {
 }
 
 function markRead(id: string): void {
+  if (markQuotaRead(id)) return
   if (readIds.value.includes(id)) return
   persist([...readIds.value, id])
 }
@@ -192,10 +623,12 @@ function markRead(id: string): void {
 function markAllRead(): void {
   const unread = items.value.filter((item) => !item.read).map((item) => item.id)
   if (unread.length === 0) return
+  const persisted = unread.filter((id) => !markQuotaRead(id))
+  if (persisted.length === 0) return
   // persist() truncates to the TAIL, so append oldest-first: `items` is
   // newest-first, and a batch bigger than MAX_READ_IDS would otherwise drop the
   // newest ids and resurrect them as unread.
-  persist([...readIds.value, ...unread.reverse()])
+  persist([...readIds.value, ...persisted.reverse()])
 }
 
 /** Hand the live updater state in (call once, right after useUpdater()). */
@@ -224,7 +657,14 @@ function load(): void {
   // No stored set at all — a fresh install. Baseline everything on screen as
   // read (like App.vue does for the What's New watermark) so a new user isn't
   // greeted by every historical release note at once.
-  persist(items.value.map((item) => item.id).reverse())
+  persist(items.value.filter((item) => item.kind !== 'quota').map((item) => item.id).reverse())
+}
+
+/** Test-only: forget every quota incident (the module is a singleton). */
+export function __resetQuotaAnnouncementsForTest(): void {
+  quotaIncidents.value = new Map()
+  quotaInvalidated.value = new Set()
+  quotaReadMarks.value = new Map()
 }
 
 export function useAnnouncements() {
@@ -236,5 +676,8 @@ export function useAnnouncements() {
     markAllRead,
     setUpdateSource,
     noteBackendUpgrade,
+    noteQuotaIncident,
+    invalidateQuotaActions,
+    dismissQuotaIncident,
   }
 }

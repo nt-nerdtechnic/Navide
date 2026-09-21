@@ -23,5 +23,8 @@ export const SPEC = {
   needsSessionMarker: true,
   bracketedPaste: true,
   supportsRebuild: true,
-  hint: 'generalist'
+  hint: 'generalist',
+  // Quota failover: kimi.py reports weekly always and a "Rate limit (5h)"
+  // session window only when the plan has one — enforced when present.
+  quotaSemantics: { hard: ['weekly', 'session'], required: ['weekly'] },
 } as const satisfies AgentSpec

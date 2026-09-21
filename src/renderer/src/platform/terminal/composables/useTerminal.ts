@@ -3333,11 +3333,13 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
   // conversation. History still accumulates across restarts — the replayed
   // snapshot lands in the normal buffer, which the next save serializes ahead
   // of the current screen.
-  function serializeSnapshot(lines: number): string {
+  /** `lines` undefined = every line xterm still holds (the addon's default),
+   *  which is what a handoff wants; the stored snapshot passes its cap. */
+  function serializeSnapshot(lines?: number): string {
     const altIsHistory = agentProfile(activeAgentKey)?.fullScreenTui === true
     try {
       const payload = serializer.serialize({
-        scrollback: lines,
+        ...(lines === undefined ? {} : { scrollback: lines }),
         excludeAltBuffer: !altIsHistory,
       })
       return altIsHistory ? stripAltScreenEnter(payload) : payload
@@ -3412,6 +3414,21 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
     lastSnapActivityAt = raw
   }
   watch(nowTick, maybeSaveScrollSnapshot)
+
+  /** This pane's scrollback as a serialized buffer, for handing to the pane
+   *  that replaces it. Everything xterm still holds (bounded by xterm's own
+   *  scrollback, not the stored snapshot's line cap — this is a memory
+   *  handoff, not a localStorage write), in the stored snapshot's format.
+   *
+   *  Async on purpose: `term.write` queues, and the buffer only reflects a
+   *  chunk once the parser has run it (a write callback fires after every
+   *  earlier write has been processed). Serializing right after the flush
+   *  would drop the tail the flush had just queued. */
+  async function serializeScrollback(): Promise<string> {
+    _flushPendingOutput()
+    await new Promise<void>((resolve) => term.write('', resolve))
+    return serializeSnapshot()
+  }
 
   const _snapshotHooks: TerminalSnapshotHooks = {
     currentKey: () => persistKey,
@@ -4027,6 +4044,16 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
         term.write(MOUSE_MODE_RESET_NEW_PROCESS)
         term.write('\r\n\x1b[2m\x1b[38;5;240m─── reconnected ───\x1b[0m\r\n')
       }
+    } else if (opts.replayScrollback && !snapshotReplayed) {
+      // A handoff from the pane this one replaces (quota-failover restart):
+      // the same serialized-buffer format as the stored snapshot, taken from
+      // the old xterm right before it was stopped, so the history the user
+      // was looking at is the history they keep. Same mode reset, for the
+      // same reason. Nothing here goes to the PTY.
+      snapshotReplayed = true
+      term.write(opts.replayScrollback)
+      term.write(MOUSE_MODE_RESET_NEW_PROCESS)
+      term.write('\r\n\x1b[2m\x1b[38;5;240m─── account switched ───\x1b[0m\r\n')
     }
     // Only resume spawns are throttled (they are the heavy ones). Acquire before
     // send so the queue-wait is NOT charged against the per-request timeout;
@@ -4603,6 +4630,7 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
   return {
     mount,
     spawn,
+    serializeScrollback,
     tryReattach,
     attachedOutputLogFile,
     interrupt,

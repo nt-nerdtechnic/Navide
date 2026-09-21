@@ -139,6 +139,15 @@ _OAUTH_ACCOUNT_SLOT_FILE = "oauth-account.json"
 # The CLI completes its login there without touching the live credentials;
 # the usage poller then harvests it into the slot and removes it.
 LOGIN_HOME_DIRNAME = "login-home"
+# For a CLI that cannot be given an isolated home, the login pane signs in
+# against the LIVE store and would overwrite the active account. Before the
+# pane starts the vault snapshots the live credential into this file INSIDE
+# THE SLOT DIR (no login home is created — that directory means "isolated
+# login" to the handlers). The harvest parks whatever the CLI wrote into the
+# profile's slot and puts the snapshot back, so "add account" never costs the
+# account that was signed in. Private file (a secret); JSON {secret, scope}.
+# ``login_pending`` is the one predicate covering both kinds of login.
+_PRE_LOGIN_SNAPSHOT_FILE = ".pre-login-live.json"
 
 # Where each CLI writes its secret inside an isolated login home, relative to
 # the login-home dir. Env vars and layouts mirror the pre-refactor config-home
@@ -352,7 +361,14 @@ class CredentialVault:
     def _live_file(self, agent_key: str) -> Path:
         spec = _cli_vendor_spec(agent_key)
         if spec is not None and spec.live_file_resolver is not None:
-            return spec.live_file_resolver(self._real_home)
+            try:
+                return spec.live_file_resolver(self._real_home)
+            except ValueError as err:
+                # The vendor knows the layout in use cannot be swapped
+                # (droid's per-directory key-file mode): say so, do nothing.
+                raise CredentialVaultError(f"{agent_key}: {err}") from err
+        if agent_key not in _LIVE_FILES:
+            raise CredentialVaultError(f"{agent_key} has no live credential file on this platform")
         return self._real_home.joinpath(*_LIVE_FILES[agent_key])
 
     def _claude_config_json(self) -> Path:
@@ -361,16 +377,25 @@ class CredentialVault:
     # ---- Keychain primitives (injectable runner; never the real Keychain
     # in tests) ----
 
-    def _keychain_read(self, service: str, *, strict: bool = False) -> str | None:
+    def _keychain_read(
+        self, service: str, *, strict: bool = False, account: str | None = None
+    ) -> str | None:
         """Read a generic-password item. A missing item (exit code 44 /
         "could not be found") is a legitimate signed-out state and returns
         None. Any other failure (locked keychain, denied access, timeout) is
         indistinguishable from signed-out, so with ``strict=True`` it raises
         instead — capture paths must never mistake a transient read failure
         for a logout and erase the slot. Read-only display paths keep the
-        lax default (a transient failure shows as signed-out, harmless)."""
+        lax default (a transient failure shows as signed-out, harmless).
+        ``account`` narrows the lookup to one account attribute — a vendor
+        that keeps several logins under one service name (copilot) needs it,
+        and a vendor sharing a generic service name (antigravity's "gemini")
+        must not read another program's item."""
+        args = ["find-generic-password", "-s", service]
+        if account:
+            args += ["-a", account]
         try:
-            rc, out = self._security(["find-generic-password", "-s", service, "-w"], None)
+            rc, out = self._security(args + ["-w"], None)
         except Exception as err:  # noqa: BLE001
             if strict:
                 raise CredentialVaultError(
@@ -393,7 +418,9 @@ class CredentialVault:
         secret = out.rstrip("\n")
         return secret or None
 
-    def _keychain_write(self, service: str, secret: str) -> None:
+    def _keychain_write(
+        self, service: str, secret: str, *, account: str | None = None
+    ) -> None:
         # Refuse a multi-line payload BEFORE touching the item: `security -i`
         # parses one command per line, so it would store everything up to the
         # first newline and fail on the rest — leaving a truncated, unusable
@@ -411,7 +438,7 @@ class CredentialVault:
             [
                 "add-generic-password",
                 "-U",
-                "-a", _kc_quote(getpass.getuser()),
+                "-a", _kc_quote(account or getpass.getuser()),
                 "-s", _kc_quote(service),
                 "-w", _kc_quote(secret),
             ]
@@ -427,15 +454,108 @@ class CredentialVault:
                 + (f": {detail}" if detail else "")
             )
 
-    def _keychain_delete(self, service: str) -> None:
+    def _keychain_delete(self, service: str, *, account: str | None = None) -> None:
         # A missing item is fine — deletion is idempotent.
-        self._security(["delete-generic-password", "-s", service], None)
+        args = ["delete-generic-password", "-s", service]
+        if account:
+            args += ["-a", account]
+        self._security(args, None)
+
+    # ---- vendor adapters (declared on the spec, mechanics here) ----
+
+    @staticmethod
+    def _switch_spec(agent_key: str):
+        spec = _cli_vendor_spec(agent_key)
+        return spec.account_switch if spec is not None else None
+
+    def _require_scope(self, agent_key: str, scope: str | None) -> str | None:
+        """Validate a profile's provider ``scope`` against the vendor's
+        declaration. A per-provider store demands one of its declared scopes
+        — never an arbitrary client string, never a whole-file fallback that
+        would carry other providers along; every other vendor takes none."""
+        switch = self._switch_spec(agent_key)
+        scopes = switch.scopes if switch is not None else ()
+        if scopes:
+            if scope is None and len(scopes) == 1:
+                # One declared provider: a caller predating the scope field
+                # (and every profile of that vendor) can only mean it.
+                return scopes[0]
+            if scope not in scopes:
+                raise CredentialVaultError(
+                    f"{agent_key} needs a provider scope from {list(scopes)}, got {scope!r}"
+                )
+            return scope
+        if scope:
+            raise CredentialVaultError(f"{agent_key} takes no provider scope, got {scope!r}")
+        return None
+
+    def _is_vendor_keychain(self, agent_key: str) -> bool:
+        """True when this vendor's live secret is one or more macOS Keychain
+        items declared on its spec (claude keeps its own branches)."""
+        switch = self._switch_spec(agent_key)
+        return (
+            agent_key != "claude"
+            and self._is_macos
+            and switch is not None
+            and switch.store == "keychain"
+            and bool(switch.keychain_items)
+        )
+
+    def _read_vendor_keychain(self, agent_key: str, *, strict: bool) -> str | None:
+        """Every declared item as one JSON payload ``{"keychain": {"<service>|<account>": secret}}``
+        — the slot stores exactly this so a restore puts each item back where
+        it came from. None when no item exists (signed out)."""
+        switch = self._switch_spec(agent_key)
+        found: dict[str, str] = {}
+        for service, account in switch.keychain_items:
+            value = self._keychain_read(service, strict=strict, account=account or None)
+            if value is not None:
+                found[f"{service}|{account}"] = value
+        if not found:
+            return None
+        return json.dumps({"keychain": found}, separators=(",", ":"))
+
+    def _write_vendor_keychain(self, agent_key: str, secret: str | None) -> None:
+        switch = self._switch_spec(agent_key)
+        items = _parse_json_dict(secret)
+        stored = items.get("keychain") if items else None
+        if secret is not None and not isinstance(stored, dict):
+            raise CredentialVaultError(
+                f"{agent_key} slot payload is not a keychain item map"
+            )
+        for service, account in switch.keychain_items:
+            value = stored.get(f"{service}|{account}") if isinstance(stored, dict) else None
+            if isinstance(value, str) and value:
+                self._keychain_write(service, value, account=account or None)
+            else:
+                self._keychain_delete(service, account=account or None)
+
+    def _extract(self, agent_key: str, document: str | None, scope: str) -> str | None:
+        switch = self._switch_spec(agent_key)
+        try:
+            return switch.extract(document, scope)
+        except Exception as err:  # noqa: BLE001 — a vendor bug must not look like a logout
+            raise CredentialVaultError(f"{agent_key} credential extract failed: {err}") from err
+
+    def _merge(self, agent_key: str, document: str | None, scope: str, portion: str | None) -> str:
+        switch = self._switch_spec(agent_key)
+        try:
+            merged = switch.merge(document, scope, portion)
+        except Exception as err:  # noqa: BLE001
+            raise CredentialVaultError(f"{agent_key} credential merge failed: {err}") from err
+        if not isinstance(merged, str):
+            raise CredentialVaultError(f"{agent_key} credential merge returned no document")
+        return merged
 
     # ---- live credentials ----
 
-    def read_live(self, agent_key: str, *, strict: bool = False) -> LiveCredentials:
+    def read_live(
+        self, agent_key: str, *, strict: bool = False, scope: str | None = None
+    ) -> LiveCredentials:
         """``strict=True`` raises on a transient Keychain failure instead of
-        reporting signed-out — required on capture paths (see _keychain_read)."""
+        reporting signed-out — required on capture paths (see _keychain_read).
+        ``scope`` selects one provider entry of a per-provider store (see
+        ``_require_scope``); the secret is then that entry alone."""
         if agent_key == "claude":
             secret = (
                 self._keychain_read(CLAUDE_LIVE_KEYCHAIN_SERVICE, strict=strict)
@@ -444,9 +564,17 @@ class CredentialVault:
             if secret is None:
                 secret = _read_text(self._live_file("claude"))
             return LiveCredentials(secret=secret, account=self._read_live_oauth_account())
-        return LiveCredentials(secret=_read_text(self._live_file(agent_key)))
+        scope = self._require_scope(agent_key, scope)
+        if self._is_vendor_keychain(agent_key):
+            return LiveCredentials(secret=self._read_vendor_keychain(agent_key, strict=strict))
+        document = _read_text(self._live_file(agent_key))
+        if scope is not None:
+            return LiveCredentials(secret=self._extract(agent_key, document, scope))
+        return LiveCredentials(secret=document)
 
-    def write_live(self, agent_key: str, creds: LiveCredentials) -> None:
+    def write_live(
+        self, agent_key: str, creds: LiveCredentials, *, scope: str | None = None
+    ) -> None:
         if agent_key == "claude":
             if creds.secret is None:
                 if self._is_macos:
@@ -460,13 +588,41 @@ class CredentialVault:
                 _write_live_file(self._live_file("claude"), creds.secret)
             self._write_live_oauth_account(creds.account)
             return
+        scope = self._require_scope(agent_key, scope)
+        if self._is_vendor_keychain(agent_key):
+            self._write_vendor_keychain(agent_key, creds.secret)
+            return
+        if scope is not None:
+            # Targeted rewrite: only this provider's entry changes; the rest
+            # of the CLI's document (other providers, settings, comments) is
+            # carried through by the vendor's ``merge``.
+            path = self._live_file(agent_key)
+            merged = self._merge(agent_key, _read_text(path), scope, creds.secret)
+            switch = self._switch_spec(agent_key)
+            companions: tuple[tuple[Path, str | None], ...] = ()
+            if switch is not None and switch.companion_writes is not None:
+                # Derived before anything is written: a refusal here (mcode's
+                # region guard) leaves the live store exactly as it was.
+                try:
+                    companions = switch.companion_writes(path, merged, scope)
+                except Exception as err:  # noqa: BLE001
+                    raise CredentialVaultError(
+                        f"{agent_key} companion credential files failed: {err}"
+                    ) from err
+            _write_live_file(path, merged)
+            for companion_path, text in companions:
+                if text is None:
+                    companion_path.unlink(missing_ok=True)
+                else:
+                    _write_live_file(companion_path, text)
+            return
         if creds.secret is None:
             self._live_file(agent_key).unlink(missing_ok=True)
         else:
             _write_live_file(self._live_file(agent_key), creds.secret)
 
-    def clear_live(self, agent_key: str) -> None:
-        self.write_live(agent_key, LiveCredentials())
+    def clear_live(self, agent_key: str, *, scope: str | None = None) -> None:
+        self.write_live(agent_key, LiveCredentials(), scope=scope)
 
     # ---- app secrets (not tied to a CLI vendor or an account slot) ----
 
@@ -607,7 +763,9 @@ class CredentialVault:
 
     # ---- slots ----
 
-    def read_slot(self, agent_key: str, slot_id: str) -> LiveCredentials:
+    def read_slot(
+        self, agent_key: str, slot_id: str, *, scope: str | None = None
+    ) -> LiveCredentials:
         slot = self.slot_dir(agent_key, slot_id)
         if agent_key == "claude":
             if self._is_macos:
@@ -623,7 +781,14 @@ class CredentialVault:
                 except ValueError:
                     account = None
             return LiveCredentials(secret=secret, account=account)
-        return LiveCredentials(secret=_read_private_text(slot / _SLOT_FILES[agent_key]))
+        scope = self._require_scope(agent_key, scope)
+        stored = _read_private_text(slot / _SLOT_FILES[agent_key])
+        if scope is not None:
+            # A per-provider slot document has the vendor's own shape, one
+            # key per scope, so the reserved ``__default__`` slot can park
+            # several providers side by side without one overwriting another.
+            return LiveCredentials(secret=self._extract(agent_key, stored, scope))
+        return LiveCredentials(secret=stored)
 
     def _claude_profile_home_secret(self, slot_id: str) -> str | None:
         """The credential a managed claude profile's own persistent home holds
@@ -645,7 +810,14 @@ class CredentialVault:
         """
         return self.read_live("claude") if active else self.read_slot("claude", slot_id)
 
-    def write_slot(self, agent_key: str, slot_id: str, creds: LiveCredentials) -> None:
+    def write_slot(
+        self,
+        agent_key: str,
+        slot_id: str,
+        creds: LiveCredentials,
+        *,
+        scope: str | None = None,
+    ) -> None:
         slot = self.slot_dir(agent_key, slot_id)
         if agent_key == "claude":
             # A wiped credential holds no token to store, and writing it would
@@ -679,13 +851,21 @@ class CredentialVault:
             else:
                 _write_private(account_file, json.dumps(creds.account, indent=2))
             return
+        scope = self._require_scope(agent_key, scope)
+        target = slot / _SLOT_FILES[agent_key]
+        if scope is not None:
+            merged = self._merge(agent_key, _read_private_text(target), scope, creds.secret)
+            _write_private(target, merged)
+            return
         if creds.secret is None:
-            (slot / _SLOT_FILES[agent_key]).unlink(missing_ok=True)
+            target.unlink(missing_ok=True)
         else:
-            _write_private(slot / _SLOT_FILES[agent_key], creds.secret)
+            _write_private(target, creds.secret)
 
-    def slot_is_empty(self, agent_key: str, slot_id: str) -> bool:
-        return self.read_slot(agent_key, slot_id).secret is None
+    def slot_is_empty(
+        self, agent_key: str, slot_id: str, *, scope: str | None = None
+    ) -> bool:
+        return self.read_slot(agent_key, slot_id, scope=scope).secret is None
 
     def slot_account(self, agent_key: str, slot_id: str) -> dict | None:
         """The slot's display-only account info (claude's ``oauthAccount``)."""
@@ -699,7 +879,9 @@ class CredentialVault:
         None for the other agents, which have no such block."""
         return self._read_live_oauth_account() if agent_key == "claude" else None
 
-    def identity(self, agent_key: str, slot_id: str | None = None) -> dict:
+    def identity(
+        self, agent_key: str, slot_id: str | None = None, *, scope: str | None = None
+    ) -> dict:
         """Display-only identity for one account slot (``slot_id=None`` = the
         live state, i.e. the currently active account). ``signedIn`` reflects
         whether an actual credential secret exists — a claude blob Claude Code
@@ -727,13 +909,24 @@ class CredentialVault:
                     and not _claude_credential_is_wiped(base.secret)
                 )
                 return {"email": email, "signedIn": signed_in}
-            if slot_id is None:
-                secret = _read_text(self._live_file(agent_key))
-            else:
-                secret = _read_private_text(
-                    self.slot_dir(agent_key, slot_id) / _SLOT_FILES[agent_key]
-                )
             spec = _cli_vendor_spec(agent_key)
+            switch = spec.account_switch if spec is not None else None
+            if scope is None and switch is not None and len(switch.scopes) > 1:
+                # The CLI as a whole (no provider named): signed in when ANY
+                # declared provider entry holds a credential. The scoped
+                # answer is what the accounts UI and the switch use; this one
+                # keeps the spawn-time "signed out" advisory honest.
+                return {
+                    "email": None,
+                    "signedIn": any(
+                        self.identity(agent_key, slot_id, scope=candidate)["signedIn"]
+                        for candidate in switch.scopes
+                    ),
+                }
+            if slot_id is None:
+                secret = self.read_live(agent_key, scope=scope).secret
+            else:
+                secret = self.read_slot(agent_key, slot_id, scope=scope).secret
             if spec is not None and spec.identity_from_secret is not None:
                 return spec.identity_from_secret(secret)
             # kimi (and any future agent without an identity field): presence
@@ -745,7 +938,9 @@ class CredentialVault:
 
     # ---- account switching ----
 
-    def capture(self, agent_key: str, slot_id: str) -> LiveCredentials:
+    def capture(
+        self, agent_key: str, slot_id: str, *, scope: str | None = None
+    ) -> LiveCredentials:
         """Mirror the live credential state — the credentials ``slot_id``
         currently runs on — into the slot (a logged-out state empties the
         slot). Returns the snapshot. Reads strictly: a transient Keychain
@@ -754,26 +949,34 @@ class CredentialVault:
         whose tokens Claude Code wiped in place leaves the slot's stored secret
         alone (``write_slot``); the returned snapshot still mirrors the live
         state so callers can roll it back."""
-        creds = self.read_live(agent_key, strict=True)
-        self.write_slot(agent_key, slot_id, creds)
+        creds = self.read_live(agent_key, strict=True, scope=scope)
+        self.write_slot(agent_key, slot_id, creds, scope=scope)
         return creds
 
-    def restore(self, agent_key: str, slot_id: str) -> None:
+    def restore(self, agent_key: str, slot_id: str, *, scope: str | None = None) -> None:
         """Make ``slot_id`` the active account: its slot content becomes the
         live credentials, and an empty slot clears them (the CLI then prompts
         a fresh login)."""
-        self.write_live(agent_key, self.read_slot(agent_key, slot_id))
+        self.write_live(agent_key, self.read_slot(agent_key, slot_id, scope=scope), scope=scope)
 
-    def switch(self, agent_key: str, from_slot_id: str, to_slot_id: str) -> None:
+    def switch(
+        self,
+        agent_key: str,
+        from_slot_id: str,
+        to_slot_id: str,
+        *,
+        scope: str | None = None,
+    ) -> None:
         """Atomically capture the outgoing account into ``from_slot_id`` and
         bring ``to_slot_id`` live. On a restore failure the captured snapshot is
-        written back so the live state is never lost."""
-        outgoing = self.capture(agent_key, from_slot_id)
+        written back so the live state is never lost. ``scope`` (per-provider
+        stores) names the one provider entry both sides of the swap touch."""
+        outgoing = self.capture(agent_key, from_slot_id, scope=scope)
         try:
-            self.restore(agent_key, to_slot_id)
+            self.restore(agent_key, to_slot_id, scope=scope)
         except Exception as err:
             try:
-                self.write_live(agent_key, outgoing)
+                self.write_live(agent_key, outgoing, scope=scope)
             except Exception as rollback_err:  # noqa: BLE001
                 log.error(
                     "credential rollback for %s failed after restore error: %s",
@@ -783,20 +986,20 @@ class CredentialVault:
                 f"switching {agent_key} credentials failed: {err}"
             ) from err
 
-    def harvest(self, agent_key: str, slot_id: str) -> bool:
+    def harvest(self, agent_key: str, slot_id: str, *, scope: str | None = None) -> bool:
         """Opportunistically fill an EMPTY slot from the live credentials the
         account currently runs on (the user just logged in inside a pane).
         No-op when the slot already holds a secret or nothing is signed in — a
         claude credential whose tokens were wiped counts as nothing.
         Returns True when something was harvested."""
-        if not self.slot_is_empty(agent_key, slot_id):
+        if not self.slot_is_empty(agent_key, slot_id, scope=scope):
             return False
-        creds = self.read_live(agent_key)
+        creds = self.read_live(agent_key, scope=scope)
         if creds.secret is None:
             return False
         if agent_key == "claude" and _claude_credential_is_wiped(creds.secret):
             return False
-        self.write_slot(agent_key, slot_id, creds)
+        self.write_slot(agent_key, slot_id, creds, scope=scope)
         return True
 
     def delete_slot_secrets(self, agent_key: str, slot_id: str) -> None:
@@ -811,6 +1014,16 @@ class CredentialVault:
             if agent_key == "claude" and self._is_macos:
                 self._keychain_delete(legacy_claude_keychain_service(home))
             shutil.rmtree(home, ignore_errors=True)
+        if not self._login_isolated(agent_key) and self.login_pending(agent_key, slot_id):
+            # Deleting a profile mid-sign-in: whatever the CLI wrote into the
+            # live store belongs to the account being deleted, and the one
+            # that was active before must come back — otherwise the next
+            # switch would capture the deleted login into the active slot.
+            try:
+                self.discard_pending_login(agent_key, slot_id)
+            except CredentialVaultError as err:
+                log.warning("restoring the pre-login %s credential failed: %s", agent_key, err)
+        self._pre_login_snapshot_path(agent_key, slot_id).unlink(missing_ok=True)
         if agent_key == "claude":
             if self._is_macos:
                 self._keychain_delete(self._slot_service(agent_key, slot_id))
@@ -904,26 +1117,84 @@ class CredentialVault:
                 log.warning("grok shim symlink %s -> %s failed: %s", dst, src, err)
         return shim
 
-    def login_spawn_env(self, agent_key: str, slot_id: str) -> tuple[dict[str, str], list[str]]:
+    def _login_isolated(self, agent_key: str) -> bool:
+        """Does a login pane of this CLI get its own credential store?"""
+        if agent_key in ("claude", "grok"):
+            return True
+        spec = _cli_vendor_spec(agent_key)
+        return spec is not None and spec.login_home_env is not None
+
+    def _pre_login_snapshot_path(self, agent_key: str, slot_id: str) -> Path:
+        return self.slot_dir(agent_key, slot_id) / _PRE_LOGIN_SNAPSHOT_FILE
+
+    def login_pending(self, agent_key: str, slot_id: str) -> bool:
+        """Is a sign-in for this profile started and not yet harvested? True
+        for an isolated login home that still exists, and for a non-isolated
+        login whose pre-login snapshot is still held. The handlers' "login in
+        progress" guards must ask this, not ``login_home_path().is_dir()``,
+        or a CLI without isolation is switchable mid-sign-in."""
+        if self._login_isolated(agent_key):
+            return self.login_home_path(agent_key, slot_id).is_dir()
+        return self._pre_login_snapshot_path(agent_key, slot_id).is_file()
+
+    def discard_pending_login(
+        self, agent_key: str, slot_id: str, *, scope: str | None = None
+    ) -> bool:
+        """End a sign-in that was cancelled, failed or timed out. A completed
+        write is still parked (never lost), the pre-login credential is put
+        back, and the pending marker is removed. Returns True when a
+        credential was parked. Isolated logins keep their home for the
+        ordinary harvest; only the non-isolated kind needs this."""
+        if self._login_isolated(agent_key):
+            return False
+        parked = self.harvest_login_home(agent_key, slot_id, scope=scope)
+        self._pre_login_snapshot_path(agent_key, slot_id).unlink(missing_ok=True)
+        return parked
+
+    def _pre_login_snapshot(self, agent_key: str, slot_id: str) -> tuple[bool, str | None, str | None]:
+        """``(present, secret, scope)`` of the snapshot a non-isolated login
+        holds; ``present`` False when there is none."""
+        raw = _read_private_text(self._pre_login_snapshot_path(agent_key, slot_id))
+        data = _parse_json_dict(raw)
+        if data is None or "secret" not in data:
+            return False, None, None
+        secret = data.get("secret")
+        scope = data.get("scope")
+        return (
+            True,
+            secret if isinstance(secret, str) else None,
+            scope if isinstance(scope, str) else None,
+        )
+
+    def login_spawn_env(
+        self, agent_key: str, slot_id: str, *, scope: str | None = None
+    ) -> tuple[dict[str, str], list[str]]:
         """Env for spawning ``agent_key``'s login pane inside the profile's
         isolated login home: ``(env_set, env_remove)``. Creates the login home
         (0700 — it will hold fresh credentials). A CLI with no way to relocate
-        its credential file gets no isolation and no login home — an empty pair
-        means "sign in against the real home". Blocking I/O — call off the
-        event loop."""
+        its credential file gets no isolation — an empty pair means "sign in
+        against the real home" — and its login home holds only a snapshot of
+        the live credential taken now (see ``_PRE_LOGIN_SNAPSHOT_FILE``).
+        ``scope`` is the profile's provider scope for a per-provider store.
+        Blocking I/O — call off the event loop."""
         if agent_key not in _SLOT_FILES:
             raise ValueError(f"unsupported agent for CLI login homes: {agent_key!r}")
         spec = _cli_vendor_spec(agent_key)
-        if agent_key not in ("claude", "grok") and (
-            spec is None or spec.login_home_env is None
-        ):
+        if not self._login_isolated(agent_key):
             # No isolation lever exists for this CLI (kilo: only the
             # general-purpose XDG_DATA_HOME, which would relocate every
-            # XDG-aware program in the pane). The sign-in runs against the real
-            # home and the live credential it writes is captured into a slot by
-            # the ordinary capture/harvest paths. No login home is created:
-            # its mere existence is what makes the switch handler and the usage
-            # poller try to harvest one, and they have no secret file to read.
+            # XDG-aware program in the pane; copilot/cursor/antigravity keep
+            # one machine-wide store). The sign-in runs against the real home
+            # and REPLACES the live credential, so the active account's copy
+            # is snapshotted first, into a login home that exists for that
+            # snapshot alone (and so the switch handler and the poller treat
+            # the profile as "login pending" until it is harvested).
+            scope = self._require_scope(agent_key, scope)
+            live = self.read_live(agent_key, strict=True, scope=scope)
+            _write_private(
+                self._pre_login_snapshot_path(agent_key, slot_id),
+                json.dumps({"secret": live.secret, "scope": scope}),
+            )
             return {}, []
         home = self.login_home_path(agent_key, slot_id)
         secret_files.make_private_dir(home)  # the home will hold fresh secrets
@@ -939,14 +1210,37 @@ class CredentialVault:
         shim = self._refresh_grok_login_shim(Path(home_str))
         return {"HOME": canonical_path_str(shim)}, []
 
-    def login_secret_present(self, agent_key: str, slot_id: str) -> bool:
+    def login_secret_present(
+        self, agent_key: str, slot_id: str, *, scope: str | None = None
+    ) -> bool:
         """True when the isolated login home already holds the CLI's secret
         file (file-based agents only — claude's Keychain secret has no cheap
-        peek and its sign-in command exits on completion anyway)."""
+        peek and its sign-in command exits on completion anyway). For a
+        per-provider store the file must hold the profile's scope entry."""
+        if not self._login_isolated(agent_key):
+            # The CLI wrote to the live store: the login is complete once the
+            # live credential differs from the pre-login snapshot.
+            present, before, snap_scope = self._pre_login_snapshot(agent_key, slot_id)
+            if not present:
+                return False
+            try:
+                live = self.read_live(agent_key, scope=scope or snap_scope).secret
+            except CredentialVaultError:
+                return False
+            return live is not None and live != before
         segments = _LOGIN_HOME_SECRET_FILES.get(agent_key)
         if segments is None:
             return False
-        return self.login_home_path(agent_key, slot_id).joinpath(*segments).is_file()
+        path = self.login_home_path(agent_key, slot_id).joinpath(*segments)
+        if not path.is_file():
+            return False
+        scope = self._require_scope(agent_key, scope)
+        if scope is None:
+            return True
+        try:
+            return self._extract(agent_key, _read_text(path), scope) is not None
+        except CredentialVaultError:
+            return False
 
     def _login_home_is_stale(self, agent_key: str, slot_id: str, home: Path) -> bool:
         """True when the slot already holds a NEWER credential than the login
@@ -956,8 +1250,15 @@ class CredentialVault:
         claude's Keychain entries carry no mtime, so the home directory itself
         stands in for the home's secret and the slot's ``oauth-account.json``
         for the slot's."""
+        if not self._login_isolated(agent_key):
+            return False
         try:
-            if self.read_slot(agent_key, slot_id).secret is None:
+            if agent_key == "claude":
+                if self.read_slot("claude", slot_id).secret is None:
+                    return False
+            elif _read_private_text(
+                self.slot_dir(agent_key, slot_id) / _SLOT_FILES[agent_key]
+            ) is None:
                 return False
             slot = self.slot_dir(agent_key, slot_id)
             if agent_key == "claude":
@@ -972,7 +1273,9 @@ class CredentialVault:
             return False
         return home_mtime < slot_mtime
 
-    def harvest_login_home(self, agent_key: str, slot_id: str) -> bool:
+    def harvest_login_home(
+        self, agent_key: str, slot_id: str, *, scope: str | None = None
+    ) -> bool:
         """Capture a finished isolated login into the profile's slot.
 
         Overwrites the slot — the user just re-logged this account, so the
@@ -982,6 +1285,25 @@ class CredentialVault:
         is deleted; a login home without credentials yet (login still in
         progress or abandoned) is a no-op and stays for a later poll. Call
         inside ``switch_lock(agent_key)``."""
+        if not self._login_isolated(agent_key):
+            # The CLI signed in against the live store. Park what it wrote
+            # into this profile's slot and put the pre-login credential back
+            # so the account that was active stays active (and its own slot
+            # untouched); switching to the new account is a separate, normal
+            # switch. Nothing written yet = login still pending: no-op. The
+            # slot is written BEFORE the live store is touched, so a failure
+            # in between leaves the new login parked and the old one live.
+            present, before, snap_scope = self._pre_login_snapshot(agent_key, slot_id)
+            if not present:
+                return False
+            scope = self._require_scope(agent_key, scope if scope is not None else snap_scope)
+            live = self.read_live(agent_key, strict=True, scope=scope)
+            if live.secret is None or live.secret == before:
+                return False
+            self.write_slot(agent_key, slot_id, live, scope=scope)
+            self.write_live(agent_key, LiveCredentials(secret=before), scope=scope)
+            self._pre_login_snapshot_path(agent_key, slot_id).unlink(missing_ok=True)
+            return True
         home = self.login_home_path(agent_key, slot_id)
         if not home.is_dir():
             return False
@@ -1025,10 +1347,13 @@ class CredentialVault:
                     except OSError as err:
                         log.warning("stale profile-home credential cleanup failed: %s", err)
         else:
+            scope = self._require_scope(agent_key, scope)
             secret = _read_text(home.joinpath(*_LOGIN_HOME_SECRET_FILES[agent_key]))
+            if secret is not None and scope is not None:
+                secret = self._extract(agent_key, secret, scope)
             if secret is None:
                 return False
-            self.write_slot(agent_key, slot_id, LiveCredentials(secret=secret))
+            self.write_slot(agent_key, slot_id, LiveCredentials(secret=secret), scope=scope)
         shutil.rmtree(home, ignore_errors=True)
         return True
 
@@ -1155,7 +1480,9 @@ class CredentialVault:
 
     # ---- one-time promotion of legacy profile-home credentials ----
 
-    def _promote_profile_home(self, agent_key: str, profile_id: str, *, active: bool) -> None:
+    def _promote_profile_home(
+        self, agent_key: str, profile_id: str, *, active: bool, scope: str | None = None
+    ) -> None:
         """Promote the credentials a legacy profile home still holds into the
         profile's slot. Read-only towards the home — a pane spawned before the
         unification may still be running in it, so nothing in the home is ever
@@ -1184,11 +1511,16 @@ class CredentialVault:
                 "claude", profile_id, LiveCredentials(secret=home_secret, account=account)
             )
             return
-        if self.read_slot(agent_key, profile_id).secret is not None:
+        if agent_key not in _PROFILE_HOME_SECRET_FILES:
+            return  # the vendor never had legacy isolated homes
+        scope = self._require_scope(agent_key, scope)
+        if self.read_slot(agent_key, profile_id, scope=scope).secret is not None:
             return
         secret = _read_text(home.joinpath(*_PROFILE_HOME_SECRET_FILES[agent_key]))
+        if secret is not None and scope is not None:
+            secret = self._extract(agent_key, secret, scope)
         if secret is not None:
-            self.write_slot(agent_key, profile_id, LiveCredentials(secret=secret))
+            self.write_slot(agent_key, profile_id, LiveCredentials(secret=secret), scope=scope)
 
     def _claude_live_unified_marker(self) -> Path:
         return self._root / "claude" / ".live-unified"
@@ -1240,8 +1572,13 @@ class CredentialVault:
             log.warning("cannot write claude live-unification marker: %s", err)
 
     def _promote_agent_profile_homes(
-        self, agent_key: str, profile_ids: list[str], active_id: str | None
+        self,
+        agent_key: str,
+        profile_ids: list[str],
+        active_id: str | None,
+        scopes: dict[str, str | None] | None = None,
     ) -> None:
+        scopes = scopes or {}
         # One-shot per agent: re-running the promotion every startup would let
         # a legacy home copy with a far-future expiresAt (e.g. a revoked
         # long-lived token) repeatedly overwrite a slot's newer credentials.
@@ -1253,7 +1590,8 @@ class CredentialVault:
             for profile_id in profile_ids:
                 try:
                     self._promote_profile_home(
-                        agent_key, profile_id, active=profile_id == active_id
+                        agent_key, profile_id, active=profile_id == active_id,
+                        scope=scopes.get(profile_id),
                     )
                 except Exception as err:  # noqa: BLE001
                     all_promoted = False
@@ -1277,11 +1615,12 @@ class CredentialVault:
         # (e.g. its secret only ever existed in the legacy profile home) —
         # publish the freshly promoted slot so panes are signed in.
         try:
+            active_scope = scopes.get(active_id)
             if (
-                self.read_live(agent_key).secret is None
-                and self.read_slot(agent_key, active_id).secret is not None
+                self.read_live(agent_key, scope=active_scope).secret is None
+                and self.read_slot(agent_key, active_id, scope=active_scope).secret is not None
             ):
-                self.restore(agent_key, active_id)
+                self.restore(agent_key, active_id, scope=active_scope)
         except Exception as err:  # noqa: BLE001
             log.warning(
                 "restoring active %s account after promotion failed: %s",
@@ -1307,12 +1646,16 @@ class CredentialVault:
                 str(p["id"]) for p in doc["profiles"]
                 if p.get("agentKey") == agent_key and p.get("id")
             ]
+            scopes = {
+                str(p["id"]): (p.get("scope") or None) for p in doc["profiles"]
+                if p.get("agentKey") == agent_key and p.get("id")
+            }
             active_id = doc["defaults"].get(agent_key)
             try:
                 async with self.switch_lock(agent_key):
                     await vault_to_thread(
                         self._promote_agent_profile_homes,
-                        agent_key, profile_ids, active_id,
+                        agent_key, profile_ids, active_id, scopes,
                     )
             except Exception as err:  # noqa: BLE001
                 log.warning("profile-home promotion for %s failed: %s", agent_key, err)

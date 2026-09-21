@@ -35,5 +35,14 @@ export const SPEC = {
   // bracketedPaste is likewise unset: it is a property of the live PTY stream
   // and has not been measured for mcode, and the other vendors' flags were all
   // set from a real capture.
-  hint: 'generalist'
+  hint: 'generalist',
+  // Quota failover, from mcode 0.4.12's chunks (vendor-owner source read, not
+  // reproduced live): error kinds usage_limit ("LLM usage limit reached") and
+  // credits_exhausted ("LLM credits exhausted") are quota; rate_limited ("LLM
+  // provider rate limited the request") is not and is left out. The Codex-
+  // OAuth route prints "You have hit your ChatGPT usage limit". Conversations
+  // live in SQLite with no Navide reader yet, so PTY text is the only source.
+  quotaExhausted: {
+    pattern: /(LLM usage limit reached|LLM credits exhausted|hit your ChatGPT usage limit|usage_limited\(provider_quota\))/i,
+  },
 } as const satisfies AgentSpec

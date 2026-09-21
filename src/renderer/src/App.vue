@@ -284,6 +284,16 @@ import { entryBelongsToWorkspace, filterWorkspaceEntries, historyEntriesFor, his
 import { executeCommand, initKeybindingsPort, useKeybindings, registerCommand, setContext } from '@navide/plugin-ui/shared'
 import { useUiActionBus } from './composables/useUiActionBus'
 import { releaseAnnouncementId, useAnnouncements } from './composables/useAnnouncements'
+import {
+  useQuotaFailover,
+  type CommitEvent as QuotaCommitEvent,
+  type FailoverIncident,
+  type PaneReadiness,
+  type PrepareEventPane,
+  type RestartOutcome,
+} from './composables/useQuotaFailover'
+import { accountLabel } from './lib/accountLabel'
+import { plaintextTokenStoreMessage, tLogin } from './composables/useCliProfiles'
 import { useStatusBarPopover } from './composables/useStatusBarPopover'
 import navideMark from './assets/navide-mark.png'
 
@@ -522,6 +532,7 @@ function dismissWhatsNew(): void {
 }
 // Announcements centre: the status-bar feed of release notes + updater news.
 const announcements = useAnnouncements()
+const quotaFailover = useQuotaFailover()
 // Status-bar popovers (backend / announcements / clock) share one open id, so
 // opening any of them closes whichever was showing.
 const { openPopover, toggle: togglePopover, close: closePopover } = useStatusBarPopover()
@@ -1353,6 +1364,13 @@ interface ActivePane {
    *  block itself is gone, and every genuinely later turn carries a newer
    *  source stamp, so leaving it set rejects nothing that should pass. */
   usageLimitSeenAt?: number | null
+  /** Runtime-only: a quota-failover switch moved this pane's account and the
+   *  incident has not reached a verified state yet. Keeps the pipeline quota
+   *  gate closed (see paneUsageLimited) after the exhausted-account flag is
+   *  cleared, until the incident is ready or stops — a new pane's empty
+   *  `usageLimitAt` must not advance a stage on its own. Carried across a
+   *  rebuild with usageLimitSeenAt. */
+  quotaGateIncidentId?: string | null
   /** Runtime-only continue affordance — lit when this pane was brought back with
    *  `--resume`. The CLI reloads its transcript but parks at the prompt, so an
    *  interrupted task is never picked up on its own and nothing in the restore
@@ -1897,6 +1915,9 @@ const paneTurnCompleteSourceAt = new Map<string, number>()
 // MOST RECENT signal was "working" vs "turn ended" — the core of the CLI-state
 // model that replaces buffer-guessing.
 const paneLastActiveAt = new Map<string, number>()
+/** When the pane's current (or last) turn started — the first agent_active
+ *  after a turn end. Read by the quota failover settle (see noteTurnComplete). */
+const paneTurnStartedAt = new Map<string, number>()
 
 // Per-pane count of background subagents the CLI is still waiting on, as last
 // reported by a hook event, with the wall-clock time of that report. The
@@ -4729,6 +4750,13 @@ function checkPaneUsageLimit(
     }
     return
   }
+  // A quota-failover hold with no flag: the switch moved the account and the
+  // ordinary flag is gone, but the pipeline gate stays shut until a CURRENT
+  // reading of this account positively shows headroom (readingIsCurrent
+  // rejects the refreshPending figures a switch publishes first).
+  if (pane.quotaGateIncidentId && hasHeadlineHeadroom(usageFor(pane.agentKey))) {
+    pane.quotaGateIncidentId = null
+  }
   const tail = unseenTail(buf, bytes, watcher.limitBaseline, PANE_HEALTH_TAIL_CHARS)
   const hit = detectUsageLimit(pane.agentKey, tail, now)
   if (hit === QUOTA_READING_VETO) {
@@ -4778,6 +4806,21 @@ function checkPaneUsageLimit(
     pane_id: pane.id,
     at: new Date(now).toISOString(),
     resets_at: hit.resetAt === null ? null : new Date(hit.resetAt).toISOString()
+  })
+  // And the failover authority: it attributes the hit to the account the pane
+  // was on, verifies the text against the vendor's declared notice and
+  // decides — by the persisted policy — whether anything follows. The text
+  // goes along as evidence; the backend, not this poll, judges it.
+  void quotaFailover.report({
+    agentKey: pane.agentKey,
+    paneId: pane.id,
+    workspacePath: pane.workspacePath,
+    at: now,
+    resetsAt: hit.resetAt,
+    windowKind: null,
+    source: 'cli-text',
+    text: hit.message,
+    idempotencyKey: `${pane.id}:cli-text:${hit.resetAt ?? now}`,
   })
   // The badge's figure is up to CLAUDE_CLI_READ_INTERVAL old, so it would go on
   // advertising quota that is gone. One refresh per hit, never per poll: the
@@ -4855,6 +4898,19 @@ function raiseFromQuotaReading(pane: ActivePane, watcher: PaneHealthWatcher, now
   pane.usageLimitAt = now
   pane.usageLimitUntil = resumeAt
   watcher.limitProfileId = cliProfilesApi.defaultProfileId(pane.agentKey)
+  // The reading itself is the signal here (no text): the backend checks its
+  // own snapshot of the slot before trusting it.
+  const spent = exhaustedWindow(snap)
+  void quotaFailover.report({
+    agentKey: pane.agentKey,
+    paneId: pane.id,
+    workspacePath: pane.workspacePath,
+    at: now,
+    resetsAt: spent?.resetsAt ? Date.parse(spent.resetsAt) : null,
+    windowKind: spent?.kind ?? null,
+    source: 'usage-window',
+    idempotencyKey: `${pane.id}:usage-window:${snap!.fetchedAt}`,
+  })
 }
 
 /** Account switch: the quota flag belongs to the account that hit the limit,
@@ -4873,7 +4929,11 @@ function raiseFromQuotaReading(pane: ActivePane, watcher: PaneHealthWatcher, now
  *  at this instant is marked refreshPending — "not known yet", not "has
  *  quota". So the answer is left to the health poll, which re-raises the flag
  *  from that reading within one tick once it lands. One writer, one clock. */
-function clearPaneUsageLimits(agentKey: string, newDefaultId: string | null): void {
+function clearPaneUsageLimits(
+  agentKey: string,
+  newDefaultId: string | null,
+  opts: { resumeLoop: boolean } = { resumeLoop: true },
+): void {
   for (const pane of panes.value) {
     if (pane.agentKey !== agentKey) continue
     if (pane.usageLimitAt == null) {
@@ -4888,7 +4948,7 @@ function clearPaneUsageLimits(agentKey: string, newDefaultId: string | null): vo
       }
       continue
     }
-    clearPaneUsageLimit(pane, 'account-switch')
+    clearPaneUsageLimit(pane, 'account-switch', true, opts)
   }
 }
 
@@ -4906,7 +4966,12 @@ function clearPaneUsageLimits(agentKey: string, newDefaultId: string | null): vo
  *  own guard in that case — while it says there is quota, detectUsageLimit
  *  overrules any banner anyway, and when it says otherwise the flag is
  *  supposed to come back. */
-function clearPaneUsageLimit(pane: ActivePane, logLabel: string, remember = true): void {
+function clearPaneUsageLimit(
+  pane: ActivePane,
+  logLabel: string,
+  remember = true,
+  opts: { resumeLoop: boolean } = { resumeLoop: true },
+): void {
   const waitingOnThisLimit =
     pane.loopActive && pane.loopWaitUntil != null && pane.loopWaitUntil === pane.usageLimitUntil
   const w = paneHealthWatchers.get(pane.id)
@@ -4919,13 +4984,23 @@ function clearPaneUsageLimit(pane: ActivePane, logLabel: string, remember = true
   }
   pane.usageLimitAt = null
   pane.usageLimitUntil = null
+  // A quota-failover switch never resumes the loop on the user's behalf: the
+  // account moved, but whether the work should go on is theirs to say. The
+  // parked loop keeps its wait and the pane offers the explicit continue.
+  if (waitingOnThisLimit && !opts.resumeLoop) {
+    pane.resumeContinueAvailable = true
+    return
+  }
   if (waitingOnThisLimit) void fireLoopResume(pane.id, logLabel)
 }
 
 /** Quota badge dismissed by the user (TerminalPane already confirmed). */
 function dismissPaneUsageLimit(paneId: string): void {
   const pane = panes.value.find((p) => p.id === paneId)
-  if (!pane || pane.usageLimitAt == null) return
+  if (!pane) return
+  // The user's explicit judgement also lifts a quota-failover hold.
+  pane.quotaGateIncidentId = null
+  if (pane.usageLimitAt == null) return
   clearPaneUsageLimit(pane, 'usage-limit-dismiss')
 }
 
@@ -5291,7 +5366,8 @@ function paneAlive(paneId: string): boolean {
  *  place the block ends. Being at most one poll (5s) late is the price, and it
  *  is the cheaper one. */
 function paneUsageLimited(paneId: string): boolean {
-  return panes.value.find((p) => p.id === paneId)?.usageLimitAt != null
+  const pane = panes.value.find((p) => p.id === paneId)
+  return pane?.usageLimitAt != null || pane?.quotaGateIncidentId != null
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -5827,6 +5903,10 @@ interface SpawnInternal {
   stageIndex?: number
   /** Restore mode label for the agent history badge. */
   restoreMode?: 'memory-resume' | 'fresh'
+  /** Serialized scrollback of the pane this one replaces, replayed into the
+   *  new xterm before its PTY starts (see rebuildPaneViaResume's
+   *  preserveScrollback). Display only. */
+  scrollbackHandoff?: string
   sessionHomeId?: string
   /** CLI account pin carried through a restore: the profile_id this pane was
    *  spawned on ("__default__" = unmanaged real home). Sent to the backend so
@@ -6203,6 +6283,7 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
       isResume: opts.isResume,
       restoreMode: opts.restoreMode,
       skipReattach: opts.restoreMode === 'fresh',
+      replayScrollback: opts.scrollbackHandoff,
       loginProfileId: opts.loginProfileId,
       isLogin: opts.isLogin,
     })
@@ -7026,6 +7107,15 @@ async function rebuildPaneViaResume(
      *  button. Off for a user-invoked rebuild: that one is already an action,
      *  and its pane does not need a second one on top. */
     offerContinue?: boolean
+    /** Told the replacement pane's id once the swap has happened — the only
+     *  moment a caller can learn it, since the old id retires here. */
+    onReplaced?: (newPaneId: string) => void
+    /** Carry the pane's scrollback into the replacement (quota-failover
+     *  restart: the plan keeps the pane's history through the switch). The
+     *  old xterm is serialized right before the kill and replayed into the
+     *  new one before its PTY starts. Off for an ordinary rebuild, whose
+     *  history the CLI's own resume reprints. */
+    preserveScrollback?: boolean
   }
 ): Promise<RebuildFailure | undefined> {
   const pane = panes.value.find((p) => p.id === paneId)
@@ -7165,8 +7255,25 @@ async function rebuildPaneViaResume(
       model: pane.model,
       effort: pane.effort,
       muted: isPaneMuted(paneId),
+      // The quota gate's anchors follow the conversation, not the pane id: a
+      // replacement pane with a blank usageLimitSeenAt would let a pipeline
+      // stage advance on the very turn that ran out (see completion.ts).
+      usageLimitSeenAt: pane.usageLimitSeenAt ?? null,
+      quotaGateIncidentId: pane.quotaGateIncidentId ?? null,
     }
     try { localStorage.removeItem(`terminal-scroll:${sessionId}`) } catch {}
+    // Taken from the live xterm now, not from the stored snapshot: the exit
+    // that follows the kill discards that snapshot, and its periodic save can
+    // be a minute behind. A string in memory survives both. The capture waits
+    // for xterm's parser to drain, so the pane is re-judged afterwards: work
+    // or typing that began during the wait means this is no longer a safe
+    // moment to stop it.
+    let scrollbackHandoff = ''
+    if (opts?.preserveScrollback) {
+      const serialize = paneRef?.serializeScrollback as (() => Promise<string>) | undefined
+      scrollbackHandoff = (await serialize?.()) ?? ''
+      if (messagingHoldKey(paneId) !== null) return 'busy'
+    }
     // Preserve layout order: keep the old pane as a dummy to avoid layout
     // reflow, then swap the replacement pane into its slot.
     await onKill(paneId, { markRemoved: false, force: true, keepInList: true })
@@ -7192,6 +7299,7 @@ async function rebuildPaneViaResume(
       model: snap.model,
       effort: snap.effort,
       replacePaneId: paneId, // Atomic swap to prevent layout shift
+      scrollbackHandoff: scrollbackHandoff || undefined,
     })
     if (newId) {
       // A rebuild retires the old pane id exactly like a restore does, so the
@@ -7200,10 +7308,13 @@ async function rebuildPaneViaResume(
       rekeyLineage(paneId, newId)
       setPaneMuted(paneId, false)
       if (snap.muted) setPaneMuted(newId, true)
-      if (opts?.offerContinue) {
-        const revived = panes.value.find((p) => p.id === newId)
-        if (revived) revived.resumeContinueAvailable = true
+      const revived = panes.value.find((p) => p.id === newId)
+      if (revived) {
+        if (snap.usageLimitSeenAt != null) revived.usageLimitSeenAt = snap.usageLimitSeenAt
+        if (snap.quotaGateIncidentId) revived.quotaGateIncidentId = snap.quotaGateIncidentId
+        if (opts?.offerContinue) revived.resumeContinueAvailable = true
       }
+      opts?.onReplaced?.(newId)
       if (snap.origin !== 'pipeline') {
         await sendQuiet<ProjectPayload>('manual_pane.spawn', {
           workspace_path: snap.workspacePath,
@@ -7301,6 +7412,7 @@ provide(
   createCliAccountSwitchHandler(cliProfilesApi, {
     confirm: (message, opts) => notifyRestore.confirm(message, opts),
     agentLabel: (agentKey) => agentSpecs.find((s) => s.agentKey === agentKey)?.label ?? agentKey,
+    accountLabel: (agentKey, profileId) => accountLabel(cliProfilesApi, agentKey, profileId, i18n.global.t),
     // The account we just switched to cannot authenticate. It is the active
     // account now, so this is a live login — the poller harvests it back into
     // the slot. The toast says why a login pane appeared on its own, and an
@@ -7861,6 +7973,162 @@ const {
 // Feed the announcements centre from this one instance — useUpdater is not a
 // singleton, so calling it again there would add another IPC subscription.
 announcements.setUpdateSource(updateState)
+
+// ── Quota-exhaustion failover: this window's answers to the backend ─────────
+// The backend runs the switch; these hooks are what it asks this window for:
+// is each of my panes safe to stop (and on which session can it come back),
+// restart the listed ones through the same resume path the rebuild button
+// uses, and label accounts for the announcement. Nothing here types into a
+// pane: a switched pane comes back parked at its prompt with the continue
+// button lit, exactly like a restore.
+async function quotaPaneReadiness(paneId: string, opts: { needsResume: boolean }): Promise<PaneReadiness> {
+  const pane = panes.value.find((p) => p.id === paneId)
+  if (!pane?.realized) return { ready: false, reason: 'refused' }
+  const ref = paneRefs[paneId]
+  const status = ref?.displayStatus as string | undefined
+  // Parked on the user — a permission box or a question — is never "idle":
+  // stopping the pane would drop what it is waiting to hear.
+  if (status === 'awaiting') return { ready: false, reason: 'permission-pending' }
+  const hold = messagingHoldKey(paneId)
+  if (hold === 'gone') return { ready: false, reason: 'refused' }
+  if (hold === 'composer' || (hold === 'typing' && (ref?.hasDraft as boolean | undefined))) {
+    return { ready: false, reason: 'input-pending' }
+  }
+  if (hold === 'not-ready') {
+    // Not running and not idle: a PTY still starting can be waited for; an
+    // exited or errored one has nothing to switch.
+    return status === 'starting' ? { ready: false, reason: 'busy' } : { ready: false, reason: 'refused' }
+  }
+  if (hold !== null) return { ready: false, reason: 'busy' }
+  const sessionId = paneResumeSessionId(pane) || null
+  if (opts.needsResume) {
+    // "Ready" for a restart switch is a promise that the pane can be brought
+    // back on its conversation, so it runs the SAME preflight the rebuild
+    // will: a vendor that resumes by id, a pinned session the rebuild gate
+    // accepts, and that session actually present on disk right now. A pane
+    // that would fail the rebuild says so here, before any credential moves.
+    const spec = agentSpecs.find((s) => s.agentKey === pane.agentKey)
+    if (!spec?.resumeArgs) return { ready: false, reason: 'not-resumable' }
+    if (!sessionId) return { ready: false, reason: 'no-session' }
+    if (!paneCanRebuild(pane)) return { ready: false, reason: 'not-resumable' }
+    const onDisk = await canResumeSession(pane.agentKey, pane.workspacePath, sessionId)
+    if (onDisk !== true) return { ready: false, reason: onDisk === false ? 'no-session' : 'not-resumable' }
+    // The probe took time; the pane may have picked up work meanwhile.
+    if (messagingHoldKey(paneId) !== null) return { ready: false, reason: 'busy' }
+  }
+  return { ready: true, sessionId, resumable: !!sessionId }
+}
+
+async function quotaRestartPane(pane: PrepareEventPane): Promise<RestartOutcome> {
+  let newPaneId: string | null = null
+  const failure = await rebuildPaneViaResume(pane.paneId, {
+    suppressBusyToast: true,
+    offerContinue: true,
+    preserveScrollback: true,
+    onReplaced: (id) => { newPaneId = id },
+  })
+  if (failure) return { outcome: 'failed', reason: failure }
+  const id = newPaneId ?? pane.paneId
+  const revived = panes.value.find((p) => p.id === id)
+  return {
+    outcome: 'resumed',
+    paneId: id,
+    termId: (paneRefs[id]?.sessionId as string | undefined) ?? null,
+    sessionId: revived ? paneResumeSessionId(revived) || null : null,
+  }
+}
+
+async function quotaOpenNewConversation(pane: PrepareEventPane): Promise<RestartOutcome> {
+  // A fresh conversation the user agreed to — NOT the old pane's task. It
+  // keeps the CLI, model and effort so the account is used the same way, but
+  // no role, no stage and no kickoff: nothing from the interrupted work is
+  // typed into it, and the old pane stays where it was with its pipeline
+  // affiliation intact.
+  const old = panes.value.find((p) => p.id === pane.paneId)
+  const id = await onManualSpawn({
+    agentKey: pane.agentKey,
+    roleKey: '',
+    stageId: '',
+    model: old?.model ?? '',
+    effort: old?.effort ?? '',
+    workspacePath: pane.workspacePath || old?.workspacePath || currentWorkspace.value,
+  } as SpawnPayload)
+  if (!id) return { outcome: 'failed', reason: 'spawn-failed' }
+  return { outcome: 'new-conversation', paneId: id, termId: (paneRefs[id]?.sessionId as string | undefined) ?? null }
+}
+
+quotaFailover.initQuotaFailover(backend, {
+  ownsPane: (paneId) => panes.value.some((p) => p.id === paneId && p.realized),
+  paneReadiness: quotaPaneReadiness,
+  restartPane: quotaRestartPane,
+  openNewConversation: quotaOpenNewConversation,
+  confirmNewConversation: (tx) =>
+    notifyRestore.confirm(
+      i18n.global.t('announce.quota.confirm-new-conversation-body', {
+        agent: agentSpecs.find((s) => s.agentKey === tx.agentKey)?.label ?? tx.agentKey,
+        target: accountLabel(cliProfilesApi, tx.agentKey, tx.toSlotId === '__default__' ? null : tx.toSlotId, i18n.global.t),
+      }),
+      {
+        title: i18n.global.t('announce.quota.confirm-new-conversation-title'),
+        confirmText: i18n.global.t('announce.quota.confirm-new-conversation-confirm'),
+        cancelText: i18n.global.t('announce.quota.confirm-new-conversation-cancel'),
+      },
+    ),
+  confirmLiveIsCurrent: (agentKey, currentSlotId, targetSlotId) => {
+    const agent = agentSpecs.find((s) => s.agentKey === agentKey)?.label ?? agentKey
+    const label = (slotId: string): string =>
+      accountLabel(cliProfilesApi, agentKey, slotId === '__default__' ? null : slotId, i18n.global.t)
+    const current = label(currentSlotId)
+    return notifyRestore.confirm(
+      tLogin('cli-account.live-drift-confirm-body', { agent, current, target: label(targetSlotId) }),
+      {
+        title: tLogin('cli-account.live-drift-confirm-title'),
+        confirmText: tLogin('cli-account.live-drift-confirm-confirm', { current }),
+        cancelText: tLogin('cli-account.live-drift-confirm-cancel'),
+      },
+    )
+  },
+  paneTermId: (paneId) => (paneRefs[paneId]?.sessionId as string | undefined) ?? null,
+  paneSessionId: (paneId) => {
+    const pane = panes.value.find((p) => p.id === paneId)
+    return pane ? paneResumeSessionId(pane) || null : null
+  },
+  agentLabel: (agentKey) => agentSpecs.find((s) => s.agentKey === agentKey)?.label ?? agentKey,
+  slotLabel: (agentKey, slotId) =>
+    accountLabel(cliProfilesApi, agentKey, slotId === '__default__' ? null : slotId, i18n.global.t),
+  onSwitchCommitted: (ev: QuotaCommitEvent) => {
+    // Hold the pipeline quota gate on the affected panes until the incident
+    // is verified (or stops): the exhausted-account flag is cleared by the
+    // cli_profiles.changed that accompanies the commit, and without this a
+    // replacement pane's blank flag would read as "quota back".
+    for (const listed of ev.panes) {
+      const pane = panes.value.find((p) => p.id === listed.paneId)
+      if (pane) pane.quotaGateIncidentId = ev.incidentId
+    }
+  },
+  onIncidentReady: (incident: FailoverIncident) => releaseQuotaGate(incident.id),
+  onSwitchRefused: (code, message) => {
+    notifyRestore.toast(
+      plaintextTokenStoreMessage(message) ??
+        i18n.global.t('announce.quota.switch-refused', { code, message: message || code }),
+      { type: 'error' },
+    )
+  },
+})
+
+/** Lift the quota gate hold for every pane of an incident. The barrier that
+ *  remains is usageLimitSeenAt: a stage still needs a turn that ENDED after
+ *  the block was seen (completion.ts quotaTurnIsFresh). */
+function releaseQuotaGate(incidentId: string): void {
+  for (const pane of panes.value) {
+    if (pane.quotaGateIncidentId === incidentId) pane.quotaGateIncidentId = null
+  }
+}
+// A stopped incident does NOT release the hold: "switched, quota
+// unconfirmed" or "the new account ran out too" is not a recovery. The hold
+// lifts on evidence only — the incident reaching `ready`, a current reading
+// of the pane's account with headroom (checkPaneUsageLimit), or the user
+// dismissing the pane's quota badge (dismissPaneUsageLimit).
 // A run of failed background checks is not an update status of its own — it
 // rides alongside whatever the status is. Surface it in the status bar only
 // once it clears the user's threshold, and only if they asked to be told.
@@ -12083,6 +12351,34 @@ backend.on('agent.activity', (raw) => {
     }
     // Badge: authoritative turn end → drop the RUNNING hysteresis latch now.
     paneRefs[ev.pane_id]?.markTurnComplete?.()
+    // Quota failover: a vendor whose log names the turn's outcome (droid's
+    // agent_turn_outcome.reason) reports exhaustion as a structured signal,
+    // not text. Same authority, same verification as the pane text path.
+    const turnPane = panes.value.find((p) => p.id === ev.pane_id)
+    const turnDetail = turnPane ? agentSpecs.find((s) => s.agentKey === turnPane.agentKey)?.quotaExhausted?.turnDetail : undefined
+    if (turnPane && turnDetail && ev.detail === turnDetail) {
+      void quotaFailover.report({
+        agentKey: turnPane.agentKey,
+        paneId: turnPane.id,
+        workspacePath: turnPane.workspacePath,
+        at: Date.now(),
+        resetsAt: null,
+        windowKind: null,
+        source: 'cli-text',
+        text: ev.detail,
+        idempotencyKey: `${turnPane.id}:turn-detail:${ev.timestamp ?? Date.now()}`,
+      })
+    }
+    // Quota failover: a whole turn under the new account is the recovery
+    // evidence for a switched pane (the composable knows whether this pane is
+    // part of an unsettled transaction; everyone else is a no-op).
+    if (!ev.superseded) {
+      quotaFailover.noteTurnComplete(
+        ev.pane_id,
+        (paneRefs[ev.pane_id]?.sessionId as string | undefined) ?? null,
+        paneTurnStartedAt.get(ev.pane_id) ?? null,
+      )
+    }
     // Delivered-pending fallback for readers without user text. Never for one
     // that has it: Claude ends the turn BEFORE dequeuing, so the user record
     // itself is the consume signal (agent_active branch below).
@@ -12128,6 +12424,12 @@ backend.on('agent.activity', (raw) => {
       }
     }
   } else if (ev.event_type === 'agent_active') {
+    // First activity after the last turn end = this turn's start. The quota
+    // failover's settle needs it: a turn that began under the old account and
+    // finished under the new one is the old account's work.
+    if ((paneLastActiveAt.get(ev.pane_id) ?? 0) <= (paneTurnCompleteAt.get(ev.pane_id) ?? 0)) {
+      paneTurnStartedAt.set(ev.pane_id, Date.now())
+    }
     paneLastActiveAt.set(ev.pane_id, Date.now())
     // The loop reads a stricter clock; see activityMeansWorking for why.
     if (activityMeansWorking(ev.detail ?? '')) paneLastWorkingAt.set(ev.pane_id, Date.now())
@@ -12691,7 +12993,12 @@ backend.on('cli_profiles.changed', (raw) => {
   // Any account switch, quiet or forced, moves this agent's panes onto
   // quota that is not the exhausted one (see clearPaneUsageLimits).
   if (ev?.reason === 'set_default' && ev.agent_key) {
-    clearPaneUsageLimits(ev.agent_key, ev.defaults?.[ev.agent_key] ?? null)
+    // A switch the quota-failover transaction made clears the flag but must
+    // not resume a parked loop or replay anything (the plan's no-auto-continue
+    // rule); a manual switch keeps the behaviour it always had.
+    clearPaneUsageLimits(ev.agent_key, ev.defaults?.[ev.agent_key] ?? null, {
+      resumeLoop: !quotaFailover.agentHasActiveTransaction(ev.agent_key),
+    })
   }
   const restartKey = forcedRestartAgentKey(ev)
   if (restartKey) {
@@ -19553,6 +19860,7 @@ function paneIsCommander(p: ActivePane): boolean {
       @read="announcements.markRead($event)"
       @download="startUpdateDownload()"
       @install="onUpdateBadgeClick()"
+      @quota-action="(action) => void quotaFailover.actOn(action)"
     />
 
     <!-- Clock popover -->

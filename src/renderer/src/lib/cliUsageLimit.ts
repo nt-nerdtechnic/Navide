@@ -12,6 +12,7 @@ import {
   matchSessionLimit,
   parseLimitReset
 } from './loopPrompt'
+import { AGENT_SPECS } from '@navide/plugin-shell'
 import { exhaustedWindow, hasHeadlineHeadroom, usageFor } from '../composables/useUsage'
 
 /** The limit announcement stripped of its reset clock, e.g. a wrapped or
@@ -145,6 +146,16 @@ export function detectUsageLimit(
       resumeAt: parsed ?? usageResumeAt(agentKey, now),
       resetAt: parsed === null ? null : parsed - LIMIT_RESET_BUFFER_MS
     }
+  }
+  // The vendor's own declared notice (agents/<key>.ts quotaExhausted): its
+  // exact words, so it is trusted like the clocked sentence — and vetoed by
+  // the same positive reading. It names no window, so the reset comes from
+  // the reading or stays unknown.
+  const declared = AGENT_SPECS.find((s) => s.agentKey === agentKey)?.quotaExhausted?.pattern
+  const own = declared ? declared.exec(tail.replace(/\s+/g, ' ')) : null
+  if (own) {
+    if (hasHeadlineHeadroom(usageFor(agentKey))) return QUOTA_READING_VETO
+    return { message: own[0], resumeAt: usageResumeAt(agentKey, now), resetAt: null }
   }
   const bare = BARE_LIMIT_RE.exec(tail.replace(/\s+/g, ' '))
   if (!bare || exhaustedWindow(usageFor(agentKey)) === undefined) return null

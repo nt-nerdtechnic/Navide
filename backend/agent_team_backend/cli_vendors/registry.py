@@ -59,6 +59,57 @@ def vendor(key: str) -> VendorSpec | None:
     return VENDORS.get(key)
 
 
+def account_capability(key: str) -> dict | None:
+    """JSON-safe account-switch capability of one vendor, or None for an
+    unknown key. ``supported`` is False when the spec declares no
+    ``account_switch`` — the fail-closed answer the transaction and the UI
+    act on; the other fields are then their empty defaults."""
+    spec = VENDORS.get(key)
+    if spec is None:
+        return None
+    switch = spec.account_switch
+    if switch is None:
+        return {
+            "agentKey": key,
+            "supported": False,
+            "authScope": None,
+            "method": None,
+            "store": None,
+            "evidence": None,
+            "verifiedVersion": "",
+            "platforms": [],
+            "scopes": [],
+            "hasExpiry": False,
+            "hasIdentity": False,
+            "resume": "none" if not spec.supports_session_resume else "native",
+            "todo": "no account-switch adapter",
+            "loginCommand": spec.login_command_args is not None,
+        }
+    return {
+        "agentKey": key,
+        "supported": True,
+        "authScope": switch.auth_scope,
+        "method": switch.method,
+        "store": switch.store,
+        "evidence": switch.evidence,
+        "verifiedVersion": switch.verified_version,
+        "platforms": list(switch.platforms),
+        "scopes": list(switch.scopes),
+        "hasExpiry": switch.expires_at is not None,
+        "hasIdentity": spec.identity_from_secret is not None or key == "claude",
+        "resume": switch.resume,
+        "todo": switch.todo,
+        "loginCommand": spec.login_command_args is not None,
+    }
+
+
+def account_capabilities() -> dict[str, dict]:
+    """``account_capability`` for every registered vendor, keyed by agent key
+    in registry order — every key is present, unsupported ones included, so a
+    consumer never has to guess what an absent entry means."""
+    return {key: account_capability(key) for key in VENDORS}
+
+
 _PROXY_ENV_VARS = (
     "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
     "http_proxy", "https_proxy", "all_proxy",

@@ -129,7 +129,7 @@ describe('CliAgentsHelp', () => {
       'Inside the CLI',
       'grok login',
       'kimi login',
-      'Inside the CLI',
+      'opencode auth login',
       'Inside the CLI',
       'kilo auth login',
       'Inside the CLI',
@@ -142,7 +142,7 @@ describe('CliAgentsHelp', () => {
     ])
     // A real command is typeset as one; the fallback is prose, not a command.
     expect(cells.map((c) => c.find('code').exists())).toEqual([
-      true, true, false, true, true, false, false, true, false, true, false, false, true, false,
+      true, true, false, true, true, true, false, true, false, true, false, false, true, false,
       true,
     ])
 

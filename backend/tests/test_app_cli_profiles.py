@@ -130,7 +130,9 @@ class FakeVault:
             self._locks[agent_key] = lock
         return lock
 
-    def switch(self, agent_key: str, from_slot_id: str, to_slot_id: str) -> None:
+    def switch(
+        self, agent_key: str, from_slot_id: str, to_slot_id: str, *, scope: str | None = None
+    ) -> None:
         self.switch_calls.append((agent_key, from_slot_id, to_slot_id))
         if self.fail:
             raise RuntimeError("swap boom")
@@ -138,7 +140,7 @@ class FakeVault:
     def login_home_path(self, agent_key: str, slot_id: str) -> Path:
         return (self.root or Path("/nonexistent")) / agent_key / slot_id / "login-home"
 
-    def harvest_login_home(self, agent_key: str, slot_id: str) -> bool:
+    def harvest_login_home(self, agent_key: str, slot_id: str, *, scope: str | None = None) -> bool:
         # Mirrors CredentialVault: a home with a secret is captured + removed,
         # a secretless home (login still pending/abandoned) is a no-op.
         self.login_harvests.append((agent_key, slot_id))
@@ -289,12 +291,11 @@ async def test_cli_profiles_create_and_list(
 
     listing = session.websocket.sent[1]  # type: ignore[attr-defined]
     assert listing["payload"]["profiles"] == [profile]
-    assert listing["payload"]["defaults"] == {
-        "claude": None, "codex": None, "kimi": None, "grok": None, "kilo": None,
-    }
-    assert listing["payload"]["supported_agents"] == [
-        "claude", "codex", "kimi", "grok", "kilo",
-    ]
+    from agent_team_backend.profiles_store import SUPPORTED_AGENT_KEYS
+
+    assert listing["payload"]["defaults"] == {key: None for key in SUPPORTED_AGENT_KEYS}
+    assert listing["payload"]["supported_agents"] == list(SUPPORTED_AGENT_KEYS)
+    assert listing["payload"]["supported_agents"][:4] == ["claude", "codex", "kimi", "grok"]
 
 
 async def test_cli_profiles_list_includes_identities(
@@ -437,7 +438,7 @@ async def test_cli_profiles_create_rejects_unsupported_agent(
     await app.handle_message(session, {
         "id": "c2",
         "type": "cli_profiles.create",
-        "payload": {"agent_key": "antigravity", "name": "X"},
+        "payload": {"agent_key": "aider", "name": "X"},
     })
 
     response = session.websocket.sent[0]  # type: ignore[attr-defined]
@@ -479,9 +480,19 @@ async def test_cli_profiles_rename_delete_set_default_flow(
         "payload": {"id": profile["id"]},
     })
     assert session.websocket.sent[3]["payload"]["profiles"] == []  # type: ignore[attr-defined]
-    assert [e["payload"]["reason"] for e in events] == [
+    # Every mutation announces itself once, in order. A completed switch also
+    # tells the failover authority the user took over (epoch moves, pending
+    # automatic proposals are withdrawn) — that is the only other event.
+    assert [e["type"] for e in events] == [
+        "cli_profiles.changed", "cli_profiles.changed", "quota_failover.changed",
+        "cli_profiles.changed", "quota_failover.changed", "cli_profiles.changed",
+    ]
+    profiles_changed = [e for e in events if e["type"] == "cli_profiles.changed"]
+    assert [e["payload"]["reason"] for e in profiles_changed] == [
         "rename", "set_default", "set_default", "delete",
     ]
+    failover = [e["payload"] for e in events if e["type"] == "quota_failover.changed"]
+    assert [f["epochs"]["kimi"] for f in failover] == [1, 2]
 
 
 async def test_cli_profiles_delete_default_clears_credentials(
@@ -547,7 +558,14 @@ async def test_set_default_broadcast_carries_agent_key_and_forced(
         "payload": {"id": profile["id"], "name": "Renamed"},
     })
 
-    plain, forced, renamed = (e["payload"] for e in events)
+    assert [e["type"] for e in events] == [
+        "cli_profiles.changed", "quota_failover.changed",
+        "cli_profiles.changed", "quota_failover.changed",
+        "cli_profiles.changed",
+    ]
+    plain, forced, renamed = (
+        e["payload"] for e in events if e["type"] == "cli_profiles.changed"
+    )
     assert (plain["reason"], plain["agent_key"], plain["forced"]) == (
         "set_default", "kimi", False,
     )
@@ -1135,9 +1153,14 @@ async def test_set_default_harvests_pending_login_before_restore(
     harvested_before_swap: list[bool] = []
     orig_switch = vault.switch
 
-    def switch_spy(*args: str) -> None:
+    scopes_seen: list[str | None] = []
+
+    def switch_spy(*args: str, scope: str | None = None) -> None:
         harvested_before_swap.append(not home.exists())
-        orig_switch(*args)
+        # claude swaps a whole credential, so the handler forwards no
+        # provider scope; a per-provider vendor would get its profile's.
+        scopes_seen.append(scope)
+        orig_switch(*args, scope=scope)
 
     vault.switch = switch_spy  # type: ignore[method-assign]
 
@@ -1152,6 +1175,7 @@ async def test_set_default_harvests_pending_login_before_restore(
     assert vault.login_harvests == [("claude", profile["id"])]
     assert vault.switch_calls == [("claude", "__default__", profile["id"])]
     assert harvested_before_swap == [True]
+    assert scopes_seen == [None]
 
 
 async def test_set_default_swap_failure_keeps_old_default(
