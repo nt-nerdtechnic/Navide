@@ -4805,7 +4805,7 @@ export class FrontendPluginManager {
             if (source === 'host') {
               const gitSettings = Object.fromEntries(
                 Object.entries(rawSettings as Record<string, unknown>)
-                  .filter(([key]) => GIT_HOST_READ_ONLY_KEYS.includes(key as typeof GIT_HOST_READ_ONLY_KEYS[number]))
+                  .filter(([key]) => GIT_HOST_READ_ONLY_KEYS.includes(key as typeof GIT_HOST_READ_ONLY_KEYS[number]) && (isV2Ui || key !== 'agent-team:language'))
               )
               if (Object.keys(gitSettings).length > 0) {
                 this.emitToInstance(plugin.instanceId, event, { source, settings: gitSettings })
@@ -4842,7 +4842,7 @@ export class FrontendPluginManager {
           } else if (plugin.id === PLANS_PLUGIN_ID && (isV2Ui || isLegacyPlans)) {
             if (source === 'host') {
               const language = (rawSettings as Record<string, unknown>)['agent-team:language']
-              if (language === 'zh-TW' || language === 'en-US') {
+              if (language === 'zh-TW' || language === 'en-US' || language === 'ja-JP') {
                 this.emitToInstance(plugin.instanceId, event, {
                   source: 'host',
                   settings: { 'agent-team:language': language },

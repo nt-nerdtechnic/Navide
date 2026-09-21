@@ -7,6 +7,11 @@ import {
 } from '../hostLocale'
 
 describe('composePluginContributionQuery', () => {
+  it.each(['navide.git.left', 'navide.plans.window', 'navide.mini-ide.window'])('preserves Japanese for %s', (contributionKey) => {
+    const params = new URLSearchParams(composePluginContributionQuery({ contributionKey, workspacePath: '/workspace', theme: 'dark', locale: 'ja-JP' }))
+    expect(params.get('locale')).toBe('ja-JP')
+  })
+
   it('identifies an embedded Git contribution as the v2 left view with validated locale', () => {
     expect(composePluginContributionQuery({
       contributionKey: 'navide.git.left',

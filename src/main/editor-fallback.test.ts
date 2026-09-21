@@ -1,4 +1,6 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { createSourceFile, isFunctionDeclaration, ScriptTarget, transpileModule } from 'typescript'
 import { join, resolve } from 'node:path'
 import { classifyEditorOpen, resolveExternalOpenTarget } from './editor-fallback'
 
@@ -118,5 +120,25 @@ describe('resolveExternalOpenTarget – out-of-workspace opens (file_ws as the r
     // request into the diff/bare branches.
     expect(classifyEditorOpen({ filepath: 'notes.txt', file_ws: external })).toBe('file')
     expect(classifyEditorOpen({ file_ws: external })).toBe('bare')
+  })
+})
+
+
+describe('Host Mini-IDE locale authority', () => {
+  it('uses the current Host locale for initial and repeated editor opens, overriding caller locale', async () => {
+    // Execute the production sender without booting Electron's process lifecycle.
+    const source = createSourceFile('index.ts', readFileSync(resolve('src/main/index.ts'), 'utf8'), ScriptTarget.Latest, true)
+    const sender = source.statements.find(statement => isFunctionDeclaration(statement) && statement.name?.text === 'openMiniIdeEditor')!
+    expect(sender).toBeDefined()
+    const openMiniIdePluginView = vi.fn(() => true)
+    let hostLocale = 'ja-JP'
+    const createSender = new Function('backend', 'frontendPluginManager', 'openMiniIdePluginView', 'currentUiLocale', 'currentUiTheme',
+      transpileModule(sender.getText(source), { compilerOptions: { target: ScriptTarget.ES2022 } }).outputText + '\nreturn openMiniIdeEditor')
+    const openEditor = createSender({ host: '127.0.0.1', port: 7000 }, { peekWorkspaceDisplayName: async () => 'Demo' }, openMiniIdePluginView, () => hostLocale, () => 'dark')
+    await expect(openEditor(null, { workspace_path: '/ws', filepath: 'a.ts', locale: 'en-US' })).resolves.toBe(true)
+    expect(openMiniIdePluginView).toHaveBeenLastCalledWith('/ws', 'http://127.0.0.1:7000', { filepath: 'a.ts', locale: 'ja-JP' }, 'dark', 'Demo')
+    hostLocale = 'en-US'
+    await openEditor(null, { workspace_path: '/ws', filepath: 'b.ts', locale: 'ja-JP' })
+    expect(openMiniIdePluginView).toHaveBeenLastCalledWith('/ws', 'http://127.0.0.1:7000', { filepath: 'b.ts', locale: 'en-US' }, 'dark', 'Demo')
   })
 })

@@ -5316,12 +5316,12 @@ describe('mini-IDE dedicated window (openMiniIdePluginView)', () => {
   // These tests exercise the module-level singleton + dedicated-window path, so
   // each test must close the live window (module state resets via 'closed').
   beforeEach(() => {
-    frontendPluginManager.registerBuiltin({
+    frontendPluginManager.registerDescriptor({
       id: MINI_IDE_PLUGIN_ID,
-      requires: [],
+      requires: JSON.parse(readFileSync(resolve('src/renderer/plugins/mini-ide/plugin.json'), 'utf8')).requires,
       devUrl: '',
       entryFile: '/plugins/mini-ide/index.html',
-    })
+    }, { builtin: true })
   })
 
   afterEach(() => {
@@ -5359,6 +5359,32 @@ describe('mini-IDE dedicated window (openMiniIdePluginView)', () => {
     const view = lastView()
     expect(win.children).toContain(view)
     expect(view.bounds).toEqual({ x: 0, y: 0, width: 1000, height: 700 })
+  })
+
+  it('delivers Host language changes to an already open Mini-IDE through its shipped ui capability', () => {
+    openMiniIdePluginView('/ws', '', { locale: 'en-US' })
+    const view = lastView()
+    view.webContents.emit('did-finish-load')
+    view.webContents.sent.length = 0
+    for (const locale of ['ja-JP', 'en-US']) {
+      frontendPluginManager.dispatchHostSettingsChanged({ settings: { 'agent-team:language': locale } })
+      expect(view.webContents.sent.at(-1)).toEqual({
+        channel: 'plugin:cap:event',
+        args: [{ type: 'ui.settings_changed', data: { source: 'host', settings: { 'agent-team:language': locale } } }],
+      })
+    }
+  })
+
+  it('passes Japanese into the initial editor query and reuses the view for language changes', () => {
+    openMiniIdePluginView('/ws', '', { locale: 'ja-JP', filepath: 'a.ts' }, 'light')
+    const view = lastView()
+    expect(view.webContents.loads[0]).toContain('locale=ja-JP')
+    view.webContents.emit('did-finish-load')
+    openMiniIdePluginView('/ws', '', { locale: 'en-US', filepath: 'b.ts' }, 'light')
+    expect(lastView()).toBe(view)
+    expect(view.webContents.loads).toHaveLength(1)
+    expect(view.webContents.sent.filter(message => message.channel === 'plugin:openTarget').at(-1)?.args[0])
+      .toMatchObject({ locale: 'en-US', filepath: 'b.ts' })
   })
 
   it('passes the current theme in the entry query', () => {
@@ -6280,17 +6306,13 @@ describe('first-party Git private bridge', () => {
     }])
   })
 
-  it('does not route Host-owned language settings changes to v2 Git views', async () => {
+  it.each(['zh-TW', 'en-US', 'ja-JP'])('routes only Host-owned %s language to v2 Git views', async (locale) => {
     const { mgr, view } = await openGitView()
-
-    mgr.dispatchHostSettingsChanged({
-      settings: {
-        'agent-team:language': 'zh-TW',
-        'unknown.setting': 'ignored',
-      },
-    })
-
-    expect(view.webContents.sent).toHaveLength(0)
+    mgr.dispatchHostSettingsChanged({ settings: { 'agent-team:language': locale, 'unknown.setting': 'ignored' } })
+    expect(view.webContents.sent).toEqual([{
+      channel: 'plugin:cap:event',
+      args: [{ type: 'ui.settings_changed', data: { source: 'host', settings: { 'agent-team:language': locale } } }],
+    }])
   })
 
   it('routes Host-owned language settings changes to active Plans v2 views', async () => {
@@ -6397,6 +6419,7 @@ describe('first-party Git private bridge', () => {
           source: 'host',
           settings: {
             'agentTeam.yolo': '1',
+            'agent-team:language': 'zh-TW',
           },
         },
       }],
