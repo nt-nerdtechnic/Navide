@@ -15,11 +15,16 @@ type ModalProps = InstanceType<typeof SettingsModal>['$props']
 
 describe('Settings CLI agent cards and drawer', { timeout: 15000 }, () => {
   let wrapper: VueWrapper | undefined
+  let scrollTarget: HTMLElement | undefined
 
   beforeEach(() => {
     __resetSettingsForTest()
     loadCliAgentPrefsFromProject([], [])
     usePushChannelPrefs().pushDisabled.value = []
+    scrollTarget = undefined
+    vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(function (this: HTMLElement) {
+      scrollTarget = this
+    })
   })
 
   afterEach(() => {
@@ -81,10 +86,15 @@ describe('Settings CLI agent cards and drawer', { timeout: 15000 }, () => {
       .toContain(i18n.global.t('settings.cliAgents.chip.no-push'))
   })
 
-  async function openAgent(key: string, tab = 'overview') {
+  async function openAgent(key: string) {
     await wrapper!.get(`.cli-agent-card[data-agent-key="${key}"] .cli-agent-manage`).trigger('click')
-    if (tab !== 'overview') await wrapper!.get(`[data-cli-tab="${tab}"]`).trigger('click')
     await flushPromises()
+  }
+
+  async function expectScrolledTo(section: string) {
+    await vi.waitFor(() => {
+      expect(scrollTarget).toBe(wrapper!.get(`[data-settings-section="${section}"]`).element)
+    })
   }
 
   function field(labelKey: string) {
@@ -121,14 +131,43 @@ describe('Settings CLI agent cards and drawer', { timeout: 15000 }, () => {
     expect(wrapper!.get('.cli-agent-card[data-agent-key="claude"] input[type="checkbox"]').attributes('disabled')).toBeUndefined()
   })
 
-  it('persists keyboard-accessible reordering and blocks the same controls while filtered', async () => {
+  it('persists drag reordering and rejects drag/drop while filtered', async () => {
     await mountModal()
     const keys = wrapper!.findAll('.cli-agent-card').map((card) => card.attributes('data-agent-key'))
-    await wrapper!.get(`.cli-agent-card[data-agent-key="${keys[1]}"] .cli-card-order button`).trigger('click')
+    await wrapper!.get(`.cli-agent-card[data-agent-key="${keys[1]}"]`).trigger('dragstart')
+    await wrapper!.get(`.cli-agent-card[data-agent-key="${keys[0]}"]`).trigger('dragover')
+    await wrapper!.get(`.cli-agent-card[data-agent-key="${keys[0]}"]`).trigger('drop')
     expect(useCliAgentPrefs().order.value.slice(0, 2)).toEqual([keys[1], keys[0]])
     expect(JSON.parse(settingsGet('agentTeam.cliAgents.order', '[]')).slice(0, 2)).toEqual([keys[1], keys[0]])
-    await wrapper!.get('.cli-agent-filter-search').setValue(keys[0])
-    expect(wrapper!.findAll('.cli-card-order button').every((button) => button.attributes('disabled') !== undefined)).toBe(true)
+    const savedOrder = [...useCliAgentPrefs().order.value]
+    await wrapper!.get('[data-cli-filter="enabled"]').trigger('click')
+    await wrapper!.get(`.cli-agent-card[data-agent-key="${keys[0]}"]`).trigger('dragstart')
+    await wrapper!.get(`.cli-agent-card[data-agent-key="${keys[1]}"]`).trigger('drop')
+    expect(useCliAgentPrefs().order.value).toEqual(savedOrder)
+    expect(JSON.parse(settingsGet('agentTeam.cliAgents.order', '[]'))).toEqual(savedOrder)
+  })
+
+  it('places the drag handle before the card title and removes the bottom reorder controls', async () => {
+    await mountModal()
+    for (const card of wrapper!.findAll('.cli-agent-card')) {
+      const heading = card.get('.cli-card-heading')
+      expect(heading.element.firstElementChild).toBe(heading.get('.cli-agent-grip').element)
+      expect(card.find('.cli-card-order').exists()).toBe(false)
+      expect(card.findAll('button').map((button) => button.text())).not.toContain('↑')
+      expect(card.findAll('button').map((button) => button.text())).not.toContain('↓')
+    }
+  })
+
+  it('shows every agent setting section together without tabs or overview jump buttons', async () => {
+    await mountModal()
+    await openAgent('claude')
+    const content = wrapper!.get('.cli-drawer-content')
+    expect(content.findAll(':scope > section').map((section) => section.attributes('id'))).toEqual([
+      'cli-panel-overview', 'cli-panel-launch', 'cli-panel-permissions', 'cli-panel-push', 'cli-panel-install',
+    ])
+    expect(content.findAll(':scope > section').every((section) => section.isVisible())).toBe(true)
+    expect(wrapper!.find('.cli-agent-drawer [role="tablist"]').exists()).toBe(false)
+    expect(wrapper!.find('.cli-overview-links').exists()).toBe(false)
   })
 
   it('closes the drawer before Settings on Escape and returns focus to the opening card', async () => {
@@ -148,7 +187,7 @@ describe('Settings CLI agent cards and drawer', { timeout: 15000 }, () => {
   it('saves launch edits only to the selected agent and clears unfinished env drafts when switching', async () => {
     settingsSet(cliCommandKey('codex'), 'codex --existing')
     await mountModal()
-    await openAgent('claude', 'launch')
+    await openAgent('claude')
     await field('settings.cliLaunch.model-label').setValue('my-model')
     await field('settings.cliLaunch.command-label').setValue('claude --custom')
     await field('settings.cliLaunch.env-col-name').setValue('TEAM_TEST')
@@ -161,7 +200,7 @@ describe('Settings CLI agent cards and drawer', { timeout: 15000 }, () => {
 
     await field('settings.cliLaunch.env-col-name').setValue('UNSAVED')
     await wrapper!.get('.cli-drawer-close').trigger('click')
-    await openAgent('codex', 'launch')
+    await openAgent('codex')
     expect((field('settings.cliLaunch.env-col-name').element as HTMLInputElement).value).toBe('')
     expect((field('settings.cliLaunch.command-label').element as HTMLInputElement).value).toBe('codex --existing')
     expect(wrapper!.find('.env-name').exists()).toBe(false)
@@ -171,8 +210,7 @@ describe('Settings CLI agent cards and drawer', { timeout: 15000 }, () => {
     await mountModal()
     await openAgent('claude')
     const first = wrapper!.get('.cli-drawer-close').element as HTMLButtonElement
-    const links = wrapper!.findAll('.cli-overview-links button')
-    const last = links[links.length - 1].element as HTMLButtonElement
+    const last = wrapper!.get('#cli-panel-push input[type="checkbox"]').element as HTMLInputElement
     last.focus()
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }))
     expect(document.activeElement).toBe(first)
@@ -180,7 +218,7 @@ describe('Settings CLI agent cards and drawer', { timeout: 15000 }, () => {
     expect(document.activeElement).toBe(last)
   })
 
-  it('routes a section request into the last selected agent drawer and correct tab', async () => {
+  it('opens the last selected agent and scrolls to an externally requested section', async () => {
     await mountModal()
     await openAgent('codex')
     await wrapper!.get('.cli-drawer-close').trigger('click')
@@ -188,7 +226,7 @@ describe('Settings CLI agent cards and drawer', { timeout: 15000 }, () => {
       .setSection('cliAgents', 'cli-agents-launch')
     await flushPromises()
     expect(wrapper!.get('.cli-agent-drawer').attributes('data-agent-key')).toBe('codex')
-    expect(wrapper!.get('[data-cli-tab="launch"]').attributes('aria-selected')).toBe('true')
+    await expectScrolledTo('cli-agents-launch')
   })
 
   it('opens the launch editor from Settings search even before any agent has been selected', async () => {
@@ -201,7 +239,7 @@ describe('Settings CLI agent cards and drawer', { timeout: 15000 }, () => {
     await result!.trigger('click')
     await flushPromises()
     expect(wrapper!.get('.cli-agent-drawer').attributes('data-agent-key')).toBe(CLI_AGENT_SPECS[0].agentKey)
-    expect(wrapper!.get('[data-cli-tab="launch"]').attributes('aria-selected')).toBe('true')
+    await expectScrolledTo('cli-agents-launch')
     expect((wrapper!.get('.s-search-input').element as HTMLInputElement).value).toBe('')
   })
 
@@ -220,7 +258,7 @@ describe('Settings CLI agent cards and drawer', { timeout: 15000 }, () => {
     await result!.trigger('click')
     await flushPromises()
     expect(wrapper!.get('.cli-agent-drawer').attributes('data-agent-key')).toBe(agentKey)
-    expect(wrapper!.get(`[data-cli-tab="${section}"]`).attributes('aria-selected')).toBe('true')
+    await expectScrolledTo(`cli-agents-${section}`)
     if (section === 'push') {
       expect(wrapper!.get('#cli-panel-push').text()).toContain(i18n.global.t('settings.cliAgents.no-push-channel'))
       expect(wrapper!.find('#cli-panel-push input[type="checkbox"]').exists()).toBe(false)
@@ -243,31 +281,29 @@ describe('Settings CLI agent cards and drawer', { timeout: 15000 }, () => {
     await result!.trigger('click')
     await flushPromises()
     expect(wrapper!.get('.cli-agent-drawer').attributes('data-agent-key')).toBe(expectedAgent)
-    expect(wrapper!.get(`[data-cli-tab="${section}"]`).attributes('aria-selected')).toBe('true')
+    await expectScrolledTo(`cli-agents-${section}`)
   })
 
   it('shows unsupported capability explanations without controls that write unusable settings', async () => {
     await mountModal()
-    await openAgent('aider', 'launch')
+    await openAgent('aider')
     expect(wrapper!.find(`.cli-agent-drawer [aria-label="${i18n.global.t('settings.cliLaunch.model-label')}"]`).exists()).toBe(false)
-    await wrapper!.get('[data-cli-tab="push"]').trigger('click')
     expect(wrapper!.find('#cli-panel-push input[type="checkbox"]').exists()).toBe(false)
     expect(wrapper!.get('.cli-agent-drawer').text()).not.toContain('settings.cliCards.')
   })
 
   it('keeps permission and push changes scoped to the selected agent', async () => {
     await mountModal()
-    await openAgent('claude', 'permissions')
+    await openAgent('claude')
     await wrapper!.get('#cli-panel-permissions .perm-select').setValue('force-off')
     expect(settingsGet(cliPermissionKey('claude'), null)).toBe('force-off')
     expect(settingsGet(cliPermissionKey('codex'), null)).toBeNull()
-    await wrapper!.get('[data-cli-tab="push"]').trigger('click')
     await wrapper!.get('#cli-panel-push input[type="checkbox"]').setValue(false)
     expect(settingsGet('pushChannelsDisabled', [])).toEqual(['claude'])
     await wrapper!.get('.cli-drawer-close').trigger('click')
     expect(wrapper!.get('.cli-agent-card[data-agent-key="claude"] .cli-card-status').text())
       .toContain(i18n.global.t('settings.cliAgents.chip.push-off'))
-    await openAgent('qwen', 'push')
+    await openAgent('qwen')
     expect((wrapper!.get('#cli-panel-push input[type="checkbox"]').element as HTMLInputElement).checked).toBe(true)
   })
 })
