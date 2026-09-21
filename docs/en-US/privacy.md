@@ -48,6 +48,7 @@ A future portability feature should use explicit local export/import with redact
 | Update checks | GitHub Releases | Application version and normal network metadata |
 | Plugin Registry trust refresh | The selected Official Registry or an explicitly approved self-hosted Registry | The namespace/name of an installed marketplace plugin; no plugin source or archive is sent by the refresh |
 | Skills package retrieval | GitHub API and codeload | Requested repository/ref and normal network metadata; downloads a public archive without uploading local skill contents |
+| CLI risk DNS lookups | Operating system resolver and its configured upstream service | Declared expected hostnames and configured allowed hostnames |
 | MCP servers | The configured MCP server and any service it uses | Depends entirely on that server's tools and configuration |
 
 Read each provider's policy before sending private code or regulated data.
@@ -108,6 +109,14 @@ installation so restart checks can continue; the Registry controls retention
 of its own request logs. There is no separate refresh toggle today. Removing
 the installed marketplace plugins stops this flow; other external-service
 flows are governed by their own settings and configuration.
+
+## CLI risk observation data
+
+For vendors with declarations, the backend samples numeric endpoints of established TCP sockets attributed to active pane process trees and inventories declared local data roots. Format checks read at most 64 KiB from each candidate file locally. This feature does not intercept packets, decrypt TLS or upload file contents. Read buffers are used for format recognition; file contents and tokens are not stored in the risk records.
+
+The local `navide.db` retains baseline and file-membership metadata, paths, sizes/classes, presence and absence observation times, network endpoint findings and counts, availability, and Ignore/Allow decisions. An allowed exact IP is also retained in that vendor's UI settings. Metadata can reveal local paths and contacted IPs even though it contains no copied file contents.
+
+Building the expected-address snapshot performs forward DNS lookups for declared expected hostnames and any configured allowed hostnames through the operating system resolver. That resolver, and its configured upstream service, can receive those names. Numeric IP allowances need no hostname lookup. The feature does not infer destination names with reverse DNS; an address match or mismatch cannot establish traffic contents or intent.
 
 ## Credentials
 

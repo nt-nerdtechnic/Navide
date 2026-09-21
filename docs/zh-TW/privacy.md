@@ -44,6 +44,7 @@ Consumer：Git Preference 使用驗證過的 Package／Workspace Storage Partiti
 | Update Check | GitHub Releases | 應用程式版本與一般網路 Metadata |
 | Plugin Registry Trust Refresh | 所選的 Official Registry，或明確核准的 self-hosted Registry | 已安裝 marketplace plugin 的 namespace/name；Refresh 不會傳送 Plugin Source 或 Archive |
 | Skills package retrieval | GitHub API and codeload | Requested repository/ref and normal network metadata; downloads a public archive without uploading local skill contents |
+| CLI risk DNS lookups | Operating system resolver and its configured upstream service | Declared expected hostnames and configured allowed hostnames |
 | MCP Server | 設定的 MCP Server 與它使用的服務 | 完全取決於該 Server 的 Tool 與設定 |
 
 傳送私人程式碼或受規範資料前，請先閱讀各 Provider 政策。
@@ -75,6 +76,14 @@ Snapshot，讓重新啟動後仍能進行檢查；Registry 自己的 Request Log
 Registry 決定保存方式。目前沒有獨立的 Refresh 開關；移除已安裝的
 marketplace plugin 後，這項資料流就會停止，其他外部服務資料流仍由各自的
 設定控制。
+
+## CLI risk observation data
+
+For vendors with declarations, the backend samples numeric endpoints of established TCP sockets attributed to active pane process trees and inventories declared local data roots. Format checks read at most 64 KiB from each candidate file locally. This feature does not intercept packets, decrypt TLS or upload file contents. Read buffers are used for format recognition; file contents and tokens are not stored in the risk records.
+
+The local `navide.db` retains baseline and file-membership metadata, paths, sizes/classes, presence and absence observation times, network endpoint findings and counts, availability, and Ignore/Allow decisions. An allowed exact IP is also retained in that vendor's UI settings. Metadata can reveal local paths and contacted IPs even though it contains no copied file contents.
+
+Building the expected-address snapshot performs forward DNS lookups for declared expected hostnames and any configured allowed hostnames through the operating system resolver. That resolver, and its configured upstream service, can receive those names. Numeric IP allowances need no hostname lookup. The feature does not infer destination names with reverse DNS; an address match or mismatch cannot establish traffic contents or intent.
 
 ## 憑證
 

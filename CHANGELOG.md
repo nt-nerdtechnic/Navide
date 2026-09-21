@@ -13,12 +13,14 @@ All notable released changes to Navide will be documented in this file. The form
 
 ### Added
 
+- Add backend-owned CLI risk observations in active pane headers: sampled unexpected TCP addresses and newly observed large opaque files, with observed absence/reappearance evidence, persistent Ignore/Allow exact-IP decisions and Reveal in folder. Coverage depends on vendor/platform support; stale or unavailable observations do not imply safety, and no automatic blocking or deletion occurs.
 - Add **Reclaim selected** and selection-wide notification mute/unmute to the multi-pane context menu, with grouped actions. Reclaim keeps existing protection checks, affects only eligible selected panes, and is disabled when none are eligible; muting a mixed selection mutes all of it.
 - Add a Skills MCP workflow for inspection, bounded previews, add-only installation from local packages or public GitHub, and revision-checked delivery settings. Caller-bound previews pin exact content; local provenance survives restart, and delivery responses distinguish configuration from unknown current-session loading. Skills views refresh after committed changes and reconnects while retaining unsaved content and its original revision.
 - Add MiniMax Code (`mcode`) to CLI selection, install detection and sign-in. Session history, resume, token/quota reporting, account switching, MCP and skills wiring remain unsupported.
 
 ### Fixed
 
+- Stop Codex panes from submitting artificial session-marker turns on launch, fresh rebuild, or fresh restore. Configured prompts remain intact, session identity can arrive after the first real turn, and skills refreshes preserve session/runtime isolation in newly prepared pane homes.
 - Keep Skills refreshes in request order and save/conflict state attached to the edited skill when selection changes. Reject local packages with unreadable subdirectories, and include nested `SKILL.md` attachments in shared and native inspection inventories.
 - Keep active Antigravity and Grok sessions running when another command merely mentions a resume flag: duplicate detection no longer interprets compound shell commands, other executables or positional text after `--` as a resume request.
 - Preserve a pruned history pane's parent when resuming from another workspace only if the parent still exists in the target workspace; missing parents and explicitly recorded roots stay roots.

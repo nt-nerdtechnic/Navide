@@ -36,6 +36,7 @@ Navide は Project Telemetry Service を運営せず、Navide Account を必要�
 | Update Check | GitHub Releases | Application Version と通常の Network Metadata |
 | Plugin Registry Trust Refresh | 選択した Official Registry、または明示的に承認した self-hosted Registry | インストール済み marketplace plugin の namespace/name。Refresh では Plugin Source や Archive を送信しない |
 | Skills package retrieval | GitHub API and codeload | Requested repository/ref and normal network metadata; downloads a public archive without uploading local skill contents |
+| CLI risk DNS lookups | Operating system resolver and its configured upstream service | Declared expected hostnames and configured allowed hostnames |
 | MCP Server | 設定された MCP Server と、それが利用する Service | Server の Tool と Configuration に全面的に依存 |
 
 Private Code や規制対象 Data を送信する前に、各 Provider の Policy を確認してください。
@@ -77,6 +78,14 @@ Cleanup が成功した後に、その Plugin の Local Storage を削除しま�
 は Host 所有の明示的な Consumer であり、Git Preference は認証済みの Package と
 Workspace Storage Partition を使用します。Upgrade 時には、以前の Active Snapshot
 を新しい Candidate に複製し、Rollback 用に旧 Snapshot を保持する場合があります。
+
+## CLI risk observation data
+
+For vendors with declarations, the backend samples numeric endpoints of established TCP sockets attributed to active pane process trees and inventories declared local data roots. Format checks read at most 64 KiB from each candidate file locally. This feature does not intercept packets, decrypt TLS or upload file contents. Read buffers are used for format recognition; file contents and tokens are not stored in the risk records.
+
+The local `navide.db` retains baseline and file-membership metadata, paths, sizes/classes, presence and absence observation times, network endpoint findings and counts, availability, and Ignore/Allow decisions. An allowed exact IP is also retained in that vendor's UI settings. Metadata can reveal local paths and contacted IPs even though it contains no copied file contents.
+
+Building the expected-address snapshot performs forward DNS lookups for declared expected hostnames and any configured allowed hostnames through the operating system resolver. That resolver, and its configured upstream service, can receive those names. Numeric IP allowances need no hostname lookup. The feature does not infer destination names with reverse DNS; an address match or mismatch cannot establish traffic contents or intent.
 
 ## 認証情報
 

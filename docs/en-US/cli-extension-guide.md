@@ -106,20 +106,28 @@ constitute authenticated, end-to-end acceptance of every vendor:
   Missing parents remain roots, and a record explicitly marked as a root stays
   a root.
 
-### Codex session identity — updated 2026-09-16
+### Codex session identity — updated 2026-09-21
 
 Codex generates the ID of a new interactive session; Navide does not pass a
 Claude-style `--session-id`. Existing conversations use `codex resume <id>`.
-Codex 0.154 queues `SessionStart` for the first turn: the event does not
-guarantee an ID callback immediately on opening the TUI. Log and marker
-discovery remain necessary; a hook does not remove the first-turn requirement.
+Codex 0.155.1 queues `SessionStart` for the first turn and may defer its rollout
+until then. The ID can remain unknown while a new pane is idle. Navide sends no
+synthetic session-marker prompt on manual launch, fresh rebuild, or fresh
+restore, adds no marker to configured role/task prompts, and shows no
+marker-specific waiting overlay. A real user or configured task turn can make
+the session observable; an ID before the first input is not guaranteed.
 
 Navide accepts a trusted `SessionStart` callback only for its originating
 pane launch, using a per-launch token to reject stale or mismatched callbacks.
 The session-scoped hook configuration preserves user hooks, leaves global
-configuration unchanged, and does not bypass Codex hook review. After the
-existing startup wait, a pane already bound to a session skips the redundant
-marker; otherwise the existing marker flow continues without an extra wait.
+configuration unchanged, and does not bypass Codex hook review. YOLO does not
+approve hooks: the hook must be enabled and trusted under Codex's hook rules.
+Newly prepared pane homes keep their sessions and runtime state local; skills
+refreshes do not replace them with links to the global Codex home. This allows
+validated local rollout discovery without a hook or marker. Existing homes
+whose sessions are already shared remain unchanged and need the authenticated,
+validated hook callback for marker-free attribution; a shared path or matching
+workspace alone is insufficient. Historical markers remain readable.
 For an existing conversation, Navide explicitly binds the verified resume
 UUID rather than discovering a different session from shared storage.
 The hook handles startup and resume events only; clearing a conversation
