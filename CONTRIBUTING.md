@@ -88,6 +88,25 @@ with no packaged Plans backend.
 
 > `pnpm dev` 會同時啟動 Electron、Vite dev server 和 Python FastAPI backend。
 
+### Git hooks
+
+Point Git at the tracked hooks once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+`.githooks/pre-commit` refuses a commit whose staged `.ts`/`.vue`/`.py` files
+import a relative module that is not in the index. Several sessions share one
+working tree here, so a commit can carry a file that references a sibling still
+unstaged or untracked; the local typecheck passes because the file is on disk,
+and only CI fails. Stage the missing file too or drop the import; `--no-verify`
+bypasses the check when you know what you are doing.
+
+> 每個 clone 執行一次 `git config core.hooksPath .githooks`。pre-commit 會擋下
+> 「staged 的檔 import 了還沒進 index 的相對模組」——本機 typecheck 看得到工作樹的檔所以會過，
+> 只有 CI 會紅。
+
 ---
 
 ## Submitting a Pull Request / 提交 PR

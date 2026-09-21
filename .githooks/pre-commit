@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Refuse a commit whose staged .ts/.vue/.py files import a relative module that
+# is not in the index. This tree is shared by many parallel sessions, so a
+# commit can easily carry a file that references a sibling still sitting
+# unstaged or untracked in the working tree; local typecheck passes (the file
+# is on disk) and only CI fails (TS2307 / ModuleNotFoundError). Three times in
+# two days before this hook existed. Bypass with --no-verify if you must.
+set -u
+
+missing=""
+while IFS= read -r file; do
+  case "$file" in
+    *.ts|*.vue|*.mts|*.cts)
+      dir=$(dirname "$file")
+      # `from './x'`, `import './x'`, `import('./x')` — single or double quotes.
+      specs=$(git show ":$file" | grep -oE "(from|import)[[:space:]]*\(?[[:space:]]*['\"]\.\.?/[^'\"]+['\"]" | grep -oE "['\"][^'\"]+['\"]" | tr -d "'\"" | sort -u)
+      for spec in $specs; do
+        base="$dir/$spec"
+        # Normalise ./ and ../ so the index lookup sees the same path git stores.
+        norm=$(python3 -c 'import os,sys; print(os.path.normpath(sys.argv[1]))' "$base" 2>/dev/null || echo "$base")
+        found=0
+        for cand in "$norm" "$norm.ts" "$norm.tsx" "$norm.mts" "$norm.vue" "$norm.d.ts" "$norm/index.ts" "$norm/index.vue" "$norm.js" "$norm.mjs" "$norm.json"; do
+          if git cat-file -e ":$cand" 2>/dev/null; then found=1; break; fi
+        done
+        [ $found = 1 ] || missing="$missing
+  $file -> $spec"
+      done
+      ;;
+    *.py)
+      dir=$(dirname "$file")
+      # `from .x import y` / `from ..x import y`; `from . import y` is left
+      # alone (y may be a symbol of __init__, not a module).
+      specs=$(git show ":$file" | grep -oE "^[[:space:]]*from[[:space:]]+\.+[A-Za-z_][A-Za-z0-9_.]*[[:space:]]+import" | sed -E 's/^[[:space:]]*from[[:space:]]+//; s/[[:space:]]+import$//' | sort -u)
+      for spec in $specs; do
+        dots=$(printf '%s' "$spec" | sed -E 's/[^.].*$//')
+        name=$(printf '%s' "$spec" | sed -E 's/^\.+//')
+        up=$(( ${#dots} - 1 ))
+        pkg="$dir"
+        i=0; while [ $i -lt $up ]; do pkg=$(dirname "$pkg"); i=$((i+1)); done
+        modpath="$pkg/$(printf '%s' "$name" | tr . /)"
+        found=0
+        for cand in "$modpath.py" "$modpath/__init__.py"; do
+          if git cat-file -e ":$cand" 2>/dev/null; then found=1; break; fi
+        done
+        [ $found = 1 ] || missing="$missing
+  $file -> $spec"
+      done
+      ;;
+  esac
+done < <(git diff --cached --name-only --diff-filter=AM)
+
+if [ -n "$missing" ]; then
+  echo "pre-commit: staged files import modules that are not in the index:$missing" >&2
+  echo "" >&2
+  echo "Stage the missing files too, or drop the import; the working tree has them" >&2
+  echo "but the commit will not, and CI will fail typecheck/import. --no-verify bypasses." >&2
+  exit 1
+fi
+exit 0
