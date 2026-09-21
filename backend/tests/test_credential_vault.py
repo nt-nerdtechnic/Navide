@@ -1161,7 +1161,7 @@ def test_kilo_switch_swaps_only_the_kilo_entry(tmp_path: Path) -> None:
     # The parked document has the vendor's own shape, keyed by scope, and
     # carries nothing but the kilo entry.
     parked = json.loads(
-        (vault.slot_dir("kilo", DEFAULT_SLOT_ID) / "auth.json").read_text(encoding="utf-8")
+        osplat.secret_files.read_private(vault.slot_dir("kilo", DEFAULT_SLOT_ID) / "auth.json").decode("utf-8")
     )
     assert parked == {"kilo": {"type": "api", "key": "A"}}
 

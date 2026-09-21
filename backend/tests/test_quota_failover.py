@@ -1492,6 +1492,10 @@ async def test_hot_turn_complete_evidence_uses_the_backends_turn_start_pairing(h
     await h.service.settle({"transaction_id": tx.id, "pane_id": "pane-1", "outcome": "turn-complete",
                             "turn_started_at": iso(h.clock.now() + 999)})
     assert incident.state == "settling"
+    # Equal clock ticks cannot prove that the turn began after the commit.
+    h.activity["pane-1"]["turn_started_monotonic"] = tx.committed_monotonic
+    await h.service.settle({"transaction_id": tx.id, "pane_id": "pane-1", "outcome": "turn-complete"})
+    assert incident.state == "settling"
     # A turn whose recorded end is an exhaustion is not a working turn either.
     h.activity["pane-1"] = {"event_type": "turn_complete", "text": "",
                             "ts_monotonic": tx.committed_monotonic + 3,
@@ -1515,6 +1519,8 @@ async def test_hot_turn_complete_evidence_uses_the_backends_turn_start_pairing(h
 
 def test_activity_store_pairs_turn_start_with_its_end(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(app, "_pane_activity", {})
+    ticks = iter([10.0, 11.0, 12.0, 13.0, 14.0])
+    monkeypatch.setattr(app, "time", SimpleNamespace(monotonic=lambda: next(ticks)))
     app._record_pane_activity("p", "agent_active", "")
     first = app.pane_activity("p")
     assert first["turn_started_monotonic"] == first["ts_monotonic"]
@@ -1528,9 +1534,29 @@ def test_activity_store_pairs_turn_start_with_its_end(monkeypatch: pytest.Monkey
     app._record_pane_activity("p", "agent_active", "", detail="ignored")
     again = app.pane_activity("p")
     assert again["turn_started_monotonic"] > first["ts_monotonic"] and again["detail"] == ""
+    assert again["turn_started_monotonic"] == again["ts_monotonic"] == 13.0
     # A turn end with no observed start has an unknown start, never "now".
     app._record_pane_activity("q", "turn_complete", "done")
     assert app.pane_activity("q")["turn_started_monotonic"] is None
+
+
+def test_activity_store_pairs_turns_that_share_a_clock_tick(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(app, "_pane_activity", {})
+    ticks = iter([9.0, 10.0, 10.0, 11.0, 12.0])
+    monkeypatch.setattr(app, "time", SimpleNamespace(monotonic=lambda: next(ticks)))
+    app._record_pane_activity("p", "agent_active", "")
+    app._record_pane_activity("p", "turn_complete", "first", detail="end_turn")
+    assert app.pane_activity("p")["turn_started_monotonic"] == 9.0
+    app._record_pane_activity("p", "agent_active", "", detail="ignored")
+    assert app.pane_activity("p")["detail"] == ""
+    # A later active event belongs to the second turn, even though its start
+    # shared a tick with the preceding turn's end.
+    app._record_pane_activity("p", "agent_active", "")
+    assert app.pane_activity("p")["turn_started_monotonic"] == 10.0
+    app._record_pane_activity("p", "turn_complete", "second", detail="end_turn")
+    ended = app.pane_activity("p")
+    assert ended["turn_started_monotonic"] == 10.0 and ended["ts_monotonic"] == 12.0
+    assert ended["text"] == "second" and ended["detail"] == "end_turn"
 
 
 @pytest.mark.asyncio

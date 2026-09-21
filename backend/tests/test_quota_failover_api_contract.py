@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -562,6 +563,33 @@ async def test_turning_auto_off_or_cancelling_while_pending_withdraws_the_swap(r
     assert rig.vault.switch_calls == []
 
 
+@asynccontextmanager
+async def _report_waiting_for_switch_lock(rig, s):
+    lock = rig.vault.switch_lock("claude")
+    await lock.acquire()
+    waiting = asyncio.Event()
+    acquire = lock.acquire
+
+    async def observed_acquire():
+        waiting.set()
+        return await acquire()
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(lock, "acquire", observed_acquire)
+        report = asyncio.create_task(call(s, "quota_failover.report", report_payload("claude", "p1", idem="r1")))
+        try:
+            # Candidate reads run in the vault executor before the commit
+            # reaches this lock. Event-loop turns do not bound that work.
+            await asyncio.wait_for(waiting.wait(), timeout=5.0)
+            yield lock, report
+        finally:
+            if not report.done():
+                report.cancel()
+            await asyncio.gather(report, return_exceptions=True)
+            if lock.locked():
+                lock.release()
+
+
 async def test_auto_turned_off_while_the_switch_lock_is_held_does_not_swap(rig) -> None:
     """The window between deciding and moving credentials: a hot switch that
     is waiting for the agent's switch lock must re-check the policy once it
@@ -571,20 +599,15 @@ async def test_auto_turned_off_while_the_switch_lock_is_held_does_not_swap(rig) 
     add_pane(s, rig, term_id="t1", pane_id="p1", agent_key="claude", slot_id=a, workspace="/ws/a")
     await set_policy(s, "auto")
 
-    lock = rig.vault.switch_lock("claude")
-    await lock.acquire()
-    report = asyncio.create_task(call(s, "quota_failover.report", report_payload("claude", "p1", idem="r1")))
-    for _ in range(50):
-        await asyncio.sleep(0)
-        if any(t.state == "preparing" for t in rig.service.transactions.values()):
-            break
-    assert any(t.state == "preparing" for t in rig.service.transactions.values())
-    (incident,) = rig.service.incidents.values()
-    assert incident.state == "switching"
+    async with _report_waiting_for_switch_lock(rig, s) as (lock, report):
+        (tx,) = rig.service.transactions.values()
+        assert tx.state == "preparing"
+        (incident,) = rig.service.incidents.values()
+        assert incident.state == "switching" and rig.vault.switch_calls == []
 
-    await set_policy(s, "off")
-    lock.release()
-    result = ok(await report)
+        await set_policy(s, "off")
+        lock.release()
+        result = ok(await asyncio.wait_for(report, timeout=5.0))
     assert rig.vault.switch_calls == []
     assert rig.store.list()["defaults"]["claude"] == a
     (tx,) = rig.service.transactions.values()
@@ -604,17 +627,14 @@ async def test_switch_waiting_for_the_lock_proceeds_when_nothing_changed(rig) ->
     add_pane(s, rig, term_id="t1", pane_id="p1", agent_key="claude", slot_id=a, workspace="/ws/a")
     await set_policy(s, "auto")
 
-    lock = rig.vault.switch_lock("claude")
-    await lock.acquire()
-    report = asyncio.create_task(call(s, "quota_failover.report", report_payload("claude", "p1", idem="r1")))
-    for _ in range(50):
-        await asyncio.sleep(0)
-        if rig.service.transactions:
-            break
-    assert rig.vault.switch_calls == []  # nothing moves while the lock is held
-    lock.release()
-    result = ok(await report)
+    async with _report_waiting_for_switch_lock(rig, s) as (lock, report):
+        (tx,) = rig.service.transactions.values()
+        assert tx.state == "preparing"
+        assert rig.vault.switch_calls == []  # nothing moves while the lock is held
+        lock.release()
+        result = ok(await asyncio.wait_for(report, timeout=5.0))
     assert result["incident"]["state"] == "settling"
+    assert tx.state == "committed" and tx.swapped is True
     assert rig.vault.switch_calls == [("claude", a, b, None)]
     assert ok(await call(s, "quota_failover.get_state", {}, msg_id="st"))["budget"]["claude"]["used"] == 1
 

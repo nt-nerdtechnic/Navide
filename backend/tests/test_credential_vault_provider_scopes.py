@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from agent_team_backend.osplat import secret_files
 from agent_team_backend.credential_vault import (
     DEFAULT_SLOT_ID,
     CredentialVault,
@@ -97,7 +98,7 @@ def test_default_slot_parks_several_scopes_side_by_side(tmp_path: Path, monkeypa
     vault.switch("opencode", DEFAULT_SLOT_ID, "a2", scope="anthropic")
     vault.switch("opencode", DEFAULT_SLOT_ID, "o2", scope="openai")
 
-    parked = json.loads((vault.slot_dir("opencode", DEFAULT_SLOT_ID) / "auth.json").read_text(encoding="utf-8"))
+    parked = json.loads(secret_files.read_private(vault.slot_dir("opencode", DEFAULT_SLOT_ID) / "auth.json").decode("utf-8"))
     assert parked == {"anthropic": OPENCODE_LIVE["anthropic"], "openai": OPENCODE_LIVE["openai"]}
     after = json.loads(live.read_text(encoding="utf-8"))
     assert after["anthropic"]["access"] == "A2" and after["openai"]["access"] == "O2"
@@ -181,7 +182,7 @@ def test_pi_login_home_harvests_only_the_profile_scope(tmp_path: Path, monkeypat
 
     assert vault.harvest_login_home("pi", "p1", scope="xai") is True
 
-    parked = json.loads((vault.slot_dir("pi", "p1") / "auth.json").read_text(encoding="utf-8"))
+    parked = json.loads(secret_files.read_private(vault.slot_dir("pi", "p1") / "auth.json").decode("utf-8"))
     assert parked == {"xai": {"type": "oauth", "access": "X", "refresh": "XR"}}
     assert not home.exists()
 
