@@ -748,7 +748,7 @@ SPEC = VendorSpec(
         reads_shared_root=True,
         config_paths_key=("skills", "paths"),
     ),
-    label="OpenCode",
+    label="OpenCode (Anomaly)",
     # No MCP flag; instead a whole config document read out of
     # OPENCODE_CONFIG_CONTENT and deep-merged over the user's files, so nothing
     # on disk is touched and the value dies with the pane. Verified against
@@ -837,7 +837,7 @@ SPEC = VendorSpec(
     home_env_vars=("OPENCODE_CONFIG_DIR", "OPENCODE_CONFIG"),
     make_log_reader=OpencodeLogReader,
     # OpenCode ships `opencode upgrade` but no doctor subcommand.
-    install_dep=Dep("opencode", "OpenCode", "OpenCode terminal coding agent", "agent_cli",
+    install_dep=Dep("opencode", "OpenCode (Anomaly)", "OpenCode terminal coding agent", "agent_cli",
         ["opencode", "--version"], r"(\d+\.\d+\.\d+)",
         install_cmd="curl -fsSL https://opencode.ai/install | bash",
         needs_terminal=True, requires_binaries=("curl",), optional=True,

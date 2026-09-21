@@ -27,7 +27,7 @@ import type { AgentSpec } from './types'
 
 export const SPEC = {
   agentKey: 'muse',
-  label: 'Muse Code',
+  label: 'Muse Code (Meta)',
   defaultCommand: 'muse',
   // Values from the binary's --help, which lists one more (`max`) than the
   // published configuration docs. Meta-hosted models reject `none`.

@@ -4,7 +4,7 @@ import type { AgentSpec } from './types'
 
 export const SPEC = {
   agentKey: 'antigravity',
-  label: 'Antigravity CLI',
+  label: 'Antigravity CLI (Google)',
   defaultCommand: 'agy',
   // agy validates both together and exits 1 on a bad value, naming the
   // three it accepts.

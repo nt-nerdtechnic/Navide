@@ -901,7 +901,7 @@ SPEC = VendorSpec(
         root_home=(".qwen",),
         skills_rel=("skills",),
     ),
-    label="Qwen Code",
+    label="Qwen Code (Alibaba Cloud)",
     # `--mcp-config` is undocumented in `qwen --help` but registered, takes
     # inline JSON or a path, and merges over settings.json. No "type"
     # discriminator: httpUrl is streamable HTTP, a plain url would be SSE.
@@ -968,7 +968,7 @@ SPEC = VendorSpec(
     make_log_reader=QwenLogReader,
     # Qwen Code ships `qwen update` but no doctor subcommand; its autoupdate
     # opt-out is a settings.json key, not an env var — autoupdate_env stays empty.
-    install_dep=Dep("qwen", "Qwen Code", "Alibaba Qwen Code coding agent CLI", "agent_cli",
+    install_dep=Dep("qwen", "Qwen Code (Alibaba Cloud)", "Alibaba Qwen Code coding agent CLI", "agent_cli",
         ["qwen", "--version"], r"(\d+\.\d+\.\d+)",
         install_cmd="npm install -g @qwen-code/qwen-code", needs_terminal=True,
         requires_binaries=("npm",),

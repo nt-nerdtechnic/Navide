@@ -4,7 +4,7 @@ import type { AgentSpec } from './types'
 
 export const SPEC = {
   agentKey: 'grok',
-  label: 'Grok CLI',
+  label: 'Grok Build (SpaceXAI)',
   defaultCommand: 'grok',
   // `reasoning_effort` exists only in grok's API payload, not as a flag.
   modelArgs: (m) => `--model ${m}`,

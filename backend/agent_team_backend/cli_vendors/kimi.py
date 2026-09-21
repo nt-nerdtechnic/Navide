@@ -611,7 +611,7 @@ SPEC = VendorSpec(
         discovery_home=((".kimi-code", "skills"), (".agents", "skills")),
         discovery_project=((".agents", "skills"),),
     ),
-    label="Kimi Code",
+    label="Kimi Code CLI (Moonshot AI)",
     # No flag and no config variable, so the MCP config can only be reached
     # through the config directory — which kimi, unlike grok and antigravity,
     # relocates with a variable of its own. A url with no transport field is
@@ -658,7 +658,7 @@ SPEC = VendorSpec(
     make_log_reader=KimiLogReader,
     # Kimi Code ships `kimi doctor` and `kimi upgrade` (aliased `update`);
     # verified with `kimi --help` on 1.x.
-    install_dep=Dep("kimi", "Kimi Code", "Moonshot AI Kimi Code CLI", "agent_cli",
+    install_dep=Dep("kimi", "Kimi Code CLI (Moonshot AI)", "Moonshot AI Kimi Code CLI", "agent_cli",
         ["kimi", "--version"], r"(\d+\.\d+\.\d+)",
         install_cmd="curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash",
         needs_terminal=True, requires_binaries=("curl",), optional=True,

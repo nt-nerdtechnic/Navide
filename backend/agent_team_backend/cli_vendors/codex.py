@@ -1595,7 +1595,7 @@ SPEC = VendorSpec(
         skills_rel=("skills",),
         isolated_panes_home=(".codex-panes",),
     ),
-    label="Codex",
+    label="Codex CLI (OpenAI)",
     # No JSON document at all: `-c` is a one-shot TOML override merged over
     # config.toml at process start, and stays valid after a subcommand
     # (`codex resume`). The dotted key doubles as the already-wired marker.
@@ -1644,7 +1644,7 @@ SPEC = VendorSpec(
     home_env_vars=("CODEX_HOME",),
     interrupt_key=b"\x1b",
     make_log_reader=CodexLogReader,
-    install_dep=Dep("codex", "Codex", "OpenAI Codex CLI", "agent_cli",
+    install_dep=Dep("codex", "Codex CLI (OpenAI)", "OpenAI Codex CLI", "agent_cli",
         ["codex", "--version"], r"(\d+\.\d+\.\d+)",
         install_cmd="npm install -g @openai/codex", needs_terminal=True,
         requires_binaries=("npm",),

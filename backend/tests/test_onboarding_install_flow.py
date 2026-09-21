@@ -164,7 +164,7 @@ def test_install_result_names_the_dep(monkeypatch: pytest.MonkeyPatch) -> None:
     # branch has to carry them — including the ones that fail.
     monkeypatch.setattr(ob.osplat.paths, "resolve_program", lambda _x, *, path=None: "/opt/homebrew/bin/brew")
     result = ob.install_dep("claude")
-    assert result["label"] == "Claude Code"
+    assert result["label"] == "Claude Code (Anthropic)"
     assert result["docs_url"] == ob.DEPS_BY_ID["claude"].docs_url
     assert result["dep_id"] == "claude"
 
@@ -174,7 +174,7 @@ def test_missing_bootstrap_result_still_names_the_dep(monkeypatch: pytest.Monkey
     result = ob.install_dep("claude")
     assert result["ok"] is False
     assert result["missing_requirements"] == ["npm"]
-    assert result["label"] == "Claude Code" and result["docs_url"]
+    assert result["label"] == "Claude Code (Anthropic)" and result["docs_url"]
 
 
 def test_curl_installers_declare_their_bootstrap_binary() -> None:
@@ -320,7 +320,7 @@ async def test_spawn_probe_miss_announces_the_cli_before_failing(
     events = _missing_events(session)
     assert len(events) == 1
     assert events[0]["payload"] == {
-        "agent_key": "qwen", "label": "Qwen Code", "pane_id": "pane-1", "reason": "not_found",
+        "agent_key": "qwen", "label": "Qwen Code (Alibaba Cloud)", "pane_id": "pane-1", "reason": "not_found",
     }
 
 

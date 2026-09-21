@@ -149,7 +149,7 @@ def test_spec_is_registered_under_its_key() -> None:
     assert VENDORS["muse"] is SPEC
     assert vendor("muse") is SPEC
     assert SPEC.key == "muse"
-    assert SPEC.label == "Muse Code"
+    assert SPEC.label == "Muse Code (Meta)"
 
 
 def test_install_dep_detects_and_installs_the_cli() -> None:

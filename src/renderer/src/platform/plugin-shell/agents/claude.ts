@@ -4,7 +4,7 @@ import type { AgentSpec } from './types'
 
 export const SPEC = {
   agentKey: 'claude',
-  label: 'Claude Code',
+  label: 'Claude Code (Anthropic)',
   defaultCommand: 'claude',
   // `--effort` warns and falls back to the default on an unknown value
   // (exit 0), so an unchecked typo would run at the wrong effort and look

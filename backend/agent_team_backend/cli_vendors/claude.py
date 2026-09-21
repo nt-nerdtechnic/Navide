@@ -1304,7 +1304,7 @@ SPEC = VendorSpec(
         flag="--add-dir",
         view_layout=(".claude", "skills"),
     ),
-    label="Claude Code",
+    label="Claude Code (Anthropic)",
     # `--mcp-config` takes a literal JSON string as well as a path, and servers
     # from it load IN ADDITION to the user's own config (we never pass
     # --strict-mcp-config). A command that already carries the flag is the
@@ -1433,7 +1433,7 @@ SPEC = VendorSpec(
     # detection and the uninstall command, and `claude update` reads
     # .last-update-result.json. Switching install_cmd alone would install a
     # native binary none of those fields describe.
-    install_dep=Dep("claude", "Claude Code", "Anthropic Claude CLI", "agent_cli",
+    install_dep=Dep("claude", "Claude Code (Anthropic)", "Anthropic Claude CLI", "agent_cli",
         ["claude", "--version"], r"(\d+\.\d+\.\d+)",
         install_cmd="npm install -g @anthropic-ai/claude-code", needs_terminal=True,
         requires_binaries=("npm",),

@@ -768,7 +768,7 @@ SPEC = VendorSpec(
         reads_shared_root=True,
         skills_rel=(".agents", "skills"),
     ),
-    label="Muse Code",
+    label="Muse Code (Meta)",
     # `muse login` signs in with a Meta account by having the user approve a
     # code in the browser — a flow a PTY pane can carry. Note META_API_KEY
     # still takes priority over the account login if it is set in the
@@ -808,7 +808,7 @@ SPEC = VendorSpec(
     session_exists=_session_exists,
     make_log_reader=MuseLogReader,
     install_dep=Dep(
-        "muse", "Muse Code", "Meta Muse Code CLI", "agent_cli",
+        "muse", "Muse Code (Meta)", "Meta Muse Code CLI", "agent_cli",
         ["muse", "--version"],
         install_cmd="curl -fsSL https://dev.meta.ai/install.sh | sh",
         needs_terminal=True, requires_binaries=("curl",), optional=True,

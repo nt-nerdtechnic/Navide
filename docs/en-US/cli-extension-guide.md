@@ -13,6 +13,13 @@ Current built-in agent keys are `claude`, `codex`, `antigravity`, `grok`,
 `muse`, `droid`, and `mcode`. One key identifies a vendor on both sides — `agentKey`
 in the frontend, `agent_key` in the backend.
 
+The [vendor matrix roster](cli-vendor-matrix.md#roster) lists the current UI
+labels. Publisher suffixes are Navide presentation choices; they do not alter
+vendor keys, commands, install routes, or compatibility. Display labels are
+kept aligned across frontend and backend specs, installation entries, retained
+Plans specs, and Help. Historical research below retains its original product
+names and does not prescribe current menu labels.
+
 ---
 
 ## Part 1 — Where the code lives

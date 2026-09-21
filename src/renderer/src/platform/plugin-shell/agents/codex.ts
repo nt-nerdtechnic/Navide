@@ -4,7 +4,7 @@ import type { AgentSpec } from './types'
 
 export const SPEC = {
   agentKey: 'codex',
-  label: 'Codex',
+  label: 'Codex CLI (OpenAI)',
   defaultCommand: 'codex',
   // No effort flag: codex takes it as a config override
   // (`-c model_reasoning_effort=<value>`), a different injection shape than

@@ -4,7 +4,7 @@ import type { AgentSpec } from './types'
 
 export const SPEC = {
   agentKey: 'qwen',
-  label: 'Qwen Code',
+  label: 'Qwen Code (Alibaba Cloud)',
   defaultCommand: 'qwen',
   // Effort is settings-only (model.reasoningEffort) plus the in-session
   // /effort command; no launch flag.

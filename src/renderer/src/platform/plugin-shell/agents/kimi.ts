@@ -4,7 +4,7 @@ import type { AgentSpec } from './types'
 
 export const SPEC = {
   agentKey: 'kimi',
-  label: 'Kimi Code',
+  label: 'Kimi Code CLI (Moonshot AI)',
   defaultCommand: 'kimi',
   // Effort lives in ~/.kimi-code/config.toml ([thinking] effort) and an
   // invalid value is silently clamped there, so it is not exposed here.

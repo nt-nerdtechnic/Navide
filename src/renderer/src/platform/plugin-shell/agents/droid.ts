@@ -4,7 +4,7 @@ import type { AgentSpec } from './types'
 
 export const SPEC = {
   agentKey: 'droid',
-  label: 'Droid',
+  label: 'Droid CLI (Factory)',
   defaultCommand: 'droid',
   // No model or effort flag: `droid --help` (the interactive command Navide
   // spawns) declares neither, and its `-r` means --resume there while

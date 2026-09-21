@@ -4,7 +4,7 @@ import type { AgentSpec } from './types'
 
 export const SPEC = {
   agentKey: 'kilo',
-  label: 'Kilo Code',
+  label: 'Kilo Code CLI',
   defaultCommand: 'kilo',
   // A fork of opencode, confirmed in its source (Kilo-Org/kilocode, MIT): the
   // root command declares `-m, --model` itself (cli/cmd/tui.ts:148) and the

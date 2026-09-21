@@ -49,20 +49,20 @@ interface VendorRow {
 // test_help_panel_sign_in_column_matches_login_command_args keeps the two in
 // step, so this table cannot quietly drift from what the button runs.
 const vendors: VendorRow[] = [
-  { name: 'Claude Code', bin: 'claude', agentKey: 'claude', skipFlag: '--dangerously-skip-permissions', usage: true, multiAccount: true, signIn: 'auth login' },
-  { name: 'Codex', bin: 'codex', agentKey: 'codex', skipFlag: '--dangerously-bypass-approvals-and-sandbox', usage: true, multiAccount: true, signIn: 'login' },
-  { name: 'Antigravity CLI', bin: 'agy', agentKey: 'antigravity', skipFlag: '--dangerously-skip-permissions', usage: true, multiAccount: false, signIn: '' },
-  { name: 'Grok CLI', bin: 'grok', agentKey: 'grok', skipFlag: '', usage: true, multiAccount: true, signIn: 'login' },
-  { name: 'Kimi Code', bin: 'kimi', agentKey: 'kimi', skipFlag: '--yolo', usage: true, multiAccount: true, signIn: 'login' },
-  { name: 'OpenCode', bin: 'opencode', agentKey: 'opencode', skipFlag: '', usage: true, multiAccount: false, signIn: 'auth login' },
-  { name: 'Qwen Code', bin: 'qwen', agentKey: 'qwen', skipFlag: '--yolo', usage: true, multiAccount: false, signIn: '' },
-  { name: 'Kilo Code', bin: 'kilo', agentKey: 'kilo', skipFlag: '--auto', usage: true, multiAccount: true, signIn: 'auth login' },
+  { name: 'Claude Code (Anthropic)', bin: 'claude', agentKey: 'claude', skipFlag: '--dangerously-skip-permissions', usage: true, multiAccount: true, signIn: 'auth login' },
+  { name: 'Codex CLI (OpenAI)', bin: 'codex', agentKey: 'codex', skipFlag: '--dangerously-bypass-approvals-and-sandbox', usage: true, multiAccount: true, signIn: 'login' },
+  { name: 'Antigravity CLI (Google)', bin: 'agy', agentKey: 'antigravity', skipFlag: '--dangerously-skip-permissions', usage: true, multiAccount: false, signIn: '' },
+  { name: 'Grok Build (SpaceXAI)', bin: 'grok', agentKey: 'grok', skipFlag: '', usage: true, multiAccount: true, signIn: 'login' },
+  { name: 'Kimi Code CLI (Moonshot AI)', bin: 'kimi', agentKey: 'kimi', skipFlag: '--yolo', usage: true, multiAccount: true, signIn: 'login' },
+  { name: 'OpenCode (Anomaly)', bin: 'opencode', agentKey: 'opencode', skipFlag: '', usage: true, multiAccount: false, signIn: 'auth login' },
+  { name: 'Qwen Code (Alibaba Cloud)', bin: 'qwen', agentKey: 'qwen', skipFlag: '--yolo', usage: true, multiAccount: false, signIn: '' },
+  { name: 'Kilo Code CLI', bin: 'kilo', agentKey: 'kilo', skipFlag: '--auto', usage: true, multiAccount: true, signIn: 'auth login' },
   { name: 'Pi', bin: 'pi', agentKey: 'pi', skipFlag: '', usage: true, multiAccount: false, signIn: '' },
-  { name: 'Copilot CLI', bin: 'copilot', agentKey: 'copilot', skipFlag: '--yolo', usage: true, multiAccount: false, signIn: 'login' },
+  { name: 'GitHub Copilot CLI', bin: 'copilot', agentKey: 'copilot', skipFlag: '--yolo', usage: true, multiAccount: false, signIn: 'login' },
   { name: 'Cursor CLI', bin: 'agent', agentKey: 'cursor', skipFlag: '--force', usage: true, multiAccount: false, signIn: '' },
   { name: 'Aider', bin: 'aider', agentKey: 'aider', skipFlag: '--yes-always', usage: false, multiAccount: false, signIn: '' },
-  { name: 'Muse Code', bin: 'muse', agentKey: 'muse', skipFlag: '--disable-approval', usage: false, multiAccount: false, signIn: 'login' },
-  { name: 'Droid', bin: 'droid', agentKey: 'droid', skipFlag: '--auto high', usage: false, multiAccount: false, signIn: '' },
+  { name: 'Muse Code (Meta)', bin: 'muse', agentKey: 'muse', skipFlag: '--disable-approval', usage: false, multiAccount: false, signIn: 'login' },
+  { name: 'Droid CLI (Factory)', bin: 'droid', agentKey: 'droid', skipFlag: '--auto high', usage: false, multiAccount: false, signIn: '' },
   { name: 'MiniMax Code', bin: 'mcode', agentKey: 'mcode', skipFlag: '', usage: false, multiAccount: false, signIn: 'login' },
 ]
 

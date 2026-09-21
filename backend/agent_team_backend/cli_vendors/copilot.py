@@ -1469,7 +1469,7 @@ SPEC = VendorSpec(
         # user silently loses them.
         discovery_home=((".agents", "skills"),),
     ),
-    label="Copilot CLI",
+    label="GitHub Copilot CLI",
     # `copilot login` authenticates over OAuth. On a local desktop it opens
     # the browser and captures the result on a loopback callback — exactly
     # what a login pane carries; the device-code flow it falls back to for
@@ -1528,7 +1528,7 @@ SPEC = VendorSpec(
     # Copilot CLI ships `copilot update` but no doctor subcommand;
     # COPILOT_AUTO_UPDATE=false is its autoupdate opt-out and COPILOT_HOME
     # relocates its config/session root.
-    install_dep=Dep("copilot", "Copilot CLI", "GitHub Copilot coding agent CLI", "agent_cli",
+    install_dep=Dep("copilot", "GitHub Copilot CLI", "GitHub Copilot coding agent CLI", "agent_cli",
         ["copilot", "--version"], r"(\d+\.\d+\.\d+)",
         install_cmd="brew install --cask copilot-cli",
         needs_terminal=True, requires_binaries=("brew",), optional=True,

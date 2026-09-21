@@ -8,6 +8,7 @@ All notable released changes to Navide will be documented in this file. The form
 
 ### Changed
 
+- Align CLI menu, installer, Plans and Help labels with reviewed official product names and selected publisher suffixes, including Grok Build (SpaceXAI), while preserving vendor order, commands and existing pane names.
 - Use the app's font in pane context menus so detached menu rendering does not fall back to a browser serif font.
 - Keep destructive project-menu actions readable with a transparent default background, subtle danger color on hover or focus, and a visible keyboard focus outline, while preserving the existing close actions and confirmations.
 - Move the language picker from Appearance to its own **Settings → Language** page. Settings search opens the new page, and the language preference still applies to every workspace.

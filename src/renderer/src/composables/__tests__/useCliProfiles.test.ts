@@ -226,7 +226,7 @@ describe('useCliProfiles', () => {
     expect(res.ok).toBe(false)
     if (!res.ok) {
       expect(res.code).toBe(code)
-      const expected = i18n.global.t(key, { agent: 'Claude Code', vars: 'ANTHROPIC_API_KEY' })
+      const expected = i18n.global.t(key, { agent: 'Claude Code (Anthropic)', vars: 'ANTHROPIC_API_KEY' })
       expect(res.message).toBe(expected)
       expect(res.message).not.toContain(code)
       expect(res.message).not.toContain('cli-account.')
@@ -248,7 +248,7 @@ describe('useCliProfiles', () => {
     let res = await result.setDefault('kilo', 'p1')
     expect(res.ok).toBe(false)
     if (!res.ok) {
-      expect(res.message).toBe(i18n.global.t('cli-account.login-in-progress', { agent: 'Kilo Code', state: 'running' }))
+      expect(res.message).toBe(i18n.global.t('cli-account.login-in-progress', { agent: 'Kilo Code CLI', state: 'running' }))
       expect(res.message).not.toContain('LOGIN_IN_PROGRESS')
     }
 
@@ -257,7 +257,7 @@ describe('useCliProfiles', () => {
     })
     res = await result.setDefault('kilo', 'p1')
     expect(res.ok).toBe(false)
-    if (!res.ok) expect(res.message).toBe(i18n.global.t('cli-account.live-drift', { agent: 'Kilo Code' }))
+    if (!res.ok) expect(res.message).toBe(i18n.global.t('cli-account.live-drift', { agent: 'Kilo Code CLI' }))
 
     mock.setResponse('cli_profiles.set_default', { defaults: { kilo: 'p1' }, adoptedLiveLogin: true })
     res = await result.setDefault('kilo', 'p1')

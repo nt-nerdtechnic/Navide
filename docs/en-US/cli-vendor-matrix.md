@@ -53,24 +53,27 @@ Display order differs on purpose: the backend tuple is alphabetical, and
 
 ## Roster
 
-Ordered as the UI lists them (`agents/index.ts`).
+Ordered as the UI lists them (`agents/index.ts`). Display labels reviewed on
+2026-09-21; the capability snapshot above is unchanged. Publisher suffixes are
+Navide presentation choices, not part of official product names. Renaming a
+label does not upgrade a CLI or establish compatibility with a newer release.
 
 | Key | Label | Command executed | Install route |
 |---|---|---|---|
-| `claude` | Claude Code | `claude` | `npm i -g @anthropic-ai/claude-code` |
-| `codex` | Codex | `codex` | `npm i -g @openai/codex` |
-| `antigravity` | Antigravity CLI | **`agy`** | install script (antigravity.google) |
-| `grok` | Grok CLI | `grok` | install script (x.ai) |
-| `kimi` | Kimi Code | `kimi` | install script (code.kimi.com) |
-| `opencode` | OpenCode | `opencode` | install script (opencode.ai) |
-| `qwen` | Qwen Code | `qwen` | `npm i -g @qwen-code/qwen-code` |
-| `kilo` | Kilo Code | `kilo` | `npm i -g @kilocode/cli` |
+| `claude` | Claude Code (Anthropic) | `claude` | `npm i -g @anthropic-ai/claude-code` |
+| `codex` | Codex CLI (OpenAI) | `codex` | `npm i -g @openai/codex` |
+| `antigravity` | Antigravity CLI (Google) | **`agy`** | install script (antigravity.google) |
+| `grok` | Grok Build (SpaceXAI) | `grok` | install script (x.ai) |
+| `kimi` | Kimi Code CLI (Moonshot AI) | `kimi` | install script (code.kimi.com) |
+| `opencode` | OpenCode (Anomaly) | `opencode` | install script (opencode.ai) |
+| `qwen` | Qwen Code (Alibaba Cloud) | `qwen` | `npm i -g @qwen-code/qwen-code` |
+| `kilo` | Kilo Code CLI | `kilo` | `npm i -g @kilocode/cli` |
 | `pi` | Pi | `pi` | `npm i -g --ignore-scripts @earendil-works/pi-coding-agent` |
-| `copilot` | Copilot CLI | `copilot` | `brew install --cask copilot-cli` |
+| `copilot` | GitHub Copilot CLI | `copilot` | `brew install --cask copilot-cli` |
 | `cursor` | Cursor CLI | **`agent`** (alt: `cursor-agent`) | vendor installer |
 | `aider` | Aider | `aider` | install script (aider.chat) |
-| `muse` | Muse Code | `muse` | install script (dev.meta.ai) |
-| `droid` | Droid | `droid` | `brew install --cask droid` |
+| `muse` | Muse Code (Meta) | `muse` | install script (dev.meta.ai) |
+| `droid` | Droid CLI (Factory) | `droid` | `brew install --cask droid` |
 | `mcode` | MiniMax Code | `mcode` | `npm i -g @minimax-ai/code` |
 
 Two keys do not match their binary: `antigravity` runs `agy`, and `cursor` runs
@@ -168,12 +171,13 @@ through its settings instead of an interactive launch flag.
 
 ---
 
-## Known drift
+## Display label alignment
 
-`antigravity` is labelled `Antigravity` in the backend spec and
-`Antigravity CLI` in the frontend spec. Labels are outside the CI key check,
-so this went unnoticed; it is cosmetic, and whichever string wins, both files
-should carry it.
+Frontend specs, backend specs and installation entries, retained Plans specs,
+and the Help vendor table use the roster labels above. This also resolves the
+former backend `Antigravity` / frontend `Antigravity CLI` mismatch. Keep these
+display declarations synchronized; vendor identity and runtime routing remain
+key-based. Historical and custom pane names are not migrated.
 
 ---
 

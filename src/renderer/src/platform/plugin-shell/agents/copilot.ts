@@ -4,7 +4,7 @@ import type { AgentSpec } from './types'
 
 export const SPEC = {
   agentKey: 'copilot',
-  label: 'Copilot CLI',
+  label: 'GitHub Copilot CLI',
   defaultCommand: 'copilot',
   // `--effort` is an accepted alias; the long form is used here. GitHub's
   // published CLI reference documents only the settings.json `effortLevel`

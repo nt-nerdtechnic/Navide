@@ -841,7 +841,7 @@ SPEC = VendorSpec(
         root_env="HOME",
         skills_rel=(".gemini", "skills"),
     ),
-    label="Antigravity",
+    label="Antigravity CLI (Google)",
     # Multi-account: the refresh token is one fixed-name macOS Keychain item
     # (service "gemini", account "antigravity" — go-keyring, base64 JSON),
     # with the token file below as the stale copy the reader falls back to.
@@ -882,7 +882,7 @@ SPEC = VendorSpec(
     resume_id_from_command=_resume_id_from_command,
     session_path=_session_path,
     make_log_reader=AntigravityLogReader,
-    install_dep=Dep("antigravity", "Antigravity", "Google Antigravity CLI", "agent_cli",
+    install_dep=Dep("antigravity", "Antigravity CLI (Google)", "Google Antigravity CLI", "agent_cli",
         ["agy", "--version"], r"(\d+\.\d+\.\d+)",
         install_cmd="curl -fsSL https://antigravity.google/cli/install.sh | bash",
         needs_terminal=True, requires_binaries=("curl",), optional=True,

@@ -493,7 +493,7 @@ SPEC = VendorSpec(
     # FACTORY_HOME_OVERRIDE relocates the whole tree (droid_sessions_root).
     data_dirs=lambda ctx: (ctx.path(ctx.env.get("FACTORY_HOME_OVERRIDE") or ctx.home / ".factory"),),
     data_dir_env_vars=("FACTORY_HOME_OVERRIDE",),
-    label="Droid",
+    label="Droid CLI (Factory)",
     # Quota exhaustion, read from the 0.206.0 bundle (not reproduced live):
     # the structured ``agent_turn_outcome.reason`` value (the reader passes
     # it as the turn_complete detail) plus the TUI banners. Neighbours such
@@ -541,7 +541,7 @@ SPEC = VendorSpec(
         "DROID_PARENT_SESSION_ID",
     ),
     make_log_reader=DroidLogReader,
-    install_dep=Dep("droid", "Droid", "Factory AI coding agent", "agent_cli",
+    install_dep=Dep("droid", "Droid CLI (Factory)", "Factory AI coding agent", "agent_cli",
         ["droid", "--version"], r"(\d+\.\d+\.\d+)",
         install_cmd="brew install --cask droid", needs_terminal=True,
         requires_binaries=("brew",),

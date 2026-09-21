@@ -781,7 +781,7 @@ SPEC = VendorSpec(
         reads_shared_root=True,
         skills_rel=(".agents", "skills"),
     ),
-    label="Grok CLI",
+    label="Grok Build (SpaceXAI)",
     # Wired through the per-pane HOME shim (mcp_server/pane_home.py): the
     # official CLI reads its servers as a MAP of `[mcp_servers.<name>]` tables
     # in ~/.grok/config.toml, and `config_file` + `section` below is the whole
@@ -853,7 +853,7 @@ SPEC = VendorSpec(
     # grok-cli) installs to the same ~/.grok/bin/grok, so `which grok` cannot
     # tell them apart — the version string can: this one prints
     # "grok <x.y.z> (<commit>)", the community one a bare "1.1.7".
-    install_dep=Dep("grok", "Grok CLI", "xAI Grok coding agent", "agent_cli",
+    install_dep=Dep("grok", "Grok Build (SpaceXAI)", "xAI Grok coding agent", "agent_cli",
         ["grok", "--version"], r"(\d+\.\d+\.\d+)",
         install_cmd="curl -fsSL https://x.ai/cli/install.sh | bash",
         needs_terminal=True, requires_binaries=("curl",), optional=True,

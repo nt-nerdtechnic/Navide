@@ -337,7 +337,7 @@ SPEC = VendorSpec(
     supports_model=True,
     # Verified 2026-08-15: kilo's bundle carries no SKILL.md handling at all.
     skills_supported=False,
-    label="Kilo Code",
+    label="Kilo Code CLI",
     # An OpenCode fork: identical config document, its own variable.
     mcp_wiring=McpWiring(
         config=McpServerConfig(
@@ -424,7 +424,7 @@ SPEC = VendorSpec(
     make_log_reader=KiloLogReader,
     # Kilo Code (OpenCode fork) ships `kilo upgrade` but no doctor subcommand
     # (`kilo debug` is diagnostics-adjacent, not a doctor — no invented command).
-    install_dep=Dep("kilo", "Kilo Code", "Kilo Code terminal coding agent (OpenCode fork)", "agent_cli",
+    install_dep=Dep("kilo", "Kilo Code CLI", "Kilo Code terminal coding agent (OpenCode fork)", "agent_cli",
         ["kilo", "--version"], r"(\d+\.\d+\.\d+)",
         install_cmd="npm install -g @kilocode/cli",
         needs_terminal=True, requires_binaries=("npm",), optional=True,
