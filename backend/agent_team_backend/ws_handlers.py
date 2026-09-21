@@ -5810,15 +5810,35 @@ async def tokens_quota_cycles(session: "Session", msg_id: str, msg_type: str, pa
         await session.send_json(make_response(
             msg_id, msg_type, {"ok": False, "error": "unknown-vendor"}))
         return
-    cycles = await asyncio.to_thread(
-        app.quota_ledger.cycles, agent_key, profile_id, window_kind
-    )
+    try:
+        await asyncio.to_thread(app.quota_ledger.reconcile_pending, app.tokens_store)
+        result = await asyncio.to_thread(
+            app.quota_ledger.query_cycles, agent_key, profile_id, window_kind,
+            **{key: payload[key] for key in (
+                "range_start", "range_end", "include_current", "limit", "cursor", "snapshot", "export",
+            ) if key in payload},
+        )
+    except ValueError as err:
+        result = {"ok": False, "error": str(err)}
+    await session.send_json(make_response(msg_id, msg_type, result))
+
+
+@handler("tokens.quota_accounts")
+async def tokens_quota_accounts(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    agent_key = str(payload.get("agent_key") or "")
+    if agent_key and agent_key not in CLI_VENDORS:
+        await session.send_json(make_response(msg_id, msg_type, {"ok": False, "error": "unknown-vendor"}))
+        return
+    quota = await asyncio.to_thread(app.quota_ledger.identities)
+    tokens = {(a, p) for a, p, _day, _bucket in app.tokens_store.account_day_rows()}
     await session.send_json(make_response(msg_id, msg_type, {
-        "ok": True,
-        "agent_key": agent_key,
-        "profile_id": profile_id or "unknown",
-        "cycles": cycles,
-        "summary": app.quota_ledger.summarize(cycles),
+        "ok": True, "accounts": [
+            {"agent_key": a, "profile_id": p, "has_quota_history": (a, p) in quota,
+             "has_token_history": (a, p) in tokens}
+            for a, p in sorted(quota | tokens) if not agent_key or a == agent_key
+        ],
     }))
 
 
@@ -5844,7 +5864,10 @@ async def tokens_quota_exhausted(session: "Session", msg_id: str, msg_type: str,
     updated: list[str] = []
     if at is not None and profile_id != UNKNOWN_PROFILE_ID:
         updated = await asyncio.to_thread(
-            app.quota_ledger.mark_exhausted, agent_key, profile_id, at, resets_at
+            app.quota_ledger.mark_exhausted, agent_key, profile_id, at, resets_at,
+            window_kind=str(payload.get("window_kind") or "") or None,
+            model_scope=str(payload.get("model_scope") or "") or None,
+            reset_precision=str(payload.get("reset_precision") or "unknown"),
         )
     await session.send_json(make_response(msg_id, msg_type, {"ok": True, "updated": updated}))
     for window_kind in updated:
@@ -5867,9 +5890,16 @@ async def tokens_account_periods(session: "Session", msg_id: str, msg_type: str,
         await session.send_json(make_response(
             msg_id, msg_type, {"ok": False, "error": "unknown-vendor"}))
         return
-    result = await asyncio.to_thread(
-        app.account_periods, agent_key, profile_id, granularity
-    )
+    try:
+        await asyncio.to_thread(app.quota_ledger.reconcile_pending, app.tokens_store)
+        result = await asyncio.to_thread(
+            app.account_periods, agent_key, profile_id, granularity,
+            **{key: payload[key] for key in (
+                "range_start", "range_end", "window_kind", "offset", "limit", "export",
+            ) if key in payload},
+        )
+    except ValueError as err:
+        result = {"ok": False, "error": str(err)}
     await session.send_json(make_response(msg_id, msg_type, result))
 
 

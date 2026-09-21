@@ -10,6 +10,7 @@ import {
   LIMIT_RESET_BUFFER_MS,
   LOOP_ESTIMATE_WINDOW_MS,
   matchSessionLimit,
+  parseLimitEvidence,
   parseLimitReset
 } from './loopPrompt'
 import { AGENT_SPECS } from '@navide/plugin-shell'
@@ -90,6 +91,21 @@ export interface UsageLimitHit {
    *  derived from the reading cannot then be used to tell which window the
    *  reading was about. */
   resetAt: number | null
+  windowKind: string | null
+  modelScope: string | null
+  resetPrecision: 'exact' | 'minute' | 'hour' | 'clock_only' | 'unknown'
+}
+
+export function quotaExhaustedPayload(hit: UsageLimitHit, pane: { agentKey: string; paneId: string }, at: number) {
+  return {
+    agent_key: pane.agentKey,
+    pane_id: pane.paneId,
+    at: new Date(at).toISOString(),
+    resets_at: hit.resetAt === null ? null : new Date(hit.resetAt).toISOString(),
+    window_kind: hit.windowKind,
+    model_scope: hit.modelScope,
+    reset_precision: hit.resetPrecision
+  }
 }
 
 /** Resume time taken from the account's own `/usage` reading: the spent
@@ -144,7 +160,7 @@ export function detectUsageLimit(
     return {
       message: clocked,
       resumeAt: parsed ?? usageResumeAt(agentKey, now),
-      resetAt: parsed === null ? null : parsed - LIMIT_RESET_BUFFER_MS
+      ...parseLimitEvidence(clocked, now)
     }
   }
   // The vendor's own declared notice (agents/<key>.ts quotaExhausted): its
@@ -155,9 +171,9 @@ export function detectUsageLimit(
   const own = declared ? declared.exec(tail.replace(/\s+/g, ' ')) : null
   if (own) {
     if (hasHeadlineHeadroom(usageFor(agentKey))) return QUOTA_READING_VETO
-    return { message: own[0], resumeAt: usageResumeAt(agentKey, now), resetAt: null }
+    return { message: own[0], resumeAt: usageResumeAt(agentKey, now), ...parseLimitEvidence(own[0], now) }
   }
   const bare = BARE_LIMIT_RE.exec(tail.replace(/\s+/g, ' '))
   if (!bare || exhaustedWindow(usageFor(agentKey)) === undefined) return null
-  return { message: bare[0], resumeAt: usageResumeAt(agentKey, now), resetAt: null }
+  return { message: bare[0], resumeAt: usageResumeAt(agentKey, now), ...parseLimitEvidence(bare[0], now) }
 }

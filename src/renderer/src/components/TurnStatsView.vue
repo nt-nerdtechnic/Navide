@@ -205,8 +205,8 @@ const subtotals = computed(() => {
 // ── The version dimension ───────────────────────────────────────────────────
 const showVersion = ref(true)
 const showVersionChart = ref(false)
-/** Average spend per turn by CLI version, oldest version first — "did the
- *  upgrade get more expensive" read straight off the turns. */
+/** Observed token averages for all recorded turns in this session, by version.
+ *  Sample populations differ; these figures do not establish price changes. */
 const versionRows = computed(() => {
   const groups = new Map<string, Sum>()
   for (const turn of result.value?.turns ?? []) {

@@ -4,7 +4,7 @@
 // string comes in through props so the caller owns translation.
 import { computed } from 'vue'
 
-export interface BarWithLine { label: string; note?: string; value: number; percent: number | null; exhausted: boolean }
+export interface BarWithLine { label: string; note?: string; value: number | null; percent: number | null; exhausted: boolean }
 
 const props = withDefaults(defineProps<{
   bars: BarWithLine[]
@@ -30,7 +30,7 @@ const plotWidth = WIDTH - PAD_LEFT - PAD_RIGHT
 const plotHeight = computed(() => Math.max(1, props.height - PAD_TOP - PAD_BOTTOM))
 const baseline = computed(() => PAD_TOP + plotHeight.value)
 
-const maximum = computed(() => Math.max(1, ...props.bars.map((bar) => bar.value)))
+const maximum = computed(() => Math.max(1, ...props.bars.map((bar) => bar.value ?? 0)))
 const slot = computed(() => plotWidth / Math.max(1, props.bars.length))
 const barWidth = computed(() => Math.max(2, Math.min(48, Math.round(slot.value * 0.6))))
 const barX = (i: number): number => Math.round(PAD_LEFT + slot.value * i + (slot.value - barWidth.value) / 2)
@@ -39,7 +39,7 @@ const scaleY = (value: number): number => baseline.value - Math.round(value / ma
 const scalePercent = (p: number): number => baseline.value - Math.round(Math.min(100, Math.max(0, p)) / 100 * plotHeight.value)
 
 const layout = computed(() => props.bars.map((bar, i) => {
-  const y = scaleY(bar.value)
+  const y = scaleY(bar.value ?? 0)
   return { bar, index: i, x: barX(i), y, height: baseline.value - y }
 }))
 
@@ -53,7 +53,7 @@ const points = computed(() => props.bars.flatMap((bar, i) => bar.percent === nul
 const linePoints = computed(() => points.value.map((p) => `${p.cx},${p.cy}`).join(' '))
 
 const title = (bar: BarWithLine): string =>
-  `${bar.label}: ${format.value(bar.value)}` + (bar.percent !== null ? ` · ${formatPercent.value(bar.percent)}` : '')
+  `${bar.label}: ${bar.value === null ? '—' : format.value(bar.value)}` + (bar.percent !== null ? ` · ${formatPercent.value(bar.percent)}` : '') + (bar.note ? ` · ${bar.note}` : '')
 </script>
 <template>
   <p v-if="bars.length === 0" class="chart-empty" data-part="empty">{{ emptyText }}</p>
@@ -69,11 +69,18 @@ const title = (bar: BarWithLine): string =>
       :key="entry.index"
       class="bar-group"
       data-part="bar-group"
+      role="button"
+      tabindex="0"
+      :aria-label="title(entry.bar)"
+      :aria-pressed="selected === entry.index"
+      @keydown.enter="emit('select', entry.index)"
+      @keydown.space.prevent="emit('select', entry.index)"
       @click="emit('select', entry.index)"
     >
       <title>{{ title(entry.bar) }}</title>
       <rect :x="entry.x - 4" :y="PAD_TOP" :width="barWidth + 8" :height="plotHeight" class="hit" data-part="hit" />
       <rect
+        v-if="entry.bar.value !== null"
         :x="entry.x"
         :y="entry.y"
         :width="barWidth"
@@ -83,7 +90,7 @@ const title = (bar: BarWithLine): string =>
         :data-index="entry.index"
         :data-selected="selected === entry.index ? 'true' : undefined"
       />
-      <text :x="barCenter(entry.index)" :y="entry.y - 4" text-anchor="middle" class="total" data-part="bar-total">{{ format(entry.bar.value) }}</text>
+      <text :x="barCenter(entry.index)" :y="entry.y - 4" text-anchor="middle" class="total" data-part="bar-total">{{ entry.bar.value === null ? '—' : format(entry.bar.value) }}</text>
       <text :x="barCenter(entry.index)" :y="baseline + 14" text-anchor="middle" class="x-label" data-part="x-label">{{ entry.bar.label }}</text>
       <text v-if="entry.bar.note" :x="barCenter(entry.index)" :y="baseline + 26" text-anchor="middle" class="x-note" data-part="x-note">{{ entry.bar.note }}</text>
     </g>
@@ -103,6 +110,7 @@ text { fill: var(--text-muted); font-size: var(--font-3xs); }
 .bar-group { cursor: pointer; }
 .hit { fill: transparent; }
 .bar-group:hover .hit { fill: var(--bg-hover-faint); }
+.bar-group:focus-visible .hit { stroke: var(--accent-fg); stroke-width: 2; }
 .bar { fill: var(--accent-fg); opacity: .75; }
 .bar[data-selected="true"] { stroke: var(--accent-fg); stroke-width: 1.5; opacity: 1; }
 .total { fill: var(--text-secondary); }

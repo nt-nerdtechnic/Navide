@@ -54,13 +54,63 @@ export function withLoopDoneInstruction(prompt: string): string {
 export const SESSION_LIMIT_RE =
   /hit your .{0,40}limit.{0,80}?resets\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*\(([^)]+)\)/i
 
+const DATED_LIMIT_RE = /hit your .{0,40}limit.{0,80}?resets\s+(\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})|\s+(?:at\s+)?\d{1,2}(?::\d{2})?\s*(?:am|pm)\s*\([^)]+\)))/i
+
+function datedReset(message: string): number | null {
+  const reset = DATED_LIMIT_RE.exec(message)?.[1]
+  if (!reset) return null
+  const date = reset.slice(0, 10).split('-').map(Number)
+  const day = new Date(Date.UTC(date[0], date[1] - 1, date[2]))
+  if (day.getUTCFullYear() !== date[0] || day.getUTCMonth() + 1 !== date[1] || day.getUTCDate() !== date[2]) return null
+  if (reset[10] === 'T') {
+    const at = Date.parse(reset)
+    return Number.isFinite(at) ? at : null
+  }
+  const parts = /^(\d{4})-(\d{2})-(\d{2})\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*\(([^)]+)\)$/i.exec(reset)
+  if (!parts) return null
+  const hour = Number(parts[4]); const minute = Number(parts[5] ?? 0)
+  if (hour < 1 || hour > 12 || minute > 59) return null
+  const target = Date.UTC(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3]), hour % 12 + (parts[6].toLowerCase() === 'pm' ? 12 : 0), minute)
+  try {
+    const format = new Intl.DateTimeFormat('en-US', { timeZone: parts[7].replace(/\s/g, ''), year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' })
+    const wall = (at: number): number => {
+      const p = format.formatToParts(at)
+      const n = (type: string): number => Number(p.find((x) => x.type === type)?.value)
+      return Date.UTC(n('year'), n('month') - 1, n('day'), n('hour'), n('minute'), n('second'))
+    }
+    let at = target
+    for (let i = 0; i < 2; i++) at += target - wall(at)
+    return wall(at) === target ? at : null
+  } catch { return null }
+}
+
+/** Attribution is stricter than the legacy loop's next-clock estimate. */
+export function parseLimitEvidence(message: string, now: number = Date.now()): {
+  windowKind: string | null; modelScope: string | null
+  resetPrecision: 'exact' | 'minute' | 'hour' | 'clock_only' | 'unknown'; resetAt: number | null
+} {
+  const normalized = message.replace(/\s+/g, ' ')
+  const notice = normalized.split(/\bresets\b/i)[0]
+  const windowKind = /\bweekly\b/i.test(notice) ? 'weekly' : /\bsession\b/i.test(notice) ? 'session' : /\bmonthly\b/i.test(notice) ? 'monthly' : null
+  const model = /\(([^)]+)\)/.exec(notice)?.[1] ?? /\b(?:for|model)\s+(.+?)\s+limit/i.exec(notice)?.[1] ?? null
+  const modelScope = /all models/i.test(notice) ? 'all' : model
+  const dated = DATED_LIMIT_RE.exec(normalized)
+  if (dated) {
+    const resetAt = datedReset(normalized)
+    return { windowKind, modelScope, resetAt, resetPrecision: resetAt === null ? 'unknown' : dated[1][10] === 'T' ? 'exact' : /:\d{2}/.test(dated[1]) ? 'minute' : 'hour' }
+  }
+  const parsed = parseLimitReset(normalized, now)
+  return { windowKind, modelScope, resetPrecision: parsed === null ? 'unknown' : 'clock_only', resetAt: windowKind === 'session' && parsed !== null ? parsed - LIMIT_RESET_BUFFER_MS : null }
+}
+
 /** Match the session-limit message in `text`, tolerating the TUI's hard
  *  line-wrapping in narrow panes (cleanBuffer keeps the wrap `\n`, which the
  *  regex `.`/`.{0,40}` gaps cannot cross). Whitespace runs are collapsed to
  *  single spaces before matching. Returns the normalized matched message
  *  (suitable for parseLimitReset) or null when no limit message is present. */
 export function matchSessionLimit(text: string): string | null {
-  const m = SESSION_LIMIT_RE.exec(text.replace(/\s+/g, ' '))
+  const normalized = text.replace(/\s+/g, ' ')
+  const m = DATED_LIMIT_RE.exec(normalized) ?? SESSION_LIMIT_RE.exec(normalized)
   return m ? m[0] : null
 }
 
@@ -100,6 +150,10 @@ export const LOOP_ESTIMATE_WINDOW_MS = 5 * 60 * 60_000
  *  Returns null when the message doesn't match or can't be interpreted
  *  (unknown timezone, out-of-range time) — callers fail open. */
 export function parseLimitReset(message: string, now: number = Date.now()): number | null {
+  if (DATED_LIMIT_RE.test(message)) {
+    const at = datedReset(message)
+    return at === null ? null : at + LIMIT_RESET_BUFFER_MS
+  }
   const m = SESSION_LIMIT_RE.exec(message)
   if (!m) return null
   const rawHour = Number(m[1])

@@ -44,6 +44,7 @@ class FakeWebSocket:
 def stores(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Fresh store / history / ledger on a temp database, wired into app."""
     db = Database(tmp_path / "navide.db")
+    db.kv_set("tokens.slices_since", 1733011200.0, now=1)  # observed since December 2024
     store = TokensStore(global_path=tmp_path / "g.json", workspace_base_dir=tmp_path / "w", db=db)
     history = PaneAccountHistory(db)
     ledger = QuotaLedger(db, store.account_window_totals)
@@ -58,6 +59,7 @@ def stores(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(app, "_schedule_tokens_broadcast", lambda _ws: None)
     monkeypatch.setattr(app, "_live_scans", {})
     yield store, history, ledger, attribution
+    store.flush()
     db.close()
 
 
@@ -220,8 +222,9 @@ async def test_quota_cycles_handler_follows_the_contract(stores, tmp_path: Path)
     assert unknown_vendor == {"ok": False, "error": "unknown-vendor"}
 
     empty = await _call("tokens.quota_cycles", agent_key="codex", profile_id="acct-a")
-    assert empty == {"ok": True, "agent_key": "codex", "profile_id": "acct-a",
-                     "cycles": [], "summary": {}}
+    assert {key: empty[key] for key in ("ok", "agent_key", "profile_id", "cycles", "summary")} == {
+        "ok": True, "agent_key": "codex", "profile_id": "acct-a", "cycles": [], "summary": {}}
+    assert empty["total_count"] == 0 and empty["next_cursor"] is None
 
     reply = await _call("tokens.quota_cycles", agent_key="claude", profile_id="acct-a")
     assert reply["ok"] is True and reply["agent_key"] == "claude"
@@ -272,7 +275,8 @@ async def test_account_periods_handler_rolls_days_into_months_and_years(stores, 
     bad = await _call("tokens.account_periods", agent_key="nope", granularity="month")
     assert bad == {"ok": False, "error": "unknown-vendor"}
 
-    reply = await _call("tokens.account_periods", granularity="month")
+    selected_range = {"range_start": "2025-01-01T00:00:00Z", "range_end": "2027-01-01T00:00:00Z"}
+    reply = await _call("tokens.account_periods", granularity="month", **selected_range)
     assert reply["ok"] is True and reply["granularity"] == "month"
     rows = reply["rows"]
     assert [(r["period"], r["profile_id"]) for r in rows] == [
@@ -285,18 +289,20 @@ async def test_account_periods_handler_rolls_days_into_months_and_years(stores, 
     assert sept_a["total"] == 502 and sept_a["calls"] == 2 and sept_a["turns"] == 1
     assert (sept_a["cycles"], sept_a["exhausted"], sept_a["weekly_exhausted"]) == (2, 1, 0)
     assert rows[1]["cycles"] == 0 and rows[1]["avg_total_exhausted"] is None
-    assert reply["totals_by_period"] == [
+    assert [{key: r[key] for key in ("period", "total", "calls", "turns")} for r in reply["totals_by_period"]] == [
         {"period": "2026-09", "total": 502 + 401, "calls": 3, "turns": 1},
         {"period": "2026-08", "total": 51, "calls": 1, "turns": 0},
         {"period": "2025-12", "total": 10, "calls": 1, "turns": 0},
     ]
 
     yearly = await _call("tokens.account_periods", agent_key="claude", profile_id="acct-a",
-                         granularity="year")
+                         granularity="year", **selected_range)
     assert [(r["period"], r["total"], r["cycles"]) for r in yearly["rows"]] == [("2026", 553, 2)]
     # Filters that match nothing are ok + empty.
     nothing = await _call("tokens.account_periods", profile_id="ghost", granularity="year")
-    assert nothing == {"ok": True, "granularity": "year", "rows": [], "totals_by_period": []}
+    assert {key: nothing[key] for key in ("ok", "granularity", "rows", "totals_by_period")} == {
+        "ok": True, "granularity": "year", "rows": [], "totals_by_period": []}
+    assert nothing["total_count"] == 0 and nothing["next_offset"] is None
 
 
 @pytest.mark.asyncio
@@ -324,11 +330,11 @@ async def test_quota_exhausted_handler_stamps_the_panes_account(stores, monkeypa
     monkeypatch.setattr(app, "broadcast", broadcast)
 
     bad = await _call("tokens.quota_exhausted", agent_key="nope", pane_id="pane-1",
-                      at=iso(seen_at), resets_at=iso(resets))
+                      at=iso(seen_at), resets_at=iso(resets), reset_precision="minute", window_kind="session")
     assert bad == {"ok": False, "error": "unknown-vendor"}
     # A pane with no account resolves to nothing to stamp.
     none = await _call("tokens.quota_exhausted", agent_key="claude", pane_id="ghost",
-                       at=iso(seen_at), resets_at=iso(resets))
+                       at=iso(seen_at), resets_at=iso(resets), reset_precision="minute", window_kind="session")
     assert none == {"ok": True, "updated": []} and events == []
     # Neither does a message that named no window: which of the account's
     # windows hit the wall is then unknown, and the 100 % sample owns the stamp.
@@ -337,7 +343,7 @@ async def test_quota_exhausted_handler_stamps_the_panes_account(stores, monkeypa
     assert blind == {"ok": True, "updated": []} and events == []
 
     reply = await _call("tokens.quota_exhausted", agent_key="claude", pane_id="pane-1",
-                        at=iso(seen_at), resets_at=iso(resets))
+                        at=iso(seen_at), resets_at=iso(resets), reset_precision="minute", window_kind="session")
     assert reply == {"ok": True, "updated": ["session"]}
     assert [e["type"] for e in events] == ["tokens.quota_cycles_changed"]
     assert events[0]["payload"] == {"agent_key": "claude", "profile_id": "acct-a", "window_kind": "session"}
@@ -345,7 +351,7 @@ async def test_quota_exhausted_handler_stamps_the_panes_account(stores, monkeypa
     assert cycles["cycles"][0]["exhausted_at"] == iso(seen_at)
     # Later detection: no change, no broadcast.
     again = await _call("tokens.quota_exhausted", agent_key="claude", pane_id="pane-1",
-                        at=iso(sample_at + 60), resets_at=iso(resets))
+                        at=iso(sample_at + 60), resets_at=iso(resets), reset_precision="minute", window_kind="session")
     assert again == {"ok": True, "updated": []} and len(events) == 1
 
 
@@ -394,11 +400,11 @@ async def test_non_account_vendor_pins_the_slot_its_usage_samples_are_filed_unde
     )
     resets_iso = datetime.fromtimestamp(now + 3600, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
     svc = us.UsageService()
-    svc.snapshots["mcode"] = {
+    svc.account_snapshots["mcode"] = {"__default__": {
         "provider": "mcode", "status": "ok", "fetchedAt": now_iso,
         "windows": [{"kind": "session", "label": "Session (5h)", "usedPercent": 12.0,
                      "resetsAt": resets_iso}],
-    }
+    }}
     events: list[dict] = []
 
     async def broadcast(event, **_kw):
@@ -410,5 +416,6 @@ async def test_non_account_vendor_pins_the_slot_its_usage_samples_are_filed_unde
         {"agent_key": "mcode", "profile_id": "__default__", "window_kind": "session"}
     ]
     [cycle] = ledger.cycles("mcode", "__default__")
-    assert (cycle["input"], cycle["output"], cycle["calls"]) == (40, 2, 1)
+    assert cycle["coverage_reason"] == "start_unknown" and cycle["total"] is None
+    assert tuple(cycle["recorded_totals"][key] for key in ("input", "output", "calls")) == (40, 2, 1)
     assert ledger.cycles("mcode", "unknown") == []

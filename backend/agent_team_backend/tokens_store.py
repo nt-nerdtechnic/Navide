@@ -127,12 +127,23 @@ def _create_tokens_schema(cur: sqlite3.Cursor) -> None:
 
 # Per-account usage in fixed time slices, the sub-day resolution the quota
 # cycle ledger needs (a 5h window starts at an arbitrary minute). Bounded by
-# SLICE_RETENTION_S: a cycle's sums are frozen into quota_cycles when it
-# closes, so only open cycles ever read from here — and the longest open
+# SLICE_RETENTION_S: a cycle's sums are finalized into quota_cycles when it
+# closes; retained late events may still reconcile them. The longest open
 # window is a calendar month (copilot / grok / qwen monthly credits, up to 31
 # days back to the previous reset), so retention must cover more than that.
 SLICE_S = 300
 SLICE_RETENTION_S = 40 * 86400
+
+
+def slice_coverage(start: float | None, end: float, since: float, wall: float) -> tuple[str, str | None]:
+    if start is None:
+        return "unavailable", "start_unknown"
+    cutoff = wall - SLICE_RETENTION_S
+    available_since = max(since, cutoff)
+    if start >= available_since:
+        return "available", None
+    reason = "retention_expired" if cutoff > since else "collection_started_late"
+    return ("partial" if min(end, wall) > available_since else "unavailable"), reason
 
 
 def _create_slices_schema(cur: sqlite3.Cursor) -> None:
@@ -376,6 +387,11 @@ class TokensStore:
         self._db = db or Database(data_root / DB_FILENAME)
         self._db.migrate("tokens", 1, _create_tokens_schema)
         self._db.migrate("tokens", 2, _create_slices_schema)
+        since = self._db.kv_get("tokens.slices_since")
+        if not isinstance(since, (int, float)) or isinstance(since, bool):
+            since = time.time()
+            self._db.kv_set("tokens.slices_since", since, now=int(since))
+        self.slices_since = float(since)
 
         # RLock because reset() calls snapshot() while holding the lock.
         self._lock = RLock()
@@ -415,6 +431,9 @@ class TokensStore:
 
         self._import_legacy_json()
         self._load_slices()
+        # A bounded startup drain also repairs a crash between a slice flush
+        # and its closed-cycle reconciliation. This is not a raw-event log.
+        self._quota_changes: set[tuple[str, str, int]] = set(self._slices)
 
         self._global_data: dict[str, Any] = self._load_global()
         # In-memory checkpoint cache: path -> {"global": ckpt, "workspaces":
@@ -1424,6 +1443,7 @@ class TokensStore:
             key = (vendor, profile, slice_start)
             _add_detail(self._slices.setdefault(key, _empty_detail_bucket()), detail)
             self._dirty_slices.add(key)
+            self._quota_changes.add(key)
 
     def record_turn(
         self, vendor: str, profile_id: str, timestamp: str = ""
@@ -1441,15 +1461,18 @@ class TokensStore:
 
     def account_window_totals(
         self, vendor: str, profile_id: str, start: float | None, end: float
-    ) -> dict[str, int]:
+    ) -> dict[str, Any]:
         """Sum of the account's slices with slice_start in [start, end) — the
         token side of a quota cycle. ``start`` None means "from the oldest
         retained slice"."""
         profile = normalize_profile_id(profile_id)
         totals = _empty_detail_bucket()
+        wall = time.time()
         with self._lock:
             for (agent, prof, slice_start), bucket in self._slices.items():
                 if agent != vendor or prof != profile:
+                    continue
+                if slice_start < wall - SLICE_RETENTION_S:
                     continue
                 if start is not None and slice_start < start:
                     continue
@@ -1459,7 +1482,20 @@ class TokensStore:
         totals["total"] = (
             totals["input"] + totals["cache_read"] + totals["cache_creation"] + totals["output"]
         )
+        state, reason = slice_coverage(start, end, self.slices_since, wall)
+        totals.update(coverage_state=state, coverage_reason=reason)
         return totals
+
+    def take_quota_changes(self, limit: int) -> list[tuple[str, str, int]]:
+        with self._lock:
+            out = []
+            while self._quota_changes and len(out) < limit:
+                out.append(self._quota_changes.pop())
+            return out
+
+    def has_quota_changes(self) -> bool:
+        with self._lock:
+            return bool(self._quota_changes)
 
     def account_day_rows(self) -> list[tuple[str, str, str, dict[str, int]]]:
         """Every (agent, profile_id, day, detail bucket) of by_account_day."""
@@ -1676,7 +1712,10 @@ class TokensStore:
                 self._dirty_global = True
                 self._slices.clear()
                 self._dirty_slices.clear()
+                self._quota_changes.clear()
                 self._delete_all_slices = True
+                self.slices_since = time.time()
+                self._db.kv_set("tokens.slices_since", self.slices_since, now=int(self.slices_since))
                 self._files.clear()
                 self._last_seen.clear()
                 self._dirty_checkpoints.clear()

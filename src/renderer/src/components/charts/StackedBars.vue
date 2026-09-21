@@ -4,7 +4,7 @@
 // comes in through props so the caller owns translation.
 import { computed } from 'vue'
 
-export interface StackedBarSegment { key: string; label: string; value: number; color: string }
+export interface StackedBarSegment { key: string; label: string; value: number | null; color: string }
 export interface StackedBar { label: string; note?: string; segments: StackedBarSegment[] }
 export interface StackedBarsLegendItem { key: string; label: string; color: string }
 
@@ -31,8 +31,8 @@ const plotWidth = WIDTH - PAD_LEFT - PAD_RIGHT
 const plotHeight = computed(() => Math.max(1, props.height - PAD_TOP - PAD_BOTTOM))
 const baseline = computed(() => PAD_TOP + plotHeight.value)
 
-const totals = computed(() => props.bars.map((bar) => bar.segments.reduce((sum, s) => sum + s.value, 0)))
-const maximum = computed(() => Math.max(1, ...totals.value))
+const totals = computed(() => props.bars.map((bar) => bar.segments.some((s) => s.value === null) ? null : bar.segments.reduce((sum, s) => sum + (s.value ?? 0), 0)))
+const maximum = computed(() => Math.max(1, ...totals.value.map((v) => v ?? 0)))
 
 const slot = computed(() => plotWidth / Math.max(1, props.bars.length))
 const barWidth = computed(() => Math.max(2, Math.min(48, Math.round(slot.value * 0.6))))
@@ -44,8 +44,8 @@ const scaleY = (value: number): number => baseline.value - Math.round(value / ma
 const layout = computed(() => props.bars.map((bar, i) => {
   let cumulative = 0
   let previousY = baseline.value
-  const segments = bar.segments.map((segment) => {
-    cumulative += segment.value
+  const segments = (totals.value[i] === null ? [] : bar.segments).map((segment) => {
+    cumulative += segment.value ?? 0
     const y = scaleY(cumulative)
     const rect = { x: barX(i), y, height: previousY - y, segment }
     previousY = y
@@ -79,6 +79,12 @@ const legendItems = computed<StackedBarsLegendItem[]>(() => {
         data-part="bar"
         :data-index="entry.index"
         :data-selected="selected === entry.index ? 'true' : undefined"
+        role="button"
+        tabindex="0"
+        :aria-label="`${entry.bar.label}: ${entry.total === null ? '—' : format(entry.total)}`"
+        :aria-pressed="selected === entry.index"
+        @keydown.enter="emit('select', entry.index)"
+        @keydown.space.prevent="emit('select', entry.index)"
         @click="emit('select', entry.index)"
       >
         <rect :x="barX(entry.index) - 4" :y="PAD_TOP" :width="barWidth + 8" :height="plotHeight" class="hit" data-part="hit" />
@@ -94,9 +100,9 @@ const legendItems = computed<StackedBarsLegendItem[]>(() => {
           :data-key="seg.segment.key"
           :style="{ fill: seg.segment.color }"
         >
-          <title>{{ entry.bar.label }} · {{ seg.segment.label }}: {{ format(seg.segment.value) }}</title>
+          <title>{{ entry.bar.label }} · {{ seg.segment.label }}: {{ seg.segment.value === null ? '—' : format(seg.segment.value) }}</title>
         </rect>
-        <text :x="barCenter(entry.index)" :y="entry.top - 4" text-anchor="middle" class="total" data-part="bar-total">{{ format(entry.total) }}</text>
+        <text :x="barCenter(entry.index)" :y="entry.top - 4" text-anchor="middle" class="total" data-part="bar-total">{{ entry.total === null ? '—' : format(entry.total) }}</text>
         <text :x="barCenter(entry.index)" :y="baseline + 14" text-anchor="middle" class="x-label" data-part="x-label">{{ entry.bar.label }}</text>
         <text v-if="entry.bar.note" :x="barCenter(entry.index)" :y="baseline + 26" text-anchor="middle" class="x-note" data-part="x-note">{{ entry.bar.note }}</text>
       </g>
@@ -117,6 +123,7 @@ text { fill: var(--text-muted); font-size: var(--font-3xs); }
 .bar { cursor: pointer; }
 .hit { fill: transparent; }
 .bar:hover .hit { fill: var(--bg-hover-faint); }
+.bar:focus-visible .hit { stroke: var(--accent-fg); stroke-width: 2; }
 .segment { stroke: none; }
 .bar[data-selected="true"] .segment { stroke: var(--accent-fg); stroke-width: 1.5; }
 .total { fill: var(--text-secondary); font-size: var(--font-3xs); }

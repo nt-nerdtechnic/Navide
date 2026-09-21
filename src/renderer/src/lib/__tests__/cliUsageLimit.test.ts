@@ -89,7 +89,7 @@ describe('detectUsageLimit', () => {
     expect(hit.resumeAt).toBe(Date.parse('2026-09-07T08:30:00Z') + LIMIT_RESET_BUFFER_MS)
   })
 
-  it('reports the reset the message stated, unbuffered, as resetAt', () => {
+  it('keeps a weekly clock estimate for resume without inventing a dated ledger reset', () => {
     // resetAt is what tells the ledger WHICH of the account's windows ran
     // out. It is the message's own clock and nothing else: the reading here
     // says the session window resets at 10:50Z, and a resetAt taken from it
@@ -102,8 +102,10 @@ describe('detectUsageLimit', () => {
       "You've hit your weekly limit · resets 4:30pm (Asia/Taipei)",
       NOW
     ))
-    expect(hit.resetAt).toBe(Date.parse('2026-09-07T08:30:00Z'))
-    expect(hit.resumeAt).toBe(hit.resetAt! + LIMIT_RESET_BUFFER_MS)
+    expect(hit.resetAt).toBeNull()
+    expect(hit.windowKind).toBe('weekly')
+    expect(hit.resetPrecision).toBe('clock_only')
+    expect(hit.resumeAt).toBe(Date.parse('2026-09-07T08:30:00Z') + LIMIT_RESET_BUFFER_MS)
   })
 
   it('leaves resetAt null when the message carried no readable clock', () => {

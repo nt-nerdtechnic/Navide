@@ -75,7 +75,7 @@ describe('BarsWithLine', () => {
   it('builds titles, totals and ticks with valueFormat and percentFormat', () => {
     const w = mountChart({ valueFormat: (n) => `${n}t`, percentFormat: (p) => `${p} pct` })
     const titles = w.findAll('[data-part="bar-group"] title').map((t) => t.text())
-    expect(titles).toEqual(['Cycle 1: 100t · 40 pct', 'Cycle 2: 50t · 100 pct', 'Cycle 3: 25t'])
+    expect(titles).toEqual(['Cycle 1: 100t · 40 pct', 'Cycle 2: 50t · 100 pct', 'Cycle 3: 25t · in progress'])
     expect(w.findAll('[data-part="bar-total"]').map((t) => t.text())).toEqual(['100t', '50t', '25t'])
     expect(w.findAll('[data-part="tick"]').map((t) => t.text())).toEqual(['0t', '50t', '100t'])
     expect(w.findAll('[data-part="pct-label"]').map((t) => t.text())).toEqual(['0 pct', '50 pct', '100 pct'])

@@ -121,6 +121,40 @@ Transcript records have **unknown account attribution**: a shared local Claude h
 
 Quota history records successful observations for the active Claude account slot through the existing usage polling service. It starts accumulating when those observations are available; it cannot reconstruct earlier quota windows. Disabled polling and an empty history are displayed explicitly. Opening the monitor does not make extra provider requests. Observed tokens and quota percentages do not establish an official token allowance, throttling, effort level, or separate thinking-token usage.
 
+### Turn Stats 的帳號額度
+
+從 **Window → Turn Stats** 或 TOKENS 面板開啟。**Pane 用量**顯示單一
+session；**帳號額度**顯示此 Navide 安裝歸屬到帳號的所有 pane、所有模型活動。
+即使沒有開啟 pane，仍可查看保存帳號、歷史帳號、已移除帳號與獨立的 Unknown。
+開啟歷史與「重新讀取歷史」只讀本機資料；供應商重試沿用既有輪詢政策，不會
+自動啟用已停用的輪詢。
+
+目前供應商讀值對應選取帳號與視窗，分別標示快取、過期、失敗或停用狀態與
+觀測時間；歷史讀取時間另列。所有帳號檢視顯示彙總本機活動，不顯示單一帳號
+的目前百分比。特定模型的額度百分比與所有模型的本機 token 範圍不同。
+
+週期預設最近 30 天，可選 90 天或自訂 UTC 日期。依半開範圍內的重設時間
+選取週期；範圍到達現在時包含進行中週期。表格與圖表每頁最多 50 筆，摘要
+與符合／排除平均條件的筆數涵蓋整個範圍。使用週期按鈕或圖表查看證據来源、
+完整本機及 UTC 時間、用量明細、變動讀值與重新核算時間。每觀測百分點的
+本機 token 是總量除以非零觀測峰值，不代表供應商容量或價格。
+
+平均只納入已結束、限額證據可信且本機明細可用的週期。CLI 限額訊息可與
+較早、低於 100% 的供應商峰值並存；舊來源未知的時間仍可查看並標示未驗證。
+缺失或部分明細呈現空缺，確實觀測到的零仍為零。本機用量採五分鐘切片，
+邊界不按比例拆算；保存期限內的晚到資料可重新核算已結束週期，已保存的
+最終總量不因來源切片到期而歸零。
+
+月／年維持 **UTC 曆期**。日期範圍選取有交集的完整曆期，並顯示展開後邊界。
+token 依事件時間，週期數依開始時間（未知時用重設時間）歸期。視窗篩選只
+影響週期統計，不加總互相重疊的額度視窗。本機活动占比採同一曆期的資料，
+覆蓋不完整時不捏造完整比例。
+
+「匯出選取範圍」以單次一致回應匯出全部選取記錄，最多 10,000 筆，超過時
+須縮小日期範圍。CSV 包含帳號身份、證據、覆蓋、平均資格、UTC 時間與時區。
+部分／不可用的 token 數值留空，修正舊版缺值當零的行為；已知零值維持 `0`。
+實際鍵盤、主題、語言及額度重設驗收與自動化 fixture 檢查分開進行。
+
 ## Git 與 Review
 
 在 Marketplace 安裝功能完成前，Navide 會提供可移除的官方 Git Factory Package。其 Active Package Version 會同時提供嵌入式左側 View 與獨立 Git Window。在 Extensions 移除 Bundled Git 後，重新啟動也不會自動裝回；可在同一處按 **Restore** 恢復 Factory Copy。若存在已驗證的 Marketplace Version，會優先使用該版本。Git View 支援 Repository Discovery、Working Tree Inspection、Staging、Commit、Branch、Remote、Issue 與相關工作流；Multi-repository Workspace 可以在偵測到的 Repository 間切換。Discovery Scan 不會阻塞 Backend，並會在慢速 Filesystem 上經過受限的掃描時間後回傳部分結果。Repository Operation 仍經由 Navide Host／Backend 邊界處理；GitHub 與 GitLab Issue Detection 在可用時使用設定的 `gh` 或 `glab` CLI。若選定的 v2 Package 無法 Load、Mount 或回報 Ready，Navide 會明確標示並在該次 Process 使用保留的 Legacy Git Renderer；Security、Trust 或 Permission Denial 不會觸發 Fallback。

@@ -42,7 +42,7 @@ const props = defineProps<{
    *  account and lists the accounts the "Accounts" section offers. */
   cliProfiles?: ReturnType<typeof useCliProfiles>
 }>()
-const emit = defineEmits<{ close: [] }>()
+const emit = defineEmits<{ close: []; openSettings: [] }>()
 
 const { t } = useI18n()
 
@@ -187,6 +187,20 @@ interface AccountRow {
   label: string
   removed: boolean
 }
+const historicalAccounts = ref<Array<{ agent_key: string; profile_id: string }>>([])
+const accountHistoryError = ref(false)
+async function loadAccounts(): Promise<void> {
+  accountHistoryError.value = false
+  try {
+    const result = await props.backend.send<{ ok: boolean; accounts?: Array<{ agent_key: string; profile_id: string }> }>('tokens.quota_accounts', {})
+    if (!result.ok || !result.payload?.ok) throw new Error('history-unavailable')
+    historicalAccounts.value = result.payload.accounts ?? []
+    if (props.open && cliPanes.value.length === 0 && !selectedAccountKey.value) selectedAccountKey.value = accountRows.value[0]?.key ?? ''
+  } catch {
+    accountHistoryError.value = true
+  }
+}
+watch(() => props.open, (open) => { if (open) void loadAccounts() }, { immediate: true })
 const accountRows = computed<AccountRow[]>(() => {
   const rows: AccountRow[] = []
   const seen = new Set<string>()
@@ -196,10 +210,19 @@ const accountRows = computed<AccountRow[]>(() => {
     seen.add(key)
     rows.push({ key, agentKey, profileId, label: accountLabel(agentKey, profileId), removed })
   }
-  const agents = [...new Set(cliPanes.value.map((p) => p.agentKey))]
+  const agents = [...new Set([
+    ...cliPanes.value.map((p) => p.agentKey),
+    ...historicalAccounts.value.map((a) => a.agent_key),
+    ...CLI_AGENT_SPECS.filter((s) => props.cliProfiles?.profilesForAgent(s.agentKey).length).map((s) => s.agentKey)
+  ])]
   for (const agentKey of agents) {
     push(agentKey, DEFAULT_PROFILE_ID)
     for (const profile of props.cliProfiles?.profilesForAgent(agentKey) ?? []) push(agentKey, profile.id)
+    for (const account of historicalAccounts.value) {
+      if (account.agent_key !== agentKey) continue
+      const id = normalizeProfileId(account.profile_id)
+      push(agentKey, id, id !== DEFAULT_PROFILE_ID && id !== UNKNOWN_PROFILE_ID && !seen.has(accountKey(agentKey, id)))
+    }
     for (const p of cliPanes.value) {
       if (p.agentKey !== agentKey || !p.profileId) continue
       const id = normalizeProfileId(p.profileId)
@@ -266,6 +289,8 @@ onUnmounted(() => window.removeEventListener('keydown', onKeyDown))
           </div>
 
           <nav class="s-nav" :aria-label="t('turn-stats.pane')">
+            <div class="s-nav-group-title">{{ t('quota-cycles.pane-usage') }}</div>
+            <button v-if="accountHistoryError" type="button" class="ts-nav-item" data-act="retry-accounts" @click="loadAccounts">{{ t('quota-cycles.retry-history') }}</button>
             <p v-if="cliPanes.length === 0" class="ts-nav-empty" data-state="no-panes">{{ t('turn-stats.empty-panes') }}</p>
             <div v-for="g in groups" :key="g.label" class="s-nav-group" data-part="group" :data-workspace="g.label">
               <div class="s-nav-group-title">{{ g.label }}</div>
@@ -304,7 +329,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeyDown))
 
             <!-- Accounts: one row per (vendor, account); picking one shows its quota cycles. -->
             <div v-if="accountRows.length" class="s-nav-group" data-part="accounts">
-              <div class="s-nav-group-title">{{ t('turn-stats.accounts-section') }}</div>
+              <div class="s-nav-group-title">{{ t('quota-cycles.account-quota') }}</div>
               <button
                 v-for="a in accountRows"
                 :key="a.key"
@@ -320,7 +345,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeyDown))
                 @click="pickAccount(a.key)"
               >
                 <span class="ts-nav-main">
-                  <span class="ts-nav-label">{{ a.label }}</span>
+                  <span class="ts-nav-label">{{ a.label }}<template v-if="a.removed"> · {{ t('quota-cycles.removed') }}</template></span>
                   <span class="ts-nav-sub">
                     {{ vendorLabel(a.agentKey) }}<template v-if="a.profileId === activeProfileId(a.agentKey)"> · {{ t('account-dim.active') }}</template>
                   </span>
@@ -353,6 +378,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeyDown))
               :active="selectedAccount.profileId === activeProfileId(selectedAccount.agentKey)"
               :usage="selectedAccountUsage"
               :cli-profiles="cliProfiles"
+              @open-settings="emit('openSettings')"
             />
             <TurnStatsView v-else :backend="backend" :pane="viewPane" :usage="selectedUsage" :cli-profiles="cliProfiles" />
           </div>

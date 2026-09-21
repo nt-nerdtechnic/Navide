@@ -4,6 +4,8 @@ All notable released changes to Navide will be documented in this file. The form
 
 ## [Unreleased]
 
+- Make account quota history available without open panes, with evidence and local coverage details, stable cycle selection, bounded date ranges and paging, UTC calendar summaries, and full-range CSV exports. Missing token details remain gaps rather than zeros; completed-cycle averages require trusted limit evidence and available detail. Ambiguous weekly CLI clocks no longer invent a dated reset for ledger attribution.
+
 ### Changed
 
 - Use the app's font in pane context menus so detached menu rendering does not fall back to a browser serif font.

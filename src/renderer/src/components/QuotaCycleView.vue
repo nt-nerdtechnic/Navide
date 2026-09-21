@@ -1,21 +1,12 @@
 <script setup lang="ts">
-// Quota cycles of one account — the right half of the Turn Stats modal when
-// an account (not a pane) is picked on the left. Three tabs: the account's
-// quota windows one per row (what a 5h / weekly window cost from reset to
-// reset, how far it got, whether it ran out), and its monthly / yearly totals
-// with the cycle counts folded in. Every tab draws its chart above the table.
-//
-// It owns no data: the backend keeps the cycles (`tokens.quota_cycles`) and
-// the period ledger (`tokens.account_periods`); both composables refetch on
-// `tokens.quota_cycles_changed`.
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { CLI_AGENT_SPECS } from '@navide/plugin-shell'
 import type { useBackend } from '../composables/useBackend'
 import type { useCliProfiles } from '../composables/useCliProfiles'
-import { useQuotaCycles, type QuotaCycle } from '../composables/useQuotaCycles'
+import { useQuotaCycles, type QuotaCycle, type QuotaCursor, type QuotaSnapshot } from '../composables/useQuotaCycles'
 import { useAccountPeriods, type AccountPeriodRow, type PeriodGranularity } from '../composables/useAccountPeriods'
-import type { UsageSnapshot } from '../composables/useUsage'
+import { usageEnabled, refreshUsage, type UsageSnapshot } from '../composables/useUsage'
 import { UNKNOWN_PROFILE_ID, accountKey, accountLabel as resolveAccountLabel, accountTint } from '../lib/accountLabel'
 import BarsWithLine from './charts/BarsWithLine.vue'
 import StackedBars from './charts/StackedBars.vue'
@@ -24,624 +15,272 @@ const props = defineProps<{
   backend: ReturnType<typeof useBackend>
   agentKey: string
   profileId: string
-  /** The account's display name, resolved by the host. */
   label: string
   vendorLabel: string
-  /** True when this account is the one the agent runs on right now. */
   active: boolean
-  /** The account's own quota snapshot, for the window labels and its clock. */
   usage?: UsageSnapshot
-  /** Names the other accounts in the all-accounts breakdown. */
   cliProfiles?: ReturnType<typeof useCliProfiles>
 }>()
-
-const { t } = useI18n()
-
+const emit = defineEmits<{ openSettings: [] }>()
+const { t, locale } = useI18n()
 type Tab = 'cycle' | 'month' | 'year'
 const tab = ref<Tab>('cycle')
 const showChart = ref(true)
-
-// ── Formatting ──────────────────────────────────────────────────────────────
-function num(n: number | null | undefined): string {
-  return n === null || n === undefined ? '—' : n.toLocaleString('en-US')
-}
-function compact(n: number): string {
-  if (n < 1000) return String(n)
-  if (n < 1_000_000) return (n / 1000).toFixed(n < 10_000 ? 1 : 0) + 'k'
-  if (n < 1_000_000_000) return (n / 1_000_000).toFixed(1) + 'M'
-  return (n / 1_000_000_000).toFixed(1) + 'B'
-}
-function pct(n: number | null): string {
-  return n === null ? '—' : `${Math.round(n)}%`
-}
-const two = (v: number): string => String(v).padStart(2, '0')
-/** "9/16 17:20" — the cycle table's clock. */
-function stamp(iso: string | null): string {
-  if (!iso) return '—'
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return '—'
-  return `${d.getMonth() + 1}/${d.getDate()} ${two(d.getHours())}:${two(d.getMinutes())}`
-}
-function clock(iso: string | null): string {
-  if (!iso) return '—'
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return '—'
-  return `${two(d.getHours())}:${two(d.getMinutes())}`
-}
-function csvCell(v: string | number | null | undefined): string {
-  const s = v === null || v === undefined ? '' : String(v)
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
-}
-function download(name: string, csv: string): void {
-  const blob = new Blob([csv], { type: 'text/csv' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = name
-  a.click()
-  URL.revokeObjectURL(url)
-}
-
-// ── Cycles ──────────────────────────────────────────────────────────────────
-const cyclesApi = useQuotaCycles(props.backend)
-const cycles = computed<QuotaCycle[]>(() => cyclesApi.data.value?.cycles ?? [])
-
-// The window kinds this account has cycles for, headline kinds first so the
-// chip row reads the way the badge's windows do. A snapshot with several
-// windows of one kind (Claude's per-model weekly buckets) keys each as
-// "<kind>:<label>" so they stay separate cycles; the base kind (before the
-// colon) orders them and finds the provider's label.
-const KIND_ORDER = ['session', 'weekly', 'weekly-model', 'monthly', 'cycle']
-function baseKind(kind: string): string {
-  const i = kind.indexOf(':')
-  return i === -1 ? kind : kind.slice(0, i)
-}
-const windowKinds = computed<string[]>(() => {
-  const kinds = [...new Set(cycles.value.map((c) => c.window_kind))]
-  const rank = (k: string): number => {
-    const i = KIND_ORDER.indexOf(baseKind(k))
-    return i === -1 ? KIND_ORDER.length : i
-  }
-  return kinds.sort((a, b) => rank(a) - rank(b) || a.localeCompare(b))
-})
+const allAccounts = ref(false)
+const aggregate = computed(() => allAccounts.value && tab.value !== 'cycle')
 const windowKind = ref('')
-watch(windowKinds, (kinds) => {
-  if (!kinds.includes(windowKind.value)) windowKind.value = kinds[0] ?? ''
-}, { immediate: true })
-/** The provider's own label for a window kind when the snapshot carries it
- *  ("Session (5h)"; for "weekly-model:Fable only" the bucket whose label is
- *  "Fable only"), else the label part of the key, else the kind itself. */
+const retainedKinds = ref<string[]>([])
+const range = ref('30')
+const startDate = ref('')
+const endDate = ref('')
+const rangeAnchor = ref(Date.now())
+const localZone = Intl.DateTimeFormat().resolvedOptions().timeZone
+const rangeStart = computed(() => range.value === 'custom' ? (startDate.value ? new Date(startDate.value + 'T00:00:00Z').toISOString() : undefined) : new Date(rangeAnchor.value - Number(range.value) * 86400000).toISOString())
+const rangeEnd = computed(() => range.value === 'custom' && endDate.value ? new Date(Date.parse(endDate.value + 'T00:00:00Z') + 86400000).toISOString() : undefined)
+const validRange = computed(() => range.value !== 'custom' || (!!rangeStart.value && !!rangeEnd.value && rangeStart.value < rangeEnd.value))
+const cyclesApi = useQuotaCycles(props.backend)
+const periodsApi = useAccountPeriods(props.backend)
+const cursors = ref<Array<QuotaCursor | undefined>>([undefined])
+const page = ref(0)
+const snapshot = ref<QuotaSnapshot>()
+const selectedId = ref<string | null>(null)
+const selectedCycle = ref<QuotaCycle | null>(null)
+const selectedPeriod = ref<AccountPeriodRow | null>(null)
+const selectionNotice = ref(false)
+const exporting = ref(false)
+const exportError = ref('')
+const exportedCount = ref<number | null>(null)
+const granularity = computed<PeriodGranularity>(() => tab.value === 'year' ? 'year' : 'month')
+const cycles = computed(() => cyclesApi.data.value?.cycles ?? [])
+const kindCycles = computed(() => cycles.value.filter((c) => !windowKind.value || c.window_kind === windowKind.value))
+const periodRows = computed(() => periodsApi.data.value?.rows ?? [])
+const loading = computed(() => tab.value === 'cycle' ? cyclesApi.loading.value : periodsApi.loading.value)
+const error = computed(() => tab.value === 'cycle' ? cyclesApi.error.value : periodsApi.error.value)
+const visibleCount = computed(() => tab.value === 'cycle' ? kindCycles.value.length : periodRows.value.length)
+const totalCount = computed(() => tab.value === 'cycle' ? (cyclesApi.data.value?.total_count ?? kindCycles.value.length) : (periodsApi.data.value?.total_count ?? periodRows.value.length))
+const refreshedAt = computed(() => tab.value === 'cycle' ? cyclesApi.data.value?.refreshed_at : periodsApi.data.value?.refreshed_at)
+const hasNext = computed(() => tab.value === 'cycle' ? !!cyclesApi.data.value?.next_cursor : periodsApi.data.value?.next_offset != null)
+const summary = computed(() => tab.value === 'cycle' ? cyclesApi.data.value?.summary?.[windowKind.value] : periodsApi.data.value?.summary)
+const KIND_ORDER = ['session', 'weekly', 'weekly-model', 'monthly', 'cycle']
+const baseKind = (kind: string): string => kind.split(':')[0]
+const windowKinds = computed(() => {
+  const kinds = retainedKinds.value
+  const rank = (kind: string): number => { const n = KIND_ORDER.indexOf(baseKind(kind)); return n < 0 ? KIND_ORDER.length : n }
+  return [...kinds].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b))
+})
+watch(cyclesApi.data, (data) => { if (data) retainedKinds.value = data.window_kinds ?? [...new Set((data.cycles ?? []).map((c) => c.window_kind))] })
 function kindLabel(kind: string): string {
   const base = baseKind(kind)
   const suffix = kind.slice(base.length + 1)
-  const windows = props.usage?.windows ?? []
-  const match = windows.find((w) => w.kind === base && (!suffix || w.label === suffix)) ?? (suffix ? undefined : windows.find((w) => w.kind === base))
-  return match?.label ?? (suffix || kind)
+  return props.usage?.windows.find((w) => w.kind === base && (!suffix || w.label === suffix))?.label ?? (suffix || kind)
 }
-/** Newest first, as the backend sorts. */
-const kindCycles = computed(() => cycles.value.filter((c) => c.window_kind === windowKind.value))
-const kindSummary = computed(() => cyclesApi.data.value?.summary?.[windowKind.value] ?? null)
-
-/** A cycle from before token slices were kept has quota samples but no
- *  spend behind them: its token figures must read as "no detail", not as a
- *  free window. The backend says so with `detail_known: false`; a backend
- *  without the flag is read the old way — a closed cycle at all zeros. */
-function noDetail(c: QuotaCycle): boolean {
-  if (c.detail_known !== undefined) return c.detail_known === false
-  return c.closed && c.total === 0 && c.calls === 0 && c.turns === 0
+watch(windowKinds, (kinds) => { if (!windowKind.value && kinds.length) windowKind.value = kinds[0] })
+function num(value: number | null | undefined): string { return value == null ? '—' : value.toLocaleString(locale.value) }
+function compact(value: number): string { return new Intl.NumberFormat(locale.value, { notation: 'compact', maximumFractionDigits: 1 }).format(value) }
+function stamp(value: string | null | undefined): string {
+  if (!value || !Number.isFinite(Date.parse(value))) return '—'
+  return new Date(value).toLocaleString(locale.value, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
 }
-function cell(c: QuotaCycle, value: number): string {
-  return noDetail(c) ? '—' : num(value)
+function known(row: QuotaCycle | AccountPeriodRow): boolean {
+  return row.coverage_state ? row.coverage_state === 'available' : row.detail_known === true
 }
-
-type CycleSum = { max_percent: number; input: number; cache_read: number; cache_creation: number; output: number; total: number; calls: number; turns: number; count: number; detailed: number }
-/** Column-wise average of the cycles that ran out — the only ones that say
- *  what "100%" is; an unfinished window would pull the estimate down. The
- *  token columns average only the cycles that carry detail; the peak and
- *  the count cover every exhausted cycle. */
-const exhaustedAverage = computed<CycleSum | null>(() => {
-  const spent = kindCycles.value.filter((c) => c.exhausted_at !== null)
-  if (spent.length === 0) return null
-  const detailed = spent.filter((c) => !noDetail(c))
-  const sum: CycleSum = { max_percent: 0, input: 0, cache_read: 0, cache_creation: 0, output: 0, total: 0, calls: 0, turns: 0, count: spent.length, detailed: detailed.length }
-  for (const c of spent) sum.max_percent += c.max_percent
-  for (const c of detailed) {
-    sum.input += c.input
-    sum.cache_read += c.cache_read
-    sum.cache_creation += c.cache_creation
-    sum.output += c.output
-    sum.total += c.total
-    sum.calls += c.calls
-    sum.turns += c.turns
-  }
-  const n = Math.max(1, detailed.length)
-  return {
-    max_percent: sum.max_percent / spent.length,
-    input: Math.round(sum.input / n),
-    cache_read: Math.round(sum.cache_read / n),
-    cache_creation: Math.round(sum.cache_creation / n),
-    output: Math.round(sum.output / n),
-    total: Math.round(sum.total / n),
-    calls: Math.round(sum.calls / n),
-    turns: Math.round(sum.turns / n),
-    count: spent.length,
-    detailed: detailed.length,
-  }
+function amount(row: QuotaCycle | AccountPeriodRow, key: 'input' | 'cache_read' | 'cache_creation' | 'output' | 'total' | 'calls' | 'turns'): number | null {
+  return known(row) ? row[key] : null
+}
+function coverage(row: QuotaCycle | AccountPeriodRow): string { return t('quota-cycles.coverage-' + (row.coverage_state ?? 'unavailable')) }
+function reason(row: QuotaCycle | AccountPeriodRow): string { return t('quota-cycles.reason-' + (row.coverage_reason ?? (known(row) ? 'local' : 'legacy_coverage_unknown'))) }
+function source(row: QuotaCycle): string { return t('quota-cycles.source-' + (row.exhausted_source ?? (row.exhausted_at ? 'legacy_unknown' : 'none'))) }
+function cycleKey(row: QuotaCycle): string { return row.id != null ? String(row.id) : [props.agentKey, props.profileId, row.window_kind, row.resets_at].join('/') }
+function periodKey(row: AccountPeriodRow): string { return [row.period, row.agent_key, row.profile_id].join('/') }
+function selectCycle(row: QuotaCycle): void {
+  selectedId.value = selectedId.value === cycleKey(row) ? null : cycleKey(row)
+  selectedCycle.value = selectedId.value ? row : null
+  selectedPeriod.value = null
+  selectionNotice.value = false
+}
+function selectPeriod(row: AccountPeriodRow): void {
+  selectedId.value = selectedId.value === periodKey(row) ? null : periodKey(row)
+  selectedPeriod.value = selectedId.value ? row : null
+  selectedCycle.value = null
+  selectionNotice.value = false
+}
+function clearSelection(): void {
+  selectionNotice.value = selectedId.value !== null
+  selectedId.value = null
+  selectedCycle.value = null
+  selectedPeriod.value = null
+}
+watch(cycles, (rows) => {
+  if (!selectedCycle.value) return
+  const updated = rows.find((c) => cycleKey(c) === selectedId.value)
+  if (updated) selectedCycle.value = updated
 })
-function avgCell(value: number): string {
-  return exhaustedAverage.value && exhaustedAverage.value.detailed > 0 ? num(value) : '—'
-}
-/** Tokens per percent point: how much the window is worth at this spend
- *  mix. Stable across cycles = the capacity estimate can be trusted. */
-function perPercent(total: number, maxPercent: number): string {
-  return maxPercent > 0 && total > 0 ? compact(Math.round(total / maxPercent)) : '—'
-}
-/** The summary line prints the same average the footer row does — the
- *  backend's `avg_total_exhausted` divides by every exhausted cycle, detail
- *  or not, and would disagree with the footer on the same screen. Nothing
- *  to print when no exhausted cycle carries detail. */
-const summaryAvg = computed<number | null>(() => {
-  const avg = exhaustedAverage.value
-  return avg && avg.detailed > 0 ? avg.total : null
+watch(periodRows, (rows) => {
+  if (!selectedPeriod.value) return
+  const updated = rows.find((r) => periodKey(r) === selectedId.value)
+  if (updated) selectedPeriod.value = updated
 })
-
-/** Oldest on the left. */
-const cycleBars = computed(() =>
-  [...kindCycles.value].reverse().map((c) => ({
-    label: stamp(c.started_at ?? c.resets_at),
-    note: !c.closed ? t('quota-cycles.in-progress') : noDetail(c) ? t('quota-cycles.no-detail-short') : undefined,
-    value: c.total,
-    percent: c.max_percent,
-    exhausted: c.exhausted_at !== null,
-  }))
-)
-const selectedCycle = ref<number | null>(null)
-function onCycleSelect(barIndex: number): void {
-  // The chart is oldest-first; the table newest-first.
-  const rowIndex = kindCycles.value.length - 1 - barIndex
-  selectedCycle.value = selectedCycle.value === rowIndex ? null : rowIndex
-}
-const selectedCycleBar = computed(() =>
-  selectedCycle.value === null ? null : kindCycles.value.length - 1 - selectedCycle.value
-)
-
-const CYCLE_CSV = ['window_kind', 'started_at', 'resets_at', 'closed', 'max_percent', 'exhausted_at', 'input', 'cache_read', 'cache_creation', 'output', 'total', 'calls', 'turns', 'samples']
-function buildCyclesCsv(rows: QuotaCycle[]): string {
-  const lines = [CYCLE_CSV.join(',')]
-  for (const c of rows) {
-    lines.push(
-      [c.window_kind, c.started_at, c.resets_at, c.closed ? 1 : 0, c.max_percent, c.exhausted_at, c.input, c.cache_read, c.cache_creation, c.output, c.total, c.calls, c.turns, c.samples]
-        .map(csvCell)
-        .join(',')
-    )
-  }
-  return lines.join('\n') + '\n'
-}
-
-// ── Periods (month / year) ──────────────────────────────────────────────────
-const periodsApi = useAccountPeriods(props.backend)
-/** When on, the period tabs show every account of every vendor, with each
- *  period's share per account. */
-const allAccounts = ref(false)
-const granularity = computed<PeriodGranularity | null>(() =>
-  tab.value === 'month' ? 'month' : tab.value === 'year' ? 'year' : null
-)
-const periodRows = computed<AccountPeriodRow[]>(() => periodsApi.data.value?.rows ?? [])
-const periodTotals = computed(() => periodsApi.data.value?.totals_by_period ?? [])
-
-/** "2026-09" / "2026" for now, so the open period can be marked. UTC, as
- *  the backend keys its periods (by_account_day is a UTC calendar). */
-function currentPeriod(g: PeriodGranularity): string {
-  const d = new Date()
-  return g === 'month' ? `${d.getUTCFullYear()}-${two(d.getUTCMonth() + 1)}` : String(d.getUTCFullYear())
-}
-function periodOpen(period: string): boolean {
-  return granularity.value !== null && period === currentPeriod(granularity.value)
-}
-function rowAccountLabel(row: AccountPeriodRow): string {
-  return resolveAccountLabel(props.cliProfiles, row.agent_key, row.profile_id, t)
-}
-const VENDOR_LABEL: Record<string, string> = Object.fromEntries(CLI_AGENT_SPECS.map((s) => [s.agentKey, s.label]))
-function rowVendorLabel(agentKey: string): string {
-  return agentKey === props.agentKey ? props.vendorLabel : VENDOR_LABEL[agentKey] ?? agentKey
-}
-
-/** All-accounts view: the periods newest first, each with its rows (largest
- *  first, as the backend sorts) and the period's total for the share column. */
-const periodGroups = computed(() => {
-  const totals = new Map(periodTotals.value.map((p) => [p.period, p]))
-  const byPeriod = new Map<string, AccountPeriodRow[]>()
-  for (const row of periodRows.value) {
-    const list = byPeriod.get(row.period)
-    if (list) list.push(row)
-    else byPeriod.set(row.period, [row])
-  }
-  return [...byPeriod.entries()].map(([period, rows]) => {
-    const total = totals.get(period)
-    const sum = rows.reduce((acc, r) => acc + r.total, 0)
-    return {
-      period,
-      rows,
-      total: total?.total ?? sum,
-      calls: total?.calls ?? rows.reduce((acc, r) => acc + r.calls, 0),
-      turns: total?.turns ?? rows.reduce((acc, r) => acc + r.turns, 0),
-      exhausted: rows.reduce((acc, r) => acc + r.exhausted, 0),
-      weeklyExhausted: rows.reduce((acc, r) => acc + r.weekly_exhausted, 0),
-    }
-  })
-})
-function share(part: number, whole: number): string {
-  return whole > 0 ? `${Math.round((part / whole) * 100)}%` : '—'
-}
-
-/** Oldest on the left; one segment per account (one account = one segment). */
-const periodBars = computed(() => {
-  const groups = [...periodGroups.value].reverse()
-  return groups.map((g) => ({
-    label: g.period,
-    note: periodOpen(g.period) ? t('quota-cycles.in-progress') : undefined,
-    segments: g.rows.map((r) => ({
-      key: accountKey(r.agent_key, r.profile_id),
-      label: rowAccountLabel(r),
-      value: r.total,
-      color: accountTint(r.profile_id),
-    })),
-  }))
-})
-const selectedPeriod = ref<string | null>(null)
-function onPeriodSelect(barIndex: number): void {
-  const period = [...periodGroups.value].reverse()[barIndex]?.period ?? null
-  selectedPeriod.value = selectedPeriod.value === period ? null : period
-}
-const selectedPeriodBar = computed(() => {
-  if (selectedPeriod.value === null) return null
-  const i = [...periodGroups.value].reverse().findIndex((g) => g.period === selectedPeriod.value)
-  return i === -1 ? null : i
-})
-
-const PERIOD_CSV = ['period', 'agent_key', 'profile_id', 'account', 'input', 'cache_read', 'cache_creation', 'output', 'total', 'calls', 'turns', 'cycles', 'exhausted', 'avg_total_exhausted', 'weekly_exhausted']
-function buildPeriodsCsv(rows: AccountPeriodRow[]): string {
-  const lines = [PERIOD_CSV.join(',')]
-  for (const r of rows) {
-    lines.push(
-      [r.period, r.agent_key, r.profile_id, rowAccountLabel(r), r.input, r.cache_read, r.cache_creation, r.output, r.total, r.calls, r.turns, r.cycles, r.exhausted, r.avg_total_exhausted, r.weekly_exhausted]
-        .map(csvCell)
-        .join(',')
-    )
-  }
-  return lines.join('\n') + '\n'
-}
-
-// ── Loading ─────────────────────────────────────────────────────────────────
-// The cycles follow the account; the periods follow the account, the tab
-// and the all-accounts switch. Each load drops the previous answer first so
-// another account's rows never sit under this account's name.
-watch(
-  [() => props.agentKey, () => props.profileId],
-  ([agentKey, profileId]) => {
-    selectedCycle.value = null
-    cyclesApi.clear()
-    if (profileId === UNKNOWN_PROFILE_ID) return
-    void cyclesApi.load({ agentKey, profileId })
-  },
-  { immediate: true }
-)
-watch(
-  [() => props.agentKey, () => props.profileId, granularity, allAccounts],
-  ([agentKey, profileId, g, all]) => {
-    selectedPeriod.value = null
-    periodsApi.clear()
-    if (!g) return
-    void periodsApi.load(all ? { granularity: g } : { agentKey, profileId, granularity: g })
-  },
-  { immediate: true }
-)
-
-function exportCsv(): void {
-  const stem = `${props.agentKey}-${props.profileId.slice(0, 8)}`
+async function load(): Promise<void> {
+  if (!validRange.value) return
   if (tab.value === 'cycle') {
-    if (kindCycles.value.length === 0) return
-    download(`quota-cycles-${stem}-${windowKind.value}.csv`, buildCyclesCsv(kindCycles.value))
-    return
+    await cyclesApi.load({ agentKey: props.agentKey, profileId: props.profileId, windowKind: windowKind.value,
+      rangeStart: rangeStart.value, rangeEnd: rangeEnd.value, cursor: cursors.value[page.value], snapshot: snapshot.value })
+  } else {
+    await periodsApi.load({ agentKey: aggregate.value ? undefined : props.agentKey, profileId: aggregate.value ? undefined : props.profileId,
+      granularity: granularity.value, rangeStart: rangeStart.value, rangeEnd: rangeEnd.value, windowKind: windowKind.value, offset: page.value * 50 })
   }
-  if (periodRows.value.length === 0) return
-  download(`account-${tab.value}-${allAccounts.value ? 'all' : stem}.csv`, buildPeriodsCsv(periodRows.value))
 }
-const canExport = computed(() => (tab.value === 'cycle' ? kindCycles.value.length > 0 : periodRows.value.length > 0))
-
-const cyclesPanel = computed<'unknown' | 'loading' | 'error' | 'empty' | 'table'>(() => {
-  if (props.profileId === UNKNOWN_PROFILE_ID) return 'unknown'
-  if (cyclesApi.loading.value && !cyclesApi.data.value) return 'loading'
-  if (cyclesApi.error.value) return 'error'
-  if (kindCycles.value.length === 0) return 'empty'
-  return 'table'
-})
-const periodsPanel = computed<'loading' | 'error' | 'empty' | 'table'>(() => {
-  if (periodsApi.loading.value && !periodsApi.data.value) return 'loading'
-  if (periodsApi.error.value) return 'error'
-  if (periodRows.value.length === 0) return 'empty'
-  return 'table'
-})
-function errorText(code: string): string {
-  if (code === 'unknown-vendor') return t('quota-cycles.error-unknown-vendor')
-  return t('quota-cycles.error-generic', { detail: code })
+function resetPage(): void { page.value = 0; cursors.value = [undefined]; snapshot.value = undefined }
+function refresh(): void { resetPage(); void load() }
+function changePage(direction: number): void {
+  if (direction > 0 && tab.value === 'cycle') {
+    const next = cyclesApi.data.value?.next_cursor
+    if (!next) return
+    cursors.value[page.value + 1] = next
+    snapshot.value = cyclesApi.data.value?.snapshot
+  }
+  page.value = Math.max(0, page.value + direction)
+  void load()
 }
-
+watch([() => props.agentKey, () => props.profileId], () => {
+  windowKind.value = ''; retainedKinds.value = []; allAccounts.value = false; clearSelection(); resetPage(); cyclesApi.clear(); periodsApi.clear(); void load()
+}, { immediate: true })
+watch([tab, allAccounts, windowKind, range, startDate, endDate], () => {
+  clearSelection(); resetPage(); cyclesApi.clear(); periodsApi.clear(); void load()
+})
+function clearFilters(): void { range.value = '30'; startDate.value = ''; endDate.value = ''; rangeAnchor.value = Date.now(); windowKind.value = windowKinds.value[0] ?? ''; refresh() }
+const currentReading = computed(() => {
+  if (aggregate.value || props.profileId === UNKNOWN_PROFILE_ID || props.usage?.status !== 'ok') return null
+  const base = baseKind(windowKind.value)
+  const suffix = windowKind.value.slice(base.length + 1)
+  return props.usage.windows.find((w) => !w.expired && (!windowKind.value || (w.kind === base && (!suffix || w.label === suffix)))) ?? null
+})
+const readingState = computed(() => !usageEnabled() ? 'disabled' : props.usage?.refreshPending ? 'refreshing' : props.usage?.status === 'error' || props.usage?.refreshStatus === 'error' ? 'error' : props.usage?.stale || props.usage?.staleExpired ? 'stale' : !currentReading.value ? 'unsupported' : 'cached')
+const cycleBars = computed(() => [...kindCycles.value].reverse().map((c) => ({ label: stamp(c.started_at ?? c.resets_at), note: coverage(c) + ' · ' + source(c), value: amount(c, 'total'), percent: c.max_percent, exhausted: c.exhausted_at !== null })))
+const selectedCycleBar = computed(() => { const index = [...kindCycles.value].reverse().findIndex((c) => cycleKey(c) === selectedId.value); return index < 0 ? null : index })
+const rowAccountLabel = (row: AccountPeriodRow): string => resolveAccountLabel(props.cliProfiles, row.agent_key, row.profile_id, t)
+const vendors = Object.fromEntries(CLI_AGENT_SPECS.map((s) => [s.agentKey, s.label]))
+const periodBars = computed(() => [...periodRows.value].reverse().map((r) => ({ label: r.period + (aggregate.value ? ' · ' + rowAccountLabel(r) : ''), note: coverage(r), segments: [{ key: accountKey(r.agent_key, r.profile_id), label: rowAccountLabel(r), value: amount(r, 'total'), color: accountTint(r.profile_id) }] })))
+const selectedPeriodBar = computed(() => { const index = [...periodRows.value].reverse().findIndex((r) => periodKey(r) === selectedId.value); return index < 0 ? null : index })
+function share(row: AccountPeriodRow): string {
+  const total = periodsApi.data.value?.totals_by_period.find((p) => p.period === row.period)?.total
+  const part = amount(row, 'total')
+  return total != null && total > 0 && part != null ? Math.round(part / total * 100) + '%' : '—'
+}
+const details = computed(() => selectedCycle.value ?? selectedPeriod.value)
+const breakdown = ['input', 'cache_read', 'cache_creation', 'output', 'total', 'calls', 'turns'] as const
+const fieldLabels = { input: 'turn-stats.col-input', cache_read: 'turn-stats.col-cache-read', cache_creation: 'turn-stats.col-cache-write', output: 'turn-stats.col-output', total: 'quota-cycles.local-tokens', calls: 'turn-stats.col-calls', turns: 'quota-cycles.col-turns' }
+function csvCell(value: unknown): string { const text = value == null ? '' : String(value); return /[",\r\n]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text }
+function csv(rows: unknown[][]): string { return rows.map((row) => row.map(csvCell).join(',')).join('\r\n') + '\r\n' }
+function buildCyclesCsv(rows: QuotaCycle[], context = { agentKey: props.agentKey, profileId: props.profileId, label: props.label }): string {
+  return csv([
+    ['window_kind', 'started_at', 'resets_at', 'closed', 'max_percent', 'exhausted_at', ...breakdown, 'samples', 'schema_version', 'cycle_id', 'agent_key', 'profile_id', 'account', 'exhausted_source', 'coverage_state', 'coverage_reason', 'token_scope', 'bucket_seconds', 'last_sample_at', 'reconciled_at', 'average_eligible', 'display_timezone', 'calendar_timezone'],
+    ...rows.map((c) => [c.window_kind, c.started_at, c.resets_at, Number(c.closed), c.max_percent, c.exhausted_at, ...breakdown.map((k) => amount(c, k)), c.samples, 2, c.id, c.agent_key ?? context.agentKey, c.profile_id ?? context.profileId, context.label, c.exhausted_source ?? (c.exhausted_at ? 'legacy_unknown' : ''), c.coverage_state ?? 'unavailable', c.coverage_reason ?? (known(c) ? '' : 'legacy_coverage_unknown'), c.token_scope ?? 'local_account_all_models', c.bucket_seconds ?? 300, c.last_sample_at, c.reconciled_at, c.average_eligible ?? false, localZone, 'UTC'])
+  ])
+}
+function buildPeriodsCsv(rows: AccountPeriodRow[]): string {
+  return csv([
+    ['period', 'agent_key', 'profile_id', 'account', ...breakdown, 'cycles', 'exhausted', 'avg_total_exhausted', 'weekly_exhausted', 'schema_version', 'period_start', 'period_end', 'coverage_state', 'coverage_reason', 'eligible_count', 'excluded_count', 'calendar_timezone', 'token_time_key', 'cycle_time_key'],
+    ...rows.map((r) => [r.period, r.agent_key, r.profile_id, rowAccountLabel(r), ...breakdown.map((k) => amount(r, k)), r.cycles, r.exhausted, r.avg_total_exhausted, r.weekly_exhausted, 2, r.period_start, r.period_end, r.coverage_state ?? 'unavailable', r.coverage_reason, r.eligible_count, r.excluded_count, 'UTC', 'event_time', 'started_at_or_resets_at'])
+  ])
+}
+async function exportCsv(): Promise<void> {
+  exporting.value = true; exportError.value = ''; exportedCount.value = null
+  const kind = tab.value
+  const context = { agentKey: props.agentKey, profileId: props.profileId, label: props.label }
+  try {
+    const rows = kind === 'cycle' ? await cyclesApi.exportAll() : await periodsApi.exportAll()
+    const text = kind === 'cycle' ? buildCyclesCsv(rows as QuotaCycle[], context) : buildPeriodsCsv(rows as AccountPeriodRow[])
+    const url = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' }))
+    const a = document.createElement('a'); a.href = url; a.download = 'quota-' + kind + '.csv'; a.click(); URL.revokeObjectURL(url)
+    if (props.agentKey === context.agentKey && props.profileId === context.profileId && tab.value === kind) exportedCount.value = rows.length
+  } catch (err) { exportError.value = String((err as Error).message ?? err) }
+  finally { exporting.value = false }
+}
 defineExpose({ buildCyclesCsv, buildPeriodsCsv })
 </script>
 
 <template>
   <div class="qc-view" data-part="quota-cycles">
     <div class="qc-toolbar">
-      <span class="qc-account" data-part="account-name" :title="profileId">{{ label }}</span>
-      <span class="qc-vendor" data-part="vendor">· {{ vendorLabel }}</span>
-      <span v-if="profileId !== UNKNOWN_PROFILE_ID" class="qc-active" :class="{ on: active }" data-part="active">
-        {{ active ? t('account-dim.active') : t('account-dim.inactive') }}
-      </span>
-      <span v-if="usage?.fetchedAt" class="qc-asof" data-part="as-of">
-        {{ usage.stale ? t('turn-stats.quota-as-of-stale', { time: clock(usage.fetchedAt) }) : t('turn-stats.quota-as-of', { time: clock(usage.fetchedAt) }) }}
-      </span>
+      <strong class="qc-account" data-part="account-name">{{ aggregate ? t('quota-cycles.all-accounts') : label }}</strong>
+      <span v-if="!aggregate" data-part="vendor">{{ vendorLabel }}</span>
+      <span v-if="!aggregate && profileId !== UNKNOWN_PROFILE_ID" class="qc-active" data-part="active">{{ t(active ? 'account-dim.active' : 'account-dim.inactive') }}</span>
       <span class="qc-spacer" />
-      <button class="qc-ghost" data-act="export" :disabled="!canExport" @click="exportCsv">{{ t('turn-stats.export') }}</button>
+      <button type="button" class="qc-ghost" data-act="refresh" @click="refresh">{{ t('quota-cycles.retry-history') }}</button>
+      <button type="button" class="qc-ghost" data-act="export" :disabled="!totalCount || exporting || !validRange || loading" @click="exportCsv">{{ t('quota-cycles.export-range') }}</button>
     </div>
-
-    <div class="qc-tabs" role="tablist">
-      <button
-        v-for="name in (['cycle', 'month', 'year'] as Tab[])"
-        :key="name"
-        type="button"
-        role="tab"
-        class="qc-tab"
-        data-act="tab"
-        :data-tab="name"
-        :class="{ on: tab === name }"
-        :aria-selected="tab === name ? 'true' : 'false'"
-        @click="tab = name"
-      >{{ t(`quota-cycles.tab-${name}`) }}</button>
-      <span class="qc-spacer" />
-      <template v-if="tab === 'cycle' && windowKinds.length">
-        <button
-          v-for="kind in windowKinds"
-          :key="kind"
-          type="button"
-          class="qc-chip"
-          data-act="window-chip"
-          :data-kind="kind"
-          :class="{ on: windowKind === kind }"
-          @click="windowKind = kind"
-        >{{ kindLabel(kind) }}</button>
-      </template>
-      <button
-        v-else-if="tab !== 'cycle'"
-        type="button"
-        class="qc-chip"
-        data-act="all-accounts"
-        :data-on="allAccounts ? 'true' : 'false'"
-        :class="{ on: allAccounts }"
-        @click="allAccounts = !allAccounts"
-      >{{ t('quota-cycles.all-accounts') }}</button>
+    <p class="qc-scope">{{ t('quota-cycles.local-scope', { zone: localZone }) }}</p>
+    <div class="qc-summary">
+      <div v-if="!aggregate" data-part="current-reading">
+        {{ t('quota-cycles.latest-reading') }}: <strong>{{ currentReading ? num(currentReading.usedPercent) + '%' : '—' }}</strong>
+        <span>{{ currentReading?.label }} · {{ t('quota-cycles.reading-' + readingState) }}</span>
+        <span v-if="usage?.fetchedAt" data-part="as-of"> · {{ stamp(usage.lastSuccessAt ?? usage.fetchedAt) }}</span>
+        <span v-if="currentReading?.resetsAt"> · {{ t('quota-cycles.next-reset') }} {{ stamp(currentReading.resetsAt) }}</span>
+        <button v-if="readingState === 'disabled'" type="button" class="qc-ghost" data-act="polling-settings" @click="emit('openSettings')">{{ t('quota-cycles.polling-settings') }}</button>
+        <button v-else-if="usage && ['stale', 'error'].includes(readingState)" type="button" class="qc-ghost" data-act="retry-provider" @click="refreshUsage(agentKey, profileId)">{{ t('quota-cycles.retry-provider') }}</button>
+      </div>
+      <div data-part="cycle-summary">{{ t('quota-cycles.range-count', { count: totalCount }) }}<span v-if="refreshedAt"> · {{ t('quota-cycles.history-read') }} {{ stamp(refreshedAt) }}</span></div>
+      <div v-if="summary" data-part="average">{{ t('quota-cycles.trusted-average') }}: {{ num(summary.avg_total_exhausted) }} · {{ t('quota-cycles.eligibility', { eligible: summary.eligible_count ?? 0, excluded: summary.excluded_count ?? 0 }) }}</div>
     </div>
-
-    <!-- ── Cycles ─────────────────────────────────────────────────────────── -->
-    <template v-if="tab === 'cycle'">
-      <div v-if="cyclesPanel === 'table' && kindSummary" class="qc-summary" data-part="cycle-summary">
-        {{ t('quota-cycles.summary', { cycles: kindSummary.cycles, exhausted: kindSummary.exhausted }) }}
-        <template v-if="summaryAvg !== null">
-          · {{ t('quota-cycles.summary-avg', { total: compact(summaryAvg) }) }}
+    <div class="qc-tabs" role="tablist" :aria-label="t('quota-cycles.account-quota')">
+      <button v-for="name in (['cycle', 'month', 'year'] as Tab[])" :key="name" type="button" role="tab" class="qc-tab" data-act="tab" :data-tab="name" :class="{ on: tab === name }" :aria-selected="tab === name" @click="tab = name">{{ t('quota-cycles.tab-' + name) }}</button>
+      <button v-if="tab !== 'cycle'" type="button" class="qc-chip" data-act="all-accounts" :data-on="allAccounts" :aria-pressed="allAccounts" @click="allAccounts = !allAccounts">{{ t('quota-cycles.all-accounts') }}</button>
+    </div>
+    <div class="qc-tabs">
+      <button v-for="kind in windowKinds" :key="kind" type="button" class="qc-chip" data-act="window-chip" :data-kind="kind" :class="{ on: windowKind === kind }" :aria-pressed="windowKind === kind" @click="windowKind = kind">{{ kindLabel(kind) }}</button>
+      <label>{{ t('quota-cycles.range') }} <select v-model="range" data-act="range"><option value="30">{{ t('quota-cycles.last30') }}</option><option value="90">{{ t('quota-cycles.last90') }}</option><option value="custom">{{ t('quota-cycles.custom') }}</option></select></label>
+      <template v-if="range === 'custom'"><label>{{ t('quota-cycles.from') }} <input v-model="startDate" type="date" data-act="from"></label><label>{{ t('quota-cycles.to') }} <input v-model="endDate" type="date" data-act="to"></label></template>
+    </div>
+    <p class="qc-scope">{{ t(tab === 'cycle' ? 'quota-cycles.cycle-membership' : 'quota-cycles.period-membership') }}</p>
+    <p v-if="tab !== 'cycle' && periodsApi.data.value?.effective_range_start" class="qc-scope">{{ periodsApi.data.value.effective_range_start }} → {{ periodsApi.data.value.effective_range_end }} · UTC</p>
+    <div v-if="!validRange" class="qc-empty" data-state="invalid-range">{{ t('quota-cycles.invalid-range') }}</div>
+    <div v-else class="qc-body">
+      <p v-if="loading && !visibleCount" class="qc-empty" data-state="loading">{{ t('turn-stats.scanning') }}</p>
+      <p v-if="error" class="qc-empty qc-error" role="alert" data-state="error">{{ t('quota-cycles.error-generic', { detail: error }) }} {{ visibleCount ? t('quota-cycles.retained') : '' }} <button type="button" class="qc-ghost" data-act="retry" @click="load">{{ t('quota-cycles.retry-history') }}</button></p>
+      <p v-if="!loading && !error && !visibleCount" class="qc-empty" data-state="empty">{{ t(tab !== 'cycle' || retainedKinds.length ? 'quota-cycles.filtered-empty' : 'quota-cycles.empty') }} <template v-if="!retainedKinds.length">{{ t('quota-cycles.no-reconstruction') }}</template> <button type="button" class="qc-ghost" data-act="clear-filters" @click="clearFilters">{{ t('quota-cycles.clear-filters') }}</button></p>
+      <div v-if="visibleCount" class="qc-chart" :data-part="tab === 'cycle' ? 'cycle-chart' : 'period-chart'">
+        <button type="button" class="qc-chart-toggle" data-act="toggle-chart" :aria-expanded="showChart" @click="showChart = !showChart">{{ t('quota-cycles.visible-chart') }}</button>
+        <p class="qc-hint">{{ t('quota-cycles.chart-cycles-hint') }}</p>
+        <BarsWithLine v-if="showChart && tab === 'cycle'" :bars="cycleBars" :selected="selectedCycleBar" :value-format="compact" :ariaLabel="t('quota-cycles.chart-cycles')" :empty-text="t('quota-cycles.empty')" @select="selectCycle([...kindCycles].reverse()[$event])" />
+        <StackedBars v-else-if="showChart" :bars="periodBars" :selected="selectedPeriodBar" :value-format="compact" :ariaLabel="t('quota-cycles.chart-' + tab)" :empty-text="t('quota-cycles.empty')" @select="selectPeriod([...periodRows].reverse()[$event])" />
+      </div>
+      <table v-if="visibleCount && tab === 'cycle'" class="qc-table" data-state="table">
+        <thead><tr><th>{{ t('quota-cycles.col-cycle') }}</th><th>{{ t('quota-cycles.state-evidence') }}</th><th>{{ t('quota-cycles.col-max') }}</th><th>{{ t('quota-cycles.local-tokens') }}</th><th>{{ t('quota-cycles.col-exhausted') }}</th></tr></thead>
+        <tbody><tr v-for="c in kindCycles" :key="cycleKey(c)" class="qc-row" data-row="cycle" :data-selected="selectedId === cycleKey(c)" :data-no-detail="!known(c)">
+          <td data-part="cycle"><button type="button" class="qc-row-button" data-act="details" :aria-expanded="selectedId === cycleKey(c)" aria-controls="quota-selected-detail" @click="selectCycle(c)">{{ stamp(c.started_at) }} → {{ stamp(c.resets_at) }}</button></td>
+          <td>{{ t(c.closed ? 'quota-cycles.ended' : 'quota-cycles.in-progress') }} · {{ source(c) }}<small>{{ coverage(c) }}</small></td>
+          <td data-part="max">{{ num(c.max_percent) }}%</td><td data-part="total">{{ known(c) ? '≈ ' : '' }}{{ num(amount(c, 'total')) }}</td><td data-part="exhausted">{{ stamp(c.exhausted_at) }}<small v-if="c.exhausted_at && (!c.exhausted_source || c.exhausted_source === 'legacy_unknown')">{{ t('quota-cycles.unverified') }}</small></td>
+        </tr></tbody>
+      </table>
+      <table v-if="visibleCount && tab !== 'cycle'" class="qc-table" data-state="table" :data-mode="aggregate ? 'all' : 'single'">
+        <thead><tr><th>{{ t('quota-cycles.col-' + tab) }} · UTC</th><th v-if="aggregate">{{ t('quota-cycles.col-account') }}</th><th>{{ t('quota-cycles.local-tokens') }}</th><th v-if="aggregate">{{ t('quota-cycles.col-share') }}</th><th>{{ t('quota-cycles.col-cycles') }}</th><th>{{ t('quota-cycles.trusted-average') }}</th></tr></thead>
+        <tbody><tr v-for="r in periodRows" :key="periodKey(r)" class="qc-row" :data-row="aggregate ? 'period-account' : 'period'" :data-period="r.period" :data-selected="selectedId === periodKey(r)">
+          <td><button type="button" class="qc-row-button" data-act="details" :aria-expanded="selectedId === periodKey(r)" aria-controls="quota-selected-detail" @click="selectPeriod(r)">{{ r.period }}</button></td><td v-if="aggregate">{{ rowAccountLabel(r) }} · {{ vendors[r.agent_key] ?? r.agent_key }}</td><td data-part="total">{{ num(amount(r, 'total')) }}<small>{{ coverage(r) }}</small></td><td v-if="aggregate" data-part="share">{{ share(r) }}</td><td>{{ num(r.cycles) }}</td><td data-part="avg-exhausted">{{ num(r.avg_total_exhausted) }}<small>{{ t('quota-cycles.eligibility', { eligible: r.eligible_count ?? 0, excluded: r.excluded_count ?? 0 }) }}</small></td>
+        </tr></tbody>
+      </table>
+      <p v-if="selectionNotice" role="status" class="qc-scope">{{ t('quota-cycles.selection-cleared') }}</p>
+      <section v-if="details" id="quota-selected-detail" class="qc-detail" data-part="selected-detail" :aria-label="t('quota-cycles.details')">
+        <h3>{{ t('quota-cycles.details') }}</h3><p>{{ coverage(details) }} · {{ reason(details) }}</p>
+        <p>{{ t('quota-cycles.local-scope', { zone: localZone }) }}</p>
+        <dl><template v-for="key in breakdown" :key="key"><dt>{{ t(fieldLabels[key]) }}</dt><dd :data-part="key">{{ num(amount(details, key)) }}</dd></template></dl>
+        <template v-if="selectedCycle">
+          <p>{{ source(selectedCycle) }} · {{ t('quota-cycles.col-exhausted') }}: {{ stamp(selectedCycle.exhausted_at) }} ({{ selectedCycle.exhausted_at ?? '—' }})</p>
+          <p>{{ t('quota-cycles.col-cycle') }}: {{ selectedCycle.started_at ?? '—' }} → {{ selectedCycle.resets_at }} · UTC</p>
+          <p>{{ t('quota-cycles.changed-readings') }}: {{ selectedCycle.samples }} · {{ t('quota-cycles.latest-reading') }}: {{ stamp(selectedCycle.last_sample_at) }}</p>
+          <p>{{ t('quota-cycles.reconciled') }}: {{ stamp(selectedCycle.reconciled_at) }}</p>
+          <p>{{ t('quota-cycles.per-point') }}: {{ known(selectedCycle) && selectedCycle.total !== null && selectedCycle.max_percent > 0 ? num(selectedCycle.total / selectedCycle.max_percent) : '—' }}. {{ t('quota-cycles.formula') }}</p>
         </template>
-      </div>
-      <div v-if="cyclesPanel === 'table'" class="qc-chart" data-part="cycle-chart">
-        <button class="qc-chart-toggle" data-act="toggle-chart" :aria-expanded="showChart ? 'true' : 'false'" @click="showChart = !showChart">
-          <span class="qc-caret">{{ showChart ? '▾' : '▸' }}</span>{{ t('quota-cycles.chart-cycles') }}
-          <span class="qc-hint">{{ t('quota-cycles.chart-cycles-hint') }}</span>
-        </button>
-        <BarsWithLine
-          v-if="showChart"
-          :bars="cycleBars"
-          :value-format="compact"
-          :selected="selectedCycleBar"
-          :ariaLabel="t('quota-cycles.chart-cycles')"
-          :empty-text="t('quota-cycles.empty')"
-          @select="onCycleSelect"
-        />
-      </div>
-      <div class="qc-body">
-        <p v-if="cyclesPanel === 'unknown'" class="qc-empty" data-state="unknown">{{ t('quota-cycles.unknown-account') }}</p>
-        <p v-else-if="cyclesPanel === 'loading'" class="qc-empty" data-state="loading">{{ t('turn-stats.scanning') }}</p>
-        <p v-else-if="cyclesPanel === 'error'" class="qc-empty qc-error" data-state="error">{{ errorText(cyclesApi.error.value) }}</p>
-        <p v-else-if="cyclesPanel === 'empty'" class="qc-empty" data-state="empty">{{ t('quota-cycles.empty') }}</p>
-        <table v-else class="qc-table" data-state="table">
-          <thead>
-            <tr>
-              <th class="c-period">{{ t('quota-cycles.col-cycle') }}</th>
-              <th class="c-num">{{ t('quota-cycles.col-max') }}</th>
-              <th class="c-when">{{ t('quota-cycles.col-exhausted') }}</th>
-              <th class="c-num">{{ t('turn-stats.col-input') }}</th>
-              <th class="c-num">{{ t('turn-stats.col-cache-read') }}</th>
-              <th class="c-num">{{ t('turn-stats.col-cache-write') }}</th>
-              <th class="c-num">{{ t('turn-stats.col-output') }}</th>
-              <th class="c-num c-total">{{ t('turn-stats.col-total') }}</th>
-              <th class="c-num">{{ t('turn-stats.col-calls') }}</th>
-              <th class="c-num">{{ t('quota-cycles.col-turns') }}</th>
-              <th class="c-num">{{ t('quota-cycles.col-per-percent') }}</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="(c, i) in kindCycles"
-              :key="`${c.window_kind}:${c.resets_at}`"
-              class="qc-row"
-              data-row="cycle"
-              :data-index="i"
-              :data-closed="c.closed ? 'true' : 'false'"
-              :data-exhausted="c.exhausted_at !== null ? 'true' : 'false'"
-              :data-no-detail="noDetail(c) ? 'true' : 'false'"
-              :data-selected="selectedCycle === i ? 'true' : 'false'"
-              :title="noDetail(c) ? t('quota-cycles.no-detail') : undefined"
-              @click="selectedCycle = selectedCycle === i ? null : i"
-            >
-              <td class="c-period" data-part="cycle">
-                {{ stamp(c.started_at) }} → {{ stamp(c.resets_at) }}
-                <span v-if="!c.closed" class="qc-open" data-part="in-progress">{{ t('quota-cycles.in-progress') }}</span>
-                <span v-else-if="noDetail(c)" class="qc-nodetail" data-part="no-detail">{{ t('quota-cycles.no-detail-short') }}</span>
-              </td>
-              <td class="c-num" data-part="max">{{ pct(c.max_percent) }}</td>
-              <td class="c-when" data-part="exhausted">{{ c.exhausted_at ? clock(c.exhausted_at) : '—' }}</td>
-              <td class="c-num" data-part="input">{{ cell(c, c.input) }}</td>
-              <td class="c-num" data-part="cache-read">{{ cell(c, c.cache_read) }}</td>
-              <td class="c-num" data-part="cache-write">{{ cell(c, c.cache_creation) }}</td>
-              <td class="c-num" data-part="output">{{ cell(c, c.output) }}</td>
-              <td class="c-num c-total" data-part="total">{{ cell(c, c.total) }}</td>
-              <td class="c-num" data-part="calls">{{ cell(c, c.calls) }}</td>
-              <td class="c-num" data-part="turns">{{ cell(c, c.turns) }}</td>
-              <td class="c-num" data-part="per-percent">{{ noDetail(c) ? '—' : perPercent(c.total, c.max_percent) }}</td>
-            </tr>
-          </tbody>
-          <tfoot v-if="exhaustedAverage">
-            <tr class="qc-avg" data-row="exhausted-average">
-              <td class="c-period" :title="exhaustedAverage.detailed < exhaustedAverage.count ? t('quota-cycles.average-detailed', { detailed: exhaustedAverage.detailed }) : undefined">
-                {{ t('quota-cycles.row-exhausted-average', { count: exhaustedAverage.count }) }}
-                <span v-if="exhaustedAverage.detailed < exhaustedAverage.count" class="qc-nodetail" data-part="average-detailed">{{ t('quota-cycles.average-detailed', { detailed: exhaustedAverage.detailed }) }}</span>
-              </td>
-              <td class="c-num">{{ pct(exhaustedAverage.max_percent) }}</td>
-              <td class="c-when" />
-              <td class="c-num">{{ avgCell(exhaustedAverage.input) }}</td>
-              <td class="c-num">{{ avgCell(exhaustedAverage.cache_read) }}</td>
-              <td class="c-num">{{ avgCell(exhaustedAverage.cache_creation) }}</td>
-              <td class="c-num">{{ avgCell(exhaustedAverage.output) }}</td>
-              <td class="c-num c-total" data-part="total">{{ avgCell(exhaustedAverage.total) }}</td>
-              <td class="c-num">{{ avgCell(exhaustedAverage.calls) }}</td>
-              <td class="c-num">{{ avgCell(exhaustedAverage.turns) }}</td>
-              <td class="c-num">{{ perPercent(exhaustedAverage.total, exhaustedAverage.max_percent) }}</td>
-            </tr>
-          </tfoot>
-        </table>
-      </div>
-      <div class="qc-foot"><span class="qc-foot-note" data-part="note">{{ t('quota-cycles.note') }}</span></div>
-    </template>
-
-    <!-- ── Month / year ───────────────────────────────────────────────────── -->
-    <template v-else>
-      <div v-if="periodsPanel === 'table'" class="qc-chart" data-part="period-chart">
-        <button class="qc-chart-toggle" data-act="toggle-chart" :aria-expanded="showChart ? 'true' : 'false'" @click="showChart = !showChart">
-          <span class="qc-caret">{{ showChart ? '▾' : '▸' }}</span>{{ t(`quota-cycles.chart-${tab}`) }}
-          <span class="qc-hint">{{ t('quota-cycles.chart-periods-hint') }}</span>
-        </button>
-        <StackedBars
-          v-if="showChart"
-          :bars="periodBars"
-          :value-format="compact"
-          :selected="selectedPeriodBar"
-          :ariaLabel="t(`quota-cycles.chart-${tab}`)"
-          :empty-text="t('quota-cycles.empty-periods')"
-          @select="onPeriodSelect"
-        />
-      </div>
-      <div class="qc-body">
-        <p v-if="periodsPanel === 'loading'" class="qc-empty" data-state="loading">{{ t('turn-stats.scanning') }}</p>
-        <p v-else-if="periodsPanel === 'error'" class="qc-empty qc-error" data-state="error">{{ errorText(periodsApi.error.value) }}</p>
-        <p v-else-if="periodsPanel === 'empty'" class="qc-empty" data-state="empty">{{ t('quota-cycles.empty-periods') }}</p>
-
-        <!-- One account: a row per period. -->
-        <table v-else-if="!allAccounts" class="qc-table" data-state="table" data-mode="single">
-          <thead>
-            <tr>
-              <th class="c-period">{{ t(`quota-cycles.col-${tab}`) }}</th>
-              <th class="c-num">{{ t('turn-stats.col-input') }}</th>
-              <th class="c-num">{{ t('turn-stats.col-cache-read') }}</th>
-              <th class="c-num">{{ t('turn-stats.col-cache-write') }}</th>
-              <th class="c-num">{{ t('turn-stats.col-output') }}</th>
-              <th class="c-num c-total">{{ t('turn-stats.col-total') }}</th>
-              <th class="c-num">{{ t('turn-stats.col-calls') }}</th>
-              <th class="c-num">{{ t('quota-cycles.col-turns') }}</th>
-              <th class="c-num">{{ t('quota-cycles.col-cycles') }}</th>
-              <th class="c-num">{{ t('quota-cycles.col-exhausted-count') }}</th>
-              <th class="c-num">{{ t('quota-cycles.col-avg-exhausted') }}</th>
-              <th class="c-num">{{ t('quota-cycles.col-weekly-exhausted') }}</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="r in periodRows"
-              :key="`${r.period}:${r.agent_key}:${r.profile_id}`"
-              class="qc-row"
-              data-row="period"
-              :data-period="r.period"
-              :data-selected="selectedPeriod === r.period ? 'true' : 'false'"
-              @click="selectedPeriod = selectedPeriod === r.period ? null : r.period"
-            >
-              <td class="c-period" data-part="period">
-                {{ r.period }}
-                <span v-if="periodOpen(r.period)" class="qc-open" data-part="in-progress">{{ t('quota-cycles.in-progress') }}</span>
-              </td>
-              <td class="c-num" data-part="input">{{ num(r.input) }}</td>
-              <td class="c-num" data-part="cache-read">{{ num(r.cache_read) }}</td>
-              <td class="c-num" data-part="cache-write">{{ num(r.cache_creation) }}</td>
-              <td class="c-num" data-part="output">{{ num(r.output) }}</td>
-              <td class="c-num c-total" data-part="total">{{ num(r.total) }}</td>
-              <td class="c-num" data-part="calls">{{ num(r.calls) }}</td>
-              <td class="c-num" data-part="turns">{{ num(r.turns) }}</td>
-              <td class="c-num" data-part="cycles">{{ num(r.cycles) }}</td>
-              <td class="c-num" data-part="exhausted">{{ num(r.exhausted) }}</td>
-              <td class="c-num" data-part="avg-exhausted">{{ r.avg_total_exhausted ? compact(r.avg_total_exhausted) : '—' }}</td>
-              <td class="c-num" data-part="weekly-exhausted">{{ num(r.weekly_exhausted) }}</td>
-            </tr>
-          </tbody>
-        </table>
-
-        <!-- Every account: the periods, each with its accounts' shares. -->
-        <table v-else class="qc-table" data-state="table" data-mode="all">
-          <thead>
-            <tr>
-              <th class="c-period">{{ t('quota-cycles.col-account') }}</th>
-              <th class="c-num c-total">{{ t('turn-stats.col-total') }}</th>
-              <th class="c-num">{{ t('quota-cycles.col-share') }}</th>
-              <th class="c-num">{{ t('turn-stats.col-calls') }}</th>
-              <th class="c-num">{{ t('quota-cycles.col-turns') }}</th>
-              <th class="c-num">{{ t('quota-cycles.col-exhausted-count') }}</th>
-              <th class="c-num">{{ t('quota-cycles.col-weekly-exhausted') }}</th>
-            </tr>
-          </thead>
-          <tbody>
-            <template v-for="g in periodGroups" :key="g.period">
-              <tr class="qc-period-head" data-row="period-head" :data-period="g.period" :data-selected="selectedPeriod === g.period ? 'true' : 'false'">
-                <td class="c-period" data-part="period">
-                  {{ g.period }}
-                  <span v-if="periodOpen(g.period)" class="qc-open" data-part="in-progress">{{ t('quota-cycles.in-progress') }}</span>
-                </td>
-                <td class="c-num c-total" data-part="total">{{ num(g.total) }}</td>
-                <td class="c-num">100%</td>
-                <td class="c-num" data-part="calls">{{ num(g.calls) }}</td>
-                <td class="c-num" data-part="turns">{{ num(g.turns) }}</td>
-                <td class="c-num" data-part="exhausted">{{ num(g.exhausted) }}</td>
-                <td class="c-num" data-part="weekly-exhausted">{{ num(g.weeklyExhausted) }}</td>
-              </tr>
-              <tr
-                v-for="r in g.rows"
-                :key="`${r.period}:${r.agent_key}:${r.profile_id}`"
-                class="qc-row qc-account-row"
-                data-row="period-account"
-                :data-period="r.period"
-                :data-account-key="accountKey(r.agent_key, r.profile_id)"
-                :class="{ unknown: r.profile_id === UNKNOWN_PROFILE_ID }"
-              >
-                <td class="c-period c-account" data-part="account" :title="`${r.agent_key} · ${r.profile_id}`">
-                  <span class="qc-swatch" :style="{ background: accountTint(r.profile_id) }" aria-hidden="true" />
-                  {{ rowAccountLabel(r) }}<span class="qc-vendor-sub"> · {{ rowVendorLabel(r.agent_key) }}</span>
-                </td>
-                <td class="c-num c-total" data-part="total">{{ num(r.total) }}</td>
-                <td class="c-num" data-part="share">{{ share(r.total, g.total) }}</td>
-                <td class="c-num" data-part="calls">{{ num(r.calls) }}</td>
-                <td class="c-num" data-part="turns">{{ num(r.turns) }}</td>
-                <td class="c-num" data-part="exhausted">{{ r.profile_id === UNKNOWN_PROFILE_ID ? '—' : num(r.exhausted) }}</td>
-                <td class="c-num" data-part="weekly-exhausted">{{ r.profile_id === UNKNOWN_PROFILE_ID ? '—' : num(r.weekly_exhausted) }}</td>
-              </tr>
-            </template>
-          </tbody>
-        </table>
-      </div>
-      <div class="qc-foot"><span class="qc-foot-note" data-part="note">{{ t('quota-cycles.periods-note') }}</span></div>
-    </template>
+        <p v-if="selectedPeriod">{{ selectedPeriod.period_start }} → {{ selectedPeriod.period_end }} · UTC</p>
+        <p v-if="!known(details) && details.recorded_totals">{{ t('quota-cycles.recorded-subtotal') }}: {{ num(details.recorded_totals.total) }}</p>
+        <p>{{ t('quota-cycles.note') }}</p>
+      </section>
+    </div>
+    <div class="qc-foot">
+      <span>{{ t('quota-cycles.page-count', { count: visibleCount, total: totalCount, page: page + 1 }) }}</span>
+      <button type="button" class="qc-ghost" data-act="previous" :disabled="page === 0 || loading" @click="changePage(-1)">{{ t('quota-cycles.previous') }}</button><button type="button" class="qc-ghost" data-act="next" :disabled="!hasNext || loading" @click="changePage(1)">{{ t('quota-cycles.next') }}</button>
+    </div>
+    <p class="qc-scope">{{ t('quota-cycles.export-scope') }} <span v-if="exportedCount !== null" role="status">{{ t('quota-cycles.exported', { count: exportedCount }) }}</span><span v-if="exportError" role="alert">{{ exportError === 'range-too-large' ? t('quota-cycles.export-too-large') : t('quota-cycles.error-generic', { detail: exportError }) }}</span></p>
   </div>
 </template>
 
@@ -655,6 +294,20 @@ defineExpose({ buildCyclesCsv, buildPeriodsCsv })
   font-size: var(--font-xs);
   overflow: hidden;
 }
+.qc-scope { margin: 0; padding: 6px 16px; color: var(--text-muted); font-size: var(--font-2xs); }
+.qc-summary { display: grid; gap: 8px; }
+.qc-summary span { font-size: var(--font-2xs); font-weight: 400; }
+.qc-toolbar, .qc-foot { flex-wrap: wrap; }
+.qc-row-button { border: 0; background: transparent; color: var(--accent-fg); text-align: left; font: inherit; cursor: pointer; padding: 4px 0; }
+.qc-view button:focus-visible, .qc-view input:focus-visible, .qc-view select:focus-visible { outline: 2px solid var(--accent-fg); outline-offset: 2px; }
+.qc-tabs input, .qc-tabs select { font: inherit; color: var(--text-primary); background: var(--bg-subtle); border: 1px solid var(--border-muted); border-radius: var(--radius-sm); padding: 4px; }
+.qc-table td { white-space: normal; }
+.qc-table small { display: block; color: var(--text-muted); margin-top: 4px; }
+.qc-detail { margin: 16px; padding: 16px; border: 1px solid var(--border-muted); background: var(--bg-subtle); border-radius: var(--radius-md); overflow-wrap: anywhere; }
+.qc-detail h3 { margin: 0 0 8px; color: var(--text-bright); }
+.qc-detail dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr) auto); gap: 6px 16px; }
+.qc-detail dd { margin: 0; font-variant-numeric: tabular-nums; }
+@media (max-width: 800px) { .qc-detail dl { grid-template-columns: minmax(0, 1fr) auto; } .qc-account { max-width: 100%; } }
 .qc-spacer { flex: 1; }
 
 .qc-toolbar {
@@ -804,6 +457,7 @@ defineExpose({ buildCyclesCsv, buildPeriodsCsv })
 .qc-table td:first-child { padding-left: 16px; }
 .qc-table th:last-child,
 .qc-table td:last-child { padding-right: 16px; }
+.qc-table td { white-space: normal; }
 .c-period { color: var(--text-primary); }
 .c-when { width: 7ch; color: var(--text-muted); }
 .qc-table th.c-num,

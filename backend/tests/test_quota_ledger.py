@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from agent_team_backend.db import Database
-from agent_team_backend.quota_ledger import QuotaLedger, window_kinds_of
+from agent_team_backend.quota_ledger import QuotaLedger, SLICES_SINCE_KEY, window_kinds_of
 from agent_team_backend.quota_windows import window_seconds
 
 T0 = 1789516800.0  # 2026-09-16T00:00:00Z
@@ -29,9 +29,15 @@ class _Totals:
     def __init__(self) -> None:
         self.spent: dict[tuple[str, str], list[tuple[float, int]]] = {}
         self.calls: list[tuple[str, str, float | None, float]] = []
+        self.changes: list[tuple[str, str, float]] = []
 
     def add(self, agent: str, profile: str, ts: float, tokens: int) -> None:
         self.spent.setdefault((agent, profile), []).append((ts, tokens))
+        self.changes.append((agent, profile, ts))
+
+    def take_quota_changes(self, limit):
+        batch, self.changes = self.changes[:limit], self.changes[limit:]
+        return batch
 
     def __call__(self, agent: str, profile: str, start: float | None, end: float) -> dict[str, int]:
         self.calls.append((agent, profile, start, end))
@@ -53,6 +59,7 @@ def totals() -> _Totals:
 @pytest.fixture
 def ledger(tmp_path: Path, totals: _Totals):
     db = Database(tmp_path / "navide.db")
+    db.kv_set(SLICES_SINCE_KEY, T0, now=1)
     yield QuotaLedger(db, totals)
     db.close()
 
@@ -122,7 +129,7 @@ def test_exhausted_at_is_the_first_full_sample_and_does_not_close(
     assert ledger.cycles("claude", "acct-a", now=T0 + 4.6 * H)[0]["input"] == 5
 
 
-def test_a_cycle_freezes_when_its_reset_passes(ledger: QuotaLedger, totals: _Totals) -> None:
+def test_a_cycle_finalizes_at_reset_and_reconciles_retained_late_events(ledger: QuotaLedger, totals: _Totals) -> None:
     resets = T0 + 5 * H
     ledger.observe("claude", "acct-a", _snap(50.0, resets, T0 + H), now=T0 + H)
     totals.add("claude", "acct-a", T0 + 2 * H, 700)
@@ -137,12 +144,17 @@ def test_a_cycle_freezes_when_its_reset_passes(ledger: QuotaLedger, totals: _Tot
     assert [c["closed"] for c in cycles] == [False, True]      # newest reset first
     frozen = cycles[1]
     assert frozen["input"] == 700 and frozen["calls"] == 1
-    # Frozen: usage that arrives late for that window no longer changes it,
-    # and a late sample for it changes nothing either.
+    # Reset still closes the quota lifecycle. A retained late token event
+    # changes the stored sums only through the bounded reconciliation path;
+    # a late provider reading cannot reopen the closed cycle.
     totals.add("claude", "acct-a", T0 + 3 * H, 999)
     ledger.observe("claude", "acct-a", _snap(77.0, resets, resets + 200), now=resets + 200)
     again = ledger.cycles("claude", "acct-a", now=resets + 300)[1]
     assert again["input"] == 700 and again["max_percent"] == 50.0 and again["samples"] == 1
+    assert ledger.reconcile_pending(totals, now=resets + 300) == [("claude", "acct-a", "session")]
+    reconciled = ledger.cycles("claude", "acct-a", now=resets + 300)[1]
+    assert reconciled["closed"] and reconciled["input"] == 1699
+    assert ledger.reconcile_pending(totals, now=resets + 301) == []
 
 
 def test_close_expired_runs_without_a_new_sample(ledger: QuotaLedger, totals: _Totals) -> None:
@@ -218,12 +230,17 @@ def test_summary_and_period_stats(tmp_path: Path, totals: _Totals) -> None:
     # Everything older than the third cycle has reset by now.
     cycles = ledger.cycles("claude", "acct-a", now=T0 + 12 * H)
     summary = QuotaLedger.summarize(cycles)
-    assert summary["session"] == {"cycles": 3, "exhausted": 2, "avg_total_exhausted": 1500.0}
+    assert summary["session"]["avg_total_exhausted"] == 1500.0
+    assert (summary["session"]["cycles"], summary["session"]["exhausted"],
+            summary["session"]["eligible_count"], summary["session"]["excluded_count"]) == (3, 2, 2, 1)
     # The weekly window covers all three 5h cycles: 1000 + 2000 + 3000.
-    assert summary["weekly"] == {"cycles": 1, "exhausted": 1, "avg_total_exhausted": 6000.0}
+    assert summary["weekly"]["avg_total_exhausted"] is None
+    assert summary["weekly"]["exclusions"]["ongoing"] == 1
     stats = ledger.period_stats("month", now=T0 + 12 * H)
     assert stats == {("2026-09", "claude", "acct-a"): {
         "cycles": 3, "exhausted": 2, "avg_total_exhausted": 1500.0, "weekly_exhausted": 1,
+        "eligible_count": 2, "excluded_count": 1,
+        "exclusions": {"ongoing": 1, "no_limit": 0, "untrusted_source": 0, "unavailable_detail": 0},
     }}
     assert set(ledger.period_stats("year", now=T0 + 12 * H)) == {("2026", "claude", "acct-a")}
     db.close()
@@ -252,19 +269,19 @@ def test_pane_detection_moves_exhausted_at_earlier_but_never_later(
     sample_at = T0 + 4 * H + 35 * 60
     seen_at = T0 + 4 * H + 31 * 60
     ledger.observe("claude", "acct-a", _snap(100.0, resets, sample_at), now=sample_at)
-    assert ledger.mark_exhausted("claude", "acct-a", seen_at, resets) == ["session"]
+    assert ledger.mark_exhausted("claude", "acct-a", seen_at, resets, reset_precision="minute") == ["session"]
     assert ledger.cycles("claude", "acct-a", now=sample_at + 1)[0]["exhausted_at"] == _iso(seen_at)
     # A detection AFTER the sample does not override it; neither does a
     # detection outside the window, an unknown account, or a closed cycle.
-    assert ledger.mark_exhausted("claude", "acct-a", sample_at + 60, resets) == []
+    assert ledger.mark_exhausted("claude", "acct-a", sample_at + 60, resets, reset_precision="minute") == []
     assert ledger.cycles("claude", "acct-a", now=sample_at + 1)[0]["exhausted_at"] == _iso(seen_at)
-    assert ledger.mark_exhausted("claude", "acct-a", resets + 10, resets) == []
-    assert ledger.mark_exhausted("claude", "unknown", seen_at, resets) == []
+    assert ledger.mark_exhausted("claude", "acct-a", resets + 10, resets, reset_precision="minute") == []
+    assert ledger.mark_exhausted("claude", "unknown", seen_at, resets, reset_precision="minute") == []
     ledger.close_expired(now=resets)
-    assert ledger.mark_exhausted("claude", "acct-a", seen_at - 60, resets) == []
+    assert ledger.mark_exhausted("claude", "acct-a", seen_at - 60, resets, reset_precision="minute") == []
     # Without any sample at 100 % the detection sets exhausted_at on its own.
     ledger.observe("claude", "acct-b", _snap(80.0, resets, T0 + H), now=T0 + H)
-    assert ledger.mark_exhausted("claude", "acct-b", T0 + 2 * H, resets) == ["session"]
+    assert ledger.mark_exhausted("claude", "acct-b", T0 + 2 * H, resets, reset_precision="minute") == ["session"]
     assert ledger.cycles("claude", "acct-b", now=T0 + 3 * H)[0]["exhausted_at"] == _iso(T0 + 2 * H)
 
 
@@ -289,9 +306,10 @@ def test_pane_detection_stamps_only_the_window_the_message_named(
     ledger.observe("claude", "acct-a", _snap(89.0, session_resets, T0 + 10, extra=extra),
                    now=T0 + 10)
 
-    # The weekly wall: only the weekly cycle is stamped. weekly-model shares
-    # the reset to the second, and loses the tie on how full it was.
-    assert ledger.mark_exhausted("claude", "acct-a", seen_at, weekly_resets) == ["weekly"]
+    # The same reset is ambiguous without the explicit account-wide scope.
+    assert ledger.mark_exhausted("claude", "acct-a", seen_at, weekly_resets, reset_precision="minute") == []
+    assert ledger.mark_exhausted("claude", "acct-a", seen_at, weekly_resets,
+                                 window_kind="weekly", model_scope="all", reset_precision="minute") == ["weekly"]
     by_kind = {c["window_kind"]: c for c in ledger.cycles("claude", "acct-a", now=seen_at + 1)}
     assert by_kind["weekly"]["exhausted_at"] == _iso(seen_at)
     assert by_kind["session"]["exhausted_at"] is None
@@ -301,7 +319,7 @@ def test_pane_detection_stamps_only_the_window_the_message_named(
     # may print it with the minutes left off — an hour of slack still lands on
     # the right window because no other one resets anywhere near it.
     assert ledger.mark_exhausted(
-        "claude", "acct-a", seen_at, session_resets - 10 * 60
+        "claude", "acct-a", seen_at, session_resets - 10 * 60, window_kind="session", reset_precision="hour"
     ) == ["session"]
     assert ledger.cycles("claude", "acct-a", window_kind="session", now=seen_at + 1)[0][
         "exhausted_at"
@@ -439,7 +457,9 @@ def test_avg_total_exhausted_ignores_cycles_without_detail(tmp_path: Path, total
         cycles = ledger.cycles("claude", "acct-a", now=start + 2 * H)
         assert [c["detail_known"] for c in cycles] == [True, True, True, False]
         summary = QuotaLedger.summarize(cycles)["session"]
-        assert summary == {"cycles": 4, "exhausted": 3, "avg_total_exhausted": 3000.0}
+        assert summary == {"cycles": 4, "exhausted": 3, "avg_total_exhausted": 3000.0,
+                           "eligible_count": 2, "excluded_count": 2,
+                           "exclusions": {"ongoing": 1, "no_limit": 0, "untrusted_source": 0, "unavailable_detail": 1}}
         stats = ledger.period_stats("month", now=start + 2 * H)[("2026-09", "claude", "acct-a")]
         assert (stats["cycles"], stats["exhausted"], stats["avg_total_exhausted"]) == (4, 3, 3000.0)
 

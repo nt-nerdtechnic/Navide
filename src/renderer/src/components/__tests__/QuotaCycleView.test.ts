@@ -12,6 +12,8 @@ import QuotaCycleView from '../QuotaCycleView.vue'
 import type { QuotaCycle, QuotaCyclesResult } from '../../composables/useQuotaCycles'
 import type { AccountPeriodRow, AccountPeriodsResult } from '../../composables/useAccountPeriods'
 import type { UsageSnapshot } from '../../composables/useUsage'
+import { setUsageEnabled } from '../../composables/useUsage'
+import { __resetSettingsForTest } from '@navide/plugin-ui/shared/testing'
 
 const wire = vi.hoisted(() => ({
   calls: [] as Array<{ type: string; payload?: Record<string, unknown> }>,
@@ -31,7 +33,17 @@ function fakeBackend() {
     lastError: ref(''),
     send: vi.fn(async (type: string, sent?: Record<string, unknown>) => {
       wire.calls.push({ type, payload: sent })
-      const payload = type === 'tokens.quota_cycles' ? wire.cycles : type === 'tokens.account_periods' ? wire.periods : { ok: true }
+      let payload = type === 'tokens.quota_cycles' ? wire.cycles : type === 'tokens.account_periods' ? wire.periods : { ok: true }
+      if (type === 'tokens.quota_cycles' && (payload as QuotaCyclesResult)?.ok) {
+        const answer = payload as QuotaCyclesResult
+        const all = answer.cycles.filter((c) => !sent?.window_kind || c.window_kind === sent.window_kind)
+        const cursor = sent?.cursor as { id: number } | undefined
+        const offset = cursor ? all.findIndex((c) => c.id === cursor.id) + 1 : 0
+        const rows = sent?.export ? all : all.slice(offset, offset + 50)
+        payload = { ...answer, cycles: rows, total_count: all.length, window_kinds: [...new Set(answer.cycles.map((c) => c.window_kind))],
+          snapshot: { at: '2026-09-21T03:00:00Z', max_cycle_id: 999 },
+          next_cursor: !sent?.export && offset + 50 < all.length ? { id: rows.at(-1)?.id, resets_at: rows.at(-1)?.resets_at } : null }
+      }
       return { id: 'r', type, ok: true, payload, error: null, timestamp: '' }
     }),
     on: vi.fn((ev: string, cb: (raw: unknown) => void) => {
@@ -46,6 +58,7 @@ function fakeBackend() {
 function cycle(over: Partial<QuotaCycle> = {}): QuotaCycle {
   return {
     window_kind: 'session', started_at: '2026-09-16T09:20:00Z', resets_at: '2026-09-16T14:20:00Z', closed: true,
+    coverage_state: 'available', detail_known: true, exhausted_source: null,
     max_percent: 94, exhausted_at: null, input: 3981, cache_read: 25_806_112, cache_creation: 912_006, output: 318_442,
     total: 27_040_541, calls: 1204, turns: 163, samples: 12, ...over,
   }
@@ -67,6 +80,7 @@ function cyclesAnswer(): QuotaCyclesResult {
 }
 function periodRow(over: Partial<AccountPeriodRow> = {}): AccountPeriodRow {
   return {
+    coverage_state: 'available', detail_known: true, period_start: '2026-09-01T00:00:00Z', period_end: '2026-10-01T00:00:00Z',
     period: '2026-09', agent_key: 'claude', profile_id: 'slot-a',
     input: 61_204, cache_read: 412_880_113, cache_creation: 15_102_441, output: 5_210_392, total: 433_254_150,
     calls: 20_318, turns: 2740, cycles: 44, exhausted: 11, avg_total_exhausted: 28_500_000, weekly_exhausted: 1, ...over,
@@ -105,6 +119,7 @@ function usage(over: Partial<UsageSnapshot> = {}): UsageSnapshot {
 }
 
 beforeEach(() => {
+  __resetSettingsForTest()
   wire.calls = []
   wire.handlers = {}
   wire.cycles = cyclesAnswer()
@@ -112,6 +127,8 @@ beforeEach(() => {
   i18n.global.locale.value = 'en-US'
 })
 afterEach(() => {
+  __resetSettingsForTest()
+  vi.restoreAllMocks()
   document.body.innerHTML = ''
 })
 
@@ -134,323 +151,267 @@ async function mountView(props: Partial<InstanceType<typeof QuotaCycleView>['$pr
 }
 const calls = (type: string) => wire.calls.filter((c) => c.type === type)
 
-describe('QuotaCycleView cycles', () => {
-  it('loads the account\'s cycles, offers one chip per window kind (session first, labelled by the snapshot), and lists the picked kind newest first', async () => {
+describe('QuotaCycleView production history', () => {
+  it('loads local history in bounded pages and keeps five cycle columns with a real detail button', async () => {
     const w = await mountView()
-    expect(calls('tokens.quota_cycles')).toHaveLength(1)
-    expect(calls('tokens.quota_cycles')[0].payload).toMatchObject({ agent_key: 'claude', profile_id: 'slot-a' })
-    expect(calls('tokens.account_periods')).toHaveLength(0)
-    expect(w.get('[data-part="account-name"]').text()).toBe('services@x.dev')
-    expect(w.get('[data-part="active"]').text()).toBe(i18n.global.t('account-dim.inactive'))
-
-    const chips = w.findAll('[data-act="window-chip"]')
-    expect(chips.map((c) => c.attributes('data-kind'))).toEqual(['session', 'weekly'])
-    expect(chips[0].text()).toBe('Session (5h)')
-    expect(chips[0].classes()).toContain('on')
-
-    const rows = w.findAll('[data-row="cycle"]')
-    expect(rows).toHaveLength(3)
-    expect(rows[0].attributes('data-closed')).toBe('false')
-    expect(rows[0].get('[data-part="in-progress"]').text()).toBe(i18n.global.t('quota-cycles.in-progress'))
-    expect(rows[0].get('[data-part="max"]').text()).toBe('6%')
-    expect(rows[0].get('[data-part="total"]').text()).toBe('1,692,729')
-    expect(rows[0].get('[data-part="per-percent"]').text()).toBe('282k')
-    expect(rows[2].attributes('data-exhausted')).toBe('true')
-    expect(rows[2].get('[data-part="exhausted"]').text()).not.toBe('—')
-    expect(rows[1].get('[data-part="exhausted"]').text()).toBe('—')
-    expect(w.get('[data-part="cycle-summary"]').text()).toContain(i18n.global.t('quota-cycles.summary', { cycles: 3, exhausted: 1 }))
-    expect(w.get('[data-part="cycle-summary"]').text()).toContain('28.5M')
-    // The footer averages the exhausted cycles only.
-    const avg = w.get('[data-row="exhausted-average"]')
-    expect(avg.text()).toContain(i18n.global.t('quota-cycles.row-exhausted-average', { count: 1 }))
-    expect(avg.get('[data-part="total"]').text()).toBe('28,473,613')
-  })
-
-  it('switching the window chip swaps the rows; a kind with no exhausted cycle has no average row', async () => {
-    const w = await mountView()
-    await w.get('[data-act="window-chip"][data-kind="weekly"]').trigger('click')
-    const rows = w.findAll('[data-row="cycle"]')
-    expect(rows).toHaveLength(1)
-    expect(rows[0].get('[data-part="total"]').text()).toBe('200,000,000')
-    expect(w.find('[data-row="exhausted-average"]').exists()).toBe(false)
-    expect(calls('tokens.quota_cycles')).toHaveLength(1)
-  })
-
-  it('draws the cycle chart oldest first with the exhausted dot, and a bar click selects the matching (newest-first) row', async () => {
-    const w = await mountView()
-    const chart = w.get('[data-part="cycle-chart"]')
-    expect(chart.findAll('[data-part="bar"]')).toHaveLength(3)
-    expect(chart.findAll('[data-part="dot"][data-exhausted="true"]')).toHaveLength(1)
-    expect(chart.findAll('[data-part="x-note"]')).toHaveLength(1)
-    await chart.get('[data-part="bar"][data-index="0"]').trigger('click')
-    const rows = w.findAll('[data-row="cycle"]')
-    expect(rows[2].attributes('data-selected')).toBe('true')
-    expect(rows[0].attributes('data-selected')).toBe('false')
-    await chart.get('[data-act="toggle-chart"]').trigger('click')
-    expect(chart.find('svg').exists()).toBe(false)
-  })
-
-  it('shows the empty state for an account without cycles, the unknown note for the unknown bucket, and the vendor error', async () => {
-    wire.cycles = { ...cyclesAnswer(), cycles: [], summary: {} }
-    let w = await mountView()
-    expect(w.get('[data-state="empty"]').text()).toBe(i18n.global.t('quota-cycles.empty'))
-    expect(w.find('[data-act="window-chip"]').exists()).toBe(false)
-    expect(w.get('[data-act="export"]').attributes('disabled')).toBeDefined()
+    expect(calls('tokens.quota_cycles').at(-1)?.payload).toMatchObject({ agent_key: 'claude', profile_id: 'slot-a', window_kind: 'session', limit: 50 })
+    expect(w.findAll('thead th')).toHaveLength(5)
+    expect(w.findAll('[data-row="cycle"]')).toHaveLength(3)
+    await w.get('[data-row="cycle"] [data-act="details"]').trigger('click')
+    expect(w.get('[data-part="selected-detail"]').text()).toContain('Changed readings')
+    expect(w.get('[data-act="details"]').attributes('aria-expanded')).toBe('true')
+    expect(calls('usage.refresh')).toHaveLength(0)
     w.unmount()
-
-    wire.calls = []
-    w = await mountView({ profileId: 'unknown', label: 'Unknown' })
-    expect(w.get('[data-state="unknown"]').text()).toBe(i18n.global.t('quota-cycles.unknown-account'))
-    expect(calls('tokens.quota_cycles')).toHaveLength(0)
-    expect(w.find('[data-part="active"]').exists()).toBe(false)
-    w.unmount()
-
-    wire.cycles = { ok: false, error: 'unknown-vendor' }
-    w = await mountView({ agentKey: 'nope' })
-    expect(w.get('[data-state="error"]').text()).toBe(i18n.global.t('quota-cycles.error-unknown-vendor'))
   })
 
-  it('refetches when the backend says this account\'s cycles changed, and reloads when the account prop changes', async () => {
+  it('switches windows and preserves full weekly dates and source evidence', async () => {
     const w = await mountView()
-    for (const h of wire.handlers['tokens.quota_cycles_changed'] ?? []) h({ agent_key: 'claude', profile_id: 'slot-a', window_kind: 'session' })
-    await flushPromises()
-    expect(calls('tokens.quota_cycles')).toHaveLength(2)
-    await w.setProps({ profileId: '__default__', label: 'me@x.dev' })
-    await flushPromises()
-    expect(calls('tokens.quota_cycles')).toHaveLength(3)
-    expect(calls('tokens.quota_cycles')[2].payload).toMatchObject({ profile_id: '__default__' })
-  })
-
-  it('keys per-model weekly buckets as "kind:label" chips, labelled from the matching snapshot window', async () => {
-    const answer = cyclesAnswer()
-    answer.cycles.push(
-      cycle({ window_kind: 'weekly-model:Fable only', started_at: '2026-09-11T04:00:00Z', resets_at: '2026-09-18T04:00:00Z', closed: false, max_percent: 20, total: 5_000_000 }),
-      cycle({ window_kind: 'weekly-model:Opus', started_at: '2026-09-11T04:00:00Z', resets_at: '2026-09-18T04:00:00Z', closed: false, max_percent: 3, total: 1_000_000 }),
-    )
-    answer.summary['weekly-model:Fable only'] = { cycles: 1, exhausted: 0, avg_total_exhausted: null }
-    answer.summary['weekly-model:Opus'] = { cycles: 1, exhausted: 0, avg_total_exhausted: null }
-    wire.cycles = answer
-    const w = await mountView({
-      usage: usage({
-        windows: [
-          { kind: 'session', label: 'Session (5h)', usedPercent: 6, resetsAt: null },
-          { kind: 'weekly', label: 'Weekly (all models)', usedPercent: 64, resetsAt: null },
-          { kind: 'weekly-model', label: 'Opus', usedPercent: 3, resetsAt: null },
-          { kind: 'weekly-model', label: 'Fable only', usedPercent: 20, resetsAt: null },
-        ],
-      }),
-    })
-    const chips = w.findAll('[data-act="window-chip"]')
-    expect(chips.map((c) => c.attributes('data-kind'))).toEqual(['session', 'weekly', 'weekly-model:Fable only', 'weekly-model:Opus'])
-    expect(chips.map((c) => c.text())).toEqual(['Session (5h)', 'Weekly (all models)', 'Fable only', 'Opus'])
-    await chips[2].trigger('click')
+    await w.get('[data-kind="weekly"]').trigger('click'); await flushPromises()
     expect(w.findAll('[data-row="cycle"]')).toHaveLength(1)
-    expect(w.get('[data-row="cycle"] [data-part="total"]').text()).toBe('5,000,000')
-    // Without a snapshot the label part of the key still names the chip.
-    await w.setProps({ usage: undefined })
-    expect(w.findAll('[data-act="window-chip"]').map((c) => c.text())).toEqual(['session', 'weekly', 'Fable only', 'Opus'])
-  })
-
-  it('a closed cycle with no token detail reads as "—", is excluded from the token averages, and a 0.0 summary average is not printed', async () => {
-    const answer = cyclesAnswer()
-    // Before slices were kept: samples say it ran out, the spend is unknown (all zeros).
-    answer.cycles.push(cycle({ started_at: '2026-09-15T21:05:00Z', resets_at: '2026-09-16T02:05:00Z', max_percent: 100, exhausted_at: '2026-09-16T01:12:00Z', input: 0, cache_read: 0, cache_creation: 0, output: 0, total: 0, calls: 0, turns: 0, samples: 4 }))
-    answer.summary.session = { cycles: 4, exhausted: 2, avg_total_exhausted: 14_236_806 }
-    wire.cycles = answer
-    const w = await mountView()
-    const rows = w.findAll('[data-row="cycle"]')
-    expect(rows).toHaveLength(4)
-    const bare = rows[3]
-    expect(bare.attributes('data-no-detail')).toBe('true')
-    expect(bare.get('[data-part="no-detail"]').text()).toBe(i18n.global.t('quota-cycles.no-detail-short'))
-    expect(bare.get('[data-part="total"]').text()).toBe('—')
-    expect(bare.get('[data-part="calls"]').text()).toBe('—')
-    expect(bare.get('[data-part="per-percent"]').text()).toBe('—')
-    expect(bare.get('[data-part="max"]').text()).toBe('100%')
-    // An open cycle at 0 is not "no detail" — it has simply not spent yet.
-    expect(rows[0].attributes('data-no-detail')).toBe('false')
-    // Two exhausted, one with detail: the token average is that one's figures.
-    const avg = w.get('[data-row="exhausted-average"]')
-    expect(avg.text()).toContain(i18n.global.t('quota-cycles.row-exhausted-average', { count: 2 }))
-    expect(avg.get('[data-part="average-detailed"]').text()).toBe(i18n.global.t('quota-cycles.average-detailed', { detailed: 1 }))
-    expect(avg.get('[data-part="total"]').text()).toBe('28,473,613')
-    // The summary line agrees with the footer, not with the backend's
-    // diluted average (28,473,613 / 2 exhausted cycles = 14.2M).
-    const summary = w.get('[data-part="cycle-summary"]').text()
-    expect(summary).toContain(i18n.global.t('quota-cycles.summary-avg', { total: '28.5M' }))
-    expect(summary).not.toContain('14.2M')
+    expect(w.get('[data-row="cycle"]').text()).toContain('2026')
+    expect(w.get('[data-kind="weekly"]').attributes('aria-pressed')).toBe('true')
     w.unmount()
-
-    // The backend reports 0.0 when none of the exhausted cycles carry detail.
-    const bareOnly = cyclesAnswer()
-    bareOnly.cycles = [cycle({ max_percent: 100, exhausted_at: '2026-09-16T13:00:00Z', input: 0, cache_read: 0, cache_creation: 0, output: 0, total: 0, calls: 0, turns: 0 })]
-    bareOnly.summary = { session: { cycles: 1, exhausted: 1, avg_total_exhausted: 0 } }
-    wire.cycles = bareOnly
-    const w2 = await mountView()
-    expect(w2.get('[data-part="cycle-summary"]').text()).not.toContain(i18n.global.t('quota-cycles.summary-avg', { total: '0' }))
-    expect(w2.get('[data-row="exhausted-average"] [data-part="total"]').text()).toBe('—')
   })
 
-  it('detail_known false reads as "—" and is left out of the token averages even when the figures are non-zero', async () => {
-    const answer = cyclesAnswer()
-    answer.cycles.push(cycle({ started_at: '2026-09-15T21:05:00Z', resets_at: '2026-09-16T02:05:00Z', max_percent: 100, exhausted_at: '2026-09-16T01:12:00Z', total: 12, calls: 1, turns: 1, detail_known: false }))
-    wire.cycles = answer
-    const w = await mountView()
-    const bare = w.findAll('[data-row="cycle"]')[3]
-    expect(bare.attributes('data-no-detail')).toBe('true')
-    expect(bare.get('[data-part="no-detail"]').text()).toBe(i18n.global.t('quota-cycles.no-detail-short'))
-    expect(bare.get('[data-part="total"]').text()).toBe('—')
-    expect(bare.get('[data-part="per-percent"]').text()).toBe('—')
-    const avg = w.get('[data-row="exhausted-average"]')
-    expect(avg.text()).toContain(i18n.global.t('quota-cycles.row-exhausted-average', { count: 2 }))
-    expect(avg.get('[data-part="average-detailed"]').text()).toBe(i18n.global.t('quota-cycles.average-detailed', { detailed: 1 }))
-    expect(avg.get('[data-part="total"]').text()).toBe('28,473,613')
-  })
-
-  it('detail_known true with all-zero figures shows the zeros and counts in the average — nothing was spent', async () => {
-    const answer = cyclesAnswer()
-    answer.cycles = answer.cycles.map((c) => ({ ...c, detail_known: true }))
-    answer.cycles.push(cycle({ started_at: '2026-09-15T21:05:00Z', resets_at: '2026-09-16T02:05:00Z', max_percent: 100, exhausted_at: '2026-09-16T01:12:00Z', input: 0, cache_read: 0, cache_creation: 0, output: 0, total: 0, calls: 0, turns: 0, detail_known: true }))
-    wire.cycles = answer
-    const w = await mountView()
-    const zero = w.findAll('[data-row="cycle"]')[3]
-    expect(zero.attributes('data-no-detail')).toBe('false')
-    expect(zero.find('[data-part="no-detail"]').exists()).toBe(false)
-    expect(zero.get('[data-part="total"]').text()).toBe('0')
-    expect(zero.get('[data-part="calls"]').text()).toBe('0')
-    // Two exhausted cycles, both with detail: (28,473,613 + 0) / 2.
-    const avg = w.get('[data-row="exhausted-average"]')
-    expect(avg.find('[data-part="average-detailed"]').exists()).toBe(false)
-    expect(avg.get('[data-part="total"]').text()).toBe('14,236,807')
-  })
-
-  it('without the detail_known field a closed all-zero cycle is still read as no detail, an open one is not', async () => {
-    const answer = cyclesAnswer()
-    answer.cycles.push(
-      cycle({ started_at: '2026-09-15T21:05:00Z', resets_at: '2026-09-16T02:05:00Z', closed: true, max_percent: 50, input: 0, cache_read: 0, cache_creation: 0, output: 0, total: 0, calls: 0, turns: 0 }),
-      cycle({ started_at: '2026-09-15T16:05:00Z', resets_at: '2026-09-15T21:05:00Z', closed: false, max_percent: 1, input: 0, cache_read: 0, cache_creation: 0, output: 0, total: 0, calls: 0, turns: 0 }),
-    )
-    for (const c of answer.cycles) expect(c.detail_known).toBeUndefined()
-    wire.cycles = answer
+  it('shows missing detail as a chart/table gap while preserving a genuine zero and the full-range average', async () => {
+    wire.cycles = { ...cyclesAnswer(), cycles: [
+      cycle({ id: 1, total: null, coverage_state: 'partial', detail_known: false, exhausted_source: 'legacy_unknown', exhausted_at: '2026-09-16T12:00:00Z' }),
+      cycle({ id: 2, total: 0, input: 0, cache_read: 0, cache_creation: 0, output: 0, calls: 0, turns: 0, exhausted_source: 'cli', exhausted_at: '2026-09-16T12:00:00Z' }),
+    ], summary: { session: { cycles: 2, exhausted: 2, avg_total_exhausted: 0, eligible_count: 1, excluded_count: 1 } } }
     const w = await mountView()
     const rows = w.findAll('[data-row="cycle"]')
-    expect(rows[3].attributes('data-no-detail')).toBe('true')
-    expect(rows[3].get('[data-part="total"]').text()).toBe('—')
-    expect(rows[4].attributes('data-no-detail')).toBe('false')
-    expect(rows[4].get('[data-part="total"]').text()).toBe('0')
+    expect(rows[0].get('[data-part="total"]').text()).toBe('—')
+    expect(rows[0].text()).toContain('unverified')
+    expect(rows[1].get('[data-part="total"]').text()).toBe('≈ 0')
+    expect(w.findAll('[data-part="cycle-chart"] rect[data-part="bar"]')).toHaveLength(1)
+    expect(w.get('[data-part="average"]').text()).toContain(': 0')
+    expect(w.get('[data-part="average"]').text()).toContain('1 eligible · 1 excluded')
+    w.unmount()
   })
 
-  it('builds a cycles CSV with one row per cycle', async () => {
+  it('uses server eligibility across pages and preserves selected identity through paging and refresh', async () => {
+    const rows = Array.from({ length: 60 }, (_, n) => cycle({ id: n + 1, total: n, resets_at: new Date(Date.UTC(2026, 8, 21) - n * 5 * 3600000).toISOString() }))
+    wire.cycles = { ...cyclesAnswer(), cycles: rows, summary: { session: { cycles: 60, exhausted: 5, avg_total_exhausted: 12, eligible_count: 4, excluded_count: 56 } } }
     const w = await mountView()
-    const csv = (w.vm as unknown as { buildCyclesCsv: (rows: QuotaCycle[]) => string }).buildCyclesCsv(cyclesAnswer().cycles.slice(0, 2))
-    const lines = csv.trimEnd().split('\n')
-    expect(lines[0]).toBe('window_kind,started_at,resets_at,closed,max_percent,exhausted_at,input,cache_read,cache_creation,output,total,calls,turns,samples')
-    expect(lines).toHaveLength(3)
-    expect(lines[1]).toBe('session,2026-09-16T14:20:00Z,2026-09-16T19:20:00Z,0,6,,182,1612404,58210,21933,1692729,61,9,12')
-    expect(lines[2].startsWith('session,2026-09-16T09:20:00Z,2026-09-16T14:20:00Z,1,94,,3981,')).toBe(true)
+    expect(w.findAll('[data-row="cycle"]')).toHaveLength(50)
+    await w.findAll('[data-act="details"]')[2].trigger('click')
+    const detail = w.get('[data-part="selected-detail"]').text()
+    const summary = w.get('[data-part="average"]').text()
+    await w.get('[data-act="next"]').trigger('click'); await flushPromises()
+    expect(w.findAll('[data-row="cycle"]')).toHaveLength(10)
+    expect(w.get('[data-part="average"]').text()).toBe(summary)
+    expect(w.get('[data-part="selected-detail"]').text()).toBe(detail)
+    await w.get('[data-act="previous"]').trigger('click'); await flushPromises()
+    expect(w.findAll('[data-row="cycle"]')[2].attributes('data-selected')).toBe('true')
+    await w.get('[data-act="refresh"]').trigger('click'); await flushPromises()
+    expect(w.findAll('[data-row="cycle"]')[2].attributes('data-selected')).toBe('true')
+    expect(calls('tokens.quota_cycles').some((c) => c.payload?.snapshot != null)).toBe(true)
+    w.unmount()
+  })
+
+  it('clears selection with an explanation when filters change', async () => {
+    const w = await mountView()
+    await w.get('[data-act="details"]').trigger('click')
+    await w.get('[data-kind="weekly"]').trigger('click'); await flushPromises()
+    expect(w.find('[data-part="selected-detail"]').exists()).toBe(false)
+    expect(w.text()).toContain('Selection cleared')
+    w.unmount()
+  })
+
+  it('allows chart keyboard selection and matches the equivalent table record', async () => {
+    const w = await mountView()
+    await w.get('[data-part="bar-group"]').trigger('keydown', { key: 'Enter' })
+    expect(w.findAll('[data-row="cycle"]')[2].attributes('data-selected')).toBe('true')
+    expect(w.find('[data-part="selected-detail"]').exists()).toBe(true)
+    w.unmount()
+  })
+
+  it('reads Unknown history and retries retained failures without enabling or polling the provider', async () => {
+    const w = await mountView({ profileId: 'unknown' })
+    expect(calls('tokens.quota_cycles')[0].payload?.profile_id).toBe('unknown')
+    wire.cycles = { ok: false, error: 'read-failed' }
+    await w.get('[data-act="refresh"]').trigger('click'); await flushPromises()
+    expect(w.get('[data-state="error"]').text()).toContain('retained')
+    expect(w.findAll('[data-row="cycle"]')).toHaveLength(3)
+    wire.cycles = cyclesAnswer()
+    await w.get('[data-act="retry"]').trigger('click'); await flushPromises()
+    expect(w.find('[data-state="error"]').exists()).toBe(false)
+    expect(calls('usage.refresh')).toHaveLength(0)
+    w.unmount()
+  })
+
+  it('sends 90-day and custom UTC half-open dates, and offers recovery for empty results', async () => {
+    const w = await mountView()
+    await w.get('[data-act="range"]').setValue('90'); await flushPromises()
+    const start = calls('tokens.quota_cycles').at(-1)?.payload?.range_start as string
+    expect(Math.abs(Date.now() - Date.parse(start) - 90 * 86400000)).toBeLessThan(60000)
+    await w.get('[data-act="range"]').setValue('custom')
+    await w.get('[data-act="from"]').setValue('2026-08-01')
+    await w.get('[data-act="to"]').setValue('2026-08-31'); await flushPromises()
+    expect(calls('tokens.quota_cycles').at(-1)?.payload).toMatchObject({ range_start: '2026-08-01T00:00:00.000Z', range_end: '2026-09-01T00:00:00.000Z' })
+    wire.cycles = { ...cyclesAnswer(), cycles: [], summary: {} }
+    await w.get('[data-act="refresh"]').trigger('click'); await flushPromises()
+    expect(w.get('[data-state="empty"]').text()).toContain('cannot be reconstructed')
+    expect(w.find('[data-act="clear-filters"]').exists()).toBe(true)
+    w.unmount()
+  })
+
+  it('does not invent provider values for an unsupported window and displays cached freshness separately', async () => {
+    const w = await mountView({ usage: usage({ stale: true }) })
+    expect(w.get('[data-part="current-reading"]').text()).toContain('Stale cached reading')
+    await w.setProps({ usage: usage({ windows: [] }) })
+    expect(w.get('[data-part="current-reading"]').text()).toContain('No suitable provider/window reading')
+    expect(calls('usage.refresh')).toHaveLength(0)
+    w.unmount()
+  })
+
+  it('exports all 60 rows once from page two without a page snapshot and leaves the UI page unchanged', async () => {
+    wire.cycles = { ...cyclesAnswer(), cycles: Array.from({ length: 60 }, (_, n) => cycle({ id: n + 1 })) }
+    const w = await mountView()
+    await w.get('[data-act="next"]').trigger('click'); await flushPromises()
+    const blobs: Blob[] = []
+    vi.spyOn(URL, 'createObjectURL').mockImplementation((blob) => { blobs.push(blob as Blob); return 'blob:test' })
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    await w.get('[data-act="export"]').trigger('click'); await flushPromises()
+    const request = calls('tokens.quota_cycles').at(-1)?.payload
+    expect(request).toMatchObject({ export: true, profile_id: 'slot-a', window_kind: 'session' })
+    expect(request?.snapshot).toBeUndefined(); expect(request?.cursor).toBeUndefined()
+    expect((await blobs[0].text()).trim().split('\r\n')).toHaveLength(61)
+    expect(w.findAll('[data-row="cycle"]')).toHaveLength(10)
+    expect(w.text()).toContain('Exported 60 records')
+    vi.restoreAllMocks(); w.unmount()
+  })
+
+  it('exports blank numeric cells for partial records and real zeros with proper identity and escaping', async () => {
+    const w = await mountView({ label: 'Work, "one"\nteam' })
+    const csv = (w.vm as unknown as { buildCyclesCsv: (r: QuotaCycle[]) => string }).buildCyclesCsv([
+      cycle({ id: 11, total: 7, coverage_state: 'partial', detail_known: false, coverage_reason: 'retention_expired' }),
+      cycle({ id: 12, total: 0 }),
+    ])
+    expect(csv).toContain('exhausted_source,coverage_state,coverage_reason')
+    expect(csv).toContain('"Work, ""one""\nteam"')
+    expect(csv).toContain(',,,,,,,,12,2,11')
+    expect(csv).toContain('318442,0,1204,163')
+    expect(csv).toContain('partial,retention_expired')
+    w.unmount()
+  })
+
+  it('displays UTC periods and exact boundaries, including zero averages', async () => {
+    const w = await mountView()
+    await w.get('[data-tab="month"]').trigger('click'); await flushPromises()
+    expect(calls('tokens.account_periods').at(-1)?.payload).toMatchObject({ granularity: 'month', limit: 50, window_kind: 'session' })
+    expect(w.text()).toContain('Calendar month/year · UTC')
+    expect(w.text()).toContain('Without a selected window, cycle statistics exclude weekly quotas')
+    const rows = w.findAll('[data-row="period"]')
+    expect(rows[1].get('[data-part="avg-exhausted"]').text()).toContain('0')
+    await rows[0].get('[data-act="details"]').trigger('click')
+    expect(w.get('[data-part="selected-detail"]').text()).toContain('2026-09-01T00:00:00Z')
+    await w.get('[data-tab="year"]').trigger('click'); await flushPromises()
+    expect(calls('tokens.account_periods').at(-1)?.payload?.granularity).toBe('year')
+    w.unmount()
+  })
+
+  it.each([
+    ['month', 'weekly'],
+    ['month', 'weekly-model:Weekly (Sonnet)'],
+    ['year', 'weekly'],
+    ['year', 'weekly-model:Weekly (Sonnet)'],
+  ] as const)('shows selected %s / %s statistics while retaining account token totals', async (granularity, windowKind) => {
+    const answer = wire.cycles as QuotaCyclesResult
+    answer.cycles.push(cycle({ window_kind: 'weekly-model:Weekly (Sonnet)' }))
+    wire.periods = { ...periodsAnswer(), rows: [periodRow({ total: 123 })] }
+    const w = await mountView()
+    await w.get(`[data-tab="${granularity}"]`).trigger('click'); await flushPromises()
+    expect(w.get('[data-row="period"] [data-part="total"]').text()).toContain('123')
+    wire.periods = {
+      ok: true, granularity,
+      rows: [periodRow({ period: granularity === 'month' ? '2026-09' : '2026', total: 123, cycles: 1, exhausted: 1, eligible_count: 1, excluded_count: 0, avg_total_exhausted: 123 })],
+      totals_by_period: [{ period: granularity === 'month' ? '2026-09' : '2026', total: 123, calls: 1, turns: 0 }],
+      summary: { cycles: 1, eligible_count: 1, excluded_count: 0, avg_total_exhausted: 123 },
+    } satisfies AccountPeriodsResult
+    await w.get(`[data-kind="${windowKind}"]`).trigger('click'); await flushPromises()
+    expect(calls('tokens.account_periods').at(-1)?.payload).toMatchObject({ granularity, window_kind: windowKind, agent_key: 'claude', profile_id: 'slot-a' })
+    const row = w.get('[data-row="period"]')
+    expect(row.findAll('td')[2].text()).toBe('1')
+    expect(row.get('[data-part="total"]').text()).toContain('123')
+    expect(row.get('[data-part="avg-exhausted"]').text()).toContain('123')
+    expect(row.get('[data-part="avg-exhausted"]').text()).toContain('1 eligible · 0 excluded')
+    expect(w.get('[data-part="average"]').text()).toContain('123')
+    expect(w.get('[data-part="average"]').text()).toContain('1 eligible · 0 excluded')
+    w.unmount()
+  })
+
+  it('uses an aggregate heading without a single-account reading and does not fabricate shares across missing coverage', async () => {
+    wire.periods = allAccountsAnswer()
+    const answer = wire.periods as AccountPeriodsResult
+    answer.rows[2].coverage_state = 'partial'; answer.rows[2].total = null
+    answer.totals_by_period[0].total = null
+    const w = await mountView()
+    await w.get('[data-tab="month"]').trigger('click'); await flushPromises()
+    await w.get('[data-act="all-accounts"]').trigger('click'); await flushPromises()
+    expect(w.get('[data-part="account-name"]').text()).toBe('All accounts')
+    expect(w.find('[data-part="active"]').exists()).toBe(false)
+    expect(w.find('[data-part="as-of"]').exists()).toBe(false)
+    expect(w.find('[data-part="current-reading"]').exists()).toBe(false)
+    expect(w.findAll('[data-part="share"]').map((r) => r.text())).toEqual(['—', '—', '—'])
+    expect(calls('tokens.account_periods').at(-1)?.payload?.agent_key).toBeUndefined()
+    w.unmount()
+  })
+
+  it('renders all supported locales without leaking keys', async () => {
+    for (const language of ['en-US', 'zh-TW', 'ja-JP'] as const) {
+      const w = await mountView(); i18n.global.locale.value = language
+      await w.get('[data-act="details"]').trigger('click')
+      expect(w.text()).not.toMatch(/quota-cycles\.[a-z]/)
+      await w.get('[data-tab="month"]').trigger('click'); await flushPromises()
+      expect(w.text()).not.toMatch(/quota-cycles\.[a-z]/)
+      w.unmount()
+    }
   })
 })
 
-describe('QuotaCycleView periods', () => {
-  it('the Monthly tab asks for this account\'s months and lists them with the cycle columns; the open month is marked', async () => {
+describe('QuotaCycleView state and export boundaries', () => {
+  it('keeps disabled polling disabled across history refresh and offers its settings action', async () => {
+    setUsageEnabled(false)
     const w = await mountView()
-    await w.get('[data-act="tab"][data-tab="month"]').trigger('click')
-    await flushPromises()
-    expect(calls('tokens.account_periods')).toHaveLength(1)
-    expect(calls('tokens.account_periods')[0].payload).toEqual({ agent_key: 'claude', profile_id: 'slot-a', granularity: 'month' })
-    const table = w.get('[data-state="table"]')
-    expect(table.attributes('data-mode')).toBe('single')
-    const rows = w.findAll('[data-row="period"]')
-    expect(rows).toHaveLength(2)
-    expect(rows[0].get('[data-part="period"]').text()).toContain(NOW_MONTH)
-    expect(rows[0].get('[data-part="in-progress"]').text()).toBe(i18n.global.t('quota-cycles.in-progress'))
-    expect(rows[1].find('[data-part="in-progress"]').exists()).toBe(false)
-    expect(rows[0].get('[data-part="total"]').text()).toBe('433,254,150')
-    expect(rows[0].get('[data-part="cycles"]').text()).toBe('44')
-    expect(rows[0].get('[data-part="exhausted"]').text()).toBe('11')
-    expect(rows[0].get('[data-part="avg-exhausted"]').text()).toBe('28.5M')
-    expect(rows[1].get('[data-part="avg-exhausted"]').text()).toBe('—')
-    expect(rows[0].get('[data-part="weekly-exhausted"]').text()).toBe('1')
-    // The chart stacks one segment per account: a single account, one segment per bar, oldest first.
-    const chart = w.get('[data-part="period-chart"]')
-    expect(chart.findAll('[data-part="bar"]')).toHaveLength(2)
-    expect(chart.findAll('[data-part="segment"]')).toHaveLength(2)
-    expect(chart.findAll('[data-part="x-label"]').map((l) => l.text())).toEqual(['2026-08', NOW_MONTH])
-    await chart.get('[data-part="bar"][data-index="0"]').trigger('click')
-    expect(rows[1].attributes('data-selected')).toBe('true')
+    expect(w.text()).toContain('Polling disabled')
+    await w.get('[data-act="polling-settings"]').trigger('click')
+    expect(w.emitted('openSettings')).toHaveLength(1)
+    await w.get('[data-act="refresh"]').trigger('click'); await flushPromises()
+    expect(calls('usage.refresh')).toHaveLength(0)
+    expect(w.text()).toContain('Polling disabled')
+    w.unmount()
   })
 
-  it('the Yearly tab asks for years, and switching tabs reloads with the new granularity', async () => {
-    wire.periods = { ...periodsAnswer(), granularity: 'year', rows: [periodRow({ period: '2026' })], totals_by_period: [{ period: '2026', total: 1, calls: 1, turns: 1 }] }
+  it('reports the bounded full export limit without silently downloading a page', async () => {
     const w = await mountView()
-    await w.get('[data-act="tab"][data-tab="year"]').trigger('click')
-    await flushPromises()
-    expect(calls('tokens.account_periods')[0].payload).toMatchObject({ granularity: 'year' })
-    expect(w.get('[data-row="period"] [data-part="period"]').text()).toContain('2026')
-    await w.get('[data-act="tab"][data-tab="cycle"]').trigger('click')
-    expect(w.find('[data-row="period"]').exists()).toBe(false)
+    wire.cycles = { ok: false, error: 'range-too-large' }
+    const download = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    await w.get('[data-act="export"]').trigger('click'); await flushPromises()
+    expect(w.text()).toContain('More than 10,000 records')
+    expect(download).not.toHaveBeenCalled()
     expect(w.findAll('[data-row="cycle"]')).toHaveLength(3)
+    w.unmount()
   })
 
-  it('All accounts asks without an account and groups every account under each period with its share', async () => {
-    const w = await mountView({ cliProfiles: {
-      identityFor: (_a: string, id: string | null) => (id === 'slot-a' ? { email: 'services@x.dev', signedIn: true } : null),
-      findProfile: () => undefined,
-      defaultProfileId: () => null,
-      profilesForAgent: () => [],
-    } as unknown as never })
-    await w.get('[data-act="tab"][data-tab="month"]').trigger('click')
+  it('freezes the export identity when the selected account changes before the response arrives', async () => {
+    const backend = fakeBackend() as unknown as { send: ReturnType<typeof vi.fn> }
+    const w = await mountView({ backend: backend as never })
+    let resolveExport!: (response: unknown) => void
+    backend.send.mockImplementationOnce(() => new Promise((resolve) => { resolveExport = resolve }))
+    const blobs: Blob[] = []
+    vi.spyOn(URL, 'createObjectURL').mockImplementation((blob) => { blobs.push(blob as Blob); return 'blob:test' })
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    await w.get('[data-act="export"]').trigger('click')
+    await w.setProps({ profileId: 'slot-b', label: 'Second account' }); await flushPromises()
+    resolveExport({ ok: true, payload: { ...cyclesAnswer(), cycles: [cycle({ id: 71 })] } })
     await flushPromises()
-    wire.periods = allAccountsAnswer()
-    await w.get('[data-act="all-accounts"]').trigger('click')
-    await flushPromises()
-    expect(calls('tokens.account_periods')[1].payload).toEqual({ agent_key: undefined, profile_id: undefined, granularity: 'month' })
-    expect(w.get('[data-act="all-accounts"]').attributes('data-on')).toBe('true')
-    expect(w.get('[data-state="table"]').attributes('data-mode')).toBe('all')
-    const head = w.get('[data-row="period-head"]')
-    expect(head.get('[data-part="total"]').text()).toBe('657,654,150')
-    const rows = w.findAll('[data-row="period-account"]')
-    expect(rows.map((r) => r.attributes('data-account-key'))).toEqual(['claude/slot-a', 'codex/__default__', 'claude/unknown'])
-    expect(rows[0].get('[data-part="account"]').text()).toContain('services@x.dev')
-    expect(rows[0].get('[data-part="share"]').text()).toBe('66%')
-    expect(rows[1].get('[data-part="account"]').text()).toContain('Codex')
-    expect(rows[1].get('[data-part="share"]').text()).toBe('31%')
-    expect(rows[2].classes()).toContain('unknown')
-    expect(rows[2].get('[data-part="exhausted"]').text()).toBe('—')
-    // The chart stacks the three accounts into the one bar.
-    const chart = w.get('[data-part="period-chart"]')
-    expect(chart.findAll('[data-part="bar"]')).toHaveLength(1)
-    expect(chart.findAll('[data-part="segment"]')).toHaveLength(3)
-    expect(chart.findAll('[data-part="legend-item"]')).toHaveLength(3)
-  })
-
-  it('an empty period answer shows the empty state and disables export', async () => {
-    wire.periods = { ...periodsAnswer(), rows: [], totals_by_period: [] }
-    const w = await mountView()
-    await w.get('[data-act="tab"][data-tab="month"]').trigger('click')
-    await flushPromises()
-    expect(w.get('[data-state="empty"]').text()).toBe(i18n.global.t('quota-cycles.empty-periods'))
-    expect(w.get('[data-act="export"]').attributes('disabled')).toBeDefined()
-  })
-
-  it('builds a periods CSV with the account name beside its id', async () => {
-    const w = await mountView()
-    const csv = (w.vm as unknown as { buildPeriodsCsv: (rows: AccountPeriodRow[]) => string }).buildPeriodsCsv([periodRow()])
-    const lines = csv.trimEnd().split('\n')
-    expect(lines[0]).toBe('period,agent_key,profile_id,account,input,cache_read,cache_creation,output,total,calls,turns,cycles,exhausted,avg_total_exhausted,weekly_exhausted')
-    expect(lines[1]).toBe(`2026-09,claude,slot-a,slot-a · ${i18n.global.t('account-dim.removed')},61204,412880113,15102441,5210392,433254150,20318,2740,44,11,28500000,1`)
-  })
-
-  it('never leaks a raw i18n key on any tab, in either locale', async () => {
-    for (const locale of ['en-US', 'zh-TW'] as const) {
-      i18n.global.locale.value = locale
-      const w = await mountView()
-      for (const tab of ['month', 'year', 'cycle']) {
-        await w.get(`[data-act="tab"][data-tab="${tab}"]`).trigger('click')
-        await flushPromises()
-        expect(w.text()).not.toMatch(/(turn-stats|account-dim|quota-cycles)\.[a-z-]+/)
-      }
-      w.unmount()
-    }
+    const csv = await blobs[0].text()
+    expect(csv).toContain('claude,slot-a,services@x.dev')
+    expect(csv).not.toContain('Second account')
+    expect(w.get('[data-part="account-name"]').text()).toBe('Second account')
+    w.unmount()
   })
 })

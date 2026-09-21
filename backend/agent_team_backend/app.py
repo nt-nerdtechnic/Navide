@@ -1270,6 +1270,13 @@ def _schedule_tokens_broadcast(workspace_path: str) -> None:
         await broadcast(
             make_event("tokens.changed", tokens_store.snapshot(workspace_path))
         )
+        changed = await asyncio.to_thread(quota_ledger.reconcile_pending, tokens_store)
+        for agent, profile, kind in changed:
+            await broadcast(make_event("tokens.quota_cycles_changed", {
+                "agent_key": agent, "profile_id": profile, "window_kind": kind,
+            }))
+        if tokens_store.has_quota_changes():
+            _schedule_tokens_broadcast(workspace_path)
 
     asyncio.create_task(_fire())
 
@@ -1583,10 +1590,40 @@ async def scan_session_turns(
     return reply
 
 
-def account_periods(agent_key: str, profile_id: str, granularity: str) -> dict[str, Any]:
+def account_periods(
+    agent_key: str, profile_id: str, granularity: str, *,
+    range_start: str | None = None, range_end: str | None = None,
+    window_kind: str | None = None, offset: int = 0, limit: int = 50, export: bool = False,
+) -> dict[str, Any]:
     """`tokens.account_periods`: by_account_day rolled up to months or years
     per (agent, account), with the quota ledger's cycle counts joined in.
     Runs off-loop (the ledger reads SQLite)."""
+    from .pane_account_history import parse_event_time
+
+    wall = time.time()
+    start = parse_event_time(str(range_start)) if range_start is not None else wall - 30 * 86400
+    end = parse_event_time(str(range_end)) if range_end is not None else wall
+    if start is None or end is None or start >= end:
+        raise ValueError("invalid-range")
+    if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 200:
+        raise ValueError("invalid-page")
+    if type(export) is not bool:
+        raise ValueError("invalid-query")
+
+    def iso(ts: float) -> str:
+        return datetime.fromtimestamp(ts, timezone.utc).isoformat().replace("+00:00", "Z")
+
+    def bounds(period: str) -> tuple[float, float]:
+        year = int(period[:4])
+        month = 1 if granularity == "year" else int(period[5:7])
+        first = datetime(year, month, 1, tzinfo=timezone.utc)
+        next_year, next_month = (year + 1, 1) if granularity == "year" or month == 12 else (year, month + 1)
+        return first.timestamp(), datetime(next_year, next_month, 1, tzinfo=timezone.utc).timestamp()
+
+    def selected(period: str) -> bool:
+        first, last = bounds(period)
+        return first < end and last > start
+
     rows: dict[tuple[str, str, str], dict[str, Any]] = {}
     for agent, profile, day, bucket in tokens_store.account_day_rows():
         if agent_key and agent != agent_key:
@@ -1594,6 +1631,8 @@ def account_periods(agent_key: str, profile_id: str, granularity: str) -> dict[s
         if profile_id and profile != profile_id:
             continue
         period = day[:4] if granularity == "year" else day[:7]
+        if not selected(period):
+            continue
         row = rows.setdefault((period, agent, profile), {
             "period": period, "agent_key": agent, "profile_id": profile,
             "input": 0, "cache_read": 0, "cache_creation": 0, "output": 0,
@@ -1604,11 +1643,13 @@ def account_periods(agent_key: str, profile_id: str, granularity: str) -> dict[s
         for field in ("input", "cache_read", "cache_creation", "output", "calls", "turns"):
             row[field] += int(bucket.get(field, 0))
         row["total"] = row["input"] + row["cache_read"] + row["cache_creation"] + row["output"]
-    for key, stats in quota_ledger.period_stats(granularity).items():
+    for key, stats in quota_ledger.period_stats(granularity, now=wall, window_kind=window_kind).items():
         period, agent, profile = key
         if agent_key and agent != agent_key:
             continue
         if profile_id and profile != profile_id:
+            continue
+        if not selected(period):
             continue
         row = rows.setdefault(key, {
             "period": period, "agent_key": agent, "profile_id": profile,
@@ -1621,9 +1662,13 @@ def account_periods(agent_key: str, profile_id: str, granularity: str) -> dict[s
             "cycles": stats["cycles"], "exhausted": stats["exhausted"],
             "avg_total_exhausted": stats["avg_total_exhausted"],
             "weekly_exhausted": stats["weekly_exhausted"],
+            "eligible_count": stats["eligible_count"], "excluded_count": stats["excluded_count"],
+            "exclusions": stats["exclusions"],
         })
+    if len(rows) > 10000:
+        raise ValueError("range-too-large")
     # period newest first, then total descending within a period
-    ordered = sorted(rows.values(), key=lambda r: r["total"], reverse=True)
+    ordered = sorted(rows.values(), key=lambda r: (-r["total"], r["agent_key"], r["profile_id"]))
     ordered.sort(key=lambda r: r["period"], reverse=True)
     totals: dict[str, dict[str, Any]] = {}
     for row in ordered:
@@ -1633,10 +1678,59 @@ def account_periods(agent_key: str, profile_id: str, granularity: str) -> dict[s
         entry["total"] += row["total"]
         entry["calls"] += row["calls"]
         entry["turns"] += row["turns"]
+    fields = ("input", "cache_read", "cache_creation", "output", "total", "calls", "turns")
+    for row in ordered:
+        first, last = bounds(row["period"])
+        known = first >= tokens_store.slices_since
+        state = "available" if known else (
+            "partial" if min(last, wall) > tokens_store.slices_since else "unavailable"
+        )
+        row.update({
+            "period_start": iso(first), "period_end": iso(last),
+            "coverage_state": state, "coverage_reason": None if known else "collection_started_late",
+            "detail_known": known, "recorded_totals": {f: row[f] for f in fields},
+        })
+        row.setdefault("eligible_count", 0)
+        row.setdefault("excluded_count", 0)
+        row.setdefault("exclusions", {k: 0 for k in ("ongoing", "no_limit", "untrusted_source", "unavailable_detail")})
+        if not known:
+            row.update({f: None for f in fields})
+    for entry in totals.values():
+        components = [r for r in ordered if r["period"] == entry["period"]]
+        known = all(r["detail_known"] for r in components)
+        entry.update({
+            "detail_known": known,
+            "coverage_state": "available" if known else (
+                "unavailable" if all(r["coverage_state"] == "unavailable" for r in components) else "partial"
+            ),
+            "coverage_reason": None if known else "collection_started_late",
+            "recorded_totals": {f: entry[f] for f in ("total", "calls", "turns")},
+            "period_start": components[0]["period_start"], "period_end": components[0]["period_end"],
+        })
+        if not known:
+            entry.update({f: None for f in ("total", "calls", "turns")})
+    eligible = sum(r["eligible_count"] for r in ordered)
+    summary = {
+        "cycles": sum(r["cycles"] for r in ordered),
+        "exhausted": sum(r["exhausted"] for r in ordered),
+        "weekly_exhausted": sum(r["weekly_exhausted"] for r in ordered),
+        "eligible_count": eligible, "excluded_count": sum(r["excluded_count"] for r in ordered),
+        "avg_total_exhausted": sum((r["avg_total_exhausted"] or 0) * r["eligible_count"] for r in ordered) / eligible if eligible else None,
+        "exclusions": {k: sum(r["exclusions"][k] for r in ordered)
+                       for k in ("ongoing", "no_limit", "untrusted_source", "unavailable_detail")},
+    }
+    page = ordered if export else ordered[offset:offset + limit]
+    effective_start = bounds(datetime.fromtimestamp(start, timezone.utc).strftime("%Y" if granularity == "year" else "%Y-%m"))[0]
+    effective_end = bounds(datetime.fromtimestamp(end - 0.000001, timezone.utc).strftime("%Y" if granularity == "year" else "%Y-%m"))[1]
     return {
         "ok": True,
+        "schema_version": 2, "calendar_timezone": "UTC", "token_time_key": "event_time",
+        "cycle_time_key": "started_at_or_resets_at", "refreshed_at": iso(wall),
         "granularity": granularity,
-        "rows": ordered,
+        "rows": page, "summary": summary, "total_count": len(ordered),
+        "next_offset": offset + len(page) if not export and offset + len(page) < len(ordered) else None,
+        "range_start": iso(start), "range_end": iso(end), "export": export,
+        "effective_range_start": iso(effective_start), "effective_range_end": iso(effective_end),
         "totals_by_period": sorted(
             totals.values(), key=lambda t: t["period"], reverse=True
         ),
@@ -1922,6 +2016,8 @@ async def _reclaim_orphan_codex_homes() -> None:
 @app.on_event("startup")
 async def _start_log_watcher() -> None:
     _sanitize_inherited_cli_env()
+    if tokens_store.has_quota_changes():
+        _schedule_tokens_broadcast("")
 
     # Push channels read the user's per-vendor switches through this rather
     # than importing the settings store, which imports back into here.

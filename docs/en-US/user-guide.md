@@ -121,6 +121,51 @@ Transcript records have **unknown account attribution**: a shared local Claude h
 
 Quota history records successful observations for the active Claude account slot through the existing usage polling service. It starts accumulating when those observations are available; it cannot reconstruct earlier quota windows. Disabled polling and an empty history are displayed explicitly. Opening the monitor does not make extra provider requests. Observed tokens and quota percentages do not establish an official token allowance, throttling, effort level, or separate thinking-token usage.
 
+### Account quota in Turn Stats
+
+Open **Window → Turn Stats**, or use the TOKENS panel entry. **Pane usage**
+shows one session; **Account quota** shows activity attributed locally to an
+account across panes and models. Saved and historical accounts remain available
+without an open pane, including removed profiles and a separate Unknown bucket.
+Opening history and **Refresh history** read local records only. A provider
+retry follows the existing polling policy; disabled polling stays disabled.
+
+The current provider value belongs to the selected account and window. Its
+cached, stale, failed, or disabled state and observation time are separate from
+the history-read time. **All accounts** shows aggregate local activity and no
+single-account current percentage. Model-window quota percentages and all-model
+local tokens describe different populations.
+
+Cycles default to the last 30 days, with 90-day and custom UTC-date ranges.
+Membership uses reset time in the half-open range, including ongoing cycles
+when the range reaches the present. Tables and charts show at most 50 records
+per page; summaries and eligible/excluded average counts cover the entire range.
+Select a cycle with its button or chart to inspect source evidence, full local
+and UTC timestamps, breakdown, changed readings, and last reconciliation.
+The local-token-per-percentage-point ratio is total divided by a nonzero
+observed peak, not a provider allowance or price estimate.
+
+Only ended cycles with trusted limit evidence and usable local detail enter
+the completed-cycle average. A CLI limit can coexist with an earlier provider
+peak below 100%; legacy timestamps remain inspectable and unverified. Missing
+or partial detail appears as a gap, while an observed zero remains zero. Local
+totals use five-minute slices without boundary prorating. Late data can
+reconcile retained ended cycles; saved finalized totals survive slice expiry.
+
+Month and Year retain **UTC calendar** buckets. A date range selects whole
+intersecting buckets, whose expanded boundaries are displayed. Tokens use event
+time; cycle counts use their start time, or reset when the start is unknown.
+Window filters affect cycle statistics only, and overlapping quota windows are
+never added together as account consumption. Account shares refer to the same
+period's observed local activity and stay unavailable when coverage is incomplete.
+
+**Export selected range** exports all selected records in one consistent
+response, up to 10,000 rows; narrow the range if it exceeds that limit. CSV
+includes identity, evidence, coverage, eligibility, UTC timestamps and time-zone
+metadata. Partial/unavailable numeric token cells are empty, correcting the old
+missing-as-zero export; a known zero is `0`. Manual keyboard, theme, language,
+and real-reset acceptance remain separate from automated fixture checks.
+
 ## Git and review
 
 Navide includes a removable factory installation of the official Git package until Marketplace installation is available. Its active package version supplies both the embedded left view and the dedicated Git window. Removing Bundled Git in Extensions persists across restarts; use **Restore** there to install the factory copy again. A verified Marketplace version takes precedence when present. The view supports repository discovery, working-tree inspection, staging, commits, branches, remotes, issues, and related workflows; multi-repository workspaces can switch between discovered repositories. Discovery scans run without blocking the backend and return partial results after a bounded scan period on slow filesystems. Repository operations stay local to Navide's Host/backend boundary, and GitHub/GitLab issue detection uses the configured `gh` or `glab` CLI when available. If the selected v2 package cannot load, mount, or report ready, Navide labels and uses the retained legacy Git renderer for that process. Security, trust, or permission denials do not trigger fallback.

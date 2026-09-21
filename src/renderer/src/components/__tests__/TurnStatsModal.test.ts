@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DOMWrapper, mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import { ref } from 'vue'
 import { i18n } from '@navide/plugin-ui/foundation'
+import { CLI_AGENT_SPECS } from '@navide/plugin-shell'
 import TurnStatsModal from '../TurnStatsModal.vue'
 import type { TurnStatsPane } from '../TurnStatsView.vue'
 import { __resetUsageForTest, initUsage } from '../../composables/useUsage'
@@ -19,6 +20,7 @@ import type { useCliProfiles } from '../../composables/useCliProfiles'
 const wire = vi.hoisted(() => ({
   calls: [] as Array<{ type: string; payload?: Record<string, unknown> }>,
   handlers: {} as Record<string, Array<(raw: unknown) => void>>,
+  accounts: [] as Array<{ agent_key: string; profile_id: string }>,
 }))
 
 function fakeBackend() {
@@ -32,6 +34,7 @@ function fakeBackend() {
     lastError: ref(''),
     send: vi.fn(async (type: string, sent?: Record<string, unknown>) => {
       wire.calls.push({ type, payload: sent })
+      if (type === 'tokens.quota_accounts') return { id: 'r', type, ok: true, payload: { ok: true, accounts: wire.accounts }, error: null, timestamp: '' }
       if (type === 'tokens.turns') {
         return {
           id: 'r', type, ok: true, error: null, timestamp: '',
@@ -93,6 +96,7 @@ const PANES: TurnStatsPane[] = [
 ]
 
 beforeEach(() => {
+  wire.accounts = []
   wire.calls = []
   wire.handlers = {}
   __resetUsageForTest()
@@ -360,7 +364,7 @@ describe('TurnStatsModal accounts', () => {
     )
     await flushPromises()
     const p1 = w.ui.get('[data-act="pane"][data-pane-id="p1"]')
-    expect(p1.get('[data-part="pane-sub"]').text()).toBe('Claude Code · services@x.dev')
+    expect(p1.get('[data-part="pane-sub"]').text()).toBe(CLI_AGENT_SPECS.find((s) => s.agentKey === 'claude')!.label + ' · services@x.dev')
     const pill = p1.get('[data-part="quota-pill"]')
     expect(pill.text()).toBe('10%')
     expect(pill.classes()).toContain('crit')
@@ -369,7 +373,7 @@ describe('TurnStatsModal accounts', () => {
     expect(pill.attributes('title')).toContain(`${String(staleAt.getHours()).padStart(2, '0')}:${String(staleAt.getMinutes()).padStart(2, '0')}`)
     // A pane on the built-in Default reads that slot; nothing stale about it.
     const p2 = w.ui.get('[data-act="pane"][data-pane-id="p2"]')
-    expect(p2.get('[data-part="pane-sub"]').text()).toBe('Codex · me@x.dev')
+    expect(p2.get('[data-part="pane-sub"]').text()).toBe(CLI_AGENT_SPECS.find((s) => s.agentKey === 'codex')!.label + ' · me@x.dev')
     expect(p2.get('[data-part="quota-pill"]').attributes('data-stale')).toBe('false')
     // A pin to a removed profile has no slot to read: no pill, id shown as removed.
     const p4 = w.ui.get('[data-act="pane"][data-pane-id="p4"]')
@@ -433,7 +437,8 @@ describe('TurnStatsModal accounts', () => {
     const w = await mountModal({ panes: PINNED, cliProfiles: profiles() })
     await w.ui.get('[data-act="account"][data-account-key="claude/unknown"]').trigger('click')
     await flushPromises()
-    expect(w.ui.find('[data-part="quota-cycles"] [data-state="unknown"]').exists()).toBe(true)
+    expect(w.ui.find('[data-part="quota-cycles"]').exists()).toBe(true)
+    expect(wire.calls.some((c) => c.type === 'tokens.quota_cycles' && c.payload?.profile_id === 'unknown')).toBe(true)
     await w.setProps({ open: false })
     await w.setProps({ open: true })
     await flushPromises()
@@ -450,5 +455,20 @@ describe('TurnStatsModal accounts', () => {
       expect(w.ui.text()).not.toMatch(/(turn-stats|account-dim|quota-cycles)\.[a-z-]+/)
       w.unmount()
     }
+  })
+})
+
+describe('TurnStatsModal retained account navigation', () => {
+  it('keeps removed, Unknown and saved accounts reachable without any pane or provider request', async () => {
+    wire.accounts = [{ agent_key: 'claude', profile_id: 'removed-slot' }, { agent_key: 'claude', profile_id: 'unknown' }]
+    const cliProfiles = fakeProfiles({ profiles: [{ id: 'saved-slot', agentKey: 'codex', name: 'Saved work' }] }) as unknown as ReturnType<typeof useCliProfiles>
+    const w = await mountModal({ panes: [], cliProfiles })
+    expect(w.ui.find('[data-account-key="claude/removed-slot"]').exists()).toBe(true)
+    expect(w.ui.find('[data-account-key="claude/unknown"]').exists()).toBe(true)
+    expect(w.ui.find('[data-account-key="codex/saved-slot"]').exists()).toBe(true)
+    await w.ui.get('[data-account-key="claude/removed-slot"]').trigger('click'); await flushPromises()
+    expect(wire.calls.some((c) => c.type === 'tokens.quota_cycles' && c.payload?.profile_id === 'removed-slot')).toBe(true)
+    expect(wire.calls.some((c) => c.type === 'usage.refresh')).toBe(false)
+    w.unmount()
   })
 })

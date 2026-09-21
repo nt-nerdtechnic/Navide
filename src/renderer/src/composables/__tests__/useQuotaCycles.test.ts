@@ -56,7 +56,7 @@ describe('useQuotaCycles', () => {
     await p
     expect(mock.sent).toHaveLength(1)
     expect(mock.sent[0].type).toBe('tokens.quota_cycles')
-    expect(mock.sent[0].payload).toEqual({ agent_key: 'claude', profile_id: 'slot-a', window_kind: undefined })
+    expect(mock.sent[0].payload).toMatchObject({ agent_key: 'claude', profile_id: 'slot-a', window_kind: undefined, limit: 50, include_current: true })
     expect(api.loading.value).toBe(false)
     expect(api.error.value).toBe('')
     expect(api.data.value?.cycles).toHaveLength(2)

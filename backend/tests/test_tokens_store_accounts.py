@@ -126,7 +126,7 @@ def test_record_turn_counts_on_the_events_day_and_slice(store: TokensStore, work
     }
     slice_start = int(now // SLICE_S) * SLICE_S
     totals = store.account_window_totals("claude", "acct-a", slice_start, slice_start + SLICE_S)
-    assert totals == {
+    assert {k: totals[k] for k in ("input", "cache_read", "cache_creation", "output", "calls", "turns", "total")} == {
         "input": 10, "cache_read": 0, "cache_creation": 0, "output": 1,
         "calls": 1, "turns": 2, "total": 11,
     }

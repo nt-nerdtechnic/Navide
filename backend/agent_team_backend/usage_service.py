@@ -1251,9 +1251,9 @@ class UsageService:
 
     async def _file_quota_samples(self) -> None:
         """Hand every fresh snapshot to the quota cycle ledger and announce
-        the cycles it changed. Claude is filed per account slot; another
-        vendor's snapshot belongs to its active profile ("__default__" when
-        the vendor has no profiles). Best effort: the ledger is not allowed to
+        the cycles it changed. Each vendor's snapshot belongs to the account
+        slot captured when its fetch was accepted ("__default__" without
+        profiles). Best effort: the ledger is not allowed to
         break the poll."""
         try:
             from . import app
@@ -1263,14 +1263,14 @@ class UsageService:
         ledger = getattr(app, "quota_ledger", None)
         if ledger is None:
             return
+        # The slot captured when the fetch was accepted owns the reading.
+        # Looking up the active profile again after awaiting another provider
+        # can file the outgoing account's reading under the incoming one.
         readings: list[tuple[str, str, dict]] = [
-            ("claude", slot_id, snap)
-            for slot_id, snap in self.account_snapshots.get("claude", {}).items()
+            (provider, slot_id, snap)
+            for provider, accounts in self.account_snapshots.items()
+            for slot_id, snap in accounts.items()
         ]
-        for provider, snap in self.snapshots.items():
-            if provider == "claude":
-                continue
-            readings.append((provider, _active_profile_id(provider) or "__default__", snap))
         try:
             changed = await asyncio.to_thread(
                 lambda: [

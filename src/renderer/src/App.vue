@@ -265,7 +265,7 @@ import {
 import { isLoopSkill, resolvePromptSkill } from './lib/promptSkills'
 import { usePromptSkills } from './composables/usePromptSkills'
 import { loginCommandFor, matchLoginExpired } from './lib/cliLoginExpired'
-import { QUOTA_READING_VETO, detectUsageLimit, isDismissedUsageLimit, usageLimitDue, usageResumeAt } from './lib/cliUsageLimit'
+import { QUOTA_READING_VETO, detectUsageLimit, isDismissedUsageLimit, quotaExhaustedPayload, usageLimitDue, usageResumeAt } from './lib/cliUsageLimit'
 import {
   awaitingClearsOnMiss,
   hasAwaitingPattern,
@@ -4801,12 +4801,7 @@ function checkPaneUsageLimit(
   // ledger stamps nothing without it: the account runs a 5-hour window, a
   // weekly one and a per-model weekly one at the same time, and a stamp that
   // cannot name one of them used to land on all three.
-  void sendQuiet('tokens.quota_exhausted', {
-    agent_key: pane.agentKey,
-    pane_id: pane.id,
-    at: new Date(now).toISOString(),
-    resets_at: hit.resetAt === null ? null : new Date(hit.resetAt).toISOString()
-  })
+  void sendQuiet('tokens.quota_exhausted', quotaExhaustedPayload(hit, { agentKey: pane.agentKey, paneId: pane.id }, now))
   // And the failover authority: it attributes the hit to the account the pane
   // was on, verifies the text against the vendor's declared notice and
   // decides — by the persisted policy — whether anything follows. The text
@@ -18869,6 +18864,7 @@ function paneIsCommander(p: ActivePane): boolean {
       :cli-profiles="cliProfilesApi"
       :active-pane-id="effectiveFocusPaneId"
       @close="showTurnStats = false"
+      @open-settings="showTurnStats = false; openSettingsAt('general')"
     />
     <!-- A machine asking to pair, shown wherever the person happens to be.
          The same request is a card inside the account window; that card is the
