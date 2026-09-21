@@ -2179,7 +2179,7 @@ def _serve_workspace_file(workspace: str, rel: str, *, allow_css: bool = False) 
     to an application/octet-stream attachment.
     """
     try:
-        target = fs_service._resolve_safe(workspace, rel)
+        target = fs_service._resolve_safe(workspace, rel, allow_mockups=True)
     except fs_service.FsError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if target.is_dir():
