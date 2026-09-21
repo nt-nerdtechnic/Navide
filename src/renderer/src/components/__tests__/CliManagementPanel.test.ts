@@ -120,6 +120,38 @@ describe('CliManagementPanel', () => {
     expect(opened).toEqual(['claude update'])
   })
 
+  it('offers to reinstall an installed CLI through the vendor install command', async () => {
+    // A CLI the launch guide flagged (and the user dismissed) still needs a
+    // repair path in settings: the guided dialog reads an installed CLI as
+    // done, so reinstall runs the vendor's own install command in a terminal.
+    stubTerminal()
+    const mock = createMockBackend('connected')
+    const payload = status()
+    payload.deps = [{ ...claude, install_cmd: 'curl -fsSL https://claude.ai/install.sh | bash' }]
+    mock.setResponse('onboarding.status', payload)
+    mock.setResponse('onboarding.cli_maintenance', {
+      ok: true, needs_terminal: true, command: 'curl -fsSL https://claude.ai/install.sh | bash',
+    })
+    wrapper = mount(CliManagementPanel, {
+      props: { backend: mock.backend, onboarding: useOnboarding(mock.backend) },
+      global: { plugins: [i18n] },
+    })
+    await flushPromises()
+
+    const reinstall = wrapper.findAll('button').find((button) => button.text().includes('install.sh'))
+    expect(reinstall).toBeDefined()
+    // The guided-install entry is for missing CLIs only.
+    expect(wrapper.findAll('button').some((b) => b.text() === i18n.global.t('cli-manage.install'))).toBe(false)
+    await reinstall!.trigger('click')
+    await flushPromises()
+
+    expect(mock.sent).toContainEqual({
+      type: 'onboarding.cli_maintenance',
+      payload: { agent_key: 'claude', action: 'install' },
+    })
+    expect(opened).toEqual(['curl -fsSL https://claude.ai/install.sh | bash'])
+  })
+
   it('passes an unrecognised vendor outcome through verbatim', async () => {
     stubTerminal()
     const mock = createMockBackend('connected')

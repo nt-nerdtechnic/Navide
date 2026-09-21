@@ -225,6 +225,19 @@ function formatTime(value: string): string {
         >
           {{ $t('cli-manage.install') }}
         </button>
+        <!-- An install that is present but misbehaving (or one the launch
+             guide was dismissed on) is repaired here by running the vendor's
+             own install command again, in a terminal like update/doctor. The
+             guided dialog is for missing CLIs: it reads "installed" as done. -->
+        <button
+          v-else-if="dep.can_install && dep.install_cmd"
+          class="cm-btn"
+          :disabled="!!maintaining"
+          :title="dep.install_cmd"
+          @click="run(dep, 'install')"
+        >
+          {{ busy(dep, 'install') ? $t('cli-manage.opening') : $t('cli-manage.reinstall', { command: dep.install_cmd }) }}
+        </button>
 
         <label v-if="dep.autoupdate_env" class="cm-policy">
           {{ $t('cli-manage.autoupdate') }}

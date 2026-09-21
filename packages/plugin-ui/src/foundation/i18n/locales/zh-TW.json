@@ -7826,6 +7826,7 @@
     "update-via-docs": "依官方文件更新",
     "doctor": "診斷（{command}）",
     "install": "安裝",
+    "reinstall": "重新安裝（{command}）",
     "last-update": "上次更新：",
     "duplicates": "偵測到 {count} 套實體安裝",
     "active": "作用中",

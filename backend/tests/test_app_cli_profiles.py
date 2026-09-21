@@ -1637,15 +1637,18 @@ async def test_set_default_reports_needs_login_for_an_empty_slot(
     assert sent["payload"]["needsLoginReason"] == "signed-out"
 
 
-async def test_set_default_reports_needs_login_for_an_expired_snapshot(
+async def test_set_default_does_not_ask_login_for_an_expired_but_refreshable_snapshot(
     store: CliProfilesStore,
     events: list[dict[str, Any]],
     vault: FakeVault,
 ) -> None:
     """Nothing renews a parked slot — the CLI is the only refresher — so an
-    aged snapshot goes live expired. The switch offers a sign-in and, crucially,
-    never mints a token itself: rotating one out from under a running Claude
-    Code is what killed accounts before."""
+    aged snapshot goes live expired, and Claude Code renews it from the
+    restored refresh token on its next run. That is routine: the switch must
+    not start a sign-in (every account parked longer than one access-token
+    lifetime would re-login on each switch) and, crucially, never mints a
+    token itself: rotating one out from under a running Claude Code is what
+    killed accounts before."""
     import json
 
     profile = store.create(agent_key="claude", name="Work")
@@ -1662,14 +1665,40 @@ async def test_set_default_reports_needs_login_for_an_expired_snapshot(
 
     sent = session.websocket.sent[0]  # type: ignore[attr-defined]
     assert sent["ok"] is True
-    assert sent["payload"]["needsLogin"] is True
-    # Told apart from a lost login: parking an account does this to it, and
-    # calling it "signed out" reads as the switch having broken something.
-    assert sent["payload"]["needsLoginReason"] == "expired"
+    assert sent["payload"]["needsLogin"] is False
+    assert sent["payload"]["needsLoginReason"] is None
     assert vault.slot_writes == []
     assert json.loads(
         vault.slot_secrets[("claude", profile["id"])]
     )["claudeAiOauth"]["accessToken"] == "dead"
+
+
+async def test_set_default_reports_needs_login_for_an_expired_snapshot_without_refresh_token(
+    store: CliProfilesStore,
+    events: list[dict[str, Any]],
+    vault: FakeVault,
+) -> None:
+    """An expired access token with nothing to refresh it from cannot recover
+    on its own — the switch offers a sign-in. Told apart from a lost login:
+    parking an account does this to it, and calling it "signed out" reads as
+    the switch having broken something."""
+    profile = store.create(agent_key="claude", name="Work")
+    vault.slot_secrets[("claude", profile["id"])] = _claude_slot_secret(
+        "dead", "", 1_000
+    )
+    session = _session()
+
+    await app.handle_message(session, {
+        "id": "n2b",
+        "type": "cli_profiles.set_default",
+        "payload": {"agent_key": "claude", "profile_id": profile["id"]},
+    })
+
+    sent = session.websocket.sent[0]  # type: ignore[attr-defined]
+    assert sent["ok"] is True
+    assert sent["payload"]["needsLogin"] is True
+    assert sent["payload"]["needsLoginReason"] == "expired"
+    assert vault.slot_writes == []
 
 
 async def test_set_default_reports_needs_login_for_a_wiped_snapshot(

@@ -2182,13 +2182,16 @@ def _slot_login_reason(agent_key: str, slot_id: str) -> str | None:
     — an empty slot signs the user out), or claude's snapshot was wiped in place
     by Claude Code (both tokens emptied after an ``invalid_grant``, so it
     restores as a non-credential). ``expired``: claude's snapshot sat parked
-    long enough for its access token to expire. Nothing renews a parked slot —
-    the CLI is the only refresher — so the expired token goes live and Claude
-    Code renews it from the restored refresh token on its next run; offering a
-    sign-in is the fallback for when that refresh token is dead too, which is
-    why this case must not be announced as "signed out". A claude login with no
-    OAuth block (long-lived token) carries nothing to judge, so it counts as
-    usable. Blocking reads (Keychain) — thread it."""
+    long enough for its access token to expire AND it carries no refresh token
+    to renew it with. Nothing renews a parked slot — the CLI is the only
+    refresher — so an aged access token is routine: it goes live expired and
+    Claude Code renews it from the restored refresh token on its next run. That
+    case is usable and must not start a sign-in (every account parked longer
+    than one access-token lifetime would otherwise re-login on each switch).
+    Only a snapshot with nothing left to refresh from needs one, and it must
+    not be announced as "signed out". A claude login with no OAuth block
+    (long-lived token) carries nothing to judge, so it counts as usable.
+    Blocking reads (Keychain) — thread it."""
     from . import app
     from .credential_vault import _claude_credential_is_wiped
     from .usage_service import claude_token_expired, parse_claude_credentials
@@ -2206,7 +2209,11 @@ def _slot_login_reason(agent_key: str, slot_id: str) -> str | None:
     if _claude_credential_is_wiped(creds.secret):
         return "signed-out"
     oauth = parse_claude_credentials(creds.secret)
-    if oauth is not None and claude_token_expired(oauth):
+    if (
+        oauth is not None
+        and claude_token_expired(oauth)
+        and not oauth.get("refreshToken")
+    ):
         return "expired"
     return None
 

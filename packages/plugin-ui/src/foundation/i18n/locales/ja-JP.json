@@ -7826,6 +7826,7 @@
     "update-via-docs": "ベンダーのドキュメントに従って更新",
     "doctor": "診断（{command}）",
     "install": "インストール",
+    "reinstall": "再インストール（{command}）",
     "last-update": "最終更新：",
     "duplicates": "インストール先が {count} か所見つかりました",
     "active": "使用中",

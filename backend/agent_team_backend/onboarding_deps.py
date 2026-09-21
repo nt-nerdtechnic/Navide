@@ -697,6 +697,17 @@ def build_cli_health(dep_statuses: list[dict[str, Any]]) -> dict[str, Any]:
             continue  # Missing optional CLIs are handled by normal onboarding.
         dep_status = status_by_id.get(dep.id, {})
         primary_resolved = str(dep_status.get("resolved_path") or "")
+        # A generic name can belong to a different vendor (grok ships
+        # `~/.grok/bin/agent`, Cursor's name). resolve_executable already
+        # steps past such a squatter when picking the primary; listing it
+        # here would report a duplicate install of a CLI it is not.
+        candidates = [
+            candidate for candidate in candidates
+            if candidate["resolved_path"] == primary_resolved
+            or _is_that_tool(dep, candidate["resolved_path"])
+        ]
+        if not candidates:
+            continue
         probed: list[tuple[dict[str, Any], dict[str, Any], bool]] = []
         for candidate in candidates:
             is_primary = candidate["resolved_path"] == primary_resolved
@@ -773,25 +784,21 @@ def build_cli_health(dep_statuses: list[dict[str, Any]]) -> dict[str, Any]:
                 "candidates": detailed_candidates,
             })
 
+    # The fingerprint scopes a dismissal to what the user actually looked at
+    # in the launch guide: which repairable findings, for which CLIs, on which
+    # binaries. Two things are deliberately left out, because each brought a
+    # dismissed guide back on the next launch with nothing the user could see
+    # having changed: probe outcomes (version, status, exit code, signal) come
+    # from `--version` subprocesses under a few-second ceiling and flip on a
+    # loaded cold start; update_failed findings are not shown by the guide at
+    # all (CLI management surfaces them), so a vendor's next failed
+    # auto-update must not re-open it.
     fingerprint_source = [
         {
             "type": finding["type"],
             "agent_key": finding["agent_key"],
-            # Only update_failed carries records; keeping the key absent
-            # otherwise preserves existing fingerprints (and dismissals).
-            **({"records": [
-                {"home": record["home"], "timestamp": record["timestamp"],
-                 "status": record["status"]}
-                for record in finding["records"]
-            ]} if finding.get("records") else {}),
             "candidates": [
-                {
-                    "resolved_path": candidate["resolved_path"],
-                    "version": candidate["version"],
-                    "status": candidate["status"],
-                    "exit_code": candidate["exit_code"],
-                    "signal": candidate["signal"],
-                }
+                {"resolved_path": candidate["resolved_path"]}
                 for candidate in (
                     finding.get("candidates")
                     or ([finding["primary"]] if finding.get("primary") else [])
@@ -799,6 +806,7 @@ def build_cli_health(dep_statuses: list[dict[str, Any]]) -> dict[str, Any]:
             ],
         }
         for finding in findings
+        if finding["type"] != "update_failed"
     ]
     fingerprint = hashlib.sha256(
         json.dumps(fingerprint_source, sort_keys=True).encode("utf-8")

@@ -7826,6 +7826,7 @@
     "update-via-docs": "Update via vendor docs",
     "doctor": "Diagnose ({command})",
     "install": "Install",
+    "reinstall": "Reinstall ({command})",
     "last-update": "Last update:",
     "duplicates": "{count} physical installations found",
     "active": "active",

@@ -134,3 +134,80 @@ def test_maintenance_leaves_a_command_it_does_not_own_alone(monkeypatch) -> None
     assert onboarding_deps._command_on_the_resolved_binary(dep, dep.update_cmd) == (
         "npm install -g cursor"
     )
+
+
+# ── CLI health guide: the same squatter must not read as a duplicate install ──
+
+
+def _cursor_status(resolved: str) -> dict:
+    return {
+        "id": "cursor", "status": "ok", "version": "2026.08.25",
+        "binary_path": resolved, "resolved_path": resolved,
+        "exit_code": 0, "signal": "", "duration_ms": 42,
+    }
+
+
+def _agents_on_path(monkeypatch, *paths: str) -> None:
+    """Only the `agent` name resolves; every other CLI is absent."""
+    monkeypatch.setattr(onboarding_deps, "_distinct_executables", lambda command: [
+        {"path": p, "resolved_path": p, "aliases": [p]} for p in paths
+    ] if command == "agent" else [])
+
+
+def _two_agents_on_path(monkeypatch) -> None:
+    _agents_on_path(monkeypatch, "/g/bin/agent", "/c/bin/agent")
+    monkeypatch.setattr(onboarding_deps, "_dismissed_cli_health_fingerprint", lambda: "")
+
+
+def test_health_guide_does_not_list_grok_as_a_second_cursor_install(monkeypatch) -> None:
+    """Fourth symptom: with grok's `agent` and Cursor's `agent` both on PATH,
+    the health guide reported "multiple installs" of Cursor CLI on every launch
+    and offered to switch Navide onto grok. The primary is not re-probed; the
+    alternate is, and a banner that does not identify drops it."""
+    _two_agents_on_path(monkeypatch)
+    _prints(monkeypatch, {"/g/bin/agent": GROK_BANNER})
+
+    health = onboarding_deps.build_cli_health([_cursor_status("/c/bin/agent")])
+
+    cursor_entry = next(e for e in health["entries"] if e["agent_key"] == "cursor")
+    assert [c["resolved_path"] for c in cursor_entry["candidates"]] == ["/c/bin/agent"]
+    assert [f for f in health["findings"] if f["agent_key"] == "cursor"] == []
+
+
+def test_health_guide_still_reports_a_real_second_cursor_install(monkeypatch) -> None:
+    _two_agents_on_path(monkeypatch)
+    _prints(monkeypatch, {"/g/bin/agent": CURSOR_BANNER})
+
+    health = onboarding_deps.build_cli_health([_cursor_status("/c/bin/agent")])
+
+    duplicate = next(f for f in health["findings"] if f["type"] == "duplicate_install")
+    assert sorted(c["resolved_path"] for c in duplicate["candidates"]) == [
+        "/c/bin/agent", "/g/bin/agent",
+    ]
+
+
+def test_health_fingerprint_survives_a_probe_that_flips(monkeypatch) -> None:
+    """A dismissal is keyed by the fingerprint; the alternate's `--version`
+    runs under a 3s ceiling and a loaded cold start can time it out. That
+    changed the fingerprint and brought the dismissed guide back on the next
+    launch. Same binaries, different probe outcome: same fingerprint."""
+    _two_agents_on_path(monkeypatch)
+    _prints(monkeypatch, {"/g/bin/agent": CURSOR_BANNER})
+
+    def probe(_dep, _path, outcome):
+        return outcome
+
+    ok = {"version": "2026.08.20", "status": "ok", "exit_code": 0, "signal": "", "duration_ms": 10}
+    timed_out = {"version": "", "status": "failed", "exit_code": None, "signal": "", "duration_ms": 3000}
+
+    monkeypatch.setattr(onboarding_deps, "_probe_alternate", lambda d, p: probe(d, p, ok))
+    first = onboarding_deps.build_cli_health([_cursor_status("/c/bin/agent")])
+    monkeypatch.setattr(onboarding_deps, "_probe_alternate", lambda d, p: probe(d, p, timed_out))
+    second = onboarding_deps.build_cli_health([_cursor_status("/c/bin/agent")])
+
+    assert first["fingerprint"] and first["fingerprint"] == second["fingerprint"]
+    # A different binary set is a different finding, and is not covered.
+    _agents_on_path(monkeypatch, "/c/bin/agent", "/n/bin/agent")
+    _prints(monkeypatch, {"/n/bin/agent": CURSOR_BANNER})
+    third = onboarding_deps.build_cli_health([_cursor_status("/c/bin/agent")])
+    assert third["fingerprint"] != first["fingerprint"]

@@ -947,9 +947,12 @@ def test_cli_health_ignores_a_failure_the_cli_has_since_moved_past(
     assert health["needs_attention"] is False
 
 
-def test_update_failure_fingerprint_changes_on_a_newer_failure(
+def test_update_failure_does_not_move_the_guide_fingerprint(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """The launch guide never shows update_failed (CLI management does), so a
+    newer failed auto-update must not change the fingerprint a dismissal is
+    keyed by — that re-opened a dismissed guide on the next launch."""
     _default, profiles = _patch_homes(monkeypatch, tmp_path)
     _write_update_result(profiles / "4ad13e88")
     first = _claude_health(monkeypatch, tmp_path, version="2.1.219")["fingerprint"]
@@ -957,7 +960,7 @@ def test_update_failure_fingerprint_changes_on_a_newer_failure(
     _write_update_result(profiles / "4ad13e88", timestamp="2026-07-26T01:00:00.000Z")
     second = _claude_health(monkeypatch, tmp_path, version="2.1.219")["fingerprint"]
 
-    assert first and second and first != second
+    assert first and first == second
 
 
 # ── auto-update policy (the vendor's own switch) ─────────────────────────────
