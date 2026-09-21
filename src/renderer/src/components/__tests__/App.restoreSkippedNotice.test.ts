@@ -1,8 +1,11 @@
 // @vitest-environment happy-dom
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { describe, expect, it } from 'vitest'
-import { enUSMessages as enUS, zhTWMessages as zhTW } from '@navide/plugin-ui/foundation'
+import { describe, expect, it, vi } from 'vitest'
+import { transpileModule } from 'typescript'
+import { createI18n } from 'vue-i18n'
+import { flushPromises } from '@vue/test-utils'
+import { enUSMessages as enUS, zhTWMessages as zhTW, jaJPMessages as jaJP } from '@navide/plugin-ui/foundation'
 
 // App.vue mounts backend/terminal/onboarding lifecycles, so it isn't practical
 // to mount it here — see App.spawnAdvisories.test.ts for the same reasoning.
@@ -60,7 +63,18 @@ describe('skipped-restore notice wiring in App.vue', () => {
   it('names the skipped workspace paths in the message body', () => {
     expect(flow).toContain("list.join('\\n')")
     expect(flow).toContain("i18n.global.t('restore.skipped-message', { count: list.length })")
-    expect(flow).toContain("i18n.global.t('restore.skipped-title'")
+    expect(flow).toContain("i18n.global.t('restore.skipped-title', { count: list.length })")
+  })
+
+  it.each(['en-US', 'zh-TW', 'ja-JP'])('renders the skipped count in the actual %s notice callback', async (locale) => {
+    const i18n = createI18n({ legacy: false, locale, messages: { 'en-US': enUS, 'zh-TW': zhTW, 'ja-JP': jaJP } })
+    const alert = vi.fn().mockResolvedValue(undefined)
+    const callbackSource = 'let skippedNoticeShown = false;\n' + flow.slice(0, flow.indexOf('\n})') + 3)
+    const run = new Function('window', 'i18n', 'notifyRestore', 'booting', 'watch', transpileModule(callbackSource, {}).outputText)
+    run({ agentTeam: { restore: { getSkipped: () => Promise.resolve(['/a', '/b']) } } }, i18n, { alert }, { value: false }, vi.fn())
+    await flushPromises()
+    expect(alert).toHaveBeenCalledWith(expect.stringContaining('/a\n/b'), expect.objectContaining({ title: i18n.global.t('restore.skipped-title', { count: 2 }) }))
+    expect(alert.mock.calls[0][1].title).toContain('2')
   })
 
   it('waits out the boot overlay the same way the crash prompt does', () => {
@@ -78,7 +92,7 @@ describe('skipped-restore notice wiring in App.vue', () => {
 })
 
 describe('skipped-restore i18n keys', () => {
-  for (const [name, restore] of [['en-US', enUS.restore], ['zh-TW', zhTW.restore]] as const) {
+  for (const [name, restore] of [['en-US', enUS.restore], ['zh-TW', zhTW.restore], ['ja-JP', jaJP.restore]] as const) {
     it(`${name} defines the three skipped-restore keys`, () => {
       expect(restore['skipped-title']).toContain('{count}')
       expect(restore['skipped-message']).toBeTruthy()

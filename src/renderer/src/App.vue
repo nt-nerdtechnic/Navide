@@ -833,7 +833,7 @@ void window.agentTeam?.restore?.getSkipped?.().then((list) => {
     await notifyRestore.alert(
       `${i18n.global.t('restore.skipped-message', { count: list.length })}\n\n${list.join('\n')}`,
       {
-        title: i18n.global.t('restore.skipped-title'),
+        title: i18n.global.t('restore.skipped-title', { count: list.length }),
         confirmText: i18n.global.t('restore.skipped-ack'),
       }
     )
