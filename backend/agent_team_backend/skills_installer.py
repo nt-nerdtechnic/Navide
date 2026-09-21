@@ -110,36 +110,45 @@ class SkillInstaller:
             raise SkillValidationError("source and owner_key are required")
         if not isinstance(ref, str) or not isinstance(subdir, str):
             raise SkillValidationError("ref and subdir must be strings")
+        # Refuse a full cache before fetching anything; the check under the
+        # lock below is the one that counts, this one just saves a download.
         with self._lock:
             self._expire()
-            if sum(record["result"] is None for record in self._previews.values()) >= MAX_PREVIEWS:
-                raise SkillValidationError("too many active previews; wait for expiry")
-            if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", source):
-                source = "https://github.com/" + source
-            if source.startswith("https://"):
-                files, origin = self._github(source, ref, subdir)
-                if files is None:
-                    return origin
-            else:
-                if ref or subdir:
-                    raise SkillValidationError("local source must name the skill folder directly")
-                local_root = Path(source).expanduser()
-                if not local_root.is_absolute():
-                    raise SkillValidationError("local source must be an absolute skill folder path")
-                files = self._local(local_root)
-                origin = {"kind": "local", "path": str(Path(source).expanduser().absolute())}
-            self._validate(files)
-            fields, _ = self.store._parse_skill_file(files["SKILL.md"]["data"].decode("utf-8"))
-            total = sum(len(item["data"]) for item in files.values())
+            self._check_preview_count()
+        # Fetching and reading happen outside the lock: a GitHub download can
+        # sit on a slow socket for up to 40s, and every other caller —
+        # install(), a local preview — would otherwise wait on it, each
+        # pinning a thread of the shared to_thread pool meanwhile.
+        if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", source):
+            source = "https://github.com/" + source
+        if source.startswith("https://"):
+            files, origin = self._github(source, ref, subdir)
+            if files is None:
+                return origin
+        else:
+            if ref or subdir:
+                raise SkillValidationError("local source must name the skill folder directly")
+            local_root = Path(source).expanduser()
+            if not local_root.is_absolute():
+                raise SkillValidationError("local source must be an absolute skill folder path")
+            files = self._local(local_root)
+            origin = {"kind": "local", "path": str(Path(source).expanduser().absolute())}
+        self._validate(files)
+        fields, _ = self.store._parse_skill_file(files["SKILL.md"]["data"].decode("utf-8"))
+        total = sum(len(item["data"]) for item in files.values())
+        warnings = ["Shared-root readers can discover this skill regardless of Navide delivery targets.",
+                    "Preview expires after 15 minutes or backend restart. No skill code has been executed."]
+        if any(entry["script"] or entry["executable"] for entry in _manifest(files)):
+            warnings.append("The package contains scripts or executable files; review them before installation.")
+        if any(entry["executable"] for entry in files.values()) and osplat.platform_id == "win32":
+            warnings.append("Windows does not preserve POSIX executable permission bits.")
+        with self._lock:
+            # Recounted here: other previews may have landed during the fetch.
+            self._expire()
+            self._check_preview_count()
             if sum(record["size"] for record in self._previews.values()) + total > MAX_CACHE_BYTES:
                 raise SkillValidationError("preview cache size limit reached")
             preview_id = uuid.uuid4().hex
-            warnings = ["Shared-root readers can discover this skill regardless of Navide delivery targets.",
-                        "Preview expires after 15 minutes or backend restart. No skill code has been executed."]
-            if any(entry["script"] or entry["executable"] for entry in _manifest(files)):
-                warnings.append("The package contains scripts or executable files; review them before installation.")
-            if any(entry["executable"] for entry in files.values()) and osplat.platform_id == "win32":
-                warnings.append("Windows does not preserve POSIX executable permission bits.")
             result = {"preview_id": preview_id, "digest": _digest(files), "name": fields["name"],
                       "source": origin, "files": _manifest(files), "skill_md": files["SKILL.md"]["data"].decode("utf-8"),
                       "warnings": warnings, "expires_at": time.time() + PREVIEW_TTL,
@@ -150,6 +159,11 @@ class SkillInstaller:
             self._previews[preview_id]["timer"] = timer
             timer.start()
             return copy.deepcopy(result)
+
+    def _check_preview_count(self) -> None:
+        """Caller holds the lock."""
+        if sum(record["result"] is None for record in self._previews.values()) >= MAX_PREVIEWS:
+            raise SkillValidationError("too many active previews; wait for expiry")
 
     def install(self, preview_id: str, expected_digest: str, *, owner_key: str,
                 targets: list[str] | None, consent: bool = False) -> dict:

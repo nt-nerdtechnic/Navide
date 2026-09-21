@@ -6,6 +6,8 @@ import json
 import os
 from pathlib import Path
 import tarfile
+import threading
+import time
 
 import pytest
 
@@ -182,6 +184,73 @@ def test_preview_cache_bounded(setup, monkeypatch):
     preview(installer, source)
     with pytest.raises(SkillValidationError, match="too many"):
         preview(installer, source)
+
+
+def test_slow_download_does_not_block_other_callers(setup, monkeypatch):
+    """A GitHub preview stuck on the network must not hold the installer lock:
+    every other pane's preview/install would queue behind it (up to 40s of
+    socket timeouts), each pinning a thread of the shared to_thread pool."""
+    _, installer, source = setup
+    entered = threading.Event()
+    release = threading.Event()
+    payload = archive([("repo/SKILL.md", SKILL, tarfile.REGTYPE)])
+
+    def download(url, limit):
+        entered.set()
+        assert release.wait(5), "download was never released"
+        return json.dumps({"sha": "a" * 40}).encode() if "api.github.com" in url else payload
+
+    monkeypatch.setattr(module, "_download", download)
+    outcome = {}
+    slow = threading.Thread(
+        target=lambda: outcome.update(
+            item=installer.preview("https://github.com/example/repo", owner_key="pane-a")),
+    )
+    slow.start()
+    assert entered.wait(5)
+    started = time.monotonic()
+    item = preview(installer, source)
+    install(installer, item, consent=True)
+    elapsed = time.monotonic() - started
+    release.set()
+    slow.join(5)
+    assert elapsed < 1.0, f"pane B waited {elapsed:.2f}s behind pane A's download"
+    assert outcome["item"]["source"]["repository"] == "example/repo"
+
+
+def test_concurrent_previews_still_respect_the_cache_bound(setup, monkeypatch):
+    """With the fetch outside the lock, two previews can both pass the early
+    count check; the recount under the lock is what keeps MAX_PREVIEWS."""
+    _, installer, _ = setup
+    monkeypatch.setattr(module, "MAX_PREVIEWS", 1)
+    both_fetching = threading.Barrier(2, timeout=5)
+    payload = archive([("repo/SKILL.md", SKILL, tarfile.REGTYPE)])
+
+    def download(url, limit):
+        if "api.github.com" in url:
+            both_fetching.wait()
+            return json.dumps({"sha": "a" * 40}).encode()
+        return payload
+
+    monkeypatch.setattr(module, "_download", download)
+    results = []
+
+    def run():
+        try:
+            results.append(installer.preview("https://github.com/example/repo", owner_key="pane"))
+        except SkillValidationError as exc:
+            results.append(exc)
+
+    threads = [threading.Thread(target=run) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(5)
+    landed = [item for item in results if isinstance(item, dict)]
+    refused = [item for item in results if isinstance(item, SkillValidationError)]
+    assert len(landed) == 1 and len(refused) == 1, results
+    assert "too many" in str(refused[0])
+    assert sum(record["result"] is None for record in installer._previews.values()) == 1
 
 
 def test_relative_local_source_is_rejected(setup):
