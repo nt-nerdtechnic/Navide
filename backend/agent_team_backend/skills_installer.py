@@ -210,7 +210,11 @@ class SkillInstaller:
         def signature(info):
             return (info.st_dev, info.st_ino, info.st_mode, info.st_size,
                     info.st_mtime_ns, info.st_ctime_ns)
-        for directory, dirs, names in os.walk(root, followlinks=False):
+
+        def unreadable_directory(error):
+            raise SkillValidationError("could not read source directory") from error
+
+        for directory, dirs, names in os.walk(root, followlinks=False, onerror=unreadable_directory):
             directory_path = Path(directory)
             info = directory_path.lstat()
             if not stat.S_ISDIR(info.st_mode):

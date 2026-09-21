@@ -112,6 +112,35 @@ async def test_inspect_returns_content_and_separate_delivery_revision(library) -
     json.dumps(result)
 
 
+@pytest.mark.parametrize("kind", ["shared", "native"])
+async def test_inspect_lists_nested_manifest_attachments(library, tmp_path, kind) -> None:
+    store, native, _ = library
+    if kind == "shared":
+        source = tmp_path / "source"
+        source.mkdir()
+        (source / "SKILL.md").write_text("---\nname: nested-docs\ndescription: Nested docs\n---\nInstructions\n")
+    else:
+        source = native
+    (source / "docs").mkdir()
+    (source / "docs" / "SKILL.md").write_text("Nested skill documentation\n")
+    if kind == "shared":
+        preview = await skills_tools.skills_prepare_install(str(source), _ctx())
+        assert "docs/SKILL.md" in {row["path"] for row in preview["files"]}
+        installed = await skills_tools.skills_install(preview["preview_id"], preview["digest"], [], _ctx())
+        assert installed["ok"]
+        identity = "shared:nested-docs"
+        installed_root = store.root / "nested-docs"
+    else:
+        identity = skills_tools.skill_id({"real_path": str(native.resolve())}, native=True)
+        installed_root = native
+        (native / ".navide").write_text("private marker\n")
+    result = await skills_tools.skills_inspect(identity, _ctx())
+    assert result["ok"]
+    assert {row["path"] for row in result["skill"]["files"]} == {"SKILL.md", "docs/SKILL.md"}
+    assert result["skill"]["files_truncated"] is False
+    assert (installed_root / "docs" / "SKILL.md").read_text() == "Nested skill documentation\n"
+
+
 @pytest.mark.parametrize("identity", ["verify", "shared:missing", "native:/etc/passwd", "shared:../../elsewhere"])
 async def test_inspect_only_accepts_current_library_identities(library, identity) -> None:
     result = await skills_tools.skills_inspect(identity, _ctx())

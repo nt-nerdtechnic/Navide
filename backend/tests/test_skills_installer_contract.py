@@ -127,6 +127,26 @@ def test_source_mutation_during_read_is_rejected(library, monkeypatch):
     assert not store.root.exists()
 
 
+def test_unreadable_subdirectory_rejects_complete_preview(library, monkeypatch):
+    store, installer, source = library
+    scripts = source / "scripts"
+    scripts.mkdir()
+    (scripts / "check.py").write_text("print('required helper')")
+    original = module.os.scandir
+
+    def unreadable(path):
+        if Path(path) == scripts:
+            raise PermissionError("fixture unreadable scripts directory")
+        return original(path)
+
+    monkeypatch.setattr(module.os, "scandir", unreadable)
+    with pytest.raises(SkillValidationError, match="read source directory"):
+        prepare(installer, source)
+    assert not installer._previews
+    assert not store.root.exists()
+    assert not store.state_path.exists()
+
+
 def test_receipt_is_versioned_and_survives_edit_toggle_and_migration_line(library):
     store, installer, source = library
     item = prepare(installer, source)
