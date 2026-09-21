@@ -185,18 +185,22 @@ def scan_disk(root: str, *, deadline: float | None = None) -> DiskSample:
                     if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
                         continue
                     path = Path(entry.path)
+                    # On Windows, DirEntry.stat() obtains FindFirstFile metadata
+                    # whose device/inode fields are zero.  Use a real lstat for
+                    # the identity that must match the descriptor below.
+                    path_stat = os.lstat(path)
                     if path.resolve() != path or not path.is_relative_to(base):
                         return DiskSample("unknown", root=str(base))
                     if stat.S_ISDIR(info.st_mode):
                         pending.append(path)
                     elif stat.S_ISREG(info.st_mode):
                         opaque = False
-                        if info.st_size > MIB100:
+                        if path_stat.st_size > MIB100:
                             flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
                             fd = os.open(path, flags)
                             try:
                                 opened = os.fstat(fd)
-                                if (opened.st_dev, opened.st_ino, opened.st_size) != (info.st_dev, info.st_ino, info.st_size):
+                                if (opened.st_dev, opened.st_ino, opened.st_size) != (path_stat.st_dev, path_stat.st_ino, path_stat.st_size):
                                     return DiskSample("unknown", root=str(base))
                                 data = os.read(fd, SNIFF_BYTES)
                                 if len(data) != SNIFF_BYTES:
@@ -204,7 +208,7 @@ def scan_disk(root: str, *, deadline: float | None = None) -> DiskSample:
                                 opaque = not recognized_content(path, data)
                             finally:
                                 os.close(fd)
-                        files[str(path)] = DiskFile(info.st_size, opaque)
+                        files[str(path)] = DiskFile(path_stat.st_size, opaque)
         return DiskSample("successful", files, str(base))
     except (OSError, ValueError, RuntimeError):
         return DiskSample("unknown", root=canonical_root)
