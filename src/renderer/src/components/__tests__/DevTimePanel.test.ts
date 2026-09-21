@@ -2,6 +2,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { ref } from 'vue'
+import { i18n } from '@navide/plugin-ui/foundation'
 import DevTimePanel from '../DevTimePanel.vue'
 import { registerCommand } from '@navide/plugin-ui/shared'
 import type { DevTimeSnapshot } from '../../composables/useDevTime'
@@ -45,6 +46,19 @@ function mountPanel(snap: DevTimeSnapshot = snapshot()) {
 }
 
 describe('DevTimePanel', () => {
+  it('formats weekdays using the current interface language and reacts to switching', async () => {
+    const previous = i18n.global.locale.value
+    i18n.global.locale.value = 'ja-JP'
+    const { w } = mountPanel()
+    try {
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(w.text()).toContain(new Date(2026, 8, 6).toLocaleDateString('ja-JP', { weekday: 'short' }))
+      i18n.global.locale.value = 'en-US'
+      await w.vm.$nextTick()
+      expect(w.text()).toContain(new Date(2026, 8, 6).toLocaleDateString('en-US', { weekday: 'short' }))
+    } finally { w.unmount(); i18n.global.locale.value = previous }
+  })
+
   it('renders the three totals in h/m and the per-pane rows joined by id', async () => {
     const { w } = mountPanel()
     await new Promise((r) => setTimeout(r, 0))

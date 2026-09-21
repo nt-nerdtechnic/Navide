@@ -54,7 +54,7 @@ const initialRelPath = params.get('rel_path') ?? ''
 const rawLocale =
   params.get('locale') ??
   (settingsGet<string | null>('agent-team:language', null) as string | null)
-const initialLocale = rawLocale === 'zh-TW' || rawLocale === 'en-US' ? rawLocale : null
+const initialLocale = rawLocale === 'zh-TW' || rawLocale === 'en-US' || rawLocale === 'ja-JP' ? rawLocale : null
 // Launched without one (Window menu), the window reopens on whichever plan this
 // workspace last had open, keyed per workspace like the sidebar's own choices.
 const lastOpenedKey = lastOpenedStorageKey(workspacePath)
@@ -463,14 +463,14 @@ onMounted(() => {
     }
     if (keys.includes('agent-team:language')) {
       const nextLocale = settingsGet<string>('agent-team:language', '')
-      if (nextLocale === 'zh-TW' || nextLocale === 'en-US') {
+      if (nextLocale === 'zh-TW' || nextLocale === 'en-US' || nextLocale === 'ja-JP') {
         locale.value = nextLocale
         i18n.global.locale.value = nextLocale
       }
     }
   })
   window.agentTeam?.onLanguageChanged?.((nextLocale) => {
-    if (nextLocale === 'zh-TW' || nextLocale === 'en-US') {
+    if (nextLocale === 'zh-TW' || nextLocale === 'en-US' || nextLocale === 'ja-JP') {
       locale.value = nextLocale
       i18n.global.locale.value = nextLocale
       seedSettings({ 'agent-team:language': nextLocale })

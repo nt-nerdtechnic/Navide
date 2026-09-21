@@ -24,10 +24,11 @@ import {
   resetAllStatusBadgePrefs,
   resetStatusBadgePref,
   setStatusBadgePref,
+  statusBadgeLabelOverride,
   useStatusBadgePrefs,
 } from '../composables/useStatusBadgePrefs'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const { prefs, hasOverrides } = useStatusBadgePrefs()
 
 /** Statuses a pane cannot report itself; they only ever appear on list rows,
@@ -36,7 +37,7 @@ const ROW_ONLY: readonly PaneStatusValue[] = ['waiting', 'disconnected']
 
 /** The shipped translation for a status in one locale — the placeholder, and
  *  what an emptied field falls back to. */
-function defaultLabel(status: PaneStatusValue, locale: 'zh-TW' | 'en-US'): string {
+function defaultLabel(status: PaneStatusValue, locale: string): string {
   return t(paneStatusLabelKey(status), {}, { locale })
 }
 
@@ -57,18 +58,17 @@ function previewStyle(status: PaneStatusValue): Record<string, string> {
 }
 
 /** What the badge would read as right now, in one locale. */
-function previewLabel(status: PaneStatusValue, locale: 'zh-TW' | 'en-US'): string {
-  const pref = prefs.value[status]
-  const override = locale === 'zh-TW' ? pref?.labelZh : pref?.labelEn
-  return override?.trim() || defaultLabel(status, locale)
+function previewLabel(status: PaneStatusValue, locale: string): string {
+  return statusBadgeLabelOverride(status, locale) || defaultLabel(status, locale)
 }
 
 function isCustomized(status: PaneStatusValue): boolean {
   return !!prefs.value[status]
 }
 
-function onLabel(status: PaneStatusValue, locale: 'zh-TW' | 'en-US', value: string): void {
-  setStatusBadgePref(status, locale === 'zh-TW' ? { labelZh: value } : { labelEn: value })
+function onLabel(status: PaneStatusValue, locale: 'zh-TW' | 'en-US' | 'ja-JP', value: string): void {
+  setStatusBadgePref(status, locale === 'zh-TW' ? { labelZh: value }
+    : locale === 'ja-JP' ? { labelJa: value } : { labelEn: value })
 }
 </script>
 
@@ -80,6 +80,7 @@ function onLabel(status: PaneStatusValue, locale: 'zh-TW' | 'en-US', value: stri
       <span class="sb-h-status">{{ $t('statusBadges.col.status') }}</span>
       <span class="sb-h-label">{{ $t('statusBadges.col.zh') }}</span>
       <span class="sb-h-label">{{ $t('statusBadges.col.en') }}</span>
+      <span class="sb-h-label">{{ $t('statusBadges.col.ja') }}</span>
       <span class="sb-h-color">{{ $t('statusBadges.col.color') }}</span>
       <span class="sb-h-reset"></span>
     </div>
@@ -92,7 +93,7 @@ function onLabel(status: PaneStatusValue, locale: 'zh-TW' | 'en-US', value: stri
     >
       <div class="sb-status">
         <span class="sb-preview" :style="previewStyle(status)">
-          {{ previewLabel(status, 'zh-TW') }}
+          {{ previewLabel(status, locale) }}
         </span>
         <span class="sb-key">
           {{ status }}
@@ -122,6 +123,17 @@ function onLabel(status: PaneStatusValue, locale: 'zh-TW' | 'en-US', value: stri
           :value="prefs[status]?.labelEn ?? ''"
           :placeholder="defaultLabel(status, 'en-US')"
           @change="onLabel(status, 'en-US', ($event.target as HTMLInputElement).value)"
+        />
+      </label>
+
+      <label class="sb-field">
+        <span class="sb-sr">{{ $t('statusBadges.col.ja') }} — {{ status }}</span>
+        <input
+          type="text"
+          maxlength="24"
+          :value="prefs[status]?.labelJa ?? ''"
+          :placeholder="defaultLabel(status, 'ja-JP')"
+          @change="onLabel(status, 'ja-JP', ($event.target as HTMLInputElement).value)"
         />
       </label>
 
@@ -184,7 +196,7 @@ function onLabel(status: PaneStatusValue, locale: 'zh-TW' | 'en-US', value: stri
 .sb-head,
 .sb-row {
   display: grid;
-  grid-template-columns: minmax(190px, 1.4fr) minmax(96px, 1fr) minmax(96px, 1fr) auto auto;
+  grid-template-columns: minmax(190px, 1.4fr) repeat(3, minmax(96px, 1fr)) auto auto;
   align-items: center;
   gap: 12px;
   padding: 8px 10px;
@@ -342,9 +354,9 @@ function onLabel(status: PaneStatusValue, locale: 'zh-TW' | 'en-US', value: stri
   line-height: 1.6;
 }
 
-/* Below the two-input width the grid stops being a table and becomes stacked
- * cards, which is the only way nine rows of five columns stay usable. */
-@media (max-width: 780px) {
+/* Below the three-input width the grid stops being a table and becomes stacked
+ * cards, which is the only way nine rows of six columns stay usable. */
+@media (max-width: 920px) {
   .sb-head {
     display: none;
   }

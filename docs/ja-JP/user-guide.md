@@ -40,6 +40,10 @@ Source Code と明示的に共有された Documentation は、Repository にお
 - Main Layout を占有せず PTY を維持するには Pane を Minimize します。
 - Navide が再利用可能な Session ID を検出した後にのみ Rebuild または Resume します。
 
+Auto、Spotlight、Fullscreen Layout では、更新の右にある三角形ボタン（ツールバーの順序：**+ → 更新 → ▾/▸**）で現在のタブの子孫カードをグループごとに一括で折りたたみ・展開できます。親カードの枠付き子孫数の横にある三角形と同じ動作です。対象グループが一つでも開いていればすべて折りたたみ、すべて閉じていれば、個別に閉じた入れ子のグループも含めてすべて展開します。対象は子孫を持つ、最小化されていない親 Pane です。
+
+折りたたむと子孫カードが非表示になり、最上位の親カード、子孫数、メイン Terminal は表示されたままです。タブごとのグループ状態は独立しており、現在のウィンドウのメモリ内だけに保持されます。Grid Layout または対象の親グループがないタブでは、一括操作ボタンは無効です。
+
 A new empty Codex pane waits for your input without sending an artificial session-discovery message. Its session ID may become available only after the first real user or configured task turn; until then, Rebuild remains unavailable. The same applies to a fresh rebuild or restore. If Codex asks to review the Navide session hook, review it in Codex; YOLO mode does not approve hooks. Existing shared session homes may need that trusted hook to associate the new conversation with its pane.
 
 Select multiple pane headers with Cmd/Ctrl-click or Shift-click, then right-click a selected pane to open the batch menu. Its groups contain Interrupt/Rebuild, Minimize/Restore/Reclaim, notification controls, and Remove. **Restore selected** also opens selected panes that have not yet been opened or were reclaimed. Pane and project overflow menus stay within the window; long menus scroll so their final actions remain reachable.
@@ -148,9 +152,17 @@ Skills 画面は backend の変更成功と再接続で更新されます。未�
 
 ## Settings と Portability
 
+**設定 → 言語** は、サイドバーの「外観」の次にある独立したページです。繁體中文、English、日本語から選択できます。このユーザー設定はすべてのワークスペースに適用されます。初回起動時に言語設定が保存されていなければ、日本語のシステムでは日本語が選択されます。言語の変更は初期設定画面、Navide のネイティブメニュー項目、独立した Plans とトークンモニターのウィンドウにも反映されます。OS が提供するメニュー項目や外部のコンテンツは、それぞれの言語で表示される場合があります。
+
 Settings は Role、Pipeline、MCP Server、Analyzer Behavior、AI Provider、Appearance、Keyboard Shortcut を扱います。CLI Agents では Install 済みの Coding CLI も管理します。バージョン、Install 方法、重複 Install、その CLI 自身の最後の更新結果を表示し、その CLI 公式の更新コマンドと診断コマンドを Terminal で実行できます。Navide はベンダーのコマンドを提示して実行するだけで、CLI 自体を更新することはありません。Export された Settings は API Key と Token を Redact します。Third-party Server を有効化する前に、MCP Command と Environment Variable を確認してください。
 
 **Accounts** では CLI Account ごとに 1 枚のカードを扱います。CLI 自身のサインインに加えて、カードには **Portable Credential** を保持できます。これは各ベンダーが「どの Machine でも使う」ために公式に用意した値（例：Claude Code の `claude setup-token`）です。一度貼り付けると、その CLI の新しい Pane が環境変数として受け取り、CLI 自身の Login File には触れません。CLI ごとに*使用中*の Credential は 1 つで、カードがどれかを示し、ローカルの Login File が優先されてしまう場合には警告します。削除はこの Device にのみ影響します。
+
+**CLI の Quota が尽きたときの Account 切り替え。**ある CLI の使用中 Account が利用上限に達すると、Navide はそれを 1 件の Incident として扱い（いくつの Pane や Window が検知しても 1 件です）、Account 切り替えポリシーに従って動きます。**Off**（何もしない）、**Notify**（既定。Announcement にその CLI の切り替え先候補を一覧し、各 Account には読み取りの信頼度——新しい余裕あり、リセット済みの見込み、古い読み取り、不明——を付け、除外された Account には理由——サインアウト済み、まだ枯渇中、この回で試行済みなど——を示します）、**Auto**（Navide が最良の候補で 1 回だけ試みます）。自動切り替えは CLI の Credential Pool ごとに直近 5 時間で最大 3 回、間隔は最低 10 分です。手動の切り替えは数えません。失敗——候補なし、Credential を移せない、Pane を再開できない、新しい Account も枯渇していた——はいずれもその Incident を理由付きで終了させます。Navide が勝手に次の Account を試すことも、自動で元に戻すことも、Pane が既に行った作業を再送することもありません。元の Account のリセット時刻を過ぎても Announcement は「回復した*見込み*」としか言いません。戻すのはあなたが押すボタンです。
+
+Claude Code はリクエストごとに Credential を読み直すため、何も再起動せずに切り替わります。他の CLI は Credential をメモリに保持するため、影響を受ける Pane にまず確認します。ターンの途中、権限プロンプトの待機中、未送信の入力がある Pane は決して停止しません。切り替えは影響を受ける Pane がすべて安全にアイドルになるまで待ち、それから停止し、Credential を移し、各会話を自身の Session で再開します。再開できない Pane があれば、何かを動かす前に切り替えを止めます。Aider と MiniMax Code は会話を再開できないため、代わりに新しい会話の確認を求めます。切り替え後は 3 つの結果を別々に表示します。Account が切り替わったか、各会話が再開したか、新しい Account の Quota が確認できたか——最後の項目はその Account の新しい読み取り（または完了したターン）だけを根拠にし、2 分以内に何も届かなければ Announcement は*切り替え済み、Quota 未確認*と表示します。Credential は移ったのに Account の記録を保存できなかった場合、どの Account が実際に使われているかをあなたが確認するまで、その CLI の以降の切り替えは拒否されます。その間、何も上書きされません。同様に、現在使われている Credential が使用中 Account の控えと一致しない場合も切り替えは拒否されます。Credential 自体が Account の身元を含む CLI では Navide が自分で見分けます（トークンの更新は別 Account ではありません）。身元を含まない CLI では、現在の Credential が使用中 Account のものであることをあなたに確認し、その確認は表示された状態そのものにだけ適用されます。
+
+新しい Account のサインインは Claude Code、Codex、Grok、Kimi、Pi、Droid、MiniMax Code では隔離されています。サインイン用の Pane は専用の Home を使い、使用中の Account と実行中の Pane には触れません。他の CLI は Credential の保存場所が 1 つしかないため、サインインは一時的に現在の Credential を置き換えます。Navide は先に使用中の Account のスナップショットを取り、サインインが完了したら新しいサインインをそれ自身の Account カードへ退避し、使用中の Account を復元します——サインインが放棄された場合も同様です。このようなサインインが保留中の間、Navide はその CLI の他の Pane を開かず、その CLI の Pane が実行中のときはこのサインインを開始しません。すべての CLI の Account 切り替えの仕組みはベンダー自身のコードから読み取ったものです。Navide の中で 2 つの実 Account を往復した CLI はまだなく、MiniMax Code の対応は最も新しいものです。
 
 **Sync** セクション（Settings → Sync）は、これらの Credential を他の Device へ運べます。**Credentials** スイッチは既定で無効です。有効にすると Accounts のカードに Credential ごとの Cloud 行が現れ（同期済み、この Device のみ、Cloud にあるがここでは未使用、判断待ち）、別の Machine で貼り付けた Credential をワンクリックでここで使えるようにできます。ここで削除しても Cloud や他の Device からは削除されません。同じセクションは Sync Key の ID を表示し、漏洩が疑われるときに Rotate を提供します。すべての Record が再暗号化され、ペアリング済みの Device は新しい Key を受け取ります。
 

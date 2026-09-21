@@ -12,7 +12,7 @@ import { needsDrawnWindowControls } from '../../shared/osplat'
 const drawsOwnTitleBar = needsDrawnWindowControls()
 import { comparePeriods, summarizeTokens } from './utils/tokenMonitor'
 
-const { t } = useI18n({ useScope: 'local', messages: {
+const { t, locale } = useI18n({ useScope: 'local', messages: {
   'en-US': {
     title: 'Claude Token Monitor', scope: 'Local Claude history · account attribution unknown',
     caveat: 'These tokens are observed usage, not your account token allowance. Local sessions may belong to different accounts. Quota samples cover only the active profile slot while Navide is running; slot identity is not verified account identity. Running turns may be incomplete.',
@@ -35,6 +35,29 @@ const { t } = useI18n({ useScope: 'local', messages: {
     quotaAxis: 'Horizontal axis: samples in recorded order; dots show observed percentages.',
     coverage: 'Sessions scanned / available', partial: 'Partial history: scan limits or read errors affect these results.',
     updated: 'Last successful refresh', previous: 'Previous', next: 'Next', page: 'Page', auto: 'Refreshes every 60 seconds',
+  },
+  'ja-JP': {
+    title: 'Claude トークンモニター', scope: 'ローカルの Claude 履歴 · 所属アカウントは不明',
+    caveat: 'ここに表示するトークン数は観測された使用量であり、アカウントのトークン上限ではありません。ローカルセッションには異なるアカウントのものが含まれる場合があります。利用枠の記録は Navide の実行中にアクティブだったプロファイルスロットのみが対象で、スロットは確認済みのアカウント識別情報ではありません。実行中のターンの記録は未完了の場合があります。',
+    refresh: '更新', loading: '読み込み中…', days: '日数', model: 'モデル', all: 'すべてのモデル',
+    turns: 'ターン数', total: '合計トークン数', mean: 'ターン平均', median: 'ターン中央値', outputMean: 'ターン平均出力',
+    empty: 'この期間のローカル Claude ターンは見つかりませんでした。', connection: 'バックエンド接続',
+    comparison: '出力の比較：直近 7 日間とその前の 7 日間', choose: '比較するには、既知のモデルを 1 つ選択してください。',
+    insufficient: 'サンプルが不足しています。各期間に 10 ターン以上、かつ比較基準がゼロより大きい必要があります。',
+    comparisonNote: '観測された変化を示すだけのものです。思考量やタスクの難易度は不明なため、減少していても利用上限が引き下げられたとは判断できません。',
+    samples: 'サンプル数（直近／前期）', moving: '強調色：直近 10 ターンの移動平均、グレー：各ターン',
+    sequence: '横軸：時系列に並べたターン（等間隔で、経過時間ではありません）。',
+    input: '入力', cacheRead: 'キャッシュ読み込み', cacheWrite: 'キャッシュ書き込み', output: '出力', calls: 'API 呼び出し',
+    time: '開始日時', session: 'セッション／ターン', quota: '記録された利用枠の使用率',
+    quotaNone: '利用枠の記録はまだありません。設定で Claude 使用量の定期取得を有効にし、Navide を起動したままにしてください。トークンログから過去の利用上限を復元することはできません。',
+    quotaNote: '割合はプロバイダーが報告した値です。リセット期間ごとに分けて表示します。ローカルトークン数から利用枠の上限を算出することはできません。',
+    quotaObserved: '利用枠の最終観測日時',
+    quotaSlot: '更新時に記録されたプロファイルスロット',
+    asOf: 'データ取得日時',
+    quotaDisabled: '利用枠の定期取得は無効です。過去の記録を表示しており、新しいスナップショットは記録されていません。',
+    quotaAxis: '横軸：記録順に並べたサンプル。点は観測された割合を示します。',
+    coverage: '検索済み／利用可能なセッション', partial: '履歴は一部のみです。検索上限または読み取りエラーが結果に影響しています。',
+    updated: '最終更新成功日時', previous: '前へ', next: '次へ', page: 'ページ', auto: '60 秒ごとに更新',
   },
   'zh-TW': {
     title: 'Claude Token 監測', scope: '本機 Claude 歷史 · 帳號歸屬未知',
@@ -63,7 +86,7 @@ const { t } = useI18n({ useScope: 'local', messages: {
 const backend = useBackend()
 initSettingsBackend(createHostGitSettingsPort(backend))
 const initialLocale = new URLSearchParams(window.location.search).get('locale')
-if (initialLocale === 'en-US' || initialLocale === 'zh-TW') i18n.global.locale.value = initialLocale
+if (initialLocale === 'en-US' || initialLocale === 'zh-TW' || initialLocale === 'ja-JP') i18n.global.locale.value = initialLocale
 const days = ref(30)
 const model = ref('')
 const page = ref(0)
@@ -104,21 +127,21 @@ const visibleQuota = computed(() => quotaSeries.value.slice(quotaPage.value * 6,
 watch(quotaPages, value => { quotaPage.value = Math.min(quotaPage.value, value - 1) })
 const metrics = ['input', 'cache_read', 'cache_creation', 'output', 'total'] as const
 const labels = { input: 'input', cache_read: 'cacheRead', cache_creation: 'cacheWrite', output: 'output', total: 'total' }
-const num = (value: number) => value.toLocaleString(undefined, { maximumFractionDigits: 1 })
-const date = (value: string | null) => value ? new Date(value).toLocaleString() : '—'
+const num = (value: number) => value.toLocaleString(locale.value, { maximumFractionDigits: 1 })
+const date = (value: string | null) => value ? new Date(value).toLocaleString(locale.value) : '—'
 const { loadTheme } = useTheme()
 let offSettings: (() => void) | undefined
 onMounted(() => {
   loadTheme()
   // This root mounts once per native window; the preload listener lives with it.
   window.agentTeam?.onLanguageChanged?.(value => {
-    if (value === 'en-US' || value === 'zh-TW') i18n.global.locale.value = value
+    if (value === 'en-US' || value === 'zh-TW' || value === 'ja-JP') i18n.global.locale.value = value
   })
   offSettings = onSettingsChanged(keys => {
     if (keys.some(key => key.startsWith('agent-team:theme'))) loadTheme()
     if (keys.includes('agent-team:language')) {
       const value = settingsGet<string>('agent-team:language', 'en-US')
-      if (value === 'en-US' || value === 'zh-TW') i18n.global.locale.value = value
+      if (value === 'en-US' || value === 'zh-TW' || value === 'ja-JP') i18n.global.locale.value = value
     }
   })
 })

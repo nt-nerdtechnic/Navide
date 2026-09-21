@@ -38,6 +38,8 @@ export interface StatusBadgePref {
   labelZh?: string
   /** English label. Blank/absent → the i18n string. */
   labelEn?: string
+  /** Japanese label. Blank/absent → the i18n string. */
+  labelJa?: string
   /** Palette colour. Absent or unknown → DEFAULT_STATUS_COLORS. */
   color?: StatusColorKey
 }
@@ -61,8 +63,11 @@ function sanitize(raw: unknown): StatusBadgePrefs {
     if (typeof entry.labelEn === 'string' && entry.labelEn.trim()) {
       pref.labelEn = entry.labelEn.trim()
     }
+    if (typeof entry.labelJa === 'string' && entry.labelJa.trim()) {
+      pref.labelJa = entry.labelJa.trim()
+    }
     if (isStatusColorKey(entry.color)) pref.color = entry.color
-    if (pref.labelZh || pref.labelEn || pref.color) out[status] = pref
+    if (pref.labelZh || pref.labelEn || pref.labelJa || pref.color) out[status] = pref
   }
   return out
 }
@@ -129,7 +134,9 @@ export function statusBadgeStyle(
 export function statusBadgeLabelOverride(status: PaneStatusValue, locale: string): string {
   const pref = prefs.value[status]
   if (!pref) return ''
-  const label = locale.startsWith('zh') ? pref.labelZh : pref.labelEn
+  const label = locale.startsWith('zh') ? pref.labelZh
+    : locale.startsWith('en') ? pref.labelEn
+      : locale.startsWith('ja') ? pref.labelJa : undefined
   return label?.trim() ?? ''
 }
 
@@ -145,9 +152,10 @@ export function setStatusBadgePref(
 
   if (!merged.labelZh?.trim()) delete merged.labelZh
   if (!merged.labelEn?.trim()) delete merged.labelEn
+  if (!merged.labelJa?.trim()) delete merged.labelJa
   if (!merged.color || merged.color === DEFAULT_STATUS_COLORS[status]) delete merged.color
 
-  if (merged.labelZh || merged.labelEn || merged.color) next[status] = merged
+  if (merged.labelZh || merged.labelEn || merged.labelJa || merged.color) next[status] = merged
   else delete next[status]
 
   prefs.value = next

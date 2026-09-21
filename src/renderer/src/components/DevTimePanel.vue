@@ -83,7 +83,7 @@ const days = computed(() => {
     const local = new Date(y, (m || 1) - 1, dd || 1)
     return {
       date: d.date,
-      weekday: local.toLocaleDateString(undefined, { weekday: 'short' }),
+      weekday: local.toLocaleDateString(i18n.global.locale.value, { weekday: 'short' }),
       value: formatDuration(d.merged_s),
       // A day with a few seconds still shows a sliver — a bar that reads as
       // empty while the tooltip says otherwise looks broken.

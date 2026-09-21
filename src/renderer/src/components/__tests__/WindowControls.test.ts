@@ -3,6 +3,7 @@ import { mount, type VueWrapper } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { platformId, setPlatformId, type PlatformId } from '../../../../shared/osplat'
 import WindowControls from '../WindowControls.vue'
+import { i18n } from '@navide/plugin-ui/foundation'
 
 // The platform to restore after a test that switched it: whatever this file
 // saw when it loaded — the host, or an injection from a vitest setup file.
@@ -52,7 +53,7 @@ const buttons = (): HTMLElement[] =>
 const button = (label: string): HTMLElement | null =>
   document.body.querySelector(`.win-controls button[aria-label="${label}"]`)
 
-beforeEach(() => installBridge())
+beforeEach(() => { installBridge(); i18n.global.locale.value = 'en-US' })
 
 afterEach(() => {
   wrappers.forEach((w) => w.unmount())
@@ -66,6 +67,19 @@ const on = (id: PlatformId): void => setPlatformId(id)
 describe('WindowControls', () => {
   // macOS draws its own traffic lights over the frameless window, so a second
   // set of buttons there would be a duplicate, not a fix.
+  it('localizes visible labels and accessible names on language changes', async () => {
+    on('linux')
+    const wrapper = render()
+    i18n.global.locale.value = 'ja-JP'
+    await wrapper.vm.$nextTick()
+    expect(controls()?.getAttribute('aria-label')).toBe('ウィンドウ操作')
+    expect(buttons().map(button => button.getAttribute('aria-label'))).toEqual(['最小化', '最大化', '閉じる'])
+    expect(button('最小化')?.getAttribute('title')).toBe('最小化')
+    i18n.global.locale.value = 'en-US'
+    await wrapper.vm.$nextTick()
+    expect(button('Minimize')).not.toBeNull()
+  })
+
   it('draws nothing on macOS', () => {
     on('darwin')
     const wrapper = render()

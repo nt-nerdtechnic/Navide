@@ -25,7 +25,7 @@ import FilePreviewPane from './editor/FilePreviewPane.vue'
 import { previewKind, isMarkdownFile } from './editor/previewTypes'
 import { rebindTabs } from './editor/tabRebind'
 import { initKeybindingsPort, useKeybindings, registerCommand, setContext, executeCommand } from '@navide/plugin-ui/shared'
-import { useTheme, BUILTIN_THEMES } from '@navide/plugin-ui/foundation'
+import { i18n, useTheme, BUILTIN_THEMES } from '@navide/plugin-ui/foundation'
 import { initSettingsBackend, settingsGet, settingsSet, onSettingsChanged } from '@navide/plugin-ui/shared'
 import { useNotify } from '@navide/plugin-ui/foundation'
 import { allDiagnosticsSorted, setDiagnostics, diagnosticsKey } from './editor/diagnostics'
@@ -35,6 +35,12 @@ import type { ListConflictsResult } from './composables/useGit'
 
 // ── window params (Electron appends ?window=editor&workspace_path=…&filepath=…) ──
 const params = new URLSearchParams(window.location.search)
+function applyEditorLocale(value: unknown): void {
+  if (value === 'zh-TW' || value === 'en-US' || value === 'ja-JP') {
+    i18n.global.locale.value = value
+  }
+}
+applyEditorLocale(params.get('locale') ?? settingsGet<string>('agent-team:language', ''))
 const workspacePath = params.get('workspace_path') ?? ''
 const workspaceBaseName = workspacePath.split('/').filter(Boolean).at(-1) ?? workspacePath
 // What the titlebar calls this workspace: the alias the user gave it, which the
@@ -607,8 +613,8 @@ const closedHistory: Array<{ relPath: string; wsPath?: string; name: string }> =
 async function closeFile(key: string): Promise<void> {
   const f = findTab(key)
   if (f?.dirty) {
-    const ok = await confirm(`"${f.name}" has unsaved changes. Close anyway?`, {
-      title: 'Close File', confirmText: 'Close',
+    const ok = await confirm(i18n.global.t('editorWindow.close-file-dirty', { name: f.name }), {
+      title: i18n.global.t('editorWindow.close-file'), confirmText: i18n.global.t('action.close'),
     })
     if (!ok) return
   }
@@ -636,7 +642,7 @@ function closeTabCtxMenu(): void { tabCtxMenu.value = null }
 async function ctxCloseOthers(key: string): Promise<void> {
   closeTabCtxMenu()
   const dirty = openFiles.value.filter((f) => tabKey(f) !== key && f.kind === 'file' && f.dirty)
-  if (dirty.length) { const ok = await confirm(`${dirty.length} file(s) have unsaved changes. Close other tabs anyway?`, { title: 'Close Other Tabs', confirmText: 'Close' }); if (!ok) return }
+  if (dirty.length) { const ok = await confirm(i18n.global.t('editorWindow.close-others-dirty', { count: dirty.length }), { title: i18n.global.t('action.close-others'), confirmText: i18n.global.t('action.close') }); if (!ok) return }
   openFiles.value = openFiles.value.filter((f) => tabKey(f) === key)
 }
 async function ctxCloseRight(key: string): Promise<void> {
@@ -644,7 +650,7 @@ async function ctxCloseRight(key: string): Promise<void> {
   const idx = openFiles.value.findIndex((f) => tabKey(f) === key)
   if (idx < 0) return
   const dirty = openFiles.value.slice(idx + 1).filter((f) => f.kind === 'file' && f.dirty)
-  if (dirty.length) { const ok = await confirm(`${dirty.length} file(s) have unsaved changes. Close tabs to the right anyway?`, { title: 'Close Tabs to the Right', confirmText: 'Close' }); if (!ok) return }
+  if (dirty.length) { const ok = await confirm(i18n.global.t('editorWindow.close-right-dirty', { count: dirty.length }), { title: i18n.global.t('action.close-to-right'), confirmText: i18n.global.t('action.close') }); if (!ok) return }
   openFiles.value = openFiles.value.slice(0, idx + 1)
 }
 async function ctxCloseLeft(key: string): Promise<void> {
@@ -652,13 +658,13 @@ async function ctxCloseLeft(key: string): Promise<void> {
   const idx = openFiles.value.findIndex((f) => tabKey(f) === key)
   if (idx <= 0) return
   const dirty = openFiles.value.slice(0, idx).filter((f) => f.kind === 'file' && f.dirty)
-  if (dirty.length) { const ok = await confirm(`${dirty.length} file(s) have unsaved changes. Close tabs to the left anyway?`, { title: 'Close Tabs to the Left', confirmText: 'Close' }); if (!ok) return }
+  if (dirty.length) { const ok = await confirm(i18n.global.t('editorWindow.close-left-dirty', { count: dirty.length }), { title: i18n.global.t('action.close-to-left'), confirmText: i18n.global.t('action.close') }); if (!ok) return }
   openFiles.value = openFiles.value.slice(idx)
 }
 async function ctxCloseAll(): Promise<void> {
   closeTabCtxMenu()
   const dirty = openFiles.value.filter((f) => f.kind === 'file' && f.dirty)
-  if (dirty.length) { const ok = await confirm(`${dirty.length} file(s) have unsaved changes. Close all anyway?`, { title: 'Close All Tabs', confirmText: 'Close All' }); if (!ok) return }
+  if (dirty.length) { const ok = await confirm(i18n.global.t('editorWindow.close-all-dirty', { count: dirty.length }), { title: i18n.global.t('action.close-all'), confirmText: i18n.global.t('action.close-all') }); if (!ok) return }
   openFiles.value = []; activeKey.value = ''
 }
 async function ctxCopyPath(key: string): Promise<void> {
@@ -974,8 +980,8 @@ registerCommand('workbench.action.reloadWindow', async () => {
   const dirty = openFiles.value.filter((f) => f.kind === 'file' && f.dirty)
   if (dirty.length > 0) {
     const ok = await confirm(
-      `${dirty.length} file(s) have unsaved changes. Reload and discard them?`,
-      { title: 'Reload Window', confirmText: 'Reload' }
+      i18n.global.t('editorWindow.reload-dirty', { count: dirty.length }),
+      { title: i18n.global.t('settings.keybindings.cmd.workbench_action_reloadWindow'), confirmText: i18n.global.t('action.reload') }
     )
     if (!ok) return
   }
@@ -993,8 +999,8 @@ registerCommand('workbench.action.saveAll', saveDirtyFiles)
 registerCommand('workbench.action.closeAllEditors', async () => {
   const dirty = openFiles.value.filter((f) => f.kind === 'file' && f.dirty)
   if (dirty.length > 0) {
-    const ok = await confirm(`${dirty.length} file(s) have unsaved changes. Close all anyway?`, {
-      title: 'Close All Tabs', confirmText: 'Close All',
+    const ok = await confirm(i18n.global.t('editorWindow.close-all-dirty', { count: dirty.length }), {
+      title: i18n.global.t('action.close-all'), confirmText: i18n.global.t('action.close-all'),
     })
     if (!ok) return
   }
@@ -1006,8 +1012,8 @@ registerCommand('workbench.action.closeOtherEditors', async () => {
   if (!cur) return
   const others = openFiles.value.filter((f) => tabKey(f) !== cur && f.kind === 'file' && f.dirty)
   if (others.length > 0) {
-    const ok = await confirm(`${others.length} file(s) have unsaved changes. Close other tabs anyway?`, {
-      title: 'Close Other Tabs', confirmText: 'Close',
+    const ok = await confirm(i18n.global.t('editorWindow.close-others-dirty', { count: others.length }), {
+      title: i18n.global.t('action.close-others'), confirmText: i18n.global.t('action.close'),
     })
     if (!ok) return
   }
@@ -1020,8 +1026,8 @@ registerCommand('workbench.action.closeEditorsToTheRight', async () => {
   if (idx < 0) return
   const dirty = openFiles.value.slice(idx + 1).filter((f) => f.kind === 'file' && f.dirty)
   if (dirty.length > 0) {
-    const ok = await confirm(`${dirty.length} file(s) have unsaved changes. Close tabs to the right anyway?`, {
-      title: 'Close Tabs to the Right', confirmText: 'Close',
+    const ok = await confirm(i18n.global.t('editorWindow.close-right-dirty', { count: dirty.length }), {
+      title: i18n.global.t('action.close-to-right'), confirmText: i18n.global.t('action.close'),
     })
     if (!ok) return
   }
@@ -1034,8 +1040,8 @@ registerCommand('workbench.action.closeEditorsToTheLeft', async () => {
   if (idx <= 0) return
   const dirty = openFiles.value.slice(0, idx).filter((f) => f.kind === 'file' && f.dirty)
   if (dirty.length > 0) {
-    const ok = await confirm(`${dirty.length} file(s) have unsaved changes. Close tabs to the left anyway?`, {
-      title: 'Close Tabs to the Left', confirmText: 'Close',
+    const ok = await confirm(i18n.global.t('editorWindow.close-left-dirty', { count: dirty.length }), {
+      title: i18n.global.t('action.close-to-left'), confirmText: i18n.global.t('action.close'),
     })
     if (!ok) return
   }
@@ -1773,8 +1779,8 @@ async function closeEditorWindow(): Promise<void> {
   const dirty = openFiles.value.filter((f) => f.kind === 'file' && f.dirty)
   if (dirty.length > 0) {
     const ok = await confirm(
-      `${dirty.length} file(s) have unsaved changes. Close the editor anyway?`,
-      { title: 'Close Editor', confirmText: 'Close' }
+      i18n.global.t('editorWindow.close-editor-dirty', { count: dirty.length }),
+      { title: i18n.global.t('editorWindow.close-editor'), confirmText: i18n.global.t('action.close') }
     )
     if (!ok) return
   }
@@ -1826,6 +1832,7 @@ let offThemeSettingsChange: (() => void) | null = null
 let offOpenTarget: (() => void) | null = null
 
 function applyOpenTarget(p: Record<string, string>): void {
+  applyEditorLocale(p.locale)
   const sidebar = p.sidebar
   if (sidebar === 'explorer' || sidebar === 'search' || sidebar === 'git') {
     sidebarView.value = sidebar
@@ -1857,7 +1864,11 @@ function applyOpenTarget(p: Record<string, string>): void {
 
 onMounted(() => {
   loadTheme()
+  window.agentTeam?.onLanguageChanged?.(applyEditorLocale)
   offThemeSettingsChange = onSettingsChanged((keys) => {
+    if (keys.includes('agent-team:language')) {
+      applyEditorLocale(settingsGet<string>('agent-team:language', ''))
+    }
     if (keys.includes('agent-team:theme') || keys.includes('agent-team:theme-custom')) {
       loadTheme()
     }
@@ -2257,7 +2268,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
         ref="themeInputEl"
         v-model="themeQuery"
         class="ide-palette-input"
-        placeholder="Select color theme…"
+        :placeholder="$t('editorWindow.select-theme')"
         @keydown="onThemeKeydown"
       />
       <ul class="ide-palette-list">
@@ -2282,7 +2293,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
         ref="kbInputEl"
         v-model="kbQuery"
         class="ide-palette-input"
-        placeholder="Search keyboard shortcuts…"
+        :placeholder="$t('editorWindow.search-shortcuts')"
         @keydown="onKbKeydown"
       />
       <ul class="ide-palette-list">
@@ -2300,7 +2311,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
         ref="langInputEl"
         v-model="langQuery"
         class="ide-palette-input"
-        placeholder="Select language mode…"
+        :placeholder="$t('editorWindow.select-language')"
         @keydown="onLangKeydown"
       />
       <ul class="ide-palette-list">
@@ -2325,7 +2336,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
         ref="wsymInputEl"
         v-model="wsymQuery"
         class="ide-palette-input"
-        placeholder="Go to symbol in workspace…"
+        :placeholder="$t('editorWindow.workspace-symbol')"
         @keydown="onWsymKeydown"
       />
       <ul v-if="wsymItems.length" class="ide-palette-list">
@@ -2351,7 +2362,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
         ref="symInputEl"
         v-model="symQuery"
         class="ide-palette-input"
-        placeholder="Go to symbol…"
+        :placeholder="$t('editorWindow.symbol')"
         @keydown="onSymKeydown"
       />
       <ul v-if="symItems.length" class="ide-palette-list">
@@ -2500,7 +2511,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
       :style="{ left: bcDropdown.x + 'px', top: bcDropdown.y + 'px' }"
       @click.stop
     >
-      <div v-if="!bcDropdown.items.length" class="ide-bc-dd-empty">(empty)</div>
+      <div v-if="!bcDropdown.items.length" class="ide-bc-dd-empty">{{ $t('label.no-results') }}</div>
       <div
         v-for="(item, i) in bcDropdown.items"
         :key="(item.relPath || '') + (item.line ?? 0)"

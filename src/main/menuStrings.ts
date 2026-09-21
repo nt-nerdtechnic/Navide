@@ -8,8 +8,8 @@ import type { SupportedLocale } from './hostLocale'
  * Main has no i18n of its own and cannot borrow the renderer's: vue-i18n needs
  * `navigator.language` and the settings cache, neither of which exists here,
  * `tsconfig.node.json` does not list `packages/plugin-ui` (a composite project
- * rejects an import from outside its file list), and the two locale JSONs are
- * ~435 KB each — a heavy price for the two dozen strings below, none of which
+ * rejects an import from outside its file list), and the locale JSONs are
+ * hundreds of KB each — a heavy price for the two dozen strings below, none of which
  * have a key over there anyway.
  *
  * The wording is not invented where the renderer already settled on one, so
@@ -39,6 +39,11 @@ export interface MenuStrings {
   openWorkspace: string
   openRecent: string
   noRecentWorkspaces: string
+  pickWorkspace: string
+  useFolder: string
+  createWorkspace: string
+  workspaceName: string
+  create: string
   reloadWindow: string
   pipelineManager: string
   resourceManager: string
@@ -63,6 +68,11 @@ export const MENU_STRINGS: Record<SupportedLocale, MenuStrings> = {
     openWorkspace: 'Open Workspace…',
     openRecent: 'Open Recent',
     noRecentWorkspaces: 'No Recent Workspaces',
+    pickWorkspace: 'Pick workspace folder',
+    useFolder: 'Use this folder',
+    createWorkspace: 'Create workspace folder',
+    workspaceName: 'Workspace name:',
+    create: 'Create',
     reloadWindow: 'Reload Window',
     pipelineManager: 'Pipeline Manager',
     resourceManager: 'Resource Manager',
@@ -74,6 +84,40 @@ export const MENU_STRINGS: Record<SupportedLocale, MenuStrings> = {
     // The legal table is the one place those titles are written; English reads
     // them straight from it rather than keeping a second copy in step.
     legal: LEGAL_LABELS
+  },
+  'ja-JP': {
+    file: 'ファイル',
+    edit: '編集',
+    view: '表示',
+    window: 'ウィンドウ',
+    copy: 'コピー',
+    settings: '設定…',
+    checkUpdates: 'アップデートを確認…',
+    newWindow: '新しいウィンドウ',
+    openWorkspace: 'ワークスペースを開く…',
+    openRecent: '最近使用した項目を開く',
+    noRecentWorkspaces: '最近使用したワークスペースはありません',
+    pickWorkspace: 'ワークスペースのフォルダーを選択',
+    useFolder: 'このフォルダーを使用',
+    createWorkspace: 'ワークスペースのフォルダーを作成',
+    workspaceName: 'ワークスペース名：',
+    create: '作成',
+    reloadWindow: 'ウィンドウを再読み込み',
+    pipelineManager: 'パイプライン管理',
+    resourceManager: 'リソース管理',
+    turnStats: 'ターン別使用量',
+    tokenMonitor: 'トークンモニター',
+    repo: 'GitHub で Navide を見る',
+    reportIssue: '問題を報告…',
+    shortcuts: 'キーボードショートカット',
+    legal: {
+      privacy: 'プライバシー',
+      security: 'セキュリティポリシー',
+      'code-of-conduct': '行動規範',
+      boundaries: '利用上の制限',
+      licenses: 'ライセンス',
+      legal: '法的情報'
+    }
   },
   'zh-TW': {
     file: '檔案',
@@ -87,6 +131,11 @@ export const MENU_STRINGS: Record<SupportedLocale, MenuStrings> = {
     openWorkspace: '開啟工作區…',
     openRecent: '開啟最近使用',
     noRecentWorkspaces: '沒有最近使用的工作區',
+    pickWorkspace: '選擇工作區資料夾',
+    useFolder: '使用此資料夾',
+    createWorkspace: '建立工作區資料夾',
+    workspaceName: '工作區名稱：',
+    create: '建立',
     reloadWindow: '重新載入視窗',
     pipelineManager: '流程管理',
     resourceManager: '資源控管',

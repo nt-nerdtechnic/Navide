@@ -42,6 +42,25 @@ describe('Token monitor window', () => {
       w.unmount(); expect(wire.settingsChanged).toBeNull()
     } finally { window.agentTeam = previous }
   })
+  it('boots in Japanese and reformats dates when the Host language changes', async () => {
+    const previousUrl = window.location.href
+    window.history.replaceState({}, '', '/?window=token-monitor&locale=ja-JP')
+    try {
+      const w = await render()
+      expect(w.text()).toContain('Claude トークンモニター')
+      const timestamp = new Date(answer().turns[0].started_at!)
+      expect(w.get('[data-row="turn"] td').text()).toBe(timestamp.toLocaleString('ja-JP'))
+      wire.locale = 'en-US'
+      wire.settingsChanged?.(['agent-team:language'])
+      await flushPromises()
+      expect(w.get('[data-row="turn"] td').text()).toBe(timestamp.toLocaleString('en-US'))
+      wire.locale = 'ja-JP'
+      wire.settingsChanged?.(['agent-team:language'])
+      await flushPromises()
+      expect(w.text()).toContain('Claude トークンモニター')
+    } finally { window.history.replaceState({}, '', previousUrl) }
+  })
+
   it('renders accurate aggregate statistics, filters model and keeps quota resets separate', async () => {
     const w = await render()
     expect(w.get('[data-part="stats"]').text()).toContain('300')

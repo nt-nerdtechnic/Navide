@@ -24,6 +24,7 @@ import {
   type SpawnHistoryEntry,
 } from '../lib/spawnHistory'
 import BrandLoader from './BrandLoader.vue'
+import { i18n } from '@navide/plugin-ui/foundation'
 
 // Agent History modal, extracted from App.vue. Owns only presentation-local
 // state (search query, filters, selection, kill-all confirmation). Flows that
@@ -314,7 +315,7 @@ function agentLabelFor(entry: SpawnHistoryEntry): string {
 function formatTimestamp(iso?: string): string {
   if (!iso) return '—'
   const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString()
+  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString(i18n.global.locale.value)
 }
 
 /** The detail row names the actual spawner, all three of them. The origin
@@ -331,7 +332,7 @@ function listTime(entry: SpawnHistoryEntry, groupKey: HistoryGroupKey): string {
   if (!entry.spawnedAt) return '—'
   const d = new Date(entry.spawnedAt)
   if (Number.isNaN(d.getTime())) return '—'
-  return groupKey === 'earlier' ? d.toLocaleDateString() : d.toLocaleTimeString()
+  return groupKey === 'earlier' ? d.toLocaleDateString(i18n.global.locale.value) : d.toLocaleTimeString(i18n.global.locale.value)
 }
 
 async function onLoadMore(): Promise<void> {

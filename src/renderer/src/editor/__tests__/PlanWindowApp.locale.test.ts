@@ -66,6 +66,20 @@ describe('PlanWindowApp locale propagation', () => {
     } as unknown as typeof window.agentTeam
   })
 
+  it('keeps Japanese from initial query through native and settings updates', () => {
+    window.history.replaceState({}, '', 'http://localhost:3000/?window=plans&workspace_path=/tmp/demo-ws&locale=ja-JP')
+    const wrapper = mount(PlanWindowApp, { global: { plugins: [i18n] } })
+    expect(i18n.global.locale.value).toBe('ja-JP')
+    expect(settingsGet('agent-team:language', '')).toBe('ja-JP')
+    languageCallback!('en-US')
+    expect(i18n.global.locale.value).toBe('en-US')
+    for (const listener of backendListeners.get('ui.settings_changed')!) {
+      listener({ source: 'host', settings: { 'agent-team:language': 'ja-JP' } })
+    }
+    expect(i18n.global.locale.value).toBe('ja-JP')
+    wrapper.unmount()
+  })
+
   it('receives current Host locale from query before first render', () => {
     window.history.replaceState({}, '', 'http://localhost:3000/?window=plans&workspace_path=/tmp/demo-ws&locale=en-US')
     const wrapper = mount(PlanWindowApp, { global: { plugins: [i18n] } })

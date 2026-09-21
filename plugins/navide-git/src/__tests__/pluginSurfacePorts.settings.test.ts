@@ -82,6 +82,7 @@ describe('navide.git v2 settings port', () => {
 
     expect(port.ownedKeys).toEqual([...GIT_USER_PREFERENCE_KEYS, GIT_WORKSPACE_REPOSITORY_KEY])
     expect(port.readOnlyKeys).toEqual(GIT_HOST_READ_ONLY_KEYS)
+    expect(port.readOnlyKeys).toContain('agent-team:language')
   })
 
   it('writes approved keys to their owning partition and ignores Host-owned keys', async () => {
@@ -93,6 +94,7 @@ describe('navide.git v2 settings port', () => {
       'agentTeam.git.logScope': 'current',
       'agentTeam.gitTabRepo': '/workspace/sub',
       'agentTeam.analyzerModel': 'must-not-write',
+      'agent-team:language': 'ja-JP',
       'agentTeam.yolo': 'must-not-write',
       __migrated: true,
     })

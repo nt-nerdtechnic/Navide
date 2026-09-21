@@ -20,6 +20,7 @@
  * get the system's own frame instead (see `systemFrameUnlessMac`).
  */
 import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { i18n } from '@navide/plugin-ui/foundation'
 import { needsDrawnWindowControls } from '../../../shared/osplat'
 
 const shown = needsDrawnWindowControls() && Boolean(window.agentTeam?.windowControls)
@@ -74,12 +75,12 @@ const toggleMaximize = async (): Promise<void> => {
        context, which is the only place `--z-window-controls` can mean what it
        says. -->
   <Teleport v-if="shown" to="body">
-    <div class="win-controls" role="group" aria-label="Window controls">
+    <div class="win-controls" role="group" :aria-label="i18n.global.t('windowControls.group')">
       <button
         class="win-control"
         type="button"
-        title="Minimize"
-        aria-label="Minimize"
+        :title="i18n.global.t('windowControls.minimize')"
+        :aria-label="i18n.global.t('windowControls.minimize')"
         @mousedown.stop
         @click="minimize"
       >
@@ -90,8 +91,8 @@ const toggleMaximize = async (): Promise<void> => {
       <button
         class="win-control"
         type="button"
-        :title="maximized ? 'Restore' : 'Maximize'"
-        :aria-label="maximized ? 'Restore' : 'Maximize'"
+        :title="i18n.global.t(maximized ? 'windowControls.restore' : 'windowControls.maximize')"
+        :aria-label="i18n.global.t(maximized ? 'windowControls.restore' : 'windowControls.maximize')"
         @mousedown.stop
         @click="toggleMaximize"
       >
@@ -106,8 +107,8 @@ const toggleMaximize = async (): Promise<void> => {
       <button
         class="win-control win-control--close"
         type="button"
-        title="Close"
-        aria-label="Close"
+        :title="i18n.global.t('action.close')"
+        :aria-label="i18n.global.t('action.close')"
         @mousedown.stop
         @click="close"
       >

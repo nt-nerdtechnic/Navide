@@ -1,4 +1,4 @@
-export { i18n, enUSMessages, zhTWMessages } from './i18n'
+export { i18n, enUSMessages, zhTWMessages, jaJPMessages } from './i18n'
 
 export {
   BUILTIN_THEMES,

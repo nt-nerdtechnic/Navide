@@ -44,6 +44,7 @@ import {
   getContributionWindowConfig,
   getContributionWindowKey,
 } from './plansWindowRouting'
+import { MENU_STRINGS } from './menuStrings'
 import { HostLocaleManager, readPersistedLocaleFromSettings, type SupportedLocale } from './hostLocale'
 import {
   activateFactoryGitWithLegacyFallback,
@@ -1464,9 +1465,9 @@ ipcMain.handle('backend:stop', async () => {
 
 ipcMain.handle('workspace:pick', async (_event, defaultPath?: string) => {
   const opts: Electron.OpenDialogOptions = {
-    title: 'Pick workspace folder',
+    title: MENU_STRINGS[currentUiLocale()].pickWorkspace,
     properties: ['openDirectory', 'createDirectory'],
-    buttonLabel: 'Use this folder'
+    buttonLabel: MENU_STRINGS[currentUiLocale()].useFolder
   }
   if (defaultPath && typeof defaultPath === 'string') opts.defaultPath = defaultPath
 
@@ -1484,10 +1485,10 @@ ipcMain.handle('workspace:new', async (): Promise<NewWorkspaceResult> => {
   // workspace in the same step that places it. `defaultPath` seeds both — the
   // home directory and an editable placeholder name.
   const opts: Electron.SaveDialogOptions = {
-    title: 'Create workspace folder',
+    title: MENU_STRINGS[currentUiLocale()].createWorkspace,
     defaultPath: join(app.getPath('home'), 'navide-workspace'),
-    nameFieldLabel: 'Workspace name:',
-    buttonLabel: 'Create',
+    nameFieldLabel: MENU_STRINGS[currentUiLocale()].workspaceName,
+    buttonLabel: MENU_STRINGS[currentUiLocale()].create,
     // `showOverwriteConfirmation` is Linux-only and deliberately left off:
     // nothing here overwrites, so asking "replace it?" would promise something
     // the mkdir below refuses to do. macOS and Windows ask anyway and cannot
@@ -1973,7 +1974,7 @@ async function openMiniIdeEditor(
   const opened = openMiniIdePluginView(
     workspacePath,
     httpUrl,
-    extraParams,
+    { ...extraParams, locale: currentUiLocale() },
     currentUiTheme(),
     displayName
   )
@@ -4106,7 +4107,7 @@ app.whenReady().then(async () => {
             openMiniIdePluginView(
               process.env['AGENT_TEAM_PLUGIN_WORKSPACE'] ?? '',
               httpUrl,
-              {},
+              { locale: currentUiLocale() },
               currentUiTheme()
             )
           },

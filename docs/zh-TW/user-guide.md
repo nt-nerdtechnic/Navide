@@ -40,6 +40,10 @@ Navide 將個人私有 Project Intelligence 儲存在 Workspace 內的 `.agent-t
 - 將 Pane 最小化可以保留 PTY，同時避免占用主要 Layout。
 - 只有 Navide 偵測到可重用 Session ID 後，才進行 Rebuild 或 Resume。
 
+在 Auto、Spotlight 與 Fullscreen Layout 中，重新整理右側的三角形按鈕（工具列順序：**+ → 重新整理 → ▾/▸**）可收合或展開目前分頁的後代卡片群組，行為與父卡片後代數量外框旁的三角形相同。只要任何符合條件的群組仍展開，就會全部收合；全部收合時，則會展開所有群組，包含先前個別收合的巢狀群組。符合條件的父 Pane 必須有後代且未最小化。
+
+收合會隱藏後代卡片，保留最上層父卡片、後代數量與主終端機。各分頁的群組狀態互相獨立，僅保留於目前視窗的記憶體中。Grid Layout 或目前分頁沒有符合條件的父群組時，批次按鈕會停用。
+
 A new empty Codex pane waits for your input without sending an artificial session-discovery message. Its session ID may become available only after the first real user or configured task turn; until then, Rebuild remains unavailable. The same applies to a fresh rebuild or restore. If Codex asks to review the Navide session hook, review it in Codex; YOLO mode does not approve hooks. Existing shared session homes may need that trusted hook to associate the new conversation with its pane.
 
 Select multiple pane headers with Cmd/Ctrl-click or Shift-click, then right-click a selected pane to open the batch menu. Its groups contain Interrupt/Rebuild, Minimize/Restore/Reclaim, notification controls, and Remove. **Restore selected** also opens selected panes that have not yet been opened or were reclaimed. Pane and project overflow menus stay within the window; long menus scroll so their final actions remain reachable.
@@ -150,15 +154,21 @@ Skills 畫面在 backend 成功變更與重新連線後刷新，保留未儲存�
 
 ## Settings 與可攜性
 
-**設定 → 語言** 是側欄中位於「外觀」之後的獨立頁面。可選擇繁體中文或 English；這項使用者層級偏好套用到所有工作區。
+**設定 → 語言** 是側欄中位於「外觀」之後的獨立頁面。可選擇繁體中文、English 或日本語；這項使用者層級偏好套用到所有工作區。初次啟動且尚未儲存語言偏好時，日文系統會使用日文介面。語言切換也會套用到初始設定畫面、Navide 原生選單標籤，以及獨立的 Plans 和 Token Monitor 視窗。作業系統提供的選單角色與外部內容可能保留各自的語言。
 
 Settings 涵蓋 Role、Pipeline、MCP Server、Analyzer Behavior、AI Provider、Appearance、Keyboard Shortcut，以及獨立的 **Execution Policy** 分頁。該分頁會顯示唯讀的 Host 預設值，讓你建立或編輯一個全域的 `full`、`allowlist` 或 `denylist` 使用者政策，並將第一層系統命名空間與最上層 Shell 可執行檔名稱分開管理。完整模式需要明確的高風險確認。開啟工作區後，也會顯示不受信任的 Repository 建議，讓你明確選擇 Host 預設值、使用者政策或接受後的 Repository 政策。全域政策損壞時，可透過獨立確認的重建保留工作區來源選擇；政策資料夾不安全或無法使用時，則必須手動修復。Extensions 會將 Plugin 的 Manifest Permissions、精確 package-version Grant，以及目前選定 Agent 的 Execution Policy 分開顯示。
 
-**設定 → CLI Agents** 以每個 Agent 一張卡片呈現。使用搜尋及「全部」、「已啟用」或「需注意」篩選找到 Agent，切換啟用狀態。要調整順序，請選擇「全部」並清空搜尋，再拖曳卡片或使用上下移動按鈕；篩選或搜尋期間無法重新排序。至少必須保留一個已啟用的 Agent。選擇「管理」會開啟該 Agent 的側邊抽屜，提供總覽、啟動設定、權限、推送及安裝分頁。設定沿用自動儲存方式，不需要另外按下儲存。關閉抽屜或按 Escape 會先返回卡片，不會直接關閉整個設定視窗。
+**設定 → CLI Agents** 以每個 Agent 一張卡片呈現。使用搜尋及「全部」、「已啟用」或「需注意」篩選找到 Agent，切換啟用狀態。要調整順序，請選擇「全部」並清空搜尋，再使用卡片標題左側的拖曳把手調整順序；篩選或搜尋期間無法重新排序。至少必須保留一個已啟用的 Agent。選擇「管理」會開啟該 Agent 的側邊抽屜，總覽、啟動設定、權限、推送及安裝區段依序排列在同一個可捲動頁面。設定沿用自動儲存方式，不需要另外按下儲存。關閉抽屜或按 Escape 會先返回卡片，不會直接關閉整個設定視窗。
 
-安裝分頁管理已安裝的 Coding CLI：版本、安裝方式、重複安裝、該 CLI 上次自我更新的結果，以及在終端機執行該 CLI 官方更新與診斷指令的按鈕。開啟工作區時可設定恢復單一 CLI、第一個 Grid 頁面或目前分頁；即使上次不是 Grid layout，Grid 頁面仍會依 Grid preset 計算。Navide 只呈現並執行官方指令，不會自行更新 CLI。Exported Setting 會遮蔽 API Key 與 Token。啟用第三方 Server 前，請先檢查 MCP Command 與 Environment Variable。
+安裝區段管理已安裝的 Coding CLI：版本、安裝方式、重複安裝、該 CLI 上次自我更新的結果，以及在終端機執行該 CLI 官方更新與診斷指令的按鈕。開啟工作區時可設定恢復單一 CLI、第一個 Grid 頁面或目前分頁；即使上次不是 Grid layout，Grid 頁面仍會依 Grid preset 計算。Navide 只呈現並執行官方指令，不會自行更新 CLI。Exported Setting 會遮蔽 API Key 與 Token。啟用第三方 Server 前，請先檢查 MCP Command 與 Environment Variable。
 
 **帳號**分頁為每個 CLI 帳號放一張卡片。除了 CLI 自己的登入，卡片還能保存一份**可攜憑證**：各家官方為「在任何機器上使用」而設計的值（例如 Claude Code 的 `claude setup-token`）。貼入一次，該 CLI 的新 pane 會在環境變數裡拿到它，CLI 自己的登入檔不會被動到。每個 CLI 同時只有一份憑證在*使用中*；卡片會標示是哪一份，並在本機登入檔會蓋過它時提出警告。移除憑證只影響這台裝置。
+
+**CLI 額度耗盡時切換帳號。**當某個 CLI 的使用中帳號撞到用量上限，Navide 會為它建立一個事件——不管有幾個 pane 或視窗看到——並依帳號切換策略處理：**關閉**（什麼都不做）、**通知**（預設：公告列出該 CLI 可切換的其他帳號，每個帳號標示讀數可信度——新鮮餘裕、預計已重置、較舊讀數、未知——並說明其餘帳號被排除的原因，例如未登入、仍在耗盡中、本輪已試過）、或**自動**（Navide 以最佳候選做一次嘗試）。自動切換每個 CLI 憑證池在滾動 5 小時內最多 3 次、兩次至少間隔 10 分鐘；你自己動手的切換不計入。任何失敗——沒有可用帳號、憑證搬不動、pane 無法接續、或新帳號也已耗盡——都會結束該事件並顯示原因；Navide 不會自行改試下一個帳號、不會自動切回、也不會重送 pane 可能已做過的工作。原帳號的重置時間過後，公告只會說它*預計*已恢復；切回是你按下的按鈕。
+
+Claude Code 每次請求都會重讀憑證，因此切換不需重啟任何東西。其他 CLI 把憑證留在記憶體裡，所以會先詢問受影響的 pane：正在回合中、等待權限回覆、或有未送出輸入的 pane 絕不會被停止——切換會等到所有受影響的 pane 都安全閒置，再停止它們、搬動憑證、並讓每個對話在自己的 session 上接續。有 pane 無法接續時，切換會在動到任何東西之前停下。Aider 與 MiniMax Code 無法接續對話，因此切換會改請你確認開新對話。切換後三件事分開顯示：帳號是否已切換、每個對話是否已接續、新帳號的額度是否已驗證——最後一項只認該帳號的新讀數（或它完成的一個回合）；兩分鐘內沒有任何證據，公告會寫*已切換，額度未確認*。若憑證已搬動但帳號記錄存不下來，該 CLI 之後的切換都會被拒絕，直到你確認目前實際使用的是哪個帳號；在那之前不會覆寫任何東西。同樣地，當目前使用中的憑證與使用中帳號的備份不一致時，切換會被拒絕：憑證本身帶有帳號身份的 CLI，Navide 會自行分辨（token 更新不算換帳號）；憑證不帶身份的 CLI，則會請你確認目前的憑證仍屬於使用中的帳號，而這個確認只對你當時看到的那個狀態有效。
+
+Claude Code、Codex、Grok、Kimi、Pi、Droid、MiniMax Code 的新帳號登入是隔離的：登入 pane 使用私有 home，使用中的帳號與執行中的 pane 不受影響。其他 CLI 只有一個憑證儲存位置，登入會暫時取代目前的憑證；Navide 會先為使用中的帳號留下快照，登入完成後把新登入停放到它自己的帳號卡片，再把使用中的帳號還原——登入被放棄時也一樣。這類登入進行中時，Navide 不會開啟該 CLI 的其他 pane；該 CLI 有 pane 在執行時也不會開始這類登入。所有 CLI 的帳號切換版面都是從各家程式碼讀出來的；還沒有任何 CLI 在 Navide 裡以兩個真實帳號完成來回切換，而 MiniMax Code 的支援是最新加入的。
 
 **同步**區段（設定 → 同步）可以把這些憑證帶到你的其他裝置。**憑證**開關預設關閉。開啟後，帳號卡片會為每份憑證多一行雲端狀態——已同步、只在這台、雲端有但這台未使用、或待你決定——而在別台機器貼入的憑證可以一鍵在這台啟用。在這台移除永遠不會刪掉雲端或其他裝置上的那一份。同一區段會顯示同步金鑰的 id，並在你懷疑外洩時提供更換：所有記錄重新加密，已配對的裝置會收到新金鑰。
 

@@ -34,7 +34,7 @@ if (initialTheme) {
 }
 
 const initialLocale = new URLSearchParams(window.location.search).get('locale')
-if (initialLocale === 'zh-TW' || initialLocale === 'en-US') {
+if (initialLocale === 'zh-TW' || initialLocale === 'en-US' || initialLocale === 'ja-JP') {
   i18n.global.locale.value = initialLocale
   seedSettings({ 'agent-team:language': initialLocale })
 }
@@ -64,7 +64,7 @@ if (initialLocale === 'zh-TW' || initialLocale === 'en-US') {
     const relPath = params['rel_path']
     if (relPath) planOpenDocCb?.(relPath)
     const targetLocale = params['locale']
-    if (targetLocale === 'zh-TW' || targetLocale === 'en-US') {
+    if (targetLocale === 'zh-TW' || targetLocale === 'en-US' || targetLocale === 'ja-JP') {
       i18n.global.locale.value = targetLocale
       seedSettings({ 'agent-team:language': targetLocale })
     }

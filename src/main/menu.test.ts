@@ -467,6 +467,16 @@ describe('application menu — locale', () => {
     setPlatformId(BASELINE)
   })
 
+  it('renders Japanese menu entries without changing their actions', () => {
+    setPlatformId('linux')
+    installApplicationMenu(hooks, [], 'ja-JP')
+    expect(h.template.map(item => item.label)).toEqual(expect.arrayContaining(['ファイル', '編集', '表示', 'ウィンドウ']))
+    fire(itemIn(submenuOf('ファイル'), 'ワークスペースを開く…'))
+    expect(hooks.calls).toEqual(['open-workspace'])
+    expect(MENU_STRINGS['ja-JP'].pickWorkspace).toBe('ワークスペースのフォルダーを選択')
+    expect(Object.keys(MENU_STRINGS['ja-JP']).sort()).toEqual(Object.keys(MENU_STRINGS['en-US']).sort())
+  })
+
   it('labels the top-level menus in the requested locale', () => {
     setPlatformId('linux')
     installApplicationMenu(hooks, [], 'zh-TW')
@@ -508,7 +518,7 @@ describe('application menu — locale', () => {
   // re-localize it. Supplying our own label would silently take those items
   // out of the OS's hands, so no role may carry one.
   it('leaves every role item unlabeled so the OS keeps wording them', () => {
-    for (const locale of ['en-US', 'zh-TW'] as const) {
+    for (const locale of ['en-US', 'zh-TW', 'ja-JP'] as const) {
       for (const platform of ['darwin', 'linux'] as const) {
         setPlatformId(platform)
         installApplicationMenu(hooks, [], locale)

@@ -1,7 +1,10 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { transpileModule } from 'typescript'
 import { i18n } from '@navide/plugin-ui/foundation'
-import { initSettingsBackend, seedSettings, settingsGet, settingsReadiness, settingsSet } from '@navide/plugin-ui/shared'
+import { initSettingsBackend, seedSettings, settingsGet, settingsReadiness } from '@navide/plugin-ui/shared'
 import { __resetSettingsForTest } from '@navide/plugin-ui/shared/testing'
 import { createMockBackend } from './mockBackend'
 import { ensureLanguageSettingsSubscription, useSettings } from '../useSettings'
@@ -83,6 +86,39 @@ describe('useSettings — language bootstrap and persistence', () => {
   afterEach(() => {
     delete (globalThis as typeof globalThis & { __navideSettingsBootstrap?: unknown }).__navideSettingsBootstrap
     __resetSettingsForTest()
+  })
+
+  it.each(['ja-JP', '"ja-JP"'])('loads persisted Japanese %s without overwriting it with a workspace fallback', (raw) => {
+    seedSettings({ [LANGUAGE_KEY]: raw })
+    const settings = useSettings()
+    settings.loadLanguage({ language: 'en-US' })
+    expect(settings.language.value).toBe('ja-JP')
+    expect(i18n.global.locale.value).toBe('ja-JP')
+  })
+
+  it('persists and broadcasts Japanese, then follows another window back to English', async () => {
+    const { backend, emit, sent } = createMockBackend('connected')
+    initSettingsBackend(backend)
+    const broadcast = vi.fn()
+    window.agentTeam = { broadcastLanguageChange: broadcast } as unknown as typeof window.agentTeam
+    const settings = useSettings()
+    settings.setLanguage('en-US', { broadcast: false })
+    settings.setLanguage('ja-JP')
+    expect(settingsGet(LANGUAGE_KEY, null)).toBe('ja-JP')
+    expect(broadcast).toHaveBeenCalledWith('ja-JP')
+    await vi.waitFor(() => expect(sent.some(call => call.type === 'ui.settings.set')).toBe(true))
+    emit('ui.settings_changed', { settings: { [LANGUAGE_KEY]: 'en-US' } })
+    expect(settings.language.value).toBe('en-US')
+    expect(i18n.global.locale.value).toBe('en-US')
+  })
+
+  it('follows a Japanese system language before a preference exists', () => {
+    const language = vi.spyOn(navigator, 'language', 'get').mockReturnValue('ja')
+    try {
+      useSettings().loadLanguage()
+      expect(i18n.global.locale.value).toBe('ja-JP')
+      expect(settingsGet(LANGUAGE_KEY, null)).toBeNull()
+    } finally { language.mockRestore() }
   })
 
   it('loads language from bootstrap settings cache and sets i18n locale', () => {
@@ -182,32 +218,21 @@ describe('useSettings — language bootstrap and persistence', () => {
     expect(i18n.global.locale.value).toBe('en-US')
   })
 
-  it('proves main bootstrap locale applies to i18n before first mount and matches useSettings', async () => {
-    // Simulates the exact Host bootstrap startup sequence in main.ts:
-    // 1. Host bootstrap settings contain persisted zh-TW
-    const bootstrapSettings = { 'agent-team:language': 'zh-TW' }
-    ;(globalThis as typeof globalThis & { __navideSettingsBootstrap?: Record<string, unknown> }).__navideSettingsBootstrap =
-      bootstrapSettings
+  it.each(['zh-TW', 'en-US', 'ja-JP', '"ja-JP"'])('executes the actual %s renderer bootstrap before root mounting', (raw) => {
+    const bootstrapSettings = { [LANGUAGE_KEY]: raw }
     seedSettings(bootstrapSettings)
-
-    // 2. main.ts resolves bootstrap locale and updates i18n before loadRoot / first mount
-    const bootstrapLocale = bootstrapSettings['agent-team:language']
-    if (bootstrapLocale === 'zh-TW' || bootstrapLocale === 'en-US') {
-      i18n.global.locale.value = bootstrapLocale
-    }
-    expect(i18n.global.locale.value).toBe('zh-TW')
-
-    // 3. Components calling useSettings() immediately see the bootstrapped zh-TW
-    const { language } = useSettings()
-    expect(language.value).toBe('zh-TW')
-
-    // 4. Updating via UI persists to settings store (which flushes to ui_settings.json)
-    const broadcast = vi.fn()
-    window.agentTeam = { broadcastLanguageChange: broadcast } as unknown as typeof window.agentTeam
-    const { setLanguage } = useSettings()
-    setLanguage('en-US')
-    expect(settingsGet('agent-team:language', null)).toBe('en-US')
-    expect(broadcast).toHaveBeenCalledWith('en-US')
+    const source = readFileSync(resolve('src/renderer/src/main.ts'), 'utf8')
+    const start = source.indexOf('const bootstrapLocaleRaw =')
+    const end = source.indexOf('// Theme token layers', start)
+    expect(start).toBeGreaterThan(-1)
+    expect(end).toBeLessThan(source.indexOf('loadRoot()'))
+    const run = new Function('bootstrapSettings', 'i18n', transpileModule(source.slice(start, end), {}).outputText)
+    run(bootstrapSettings, i18n)
+    const expected = raw.replaceAll('"', '')
+    expect(i18n.global.locale.value).toBe(expected)
+    useSettings().loadLanguage()
+    expect(useSettings().language.value).toBe(expected)
+    expect(settingsGet(LANGUAGE_KEY, null)).toBe(raw)
   })
 })
 

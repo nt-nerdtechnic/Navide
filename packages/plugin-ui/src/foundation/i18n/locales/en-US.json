@@ -1,4 +1,26 @@
 {
+  "windowControls": {
+    "group": "Window controls",
+    "minimize": "Minimize",
+    "maximize": "Maximize",
+    "restore": "Restore"
+  },
+  "editorWindow": {
+    "close-editor": "Close Editor",
+    "close-editor-dirty": "{count} file(s) have unsaved changes. Close the editor anyway?",
+    "close-file": "Close File",
+    "close-file-dirty": "\"{name}\" has unsaved changes. Close anyway?",
+    "close-others-dirty": "{count} file(s) have unsaved changes. Close other tabs anyway?",
+    "close-right-dirty": "{count} file(s) have unsaved changes. Close tabs to the right anyway?",
+    "close-left-dirty": "{count} file(s) have unsaved changes. Close tabs to the left anyway?",
+    "close-all-dirty": "{count} file(s) have unsaved changes. Close all anyway?",
+    "reload-dirty": "{count} file(s) have unsaved changes. Reload and discard them?",
+    "select-theme": "Select color theme…",
+    "search-shortcuts": "Search keyboard shortcuts…",
+    "select-language": "Select language mode…",
+    "workspace-symbol": "Go to symbol in workspace…",
+    "symbol": "Go to symbol…"
+  },
   "cli-risk": {
     "details": "CLI observations",
     "close": "Close observations",
@@ -927,7 +949,7 @@
         },
         "appearance-language": {
           "title": "Language",
-          "summary": "Switch between Traditional Chinese and English."
+          "summary": "Switch between Traditional Chinese, English, and Japanese."
         },
         "appearance-ui-scale": {
           "title": "Interface Scale",
@@ -960,6 +982,10 @@
         "general-usage-badge": {
           "title": "CLI Quota Badge",
           "summary": "Show remaining CLI quota in pane headers (claude/codex/kimi/grok) and pick the refresh interval."
+        },
+        "general-quota-failover": {
+          "title": "Account switch when quota runs out",
+          "summary": "Off / notify / automatic, and what each CLI can do"
         },
         "accounts": {
           "title": "Git Accounts",
@@ -1264,7 +1290,9 @@
       "theme": "Theme",
       "theme-hint": "Theme is a user-level preference applied across all workspaces.",
       "language-zh-TW": "繁體中文",
+      "reset-colors-hint": "Reset all custom colors to the built-in theme",
       "language-en-US": "English",
+      "language-ja-JP": "日本語",
       "language-hint": "Language is a user-level preference applied across all workspaces.",
       "ui-scale": "Interface Scale",
       "ui-scale-hint": "Scale the whole interface — text, icons, and spacing — in every window. Separate from the terminal and editor font sizes, which keep their own ⌘= / ⌘- shortcuts.",
@@ -1425,7 +1453,7 @@
           "title": "Settings overview",
           "p1": "The settings window opens with <kbd class=\"syh-kbd\">⌘,</kbd>; the gear button in the title bar is the same entry point. The left sidebar is split into four groups, <strong>19 tabs</strong> in total.",
           "h1": "The search field",
-          "p2": "Below the sidebar heading is a search field with the placeholder <code>Search settings…</code>. It matches setting titles, their section and their keywords <strong>across tabs</strong> (in both languages), listing at most 8 results; clicking one switches to that tab and scrolls to the section (with one exception: \"Storage\" closes settings and opens the Resource Manager directly). With no match it shows <code>No matching settings</code>. <kbd class=\"syh-kbd\">Esc</kbd> clears it.",
+          "p2": "Below the sidebar heading is a search field with the placeholder <code>Search settings…</code>. It matches setting titles, their section and their keywords <strong>across tabs</strong> (using the current interface language and indexed keywords), listing at most 8 results; clicking one switches to that tab and scrolls to the section (with one exception: \"Storage\" closes settings and opens the Resource Manager directly). With no match it shows <code>No matching settings</code>. <kbd class=\"syh-kbd\">Esc</kbd> clears it.",
           "callout": {
             "title": "The search index is not exhaustive",
             "text": "The index is a hand-maintained list, and <strong>the CLI Agents, Layout, Notifications and Extensions tabs have no entries at all</strong>, so nothing inside them is searchable — you have to open them yourself."
@@ -1447,7 +1475,7 @@
               "more": "section 2 of this page"
             },
             "language": {
-              "what": "Interface language for every workspace: Traditional Chinese or English",
+              "what": "Interface language for every workspace: Traditional Chinese, English, or Japanese",
               "more": "section 2 of this page"
             },
             "statusBadges": {
@@ -1587,7 +1615,7 @@
           "appearance": {
             "theme": "<strong>Theme</strong> — five built in: Dark (GitHub), Midnight, Forest, Light and High Contrast, with Dark (GitHub) as the default.",
             "colors": "<strong>Custom Colors</strong> — eight overridable color tokens (background, surface, text, secondary text, border, accent, success, danger). Overrides sit on top of the current theme and are <strong>kept when you switch themes</strong>; <em>↺ Reset to defaults</em> restores them.",
-            "language": "<strong>Language</strong> — <strong>only two</strong>: <code>繁體中文</code> and <code>English</code>. Until you pick one, Navide follows the system language. This is a user-level preference and applies to every workspace.",
+            "language": "<strong>Language</strong> — <strong>three languages</strong>: <code>繁體中文</code>, <code>English</code>, and <code>日本語</code>. Until you pick one, Navide follows the system language. This is a user-level preference and applies to every workspace.",
             "uiScale": "<strong>Interface Scale</strong> — the first row of the <strong>Appearance ▸ Other</strong> block, and a <strong>dropdown</strong> rather than a slider: six steps (80%, 90%, 100%, 110%, 125%, 150%; 100% by default), on <kbd class=\"syh-kbd\">⇧⌘=</kbd> / <kbd class=\"syh-kbd\">⇧⌘-</kbd> / <kbd class=\"syh-kbd\">⇧⌘0</kbd>. It drives Electron's page zoom rather than a CSS variable, so text, icons, borders and spacing all move together, and the main process applies it to <strong>every window</strong>, plugin windows included. It is a <strong>separate axis</strong> from pane font size: <kbd class=\"syh-kbd\">⌘=</kbd> / <kbd class=\"syh-kbd\">⌘-</kbd> / <kbd class=\"syh-kbd\">⌘0</kbd> change only the terminal <strong>content</strong> font size (one value shared by every CLI pane in the window), while Interface Scale changes the shell around it — and the two <strong>multiply</strong>, the way a browser's page zoom multiplies with a site's own font size.",
             "restore": "<strong>Restore Windows</strong> — reopen the workspace windows that were open when you last quit."
           },
@@ -1596,7 +1624,7 @@
             "text": "The notification toggles do exist — they are simply not on Appearance but on the <strong>Notifications tab</strong>, three of them: <em>System notifications</em> (a desktop notification when a CLI finishes its turn or needs your input while Navide is in the background; the Dock badge keeps counting either way), <em>Notification sound</em> (a short chime on turn completion and a double ping while a CLI waits for you), and <em>Notification permission</em> — macOS does not report the real authorization to Navide, so this one can only send a test notification for you to confirm it appears; if it does not, allow Navide under System Settings → Notifications. That last row only appears on platforms where it applies."
           },
           "h3": "Status badges",
-          "p1": "<strong>Rename and recolor</strong> each of the nine pane states. The Chinese and English names are filled in separately (24 characters each; leave one blank to fall back to the built-in translation). Once changed, the pane badges, the sidebar, the meeting bar and the resource panel all follow. <strong>The setting lives on your account, not with the project.</strong>",
+          "p1": "<strong>Rename and recolor</strong> each of the nine pane states. The Chinese, English, and Japanese names are filled in separately (24 characters each; leave one blank to fall back to the built-in translation). Once changed, the pane badges, the sidebar, the meeting bar and the resource panel all follow. <strong>The setting lives on your account, not with the project.</strong>",
           "statusTable": {
             "state": "State",
             "when": "When a pane is in it",
@@ -1641,7 +1669,7 @@
             "title": "The shared root",
             "text": "Skills created by Navide always live in <code>~/.agents/skills</code>. This page <strong>never moves or rewrites</strong> the skills inside a CLI's own folder — those are merely reflected so you can see them, and can be routed to other CLIs. (The one explicit exception is <em>Move into shared library</em>, which moves the files and leaves a symlink behind, and can be undone.)"
           },
-          "p2": "The page has two views, <strong>Browse</strong> (cards) and <strong>Route</strong> (the routing matrix). The matrix has the 14 CLIs across the top and the skills down the side, each cell in one of four states, and every row carries <em>All</em> / <em>None</em> batch buttons:",
+          "p2": "The page has two views, <strong>Browse</strong> (cards) and <strong>Route</strong> (the routing matrix). The matrix has the 15 CLIs across the top and the skills down the side, each cell in one of four states, and every row carries <em>All</em> / <em>None</em> batch buttons:",
           "matrixTable": {
             "cell": "Cell",
             "meaning": "Means",
@@ -1661,7 +1689,7 @@
             "none": {
               "cell": "— no skills mechanism",
               "meaning": "That CLI has no notion of skills at all, so there is nothing to connect to.",
-              "who": "3: aider, kilo, droid"
+              "who": "4: aider, droid, kilo, mcode"
             },
             "pending": {
               "cell": "· supported, not wired yet",
@@ -1670,6 +1698,7 @@
             }
           },
           "p3": "Clicking a skill opens a drawer. Skills Navide created itself are fully editable: <em>Description</em>, <em>User invocable</em> (lets you call it directly), <em>Model invocation</em> (lets the model pick it), <em>Instructions (Markdown)</em>, and <em>Advanced agent fields</em> (allowed/disallowed tools, model, effort, context). Attachments are read-only; press <em>Open folder</em> to manage them. Known fields are editable and any other frontmatter is preserved verbatim; deletion is <em>Move to Trash</em>. If a CLI has a skill of its own under the same name, it is labelled <em>Native skill wins</em> — its own copy takes precedence.",
+          "liveRefresh": "The page <strong>refreshes itself</strong>: when an agent adds, installs or re-routes a skill over MCP, the list and the cards follow immediately — no need to close and reopen it. An <strong>unsaved draft of yours is never overwritten</strong>; a genuine collision raises the conflict prompt and you choose which version to keep.",
           "h2": "Prompts — the prompt skill library",
           "p4": "This is <strong>a different thing</strong> from Skills above. A prompt skill is a whole reusable instruction, cast by the <code>∞</code> button in the pane title bar. <strong>One skill is one complete prompt — picking a skill \"replaces\" the prompt rather than appending to another one.</strong>",
           "prompts": {
@@ -1688,14 +1717,14 @@
             "notCreated": "A file that does not exist yet is marked <em>Not created</em> — saving creates it, along with any missing parent directories.",
             "reload": "If another program changes the file while you are editing, it stops and asks you to <em>Reload from disk (discards your draft)</em> first, rather than overwriting your work or theirs."
           },
-          "p6": "The <strong>CLI coverage</strong> block at the bottom sorts the 14 CLIs into three groups:",
+          "p6": "The <strong>CLI coverage</strong> block at the bottom sorts the 15 CLIs into three groups:",
           "coverageTable": {
             "category": "Category",
             "meaning": "Means"
           },
           "memoryCoverage": {
             "mapped": {
-              "value": "Navide knows where this CLI keeps its instructions. 13 of them are in this group."
+              "value": "Navide knows where this CLI keeps its instructions. 14 of them are in this group."
             },
             "configured": {
               "value": "Only aider. It has no file name of its own — it reads whatever the read: field in .aider.conf.yml names, so whatever you put there is what is listed here (up to 20). CONVENTIONS.md is only a name suggested by the documentation; the program itself does not know it."
@@ -1770,7 +1799,7 @@
           "h4": "Extensions",
           "p6": "Below the policy block sits the plugin inventory, in <strong>two parts</strong>: <strong>Bundled</strong> (packages shipped with the app, such as Bundled Git, which can be disabled and then <em>Restore</em>d) and <strong>Installed</strong> (ones you installed yourself, listing their sensitive capabilities and dependencies, with <em>Remove</em>). Every row in both parts carries an extra line with its <em>Manifest Permissions</em> and <em>Package-version Grant</em>, spelling out what this version was actually granted; with no matching grant it says so. <strong>Searching the registry and installing new packages is now its own tab, Marketplace</strong> — not here.",
           "p7": "Installing takes <strong>two confirmations</strong>, and nothing is written to disk before them: first \"trust the publisher\" — the screen says plainly that <em>a valid signature only proves the package was not tampered with, not that you are willing to run this publisher's code</em>; then \"confirm the plugin's permissions\", which lists the sensitive capabilities it asks for and warns specifically when it ships a native backend executable.",
-          "mirror": "<strong>The download mirror</strong>: every release's files are published twice, on the GitHub Release and on <code>dl.navide.dev</code> — the same bytes, with sha256 sums to check them against. When a check or a download hits a <strong>network-shaped failure</strong> (unreachable host, timeout, 5xx/429), the app switches the feed to the mirror and tries again, and <strong>stays on the mirror for the rest of the session</strong>. <strong>A 404 or a signature/checksum error is never retried on the mirror</strong> — it carries the same files, so it would fail the same way, and reporting the failure as it is helps more than hiding it.",
+          "mirror": "<strong>The download mirror</strong>: every release's files are published twice, on the GitHub Release and on <code>dl.navide.dev</code> — the same bytes, with sha256 sums to check them against. <strong>The mirror is the default update source</strong>: the app points its feed at <code>dl.navide.dev</code> on startup, and GitHub is the fallback. It falls back only on a <strong>network-shaped failure</strong> (unreachable host, timeout, 5xx/429), and once it has, it <strong>stays on GitHub for the rest of the session</strong> — only a restart goes back to the mirror. <strong>A 404 or a signature/checksum error never triggers the fallback</strong> — both hosts carry the same files, so it would fail the same way, and reporting the failure as it is helps more than hiding it.",
           "policyIntro": "The <strong>execution policy</strong> decides what a plugin's backend may execute. It is <strong>not a tab of its own</strong>: it is the block at the top of the Extensions page, with its own scope badge (per user and per workspace) and policy file path. The top of it shows the <em>effective policy</em> — its source, its mode, and its status: <em>active</em>, <em>stale</em>, <em>unavailable</em> or <em>corrupt</em>.",
           "policy": {
             "hostDefault": "<strong>Host default</strong> — the built-in least-privilege baseline, marked <strong>read-only</strong>. It stays usable even if the user policy store is gone entirely, so there is always a way back.",
@@ -1800,6 +1829,7 @@
           "p4": "The server address is <strong>hard-coded</strong>; there is no field for it in settings, and the account window only shows it as a read-only <em>Server</em> row. There are six link states: <code>Not signed in</code>, <code>Connecting…</code>, <code>Waiting for Keychain</code>, <code>Connected</code>, <code>Cannot reach the server</code> and <code>Access token rejected</code>. The <em>Your network</em> block has a <em>Turn off</em> / <em>Turn on</em> switch to go offline temporarily, keeping the account and the settings.",
           "h2": "Pairing two devices",
           "p5": "Once both machines are signed in to <strong>the same account</strong>, the other appears in the <em>Your network</em> list (with Online/Offline, when it was last seen, and how many panes it has open).",
+          "roster": "The list is <strong>three levels deep</strong>: by <strong>device</strong> first (each heading folds; anything that is not this machine starts folded), then by <strong>state</strong> into <em>Running</em>, <em>Idle</em> and <em>Not opened</em> (an empty state is skipped entirely, and <em>Not opened</em> starts folded), and inside each state the <strong>workspace</strong> name is a caption rule between runs of panes. Three count tiles sit on top: click one to see only that state. The search box beside them matches pane name, workspace, CLI type and device name, and while you search <strong>the grouping is dropped</strong> in favour of a flat list of hits. Each row shows how long ago the pane started, with the exact timestamp on hover. Fold state is remembered on this machine.",
           "pairing": {
             "step1": "Press <strong>Pair</strong> on that device's row.",
             "step2": "<strong>The same six digits</strong> appear on both screens, along with the other device's fingerprint.",
@@ -2162,7 +2192,7 @@
               },
               "apply": {
                 "label": "Apply & Stage",
-                "text": "Only clickable once every block is settled; it writes the result back and stages the file in one go. This button is in English in both languages — that is what the product prints."
+                "text": "Only clickable once every block is settled; it writes the result back and stages the file in one go. This button is in English regardless of the selected interface language — that is what the product prints."
               }
             }
           },
@@ -2830,7 +2860,7 @@
             "envName": "CLAUDE_CONFIG_DIR"
           }
         },
-        "intro": "How the supported CLI agents are installed, tuned and given multiple accounts, and where quota and cost figures come from. Settings ▸ CLI Agents shows agent cards; Manage opens an agent's Overview, Launch, Permissions, Push, and Install tabs. Launch decides which command line a newly spawned pane starts on. Terms (workspace, pane, group) follow the \"Workspace & Panes\" topic.",
+        "intro": "How the supported CLI agents are installed, tuned and given multiple accounts, and where quota and cost figures come from. Settings ▸ CLI Agents shows agent cards; Manage opens Overview, Launch, Permissions, Push, and Install sections together on one scrolling page. Launch decides which command line a newly spawned pane starts on. Terms (workspace, pane, group) follow the \"Workspace & Panes\" topic.",
         "s1": {
           "title": "Supported CLIs",
           "p1": "The table lists the built-in CLI agents. The order below is the default order of the + menu and of <kbd class=\"cah-kbd\">Ctrl</kbd>+<kbd class=\"cah-kbd\">1</kbd>…<kbd class=\"cah-kbd\">9</kbd> (drag to reorder in Settings, see chapter 4).",
@@ -2843,9 +2873,9 @@
             "signIn": "Sign-in command",
             "signInInside": "Inside the CLI"
           },
-          "note": "\"Quota\" = Navide can read the remaining usage (chapter 6). \"Multi-account\" = several sign-ins can be kept in Settings and switched (chapter 5). The three CLIs without a permission-bypass flag (Grok CLI, OpenCode, Pi) simply have no such flag — it is not something Navide left out. \"Sign-in command\" = what Navide actually runs when you press Sign in under Settings ▸ Accounts; the CLIs marked \"Inside the CLI\" declare no separate sign-in command, so the button launches them as usual and signing in happens on their own screen.",
+          "note": "\"Quota\" = Navide can read the remaining usage (chapter 6). \"Multi-account\" = several sign-ins can be kept in Settings and switched (chapter 5). The four CLIs without a permission-bypass flag (Grok CLI, OpenCode, Pi, MiniMax Code) simply have no such flag — it is not something Navide left out. \"Sign-in command\" = what Navide actually runs when you press Sign in under Settings ▸ Accounts; the CLIs marked \"Inside the CLI\" declare no separate sign-in command, so the button launches them as usual and signing in happens on their own screen.",
           "callout": {
-            "title": "The 15th entry is not an agent",
+            "title": "The 16th entry is not an agent",
             "text": "<strong>>_ Open Terminal</strong> at the bottom of the + menu is a plain shell: no agent is attached and no role is injected. It sits deliberately outside the list so the CLI list's scrolling never hides it."
           }
         },
@@ -2927,7 +2957,7 @@
             "global": "A <strong>global switch</strong> at the top: <em>Bypass permission prompts by default (YOLO mode)</em>.",
             "perVendor": "One row per vendor below it, each showing the vendor's actual flag (for example <code>--yolo</code>) with a three-way dropdown on the right: <strong>Follow global / Always bypass / Never bypass</strong>."
           },
-          "p4": "The three vendors without a flag (Grok CLI / OpenCode / Pi) are not in this list; a note at the bottom of the page names them and says there is nothing to switch.",
+          "p4": "The four vendors without a flag (Grok CLI / OpenCode / Pi / MiniMax Code) are not in this list; a note at the bottom of the page names them and says there is nothing to switch.",
           "callout1": {
             "title": "Changes do not reach running panes",
             "text": "The flag is written into a pane's command line <strong>the moment it starts</strong>. Changes here only affect panes spawned afterwards; a running pane keeps what it started with until you rebuild or restore it."
@@ -3008,7 +3038,7 @@
             }
           },
           "chipsLegend": "The colours are consistent: green = normal or on, amber = a deviation worth noticing, red = unusable or switched off, grey = a neutral fact.",
-          "launchIntro": "This part decides which command line a <strong>newly spawned</strong> pane of each CLI starts on. It is an accordion and <strong>only one vendor opens at a time</strong> — fourteen environment-variable tables laid out flat would be fourteen tables down one page. Everything here is per CLI and per machine, not per project, and applies to every window. A collapsed row summarises in one line (model, effort, custom command, how many env) what has been changed.",
+          "launchIntro": "This part decides which command line a <strong>newly spawned</strong> pane of each CLI starts on. It is an accordion and <strong>only one vendor opens at a time</strong> — fifteen environment-variable tables laid out flat would be fifteen tables down one page. Everything here is per CLI and per machine, not per project, and applies to every window. A collapsed row summarises in one line (model, effort, custom command, how many env) what has been changed.",
           "launchTable": {
             "field": "Field",
             "detail": "What it does"
@@ -3054,8 +3084,8 @@
               "vendors": "Codex, Cursor CLI, Grok CLI, Kilo Code, Kimi Code, OpenCode, Qwen Code"
             },
             "neither": {
-              "group": "Neither (3)",
-              "vendors": "Aider, Droid, and Terminal (which is not an agent)"
+              "group": "Neither (4)",
+              "vendors": "Aider, Droid, MiniMax Code, and Terminal (which is not an agent)"
             }
           },
           "spawnNote": "The seven \"Model only\" CLIs are not short of a reasoning knob; the knob just is not a launch argument. For some it is baked into the model id (a trailing <code>-high</code>, say), for others it lives in a config file or behind an in-session command. A value that breaks the rules (a model id containing a space, or starting with \"-\") is explained on the spot and disables the submit button. And if that CLI has a custom launch command, both fields are disabled with the reason spelled out — that line runs as written and Navide adds no model to it.",
@@ -3067,7 +3097,7 @@
           "title": "Accounts",
           "p1": "Settings ▸ <strong>Accounts</strong> holds two unrelated things: Git accounts in the top half, CLI accounts in the bottom half.",
           "h1": "CLI accounts",
-          "p2": "All 14 vendors get a heading, but only <strong>5 support multiple accounts</strong>: Claude Code, Codex, Kimi Code, Grok CLI, Kilo Code. The rest print one line — \"This agent does not support multiple accounts.\" — with no add button at all.",
+          "p2": "All 15 vendors get a heading, but only <strong>5 support multiple accounts</strong>: Claude Code, Codex, Kimi Code, Grok CLI, Kilo Code. The rest print one line — \"This agent does not support multiple accounts.\" — with no add button at all.",
           "p3": "Under each vendor the first card is always the built-in <strong>Default</strong> (your original login credentials); the accounts you added follow. A card shows the signed-in email, the <em>Default</em> tag and that account's remaining quota.",
           "table": {
             "action": "Action",
@@ -3125,7 +3155,7 @@
           "title": "Quota display",
           "p1": "The quota badge lives in the <strong>CLI pane's title bar</strong> (not the status bar) and shows the remaining percentage; hover to expand the details — each metering window, reset times, and the account switcher. The account cards in Settings ▸ Accounts read the same data.",
           "h1": "Which vendors are covered",
-          "p2": "<strong>11</strong>: Claude Code, Codex, Kimi Code, Grok CLI, Antigravity CLI, OpenCode, Qwen Code, Kilo Code, Pi, Copilot CLI, Cursor CLI. Aider, Muse Code and Droid have no readable quota source.",
+          "p2": "<strong>11</strong>: Claude Code, Codex, Kimi Code, Grok CLI, Antigravity CLI, OpenCode, Qwen Code, Kilo Code, Pi, Copilot CLI, Cursor CLI. Aider, Muse Code, Droid and MiniMax Code have no readable quota source.",
           "h2": "Where the data comes from",
           "list": {
             "claude": "<strong>Claude Code is special</strong>: Navide never touches its credentials; it runs <code>claude -p /usage</code> and reads the quota report the CLI prints itself. Each read therefore starts a full Claude Code and takes a few seconds.",
@@ -3257,6 +3287,38 @@
               "fix": "This is deliberate, not a fault. If you need those arguments, go back to the vendor’s default command and set them through the default model and effort fields instead."
             }
           }
+        },
+        "s9": {
+          "title": "CLI risk observations",
+          "p1": "A small pill starting with <code>▲</code> can appear in a CLI pane's title bar, after the login-expired and usage-limit badges. <strong>It is invisible by default</strong> — it shows only when Navide has observed one of the three situations below, and only the most severe finding at a time (red before yellow). This is not a settings feature: <strong>there is no switch for it anywhere in Settings</strong>; you only ever meet it on the pane:",
+          "table": {
+            "signal": "What was observed",
+            "color": "Colour",
+            "when": "When it appears"
+          },
+          "signals": {
+            "network": {
+              "when": "The pane's process tree (the CLI itself, its MCP servers and tools) holds an <strong>established TCP connection</strong> to an IP outside that vendor's declared host set. The set is built by resolving the vendor's declared hostnames (cached for 5 minutes) plus anything you have allowed. <strong>Only Claude Code and Codex declare hosts today</strong>; every other vendor reads \"Unsupported\". Any proxy or base-URL environment variable disables the comparison outright. TCP only — no UDP/QUIC — and macOS and Linux only; Windows is unsupported."
+            },
+            "disk": {
+              "when": "A file appeared in that vendor's data directory (<code>~/.claude</code>, <code>~/.codex</code> and so on) that is <strong>larger than 100 MiB</strong> and whose first 64 KiB Navide <strong>cannot recognise</strong> (SQLite, archives, PDF, images, GGUF and plain text are all recognised; an extension alone never counts). Only files first seen within 24 hours, and only after a first baseline scan exists — anything already there is never flagged. Aider declares no data directory, so it is not scanned."
+            },
+            "diskAgain": {
+              "when": "A path that was flagged before was <strong>confirmed absent</strong> and then <strong>observed again</strong> in the same 100 MiB size class. Once red, it stays red."
+            }
+          },
+          "p2": "Clicking the pill opens a \"CLI observations\" dialog listing <strong>every</strong> finding for the pane with its evidence (vendor, endpoint or path, connection count or size, each observation time, observation status, last successful sample), followed by a scope line and a caveat. Network findings are scoped to <strong>this pane's process tree</strong>; file findings apply to <strong>every pane of that vendor</strong>. Each finding offers:",
+          "actions": {
+            "ignore": "Dismisses this finding; it will not be shown again.",
+            "ignoreIp": "Network only — ignores every port of this IP for this vendor.",
+            "allowIp": "Adds the IP to that vendor's allow list so it is never flagged again; the decision is stored in this machine's settings and survives a restart.",
+            "reveal": "File only — shows the file in Finder / the file manager."
+          },
+          "p3": "Sampling <strong>rides on the existing resource poll</strong> — there is no separate timer: every 30 seconds while idle, every 2 seconds while the resource window is open. File sweeps are further limited to once per vendor every 5 minutes, at most 100,000 entries and 20 seconds each, and symlinks are always skipped. While the backend is disconnected the pill keeps the last evidence it received and marks it stale.",
+          "callout": {
+            "title": "It observes; it never acts",
+            "text": "Navide <strong>never blocks a connection, pauses a CLI or deletes a file on its own</strong> — the pill means \"something is worth a look\", and every line in the evidence dialog says what it can and cannot prove (an observation time is not a creation time; the destination hostname and the traffic content are unknown). Conversely, <strong>no pill is not an assurance of safety</strong>: it covers only the situations, vendors and platforms listed above."
+          }
         }
       },
       "messaging": {
@@ -3285,7 +3347,7 @@
               "ack": "<strong>A pure acknowledgement</strong> — \"got it\", \"done\", anything the other side need not act on. It is written to the message log for you to read (badged \"ack only\") but is <strong>never typed into the other agent's input box</strong>, so it neither interrupts nor wakes it — which also means anything the other side has to read or act on cannot go this way.",
               "pending": "<strong>Check who is waiting on me</strong> — a busy pane cannot be typed into, so the agent can ask the question itself: what is queued waiting for it to go idle, and whether anything it sent is stuck."
             },
-            "note": "<strong>Ten</strong> of the fourteen CLIs are wired to this tool set (see the table in the next section). The ones that are not — Aider, Droid, Muse Code, Pi — use the output protocol below instead."
+            "note": "<strong>Ten</strong> of the fifteen CLIs are wired to this tool set (see the table in the next section). The ones that are not — Aider, Droid, Muse Code, Pi — use the output protocol below instead; MiniMax Code has neither route yet and can only receive."
           },
           "proto": {
             "title": "Output protocol",
@@ -3297,16 +3359,17 @@
         },
         "s3": {
           "title": "Which CLIs can send",
-          "p1": "<strong>Every CLI pane can receive messages</strong> — Navide types the text straight into the terminal, which has nothing to do with the CLI. <strong>All fourteen can also send</strong>; only the route available to them differs:",
+          "p1": "<strong>Every CLI pane can receive messages</strong> — Navide types the text straight into the terminal, which has nothing to do with the CLI. <strong>Fourteen of the fifteen can also send</strong>; only the route available to them differs:",
           "table": {
             "cli": "CLI",
             "send": "Can it send?"
           },
           "sendModes": {
             "both": "MCP tools + output protocol",
-            "protocolOnly": "Output protocol only"
+            "protocolOnly": "Output protocol only",
+          "none": "Neither (receive only)"
           },
-          "note1": "<strong>All fourteen can send</strong>; only the route differs. The output protocol works everywhere — Navide can tell when each agent has finished saying something, and what it said. MCP tools additionally need the CLI to offer a way in (a launch flag, one environment variable carrying the whole config document, or a per-pane mirror of the config directory); Aider, Droid, Muse Code and Pi offer none, so they use the output protocol only.",
+          "note1": "<strong>Fourteen of the fifteen can send</strong>; only the route differs. The output protocol needs Navide to read that agent's own log — the fourteen vendors that ship a log reader are all covered, so Navide can tell when the agent has finished saying something, and what it said. MCP tools additionally need the CLI to offer a way in (a launch flag, one environment variable carrying the whole config document, or a per-pane mirror of the config directory); Aider, Droid, Muse Code and Pi offer none, so they use the output protocol only. <strong>MiniMax Code has neither</strong>: it keeps its conversations in SQLite and Navide has no reader for that shape yet, so it can receive messages but cannot send.",
           "note2": "Two caveats in practice: <strong>Antigravity</strong> cannot send on the turn where the agent asks you a question (that turn carries no reply text) — ordinary answering turns are fine; and <strong>Qwen, Pi and Kimi</strong> have no explicit \"turn finished\" signal, so Navide infers it from 8 seconds of silence and the send goes out a little later."
         },
         "s4": {
@@ -3489,7 +3552,7 @@
           "title": "Known limits",
           "list": {
             "terminalPane": "<strong>A plain terminal pane cannot send or receive</strong> — only CLI agent panes have a name.",
-            "receiveOnly": "<strong>Four CLIs have no MCP tools</strong> — all fourteen can send, but Aider, Droid, Muse Code and Pi can only use the bare-line output protocol; see \"Which CLIs can send\" above.",
+            "receiveOnly": "<strong>Five CLIs have no MCP tools</strong> — Aider, Droid, Muse Code and Pi can only use the bare-line output protocol, and <strong>MiniMax Code has not even that</strong>: it can receive messages but cannot send. See \"Which CLIs can send\" above.",
             "detached": "<strong>After a pane is detached to its own window, or the window reloads</strong>, the MCP tool route only comes back once the pane is reopened; the output protocol is unaffected.",
             "queueFull": "<strong>When the target's queue is full (10 at most) the message is dropped</strong> — but no longer silently: the panel says \"The target already has 10 messages waiting\", the failure is typed back into the sending pane as a notice, and the sending agent can equally look up what became of its own message. Delivery is still asynchronous, so nothing is known <strong>at the instant of sending</strong>.",
             "noPermission": "<strong>There is no permission prompt</strong> — cross-workspace messaging raises no confirmation dialog, only a notice on arrival. That is a deliberate trade-off.",
@@ -3625,7 +3688,7 @@
             "sub3": "claude · tester",
             "branch": "main*",
             "backend": "backend · 127.0.0.1:8765",
-            "resource": "▤ 3 · 12% · 1.2 GB",
+            "resource": "▤ 2/3 · 12% · 1.2 GB",
             "version": "📢 v0.2.0",
             "clock": "09/14 15:12"
           }
@@ -3811,8 +3874,8 @@
           "h2": "The three levels of the Agents tab",
           "p1": "Top to bottom: <strong>workspace row → group row → pane row</strong>.",
           "rows": {
-            "workspace": "<strong>Workspace row</strong>: collapse arrow, project name and path, pane count, and on the right <code>↻</code> (rebuild all), History and <code>＋</code>. The context menu has <em>Open this folder in Finder</em>, <em>Copy path</em>, moving it into a workspace group, <em>Close workspace</em> (drops the row and leaves its CLIs running for a later reopen) and <em>Close workspace and its panes</em> (ends them).",
-            "group": "<strong>Group row</strong>: sticks to the top while scrolling and shows a status dot, the group name, the member count, and a <code>＋</code> that opens an agent inside that group. Member rows carry a neutral-colored rail along their left edge to show they belong to one group.",
+            "workspace": "<strong>Workspace row</strong>: collapse arrow, fold button, project name and path, pane count, and on the right <code>↻</code> (rebuild all), History, <code>⋯</code> and <code>＋</code>. The context menu has <em>Open this folder in Finder</em>, <em>Copy path</em>, <em>Reclaim this project's CLIs</em>, moving it into a workspace group, <em>Close workspace</em> (drops the row and leaves its CLIs running for a later reopen) and <em>Close workspace and its panes</em> (ends them). <code>⋯</code> opens the full version of the same set (rebuild all panes, History, Finder, copy path, rename project, open in its own window, reclaim, close); it <strong>flips upward near the bottom of the window</strong>, and when the menu itself is long, <strong>scrolling inside it no longer dismisses it</strong> — only scrolling elsewhere does.",
+            "group": "<strong>Group row</strong>: sticks to the top while scrolling and shows a status dot, the group name, the member count, a fold button that only appears on hover, and a <code>＋</code> that opens an agent inside that group. Member rows carry a neutral-colored rail along their left edge to show they belong to one group.",
             "pane": "<strong>Pane row</strong>: name, status, the Docked label and so on."
           },
           "callout": {
@@ -3821,13 +3884,19 @@
           },
           "h3": "Lineage indentation",
           "p2": "Sub-panes opened by an agent or by MCP hang under their parent with 13px of indentation per level, and the parent row carries a <code>▾</code> / <code>▸</code> that collapses the whole subtree. <strong>There is no separate label</strong> — the indentation itself is what says \"someone else opened this, you did not\".",
+          "folds": {
+            "pane": "<strong>One parent pane</strong> — the <code>\u25be</code> / <code>\u25b8</code> in front of the parent row; it folds that one subtree.",
+            "group": "<strong>A whole run group</strong> — the fold button at the right of the group row (<strong>it only appears while the pointer is on that row</strong>) collapses or expands every row in that group that has children. A group with nothing foldable has no button at all.",
+            "workspace": "<strong>A whole workspace</strong> — the same button on the workspace row, covering every group and subtree in that project. With nothing to fold it is disabled rather than hidden."
+          },
+          "foldNote": "<strong>Alt/Option-clicking the row\u2019s expand caret</strong> does the same thing as either fold button \u2014 the tooltip says so: Alt+click: collapse everything inside. Fold state is stored <strong>per pane, with the project</strong>, so it survives a restart.",
           "h4": "Multi-select and batch dragging",
           "multiselect": {
             "cmdClick": "<kbd class=\"wph-kbd\">⌘</kbd> click: add a single row to the selection.",
             "shiftClick": "<kbd class=\"wph-kbd\">⇧</kbd> click: select a whole range (in the order shown on screen, not the internal order).",
             "batchMenu": "Right-clicking with several rows selected turns the menu into its batch form: <em>Interrupt selected</em>, <em>Rebuild selected</em>, <em>Minimize selected</em>, <em>Restore selected</em>, <em>Reclaim selected</em> (shows the eligible count), <em>Mute selected notifications</em> (or unmute when all selected panes are muted), and <em>Remove selected</em>. Reclaim keeps panes available to resume and skips protected panes."
           },
-          "p3": "Dragging any one of the selected panes takes <strong>the whole batch</strong> with it. Where you drop decides what happens:",
+          "p3": "Dragging any one of the selected panes takes <strong>the whole batch</strong> with it. If the row you grab is a <strong>folded parent</strong>, its hidden children come along too — only the row you actually grabbed expands into its subtree, so another folded parent in the same selection still moves alone. Where you drop decides what happens:",
           "dropTable": {
             "target": "Drop on",
             "result": "Result"
@@ -4033,9 +4102,9 @@
           "note4": "One workspace can hold two panes with the same name, and a name alone then cannot say which one is meant, so the tools above refuse outright with <code>ambiguous-target</code> instead of picking one. To name a specific pane, pass the <code>pane_id</code> returned by <code>cli_list_targets</code> to <code>cli_send</code>, <code>cli_send_and_wait</code>, <code>cli_read_log</code>, <code>cli_get_status</code> or <code>cli_wait_idle</code>, and leave the address argument out. Names are more readable day to day; a pane reopened with a different CLI gets a new id, and on <code>unknown-pane-id</code> you simply look it up again. Panes on another device have no local id and can only be addressed by name.",
           "note5": "Giving <code>cli_send</code> the address <code>group</code> does not look for a pane called group: it broadcasts to the other panes <strong>in my own tab group</strong> (same workspace). That differs from the bare-line protocol's <code>all</code>: <code>all</code> is the whole window, regardless of grouping. Panes in no group share one implicit group, so they can reach each other rather than nobody. The reply's shape differs too: each recipient in <code>recipients</code> has its own <code>msg_key</code> to query separately with <code>cli_check_message</code>, and an empty <code>recipients</code> means nobody else is in your group, not a failure. The cost is the same as <code>all</code>: a pane actually named group can no longer be addressed by name.",
           "h4": "Which CLIs are wired up",
-          "p2": "<strong>Ten</strong> of the fourteen so far: Claude Code, Codex, Copilot CLI, Qwen Code, OpenCode, Kilo Code, Kimi Code, Grok CLI, Antigravity CLI, Cursor CLI. How they are wired depends on the interface each CLI offers — a launch flag (Claude Code, Codex, Copilot, Qwen), one environment variable carrying the whole config document (OpenCode, Kilo), or a per-pane mirror of the config directory (Kimi, Grok, Antigravity). None of the three <strong>touches your own MCP config file</strong>.",
+          "p2": "<strong>Ten</strong> of the fifteen so far: Claude Code, Codex, Copilot CLI, Qwen Code, OpenCode, Kilo Code, Kimi Code, Grok CLI, Antigravity CLI, Cursor CLI. How they are wired depends on the interface each CLI offers — a launch flag (Claude Code, Codex, Copilot, Qwen), one environment variable carrying the whole config document (OpenCode, Kilo), or a per-pane mirror of the config directory (Kimi, Grok, Antigravity). None of the three <strong>touches your own MCP config file</strong>.",
           "note6": "<strong>Cursor is the one exception</strong>: it only reads <code>.cursor/mcp.json</code> inside the workspace, so Navide merges its entry into that file and adds it to <code>.git/info/exclude</code>, leaving your git status clean.",
-          "note7": "Not yet wired are <strong>Aider, Muse Code and Pi</strong> (those three CLIs have no MCP interface) and <strong>Droid</strong> (Navide has not wired it yet). Those panes can still message other panes over the bare-line output protocol; they just have no MCP tools to call.",
+          "note7": "Not yet wired are <strong>Aider, Muse Code and Pi</strong> (those three CLIs have no MCP interface) and <strong>Droid and MiniMax Code</strong> (Navide has not wired them, and whether their CLIs expose a way in has not been established). Most of those panes can still message other panes over the bare-line output protocol; they just have no MCP tools to call. MiniMax Code is the exception: it has no output protocol either, so it can only receive.",
           "note8": "The wiring happens <strong>the moment the pane starts</strong>. So after an update, panes already open still hold the old tool list — close and reopen one to get the new one.",
           "h5": "The Preview panel",
           "previewTools": {
@@ -4121,7 +4190,7 @@
           "troubleshooting": {
             "noTools": {
               "symptom": "The agent says it has no plan or messaging tools",
-              "detail": "That pane was not wired when it opened (it predates the update), or it runs one of the four CLIs not yet wired to MCP (Aider / Droid / Muse Code / Pi). For the former, close and reopen it; for the latter, use the bare-line output protocol to message instead."
+              "detail": "That pane was not wired when it opened (it predates the update), or it runs one of the five CLIs not yet wired to MCP (Aider / Droid / Muse Code / Pi / MiniMax Code). For the former, close and reopen it; for the latter, use the bare-line output protocol to message instead — MiniMax Code has not even that, and can only receive."
             },
             "serverUnused": {
               "symptom": "A server was added in Settings → MCP but the agent cannot use it",
@@ -4505,7 +4574,7 @@
               "sample": "dot"
             },
             "resources": {
-              "where": "Left half of the status bar, shown in the form <code>▤ 3</code>",
+              "where": "Left half of the status bar, shown in the form <code>▤ 2/3</code> (live panes / all panes)",
               "what": "How many panes are running, plus CPU and memory. Click it for per-pane usage, where you can reclaim or jump to a pane directly.",
               "name": "<code>CLI resources</code>"
             },
@@ -5263,15 +5332,15 @@
         },
         "s2": {
           "title": "Where downloads come from: GitHub and dl.navide.dev",
-          "p1": "The same file is served from two places: GitHub Releases, and Navide's own download mirror at <code>dl.navide.dev</code>. They are not primary and backup — they are two outlets for the same bytes.",
+          "p1": "The same file is served from two places: Navide's own download mirror at <code>dl.navide.dev</code>, and GitHub Releases. <strong>The mirror is the primary source</strong> and GitHub is the fallback; both carry the same bytes, not two different builds.",
           "list": {
             "readme": "<strong>The README's download list</strong> carries a <em>mirror</em> link beside every line, pointing at the same file on the mirror. Whichever side is slow for you, take the other.",
             "identical": "The two are <strong>byte for byte identical</strong>. After writing the mirror, the release pipeline downloads every file back from <code>dl.navide.dev</code> and compares sha256 sums, failing the step on any mismatch — so the mirror is never stale and never half-uploaded.",
-            "website": "<strong>The website's</strong> download buttons probe the mirror first and link there when it answers, falling back to GitHub only when it does not."
+            "website": "<strong>The website</strong> and the <strong>README download lists</strong> both link to the mirror directly, with the GitHub link beside it."
           },
           "h1": "Which side in-app updates use",
-          "p2": "Updating still <strong>reads GitHub by default</strong>. It switches to the mirror only on a network-level failure — host not found, connection refused, timeout, a 5xx from the server — and once it has switched, it stays on the mirror for the rest of that run.",
-          "note": "<strong>A 404 or a checksum mismatch does not trigger the switch.</strong> The mirror holds the same file, so switching would fail the same way; reporting the error as-is is what makes the real problem visible."
+          "p2": "Updating <strong>reads the mirror by default</strong>: the app sets its update feed to <code>dl.navide.dev</code> at startup. It <strong>falls back to GitHub</strong> only on a network-level failure — host not found, connection refused, timeout, a 5xx or 429 from the server — and once it has fallen back it stays on GitHub for the rest of that run. There is no path back to the mirror; a restart begins from the mirror again.",
+          "note": "<strong>A 404 or a checksum mismatch does not trigger the fallback.</strong> Both hosts hold the same file, so switching would fail the same way; reporting the error as-is is what makes the real problem visible."
         },
         "s3": {
           "title": "Auto-update across platforms",
@@ -6380,6 +6449,11 @@
         "login-complete": "Signed in as {email}. Account saved.",
         "login-complete-no-email": "Sign-in complete. Account saved.",
         "new-account": "+ New account",
+        "new-account-scope": "Provider for the new account",
+        "global-login-title": "Sign in on the live credential?",
+        "global-login-body": "{agent} has no isolated sign-in. During sign-in its live credential is temporarily replaced by the new account; when the sign-in completes the current account ({current}) is restored, and the new account is used only when you switch to it. Running {agent} panes block this — close or finish them first.",
+        "global-login-confirm": "Sign in",
+        "global-login-cancel": "Cancel",
         "refresh-quota": "Refresh quota",
         "refreshing-quota": "Refreshing…",
         "refresh-quota-hint": "Re-read every CLI's remaining quota now, skipping the usual wait after a failed read. Claude is read by launching its CLI, so this can take a few seconds.",
@@ -7138,6 +7212,10 @@
     "status-empty": "This tab has no panes",
     "delete-tab": "Delete this tab",
     "add-group": "New run group",
+    "collapse-families": "Collapse all pane families in this tab",
+    "expand-families": "Expand all pane families in this tab",
+    "family-toggle-grid": "Family folding is available in Auto, Spotlight, and Fullscreen layouts",
+    "family-toggle-empty": "This tab has no pane families to fold",
     "move-to-group": "Move to another group",
     "close-all-panes": "Close all panes"
   },
@@ -7286,7 +7364,121 @@
     "empty": "No announcements yet",
     "load-more": "Load more ({count} left)",
     "mcp-tools-changed": "MCP tools may have changed",
-    "mcp-tools-changed-note": "A CLI agent reads Navide's MCP tool list once, when it starts. Anything still connected from the previous version ({from}) — a CLI pane, or an external MCP client — keeps the tools it saw then; reopen the pane or reconnect the client to pick up new ones."
+    "mcp-tools-changed-note": "A CLI agent reads Navide's MCP tool list once, when it starts. Anything still connected from the previous version ({from}) — a CLI pane, or an external MCP client — keeps the tools it saw then; reopen the pane or reconnect the client to pick up new ones.",
+    "quota": {
+      "status": {
+        "detected": "{agent}: {source} has run out of quota",
+        "awaiting-confirmation": "{agent}: switching to {target} needs your confirmation",
+        "waiting-safe": "{agent}: waiting for a safe moment to switch to {target}",
+        "switching": "{agent}: switching to {target}",
+        "settling": "{agent}: switched to {target}, verifying quota",
+        "ready": "{agent}: switched to {target}",
+        "partial": "{agent}: switched to {target}, some panes did not resume",
+        "notify-stopped": "{agent}: automatic switch stopped",
+        "unreconciled": "{agent}: an account switch was not reconciled"
+      },
+      "reason": {
+        "unsupported": "{agent} has no account switching yet.",
+        "manual-only": "{agent} can only be switched manually.",
+        "unverified-adapter": "{agent}'s account switching is not verified on this platform; switch manually.",
+        "no-resume": "{agent} cannot resume its conversation automatically. Switch manually to keep this window and open a new conversation.",
+        "no-candidate": "No account to switch to. Sign in to another account or wait for the reset.",
+        "auto_budget_exhausted": "Automatic switch limit reached. Switch manually or wait for the window to pass.",
+        "chained-exhaustion": "{target} ran out as well. Nothing else was tried.",
+        "pane-unowned": "A pane in this switch belongs to no open window.",
+        "pane-no-session": "A pane has no session to resume, so nothing was switched.",
+        "pane-not-resumable": "A pane cannot be resumed, so nothing was switched.",
+        "pane-refused": "A pane refused the switch, so nothing was switched.",
+        "pane-unsupported": "A pane cannot take part in a switch, so nothing was switched.",
+        "pane-input-pending": "A pane holds unsent input, so nothing was switched.",
+        "pane-permission-pending": "A pane is waiting on a permission prompt, so nothing was switched.",
+        "pane-resume-data-missing": "A pane could not name the session to resume, so nothing was switched.",
+        "pane-idle-unverified": "A pane's idle state could not be verified, so nothing was switched.",
+        "platform-unsupported": "{agent}'s account switching is not available on this platform.",
+        "identity-unknown": "The account behind the current sign-in could not be identified, so nothing was switched.",
+        "credential-override": "The panes take their credential from the environment; a switch would not reach them.",
+        "pane-scope-unknown": "A pane's provider scope is unknown, so nothing was switched.",
+        "credential-source-unknown": "Where {agent}'s credential comes from could not be determined (environment variable or provider scope), so nothing was switched.",
+        "live-drift": "The live credential belongs to another account and the target slot is not empty; reconcile before switching.",
+        "live-drift-unverified": "The live credential changed and its identity cannot be verified; nothing was switched. Switch manually to confirm which account is live.",
+        "audit-write-failed": "Credentials were switched but the audit record could not be written; automatic switching pauses until it can.",
+        "incident-closed": "The incident was closed before the switch completed.",
+        "interrupted-swap": "A credential swap was interrupted; which account is live is unknown. Pick the live one to reconcile.",
+        "unreconciled": "An earlier switch left the saved default and the live account out of step; reconcile before switching again.",
+        "identity-mismatch": "The account you picked does not match the credential that is live ({identity}).",
+        "persist-failed": "The default could not be saved again; the switch stays unreconciled.",
+        "prepare-timeout": "Not every pane answered in time, so nothing was switched.",
+        "wait-timeout": "Panes stayed busy for 30 minutes, so nothing was switched.",
+        "stale-state": "The account changed underneath the switch, so it was dropped.",
+        "new-pane-during-prepare": "A new pane opened during the switch, so it was dropped.",
+        "pane-became-busy": "A pane became busy during the switch, so it was dropped.",
+        "login-pending": "A sign-in is in progress; switch after it completes.",
+        "login-harvest-failed": "The current sign-in could not be saved, so nothing was switched.",
+        "target-signed-out": "{target} is not signed in.",
+        "target-expired": "{target}'s sign-in has expired.",
+        "target-login-pending": "{target} is still signing in.",
+        "swap-failed": "Switching to {target} failed; {source} is still active. Nothing else was tried.",
+        "default-persist-failed": "Credentials were switched but the default could not be saved; check Settings before continuing.",
+        "resume-failed": "Switched to {target}, but resuming failed. Panes keep their state; nothing was replayed.",
+        "target-exhausted": "{target} is out of quota too. Nothing else was tried.",
+        "quota-unconfirmed": "Switched to {target}, but no reading confirmed its quota within 120 s. Later readings only update this row.",
+        "manual-switch": "A manual switch took over.",
+        "policy-changed": "Automatic switching was turned off during the switch.",
+        "user-cancelled": "Cancelled.",
+        "quota-confirmed": "{target}'s quota was read and has headroom.",
+        "turn-complete": "{target} completed a turn after the switch; its quota was not read.",
+        "outgoing-recovered": "{source} recovered on its own; no switch was needed.",
+        "unattributed": "The signal could not be tied to an account, so nothing was switched.",
+        "usage-window-disagrees": "The account's own reading does not show the quota as spent, so nothing was switched.",
+        "no-declared-detector": "{agent} declares no exhaustion signal, so this text only informs.",
+        "text-did-not-match": "The text did not match {agent}'s declared exhaustion signal, so nothing was switched."
+      },
+      "cause": {
+        "quota-exhausted": "Quota exhausted",
+        "rate-limited": "Rate limited (temporary)",
+        "auth": "Sign-in problem",
+        "network": "Network error",
+        "context": "Context window full",
+        "payment": "Billing problem",
+        "low-quota-warning": "Quota running low",
+        "unknown": "Unclassified failure"
+      },
+      "tier": {
+        "fresh-headroom": "quota available",
+        "reset-expected": "reset expected, unverified",
+        "stale-headroom": "had quota at last reading",
+        "unknown": "no reading"
+      },
+      "excluded": {
+        "current": "current account",
+        "signed-out": "not signed in",
+        "expired": "sign-in expired",
+        "login-pending": "signing in",
+        "limit-not-reset": "a limit has not reset",
+        "exhausted": "a limit has not reset",
+        "tried": "already tried this round",
+        "wrong-scope": "different authentication scope"
+      },
+      "scope": "Affects {workspaces} workspace(s), {panes} pane(s) · {scope}",
+      "candidate": "{label} — {tier}",
+      "candidate-detail": "{label} — {tier} · {detail}",
+      "excluded-line": "{label} — {reason}",
+      "reset-expected": "{source} is expected back around {time} (not verified). No automatic switch back.",
+      "actions-withdrawn": "These options are no longer current.",
+      "untrusted": "Not verified: no switch was started.",
+      "not-switched": "{count} pane(s) not switched: their credential comes from the environment.",
+      "blocked": "Account switching for this CLI is paused until the earlier switch is reconciled.",
+      "reconcile": "Complete reconciliation",
+      "reconcile-as": "The live account is {label}",
+      "switch-to": "Switch to {label}",
+      "retry-resume": "Retry resume",
+      "switch-back": "Switch back to {label}",
+      "switch-refused": "Account switch refused ({code}): {message}",
+      "confirm-new-conversation-title": "Open a new conversation?",
+      "confirm-new-conversation-body": "{agent} cannot resume its conversation on another account. Switching to {target} keeps this pane as it is (on the old account, not resumed) and opens a new conversation on {target}. Credentials change only if you confirm.",
+      "confirm-new-conversation-confirm": "Keep this pane and open a new conversation",
+      "confirm-new-conversation-cancel": "Cancel, keep the current account"
+    }
   },
   "clock": {
     "title": "Time",
@@ -7350,6 +7542,7 @@
       "status": "Status",
       "zh": "Traditional Chinese",
       "en": "English",
+      "ja": "Japanese",
       "color": "Colour"
     },
     "row-only": "list only",
@@ -7530,7 +7723,25 @@
     "switch-restart-confirm-cancel": "Cancel",
     "switch-restart-partial": "{failed} of {total} pane(s) could not be restarted after the account switch — see the log for details.",
     "needs-login": "This account is signed out — starting a sign-in.",
-    "needs-login-expired": "This account's token expired while it was parked — starting a sign-in to renew it."
+    "needs-login-expired": "This account's token expired while it was parked — starting a sign-in to renew it.",
+    "preflight-unknown-scope": "This slot's provider is not one {agent} declares — pick a provider from the list.",
+    "preflight-scope-mismatch": "This account belongs to a different {agent} provider than the one in use.",
+    "preflight-shadowed-by-env": "The pane environment sets {vars}, which overrides the signed-in credential — the switch would not take effect.",
+    "preflight-platform-unsupported": "Account switching for {agent} is not available on this platform.",
+    "preflight-unsupported": "{agent} does not support account switching yet.",
+    "preflight-identity-unknown": "The current {agent} sign-in could not be identified, so it cannot be parked safely.",
+    "preflight-unreconciled": "An earlier {agent} switch is not reconciled — complete it from the announcement first.",
+    "preflight-credential-source-unknown": "Where {agent}'s credential comes from could not be determined (environment variable or provider scope), so nothing was switched.",
+    "login-in-progress": "A {agent} sign-in is {state} — switch after it completes.",
+    "login-blocked-by-live-panes": "{count} running {agent} pane(s) block signing in — close or finish them first.",
+    "live-drift": "The live {agent} credential is not the current account and the target slot is not empty — reconcile from the announcement first.",
+    "adopted-live-login": "The live sign-in already was the selected account; it was adopted into its slot without a swap.",
+    "plaintext-token-store": "This Copilot installation stores its token in plain text (storeTokenPlaintext); Navide cannot switch its accounts safely, so nothing was changed.",
+    "live-drift-unverified": "{agent}'s live credential changed and its identity cannot be verified — nothing was switched.",
+    "live-drift-confirm-title": "Is the live credential still the current account?",
+    "live-drift-confirm-body": "{agent}'s live credential changed since it was last saved, and this CLI stores no identity Navide could check it against. Continue only if you are certain it is still {current} (a normal token refresh, not another sign-in). If you continue, Navide keeps the live credential as {current} and switches to {target}.",
+    "live-drift-confirm-confirm": "It is still {current} — continue",
+    "live-drift-confirm-cancel": "Cancel"
   },
   "cliDrop": {
     "source-closed": "CLI pane is no longer open",
@@ -7726,6 +7937,25 @@
     "settings-enabled": "Show remaining quota in CLI pane headers",
     "settings-refresh": "Refresh interval",
     "settings-hint": "Shows CLI quota for 11 providers: claude, codex, kimi, grok, antigravity, opencode, qwen, kilo, pi, copilot and cursor. Most read local CLI credentials to query that provider's own usage API — read-only, credentials are never written. Claude is different: it drives the Claude CLI's built-in /usage panel instead of reading credentials.",
+    "failover-title": "Account switch when quota runs out",
+    "failover-hint": "What Navide does when a CLI account hits its quota: do nothing, list the accounts it could switch to (default), or switch automatically — at most 3 automatic switches per 5 hours per CLI, never back to the exhausted account on its own. The table shows what each CLI can do; the switch itself is decided by the backend.",
+    "failover-mode-off": "Off",
+    "failover-mode-notify": "Notify me",
+    "failover-mode-auto": "Switch automatically",
+    "failover-col-cli": "CLI",
+    "failover-col-switch": "Switch",
+    "failover-col-resume": "Conversation",
+    "failover-col-notes": "Notes",
+    "failover-switch-hot": "Hot swap (no restart)",
+    "failover-switch-restart": "Restart and resume",
+    "failover-switch-manual": "Manual only",
+    "failover-switch-unsupported": "Not available",
+    "failover-resume-native": "Resumes",
+    "failover-resume-lossy": "Resumes with loss",
+    "failover-resume-none": "New conversation",
+    "failover-unverified": "Not verified on a real account",
+    "failover-platform-unsupported": "Not on this platform",
+    "failover-audit-degraded": "The switch audit record could not be written; automatic switching is paused until it can. Manual switching still works.",
     "settings-signing-title": "Antigravity credentials (maintainer)",
     "settings-signing-hint": "Dev-only. Writes ~/navide-signing/usage_secrets.py so the next release build bundles Antigravity's public installed-app OAuth constants. Never stored in the repo.",
     "settings-signing-id": "client_id",
