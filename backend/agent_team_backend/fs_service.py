@@ -37,6 +37,8 @@ _log = logging.getLogger(__name__)
 # live under <workspace>/.agent-team/reports/ (see plan_provisioning).
 # These subtrees are exempt from the internal-dir protection.
 _ALLOWED_AGENT_TEAM_SUBDIRS = frozenset({"plans", "reports"})
+# Mockups may be inspected and previewed, but filesystem mutations stay blocked.
+_READABLE_AGENT_TEAM_SUBDIRS = _ALLOWED_AGENT_TEAM_SUBDIRS | {"mockups"}
 
 # High-noise dirs the UI should not auto-expand (performance, NOT gitignore).
 # Mirrors git_watcher._IGNORE_SEGMENTS, plus `.git`.
@@ -59,13 +61,15 @@ class FsError(Exception):
 
 
 def _resolve_safe(
-    workspace_path: str, rel_path: str, *, allow_internal_root: bool = False
+    workspace_path: str, rel_path: str, *, allow_internal_root: bool = False,
+    allow_mockups: bool = False,
 ) -> Path:
     """Resolve ``rel_path`` under the workspace root, rejecting any escape.
 
     Guards against ``..`` traversal, absolute-path escapes, symlink escapes
     (via ``resolve()``), and operations touching the internal ``.agent-team``
-    directory — except its user-facing ``plans/`` subtree, which is allowed.
+    directory — except its user-facing subtrees. ``mockups/`` is read-only.
+    Only read-only callers may opt in with ``allow_mockups``.
     """
     if not workspace_path:
         raise FsError("no workspace selected")
@@ -88,7 +92,7 @@ def _resolve_safe(
     # the allowed subtrees fails the guard on its own path.
     if allow_internal_root and _same_path(target, root / PROJECT_DIR_NAME):
         return target
-    _reject_protected_internal_dir(target)
+    _reject_protected_internal_dir(target, allow_mockups=allow_mockups)
     return target
 
 
@@ -156,15 +160,15 @@ def _reject_git_internal_tree(target: Path) -> None:
         raise FsError("cannot verify Git internal directory protection") from exc
 
 
-def _reject_protected_internal_dir(target: Path) -> None:
+def _reject_protected_internal_dir(target: Path, *, allow_mockups: bool = False) -> None:
     """Reject paths inside an internal ``.agent-team`` dir, wherever it sits.
 
     The check walks the whole absolute path rather than only the part below the
     root: a caller may name any existing directory as its root (that is how
     files outside a workspace are opened), and rooting at
     ``<ws>/.agent-team`` would otherwise leave the guard looking at a filename
-    where it expects the internal dir. Only the user-facing ``plans/`` and
-    ``reports/`` subtrees are allowed through, exactly as before.
+    where it expects the internal dir. ``plans/`` and ``reports/`` support
+    reads and mutations; ``mockups/`` is allowed only for reads.
     """
     parts = target.parts
     i = _internal_dir_index(parts)
@@ -174,7 +178,8 @@ def _reject_protected_internal_dir(target: Path) -> None:
     # `.agent-team/plans/../chat-threads.json` normalizes to a protected
     # path before reaching this check.
     nxt = parts[i + 1] if i + 1 < len(parts) else None
-    if nxt not in _ALLOWED_AGENT_TEAM_SUBDIRS:
+    allowed = _READABLE_AGENT_TEAM_SUBDIRS if allow_mockups else _ALLOWED_AGENT_TEAM_SUBDIRS
+    if nxt not in allowed:
         raise FsError("the internal directory is protected")
 
 
@@ -201,8 +206,8 @@ def list_dir(
     mode="display":
         Dirs first, then files, each alphabetical. Dotfiles are excluded unless
         ``show_hidden`` is True — including ``.agent-team``, which is surfaced as a
-        normal hidden dir but shows only its user-facing ``plans/`` and
-        ``reports/`` subtrees; the rest of its contents (the live SQLite database,
+        normal hidden dir but shows only its user-facing ``plans/``, ``reports/``
+        and ``mockups/`` subtrees; the rest of its contents (the live SQLite database,
         logs, migration leftovers) stay unlistable and unopenable.
     mode="discovery":
         Strict 4-step sequence for plan root discovery:
@@ -215,7 +220,7 @@ def list_dir(
         return {"ok": False, "error": "invalid list_dir mode"}
 
     try:
-        target = _resolve_safe(workspace_path, rel_path, allow_internal_root=True)
+        target = _resolve_safe(workspace_path, rel_path, allow_internal_root=True, allow_mockups=True)
     except FsError as exc:
         return {"ok": False, "error": str(exc)}
     if not target.is_dir():
@@ -241,7 +246,7 @@ def list_dir(
             internal_root = root / PROJECT_DIR_NAME
             for de in candidates:
                 name = de.name
-                if _same_path(target, internal_root) and name not in _ALLOWED_AGENT_TEAM_SUBDIRS:
+                if _same_path(target, internal_root) and name not in _READABLE_AGENT_TEAM_SUBDIRS:
                     continue
                 entries.append(_entry(root, target, name, True))
         else:
@@ -254,7 +259,7 @@ def list_dir(
             internal_root = root / PROJECT_DIR_NAME
             for de in scan:
                 name = de.name
-                if _same_path(target, internal_root) and name not in _ALLOWED_AGENT_TEAM_SUBDIRS:
+                if _same_path(target, internal_root) and name not in _READABLE_AGENT_TEAM_SUBDIRS:
                     continue  # internal state — only the user-facing subtrees show
                 if name.startswith(".") and not show_hidden:
                     continue
@@ -503,7 +508,7 @@ def read_file(workspace_path: str, rel_path: str, encoding_override: str | None 
                      "size": int, "ext": str}
     """
     try:
-        target = _resolve_safe(workspace_path, rel_path)
+        target = _resolve_safe(workspace_path, rel_path, allow_mockups=True)
         if not target.is_file():
             raise FsError("not a file")
         st = target.stat()
@@ -601,7 +606,7 @@ def read_image(workspace_path: str, rel_path: str) -> dict[str, Any]:
     Rejects non-image extensions and images larger than 20 MB.
     """
     try:
-        target = _resolve_safe(workspace_path, rel_path)
+        target = _resolve_safe(workspace_path, rel_path, allow_mockups=True)
         if not target.is_file():
             raise FsError("not a file")
         ext = target.suffix.lower()
@@ -633,7 +638,7 @@ def list_archive(workspace_path: str, rel_path: str) -> dict[str, Any]:
     larger than 100 MB are rejected.
     """
     try:
-        target = _resolve_safe(workspace_path, rel_path)
+        target = _resolve_safe(workspace_path, rel_path, allow_mockups=True)
         if not target.is_file():
             raise FsError("not a file")
         size = target.stat().st_size
@@ -697,7 +702,7 @@ def convert_office(workspace_path: str, rel_path: str) -> dict[str, Any]:
     Files larger than 10 MB are rejected.
     """
     try:
-        target = _resolve_safe(workspace_path, rel_path)
+        target = _resolve_safe(workspace_path, rel_path, allow_mockups=True)
         if not target.is_file():
             raise FsError("not a file")
         size = target.stat().st_size
@@ -826,7 +831,7 @@ def stat_workspace_path(workspace_path: str, rel_path: str = "") -> dict[str, An
     the workspace root and the relative path are validated together.
     """
     try:
-        target = _resolve_safe(workspace_path, rel_path, allow_internal_root=True)
+        target = _resolve_safe(workspace_path, rel_path, allow_internal_root=True, allow_mockups=True)
         if not target.exists():
             return {
                 "ok": True,

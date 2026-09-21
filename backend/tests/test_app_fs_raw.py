@@ -203,6 +203,27 @@ def test_raw_agent_team_plans_traversal_rejected(client, workspace):
     assert resp.status_code == 400
 
 
+@pytest.mark.parametrize("root_rel", ["", ".agent-team", ".agent-team/mockups"])
+def test_raw_mockup_html_served_under_each_root(client, workspace, root_rel):
+    mockups = workspace / ".agent-team" / "mockups"
+    mockups.mkdir()
+    document = mockups / "preview.html"
+    document.write_text("<h1>mockup</h1>")
+    root = workspace / root_rel
+    response = _get(client, root, str(document.relative_to(root)))
+    assert response.status_code == 200
+    assert response.text == "<h1>mockup</h1>"
+    assert response.headers["content-type"].startswith("text/html")
+    assert response.headers["content-security-policy"] == "sandbox"
+
+
+def test_raw_mockup_traversal_still_protected(client, workspace):
+    (workspace / ".agent-team" / "mockups").mkdir()
+    response = _get(client, workspace, ".agent-team/mockups/../secret.txt")
+    assert response.status_code == 400
+    assert response.json()["detail"] == "the internal directory is protected"
+
+
 def test_raw_missing_file_returns_404(client, workspace):
     resp = _get(client, workspace, "nope.bin")
     assert resp.status_code == 404

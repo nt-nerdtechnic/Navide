@@ -126,6 +126,42 @@ def test_page_agent_team_root_still_protected(client, workspace):
     assert resp.status_code == 400
 
 
+def test_page_mockup_and_relative_assets_served(client, workspace):
+    mockups = workspace / ".agent-team" / "mockups"
+    assets = mockups / "assets"
+    assets.mkdir(parents=True)
+    (mockups / "preview.html").write_text(
+        '<link rel="stylesheet" href="./assets/style.css"><img src="./assets/image.svg">'
+    )
+    (assets / "style.css").write_text("body { color: red }")
+    (assets / "image.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg"/>')
+
+    page = _get(client, workspace, ".agent-team/mockups/preview.html")
+    assert page.status_code == 200
+    assert page.headers["content-type"].startswith("text/html")
+    assert page.headers["content-security-policy"] == "sandbox"
+    for name, mime in (("style.css", "text/css"), ("image.svg", "image/svg+xml")):
+        asset = client.get(page.url.join(f"./assets/{name}"))
+        assert asset.status_code == 200
+        assert asset.headers["content-type"].startswith(mime)
+        assert asset.headers["content-security-policy"] == "sandbox"
+        assert "content-disposition" not in asset.headers
+
+
+@pytest.mark.parametrize("target", ["internal", "outside"])
+def test_page_mockup_symlink_cannot_read_protected_files(client, workspace, target):
+    mockups = workspace / ".agent-team" / "mockups"
+    mockups.mkdir(parents=True)
+    secret = workspace / ".agent-team" / "secret.html" if target == "internal" else workspace.parent / "secret.html"
+    secret.write_text("private")
+    (mockups / "linked.html").symlink_to(secret)
+    response = _get(client, workspace, ".agent-team/mockups/linked.html")
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "the internal directory is protected" if target == "internal" else "path escapes workspace"
+    )
+
+
 def test_page_css_inline(client, workspace):
     # /fs/page difference vs /fs/raw: stylesheets load inline so relative
     # ./style.css subresources work in the sandboxed HTML preview.
