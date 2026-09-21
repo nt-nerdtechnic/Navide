@@ -74,7 +74,7 @@ describe('launch overrides section', () => {
   })
 
   it('marks a reserved env name without refusing it — soft block, not hard', () => {
-    expect(body).toContain('isReservedSpawnEnvKey(entry.name)')
+    expect(body).toContain("isReservedSpawnEnvKey(entry.name, { foldCase: platformId() === 'win32' })")
     expect(body).toContain("$t('settings.cliLaunch.env-reserved-chip')")
     // The add button is gated on the NAME being usable, never on it being
     // reserved: the decision on record is that a reserved key may be saved.

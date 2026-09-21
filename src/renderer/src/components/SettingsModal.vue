@@ -3167,7 +3167,7 @@ watch(activeTab, (tab) => {
                         <td class="env-name">
                           <code>{{ entry.name }}</code>
                           <span
-                            v-if="isReservedSpawnEnvKey(entry.name)"
+                            v-if="isReservedSpawnEnvKey(entry.name, { foldCase: platformId() === 'win32' })"
                             class="cli-chip cli-chip--bad"
                           >{{ $t('settings.cliLaunch.env-reserved-chip') }}</span>
                         </td>
@@ -3217,7 +3217,7 @@ watch(activeTab, (tab) => {
                       </tr>
                     </tbody>
                   </table>
-                  <p v-if="isReservedSpawnEnvKey(envDraftName)" class="launch-warn">
+                  <p v-if="isReservedSpawnEnvKey(envDraftName, { foldCase: platformId() === 'win32' })" class="launch-warn">
                     {{ $t('settings.cliLaunch.env-reserved-warn') }}
                   </p>
                 </div>

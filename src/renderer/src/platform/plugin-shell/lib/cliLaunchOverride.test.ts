@@ -1,8 +1,7 @@
 import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
-import { afterEach, describe, expect, it } from 'vitest'
-import { platformId, setPlatformId, type PlatformId } from '../../../../../shared/osplat'
+import { describe, expect, it } from 'vitest'
 import {
   SPAWN_ENV_RESERVED_KEYS,
   chooseLaunchCommand,
@@ -14,19 +13,6 @@ import {
   serializeCliEnvOverride,
   spawnEnvOverride,
 } from './cliLaunchOverride'
-
-// Whatever platform this file loaded under — the host, or a suite-wide
-// injection — is what every test hands back (see src/shared/osplat.test.ts).
-const BASELINE = platformId()
-
-const asPlatform = (id: PlatformId, run: () => void): void => {
-  setPlatformId(id)
-  run()
-}
-
-afterEach(() => {
-  setPlatformId(BASELINE)
-})
 
 describe('settings keys', () => {
   it('mirror the per-vendor shape the other CLI settings use', () => {
@@ -165,18 +151,15 @@ describe('isReservedSpawnEnvKey', () => {
   // variable — marking it would warn about a row that is perfectly legal.
   // Mirrors the backend's `filter_spawn_env_request` through
   // `osplat.paths.env_name_key`.
+  // The caller passes the platform's answer (SettingsModal hands in
+  // `isWindows()`); this module never reads the platform itself.
   it('folds case only where the host process environment does', () => {
-    asPlatform('win32', () => {
-      expect(isReservedSpawnEnvKey('minimax_data_dir')).toBe(true)
-      expect(isReservedSpawnEnvKey('Claude_Config_Dir')).toBe(true)
-      expect(isReservedSpawnEnvKey('https_proxy')).toBe(false)
-    })
-    for (const id of ['darwin', 'linux'] as const) {
-      asPlatform(id, () => {
-        expect(isReservedSpawnEnvKey('minimax_data_dir')).toBe(false)
-        expect(isReservedSpawnEnvKey('MINIMAX_DATA_DIR')).toBe(true)
-      })
-    }
+    expect(isReservedSpawnEnvKey('minimax_data_dir', { foldCase: true })).toBe(true)
+    expect(isReservedSpawnEnvKey('Claude_Config_Dir', { foldCase: true })).toBe(true)
+    expect(isReservedSpawnEnvKey('https_proxy', { foldCase: true })).toBe(false)
+    expect(isReservedSpawnEnvKey('minimax_data_dir', { foldCase: false })).toBe(false)
+    expect(isReservedSpawnEnvKey('minimax_data_dir')).toBe(false)
+    expect(isReservedSpawnEnvKey('MINIMAX_DATA_DIR', { foldCase: false })).toBe(true)
   })
 })
 
