@@ -50,6 +50,19 @@ preflight, the credential vault or the log watcher paths that do not exist.
 `docs/adding-a-cli-vendor.md` carries the full step list, the structural
 tests that act as the checklist, and the import rules.
 
+Account switching (added 2026-09-21) is declared the same way: an
+`AccountSwitchSpec` on the vendor spec names the credential pool, the switch
+method (`hot` / `restart` / `manual`), the store layout with its provider
+scopes, the evidence the layout rests on (`live` / `source` / `docs` plus the
+version it was read from), and the environment variables that shadow the
+stored credential; `quota_exhausted_patterns` is the only CLI text the backend
+accepts as an exhaustion signal, and `login_home_env` decides whether a
+sign-in pane is isolated or runs against the live store. Step 9 of the vendor
+guide lists the contract. As of this writing all fifteen vendors carry
+`evidence="source"` — no real-account round-trip has been recorded; MiniMax
+Code's adapter (region-scoped compound file plus a companion `auth-state`
+write, no session resume) is the newest.
+
 ---
 
 ## Part 2 — Integration records

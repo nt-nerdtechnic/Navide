@@ -1,0 +1,788 @@
+<!DOCTYPE html>
+<html lang="zh-Hant" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CLI 帳號切換 · 互動原型</title>
+<meta name="description" content="Interactive design prototype for the all-CLI quota-exhaustion account switch flow. Simulated data only; no product implementation.">
+<style>
+/* ---------- tokens ---------- */
+:root{
+  --bg:#0d1117; --surface:#161b22; --raised:#1c2330; --inset:#0a0e14;
+  --line:#30363d; --line-soft:#232a33;
+  --text:#e6edf3; --muted:#8b949e; --faint:#8b949e;
+  --blue:#58a6ff; --blue-deep:#1f6feb; --teal:#2fb8c4; --teal-deep:#1b7c83;
+  --ok:#3fb950; --warn:#d29922; --danger:#f85149; --violet:#a371f7;
+  --focus:0 0 0 2px var(--bg),0 0 0 4px var(--blue);
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  --sans:-apple-system,"PingFang TC","Noto Sans TC","Segoe UI",system-ui,sans-serif;
+  --r:6px;
+}
+:root[data-theme="light"]{
+  --bg:#eef1f5; --surface:#ffffff; --raised:#f6f8fa; --inset:#e9edf2;
+  --line:#c9d1da; --line-soft:#dfe5ec;
+  --text:#1f2733; --muted:#57606a; --faint:#626d79;
+  --blue:#0969da; --blue-deep:#0550ae; --teal:#1b7c83; --teal-deep:#136067;
+  --ok:#1a7f37; --warn:#9a6700; --danger:#cf222e; --violet:#8250df;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--text);font:13px/1.5 var(--sans);-webkit-font-smoothing:antialiased}
+button,select{font:inherit;color:inherit}
+button{cursor:pointer;border:1px solid var(--line);background:var(--raised);border-radius:var(--r);padding:5px 10px}
+button:hover{border-color:var(--muted)}
+button:disabled{opacity:.45;cursor:not-allowed}
+button.primary{background:var(--blue-deep);border-color:var(--blue-deep);color:#fff}
+button.primary:hover{filter:brightness(1.1)}
+button.quiet{background:transparent}
+:focus-visible{outline:none;box-shadow:var(--focus)}
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+h1,h2,h3{margin:0;font-weight:600}
+h2{font-size:12px;color:var(--muted);margin-bottom:6px}
+p{margin:0}
+kbd{font:11px var(--mono);border:1px solid var(--line);border-radius:4px;padding:0 4px;background:var(--inset)}
+
+/* ---------- topbar ---------- */
+.topbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:8px 14px;border-bottom:1px solid var(--line);background:var(--surface);position:sticky;top:0;z-index:5}
+.topbar h1{font-size:14px}
+.stamp{font-size:11px;color:var(--warn);border:1px solid var(--warn);border-radius:999px;padding:1px 8px;white-space:nowrap}
+.topbar .grow{flex:1}
+.topbar .status{font-size:12px;color:var(--muted);min-width:0;flex:1 1 160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ---------- layout ---------- */
+.layout{display:grid;grid-template-columns:236px minmax(0,1fr) 300px;gap:10px;padding:10px;min-height:calc(100vh - 42px)}
+.rail{display:flex;flex-direction:column;gap:12px;min-width:0}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:10px}
+.card.sim{border-style:dashed;border-color:var(--violet)}
+.card.sim h2{color:var(--violet)}
+.hint{font-size:11px;color:var(--faint)}
+
+/* segmented */
+.seg{display:grid;grid-template-columns:repeat(3,1fr);border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+.seg label{position:relative;text-align:center;padding:5px 0;cursor:pointer;color:var(--muted);border-right:1px solid var(--line)}
+.seg label:last-child{border-right:0}
+.seg input{position:absolute;inset:0;opacity:0;margin:0}
+.seg input:checked+span{color:var(--text);font-weight:600}
+.seg label:has(input:checked){background:var(--raised);box-shadow:inset 0 -2px 0 var(--teal)}
+.seg label:has(input:focus-visible){box-shadow:var(--focus);z-index:1}
+
+select{width:100%;background:var(--raised);border:1px solid var(--line);border-radius:var(--r);padding:5px 8px}
+.cap{margin-top:8px;font-size:11px;display:grid;grid-template-columns:auto 1fr;gap:2px 8px}
+.cap dt{color:var(--faint)}
+.cap dd{margin:0}
+.tag{display:inline-block;font-size:10px;line-height:16px;padding:0 6px;border-radius:999px;border:1px solid var(--line);color:var(--muted);vertical-align:middle}
+.tag.now{color:var(--teal);border-color:var(--teal)}
+.tag.plan{color:var(--violet);border-color:var(--violet)}
+.tag.ok{color:var(--ok);border-color:var(--ok)}
+.tag.warn{color:var(--warn);border-color:var(--warn)}
+.tag.bad{color:var(--danger);border-color:var(--danger)}
+
+/* scenarios */
+.scen{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+.scen button{width:100%;text-align:left;padding:6px 8px;background:transparent;border-color:transparent;display:flex;gap:8px;align-items:flex-start}
+.scen button:hover{background:var(--raised)}
+.scen button[aria-pressed="true"]{background:var(--raised);border-color:var(--teal)}
+.scen .n{font:11px var(--mono);color:var(--faint);padding-top:2px}
+.scen .t{font-weight:500}
+.scen .s{font-size:11px;color:var(--muted)}
+
+.sim .btns{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.sim .btns button{font-size:12px;padding:5px 6px}
+.sim .btns button.wide{grid-column:1/-1}
+
+/* ---------- app mock ---------- */
+.mock{background:var(--surface);border:1px solid var(--line);border-radius:8px;display:grid;grid-template-rows:auto 1fr;min-width:0;overflow:hidden}
+.mock-title{display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid var(--line);font-size:12px;color:var(--muted)}
+.dots{display:flex;gap:5px}.dots i{width:10px;height:10px;border-radius:50%;background:var(--line)}
+.mock-body{display:grid;grid-template-columns:176px minmax(0,1fr);min-height:0}
+.wsbar{border-right:1px solid var(--line);padding:8px;font-size:12px;overflow:auto}
+.wsbar h3{font-size:11px;color:var(--faint);margin:6px 0 4px;font-weight:500}
+.wsbar .pane-row{display:flex;align-items:center;gap:6px;padding:3px 6px;border-radius:4px;color:var(--muted)}
+.wsbar .pane-row.on{background:var(--raised);color:var(--text)}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--faint);flex:none}
+.dot.busy{background:var(--warn)}.dot.idle{background:var(--ok)}.dot.exhausted{background:var(--danger)}
+.dot.awaiting{background:var(--blue)}.dot.stopping{background:var(--muted)}.dot.resumed{background:var(--teal)}
+.dot.failed{background:var(--danger)}.dot.manual{background:var(--violet)}
+.wsbar .acct{margin-left:auto;font:10px var(--mono);color:var(--faint)}
+
+.stage{display:grid;grid-template-rows:minmax(0,1fr) auto;min-height:0}
+.panes{display:grid;gap:8px;padding:8px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));align-content:start}
+.pane{background:var(--inset);border:1px solid var(--line);border-radius:var(--r);display:flex;flex-direction:column;min-height:170px}
+.pane header{display:flex;align-items:center;gap:6px;padding:4px 8px;border-bottom:1px solid var(--line-soft);font-size:11px;color:var(--muted)}
+.pane header b{color:var(--text);font-weight:600}
+.pane header .acct{font-family:var(--mono);font-size:10px}
+.pane header .st{margin-left:auto}
+.term{flex:1;padding:6px 8px;font:11px/1.55 var(--mono);white-space:pre-wrap;word-break:break-word;color:var(--text);overflow:auto;max-height:220px}
+.term .p{color:var(--teal)}.term .d{color:var(--muted)}.term .e{color:var(--danger)}.term .w{color:var(--warn)}.term .g{color:var(--ok)}.term .b{color:var(--blue)}
+.pane footer{border-top:1px solid var(--line-soft);padding:3px 8px;font:11px var(--mono);color:var(--faint)}
+.pane.busy footer::after{content:"⏳ 執行中 — 不會被自動停止";color:var(--warn)}
+.pane.idle footer::after{content:"› 等待輸入"}
+.pane.awaiting footer::after{content:"⚑ 等待權限回覆 — 視為未安全";color:var(--blue)}
+.pane.exhausted footer::after{content:"✖ 額度耗盡";color:var(--danger)}
+.pane.stopping footer::after{content:"⏸ 已安全停止，準備接續";color:var(--muted)}
+.pane.resumed footer::after{content:"✓ 已接續原對話";color:var(--teal)}
+.pane.failed footer::after{content:"✖ 接續失敗 — 保留原狀等待處理";color:var(--danger)}
+.pane.manual footer::after{content:"⚠ 此 CLI 無法接續，需另開對話";color:var(--violet)}
+
+/* announcement panel */
+.announce{border-top:1px solid var(--line);padding:8px 10px;display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:10px;background:var(--surface)}
+.announce h2{display:flex;align-items:center;gap:8px}
+.notice{border-left:3px solid var(--line);padding:6px 10px;background:var(--raised);border-radius:0 var(--r) var(--r) 0;margin-bottom:8px}
+.notice.warn{border-color:var(--warn)}.notice.bad{border-color:var(--danger)}.notice.ok{border-color:var(--ok)}.notice.info{border-color:var(--blue)}.notice.teal{border-color:var(--teal)}
+.notice .h{font-weight:600}
+.notice .m{color:var(--muted);font-size:12px;margin-top:2px}
+.notice .acts{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap}
+.notice .acts button{font-size:12px;padding:3px 9px}
+.budget{font-size:11px;color:var(--faint);margin-top:4px}
+.results{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.res{font-size:11px;border:1px solid var(--line);border-radius:var(--r);padding:3px 8px;color:var(--muted);background:var(--inset)}
+.res b{font-weight:600;color:var(--text)}
+.res[data-v="ok"]{border-color:var(--ok)}.res[data-v="ok"] b{color:var(--ok)}
+.res[data-v="bad"]{border-color:var(--danger)}.res[data-v="bad"] b{color:var(--danger)}
+.res[data-v="warn"]{border-color:var(--warn)}.res[data-v="warn"] b{color:var(--warn)}
+.res[data-v="run"]{border-color:var(--blue)}.res[data-v="run"] b{color:var(--blue)}
+.res[data-v="manual"]{border-color:var(--violet)}.res[data-v="manual"] b{color:var(--violet)}
+
+.cands{display:flex;flex-direction:column;gap:6px}
+.cand{border:1px solid var(--line);border-radius:var(--r);padding:6px 8px;background:var(--raised);display:grid;grid-template-columns:1fr auto;gap:2px 8px;align-items:center}
+.cand.chosen{border-color:var(--teal);box-shadow:inset 3px 0 0 var(--teal)}
+.cand.excluded{opacity:.7;background:transparent}
+.cand .id{font:12px var(--mono)}
+.cand .why{grid-column:1/-1;font-size:11px;color:var(--muted)}
+.cand .why.bad{color:var(--danger)}
+.cand button{font-size:11px;padding:2px 8px;grid-row:1/3}
+.cand .tier{justify-self:end}
+.empty{font-size:12px;color:var(--faint);padding:8px;border:1px dashed var(--line);border-radius:var(--r)}
+
+/* ---------- flow rail ---------- */
+.flow svg{width:100%;height:auto;display:block}
+.flow .edge{fill:none;stroke:var(--line);stroke-width:1.5}
+.flow .edge.done{stroke:var(--teal);stroke-width:2}
+.flow .edge.skip{stroke-dasharray:3 4;opacity:.5}
+.flow .edge.back{stroke-dasharray:2 3}
+.flow .node rect{fill:var(--raised);stroke:var(--line);rx:5}
+.flow .node text{fill:var(--muted);font-size:10.5px;text-anchor:middle;dominant-baseline:middle;font-family:var(--sans)}
+.flow .node.done rect{stroke:var(--teal)}
+.flow .node.done text{fill:var(--text)}
+.flow .node.current rect{fill:var(--teal-deep);stroke:var(--teal)}
+.flow .node.current text{fill:#fff;font-weight:600}
+.flow .node.bad.current rect{fill:#6e1a1a;stroke:var(--danger)}
+.flow .node.warn.current rect{fill:#5a4108;stroke:var(--warn)}
+.flow .node.off rect{stroke-dasharray:3 3}
+.flow .label{fill:var(--faint);font-size:9.5px;font-family:var(--sans)}
+.explain{margin-top:8px;padding:8px;border-radius:var(--r);background:var(--raised);font-size:12px}
+.explain .k{font-weight:600;color:var(--teal)}
+.log{list-style:none;margin:6px 0 0;padding:0;font:11px/1.5 var(--mono);color:var(--muted);max-height:180px;overflow:auto}
+.log li{border-top:1px solid var(--line-soft);padding:3px 0}
+.log li:first-child{border-top:0}
+.log time{color:var(--faint);margin-right:6px}
+
+/* ---------- modal ---------- */
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;padding:20px;z-index:20}
+.modal[open]{display:flex}
+.modal .box{background:var(--surface);border:1px solid var(--line);border-radius:10px;max-width:860px;width:100%;max-height:90vh;overflow:auto;padding:16px}
+.modal h2{color:var(--text);font-size:15px;margin-bottom:8px}
+.modal h3{font-size:12px;color:var(--muted);margin:14px 0 6px}
+.modal ul{margin:0;padding-left:18px;font-size:12px;color:var(--muted)}
+.tscroll{overflow:auto;-webkit-overflow-scrolling:touch}
+table{border-collapse:collapse;width:100%;min-width:560px;font-size:12px}
+th,td{text-align:left;padding:5px 8px;border-bottom:1px solid var(--line-soft);vertical-align:top}
+th{color:var(--muted);font-weight:500}
+td.k{font-family:var(--mono)}
+
+@media (max-width:1040px){
+  .layout{grid-template-columns:1fr}
+  .rail.left{order:2}.mock{order:1}.rail.right{order:3}
+  .mock-body{grid-template-columns:1fr}
+  .wsbar{border-right:0;border-bottom:1px solid var(--line)}
+  .announce{grid-template-columns:1fr}
+}
+@media (prefers-reduced-motion:no-preference){
+  .flow .node.current rect{transition:fill .25s,stroke .25s}
+  .flow .edge{transition:stroke .25s}
+  .cand,.notice{transition:border-color .2s}
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <h1>CLI 帳號切換流程</h1>
+  <span class="stamp">互動原型 · 模擬資料 · 未實作</span>
+  <div class="grow"></div>
+  <div class="status" id="topStatus" aria-live="polite">尚未觸發事件</div>
+  <button class="quiet" id="btnReadme" aria-haspopup="dialog">各 CLI 能力總覽</button>
+  <button class="quiet" id="btnTheme" aria-pressed="false" title="切換亮／暗色">亮色</button>
+</header>
+
+<main class="layout">
+  <!-- ===== left rail ===== -->
+  <aside class="rail left">
+    <section class="card">
+      <h2>耗盡後的處理方式</h2>
+      <div class="seg" role="radiogroup" aria-label="切換模式">
+        <label><input type="radio" name="mode" value="off"><span>關閉</span></label>
+        <label><input type="radio" name="mode" value="notify" checked><span>通知我</span></label>
+        <label><input type="radio" name="mode" value="auto"><span>自動切換</span></label>
+      </div>
+      <p class="hint" id="modeHint" style="margin-top:6px"></p>
+    </section>
+
+    <section class="card">
+      <h2><label for="cliPick">CLI</label></h2>
+      <select id="cliPick" aria-describedby="capNow"></select>
+      <dl class="cap" id="capNow"></dl>
+    </section>
+
+    <section class="card">
+      <h2>情境</h2>
+      <ul class="scen" id="scenList"></ul>
+    </section>
+
+    <section class="card sim" aria-labelledby="simH">
+      <h2 id="simH">模擬控制</h2>
+      <div class="btns">
+        <button class="wide" data-sim="hit">觸發額度耗盡</button>
+        <button data-sim="work">剩餘工作完成</button>
+        <button data-sim="advance">推進／驗證結果</button>
+        <button class="wide" data-sim="reset">重置此情境</button>
+      </div>
+      <p class="hint" style="margin-top:6px">這區不屬於產品畫面，只用來推動模擬狀態。帳號選擇與手動切回等使用者動作在中央的公告面板裡操作。</p>
+    </section>
+  </aside>
+
+  <!-- ===== app mock ===== -->
+  <section class="mock" aria-label="Navide 畫面模擬">
+    <div class="mock-title"><span class="dots"><i></i><i></i><i></i></span><span id="mockTitle">Navide — Agent-Team</span></div>
+    <div class="mock-body">
+      <nav class="wsbar" id="wsbar" aria-label="工作區與 CLI 視窗"></nav>
+      <div class="stage">
+        <div class="panes" id="panes"></div>
+        <section class="announce" aria-label="公告與帳號候選">
+          <div>
+            <h2>公告 <span class="tag" id="incidentTag"></span></h2>
+            <div id="notices"></div>
+            <div class="results" id="results"></div>
+            <p class="budget" id="budget"></p>
+          </div>
+          <div>
+            <h2>可切換的帳號 <span class="hint" id="candHint"></span></h2>
+            <div class="cands" id="cands"></div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== right rail ===== -->
+  <aside class="rail right">
+    <section class="card flow">
+      <h2>流程位置</h2>
+      <svg viewBox="0 0 300 500" role="img" aria-labelledby="flowTitle" id="flowSvg">
+        <title id="flowTitle">切換流程分支圖，目前步驟以實心標示</title>
+        <g id="edges"></g><g id="nodes"></g>
+      </svg>
+      <div class="explain" id="explain"></div>
+    </section>
+    <section class="card">
+      <h2>事件記錄</h2>
+      <ol class="log" id="log"></ol>
+    </section>
+  </aside>
+</main>
+
+<div class="modal" id="readme" role="dialog" aria-modal="true" aria-labelledby="readmeH">
+  <div class="box">
+    <div style="display:flex;align-items:center;gap:8px">
+      <h2 id="readmeH" style="flex:1">各 CLI 的帳號切換能力</h2>
+      <button id="btnCloseReadme">關閉</button>
+    </div>
+    <p class="hint">「現況」是程式目前宣告的能力；「計畫交付」是審閱中提案，尚未實作也未實機驗證。表格由 registry 的 15 個 CLI 產生。</p>
+    <div class="tscroll"><table id="capTable"><thead><tr><th>CLI</th><th>帳號槽（現況）</th><th>切換方式（現況）</th><th>接續對話（現況）</th><th>計畫交付</th></tr></thead><tbody></tbody></table></div>
+    <h3>共用規則（提案）</h3>
+    <ul>
+      <li>預設「通知我」。自動切換需主動開啟；任一步失敗即通知並停止該輪，不改試下一個帳號。</li>
+      <li>同一 CLI 在 5 小時滾動窗口內最多自動切換 3 次，兩次至少間隔 10 分鐘；等待安全閒置不計次。</li>
+      <li>手動選擇的切換與手動切回不消耗自動次數；10 分鐘間隔與 5 小時窗口在原型中只是文案示意。</li>
+      <li>不自動切回原帳號。原帳號只顯示「預計恢復」，實際切回由使用者按鈕啟動，走同一條切換流程。</li>
+      <li>需要重啟的 CLI 預設等到所有受影響 pane 安全閒置再停止；忙碌、等待權限、有未送出輸入的 pane 不會被自動停止。此預設仍在審閱中。</li>
+      <li>「帳號已切換」「對話已接續」「額度已驗證」是三件事，分開顯示；沒有可驗證的讀數就標為未確認。</li>
+      <li>Aider 與 MiniMax Code 沒有原生對話接續：更動憑證前先要求確認「保留原視窗並另開對話」；自動模式停止並通知。結果只算部分完成，不會顯示為對話已接續。</li>
+    </ul>
+  </div>
+</div>
+
+<div class="sr-only" aria-live="assertive" id="live"></div>
+
+<script>
+/* ===================== registry & scenarios (simulated) ===================== */
+const CLIS = {
+  claude:{name:'Claude Code',slot:true,hot:true,resume:true,verified:true},
+  codex:{name:'Codex',slot:true,hot:false,resume:true},
+  kimi:{name:'Kimi Code',slot:true,hot:false,resume:true},
+  grok:{name:'Grok CLI',slot:true,hot:false,resume:true},
+  kilo:{name:'Kilo Code',slot:true,hot:false,resume:true},
+  antigravity:{name:'Antigravity',slot:false,hot:false,resume:true},
+  copilot:{name:'Copilot CLI',slot:false,hot:false,resume:true},
+  cursor:{name:'Cursor Agent',slot:false,hot:false,resume:true},
+  droid:{name:'Droid',slot:false,hot:false,resume:true},
+  muse:{name:'Muse',slot:false,hot:false,resume:true},
+  opencode:{name:'OpenCode',slot:false,hot:false,resume:true},
+  pi:{name:'Pi',slot:false,hot:false,resume:true},
+  qwen:{name:'Qwen Code',slot:false,hot:false,resume:true},
+  aider:{name:'Aider',slot:false,hot:false,resume:false},
+  mcode:{name:'MiniMax Code',slot:false,hot:false,resume:false},
+};
+const ORDER = ['claude','codex','antigravity','grok','kimi','opencode','qwen','kilo','pi','copilot','cursor','aider','muse','droid','mcode'];
+
+const LIMIT_TEXT = {
+  claude:'Claude AI usage limit reached · resets 14:00 (Asia/Taipei)',
+  codex:"You've hit your usage limit. Try again in 3h 12m.",
+  kimi:'Error 429: quota exhausted for this billing cycle',
+  grok:'rate limit: monthly credits exhausted',
+  aider:'litellm.RateLimitError: quota exceeded for account',
+  mcode:'error: plan quota exhausted (resets 00:00 UTC)',
+};
+const limitText = k => LIMIT_TEXT[k] || 'usage limit reached — quota exhausted';
+
+// Candidate tiers follow the plan's ordering: fresh > reset > stale > unknown; excluded carry a reason.
+const C = (id,tier,info,reason)=>({id,tier,info,reason});
+const SCENARIOS = [
+  {id:'notify-claude',cli:'claude',mode:'notify',title:'通知後由使用者選帳號',sub:'Claude · 熱切換',swaps:0,
+    panes:[P('Agent-Team','claude-1','dev@example.com','idle',['修好 useUsage 的 stale 判斷，測試 42 passed。','等待下一個指令。']),
+           P('Agent-Team','claude-2','dev@example.com','idle',['已整理 CHANGELOG 草稿。'])],
+    cands:[C('work@example.com','fresh','5 小時 78% 餘裕 · 週 61% · 4 分鐘前'),C('backup@example.com','stale','上次 52% 餘裕 · 3 小時前量測'),C('spare@example.com','excluded',null,'尚未登入')]},
+  {id:'auto-claude-hot',cli:'claude',mode:'auto',title:'自動熱切換',sub:'Claude · 不重啟 pane',swaps:2,
+    panes:[P('Agent-Team','claude-1','dev@example.com','busy',['正在改 ws_handlers.py …','Running: uv run pytest backend/tests -q']),
+           P('Agent-Team','claude-2','dev@example.com','idle',['Idle.'])],
+    cands:[C('work@example.com','fresh','5 小時 91% 餘裕 · 週 70% · 2 分鐘前'),C('backup@example.com','reset','曾耗盡的 5 小時窗口預估 13:30 已重置 · 週限制未知')]},
+  {id:'codex-wait',cli:'codex',mode:'auto',title:'等待安全閒置再重啟',sub:'Codex · 兩個工作區',swaps:0,
+    panes:[P('Agent-Team','codex-1','team@example.com','busy',['Applying patch to git_service.py …','Running tests (1/3)']),
+           P('navide-web','codex-web','team@example.com','idle',['Build passed. Ready.']),
+           P('navide-web','codex-docs','team@example.com','awaiting',['Allow `rm -rf dist/`? [y/N]'])],
+    cands:[C('team-b@example.com','fresh','週 84% 餘裕 · 6 分鐘前'),C('team-c@example.com','unknown','有憑證，沒有額度讀數')]},
+  {id:'no-eligible',cli:'claude',mode:'auto',title:'沒有可用帳號',sub:'Claude · 逐一列出原因',swaps:1,
+    panes:[P('Agent-Team','claude-1','dev@example.com','idle',['Idle.'])],
+    cands:[C('work@example.com','excluded',null,'週限制仍未重置（預估週三 09:00）'),C('backup@example.com','excluded',null,'登入已過期，需重新登入'),C('spare@example.com','excluded',null,'本輪已嘗試過'),C('other-org@example.com','excluded',null,'認證範圍不同（其他組織）')]},
+  {id:'cred-fail',cli:'kimi',mode:'auto',title:'憑證切換失敗，自動流程停止',sub:'Kimi · 憑證檔寫入被拒',swaps:0,fail:'commit',
+    panes:[P('Agent-Team','kimi-1','ops@example.com','idle',['Idle.']),P('Agent-Team','kimi-2','ops@example.com','idle',['Done.'])],
+    cands:[C('ops-b@example.com','fresh','月 66% 餘裕 · 1 分鐘前'),C('ops-c@example.com','stale','上次 30% 餘裕 · 9 小時前')]},
+  {id:'partial-resume',cli:'codex',mode:'auto',title:'帳號換好，一個對話接續失敗',sub:'Codex · 部分完成',swaps:0,fail:'resume',
+    panes:[P('Agent-Team','codex-1','team@example.com','idle',['Idle.']),P('Agent-Team','codex-2','team@example.com','idle',['Idle.'])],
+    cands:[C('team-b@example.com','fresh','週 84% 餘裕 · 6 分鐘前')]},
+  {id:'no-resume',cli:'aider',mode:'notify',title:'無法接續，確認後另開對話',sub:'Aider／MiniMax Code',swaps:0,
+    panes:[P('Agent-Team','aider-1','me@example.com','idle',['Tokens: 12k sent, 3k received.'])],
+    cands:[C('me-2@example.com','unknown','有 API 金鑰，沒有額度讀數')]},
+  {id:'stale-unknown',cli:'grok',mode:'auto',title:'舊讀數候選，切換後無法驗證',sub:'Grok · 額度未確認',swaps:0,fail:'verify',
+    panes:[P('Agent-Team','grok-1','lab@example.com','idle',['Idle.'])],
+    cands:[C('lab-b@example.com','stale','上次 44% 餘裕 · 7 小時前'),C('lab-c@example.com','unknown','有憑證，沒有額度讀數')]},
+];
+function P(ws,id,acct,status,lines){return {ws,id,acct,status,lines:lines.slice(),resumed:null};}
+
+const IN_FLIGHT = ['confirm','hotswap','restart','commit','settling'];
+const TIER = {fresh:['新鮮餘裕','ok'],reset:['預計已重置','warn'],stale:['舊讀數','warn'],unknown:['未知','plan'],excluded:['排除','bad']};
+
+/* ===================== state ===================== */
+let state = null;
+let timer = null;
+
+function loadScenario(sc, cliOverride){
+  if (timer){clearTimeout(timer);timer=null;}
+  const cli = cliOverride || sc.cli;
+  state = {
+    scenario: sc.id, cli, mode: sc.mode,
+    step: 'idle', trail: [], manual:false, attemptAuto:false, manualNew:false,
+    original: sc.panes[0].acct, chosen: null,
+    panes: sc.panes.map(p=>({...p,lines:p.lines.slice(),status:p.status,resumed:null})),
+    cands: sc.cands.map(c=>({...c,tried:false})),
+    swaps: sc.swaps, fail: sc.fail || null,
+    results: {switched:null, resumed:null, verified:null},
+    stopReason: null, log: [],
+  };
+  document.querySelector(`input[name=mode][value=${sc.mode}]`).checked = true;
+  document.getElementById('cliPick').value = cli;
+  log(`載入情境「${sc.title}」— ${CLIS[cli].name}，模式：${modeName(sc.mode)}`);
+  render();
+}
+
+function modeName(m){return {off:'關閉',notify:'通知我',auto:'自動切換'}[m];}
+function busyPanes(){return state.panes.filter(p=>p.status==='busy'||p.status==='awaiting');}
+function needsRestart(){return !CLIS[state.cli].hot;}
+function noResume(){return !CLIS[state.cli].resume;}
+function eligible(){return state.cands.filter(c=>c.tier!=='excluded'&&!c.tried);}
+function go(step){
+  if (state.step!==step){state.trail.push(step);}
+  state.step=step;
+}
+function log(msg){
+  const t=new Date().toTimeString().slice(0,8);
+  state.log.unshift({t,msg});
+  if (state.log.length>40) state.log.length=40;
+}
+
+/* ===================== transitions ===================== */
+function quotaHit(){
+  if (state.step!=='idle'){announce('事件已存在，同一次耗盡不會重複開啟。');return;}
+  state.panes.forEach(p=>{
+    if (p.status==='busy'||p.status==='idle'||p.status==='awaiting'){
+      p.lines.push('<e>'+limitText(state.cli)+'</e>');
+    }
+  });
+  // The exhausted pane is the one that hit the wall; others share the same account.
+  const first = state.panes.find(p=>p.status==='idle')||state.panes[0];
+  if (first.status==='idle') first.status='exhausted';
+  go('detected');
+  log(`偵測到 ${CLIS[state.cli].name} 帳號 ${state.original} 額度耗盡（${state.panes.length} 個 pane 受影響）`);
+  // Detection and mode judgment are instantaneous in the product; run them through to the first user-visible stop.
+  while (['detected','mode'].includes(state.step)) advance();
+}
+
+function advance(){
+  switch(state.step){
+    case 'idle': quotaHit(); return;
+    case 'detected': go('mode'); log(`判斷模式：${modeName(state.mode)}`); break;
+    case 'mode':
+      if (state.mode==='off'){go('bypass');log('自動切換已關閉：只記錄耗盡，不列候選、不切換');break;}
+      go('candidate');
+      if (state.mode==='auto'){
+        const c = eligible()[0];
+        if (!c){finish('stopped','no-candidate');break;}
+        if (state.swaps>=3){finish('stopped','throttle');break;}
+        if (noResume()){state.chosen=c.id;finish('stopped','no-resume');break;}
+        choose(c.id,true); return;
+      }
+      log(eligible().length?'列出可切換的帳號，等待使用者選擇':'沒有可用帳號，列出各帳號的排除原因');
+      break;
+    case 'candidate':
+      if (!state.chosen){announce(eligible().length?'請在公告面板選擇要切換的帳號。':'沒有可切換的帳號；可先登入或等待重置。');return;}
+      break;
+    case 'confirm': announce('請在公告面板確認「保留原視窗並另開對話」，或取消。'); return;
+    case 'hotswap': go('commit'); log('熱切換：保留原 process 與 pane，只更換憑證'); break;
+    case 'waiting':
+      if (busyPanes().length){announce(`仍有 ${busyPanes().length} 個 pane 未安全閒置，繼續等待。等待不計入切換次數，也不會定時強制重試。`);return;}
+      go('restart'); log('所有受影響 pane 已安全閒置，快照 session / 目錄 / 模型設定後停止');
+      state.panes.forEach(p=>{p.status='stopping';});
+      break;
+    case 'restart': go('commit'); log('停止 PTY 完成，開始提交憑證'); break;
+    case 'commit':
+      if (state.fail==='commit' && !state.manual){
+        state.results.switched=false;
+        state.panes.forEach(p=>{if(p.status==='stopping'){p.status='failed';p.lines.push('<e>credential file write denied — pane left stopped on '+state.original+'; resume manually</e>');}});
+        finish('stopped','commit-failed');break;
+      }
+      state.results.switched=true;
+      if (state.attemptAuto){state.swaps++;}
+      { const c=state.cands.find(c=>c.id===state.chosen); if (c) c.tried=true; }
+      log(`憑證已提交：${state.chosen}（${state.attemptAuto?'自動':'手動'}；自動次數 ${state.swaps}/3）`);
+      if (state.manualNew){
+        // Old pane keeps the old account untouched; a fresh conversation opens on the new account.
+        state.panes.forEach(p=>{p.status='manual';p.lines.push('<w>保留此視窗（舊帳號，額度耗盡）；未嘗試接續。</w>');});
+        state.panes.push(P(state.panes[0].ws, state.cli+'-new', state.chosen, 'idle', ['<d>new conversation started as '+state.chosen+'</d>']));
+        state.results.resumed='manual'; log('保留原視窗，以新帳號另開新對話（未接續）');
+      } else if (needsRestart()){
+        let failed=false;
+        state.panes.forEach((p,i)=>{
+          const bad = state.fail==='resume' && i===state.panes.length-1 && !state.manual;
+          p.acct=state.chosen; p.status = bad?'failed':'resumed';
+          p.lines.push(bad?'<e>resume failed: session file locked — pane left untouched</e>':'<g>resumed session '+fakeSid(p.id)+' as '+state.chosen+'</g>');
+          if (bad) failed=true;
+        });
+        state.results.resumed = failed?'partial':true;
+        log(failed?'部分 pane 接續失敗，保留可恢復狀態':'所有 pane 已在原 session 接續');
+        if (failed){state.results.verified='unconfirmed';finish('partial','resume-partial');break;}
+      } else {
+        state.results.resumed=true;
+        state.panes.forEach(p=>{p.acct=state.chosen;if(p.status==='exhausted')p.status='idle';p.lines.push('<b>credentials reloaded → '+state.chosen+'</b>');});
+      }
+      go('settling'); state.results.verified='run';
+      log('進入穩定期：只接受新帳號、新 epoch 且晚於提交時間的讀數');
+      break;
+    case 'settling':
+      if (state.fail==='verify' && !state.manual){
+        state.results.verified='unconfirmed';
+        finish('stopped','verify-timeout');break;
+      }
+      state.results.verified=true;
+      finish(state.results.resumed===true?'ready':'partial', state.results.resumed===true?null:'manual-new'); break;
+    default: announce('此輪已結束。可重置情境或手動切回。'); return;
+  }
+  render();
+}
+
+function choose(id, automatic){
+  if (state.step!=='candidate'){return;}
+  state.chosen=id; state.attemptAuto=!!automatic;
+  log((automatic?'自動選定':'使用者選擇')+`候選 ${id}`+(automatic?'':'（手動切換，不計入自動次數）'));
+  if (noResume()){go('confirm');log('此 CLI 無法接續原對話，等待使用者確認保留原視窗並另開對話');render();return;}
+  if (!needsRestart()){go('hotswap');render();return;}
+  go('waiting');
+  if (busyPanes().length){log(`需要重啟：${busyPanes().length} 個 pane 忙碌或等待權限，先等待安全閒置`);render();}
+  else {log('需要重啟：全部 pane 已閒置，安全檢查立即通過');advance();}
+}
+
+function finish(step, reason){
+  go(step); state.stopReason=reason;
+  const msg={ 'no-candidate':'沒有可用帳號：通知並停止，不切換',
+    'throttle':'已達 5 小時 3 次上限：通知並停止',
+    'commit-failed':'憑證切換失敗：通知並停止，不改試下一個帳號',
+    'verify-timeout':'120 秒內沒有可驗證讀數：已切換，額度未確認；本輪自動流程結束',
+    'resume-partial':'部分完成：帳號已切換，一個對話未接續',
+    'no-resume':'此 CLI 無法自動接續原對話：自動流程停止並通知，未更動憑證',
+    'manual-new':'部分完成：帳號已切換、額度已驗證，原對話未接續（已另開新對話）',
+    null:'新帳號讀數已驗證，可以繼續工作'}[reason];
+  log(msg);
+}
+
+function workDone(){
+  const n=busyPanes().length;
+  if (!n){announce('目前沒有忙碌的 pane。');return;}
+  state.panes.forEach(p=>{
+    if (p.status==='busy'){p.status='idle';p.lines.push('<g>Done. 3 passed.</g>');}
+    if (p.status==='awaiting'){p.status='idle';p.lines.push('<d>[y] granted</d>');}
+  });
+  log(`${n} 個 pane 完成剩餘工作，回到安全閒置`);
+  if (state.step==='waiting'){advance();return;}
+  render();
+}
+
+function manualBack(){
+  // Explicitly user-initiated; the clock alone never proves the original account recovered.
+  state.manual=true; state.attemptAuto=false; state.manualNew=false; state.chosen=state.original; state.fail=null;
+  log(`使用者手動切回 ${state.original}（走同一條切換流程，切回後仍需驗證額度）`);
+  state.results={switched:null,resumed:null,verified:null}; state.trail=[];
+  if (!needsRestart()){go('hotswap');render();return;}
+  go('waiting'); if (busyPanes().length) render(); else advance();
+}
+
+function confirmNew(){
+  // Explicit user confirmation: the old pane is kept untouched; a new conversation opens on the new account.
+  state.manualNew=true; go('commit'); log(`使用者確認：保留原視窗，以 ${state.chosen} 另開對話`); render();
+}
+function retryResume(){
+  const p=state.panes.find(p=>p.status==='failed'); if(!p) return;
+  p.status='resumed'; p.lines.push('<g>resumed session '+fakeSid(p.id)+' as '+state.chosen+' (retry)</g>');
+  state.results.resumed=true; state.results.verified='run'; state.stopReason=null; go('settling');
+  log('重試接續成功（模擬），進入穩定期驗證額度'); render();
+}
+function newConversationForFailed(){
+  const p=state.panes.find(p=>p.status==='failed'); if(!p) return;
+  p.status='manual'; p.lines.push('<w>保留此視窗，未再嘗試接續。</w>');
+  state.panes.push(P(p.ws, p.id+'-new', state.chosen, 'idle', ['<d>new conversation started as '+state.chosen+'</d>']));
+  state.results.verified='run'; state.stopReason='manual-new'; go('settling');
+  log('為接續失敗的 pane 另開新對話（原視窗保留），進入穩定期驗證額度'); render();
+}
+function fakeSid(id){let h=0;for(const ch of id)h=(h*31+ch.charCodeAt(0))&0xffff;return 'sess_'+h.toString(16).padStart(4,'0');}
+
+/* ===================== render ===================== */
+const $ = s=>document.querySelector(s);
+function esc(s){return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+function termLine(l){ // allow only our own tiny markup tags
+  return l.replace(/<(\/?)([pdewgb])>/g,(m,s,t)=>s?'</span>':`<span class="${t}">`);
+}
+
+function render(){
+  renderCap(); renderPanes(); renderWs(); renderAnnounce(); renderFlow(); renderLog(); renderTop();
+  const locked = IN_FLIGHT.includes(state.step);
+  document.querySelectorAll('input[name=mode]').forEach(r=>{r.disabled=locked;});
+  $('#modeHint').textContent = locked ? '切換進行中，完成本次操作後可調整。' : {off:'不啟動切換；只在畫面上標示耗盡。',notify:'列出可切換的帳號，由你決定。',auto:'依 CLI 能力熱切換或等待安全閒置後重啟；任一步失敗就通知並停止。'}[state.mode];
+  document.querySelectorAll('.scen button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.id===state.scenario)));
+  const term=['ready','stopped','partial','bypass'].includes(state.step);
+  $('[data-sim=hit]').disabled = state.step!=='idle';
+  $('[data-sim=work]').disabled = !busyPanes().length;
+  $('[data-sim=advance]').disabled = term || state.step==='confirm' || (state.step==='candidate' && !state.chosen && state.mode==='notify');
+}
+
+function renderCap(){
+  const k=state.cli, c=CLIS[k];
+  const now = c.slot ? (c.hot?'熱切換（已驗證）':'需重啟，目前要求強制／重啟') : '沒有帳號槽';
+  const nowRes = c.resume ? '有' : '無';
+  const plan = !c.slot ? '補憑證擷取／還原與登入判斷 adapter' : (c.hot?'保留熱切路徑，補新版憑證重讀驗證':'改為等待安全閒置、切換後接續原 session');
+  const planRes = c.resume ? '' : '；無損接續不可行，明示另開對話';
+  $('#capNow').innerHTML =
+    `<dt><span class="tag now">現況</span></dt><dd>帳號槽：${c.slot?'有':'無'} · ${now} · 接續：${nowRes}</dd>`+
+    `<dt><span class="tag plan">計畫</span></dt><dd>${plan}${planRes}</dd>`;
+}
+
+function renderWs(){
+  const groups={};
+  state.panes.forEach(p=>{(groups[p.ws]=groups[p.ws]||[]).push(p);});
+  let h='';
+  for (const ws in groups){
+    h+=`<h3>${esc(ws)}</h3>`+groups[ws].map(p=>`<div class="pane-row on"><i class="dot ${p.status}"></i><span>${esc(p.id)}</span><span class="acct">${esc(p.acct.split('@')[0])}</span></div>`).join('');
+  }
+  h+=`<h3>其他</h3><div class="pane-row"><i class="dot idle"></i><span>shell</span></div><div class="pane-row"><i class="dot idle"></i><span>git</span></div>`;
+  $('#wsbar').innerHTML=h;
+  $('#mockTitle').textContent='Navide — '+Object.keys(groups).join(' · ');
+}
+
+const ST_TXT={busy:'執行中',idle:'閒置',awaiting:'等待權限',exhausted:'額度耗盡',stopping:'已停止',resumed:'已接續',failed:'接續失敗',manual:'需另開對話'};
+function renderPanes(){
+  $('#panes').innerHTML = state.panes.map(p=>`
+    <article class="pane ${p.status}" aria-label="${esc(p.id)}">
+      <header><b>${esc(CLIS[state.cli].name)}</b><span>${esc(p.ws)} / ${esc(p.id)}</span><span class="acct">${esc(p.acct)}</span><span class="st tag">${ST_TXT[p.status]}</span></header>
+      <div class="term"><span class="d">$ ${esc(state.cli)}${CLIS[state.cli].resume?' --resume '+fakeSid(p.id):''}</span>\n${p.lines.map(termLine).join('\n')}</div>
+      <footer></footer>
+    </article>`).join('');
+}
+
+function renderAnnounce(){
+  const s=state, cli=CLIS[s.cli].name, n=s.panes.length, wsN=new Set(s.panes.map(p=>p.ws)).size;
+  const scope=`影響 ${wsN} 個工作區、${n} 個 pane`;
+  let cls='info', h='', m='', acts=[];
+  switch(s.step){
+    case 'idle': cls=''; h='沒有待處理的公告'; m='觸發額度耗盡後，這裡會顯示事件與可用動作。'; break;
+    case 'detected': case 'mode': cls='warn'; h=`${cli} 帳號 ${s.original} 額度已耗盡`; m=scope; break;
+    case 'bypass': cls='warn'; h=`${cli} 帳號 ${s.original} 額度已耗盡`; m=`自動切換已關閉，未列候選。${scope}。可到設定手動切換帳號。`; break;
+    case 'candidate': cls='warn'; h=`${cli} 額度已耗盡`; m= s.mode==='notify'? `${scope}。從右側選擇要切換的帳號；${needsRestart()?'此 CLI 需要重啟，忙碌的 pane 會等到安全閒置。':'此 CLI 可熱切換，不會重啟 pane。'}` : scope; break;
+    case 'confirm': cls='warn'; h=`${cli} 無法接續原對話`; m=`切換到 ${s.chosen} 後，原視窗會保留在舊帳號（不接續、不停止），並以新帳號另開一個對話。需要你確認才會更動憑證。`; break;
+    case 'hotswap': cls='info'; h=`切換到 ${s.chosen}`; m='熱切換進行中，不會重啟任何 pane。'; break;
+    case 'waiting': cls='info'; h=`等待安全時機再切換到 ${s.chosen}`; m=`${busyPanes().length} 個 pane 忙碌或等待權限，不會被自動停止；全部閒置後才會重啟。等待不計入切換次數。`; break;
+    case 'restart': cls='info'; h=`正在停止並切換到 ${s.chosen}`; m='已快照每個 pane 的目錄、session、模型與權限設定。'; break;
+    case 'commit': cls='info'; h='提交憑證中'; m='更換認證資料，其他設定與對話不動。'; break;
+    case 'settling': cls='teal'; h=`已切換到 ${s.chosen}，等待額度驗證`; m='只接受新帳號的新讀數；prompt 出現或畫面靜默都不算恢復。最多等待 120 秒。'; break;
+    case 'ready': cls='ok'; h=`已切換到 ${s.chosen}，額度已驗證`; m=`可以繼續工作。原帳號 ${s.original} 預計 14:00 恢復（未驗證），不會自動切回。`; break;
+    case 'partial': cls='warn';
+      if (s.stopReason==='manual-new'){h=`已切換到 ${s.chosen}，原對話未接續`; m='已另開新對話並驗證額度；原視窗保留在舊帳號。這不是無損接續。';}
+      else {h=`已切換到 ${s.chosen}，部分對話未接續`; m='接續失敗的 pane 保留原狀；可重試接續或另開對話，不會自動重播先前任務。';}
+      break;
+    case 'stopped': cls='bad'; h={ 'no-candidate':'沒有可切換的帳號', 'throttle':'已達自動切換上限', 'commit-failed':`切換到 ${s.chosen} 失敗`, 'verify-timeout':`已切換到 ${s.chosen}，額度未確認`, 'no-resume':`${cli} 無法自動接續，已停止`}[s.stopReason];
+      m={ 'no-candidate':'每個帳號的原因列在右側。可登入新帳號或等待重置後再試。', 'throttle':'5 小時內已自動切換 3 次。可手動切換，或等窗口過期。', 'commit-failed':'憑證檔案寫入被拒（權限不足），原帳號維持不變。自動流程已停止，不會改試其他帳號。', 'verify-timeout':'120 秒內沒有可驗證的讀數。帳號已更換，但無法確認額度；後續讀數只更新狀態，不會再自動切換。', 'no-resume':`此 CLI 沒有原生對話接續，自動模式不會更動憑證。候選 ${s.chosen} 可用；改為手動處理時會保留原視窗並另開對話。`}[s.stopReason]; break;
+  }
+  if (['ready','stopped','partial'].includes(s.step) && s.results.switched && !s.manual && !s.manualNew) acts.push(`<button data-act="back">手動切回 ${esc(s.original)}</button>`);
+  if (s.step==='partial'&&s.stopReason==='resume-partial') acts.push(`<button data-act="retry">重試接續</button><button data-act="newconv">另開對話</button>`);
+  if (s.step==='stopped'&&s.stopReason==='no-candidate') acts.push(`<button disabled title="原型未實作登入">登入其他帳號（示意，未實作）</button>`);
+  if (s.step==='stopped'&&s.stopReason==='no-resume') acts.push(`<button data-act="tomanual">改為手動處理</button>`);
+  if (s.step==='confirm') acts.push(`<button class="primary" data-act="confirmnew">保留原視窗並另開對話</button><button data-act="cancel">取消，維持原帳號</button>`);
+  $('#notices').innerHTML = `<div class="notice ${cls}"><div class="h">${esc(h)}</div><div class="m">${m}</div>${acts.length?`<div class="acts">${acts.join('')}</div>`:''}</div>`;
+  $('#incidentTag').textContent = s.step==='idle'?'':(s.manual?'手動切回':'事件 #'+fakeSid(s.scenario).slice(5));
+
+  const R=s.results, v=x=>x===true?['完成','ok']:x===false?['失敗','bad']:x==='partial'?['部分','warn']:x==='run'?['驗證中','run']:x==='unconfirmed'?['未確認','warn']:x==='manual'?['未接續（另開對話）','warn']:['—',''];
+  const rows=[['帳號已切換',v(R.switched)],['對話已接續',v(R.resumed)],['額度已驗證',v(R.verified)]];
+  $('#results').innerHTML = s.step==='idle'?'':rows.map(([k,[t,c]])=>`<span class="res" data-v="${c}">${k}：<b>${t}</b></span>`).join('');
+  $('#budget').textContent = `自動切換次數：本 5 小時已用 ${s.swaps}/3（提案數值：滾動 5 小時最多 3 次、間隔至少 10 分鐘；手動切換與等待安全閒置不計次。原型不模擬時鐘，數值為示意）`;
+
+  const showCands = !['idle','bypass'].includes(s.step);
+  $('#candHint').textContent = showCands ? (s.mode==='auto'?'自動模式：依可信度取第一個':'依可信度排序') : '';
+  $('#cands').innerHTML = !showCands ? '<div class="empty">尚無事件。</div>' : s.cands.map(c=>{
+    const [t,cl]=TIER[c.tier]; const chosen=c.id===s.chosen;
+    const canPick = s.step==='candidate' && s.mode==='notify' && c.tier!=='excluded' && !c.tried;
+    return `<div class="cand ${chosen?'chosen':''} ${c.tier==='excluded'?'excluded':''}">
+      <span class="id">${esc(c.id)}${chosen?' <span class="tag now">已選</span>':''}${c.tried&&!chosen?' <span class="tag">本輪已試</span>':''}</span>
+      ${canPick?`<button data-act="pick" data-id="${esc(c.id)}">切換到此帳號</button>`:`<span class="tag ${cl} tier">${t}</span>`}
+      <span class="why ${c.tier==='excluded'?'bad':''}">${esc(c.reason||c.info||'')}${c.tier==='unknown'?'（該輪最多嘗試一次，不代表有額度）':''}</span>
+    </div>`;}).join('');
+}
+
+/* ---- flow map ---- */
+const NODES = {
+  detected:[120,26,'偵測耗盡'], mode:[120,82,'判斷模式'], bypass:[240,82,'關閉：不切換'],
+  candidate:[120,138,'候選帳號'], hotswap:[46,200,'熱切換'], waiting:[140,200,'等待安全閒置'], confirm:[254,200,'確認另開對話'],
+  restart:[140,256,'停止並重啟'], commit:[120,312,'提交憑證'], settling:[76,368,'穩定期／驗證'],
+  ready:[48,436,'已驗證可用'], partial:[140,436,'部分完成'], stopped:[240,436,'通知並停止'],
+};
+// [from, to, customPath?, className?] — custom paths route around nodes; 'back' marks a recovery edge.
+const EDGES = [['detected','mode'],['mode','bypass','M164,82 H196'],['mode','candidate'],
+  ['candidate','hotswap'],['candidate','waiting'],['candidate','confirm'],
+  ['candidate','stopped','M120,151 C120,170 197,168 197,215 V380 C197,410 240,400 240,423'],
+  ['waiting','restart'],['hotswap','commit'],['restart','commit'],
+  ['confirm','commit','M254,213 V290 C254,305 190,305 164,312'],
+  ['commit','settling'],['commit','partial'],
+  ['commit','stopped','M150,325 C150,355 197,345 197,380 C197,410 240,400 240,423'],
+  ['settling','ready'],['settling','partial'],['settling','stopped'],
+  ['partial','settling','M184,436 C196,436 196,368 120,368','back']];
+const EXPLAIN = {
+  idle:['尚未開始','按「觸發額度耗盡」開始模擬。流程圖會隨每一步亮起。'],
+  detected:['偵測耗盡','事件歸屬於發生當時的帳號與 pane；多個 pane 的同一次耗盡合成一個事件。一般 429、網路錯誤、登入過期不會走這條路。'],
+  mode:['判斷模式','關閉：略過。通知我：列候選等你選。自動切換：取可信度最高的候選，但仍受切換次數上限。'],
+  bypass:['關閉：不切換','只標示耗盡狀態。你可以到設定手動切換。'],
+  candidate:['候選帳號','排除目前帳號、未登入、硬限制未重置、本輪已試過與認證範圍不同者。依新鮮餘裕 › 預計重置 › 舊讀數 › 未知排序。'],
+  hotswap:['熱切換','僅 Claude 目前驗證可行：保留 process，直接換憑證。'],
+  confirm:['確認另開對話','Aider／MiniMax Code 沒有原生接續。憑證不會更動，直到你確認保留原視窗並另開對話；自動模式在這裡停止並通知。'],
+  waiting:['等待安全閒置','需重啟的 CLI 不會殺忙碌 pane。等待不計次、不定時重試；改成關閉會取消尚未提交的步驟。'],
+  restart:['停止並重啟','先快照工作目錄、session、模型／權限與未送出輸入，全部安全才停止。'],
+  commit:['提交憑證','只交換認證資料。真的交換就計次，即使後續接續失敗。'],
+  settling:['穩定期／驗證','只接受目標帳號、新 epoch、晚於提交時間的讀數。舊讀數不能解閘。'],
+  ready:['已驗證可用','三件事都完成。原帳號不自動切回，只提供手動按鈕。'],
+  partial:['部分完成','帳號已換，但至少一個對話沒有接續（失敗或另開新對話）。保留可恢復狀態，不重播任務。'],
+  stopped:['通知並停止','任一步失敗就結束本輪，不改試下一個候選；等你處理。'],
+};
+function buildFlow(){
+  const N=$('#nodes'),E=$('#edges');
+  E.innerHTML=EDGES.map(([a,b,d,cls])=>{const [x1,y1]=NODES[a],[x2,y2]=NODES[b];const my=(y1+y2)/2;
+    return `<path class="edge ${cls||''}" data-e="${a}-${b}" d="${d||`M${x1},${y1+13} C${x1},${my} ${x2},${my} ${x2},${y2-13}`}"/>`;}).join('');
+  N.innerHTML=Object.entries(NODES).map(([k,[x,y,t]])=>`<g class="node ${k==='bypass'?'off':''} ${k==='stopped'?'bad':k==='partial'?'warn':''}" data-n="${k}"><rect x="${x-44}" y="${y-13}" width="88" height="26"/><text x="${x}" y="${y}">${t}</text></g>`).join('');
+}
+function renderFlow(){
+  const trail=new Set(state.trail);
+  document.querySelectorAll('#nodes .node').forEach(g=>{const k=g.dataset.n;g.classList.toggle('done',trail.has(k)&&k!==state.step);g.classList.toggle('current',k===state.step);});
+  document.querySelectorAll('#edges .edge').forEach(e=>{const [a,b]=e.dataset.e.split('-');
+    const done = state.trail.some((x,i)=>x===a&&state.trail[i+1]===b);
+    e.classList.toggle('done',done); e.classList.toggle('skip',trail.has(a)&&!done);});
+  const [k,t]=EXPLAIN[state.step];
+  $('#explain').innerHTML=`<span class="k">${k}</span> — ${esc(t)}`;
+}
+function renderLog(){ $('#log').innerHTML=state.log.map(l=>`<li><time>${l.t}</time>${esc(l.msg)}</li>`).join(''); }
+function renderTop(){
+  const [k]=EXPLAIN[state.step];
+  const txt=`${CLIS[state.cli].name} · ${modeName(state.mode)} · ${k}`;
+  $('#topStatus').textContent=txt; $('#live').textContent=txt;
+}
+function announce(msg){ log(msg); $('#live').textContent=msg; renderLog(); }
+
+/* ===================== wiring ===================== */
+function init(){
+  const pick=$('#cliPick');
+  pick.innerHTML=ORDER.map(k=>`<option value="${k}">${CLIS[k].name}${CLIS[k].slot?'':'（規劃中）'}</option>`).join('');
+  $('#scenList').innerHTML=SCENARIOS.map((s,i)=>`<li><button data-id="${s.id}" aria-pressed="false"><span class="n">${i+1}</span><span><span class="t">${s.title}</span><br><span class="s">${s.sub}</span></span></button></li>`).join('');
+  $('#capTable tbody').innerHTML=ORDER.map(k=>{const c=CLIS[k];
+    return `<tr><td class="k">${k}</td><td>${c.slot?'有':'<span class="tag plan">規劃補齊</span>'}</td><td>${c.slot?(c.hot?'熱切換 <span class="tag ok">已驗證</span>':'需強制／重啟'):'—'}</td><td>${c.resume?'有宣告':'<span class="tag bad">無</span>'}</td><td>${!c.slot?'憑證擷取／還原 adapter'+(c.resume?'':'；另開對話流程'):(c.hot?'保留熱切，補實機驗證':'等待安全閒置 + 接續原 session')}</td></tr>`;}).join('');
+  buildFlow();
+
+  $('#scenList').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;loadScenario(SCENARIOS.find(s=>s.id===b.dataset.id));});
+  document.querySelectorAll('input[name=mode]').forEach(r=>r.addEventListener('change',()=>{
+    if (IN_FLIGHT.includes(state.step)){document.querySelector(`input[name=mode][value=${state.mode}]`).checked=true;return;}
+    state.mode=r.value; log(`模式改為：${modeName(state.mode)}`);
+    if (['detected','mode','candidate','waiting'].includes(state.step)){
+      // Pre-commit steps re-evaluate; nothing already committed is undone.
+      state.chosen=null; state.trail=state.trail.slice(0,state.trail.indexOf('detected')+1); state.step='detected';
+      log('尚未提交憑證，依新模式重新判斷'); advance(); return;
+    }
+    render();
+  }));
+  pick.addEventListener('change',()=>{
+    const sc=SCENARIOS.find(s=>s.id===state.scenario);
+    const base={...sc,panes:sc.panes.map(p=>({...p,id:p.id.replace(/^[a-z]+/,pick.value)}))};
+    loadScenario(base,pick.value); log(`改用 ${CLIS[pick.value].name} 重跑同一情境（能力依該 CLI 宣告）`); render();
+  });
+  document.querySelectorAll('[data-sim]').forEach(b=>b.addEventListener('click',()=>{
+    const a=b.dataset.sim;
+    if (a==='hit') quotaHit(); else if (a==='work') workDone(); else if (a==='advance') advance();
+    else if (a==='reset') loadScenario(SCENARIOS.find(s=>s.id===state.scenario), state.cli);
+  }));
+  document.querySelector('.announce').addEventListener('click',e=>{
+    const b=e.target.closest('button[data-act]'); if(!b) return;
+    const a=b.dataset.act;
+    if (a==='pick') choose(b.dataset.id,false);
+    else if (a==='back') manualBack();
+    else if (a==='retry') retryResume();
+    else if (a==='newconv') newConversationForFailed();
+    else if (a==='tomanual'){state.step='candidate';go('confirm');log('使用者選擇改為手動處理，等待確認另開對話');render();}
+    else if (a==='confirmnew') confirmNew();
+    else if (a==='cancel'){state.chosen=null;state.trail=state.trail.slice(0,state.trail.indexOf('candidate')+1);state.step='candidate';log('使用者取消，維持原帳號');render();}
+  });
+  const modal=$('#readme');
+  $('#btnReadme').addEventListener('click',()=>{modal.setAttribute('open','');$('#btnCloseReadme').focus();});
+  $('#btnCloseReadme').addEventListener('click',()=>{modal.removeAttribute('open');$('#btnReadme').focus();});
+  modal.addEventListener('click',e=>{if(e.target===modal)modal.removeAttribute('open');});
+  document.addEventListener('keydown',e=>{if(e.key==='Escape'&&modal.hasAttribute('open'))modal.removeAttribute('open');});
+  $('#btnTheme').addEventListener('click',()=>{
+    const root=document.documentElement, light=root.dataset.theme!=='light';
+    root.dataset.theme=light?'light':'dark'; $('#btnTheme').textContent=light?'暗色':'亮色'; $('#btnTheme').setAttribute('aria-pressed',String(light));
+  });
+  loadScenario(SCENARIOS[0]);
+  quotaHit();
+}
+init();
+</script>
+</body>
+</html>

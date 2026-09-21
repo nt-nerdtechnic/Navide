@@ -36,6 +36,48 @@ You never need to read or modify the shared orchestration code.
    which is usually *not* the end. Run the test and let the diff place it.
 8. Only if your spec sets `login_command_args`: add the key to the expected set
    in `backend/tests/test_login_spawn_command.py`.
+9. Account switching is opt-in through `account_switch=AccountSwitchSpec(...)`
+   on the spec, plus `slot_file` (the parked copy's file name). A spec without
+   the declaration is never offered for switching and never inherits another
+   vendor's behaviour. The fields the transaction and the UI read:
+   - `auth_scope` — the credential pool. Two vendors declaring the same string
+     share one switch lock and one impact set. For a per-provider store the
+     declared value is the prefix; the runtime pool is `"<auth_scope>:<scope>"`
+     (`cli_vendors.base.auth_scope_for`).
+   - `method` — `hot` (the CLI re-reads its credential per request; panes keep
+     running), `restart` (affected panes are stopped at a safe point, swapped,
+     and resumed), or `manual` (the vault can park and restore, but the user
+     must confirm a new conversation). Automatic switching is refused for
+     `manual`, and for `restart` when `resume` is not `native`.
+   - `store` — `file`, `compound-file` (one provider entry inside a shared
+     document; needs `extract` / `merge`, and `scopes` listing every provider
+     id a profile may bind to), `keychain` (`keychain_items` as
+     `(service, account)` pairs, `live_file` as the non-macOS fallback),
+     `pointer`, or `env`.
+   - `evidence` — `live` (an A → B → A round-trip on an installed CLI,
+     recorded against `verified_version`), `source` (read from the vendor's
+     code or package), or `docs`. Anything but `live` is shown as unverified;
+     it is never a reason to refuse a switch, and it must not be raised without
+     the round-trip. Keep `platforms` to the tuple you actually established;
+     `todo` names what is still open.
+   - `shadowing_env` — variable names the CLI ranks above the stored
+     credential. A pane launched with one of them present is reported as not
+     switchable rather than swapped.
+   - Quota evidence: the backend trusts an exhaustion report only from its own
+     per-account usage snapshot (`fetch_usage`) or from a text the vendor
+     declared in `quota_exhausted_patterns`. A vendor declaring neither can
+     only ever notify.
+   - Sign-in isolation: set `login_home_env` (and `login_home_secret_file`)
+     when the CLI can be pointed at a private home; the sign-in pane then
+     runs there and the live credential is untouched. Without it the sign-in
+     is *global*: the vault snapshots the live credential before the pane
+     spawns, parks what the CLI wrote into the profile's slot afterwards and
+     restores the snapshot. Say which one applies in the integration record.
+   The structural test `backend/tests/test_account_switch_capabilities.py`
+   checks the declaration; `backend/tests/test_quota_failover_api_contract.py`
+   and `test_quota_failover_login_contract.py` exercise the switch and sign-in
+   flows through the real handlers — add your vendor to their vendor lists
+   when you declare `account_switch`.
 
 ## Frontend
 

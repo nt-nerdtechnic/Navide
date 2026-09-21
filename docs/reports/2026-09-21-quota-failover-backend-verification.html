@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>額度耗盡帳號切換 · 後端權威交付驗證報告</title>
+
+
+<style>
+  :root {
+    --bg: #F4F5F8; --surface: #FFFFFF; --surface-2: #EDEFF4;
+    --ink: #1D2530; --muted: #5D6774; --line: #DDE1E9;
+    --accent: #3B5BDB; --accent-soft: #E8EDFB;
+    --st-pending: #8B95A3; --st-pending-bg: #EDEFF4;
+    --st-progress: #C77400; --st-progress-bg: #FBF0DC;
+    --st-done: #2B8A3E; --st-done-bg: #E3F2E6;
+    --danger: #C0392B; --danger-bg: #FAE9E6;
+    --code-bg: #EEF0F5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14171D; --surface: #1C2028; --surface-2: #232833;
+      --ink: #E6EAF1; --muted: #9AA4B2; --line: #2C323E;
+      --accent: #7B94F0; --accent-soft: #232C48;
+      --st-pending: #8B95A3; --st-pending-bg: #232833;
+      --st-progress: #E8A54B; --st-progress-bg: #3A2E1A;
+      --st-done: #6BC77F; --st-done-bg: #1E3324;
+      --danger: #E07060; --danger-bg: #3A2320;
+      --code-bg: #242936;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14171D; --surface: #1C2028; --surface-2: #232833;
+    --ink: #E6EAF1; --muted: #9AA4B2; --line: #2C323E;
+    --accent: #7B94F0; --accent-soft: #232C48;
+    --st-pending: #8B95A3; --st-pending-bg: #232833;
+    --st-progress: #E8A54B; --st-progress-bg: #3A2E1A;
+    --st-done: #6BC77F; --st-done-bg: #1E3324;
+    --danger: #E07060; --danger-bg: #3A2320;
+    --code-bg: #242936;
+  }
+  :root[data-theme="light"] {
+    --bg: #F4F5F8; --surface: #FFFFFF; --surface-2: #EDEFF4;
+    --ink: #1D2530; --muted: #5D6774; --line: #DDE1E9;
+    --accent: #3B5BDB; --accent-soft: #E8EDFB;
+    --st-pending: #8B95A3; --st-pending-bg: #EDEFF4;
+    --st-progress: #C77400; --st-progress-bg: #FBF0DC;
+    --st-done: #2B8A3E; --st-done-bg: #E3F2E6;
+    --danger: #C0392B; --danger-bg: #FAE9E6;
+    --code-bg: #EEF0F5;
+  }
+
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font-family: -apple-system, "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", sans-serif;
+    line-height: 1.75; font-size: 15.5px;
+  }
+  .wrap { max-width: 820px; margin: 0 auto; padding: 40px 24px 80px; }
+  code, pre { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.87em; }
+  code { background: var(--code-bg); padding: 1px 6px; border-radius: 4px; }
+  pre { background: var(--code-bg); padding: 13px 16px; border-radius: 8px; overflow-x: auto; line-height: 1.6; }
+  pre code { background: none; padding: 0; }
+
+  header { margin-bottom: 44px; padding-bottom: 26px; border-bottom: 2px solid var(--line); }
+  .eyebrow {
+    text-transform: uppercase; letter-spacing: 0.14em; font-size: 11.5px;
+    color: var(--accent); font-weight: 700; margin-bottom: 8px;
+  }
+  h1 { font-size: 27px; line-height: 1.35; margin-bottom: 10px; font-weight: 700; }
+  .overview { color: var(--muted); font-size: 16px; max-width: 42em; }
+
+  .pill {
+    display: inline-block; padding: 2px 11px; border-radius: 99px;
+    font-size: 12.5px; font-weight: 700; white-space: nowrap; vertical-align: 2px;
+    margin-left: 10px;
+  }
+  .pill.draft      { background: var(--surface-2); color: var(--muted); }
+  .pill.in-review  { background: var(--accent-soft); color: var(--accent); }
+  .pill.approved   { background: var(--st-done-bg); color: var(--st-done); }
+  .pill.in-progress{ background: var(--st-progress-bg); color: var(--st-progress); }
+  .pill.done       { background: var(--st-done-bg); color: var(--st-done); }
+  .pill.abandoned  { background: var(--danger-bg); color: var(--danger); }
+
+  section { margin-bottom: 48px; }
+  h2 { font-size: 20px; margin-bottom: 16px; font-weight: 700; }
+  h3 { font-size: 16px; margin: 22px 0 8px; font-weight: 700; }
+  p { margin-bottom: 12px; max-width: 44em; }
+  ul, ol { margin-bottom: 12px; padding-left: 1.4em; max-width: 42em; }
+  li { margin-bottom: 5px; }
+
+  .phase {
+    border: 1px solid var(--line); border-radius: 12px; background: var(--surface);
+    margin-bottom: 14px; overflow: hidden;
+  }
+  .phase-head {
+    display: flex; align-items: center; gap: 10px; padding: 12px 18px;
+    background: var(--surface-2); border-bottom: 1px solid var(--line);
+    font-weight: 700; font-size: 15px; flex-wrap: wrap;
+  }
+  .phase-body { padding: 12px 18px 6px; }
+
+  ul.todos { list-style: none; padding: 0; }
+  ul.todos li {
+    display: flex; align-items: baseline; gap: 10px; padding: 5px 0;
+    border-bottom: 1px dashed var(--line);
+  }
+  ul.todos li:last-child { border-bottom: none; }
+  ul.todos .st {
+    flex: none; font-size: 11.5px; font-weight: 700; border-radius: 99px;
+    padding: 1px 9px; min-width: 74px; text-align: center;
+  }
+  li[data-status="pending"]     .st { background: var(--st-pending-bg); color: var(--st-pending); }
+  li[data-status="in-progress"] .st { background: var(--st-progress-bg); color: var(--st-progress); }
+  li[data-status="done"]        .st { background: var(--st-done-bg); color: var(--st-done); }
+  li[data-status="skipped"]     .st { background: var(--danger-bg); color: var(--danger); }
+  li[data-status="done"] { color: var(--muted); }
+
+  .notes { list-style: none; padding: 0; max-width: none; }
+  .notes li {
+    background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--accent);
+    border-radius: 0 10px 10px 0; padding: 10px 16px; margin-bottom: 10px;
+  }
+  .notes li[data-resolved="true"] { border-left-color: var(--st-done); opacity: 0.75; }
+  .notes .who { font-size: 12px; font-weight: 700; color: var(--accent); margin-right: 8px; text-transform: uppercase; letter-spacing: 0.06em; }
+  .notes .reply { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--line); color: var(--muted); font-size: 14.5px; }
+
+  .tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: 14.5px; }
+  th, td { padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--line); }
+  th { background: var(--surface-2); font-weight: 700; }
+  tr:last-child td { border-bottom: none; }
+
+  .note { color: var(--muted); font-size: 13.5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="eyebrow">Agent-Team · Report · 附錄於 quota-exhaustion-auto-switch_7b3e91</div>
+  <h1>額度耗盡帳號切換 · 後端權威交付驗證報告<span class="pill in-review">backend B/E</span></h1>
+  <p class="overview">Phase B/E 後端交付：quota_failover.py 權威服務、WS 契約、usage 泛化、持久化預算與對帳防護，附測試命令與 exit code、未完成缺口。</p>
+</header>
+
+<section>
+  <h2>Goals</h2>
+  <p>母計畫 <code>quota-exhaustion-auto-switch_7b3e91</code> Phase B（後端權威、持久化節流、切換交易）與 Phase E（恢復驗證、競態、settling）的後端部分。renderer 只回報與提議；憑證是否移動、影響哪些 pane、預算是否還有，全部由 <code>backend/agent_team_backend/quota_failover.py</code> 決定。本報告只陳述已由測試證明的事實；未經證明的一律列在「缺口」。</p>
+  <div class="tablewrap"><table>
+    <tr><th>檔案</th><th>變更</th></tr>
+    <tr><td><code>backend/agent_team_backend/quota_failover.py</code></td><td>新檔（約 2.3K 行）：capability／auth scope／provenance、純函式候選排序、QuotaFailoverStore（kv policy＋<code>quota_failover_switches</code> 稽核／預算表）、Incident／Transaction、QuotaFailoverService</td></tr>
+    <tr><td><code>backend/agent_team_backend/ws_handlers.py</code></td><td>+~330：10 個 <code>quota_failover.*</code> handler；<code>cli_profiles.set_default</code> 加 UNRECONCILED_STATE 守衛、scope 解析、manual hook；<code>terminal.create</code> 於 switch_lock 內寫 pane provenance；<code>cli_profiles.create</code> 接 scope；<code>cli_profiles.list</code> 帶 account_capabilities</td></tr>
+    <tr><td><code>backend/agent_team_backend/usage_service.py</code></td><td>+~190／−10：<code>begin_switch_epoch</code>／<code>announce_switch</code> 泛化、每 vendor epoch 丟棄遲到 poll、非 Claude account_snapshots、失效觀察 hook、harvest 路徑傳 scope</td></tr>
+    <tr><td><code>backend/agent_team_backend/app.py</code></td><td>+4：<code>quota_failover = QuotaFailoverService(db=database)</code> 單例接線</td></tr>
+    <tr><td><code>backend/tests/test_quota_failover.py</code></td><td>新檔：75 個測試</td></tr>
+    <tr><td><code>backend/tests/test_app_cli_profiles.py</code></td><td>FakeVault 接受 <code>scope</code>；兩個事件測試改為驗證事件型別序列與 <code>quota_failover.changed.epochs</code>；switch_spy 驗證 scope 轉送</td></tr>
+  </table></div>
+  <p class="note">未動：<code>credential_vault.py</code>、<code>profiles_store.py</code>、<code>cli_vendors/*</code>（vendor owner）、前端、文件與 locale。<code>backend/tests/test_quota_failover_api_contract.py</code>（18 條）由獨立驗證窗擁有，本報告只引用其結果。</p>
+</section>
+
+<section>
+  <h2>Phases</h2>
+  <div class="phase">
+    <div class="phase-head">Phase B · 後端權威與交易</div>
+    <div class="phase-body">
+      <ul class="todos">
+        <li data-status="done" data-item-id="policy-persist"><span class="st">done</span><span>持久化 off/notify/auto（預設 notify）；<code>set_policy</code> 非 auto 時 <code>_withdraw</code> 所有未提交自動交易並把 incident 收成 notify-stopped</span></li>
+        <li data-status="done" data-item-id="incident-correlation"><span class="st">done</span><span>incident key＝agent＋auth scope＋outgoing slot；同一 outgoing slot 的晚到回報（含 epoch 已變）併入同一 incident；<code>usage-window</code> 要後端快照該 slot 真的 100%，<code>cli-text</code> 要 vendor 宣告 patterns 且匹配，否則 <code>trusted:false</code> 只通知；attribution 只用 <code>pane_account_history.profile_at(pane, at)</code>，unknown 只通知</span></li>
+        <li data-status="done" data-item-id="candidates"><span class="st">done</span><span><code>rank_candidates</code>：fresh-headroom→reset-expected→stale-headroom→unknown，同階以最弱餘裕→新鮮度→slotId；排除 current/tried/signed-out/expired/login-pending/exhausted；weekly 100% 未 reset 否決 session 已 reset；ledger 開放耗盡 cycle 否決舊 snapshot；未來時間戳與 nonfinite 不算 fresh；<code>weekly-model</code> 促銷桶不單獨否決</span></li>
+        <li data-status="done" data-item-id="budget"><span class="st">done</span><span><code>quota_failover_switches</code> 表：automatic=1 且 (swapped=1 或 state='swapping') 計次；3 次/5h、間隔 600s；manual 不計、不受限；重建 service 讀同表</span></li>
+        <li data-status="done" data-item-id="hot-commit"><span class="st">done</span><span><code>_commit</code>：鎖等待 10s；鎖後與最後一個 await 後各一次 <code>_recheck_locked</code>（tx 仍 open、store current==from、epoch 未變、auto 時 policy 仍 auto／audit 未降級／預算仍有）；candidate 綁定的交易重驗 <code>_require_eligible</code>；先寫 intent 列再 <code>vault.switch</code>；swap 後鎖內 <code>service.begin_switch_epoch</code>；set_default 失敗→partial＋unreconciled；audit 二次寫失敗→partial＋<code>audit_degraded</code> 暫停 auto</span></li>
+      </ul>
+      <p class="note">驗收對照：跨 window 同事件只交換一次（test_auto_hot_switch_swaps_once…、契約測試同題）；手動搶先後拒絕舊 epoch（test_manual_route_cancels…）；false auto 授權拒絕（AUTO_DISABLED）；重啟不重設預算（test_budget_counts_only…）；提交中新增 pane 被阻擋（new-pane-during-prepare）；登入中不交換（target-login-pending／signed-out）；憑證成功但 metadata 失敗可見（partial＋liveIdentity）。</p>
+    </div>
+  </div>
+  <div class="phase">
+    <div class="phase-head">Phase D/E 後端半邊 · 重啟流程、settling、對帳</div>
+    <div class="phase-body">
+      <ul class="todos">
+        <li data-status="done" data-item-id="restart-flow"><span class="st">done</span><span><code>quota_failover.prepare</code> 只送給擁有受影響 pane 的 session、每 pane 一筆；ack ready 需 <code>resume.resumable is True</code>＋<code>session_id</code>，auto 另需 <code>idle:&quot;turn-boundary&quot;</code>；busy→waiting-safe 可重複 ack（30 分鐘上限）、不計預算；其他 reason→cancelled；commit 前重列 live pane（新 pane／<code>agent_active</code> 轉忙→取消）；new-conversation 走 awaiting-confirmation→<code>confirm</code>；auto 對 resume≠native 直接 no-resume 停止</span></li>
+        <li data-status="done" data-item-id="settling"><span class="st">done</span><span><code>observe_usage</code> 只認 fetchedAt &gt; committedAt、目標 slot、tier==fresh-headroom（空 windows／過 reset 仍 100%／stale 不算）且所有 restart pane settle=resumed；目標耗盡→target-exhausted；<code>settle turn-complete</code> 需 pane 屬交易、activity 為 commit 後 turn_complete、restart 需新 PTY started_monotonic &gt; commit、hot 需 turn_started_at &gt; committedAt；120s→quota-unconfirmed；鏈式耗盡（新帳號也耗盡）繼承 tried、autoAllowed=false，不試下一候選；hasIdentity=false vendor 永不 quota-confirmed</span></li>
+        <li data-status="done" data-item-id="usage-generalize"><span class="st">done</span><span><code>_agent_epochs</code> 每 vendor；poll_once 起始快照 epoch，結束比對不符即丟（test_non_claude_switch_marks_the_account_and_drops_a_mid_read_poll）；<code>account_snapshots[vendor][active_slot]</code>；<code>announce_claude_switch</code> 改為薄包裝、既有 164 條 usage 測試維持綠</span></li>
+        <li data-status="done" data-item-id="reconcile-guard"><span class="st">done</span><span>partial（default-persist-failed）與 swapping 殘留列於 <code>__init__</code> 重建 <code>unreconciled</code>；<code>begin_switch</code> 與 legacy <code>cli_profiles.set_default</code> 皆回 UNRECONCILED_STATE、不呼叫 vault；<code>quota_failover.reconcile</code>：已知 live 時 server 決定（指名不同→BAD_REQUEST 零 mutation），中斷 swap 時限 from/to 二選一並對照 vault.identity（IDENTITY_MISMATCH）；成功只寫 store default、標 reconciledAt、bump epoch</span></li>
+      </ul>
+      <p class="note">契約測試窗回報：test_partial_commit_never_lets_a_later_switch_capture_live_b_into_slot_a 原紅（A 槽被 B 覆寫）→ 修後綠；rc-wrong（指名 C）於現行 tree 亦拒絕。</p>
+    </div>
+  </div>
+  <div class="phase">
+    <div class="phase-head">接線 · provenance、scope、handlers</div>
+    <div class="phase-body">
+      <ul class="todos">
+        <li data-status="done" data-item-id="provenance"><span class="st">done</span><span><code>terminal.create</code> 在 switch_lock 內寫 <code>metadata.launch_profile_id / profile_scope / auth_scope / credential_source / credential_env</code>（只有變數名，無值）；<code>credentialSource</code>=vault｜portable｜env-override，env-override 的 pane auto→CREDENTIAL_OVERRIDE，manual 列入 <code>overriddenPanes</code> 不重啟；bound scope 交易下 provenance 缺失或 default 啟動的多 provider pane→pane-scope-unknown 停止</span></li>
+        <li data-status="done" data-item-id="handlers-scope"><span class="st">done</span><span><code>cli_profiles.create</code> 傳 <code>scope</code>；<code>cli_profiles.list</code> 多 <code>account_capabilities</code>；<code>set_default</code> 由兩側 profile 解析 scope（profile↔profile 不同→SCOPE_MISMATCH）傳給 <code>harvest_login_home</code>／<code>switch</code>；usage_service harvest 路徑以 signature 偵測後傳 scope；vendor <code>base.switch_preflight</code> 於 spawn 與交易前呼叫，reason 直接成為 error code</span></li>
+      </ul>
+      <p class="note">budget 以已解析 scope 為 key（claude／codex／kilo:kilo／opencode:anthropic）；預設 slot 的 scope 取另一側 profile（default↔A 皆 A 的 provider）；opencode default→A→default 只動 anthropic entry、openai pane 不受影響（test_compound_default_round_trip…）。</p>
+    </div>
+  </div>
+  <div class="phase">
+    <div class="phase-head">登入流程守衛 · 保護原槽（獨立 QA login contract 8 紅→綠）</div>
+    <div class="phase-body">
+      <ul class="todos">
+        <li data-status="done" data-item-id="login-in-progress"><span class="st">done</span><span><code>cli_profiles.set_default</code>：目標 profile 有 running 登入 pane，或同 agent 任一 live-store 登入 pane（metadata.live_login）在跑 → LOGIN_IN_PROGRESS，不再以 login home 存在為條件；切換前 harvest 條件改 <code>vault.login_pending</code>（傳 scope）。quota_failover.switch 同樣 LOGIN_IN_PROGRESS{agentKey, profileId, state}</span></li>
+        <li data-status="done" data-item-id="live-drift"><span class="st">done</span><span>switch 前判定 live 是否仍為 outgoing 帳號（<code>live_drift</code>）：payload 相同→無事；不同時先比穩定帳號 id——codex <code>tokens.account_id</code>（缺則 id_token 的 chatgpt_account_id claim）、claude oauthAccount 的 accountUuid|organizationUuid（同 email 不同 org＝不同帳號）——再比 email（其他 vendor 的 vault.identity）；相同→照常 switch（token 輪替不是換帳，A 槽存回新 token）；不同→目標槽空則只 <code>vault.capture</code>(live→目標槽)＋set_default（adoptedLiveLogin:true），非空 LIVE_DRIFT{verified:true, liveIdentity} 零 mutation；都無身份→LIVE_DRIFT{verified:false}，manual 重送（新 idempotency_key）帶 <code>assume_live_is_current:true</code> 才照常 switch，auto 永不假設；quota 交易回 ok＋cancelled tx（reason live-drift／live-drift-unverified、liveIdentity）。QA 反向：refreshed／different_live_identity／failover_route／codex same-email-other-account_id 皆綠</span>。確認重送綁定：LIVE_DRIFT details 帶 currentSlotId／epoch／liveFingerprint；legacy set_default 帶 assume 時必填 expected_current_slot_id＋expected_epoch，鎖內、任何 harvest/capture/write 前比對（不符 STALE_STATE／STALE_EPOCH，A→C→A 亦拒），live_fingerprint 必填且必須與當下 live 相符（modal 期間 CLI 改寫 live 只有它能偵測），缺任一 → BAD_REQUEST；不帶 assume 的一般手動呼叫相容不變</li>
+        <li data-status="done" data-item-id="live-login-spawn"><span class="st">done</span><span><code>terminal.create</code> 登入 pane：login_spawn_env 傳 scope；回 ({},[]) 的 global 登入若同 agent 有 running regular pane 或另一個 global 登入 → LOGIN_BLOCKED_BY_LIVE_PANES 並 <code>discard_pending_login</code> 還原快照；否則標 metadata.live_login。regular pane 在 global 登入進行中／pre-login 快照仍在時 → LOGIN_IN_PROGRESS（避免新 pane 跑在暫時 B 卻 pin 成 A）</span></li>
+        <li data-status="done" data-item-id="login-watch-discard"><span class="st">done</span><span>usage_service login watch：pre-check 改 login_pending；global 登入 pane 消失且未寫入 → <code>discard_pending_login</code>（還原 A）；隔離 vendor 行為不變</span></li>
+        <li data-status="done" data-item-id="login-isolation-cap"><span class="st">done</span><span>capabilities 每筆 <code>loginIsolation: "isolated"|"global"</code>（以 vault._login_isolated 為準，claude/grok 特例）</span></li>
+      </ul>
+      <p class="note">依賴 vendor owner 的 vault seam：login_spawn_env 對 global vendor 先把登入前 live 憑證快照到 <code>&lt;slot&gt;/.pre-login-live.json</code>（私有檔、不進 audit/log）、login_pending／harvest_login_home／discard_pending_login／login_secret_present；後端重啟後快照仍在 → login_pending 仍 True → 兩入口與新 pane 皆被擋。</p>
+    </div>
+  </div>
+  <div class="phase">
+    <div class="phase-head">缺口（不得標為完成）</div>
+    <div class="phase-body">
+      <ul class="todos">
+        <li data-status="pending" data-item-id="gap-vendor-tests"><span class="st">pending</span><span><code>backend/tests/test_profiles_store.py::test_set_default_validates_agent_and_profile</code> 紅：測試以 aider 為不支援 vendor，但 vendor owner 已讓 aider 進 SUPPORTED_AGENT_KEYS；屬 vendor 側測試更新，已回報父窗</span></li>
+        <li data-status="done" data-item-id="gap-structured-signal"><span class="st">done</span><span>新增 <code>report.source="structured"</code>：後端只認該 pane 自己被 log reader 記錄的 turn_complete <code>detail</code>（app._pane_activity）匹配 vendor <code>quota_exhausted_patterns</code>、且時間在回報 10 分鐘內、晚於該 pool 上次 swap；客端 text 不算證據。非 quota 訊號（rate-limited/auth-expired/payment/network/context-full）回 BAD_SIGNAL{classified, action:"notify-only"} 不開 incident。hot vendor 的 turn-complete 證據改用 activity store 內後端配對的 <code>turn_started_monotonic</code>（無觀測起點＝未知＝不算），不再讀 renderer 的 turn_started_at</span></li>
+        <li data-status="pending" data-item-id="gap-live-verify"><span class="st">pending</span><span>13 家宣告 slot 的 vendor evidence 全為 source；程式不以 evidence 作 gate（父窗決定），但 A→B→A 實機 round-trip、Keychain 授權框、Windows/Linux 真實 seam 未驗；mcode 尚無 adapter（unsupported），aider 為 manual/lossy</span></li>
+        <li data-status="pending" data-item-id="gap-frontend"><span class="st">pending</span><span>report／switch／ack／settle／confirm／reconcile 的 renderer 端與公告尚由通知與候選 pane 實作；hot vendor 的 turn-complete 證據需 renderer 提供 <code>turn_started_at</code>（後端只保留每 pane 最後一筆 activity，無法獨立驗證 turn 起點）；qwen 等 env precedence 未宣告 shadowing_env 仍是 open gap</span></li>
+        <li data-status="pending" data-item-id="full-suite"><span class="st">pending</span><span>完整 <code>uv --project backend run pytest backend/tests</code>／<code>pnpm test:run</code>／<code>pnpm typecheck</code>／<code>pnpm build</code> 由父窗整合後裸跑；<code>quota_failover.py</code> 約 2.3K 行，若後續再長建議把排序純函式拆檔</span></li>
+      </ul>
+      <p class="note">以上五項未完成，不得把 Phase B/E 標為 done。</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>WS 契約摘要</h2>
+  <div class="tablewrap"><table>
+    <tr><th>Request</th><th>Payload（snake_case）</th><th>回應／效果</th></tr>
+    <tr><td><code>quota_failover.get_state</code></td><td>{}</td><td>State：policy、auditDegraded、unreconciled、capabilities、budget（以 resolved scope 為 key）、epochs、incidents（open）、transactions（open＋committed 未 settle）、recentIncidents／recentTransactions（24h／20 筆）</td></tr>
+    <tr><td><code>quota_failover.set_policy</code></td><td>mode</td><td>State；非 auto 撤回未提交自動交易</td></tr>
+    <tr><td><code>quota_failover.report</code></td><td>agent_key, pane_id, at, resets_at?, window_kind?, signal="quota-exhausted", source, text?, idempotency_key, workspace_path?</td><td>{incident, created}；BAD_SIGNAL／BAD_REQUEST；policy=auto 且 trusted 時後端自行開自動交易</td></tr>
+    <tr><td><code>quota_failover.candidates</code></td><td>agent_key</td><td>{agentKey, candidates:[{slotId, tier, loginState, excluded, headroom, fetchedAt}]}</td></tr>
+    <tr><td><code>quota_failover.switch</code></td><td>agent_key, to_slot_id, expected_current_slot_id, expected_epoch, idempotency_key, automatic, incident_id?, confirmed?</td><td>{transaction}；同 key／同 incident＋target 在途→同一筆；force→BAD_REQUEST</td></tr>
+    <tr><td><code>quota_failover.confirm / ack / settle / cancel</code></td><td>transaction_id (+ pane_id, ready, idle, reason, resume / outcome, session_id, term_id, turn_started_at)</td><td>{transaction}</td></tr>
+    <tr><td><code>quota_failover.reconcile</code></td><td>agent_key, transaction_id, live_slot_id?</td><td>{agentKey, liveSlotId, transactionId}；只寫 store default、不動憑證</td></tr>
+    <tr><td>Events</td><td colspan="2"><code>quota_failover.changed</code>（State，每次變更）、<code>quota_failover.prepare</code>（只給擁有受影響 pane 的 session）、<code>quota_failover.commit</code>（broadcast；含 restartStrategy、panes、needsLogin）</td></tr>
+  </table></div>
+  <p class="note">錯誤碼：BAD_SIGNAL、BAD_REQUEST、UNSUPPORTED、AUTO_DISABLED、MANUAL_ONLY、STALE_STATE、STALE_EPOCH、NOOP、SCOPE_MISMATCH、SCOPE_UNKNOWN、UNKNOWN_SCOPE／PLATFORM_UNSUPPORTED／SHADOWED_BY_ENV（vendor preflight）、STALE_INCIDENT、TRANSACTION_ACTIVE、ALREADY_TRIED、AUTO_STOPPED、IDENTITY_UNKNOWN、AUTO_BUDGET_UNVERIFIABLE、AUTO_BUDGET_EXHAUSTED、NO_RESUME、CANDIDATE_EXCLUDED、CREDENTIAL_OVERRIDE、UNRECONCILED_STATE、IDENTITY_MISMATCH、PERSIST_FAILED、NOT_FOUND、BAD_STATE。</p>
+</section>
+
+<section>
+  <h2>Risks</h2>
+  <ul>
+    <li>evidence 不再是 auto gate：auto 對 source 級 adapter 亦會啟用；實機驗收前若 vendor 的 file/Keychain 佈局與宣告不符，auto 會以 swap-failed／target-signed-out 停止並通知，但不會回滾。</li>
+    <li>hot vendor 的 turn-complete 起點證據依賴 renderer 的 <code>turn_started_at</code>；後端只能驗 activity 時間晚於 commit。</li>
+    <li>default 啟動的多 provider pane（opencode／pi）無法歸屬 provider，任何 bound scope 交易都會 pane-scope-unknown 停止；手動 force 路徑（legacy）仍可用。</li>
+    <li>SUPPORTED_AGENT_KEYS 是 import-time 常數；handler 內即時讀，但 profiles_store 自身的驗證亦以此為準，vendor 新增 slot_file 後需重啟後端。</li>
+  </ul>
+</section>
+
+<section>
+  <h2>Validation</h2>
+  <p>全部裸跑（stdout 重導至 log 檔、exit code 於同一 shell 立即擷取，未 pipe 給 tail/head）；最終一輪 2026-09-21 11:25（stable-id＋legacy 重送守衛＋必要 fingerprint 落地後；完整 suite 由 QA runner 04 於 11:08 完成、受影響子集由 QA 補跑）：</p>
+  <div class="tablewrap"><table>
+    <tr><th>命令</th><th>結果</th><th>exit</th></tr>
+    <tr><td><code>uv --project backend run pytest backend/tests/test_quota_failover.py backend/tests/test_quota_failover_api_contract.py backend/tests/test_quota_failover_login_contract.py backend/tests/test_app_cli_profiles.py backend/tests/test_app_terminal_create.py backend/tests/test_terminal_replace_dedup.py backend/tests/test_ws_handlers_account_dimensions.py -q</code></td><td>253 passed（quota_failover 75＋api 18＋login contract 現行檔＋app_cli_profiles＋app_terminal_create＋terminal_replace_dedup＋account_dimensions；11:20 落地後）</td><td>0</td></tr>
+    <tr><td><code>OSPLAT_SWAP=paths,platform_id uv --project backend run pytest backend/tests/test_quota_failover.py backend/tests/test_quota_failover_login_contract.py backend/tests/test_app_cli_profiles.py -p tests.osplat_win_swap -q</code></td><td>180 passed（Windows seam：quota_failover＋login_contract＋app_cli_profiles）</td><td>0</td></tr>
+    <tr><td><code>uv --project backend run ruff check backend/agent_team_backend/quota_failover.py backend/agent_team_backend/ws_handlers.py backend/agent_team_backend/usage_service.py backend/agent_team_backend/app.py</code></td><td>All checks passed</td><td>0</td></tr>
+  </table></div>
+  <p class="note">獨立契約套件（<code>test_quota_failover_api_contract.py</code> 18 條、<code>test_quota_failover_login_contract.py</code>）由驗證窗擁有；上表為本機對現行 tree 的執行結果。完整 suite／typecheck／build 由父窗整合後執行。無真實憑證、無 Keychain、無 UI 自動化。vendor 側 fixture 已由 vendor owner 收斂（本輪 tree 綠）。</p>
+</section>
+
+<section>
+  <h2>Review Notes</h2>
+  <p class="note">審查留言請寫在核准計畫 quota-exhaustion-auto-switch_7b3e91；本檔為其驗證附錄。</p>
+</section>
+
+</div>
+</body>
+</html>
