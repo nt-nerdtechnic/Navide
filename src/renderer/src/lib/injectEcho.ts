@@ -79,6 +79,14 @@ export const COMPOSER_FALLBACK_LINES = 3
  *  construction, whatever the footer is doing. Without a frame — a plain shell,
  *  a CLI that draws no box — fall back to the bottom few rows. */
 export function composerFromScreen(screen: string): string {
+  return framedComposer(screen) ?? screen.split('\n').slice(-COMPOSER_FALLBACK_LINES).join('\n')
+}
+
+/** The input box located by its frame alone — null when the screen has no
+ *  frame to locate it by. Split out of composerFromScreen for the one caller
+ *  that must not act on the bottom-rows guess: the collapsed-paste check in
+ *  submitEvidence, where a wrong guess would refuse a submit that took. */
+export function framedComposer(screen: string): string | null {
   const lines = screen.split('\n')
   let close = -1
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -91,7 +99,7 @@ export function composerFromScreen(screen: string): string {
       }
     }
   }
-  return lines.slice(-COMPOSER_FALLBACK_LINES).join('\n')
+  return null
 }
 
 /** What the composer looked like BEFORE Enter, for the `queued` verdict. The
@@ -321,6 +329,18 @@ export function submitEvidence(opts: {
     }
     return 'queued'
   }
+  // The collapsed-paste case: the tail never echoed, so growth is the only
+  // signal left — and growth alone cannot tell Enter from a repaint. Observed
+  // in Claude Code: an Enter sent right after the collapsed paste appeared did
+  // not take. With the pane focused, the TUI repainted on its own, the repaint
+  // read as 'growth', and the message was reported delivered while the
+  // "[Pasted text …]" summary still sat in the box; unfocused, the pane stayed
+  // quiet, the poll ran out, and the resent Enter took. The rendered box says
+  // which happened: while it still shows the summary, nothing was submitted.
+  // Framed box only — the bottom-rows guess a frameless vendor gets could hold
+  // the summary a TUI echoes just above its box after a submit that took.
+  const framed = framedComposer(opts.screen)
+  if (framed !== null && PASTE_PLACEHOLDER_RE.test(framed)) return null
   return opts.grownBy > 0 ? 'growth' : null
 }
 

@@ -329,12 +329,60 @@ describe('submitEvidence', () => {
     ).toBeNull()
   })
 
+  // The collapsed-paste case, as Claude Code 2.1.278 draws it: the payload is
+  // never on screen, only "[Pasted text #65 +33 lines]" inside the box. A
+  // focused pane repaints on its own, so growth alone said "delivered" while
+  // the summary still sat in the box and Enter had not taken. The framed box
+  // is what answers; growth only counts once the summary has left it.
+  const pasteScreen = (composer: string): string => [
+    '✻ Churned for 31s · done 11:56 AM',
+    '            current: 2.1.278 · latest: 2.1.278',
+    '────────────────────────────────────────────',
+    composer,
+    '────────────────────────────────────────────',
+    '  paste again to expand',
+  ].join('\n')
+  const PASTE_HOLDING = pasteScreen('❯ [Pasted text #65 +33 lines]')
+  const PASTE_GONE = pasteScreen('❯ ')
+
+  it('refuses growth while the box still shows the collapsed-paste summary', () => {
+    expect(
+      submitEvidence({ tailWasOnScreen: false, tail: 'x', screen: PASTE_HOLDING, grownBy: 4_000 }),
+    ).toBeNull()
+  })
+
+  it('accepts growth once the collapsed-paste summary has left the box', () => {
+    expect(
+      submitEvidence({ tailWasOnScreen: false, tail: 'x', screen: PASTE_GONE, grownBy: 40 }),
+    ).toBe('growth')
+  })
+
+  // A summary echoed just above the box after a submit that took must not be
+  // read as "still in the box": the frame keeps it out.
+  it('ignores a collapsed-paste summary drawn above the framed box', () => {
+    const screen = ['> [Pasted text #65 +33 lines]', PASTE_GONE].join('\n')
+    expect(
+      submitEvidence({ tailWasOnScreen: false, tail: 'x', screen, grownBy: 40 }),
+    ).toBe('growth')
+  })
+
+  // Frameless: the bottom-rows guess could hold an echoed summary, so the
+  // check does not apply and the growth fallback stays exactly as it was.
+  it('leaves the growth fallback alone when there is no frame to locate the box by', () => {
+    const frameless = '> [Pasted text #3 +12 lines]\nworking…'
+    expect(
+      submitEvidence({ tailWasOnScreen: false, tail: 'x', screen: frameless, grownBy: 40 }),
+    ).toBe('growth')
+  })
+
   it('agrees with submitLanded', () => {
     const cases = [
       { tailWasOnScreen: true, tail: 'abc', screen: 'gone', grownBy: 0 },
       { tailWasOnScreen: true, tail: 'abc', screen: 'abc', grownBy: 99 },
       { tailWasOnScreen: false, tail: 'x', screen: '', grownBy: 1 },
       { tailWasOnScreen: false, tail: 'x', screen: '', grownBy: 0 },
+      { tailWasOnScreen: false, tail: 'x', screen: PASTE_HOLDING, grownBy: 99 },
+      { tailWasOnScreen: false, tail: 'x', screen: PASTE_GONE, grownBy: 99 },
     ]
     for (const c of cases) expect(submitLanded(c)).toBe(submitEvidence(c) !== null)
   })
