@@ -75,6 +75,9 @@ class DarwinLayout(DarwinPaths):
     def isolated_home_env(self, home_dir: Path) -> dict[str, str]:
         return _posix_paths.isolated_home_env(home_dir)
 
+    def env_name_key(self, name: str) -> str:
+        return _posix_paths.env_name_key(name)
+
     def askpass_launcher(self, helper_py: Path, launch_argv: list[str]) -> Path:
         return _posix_paths.askpass_launcher(helper_py, launch_argv)
 

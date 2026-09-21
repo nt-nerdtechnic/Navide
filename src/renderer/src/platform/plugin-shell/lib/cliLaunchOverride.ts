@@ -22,6 +22,8 @@
  * into a process environment at all.
  */
 
+import { isWindows } from '../../../../../shared/osplat'
+
 /** One row of the env table. An array rather than a map so the settings page
  *  can hold a half-typed row (empty name, value already pasted) without it
  *  colliding with another half-typed row. */
@@ -157,10 +159,17 @@ export const SPAWN_ENV_RESERVED_KEYS: readonly string[] = [
 ]
 
 const RESERVED = new Set(SPAWN_ENV_RESERVED_KEYS)
+const RESERVED_FOLDED = new Set(SPAWN_ENV_RESERVED_KEYS.map((key) => key.toLowerCase()))
 
 /** True when the backend will drop this name on the way in. Soft, not hard:
  *  the UI marks the row and still lets it be saved, because the same name may
- *  become legal the day Navide stops managing that CLI's home. */
+ *  become legal the day Navide stops managing that CLI's home.
+ *
+ *  Compared the way the host's process environment compares names, matching
+ *  the backend's `osplat.paths.env_name_key`: Windows folds case, so
+ *  `minimax_data_dir` sets MINIMAX_DATA_DIR and is marked; POSIX does not,
+ *  and there the lower-case spelling is a different, legal variable. */
 export function isReservedSpawnEnvKey(name: string): boolean {
-  return RESERVED.has(name.trim())
+  const trimmed = name.trim()
+  return isWindows() ? RESERVED_FOLDED.has(trimmed.toLowerCase()) : RESERVED.has(trimmed)
 }

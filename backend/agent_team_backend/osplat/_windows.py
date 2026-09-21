@@ -994,6 +994,11 @@ class WindowsLayout(WindowsPaths):
         home = str(home_dir)
         return {"USERPROFILE": home, "HOME": home, "TEMP": home, "TMP": home}
 
+    def env_name_key(self, name: str) -> str:
+        # The env block handed to CreateProcess is matched case-insensitively,
+        # so a request spelled `minimax_data_dir` sets MINIMAX_DATA_DIR.
+        return name.casefold()
+
     def askpass_launcher(self, helper_py: Path, launch_argv: list[str]) -> Path:
         """A sibling `.cmd` that runs this backend's own askpass entry mode.
 

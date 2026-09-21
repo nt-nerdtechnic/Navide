@@ -103,6 +103,18 @@ class Paths(Protocol):
         """
         ...
 
+    def env_name_key(self, name: str) -> str:
+        """The identity under which this platform's process environment
+        compares a variable name.
+
+        POSIX names are case-sensitive, so the name is its own key and
+        `minimax_data_dir` is a different variable from `MINIMAX_DATA_DIR`.
+        Windows names are not: `CreateProcess` matches them case-insensitively
+        and a child reads whichever spelling was set. A check that asks "is
+        this name X?" compares the two keys, never the raw names.
+        """
+        ...
+
     def askpass_launcher(self, helper_py: Path, launch_argv: list[str]) -> Path:
         """The path git can exec as `GIT_ASKPASS` to run the helper.
 

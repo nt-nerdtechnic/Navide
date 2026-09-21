@@ -1854,10 +1854,17 @@ def filter_spawn_env_request(requested: dict[str, str]) -> tuple[dict[str, str],
     Soft because the spawn still goes ahead — a user-configured env var that
     happens to collide with a home relocator is a misconfiguration to report,
     not a reason to refuse the pane.
+
+    Names are compared the way the platform's process environment compares
+    them (``osplat.paths.env_name_key``): on Windows ``minimax_data_dir``
+    sets MINIMAX_DATA_DIR and is denied as such, while on POSIX it is a
+    different variable and passes. ``denied`` names the key as requested, so
+    the notice shows the user what they typed.
     """
-    deny = spawn_env_deny_list()
-    denied = [key for key in requested if key in deny]
-    kept = {key: value for key, value in requested.items() if key not in deny}
+    fold = osplat.paths.env_name_key
+    deny = {fold(name) for name in spawn_env_deny_list()}
+    denied = [key for key in requested if fold(key) in deny]
+    kept = {key: value for key, value in requested.items() if key not in denied}
     return kept, denied
 
 

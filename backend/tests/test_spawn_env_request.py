@@ -13,8 +13,9 @@ from typing import Any
 
 import pytest
 
-from agent_team_backend import app
+from agent_team_backend import app, osplat
 from agent_team_backend.cli_vendors.registry import VENDORS
+from agent_team_backend.osplat import _posix_paths, _windows
 from agent_team_backend.profiles_store import CLAUDE_ENV_OVERRIDES
 
 
@@ -134,6 +135,51 @@ def test_filter_drops_denied_keys_and_keeps_the_rest() -> None:
 
 def test_filter_passes_an_empty_request_through() -> None:
     assert app.filter_spawn_env_request({}) == ({}, [])
+
+
+# --- case: the platform's rule, not the list's spelling ---------------------
+#
+# Windows compares env names case-insensitively, so `minimax_data_dir` in a
+# request sets MINIMAX_DATA_DIR for the child — and the inherited upper-case
+# spelling was already stripped, so the request's value is the one the CLI
+# reads. The deny check therefore has to compare through the platform seam.
+# POSIX keeps exact matching: there the lower-case name is a different, legal
+# variable, and denying it would refuse a user's own setting for nothing.
+# Neither test runs on the platform it describes; each swaps the seam in.
+
+def test_filter_denies_any_spelling_where_the_platform_folds_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(osplat.paths, "env_name_key", _windows.paths.env_name_key)
+
+    kept, denied = app.filter_spawn_env_request({
+        "minimax_data_dir": "D:\\x",
+        "Claude_Config_Dir": "D:\\y",
+        "MY_PROJECT_TOKEN": "fine",
+    })
+
+    # Named as requested: the notice should show what the user typed.
+    assert denied == ["minimax_data_dir", "Claude_Config_Dir"]
+    assert kept == {"MY_PROJECT_TOKEN": "fine"}
+
+
+def test_filter_keeps_exact_matching_where_the_platform_is_case_sensitive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(osplat.paths, "env_name_key", _posix_paths.env_name_key)
+
+    kept, denied = app.filter_spawn_env_request({
+        "minimax_data_dir": "/tmp/x",
+        "MINIMAX_DATA_DIR": "/tmp/y",
+    })
+
+    assert denied == ["MINIMAX_DATA_DIR"]
+    assert kept == {"minimax_data_dir": "/tmp/x"}
+
+
+def test_env_name_key_folds_only_on_windows() -> None:
+    assert _windows.paths.env_name_key("Minimax_Data_Dir") == "minimax_data_dir"
+    assert _posix_paths.env_name_key("Minimax_Data_Dir") == "Minimax_Data_Dir"
 
 
 def test_overridden_keys_report_replacement_and_removal() -> None:

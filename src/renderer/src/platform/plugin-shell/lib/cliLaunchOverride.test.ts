@@ -1,7 +1,8 @@
 import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
+import { platformId, setPlatformId, type PlatformId } from '../../../../../shared/osplat'
 import {
   SPAWN_ENV_RESERVED_KEYS,
   chooseLaunchCommand,
@@ -13,6 +14,19 @@ import {
   serializeCliEnvOverride,
   spawnEnvOverride,
 } from './cliLaunchOverride'
+
+// Whatever platform this file loaded under — the host, or a suite-wide
+// injection — is what every test hands back (see src/shared/osplat.test.ts).
+const BASELINE = platformId()
+
+const asPlatform = (id: PlatformId, run: () => void): void => {
+  setPlatformId(id)
+  run()
+}
+
+afterEach(() => {
+  setPlatformId(BASELINE)
+})
 
 describe('settings keys', () => {
   it('mirror the per-vendor shape the other CLI settings use', () => {
@@ -143,6 +157,26 @@ describe('isReservedSpawnEnvKey', () => {
   it('marks both MiniMax data-root aliases as reserved', () => {
     expect(isReservedSpawnEnvKey('MINIMAX_DATA_DIR')).toBe(true)
     expect(isReservedSpawnEnvKey('MAVIS_DATA_DIR')).toBe(true)
+  })
+
+  // Windows env names are case-insensitive: `minimax_data_dir` in the table
+  // sets MINIMAX_DATA_DIR for the pane, so it has to be marked there. POSIX
+  // names are not, and there the lower-case spelling is the user's own
+  // variable — marking it would warn about a row that is perfectly legal.
+  // Mirrors the backend's `filter_spawn_env_request` through
+  // `osplat.paths.env_name_key`.
+  it('folds case only where the host process environment does', () => {
+    asPlatform('win32', () => {
+      expect(isReservedSpawnEnvKey('minimax_data_dir')).toBe(true)
+      expect(isReservedSpawnEnvKey('Claude_Config_Dir')).toBe(true)
+      expect(isReservedSpawnEnvKey('https_proxy')).toBe(false)
+    })
+    for (const id of ['darwin', 'linux'] as const) {
+      asPlatform(id, () => {
+        expect(isReservedSpawnEnvKey('minimax_data_dir')).toBe(false)
+        expect(isReservedSpawnEnvKey('MINIMAX_DATA_DIR')).toBe(true)
+      })
+    }
   })
 })
 

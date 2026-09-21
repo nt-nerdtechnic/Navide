@@ -32,6 +32,10 @@ def isolated_home_env(home_dir: Path) -> dict[str, str]:
     return {"HOME": home, "TMPDIR": home}
 
 
+def env_name_key(name: str) -> str:
+    return name
+
+
 def askpass_launcher(helper_py: Path, launch_argv: list[str]) -> Path:
     """The `.py` itself, or a `.sh` around `launch_argv` in a frozen build.
 
