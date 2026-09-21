@@ -6,7 +6,10 @@
 // either inline on the action's reply (useUiActionBus) or pulled on demand
 // (ui.diagnostics.read). Pure module state, no Vue dependency.
 
-export type DiagnosticLevel = 'warn' | 'error'
+// 'info' is a breadcrumb, not a fault: a tab switch or focus move the user did
+// not click for, recorded so a "why did the view jump" report can be answered
+// from ui.diagnostics.read instead of guessed at.
+export type DiagnosticLevel = 'info' | 'warn' | 'error'
 
 export interface DiagnosticEntry {
   seq: number

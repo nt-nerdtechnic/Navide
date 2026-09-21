@@ -6382,6 +6382,7 @@ async function onCliLoginSpawn(agentKey: string, loginProfileId?: string): Promi
   showSettings.value = false
   if (loginProfileId) pendingLoginPanes.set(loginProfileId, { paneId, agentKey })
   // The user must see the pane that is waiting for the browser authorization.
+  noteViewJump('account login spawn', { paneId })
   onFocusPane(paneId)
 }
 
@@ -6422,6 +6423,7 @@ async function dispatchPlanToPane(relPath: string, agentKey: string): Promise<Pl
     currentWorkspace.value
   )
   if (reusable) {
+    noteViewJump('plan execute (reuse pane)', { paneId: reusable.id })
     selectPane(reusable.id, { userInitiated: false })
     const injected = await injectPane(reusable.id, prompt, 'plan-execute', true)
     return injected ? { ok: true } : { ok: false, reason: 'inject-failed' }
@@ -6459,6 +6461,7 @@ async function dispatchPlanToPane(relPath: string, agentKey: string): Promise<Pl
   })
   const pane = panes.value.find((p) => p.id === paneId)
   if (!pane) return { ok: false, reason: 'pane-spawn-failed' }
+  noteViewJump('plan execute (new pane)', { paneId })
   selectPane(paneId, { userInitiated: false })
   const bootstrapped = await sendSessionMarkerBootstrap(pane, `[pane ${paneId.slice(0, 8)}]`)
   if (!bootstrapped) {
@@ -8327,6 +8330,7 @@ registerCommand('ui.pane.close', async (args) => {
 registerCommand('ui.pane.focus', (args) => {
   const paneId = (args as { paneId?: string } | undefined)?.paneId
   if (!paneId) throw new Error(`ui.pane.focus requires ${PANE_ID_HINT}`)
+  noteViewJump('mcp ui.pane.focus', { paneId })
   onFocusPane(paneId)
 })
 // Where a pane sits: its tab group and its parent. Both halves are optional
@@ -8546,6 +8550,7 @@ registerCommand('ui.diagnostics.read', (args) => {
 registerCommand('ui.tab.switch', (args) => {
   const tabId = (args as { tabId?: string } | undefined)?.tabId
   if (!tabId) throw new Error('ui.tab.switch requires tabId')
+  noteViewJump('mcp ui.tab.switch', { tab: tabId })
   activeTab.value = tabId
 })
 // Push something into the right rail's preview panel. Reached by MCP
@@ -8831,6 +8836,20 @@ function mainModalOpen(): boolean {
 }
 watch([showSettings, showAccount, showCompletionModal, showRestoreScopeModal, showPipelineManager, showDebug, showHistory], () => setContext('modalOpen', mainModalOpen()))
 
+/** Breadcrumb for a view change nobody clicked for: which tab or pane the
+ *  window jumped to, and which code path did it. Every path that can switch
+ *  the tab or move focus without a user gesture notes itself here, so the
+ *  answer to "the view jumped by itself" is a ui.diagnostics.read away. */
+function noteViewJump(source: string, detail: { tab?: string; paneId?: string }): void {
+  const target = detail.tab !== undefined ? `tab "${detail.tab}"` : `pane ${detail.paneId?.slice(0, 8) ?? '?'}`
+  recordDiagnostic({
+    level: 'info',
+    code: detail.tab !== undefined ? 'view.tab-switched' : 'view.focus-moved',
+    message: `${source} → ${target} (was tab "${activeTab.value}")`,
+    ...(detail.paneId ? { paneId: detail.paneId } : {}),
+  })
+}
+
 /** The sidebar agent list shows panes from every tab; focusing one that lives
  *  in another tab must also activate that tab, or the pane stays v-show-hidden. */
 function revealPaneTab(paneId: string): void {
@@ -8894,6 +8913,7 @@ async function focusPaneFromNotification(paneId: string): Promise<void> {
   // ordinary case, not an edge one. revealPaneTab only knows how to change
   // tabs, and a tab id never matches across workspaces.
   if (!(await ensurePaneWorkspaceOnScreen(paneId))) return
+  noteViewJump('notification click', { paneId })
   revealPaneTab(paneId)
   selectPane(paneId, { userInitiated: false, scrollIntoView: true })
 }
@@ -15128,7 +15148,9 @@ function onRunGroupsRemoteSync(raw: unknown): void {
   runGroups.value = merged
   // applyingRemote suppresses _saveRunGroups below, and with it the mirror.
   _cacheRunGroups(ws, merged)
-  activeTab.value = resolveActiveTab(merged, activeTab.value)
+  const resolvedTab = resolveActiveTab(merged, activeTab.value)
+  if (resolvedTab !== activeTab.value) noteViewJump('peer window run_groups update', { tab: resolvedTab })
+  activeTab.value = resolvedTab
   currentRunGroupId.value = merged[merged.length - 1]?.id ?? ''
   void nextTick(() => {
     applyingRemote.value = false
@@ -16661,12 +16683,18 @@ watch(panes, (newPanes, oldPanes) => {
   // draw the focused pane and nothing else — follow it. A switch restores a
   // whole workspace's panes through here, and none of them was asked for.
   if (!landingWorkspaceSwitch && layoutMode.value !== 'grid' && newPanes.length > (oldPanes?.length ?? 0)) {
-    selectPane(newPanes[newPanes.length - 1].id, { userInitiated: false })
+    const newest = newPanes[newPanes.length - 1].id
+    noteViewJump('new pane in non-grid layout', { paneId: newest })
+    selectPane(newest, { userInitiated: false })
   }
   // If the current tab's run group was removed, fall back to first available group
   if (activeTab.value && stageTabs.value.length > 0) {
     const tabStillExists = stageTabs.value.some((t) => t.key === activeTab.value)
-    if (!tabStillExists) activeTab.value = stageTabs.value[0]?.key ?? ''
+    if (!tabStillExists) {
+      const fallbackTab = stageTabs.value[0]?.key ?? ''
+      noteViewJump('active tab vanished from pane list', { tab: fallbackTab })
+      activeTab.value = fallbackTab
+    }
   }
 })
 
