@@ -487,6 +487,7 @@ const resourceRows = computed(() => [
         </table>
       </div>
       <p class="syh-p" v-html="$t('settings.help.settingsSystem.s3.p3')"></p>
+      <p class="syh-note" v-html="$t('settings.help.settingsSystem.s3.liveRefresh')"></p>
 
       <h3 class="syh-h3">{{ $t('settings.help.settingsSystem.s3.h2') }}</h3>
       <p class="syh-p" v-html="$t('settings.help.settingsSystem.s3.p4')"></p>
@@ -616,6 +617,7 @@ const resourceRows = computed(() => [
 
       <h3 class="syh-h3">{{ $t('settings.help.settingsSystem.s5.h2') }}</h3>
       <p class="syh-p" v-html="$t('settings.help.settingsSystem.s5.p5')"></p>
+      <p class="syh-p" v-html="$t('settings.help.settingsSystem.s5.roster')"></p>
       <ol class="syh-list">
         <li v-html="$t('settings.help.settingsSystem.s5.pairing.step1')"></li>
         <li v-html="$t('settings.help.settingsSystem.s5.pairing.step2')"></li>

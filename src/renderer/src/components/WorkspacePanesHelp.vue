@@ -453,6 +453,12 @@ const shortcuts: { key: string; keys: string }[] = [
 
       <h3 class="wph-h3">{{ $t('settings.help.workspace.s5.h3') }}</h3>
       <p class="wph-p" v-html="$t('settings.help.workspace.s5.p2')"></p>
+      <ul class="wph-list">
+        <li v-html="$t('settings.help.workspace.s5.folds.pane')"></li>
+        <li v-html="$t('settings.help.workspace.s5.folds.group')"></li>
+        <li v-html="$t('settings.help.workspace.s5.folds.workspace')"></li>
+      </ul>
+      <p class="wph-note" v-html="$t('settings.help.workspace.s5.foldNote')"></p>
 
       <h3 class="wph-h3">{{ $t('settings.help.workspace.s5.h4') }}</h3>
       <ul class="wph-list">

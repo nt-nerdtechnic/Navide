@@ -50,6 +50,7 @@ const QUOTED_LABELS: ReadonlyArray<{ key: string; params?: Record<string, string
   { key: 'action.restore-selected' },
   { key: 'action.remove-selected' },
   { key: 'action.open-in-finder' },            // workspace-row context menu
+  { key: 'action.reclaim-workspace' },
   { key: 'action.close-workspace' },
   { key: 'action.close-workspace-and-panes' },
   { key: 'label.agents' },                     // the views, named as the UI names them
@@ -73,6 +74,7 @@ const QUOTED_LABELS: ReadonlyArray<{ key: string; params?: Record<string, string
   { key: 'updater.install' },
   { key: 'announce.load-more', params: { count: 'N' } },
   { key: 'resource.reclaim-action', params: { count: 'N' } },
+  { key: 'action.fold-workspace-hint' },       // sidebar fold shortcut
 ]
 
 // The four stage-mode buttons are glyph-only; the topic takes their name from

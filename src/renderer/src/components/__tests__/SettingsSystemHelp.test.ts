@@ -17,10 +17,9 @@ import { expectNoChineseText } from './helpLocaleAssertions'
 // advisory is filtered out before asserting.
 const HTML_ADVISORY = '[intlify] Detected HTML in '
 
-// The Language row quotes the two options verbatim, and settings.appearance
-// .language-zh-TW really is "繁體中文" in en-US too — the one Han string that
-// belongs in the English rendering.
-const LITERAL_OPTION = '繁體中文'
+// The Language row keeps native names in all three interface languages.
+// These two Han strings therefore belong in the English rendering.
+const LITERAL_OPTIONS = ['繁體中文', '日本語']
 
 // Row counts per table, in template order.
 // The first table is the settings nav: nineteen pages in four groups,
@@ -59,8 +58,8 @@ describe('SettingsSystemHelp', () => {
     const wrapper = mountHelp()
 
     const text = wrapper.text()
-    expect(text).toContain(LITERAL_OPTION)
-    expectNoChineseText(text, { allowLiterals: [LITERAL_OPTION] })
+    for (const option of LITERAL_OPTIONS) expect(text).toContain(option)
+    expectNoChineseText(text, { allowLiterals: LITERAL_OPTIONS })
     expect(text).toContain('Settings overview')
     expect(text).toContain('Resources and upkeep')
     expect(text).toContain('Token Monitor')

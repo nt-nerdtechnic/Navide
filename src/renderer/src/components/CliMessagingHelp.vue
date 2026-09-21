@@ -15,15 +15,20 @@ import MockPaneCard from './helpMocks/MockPaneCard.vue'
 
 interface CoverageRow {
   cli: string
-  send: 'both' | 'protocolOnly'
+  send: 'both' | 'protocolOnly' | 'none'
 }
 
-// Sending needs one of the two routes, and every vendor has at least one.
+// Sending needs one of the two routes. Fourteen of the fifteen vendors have
+// at least one; mcode has neither.
 //
-// The output protocol needs Navide to read the agent's turn text: all 14
-// readers now put the reply on `turn_complete` as `text=`, and the parser
-// (agentMessaging.ts) is vendor-agnostic — App.vue hands it `ev.text` with no
-// vendor check — so the protocol route is open everywhere.
+// The output protocol needs Navide to read the agent's turn text: the 14
+// readers in log_readers/ put the reply on `turn_complete` as `text=`, and the
+// parser (agentMessaging.ts) is vendor-agnostic — App.vue hands it `ev.text`
+// with no vendor check — so the protocol route is open wherever a reader
+// exists. mcode is the one vendor with no reader at all
+// (log_readers/mcode.py is a documented placeholder: its conversations live in
+// SQLite, and the row payloads cannot be modelled without an authenticated
+// session), so nothing ever reaches the parser for an mcode pane.
 //
 // The MCP tools are wired at spawn for the 10 vendors whose CLI offers a way
 // in: a launch flag (Claude Code, Codex, Copilot, Qwen), one env var carrying
@@ -31,10 +36,10 @@ interface CoverageRow {
 // config directory (Kimi, Grok, Antigravity). Cursor is the exception that
 // only reads a workspace file, so its wiring writes `.cursor/mcp.json` (and
 // excludes it from git). Aider, Muse and Pi have no MCP surface at all
-// (base.py says so outright); Droid is simply not wired yet.
+// (base.py says so outright); Droid and mcode are simply not wired yet.
 //
 // Receiving is unaffected throughout — that is text injected into the
-// terminal, and it works for every CLI.
+// terminal, and it works for every CLI, mcode included.
 const coverage: CoverageRow[] = [
   { cli: 'Claude Code', send: 'both' },
   { cli: 'Codex', send: 'both' },
@@ -50,6 +55,7 @@ const coverage: CoverageRow[] = [
   { cli: 'Droid', send: 'protocolOnly' },
   { cli: 'Muse Code', send: 'protocolOnly' },
   { cli: 'Pi', send: 'protocolOnly' },
+  { cli: 'MiniMax Code', send: 'none' },
 ]
 
 // Row keys for the prose tables; each row's text is looked up under
