@@ -9,6 +9,7 @@ import { __resetSettingsForTest } from '@navide/plugin-ui/shared/testing'
 import SettingsModal from '../SettingsModal.vue'
 import { createMockBackend } from '../../composables/__tests__/mockBackend'
 import { loadCliAgentPrefsFromProject, useCliAgentPrefs } from '../../composables/useCliAgentPrefs'
+import { useSettings } from '../../composables/useSettings'
 import { usePushChannelPrefs } from '../../composables/usePushChannelPrefs'
 
 type ModalProps = InstanceType<typeof SettingsModal>['$props']
@@ -33,7 +34,7 @@ describe('Settings CLI agent cards and drawer', { timeout: 15000 }, () => {
     vi.restoreAllMocks()
   })
 
-  async function mountModal() {
+  async function mountModal(initialTab: ModalProps['initialTab'] = 'cliAgents', renderSettings = false) {
     const mock = createMockBackend('connected')
     mock.setResponse('onboarding.status', {
       deps: CLI_AGENT_SPECS.map((spec) => ({
@@ -48,7 +49,7 @@ describe('Settings CLI agent cards and drawer', { timeout: 15000 }, () => {
       attachTo: document.body,
       props: {
         backend: mock.backend,
-        initialTab: 'cliAgents',
+        initialTab,
         rolesApi: {} as ModalProps['rolesApi'],
         stagesApi: {} as ModalProps['stagesApi'],
         analyzerApi: {
@@ -69,12 +70,66 @@ describe('Settings CLI agent cards and drawer', { timeout: 15000 }, () => {
       },
       global: {
         plugins: [i18n],
-        stubs: { Teleport: true },
+        stubs: { Teleport: true, ...(renderSettings ? {
+          SettingsSection: { template: '<section><slot /></section>' },
+          SettingsCard: { template: '<div><slot /></div>' },
+          SettingRow: { template: '<div><slot /><slot name="control" /></div>' },
+        } : {}) },
       },
     })
     await flushPromises()
     return mock
   }
+
+  it('keeps three native language choices on their own page and routes Japanese search there', async () => {
+    const settings = useSettings()
+    const previous = settings.language.value
+    settings.setLanguage('en-US', { broadcast: false })
+    try {
+      await mountModal('appearance', true)
+      const languageRow = wrapper!.get('[data-settings-section="appearance-language"]')
+      expect(languageRow.isVisible()).toBe(false)
+      expect(wrapper!.findAll('.ap-lang-btn').map(button => button.text().replace('✓', '').trim()))
+        .toEqual(['繁體中文', 'English', '日本語'])
+      await wrapper!.get('.s-search-input').setValue('Japanese')
+      const result = wrapper!.findAll('.s-search-result').find(item => item.text().includes('Language'))!
+      expect(result).toBeDefined()
+      await result.trigger('click')
+      expect(languageRow.isVisible()).toBe(true)
+      expect(wrapper!.get('.s-search-input').element).toHaveProperty('value', '')
+      for (const [index, locale] of ['zh-TW', 'en-US', 'ja-JP'].entries()) {
+        await wrapper!.findAll('.ap-lang-btn')[index].trigger('click')
+        expect(settings.language.value).toBe(locale)
+        expect(settingsGet('agent-team:language', '')).toBe(locale)
+        settings.loadLanguage({ language: 'en-US' })
+        expect(settings.language.value).toBe(locale)
+      }
+      await wrapper!.setProps({ initialTab: 'language' })
+      await wrapper!.setProps({ initialTab: 'appearance' })
+      const currentLanguageRow = wrapper!.get('[data-settings-section="appearance-language"]')
+      expect(currentLanguageRow.element.isConnected).toBe(true)
+      expect(currentLanguageRow.isVisible()).toBe(false)
+    } finally { settings.setLanguage(previous, { broadcast: false }) }
+  })
+
+  it('formats the last successful update check using the active interface locale', async () => {
+    const settings = useSettings()
+    const previous = settings.language.value
+    const previousBridge = window.agentTeam
+    const checkedAt = '2026-09-21T03:04:05Z'
+    window.agentTeam = { ...previousBridge, updater: {
+      onStateChanged: () => () => {},
+      getState: async () => ({ status: 'idle', currentVersion: '0.2.8', checkedAt, lastCheckFailure: { count: 1, message: 'offline' } }),
+    } } as unknown as typeof window.agentTeam
+    try {
+      settings.setLanguage('ja-JP', { broadcast: false })
+      await mountModal('updates', true)
+      expect(wrapper!.text()).toContain(new Date(checkedAt).toLocaleString('ja-JP'))
+      settings.setLanguage('en-US', { broadcast: false })
+      await wrapper!.vm.$nextTick()
+      expect(wrapper!.text()).toContain(new Date(checkedAt).toLocaleString('en-US'))
+    } finally { settings.setLanguage(previous, { broadcast: false }); window.agentTeam = previousBridge }
+  })
 
   it('renders the registry as cards with no editor open initially', async () => {
     await mountModal()

@@ -877,7 +877,7 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
     title: t('settings.search.item.appearance-language.title'),
     group: t('settings.nav.language'),
     summary: t('settings.search.item.appearance-language.summary'),
-    keywords: 'language locale 語言 繁體中文 english en-us zh-tw',
+    keywords: 'language locale 語言 繁體中文 english 日本語 japanese en-us zh-tw ja-jp',
   },
   {
     id: 'appearance-ui-scale',
@@ -1205,12 +1205,12 @@ function onUiScaleChange(value: string): void {
   uiScaleModel.value = setUiScale(value)
 }
 
-// Both locales store each option under its own name (en-US.json:974 keeps
-// "繁體中文" as-is), which is how a language picker should read, so the labels
+// Locale catalogs keep language names in their native form, so the labels
 // come from those keys rather than a second hardcoded copy.
 const SUPPORTED_LANGUAGES = [
   { value: 'zh-TW', labelKey: 'settings.appearance.language-zh-TW' },
   { value: 'en-US', labelKey: 'settings.appearance.language-en-US' },
+  { value: 'ja-JP', labelKey: 'settings.appearance.language-ja-JP' },
 ]
 
 function onHealthTimeoutChange(raw: string): void {
@@ -1413,7 +1413,7 @@ const {
 // checkedAt only moves when a check succeeds, so it reads as "last known good"
 // next to a run of failures.
 const updLastSuccessfulCheck = computed(() =>
-  updateState.value.checkedAt ? new Date(updateState.value.checkedAt).toLocaleString() : ''
+  updateState.value.checkedAt ? new Date(updateState.value.checkedAt).toLocaleString(currentLanguage.value) : ''
 )
 // check → download → install, so the panel shows where the update actually is
 // rather than leaving the user to infer it from one status line.
@@ -4063,7 +4063,7 @@ watch(activeTab, (tab) => {
                   v-if="hasCustomOverrides"
                   class="ap-reset"
                   @click="resetCustom"
-                  title="Reset all custom colors to the built-in theme"
+                  :title="$t('settings.appearance.reset-colors-hint')"
                 >
                   {{ $t('settings.appearance.reset-to-defaults') }}
                 </button>
