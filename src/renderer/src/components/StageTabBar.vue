@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, nextTick } from 'vue'
+import { ref, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import RebuildIcon from './RebuildIcon.vue'
 import { tabRunStatePaneStatus, type TabRunState } from '../lib/tabStatus'
@@ -22,8 +22,6 @@ const props = withDefaults(defineProps<{
   canRebuildAll?: boolean
   rebuildingAll?: boolean
   rebuildAllTitle?: string
-  allFamiliesCollapsed?: boolean
-  familyToggleDisabledReason?: 'grid' | 'empty'
 }>(), {
   canRebuildAll: false,
   rebuildingAll: false,
@@ -39,14 +37,9 @@ const emit = defineEmits<{
   (e: 'reorder-tab', fromKey: string, toKey: string): void
   (e: 'detach', key: string, x: number, y: number): void
   (e: 'rebuild-all'): void
-  (e: 'toggleFamilies'): void
 }>()
 
 const { t } = useI18n()
-const familyToggleTitle = computed(() => {
-  if (props.familyToggleDisabledReason) return t(`stageTab.family-toggle-${props.familyToggleDisabledReason}`)
-  return t(props.allFamiliesCollapsed ? 'stageTab.expand-families' : 'stageTab.collapse-families')
-})
 
 /** Hover text for the status dot. Kept on the dot rather than the whole tab so
  *  it does not shadow the ✕ button's own title. */
@@ -210,15 +203,6 @@ function onRenameKeydown(e: KeyboardEvent, key: string): void {
     >
       <RebuildIcon />
     </button>
-    <button
-      type="button"
-      class="tab-family-toggle-btn"
-      :disabled="!!familyToggleDisabledReason"
-      :title="familyToggleTitle"
-      :aria-label="familyToggleTitle"
-      :aria-expanded="!allFamiliesCollapsed"
-      @click="emit('toggleFamilies')"
-    >{{ allFamiliesCollapsed ? '▸' : '▾' }}</button>
     </div>
     <div class="stage-tab-actions"><slot name="actions" /></div>
   </div>
@@ -369,8 +353,7 @@ function onRenameKeydown(e: KeyboardEvent, key: string): void {
 }
 
 .tab-add-btn,
-.tab-rebuild-all-btn,
-.tab-family-toggle-btn {
+.tab-rebuild-all-btn {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -388,26 +371,20 @@ function onRenameKeydown(e: KeyboardEvent, key: string): void {
   transition: color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out);
 }
 .tab-add-btn:hover,
-.tab-rebuild-all-btn:hover:not(:disabled),
-.tab-family-toggle-btn:hover:not(:disabled) {
+.tab-rebuild-all-btn:hover:not(:disabled) {
   color: var(--text-primary);
   border-color: var(--accent-focus);
   background: var(--bg-hover);
 }
 
-.tab-rebuild-all-btn,
-.tab-family-toggle-btn {
+.tab-rebuild-all-btn {
   margin-left: 2px;
-}
-.tab-family-toggle-btn {
-  font-size: 11px;
 }
 .tab-rebuild-all-btn svg {
   width: 14px;
   height: 14px;
 }
-.tab-rebuild-all-btn:disabled,
-.tab-family-toggle-btn:disabled {
+.tab-rebuild-all-btn:disabled {
   cursor: default;
   opacity: 0.4;
 }
