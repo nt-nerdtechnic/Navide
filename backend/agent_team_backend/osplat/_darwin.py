@@ -9,11 +9,13 @@ asked.
 
 from __future__ import annotations
 
+import os
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 
 from .. import proc_rusage
-from ._posix import process_tree, terminal_backend
+from ._posix import PosixTerminalBackend, PosixTerminalHandle, process_tree
 
 
 class DarwinPaths:
@@ -45,9 +47,69 @@ class DarwinResourceProbe:
         return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
 
 
+#: Kill switch / override for the pane helper below: "0" runs panes bare (the
+#: pre-helper behaviour), any other value is the helper executable to use.
+PANE_HELPER_ENV = "NAVIDE_PANE_HELPER"
+_PANE_HELPER_EXE = Path("Navide Pane.app") / "Contents" / "MacOS" / "navide-pane"
+
+
+def find_pane_helper(env: dict[str, str] | None = None) -> str | None:
+    """Path of the pane helper executable, or None to spawn panes bare.
+
+    Packaged: next to the frozen backend in Contents/Resources/bin (where
+    electron-builder puts it, see package.json build.mac.extraResources).
+    Checkout: build/pane-helper/, if `pnpm run build:pane-helper` has run.
+    """
+    override = (env if env is not None else os.environ).get(PANE_HELPER_ENV)
+    if override is not None:
+        if override.strip() in ("", "0"):
+            return None
+        return override if os.access(override, os.X_OK) else None
+    if getattr(sys, "frozen", False):
+        candidate = Path(sys.executable).resolve().parent / _PANE_HELPER_EXE
+    else:
+        candidate = Path(__file__).resolve().parents[3] / "build" / "pane-helper" / _PANE_HELPER_EXE
+    return str(candidate) if os.access(candidate, os.X_OK) else None
+
+
+class DarwinTerminalBackend(PosixTerminalBackend):
+    """The POSIX pty spawn, with every pane run under the pane helper.
+
+    LaunchServices names a process after its nearest registered ancestor, so
+    a tool a pane launches that registers itself (a browser CLI did, on every
+    call) showed in the Dock as another running "Navide" — the app looked
+    like it was relaunching in a loop. The helper (resources/pane-helper) is
+    its own LSUIElement bundle that registers first, so anything under it is
+    attributed to "Navide Pane", which the Dock does not show. It forwards
+    signals and exits with the child's status, so kill and exit handling in
+    `terminals.py` see the same pid semantics as before. No helper → the
+    pane runs exactly as it did without one.
+    """
+
+    def __init__(self, helper: str | None) -> None:
+        self.helper = helper
+
+    def spawn(
+        self,
+        argv: list[str] | str,
+        *,
+        cwd: str,
+        env: dict[str, str],
+        rows: int,
+        cols: int,
+    ) -> PosixTerminalHandle:
+        if isinstance(argv, str):
+            argv = self.parse_command(argv)
+        if self.helper:
+            argv = [self.helper, *argv]
+        return super().spawn(argv, cwd=cwd, env=env, rows=rows, cols=cols)
+
+
 paths = DarwinPaths()
 resource_probe = DarwinResourceProbe()
-# PTY and process-group handling are plain POSIX; see `_posix`.
+# PTY and process-group handling are plain POSIX (see `_posix`); Darwin only
+# adds the pane helper in front of the command.
+terminal_backend = DarwinTerminalBackend(find_pane_helper())
 __all__ = ["paths", "process_tree", "resource_probe", "terminal_backend"]
 
 

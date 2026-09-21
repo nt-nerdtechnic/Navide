@@ -46,13 +46,17 @@ def _collect(received: list[str]):
     return emit
 
 
-async def _run_probe(svc: TerminalService, received: list[str], child: str) -> str:
+async def _run_probe(
+    svc: TerminalService, received: list[str], child: str, root: list[int] | None = None
+) -> str:
     session = svc.create(
         pane_id="p1",
         agent_key=None,
         command=[sys.executable, "-u", "-c", child],
         cwd=".",
     )
+    if root is not None:
+        root.append(session.proc.pid)
     try:
         for _ in range(500):
             await asyncio.sleep(0.01)
@@ -87,7 +91,11 @@ async def test_child_owns_a_controlling_terminal():
 
 async def test_child_stays_its_own_session_and_group_leader():
     """pty_registry._classify_root treats `pgid != pid` as a dead root, so
-    claiming the ctty must not disturb sid/pgid/pid all being the child's pid."""
+    claiming the ctty must not disturb sid/pgid/pid all being the root's pid.
+
+    The root is the pane's PTY child — the command itself, or on macOS the
+    pane helper the command runs under (osplat._darwin); either way the probe
+    must find itself in the root's session and group."""
     received: list[str] = []
     svc = TerminalService(_collect(received))
     child = (
@@ -96,14 +104,19 @@ async def test_child_stays_its_own_session_and_group_leader():
         "os.getpid(), os.getpgid(0), os.getsid(0)))\n"
         "sys.stdout.flush()\n"
     )
-    combined = await _run_probe(svc, received, child)
+    root: list[int] = []
+    combined = await _run_probe(svc, received, child, root)
     marker = [ln for ln in combined.splitlines() if ln.startswith("PROBE:IDS:")]
     assert marker, f"probe never reported its ids; saw: {combined!r}"
     _, _, pid, pgid, sid = marker[0].split(":")
-    assert pid == pgid == sid, (
-        f"child must lead its own session and group; got "
-        f"pid={pid} pgid={pgid} sid={sid}"
+    assert pgid == sid == str(root[0]), (
+        f"the PTY child must lead its own session and group; got "
+        f"root={root[0]} pid={pid} pgid={pgid} sid={sid}"
     )
+    if getattr(terminals.osplat.terminal_backend, "helper", None) is None:
+        assert pid == sid, (
+            f"without a pane helper the command is the root; got pid={pid} sid={sid}"
+        )
 
 
 async def test_ctrl_c_raises_sigint_in_a_line_mode_child():

@@ -25,6 +25,7 @@ backend/.venv/
 **/__pycache__/
 *.pyc
 backend/dist/
+build/pane-helper/
 backend/build/
 # ─── Electron packaging output ──────────────────────────────────────────────
 dist-local/
