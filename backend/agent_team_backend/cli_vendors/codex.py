@@ -721,6 +721,16 @@ _SESSION_SUBDIRS = ("sessions", "archived_sessions")
 _MAX_THREAD_HOPS = 8
 # Same budget the attribution layer reads session files with.
 _META_READ_BYTES = 524_288
+# Runtime locations from Codex 0.155.1. Keep config resources (including
+# relative paths in named profiles) visible without sharing session storage.
+_HOME_RUNTIME_ENTRIES = frozenset({
+    *_SESSION_SUBDIRS, "session_index.jsonl", "history.jsonl", "shell_snapshots",
+    "thread-writer-locks", "log", "tmp", "app-server-control", "app-server-daemon",
+})
+_HOME_RUNTIME_DATABASE = re.compile(
+    r"(?:state|logs|goals|memories(?:_v2)?|queue|thread_history)_\d+\.sqlite"
+    r"(?:-(?:wal|shm|journal))?"
+)
 
 
 class CodexHomeManager:
@@ -737,14 +747,6 @@ class CodexHomeManager:
         self.panes_root = panes_root or (Path.home() / ".codex-panes")
         self.managed_skills_root = managed_skills_root or (app_data_dir() / "runtime" / "skills")
         self._refresh_managed_skills = managed_skills_root is None
-        self.shared_entries = (
-            "auth.json",
-            "config.toml",
-            "AGENTS.md",
-            "plugins",
-            "rules",
-            "memories",
-        )
 
     def prepare(self, home_id: str, *, source_home: Path | None = None) -> Path:
         """Create the per-pane home, symlinking shared entries from
@@ -758,17 +760,27 @@ class CodexHomeManager:
         safe_id = self._safe_home_id(home_id)
         pane_home = self.panes_root / safe_id
         pane_home.mkdir(parents=True, exist_ok=True)
-        for name in self.shared_entries:
-            src = source / name
-            dst = pane_home / name
+        self._share_config_entries(pane_home, source)
+        self._prepare_skills_view(pane_home, source / "skills")
+        return pane_home
+
+    def _share_config_entries(self, pane_home: Path, source: Path) -> None:
+        if not source.is_dir():
+            return
+        for src in source.iterdir():
+            if (
+                src.name in _HOME_RUNTIME_ENTRIES
+                or _HOME_RUNTIME_DATABASE.fullmatch(src.name)
+                or src.name == "skills" or src.name.startswith(".navide-skills")
+            ):
+                continue
+            dst = pane_home / src.name
             if not src.exists() or dst.exists() or dst.is_symlink():
                 continue
             try:
                 dst.symlink_to(src, target_is_directory=src.is_dir())
             except OSError as err:
                 log.warning("codex home symlink %s -> %s failed: %s", dst, src, err)
-        self._prepare_skills_view(pane_home, source / "skills")
-        return pane_home
 
     def _prepare_skills_view(self, pane_home: Path, native_root: Path) -> None:
         """Expose native and enabled managed skills under ``CODEX_HOME/skills``.
@@ -1005,6 +1017,7 @@ class CodexHomeManager:
             try:
                 for pane_home in sorted(self.panes_root.iterdir()):
                     if holds_session(pane_home):
+                        self._share_config_entries(pane_home, self.real_home)
                         self._prepare_skills_view(pane_home, self.real_home / "skills")
                         return pane_home
             except OSError:

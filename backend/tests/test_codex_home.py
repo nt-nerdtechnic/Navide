@@ -114,6 +114,34 @@ def test_archived_session_routes_home_but_is_not_resumable(tmp_path: Path) -> No
     assert manager.find_resumable_session_home("live-id-1") == panes / "pane-home"
 
 
+def test_resume_home_refreshes_profile_configs_without_sharing_runtime(tmp_path: Path) -> None:
+    real = tmp_path / "real-codex"
+    real.mkdir()
+    manager = CodexHomeManager(
+        real_home=real, panes_root=tmp_path / "panes",
+        managed_skills_root=tmp_path / "managed",
+    )
+    home = manager.prepare("pane-1")
+    (home / "sessions").mkdir()
+    rollout = home / "sessions" / "rollout-resume-id.jsonl"
+    rollout.write_text("{}", encoding="utf-8")
+    (home / "local.config.toml").write_text("model = 'local'\n", encoding="utf-8")
+    (real / "local.config.toml").write_text("model = 'global'\n", encoding="utf-8")
+    (real / "fast.config.toml").write_text("model = 'fast'\n", encoding="utf-8")
+    (real / "hooks.json").write_text('{"hooks": {}}', encoding="utf-8")
+    (real / "state_5.sqlite").write_text("global-runtime", encoding="utf-8")
+
+    assert manager.find_session_home("resume-id") == home
+
+    assert (home / "fast.config.toml").resolve() == (real / "fast.config.toml").resolve()
+    assert (home / "hooks.json").resolve() == (real / "hooks.json").resolve()
+    assert (home / "local.config.toml").read_text(encoding="utf-8") == "model = 'local'\n"
+    assert not (home / "local.config.toml").is_symlink()
+    assert not (home / "sessions").is_symlink()
+    assert rollout.read_text(encoding="utf-8") == "{}"
+    assert not (home / "state_5.sqlite").exists()
+
+
 def test_session_exists_preflight_rejects_archived_rollout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -441,7 +469,7 @@ def _hook_trust_fixture(tmp_path: Path) -> tuple[CodexHomeManager, Path, Path]:
     )
     manager = CodexHomeManager(real_home=real, panes_root=tmp_path / "panes")
     pane = manager.prepare("pane-1")
-    (pane / "hooks.json").symlink_to(real / "hooks.json")
+    assert (pane / "hooks.json").resolve() == (real / "hooks.json").resolve()
     return manager, real, pane
 
 
@@ -469,6 +497,7 @@ def test_seed_hook_trust_skips_missing_or_diverged_pane_hooks(tmp_path: Path) ->
     before = (real / "config.toml").read_text(encoding="utf-8")
 
     other = manager.prepare("pane-2")
+    (other / "hooks.json").unlink()
     assert manager.seed_hook_trust(other) == 0  # no hooks.json in that home
 
     (pane / "hooks.json").unlink()

@@ -453,6 +453,102 @@ def test_config_home_mirrors_the_real_root_and_owns_only_the_skills_dir(
     assert env == {}
 
 
+@pytest.mark.parametrize("runtime_owner", ["new", "pane", "shared"])
+def test_codex_prepared_home_keeps_runtime_ownership_after_skills_wiring(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, runtime_owner: str,
+) -> None:
+    from agent_team_backend.cli_vendors.codex import CodexHomeManager
+
+    user_home = tmp_path / "home"
+    real = user_home / ".codex"
+    runtime_dirs = (
+        "sessions", "archived_sessions", "log", "shell_snapshots",
+        "thread-writer-locks", "tmp", "app-server-control", "app-server-daemon",
+    )
+    runtime_files = (
+        "session_index.jsonl", "history.jsonl", "state_5.sqlite",
+        "state_5.sqlite-wal", "state_5.sqlite-shm", "state_5.sqlite-journal",
+        "logs_2.sqlite", "goals_1.sqlite", "memories_1.sqlite",
+        "memories_v2_1.sqlite", "queue_1.sqlite", "thread_history_1.sqlite",
+    )
+    for name in runtime_dirs:
+        (real / name).mkdir(parents=True)
+        (real / name / "existing").write_text("shared", encoding="utf-8")
+    for name in runtime_files:
+        (real / name).write_text("shared", encoding="utf-8")
+    for name in ("auth.json", "config.toml", "fast.config.toml", "hooks.json"):
+        (real / name).write_text("user-config", encoding="utf-8")
+    for name in ("agents/researcher.toml", "custom/instructions.md", "instructions.txt", ".env"):
+        resource = real / name
+        resource.parent.mkdir(parents=True, exist_ok=True)
+        resource.write_text("user-resource", encoding="utf-8")
+    (real / "plugins").mkdir()
+    (real / "mcp-oauth-locks").mkdir()
+    (real / "skills" / "mine").mkdir(parents=True)
+    manager = CodexHomeManager(
+        real_home=real, panes_root=user_home / ".codex-panes",
+        managed_skills_root=tmp_path / "managed",
+    )
+    pane_home = manager.prepare("pane-1")
+    if runtime_owner == "pane":
+        for name in runtime_dirs:
+            (pane_home / name).mkdir()
+            (pane_home / name / "existing").write_text("private", encoding="utf-8")
+        for name in runtime_files:
+            (pane_home / name).write_text("private", encoding="utf-8")
+    elif runtime_owner == "shared":
+        for name in (*runtime_dirs, *runtime_files):
+            (pane_home / name).symlink_to(real / name, target_is_directory=name in runtime_dirs)
+    store = _store_with_native(tmp_path, "codex")
+    monkeypatch.setattr(skills_wiring, "real_home", lambda: user_home)
+    monkeypatch.setattr(skills_wiring, "SkillsStore", lambda: store)
+    env = {"CODEX_HOME": str(pane_home)}
+
+    for _ in range(2):
+        assert skills_wiring.wire_command("codex", "codex", None, "pane-1", env) == "codex"
+        assert env == {"CODEX_HOME": str(pane_home)}
+        for name in (*runtime_dirs, *runtime_files):
+            path = pane_home / name
+            if runtime_owner == "new":
+                assert not path.exists() and not path.is_symlink(), name
+            elif runtime_owner == "shared":
+                assert path.is_symlink() and path.resolve() == (real / name).resolve(), name
+            else:
+                assert not path.is_symlink(), name
+                content = path / "existing" if name in runtime_dirs else path
+                assert content.read_text(encoding="utf-8") == "private"
+        assert not (pane_home / "state_99.sqlite").exists()
+        (real / "state_99.sqlite").write_text("created later", encoding="utf-8")
+
+    for name in ("auth.json", "config.toml", "fast.config.toml", "hooks.json", "plugins", "mcp-oauth-locks"):
+        assert (pane_home / name).resolve() == (real / name).resolve()
+    for name in ("agents/researcher.toml", "custom/instructions.md", "instructions.txt", ".env"):
+        assert (pane_home / name).read_text(encoding="utf-8") == "user-resource"
+    assert (pane_home / "skills" / "mine").resolve() == (real / "skills" / "mine").resolve()
+    assert (pane_home / "skills" / "alpha").resolve() == (tmp_path / "vendor" / "copilot" / "alpha").resolve()
+    for name in runtime_dirs:
+        assert (real / name / "existing").read_text(encoding="utf-8") == "shared"
+    for name in runtime_files:
+        assert (real / name).read_text(encoding="utf-8") == "shared"
+
+
+def test_codex_external_home_keeps_generic_skills_mirroring(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real = tmp_path / "home" / ".codex"
+    (real / "sessions").mkdir(parents=True)
+    store = _store_with_native(tmp_path, "codex")
+    monkeypatch.setattr(skills_wiring, "real_home", lambda: tmp_path / "home")
+    monkeypatch.setattr(skills_wiring, "SkillsStore", lambda: store)
+    external = tmp_path / "external"
+
+    skills_wiring.wire_command("codex", "codex", None, "pane-1", {"CODEX_HOME": str(external)})
+
+    assert (external / "sessions").is_symlink()
+    assert (external / "sessions").resolve() == (real / "sessions").resolve()
+    assert (external / "skills" / "alpha").is_symlink()
+
+
 def test_config_home_never_displaces_a_users_own_skill_of_the_same_name(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -13,7 +13,9 @@ export const SPEC = {
   skipPermissionFlag: '--dangerously-bypass-approvals-and-sandbox',
   // Subcommand, NOT a --flag.
   resumeArgs: (id) => `resume ${id}`,
-  needsSessionMarker: true,
+  // SessionStart or the pane's own rollout binds the ID after real work starts.
+  // An idle pane must not submit a synthetic prompt just to discover its ID.
+  needsSessionMarker: false,
   resumeCommandPattern: /^codex\s+resume\s+\S+/,
   supportsRebuild: true,
   verifiedTurnText: true,

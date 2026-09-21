@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Codex Session Detection Without a Bootstrap Turn — Verification Report</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f4f5f8; --surface: #fff; --ink: #1d2530; --muted: #5d6774;
+      --line: #dde1e9; --accent: #3b5bdb; --code: #edeff4;
+      --done: #226b32; --done-bg: #e3f2e6; --pending: #805000; --pending-bg: #fbf0dc;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #14171d; --surface: #1c2028; --ink: #e6eaf1; --muted: #a7b0bd;
+        --line: #343b48; --accent: #9eb2ff; --code: #242936;
+        --done: #8cdda0; --done-bg: #1e3324; --pending: #f1bd73; --pending-bg: #3a2e1a;
+      }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.7 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    main { max-width: 1020px; margin: 0 auto; padding: 44px 24px 80px; }
+    header { padding-bottom: 26px; border-bottom: 2px solid var(--line); }
+    h1 { max-width: 27ch; font-size: clamp(28px, 4vw, 40px); line-height: 1.2; margin: 8px 0 18px; }
+    h2 { font-size: 22px; margin: 0 0 14px; line-height: 1.4; }
+    h3 { font-size: 17px; margin: 24px 0 8px; }
+    p { margin: 10px 0; }
+    a { color: var(--accent); text-underline-offset: 3px; }
+    a:focus-visible { outline: 3px solid var(--accent); outline-offset: 4px; }
+    .eyebrow { margin: 0; color: var(--accent); font-size: 12px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+    .muted { color: var(--muted); }
+    .status-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 24px 0 0; }
+    .status { padding: 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+    .status strong { display: block; font-size: 15px; margin-bottom: 7px; }
+    .badge { display: inline-block; padding: 3px 10px; border-radius: 30px; font-size: 13px; font-weight: 700; }
+    .done { color: var(--done); background: var(--done-bg); }
+    .pending { color: var(--pending); background: var(--pending-bg); }
+    section { margin-top: 30px; padding: 26px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+    .table-scroll { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; text-align: left; }
+    th, td { padding: 12px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; }
+    tr:last-child td { border-bottom: 0; }
+    code { background: var(--code); padding: 2px 5px; border-radius: 4px; font: .88em/1.5 ui-monospace, "SF Mono", Consolas, monospace; overflow-wrap: anywhere; }
+    ul, ol { padding-left: 24px; }
+    li + li { margin-top: 8px; }
+    .callout { margin: 18px 0; padding: 14px 18px; border-left: 4px solid var(--accent); background: var(--code); border-radius: 0 8px 8px 0; }
+    footer { margin-top: 28px; font-size: 13px; color: var(--muted); }
+    @media (max-width: 650px) {
+      main { padding: 26px 14px 50px; }
+      section { padding: 19px 15px; }
+      .status-grid { grid-template-columns: 1fr; }
+      th, td { padding: 10px 7px; }
+    }
+    @media print {
+      :root { --bg: #fff; --surface: #fff; --ink: #000; --muted: #444; --line: #ccc; --accent: #234b99; --code: #f4f4f4; }
+      main { max-width: none; padding: 0; }
+      section { break-inside: avoid; }
+      .table-scroll { overflow: visible; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <p class="eyebrow">Engineering verification · 2026-09-21 · Codex CLI 0.155.1</p>
+    <h1>Session detection without a bootstrap turn</h1>
+    <p>A fresh Codex pane now waits for real input instead of submitting an artificial HTML comment to discover its session ID. Session attribution remains conditional on evidence from an isolated rollout or an authenticated, validated hook.</p>
+    <p class="muted">Implementation and all required automated checks are complete. The final full frontend and backend suites, typecheck and build passed, including fresh renderer checks after the concurrent source correction. Only user manual app acceptance remains pending.</p>
+    <div class="status-grid" aria-label="Completion status">
+      <div class="status"><strong>Implementation</strong><span class="badge done">Complete</span></div>
+      <div class="status" id="overall-verification"><strong>Full automated verification</strong><span class="badge done">Passed</span></div>
+      <div class="status" id="manual-status"><strong>Manual app acceptance</strong><span class="badge pending">Pending — user</span></div>
+    </div>
+    <p><a href="../../.agent-team/plans/codex-session-detection-without-bootstrap_b5549f.html">Approved local plan</a> <span class="muted">· This private plan link is available only in the originating workspace.</span></p>
+  </header>
+
+  <section id="problem">
+    <h2>Problem and root cause</h2>
+    <p>Codex was declared as requiring a session marker. The renderer therefore sent <code>&lt;!-- agent-team-session: at-pane:… --&gt;</code> as a real prompt when opening an otherwise empty pane. This could start model work, consume quota and produce an irrelevant response before the user had requested a task.</p>
+    <p>A second issue undermined passive attribution. CodexHomeManager prepared a pane home, but generic skills reconciliation subsequently mirrored unrelated entries from the global Codex home. This could make <code>sessions</code> and SQLite runtime files shared across panes. A pane-shaped path then did not establish which pane owned a conversation.</p>
+    <p>Codex 0.155.1 allocates a thread ID during initialization, while its rollout can be deferred and <code>SessionStart</code> is queued until the first turn. An internally allocated ID is therefore not a guarantee that a PTY host can observe it immediately.</p>
+    <div class="callout"><strong>Expected behavior:</strong> an idle pane may have no known session ID. The integration does not invent an ID, guess from a shared workspace, or create a model turn to fill that gap.</div>
+  </section>
+
+  <section id="changes">
+    <h2>Final production changes</h2>
+    <p>The task changes four production files. Existing unrelated worktree changes are outside this report.</p>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th scope="col">File</th><th scope="col">Responsibility and resulting behavior</th></tr></thead>
+        <tbody>
+          <tr><td><a href="../../src/renderer/src/platform/plugin-shell/agents/codex.ts">Frontend Codex spec</a></td><td>Disables <code>needsSessionMarker</code>. Manual launch, fresh rebuild and fresh restore send no artificial marker; configured task and role prompts remain intact. The existing marker-specific waiting overlay no longer applies to Codex.</td></tr>
+          <tr><td><a href="../../backend/agent_team_backend/cli_vendors/base.py">SkillsWiring contract</a></td><td>Declares which pane homes belong to the vendor home manager. Other vendors and generic skills-owned roots retain their existing behavior.</td></tr>
+          <tr><td><a href="../../backend/agent_team_backend/plugins/builtin/navide_skills/skills_wiring.py">Skills reconciliation</a></td><td>Reconciles only the skills subtree inside an existing vendor-managed Codex pane home. It does not import sibling runtime entries.</td></tr>
+          <tr><td><a href="../../backend/agent_team_backend/cli_vendors/codex.py">CodexHomeManager</a></td><td>Shares non-runtime configuration and resources while excluding verified Codex runtime locations. Preserves existing destinations, including local overrides and legacy shared links, and refreshes configuration visibility when locating a pane home for resume.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Runtime exclusions follow the verified 0.155.1 contract: session and archive directories, session index and input history, logs, shell snapshots, temporary files, thread writer locks, daemon/control state, and the versioned state/logs/goals/memories/queue/thread-history SQLite families with their sidecars.</p>
+    <p>Configuration resources remain visible, including named <code>*.config.toml</code> profiles, <code>agents/</code>, custom instruction files, <code>.env</code>, plugins and hooks. MCP OAuth credential locks remain shared to preserve coordination for shared credentials.</p>
+  </section>
+
+  <section id="review">
+    <h2>Review finding caught and fixed</h2>
+    <p>Independent review found a P2 compatibility problem in the first isolation approach: simply stopping all sibling mirroring would also hide named profiles and relative configuration resources, such as <code>agents/researcher.toml</code> and custom instruction files.</p>
+    <p>The final implementation keeps sharing under CodexHomeManager and excludes known runtime storage there. It preserves resource visibility without making the skills subsystem responsible for the whole home. Regression coverage includes nested resources, late-added profile files during resume, local overrides, and new, already isolated and already shared runtime paths.</p>
+    <p>No remaining P1 or P2 findings were identified in the final task review. That review covers this bounded change; it is not an audit of unrelated worktree changes or future Codex storage formats.</p>
+  </section>
+
+  <section id="focused-verification">
+    <h2>Completed focused verification</h2>
+    <p>Commands were run without output-filtering pipelines, and completion was recorded from their actual exit codes. Suites overlap; the counts below must not be added into a unique-test total.</p>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th scope="col">Check</th><th scope="col">Observed result</th><th scope="col">What it establishes</th></tr></thead>
+        <tbody>
+          <tr id="gate-ownership"><td>Final backend ownership and attribution checks</td><td><span class="badge done">94 passed · exit 0</span></td><td>Configuration visibility, runtime exclusion, skills ownership, resume preservation and marker-free attribution. Four existing deprecation warnings.</td></tr>
+          <tr id="gate-hooks"><td>Existing and new SessionStart tests</td><td><span class="badge done">22 passed · exit 0</span></td><td>Shared-root same-cwd panes, delayed rollout/registration, null transcript path, authenticated launches, stale-token rejection, duplicate prevention and persistence before broadcast.</td></tr>
+          <tr id="gate-hook-windows"><td>New SessionStart tests with Windows path/platform seams</td><td><span class="badge done">5 passed · exit 0</span></td><td>Portable path and environment handling in the new flow tests. This is not a native Windows executable or PowerShell acceptance test.</td></tr>
+          <tr id="gate-backend-windows"><td>Backend ownership, attribution and hook checks with Windows path/platform seams</td><td><span class="badge done">115 passed / 1 skipped · exit 0</span></td><td>Expanded Windows-seam verification of the final backend changes. It does not replace native Windows acceptance.</td></tr>
+          <tr id="gate-frontend-targeted"><td>Frontend targeted checks</td><td><span class="badge done">48 passed / 5 files · exit 0</span></td><td>Real orchestration functions with fake terminal I/O: launch, rebuild, fresh restore, intentional prompts, explicit resume and unchanged bootstrap behavior for other marker vendors.</td></tr>
+          <tr id="gate-diff"><td>Whitespace validation</td><td><span class="badge done">git diff --check · exit 0</span></td><td>No whitespace errors in the checked worktree diff.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>The final seven-case Codex orchestration test file also passed in the initial full run. This is a file-level result; the full-suite exit remains a separate gate below.</p>
+    <p>New focused evidence is in <a href="../../backend/tests/test_codex_session_start_flow.py">SessionStart flow tests</a>, <a href="../../backend/tests/test_codex_marker_free_attribution.py">marker-free attribution tests</a>, and <a href="../../src/renderer/src/components/__tests__/App.codexSessionIdentity.test.ts">frontend identity tests</a>.</p>
+  </section>
+
+  <section id="real-runtime">
+    <h2>Real Codex runtime proof</h2>
+    <p>The installed Codex 0.155.1 app-server was exercised headlessly in a disposable home and workspace. It used a loopback-only fake provider, with no real account credentials or user configuration inherited. The verification driver exited <strong>0</strong>.</p>
+    <ol>
+      <li>The unchanged Navide inline hook appeared in <code>hooks/list</code> as <code>enabled=true</code> and <code>trustStatus=untrusted</code>.</li>
+      <li>The official configuration API trusted only that test hook in the disposable home. A second listing reported <code>trusted</code>; no blanket hook-trust bypass was used.</li>
+      <li><code>thread/start</code> returned a UUID before any turn. No SessionStart callback had arrived at that point.</li>
+      <li>A synthetic verification turn, confined to this headless harness, triggered the actual Navide hook command. The callback carried the expected UUID, launch identity and authentication header.</li>
+      <li>The turn was interrupted immediately after the callback. The fake provider recorded <strong>zero requests</strong>; no model call was made.</li>
+    </ol>
+    <p class="muted">Temporary evidence: <code>verify_codex_hook_runtime.py</code>, <code>codex-runtime/result.json</code>, <code>codex-runtime/rpc.json</code> and <code>codex-runtime/stderr.log</code>. These scratch artifacts are kept outside the repository; no credential values are reproduced here.</p>
+    <p>This proves the supported trusted-hook path and its timing. It does not establish that a user's existing home has trusted the hook, and it is not manual acceptance of the Electron app.</p>
+  </section>
+
+  <section id="full-gates">
+    <h2>Full verification gates</h2>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th scope="col">Gate</th><th scope="col">Status</th><th scope="col">Evidence or next step</th></tr></thead>
+        <tbody>
+          <tr id="gate-backend-full"><td>Full backend suite</td><td><span class="badge done">Passed · exit 0</span></td><td><p>The final <code>uv --project backend run pytest backend/tests</code> run exited 0: 6,610 passed, 13 skipped and 14 warnings in 344.56 seconds. Evidence: <code>backend-final.log</code>.</p><p>An earlier run was interrupted after 1,899 passed and 1 skipped. That interrupted attempt was not counted as a passing full-suite result.</p></td></tr>
+          <tr id="gate-frontend-full"><td>Full frontend suite</td><td><span class="badge done">Final full run passed · exit 0</span></td><td><p>The final full run exited 0 in 136.61 seconds: 673 files (672 passed, 1 skipped) and 10,060 tests (10,045 passed, 15 skipped), with no unhandled or RPC errors. Evidence: <code>frontend-final-full.log</code>.</p><p>The initial run exited 1 after 3,018.19 seconds: 673 files (661 passed, 11 failed, 1 skipped) and 10,060 tests (10,027 passed, 18 failed, 15 skipped). Failures comprised 17 timeouts and one source-contract assertion in <code>App.idleReclaim.test.ts</code>. Three additional unhandled <code>vitest-worker onTaskUpdate</code> RPC timeout errors had no file attribution.</p><p>The first retry of all 11 failed files with <code>--maxWorkers=1</code> and unchanged test timeouts exited 1 after 205.39 seconds: 10 files passed and 1 failed; 124 tests passed and 1 failed out of 125. All 17 prior timeout tests recovered. That retry's remaining source-contract assertion belonged to concurrent CLI-risk edits to <code>App.idleReclaim.test.ts</code> and <code>App.vue</code>, both introduced after this task's starting snapshot and untouched by this task. One unhandled <code>onTaskUpdate</code> RPC timeout also remained, with no file attribution available from the aggregate footer stack. These initial attempts remain historical failures.</p><p>Another task subsequently corrected the CLI-risk assertion and Vue provider wiring. The isolated <code>App.idleReclaim.test.ts</code> run passed all 28 tests with direct exit 0 and no unhandled errors; its source hash remained stable. Evidence: <code>frontend-after-concurrent-fix.log</code>. Final serial recovery of the original 11 failed files then passed all 125 tests with exit 0 in 24.43 seconds and no errors; evidence: <code>frontend-final-recovery.log</code>. The clean final full-suite result above verifies recovery across the complete suite.</p></td></tr>
+          <tr id="gate-typecheck"><td>Typecheck</td><td><span class="badge done">Passed · exit 0</span></td><td><code>pnpm typecheck</code> exited 0 across all phases: node, integration, plugin-git, plugin-plans, web and public. After the concurrent <code>App.vue</code> correction, current-source <code>pnpm typecheck:web</code> also exited 0. Evidence: <code>frontend-final-typecheck-web.log</code>.</td></tr>
+          <tr id="gate-build"><td>Application build</td><td><span class="badge done">Passed · exit 0</span></td><td><p><code>pnpm build</code> exited 0 across the renderer (2 minutes 13 seconds), official plugins, Plans backend, Git v2 and legacy Git, main and preload stages. Another build in the same checkout was observed during the official-plugin stages and was absent when this run's electron-vite stage was observed. No failure or output conflict was observed; artifact isolation is not claimed.</p><p>After the concurrent <code>App.vue</code> correction, current-source <code>pnpm exec electron-vite build</code> also exited 0, with the renderer completing in 24.06 seconds; plugins were unchanged. Evidence: <code>frontend-final-electron-build.log</code>.</p></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="muted">All required automated gates passed. Before/after hashes for <code>App.vue</code>, <code>App.idleReclaim.test.ts</code>, the Codex agent spec and the Codex behavioral test matched (<code>cmp</code> exit 0), confirming stable source across the final frontend gates. Earlier failed attempts remain recorded above. Only manual app acceptance remains pending.</p>
+  </section>
+
+  <section id="manual-acceptance">
+    <h2>Manual acceptance still required</h2>
+    <p>The repository prohibits UI automation. The following actual-app checks remain assigned to the user:</p>
+    <ol>
+      <li><strong>Idle startup:</strong> open an empty Codex pane with no role or kickoff. Wait for startup to settle. Confirm no HTML marker is submitted, no model work starts for discovery, and no marker-specific waiting overlay blocks input.</li>
+      <li><strong>First real task:</strong> enter a normal task in a newly prepared pane. Confirm the session ID becomes available once the CLI writes its rollout, and that the pane/history association survives an app restart.</li>
+      <li><strong>Concurrent panes:</strong> open two Codex panes in the same workspace, submit different tasks in reverse order, and confirm each retains its own session identity and resume target.</li>
+      <li><strong>Rebuild and restore:</strong> exercise fresh rebuild and fresh restore. Confirm no legacy marker reappears. Resume a confirmed historical conversation, including one in an existing shared Codex home, and confirm it returns to the original conversation/home without a new bootstrap turn.</li>
+      <li><strong>Configured prompts and resources:</strong> launch with an intentional role/task and, where used, a named Codex profile or custom agent configuration. Confirm those inputs and resources remain available without an appended marker.</li>
+      <li><strong>Legacy shared home:</strong> where applicable, review the Navide hook through Codex's own review flow. If the hook is disabled or untrusted and no trustworthy attribution source exists, an unknown ID is the expected safe result.</li>
+    </ol>
+  </section>
+
+  <section id="boundaries">
+    <h2>Preservation and limitations</h2>
+    <ul>
+      <li>Existing shared homes and their data were not migrated, detached or repaired. Existing local files and symlinks are preserved.</li>
+      <li>No real global configuration was changed during verification. YOLO mode does not approve hooks, and no global hook-trust bypass was added.</li>
+      <li>A shared path or matching workspace alone cannot bind a new Codex conversation. An enabled, trusted and validated callback may still be necessary for older shared homes.</li>
+      <li>The runtime-storage contract is pinned to Codex 0.155.1. Explicit user storage-location overrides and future new storage names are outside the automatic isolation guarantee.</li>
+      <li>Historical marker reading, explicit resume identity, other vendors and intentional prompts remain supported.</li>
+      <li>No commit, merge, deployment or manual UI acceptance is claimed.</li>
+    </ul>
+  </section>
+
+  <footer>
+    <p>Sources checked: <a href="https://github.com/openai/codex/blob/rust-v0.155.1/codex-rs/core/src/session/session.rs#L1692-L1721">queued SessionStart</a>, <a href="https://github.com/openai/codex/blob/rust-v0.155.1/codex-rs/core/src/session/turn.rs#L307-L323">first-turn dispatch</a>, <a href="https://github.com/openai/codex/blob/rust-v0.155.1/codex-rs/hooks/src/engine/discovery.rs#L676-L720">hook trust enforcement</a>, and <a href="https://github.com/openai/codex/blob/rust-v0.155.1/codex-rs/state/src/sqlite.rs#L29-L112">runtime database families</a>.</p>
+    <p>Self-contained report: inline CSS, no external assets, no executable scripts.</p>
+  </footer>
+</main>
+</body>
+</html>
