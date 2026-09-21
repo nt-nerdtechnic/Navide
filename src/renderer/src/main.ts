@@ -14,12 +14,12 @@ seedSettings(bootstrapSettings)
 const bootstrapLocaleRaw = bootstrapSettings['agent-team:language']
 if (typeof bootstrapLocaleRaw === 'string') {
   const candidate = bootstrapLocaleRaw.trim()
-  if (candidate === 'zh-TW' || candidate === 'en-US') {
+  if (candidate === 'zh-TW' || candidate === 'en-US' || candidate === 'ja-JP') {
     i18n.global.locale.value = candidate
   } else {
     try {
       const decoded = JSON.parse(candidate)
-      if (decoded === 'zh-TW' || decoded === 'en-US') {
+      if (decoded === 'zh-TW' || decoded === 'en-US' || decoded === 'ja-JP') {
         i18n.global.locale.value = decoded
       }
     } catch {
