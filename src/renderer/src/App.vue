@@ -18125,6 +18125,22 @@ const paneListLineage = computed<PaneLineageRow[]>(() =>
  *  stored one would point at nobody. */
 const paneListCollapsed = ref(new Set<string>())
 
+// Use the full lineage so expanding all also reopens nested parents hidden
+// beneath a closed ancestor.
+const tabFamilyParentIds = computed(() =>
+  paneListLineage.value
+    .filter((row) => row.descendantCount > 0 && tabFilteredPaneIds.value.has(row.id) && !minimizedPanes.value.has(row.id))
+    .map((row) => row.id)
+)
+const tabFamiliesCollapsed = computed(() =>
+  tabFamilyParentIds.value.length > 0 && tabFamilyParentIds.value.every((id) => paneListCollapsed.value.has(id))
+)
+const tabFamilyToggleDisabledReason = computed<'grid' | 'empty' | undefined>(() => {
+  if (effectiveLayoutMode.value === 'grid') return 'grid'
+  if (tabFamilyParentIds.value.length === 0) return 'empty'
+  return undefined
+})
+
 /** What the lists render, in the order they render it — and the order
  *  shift-range walks, since one is derived from the other.
  *
@@ -18137,12 +18153,11 @@ const auxiliaryListPanes = computed(() => {
       .filter((v) => !v.isMinimized && tabFilteredPaneIds.value.has(v.id))
       .map((v) => [v.id, v] as const)
   )
-  // A row hides when anything above it has been closed. Roots have no
-  // ancestors, so they always show; closing a parent takes its whole subtree
-  // with it, one level at a time.
+  // Only ancestors in this tab can hide a row: families may span tabs or
+  // workspaces, whose fold state must not change this list.
   const closed = paneListCollapsed.value
   return paneListLineage.value.flatMap((r) => {
-    if (r.ancestors.some((id) => closed.has(id))) return []
+    if (r.ancestors.some((id) => tabFilteredPaneIds.value.has(id) && closed.has(id))) return []
     const view = visible.get(r.id)
     return view ? [{ ...view, ancestors: r.ancestors, descendantCount: r.descendantCount, expanded: !closed.has(r.id) }] : []
   })
@@ -18212,6 +18227,18 @@ function togglePaneFamily(rootId: string): void {
   const next = new Set(paneListCollapsed.value)
   if (next.has(rootId)) next.delete(rootId)
   else next.add(rootId)
+  paneListCollapsed.value = next
+}
+
+function toggleTabFamilies(): void {
+  if (tabFamilyToggleDisabledReason.value) return
+  const ids = tabFamilyParentIds.value
+  const collapse = !tabFamiliesCollapsed.value
+  const next = new Set(paneListCollapsed.value)
+  for (const id of ids) {
+    if (collapse) next.add(id)
+    else next.delete(id)
+  }
   paneListCollapsed.value = next
 }
 
@@ -18992,8 +19019,11 @@ function paneIsCommander(p: ActivePane): boolean {
         :can-rebuild-all="rebuildablePaneCount > 0"
         :rebuilding-all="rebuildingTabPanes"
         :rebuild-all-title="$t('action.rebuild-tab-cli-panes')"
+        :all-families-collapsed="tabFamiliesCollapsed"
+        :family-toggle-disabled-reason="tabFamilyToggleDisabledReason"
         @add="createRunGroup()"
         @rebuild-all="rebuildPanesViaResume('tab')"
+        @toggle-families="toggleTabFamilies"
         @rename="(key, name) => renameRunGroup(key, name)"
         @delete="(key) => deleteRunGroup(key)"
         @close-group="(key) => closeRunGroup(key)"
