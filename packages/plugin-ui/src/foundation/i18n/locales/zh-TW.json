@@ -3688,7 +3688,7 @@
             "sub3": "claude · tester",
             "branch": "main*",
             "backend": "backend · 127.0.0.1:8765",
-            "resource": "▤ 2/3 · 12% · 1.2 GB",
+            "resource": "▤ 2 / 3 · 12% · 1.2 GB",
             "version": "📢 v0.2.0",
             "clock": "09/14 15:12"
           }
@@ -4574,7 +4574,7 @@
               "sample": "色點"
             },
             "resources": {
-              "where": "狀態列左半，顯示為 <code>▤ 2/3</code> 這種形式（有程序的面板／全部面板）",
+              "where": "狀態列左半，顯示為 <code>▤ 2 / 3</code> 這種形式（有程序的面板／全部面板）",
               "what": "目前有幾個面板在跑，以及 CPU／記憶體。點開看每個面板的用量，可以直接回收或跳過去。",
               "name": "<code>CLI 資源</code>"
             },

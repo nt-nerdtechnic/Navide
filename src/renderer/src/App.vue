@@ -17188,11 +17188,10 @@ const resourceMemoryShare = computed(() =>
  *  Each figure appears only once it is knowable — CPU needs two samples, and a
  *  sweep that failed shows nothing rather than a zero that reads as "idle". */
 const resourcePillText = computed(() => {
-  // The pane count, not the realized subset: idle reclaim downgrades panes to
-  // placeholders rather than closing them, and a pill reading "▤ 0" beside a
-  // panel listing thirteen panes is a contradiction. The resource figures below
-  // still come only from the panes that actually hold a process.
-  const parts = [`▤ ${panes.value.length}`]
+  // Live over total: idle reclaim downgrades panes to placeholders rather than
+  // closing them, so "▤ 10 / 100" reads as ten panes holding a process out of a
+  // hundred listed. The resource figures below come only from the live ones.
+  const parts = [`▤ ${realizedPaneCount.value} / ${panes.value.length}`]
   const share = resourceCpuShare.value
   if (share !== null && resourceUsage.cpuAvailable.value) parts.push(formatCpuPercent(share))
   if (resourceUsage.measured.value && resourceUsage.available.value && resourceTotals.value.bytes > 0) {
