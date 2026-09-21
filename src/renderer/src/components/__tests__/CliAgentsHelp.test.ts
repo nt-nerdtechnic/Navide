@@ -46,7 +46,7 @@ describe('CliAgentsHelp', () => {
     expectNoChineseText(text)
     expect(text).toContain('Supported CLIs')
     expect(text).toContain('Troubleshooting')
-    expect(wrapper.findAll('.cah-h2')).toHaveLength(8)
+    expect(wrapper.findAll('.cah-h2')).toHaveLength(9)
     expect(wrapper.findAll('.cah-table').at(0)!.findAll('tbody tr')).toHaveLength(15)
 
     // `{CLI}` is placeholder prose, not an interpolation — the escape must survive.
@@ -62,7 +62,7 @@ describe('CliAgentsHelp', () => {
     expect(text).toContain('支援哪些 CLI')
     expect(text).toContain('疑難排解')
     expect(text).toContain('取得 Session ID 中')
-    expect(wrapper.findAll('.cah-h2')).toHaveLength(8)
+    expect(wrapper.findAll('.cah-h2')).toHaveLength(9)
     expect(wrapper.findAll('.cah-table').at(0)!.findAll('tbody tr')).toHaveLength(15)
 
     expect(text).toContain('{CLI}')

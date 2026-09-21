@@ -129,6 +129,23 @@ const troubleshooting = [
   'envIgnored',
   'resumeIgnoresCommand',
 ] as const
+// ── 9 · CLI risk observations ────────────────────────────────────────
+// The three signal kinds CliRiskPill.vue can show, and the buttons its popover
+// offers. Names are read from the pill's own `cli-risk.*` keys so the table
+// can never quote a heading the pill no longer prints.
+const riskSignals = [
+  { key: 'network', nameKey: 'cli-risk.network-title', colorKey: 'statusBadges.color.yellow' },
+  { key: 'disk', nameKey: 'cli-risk.disk-title', colorKey: 'statusBadges.color.yellow' },
+  { key: 'diskAgain', nameKey: 'cli-risk.disk-again-title', colorKey: 'statusBadges.color.red' },
+] as const
+
+const riskActions = [
+  { key: 'ignore', labelKey: 'cli-risk.ignore' },
+  { key: 'ignoreIp', labelKey: 'cli-risk.ignore-ip' },
+  { key: 'allowIp', labelKey: 'cli-risk.allow-ip' },
+  { key: 'reveal', labelKey: 'cli-risk.reveal' },
+] as const
+
 const { t } = useI18n()
 
 // ── Mock screenshots ────────────────────────────────────────────────────────
@@ -665,6 +682,42 @@ const installChain = computed(() => [sample('chain1'), sample('chain2'), sample(
             </tr>
           </tbody>
         </table>
+      </div>
+    </section>
+
+    <!-- ── 9 · CLI risk observations ───────────────────────────────── -->
+    <section class="cah-section">
+      <h2 class="cah-h2"><span class="cah-num">9</span>{{ $t('settings.help.cliAgents.s9.title') }}</h2>
+      <p class="cah-p" v-html="$t('settings.help.cliAgents.s9.p1')"></p>
+      <div class="cah-tablewrap">
+        <table class="cah-table">
+          <thead>
+            <tr>
+              <th>{{ $t('settings.help.cliAgents.s9.table.signal') }}</th>
+              <th>{{ $t('settings.help.cliAgents.s9.table.color') }}</th>
+              <th>{{ $t('settings.help.cliAgents.s9.table.when') }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="row in riskSignals" :key="row.key">
+              <td class="cah-nowrap"><strong>{{ $t(row.nameKey) }}</strong></td>
+              <td class="cah-nowrap">{{ $t(row.colorKey) }}</td>
+              <td v-html="$t(`settings.help.cliAgents.s9.signals.${row.key}.when`)"></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="cah-p" v-html="$t('settings.help.cliAgents.s9.p2')"></p>
+      <ul class="cah-list">
+        <li v-for="row in riskActions" :key="row.key">
+          <strong>{{ $t(row.labelKey, { vendor: 'Claude Code' }) }}</strong>
+          — {{ $t(`settings.help.cliAgents.s9.actions.${row.key}`) }}
+        </li>
+      </ul>
+      <p class="cah-p" v-html="$t('settings.help.cliAgents.s9.p3')"></p>
+      <div class="cah-callout cah-callout--warn">
+        <div class="cah-callout-title">{{ $t('settings.help.cliAgents.s9.callout.title') }}</div>
+        <div class="cah-callout-text" v-html="$t('settings.help.cliAgents.s9.callout.text')"></div>
       </div>
     </section>
   </div>
