@@ -5,8 +5,7 @@
 // Purely prop/emit driven: the feed and the updater actions live in App.vue, so
 // this component only decides layout, expansion and which button a row offers.
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { i18n } from '@navide/plugin-ui/foundation'
-import type { Announcement, AnnouncementActionSpec, QuotaAnnouncementAction } from '../composables/useAnnouncements'
+import type { Announcement } from '../composables/useAnnouncements'
 
 const props = defineProps<{ items: Announcement[] }>()
 const emit = defineEmits<{
@@ -15,54 +14,7 @@ const emit = defineEmits<{
   read: [id: string]
   download: []
   install: []
-  /** A quota row's button: the typed action, ids and epoch included, for the
-   *  backend to re-validate. Nothing is executed here. */
-  'quota-action': [action: QuotaAnnouncementAction]
 }>()
-
-/** Buttons of a row: the typed list, else the single update action. */
-function actionsOf(item: Announcement): AnnouncementActionSpec[] {
-  if (item.actions && item.actions.length > 0) return item.actions
-  return item.action ? [{ kind: item.action }] : []
-}
-
-function onAction(action: AnnouncementActionSpec): void {
-  if (action.kind === 'download') emit('download')
-  else if (action.kind === 'install') emit('install')
-  else emit('quota-action', action as QuotaAnnouncementAction)
-}
-
-/** Quota-row button labels have no locale entries yet (see QUOTA_I18N_KEYS
- *  in useAnnouncements); fall back to English rather than print the key. */
-function tq(key: string, fallback: string, params: Record<string, string> = {}): string {
-  if (i18n.global.te(key)) return i18n.global.t(key, params)
-  return fallback.replace(/\{(\w+)\}/g, (_, name: string) => params[name] ?? '')
-}
-
-function actionLabel(action: AnnouncementActionSpec): string {
-  switch (action.kind) {
-    case 'download':
-      return i18n.global.t('updater.download')
-    case 'install':
-      return i18n.global.t('updater.install')
-    case 'quota-switch':
-      return tq('announce.quota.switch-to', 'Switch to {label}', { label: action.label })
-    case 'quota-retry-resume':
-      return tq('announce.quota.retry-resume', 'Retry resume')
-    case 'quota-switch-back':
-      return tq('announce.quota.switch-back', 'Switch back to {label}', { label: action.label })
-  }
-}
-
-function actionKey(action: AnnouncementActionSpec): string {
-  return 'slotId' in action ? `${action.kind}:${action.slotId}` : action.kind
-}
-
-function iconOf(item: Announcement): string {
-  if (item.kind === 'release') return '🏷'
-  if (item.kind === 'quota') return '◔'
-  return '⬆'
-}
 
 const expandedId = ref<string | null>(null)
 
@@ -122,22 +74,25 @@ function fmtTime(ts: number): string {
         @click="toggle(item)"
       >
         <div class="an-line1">
-          <span class="an-icon">{{ iconOf(item) }}</span>
+          <span class="an-icon">{{ item.kind === 'release' ? '🏷' : '⬆' }}</span>
           <span class="an-title">{{ item.title }}</span>
           <span v-if="item.version" class="an-ver">v{{ item.version }}</span>
           <span v-if="!item.read" class="an-dot" />
         </div>
         <div v-if="item.createdAt" class="an-time">{{ fmtTime(item.createdAt) }}</div>
-        <div v-if="actionsOf(item).length > 0" class="an-acts">
+        <div v-if="item.action" class="an-acts">
           <button
-            v-for="action in actionsOf(item)"
-            :key="actionKey(action)"
+            v-if="item.action === 'download'"
             class="an-btn an-btn-primary"
-            :data-act="action.kind"
-            :data-slot="'slotId' in action ? action.slotId : undefined"
-            :data-epoch="'epoch' in action ? action.epoch : undefined"
-            @click.stop="onAction(action)"
-          >{{ actionLabel(action) }}</button>
+            data-act="download"
+            @click.stop="emit('download')"
+          >{{ $t('updater.download') }}</button>
+          <button
+            v-else
+            class="an-btn an-btn-primary"
+            data-act="install"
+            @click.stop="emit('install')"
+          >{{ $t('updater.install') }}</button>
         </div>
         <div v-if="expandedId === item.id" class="an-detail">
           <div v-if="item.kind === 'update' && item.highlights.length > 0" class="an-sub">
@@ -271,7 +226,6 @@ function fmtTime(ts: number): string {
 .an-acts {
   margin-top: 5px;
   display: flex;
-  flex-wrap: wrap;
   gap: 5px;
 }
 .an-detail { padding: 6px 0 2px; }
