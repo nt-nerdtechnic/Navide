@@ -19,6 +19,8 @@ from typing import IO, Any, Awaitable, Callable
 from uuid import uuid4
 
 from . import osplat, pty_registry
+from .cli_vendors.base import VendorRuntimeContext
+from .cli_vendors.registry import risk_runtime_context
 from .osplat import spec
 from .osplat.proctree import children_map as _children_map
 from .osplat.proctree import walk_descendants as _walk_descendants
@@ -167,6 +169,8 @@ class TerminalSession:
     # a stale entry from ever matching a recycled pid (same pattern as
     # pty_registry).
     descendants: dict[int, str] = field(default_factory=dict)
+    # Sanitized path/override context only; never persisted as pane metadata.
+    risk_context: VendorRuntimeContext | None = field(default=None, repr=False)
 
 
 # Output logs currently held open for append by a live session (terminal
@@ -582,6 +586,11 @@ class TerminalService:
         for key in env_remove or ():
             final_env.pop(key, None)
 
+        try:
+            risk_context = risk_runtime_context(final_env, cwd)
+        except ValueError:
+            risk_context = None
+
         started_monotonic = time.monotonic()
         # The platform seam owns the PTY and the child's session/controlling
         # terminal (POSIX: openpty + setsid + claim the ctty; Windows: ConPTY
@@ -632,6 +641,7 @@ class TerminalService:
                 started_monotonic=started_monotonic,
                 metadata=metadata or {},
                 output_log_fp=log_fp,
+                risk_context=risk_context,
             )
             self._sessions[session.id] = session
             if log_fp is not None:

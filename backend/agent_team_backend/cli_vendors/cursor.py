@@ -806,6 +806,10 @@ def _session_exists(workspace_path: str, session_id: str) -> bool:
 
 SPEC = VendorSpec(
     key="cursor",
+    # The web quota endpoint is not evidence of the CLI's inference hosts.
+    expected_hosts=(),
+    # Verified CLI conversation store; exclude the IDE's other .cursor data.
+    data_dirs=lambda ctx: (ctx.path(ctx.home / ".cursor" / "chats"),),
     supports_model=True,
     # Verified 2026-08-15 (docs): .cursor/skills and .agents/skills in the
     # project, ~/.cursor/skills globally, and no relocation variable at all —

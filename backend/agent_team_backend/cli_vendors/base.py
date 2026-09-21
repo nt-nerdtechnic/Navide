@@ -291,6 +291,10 @@ class SkillsWiring:
     root_home: tuple[str, ...] = ()
     # The skills directory relative to that root.
     skills_rel: tuple[str, ...] = ()
+    # Existing pane homes directly under this user-home-relative directory
+    # belong to the vendor's home manager. Reconcile their skills subtree
+    # only; importing sibling entries would share otherwise isolated state.
+    isolated_panes_home: tuple[str, ...] = ()
 
     # --- a directory the CLI reads out of the workspace ---
     # Last resort for a CLI with no relocation variable: the path is inside the

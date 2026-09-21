@@ -6869,16 +6869,51 @@ async def terminal_resource_usage(session: "Session", msg_id: str, msg_type: str
     whole call costs about as much as the slower one. Concurrent callers share
     one sweep — see _RESOURCE_SWEEP_TTL_S.
     """
+    from . import app
+    from .cli_risk import active_panes
+
+    # Sampling is request-triggered but independent of the CPU/memory cache.
+    # A cached CPU response must still deliver the latest completed risk state.
+    app.cli_risk_service.request(active_panes(session.terminals, app._PTY_OWNERS))
     async with _resource_sweep_lock:
         now = time.monotonic()
         cached = _resource_sweep_cache["payload"]
         if cached is not None and now - float(_resource_sweep_cache["at"]) < _RESOURCE_SWEEP_TTL_S:
-            await session.send_json(make_response(msg_id, msg_type, cached))
+            risks = app.cli_risk_service.current(active_panes(session.terminals, app._PTY_OWNERS))
+            await session.send_json(make_response(msg_id, msg_type, {**cached, "cliRisks": risks}))
             return
         result = await _collect_resource_usage(session)
         _resource_sweep_cache["at"] = now
         _resource_sweep_cache["payload"] = result
-    await session.send_json(make_response(msg_id, msg_type, result))
+    risks = app.cli_risk_service.current(active_panes(session.terminals, app._PTY_OWNERS))
+    await session.send_json(make_response(msg_id, msg_type, {**result, "cliRisks": risks}))
+
+
+@handler("terminal.cli_risk_action")
+async def terminal_cli_risk_action(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+    from .cli_risk import active_panes
+
+    pane_id, signal_id, action = (payload.get(key) for key in ("paneId", "signalId", "action"))
+    if not isinstance(pane_id, str) or not isinstance(signal_id, str) or action not in ("ignore", "allow"):
+        await session.send_json(make_error(msg_id, msg_type, "BAD_REQUEST", "invalid CLI risk action"))
+        return
+    owned = {sid: owner for sid, owner in app._PTY_OWNERS.items() if owner is session}
+    panes = active_panes(session.terminals, owned)
+    if not any(pane.pane_id == pane_id for pane in panes):
+        await session.send_json(make_error(msg_id, msg_type, "TERMINAL_NOT_OWNED", "pane is not owned by this connection"))
+        return
+    try:
+        # Disk evidence is vendor-wide, including roots active in another
+        # owned window. Authorization above remains local to the target pane.
+        await app.cli_risk_service.action(
+            active_panes(session.terminals, app._PTY_OWNERS), pane_id, signal_id, action
+        )
+    except ValueError as err:
+        await session.send_json(make_error(msg_id, msg_type, "BAD_REQUEST", str(err)))
+        return
+    risks = app.cli_risk_service.current(active_panes(session.terminals, app._PTY_OWNERS))
+    await session.send_json(make_response(msg_id, msg_type, {"cliRisks": risks}))
 
 
 async def _collect_resource_usage(session: "Session") -> dict:

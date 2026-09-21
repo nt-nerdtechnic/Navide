@@ -46,6 +46,7 @@ from .base import (
     PushChannel,
     SkillsWiring,
     VendorSpec,
+    VendorRuntimeContext,
     command_text,
 )
 from ..usage_common import (
@@ -769,8 +770,29 @@ def _install_hooks(port_file: str) -> Any:
     return install_hooks(port_file)
 
 
+def _risk_data_dirs(ctx: VendorRuntimeContext) -> tuple[Path, ...]:
+    # Verified in installed @qwen-code/qwen-code Storage.getRuntimeBaseDir:
+    # QWEN_RUNTIME_DIR overrides runtime output, otherwise QWEN_HOME is used.
+    # Config remains at QWEN_HOME. Storage.resolvePath expands ~/ itself.
+    def path(value: str | Path) -> Path:
+        text = str(value)
+        if text == "~":
+            return ctx.home
+        if text.startswith(("~/", "~\\")):
+            return ctx.home.joinpath(*re.split(r"[/\\]+", text[2:]))
+        return ctx.path(value)
+
+    root = path(ctx.env.get("QWEN_HOME") or ctx.home / ".qwen")
+    runtime = ctx.env.get("QWEN_RUNTIME_DIR")
+    return tuple(dict.fromkeys((root, path(runtime)))) if runtime else (root,)
+
+
 SPEC = VendorSpec(
     key="qwen",
+    # OpenAI-compatible/custom providers; quota hosts cover another interface.
+    expected_hosts=(),
+    data_dirs=_risk_data_dirs,
+    data_dir_env_vars=("QWEN_HOME", "QWEN_RUNTIME_DIR"),
     supports_model=True,
     # Verified 2026-08-15: QWEN_HOME *is* the .qwen directory (its
     # resolveQwenHome falls back to ~/.qwen), so skills sit one level in.

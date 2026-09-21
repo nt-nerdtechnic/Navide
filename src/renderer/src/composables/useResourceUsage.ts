@@ -2,8 +2,8 @@
  * The sampling loop behind the resource pill, its summary card and the
  * Resource Manager window.
  *
- * The backend measures on request and keeps no state, so every consumer of
- * this runs its own loop and differences against its own previous sample. That
+ * The backend measures resource counters on request without keeping their
+ * previous readings, so every consumer differences against its own sample. That
  * is what makes a second window free: it does not disturb the first one's
  * interval, and there is no shared "last reading" to race over.
  *
@@ -13,7 +13,9 @@
  * gets the fast one.
  */
 
-import { computed, onScopeDispose, ref, watch, type Ref } from 'vue'
+import { computed, onScopeDispose, ref, watch, type InjectionKey, type Ref } from 'vue'
+import type { PortResponse } from '@navide/plugin-ui/shared'
+import type { CliRiskAction, CliRiskPaneState, CliRiskProjection } from '../lib/cliRisk'
 import {
   cpuPercent,
   machineCpuShare,
@@ -31,6 +33,7 @@ export interface ResourceUsagePaneWire {
 }
 
 export interface ResourceUsageWire {
+  cliRisks?: Record<string, CliRiskPaneState>
   available: boolean
   cpu_available: boolean
   /** Seconds since the epoch, as read after the sweep returned. */
@@ -44,13 +47,57 @@ export interface ResourceUsageWire {
 export interface UseResourceUsageOptions {
   /** Sends `terminal.resource_usage`; resolves null when the backend is away. */
   request: () => Promise<ResourceUsageWire | null>
+  requestCliRiskAction?: (action: CliRiskAction) => Promise<PortResponse<CliRiskProjection>>
   /** How many panes are worth measuring. Zero stops the loop entirely. */
   paneCount: Ref<number>
   /** Whether a surface showing these numbers is open, which picks the cadence. */
   panelOpen: Ref<boolean>
 }
 
+export interface CliRiskContext {
+  cliRisksByPaneId: Ref<Map<string, CliRiskPaneState>>
+  cliRisksAvailable: Ref<boolean>
+  paneIdByKey: Ref<Map<string, string>>
+  actOnCliRisk: (paneId: string, signalId: string, action: CliRiskAction['action']) => Promise<PortResponse<CliRiskProjection>>
+}
+
+export const cliRiskKey: InjectionKey<CliRiskContext> = Symbol('cli-risk')
+
 export function useResourceUsage(opts: UseResourceUsageOptions) {
+  const cliRisksByPaneId = ref(new Map<string, CliRiskPaneState>())
+  const cliRisksAvailable = ref(true)
+  // A poll started before an action must not bring the dismissed finding back.
+  let riskRevision = 0
+  let riskGeneration = 0
+  let actionTail: Promise<void> = Promise.resolve()
+
+  async function actOnCliRisk(paneId: string, signalId: string, action: CliRiskAction['action']): Promise<PortResponse<CliRiskProjection>> {
+    const request = opts.requestCliRiskAction
+    if (!request) {
+      return { ok: false, payload: null, error: { code: 'UNAVAILABLE', message: '' } }
+    }
+    const generation = riskGeneration
+    // Every pane shares this queue. Do not send the next decision until the
+    // previous projection arrived; otherwise reversed replies can undo it.
+    const result = actionTail.then(async (): Promise<PortResponse<CliRiskProjection>> => {
+      if (generation !== riskGeneration || opts.paneCount.value === 0) {
+        return { ok: false, payload: null, error: { code: 'CANCELLED', message: '' } }
+      }
+      const response = await request({ paneId, signalId, action })
+      if (response.ok && response.payload && generation === riskGeneration) {
+        riskRevision += 1
+        const next = new Map(cliRisksByPaneId.value)
+        for (const [id, state] of Object.entries(response.payload.cliRisks)) next.set(id, state)
+        cliRisksByPaneId.value = next
+        cliRisksAvailable.value = true
+      }
+      return response
+    })
+    // A transport rejection still reaches its caller, but releases the queue.
+    actionTail = result.then(() => {}, () => {})
+    return result
+  }
+
   const bytesByKey = ref(new Map<string, number>())
   const cpuPercentByKey = ref(new Map<string, number | null>())
   // The same readings indexed by pane id. The main window keys by terminal
@@ -84,9 +131,11 @@ export function useResourceUsage(opts: UseResourceUsageOptions) {
   async function refresh(): Promise<void> {
     if (inFlight) return
     inFlight = true
+    const revision = riskRevision
     try {
       const wire = await opts.request()
       if (!wire) {
+        cliRisksAvailable.value = false
         // The backend could not answer at all. Figures are hidden rather than
         // shown as zero, which would read as "these panes are free" — the
         // opposite of what a failed sweep means.
@@ -94,6 +143,10 @@ export function useResourceUsage(opts: UseResourceUsageOptions) {
         cpuAvailable.value = false
         measured.value = true
         return
+      }
+      if (revision === riskRevision) {
+        cliRisksByPaneId.value = new Map(Object.entries(wire.cliRisks ?? {}))
+        cliRisksAvailable.value = true
       }
       available.value = wire.available !== false
       cpuAvailable.value = wire.cpu_available !== false
@@ -161,6 +214,9 @@ export function useResourceUsage(opts: UseResourceUsageOptions) {
         bytesByPaneId.value = new Map()
         cpuPercentByPaneId.value = new Map()
         paneIdByKey.value = new Map()
+        riskRevision += 1
+        riskGeneration += 1
+        cliRisksByPaneId.value = new Map()
         return
       }
       void refresh()
@@ -169,7 +225,10 @@ export function useResourceUsage(opts: UseResourceUsageOptions) {
     { immediate: true }
   )
 
-  onScopeDispose(stop)
+  onScopeDispose(() => {
+    riskGeneration += 1
+    stop()
+  })
 
   const totalBytes = computed(() => {
     let sum = 0
@@ -191,6 +250,9 @@ export function useResourceUsage(opts: UseResourceUsageOptions) {
   })
 
   return {
+    cliRisksByPaneId,
+    cliRisksAvailable,
+    actOnCliRisk,
     bytesByKey,
     cpuPercentByKey,
     bytesByPaneId,

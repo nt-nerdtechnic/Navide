@@ -91,3 +91,13 @@ scripts_by_shell: dict[str, spec.Scripts] = {
 }
 
 __all__ += ["scripts", "scripts_by_shell"]
+
+from . import cli_network  # noqa: E402
+
+collect_cli_connections = {
+    "darwin": cli_network.collect_lsof,
+    "linux": cli_network.collect_ss,
+    "win32": cli_network.unsupported,
+}[platform_id]
+
+__all__ += ["collect_cli_connections"]

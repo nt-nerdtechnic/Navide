@@ -18,7 +18,7 @@ import { schedulePrewarm } from './lib/prewarm'
 import { flattenSidebarOrder, resolveFocusedPane } from './lib/paneFocus'
 import { formatBytes } from './lib/formatBytes'
 import { formatCpuPercent, machineCpuShare, machineMemoryShare } from './lib/resourceSampling'
-import { useResourceUsage, type ResourceUsageWire } from './composables/useResourceUsage'
+import { cliRiskKey, useResourceUsage, type ResourceUsageWire } from './composables/useResourceUsage'
 import ResourceSummaryPanel, { type ResourceSummaryRow } from './components/ResourceSummaryPanel.vue'
 import ResourceManagerModal from './components/ResourceManagerModal.vue'
 import TurnStatsModal from './components/TurnStatsModal.vue'
@@ -16780,9 +16780,11 @@ const realizedPaneCount = computed(() => panes.value.filter((p) => p.realized).l
 
 const resourceUsage = useResourceUsage({
   request: () => sendQuiet<ResourceUsageWire>('terminal.resource_usage', {}),
+  requestCliRiskAction: (payload) => backend.send('terminal.cli_risk_action', { ...payload }),
   paneCount: realizedPaneCount,
   panelOpen: resourcePanelOpen,
 })
+provide(cliRiskKey, resourceUsage)
 
 const resourceRows = computed<ResourceSummaryRow[]>(() => {
   const statusById = new Map(paneViews.value.map((v) => [v.id, v.status]))

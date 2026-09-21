@@ -697,6 +697,11 @@ def _session_exists(workspace_path: str, session_id: str) -> bool:
 
 SPEC = VendorSpec(
     key="muse",
+    # Login/usage observations do not establish Muse's CLI service host set.
+    expected_hosts=(),
+    # Same dedicated XDG root as muse_data_root, with the pane's HOME shim.
+    data_dirs=lambda ctx: (ctx.path(ctx.env.get("XDG_DATA_HOME", "").strip() or ctx.home / ".local" / "share") / "muse",),
+    data_dir_env_vars=("XDG_DATA_HOME",),
     supports_model=True,
     supports_effort=True,
     known_efforts=('none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'),

@@ -101,6 +101,8 @@ from .tokens_store import TokensStore
 # shells, PTYs, Git hooks, and CLI helpers must not inherit a Host credential.
 _HOST_SESSION_TOKEN = os.environ.pop("NAVIDE_BACKEND_HOST_TOKEN", "")
 from .ui_settings import UiSettingsStore
+from .cli_risk import CliRiskService
+from .cli_risk_store import CliRiskStore
 from .sync_engine import SyncStore
 from .history_store import HistoryStore
 from .agent_message_log import AgentMessageLog
@@ -209,6 +211,7 @@ skills_store = SkillsStore()
 analyzer_settings_store = AnalyzerSettingsStore(db=database)
 ai_chat_settings_store = AIChatSettingsStore(db=database)
 ui_settings_store = UiSettingsStore(db=database)
+cli_risk_service = CliRiskService(CliRiskStore(database))
 sync_store = SyncStore(database)
 # Module-level stores share the same database handle.
 pty_registry.set_database(database)
@@ -2077,6 +2080,7 @@ async def _start_log_watcher() -> None:
 @app.on_event("shutdown")
 async def _stop_log_watcher() -> None:
     global _log_watcher, _git_watcher, _credential_watcher
+    await cli_risk_service.close()
     if _ownerless_sweeper_task is not None:
         _ownerless_sweeper_task.cancel()
     if _mem_probe_task is not None:

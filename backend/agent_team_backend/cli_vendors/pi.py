@@ -44,7 +44,7 @@ from pathlib import Path
 
 import re
 
-from .base import Dep, SkillsWiring, VendorSpec, command_text
+from .base import Dep, SkillsWiring, VendorRuntimeContext, VendorSpec, command_text
 from . import _protocols
 from ..usage_common import HTTP_TIMEOUT, _epoch_to_iso, _num, _snapshot, _window, parse_retry_after
 from ..log_readers.base import (
@@ -809,8 +809,21 @@ def _session_exists(workspace_path: str, session_id: str) -> bool:
 
 # ---- vendor spec -----------------------------------------------------------
 
+def _risk_data_dirs(ctx: VendorRuntimeContext) -> tuple[Path, ...]:
+    # pi_sessions_root permits moving sessions separately from config/data.
+    root = ctx.path(ctx.env.get("PI_CODING_AGENT_DIR") or ctx.home / ".pi" / "agent")
+    sessions = ctx.env.get("PI_CODING_AGENT_SESSION_DIR")
+    if sessions:
+        return tuple(dict.fromkeys((root, ctx.path(sessions))))
+    return (root,)
+
+
 SPEC = VendorSpec(
     key="pi",
+    # Open-ended provider/model config; OpenRouter quota is not a CLI host set.
+    expected_hosts=(),
+    data_dirs=_risk_data_dirs,
+    data_dir_env_vars=("PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR"),
     supports_model=True,
     supports_effort=True,
     known_efforts=('off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'),

@@ -1267,6 +1267,31 @@ _PORTABLE_SHADOWING_SETTINGS = tuple(
 
 SPEC = VendorSpec(
     key="claude",
+    # Official standalone CLI network requirements (verified 2026-09-21):
+    # https://code.claude.com/docs/en/network-config#network-access-requirements
+    # Only concrete hosts: dynamic artifact/Gerrit hosts and arbitrary tools
+    # remain outside this declared set, not presumed malicious.
+    expected_hosts=(
+        "api.anthropic.com", "claude.ai", "claude.com", "platform.claude.com",
+        "mcp-proxy.anthropic.com", "downloads.claude.ai", "storage.googleapis.com",
+        "registry.npmjs.org", "bridge.claudeusercontent.com", "raw.githubusercontent.com",
+        "http-intake.logs.us5.datadoghq.com", "browser-intake-us5-datadoghq.com",
+        "formulae.brew.sh", "code.claude.com",
+    ),
+    # Provider/gateway variables: https://code.claude.com/docs/en/env-vars
+    # Keep only presence, never URL values.
+    network_override_env_vars=(
+        "ANTHROPIC_BASE_URL", "ANTHROPIC_AWS_BASE_URL", "ANTHROPIC_BEDROCK_BASE_URL",
+        "ANTHROPIC_BEDROCK_MANTLE_BASE_URL", "ANTHROPIC_VERTEX_BASE_URL",
+        "ANTHROPIC_FOUNDRY_BASE_URL", "ANTHROPIC_FOUNDRY_RESOURCE",
+        "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY",
+        "CLAUDE_CODE_USE_ANTHROPIC_AWS", "CLAUDE_CODE_USE_MANTLE",
+        "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
+    ),
+    # Same config home as install_dep; never use the backend reader's fallback
+    # search across other accounts when this pane has an isolated config dir.
+    data_dirs=lambda ctx: (ctx.path(ctx.env.get("CLAUDE_CONFIG_DIR") or ctx.home / ".claude"),),
+    data_dir_env_vars=("CLAUDE_CONFIG_DIR",),
     supports_model=True,
     supports_effort=True,
     known_efforts=('low', 'medium', 'high', 'xhigh', 'max'),

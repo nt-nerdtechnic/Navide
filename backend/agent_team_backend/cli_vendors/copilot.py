@@ -1306,6 +1306,11 @@ def _install_hooks(port_file: str) -> Any:
 
 SPEC = VendorSpec(
     key="copilot",
+    # Enterprise hosts/model routing have no verified default CLI host set here.
+    expected_hosts=(),
+    # Same root as copilot_root, using the captured child environment.
+    data_dirs=lambda ctx: (ctx.path(ctx.env.get("COPILOT_HOME") or ctx.home / ".copilot"),),
+    data_dir_env_vars=("COPILOT_HOME",),
     supports_model=True,
     supports_effort=True,
     known_efforts=('none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'),

@@ -437,6 +437,11 @@ def _session_exists(workspace_path: str, session_id: str) -> bool:
 
 SPEC = VendorSpec(
     key="droid",
+    # Factory/custom model service destinations have not been verified here.
+    expected_hosts=(),
+    # FACTORY_HOME_OVERRIDE relocates the whole tree (droid_sessions_root).
+    data_dirs=lambda ctx: (ctx.path(ctx.env.get("FACTORY_HOME_OVERRIDE") or ctx.home / ".factory"),),
+    data_dir_env_vars=("FACTORY_HOME_OVERRIDE",),
     label="Droid",
     resume_id_from_command=_resume_id_from_command,
     session_path=_session_path,

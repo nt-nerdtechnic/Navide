@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, inject, nextTick, onMounted, ref, watch } from 'vue'
 import { useTerminal, type ClipboardFailureReason } from '@navide/terminal'
 import { agentProfileFor } from '@navide/plugin-shell'
 import { useNotify, useTheme } from '@navide/plugin-ui/foundation'
@@ -20,6 +20,8 @@ import { i18n } from '@navide/plugin-ui/foundation'
 import { isMacPlatform } from '@navide/plugin-ui/shared'
 import RebuildIcon from './RebuildIcon.vue'
 import UsageBadge from './UsageBadge.vue'
+import CliRiskPill from './CliRiskPill.vue'
+import { cliRiskKey } from '../composables/useResourceUsage'
 import RestoredPanePlaceholder from './RestoredPanePlaceholder.vue'
 
 interface Props {
@@ -101,6 +103,7 @@ interface Props {
 }
 
 const props = defineProps<Props>()
+const cliRisk = inject(cliRiskKey, null)
 const emit = defineEmits<{
   (e: 'set-focus', ev?: MouseEvent): void
   (e: 'minimize'): void
@@ -222,6 +225,10 @@ const terminal = useTerminal(props.paneId, props.terminalPort, {
   onPtyLostWhileDisconnected: () => emit('pty-lost'),
   agentProfileFor,
 })
+// Reattached terminals can keep the backend's old pane id. Actions must use
+// that same backend-owned identity, just like the resource usage projection.
+const cliRiskPaneId = computed(() => cliRisk?.paneIdByKey.value.get(terminal.sessionId.value) ?? props.paneId)
+const cliRiskState = computed(() => cliRisk?.cliRisksByPaneId.value.get(cliRiskPaneId.value))
 const { theme } = useTheme()
 watch(theme, () => terminal.updateXtermTheme())
 
@@ -658,6 +665,14 @@ onMounted(() => {
         >{{ usageLimitUntil != null
           ? $t('pane.terminal.usage-limit-badge', { time: formatLoopTime(usageLimitUntil) })
           : $t('pane.terminal.usage-limit-badge-unknown') }}</span>
+        <CliRiskPill
+          v-if="cliRisk && cliRiskState?.signals.length && !restoring && onScreen !== false"
+          :pane-id="cliRiskPaneId"
+          :state="cliRiskState"
+          :available="cliRisk.cliRisksAvailable.value"
+          :compact="loginExpired && usageLimitHit"
+          :act="cliRisk.actOnCliRisk"
+        />
         <span
           class="status"
           :data-status="displayStatus"
@@ -822,6 +837,7 @@ onMounted(() => {
   cursor: default;
 }
 .pane-header {
+  container: cli-pane-header / inline-size;
   display: flex;
   flex-direction: column;
   align-items: stretch;

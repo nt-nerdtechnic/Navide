@@ -596,6 +596,11 @@ def _session_exists(workspace_path: str, session_id: str) -> bool:
 
 SPEC = VendorSpec(
     key="kimi",
+    # Configurable provider/base URL; no verified default CLI host set here.
+    expected_hosts=(),
+    # Same runtime root as _kimi_home.
+    data_dirs=lambda ctx: (ctx.path(ctx.env.get("KIMI_CODE_HOME") or ctx.home / ".kimi-code"),),
+    data_dir_env_vars=("KIMI_CODE_HOME",),
     supports_model=True,
     skills_supported=True,
     # --skills-dir is repeatable but replaces auto-discovery outright, so the

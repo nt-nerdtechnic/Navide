@@ -25,6 +25,14 @@ const reclaimFn = () =>
   block('async function reclaimIdlePane(', 'let _idleReclaimTimer')
 
 describe('idle reclaim wiring', () => {
+  it('shares the existing resource poller with risk UI and excludes reclaimed placeholders', () => {
+    const wiring = block('const resourceUsage = useResourceUsage({', 'const resourceRows = computed')
+    expect(wiring).toContain("requestCliRiskAction: (payload) => backend.send('terminal.cli_risk_action', { ...payload })")
+    expect(wiring).toContain('paneCount: realizedPaneCount')
+    expect(wiring).toContain('provide(cliRiskKey, resourceUsage)')
+    expect(appSource).toMatch(/<TerminalPane\s+v-if="p.realized"/)
+  })
+
   // markRemoved unspawns the backend record. A reclaim that did that would
   // survive as a real close on the next restart — the conversation would not
   // come back, which is the opposite of the deal this feature offers.

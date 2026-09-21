@@ -27,7 +27,7 @@ import shutil
 import threading
 import time
 
-from .base import Dep, McpWiring, SkillsWiring, VendorSpec, command_text
+from .base import Dep, McpWiring, SkillsWiring, VendorRuntimeContext, VendorSpec, command_text
 from ..applog import app_data_dir
 from ..skills_store import SkillsStore
 from . import _protocols
@@ -1479,8 +1479,29 @@ def _session_exists(workspace_path: str, session_id: str) -> bool:
 
 # ---- vendor spec -----------------------------------------------------------
 
+def _risk_data_dirs(ctx: VendorRuntimeContext) -> tuple[Path, ...]:
+    root = ctx.path(ctx.env.get("CODEX_HOME") or ctx.home / ".codex")
+    # https://learn.chatgpt.com/docs/config-file/environment-variables
+    # SQLite state can move separately; config-file sqlite_home takes precedence
+    # inside Codex and is outside this environment-only observation scope.
+    sqlite_home = ctx.env.get("CODEX_SQLITE_HOME")
+    if sqlite_home:
+        return tuple(dict.fromkeys((root, ctx.path(sqlite_home))))
+    return (root,)
+
+
 SPEC = VendorSpec(
     key="codex",
+    # Built-in OpenAI API and ChatGPT service defaults (verified 2026-09-21):
+    # https://learn.chatgpt.com/docs/config-file/config-sample
+    # https://github.com/openai/codex/blob/main/codex-rs/model-provider-info/src/lib.rs
+    # https://github.com/openai/codex/blob/main/codex-rs/login/src/server.rs
+    # Custom providers/config-file routing and tool traffic are not enumerated.
+    expected_hosts=("api.openai.com", "chatgpt.com", "auth.openai.com"),
+    network_override_env_vars=("OPENAI_BASE_URL", "CODEX_OSS_BASE_URL", "CODEX_OSS_PORT"),
+    # CODEX_HOME is assigned per pane, including resumes in an existing home.
+    data_dirs=_risk_data_dirs,
+    data_dir_env_vars=("CODEX_HOME", "CODEX_SQLITE_HOME"),
     supports_model=True,
     # Verified 2026-08-15: codex resolves its skills from $CODEX_HOME/skills.
     skills_supported=True,
@@ -1489,6 +1510,7 @@ SPEC = VendorSpec(
         reads_shared_root=True,
         root_home=(".codex",),
         skills_rel=("skills",),
+        isolated_panes_home=(".codex-panes",),
     ),
     label="Codex",
     # No JSON document at all: `-c` is a one-shot TOML override merged over

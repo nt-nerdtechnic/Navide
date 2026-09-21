@@ -605,6 +605,11 @@ def _session_lookup_path(workspace_path: str, session_id: str) -> Path:
 
 SPEC = VendorSpec(
     key="aider",
+    # Provider/model selection is open-ended; no verified default host set.
+    expected_hosts=(),
+    # History is a configurable workspace FILE, not a dedicated data root.
+    # Declaring its parent would scan unrelated repository/user files.
+    data_dirs=None,
     # Verified 2026-08-15: aider's package never mentions "skill".
     skills_supported=False,
     label="Aider",

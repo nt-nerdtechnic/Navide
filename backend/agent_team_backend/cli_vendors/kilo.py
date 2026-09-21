@@ -317,6 +317,11 @@ def _session_exists(workspace_path: str, session_id: str) -> bool:
 
 SPEC = VendorSpec(
     key="kilo",
+    # OpenCode fork with arbitrary providers; quota base is not a CLI host set.
+    expected_hosts=(),
+    # Same XDG database/auth root as KiloLogReader and _kilo_auth_file.
+    data_dirs=lambda ctx: (ctx.path(ctx.env.get("XDG_DATA_HOME") or ctx.home / ".local" / "share") / "kilo",),
+    data_dir_env_vars=("XDG_DATA_HOME",),
     # Confirmed in source (Kilo-Org/kilocode): the root command declares
     # --model and applies it at the highest priority. No effort flag —
     # --variant exists only on `kilo run`. Details in agents/kilo.ts, which

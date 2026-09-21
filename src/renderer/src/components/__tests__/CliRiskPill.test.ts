@@ -1,0 +1,203 @@
+// @vitest-environment happy-dom
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
+import { nextTick } from 'vue'
+import { i18n } from '@navide/plugin-ui/foundation'
+import CliRiskPill from '../CliRiskPill.vue'
+import type { CliRiskPaneState } from '../../lib/cliRisk'
+import { diskSignal, networkSignal, riskState } from '../../composables/__tests__/fixtures/cliRisk'
+
+let wrapper: VueWrapper
+const act = vi.fn()
+
+function render(state?: CliRiskPaneState, extra: Record<string, unknown> = {}): VueWrapper {
+  wrapper = mount(CliRiskPill, {
+    props: { paneId: 'pane-a', state, act, ...extra },
+    attachTo: document.body,
+  })
+  return wrapper
+}
+
+async function open(): Promise<HTMLElement> {
+  await wrapper.get('.cli-risk-inline').trigger('click')
+  await flushPromises()
+  return document.querySelector<HTMLElement>('.cli-risk-pop')!
+}
+
+function actionButton(pop: HTMLElement, text: string): HTMLButtonElement {
+  return [...pop.querySelectorAll('button')].find((button) => button.textContent === text)!
+}
+
+beforeEach(() => {
+  i18n.global.locale.value = 'en-US'
+  act.mockReset().mockResolvedValue({ ok: true, payload: { cliRisks: {} }, error: null })
+})
+afterEach(() => {
+  wrapper?.unmount()
+  vi.unstubAllGlobals()
+  vi.restoreAllMocks()
+  document.body.innerHTML = ''
+})
+
+describe('CliRiskPill', () => {
+  it.each([undefined, 'successful', 'unsupported', 'unknown'] as const)('adds no UI without findings (%s)', (status) => {
+    const state = status ? { signals: [], network: { status }, disk: { status } } : undefined
+    render(state)
+    expect(wrapper.find('button').exists()).toBe(false)
+    expect(document.querySelector('.cli-risk-pop')).toBeNull()
+  })
+
+  it('renders one yellow numeric endpoint pill and exact network evidence', async () => {
+    const signal = networkSignal()
+    render(riskState([signal]))
+    expect(wrapper.findAll('.cli-risk-inline')).toHaveLength(1)
+    expect(wrapper.get('.cli-risk-inline').classes()).toContain('yellow')
+    expect(wrapper.get('.cli-risk-inline').text()).toBe('▲ 198.51.100.25:443')
+    const pop = await open()
+    expect(pop.textContent).toContain('Address outside expected set')
+    expect(pop.textContent).toContain('2 in last sample')
+    expect(pop.textContent).toContain(signal.firstObservedAt)
+    expect(pop.textContent).toContain(signal.lastObservedAt)
+    expect(pop.textContent).toContain(signal.expectedSetObservedAt)
+    expect(pop.textContent).toContain("Observed in this pane's process tree")
+    expect(pop.textContent).toContain('across all ports, for codex')
+    expect(pop.textContent).toContain('not connection duration')
+  })
+
+  it('brackets an IPv6 address for the endpoint without resolving a hostname', async () => {
+    render(riskState([networkSignal({ ip: '2001:db8::25' })]))
+    expect(wrapper.get('.cli-risk-inline').text()).toBe('▲ [2001:db8::25]:443')
+    expect((await open()).textContent).toContain('exact IP 2001:db8::25')
+  })
+
+  it.each(['yellow', 'red'] as const)('renders %s disk evidence and vendor-wide scope', async (severity) => {
+    const signal = diskSignal({ severity })
+    render(riskState([signal]))
+    expect(wrapper.get('.cli-risk-inline').classes()).toContain(severity)
+    const pop = await open()
+    expect(pop.textContent).toContain(severity === 'red' ? 'Observed again after absence' : 'Newly observed opaque file')
+    expect(pop.textContent).toContain(signal.path)
+    expect(pop.textContent).toContain('313 MiB')
+    expect(pop.textContent).toContain(signal.firstObservedAt)
+    expect(pop.textContent).toContain(signal.lastObservedAt)
+    expect(pop.textContent).toContain(signal.absentObservedAt)
+    expect(pop.textContent).toContain('Applies to all codex panes')
+    expect(actionButton(pop, 'Reveal in folder')).toBeTruthy()
+    expect(actionButton(pop, 'Allow this IP for codex')).toBeUndefined()
+    if (severity === 'red') expect(pop.textContent).toContain('do not identify who changed it')
+  })
+
+  it('uses backend order for the single pill and all findings without severity sorting', async () => {
+    const signals = [networkSignal(), diskSignal()]
+    render(riskState(signals))
+    expect(wrapper.get('.cli-risk-inline').classes()).toContain('yellow')
+    const pop = await open()
+    expect([...pop.querySelectorAll('[data-signal-id]')].map((node) => node.getAttribute('data-signal-id'))).toEqual(signals.map((signal) => signal.id))
+  })
+
+  it('shows stale status and last-success evidence only in the popover', async () => {
+    const state = riskState([networkSignal({ stale: true })])
+    state.network.status = 'unknown'
+    render(state, { available: false })
+    expect(wrapper.get('.cli-risk-inline').text()).toBe('▲ 198.51.100.25:443')
+    const pop = await open()
+    expect(pop.textContent).toContain('Historical finding')
+    expect(pop.textContent).toContain('Unknown')
+    expect(pop.textContent).toContain('Last successful sample')
+    expect(pop.textContent).toContain(state.network.lastSuccessAt)
+    expect(pop.textContent).toContain('Backend unavailable')
+  })
+
+  it.each([['Ignore this IP', 'ignore'], ['Allow this IP for codex', 'allow']] as const)('forwards %s by signal identity only', async (button, action) => {
+    const signal = networkSignal()
+    render(riskState([signal]))
+    actionButton(await open(), button).click()
+    await flushPromises()
+    expect(act).toHaveBeenCalledExactlyOnceWith('pane-a', signal.id, action)
+  })
+
+  it('reveals the exact backend path through the native action and does not send a risk mutation', async () => {
+    const revealPath = vi.fn().mockResolvedValue({ ok: true })
+    vi.stubGlobal('agentTeam', { revealPath })
+    const signal = diskSignal()
+    render(riskState([signal]))
+    actionButton(await open(), 'Reveal in folder').click()
+    await flushPromises()
+    expect(revealPath).toHaveBeenCalledExactlyOnceWith(signal.path)
+    expect(act).not.toHaveBeenCalled()
+  })
+
+  it('surfaces native reveal errors', async () => {
+    vi.stubGlobal('agentTeam', { revealPath: vi.fn().mockResolvedValue({ ok: false, error: 'Path unavailable' }) })
+    render(riskState([diskSignal()]))
+    actionButton(await open(), 'Reveal in folder').click()
+    await flushPromises()
+    expect(document.querySelector('[role="alert"]')?.textContent).toBe('Path unavailable')
+  })
+
+  it('disables repeated mutations while pending and retains the finding on rejection', async () => {
+    let finish!: (value: unknown) => void
+    act.mockImplementation(() => new Promise((resolve) => { finish = resolve }))
+    render(riskState())
+    const pop = await open()
+    actionButton(pop, 'Ignore this IP').click()
+    await nextTick()
+    expect(actionButton(pop, 'Allow this IP for codex').disabled).toBe(true)
+    actionButton(pop, 'Allow this IP for codex').click()
+    expect(act).toHaveBeenCalledTimes(1)
+    finish({ ok: false, payload: null, error: { code: 'FORBIDDEN', message: 'Pane is not owned locally' } })
+    await flushPromises()
+    expect(pop.querySelector('[role="alert"]')?.textContent).toBe('Pane is not owned locally')
+    expect(wrapper.find('.cli-risk-inline').exists()).toBe(true)
+    expect(actionButton(pop, 'Allow this IP for codex').disabled).toBe(false)
+  })
+
+  it('renders backend strings as text and reports transport errors', async () => {
+    act.mockRejectedValue(new Error('Backend disconnected'))
+    render(riskState([diskSignal({ path: '<img src=x onerror=alert(1)>' })]))
+    const pop = await open()
+    expect(pop.querySelector('img')).toBeNull()
+    expect(pop.textContent).toContain('<img src=x onerror=alert(1)>')
+    actionButton(pop, 'Ignore').click()
+    await flushPromises()
+    expect(pop.querySelector('[role="alert"]')?.textContent).toBe('Backend disconnected')
+  })
+
+  it('offers a compact triangle with a full accessible label', () => {
+    render(riskState(), { compact: true })
+    expect(wrapper.get('.cli-risk-inline').classes()).toContain('compact')
+    expect(wrapper.get('.cli-risk-inline').attributes('aria-label')).toContain('198.51.100.25:443')
+    expect(wrapper.get('.cli-risk-inline').attributes('title')).toContain('Address outside expected set')
+  })
+
+  it('focuses the dialog, cycles action focus, and restores the trigger on Escape', async () => {
+    render(riskState())
+    const pop = await open()
+    expect(document.activeElement).toBe(pop)
+    expect(wrapper.get('.cli-risk-inline').attributes('aria-expanded')).toBe('true')
+    const buttons = [...pop.querySelectorAll('button')]
+    buttons[buttons.length - 1].focus()
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }))
+    expect(document.activeElement).toBe(buttons[0])
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await nextTick()
+    expect(document.querySelector('.cli-risk-pop')).toBeNull()
+    expect(document.activeElement).toBe(wrapper.get('.cli-risk-inline').element)
+  })
+
+  it('dismisses on outside pointer, window blur, or removal of all findings', async () => {
+    render(riskState())
+    await open()
+    document.body.dispatchEvent(new Event('pointerdown', { bubbles: true }))
+    await nextTick()
+    expect(document.querySelector('.cli-risk-pop')).toBeNull()
+    await open()
+    window.dispatchEvent(new Event('blur'))
+    await nextTick()
+    expect(document.querySelector('.cli-risk-pop')).toBeNull()
+    await open()
+    await wrapper.setProps({ state: riskState([]) })
+    expect(document.querySelector('.cli-risk-pop')).toBeNull()
+    expect(wrapper.find('button').exists()).toBe(false)
+  })
+})

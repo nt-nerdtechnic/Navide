@@ -706,6 +706,11 @@ def _session_exists(workspace_path: str, session_id: str) -> bool:
 
 SPEC = VendorSpec(
     key="opencode",
+    # Arbitrary provider config; a selected quota provider is not a CLI host set.
+    expected_hosts=(),
+    # Same XDG database/auth root as _data_dir("opencode").
+    data_dirs=lambda ctx: (ctx.path(ctx.env.get("XDG_DATA_HOME") or ctx.home / ".local" / "share") / "opencode",),
+    data_dir_env_vars=("XDG_DATA_HOME",),
     supports_model=True,
     skills_supported=True,
     # skills.paths registers extra roots; opencode deep-merges this document
