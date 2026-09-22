@@ -3,7 +3,6 @@ import asyncio
 import json
 import os
 import shlex
-import shutil
 import subprocess
 import sys
 import time
@@ -14,14 +13,13 @@ import pytest
 from agent_team_backend import app, usage_service
 from agent_team_backend.credential_store import CredentialStores, active_store_metadata
 from agent_team_backend.pane_account_history import PaneAccountHistory
+from tests.test_credential_launch import posix_bash  # noqa: F401
 from tests.test_quota_failover_login_contract import call, rig, session  # noqa: F401
 
 
 @pytest.fixture(params=[("kilo", "kilo", "@kilocode/cli"), ("opencode", "anthropic", "opencode-ai")])
-def launch_rig(request, rig, tmp_path, monkeypatch):
-    bash = shutil.which("bash")
-    if bash is None:
-        pytest.skip("bash is unavailable")
+def launch_rig(request, rig, tmp_path, monkeypatch, posix_bash):
+    bash = posix_bash
     vendor, scope, package = request.param
     monkeypatch.delenv("XDG_DATA_HOME", raising=False)
     stores = CredentialStores(rig.store._db, active_store_metadata)
