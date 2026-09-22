@@ -15,6 +15,11 @@ import {
   type UsageWindow
 } from '../composables/useUsage'
 import { cliAccountSwitchKey, type useCliProfiles } from '../composables/useCliProfiles'
+import {
+  DEFAULT_PROFILE_ID,
+  accountChipLabel,
+  accountLabel as resolveAccountLabel,
+} from '../lib/accountLabel'
 import { useNotify } from '@navide/plugin-ui/foundation'
 import { executeCommand } from '@navide/plugin-ui/shared'
 import { i18n } from '@navide/plugin-ui/foundation'
@@ -69,6 +74,55 @@ const visible = computed(
     cliMissing.value ||
     pending.value
 )
+
+// ── Account section of the badge ────────────────────────────────────────────
+// Which account the figure belongs to: the vendor's current default, the same
+// slot the number is read for (see accountUsageFor above). A pane that is
+// still running on the account it was started with is NOT reflected here —
+// that needs the backend's per-pane profileId, which the renderer has no
+// access to yet.
+const chipProfileId = computed(
+  () => props.cliProfiles.defaultProfileId(props.agentKey) ?? DEFAULT_PROFILE_ID
+)
+const chipSlot = computed(() => (chipProfileId.value === DEFAULT_PROFILE_ID ? null : chipProfileId.value))
+const chipAlias = computed(() => props.cliProfiles.aliasFor?.(props.agentKey, chipSlot.value) ?? '')
+const chipEmail = computed(
+  () => props.cliProfiles.identityFor(props.agentKey, chipSlot.value)?.email ?? ''
+)
+const chipLabel = computed(() =>
+  accountChipLabel(props.cliProfiles, props.agentKey, chipProfileId.value, t)
+)
+// Hidden when it would carry no information: no alias, no email and no second
+// account to tell this one apart from — the badge is then exactly the number
+// pill it has always been.
+const showName = computed(
+  () => !!(chipAlias.value || chipEmail.value || props.cliProfiles.hasProfiles(props.agentKey))
+)
+// The header truncates; the whole address (and the alias it hides behind)
+// belongs in the tooltip.
+const chipTooltip = computed(() => {
+  const parts = [chipAlias.value, chipEmail.value].filter(Boolean)
+  return t('usage.account-tooltip', { account: parts.length ? parts.join(' · ') : chipLabel.value })
+})
+const chipInitial = computed(() => avatarInitial(chipLabel.value))
+
+// The figure itself, as text: one place for it so the name section can wrap it
+// without the markup being written twice (and so a badge with no name section
+// keeps exactly the DOM it had before).
+const badgeText = computed(() => {
+  if (exhausted.value) return t('usage.exhausted-short')
+  if (remaining.value !== null) return formatRemaining(remaining.value)
+  if (pending.value && !expired.value && !cliMissing.value) return t('usage.reading-short')
+  return '⚠'
+})
+// Mid-switch the figure still belongs to the PREVIOUS account, so the caveat
+// travels with the number, not with the name.
+const badgeSmall = computed(() => {
+  if (!exhausted.value && remaining.value === null) return ''
+  if (pending.value) return t('usage.reading-short')
+  if (cached.value) return t('usage.cached-short')
+  return ''
+})
 
 // Account-switch block: only shown when this agent has ≥1 extra profile.
 const canSwitch = computed(() => props.cliProfiles.hasProfiles(props.agentKey))
@@ -231,6 +285,53 @@ async function selectProfile(id: string): Promise<void> {
   }
 }
 
+// ── Renaming an account from the list ───────────────────────────────────────
+// The row id being edited ('' = the built-in Default), or null when no row is.
+// The field holds the ALIAS only: empty clears it and the row falls back to
+// the email or the generated name.
+const renamingId = ref<string | null>(null)
+const renameDraft = ref('')
+const renameInput = ref<HTMLInputElement | null>(null)
+// Esc must not be undone by the blur it causes; this says the edit is over.
+let renameAborted = false
+
+/** Template ref set from inside a v-for, where a plain `ref` would collect an
+ *  array; only one row is ever in edit mode, so the last one set is it. */
+function setRenameInput(el: unknown): void {
+  renameInput.value = (el as HTMLInputElement | null) ?? null
+}
+
+function startRename(id: string): void {
+  renamingId.value = id
+  renameDraft.value = props.cliProfiles.aliasFor?.(props.agentKey, id || null) ?? ''
+  renameAborted = false
+  void nextTick(() => {
+    renameInput.value?.focus()
+    renameInput.value?.select()
+  })
+}
+
+function cancelRename(): void {
+  renameAborted = true
+  renamingId.value = null
+}
+
+async function commitRename(): Promise<void> {
+  if (renameAborted || renamingId.value === null) return
+  const id = renamingId.value
+  const name = renameDraft.value.trim()
+  renamingId.value = null
+  await props.cliProfiles.rename(id || DEFAULT_PROFILE_ID, name, props.agentKey)
+}
+
+// Rows read the same way the header chip does — alias, then the signed-in
+// email, then the generated name — so one account is one name everywhere.
+function rowLabel(profileId: string | null, defaultLabel?: string): string {
+  return resolveAccountLabel(props.cliProfiles, props.agentKey, profileId ?? DEFAULT_PROFILE_ID, t, {
+    defaultLabel,
+  })
+}
+
 // Jump straight to Settings › Accounts (CLI account manager) so a new account
 // can be added. Close the popover first — the modal opens on top of it.
 function openAccountSettings(): void {
@@ -280,11 +381,6 @@ function avatarColor(key: string): string {
 function avatarInitial(label: string): string {
   const t = label.trim()
   return t ? t.charAt(0).toUpperCase() : '?'
-}
-
-// Rows are labeled by the signed-in identity when the backend resolved one.
-function accountLabel(profileId: string | null, fallback: string): string {
-  return props.cliProfiles.identityFor(props.agentKey, profileId)?.email ?? fallback
 }
 
 // Per-account remaining quota, shown as a plain number on each switch row.
@@ -337,7 +433,10 @@ function acctTitle(profileId: string | null): string {
     v-if="visible"
     ref="badgeRef"
     class="usage-badge"
-    :class="[tier, { cached, pending, exhausted }]"
+    :class="[
+      showName ? 'has-name' : tier,
+      { cached, pending, exhausted: exhausted && !showName }
+    ]"
     :title="
       open
         ? ''
@@ -362,26 +461,26 @@ function acctTitle(profileId: string | null): string {
     @mouseleave="onLeave"
     @click.stop
   >
-    <template v-if="exhausted">
-      {{ $t('usage.exhausted-short') }}
-      <!-- Same caveats as the numeric branch: mid-switch the figure belongs to
-           the PREVIOUS account, so an unqualified "spent" would pin the old
-           account's exhaustion on the new one. -->
-      <small v-if="pending">{{ $t('usage.reading-short') }}</small>
-      <small v-else-if="cached">{{ $t('usage.cached-short') }}</small>
+    <!-- Which account this figure belongs to. Only the number section takes
+         the warn/crit/spent colour: the account did not go red, its quota did.
+         The dashed "not current" cue stays on the whole pill, because
+         mid-switch the name is already the NEW account and the number is
+         still the old one. -->
+    <template v-if="showName">
+      <span class="usage-badge-name" :title="chipTooltip">
+        <span class="usage-badge-name-text">{{ chipLabel }}</span>
+        <!-- Narrow panes swap the name for its first character (CSS below);
+             both are rendered because CSS cannot shorten text. -->
+        <span class="usage-badge-name-initial" aria-hidden="true">{{ chipInitial }}</span>
+      </span>
+      <span class="usage-badge-num" :class="[tier, { exhausted }]"
+        >{{ badgeText }}<small v-if="badgeSmall">{{ badgeSmall }}</small></span
+      >
     </template>
-    <template v-else-if="remaining !== null">
-      {{ formatRemaining(remaining) }}
-      <small v-if="pending">{{ $t('usage.reading-short') }}</small>
-      <small v-else-if="cached">{{ $t('usage.cached-short') }}</small>
-    </template>
-    <!-- No number to show yet, but a read is running: say that rather than
-         warn, which would report a fault where there is only a wait. A real
-         fault still wins — it is the one the user can act on. -->
-    <template v-else-if="pending && !expired && !cliMissing">{{
-      $t('usage.reading-short')
-    }}</template>
-    <template v-else>⚠</template>
+    <!-- Same caveats as ever: "spent" or a percentage mid-switch belongs to
+         the PREVIOUS account, and ⚠ wins over a wait the user cannot act on
+         (see badgeText / badgeSmall). -->
+    <template v-else>{{ badgeText }}<small v-if="badgeSmall">{{ badgeSmall }}</small></template>
   </span>
   <Teleport to="body">
     <div
@@ -436,70 +535,119 @@ function acctTitle(profileId: string | null): string {
           {{ critSwitch ? $t('usage.switch-low') : $t('usage.switch-title') }}
         </div>
         <div v-if="canSwitch" class="usage-acct-list" role="listbox">
-          <button
-            class="usage-acct"
-            role="option"
-            :class="{ active: activeProfileId === '' }"
-            :aria-selected="activeProfileId === ''"
-            :disabled="switching !== null"
-            @click="selectProfile('')"
-          >
-            <span class="usage-acct-av default">{{
-              avatarInitial(accountLabel(null, $t('usage.switch-default')))
-            }}</span>
-            <span class="usage-acct-name">{{ accountLabel(null, $t('usage.switch-default')) }}</span>
-            <span v-if="acctSignedOut(null)" class="usage-acct-out">{{
-              $t('settings.accounts.cli.not-signed-in')
-            }}</span>
-            <span
-              v-else-if="acctPct(null)"
-              class="usage-acct-pct"
-              :class="[acctTier(null), { stale: acctStale(null) }]"
-              :title="acctTitle(null)"
-              >{{ acctStale(null) ? '~' : '' }}{{ acctPct(null) }}</span
+          <!-- Each row is a button so a click anywhere on it switches; the
+               pencil is its sibling rather than a child, because a button
+               inside a button is not valid markup. -->
+          <div class="usage-acct-row">
+            <input
+              v-if="renamingId === ''"
+              :ref="setRenameInput"
+              v-model="renameDraft"
+              class="usage-acct-rename"
+              :placeholder="rowLabel(null, $t('usage.switch-default'))"
+              :aria-label="$t('usage.rename-account')"
+              @keydown.enter.prevent="commitRename"
+              @keydown.esc.prevent="cancelRename"
+              @blur="commitRename"
+              @click.stop
+            />
+            <button
+              v-else
+              class="usage-acct"
+              role="option"
+              :class="{ active: activeProfileId === '' }"
+              :aria-selected="activeProfileId === ''"
+              :disabled="switching !== null"
+              @click="selectProfile('')"
             >
-            <span
-              v-else-if="acctPending(null)"
-              class="usage-acct-pct stale"
-              :title="acctTitle(null)"
-              >{{ $t('usage.reading-short') }}</span
+              <span class="usage-acct-av default">{{
+                avatarInitial(rowLabel(null, $t('usage.switch-default')))
+              }}</span>
+              <span class="usage-acct-name">{{ rowLabel(null, $t('usage.switch-default')) }}</span>
+              <span v-if="acctSignedOut(null)" class="usage-acct-out">{{
+                $t('settings.accounts.cli.not-signed-in')
+              }}</span>
+              <span
+                v-else-if="acctPct(null)"
+                class="usage-acct-pct"
+                :class="[acctTier(null), { stale: acctStale(null) }]"
+                :title="acctTitle(null)"
+                >{{ acctStale(null) ? '~' : '' }}{{ acctPct(null) }}</span
+              >
+              <span
+                v-else-if="acctPending(null)"
+                class="usage-acct-pct stale"
+                :title="acctTitle(null)"
+                >{{ $t('usage.reading-short') }}</span
+              >
+              <span v-if="switching === ''" class="usage-acct-spin" aria-hidden="true" />
+              <span v-else-if="activeProfileId === ''" class="usage-acct-tick">✓</span>
+            </button>
+            <button
+              v-if="renamingId !== ''"
+              class="usage-acct-edit"
+              :title="$t('usage.rename-account')"
+              :aria-label="$t('usage.rename-account')"
+              @click.stop="startRename('')"
             >
-            <span v-if="switching === ''" class="usage-acct-spin" aria-hidden="true" />
-            <span v-else-if="activeProfileId === ''" class="usage-acct-tick">✓</span>
-          </button>
-          <button
-            v-for="p in switchProfiles"
-            :key="p.id"
-            class="usage-acct"
-            role="option"
-            :class="{ active: activeProfileId === p.id }"
-            :aria-selected="activeProfileId === p.id"
-            :disabled="switching !== null"
-            @click="selectProfile(p.id)"
-          >
-            <span class="usage-acct-av" :style="{ background: avatarColor(p.id) }">{{
-              avatarInitial(accountLabel(p.id, p.name))
-            }}</span>
-            <span class="usage-acct-name">{{ accountLabel(p.id, p.name) }}</span>
-            <span v-if="acctSignedOut(p.id)" class="usage-acct-out">{{
-              $t('settings.accounts.cli.not-signed-in')
-            }}</span>
-            <span
-              v-else-if="acctPct(p.id)"
-              class="usage-acct-pct"
-              :class="[acctTier(p.id), { stale: acctStale(p.id) }]"
-              :title="acctTitle(p.id)"
-              >{{ acctStale(p.id) ? '~' : '' }}{{ acctPct(p.id) }}</span
+              ✎
+            </button>
+          </div>
+          <div v-for="p in switchProfiles" :key="p.id" class="usage-acct-row">
+            <input
+              v-if="renamingId === p.id"
+              :ref="setRenameInput"
+              v-model="renameDraft"
+              class="usage-acct-rename"
+              :placeholder="rowLabel(p.id)"
+              :aria-label="$t('usage.rename-account')"
+              @keydown.enter.prevent="commitRename"
+              @keydown.esc.prevent="cancelRename"
+              @blur="commitRename"
+              @click.stop
+            />
+            <button
+              v-else
+              class="usage-acct"
+              role="option"
+              :class="{ active: activeProfileId === p.id }"
+              :aria-selected="activeProfileId === p.id"
+              :disabled="switching !== null"
+              @click="selectProfile(p.id)"
             >
-            <span
-              v-else-if="acctPending(p.id)"
-              class="usage-acct-pct stale"
-              :title="acctTitle(p.id)"
-              >{{ $t('usage.reading-short') }}</span
+              <span class="usage-acct-av" :style="{ background: avatarColor(p.id) }">{{
+                avatarInitial(rowLabel(p.id))
+              }}</span>
+              <span class="usage-acct-name">{{ rowLabel(p.id) }}</span>
+              <span v-if="acctSignedOut(p.id)" class="usage-acct-out">{{
+                $t('settings.accounts.cli.not-signed-in')
+              }}</span>
+              <span
+                v-else-if="acctPct(p.id)"
+                class="usage-acct-pct"
+                :class="[acctTier(p.id), { stale: acctStale(p.id) }]"
+                :title="acctTitle(p.id)"
+                >{{ acctStale(p.id) ? '~' : '' }}{{ acctPct(p.id) }}</span
+              >
+              <span
+                v-else-if="acctPending(p.id)"
+                class="usage-acct-pct stale"
+                :title="acctTitle(p.id)"
+                >{{ $t('usage.reading-short') }}</span
+              >
+              <span v-if="switching === p.id" class="usage-acct-spin" aria-hidden="true" />
+              <span v-else-if="activeProfileId === p.id" class="usage-acct-tick">✓</span>
+            </button>
+            <button
+              v-if="renamingId !== p.id"
+              class="usage-acct-edit"
+              :title="$t('usage.rename-account')"
+              :aria-label="$t('usage.rename-account')"
+              @click.stop="startRename(p.id)"
             >
-            <span v-if="switching === p.id" class="usage-acct-spin" aria-hidden="true" />
-            <span v-else-if="activeProfileId === p.id" class="usage-acct-tick">✓</span>
-          </button>
+              ✎
+            </button>
+          </div>
         </div>
         <button class="usage-acct-manage" @click="openAccountSettings">
           <span class="usage-acct-manage-icon">＋</span>
@@ -561,6 +709,66 @@ function acctTitle(profileId: string | null): string {
   margin-left: 2px;
   font-size: 8px;
   font-weight: 500;
+}
+/* Sectioned pill: the account name and its figure share one border so the
+   number visibly belongs to that account. Padding moves to the sections. */
+.usage-badge.has-name {
+  display: inline-flex;
+  align-items: stretch;
+  padding: 0;
+  overflow: hidden;
+}
+.usage-badge-name {
+  display: inline-flex;
+  align-items: center;
+  max-width: 84px;
+  padding: 1px 5px;
+  overflow: hidden;
+  color: var(--text-secondary);
+  border-right: 1px solid var(--border-default);
+}
+.usage-badge-name-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.usage-badge-name-initial {
+  display: none;
+}
+.usage-badge-num {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+}
+/* Only the figure takes the state colour — the account is not "critical",
+   its quota is. */
+.usage-badge-num.warn {
+  color: var(--attention-fg);
+  background: var(--attention-subtle);
+}
+.usage-badge-num.crit {
+  color: var(--danger-fg);
+  background: var(--danger-deep);
+}
+.usage-badge-num.exhausted {
+  color: var(--text-on-emphasis);
+  background: var(--danger-emphasis);
+}
+/* Narrow panes: the name collapses to its first character. The header
+   declares `container: cli-pane-header` (TerminalPane.vue). */
+@container cli-pane-header (max-width: 360px) {
+  .usage-badge-name {
+    max-width: none;
+    width: 14px;
+    padding: 0;
+    justify-content: center;
+  }
+  .usage-badge-name-text {
+    display: none;
+  }
+  .usage-badge-name-initial {
+    display: inline;
+  }
 }
 .usage-pop {
   position: fixed;
@@ -675,6 +883,47 @@ function acctTitle(profileId: string | null): string {
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+/* Row + its pencil. The pencil only appears on hover so the list reads as a
+   switcher first and a rename surface second. */
+.usage-acct-row {
+  display: flex;
+  align-items: center;
+  border-radius: 6px;
+}
+.usage-acct-row .usage-acct {
+  flex: 1;
+  min-width: 0;
+}
+.usage-acct-edit {
+  flex-shrink: 0;
+  visibility: hidden;
+  padding: 2px 5px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--font-3xs);
+  cursor: pointer;
+}
+.usage-acct-row:hover .usage-acct-edit,
+.usage-acct-edit:focus-visible {
+  visibility: visible;
+}
+.usage-acct-edit:hover {
+  color: var(--accent-fg);
+  background: var(--bg-hover);
+}
+.usage-acct-rename {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 1px solid var(--accent-fg);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  color: var(--text-bright);
+  font-size: var(--font-2xs);
+  font-family: inherit;
 }
 .usage-acct {
   display: flex;
