@@ -2490,67 +2490,34 @@ async def cli_profiles_set_default(session: "Session", msg_id: str, msg_type: st
         # replaced it, that capture would overwrite the outgoing account's
         # only copy with someone else's credential. When the target slot is
         # empty the live credential can only be the target's fresh sign-in:
-        # park it there and bring nothing else live. Otherwise refuse — the
-        # user has to say which account is live (quota_failover.reconcile).
+        # park it there and bring nothing else live. Otherwise the user's
+        # pick wins: a manual switch is never refused for drift (the
+        # reconcile gate belongs to the quota failover transaction alone),
+        # so the risk is logged and reported as ``warning``.
         drift = await vault_to_thread(
             quota_failover.live_drift, app.credential_vault, agent_key,
             current_id or DEFAULT_SLOT_ID, scope_from,
         )
         adopted = False
-        if drift == "unverifiable":
-            # The live payload changed but nothing says whose it is (a vendor
-            # with no readable identity): a token refresh and a foreign
-            # sign-in look alike. Neither is assumed — the user confirms
-            # ``assume_live_is_current`` to proceed as a normal switch, and
-            # that word is bound to what they were shown: the resend must
-            # name the same active account and the same live payload
-            # (``live_fingerprint`` from the refusal), or it is asked again.
-            fingerprint = await vault_to_thread(
-                quota_failover.live_fingerprint, app.credential_vault, agent_key, scope_from,
-            )
-            # expected_current_slot_id / expected_epoch were already enforced
-            # above; the fingerprint from the refusal must still be the live
-            # payload — a CLI rewriting the live store during the dialog does
-            # not move the epoch, only this catches it.
-            offered_fp = str(payload.get("live_fingerprint") or "")
-            confirmed = assume and bool(fingerprint) and offered_fp == fingerprint
-            if not confirmed:
-                await session.send_json(
-                    make_error(
-                        msg_id, msg_type, "LIVE_DRIFT",
-                        f"the live {agent_key} credential changed and carries no identity to "
-                        "compare; confirm it is still the current account before switching",
-                        {"currentSlotId": current_id or DEFAULT_SLOT_ID,
-                         "targetSlotId": profile_id or DEFAULT_SLOT_ID, "verified": False,
-                         "epoch": app.quota_failover.epoch(agent_key),
-                         "liveIdentity": await vault_to_thread(app.credential_vault.identity, agent_key),
-                         "liveFingerprint": fingerprint},
-                    )
-                )
-                return
+        warning = None
+        target_slot = profile_id or DEFAULT_SLOT_ID
         if drift == "drifted":
-            target_slot = profile_id or DEFAULT_SLOT_ID
             target_empty = await vault_to_thread(
                 lambda: app.credential_vault.read_slot(
                     agent_key, target_slot, **({"scope": switch_scope} if switch_scope else {})
                 ).secret is None
             )
             if not target_empty:
-                await session.send_json(
-                    make_error(
-                        msg_id, msg_type, "LIVE_DRIFT",
-                        f"the live {agent_key} credential is no longer the active "
-                        "account's; say which account is signed in before switching",
-                        {"currentSlotId": current_id or DEFAULT_SLOT_ID,
-                         "targetSlotId": target_slot, "verified": True,
-                         "epoch": app.quota_failover.epoch(agent_key),
-                         "liveIdentity": await vault_to_thread(app.credential_vault.identity, agent_key),
-                         "liveFingerprint": await vault_to_thread(
-                             quota_failover.live_fingerprint, app.credential_vault, agent_key, scope_from,
-                         )},
-                    )
-                )
-                return
+                warning = "live-drift"
+        elif drift == "unverifiable":
+            warning = "live-drift-unverified"
+        if warning is not None:
+            app.log.warning(
+                "manual %s switch %s -> %s: %s; the live credential is captured into "
+                "the outgoing slot as-is", agent_key, current_id or DEFAULT_SLOT_ID,
+                target_slot, warning,
+            )
+        if drift == "drifted" and warning is None:
             try:
                 await vault_to_thread(
                     functools.partial(
@@ -2609,6 +2576,9 @@ async def cli_profiles_set_default(session: "Session", msg_id: str, msg_type: st
                 # pane reads as "you were logged out" or "this needs
                 # re-authenticating" — the latter is routine after parking.
                 "needsLoginReason": login_reason,
+                # "live-drift" / "live-drift-unverified": the live credential
+                # captured into the outgoing slot may not have been its own.
+                "warning": warning,
             })
         )
     # The user switched by hand: any automatic proposal still pending for this
