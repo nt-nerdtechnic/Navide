@@ -19,6 +19,7 @@ export const HOST_GIT_READ_ONLY_KEYS = [
   'agentTeam.analyzerModel',
   'agent-team:theme',
   'agent-team:theme-custom',
+  'agent-team:language',
 ] as const
 
 export const HOST_GIT_WORKSPACE_REPOSITORY_KEY = 'agentTeam.gitTabRepo' as const

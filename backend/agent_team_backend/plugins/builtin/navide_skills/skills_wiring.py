@@ -22,12 +22,12 @@ import json
 import logging
 import os
 import re
-import shlex
 import shutil
 import tempfile
 from pathlib import Path
 from typing import Any
 
+from agent_team_backend import osplat
 from agent_team_backend.applog import app_data_dir
 from agent_team_backend.cli_vendors.base import SkillsWiring
 from agent_team_backend.cli_vendors.registry import vendor
@@ -121,7 +121,7 @@ def flag_values(wiring: SkillsWiring, view: Path, cwd: str) -> list[str]:
             return []
         paths = [str(entry) for entry in entries]
     else:
-        paths = [str(leaf)]
+        paths = [str(view)]
     return paths + [str(root) for root in discovery_roots(wiring, cwd)]
 
 
@@ -198,10 +198,10 @@ def prepare_root(
 ) -> str | None:
     """Materialise this CLI's own skills directory inside a per-pane root.
 
-    The root mirrors the real one entry by entry, so the pane keeps every
-    credential, session and setting the user has; only the skills directory on
-    the way down is rebuilt as ours. Returns the value ``root_env`` should
-    carry, or None when nothing should be wired.
+    Skills-owned roots mirror the real one entry by entry. An isolated root
+    owned by the vendor's home manager keeps its sibling entries unchanged.
+    Returns the value ``root_env`` should carry, or None when nothing should
+    be wired.
     """
     if not _SAFE_PANE_ID.match(pane_id or ""):
         return None
@@ -224,7 +224,14 @@ def prepare_root(
         real_root = home.joinpath(*wiring.root_home)
         sources = _managed_sources(agent_key, store, native_root)
         suppressed = [home.joinpath(*rel) for rel in wiring.discovery_home]
-        _materialise(root, real_root, wiring.skills_rel, sources, suppressed, adopt=ours)
+        isolated = bool(
+            existing and wiring.isolated_panes_home
+            and root.parent.resolve() == home.joinpath(*wiring.isolated_panes_home).resolve()
+        )
+        _materialise(
+            root, real_root, wiring.skills_rel, sources, suppressed,
+            adopt=ours, mirror_home=not isolated,
+        )
         return str(root)
     except Exception as err:  # noqa: BLE001 - optional wiring must never block spawn
         log.warning("Managed-skills root for %s failed: %s", agent_key, err)
@@ -362,7 +369,7 @@ def wire_command(
     if not wiring.flag or str(view) in text:
         return command
     suffix = " ".join(
-        f"{wiring.flag} {shlex.quote(value)}" for value in flag_values(wiring, view, cwd)
+        f"{wiring.flag} {osplat.paths.quote_arg(value)}" for value in flag_values(wiring, view, cwd)
     )
     return _append_to_command(command, suffix) if suffix else command
 
@@ -451,12 +458,12 @@ def _materialise(
     suppressed: list[Path] | None = None,
     *,
     adopt: bool = True,
+    mirror_home: bool = True,
 ) -> None:
-    """Rebuild only the skills directory inside ``root``; mirror the rest.
+    """Rebuild the skills directory; optionally mirror its ancestor directories.
 
-    Every level on the way down is a real directory whose other entries are
-    links back to the user's, so a pane sees its own skills view and the
-    user's everything-else.
+    When mirroring, every ancestor's other entries link back to the user's
+    root. A vendor-owned isolated root leaves those entries to its owner.
 
     ``suppressed`` are roots the CLI scans only while the variable is unset —
     relocating it would silently cost the user those skills, so their contents
@@ -470,7 +477,8 @@ def _materialise(
         # (a fresh login, a new session dir) belongs in the user's tree, not
         # trapped in one pane. The leaf below is ours and is never adopted —
         # that would copy managed links into the user's own skills directory.
-        _mirror_into(dst, src, skip={name}, adopt=adopt)
+        if mirror_home:
+            _mirror_into(dst, src, skip={name}, adopt=adopt)
         src, dst = src / name, dst / name
         # Only the leaf may be ours, and every level above it must be a real
         # directory of our own. A link here — left by an MCP shim that mirrored

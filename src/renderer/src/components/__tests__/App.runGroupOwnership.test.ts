@@ -52,10 +52,13 @@ describe('run groups are saved only into the workspace they belong to', () => {
 
   it('refuses to persist a list that belongs to another workspace', () => {
     const save = body('_saveRunGroups')
-    const guard = 'if (normWs(runGroupsOwner.value) !== normWs(ws)) return'
+    const guard = 'if (normWs(runGroupsOwner.value) !== normWs(ws)) {'
     expect(save).toContain(guard)
-    // Ahead of the write, not merely present somewhere in the function.
+    // Ahead of the write, not merely present somewhere in the function, and it
+    // still leaves rather than falling through into it.
     expect(save.indexOf(guard)).toBeLessThan(save.indexOf("sendQuiet('project.set_ui_state'"))
+    expect(save.slice(save.indexOf(guard), save.indexOf("sendQuiet('project.set_ui_state'")))
+      .toContain('return')
   })
 
   it('compares the owner against the very path it would write under', () => {

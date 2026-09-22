@@ -27,10 +27,11 @@ from __future__ import annotations
 import json
 import logging
 import os
-import shlex
 import shutil
 from pathlib import Path
 from typing import Any
+
+from . import osplat
 
 log = logging.getLogger("agent_team_backend.claude_hooks")
 
@@ -108,25 +109,19 @@ def _build_curl_command(port_file: str, event_kind: str, endpoint: str = "claude
     """
     from . import hook_auth
 
-    safe_port_file = shlex.quote(port_file)
-    # The secret is read out of a 0600 file when the hook fires (`-H @file`),
-    # never written into this command: settings.json is world readable and
-    # `ps` would show an argument. See hook_auth.
-    safe_auth_file = shlex.quote(str(hook_auth.header_file()))
     # Claude's Stop hook only: qwen borrows this builder, and nothing has
     # established that its CLI reads a hook's stdout the same way.
     keeps_body = event_kind == "stop" and endpoint == "claude"
-    sink = "" if keeps_body else "-o /dev/null "
-    timeout = _STOP_TIMEOUT_S if keeps_body else 2
-    return (
-        f"{_AGENT_TEAM_MARKER} kind={event_kind}\n"
-        f"PORT=$(cat {safe_port_file} 2>/dev/null); "
-        f"[ -n \"$PORT\" ] && curl -fsS -m {timeout} {sink}-X POST "
-        f"-H 'Content-Type: application/json' "
-        f"-H 'X-Agent-Team-Event: {event_kind}' "
-        f"-H @{safe_auth_file} "
-        f"--data-binary @- "
-        f"\"http://127.0.0.1:$PORT/hooks/{endpoint}\" || true"
+    # The secret is read out of a 0600 file when the hook fires (`-H @file`),
+    # never written into this command: settings.json is world readable and
+    # `ps` would show an argument. See hook_auth.
+    return f"{_AGENT_TEAM_MARKER} kind={event_kind}\n" + osplat.scripts.hook_post_json(
+        port_file=port_file,
+        header_file=str(hook_auth.header_file()),
+        url_path=f"/hooks/{endpoint}",
+        event=event_kind,
+        timeout_s=_STOP_TIMEOUT_S if keeps_body else 2,
+        keep_body=keeps_body,
     )
 
 
@@ -152,21 +147,11 @@ def _build_rewake_command(port_file: str) -> str:
     """
     from . import hook_auth
 
-    safe_port_file = shlex.quote(port_file)
-    safe_auth_file = shlex.quote(str(hook_auth.header_file()))
-    return (
-        f"{_AGENT_TEAM_MARKER} kind=rewake\n"
-        f"PORT=$(cat {safe_port_file} 2>/dev/null); "
-        f"[ -n \"$PORT\" ] || exit 0\n"
-        f"BODY=$(curl -fsS -m {_REWAKE_CURL_TIMEOUT_S} -X POST "
-        f"-H 'Content-Type: application/json' "
-        f"-H 'X-Agent-Team-Event: rewake' "
-        f"-H @{safe_auth_file} "
-        f"--data-binary @- "
-        f"\"http://127.0.0.1:$PORT/hooks/claude/rewake\" || true)\n"
-        f"[ -n \"$BODY\" ] || exit 0\n"
-        f"printf '%s\\n' \"$BODY\" >&2\n"
-        f"exit 2"
+    return f"{_AGENT_TEAM_MARKER} kind=rewake\n" + osplat.scripts.hook_rewake(
+        port_file=port_file,
+        header_file=str(hook_auth.header_file()),
+        url_path="/hooks/claude/rewake",
+        timeout_s=_REWAKE_CURL_TIMEOUT_S,
     )
 
 
@@ -293,14 +278,10 @@ def install_hooks(port_file: str, settings_file: Path | None = None) -> dict[str
         # (Stop) wants both.
         ours: list[dict[str, Any]] = []
         if event_kind:
-            ours.append({
-                "type": "command",
-                "command": _build_curl_command(port_file, event_kind),
-            })
+            ours.append(osplat.scripts.hook_entry(_build_curl_command(port_file, event_kind)))
         if event_name in _REWAKE_EVENTS and rewake_wanted:
             ours.append({
-                "type": "command",
-                "command": _build_rewake_command(port_file),
+                **osplat.scripts.hook_entry(_build_rewake_command(port_file)),
                 "asyncRewake": True,
                 "timeout": _REWAKE_TIMEOUT_S,
             })

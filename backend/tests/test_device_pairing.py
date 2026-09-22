@@ -27,8 +27,19 @@ def _clean():
 
 KEY_A = "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQT0="
 KEY_B = "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI9"
+ENC_A = "RUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUU9"
+ENC_B = "RkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkY9"
 NONCE_A = "bm9uY2UtYQ=="
 NONCE_B = "bm9uY2UtYg=="
+
+
+def _sas(**overrides):
+    """The honest code, with any one input replaced."""
+    inputs = dict(
+        key_a=KEY_A, key_b=KEY_B, enc_a=ENC_A, enc_b=ENC_B, nonce_a=NONCE_A, nonce_b=NONCE_B
+    )
+    inputs.update(overrides)
+    return device_pairing.sas(**inputs)
 
 
 # ---- the code ----------------------------------------------------------------
@@ -37,8 +48,10 @@ NONCE_B = "bm9uY2UtYg=="
 def test_both_ends_derive_the_same_code_from_opposite_points_of_view() -> None:
     """Neither machine knows which of them is "a". The code has to come out the
     same anyway, or every honest pairing would look like an attack."""
-    mine = device_pairing.sas(key_a=KEY_A, key_b=KEY_B, nonce_a=NONCE_A, nonce_b=NONCE_B)
-    theirs = device_pairing.sas(key_a=KEY_B, key_b=KEY_A, nonce_a=NONCE_B, nonce_b=NONCE_A)
+    mine = _sas()
+    theirs = _sas(
+        key_a=KEY_B, key_b=KEY_A, enc_a=ENC_B, enc_b=ENC_A, nonce_a=NONCE_B, nonce_b=NONCE_A
+    )
     assert mine == theirs
     assert mine
 
@@ -52,14 +65,16 @@ def test_a_known_input_gives_a_known_code() -> None:
     What they would not agree with is a *peer running the previous build*, and
     the symptom is two people staring at different digits with no idea why. This
     is the one assertion that notices.
+
+    Changed once on purpose, when the encryption keys joined the hash: a peer on
+    the build before that shows different digits to this one, which is the
+    intended outcome — it also sends no encryption key, and is refused.
     """
-    assert device_pairing.sas(
-        key_a=KEY_A, key_b=KEY_B, nonce_a=NONCE_A, nonce_b=NONCE_B
-    ) == "159 755"
+    assert _sas() == "505 222"
 
 
 def test_the_code_is_six_digits_a_person_can_read_aloud() -> None:
-    code = device_pairing.sas(key_a=KEY_A, key_b=KEY_B, nonce_a=NONCE_A, nonce_b=NONCE_B)
+    code = _sas()
     assert len(code) == 7 and code[3] == " "
     assert code.replace(" ", "").isdigit()
 
@@ -72,25 +87,39 @@ def test_swapping_a_key_makes_the_two_ends_disagree() -> None:
     digits: change either public key and the two ends compute different codes,
     which is what the comparison catches.
     """
-    honest = device_pairing.sas(key_a=KEY_A, key_b=KEY_B, nonce_a=NONCE_A, nonce_b=NONCE_B)
+    honest = _sas()
     relay_key = "UkVMQVlSRUxBWVJFTEFZUkVMQVlSRUxBWVJFTEFZUkU9"
     # What the initiator computes when the relay substitutes its own key on the
     # way to it, while the responder still believes it is talking to the peer.
-    tampered = device_pairing.sas(
-        key_a=KEY_A, key_b=relay_key, nonce_a=NONCE_A, nonce_b=NONCE_B
-    )
+    tampered = _sas(key_b=relay_key)
     assert tampered != honest
+
+
+def test_swapping_an_encryption_key_makes_the_two_ends_disagree_too() -> None:
+    """The half the first version left out.
+
+    The signing key says who sent a frame; the encryption key says who can open
+    what is sealed to this device — the account sync key among other things. A
+    code over the signing keys alone let a relay leave every signature intact,
+    swap the encryption key in the directory, and be handed every sealed box
+    while two people agreed on the digits. Swapping it now changes the digits.
+    """
+    honest = _sas()
+    relay_enc = "UkVMQVktRU5DLUtFWS1SRUxBWS1FTkMtS0VZLVJFTEFZLQ=="
+    assert _sas(enc_b=relay_enc) != honest
+    assert _sas(enc_a=relay_enc) != honest
+
+
+def test_an_encryption_key_cannot_be_moved_to_the_other_signing_key() -> None:
+    """Ordered with its signing key, like the nonce, for the same reason."""
+    assert _sas(enc_a=ENC_B, enc_b=ENC_A) != _sas()
 
 
 def test_changing_either_nonce_changes_the_code() -> None:
     """Both sides contribute, so neither can pick the digits on its own."""
-    base = device_pairing.sas(key_a=KEY_A, key_b=KEY_B, nonce_a=NONCE_A, nonce_b=NONCE_B)
-    assert device_pairing.sas(
-        key_a=KEY_A, key_b=KEY_B, nonce_a="b3RoZXI=", nonce_b=NONCE_B
-    ) != base
-    assert device_pairing.sas(
-        key_a=KEY_A, key_b=KEY_B, nonce_a=NONCE_A, nonce_b="b3RoZXI="
-    ) != base
+    base = _sas()
+    assert _sas(nonce_a="b3RoZXI=") != base
+    assert _sas(nonce_b="b3RoZXI=") != base
 
 
 def test_a_nonce_cannot_be_moved_to_the_other_key() -> None:
@@ -100,16 +129,18 @@ def test_a_nonce_cannot_be_moved_to_the_other_key() -> None:
     still land on the same digest — the digits would match while the two ends
     were describing different pairings.
     """
-    honest = device_pairing.sas(key_a=KEY_A, key_b=KEY_B, nonce_a=NONCE_A, nonce_b=NONCE_B)
-    crossed = device_pairing.sas(key_a=KEY_A, key_b=KEY_B, nonce_a=NONCE_B, nonce_b=NONCE_A)
+    honest = _sas()
+    crossed = _sas(nonce_a=NONCE_B, nonce_b=NONCE_A)
     assert crossed != honest
 
 
 def test_half_an_exchange_produces_no_code_at_all() -> None:
     """A code over missing input would still be six digits, and two people could
     still successfully compare it."""
-    assert device_pairing.sas(key_a=KEY_A, key_b="", nonce_a=NONCE_A, nonce_b=NONCE_B) == ""
-    assert device_pairing.sas(key_a=KEY_A, key_b=KEY_B, nonce_a="", nonce_b=NONCE_B) == ""
+    assert _sas(key_b="") == ""
+    assert _sas(nonce_a="") == ""
+    assert _sas(enc_a="") == ""
+    assert _sas(enc_b="") == ""
 
 
 def test_nonces_are_not_predictable() -> None:
@@ -125,7 +156,7 @@ def test_the_initiator_walks_request_response_confirm() -> None:
     assert pairing.role == device_pairing.ROLE_INITIATOR
     assert pairing.our_nonce and not pairing.their_nonce
 
-    device_pairing.accept_response("dev-b", their_key=KEY_B, their_nonce=NONCE_B)
+    device_pairing.accept_response("dev-b", their_key=KEY_B, their_enc_key=ENC_B, their_nonce=NONCE_B)
     assert device_pairing.get("dev-b").state == device_pairing.STATE_AWAITING_LOCAL
 
     device_pairing.confirm("dev-b")
@@ -134,7 +165,7 @@ def test_the_initiator_walks_request_response_confirm() -> None:
 
 def test_the_responder_starts_with_both_nonces_and_its_own_turn() -> None:
     pairing = device_pairing.accept_request(
-        "dev-a", device_name="M4", their_key=KEY_A, their_nonce=NONCE_A
+        "dev-a", device_name="M4", their_key=KEY_A, their_enc_key=ENC_A, their_nonce=NONCE_A
     )
     assert pairing.role == device_pairing.ROLE_RESPONDER
     assert pairing.state == device_pairing.STATE_AWAITING_LOCAL
@@ -149,7 +180,7 @@ def test_only_one_exchange_per_device_at_a_time() -> None:
         device_pairing.begin("dev-b", device_name="M3")
     with pytest.raises(device_pairing.PairingError):
         device_pairing.accept_request(
-            "dev-b", device_name="M3", their_key=KEY_B, their_nonce=NONCE_B
+            "dev-b", device_name="M3", their_key=KEY_B, their_enc_key=ENC_B, their_nonce=NONCE_B
         )
 
 
@@ -200,7 +231,7 @@ def test_the_clock_restarts_when_the_digits_appear() -> None:
     late = pairing.started_at + device_pairing.REQUEST_TTL_S - 1
 
     with _frozen(late):
-        device_pairing.accept_response("dev-late", their_key=KEY_B, their_nonce=NONCE_B)
+        device_pairing.accept_response("dev-late", their_key=KEY_B, their_enc_key=ENC_B, their_nonce=NONCE_B)
 
     assert pairing.deadline > original
     assert pairing.deadline == pytest.approx(late + device_pairing.REQUEST_TTL_S)
@@ -212,7 +243,7 @@ def test_the_clock_restarts_once_and_not_per_frame() -> None:
     """Otherwise a device that keeps sending holds the exchange open for ever,
     which is not a longer expiry — it is the absence of one."""
     pairing = device_pairing.accept_request(
-        "dev-chatty", device_name="M4", their_key=KEY_A, their_nonce=NONCE_A
+        "dev-chatty", device_name="M4", their_key=KEY_A, their_enc_key=ENC_A, their_nonce=NONCE_A
     )
     after_first = pairing.deadline
 
@@ -226,23 +257,64 @@ def test_the_clock_restarts_once_and_not_per_frame() -> None:
 
 def test_a_response_out_of_order_is_refused() -> None:
     device_pairing.accept_request(
-        "dev-a", device_name="M4", their_key=KEY_A, their_nonce=NONCE_A
+        "dev-a", device_name="M4", their_key=KEY_A, their_enc_key=ENC_A, their_nonce=NONCE_A
     )
     with pytest.raises(device_pairing.PairingError):
-        device_pairing.accept_response("dev-a", their_key=KEY_A, their_nonce=NONCE_A)
+        device_pairing.accept_response("dev-a", their_key=KEY_A, their_enc_key=ENC_A, their_nonce=NONCE_A)
 
 
 def test_a_response_cannot_revise_the_key_the_request_carried() -> None:
     """Otherwise the relay could wait until the code was on screen and then swap
     the key it covers."""
-    device_pairing.begin("dev-b", device_name="M3", their_key=KEY_B)
+    device_pairing.begin("dev-b", device_name="M3", their_key=KEY_B, their_enc_key=ENC_B)
     with pytest.raises(device_pairing.PairingError):
-        device_pairing.accept_response("dev-b", their_key=KEY_A, their_nonce=NONCE_B)
+        device_pairing.accept_response(
+            "dev-b", their_key=KEY_A, their_enc_key=ENC_B, their_nonce=NONCE_B
+        )
+
+
+def test_a_response_cannot_revise_the_encryption_key_either() -> None:
+    device_pairing.begin("dev-b", device_name="M3", their_key=KEY_B, their_enc_key=ENC_B)
+    with pytest.raises(device_pairing.PairingError):
+        device_pairing.accept_response(
+            "dev-b", their_key=KEY_B, their_enc_key=ENC_A, their_nonce=NONCE_B
+        )
+    assert device_pairing.get("dev-b").their_enc_key == ENC_B
+
+
+def test_a_frame_without_an_encryption_key_is_refused_not_completed() -> None:
+    """Fail closed. The alternative — reading the missing key from the directory
+    — is exactly the substitution the six digits now exist to catch, and a peer
+    on the previous build is one that has to update before it can pair."""
+    with pytest.raises(device_pairing.PairingError):
+        device_pairing.accept_request(
+            "dev-old", device_name="M4", their_key=KEY_A, their_enc_key="", their_nonce=NONCE_A
+        )
+    assert device_pairing.get("dev-old") is None
+
+    device_pairing.begin("dev-b", device_name="M3")
+    with pytest.raises(device_pairing.PairingError):
+        device_pairing.accept_response(
+            "dev-b", their_key=KEY_B, their_enc_key="", their_nonce=NONCE_B
+        )
+    assert device_pairing.get("dev-b").state == device_pairing.STATE_AWAITING_RESPONSE
+
+
+def test_the_code_covers_the_encryption_key_the_exchange_fixed() -> None:
+    pairing = device_pairing.accept_request(
+        "dev-a", device_name="M4", their_key=KEY_A, their_enc_key=ENC_A, their_nonce=NONCE_A
+    )
+    shown = device_pairing.code_for(pairing, our_key=KEY_B, our_enc_key=ENC_B)
+    assert shown == device_pairing.sas(
+        key_a=KEY_B, key_b=KEY_A, enc_a=ENC_B, enc_b=ENC_A,
+        nonce_a=pairing.our_nonce, nonce_b=NONCE_A,
+    )
+    assert shown != device_pairing.code_for(pairing, our_key=KEY_B, our_enc_key=ENC_A)
 
 
 def test_confirming_twice_is_refused() -> None:
     device_pairing.accept_request(
-        "dev-a", device_name="M4", their_key=KEY_A, their_nonce=NONCE_A
+        "dev-a", device_name="M4", their_key=KEY_A, their_enc_key=ENC_A, their_nonce=NONCE_A
     )
     device_pairing.confirm("dev-a")
     with pytest.raises(device_pairing.PairingError):
@@ -305,7 +377,7 @@ def test_the_responder_alone_cannot_finish_it() -> None:
     must still not be paired.
     """
     device_pairing.accept_request(
-        "dev-a", device_name="M4", their_key=KEY_A, their_nonce=NONCE_A
+        "dev-a", device_name="M4", their_key=KEY_A, their_enc_key=ENC_A, their_nonce=NONCE_A
     )
     device_pairing.confirm("dev-a")
 
@@ -318,7 +390,7 @@ def test_the_peer_confirming_does_not_answer_for_the_responder() -> None:
     looking at the card when the pin was written — and "refuse" would mean
     nothing, because the answer had already been given for them."""
     device_pairing.accept_request(
-        "dev-a", device_name="M4", their_key=KEY_A, their_nonce=NONCE_A
+        "dev-a", device_name="M4", their_key=KEY_A, their_enc_key=ENC_A, their_nonce=NONCE_A
     )
     device_pairing.note_peer_confirmed("dev-a")
 
@@ -341,7 +413,7 @@ def test_the_initiator_is_not_finished_by_the_other_side_alone() -> None:
     knows them. Only a person reading two screens is outside its reach.
     """
     device_pairing.begin("dev-b", device_name="M3")
-    device_pairing.accept_response("dev-b", their_key=KEY_B, their_nonce=NONCE_B)
+    device_pairing.accept_response("dev-b", their_key=KEY_B, their_enc_key=ENC_B, their_nonce=NONCE_B)
 
     # The far side answers. On its own that used to be enough.
     device_pairing.note_peer_confirmed("dev-b")
@@ -361,21 +433,21 @@ def test_the_initiator_grants_nothing_while_it_waits() -> None:
     stranger's.
     """
     device_pairing.begin("dev-wait", device_name="M3")
-    device_pairing.accept_response("dev-wait", their_key=KEY_B, their_nonce=NONCE_B)
+    device_pairing.accept_response("dev-wait", their_key=KEY_B, their_enc_key=ENC_B, their_nonce=NONCE_B)
     device_pairing.note_peer_confirmed("dev-wait")
 
     assert device_pairing.complete("dev-wait") is None
     pending = device_pairing.get("dev-wait")
     assert pending is not None and pending.we_confirmed is False
     # And the digits are on the card, which is the whole point of the wait.
-    assert device_pairing.code_for(pending, our_key=KEY_A)
+    assert device_pairing.code_for(pending, our_key=KEY_A, our_enc_key=ENC_A)
 
 
 def test_both_confirming_pairs_the_responder_once_in_either_order() -> None:
     for first_is_peer in (False, True):
         device_pairing._reset_for_test()
         device_pairing.accept_request(
-            "dev-a", device_name="M4", their_key=KEY_A, their_nonce=NONCE_A
+            "dev-a", device_name="M4", their_key=KEY_A, their_enc_key=ENC_A, their_nonce=NONCE_A
         )
         if first_is_peer:
             device_pairing.note_peer_confirmed("dev-a")

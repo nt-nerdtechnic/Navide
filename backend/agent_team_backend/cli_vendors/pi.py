@@ -44,7 +44,17 @@ from pathlib import Path
 
 import re
 
-from .base import Dep, SkillsWiring, VendorSpec, command_text
+from .base import (
+    AccountSwitchSpec,
+    Dep,
+    SkillsWiring,
+    VendorRuntimeContext,
+    VendorSpec,
+    command_text,
+    provider_entry_identity,
+    provider_map_extract,
+    provider_map_merge,
+)
 from . import _protocols
 from ..usage_common import HTTP_TIMEOUT, _epoch_to_iso, _num, _snapshot, _window, parse_retry_after
 from ..log_readers.base import (
@@ -580,6 +590,27 @@ PiLogReader.pane_cwd_match = _pane_cwd_match
 # here and never refreshed (pi rotates its own refresh tokens): an expired
 # oauth entry maps to status=expired.
 PI_AGENT_DIR_ENV = "PI_CODING_AGENT_DIR"
+PI_AUTH_FILE_REL = (".pi", "agent", "auth.json")
+# The OAuth flows pi-ai 0.84 bundles (auth/oauth/load.js), keyed by the
+# provider id the entry is stored under. Each is a subscription login of its
+# own, so each is a scope a profile can bind to; BYOK ``api_key`` entries of
+# other providers are never touched by a switch.
+PI_ACCOUNT_SCOPES = (
+    "anthropic",
+    "openai-codex",
+    "github-copilot",
+    "openrouter",
+    "kimi-coding",
+    "xai",
+)
+
+
+def _pi_auth_file(home: Path, env: dict | None = None) -> Path:
+    """``$PI_CODING_AGENT_DIR/auth.json`` when set (config.js getAgentDir),
+    else ``~/.pi/agent/auth.json``."""
+    env = os.environ if env is None else env
+    root = env.get(PI_AGENT_DIR_ENV)
+    return Path(root) / "auth.json" if root else home.joinpath(*PI_AUTH_FILE_REL)
 PI_OPENROUTER_KEY_URL = "https://openrouter.ai/api/v1/key"
 
 
@@ -798,15 +829,32 @@ def _resume_id_from_command(command) -> str:
 
 
 def _session_exists(workspace_path: str, session_id: str) -> bool:
-    # Filenames carry a timestamp prefix the id alone can't reconstruct;
-    # ask the reader so a stale persisted id fails preflight.
-    return PiLogReader().has_session(session_id)
+    # --session-id only resumes within the launch workspace; finding the id
+    # in another project would make Pi create a new empty session instead.
+    reader = PiLogReader()
+    return bool(session_id) and any(
+        reader.session_id_from_path(path) == session_id
+        for path in reader.session_files_for_workspace(workspace_path)
+    )
 
 
 # ---- vendor spec -----------------------------------------------------------
 
+def _risk_data_dirs(ctx: VendorRuntimeContext) -> tuple[Path, ...]:
+    # pi_sessions_root permits moving sessions separately from config/data.
+    root = ctx.path(ctx.env.get("PI_CODING_AGENT_DIR") or ctx.home / ".pi" / "agent")
+    sessions = ctx.env.get("PI_CODING_AGENT_SESSION_DIR")
+    if sessions:
+        return tuple(dict.fromkeys((root, ctx.path(sessions))))
+    return (root,)
+
+
 SPEC = VendorSpec(
     key="pi",
+    # Open-ended provider/model config; OpenRouter quota is not a CLI host set.
+    expected_hosts=(),
+    data_dirs=_risk_data_dirs,
+    data_dir_env_vars=("PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR"),
     supports_model=True,
     supports_effort=True,
     known_efforts=('off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'),
@@ -815,6 +863,36 @@ SPEC = VendorSpec(
     # discovery rather than replacing it (--no-skills is the opt-out).
     skills_wiring=SkillsWiring(flag="--skill", flag_takes="each"),
     label="Pi",
+    # Multi-account: ``auth.json`` is a provider map (FileAuthStorageBackend,
+    # 0600, written whole under a lock file); a profile binds to one OAuth
+    # provider and a switch rewrites that entry only. ``PI_CODING_AGENT_DIR``
+    # relocates the whole agent dir, so a login pane gets its own auth.json
+    # there and the vault harvests the profile's scope entry out of it.
+    # AuthStorage re-reads the file when its revision changes, so a hot swap
+    # may work; until that is seen on a real account the safe answer is a
+    # restart with ``pi --session-id <id>``.
+    live_file=PI_AUTH_FILE_REL,
+    live_file_resolver=lambda home: _pi_auth_file(home),
+    slot_file="auth.json",
+    login_home_secret_file=("auth.json",),
+    login_home_env=PI_AGENT_DIR_ENV,
+    identity_from_secret=provider_entry_identity,
+    account_switch=AccountSwitchSpec(
+        auth_scope="pi",
+        method="restart",
+        store="compound-file",
+        evidence="source",
+        verified_version="0.84.0",
+        scopes=PI_ACCOUNT_SCOPES,
+        extract=provider_map_extract,
+        merge=provider_map_merge,
+        # pi-ai auth/resolve.js: "A stored credential owns the provider:
+        # ambient/env is consulted only when nothing is stored" — an env key
+        # never outranks the auth.json entry, so nothing shadows a switch.
+        shadowing_env=(),
+        resume="native",
+        todo="layout from the installed 0.84.0 package; hot reload seen in auth-storage.js but unverified; no real-account round-trip recorded",
+    ),
     # Late-bound (module global at call time) so tests can monkeypatch.
     fetch_usage=lambda home: fetch_pi(home),
     resume_id_from_command=_resume_id_from_command,

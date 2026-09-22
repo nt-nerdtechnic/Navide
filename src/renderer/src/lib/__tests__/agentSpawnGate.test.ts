@@ -40,6 +40,7 @@ function ctx(overrides: Partial<SpawnGateContext> = {}): SpawnGateContext {
     parentChildCount: 0,
     cliPaneCount: 1,
     modelCapabilityFor: (key) => CAPABILITIES[key],
+    launchCommandOverridden: () => false,
     ...overrides,
   }
 }
@@ -66,6 +67,21 @@ describe('evaluateSpawnRequest', () => {
       expect(res.ok).toBe(false)
       if (!res.ok) expect(res.reason).toContain('name')
     }
+  })
+
+  it('rejects an empty task on a fresh spawn', () => {
+    const res = evaluateSpawnRequest({ ...goodReq, task: '' }, ctx())
+    expect(res.ok).toBe(false)
+    if (!res.ok) expect(res.reason).toContain('task')
+  })
+
+  it('accepts an empty task when the request resumes a conversation', () => {
+    // A resumed conversation already has its own context; the caller may only
+    // want it back on screen and talk to it later with cli_send. A fresh pane
+    // with nothing to do is still refused above — this flag is the only thing
+    // that changes the answer.
+    const res = evaluateSpawnRequest({ ...goodReq, task: '', resumesSession: true }, ctx())
+    expect(res).toEqual({ ok: true, agentKey: 'claude', name: 'worker-2', task: '' })
   })
 
   it('rejects a name collision without renaming', () => {
@@ -422,6 +438,40 @@ describe('evaluateSpawnRequest — model / effort capability', () => {
     expect(results[1].ok).toBe(true)
     // The rejected request must not have consumed a child slot.
     if (results[1].ok) expect(results[1].advisories).toBeUndefined()
+  })
+})
+
+describe('evaluateSpawnRequest — a stored launch command', () => {
+  // The stored command runs verbatim, so a model the caller named could not
+  // reach argv. Accepting it would answer ok for a pane on the vendor default.
+  // codex: the fixture shape with both flags, so effort alone is a valid ask.
+  const overridden = ctx({ launchCommandOverridden: (key) => key === 'codex' })
+  const codexReq = { ...goodReq, agent: 'codex' }
+
+  it('refuses an explicit model or effort for that agent, naming the setting', () => {
+    for (const extra of [{ model: 'gpt-5' }, { effort: 'high' }]) {
+      const res = evaluateSpawnRequest({ ...codexReq, ...extra }, overridden)
+      expect(res.ok).toBe(false)
+      if (!res.ok) expect(res.reason).toContain('啟動指令')
+    }
+  })
+
+  it('accepts the same request with no model — the override itself is fine', () => {
+    expect(evaluateSpawnRequest(codexReq, overridden).ok).toBe(true)
+  })
+
+  it('accepts a model for an agent without an override', () => {
+    expect(evaluateSpawnRequest({ ...goodReq, model: 'opus-5' }, overridden).ok).toBe(true)
+  })
+
+  it('accepts a model on a resume, whose command never reads the setting', () => {
+    const res = evaluateSpawnRequest({ ...codexReq, model: 'gpt-5', resumesSession: true }, overridden)
+    expect(res.ok).toBe(true)
+  })
+
+  it('applies to every SPAWN block in a turn too', () => {
+    const [res] = evaluateTurnSpawns([{ ...codexReq, model: 'gpt-5' }], overridden)
+    expect(res.ok).toBe(false)
   })
 })
 

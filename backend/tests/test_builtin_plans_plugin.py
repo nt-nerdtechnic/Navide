@@ -9,13 +9,13 @@ do not appear in tools/list.
 
 from __future__ import annotations
 
-import shlex
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from agent_team_backend import osplat
 from agent_team_backend.plugins import wiring
 from agent_team_backend.plugins.activation_catalog import (
     ACTIVATION_CATALOG_DIGEST_ENV,
@@ -62,7 +62,7 @@ def test_startup_activates_builtin_and_registers_contributions(
     assert host.startup_hooks() == []
     assert host.shutdown_hooks() == []
     assert [pid for pid, _ in host.spawn_transformers()] == ["navide.skills"]
-    assert [pid for pid, _ in host.registered_mcp_tool_installers()] == ["navide.plans"]
+    assert [pid for pid, _ in host.registered_mcp_tool_installers()] == ["navide.plans", "navide.skills"]
 
 
 async def test_core_lifecycle_starts_the_server_and_refreshes_claude_config(
@@ -88,13 +88,15 @@ async def test_plugin_tools_are_installed_on_the_core_server(host: PluginHost) -
     tool installed after the session manager starts would be in neither.
     """
     wiring.startup(host)
-    assert wiring.apply_mcp_tools(host, plan_mcp.server) == ["navide.plans"]
+    assert wiring.apply_mcp_tools(host, plan_mcp.server) == ["navide.plans", "navide.skills"]
     names = [tool.name for tool in await plan_mcp.server.list_tools()]
     for name in ["plan_list", "plan_read", "plan_create", "plan_update_stage", "plan_update_todo", "plan_add_note"]:
         assert names.count(name) == 1
     assert "cli_get_status" in names
     assert "cli_interrupt" in names
     assert "ui_invoke" in names
+    for name in ("skills_inspect", "skills_prepare_install", "skills_install", "skills_set_delivery"):
+        assert names.count(name) == 1
     assert host.registered_routes() == []
 
 
@@ -108,7 +110,7 @@ def test_spawn_wiring_appends_claude_flag(tmp_path: Path) -> None:
     config = plan_mcp_wiring.write_claude_config(4567)
 
     wired = plan_mcp_wiring.wire_command("claude", "claude", plan_mcp_wiring.backend_port())
-    assert wired == f"claude --mcp-config {shlex.quote(str(config))}"
+    assert wired == f"claude --mcp-config {osplat.paths.quote_arg(str(config))}"
 
 
 def test_spawn_wiring_appends_codex_override(tmp_path: Path) -> None:
@@ -116,9 +118,8 @@ def test_spawn_wiring_appends_codex_override(tmp_path: Path) -> None:
 
     wired = plan_mcp_wiring.wire_command("codex", "codex", plan_mcp_wiring.backend_port())
     # No pane id given, so the override URL carries the host credential.
-    assert wired == (
-        f"codex -c 'mcp_servers.navide.url=\"{plan_mcp_wiring.plan_mcp_url(4567)}\"'"
-    )
+    override = f'mcp_servers.navide.url="{plan_mcp_wiring.plan_mcp_url(4567)}"'
+    assert wired == f"codex -c {osplat.paths.quote_arg(override)}"
 
 
 def test_spawn_wiring_noop_for_other_agents(host: PluginHost, tmp_path: Path) -> None:

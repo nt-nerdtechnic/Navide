@@ -1,5 +1,8 @@
 import { app, clipboard, Menu, webContents, type BrowserWindow, type MenuItemConstructorOptions, type WebContents } from 'electron'
 import { LEGAL_LABELS, LEGAL_ROUTES, type LegalRoute } from '../shared/legalLinks'
+import { MENU_STRINGS } from './menuStrings'
+import type { SupportedLocale } from './hostLocale'
+import { isMac } from '../shared/osplat'
 import { getTerminalSelection } from './terminal-selection-cache'
 
 /**
@@ -13,6 +16,13 @@ import { getTerminalSelection } from './terminal-selection-cache'
  *   - File: Open Workspace… (⌘O); on non-macOS also Settings… / Check for
  *     Updates… (platforms without an app menu)
  *   - Window: Pipeline Manager
+ *
+ * Every label this file writes is localized through menuStrings.ts, indexed by
+ * the `locale` argument. Items carrying an Electron `role` are not: Chromium
+ * labels those in the SYSTEM locale and offers no way to override it, so a
+ * zh-TW menu on an English machine reads as a mix. That is deliberate — see
+ * menuStrings.ts. Electron also cannot re-label an installed menu, so changing
+ * the language means building a new one (index.ts's rebuildAppMenu).
  *
  * FOUR deliberate omissions from the default menu remain, all because native
  * accelerators fire before the renderer's key handlers:
@@ -66,6 +76,10 @@ export interface AppMenuHooks {
   onOpenPipelineManager?: () => void
   /** Window menu: open the Resource Manager window (CPU + memory per CLI). */
   onOpenResourceManager?: () => void
+  /** Window menu: open the Turn Stats modal (per-turn token usage of a pane). */
+  onOpenTurnStats?: () => void
+  /** Window menu: open the standalone machine-wide token monitor. */
+  onOpenTokenMonitor?: () => void
   /** Window menu: open the account window (sign in / create an account). */
   onOpenAccount?: () => void
   /** Help menu: open the Navide GitHub repo. */
@@ -114,9 +128,13 @@ const SELECTION_TIMED_OUT = Symbol('selection-read-timed-out')
 
 export function installApplicationMenu(
   hooks: AppMenuHooks = {},
-  recents: RecentMenuEntry[] = []
+  recents: RecentMenuEntry[] = [],
+  locale: SupportedLocale
 ): void {
-  const isMac = process.platform === 'darwin'
+  const mac = isMac()
+  // Required, with no default: a caller that forgot to pass one would build an
+  // English menu for a zh-TW user, and that failure looks exactly like success.
+  const s = MENU_STRINGS[locale]
 
   // `role: 'copy'` copies the DOM selection, which a terminal pane never has
   // (`.xterm` is user-select: none), so Edit > Copy was inert while a CLI was
@@ -129,7 +147,7 @@ export function installApplicationMenu(
   // the window would reach nobody at all. Same conclusion context-menu.ts
   // already reached for the right-click menu.
   const copyItem: MenuItemConstructorOptions = {
-    label: 'Copy',
+    label: s.copy,
     accelerator: 'CmdOrCtrl+C',
     // Nothing awaits this handler, so every path must swallow its own errors:
     // an escaping rejection becomes an unhandled rejection in the main process.
@@ -203,17 +221,17 @@ export function installApplicationMenu(
   }
 
   const settingsItem: MenuItemConstructorOptions = {
-    label: 'Settings…',
+    label: s.settings,
     accelerator: 'CmdOrCtrl+,',
     click: () => hooks.onOpenSettings?.()
   }
   const checkUpdatesItem: MenuItemConstructorOptions = {
-    label: 'Check for Updates…',
+    label: s.checkUpdates,
     click: () => hooks.onCheckUpdates?.()
   }
 
   const template: MenuItemConstructorOptions[] = [
-    ...(isMac
+    ...(mac
       ? [
           {
             label: app.name,
@@ -235,28 +253,28 @@ export function installApplicationMenu(
         ]
       : []),
     {
-      label: 'File',
+      label: s.file,
       submenu: [
-        { label: 'New Window', accelerator: 'CmdOrCtrl+N', click: () => hooks.onNewWindow?.() },
+        { label: s.newWindow, accelerator: 'CmdOrCtrl+N', click: () => hooks.onNewWindow?.() },
         {
-          label: 'Open Workspace…',
+          label: s.openWorkspace,
           accelerator: 'CmdOrCtrl+O',
           click: () => hooks.onOpenWorkspace?.()
         },
         {
-          label: 'Open Recent',
+          label: s.openRecent,
           submenu: recents.length
             ? recents.map((r) => ({
                 label: r.name || r.path,
                 enabled: r.exists,
                 click: () => hooks.onOpenRecent?.(r.path)
               }))
-            : [{ label: 'No Recent Workspaces', enabled: false }]
+            : [{ label: s.noRecentWorkspaces, enabled: false }]
         },
         // No app menu off macOS — surface the same entries under File. macOS
         // gets nothing here: its Settings… live in the app menu, and `close` is
         // omitted so ⌘W reaches the renderer (see the doc comment above).
-        ...(isMac
+        ...(mac
           ? []
           : [
               { type: 'separator' } as MenuItemConstructorOptions,
@@ -268,7 +286,7 @@ export function installApplicationMenu(
       ]
     },
     {
-      label: 'Edit',
+      label: s.edit,
       submenu: [
         { role: 'undo' },
         { role: 'redo' },
@@ -276,7 +294,7 @@ export function installApplicationMenu(
         { role: 'cut' },
         copyItem,
         { role: 'paste' },
-        ...(isMac
+        ...(mac
           ? [
               { role: 'pasteAndMatchStyle' } as MenuItemConstructorOptions,
               { role: 'delete' } as MenuItemConstructorOptions,
@@ -290,14 +308,14 @@ export function installApplicationMenu(
       ]
     },
     {
-      label: 'View',
+      label: s.view,
       // No resetZoom / zoomIn / zoomOut, no forceReload, no `role: 'reload'` —
       // see the doc comment above.
       submenu: [
         // Same action the role performs, minus the accelerator it comes with.
         // Reloading stays reachable by mouse while ⌘R belongs to the renderer.
         {
-          label: 'Reload Window',
+          label: s.reloadWindow,
           click: (_item, win) => {
             const target =
               webContents.getFocusedWebContents() ?? (win as BrowserWindow | undefined)?.webContents
@@ -314,18 +332,20 @@ export function installApplicationMenu(
       ]
     },
     {
-      label: 'Window',
+      label: s.window,
       submenu: [
         { label: 'Navide Cloud', click: () => hooks.onOpenAccount?.() },
         { type: 'separator' },
-        { label: 'Pipeline Manager', click: () => hooks.onOpenPipelineManager?.() },
-        { label: 'Resource Manager', click: () => hooks.onOpenResourceManager?.() },
+        { label: s.pipelineManager, click: () => hooks.onOpenPipelineManager?.() },
+        { label: s.resourceManager, click: () => hooks.onOpenResourceManager?.() },
+        { label: s.turnStats, click: () => hooks.onOpenTurnStats?.() },
+        { label: s.tokenMonitor, click: () => hooks.onOpenTokenMonitor?.() },
         { type: 'separator' },
         { role: 'minimize' },
         // macOS "zoom" = maximize the window frame. Unrelated to content zoom,
         // has no accelerator, and is part of the standard Window menu.
         { role: 'zoom' },
-        ...(isMac
+        ...(mac
           ? [
               { type: 'separator' } as MenuItemConstructorOptions,
               { role: 'front' } as MenuItemConstructorOptions
@@ -336,16 +356,16 @@ export function installApplicationMenu(
     {
       role: 'help',
       submenu: [
-        { label: 'Navide on GitHub', click: () => hooks.onOpenRepo?.() },
-        { label: 'Report an Issue…', click: () => hooks.onReportIssue?.() },
+        { label: s.repo, click: () => hooks.onOpenRepo?.() },
+        { label: s.reportIssue, click: () => hooks.onReportIssue?.() },
         { type: 'separator' },
-        { label: 'Keyboard Shortcuts', click: () => hooks.onShowShortcuts?.() },
+        { label: s.shortcuts, click: () => hooks.onShowShortcuts?.() },
         { type: 'separator' },
         // One entry per page, in the table's order, so the menu and the site
         // can only disagree by editing the table.
         ...LEGAL_ROUTES.map(
           (route): MenuItemConstructorOptions => ({
-            label: LEGAL_LABELS[route],
+            label: s.legal[route],
             click: () => hooks.onOpenLegal?.(route)
           })
         )

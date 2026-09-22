@@ -1,6 +1,6 @@
 {
   "name": "agent-team",
-  "version": "0.2.1",
+  "version": "0.2.8",
   "private": true,
   "author": "Navide Team",
   "description": "Navide: the AI-native engineering environment for one engineer directing multiple coding agents",
@@ -16,7 +16,8 @@
   },
   "scripts": {
     "dev": "pnpm run build:public-packages && vite build --config vite.plans.config.ts && pnpm run build:mini-ide:v2 && pnpm run build:plans:v2 && node scripts/build-plans-v2-backend.mjs --if-needed && pnpm run build:git:v2 && node scripts/stage-official-plugin-artifacts.mjs && electron-vite dev",
-    "build": "pnpm run build:official-plugins && pnpm run build:git:legacy && electron-vite build",
+    "build": "pnpm run build:official-plugins && pnpm run build:git:legacy && pnpm run build:pane-helper && electron-vite build",
+    "build:pane-helper": "node scripts/build-pane-helper.mjs",
     "build:official-plugins": "pnpm run build:public-packages && pnpm run build:mini-ide && pnpm run build:mini-ide:v2 && pnpm run build:plans && pnpm run build:git:v2 && node scripts/stage-official-plugin-artifacts.mjs",
     "build:mini-ide": "vite build --config vite.mini-ide.config.ts",
     "build:mini-ide:v2": "vite build --config plugins/navide-mini-ide/vite.config.ts",
@@ -66,10 +67,6 @@
         "to": "resources/"
       },
       {
-        "from": "backend/dist/agent_team_backend",
-        "to": "bin/agent_team_backend"
-      },
-      {
         "from": "dist-plugins/mini-ide",
         "to": "plugins/mini-ide"
       },
@@ -117,23 +114,56 @@
             ]
           }
         ]
-      }
+      },
+      "extraResources": [
+        {
+          "from": "backend/dist/agent_team_backend",
+          "to": "bin/agent_team_backend"
+        },
+        {
+          "from": "build/pane-helper/Navide Pane.app",
+          "to": "bin/Navide Pane.app"
+        }
+      ]
     },
     "win": {
       "target": "nsis",
-      "icon": "resources/icon.png"
+      "icon": "resources/icon.png",
+      "extraResources": [
+        {
+          "from": "backend/dist/agent_team_backend.exe",
+          "to": "bin/agent_team_backend.exe"
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "Navide",
+      "artifactName": "Navide-${version}-win-${arch}.${ext}"
     },
     "linux": {
       "target": [
         "AppImage",
         "deb"
       ],
-      "icon": "resources/icon.png",
+      "executableName": "navide",
+      "icon": "build/icons",
       "category": "Development",
       "maintainer": "Navide Team <nt.fitproject@gmail.com>",
       "synopsis": "AI-native engineering environment for directing multiple coding agents",
       "description": "Navide is a desktop engineering environment for one engineer directing multiple coding agent CLIs.",
-      "syncDesktopName": true
+      "syncDesktopName": true,
+      "extraResources": [
+        {
+          "from": "backend/dist/agent_team_backend",
+          "to": "bin/agent_team_backend"
+        }
+      ]
+    },
+    "deb": {
+      "packageName": "navide"
     }
   },
   "devDependencies": {
@@ -143,12 +173,12 @@
     "@navide/plugin-ui": "link:packages/plugin-ui",
     "@types/node": "^22",
     "@types/ws": "^8.18.1",
-    "@vitejs/plugin-vue": "^5.2.1",
-    "@vue/test-utils": "^2.5.0",
-    "electron": "^44.2.0",
+    "@vitejs/plugin-vue": "^6.0.9",
+    "@vue/test-utils": "^2.5.1",
+    "electron": "^44.4.3",
     "electron-builder": "^26.16.1",
     "electron-vite": "^3.1.0",
-    "happy-dom": "^20.14.0",
+    "happy-dom": "^20.14.5",
     "typescript": "^5.7.2",
     "vite": "^6.4.3",
     "vite-plugin-monaco-editor": "^1.1.0",
@@ -184,11 +214,11 @@
     "@xterm/addon-webgl": "^0.19.0",
     "@xterm/xterm": "^6.0.0",
     "electron-updater": "^6.8.9",
-    "koffi": "^3.2.1",
+    "koffi": "^3.3.0",
     "mermaid": "^11.17.2",
     "monaco-editor": "^0.55.1",
     "vue-i18n": "11",
     "ws": "^8.21.3",
-    "yaml": "^2.9.0"
+    "yaml": "^2.9.1"
   }
 }

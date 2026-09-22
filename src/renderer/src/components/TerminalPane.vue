@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, inject, nextTick, onMounted, ref, watch } from 'vue'
 import { useTerminal, type ClipboardFailureReason } from '@navide/terminal'
 import { agentProfileFor } from '@navide/plugin-shell'
 import { useNotify, useTheme } from '@navide/plugin-ui/foundation'
@@ -20,6 +20,8 @@ import { i18n } from '@navide/plugin-ui/foundation'
 import { isMacPlatform } from '@navide/plugin-ui/shared'
 import RebuildIcon from './RebuildIcon.vue'
 import UsageBadge from './UsageBadge.vue'
+import CliRiskPill from './CliRiskPill.vue'
+import { cliRiskKey } from '../composables/useResourceUsage'
 import RestoredPanePlaceholder from './RestoredPanePlaceholder.vue'
 
 interface Props {
@@ -70,6 +72,9 @@ interface Props {
   /** Runtime-only login-expired badge — lit when the pane's CLI reported an
    *  expired login; clicking it asks App.vue to re-send the login command. */
   loginExpired?: boolean
+  /** The user muted this pane: no desktop notification and no sound from it.
+   *  Shown as a 🔇 badge; clicking it asks App.vue to unmute. */
+  muted?: boolean
   /** Runtime-only quota badge — lit while this pane's CLI has announced it is
    *  out of quota. `usageLimitUntil` is when it comes back, or null when no
    *  reset time could be resolved (the badge then says so instead of naming a
@@ -98,9 +103,11 @@ interface Props {
 }
 
 const props = defineProps<Props>()
+const cliRisk = inject(cliRiskKey, null)
 const emit = defineEmits<{
   (e: 'set-focus', ev?: MouseEvent): void
   (e: 'minimize'): void
+  (e: 'toggle-mute'): void
   (e: 'rebuild'): void
   (e: 'rebuild-clean'): void
   (e: 'rename', name: string): void
@@ -123,6 +130,9 @@ const emit = defineEmits<{
   /** Login-expired badge clicked — App.vue sends the CLI's login command into
    *  this pane and clears the badge. */
   (e: 'fix-login'): void
+  /** Quota badge clicked and the confirm accepted — App.vue clears the pane's
+   *  quota flag and resumes a loop that was parked on that limit. */
+  (e: 'usage-limit-dismiss'): void
   /** Continue button clicked on a resumed pane — App.vue injects the resume
    *  prompt once so the interrupted work carries on. */
   (e: 'continue-resume'): void
@@ -215,6 +225,10 @@ const terminal = useTerminal(props.paneId, props.terminalPort, {
   onPtyLostWhileDisconnected: () => emit('pty-lost'),
   agentProfileFor,
 })
+// Reattached terminals can keep the backend's old pane id. Actions must use
+// that same backend-owned identity, just like the resource usage projection.
+const cliRiskPaneId = computed(() => cliRisk?.paneIdByKey.value.get(terminal.sessionId.value) ?? props.paneId)
+const cliRiskState = computed(() => cliRisk?.cliRisksByPaneId.value.get(cliRiskPaneId.value))
 const { theme } = useTheme()
 watch(theme, () => terminal.updateXtermTheme())
 
@@ -340,11 +354,15 @@ defineExpose({
   clearNeedsInput: terminal.clearNeedsInput,
   markQuestion: terminal.markQuestion,
   clearQuestion: terminal.clearQuestion,
+  markDeliveredPending: terminal.markDeliveredPending,
+  clearDeliveredPending: terminal.clearDeliveredPending,
   markBufferPosition: terminal.markBufferPosition,
   recleanBuffer: terminal.recleanBuffer,
   flushPendingClean: terminal.flushPendingClean,
   readRenderedText: terminal.readRenderedText,
   readScreenTail: terminal.readScreenTail,
+  // The pane's scrollback for a replacement pane to replay (quota-failover restart).
+  serializeScrollback: terminal.serializeScrollback,
   readLineBeforeCursor: terminal.readLineBeforeCursor,
   fitTerminal: terminal.fitTerminal,
   lockCols: terminal.lockCols,
@@ -545,6 +563,12 @@ function onLoopBadgeClick(e: MouseEvent): void {
   else emit('toggle-loop')
 }
 
+/** The quota badge can be wrong (or already moot) — let the user drop it. */
+function onUsageLimitBadgeClick(): void {
+  if (!window.confirm(i18n.global.t('pane.terminal.usage-limit-dismiss-confirm'))) return
+  emit('usage-limit-dismiss')
+}
+
 onMounted(() => {
   if (containerRef.value) terminal.mount(containerRef.value)
 })
@@ -619,6 +643,13 @@ onMounted(() => {
           >∞</button>
         </PromptSkillPicker>
         <span
+          v-if="muted"
+          class="muted-inline"
+          role="button"
+          :title="$t('pane.terminal.muted-tooltip')"
+          @click.stop="emit('toggle-mute')"
+        ><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8.7 3A6 6 0 0 1 18 8a21.3 21.3 0 0 0 .6 5"></path><path d="M17 17H3s3-2 3-9a4.67 4.67 0 0 1 .3-1.7"></path><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"></path><line x1="2" y1="2" x2="22" y2="22"></line></svg></span>
+        <span
           v-if="loginExpired"
           class="login-expired-inline"
           role="button"
@@ -628,12 +659,22 @@ onMounted(() => {
         <span
           v-if="usageLimitHit"
           class="usage-limit-inline"
+          role="button"
           :title="usageLimitUntil != null
             ? $t('pane.terminal.usage-limit-tooltip', { time: formatLoopTime(usageLimitUntil) })
             : $t('pane.terminal.usage-limit-tooltip-unknown')"
+          @click.stop="onUsageLimitBadgeClick"
         >{{ usageLimitUntil != null
           ? $t('pane.terminal.usage-limit-badge', { time: formatLoopTime(usageLimitUntil) })
           : $t('pane.terminal.usage-limit-badge-unknown') }}</span>
+        <CliRiskPill
+          v-if="cliRisk && cliRiskState?.signals.length && !restoring && onScreen !== false"
+          :pane-id="cliRiskPaneId"
+          :state="cliRiskState"
+          :available="cliRisk.cliRisksAvailable.value"
+          :compact="loginExpired && usageLimitHit"
+          :act="cliRisk.actOnCliRisk"
+        />
         <span
           class="status"
           :data-status="displayStatus"
@@ -756,13 +797,18 @@ onMounted(() => {
   position: absolute;
   top: 5px;
   z-index: 10;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
   background: none;
   border: none;
   color: var(--text-secondary);
   font-size: var(--font-md);
   cursor: pointer;
   box-sizing: border-box;
-  padding: 0 3px;
+  padding: 0;
   line-height: 1;
   border-radius: var(--radius-xs);
   opacity: 1;
@@ -793,6 +839,7 @@ onMounted(() => {
   cursor: default;
 }
 .pane-header {
+  container: cli-pane-header / inline-size;
   display: flex;
   flex-direction: column;
   align-items: stretch;
@@ -841,7 +888,7 @@ onMounted(() => {
   font: inherit;
   font-weight: 600;
   color: var(--text-primary);
-  background: var(--bg-default);
+  background: var(--bg-base);
   border: 1px solid var(--accent-emphasis);
   border-radius: var(--radius-xs);
   padding: 1px 5px;
@@ -884,6 +931,16 @@ onMounted(() => {
   opacity: 1;
   border-color: var(--success-fg);
 }
+.muted-inline {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.muted-inline:hover {
+  color: var(--text-primary);
+}
 .login-expired-inline {
   font-size: var(--font-3xs);
   font-weight: 600;
@@ -900,9 +957,8 @@ onMounted(() => {
 .login-expired-inline:hover {
   border-color: var(--attention-fg);
 }
-/* Quota exhausted. Deliberately louder than the login badge and not a button:
-   a re-login is something the user can do here, waiting out a quota window is
-   not — the badge only says when work can start again. */
+/* Quota exhausted. Deliberately louder than the login badge. Clicking it
+   (after a confirm) dismisses the flag, e.g. when it is stale or moot. */
 .usage-limit-inline {
   font-size: var(--font-3xs);
   font-weight: 600;
@@ -914,7 +970,7 @@ onMounted(() => {
   letter-spacing: 0.2px;
   white-space: nowrap;
   flex-shrink: 0;
-  cursor: default;
+  cursor: pointer;
 }
 .loop-btn {
   font-size: var(--font-3xs);

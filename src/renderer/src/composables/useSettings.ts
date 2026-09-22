@@ -3,27 +3,28 @@ import { i18n } from '@navide/plugin-ui/foundation'
 import { onSettingsChanged, settingsGet, settingsReadiness, settingsSet } from '@navide/plugin-ui/shared'
 
 const LANGUAGE_KEY = 'agent-team:language'
-const SUPPORTED = new Set(['zh-TW', 'en-US'])
+const SUPPORTED = new Set(['zh-TW', 'en-US', 'ja-JP'])
 
 function normalizeLocale(raw: string): string {
   if (/^zh-(TW|Hant|HK)/i.test(raw) || /^zh/i.test(raw)) return 'zh-TW'
   if (/^en/i.test(raw)) return 'en-US'
+  if (/^ja/i.test(raw)) return 'ja-JP'
   return 'zh-TW'
 }
 
-function parseSupportedLocale(raw: unknown): 'zh-TW' | 'en-US' | null {
+function parseSupportedLocale(raw: unknown): 'zh-TW' | 'en-US' | 'ja-JP' | null {
   if (typeof raw !== 'string') return null
   const candidate = raw.trim()
-  if (SUPPORTED.has(candidate)) return candidate as 'zh-TW' | 'en-US'
+  if (SUPPORTED.has(candidate)) return candidate as 'zh-TW' | 'en-US' | 'ja-JP'
   try {
     const decoded = JSON.parse(candidate)
-    return typeof decoded === 'string' && SUPPORTED.has(decoded) ? (decoded as 'zh-TW' | 'en-US') : null
+    return typeof decoded === 'string' && SUPPORTED.has(decoded) ? (decoded as 'zh-TW' | 'en-US' | 'ja-JP') : null
   } catch {
     return null
   }
 }
 
-function readLocal(): 'zh-TW' | 'en-US' | null {
+function readLocal(): 'zh-TW' | 'en-US' | 'ja-JP' | null {
   const v = settingsGet<unknown>(LANGUAGE_KEY, null)
   return parseSupportedLocale(v)
 }
@@ -36,7 +37,7 @@ function writeLocal(value: string): void {
 const initialLocale = readLocal() ?? (i18n.global.locale.value as string)
 const language = ref<string>(initialLocale)
 if (SUPPORTED.has(initialLocale) && i18n.global.locale.value !== initialLocale) {
-  i18n.global.locale.value = initialLocale as 'zh-TW' | 'en-US'
+  i18n.global.locale.value = initialLocale as 'zh-TW' | 'en-US' | 'ja-JP'
 }
 
 let unwatchSettings: (() => void) | null = null
@@ -65,7 +66,7 @@ function loadLanguage(backendFallback?: { language?: string }): void {
   const backend = backendFallback?.language ? parseSupportedLocale(backendFallback.language) : null
   const next = backend ?? normalizeLocale(navigator.language)
   language.value = next
-  i18n.global.locale.value = next as 'zh-TW' | 'en-US'
+  i18n.global.locale.value = next as 'zh-TW' | 'en-US' | 'ja-JP'
   // Promote the workspace's dormant backup only once the settings store is
   // authoritative. Before the snapshot lands, readLocal() returns null for a
   // preference the user does have, and this write would bury it — permanently,

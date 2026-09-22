@@ -39,14 +39,13 @@ mean the "keep force_redraw" argument rests on a smaller set than it used to.
 
 from __future__ import annotations
 
-import fcntl
 import os
-import pty
+
 import select
 import shutil
 import struct
 import sys
-import termios
+
 import time
 
 import pytest
@@ -71,10 +70,13 @@ pytestmark = pytest.mark.skipif(
     reason="opt-in vendor probe; set AGENT_TEAM_VENDOR_PROBE=1 to run",
 )
 
+# Real POSIX PTY behaviour: the module is skipped where these do not exist.
+fcntl = pytest.importorskip("fcntl")
+pty = pytest.importorskip("pty")
+termios = pytest.importorskip("termios")
 
 def _winsize(fd: int, rows: int, cols: int) -> None:
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
-
 
 def _read_for(fd: int, seconds: float) -> bytes:
     out = b""
@@ -91,7 +93,6 @@ def _read_for(fd: int, seconds: float) -> bytes:
             break
         out += chunk
     return out
-
 
 def _read_until_quiet(fd: int, quiet: float, hard: float) -> bytes:
     """Wait for the CLI's first output, then read until it goes quiet.
@@ -123,7 +124,6 @@ def _read_until_quiet(fd: int, quiet: float, hard: float) -> bytes:
         out += chunk
         last = time.monotonic()
     return out
-
 
 @pytest.mark.parametrize("vendor", RESPONDING_VENDORS)
 def test_vendor_repaints_on_the_force_redraw_nudge(vendor: str) -> None:

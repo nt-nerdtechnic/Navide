@@ -49,5 +49,11 @@ export const SPEC = {
   awaitingInput: {
     pattern: /\(Y\)es\/\(N\)o(\/\(A\)ll)?(\/\(S\)kip all)?(\/\(D\)on't ask again)? \[[^\]]+\]:\s*$/,
   },
-  hint: 'generalist'
+  hint: 'generalist',
+  // No quotaExhausted on purpose (aider 0.86.2, exceptions.py): its
+  // RateLimitError text folds a 429 and an exhausted quota into one sentence,
+  // BudgetExceededError is litellm's local budget, and neither reaches the
+  // chat history. Exhaustion cannot be attributed, so the failover only ever
+  // notifies for aider; this stays a Phase A todo until the vendor prints a
+  // distinguishable notice.
 } as const satisfies AgentSpec

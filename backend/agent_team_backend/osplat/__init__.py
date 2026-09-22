@@ -52,5 +52,52 @@ platform_id: str = (
 
 paths: spec.Paths = _impl.paths
 resource_probe: spec.ResourceProbe = _impl.resource_probe
+process_tree: spec.ProcessTree = _impl.process_tree
+terminal_backend: spec.TerminalBackend = _impl.terminal_backend
 
-__all__ = ["impl_name", "paths", "resource_probe", "spec"]
+__all__ = [
+    "impl_name",
+    "paths",
+    "process_tree",
+    "resource_probe",
+    "spec",
+    "terminal_backend",
+]
+
+# ---- appended seams ----------------------------------------------------------
+
+secret_files: spec.SecretFiles = _impl.secret_files
+
+__all__ += ["secret_files"]
+
+scheduler: spec.Scheduler = _impl.scheduler
+
+__all__ += ["scheduler"]
+
+scripts: spec.Scripts = _impl.scripts
+
+#: Both shells' renderers, keyed by the name the consumer uses for them.
+#:
+#: For the one caller that has to write text for a shell this machine is not
+#: running: Copilot's hook file declares a `bash` and a `powershell` spelling
+#: side by side and chooses at fire time, so the file is correct wherever it
+#: is read rather than only where it was written. Everything else wants
+#: `scripts`, which is this machine's.
+from . import _posix_paths, _windows  # noqa: E402
+
+scripts_by_shell: dict[str, spec.Scripts] = {
+    "bash": _posix_paths.scripts,
+    "powershell": _windows.scripts,
+}
+
+__all__ += ["scripts", "scripts_by_shell"]
+
+from . import cli_network  # noqa: E402
+
+collect_cli_connections = {
+    "darwin": cli_network.collect_lsof,
+    "linux": cli_network.collect_ss,
+    "win32": cli_network.unsupported,
+}[platform_id]
+
+__all__ += ["collect_cli_connections"]

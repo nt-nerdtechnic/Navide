@@ -150,6 +150,19 @@ describe('every entry point restores a minimized pane before focusing it', () =>
     }
   })
 
+  it('sends a carried row of the main-window lists through the sidebar jump', () => {
+    // The lists carry descendants that are minimized or live on another tab or
+    // workspace; a plain click on one must switch, restore and focus exactly
+    // like the sidebar, while a modifier click only selects.
+    const click = fn('onAuxiliaryListClick')
+    expect(click).toContain('if (tabVisiblePanes.value.some((p) => p.id === paneId)) {')
+    expect(click).toContain('void onSidebarFocusPane(paneId)')
+    const modifiers = click.slice(click.indexOf('if (ev.shiftKey)'), click.indexOf('void onSidebarFocusPane(paneId)'))
+    expect(modifiers).not.toContain('revealPaneTab')
+    expect(modifiers).not.toContain('restorePane')
+    expect(modifiers).not.toContain('selectPane')
+  })
+
   it('restores only after the workspace switch has been agreed', () => {
     // ensurePaneWorkspaceOnScreen can answer false — the pane's workspace is
     // not this window's to show. Un-minimizing a pane the jump then abandons

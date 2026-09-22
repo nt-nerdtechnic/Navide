@@ -62,16 +62,18 @@ describe('ControlPane – Plans sidebar tab', () => {
     const btns = wrapper.findAll('.sidebar-tabs .tab-btn')
     // agents, pipeline, explorer, factory-installed Git, retained Plans
     expect(btns).toHaveLength(5)
-    expect(btns[4].attributes('title')).toContain('Plans')
+    // Select on the tab id, not the title: the title is composed from a
+    // locale key and this file stubs $t to echo keys, so matching its text
+    // would assert against the stub rather than against the product.
+    expect(btns[4].attributes('data-tab')).toBe('plans')
   })
 
   it('mounts the packaged Plans left contribution on the canonical tab', async () => {
     await wrapper.setProps({ pluginContributions: [plansContribution] } as never)
     expect(wrapper.findComponent({ name: 'PlanPane' }).exists()).toBe(false)
-    const plansButton = wrapper.findAll('.sidebar-tabs .tab-btn')
-      .find((button) => button.attributes('title')?.includes('Plans'))
-    expect(plansButton).toBeDefined()
-    await plansButton!.trigger('click')
+    const plansButton = wrapper.find('.sidebar-tabs .tab-btn[data-tab="plans"]')
+    expect(plansButton.exists()).toBe(true)
+    await plansButton.trigger('click')
     await wrapper.vm.$nextTick()
     const planHost = wrapper.findAllComponents({ name: 'PluginRegionHost' })
       .find((host) => host.props('contribution').contributionKey === 'navide.plans.left')
@@ -84,9 +86,8 @@ describe('ControlPane – Plans sidebar tab', () => {
       pluginContributions: [plansContribution],
       legacyPlansRecovery: true,
     } as never)
-    const plansButton = wrapper.findAll('.sidebar-tabs .tab-btn')
-      .find((button) => button.attributes('title')?.includes('Plans'))
-    await plansButton!.trigger('click')
+    const plansButton = wrapper.find('.sidebar-tabs .tab-btn[data-tab="plans"]')
+    await plansButton.trigger('click')
     await wrapper.vm.$nextTick()
 
     expect(wrapper.find('[data-plans-legacy-recovery-label]').exists()).toBe(true)

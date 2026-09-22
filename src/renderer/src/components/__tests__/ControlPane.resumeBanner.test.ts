@@ -32,7 +32,7 @@ function existingProject(pipelineId: string) {
     stagesCompleted: 2,
     nextStageIndex: 2,
     updatedAt: '2026-09-09',
-    projectFile: '/tmp/ws/.agent-team/project.json',
+    workspacePath: '/tmp/ws',
     pipelineId,
     runCount: 1,
   }

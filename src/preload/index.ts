@@ -13,6 +13,7 @@ import type {
 } from '../shared/executionPolicy'
 import type { LegacyPlansPreferenceProjection } from '../shared/plansPreferences'
 import { LEGAL_LINKS, type LegalRoute } from '../shared/legalLinks'
+import type { NewWorkspaceResult } from '../shared/workspaceCreate'
 
 /** Which Electron-owned cache groups to clear. Never touches user state. */
 export interface ClearElectronCachesOptions {
@@ -240,7 +241,7 @@ contextBridge.exposeInMainWorld('agentTeam', {
     ipcRenderer.send('menu:setRecents', list),
   pickWorkspace: (defaultPath?: string): Promise<string | null> =>
     ipcRenderer.invoke('workspace:pick', defaultPath),
-  newWorkspace: (): Promise<string | null> => ipcRenderer.invoke('workspace:new'),
+  newWorkspace: (): Promise<NewWorkspaceResult> => ipcRenderer.invoke('workspace:new'),
   getHomeDir: (): Promise<string> => ipcRenderer.invoke('app:home-dir'),
   listOpenWorkspaces: (): Promise<string[]> => ipcRenderer.invoke('workspace:listOpen'),
   focusWorkspaceWindow: (workspacePath: string): Promise<boolean> =>
@@ -290,6 +291,11 @@ contextBridge.exposeInMainWorld('agentTeam', {
     const listener = (): void => handler()
     ipcRenderer.on('menu:open-resource-manager', listener)
     return () => ipcRenderer.removeListener('menu:open-resource-manager', listener)
+  },
+  onOpenTurnStats: (handler: () => void): (() => void) => {
+    const listener = (): void => handler()
+    ipcRenderer.on('menu:open-turn-stats', listener)
+    return () => ipcRenderer.removeListener('menu:open-turn-stats', listener)
   },
   openPlansWindow: (args: { workspace_path: string; rel_path?: string }): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke('window:openPlans', {
@@ -543,7 +549,7 @@ contextBridge.exposeInMainWorld('agentTeam', {
     ipcRenderer.invoke('settings:cdp-debug-read'),
   writeCdpDebugConfig: (config: { enabled: boolean; port: number }): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('settings:cdp-debug-write', config),
-  notify: (args: { paneId?: string; title: string; body?: string }): Promise<{ ok: boolean }> =>
+  notify: (args: { paneId?: string; title: string; body?: string; silent?: boolean }): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke('window:notify', args),
   // Plan execute dispatch: the plan window hands an approved plan to a CLI
   // agent. Main focuses the workspace's main window and forwards the payload;

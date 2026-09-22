@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { mount, type VueWrapper } from '@vue/test-utils'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // A real settings store, so the pane is exercised end to end: a click writes,
 // the write comes back through the composable, and the row repaints. The only
@@ -40,12 +40,32 @@ function mountPane(): VueWrapper {
 describe('StatusBadgeSettingsPane', () => {
   let wrapper: VueWrapper | undefined
 
+  beforeEach(() => { i18n.global.locale.value = 'zh-TW' })
+
   afterEach(() => {
     wrapper?.unmount()
     wrapper = undefined
     resetAllStatusBadgePrefs()
     h.store.clear()
     __reloadStatusBadgePrefsForTest()
+  })
+
+  it('edits Japanese labels and previews the active interface language', async () => {
+    i18n.global.locale.value = 'ja-JP'
+    wrapper = mountPane()
+    const row = wrapper.findAll('.sb-row')[PANE_STATUS_ORDER.indexOf('idle')]
+    const ja = row.findAll('.sb-field input')[2]
+    expect(ja.attributes('placeholder')).toBe(i18n.global.t('paneStatus.idle'))
+    await ja.setValue('待機中')
+    await ja.trigger('change')
+    expect(row.find('.sb-preview').text()).toBe('待機中')
+    expect(JSON.parse(String(h.store.get('agentTeam.statusBadges')))).toEqual({ idle: { labelJa: '待機中' } })
+    i18n.global.locale.value = 'en-US'
+    await wrapper.vm.$nextTick()
+    expect(row.find('.sb-preview').text()).toBe(i18n.global.t('paneStatus.idle'))
+    await ja.setValue('')
+    await ja.trigger('change')
+    expect(JSON.parse(String(h.store.get('agentTeam.statusBadges')))).toEqual({})
   })
 
   it('lists every status, once', () => {

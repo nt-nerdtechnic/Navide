@@ -10,6 +10,11 @@ nothing).
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+import pytest
+
+from agent_team_backend import app as app_module
 from agent_team_backend.app import _login_spawn_command
 from agent_team_backend.cli_vendors.registry import VENDORS
 
@@ -27,10 +32,22 @@ def test_drops_yolo_flags_that_do_not_apply_to_auth() -> None:
     assert _login_spawn_command("claude", command) == "claude auth login"
 
 
-def test_empty_args_strip_flags_without_appending() -> None:
-    # grok has no auth subcommand: its TUI starts first-run auth on a bare
-    # launch. Empty must not behave like None (which would keep the flags).
-    assert _login_spawn_command("grok", "grok --yolo") == "grok"
+def test_empty_args_strip_flags_without_appending(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`""` means "sign-in IS the bare binary": strip the flags, append nothing.
+
+    No shipping vendor declares `""` today (grok did while Navide targeted the
+    community grok-cli, which had no auth subcommand; the official xAI CLI has
+    `grok login`). The branch is still live, so it is driven through a stub
+    rather than pinned to whichever vendor happens to have that shape — a
+    vendor fact that has already changed once.
+    """
+    monkeypatch.setattr(
+        app_module, "cli_vendor", lambda _key: SimpleNamespace(login_command_args="")
+    )
+
+    assert _login_spawn_command("stub", "stub --yolo") == "stub"
 
 
 def test_vendor_without_a_sign_in_invocation_is_left_alone() -> None:
@@ -66,7 +83,9 @@ def test_every_declared_trigger_still_produces_a_command() -> None:
     # rewrite, so a typo'd or misplaced value cannot pass silently.
     declared = [k for k, s in VENDORS.items() if s.login_command_args is not None]
 
-    assert set(declared) == {"claude", "codex", "kimi", "grok", "kilo"}
+    assert set(declared) == {
+        "claude", "codex", "kimi", "grok", "kilo", "copilot", "muse", "mcode", "opencode",
+    }
     for key in declared:
         rewritten = _login_spawn_command(key, f"{key} --some-flag")
         assert rewritten.startswith(key), key

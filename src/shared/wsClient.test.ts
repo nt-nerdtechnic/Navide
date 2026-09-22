@@ -218,6 +218,60 @@ describe('createWsClient', () => {
     expect(FakeWebSocket.instances).toHaveLength(2)
   })
 
+  it('a superseded socket no longer emits messages', () => {
+    const c = makeClient()
+    c.connect(URL)
+    const first = FakeWebSocket.instances[0]
+    first.open()
+    const seen: unknown[] = []
+    c.on('agent_msg.deliver', (p) => seen.push(p))
+
+    c.reconnectNow('system resumed')
+    const second = FakeWebSocket.instances[1]
+    second.open()
+
+    // The old TCP side can still deliver a broadcast after the swap; only
+    // the active socket may reach the listeners, or every event lands twice.
+    first.push('agent_msg.deliver')
+    expect(seen).toHaveLength(0)
+    second.push('agent_msg.deliver')
+    expect(seen).toHaveLength(1)
+  })
+
+  it('connect() to the same url keeps a socket that is already open or connecting', () => {
+    const c = makeClient()
+    c.connect(URL)
+    c.connect(URL) // second caller racing the first (init() vs backend:changed)
+    expect(FakeWebSocket.instances).toHaveLength(1)
+    const sock = FakeWebSocket.instances[0]
+    sock.open()
+    c.connect(URL)
+    expect(FakeWebSocket.instances).toHaveLength(1)
+    expect(sock.closed).toBe(false)
+    expect(statuses).toEqual(['connecting', 'connected'])
+  })
+
+  it('connect() to another url closes the socket it replaces and rejects its in-flight requests', async () => {
+    const c = makeClient()
+    c.connect(URL)
+    const first = FakeWebSocket.instances[0]
+    first.open()
+    const seen: unknown[] = []
+    c.on('git.changed', (p) => seen.push(p))
+    const inflight = c.send('fs.read_file', {}).catch((e: Error) => e)
+
+    c.connect('ws://127.0.0.1:9999/ws')
+    expect(FakeWebSocket.instances).toHaveLength(2)
+    expect(first.closed).toBe(true)
+    await expect(inflight).resolves.toMatchObject({ message: 'socket superseded' })
+
+    first.push('git.changed')
+    expect(seen).toHaveLength(0)
+    // The replaced socket's close must not schedule a competing reconnect.
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(FakeWebSocket.instances).toHaveLength(2)
+  })
+
   it('ignores reconnectNow after dispose', () => {
     const c = makeClient()
     c.connect(URL)

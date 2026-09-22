@@ -15,7 +15,13 @@ from typing import Any
 
 import pytest
 
-from agent_team_backend import app
+from agent_team_backend import app, osplat
+
+# Real `git worktree` calls through the seam; see test_git_service.py.
+pytestmark = pytest.mark.skipif(
+    osplat.paths.resolve_program("git") is None,
+    reason="git is not resolvable through osplat.paths on this host",
+)
 
 
 class FakeWebSocket:

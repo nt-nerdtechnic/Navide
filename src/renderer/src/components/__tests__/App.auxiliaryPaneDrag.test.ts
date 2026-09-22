@@ -24,7 +24,7 @@ function elementOpeningTag(className: string): string {
 
 function expectPaneDragSurface(openingTag: string): void {
   expect(openingTag).toContain('draggable="true"')
-  expect(openingTag).toContain('@dragstart="onAuxiliaryPaneDragStart($event, p.id)"')
+  expect(openingTag).toContain('@dragstart="onAuxiliaryPaneDragStart($event, p.id, ')
   expect(openingTag).toContain('@dragend="onAuxiliaryPaneDragEnd"')
   expect(openingTag).toContain('@dragover="onAuxiliaryPaneDragOver($event, p.id)"')
   expect(openingTag).toContain('@drop.prevent="onAuxiliaryPaneDrop($event, p.id)"')

@@ -11,6 +11,7 @@ import {
 } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import type { HostStorageSnapshotIdentity } from './pluginStorage'
+import { syncDirectorySync } from './fsSync'
 
 export const PLANS_PLUGIN_ID = 'navide.plans'
 
@@ -200,12 +201,7 @@ export class PlansStorageLifecycleSelector {
       descriptor = null
       this.fileOps.renameSync(temporaryPath, this.recordPath)
       temporaryPath = ''
-      const parentDescriptor = this.fileOps.openSync(parentPath, constants.O_RDONLY)
-      try {
-        this.fileOps.fsyncSync(parentDescriptor)
-      } finally {
-        this.fileOps.closeSync(parentDescriptor)
-      }
+      syncDirectorySync(parentPath, { ops: this.fileOps })
       return true
     } catch (error) {
       if (descriptor !== null) {

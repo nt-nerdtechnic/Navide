@@ -27,6 +27,13 @@
   --font-row-title: 15px;
   --font-row-desc: 13px;
 
+  /* Height of the title bar every window draws for itself. Defined here, with
+     the tokens, rather than in one window's stylesheet: the Plans window does
+     not load App.vue's styles, so a definition there was only a single source
+     of truth for the windows that happened to import it, and the next window
+     to need the number would have written 38px again. */
+  --titlebar-height: 38px;
+
   /* ── Font families ──────────────────────────────────────────── */
   --font-ui: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', 'PingFang TC', sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -67,12 +74,26 @@
    *   999-2100        → --z-popover (menus / popovers / tooltips)
    *   5000-9560       → --z-modal   (dialogs and their scrims)
    *   9998-10100      → --z-toast   (notifications, always on top)
+   *   above all bands → --z-window-controls (not a band; see below)
    */
   --z-base: 1;
   --z-sticky: 100;
   --z-popover: 1000;
   --z-modal: 2000;
   --z-toast: 3000;
+
+  /*
+   * Not a band the app may draw into — the window's own minimise / maximise /
+   * close buttons, which Windows and Linux make us draw ourselves. macOS paints
+   * its traffic lights over the window, above every layer the page can reach;
+   * these have to behave the same way or an open dialog leaves the window with
+   * no way to be closed but Alt+F4. Deliberately far above --z-toast so the
+   * gap is legible as "this is not part of the stack"; the invariant is
+   * enforced by windowControlsStacking.test.ts, which resolves every
+   * fixed-position z-index in the renderer (calc() and tokens included) and
+   * fails if any of them reaches this.
+   */
+  --z-window-controls: 9000;
 
   /* ── Motion (2 durations + 1 curve) ─────────────────────────── */
   --motion-fast: 120ms; /* hover / active / color changes */

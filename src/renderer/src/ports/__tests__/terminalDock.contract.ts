@@ -32,6 +32,7 @@ function createRequest(): TerminalCreateRequest {
     metadata: { origin: 'contract' },
     outputLogFile: '/tmp/output.log',
     loginProfileId: 'profile-1',
+    isLogin: true,
     replacesTerminalId: 'old-session',
   }
 }
@@ -46,6 +47,8 @@ export function runTerminalDockContract(createHarness: () => TerminalDockContrac
       expect(harness.port.shell.value).toBe('bash')
 
       await harness.port.input('session-1', 'hello', 11)
+      await harness.port.input('session-1', 'typed', undefined, { human: true })
+      await harness.port.input('session-1', 'pasted', undefined, { human: false })
       await harness.port.create(createRequest(), 22)
       await harness.port.cancelCreate('pane-1', 'generation-1')
       await harness.port.reattach(['session-1'], 120, 32)
@@ -59,6 +62,9 @@ export function runTerminalDockContract(createHarness: () => TerminalDockContrac
 
       expect(harness.sent).toEqual([
         { type: 'terminal.input', payload: { terminal_session_id: 'session-1', data: 'hello' }, timeoutMs: 11 },
+        // Only a true flag reaches the wire — the backend keys off its presence.
+        { type: 'terminal.input', payload: { terminal_session_id: 'session-1', data: 'typed', human: true }, timeoutMs: undefined },
+        { type: 'terminal.input', payload: { terminal_session_id: 'session-1', data: 'pasted' }, timeoutMs: undefined },
         {
           type: 'terminal.create',
           payload: {
@@ -73,6 +79,7 @@ export function runTerminalDockContract(createHarness: () => TerminalDockContrac
             metadata: { origin: 'contract' },
             output_log_file: '/tmp/output.log',
             login_profile_id: 'profile-1',
+            is_login: true,
             replaces_terminal_id: 'old-session',
           },
           timeoutMs: 22,
@@ -87,6 +94,13 @@ export function runTerminalDockContract(createHarness: () => TerminalDockContrac
         { type: 'agent_msg.list', payload: {} },
         { type: 'fs.stat_path', payload: { path: '/workspace/src/app.ts' }, timeoutMs: 33 },
       ])
+    })
+
+    it('sends quota lineage as top-level claims without using replacement-kill semantics', async () => {
+      const harness = createHarness()
+      await harness.port.create({ ...createRequest(), replacesTerminalId: null, quotaTransactionId: 'tx-1', quotaOriginalPaneId: 'original-pane' }, 22)
+      expect(harness.sent[0].payload).toMatchObject({ quota_transaction_id: 'tx-1', quota_original_pane_id: 'original-pane', replaces_terminal_id: null })
+      expect(harness.sent[0].payload.metadata).toEqual({ origin: 'contract' })
     })
 
     it('delivers output and exit events through named subscriptions with cleanup', () => {

@@ -14,6 +14,7 @@ import pytest
 
 from agent_team_backend import app as app_mod
 from agent_team_backend import onboarding_deps as ob
+from agent_team_backend import osplat
 from agent_team_backend.onboarding_deps import Dep
 
 
@@ -22,20 +23,28 @@ _ALIASED = Dep("cursor", "Cursor CLI", "", "agent_cli", ["agent", "--version"],
                install_cmd="curl https://example.invalid/install | bash")
 
 
-def _which(available: dict[str, str]):
-    return lambda name: available.get(Path(name).name)
+def _installed(monkeypatch: pytest.MonkeyPatch, available: dict[str, str]) -> None:
+    """What the launch seam finds on PATH, keyed by the bare command name.
+
+    One patch covers both callers: `onboarding_deps` and `app` now ask
+    `osplat.paths.resolve_program` rather than `shutil.which` each.
+    """
+    monkeypatch.setattr(
+        osplat.paths, "resolve_program",
+        lambda name, *, path=None: available.get(Path(name).name),
+    )
 
 
 # ── alternate executables ────────────────────────────────────────────────────
 def test_resolve_prefers_the_primary_name(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(ob.shutil, "which", _which({
+    _installed(monkeypatch, {
         "agent": "/opt/bin/agent", "cursor-agent": "/opt/bin/cursor-agent",
-    }))
+    })
     assert ob.resolve_executable(_ALIASED) == "/opt/bin/agent"
 
 
 def test_resolve_falls_back_to_the_legacy_name(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(ob.shutil, "which", _which({"cursor-agent": "/opt/bin/cursor-agent"}))
+    _installed(monkeypatch, {"cursor-agent": "/opt/bin/cursor-agent"})
     assert ob.resolve_executable(_ALIASED) == "/opt/bin/cursor-agent"
 
 
@@ -44,7 +53,7 @@ def test_detect_finds_a_cli_installed_under_its_legacy_name(
 ) -> None:
     # The whole point: a machine carrying only `cursor-agent` used to be told
     # "not installed" and offered an install it did not need.
-    monkeypatch.setattr(ob.shutil, "which", _which({"cursor-agent": "/opt/bin/cursor-agent"}))
+    _installed(monkeypatch, {"cursor-agent": "/opt/bin/cursor-agent"})
     probed: list[list[str]] = []
 
     def run(cmd, *_a, **_k):
@@ -62,14 +71,13 @@ def test_registry_declares_the_cursor_alias() -> None:
 
 
 def test_deps_without_an_alias_are_unaffected(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(ob.shutil, "which", _which({}))
+    _installed(monkeypatch, {})
     assert ob.resolve_executable(ob.DEPS_BY_ID["claude"]) == ""
 
 
 # ── spawn command rewriting ──────────────────────────────────────────────────
 def test_spawn_command_switches_to_the_installed_alias(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(app_mod.shutil, "which", _which({"agent": "/opt/bin/agent"}))
-    monkeypatch.setattr(ob.shutil, "which", _which({"agent": "/opt/bin/agent"}))
+    _installed(monkeypatch, {"agent": "/opt/bin/agent"})
     command = ["/bin/zsh", "-ilc", "cursor-agent --resume abc"]
     assert app_mod._command_with_installed_cli_alias("cursor", command) == [
         "/bin/zsh", "-ilc", "/opt/bin/agent --resume abc",
@@ -80,16 +88,54 @@ def test_spawn_command_untouched_when_the_requested_name_exists(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     available = {"cursor-agent": "/opt/bin/cursor-agent", "agent": "/opt/bin/agent"}
-    monkeypatch.setattr(app_mod.shutil, "which", _which(available))
-    monkeypatch.setattr(ob.shutil, "which", _which(available))
+    _installed(monkeypatch, available)
     command = ["/bin/zsh", "-ilc", "cursor-agent --resume abc"]
     assert app_mod._command_with_installed_cli_alias("cursor", command) == command
+
+
+def test_spawn_command_matches_the_name_as_windows_spells_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Windows PATH lookup answers `cursor-agent.cmd`; the rewrite has to
+    recognise that as the pinned name, or the spawn it exists to fix is left
+    pointing at a name this machine does not have."""
+    from agent_team_backend.osplat import _windows
+
+    monkeypatch.setattr(app_mod.osplat, "paths", _windows.paths)
+    monkeypatch.setattr(
+        _windows.paths, "resolve_program",
+        lambda name, *, path=None: r"C:\npm\agent.cmd" if Path(name).stem == "agent" else None,
+    )
+    monkeypatch.setattr(ob, "resolve_executable", lambda _dep: r"C:\npm\agent.cmd")
+    command = ["cmd.exe", "/d", "/c", r"cursor-agent.cmd --resume abc"]
+    assert app_mod._command_with_installed_cli_alias("cursor", command) == [
+        "cmd.exe", "/d", "/c", r"C:\npm\agent.cmd --resume abc",
+    ]
+
+
+def test_spawn_command_matches_the_bare_pinned_name_on_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pane command names the CLI without an extension, which is not one of
+    the candidates Windows tries on PATH — the rewrite still has to see it."""
+    from agent_team_backend.osplat import _windows
+
+    monkeypatch.setattr(app_mod.osplat, "paths", _windows.paths)
+    monkeypatch.setattr(
+        _windows.paths, "resolve_program",
+        lambda name, *, path=None: r"C:\npm\agent.cmd" if Path(name).stem == "agent" else None,
+    )
+    monkeypatch.setattr(ob, "resolve_executable", lambda _dep: r"C:\npm\agent.cmd")
+    command = ["cmd.exe", "/d", "/c", "cursor-agent --resume abc"]
+    assert app_mod._command_with_installed_cli_alias("cursor", command) == [
+        "cmd.exe", "/d", "/c", r"C:\npm\agent.cmd --resume abc",
+    ]
 
 
 def test_spawn_command_untouched_for_a_cli_without_aliases(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(app_mod.shutil, "which", _which({}))
+    _installed(monkeypatch, {})
     command = ["/bin/zsh", "-ilc", "claude --dangerously-skip-permissions"]
     assert app_mod._command_with_installed_cli_alias("claude", command) == command
 
@@ -97,15 +143,13 @@ def test_spawn_command_untouched_for_a_cli_without_aliases(
 def test_spawn_command_untouched_when_nothing_is_installed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(app_mod.shutil, "which", _which({}))
-    monkeypatch.setattr(ob.shutil, "which", _which({}))
+    _installed(monkeypatch, {})
     command = ["/bin/zsh", "-ilc", "cursor-agent"]
     assert app_mod._command_with_installed_cli_alias("cursor", command) == command
 
 
 def test_spawn_probe_accepts_the_legacy_binary(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(app_mod.shutil, "which", _which({"cursor-agent": "/opt/bin/cursor-agent"}))
-    monkeypatch.setattr(ob.shutil, "which", _which({"cursor-agent": "/opt/bin/cursor-agent"}))
+    _installed(monkeypatch, {"cursor-agent": "/opt/bin/cursor-agent"})
     monkeypatch.setattr(
         app_mod.subprocess, "run",
         lambda cmd, *_a, **_k: subprocess.CompletedProcess(cmd, 0, "2026.1.5", ""),
@@ -118,19 +162,19 @@ def test_spawn_probe_accepts_the_legacy_binary(monkeypatch: pytest.MonkeyPatch) 
 def test_install_result_names_the_dep(monkeypatch: pytest.MonkeyPatch) -> None:
     # The dialog renders label + docs link from the result itself, so every
     # branch has to carry them — including the ones that fail.
-    monkeypatch.setattr(ob.shutil, "which", lambda _x: "/opt/homebrew/bin/brew")
+    monkeypatch.setattr(ob.osplat.paths, "resolve_program", lambda _x, *, path=None: "/opt/homebrew/bin/brew")
     result = ob.install_dep("claude")
-    assert result["label"] == "Claude Code"
+    assert result["label"] == "Claude Code (Anthropic)"
     assert result["docs_url"] == ob.DEPS_BY_ID["claude"].docs_url
     assert result["dep_id"] == "claude"
 
 
 def test_missing_bootstrap_result_still_names_the_dep(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(ob.shutil, "which", lambda _x: None)
+    monkeypatch.setattr(ob.osplat.paths, "resolve_program", lambda _x, *, path=None: None)
     result = ob.install_dep("claude")
     assert result["ok"] is False
     assert result["missing_requirements"] == ["npm"]
-    assert result["label"] == "Claude Code" and result["docs_url"]
+    assert result["label"] == "Claude Code (Anthropic)" and result["docs_url"]
 
 
 def test_curl_installers_declare_their_bootstrap_binary() -> None:
@@ -196,7 +240,7 @@ def test_status_reports_the_dismissals(tmp_path: Path, monkeypatch: pytest.Monke
     _isolate_state(monkeypatch, tmp_path)
     monkeypatch.setattr(ob, "detect_dep", lambda dep, quick=False: {"id": dep.id, "group": dep.group, "status": "missing"})
     monkeypatch.setattr(ob, "detect_ollama_status", lambda: {"models": [], "detail": "", "reachable": False})
-    monkeypatch.setattr(ob, "_refresh_path_from_login_shell", lambda force=False: None)
+    monkeypatch.setattr(ob, "_refresh_path_from_login_shell", lambda *_a, **_kw: None)
     monkeypatch.setattr(ob, "build_cli_health", lambda deps: {})
     ob.set_install_prompt_dismissed("kilo", True)
     assert ob.get_status()["install_prompt_dismissed"] == ["kilo"]
@@ -211,43 +255,88 @@ class _FakeWebSocket:
         self.sent.append(payload)
 
 
-async def _run_create(session: object, monkeypatch: pytest.MonkeyPatch, reason: str) -> None:
+class _StopHere(Exception):
+    """Sentinel ending the impl just past the probe block, which is all these
+    tests drive. A spawn the probe lets through would otherwise run on."""
+
+
+# What each probe outcome looks like on the command shape that produces it: a
+# miss RAISES only when the spawn execs the CLI directly (a bare argv — the
+# plugin ai.cli.start path, a Windows agent pane) and DEGRADES when a shell
+# stands in front of it. Pairing the outcome with its real shape keeps these
+# tests from exercising a combination production never builds.
+_PROBE_CASES = {
+    "raise_not_found": (["qwen"], "raise", "not_found"),
+    "degrade_not_found": (["/bin/zsh", "-ilc", "qwen"], "degrade", "not_found"),
+    "nonzero_exit": (["/bin/zsh", "-ilc", "qwen"], "raise", "nonzero_exit"),
+}
+
+
+async def _run_create(session: object, monkeypatch: pytest.MonkeyPatch, case: str) -> None:
     """Drive terminal.create's impl to the point where the spawn probe runs."""
     from agent_team_backend import ws_handlers
+
+    command, outcome, reason = _PROBE_CASES[case]
 
     async def noop(*_a: object, **_k: object) -> None:
         return None
 
-    def boom(*_a: object, **_k: object) -> None:
-        raise app_mod.AgentCliProbeError("no executable", {"reason": reason})
+    def probe(*_a: object, **_k: object) -> dict[str, object]:
+        if outcome == "degrade":
+            return {"agent_key": "qwen", "reason": reason, "degraded": True, "binary_path": ""}
+        raise app_mod.AgentCliProbeError("probe failed", {"reason": reason})
+
+    def stop(*_a: object, **_k: object) -> dict[str, str]:
+        raise _StopHere
 
     monkeypatch.setattr(app_mod, "_ensure_fresh_path_for_spawn", noop)
     monkeypatch.setattr(app_mod, "_command_with_persisted_cli_binary", lambda _k, c: c)
     monkeypatch.setattr(app_mod, "_command_with_installed_cli_alias", lambda _k, c: c)
-    monkeypatch.setattr(app_mod, "_probe_agent_cli_for_spawn", boom)
+    monkeypatch.setattr(app_mod, "_probe_agent_cli_for_spawn", probe)
+    monkeypatch.setattr(ob, "spawn_env_for", stop)
     await ws_handlers._terminal_create_impl(
         session,  # type: ignore[arg-type]
         "m1", "terminal.create",
-        {"pane_id": "pane-1", "agent_key": "qwen", "command": "qwen", "cwd": "/tmp"},
+        {"pane_id": "pane-1", "agent_key": "qwen", "command": command, "cwd": "/tmp"},
         {}, "gen-1",
     )
+
+
+def _missing_events(session: object) -> list[dict]:
+    return [m for m in session.websocket.sent if m["type"] == "cli.missing"]  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio
 async def test_spawn_probe_miss_announces_the_cli_before_failing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # The window needs this to open the guided install: a probe miss happens
-    # BEFORE any PTY exists, so exit 127 never fires and nothing else would say
-    # what went wrong beyond red text in a dead pane.
+    # The window needs this to open the guided install: a probe miss on a spawn
+    # that execs the CLI directly happens BEFORE any PTY exists, so exit 127
+    # never fires and nothing else would say what went wrong beyond red text in
+    # a dead pane.
     session = app_mod.Session(_FakeWebSocket())  # type: ignore[arg-type]
     with pytest.raises(app_mod.AgentCliProbeError):
-        await _run_create(session, monkeypatch, "not_found")
-    events = [m for m in session.websocket.sent if m["type"] == "cli.missing"]  # type: ignore[attr-defined]
+        await _run_create(session, monkeypatch, "raise_not_found")
+    events = _missing_events(session)
     assert len(events) == 1
     assert events[0]["payload"] == {
-        "agent_key": "qwen", "label": "Qwen Code", "pane_id": "pane-1", "reason": "not_found",
+        "agent_key": "qwen", "label": "Qwen Code (Alibaba Cloud)", "pane_id": "pane-1", "reason": "not_found",
     }
+
+
+@pytest.mark.asyncio
+async def test_a_spawn_let_through_on_a_miss_does_not_announce_it_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The window opens the install wizard on cli.missing unconditionally. When
+    # the probe misses but a shell stands in front of the CLI, the spawn goes
+    # ahead and the CLI may well run — announcing it missing would put the
+    # wizard over a working pane. A real absence exits 127 instead, and the
+    # window's terminal.exit handler offers the install then.
+    session = app_mod.Session(_FakeWebSocket())  # type: ignore[arg-type]
+    with pytest.raises(_StopHere):  # got past the probe block, into the spawn
+        await _run_create(session, monkeypatch, "degrade_not_found")
+    assert _missing_events(session) == []
 
 
 @pytest.mark.asyncio
@@ -259,7 +348,7 @@ async def test_other_probe_failures_do_not_offer_an_install(
     session = app_mod.Session(_FakeWebSocket())  # type: ignore[arg-type]
     with pytest.raises(app_mod.AgentCliProbeError):
         await _run_create(session, monkeypatch, "nonzero_exit")
-    assert not [m for m in session.websocket.sent if m["type"] == "cli.missing"]  # type: ignore[attr-defined]
+    assert _missing_events(session) == []
 
 
 @pytest.mark.asyncio

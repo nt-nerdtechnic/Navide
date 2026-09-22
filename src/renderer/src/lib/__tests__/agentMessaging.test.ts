@@ -10,6 +10,8 @@ import {
   TURN_SILENCE_MS,
   TURN_STALE_MS,
   VENDORS_WITHOUT_TURN_END,
+  VENDORS_WITHOUT_USER_TEXT,
+  turnEndConsumesDeliveries,
   parseMessages,
   parseSpawns,
   renderSpawnKickoff,
@@ -313,6 +315,22 @@ describe('renderEnvelope', () => {
     expect(parseMessages(env)).toEqual([])
   })
 
+  it('tells the recipient when not to reply, on the same single line', () => {
+    // Regression guard for the ack ping-pong: one report produced four
+    // messages in 52s (report, bare-line restatement of the same report, ack,
+    // ack of the ack) because the hint only taught HOW to reply. The hint must
+    // name the two no-reply cases and point at kind="ack", without growing a
+    // second line that could parse as a marker.
+    const env = renderEnvelope('claude-1', 'hello', { correlationId: 'abc123:7' })
+    const lines = env.split('\n')
+    expect(lines).toHaveLength(3)
+    const hint = lines[2]
+    expect(hint).toContain('沒有新資訊就不要回信')
+    expect(hint).toContain('kind="ack"')
+    expect(hint).toContain('已用 cli_send 送出的內容不要再用 MSG 區塊重述')
+    expect(parseMessages(env)).toEqual([])
+  })
+
   it('omits the reply hint when disabled', () => {
     const env = renderEnvelope('claude-1', 'hello', { includeReplyHint: false })
     expect(env).toBe(`${MSG_ENVELOPE_PREFIX} claude-1\nhello`)
@@ -576,16 +594,41 @@ describe('isTurnInFlight', () => {
 
   it('lists exactly the vendors whose logs carry no end-of-turn record', () => {
     // The test is where the boundary comes from, not whether a turn_complete
-    // arrives — every reader emits one. grok/kimi/pi/qwen synthesize theirs
-    // from a quiet window (_TURN_IDLE_SECONDS / _TURN_IDLE_MS in their backend
-    // vendor files) — inference one layer down. Vendors that read a real record
-    // stay out even when it is indirect: opencode (and kilo, on its reader) a
-    // `step-finish` reason, antigravity a completed step carrying a reply,
-    // cursor an assistant row in store.db. See turnEndInferredFromSilence in
-    // agents/types.ts.
+    // arrives — every reader emits one. kimi/pi/qwen synthesize theirs from a
+    // quiet window (_TURN_IDLE_MS in their backend vendor files) — inference
+    // one layer down. Vendors that read a real record stay out even when it is
+    // indirect: opencode (and kilo, on its reader) a `step-finish` reason,
+    // antigravity a completed step carrying a reply, cursor an assistant row in
+    // store.db, and grok a `turn_completed` record — the official xAI CLI
+    // writes one where the community grok-cli wrote none, which is why grok
+    // left this list. See turnEndInferredFromSilence in agents/types.ts.
     expect([...VENDORS_WITHOUT_TURN_END].sort()).toEqual([
-      'grok', 'kimi', 'pi', 'qwen',
+      'kimi', 'pi', 'qwen',
     ])
+  })
+})
+
+describe('turnEndConsumesDeliveries', () => {
+  // A delivered-pending message is normally released by the recipient's own
+  // user record (the envelope, one per message). Only a vendor whose reader
+  // never surfaces user text falls back to "the next turn end consumed
+  // everything" — and that must never be claude: it ends the current turn
+  // BEFORE dequeuing, so its turn_complete arrives with the message still
+  // queued. A pane that has only ever run slash commands or image prompts
+  // gets text="" on every user record, which is why this is a static set and
+  // not something learned from the events.
+  it('is empty today — every shipped reader carries user text', () => {
+    expect([...VENDORS_WITHOUT_USER_TEXT]).toEqual([])
+  })
+
+  it('never lets a turn end clear claude deliveries', () => {
+    expect(turnEndConsumesDeliveries('claude')).toBe(false)
+    expect(turnEndConsumesDeliveries('codex')).toBe(false)
+  })
+
+  it('does for a vendor listed as having no user text', () => {
+    expect(turnEndConsumesDeliveries('claude', new Set(['claude']))).toBe(true)
+    expect(turnEndConsumesDeliveries('codex', new Set(['claude']))).toBe(false)
   })
 })
 

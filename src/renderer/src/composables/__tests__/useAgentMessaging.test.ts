@@ -456,6 +456,24 @@ describe('useAgentMessaging', () => {
       expect(row?.correlation_id).toBe('pz:mcp:abc')
     })
 
+    it('accepts one broadcast of a message once, however many times it arrives', () => {
+      // A window holding two sockets to the backend (a connect() race) gets
+      // every broadcast twice. The second copy carries the same msg_key, and
+      // it must not become a second queued row — that is one message injected
+      // twice into the pane, and two rows in the log under one correlation id.
+      m.registerPane('p3', 'claude', 'reader')
+      const args = {
+        msgKey: 'pz:mcp:dup',
+        targetPaneId: 'p3',
+        fromDisplay: 'alpha/sender',
+        content: 'run the tests',
+      }
+      expect(m.acceptRemoteMessage(args)).toBe(true)
+      expect(m.acceptRemoteMessage(args)).toBe(false)
+      expect(appended.flat().filter((r) => r.correlation_id === 'pz:mcp:dup')).toHaveLength(1)
+      expect(m.queuedCountFor('p3')).toBe(1)
+    })
+
     it('updates on the delivering → delivered transition', async () => {
       const msg = m.sendMessage('claude-1', 'codex-1', 'hi')
       m.pump()

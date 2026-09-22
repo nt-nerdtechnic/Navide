@@ -1,37 +1,34 @@
 <script setup lang="ts">
-// Read-only reference for inter-CLI messaging, shown inside Settings → 說明.
-// Static mirror of the messaging system; the limits below are the real
-// constants from useAgentMessaging.ts — keep them in sync if those change.
+import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 
-interface AddressRow {
-  form: string
-  meaning: string
-  example: string
-}
+import { MSG_ENVELOPE_PREFIX } from '../lib/agentMessaging'
+import MockEnvelopePane from './helpMocks/MockEnvelopePane.vue'
+import MockFigure from './helpMocks/MockFigure.vue'
+import MockMessageLog from './helpMocks/MockMessageLog.vue'
+import MockPaneCard from './helpMocks/MockPaneCard.vue'
 
-interface GuardRow {
-  limit: string
-  value: string
-  why: string
-}
-
-interface TroubleRow {
-  symptom: string
-  cause: string
-  fix: string
-}
+// Read-only reference for inter-CLI messaging, shown inside Settings → Help.
+// Static mirror of the messaging system; all prose lives in the locale files
+// under `settings.help.messaging.*` — the limits quoted there are the real
+// constants from useAgentMessaging.ts, so keep them in sync if those change.
 
 interface CoverageRow {
   cli: string
-  send: string
+  send: 'both' | 'protocolOnly' | 'none'
 }
 
-// Sending needs one of the two routes, and every vendor has at least one.
+// Sending needs one of the two routes. Fourteen of the fifteen vendors have
+// at least one; mcode has neither.
 //
-// The output protocol needs Navide to read the agent's turn text: all 14
-// readers now put the reply on `turn_complete` as `text=`, and the parser
-// (agentMessaging.ts) is vendor-agnostic — App.vue hands it `ev.text` with no
-// vendor check — so the protocol route is open everywhere.
+// The output protocol needs Navide to read the agent's turn text: the 14
+// readers in log_readers/ put the reply on `turn_complete` as `text=`, and the
+// parser (agentMessaging.ts) is vendor-agnostic — App.vue hands it `ev.text`
+// with no vendor check — so the protocol route is open wherever a reader
+// exists. mcode is the one vendor with no reader at all
+// (log_readers/mcode.py is a documented placeholder: its conversations live in
+// SQLite, and the row payloads cannot be modelled without an authenticated
+// session), so nothing ever reaches the parser for an mcode pane.
 //
 // The MCP tools are wired at spawn for the 10 vendors whose CLI offers a way
 // in: a launch flag (Claude Code, Codex, Copilot, Qwen), one env var carrying
@@ -39,394 +36,415 @@ interface CoverageRow {
 // config directory (Kimi, Grok, Antigravity). Cursor is the exception that
 // only reads a workspace file, so its wiring writes `.cursor/mcp.json` (and
 // excludes it from git). Aider, Muse and Pi have no MCP surface at all
-// (base.py says so outright); Droid is simply not wired yet.
+// (base.py says so outright); Droid and mcode are simply not wired yet.
 //
 // Receiving is unaffected throughout — that is text injected into the
-// terminal, and it works for every CLI.
+// terminal, and it works for every CLI, mcode included.
 const coverage: CoverageRow[] = [
-  { cli: 'Claude Code', send: 'MCP 工具 ＋ 輸出協定' },
-  { cli: 'Codex', send: 'MCP 工具 ＋ 輸出協定' },
-  { cli: 'Copilot CLI', send: 'MCP 工具 ＋ 輸出協定' },
-  { cli: 'Qwen Code', send: 'MCP 工具 ＋ 輸出協定' },
-  { cli: 'OpenCode', send: 'MCP 工具 ＋ 輸出協定' },
-  { cli: 'Kilo Code', send: 'MCP 工具 ＋ 輸出協定' },
-  { cli: 'Kimi Code', send: 'MCP 工具 ＋ 輸出協定' },
-  { cli: 'Grok CLI', send: 'MCP 工具 ＋ 輸出協定' },
-  { cli: 'Antigravity CLI', send: 'MCP 工具 ＋ 輸出協定' },
-  { cli: 'Cursor CLI', send: 'MCP 工具 ＋ 輸出協定' },
-  { cli: 'Aider', send: '僅輸出協定' },
-  { cli: 'Droid', send: '僅輸出協定' },
-  { cli: 'Muse Code', send: '僅輸出協定' },
-  { cli: 'Pi', send: '僅輸出協定' },
+  { cli: 'Claude Code', send: 'both' },
+  { cli: 'Codex', send: 'both' },
+  { cli: 'Copilot CLI', send: 'both' },
+  { cli: 'Qwen Code', send: 'both' },
+  { cli: 'OpenCode', send: 'both' },
+  { cli: 'Kilo Code', send: 'both' },
+  { cli: 'Kimi Code', send: 'both' },
+  { cli: 'Grok CLI', send: 'both' },
+  { cli: 'Antigravity CLI', send: 'both' },
+  { cli: 'Cursor CLI', send: 'both' },
+  { cli: 'Aider', send: 'protocolOnly' },
+  { cli: 'Droid', send: 'protocolOnly' },
+  { cli: 'Muse Code', send: 'protocolOnly' },
+  { cli: 'Pi', send: 'protocolOnly' },
+  { cli: 'MiniMax Code', send: 'none' },
 ]
 
-const addressing: AddressRow[] = [
-  {
-    form: '<pane 名稱>',
-    meaning: '只找自己這個工作區裡的 pane',
-    example: 'reviewer',
-  },
-  {
-    form: '<資料夾名>/<pane 名稱>',
-    meaning: '指定另一個工作區視窗裡的 pane',
-    example: 'Agent-Team/reviewer',
-  },
-  {
-    form: '<路徑後綴>/<pane 名稱>',
-    meaning: '資料夾同名時用來消歧',
-    example: 'work/proj/reviewer',
-  },
-  {
-    form: '<絕對路徑>/<pane 名稱>',
-    meaning: '最精確的寫法',
-    example: '/Users/me/proj/reviewer',
-  },
-]
+// Row keys for the prose tables; each row's text is looked up under
+// `settings.help.messaging.<section>.<table>.<key>` so both locales stay in
+// parity and the row order is fixed here. Only the examples stay in code —
+// they are literal addresses, not prose.
+const addressing = [
+  { key: 'pane', example: 'reviewer' },
+  { key: 'folder', example: 'Agent-Team/reviewer' },
+  { key: 'suffix', example: 'work/proj/reviewer' },
+  { key: 'absolute', example: '/Users/me/proj/reviewer' },
+  { key: 'device', example: 'mac-studio/Agent-Team/reviewer' },
+] as const
 
-const guards: GuardRow[] = [
-  {
-    limit: '同一組「來源 → 目標」的頻率',
-    value: '每 60 秒最多 5 則',
-    why: '兩個 agent 互相回覆可能無限往返',
-  },
-  {
-    limit: '單一 pane 的待送佇列',
-    value: '最多 10 則',
-    why: '對方忙不過來時不要無限堆積',
-  },
-  {
-    limit: '送出後等不到結果',
-    value: '30 分鐘後標為失敗',
-    why: '對方視窗被關掉時，訊息不會永遠卡在「佇列中」',
-  },
-  {
-    limit: '暫停開關',
-    value: '訊息面板',
-    why: '你隨時可以喊停，訊息會排隊但不送出',
-  },
-]
+const spawnLimits = ['children', 'total', 'depth'] as const
 
-const troubleshooting: TroubleRow[] = [
+const guards = ['rate', 'queue', 'timeout', 'pause'] as const
+
+const troubleshooting = [
+  'noTool',
+  'staleId',
+  'unknownWorkspace',
+  'ambiguous',
+  'stuckQueued',
+  'kickoffFailed',
+  'deviceOffline',
+  'rateLimit',
+  'paused',
+] as const
+
+const { t } = useI18n()
+
+// ── Mock screenshots ────────────────────────────────────────────────────────
+// Two HTML pictures, drawn from the components they depict rather than
+// captured. The ASCII diagram in section 1 stays: it is a SEQUENCE (who acts,
+// in what order), which a picture of one instant cannot express — these two
+// show what the message LOOKS like and where it lands, which the sequence
+// cannot. They answer different questions, so both earn their place.
+
+const MARKS = ['\u2460', '\u2461', '\u2462']
+
+function mockLegend(figure: string, rows: string[]): { mark: string; label: string; text: string }[] {
+  return rows.map((row, i) => ({
+    mark: MARKS[i],
+    label: t(`settings.help.messaging.mock.${figure}.legend.${row}.label`),
+    text: t(`settings.help.messaging.mock.${figure}.legend.${row}.text`),
+  }))
+}
+
+/** Sample name, kept in the locale files so a picture never hard-codes prose. */
+function sample(key: string): string {
+  return t(`settings.help.messaging.mock.sample.${key}`)
+}
+
+/** The status word the pane pill and the sidebar dot share. */
+function statusWord(status: string): string {
+  return t(`paneStatus.${status}`)
+}
+
+const deliveryLegend = computed(() => mockLegend('delivery', ['envelope', 'status']))
+const panelLegend = computed(() => mockLegend('panel', ['actions', 'route', 'status']))
+
+// The envelope exactly as agentMessaging.ts:334 assembles it: the prefix
+// constant, the sender handle, the body, then the reply-format line.
+const envelopeLines = computed(() => [
+  { text: `${MSG_ENVELOPE_PREFIX} ${sample('pane1')}`, dim: true },
+  { text: sample('body') },
+  { text: sample('hint'), dim: true },
+])
+
+const logActions = computed(() => [t('msg.pause'), t('msg.clear-log')])
+
+const logRows = computed(() => [
   {
-    symptom: 'agent 說它沒有傳訊的工具',
-    cause: '那個 pane 是在功能上線前開的（MCP 工具是 pane 啟動當下接上去的），或那家 CLI 不在接上 MCP 的十家之列',
-    fix: '關掉那個 pane 重開；若那家 CLI 本來就沒接 MCP（Aider／Droid／Muse Code／Pi），改請它用 ---MSG--- 輸出協定',
+    from: sample('pane1'),
+    to: sample('pane2'),
+    time: sample('t1'),
+    status: 'delivered' as const,
+    statusLabel: t('msg.status-delivered'),
+    preview: sample('body'),
   },
   {
-    symptom: '提示 pane id 已失效（stale）',
-    cause: 'pane 被拆到別的視窗、或視窗重新載入過，身分換了但 CLI 還握著舊的',
-    fix: '重開那個 pane；或改用 ---MSG--- 協定，它每次都用當下的身分',
+    from: sample('pane2'),
+    to: sample('pane1'),
+    time: sample('t2'),
+    status: 'delivering' as const,
+    statusLabel: t('msg.status-delivering'),
+    preview: sample('preview2'),
   },
   {
-    symptom: 'unknown workspace',
-    cause: '那個資料夾名沒有對應的工作區視窗開著',
-    fix: '確認對方視窗開著，或先請 agent 列出可傳送的對象',
+    from: sample('pane1'),
+    toWs: sample('workspaceB'),
+    to: sample('pane2'),
+    time: sample('t3'),
+    status: 'queued' as const,
+    statusLabel: t('msg.status-queued'),
+    badge: t('msg.cross-workspace-badge'),
+    preview: sample('preview3'),
   },
-  {
-    symptom: 'ambiguous workspace / ambiguous target',
-    cause: '兩個工作區資料夾同名，或同一工作區有兩個同名 pane',
-    fix: '改用完整路徑；同名 pane 則改掉其中一個的名稱',
-  },
-  {
-    symptom: '訊息一直停在「佇列中」',
-    cause: '對方正在跑長任務，還沒閒下來',
-    fix: '正常現象，等它做完；真的卡住 30 分鐘會自動標為失敗',
-  },
-  {
-    symptom: '提示超出頻率限制',
-    cause: '同一組來源 → 目標 60 秒內超過 5 則',
-    fix: '通常代表兩個 agent 在無效往返，去看看它們在聊什麼',
-  },
-  {
-    symptom: '訊息面板一則都沒動',
-    cause: '投遞被暫停了',
-    fix: '在訊息面板按「恢復投遞」',
-  },
-]
+])
 </script>
 
 <template>
   <div class="cmh">
-    <p class="cmh-intro">
-      Navide 裡的 CLI agent 可以把指令送給另一個 CLI agent — 同一個工作區、或另一個工作區視窗都行。
-      每個 CLI pane 都有一個<strong>名稱</strong>，那個名稱就是它的<strong>位址</strong>，
-      也就是你在 pane 標題上看到的字。
-    </p>
+    <p class="cmh-intro" v-html="$t('settings.help.messaging.intro')"></p>
 
     <div class="cmh-callout">
-      <div class="cmh-callout-title">最重要的一件事</div>
-      <div class="cmh-callout-text">
-        你不需要背任何語法。直接用中文交代就好，例如
-        「<em>請你叫 reviewer 去跑測試</em>」，agent 會自己查位址、自己送出。
-        下面的語法是給你除錯時對照用的。
-      </div>
+      <div class="cmh-callout-title">{{ $t('settings.help.messaging.callout.title') }}</div>
+      <div class="cmh-callout-text" v-html="$t('settings.help.messaging.callout.text')"></div>
     </div>
 
-    <!-- ── 運作方式 ─────────────────────────────────────────────────── -->
+    <!-- ── How it works ─────────────────────────────────────────────── -->
     <section class="cmh-section">
-      <h2 class="cmh-h2">怎麼運作</h2>
-      <pre class="cmh-flow">pane「架構師」                Navide                pane「reviewer」
-     │                                                    │
-     │  「叫 reviewer 跑測試」 ──►  查名冊、確認對方閒著        │
-     │                              ──────────────────►  收到並自動執行
-     │                                                    │
-     │  ◄───────────  對方回訊也走同一條路  ◄────────────────┘</pre>
-      <p class="cmh-p">
-        訊息是<strong>自動送出</strong>的，不是貼進輸入框等人按 Enter — 對方會直接開始做。
-      </p>
+      <h2 class="cmh-h2">{{ $t('settings.help.messaging.s1.title') }}</h2>
+      <pre class="cmh-flow">{{ $t('settings.help.messaging.s1.flow') }}</pre>
+      <p class="cmh-p" v-html="$t('settings.help.messaging.s1.p1')"></p>
     </section>
 
-    <!-- ── 兩條路 ───────────────────────────────────────────────────── -->
+    <!-- ── The two routes ───────────────────────────────────────────── -->
     <section class="cmh-section">
-      <h2 class="cmh-h2">兩條路</h2>
-      <p class="cmh-p">
-        送出訊息有兩種方式，遞送機制完全相同，差別在 agent 怎麼知道自己有這個能力、
-        以及<strong>哪些 CLI 支援</strong>（見下一節）。
-      </p>
+      <h2 class="cmh-h2">{{ $t('settings.help.messaging.s2.title') }}</h2>
+      <p class="cmh-p" v-html="$t('settings.help.messaging.s2.p1')"></p>
 
       <div class="cmh-card">
         <div class="cmh-card-head">
-          <span class="cmh-card-title">MCP 工具</span>
-          <span class="cmh-tag">手動開的 pane 用這個</span>
+          <span class="cmh-card-title">{{ $t('settings.help.messaging.s2.mcp.title') }}</span>
+          <span class="cmh-tag">{{ $t('settings.help.messaging.s2.mcp.tag') }}</span>
         </div>
-        <p class="cmh-p">
-          agent 啟動時就會在自己的工具清單裡看到，不需要任何人教它。
-          它可以先查詢有哪些對象在線上，再把指令送過去。
-        </p>
-        <p class="cmh-p">工具有三個：</p>
+        <p class="cmh-p">{{ $t('settings.help.messaging.s2.mcp.p1') }}</p>
+        <p class="cmh-p">{{ $t('settings.help.messaging.s2.mcp.p2') }}</p>
         <ul class="cmh-list">
-          <li><strong>查詢對象</strong> — 有誰在線上、位址怎麼寫、對方現在是不是忙碌中。</li>
-          <li><strong>送出指令</strong> — 把任意文字送給指定的 pane。</li>
-          <li>
-            <strong>開新 agent 並派工</strong> — 請 Navide 開一個新的 CLI pane、指定用哪家 CLI、
-            給它任務。新 pane 完成後應該會用訊息回報給呼叫者，但那是子 agent 自己輸出的，
-            不是 Navide 的保證：呼叫者忙碌時會排隊，子 agent 沒照格式輸出時則不會送達。
-          </li>
+          <li v-html="$t('settings.help.messaging.s2.mcp.tools.list')"></li>
+          <li v-html="$t('settings.help.messaging.s2.mcp.tools.send')"></li>
+          <li v-html="$t('settings.help.messaging.s2.mcp.tools.spawn')"></li>
+          <li v-html="$t('settings.help.messaging.s2.mcp.tools.ack')"></li>
+          <li v-html="$t('settings.help.messaging.s2.mcp.tools.pending')"></li>
         </ul>
-        <p class="cmh-note">
-          十四家裡有 <strong>十家</strong>接上了這組工具（見下一節的表）。沒接上的是
-          Aider、Droid、Muse Code、Pi，它們改走下面的輸出協定。
-        </p>
+        <p class="cmh-note" v-html="$t('settings.help.messaging.s2.mcp.note')"></p>
       </div>
 
       <div class="cmh-card">
         <div class="cmh-card-head">
-          <span class="cmh-card-title">輸出協定</span>
-          <span class="cmh-tag">流程（pipeline）的 pane 自動具備</span>
+          <span class="cmh-card-title">{{ $t('settings.help.messaging.s2.proto.title') }}</span>
+          <span class="cmh-tag">{{ $t('settings.help.messaging.s2.proto.tag') }}</span>
         </div>
-        <p class="cmh-p">agent 在回覆裡輸出這種裸文字區塊，Navide 會攔下來當作訊息：</p>
-        <pre class="cmh-code">---MSG-START--- to: reviewer
-幫我跑一下 pnpm test:run，把失敗清單回報給我
----MSG-END---</pre>
-        <p class="cmh-note">
-          to: 可以跟 ---MSG-START--- 寫在同一行，也可以單獨寫在它<strong>正下方那一行</strong>；
-          再往下的 to: 就會被當成內容。---MSG-START--- 與 ---MSG-END--- 這兩行必須頂格、不可縮排，
-          也不可以放在 markdown 的程式碼區塊裡，否則不會被辨識，而且不會有任何錯誤提示。
-          流程的 slot 在開場時就會被告知這個協定；手動開的 pane 不會，
-          但你可以把上面這段直接貼給它——前提是那個 CLI 在下表裡支援輸出協定。
-        </p>
+        <p class="cmh-p">{{ $t('settings.help.messaging.s2.proto.p1') }}</p>
+        <pre class="cmh-code">{{ $t('settings.help.messaging.s2.proto.code') }}</pre>
+        <p class="cmh-note" v-html="$t('settings.help.messaging.s2.proto.note')"></p>
       </div>
     </section>
 
-    <!-- ── 支援範圍 ─────────────────────────────────────────────────── -->
+    <!-- ── Which CLIs can send ──────────────────────────────────────── -->
     <section class="cmh-section">
-      <h2 class="cmh-h2">哪些 CLI 送得出訊息</h2>
-      <p class="cmh-p">
-        <strong>所有 CLI pane 都收得到訊息</strong>——那是 Navide 直接把文字打進終端機，跟 CLI 種類無關。
-        <strong>主動送出也是十四家都可以</strong>，差別只在它手上有哪條路：
-      </p>
+      <h2 class="cmh-h2">{{ $t('settings.help.messaging.s3.title') }}</h2>
+      <p class="cmh-p" v-html="$t('settings.help.messaging.s3.p1')"></p>
       <div class="cmh-tablewrap">
         <table class="cmh-table">
           <thead>
-            <tr><th>CLI</th><th>能主動送訊嗎</th></tr>
+            <tr>
+              <th>{{ $t('settings.help.messaging.s3.table.cli') }}</th>
+              <th>{{ $t('settings.help.messaging.s3.table.send') }}</th>
+            </tr>
           </thead>
           <tbody>
             <tr v-for="row in coverage" :key="row.cli">
               <td>{{ row.cli }}</td>
-              <td class="cmh-supported">{{ row.send }}</td>
+              <td class="cmh-supported">{{ $t(`settings.help.messaging.s3.sendModes.${row.send}`) }}</td>
             </tr>
           </tbody>
         </table>
       </div>
-      <p class="cmh-note">
-        <strong>十四家都送得出訊息</strong>，差別只在走哪條路。輸出協定每家都通——Navide
-        讀得到各家 agent「講完一段話」以及它講了什麼。MCP 工具則要那家 CLI 提供接入點
-        （啟動參數、一個帶整份設定的環境變數，或一份只給這個 pane 用的設定目錄鏡像），
-        Aider、Droid、Muse Code、Pi 目前沒有，所以它們只走輸出協定。
-      </p>
-      <p class="cmh-note">
-        兩個實務上的但書：<strong>Antigravity</strong> 在「agent 反問你」的那個回合送不出訊息
-        （那個回合不帶回覆文字），一般回答的回合正常；<strong>Qwen、Pi、Grok、Kimi</strong>
-        沒有明確的「回合結束」訊號，Navide 靠靜默推斷，所以送出時機會晚一些。
-      </p>
+      <p class="cmh-note" v-html="$t('settings.help.messaging.s3.note1')"></p>
+      <p class="cmh-note" v-html="$t('settings.help.messaging.s3.note2')"></p>
     </section>
 
-    <!-- ── 定址 ─────────────────────────────────────────────────────── -->
+    <!-- ── Addressing ───────────────────────────────────────────────── -->
     <section class="cmh-section">
-      <h2 class="cmh-h2">怎麼指定對方</h2>
+      <h2 class="cmh-h2">{{ $t('settings.help.messaging.s4.title') }}</h2>
       <div class="cmh-tablewrap">
         <table class="cmh-table">
           <thead>
-            <tr><th>寫法</th><th>意思</th><th>例子</th></tr>
+            <tr>
+              <th>{{ $t('settings.help.messaging.s4.table.form') }}</th>
+              <th>{{ $t('settings.help.messaging.s4.table.meaning') }}</th>
+              <th>{{ $t('settings.help.messaging.s4.table.example') }}</th>
+            </tr>
           </thead>
           <tbody>
-            <tr v-for="row in addressing" :key="row.form">
-              <td><code>{{ row.form }}</code></td>
-              <td>{{ row.meaning }}</td>
+            <tr v-for="row in addressing" :key="row.key">
+              <td><code>{{ $t(`settings.help.messaging.s4.addressing.${row.key}.form`) }}</code></td>
+              <td>{{ $t(`settings.help.messaging.s4.addressing.${row.key}.meaning`) }}</td>
               <td><code>{{ row.example }}</code></td>
             </tr>
           </tbody>
         </table>
       </div>
       <ul class="cmh-list">
-        <li><strong>不帶斜線就永遠出不了自己的工作區。</strong>想跨專案一定要明寫。</li>
-        <li><strong>找不到或有歧義一律拒絕，不猜。</strong>把指令送到錯的 CLI，比不送更糟。</li>
-        <li><strong>廣播（<code>all</code>）不會跨工作區。</strong>跨專案永遠是明確指名的動作。</li>
+        <li v-html="$t('settings.help.messaging.s4.list.noSlash')"></li>
+        <li v-html="$t('settings.help.messaging.s4.list.ambiguous')"></li>
+        <li v-html="$t('settings.help.messaging.s4.list.broadcast')"></li>
+        <li v-html="$t('settings.help.messaging.s4.list.device')"></li>
       </ul>
     </section>
 
-    <!-- ── 時機 ─────────────────────────────────────────────────────── -->
+    <!-- ── Timing ───────────────────────────────────────────────────── -->
     <section class="cmh-section">
-      <h2 class="cmh-h2">對方什麼時候會收到</h2>
-      <p class="cmh-p">
-        不是立刻。Navide 會等對方<strong>真的閒下來</strong>才打字進去，避免打斷它正在做的事：
-      </p>
+      <h2 class="cmh-h2">{{ $t('settings.help.messaging.s5.title') }}</h2>
+      <p class="cmh-p" v-html="$t('settings.help.messaging.s5.p1')"></p>
       <ul class="cmh-list">
-        <li>對方的 CLI 還活著，而且已經過了啟動階段</li>
-        <li>沒有正在跑的回合</li>
-        <li>最近 2 秒沒有任何輸出</li>
+        <li>{{ $t('settings.help.messaging.s5.list.alive') }}</li>
+        <li>{{ $t('settings.help.messaging.s5.list.noTyping') }}</li>
+        <li>{{ $t('settings.help.messaging.s5.list.noTurn') }}</li>
+        <li>{{ $t('settings.help.messaging.s5.list.quiet') }}</li>
       </ul>
-      <p class="cmh-p">
-        條件不滿足就先排隊，滿足了自動送出。所以對方正在跑長任務時，你的訊息會等它做完 — 這是刻意的。
-        對方收到的訊息開頭會標明來源，它才知道要回覆給誰。
-      </p>
-      <p class="cmh-note">
-        少數 CLI（Qwen、Pi、Cursor）的紀錄裡沒有「回合結束」這個訊號，Navide 無從得知它們何時做完，
-        改以「安靜 20 秒」當作結束。所以送給這幾種 CLI 的訊息可能會多等一會兒。
-      </p>
+      <p class="cmh-p">{{ $t('settings.help.messaging.s5.p2') }}</p>
+      <p class="cmh-note">{{ $t('settings.help.messaging.s5.note') }}</p>
+
+      <!-- Both ends of one message. The envelope is quoted because Navide
+           writes it; the transcripts either side stay blank because a CLI's
+           own output is not ours to invent. -->
+      <MockFigure
+        :caption="$t('settings.help.messaging.mock.delivery.caption')"
+        :legend="deliveryLegend"
+      >
+        <div class="cmh-mock-pair">
+          <MockPaneCard
+            :title="sample('pane1')"
+            status="idle"
+            :status-label="statusWord('idle')"
+            :lines="3"
+          />
+          <MockEnvelopePane
+            :title="sample('pane2')"
+            status="running"
+            :status-label="statusWord('running')"
+            :lines="envelopeLines"
+            :body-mark="MARKS[0]"
+            :mark="MARKS[1]"
+            caret
+            focus
+          />
+        </div>
+      </MockFigure>
     </section>
 
-    <!-- ── 你看得到什麼 ─────────────────────────────────────────────── -->
+    <!-- ── What you see ─────────────────────────────────────────────── -->
     <section class="cmh-section">
-      <h2 class="cmh-h2">你在畫面上看得到什麼</h2>
+      <h2 class="cmh-h2">{{ $t('settings.help.messaging.s6.title') }}</h2>
       <ul class="cmh-list">
-        <li>
-          <strong>狀態列的「訊息」按鈕</strong> — 開啟「CLI 互傳訊息」面板，
-          看每一則的來源、目標、狀態與內容；跨工作區的會多一個徽章。也可以在這裡暫停投遞。
-        </li>
-        <li>
-          <strong>收到跨工作區指令時</strong> — 目標視窗會跳出提示，讓你知道這段指令不是你自己下的。
-        </li>
-        <li>
-          <strong>輸入框打 <code>@</code></strong> — 跳出可選名單，包含其他工作區視窗的位址。
-        </li>
-        <li>
-          <strong>把 pane 拖到另一個 pane 上</strong> — 游標剛好停在 <code>@</code> 後面會插入對方的位址；
-          否則貼上對方的畫面內容摘要。
-        </li>
+        <li v-html="$t('settings.help.messaging.s6.list.panel')"></li>
+        <li v-html="$t('settings.help.messaging.s6.list.crossWorkspace')"></li>
+        <li v-html="$t('settings.help.messaging.s6.list.mention')"></li>
+        <li v-html="$t('settings.help.messaging.s6.list.drag')"></li>
+        <li v-html="$t('settings.help.messaging.s6.list.wake')"></li>
       </ul>
+
+      <!-- The panel those list items point at. -->
+      <MockFigure
+        :caption="$t('settings.help.messaging.mock.panel.caption')"
+        :legend="panelLegend"
+      >
+        <MockMessageLog
+          :title="$t('msg.panel-title')"
+          :actions="logActions"
+          :rows="logRows"
+          :mark="MARKS[0]"
+        />
+      </MockFigure>
     </section>
 
-    <!-- ── 開新 agent ───────────────────────────────────────────────── -->
+    <!-- ── Spawning a new agent ─────────────────────────────────────── -->
     <section class="cmh-section">
-      <h2 class="cmh-h2">請 agent 開一個新 agent</h2>
-      <p class="cmh-p">
-        除了傳訊息，agent 還可以請 Navide<strong>開一個新的 CLI pane 並指派任務</strong>——
-        適合把工作拆開平行處理，或交給另一家更適合的 CLI。你一樣只要用中文交代，例如
-        「<em>開一個 codex 來審查這份 PR</em>」。
-      </p>
+      <h2 class="cmh-h2">{{ $t('settings.help.messaging.s7.title') }}</h2>
+      <p class="cmh-p" v-html="$t('settings.help.messaging.s7.p1')"></p>
       <ul class="cmh-list">
-        <li>新 pane 的名稱就是它的位址，取角色名最好用。</li>
-        <li>任務完成後，新 pane 會<strong>主動用訊息回報</strong>給開它的那個 agent。</li>
-        <li>
-          被拒絕的原因<strong>只跟寫錯有關</strong>：CLI 名稱不存在、名稱重複或不合法、
-          任務空白、指定了那家 CLI 無法接受的模型或思考強度。
-        </li>
+        <li>{{ $t('settings.help.messaging.s7.list.name') }}</li>
+        <li v-html="$t('settings.help.messaging.s7.list.report')"></li>
+        <li v-html="$t('settings.help.messaging.s7.list.kickoff')"></li>
+        <li v-html="$t('settings.help.messaging.s7.list.duplicate')"></li>
+        <li v-html="$t('settings.help.messaging.s7.list.rejected')"></li>
+        <li v-html="$t('settings.help.messaging.s7.list.resume')"></li>
       </ul>
       <div class="cmh-tablewrap">
         <table class="cmh-table">
           <thead>
-            <tr><th>建議值</th><th>數值</th></tr>
+            <tr>
+              <th>{{ $t('settings.help.messaging.s7.table.suggestion') }}</th>
+              <th>{{ $t('settings.help.messaging.s7.table.value') }}</th>
+            </tr>
           </thead>
           <tbody>
-            <tr><td>一個 pane 最多開幾個子 pane</td><td class="cmh-nowrap">3</td></tr>
-            <tr><td>一個工作區的 CLI pane 總數</td><td class="cmh-nowrap">8</td></tr>
-            <tr><td>開啟鏈的深度（你開的再開下去）</td><td class="cmh-nowrap">2 層</td></tr>
+            <tr v-for="key in spawnLimits" :key="key">
+              <td>{{ $t(`settings.help.messaging.s7.limits.${key}.label`) }}</td>
+              <td class="cmh-nowrap">{{ $t(`settings.help.messaging.s7.limits.${key}.value`) }}</td>
+            </tr>
           </tbody>
         </table>
       </div>
-      <p class="cmh-note">
-        這些是<strong>建議值，不是上限</strong>——超過不會擋下來，只會在回覆裡附一則提醒，
-        讓 agent 轉達或記錄，用意是提醒它別遞迴開下去把機器塞爆。流程（pipeline）的 pane
-        也可以用 <code>---SPAWN---</code> 區塊做同一件事，走的是同一套建議值。
-      </p>
+      <p class="cmh-note" v-html="$t('settings.help.messaging.s7.note')"></p>
+      <p class="cmh-note" v-html="$t('settings.help.messaging.s7.note2')"></p>
     </section>
 
-    <!-- ── 護欄 ─────────────────────────────────────────────────────── -->
+    <!-- ── Guardrails ───────────────────────────────────────────────── -->
     <section class="cmh-section">
-      <h2 class="cmh-h2">護欄</h2>
-      <p class="cmh-p">避免 agent 之間互相刷爆：</p>
+      <h2 class="cmh-h2">{{ $t('settings.help.messaging.s8.title') }}</h2>
+      <p class="cmh-p">{{ $t('settings.help.messaging.s8.p1') }}</p>
       <div class="cmh-tablewrap">
         <table class="cmh-table">
           <thead>
-            <tr><th>限制</th><th>數值</th><th>為什麼</th></tr>
+            <tr>
+              <th>{{ $t('settings.help.messaging.s8.table.limit') }}</th>
+              <th>{{ $t('settings.help.messaging.s8.table.value') }}</th>
+              <th>{{ $t('settings.help.messaging.s8.table.why') }}</th>
+            </tr>
           </thead>
           <tbody>
-            <tr v-for="row in guards" :key="row.limit">
-              <td>{{ row.limit }}</td>
-              <td class="cmh-nowrap">{{ row.value }}</td>
-              <td>{{ row.why }}</td>
+            <tr v-for="key in guards" :key="key">
+              <td>{{ $t(`settings.help.messaging.s8.guards.${key}.limit`) }}</td>
+              <td class="cmh-nowrap">{{ $t(`settings.help.messaging.s8.guards.${key}.value`) }}</td>
+              <td>{{ $t(`settings.help.messaging.s8.guards.${key}.why`) }}</td>
             </tr>
           </tbody>
         </table>
       </div>
     </section>
 
-    <!-- ── 疑難排解 ─────────────────────────────────────────────────── -->
+    <!-- ── Troubleshooting ──────────────────────────────────────────── -->
     <section class="cmh-section">
-      <h2 class="cmh-h2">出問題時怎麼判斷</h2>
+      <h2 class="cmh-h2">{{ $t('settings.help.messaging.s9.title') }}</h2>
       <div class="cmh-tablewrap">
         <table class="cmh-table">
           <thead>
-            <tr><th>症狀</th><th>原因</th><th>怎麼辦</th></tr>
+            <tr>
+              <th>{{ $t('settings.help.messaging.s9.table.symptom') }}</th>
+              <th>{{ $t('settings.help.messaging.s9.table.cause') }}</th>
+              <th>{{ $t('settings.help.messaging.s9.table.fix') }}</th>
+            </tr>
           </thead>
           <tbody>
-            <tr v-for="row in troubleshooting" :key="row.symptom">
-              <td>{{ row.symptom }}</td>
-              <td>{{ row.cause }}</td>
-              <td>{{ row.fix }}</td>
+            <tr v-for="key in troubleshooting" :key="key">
+              <td>{{ $t(`settings.help.messaging.s9.troubleshooting.${key}.symptom`) }}</td>
+              <td>{{ $t(`settings.help.messaging.s9.troubleshooting.${key}.cause`) }}</td>
+              <td>{{ $t(`settings.help.messaging.s9.troubleshooting.${key}.fix`) }}</td>
             </tr>
           </tbody>
         </table>
       </div>
     </section>
 
-    <!-- ── 限制 ─────────────────────────────────────────────────────── -->
+    <!-- ── Known limits ─────────────────────────────────────────────── -->
     <section class="cmh-section">
-      <h2 class="cmh-h2">已知限制</h2>
+      <h2 class="cmh-h2">{{ $t('settings.help.messaging.s10.title') }}</h2>
       <ul class="cmh-list">
-        <li><strong>純終端機 pane 不能當收發對象</strong> — 只有 CLI agent pane 才有名稱。</li>
-        <li>
-          <strong>多數 CLI 只能收、不能送</strong> — 12 種 CLI 裡目前只有 4 種送得出訊息，
-          見上方「哪些 CLI 送得出訊息」。
-        </li>
-        <li>
-          <strong>pane 被拆到獨立視窗、或視窗重新載入後</strong>，MCP 工具那條路要重開 pane 才恢復；
-          輸出協定不受影響。
-        </li>
-        <li>
-          <strong>對方佇列滿的時候</strong>，送出端會顯示成功但訊息其實被丟棄 —
-          遞送是非同步的，送出當下無從得知。要確認就去看對方視窗的訊息面板。
-        </li>
-        <li>
-          <strong>沒有權限確認</strong> — 跨工作區傳訊不會跳確認框，只會在收到時提示。這是刻意的取捨。
-        </li>
+        <li v-html="$t('settings.help.messaging.s10.list.terminalPane')"></li>
+        <li v-html="$t('settings.help.messaging.s10.list.receiveOnly')"></li>
+        <li v-html="$t('settings.help.messaging.s10.list.detached')"></li>
+        <li v-html="$t('settings.help.messaging.s10.list.queueFull')"></li>
+        <li v-html="$t('settings.help.messaging.s10.list.noPermission')"></li>
+        <li v-html="$t('settings.help.messaging.s10.list.ackLocal')"></li>
       </ul>
     </section>
 
-    <p class="cmh-tip">
-      小訣竅：先幫 pane 改個角色名（「reviewer」「架構師」），標題就是位址，之後交代事情會順很多。
-    </p>
+    <!-- ── Across devices ───────────────────────────────────────────── -->
+    <section class="cmh-section">
+      <h2 class="cmh-h2">{{ $t('settings.help.messaging.s11.title') }}</h2>
+      <p class="cmh-p" v-html="$t('settings.help.messaging.s11.p1')"></p>
+      <ul class="cmh-list">
+        <li v-html="$t('settings.help.messaging.s11.list.address')"></li>
+        <li v-html="$t('settings.help.messaging.s11.list.works')"></li>
+        <li v-html="$t('settings.help.messaging.s11.list.notWorks')"></li>
+        <li v-html="$t('settings.help.messaging.s11.list.offline')"></li>
+      </ul>
+      <p class="cmh-note" v-html="$t('settings.help.messaging.s11.note')"></p>
+    </section>
+
+    <!-- ── What the sender is told afterwards ───────────────────────── -->
+    <section class="cmh-section">
+      <h2 class="cmh-h2">{{ $t('settings.help.messaging.s12.title') }}</h2>
+      <p class="cmh-p">{{ $t('settings.help.messaging.s12.p1') }}</p>
+      <ul class="cmh-list">
+        <li v-html="$t('settings.help.messaging.s12.list.notice')"></li>
+        <li v-html="$t('settings.help.messaging.s12.list.stale')"></li>
+        <li v-html="$t('settings.help.messaging.s12.list.check')"></li>
+        <li v-html="$t('settings.help.messaging.s12.list.busy')"></li>
+      </ul>
+      <p class="cmh-note">{{ $t('settings.help.messaging.s12.note') }}</p>
+    </section>
+
+    <p class="cmh-tip">{{ $t('settings.help.messaging.tip') }}</p>
   </div>
 </template>
 
@@ -542,6 +560,16 @@ const troubleshooting: TroubleRow[] = [
   color: var(--accent-fg);
 }
 
+/* Two panes abreast inside a figure; they stack when the dialog is narrow. */
+.cmh-mock-pair {
+  display: flex;
+  gap: 0.6em;
+  align-items: stretch;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.cmh-mock-pair > * { flex: 1 1 13em; min-width: 0; }
+
 .cmh-tablewrap {
   overflow-x: auto;
   border: 1px solid var(--border-muted);
@@ -570,7 +598,9 @@ const troubleshooting: TroubleRow[] = [
 .cmh-nowrap { white-space: nowrap; }
 .cmh-supported { color: var(--text-primary); }
 
-.cmh code {
+/* `code` also appears inside v-html prose, which carries no scoped data-v
+   attribute — hence :deep(). */
+.cmh :deep(code) {
   font-family: ui-monospace, 'SF Mono', Menlo, monospace;
   font-size: 0.92em;
   background: var(--bg-inset);

@@ -298,9 +298,27 @@ export function createWsClient(opts: WsClientOptions = {}): WsClient {
   // the socket, which lands in the close handler below and reconnects.
 
   function connect(url_?: string): void {
-    if (url_ !== undefined) url = url_
-    if (!url || disposed) return
+    const target = url_ ?? url
+    if (!target || disposed) return
     errored = false
+    // Two callers can race into here for the same url (useBackend's init()
+    // poll and its backend:changed handler, milliseconds apart after an
+    // update restart). Keep a socket that is already open/connecting rather
+    // than open a second one beside it: tearing it down would reject its
+    // in-flight requests, and leaving it would double every broadcast for as
+    // long as its TCP side stayed up.
+    if (isHealthyFor(target)) return
+    url = target
+    // Anything else still referenced (another url, a socket stuck in CLOSING)
+    // is torn down first so at most one socket is ever live. `socket` is
+    // nulled before close() so the old close handler is a no-op.
+    const old = socket
+    socket = null
+    if (old) {
+      try { old.close() } catch { /* already torn down */ }
+      for (const [, entry] of pending) entry.reject(new Error('socket superseded'))
+      pending.clear()
+    }
     const ctor = resolveCtor()
     setStatus('connecting')
     const sock = new ctor(url)
@@ -319,6 +337,7 @@ export function createWsClient(opts: WsClientOptions = {}): WsClient {
     })
 
     sock.addEventListener('message', (ev) => {
+      if (socket !== sock) return // superseded by a reset/reconnect swap
       const data = (ev as { data?: unknown }).data
       // Binary frame: raw terminal output, bypassing JSON entirely.
       if (data instanceof ArrayBuffer || data instanceof Uint8Array) {

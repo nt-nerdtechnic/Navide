@@ -346,7 +346,10 @@ class MCPSettingsStore:
         # (milliseconds), so a rewrite inside the tick that stamped
         # `actual_revision` would leave it unchanged and a stale writer could
         # not be told apart from a fresh one. Nudge it past every value a
-        # reader may already hold.
-        if self.revision <= actual_revision:
-            bumped = actual_revision + 1
+        # reader may already hold. NTFS stores mtime in 100 ns units, so a
+        # nudge of 1 ns rounds back to the same value; step by a microsecond
+        # until the stamp actually moves.
+        bumped = actual_revision
+        while self.revision <= actual_revision:
+            bumped += 1_000
             os.utime(self._path, ns=(bumped, bumped))

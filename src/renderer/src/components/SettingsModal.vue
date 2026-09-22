@@ -25,6 +25,9 @@ import {
   setUsageRefreshSec,
   usageRefreshSec,
 } from '../composables/useUsage'
+import { systemNotifyEnabled, setSystemNotifyEnabled } from '../composables/useSystemNotify'
+import { notifySoundEnabled, setNotifySoundEnabled } from '../composables/useSoundNotify'
+import { usePermissions } from '../composables/usePermissions'
 import {
   AUTO_RESUME_ON_RECONNECT_SETTING_KEY,
   RESUME_BEHAVIOR_SETTING_KEY,
@@ -54,6 +57,29 @@ import {
   type DetectedEditor,
 } from '../lib/defaultEditor'
 import { useCliAgentPrefs } from '../composables/useCliAgentPrefs'
+import { useOnboarding } from '../composables/useOnboarding'
+import {
+  pushChannelEnabled,
+  togglePushChannel,
+  usePushChannelPrefs,
+} from '../composables/usePushChannelPrefs'
+import { cliAgentRowChips } from '../lib/cliAgentRow'
+import { modelRefusalMessage } from '../lib/agentSpawnGate'
+import {
+  SPAWN_ENV_RESERVED_KEYS,
+  cliCommandKey,
+  cliEnvKey,
+  cliModelKey,
+  isReservedSpawnEnvKey,
+  isValidEnvName,
+  modelArgsFor,
+  parseCliEnvOverride,
+  parseCliModelDefault,
+  serializeCliEnvOverride,
+  serializeCliModelDefault,
+  type CliEnvEntry,
+  type CliModelDefault,
+} from '@navide/plugin-shell'
 import {
   ANY as POLICY_ANY,
   addRule as addPolicyRuleTo,
@@ -65,12 +91,8 @@ import {
   type PolicyDocument,
 } from '../lib/panePolicy'
 import { CLI_AGENT_SPECS } from '@navide/plugin-shell'
-import {
-  LOOP_PROMPT_SETTING_KEY,
-  DEFAULT_LOOP_PROMPT,
-  LOOP_RESUME_SETTING_KEY,
-  DEFAULT_LOOP_RESUME,
-} from '../lib/loopPrompt'
+import { useQuotaFailover, type FailoverMode } from '../composables/useQuotaFailover'
+import { platformId } from '../../../shared/osplat'
 import { useUpdater } from '../composables/useUpdater'
 import { updateStages } from '../lib/updaterStages'
 import type { UpdateChannel } from '../../../shared/updater'
@@ -92,13 +114,15 @@ import CliAgentsHelp from './CliAgentsHelp.vue'
 import CodeWorkflowHelp from './CodeWorkflowHelp.vue'
 import SettingsSystemHelp from './SettingsSystemHelp.vue'
 import IconReferenceHelp from './IconReferenceHelp.vue'
+import CrossPlatformHelp from './CrossPlatformHelp.vue'
 import ExtensionsPane from './ExtensionsPane.vue'
 import ExecutionPolicyPane from './ExecutionPolicyPane.vue'
-import StorageUsagePane from './StorageUsagePane.vue'
+import MarketplacePane from './MarketplacePane.vue'
 import LayoutSettingsPane from '../layout/LayoutSettingsPane.vue'
 import McpPane from './McpPane.vue'
 import SkillsPane from './SkillsPane.vue'
 import PromptSkillsPane from './PromptSkillsPane.vue'
+import SyncSettings from './SyncSettings.vue'
 import MemoryPane from './MemoryPane.vue'
 import StatusBadgeSettingsPane from './StatusBadgeSettingsPane.vue'
 import NavideCloudMark from './NavideCloudMark.vue'
@@ -125,12 +149,8 @@ const props = defineProps<{
   /** True when a workspace is open — CLI account sign-in needs one to spawn
    *  the login pane. */
   workspaceOpen?: boolean
-  /** Workspaces the app knows about — the Storage tab scans them for
-   *  reclaimable build output and logs. */
-  workspacePaths?: string[]
   /** The workspace currently open, empty when none is. The Memory tab edits
-   *  this project's instruction files, so it needs the open one by name
-   *  rather than the first of ``workspacePaths``. */
+   *  this project's instruction files. */
   workspacePath?: string
   stagesApi: ReturnType<typeof useStages>
   analyzerApi: ReturnType<typeof useAnalyzer>
@@ -162,6 +182,7 @@ const emit = defineEmits<{
   (e: 'update:idleReclaimEnabled', v: boolean): void
   (e: 'update:idleReclaimMinutes', v: string): void
   (e: 'reclaim-now'): void
+  (e: 'open-resource-manager'): void
 }>()
 const confirmBeforeCloseModel = computed({
   get: () => props.confirmBeforeClose ?? true,
@@ -199,7 +220,7 @@ const reclaimNowCount = computed(() => props.reclaimableNowCount ?? 0)
 const reclaimNowSize = computed(() => formatBytes(props.reclaimableNowBytes ?? 0))
 
 // ── Tab ───────────────────────────────────────────────────────────────────────
-type Tab = 'mcp' | 'skills' | 'prompts' | 'memory' | 'analyzer' | 'cliAgents' | 'general' | 'cross-device' | 'updates' | 'appearance' | 'statusBadges' | 'layout' | 'accounts' | 'extensions' | 'executionPolicy' | 'storage' | 'keybindings' | 'help'
+type Tab = 'mcp' | 'skills' | 'prompts' | 'memory' | 'analyzer' | 'cliAgents' | 'general' | 'cross-device' | 'updates' | 'appearance' | 'language' | 'statusBadges' | 'layout' | 'notifications' | 'accounts' | 'extensions' | 'marketplace' | 'keybindings' | 'help'
 
 /** Topics inside the Help tab — read-only reference material, no settings. */
 type HelpTopic =
@@ -209,6 +230,7 @@ type HelpTopic =
   | 'mcp'
   | 'codeWorkflow'
   | 'settingsSystem'
+  | 'crossPlatform'
   | 'icons'
 const helpTopic = ref<HelpTopic>('workspace')
 // Topic order is the reading order: what the main window is made of, then the
@@ -220,6 +242,7 @@ const helpTopicComponents: Record<HelpTopic, Component> = {
   mcp: McpHelp,
   codeWorkflow: CodeWorkflowHelp,
   settingsSystem: SettingsSystemHelp,
+  crossPlatform: CrossPlatformHelp,
   icons: IconReferenceHelp,
 }
 const helpTopicOrder: HelpTopic[] = [
@@ -229,6 +252,7 @@ const helpTopicOrder: HelpTopic[] = [
   'mcp',
   'codeWorkflow',
   'settingsSystem',
+  'crossPlatform',
   'icons',
 ]
 const activeTab = ref<Tab>(props.initialTab ?? 'general')
@@ -257,6 +281,7 @@ defineExpose({
   // for one, which it used to do in prose and with nowhere to click.
   setSection: async (tab: Tab, section: string): Promise<void> => {
     activeTab.value = tab
+    if (tab === 'cliAgents') await openCliSection(section)
     await nextTick()
     requestAnimationFrame(() => {
       document
@@ -269,13 +294,200 @@ defineExpose({
 // ── CLI Agents (enable/disable + reorder for the manual spawn dropdown) ────────
 const { order: cliOrder, disabled: cliDisabled } = useCliAgentPrefs()
 
+// The single onboarding instance for this window. It used to be created inside
+// CliManagementPanel; the list rows above it need the same probe, and a second
+// useOnboarding() would be a second `onboarding.status` round trip — which
+// shells out once per dep — rather than a second reader of this one.
+const onboarding = useOnboarding(props.backend)
+
+/** vue-i18n's `t` is overloaded, and neither overload alone accepts the
+ *  "params or nothing" shape the chip builder is written against. */
+const translateChip = (key: string, params?: Record<string, unknown>): string =>
+  params ? t(key, params) : t(key)
+
+/** `agentTeam.cliBinary.<key>` is a plain settings read, so it is snapshotted
+ *  when the tab is opened rather than watched. */
+const cliBinaryOverrides = ref<Record<string, boolean>>({})
+function refreshCliBinaryOverrides(): void {
+  cliBinaryOverrides.value = Object.fromEntries(
+    CLI_AGENT_SPECS.map((s) => [
+      s.agentKey,
+      !!settingsGet(`agentTeam.cliBinary.${s.agentKey}`, '').trim(),
+    ])
+  )
+}
+
+// ── Per-vendor launch overrides: model, effort, command line, environment ────
+// All four are global-scope keys (`agentTeam.cliModel.*`, `.cliCommand.*`,
+// `.cliEnv.*`), snapshotted when the tab opens for the same reason
+// cliBinaryOverrides is: they are plain settings reads, not reactive stores.
+// The drawer edits one vendor at a time; drafts never cross agent boundaries.
+const expandedLaunchKey = ref('')
+const launchModels = ref<Record<string, CliModelDefault>>({})
+const launchCommands = ref<Record<string, string>>({})
+const launchEnvs = ref<Record<string, CliEnvEntry[]>>({})
+/** The refusal text for a vendor whose typed model/effort cannot be honoured,
+ *  keyed by agent key. Present = the value was NOT written. */
+const launchModelErrors = ref<Record<string, string>>({})
+
+function refreshLaunchOverrides(): void {
+  launchModels.value = Object.fromEntries(
+    CLI_AGENT_SPECS.map((s) => [
+      s.agentKey,
+      parseCliModelDefault(settingsGet<unknown>(cliModelKey(s.agentKey), null)),
+    ])
+  )
+  launchCommands.value = Object.fromEntries(
+    CLI_AGENT_SPECS.map((s) => [s.agentKey, settingsGet(cliCommandKey(s.agentKey), '')])
+  )
+  launchEnvs.value = Object.fromEntries(
+    CLI_AGENT_SPECS.map((s) => [
+      s.agentKey,
+      parseCliEnvOverride(settingsGet<unknown>(cliEnvKey(s.agentKey), null)),
+    ])
+  )
+  launchModelErrors.value = {}
+}
+
+function launchModelFor(k: string): CliModelDefault {
+  return launchModels.value[k] ?? { model: '', effort: '' }
+}
+
+/** Write a model/effort pair only if the vendor can actually be told it. The
+ *  check and the wording both come from the spawn path's own modules, so the
+ *  sentence here is the one the spawn card gives. A refused pair stays on
+ *  screen with its reason rather than being silently discarded. */
+function applyLaunchModel(k: string, next: CliModelDefault): void {
+  const spec = CLI_AGENT_SPECS.find((s) => s.agentKey === k)
+  const chosen = modelArgsFor({ spec, request: next })
+  if (!chosen.ok) {
+    // The refused value is NOT kept in launchModels: that map is also what the
+    // list above reads its "model x" chip from, and a chip for a pick the spawn
+    // would never make is worse than the field snapping back with a reason.
+    const refusal = modelRefusalMessage(k, chosen.refusal, next.effort)
+    launchModelErrors.value = {
+      ...launchModelErrors.value,
+      [k]: t(refusal.key, refusal.params),
+    }
+    return
+  }
+  const { [k]: _dropped, ...rest } = launchModelErrors.value
+  launchModelErrors.value = rest
+  launchModels.value = { ...launchModels.value, [k]: next }
+  settingsSet(cliModelKey(k), serializeCliModelDefault(next))
+}
+
+function onLaunchModelInput(k: string, e: Event): void {
+  applyLaunchModel(k, { ...launchModelFor(k), model: (e.target as HTMLInputElement).value.trim() })
+}
+function onLaunchEffortSelect(k: string, e: Event): void {
+  applyLaunchModel(k, { ...launchModelFor(k), effort: (e.target as HTMLSelectElement).value })
+}
+
+function onLaunchCommandInput(k: string, e: Event): void {
+  const value = (e.target as HTMLInputElement).value
+  launchCommands.value = { ...launchCommands.value, [k]: value }
+  // An empty override is the absence of one, so it clears the key rather than
+  // storing '' — which resolveCommand would read the same way anyway.
+  settingsSet(cliCommandKey(k), value.trim() || null)
+}
+
+function commitLaunchEnv(k: string, entries: CliEnvEntry[]): void {
+  launchEnvs.value = { ...launchEnvs.value, [k]: entries }
+  settingsSet(cliEnvKey(k), serializeCliEnvOverride(entries))
+}
+function onLaunchEnvValueInput(k: string, index: number, e: Event): void {
+  const entries = [...(launchEnvs.value[k] ?? [])]
+  if (!entries[index]) return
+  entries[index] = { ...entries[index], value: (e.target as HTMLInputElement).value }
+  commitLaunchEnv(k, entries)
+}
+function removeLaunchEnv(k: string, index: number): void {
+  commitLaunchEnv(k, (launchEnvs.value[k] ?? []).filter((_, i) => i !== index))
+}
+
+// One draft pair, not one per vendor: only the open row can be typed into.
+const envDraftName = ref('')
+const envDraftValue = ref('')
+/** Blocked while the name is unusable or already in the table — adding a second
+ *  row for the same name would silently discard the first on save. */
+const envDraftBlocked = computed(() => {
+  const name = envDraftName.value.trim()
+  if (!isValidEnvName(name)) return true
+  return (launchEnvs.value[expandedLaunchKey.value] ?? []).some((e) => e.name === name)
+})
+function addLaunchEnv(k: string): void {
+  if (envDraftBlocked.value) return
+  commitLaunchEnv(k, [
+    ...(launchEnvs.value[k] ?? []),
+    { name: envDraftName.value.trim(), value: envDraftValue.value },
+  ])
+  envDraftName.value = ''
+  envDraftValue.value = ''
+}
+
 const cliAgentRows = computed(() => {
   const rank = (k: string) => {
     const i = cliOrder.value.indexOf(k)
     return i < 0 ? Number.MAX_SAFE_INTEGER : i
   }
-  return [...CLI_AGENT_SPECS].sort((a, b) => rank(a.agentKey) - rank(b.agentKey))
+  const deps = new Map(onboarding.cliDeps.value.map((dep) => [dep.id, dep]))
+  return [...CLI_AGENT_SPECS]
+    .sort((a, b) => rank(a.agentKey) - rank(b.agentKey))
+    .map((spec) => {
+      const dep = deps.get(spec.agentKey)
+      const identity = props.cliProfilesApi.identityFor(spec.agentKey, null)
+      return {
+        agentKey: spec.agentKey,
+        label: spec.label,
+        hint: spec.hint ?? '',
+        version: dep?.version ?? '',
+        needsAttention: dep?.status === 'missing' || dep?.status === 'outdated'
+          || identity?.signedIn === false
+          || !!onboarding.cliHealth.value?.findings.some((finding) => finding.agent_key === spec.agentKey),
+        chips: cliAgentRowChips(
+          {
+            install: dep ? { status: dep.status, version: dep.version } : null,
+            hasPermissionFlag: !!spec.skipPermissionFlag,
+            permissionMode: cliPermissionMode(spec.agentKey),
+            pushKind: spec.pushChannel?.kind ?? '',
+            pushEnabled: pushChannelEnabled(spec.agentKey),
+            supportsModel: !!spec.modelArgs,
+            modelDefault: launchModelFor(spec.agentKey),
+            signedIn: identity ? identity.signedIn : null,
+            // The built-in Default slot is an account too, so a vendor with no
+            // extra profile still has one.
+            accountCount: props.cliProfilesApi.profilesForAgent(spec.agentKey).length + 1,
+            binaryOverride: !!cliBinaryOverrides.value[spec.agentKey],
+            commandOverride: !!(launchCommands.value[spec.agentKey] ?? '').trim(),
+            envOverrideCount: (launchEnvs.value[spec.agentKey] ?? []).length,
+          },
+          translateChip
+        ),
+      }
+    })
 })
+/** The launch-override editor's rows, in the list's own order so the two
+ *  sections read the same way down the page. What each vendor may be told is
+ *  taken from its spec — declaring `modelArgs` is what puts a Model field on a
+ *  row, and there is no model list anywhere: ids change every release, so the
+ *  field is free text and `modelArgsFor` judges it. */
+const launchRows = computed(() =>
+  cliAgentRows.value.map((row) => {
+    const spec = CLI_AGENT_SPECS.find((s) => s.agentKey === row.agentKey)
+    return {
+      agentKey: row.agentKey,
+      label: row.label,
+      supportsModel: !!spec?.modelArgs,
+      supportsEffort: !!spec?.effortArgs,
+      knownEfforts: spec?.knownEfforts ?? [],
+    }
+  })
+)
+/** Named in the section's footnote so a marked row points at a list rather
+ *  than leaving the rule implicit. */
+const reservedEnvKeyList = SPAWN_ENV_RESERVED_KEYS.join(', ')
+
 const cliEnabledCount = computed(
   () => CLI_AGENT_SPECS.filter((s) => !cliDisabled.value.includes(s.agentKey)).length
 )
@@ -293,27 +505,18 @@ function toggleCliAgent(k: string): void {
   cliDisabled.value = [...set]
 }
 // ── Push channels (which CLIs may be handed a message without typing) ────────
-// A negative list, like cliDisabled above: every declared channel is on until
-// the user says otherwise, so a vendor that gains one later needs no migration.
-// The backend reads the same key and is the only place the switch is applied.
-const PUSH_DISABLED_KEY = 'pushChannelsDisabled'
-const pushDisabled = ref<string[]>(settingsGet<string[]>(PUSH_DISABLED_KEY, []))
+// The list itself lives in usePushChannelPrefs — a module-scoped ref, so a
+// second window editing this page repaints this one instead of leaving it on a
+// stale copy until reload.
+const { pushDisabled } = usePushChannelPrefs()
 const pushChannelRows = computed(() =>
   CLI_AGENT_SPECS.filter((s) => s.pushChannel)
 )
-function pushChannelEnabled(k: string): boolean {
-  return !pushDisabled.value.includes(k)
-}
-function togglePushChannel(k: string): void {
-  const set = new Set(pushDisabled.value)
-  // No "keep at least one" rule here, unlike the CLI list: turning every
-  // channel off is a valid choice — messages are simply typed in, which is
-  // what every pane did before channels existed.
-  if (set.has(k)) set.delete(k)
-  else set.add(k)
-  pushDisabled.value = [...set]
-  settingsSet(PUSH_DISABLED_KEY, pushDisabled.value)
-}
+/** Every channel off is allowed, but it costs something the page has to say. */
+const allPushChannelsOff = computed(() =>
+  pushChannelRows.value.length > 0
+  && pushChannelRows.value.every((s) => pushDisabled.value.includes(s.agentKey))
+)
 
 // ── Permission bypass (global toggle + per-vendor override) ──────────────────
 // The global flag is owned by App.vue (ControlPane edits the same ref), so it
@@ -346,17 +549,118 @@ function setCliPermissionMode(k: string, mode: CliPermissionMode): void {
 function onPermissionSelect(k: string, e: Event): void {
   setCliPermissionMode(k, parseCliPermissionMode((e.target as HTMLSelectElement).value))
 }
-/** Named in the footnote so the list's absences are explained rather than
- *  looking like an oversight. */
-const flaglessVendors = computed(() =>
-  CLI_AGENT_SPECS.filter((s) => !s.skipPermissionFlag)
-    .map((s) => s.label)
-    .join(' / ')
-)
+const cliFilter = ref<'all' | 'enabled' | 'attention'>('all')
+const cliFilterQuery = ref('')
+const selectedCliKey = ref('')
+const lastManagedCliKey = ref('')
+const cliDrawerRef = ref<HTMLElement | null>(null)
+const cliGridRef = ref<HTMLElement | null>(null)
+const cliPanelRef = ref<InstanceType<typeof CliManagementPanel> | null>(null)
+const cliInstallOpen = ref(false)
+let cliDrawerTrigger: HTMLElement | null = null
+const selectedCli = computed(() => cliAgentRows.value.find((row) => row.agentKey === selectedCliKey.value))
+const selectedLaunchRows = computed(() => launchRows.value.filter((row) => row.agentKey === selectedCliKey.value))
+const selectedPermissionRows = computed(() => permissionRows.value.filter((row) => row.agentKey === selectedCliKey.value))
+const selectedPushRows = computed(() => pushChannelRows.value.filter((row) => row.agentKey === selectedCliKey.value))
+const cliCanReorder = computed(() => cliFilter.value === 'all' && !cliFilterQuery.value.trim())
+const filteredCliRows = computed(() => {
+  const query = cliFilterQuery.value.trim().toLowerCase()
+  return cliAgentRows.value.filter((row) =>
+    (!query || `${row.label} ${row.agentKey}`.toLowerCase().includes(query))
+    && (cliFilter.value !== 'enabled' || cliAgentEnabled(row.agentKey))
+    && (cliFilter.value !== 'attention' || row.needsAttention)
+  )
+})
+
+async function openCliDrawer(key: string, trigger?: EventTarget | null): Promise<void> {
+  if (!CLI_AGENT_SPECS.some((spec) => spec.agentKey === key)) return
+  cliDrawerTrigger = trigger instanceof HTMLElement
+    ? trigger.closest('.cli-agent-card')?.querySelector<HTMLElement>('.cli-agent-manage') ?? trigger
+    : document.activeElement as HTMLElement | null
+  selectedCliKey.value = key
+  lastManagedCliKey.value = key
+  expandedLaunchKey.value = key
+  envDraftName.value = ''
+  envDraftValue.value = ''
+  await nextTick()
+  cliDrawerRef.value?.querySelector<HTMLButtonElement>('.cli-drawer-close')?.focus()
+}
+
+async function closeCliDrawer(restoreFocus = true): Promise<void> {
+  if (cliInstallOpen.value) return
+  const key = selectedCliKey.value
+  selectedCliKey.value = ''
+  expandedLaunchKey.value = ''
+  envDraftName.value = ''
+  envDraftValue.value = ''
+  await nextTick()
+  if (restoreFocus && activeTab.value === 'cliAgents') {
+    if (cliDrawerTrigger?.isConnected) cliDrawerTrigger.focus()
+    else {
+      const card = [...(cliGridRef.value?.querySelectorAll<HTMLElement>('.cli-agent-card') ?? [])]
+        .find((element) => element.dataset.agentKey === key)
+      const target = card?.querySelector<HTMLElement>('.cli-agent-manage')
+        ?? cliGridRef.value?.querySelector<HTMLInputElement>('.cli-agent-filter-search')
+      target?.focus()
+    }
+  }
+  cliDrawerTrigger = null
+}
+
+function closeSettingsLayer(): void {
+  if (cliInstallOpen.value) { cliPanelRef.value?.closeInstallDialog(); return }
+  if (selectedCliKey.value) { void closeCliDrawer(); return }
+  emit('close')
+}
+
+async function openCliSection(section: string, query = ''): Promise<void> {
+  if (!['cli-agents-launch', 'cli-agents-permissions', 'cli-agents-push', 'cli-agents-maintenance'].includes(section)) {
+    await closeCliDrawer(false)
+    return
+  }
+  const candidates = cliAgentRows.value.filter((row) =>
+    section === 'cli-agents-permissions' ? permissionRows.value.some((spec) => spec.agentKey === row.agentKey)
+      : section === 'cli-agents-push' ? pushChannelRows.value.some((spec) => spec.agentKey === row.agentKey) : true)
+  const text = ` ${query.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()} `
+  // Match whole names before choosing a supported default: "Copilot" must not
+  // select Pi, and explicitly requesting Codex Push must explain its absence.
+  const namedAgent = [...cliAgentRows.value]
+    .sort((a, b) => b.label.length - a.label.length)
+    .find((row) => [row.agentKey, row.label].some((name) =>
+      text.includes(` ${name.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()} `)))
+  const agent = namedAgent
+    ?? candidates.find((row) => row.agentKey === lastManagedCliKey.value) ?? candidates[0]
+  if (agent) await openCliDrawer(agent.agentKey)
+}
+
+function trapCliDrawerFocus(event: KeyboardEvent): void {
+  const root = cliInstallOpen.value
+    ? cliDrawerRef.value?.querySelector<HTMLElement>('.ci-dialog')
+    : cliDrawerRef.value
+  if (!root) return
+  const controls = [...root.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex="0"]')]
+    .filter((element) => {
+      for (let parent: HTMLElement | null = element; parent && parent !== root; parent = parent.parentElement) {
+        if (parent.hidden || parent.hasAttribute('inert') || getComputedStyle(parent).display === 'none') return false
+      }
+      return true
+    })
+  const first = controls[0]
+  const last = controls[controls.length - 1]
+  if (!first) { event.preventDefault(); root.focus(); return }
+  if (!root.contains(document.activeElement) || (event.shiftKey && document.activeElement === first)) {
+    event.preventDefault()
+    ;(event.shiftKey ? last : first).focus()
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault()
+    first.focus()
+  }
+}
 
 const cliDragKey = ref('')
 const cliDragOverKey = ref('')
 function onCliDragStart(e: DragEvent, k: string): void {
+  if (!cliCanReorder.value) { e.preventDefault(); return }
   cliDragKey.value = k
   if (e.dataTransfer) {
     e.dataTransfer.effectAllowed = 'move'
@@ -375,7 +679,7 @@ function onCliDrop(k: string): void {
   const from = cliDragKey.value
   cliDragOverKey.value = ''
   cliDragKey.value = ''
-  if (!from || from === k) return
+  if (!cliCanReorder.value || !from || from === k) return
   const keys = cliAgentRows.value.map((s) => s.agentKey)
   const fi = keys.indexOf(from)
   const ti = keys.indexOf(k)
@@ -383,6 +687,8 @@ function onCliDrop(k: string): void {
   keys.splice(ti, 0, keys.splice(fi, 1)[0])
   cliOrder.value = keys
 }
+
+const { t } = useI18n()
 
 interface SettingsSearchItem {
   id: string
@@ -394,26 +700,73 @@ interface SettingsSearchItem {
   keywords: string
   mcpView?: MView
   helpTopic?: HelpTopic
+  /** A result that is a door out of Settings rather than a place in it. */
+  opens?: 'resource-manager'
 }
 
 const settingsSearchQuery = ref('')
 const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
   {
+    id: 'cli-agents-list',
+    tab: 'cliAgents',
+    section: 'cli-agents-list',
+    title: t('settings.search.item.cli-agents-list.title'),
+    group: t('settings.nav.cliAgents'),
+    summary: t('settings.search.item.cli-agents-list.summary'),
+    keywords: 'cli agent agents enable disable reorder order spawn dropdown install version permission account binary claude codex cursor aider 啟用 停用 排序 安裝 權限 帳號 執行檔',
+  },
+  {
+    id: 'cli-agents-launch',
+    tab: 'cliAgents',
+    section: 'cli-agents-launch',
+    title: t('settings.search.item.cli-agents-launch.title'),
+    group: t('settings.nav.cliAgents'),
+    summary: t('settings.search.item.cli-agents-launch.summary'),
+    keywords: 'model effort launch command override env environment variable proxy opus sonnet gpt reasoning 模型 強度 啟動指令 覆寫 環境變數 代理',
+  },
+  {
+    id: 'cli-agents-permissions',
+    tab: 'cliAgents',
+    section: 'cli-agents-permissions',
+    title: t('settings.search.item.cli-agents-permissions.title'),
+    group: t('settings.nav.cliAgents'),
+    summary: t('settings.search.item.cli-agents-permissions.summary'),
+    keywords: 'permission bypass yolo skip prompt dangerously-skip-permissions unattended per-vendor override 權限 略過 免詢問 覆寫',
+  },
+  {
+    id: 'cli-agents-push',
+    tab: 'cliAgents',
+    section: 'cli-agents-push',
+    title: t('settings.search.item.cli-agents-push.title'),
+    group: t('settings.nav.cliAgents'),
+    summary: t('settings.search.item.cli-agents-push.summary'),
+    keywords: 'push channel channels rewake tui-http input-file message delivery idle typed 推送 通道 喚醒 訊息 送達',
+  },
+  {
+    id: 'cli-agents-maintenance',
+    tab: 'cliAgents',
+    section: 'cli-agents-maintenance',
+    title: t('settings.search.item.cli-agents-maintenance.title'),
+    group: t('settings.nav.cliAgents'),
+    summary: t('settings.search.item.cli-agents-maintenance.summary'),
+    keywords: 'install update detect version binary path duplicate which npm homebrew doctor 安裝 更新 偵測 版本 執行檔 路徑 重複',
+  },
+  {
     id: 'mcp-installed',
     tab: 'mcp',
     section: 'mcp-installed',
-    title: 'Installed MCP Servers / 已安裝 MCP',
-    group: 'MCP',
-    summary: 'Refresh, open config, enable/disable, remove, inspect tools, edit command, args, and env vars.',
+    title: t('settings.search.item.mcp-installed.title'),
+    group: t('settings.nav.mcp'),
+    summary: t('settings.search.item.mcp-installed.summary'),
     keywords: 'mcp server servers tools command args env context7 enable disable config refresh 已安裝 工具 環境變數 設定檔',
   },
   {
     id: 'mcp-catalog',
     tab: 'mcp',
     section: 'mcp-catalog',
-    title: 'MCP Catalog / MCP 目錄',
-    group: 'MCP',
-    summary: 'Search and add context-reading MCP servers from the catalog.',
+    title: t('settings.search.item.mcp-catalog.title'),
+    group: t('settings.nav.mcp'),
+    summary: t('settings.search.item.mcp-catalog.summary'),
     keywords: 'mcp catalog add install search context reading 新增 安裝 搜尋 目錄',
     mcpView: 'catalog',
   },
@@ -422,253 +775,268 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
     tab: 'mcp',
     section: 'mcp-agents',
     mcpView: 'list',
-    title: "Every CLI's MCP / 各 CLI 的 MCP",
-    group: 'MCP',
-    summary: "Read-only view of the MCP servers each CLI keeps in its own config, and where each server is set up.",
+    title: t('settings.search.item.mcp-agents.title'),
+    group: t('settings.nav.mcp'),
+    summary: t('settings.search.item.mcp-agents.summary'),
     keywords: 'mcp native cli claude codex copilot cursor kimi grok reflect compare matrix 原生 對照 各家 設定檔 唯讀',
   },
   {
     id: 'skills',
     tab: 'skills',
     section: 'skills',
-    title: 'Skills / 技能',
-    group: 'Integrations',
-    summary: 'Create, edit, enable, disable, and inspect app-managed agent skills.',
+    title: t('settings.search.item.skills.title'),
+    group: t('settings.nav.group.integration'),
+    summary: t('settings.search.item.skills.summary'),
     keywords: 'skills skill agent instructions markdown enable disable attachments 技能 指令 啟用 停用 附件',
   },
   {
     id: 'prompts',
     tab: 'prompts',
     section: 'prompts',
-    title: 'Prompt Skills / Prompt 技能',
-    group: 'Integrations',
-    summary: 'Create and edit the prompt skills a CLI pane can cast from its loop button.',
+    title: t('settings.search.item.prompts.title'),
+    group: t('settings.nav.group.integration'),
+    summary: t('settings.search.item.prompts.summary'),
     keywords: 'prompt skills loop 技能 提示詞 迴圈 循環 按鈕 預設 preset resume 續跑 輪次 max turns',
   },
   {
     id: 'memory',
     tab: 'memory',
     section: 'memory',
-    title: 'Memory / 記憶',
-    group: 'Integrations',
-    summary: "View and edit the instruction files each CLI reads: CLAUDE.md, AGENTS.md, QWEN.md, .cursor rules.",
+    title: t('settings.search.item.memory.title'),
+    group: t('settings.nav.group.integration'),
+    summary: t('settings.search.item.memory.summary'),
     keywords: 'memory instructions claude.md agents.md qwen.md cursor rules mdc context 指示檔 記憶 規則 說明檔',
   },
   {
     id: 'analyzer-backend',
     tab: 'analyzer',
     section: 'analyzer-backend',
-    title: 'Inference Backend / 推論後端',
-    group: 'Analyzer',
-    summary: 'Switch Ollama REST or llama.cpp, set base URL, llama-cli path, and GGUF model path.',
+    title: t('settings.search.item.analyzer-backend.title'),
+    group: t('settings.nav.analyzer'),
+    summary: t('settings.search.item.analyzer-backend.summary'),
     keywords: 'analyzer inference backend 推論 分析器 ollama llama llama.cpp llama-cli gguf url base url health',
   },
   {
     id: 'analyzer-models',
     tab: 'analyzer',
     section: 'analyzer-models',
-    title: 'Models & Benchmark / 模型與基準測試',
-    group: 'Analyzer',
-    summary: 'Download/delete Ollama models and run model benchmark tasks.',
+    title: t('settings.search.item.analyzer-models.title'),
+    group: t('settings.nav.analyzer'),
+    summary: t('settings.search.item.analyzer-models.summary'),
     keywords: 'model models benchmark download delete pull ollama 模型 基準測試 下載 刪除',
   },
   {
     id: 'appearance-theme',
     tab: 'appearance',
     section: 'appearance-theme',
-    title: 'Theme & Custom Colors / 主題與自訂顏色',
-    group: 'Appearance',
-    summary: 'Built-in themes and semantic color overrides.',
+    title: t('settings.search.item.appearance-theme.title'),
+    group: t('settings.nav.appearance'),
+    summary: t('settings.search.item.appearance-theme.summary'),
     keywords: 'appearance theme custom colors color 外觀 主題 自訂顏色 背景 文字 邊框 accent high contrast',
   },
   {
     id: 'general-default-editor',
     tab: 'general',
     section: 'general-default-editor',
-    title: 'Default Editor / 預設編輯器',
-    group: 'General',
-    summary: 'Choose where files and folders open: Mini-IDE, the system default app, VS Code, Cursor, or a custom command.',
+    title: t('settings.search.item.general-default-editor.title'),
+    group: t('settings.nav.group.general'),
+    summary: t('settings.search.item.general-default-editor.summary'),
     keywords: 'default editor open with mini-ide system vscode visual studio code cursor sublime custom command placeholder 預設編輯器 開啟 外部編輯器 自訂命令 偵測',
   },
   {
     id: 'settings-management',
     tab: 'general',
     section: 'settings-management',
-    title: 'Settings Management / 設定管理',
-    group: 'General',
-    summary: 'Export/import the full settings bundle and inspect where settings are stored.',
+    title: t('settings.search.item.settings-management.title'),
+    group: t('settings.nav.group.general'),
+    summary: t('settings.search.item.settings-management.summary'),
     keywords: 'settings management export import bundle config path location scope user workspace 設定管理 匯出 匯入 全集 位置 路徑 層級',
   },
   {
     id: 'general-p2p',
     tab: 'cross-device',
     section: 'general-p2p',
-    title: 'Navide Cloud / 跨裝置傳訊',
-    group: 'Accounts & Agents',
-    summary: 'Join this machine to Navide Cloud so agents here can message agents on your other devices.',
+    title: t('settings.search.item.general-p2p.title'),
+    group: t('settings.nav.group.accountsAgents'),
+    summary: t('settings.search.item.general-p2p.summary'),
     keywords: 'navide cloud p2p cross device remote server url access token navide-server connect link relay 雲端 跨裝置 遠端 伺服器 網址 權杖 連線 傳訊',
   },
   {
     id: 'general-p2p-policy',
     tab: 'cross-device',
     section: 'general-p2p-policy',
-    title: 'Navide Cloud Authorization / 跨裝置授權',
-    group: 'Accounts & Agents',
-    summary: 'Choose which remote devices may send instructions to panes on this machine. Everything is refused until a rule allows it.',
+    title: t('settings.search.item.general-p2p-policy.title'),
+    group: t('settings.nav.group.accountsAgents'),
+    summary: t('settings.search.item.general-p2p-policy.summary'),
     keywords: 'navide cloud policy permission authorization allow rule deny default pane cross device remote rejected 雲端 政策 權限 授權 允許 規則 拒絕 跨裝置 被擋',
   },
   {
     id: 'appearance-language',
-    tab: 'appearance',
+    tab: 'language',
     section: 'appearance-language',
-    title: 'Language / 語言',
-    group: 'Appearance',
-    summary: 'Switch between Traditional Chinese and English.',
-    keywords: 'language locale 語言 繁體中文 english en-us zh-tw',
+    title: t('settings.search.item.appearance-language.title'),
+    group: t('settings.nav.language'),
+    summary: t('settings.search.item.appearance-language.summary'),
+    keywords: 'language locale 語言 繁體中文 english 日本語 japanese en-us zh-tw ja-jp',
   },
   {
     id: 'appearance-ui-scale',
     tab: 'appearance',
     section: 'appearance-ui-scale',
-    title: 'Interface Scale / 介面縮放',
-    group: 'Appearance',
-    summary: 'Scale the whole interface — text, icons, and spacing — in every window.',
+    title: t('settings.search.item.appearance-ui-scale.title'),
+    group: t('settings.nav.appearance'),
+    summary: t('settings.search.item.appearance-ui-scale.summary'),
     keywords: 'ui scale zoom interface magnify enlarge shrink bigger smaller font size percent dpi 介面 縮放 放大 縮小 字級 字體 大小 百分比 老花',
   },
   {
     id: 'appearance-runtime',
     tab: 'appearance',
     section: 'appearance-runtime',
-    title: 'Restore Windows / 還原視窗',
-    group: 'Appearance',
-    summary: 'Restore editor windows on startup.',
+    title: t('settings.search.item.appearance-runtime.title'),
+    group: t('settings.nav.appearance'),
+    summary: t('settings.search.item.appearance-runtime.summary'),
     keywords: 'restore windows 還原視窗 startup 啟動',
   },
   {
     id: 'status-badges',
     tab: 'statusBadges',
     section: 'statusBadges',
-    title: 'Status Badges / 狀態徽章',
-    group: 'Appearance',
-    summary: 'Rename each pane status and pick its colour, per language.',
+    title: t('settings.search.item.status-badges.title'),
+    group: t('settings.nav.appearance'),
+    summary: t('settings.search.item.status-badges.summary'),
     keywords: 'status badge badges colour color rename label idle running awaiting starting stopped exited error 狀態 徽章 顏色 名稱 重新命名 閒置 執行中 等待回應 啟動中 已停止 已結束 錯誤',
   },
   {
     id: 'general-environment',
     tab: 'general',
     section: 'general-environment',
-    title: 'Environment / 環境檢測',
-    group: 'General',
-    summary: 'Rerun the environment check (onboarding).',
+    title: t('settings.search.item.general-environment.title'),
+    group: t('settings.nav.group.general'),
+    summary: t('settings.search.item.general-environment.summary'),
     keywords: 'environment onboarding env check rerun 環境檢測 重新檢測',
   },
   {
     id: 'general-backend-timeout',
     tab: 'general',
     section: 'general-backend-timeout',
-    title: 'Backend Timeout / 後端啟動逾時',
-    group: 'General',
-    summary: 'Set the backend startup health-check timeout.',
+    title: t('settings.search.item.general-backend-timeout.title'),
+    group: t('settings.nav.group.general'),
+    summary: t('settings.search.item.general-backend-timeout.summary'),
     keywords: 'backend timeout health check startup 啟動逾時 後端',
   },
   {
     id: 'updates',
     tab: 'updates',
     section: 'updates',
-    title: 'Updates / 更新',
-    group: 'Updates',
-    summary: 'Check for updates, auto-check/auto-download, and release channel.',
+    title: t('settings.search.item.updates.title'),
+    group: t('settings.nav.updates'),
+    summary: t('settings.search.item.updates.summary'),
     keywords: 'update updates version check auto download channel stable beta release notes 更新 版本 檢查 自動下載 頻道 穩定版 測試版',
-  },
-  {
-    id: 'general-loop-prompt',
-    tab: 'general',
-    section: 'general-loop-prompt',
-    title: 'Loop Prompt / Loop 提示詞',
-    group: 'General',
-    summary: 'Edit the prompt sent to a CLI pane when its loop button is clicked, and the auto-resume prompt after a session-limit pause.',
-    keywords: 'loop prompt 循環 提示詞 迴圈 continuous development 持續開發 pane button resume 續跑 session limit 上限',
   },
   {
     id: 'general-resume-behavior',
     tab: 'general',
     section: 'general-resume-behavior',
-    title: 'Resume on Open / 開啟時恢復對話',
-    group: 'General',
-    summary: 'Whether opening a workspace resumes its previous CLI panes, starts them fresh, or asks each time.',
+    title: t('settings.search.item.general-resume-behavior.title'),
+    group: t('settings.nav.group.general'),
+    summary: t('settings.search.item.general-resume-behavior.summary'),
     keywords: 'resume restore start fresh ask workspace open session conversation 恢復 還原 開新對話 詢問 開啟 工作區 對話 續接',
   },
   {
     id: 'general-usage-badge',
     tab: 'general',
     section: 'general-usage-badge',
-    title: 'CLI Quota Badge / CLI 額度徽章',
-    group: 'General',
-    summary: 'Show remaining CLI quota in pane headers (claude/codex/kimi/grok) and pick the refresh interval.',
+    title: t('settings.search.item.general-usage-badge.title'),
+    group: t('settings.nav.group.general'),
+    summary: t('settings.search.item.general-usage-badge.summary'),
     keywords: 'usage quota badge remaining limit rate window reset 額度 剩餘 用量 徽章 刷新 間隔 claude codex kimi grok',
+  },
+  {
+    id: 'general-quota-failover',
+    tab: 'general',
+    section: 'general-quota-failover',
+    title: t('settings.search.item.general-quota-failover.title'),
+    group: t('settings.nav.group.general'),
+    summary: t('settings.search.item.general-quota-failover.summary'),
+    keywords: 'quota exhausted account switch failover auto notify off hot restart resume 額度 耗盡 切換 帳號 自動 通知 關閉 熱切 重啟 接續',
   },
   {
     id: 'accounts',
     tab: 'accounts',
     section: 'accounts',
-    title: 'Git Accounts / Git 帳號',
-    group: 'Accounts',
-    summary: 'Add, edit, and remove encrypted Git host credentials and tokens.',
+    title: t('settings.search.item.accounts.title'),
+    group: t('settings.nav.accounts'),
+    summary: t('settings.search.item.accounts.summary'),
     keywords: 'git account accounts credential credentials token github safeStorage 帳號 憑證 金鑰 加密',
   },
   {
     id: 'cli-accounts',
     tab: 'accounts',
     section: 'cli-accounts',
-    title: 'CLI Accounts / CLI 帳號',
-    group: 'Accounts',
-    summary: 'Manage per-agent CLI login profiles (claude, codex, kimi, grok).',
+    title: t('settings.search.item.cli-accounts.title'),
+    group: t('settings.nav.accounts'),
+    summary: t('settings.search.item.cli-accounts.summary'),
     keywords: 'cli account accounts profile profiles login claude codex kimi grok agent 帳號 登入 切換帳號 profile',
   },
   {
     id: 'shortcuts',
     tab: 'keybindings',
     section: 'keybindings',
-    title: 'Keyboard Shortcuts Reference / 快捷鍵對照',
-    group: 'System',
-    summary: 'Every shortcut in one place: the editable rule table, plus read-only sections for terminal and native-menu keys.',
+    title: t('settings.search.item.shortcuts.title'),
+    group: t('settings.nav.group.system'),
+    summary: t('settings.search.item.shortcuts.summary'),
     keywords: 'keyboard shortcuts keys keybinding hotkey 快捷鍵 鍵盤 按鍵 workbench editor terminal cli ctrl cmd shift option',
   },
   {
     id: 'keybindings',
     tab: 'keybindings',
     section: 'keybindings',
-    title: 'Customize Shortcuts / 自訂快捷鍵',
-    group: 'System',
-    summary: 'Rebind, add or remove keyboard shortcuts. Records the keys you press, flags conflicts, and resets to defaults per row.',
+    title: t('settings.search.item.keybindings.title'),
+    group: t('settings.nav.group.system'),
+    summary: t('settings.search.item.keybindings.summary'),
     keywords: 'keybinding keybindings customize rebind remap shortcut shortcuts hotkey chord conflict reset 自訂 快捷鍵 改鍵 重新綁定 衝突 還原 keybindings.json',
   },
   {
+    // Storage lives in the Resource Manager now; the entry stays so "disk" and
+    // "cleanup" still find it from here. `tab` and `section` are never read
+    // for an `opens` item — openSettingsSearchResult leaves before using them.
     id: 'storage',
-    tab: 'storage',
+    tab: 'general',
     section: 'storage',
-    title: 'Storage / 儲存空間',
-    group: 'System',
-    summary: 'Scan disk usage across app data, Electron caches, CLI homes and workspaces, then clean up reclaimable space.',
-    keywords: 'storage disk space usage cache caches cleanup clean logs node_modules stale free 儲存 空間 磁碟 快取 清理 清除 日誌 佔用 釋出',
+    opens: 'resource-manager',
+    title: t('settings.search.item.storage.title'),
+    group: t('settings.nav.group.system'),
+    summary: t('settings.search.item.storage.summary'),
+    keywords: 'storage disk space usage cache caches cleanup clean logs node_modules stale free resource manager 儲存 空間 磁碟 快取 清理 清除 日誌 佔用 釋出 資源',
   },
   {
+    // The policy editor is a block on the Extensions page now, so the hit opens
+    // that page and scrolls to the block; the section id is unchanged.
     id: 'execution-policy',
-    tab: 'executionPolicy',
+    tab: 'extensions',
     section: 'execution-policy',
-    title: 'Execution Policy / 執行政策',
-    group: 'Security',
-    summary: 'Edit the global agent policy, choose workspace sources, review repository recommendations, and recover corrupt policy storage.',
+    title: t('settings.search.item.execution-policy.title'),
+    group: t('settings.nav.group.integration'),
+    summary: t('settings.search.item.execution-policy.summary'),
     keywords: 'execution policy permission permissions allowlist denylist full shell executable system namespace source repository recommendation untrusted recovery rebuild security 執行政策 權限 允許清單 拒絕清單 完整模式 shell 可執行檔 系統命名空間 來源 repository 建議 不受信任 修復 重建 安全性',
+  },
+  {
+    id: 'marketplace',
+    tab: 'marketplace',
+    section: 'marketplace',
+    title: t('settings.search.item.marketplace.title'),
+    group: t('settings.nav.group.integration'),
+    summary: t('settings.search.item.marketplace.summary'),
+    keywords: 'marketplace extension extensions plugin plugins registry search browse install publisher signed unsigned trust 市集 擴充 擴充功能 外掛 搜尋 瀏覽 安裝 發佈者 簽章 信任',
   },
   {
     id: 'help-mcp',
     tab: 'help',
     section: 'help',
     helpTopic: 'mcp',
-    title: 'MCP 說明 / How Navide uses MCP',
-    group: 'Help',
-    summary: 'The two directions MCP is used in: tools Navide offers CLI agents, and external servers Navide reads docs from.',
+    title: t('settings.search.item.help-mcp.title'),
+    group: t('settings.nav.help'),
+    summary: t('settings.search.item.help-mcp.summary'),
     keywords: 'mcp model context protocol tool tools plan cli agent server client context7 github filesystem 說明 介紹 工具 計畫 外部 文件 注入 怎麼用 為什麼用不到',
   },
   {
@@ -676,9 +1044,9 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
     tab: 'help',
     section: 'help',
     helpTopic: 'messaging',
-    title: 'CLI 互傳訊息 / Inter-CLI Messaging',
-    group: 'Help',
-    summary: 'How one CLI agent sends an instruction to another — addressing, delivery timing, guard rails, and troubleshooting.',
+    title: t('settings.help.topic.messaging'),
+    group: t('settings.nav.help'),
+    summary: t('settings.search.item.help-cli-messaging.summary'),
     keywords: 'help guide messaging message send cli agent pane cross workspace address broadcast queue rate limit troubleshooting 說明 教學 訊息 傳訊 互傳 傳送 指令 位址 跨工作區 廣播 佇列 頻率 疑難排解 怎麼用',
   },
   {
@@ -686,9 +1054,9 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
     tab: 'help',
     section: 'help',
     helpTopic: 'workspace',
-    title: '工作區與面板 / Workspace & Panes',
-    group: 'Help',
-    summary: 'What a workspace, pane and run group are, plus stage layouts, the sidebar tree and the status bar.',
+    title: t('settings.help.topic.workspace'),
+    group: t('settings.nav.help'),
+    summary: t('settings.search.item.help-workspace.summary'),
     keywords: 'help guide workspace pane run group sidebar layout grid spotlight fullscreen slot status bar placeholder idle reclaim lineage 說明 教學 工作區 專案 面板 群組 側欄 版面 排列 佔位卡 閒置 回收 血緣 狀態列 多選 拖曳 快捷鍵',
   },
   {
@@ -696,9 +1064,9 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
     tab: 'help',
     section: 'help',
     helpTopic: 'cliAgents',
-    title: 'CLI Agent 與帳號 / CLI Agents & Accounts',
-    group: 'Help',
-    summary: 'Which CLIs are supported, how they are detected and installed, roles, account switching and usage badges.',
+    title: t('settings.help.topic.cliAgents'),
+    group: t('settings.nav.help'),
+    summary: t('settings.search.item.help-cli-agents.summary'),
     keywords: 'help guide cli agent vendor install detect role account switch login usage quota badge permission skip 說明 教學 安裝 偵測 角色 帳號 切換 登入 額度 用量 徽章 權限 多帳號 疑難排解',
   },
   {
@@ -706,9 +1074,9 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
     tab: 'help',
     section: 'help',
     helpTopic: 'codeWorkflow',
-    title: '程式碼工作流 / Code Workflow',
-    group: 'Help',
-    summary: 'Git staging and branches, plan documents and their review tools, the editor window and file preview.',
+    title: t('settings.help.topic.codeWorkflow'),
+    group: t('settings.nav.help'),
+    summary: t('settings.search.item.help-code-workflow.summary'),
     keywords: 'help guide git stage commit branch remote conflict diff stash plan review approve todo editor monaco preview record track 說明 教學 暫存 提交 分支 遠端 衝突 差異 草稿 計畫 審閱 核准 編輯器 預覽 變更記錄',
   },
   {
@@ -716,19 +1084,29 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
     tab: 'help',
     section: 'help',
     helpTopic: 'settingsSystem',
-    title: '設定與系統 / Settings & System',
-    group: 'Help',
-    summary: 'A map of all settings pages, plus Navide Cloud, the window menus, scheduled tasks and resource upkeep.',
+    title: t('settings.help.topic.settingsSystem'),
+    group: t('settings.nav.help'),
+    summary: t('settings.search.item.help-settings-system.summary'),
     keywords: 'help guide settings overview skills prompts memory storage shortcuts updates analyzer extensions navide cloud pairing device schedule resource 說明 教學 設定 總覽 技能 提示 記憶 儲存 快捷鍵 更新 跨裝置 配對 裝置 排程 資源',
+  },
+  {
+    id: 'help-cross-platform',
+    tab: 'help',
+    section: 'help',
+    helpTopic: 'crossPlatform',
+    title: t('settings.help.topic.crossPlatform'),
+    group: t('settings.nav.help'),
+    summary: t('settings.search.item.help-cross-platform.summary'),
+    keywords: 'help guide windows linux macos platform install installer nsis appimage deb arm64 mirror download update shortcut modifier ctrl titlebar conpty dpapi keyring 說明 教學 跨平台 視窗 安裝 安裝檔 鏡像 下載 更新 修飾鍵 標題列 憑證 金鑰庫 多台 機器',
   },
   {
     id: 'help-icons',
     tab: 'help',
     section: 'help',
     helpTopic: 'icons',
-    title: '介面圖示 / Icon Reference',
-    group: 'Help',
-    summary: 'Every button icon in the interface — what it is called, where it lives and what pressing it does.',
+    title: t('settings.help.topic.icons'),
+    group: t('settings.nav.help'),
+    summary: t('settings.search.item.help-icons.summary'),
     keywords: 'help guide icon button symbol glyph legend reference sidebar pane stage status bar git plan rail 說明 教學 圖示 按鈕 符號 對照 對照表 圖例 這是什麼 狀態色 色點',
   },
 ])
@@ -750,7 +1128,13 @@ const settingsSearchResults = computed(() => {
 })
 
 async function openSettingsSearchResult(item: SettingsSearchItem): Promise<void> {
+  if (item.opens === 'resource-manager') {
+    settingsSearchQuery.value = ''
+    emit('open-resource-manager')
+    return
+  }
   activeTab.value = item.tab
+  if (item.tab === 'cliAgents') await openCliSection(item.section, settingsSearchQuery.value)
   if (item.tab === 'mcp' && item.mcpView) mView.value = item.mcpView
   if (item.tab === 'help' && item.helpTopic) helpTopic.value = item.helpTopic
   settingsSearchQuery.value = ''
@@ -798,7 +1182,7 @@ const {
   resetCustom,
 } = useTheme()
 
-// ── Appearance (language) ─────────────────────────────────────────────────────
+// ── Language ──────────────────────────────────────────────────────────────────
 const { language: currentLanguage, setLanguage, healthCheckTimeoutSec, setHealthCheckTimeoutSec } = useSettings()
 
 // Auto-restore workspace windows on next launch (main-process setting, stored in
@@ -821,25 +1205,17 @@ function onUiScaleChange(value: string): void {
   uiScaleModel.value = setUiScale(value)
 }
 
+// Locale catalogs keep language names in their native form, so the labels
+// come from those keys rather than a second hardcoded copy.
 const SUPPORTED_LANGUAGES = [
-  { value: 'zh-TW', label: '繁體中文' },
-  { value: 'en-US', label: 'English' },
+  { value: 'zh-TW', labelKey: 'settings.appearance.language-zh-TW' },
+  { value: 'en-US', labelKey: 'settings.appearance.language-en-US' },
+  { value: 'ja-JP', labelKey: 'settings.appearance.language-ja-JP' },
 ]
 
 function onHealthTimeoutChange(raw: string): void {
   const n = Number(raw)
   if (Number.isFinite(n)) setHealthCheckTimeoutSec(n)
-}
-
-// Loop prompt sent to a CLI pane when its loop button is clicked, and the
-// resume prompt auto-sent after a session-limit pause once the quota resets.
-const loopPromptText = ref(settingsGet(LOOP_PROMPT_SETTING_KEY, DEFAULT_LOOP_PROMPT))
-function onLoopPromptChange(): void {
-  settingsSet(LOOP_PROMPT_SETTING_KEY, loopPromptText.value)
-}
-const loopResumeText = ref(settingsGet(LOOP_RESUME_SETTING_KEY, DEFAULT_LOOP_RESUME))
-function onLoopResumeChange(): void {
-  settingsSet(LOOP_RESUME_SETTING_KEY, loopResumeText.value)
 }
 
 // Per-CLI quota badge (pane headers): on/off + backend poll interval.
@@ -855,6 +1231,54 @@ function onUsageRefreshChange(raw: string): void {
     setUsageRefreshSec(n)
   }
 }
+
+// Quota-exhaustion account switching: the policy the backend persists
+// (off / notify / auto) and what each CLI can do about it, both read from
+// the switch authority itself (quota_failover.get_state, mirrored by the
+// singleton) so this page cannot disagree with the switch it describes.
+// Evidence and platform are shown as facts; only the backend decides what a
+// vendor may do automatically.
+const quotaFailover = useQuotaFailover()
+const FAILOVER_MODES: readonly FailoverMode[] = ['off', 'notify', 'auto']
+const failoverMode = computed<FailoverMode>(() => quotaFailover.state.value?.policy.mode ?? 'notify')
+const failoverBusy = ref(false)
+async function onFailoverModeChange(raw: string): Promise<void> {
+  if (!(FAILOVER_MODES as readonly string[]).includes(raw) || failoverBusy.value) return
+  failoverBusy.value = true
+  try {
+    await quotaFailover.setPolicy(raw as FailoverMode)
+  } finally {
+    failoverBusy.value = false
+  }
+}
+interface FailoverCapabilityRow {
+  agentKey: string
+  label: string
+  switchMode: 'hot' | 'restart' | 'manual' | 'unsupported'
+  resume: 'native' | 'lossy' | 'none'
+  /** Not exercised on a real account on any build ("source" / "docs"). */
+  unverified: boolean
+  /** Declared for other platforms only. */
+  platformUnsupported: boolean
+  todo: string
+}
+const failoverRows = computed<FailoverCapabilityRow[]>(() => {
+  const caps = quotaFailover.state.value?.capabilities
+  if (!caps) return []
+  const here = platformId()
+  return CLI_AGENT_SPECS.map((spec) => {
+    const cap = caps[spec.agentKey]
+    return {
+      agentKey: spec.agentKey,
+      label: spec.label,
+      switchMode: cap?.supported ? cap.switchMode : 'unsupported',
+      resume: cap?.resume ?? 'none',
+      unverified: !!cap?.supported && cap.evidence !== 'live',
+      platformUnsupported: !!cap?.supported && Array.isArray(cap.platforms) && cap.platforms.length > 0 && !cap.platforms.includes(here),
+      todo: cap?.todo ?? '',
+    }
+  })
+})
 
 // Whether opening a workspace resumes its previous CLI panes, starts them
 // fresh, or asks. Read at restore time in App.vue.
@@ -881,6 +1305,30 @@ const autoResumeOnReconnectModel = ref(
 )
 function onAutoResumeOnReconnectChange(): void {
   settingsSet(AUTO_RESUME_ON_RECONNECT_SETTING_KEY, autoResumeOnReconnectModel.value)
+}
+
+// Background notifications for CLI done / needs-input: the OS notification and
+// the sound are separate toggles so either can be muted on its own.
+const systemNotifyEnabledModel = ref(systemNotifyEnabled())
+function onSystemNotifyEnabledChange(): void {
+  setSystemNotifyEnabled(systemNotifyEnabledModel.value)
+}
+const notifySoundEnabledModel = ref(notifySoundEnabled())
+function onNotifySoundEnabledChange(): void {
+  setNotifySoundEnabled(notifySoundEnabledModel.value)
+}
+
+// macOS notification permission. Electron cannot read the real TCC state (see
+// main/permissions.ts), so what we show is the last test result; the test
+// button fires a real notification so the user sees for themselves.
+const perms = usePermissions()
+const notifyPermissionStatus = computed(() => perms.statuses.value.notifications)
+const notifyPermissionApplicable = computed(() => notifyPermissionStatus.value !== 'not-applicable')
+function sendTestNotification(): void {
+  void perms.request('notifications', {
+    title: t('onboard.notif-test-title'),
+    body: t('onboard.notif-test-body'),
+  })
 }
 
 // Max resume spawns that run terminal.create concurrently (the rest queue).
@@ -965,7 +1413,7 @@ const {
 // checkedAt only moves when a check succeeds, so it reads as "last known good"
 // next to a run of failures.
 const updLastSuccessfulCheck = computed(() =>
-  updateState.value.checkedAt ? new Date(updateState.value.checkedAt).toLocaleString() : ''
+  updateState.value.checkedAt ? new Date(updateState.value.checkedAt).toLocaleString(currentLanguage.value) : ''
 )
 // check → download → install, so the panel shows where the update actually is
 // rather than leaving the user to infer it from one status line.
@@ -989,32 +1437,52 @@ const settingsBundleError = ref('')
  *  it has no scope badge and no settings file to reveal. */
 type SettingsTab = Exclude<Tab, 'help'>
 
-const settingsScopeNotes: Record<SettingsTab, { scope: string; storage: keyof SettingsPaths | 'localStorage' | 'mainProcess' | 'safeStorage' | 'cliFiles' }> = {
-  mcp: { scope: 'User', storage: 'mcp' },
-  skills: { scope: 'User', storage: 'skills' },
-  prompts: { scope: 'User', storage: 'localStorage' },
+// The scope is stored as a key, not as prose: the badge is resolved through
+// `scopeLabel()` at render time so it follows a language switch.
+type SettingsScope = 'user' | 'userWorkspace' | 'accountServer' | 'userWorkspaceBindings' | ''
+
+const settingsScopeNotes: Record<SettingsTab, { scope: SettingsScope; storage: keyof SettingsPaths | 'localStorage' | 'mainProcess' | 'safeStorage' | 'cliFiles' }> = {
+  mcp: { scope: 'user', storage: 'mcp' },
+  skills: { scope: 'user', storage: 'skills' },
+  prompts: { scope: 'user', storage: 'localStorage' },
   // The CLIs' own instruction files: each one lives where its CLI looks for
   // it, so the pane shows per-file paths and this tab has none of its own.
-  memory: { scope: 'User / Workspace', storage: 'cliFiles' },
-  analyzer: { scope: 'User', storage: 'analyzer' },
-  cliAgents: { scope: 'User', storage: 'localStorage' },
-  general: { scope: 'User', storage: 'localStorage' },
+  memory: { scope: 'userWorkspace', storage: 'cliFiles' },
+  analyzer: { scope: 'user', storage: 'analyzer' },
+  // Order and the disabled list are persisted per workspace (project.json),
+  // with the global KV as the fallback default — so this page is both.
+  cliAgents: { scope: 'userWorkspace', storage: 'localStorage' },
+  general: { scope: 'user', storage: 'localStorage' },
   // Neither half of this page is a local setting: the access token is in
   // the credential vault and the authorization rules live on the server,
   // which is why the cards say so themselves rather than showing a path.
-  'cross-device': { scope: 'Account / Server', storage: 'safeStorage' },
-  updates: { scope: 'User', storage: 'mainProcess' },
-  appearance: { scope: 'User', storage: 'localStorage' },
+  'cross-device': { scope: 'accountServer', storage: 'safeStorage' },
+  updates: { scope: 'user', storage: 'mainProcess' },
+  appearance: { scope: 'user', storage: 'localStorage' },
+  language: { scope: 'user', storage: 'localStorage' },
   // The user's own names and colours for the pane status badges.
-  statusBadges: { scope: 'User', storage: 'localStorage' },
+  statusBadges: { scope: 'user', storage: 'localStorage' },
   // One arrangement for every workspace, shared live across windows.
-  layout: { scope: 'User', storage: 'localStorage' },
-  accounts: { scope: 'User / Workspace bindings', storage: 'safeStorage' },
-  extensions: { scope: 'User', storage: 'mainProcess' },
-  executionPolicy: { scope: 'User / Workspace', storage: 'mainProcess' },
-  storage: { scope: 'User', storage: 'app_data_dir' },
-  keybindings: { scope: 'User', storage: 'mainProcess' },
+  layout: { scope: 'user', storage: 'localStorage' },
+  // The two notification toggles are localStorage flags like General's.
+  notifications: { scope: 'user', storage: 'localStorage' },
+  accounts: { scope: 'userWorkspaceBindings', storage: 'safeStorage' },
+  extensions: { scope: 'user', storage: 'mainProcess' },
+  // Browsing the registry reads nothing of the user's, so this page has no
+  // scope badge; the entry exists because the map covers every nav page.
+  marketplace: { scope: '', storage: 'mainProcess' },
+  keybindings: { scope: 'user', storage: 'mainProcess' },
 }
+
+function scopeLabel(scope: SettingsScope): string {
+  return scope ? t(`settings.scope.${scope}`) : ''
+}
+
+// The execution policy block sits inside the Extensions page but carries its
+// own scope: the policy is per user and per workspace, the plugin inventory
+// next to it is not. It is a block, not a nav page, so it stays out of
+// `settingsScopeNotes` — that map is one entry per page.
+const executionPolicyScopeNote = { scope: 'userWorkspace', storage: 'mainProcess' } as const
 
 async function loadSettingsPaths(): Promise<void> {
   try {
@@ -1023,13 +1491,18 @@ async function loadSettingsPaths(): Promise<void> {
   } catch { /* non-fatal */ }
 }
 
-function pathForTab(tab: SettingsTab): string {
-  const storage = settingsScopeNotes[tab].storage
-  if (storage === 'localStorage') return 'ui_settings.json (app data) + workspace backup'
-  if (storage === 'mainProcess') return 'Electron main process userData'
-  if (storage === 'safeStorage') return 'Encrypted local safeStorage registry'
-  if (storage === 'cliFiles') return "Each CLI's own instruction files"
+type SettingsStorage = (typeof settingsScopeNotes)[SettingsTab]['storage']
+
+function pathForStorage(storage: SettingsStorage): string {
+  if (storage === 'localStorage') return t('settings.storage.localStorage')
+  if (storage === 'mainProcess') return t('settings.storage.mainProcess')
+  if (storage === 'safeStorage') return t('settings.storage.safeStorage')
+  if (storage === 'cliFiles') return t('settings.storage.cliFiles')
   return settingsPaths.value[storage] ?? ''
+}
+
+function pathForTab(tab: SettingsTab): string {
+  return pathForStorage(settingsScopeNotes[tab].storage)
 }
 
 async function openSettingsPath(path?: string): Promise<void> {
@@ -1048,7 +1521,7 @@ async function exportSettingsBundle(): Promise<void> {
   try {
     const resp = await props.backend.send<{ bundle: Record<string, unknown> }>('settings.bundle.export', {})
     if (!resp.ok || !resp.payload?.bundle) {
-      settingsBundleError.value = resp.error?.message ?? 'Export failed'
+      settingsBundleError.value = resp.error?.message ?? t('settings.management.export-failed')
       return
     }
     const bundle = {
@@ -1062,13 +1535,13 @@ async function exportSettingsBundle(): Promise<void> {
       },
     }
     const result = await window.agentTeam.saveJson({
-      title: 'Export settings bundle',
+      title: t('settings.management.export-dialog-title'),
       defaultName: `agent-team-settings-${stampForFile()}.json`,
       content: JSON.stringify(bundle, null, 2),
     })
-    if (result.ok) settingsBundleSummary.value = 'Settings bundle exported'
+    if (result.ok) settingsBundleSummary.value = t('settings.management.exported')
   } catch (err) {
-    settingsBundleError.value = err instanceof Error ? err.message : 'Export failed'
+    settingsBundleError.value = err instanceof Error ? err.message : t('settings.management.export-failed')
   } finally {
     settingsBundleBusy.value = false
   }
@@ -1079,12 +1552,12 @@ async function importSettingsBundle(): Promise<void> {
   settingsBundleBusy.value = true
   settingsBundleError.value = ''
   try {
-    const result = await window.agentTeam.openJson({ title: 'Import settings bundle JSON' })
+    const result = await window.agentTeam.openJson({ title: t('settings.management.import-dialog-title') })
     if (!result.ok || !result.content) return
     const bundle = JSON.parse(result.content) as Record<string, unknown>
     const resp = await props.backend.send<{ applied: string[]; paths: SettingsPaths }>('settings.bundle.import', { bundle })
     if (!resp.ok) {
-      settingsBundleError.value = resp.error?.message ?? 'Import failed'
+      settingsBundleError.value = resp.error?.message ?? t('settings.management.import-failed')
       return
     }
     const appearance = bundle.appearance as Record<string, unknown> | undefined
@@ -1109,9 +1582,9 @@ async function importSettingsBundle(): Promise<void> {
     ])
     const applied = resp.payload?.applied ?? []
     if (shouldReloadMcpAfterBundleImport(applied)) await mLoad(true)
-    settingsBundleSummary.value = `Imported: ${applied.join(', ') || 'appearance'}`
+    settingsBundleSummary.value = t('settings.management.imported', { items: applied.join(', ') || 'appearance' })
   } catch (err) {
-    settingsBundleError.value = err instanceof Error ? err.message : 'Import failed'
+    settingsBundleError.value = err instanceof Error ? err.message : t('settings.management.import-failed')
   } finally {
     settingsBundleBusy.value = false
   }
@@ -1212,7 +1685,6 @@ const p2pDotClass = computed(() => {
 // readable while the link is down and writable only while it is up. Panes on
 // one machine never consult it, which is why the whole block only appears once
 // a server is configured.
-const { t } = useI18n()
 interface P2pPolicyDevice { deviceId: string; deviceName: string; paneCount: number }
 interface P2pPolicyState {
   state: string
@@ -1411,16 +1883,35 @@ watch(activeTab, (tab) => {
 
 // Close on ESC.
 function onKeyDown(e: KeyboardEvent) {
+  if (selectedCliKey.value && activeTab.value === 'cliAgents') {
+    if (e.key === 'Tab') { trapCliDrawerFocus(e); return }
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      if (cliInstallOpen.value) cliPanelRef.value?.closeInstallDialog()
+      else void closeCliDrawer()
+      return
+    }
+  }
   if (e.key !== 'Escape') return
+  if (e.defaultPrevented) return
   emit('close')
 }
 onMounted(() => {
   window.addEventListener('keydown', onKeyDown)
+  refreshCliBinaryOverrides()
+  refreshLaunchOverrides()
+  if (activeTab.value === 'cliAgents') void onboarding.refresh()
   void loadSettingsPaths()
   void loadDetectedEditors()
+  void perms.refresh()
 })
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeyDown)
+  // The onboarding instance is this component's now, so its timers are too:
+  // an install watched from the CLI management panel keeps a poll and an
+  // elapsed-seconds ticker running, and closing Settings has to stop them.
+  onboarding.dispose()
   if (previewTimer) { clearTimeout(previewTimer); previewTimer = null }
   if (p2pTimer) { clearInterval(p2pTimer); p2pTimer = null }
 })
@@ -1442,8 +1933,8 @@ async function azDetectCli() {
 }
 async function azPickCli() {
   const result = await window.agentTeam?.pickFile?.({
-    title: 'Select llama-cli executable',
-    filters: [{ name: 'Executable', extensions: ['*'] }],
+    title: t('settings.analyzer.select-llama-cli'),
+    filters: [{ name: t('settings.analyzer.filter-executable'), extensions: ['*'] }],
     defaultPath: '/opt/homebrew/bin',
   })
   if (result?.ok && result.path) {
@@ -1452,8 +1943,8 @@ async function azPickCli() {
 }
 async function azPickGguf() {
   const result = await window.agentTeam?.pickFile?.({
-    title: 'Select GGUF model file',
-    filters: [{ name: 'GGUF Model', extensions: ['gguf'] }, { name: 'All Files', extensions: ['*'] }],
+    title: t('settings.analyzer.select-gguf-model'),
+    filters: [{ name: t('settings.analyzer.filter-gguf'), extensions: ['gguf'] }, { name: t('settings.analyzer.filter-all-files'), extensions: ['*'] }],
   })
   if (result?.ok && result.path) {
     await props.analyzerApi.saveSettings({ gguf_path: result.path })
@@ -1522,7 +2013,7 @@ let mEditVersion = 0
 
 const mFilteredCatalog = computed(() => {
   const q = mSearch.value.trim().toLowerCase()
-  return q ? MCP_CATALOG.filter(c => c.name.includes(q) || c.label.toLowerCase().includes(q) || c.description.includes(q))
+  return q ? MCP_CATALOG.filter(c => c.name.includes(q) || c.label.toLowerCase().includes(q) || t(c.descriptionKey).toLowerCase().includes(q))
            : MCP_CATALOG
 })
 
@@ -1850,6 +2341,14 @@ watch(activeTab, (tab) => {
   if (tab === 'mcp') { void eaLoad(); void cdpLoad() }
   if (tab === 'appearance') void loadAutoRestore()
   if (tab === 'accounts') void accountsApi.refresh()
+  if (tab === 'cliAgents') {
+    refreshCliBinaryOverrides()
+    refreshLaunchOverrides()
+    void onboarding.refresh()
+  } else {
+    cliInstallOpen.value = false
+    void closeCliDrawer(false)
+  }
 })
 
 </script>
@@ -1857,11 +2356,11 @@ watch(activeTab, (tab) => {
 <template>
   <Teleport to="body">
     <!-- Overlay -->
-    <div class="s-overlay nv-modal-overlay" @click.self="emit('close')">
+    <div class="s-overlay nv-modal-overlay" @click.self="closeSettingsLayer()">
       <div class="s-modal nv-modal-shell nv-modal-shell--wide">
 
         <!-- ── Sidebar (title + search + grouped nav) ────────────────────── -->
-        <aside class="s-sidebar">
+        <aside class="s-sidebar" :inert="!!selectedCliKey">
           <div class="s-ws-header">
             <div class="s-ws-avatar" aria-hidden="true">
               <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v1.8M8 12.7v1.8M14.5 8h-1.8M3.3 8H1.5M12.6 3.4l-1.3 1.3M4.7 11.3l-1.3 1.3M12.6 12.6l-1.3-1.3M4.7 4.7 3.4 3.4"/></svg>
@@ -1899,7 +2398,7 @@ watch(activeTab, (tab) => {
             </div>
           </div>
 
-          <nav class="s-nav" aria-label="Settings sections">
+          <nav class="s-nav" :aria-label="$t('settings.nav.sections-label')">
             <div class="s-nav-group">
               <div class="s-nav-group-title">{{ $t('settings.nav.group.general') }}</div>
               <SettingsNavItem :label="$t('settings.nav.general')" :active="activeTab === 'general'" @select="activeTab = 'general'">
@@ -1912,6 +2411,11 @@ watch(activeTab, (tab) => {
                   <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10.5 2.5 13.5 5.5 6.5 12.5 3.5 12.5 3.5 9.5 10.5 2.5Z"/><path d="M9 4l3 3"/></svg>
                 </template>
               </SettingsNavItem>
+              <SettingsNavItem :label="$t('settings.nav.language')" :active="activeTab === 'language'" @select="activeTab = 'language'">
+                <template #icon>
+                  <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="6.5"/><ellipse cx="8" cy="8" rx="2.7" ry="6.5"/><path d="M1.5 8h13"/></svg>
+                </template>
+              </SettingsNavItem>
               <SettingsNavItem :label="$t('settings.nav.statusBadges')" :active="activeTab === 'statusBadges'" @select="activeTab = 'statusBadges'">
                 <template #icon>
                   <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="1.5" y="4.5" width="13" height="7" rx="3.5"/><circle cx="5.5" cy="8" r="1.5"/></svg>
@@ -1922,11 +2426,9 @@ watch(activeTab, (tab) => {
                   <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M5.5 2.5v11M14.5 6h-9"/></svg>
                 </template>
               </SettingsNavItem>
-              <SettingsNavItem :label="$t('settings.nav.crossDevice')" :active="activeTab === 'cross-device'" @select="activeTab = 'cross-device'">
+              <SettingsNavItem :label="$t('settings.nav.notifications')" :active="activeTab === 'notifications'" @select="activeTab = 'notifications'">
                 <template #icon>
-                  <!-- The same mark as the titlebar and the page header: this
-                       row is how most people will first reach Navide Cloud. -->
-                  <NavideCloudMark variant="solid" class="nvc-nav-mark" />
+                  <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.2a3.6 3.6 0 0 0-3.6 3.6v2.4L3 10.4v.8h10v-.8l-1.4-2.2V5.8A3.6 3.6 0 0 0 8 2.2Z"/><path d="M6.6 13a1.4 1.4 0 0 0 2.8 0"/></svg>
                 </template>
               </SettingsNavItem>
             </div>
@@ -1946,6 +2448,13 @@ watch(activeTab, (tab) => {
               <SettingsNavItem :label="$t('settings.nav.analyzer')" :active="activeTab === 'analyzer'" @select="activeTab = 'analyzer'">
                 <template #icon>
                   <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3.2C6.6 2.2 4.2 2.8 4.2 4.8 2.7 5.1 2.7 7.3 4.2 7.8c0 2 1.9 2.6 3.8 2.1"/><path d="M8 3.2c1.4-1 3.8-.4 3.8 1.6 1.5.3 1.5 2.5 0 3 0 2-1.9 2.6-3.8 2.1"/><path d="M8 3.2v9.6"/></svg>
+                </template>
+              </SettingsNavItem>
+              <SettingsNavItem :label="$t('settings.nav.crossDevice')" :active="activeTab === 'cross-device'" @select="activeTab = 'cross-device'">
+                <template #icon>
+                  <!-- The same mark as the titlebar and the page header: this
+                       row is how most people will first reach Navide Cloud. -->
+                  <NavideCloudMark variant="solid" class="nvc-nav-mark" />
                 </template>
               </SettingsNavItem>
             </div>
@@ -1977,24 +2486,15 @@ watch(activeTab, (tab) => {
                   <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6.4 2.6h3.2v1.5a1.3 1.3 0 0 0 2.4 0V2.6h1.4v3.2h-1.5a1.3 1.3 0 0 0 0 2.4h1.5v3.2H6.4v-1.5a1.3 1.3 0 0 0-2.4 0v1.5H2.6V8.2h1.5a1.3 1.3 0 0 0 0-2.4H2.6V2.6h3.8Z"/></svg>
                 </template>
               </SettingsNavItem>
-            </div>
-
-            <div class="s-nav-group">
-              <div class="s-nav-group-title">{{ $t('settings.nav.group.security') }}</div>
-              <SettingsNavItem :label="$t('settings.nav.executionPolicy')" :active="activeTab === 'executionPolicy'" @select="activeTab = 'executionPolicy'">
+              <SettingsNavItem :label="$t('settings.nav.marketplace')" :active="activeTab === 'marketplace'" @select="activeTab = 'marketplace'">
                 <template #icon>
-                  <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.8 13 3.7v3.7c0 3.1-2 5.7-5 6.8-3-1.1-5-3.7-5-6.8V3.7L8 1.8Z"/><path d="m5.7 8 1.5 1.5 3.2-3.2"/></svg>
+                  <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.6 5.4h10.8l-.8 7.1a1.2 1.2 0 0 1-1.2 1.1H4.6a1.2 1.2 0 0 1-1.2-1.1L2.6 5.4Z"/><path d="M5.8 7.2V4.6a2.2 2.2 0 0 1 4.4 0v2.6"/></svg>
                 </template>
               </SettingsNavItem>
             </div>
 
             <div class="s-nav-group">
               <div class="s-nav-group-title">{{ $t('settings.nav.group.system') }}</div>
-              <SettingsNavItem :label="$t('settings.nav.storage')" :active="activeTab === 'storage'" @select="activeTab = 'storage'">
-                <template #icon>
-                  <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="8" cy="3.8" rx="5.2" ry="2"/><path d="M2.8 3.8v4.4c0 1.1 2.3 2 5.2 2s5.2-.9 5.2-2V3.8"/><path d="M2.8 8.2v4c0 1.1 2.3 2 5.2 2s5.2-.9 5.2-2v-4"/></svg>
-                </template>
-              </SettingsNavItem>
               <SettingsNavItem :label="$t('settings.nav.keybindings')" :active="activeTab === 'keybindings'" @select="activeTab = 'keybindings'">
                 <template #icon>
                   <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="1.3" y="3.8" width="13.4" height="8.4" rx="1.4"/><path d="M4 6.4h0.01M6.4 6.4h0.01M8.8 6.4h0.01M11.2 6.4h0.01M4 8.8h0.01M11.2 8.8h0.01M6 10.6h4"/></svg>
@@ -2016,7 +2516,7 @@ watch(activeTab, (tab) => {
 
         <!-- ── Content (close button + all tab bodies) ───────────────────── -->
         <div class="s-content">
-          <button class="s-close" @click="emit('close')" title="Close (ESC)">✕</button>
+          <button class="s-close" :inert="!!selectedCliKey" @click="emit('close')" :title="$t('action.close-esc')">✕</button>
 
         <!-- ── MCP TAB ───────────────────────────────────────────────────── -->
         <div v-show="activeTab === 'mcp'" class="s-body s-body--bleed mcp-body">
@@ -2034,7 +2534,7 @@ watch(activeTab, (tab) => {
               </div>
             </div>
             <div class="settings-meta-row">
-              <span class="scope-badge">{{ settingsScopeNotes.mcp.scope }}</span>
+              <span class="scope-badge">{{ scopeLabel(settingsScopeNotes.mcp.scope) }}</span>
               <span class="settings-path" :title="pathForTab('mcp')">{{ pathForTab('mcp') }}</span>
               <button class="settings-path-btn" :disabled="!settingsPaths.mcp" @click="openSettingsPath(settingsPaths.mcp)">{{ $t('action.open') }}</button>
             </div>
@@ -2113,32 +2613,32 @@ watch(activeTab, (tab) => {
           <!-- ── CATALOG VIEW ────────────────────────────────────────────── -->
           <template v-else-if="mView === 'catalog'">
             <div class="mcp-topbar" data-settings-section="mcp-catalog">
-              <button class="mcp-back-btn nv-btn" @click="mView = 'list'">← Back</button>
-              <span class="mcp-page-title">Add MCP Servers</span>
+              <button class="mcp-back-btn nv-btn" @click="mView = 'list'">← {{ $t('action.back') }}</button>
+              <span class="mcp-page-title">{{ $t('settings.mcp.catalog-title') }}</span>
             </div>
 
             <div class="mcp-search-wrap">
-              <input v-model="mSearch" type="text" placeholder="Search MCP servers by name" class="mcp-search" spellcheck="false" />
+              <input v-model="mSearch" type="text" :placeholder="$t('settings.mcp.catalog-search')" class="mcp-search" spellcheck="false" />
               <span class="mcp-search-icon">🔍</span>
             </div>
 
             <div class="mcp-catalog-hint">
-              💡 This catalog lists only <strong>"Orchestrator context-reading"</strong> MCPs — tools that read workspace / docs / external service data and inject it into kickoff prompts to ground agent knowledge. Execution actions (tests, browser automation, etc.) are handled by the CLI agents themselves.
+              💡 <span v-html="$t('settings.mcp.catalog-hint')"></span>
             </div>
 
             <div class="mcp-catalog-list">
               <div v-for="item in mFilteredCatalog" :key="item.name" class="mcp-catalog-card">
                 <div class="mcp-catalog-info">
                   <div class="mcp-catalog-name">{{ item.label }}</div>
-                  <div class="mcp-catalog-desc">{{ item.description }}</div>
+                  <div class="mcp-catalog-desc">{{ t(item.descriptionKey) }}</div>
                   <div v-if="item.requiresEnv?.length" class="mcp-catalog-note">
-                    ⚠ Requires env vars: {{ item.requiresEnv.join(', ') }}
+                    ⚠ {{ $t('settings.mcp.catalog-requires-env', { vars: item.requiresEnv.join(', ') }) }}
                   </div>
                 </div>
-                <button v-if="mIsInstalled(item.name)" class="mcp-installed-badge" disabled>Installed</button>
-                <button v-else class="mcp-add-btn nv-btn nv-btn--primary" @click="mAddFromCatalog(item)" :disabled="mSaving">+ Add</button>
+                <button v-if="mIsInstalled(item.name)" class="mcp-installed-badge" disabled>{{ $t('label.installed') }}</button>
+                <button v-else class="mcp-add-btn nv-btn nv-btn--primary" @click="mAddFromCatalog(item)" :disabled="mSaving">+ {{ $t('action.add') }}</button>
               </div>
-              <div v-if="mFilteredCatalog.length === 0" class="mcp-empty">No matching MCP servers found</div>
+              <div v-if="mFilteredCatalog.length === 0" class="mcp-empty">{{ $t('settings.mcp.catalog-empty') }}</div>
             </div>
           </template>
 
@@ -2166,7 +2666,7 @@ watch(activeTab, (tab) => {
                 <input v-model="mCustomCommand" required spellcheck="false" placeholder="npx" />
               </div>
               <div v-else class="field">
-                <label class="lbl">URL</label>
+                <label class="lbl">{{ $t('label.url') }}</label>
                 <input v-model="mCustomUrl" required type="url" spellcheck="false" placeholder="https://example.com/mcp" />
               </div>
               <div class="mcp-custom-actions">
@@ -2186,7 +2686,7 @@ watch(activeTab, (tab) => {
         <div v-show="activeTab === 'skills'" class="s-body s-body--bleed" data-settings-section="skills">
           <h1 class="s-page-title">{{ $t('settings.nav.skills') }}</h1>
           <div class="settings-meta-row">
-            <span class="scope-badge">{{ settingsScopeNotes.skills.scope }}</span>
+            <span class="scope-badge">{{ scopeLabel(settingsScopeNotes.skills.scope) }}</span>
             <span class="settings-path" :title="pathForTab('skills')">{{ pathForTab('skills') }}</span>
             <button class="settings-path-btn" :disabled="!settingsPaths.skills" @click="openSettingsPath(settingsPaths.skills)">{{ $t('action.open') }}</button>
           </div>
@@ -2197,7 +2697,7 @@ watch(activeTab, (tab) => {
         <div v-show="activeTab === 'prompts'" class="s-body s-body--bleed" data-settings-section="prompts">
           <h1 class="s-page-title">{{ $t('settings.nav.prompts') }}</h1>
           <div class="settings-meta-row">
-            <span class="scope-badge">{{ settingsScopeNotes.prompts.scope }}</span>
+            <span class="scope-badge">{{ scopeLabel(settingsScopeNotes.prompts.scope) }}</span>
           </div>
           <PromptSkillsPane />
         </div>
@@ -2206,7 +2706,7 @@ watch(activeTab, (tab) => {
         <div v-show="activeTab === 'memory'" class="s-body s-body--bleed" data-settings-section="memory">
           <h1 class="s-page-title">{{ $t('settings.nav.memory') }}</h1>
           <div class="settings-meta-row">
-            <span class="scope-badge">{{ settingsScopeNotes.memory.scope }}</span>
+            <span class="scope-badge">{{ scopeLabel(settingsScopeNotes.memory.scope) }}</span>
           </div>
           <!-- Project files belong to the folder that is actually open; the
                first known workspace is the current one whenever there is one. -->
@@ -2220,11 +2720,11 @@ watch(activeTab, (tab) => {
         <div v-show="activeTab === 'analyzer'" class="s-body s-body--bleed analyzer-body">
           <h1 class="s-page-title">{{ $t('settings.nav.analyzer') }}</h1>
           <div class="settings-meta-row">
-            <span class="scope-badge">{{ settingsScopeNotes.analyzer.scope }}</span>
+            <span class="scope-badge">{{ scopeLabel(settingsScopeNotes.analyzer.scope) }}</span>
             <span class="settings-path" :title="settingsPaths.analyzer">{{ settingsPaths.analyzer }}</span>
             <button class="settings-path-btn" :disabled="!settingsPaths.analyzer" @click="openSettingsPath(settingsPaths.analyzer)">{{ $t('action.open') }}</button>
             <span class="settings-path-divider">·</span>
-            <span class="settings-path" :title="settingsPaths.ai_chat">AI keys: {{ settingsPaths.ai_chat }}</span>
+            <span class="settings-path" :title="settingsPaths.ai_chat">{{ $t('settings.analyzer.ai-keys-label') }} {{ settingsPaths.ai_chat }}</span>
             <button class="settings-path-btn" :disabled="!settingsPaths.ai_chat" @click="openSettingsPath(settingsPaths.ai_chat)">{{ $t('action.open') }}</button>
           </div>
 
@@ -2252,7 +2752,7 @@ watch(activeTab, (tab) => {
                   <input
                     class="az-input"
                     type="text"
-                    placeholder="e.g. llama-cli or /usr/local/bin/llama-completion"
+                    :placeholder="$t('settings.analyzer.llama-cli-placeholder')"
                     :value="props.analyzerApi.analyzerSettings.value.llama_cli"
                     @change="props.analyzerApi.saveSettings({ llama_cli: ($event.target as HTMLInputElement).value })"
                   />
@@ -2297,15 +2797,12 @@ watch(activeTab, (tab) => {
                   <div class="az-status-row">
                     <span class="az-status-dot" :class="props.analyzerApi.health.value?.gguf_warning ? 'err' : 'ok'"></span>
                     <span class="az-version" v-if="props.analyzerApi.health.value?.ok && !props.analyzerApi.health.value?.gguf_warning">
-                      File found · {{ props.analyzerApi.health.value?.gguf_size ? ((props.analyzerApi.health.value.gguf_size as number) / 1e9).toFixed(1) + ' GB' : '' }}
+                      {{ $t('settings.analyzer.gguf-file-found') }} · {{ props.analyzerApi.health.value?.gguf_size ? ((props.analyzerApi.health.value.gguf_size as number) / 1e9).toFixed(1) + ' GB' : '' }}
                     </span>
-                    <span class="az-version offline" v-else>{{ (props.analyzerApi.health.value as any)?.gguf_warning ?? 'Not yet detected' }}</span>
+                    <span class="az-version offline" v-else>{{ (props.analyzerApi.health.value as any)?.gguf_warning ?? $t('settings.analyzer.gguf-not-detected') }}</span>
                   </div>
                 </template>
-                <div class="az-gguf-hint">
-                  Download a <code>.gguf</code> file from <a class="az-link" href="https://huggingface.co/models?library=gguf" target="_blank">HuggingFace</a>
-                  and enter the full path here. Leave blank to use the Ollama model selected in the model manager.
-                </div>
+                <div class="az-gguf-hint" v-html="$t('settings.analyzer.gguf-hint')"></div>
               </div>
             </template>
 
@@ -2495,38 +2992,214 @@ watch(activeTab, (tab) => {
 
         <!-- ══ CLI AGENTS TAB ══ -->
         <div v-show="activeTab === 'cliAgents'" class="s-body cli-agents-body">
+          <div ref="cliGridRef" class="cli-agent-roster" :inert="!!selectedCliKey">
           <h1 class="s-page-title">{{ $t('settings.nav.cliAgents') }}</h1>
           <section class="ap-section" data-settings-section="cli-agents-list">
-            <h3 class="ap-title">{{ $t('settings.cliAgents.title') }}</h3>
             <p class="ap-hint">{{ $t('settings.cliAgents.hint') }}</p>
-            <ul class="cli-agent-list">
+            <div class="cli-agent-toolbar">
+              <input v-model="cliFilterQuery" type="search" class="cli-agent-filter-search" :placeholder="$t('settings.cliAgents.search')" :aria-label="$t('settings.cliAgents.search')" />
+              <div class="cli-agent-filters" :aria-label="$t('settings.cliAgents.filter-label')">
+                <button v-for="filter in (['all', 'enabled', 'attention'] as const)" :key="filter" type="button" :data-cli-filter="filter" :aria-pressed="cliFilter === filter" @click="cliFilter = filter">{{ $t(`settings.cliAgents.filter-${filter}`) }}</button>
+              </div>
+              <button type="button" :disabled="onboarding.loading.value" @click="onboarding.refresh({ fresh: true })">{{ $t('cli-manage.redetect') }}</button>
+            </div>
+            <p class="ap-hint cli-agent-count">{{ $t('settings.cliAgents.count', { visible: filteredCliRows.length, total: cliAgentRows.length, enabled: cliEnabledCount }) }} · {{ $t(cliCanReorder ? 'settings.cliAgents.drag-hint' : 'settings.cliAgents.reorder-filtered') }}</p>
+            <ul class="cli-agent-grid">
               <li
-                v-for="spec in cliAgentRows"
-                :key="spec.agentKey"
-                class="cli-agent-row"
-                :class="{ 'drag-over': cliDragOverKey === spec.agentKey, 'is-disabled': !cliAgentEnabled(spec.agentKey) }"
-                draggable="true"
-                @dragstart="onCliDragStart($event, spec.agentKey)"
-                @dragover="onCliDragOver($event, spec.agentKey)"
-                @dragenter="onCliDragOver($event, spec.agentKey)"
-                @dragleave="onCliDragLeave(spec.agentKey)"
-                @drop.prevent="onCliDrop(spec.agentKey)"
+                v-for="row in filteredCliRows"
+                :key="row.agentKey"
+                class="cli-agent-card"
+                :data-agent-key="row.agentKey"
+                :class="{ 'drag-over': cliDragOverKey === row.agentKey, 'is-disabled': !cliAgentEnabled(row.agentKey) }"
+                :draggable="cliCanReorder"
+                @dragstart="onCliDragStart($event, row.agentKey)"
+                @dragover="onCliDragOver($event, row.agentKey)"
+                @dragenter="onCliDragOver($event, row.agentKey)"
+                @dragleave="onCliDragLeave(row.agentKey)"
+                @drop.prevent="onCliDrop(row.agentKey)"
+                @dragend="cliDragKey = ''; cliDragOverKey = ''"
+                @click="openCliDrawer(row.agentKey, $event.currentTarget)"
               >
-                <span class="cli-agent-grip" :title="$t('settings.cliAgents.drag-hint')">⠿</span>
-                <label class="cli-agent-toggle">
-                  <input
-                    type="checkbox"
-                    :checked="cliAgentEnabled(spec.agentKey)"
-                    :disabled="cliAgentEnabled(spec.agentKey) && cliEnabledCount <= 1"
-                    @change="toggleCliAgent(spec.agentKey)"
-                  />
-                  <span class="cli-agent-label">{{ spec.label }}</span>
-                </label>
-                <span v-if="spec.hint" class="cli-agent-hint">{{ spec.hint }}</span>
+                <div class="cli-card-heading">
+                  <span class="cli-agent-grip" :title="$t('settings.cliAgents.drag-hint')" aria-hidden="true">⠿</span>
+                  <span class="cli-card-icon" aria-hidden="true">{{ row.label.slice(0, 2).toUpperCase() }}</span>
+                  <span class="cli-agent-label">{{ row.label }}</span>
+                  <span v-if="row.needsAttention" class="cli-card-attention" :title="$t('settings.cliAgents.filter-attention')" :aria-label="$t('settings.cliAgents.filter-attention')">!</span>
+                </div>
+                <div class="cli-card-status">
+                  <span v-for="chip in row.chips.filter((chip) => chip.id === 'install' || chip.id === 'account' || chip.id === 'push')" :key="chip.id" class="cli-chip" :class="`cli-chip--${chip.tone}`">{{ chip.label }}</span>
+                  <span v-if="!row.chips.some((chip) => chip.id === 'install')" class="cli-agent-hint">{{ $t('settings.cliAgents.not-detected') }}</span>
+                </div>
+                <div class="cli-card-footer">
+                  <label class="cli-agent-toggle" @click.stop>
+                    <input type="checkbox" :checked="cliAgentEnabled(row.agentKey)" :disabled="cliAgentEnabled(row.agentKey) && cliEnabledCount <= 1" :aria-label="$t('settings.cliAgents.enable-agent', { agent: row.label })" @change="toggleCliAgent(row.agentKey)" />
+                    <span>{{ $t('settings.cliAgents.enabled') }}</span>
+                  </label>
+                  <button type="button" class="cli-agent-manage" :aria-label="$t('settings.cliAgents.manage-agent', { agent: row.label })" @click.stop="openCliDrawer(row.agentKey, $event.currentTarget)">{{ $t('settings.cliAgents.manage') }} ›</button>
+                </div>
               </li>
             </ul>
+            <p v-if="!filteredCliRows.length" class="cli-agent-empty">{{ $t('settings.cliAgents.no-results') }}</p>
           </section>
-          <section class="ap-section" data-settings-section="cli-agents-permissions">
+          </div>
+          <Transition name="cli-drawer">
+          <div v-if="selectedCli" class="cli-drawer-layer">
+            <div class="cli-drawer-scrim" @click="closeCliDrawer()"></div>
+            <section ref="cliDrawerRef" class="cli-agent-drawer" role="dialog" aria-modal="true" aria-labelledby="cli-drawer-title" :data-agent-key="selectedCli.agentKey" tabindex="-1">
+              <header class="cli-drawer-header" :inert="cliInstallOpen">
+                <div><h2 id="cli-drawer-title">{{ selectedCli.label }}</h2><p class="cli-agent-hint">{{ selectedCli.version }}</p></div>
+                <button type="button" class="cli-drawer-close" :aria-label="$t('settings.cliAgents.close-drawer')" @click="closeCliDrawer()">✕</button>
+              </header>
+              <div class="cli-drawer-content">
+              <section id="cli-panel-overview" class="ap-section cli-overview">
+                <h3 class="ap-title">{{ $t('settings.cliAgents.tab-overview') }}</h3>
+                <p v-if="selectedCli.hint" class="ap-hint">{{ selectedCli.hint }}</p>
+                <div class="cli-agent-chips"><span v-for="chip in selectedCli.chips" :key="chip.id" class="cli-chip" :class="`cli-chip--${chip.tone}`">{{ chip.label }}</span></div>
+                <label class="cli-agent-toggle"><input type="checkbox" :checked="cliAgentEnabled(selectedCli.agentKey)" :disabled="cliAgentEnabled(selectedCli.agentKey) && cliEnabledCount <= 1" @change="toggleCliAgent(selectedCli.agentKey)" />{{ $t('settings.cliAgents.enabled') }}</label>
+              </section>
+          <section id="cli-panel-launch" class="ap-section" data-settings-section="cli-agents-launch">
+            <h3 class="ap-title">{{ $t('settings.cliLaunch.title') }}</h3>
+            <p class="ap-hint">{{ $t('settings.cliLaunch.hint') }}</p>
+            <ul class="cli-agent-list">
+              <li
+                v-for="row in selectedLaunchRows"
+                :key="row.agentKey"
+                class="cli-agent-row launch-row"
+                :class="{ 'launch-open': expandedLaunchKey === row.agentKey }"
+              >
+                <div v-if="expandedLaunchKey === row.agentKey" class="launch-body">
+                  <div v-if="row.supportsModel" class="launch-field">
+                    <span class="launch-field-label">{{ $t('settings.cliLaunch.model-label') }}</span>
+                    <input
+                      type="text"
+                      class="launch-input"
+                      :value="launchModelFor(row.agentKey).model"
+                      :placeholder="$t('settings.cliLaunch.model-placeholder')"
+                      :aria-label="$t('settings.cliLaunch.model-label')"
+                      @change="onLaunchModelInput(row.agentKey, $event)"
+                    />
+                  </div>
+                  <div v-if="row.supportsEffort" class="launch-field">
+                    <span class="launch-field-label">{{ $t('settings.cliLaunch.effort-label') }}</span>
+                    <select
+                      v-if="row.knownEfforts.length"
+                      class="launch-input"
+                      :value="launchModelFor(row.agentKey).effort"
+                      :aria-label="$t('settings.cliLaunch.effort-label')"
+                      @change="onLaunchEffortSelect(row.agentKey, $event)"
+                    >
+                      <option value="">{{ $t('settings.cliLaunch.effort-vendor-default') }}</option>
+                      <option v-for="level in row.knownEfforts" :key="level" :value="level">{{ level }}</option>
+                    </select>
+                    <!-- A vendor may declare effortArgs with no vocabulary, in
+                         which case there is nothing to list and the value goes
+                         through as typed. -->
+                    <input
+                      v-else
+                      type="text"
+                      class="launch-input"
+                      :value="launchModelFor(row.agentKey).effort"
+                      :aria-label="$t('settings.cliLaunch.effort-label')"
+                      @change="onLaunchEffortSelect(row.agentKey, $event)"
+                    />
+                  </div>
+                  <p v-if="!row.supportsModel && !row.supportsEffort" class="ap-hint launch-note">
+                    {{ $t('settings.cliLaunch.no-model-args') }}
+                  </p>
+                  <p v-if="launchModelErrors[row.agentKey]" class="launch-error">
+                    {{ launchModelErrors[row.agentKey] }}
+                  </p>
+
+                  <div class="launch-field">
+                    <span class="launch-field-label">{{ $t('settings.cliLaunch.command-label') }}</span>
+                    <input
+                      type="text"
+                      class="launch-input"
+                      :value="launchCommands[row.agentKey] ?? ''"
+                      :placeholder="$t('settings.cliLaunch.command-placeholder')"
+                      :aria-label="$t('settings.cliLaunch.command-label')"
+                      @change="onLaunchCommandInput(row.agentKey, $event)"
+                    />
+                  </div>
+                  <div v-if="(launchCommands[row.agentKey] ?? '').trim()" class="launch-warn">
+                    <p>{{ $t('settings.cliLaunch.command-shadows-model') }}</p>
+                    <p>{{ $t('settings.cliLaunch.command-shadows-resume') }}</p>
+                  </div>
+
+                  <div class="launch-env-title">{{ $t('settings.cliLaunch.env-title') }}</div>
+                  <table class="launch-env-table">
+                    <thead>
+                      <tr>
+                        <th>{{ $t('settings.cliLaunch.env-col-name') }}</th>
+                        <th>{{ $t('settings.cliLaunch.env-col-value') }}</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="(entry, index) in (launchEnvs[row.agentKey] ?? [])" :key="entry.name">
+                        <td class="env-name">
+                          <code>{{ entry.name }}</code>
+                          <span
+                            v-if="isReservedSpawnEnvKey(entry.name, { foldCase: platformId() === 'win32' })"
+                            class="cli-chip cli-chip--bad"
+                          >{{ $t('settings.cliLaunch.env-reserved-chip') }}</span>
+                        </td>
+                        <td>
+                          <input
+                            type="text"
+                            class="launch-input"
+                            :value="entry.value"
+                            :aria-label="entry.name"
+                            @change="onLaunchEnvValueInput(row.agentKey, index, $event)"
+                          />
+                        </td>
+                        <td>
+                          <button type="button" class="env-remove" @click="removeLaunchEnv(row.agentKey, index)">
+                            {{ $t('settings.cliLaunch.env-remove') }}
+                          </button>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td>
+                          <input
+                            v-model="envDraftName"
+                            type="text"
+                            class="launch-input"
+                            :placeholder="$t('settings.cliLaunch.env-name-placeholder')"
+                            :aria-label="$t('settings.cliLaunch.env-col-name')"
+                          />
+                        </td>
+                        <td>
+                          <input
+                            v-model="envDraftValue"
+                            type="text"
+                            class="launch-input"
+                            :placeholder="$t('settings.cliLaunch.env-value-placeholder')"
+                            :aria-label="$t('settings.cliLaunch.env-col-value')"
+                            @keyup.enter="addLaunchEnv(row.agentKey)"
+                          />
+                        </td>
+                        <td>
+                          <button
+                            type="button"
+                            class="env-add"
+                            :disabled="envDraftBlocked"
+                            @click="addLaunchEnv(row.agentKey)"
+                          >{{ $t('settings.cliLaunch.env-add') }}</button>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  <p v-if="isReservedSpawnEnvKey(envDraftName, { foldCase: platformId() === 'win32' })" class="launch-warn">
+                    {{ $t('settings.cliLaunch.env-reserved-warn') }}
+                  </p>
+                </div>
+              </li>
+            </ul>
+            <p class="ap-hint">{{ $t('settings.cliLaunch.reserved-note', { list: reservedEnvKeyList }) }}</p>
+            <p class="ap-hint">{{ $t('settings.cliLaunch.restart-note') }}</p>
+          </section>
+          <section id="cli-panel-permissions" class="ap-section" data-settings-section="cli-agents-permissions">
             <h3 class="ap-title">{{ $t('settings.cliPermission.title') }}</h3>
             <p class="ap-hint">{{ $t('settings.cliPermission.hint') }}</p>
             <label class="cli-agent-toggle perm-global">
@@ -2535,7 +3208,7 @@ watch(activeTab, (tab) => {
             </label>
             <ul class="cli-agent-list">
               <li
-                v-for="spec in permissionRows"
+                v-for="spec in selectedPermissionRows"
                 :key="spec.agentKey"
                 class="cli-agent-row perm-row"
                 :class="{ 'perm-overridden': cliPermissionMode(spec.agentKey) !== 'inherit' }"
@@ -2554,14 +3227,14 @@ watch(activeTab, (tab) => {
                 </select>
               </li>
             </ul>
-            <p class="ap-hint">{{ $t('settings.cliPermission.flagless-note', { list: flaglessVendors }) }}</p>
+            <p v-if="!selectedPermissionRows.length" class="ap-hint">{{ $t('settings.cliPermission.flagless-note', { list: selectedCli.label }) }}</p>
             <p class="ap-hint">{{ $t('settings.cliPermission.restart-note') }}</p>
           </section>
-          <section class="ap-section" data-settings-section="cli-agents-push">
+          <section id="cli-panel-push" class="ap-section" data-settings-section="cli-agents-push">
             <h3 class="ap-title">{{ $t('settings.pushChannels.title') }}</h3>
             <p class="ap-hint">{{ $t('settings.pushChannels.hint') }}</p>
             <ul class="cli-agent-list">
-              <li v-for="spec in pushChannelRows" :key="spec.agentKey" class="cli-agent-row">
+              <li v-for="spec in selectedPushRows" :key="spec.agentKey" class="cli-agent-row">
                 <label class="cli-agent-toggle">
                   <input
                     type="checkbox"
@@ -2573,11 +3246,33 @@ watch(activeTab, (tab) => {
                 <span class="cli-agent-hint">{{ $t(`settings.pushChannels.cost-${spec.agentKey}`) }}</span>
               </li>
             </ul>
+            <p v-if="!selectedPushRows.length" class="ap-hint">{{ $t('settings.cliAgents.no-push-channel') }}</p>
+            <div v-if="allPushChannelsOff" class="push-all-off">
+              <div class="push-all-off-title">{{ $t('settings.pushChannels.all-off-title') }}</div>
+              <ul class="push-all-off-list">
+                <li>{{ $t('settings.pushChannels.all-off-delivery') }}</li>
+                <li>{{ $t('settings.pushChannels.all-off-rewake') }}</li>
+                <li>{{ $t('settings.pushChannels.all-off-restart') }}</li>
+              </ul>
+            </div>
             <p class="ap-hint">{{ $t('settings.pushChannels.restart-note') }}</p>
           </section>
-          <section class="ap-section" data-settings-section="cli-agents-maintenance">
-            <CliManagementPanel v-if="activeTab === 'cliAgents'" :backend="props.backend" />
+          <section id="cli-panel-install" class="ap-section" data-settings-section="cli-agents-maintenance">
+            <CliManagementPanel
+              v-if="activeTab === 'cliAgents'"
+              ref="cliPanelRef"
+              :agent-key="selectedCli.agentKey"
+              :backend="props.backend"
+              :onboarding="onboarding"
+              :cli-profiles="cliProfilesApi"
+              @login="(agentKey: string) => emit('cli-login', agentKey)"
+              @install-open-change="cliInstallOpen = $event"
+            />
           </section>
+              </div>
+            </section>
+          </div>
+          </Transition>
         </div>
 
         <!-- ══ GENERAL TAB ══ -->
@@ -2812,6 +3507,52 @@ watch(activeTab, (tab) => {
               </SettingRow>
 
               <SettingRow
+                data-settings-section="general-quota-failover"
+                :title="$t('usage.failover-title')"
+                :description="$t('usage.failover-hint')"
+              >
+                <template #control>
+                  <select
+                    data-testid="quota-failover-mode"
+                    :value="failoverMode"
+                    :disabled="failoverBusy || !quotaFailover.state.value"
+                    @change="onFailoverModeChange(($event.target as HTMLSelectElement).value)"
+                  >
+                    <option v-for="mode in FAILOVER_MODES" :key="mode" :value="mode">
+                      {{ $t(`usage.failover-mode-${mode}`) }}
+                    </option>
+                  </select>
+                </template>
+              </SettingRow>
+              <div v-if="quotaFailover.state.value" class="failover-caps" data-settings-section="general-quota-failover-caps">
+                <p v-if="quotaFailover.state.value.auditDegraded" class="failover-warn">
+                  {{ $t('usage.failover-audit-degraded') }}
+                </p>
+                <table class="az-table failover-table">
+                  <thead>
+                    <tr>
+                      <th>{{ $t('usage.failover-col-cli') }}</th>
+                      <th>{{ $t('usage.failover-col-switch') }}</th>
+                      <th>{{ $t('usage.failover-col-resume') }}</th>
+                      <th>{{ $t('usage.failover-col-notes') }}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="row in failoverRows" :key="row.agentKey" :data-failover-agent="row.agentKey">
+                      <td>{{ row.label }}</td>
+                      <td>{{ $t(`usage.failover-switch-${row.switchMode}`) }}</td>
+                      <td>{{ $t(`usage.failover-resume-${row.resume}`) }}</td>
+                      <td class="failover-notes">
+                        <span v-if="row.platformUnsupported" class="failover-tag">{{ $t('usage.failover-platform-unsupported') }}</span>
+                        <span v-if="row.unverified" class="failover-tag">{{ $t('usage.failover-unverified') }}</span>
+                        <span v-if="row.switchMode === 'unsupported' && row.todo" class="failover-todo">{{ row.todo }}</span>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <SettingRow
                 v-if="isDev"
                 data-settings-section="general-antigravity-secrets"
                 :title="$t('usage.settings-signing-title')"
@@ -2872,17 +3613,6 @@ watch(activeTab, (tab) => {
             </SettingsCard>
           </SettingsSection>
 
-          <SettingsSection :label="$t('settings.appearance.loop-prompt')">
-            <SettingsCard>
-              <div class="s-fullrow" data-settings-section="general-loop-prompt">
-                <p class="ap-hint">{{ $t('settings.appearance.loop-prompt-hint') }}</p>
-                <textarea v-model="loopPromptText" rows="4" spellcheck="false" @change="onLoopPromptChange"></textarea>
-                <p class="ap-hint">{{ $t('settings.appearance.loop-resume-hint') }}</p>
-                <textarea v-model="loopResumeText" rows="2" spellcheck="false" @change="onLoopResumeChange"></textarea>
-              </div>
-            </SettingsCard>
-          </SettingsSection>
-
           <SettingsSection :label="$t('settings.section.settings-management')">
             <SettingsCard data-settings-section="settings-management">
               <SettingRow
@@ -2898,7 +3628,7 @@ watch(activeTab, (tab) => {
               </SettingRow>
               <div class="s-fullrow">
                 <div class="settings-meta-row inline">
-                  <span class="scope-badge">{{ settingsScopeNotes.general.scope }}</span>
+                  <span class="scope-badge">{{ scopeLabel(settingsScopeNotes.general.scope) }}</span>
                   <span class="settings-path" :title="pathForTab('general')">{{ pathForTab('general') }}</span>
                 </div>
                 <p v-if="settingsBundleSummary" class="summary-ok">{{ settingsBundleSummary }}</p>
@@ -2917,6 +3647,7 @@ watch(activeTab, (tab) => {
             <span class="nvc-page-mark" aria-hidden="true"><NavideCloudMark /></span>
             {{ $t('settings.nav.crossDevice') }}
           </h1>
+          <SyncSettings :backend="props.backend" />
           <SettingsSection :label="$t('settings.p2p.title')">
             <SettingsCard>
               <div class="s-fullrow" data-settings-section="general-p2p">
@@ -3332,7 +4063,7 @@ watch(activeTab, (tab) => {
                   v-if="hasCustomOverrides"
                   class="ap-reset"
                   @click="resetCustom"
-                  title="Reset all custom colors to the built-in theme"
+                  :title="$t('settings.appearance.reset-colors-hint')"
                 >
                   {{ $t('settings.appearance.reset-to-defaults') }}
                 </button>
@@ -3361,30 +4092,6 @@ watch(activeTab, (tab) => {
                 </label>
               </div>
             </div>
-          </SettingsSection>
-
-          <SettingsSection :label="$t('settings.section.language')">
-            <SettingsCard>
-              <SettingRow
-                data-settings-section="appearance-language"
-                :title="$t('settings.appearance.language')"
-                :description="$t('settings.appearance.language-hint')"
-              >
-                <template #control>
-                  <div class="ap-lang-row">
-                    <button
-                      v-for="lang in SUPPORTED_LANGUAGES"
-                      :key="lang.value"
-                      :class="['ap-lang-btn', { active: currentLanguage === lang.value }]"
-                      @click="setLanguage(lang.value)"
-                    >
-                      {{ lang.label }}
-                      <span v-if="currentLanguage === lang.value" class="ap-check">✓</span>
-                    </button>
-                  </div>
-                </template>
-              </SettingRow>
-            </SettingsCard>
           </SettingsSection>
 
           <SettingsSection :label="$t('settings.section.other')">
@@ -3419,26 +4126,45 @@ watch(activeTab, (tab) => {
 
         </div>
 
+        <!-- ══ LANGUAGE TAB ══ -->
+        <div v-show="activeTab === 'language'" class="s-body appearance-body">
+          <h1 class="s-page-title">{{ $t('settings.nav.language') }}</h1>
+
+          <SettingsSection :label="$t('settings.section.language')">
+            <SettingsCard>
+              <SettingRow
+                data-settings-section="appearance-language"
+                :title="$t('settings.appearance.language')"
+                :description="$t('settings.appearance.language-hint')"
+              >
+                <template #control>
+                  <div class="ap-lang-row">
+                    <button
+                      v-for="lang in SUPPORTED_LANGUAGES"
+                      :key="lang.value"
+                      :class="['ap-lang-btn', { active: currentLanguage === lang.value }]"
+                      @click="setLanguage(lang.value)"
+                    >
+                      {{ $t(lang.labelKey) }}
+                      <span v-if="currentLanguage === lang.value" class="ap-check">✓</span>
+                    </button>
+                  </div>
+                </template>
+              </SettingRow>
+            </SettingsCard>
+          </SettingsSection>
+        </div>
+
         <div v-show="activeTab === 'accounts'" class="s-body s-body--bleed accounts-body" data-settings-section="accounts">
           <h1 class="s-page-title">{{ $t('settings.nav.accounts') }}</h1>
           <div class="settings-meta-row">
-            <span class="scope-badge">{{ settingsScopeNotes.accounts.scope }}</span>
+            <span class="scope-badge">{{ scopeLabel(settingsScopeNotes.accounts.scope) }}</span>
             <span class="settings-path">{{ pathForTab('accounts') }}</span>
           </div>
           <GitAccountsPane :api="accountsApi" />
           <div data-settings-section="cli-accounts" style="margin: 4px 22px 22px; padding-top: 22px; border-top: 1px solid var(--border-default);">
             <CliAccountsPane :api="cliProfilesApi" :workspace-open="workspaceOpen ?? false" @login="(agentKey: string, loginProfileId?: string) => emit('cli-login', agentKey, loginProfileId)" />
           </div>
-        </div>
-
-        <!-- ── EXECUTION POLICY TAB ─────────────────────────────────────── -->
-        <div v-show="activeTab === 'executionPolicy'" class="s-body s-body--bleed execution-policy-body" data-settings-section="execution-policy">
-          <h1 class="s-page-title">{{ $t('settings.nav.executionPolicy') }}</h1>
-          <div class="settings-meta-row">
-            <span class="scope-badge">{{ settingsScopeNotes.executionPolicy.scope }}</span>
-            <span class="settings-path">{{ pathForTab('executionPolicy') }}</span>
-          </div>
-          <ExecutionPolicyPane :workspace-path="props.workspacePath" />
         </div>
 
         <!-- ── KEYBOARD SHORTCUTS TAB ────────────────────────────────────── -->
@@ -3468,9 +4194,32 @@ watch(activeTab, (tab) => {
         </div>
 
         <!-- ── EXTENSIONS TAB (flag-gated) ───────────────────────────────── -->
-        <div v-show="activeTab === 'extensions'" class="s-body s-body--bleed" data-settings-section="extensions">
+        <!-- One page, two things that belong together: the policy that decides
+             what an extension may execute, then the extensions it applies to.
+             The scope badge sits on the policy block rather than the page,
+             because the policy is the part that is per user and per workspace —
+             the inventory below it is not. -->
+        <div v-show="activeTab === 'extensions'" class="s-body s-body--bleed extensions-body" data-settings-section="extensions">
           <h1 class="s-page-title">{{ $t('settings.nav.extensions') }}</h1>
-          <ExtensionsPane :workspace-path="props.workspacePath" />
+          <div class="extensions-scroll">
+            <section class="ext-policy-block" data-settings-section="execution-policy">
+              <h2 class="ext-policy-block-title">{{ $t('settings.nav.executionPolicy') }}</h2>
+              <div class="settings-meta-row inline">
+                <span class="scope-badge">{{ scopeLabel(executionPolicyScopeNote.scope) }}</span>
+                <span class="settings-path">{{ pathForStorage(executionPolicyScopeNote.storage) }}</span>
+              </div>
+              <ExecutionPolicyPane :workspace-path="props.workspacePath" />
+            </section>
+            <ExtensionsPane />
+          </div>
+        </div>
+
+        <!-- ── MARKETPLACE TAB ───────────────────────────────────────────── -->
+        <div v-show="activeTab === 'marketplace'" class="s-body s-body--bleed marketplace-body" data-settings-section="marketplace">
+          <h1 class="s-page-title">{{ $t('settings.nav.marketplace') }}</h1>
+          <div class="marketplace-scroll">
+            <MarketplacePane />
+          </div>
         </div>
 
         <!-- ── STATUS BADGES TAB ─────────────────────────────────────────── -->
@@ -3485,16 +4234,57 @@ watch(activeTab, (tab) => {
           <LayoutSettingsPane />
         </div>
 
-        <!-- ── STORAGE TAB ───────────────────────────────────────────────── -->
-        <div v-show="activeTab === 'storage'" class="s-body storage-body" data-settings-section="storage">
-          <h1 class="s-page-title">{{ $t('settings.nav.storage') }}</h1>
-          <!-- Lazy-mounted: the scan is expensive, so it only runs once the
-               user actually opens this tab. -->
-          <StorageUsagePane
-            v-if="activeTab === 'storage'"
-            :backend="props.backend"
-            :workspace-paths="props.workspacePaths"
-          />
+        <!-- ── NOTIFICATIONS TAB ─────────────────────────────────────────── -->
+        <div v-show="activeTab === 'notifications'" class="s-body notifications-body" data-settings-section="notifications">
+          <h1 class="s-page-title">{{ $t('settings.nav.notifications') }}</h1>
+
+          <SettingsSection :label="$t('settings.section.notifications')">
+            <SettingsCard>
+              <SettingRow
+                data-settings-section="general-system-notify"
+                :title="$t('settings.general.system-notify')"
+                :description="$t('settings.general.system-notify-hint')"
+              >
+                <template #control>
+                  <ToggleSwitch
+                    v-model="systemNotifyEnabledModel"
+                    :aria-label="$t('settings.general.system-notify')"
+                    @update:modelValue="onSystemNotifyEnabledChange"
+                  />
+                </template>
+              </SettingRow>
+
+              <SettingRow
+                data-settings-section="general-notify-sound"
+                :title="$t('settings.general.notify-sound')"
+                :description="$t('settings.general.notify-sound-hint')"
+              >
+                <template #control>
+                  <ToggleSwitch
+                    v-model="notifySoundEnabledModel"
+                    :aria-label="$t('settings.general.notify-sound')"
+                    @update:modelValue="onNotifySoundEnabledChange"
+                  />
+                </template>
+              </SettingRow>
+
+              <SettingRow
+                v-if="notifyPermissionApplicable"
+                data-settings-section="general-notify-permission"
+                :title="$t('settings.general.notify-permission')"
+                :description="$t(`settings.general.notify-permission-status.${notifyPermissionStatus}`) + ' ' + $t('settings.general.notify-permission-hint')"
+              >
+                <template #control>
+                  <button
+                    class="ap-reset"
+                    :disabled="!!perms.requesting.value"
+                    @click="sendTestNotification"
+                  >{{ perms.requesting.value === 'notifications' ? $t('onboard.requesting') : $t('settings.general.notify-permission-test') }}</button>
+                  <button class="ap-reset" @click="perms.openSettings('notifications')">{{ $t('onboard.open-settings') }}</button>
+                </template>
+              </SettingRow>
+            </SettingsCard>
+          </SettingsSection>
         </div>
 
         </div>
@@ -3752,19 +4542,125 @@ watch(activeTab, (tab) => {
 .setting-row-control select { width: auto; min-width: 120px; }
 .setting-row-control input[type='number'] { width: 96px; }
 
-/* CLI Agents tab — enable/disable + drag-reorder list */
+/* CLI Agents cards and the selected agent's contained drawer. */
+.cli-agent-roster { flex: 1; min-height: 0; overflow-y: auto; padding: 18px 22px; }
+.cli-agent-toolbar, .cli-agent-filters { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.cli-agent-toolbar input { flex: 1; min-width: 130px; }
+.cli-agent-toolbar button, .cli-agent-manage {
+  border: 1px solid var(--border-default); border-radius: var(--radius-sm);
+  background: var(--bg-elevated); color: var(--text-primary); padding: 5px 9px; font: inherit; font-size: var(--font-xs); cursor: pointer;
+}
+.cli-agent-toolbar button[aria-pressed='true'] { color: var(--accent-fg); background: var(--accent-subtle); border-color: var(--accent-focus); }
+.cli-agent-toolbar button:disabled { opacity: .4; cursor: default; }
+.cli-agent-count { margin: 10px 0 14px; }
+.cli-agent-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(210px, 100%), 1fr)); gap: 12px; list-style: none; padding: 0; margin: 0; }
+.cli-agent-card { display: flex; flex-direction: column; gap: 12px; min-width: 0; padding: 14px; border: 1px solid var(--border-default); border-radius: var(--radius-md); background: var(--bg-elevated); cursor: pointer; }
+.cli-agent-card:hover { border-color: var(--border-strong); }
+.cli-agent-card.drag-over { box-shadow: inset 0 0 0 2px var(--accent-focus); }
+.cli-agent-card.is-disabled { background: var(--bg-muted); }
+.cli-agent-card.is-disabled .cli-card-heading { opacity: .6; }
+.cli-card-heading { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.cli-card-heading .cli-agent-label { overflow-wrap: anywhere; }
+.cli-card-icon { display: grid; place-items: center; width: 30px; height: 30px; flex: 0 0 30px; border-radius: 8px; background: var(--bg-muted); color: var(--text-secondary); font-size: var(--font-xs); font-weight: 700; }
+.cli-card-attention { margin-left: auto; color: var(--warning-fg, #c77400); font-weight: 700; }
+.cli-card-status { display: flex; align-items: flex-start; flex-direction: column; gap: 4px; min-height: 42px; }
+.cli-card-status .cli-chip { max-width: 100%; overflow: hidden; text-overflow: ellipsis; box-sizing: border-box; }
+.cli-card-footer { display: flex; align-items: center; gap: 8px; margin-top: auto; font-size: var(--font-xs); }
+.cli-agent-empty { color: var(--text-secondary); text-align: center; padding: 30px 10px; }
+.cli-drawer-layer { position: absolute; inset: 0; z-index: 20; }
+.cli-drawer-scrim { position: absolute; inset: 0; background: rgb(0 0 0 / .25); }
+.cli-agent-drawer { position: absolute; inset: 0 0 0 auto; width: min(600px, 100%); display: flex; flex-direction: column; background: var(--bg-base); border-left: 1px solid var(--border-default); box-shadow: var(--shadow-modal); min-width: 0; }
+.cli-drawer-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 18px 20px 12px; }
+.cli-drawer-header h2 { margin: 0; font-size: var(--font-lg); }
+.cli-drawer-header p { margin: 3px 0 0; }
+.cli-drawer-close { border: 0; background: none; color: var(--text-secondary); cursor: pointer; font-size: var(--font-md); padding: 4px 8px; }
+.cli-drawer-content { flex: 1; min-height: 0; overflow-y: auto; padding: 18px 20px; }
+.cli-drawer-content .ap-section { margin: 0; }
+.cli-drawer-content .ap-section + .ap-section { margin-top: 22px; padding-top: 22px; border-top: 1px solid var(--border-default); }
+.cli-overview > .cli-agent-toggle { margin: 18px 0; }
+.cli-agent-drawer .launch-body { padding: 12px; border-top: 0; }
+.cli-agent-drawer .launch-field { align-items: flex-start; flex-direction: column; gap: 4px; }
+.cli-agent-drawer .launch-field-label { flex: none; }
+.cli-agent-drawer .launch-field .launch-input { width: 100%; box-sizing: border-box; }
+.cli-agent-drawer .perm-row { flex-wrap: wrap; }
+.cli-agent-drawer .perm-name { display: none; }
+.cli-agent-drawer .perm-flag { flex-basis: 100%; }
+.cli-agent-drawer .launch-env-table { table-layout: fixed; }
+.cli-agent-drawer .launch-env-table td:last-child, .cli-agent-drawer .launch-env-table th:last-child { width: 62px; }
+.cli-agent-drawer .launch-env-table .launch-input { width: 100%; box-sizing: border-box; }
+.cli-agent-drawer .env-name { display: table-cell; overflow-wrap: anywhere; }
+.cli-drawer-enter-active .cli-agent-drawer, .cli-drawer-leave-active .cli-agent-drawer { transition: transform .18s ease; }
+.cli-drawer-enter-from .cli-agent-drawer, .cli-drawer-leave-to .cli-agent-drawer { transform: translateX(100%); }
+@media (max-width: 960px) {
+  .cli-agent-drawer { width: 100%; border-left: 0; }
+  .cli-agent-roster { padding: 16px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cli-drawer-enter-active .cli-agent-drawer, .cli-drawer-leave-active .cli-agent-drawer { transition: none; }
+}
 .cli-agent-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .cli-agent-row {
   display: flex; align-items: center; gap: 10px;
   padding: 8px 12px; border: 1px solid var(--border-default); border-radius: var(--radius-md);
   background: var(--bg-elevated);
 }
-.cli-agent-row.drag-over { box-shadow: inset 0 0 0 2px var(--accent-focus); background: var(--accent-subtle); }
-.cli-agent-row.is-disabled { opacity: 0.55; }
 .cli-agent-grip { color: var(--text-secondary); cursor: grab; user-select: none; font-size: var(--font-md); }
 .cli-agent-toggle { display: flex; align-items: center; gap: 8px; flex: 1; cursor: pointer; margin: 0; }
 .cli-agent-label { font-size: var(--font-sm); font-weight: 600; }
 .cli-agent-hint { font-size: var(--font-2xs); color: var(--text-secondary); }
+.cli-agent-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.cli-chip {
+  font-size: var(--font-2xs); font-weight: 600; line-height: 1.6;
+  padding: 0 8px; border-radius: 99px; white-space: nowrap;
+  border: 1px solid var(--border-default); background: var(--bg-muted); color: var(--text-secondary);
+}
+.cli-chip--ok { color: #2b8a3e; border-color: transparent; }
+.cli-chip--warn { color: #c77400; border-color: transparent; }
+.cli-chip--bad { color: #c0392b; border-color: transparent; }
+.cli-chip--info { color: var(--accent-fg, #3b5bdb); border-color: transparent; }
+/* Launch overrides for the selected agent. */
+.launch-row { flex-direction: column; align-items: stretch; padding: 0; }
+.launch-row.launch-open { border-color: var(--accent-focus); }
+.launch-body {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 4px 12px 12px 32px; border-top: 1px solid var(--border-default);
+}
+.launch-field { display: flex; align-items: center; gap: 10px; }
+.launch-field-label { flex: 0 0 96px; font-size: var(--font-2xs); color: var(--text-secondary); }
+.launch-input { flex: 1; min-width: 0; font-size: var(--font-2xs); }
+.launch-note { margin: 0; }
+.launch-error { margin: 0; font-size: var(--font-2xs); color: var(--danger-fg); }
+.launch-warn {
+  padding: 6px 10px; border-radius: var(--radius-md);
+  border: 1px solid var(--border-default); border-left: 3px solid #c77400;
+  background: var(--bg-muted); font-size: var(--font-2xs); color: var(--text-secondary);
+}
+.launch-warn p { margin: 0; }
+.launch-warn p + p { margin-top: 5px; }
+.launch-env-title { margin-top: 4px; font-size: var(--font-2xs); font-weight: 700; }
+.launch-env-table { width: 100%; border-collapse: collapse; }
+.launch-env-table th {
+  font-size: var(--font-2xs); font-weight: 600; color: var(--text-secondary);
+  text-align: left; padding: 0 6px 2px 0;
+}
+.launch-env-table td { padding: 2px 6px 2px 0; vertical-align: middle; }
+.launch-env-table td:last-child, .launch-env-table th:last-child { width: 1%; padding-right: 0; }
+.env-name { display: flex; align-items: center; gap: 6px; font-size: var(--font-2xs); }
+.env-remove, .env-add {
+  font-size: var(--font-2xs); padding: 2px 8px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border-default); background: var(--bg-elevated);
+  color: var(--text-secondary); cursor: pointer; white-space: nowrap;
+}
+.env-add:disabled { opacity: 0.45; cursor: default; }
+/* Push channels: what switching every one of them off actually costs. */
+.push-all-off {
+  margin-top: 10px; padding: 10px 14px; border-radius: var(--radius-md);
+  border: 1px solid var(--border-default); border-left: 3px solid #c77400;
+  background: var(--bg-muted);
+}
+.push-all-off-title { font-size: var(--font-xs); font-weight: 700; margin-bottom: 4px; }
+.push-all-off-list { margin: 0; padding-left: 1.2em; font-size: var(--font-2xs); color: var(--text-secondary); }
+.push-all-off-list li { margin-bottom: 2px; }
 /* Permission overrides: name | flag | mode picker, the flag column taking the
    slack so the pickers line up down the list. */
 .perm-global { margin: 4px 0 10px; }
@@ -3881,17 +4777,15 @@ watch(activeTab, (tab) => {
   min-height: 0;
   overflow: hidden;
 }
-.cli-agents-body { overflow-y: auto; padding: 18px 22px; }
+.cli-agents-body { position: relative; }
 .updates-body { overflow-y: auto; padding: 18px 22px; }
 /* Accounts tab stacks two tall blocks (git + CLI accounts); scroll the tab so
    neither squeezes the other to zero height inside the overflow-hidden s-body. */
 .accounts-body { display: block; overflow-y: auto; }
-/* Storage tab is a two-column settings page like appearance/general: the bare
-   .s-body clips instead of scrolling, so it needs its own scroll + padding. */
-.storage-body { overflow-y: auto; padding: 18px 22px; }
-/* Same reason as storage: a stack of region cards needs the gutter and its own
-   scroll, which the bare .s-body (overflow:hidden, no padding) does not give. */
+/* A stack of region cards needs the gutter and its own scroll, which the bare
+   .s-body (overflow:hidden, no padding) does not give. */
 .layout-body { overflow-y: auto; padding: 18px 22px; }
+.notifications-body { overflow-y: auto; padding: 18px 22px; }
 /* Same reason: a scrolling list of status rows needs the gutter and its own
    scroll, which the bare .s-body does not give. */
 .status-badges-body { overflow-y: auto; padding: 18px 22px; }
@@ -3904,6 +4798,25 @@ watch(activeTab, (tab) => {
    The page title carries it instead, matching the 18px/22px inset the padded tab
    bodies above apply to their whole content. */
 .s-body--bleed > .s-page-title { padding: 18px 22px 0; flex-shrink: 0; }
+/* The Extensions page stacks the execution-policy editor on top of the plugin
+   inventory, so the page owns the one scrollbar and both panes inside it are
+   plain blocks. Marketplace matches it so the two plugin pages scroll alike. */
+.extensions-scroll,
+.marketplace-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.ext-policy-block { margin-bottom: var(--space-group); }
+.ext-policy-block-title {
+  /* Side margins, not padding or a width: these panels have no border-box, so
+     a width here would push the block past its grid track. */
+  margin: 0 22px;
+  font-size: var(--font-md);
+  font-weight: 600;
+  color: var(--text-bright);
+}
+.ext-policy-block > .settings-meta-row.inline { margin: 8px 22px 14px; }
 .settings-meta-row {
   display: flex;
   align-items: center;
@@ -4340,9 +5253,9 @@ button.ghost:hover:not(:disabled) { background: var(--bg-muted); }
 .az-pct { font-weight: 600; color: var(--text-bright); margin-left: 6px; }
 .az-size-info { color: var(--text-muted); font-size: var(--font-2xs); margin-left: 4px; }
 .az-gguf-hint { font-size: var(--font-2xs); color: var(--text-muted); margin-top: 6px; line-height: var(--lh-base); }
-.az-gguf-hint code { background: var(--bg-subtle); padding: 1px 4px; border-radius: var(--radius-xs); color: var(--text-bright); }
-.az-link { color: var(--accent-fg); text-decoration: none; }
-.az-link:hover { text-decoration: underline; }
+.az-gguf-hint :deep(code) { background: var(--bg-subtle); padding: 1px 4px; border-radius: var(--radius-xs); color: var(--text-bright); }
+.az-gguf-hint :deep(.az-link) { color: var(--accent-fg); text-decoration: none; }
+.az-gguf-hint :deep(.az-link:hover) { text-decoration: underline; }
 .az-code { background: var(--bg-subtle); padding: 1px 5px; border-radius: var(--radius-xs); font-size: var(--font-2xs); color: var(--text-bright); font-family: var(--font-mono); }
 .az-url-row { display: flex; gap: 6px; align-items: center; }
 .az-url-row .az-input { flex: 1; }
@@ -4475,6 +5388,19 @@ button.ghost:hover:not(:disabled) { background: var(--bg-muted); }
 .az-td-verdict { text-align: center; }
 .az-elapsed { font-size: var(--font-3xs); color: var(--text-secondary); margin-left: 3px; }
 .az-na { color: var(--text-disabled); }
+.failover-caps { padding: 0 var(--space-row-x) var(--space-row-y); }
+.failover-table td { font-size: var(--font-2xs); }
+.failover-notes { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.failover-tag {
+  font-size: var(--font-3xs);
+  border-radius: 99px;
+  padding: 0 6px;
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.failover-todo { font-size: var(--font-3xs); color: var(--text-muted); }
+.failover-warn { margin: 0 0 6px; font-size: var(--font-2xs); color: var(--attention-fg); }
 .az-row-fail td { color: var(--text-disabled); }
 .az-row-fail .az-td-model { color: var(--text-muted); }
 .az-badge-pass {

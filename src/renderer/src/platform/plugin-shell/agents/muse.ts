@@ -27,7 +27,7 @@ import type { AgentSpec } from './types'
 
 export const SPEC = {
   agentKey: 'muse',
-  label: 'Muse Code',
+  label: 'Muse Code (Meta)',
   defaultCommand: 'muse',
   // Values from the binary's --help, which lists one more (`max`) than the
   // published configuration docs. Meta-hosted models reject `none`.
@@ -54,5 +54,14 @@ export const SPEC = {
   // back by finding it in the recorded prompt.
   needsSessionMarker: true,
   supportsRebuild: true,
-  hint: 'generalist'
+  hint: 'generalist',
+  // Quota failover, from muse 1.3.0's binary strings (vendor-owner source
+  // read, not reproduced live): "usage limit reached" is its own error class,
+  // separate from "rate limited"; the goal state prints "usage limited" /
+  // "limited by budget" and the provider class is provider_tier_limit. The
+  // session-JSONL quota_hit record has no captured sample yet, so only the
+  // printed forms are declared.
+  quotaExhausted: {
+    pattern: /(usage limit reached|limited by budget|provider_tier_limit|quota_hit)/i,
+  },
 } as const satisfies AgentSpec

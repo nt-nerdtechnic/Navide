@@ -19,7 +19,7 @@ The root [README](../../README.md) introduces the product and current distributi
 
 | Document | Purpose |
 |---|---|
-| [Getting started](getting-started.md) | Download the unsigned preview or install from source, then complete the first launch |
+| [Getting started](getting-started.md) | Download the signed macOS build or the Windows or Linux installer, or install from source, then complete the first launch |
 | [User guide](user-guide.md) | Learn workspaces, panes, pipelines, coordination, Git, history, and editor workflows |
 | [Troubleshooting](troubleshooting.md) | Resolve startup, permissions, agent-session, analyzer, and token-tracking problems |
 
@@ -38,6 +38,7 @@ The root [README](../../README.md) introduces the product and current distributi
 | [Architecture](architecture.md) | Understand process boundaries, state ownership, and major services |
 | [Adding a CLI vendor](../adding-a-cli-vendor.md) | Add an AI coding CLI: the two spec files, registration, and the checks CI enforces |
 | [CLI extension guide](cli-extension-guide.md) | Per-vendor integration records: install routes, resume syntax, session storage formats |
+| [CLI vendor matrix](cli-vendor-matrix.md) | See every shipped CLI, the command it runs, and the capabilities its spec declares |
 | [Plugin development](plugin-development.md) | Build a frontend view plugin or a backend plugin, then package and sign it |
 | [Plugin development v2](plugin-development-v2.md) | Use the public contracts, SDK, UI package, and external frontend package workflow |
 | [External MCP control](external-mcp-control.md) | Connect an external MCP client to control a running Navide window, and understand the security model |

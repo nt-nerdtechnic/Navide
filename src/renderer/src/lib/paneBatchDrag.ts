@@ -4,6 +4,8 @@
 // The right-click menu already works this way (ctxTargetIds in App.vue); these
 // helpers give the drag surfaces the same semantics.
 
+import { withDescendants, type LineagePane } from './paneLineage'
+
 /**
  * The panes a drag actually carries.
  *
@@ -59,4 +61,31 @@ export function reorderBatchByIds<T extends { id: string }>(
   if (rest.every((it, i) => it.id === before[i])) return false
   items.splice(0, items.length, ...rest)
   return true
+}
+
+/**
+ * The panes a drag carries when the grabbed row was folded.
+ *
+ * A folded row stands for the family it hides, so the drag has to carry the
+ * hidden descendants too — otherwise a reorder or a drop in another window
+ * moves the parent alone and the children it was hiding stay behind.
+ *
+ * @param draggedId The pane the pointer grabbed.
+ * @param batch     What the drag carries before folding is considered (the
+ *                  multi-selection, or the dragged pane alone).
+ * @param panes     Every pane, in the order the batch should move in.
+ * @returns `batch` itself when the row hides nobody new — reference-equal, so
+ *          callers can test for "nothing was added" — otherwise `batch` plus
+ *          the dragged row's descendants, in `panes` order. Only THIS row's
+ *          subtree joins: an expanded parent elsewhere in the batch keeps the
+ *          single-row drag it always had.
+ */
+export function withFoldedSubtree(
+  draggedId: string,
+  batch: readonly string[],
+  panes: readonly LineagePane[]
+): string[] {
+  const carried = new Set([...batch, ...withDescendants([draggedId], panes)])
+  if (carried.size === batch.length) return batch as string[]
+  return panes.filter((p) => carried.has(p.id)).map((p) => p.id)
 }

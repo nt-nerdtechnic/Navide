@@ -149,7 +149,7 @@ def test_spec_is_registered_under_its_key() -> None:
     assert VENDORS["muse"] is SPEC
     assert vendor("muse") is SPEC
     assert SPEC.key == "muse"
-    assert SPEC.label == "Muse Code"
+    assert SPEC.label == "Muse Code (Meta)"
 
 
 def test_install_dep_detects_and_installs_the_cli() -> None:
@@ -207,10 +207,12 @@ def test_unverified_capabilities_stay_unset() -> None:
 
     Still unset, each for a reason:
     """
-    # Credentials: Meta documents `muse auth set` / META_API_KEY but not where
-    # a stored credential lands, and no env var relocates the config home.
-    assert SPEC.live_file is None
-    assert SPEC.slot_file is None
+    # Credentials: the launcher script names the file and its shape (see
+    # ``account_switch``), but MUSE_AUTH_PATH is a file path, not a home, so
+    # no login-home isolation exists and no legacy profile home ever did.
+    assert SPEC.live_file == (".config", "muse", "auth.json")
+    assert SPEC.slot_file == "auth.json"
+    assert SPEC.login_home_env is None
     assert SPEC.login_home_secret_file is None
     assert SPEC.profile_home_secret_file is None
     assert SPEC.login_home_env is None

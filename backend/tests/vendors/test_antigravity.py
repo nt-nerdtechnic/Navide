@@ -15,6 +15,39 @@ from agent_team_backend.cli_vendors.antigravity import _extract_cwd
 from agent_team_backend.log_readers.attribution import Attribution
 
 
+def test_resume_command_claims_the_explicit_conversation() -> None:
+    from agent_team_backend import app
+    from agent_team_backend.cli_vendors.antigravity import SPEC
+
+    parse = SPEC.resume_id_from_command
+    assert parse is not None
+    sid = "21fdfc1b-883a-47ce-b547-e9179ba62eef"
+    for command in (
+        f"agy --conversation {sid}",
+        f"agy --model test --conversation='{sid}'",
+        f"'agy' '--conversation' '{sid}'",
+        ["/bin/sh", "-lc", f"agy --conversation {sid}"],
+    ):
+        assert parse(command) == sid
+        assert app._resume_id_for_agent("antigravity", command) == sid
+    for command in ("agy", "agy --continue", "agy --conversation --model test"):
+        assert parse(command) == ""
+
+
+def test_resume_command_does_not_claim_shell_or_positional_text() -> None:
+    from agent_team_backend.cli_vendors.antigravity import SPEC
+
+    sid = "21fdfc1b-883a-47ce-b547-e9179ba62eef"
+    for separator in ("&&", "||", ";", "|", "\n", "#"):
+        assert SPEC.resume_id_from_command(
+            f"agy --help {separator} echo --conversation {sid}"
+        ) == ""
+    assert SPEC.resume_id_from_command(f"agy -- --conversation {sid}") == ""
+    assert SPEC.resume_id_from_command(f"echo --conversation {sid}") == ""
+    assert SPEC.resume_id_from_command(["/bin/sh", "-lc", f"printf --conversation {sid}"]) == ""
+    assert SPEC.resume_id_from_command(["echo", f"agy --conversation {sid}"]) == ""
+
+
 def _make_conversation_db(path: Path, workspace: Path, extra_blob: bytes = b"") -> None:
     """Minimal conversation db: trajectory_metadata_blob with a file:// URI.
 
@@ -202,3 +235,9 @@ def test_new_conversation_fallback_does_not_guess_between_two_antigravity_panes(
     )
 
     assert attr.maybe_announce_session(usage) is None
+
+
+def test_turns_are_unsupported_the_log_has_no_token_usage(tmp_path: Path) -> None:
+    reader = AntigravityLogReader()
+    assert reader.turns_method == "unsupported"
+    assert reader.turns_for_session(tmp_path / "missing.jsonl") == []

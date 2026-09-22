@@ -24,10 +24,13 @@ import os
 import tempfile
 import re
 import shutil
+import sqlite3
 import threading
 import time
 
-from .base import Dep, McpWiring, SkillsWiring, VendorSpec, command_text
+import psutil
+
+from .base import AccountSwitchSpec, Dep, McpWiring, SkillsWiring, VendorRuntimeContext, VendorSpec, command_text
 from ..applog import app_data_dir
 from ..skills_store import SkillsStore
 from . import _protocols
@@ -37,10 +40,13 @@ from ..log_readers.base import (
     IncrementalParseResult,
     LogReader,
     TokenUsage,
+    TurnCall,
+    TurnUsage,
     activity_high_water,
     join_text_blocks,
     read_jsonl_tail,
     set_activity_high_water,
+    turn_excerpt,
     user_prompt_text,
 )
 
@@ -50,7 +56,7 @@ log = logging.getLogger("agent_team_backend.log_readers.codex")
 # per-file seen_keys set (avoids needing a separate state dict).
 _CUM_PREFIX = "__cum__:"
 # Prefix for stashing the last assistant text inside seen_keys, so a turn whose
-# assistant message and token_count boundary land in different poll batches
+# assistant message and task_complete boundary land in different poll batches
 # still delivers the text on its turn_complete (Codex's per-turn boundary).
 _TEXT_PREFIX = "__lasttext__:"
 
@@ -75,6 +81,36 @@ def _int(v) -> int:  # noqa: ANN001
         return 0
 
 
+def _typed_prompt(payload: dict) -> str | None:
+    """The user's typed prompt carried by an `event_msg` payload, or None when
+    the record is not a user prompt at all.
+
+    Two shapes, because Codex changed the rollout format: up to mid-2026 the
+    prompt was its own `user_message` event with a `message` string; rollouts
+    written since (codex-cli 0.155 observed) have no `user_message` record and
+    instead complete the prompt as an `item_completed` whose `item.type` is
+    `UserMessage`, with the text spread over `content` blocks of type `text`
+    (images ride as `local_image` blocks with no text). An empty string means
+    a prompt record with nothing typed in it.
+    """
+    ptype = payload.get("type")
+    if ptype == "user_message":
+        return str(payload.get("message") or "")
+    if ptype != "item_completed":
+        return None
+    item = payload.get("item")
+    if not isinstance(item, dict) or item.get("type") != "UserMessage":
+        return None
+    content = item.get("content")
+    if not isinstance(content, list):
+        return ""
+    return "\n".join(
+        str(block.get("text") or "")
+        for block in content
+        if isinstance(block, dict) and block.get("type") == "text"
+    )
+
+
 def _read_cumulative(seen_keys: set[str]) -> tuple[int, int]:
     """Return (prev_input, prev_output) from sentinel key, or (0, 0)."""
     for k in seen_keys:
@@ -95,8 +131,33 @@ def _write_cumulative(seen_keys: set[str], input_total: int, output_total: int) 
     seen_keys.add(f"{_CUM_PREFIX}in={input_total},out={output_total}")
 
 
+def _dedupe_resolved(roots: list[Path]) -> list[Path]:
+    """Drop roots that resolve to a path an earlier root already covers.
+
+    Pane homes made before 9ab9e87c mirror `sessions` as a symlink back to
+    ~/.codex/sessions, so each of them re-listed the whole default tree (#121:
+    39k rollouts x 27 homes ≈ 6 min per scan). Order is kept so the default
+    root, listed first, is the spelling that survives.
+    """
+    out: list[Path] = []
+    seen: set[Path] = set()
+    for root in roots:
+        try:
+            key = root.resolve()
+        except OSError:
+            key = root
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(root)
+    return out
+
+
 class CodexLogReader(LogReader):
     vendor: str = "codex"
+
+    #: turns_for_session cuts on the rollout's own user prompt records.
+    turns_method: str = "exact"
 
     #: parse_activity walks a dense ascending line counter and resumes from
     #: one high-water mark, so an old file can be seeded to EOF by counting
@@ -148,7 +209,7 @@ class CodexLogReader(LogReader):
                 )
             except OSError as err:
                 log.debug("enumerate %s failed: %s", panes_root, err)
-        return roots
+        return _dedupe_resolved(roots)
 
     def watch_dirs(self) -> list[Path]:
         roots: list[Path] = []
@@ -158,7 +219,7 @@ class CodexLogReader(LogReader):
         panes_root = Path.home() / ".codex-panes"
         if panes_root.is_dir():
             roots.append(panes_root)
-        return roots
+        return _dedupe_resolved(roots)
 
     def session_files(self) -> list[Path]:
         with self._discovery_lock:
@@ -248,6 +309,7 @@ class CodexLogReader(LogReader):
         latest_event: dict | None = None
         cwd = ""
         model = ""
+        cli_version = ""
         session_id = path.stem
 
         with fh:
@@ -267,6 +329,7 @@ class CodexLogReader(LogReader):
                     if isinstance(payload, dict):
                         cwd = str(payload.get("cwd") or cwd)
                         model = str(payload.get("model_provider") or payload.get("model") or model)
+                        cli_version = str(payload.get("cli_version") or cli_version)
                     continue
 
                 # Token count events are the only ones we care about
@@ -322,6 +385,7 @@ class CodexLogReader(LogReader):
                 dedup_key=f"codex_cumulative::{session_id}::{latest_in}::{latest_out}",
                 timestamp=str(latest_event.get("timestamp") or ""),
                 model=model,
+                cli_version=cli_version,
             )
         ]
 
@@ -342,6 +406,7 @@ class CodexLogReader(LogReader):
         latest_in, latest_out = prev_in, prev_out
         cwd = "" if replaced else str(checkpoint.get("cwd") or "")
         model = "" if replaced else str(checkpoint.get("model") or "")
+        cli_version = "" if replaced else str(checkpoint.get("cli_version") or "")
         session_id = path.stem if replaced else str(checkpoint.get("session_id") or path.stem)
         latest_event: dict | None = None
         latest_end = int(next_checkpoint.get("offset") or 0)
@@ -355,6 +420,7 @@ class CodexLogReader(LogReader):
                     cwd = str(payload.get("cwd") or cwd)
                     session_id = str(payload.get("id") or session_id)
                     model = str(payload.get("model_provider") or payload.get("model") or model)
+                    cli_version = str(payload.get("cli_version") or cli_version)
                 continue
             if rec.get("type") != "event_msg":
                 continue
@@ -376,6 +442,7 @@ class CodexLogReader(LogReader):
             "cwd": cwd,
             "model": model,
             "session_id": session_id,
+            "cli_version": cli_version,
         })
         if latest_event is None:
             return IncrementalParseResult([], next_checkpoint)
@@ -398,17 +465,113 @@ class CodexLogReader(LogReader):
             timestamp=str(latest_event.get("timestamp") or ""),
             model=model,
             checkpoint=event_checkpoint,
+            cli_version=cli_version,
         )
         return IncrementalParseResult([event], next_checkpoint)
+
+    def turns_for_session(self, path: Path, session_id: str = "") -> list[TurnUsage]:
+        """A turn opens at each user prompt record (see _typed_prompt); every `token_count`
+        inside it is one model call, measured as the delta of the cumulative
+        `total_token_usage` against the previous one (the same counters
+        parse_session_file differences, kept apart instead of folded). A
+        rollout with no prompt record at all falls back to one turn
+        per token_count.
+
+        Codex's input_tokens already contains cached_input_tokens and its
+        output_tokens already contains reasoning_output_tokens (its
+        total_tokens is input + output), so input here is the uncached
+        remainder, output is taken as is, and the turn total equals the
+        CLI's own total_tokens.
+        """
+        try:
+            fh = path.open(encoding="utf-8")
+        except OSError as err:
+            log.debug("open %s failed: %s", path, err)
+            return []
+        sid = path.stem
+        model = ""
+        cli_version = ""
+        prev = (0, 0, 0)
+        turns: list[TurnUsage] = []
+        current: TurnUsage | None = None
+        saw_prompt = False
+        with fh:
+            for line_no, raw in enumerate(fh, 1):
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    rec = json.loads(raw)
+                except json.JSONDecodeError:
+                    log.debug("%s:%d malformed JSON, skipping", path.name, line_no)
+                    continue
+                payload = rec.get("payload") or {}
+                if not isinstance(payload, dict):
+                    continue
+                if rec.get("type") == "session_meta":
+                    sid = str(payload.get("id") or sid)
+                    model = str(payload.get("model_provider") or payload.get("model") or model)
+                    cli_version = str(payload.get("cli_version") or cli_version)
+                    continue
+                if rec.get("type") != "event_msg":
+                    continue
+                ts = str(rec.get("timestamp") or "") or None
+                ptype = payload.get("type")
+                prompt = _typed_prompt(payload)
+                if prompt is not None:
+                    saw_prompt = True
+                    current = TurnUsage(
+                        turn_index=0, session_id=sid, started_at=ts, ended_at=None,
+                        prompt_excerpt=turn_excerpt(prompt),
+                    )
+                    turns.append(current)
+                    continue
+                if ptype != "token_count":
+                    continue
+                info = payload.get("info")
+                totals = info.get("total_token_usage") if isinstance(info, dict) else None
+                if not isinstance(totals, dict):
+                    continue
+                cur = (
+                    _int(totals.get("input_tokens")),
+                    _int(totals.get("cached_input_tokens")),
+                    _int(totals.get("output_tokens")),
+                )
+                delta = tuple(c - p for c, p in zip(cur, prev))
+                prev = cur
+                if any(d < 0 for d in delta):
+                    continue  # totals shrank: rotated session, new baseline
+                if not any(delta):
+                    continue
+                if current is None or not saw_prompt:
+                    current = TurnUsage(
+                        turn_index=0, session_id=sid, started_at=ts, ended_at=None,
+                        prompt_excerpt="",
+                    )
+                    turns.append(current)
+                current.add_call(TurnCall(
+                    ts=ts, model=model,
+                    input=max(0, delta[0] - delta[1]), cache_read=delta[1],
+                    cache_creation=0, output=delta[2], cli_version=cli_version,
+                ))
+                current.ended_at = ts or current.ended_at
+        # Either id names this rollout: the session_meta id (what the token
+        # sink and the live registry carry) or the file stem (what
+        # session_id_from_path answers and a bare tokens.turns lookup uses).
+        if session_id and session_id not in (sid, path.stem):
+            return []
+        out = [t for t in turns if t.calls]
+        for n, turn in enumerate(out, 1):
+            turn.turn_index = n
+        return out
 
     def parse_activity(
         self, path: Path, seen_keys: set[str]
     ) -> list[ActivityEvent]:
         """Emit `agent_active` for assistant + event_msg lines.
 
-        Codex doesn't have a clean "turn end" sentinel like Claude; we use the
-        token_count event (which Codex emits at conversation boundaries) as
-        a proxy for `turn_complete`.
+        `task_complete` (and `turn_aborted`) is the turn end; `token_count`
+        is per model call and is only counted, never used as a boundary.
         """
         out: list[ActivityEvent] = []
         session_id = path.stem
@@ -494,26 +657,38 @@ class CodexLogReader(LogReader):
                                 last_text = msg_text
                                 text_changed = True
                         # Turn text rides only on turn_complete (the event the
-                        # frontend judges). The one exception: a user_message's
-                        # typed prompt rides on its own agent_active event so the
+                        # frontend judges). The one exception: the user's typed
+                        # prompt rides on its own agent_active event so the
                         # frontend can name the pane from the first user text.
+                        # Both rollout shapes (see _typed_prompt) surface as
+                        # detail "user_message" — the frontend keys on it.
                         # "<...>"-wrapped records are injected instruction/context
                         # stubs, not typed prompts.
                         text = ""
-                        if ptype == "user_message":
-                            text = user_prompt_text(str(payload.get("message") or ""))
+                        detail = ptype
+                        prompt = _typed_prompt(payload)
+                        if prompt is not None:
+                            detail = "user_message"
+                            text = user_prompt_text(prompt)
                         out.append(ActivityEvent(
                             vendor="codex", event_type="agent_active",
                             cwd=cwd, session_id=session_id, file_path=str(path),
-                            dedup_key=key, timestamp=ts, detail=ptype, text=text,
+                            dedup_key=key, timestamp=ts, detail=detail, text=text,
                         ))
-                        # token_count typically fires once per turn end in Codex.
-                        if ptype == "token_count":
+                        # task_complete is the turn's real end. token_count is
+                        # NOT: it fires once per model call, i.e. after every
+                        # tool call inside a turn, so ending the turn there
+                        # fired "done" mid-turn. turn_aborted (Esc) ends the
+                        # turn too, with nothing completed to judge.
+                        if ptype in ("task_complete", "turn_aborted"):
+                            text = ""
+                            if ptype == "task_complete":
+                                text = last_text or str(payload.get("last_agent_message") or "")
                             out.append(ActivityEvent(
                                 vendor="codex", event_type="turn_complete",
                                 cwd=cwd, session_id=session_id, file_path=str(path),
                                 dedup_key=f"turn:{line_no}", timestamp=ts,
-                                detail="token_count", text=last_text,
+                                detail=ptype, text=text,
                             ))
                             # Turn consumed the text; reset so the next turn's
                             # empty-text boundary can't reuse it.
@@ -529,6 +704,13 @@ class CodexLogReader(LogReader):
 # ---- per-pane CODEX_HOME management (merged from codex_home.py) ------------
 
 _SAFE_HOME_ID = re.compile(r"^[A-Za-z0-9_.:-]+$")
+# Home ids Navide itself generates: a pane's crypto.randomUUID(), or a plugin
+# window's `<8 hex>-<surface>-ai-terminal` (aiTerminalPaneId). Reclaim only
+# touches these — anything else under ~/.codex-panes was put there by hand.
+_NAVIDE_HOME_ID = re.compile(
+    r"^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+    r"|[0-9a-f]{8}-[a-z]+-ai-terminal)$"
+)
 
 # CODEX_HOME *routing* lookup only: which home physically holds a rollout.
 # `sessions` is nested {Y}/{M}/{D}; `codex archive` moves a rollout into the
@@ -542,6 +724,16 @@ _SESSION_SUBDIRS = ("sessions", "archived_sessions")
 _MAX_THREAD_HOPS = 8
 # Same budget the attribution layer reads session files with.
 _META_READ_BYTES = 524_288
+# Runtime locations from Codex 0.155.1. Keep config resources (including
+# relative paths in named profiles) visible without sharing session storage.
+_HOME_RUNTIME_ENTRIES = frozenset({
+    *_SESSION_SUBDIRS, "session_index.jsonl", "history.jsonl", "shell_snapshots",
+    "thread-writer-locks", "log", "tmp", "app-server-control", "app-server-daemon",
+})
+_HOME_RUNTIME_DATABASE = re.compile(
+    r"(?:state|logs|goals|memories(?:_v2)?|queue|thread_history)_\d+\.sqlite"
+    r"(?:-(?:wal|shm|journal))?"
+)
 
 
 class CodexHomeManager:
@@ -558,14 +750,6 @@ class CodexHomeManager:
         self.panes_root = panes_root or (Path.home() / ".codex-panes")
         self.managed_skills_root = managed_skills_root or (app_data_dir() / "runtime" / "skills")
         self._refresh_managed_skills = managed_skills_root is None
-        self.shared_entries = (
-            "auth.json",
-            "config.toml",
-            "AGENTS.md",
-            "plugins",
-            "rules",
-            "memories",
-        )
 
     def prepare(self, home_id: str, *, source_home: Path | None = None) -> Path:
         """Create the per-pane home, symlinking shared entries from
@@ -579,17 +763,27 @@ class CodexHomeManager:
         safe_id = self._safe_home_id(home_id)
         pane_home = self.panes_root / safe_id
         pane_home.mkdir(parents=True, exist_ok=True)
-        for name in self.shared_entries:
-            src = source / name
-            dst = pane_home / name
+        self._share_config_entries(pane_home, source)
+        self._prepare_skills_view(pane_home, source / "skills")
+        return pane_home
+
+    def _share_config_entries(self, pane_home: Path, source: Path) -> None:
+        if not source.is_dir():
+            return
+        for src in source.iterdir():
+            if (
+                src.name in _HOME_RUNTIME_ENTRIES
+                or _HOME_RUNTIME_DATABASE.fullmatch(src.name)
+                or src.name == "skills" or src.name.startswith(".navide-skills")
+            ):
+                continue
+            dst = pane_home / src.name
             if not src.exists() or dst.exists() or dst.is_symlink():
                 continue
             try:
                 dst.symlink_to(src, target_is_directory=src.is_dir())
             except OSError as err:
                 log.warning("codex home symlink %s -> %s failed: %s", dst, src, err)
-        self._prepare_skills_view(pane_home, source / "skills")
-        return pane_home
 
     def _prepare_skills_view(self, pane_home: Path, native_root: Path) -> None:
         """Expose native and enabled managed skills under ``CODEX_HOME/skills``.
@@ -717,6 +911,61 @@ class CodexHomeManager:
         elif path.exists():
             shutil.rmtree(path)
 
+    def seed_hook_trust(self, pane_home: Path) -> int:
+        """Carry the user's hooks.json trust over to a per-pane CODEX_HOME.
+
+        Codex (>= 0.15x) keys hook trust in the shared config.toml by the
+        *path* of the hooks.json that defines the hook —
+        ``[hooks.state."<CODEX_HOME>/hooks.json:<event>:<i>:<j>"]`` — with a
+        content hash as the value. A pane home mirrors ``~/.codex/hooks.json``
+        under its own path, so the same file lands under a key the user never
+        trusted and every spawn (resume included) stops at "Hooks need review".
+        Copy the real-home entries under the pane-home key; the hash is
+        content-only, so it stays valid. Only hooks the user already trusted
+        are seeded, and only when the pane file is byte-identical. Returns
+        the number of entries appended.
+        """
+        pane_hooks = pane_home / "hooks.json"
+        real_hooks = self.real_home / "hooks.json"
+        config = self.real_home / "config.toml"
+        try:
+            if not (pane_hooks.is_file() and real_hooks.is_file()):
+                return 0
+            if pane_hooks.read_bytes() != real_hooks.read_bytes():
+                return 0
+            text = config.read_text(encoding="utf-8")
+        except OSError:
+            return 0
+        real_prefix = f"{real_hooks}:"
+        pane_prefix = f"{pane_hooks}:"
+        keys = re.findall(r'^\[hooks\.state\."((?:[^"\\]|\\.)*)"\]\s*$', text, flags=re.MULTILINE)
+        # Header → the trusted_hash line that follows it.
+        blocks = re.findall(
+            r'^\[hooks\.state\."((?:[^"\\]|\\.)*)"\]\s*\n\s*trusted_hash\s*=\s*("[^"\n]*")',
+            text, flags=re.MULTILINE,
+        )
+        existing = {_toml_unescape(k) for k in keys}
+        additions = []
+        for key, hashed in blocks:
+            key = _toml_unescape(key)
+            if not key.startswith(real_prefix):
+                continue
+            new_key = pane_prefix + key[len(real_prefix):]
+            if new_key in existing:
+                continue
+            existing.add(new_key)
+            additions.append(f'[hooks.state."{_toml_escape(new_key)}"]\ntrusted_hash = {hashed}\n')
+        if not additions:
+            return 0
+        lead = "" if text.endswith("\n") else "\n"
+        try:
+            with config.open("a", encoding="utf-8") as f:
+                f.write(lead + "\n" + "\n".join(additions))
+        except OSError as err:
+            log.warning("seeding codex hook trust for %s failed: %s", pane_home, err)
+            return 0
+        return len(additions)
+
     def find_session_home(self, resume_id: str) -> Path | None:
         """Locate the CODEX_HOME that physically holds this session, if any.
 
@@ -771,6 +1020,7 @@ class CodexHomeManager:
             try:
                 for pane_home in sorted(self.panes_root.iterdir()):
                     if holds_session(pane_home):
+                        self._share_config_entries(pane_home, self.real_home)
                         self._prepare_skills_view(pane_home, self.real_home / "skills")
                         return pane_home
             except OSError:
@@ -806,16 +1056,20 @@ class CodexHomeManager:
             except OSError:
                 return resume_id
             metas = _session_meta_payloads(text)
-            if not metas or metas[0].get("thread_source") != "subagent":
+            if not metas or not is_subagent_session_meta(metas[0]):
                 return rid  # already a user thread
             ancestor = next(
                 (str(m["id"]) for m in metas
-                 if m.get("thread_source") != "subagent" and m.get("id")),
+                 if not is_subagent_session_meta(m) and m.get("id")),
                 "",
             )
             if ancestor:
                 return ancestor
-            rid = str(metas[0].get("parent_thread_id") or "")
+            source = metas[0].get("source")
+            subagent = source.get("subagent") if isinstance(source, dict) else None
+            spawn = subagent.get("thread_spawn") if isinstance(subagent, dict) else None
+            nested_parent = spawn.get("parent_thread_id") if isinstance(spawn, dict) else None
+            rid = str(metas[0].get("parent_thread_id") or nested_parent or "")
         return resume_id
 
     def _rollout_path(self, resume_id: str) -> Path | None:
@@ -841,6 +1095,157 @@ class CodexHomeManager:
                 if found is not None:
                     return found
         return None
+
+    def owns_session(self, pane_home: Path) -> bool:
+        """True when a rollout can only be resumed through this home.
+
+        `codex resume <id>` only works from the home that recorded the rollout
+        (its file plus that home's own state db), so a home holding one must
+        outlive its pane. Archived rollouts count too — `codex unarchive`
+        needs the same home. Fails closed: a subdir that cannot be read is
+        treated as owning a session.
+
+        A symlinked `sessions` (a mirror back to ~/.codex/sessions) holds no
+        file of its own, but codex 0.155 resolves a resume through the
+        `rollout_path` in its state db — and a rollout written through the
+        link was recorded under THIS home's path. Removing the home leaves
+        that pointer dangling ("no rollout found for thread id") even though
+        the file survives in the real home, so a mirrored home is owned by
+        every thread the real home's state db still keys on it.
+        """
+        for name in _SESSION_SUBDIRS:
+            subdir = pane_home / name
+            if subdir.is_symlink():
+                if self._state_db_references(pane_home):
+                    return True
+                continue
+            if not subdir.is_dir():
+                continue
+            try:
+                if next(subdir.rglob("rollout-*.jsonl"), None) is not None:
+                    return True
+            except OSError:
+                return True
+        return False
+
+    def _state_db_references(self, pane_home: Path) -> bool:
+        """True when the real home's state db keys a rollout on ``pane_home``.
+
+        Fails closed: a db that exists but cannot be queried — a schema this
+        code does not know included — counts as a reference. No db at all
+        means codex never wrote there.
+        """
+        prefix = f"{pane_home}{os.sep}"
+        if not self.real_home.is_dir():
+            return False
+        try:
+            dbs = [
+                p for p in self.real_home.iterdir()
+                if p.name.startswith("state_") and p.suffix == ".sqlite"
+            ]
+        except OSError:
+            return True
+        for db in dbs:
+            try:
+                # A plain connection: read-only mode cannot create the -shm a
+                # WAL database needs when its writer is not around. `_` in a
+                # home path is a LIKE wildcard; a false match only keeps a home.
+                conn = sqlite3.connect(db, timeout=5)
+                try:
+                    row = conn.execute(
+                        "SELECT 1 FROM threads WHERE rollout_path LIKE ? LIMIT 1",
+                        (prefix + "%",),
+                    ).fetchone()
+                finally:
+                    conn.close()
+            except sqlite3.Error as err:
+                # Includes "no such table": codex renames its files and moves
+                # tables across schema bumps (state_4 -> state_5,
+                # thread_history split out), and a bump that moves `threads`
+                # must not read as "nothing references this home".
+                log.warning("cannot read codex state db %s: %s", db, err)
+                return True
+            if row is not None:
+                return True
+        return False
+
+    def reclaim(self, home_id: str) -> bool:
+        """Remove a pane home its pane no longer needs. Returns True on removal.
+
+        Refuses anything that is not a Navide-shaped id, a home that still
+        owns a session (see `owns_session`), and a home holding a real (not
+        symlinked) auth.json — a fresh-install login that
+        `promote_stranded_auth` has not adopted yet. A home that is itself a
+        symlink is unlinked, never followed; nested symlinks (the shared
+        config entries) are removed as links by rmtree.
+        """
+        safe_id = self._safe_home_id(home_id)
+        if not _NAVIDE_HOME_ID.match(safe_id):
+            return False
+        pane_home = self.panes_root / safe_id
+        if pane_home.is_symlink():
+            pane_home.unlink()
+            return True
+        if not pane_home.is_dir():
+            return False
+        if self.owns_session(pane_home):
+            return False
+        auth = pane_home / "auth.json"
+        if auth.is_file() and not auth.is_symlink():
+            return False
+        shutil.rmtree(pane_home)
+        return True
+
+    def sweep_orphans(self) -> list[str]:
+        """Reclaim every pane home no pane needs. Runs once at backend start.
+
+        This backend has no live pane then, but another Navide on the same
+        machine (a packaged build beside `pnpm dev`) may: its codex processes
+        carry CODEX_HOME in their environment, and a home one of them runs in
+        is skipped. Otherwise the only homes kept are the ones `reclaim`
+        refuses. Returns the ids it removed."""
+        if not self.panes_root.is_dir():
+            return []
+        try:
+            names = sorted(p.name for p in self.panes_root.iterdir())
+        except OSError as err:
+            log.warning("enumerating %s failed: %s", self.panes_root, err)
+            return []
+        live = self._live_codex_homes()
+        reclaimed: list[str] = []
+        for name in names:
+            if not _NAVIDE_HOME_ID.match(name):
+                continue
+            if name in live:
+                continue
+            try:
+                if self.reclaim(name):
+                    reclaimed.append(name)
+            except OSError as err:
+                log.warning("reclaiming codex pane home %s failed: %s", name, err)
+        return reclaimed
+
+    def _live_codex_homes(self) -> set[str]:
+        """Names of the pane homes some running process has as CODEX_HOME.
+
+        Only this user's processes expose their environment; anything else
+        is skipped, not treated as live. Read once per sweep."""
+        root = self.panes_root.resolve()
+        live: set[str] = set()
+        for proc in psutil.process_iter():
+            try:
+                home = proc.environ().get("CODEX_HOME")
+            except (psutil.Error, OSError):
+                continue
+            if not home:
+                continue
+            try:
+                path = Path(home).resolve()
+            except OSError:
+                continue
+            if path.parent == root:
+                live.add(path.name)
+        return live
 
     def cleanup(self, home_id: str) -> bool:
         safe_id = self._safe_home_id(home_id)
@@ -872,6 +1277,25 @@ class CodexHomeManager:
 _CODEX_PANES_ROOT_NAME = ".codex-panes"
 
 
+def _toml_escape(value: str) -> str:
+    """Quoted-key body for a TOML basic string (paths: backslash and quote)."""
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _toml_unescape(value: str) -> str:
+    return re.sub(r'\\(["\\])', r"\1", value)
+
+
+def is_subagent_session_meta(payload: dict) -> bool:
+    """Codex's optional thread_source is not the only subagent signal."""
+    source = payload.get("source")
+    return bool(
+        payload.get("thread_source") == "subagent"
+        or payload.get("parent_thread_id")
+        or isinstance(source, dict) and "subagent" in source
+    )
+
+
 def _session_meta_resume_id(text: str) -> str:
     """The session_meta record's payload.id — the id `codex resume` actually
     needs (the filename stem includes a timestamp prefix and is NOT accepted).
@@ -887,7 +1311,7 @@ def _session_meta_resume_id(text: str) -> str:
     keeps the binding.
     """
     for payload in _session_meta_payloads(text):
-        if payload.get("thread_source") == "subagent":
+        if is_subagent_session_meta(payload):
             return ""
         if payload.get("id"):
             return str(payload["id"])
@@ -1138,8 +1562,29 @@ def _session_exists(workspace_path: str, session_id: str) -> bool:
 
 # ---- vendor spec -----------------------------------------------------------
 
+def _risk_data_dirs(ctx: VendorRuntimeContext) -> tuple[Path, ...]:
+    root = ctx.path(ctx.env.get("CODEX_HOME") or ctx.home / ".codex")
+    # https://learn.chatgpt.com/docs/config-file/environment-variables
+    # SQLite state can move separately; config-file sqlite_home takes precedence
+    # inside Codex and is outside this environment-only observation scope.
+    sqlite_home = ctx.env.get("CODEX_SQLITE_HOME")
+    if sqlite_home:
+        return tuple(dict.fromkeys((root, ctx.path(sqlite_home))))
+    return (root,)
+
+
 SPEC = VendorSpec(
     key="codex",
+    # Built-in OpenAI API and ChatGPT service defaults (verified 2026-09-21):
+    # https://learn.chatgpt.com/docs/config-file/config-sample
+    # https://github.com/openai/codex/blob/main/codex-rs/model-provider-info/src/lib.rs
+    # https://github.com/openai/codex/blob/main/codex-rs/login/src/server.rs
+    # Custom providers/config-file routing and tool traffic are not enumerated.
+    expected_hosts=("api.openai.com", "chatgpt.com", "auth.openai.com"),
+    network_override_env_vars=("OPENAI_BASE_URL", "CODEX_OSS_BASE_URL", "CODEX_OSS_PORT"),
+    # CODEX_HOME is assigned per pane, including resumes in an existing home.
+    data_dirs=_risk_data_dirs,
+    data_dir_env_vars=("CODEX_HOME", "CODEX_SQLITE_HOME"),
     supports_model=True,
     # Verified 2026-08-15: codex resolves its skills from $CODEX_HOME/skills.
     skills_supported=True,
@@ -1148,8 +1593,9 @@ SPEC = VendorSpec(
         reads_shared_root=True,
         root_home=(".codex",),
         skills_rel=("skills",),
+        isolated_panes_home=(".codex-panes",),
     ),
-    label="Codex",
+    label="Codex CLI (OpenAI)",
     # No JSON document at all: `-c` is a one-shot TOML override merged over
     # config.toml at process start, and stays valid after a subcommand
     # (`codex resume`). The dotted key doubles as the already-wired marker.
@@ -1165,6 +1611,27 @@ SPEC = VendorSpec(
     profile_home_secret_file=("auth.json",),
     login_home_env="CODEX_HOME",
     identity_from_secret=identity_from_secret,
+    # ``auth.json`` is read at startup, so a swap needs the pane restarted and
+    # resumed (``codex resume <id>``). Multi-account switching has run on real
+    # accounts through the vault's restart path, but not against a recorded
+    # codex version — "source" until a round-trip is logged. No
+    # ``expires_at``: the JWT ``exp`` is the access token's and codex
+    # refreshes it itself.
+    account_switch=AccountSwitchSpec(
+        auth_scope="codex",
+        method="restart",
+        store="file",
+        evidence="source",
+        verified_version="0.155.1",
+        # The 0.155.1 binary accepts a credential from these ("provide an API
+        # key through a supported auth env var", "auth is provided by
+        # environment"); whether one outranks a ChatGPT login in auth.json is
+        # not readable from the binary, so a pane carrying one is reported as
+        # credential-source-unknown, not swapped.
+        uncertain_env=("OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"),
+        resume="native",
+        todo="restart switch used on real accounts; record an A -> B -> A round-trip against 0.155.1; env-vs-auth.json precedence unverified",
+    ),
     # Late-bound (module global at call time) so tests can monkeypatch. The
     # wham endpoint reads the EFFECTIVE codex home ($CODEX_HOME override,
     # else <home>/.codex) — the same resolution the poller used inline.
@@ -1177,7 +1644,7 @@ SPEC = VendorSpec(
     home_env_vars=("CODEX_HOME",),
     interrupt_key=b"\x1b",
     make_log_reader=CodexLogReader,
-    install_dep=Dep("codex", "Codex", "OpenAI Codex CLI", "agent_cli",
+    install_dep=Dep("codex", "Codex CLI (OpenAI)", "OpenAI Codex CLI", "agent_cli",
         ["codex", "--version"], r"(\d+\.\d+\.\d+)",
         install_cmd="npm install -g @openai/codex", needs_terminal=True,
         requires_binaries=("npm",),

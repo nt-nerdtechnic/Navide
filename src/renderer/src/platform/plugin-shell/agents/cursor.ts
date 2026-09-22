@@ -24,5 +24,8 @@ export const SPEC = {
   // an older build still reads as a resume rather than a custom command.
   resumeCommandPattern: /^(?:cursor-)?agent\s+--resume(?:=|\s+)\S+/,
   supportsRebuild: true,
-  hint: 'generalist'
+  hint: 'generalist',
+  // Quota failover: cursor.py reports the plan "cycle" and, when enabled, an
+  // "on-demand" pool that keeps requests flowing once the cycle is spent.
+  quotaSemantics: { hard: ['cycle'], required: ['cycle'], alternate: ['on-demand'] },
 } as const satisfies AgentSpec

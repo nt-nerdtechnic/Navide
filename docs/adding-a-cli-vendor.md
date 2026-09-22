@@ -17,12 +17,67 @@ You never need to read or modify the shared orchestration code.
    vendor needs a module there — a re-export shim when you wrote a reader
    (copy any existing one), an empty placeholder when you did not. If you
    wrote one, also list its class in `log_readers/__init__.py`
-   (`_MIGRATED_READERS` and `__all__`).
-5. Add `backend/tests/vendors/test_<key>.py` covering what you implemented.
-6. Add your key to two hardcoded lists in the tests: `EXPECTED_KEYS` in
+   (`_MIGRATED_READERS` and `__all__`). Shipping no reader has one consequence
+   worth knowing up front: Navide cannot learn the id of a session it started,
+   so set `supports_session_resume=False` (it defaults to **True**) and leave
+   `resumeArgs` out of the frontend spec — the two sides are cross-checked.
+5. Add a row to `MEMORY_SOURCES` in
+   `backend/agent_team_backend/native_memory.py` naming the instruction file
+   your CLI reads (`AGENTS.md` for most). Every vendor must be mapped there or
+   listed in `_CONFIGURED`; otherwise `test_native_memory` fails with a vendor
+   in state `unknown`.
+6. Add `backend/tests/vendors/test_<key>.py` covering what you implemented.
+7. Add your key to the hardcoded lists in the tests: `EXPECTED_KEYS` in
    `backend/tests/test_cli_vendors_registry.py`, and the `SNAPSHOT` in
-   `backend/tests/vendors/test_install_deps_snapshot.py` (append your entry
-   last unless you also added the key to `_AGENT_CLI_ORDER`).
+   `backend/tests/vendors/test_install_deps_snapshot.py`. The snapshot is
+   ordered by `DEPS`, which is `_AGENT_CLI_ORDER` first and then the remaining
+   keys in **registry order** — so unless you add your key to
+   `_AGENT_CLI_ORDER`, your entry goes where the key sorts among the others,
+   which is usually *not* the end. Run the test and let the diff place it.
+8. Only if your spec sets `login_command_args`: add the key to the expected set
+   in `backend/tests/test_login_spawn_command.py`.
+9. Account switching is opt-in through `account_switch=AccountSwitchSpec(...)`
+   on the spec, plus `slot_file` (the parked copy's file name). A spec without
+   the declaration is never offered for switching and never inherits another
+   vendor's behaviour. The fields the transaction and the UI read:
+   - `auth_scope` — the credential pool. Two vendors declaring the same string
+     share one switch lock and one impact set. For a per-provider store the
+     declared value is the prefix; the runtime pool is `"<auth_scope>:<scope>"`
+     (`cli_vendors.base.auth_scope_for`).
+   - `method` — `hot` (the CLI re-reads its credential per request; panes keep
+     running), `restart` (affected panes are stopped at a safe point, swapped,
+     and resumed), or `manual` (the vault can park and restore, but the user
+     must confirm a new conversation). Automatic switching is refused for
+     `manual`, and for `restart` when `resume` is not `native`.
+   - `store` — `file`, `compound-file` (one provider entry inside a shared
+     document; needs `extract` / `merge`, and `scopes` listing every provider
+     id a profile may bind to), `keychain` (`keychain_items` as
+     `(service, account)` pairs, `live_file` as the non-macOS fallback),
+     `pointer`, or `env`.
+   - `evidence` — `live` (an A → B → A round-trip on an installed CLI,
+     recorded against `verified_version`), `source` (read from the vendor's
+     code or package), or `docs`. Anything but `live` is shown as unverified;
+     it is never a reason to refuse a switch, and it must not be raised without
+     the round-trip. Keep `platforms` to the tuple you actually established;
+     `todo` names what is still open.
+   - `shadowing_env` — variable names the CLI ranks above the stored
+     credential. A pane launched with one of them present is reported as not
+     switchable rather than swapped.
+   - Quota evidence: the backend trusts an exhaustion report only from its own
+     per-account usage snapshot (`fetch_usage`) or from a text the vendor
+     declared in `quota_exhausted_patterns`. A vendor declaring neither can
+     only ever notify.
+   - Sign-in isolation: set `login_home_env` (and `login_home_secret_file`)
+     when the CLI can be pointed at a private home; the sign-in pane then
+     runs there and the live credential is untouched. Without it the sign-in
+     is *global*: the vault snapshots the live credential before the pane
+     spawns, parks what the CLI wrote into the profile's slot afterwards and
+     restores the snapshot. Say which one applies in the integration record.
+   The structural test `backend/tests/test_account_switch_capabilities.py`
+   checks the declaration; `backend/tests/test_quota_failover_api_contract.py`
+   and `test_quota_failover_login_contract.py` exercise the switch and sign-in
+   flows through the real handlers — add your vendor to their vendor lists
+   when you declare `account_switch`.
 
 ## Frontend
 
@@ -31,7 +86,25 @@ You never need to read or modify the shared orchestration code.
    flags — the template lists every optional field with pointers to the
    full docs in `agents/types.ts`).
 2. Register it in `agents/index.ts` (one line, display order).
-3. Run `pnpm vitest run src/renderer/src/platform/plugin-shell/agents` — the structural tests there
+3. Add a row to `vendors` in `src/renderer/src/components/CliAgentsHelp.vue`
+   (Settings ▸ Help). It is a hand-maintained mirror, and
+   `test_help_panel_sign_in_column_matches_login_command_args` compares its
+   `signIn` column against every spec's `login_command_args`.
+4. Update `src/renderer/src/components/__tests__/CliAgentsHelp.test.ts`: the
+   table row count (asserted twice, once per locale), the sign-in command
+   list, and the list of which cells render a `<code>` element.
+5. Append your `{ agentKey, label, hint }` to
+   `plugins/navide-plans/src/retained/agentSpecs.ts` — the plans plugin keeps a
+   retained copy that a test compares against the live list.
+6. Only if your spec declares `home_env_vars`: add each one to
+   `SPAWN_ENV_RESERVED_KEYS` in
+   `src/renderer/src/platform/plugin-shell/lib/cliLaunchOverride.ts`. This is
+   product code, not a test list: a home relocator Navide sets itself must not
+   be offered as a user-editable spawn env var, or the page promises an
+   override that gets overwritten.
+7. Only if your spec has no `skipPermissionFlag`: update the flagless-vendor
+   list in `src/renderer/src/platform/plugin-shell/lib/cliPermission.test.ts`.
+8. Run `pnpm vitest run src/renderer/src/platform/plugin-shell/agents` — the structural tests there
    check your spec against the rules the template states (key matches the
    filename, the file is registered, `resumeCommandPattern` matches the
    command Navide builds for you, no `/g` on a matcher). They need no edit

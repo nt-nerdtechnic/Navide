@@ -57,7 +57,7 @@ describe('App batch drag wiring', () => {
 
   it('hands the batch to the drag payload and to the cross-window handoff', () => {
     expect(appSource).toContain(':selection-batch-ids="selectionBatchIds"')
-    expect(appSource).toContain('batchFor: paneDragBatch,')
+    expect(appSource).toContain('batchFor: auxiliaryDragBatch,')
     expect(appSource).toContain(
       'window.agentTeam?.cliPaneDragEnd?.(paneId, screenX, screenY, paneDragBatch(paneId))'
     )

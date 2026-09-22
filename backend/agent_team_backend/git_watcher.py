@@ -175,9 +175,13 @@ class _RepoHandler(FileSystemEventHandler):
         return out
 
     def _rel(self, src: str) -> str:
-        """`src` as a path relative to the repo root, or "" if it is outside."""
+        """`src` as a path relative to the repo root, or "" if it is outside.
+
+        Posix form: it goes on the wire as a preview `rel_path`, which the
+        other writers (`preview.record`, the transcript ingest) already emit
+        with forward slashes, and the renderer matches on the string."""
         try:
-            return str(Path(src).resolve().relative_to(self._root))
+            return Path(src).resolve().relative_to(self._root).as_posix()
         except (ValueError, OSError):
             return ""
 

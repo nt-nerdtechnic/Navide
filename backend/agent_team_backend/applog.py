@@ -1,4 +1,4 @@
-"""Backend logging: rotating file handler under the macOS app-data dir."""
+"""Backend logging: rotating file handler under the platform app-data dir."""
 
 from __future__ import annotations
 
@@ -6,6 +6,8 @@ import logging
 import os
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+
+from . import osplat
 
 
 def default_app_data_dir() -> Path:
@@ -15,15 +17,11 @@ def default_app_data_dir() -> Path:
     running on the default state, or beside it?" — which is the question that
     decides whether a stored secret may share a name with the shipped app's.
     """
-    if os.name == "posix" and os.uname().sysname == "Darwin":
-        return Path(os.path.expanduser("~/Library/Application Support/Agent-Team"))
-    # Fallback for non-macOS dev: XDG_DATA_HOME or ~/.local/share.
-    base = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
-    return Path(base) / "Agent-Team"
+    return osplat.paths.state_dir("Agent-Team")
 
 
 def app_data_dir() -> Path:
-    """Cross-platform-ish app data dir. V1 targets macOS.
+    """The app data dir: ``AGENT_TEAM_DATA_DIR`` or the platform default.
 
     An explicit ``AGENT_TEAM_DATA_DIR`` override wins over the platform default.
     The dev launcher sets it so a `npm run dev` instance keeps its backend state

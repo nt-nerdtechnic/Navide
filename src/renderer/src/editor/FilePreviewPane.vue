@@ -107,6 +107,37 @@ const pdfSupported =
     : true
 const pdfLoaded = ref(false)
 
+// ── Raw load failure ──────────────────────────────────────────────────────────
+// null = no failure seen; '' = failed without detail; otherwise the detail.
+// <img>/<video>/<audio> report failures through their error event, but an
+// iframe fires load even for a 403 page, so the PDF branch probes /fs/raw.
+const rawError = ref<string | null>(null)
+
+function onRawError(): void {
+  rawError.value ??= ''
+}
+
+async function probePdf(url: string): Promise<void> {
+  let detail: string | null = null
+  try {
+    const resp = await fetch(url, { headers: { Range: 'bytes=0-0' } })
+    if (!resp.ok) detail = `HTTP ${resp.status}`
+  } catch (err) {
+    detail = err instanceof Error ? err.message : String(err)
+  }
+  // Ignore answers for a file that is no longer shown.
+  if (detail !== null && url === rawUrl.value) rawError.value = detail
+}
+
+watch(
+  rawUrl,
+  (url) => {
+    rawError.value = null
+    if (kind.value === 'pdf' && pdfSupported) void probePdf(url)
+  },
+  { immediate: true },
+)
+
 // ── Hex dump (unknown binary) ─────────────────────────────────────────────────
 const HEX_LIMIT = 65536
 const hexLoading = ref(false)
@@ -186,28 +217,44 @@ onMounted(() => {
 
     <!-- Image -->
     <div v-if="kind === 'image'" class="fpv-body fpv-image-body">
+      <div v-if="rawError !== null" class="fpv-raw-error">
+        {{ $t('preview.raw-error') }}<template v-if="rawError"> ({{ rawError }})</template>
+      </div>
       <img
+        v-else
         :src="rawUrl"
         class="fpv-img"
         :class="fitToWindow ? 'fpv-img--fit' : 'fpv-img--full'"
         :alt="name"
         @load="onImgLoad"
+        @error="onRawError"
       />
     </div>
 
     <!-- Video -->
     <div v-else-if="kind === 'video'" class="fpv-body fpv-media-body">
-      <video class="fpv-video" controls :src="rawUrl" />
+      <div v-if="rawError !== null" class="fpv-raw-error">
+        {{ $t('preview.raw-error') }}<template v-if="rawError"> ({{ rawError }})</template>
+      </div>
+      <video v-else class="fpv-video" controls :src="rawUrl" @error="onRawError" />
     </div>
 
     <!-- Audio -->
     <div v-else-if="kind === 'audio'" class="fpv-body fpv-media-body">
-      <audio class="fpv-audio" controls :src="rawUrl" />
+      <div v-if="rawError !== null" class="fpv-raw-error">
+        {{ $t('preview.raw-error') }}<template v-if="rawError"> ({{ rawError }})</template>
+      </div>
+      <audio v-else class="fpv-audio" controls :src="rawUrl" @error="onRawError" />
     </div>
 
     <!-- PDF -->
     <template v-else-if="kind === 'pdf'">
-      <div v-if="pdfSupported" class="fpv-body fpv-pdf-body">
+      <div v-if="pdfSupported && rawError !== null" class="fpv-body fpv-media-body">
+        <div class="fpv-raw-error">
+          {{ $t('preview.raw-error') }}<template v-if="rawError"> ({{ rawError }})</template>
+        </div>
+      </div>
+      <div v-else-if="pdfSupported" class="fpv-body fpv-pdf-body">
         <div v-if="!pdfLoaded" class="fpv-pdf-loading">{{ $t('label.loading') }}</div>
         <iframe
           class="fpv-pdf-frame"
@@ -445,6 +492,11 @@ onMounted(() => {
   margin: 0;
   color: var(--text-secondary);
   font-size: var(--font-xs);
+}
+.fpv-raw-error {
+  color: var(--danger-fg, #e5534b);
+  font-size: var(--font-xs);
+  text-align: center;
 }
 .fpv-hex-status {
   color: var(--text-secondary);

@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from agent_team_backend import pty_registry
+from agent_team_backend import osplat, pty_registry
 from agent_team_backend.terminals import TerminalService
 
 
@@ -134,6 +134,7 @@ def test_reap_kills_recorded_orphan() -> None:
     assert _registry() == {}
 
 
+@pytest.mark.skipif(not hasattr(os, "setsid"), reason="/bin/sh exec + lstart identity is POSIX-only")
 def test_reap_kills_orphan_behind_shell_exec() -> None:
     # The real app spawns `<shell> -lc <cmd>`; the shell execs the final
     # command, so ps shows `sleep 300`, not the shell. Identity must still
@@ -194,7 +195,7 @@ def test_reap_kills_matching_descendant_of_gone_root() -> None:
     # the recorded descendant and take it down even though the root is gone.
     orphan = subprocess.Popen(["sleep", "300"], start_new_session=True)
     try:
-        lstart = pty_registry._ps(orphan.pid, "lstart=")
+        lstart = osplat.process_tree.start_time(orphan.pid)
         assert lstart
         root_pid = _dead_pid()
         pty_registry._save({
@@ -232,7 +233,7 @@ def test_reap_never_kills_descendants_under_an_unverifiable_live_root() -> None:
     root = subprocess.Popen(["sleep", "300"], start_new_session=True)
     server = subprocess.Popen(["sleep", "300"], start_new_session=True)
     try:
-        lstart = pty_registry._ps(server.pid, "lstart=")
+        lstart = osplat.process_tree.start_time(server.pid)
         assert lstart
         pty_registry._save({
             str(root.pid): {
@@ -289,7 +290,7 @@ def test_reap_kills_root_group_and_detached_descendant_together() -> None:
     try:
         pty_registry.register(root.pid, ["sleep", "300"])
         _set_owner(root.pid, 1)
-        lstart = pty_registry._ps(detached.pid, "lstart=")
+        lstart = osplat.process_tree.start_time(detached.pid)
         assert lstart
         pty_registry.update_descendants({root.pid: {detached.pid: lstart}})
 
@@ -321,6 +322,37 @@ def test_reap_never_signals_a_recycled_pid() -> None:
     assert _registry() == {}
 
 
+def test_reap_force_round_re_verifies_identity_after_the_grace(monkeypatch) -> None:
+    # The root matched at the first look and got the polite signal; during
+    # the grace its pid was recycled (a Windows backend's own first panes can
+    # land there). The force round must be re-checked against a fresh table:
+    # the recycled pid is dropped, the still-matching descendant is kept, and
+    # a fresh probe that fails authorizes nothing.
+    tables = [
+        {77: (77, "L77"), 88: (88, "L88")},        # verdict snapshot
+        {77: (77, "L77-recycled"), 88: (88, "L88")},  # after the grace
+    ]
+    monkeypatch.setattr(pty_registry, "_ps_table", lambda: tables.pop(0))
+    monkeypatch.setattr(pty_registry, "_backend_alive", lambda pid: False)
+    sent: list[tuple[list[tuple[int, bool]], bool]] = []
+    monkeypatch.setattr(
+        pty_registry, "_signal_each",
+        lambda targets, *, force: sent.append((list(targets), force)),
+    )
+    pty_registry._save({
+        "77": {"argv0": "x", "lstart": "L77", "owner": 1, "descendants": {"88": "L88"}},
+    })
+
+    assert pty_registry.reap_stale(grace=0.0) == [77, 88]
+    assert sent == [([(77, True), (88, True)], False), ([(88, True)], True)]
+
+    tables[:] = [{77: (77, "L77")}, None]  # the fresh probe fails
+    sent.clear()
+    pty_registry._save({"77": {"argv0": "x", "lstart": "L77", "owner": 1}})
+    pty_registry.reap_stale(grace=0.0)
+    assert sent == [([(77, True)], False), ([], True)]
+
+
 def test_reap_leaves_live_sibling_entries_untouched(monkeypatch) -> None:
     proc = subprocess.Popen(["sleep", "30"], start_new_session=True)
     try:
@@ -340,7 +372,9 @@ def test_concurrent_register_unregister_keeps_registry_consistent(monkeypatch) -
     # register/unregister run on executor threads in the real app (terminals.py
     # keeps their ps + file I/O off the event loop) — interleaved
     # load-modify-save must not lose entries or raise.
-    monkeypatch.setattr(pty_registry, "_ps", lambda pid, fields: "stub lstart")
+    monkeypatch.setattr(
+        pty_registry.osplat.process_tree, "start_time", lambda pid: "stub lstart"
+    )
     pids = list(range(900_000, 900_032))
 
     def churn(pid: int) -> None:

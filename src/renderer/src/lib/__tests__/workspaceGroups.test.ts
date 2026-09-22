@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildWorkspaceGroups, workspaceParentPath, type LineageRow } from '../workspaceGroups'
+import { buildWorkspaceGroups, type LineageRow } from '../workspaceGroups'
 
 // The sidebar's grouping, run for real rather than read as source text. It sat
 // inside App.vue, which cannot be mounted in a test (backend and terminal
@@ -42,25 +42,6 @@ function build(over: Partial<Parameters<typeof buildWorkspaceGroups>[0]> = {}) {
     ...over,
   })
 }
-
-describe('workspaceParentPath', () => {
-  it('shows the folder the workspace sits in, home collapsed', () => {
-    expect(workspaceParentPath(A, HOME)).toBe('~/Desktop')
-    expect(workspaceParentPath(C, HOME)).toBe('~/Git')
-  })
-
-  it('ignores a trailing slash', () => {
-    expect(workspaceParentPath(`${A}/`, HOME)).toBe('~/Desktop')
-  })
-
-  it('falls back to the folder itself at the root', () => {
-    expect(workspaceParentPath('/alpha', HOME)).toBe('/alpha')
-  })
-
-  it('leaves a path outside home alone', () => {
-    expect(workspaceParentPath('/opt/work/proj', HOME)).toBe('/opt/work')
-  })
-})
 
 describe('buildWorkspaceGroups', () => {
   it('splits a workspace into its run groups, in tab order', () => {
@@ -336,5 +317,65 @@ describe('buildWorkspaceGroups', () => {
     })
     expect(rows.map((r) => r.path)).toEqual([A, C])
     expect(rows[1].count).toBe(2)
+  })
+})
+
+describe('buildWorkspaceGroups display names', () => {
+  it('labels a row with the folder name when no alias is given', () => {
+    const rows = build({ here: A, order: [A] })
+    expect(rows[0].label).toBe('alpha')
+  })
+
+  it('labels a row with its alias', () => {
+    const rows = build({ here: A, order: [A], aliases: { [A]: 'Payments API' } })
+    expect(rows[0].label).toBe('Payments API')
+  })
+
+  it('leaves path and every comparison on the real path', () => {
+    // The alias is display only: the row still identifies itself by path, and
+    // its panes are still matched by path — so renaming a project can never
+    // move a pane between headings.
+    const rows = build({
+      here: A,
+      order: [A, B],
+      panes: [pane('a1', A), pane('b1', B)],
+      lineage: [row('a1'), row('b1')],
+      aliases: { [A]: 'same', [B]: 'same' },
+    })
+    expect(rows.map((r) => r.path)).toEqual([A, B])
+    expect(rows.map((r) => r.label)).toEqual(['same', 'same'])
+    expect(rows[0].paneIds).toEqual(['a1'])
+    expect(rows[1].paneIds).toEqual(['b1'])
+    // The full path is what tells two identically-named rows apart — and,
+    // under an alias, the only place the real folder name is still shown.
+    expect(rows[0].displayPath).toBe('~/Desktop/alpha')
+  })
+
+  it('shows the full path under the heading, home collapsed, trailing slash dropped', () => {
+    const rows = build({
+      here: A,
+      order: [A, `${C}/`, '/opt/work/proj'],
+      panes: [pane('a1', A), pane('c1', C), pane('o1', '/opt/work/proj')],
+      lineage: [row('a1'), row('c1'), row('o1')],
+      aliases: { [A]: 'Payments' },
+    })
+    expect(rows.map((r) => r.displayPath)).toEqual([
+      '~/Desktop/alpha',
+      '~/Git/gamma',
+      '/opt/work/proj',
+    ])
+    // An aliased heading must not hide the folder: the path still ends in it.
+    expect(rows[0].label).toBe('Payments')
+    expect(rows[0].displayPath.endsWith('/alpha')).toBe(true)
+  })
+
+  it('finds an alias stored without the trailing slash the row carries', () => {
+    const rows = build({ here: `${A}/`, order: [`${A}/`], aliases: { [A]: 'Payments API' } })
+    expect(rows[0].label).toBe('Payments API')
+  })
+
+  it('falls back to the folder name for a cleared alias', () => {
+    const rows = build({ here: A, order: [A], aliases: { [A]: '' } })
+    expect(rows[0].label).toBe('alpha')
   })
 })

@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from .base import (
+    AccountSwitchSpec,
     Dep,
     McpServerConfig,
     McpValue,
@@ -30,6 +31,8 @@ from .base import (
     PushChannel,
     VendorSpec,
     command_text,
+    provider_map_extract,
+    provider_map_merge,
 )
 from .opencode import OpencodeLogReader  # vendor→vendor: sanctioned fork inheritance
 from ..usage_common import (
@@ -109,7 +112,12 @@ def identity_from_secret(secret):
             data = json.loads(secret)
         except ValueError:
             data = None
-    entry = data.get("kilo") if isinstance(data, dict) else None
+    # Either the whole auth.json (legacy whole-file slots, the live file) or
+    # the bare "kilo" entry a scoped slot holds (see ``provider_map_extract``).
+    if isinstance(data, dict) and "type" in data and "kilo" not in data:
+        entry = data
+    else:
+        entry = data.get("kilo") if isinstance(data, dict) else None
     return {"email": None, "signedIn": _kilo_entry_credentials(entry) is not None}
 
 
@@ -150,7 +158,7 @@ def _kilo_auth_file(home: Path, env: dict) -> Path:
     return home.joinpath(*KILO_AUTH_FILE_REL)
 
 
-def read_kilo_credentials(home: Path, env: dict | None = None) -> dict | None:
+def read_kilo_credentials(home: Path, env: dict | None = None, *, bound_store: bool = False) -> dict | None:
     """The Kilo bearer token + optional organization id, resolved the way the
     Kilo CLI does (read-only): ``KILO_AUTH_CONTENT`` env injects the whole
     auth.json content, otherwise ``<XDG_DATA_HOME|~/.local/share>/kilo/auth.json``
@@ -173,7 +181,7 @@ def read_kilo_credentials(home: Path, env: dict | None = None) -> dict | None:
         if isinstance(data, dict) else None
     if creds is not None:
         return creds
-    return _kilo_legacy_credentials(home)
+    return None if bound_store else _kilo_legacy_credentials(home)
 
 
 def kilo_base_url(token: str, env: dict | None = None) -> str:
@@ -245,9 +253,9 @@ def normalize_kilo_pass(data: Any) -> list[dict]:
 
 
 
-async def fetch_kilo(home: Path, env: dict | None = None) -> dict:
+async def fetch_kilo(home: Path, env: dict | None = None, *, bound_store: bool = False) -> dict:
     env = env if env is not None else dict(os.environ)
-    creds = read_kilo_credentials(home, env)
+    creds = read_kilo_credentials(home, env, bound_store=bound_store)
     if creds is None:
         return _snapshot("kilo", "no-credentials")
     import httpx
@@ -317,6 +325,11 @@ def _session_exists(workspace_path: str, session_id: str) -> bool:
 
 SPEC = VendorSpec(
     key="kilo",
+    # OpenCode fork with arbitrary providers; quota base is not a CLI host set.
+    expected_hosts=(),
+    # Same XDG database/auth root as KiloLogReader and _kilo_auth_file.
+    data_dirs=lambda ctx: (ctx.path(ctx.env.get("XDG_DATA_HOME") or ctx.home / ".local" / "share") / "kilo",),
+    data_dir_env_vars=("XDG_DATA_HOME",),
     # Confirmed in source (Kilo-Org/kilocode): the root command declares
     # --model and applies it at the highest priority. No effort flag —
     # --variant exists only on `kilo run`. Details in agents/kilo.ts, which
@@ -324,7 +337,7 @@ SPEC = VendorSpec(
     supports_model=True,
     # Verified 2026-08-15: kilo's bundle carries no SKILL.md handling at all.
     skills_supported=False,
-    label="Kilo Code",
+    label="Kilo Code CLI",
     # An OpenCode fork: identical config document, its own variable.
     mcp_wiring=McpWiring(
         config=McpServerConfig(
@@ -359,19 +372,34 @@ SPEC = VendorSpec(
     # file — `kilo auth list` prints the path itself, and it is the same tuple
     # the quota reader already resolves against.
     #
-    # KNOWN LIMIT: XDG_DATA_HOME is NOT honoured here. CredentialVault resolves
-    # a live file as <real home>/<live_file> (_live_file), while _kilo_auth_file
-    # above follows kilo and prefers $XDG_DATA_HOME/kilo/auth.json. A user who
-    # sets XDG_DATA_HOME therefore has account switching read and write
-    # ~/.local/share/kilo/auth.json while the CLI keeps using the XDG copy, so
-    # the switch silently does nothing (the quota badge, which does follow XDG,
-    # keeps reporting the account that is really live). Left as is on purpose:
-    # _live_file is the shared resolution for every vendor, and teaching it
-    # env-var lookups for this one rare setup would change path resolution for
-    # claude/codex/kimi/grok too.
+    # The vault follows the same XDG path as the CLI and quota reader.
     live_file=KILO_AUTH_FILE_REL,
+    live_file_resolver=lambda home: _kilo_auth_file(home, os.environ),
+    live_file_from_context=lambda ctx: ctx.path(_kilo_auth_file(ctx.home, ctx.env)),
+    credential_path_env_vars=("XDG_DATA_HOME",),
     slot_file="auth.json",
     identity_from_secret=identity_from_secret,
+    # ``auth.json`` is an OpenCode-shaped provider map; only the "kilo" entry
+    # is the account, so a switch rewrites that one key and leaves any other
+    # provider the user added in place. Slots parked before this split hold
+    # the whole file, which the extract reads the same way (it is the same
+    # shape), so nothing stored is invalidated. Kilo loads the file at
+    # startup, hence restart.
+    account_switch=AccountSwitchSpec(
+        auth_scope="kilo",
+        method="restart",
+        store="compound-file",
+        evidence="source",
+        verified_version="7.4.22",
+        scopes=("kilo",),
+        extract=provider_map_extract,
+        merge=provider_map_merge,
+        # The 7.4.22 binary's provider table: kilo's key is KILO_API_KEY; the
+        # OpenCode-derived loader's env-vs-auth.json precedence is unverified.
+        uncertain_env_by_scope=(("kilo", ("KILO_API_KEY",)),),
+        resume="native",
+        todo="no A -> B -> A round-trip on two real accounts recorded",
+    ),
     # login_home_env / login_home_secret_file stay unset: kilo has no dedicated
     # config-home variable (`kilo debug paths` reports only the generic XDG
     # dirs), so a login pane cannot be given its own credential file without
@@ -381,6 +409,7 @@ SPEC = VendorSpec(
     # afterwards (see credential_vault.login_spawn_env).
     # Late-bound (module global at call time) so tests can monkeypatch.
     fetch_usage=lambda home: fetch_kilo(home),
+    fetch_usage_from_context=lambda ctx: fetch_kilo(ctx.home, dict(ctx.env), bound_store=True),
     resume_id_from_command=_resume_id_from_command,
     session_exists=_session_exists,
     # Only the env vars Kilo actually documents (kilo-config.md defines
@@ -398,7 +427,7 @@ SPEC = VendorSpec(
     make_log_reader=KiloLogReader,
     # Kilo Code (OpenCode fork) ships `kilo upgrade` but no doctor subcommand
     # (`kilo debug` is diagnostics-adjacent, not a doctor — no invented command).
-    install_dep=Dep("kilo", "Kilo Code", "Kilo Code terminal coding agent (OpenCode fork)", "agent_cli",
+    install_dep=Dep("kilo", "Kilo Code CLI", "Kilo Code terminal coding agent (OpenCode fork)", "agent_cli",
         ["kilo", "--version"], r"(\d+\.\d+\.\d+)",
         install_cmd="npm install -g @kilocode/cli",
         needs_terminal=True, requires_binaries=("npm",), optional=True,

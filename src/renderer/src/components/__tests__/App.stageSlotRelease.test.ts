@@ -117,9 +117,119 @@ describe('closing a workspace ends the run its panes belonged to', () => {
     // closeRunGroup and closeAllSessions both guard; this one did not.
     expect(fn).toContain('tearDownPipelineOrchestration()')
     const abortAt = fn.indexOf('tearDownPipelineOrchestration()')
-    const killAt = fn.indexOf('await onKill(pane.id)')
+    // The pipeline branch's kill — the one whose slot release could advance a
+    // stage into the workspace being torn down.
+    const killAt = fn.indexOf('await onKill(pane.id, { markRemoved: false })')
     expect(abortAt).toBeGreaterThan(-1)
     expect(killAt).toBeGreaterThan(abortAt)
+  })
+
+  it('leaves the window with no run, so a later restore is not refused', () => {
+    // restoreWorkspacePanes returns null while the window's pipeline is
+    // 'running' or 'aborted' — 'aborted' meaning "paused, panes still alive".
+    // This close killed them and kept their records for the reopen, so a
+    // window parked at 'aborted' would never bring them back.
+    const restore = appSource.slice(appSource.indexOf('async function restoreWorkspacePanes('))
+    expect(restore.slice(0, 1200)).toContain('restoreBlockedByRun({')
+    expect(fn).toContain("pipeline.state = 'idle'")
+    expect(fn).toContain("pipeline.workspacePath = ''")
+  })
+
+  it('scopes the restore gate to the run\'s own workspace', () => {
+    // The gate used to be window-wide, so a run merely paused anywhere refused
+    // to bring back the panes of an unrelated project whose records this close
+    // deliberately keeps. It cannot be scoped on pipeline.workspacePath:
+    // onWorkspaceBrowse reassigns that to the workspace being ENTERED, so the
+    // comparison would be a workspace against itself — always true, always
+    // blocking, and it uncovers the path assignment inside the restore.
+    // The rule itself is behaviour-tested in lib/__tests__/workspaceCloseRun.test.ts;
+    // a wiring test cannot reach it, so it pins the arguments — the same shape
+    // the closeEndsTheRun assertion below uses, and for the same reason.
+    const restore = appSource.slice(appSource.indexOf('async function restoreWorkspacePanes('))
+    const call = restore.slice(restore.indexOf('restoreBlockedByRun({'), restore.indexOf('})) return null'))
+    expect(call).toContain('state: pipeline.state')
+    expect(call).toContain('runWorkspacePath: normWs(pipelineRunWorkspace)')
+    expect(call).toContain('restoringWorkspacePath: normWs(workspacePath)')
+    // pipeline.workspacePath is the field that cannot answer this — passing it
+    // compares a workspace with itself, because onWorkspaceBrowse has already
+    // reassigned it to the one being entered.
+    expect(call).not.toContain('pipeline.workspacePath')
+    expect(appSource).toContain("restoreBlockedByRun } from './lib/workspaceCloseRun'")
+  })
+
+  it('writes the run identity only where a run becomes running, and clears it', () => {
+    // Written next to each 'running' transition and nowhere else, or it stops
+    // naming the run and the gate starts answering about the wrong project.
+    const writes = appSource.match(/(?<!let )pipelineRunWorkspace = /g) ?? []
+    // 2 starts (start + resume), 1 rollback (a resume the backend refused puts
+    // back what it had just written), 3 clears (pipeline reset, workspace close,
+    // workspace close that keeps its panes).
+    expect(writes.length).toBe(6)
+    // The rollback is legitimate only because it undoes a 'running' write that
+    // never took: it must live in the refused-resume branch and nowhere else.
+    const rollback = appSource.indexOf('pipelineRunWorkspace = before.runWorkspace')
+    expect(rollback).toBeGreaterThan(-1)
+    const refused = appSource.lastIndexOf('if (!resp) {', rollback)
+    expect(refused).toBeGreaterThan(appSource.lastIndexOf("sendQuiet<ProjectPayload>('pipeline.resume'", rollback))
+    expect(appSource.indexOf('pipelineRunWorkspace = before.runWorkspace', rollback + 1)).toBe(-1)
+    expect(appSource).toContain("let pipelineRunWorkspace = ''")
+    expect(appSource).toContain("pipelineRunWorkspace = resumeWorkspacePath\n  pipeline.stageIndex = info.nextStageIndex\n  pipeline.state = 'running'")
+    expect(appSource).toContain("pipelineRunWorkspace = payload.workspacePath\n  pipeline.stageIndex = 0\n  pipeline.state = 'running'")
+    expect(appSource).toContain("pipeline.state = 'idle'\n  pipelineRunWorkspace = ''")
+  })
+
+  it('does not let a restore repoint a live run at another workspace', () => {
+    // The old window-wide gate made this line unreachable during a run. With
+    // the gate scoped, a restore for ANOTHER workspace reaches it — and
+    // overwriting the path there makes closeEndsTheRun miss the real run, the
+    // exact cascade the close guard exists to prevent.
+    const restore = appSource.slice(appSource.indexOf('async function restoreWorkspacePanes('))
+    expect(restore).toContain("if (pipeline.state !== 'running') pipeline.workspacePath = workspacePath")
+  })
+
+  it('resets a paused run too, not only one this close ended', () => {
+    // closeEndsTheRun is false unless the run is still RUNNING, so a run the
+    // user aborted earlier parks the window at 'aborted' and never enters that
+    // branch. A reset living inside it would leave exactly that close — the
+    // one whose dialog promises the panes come back — unable to restore.
+    const abortSend = fn.indexOf("reason: 'user' })")
+    const reset = fn.indexOf("if (pipeline.state === 'aborted' &&")
+    expect(abortSend).toBeGreaterThan(-1)
+    expect(reset).toBeGreaterThan(abortSend)
+    // The branch closes between them.
+    expect(fn.slice(abortSend, reset)).toContain('\n  }\n')
+  })
+
+  it('does not drop a paused run the close never touched', () => {
+    // Unconditional, it also cleared a run paused in ANOTHER workspace: its
+    // panel would vanish, and — worse — clearing pipelineRunWorkspace unblocks
+    // a cold restore of that workspace over panes that are still alive.
+    expect(fn).toContain("if (pipeline.state === 'aborted' && normWs(pipelineRunWorkspace) === normWs(path))")
+  })
+
+  it('leaves a dismissed reconnect banner dismissed until a ghost is new', () => {
+    // Paired with the filter below: once another workspace's ghosts survive a
+    // restore, un-dismissing the banner at restore time re-raises it over a
+    // project the user is no longer looking at — and its click target is
+    // disconnectedPaneIds[0], a pane in that other workspace.
+    const restore = appSource.slice(appSource.indexOf('async function restoreWorkspacePanes('))
+    const block = restore.slice(restore.indexOf('if (fullRestore) {'), restore.indexOf('for (const saved of toRestore)'))
+    expect(block).not.toContain('reconnectBannerDismissed.value = false')
+    // Reset where a ghost is actually added — the moment there is news.
+    const realize = appSource.slice(appSource.indexOf('disconnectedPaneIds.value = [...disconnectedPaneIds.value, newId]'))
+    expect(realize.slice(0, 300)).toContain('reconnectBannerDismissed.value = false')
+  })
+
+  it('takes only the closing workspace\'s ghosts out of the window-wide list', () => {
+    // disconnectedPaneIds is per window, and the banner it drives is the only
+    // way into the reconnect picker. The old gate made this unreachable during
+    // a run; now a restore for another project gets here, and clearing the
+    // whole list would strand the run's own ghosts.
+    const restore = appSource.slice(appSource.indexOf('async function restoreWorkspacePanes('))
+    const block = restore.slice(restore.indexOf('if (fullRestore) {'), restore.indexOf('reconnectBannerDismissed.value = false'))
+    expect(block).toContain('disconnectedPaneIds.value.filter((id) => {')
+    expect(block).toContain('normWs(owner) !== normWs(workspacePath)')
+    expect(block).not.toContain('disconnectedPaneIds.value = []')
   })
 
   it('asks whether THIS close ends THIS window\'s run, not just "any pipeline pane"', () => {

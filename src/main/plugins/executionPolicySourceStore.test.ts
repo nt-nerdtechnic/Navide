@@ -15,6 +15,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { normalizePlatformId } from '../../shared/osplat'
 import type { ExecutionPolicy } from '../../../packages/plugin-contracts/src/index'
 import {
   ExecutionPolicySourceStore,
@@ -33,6 +34,9 @@ import {
   HOST_DEFAULT_EXECUTION_POLICY,
   ExecutionPolicyStore,
 } from './executionPolicyStore'
+
+// The real filesystem the suite runs on: NTFS has no POSIX mode bits to assert on.
+const hostIsWindows = normalizePlatformId(process.platform) === 'win32'
 
 const RECOMMENDED_POLICY: ExecutionPolicy = {
   schemaVersion: 1 as const,
@@ -592,9 +596,11 @@ describe('ExecutionPolicySourceStore', () => {
       )
       expect(readFileSync(sourceRevisionFile(userData), 'utf8'))
         .toBe('{"schemaVersion":1,"highWater":1}\n')
-      expect(lstatSync(join(userData, EXECUTION_POLICY_DIRECTORY)).mode & 0o777).toBe(0o700)
-      expect(lstatSync(sourceStateFile(userData)).mode & 0o777).toBe(0o600)
-      expect(lstatSync(sourceRevisionFile(userData)).mode & 0o777).toBe(0o600)
+      if (!hostIsWindows) {
+        expect(lstatSync(join(userData, EXECUTION_POLICY_DIRECTORY)).mode & 0o777).toBe(0o700)
+        expect(lstatSync(sourceStateFile(userData)).mode & 0o777).toBe(0o600)
+        expect(lstatSync(sourceRevisionFile(userData)).mode & 0o777).toBe(0o600)
+      }
       expect(readdirSync(join(userData, EXECUTION_POLICY_DIRECTORY)).sort()).toEqual([
         'policy.json',
         'revision.json',

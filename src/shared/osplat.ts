@@ -107,17 +107,94 @@ export function loginShellFlags(shell: string): string[] {
  *
  * Prepended to PATH so a tool installed to one of these is found even when
  * the shell would not answer (a heavy rc file timing out, an exotic shell).
- * Each list is the platform's own convention: Homebrew's prefixes on macOS;
- * on Linux the XDG-adjacent dirs the pnpm and uv installers use, plus snap's
- * bin which most distributions do not put on the session PATH.
+ * Each list is the platform's own convention: on macOS Homebrew's prefixes
+ * plus the Node version managers' global bins, where an `npm install -g` CLI
+ * such as codex lands; on Linux the XDG-adjacent dirs the pnpm, uv and
+ * `npm config set prefix` installers use, the Rust and bun toolchains, nvm's
+ * per-version bins, and snap's bin which most distributions do not put on the
+ * session PATH.
+ *
+ * `nvmBins` is nvm's `~/.nvm/versions/node/<v>/bin` list, newest first —
+ * enumerated by the caller because this module has no `fs` (see
+ * listNvmNodeBins in main). Mirrors `Paths.login_path_fallbacks` plus
+ * `Paths.login_path_tail_fallbacks` on the backend; keep them the same.
+ *
+ * On macOS the nvm bins come LAST, after Homebrew's prefixes: nvm keeps one
+ * bin per version, and ahead of /opt/homebrew/bin an old one outranks the
+ * node of someone who moved to Homebrew but kept ~/.nvm. Last, a CLI only nvm
+ * provides is still found. The backend appends them after PATH for the same
+ * reason. Linux keeps its original order.
  */
-export function loginPathFallbacks(home: string): string[] {
+export function loginPathFallbacks(home: string, nvmBins: string[] = []): string[] {
   const local = `${home}/.local/bin`
   switch (platformId()) {
     case 'darwin':
-      return [local, '/usr/local/bin', '/opt/homebrew/bin', '/opt/homebrew/sbin']
+      return [
+        local,
+        `${home}/Library/pnpm`,
+        `${home}/.npm-global/bin`,
+        `${home}/.volta/bin`,
+        `${home}/.bun/bin`,
+        '/usr/local/bin',
+        '/opt/homebrew/bin',
+        '/opt/homebrew/sbin',
+        ...nvmBins,
+      ]
     case 'linux':
-      return [local, `${home}/.local/share/pnpm`, '/usr/local/bin', '/snap/bin']
+      return [
+        local,
+        `${home}/.local/share/pnpm`,
+        `${home}/.npm-global/bin`,
+        `${home}/.cargo/bin`,
+        `${home}/.bun/bin`,
+        ...nvmBins,
+        '/usr/local/bin',
+        '/snap/bin',
+      ]
+    default:
+      return []
+  }
+}
+
+/** Where an editor's CLI lives when it is installed but not on PATH. */
+export interface EditorInstallHints {
+  /** The CLI's name: `code`, `cursor`. */
+  command: string
+  /** The macOS bundle name under /Applications: `Visual Studio Code`. */
+  macApp: string
+  /** Linux package prefixes that carry `bin/<command>`: `/usr/share/code`. */
+  linuxPrefixes?: string[]
+  /** The Flatpak app id, whose exported launcher is named after it, not the CLI. */
+  flatpakId?: string
+}
+
+/**
+ * Absolute paths tried for an editor's CLI when PATH has no hit.
+ *
+ * macOS ships the CLI inside the .app and putting it on PATH is a manual
+ * opt-in most users skip. On Linux the deb/rpm has it under the package
+ * prefix (the `/usr/bin` symlink is not always there), snap exports it to
+ * `/snap/bin` (on PATH on Ubuntu, not elsewhere), and Flatpak exports a
+ * launcher named after the app id — `com.visualstudio.code`, never `code` —
+ * so a PATH lookup for the CLI's name can never find it. Windows has no
+ * entry yet: `code.cmd` lands on PATH from the installer there.
+ */
+export function editorBundledPaths(home: string, hints: EditorInstallHints): string[] {
+  const { command, macApp, linuxPrefixes = [], flatpakId } = hints
+  switch (platformId()) {
+    case 'darwin':
+      return [
+        `/Applications/${macApp}.app/Contents/Resources/app/bin/${command}`,
+        `${home}/Applications/${macApp}.app/Contents/Resources/app/bin/${command}`,
+      ]
+    case 'linux':
+      return [
+        ...linuxPrefixes.map((prefix) => `${prefix}/bin/${command}`),
+        `/snap/bin/${command}`,
+        ...(flatpakId
+          ? [`/var/lib/flatpak/exports/bin/${flatpakId}`, `${home}/.local/share/flatpak/exports/bin/${flatpakId}`]
+          : []),
+      ]
     default:
       return []
   }
@@ -130,14 +207,69 @@ export function defaultShell(env: Record<string, string | undefined> = {}): stri
     case 'darwin':
       return '/bin/zsh'
     case 'win32':
-      // PowerShell 7 when it is installed, and Windows PowerShell otherwise;
-      // both accept the `-Command` form the spawn paths use. Resolution is by
-      // name so PATH decides, the same way `$SHELL` would.
-      return env.COMSPEC || 'powershell.exe'
+      // Windows PowerShell, which every supported Windows ships; resolution is
+      // by name so PATH decides, the same way `$SHELL` would. Deliberately not
+      // `COMSPEC`: that names cmd.exe, whose command syntax is nothing like
+      // what the spawn paths assume, and it is set on every Windows session so
+      // honouring it would have made cmd.exe the effective default.
+      return 'powershell.exe'
     default:
       // bash is not guaranteed on a minimal Linux install, but it is what
       // every distribution we would ship to has, and `sh` loses the
       // interactive features the CLI panes rely on.
       return '/bin/bash'
   }
+}
+
+/** The file name of `shell`, whichever separator its path uses. */
+function shellBasename(shell: string): string {
+  return shell.split(/[\\/]/).pop()?.toLowerCase() ?? ''
+}
+
+export interface ShellCommandOptions {
+  /**
+   * True when `command` is a CLI agent invocation (`claude --mcp-config {…}`)
+   * rather than the user's interactive shell. On Windows this returns the
+   * command as a plain string instead of wrapping it in `powershell -Command`,
+   * because PowerShell's `-Command` re-parses the string as PowerShell code:
+   * the `{…}` of a `--mcp-config` JSON payload is read as a script block and
+   * the `&` in a plan-mcp URL as the call operator, so every such pane died at
+   * launch with a parser error. Handed the bare string, the backend splits it
+   * with `CommandLineToArgvW` rules and runs the program directly (its own
+   * PATHEXT / npm-shim resolution), so there is no PowerShell and no cmd.exe
+   * in the chain — the JSON stays one intact argument (the backend already
+   * quotes appended flags for those same rules). No effect off Windows, where
+   * the login-shell wrapping below is what loads the PATH the CLI needs.
+   */
+  agentPane?: boolean
+}
+
+/**
+ * The command that runs one CLI pane inside the user's shell and leaves it
+ * open afterwards — how every CLI pane is started.
+ *
+ * POSIX: `-l` so the login files load, plus `-i` for zsh because installers
+ * append to `~/.zshrc`, which a plain login shell skips. Windows PowerShell
+ * has neither flag: `-NoExit -Command` is the equivalent, and `-NoLogo`
+ * keeps the banner out of the pane. cmd.exe's `/k` is its `-NoExit`. Any
+ * other shell on Windows (Git's bash.exe, for one) takes the POSIX flags.
+ *
+ * Windows agent panes (see `ShellCommandOptions.agentPane`) are the exception:
+ * they return the plain command string so the backend runs the program
+ * directly, no PowerShell in the way.
+ */
+export function shellCommandArgv(
+  shell: string,
+  command: string,
+  opts: ShellCommandOptions = {},
+): string | string[] {
+  if (isWindows()) {
+    if (opts.agentPane) return command
+    const name = shellBasename(shell)
+    if (name === 'powershell.exe' || name === 'powershell' || name === 'pwsh.exe' || name === 'pwsh') {
+      return [shell, '-NoLogo', '-NoExit', '-Command', command]
+    }
+    if (name === 'cmd.exe' || name === 'cmd') return [shell, '/k', command]
+  }
+  return [shell, shell.endsWith('zsh') ? '-ilc' : '-lc', command]
 }

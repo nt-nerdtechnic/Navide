@@ -4,7 +4,7 @@ import type { AgentSpec } from './types'
 
 export const SPEC = {
   agentKey: 'opencode',
-  label: 'OpenCode',
+  label: 'OpenCode (Anomaly)',
   defaultCommand: 'opencode',
   // The root command really does consume `--model` — it is declared on the
   // root command, threaded into the TUI and parsed there. An earlier audit

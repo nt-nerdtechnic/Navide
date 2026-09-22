@@ -763,6 +763,7 @@ describe('ControlPane – workspace rails', () => {
     await wrapper.findAll('.ws-rcell')[1].trigger('click')
     expect(wrapper.emitted('switch-to-workspace')).toBeUndefined()
     expect(wrapper.emitted('close-workspace')).toBeUndefined()
+    expect(wrapper.emitted('close-workspace-keep-panes')).toBeUndefined()
     expect(wrapper.emitted('detach-workspace')).toBeUndefined()
     expect(wrapper.emitted('toggle-workspace')).toBeUndefined()
   })

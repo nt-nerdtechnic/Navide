@@ -1,9 +1,14 @@
 // @vitest-environment happy-dom
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { ref } from 'vue'
 import { shallowMount, type VueWrapper } from '@vue/test-utils'
 import ControlPane from '../ControlPane.vue'
+import ExplorerPane from '../ExplorerPane.vue'
+import { useWorkspaceAliases } from '../../composables/useWorkspaceAliases'
+import type { RecentWorkspace } from '../../composables/useRecentWorkspaces'
+import { createMockBackend, withScope } from '../../composables/__tests__/mockBackend'
 
 // The sidebar's outer layer is the workspace (project), not a tab group.
 //
@@ -11,6 +16,31 @@ import ControlPane from '../ControlPane.vue'
 // Every other row comes from the backend messaging registry, which knows a
 // pane's name, agent and busy flag and nothing else, so those rows are
 // read-only and click through to the window that does own them.
+
+/** The alias map the way production builds it: through useWorkspaceAliases
+ *  from the recent list, where a workspace with NO alias still carries its
+ *  folder basename as `name` (the backend's touch() writes that). A hand-made
+ *  map holding only real aliases skips the one shape that bit — the basename
+ *  mirror being read as a name — so the "no alias" tests feed this instead. */
+function productionAliases(recent: Array<[path: string, name: string]>): Record<string, string> {
+  const list = ref<RecentWorkspace[]>(
+    recent.map(([path, name]) => ({
+      path,
+      name,
+      last_opened_at: '',
+      pinned: false,
+      last_known_state: '',
+      last_known_task: '',
+      exists: true,
+    })),
+  )
+  const { result, scope } = withScope(() =>
+    useWorkspaceAliases(createMockBackend('connected').backend, list),
+  )
+  const out = { ...result.aliases.value }
+  scope.stop()
+  return out
+}
 
 const localPanes = [
   { id: 'p1', agentLabel: 'Claude', status: 'running', command: 'claude', origin: 'manual', isMinimized: false, isCommander: false },
@@ -55,7 +85,10 @@ const current = (over: Record<string, unknown> = {}) => {
 
 describe('ControlPane – workspace sections', () => {
   let wrapper: VueWrapper
-  afterEach(() => wrapper?.unmount())
+  afterEach(() => {
+    wrapper?.unmount()
+    vi.useRealTimers()
+  })
 
   it('renders the flat list when no workspaces prop is given', () => {
     wrapper = mountWith({})
@@ -101,21 +134,37 @@ describe('ControlPane – workspace sections', () => {
     expect(own.attributes('disabled')).toBeDefined()
   })
 
-  it('moves rebuild-all and history onto the workspace row', async () => {
-    // Both act on one workspace's panes, so grouped they belong on its row —
-    // and the section header must not keep a second copy.
+  it('moves rebuild-all and history into the workspace row\'s ⋯ menu', async () => {
+    // Both act on one workspace's panes, so grouped they belong to its row —
+    // and the section header must not keep a second copy. They sit in the ⋯
+    // overflow rather than on the row itself: at the sidebar's 240px minimum a
+    // fourth button takes its width from the project name.
     wrapper = mountWith({ workspaces: [current()] })
-    const acts = wrapper.find('.ws-head--current').findAll('.ws-act')
-    expect(acts).toHaveLength(2)
+    const head = wrapper.find('.ws-head--current')
+    expect(head.findAll('.ws-act')).toHaveLength(0)
     expect(wrapper.find('.agent-header-actions').exists()).toBe(false)
-    await acts[1].trigger('click')
+    // Closed until asked for, so it costs the row no width.
+    expect(wrapper.find('.ws-more-menu').exists()).toBe(false)
+    await head.find('.ws-more').trigger('click')
+    // Addressed by label rather than position: the menu has since taken in the
+    // actions that used to need a right-click, and an index would have to be
+    // renumbered every time it grows again.
+    const opts = wrapper.findAll('.ws-more-opt')
+    expect(opts.map((o) => o.text())).toContain('action.rebuild-all-cli-panes-label')
+    const history = opts.find((o) => o.text() === 'label.history')
+    expect(history).toBeDefined()
+    await history!.trigger('click')
     expect(wrapper.emitted('open-history')).toBeTruthy()
+    // Choosing an item dismisses the menu; leaving it up over a row whose
+    // action already ran reads as though nothing happened.
+    expect(wrapper.find('.ws-more-menu').exists()).toBe(false)
   })
 
   it('keeps them in the header while nothing is grouped', () => {
     wrapper = mountWith({})
     expect(wrapper.find('.agent-header-actions').exists()).toBe(true)
     expect(wrapper.findAll('.ws-act')).toHaveLength(0)
+    expect(wrapper.findAll('.ws-more')).toHaveLength(0)
   })
 
   it('offers neither opening nor switching in a detached window', async () => {
@@ -130,7 +179,9 @@ describe('ControlPane – workspace sections', () => {
     expect(wrapper.find('.hdr-add-ws').exists()).toBe(false)
     const rows = wrapper.findAll('.ws-head--current')
     expect(rows[1].classes()).not.toContain('ws-head--switchable')
+    vi.useFakeTimers()
     await rows[1].trigger('click')
+    vi.runAllTimers()
     expect(wrapper.emitted('switch-to-workspace')).toBeUndefined()
   })
 
@@ -458,11 +509,33 @@ describe('ControlPane – workspace sections', () => {
     expect(wrapper.emitted('close-workspace')?.[0]).toEqual(['/Users/me/Desktop/Other'])
   })
 
+  it('offers a close that leaves the CLIs running, beside the one that ends them', async () => {
+    // Two rows under the same guard. The plain one only drops the sidebar
+    // entry — the panes stay alive in the backend for a reopen — so it is the
+    // non-danger row and emits its own event; the danger row is the teardown.
+    const adopted = current({ path: '/Users/me/Desktop/Other', label: 'Other' })
+    wrapper = mountWith({ workspace: '/Users/me/Desktop/Agent-Team', workspaces: [current(), adopted] })
+    await wrapper.findAll('.ws-head--current')[1].trigger('contextmenu')
+    const rows = wrapper.findAll('.ws-ctx-opt')
+    // $t is mocked to return the key.
+    const keep = rows.find((r) => r.text() === 'action.close-workspace')
+    expect(keep?.exists()).toBe(true)
+    expect(keep!.classes()).not.toContain('danger')
+    expect(wrapper.find('.ws-ctx-opt.danger').text()).toBe('action.close-workspace-and-panes')
+    await keep!.trigger('click')
+    expect(wrapper.emitted('close-workspace-keep-panes')?.[0]).toEqual(['/Users/me/Desktop/Other'])
+    expect(wrapper.emitted('close-workspace')).toBeUndefined()
+  })
+
   it('reveals a workspace folder from that menu', async () => {
     // The titlebar button that used to do this is gone.
     wrapper = mountWith({ workspaces: [current()] })
     await wrapper.find('.ws-head--current').trigger('contextmenu')
-    await wrapper.findAll('.ws-ctx-opt')[0].trigger('click')
+    // Found by its label, not by its position: the menu has gained rows before
+    // it (rename) and would gain more, and an index silently pointed the test
+    // at whichever row happened to be first.
+    const reveal = wrapper.findAll('.ws-ctx-opt').find((b) => b.text() === 'action.open-in-finder')
+    await reveal!.trigger('click')
     expect(wrapper.emitted('reveal-workspace-folder')?.[0]).toEqual(['/Users/me/Desktop/Agent-Team'])
   })
 
@@ -479,25 +552,52 @@ describe('ControlPane – workspace sections', () => {
     // anything — the whole row is the target.
     const other = current({ path: '/Users/me/Desktop/Other', label: 'Other' })
     wrapper = mountWith({ workspace: '/Users/me/Desktop/Agent-Team', workspaces: [current(), other] })
+    vi.useFakeTimers()
     const rows = wrapper.findAll('.ws-head--current')
     // The one on screen is inert and not marked clickable.
     expect(rows[0].classes()).not.toContain('ws-head--switchable')
     await rows[0].trigger('click')
+    vi.runAllTimers()
     expect(wrapper.emitted('switch-to-workspace')).toBeUndefined()
     expect(rows[1].classes()).toContain('ws-head--switchable')
     await rows[1].trigger('click')
-    expect(wrapper.emitted('switch-to-workspace')?.[0]).toEqual(['/Users/me/Desktop/Other'])
+    // Deferred by one double-click interval, so a double-click on the name can
+    // still cancel it (see 'renaming a workspace'). Not yet…
+    expect(wrapper.emitted('switch-to-workspace')).toBeUndefined()
+    vi.advanceTimersByTime(250)
+    // …and exactly once after it.
+    expect(wrapper.emitted('switch-to-workspace')).toEqual([['/Users/me/Desktop/Other']])
+  })
+
+  it('a double-click on the row body switches once, not twice', async () => {
+    // The two clicks before the dblclick each scheduled a switch; the second
+    // replaced the first, and the dblclick itself replaces the pending one
+    // with an immediate switch.
+    const other = current({ path: '/Users/me/Desktop/Other', label: 'Other' })
+    wrapper = mountWith({ workspace: '/Users/me/Desktop/Agent-Team', workspaces: [current(), other] })
+    vi.useFakeTimers()
+    const row = wrapper.findAll('.ws-head--current')[1]
+    await row.trigger('click')
+    await row.trigger('click')
+    await row.trigger('dblclick')
+    vi.runAllTimers()
+    expect(wrapper.emitted('switch-to-workspace')).toEqual([['/Users/me/Desktop/Other']])
   })
 
   it('the row controls keep working without switching', async () => {
-    // caret, rebuild, history and ＋ all stop propagation.
+    // caret, fold, ＋ and ⋯ all stop propagation — the row itself is the
+    // switch, so any of them leaking would change project as a side effect.
     const other = current({ path: '/Users/me/Desktop/Other', label: 'Other' })
     wrapper = mountWith({ workspace: '/Users/me/Desktop/Agent-Team', workspaces: [current(), other] })
     const row = wrapper.findAll('.ws-head--current')[1]
     await row.find('.ws-caret').trigger('click')
     expect(wrapper.emitted('toggle-workspace')?.[0]).toEqual(['/Users/me/Desktop/Other'])
     expect(wrapper.emitted('switch-to-workspace')).toBeUndefined()
-    await row.findAll('.ws-act')[1].trigger('click')
+    await row.find('.ws-fold').trigger('click')
+    expect(wrapper.emitted('switch-to-workspace')).toBeUndefined()
+    await row.find('.ws-more').trigger('click')
+    expect(wrapper.emitted('switch-to-workspace')).toBeUndefined()
+    await wrapper.findAll('.ws-more-opt')[1].trigger('click')
     expect(wrapper.emitted('open-history')).toBeTruthy()
     expect(wrapper.emitted('switch-to-workspace')).toBeUndefined()
   })
@@ -534,6 +634,234 @@ describe('ControlPane – workspace sections', () => {
     wrapper.unmount()
     wrapper = mountWith({})
     expect(wrapper.find('.agent-list-hdr .lbl').text()).toBe('label.active-agents')
+  })
+
+  // The display name. Same gesture as a pane's: double-click the name, Enter
+  // commits, Esc abandons. The heading text arrives already resolved through
+  // `label`, so these are about the edit, not about where the name came from.
+  describe('renaming a workspace', () => {
+    const HERE = '/Users/me/Desktop/Agent-Team'
+
+    async function startEdit(extra: Record<string, unknown> = {}): Promise<void> {
+      wrapper = mountWith({ workspace: HERE, workspaces: [current()], ...extra })
+      await wrapper.find('.ws-name').trigger('dblclick')
+    }
+
+    it('opens an EMPTY input when the workspace has no alias', async () => {
+      // Not seeded with the folder name on screen: the commit compares the
+      // draft against the alias, and a folder-name seed made "looked and
+      // changed nothing" indistinguishable from "typed the folder name in".
+      // Fed the recent list's basename mirror, which is exactly the seed that
+      // must NOT come through.
+      await startEdit({ workspaceAliases: productionAliases([[HERE, 'Agent-Team']]) })
+      const input = wrapper.find('.ws-rename-input')
+      expect(input.exists()).toBe(true)
+      expect((input.element as HTMLInputElement).value).toBe('')
+      expect(input.attributes('placeholder')).toBe('label.workspace-name-placeholder')
+      expect(wrapper.find('.ws-name').exists()).toBe(false)
+    })
+
+    it('seeds the input with the existing alias, so it can be edited', async () => {
+      await startEdit({ workspaceAliases: { [HERE]: 'Payments API' } })
+      expect((wrapper.find('.ws-rename-input').element as HTMLInputElement).value)
+        .toBe('Payments API')
+    })
+
+    it('commits on Enter with the path, not the name', async () => {
+      await startEdit()
+      const input = wrapper.find('.ws-rename-input')
+      await input.setValue('  Payments API  ')
+      await input.trigger('keydown', { key: 'Enter' })
+      expect(wrapper.emitted('rename-workspace')?.[0]).toEqual([HERE, 'Payments API'])
+      expect(wrapper.find('.ws-rename-input').exists()).toBe(false)
+    })
+
+    it('sends an empty name through — that is how the alias is cleared', async () => {
+      await startEdit({ workspaceAliases: { [HERE]: 'Payments API' } })
+      const input = wrapper.find('.ws-rename-input')
+      await input.setValue('')
+      await input.trigger('keydown', { key: 'Enter' })
+      expect(wrapper.emitted('rename-workspace')?.[0]).toEqual([HERE, ''])
+    })
+
+    it('commits on blur', async () => {
+      await startEdit()
+      const input = wrapper.find('.ws-rename-input')
+      await input.setValue('Payments API')
+      await input.trigger('blur')
+      expect(wrapper.emitted('rename-workspace')?.[0]).toEqual([HERE, 'Payments API'])
+    })
+
+    // blur commits, so the commonest accident — double-click a name to select
+    // a word, change nothing, click away — must not be a write. The backend's
+    // rename uses load_or_create, so an unchanged commit CREATED the project
+    // document in a workspace the user only looked at, storing an alias equal
+    // to the folder name that then froze the row if that folder was renamed.
+    it('does not emit when the draft is unchanged — no alias', async () => {
+      await startEdit()
+      await wrapper.find('.ws-rename-input').trigger('blur')
+      expect(wrapper.emitted('rename-workspace')).toBeUndefined()
+      expect(wrapper.find('.ws-rename-input').exists()).toBe(false)
+    })
+
+    it('does not emit when the draft is unchanged — existing alias', async () => {
+      await startEdit({ workspaceAliases: { [HERE]: 'Payments API' } })
+      await wrapper.find('.ws-rename-input').trigger('blur')
+      expect(wrapper.emitted('rename-workspace')).toBeUndefined()
+    })
+
+    it('does emit when the folder name is typed into an unaliased workspace', async () => {
+      // The draft equals what is on screen but NOT the alias (there is none),
+      // so this is a real write the user asked for. With the basename mirror
+      // read as an alias, the seed was 'Agent-Team' and this blur was a no-op.
+      await startEdit({ workspaceAliases: productionAliases([[HERE, 'Agent-Team']]) })
+      await wrapper.find('.ws-rename-input').setValue('Agent-Team')
+      await wrapper.find('.ws-rename-input').trigger('blur')
+      expect(wrapper.emitted('rename-workspace')?.[0]).toEqual([HERE, 'Agent-Team'])
+    })
+
+    it('abandons on Escape, and the blur that follows does not resurrect it', async () => {
+      await startEdit()
+      const input = wrapper.find('.ws-rename-input')
+      await input.setValue('Payments API')
+      await input.trigger('keydown', { key: 'Escape' })
+      await input.trigger('blur')
+      expect(wrapper.emitted('rename-workspace')).toBeUndefined()
+      expect(wrapper.find('.ws-rename-input').exists()).toBe(false)
+    })
+
+    it('ignores the Enter an IME sends while composing', async () => {
+      await startEdit()
+      const input = wrapper.find('.ws-rename-input')
+      await input.trigger('keydown', { key: 'Enter', isComposing: true })
+      expect(wrapper.emitted('rename-workspace')).toBeUndefined()
+      expect(wrapper.find('.ws-rename-input').exists()).toBe(true)
+    })
+
+    it('also opens from the context menu — the route that does not switch first', async () => {
+      wrapper = mountWith({ workspace: HERE, workspaces: [current()] })
+      await wrapper.find('.ws-head--current').trigger('contextmenu')
+      const rename = wrapper.findAll('.ws-ctx-opt').find((b) => b.text() === 'action.rename-workspace')
+      expect(rename).toBeDefined()
+      await rename!.trigger('click')
+      expect(wrapper.find('.ws-rename-input').exists()).toBe(true)
+      expect(wrapper.find('.ws-ctx-menu').exists()).toBe(false)
+    })
+
+    // Same gesture on every row, like a pane's. On another row the two clicks
+    // that precede the dblclick each scheduled a switch (@dblclick.stop cannot
+    // cancel clicks that already ran) — so the switch is deferred by one
+    // double-click interval and the dblclick cancels it. Otherwise the project
+    // switched — a whole project's panes restored behind a cover — and the
+    // editor opened under it, where the cover's focus change blurred and
+    // committed.
+    it('opens the editor from a double-click on another workspace, without switching', async () => {
+      const other = current({ path: '/Users/me/Desktop/Other', label: 'Other' })
+      wrapper = mountWith({ workspace: HERE, workspaces: [current(), other] })
+      vi.useFakeTimers()
+      const row = wrapper.findAll('.ws-head--current')[1]
+      const name = row.find('.ws-name')
+      // The browser's sequence: click, click, dblclick.
+      await row.trigger('click')
+      await row.trigger('click')
+      await name.trigger('dblclick')
+      vi.runAllTimers()
+      expect(wrapper.emitted('switch-to-workspace')).toBeUndefined()
+      // The editor is on THAT row — the current one still shows its name.
+      expect(row.find('.ws-rename-input').exists()).toBe(true)
+      expect(wrapper.findAll('.ws-head--current')[0].find('.ws-name').exists()).toBe(true)
+    })
+
+    it('commits a rename on another workspace with that row path', async () => {
+      const other = current({ path: '/Users/me/Desktop/Other', label: 'Other' })
+      wrapper = mountWith({ workspace: HERE, workspaces: [current(), other] })
+      vi.useFakeTimers()
+      const row = wrapper.findAll('.ws-head--current')[1]
+      await row.trigger('click')
+      await row.trigger('click')
+      await row.find('.ws-name').trigger('dblclick')
+      const input = row.find('.ws-rename-input')
+      await input.setValue('Ledger')
+      await input.trigger('keydown', { key: 'Enter' })
+      vi.runAllTimers()
+      expect(wrapper.emitted('rename-workspace')?.[0]).toEqual(['/Users/me/Desktop/Other', 'Ledger'])
+      expect(wrapper.emitted('switch-to-workspace')).toBeUndefined()
+    })
+
+    it('still opens from the context menu on another workspace', async () => {
+      const other = current({ path: '/Users/me/Desktop/Other', label: 'Other' })
+      wrapper = mountWith({ workspace: HERE, workspaces: [current(), other] })
+      await wrapper.findAll('.ws-head--current')[1].trigger('contextmenu')
+      const rename = wrapper.findAll('.ws-ctx-opt').find((b) => b.text() === 'action.rename-workspace')
+      await rename!.trigger('click')
+      const input = wrapper.find('.ws-rename-input')
+      await input.setValue('Ledger')
+      await input.trigger('keydown', { key: 'Enter' })
+      expect(wrapper.emitted('rename-workspace')?.[0]).toEqual(['/Users/me/Desktop/Other', 'Ledger'])
+      expect(wrapper.emitted('switch-to-workspace')).toBeUndefined()
+    })
+
+    // The name covers the part of the row the pointer lands on, so its own
+    // title is the one the user reads. With an alias the heading may say
+    // anything — including what another project's says — and the path is the
+    // only thing left that identifies the folder, so it may never be replaced.
+    it('keeps the full path in the name tooltip', () => {
+      const other = current({ path: '/Users/me/Desktop/Other', label: 'Other' })
+      wrapper = mountWith({
+        workspace: HERE,
+        workspaces: [current(), other],
+        workspaceAliases: { [HERE]: 'Payments API', '/Users/me/Desktop/Other': 'Payments API' },
+      })
+      const names = wrapper.findAll('.ws-name')
+      // On every row: path first, hint after it. The hint's wording comes from
+      // the real i18n bundle (the script resolves it, not the template's $t
+      // mock), so only its presence is asserted.
+      const title = names[0].attributes('title') ?? ''
+      expect(title.startsWith(`${HERE}\n`)).toBe(true)
+      expect(title.slice(HERE.length + 1)).not.toBe('')
+      const otherTitle = names[1].attributes('title') ?? ''
+      expect(otherTitle.startsWith('/Users/me/Desktop/Other\n')).toBe(true)
+      expect(otherTitle.slice('/Users/me/Desktop/Other'.length + 1)).toBe(title.slice(HERE.length + 1))
+      // And the wrapper's title is unchanged either way.
+      expect(wrapper.findAll('.ws-text')[0].attributes('title')).toBe(HERE)
+    })
+  })
+
+  // The sidebar heading and the file tree's own heading name the SAME
+  // workspace, so a renamed project that still shows its folder name in the
+  // explorer is the inconsistency this covers.
+  describe('explorer heading name', () => {
+    const HERE = '/Users/me/Desktop/Agent-Team'
+    // Only presence matters: ExplorerPane is stubbed, and the try/catch around
+    // the CLI status call swallows whatever this returns.
+    const backend = { send: async () => ({ payload: {} }) }
+
+    const explorerProps = (extra: Record<string, unknown>) => {
+      wrapper = mountWith({ backend, workspace: HERE, ...extra })
+      const explorer = wrapper.findComponent(ExplorerPane)
+      expect(explorer.exists()).toBe(true)
+      return explorer.props()
+    }
+
+    it('passes the current workspace alias to ExplorerPane', () => {
+      const props = explorerProps({
+        workspaceAliases: { [HERE]: 'Payments API', '/Users/me/Desktop/Other': 'Ledger' },
+      })
+      expect(props.workspacePath).toBe(HERE)
+      expect(props.workspaceDisplayName).toBe('Payments API')
+    })
+
+    it('passes nothing when the current workspace has no alias', () => {
+      // Empty, not the folder name: ExplorerPane owns the basename fallback, so
+      // resolving it here would put a second copy of that rule on screen.
+      const props = explorerProps({
+        workspaceAliases: productionAliases([
+          [HERE, 'Agent-Team'],
+          ['/Users/me/Desktop/Other', 'Ledger'],
+        ]),
+      })
+      expect(props.workspaceDisplayName ?? '').toBe('')
+    })
   })
 
 })

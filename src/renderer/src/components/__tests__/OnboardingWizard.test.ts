@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import OnboardingWizard from '../OnboardingWizard.vue'
+import { useSettings } from '../../composables/useSettings'
 import { i18n } from '@navide/plugin-ui/foundation'
 import { createMockBackend } from '../../composables/__tests__/mockBackend'
 import type { OnboardDep, OnboardStatus } from '../../composables/useOnboarding'
@@ -85,6 +86,20 @@ describe('OnboardingWizard', () => {
     await flushPromises()
     return w
   }
+
+  it('offers native language names and switches to Japanese', async () => {
+    const previous = i18n.global.locale.value
+    const mock = createMockBackend('connected')
+    mock.setResponse('onboarding.status', status())
+    try {
+      wrapper = await open(mock)
+      const select = wrapper.get('select.ob-lang-btn')
+      expect(select.findAll('option').map(option => option.text())).toEqual(['繁體中文', 'English', '日本語'])
+      await select.setValue('ja-JP')
+      expect(i18n.global.locale.value).toBe('ja-JP')
+      expect(wrapper.text()).toContain(i18n.global.t('onboard.step.environment'))
+    } finally { useSettings().setLanguage(previous, { broadcast: false }) }
+  })
 
   it('stops installing the rest once one install moves to a terminal', async () => {
     // Homebrew is interactive: it has only been *handed off*, so `brew install

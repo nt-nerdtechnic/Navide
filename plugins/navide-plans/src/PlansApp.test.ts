@@ -57,7 +57,9 @@ beforeAll(async () => {
   })
   window.history.replaceState({}, '', `/?workspace_path=%2Fworkspace&rel_path=${encodeURIComponent(existingPath)}`)
   PlansApp = (await import('./PlansApp.vue')).default
-})
+  // Imports the whole PlansApp graph once; under a full parallel run the
+  // 10s hook default is on the edge and collects the file as failed.
+}, 30_000)
 
 beforeEach(() => {
   state.realNotify = false
@@ -824,6 +826,24 @@ describe('PlansApp', () => {
     expect(state.calls.filter(({ name }) => name === 'plans.list')).toHaveLength(1)
 
     await state.subscriptionListener?.({ workspace_path: '/workspace' })
+    await new Promise((r) => setTimeout(r, 250))
+    await flushPromises()
+    expect(state.calls.filter(({ name }) => name === 'plans.list')).toHaveLength(2)
+  })
+
+  it('collapses a burst of plans.changed events into one plans.list scan', async () => {
+    await mountPlans()
+    expect(state.calls.filter(({ name }) => name === 'plans.list')).toHaveLength(1)
+
+    // One saved document fans out into several watcher events; a file storm
+    // into hundreds. Each used to start its own full scan.
+    for (let index = 0; index < 5; index += 1) {
+      state.subscriptionListener?.({ workspace_path: '/workspace' })
+      await new Promise((r) => setTimeout(r, 20))
+    }
+    await flushPromises()
+    expect(state.calls.filter(({ name }) => name === 'plans.list')).toHaveLength(1)
+    await new Promise((r) => setTimeout(r, 250))
     await flushPromises()
     expect(state.calls.filter(({ name }) => name === 'plans.list')).toHaveLength(2)
   })

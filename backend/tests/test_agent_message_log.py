@@ -399,6 +399,14 @@ def test_kind_round_trips_and_defaults_to_null(tmp_path):
     assert rows["a:2"]["kind"] is None
 
 
+def test_an_ack_kind_survives_rather_than_degrading(log):
+    """An "ack" row is logged and never injected, so the panel has to be able to
+    tell it apart from an ordinary message after a reload."""
+    log.append([_row("a:1", 100) | {"kind": "ack"}, _row("a:2", 200)])
+
+    assert [r["kind"] for r in log.tail()] == ["ack", None]
+
+
 def test_an_unrecognized_kind_is_stored_as_an_ordinary_message(log):
     """The panel reads `kind` to decide what a row is, so an unknown value
     degrades to NULL rather than reaching the UI."""

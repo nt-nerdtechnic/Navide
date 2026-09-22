@@ -172,18 +172,19 @@ async def test_workspace_list_marks_which_recent_workspaces_have_a_live_pane(
 
 @pytest.mark.asyncio
 async def test_workspace_list_reports_a_live_workspace_the_recent_list_never_saw(
-    monkeypatch: pytest.MonkeyPatch, recent: None
+    monkeypatch: pytest.MonkeyPatch, recent: None, tmp_path: Path
 ) -> None:
     """A pane can run in a project the user never opened from the welcome
     screen — a legal workspace_path the recent list does not mention."""
-    monkeypatch.setattr(
-        plan_mcp, "_live_pane_workspaces", lambda: ["/ws/gamma", "/ws/alpha"]
-    )
+    # Real absolute paths: the live set is reported in resolved form.
+    alpha = str((tmp_path / "alpha").resolve())
+    gamma = str((tmp_path / "gamma").resolve())
+    monkeypatch.setattr(plan_mcp, "_live_pane_workspaces", lambda: [gamma, alpha])
 
     result = await plan_mcp.workspace_list(_host_ctx())
 
-    assert result["live_pane_workspaces"] == ["/ws/alpha", "/ws/gamma"]
-    assert "/ws/gamma" not in {entry["path"] for entry in result["workspaces"]}
+    assert result["live_pane_workspaces"] == [alpha, gamma]
+    assert gamma not in {entry["path"] for entry in result["workspaces"]}
 
 
 # ── C. pipeline_list ────────────────────────────────────────────────────────
@@ -485,6 +486,7 @@ async def test_skills_list_summarises_the_library_without_the_instructions(
 
     assert result["skills"] == [
         {
+            "id": "shared:verify",
             "name": "verify",
             "description": "How to drive this repo's surfaces",
             "enabled": True,
@@ -494,8 +496,11 @@ async def test_skills_list_summarises_the_library_without_the_instructions(
             "native_conflict": False,
         }
     ]
+    from agent_team_backend.plugins.builtin.navide_skills.skills_tools import skill_id
+
     assert result["native"] == [
         {
+            "id": skill_id({"real_path": "/home/u/.claude/skills/notebooklm"}, native=True),
             "name": "notebooklm",
             "description": "NotebookLM API",
             "source": "claude",
@@ -523,6 +528,23 @@ async def test_skills_list_marks_what_is_delivered_to_the_calling_pane(
         "native_paths": ["/home/u/.claude/skills/notebooklm"],
     }
     assert skills.targets_calls == ["codex"]
+
+
+@pytest.mark.asyncio
+async def test_skills_list_distinguishes_configuration_from_cli_loading(
+    skills: _FakeSkillsStore,
+) -> None:
+    agent_messaging.register("pa", "reviewer", "/ws/alpha", agent_key="codex")
+
+    result = await plan_mcp.skills_list(_ctx())
+
+    assert result["configured_for_me"]["skills"] == ["verify"]
+    assert result["configured_for_me"]["materialized_in_current_session"] is None
+    assert result["configured_for_me"]["loaded_in_current_session"] is None
+    assert result["configured_for_me"]["activation"] == "new_session"
+    assert result["delivery_semantics"] == "configuration_only"
+    assert result["skills"][0]["id"] == "shared:verify"
+    assert result["native"][0]["id"].startswith("native:")
 
 
 @pytest.mark.asyncio
@@ -653,8 +675,12 @@ async def test_the_inventory_tools_are_registered_with_their_declared_arguments(
         "pipeline_status",
         "skills_list",
         "cli_message_log",
+        "workspace_open",
+        "workspace_switch",
     }
     # The Context parameter is injected, never asked of the agent.
+    for name in ("workspace_open", "workspace_switch"):
+        assert set(tools[name].inputSchema.get("properties") or {}) == {"path"}
     assert set(tools["cli_usage"].inputSchema.get("properties") or {}) == {"agent"}
     assert set(tools["pipeline_status"].inputSchema.get("properties") or {}) == {
         "workspace_path"

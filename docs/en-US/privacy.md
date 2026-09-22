@@ -2,7 +2,7 @@
 
 English | [繁體中文](../zh-TW/privacy.md) | [日本語](../ja-JP/privacy.md) | [Documentation](README.md)
 
-Navide is **local-first**, not universally offline. Its Electron application, Python backend, terminal sessions, private project intelligence, workspace state, and orchestration logic run on your Mac. Data can leave the machine when you enable or use an external service.
+Navide is **local-first**, not universally offline. Its Electron application, Python backend, terminal sessions, private project intelligence, workspace state, and orchestration logic run on your machine. Data can leave the machine when you enable or use an external service.
 
 ## Data kept locally by Navide
 
@@ -47,6 +47,8 @@ A future portability feature should use explicit local export/import with redact
 | Git operations and Issue detection | Configured Git host, through local `git`, `gh`, or `glab` CLIs | Repository and Issue data, plus credentials handled by the CLI or Host account flow |
 | Update checks | GitHub Releases | Application version and normal network metadata |
 | Plugin Registry trust refresh | The selected Official Registry or an explicitly approved self-hosted Registry | The namespace/name of an installed marketplace plugin; no plugin source or archive is sent by the refresh |
+| Skills package retrieval | GitHub API and codeload | Requested repository/ref and normal network metadata; downloads a public archive without uploading local skill contents |
+| CLI risk DNS lookups | Operating system resolver and its configured upstream service | Declared expected hostnames and configured allowed hostnames |
 | MCP servers | The configured MCP server and any service it uses | Depends entirely on that server's tools and configuration |
 
 Read each provider's policy before sending private code or regulated data.
@@ -108,9 +110,21 @@ of its own request logs. There is no separate refresh toggle today. Removing
 the installed marketplace plugins stops this flow; other external-service
 flows are governed by their own settings and configuration.
 
+## CLI risk observation data
+
+For vendors with declarations, the backend samples numeric endpoints of established TCP sockets attributed to active pane process trees and inventories declared local data roots. Format checks read at most 64 KiB from each candidate file locally. This feature does not intercept packets, decrypt TLS or upload file contents. Read buffers are used for format recognition; file contents and tokens are not stored in the risk records.
+
+The local `navide.db` retains baseline and file-membership metadata, paths, sizes/classes, presence and absence observation times, network endpoint findings and counts, availability, and Ignore/Allow decisions. An allowed exact IP is also retained in that vendor's UI settings. Metadata can reveal local paths and contacted IPs even though it contains no copied file contents.
+
+Building the expected-address snapshot performs forward DNS lookups for declared expected hostnames and any configured allowed hostnames through the operating system resolver. That resolver, and its configured upstream service, can receive those names. Numeric IP allowances need no hostname lookup. The feature does not infer destination names with reverse DNS; an address match or mismatch cannot establish traffic contents or intent.
+
 ## Credentials
 
 Agent CLI credentials remain in each CLI's own configuration. If you enter cloud AI keys in Navide, Navide stores them locally so AI features (inline editing, code review) can use them. Settings export redacts API keys and tokens.
+
+**Portable CLI credentials** are the exception you opt into: a value a vendor documents for carrying between machines (for example the token `claude setup-token` prints) that you paste in Settings → Accounts. Navide stores it encrypted on this device and hands it to new panes of that CLI in their environment only; it never writes it into the CLI's own login files. Removing it from a device removes it from that device.
+
+If you switch on **Credentials** under Settings → Sync (off by default), each pasted credential is encrypted on your device with your account's sync key before it leaves and stored by Navide Cloud as ciphertext the service cannot open. Another device signed in to the same account decrypts it and keeps it encrypted at rest, again handing it to panes only. What the service can see is an opaque item id, a revision number, a timestamp and which device wrote the record — not which CLI or account the credential belongs to. Removing a credential on one device does not remove it from the cloud or your other devices, and nothing is uploaded until you switch the section on; switching accounts on a device drops what that device imported and switches the section off again.
 
 Local file permissions reduce accidental access by other users on the same machine but do not protect against malware, a compromised user account, unrestricted agents, backups, or processes with equivalent permissions.
 
@@ -141,3 +155,17 @@ Cross-agent handoffs can include task context and prior-stage output. Automatic 
 Private project intelligence can be removed from the workspace's `.agent-team/` directory after active sessions are stopped. Deleting it can remove resumability, run history, attribution, and accumulated context without deleting the source repository. Application-wide settings and histories live in the Navide application data directory. Back up any configuration you intend to preserve before deletion.
 
 For vulnerability reporting, see the [Security Policy](../../SECURITY.md).
+
+## Token Monitor local records
+
+Token Monitor reads local Claude transcripts to summarize turn timestamps, session identifiers, models, and token counts. Its in-memory cache contains these summaries rather than prompt or response text. Local transcript records are not assigned to the current account because their account ownership cannot be verified.
+
+Successful observations from the existing Claude quota polling service are saved in the application data directory as `claude-quota-history.sqlite3`. Records contain an account-slot identifier, observation time, plan type, quota percentages, and reset-window metadata; they contain no credentials or conversation text. Recording prunes observations older than 180 days and limits the database to 50,000 samples. This history is local to this installation and is not uploaded by Token Monitor. Opening or refreshing the monitor adds no external API or CLI requests; the existing usage service retains its own polling behavior.
+
+### Skills installation through MCP
+
+Preparing a public GitHub skill sends its repository and ref, plus normal connection metadata, to `api.github.com`, then downloads the resolved commit archive from `codeload.github.com`. Sources accept `owner/repo` or an HTTPS `github.com/owner/repo` URL; private repositories, arbitrary download URLs and redirects are rejected. Navide adds no GitHub authorization credentials and uploads no local skill contents during retrieval. System proxy settings may still apply. Preparing a local package only reads the selected local skill directory and makes no GitHub request.
+
+Prepared bytes stay in backend memory and become unusable after 15 minutes or backend restart. At most eight packages may be active, with up to eight lightweight completed retry receipts held separately in memory. Installation uses the reviewed snapshot without rereading its source, writes to the existing shared Skills root, and never executes scripts or plugin hooks. A retained receipt lets a retry return the original result without another write; it expires at the original preview deadline or may be evicted earlier. Retry after expiry or eviction returns missing/expired without reinstalling. Inspection and preparation return skill text, file information and source paths to the requesting coding agent; its configured model provider may receive those results under the CLI's own data policy. Avoid secrets in skill packages.
+
+Skills sync, when enabled, can carry eligible installed content and delivery settings to paired devices through the existing flow. The selected package uses the same limits as Skills content export: 64 files, 256 KiB per file and 512 KiB total. These limits do not guarantee that synchronization completed. Backend-generated source, digest and timestamp records are stored in a local Navide marker, survive local edits and restart, and are excluded from export and Skills sync.

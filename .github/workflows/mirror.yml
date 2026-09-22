@@ -1,0 +1,107 @@
+name: Mirror release
+
+# Copies one GitHub Release, byte for byte, to the S3 bucket behind
+# dl.navide.dev. release.yml calls this after every platform has published;
+# the manual trigger backfills a release that shipped before the mirror
+# existed, or re-runs one whose mirror job failed.
+#
+# releases/<tag>/ is the permanent, immutable copy the website links to;
+# releases/latest/ is overwritten every release so electron-updater's generic
+# provider can read latest*.yml (and the files they name) from one fixed URL.
+# The CloudFront behavior for releases/latest/* caches for 60 s; the
+# invalidation just makes the switch immediate.
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Release tag to mirror (v0.2.3)
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to mirror (v0.2.3)
+        required: true
+        type: string
+      refresh_latest:
+        description: Also replace releases/latest/ with this tag (off when backfilling an older release)
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    name: Mirror ${{ inputs.tag }} to dl.navide.dev
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.NAVIDE_MIRROR_AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.NAVIDE_MIRROR_AWS_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: ap-northeast-1
+      MIRROR_BUCKET: navide-releases
+      MIRROR_DISTRIBUTION: E3QHTAL965EQZS
+      TAG: ${{ inputs.tag }}
+      # A release run always refreshes latest/; a manual run only when asked.
+      REFRESH_LATEST: ${{ github.event_name == 'workflow_call' || github.event_name == 'push' || inputs.refresh_latest == true }}
+    steps:
+      - name: Verify mirror credentials
+        run: |
+          aws sts get-caller-identity --query Arn --output text
+          # s3api, not `s3 ls`: the latter exits 1 on an empty prefix, which
+          # is exactly what the very first mirror run sees.
+          aws s3api list-objects-v2 --bucket "${MIRROR_BUCKET}" --prefix releases/ \
+            --max-keys 50 --query 'Contents[].Key' --output text
+
+      - name: Download the published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p mirror
+          gh release download "${TAG}" --repo "${GITHUB_REPOSITORY}" --dir mirror
+          # Every platform's files must be present before anything is mirrored:
+          # a partial mirror would send website visitors to 404s.
+          for expected in latest-mac.yml latest-linux.yml latest.yml; do
+            test -f "mirror/${expected}"
+          done
+          ls -la mirror
+          (cd mirror && sha256sum -- * > "../${TAG}.sha256")
+          cat "${TAG}.sha256"
+
+      - name: Upload to releases/<tag>/
+        run: |
+          # Content-Type is set explicitly: S3 would otherwise guess from the
+          # extension and serve latest*.yml as text/yaml with a charset, which
+          # electron-updater tolerates but browsers then try to render.
+          aws s3 sync mirror "s3://${MIRROR_BUCKET}/releases/${TAG}/" \
+            --exclude '*' --include '*.yml' --content-type 'application/x-yaml' --no-progress
+          aws s3 sync mirror "s3://${MIRROR_BUCKET}/releases/${TAG}/" \
+            --exclude '*.yml' --content-type 'application/octet-stream' --no-progress
+          aws s3 cp "${TAG}.sha256" "s3://${MIRROR_BUCKET}/releases/${TAG}/SHA256SUMS" \
+            --content-type 'text/plain' --no-progress
+
+      - name: Replace releases/latest/
+        if: env.REFRESH_LATEST == 'true'
+        run: |
+          # latest/ is replaced wholesale: --delete drops the previous
+          # version's binaries so the prefix never mixes two releases.
+          aws s3 sync mirror "s3://${MIRROR_BUCKET}/releases/latest/" --delete \
+            --exclude '*' --include '*.yml' --content-type 'application/x-yaml' --no-progress
+          aws s3 sync mirror "s3://${MIRROR_BUCKET}/releases/latest/" --delete \
+            --exclude '*.yml' --content-type 'application/octet-stream' --no-progress
+          aws cloudfront create-invalidation --distribution-id "${MIRROR_DISTRIBUTION}" \
+            --paths '/releases/latest/*' --query Invalidation.Id --output text
+
+      - name: Verify the mirror serves what GitHub serves
+        run: |
+          # Compare the mirrored bytes against the sha256 taken from the GitHub
+          # download above; a mismatch fails the job and leaves GitHub as the
+          # website's only working link (the site probes before it links).
+          mkdir -p check && cd check
+          while read -r sum name; do
+            curl -fsSL --retry 3 -o "${name}" "https://dl.navide.dev/releases/${TAG}/${name}"
+          done < "../${TAG}.sha256"
+          sha256sum -c "../${TAG}.sha256"

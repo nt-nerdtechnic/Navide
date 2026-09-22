@@ -7,6 +7,11 @@ import {
 } from '../hostLocale'
 
 describe('composePluginContributionQuery', () => {
+  it.each(['navide.git.left', 'navide.plans.window', 'navide.mini-ide.window'])('preserves Japanese for %s', (contributionKey) => {
+    const params = new URLSearchParams(composePluginContributionQuery({ contributionKey, workspacePath: '/workspace', theme: 'dark', locale: 'ja-JP' }))
+    expect(params.get('locale')).toBe('ja-JP')
+  })
+
   it('identifies an embedded Git contribution as the v2 left view with validated locale', () => {
     expect(composePluginContributionQuery({
       contributionKey: 'navide.git.left',
@@ -21,6 +26,39 @@ describe('composePluginContributionQuery', () => {
     })).toBe(
       '?workspace_path=%2Fworkspace&theme=dark&locale=zh-TW&git_yolo=0&git_analyzer_model=qwen2%3Alatest&git_theme_custom=%7B%7D&v2=1&contribution=left'
     )
+  })
+
+  it('carries the workspace alias for a window contribution and omits it when blank', () => {
+    const aliased = new URLSearchParams(composePluginContributionQuery({
+      contributionKey: 'navide.plans.window',
+      workspacePath: '/Users/dev/projects/agent-team',
+      theme: 'dark',
+      workspaceDisplayName: 'Navide',
+    }))
+    expect(aliased.get('workspace_display_name')).toBe('Navide')
+    // The path stays the identity; the alias is display only.
+    expect(aliased.get('workspace_path')).toBe('/Users/dev/projects/agent-team')
+
+    const padded = new URLSearchParams(composePluginContributionQuery({
+      contributionKey: 'navide.plans.window',
+      workspacePath: '/Users/dev/projects/agent-team',
+      theme: 'dark',
+      workspaceDisplayName: '  Navide  ',
+    }))
+    expect(padded.get('workspace_display_name')).toBe('Navide')
+
+    // Blank, whitespace-only and absent all mean "no alias": the param must
+    // stay out so the view cannot tell them apart from an alias equal to the
+    // folder name.
+    for (const workspaceDisplayName of ['', '   ', undefined]) {
+      const plain = new URLSearchParams(composePluginContributionQuery({
+        contributionKey: 'navide.plans.window',
+        workspacePath: '/Users/dev/projects/agent-team',
+        theme: 'dark',
+        workspaceDisplayName,
+      }))
+      expect(plain.has('workspace_display_name')).toBe(false)
+    }
   })
 
   it('identifies a standalone Git contribution as the v2 window view with validated locale', () => {

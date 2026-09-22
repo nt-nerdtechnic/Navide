@@ -15,7 +15,11 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Sequence
 from pathlib import Path
+
+from . import _posix
+from ._posix import terminal_backend
 
 log = logging.getLogger(__name__)
 
@@ -164,6 +168,153 @@ class LinuxResourceProbe:
     def memory_kind(self) -> str:
         return "pss"
 
+    def peak_rss_bytes(self) -> int | None:
+        import resource
+
+        # Linux reports ru_maxrss in kilobytes.
+        return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
+
+
+#: What `/proc/<pid>/comm` reads as for the processes that adopt orphans on a
+#: Linux desktop besides init: the user's `systemd --user` (a child
+#: subreaper on every systemd desktop, so an orphan's ppid is it, not 1) and
+#: bubblewrap, which plays the same role inside a Flatpak.
+_SUBREAPER_COMMS = frozenset({"systemd", "bwrap"})
+
+
+def _read_comm(pid: int) -> str | None:
+    try:
+        return (_PROC / str(pid) / "comm").read_text().strip()
+    except OSError:
+        return None
+
+
+class LinuxProcessTree(_posix.PosixProcessTree):
+    def is_orphan_parent(self, ppid: int, me: int) -> bool:
+        # The POSIX answer (init or this backend), plus the subreapers: a
+        # CLI this backend spawned can only end up under `systemd --user`
+        # by the backend dying, which is exactly the orphan `reap_stale`
+        # is looking for. `terminals` still checks the process's identity
+        # (ps lstart) before killing anything this says yes to.
+        if super().is_orphan_parent(ppid, me):
+            return True
+        return _read_comm(ppid) in _SUBREAPER_COMMS
+
 
 paths = LinuxPaths()
 resource_probe = LinuxResourceProbe()
+process_tree = LinuxProcessTree()
+# PTY handling is plain POSIX; see `_posix`.
+__all__ = ["paths", "process_tree", "resource_probe", "terminal_backend"]
+
+
+# ---- appended: the Paths members added for the Windows port -----------------
+#
+# A subclass rather than edits to `LinuxPaths` above, so this lands as a pure
+# append; `paths` is rebound below to the complete implementation.
+
+from . import _posix_paths, _posix_secrets  # noqa: E402
+
+
+class LinuxLayout(LinuxPaths):
+    def state_dir(self, app_name: str) -> Path:
+        # `$XDG_DATA_HOME`, not `$XDG_CONFIG_HOME`: this is where `applog` has
+        # always put the backend's state on Linux, and an install's sessions
+        # and settings must stay findable across the move behind this seam.
+        configured = os.environ.get("XDG_DATA_HOME")
+        base = Path(configured) if configured else Path.home() / ".local" / "share"
+        return base / app_name
+
+    def config_home(self, home: Path) -> Path:
+        return home / ".config"
+
+    def roaming_app_data(self) -> Path | None:
+        return _posix_paths.roaming_app_data()
+
+    def home_env_var(self) -> str:
+        return _posix_paths.home_env_var()
+
+    def isolated_home_env(self, home_dir: Path) -> dict[str, str]:
+        return _posix_paths.isolated_home_env(home_dir)
+
+    def env_name_key(self, name: str) -> str:
+        return _posix_paths.env_name_key(name)
+
+    def askpass_launcher(self, helper_py: Path, launch_argv: list[str]) -> Path:
+        return _posix_paths.askpass_launcher(helper_py, launch_argv)
+
+    def git_subprocess_env(self, askpass: str) -> dict[str, str]:
+        return _posix_paths.git_subprocess_env(askpass)
+
+    def executable_candidates(self, name: str) -> list[str]:
+        return _posix_paths.executable_candidates(name)
+
+    def is_executable(self, path: Path) -> bool:
+        return _posix_paths.is_executable(path)
+
+    def login_path_probe(self) -> list[str] | None:
+        # `-i` for bash too: the stock Debian/Ubuntu ~/.bashrc, where nvm and
+        # bun put their PATH lines, returns at once in a non-interactive shell.
+        return _posix_paths.login_path_probe(interactive_bash=True)
+
+    def login_path_fallbacks(self, home: Path) -> list[str]:
+        # The dirs the Linux installers use and the session PATH omits: the
+        # XDG-adjacent ones (uv, pnpm, `npm config set prefix`), the Rust and
+        # bun toolchains, nvm's per-version bins, and snap's, which most
+        # distributions leave off a .desktop-launched PATH.
+        return [
+            str(home / ".local" / "bin"),
+            str(home / ".local" / "share" / "pnpm"),
+            str(home / ".npm-global" / "bin"),
+            # Where npm was actually told to install, when that is not the one
+            # guessed above. See `npm_prefix_bins`.
+            *_posix_paths.npm_prefix_bins(home),
+            str(home / ".cargo" / "bin"),
+            str(home / ".bun" / "bin"),
+            *_posix_paths.nvm_node_bins(home),
+            "/usr/local/bin",
+            "/snap/bin",
+        ]
+
+    def login_path_tail_fallbacks(self, home: Path) -> list[str]:
+        return []
+
+    def backend_entry_on_disk(self, entry: str) -> str:
+        return _posix_paths.backend_entry_on_disk(entry)
+
+    def enforces_posix_modes(self) -> bool:
+        return _posix_paths.enforces_posix_modes()
+
+    def symlinks_available(self) -> bool:
+        return _posix_paths.symlinks_available()
+
+    def shell_command(self, command: str) -> list[str]:
+        return _posix_paths.shell_command(command)
+
+    def quote_arg(self, arg: str) -> str:
+        return _posix_paths.quote_arg(arg)
+
+    def resolve_program(self, name_or_path: str, *, path: str | None = None) -> str | None:
+        return _posix_paths.resolve_program(name_or_path, path=path)
+
+    def launch_kind(self, program: str) -> str:
+        return _posix_paths.launch_kind(program)
+
+    def launch_argv(self, program: str, args: Sequence[str] = ()) -> list[str]:
+        return _posix_paths.launch_argv(program, args)
+
+    def pty_launch_parts(
+        self, program: str, args: Sequence[str] = (), *, path: str | None = None
+    ) -> tuple[str, list[str]]:
+        return _posix_paths.pty_launch_parts(program, args, path=path)
+
+
+paths = LinuxLayout()
+secret_files = _posix_secrets.secret_files
+scripts = _posix_paths.scripts
+
+from . import _posix_scheduler  # noqa: E402
+
+# crontab only: launchd does not exist here, so that kind lists as
+# unsupported without ever spawning `launchctl`.
+scheduler = _posix_scheduler.PosixScheduler(launchd=False)

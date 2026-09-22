@@ -23,6 +23,14 @@ class FakeTerminals:
     def __init__(self, live: list[SimpleNamespace] | None = None) -> None:
         self.created: list[dict[str, Any]] = []
         self.killed: list[tuple[str, bool]] = []
+        # The reap sites wait out a graceful shutdown before spawning; record
+        # the waits so a test can assert the old PTY was gone first.
+        self.reap_waits: list[str] = []
+        # What that wait answers. False is a child that outlived its SIGKILL —
+        # the case the reap sites must refuse to spawn over, and the one the
+        # real ceiling only ever reports now that the breakaway sweep runs
+        # outside it.
+        self.reap_result = True
         self.live = live or []
 
     def create(self, **kwargs: Any) -> SimpleNamespace:
@@ -38,6 +46,12 @@ class FakeTerminals:
         self.killed.append((session_id, force))
         self.live = [s for s in self.live if s.id != session_id]
 
+    async def wait_until_reaped(
+        self, session_id: str, timeout: float | None = None
+    ) -> bool:
+        self.reap_waits.append(session_id)
+        return self.reap_result
+
     def find_live_by_resume_id(
         self, agent_key: str, resume_id: str, extract: Any
     ) -> list[SimpleNamespace]:
@@ -52,6 +66,9 @@ class FakeTerminals:
 
 class FakeAttribution:
     def register_pane(self, pane_id: str, **kwargs: Any) -> None:
+        pass
+
+    def scan_pane_baseline(self, pane_id: str) -> None:
         pass
 
 
@@ -79,13 +96,15 @@ def _live_pty(term_id: str, agent_key: str, command: list[str]) -> SimpleNamespa
     return SimpleNamespace(id=term_id, agent_key=agent_key, command=command, closed=False)
 
 
-async def _create(session: app.Session, command: Any, pane_id: str = "pane-1") -> None:
+async def _create(
+    session: app.Session, command: Any, pane_id: str = "pane-1", agent_key: str = "claude",
+) -> None:
     await app.handle_message(session, {
         "id": "m1",
         "type": "terminal.create",
         "payload": {
             "pane_id": pane_id,
-            "agent_key": "claude",
+            "agent_key": agent_key,
             "command": command,
             "cwd": "/ws",
             "metadata": {"workspace_path": "/ws"},
@@ -133,7 +152,104 @@ async def test_resume_spawn_reaps_live_duplicate_first(
     await _create(session, ["/bin/zsh", "-lc", "claude --resume abc-123"])
 
     assert terminals.killed == [("term-stale", True)]
+    # Signalling the stale PTY is not enough for a vendor whose shutdown is
+    # graceful: two claudes appending to one session file is precisely what
+    # this dedup prevents, so the reap waits for the child to be gone.
+    assert terminals.reap_waits == ["term-stale"]
     assert len(terminals.created) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("agent_key,cli,flag", [
+    ("antigravity", "agy", "--conversation"),
+    ("grok", "grok", "--resume"),
+])
+@pytest.mark.parametrize("wrapper", [
+    ["/bin/sh", "-lc"],
+    ["/bin/zsh", "-ilc"],
+    ["cmd.exe", "/d", "/s", "/c"],
+    ["powershell.exe", "-NoLogo", "-NoExit", "-Command"],
+])
+async def test_resume_spawn_reaps_grok_and_antigravity_duplicates(
+    monkeypatch: pytest.MonkeyPatch, agent_key: str, cli: str, flag: str,
+    wrapper: list[str],
+) -> None:
+    from agent_team_backend.mcp_server import wiring
+
+    monkeypatch.setattr(app, "attribution", FakeAttribution())
+    monkeypatch.setattr(app, "_register_workspace_and_backfill", lambda _ws: None)
+    monkeypatch.setattr(wiring, "wire_command", lambda _agent, command, *_args, **_kwargs: command)
+    sid = "21fdfc1b-883a-47ce-b547-e9179ba62eef"
+    command = [*wrapper, f"{cli} {flag} {sid}"]
+    stale = _live_pty("term-stale", agent_key, command)
+    terminals = FakeTerminals(live=[stale])
+    session = _session(terminals)
+
+    await _create(session, command, agent_key=agent_key)
+
+    assert terminals.killed == [("term-stale", True)]
+    assert terminals.reap_waits == ["term-stale"]
+    assert len(terminals.created) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("agent_key,cli,flag", [
+    ("antigravity", "agy", "--conversation"),
+    ("grok", "grok", "--resume"),
+])
+@pytest.mark.parametrize("command_tail", ["--help && echo", "--help;echo", "--", "non-shell-argv"])
+async def test_non_resume_command_preserves_running_vendor_session(
+    monkeypatch: pytest.MonkeyPatch, agent_key: str, cli: str, flag: str,
+    command_tail: str,
+) -> None:
+    from agent_team_backend.mcp_server import wiring
+
+    monkeypatch.setattr(app, "attribution", FakeAttribution())
+    monkeypatch.setattr(app, "_register_workspace_and_backfill", lambda _ws: None)
+    monkeypatch.setattr(wiring, "wire_command", lambda _agent, command, *_args, **_kwargs: command)
+    sid = "21fdfc1b-883a-47ce-b547-e9179ba62eef"
+    stale = _live_pty("term-stale", agent_key, ["/bin/sh", "-lc", f"{cli} {flag} {sid}"])
+    terminals = FakeTerminals(live=[stale])
+
+    command = (["echo", f"{cli} {flag} {sid}"] if command_tail == "non-shell-argv"
+               else ["/bin/sh", "-lc", f"{cli} {command_tail} {flag} {sid}"])
+    await _create(_session(terminals), command, agent_key=agent_key)
+
+    assert terminals.killed == []
+    assert terminals.reap_waits == []
+    assert len(terminals.created) == 1
+
+
+@pytest.mark.asyncio
+async def test_resume_spawn_refuses_when_the_reap_times_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A reap that runs out is a child that outlived a SIGKILL.
+
+    Spawning anyway hands the user exactly the corruption this dedup exists to
+    prevent — two claudes appending to one session file — and does it
+    silently, because the only trace was one backend log line. The create
+    fails instead, with its own code so a retry is the obvious response.
+    """
+    monkeypatch.setattr(app, "attribution", FakeAttribution())
+    monkeypatch.setattr(app, "_register_workspace_and_backfill", lambda _ws: None)
+    stale = _live_pty(
+        "term-stale", "claude", ["/bin/zsh", "-lc", "claude --resume abc-123"]
+    )
+    terminals = FakeTerminals(live=[stale])
+    terminals.reap_result = False
+    session = _session(terminals)
+
+    await _create(session, ["/bin/zsh", "-lc", "claude --resume abc-123"])
+
+    assert terminals.reap_waits == ["term-stale"]
+    # The point of the whole change: nothing was spawned over the survivor.
+    assert terminals.created == []
+    sent = session.websocket.sent  # type: ignore[attr-defined]
+    errors = [m for m in sent if m.get("error")]
+    assert errors, f"the failure was silent: {sent}"
+    assert errors[-1]["error"]["code"] == "CREATE_REAP_TIMEOUT"
+    assert errors[-1]["error"]["details"]["terminal_session_id"] == "term-stale"
 
 
 @pytest.mark.asyncio

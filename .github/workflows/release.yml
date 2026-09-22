@@ -5,9 +5,10 @@ on:
     tags:
       - 'v*.*.*'
   # Manual trigger to dry-run the whole chain without publishing a release:
-  # macOS builds, signs, notarizes and verifies; Linux builds and validates.
-  # Both attach their installers as workflow artifacts so a dry run still
-  # yields something to download and try.
+  # macOS builds, signs, notarizes and verifies; Linux and Windows build and
+  # validate; the arm64 Linux job runs here and only here. Every one of them
+  # attaches its installers as workflow artifacts, so a dry run still yields
+  # something to download and try.
   workflow_dispatch:
 
 permissions:
@@ -45,7 +46,7 @@ jobs:
           cache: pnpm
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: '1.27.x'
           cache: false
@@ -194,11 +195,7 @@ jobs:
           test "${#assets[@]}" -ge 4
           # Idempotent publish: if the release already exists (e.g. published
           # manually or by a rerun), upload/replace assets instead of failing.
-          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            gh release upload "${GITHUB_REF_NAME}" "${assets[@]}" --clobber
-          else
-            gh release create "${GITHUB_REF_NAME}" "${assets[@]}" --verify-tag --generate-notes --title "Navide ${GITHUB_REF_NAME}"
-          fi
+          scripts/publish-release-assets.sh "${GITHUB_REF_NAME}" "${assets[@]}"
 
   release-linux-x64:
     if: github.ref_name != 'v0.1.40' && github.ref_name != 'v0.1.41' && github.ref_name != 'v0.1.49'
@@ -230,7 +227,7 @@ jobs:
           cache: pnpm
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: '1.27.x'
           cache: false
@@ -326,7 +323,7 @@ jobs:
       - name: Attach installers to the workflow run
         # Every run, including a workflow_dispatch dry run: this is how a
         # Linux build gets tried on a real desktop before a tag publishes it.
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: navide-linux-x64
           if-no-files-found: error
@@ -349,8 +346,466 @@ jobs:
           test "${#assets[@]}" -eq 3
           # The macOS job normally created the release already; the create
           # branch only fires on a manual rerun of this job alone.
-          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
-            gh release upload "${GITHUB_REF_NAME}" "${assets[@]}" --clobber
+          scripts/publish-release-assets.sh "${GITHUB_REF_NAME}" "${assets[@]}"
+
+  package-linux-arm64:
+    # Manual dry runs only: this build exists so the Linux port can be tried
+    # in an arm64 VM on Apple silicon, where the x64 binaries cannot run. It
+    # is never published, so it does not wait on the macOS job.
+    if: github.event_name == 'workflow_dispatch'
+    name: Package Linux arm64 (dry run only)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    environment:
+      name: production
+      url: https://github.com/nt-nerdtechnic/Navide/releases/latest
+
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.0.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.x'
+          cache: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-suffix: package-linux-arm64
+
+      - name: Install dependencies
+        run: |
+          pnpm install --frozen-lockfile
+          uv --project backend sync --locked
+
+      - name: Run Linux release gates
+        # Same OS-level gates as the x64 job, on the arm64 kernel: the backend
+        # suite, and the smoke test that opens a real PTY, reads /proc, and
+        # serves /health.
+        run: |
+          uv --project backend run ruff check backend
+          uv --project backend run pytest backend/tests
+          uv --project backend run python backend/linux_smoke.py
+
+      - name: Provision Antigravity usage secrets
+        env:
+          ANTIGRAVITY_CLIENT_ID: ${{ secrets.ANTIGRAVITY_CLIENT_ID }}
+          ANTIGRAVITY_CLIENT_SECRET: ${{ secrets.ANTIGRAVITY_CLIENT_SECRET }}
+        run: |
+          if [ -n "$ANTIGRAVITY_CLIENT_ID" ] && [ -n "$ANTIGRAVITY_CLIENT_SECRET" ]; then
+            printf 'ANTIGRAVITY_CLIENT_ID = "%s"\nANTIGRAVITY_CLIENT_SECRET = "%s"\n' \
+              "$ANTIGRAVITY_CLIENT_ID" "$ANTIGRAVITY_CLIENT_SECRET" \
+              > backend/agent_team_backend/usage_secrets.py
+            echo "usage_secrets.py provisioned"
           else
-            gh release create "${GITHUB_REF_NAME}" "${assets[@]}" --verify-tag --generate-notes --title "Navide ${GITHUB_REF_NAME}"
+            echo "Antigravity secrets not set; provider disabled in this build"
           fi
+
+      - name: Build Python backend
+        # PyInstaller cannot cross-compile; an arm64 backend binary can only
+        # come from an arm64 runner.
+        working-directory: backend
+        run: uv run pyinstaller agent_team_backend.spec
+
+      - name: Build application
+        shell: bash
+        run: |
+          pnpm build
+          test -f dist-plugins/plans/index.html
+          test ! -e dist-plugins/plans/backend/navide-plans
+          test ! -e dist-plugins/plans/backend/navide-plans-go
+          node scripts/verify-plans-production.mjs
+          # No signing on Linux: neither AppImage nor deb has a Gatekeeper or
+          # SmartScreen equivalent, so there is no certificate to provision and
+          # nothing to notarize. `--publish never` still writes latest-linux.yml,
+          # which the AppImage updater reads.
+          pnpm exec electron-builder --linux --arm64 --publish never
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+
+      - name: Validate release artifacts
+        shell: bash
+        run: |
+          ls -l dist-release
+          # electron-builder names the arm64 update manifest by arch.
+          test -f dist-release/latest-linux-arm64.yml
+          test "$(find dist-release -maxdepth 1 -name 'Navide-*.AppImage' | wc -l | tr -d ' ')" -eq 1
+          test "$(find dist-release -maxdepth 1 -name 'Navide-*.deb' | wc -l | tr -d ' ')" -eq 1
+          # The packaged backend must be the Linux one this job just built,
+          # not a stale macOS binary that happened to be lying around.
+          # Absolute path: the extraction below runs from a temp directory.
+          appimage="${PWD}/$(find dist-release -maxdepth 1 -name 'Navide-*.AppImage' -print -quit)"
+          chmod +x "${appimage}"
+          work="$(mktemp -d)"
+          (cd "${work}" && "${appimage}" --appimage-extract >/dev/null)
+          backend="$(find "${work}/squashfs-root/resources/bin" -maxdepth 1 -name 'agent_team_backend' -print -quit)"
+          test -n "${backend}"
+          file "${backend}" | grep -q 'ELF 64-bit.*aarch64'
+          # …and the v2 Plans package carries its Linux backend.
+          test -x "${work}/squashfs-root/resources/plugins/navide-plans/backend/navide-plans"
+          rm -rf "${work}"
+
+      - name: Attach installers to the workflow run
+        # The only output of this job.
+        uses: actions/upload-artifact@v7
+        with:
+          name: navide-linux-arm64
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            dist-release/Navide-*.AppImage
+            dist-release/Navide-*.deb
+            dist-release/latest-linux-arm64.yml
+
+  release-windows-x64:
+    if: github.ref_name != 'v0.1.40' && github.ref_name != 'v0.1.41' && github.ref_name != 'v0.1.49'
+    name: Package and release Windows x64
+    # Serialised behind macOS for the same reason the Linux job is: the
+    # release is created once and joined by the other platforms' assets.
+    needs: release-macos-arm64
+    runs-on: windows-latest
+    timeout-minutes: 45
+    environment:
+      name: production
+      url: https://github.com/nt-nerdtechnic/Navide/releases/latest
+    # Git-for-Windows bash on every step, so the Linux job's shell idioms
+    # (find/wc/test, arrays, process substitution) carry over unchanged.
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.0.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.x'
+          cache: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-suffix: release-windows
+
+      - name: Install dependencies
+        run: |
+          pnpm install --frozen-lockfile
+          uv --project backend sync --locked
+
+      - name: Verify tag and version sources
+        if: github.event_name == 'push'
+        run: pnpm release:check "${GITHUB_REF_NAME}"
+
+      - name: Run Windows release gates
+        # The platform-independent frontend gates already passed in the macOS
+        # job this depends on; what is worth repeating is the backend suite on
+        # this kernel, where the process, path and signal seams differ most.
+        run: |
+          uv --project backend run ruff check backend
+          uv --project backend run pytest backend/tests
+
+      - name: Provision Antigravity usage secrets
+        env:
+          ANTIGRAVITY_CLIENT_ID: ${{ secrets.ANTIGRAVITY_CLIENT_ID }}
+          ANTIGRAVITY_CLIENT_SECRET: ${{ secrets.ANTIGRAVITY_CLIENT_SECRET }}
+        run: |
+          if [ -n "$ANTIGRAVITY_CLIENT_ID" ] && [ -n "$ANTIGRAVITY_CLIENT_SECRET" ]; then
+            printf 'ANTIGRAVITY_CLIENT_ID = "%s"\nANTIGRAVITY_CLIENT_SECRET = "%s"\n' \
+              "$ANTIGRAVITY_CLIENT_ID" "$ANTIGRAVITY_CLIENT_SECRET" \
+              > backend/agent_team_backend/usage_secrets.py
+            echo "usage_secrets.py provisioned"
+          else
+            echo "Antigravity secrets not set; provider disabled in this build"
+          fi
+
+      - name: Build Python backend
+        # PyInstaller cannot cross-compile; this is the only place a Windows
+        # backend exe is ever produced.
+        working-directory: backend
+        run: uv run pyinstaller agent_team_backend.spec
+
+      - name: Verify the frozen backend can open a ConPTY
+        # The unit tests only see what the spec collects; they cannot see
+        # whether the bootloader extracts winpty's OpenConsole.exe so conpty.dll
+        # finds it at runtime. This spawns a real ConPTY inside the FROZEN exe:
+        # a build that dropped OpenConsole.exe exits every pane at once with
+        # STATUS_CONTROL_C_EXIT, so this step goes red before that ever ships.
+        run: backend/dist/agent_team_backend.exe --self-check conpty
+
+      - name: Build application
+        run: |
+          pnpm build
+          test -f dist-plugins/plans/index.html
+          test ! -e dist-plugins/plans/backend/navide-plans
+          test ! -e dist-plugins/plans/backend/navide-plans-go
+          node scripts/verify-plans-production.mjs
+          # No signing yet: there is no Windows code-signing certificate, so
+          # SmartScreen will warn on first run and electron-updater installs
+          # updates without verifying a signature. `--publish never` still
+          # writes latest.yml, which the NSIS updater reads.
+          pnpm exec electron-builder --win --x64 --publish never
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+
+      - name: Validate release artifacts
+        run: |
+          test -f dist-release/latest.yml
+          test "$(find dist-release -maxdepth 1 -name 'Navide-*-win-x64.exe' | wc -l | tr -d ' ')" -eq 1
+          # The packaged backend must be the Windows exe this job just built,
+          # and the v2 Plans package must carry its Windows backend. `test -f`
+          # rather than `-x`: the executable bit means nothing on NTFS.
+          test -f dist-release/win-unpacked/resources/bin/agent_team_backend.exe
+          test -f dist-release/win-unpacked/resources/plugins/navide-plans/backend/navide-plans.exe
+
+      - name: Attach installers to the workflow run
+        # Every run, including a workflow_dispatch dry run: this is how a
+        # Windows build gets tried on a real desktop before a tag publishes it.
+        uses: actions/upload-artifact@v7
+        with:
+          name: navide-windows-x64
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            dist-release/Navide-*-win-x64.exe
+            dist-release/Navide-*-win-x64.exe.blockmap
+            dist-release/latest.yml
+
+      - name: Publish GitHub Release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          assets=()
+          while IFS= read -r -d '' asset; do
+            assets+=("${asset}")
+          done < <(find dist-release -maxdepth 1 -type f \( -name 'Navide-*-win-x64.exe' -o -name 'Navide-*-win-x64.exe.blockmap' -o -name 'latest.yml' \) -print0)
+          # installer + latest.yml at least; the blockmap joins when produced.
+          test "${#assets[@]}" -ge 2
+          # The macOS job normally created the release already; the create
+          # branch only fires on a manual rerun of this job alone.
+          scripts/publish-release-assets.sh "${GITHUB_REF_NAME}" "${assets[@]}"
+
+  release-windows-arm64:
+    if: github.ref_name != 'v0.1.40' && github.ref_name != 'v0.1.41' && github.ref_name != 'v0.1.49'
+    name: Package and release Windows arm64
+    # Behind the x64 job rather than beside it, for two reasons. The release is
+    # created once and joined by the other platforms' assets, as on Linux; and
+    # Windows is the one platform with no per-arch update manifest, so this job
+    # has to read the x64 `latest.yml` and add itself to it instead of
+    # publishing a second file of the same name over the top.
+    needs: release-windows-x64
+    runs-on: windows-11-arm
+    # Longer than the x64 job's 45: two of the backend's dependencies publish
+    # no win_arm64 wheel (httptools, watchdog) and are compiled from their
+    # sdists here.
+    timeout-minutes: 60
+    environment:
+      name: production
+      url: https://github.com/nt-nerdtechnic/Navide/releases/latest
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.0.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.x'
+          cache: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-suffix: release-windows-arm64
+
+      - name: Install dependencies
+        run: |
+          pnpm install --frozen-lockfile
+          uv --project backend sync --locked
+
+      - name: Verify tag and version sources
+        if: github.event_name == 'push'
+        run: pnpm release:check "${GITHUB_REF_NAME}"
+
+      - name: Run Windows release gates
+        # Same reasoning as the x64 job: the frontend gates already passed in
+        # the macOS job, and what is worth repeating here is the backend suite
+        # on this kernel — which on arm64 is also the first thing that would
+        # notice a dependency that only pretends to have an arm64 build.
+        run: |
+          uv --project backend run ruff check backend
+          uv --project backend run pytest backend/tests
+
+      - name: Provision Antigravity usage secrets
+        env:
+          ANTIGRAVITY_CLIENT_ID: ${{ secrets.ANTIGRAVITY_CLIENT_ID }}
+          ANTIGRAVITY_CLIENT_SECRET: ${{ secrets.ANTIGRAVITY_CLIENT_SECRET }}
+        run: |
+          if [ -n "$ANTIGRAVITY_CLIENT_ID" ] && [ -n "$ANTIGRAVITY_CLIENT_SECRET" ]; then
+            printf 'ANTIGRAVITY_CLIENT_ID = "%s"\nANTIGRAVITY_CLIENT_SECRET = "%s"\n' \
+              "$ANTIGRAVITY_CLIENT_ID" "$ANTIGRAVITY_CLIENT_SECRET" \
+              > backend/agent_team_backend/usage_secrets.py
+            echo "usage_secrets.py provisioned"
+          else
+            echo "Antigravity secrets not set; provider disabled in this build"
+          fi
+
+      - name: Build Python backend
+        # PyInstaller cannot cross-compile, so an arm64 backend exe exists only
+        # if an arm64 runner built it. This is the whole reason the job exists:
+        # everything else could have been produced on the x64 runner.
+        working-directory: backend
+        run: uv run pyinstaller agent_team_backend.spec
+
+      - name: Verify the frozen backend can open a ConPTY
+        # The same gate the x64 job runs, for the same CRITICAL: a build that
+        # failed to collect winpty's OpenConsole.exe kills every pane the
+        # moment it opens, and nothing but a real ConPTY inside the frozen exe
+        # can see it. Native arm64 is a fresh chance to get that wrong.
+        run: backend/dist/agent_team_backend.exe --self-check conpty
+
+      - name: Build application
+        run: |
+          pnpm build
+          test -f dist-plugins/plans/index.html
+          test ! -e dist-plugins/plans/backend/navide-plans
+          test ! -e dist-plugins/plans/backend/navide-plans-go
+          node scripts/verify-plans-production.mjs
+          # Unsigned for the same reason the x64 build is: there is no Windows
+          # code-signing certificate yet.
+          pnpm exec electron-builder --win --arm64 --publish never
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+
+      - name: Validate release artifacts
+        run: |
+          ls -l dist-release
+          # Not latest-win-arm64.yml: app-builder-lib suffixes the update
+          # manifest by architecture for Linux only, so this is `latest.yml`
+          # too, and the publish step below merges it into the x64 one.
+          test -f dist-release/latest.yml
+          test "$(find dist-release -maxdepth 1 -name 'Navide-*-win-arm64.exe' | wc -l | tr -d ' ')" -eq 1
+          test -f dist-release/win-arm64-unpacked/resources/bin/agent_team_backend.exe
+          test -f dist-release/win-arm64-unpacked/resources/plugins/navide-plans/backend/navide-plans.exe
+          # The point of this job is a native build, and an installer whose
+          # payload is quietly x64 would run anyway — under Prism, exactly what
+          # we are trying to stop. The COFF headers are the only witness.
+          node scripts/check-pe-machine.mjs arm64 \
+            dist-release/win-arm64-unpacked/Navide.exe \
+            dist-release/win-arm64-unpacked/resources/bin/agent_team_backend.exe \
+            dist-release/win-arm64-unpacked/resources/plugins/navide-plans/backend/navide-plans.exe
+
+      - name: Fetch the x64 update manifest
+        uses: actions/download-artifact@v7
+        with:
+          name: navide-windows-x64
+          path: dist-x64
+
+      - name: Merge this build into the Windows update manifest
+        # electron-updater reads one `latest.yml` for both Windows arches and
+        # picks the installer whose URL contains process.arch, so the published
+        # manifest has to list x64 and arm64 together.
+        run: |
+          node scripts/merge-windows-update-manifest.mjs \
+            dist-x64/latest.yml dist-release/latest.yml dist-release/latest.yml
+          cat dist-release/latest.yml
+
+      - name: Attach installers to the workflow run
+        # Every run, including a workflow_dispatch dry run: a Windows on Arm
+        # desktop is where this build has to be tried before a tag ships it.
+        uses: actions/upload-artifact@v7
+        with:
+          name: navide-windows-arm64
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            dist-release/Navide-*-win-arm64.exe
+            dist-release/Navide-*-win-arm64.exe.blockmap
+            dist-release/latest.yml
+
+      - name: Publish GitHub Release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          assets=()
+          while IFS= read -r -d '' asset; do
+            assets+=("${asset}")
+          done < <(find dist-release -maxdepth 1 -type f \( -name 'Navide-*-win-arm64.exe' -o -name 'Navide-*-win-arm64.exe.blockmap' -o -name 'latest.yml' \) -print0)
+          # installer + latest.yml at least; the blockmap joins when produced.
+          test "${#assets[@]}" -ge 2
+          # --clobber replaces the x64 job's latest.yml with the merged one it
+          # was built from; this job runs after that one, so there is no race.
+          scripts/publish-release-assets.sh "${GITHUB_REF_NAME}" "${assets[@]}"
+
+  mirror-release:
+    # Runs last, after every platform has joined the GitHub Release, and copies
+    # the finished release to the S3 bucket behind dl.navide.dev (the steps
+    # live in mirror.yml so a past release can be backfilled by hand). Reading
+    # the assets back from GitHub rather than from each job's dist-release
+    # means the mirror carries exactly what GitHub serves — including the
+    # Windows latest.yml after the arm64 job merged itself into it.
+    if: github.event_name == 'push' && github.ref_name != 'v0.1.40' && github.ref_name != 'v0.1.41' && github.ref_name != 'v0.1.49'
+    needs: [release-macos-arm64, release-linux-x64, release-windows-arm64]
+    uses: ./.github/workflows/mirror.yml
+    with:
+      tag: ${{ github.ref_name }}
+    secrets: inherit

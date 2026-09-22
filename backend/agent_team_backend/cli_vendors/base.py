@@ -21,7 +21,9 @@ modules — those import the registry, and a back-edge would be a cycle.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import json
+import shlex
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -32,6 +34,7 @@ from typing import Any, Callable
 # state directory asks for the convention rather than spelling out one
 # platform's layout (which is how the Cursor reader ended up macOS-only).
 from ..osplat import paths as platform_paths  # noqa: F401
+from ..osplat import platform_id as _platform_id
 
 
 def command_text(command: Any) -> str:
@@ -44,6 +47,38 @@ def command_text(command: Any) -> str:
     if isinstance(command, list):
         return str(command[-1]) if command else ""
     return str(command or "")
+
+
+def simple_command_args(command: Any) -> list[str]:
+    """Parse a literal CLI invocation for destructive resume deduplication.
+
+    Unlike command_text, only unwrap known shell command argv. Complex shell
+    overrides remain unclaimed rather than guessing which process they start.
+    """
+    if isinstance(command, list):
+        if len(command) < 3:
+            return []
+        shell = str(command[0]).replace("\\", "/").rsplit("/", 1)[-1].lower()
+        flags = tuple(str(arg) for arg in command[1:-1])
+        posix = shell in {"sh", "bash", "zsh", "dash", "ksh", "fish"} and flags in {
+            ("-c",), ("-lc",), ("-ilc",),
+        }
+        windows_flags = tuple(arg.lower() for arg in flags)
+        windows = shell in {"cmd", "cmd.exe"} and windows_flags in {
+            ("/c",), ("/k",), ("/d", "/s", "/c"), ("/d", "/c"),
+        }
+        powershell = shell in {"powershell", "powershell.exe", "pwsh", "pwsh.exe"} and windows_flags in {
+            ("-command",), ("-nologo", "-noexit", "-command"),
+        }
+        if not (posix or windows or powershell):
+            return []
+    text = command_text(command)
+    if any(char in text for char in ";&|<>`$%#()\n\r"):
+        return []
+    try:
+        return shlex.split(text)
+    except ValueError:
+        return []
 
 
 @dataclass(frozen=True)
@@ -80,6 +115,13 @@ class Dep:
     # old name on older installs). Probed in order only when check_cmd[0] is not
     # on PATH, so a machine carrying the legacy binary is not reported missing.
     alt_commands: tuple[str, ...] = ()
+    # Output `check_cmd` must produce for a resolved binary to be THIS tool.
+    # Needed only when the name is generic enough for another vendor to ship
+    # it: `agent` is Cursor's, but xAI's grok installs ~/.grok/bin/agent as a
+    # symlink to itself, and `grok 1.0.34 (...)` satisfies any plain version
+    # pattern — so Navide detected grok as Cursor and spawned it as Cursor.
+    # '' = the name is unambiguous and no probe is run (every other dep).
+    identity_regex: str = ""
     min_version: str = ""            # '' = any version is fine
     install_cmd: str = ""            # shell command (whitelist); '' = no auto-install
     needs_terminal: bool = False     # interactive (sudo / OAuth) → external Terminal
@@ -251,6 +293,10 @@ class SkillsWiring:
     root_home: tuple[str, ...] = ()
     # The skills directory relative to that root.
     skills_rel: tuple[str, ...] = ()
+    # Existing pane homes directly under this user-home-relative directory
+    # belong to the vendor's home manager. Reconcile their skills subtree
+    # only; importing sibling entries would share otherwise isolated state.
+    isolated_panes_home: tuple[str, ...] = ()
 
     # --- a directory the CLI reads out of the workspace ---
     # Last resort for a CLI with no relocation variable: the path is inside the
@@ -404,6 +450,456 @@ class PushChannel:
     max_chars: int = 0
 
 
+class SlotKind(str, Enum):
+    """What kind of secret a parked credential slot holds.
+
+    Decided per vendor by ``VendorSpec.classify_secret``; the shared
+    ``portable_credentials.classify_slot`` only adds the two answers no vendor
+    can give — ``EMPTY`` for a slot with nothing in it and ``UNKNOWN`` for one
+    the vendor cannot (or declined to) classify. ``UNKNOWN`` is the fail-closed
+    answer: a slot whose kind is not known is never offered for sync.
+    """
+
+    API_KEY = "api_key"
+    OAUTH = "oauth"
+    EMPTY = "empty"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class PortableCredential:
+    """How a credential the user pasted reaches this CLI at spawn.
+
+    The vendor's own documented, multi-machine way in: the value goes into a
+    variable of the pane's environment and nowhere else — not into the CLI's
+    login file, its config home or the OS keychain — so it cannot collide with
+    a ``/login`` the user did on the same machine and leaves nothing on disk
+    for the credential watcher to mistake for an external sign-in.
+
+    Declarative like ``McpWiring``: storing, validating and injecting the
+    value is shared orchestration (``portable_credentials``), and a vendor
+    module must not import it.
+    """
+
+    # The variable the CLI reads the secret from, e.g. "CLAUDE_CODE_OAUTH_TOKEN".
+    env: str
+    # What the value is, in SlotKind vocabulary: "oauth" for a long-lived
+    # OAuth token the vendor mints for exactly this purpose, "api_key" for a
+    # console key. Metadata for the UI; never changes how it is handled.
+    kind: str = "api_key"
+    # Fixed companions the CLI needs beside the secret to use it at all, e.g.
+    # a base URL that points the CLI at the endpoint the key belongs to.
+    env_extra: tuple[tuple[str, str], ...] = ()
+    # Variables the CLI ranks ABOVE ``env``: if one is inherited, the injected
+    # value is silently ignored, so they are removed from the pane's
+    # environment (the pane's only; the user's shell keeps them).
+    env_remove: tuple[str, ...] = ()
+    # Files under the real home the CLI ranks above ``env`` (an interactive
+    # session token). Their presence is REPORTED so the UI can say why the
+    # pasted credential is not in effect; Navide never deletes them.
+    shadowing_files: tuple[tuple[str, ...], ...] = ()
+    # Settings the CLI ranks above ``env`` — a key helper, a provider route,
+    # an environment block inside its own config — as (root, file path parts,
+    # key path into the JSON document). ``root`` is "home" for the real home,
+    # "cwd" for the pane's working directory, or "managed" for the
+    # organisation policy directory below. A key that resolves to a non-empty
+    # value counts as present. Reported like a file, never edited: rewriting
+    # the user's provider configuration — let alone an administrator's — is
+    # not Navide's call.
+    shadowing_settings: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = ()
+    # The "managed" root per platform id ("darwin" / "linux" / "win32"), as
+    # the vendor documents it. Absolute paths, resolved by the shared side
+    # from the running platform — a vendor names the directory, never a user.
+    # A platform with no entry has no managed root and nothing to check.
+    managed_roots: tuple[tuple[str, str], ...] = ()
+    # Regex the pasted value must fully match, "" = any single non-empty line.
+    # A shape check only — it is not proof the value works.
+    value_pattern: str = ""
+    # How the user obtains the value: the vendor's own command, and the docs
+    # that say so. Shown verbatim; Navide never runs the command.
+    obtain_command: str = ""
+    docs_url: str = ""
+    # Whether it is established — from the vendor's docs or a live test — that
+    # a request made with this value draws on the user's subscription. False
+    # is what the UI shows as "unverified", and it is the honest default: a
+    # value that works but bills a different wallet is portable and useless.
+    quota_verified: bool = False
+
+
+@dataclass(frozen=True)
+class ShutdownSpec:
+    """How a kill should treat this CLI on its way out.
+
+    The shared kill path is SIGKILL-first for almost every caller (the
+    frontend defaults ``force`` to true), which is correct for a CLI that
+    keeps no state outside its transcript. A CLI that runs an exit hook needs
+    the other order, and this is where it says so. The defaults spell out the
+    current behavior, so a vendor that declares nothing keeps it exactly.
+    """
+
+    # Send SIGTERM and wait ``grace_s`` before the existing force logic runs.
+    # False = the kill path is untouched for this vendor.
+    graceful: bool = False
+    # How long the SIGTERM is given. Only read when ``graceful``.
+    grace_s: float = 1.0
+    # Hold the PTY master open across the grace. Closing it HUPs the child and
+    # drops the other end of its stdout, which can cut an exit hook off
+    # mid-write; a vendor whose hook touches a file on disk wants this true.
+    defer_master_close: bool = False
+
+
+@dataclass(frozen=True)
+class AccountSwitchSpec:
+    """How the credential vault swaps this vendor's account, and what the
+    switch transaction has to do to the CLI afterwards.
+
+    ``None`` on the spec means "no adapter": the vendor is not offered for
+    account switching at all (fail closed). Every value here is metadata the
+    backend transaction and the UI read; the file/Keychain mechanics stay in
+    the vault, driven by the credential fields on ``VendorSpec`` plus the
+    ``extract``/``merge`` pair below for compound stores.
+    """
+
+    # Credential-pool id. Two vendors declaring the same string share one
+    # switch lock and one impact set. Per-provider stores append the scope at
+    # runtime — see ``auth_scope_for`` — so the declared value is the prefix.
+    auth_scope: str
+    # "hot": a running CLI re-reads the credential per request, so a swap
+    # needs no restart. "restart": affected panes must be stopped, swapped
+    # and resumed. "manual": the vault can park/restore the credential but the
+    # CLI must be relaunched by the user into a new conversation (no resume).
+    method: str
+    # "file": one whole file is swapped. "compound-file": one provider entry
+    # inside a shared document (needs ``extract``/``merge``). "keychain": a
+    # macOS generic-password item (``keychain_items``), with ``live_file`` as
+    # the non-macOS fallback. "pointer": a config value selecting among logins
+    # the CLI already holds (mechanically a compound-file). "env": the
+    # credential only ever reaches the CLI through the spawn environment.
+    store: str
+    # How the layout was established: "live" (a real A -> B -> A round-trip on
+    # an installed CLI, recorded against ``verified_version``), "source" (read
+    # from the vendor's shipped code or its installed package), "docs"
+    # (official documentation only). Anything but "live" has not been
+    # exercised on a real account; it is shown as such, and the manual
+    # acceptance in the plan is what upgrades it.
+    evidence: str
+    # The CLI version the evidence came from, as its --version prints it.
+    verified_version: str = ""
+    # Platforms the adapter is expected to work on: a subset of
+    # ("darwin", "linux", "win32"). A platform outside this tuple is
+    # unsupported for switching, with the reason in ``todo``.
+    platforms: tuple[str, ...] = ("darwin", "linux", "win32")
+    # compound-file / pointer only: provider entries a profile may bind to.
+    # () = the document is swapped whole. A profile's ``scope`` must be one
+    # of these; the vault never accepts an arbitrary client string.
+    scopes: tuple[str, ...] = ()
+    # compound-file / pointer only: (document text | None, scope) -> the
+    # portion belonging to that scope as text, or None when absent.
+    extract: Callable[[str | None, str], str | None] | None = None
+    # compound-file / pointer only: (document text | None, scope, portion |
+    # None) -> the new document text with only that scope's entry replaced
+    # (None removes it). Every other provider's value survives; the document
+    # is re-serialised, so formatting is the vendor's canonical one, not the
+    # original bytes.
+    merge: Callable[[str | None, str, str | None], str | None] | None = None
+    # compound-file only: (live path, new document text, scope) -> extra
+    # (path, text | None) pairs the vault writes right after the live
+    # document (None unlinks). For a CLI whose credential is paired with a
+    # sidecar the credential alone does not satisfy — mcode's per-namespace
+    # ``auth-state.json`` must carry the credential's ``generation`` — the
+    # sidecar is DERIVED here from the document just written, never parked.
+    companion_writes: Callable[[Path, str | None, str], tuple[tuple[Path, str | None], ...]] | None = None
+    # (slot secret text | None) -> epoch seconds the credential expires at,
+    # None when the vendor gives no expiry. A validity hint for candidate
+    # ranking — never proof the credential works.
+    expires_at: Callable[[str | None], float | None] | None = None
+    # macOS Keychain items holding the live secret, as (service, account)
+    # pairs, in the order they are stored inside the slot payload. Only read
+    # when ``store == "keychain"``.
+    keychain_items: tuple[tuple[str, str], ...] = ()
+    # Environment variables the CLI ranks ABOVE the credential the vault
+    # switches (an API key in the pane's environment). When one is present
+    # in a pane's launch environment a swap of the file changes nothing for
+    # that pane, so ``switch_preflight`` reports it as shadowed instead of
+    # letting the transaction swap and wait for a timeout. Names only.
+    shadowing_env: tuple[str, ...] = ()
+    # Same, but only for panes of ONE provider scope, as (scope, names)
+    # pairs: another provider's key in the environment must not block this
+    # provider's switch.
+    shadowing_env_by_scope: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    # Variables the CLI is known (from its source) to accept a credential
+    # from, whose precedence over the stored login could NOT be established.
+    # Present in a pane's environment, ``switch_preflight`` answers
+    # "credential-source-unknown": the swap may or may not reach that pane,
+    # and the transaction must not claim either. An empty tuple here means
+    # nothing is known — not that nothing overrides.
+    uncertain_env: tuple[str, ...] = ()
+    uncertain_env_by_scope: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    # After a restart, can the conversation continue? "native": the CLI
+    # resumes by id. "lossy": a best-effort restore (aider's chat history).
+    # "none": the CLI starts a new conversation and the user must be told.
+    resume: str = "native"
+    # What is still missing for this vendor, in one sentence. "" = complete.
+    todo: str = ""
+
+
+def provider_map_extract(
+    document: str | None, scope: str, *, path: tuple[str, ...] = ()
+) -> str | None:
+    """``extract`` for the common provider-map store: a JSON object keyed by
+    provider id (OpenCode's ``auth.json`` and its relatives), optionally
+    nested under ``path``. Returns the ``scope`` entry as JSON text, or None
+    when the document has no such entry. A malformed document reads as
+    empty — that is the vault's fail-closed answer, never a raise."""
+    if document is None:
+        return None
+    try:
+        data = json.loads(document)
+    except ValueError:
+        return None
+    for key in path:
+        data = data.get(key) if isinstance(data, dict) else None
+    entry = data.get(scope) if isinstance(data, dict) else None
+    if not isinstance(entry, dict) or not entry:
+        return None
+    return json.dumps(entry, separators=(",", ":"), sort_keys=True)
+
+
+def provider_map_merge(
+    document: str | None, scope: str, portion: str | None, *, path: tuple[str, ...] = ()
+) -> str:
+    """``merge`` for the provider-map store: replace (or, with ``portion`` None,
+    remove) exactly the ``scope`` entry and carry every other key's value
+    through unchanged. The result is re-serialised the way the CLIs write the
+    file themselves (``JSON.stringify(_, null, 2)``: two-space indent), so
+    key order and whitespace are canonical rather than the original bytes;
+    strict JSON only — a document that does not parse as a JSON object is
+    refused rather than overwritten, because it is the user's file."""
+    if document is None or not document.strip():
+        data: Any = {}
+    else:
+        data = json.loads(document)
+    if not isinstance(data, dict):
+        raise ValueError("credential document is not a JSON object")
+    target = data
+    for key in path:
+        nested = target.get(key)
+        if nested is None:
+            nested = target[key] = {}
+        elif not isinstance(nested, dict):
+            raise ValueError(f"credential document key {key!r} is not an object")
+        target = nested
+    if portion is None:
+        target.pop(scope, None)
+    else:
+        entry = json.loads(portion)
+        if not isinstance(entry, dict):
+            raise ValueError("credential portion is not a JSON object")
+        target[scope] = entry
+    return json.dumps(data, indent=2)
+
+
+def dotenv_extract(document: str | None, names: Sequence[str]) -> str | None:
+    """``extract`` for a ``KEY=VALUE`` file: the first of ``names`` present
+    with a non-empty value, as the JSON text ``{"<NAME>": "<value>"}`` so a
+    restore puts it back under the same variable. Comments, blank lines and
+    ``export`` prefixes are read the way python-dotenv reads them."""
+    if document is None:
+        return None
+    values: dict[str, str] = {}
+    for line in document.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, _, value = stripped.partition("=")
+        key = key.strip()
+        if key.startswith("export "):
+            key = key[len("export "):].strip()
+        values[key] = value.strip().strip("'\"")
+    for name in names:
+        value = values.get(name)
+        if isinstance(value, str) and value.strip():
+            return json.dumps({name: value.strip()}, separators=(",", ":"))
+    return None
+
+
+def dotenv_merge(document: str | None, names: Sequence[str], portion: str | None) -> str:
+    """``merge`` for a ``KEY=VALUE`` file: drop every line assigning one of
+    ``names``, keep every other line verbatim, and append the portion's
+    single ``NAME=value`` line (nothing when ``portion`` is None)."""
+    entry = json.loads(portion) if portion is not None else None
+    if entry is not None and (
+        not isinstance(entry, dict) or len(entry) != 1
+        or next(iter(entry)) not in names
+        or not isinstance(next(iter(entry.values())), str)
+    ):
+        raise ValueError(f"credential portion must map exactly one of {list(names)}")
+    kept: list[str] = []
+    for line in (document or "").splitlines():
+        stripped = line.strip()
+        key = stripped.partition("=")[0].strip()
+        if key.startswith("export "):
+            key = key[len("export "):].strip()
+        if "=" in stripped and not stripped.startswith("#") and key in names:
+            continue
+        kept.append(line)
+    if entry:
+        (name, value), = entry.items()
+        kept.append(f"{name}={value}")
+    return "\n".join(kept) + ("\n" if kept else "")
+
+
+def keychain_payload_items(secret: str | None) -> dict[str, str]:
+    """The items inside a slot secret of a ``store == "keychain"`` vendor:
+    ``{"<service>|<account>": <item value>}`` as the vault parks them. Empty
+    for None, a non-keychain payload or malformed text — never raises, so an
+    ``identity_from_secret`` built on it reads garbage as signed out."""
+    if secret is None:
+        return {}
+    try:
+        data = json.loads(secret)
+    except ValueError:
+        return {}
+    items = data.get("keychain") if isinstance(data, dict) else None
+    if not isinstance(items, dict):
+        return {}
+    return {k: v for k, v in items.items() if isinstance(k, str) and isinstance(v, str) and v}
+
+
+def provider_entry_identity(secret: str | None) -> dict:
+    """``identity_from_secret`` for a scoped slot of a provider-map store: the
+    secret is one entry (``provider_map_extract``). Signed in when it holds a
+    usable credential — an ``api``/``api_key`` entry with a key, or an
+    ``oauth`` entry with an access or refresh token. No email: these entries
+    carry none (an OpenAI entry has an ``accountId``, which is not a person),
+    so the accounts UI names the row by the profile name."""
+    data = None
+    if secret is not None:
+        try:
+            data = json.loads(secret)
+        except ValueError:
+            data = None
+    if not isinstance(data, dict):
+        return {"email": None, "signedIn": False}
+    kind = data.get("type")
+    if kind in ("api", "api_key"):
+        signed_in = isinstance(data.get("key"), str) and bool(data["key"])
+    elif kind == "oauth":
+        signed_in = any(
+            isinstance(data.get(field), str) and data[field]
+            for field in ("access", "refresh")
+        )
+    else:
+        signed_in = False
+    return {"email": None, "signedIn": signed_in}
+
+
+def switch_preflight(
+    spec: "VendorSpec",
+    *,
+    env_names: Iterable[str] = (),
+    scope: str | None = None,
+    platform: str | None = None,
+) -> dict:
+    """Can the vault's switch reach the credential this pane actually uses?
+
+    Pure and secret-free: ``env_names`` are the NAMES present in the pane's
+    launch environment (never values). Returns ``{"ok", "reason",
+    "authScope", "method", "shadowedBy"}``; ``reason`` is None when ok, else
+    one of "unsupported", "unknown-scope", "platform-unsupported",
+    "shadowed-by-env" (a variable the CLI ranks above the stored login) or
+    "credential-source-unknown" (a variable the CLI takes a credential from,
+    precedence unestablished). Only the variables of the pane's own provider
+    scope count for a per-provider store. The transaction calls this before
+    touching anything so such a pane is reported rather than swapped and
+    left to time out."""
+    platform = platform or _platform_id
+    switch = spec.account_switch
+    if switch is None:
+        return {"ok": False, "reason": "unsupported", "authScope": None,
+                "method": None, "shadowedBy": []}
+    auth_scope = auth_scope_for(spec, scope)
+    if auth_scope is None:
+        return {"ok": False, "reason": "unknown-scope", "authScope": None,
+                "method": switch.method, "shadowedBy": []}
+    if platform not in switch.platforms:
+        return {"ok": False, "reason": "platform-unsupported", "authScope": auth_scope,
+                "method": switch.method, "shadowedBy": []}
+    present = set(env_names)
+    effective_scope = scope
+    if switch.scopes and scope is None and len(switch.scopes) == 1:
+        effective_scope = switch.scopes[0]
+
+    def _for_scope(pairs: tuple[tuple[str, tuple[str, ...]], ...]) -> list[str]:
+        return [name for s, names in pairs if s == effective_scope for name in names]
+
+    shadowed = [
+        name for name in (*switch.shadowing_env, *_for_scope(switch.shadowing_env_by_scope))
+        if name in present
+    ]
+    if shadowed:
+        return {"ok": False, "reason": "shadowed-by-env", "authScope": auth_scope,
+                "method": switch.method, "shadowedBy": shadowed}
+    uncertain = [
+        name for name in (*switch.uncertain_env, *_for_scope(switch.uncertain_env_by_scope))
+        if name in present
+    ]
+    if uncertain:
+        return {"ok": False, "reason": "credential-source-unknown", "authScope": auth_scope,
+                "method": switch.method, "shadowedBy": uncertain}
+    return {"ok": True, "reason": None, "authScope": auth_scope,
+            "method": switch.method, "shadowedBy": []}
+
+
+def auth_scope_for(spec: "VendorSpec", scope: str | None = None) -> str | None:
+    """The runtime credential-pool id for ``spec`` and a profile's provider
+    ``scope``, canonical so one pool never gets two identities:
+
+    * whole-file vendor: the declared ``auth_scope`` (``scope`` ignored);
+    * per-provider vendor with one declared scope: always
+      ``"<auth_scope>:<that scope>"`` — a profile that predates the field
+      (``scope`` None) and one that names it explicitly are the same pool;
+    * per-provider vendor with several scopes: ``"<auth_scope>:<scope>"``
+      for a declared scope, and None when the scope is missing or unknown —
+      the bare prefix must never pass for a known pool.
+
+    The reserved ``__default__`` slot has no profile of its own: in a switch
+    it takes the scope of the scoped profile on the other side, so pass that
+    profile's scope for both directions of a default <-> scoped switch.
+    None also when the vendor has no account-switch adapter."""
+    switch = spec.account_switch
+    if switch is None:
+        return None
+    if not switch.scopes:
+        return switch.auth_scope
+    if scope is None and len(switch.scopes) == 1:
+        scope = switch.scopes[0]
+    if scope not in switch.scopes:
+        return None
+    return f"{switch.auth_scope}:{scope}"
+
+
+@dataclass(frozen=True)
+class VendorRuntimeContext:
+    """Nonsecret launch snapshot for risk declarations, after pane isolation.
+
+    ``home`` is the effective child home; ``env`` contains only declared
+    path values and presence markers for network overrides. Never put the
+    full spawn environment here or reconstruct it from the backend process.
+    """
+
+    home: Path
+    env: Mapping[str, str] = field(repr=False)
+    cwd: Path
+
+    def path(self, value: str | Path) -> Path:
+        """Make a runtime path absolute without reading or resolving symlinks."""
+        path = Path(value)
+        if not self.cwd.is_absolute() or not self.home.is_absolute():
+            raise ValueError("Risk runtime home and cwd must be absolute")
+        return path if path.is_absolute() else self.cwd / path
+
+
 @dataclass(frozen=True)
 class VendorSpec:
     """Everything the shared orchestration knows about one CLI vendor.
@@ -421,6 +917,13 @@ class VendorSpec:
     # Path parts of the live credential file under the real home,
     # e.g. (".codex", "auth.json").
     live_file: tuple[str, ...] | None = None
+    # Resolve a vendor's environment-dependent live credential path from the
+    # real home. Unset retains the fixed live_file layout above.
+    live_file_resolver: Callable[[Path], Path] | None = None
+    # Path-only context reported by this launch after shell startup. The
+    # legacy resolver remains for compatibility and upgrade comparison.
+    live_file_from_context: Callable[[VendorRuntimeContext], Path] | None = None
+    credential_path_env_vars: tuple[str, ...] = ()
     # Filename of the parked copy inside the vendor's slot directory.
     slot_file: str | None = None
     # Path parts of the secret inside an isolated login home; None for
@@ -448,10 +951,38 @@ class VendorSpec:
     #           so the flags are still stripped but nothing is appended.
     login_command_args: str | None = None
 
+    # (secret text) -> SlotKind.API_KEY or SlotKind.OAUTH for a parked slot's
+    # secret, read from the slot file this spec declares. None = this vendor
+    # cannot tell its credential kinds apart, and every slot classifies as
+    # UNKNOWN. A classifier that raises, or answers anything outside those two
+    # members, is likewise read as UNKNOWN by ``portable_credentials`` — the
+    # shared side never guesses on a vendor's behalf.
+    classify_secret: Callable[[str], SlotKind] | None = None
+
+    # The vendor's documented way to hand a credential to its CLI through the
+    # spawn environment. None = no such interface is known or verified for
+    # this vendor, and the UI offers nothing to paste into. Never fill this
+    # from a guess: a wrong variable name is injected silently and the CLI
+    # simply asks the user to log in.
+    portable_credential: PortableCredential | None = None
+
+    # How the credential vault switches this vendor's account and what the
+    # switch transaction must do afterwards. None = no adapter: the vendor is
+    # never offered for switching (fail closed), whatever the fields above
+    # say. Declared only with evidence — see ``AccountSwitchSpec.evidence``.
+    account_switch: AccountSwitchSpec | None = None
+
     # --- usage quota ---
+    # Regex sources (compiled case-insensitively by the switch gate) that
+    # identify THIS vendor's own "quota exhausted" text or structured turn
+    # detail — never a generic 429 / rate-limit / login / payment message.
+    # () = the vendor has no verified text signal, so a text report about it
+    # is not evidence. Mirror of the frontend spec's ``quotaExhausted``.
+    quota_exhausted_patterns: tuple[str, ...] = ()
     # async (home: Path) -> snapshot dict, same shape usage_service._snapshot
     # produces. None = vendor has no quota interface (aider) or not migrated.
     fetch_usage: Callable[[Path], Any] | None = None
+    fetch_usage_from_context: Callable[[VendorRuntimeContext], Any] | None = None
 
     # --- resume / session ---
     # (command) -> session id the launch command targets, "" when none.
@@ -461,6 +992,17 @@ class VendorSpec:
     session_path: Callable[[str, str], Path | None] | None = None
     # (workspace_path: str, session_id: str) -> session exists on disk.
     session_exists: Callable[[str, str], bool] | None = None
+    # Can a launch NAME the conversation to continue? True for every CLI whose
+    # resume takes an id (the frontend spec's `resumeArgs`); False only for one
+    # that restores from a file with no id to name — aider, which resumes from
+    # a chat-history path instead.
+    #
+    # Deliberately NOT inferred from `session_exists is None`: a vendor that has
+    # not declared its own on-disk check still resumes fine (app._session_exists
+    # falls back to a path lookup for it), so reading absence as "cannot resume"
+    # would refuse grok and antigravity for a reason that is about this file's
+    # migration state rather than about the CLI.
+    supports_session_resume: bool = True
 
     # --- spawn environment ---
     # Vendor-specific defaults added only when neither the request nor the
@@ -524,3 +1066,23 @@ class VendorSpec:
     # the hooks at startup and admits the vendor to that endpoint, so a vendor
     # cannot be one without the other. None = no hook mechanism.
     install_hooks: Callable[[str], Any] | None = None
+
+    # --- shutdown ---
+    # How a kill treats this CLI. None = the shared kill path runs unchanged,
+    # which is what 13 of the 14 vendors want.
+    shutdown: ShutdownSpec | None = None
+
+    # --- observational risk signals (backend only) ---
+    # Concrete DNS names/IPs for a declared default service profile; no URLs,
+    # wildcards or claim of exhaustive CLI/tool traffic. Empty = unsupported.
+    # Dispatch through registry.expected_hosts_for_context to honor overrides.
+    expected_hosts: tuple[str, ...] = ()
+    # Pure resolver for the active pane's absolute data roots. None/empty =
+    # unsupported. The observer, not the declaration, owns filesystem access.
+    data_dirs: Callable[[VendorRuntimeContext], tuple[Path, ...]] | None = None
+    # Only these environment path values may enter the risk context.
+    data_dir_env_vars: tuple[str, ...] = ()
+    # These values are captured ONLY as presence markers. Any nonempty
+    # override disables this vendor's default network profile; it is never
+    # interpreted as a trusted endpoint or persisted as a credential URL.
+    network_override_env_vars: tuple[str, ...] = ()

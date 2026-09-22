@@ -2,10 +2,18 @@ import * as fs from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { isWindows } from '../../shared/osplat'
 import type { GitStorageLifecycleFileOps } from './gitStorageLifecycle'
 import { GitStorageLifecycleSelector } from './gitStorageLifecycle'
 
 const roots: string[] = []
+
+// Whether the product will flush the parent directory at all: fsSync skips it
+// through `isWindows()` (the seam), not by asking the kernel — so this gate
+// reads the same source, or an injected platform leaves the test expecting a
+// flush the product never attempts. (NTFS cannot fsync a directory handle,
+// which is why the seam answers that way on Windows.)
+const skipsDirectoryFlush = isWindows()
 
 afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true })
@@ -62,7 +70,8 @@ describe('Git storage lifecycle selector', () => {
     expect(JSON.parse(fs.readFileSync(recordPath, 'utf8')).packageVersion).toBe('1.0.0')
   })
 
-  it('keeps a complete new selector when the parent directory flush fails', () => {
+  // The directory flush is skipped on Windows, so there is no second fsync to fail.
+  it.skipIf(skipsDirectoryFlush)('keeps a complete new selector when the parent directory flush fails', () => {
     const root = fs.mkdtempSync(join(tmpdir(), 'navide-git-lifecycle-'))
     roots.push(root)
     const recordPath = join(root, 'lifecycle.json')

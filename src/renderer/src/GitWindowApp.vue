@@ -62,6 +62,13 @@ import { closeGitWindowMenuOnEscape } from './lib/gitMenuEscape'
 // The host sets ?workspace_path= when it loads this entry (frontendPluginManager
 // gitQuery). A getter is what useGit expects.
 const workspacePath = new URLSearchParams(window.location.search).get('workspace_path') ?? ''
+// The alias the user gave this workspace, resolved by the Host and passed as
+// `workspace_display_name`; blank or absent means "no alias" and the folder
+// name stands in. KNOWN LIMITATION: a load-time snapshot. Renaming the
+// workspace while this window is open does NOT retitle it; the name is correct
+// again the next time the window opens.
+const workspaceAliasParam =
+  new URLSearchParams(window.location.search).get('workspace_display_name')?.trim() ?? ''
 
 const { t } = useI18n()
 const gitTransport = inject(GIT_TRANSPORT_KEY)!
@@ -218,7 +225,9 @@ const remoteBranches = computed(() => gitBranches.value.filter((b) => b.is_remot
 
 const hasWorkspace = computed(() => workspacePath.length > 0)
 const isRepo = computed(() => gitStatus.value.is_git_repo)
-const repoName = computed(() => workspacePath.split('/').filter(Boolean).at(-1) ?? '')
+const repoName = computed(
+  () => workspaceAliasParam || (workspacePath.split('/').filter(Boolean).at(-1) ?? '')
+)
 
 const changeCount = computed(() => {
   const s = gitStatus.value

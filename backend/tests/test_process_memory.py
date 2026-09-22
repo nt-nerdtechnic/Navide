@@ -10,6 +10,7 @@ class TestSyscallSweep:
         monkeypatch.setattr(
             process_memory.osplat.resource_probe, "sample", lambda pids: {1: (500, 2.5), 2: (700, 1.0)}
         )
+        monkeypatch.setattr(process_memory.osplat.resource_probe, "available", lambda: True)
         monkeypatch.setattr(process_memory.subprocess, "run", _must_not_run)
         assert process_memory.footprints([1, 2]) == {1: 500, 2: 700}
 

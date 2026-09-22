@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { markerTurnActionFor } from '../sessionMarkerTurn'
+import {
+  hasDetectedCodexSession,
+  markerTurnActionFor,
+  screenShowsBlockingDialog,
+  screenShowsHookTrustPrompt
+} from '../sessionMarkerTurn'
 
 type Activity = { event_type?: string; detail?: string; text?: string }
 
@@ -93,5 +98,99 @@ describe('session-marker gate sequences', () => {
       { event_type: 'turn_complete', detail: 'assistant', text: 'Anything else?' },
     ])
     expect(suppressed).toEqual([true, false])
+  })
+})
+
+describe('Codex identity arriving during startup', () => {
+  it('keeps bootstrap for a saved conversation placeholder until a real ID arrives', () => {
+    const pane = { agentKey: 'codex', pinnedSessionId: 'saved-id', pinnedFromRestore: true }
+    expect(hasDetectedCodexSession(pane)).toBe(false)
+    pane.pinnedSessionId = 'current-cli-id'
+    pane.pinnedFromRestore = false
+    expect(hasDetectedCodexSession(pane)).toBe(true)
+  })
+
+  it('keeps the existing fallback when hooks are absent or untrusted', () => {
+    expect(hasDetectedCodexSession({ agentKey: 'codex' })).toBe(false)
+    expect(hasDetectedCodexSession({ agentKey: 'codex', pinnedSessionId: '' })).toBe(false)
+  })
+
+  it('does not change another vendor bootstrap policy', () => {
+    expect(hasDetectedCodexSession({ agentKey: 'qwen', pinnedSessionId: 'known-id' })).toBe(false)
+  })
+})
+
+describe('screenShowsBlockingDialog', () => {
+  // Rendered by Codex 0.154 in a pane whose home mirrors untrusted hooks; the
+  // marker pasted into this screen was lost and the pane never got a resume
+  // id (2026-09-16, pane ccd2efbf). Lines as xterm renders them.
+  const hooksReview = [
+    'Hooks need review',
+    '8 hooks are new or changed.',
+    'Hooks can run outside the sandbox after you trust them.',
+    '',
+    '› 1. Review hooks',
+    '  2. Trust all and continue',
+    "  3. Continue without trusting (hooks won't run)",
+    '',
+    'Press enter to confirm or esc to go back'
+  ].join('\n')
+
+  it('holds on the Codex hook-trust screen', () => {
+    expect(screenShowsBlockingDialog(hooksReview)).toBe(true)
+  })
+
+  it('still matches when a narrow pane wraps the confirm line', () => {
+    const wrapped = hooksReview.replace(
+      'Press enter to confirm or esc to go back',
+      'Press enter to confirm or\n  esc to go back'
+    )
+    expect(screenShowsBlockingDialog(wrapped)).toBe(true)
+  })
+
+  it('lets the ordinary ready prompt through', () => {
+    const ready = [
+      '>_ OpenAI Codex (v0.154.0)',
+      'model:       loading   /model to change',
+      'directory:   ~/Desktop/Agent-Team',
+      'permissions: YOLO mode',
+      '',
+      '› Ask Codex to do anything',
+      '? for shortcuts'
+    ].join('\n')
+    expect(screenShowsBlockingDialog(ready)).toBe(false)
+  })
+
+  it('is not the workspace-trust prompt dismissStartupDialog answers itself', () => {
+    // "Press enter to continue" is auto-accepted elsewhere; this gate must
+    // not start holding on it, or trusted-workspace spawns would stall.
+    expect(screenShowsBlockingDialog('Do you trust the contents of this folder?\nPress enter to continue')).toBe(false)
+    expect(screenShowsBlockingDialog('')).toBe(false)
+  })
+})
+
+describe('screenShowsHookTrustPrompt', () => {
+  // Acting on this switches the injected Codex hook off for every later pane,
+  // so it has to identify OUR hook as the thing blocking the pane — not any
+  // confirm prompt that happens to be on screen.
+  it('matches the hook approval screen, wrapped or not', () => {
+    expect(screenShowsHookTrustPrompt('Hooks need review')).toBe(true)
+    expect(screenShowsHookTrustPrompt('  hooks   need\n  review before they can run.  ')).toBe(true)
+    expect(
+      screenShowsHookTrustPrompt('1. Review hooks\n2. Trust all and continue\nHooks need review')
+    ).toBe(true)
+  })
+
+  it('does not match the other blocking dialogs', () => {
+    // screenShowsBlockingDialog is deliberately broader. If this narrower one
+    // matched the same things, answering an unrelated confirm prompt would
+    // disable the hook.
+    const confirm = 'Press enter to confirm or esc to go back'
+    expect(screenShowsBlockingDialog(confirm)).toBe(true)
+    expect(screenShowsHookTrustPrompt(confirm)).toBe(false)
+
+    expect(screenShowsHookTrustPrompt('Do you trust the contents of this folder?')).toBe(false)
+    expect(screenShowsHookTrustPrompt('> Ask Codex to do anything')).toBe(false)
+    expect(screenShowsHookTrustPrompt('')).toBe(false)
   })
 })

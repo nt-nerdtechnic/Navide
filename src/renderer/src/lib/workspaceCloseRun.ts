@@ -41,3 +41,59 @@ export function closeEndsTheRun(probe: WorkspaceCloseProbe): boolean {
   if (probe.runWorkspacePath !== probe.closingWorkspacePath) return false
   return probe.doomedOrigins.includes('pipeline')
 }
+
+/** Does the window's pipeline run block restoring THIS workspace's panes?
+ *
+ *  A restore recreates panes from records, so it must not run for a workspace
+ *  whose panes are already on screen — which is what a live or paused run
+ *  means for the workspace it belongs to. Every OTHER workspace in the window
+ *  is a different question, and answering it window-wide is what made a run
+ *  paused in one project refuse to bring back another project's panes, whose
+ *  records a workspace close deliberately keeps.
+ *
+ *  `runWorkspacePath` must come from a field that names the RUN's workspace
+ *  and nothing else. `pipeline.workspacePath` is not that: onWorkspaceBrowse
+ *  reassigns it to whatever workspace is being entered, so passing it compares
+ *  a workspace with itself and blocks everything — the window-wide behaviour
+ *  this replaced, wearing a scope that looks narrower than it is.
+ *
+ *  An empty `runWorkspacePath` means the run's workspace is unknown, and an
+ *  unknown one blocks: restoring panes on top of live ones duplicates them,
+ *  while refusing costs a reopen.
+ */
+export interface RestoreRunProbe {
+  /** `pipeline.state`. Only 'running' and 'aborted' mean panes are alive. */
+  state: string
+  /** The run's own workspace, normalized. Empty when unknown. */
+  runWorkspacePath: string
+  /** The workspace whose panes are about to be restored, normalized. */
+  restoringWorkspacePath: string
+}
+
+export function restoreBlockedByRun(probe: RestoreRunProbe): boolean {
+  if (probe.state !== 'running' && probe.state !== 'aborted') return false
+  if (!probe.runWorkspacePath) return true
+  return probe.runWorkspacePath === probe.restoringWorkspacePath
+}
+
+/** Which confirm-close body the panes of a workspace call for.
+ *
+ *  Three sentences can be true of a close, and picking the wrong one makes the
+ *  dialog promise something the teardown does not do: manual and mcp panes
+ *  keep their records and come back as click-to-resume cards, while pipeline
+ *  panes are unspawned with the run — so a body that speaks for "every pane"
+ *  is only correct when the workspace holds none of the latter, and the body
+ *  that names the ones that will not come back reads as nonsense when it is
+ *  describing all of them.
+ *
+ *  Returns the full i18n key, so the caller interpolates once and the choice
+ *  itself is testable without mounting anything.
+ */
+export function closeDialogBodyKey(counts: { count: number, pipelineCount: number }): string {
+  if (counts.count <= 0) return 'confirm-close.sidebar-ws-body-empty'
+  // >= rather than ===: a count that somehow exceeds the total still means
+  // "nothing here survives the close", which is the sentence that stays true.
+  if (counts.pipelineCount >= counts.count) return 'confirm-close.sidebar-ws-body-pipeline-only'
+  if (counts.pipelineCount > 0) return 'confirm-close.sidebar-ws-body-pipeline'
+  return 'confirm-close.sidebar-ws-body'
+}

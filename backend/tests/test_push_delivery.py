@@ -263,12 +263,16 @@ class _FakeTui:
         submit_status: int = 200,
         append_status: int = 200,
         submit_drops: bool = False,
+        clear_status: int = 200,
+        clear_drops: bool = False,
     ) -> None:
         self.submit_status = submit_status
         self.append_status = append_status
         #: Close the connection on submit without answering, which is what a
         #: TUI going away mid-push looks like from the client side.
         self.submit_drops = submit_drops
+        self.clear_status = clear_status
+        self.clear_drops = clear_drops
         self.appended: list[str] = []
         self.submits = 0
         self.clears = 0
@@ -312,7 +316,11 @@ class _FakeTui:
             if status < 400:
                 self.submits += 1
         elif path.endswith("/clear-prompt"):
+            if self.clear_drops:
+                writer.close()
+                return
             self.clears += 1
+            status = self.clear_status
         payload = b"true"
         writer.write(
             f"HTTP/1.1 {status} X\r\nContent-Length: {len(payload)}\r\n"
@@ -378,14 +386,45 @@ async def test_http_push_reports_a_rejected_append_without_submitting() -> None:
 
 @pytest.mark.asyncio
 async def test_http_push_clears_the_composer_when_the_submit_fails() -> None:
-    """Otherwise the typed fallback would submit the envelope twice over."""
+    """Otherwise the typed fallback would submit the envelope twice over. A
+    confirmed clear is named in the reason, so the caller knows the composer is
+    empty again and nothing is left behind."""
     tui = _FakeTui(submit_status=500)
     await tui.start()
     try:
         await _registered_http(tui)
-        assert await push_delivery.deliver("p1", "hi") == (False, "submit-500")
+        assert await push_delivery.deliver("p1", "hi") == (False, "submit-500/cleared")
         assert tui.appended == ["hi"]
         assert tui.clears == 1
+        assert not push_delivery.leaves_text_behind(push_delivery.KIND_HTTP, "submit-500/cleared")
+    finally:
+        await tui.stop()
+
+
+@pytest.mark.asyncio
+async def test_http_push_reports_a_clear_the_cli_refused() -> None:
+    """The append landed and neither the submit nor the clear went through: the
+    text is still in the composer, and the reason must not claim otherwise."""
+    tui = _FakeTui(submit_status=500, clear_status=500)
+    await tui.start()
+    try:
+        await _registered_http(tui)
+        assert await push_delivery.deliver("p1", "hi") == (False, "submit-500")
+        assert tui.clears == 1
+        assert push_delivery.leaves_text_behind(push_delivery.KIND_HTTP, "submit-500")
+    finally:
+        await tui.stop()
+
+
+@pytest.mark.asyncio
+async def test_http_push_reports_a_clear_that_never_answered() -> None:
+    """Same as a refused clear: an exception on the clear call is not a clear."""
+    tui = _FakeTui(submit_status=500, clear_drops=True)
+    await tui.start()
+    try:
+        await _registered_http(tui)
+        assert await push_delivery.deliver("p1", "hi") == (False, "submit-500")
+        assert push_delivery.leaves_text_behind(push_delivery.KIND_HTTP, "submit-500")
     finally:
         await tui.stop()
 
@@ -587,7 +626,7 @@ async def test_http_push_clears_the_composer_when_the_submit_errors() -> None:
     await tui.start()
     try:
         await _registered_http(tui)
-        assert await push_delivery.deliver("p1", "hi") == (False, "submit-error")
+        assert await push_delivery.deliver("p1", "hi") == (False, "submit-error/cleared")
         assert tui.appended == ["hi"]
         assert tui.clears == 1
     finally:
@@ -600,6 +639,9 @@ async def test_a_failed_submit_is_the_only_thing_that_leaves_text_behind() -> No
     it has to be exactly the cases where our text is still in the composer."""
     assert push_delivery.leaves_text_behind(push_delivery.KIND_HTTP, "submit-500")
     assert push_delivery.leaves_text_behind(push_delivery.KIND_HTTP, "submit-error")
+    # A clear the CLI confirmed emptied the composer again.
+    assert not push_delivery.leaves_text_behind(push_delivery.KIND_HTTP, "submit-500/cleared")
+    assert not push_delivery.leaves_text_behind(push_delivery.KIND_HTTP, "submit-error/cleared")
     # Nothing reached the composer in any of these.
     assert not push_delivery.leaves_text_behind(push_delivery.KIND_HTTP, "not-listening")
     assert not push_delivery.leaves_text_behind(push_delivery.KIND_HTTP, "append-401")

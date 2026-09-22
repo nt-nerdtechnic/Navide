@@ -12,6 +12,10 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { normalizePlatformId } from '../../shared/osplat'
+
+// The real filesystem the suite runs on: NTFS has no POSIX mode bits to assert on.
+const hostIsWindows = normalizePlatformId(process.platform) === 'win32'
 
 const closeFailure = vi.hoisted(() => ({ enabled: false }))
 
@@ -314,7 +318,8 @@ describe('ExecutionPolicySourceStore hardening', () => {
     }
   })
 
-  it('reports a temporarily inaccessible repository document as unavailable', () => {
+  // chmod 000 does not make a directory unreadable on NTFS.
+  it.skipIf(hostIsWindows)('reports a temporarily inaccessible repository document as unavailable', () => {
     const userData = temporaryRoot('navide-policy-source-recommendation-unavailable-user-')
     const workspacePath = temporaryRoot('navide-policy-source-recommendation-unavailable-workspace-')
     const repositoryDirectory = join(workspacePath, '.navide')
@@ -608,17 +613,21 @@ describe('ExecutionPolicySourceStore hardening', () => {
     }
   })
 
-  it.each([
+  const corruptGlobalCases = [
     ['malformed global policy', (userData: string) => {
       writeFileSync(policyFile(userData, EXECUTION_POLICY_FILE), '{not-json', 'utf8')
-    }],
-    ['owner-unsafe global policy', (userData: string) => {
-      chmodSync(policyFile(userData, EXECUTION_POLICY_FILE), 0o644)
     }],
     ['corrupt global revision metadata', (userData: string) => {
       writeFileSync(policyFile(userData, EXECUTION_POLICY_REVISION_FILE), '{not-json', 'utf8')
     }],
-  ] as const)('keeps an explicit user pin fail-closed for %s', (_label, corruptGlobal) => {
+  ] as const
+  // A 0o644 mode cannot be set on NTFS, so the file never becomes owner-unsafe there.
+  const ownerUnsafeCase = [
+    ['owner-unsafe global policy', (userData: string) => {
+      chmodSync(policyFile(userData, EXECUTION_POLICY_FILE), 0o644)
+    }],
+  ] as const
+  const keepsUserPinFailClosed = (corruptGlobal: (userData: string) => void): void => {
     const userData = temporaryRoot('navide-policy-source-user-corrupt-global-')
     const workspacePath = temporaryRoot('navide-policy-source-user-corrupt-global-workspace-')
     try {
@@ -653,7 +662,16 @@ describe('ExecutionPolicySourceStore hardening', () => {
       rmSync(userData, { recursive: true, force: true })
       rmSync(workspacePath, { recursive: true, force: true })
     }
+  }
+  it.each(corruptGlobalCases)('keeps an explicit user pin fail-closed for %s', (_label, corruptGlobal) => {
+    keepsUserPinFailClosed(corruptGlobal)
   })
+  it.skipIf(hostIsWindows).each(ownerUnsafeCase)(
+    'keeps an explicit user pin fail-closed for %s',
+    (_label, corruptGlobal) => {
+      keepsUserPinFailClosed(corruptGlobal)
+    },
+  )
 
   it('keeps an invalid unselected recommendation separate from the active default source', () => {
     const userData = temporaryRoot('navide-policy-source-unselected-user-')

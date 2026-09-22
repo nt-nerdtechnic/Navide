@@ -14,9 +14,11 @@ import { shallowMount, type VueWrapper } from '@vue/test-utils'
 import { ref } from 'vue'
 import TokenStatsPanel from '../TokenStatsPanel.vue'
 import { usePreview } from '../../preview/usePreview'
-import { settingsSet } from '@navide/plugin-ui/shared'
+import { registerCommand, settingsSet } from '@navide/plugin-ui/shared'
 import { __resetSettingsForTest } from '@navide/plugin-ui/shared/testing'
 import type { TokensSnapshot } from '../../composables/useTokens'
+import { i18n } from '@navide/plugin-ui/foundation'
+import { __resetUsageForTest, initUsage } from '../../composables/useUsage'
 
 type Handler = (raw: unknown) => void
 
@@ -48,7 +50,7 @@ function snapshot(over: Partial<TokensSnapshot['workspace']> = {}): TokensSnapsh
         by_pane: { 's1:A': bucket(1, 2, 1) },
       },
       runs: [],
-      cumulative: { totals: bucket(100, 200, 30), by_vendor: { claude: bucket(5, 6, 7) }, by_stage: { s1: bucket(8, 9, 10) } },
+      cumulative: { totals: bucket(100, 200, 30), by_vendor: { claude: bucket(5, 6, 7) }, by_stage: { s1: bucket(8, 9, 10) }, by_group: {} },
       ...over,
     },
     global: { all_time: bucket(1000, 2000, 300), by_vendor: {}, by_day: {} },
@@ -156,6 +158,34 @@ describe('TokenStatsPanel', () => {
     w.unmount()
   })
 
+  it('renders BY GROUP rows from cumulative.by_group in runGroups order', async () => {
+    // Rows come from the snapshot, not from panes: a group with no usage still
+    // lists (as zeros) because the sidebar lists it.
+    const { w, emit } = mountPanel({
+      runGroups: [{ id: 'rg-2', name: 'Later' }, { id: 'rg-1', name: 'Earlier' }],
+    })
+    const snap = snapshot()
+    snap.workspace.cumulative.by_group = { 'rg-1': bucket(11, 22, 3) }
+    emit('tokens.changed', snap)
+    await w.findAll('.hdr .tab')[1].trigger('click')  // tokens
+    const groupBlock = w.findAll('.block').find((b) => b.text().includes('label.by-group'))!
+    const rows = groupBlock.findAll('tbody tr')
+    expect(rows.map((r) => r.find('th').text())).toEqual(['Later', 'Earlier'])
+    expect(rows[0].findAll('td').map((c) => c.text())).toEqual(['0', '0', '0'])
+    expect(rows[1].findAll('td').map((c) => c.text())).toEqual(['11', '22', '3'])
+    w.unmount()
+  })
+
+  it('shows no-groups empty state when there are no groups and by_group is empty', async () => {
+    const { w, emit } = mountPanel()
+    emit('tokens.changed', snapshot())
+    await w.findAll('.hdr .tab')[1].trigger('click')
+    const groupBlock = w.findAll('.block').find((b) => b.text().includes('label.by-group'))!
+    expect(groupBlock.text()).toContain('label.no-groups')
+    expect(groupBlock.find('table').exists()).toBe(false)
+    w.unmount()
+  })
+
   it('keys pane token rows by stage:slot so they survive a frontend restart', async () => {
     // by_pane is keyed 'stageId:slotLabel' on the backend; a pane's UUID
     // changes on every rebuild, so matching on it would zero the row.
@@ -232,7 +262,7 @@ describe('TokenStatsPanel', () => {
     const snap = snapshot({
       cumulative: {
         totals: bucket(77_059_400_000, 329_000_000, 369_287),
-        by_vendor: {}, by_stage: {},
+        by_vendor: {}, by_stage: {}, by_group: {},
       },
     })
     snap.global.all_time = bucket(2_500_000_000_000, 0, 0)
@@ -277,6 +307,17 @@ describe('TokenStatsPanel', () => {
     // sA alone (100/10) — not sA + sB (107/13), which is what the old sum showed.
     expect(block.findAll('.cell .big').map((n) => n.text())).toEqual(['100', '10', '110', '5'])
     expect(block.text()).toContain('claude')
+    w.unmount()
+  })
+
+  it('opens Turn Stats from the session header through the shared command', async () => {
+    // App registers this command; here a stand-in records the call.
+    const ran: string[] = []
+    registerCommand('ui.window.openTurnStats', () => { ran.push('turn-stats') })
+    const { w, emit } = mountPanel({ panes: LIVE_PANES, activePaneId: 'p1' })
+    const block = await topCells(w, emit, liveSnapshot())
+    await block.get('[data-act="open-turn-stats"]').trigger('click')
+    expect(ran).toEqual(['turn-stats'])
     w.unmount()
   })
 
@@ -353,6 +394,90 @@ describe('TokenStatsPanel', () => {
     usePreview().show({ kind: 'file', workspacePath: '/ws', relPath: 'a.png' })
     await w.vm.$nextTick()
     expect(w.emitted('update:expanded')).toEqual([[true]])
+    w.unmount()
+  })
+})
+
+describe('TokenStatsPanel BY ACCOUNT', () => {
+  beforeEach(() => {
+    __resetSettingsForTest()
+    usePreview().reset()
+    __resetUsageForTest()
+  })
+  afterEach(() => {
+    __resetUsageForTest()
+  })
+
+  const profiles = {
+    findProfile: (id: string | null | undefined) => (id === 'slot-a' ? { id, agentKey: 'claude', name: 'Services', createdAt: '' } : undefined),
+    identityFor: (_agent: string, profileId: string | null) => (profileId === 'slot-a' ? { email: 'services@x.dev', signedIn: true } : null),
+    defaultProfileId: () => null,
+    profilesForAgent: () => [],
+  }
+  const snap = (over: Record<string, { input: number; output: number; calls: number }>) => {
+    const s = snapshot()
+    s.workspace.cumulative.by_account = over
+    return s
+  }
+  async function open(w: VueWrapper) {
+    await w.findAll('.hdr .tab')[1].trigger('click')
+    return w.findAll('.block').find((b) => b.attributes('data-block') === 'by-account')!
+  }
+
+  it('renders one row per account after BY VENDOR: real accounts largest first, then Default, then unknown, with each account\'s quota', async () => {
+    const { w, emit } = mountPanel({ cliProfiles: profiles })
+    initUsage((w.props() as { backend: never }).backend)
+    emit('usage.changed', {
+      providers: {},
+      accounts: { claude: { 'slot-a': { provider: 'claude', status: 'ok', planType: null, fetchedAt: '', error: null, windows: [{ kind: 'session', label: 'S', usedPercent: 6, resetsAt: null }] } } },
+    })
+    emit('tokens.changed', snap({
+      unknown: bucket(1, 5, 3),
+      __default__: bucket(400, 1, 1),
+      'slot-a': bucket(9, 33, 24),
+      'gone-0123456789': bucket(300, 300, 6),
+    }))
+    const block = await open(w)
+    const blocks = w.findAll('.block').map((b) => b.attributes('data-block') ?? b.find('.block-title').text())
+    expect(blocks.indexOf('by-account')).toBe(blocks.indexOf('label.by-vendor') + 1)
+    const rows = block.findAll('tbody tr[data-row="account"]')
+    expect(rows.map((r) => r.attributes('data-account'))).toEqual(['gone-0123456789', 'slot-a', '__default__', 'unknown'])
+    expect(rows[0].find('th').text()).toBe(`gone-012 · ${i18n.global.t('account-dim.removed')}`)
+    expect(rows[0].find('[data-part="quota"]').text()).toBe('—')
+    expect(rows[1].find('th').text()).toBe('services@x.dev')
+    expect(rows[1].findAll('td').map((c) => c.text())).toEqual(['9', '33', '24', '94%'])
+    expect(rows[2].find('th').text()).toBe(i18n.global.t('account-dim.default'))
+    expect(rows[3].find('th').text()).toBe(i18n.global.t('account-dim.unknown'))
+    expect(rows[3].classes()).toContain('unknown')
+    expect(rows[3].find('[data-part="quota"]').text()).toBe('—')
+    expect(block.text()).toContain('label.quota')
+    w.unmount()
+  })
+
+  it('shows the spent mark for an exhausted account', async () => {
+    const { w, emit } = mountPanel({ cliProfiles: profiles })
+    initUsage((w.props() as { backend: never }).backend)
+    emit('usage.changed', {
+      providers: {},
+      accounts: { claude: { 'slot-a': { provider: 'claude', status: 'ok', planType: null, fetchedAt: '', error: null, windows: [{ kind: 'session', label: 'S', usedPercent: 100, resetsAt: null }] } } },
+    })
+    emit('tokens.changed', snap({ 'slot-a': bucket(9, 33, 24) }))
+    const block = await open(w)
+    expect(block.find('[data-row="account"] [data-part="quota"]').text()).toBe(i18n.global.t('usage.exhausted-short'))
+    w.unmount()
+  })
+
+  it('shows the no-accounts empty state when the backend carries no by_account, and ids without a profiles source', async () => {
+    const { w, emit } = mountPanel()
+    emit('tokens.changed', snapshot())
+    let block = await open(w)
+    expect(block.text()).toContain('label.no-accounts')
+    expect(block.find('table').exists()).toBe(false)
+    emit('tokens.changed', snap({ 'slot-a': bucket(1, 2, 3) }))
+    await w.vm.$nextTick()
+    block = w.findAll('.block').find((b) => b.attributes('data-block') === 'by-account')!
+    expect(block.find('[data-row="account"] th').text()).toBe(`slot-a · ${i18n.global.t('account-dim.removed')}`)
+    expect(block.find('[data-row="account"] [data-part="quota"]').text()).toBe('—')
     w.unmount()
   })
 })

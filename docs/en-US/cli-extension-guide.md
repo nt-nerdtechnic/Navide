@@ -10,8 +10,15 @@ have since moved.
 
 Current built-in agent keys are `claude`, `codex`, `antigravity`, `grok`,
 `kimi`, `opencode`, `qwen`, `kilo`, `pi`, `copilot`, `cursor`, `aider`,
-`muse`, and `droid`. One key identifies a vendor on both sides — `agentKey`
+`muse`, `droid`, and `mcode`. One key identifies a vendor on both sides — `agentKey`
 in the frontend, `agent_key` in the backend.
+
+The [vendor matrix roster](cli-vendor-matrix.md#roster) lists the current UI
+labels. Publisher suffixes are Navide presentation choices; they do not alter
+vendor keys, commands, install routes, or compatibility. Display labels are
+kept aligned across frontend and backend specs, installation entries, retained
+Plans specs, and Help. Historical research below retains its original product
+names and does not prescribe current menu labels.
 
 ---
 
@@ -50,6 +57,19 @@ preflight, the credential vault or the log watcher paths that do not exist.
 `docs/adding-a-cli-vendor.md` carries the full step list, the structural
 tests that act as the checklist, and the import rules.
 
+Account switching (added 2026-09-21) is declared the same way: an
+`AccountSwitchSpec` on the vendor spec names the credential pool, the switch
+method (`hot` / `restart` / `manual`), the store layout with its provider
+scopes, the evidence the layout rests on (`live` / `source` / `docs` plus the
+version it was read from), and the environment variables that shadow the
+stored credential; `quota_exhausted_patterns` is the only CLI text the backend
+accepts as an exhaustion signal, and `login_home_env` decides whether a
+sign-in pane is isolated or runs against the live store. Step 9 of the vendor
+guide lists the contract. As of this writing all fifteen vendors carry
+`evidence="source"` — no real-account round-trip has been recorded; MiniMax
+Code's adapter (region-scoped compound file plus a companion `auth-state`
+write, no session resume) is the newest.
+
 ---
 
 ## Part 2 — Integration records
@@ -60,6 +80,82 @@ exist as described, and the per-layer instructions are superseded by Part 1.
 What remains valid — and is recorded nowhere else — is the per-vendor
 research: install routes, resume syntax, session storage formats, token
 accounting, and the trap each CLI hides.
+
+### MiniMax Code (`mcode`) — added 2026-09-20
+
+The integration supports install detection, interactive launch and `mcode login`.
+Session discovery, transcripts, resume, token/quota reporting, account switching,
+MCP and skills wiring are not implemented. Model, effort and permission-bypass
+flags are omitted because the verified interactive CLI does not accept them.
+Navide strips both `MINIMAX_DATA_DIR` and its legacy fallback `MAVIS_DATA_DIR`
+from inherited environments and refuses them in launch overrides; it does not
+create an isolated MiniMax home per pane.
+
+### CLI reliability corrections — 2026-09-20
+
+These corrections are covered by isolated regression tests; they do not
+constitute authenticated, end-to-end acceptance of every vendor:
+
+- Antigravity rechecks unfinished SQLite assistant rows when their status is
+  updated in place, so a later completion is not lost behind the row watermark.
+- Antigravity `--conversation` and Grok `-r` / `--resume` commands now expose
+  their explicit session IDs to the existing duplicate-PTY reaping path.
+  Grok title-based resume is still not parsed as a session ID. Both vendors
+  retain file-based session existence checks through `session_path`.
+  Duplicate detection accepts literal CLI invocations and known shell wrappers;
+  it does not infer IDs from compound shell commands, other executables or
+  positional text after `--`.
+- Grok's first session directory is shared with its per-pane home shim even
+  when the real home had no sessions directory before launch.
+- Kimi streaming records postpone inferred idle completion. New assistant
+  content after an inferred idle boundary can produce its final reply under
+  a fresh completion key.
+- OpenCode quota credentials and Kilo account switching follow
+  `XDG_DATA_HOME`; Kilo's credential watcher uses the same resolved path.
+- Pi resume preflight checks the target workspace, matching `--session-id`:
+  finding that ID only in another workspace must not permit an empty new
+  conversation to look like a successful resume.
+- Droid retains assistant text across log polls until its outcome arrives,
+  then clears it so later turns cannot reuse the previous reply.
+- Resuming a closed pane from Agent History restores its recorded model and
+  effort. If the pane record was pruned, durable history supplies those
+  choices; older records without them retain the vendor default. An older
+  client's omitted fields no longer erase recorded choices.
+  When resuming history viewed from another workspace, a pruned pane's saved
+  parent is restored only if that parent still exists in the target workspace.
+  Missing parents remain roots, and a record explicitly marked as a root stays
+  a root.
+
+### Codex session identity — updated 2026-09-21
+
+Codex generates the ID of a new interactive session; Navide does not pass a
+Claude-style `--session-id`. Existing conversations use `codex resume <id>`.
+Codex 0.155.1 queues `SessionStart` for the first turn and may defer its rollout
+until then. The ID can remain unknown while a new pane is idle. Navide sends no
+synthetic session-marker prompt on manual launch, fresh rebuild, or fresh
+restore, adds no marker to configured role/task prompts, and shows no
+marker-specific waiting overlay. A real user or configured task turn can make
+the session observable; an ID before the first input is not guaranteed.
+
+Navide accepts a trusted `SessionStart` callback only for its originating
+pane launch, using a per-launch token to reject stale or mismatched callbacks.
+The session-scoped hook configuration preserves user hooks, leaves global
+configuration unchanged, and does not bypass Codex hook review. YOLO does not
+approve hooks: the hook must be enabled and trusted under Codex's hook rules.
+Newly prepared pane homes keep their sessions and runtime state local; skills
+refreshes do not replace them with links to the global Codex home. This allows
+validated local rollout discovery without a hook or marker. Existing homes
+whose sessions are already shared remain unchanged and need the authenticated,
+validated hook callback for marker-free attribution; a shared path or matching
+workspace alone is insufficient. Historical markers remain readable.
+For an existing conversation, Navide explicitly binds the verified resume
+UUID rather than discovering a different session from shared storage.
+The hook handles startup and resume events only; clearing a conversation
+continues to use the existing log-discovery flow.
+
+Hook review, third-party `SessionEnd` timeout warnings, and MCP startup
+failures are separate from session identity. This integration does not approve
+unrelated hooks or repair failing MCP servers.
 
 ### Antigravity CLI (`agy`) — added 2026-07-05
 
@@ -84,6 +180,25 @@ accounting, and the trap each CLI hides.
 - No Navide YOLO flag is added because the integrated CLI has no general
   tool-execution confirmation gate.
 - The integration reads the shared `~/.grok/grok.db` in a WAL-aware manner.
+
+**Superseded 2026-09-14 — the vendor now targets xAI's own grok-build CLI**
+(`curl -fsSL https://x.ai/cli/install.sh | bash`, docs.x.ai/build/cli), not the
+community CLI the research below describes. Both install to `~/.grok/bin/grok`,
+so `which grok` cannot tell them apart; the version string can — xAI's prints
+`grok <x.y.z> (<commit>)`, the community one a bare `1.1.7`. What changed for
+the integration: sign-in is `grok login` (browser OAuth at auth.x.ai), and MCP
+servers live in `~/.grok/config.toml` under `[mcp_servers.<name>]` — a TOML map
+keyed by the server's name, where a bare `url` means streamable HTTP — instead
+of a `mcp.servers` **list** in `~/.grok/user-settings.json`. Resume is
+`grok -r <id>` — `-s`/`--session-id` NAMES a new session and errors on an
+existing id, so the `grok -s` below no longer applies. Sessions are one
+directory each under `$GROK_HOME/sessions/<url-encoded-cwd>/<uuid7>/`
+(`updates.jsonl` transcript, `usage.json`, `summary.json`); the shared
+`~/.grok/grok.db` is gone. The transcript carries an explicit `turn_completed`
+record with the turn's tokens, so the 8-second-silence turn-end inference the
+community CLI needed was removed with it. `grok update` exists and is the
+update action. Everything below still describes the community CLI and is kept
+as the record of how the integration was built.
 
 The following notes preserve the research that informed the integration.
 
@@ -215,3 +330,38 @@ Record shapes came from droid's own zod schemas and read loops inside the
 250MB bundle, cross-checked against a real session file. `verifiedTurnText`
 stays unset: no authenticated session has exercised the assistant/outcome path
 yet.
+
+
+### Managed credential destinations
+
+Kilo and OpenCode declare `credential_path_env_vars`, `live_file_from_context`
+and `fetch_usage_from_context`. Their launch helper reports only the declared
+path inputs, effective home/cwd, and credential-override variable names over an
+authenticated, single-use loopback connection after shell startup. Credential
+values and the rest of the environment are never reported. The owning create
+coroutine keeps the vendor lock through binding and the pre-login snapshot,
+then releases the CLI with GO. It preserves the original logical command for
+resume/history and does not override HOME or XDG_DATA_HOME.
+
+Each vendor has one managed store. Vault reads/writes, credential-file watches
+and native usage reads use that destination. Existing SQLite KV storage keeps
+only canonical path, home, cwd and declared path inputs; launch tokens and
+credential contents are not stored in that record. A saved destination is not
+fresh proof for another pane. Account mutations require compatible launch
+proof from every running pane of that vendor.
+
+A clean installation can bind its first observed store. Upgrades must agree
+with existing live credentials, the active slot and recorded ownership. An
+ambiguous upgrade or a different destination leaves normal CLI execution
+available but refuses account mutation with a reason. There is no store picker,
+automatic replacement, credential migration or independent default per store.
+
+The literal bash/zsh command seam recognizes native vendor executables and
+package-declared entrypoints; arbitrary functions/scripts retain their original
+shell command and error semantics without account-mutation authority. Native
+Windows launches reuse the existing command parser and recognized npm `.cmd`
+unwrapping; unknown batch wrappers keep their original launch. The Windows
+helper waits for its child within the existing ConPTY job. Source helper tests
+and platform substitutes do not certify a packaged build or real Windows
+execution. Other ambient-path adapters still require explicit declarations and
+same-launch coverage before this contract can be claimed for them.

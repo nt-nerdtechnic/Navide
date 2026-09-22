@@ -4,9 +4,13 @@ import type { PaneArgContext } from '@navide/plugin-shell'
 import { extractDropPaths, stabilizeDroppedPaths } from '../lib/drop'
 import { PANE_BATCH_MIME } from '@navide/terminal'
 import { resolveDragBatch } from '../lib/paneBatchDrag'
+import { resolveLineageDrop, resolveRootDrop } from '../lib/lineageDrop'
+import { withDescendants } from '../lib/paneLineage'
 import { setBatchDragImage } from '../lib/batchDragImage'
 import { paneStatusLabelText, type PaneStatusValue } from '../lib/paneStatusLabel'
 import { rollupPaneStatus } from '../lib/paneStatusRollup'
+import { subtreeSignals } from '../lib/paneSubtreeStatus'
+import { workspaceAliasOf, workspaceDisplayName } from '../lib/workspaceAlias'
 import { statusBadgeStyle } from '../composables/useStatusBadgePrefs'
 import { rollupTabStatus, runGroupStateLabelKey, tabRunStatePaneStatus } from '../lib/tabStatus'
 import {
@@ -56,6 +60,16 @@ const PlanPane = defineAsyncComponent(() => import('../editor/PlanPane.vue'))
 import type { AgentSpec } from '@navide/plugin-shell'
 export type { AgentSpec } from '@navide/plugin-shell'
 import { CLI_AGENT_SPECS } from '@navide/plugin-shell'
+import {
+  chooseLaunchCommand,
+  cliCommandKey,
+  cliModelKey,
+  modelArgsFor,
+  parseCliModelDefault,
+  supportsEffort,
+  supportsModel,
+} from '@navide/plugin-shell'
+import { modelRefusalMessage } from '../lib/agentSpawnGate'
 
 /** CLIs YOLO mode actually affects: the ones declaring a bypass flag. Derived,
  *  because the hand-written hint here listed three while eight qualified. */
@@ -159,6 +173,14 @@ export interface ActivePaneView {
    *  verbatim — the tree itself is built in App's paneLineage, which is the
    *  structure layer this view model must not duplicate. */
   spawnedBy?: string
+  /** The workspace the pane runs in. Read by the nest-drop pre-check: a pane
+   *  can only be parented within its own workspace, and the row must not light
+   *  up for a drop the write would refuse. */
+  workspacePath: string
+  /** The pane's run group, absent for the ungrouped tab. Read by the
+   *  make-root pre-check: a root already sitting in the header's group has
+   *  nothing to gain from the drop, so its header must not light up. */
+  runGroupId?: string
   /** True when this pane's lineage subtree is folded in the lists. */
   collapsed?: boolean
   /** True when this pane corresponds to a slot marked is_commander=true in
@@ -173,6 +195,8 @@ export interface ActivePaneView {
   slotLabel?: string
   /** True when the pane is minimized to the sidebar (hidden in grid, PTY alive). */
   isMinimized?: boolean
+  /** True when the user muted this pane's notification and sound (Dock badge still counts). */
+  isMuted?: boolean
   /** True while the pane's loop is active — shown as an ∞ badge next to status. */
   loopActive?: boolean
   /** Epoch ms of the scheduled loop auto-resume; null/undefined when not waiting. */
@@ -187,6 +211,17 @@ export interface ActivePaneView {
   /** True while App has a rebuild in flight for this pane's session — disables
    *  the rebuild control so a double-click cannot start a second kill/spawn. */
   rebuilding?: boolean
+  /** The pane's quota-hit state, copied from ActivePane (see its doc): when the
+   *  CLI's "hit your limit" message was last seen, when the quota is due back,
+   *  and the never-cleared detection high-water mark. Read by Turn Stats to
+   *  flag the turn that ran into the limit. */
+  usageLimitAt?: number | null
+  usageLimitUntil?: number | null
+  usageLimitSeenAt?: number | null
+  /** The CLI account the pane is pinned to ('__default__' = the real home;
+   *  absent on a pane from before pinning existed). Read by Turn Stats to
+   *  pick the account's own quota snapshot. */
+  profileId?: string
 }
 
 export interface SpawnPayload {
@@ -195,6 +230,13 @@ export interface SpawnPayload {
   stageId: StageId
   workspacePath: string
   customName?: string
+  /** Model id to launch on ('' / absent = the vendor default). Only set for a
+   *  CLI whose spec declares `modelArgs`; the plain-shell spawns below leave
+   *  both out, because a shell has no model to be told about. */
+  model?: string
+  /** Reasoning-effort level, for the vendors with a flag separate from the
+   *  model id. Set only alongside a vendor that declares `effortArgs`. */
+  effort?: string
   /** Run group to open the pane in. Set only by the sidebar's per-group ＋,
    *  which knows which group the user is pointing at; every other entry point
    *  leaves it unset and the pane lands in the group the active tab names. */
@@ -264,7 +306,9 @@ export interface ExistingProjectInfo {
   stagesCompleted: number
   nextStageIndex: number // -1 if all done
   updatedAt: string
-  projectFile: string
+  /** The workspace directory, as the backend resolved it. Resume spawns into
+   *  this; never derive it from `paths.project_file`, a file inside it. */
+  workspacePath: string
   pipelineId: string
   runCount: number
 }
@@ -326,6 +370,10 @@ interface Props {
    *  canRebuildAll above answers for the one on screen, which is what the
    *  toolbar's copy of the button means. */
   rebuildableByWorkspace?: Record<string, number>
+  /** Reclaimable pane counts keyed by workspace path, trimmed the same way.
+   *  Per workspace for the same reason the rebuild count is: the menu sits on
+   *  one heading and must answer for that project, not the one on screen. */
+  reclaimableByWorkspace?: Record<string, number>
   rebuildingAll?: boolean
   /** Issue dispatch/handle status — forwarded to GitPane for badges. */
   issueHandoffs?: Record<string, { paneId: string; mode: string; state: string }>
@@ -349,6 +397,10 @@ interface Props {
   /** Workspace sections, this window's first. Omitted renders the flat list —
    *  which is what every other mount of this component gets. */
   workspaces?: WorkspaceGroupRow[]
+  /** Path → user-set workspace display name. The heading rows already arrive
+   *  labelled through `workspaces`; this is for the surfaces that name a
+   *  workspace from a path of their own (the resume picker). */
+  workspaceAliases?: Readonly<Record<string, string>>
   /** True in a detached window: it is one run group's view of ONE workspace,
    *  so it neither opens others nor switches between them — the controls are
    *  hidden rather than left to do nothing.
@@ -819,6 +871,36 @@ const wsCountStates = computed<Map<string, PaneStatusValue | undefined>>(() => {
   return out
 })
 
+/** Each parent pane's "↳ n" subtree signal, keyed by pane id — see
+ *  subtreeSignals for why it is computed from spawnedBy over all panes and
+ *  kept out of the pane's own status. */
+const subtreeById = computed(() => subtreeSignals(props.panes))
+
+/** The status the row's dot is painted with: the pane's own, unless a pane it
+ *  spawned is louder. The sidebar row has no width for another chip, so the
+ *  family's state rides on the dot that is already there — the same attention
+ *  order as every other rollup, so a child waiting on the user turns the dot
+ *  amber over a parent that is merely running. The expanded row's text pill
+ *  keeps saying what THIS pane is doing. */
+function dotStateOf(p: ActivePaneView): PaneStatusValue {
+  const sub = subtreeById.value.get(p.id)
+  if (!sub) return p.status
+  return rollupPaneStatus([p.status, sub.state]) ?? p.status
+}
+
+/** The dot's legend: the pane's own status, and the family's when that is
+ *  what coloured it. */
+function dotTitleOf(p: ActivePaneView): string {
+  const own = paneStatusLabelText(p.status)
+  const sub = subtreeById.value.get(p.id)
+  if (!sub) return own
+  const family = i18n.global.t('pane.terminal.subtree-tooltip', {
+    count: sub.count,
+    status: paneStatusLabelText(sub.state),
+  })
+  return `${own} · ${family}`
+}
+
 /** The attributes that paint a count pill with a status.
  *
  *  One binding rather than three so the badge either carries the whole signal
@@ -849,6 +931,14 @@ function groupKeyStyle(state: TabRunState): Record<string, string> | undefined {
 function wsCanRebuild(path: string): boolean {
   const key = (path ?? '').replace(/\/+$/, '')
   return (props.rebuildableByWorkspace?.[key] ?? 0) > 0
+}
+
+/** How many CLIs in this workspace a reclaim would take right now. Drives both
+ *  the menu item's count and its greyed-out state; the guards behind the number
+ *  live in idleReclaim.ts, and App owns the count. */
+function wsReclaimableCount(path: string): number {
+  const key = (path ?? '').replace(/\/+$/, '')
+  return props.reclaimableByWorkspace?.[key] ?? 0
 }
 
 /** One workspace's rows, split into run groups and resolved to panes.
@@ -955,12 +1045,24 @@ const emit = defineEmits<{
   (e: 'toggle-collapsed', paneId: string): void
   /** Fold/unfold a whole workspace section. */
   (e: 'toggle-workspace', path: string): void
+  /** Fold/unfold every lineage subtree inside one workspace, leaving the
+   *  heading itself open. App owns the pane state and persists it, the same
+   *  way it owns 'toggle-collapsed'. */
+  (e: 'collapse-workspace-subtrees', path: string, collapse: boolean): void
+  /** Fold/unfold every lineage subtree inside ONE run group. The rows are
+   *  named rather than derived from the workspace: grouping is the sidebar's
+   *  own layer, so App has no list of its own to re-derive them from. */
+  (e: 'collapse-pane-subtrees', path: string, paneIds: string[], collapse: boolean): void
   /** Bring a workspace to the front — focus its window if one has it open,
    *  otherwise open it. */
   /** Open a new agent in a workspace that is not this window's. */
   (e: 'open-workspace-picker'): void
   (e: 'switch-to-workspace', path: string): void
+  /** End every CLI in the workspace and let go of it. */
   (e: 'close-workspace', path: string): void
+  /** Let go of the workspace and leave its CLIs running: the sidebar row goes,
+   *  the backend keeps the panes, and reopening picks them up alive. */
+  (e: 'close-workspace-keep-panes', path: string): void
   (e: 'detach-workspace', path: string, x: number, y: number): void
   (e: 'reorder-workspace', fromPath: string, toPath: string): void
   (e: 'reveal-workspace-folder', path: string): void
@@ -969,6 +1071,8 @@ const emit = defineEmits<{
   /** From a workspace heading: that workspace. From the toolbar: undefined,
    *  meaning the workspace on screen. */
   (e: 'rebuild-all', workspacePath?: string): void
+  /** Reclaim every reclaimable CLI in this workspace at once. */
+  (e: 'reclaim-workspace-panes', workspacePath: string): void
   (e: 'restore', paneId: string): void
   (e: 'context-menu', paneId: string, ev: MouseEvent): void
   (e: 'pipeline-start', payload: { task: string; workspacePath: string; pipelineId?: string }): void
@@ -984,6 +1088,17 @@ const emit = defineEmits<{
   (e: 'pipeline-restart', payload: { task: string; workspacePath: string }): void
   (e: 'focus-pane', paneId: string, ev?: MouseEvent): void
   (e: 'reorder-pane', fromId: string, toId: string): void
+  /** A pane (and its multi-selection) dropped on the middle of another row:
+   *  make it that row's child. App resolves the batch and runs the writes. */
+  (e: 'nest-pane', draggedId: string, targetId: string): void
+  /** A pane dropped on a run group's header row: make it a root of the
+   *  lineage inside that group. */
+  (e: 'root-pane', draggedId: string, workspacePath: string, runGroupId: string): void
+  /** Replace the App-owned multi-selection with exactly these panes. Fired
+   *  when a drag starts on a folded row: the hidden subtree travels with it,
+   *  and App resolves every drop from the selection, so the selection must
+   *  hold the subtree before the drop lands. */
+  (e: 'select-panes', paneIds: string[]): void
   (e: 'open-settings'): void
   (e: 'open-pipeline-manager', pipelineId?: string): void
   (e: 'open-history', workspacePath?: string): void
@@ -994,6 +1109,9 @@ const emit = defineEmits<{
   (e: 'open-git-accounts'): void
   (e: 'changes-count', count: number): void
   (e: 'rename-pane', paneId: string, name: string): void
+  /** A workspace's display name was edited. An empty `name` clears the alias
+   *  and restores the folder name. */
+  (e: 'rename-workspace', workspacePath: string, name: string): void
   (e: 'install-cli', payload: { agentKey: string; label: string }): void
   (e: 'update:collapsed', v: boolean): void
 }>()
@@ -1032,6 +1150,110 @@ function onRenameKeydown(e: KeyboardEvent): void {
   if (e.isComposing) return
   if (e.key === 'Enter') { e.preventDefault(); commitRename() }
   if (e.key === 'Escape') { e.preventDefault(); _cancelledRename = true; renamingPaneId.value = null }
+}
+
+// ── Workspace display name ───────────────────────────────────────────────────
+// Same gesture as the pane rename above — double-click the name, Enter commits,
+// Esc abandons, blur commits — because they are the same act on two rows of the
+// same list, and a second convention here would only be one more thing to learn.
+const renamingWorkspace = ref<string | null>(null)
+const wsRenameDraft = ref('')
+let _cancelledWsRename = false
+/** The alias the editor opened on, to compare the draft against on commit. */
+let _wsRenameSeed = ''
+
+/** How long a single click on another row waits before it switches.
+ *
+ *  The row is the switch, and `@dblclick.stop` on the name cannot cancel the
+ *  two clicks that already ran before it — so without this a double-click on
+ *  another row switched projects (restoring a whole project's panes behind a
+ *  cover) AND opened the editor, whose blur under the cover then committed.
+ *  The pane rows above need nothing of the sort: their click only focuses,
+ *  which is cheap and idempotent. A workspace switch is neither, so it is
+ *  deferred by one double-click interval and a double-click cancels it. */
+const WS_SWITCH_DBLCLICK_MS = 250
+let _wsSwitchTimer: ReturnType<typeof setTimeout> | null = null
+
+function cancelPendingWorkspaceSwitch(): void {
+  if (_wsSwitchTimer === null) return
+  clearTimeout(_wsSwitchTimer)
+  _wsSwitchTimer = null
+}
+
+function onWsHeadClick(path: string): void {
+  cancelPendingWorkspaceSwitch()
+  if (props.detachedWindow || path === workspacePath.value) return
+  _wsSwitchTimer = setTimeout(() => {
+    _wsSwitchTimer = null
+    emit('switch-to-workspace', path)
+  }, WS_SWITCH_DBLCLICK_MS)
+}
+
+/** A double-click on the row outside the name: still the switch, once. */
+function onWsHeadDblclick(path: string): void {
+  cancelPendingWorkspaceSwitch()
+  if (props.detachedWindow || path === workspacePath.value) return
+  emit('switch-to-workspace', path)
+}
+
+/** The name's own tooltip.
+ *
+ *  The full real path comes FIRST and unconditionally: it is what the
+ *  surrounding `.ws-text` title says, this element covers the part of the row
+ *  the pointer actually lands on, and with a display name — which may say
+ *  anything, including the same thing as another project's — the path is the
+ *  only thing left that identifies which folder the row is. The rename hint is
+ *  appended, never substituted. */
+function wsNameTitle(path: string): string {
+  return `${path}\n${i18n.global.t('action.rename-workspace')}`
+}
+
+function startWorkspaceRename(path: string): void {
+  // The double-click that opens this on another row is preceded by two clicks
+  // that each scheduled a switch; the editor opens on THIS row, not after one.
+  cancelPendingWorkspaceSwitch()
+  _cancelledWsRename = false
+  // Seeded with the ALIAS, not with what is on screen. A workspace that has no
+  // alias therefore opens EMPTY (the placeholder says the folder name is what
+  // an empty box means), which is what makes "opened the box and changed
+  // nothing" distinguishable from "typed the folder name in" on commit. Seeding
+  // the resolved label made the first one indistinguishable from the second,
+  // and blur then stored an alias equal to the folder name — in a project
+  // document the rename had to create — freezing the row's name if that folder
+  // was ever renamed on disk.
+  //
+  // This holds only because `workspaceAliases` arrives without the recent
+  // store's basename fallback (useWorkspaceAliases filters it): an alias that
+  // equals the folder name is filtered with it, so that one also opens empty
+  // and re-typing the folder name into it writes the same value back — a
+  // no-op for the document, and the price of the filter.
+  _wsRenameSeed = workspaceAliasOf(path, props.workspaceAliases)
+  wsRenameDraft.value = _wsRenameSeed
+  renamingWorkspace.value = path
+}
+
+function commitWorkspaceRename(): void {
+  if (_cancelledWsRename || !renamingWorkspace.value) return
+  const path = renamingWorkspace.value
+  const next = wsRenameDraft.value.trim()
+  renamingWorkspace.value = null
+  // An unchanged draft is not a rename. Blur commits, so double-clicking a name
+  // to select a word and then clicking away would otherwise emit a write — and
+  // the backend's rename uses load_or_create, so that write CREATES the project
+  // document in a workspace the user only looked at.
+  if (next === _wsRenameSeed) return
+  // Empty means "clear the alias" — sent as-is, not dropped: the placeholder
+  // says so, and swallowing it would make the one way back to the folder name
+  // look broken.
+  emit('rename-workspace', path, next)
+}
+
+function onWsRenameKeydown(e: KeyboardEvent): void {
+  // Ignore the Enter/Escape an IME sends while composing — that keystroke
+  // confirms candidate selection, not the rename.
+  if (e.isComposing) return
+  if (e.key === 'Enter') { e.preventDefault(); commitWorkspaceRename() }
+  if (e.key === 'Escape') { e.preventDefault(); _cancelledWsRename = true; renamingWorkspace.value = null }
 }
 
 function agentTypeLabel(agentKey: string): string {
@@ -1492,15 +1714,15 @@ function selectSidebarTab(tab: SidebarTab): void {
 // Rail entries mirror the tab strip. Emoji icons rather than the strip's inline
 // SVGs: the rail is 36px wide, and copying five <path> blobs to render them at
 // half size buys nothing over the icon convention TokenStatsPanel's rail set.
-// `title` keeps its shortcut hint: Cmd+1..5 are bound to SIDEBAR_TABS by
+// `shortcut` keeps its hint: Cmd+1..5 are bound to SIDEBAR_TABS by
 // position in that list, not by position in the strip, so reordering the strip
 // leaves the hints correct.
-const RAIL_TABS: { id: SidebarTab; icon?: string; label: string; title: string; path: string }[] = [
-  { id: 'agents', icon: '\u{1F916}', label: 'label.agents', title: 'Agents (\u23181)', path: 'M2 3.5a1.25 1.25 0 1 1 2.5 0 1.25 1.25 0 0 1-2.5 0Zm0 4.5a1.25 1.25 0 1 1 2.5 0A1.25 1.25 0 0 1 2 8Zm0 4.5a1.25 1.25 0 1 1 2.5 0 1.25 1.25 0 0 1-2.5 0ZM6.5 2.75A.75.75 0 0 1 7.25 2h7a.75.75 0 0 1 0 1.5h-7a.75.75 0 0 1-.75-.75Zm0 4.5A.75.75 0 0 1 7.25 6.5h7a.75.75 0 0 1 0 1.5h-7a.75.75 0 0 1-.75-.75Zm0 4.5a.75.75 0 0 1 .75-.75h7a.75.75 0 0 1 0 1.5h-7a.75.75 0 0 1-.75-.75Z' },
-  { id: 'pipeline', icon: '\u{1F500}', label: 'label.pipeline', title: 'Pipeline (\u23182)', path: 'M0 1.75C0 .784.784 0 1.75 0h3.5C6.216 0 7 .784 7 1.75v3.5A1.75 1.75 0 0 1 5.25 7H4v4a1 1 0 0 0 1 1h4v-1.25C9 9.784 9.784 9 10.75 9h3.5c.966 0 1.75.784 1.75 1.75v3.5A1.75 1.75 0 0 1 14.25 16h-3.5A1.75 1.75 0 0 1 9 14.25v-.75H5A2.5 2.5 0 0 1 2.5 11V7h-.75A1.75 1.75 0 0 1 0 5.25Zm1.75-.25a.25.25 0 0 0-.25.25v3.5c0 .138.112.25.25.25h3.5a.25.25 0 0 0 .25-.25v-3.5a.25.25 0 0 0-.25-.25Zm9 9a.25.25 0 0 0-.25.25v3.5c0 .138.112.25.25.25h3.5a.25.25 0 0 0 .25-.25v-3.5a.25.25 0 0 0-.25-.25Z' },
-  { id: 'explorer', icon: '\u{1F4C1}', label: 'label.explorer', title: 'Explorer (\u23183)', path: 'M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5L6.2 1.7A1.75 1.75 0 0 0 4.96 1H1.75Z' },
-  { id: 'git', label: 'label.git', title: 'Git (\u23184)', path: 'M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25z' },
-  { id: 'plans', icon: '\u{1F4CB}', label: 'label.plans', title: 'Plans (\u23185)', path: 'M5 2a1 1 0 0 0-1 1H2.75A1.75 1.75 0 0 0 1 4.75v9.5c0 .966.784 1.75 1.75 1.75h10.5A1.75 1.75 0 0 0 15 14.25v-9.5A1.75 1.75 0 0 0 13.25 3H12a1 1 0 0 0-1-1H5Zm0 2h6v1a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4Zm-2.25.5H4a2.5 2.5 0 0 0 2 1h4a2.5 2.5 0 0 0 2-1h1.25a.25.25 0 0 1 .25.25v9.5a.25.25 0 0 1-.25.25H2.75a.25.25 0 0 1-.25-.25v-9.5a.25.25 0 0 1 .25-.25Z' },
+const RAIL_TABS: { id: SidebarTab; icon?: string; label: string; shortcut: string; path: string }[] = [
+  { id: 'agents', icon: '\u{1F916}', label: 'label.agents', shortcut: '1', path: 'M2 3.5a1.25 1.25 0 1 1 2.5 0 1.25 1.25 0 0 1-2.5 0Zm0 4.5a1.25 1.25 0 1 1 2.5 0A1.25 1.25 0 0 1 2 8Zm0 4.5a1.25 1.25 0 1 1 2.5 0 1.25 1.25 0 0 1-2.5 0ZM6.5 2.75A.75.75 0 0 1 7.25 2h7a.75.75 0 0 1 0 1.5h-7a.75.75 0 0 1-.75-.75Zm0 4.5A.75.75 0 0 1 7.25 6.5h7a.75.75 0 0 1 0 1.5h-7a.75.75 0 0 1-.75-.75Zm0 4.5a.75.75 0 0 1 .75-.75h7a.75.75 0 0 1 0 1.5h-7a.75.75 0 0 1-.75-.75Z' },
+  { id: 'pipeline', icon: '\u{1F500}', label: 'label.pipeline', shortcut: '2', path: 'M0 1.75C0 .784.784 0 1.75 0h3.5C6.216 0 7 .784 7 1.75v3.5A1.75 1.75 0 0 1 5.25 7H4v4a1 1 0 0 0 1 1h4v-1.25C9 9.784 9.784 9 10.75 9h3.5c.966 0 1.75.784 1.75 1.75v3.5A1.75 1.75 0 0 1 14.25 16h-3.5A1.75 1.75 0 0 1 9 14.25v-.75H5A2.5 2.5 0 0 1 2.5 11V7h-.75A1.75 1.75 0 0 1 0 5.25Zm1.75-.25a.25.25 0 0 0-.25.25v3.5c0 .138.112.25.25.25h3.5a.25.25 0 0 0 .25-.25v-3.5a.25.25 0 0 0-.25-.25Zm9 9a.25.25 0 0 0-.25.25v3.5c0 .138.112.25.25.25h3.5a.25.25 0 0 0 .25-.25v-3.5a.25.25 0 0 0-.25-.25Z' },
+  { id: 'explorer', icon: '\u{1F4C1}', label: 'label.explorer', shortcut: '3', path: 'M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5L6.2 1.7A1.75 1.75 0 0 0 4.96 1H1.75Z' },
+  { id: 'git', label: 'label.git', shortcut: '4', path: 'M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25z' },
+  { id: 'plans', icon: '\u{1F4CB}', label: 'label.plans', shortcut: '5', path: 'M5 2a1 1 0 0 0-1 1H2.75A1.75 1.75 0 0 0 1 4.75v9.5c0 .966.784 1.75 1.75 1.75h10.5A1.75 1.75 0 0 0 15 14.25v-9.5A1.75 1.75 0 0 0 13.25 3H12a1 1 0 0 0-1-1H5Zm0 2h6v1a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4Zm-2.25.5H4a2.5 2.5 0 0 0 2 1h4a2.5 2.5 0 0 0 2-1h1.25a.25.25 0 0 1 .25.25v9.5a.25.25 0 0 1-.25.25H2.75a.25.25 0 0 1-.25-.25v-9.5a.25.25 0 0 1 .25-.25Z' },
 ]
 
 // Ordered by the slot, not by the table above: moving a view also reorders it.
@@ -1573,6 +1795,76 @@ const modalAgent = ref<string>(pickedAgent.value)
 const activeSpawnAgent = computed(() =>
   manualSpawnOpen.value ? modalAgent.value : pickedAgent.value
 )
+
+// ── Model / reasoning effort for the next spawn ───────────────────────────────
+// Which fields appear is answered by the vendor spec, never by a list kept
+// here: a CLI that declares no `modelArgs` gets no Model field, and one with no
+// `effortArgs` no Effort field. droid and aider declare neither and so show
+// nothing — droid accepts an unknown --model and ignores it, so offering the
+// control would be a promise the spawn cannot keep.
+//
+// Effort is a select because `knownEfforts` is a small closed vocabulary the
+// spec states outright. Model is free text because model ids change with every
+// vendor release: a build-time list here would reject valid ids the day after
+// it shipped, which is the same reason modelArgsFor refuses to validate them.
+const pickedModel = ref<string>('')
+const pickedEffort = ref<string>('')
+
+/** The spec behind the dialog's current pick, for the capability questions. */
+const spawnModelSpec = computed(() =>
+  manualAgentSpecs.value.find((s) => s.agentKey === activeSpawnAgent.value)
+)
+const canPickModel = computed(() => supportsModel(spawnModelSpec.value))
+const canPickEffort = computed(() => supportsEffort(spawnModelSpec.value))
+const effortOptions = computed<readonly string[]>(() => spawnModelSpec.value?.knownEfforts ?? [])
+
+/** The stored per-vendor default, which is what a pane starts on when nothing
+ *  is typed in the dialog. Read fresh rather than cached: Settings writes this
+ *  key from another surface, and a stale copy would launch the old pick. */
+function storedModelDefault(agentKey: string): { model: string; effort: string } {
+  return parseCliModelDefault(settingsGet<unknown>(cliModelKey(agentKey), null))
+}
+
+/** Seed the dialog's fields from the vendor's stored default. Called whenever
+ *  the dialog's CLI changes, because a model id belongs to one vendor's
+ *  namespace — carrying `opus-5` over to codex would spawn a refusal. */
+function seedModelPick(agentKey: string): void {
+  commandShadowsModel.value = launchesOnStoredCommand(agentKey)
+  // Nothing to seed when the stored launch command wins: the fields are
+  // disabled, and showing the stored model in them would read as applied.
+  const stored = commandShadowsModel.value ? { model: '', effort: '' } : storedModelDefault(agentKey)
+  pickedModel.value = stored.model
+  pickedEffort.value = stored.effort
+}
+
+/** Whether a fresh pane of this agent launches on the user's stored launch
+ *  command (Settings → CLI Agents). That line runs verbatim, so a model or
+ *  effort picked here could not reach the CLI — the fields say so instead of
+ *  taking a pick that would be dropped. Read fresh, like storedModelDefault. */
+function launchesOnStoredCommand(agentKey: string): boolean {
+  return chooseLaunchCommand({
+    callerCommand: '',
+    storedCommand: settingsGet<string>(cliCommandKey(agentKey), ''),
+    isLogin: false,
+  }).source === 'stored'
+}
+/** Set with the seed, when the dialog opens or changes CLI. */
+const commandShadowsModel = ref<boolean>(false)
+watch([manualSpawnOpen, modalAgent], () => {
+  if (manualSpawnOpen.value) seedModelPick(modalAgent.value)
+})
+
+/** Why the current pick cannot be launched, or '' when it can. Uses the same
+ *  helper the spawn command is built from, so the gate and the argv can never
+ *  disagree about what this vendor accepts. */
+const modelRefusal = computed<string>(() => {
+  const request = { model: pickedModel.value.trim(), effort: pickedEffort.value.trim() }
+  if (!request.model && !request.effort) return ''
+  const chosen = modelArgsFor({ spec: spawnModelSpec.value, request })
+  if (chosen.ok) return ''
+  const { key, params } = modelRefusalMessage(activeSpawnAgent.value, chosen.refusal, request.effort)
+  return i18n.global.t(key, params)
+})
 const pipelineOpen = ref<boolean>(true)
 // Manual spawn used to be a card, and a spawn-mode workspace opened with it
 // already expanded. As a dialog that same default means it appears over the
@@ -1626,7 +1918,7 @@ const resumeOptions = computed<{ sessionId: string; label: string; workspacePath
     if (seen.has(sid)) continue
     seen.add(sid)
     const when = entry.spawnedAt ? entry.spawnedAt.slice(0, 16).replace('T', ' ') : '—'
-    const ws = entry.workspacePath.split('/').filter(Boolean).pop() ?? entry.workspacePath
+    const ws = workspaceDisplayName(entry.workspacePath, props.workspaceAliases)
     out.push({
       sessionId: sid,
       label: `${entry.customName || entry.agentLabel} · ${entry.roleLabel || '—'} · ${ws} · ${when}`,
@@ -1695,12 +1987,26 @@ const spawnWorkspaceOverride = ref<string>('')
 const spawnGroupOverride = ref<string>('')
 
 function emitSpawn(agentKey: string): void {
+  // The dialog's fields are the pick only while the dialog is open and is
+  // showing THIS agent. Every other entry point (the ＋ menu, the heading
+  // button) spawns without the dialog ever rendering, so it takes the vendor's
+  // stored default — reading the fields there would launch whichever CLI's
+  // model happened to be left in them.
+  // A stored launch command sends neither — it would be dropped on the way to
+  // argv, and a spawn must never carry a pick the CLI does not receive.
+  const pick = launchesOnStoredCommand(agentKey)
+    ? { model: '', effort: '' }
+    : manualSpawnOpen.value && agentKey === activeSpawnAgent.value
+      ? { model: pickedModel.value.trim(), effort: pickedEffort.value.trim() }
+      : storedModelDefault(agentKey)
   emit('spawn', {
     agentKey,
     roleKey: pickedRole.value,
     stageId: '',
     workspacePath: spawnWorkspaceOverride.value || workspacePath.value,
-    runGroupId: spawnGroupOverride.value || undefined
+    runGroupId: spawnGroupOverride.value || undefined,
+    model: pick.model || undefined,
+    effort: pick.effort || undefined
   })
   spawnWorkspaceOverride.value = ''
   spawnGroupOverride.value = ''
@@ -1713,10 +2019,11 @@ const pickedAgentLabel = computed(
 )
 
 // ── The ＋ menu on this window's workspace heading ────────────────────────────
-// The default CLI and role for a one-click spawn: it reads and writes
-// pickedAgent/pickedRole, which is what its ✓ marks. The Manual spawn dialog
-// keeps its own CLI pick (modalAgent) instead — it is where you go to run
-// something other than the default, and doing so must not reset the default.
+// The default CLI and role for a one-click spawn: it reads pickedAgent/pickedRole,
+// which is what its ✓ marks. Picking another CLI from the menu opens it once
+// without moving the default. The Manual spawn dialog keeps its own CLI pick
+// (modalAgent) instead — it is where you go to run something other than the
+// default, and doing so must not reset the default either.
 const addMenuOpen = ref<boolean>(false)
 /** Which workspace heading opened the menu, so a pick starts there. */
 const addMenuWorkspace = ref<string>('')
@@ -1833,6 +2140,207 @@ function toggleGroup(wsPath: string, id: string): void {
   collapsedGroups.value = next
 }
 
+/** One run-group section as the list draws it. */
+type GroupSection = ReturnType<typeof groupSectionsOf>[number]
+
+/** The rows of one run group that HAVE a subtree to fold.
+ *
+ *  The same judgement foldableGroupsOf makes one level up: a leaf carries no
+ *  subtree, so counting it would leave the button reading "expand" over a
+ *  group where nothing on screen is folded. */
+function foldableRowsOf(g: GroupSection): GroupSection['rows'] {
+  return g.rows.filter((r) => r.hasChildren)
+}
+
+/** Whether this group already has every subtree inside it folded. */
+function isGroupFolded(g: GroupSection): boolean {
+  const rows = foldableRowsOf(g)
+  return rows.length > 0 && rows.every((r) => r.collapsed)
+}
+
+/** Whether this group has anything to fold at all. A group of leaves gets no
+ *  button rather than one that does nothing when pressed. */
+function canFoldGroup(g: GroupSection): boolean {
+  return foldableRowsOf(g).length > 0
+}
+
+/** Fold or unfold every lineage subtree inside ONE run group.
+ *
+ *  The run-group twin of toggleWorkspaceFold, and the same single-toggle
+ *  judgement: with everything already folded, a "collapse" that does nothing
+ *  is a button that looks broken, so the label and icon follow the state.
+ *
+ *  The heading itself is left alone on purpose — the caret beside it is what
+ *  hides the group; this empties the group without hiding it.
+ *
+ *  It names the rows rather than letting App re-derive them: these are the
+ *  rows the list actually drew under this heading, so a pane that has moved
+ *  to another group cannot be folded by the group it left. */
+function toggleGroupFold(ws: WorkspaceGroupRow | null, g: GroupSection): void {
+  if (!ws || !canFoldGroup(g)) return
+  const collapse = !isGroupFolded(g)
+  emit(
+    'collapse-pane-subtrees',
+    ws.path,
+    foldableRowsOf(g).map((r) => r.pane.id),
+    collapse
+  )
+}
+
+/** The group caret's click, carrying the same two gestures as the workspace
+ *  caret one level up: plain click folds the group itself, Alt/Option+click
+ *  reaches the fold button beside it. */
+function onGrpCaretClick(ws: WorkspaceGroupRow | null, g: GroupSection, ev: MouseEvent): void {
+  if (ev.altKey) {
+    toggleGroupFold(ws, g)
+    return
+  }
+  toggleGroup(ws?.path ?? '', g.id)
+}
+
+/** The run groups of one workspace that HAVE a heading to fold.
+ *
+ *  A workspace whose panes belong to no run group renders one nameless
+ *  section with no caret of its own (`bare` in groupSectionsOf). Counting it
+ *  would leave the fold button reading "expand" over a row that shows nothing
+ *  folded, because there is no heading on screen to have folded. */
+function foldableGroupsOf(ws: WorkspaceGroupRow): WorkspaceGroupRow['groups'] {
+  const bare = ws.groups.length <= 1 && (ws.groups[0]?.id ?? '') === ''
+  return bare ? [] : ws.groups
+}
+
+/** Whether one workspace already has everything below its heading folded.
+ *
+ *  Both layers, because the button folds both: the run group headings, and
+ *  every lineage subtree inside them. A leaf has no subtree to fold, so it
+ *  never keeps this false. */
+function isWorkspaceFolded(ws: WorkspaceGroupRow): boolean {
+  const groups = foldableGroupsOf(ws)
+  return (
+    groups.every((g) => isGroupCollapsed(ws.path, g.id)) &&
+    ws.groups.every((g) => g.rows.every((r) => !r.hasChildren || r.collapsed))
+  )
+}
+
+/** Whether this workspace has anything to fold at all — a group heading or a
+ *  pane with children. Flat projects get a disabled button rather than one
+ *  that looks broken when pressed. */
+function canFoldWorkspace(ws: WorkspaceGroupRow): boolean {
+  return foldableGroupsOf(ws).length > 0 || ws.groups.some((g) => g.rows.some((r) => r.hasChildren))
+}
+
+/** Fold or unfold everything below ONE workspace heading.
+ *
+ *  The per-workspace twin of toggleAllWorkspaces, and the same single-toggle
+ *  judgement: with everything already folded, a "collapse" that does nothing
+ *  is a button that looks broken, so the label and icon follow the state.
+ *
+ *  The heading itself is left alone on purpose. Folding it too would make this
+ *  button a slower duplicate of the caret beside it; what it does instead is
+ *  empty the project without hiding it. */
+function toggleWorkspaceFold(ws: WorkspaceGroupRow): void {
+  if (!canFoldWorkspace(ws)) return
+  const collapse = !isWorkspaceFolded(ws)
+  const next = new Set(collapsedGroups.value)
+  for (const g of foldableGroupsOf(ws)) {
+    const key = groupKey(ws.path, g.id)
+    if (collapse) next.add(key)
+    else next.delete(key)
+  }
+  collapsedGroups.value = next
+  // The subtrees live in App's collapsedPanes and are persisted per pane, so
+  // this half cannot be done here.
+  emit('collapse-workspace-subtrees', ws.path, collapse)
+}
+
+/** The heading caret's click, which carries two gestures.
+ *
+ *  Plain click folds the workspace itself. Alt/Option+click reaches the same
+ *  action the fold button runs — the explorer convention, kept as the fast
+ *  path for when the pointer is already on the caret. The button is what
+ *  makes the gesture discoverable; this is what makes it quick. */
+function onWsCaretClick(ws: WorkspaceGroupRow, ev: MouseEvent): void {
+  if (ev.altKey) {
+    toggleWorkspaceFold(ws)
+    return
+  }
+  emit('toggle-workspace', ws.path)
+}
+
+/** Which workspace heading has its ⋯ menu open; empty for none.
+ *
+ *  Rebuild-all and history moved in here to make room for the fold button
+ *  without taking width from the name, which at the sidebar's 240px minimum
+ *  is the part that runs out first. */
+const wsMoreMenuPath = ref<string>('')
+const wsMoreMenuStyle = ref<Record<string, string>>({})
+const wsMoreMenuEl = ref<HTMLElement | null>(null)
+
+function toggleWsMoreMenu(ev: MouseEvent, path: string): void {
+  if (wsMoreMenuPath.value === path) {
+    closeWsMoreMenu()
+    return
+  }
+  // Mutually exclusive with the ＋ roster: both anchor to the same row, and
+  // two panels open over one heading is never what a click on either meant.
+  addMenuOpen.value = false
+  const btn = ev.currentTarget as HTMLElement | null
+  const box = btn?.getBoundingClientRect()
+  wsMoreMenuStyle.value = box
+    ? { top: `${Math.round(box.bottom + 4)}px`, left: `${Math.round(Math.max(8, box.right - 168))}px` }
+    : {}
+  wsMoreMenuPath.value = path
+  if (!box) return
+  const openingStyle = wsMoreMenuStyle.value
+  void nextTick(() => {
+    const menu = wsMoreMenuEl.value
+    // A close/reopen of the same workspace must not reuse the older anchor.
+    if (!menu || wsMoreMenuPath.value !== path || wsMoreMenuStyle.value !== openingStyle) return
+    const height = menu.getBoundingClientRect().height
+    wsMoreMenuStyle.value = {
+      ...openingStyle,
+      top: `${Math.round(Math.max(8, Math.min(box.bottom + 4, window.innerHeight - height - 8)))}px`,
+    }
+  })
+}
+
+function closeWsMoreMenu(): void {
+  wsMoreMenuPath.value = ''
+}
+
+/** Same floor as the right-click menu's: a window must keep one workspace, so
+ *  the close rows only appear for a project that has somewhere to land. */
+const wsMoreCanClose = computed(
+  () => !!wsMoreMenuPath.value && (wsMoreMenuPath.value !== workspacePath.value || canCloseCurrent.value)
+)
+
+function wsMoreAction(kind: WorkspaceActionKind): void {
+  const path = wsMoreMenuPath.value
+  if (!path) return
+  closeWsMoreMenu()
+  workspaceAction(kind, path)
+}
+
+/** Rename from the ⋯ menu, for the same reason the context menu has its own
+ *  route: double-clicking the name would switch to that workspace first, which
+ *  restores a whole project's panes — far more than "rename" asked for. */
+function wsMoreRename(): void {
+  const path = wsMoreMenuPath.value
+  if (!path) return
+  closeWsMoreMenu()
+  startWorkspaceRename(path)
+}
+
+/** Detach without the drag. The drag hands over where it was released; from a
+ *  menu the click is the only position we have, which puts the new window at
+ *  the pointer — the same place the gesture would have left it. */
+function wsMoreDetach(ev: MouseEvent): void {
+  const path = wsMoreMenuPath.value
+  if (!path || !canDetachWorkspace.value) return
+  closeWsMoreMenu()
+  emit('detach-workspace', path, ev.screenX, ev.screenY)
+}
+
 /** The heading a workspace drag is hovering, for the drop line. */
 const wsDragOverPath = ref<string>('')
 let draggingWorkspacePath = ''
@@ -1907,7 +2415,7 @@ function onWsDragEnd(e: DragEvent, path: string): void {
  *  and then jumps is worse than one placed from a constant. Kept generous:
  *  overshooting flips a menu that would have fitted, undershooting lets one
  *  hang off the edge, and only the second is a bug. */
-const WS_MENU_H = 96
+const WS_MENU_H = 124
 const WS_MENU_W = 170
 
 function openWsMenu(ev: MouseEvent, path: string, canClose: boolean): void {
@@ -1946,13 +2454,37 @@ onUnmounted(() => {
   document.removeEventListener('scroll', closeWsMenu, true)
 })
 
-function wsMenuAction(kind: 'reveal' | 'copy' | 'close'): void {
+/** Rename from the context menu — the safe route for a workspace that is NOT
+ *  the one on screen. Double-clicking its name would switch to it first (the
+ *  row is the switch), and switching restores a whole project's panes, which is
+ *  far more than the gesture asked for. */
+function startWorkspaceRenameFromMenu(): void {
   const m = wsMenu.value
   if (!m) return
   closeWsMenu()
-  if (kind === 'reveal') emit('reveal-workspace-folder', m.path)
-  else if (kind === 'copy') void navigator.clipboard?.writeText(m.path)
-  else emit('close-workspace', m.path)
+  startWorkspaceRename(m.path)
+}
+
+type WorkspaceActionKind = 'reveal' | 'copy' | 'close' | 'close-keep-panes' | 'reclaim'
+
+/** The action itself, addressed by path so both of a heading's menus can run
+ *  it: the row's right-click menu and the ⋯ overflow. Kept apart from either
+ *  menu's state — the two open from different gestures and close themselves
+ *  differently, and a shared action that read one of their refs would do the
+ *  right thing from one menu and nothing from the other. */
+function workspaceAction(kind: WorkspaceActionKind, path: string): void {
+  if (kind === 'reveal') emit('reveal-workspace-folder', path)
+  else if (kind === 'copy') void navigator.clipboard?.writeText(path)
+  else if (kind === 'close-keep-panes') emit('close-workspace-keep-panes', path)
+  else if (kind === 'reclaim') emit('reclaim-workspace-panes', path)
+  else emit('close-workspace', path)
+}
+
+function wsMenuAction(kind: WorkspaceActionKind): void {
+  const m = wsMenu.value
+  if (!m) return
+  closeWsMenu()
+  workspaceAction(kind, m.path)
 }
 // Fixed, not absolute: the pane list scrolls under `overflow-y: auto`, which
 // would clip a menu positioned inside it.
@@ -1988,11 +2520,11 @@ function toggleAddMenu(ev: MouseEvent, wsPath = '', groupId = ''): void {
   addMenuOpen.value = true
 }
 
-/** Pick a CLI from the menu and open it. Writing pickedAgent first means the
- *  card agrees with what just happened, and that spawn() takes its usual path —
- *  including the guided install for a CLI that is not there. */
+/** Pick a CLI from the menu and open it. This is a one-off: pickedAgent stays
+ *  as it is, so the ✓ and what ＋ opens next time do not follow the pick.
+ *  spawn() still takes its usual path — including the guided install for a CLI
+ *  that is not there. */
 function spawnAs(agentKey: string): void {
-  pickedAgent.value = agentKey
   spawnWorkspaceOverride.value = addMenuWorkspace.value
   spawnGroupOverride.value = addMenuGroup.value
   addMenuOpen.value = false
@@ -2044,6 +2576,38 @@ onUnmounted(() => document.removeEventListener('keydown', onSpawnModalKeydown))
 function closeAddMenu(): void {
   addMenuOpen.value = false
 }
+
+// Same three dismissals the ＋ roster uses, for the same reasons: a click
+// anywhere else, Escape, and scroll outside the menu (captured — the pane
+// list scrolls and its events do not bubble, so without this the menu hangs
+// over whatever scrolled into the button's old place).
+function onWsMoreMenuKeydown(e: KeyboardEvent): void {
+  if (e.key === 'Escape') closeWsMoreMenu()
+}
+function onWsMoreMenuScroll(e: Event): void {
+  if (e.target instanceof Node && wsMoreMenuEl.value?.contains(e.target)) return
+  closeWsMoreMenu()
+}
+watch(wsMoreMenuPath, (path) => {
+  if (path) {
+    document.addEventListener('click', closeWsMoreMenu)
+    document.addEventListener('keydown', onWsMoreMenuKeydown)
+    document.addEventListener('scroll', onWsMoreMenuScroll, true)
+  } else {
+    document.removeEventListener('click', closeWsMoreMenu)
+    document.removeEventListener('keydown', onWsMoreMenuKeydown)
+    document.removeEventListener('scroll', onWsMoreMenuScroll, true)
+  }
+})
+onUnmounted(() => {
+  document.removeEventListener('click', closeWsMoreMenu)
+  document.removeEventListener('keydown', onWsMoreMenuKeydown)
+  document.removeEventListener('scroll', onWsMoreMenuScroll, true)
+})
+// The ＋ roster closes this one too, so opening either never leaves both up.
+watch(addMenuOpen, (open) => {
+  if (open) closeWsMoreMenu()
+})
 
 watch(addMenuOpen, (open) => {
   if (open) {
@@ -2255,6 +2819,7 @@ function onWindowBlur(): void {
 window.addEventListener('focus', onWindowFocus)
 window.addEventListener('blur', onWindowBlur)
 onUnmounted(() => {
+  cancelPendingWorkspaceSwitch()
   window.removeEventListener('focus', onWindowFocus)
   window.removeEventListener('blur', onWindowBlur)
 })
@@ -2279,9 +2844,22 @@ let draggingPaneId = ''
 // Rendered as dragging, and excluded from being a drop target for itself.
 const draggingBatchIds = ref<string[]>([])
 
-function onAgentDragStart(e: DragEvent, paneId: string): void {
+function onAgentDragStart(e: DragEvent, paneId: string, folded = false): void {
   if (!e.dataTransfer) return
-  const batch = resolveDragBatch(paneId, props.selectedPaneIds, props.panes.map((p) => p.id))
+  const orderedIds = props.panes.map((p) => p.id)
+  let batch = resolveDragBatch(paneId, props.selectedPaneIds, orderedIds)
+  // A folded row stands for its whole subtree, so the drag carries the hidden
+  // descendants as if they had been multi-selected — otherwise a tab or window
+  // drop moves the parent alone and the children it was hiding stay behind.
+  // Only THIS row's subtree joins: an expanded parent elsewhere in the
+  // selection keeps the single-row drag it always had.
+  if (folded) {
+    const carried = new Set([...batch, ...withDescendants([paneId], props.panes)])
+    if (carried.size > batch.length) {
+      batch = orderedIds.filter((id) => carried.has(id))
+      emit('select-panes', batch)
+    }
+  }
   e.dataTransfer.setData('application/x-pane-id', paneId)
   // Only a real batch writes the MIME — its presence is what marks a batch drag
   // for drop targets, including ones in another window.
@@ -2302,11 +2880,46 @@ function onAgentDragEnd(e: DragEvent): void {
   draggingPaneId = ''
   draggingBatchIds.value = []
   reorderDragOverId.value = ''
+  nestDragOverId.value = ''
+  rootDragOverKey.value = ''
   // Cross-window handoff, same contract as TerminalPane's header dragend:
   // dropEffect 'none' ⇒ nothing in this window consumed the drag, so let main
   // route the pane to whatever window sits under the release point.
   if (!paneId || e.dataTransfer?.dropEffect !== 'none') return
   window.agentTeam?.cliPaneDragEnd?.(paneId, e.screenX, e.screenY, batch)
+}
+
+// A row is two drop targets stacked: its middle band nests the dragged pane
+// under it, its top and bottom edges keep the reorder that was here first.
+// The band is decided from the pointer's position over the row on every
+// dragover, so the same drag can slide from one meaning to the other.
+const nestDragOverId = ref('')
+/** True when the pointer sits in the nest band: 30%–70% of the row's NAME
+ *  line, not of the whole <li> — the focused row is expanded with detail
+ *  lines below the name, and measured whole its name sat in the top 30%, so
+ *  dropping on the focused pane's name could only ever reorder. */
+function inNestBand(e: DragEvent): boolean {
+  const li = e.currentTarget as HTMLElement
+  const rect = (li.querySelector('.agent-line') ?? li).getBoundingClientRect()
+  if (!rect.height) return false
+  const frac = (e.clientY - rect.top) / rect.height
+  return frac >= 0.3 && frac <= 0.7
+}
+/** Whether nesting this window's in-flight batch under `targetId` would be
+ *  accepted. Exact for a drag the sidebar started (the batch is known);
+ *  a drag from a pane header or a layout card carries an unreadable payload
+ *  during dragover, so it is allowed here and decided on drop. */
+function nestAllowed(targetId: string): boolean {
+  const batch = draggingBatchIds.value
+  if (!batch.length) return true
+  return resolveLineageDrop(batch, targetId, props.panes).ok
+}
+/** Same pre-check for the group header: the batch must belong to that
+ *  workspace, and must not already be roots of that group. */
+function rootAllowed(workspacePath: string, runGroupId: string): boolean {
+  const batch = draggingBatchIds.value
+  if (!batch.length) return true
+  return resolveRootDrop(batch, workspacePath, runGroupId, props.panes).ok
 }
 
 function onAgentDragOver(e: DragEvent, paneId: string): void {
@@ -2315,19 +2928,60 @@ function onAgentDragOver(e: DragEvent, paneId: string): void {
     || draggingBatchIds.value.includes(paneId)
     || !e.dataTransfer?.types.includes('application/x-pane-id')
   ) return
+  if (inNestBand(e)) {
+    reorderDragOverId.value = ''
+    if (!nestAllowed(paneId)) {
+      nestDragOverId.value = ''
+      return
+    }
+    nestDragOverId.value = paneId
+  } else {
+    nestDragOverId.value = ''
+    reorderDragOverId.value = paneId
+  }
   e.preventDefault()
-  reorderDragOverId.value = paneId
 }
 
 function onAgentDragLeave(paneId: string): void {
   if (reorderDragOverId.value === paneId) reorderDragOverId.value = ''
+  if (nestDragOverId.value === paneId) nestDragOverId.value = ''
 }
 
 function onAgentDrop(e: DragEvent, paneId: string): void {
   reorderDragOverId.value = ''
+  nestDragOverId.value = ''
   const draggedId = e.dataTransfer?.getData('application/x-pane-id') || ''
   if (!draggedId || draggedId === paneId) return
-  emit('reorder-pane', draggedId, paneId)
+  if (inNestBand(e)) emit('nest-pane', draggedId, paneId)
+  else emit('reorder-pane', draggedId, paneId)
+}
+
+// The group header is a third target: drop a pane on it to make it a root of
+// the lineage in that group. Only a workspace with real groups draws one, so
+// the ungrouped-only list has no make-root gesture.
+const rootDragOverKey = ref('')
+const groupDropKey = (workspacePath: string, runGroupId: string): string =>
+  `${workspacePath}/${runGroupId}`
+
+function onGroupDragOver(e: DragEvent, workspacePath: string, runGroupId: string): void {
+  if (!e.dataTransfer?.types.includes('application/x-pane-id')) return
+  if (!rootAllowed(workspacePath, runGroupId)) {
+    rootDragOverKey.value = ''
+    return
+  }
+  e.preventDefault()
+  rootDragOverKey.value = groupDropKey(workspacePath, runGroupId)
+}
+
+function onGroupDragLeave(workspacePath: string, runGroupId: string): void {
+  if (rootDragOverKey.value === groupDropKey(workspacePath, runGroupId)) rootDragOverKey.value = ''
+}
+
+function onGroupDrop(e: DragEvent, workspacePath: string, runGroupId: string): void {
+  rootDragOverKey.value = ''
+  const draggedId = e.dataTransfer?.getData('application/x-pane-id') || ''
+  if (!draggedId) return
+  emit('root-pane', draggedId, workspacePath, runGroupId)
 }
 
 function onWorkspaceDrop(e: DragEvent): void {
@@ -2422,9 +3076,12 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
           { 'plugin-tab-btn': t.id === 'git' && !legacyGitRecovery && gitPluginTab },
           { active: sidebarTab === t.id || (t.id === 'git' && gitPluginTab?.tabId === sidebarTab) }
         ]"
+        :data-tab="t.id"
         :data-legacy-git-tab="t.id === 'git' && legacyGitRecovery ? '' : undefined"
         :data-plugin-contribution="t.id === 'git' && !legacyGitRecovery ? gitPluginTab?.contributionKey : undefined"
-        :title="t.id === 'git' && gitPluginTab ? `${gitPluginTab.title} (⌘4)` : t.title"
+        :title="t.id === 'git' && gitPluginTab
+          ? `${gitPluginTab.title} (⌘4)`
+          : `${$t(t.label)} (⌘${t.shortcut})`"
         @click="selectSidebarTab(t.id)"
       >
         <template v-if="t.id === 'git' && !legacyGitRecovery && gitPluginTab">
@@ -2488,10 +3145,17 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
         :class="{ 'part-top-plugin': sidebarTab === 'plans' && !legacyPlansRecovery }"
         style="flex: 1"
       >
+        <!-- The ALIAS, not the resolved display name: an unnamed workspace must
+             reach ExplorerPane as empty so its own basename fallback runs, which
+             keeps one place deciding what a nameless workspace is called. Empty
+             because the map has no basename-fallback entries (useWorkspaceAliases
+             leaves the recent store's folder-name mirror out), not because this
+             lookup strips them. -->
         <ExplorerPane
           v-if="backend && visibleTabIds.has('explorer')"
           v-show="sidebarTab === 'explorer'"
           :workspace-path="workspace ?? ''"
+          :workspace-display-name="workspaceAliasOf(workspace ?? '', workspaceAliases)"
           :backend="backend"
         />
         <!-- Generic plugin views are mounted by contribution key; the renderer
@@ -2593,7 +3257,7 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
     <section class="block panel-section">
       <div class="row between">
         <label class="lbl">{{ $t('label.pipelines') }}</label>
-        <button class="ghost manage-btn" title="Manage pipelines" @click="openPipelineManager()">⚙</button>
+        <button class="ghost manage-btn" :title="$t('action.manage-pipelines')" @click="openPipelineManager()">⚙</button>
       </div>
       <ul v-if="pipelines && pipelines.length && pipeline.state !== 'running' && pipeline.state !== 'aborted'" class="pipeline-list">
         <li
@@ -2890,33 +3554,75 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
           @dragenter="onWsDragOver($event, ws.path)"
           @dragleave="onWsDragLeave(ws.path)"
           @drop.prevent="onWsDrop($event, ws.path)"
-          @click="!detachedWindow && ws.path !== workspacePath && emit('switch-to-workspace', ws.path)"
+          @click="onWsHeadClick(ws.path)"
+          @dblclick="onWsHeadDblclick(ws.path)"
           @contextmenu="openWsMenu($event, ws.path, ws.path !== workspacePath || canCloseCurrent)"
         >
           <button
             class="ws-caret"
-            :title="ws.collapsed ? $t('action.expand-subtree') : $t('action.collapse-subtree')"
-            @click.stop="emit('toggle-workspace', ws.path)"
+            :title="`${ws.collapsed ? $t('action.expand-subtree') : $t('action.collapse-subtree')}${canFoldWorkspace(ws) ? ` · ${$t('action.fold-workspace-hint')}` : ''}`"
+            @click.stop="onWsCaretClick(ws, $event)"
           >{{ ws.collapsed ? '›' : '⌄' }}</button>
           <span class="ws-icon"><FolderIcon /></span>
+          <!-- The hover title stays the FULL REAL PATH, on the name itself as
+               well as on the wrapper. With a display name the heading may say
+               anything at all, and may say the same thing as another
+               project's — the path is the only thing left that identifies
+               which folder this row is, so nothing here may replace it; the
+               name's own title appends the rename hint after the path. See
+               wsNameTitle(). -->
           <span class="ws-text" :title="ws.path">
             <span class="ws-line">
-              <span class="ws-name">{{ ws.label }}</span>
+              <input
+                v-if="renamingWorkspace === ws.path"
+                v-focus
+                v-model="wsRenameDraft"
+                class="ws-rename-input"
+                :placeholder="$t('label.workspace-name-placeholder')"
+                :title="$t('label.workspace-name-hint')"
+                @keydown="onWsRenameKeydown"
+                @blur="commitWorkspaceRename"
+                @click.stop
+                @mousedown.stop
+                @dblclick.stop
+              />
+              <span
+                v-else
+                class="ws-name"
+                :title="wsNameTitle(ws.path)"
+                @dblclick.stop="startWorkspaceRename(ws.path)"
+              >{{ ws.label }}</span>
               <span class="ws-count" v-bind="countBadgeAttrs(wsCountStates.get(ws.path))">{{ ws.count }}</span>
             </span>
             <span class="ws-path">{{ ws.displayPath }}</span>
           </span>
+          <!-- Folds what hangs BELOW this heading, leaving the project itself
+               on screen — the caret beside the name is what hides the project.
+               Same glyph as the section header's fold-all so the two read as
+               the same gesture at two scopes. -->
           <button
-            class="ws-act"
-            :class="{ busy: rebuildingAll }"
-            :disabled="!wsCanRebuild(ws.path) || rebuildingAll"
-            :title="$t('action.rebuild-all-cli-panes')"
-            :aria-label="$t('action.rebuild-all-cli-panes')"
-            @click.stop="emit('rebuild-all', ws.path)"
+            class="ws-fold"
+            :disabled="!canFoldWorkspace(ws)"
+            :title="isWorkspaceFolded(ws) ? $t('action.expand-workspace-tree') : $t('action.collapse-workspace-tree')"
+            :aria-label="isWorkspaceFolded(ws) ? $t('action.expand-workspace-tree') : $t('action.collapse-workspace-tree')"
+            @click.stop="toggleWorkspaceFold(ws)"
           >
-            <RebuildIcon />
+            <svg
+              width="13"
+              height="13"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <rect x="4.5" y="1.5" width="10" height="10" rx="1" />
+              <rect x="1.5" y="4.5" width="10" height="10" rx="1" fill="var(--bg-base)" />
+              <path :d="isWorkspaceFolded(ws) ? 'M4 9.5h5M6.5 7v5' : 'M4 9.5h5'" />
+            </svg>
           </button>
-          <button class="ws-act" :title="$t('label.history')" @click.stop="emit('open-history', ws.path)"><HistoryIcon /></button>
           <!-- Opens the same CLI and role the spawn card holds, in THIS
                workspace — the menu remembers which heading opened it. -->
           <button
@@ -2926,6 +3632,16 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
             :title="canSpawn ? `${$t('action.add-to-grid')} · ${pickedAgentLabel}` : $t('label.set-workspace-first')"
             @click.stop="toggleAddMenu($event, ws.path)"
           ><AddPaneIcon /></button>
+          <!-- Rebuild-all and history live in here rather than on the row: at
+               the sidebar's 240px minimum a fourth button takes its width from
+               the project name, which is the part that runs out first. -->
+          <button
+            class="ws-more"
+            :aria-expanded="wsMoreMenuPath === ws.path"
+            :aria-label="$t('action.more-workspace-actions')"
+            :title="$t('action.more-workspace-actions')"
+            @click.stop="toggleWsMoreMenu($event, ws.path)"
+          >⋯</button>
         </li>
         <template v-for="g in groupSectionsOf(ws)" :key="`${ws?.path ?? ''}/${g.id}`">
         <!-- The group layer sits BESIDE the lineage rather than above it: a
@@ -2944,14 +3660,19 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
           v-if="!g.bare"
           v-show="!ws?.collapsed"
           class="ws-grp"
+          :class="{ 'ws-grp--drop': rootDragOverKey === groupDropKey(ws?.path ?? '', g.id) }"
           :data-state="g.state"
+          @dragover="onGroupDragOver($event, ws?.path ?? '', g.id)"
+          @dragenter="onGroupDragOver($event, ws?.path ?? '', g.id)"
+          @dragleave="onGroupDragLeave(ws?.path ?? '', g.id)"
+          @drop.prevent="onGroupDrop($event, ws?.path ?? '', g.id)"
         >
           <button
             class="ws-grp-caret"
-            :title="isGroupCollapsed(ws?.path ?? '', g.id)
+            :title="`${isGroupCollapsed(ws?.path ?? '', g.id)
               ? $t('action.expand-subtree')
-              : $t('action.collapse-subtree')"
-            @click.stop="toggleGroup(ws?.path ?? '', g.id)"
+              : $t('action.collapse-subtree')}${canFoldGroup(g) ? ` · ${$t('action.fold-workspace-hint')}` : ''}`"
+            @click.stop="onGrpCaretClick(ws, g, $event)"
           >{{ isGroupCollapsed(ws?.path ?? '', g.id) ? '›' : '⌄' }}</button>
           <span
             class="ws-grp-key"
@@ -2964,6 +3685,35 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
                here — on a different scale, since the key has four states and a
                status has nine — reads as two signals disagreeing. -->
           <span class="ws-count">{{ g.rows.length }}</span>
+          <!-- Folds what hangs BELOW this heading, leaving the group itself on
+               screen — the twin of the workspace heading's fold button, same
+               glyph, one level down. Unlike that one it is absent rather than
+               disabled where there is nothing to fold: a group of leaves is
+               the common case at this depth, and the row can spare a button's
+               width only while it is doing something. -->
+          <button
+            v-if="ws && canFoldGroup(g)"
+            class="ws-grp-fold"
+            :title="isGroupFolded(g) ? $t('action.expand-group-tree') : $t('action.collapse-group-tree')"
+            :aria-label="isGroupFolded(g) ? $t('action.expand-group-tree') : $t('action.collapse-group-tree')"
+            @click.stop="toggleGroupFold(ws, g)"
+          >
+            <svg
+              width="13"
+              height="13"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <rect x="4.5" y="1.5" width="10" height="10" rx="1" />
+              <rect x="1.5" y="4.5" width="10" height="10" rx="1" fill="var(--bg-base)" />
+              <path :d="isGroupFolded(g) ? 'M4 9.5h5M6.5 7v5' : 'M4 9.5h5'" />
+            </svg>
+          </button>
           <!-- The sidebar's own entry point: ＋ here opens an agent in THIS
                group, which the stage tab bar cannot express — it can only open
                into whichever group it is currently showing. Management (rename,
@@ -2976,7 +3726,7 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
             :title="`${$t('action.open-agent-in-group')} · ${pickedAgentLabel}`"
             :aria-label="$t('action.open-agent-in-group')"
             @click.stop="toggleAddMenu($event, ws.path, g.id)"
-          >＋</button>
+          ><AddPaneIcon /></button>
         </li>
         <li
           v-for="({ pane: p, depth, hasChildren, collapsed: folded }, gi) in g.rows"
@@ -2984,13 +3734,13 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
           :key="p.id"
           class="agent-item"
           :style="depth ? { marginLeft: depth * 13 + 'px' } : undefined"
-          :class="{ 'in-group': !g.bare, 'in-group-last': !g.bare && gi === g.rows.length - 1, pipeline: p.origin === 'pipeline', manager: p.isCommander, minimized: p.isMinimized, 'agent-item--focus': p.id === props.focusPaneId, 'agent-item--selected': props.selectedPaneIds?.has(p.id), 'agent-item--dragging': draggingBatchIds.includes(p.id), 'drag-over': reorderDragOverId === p.id, expanded: isRowExpanded(p.id) }"
+          :class="{ 'in-group': !g.bare, 'in-group-last': !g.bare && gi === g.rows.length - 1, pipeline: p.origin === 'pipeline', manager: p.isCommander, minimized: p.isMinimized, 'agent-item--focus': p.id === props.focusPaneId, 'agent-item--selected': props.selectedPaneIds?.has(p.id), 'agent-item--dragging': draggingBatchIds.includes(p.id), 'drag-over': reorderDragOverId === p.id, 'agent-item--nest': nestDragOverId === p.id, expanded: isRowExpanded(p.id) }"
           @dragover="onAgentDragOver($event, p.id)"
           @dragenter="onAgentDragOver($event, p.id)"
           @dragleave="onAgentDragLeave(p.id)"
           @drop.prevent="onAgentDrop($event, p.id)"
         >
-          <div class="agent-line" role="button" title="Focus pane" draggable="true" @dragstart="onAgentDragStart($event, p.id)" @dragend="onAgentDragEnd" @click="onAgentLineClick(p.id, $event)" @contextmenu.prevent="emit('context-menu', p.id, $event)">
+          <div class="agent-line" role="button" title="Focus pane" draggable="true" @dragstart="onAgentDragStart($event, p.id, hasChildren && folded)" @dragend="onAgentDragEnd" @click="onAgentLineClick(p.id, $event)" @contextmenu.prevent="emit('context-menu', p.id, $event)">
             <button
               v-if="hasChildren"
               class="lineage-caret"
@@ -2998,7 +3748,7 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
               @click.stop="emit('toggle-collapsed', p.id)"
             >{{ folded ? '▸' : '▾' }}</button>
             <span v-else-if="depth || g.rail" class="lineage-spacer"></span>
-            <span class="status-dot" :data-state="p.status" :style="statusBadgeStyle(p.status)" :title="paneStatusLabelText(p.status)"></span>
+            <span class="status-dot" :data-state="dotStateOf(p)" :style="statusBadgeStyle(dotStateOf(p))" :title="dotTitleOf(p)"></span>
             <!-- No MCP tag beside it. `origin === 'mcp'` is still recorded and
                  still drives spawn behaviour; it just does not need a badge.
                  The indentation already says an agent spawned this pane, and
@@ -3026,9 +3776,16 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
               class="auto-name-mark"
               :title="$t('pane.terminal.auto-named-tooltip')"
             >◦</span>
-            <span v-if="p.isCommander" class="manager-inline" title="Stage manager — controls flow and decides ---STAGE-DONE---">🎯 Mgr</span>
+            <span v-if="p.isCommander" class="manager-inline" :title="$t('label.stage-manager-tooltip')">🎯 Mgr</span>
             <span v-if="!isRowExpanded(p.id)" class="agent-line-sub">{{ agentTypeLabel(p.agentKey) }} · {{ p.roleLabel || 'No role' }}</span>
-            <span v-if="p.isMinimized" class="minimized-tag" title="Docked in sidebar">
+            <span
+              v-if="p.loopActive"
+              class="loop-tag"
+              :class="{ waiting: p.loopWaitUntil != null }"
+              :title="$t('pane.terminal.loop-tag-tooltip')"
+            >∞</span>
+            <span v-if="p.isMuted" class="muted-tag" :title="$t('pane.terminal.muted-tooltip')"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8.7 3A6 6 0 0 1 18 8a21.3 21.3 0 0 0 .6 5"></path><path d="M17 17H3s3-2 3-9a4.67 4.67 0 0 1 .3-1.7"></path><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"></path><line x1="2" y1="2" x2="22" y2="22"></line></svg></span>
+            <span v-if="p.isMinimized" class="minimized-tag" :title="$t('label.docked-in-sidebar')">
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line></svg>
               Docked
             </span>
@@ -3159,6 +3916,7 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
         :style="{ top: `${wsMenu.y}px`, left: `${wsMenu.x}px` }"
         @click.stop
       >
+        <button class="ws-ctx-opt" @click="startWorkspaceRenameFromMenu()">{{ $t('action.rename-workspace') }}</button>
         <button class="ws-ctx-opt" @click="wsMenuAction('reveal')">{{ $t('action.open-in-finder') }}</button>
         <button class="ws-ctx-opt" @click="wsMenuAction('copy')">{{ $t('action.copy-path') }}</button>
         <!-- Membership is exclusive, so this reads as a radio group: one tick,
@@ -3180,17 +3938,134 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
             <span>{{ r.name }}</span>
           </button>
         </template>
+        <!-- Free the whole project's memory without letting go of it: every
+             idle CLI here ends and leaves a click-to-resume placeholder. Its
+             own section, above the closing rows, because it is the one row
+             that takes nothing away permanently. -->
+        <div class="ws-add-div"></div>
+        <button
+          class="ws-ctx-opt"
+          :disabled="wsReclaimableCount(wsMenu.path) === 0"
+          :title="$t('action.reclaim-workspace-title')"
+          @click="wsMenuAction('reclaim')"
+        >
+          {{ wsReclaimableCount(wsMenu.path) > 0
+            ? $t('action.reclaim-workspace-count', { count: wsReclaimableCount(wsMenu.path) })
+            : $t('action.reclaim-workspace') }}
+        </button>
         <!-- The primary workspace is what this window was opened with; closing
              it would leave the window with no root. Switch or close the window
              instead. -->
         <template v-if="wsMenu.canClose">
           <div class="ws-add-div"></div>
-          <button class="ws-ctx-opt danger" @click="wsMenuAction('close')">
+          <!-- Two ways to let go. The plain row only drops the sidebar entry
+               and leaves every CLI running for a later reopen; the danger row
+               is the one that ends them. -->
+          <button class="ws-ctx-opt" @click="wsMenuAction('close-keep-panes')">
             {{ $t('action.close-workspace') }}
+          </button>
+          <button class="ws-ctx-opt danger" @click="wsMenuAction('close')">
+            {{ $t('action.close-workspace-and-panes') }}
           </button>
         </template>
       </div>
 
+      <!-- The heading's ⋯ overflow. Fixed and anchored to the button like the
+           ＋ roster, because the pane list scrolls and an absolutely placed
+           panel would scroll away from its own anchor. -->
+      <div v-if="wsMoreMenuPath" ref="wsMoreMenuEl" class="ws-more-menu" :style="wsMoreMenuStyle" @click.stop>
+        <button
+          class="ws-more-opt"
+          :disabled="!wsCanRebuild(wsMoreMenuPath) || rebuildingAll"
+          :title="$t('action.rebuild-all-cli-panes')"
+          @click="emit('rebuild-all', wsMoreMenuPath); closeWsMoreMenu()"
+        >
+          <span class="ws-more-ico" :class="{ busy: rebuildingAll }"><RebuildIcon /></span>
+          <span>{{ $t('action.rebuild-all-cli-panes-label') }}</span>
+        </button>
+        <button class="ws-more-opt" @click="emit('open-history', wsMoreMenuPath); closeWsMoreMenu()">
+          <span class="ws-more-ico"><HistoryIcon /></span>
+          <span>{{ $t('label.history') }}</span>
+        </button>
+
+        <!-- Everything below already existed, reachable only by right-clicking
+             the row or by a drag nobody guesses. The right-click menu keeps
+             them too: this is a second door, not a move. -->
+        <div class="ws-add-div"></div>
+        <button class="ws-more-opt" @click="wsMoreAction('reveal')">
+          <span class="ws-more-ico"><FolderIcon /></span>
+          <span>{{ $t('action.open-in-finder') }}</span>
+        </button>
+        <button class="ws-more-opt" @click="wsMoreAction('copy')">
+          <span class="ws-more-ico">
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <rect x="5.5" y="5.5" width="8" height="9" rx="1.5" />
+              <path d="M10.5 5.5v-2a1.5 1.5 0 0 0-1.5-1.5H4a1.5 1.5 0 0 0-1.5 1.5V10a1.5 1.5 0 0 0 1.5 1.5h1.5" />
+            </svg>
+          </span>
+          <span>{{ $t('action.copy-path') }}</span>
+        </button>
+        <button class="ws-more-opt" @click="wsMoreRename()">
+          <span class="ws-more-ico">
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M11.5 2.5l2 2-7.5 7.5-2.5.5.5-2.5z" />
+              <path d="M2.5 14h11" />
+            </svg>
+          </span>
+          <span>{{ $t('action.rename-workspace') }}</span>
+        </button>
+        <button v-if="canDetachWorkspace" class="ws-more-opt" @click="wsMoreDetach($event)">
+          <span class="ws-more-ico">
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M8 2.5H3.5A1.5 1.5 0 0 0 2 4v8.5A1.5 1.5 0 0 0 3.5 14H12a1.5 1.5 0 0 0 1.5-1.5V8" />
+              <path d="M10 2.5h3.5V6M13.5 2.5L8 8" />
+            </svg>
+          </span>
+          <span>{{ $t('action.detach-workspace') }}</span>
+        </button>
+
+        <div class="ws-add-div"></div>
+        <button
+          class="ws-more-opt"
+          :disabled="wsReclaimableCount(wsMoreMenuPath) === 0"
+          :title="$t('action.reclaim-workspace-title')"
+          @click="wsMoreAction('reclaim')"
+        >
+          <span class="ws-more-ico">
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M13 8a5 5 0 1 1-1.6-3.7" />
+              <path d="M13.5 2v3h-3" />
+            </svg>
+          </span>
+          <span>{{ wsReclaimableCount(wsMoreMenuPath) > 0
+            ? $t('action.reclaim-workspace-count', { count: wsReclaimableCount(wsMoreMenuPath) })
+            : $t('action.reclaim-workspace') }}</span>
+        </button>
+
+        <!-- Last, behind their own rule, and in danger colour: the two rows
+             that take something away. Right-click hid them behind a gesture;
+             here they sit one click from Rebuild, so they have to read as the
+             end of the list rather than one more item in it. -->
+        <template v-if="wsMoreCanClose">
+          <div class="ws-add-div"></div>
+          <button class="ws-more-opt" @click="wsMoreAction('close-keep-panes')">
+            <span class="ws-more-ico">
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M4 4l8 8M12 4l-8 8" />
+              </svg>
+            </span>
+            <span>{{ $t('action.close-workspace') }}</span>
+          </button>
+          <button class="ws-more-opt danger" @click="wsMoreAction('close')">
+            <span class="ws-more-ico">
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M4 4l8 8M12 4l-8 8" />
+              </svg>
+            </span>
+            <span>{{ $t('action.close-workspace-and-panes') }}</span>
+          </button>
+        </template>
+      </div>
       <div v-if="addMenuOpen" class="ws-add-menu" :style="addMenuStyle" @click.stop>
         <select v-model="pickedRole" class="ws-add-role">
           <option value="">{{ $t('label.select-role') }}</option>
@@ -3250,8 +4125,32 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
               <option v-for="r in roles" :key="r.key" :value="r.key">{{ r.label }}</option>
             </select>
           </div>
+          <!-- Labelled, unlike the row above: either field can be absent for a
+               vendor, so a bare control would leave the remaining one
+               unidentified. -->
+          <div v-if="canPickModel || canPickEffort" class="row two-col">
+            <label v-if="canPickModel" class="spawn-field">
+              <span class="spawn-field-lb">{{ $t('spawn.model.label') }}</span>
+              <input
+                v-model="pickedModel"
+                type="text"
+                spellcheck="false"
+                :disabled="commandShadowsModel"
+                :placeholder="$t('spawn.model.placeholder')"
+              />
+            </label>
+            <label v-if="canPickEffort" class="spawn-field">
+              <span class="spawn-field-lb">{{ $t('spawn.model.effort-label') }}</span>
+              <select v-model="pickedEffort" :disabled="commandShadowsModel">
+                <option value="">{{ $t('spawn.model.effort-default') }}</option>
+                <option v-for="e in effortOptions" :key="e" :value="e">{{ e }}</option>
+              </select>
+            </label>
+          </div>
+          <p v-if="commandShadowsModel && (canPickModel || canPickEffort)" class="hint model-shadowed">{{ $t('spawn.model.shadowed-by-command') }}</p>
+          <p v-if="modelRefusal" class="hint warn">{{ modelRefusal }}</p>
           <div class="row spawn-actions">
-            <button class="primary wide" :disabled="!canSpawn" @click="spawn()">{{ $t('action.add-to-grid') }}</button>
+            <button class="primary wide" :disabled="!canSpawn || !!modelRefusal" @click="spawn()">{{ $t('action.add-to-grid') }}</button>
             <button class="ghost wide terminal-btn" :disabled="!canSpawn" @click="openTerminal">{{ $t('action.open-terminal') }}</button>
           </div>
           <div class="row resume-actions">
@@ -3312,7 +4211,7 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
           <button class="ghost back-btn" @click="backToList">← Back</button>
           <span class="pipeline-detail-name">{{ openedPipeline?.name ?? openedPipelineId }}</span>
           <span v-if="openedPipelineId === activePipelineId" class="active-tag">{{ $t('label.default') }}</span>
-          <button class="ghost manage-btn" title="Manage pipelines" @click="openPipelineManager(openedPipelineId || undefined)">⚙</button>
+          <button class="ghost manage-btn" :title="$t('action.manage-pipelines')" @click="openPipelineManager(openedPipelineId || undefined)">⚙</button>
         </div>
       </section>
       <section class="block" :class="{ pipeline: pipelineOpen }">
@@ -3877,6 +4776,24 @@ textarea.drag-over {
   flex-direction: column;
   gap: 4px;
   align-items: stretch;
+}
+/* One labelled control per grid column. min-width:0 because a grid item
+   defaults to its content's min size, and the input inside would otherwise
+   push the 1fr 1fr track wider than the card. */
+.spawn-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.spawn-field-lb {
+  color: var(--text-muted);
+  font-size: var(--font-3xs);
+}
+/* A vendor with only one of the two flags leaves one track empty; span both so
+   the lone field fills the card instead of sitting at half width. */
+.row.two-col > .spawn-field:only-child {
+  grid-column: 1 / -1;
 }
 .terminal-btn {
   opacity: 0.6;
@@ -4801,6 +5718,8 @@ button.icon-btn.muted:hover {
 .ws-head > .ws-caret,
 .ws-head > .ws-icon,
 .ws-head > .ws-act,
+.ws-head > .ws-fold,
+.ws-head > .ws-more,
 .ws-head > .ws-add { height: 16px; align-self: flex-start; }
 .ws-caret {
   flex: none;
@@ -4843,6 +5762,24 @@ button.icon-btn.muted:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
   line-height: 16px;
+}
+/* Takes the name's place in the same flex line. `min-width: 0` and an explicit
+   border-box are both load-bearing: an input's intrinsic width is ~20 chars,
+   which without the first would push the count badge and the row's actions out
+   of the sidebar's grid track, and the panel has no border-box reset of its own
+   so padding would otherwise be added ON TOP of the flex basis. Never
+   `width: 100%` here for the same reason. */
+.ws-rename-input {
+  flex: 1 1 0;
+  min-width: 0;
+  box-sizing: border-box;
+  background: var(--bg-inset);
+  border: 1px solid var(--accent-emphasis);
+  border-radius: var(--radius-xs);
+  color: var(--text-bright);
+  font-size: var(--font-xs);
+  line-height: 16px;
+  padding: 1px 5px;
 }
 /* The path disambiguates two projects that share a folder name. It is the
    part that gets dropped when the row runs out of width; the full path is on
@@ -4977,6 +5914,113 @@ button.icon-btn.muted:hover {
 .ws-head:hover .ws-add { opacity: 1; }
 .ws-add:hover { color: var(--text-bright); }
 
+/* Folds everything below this heading. Shares the row's button box with ＋ and
+   ⋯ so the three read as one group; the glyph is the section header's, because
+   it is the same gesture at a narrower scope. */
+.ws-fold {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--icon-btn-sm);
+  height: var(--icon-btn-sm);
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  line-height: 1;
+  color: var(--text-muted);
+  opacity: 0.65;
+}
+.ws-fold svg { display: block; }
+.ws-head:hover .ws-fold { opacity: 1; }
+.ws-fold:hover:not(:disabled) { color: var(--text-bright); }
+.ws-fold:disabled { opacity: 0.3; cursor: default; }
+
+/* The overflow that rebuild-all and history moved into. A glyph rather than an
+   icon, so it is legible at the row's 16px without competing with the two
+   stroke marks beside it. */
+.ws-more {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--icon-btn-sm);
+  height: var(--icon-btn-sm);
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: var(--font-sm);
+  line-height: 1;
+  color: var(--text-muted);
+  opacity: 0.65;
+}
+.ws-head:hover .ws-more { opacity: 1; }
+.ws-more:hover { color: var(--text-bright); }
+.ws-more[aria-expanded='true'] { opacity: 1; color: var(--text-bright); }
+
+.ws-more-menu {
+  position: fixed;
+  z-index: 300;
+  box-sizing: border-box;
+  width: 168px;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+  padding: 5px 4px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated, var(--bg-secondary));
+  box-shadow: var(--shadow-popover);
+  font-family: var(--font-ui);
+  font-size: var(--font-xs);
+}
+.ws-more-opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 8px;
+  border: none;
+  background: none;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--font-xs);
+  line-height: var(--lh-tight);
+  text-align: left;
+  cursor: pointer;
+}
+.ws-more-opt:hover:not(:disabled),
+.ws-more-opt:focus-visible:not(:disabled) { background: var(--bg-hover, rgb(255 255 255 / 7%)); }
+.ws-more-opt:focus-visible {
+  outline: 2px solid var(--accent-focus);
+  outline-offset: -2px;
+}
+.ws-more-opt:disabled { opacity: 0.4; cursor: default; }
+/* Override the filled button.danger background as well as its text colour. */
+.ws-more-opt.danger {
+  background: none;
+  color: var(--danger-bright, #e05252);
+}
+.ws-more-opt.danger:hover:not(:disabled),
+.ws-more-opt.danger:focus-visible:not(:disabled) { background: var(--danger-subtle, rgb(224 82 82 / 12%)); }
+.ws-more-opt.danger:disabled { background: none; }
+.ws-more-ico { flex: none; display: flex; align-items: center; color: var(--text-secondary); }
+.ws-more-ico :deep(svg) { width: 12px; height: 12px; display: block; }
+/* The rows added later draw their glyph inline rather than as a component —
+   one use each. They inherit the sizing above; this is the stroke styling the
+   icon components carry in their own scoped block. */
+.ws-more-ico > svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.ws-more-opt.danger .ws-more-ico { color: inherit; }
+.ws-more-ico.busy :deep(svg) { animation: agent-rebuild-spin 0.8s linear infinite; }
+
 /* Rebuild-all and history, moved off the section header: both act on one
    workspace's panes. Sized to the row rather than the 32px header button. */
 .ws-act {
@@ -5090,7 +6134,8 @@ button.icon-btn.muted:hover {
   text-align: left;
   cursor: pointer;
 }
-.ws-ctx-opt:hover { background: var(--bg-hover, rgb(255 255 255 / 7%)); }
+.ws-ctx-opt:hover:not(:disabled) { background: var(--bg-hover, rgb(255 255 255 / 7%)); }
+.ws-ctx-opt:disabled { opacity: 0.4; cursor: default; }
 /* A menu row, not a button. `button.danger` elsewhere paints a filled red
    background with light text; this selector is more specific and was only
    overriding the colour, leaving red on red — the label vanished. */
@@ -5098,7 +6143,7 @@ button.icon-btn.muted:hover {
   background: none;
   color: var(--danger-bright, #e05252);
 }
-.ws-ctx-opt.danger:hover { background: var(--danger-subtle, rgb(224 82 82 / 12%)); }
+.ws-ctx-opt.danger:hover:not(:disabled) { background: var(--danger-subtle, rgb(224 82 82 / 12%)); }
 /* ── Run group layer ────────────────────────────────────────────────────────
    Still not another step of indentation — indentation is already spent on
    parent/child panes, and a third level would push an MCP child's name past
@@ -5178,27 +6223,67 @@ button.icon-btn.muted:hover {
   white-space: nowrap;
 }
 /* Reserved space, not conditional space: the button keeps its box when hidden
-   so the count does not shift sideways as the pointer crosses the row. */
+   so the count does not shift sideways as the pointer crosses the row.
+   16px is what the full-width ＋ this replaced occupied (12px glyph + 2px each
+   side), so swapping the character for the icon moved nothing on the row. */
 .ws-grp-add {
   flex: none;
   margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
   border: none;
   background: none;
-  padding: 0 2px;
+  padding: 0;
   color: var(--text-muted);
-  font-size: 12px;
   line-height: 1;
   cursor: pointer;
   opacity: 0;
   transition: opacity var(--motion-fast) var(--ease-out);
 }
+/* The same 12px the workspace heading's ＋ renders at. Both buttons open the
+   same agent menu, so they are one mark at one size — the heading's used to be
+   a full-width character too, and this row was left behind when that one was
+   redrawn. */
+.ws-grp-add :deep(svg) { width: 12px; height: 12px; }
 .ws-grp:hover .ws-grp-add,
 .ws-grp-add:focus-visible,
 .ws-grp-add[aria-expanded='true'] { opacity: 1; }
 .ws-grp-add:hover { color: var(--text-bright); }
 @media (prefers-reduced-motion: reduce) {
-  .ws-grp-add { transition: none; }
+  .ws-grp-add,
+  .ws-grp-fold { transition: none; }
 }
+/* The workspace fold button one level down. Hidden at rest and revealed with
+   the row, like the ＋ beside it — unlike .ws-fold on the heading above, which
+   stays visible: a heading is a landmark you aim at, a group row is one of
+   many and reads more quietly with only its name and count at rest. The auto
+   margin moves to this button when it is present, so the two stay one pair at
+   the right edge. */
+.ws-grp-fold {
+  flex: none;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  line-height: 1;
+  color: var(--text-muted);
+  opacity: 0;
+  transition: opacity var(--motion-fast) var(--ease-out);
+}
+.ws-grp-fold svg { display: block; }
+.ws-grp:hover .ws-grp-fold,
+.ws-grp-fold:focus-visible { opacity: 1; }
+.ws-grp-fold:hover { color: var(--text-bright); }
+.ws-grp-fold + .ws-grp-add { margin-left: 0; }
 /* A rail down the rows — but read the history before touching its colour.
    The first attempt was a COLOURED stripe, meant to tell you which group you
    were in once its heading had scrolled away. Then the colour became the
@@ -5280,6 +6365,30 @@ button.icon-btn.muted:hover {
 /* Reorder drop target feedback, matching .pane-header.drag-over in TerminalPane.vue. */
 .agent-item.drag-over {
   background: var(--accent-subtle);
+  box-shadow: inset 0 0 0 2px var(--accent-focus);
+}
+/* Nest drop target: the pointer is in the row's middle band, so the drop makes
+   the dragged pane this row's child. Distinct from the reorder ring above — a
+   filled tint plus the ↳ the child row will carry once it lands. */
+.agent-item--nest {
+  position: relative;
+  background: color-mix(in srgb, var(--accent-focus) 22%, transparent);
+  box-shadow: inset 2px 0 0 var(--accent-focus);
+}
+.agent-item--nest::after {
+  content: '↳';
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent-focus);
+  pointer-events: none;
+}
+/* Group header as drop target: the drop makes the dragged pane a root of this
+   group. Same ring as a reorder target so it reads as "drop here". */
+.ws-grp--drop {
   box-shadow: inset 0 0 0 2px var(--accent-focus);
 }
 .agent-line {
@@ -5560,6 +6669,25 @@ button.icon-btn.muted:hover {
   opacity: 0.45;
   margin-left: -4px; /* pulls back .agent-line's 6px gap */
   user-select: none;
+}
+.loop-tag {
+  font-size: var(--font-3xs);
+  padding: 1px 5px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  background: var(--success-subtle);
+  color: var(--success-fg);
+  border: 1px solid var(--success-emphasis);
+  white-space: nowrap;
+}
+.loop-tag.waiting {
+  opacity: 0.55;
+}
+.muted-tag {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: var(--text-muted);
 }
 .minimized-tag {
   margin-left: auto;

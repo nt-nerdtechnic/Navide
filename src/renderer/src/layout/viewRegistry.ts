@@ -44,6 +44,7 @@ export type ViewId =
   | 'plans'
   | 'history'
   | 'tokens'
+  | 'time'
   | 'tasker'
   | 'messages'
   | 'preview'
@@ -82,6 +83,7 @@ export const VIEWS: readonly ViewDescriptor[] = [
   V({ id: 'git', titleKey: 'label.git', icon: '\u{1F33F}', defaultSlot: 'left', allowedSlots: ['left'], preferredAxis: 'any', minSize: 260 }),
   V({ id: 'plans', titleKey: 'label.plans', icon: '\u{1F4CB}', defaultSlot: 'left', allowedSlots: ['left'], preferredAxis: 'any', minSize: 240 }),
   V({ id: 'history', titleKey: 'label.history', icon: '\u{1F4DC}', defaultSlot: 'right', allowedSlots: ['right', 'up', 'down'], preferredAxis: 'any', minSize: 220 }),
+  V({ id: 'time', titleKey: 'label.time', icon: '\u23F1', defaultSlot: 'right', allowedSlots: ['right'], preferredAxis: 'any', minSize: 200 }),
   V({ id: 'tokens', titleKey: 'label.tokens', icon: '\u{1F4CA}', defaultSlot: 'right', allowedSlots: ['right'], preferredAxis: 'any', minSize: 200 }),
   V({ id: 'tasker', titleKey: 'label.tasker', icon: '\u{1F5D3}', defaultSlot: 'right', allowedSlots: ['right', 'up', 'down'], preferredAxis: 'any', minSize: 220 }),
   V({ id: 'messages', titleKey: 'label.messages', icon: '\u{2709}', defaultSlot: 'right', allowedSlots: ['right', 'up', 'down'], preferredAxis: 'any', minSize: 220 }),
@@ -138,6 +140,27 @@ export function moveTargetsFor(id: string, current: SlotId | null): SlotId[] {
  * build that knows fewer views must not delete the others' entries from the
  * persisted state, only decline to render them.
  */
+/**
+ * `views` re-sorted into the order this registry declares them in.
+ *
+ * Declaration order IS the shipped tab order (see VIEWS), so this is what a
+ * slot looks like before anyone has touched it. Ids the registry does not know
+ * keep their relative places at the end rather than being dropped — a build
+ * that knows fewer views must not rewrite the layout of one that knows more.
+ */
+export function sortByDeclaration(views: readonly string[]): string[] {
+  const rank = new Map<string, number>(VIEWS.map((v, i) => [v.id as string, i]))
+  return [...views].sort((a, b) => {
+    const ra = rank.get(a)
+    const rb = rank.get(b)
+    if (ra === undefined && rb === undefined) return 0
+    if (ra === undefined) return 1
+    if (rb === undefined) return -1
+    return ra - rb
+  })
+}
+
+
 export function reconcileOccupancy(
   bySlot: readonly (readonly [SlotId, readonly string[]])[],
   hidden: readonly string[] = []

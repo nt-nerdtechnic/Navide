@@ -39,15 +39,14 @@ case fail earlier and more legibly in the log.
 from __future__ import annotations
 
 import logging
-import os
 import base64
 import hashlib
 import hmac
 import secrets
-import stat
 from urllib.parse import urlsplit
 
 from agent_team_backend.applog import backend_ws_token_file
+from agent_team_backend.osplat import secret_files
 
 log = logging.getLogger(__name__)
 
@@ -62,23 +61,17 @@ _token: str = ""
 def issue_token() -> str:
     """Mint this run's token and write it beside the port file, owner-only.
 
-    Written via ``os.open`` with the mode set at creation rather than a
-    write-then-chmod: the gap between the two is a window in which the secret
-    exists at whatever the umask allowed. That is exactly the mistake the port
-    file makes today (0644), and the reason this is a separate file.
+    Written through the platform seam with the mode set at creation rather
+    than a write-then-chmod: the gap between the two is a window in which the
+    secret exists at whatever the umask allowed. That is exactly the mistake
+    the port file makes today (0644), and the reason this is a separate file.
+    Plain content, not wrapped: the Electron main process reads it as-is.
     """
     global _token
     _token = secrets.token_urlsafe(32)
     path = backend_ws_token_file()
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, stat.S_IRUSR | stat.S_IWUSR)
-        try:
-            os.write(fd, _token.encode("utf-8"))
-        finally:
-            os.close(fd)
-        # A file that already existed keeps its old mode through O_CREAT.
-        os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+        secret_files.write_private_plain(path, _token.encode("utf-8"))
         log.info("wrote the ws token to %s", path)
     except OSError as err:
         # Fail loudly rather than silently running without a credential: an

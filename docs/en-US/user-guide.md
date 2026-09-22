@@ -40,9 +40,37 @@ Use manual spawn for exploration, maintenance, or an Evolution task that does no
 - Minimize a pane to keep its PTY alive without occupying the main layout.
 - Rebuild or resume only after Navide has detected a reusable session ID.
 
-Supported built-in agent keys cover 13 coding CLIs: Aider, Antigravity CLI, Claude Code, Codex, Copilot CLI, Cursor CLI, Grok CLI, Kilo Code, Kimi Code, Muse Code, OpenCode, Pi, Qwen Code. The exact CLI behavior and provider billing remain controlled by each external tool.
+In Auto, Spotlight, and Fullscreen layouts, the triangle button to the right of refresh (toolbar order: **+ → refresh → ▾/▸**) folds or unfolds the current tab's descendant-card families. It uses the same behavior as the triangle beside a parent's outlined descendant count. If any eligible family is open, it collapses all; when all are closed, it expands all, including nested families previously closed individually. Eligible parents have descendants and are not minimized.
+
+Folding hides descendant cards while keeping their top-level parent cards, descendant counts, and the main terminal visible. Each tab's family state is independent and stays only in the current window's memory. The bulk button is disabled in Grid or when the tab has no eligible parent families.
+
+A parent's descendant count includes every pane it spawned, and each of them can be reached by unfolding the family, even when a descendant is minimized or lives on another tab or in another project. Such a row carries a location hint (**Minimized to sidebar**, **Tab: name**, **Project: name**; long names are cut short with the full text on hover). Unfolding only changes the list. Clicking a descendant's row switches to its project and tab, restores it if minimized, and focuses it, the same way the left agent list does. Cmd/Ctrl-click and Shift-click on such a row only add it to the selection, in the list's order, without switching tabs or restoring anything. The bulk button still acts only on the current tab's parents that are not minimized. When spawned panes are busy, the parent card in Auto and Fullscreen shows a readable summary on its second line (Spotlight thumbnails show only the location hint), such as **1 child pane · Running**, naming the most urgent status among its descendants and how many are in it.
+
+A new empty Codex pane waits for your input without sending an artificial session-discovery message. Its session ID may become available only after the first real user or configured task turn; until then, Rebuild remains unavailable. The same applies to a fresh rebuild or restore. If Codex asks to review the Navide session hook, review it in Codex; YOLO mode does not approve hooks. Existing shared session homes may need that trusted hook to associate the new conversation with its pane.
+
+Select multiple pane headers with Cmd/Ctrl-click or Shift-click, then right-click a selected pane to open the batch menu. Its groups contain Interrupt/Rebuild, Minimize/Restore/Reclaim, notification controls, and Remove. **Restore selected** also opens selected panes that have not yet been opened or were reclaimed. Pane and project overflow menus stay within the window; long menus scroll so their final actions remain reachable.
+
+**Reclaim selected (N)** shows how many selected panes are eligible, releases their CLI processes, and keeps click-to-resume placeholders. It skips protected panes, including running panes, the focused pane, panes awaiting an answer or holding unsent text, and panes without a resumable session. The action stays visible but is disabled when none of the selected panes can be reclaimed. **Mute selected notifications** mutes the entire selection, including a mix of muted and unmuted panes; when every selected pane is muted, **Unmute selected notifications** restores notifications for all of them. These batch actions affect only the selected panes.
+
+Supported built-in agent keys cover 14 coding CLIs: Aider, Antigravity CLI, Claude Code, Codex, Copilot CLI, Cursor CLI, Droid, Grok CLI, Kilo Code, Kimi Code, Muse Code, OpenCode, Pi, Qwen Code. The exact CLI behavior and provider billing remain controlled by each external tool.
 
 For Kimi Code panes, Navide gives the CLI a 100 ms escape-sequence reassembly window so arrow-key navigation remains reliable through the embedded terminal. An existing `PI_TUI_ESC_TIMEOUT` environment value still takes precedence.
+
+### CLI risk observations
+
+An active agent pane can show one yellow or red risk pill. Open its popover to inspect the backend's evidence and observation times; multiple findings share that popover. Disk findings apply to the vendor's active panes, while network findings belong to the observed pane's process tree, including its CLI, MCP servers and tools. Reclaimed placeholders show no risk pill.
+
+- **Yellow network:** a sampled numeric IP and port fall outside a complete, current expected-address snapshot. The count is from the last sample, and “observed since” describes sampled observations, not connection duration. Legitimate tools, proxies and different DNS answers can produce a mismatch.
+- **Yellow disk:** after a successful baseline, a file first observed following prior absence qualifies within 24 hours if it exceeds 100 MiB and bounded content inspection does not recognize its format. Files already in the baseline are excluded; timestamps and familiar extensions alone do not establish that a file is new or recognized.
+- **Red disk:** a previously flagged path was successfully observed present, then absent, then present again with opaque content in the same 100 MiB size class. This does not identify who removed or recreated it, or establish that its contents are the same.
+
+**Ignore** persists for the displayed vendor/IP across all ports, or vendor/canonical file path, including later severity changes. **Allow this IP** adds only the displayed exact IP for that vendor across all ports; it does not allow an inferred hostname or certify the destination. Both decisions apply across that vendor's panes and survive restart. Disk **Reveal in folder** opens the existing native folder action so you can inspect the file.
+
+Observations use existing resource requests: normally every 30 seconds, or every 2 seconds while the resource panel is open. Disk attempts, including failed attempts, are throttled to once per five minutes per active vendor. Work finishes in the backend and appears in a later response; opening Storage is unnecessary. Descendant discovery and polling can delay network evidence, and short-lived connections or file replacement between samples can be missed.
+
+Default network declarations currently cover Claude Code and Codex; other vendors have no expected-address comparison. Captured proxy or provider-endpoint overrides disable that comparison. Network observation covers established TCP on macOS and Linux; Windows network observation and UDP/QUIC are unsupported. Disk roots are declared per vendor, with Aider unsupported; symlinks beneath a resolved data root are skipped. Roots use the captured pane home and declared environment overrides; later changes inside CLI settings, command arguments or shell startup scripts can fall outside that snapshot. Failed or incomplete collection, unavailable declarations and expired DNS must not be read as a clean result. Historical findings can remain visible as stale evidence. **No pill is not an assurance of safety.**
+
+These observations help you inspect local activity; they do not prove exfiltration or unlawful intent. Navide does not automatically block a connection, pause a CLI or delete a file. See [Privacy and Data Flows](privacy.md#cli-risk-observation-data) for local reads, retained metadata and DNS requests.
 
 ## Pipelines
 
@@ -87,6 +115,59 @@ History is an append-only timeline for pipeline, stage, pane, question, analyzer
 
 Token Stats parses compatible local CLI logs and attributes usage to workspaces, panes, stages, and runs. It is an observability feature, not a provider invoice. Provider-side usage and billing remain authoritative.
 
+### Token Monitor
+
+Open **Window → Token Monitor** for a separate window showing local Claude turn history over 14, 30, or 90 days. Reopening the command focuses the existing monitor. The existing **Turn Stats** modal remains available for inspecting one pane. Model filters, per-turn trends, and per-turn averages and medians summarize the selected local records.
+
+Transcript records have **unknown account attribution**: a shared local Claude history cannot establish which signed-in account produced a turn. Other devices, web conversations, and subagent logs are outside this view. Missing history is not zero usage; partial scan coverage and errors are shown. Large histories are bounded, and refresh can reuse a scan for 60 seconds.
+
+Quota history records successful observations for the active Claude account slot through the existing usage polling service. It starts accumulating when those observations are available; it cannot reconstruct earlier quota windows. Disabled polling and an empty history are displayed explicitly. Opening the monitor does not make extra provider requests. Observed tokens and quota percentages do not establish an official token allowance, throttling, effort level, or separate thinking-token usage.
+
+### Account quota in Turn Stats
+
+Open **Window → Turn Stats**, or use the TOKENS panel entry. **Pane usage**
+shows one session; **Account quota** shows activity attributed locally to an
+account across panes and models. Saved and historical accounts remain available
+without an open pane, including removed profiles and a separate Unknown bucket.
+Opening history and **Refresh history** read local records only. A provider
+retry follows the existing polling policy; disabled polling stays disabled.
+
+The current provider value belongs to the selected account and window. Its
+cached, stale, failed, or disabled state and observation time are separate from
+the history-read time. **All accounts** shows aggregate local activity and no
+single-account current percentage. Model-window quota percentages and all-model
+local tokens describe different populations.
+
+Cycles default to the last 30 days, with 90-day and custom UTC-date ranges.
+Membership uses reset time in the half-open range, including ongoing cycles
+when the range reaches the present. Tables and charts show at most 50 records
+per page; summaries and eligible/excluded average counts cover the entire range.
+Select a cycle with its button or chart to inspect source evidence, full local
+and UTC timestamps, breakdown, changed readings, and last reconciliation.
+The local-token-per-percentage-point ratio is total divided by a nonzero
+observed peak, not a provider allowance or price estimate.
+
+Only ended cycles with trusted limit evidence and usable local detail enter
+the completed-cycle average. A CLI limit can coexist with an earlier provider
+peak below 100%; legacy timestamps remain inspectable and unverified. Missing
+or partial detail appears as a gap, while an observed zero remains zero. Local
+totals use five-minute slices without boundary prorating. Late data can
+reconcile retained ended cycles; saved finalized totals survive slice expiry.
+
+Month and Year retain **UTC calendar** buckets. A date range selects whole
+intersecting buckets, whose expanded boundaries are displayed. Tokens use event
+time; cycle counts use their start time, or reset when the start is unknown.
+Window filters affect cycle statistics only, and overlapping quota windows are
+never added together as account consumption. Account shares refer to the same
+period's observed local activity and stay unavailable when coverage is incomplete.
+
+**Export selected range** exports all selected records in one consistent
+response, up to 10,000 rows; narrow the range if it exceeds that limit. CSV
+includes identity, evidence, coverage, eligibility, UTC timestamps and time-zone
+metadata. Partial/unavailable numeric token cells are empty, correcting the old
+missing-as-zero export; a known zero is `0`. Manual keyboard, theme, language,
+and real-reset acceptance remain separate from automated fixture checks.
+
 ## Git and review
 
 Navide includes a removable factory installation of the official Git package until Marketplace installation is available. Its active package version supplies both the embedded left view and the dedicated Git window. Removing Bundled Git in Extensions persists across restarts; use **Restore** there to install the factory copy again. A verified Marketplace version takes precedence when present. The view supports repository discovery, working-tree inspection, staging, commits, branches, remotes, issues, and related workflows; multi-repository workspaces can switch between discovered repositories. Discovery scans run without blocking the backend and return partial results after a bounded scan period on slow filesystems. Repository operations stay local to Navide's Host/backend boundary, and GitHub/GitLab issue detection uses the configured `gh` or `glab` CLI when available. If the selected v2 package cannot load, mount, or report ready, Navide labels and uses the retained legacy Git renderer for that process. Security, trust, or permission denials do not trigger fallback.
@@ -99,10 +180,47 @@ The editor uses Monaco and provides file editing, diagnostics, plan rendering, d
 
 These tools are the Intervention surface of the wider engineering environment. Navide's goal is eventually to provide the complete professional workflow without requiring a traditional IDE as the user's primary environment.
 
+## Skills through Navide MCP
+
+An authorized agent can use the same library as **Settings → Skills**:
+
+1. Call `skills_list`, then pass a returned ID to `skills_inspect` for instructions, files, ownership, provenance and the current `delivery_revision`.
+2. Call `skills_prepare_install` with `owner/repo`, an HTTPS `github.com/owner/repo` URL, or an absolute local skill folder (`~` is expanded). For GitHub, pass `ref` and `subdir` separately; `subdir: "."` selects the repository root. Multiple candidates return `selection_required` and `candidates` without an installable preview ID. Choose a path and prepare again. Private repositories, arbitrary URLs and GitHub tree URLs are unsupported.
+3. Review the full instructions, file inventory, script warnings, source and digest. Call `skills_install` with the preview ID, exact digest and explicit targets. The first shared-root write also requires the user's permission through `consent`; a digest or agent-supplied boolean does not establish that permission. Installation rejects any same-name managed, user-owned or native skill. It exclusively creates the destination and publishes `SKILL.md` after attachments and metadata, so discovery does not see an incomplete package; this is not an atomic directory rename.
+4. For later delivery changes, call `skills_set_delivery` with the skill ID and latest `delivery_revision`. Stale revisions fail without replacing another client's decision. This workflow adds skills; it does not update or refetch an existing installation.
+
+Prepared bytes belong to the authenticated caller and expire after 15 minutes or backend restart. Installation uses those bytes without rereading the local source or fetching GitHub again. A permission retry can reuse an unexpired preview. While its retry receipt remains available, replay returns the original result without writing again. There are at most eight active preparations plus a separate cache of at most eight lightweight completed retry receipts. Successful installation releases package bytes and the active slot. Receipts expire at the original preview deadline; when the cache fills, the oldest successful installation receipt is evicted first. Retry after expiry or eviction returns missing/expired without reinstalling. GitHub downloads are capped at 10 MiB compressed, 32 MiB expanded and 4,096 entries; a selected skill is limited to 64 files, 256 KiB per file and 512 KiB total. Unsafe paths, links, special files, reserved metadata and invalid manifests are rejected rather than omitted.
+
+For shared skills, `targets: null` selects all wired vendors and `targets: []` stops Navide's extra delivery. For native skills, targets opt other CLIs in; an empty list or `null` clears those extra routes. CLIs that read the shared root themselves may discover a skill regardless of Navide's targets or enabled switch. These settings are not an isolation boundary.
+
+`materialized_in_current_session: null` and `loaded_in_current_session: null` mean current-session materialization and loading are unknown. The compatibility field `delivered_to_me` also describes configuration. Start a new CLI session after changing delivery and verify loading there; an installation or routing response is not evidence that a running CLI loaded new content.
+
+A local provenance receipt records the source, prepared digest and timestamps, survives edits, toggles and restart, and is available through inspection. Its digest describes the installed snapshot, not any subsequent local edits. The management marker and provenance are excluded from existing export and Skills sync; provenance is not preserved across devices. With Skills sync enabled, eligible content and delivery decisions can still propagate through the existing sync flow. Matching package limits do not prove that synchronization completed.
+
+Open Skills views refresh after successful backend mutations and reconnects, preserving unsaved content and its original revision so stale saves still conflict. Direct edits by other filesystem tools require manual refresh. Preparation and installation never run bundled scripts or plugin hooks; later skill use remains subject to the CLI's tools and authorization.
+
 ## Settings and portability
+
+**Settings → Language** is a separate page after Appearance in the sidebar. Choose Traditional Chinese, English, or Japanese; this user-level preference applies to every workspace. On first launch, a Japanese system language selects Japanese when no language preference has been saved. Language changes also reach the onboarding screen, native Navide menu labels, and standalone Plans and Token Monitor windows. Operating-system menu roles and externally supplied content may retain their own language.
 
 Settings cover roles, pipelines, MCP servers, analyzer behavior, AI providers, appearance, keyboard shortcuts, and the separate **Execution Policy** tab. That tab shows the read-only Host default, lets you create or edit one global `full`, `allowlist`, or `denylist` user policy, and keeps first-level system namespaces separate from top-level shell executable names. Full mode requires an explicit high-risk confirmation. For an open workspace it also shows the untrusted repository recommendation and lets you explicitly choose the Host default, user policy, or an accepted repository policy. Corrupt global policy state has a separately confirmed rebuild that preserves workspace source selections; an unsafe or unavailable policy directory instead requires manual remediation. The Extensions view shows a package's Manifest Permissions and exact package-version Grant separately from the selected agent Execution Policy.
 
-CLI Agents additionally manages the installed coding CLIs: version, install method, duplicate installations, the result of the CLI's own last update, and buttons that run that CLI's official update and diagnostic commands in a terminal. Resume on Open can restore one CLI, the first Grid page, or the active tab; the Grid-page choice follows the Grid preset even when the saved layout was not Grid. Navide surfaces and runs vendor commands; it never updates a CLI itself. Exported settings redact API keys and tokens. Review MCP commands and environment variables before enabling third-party servers.
+**Settings → CLI Agents** presents one card per agent. Use search and the All, Enabled, or Needs attention filters to find an agent, or toggle its enabled state. To reorder agents, choose **All** and clear the search, then drag cards using the grip to the left of each title. Reordering is disabled while a filter or search is active. At least one agent must stay enabled. Choose **Manage** to open that agent’s drawer, with Overview, Launch, Permissions, Push, and Install sections stacked on one scrolling page. Changes use the existing automatic persistence; there is no separate Save step. Close the drawer, or press Escape, to return to the cards before closing Settings.
+
+The Install section manages the installed coding CLIs: version, install method, duplicate installations, the result of the CLI's own last update, and buttons that run that CLI's official update and diagnostic commands in a terminal. Resume on Open can restore one CLI, the first Grid page, or the active tab; the Grid-page choice follows the Grid preset even when the saved layout was not Grid. Navide surfaces and runs vendor commands; it never updates a CLI itself. Exported settings redact API keys and tokens. Review MCP commands and environment variables before enabling third-party servers.
+
+**Accounts** keeps one card per CLI account. Besides the CLI's own sign-in, a card can hold a **portable credential**: the value the vendor documents for use on any machine (Claude Code's `claude setup-token`, for example). Paste it once; new panes of that CLI receive it in their environment and the CLI's own login files are left alone. One credential per CLI is the one *in use*; the card says which, and warns when a local login file would take precedence over it. Removing a credential removes it from this device only.
+
+**Naming an account.** Every account can carry a name you choose, the built-in Default included: hover its card in Accounts and click the pencil, or use the pencil on a row of the quota badge's account list. That name leads wherever the account is shown — the pane header, the account list, the cards, switch notices and Turn Stats — and the signed-in identity stays beside it; clearing the field returns the card to its generated name (Account 1, Account 2…). For the CLIs whose credentials carry no identity, a name you give is the only way to tell two accounts apart.
+
+The pane header's quota badge now names the account its figure was read for, in its own section in front of the percentage: your name for the account, or the part of the signed-in email before `@` when you have not named it. The figure alone takes the warning and out-of-quota colours, the whole badge stays dashed while a reading is in flight, and the full address is in the tooltip. A narrow pane shortens the section to the name's first character. An account with no name, no identity and no second account of that CLI to be told apart from adds nothing to the badge, which then looks exactly as it did before. The figure belongs to the CLI's current account, which for a pane started before an account switch is not necessarily the account that pane is still running on.
+
+**Switching accounts when a CLI runs out of quota.** When the active account of a CLI hits its usage limit, Navide files one incident for it — however many panes or windows saw it — and acts on the account-switch policy: **Off** (nothing happens), **Notify** (the default: an announcement lists the other accounts of that CLI you could switch to, each tagged with the reliability of its reading — fresh headroom, expected reset, an older reading, or unknown — and names why the rest are excluded, such as signed out, still exhausted, or already tried), or **Auto** (Navide makes one attempt with the best candidate). Automatic switches are limited to three per rolling five hours and at least ten minutes apart per CLI credential pool; switches you make yourself do not count. Any failure — no eligible account, a credential that could not be moved, a pane that could not resume, or a new account that turns out to be exhausted too — ends that incident with the reason shown; Navide never tries the next account on its own, never switches back on its own, and never re-sends work a pane may already have done. After the original account's reset time the announcement says it is *expected* to have recovered; switching back is a button you press.
+
+Claude Code switches without restarting anything, because it re-reads its credential on every request. Every other CLI keeps the credential in memory, so its affected panes are asked first: a pane that is mid-turn, waiting on a permission prompt, or has unsent input is never stopped — the switch waits until every affected pane is safely idle, then stops them, moves the credential, and resumes each conversation on its own session. A pane that cannot be resumed stops the switch before anything moves. Aider and MiniMax Code cannot resume a conversation, so a switch asks you to confirm a new one instead. Afterwards, three results are shown separately: whether the account switched, whether each conversation resumed, and whether the new account's quota was verified — the last only from a fresh reading of that account (or a turn it completed); if nothing arrives within two minutes the announcement says *switched, quota unconfirmed*. If the credentials moved but the account record could not be saved, further switches of that CLI are refused until you confirm which account is live; nothing is overwritten in the meantime. Likewise, when the live credential no longer matches the active account's copy, a switch is refused: for a CLI whose credential names its account, Navide tells the two apart by itself (a token refresh is not a different account); for one whose credential carries no identity, it asks you to confirm that the live credential is still the active account's, and that confirmation only applies to the exact state you were shown.
+
+Signing in a new account is isolated for Claude Code, Codex, Grok, Kimi, Pi, Droid, and MiniMax Code: the sign-in pane uses a private home, and the active account and its running panes are untouched. The other CLIs keep a single credential store, so their sign-in temporarily replaces the live credential; Navide snapshots the active account first, parks the new sign-in into its own account card when it completes, and restores the active account — also when the sign-in is abandoned. While such a sign-in is pending, Navide refuses to open other panes of that CLI, and it refuses to start one while other panes of that CLI are running. The account-switch layouts of every CLI were read from the vendor's own code; no CLI has yet been round-tripped between two real accounts inside Navide, and MiniMax Code's support is the newest.
+
+The **Sync** section (Settings → Sync) can carry those credentials to your other devices. The **Credentials** switch is off by default. When it is on, the Accounts cards show a cloud line per credential — in sync, on this device only, in the cloud but not used here, or waiting on a decision — and a credential pasted on another machine can be taken into use here with one click. Removing a credential here never removes it from the cloud or from other devices. The same section shows the sync key's id and offers to rotate it if you suspect it leaked: every record is re-sealed and paired devices receive the new key.
 
 `.agent-team/` is not currently a portability mechanism. Any future migration between machines should use an explicit local export/import flow with redaction and retention controls rather than Git synchronization.

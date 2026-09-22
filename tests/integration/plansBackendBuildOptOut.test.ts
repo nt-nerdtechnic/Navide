@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
-import { loadPluginDir } from '../../src/main/plugins/installedPlugins'
+import { backendEntryOnDisk, loadPluginDir } from '../../src/main/plugins/installedPlugins'
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const buildScript = join(repositoryRoot, 'scripts/build-plans-v2-backend.mjs')
@@ -27,7 +27,7 @@ function writePlansPackage(dir: string, options: { backend: boolean }): void {
   if (options.backend) {
     const backendDir = join(dir, 'backend')
     mkdirSync(backendDir, { recursive: true })
-    const entry = join(backendDir, 'navide-plans')
+    const entry = join(dir, backendEntryOnDisk('backend/navide-plans'))
     // Not a script: the loader rejects a shebang as a packaged executable.
     writeFileSync(entry, Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0x00, 0x01]))
     chmodSync(entry, 0o755)
@@ -143,7 +143,7 @@ describe('packaged Plans backend build opt-out', () => {
     const ok = loadPluginDir(withBackend)
     expect(ok.error).toBeUndefined()
     expect(ok.descriptor?.id).toBe('navide.plans')
-    expect(ok.activation?.backend?.entryFile).toBe(join(withBackend, 'backend/navide-plans'))
+    expect(ok.activation?.backend?.entryFile).toBe(join(withBackend, backendEntryOnDisk('backend/navide-plans')))
 
     const withoutBackend = temporaryDirectory('navide-plans-pkg-missing-')
     writePlansPackage(withoutBackend, { backend: false })

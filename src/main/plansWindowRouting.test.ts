@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { normalizePlatformId, setPlatformId } from '../shared/osplat'
+import { platformId, setPlatformId } from '../shared/osplat'
 import {
   createPlansWindowRouter,
   getContributionWindowConfig,
@@ -10,6 +10,12 @@ import {
   PLANS_PLUGIN_ID,
   type PluginLaunchDescriptor,
 } from './plugins/frontendPluginManager'
+
+// The platform to restore after a test that switched it: whatever this file
+// saw when it loaded — the host, or an injection from a vitest setup file.
+// Restoring to the host instead silently undid that injection for every
+// later test in the file (see src/shared/platformBaseline.test.ts).
+const BASELINE = platformId()
 
 describe('Plans window production routing unit tests', () => {
   function setupRouter(options: {
@@ -417,7 +423,7 @@ describe('Plans window production routing unit tests', () => {
   })
 
   describe('getContributionWindowConfig', () => {
-    afterEach(() => setPlatformId(normalizePlatformId(process.platform)))
+    afterEach(() => setPlatformId(BASELINE))
 
     it('uses legacy-compatible 1100x760 size and native titlebar for navide.plans.window', () => {
       const config = getContributionWindowConfig('navide.plans.window', 'Plans')

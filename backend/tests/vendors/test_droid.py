@@ -187,6 +187,40 @@ def test_turn_outcome_emits_turn_complete_with_the_assistant_text(
     assert done[0].session_id == "a"
 
 
+def test_turn_text_survives_poll_boundary_and_is_consumed(sessions_root: Path) -> None:
+    path = _write_session(sessions_root, "/w", "a", [
+        _session_start("a", "/w"),
+        _msg("assistant", [{"type": "text", "text": "reply across polls"}]),
+    ])
+    reader, seen = DroidLogReader(), set()
+    reader.parse_activity(path, seen)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"type": "agent_turn_outcome", "reason": "completed"}) + "\n")
+    assert [e.text for e in reader.parse_activity(path, seen)
+            if e.event_type == "turn_complete"] == ["reply across polls"]
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"type": "agent_turn_outcome", "reason": "cancelled"}) + "\n")
+    assert [e.text for e in reader.parse_activity(path, seen)
+            if e.event_type == "turn_complete"] == [""]
+
+
+def test_new_prompt_discards_unfinished_previous_turn_text(sessions_root: Path) -> None:
+    path = _write_session(sessions_root, "/w", "a", [
+        _session_start("a", "/w"),
+        _msg("assistant", [{"type": "text", "text": "previous reply"}]),
+    ])
+    reader, seen = DroidLogReader(), set()
+    reader.parse_activity(path, seen)
+    with path.open("a", encoding="utf-8") as fh:
+        for record in [
+            _msg("user", [{"type": "text", "text": "next prompt"}]),
+            {"type": "agent_turn_outcome", "reason": "cancelled"},
+        ]:
+            fh.write(json.dumps(record) + "\n")
+    assert [e.text for e in reader.parse_activity(path, seen)
+            if e.event_type == "turn_complete"] == [""]
+
+
 @pytest.mark.parametrize(
     "reason", ["cancelled", "error", "permission_rejected", "process_exit"]
 )

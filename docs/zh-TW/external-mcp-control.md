@@ -87,8 +87,8 @@ Tool 都回傳單一物件，因此這個問題只會在 `plan_list` 上出現�
 
 | Tool | 參數 | 功能 |
 |---|---|---|
-| `cli_list_targets` | — | 列出可定址的 CLI Pane：`name`、`address`、`pane_id`（每個 `ui.pane.*` action 都吃這個鍵，也可以在下面那幾個 Pane Tool 上取代 `address`）、`workspace_path`、`same_workspace`、`busy`、`hold_reason?` |
-| `cli_whoami` | — | **僅限 CLI Pane。** 自己的身分，形狀與名冊描述別人時完全相同：`{ok, caller, name, address, pane_id, workspace_path, agent_key, busy, offline, hold_reason?, spawned_by?, waiting_on_me?}`。`pane_id` 是所有 `ui.pane.*` 動作唯一接受的鍵，所以這是 pane 能對自己動作的前提；`spawned_by` 是開出你的那個 pane（它關掉後回 `{pane_id, gone: true}`）|
+| `cli_list_targets` | — | 列出可定址的 CLI Pane：`name`、`address`、`pane_id`（每個 `ui.pane.*` action 都吃這個鍵，也可以在下面那幾個 Pane Tool 上取代 `address`）、`workspace_path`、`same_workspace`、`busy`、`realized`（還原用 placeholder 為 false：背後沒有 CLI 在跑，所以永遠 busy，訊息會停到有人打開它——`ui.pane.open`，或 `cli_send(open_target=true)`）、`hold_reason?` |
+| `cli_whoami` | — | **僅限 CLI Pane。** 自己的身分，形狀與名冊描述別人時完全相同：`{ok, caller, name, address, pane_id, workspace_path, agent_key, busy, offline, realized, delegation_hint, hold_reason?, spawned_by?, waiting_on_me?}`。`delegation_hint` 重述派工原則（見下方 `cli_open_agent`），給沒讀過 server instructions 的 Pane 看。`pane_id` 是所有 `ui.pane.*` 動作唯一接受的鍵，所以這是 pane 能對自己動作的前提；`spawned_by` 是開出你的那個 pane（它關掉後回 `{pane_id, gone: true}`）|
 | `cli_send` | `to`（Pane 位址，或 `"group"` 表示廣播）、`text`、`wait_for_delivery_s=0`（上限 120）、`pane_id?`、`reply_to?` | 在另一個 Pane 進入 Idle 後遞送一則指令（忙碌則排入佇列）；回傳 `msg_key`，若有等待則一併回傳它的結果 |
 | `cli_check_message` | `msg_key` | 某次 `cli_send` 的結果：`{status, target, age_seconds, reason?, settled_after_s?, hold?, held_for_s?, stale?}` |
 | `cli_cancel_message` | `msg_key` | 收回一則你送出、但還沒送進去的訊息。由擁有收件佇列的視窗裁決：還在排隊就丟棄、狀態轉為 `cancelled`；已經開始投遞則忽略撤回並回報它最終的狀態。撤回不是失敗，也不會寫任何通知回給你。回傳 `{ok, msg_key, status, reason?}` |
@@ -96,8 +96,40 @@ Tool 都回傳單一物件，因此這個問題只會在 `plan_list` 上出現�
 | `cli_pending_incoming` | `limit=20`（上限 200） | **僅限 CLI Pane。** 目前排給*你*、還沒送進來的訊息：`{count, messages: [{uid, sender, status, age_seconds, kind?, excerpt, correlation_id?, in_reply_to?, hold?, held_for_s?, stale?}]}` |
 | `cli_read_incoming` | `uid=""`、`limit=5`（上限 20）、`include_delivered=false`、`peek=false` | **僅限 CLI Pane。** 寄給你的訊息**全文**——`cli_pending_incoming` 只給 200 字元且壓平空白：`{count, messages: [{uid, sender, status, kind?, content, age_seconds, consumed, correlation_id?, in_reply_to?, hold?, held_for_s?, stale?}], note?}`。**預設讀取即消費**，讀過的訊息不會再注入你的輸入框；`peek: true` 只讀不消費。消費採「先保留、後釋放」，釋放若遺失，訊息會退回佇列並可能再送達一次；`consumed` 逐則回報，未消費的原因寫在 `note` |
 | `cli_send_and_wait` | `to`、`text`、`timeout_s=60`（上限 120）、`pane_id?` | `cli_send` 再加上等待該回合結束；回傳 `cli_wait_idle` 的結果，外加 `{ok, target, msg_key}`  **遠端 Pane**：送出與送達閘門與本機相同（`rejected` 仍與 `failed` 分開）；等待那半用名冊狀態字，弱點與 `cli_wait_idle` 相同。 |
-| `cli_open_agent` | `agent`、`name`、`task`、`workspace_path`（非 Pane 呼叫端必填）、`model`、`effort` | 帶著一項任務 Spawn 新的 CLI Pane；回傳 `{ok, name, address, pane_id}`，若該次 Spawn 跨過 Advisory 門檻則另附 `advisories`。`model` 與 `effort` 為選填，該 CLI 不支援時會「拒絕」而非忽略，Pane 不會悄悄用別的模型啟動。多數 CLI 接受 model；接受獨立 effort 的較少，其餘把 effort 編在 model id 裡（`gpt-5.3-codex-high`）。model id 不做驗證（每次改版都會變），effort 則會對照該 CLI 的合法值檢查 |
+| `cli_open_agent` | `agent`、`name`、`task`、`workspace_path`（非 Pane 呼叫端必填）、`model`、`effort`、`pane_id?`、`session_id?`、`run_group_id?` | 帶著一項任務 Spawn 新的 CLI Pane；回傳 `{ok, name, address, pane_id}`，若該次 Spawn 跨過 Advisory 門檻則另附 `advisories`。**派工原則**（server instructions 也有同一句）：會改檔案、跑超過幾分鐘、或使用者可能想看、中斷或接手的工作，要派給這裡開出的 Pane —— 不是 Agent 自己的 subagent 機制（Claude Code 的 `Agent`／`Task` 工具）。Pane 在 Navide 裡看得到、跑到一半可以打開、比呼叫端的 Session 活得久；subagent 是只交回一段摘要的黑盒。純唯讀、整個結果只有一段話的短查詢仍適合用 subagent。`model` 與 `effort` 為選填，該 CLI 不支援時會「拒絕」而非忽略，Pane 不會悄悄用別的模型啟動。多數 CLI 接受 model；接受獨立 effort 的較少，其餘把 effort 編在 model id 裡（`gpt-5.3-codex-high`）。model id 不做驗證（每次改版都會變），effort 則會對照該 CLI 的合法值檢查 |
 | `cli_close_agent` | `target`、`pane_id?` | 關掉一個 Pane —— `cli_open_agent` 的另一半。**這會直接終結對方的工作**：Pane 與它的 PTY 一併消失，正在跑的回合跟著死掉，排給它的訊息永遠不會送達，而且無法復原 —— 關掉的 Pane 是 Session 沒了，不是暫存起來。動手前先用 `cli_get_status` 看它是不是正在做事；`cli_interrupt` 是比較軟的一階，`cli_send` 更軟（它會等回合做完）。回傳 `{ok, target, name, closed, advisories?}`，`advisories` 說明這次關閉的代價，而且是別人不會回報的那些：Pane 正在回合中、有訊息排在它的佇列裡、它底下有子 Pane 現在變成孤兒。這些都在 Kill 之前先蒐集，因為事後就再也問不到了。僅限本機 Pane：`<device>/<workspace>/<pane>` 這種位址會以 `close-local-only` 失敗，那是這個 Tool 的限制，不是位址寫錯 |
+
+**Choosing a tab group when opening a pane.** `cli_open_agent` accepts optional
+`run_group_id` for a fresh pane or a new pane opened with `session_id`:
+
+- Omit it or pass `null` to preserve existing group selection rules: fresh
+  panes opened by pane callers inherit the caller's group, resumed conversations
+  use the existing saved-group and fallback rules, and standalone callers retain
+  their existing defaults.
+- Pass `""` to open in the manual, ungrouped tab.
+- Pass an existing group ID in the target workspace to override the inherited
+  or saved group. The pane's parent lineage is unchanged by this parameter.
+- Invalid IDs and groups from another workspace are refused before spawning.
+- An explicit group cannot be combined with `pane_id`, which reopens an existing
+  pane. Use `cli_place_pane` to move that pane instead.
+
+A successful explicit selection returns `run_group_id`; when resuming,
+`restored_lineage.run_group_id` also reflects the override.
+
+Read the current MCP tool schema before calling. Obtain IDs from
+`cli_list_sessions` (`run_group_id`) for the target workspace; use a group ID
+that still exists, not its display name. For example, replace the path and
+group ID below with values returned for the target workspace:
+
+```json
+{
+  "agent": "codex",
+  "name": "Review",
+  "task": "Review the change and report findings.",
+  "workspace_path": "/path/to/project",
+  "run_group_id": "existing-group-id"
+}
+```
 
 `cli_send` 在訊息*被接受*遞送時就回傳，不是在另一個 Agent 讀到時才回傳。
 `cli_check_message` 補上這個閉環：`status` 可能是 `queued`（已廣播，尚無視窗
@@ -222,7 +254,7 @@ Diagnostics，可透過 `ui_diagnostics` 讀取。
 | Tool | 參數 | 功能 |
 |---|---|---|
 | `cli_read_log` | `target`、`tail_lines=200`、`since?`、`pane_id?` | Pane 對話記錄的尾端（≤512KB 且 ≤`tail_lines` 行）；回傳 `next_cursor` 與 `rotated` |
-| `cli_get_status` | `target`、`pane_id?` | `{busy, agent_key, last_activity?, ui?}` —— 當擁有該 Pane 的視窗有回應時，`ui` 鏡射 `ui.pane.getStatus`  **遠端 Pane**：答案來自名冊，帶 `remote: true` 與 `source: "roster_status"`——只有一個狀態字，沒有 `last_activity`、沒有 `ui` 區塊，且有 0.5 秒 debounce 與 30 秒掃描，所以是準即時而非即時。 |
+| `cli_get_status` | `target`、`pane_id?` | `{busy, agent_key, last_activity?, usage?, ui?}` —— 當擁有該 Pane 的視窗有回應時，`ui` 鏡射 `ui.pane.getStatus`，並在有值時帶上 Pane 的啟動身分：`agentLabel`、`model` / `effort`（Pane 啟動時指定的——在 CLI 裡打 `/model` 切換這裡看不到；缺席＝廠商預設）、`profileId`（帳號 pin，僅供記帳：每個 Pane 實際都跑 live 登入）、`loginExpired` / `usageLimitUntil`（只在 CLI 印出該訊息期間出現）。`usage` 是該廠商的**快取**額度快照——與 `cli_usage` 在 `providers[agent_key]` 回報的是同一列，本呼叫絕不刷新；看 `fetchedAt` / `stale` 判斷新舊。  **遠端 Pane**：答案來自名冊，帶 `remote: true` 與 `source: "roster_status"`——只有一個狀態字，沒有 `last_activity`、沒有 `ui` 區塊、也沒有 `usage`（本機快取講的是本機帳號），且有 0.5 秒 debounce 與 30 秒掃描，所以是準即時而非即時。 |
 | `cli_wait_idle` | `target`、`timeout_s=60`（上限 120）、`pane_id?` | 阻擋直到該 Pane 進入 Idle 或逾時；回傳 `{idle, source, waited_s, last_activity?, ui_status?}`，逾時再加上 `reason`  **遠端 Pane**：輪詢名冊的狀態字。`source` 是 `roster_status` 或 `roster_offline`，**絕不會是** `turn_complete`——遠端最強的觀察就只是「狀態字不再顯示忙碌」。停在提示上的 pane 會以 `reason: "awaiting_unclassified"` 逾時，因為名冊只帶一個字，無法分辨「卡在權限提示（等的是人）」與「agent 在問問題（其實可視為閒置）」。`offline` 是真正的第三種答案，會立刻回傳而不是等到逾時。 |
 | `cli_interrupt` | `target`、`pane_id` | 送出該 CLI 的中斷鍵給本機的 pane——codex 是 `ESC`，其餘是 `^C`。**這不等於停止**：依 CLI 而異，可能中止當前回合、可能只是清空輸入框、第二次按下甚至可能直接離開 CLI。它是一個按鍵，不是一道指令。用 `cli_get_status`／`cli_wait_idle` 確認結果；若那件工作可以讓它做完，改用 `cli_send` 傳話。回傳 `{ok, target, name, sent, status_before, advisories?}`——`sent: false` 代表根本沒送出（沒有 session，或視窗正在重連）。僅限本機 pane |
 | `cli_message_log` | `limit=50`（上限 200） | **僅限 CLI Pane。** 你自己的訊息歷史 —— 你送出過什麼、什麼送到了你這裡，最新的在最後。`cli_inbox_summary` 只回報你卡住的送出，`cli_pending_incoming` 只回報還沒送達的收件；訊息一旦落地就同時離開這兩者，Compaction 之後也從你的 Context 裡消失，所以「我們先前到底說了什麼」只有這裡答得出來。這是持久化的記錄，後端重啟後仍在，而且在這裡讀取永遠不會把任何訊息從別人的佇列上拿走。只會回傳屬於你的列：以你**目前**的傳訊名稱比對寄件者或收件者，所以排給某個你後來改掉的名字的訊息，就不再算是你的。回傳 `{ok, count, messages, scanned, truncated}`；每則訊息是 `{uid, created_at, status, sender, recipient, direction, excerpt}`，有值時再加上 `kind`／`reason`／`delivered_at`／`correlation_id`／`reply_to`／`remote`／`remote_workspace`。`excerpt` 是壓平空白後的 200 字元 —— 要全文請用 `cli_read_incoming`。`truncated` 代表較舊的訊息被截掉了，可能是被 `limit`、也可能是被這次掃描的近期列視窗切掉；`scanned` 是那個視窗掃了幾列 |
@@ -244,8 +276,8 @@ Append-only 擷取檔案中的位元組偏移量，因此一旦該檔案被截�
 文字的 `turn_complete` 事件：**aider、antigravity、claude、codex、copilot、
 cursor、droid、grok、kilo、kimi、muse、opencode、pi、qwen**。對這些而言，
 `cli_wait_idle` 與 `cli_get_status` 的 `last_activity.type` 是依據精確的
-turn-complete 訊號解析出來的 —— 但有一項但書：**grok、kimi、pi、qwen** 沒有自己的
-回合結束記錄，而是從 Log 中 8 秒的靜默合成出 `turn_complete`，因此對這四者而言
+turn-complete 訊號解析出來的 —— 但有一項但書：**kimi、pi、qwen** 沒有自己的
+回合結束記錄，而是從 Log 中 8 秒的靜默合成出 `turn_complete`，因此對這三者而言
 該事件本身就是一種推論，回合中途夠長的停頓也可能讓等待提早結束。至於一般
 Terminal Pane，則完全沒有這種訊號 ——
 `cli_wait_idle` 會退回以 10 秒沒有新活動的安靜期來推論 Idle（回應中
@@ -255,8 +287,8 @@ Terminal Pane，則完全沒有這種訊號 ——
 
 這也是為什麼 `source` 是 `cli_send_and_wait` 結果中該讀的欄位：不論由哪個 CLI
 產生，形狀都一模一樣，但可信度並不相同。來自 aider/antigravity/claude/codex/
-copilot/cursor/droid/kilo/muse/opencode 的 `turn_complete` 是 CLI 自己說回合結束了；
-同樣的值若來自 grok/kimi/pi/qwen，則是上述的 8 秒靜默推論；而 `quiet_period` ——
+copilot/cursor/droid/grok/kilo/muse/opencode 的 `turn_complete` 是 CLI 自己說回合結束了；
+同樣的值若來自 kimi/pi/qwen，則是上述的 8 秒靜默推論；而 `quiet_period` ——
 一般 Terminal Pane 唯一可得的結果 —— 代表根本沒有任何東西回報回合結束，因此請
 檢查內容，而不要信任訊號。`target_lost` 是第四個值，也是唯一一個不是對回合下
 判定的值：它表示該 Pane 在等待能得出判定之前就消失了。
@@ -296,20 +328,24 @@ Action —— `ui.pane.create`、`ui.preview.show`、`ui.window.openGit` —— 
 
 | Action | 參數 | 效果 |
 |---|---|---|
-| `ui.settings.open` | `{tab?}`（`general`、`mcp`、`analyzer`、`updates`、`appearance`、`accounts`、`storage`、`keybindings` 之一） | 開啟 Settings，可指定切到特定分頁 |
+| `ui.settings.open` | `{tab?}`（`general`、`mcp`、`analyzer`、`updates`、`appearance`、`accounts`、`keybindings` 之一） | 開啟 Settings，可指定切到特定分頁 |
 | `ui.settings.close` | — | 關閉 Settings |
 | `ui.settings.yolo` | `{yolo?}` | 讀取全域的 CLI 權限略過開關；有給 `yolo` 就設定它。回傳 `{yolo, agents}`，每個 agent 是 `{agent, mode, skipFlag}`。它不是 Workspace 範圍的：任何視窗都能回答，而且單一廠商的答案是 `skipFlag`，不是 `yolo` |
 | `ui.pane.create` | `{agent, name?, task?}` | 在該視窗已開啟的 Workspace 中為 `agent` Spawn 一個 Pane；若有給 `task`，會作為 Kickoff Prompt 送出並略過 Role 注入 |
 | `ui.pane.close` | `{paneId}` | Kill 一個 Pane |
 | `ui.pane.focus` | `{paneId}` | 顯示並聚焦一個 Pane（必要時切換分頁） |
-| `ui.pane.getStatus` | `{paneId}` | 回傳該 Pane 的 `{status, buffer, logPath?}` |
+| `ui.pane.open` | `{paneId}` | 打開一個還原用的 placeholder（`cli_list_targets` 列出 `realized: false` 的 Pane）並等它開完。回傳 `{realized, reason, paneId}`——`paneId` 是開完後這個 Pane 的 id，`reason` 是 `opened`、`fresh`（全新 session，不記得先前對話）、`already-open`，或它沒開起來的原因。Resume 行為設為 `ask` 時不會彈出 modal |
+| `ui.pane.getStatus` | `{paneId}` | 回傳該 Pane 的 `{status, buffer, logPath?, awaitingKind?, kickoff?, agentLabel?, model?, effort?, profileId?, loginExpired?, usageLimitUntil?}`——身分類欄位只在該 Pane 有值時出現 |
 | `ui.pane.interrupt` | `{paneId}` | 對該 Pane 按下它的中斷鍵。回傳 `{sent, status, advisories?}` —— `status` 是在按下**之前**讀的，因為這一按會改變它自己要回報的那個狀態 |
 | `ui.tab.switch` | `{tabId}` | 切換作用中的 Stage／Run-group 分頁 |
 | `ui.preview.show` | `{kind, …}` | 在右側 rail 的預覽面板顯示檔案、diff 或內嵌片段 |
 | `ui.window.openPlans` | — | 開啟 Plan 視窗 |
+| `ui.window.openResourceManager` | — | 開啟 Resource Manager（CPU／記憶體／磁碟用量與儲存清理） |
+| `ui.window.openTurnStats` | — | 開啟 Turn Stats（單一 CLI pane 的每輪 token 用量） |
 | `ui.window.openGit` | — | 為目前 Workspace 開啟 Git 視窗 |
 | `ui.window.openPipeline` | `{pipelineId?}` | 開啟 Pipeline Manager 視窗 |
 | `ui.workspace.open` | `{path}` | 將 `path` 開啟為 Workspace（路由到任一 Live 視窗 —— 見上文） |
+| `ui.workspace.switch` | `{path}` | 把這個視窗切換到它已持有的 Workspace；Pane 保留。視窗未持有的路徑會被拒絕（請用 `ui.workspace.open`） |
 | `ui.layout.setMode` | `{mode}` | 變更 Pane Layout 模式 |
 | `ui.pipeline.start` | `{task?, pipelineId?}` | 在該視窗已開啟的 Workspace 啟動一次 Pipeline 執行。以下情況會報錯：沒有開啟的 Workspace、已經有一輪在跑（要先 Abort）、沒給 `pipelineId` 而這個 Workspace 也沒有選定的 Pipeline、或這一輪最後沒有真的進入 `running`。回傳 `{pipelineId, stages, workspacePath, state}` |
 | `ui.pipeline.abort` | — | 中止進行中的那一輪；沒有東西在跑時會報錯，而不是對一個空操作回 ok。回傳 `{workspacePath, state}` |
@@ -395,15 +431,25 @@ watcher 兜底，以 `source: "watcher"` 且無歸屬的形式記錄。因此 `p
 
 ### Workspace、Skills 與指示檔
 
-三個唯讀盤點。它們各自回答一個上面那些 Tool 預設你已經知道答案的問題：哪些路徑
-是 Workspace、寫指示給某個 CLI 之前它本來就拿到了什麼、以及這個專案本身已經說過
-什麼。
+Skills 工作流另提供經使用者授權的安裝與投遞變更；mutation annotations 會將這些操作與下方唯讀清單區分。
+
+五個唯讀盤點。它們各自回答一個上面那些 Tool 預設你已經知道答案的問題：哪些路徑
+是 Workspace、寫指示給某個 CLI 之前它本來就拿到了什麼、這個專案本身已經說過
+什麼、設定了哪些 MCP Server、以及使用者存了哪些 Prompt。
 
 | Tool | 參數 | 功能 |
 |---|---|---|
 | `workspace_list` | — | Navide 知道的專案，最近開啟的在前 —— `plan_create`、`preview_record`、`cli_open_agent` 都要一個專案根目錄的絕對路徑，而這就是那份清單。回傳 `{workspaces, live_pane_workspaces}`。每個 Workspace 帶著 Store 自己的紀錄（`path`、`name`、`last_opened_at`、`pinned`、`exists`），外加 `has_live_panes`：現在真的有 CLI Pane 跑在裡面時為真。優先挑這種 —— `has_live_panes` 為 false 的 Workspace 沒有任何 Navide 視窗在看它，寫進去的 Plan 或預覽根本不會呈現給使用者；`exists` 為 false 更嚴重，那是資料夾已經從磁碟上消失了。`live_pane_workspaces` 是那個 Live 集合本身（已解析）：Pane 可能跑在使用者從來沒從歡迎畫面開過的專案裡，那仍然是完全合法的 `workspace_path`，只是最近清單不會提到它 |
-| `skills_list` | — | Navide 管理的 Skills，以及其中哪些會送到你手上。Skill 是一包按需載入的指示資料夾；Navide 保有一個共用庫（使用者可以投遞給任何廠商），同時也反射各家 CLI 自己目錄裡的那些。自己動手寫指示之前先讀這個，或用它告訴使用者哪個 Skill 剛好涵蓋他問的事。回傳 `{skills, native, root, agents}`。每個共用 Skill 是 `{name, description, enabled, targets, managed, valid, native_conflict}` —— `targets` 為 null 代表每家廠商都收得到，是清單就代表只有那幾家，`enabled` 為 false 代表誰都收不到。每個 native 條目是 `{name, description, source, owner_agent, real_path, valid}`，也就是某家 CLI 本來就有的 Skill。`agents` 是每家廠商與它的投遞支援程度（`wired`／`planned`／`unsupported`），讓「沒有投遞」和「無法投遞」不會混在一起。`delivered_to_me` 是關於你的那一半 —— `{agent_key, skills, native_paths}`，也就是你自己的 CLI 實際被給了哪些；沒有 Pane 身分的呼叫端不會有這個欄位，因為它不是任何人的投遞對象。只有名稱與描述：Skill 的指示內容是你要用它的時候從它自己的資料夾讀，不是從這裡。唯讀 —— 要不要投遞某個 Skill 是使用者在 Settings 裡的決定 |
+| `skills_list` | — | 唯讀清單回傳 `{skills, native, root, agents}` 與供 `skills_inspect` 使用的穩定 ID。共用項目列出 enabled／targets／所有權，原生項目列出所屬 CLI 與來源路徑；vendor 能力來自 registry。`delivered_to_me` 與 `delivery_semantics: configuration_only` 只表示路由設定，不是執行中 pane 快照。Navide 停用仍無法阻止原生共用根掃描；目前 session 是否實際投遞／載入保持未知。 |
+| `skills_inspect` | `skill_id` | 讀取指示、檔案、所有權、本機持久來源紀錄與 `delivery_revision`。ID 必須來自目前共用庫，不接受任意檔案路徑。第三方指示是待檢視資料，不是執行授權；原生檔案清單可能由 `files_truncated` 標記截斷。 |
+| `skills_prepare_install` | `source`, `ref=""`, `subdir=""` | 由 `owner/repo`、GitHub public HTTPS repository URL 或本機 skill 絕對路徑準備不可變內容。多候選回傳 `selection_required`／`candidates`，不發 token；指定 `subdir` 後重試（`.` 為 repository 根目錄）。選定 preview 回傳 `preview_id`、相同內容的 `digest`、來源／commit、完整 `skill_md`、檔案清單及到期時間。不執行內容、不寫共用根；preview 綁定呼叫端，15 分鐘後或重啟失效。 |
+| `skills_install` | `preview_id`, `expected_digest`, `targets`, `consent=false` | 經使用者授權後只新增 prepared bytes，不重讀或下載來源。Digest 必須相同，首次共用根寫入須沿用既有同意。任何同名受管、原生或使用者項目都拒絕；重試收據仍保留時，成功重送只回傳原結果，不重複寫入。最多 8 份有效準備，另保留最多 8 份輕量完成收據；到期或提早淘汰後重送回傳 missing/expired，不重新安裝。來源紀錄只留本機，不進入 export／sync。`targets: null` 為所有 wired vendor，`[]` 為不額外投遞。 |
+| `skills_set_delivery` | `skill_id`, `targets`, `expected_revision`, `enabled=null` | 經使用者授權，以 inspect 的 `delivery_revision` 更新設定；過時版本回 `SKILL_CONFLICT`。原生 skill 的空／null targets 清除額外投遞，禁止設定 `enabled`。不影響所屬 CLI 或共用根的自動掃描；實際載入須另開 session 驗證。限制詳見 [Skills 工作流](user-guide.md)。 |
 | `memory_list` | `workspace_path`、`path=""` | 這裡的 CLI 會載入的指示檔 —— `CLAUDE.md`、`AGENTS.md`、`GEMINI.md` 等等，包含這個專案裡的與使用者家目錄裡的。不帶 `path` 時只列 Metadata：`{workspace_path, files, agents}`，每個檔案是 `scope`（`user` 或 `project`）、`path`、`relative`、`readers`（會載入它的廠商鍵）、`canonical`、`exists`、`size`、`modified`、`error`。還不存在的檔案一樣會被列出來，因為它標示的是「某個慣例該寫在哪裡」；`agents` 是每家廠商與 Navide 找它檔案的方式（`mapped` 或 `configured`）。帶 `path` 時回傳那一個檔案：`{workspace_path, file, path, text, exists, modified}` —— 而且路徑必須是這份清單報過的，其他一律拒絕，所以這不是一條讀任意檔案的路。唯讀：編輯指示檔是使用者在 Settings 裡的決定，這裡沒有對應的 Tool。沒有 Workspace 時只會列出 user 範圍的檔案 |
+| `workspace_open` | `path` | 將 `path` 開啟為 Workspace —— 開新視窗或用既有視窗，由 Navide 決定。`path` 必須是專案根目錄的絕對路徑，也就是 `workspace_list` 回報的那種。等同 `ui_invoke` 帶 action `ui.workspace.open`，但不必先查 action；路由到任一 Live 視窗，所以只有完全沒有視窗開著時才會出錯。回傳 `{ok, path}` |
+| `workspace_switch` | `path` | 把承載呼叫 Pane 的那個視窗切換到它已持有的另一個 Workspace（一視窗多專案）；Pane 不受影響。視窗未持有 `path` 時回錯誤並指向 `workspace_open`；該視窗有 Pipeline 在跑時也會拒絕（先 `pipeline_abort`，或從側欄切換）。只限 Pane 呼叫 —— host 或外部呼叫者沒有自己的視窗，會得到 `ok: false`（改用 `ui_invoke` 帶 `workspace_path` 與 action `ui.workspace.switch`）。回傳 `{ok, path}`，`path` 是現在畫面上的 Workspace |
+| `mcp_list` | — | 這裡設定的 MCP Server —— Navide 自己以 Client 身分連接的那些（附即時狀態），以及各家 CLI 自己設定檔裡（`~/.claude.json`、`~/.codex/config.toml` 等）反射出來的那些，照檔案寫的呈現。回傳 `{servers, native, agents}`。每個 Navide 管理的 Server 是 `{name, enabled, transport, command, args, env}` 或 `{name, enabled, transport, url, headers}`，外加 `status`（`disabled`／`connected`／`error`／`unknown`）與 `tool_count`；工具清單本身不帶。每個 native 條目是 `{name, agent, transport, path, command, args, url, env, headers, enabled, valid, error}`。`agents` 是每家廠商與 Navide 對它 MCP 能做的事（`wired`／`planned`／`unsupported`），以及它自己的設定有沒有被反射。所有長得像憑證的值 —— env 與 header 的值、`--api-key=` 這類引數、URL 裡的 userinfo 與機密查詢參數 —— 都已經遮成 `***`；名稱與主機保留，條目才認得出來。全域清單，不分 Workspace。唯讀 —— 新增、啟用或編輯 Server 是使用者在 Settings 裡的決定 |
+| `prompt_list` | `id=""` | 使用者放在 Settings → Prompts 的 Prompt 技能 —— 從 App 對 CLI Pane 發射的已存指示。不帶 `id` 時只列 Metadata：`{skills, default_id}`，每個技能是 `{id, name, icon, description, category, enabled, isDefault, maxTurns}`，`default_id` 是標為預設的那個技能的 id（沒有則為 `""`）。使用者從沒存過任何一個時會多一個 `note`：App 會在第一次使用時植入一個內建技能，而那個從這裡看不到。帶 `id` 時回傳那一個技能的完整內容 —— `{skill}`，含 `prompt` 與 `resumePrompt`；未知的 id 回 `{ok: false, error}`。唯讀：建立或編輯是在 Settings 裡做的 |
 
 ### Pipeline
 

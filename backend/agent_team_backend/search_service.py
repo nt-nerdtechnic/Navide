@@ -188,7 +188,7 @@ def _find_rg(
             if not abs_path:
                 continue
             try:
-                rel = str(Path(abs_path).resolve().relative_to(root))
+                rel = Path(abs_path).resolve().relative_to(root).as_posix()
             except ValueError:
                 rel = abs_path
             line_no = data.get("line_number", 0)
@@ -254,7 +254,7 @@ def _find_python(
                 truncated = True
                 break
             fp = Path(dirpath) / fn
-            rel = str(fp.relative_to(root))
+            rel = fp.relative_to(root).as_posix()
             if not _glob_ok(rel, fn, includes, excludes):
                 continue
             try:

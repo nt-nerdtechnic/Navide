@@ -30,7 +30,7 @@ import {
   GIT_TRANSPORT_KEY,
   GIT_UI_KEY,
 } from './ports/gitSurface'
-import { initKeybindingsPort, initSettingsBackend, seedSettings } from '@navide/plugin-ui/shared'
+import { initKeybindingsPort, initSettingsBackend, onSettingsChanged, seedSettings, settingsGet } from '@navide/plugin-ui/shared'
 
 // Theme token layers — order matters: primitives → semantic roles → themes.
 import '@navide/plugin-ui/styles.css'
@@ -47,6 +47,7 @@ import GitDetailApp from './GitDetailApp.vue'
 // keeps it; the connect-time `ui.settings.get` reconcile then takes over.
 // Mirrors plugins/plans/mount.ts.
 const query = new URLSearchParams(window.location.search)
+const initialLocale = query.get('locale')
 const initialTheme = query.get('theme')
 const initialThemeCustom = query.get('git_theme_custom')
 const initialYolo = query.get('git_yolo') ?? '1'
@@ -60,7 +61,19 @@ if (initialTheme) {
   initialSettings['agent-team:theme'] = JSON.stringify(initialTheme)
 }
 if (initialThemeCustom) initialSettings['agent-team:theme-custom'] = initialThemeCustom
+if (initialLocale === 'zh-TW' || initialLocale === 'en-US' || initialLocale === 'ja-JP') {
+  initialSettings['agent-team:language'] = initialLocale
+  i18n.global.locale.value = initialLocale
+}
 seedSettings(initialSettings)
+const offLanguageSettings = onSettingsChanged((keys) => {
+  if (!keys.includes('agent-team:language')) return
+  const language = settingsGet<string>('agent-team:language', '')
+  if (language === 'zh-TW' || language === 'en-US' || language === 'ja-JP') {
+    i18n.global.locale.value = language
+  }
+})
+window.addEventListener('unload', offLanguageSettings, { once: true })
 
 const backend = useBackend()
 const capabilitySdk = createPluginCapabilitySdk(backend)

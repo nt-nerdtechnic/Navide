@@ -291,8 +291,13 @@ function textPlainPayload(ev: DragStub): string | undefined {
   return call?.[1] as string | undefined
 }
 
-async function mountApp(workspacePath = '/tmp/ws'): Promise<VueWrapper> {
-  window.history.replaceState({}, '', `/?workspace_path=${encodeURIComponent(workspacePath)}`)
+async function mountApp(workspacePath = '/tmp/ws', workspaceDisplayName = ''): Promise<VueWrapper> {
+  window.history.replaceState(
+    {},
+    '',
+    `/?workspace_path=${encodeURIComponent(workspacePath)}` +
+      (workspaceDisplayName ? `&workspace_display_name=${encodeURIComponent(workspaceDisplayName)}` : ''),
+  )
   const backend = useBackend()
   const gitTransport = createHostGitTransport(backend)
   const surfacePorts = createHostGitSurfacePorts(backend, gitTransport)
@@ -1184,5 +1189,30 @@ describe('GitWindowApp — Resolve with agent', () => {
 
     expect(promptPaste()).toBeUndefined()
     expect(toastMessages()).toContain('permission denied')
+  })
+})
+
+describe('GitWindowApp — workspace title (legacy recovery bundle)', () => {
+  let wrapper: VueWrapper | null = null
+
+  afterEach(() => {
+    wrapper?.unmount()
+    wrapper = null
+  })
+
+  it('wears the alias the Host resolved, in the window title and the toolbar crumb', async () => {
+    wrapper = await mountApp('/Users/dev/projects/agent-team', '  Navide  ')
+    expect(document.title).toBe('Navide — Git')
+    expect(wrapper.get('.toolbar .crumb').text()).toContain('Navide')
+  })
+
+  it('falls back to the folder name when the alias is absent or blank', async () => {
+    for (const alias of ['', ' ', '   ']) {
+      document.title = 'untouched'
+      const view = await mountApp('/Users/dev/projects/agent-team', alias)
+      expect(document.title, JSON.stringify(alias)).toBe('agent-team — Git')
+      expect(view.get('.toolbar .crumb').text(), JSON.stringify(alias)).toContain('agent-team')
+      view.unmount()
+    }
   })
 })

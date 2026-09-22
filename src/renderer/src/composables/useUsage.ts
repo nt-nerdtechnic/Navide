@@ -242,6 +242,34 @@ export function isExhausted(snap: UsageSnapshot | undefined): boolean {
   return exhaustedWindow(snap) !== undefined
 }
 
+/** True when the account's own reading POSITIVELY says general quota remains:
+ *  a successful, current read that measured at least one headline window and
+ *  found none of them spent.
+ *
+ *  The inverse of `isExhausted` would not do. That one answers false for an
+ *  account nobody has read, and callers that treat "not exhausted" as "has
+ *  quota" turn every unread account into a healthy one. This is the third
+ *  state — a reading that is absent, errored, stale or still in flight is
+ *  "don't know" and answers false, so a veto built on it can only ever fire
+ *  on evidence. */
+export function hasHeadlineHeadroom(snap: UsageSnapshot | undefined): boolean {
+  if (!readingIsCurrent(snap)) return false
+  const headline = snap!.windows.filter((w) => !w.expired && HEADLINE_KINDS.has(w.kind))
+  return headline.length > 0 && headline.every((w) => w.usedPercent < EXHAUSTED_USED_PCT)
+}
+
+/** True when this snapshot is a reading, rather than something standing in for
+ *  one. `status !== 'ok'` is not enough on its own: a refresh that failed, and
+ *  the cached figures an account switch publishes before its first read lands,
+ *  both keep `status: 'ok'` and carry windows that look exactly like measured
+ *  ones. Callers that decide something FROM the reading — either direction —
+ *  share this, so "not known yet" cannot pass for an answer at one end while
+ *  being rejected at the other. */
+export function readingIsCurrent(snap: UsageSnapshot | undefined): boolean {
+  if (!snap || snap.status !== 'ok') return false
+  return !snap.stale && !snap.staleExpired && !snap.refreshPending
+}
+
 /** Severity by REMAINING quota: >40 ok (grey), 15–40 warn (orange), <15 crit (red). */
 export function remainingTier(remaining: number): 'ok' | 'warn' | 'crit' {
   if (remaining < 15) return 'crit'

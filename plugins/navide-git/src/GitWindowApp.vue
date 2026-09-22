@@ -60,10 +60,19 @@ import BranchDiffPane from './editor/BranchDiffPane.vue'
 import ConflictPane from './editor/ConflictPane.vue'
 import { closeGitWindowMenuOnEscape } from './lib/gitMenuEscape'
 import { buildConflictPrompt } from './lib/conflictPrompt'
+import { workspaceDisplayName } from './lib/workspaceAlias'
 
 // The host sets ?workspace_path= when it loads this entry (frontendPluginManager
 // gitQuery). A getter is what useGit expects.
 const workspacePath = new URLSearchParams(window.location.search).get('workspace_path') ?? ''
+// The alias the user gave this workspace, resolved by the Host and passed as
+// `workspace_display_name`; blank or absent means "no alias" and the folder
+// name stands in. KNOWN LIMITATION: a load-time snapshot. Renaming the
+// workspace while this window is open does NOT retitle it — this bundle talks
+// to a capability shim with no project.* call or event, so there is nothing to
+// follow. The name is correct again the next time the window opens.
+const workspaceAliasParam =
+  new URLSearchParams(window.location.search).get('workspace_display_name') ?? ''
 const props = defineProps<{
   workspaceGrantPort: GitWorkspaceGrantPort
   aiCliController: AiCliSessionController
@@ -221,7 +230,7 @@ const remoteBranches = computed(() => gitBranches.value.filter((b) => b.is_remot
 
 const hasWorkspace = computed(() => workspacePath.length > 0)
 const isRepo = computed(() => gitStatus.value.is_git_repo)
-const repoName = computed(() => workspacePath.split('/').filter(Boolean).at(-1) ?? '')
+const repoName = computed(() => workspaceDisplayName(workspacePath, workspaceAliasParam))
 
 const changeCount = computed(() => {
   const s = gitStatus.value

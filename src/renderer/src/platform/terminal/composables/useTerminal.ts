@@ -56,7 +56,7 @@ import type {
   TerminalAgentProfileResolver,
   WrappedLineGroup,
 } from '@navide/plugin-ui'
-import type { TerminalDockPort, TerminalSpawnOptions } from '../ports/terminalDock'
+import type { TerminalDockPort, TerminalInputOptions, TerminalSpawnOptions } from '../ports/terminalDock'
 
 export { encodeShiftEnter }
 export type { TerminalAgentProfile, TerminalAgentProfileResolver }
@@ -183,6 +183,11 @@ const FOCUS_REPORT = /^\x1b\[[IO]/
 function isTerminalReport(data: string): boolean {
   return MOUSE_REPORT.test(data) || FOCUS_REPORT.test(data)
 }
+
+/** The custom key handler sends its bytes through pasteText, the same helper
+ *  programmatic injection uses — but a chord like Shift+Enter or ⌘⌫ is still
+ *  the person at the keyboard, so those sites pass this and injection does not. */
+const HUMAN_KEY: TerminalInputOptions = { human: true }
 
 // ── Edit > Copy bridge ──────────────────────────────────────────────────────
 // Main cannot read an xterm selection (`.xterm` is user-select: none, so
@@ -394,13 +399,12 @@ export function expandHomePath(fp: string, home: string): string {
 
 // Moved to lib/paths so a caller that only wants the string helper does not
 // load this module. Re-exported because every existing import names it here.
+// The box-frame regex is shared with lib/injectEcho, which also has to find the
+// frame — there by its position rather than to skip it — so the two cannot
+// drift apart.
+import { BOX_ONLY_LINE_RE } from '../../../lib/injectEcho'
 import { collapseHomePath } from '../lib/paths'
 export { collapseHomePath } from '../lib/paths'
-
-// A line made of nothing but box-drawing glyphs and spaces — the frame of a
-// CLI's bottom input widget (╭──╮ / ╰──╯). At least one box char is required so
-// a plain blank line isn't matched here (blanks are handled separately).
-const BOX_ONLY_LINE_RE = /^[\s─-╿]*[─-╿][\s─-╿]*$/
 
 /** Serialize the RENDERED scrollback (what the user actually sees) as text.
  *  Unlike the raw-stream cleanBuffer, TUI repaints overwrite buffer lines in
@@ -801,6 +805,20 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
   // finished turn on the PTY. Same settle semantics as awaiting: clean output
   // past the window means the user answered and the CLI moved on.
   const questionAt = ref<number>(0)
+  // Messages Navide itself delivered into this pane that the CLI has not yet
+  // picked up, fed in by App.vue. A CLI that queues mid-turn input (Claude
+  // Code) keeps working on the current turn — often painting only a spinner,
+  // which is stripped as TUI noise — so the PTY heuristic settles to idle
+  // while our message is still sitting in its queue. A count, not a flag: each
+  // envelope the recipient's transcript shows consumed releases one, so two
+  // deliveries need two consumes. The timestamp is the fuse's clock, taken at
+  // the LATEST delivery — see displayStatus for why the fuse exists at all.
+  const deliveredPendingCount = ref<number>(0)
+  const deliveredPendingAt = ref<number>(0)
+  // Same reasoning as TURN_STALE_MS in lib/agentMessaging.ts: the consume
+  // signal is trustworthy but a single miss (a reader dropping a record, a
+  // turn aborted with ESC) must not park the badge on RUNNING forever.
+  const DELIVERED_PENDING_FUSE_MS = 120_000
   // Tick so displayStatus re-evaluates after output goes quiet.
   const nowTick = ref<number>(Date.now())
   const isOnScreen = (): boolean => opts?.onScreen?.() ?? true
@@ -906,6 +924,20 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
       questionAt.value > 0 &&
       lastCleanBurstAt.value < questionAt.value + AWAITING_SETTLE_MS
     ) return 'awaiting'
+    // A message we delivered that the CLI has not consumed yet means it still
+    // has work queued, whatever the PTY says. Below both AWAITING paths on
+    // purpose: a pane parked on a prompt or a question cannot consume anything
+    // until the user acts, and hiding that behind RUNNING would take the one
+    // badge that tells them to. Above the authoritative turn end because
+    // Claude Code ends the CURRENT turn before it dequeues — that turn_complete
+    // is exactly the moment this must keep reporting RUNNING. The fuse is not
+    // a detection window: a consume signal that never arrives would otherwise
+    // hold RUNNING indefinitely (GitHub #21 parked a pane 8.5h on one lost
+    // signal), so past it the delivery is deemed consumed.
+    if (
+      deliveredPendingCount.value > 0 &&
+      nowTick.value - deliveredPendingAt.value <= DELIVERED_PENDING_FUSE_MS
+    ) return 'running'
     if (turnCompleteAt.value > lastCleanBurstAt.value) return 'idle'
     if (nowTick.value - lastCleanBurstAt.value > IDLE_CONFIRM_MS) return 'idle'
     return runningLatched.value ? 'running' : 'idle'
@@ -1058,6 +1090,27 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
     questionAt.value = 0
   }
 
+  /** Navide delivered a message into this pane and the CLI accepted it (Enter
+   *  verified). Called from App.vue's deliverAgentMessage. A count that already
+   *  outlived the fuse is stale by definition — its consume signal was lost —
+   *  so it is dropped rather than carried into the new delivery, or the next
+   *  consume would leave a ghost holding RUNNING for a message long gone. */
+  function markDeliveredPending(): void {
+    const now = Date.now()
+    if (deliveredPendingCount.value > 0 && now - deliveredPendingAt.value > DELIVERED_PENDING_FUSE_MS) {
+      deliveredPendingCount.value = 0
+    }
+    deliveredPendingCount.value += 1
+    deliveredPendingAt.value = now
+  }
+
+  /** The CLI picked a delivered message up. One per envelope the recipient's
+   *  transcript shows as a user record; `all` for readers that carry no user
+   *  text, where the next turn end is the only consume signal there is. */
+  function clearDeliveredPending(all = false): void {
+    deliveredPendingCount.value = all ? 0 : Math.max(0, deliveredPendingCount.value - 1)
+  }
+
   function markBufferPosition(): number {
     flushPendingClean()
     return cleanBuffer.value.length
@@ -1103,7 +1156,7 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
       if (!data || !inputTransportReady()) return
       inputBuffer = applyMentionPickToInput(inputBuffer, query, addresses)
       syncDraft()
-      void terminalPort.input(sessionId.value, data)
+      void terminalPort.input(sessionId.value, data, undefined, { human: true })
       opts?.onMentionPick?.(addresses)
     },
   })
@@ -1546,7 +1599,7 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
     const inputHandlers = createTerminalInputHandlers({
       terminal: term,
       isAgentPane: () => !!activeAgentKey && activeAgentKey !== 'terminal',
-      send: (text) => { void pasteText(text) },
+      send: (text) => { void pasteText(text, HUMAN_KEY) },
       encodeNewline: () => encodeShiftEnter(agentProfile(activeAgentKey)),
       finalizeStaleComposition,
       reportEmptyCopy: () => reportEmptyCopy(),
@@ -1907,11 +1960,13 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
   // conversation. History still accumulates across restarts — the replayed
   // snapshot lands in the normal buffer, which the next save serializes ahead
   // of the current screen.
-  function serializeSnapshot(lines: number): string {
+  /** `lines` undefined = every line xterm still holds (the addon's default),
+   *  which is what a handoff wants; the stored snapshot passes its cap. */
+  function serializeSnapshot(lines?: number): string {
     const altIsHistory = agentProfile(activeAgentKey)?.fullScreenTui === true
     try {
       const payload = serializer.serialize({
-        scrollback: lines,
+        ...(lines === undefined ? {} : { scrollback: lines }),
         excludeAltBuffer: !altIsHistory,
       })
       return altIsHistory ? stripAltScreenEnter(payload) : payload
@@ -1986,6 +2041,21 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
     lastSnapActivityAt = raw
   }
   watch(nowTick, maybeSaveScrollSnapshot)
+
+  /** This pane's scrollback as a serialized buffer, for handing to the pane
+   *  that replaces it. Everything xterm still holds (bounded by xterm's own
+   *  scrollback, not the stored snapshot's line cap — this is a memory
+   *  handoff, not a localStorage write), in the stored snapshot's format.
+   *
+   *  Async on purpose: `term.write` queues, and the buffer only reflects a
+   *  chunk once the parser has run it (a write callback fires after every
+   *  earlier write has been processed). Serializing right after the flush
+   *  would drop the tail the flush had just queued. */
+  async function serializeScrollback(): Promise<string> {
+    _flushPendingOutput()
+    await new Promise<void>((resolve) => term.write('', resolve))
+    return serializeSnapshot()
+  }
 
   const _snapshotHooks: TerminalSnapshotHooks = {
     currentKey: () => persistKey,
@@ -2094,6 +2164,9 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
   // is still true, so gating that path would deadlock the pane's own startup.
   let _stdinGated = false
   let _gatedInput = ''
+  // True once something in _gatedInput was typed rather than reported by the
+  // terminal, so the flush can carry the human flag the keystrokes would have.
+  let _gatedInputHuman = false
   const GATED_INPUT_MAX = 4096
   /** When the held buffer was last written to, for the staleness bound below. */
   let _gatedInputAt = 0
@@ -2129,16 +2202,19 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
     // prevent, arriving by the one path allowed to hold input.
     if (Date.now() - _gatedInputAt > GATED_INPUT_MAX_AGE_MS) {
       _gatedInput = ''
+      _gatedInputHuman = false
       return
     }
     const pending = _gatedInput
+    const human = _gatedInputHuman
     _gatedInput = ''
+    _gatedInputHuman = false
     // A pane that died while preparing has nowhere to replay to; dropping the
     // buffer is the only option left, and sending would clear isStopped for a
     // session that no longer exists.
     if (!sessionId.value || status.value === 'exited' || status.value === 'error') return
     noteUserInput(pending)
-    void terminalPort.input(sessionId.value, pending)
+    void terminalPort.input(sessionId.value, pending, undefined, human ? { human: true } : undefined)
   }
 
   // Renderer half of the input round-trip. The pane has no local echo, so the
@@ -2187,6 +2263,7 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
         // has already given up on.
         _gatedInput = (_gatedInput + data).slice(-GATED_INPUT_MAX)
         _gatedInputAt = Date.now()
+        if (!isTerminalReport(data)) _gatedInputHuman = true
         return
       }
       // Backstop for the disconnected overlay: refuse rather than queue. The
@@ -2236,7 +2313,9 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
       // every key would never let the lag they are feeling accumulate.
       if (!_keystrokeSentAt && data.length <= 16) _keystrokeSentAt = Date.now()
 
-      void terminalPort.input(sessionId.value, data)
+      // The one path that is the person typing; mouse/focus reports ride the
+      // same event and must not read as a human at the keyboard.
+      void terminalPort.input(sessionId.value, data, undefined, isTerminalReport(data) ? undefined : { human: true })
 
       // The public menu narrows from the same onData stream, including IME commits.
       mentionMenu.onData(data)
@@ -2591,6 +2670,16 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
         term.write(TERMINAL_NEW_PROCESS_RESET)
         term.write(TERMINAL_RECONNECTED_DIVIDER)
       }
+    } else if (opts.replayScrollback && !snapshotReplayed) {
+      // A handoff from the pane this one replaces (quota-failover restart):
+      // the same serialized-buffer format as the stored snapshot, taken from
+      // the old xterm right before it was stopped, so the history the user
+      // was looking at is the history they keep. Same mode reset, for the
+      // same reason. Nothing here goes to the PTY.
+      snapshotReplayed = true
+      term.write(opts.replayScrollback)
+      term.write(TERMINAL_NEW_PROCESS_RESET)
+      term.write('\r\n\x1b[2m\x1b[38;5;240m─── account switched ───\x1b[0m\r\n')
     }
     // Only resume spawns are throttled (they are the heavy ones). Acquire before
     // send so the queue-wait is NOT charged against the per-request timeout;
@@ -2627,7 +2716,10 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
         metadata: opts.metadata ?? null,
         outputLogFile: opts.outputLogFile ?? null,
         loginProfileId: opts.loginProfileId ?? null,
+        isLogin: opts.isLogin ?? false,
         replacesTerminalId: replacesPtyId || null,
+        quotaTransactionId: opts.quotaTransactionId,
+        quotaOriginalPaneId: opts.quotaOriginalPaneId,
       }, TERMINAL_CREATE_TIMEOUT_MS)
       // A cancellation or replacement can land while the RPC is in flight.
       // The backend cancellation owns rollback; a late result must never bind
@@ -2658,6 +2750,9 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
         const version = probe.version ? ` v${probe.version}` : ''
         const duration = typeof probe.duration_ms === 'number' ? `, ${probe.duration_ms}ms` : ''
         term.writeln(`\x1b[2m[startup probe] ${probe.binary_path}${version}${duration}\x1b[0m`)
+      }
+      for (const warning of resp.payload.wiring_warnings ?? []) {
+        term.writeln(`\x1b[33m[mcp] ${warning}\x1b[0m`)
       }
       resizeCtrl.applyFit()  // sync the real size to the backend on first paint
       // The width measured above can still be a mid-layout snapshot (e.g. this
@@ -2806,6 +2901,7 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
     // no longer exists.
     awaitingInputAt.value = 0
     questionAt.value = 0
+    deliveredPendingCount.value = 0
     error.value = ''
     stallReason.value = null  // a retry must not inherit the last attempt's exit
     status.value = 'starting'
@@ -2855,10 +2951,10 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
   /** Returns false when nothing was sent, so a caller staging a paste in parts
    *  can stop rather than send the tail on its own — an Enter that arrives
    *  without the text it was meant to submit is its own kind of wrong. */
-  function pasteText(text: string): boolean {
+  function pasteText(text: string, opts?: TerminalInputOptions): boolean {
     if (!sessionId.value || status.value === 'exited' || status.value === 'error') return false
     if (!inputTransportReady()) return false
-    void terminalPort.input(sessionId.value, text)
+    void terminalPort.input(sessionId.value, text, undefined, opts)
     return true
   }
 
@@ -2870,14 +2966,14 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
    * of which reject), or the backend answered `ok: false` — which wsClient
    * resolves rather than rejects, so it has to be checked here.
    */
-  function _sendPasteChunk(text: string): Promise<PasteChunkFailure | null> {
+  function _sendPasteChunk(text: string, opts?: TerminalInputOptions): Promise<PasteChunkFailure | null> {
     if (!sessionId.value || status.value === 'exited' || status.value === 'error') {
       return Promise.resolve('transport')
     }
     if (!inputTransportReady()) {
       return Promise.resolve('transport')
     }
-    return terminalPort.input(sessionId.value, text, PASTE_ACK_TIMEOUT_MS)
+    return terminalPort.input(sessionId.value, text, PASTE_ACK_TIMEOUT_MS, opts)
       .then((reply) => {
         if (reply && typeof reply === 'object' && (reply as { ok?: unknown }).ok === false) {
           return 'refused' as const
@@ -2972,7 +3068,9 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
     // retry from here: the bytes that did land are already in the CLI's input,
     // so re-sending would duplicate them. Say so and let the user decide.
     const chunks = chunkForPty(payload, PASTE_CHUNK)
-    void Promise.all(chunks.map((chunk) => _sendPasteChunk(chunk))).then((outcomes) => {
+    // ⌘V and a file drop are the person at the keyboard; injection never
+    // comes through here (App.vue's injectText has its own path).
+    void Promise.all(chunks.map((chunk) => _sendPasteChunk(chunk, HUMAN_KEY))).then((outcomes) => {
       const lost = outcomes.filter((o) => o === 'transport' || o === 'refused').length
       const late = outcomes.filter((o) => o === 'timeout').length
       // A late ack is not a lost chunk: the backend writes the bytes into the
@@ -3163,6 +3261,7 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
   return {
     mount,
     spawn,
+    serializeScrollback,
     tryReattach,
     attachedOutputLogFile,
     interrupt,
@@ -3196,6 +3295,8 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
     clearNeedsInput,
     markQuestion,
     clearQuestion,
+    markDeliveredPending,
+    clearDeliveredPending,
     markBufferPosition,
     recleanBuffer,
     flushPendingClean,

@@ -134,6 +134,13 @@ describe('buildPaneStatusReply', () => {
     })
   })
 
+  it('reports waiting for a cold-restore placeholder and starting for a realized pane with no ref', () => {
+    // A placeholder has no CLI and will not get one on its own; a realized
+    // pane with no ref yet is genuinely booting. Same missing ref, two states.
+    expect(buildPaneStatusReply({ realized: false }, null).status).toBe('waiting')
+    expect(buildPaneStatusReply({ realized: true }, null).status).toBe('starting')
+  })
+
   it('reports the live status and buffer for a realized pane', () => {
     expect(
       buildPaneStatusReply({ outputLogFile: '/ws/x.log' }, { displayStatus: 'running', buffer: 'hello' })
@@ -215,6 +222,38 @@ describe('buildPaneStatusReply', () => {
       buffer: '',
       logPath: undefined
     })
+  })
+
+  it('carries the launch identity when the pane record has it', () => {
+    const reply = buildPaneStatusReply(
+      {
+        agentLabel: 'Claude Code',
+        model: 'claude-opus-5',
+        effort: 'high',
+        profileId: '__default__',
+        loginExpired: true,
+        usageLimitUntil: 1789000000000
+      },
+      { displayStatus: 'idle', buffer: '' }
+    )
+    expect(reply.agentLabel).toBe('Claude Code')
+    expect(reply.model).toBe('claude-opus-5')
+    expect(reply.effort).toBe('high')
+    expect(reply.profileId).toBe('__default__')
+    expect(reply.loginExpired).toBe(true)
+    expect(reply.usageLimitUntil).toBe(1789000000000)
+  })
+
+  it('omits every identity key that has no value, never sending null or false', () => {
+    // A pane launched on the vendor default has no model; a healthy pane has
+    // no loginExpired and no usageLimitUntil (the field is null between hits).
+    const reply = buildPaneStatusReply(
+      { agentLabel: '', model: undefined, loginExpired: false, usageLimitUntil: null },
+      { displayStatus: 'idle', buffer: '' }
+    )
+    for (const key of ['agentLabel', 'model', 'effort', 'profileId', 'loginExpired', 'usageLimitUntil']) {
+      expect(key in reply).toBe(false)
+    }
   })
 })
 
@@ -787,6 +826,29 @@ describe('clusterMentionCandidates', () => {
     expect(out.map((x) => x.address)).toEqual(['x', 'y', 'a'])
     expect(out[0].group).toBeUndefined()
   })
+
+  it('sections by the key, not by the heading text', () => {
+    // Two projects can be called the same thing — the more so now that a
+    // project can be given a display name, which is allowed to repeat. Keyed on
+    // the path they stay two sections; keyed on the name they collapsed into
+    // one and each project appeared to hold the other's panes.
+    const at = (address: string, path: string, label: string): MentionCandidate =>
+      ({ address, group: path, groupLabel: label })
+    const out = clusterMentionCandidates([
+      at('a', '/w/one', 'api'),
+      at('b', '/w/two', 'api'),
+      at('c', '/w/one', 'api'),
+    ])
+    expect(out.map((x) => x.address)).toEqual(['a', 'c', 'b'])
+    expect(out.map((x) => x.group)).toEqual(['/w/one', '/w/one', '/w/two'])
+    expect(out.map((x) => x.groupLabel)).toEqual(['api', 'api', 'api'])
+  })
+
+  it('leads with the sender own workspace by path', () => {
+    const at = (address: string, path: string): MentionCandidate => ({ address, group: path })
+    const out = clusterMentionCandidates([at('a', '/w/two'), at('b', '/w/one')], '/w/one')
+    expect(out.map((x) => x.address)).toEqual(['b', 'a'])
+  })
 })
 
 describe('rankMentionCandidates', () => {
@@ -803,6 +865,18 @@ describe('rankMentionCandidates', () => {
     const out = rankMentionCandidates(all, ['proj/x-1'], 'Recent')
     expect(out[0]).toMatchObject({ address: 'proj/x-1', group: 'Recent' })
     expect(out.find((c) => c.address === 'claude-1')?.group).toBe('local')
+  })
+
+  it('drops the old section heading when it hoists a row into recents', () => {
+    // The hoisted row changes section, so a groupLabel left over from its
+    // workspace would title the recents header with a project name.
+    const out = rankMentionCandidates(
+      [{ address: 'proj/x-1', group: '/w/proj', groupLabel: 'Payments API' }],
+      ['proj/x-1'],
+      'Recent',
+    )
+    expect(out[0]).toMatchObject({ address: 'proj/x-1', group: 'Recent' })
+    expect(out[0].groupLabel).toBeUndefined()
   })
 
   it('ignores recents that are no longer offered (pane closed)', () => {

@@ -81,13 +81,15 @@ from agent_team_backend import (  # noqa: E402
     agent_messaging,
     app,
     device_identity,
+    device_pairing,
     device_signing,
     remote_roster,
     server_link,
     trust_store,
 )
 from agent_team_backend.credential_vault import CredentialVault  # noqa: E402
-from agent_team_backend import server_link  # noqa: E402
+from agent_team_backend.db import Database  # noqa: E402
+from agent_team_backend import device_crypto, server_link, sync_engine, sync_keyring, sync_scopes  # noqa: E402
 from agent_team_backend.server_link import ServerLink, ServerLinkConfig  # noqa: E402
 
 # The other half of the isolation: the trust store's document lives in the
@@ -122,6 +124,9 @@ DEVICE_B = f"verify-b-{RUN}"
 #: Section 14 only, against the disposable server.
 DEVICE_C = f"verify-c-{RUN}"
 DEVICE_D = f"verify-d-{RUN}"
+#: Section 17 only: two devices of one account, each with its own sync store.
+DEVICE_E = f"verify-e-{RUN}"
+DEVICE_F = f"verify-f-{RUN}"
 #: The address every A→B message in sections 6-11 uses.
 TO_B = {"deviceId": DEVICE_B, "workspace": WORKSPACE_LABEL, "paneName": PANE_NAME}
 SENDER = {"workspace": WORKSPACE_LABEL, "paneName": "sender", "paneId": "verify-sender"}
@@ -358,10 +363,91 @@ async def open_link(
     started = await link.start()
     if not started:
         raise SystemExit("ServerLink refused to start; check NAVIDE_WS / token")
-    ok = await until(lambda: bool(link.member_id) or bool(link.terminated_reason), f"{name} auth")
+    # Authenticated, not merely identified: the member id is settled partway
+    # through the hello, and what follows it (the pin, the keyring binding)
+    # still runs before the link will carry a request. Waiting on the id alone
+    # let the first send land in that gap and come back LINK_OFFLINE.
+    ok = await until(lambda: link._authenticated or bool(link.terminated_reason), f"{name} auth")
     if not ok or link.terminated_reason:
         raise SystemExit(f"{name} failed to authenticate: {link.terminated_reason}")
     return link, recorder
+
+
+# ---- pairing two links in this process ---------------------------------------
+
+# A message from a device this machine has not paired with is refused before the
+# policy is consulted (REASON_NOT_PAIRED), and the only thing that writes a pin
+# is a completed SAS exchange. So two links that are to exchange messages have
+# to pair first, through the real server: request, response, both confirms.
+#
+# One thing cannot be checked here: that the six digits *match*. This process
+# is one machine standing in for two, so both ends hold the same signing and
+# encryption keys, and the SAS orders its inputs by signing key — with the two
+# keys equal the tie falls the same way on both sides and the nonces land in
+# opposite slots. Two real machines never share a key. Everything else — the
+# frames, the signatures, the pins with both keys, the sync-key offer that
+# follows — is the production path, driven end to end.
+
+
+async def pair_links(initiator: ServerLink, responder: ServerLink, label: str) -> bool:
+    x_id, y_id = initiator._device_id, responder._device_id
+    check(
+        await until(lambda: initiator._device_online(y_id), f"{label}: 對方在線上"),
+        f"{label}: 配對前 server 已回報對方在線上",
+    )
+    started = await initiator.start_pairing(y_id)
+    check(
+        isinstance(started, dict) and started.get("ok") is True,
+        f"{label}: start_pairing 送出 pair-request",
+        started,
+    )
+    def _state(device_id: str) -> str:
+        pairing = device_pairing.get(device_id)
+        return pairing.state if pairing else ""
+
+    both_waiting = await until(
+        lambda: _state(x_id) == _state(y_id) == device_pairing.STATE_AWAITING_LOCAL,
+        f"{label}: 兩端都拿到雙方 nonce",
+    )
+    check(both_waiting, f"{label}: request/response 走完，兩端都等自己的人按下確認")
+    mine = device_pairing.get(y_id)
+    theirs = device_pairing.get(x_id)
+    check(
+        bool(mine and theirs)
+        and mine.their_enc_key == theirs.their_enc_key == device_crypto.public_key()
+        and mine.their_key == theirs.their_key == device_signing.public_key(),
+        f"{label}: 兩端從 frame（不是目錄）拿到對方的簽章鍵與加密鍵",
+    )
+    # Two people press. Order does not matter; each side sends exactly one confirm.
+    answered_y = await responder.confirm_pairing(x_id, accept=True)
+    answered_x = await initiator.confirm_pairing(y_id, accept=True)
+    check(
+        answered_x.get("ok") is True and answered_y.get("ok") is True,
+        f"{label}: 兩端都確認",
+        {"x": answered_x, "y": answered_y},
+    )
+
+    def _pinned() -> bool:
+        a, b = trust_store.pin_for(x_id), trust_store.pin_for(y_id)
+        return bool(
+            a and b and a.get("approved") and b.get("approved")
+            and a.get("encKey") and b.get("encKey")
+        )
+
+    pinned = await until(_pinned, f"{label}: 兩端寫入 pin")
+    check(pinned, f"{label}: 兩端都釘選了對方的簽章鍵＋加密鍵（approved）", {
+        "x": trust_store.pin_for(x_id), "y": trust_store.pin_for(y_id)
+    })
+    # The pins can be written before the last confirm frame has crossed the
+    # server, so the exchange records are the last thing to go.
+    check(
+        await until(
+            lambda: device_pairing.get(x_id) is None and device_pairing.get(y_id) is None,
+            f"{label}: 交換記錄清空",
+        ),
+        f"{label}: 配對完成後沒有殘留的交換",
+    )
+    return pinned
 
 
 # ---- a server this script is allowed to kill --------------------------------
@@ -599,6 +685,63 @@ async def main() -> int:
         await until(lambda: link_b._policy_revision == 1, "B 收到 policy.changed 並重抓")
         check(link_b._policy_revision == 1, "policy.changed 推播讓 B 的快取升到 revision 1")
 
+        print("\n== 5b. 配對 A↔B（SAS 交換走真 server） ==")
+        # Nothing below reaches a pane without this: an unpaired sender is
+        # refused with REASON_NOT_PAIRED before the policy is even read.
+        check(
+            trust_store.pin_for(DEVICE_A) is None and trust_store.pin_for(DEVICE_B) is None,
+            "配對前兩端互相沒有 pin（訊息會被拒為 not-paired）",
+        )
+        check(await pair_links(link_a, link_b, "A↔B"), "A↔B 配對完成")
+
+        # The account sync key rides the same channel once the two are paired:
+        # rotate here, offer to every eligible peer, and watch the offer land.
+        # Both links share this process's keyring, so "B can read A's new
+        # records" is not something this run can prove — the two-process
+        # script covers that. What is proved is the wire: the offer is
+        # sealed to the pinned key, carried by the real server, and adopted
+        # by the receiving link's handler rather than dropped or refused.
+        sync_keyring.ensure_account_key()
+        rotated_kid = sync_keyring.rotate_account_key()
+        offers = await link_a.offer_sync_key_to_peers()
+        check(
+            offers.get("offered") == [DEVICE_B],
+            "輪替後 offer_sync_key_to_peers 只送給已配對的同帳號裝置 B",
+            offers,
+        )
+        offer_landed = await until(
+            lambda: any(
+                (device_pairing.parse(m.get("text")) or {}).get("kind")
+                == device_pairing.SYNC_KEY_OFFER
+                for m in rec_b.pending
+            ),
+            "B 收到 sync-key-offer",
+        )
+        check(offer_landed, "sync-key-offer 經真 server 送達 B")
+        offer_key = next(
+            (
+                m.get("msgKey") for m in rec_b.pending
+                if (device_pairing.parse(m.get("text")) or {}).get("kind")
+                == device_pairing.SYNC_KEY_OFFER
+            ),
+            "",
+        )
+        check(
+            await until(
+                lambda: any(
+                    m.get("msgKey") == offer_key and m.get("state") == "delivered"
+                    for m in rec_a.acked
+                ),
+                "offer 被 B 端 handler 接受",
+            ),
+            "B 端的 handler 接受了 offer（acked delivered，不是 rejected）",
+            [m for m in rec_a.acked if m.get("msgKey") == offer_key],
+        )
+        check(
+            sync_keyring.active_key_id() == rotated_kid,
+            "offer 往返後 ring 仍是輪替後的那把（同血緣同 gen＝冪等）",
+        )
+
         print("\n== 6/7. messages.send / messages.pending ==")
         msg_key = f"verify:{RUN}:{secrets.token_hex(4)}"
         send_reply = await link_a.send_message(
@@ -631,7 +774,13 @@ async def main() -> int:
             "推播的 to.workspace / to.paneName 原樣送達",
             pushed.get("to"),
         )
-        check(pushed.get("text") == "hello from device A", "推播帶原文", pushed.get("text"))
+        # Sealed to the pinned encryption key, so the relay carries ciphertext
+        # and the original only reappears once B's handler opens it.
+        check(
+            bool(pushed.get("cipher")) and not pushed.get("text"),
+            "推播帶密文、不帶原文（封給 pin 裡的加密鍵）",
+            {k: pushed.get(k) for k in ("cipher", "text")},
+        )
         check(
             not any(m.get("msgKey") == msg_key for m in rec_a.pending),
             "裝置 A 沒有收到自己送出的訊息（迴圈防護）",
@@ -649,6 +798,11 @@ async def main() -> int:
             ),
             "B 端把訊息解析到本機 pane（政策放行、位址解析成功）",
             link_b._inbound.get(msg_key),
+        )
+        check(
+            delivered(msg_key) and delivered(msg_key)[0].get("content") == "hello from device A",
+            "B 端解開密文後原文送進 pane",
+            delivered(msg_key),
         )
 
         print("\n== 8. messages.ack -> messages.acked ==")
@@ -715,50 +869,54 @@ async def main() -> int:
             await until(lambda: link_b._policy_revision == 2, "B 的政策升到 revision 2"),
             "policy.changed 讓 B 換上新政策",
         )
-        # --- your own second machine, before and after somebody vouches for it ---
-        # Two halves, and the first one is the reason this section was rewritten.
-        # Pinning settles *which key* a device id may use from here on; it does
-        # not settle that the machine behind it is the one you have in mind,
-        # because the member id in that first message was written by the relay.
-        # So an unvouched-for device does not get the own-device ring: it is held
-        # to the ordinary rules, which here deny everything.
+        # --- your own second machine, unpaired and then paired again ---
+        # Two halves, and the first one is the reason this section exists.
+        # Signing the account in on a second device is not the grant: the
+        # member id in a message is the relay's word, and the only thing that
+        # makes a device *yours* here is a pairing two people confirmed. So B
+        # unpairs A (the account view's "unpair" button, forget_device) and
+        # A's next message is refused before the policy is even read —
+        # REASON_NOT_PAIRED, not policy-denied, because there is no pin to
+        # verify it against.
         #
         # Asserting only the second half would leave this line green after
         # somebody removed the gate — and removing it is exactly the tempting
-        # "fix" when this section goes red, because the old label said signing in
-        # was itself the grant. It no longer is.
-        unvouched_key = f"verify:{RUN}:own-unvouched"
-        unvouched_send = await link_a.send_message(
-            to=TO_B, sender=SENDER, text="before anyone vouched", msg_key=unvouched_key
+        # "fix" when this section goes red.
+        forgotten = await asyncio.to_thread(trust_store.forget_device, DEVICE_A)
+        check(forgotten.get("found") is True, "（前置）B 端解除與 A 的配對", forgotten)
+        unpaired_key = f"verify:{RUN}:own-unpaired"
+        unpaired_send = await link_a.send_message(
+            to=TO_B, sender=SENDER, text="before pairing again", msg_key=unpaired_key
         )
         check(
-            isinstance(unvouched_send, dict) and unvouched_send.get("ok") is True,
-            "server 接受送出（政策是收端的事，不是 server 的）",
-            unvouched_send,
+            isinstance(unpaired_send, dict) and unpaired_send.get("ok") is True,
+            "server 接受送出（配對是收端的事，不是 server 的）",
+            unpaired_send,
         )
         check(
             await until(
-                lambda: any(m.get("msgKey") == unvouched_key for m in rec_a.acked),
-                "A 收到未核准裝置的 acked",
+                lambda: any(m.get("msgKey") == unpaired_key for m in rec_a.acked),
+                "A 收到未配對裝置的 acked",
             ),
-            "未核准的自家裝置也會回報結果",
+            "未配對的自家裝置也會回報結果",
         )
-        unvouched_ack = next((m for m in rec_a.acked if m.get("msgKey") == unvouched_key), {})
+        unpaired_ack = next((m for m in rec_a.acked if m.get("msgKey") == unpaired_key), {})
         check(
-            unvouched_ack.get("reason") == "policy-denied",
-            "未核准的自家裝置照一般規則辦，不進 own-device 環",
-            unvouched_ack,
+            unpaired_ack.get("reason") == server_link.REASON_NOT_PAIRED,
+            "未配對的自家裝置在政策之前就被拒（not-paired，不進 own-device 環）",
+            unpaired_ack,
         )
         check(
-            delivered(unvouched_key) == [],
+            delivered(unpaired_key) == [],
             "而且沒有送進 pane",
-            delivered(unvouched_key),
+            delivered(unpaired_key),
         )
 
-        # Now vouch for it, the way a person does in the account view once they
-        # have compared the fingerprint against the other machine.
-        vouched = await asyncio.to_thread(trust_store.approve_device, DEVICE_A)
-        check(vouched is True, "（前置）核准裝置 A，等同在帳號視圖裡按下確認", vouched)
+        # Pair again, the way two people do. B starts it this time: A still
+        # pins B, so from A's side there is nothing to start — and a pairing
+        # begun from the side that forgot is exactly the route the account
+        # view offers after an unpair.
+        check(await pair_links(link_b, link_a, "B↔A 重新配對"), "（前置）B 重新與 A 配對")
 
         own_key = f"verify:{RUN}:own-device"
         own_send = await link_a.send_message(
@@ -1210,6 +1368,7 @@ async def main() -> int:
 
     await check_server_outage()
     await check_account_flow()
+    await check_credentials_sync()
 
     print(f"\n== 結果：{_passed} 通過 / {_failed} 失敗 ==")
     return 1 if _failed else 0
@@ -1248,6 +1407,7 @@ async def check_server_outage() -> None:
         )
         check(granted.get("ok") is True, "（前置）允許 C 驅動 D 的 pane", granted)
         await until(lambda: link_d._policy_revision == 1, "D 收到政策")
+        check(await pair_links(link_c, link_d, "C↔D"), "（前置）C↔D 配對完成")
 
         to_d = {"deviceId": DEVICE_D, "workspace": WORKSPACE_LABEL, "paneName": PANE_NAME}
 
@@ -1425,6 +1585,144 @@ async def check_account_flow() -> None:
             f"  （留下一個帳號 {email}：server 沒有刪除租戶的介面，"
             f"所以每跑一次就多一個測試租戶，不是腳本沒清乾淨）"
         )
+
+
+
+
+async def check_credentials_sync() -> None:
+    """Section 17: the credentials scope against a real server, two devices.
+
+    Everything the pytest suite proves runs against ``FakeServer``; this is the
+    one place the real ``sync.push`` / ``sync.pull`` handlers, the allowlist and
+    the account boundary meet the engine. Two links sign in as the same account
+    (one ring, as on two machines of one person); each drives its *own* engine
+    over its own SQLite store and its own adapter, because two devices sharing
+    one store would not be two devices. The adapter's vault seams are
+    synthetic: no portable credential of this machine is read or written.
+
+    Checked: the record travels and opens on the other side; the server holds
+    only ciphertext; neither store holds the value in the clear; a second round
+    is a no-op; removal here is not a tombstone there; a disabled import stays
+    off until pulled by name; the inventory names the slot, not the secret.
+    """
+    print("\n== 17. credentials scope 對真 server：兩台裝置 ==")
+    secret = f"sk-ant-oat01-VERIFY-{RUN}-{secrets.token_hex(8)}"
+    link_e, _rec_e = await open_link(DEVICE_E, "E")
+    link_f, _rec_f = await open_link(DEVICE_F, "F")
+    work = Path(tempfile.mkdtemp(prefix="navide-verify-cred-"))
+    try:
+        sync_scopes.set_scope_enabled("credentials", True)
+        check(await link_e.ensure_sync_key(), "E 取得帳號同步金鑰（首台：鑄造）")
+        check(sync_keyring.has_account_key(), "同一行程的第二條連線看見同一把 ring")
+
+        class Vault:
+            def __init__(self, values: dict) -> None:
+                self.values = dict(values)
+
+            def entries(self) -> list[tuple[str, str]]:
+                return sorted(self.values)
+
+            def read_secret(self, agent_key: str, slot_id: str) -> str | None:
+                return self.values.get((agent_key, slot_id))
+
+            def forget(self, agent_key: str, slot_id: str) -> None:
+                self.values.pop((agent_key, slot_id), None)
+
+        def device(link: ServerLink, name: str, values: dict):
+            db = Database(work / f"{name}.db")
+            store = sync_engine.SyncStore(db)
+            vault = Vault(values)
+            adapter = sync_scopes.CredentialsScope(
+                db,
+                entries=vault.entries,
+                read_secret=vault.read_secret,
+                forget_local=vault.forget,
+                accepts=lambda _agent, _value: True,
+            )
+            engine = sync_engine.SyncEngine(
+                store,
+                link._request,  # noqa: SLF001 - the raw request path, as section 4 uses it
+                device_id=lambda: link._device_id,  # noqa: SLF001
+                enabled=lambda _scope: True,
+                signing_key_for=lambda _device: "",
+            )
+            engine.register(adapter)
+            return engine, store, adapter, vault, work / f"{name}.db"
+
+        eng_e, store_e, ad_e, vault_e, db_e = device(link_e, "E", {("claude", "__default__"): secret})
+        eng_f, store_f, ad_f, _vault_f, db_f = device(link_f, "F", {})
+
+        first = await eng_e.sync("credentials")
+        check(first.get("pushed") == 1 and first.get("conflicts") == 0, "E 推上 1 筆", first)
+        second = await eng_f.sync("credentials")
+        check(second.get("pulled") == 1 and second.get("conflicts") == 0, "F 拉到 1 筆", second)
+        check(ad_f.imported_value("claude", "__default__") == secret, "F 解開的值與 E 貼入的一致")
+        item_id = next(iter(ad_e.snapshot()))
+
+        raw = await link_f._request("sync.pull", {"scope": "credentials", "since": 0, "limit": 200})  # noqa: SLF001
+        rows = ((raw or {}).get("payload") or {}).get("items") or []
+        row = next((r for r in rows if r.get("itemId") == item_id), None)
+        check(row is not None and secret not in json.dumps(row), "server 那一列只有密文", row and {k: row[k] for k in ("itemId", "rev", "deviceId")})
+        check(row is not None and row.get("deviceId") == link_e._device_id, "server 蓋的是 E 的 deviceId", row and row.get("deviceId"))  # noqa: SLF001
+
+        def disk(path: Path) -> bytes:
+            out = b""
+            for suffix in ("", "-journal", "-wal", "-shm"):
+                p = Path(str(path) + suffix)
+                if p.exists():
+                    out += p.read_bytes()
+            return out
+
+        check(secret.encode() not in disk(db_e) and secret.encode() not in disk(db_f), "兩台的 SQLite（含 journal/WAL）都沒有明文")
+
+        again_e = await eng_e.sync("credentials")
+        again_f = await eng_f.sync("credentials")
+        check(
+            again_e.get("pushed") == 0 and again_f.get("pushed") == 0 and again_f.get("pulled") == 0,
+            "第二輪兩邊都是 no-op",
+            {"E": again_e, "F": again_f},
+        )
+
+        inventory = await eng_f.inventory("credentials")
+        items = inventory.get("items") or []
+        entry = next((i for i in items if i.get("itemId") == item_id), None)
+        check(
+            entry is not None
+            and entry.get("state") == sync_engine.STATE_IN_SYNC
+            and (entry.get("remote") or {}).get("meta") == {"agentKey": "claude", "slotId": "__default__"}
+            and secret not in json.dumps(inventory),
+            "inventory：in-sync、meta 只有 agent/slot、無明文",
+            entry,
+        )
+
+        vault_e.values.clear()  # removed on E
+        removed = await eng_e.sync("credentials")
+        raw = await link_f._request("sync.pull", {"scope": "credentials", "since": 0, "limit": 200})  # noqa: SLF001
+        rows = ((raw or {}).get("payload") or {}).get("items") or []
+        row = next((r for r in rows if r.get("itemId") == item_id), None)
+        check(
+            removed.get("pushed") == 0 and row is not None and not row.get("deleted"),
+            "E 本機移除後 server 上沒有墓碑",
+            {"result": removed, "deleted": row and row.get("deleted")},
+        )
+
+        check(ad_f.disable("claude", "__default__") == 1, "F 停用匯入副本")
+        store_f.forget("credentials")  # as switching the section off and on would
+        await eng_f.sync("credentials")
+        check(ad_f.imported_value("claude", "__default__") is None, "重讀整個 scope 後停用的憑證沒有復活")
+        pulled = await eng_f.pull_items("credentials", [item_id])
+        check(
+            pulled and pulled[0].get("result") == "pulled" and ad_f.imported_value("claude", "__default__") == secret,
+            "指名 pull 才把它帶回來",
+            pulled,
+        )
+        _ = store_e  # kept for symmetry; E's bookkeeping is asserted through its rounds
+    finally:
+        with contextlib.suppress(Exception):
+            sync_scopes.set_scope_enabled("credentials", False)
+        await link_e.stop()
+        await link_f.stop()
+        shutil.rmtree(work, ignore_errors=True)
 
 
 if __name__ == "__main__":

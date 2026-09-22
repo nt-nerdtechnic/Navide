@@ -55,6 +55,11 @@ from .test_server_link import (  # noqa: F401 - broadcasts is a fixture
 
 DENY_ALL = {"version": 1, "default": "deny", "rules": []}
 
+#: A well-formed X25519 public key for pins these tests write by hand. The
+#: pairing exchange pins one next to the signing key, and a pin without one
+#: is the legacy shape the sync-key offer refuses.
+ENC_KEY = PEER.enc_key
+
 
 def _impersonating(member_id: str = "ATTACKER-CHOSEN"):
     """A relay that hands this machine an identity of the relay's choosing.
@@ -948,6 +953,7 @@ def test_no_public_read_answers_from_an_empty_cache():
         "notices": lambda: len(trust_store.notices()),
         "has_seen_message": lambda: trust_store.has_seen_message("k-seen"),
         "unapproved_devices": lambda: len(trust_store.unapproved_devices()),
+        "legacy_pinned_devices": lambda: trust_store.legacy_pinned_devices(),
         # The one reader here that is a refusal. A cold cache answering "not
         # blocked" would make a backend restart into a way to lift every block.
         "is_blocked_locally": lambda: trust_store.is_blocked_locally(
@@ -1309,7 +1315,7 @@ def test_a_completed_pairing_is_what_writes_a_pin() -> None:
     assert trust_store.pin_for("dev-paired") is None
 
     assert trust_store.pin_paired_device(
-        "dev-paired", sign_key=key, member_id="m1", own_member_id="m1"
+        "dev-paired", sign_key=key, enc_key=ENC_KEY, member_id="m1", own_member_id="m1"
     ) is True
     pin = trust_store.pin_for("dev-paired")
     assert pin is not None and pin["approved"] is True and pin["signKey"] == key
@@ -1321,10 +1327,13 @@ def test_pairing_again_never_revises_the_pinned_key() -> None:
     around that."""
     trust_store.load()
     original = device_signing.public_key()
-    trust_store.pin_paired_device("dev-fixed", sign_key=original, member_id="m1")
+    trust_store.pin_paired_device("dev-fixed", sign_key=original, enc_key=ENC_KEY, member_id="m1")
 
     trust_store.pin_paired_device(
-        "dev-fixed", sign_key="c3Vic3RpdHV0ZWQta2V5LWZyb20tdGhlLXJlbGF5QQ==", member_id="m1"
+        "dev-fixed",
+        sign_key="c3Vic3RpdHV0ZWQta2V5LWZyb20tdGhlLXJlbGF5QQ==",
+        enc_key=ENC_KEY,
+        member_id="m1",
     )
     assert trust_store.pin_for("dev-fixed")["signKey"] == original
 
@@ -1332,8 +1341,12 @@ def test_pairing_again_never_revises_the_pinned_key() -> None:
 def test_pinning_the_same_device_twice_changes_nothing() -> None:
     trust_store.load()
     key = device_signing.public_key()
-    assert trust_store.pin_paired_device("dev-twice-p", sign_key=key, member_id="m1") is True
-    assert trust_store.pin_paired_device("dev-twice-p", sign_key=key, member_id="m1") is False
+    assert trust_store.pin_paired_device(
+        "dev-twice-p", sign_key=key, enc_key=ENC_KEY, member_id="m1"
+    ) is True
+    assert trust_store.pin_paired_device(
+        "dev-twice-p", sign_key=key, enc_key=ENC_KEY, member_id="m1"
+    ) is False
 
 
 def test_a_pairing_with_no_key_writes_nothing() -> None:
@@ -1341,8 +1354,16 @@ def test_a_pairing_with_no_key_writes_nothing() -> None:
     pin, and a pin with no key would refuse every message from that device for
     ever with no way to see why."""
     trust_store.load()
-    assert trust_store.pin_paired_device("dev-keyless-p", sign_key="", member_id="m1") is False
+    assert trust_store.pin_paired_device(
+        "dev-keyless-p", sign_key="", enc_key=ENC_KEY, member_id="m1"
+    ) is False
     assert trust_store.pin_for("dev-keyless-p") is None
+    # And no encryption key means the same: half a pairing pins nothing.
+    key = device_signing.public_key()
+    assert trust_store.pin_paired_device(
+        "dev-keyless-e", sign_key=key, enc_key="", member_id="m1"
+    ) is False
+    assert trust_store.pin_for("dev-keyless-e") is None
 
 
 def test_a_directory_device_that_never_knocked_is_not_on_the_pending_card() -> None:
@@ -1392,7 +1413,7 @@ def test_a_device_of_yours_can_still_be_paired_from_its_row() -> None:
 
     # And once a pairing completes, the row is settled.
     assert trust_store.pin_paired_device(
-        "dev-mine", sign_key=key, member_id="m-self", own_member_id="m-self"
+        "dev-mine", sign_key=key, enc_key=ENC_KEY, member_id="m-self", own_member_id="m-self"
     ) is True
     row = next(
         d for d in link.network_snapshot()["devices"] if d["deviceId"] == "dev-mine"
@@ -1736,7 +1757,7 @@ def test_unpairing_no_longer_resurrects_the_row() -> None:
     trust_store.load()
     key = device_signing.public_key()
     _roster_offering("dev-unpaired", key)
-    trust_store.pin_paired_device("dev-unpaired", sign_key=key, member_id="m1")
+    trust_store.pin_paired_device("dev-unpaired", sign_key=key, enc_key=ENC_KEY, member_id="m1")
     link = _trust_link()
     assert not any(r["deviceId"] == "dev-unpaired" for r in link._pending_approvals())
 
@@ -1884,7 +1905,7 @@ async def test_a_pair_request_reaches_no_pane_and_pins_nothing(broadcasts):
                     asker,
                     device_pairing.PAIR_REQUEST,
                     nonce="bm9uY2U=",
-                    signKey=asker.sign_key,
+                    signKey=asker.sign_key, encKey=asker.enc_key,
                 ),
             }
         )
@@ -1914,7 +1935,7 @@ async def test_a_pair_request_that_does_not_verify_starts_nothing():
     try:
         conn = server.opened[0]
         payload = _pair_frame(
-            asker, device_pairing.PAIR_REQUEST, nonce="bm9uY2U=", signKey=asker.sign_key
+            asker, device_pairing.PAIR_REQUEST, nonce="bm9uY2U=", signKey=asker.sign_key, encKey=asker.enc_key
         )
         payload["sig"] = Peer("dev-somebody").sign(
             msg_key=payload["msgKey"],
@@ -1953,7 +1974,7 @@ async def test_a_blocked_device_cannot_put_a_pairing_card_on_the_screen():
                     asker,
                     device_pairing.PAIR_REQUEST,
                     nonce="bm9uY2U=",
-                    signKey=asker.sign_key,
+                    signKey=asker.sign_key, encKey=asker.enc_key,
                 ),
             }
         )
@@ -2072,7 +2093,7 @@ async def test_a_responder_confirming_alone_writes_no_pin():
     link = await _connected(server)
     try:
         device_pairing.accept_request(
-            "dev-half", device_name="M3", their_key=PEER.sign_key, their_nonce="bm9uY2U="
+            "dev-half", device_name="M3", their_key=PEER.sign_key, their_enc_key=PEER.enc_key, their_nonce="bm9uY2U="
         )
         reply = await link.confirm_pairing("dev-half", accept=True)
 
@@ -2092,7 +2113,7 @@ async def test_refusing_after_the_other_side_confirmed_still_pairs_nothing():
     link = await _connected(server)
     try:
         device_pairing.accept_request(
-            "dev-no", device_name="M3", their_key=PEER.sign_key, their_nonce="bm9uY2U="
+            "dev-no", device_name="M3", their_key=PEER.sign_key, their_enc_key=PEER.enc_key, their_nonce="bm9uY2U="
         )
         device_pairing.note_peer_confirmed("dev-no")
 
@@ -2113,7 +2134,7 @@ async def test_both_sides_confirming_writes_the_pin():
     link = await _connected(server)
     try:
         device_pairing.accept_request(
-            "dev-yes-p", device_name="M3", their_key=PEER.sign_key, their_nonce="bm9uY2U="
+            "dev-yes-p", device_name="M3", their_key=PEER.sign_key, their_enc_key=PEER.enc_key, their_nonce="bm9uY2U="
         )
         device_pairing.note_peer_confirmed("dev-yes-p")
 
@@ -2137,9 +2158,11 @@ async def test_a_refusal_from_the_other_side_cancels_and_says_so():
     link = await _connected(server)
     try:
         conn = server.opened[0]
-        device_pairing.begin(PEER.device_id, device_name="M3", their_key=PEER.sign_key)
+        device_pairing.begin(
+            PEER.device_id, device_name="M3", their_key=PEER.sign_key, their_enc_key=PEER.enc_key
+        )
         device_pairing.accept_response(
-            PEER.device_id, their_key=PEER.sign_key, their_nonce="bm9uY2U="
+            PEER.device_id, their_key=PEER.sign_key, their_enc_key=PEER.enc_key, their_nonce="bm9uY2U="
         )
         await conn.push(
             {
@@ -2189,7 +2212,7 @@ async def test_a_blocked_pair_request_is_acked_as_a_policy_refusal():
             {
                 "type": "messages.pending",
                 "payload": _pair_frame(
-                    asker, device_pairing.PAIR_REQUEST, nonce="bm9uY2U=", signKey=asker.sign_key
+                    asker, device_pairing.PAIR_REQUEST, nonce="bm9uY2U=", signKey=asker.sign_key, encKey=asker.enc_key
                 ),
             }
         )
@@ -2480,7 +2503,7 @@ async def test_a_relay_cannot_pair_itself_with_the_initiator():
         await link.start_pairing(PEER.device_id)
         # Everything below this line is within a relay's power to synthesise.
         device_pairing.accept_response(
-            PEER.device_id, their_key=PEER.sign_key, their_nonce="bm9uY2U="
+            PEER.device_id, their_key=PEER.sign_key, their_enc_key=PEER.enc_key, their_nonce="bm9uY2U="
         )
         await conn.push(
             {
@@ -2527,7 +2550,7 @@ async def test_a_failed_pin_is_not_reported_as_a_pairing(monkeypatch):
         link._online_devices = {PEER.device_id}
         await link.start_pairing(PEER.device_id)
         device_pairing.accept_response(
-            PEER.device_id, their_key=PEER.sign_key, their_nonce="bm9uY2U="
+            PEER.device_id, their_key=PEER.sign_key, their_enc_key=PEER.enc_key, their_nonce="bm9uY2U="
         )
         await conn.push(
             {
@@ -2568,7 +2591,7 @@ async def test_the_responder_completes_when_that_answer_arrives():
                     asker,
                     device_pairing.PAIR_REQUEST,
                     nonce="bm9uY2U=",
-                    signKey=asker.sign_key,
+                    signKey=asker.sign_key, encKey=asker.enc_key,
                 ),
             }
         )
@@ -2639,7 +2662,7 @@ async def test_a_refusal_reaches_the_other_side_from_either_end():
         # before anybody at that end could have pressed anything.
         await link.start_pairing(PEER.device_id)
         device_pairing.accept_response(
-            PEER.device_id, their_key=PEER.sign_key, their_nonce="bm9uY2U="
+            PEER.device_id, their_key=PEER.sign_key, their_enc_key=PEER.enc_key, their_nonce="bm9uY2U="
         )
         await conn.push(
             {
@@ -2683,7 +2706,7 @@ async def test_a_pairing_row_carries_when_the_exchange_began():
                     asker,
                     device_pairing.PAIR_REQUEST,
                     nonce="bm9uY2U=",
-                    signKey=asker.sign_key,
+                    signKey=asker.sign_key, encKey=asker.enc_key,
                 ),
             }
         )
@@ -2724,7 +2747,7 @@ async def test_the_responder_is_not_paired_by_the_other_side_alone():
                     asker,
                     device_pairing.PAIR_REQUEST,
                     nonce="bm9uY2U=",
-                    signKey=asker.sign_key,
+                    signKey=asker.sign_key, encKey=asker.enc_key,
                 ),
             }
         )
@@ -2770,7 +2793,7 @@ async def test_the_initiator_confirms_too_and_sends_exactly_one(monkeypatch):
         link._online_devices = {PEER.device_id}
         await link.start_pairing(PEER.device_id)
         device_pairing.accept_response(
-            PEER.device_id, their_key=PEER.sign_key, their_nonce="bm9uY2U="
+            PEER.device_id, their_key=PEER.sign_key, their_enc_key=PEER.enc_key, their_nonce="bm9uY2U="
         )
         sent_before = len(conn.sent)
 
@@ -2878,7 +2901,7 @@ def test_a_rebuilt_store_can_pair_again() -> None:
 
     key = device_signing.public_key()
     assert trust_store.pin_paired_device(
-        "dev-after-rebuild", sign_key=key, member_id="m1", own_member_id="m1"
+        "dev-after-rebuild", sign_key=key, enc_key=ENC_KEY, member_id="m1", own_member_id="m1"
     ) is True
     assert trust_store.pin_for("dev-after-rebuild") is not None
 

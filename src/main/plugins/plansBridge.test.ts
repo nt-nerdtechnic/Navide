@@ -1,5 +1,5 @@
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { describe, expect, it } from 'vitest'
 import {
@@ -64,12 +64,13 @@ function request(
 async function runCoreCorpus(create: () => ReturnType<typeof createInMemoryPlansBridgeDispatcher>) {
   const dispatcher = create()
   const controller = new AbortController()
-  const bridgeContext = context(controller.signal, [], '/workspace')
+  const workspace = resolve('/workspace')
+  const bridgeContext = context(controller.signal, [], workspace)
 
   await expect(dispatcher.dispatch(
     request('filesystem', 'resolve_root', {}),
     bridgeContext,
-  )).resolves.toEqual({ root: '/workspace' })
+  )).resolves.toEqual({ root: workspace })
 
   await expect(dispatcher.dispatch(
     request('filesystem', 'rename', {
@@ -255,12 +256,13 @@ describe('Plans Host Bridge ports', () => {
   })
 
   it('renames the requested source path in the in-memory filesystem adapter', async () => {
+    const workspace = resolve('/workspace')
     const dispatcher = createInMemoryPlansBridgeDispatcher({
-      root: '/workspace',
-      files: { '/workspace/old-plan.md': 'draft' },
+      root: workspace,
+      files: { [join(workspace, 'old-plan.md')]: 'draft' },
     })
     const controller = new AbortController()
-    const bridgeContext = context(controller.signal, [], '/workspace')
+    const bridgeContext = context(controller.signal, [], workspace)
 
     await expect(dispatcher.dispatch(
       request('filesystem', 'rename', {
@@ -277,6 +279,54 @@ describe('Plans Host Bridge ports', () => {
       request('filesystem', 'read_file', { rel_path: 'old-plan.md' }),
       bridgeContext,
     )).rejects.toMatchObject({ code: 'BACKEND_UNAVAILABLE' })
+  })
+
+  it('forwards watcher events for plan documents only', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'navide-plans-bridge-watch-'))
+    const canonicalRoot = realpathSync(root)
+    mkdirSync(join(root, '.agent-team/plans'), { recursive: true })
+    const dispatcher = createLocalFilesystemDispatcher()
+    const controller = new AbortController()
+    const events: Array<{ event: string; payload: unknown }> = []
+    const bridgeContext = context(controller.signal, events, canonicalRoot, runtime, canonicalRoot)
+    const settle = (): Promise<void> => new Promise((resolvePromise) => setTimeout(resolvePromise, 300))
+    // FSEvents can replay the directory creation above into a watch that
+    // starts right after it; let it drain before the watch begins.
+    await settle()
+    const watcher = dispatcher.dispatch(request('filesystem', 'watch', { rel_path: '' }), bridgeContext)
+    try {
+      await settle()
+      // The storm that took the child down: backend state files and logs next
+      // to the plans directory, plus ordinary source edits.
+      writeFileSync(join(root, '.agent-team/navide.db'), 'db', 'utf8')
+      writeFileSync(join(root, '.agent-team/pipeline.log'), 'log', 'utf8')
+      writeFileSync(join(root, 'notes.txt'), 'text', 'utf8')
+      await settle()
+      expect(events).toEqual([])
+
+      writeFileSync(join(root, '.agent-team/plans/doc.html'), '<html></html>', 'utf8')
+      await settle()
+      expect(events.length).toBeGreaterThan(0)
+      for (const { event, payload } of events) {
+        expect(event).toBe('filesystem.changed')
+        expect(payload).toMatchObject({ workspace_path: canonicalRoot, path: '.agent-team/plans/doc.html' })
+        // Vacuous on POSIX and the whole point on Windows, where fs.watch
+        // reports the host separator: this wire is posix, and the child
+        // rejects a workspace-relative path containing a backslash.
+        expect(String((payload as { path: string }).path)).not.toContain('\\')
+      }
+
+      // Moving a whole plan directory away sends one event naming the
+      // directory and none for the documents inside it.
+      events.length = 0
+      renameSync(join(root, '.agent-team/plans'), join(root, '.agent-team/stash'))
+      await settle()
+      expect(events.map(({ payload }) => (payload as { path?: string }).path)).toContain('.agent-team/plans')
+    } finally {
+      controller.abort()
+      await expect(watcher).resolves.toBeNull()
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 
   it('does not overwrite an existing production rename destination', async () => {

@@ -293,3 +293,32 @@ export function isAllowedPlanDocumentPath(relPath: string, workspaceRoot: string
 
   return false
 }
+
+/** The plan directories themselves: one moved in or out of the workspace
+ * arrives as a single event naming the directory, never its documents.
+ * Deliberately not their ancestors. A host whose watcher reports the parent
+ * of a changed file — Windows does — names `.agent-team` for every database
+ * and log write beside the plans, and `docs` for every ordinary edit under
+ * it: exactly the storm this filter exists to stop. */
+const PLAN_DIRECTORY_PATHS: readonly string[] = PLAN_DOC_DIRS
+
+/**
+ * Decide whether a watcher event names a plan document, or a directory whose
+ * move would add or remove documents wholesale. The common case — storm
+ * traffic such as database and log writes, git, builds — fails the string
+ * checks before any filesystem probe runs; only a path shaped like a
+ * nested-repository plan directory pays for the bounded traversal behind
+ * `isAllowedPlanDocumentPath`.
+ */
+export function isPlanDocumentChangePath(relPath: string, workspaceRoot: string): boolean {
+  const normalized = relPath.replace(/\\/g, '/')
+  if (PLAN_DIRECTORY_PATHS.some((dir) => normalized === dir || normalized.endsWith(`/${dir}`))) {
+    return true
+  }
+  const segments = normalized.split('/')
+  if (segments.length < 2 || !isPlanDocName(segments[segments.length - 1])) return false
+  const parent = segments.slice(0, -1).join('/')
+  if ((PLAN_DOC_DIRS as readonly string[]).includes(parent)) return true
+  if (!PLAN_DOC_DIRS.some((planDir) => parent.endsWith(`/${planDir}`))) return false
+  return isAllowedPlanDocumentPath(relPath, workspaceRoot)
+}

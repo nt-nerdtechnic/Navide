@@ -8,7 +8,7 @@
 // advisory thresholds below still succeed; the caller just gets an
 // `advisories` note back to relay or log.
 
-import { modelArgsFor, type AgentKey, type CliModelCapability } from '@navide/plugin-shell'
+import { modelArgsFor, type AgentKey, type CliModelCapability, type CliModelRefusal } from '@navide/plugin-shell'
 import { normalizeMessagingName, type ParsedSpawnRequest } from './agentMessaging'
 
 /** Advisory threshold for live child panes one pane has spawned — crossing it
@@ -39,6 +39,10 @@ export interface SpawnGateContext {
    *  authoritative check, so a drift between the two cannot launch a pane on
    *  the wrong model. Undefined for an unknown key. */
   modelCapabilityFor: (agentKey: string) => CliModelCapability | undefined
+  /** True when a fresh pane of this agent launches on the user's stored
+   *  launch command (Settings → CLI Agents). That line is used verbatim, so a
+   *  model or effort could not reach argv. */
+  launchCommandOverridden: (agentKey: string) => boolean
 }
 
 /** An accepted request. `model` / `effort` are present only when the caller
@@ -85,10 +89,11 @@ export function spawnAdvisoriesFor(
   return advisories
 }
 
-/** Turn a {@link modelArgsFor} refusal into user/agent-facing text. Says what
- *  this vendor DOES accept, not just what it rejected — a caller told only
- *  "not supported" retries with the same shape. */
-function describeModelRefusal(
+/** Turn a {@link modelArgsFor} refusal into agent-facing text (protocol
+ *  language, see the header). Says what this vendor DOES accept, not just what
+ *  it rejected — a caller told only "not supported" retries with the same
+ *  shape. Surfaces a user reads take {@link modelRefusalMessage} instead. */
+export function describeModelRefusal(
   agentKey: string,
   refusal: Exclude<ReturnType<typeof modelArgsFor>, { ok: true }>['refusal'],
   effort: string,
@@ -120,6 +125,29 @@ function describeModelRefusal(
   )
 }
 
+const MODEL_REFUSAL_I18N_KEY: Record<CliModelRefusal['kind'], string> = {
+  'model-unsupported': 'spawn.model.refuse.model-unsupported',
+  'effort-unsupported': 'spawn.model.refuse.effort-unsupported',
+  'model-malformed': 'spawn.model.refuse.model-malformed',
+  'effort-malformed': 'spawn.model.refuse.effort-malformed',
+  'effort-invalid': 'spawn.model.refuse.effort-invalid',
+}
+
+/** The same refusal as an i18n message descriptor, for the surfaces a user
+ *  reads (spawn dialog, Settings → CLI Agents). This module has no i18n
+ *  access, so the caller resolves it with its own `t(key, params)`. Kept next
+ *  to {@link describeModelRefusal} so the two wordings drift together, not
+ *  apart. */
+export function modelRefusalMessage(
+  agentKey: string,
+  refusal: CliModelRefusal,
+  effort: string,
+): { key: string; params: Record<string, string> } {
+  const params: Record<string, string> = { agent: agentKey, effort }
+  if (refusal.kind === 'effort-invalid') params.accepted = refusal.accepted.join(', ')
+  return { key: MODEL_REFUSAL_I18N_KEY[refusal.kind], params }
+}
+
 /** The same agent-key whitelist check evaluateSpawnRequest does, pulled out
  *  so a caller that bypasses the rest of the gate (ui.pane.create) can still
  *  refuse a key with no runtime representation — "terminal" included — before
@@ -149,7 +177,10 @@ export function evaluateSpawnRequest(
   if (ctx.isNameTaken(name)) {
     return { ok: false, reason: `名稱「${name}」已被其他 pane 使用，請換一個名稱` }
   }
-  if (!req.task) return { ok: false, reason: 'task 欄位不可為空' }
+  // A fresh pane with nothing to do is a mistake. A RESUMED one is not — the
+  // conversation already has its context, and the caller may only want it
+  // back on screen, talking to it later with cli_send.
+  if (!req.task && !req.resumesSession) return { ok: false, reason: 'task 欄位不可為空' }
 
   const model = (req.model ?? '').trim()
   const effort = (req.effort ?? '').trim()
@@ -158,6 +189,18 @@ export function evaluateSpawnRequest(
     request: { model, effort },
   })
   if (!chosen.ok) return { ok: false, reason: describeModelRefusal(req.agent, chosen.refusal, effort) }
+  // Refused, not dropped: the caller named a model, and a pane that opens on
+  // the vendor default looks exactly like one that got it. A resume is exempt —
+  // its command is rebuilt from the vendor's own syntax, model included, and
+  // never reads the stored launch command.
+  if ((model || effort) && !req.resumesSession && ctx.launchCommandOverridden(req.agent)) {
+    return {
+      ok: false,
+      reason:
+        `「${req.agent}」設了自訂啟動指令（設定 → CLI Agents），整條命令照原樣執行，` +
+        `Navide 不會再加上 model / effort — 請拿掉這兩個參數，或先清空該啟動指令`,
+    }
+  }
 
   const advisories = spawnAdvisoriesFor(ctx)
 

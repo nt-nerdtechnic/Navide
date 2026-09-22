@@ -26,20 +26,24 @@ import base64
 import hashlib
 import os
 import re
-import signal
 import sys
 import time
 from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from .. import osplat
 from .base import (
+    AccountSwitchSpec,
     Dep,
     McpServerConfig,
     McpValue,
     McpWiring,
+    PortableCredential,
     PushChannel,
+    ShutdownSpec,
     SkillsWiring,
+    SlotKind,
     VendorSpec,
     command_text,
 )
@@ -53,8 +57,11 @@ from ..log_readers.base import (
     IncrementalParseResult,
     LogReader,
     TokenUsage,
+    TurnCall,
+    TurnUsage,
     activity_high_water,
     join_text_blocks,
+    merge_prompt_excerpt,
     read_jsonl_tail,
     set_activity_high_water,
     user_prompt_text,
@@ -168,6 +175,9 @@ def claude_projects_root() -> Path | None:
 
 class ClaudeLogReader(LogReader):
     vendor: str = "claude"
+
+    #: turns_for_session groups on the transcript's own promptId.
+    turns_method: str = "exact"
 
     #: parse_activity walks a dense ascending line counter and resumes from
     #: one high-water mark, so an old file can be seeded to EOF by counting
@@ -297,6 +307,9 @@ class ClaudeLogReader(LogReader):
                         dedup_key=dedup_key,
                         timestamp=str(rec.get("timestamp") or ""),
                         model=str(msg.get("model") or ""),
+                        cache_read_tokens=_int(usage.get("cache_read_input_tokens")),
+                        cache_creation_tokens=_int(usage.get("cache_creation_input_tokens")),
+                        cli_version=str(rec.get("version") or ""),
                     )
                 )
         return out
@@ -351,10 +364,88 @@ class ClaudeLogReader(LogReader):
                 timestamp=str(rec.get("timestamp") or ""),
                 model=str(msg.get("model") or ""),
                 checkpoint=event_checkpoint,
+                cache_read_tokens=_int(usage.get("cache_read_input_tokens")),
+                cache_creation_tokens=_int(usage.get("cache_creation_input_tokens")),
+                cli_version=str(rec.get("version") or ""),
             ))
 
         final_checkpoint["recent_keys"] = recent
         return IncrementalParseResult(out, final_checkpoint)
+
+    def turns_for_session(self, path: Path, session_id: str = "") -> list[TurnUsage]:
+        """One turn per `promptId`: every human `user` record (no
+        toolUseResult) carries the id of the prompt it belongs to, and the
+        assistant records that follow — which carry none — belong to the
+        latest one. Grouping on the id rather than on each user record keeps
+        a prompt's attachments, images and a compaction summary (all written
+        as extra user records under the same id) inside their turn, and a
+        resumed session that keeps appending to this file simply adds ids.
+
+        Same dedup as parse_session_file (message id + requestId, so a
+        streamed message split over several lines counts once), but the four
+        usage counters stay apart instead of folding cache into input.
+        """
+        try:
+            fh = path.open(encoding="utf-8")
+        except OSError as err:
+            log.debug("open %s failed: %s", path, err)
+            return []
+        sid = path.stem
+        turns: dict[str, TurnUsage] = {}
+        current: TurnUsage | None = None
+        seen: set[str] = set()
+        with fh:
+            for line_no, raw in enumerate(fh, 1):
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    rec = json.loads(raw)
+                except json.JSONDecodeError:
+                    log.debug("%s:%d malformed JSON, skipping", path.name, line_no)
+                    continue
+                rtype = rec.get("type")
+                msg = rec.get("message")
+                if not isinstance(msg, dict):
+                    continue
+                ts = str(rec.get("timestamp") or "") or None
+                if rtype == "user" and "toolUseResult" not in rec:
+                    key = str(rec.get("promptId") or f"line:{line_no}")
+                    current = turns.get(key)
+                    if current is None:
+                        current = turns[key] = TurnUsage(
+                            turn_index=0, session_id=sid,
+                            started_at=ts, ended_at=None, prompt_excerpt="",
+                        )
+                    content = msg.get("content")
+                    text = content if isinstance(content, str) else join_text_blocks(content, "text")
+                    current.prompt_excerpt = merge_prompt_excerpt(current.prompt_excerpt, text)
+                    continue
+                if rtype != "assistant" or current is None:
+                    continue
+                usage = msg.get("usage")
+                if not isinstance(usage, dict):
+                    continue
+                dedup_key = f"{msg.get('id') or ''}::{rec.get('requestId') or ''}"
+                if dedup_key == "::" or dedup_key in seen:
+                    continue
+                call = TurnCall(
+                    ts=ts, model=str(msg.get("model") or ""),
+                    input=_int(usage.get("input_tokens")),
+                    cache_read=_int(usage.get("cache_read_input_tokens")),
+                    cache_creation=_int(usage.get("cache_creation_input_tokens")),
+                    output=_int(usage.get("output_tokens")),
+                    cli_version=str(rec.get("version") or ""),
+                )
+                if call.input + call.cache_read + call.cache_creation + call.output == 0:
+                    continue
+                seen.add(dedup_key)
+                current.add_call(call)
+                current.ended_at = ts or current.ended_at
+        out = [t for t in turns.values() if t.calls]
+        for n, turn in enumerate(out, 1):
+            turn.turn_index = n
+        return out
 
     def parse_activity(
         self, path: Path, seen_keys: set[str]
@@ -476,7 +567,7 @@ def _pane_cwd_match(self, usage, pane_cwd, pane_id):
     # Claude names its per-project dir after the encoded cwd; the file path
     # carries it.
     expected_dir = encode_claude_cwd(pane_cwd)
-    return f"/{expected_dir}/" in usage.file_path
+    return expected_dir in Path(usage.file_path).parts
 
 
 ClaudeLogReader.pane_cwd_match = _pane_cwd_match
@@ -584,8 +675,15 @@ USAGE_ARGS = (
     "--no-session-persistence",
     "-p", "/usage",
 )
-# ~2s idle; observed up to ~40s on a heavily loaded machine.
-USAGE_TIMEOUT_S = 90.0
+# ~2s idle, but that is the floor, not the shape: the probe boots a whole
+# Claude Code, so it scales with how busy the machine already is. Measured on a
+# machine running ~20 CLI panes: 21s, 25s, 26s, 52s for the same command back to
+# back. At 90s that left no headroom — a run of eight consecutive timeouts froze
+# the badge on a 2.5h-old reading, each one paying for a full CLI boot and
+# throwing the result away. The read is rate-limited to one per
+# CLAUDE_CLI_READ_INTERVAL either way, so waiting longer costs nothing a
+# failed read did not already cost; giving up early costs the whole reading.
+USAGE_TIMEOUT_S = 180.0
 
 _ENV_DROP = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CONFIG_DIR")
 
@@ -692,12 +790,27 @@ def _panel_probe_env() -> dict[str, str]:
     return env
 
 
+def _kill_group_now(pid: int) -> None:
+    """Force-kill a probe's process group without awaiting anything.
+
+    The async `_kill_group` sleeps between its SIGTERM and its SIGKILL, and a
+    cancellation handler is not a safe place to await — the handler may never
+    resume, which is exactly how a process gets abandoned. A probe being
+    cancelled is being thrown away, so it goes straight to SIGKILL."""
+    try:
+        osplat.process_tree.kill_group(osplat.process_tree.group_of(pid), force=True)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+
+
 async def _kill_group(pid: int) -> None:
     # Async on purpose: this runs on the backend's only event loop, and a
     # blocking sleep here freezes every WebSocket session for its duration.
-    for sig in (signal.SIGTERM, signal.SIGKILL):
+    for force in (False, True):
         try:
-            os.killpg(os.getpgid(pid), sig)
+            osplat.process_tree.kill_group(
+                osplat.process_tree.group_of(pid), force=force
+            )
         except (ProcessLookupError, PermissionError, OSError):
             return
         await asyncio.sleep(0.2)
@@ -717,8 +830,9 @@ async def read_usage_panel(binary: str) -> str:
     Raises ``RuntimeError`` with a message fit for the badge's ``error`` field:
     a timeout, a non-zero exit with the CLI's first stderr line, or — when the
     exit carried no usage line at all — a note that the CLI needs updating."""
+    started = time.monotonic()
     proc = await asyncio.create_subprocess_exec(
-        binary, *USAGE_ARGS,
+        *osplat.paths.launch_argv(binary, USAGE_ARGS),
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
@@ -726,6 +840,20 @@ async def read_usage_panel(binary: str) -> str:
     )
     try:
         out, err = await asyncio.wait_for(proc.communicate(), timeout=USAGE_TIMEOUT_S)
+        # A successful read used to leave no trace, so how close the probe was
+        # running to USAGE_TIMEOUT_S could only be guessed at after the fact —
+        # and guessing is what set the budget too low the first time.
+        log.info("claude /usage read ok in %.1fs (budget %.0fs)",
+                 time.monotonic() - started, USAGE_TIMEOUT_S)
+    except asyncio.CancelledError:
+        # An account switch abandons this read (UsageService.
+        # _cancel_claude_reads). The probe runs in its own session, so nothing
+        # reaps it once we stop waiting: without this an abandoned Claude Code
+        # keeps running for minutes — on the very machine whose load made the
+        # read slow enough to be worth abandoning. Same leak the timeout path
+        # was written to prevent; cancellation is just the second way in.
+        _kill_group_now(proc.pid)
+        raise
     except asyncio.TimeoutError:
         await _kill_group(proc.pid)
         try:
@@ -921,8 +1049,7 @@ async def _run_probe(binary: str, timeout: float) -> tuple[bool, str]:
 
     try:
         proc = await asyncio.create_subprocess_exec(
-            binary,
-            *_PROBE_ARGS,
+            *osplat.paths.launch_argv(binary, _PROBE_ARGS),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             env=_refresh_probe_env(),
@@ -1090,8 +1217,82 @@ def _install_hooks(port_file: str) -> Any:
     return install_hooks(port_file)
 
 
+def classify_secret(secret: str) -> SlotKind:
+    """A parked ``.credentials.json`` is a ``/login`` OAuth credential when it
+    carries ``claudeAiOauth.accessToken``. Nothing else is claimed: a
+    Console login keeps its API key elsewhere, and a shape this does not
+    recognise is left UNKNOWN for the shared side to refuse."""
+    try:
+        data = json.loads(secret)
+    except ValueError:
+        return SlotKind.UNKNOWN
+    oauth = data.get("claudeAiOauth") if isinstance(data, dict) else None
+    if isinstance(oauth, dict) and oauth.get("accessToken"):
+        return SlotKind.OAUTH
+    return SlotKind.UNKNOWN
+
+
+# Auth-precedence keys as documented (code.claude.com/docs/en/authentication,
+# "Authentication precedence", read 2026-09-16): cloud provider selection,
+# then ANTHROPIC_AUTH_TOKEN, ANTHROPIC_API_KEY, apiKeyHelper all rank ABOVE
+# CLAUDE_CODE_OAUTH_TOKEN. A settings ``env`` block sets the same variables,
+# and ANTHROPIC_BASE_URL would send the token to another endpoint. Each is
+# checked in every settings file the CLI merges, and in the managed policy
+# — which is reported as blocking, never overridden.
+_PORTABLE_SHADOW_KEYS: tuple[tuple[str, ...], ...] = (
+    ("apiKeyHelper",),
+    ("env", "ANTHROPIC_AUTH_TOKEN"),
+    ("env", "ANTHROPIC_API_KEY"),
+    ("env", "ANTHROPIC_BASE_URL"),
+    ("env", "CLAUDE_CODE_USE_BEDROCK"),
+    ("env", "CLAUDE_CODE_USE_VERTEX"),
+    ("env", "CLAUDE_CODE_USE_FOUNDRY"),
+    ("env", "CLAUDE_CODE_USE_MANTLE"),
+)
+_PORTABLE_SETTINGS_FILES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("home", (".claude", "settings.json")),
+    ("cwd", (".claude", "settings.json")),
+    ("cwd", (".claude", "settings.local.json")),
+    ("managed", ("managed-settings.json",)),
+)
+_PORTABLE_SHADOWING_SETTINGS = tuple(
+    (root, parts, key)
+    for root, parts in _PORTABLE_SETTINGS_FILES
+    for key in _PORTABLE_SHADOW_KEYS
+) + (
+    # An administrator forcing a sign-in method decides the credential; a
+    # pasted token must not be the thing that quietly contradicts it.
+    ("managed", ("managed-settings.json",), ("forceLoginMethod",)),
+)
+
+
 SPEC = VendorSpec(
     key="claude",
+    # Official standalone CLI network requirements (verified 2026-09-21):
+    # https://code.claude.com/docs/en/network-config#network-access-requirements
+    # Only concrete hosts: dynamic artifact/Gerrit hosts and arbitrary tools
+    # remain outside this declared set, not presumed malicious.
+    expected_hosts=(
+        "api.anthropic.com", "claude.ai", "claude.com", "platform.claude.com",
+        "mcp-proxy.anthropic.com", "downloads.claude.ai", "storage.googleapis.com",
+        "registry.npmjs.org", "bridge.claudeusercontent.com", "raw.githubusercontent.com",
+        "http-intake.logs.us5.datadoghq.com", "browser-intake-us5-datadoghq.com",
+        "formulae.brew.sh", "code.claude.com",
+    ),
+    # Provider/gateway variables: https://code.claude.com/docs/en/env-vars
+    # Keep only presence, never URL values.
+    network_override_env_vars=(
+        "ANTHROPIC_BASE_URL", "ANTHROPIC_AWS_BASE_URL", "ANTHROPIC_BEDROCK_BASE_URL",
+        "ANTHROPIC_BEDROCK_MANTLE_BASE_URL", "ANTHROPIC_VERTEX_BASE_URL",
+        "ANTHROPIC_FOUNDRY_BASE_URL", "ANTHROPIC_FOUNDRY_RESOURCE",
+        "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY",
+        "CLAUDE_CODE_USE_ANTHROPIC_AWS", "CLAUDE_CODE_USE_MANTLE",
+        "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
+    ),
+    # Same config home as install_dep; never use the backend reader's fallback
+    # search across other accounts when this pane has an isolated config dir.
+    data_dirs=lambda ctx: (ctx.path(ctx.env.get("CLAUDE_CONFIG_DIR") or ctx.home / ".claude"),),
+    data_dir_env_vars=("CLAUDE_CONFIG_DIR",),
     supports_model=True,
     supports_effort=True,
     known_efforts=('low', 'medium', 'high', 'xhigh', 'max'),
@@ -1103,7 +1304,7 @@ SPEC = VendorSpec(
         flag="--add-dir",
         view_layout=(".claude", "skills"),
     ),
-    label="Claude Code",
+    label="Claude Code (Anthropic)",
     # `--mcp-config` takes a literal JSON string as well as a path, and servers
     # from it load IN ADDITION to the user's own config (we never pass
     # --strict-mcp-config). A command that already carries the flag is the
@@ -1146,9 +1347,67 @@ SPEC = VendorSpec(
     ),
     login_command_args="auth login",
     install_hooks=_install_hooks,
+    # The usage-limit banner Claude Code prints ("You've hit your … limit ·
+    # resets 3pm (Asia/Taipei)"); the same detector the frontend spec's
+    # ``quotaExhausted`` carries, so a cli-text report matches on both sides.
+    quota_exhausted_patterns=(
+        r"hit your .{0,40}limit.{0,80}?resets\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)\s*\([^)]+\)",
+    ),
+    classify_secret=classify_secret,
+    # `claude setup-token` mints a one-year OAuth token that "authenticates
+    # with your Claude subscription" and is documented for exactly this use:
+    # copy it and set CLAUDE_CODE_OAUTH_TOKEN "wherever you want to
+    # authenticate" (docs/en/authentication, read 2026-09-16). env_remove is
+    # everything the precedence list ranks above it, plus the endpoint
+    # override; the managed root is the documented policy directory per
+    # platform (docs/en/managed-settings — Windows is Program Files, not the
+    # legacy ProgramData path).
+    portable_credential=PortableCredential(
+        env="CLAUDE_CODE_OAUTH_TOKEN",
+        kind="oauth",
+        env_remove=(
+            "CLAUDE_CODE_USE_BEDROCK",
+            "CLAUDE_CODE_USE_VERTEX",
+            "CLAUDE_CODE_USE_FOUNDRY",
+            "CLAUDE_CODE_USE_MANTLE",
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_BASE_URL",
+        ),
+        shadowing_settings=_PORTABLE_SHADOWING_SETTINGS,
+        managed_roots=(
+            ("darwin", "/Library/Application Support/ClaudeCode"),
+            ("linux", "/etc/claude-code"),
+            ("win32", r"C:\Program Files\ClaudeCode"),
+        ),
+        obtain_command="claude setup-token",
+        docs_url="https://code.claude.com/docs/en/authentication",
+        quota_verified=True,
+    ),
     live_file=(".claude", ".credentials.json"),
     slot_file=".credentials.json",
     profile_home_secret_file=(".credentials.json",),
+    # The one CLI that re-reads its credential per request: a swap of the
+    # live Keychain item (file elsewhere) takes effect in running panes
+    # without a restart. The vault's HOT_SWAP path has shipped and been used
+    # on real accounts, but the Claude Code version of that acceptance was
+    # never recorded, so the evidence stays "source" until an A -> B -> A
+    # round-trip is logged against a named version. No ``expires_at``: the
+    # stored ``expiresAt`` is the ACCESS token's, which Claude Code refreshes
+    # on its own — reporting it would mark a valid parked account expired.
+    account_switch=AccountSwitchSpec(
+        auth_scope="claude",
+        method="hot",
+        store="keychain",
+        evidence="source",
+        verified_version="2.1.278",
+        keychain_items=(("Claude Code-credentials", ""),),
+        # An API key / auth token in the environment, or Navide's own
+        # portable long-lived token, replaces the OAuth login entirely.
+        shadowing_env=("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"),
+        resume="native",
+        todo="hot swap shipped and used on real accounts; record an A -> B -> A round-trip against 2.1.278",
+    ),
     # login_home_secret_file stays None: claude's login-home secret lives in
     # a path-hashed Keychain item, not a peekable file (see credential_vault).
     # The vault's claude behavior branches (Keychain dual-track, oauthAccount,
@@ -1174,7 +1433,7 @@ SPEC = VendorSpec(
     # detection and the uninstall command, and `claude update` reads
     # .last-update-result.json. Switching install_cmd alone would install a
     # native binary none of those fields describe.
-    install_dep=Dep("claude", "Claude Code", "Anthropic Claude CLI", "agent_cli",
+    install_dep=Dep("claude", "Claude Code (Anthropic)", "Anthropic Claude CLI", "agent_cli",
         ["claude", "--version"], r"(\d+\.\d+\.\d+)",
         install_cmd="npm install -g @anthropic-ai/claude-code", needs_terminal=True,
         requires_binaries=("npm",),
@@ -1184,4 +1443,13 @@ SPEC = VendorSpec(
         update_state_file=".last-update-result.json",
         config_home_env="CLAUDE_CONFIG_DIR", config_home_default=".claude",
         autoupdate_env="DISABLE_AUTOUPDATER"),
+    # claude writes fullscreenBootPending[pid] into ~/.claude.json when it
+    # starts in fullscreen and clears it from a SIGTERM handler on the way out.
+    # A SIGKILL never runs that handler, so the entry survives; the next start
+    # sees a pending entry whose pid is gone, counts a strike, and at two
+    # strikes writes fullscreenAutoDisabled — which is how the dim header row
+    # (previous prompts shown when scrolling up) disappears. 3s is the room the
+    # handler needs for a read-modify-write of that file, and the master stays
+    # open across it because a HUP mid-write is the same lost entry.
+    shutdown=ShutdownSpec(graceful=True, grace_s=3.0, defer_master_close=True),
 )

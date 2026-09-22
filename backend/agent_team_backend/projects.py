@@ -129,6 +129,7 @@ class PaneRecord:
     output_log_file: str = ""       # conversation log path recorded at spawn time
     stopped: bool = False           # STOP badge: a stop action was issued and the user hasn't taken over yet
     is_minimized: bool = False      # collapsed to the sidebar. The renderer has been sending this since the feature shipped; the handler was missing, so it never persisted.
+    is_muted: bool = False          # per-pane mute: no desktop notification and no sound for this pane; the Dock badge still counts it
     collapsed: bool = False         # lineage subtree folded in the agent lists. Lives here, not in a Project-level id set: pane_id is regenerated every restart, so such a set would silently empty itself.
 
 
@@ -167,7 +168,11 @@ class Project:
     run_count: int = 0     # incremented on each successful pipeline completion
     theme: str = "dark-github"  # backup of the user-level theme (source of truth is the renderer's localStorage)
     theme_custom: dict[str, Any] = field(default_factory=dict)  # backup of custom CSS var overrides (key -> value)
-    language: str = "zh-TW"  # backup of the user-level language (source of truth is the renderer's localStorage)
+    # Backup of the user-level language (source of truth is the renderer's
+    # localStorage). Empty until the user picks one: the renderer adopts this
+    # backup as if it were a choice, and a "zh-TW" default here turned every
+    # English first launch Chinese on its second start.
+    language: str = ""
     tab_order: list[str] = field(default_factory=list)  # run-group tab order (ids); empty = frontend insertion order
     # Renderer-owned run-group tab records ({id, name, createdAt} dicts), stored
     # in display order. None = never persisted (frontend falls back to legacy
@@ -184,6 +189,19 @@ class Project:
     # per-user default); [] is a valid "explicitly cleared to default" value.
     cli_agent_order: list[str] | None = None
     cli_agent_disabled: list[str] | None = None
+    # User-set display name for this workspace. "" = fall back to
+    # basename(workspace_path), which is what every surface showed before this
+    # field existed. Division of labour with `name`: `name` is the initial
+    # value recorded when the project document was created and has no UI to
+    # change it; `display_name` is the name the user picked and is the only one
+    # the sidebar / title bar / recent list honour. The truth lives here, in
+    # the workspace's own db: the alias stays with the project folder, is
+    # independent per project, and is not lost when the global settings caches
+    # are rebuilt. It is LOCAL — `.agent-team/` is git-ignored, so the alias is
+    # never committed and never reaches a teammate. The global
+    # recent-workspaces store keeps a `name` mirror for drawing lists without
+    # opening every project's db.
+    display_name: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -389,6 +407,11 @@ class ProjectStore:
                 log.warning("project.json at %s is corrupt during peek (%s)", pf, err)
                 return None
         if not isinstance(data, dict):
+            # The two corrupt-document branches below say so; this one used to
+            # return empty-handed in silence, which reads downstream as "that
+            # workspace has no panes" rather than "its record is unreadable".
+            if data is not None:
+                log.warning("project document for %s is not an object during peek", ws)
             return None
         try:
             project = Project.from_dict(data)
@@ -883,6 +906,44 @@ class ProjectStore:
         )
         return project
 
+    def record_pane_unspawn_by_id(
+        self,
+        workspace_path: str,
+        *,
+        pane_id: str,
+    ) -> tuple["Project", bool]:
+        """Retire any pane record by its own id, pipeline slots included.
+
+        record_manual_pane_unspawn refuses pipeline records on purpose, so that
+        closing one manual pane can never retire a slot. Closing the whole
+        workspace does take the slots with it, and the pane id is the only key
+        that cannot drift on the way: a slot is otherwise addressed by
+        (stage_index, slot_label), a pair the renderer has to resolve against
+        whichever pipeline its window happens to be showing — which is not
+        necessarily the one this workspace ran.
+
+        Returns the project and whether a record was actually retired.
+        """
+        project = self.load_or_create(workspace_path)
+        matches = [
+            p for p in project.panes
+            if p.pane_id == pane_id and p.spawn_status != "removed"
+        ]
+        if not matches:
+            return project, False
+        for pane in matches:
+            self._adopt_orphans(project, pane)
+            pane.spawn_status = "removed"
+            pane.removed_at = _now_iso()
+            pane.kickoff_status = "none"
+        self.save(project)
+        self.append_event(
+            workspace_path,
+            {"event": "pane_unspawn_by_id", "pane_id": pane_id, "count": len(matches)},
+            log_file_name=project.log_file_name,
+        )
+        return project, True
+
     def record_manual_pane_unspawn(
         self,
         workspace_path: str,
@@ -1094,6 +1155,24 @@ class ProjectStore:
         self.save(project)
         return project
 
+    def record_detected_session(
+        self, workspace_path: str, *, pane_id: str, session_id: str,
+    ) -> Project:
+        """Persist log discovery even when no renderer receives the event."""
+        with self._save_lock:
+            project = self.load_or_create(workspace_path)
+            pane = next((p for p in project.panes if p.pane_id == pane_id), None)
+            if pane is None:
+                # Both manual and pipeline spawns adopt this pending stub.
+                pane = PaneRecord(pane_id=pane_id, origin="manual")
+                project.panes.append(pane)
+            pane.session_id = session_id
+            for entry in project.ui_spawn_history or []:
+                if entry.get("paneId") == pane_id:
+                    entry["sessionId"] = session_id
+            self.save(project)
+            return project
+
     def record_manual_pane_session(
         self,
         workspace_path: str,
@@ -1173,6 +1252,39 @@ class ProjectStore:
         self.save(project)
         return project
 
+    def set_pane_parent(
+        self,
+        workspace_path: str,
+        *,
+        pane_id: str,
+        spawned_by: str,
+    ) -> "Project | str":
+        """Re-parent a pane: make `spawned_by` its parent, or "" to make it a
+        root. The other half of the lineage next to set_pane_run_group.
+
+        Returns the project on success, or a short reason string on refusal —
+        a string rather than None because the three refusals need telling
+        apart by the caller: `not_found` (no such pane), `parent_not_found`
+        (the proposed parent is not in this workspace), `cycle` (the parent
+        is the pane itself or one of its descendants — the tree would loop,
+        and the sidebar's lineage walk would spin). A pane cannot be its own
+        parent for the same reason.
+        """
+        project = self.load_or_create(workspace_path)
+        pane = next((p for p in project.panes if p.pane_id == pane_id), None)
+        if pane is None:
+            return "not_found"
+        if spawned_by:
+            if spawned_by == pane_id:
+                return "cycle"
+            if not any(p.pane_id == spawned_by for p in project.panes):
+                return "parent_not_found"
+            if ProjectStore._would_cycle(project, pane_id, spawned_by):
+                return "cycle"
+        pane.spawned_by = spawned_by
+        self.save(project)
+        return project
+
     def set_pane_stopped(
         self,
         workspace_path: str,
@@ -1202,6 +1314,22 @@ class ProjectStore:
         if pane is None:
             return project
         pane.is_minimized = is_minimized
+        self.save(project)
+        return project
+
+    def set_pane_muted(
+        self,
+        workspace_path: str,
+        *,
+        pane_id: str,
+        is_muted: bool,
+    ) -> Project:
+        """Persist the per-pane mute. No-op if pane not found."""
+        project = self.load_or_create(workspace_path)
+        pane = next((p for p in project.panes if p.pane_id == pane_id), None)
+        if pane is None:
+            return project
+        pane.is_muted = is_muted
         self.save(project)
         return project
 
@@ -1245,6 +1373,48 @@ class ProjectStore:
         rest = [p for p in project.panes if p.pane_id not in rank]
         project.panes = listed + rest
         self.save(project)
+        return project
+
+    def set_display_name(
+        self,
+        workspace_path: str,
+        display_name: str,
+    ) -> Project | None:
+        """Persist the user-set display name for this workspace.
+
+        The value is stripped; an empty string is a legitimate write meaning
+        "clear the alias and go back to basename(workspace_path)".
+
+        Unlike the other ui-state setters this one uses load_or_create, not
+        peek: renaming is an explicit action the user takes on a workspace they
+        have open, so creating the project document for it is legitimate — and
+        it leaves no silent no-op path that would answer the user with a
+        success they did not get.
+
+        Returns None ONLY on a real failure: an empty path, a workspace that is
+        not a directory on disk, or a document that could not be written. The
+        caller is expected to report that to the user.
+
+        The alias is purely cosmetic: the workspace path stays the only
+        identifier, so duplicates across workspaces are allowed and nothing
+        here validates uniqueness.
+        """
+        if not workspace_path.strip():
+            # abspath("") is the backend's cwd, which IS a directory — without
+            # this guard an empty path would happily create a project document
+            # somewhere nobody asked for.
+            return None
+        try:
+            # RLock is reentrant: load_or_create may save() a fresh document.
+            with self._save_lock:
+                project = self.load_or_create(workspace_path)
+                project.display_name = display_name.strip()
+                self.save(project)
+        except (OSError, ValueError) as err:
+            log.warning(
+                "cannot set display name for %s: %s", workspace_path, err
+            )
+            return None
         return project
 
     def set_tab_order(

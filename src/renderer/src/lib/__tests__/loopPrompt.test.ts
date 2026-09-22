@@ -115,6 +115,17 @@ describe('lib/loopPrompt matchSessionLimit', () => {
   it('returns null for non-matching text', () => {
     expect(matchSessionLimit('all good, no limits here')).toBeNull()
   })
+
+  // The matcher collapses whitespace before running, so newlines are gone and
+  // nothing but the quantifier keeps the two halves in the same sentence.
+  it('refuses two halves too far apart to be one message', () => {
+    const tail = `I hit your usage limit question earlier.${' x'.repeat(200)} The cache resets 3:00pm (Asia/Taipei) daily.`
+    expect(matchSessionLimit(tail)).toBeNull()
+  })
+
+  it('still matches the real message across the wrap that separates the halves', () => {
+    expect(matchSessionLimit("You've hit your session limit ·\n\n  resets 4:30am (UTC)")).not.toBeNull()
+  })
 })
 
 // unseenTail slices the not-yet-consumed region of a rolling capped buffer

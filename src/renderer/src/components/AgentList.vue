@@ -88,7 +88,7 @@ function kickoffLabel(status?: ActivePaneView['kickoffStatus']): string {
         >
           <span v-if="p.origin === 'pipeline'" class="pipe-tag">P{{ p.stageId }}</span>
           <span class="badge">{{ p.agentLabel }}</span>
-          <span v-if="p.isCommander" class="manager-inline" title="Stage manager — controls flow and decides ---STAGE-DONE---">🎯 Mgr</span>
+          <span v-if="p.isCommander" class="manager-inline" :title="$t('label.stage-manager-tooltip')">🎯 Mgr</span>
           <span v-if="p.isMinimized" class="minimized-tag">▪ sidebar</span>
           <span
             v-else

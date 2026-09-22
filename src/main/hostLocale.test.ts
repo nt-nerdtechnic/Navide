@@ -8,9 +8,10 @@ import {
 } from './hostLocale'
 
 describe('Host locale resolution', () => {
-  it('validates only supported locales en-US and zh-TW', () => {
+  it('validates supported interface locales', () => {
     expect(validateSupportedLocale('en-US')).toBe('en-US')
     expect(validateSupportedLocale('zh-TW')).toBe('zh-TW')
+    expect(validateSupportedLocale('ja-JP')).toBe('ja-JP')
     expect(validateSupportedLocale('zh-CN')).toBeNull()
     expect(validateSupportedLocale('fr-FR')).toBeNull()
     expect(validateSupportedLocale('')).toBeNull()
@@ -29,12 +30,25 @@ describe('Host locale resolution', () => {
     expect(normalizeSystemLocale('en-GB')).toBe('en-US')
     expect(normalizeSystemLocale('en')).toBe('en-US')
 
+    expect(normalizeSystemLocale('ja-JP')).toBe('ja-JP')
+    expect(normalizeSystemLocale('ja')).toBe('ja-JP')
+    expect(normalizeSystemLocale(' JA-jp ')).toBe('ja-JP')
+
     // Unsupported system locales fall back to zh-TW
-    expect(normalizeSystemLocale('ja-JP')).toBe('zh-TW')
     expect(normalizeSystemLocale('fr-FR')).toBe('zh-TW')
     expect(normalizeSystemLocale('')).toBe('zh-TW')
     expect(normalizeSystemLocale(null)).toBe('zh-TW')
     expect(normalizeSystemLocale(undefined)).toBe('zh-TW')
+  })
+
+  it.each(['ja-JP', '"ja-JP"'])('retains persisted Japanese %s across restart and runtime updates', (raw) => {
+    const persisted = readPersistedLocaleFromSettings({ 'agent-team:language': raw })
+    const manager = new HostLocaleManager(() => persisted, () => 'en-US')
+    expect(manager.getLocale()).toBe('ja-JP')
+    expect(manager.setRuntimeLocale('en-US')).toBe('en-US')
+    expect(manager.setRuntimeLocale('ja-JP')).toBe('ja-JP')
+    expect(manager.setRuntimeLocale('fr-FR')).toBeNull()
+    expect(manager.getLocale()).toBe('ja-JP')
   })
 
   it('prioritizes valid persisted settings over system locale', () => {

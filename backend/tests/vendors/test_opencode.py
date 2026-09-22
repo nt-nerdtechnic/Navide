@@ -18,6 +18,28 @@ import pytest
 from agent_team_backend.log_readers import OpencodeLogReader, TokenUsage
 from agent_team_backend.log_readers.attribution import Attribution
 
+
+def test_quota_credentials_follow_the_readers_xdg_data_home(tmp_path: Path, monkeypatch) -> None:
+    from agent_team_backend.cli_vendors.opencode import read_opencode_credentials
+
+    default_auth = tmp_path / ".local" / "share" / "opencode" / "auth.json"
+    default_auth.parent.mkdir(parents=True)
+    default_auth.write_text(json.dumps({"anthropic": {"type": "oauth", "access": "old"}}))
+    xdg = tmp_path / "xdg"
+    monkeypatch.setenv("XDG_DATA_HOME", str(xdg))
+    assert read_opencode_credentials(tmp_path) is None
+    auth = xdg / "opencode" / "auth.json"
+    auth.parent.mkdir(parents=True)
+    auth.write_text(json.dumps({"anthropic": {"type": "oauth", "access": "current"}}))
+    assert read_opencode_credentials(tmp_path) == {
+        "anthropic": {"type": "oauth", "access": "current"},
+    }
+    monkeypatch.delenv("XDG_DATA_HOME")
+    assert read_opencode_credentials(tmp_path) == {
+        "anthropic": {"type": "oauth", "access": "old"},
+    }
+
+
 _SCHEMA = """
 CREATE TABLE project (
   id TEXT PRIMARY KEY,
@@ -217,6 +239,8 @@ def test_parse_folds_cache_into_input_and_reasoning_into_output(
     assert e.file_path == str(db)
     assert e.model == "claude-sonnet-4-5"
     assert e.dedup_key == "msg:msg_a1"
+    # session.version names the CLI build that wrote the session.
+    assert e.cli_version == "1.15.12"
 
 
 def test_streaming_assistant_row_counted_only_once_completed(

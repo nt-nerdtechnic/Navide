@@ -70,27 +70,30 @@ class UiSettingsStore:
         would grow the merged document past the size cap is rejected whole
         (nothing persisted, empty delta returned).
         """
-        current = self.get()
-        delta: dict[str, Any] = {}
-        for key, value in updates.items():
-            if not isinstance(key, str) or not key:
-                continue
-            if value is None:
-                current.pop(key, None)
-            else:
-                current[key] = value
-            delta[key] = value
-        if delta:
-            payload = json.dumps(current, ensure_ascii=False, separators=(",", ":"))
-            if len(payload.encode("utf-8")) > _MAX_FILE_SIZE:
-                log.warning(
-                    "ui settings update rejected: document would exceed %d bytes",
-                    _MAX_FILE_SIZE,
-                )
-                return {}
-            self._db.kv_set(_KV_KEY, current, now=int(time.time()))
-            self._write_mirror(current)
-        return delta
+        # Worker-side CLI risk actions also merge a key in this document.
+        # Hold the shared DB lock across the whole RMW, including its mirror.
+        with self._db.transaction():
+            current = self.get()
+            delta: dict[str, Any] = {}
+            for key, value in updates.items():
+                if not isinstance(key, str) or not key:
+                    continue
+                if value is None:
+                    current.pop(key, None)
+                else:
+                    current[key] = value
+                delta[key] = value
+            if delta:
+                payload = json.dumps(current, ensure_ascii=False, separators=(",", ":"))
+                if len(payload.encode("utf-8")) > _MAX_FILE_SIZE:
+                    log.warning(
+                        "ui settings update rejected: document would exceed %d bytes",
+                        _MAX_FILE_SIZE,
+                    )
+                    return {}
+                self._db.kv_set(_KV_KEY, current, now=int(time.time()))
+                self._write_mirror(current)
+            return delta
 
     def _write_mirror(self, data: dict[str, Any]) -> None:
         """Atomic best-effort rewrite of the Electron bootstrap mirror file."""

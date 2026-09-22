@@ -32,6 +32,12 @@ if (initialTheme) {
   seedSettings({ 'agent-team:theme': JSON.stringify(initialTheme) })
 }
 
+const initialLocale = new URLSearchParams(window.location.search).get('locale')
+if (initialLocale === 'zh-TW' || initialLocale === 'en-US' || initialLocale === 'ja-JP') {
+  i18n.global.locale.value = initialLocale
+  seedSettings({ 'agent-team:language': initialLocale })
+}
+
 // Announce readiness to the host broker (mirrors the noop/fs_probe plugins).
 window.nav?.ready?.()
 

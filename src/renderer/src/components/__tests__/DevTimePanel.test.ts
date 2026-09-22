@@ -1,0 +1,106 @@
+// @vitest-environment happy-dom
+import { describe, it, expect, vi } from 'vitest'
+import { mount } from '@vue/test-utils'
+import { ref } from 'vue'
+import { i18n } from '@navide/plugin-ui/foundation'
+import DevTimePanel from '../DevTimePanel.vue'
+import { registerCommand } from '@navide/plugin-ui/shared'
+import type { DevTimeSnapshot } from '../../composables/useDevTime'
+
+function snapshot(over: Partial<DevTimeSnapshot> = {}): DevTimeSnapshot {
+  const t = (m: number, h: number, a: number, o: number, w = m) => ({ merged_s: m, human_s: h, agent_s: a, overlap_s: o, wall_s: w })
+  return {
+    workspace_path: '/ws',
+    gap_human_s: 300,
+    gap_agent_s: 900,
+    active: true,
+    active_sources: ['agent'],
+    // today: 2h 35m of activity inside a 3h 10m span → 18% idle.
+    totals: { today: t(9300, 3600, 7200, 1500, 11400), last7d: t(36000, 0, 0, 0, 0), last30d: t(0, 0, 0, 0), all: t(90061, 0, 0, 0) },
+    by_day: ['06', '07', '08', '09', '10', '11', '12'].map((d) => ({ date: `2026-09-${d}`, merged_s: d === '12' ? 9300 : 60, human_s: 0, agent_s: 0 })),
+    by_pane: [{ pane_id: 'p1', today_s: 9300, all_s: 90061, active: true }],
+    ...over,
+  }
+}
+
+function mountPanel(snap: DevTimeSnapshot = snapshot()) {
+  const backend = {
+    status: ref('connected'),
+    send: vi.fn(async () => ({ ok: true, payload: snap })),
+    on: () => () => {},
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const w = mount(DevTimePanel as any, {
+    props: {
+      backend,
+      workspacePath: '/ws',
+      panes: [
+        { id: 'p1', agentKey: 'claude', agentLabel: 'API work', roleLabel: 'backend' },
+        { id: 'p2', agentKey: 'codex', agentLabel: 'Docs', roleLabel: 'writer' },
+      ],
+    },
+    // Params are echoed so a test can read what the interpolation received.
+    global: { mocks: { $t: (key: string, params?: Record<string, unknown>) => params ? `${key} ${JSON.stringify(params)}` : key } },
+  })
+  return { w, backend }
+}
+
+describe('DevTimePanel', () => {
+  it('formats weekdays using the current interface language and reacts to switching', async () => {
+    const previous = i18n.global.locale.value
+    i18n.global.locale.value = 'ja-JP'
+    const { w } = mountPanel()
+    try {
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(w.text()).toContain(new Date(2026, 8, 6).toLocaleDateString('ja-JP', { weekday: 'short' }))
+      i18n.global.locale.value = 'en-US'
+      await w.vm.$nextTick()
+      expect(w.text()).toContain(new Date(2026, 8, 6).toLocaleDateString('en-US', { weekday: 'short' }))
+    } finally { w.unmount(); i18n.global.locale.value = previous }
+  })
+
+  it('renders the three totals in h/m and the per-pane rows joined by id', async () => {
+    const { w } = mountPanel()
+    await new Promise((r) => setTimeout(r, 0))
+    await w.vm.$nextTick()
+
+    const bigs = w.findAll('.totals .big').map((n) => n.text())
+    expect(bigs).toEqual(['2h 35m', '10h 0m', '25h 1m'])
+
+    const rows = w.findAll('tr.pane-row')
+    expect(rows).toHaveLength(2)
+    // Sorted by all-time desc: the pane with data first, the one without at zero.
+    expect(rows[0].text()).toContain('API work')
+    expect(rows[0].text()).toContain('2h 35m')
+    expect(rows[0].find('.dot').classes()).toContain('on')
+    expect(rows[1].text()).toContain('Docs')
+    expect(rows[1].text()).toContain('0m')
+    expect(rows[1].find('.dot').classes()).not.toContain('on')
+    expect(w.find('.hint').text()).toBe('devtime.idle-hint {"minutes":5}')
+    w.unmount()
+  })
+
+  it('prints wall-clock span and idle share under the cards, hidden when the window has no span', async () => {
+    const { w } = mountPanel()
+    await new Promise((r) => setTimeout(r, 0))
+    await w.vm.$nextTick()
+    expect(w.find('.wall').text()).toBe('devtime.wall-clock {"wall":"3h 10m","idle":18}')
+
+    // last7d has activity but wall_s 0 (the backend has no span for it): no line.
+    await w.findAll('.totals .cell')[1].trigger('click')
+    expect(w.find('.wall').exists()).toBe(false)
+    w.unmount()
+  })
+
+  it('clicking a pane row asks App to focus it through ui.pane.focus', async () => {
+    const focus = vi.fn()
+    registerCommand('ui.pane.focus', focus)
+    const { w } = mountPanel()
+    await new Promise((r) => setTimeout(r, 0))
+    await w.vm.$nextTick()
+
+    await w.findAll('tr.pane-row')[1].trigger('click')
+    expect(focus).toHaveBeenCalledWith({ paneId: 'p2' })
+    w.unmount()
+  })
+})

@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from .. import osplat
+
 ACTIVATION_CATALOG_PATH_ENV = "AGENT_TEAM_PLUGIN_ACTIVATION_CATALOG"
 ACTIVATION_CATALOG_DIGEST_ENV = "AGENT_TEAM_PLUGIN_ACTIVATION_CATALOG_SHA256"
 
@@ -96,7 +98,7 @@ def _regular_file(path: Path, label: str, *, owner_only: bool = False) -> bytes:
         raise ActivationCatalogError(f"{label} is unavailable: {err}") from err
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
         raise ActivationCatalogError(f"{label} must be a regular non-symlink file")
-    if owner_only and os.name != "nt" and stat.S_IMODE(info.st_mode) & 0o077:
+    if owner_only and osplat.paths.enforces_posix_modes() and stat.S_IMODE(info.st_mode) & 0o077:
         raise ActivationCatalogError(f"{label} must be owner-only")
     try:
         return path.read_bytes()
@@ -122,7 +124,10 @@ def _manifest_identity(
         or manifest.get("id") != plugin_id
         or manifest.get("version") != package_version
         or not isinstance(entry, str)
-        or package_dir / entry != entry_file
+        # The manifest names a bare entry; the file on disk carries the
+        # platform's executable suffix (`.exe` on Windows), exactly as the
+        # Electron side resolves it in `backendEntryOnDisk`.
+        or package_dir / osplat.paths.backend_entry_on_disk(entry) != entry_file
         or backend.get("protocolVersion") != 1
         or backend.get("activation") != "startup"
     ):

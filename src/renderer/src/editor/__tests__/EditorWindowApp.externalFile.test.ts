@@ -48,6 +48,7 @@ vi.mock('../FilePreviewPane.vue', () => stub('FilePreviewPane', ['workspacePath'
 // EditorPane records which root its save() ran against — `workbench.action.
 // saveAll` reaches panes through the host's ref map, and a save that used the
 // window workspace instead of the tab's own root writes to the wrong file.
+const localeWire = vi.hoisted(() => ({ language: '', settingsChanged: null as null | ((keys: string[]) => void), languageChanged: null as null | ((locale: string) => void) }))
 const saveCalls = vi.hoisted(() => [] as Array<{ workspacePath: string; relPath: string }>)
 
 vi.mock('@navide/plugin-ui/editor', () => ({
@@ -84,13 +85,6 @@ vi.mock('../../composables/useBackend', () => ({
   }),
 }))
 
-vi.mock('@navide/plugin-ui/shared', () => ({
-  initSettingsBackend: vi.fn(),
-  settingsGet: vi.fn((_key: string, def: unknown) => def),
-  settingsSet: vi.fn(),
-  onSettingsChanged: vi.fn(() => () => {}),
-}))
-
 vi.mock('@navide/plugin-shell', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@navide/plugin-shell')>()),
   AiCliDock: stub('AiCliDock').default,
@@ -110,6 +104,10 @@ const commands = vi.hoisted(() => new Map<string, () => unknown>())
 
 vi.mock('@navide/plugin-ui/shared', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@navide/plugin-ui/shared')>()),
+  initSettingsBackend: vi.fn(),
+  settingsGet: vi.fn((key: string, def: unknown) => key === 'agent-team:language' ? localeWire.language : def),
+  settingsSet: vi.fn(),
+  onSettingsChanged: vi.fn((callback: (keys: string[]) => void) => { localeWire.settingsChanged = callback; return () => { localeWire.settingsChanged = null } }),
   initKeybindingsPort: vi.fn(),
   useKeybindings: vi.fn(),
   registerCommand: vi.fn((id: string, fn: () => unknown) => { commands.set(id, fn) }),
@@ -129,6 +127,10 @@ let pickFileResult: { ok: boolean; path?: string } = { ok: false }
 let realpaths: Record<string, string> = {}
 
 beforeEach(() => {
+  localeWire.language = ''
+  localeWire.settingsChanged = null
+  localeWire.languageChanged = null
+  i18n.global.locale.value = 'en-US'
   saveCalls.length = 0
   commands.clear()
   bridge.onOpenEditorFile = undefined
@@ -138,6 +140,7 @@ beforeEach(() => {
   Object.assign(window, {
     agentTeam: {
       onSwitchEditorSidebar: vi.fn(),
+      onLanguageChanged: (callback: (locale: string) => void) => { localeWire.languageChanged = callback },
       onOpenEditorFile: (cb: (p: Record<string, string>) => void) => { bridge.onOpenEditorFile = cb },
       onOpenEditorDiff: vi.fn(),
       onOpenEditorBranchDiff: vi.fn(),
@@ -174,6 +177,30 @@ function panes(wrapper: VueWrapper) {
 }
 
 describe('EditorWindowApp – files outside the workspace', () => {
+  it('follows Japanese query, Host settings, native events and reused plugin targets', async () => {
+    const wrapper = await mountApp('&locale=ja-JP')
+    expect(i18n.global.locale.value).toBe('ja-JP')
+    localeWire.language = 'en-US'
+    localeWire.settingsChanged?.(['agent-team:language'])
+    expect(i18n.global.locale.value).toBe('en-US')
+    localeWire.languageChanged?.('ja-JP')
+    expect(i18n.global.locale.value).toBe('ja-JP')
+    bridge.onOpenTarget?.({ locale: 'en-US', filepath: 'a.ts' })
+    await flushPromises()
+    expect(i18n.global.locale.value).toBe('en-US')
+    bridge.onOpenTarget?.({ locale: 'ja-JP', filepath: 'b.ts' })
+    await flushPromises()
+    expect(i18n.global.locale.value).toBe('ja-JP')
+    expect(wrapper.findAll('.ide-tab')).toHaveLength(2)
+    await wrapper.get('.ide-tab').trigger('contextmenu')
+    expect(document.body.textContent).toContain('他を閉じる')
+    localeWire.languageChanged?.('en-US')
+    await wrapper.vm.$nextTick()
+    expect(document.body.textContent).toContain('Close Others')
+    wrapper.unmount()
+    expect(localeWire.settingsChanged).toBeNull()
+  })
+
   it('opens same-named files from two roots as two independent tabs', async () => {
     const wrapper = await mountApp()
     await openViaIpc('notes.txt')

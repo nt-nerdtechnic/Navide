@@ -4,7 +4,7 @@ import type { AgentSpec } from './types'
 
 export const SPEC = {
   agentKey: 'kilo',
-  label: 'Kilo Code',
+  label: 'Kilo Code CLI',
   defaultCommand: 'kilo',
   // A fork of opencode, confirmed in its source (Kilo-Org/kilocode, MIT): the
   // root command declares `-m, --model` itself (cli/cmd/tui.ts:148) and the
@@ -38,5 +38,9 @@ export const SPEC = {
   fullScreenTui: true,
   // Same `/tui/*` channel as OpenCode (its upstream), password-protected here.
   pushChannel: { kind: 'tui-http', holdsInputBox: true },
-  hint: 'generalist'
+  hint: 'generalist',
+  // Quota failover: kilo.py reports a prepaid balance as a "credits" window
+  // (its `balance` field is the datum) and/or a Kilo Pass "period" window —
+  // either alone is a complete reading.
+  quotaSemantics: { hard: ['credits', 'period'], required: [] },
 } as const satisfies AgentSpec

@@ -216,6 +216,39 @@ def test_pane_attribution_within_run(claude_attr: tuple[Attribution, Path]) -> N
     assert result.stage_id == "01"
 
 
+def test_register_pane_group_id_flows_through_attribute(claude_attr: tuple[Attribution, Path]) -> None:
+    attr, root = claude_attr
+    cwd = "/x"
+    proj_dir = root / "-x"; proj_dir.mkdir()
+    attr.register_pane("pane-1", vendor="claude", cwd=cwd,
+                       workspace_path=cwd, group_id="rg-1")
+    f = proj_dir / "s.jsonl"; f.write_text("")
+    result = attr.attribute(_make_usage("claude", session_id="s", file_path=str(f)))
+    assert result.pane_id == "pane-1"
+    assert result.group_id == "rg-1"
+
+
+def test_set_pane_group_repoints_subsequent_attribution(claude_attr: tuple[Attribution, Path]) -> None:
+    attr, root = claude_attr
+    cwd = "/x"
+    proj_dir = root / "-x"; proj_dir.mkdir()
+    attr.register_pane("pane-1", vendor="claude", cwd=cwd, workspace_path=cwd)
+    f = proj_dir / "s.jsonl"; f.write_text("")
+    usage = _make_usage("claude", session_id="s", file_path=str(f))
+    assert attr.attribute(usage).group_id == ""
+
+    assert attr.set_pane_group("pane-1", "rg-2") is True
+    assert attr.attribute(usage).group_id == "rg-2"
+    # Back to ungrouped is a plain "" too.
+    assert attr.set_pane_group("pane-1", "") is True
+    assert attr.attribute(usage).group_id == ""
+
+
+def test_set_pane_group_unknown_pane_returns_false(claude_attr: tuple[Attribution, Path]) -> None:
+    attr, _root = claude_attr
+    assert attr.set_pane_group("never-registered", "rg-1") is False
+
+
 def test_register_pane_scopes_baseline_to_workspace_folder(tmp_path: Path) -> None:
     """register_pane must enumerate only the pane's workspace folder, not the
     whole session tree. On a large ~/.claude the whole-tree scan stat'd ~1500
@@ -255,6 +288,38 @@ def test_register_pane_falls_back_to_full_tree_when_unscopable(claude_attr: tupl
     f = proj / "s.jsonl"; f.write_text("")
     attr.register_pane("p", vendor="claude", cwd="/x", workspace_path="/x")
     assert f in attr._panes["p"].baseline_files
+
+
+def test_deferred_baseline_blocks_claims_until_the_scan_lands(claude_attr: tuple[Attribution, Path]) -> None:
+    """register_pane(defer_baseline=True) is the terminal.create shape: the
+    pane owns its identity at once, but until scan_pane_baseline fills the
+    baseline in, the first-come claim must not fire — a pre-existing session
+    replayed during that window would otherwise be adopted as the pane's own."""
+    attr, root = claude_attr
+    cwd = "/x"
+    proj = root / "-x"; proj.mkdir()
+    old = proj / "old.jsonl"; old.write_text("")
+    attr.register_pane("p", vendor="claude", cwd=cwd, workspace_path=cwd, defer_baseline=True)
+    reg = attr._panes["p"]
+    assert reg.baseline_pending is True and reg.baseline_files == set()
+    assert attr.attribute(_make_usage("claude", session_id="old", file_path=str(old))).pane_id is None
+
+    attr.scan_pane_baseline("p")
+    assert reg.baseline_pending is False
+    assert old in reg.baseline_files
+    # Still not claimable — the scan proved it predates the pane.
+    assert attr.attribute(_make_usage("claude", session_id="old", file_path=str(old))).pane_id is None
+    fresh = proj / "fresh.jsonl"; fresh.write_text("")
+    assert attr.attribute(_make_usage("claude", session_id="fresh", file_path=str(fresh))).pane_id == "p"
+
+
+def test_scan_pane_baseline_never_revives_an_unregistered_pane(claude_attr: tuple[Attribution, Path]) -> None:
+    attr, root = claude_attr
+    (root / "-x").mkdir()
+    attr.register_pane("p", vendor="claude", cwd="/x", workspace_path="/x", defer_baseline=True)
+    attr.unregister_pane("p")
+    attr.scan_pane_baseline("p")  # the create was rolled back while the scan was queued
+    assert "p" not in attr._panes
 
 
 def test_two_unclaimed_panes_same_workspace_claim_nothing(claude_attr: tuple[Attribution, Path]) -> None:
@@ -476,8 +541,8 @@ def test_marker_binds_two_codex_panes_and_returns_resume_id(codex_attr: tuple[At
     assert attr.pane_for_session("rollout-T2-uuid2")[0] == "p2"
 
 
-def test_codex_home_path_binds_to_session_home_id(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("HOME", str(tmp_path))
+def test_codex_home_path_binds_to_session_home_id(set_home, tmp_path: Path) -> None:
+    set_home(tmp_path)
     root = tmp_path / ".codex-panes" / "home-old" / "sessions" / "2026" / "06" / "08"
     root.mkdir(parents=True)
     f = root / "rollout-2026-06-08T00-00-00-sid.jsonl"
@@ -498,12 +563,12 @@ def test_codex_home_path_binds_to_session_home_id(monkeypatch: pytest.MonkeyPatc
 
 
 def test_codex_home_path_rebinds_new_rollout_after_rotation(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    set_home, tmp_path: Path
 ) -> None:
     """In-pane login rotates Codex to a fresh rollout file; the new session
     must bind to the same pane and announce the new resume id (so the
     frontend re-pins instead of staying on the dead pre-login session)."""
-    monkeypatch.setenv("HOME", str(tmp_path))
+    set_home(tmp_path)
     root = tmp_path / ".codex-panes" / "home-old" / "sessions" / "2026" / "07" / "30"
     root.mkdir(parents=True)
     a = root / "rollout-2026-07-30T22-00-00-sid-a.jsonl"
@@ -530,11 +595,11 @@ def test_codex_home_path_rebinds_new_rollout_after_rotation(
 
 
 def test_codex_home_path_waits_for_session_meta(
-    monkeypatch: pytest.MonkeyPatch,
+    set_home,
     tmp_path: Path,
 ) -> None:
     """A newly-created rollout must not publish its filename as a resume id."""
-    monkeypatch.setenv("HOME", str(tmp_path))
+    set_home(tmp_path)
     root = tmp_path / ".codex-panes" / "home-old" / "sessions"
     root.mkdir(parents=True)
     f = root / "rollout-2026-07-14T23-53-50-real-resume-id.jsonl"
@@ -600,12 +665,12 @@ def _codex_subagent_meta(sid: str, parent: str) -> str:
 
 
 def test_codex_home_path_ignores_subagent_rollout(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    set_home, tmp_path: Path
 ) -> None:
     """A sub-agent thread must never be pinned as the pane's session: codex
     refuses direct input on it, so a pane resumed onto one is unusable. The
     parent rollout in the same home keeps the binding."""
-    monkeypatch.setenv("HOME", str(tmp_path))
+    set_home(tmp_path)
     root = tmp_path / ".codex-panes" / "home-old" / "sessions" / "2026" / "08" / "24"
     root.mkdir(parents=True)
     parent = root / "rollout-2026-08-24T15-31-28-parent-id.jsonl"
@@ -674,8 +739,8 @@ def test_codex_marker_ignores_subagent_rollout(codex_attr: tuple[Attribution, Pa
     assert attr.maybe_bind_by_marker(usage) is None
 
 
-def test_codex_home_path_prevents_same_cwd_first_claim(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("HOME", str(tmp_path))
+def test_codex_home_path_prevents_same_cwd_first_claim(set_home, tmp_path: Path) -> None:
+    set_home(tmp_path)
     root = tmp_path / ".codex-panes"
     f1 = root / "home-a" / "sessions" / "rollout-a.jsonl"
     f2 = root / "home-b" / "sessions" / "rollout-b.jsonl"
@@ -752,7 +817,7 @@ def test_encode_claude_cwd_agrees_with_resume_preflight_encoder() -> None:
     from agent_team_backend.app import _session_lookup_path
 
     p = _session_lookup_path("claude", CJK_WS, "sid1")
-    assert p.endswith(f"/{encode_claude_cwd(CJK_WS)}/sid1.jsonl")
+    assert Path(p).parts[-2:] == (encode_claude_cwd(CJK_WS), "sid1.jsonl")
 
 
 def test_cwd_matches_dash_encoded_dir_for_cjk_workspace(

@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { activityMeansWorking, applyLoopWait, detailMeansToolUse, quotaTurnIsFresh, recordTurnComplete, paneSignalResetKeys, loopWaitBackoffMs, loopWaitHonoured, LOOP_WAIT_BACKOFF_MS, LOOP_WAIT_TOTAL_MAX_MS, slotFinished, allSlotsFinished, turnCompleteDone, loopContinueReady, turnEndsWithSentinel, parseEventMs, isReplayedTurnComplete, normalizeTurnText, turnMadeProgress, loopBackoffMs, applyTurnProgress, loopStallVerdict, loopWaitingOnSubagents, turnUsedNoTools, LOOP_STALL_BACKOFF_MS, LOOP_MIN_PROGRESS_CHARS, LOOP_STALL_LIMIT, LOOP_MAX_CONTINUES, LOOP_SUBAGENT_WAIT_MAX_MS, LOOP_RECENT_TURNS, type SlotSignal, type LoopStallState } from '../completion'
+import { activityMeansWorking, applyLoopWait, clearProvisionalStall, loopSettleMs, LOOP_INFERRED_TURN_END_SETTLE_MS, detailMeansToolUse, quotaTurnIsFresh, recordTurnComplete, paneSignalResetKeys, loopWaitBackoffMs, loopWaitHonoured, LOOP_WAIT_BACKOFF_MS, LOOP_WAIT_TOTAL_MAX_MS, slotFinished, allSlotsFinished, turnCompleteDone, loopContinueReady, turnEndsWithSentinel, parseEventMs, isReplayedTurnComplete, turnTextFingerprint, normalizeTurnText, turnMadeProgress, loopBackoffMs, applyTurnProgress, loopStallVerdict, loopWaitingOnSubagents, turnUsedNoTools, LOOP_STALL_BACKOFF_MS, LOOP_MIN_PROGRESS_CHARS, LOOP_STALL_LIMIT, LOOP_MAX_CONTINUES, LOOP_SUBAGENT_WAIT_MAX_MS, LOOP_RECENT_TURNS, type SlotSignal, type LoopStallState } from '../completion'
+import { VENDORS_WITHOUT_TURN_END } from '../agentMessaging'
+import { CLI_AGENT_SPECS } from '@navide/plugin-shell'
 
 // Fixed reference time for the watcher arming. turn_complete only counts when
 // its timestamp is strictly AFTER this.
@@ -237,6 +239,34 @@ describe('applyTurnProgress', () => {
   })
 })
 
+describe('clearProvisionalStall', () => {
+  it('takes back the charge an empty-text copy made, and marks the turn judged', () => {
+    const after = clearProvisionalStall({ stalledRuns: 3, lastTurnText: '', emptyCharged: true })
+    expect(after.stalledRuns).toBe(2)
+    expect(after.emptyCharged).toBe(false)
+    expect(after.toolJudged).toBe(true)
+  })
+
+  it('leaves the count alone when no provisional charge was made', () => {
+    const after = clearProvisionalStall({ stalledRuns: 3, lastTurnText: '' })
+    expect(after.stalledRuns).toBe(3)
+    expect(after.toolJudged).toBe(true)
+  })
+
+  it('never drives the count negative', () => {
+    // The count is a number of turns. Three places write it and only their
+    // relative order kept this subtraction above zero; the clamp is what
+    // actually holds.
+    expect(clearProvisionalStall({ stalledRuns: 0, lastTurnText: '', emptyCharged: true }).stalledRuns).toBe(0)
+  })
+
+  it('keeps the rest of the state', () => {
+    const after = clearProvisionalStall({ stalledRuns: 1, lastTurnText: 'x', recentTurns: ['x'], emptyCharged: true })
+    expect(after.lastTurnText).toBe('x')
+    expect(after.recentTurns).toEqual(['x'])
+  })
+})
+
 describe('loopStallVerdict', () => {
   it('lets a healthy loop keep going', () => {
     expect(loopStallVerdict({ continues: 0, stalledRuns: 0 })).toBe('ok')
@@ -344,6 +374,34 @@ const SPIN_TURNS = [
   '兩個驗收 agent 都在收尾階段，等待回報中。尚未完成，不輸出標記。',
   '驗收回報尚未到達，持續等待中（回歸 agent 收結果、瀏覽器 agent 實測）。尚未完成，不輸出標記。',
 ]
+
+describe('loopSettleMs', () => {
+  const DEFAULT = 1500
+  // grok dropped out when it moved to the official xAI CLI, whose transcript
+  // carries an explicit `turn_completed` record.
+  const SILENCE_VENDORS = ['kimi', 'pi', 'qwen']
+
+  it('holds the verdict longer for the vendors whose turn end is inferred from silence', () => {
+    for (const key of SILENCE_VENDORS) {
+      expect(VENDORS_WITHOUT_TURN_END.has(key)).toBe(true)
+      expect(loopSettleMs(VENDORS_WITHOUT_TURN_END.has(key), DEFAULT)).toBe(LOOP_INFERRED_TURN_END_SETTLE_MS)
+    }
+    expect(LOOP_INFERRED_TURN_END_SETTLE_MS).toBeGreaterThan(DEFAULT)
+  })
+
+  it('leaves every other vendor on the default settle', () => {
+    const others = CLI_AGENT_SPECS.map((s) => s.agentKey).filter((k) => !SILENCE_VENDORS.includes(k))
+    expect(others.length).toBe(CLI_AGENT_SPECS.length - SILENCE_VENDORS.length)
+    for (const key of others) {
+      expect(VENDORS_WITHOUT_TURN_END.has(key)).toBe(false)
+      expect(loopSettleMs(VENDORS_WITHOUT_TURN_END.has(key), DEFAULT)).toBe(DEFAULT)
+    }
+  })
+
+  it('never shortens a default that is already longer', () => {
+    expect(loopSettleMs(true, LOOP_INFERRED_TURN_END_SETTLE_MS + 1)).toBe(LOOP_INFERRED_TURN_END_SETTLE_MS + 1)
+  })
+})
 
 describe('loopWaitingOnSubagents', () => {
   const NOW = 10_000_000
@@ -474,7 +532,10 @@ describe('the reported spin is now caught', () => {
     // Claude's Stop hook carries no text. Before, that was UNKNOWN and the
     // turn was ignored entirely; now the tool signal can still speak for it.
     let state: LoopStallState = { stalledRuns: 0, lastTurnText: '' }
-    for (let i = 0; i < LOOP_STALL_LIMIT; i++) state = applyTurnProgress(state, '', NO_TOOLS)
+    for (let i = 0; i < LOOP_STALL_LIMIT; i++) {
+      // One empty copy per armed turn; the arm between turns clears the flags.
+      state = { ...applyTurnProgress(state, '', NO_TOOLS), emptyCharged: false, toolJudged: false }
+    }
     expect(loopStallVerdict({ continues: 0, stalledRuns: state.stalledRuns })).toBe('stop-stalled')
   })
 
@@ -484,6 +545,60 @@ describe('the reported spin is now caught', () => {
       state = applyTurnProgress(state, '', { toolUsesThisTurn: 0, toolSignalsSeen: false })
     }
     expect(loopStallVerdict({ continues: 0, stalledRuns: state.stalledRuns })).toBe('ok')
+  })
+})
+
+describe('one turn reported twice charges one stall', () => {
+  // Claude reports every turn end TWICE: the Stop hook (no text) and the JSONL
+  // reader (with text). Both reach applyTurnProgress with the same per-turn
+  // tool count, so a talk-only turn was charged on each copy — two stalls per
+  // turn, LOOP_STALL_LIMIT reached after two turns instead of four.
+  const NO_TOOLS = { toolUsesThisTurn: 0, toolSignalsSeen: true }
+  const WORKED = { toolUsesThisTurn: 2, toolSignalsSeen: true }
+  const TALK = 'Still waiting on the background job; nothing else to do this turn until it finishes.'
+
+  it('hook copy first, then the reader text (the usual order)', () => {
+    let state: LoopStallState = { stalledRuns: 0, lastTurnText: '' }
+    state = applyTurnProgress(state, '', NO_TOOLS)
+    state = applyTurnProgress(state, TALK, NO_TOOLS)
+    expect(state.stalledRuns).toBe(1)
+  })
+
+  it('reader text first, then the hook copy', () => {
+    let state: LoopStallState = { stalledRuns: 0, lastTurnText: '' }
+    state = applyTurnProgress(state, TALK, NO_TOOLS)
+    state = applyTurnProgress(state, '', NO_TOOLS)
+    expect(state.stalledRuns).toBe(1)
+  })
+
+  it('the text judgement REPLACES the hook copy\'s charge, it does not add to it', () => {
+    // Both copies must see the same tool count — that is what makes them one
+    // turn. The empty copy charges provisionally (2 → 3) and the text lands on
+    // the same 3; judged independently it would read 4.
+    let state: LoopStallState = { stalledRuns: 2, lastTurnText: '' }
+    state = applyTurnProgress(state, '', NO_TOOLS)
+    expect(state.stalledRuns).toBe(3) // provisional
+    state = applyTurnProgress(state, TALK, NO_TOOLS)
+    expect(state.stalledRuns).toBe(3) // replaced, not added to
+  })
+
+  it('a turn that used tools clears the count outright', () => {
+    let state: LoopStallState = { stalledRuns: 2, lastTurnText: '' }
+    state = applyTurnProgress(state, '', NO_TOOLS)
+    state = applyTurnProgress(state, TALK, WORKED)
+    expect(state.stalledRuns).toBe(0)
+  })
+
+  it('still charges once per turn across turns', () => {
+    // The per-turn flags are what armLoopTurn resets; a fresh arm is modelled
+    // by dropping them, exactly as the watcher does.
+    let state: LoopStallState = { stalledRuns: 0, lastTurnText: '' }
+    for (let i = 0; i < LOOP_STALL_LIMIT; i++) {
+      state = applyTurnProgress(state, '', NO_TOOLS)
+      state = applyTurnProgress(state, `${TALK} (turn ${i})`, NO_TOOLS)
+      state = { ...state, emptyCharged: false, toolJudged: false }
+    }
+    expect(state.stalledRuns).toBe(LOOP_STALL_LIMIT)
   })
 })
 
@@ -661,6 +776,39 @@ describe('LOOP_WAIT backoff and budget', () => {
     }
     expect(turns).toBeLessThan(1000) // it terminates at all
     expect(st.totalWaitedMs).toBeGreaterThanOrEqual(LOOP_WAIT_TOTAL_MAX_MS)
+  })
+})
+
+describe('a LOOP_WAIT turn reported twice still climbs the backoff', () => {
+  // Claude's Stop hook reports the turn end first and carries no text; the
+  // reader's copy with the <<LOOP_WAIT>> text follows. Judged as "any other
+  // turn", the empty copy reset the streak every time, so the text re-opened
+  // it at 1 and the hold never left the 60s tier. An empty-text turn is
+  // UNKNOWN to the wait judgement — the same rule applyTurnProgress applies.
+  const FRESH = { consecutive: 0, totalWaitedMs: 0 }
+  const WAIT_TEXT = '仍在等背景測試回報。\n\n<<LOOP_WAIT>>'
+  /** noteLoopWait's classification of one turn_complete's text. */
+  const judged = (text: string): boolean | null => (text ? turnEndsWithSentinel(text, '<<LOOP_WAIT>>') : null)
+
+  it('two turns of [hook copy, then LOOP_WAIT text] count as two consecutive waits', () => {
+    let st = FRESH
+    for (let turn = 0; turn < 2; turn++) {
+      st = applyLoopWait(st, judged(''))
+      st = applyLoopWait(st, judged(WAIT_TEXT))
+    }
+    expect(st.consecutive).toBe(2)
+    expect(loopWaitBackoffMs(st.consecutive)).toBe(LOOP_WAIT_BACKOFF_MS[1])
+  })
+
+  it('an empty copy after the text does not end the streak either', () => {
+    let st = applyLoopWait(FRESH, judged(WAIT_TEXT))
+    st = applyLoopWait(st, judged(''))
+    expect(st.consecutive).toBe(1)
+  })
+
+  it('a real other turn still ends the streak', () => {
+    const waited = applyLoopWait(applyLoopWait(FRESH, true), true)
+    expect(applyLoopWait(waited, judged('Fixed the parser and reran the suite; all green.')).consecutive).toBe(0)
   })
 })
 
@@ -1062,5 +1210,39 @@ describe('quotaTurnIsFresh · what it does NOT do', () => {
       sentinelSeen: true, turnCompleteAt: SEEN + 1_000, armedAt: ARMED,
       quotaSeenAt: SEEN, turnSourceAt: SEEN - 500
     })).toBe(true)
+  })
+})
+
+describe('turnTextFingerprint', () => {
+  // The dedupe of last resort: the timestamp gate reads an unparseable stamp as
+  // fresh, so for those vendors the same turn was re-dispatched every time it
+  // was re-reported — the MSG blocks in it sent again with no ceiling.
+  it('is stable for the same text', () => {
+    const text = '---MSG-START---\nto: reviewer\ndone\n---MSG-END---'
+    expect(turnTextFingerprint(text)).toBe(turnTextFingerprint(text))
+  })
+
+  it('separates turns that differ only at the very end', () => {
+    expect(turnTextFingerprint('report A')).not.toBe(turnTextFingerprint('report B'))
+  })
+
+  it('separates turns that differ only at the very start', () => {
+    expect(turnTextFingerprint('A report')).not.toBe(turnTextFingerprint('B report'))
+  })
+
+  it('separates a repeated block from the same block sent twice in one turn', () => {
+    // Two identical MSG blocks in one turn are two messages; the same block
+    // arriving in a later turn is a replay. Length alone cannot tell them
+    // apart, which is why the hash is length-prefixed rather than length-only.
+    const once = 'send it'
+    expect(turnTextFingerprint(once)).not.toBe(turnTextFingerprint(once + once))
+  })
+
+  it('is order-sensitive, not a character sum', () => {
+    expect(turnTextFingerprint('ab')).not.toBe(turnTextFingerprint('ba'))
+  })
+
+  it('handles an empty turn without collapsing it onto a real one', () => {
+    expect(turnTextFingerprint('')).not.toBe(turnTextFingerprint(' '))
   })
 })

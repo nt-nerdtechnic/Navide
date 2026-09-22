@@ -1,16 +1,17 @@
-export type SupportedLocale = 'zh-TW' | 'en-US'
-export const SUPPORTED_LOCALES: readonly SupportedLocale[] = ['zh-TW', 'en-US'] as const
+export type SupportedLocale = 'zh-TW' | 'en-US' | 'ja-JP'
+export const SUPPORTED_LOCALES: readonly SupportedLocale[] = ['zh-TW', 'en-US', 'ja-JP'] as const
 
 export function normalizeSystemLocale(rawLocale: string | null | undefined): SupportedLocale {
   if (!rawLocale || typeof rawLocale !== 'string') return 'zh-TW'
   const normalized = rawLocale.trim()
   if (/^zh-(TW|Hant|HK)/i.test(normalized) || /^zh/i.test(normalized)) return 'zh-TW'
   if (/^en/i.test(normalized)) return 'en-US'
+  if (/^ja/i.test(normalized)) return 'ja-JP'
   return 'zh-TW'
 }
 
 export function validateSupportedLocale(value: unknown): SupportedLocale | null {
-  return value === 'zh-TW' || value === 'en-US' ? value : null
+  return value === 'zh-TW' || value === 'en-US' || value === 'ja-JP' ? value : null
 }
 
 export function readPersistedLocaleFromSettings(

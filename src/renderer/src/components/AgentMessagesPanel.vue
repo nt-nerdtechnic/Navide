@@ -164,6 +164,9 @@ function vendorOf(agentKey: string | undefined, handle: string): string | null {
           <span v-if="msg.kind === 'notice'" class="msg-notice">
             {{ $t('msg.notice-badge') }}
           </span>
+          <span v-else-if="msg.kind === 'ack'" class="msg-notice">
+            {{ $t('msg.ack-badge') }}
+          </span>
           <!-- Only while it is still waiting: once a row is `delivering` the
                envelope is being written into the pane and there is nothing left
                to take back. -->
@@ -178,9 +181,15 @@ function vendorOf(agentKey: string | undefined, handle: string): string | null {
           </button>
           <!-- No Resend on a notice: it only reports another row's failure, so
                re-sending it would deliver stale news, and the row it is about
-               has its own Resend. -->
+               has its own Resend. None on an ack either: retryMessage() drops
+               `kind`, so re-sending one would type into the pane the ack was
+               written never to touch. -->
           <button
-            v-else-if="(msg.status === 'failed' || msg.status === 'cancelled') && msg.kind !== 'notice'"
+            v-else-if="
+              (msg.status === 'failed' || msg.status === 'cancelled') &&
+              msg.kind !== 'notice' &&
+              msg.kind !== 'ack'
+            "
             class="msg-btn msg-act"
             data-act="retry"
             @click.stop="messaging.retryMessage(msg.id)"

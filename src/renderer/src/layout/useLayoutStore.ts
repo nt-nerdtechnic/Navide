@@ -8,6 +8,7 @@ import { ref, computed, type Ref, type ComputedRef } from 'vue'
 import { onSettingsChanged, settingsGet, settingsSet } from '@navide/plugin-ui/shared'
 import {
   LAYOUT_SETTINGS_KEY,
+  LAYOUT_VERSION,
   SLOT_IDS,
   clampSlotSize,
   LAYOUT_PRESETS,
@@ -17,7 +18,7 @@ import {
   type SlotId,
   type SlotState,
 } from './slots'
-import { canPlace, isMovable, reconcileOccupancy, viewById } from './viewRegistry'
+import { canPlace, isMovable, reconcileOccupancy, sortByDeclaration, viewById } from './viewRegistry'
 
 /**
  * Pre-refactor keys, read once so an existing install keeps the widths and the
@@ -65,8 +66,19 @@ function load(): LayoutState {
   if (!raw) return readLegacyInto(base)
 
   try {
-    const parsed = JSON.parse(raw) as Partial<LayoutState>
-    if (parsed?.version !== 1) return readLegacyInto(base)
+    const parsed = JSON.parse(raw) as Partial<LayoutState> & { version?: number }
+    const stored = Number(parsed?.version)
+    if (!Number.isInteger(stored) || stored < 1 || stored > LAYOUT_VERSION) {
+      return readLegacyInto(base)
+    }
+    // v1 kept whichever tab order it happened to accumulate, so the shipped
+    // order could never reach an install that had already opened a panel — a
+    // default-order change was invisible to every existing user. Re-sorting is
+    // safe precisely because v1 gave nobody a way to order tabs within a slot:
+    // moveView refuses a same-slot move and nothing drags, so the stored order
+    // is a by-product of appends (showView, reconcileOccupancy), never a
+    // choice. Which SLOT a view sits in IS a choice and is left alone.
+    const normaliseOrder = stored < 2
 
     if (parsed.chrome && typeof parsed.chrome === 'object') {
       base.chrome.titlebar = parsed.chrome.titlebar !== false
@@ -76,14 +88,14 @@ function load(): LayoutState {
       base.hidden = parsed.hidden.filter((v) => typeof v === 'string' && !!viewById(v))
     }
     for (const id of SLOT_IDS) {
-      const stored = parsed.slots?.[id]
-      if (!isSlotShaped(stored)) continue
+      const storedSlot = parsed.slots?.[id]
+      if (!isSlotShaped(storedSlot)) continue
       base.slots[id] = {
-        views: stored.views.filter((v) => typeof v === 'string'),
-        active: typeof stored.active === 'string' ? stored.active : null,
-        size: clampSlotSize(id, stored.size),
-        collapsed: stored.collapsed,
-        ...(stored.spanMode ? { spanMode: stored.spanMode } : {}),
+        views: storedSlot.views.filter((v) => typeof v === 'string'),
+        active: typeof storedSlot.active === 'string' ? storedSlot.active : null,
+        size: clampSlotSize(id, storedSlot.size),
+        collapsed: storedSlot.collapsed,
+        ...(storedSlot.spanMode ? { spanMode: storedSlot.spanMode } : {}),
       }
     }
     // One pass over all four slots at once: the singleton invariant and the
@@ -95,7 +107,10 @@ function load(): LayoutState {
     )
     for (const id of SLOT_IDS) {
       const slot = base.slots[id]
-      slot.views = occupancy[id]
+      // After occupancy, so a view re-homed here by reconcileOccupancy lands in
+      // its declared place rather than at the end — which is exactly how `time`
+      // ended up below `tokens` on installs whose stored list predated it.
+      slot.views = normaliseOrder ? sortByDeclaration(occupancy[id]) : occupancy[id]
       // An active view that is no longer in the slot would render nothing.
       if (slot.active && !slot.views.includes(slot.active)) slot.active = slot.views[0] ?? null
       if (!slot.active && slot.views.length) slot.active = slot.views[0]

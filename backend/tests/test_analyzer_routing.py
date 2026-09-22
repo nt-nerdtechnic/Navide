@@ -258,13 +258,12 @@ async def test_run_llama_cli_uses_override():
 async def test_health_uses_override():
     """health() should check the overridden CLI, not the default LLAMA_CLI."""
     from agent_team_backend.analyzer import health
-    import shutil
 
-    with patch("agent_team_backend.analyzer.shutil.which") as mock_which:
-        mock_which.return_value = None
+    with patch("agent_team_backend.analyzer.osplat.paths.resolve_program") as mock_resolve:
+        mock_resolve.return_value = None
         result = await health(llama_cli_override="nonexistent-binary-xyz")
 
-    mock_which.assert_called_with("nonexistent-binary-xyz")
+    mock_resolve.assert_called_with("nonexistent-binary-xyz")
     assert result["ok"] is False
     assert "nonexistent-binary-xyz" in result["error"]
 
@@ -280,7 +279,8 @@ async def test_health_gguf_warning_when_file_missing(tmp_path):
     mock_proc.returncode = 0
     mock_proc.communicate = AsyncMock(return_value=(b"version 9330\n", b""))
 
-    with patch("agent_team_backend.analyzer.shutil.which", return_value="/usr/local/bin/llama-cli"), \
+    with patch("agent_team_backend.analyzer.osplat.paths.resolve_program",
+               return_value="/usr/local/bin/llama-cli"), \
          patch("agent_team_backend.analyzer.asyncio.create_subprocess_exec",
                new_callable=AsyncMock, return_value=mock_proc):
         result = await health(gguf_path_override=fake_gguf)
@@ -302,7 +302,8 @@ async def test_health_gguf_size_when_file_exists(tmp_path):
     mock_proc.returncode = 0
     mock_proc.communicate = AsyncMock(return_value=(b"version 9330\n", b""))
 
-    with patch("agent_team_backend.analyzer.shutil.which", return_value="/usr/local/bin/llama-cli"), \
+    with patch("agent_team_backend.analyzer.osplat.paths.resolve_program",
+               return_value="/usr/local/bin/llama-cli"), \
          patch("agent_team_backend.analyzer.asyncio.create_subprocess_exec",
                new_callable=AsyncMock, return_value=mock_proc):
         result = await health(gguf_path_override=str(gguf_file))
@@ -310,6 +311,30 @@ async def test_health_gguf_size_when_file_exists(tmp_path):
     assert result["ok"] is True
     assert "gguf_warning" not in result
     assert result["gguf_size"] > 0
+
+
+@pytest.mark.asyncio
+async def test_health_starts_a_windows_shim_through_cmd(monkeypatch):
+    """A llama.cpp shipped as a `.cmd` wrapper needs cmd.exe in front of it."""
+    from agent_team_backend import analyzer
+    from agent_team_backend.osplat import _windows
+
+    mock_proc = MagicMock()
+    mock_proc.returncode = 0
+    mock_proc.communicate = AsyncMock(return_value=(b"version 9330\n", b""))
+
+    monkeypatch.setattr(analyzer.osplat, "paths", _windows.paths)
+    monkeypatch.setattr(
+        _windows.paths, "resolve_program", lambda _name, *, path=None: r"C:\llama\llama-cli.cmd"
+    )
+    with patch("agent_team_backend.analyzer.asyncio.create_subprocess_exec",
+               new_callable=AsyncMock, return_value=mock_proc) as mock_exec:
+        result = await analyzer.health()
+
+    assert result["ok"] is True
+    assert mock_exec.call_args.args == (
+        "cmd.exe", "/d", "/c", r"C:\llama\llama-cli.cmd", "--version",
+    )
 
 
 @pytest.mark.asyncio

@@ -25,6 +25,7 @@ from typing import Any
 import httpx
 
 from . import pane_name_prompt
+from .http_ssl import default_ssl_context
 
 log = logging.getLogger(__name__)
 
@@ -110,7 +111,9 @@ async def generate_pane_name(
     try:
         async with _get_semaphore():
             async with httpx.AsyncClient(
-                base_url=ollama_url.rstrip("/"), timeout=_BUDGET_S
+                base_url=ollama_url.rstrip("/"),
+                timeout=_BUDGET_S,
+                verify=await default_ssl_context(),
             ) as client:
                 resp = await client.post("/api/generate", json={
                     "model": model,

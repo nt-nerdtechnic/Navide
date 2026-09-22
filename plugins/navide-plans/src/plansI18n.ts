@@ -1,18 +1,20 @@
 import enUS from './locales/en-US.json'
 import zhTW from './locales/zh-TW.json'
+import jaJP from './locales/ja-JP.json'
 
-export type SupportedPlansLocale = 'en-US' | 'zh-TW'
-export const SUPPORTED_PLANS_LOCALES: readonly SupportedPlansLocale[] = ['en-US', 'zh-TW'] as const
+export type SupportedPlansLocale = 'en-US' | 'zh-TW' | 'ja-JP'
+export const SUPPORTED_PLANS_LOCALES: readonly SupportedPlansLocale[] = ['en-US', 'zh-TW', 'ja-JP'] as const
 
 type MergeLocaleMessage = (locale: string, messages: Record<string, unknown>) => void
 
 export function installPlansMessages(mergeLocaleMessage: MergeLocaleMessage): void {
   mergeLocaleMessage('en-US', enUS)
   mergeLocaleMessage('zh-TW', zhTW)
+  mergeLocaleMessage('ja-JP', jaJP)
 }
 
 export function resolvePlansLocale(value: unknown): SupportedPlansLocale {
-  return value === 'zh-TW' || value === 'en-US' ? value : 'zh-TW'
+  return value === 'zh-TW' || value === 'en-US' || value === 'ja-JP' ? value : 'zh-TW'
 }
 
 export function parsePlansLocaleFromQuery(queryOrSearch: string): SupportedPlansLocale {
@@ -28,7 +30,7 @@ export function extractLocaleFromSettingsEvent(payload: unknown): SupportedPlans
   const settings = record.settings
   if (typeof settings !== 'object' || settings === null || Array.isArray(settings)) return null
   const language = (settings as Record<string, unknown>)['agent-team:language']
-  if (language === 'zh-TW' || language === 'en-US') {
+  if (language === 'zh-TW' || language === 'en-US' || language === 'ja-JP') {
     return language
   }
   return null

@@ -46,7 +46,7 @@ Describe the problem you are trying to solve and the solution you have in mind.
 ## Development Setup / 開發環境設定
 
 **Requirements:** Node.js 22.12+ (22.x), pnpm 10+, Python 3.12+, uv 0.11+, Go 1.27.x
-for the packaged Plans fixture, macOS 13+
+for the packaged Plans fixture, and macOS 13+ on Apple silicon, Linux x64, or Windows x64
 
 ```bash
 git clone https://github.com/nt-nerdtechnic/Navide.git
@@ -88,6 +88,25 @@ with no packaged Plans backend.
 
 > `pnpm dev` 會同時啟動 Electron、Vite dev server 和 Python FastAPI backend。
 
+### Git hooks
+
+Point Git at the tracked hooks once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+`.githooks/pre-commit` refuses a commit whose staged `.ts`/`.vue`/`.py` files
+import a relative module that is not in the index. Several sessions share one
+working tree here, so a commit can carry a file that references a sibling still
+unstaged or untracked; the local typecheck passes because the file is on disk,
+and only CI fails. Stage the missing file too or drop the import; `--no-verify`
+bypasses the check when you know what you are doing.
+
+> 每個 clone 執行一次 `git config core.hooksPath .githooks`。pre-commit 會擋下
+> 「staged 的檔 import 了還沒進 index 的相對模組」——本機 typecheck 看得到工作樹的檔所以會過，
+> 只有 CI 會紅。
+
 ---
 
 ## Submitting a Pull Request / 提交 PR
@@ -123,9 +142,10 @@ with no packaged Plans backend.
 
 Please fill in the pull request template — include a summary of changes and how you tested them.
 
-CI runs frontend checks and the application/plugin build, macOS backend checks,
-packaged Plans checks, and marketplace registry/contract checks in parallel. The
-`Lint and test` status passes only when all four jobs succeed. CI does not run Electron UI automation;
+CI runs nine jobs in parallel: frontend checks and the application/plugin build
+on macOS, Linux and Windows; backend checks on macOS, Linux and Windows; packaged
+Plans checks; marketplace registry/contract checks; and a dependency audit. The
+`Lint and test` status passes only when all nine succeed. CI does not run Electron UI automation;
 test UI changes manually. To reproduce the build check locally, run `pnpm build`.
 
 > Fork 後建立 feature branch，跑測試與型別檢查無誤後，依照下方 commit 格式提交，並開 PR 至 `main`。
@@ -147,8 +167,97 @@ test UI changes manually. To reproduce the build check locally, run `pnpm build`
   integration is two vendor spec files plus registration — never an
   `if agent_key == "<yours>"` branch in a shared module.
 
+**Tests that have to pass on macOS, Linux and Windows**
+
+CI runs both suites on all three. Most tests that fail on only one platform
+are correct code plus a test that answered a platform question itself instead
+of asking the seam the code under test asks. Two rules keep that out:
+
+- *Do not build a platform-dependent value by a different route than the
+  module under test.* If the module gets a path from `join()`, a PATH from
+  `os.pathsep`, a shell from `osplat.paths.shell_command()`, or kills through
+  `osplat.process_tree.kill()`, the test uses the same call — never a
+  `'/tmp/…'` literal as a fake-fs key, a `.split(":")`, a bare `/bin/sh`, or a
+  stub of `os.kill` under that module. The two spellings agree on the platform
+  you wrote the test on and disagree on exactly one other; and a stub that
+  lands under the seam does something worse than fail there — on Windows
+  `os.kill` is never reached, the real call raises an equivalent error, and
+  the test passes while executing none of what it claims. Stub the seam for
+  *which* pids are signalled; only a test about *how* (the signal itself) may
+  stub `os.kill`, gated on the capability (`skipif(not hasattr(signal,
+  "SIGKILL"))` — say what you need, not which OS you think you are on). A
+  literal that is a spec constant (`STATUS_CONTROL_C_EXIT`) or a value the test
+  itself set is fine to assert; a value the current platform decides (an OS
+  error message) is not. `backend/tests/test_cross_platform_test_hygiene.py`
+  and `src/main/crossPlatformTestHygiene.test.ts` ratchet the shapes that can be
+  matched statically; the rest is this paragraph.
+- *Take the platform as an input; do not ask the host.* Code that computes
+  another platform's paths should take the platform as a parameter and pick
+  `path.win32`/`path.posix` (or the osplat layout class) from it, the way
+  `resolveBackendDataDir` in `src/main/ui-settings-bootstrap.ts` does. Then a
+  test can assert all three answers on any runner — the fastest one, minutes
+  before the Windows job reports. `src/main/backend-ws-token-parity.test.ts`
+  does exactly this: the macOS runner asserts the Linux answer by driving
+  `_linux.LinuxLayout` directly and comparing with the Python side.
+
+**Running the backend suite as Windows before pushing**
+
+The Windows CI job takes 20+ minutes round-trip, and most of what it catches
+is the first rule above. `backend/tests/osplat_win_swap.py` catches that class
+on this machine in minutes: it swaps `osplat.paths` (optionally
+`osplat.platform_id`) for the Windows implementation before anything imports
+the feature code, so every `home_env_var()` / `config_home()` /
+`shell_command()` caller computes the Windows answer and every seam-keyed
+skip falls the way it falls on Windows.
+
+```sh
+# the files you touched — seconds
+OSPLAT_SWAP=paths uv --project backend run pytest backend/tests/test_host_shell.py -p tests.osplat_win_swap
+# the whole suite — a couple of minutes
+OSPLAT_SWAP=paths,platform_id uv --project backend run pytest backend/tests -p tests.osplat_win_swap
+```
+
+Expected result: green apart from the suite's known-flaky tests, with about
+300 extra skips — the tests that drive a real `git`/`gh` through the seam,
+which the Windows resolver (`PATHEXT`: `git.exe`, never `git`) cannot find
+on a POSIX host. A new red here is a test that answered a platform question
+by a different route than the code under test — fix the test the way the
+rule above says, not by gating it on `sys.platform`. A test that needs a
+real program says so through the seam too:
+`skipif(osplat.paths.resolve_program("git") is None)` for a binary,
+`osplat.paths.executable_candidates("gh") != ["gh"]` for a `#!/bin/sh` fake
+found by bare name. (The run also writes
+`backend/agent_team_backend/git_askpass_helper.cmd`, as Windows does; it is
+gitignored.) The swapped run finishes sooner only because those skipped
+tests are the subprocess-heavy ones — every `git_service` test spawns real
+git several times — not because anything runs faster; it runs fewer tests,
+so it is a second pass before pushing, never a replacement for the normal
+run.
+
+What it verifies: path and environment arithmetic (`APPDATA`, `USERPROFILE`,
+`PATHEXT` candidate lists, `cmd.exe` argv shapes), seam-keyed skips, and the
+feature code that branches on `platform_id`. What it cannot verify — nothing
+below has a stub-free test on any platform, and only a real Windows host
+(CI, or a VM) exercises it: a real DPAPI round-trip (`CryptProtectData`),
+real `icacls` ACLs, the `ctypes.WinDLL` prototype bindings and `_win_error`,
+real `CommandLineToArgvW` parsing, Job Object kill-on-close semantics,
+ConPTY I/O / EOF / resize, the `WinError 1314` symlink branch, psutil's
+Windows-only `private` / `peak_wset` fields, whether the rendered PowerShell
+hook scripts actually run, and the win-only `sys.platform` arms inside the
+`test_osplat.py` allowlist. Do not swap `secret_files`, `terminal_backend`,
+`process_tree` or `resource_probe` to get at those: their Windows
+implementations reach `WinDLL`, `winpty` and `icacls` at call time, so on a
+POSIX host every caller fails on the missing binding, not on anything the
+test asserts (the plugin refuses them for that reason).
+
 > 請與現有程式碼風格保持一致。Python 提交前請執行完整 backend tests。
 > 新增 CLI 整合請依 `docs/adding-a-cli-vendor.md`，一家一檔，不要在共用模組加分支。
+> 測試要在三個平台都過：不要繞過被測程式用的 seam 自己造路徑／平台答案
+> （`join()`、`os.pathsep`、`osplat.*`——被測程式怎麼拿，測試就怎麼拿；stub 停在 seam，
+> 不停在 seam 底下的 `os.kill`）；算別的平台的路徑時把 platform 當參數傳、不要問 host，
+> 這樣三個平台的答案在任何 runner 都能斷言。
+> 推 CI 前先用 `-p tests.osplat_win_swap` 把後端 suite 當 Windows 跑一次（改到的檔案幾秒、全套約十分鐘）；
+> 它只換 `osplat.paths`／`platform_id`，換不到 DPAPI／ConPTY／Job Object 那些真實行為——那些只有 Windows CI 或 VM 驗得到。
 
 ---
 
@@ -165,7 +274,7 @@ fix(analyzer): handle empty ollama response
 docs: update quick start instructions
 refactor(terminal): simplify PTY write path
 test: add tests for sentinel detection
-chore: update electron to v33
+chore: update electron to v44
 ```
 
 | Type | Use for |

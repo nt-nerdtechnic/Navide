@@ -2,7 +2,7 @@
 
 [English](../en-US/privacy.md) | [繁體中文](../zh-TW/privacy.md) | 日本語 | [ドキュメント](README.md)
 
-Navide は **Local-first** ですが、常に完全オフラインという意味ではありません。Electron Application、Python Backend、Terminal Session、非公開の Project Intelligence、Workspace State、Orchestration Logic は Mac 上で動作します。外部 Service を有効化または利用すると、データが端末外へ送られる場合があります。
+Navide は **Local-first** ですが、常に完全オフラインという意味ではありません。Electron Application、Python Backend、Terminal Session、非公開の Project Intelligence、Workspace State、Orchestration Logic はお使いのマシン上で動作します。外部 Service を有効化または利用すると、データが端末外へ送られる場合があります。
 
 ## Navide がローカルに保存するデータ
 
@@ -35,6 +35,8 @@ Navide は Project Telemetry Service を運営せず、Navide Account を必要�
 | Git Operation と Issue Detection | 設定された Git Host。Local `git`、`gh`、`glab` CLI 経由 | Repository/Issue Data と、CLI または Host Account Flow が扱う Credential |
 | Update Check | GitHub Releases | Application Version と通常の Network Metadata |
 | Plugin Registry Trust Refresh | 選択した Official Registry、または明示的に承認した self-hosted Registry | インストール済み marketplace plugin の namespace/name。Refresh では Plugin Source や Archive を送信しない |
+| Skills package retrieval | GitHub API and codeload | Requested repository/ref and normal network metadata; downloads a public archive without uploading local skill contents |
+| CLI risk DNS lookups | Operating system resolver and its configured upstream service | Declared expected hostnames and configured allowed hostnames |
 | MCP Server | 設定された MCP Server と、それが利用する Service | Server の Tool と Configuration に全面的に依存 |
 
 Private Code や規制対象 Data を送信する前に、各 Provider の Policy を確認してください。
@@ -77,9 +79,21 @@ Cleanup が成功した後に、その Plugin の Local Storage を削除しま�
 Workspace Storage Partition を使用します。Upgrade 時には、以前の Active Snapshot
 を新しい Candidate に複製し、Rollback 用に旧 Snapshot を保持する場合があります。
 
+## CLI risk observation data
+
+For vendors with declarations, the backend samples numeric endpoints of established TCP sockets attributed to active pane process trees and inventories declared local data roots. Format checks read at most 64 KiB from each candidate file locally. This feature does not intercept packets, decrypt TLS or upload file contents. Read buffers are used for format recognition; file contents and tokens are not stored in the risk records.
+
+The local `navide.db` retains baseline and file-membership metadata, paths, sizes/classes, presence and absence observation times, network endpoint findings and counts, availability, and Ignore/Allow decisions. An allowed exact IP is also retained in that vendor's UI settings. Metadata can reveal local paths and contacted IPs even though it contains no copied file contents.
+
+Building the expected-address snapshot performs forward DNS lookups for declared expected hostnames and any configured allowed hostnames through the operating system resolver. That resolver, and its configured upstream service, can receive those names. Numeric IP allowances need no hostname lookup. The feature does not infer destination names with reverse DNS; an address match or mismatch cannot establish traffic contents or intent.
+
 ## 認証情報
 
 Agent CLI の Credential は各 CLI の Configuration に残ります。Cloud AI Key を Navide に入力すると、AI 機能（Inline 編集、Code Review）で利用できるようローカル保存されます。Settings Export では API Key と Token を Redact します。
+
+**Portable Credential** はユーザーが自ら選ぶ例外です。各ベンダーが「別の Machine へ持ち運ぶ」ために公式に用意した値（例：`claude setup-token` が出力する Token）を、Settings → Accounts に貼り付けます。Navide はこの Device 上で暗号化して保存し、その CLI の新しい Pane を起動するときに環境変数としてのみ渡します。CLI 自身の Login File には書き込みません。ある Device から削除しても、その Device からだけ削除されます。
+
+Settings → Sync で **Credentials** を有効にすると（既定は無効）、貼り付けた各 Credential は Device 上で Account の Sync Key により暗号化されてから送信され、Navide Cloud はサービス側で開けない暗号文だけを保存します。同じ Account にサインインした別の Device がそれを復号し、ディスク上では同じく暗号文として保持し、Pane にのみ渡します。サービス側から見えるのは不透明な Item ID、Revision 番号、Timestamp、書き込んだ Device だけで、どの CLI やどの Account のものかは分かりません。ある Device で削除しても Cloud や他の Device からは削除されず、セクションを有効にするまで何も Upload されません。Device で Account を切り替えると、その Device が Import した Credential は破棄され、セクションは再び無効になります。
 
 Local File Permission は、同じ Machine 上の他 User による偶発的 Access を減らしますが、Malware、Compromised User Account、Unrestricted Agent、Backup、同等権限の Process からは保護しません。
 
@@ -98,3 +112,17 @@ Agent 間の Handoff には Task Context と前 Stage の Output が含まれる
 Active Session を停止した後、Workspace の `.agent-team/` Directory から Private Project Intelligence を削除できます。削除すると Source Repository は残りますが、Resumability、Run History、Attribution、蓄積 Context が失われる場合があります。Application 全体の Setting と History は Navide Application Data Directory にあります。保持したい Configuration は削除前に Backup してください。
 
 Vulnerability の報告については、[Security Policy（英語）](../../SECURITY.md)を参照してください。
+
+## Token Monitor local records
+
+Token Monitor reads local Claude transcripts to summarize turn timestamps, session identifiers, models, and token counts. Its in-memory cache contains these summaries rather than prompt or response text. Local transcript records are not assigned to the current account because their account ownership cannot be verified.
+
+Successful observations from the existing Claude quota polling service are saved in the application data directory as `claude-quota-history.sqlite3`. Records contain an account-slot identifier, observation time, plan type, quota percentages, and reset-window metadata; they contain no credentials or conversation text. Recording prunes observations older than 180 days and limits the database to 50,000 samples. This history is local to this installation and is not uploaded by Token Monitor. Opening or refreshing the monitor adds no external API or CLI requests; the existing usage service retains its own polling behavior.
+
+### MCP による Skills インストール
+
+GitHub public skill の準備では、repository、ref と通常の接続 metadata を `api.github.com` に送り、解決した commit の archive を `codeload.github.com` から取得します。入力は `owner/repo` または HTTPS の `github.com/owner/repo` URL です。Private repository、任意のダウンロード URL、redirect は拒否します。GitHub の認証情報を追加せず、取得時にローカル skill 内容をアップロードしません。システムの proxy 設定は適用される場合があります。ローカルの準備は指定した skill ディレクトリだけを読み、GitHub へ接続しません。
+
+準備した bytes は backend メモリに保持され、15 分後または再起動時に失効します。有効なパッケージは最大 8 件で、メモリには別に最大 8 件の軽量な完了記録を保持します。インストールは確認済み snapshot を使用し、元のファイルを再読込せず既存の共有 Skills ルートに書き込みます。スクリプトや plugin hooks は実行しません。記録が残っている間の再送は元の結果だけを返し、再書き込みしません。記録は元の preview の期限で失効するか、それより先に破棄される場合があります。その後の再送は missing/expired を返し、再インストールしません。Inspect／prepare は skill の文章、ファイル情報、出所パスを要求した coding agent に返すため、CLI 自身のデータポリシーに従いモデルプロバイダーへ送られる可能性があります。パッケージに秘密情報を含めないでください。
+
+Skills sync が有効なら、条件を満たす内容と配信設定を既存フローでペアリング済みデバイスへ同期できます。選んだパッケージは Skills 内容 export と同じ上限（64 ファイル、各 256 KiB、合計 512 KiB）を使用しますが、上限内であることは同期完了を保証しません。Backend が生成した source、digest、時刻の記録はローカルの Navide marker に残り、編集や再起動後も保持されます。Export／Skills sync には含まれません。

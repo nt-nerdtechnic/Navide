@@ -120,7 +120,7 @@ describe('useTerminal — newline chord key handling', () => {
     const handled = captured.keyHandler!(keyEvent({ key: 'Enter', shiftKey: true }))
     expect(handled).toBe(false)
     expect(inputsSent(mock)).toEqual([
-      { type: 'terminal.input', payload: { terminal_session_id: 'sess-1', data: '\x1b[13;2u' } },
+      { type: 'terminal.input', payload: { terminal_session_id: 'sess-1', data: '\x1b[13;2u', human: true } },
     ])
     scope.stop()
   })
@@ -130,7 +130,7 @@ describe('useTerminal — newline chord key handling', () => {
     const handled = captured.keyHandler!(keyEvent({ key: 'Enter', shiftKey: true }))
     expect(handled).toBe(false)
     expect(inputsSent(mock)).toEqual([
-      { type: 'terminal.input', payload: { terminal_session_id: 'sess-1', data: '\x1b[200~\n\x1b[201~' } },
+      { type: 'terminal.input', payload: { terminal_session_id: 'sess-1', data: '\x1b[200~\n\x1b[201~', human: true } },
     ])
     scope.stop()
   })
@@ -140,7 +140,7 @@ describe('useTerminal — newline chord key handling', () => {
     const handled = captured.keyHandler!(keyEvent({ key: 'Enter', shiftKey: true }))
     expect(handled).toBe(false)
     expect(inputsSent(mock)).toEqual([
-      { type: 'terminal.input', payload: { terminal_session_id: 'sess-1', data: '\x16\x0a' } },
+      { type: 'terminal.input', payload: { terminal_session_id: 'sess-1', data: '\x16\x0a', human: true } },
     ])
     scope.stop()
   })
@@ -152,7 +152,7 @@ describe('useTerminal — newline chord key handling', () => {
     const handled = captured.keyHandler!(keyEvent({ key: 'Enter', ctrlKey: true }))
     expect(handled).toBe(false)
     expect(inputsSent(mock)).toEqual([
-      { type: 'terminal.input', payload: { terminal_session_id: 'sess-1', data: '\x1b[200~\n\x1b[201~' } },
+      { type: 'terminal.input', payload: { terminal_session_id: 'sess-1', data: '\x1b[200~\n\x1b[201~', human: true } },
     ])
     scope.stop()
   })
@@ -180,7 +180,7 @@ describe('useTerminal — newline chord key handling', () => {
     const handled = captured.keyHandler!(keyEvent({ key: 'Enter', metaKey: true }))
     expect(handled).toBe(false)
     expect(inputsSent(mock)).toEqual([
-      { type: 'terminal.input', payload: { terminal_session_id: 'sess-1', data: '\x1b[13;2u' } },
+      { type: 'terminal.input', payload: { terminal_session_id: 'sess-1', data: '\x1b[13;2u', human: true } },
     ])
     scope.stop()
   })

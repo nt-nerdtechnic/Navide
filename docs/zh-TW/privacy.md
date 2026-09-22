@@ -2,7 +2,7 @@
 
 [English](../en-US/privacy.md) | 繁體中文 | [日本語](../ja-JP/privacy.md) | [文件中心](README.md)
 
-Navide 採用 **Local-first**，但不代表所有情況都完全離線。Electron 應用程式、Python Backend、Terminal Session、私有專案智慧、Workspace 狀態與調度邏輯都在你的 Mac 上執行；當你啟用或使用外部服務時，資料可能離開裝置。
+Navide 採用 **Local-first**，但不代表所有情況都完全離線。Electron 應用程式、Python Backend、Terminal Session、私有專案智慧、Workspace 狀態與調度邏輯都在你的機器上執行；當你啟用或使用外部服務時，資料可能離開裝置。
 
 ## Navide 保存在本機的資料
 
@@ -43,6 +43,8 @@ Consumer：Git Preference 使用驗證過的 Package／Workspace Storage Partiti
 | Git Operation 與 Issue Detection | 設定的 Git Host，透過本機 `git`、`gh` 或 `glab` CLI | Repository／Issue 資料，以及由 CLI 或 Host Account Flow 處理的憑證 |
 | Update Check | GitHub Releases | 應用程式版本與一般網路 Metadata |
 | Plugin Registry Trust Refresh | 所選的 Official Registry，或明確核准的 self-hosted Registry | 已安裝 marketplace plugin 的 namespace/name；Refresh 不會傳送 Plugin Source 或 Archive |
+| Skills package retrieval | GitHub API and codeload | Requested repository/ref and normal network metadata; downloads a public archive without uploading local skill contents |
+| CLI risk DNS lookups | Operating system resolver and its configured upstream service | Declared expected hostnames and configured allowed hostnames |
 | MCP Server | 設定的 MCP Server 與它使用的服務 | 完全取決於該 Server 的 Tool 與設定 |
 
 傳送私人程式碼或受規範資料前，請先閱讀各 Provider 政策。
@@ -75,9 +77,21 @@ Registry 決定保存方式。目前沒有獨立的 Refresh 開關；移除已�
 marketplace plugin 後，這項資料流就會停止，其他外部服務資料流仍由各自的
 設定控制。
 
+## CLI risk observation data
+
+For vendors with declarations, the backend samples numeric endpoints of established TCP sockets attributed to active pane process trees and inventories declared local data roots. Format checks read at most 64 KiB from each candidate file locally. This feature does not intercept packets, decrypt TLS or upload file contents. Read buffers are used for format recognition; file contents and tokens are not stored in the risk records.
+
+The local `navide.db` retains baseline and file-membership metadata, paths, sizes/classes, presence and absence observation times, network endpoint findings and counts, availability, and Ignore/Allow decisions. An allowed exact IP is also retained in that vendor's UI settings. Metadata can reveal local paths and contacted IPs even though it contains no copied file contents.
+
+Building the expected-address snapshot performs forward DNS lookups for declared expected hostnames and any configured allowed hostnames through the operating system resolver. That resolver, and its configured upstream service, can receive those names. Numeric IP allowances need no hostname lookup. The feature does not infer destination names with reverse DNS; an address match or mismatch cannot establish traffic contents or intent.
+
 ## 憑證
 
 Agent CLI 憑證保留在各 CLI 自己的設定中。如果在 Navide 輸入 Cloud AI Key，Navide 會把它保存在本機，供 AI 功能（Inline 編輯、Code Review）使用。設定 Export 會遮蔽 API Key 與 Token。
+
+**可攜憑證**是你主動選擇的例外：各家官方為「帶到別台機器」設計的值（例如 `claude setup-token` 印出的 token），在設定 → 帳號貼入。Navide 在這台裝置上加密保存，只在啟動該 CLI 的新 pane 時以環境變數交給它，不會寫進 CLI 自己的登入檔。從一台裝置移除，就只從那台裝置移除。
+
+若在設定 → 同步開啟 **憑證**（預設關閉），每一份貼入的憑證會先在你的裝置上以帳號同步金鑰加密再離開，Navide Cloud 只保存服務端無法打開的密文。登入同一帳號的另一台裝置會解開它、同樣以密文形式保存在磁碟上，並只交給 pane 使用。服務端能看到的只有不透明的項目 id、版本號、時間戳與寫入的裝置——看不出屬於哪個 CLI 或哪個帳號。在一台裝置移除不會刪掉雲端或其他裝置上的那一份；區段未開啟前不會上傳任何東西；在某台裝置切換帳號會清掉該裝置匯入的憑證並把區段重新關閉。
 
 本機檔案權限可以降低同一部電腦其他使用者意外存取的機會，但無法防範 Malware、遭入侵的使用者帳號、無限制 Agent、Backup，或具有同等權限的 Process。
 
@@ -96,3 +110,17 @@ YOLO Mode 可能略過 CLI Confirmation 或 Sandbox 保護。只應在可信任�
 停止所有 Active Session 後，可以從 Workspace 的 `.agent-team/` 目錄移除私有專案智慧。刪除它可能會移除 Resumability、Run History、Attribution 與累積 Context，但不會刪除原始碼 Repository。整個應用程式的設定與歷史位於 Navide Application Data Directory。刪除前請備份需要保留的設定。
 
 回報 Vulnerability 請依照英文版 [Security Policy](../../SECURITY.md) 私下進行。
+
+## Token Monitor local records
+
+Token Monitor reads local Claude transcripts to summarize turn timestamps, session identifiers, models, and token counts. Its in-memory cache contains these summaries rather than prompt or response text. Local transcript records are not assigned to the current account because their account ownership cannot be verified.
+
+Successful observations from the existing Claude quota polling service are saved in the application data directory as `claude-quota-history.sqlite3`. Records contain an account-slot identifier, observation time, plan type, quota percentages, and reset-window metadata; they contain no credentials or conversation text. Recording prunes observations older than 180 days and limits the database to 50,000 samples. This history is local to this installation and is not uploaded by Token Monitor. Opening or refreshing the monitor adds no external API or CLI requests; the existing usage service retains its own polling behavior.
+
+### 透過 MCP 安裝 Skills
+
+準備 GitHub public skill 時，Navide 將 repository、ref 與一般連線 metadata 傳給 `api.github.com`，再從 `codeload.github.com` 下載解析後的確切 commit archive。來源可用 `owner/repo` 或 HTTPS `github.com/owner/repo` URL；私人 repository、任意下載 URL 與 redirect 會拒絕。取得時不加入 GitHub 授權憑證、不上傳本機 skill 內容；系統 proxy 設定仍可能生效。本機套件準備只讀取指定 skill 目錄，不發 GitHub 請求。
+
+準備好的 bytes 保存在 backend 記憶體，15 分鐘後或重啟時失效，同時最多 8 份有效套件，另在記憶體保留最多 8 份輕量完成重試收據。安裝使用已檢視的快照，不重讀來源，寫入既有共用 Skills 根目錄，且不執行腳本或 plugin hooks。收據仍保留時，重試只回傳原結果而不再寫入；它沿用原 preview 到期時間，也可能提早被淘汰。到期或淘汰後重送回傳 missing/expired，不重新安裝。Inspect／prepare 會把 skill 文字、檔案資訊與來源路徑回傳給請求的 coding agent，其模型供應商可能依 CLI 自身資料政策接收這些結果；套件中應避免放入秘密資料。
+
+開啟 Skills sync 時，符合限制的安裝內容與投遞設定可透過既有流程傳到配對裝置。選定套件與 Skills 內容 export 使用相同限制：64 檔、每檔 256 KiB、總量 512 KiB；符合限制不保證同步已完成。後端產生的來源、digest 與時間紀錄存於本機 Navide marker，編輯與重啟後保留，但不進入 export／Skills sync。

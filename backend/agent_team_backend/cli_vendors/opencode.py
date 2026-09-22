@@ -41,6 +41,7 @@ from pathlib import Path
 import re
 
 from .base import (
+    AccountSwitchSpec,
     Dep,
     McpServerConfig,
     McpValue,
@@ -49,6 +50,9 @@ from .base import (
     SkillsWiring,
     VendorSpec,
     command_text,
+    provider_entry_identity,
+    provider_map_extract,
+    provider_map_merge,
 )
 from . import _protocols
 from ..usage_common import HTTP_TIMEOUT, _epoch_to_iso, _num, _snapshot, _window, parse_retry_after
@@ -239,8 +243,17 @@ class OpencodeLogReader(LogReader):
             log.debug("sqlite read %s failed: %s", path, err)
             return None
 
+    def _session_versions(self, path: Path) -> dict[str, str]:
+        """session id → the CLI version that wrote it (``session.version``).
+        A schema without the column (older CLIs) simply yields no versions;
+        the usage query itself must not depend on it."""
+        rows = self._query(path, "SELECT id, version FROM session")
+        if not rows:
+            return {}
+        return {str(sid): str(ver or "") for sid, ver in rows if sid}
+
     def _event_from_row(
-        self, path: Path, row: tuple
+        self, path: Path, row: tuple, versions: dict[str, str] | None = None
     ) -> tuple[TokenUsage | None, bool]:
         """(event, done) for one message row. done=False means the row is a
         still-streaming assistant message — retry it on a later cycle."""
@@ -267,6 +280,7 @@ class OpencodeLogReader(LogReader):
             dedup_key=f"msg:{message_id}",
             timestamp=str(completed),
             model=str(data.get("modelID") or ""),
+            cli_version=(versions or {}).get(str(session_id or ""), ""),
         ), True
 
     def parse_session_file(
@@ -279,12 +293,13 @@ class OpencodeLogReader(LogReader):
         rows = self._query(path, _USAGE_SQL.format(where=""))
         if rows is None:
             return []
+        versions = self._session_versions(path) if rows else {}
         out: list[TokenUsage] = []
         for row in rows:
             key = f"msg:{row[1]}"
             if key in seen_keys:
                 continue
-            event, done = self._event_from_row(path, row)
+            event, done = self._event_from_row(path, row, versions)
             if not done:
                 continue  # still streaming — not marked seen, retried next cycle
             seen_keys.add(key)
@@ -352,6 +367,7 @@ class OpencodeLogReader(LogReader):
 
         out: list[TokenUsage] = []
         next_row_id = last_row_id
+        versions = self._session_versions(path) if rows else {}
 
         def _cursor() -> dict:
             trimmed = sorted(pending)[-_PENDING_CAP:]
@@ -368,7 +384,7 @@ class OpencodeLogReader(LogReader):
             if row_id > next_row_id:
                 next_row_id = row_id
                 anchor = _anchor(row[1:3])
-            event, done = self._event_from_row(path, row)
+            event, done = self._event_from_row(path, row, versions)
             if not done:
                 pending.add(row_id)  # streaming assistant row — recheck later
                 continue
@@ -539,15 +555,39 @@ OpencodeLogReader.pane_cwd_match = _pane_cwd_match
 # have no readable quota and map to unavailable.
 
 OPENCODE_AUTH_FILE_REL = (".local", "share", "opencode", "auth.json")
+# Providers whose ``auth.json`` entry is an account of its own — the ids the
+# CLI's ``auth login`` offers (its ordering map in 1.15.12 lists opencode,
+# openai, github-copilot, google, anthropic, openrouter, vercel; the ChatGPT
+# OAuth is stored under "openai") plus the MiniMax coding-plan key the quota
+# reader already understands. Any other provider id stays untouched by a
+# switch: it is not a scope a profile can bind to.
+OPENCODE_ACCOUNT_SCOPES = (
+    "anthropic",
+    "openai",
+    "github-copilot",
+    "google",
+    "opencode",
+    "openrouter",
+    "vercel",
+    "minimax-coding-plan",
+)
+
+
+def _opencode_auth_file(home: Path, env: dict | None = None) -> Path:
+    """The CLI's own rule (1.15.12): ``$XDG_DATA_HOME/opencode/auth.json``
+    when the variable is set, else ``~/.local/share/opencode/auth.json``."""
+    env = os.environ if env is None else env
+    xdg = env.get("XDG_DATA_HOME")
+    return Path(xdg) / "opencode" / "auth.json" if xdg else home.joinpath(*OPENCODE_AUTH_FILE_REL)
 OPENCODE_MINIMAX_USAGE_URL = "https://api.minimax.io/v1/token_plan/remains"
 
 
-def read_opencode_credentials(home: Path) -> dict | None:
-    """Parse ``~/.local/share/opencode/auth.json``: a map of providerID ->
+def read_opencode_credentials(home: Path, env: dict | None = None) -> dict | None:
+    """Parse ``<XDG_DATA_HOME|~/.local/share>/opencode/auth.json``: providerID ->
     credential entry ({type: "api", key} or {type: "oauth", access, refresh,
     expires}). Returns the dict-valued entries, or None when the file is
     absent/malformed/empty."""
-    path = home.joinpath(*OPENCODE_AUTH_FILE_REL)
+    path = _opencode_auth_file(home, env)
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -636,13 +676,13 @@ async def _fetch_opencode_minimax(key: str) -> dict:
     return _snapshot("opencode", "ok", windows=normalize_opencode_minimax(payload))
 
 
-async def fetch_opencode(home: Path) -> dict:
+async def fetch_opencode(home: Path, env: dict | None = None) -> dict:
     """opencode is an aggregator: each supported ``auth.json`` entry is asked
     its own provider's usage endpoint. Any source that answers makes the
     snapshot "ok" (windows combined); with none answering the first failure
     is surfaced; entries without a usage surface (Zen, BYOK keys) alone ->
     unavailable."""
-    auth = read_opencode_credentials(home)
+    auth = read_opencode_credentials(home, env)
     if auth is None:
         return _snapshot("opencode", "no-credentials")
     sub_snaps: list[dict] = []
@@ -693,6 +733,11 @@ def _session_exists(workspace_path: str, session_id: str) -> bool:
 
 SPEC = VendorSpec(
     key="opencode",
+    # Arbitrary provider config; a selected quota provider is not a CLI host set.
+    expected_hosts=(),
+    # Same XDG database/auth root as _data_dir("opencode").
+    data_dirs=lambda ctx: (ctx.path(ctx.env.get("XDG_DATA_HOME") or ctx.home / ".local" / "share") / "opencode",),
+    data_dir_env_vars=("XDG_DATA_HOME",),
     supports_model=True,
     skills_supported=True,
     # skills.paths registers extra roots; opencode deep-merges this document
@@ -702,7 +747,7 @@ SPEC = VendorSpec(
         reads_shared_root=True,
         config_paths_key=("skills", "paths"),
     ),
-    label="OpenCode",
+    label="OpenCode (Anomaly)",
     # No MCP flag; instead a whole config document read out of
     # OPENCODE_CONFIG_CONTENT and deep-merged over the user's files, so nothing
     # on disk is touched and the value dies with the pane. Verified against
@@ -744,14 +789,57 @@ SPEC = VendorSpec(
         submit_path="/tui/submit-prompt",
         clear_path="/tui/clear-prompt",
     ),
+    # `opencode auth login [url]` (verified against `opencode auth --help`,
+    # 1.15.12) opens the provider picker, then the chosen provider's own
+    # OAuth or key prompt — a flow a PTY pane carries.
+    login_command_args="auth login",
+    # Multi-account: ``auth.json`` is a provider map, so a profile binds to
+    # ONE provider entry (``scopes``) and a switch rewrites that entry only.
+    # The data dir follows XDG_DATA_HOME alone — no dedicated variable to
+    # give a login pane its own file — so a sign-in runs against the real
+    # home and is captured afterwards (as kilo). The CLI loads the file at
+    # startup: restart, then ``opencode --session <id>``.
+    live_file=OPENCODE_AUTH_FILE_REL,
+    live_file_resolver=lambda home: _opencode_auth_file(home),
+    live_file_from_context=lambda ctx: ctx.path(_opencode_auth_file(ctx.home, ctx.env)),
+    credential_path_env_vars=("XDG_DATA_HOME",),
+    slot_file="auth.json",
+    identity_from_secret=provider_entry_identity,
+    account_switch=AccountSwitchSpec(
+        auth_scope="opencode",
+        method="restart",
+        store="compound-file",
+        evidence="source",
+        verified_version="1.15.12",
+        scopes=OPENCODE_ACCOUNT_SCOPES,
+        extract=provider_map_extract,
+        merge=provider_map_merge,
+        # Per-provider env keys from the 1.15.12 binary's provider table. The
+        # loader consults env and auth.json both (source "env" / "api"); which
+        # wins when both exist is not readable from the minified code, so a
+        # pane carrying THIS provider's key is credential-source-unknown.
+        uncertain_env_by_scope=(
+            ("anthropic", ("ANTHROPIC_API_KEY",)),
+            ("openai", ("OPENAI_API_KEY",)),
+            ("github-copilot", ("GITHUB_TOKEN",)),
+            ("google", ("GOOGLE_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY", "GEMINI_API_KEY")),
+            ("opencode", ("OPENCODE_API_KEY",)),
+            ("openrouter", ("OPENROUTER_API_KEY",)),
+            ("vercel", ("AI_GATEWAY_API_KEY",)),
+            ("minimax-coding-plan", ("MINIMAX_API_KEY",)),
+        ),
+        resume="native",
+        todo="layout from the 1.15.12 binary; no A -> B -> A round-trip on two real accounts recorded",
+    ),
     # Late-bound (module global at call time) so tests can monkeypatch.
     fetch_usage=lambda home: fetch_opencode(home),
+    fetch_usage_from_context=lambda ctx: fetch_opencode(ctx.home, dict(ctx.env)),
     resume_id_from_command=_resume_id_from_command,
     session_exists=_session_exists,
     home_env_vars=("OPENCODE_CONFIG_DIR", "OPENCODE_CONFIG"),
     make_log_reader=OpencodeLogReader,
     # OpenCode ships `opencode upgrade` but no doctor subcommand.
-    install_dep=Dep("opencode", "OpenCode", "OpenCode terminal coding agent", "agent_cli",
+    install_dep=Dep("opencode", "OpenCode (Anomaly)", "OpenCode terminal coding agent", "agent_cli",
         ["opencode", "--version"], r"(\d+\.\d+\.\d+)",
         install_cmd="curl -fsSL https://opencode.ai/install | bash",
         needs_terminal=True, requires_binaries=("curl",), optional=True,

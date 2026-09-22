@@ -91,6 +91,7 @@ def test_save_preserves_unknown_nested_frontmatter_and_body(store: SkillsStore) 
         "---\n"
         "# Existing body\n\nKeep this.\n",
         encoding="utf-8",
+        newline="\n",
     )
     current = store.get_skill("review-code")["skill"]
 

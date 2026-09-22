@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { inject, onMounted, onUnmounted, ref, watch } from 'vue'
+import { inject, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { CLI_AGENT_SPECS } from '@navide/plugin-shell'
-import { cliAccountSwitchKey, type useCliProfiles, type CliProfile } from '../composables/useCliProfiles'
+import { cliAccountSwitchKey, tLogin, type useCliProfiles, type CliProfile } from '../composables/useCliProfiles'
+import PortableCredentialBlock from './PortableCredentialBlock.vue'
 import { useNotify } from '@navide/plugin-ui/foundation'
 import {
   accountUsageFor,
@@ -53,6 +54,62 @@ function rowName(agentKey: string, profile: CliProfile | null): string {
   return profile ? t('settings.accounts.cli.not-signed-in') : t('cli-account.default')
 }
 
+// The card's headline: the user's own name for the account when they gave it
+// one, the signed-in identity otherwise. With an alias the identity moves to
+// the line below rather than disappearing — for the vendors that expose an
+// email it is still how the account is recognised elsewhere.
+function cardAlias(agentKey: string, profile: CliProfile | null): string {
+  return props.api.aliasFor(agentKey, profile?.id ?? null) ?? ''
+}
+
+function cardTitle(agentKey: string, profile: CliProfile | null): string {
+  return cardAlias(agentKey, profile) || rowName(agentKey, profile)
+}
+
+function cardSubtitle(agentKey: string, profile: CliProfile | null): string {
+  return cardAlias(agentKey, profile) ? rowName(agentKey, profile) : ''
+}
+
+// ── Renaming a card ──────────────────────────────────────────────────────────
+// One row at a time, keyed by agent + slot because slot ids are unique but the
+// built-in Default's "__default__" repeats across vendors. The field holds the
+// ALIAS only: empty clears it and the card falls back to the identity.
+const renamingKey = ref<string | null>(null)
+const renameDraft = ref('')
+const renameInput = ref<HTMLInputElement | null>(null)
+// Esc must not be undone by the blur it causes.
+let renameAborted = false
+
+function slotKey(agentKey: string, profile: CliProfile | null): string {
+  return `${agentKey}/${profile?.id ?? '__default__'}`
+}
+
+function setRenameInput(el: unknown): void {
+  renameInput.value = (el as HTMLInputElement | null) ?? null
+}
+
+function startRename(agentKey: string, profile: CliProfile | null): void {
+  renamingKey.value = slotKey(agentKey, profile)
+  renameDraft.value = cardAlias(agentKey, profile)
+  renameAborted = false
+  void nextTick(() => {
+    renameInput.value?.focus()
+    renameInput.value?.select()
+  })
+}
+
+function cancelRename(): void {
+  renameAborted = true
+  renamingKey.value = null
+}
+
+async function commitRename(agentKey: string, profile: CliProfile | null): Promise<void> {
+  if (renameAborted || renamingKey.value !== slotKey(agentKey, profile)) return
+  const name = renameDraft.value.trim()
+  renamingKey.value = null
+  await props.api.rename(profile?.id ?? '__default__', name, agentKey)
+}
+
 // ── Duplicate accounts (two rows storing the same login) ─────────────────────
 // Which rows duplicate which comes from the backend: the active row's identity
 // is the LIVE account rather than its own snapshot, so comparing the identities
@@ -91,10 +148,43 @@ function requireWorkspace(): boolean {
 
 // ── Add account: create an empty slot, then start its isolated CLI login ────
 const saving = ref(false)
+/** Provider picked per multi-scope vendor (opencode, pi, …); empty = not yet
+ *  chosen. The list comes from the backend's capability — never typed here. */
+const newAccountScope = ref<Record<string, string>>({})
+
+function scopeChoices(agentKey: string): string[] {
+  return props.api.scopesFor(agentKey)
+}
+
+/** A vendor whose sign-in replaces the live credential while it runs asks
+ *  first: the user is told what moves (the live credential, temporarily),
+ *  what comes back (the current account, when the sign-in completes) and
+ *  what does not happen (no switch until they switch). Isolated sign-ins
+ *  ask nothing. The backend still refuses while panes of the CLI run or a
+ *  sign-in is already going; nothing here forces past that. */
+async function confirmGlobalLogin(agentKey: string): Promise<boolean> {
+  if (!props.api.loginIsGlobal(agentKey)) return true
+  const agent = CLI_AGENT_SPECS.find((s) => s.agentKey === agentKey)?.label ?? agentKey
+  const activeId = props.api.defaultProfileId(agentKey)
+  const current = rowName(agentKey, activeId ? (props.api.findProfile(activeId) ?? null) : null)
+  return confirm(tLogin('settings.accounts.cli.global-login-body', { agent, current }), {
+    title: tLogin('settings.accounts.cli.global-login-title'),
+    confirmText: tLogin('settings.accounts.cli.global-login-confirm'),
+    cancelText: tLogin('settings.accounts.cli.global-login-cancel'),
+  })
+}
 
 async function addAccount(agentKey: string): Promise<void> {
   if (saving.value) return
   if (!requireWorkspace()) return
+  // Before the row exists: a declined warning must leave no orphan slot.
+  if (!(await confirmGlobalLogin(agentKey))) return
+  const scopes = scopeChoices(agentKey)
+  const scope = scopes.length > 0 ? (newAccountScope.value[agentKey] || scopes[0]) : null
+  if (scopes.length > 0 && !scopes.includes(scope ?? '')) {
+    toast(t('cli-account.preflight-unknown-scope', { agent: agentKey }), { type: 'error' })
+    return
+  }
   saving.value = true
   try {
     // Auto-named — rows display the signed-in identity, names are internal.
@@ -108,7 +198,7 @@ async function addAccount(agentKey: string): Promise<void> {
       .filter((m): m is RegExpExecArray => m !== null)
       .map((m) => Number(m[1]))
     const name = `Account ${nums.length ? Math.max(...nums) + 1 : 2}`
-    const created = await props.api.create(agentKey, name)
+    const created = await props.api.create(agentKey, name, scope)
     if (!created) return
     emit('login', agentKey, created.id)
   } finally {
@@ -121,8 +211,11 @@ async function signIn(agentKey: string, profileId: string | null): Promise<void>
   if (!requireWorkspace()) return
   const activeId = props.api.defaultProfileId(agentKey)
   if (profileId !== null && profileId !== activeId) {
-    // Non-active profile: isolated login — no account switch, running panes
-    // keep their credentials.
+    // Non-active profile: no account switch. For an isolated vendor the
+    // sign-in runs in a private home and running panes keep their
+    // credentials; for a global one the live credential is replaced for the
+    // duration, which the user is asked about first.
+    if (!(await confirmGlobalLogin(agentKey))) return
     emit('login', agentKey, profileId)
     return
   }
@@ -136,7 +229,7 @@ async function signIn(agentKey: string, profileId: string | null): Promise<void>
 }
 
 // ── Set default ──────────────────────────────────────────────────────────────
-const { toast } = useNotify()
+const { toast, confirm } = useNotify()
 const t = i18n.global.t
 
 // Main window provides the quiescence-aware switch (confirm + force + pane
@@ -164,10 +257,13 @@ async function requestSetDefault(agentKey: string, profileId: string | null): Pr
       refreshUsage()
       return true
     }
-    // Expected refusals skip the composable's banner and carry a ready message
-    // — toast it, or the click looks like it did nothing. A declined confirm
-    // has no message (stay silent).
-    if (res.message && (res.code === 'PANES_RUNNING' || res.code === 'SWITCH_RATE_LIMITED')) {
+    // Every refusal with a message gets toasted — including ones the
+    // composable also mirrors into its banner (PROFILE_SWAP_FAILED and other
+    // faults). The banner sits above the per-agent sections and scrolls out
+    // of view once you're looking at a specific agent's row, so relying on it
+    // alone left the click looking like it did nothing (2026-09-17). A
+    // declined confirm has no message (stay silent).
+    if (res.message) {
       toast(res.message, { type: 'error' })
     }
     return false
@@ -209,6 +305,7 @@ interface CardUsage {
   foot: string
   lastSuccess: string
   refreshStatus: string
+  refreshError: string
 }
 
 /** Display model for a card's quota area; undefined hides the area. */
@@ -231,6 +328,10 @@ function cardUsage(agentKey: string, profileId: string | null): CardUsage | unde
     resetExpired: cached && windows.length === 0 && snap.windows.length > 0,
     lastSuccess: formatResetAbsolute(snap.lastSuccessAt ?? snap.fetchedAt),
     refreshStatus,
+    // The backend's sentence for why the last read failed. `refreshStatus`
+    // collapses a timeout, a dead token and an outdated CLI into the same
+    // "unavailable"; this is the part that says which one it was.
+    refreshError: snap.refreshPending === true ? '' : (snap.error ?? ''),
   }
   if (!head)
     return {
@@ -373,6 +474,28 @@ onUnmounted(() => {
 
 // Fresh numbers when the pane opens (same nudge UsageBadge sends on switch).
 onMounted(() => refreshUsage())
+
+// ── Portable credentials (pasted, not logged in) ─────────────────────────────
+// The block itself lives in PortableCredentialBlock; this pane only decides
+// where it goes: under every account card of an agent with a portable
+// interface, and as a card of its own for each credential pulled from the
+// cloud that was pasted into a named account on another device (no local
+// profile stands for those, so they would otherwise be invisible here).
+function portableAgent(agentKey: string): boolean {
+  return props.api.portableSupportedFor(agentKey)
+}
+
+function portableMeta(agentKey: string, slotId: string) {
+  return props.api.portableFor(agentKey, slotId === '__default__' ? null : slotId)
+}
+
+function importedSlots(agentKey: string) {
+  return props.api.importedSlotsFor(agentKey)
+}
+
+// Cloud state is read when the pane opens; the metadata itself rides on the
+// profile list and its `.changed` broadcasts.
+onMounted(() => void props.api.refreshCloud())
 </script>
 
 <template>
@@ -401,6 +524,16 @@ onMounted(() => refreshUsage())
     <section v-for="spec in CLI_AGENT_SPECS" :key="spec.agentKey" class="cli-agent">
       <div class="cli-agent-head">
         <span class="cli-agent-name">{{ spec.label }}</span>
+        <select
+          v-if="supported(spec.agentKey) && scopeChoices(spec.agentKey).length > 0"
+          class="cli-scope-select"
+          :data-scope-for="spec.agentKey"
+          :aria-label="$t('settings.accounts.cli.new-account-scope')"
+          :value="newAccountScope[spec.agentKey] || scopeChoices(spec.agentKey)[0]"
+          @change="newAccountScope[spec.agentKey] = ($event.target as HTMLSelectElement).value"
+        >
+          <option v-for="scope in scopeChoices(spec.agentKey)" :key="scope" :value="scope">{{ scope }}</option>
+        </select>
         <button
           v-if="supported(spec.agentKey)"
           class="cli-btn ghost sm"
@@ -431,14 +564,38 @@ onMounted(() => refreshUsage())
                 :class="{ default: !p }"
                 :style="p ? { background: avatarColor(p.id) } : undefined"
               >
-                {{ avatarInitial(rowName(spec.agentKey, p)) }}
+                {{ avatarInitial(cardTitle(spec.agentKey, p)) }}
               </span>
+              <input
+                v-if="renamingKey === slotKey(spec.agentKey, p)"
+                :ref="setRenameInput"
+                v-model="renameDraft"
+                class="cli-card-rename"
+                :placeholder="rowName(spec.agentKey, p)"
+                :aria-label="$t('settings.accounts.cli.rename')"
+                @keydown.enter.prevent="commitRename(spec.agentKey, p)"
+                @keydown.esc.prevent="cancelRename"
+                @blur="commitRename(spec.agentKey, p)"
+              />
               <span
+                v-else
                 class="cli-card-id"
                 :class="{ dim: p && !rowIdentity(spec.agentKey, p.id)?.signedIn }"
               >
-                {{ rowName(spec.agentKey, p) }}
+                {{ cardTitle(spec.agentKey, p) }}
               </span>
+              <!-- The built-in Default is renamable too: it is a real account
+                   like any other, and for a vendor with no email it is the
+                   only way to tell it apart. -->
+              <button
+                v-if="renamingKey !== slotKey(spec.agentKey, p)"
+                class="cli-card-rename-btn"
+                :title="$t('settings.accounts.cli.rename')"
+                :aria-label="$t('settings.accounts.cli.rename')"
+                @click="startRename(spec.agentKey, p)"
+              >
+                ✎
+              </button>
               <span
                 v-if="api.defaultProfileId(spec.agentKey) === (p?.id ?? null)"
                 class="cli-badge"
@@ -446,6 +603,10 @@ onMounted(() => refreshUsage())
                 {{ $t('settings.accounts.cli.is-default') }}
               </span>
             </div>
+            <!-- With an alias on top, the signed-in identity moves here. -->
+            <span v-if="cardSubtitle(spec.agentKey, p)" class="cli-card-meta">{{
+              cardSubtitle(spec.agentKey, p)
+            }}</span>
             <span v-if="!p" class="cli-card-meta">{{
               rowIdentity(spec.agentKey, null)?.signedIn
                 ? $t('settings.accounts.cli.default-hint')
@@ -471,6 +632,14 @@ onMounted(() => refreshUsage())
                 }}</span>
               </div>
             </template>
+
+            <PortableCredentialBlock
+              v-if="portableAgent(spec.agentKey)"
+              :api="api"
+              :agent-key="spec.agentKey"
+              :slot-id="p?.id ?? '__default__'"
+              :meta="portableMeta(spec.agentKey, p?.id ?? '__default__')"
+            />
 
             <!-- Quota area (single-element v-for = local display-model alias). -->
             <template
@@ -512,6 +681,9 @@ onMounted(() => refreshUsage())
                 <div v-else-if="u.cached" class="cli-card-refresh">
                   {{ $t('usage.refresh-status', { status: u.refreshStatus }) }}
                 </div>
+                <div v-if="u.refreshError" class="cli-card-reason">
+                  {{ $t('usage.refresh-error', { reason: u.refreshError }) }}
+                </div>
               </template>
               <div
                 v-else-if="u || rowIdentity(spec.agentKey, p?.id ?? null)?.signedIn"
@@ -527,6 +699,9 @@ onMounted(() => refreshUsage())
                 </span>
                 <span v-else-if="u?.refreshStatus" class="cli-card-refresh">
                   {{ $t('usage.refresh-status', { status: u.refreshStatus }) }}
+                </span>
+                <span v-if="u?.refreshError" class="cli-card-reason">
+                  {{ $t('usage.refresh-error', { reason: u.refreshError }) }}
                 </span>
               </div>
             </template>
@@ -584,6 +759,30 @@ onMounted(() => refreshUsage())
                 </button>
               </template>
             </div>
+          </div>
+
+          <!-- Credentials pulled from the cloud that were pasted into a named
+               account elsewhere. No profile here stands for them, so each is
+               its own card; selecting one hands it to new panes like any
+               other, and removing it is local. -->
+          <div
+            v-for="m in importedSlots(spec.agentKey)"
+            :key="'imported:' + m.slotId"
+            class="cli-card cli-card-imported"
+            :class="{ active: m.enabled }"
+          >
+            <div class="cli-card-head">
+              <span class="cli-card-av imported">☁</span>
+              <span class="cli-card-id">{{ $t('settings.accounts.cli.imported-account') }}</span>
+            </div>
+            <span class="cli-card-meta">{{ $t('settings.accounts.cli.imported-account-hint') }}</span>
+            <PortableCredentialBlock
+              :api="api"
+              :agent-key="spec.agentKey"
+              :slot-id="m.slotId"
+              :meta="m"
+              :cloud-only="true"
+            />
           </div>
         </div>
       </template>
@@ -672,6 +871,36 @@ onMounted(() => refreshUsage())
   white-space: nowrap;
 }
 .cli-card-id.dim { font-weight: 400; color: var(--text-muted); }
+.cli-card-rename-btn {
+  flex-shrink: 0;
+  visibility: hidden;
+  padding: 1px 4px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--font-2xs);
+  cursor: pointer;
+}
+.cli-card:hover .cli-card-rename-btn,
+.cli-card-rename-btn:focus-visible {
+  visibility: visible;
+}
+.cli-card-rename-btn:hover {
+  color: var(--accent-fg);
+  background: var(--bg-hover);
+}
+.cli-card-rename {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 6px;
+  border: 1px solid var(--accent-fg);
+  border-radius: 5px;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: var(--font-xs);
+  font-family: inherit;
+}
 .cli-card-meta { font-size: 10.5px; color: var(--text-secondary); }
 .cli-card-dup {
   display: flex;
@@ -723,6 +952,13 @@ onMounted(() => refreshUsage())
 /* A read is in flight — the only line on the card that is about right now,
    so it must not read as quietly as the historical ones around it. */
 .cli-card-refresh.pending { color: var(--accent-fg); font-weight: 600; }
+/* The backend's own sentence; cards are narrow, so let it wrap instead of
+   clipping the half that names the failure. */
+.cli-card-reason {
+  font-size: var(--font-3xs);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
 .cli-card-expired { font-size: var(--font-2xs); font-weight: 600; color: var(--danger-fg); }
 .cli-card-none { display: flex; flex-direction: column; gap: 2px; }
 .cli-card-dash {
@@ -750,6 +986,8 @@ onMounted(() => refreshUsage())
   border-radius: 999px;
   padding: 1px 8px;
 }
+
+.cli-card-av.imported { background: var(--bg-muted); color: var(--text-secondary); font-size: 12px; }
 
 .cli-btn {
   border-radius: 5px;

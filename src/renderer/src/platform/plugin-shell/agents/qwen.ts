@@ -4,7 +4,7 @@ import type { AgentSpec } from './types'
 
 export const SPEC = {
   agentKey: 'qwen',
-  label: 'Qwen Code',
+  label: 'Qwen Code (Alibaba Cloud)',
   defaultCommand: 'qwen',
   // Effort is settings-only (model.reasoningEffort) plus the in-session
   // /effort command; no launch flag.
@@ -25,5 +25,8 @@ export const SPEC = {
   // several plain queued messages into ONE submission, so pushing a second
   // message into a busy pane can merge two agents' messages into a single turn.
   pushChannel: { kind: 'input-file', holdsInputBox: false },
-  hint: 'generalist'
+  hint: 'generalist',
+  // Quota failover: qwen.py _QWEN_WINDOWS — per5Hour / perWeek / perBillMonth,
+  // each only when the plan reports a total for it.
+  quotaSemantics: { hard: ['session', 'weekly', 'monthly'], required: ['session'] },
 } as const satisfies AgentSpec

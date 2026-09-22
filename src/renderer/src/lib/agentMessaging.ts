@@ -225,6 +225,12 @@ export interface ParsedSpawnRequest {
   model?: string
   /** Reasoning-effort level, same provenance as {@link model}. */
   effort?: string
+  /** The request continues an existing conversation rather than starting one.
+   *  Same provenance as {@link model}: only the cli_open_agent path sets it,
+   *  when `session_id` was given. It changes one thing in the gate — an empty
+   *  task is allowed, because a resumed conversation already has its own
+   *  context and the caller may only want it back on screen. */
+  resumesSession?: boolean
 }
 
 const SPAWN_START_RE = /^---SPAWN-START---\s*$/
@@ -322,6 +328,12 @@ export function sanitizeMessageContent(content: string): string {
  * together, so a reply that breaks them apart is dropped silently — no queue
  * entry, no failure notice, nothing for either side to see.
  *
+ * The hint also says when NOT to reply. Without that, agents read it as "every
+ * message must be answered" and ack each other's acks, each ack costing the
+ * other pane a full turn, and restate a cli_send report as a bare-line block
+ * so the recipient gets it twice. `kind: "ack"` on cli_send is logged and never
+ * injected, which is the right shape for a bare acknowledgement.
+ *
  * `correlationId` is asked back verbatim in the reply's `re:` field, which is
  * what lets the reply be matched to this message instead of arriving as an
  * unrelated one. Omitting it renders exactly the pre-correlation hint.
@@ -340,7 +352,9 @@ export function renderEnvelope(
     lines.push(
       `（回覆方式：第一行完整寫成 ${MSG_START} ${head}，下一行起為訊息內容，` +
         `最後一行寫 ${MSG_END}；to: 必須與 ${MSG_START} 同一行，不可換行；` +
-        `${echo}三行都要頂格，不可縮排，也不可放進 code block）`,
+        `${echo}三行都要頂格，不可縮排，也不可放進 code block。` +
+        `只是「收到」或沒有新資訊就不要回信，純確認請改用 cli_send 的 kind="ack"（不會打擾對方）；` +
+        `已用 cli_send 送出的內容不要再用 MSG 區塊重述）`,
     )
   }
   return lines.join('\n')
@@ -506,6 +520,32 @@ export const VENDORS_WITHOUT_TURN_END: ReadonlySet<string> = new Set(
   AGENT_SPECS.filter((s) => s.turnEndInferredFromSilence).map((s) => s.agentKey)
 )
 
+/** CLIs whose log reader never surfaces the user's own prompt text on its
+ *  user-record events (agent_active with detail user / prompt / user_message).
+ *
+ *  Empty on purpose: all 14 shipped readers carry it. It exists for the
+ *  delivered-pending badge (useTerminal markDeliveredPending): a message Navide
+ *  injected is normally released when the recipient's log shows the envelope
+ *  as a user record, one per message. A vendor listed here has no such record
+ *  to wait for, so its next turn end is taken as "everything consumed"
+ *  instead. That fallback must stay static rather than learned from events —
+ *  a claude pane that has only ever run slash commands or image prompts gets
+ *  text="" on every user record (user_prompt_text drops `<…>` wrappers and
+ *  list content), so a learned set would misfile it here and clear its
+ *  deliveries on a turn_complete that arrives BEFORE the queued message is
+ *  dequeued. Add a vendor only after checking its reader in
+ *  backend/agent_team_backend/cli_vendors/. */
+export const VENDORS_WITHOUT_USER_TEXT: ReadonlySet<string> = new Set()
+
+/** Whether a turn end should release every delivered-pending message for this
+ *  vendor — only for {@link VENDORS_WITHOUT_USER_TEXT}. */
+export function turnEndConsumesDeliveries(
+  agentKey: string,
+  vendors: ReadonlySet<string> = VENDORS_WITHOUT_USER_TEXT,
+): boolean {
+  return vendors.has(agentKey)
+}
+
 /**
  * Whether a pane's CLI is still mid-turn, from its activity timestamps.
  *
@@ -555,6 +595,13 @@ export function normalizeMessagingName(raw: string): string | null {
  *  so a channel that is declared but broken costs one attempt per minute
  *  instead of one per pump tick. */
 export const PUSH_COOLDOWN_MS = 60_000
+
+/** How many `unclear` pushes the same message may come back from before it is
+ *  failed. An unclear push means the CLI's composer may still be holding the
+ *  envelope, so the message is re-queued rather than typed on top; a composer
+ *  that will not clear twice running is one the message will never get through,
+ *  and the sender is told so instead of the queue holding it forever. */
+export const PUSH_UNCLEAR_LIMIT = 2
 
 /** The same, for a CLI whose server simply is not listening yet. That is what a
  *  pane looks like for the first seconds of its life, and it fixes itself — so

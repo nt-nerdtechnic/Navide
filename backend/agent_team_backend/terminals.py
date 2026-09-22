@@ -3,17 +3,12 @@ from __future__ import annotations
 import asyncio
 import codecs
 import errno
-import fcntl
 import logging
 import os
-import pty
 import re
-import shlex
 import shutil
 import signal
-import struct
 import subprocess
-import termios
 import threading
 import time
 from collections import deque
@@ -23,7 +18,12 @@ from datetime import datetime, timezone
 from typing import IO, Any, Awaitable, Callable
 from uuid import uuid4
 
-from . import pty_registry
+from . import osplat, pty_registry
+from .cli_vendors.base import VendorRuntimeContext
+from .cli_vendors.registry import risk_runtime_context
+from .osplat import spec
+from .osplat.proctree import children_map as _children_map
+from .osplat.proctree import walk_descendants as _walk_descendants
 
 
 # Strip ALL ANSI/VT escape sequences for clean log output:
@@ -130,14 +130,24 @@ def output_frame_session_id(frame: bytes) -> str | None:
 
 
 @dataclass
+class _InputBlock:
+    """One "pty input blocked" episode: from the first EAGAIN until the
+    session's _in_buffers drains to empty."""
+    since: float                # loop time of the first EAGAIN
+    timer: asyncio.TimerHandle | None = None  # pending _INPUT_BLOCK_NOTIFY_MS check
+    notified: bool = False      # terminal.input_blocked was sent
+    drained: int = 0            # bytes the PTY accepted during the episode
+
+
+@dataclass
 class TerminalSession:
     id: str
     pane_id: str
     agent_key: str | None
     command: list[str]
     cwd: str
-    master_fd: int
-    proc: subprocess.Popen[bytes]
+    handle: spec.TerminalHandle
+    proc: spec.ChildProcess
     started_monotonic: float = field(default_factory=time.monotonic)
     sequence: int = 0
     closed: bool = False
@@ -159,6 +169,8 @@ class TerminalSession:
     # a stale entry from ever matching a recycled pid (same pattern as
     # pty_registry).
     descendants: dict[int, str] = field(default_factory=dict)
+    # Sanitized path/override context only; never persisted as pane metadata.
+    risk_context: VendorRuntimeContext | None = field(default=None, repr=False)
 
 
 # Output logs currently held open for append by a live session (terminal
@@ -291,10 +303,75 @@ _COALESCE_MS = 2
 _ECHO_LAG_WARN_MS = 250
 _ECHO_LAG_MAX_MS = 5000
 _READER_SUSPEND_WARN_MS = 100
+# Upper bound on how long _flush_output keeps the PTY reader detached while a
+# drain is on the wire.  The pause is deliberate backpressure (a renderer that
+# cannot absorb output must not OOM the backend), but an unbounded one starves
+# the CLI's stdin: its stdout write blocks on the full PTY queue, it stops
+# reading input, and every message written to it sits in _in_buffers as "pty
+# input blocked".  Past this bound the reader resumes and the pressure lands on
+# our own output buffer instead (see _BUF_CAP's drop policy).
+_READER_PAUSE_MAX_MS = 1000
+# Output buffered per session before the OOM guard kicks in.  With no drain in
+# flight it forces an immediate flush; with one already stalled on the WS it
+# drops the OLDEST chunks instead, so memory stays bounded while the reader
+# keeps running.  A TUI loses a partial repaint until its next redraw; the CLI
+# itself never notices.
+_BUF_CAP = 5 * 1024 * 1024
+# Input blocked for longer than this is reported to the owning window as
+# terminal.input_blocked (and its release as terminal.input_unblocked) so the
+# renderer waits for the CLI instead of re-pasting.  Shorter blips — a TUI
+# briefly not reading while it repaints — stay silent.
+_INPUT_BLOCK_NOTIFY_MS = 500
 # Grace between a kill's SIGTERM and the SIGKILL escalation. Named so a test
 # can widen it: the CLI's SIGTERM handler is what flushes the transcript, and
 # on a loaded runner that flush can outlast a hard-coded window.
 _KILL_ESCALATION_GRACE_S = 1.0
+# How long _escalate_kill's post-SIGKILL `proc.wait` can hold the reap.
+_REAP_CONFIRM_S = 1.0
+# Slack on top of the bounded work wait_until_reaped() covers: two executor
+# hops (`proc.wait`, and the poll loops' scheduling) that can queue behind
+# other lifecycle calls on a loaded machine. Not a budget for a full-system
+# `ps` — that sweep is deliberately outside the wait, see _escalate_kill.
+_REAP_WAIT_SLACK_S = 3.0
+
+
+def _max_vendor_grace_s() -> float:
+    """The largest grace any vendor asks for, read from the registry.
+
+    Derived rather than written down: the ceiling below has to cover whatever
+    the specs declare, and a vendor that later asks for a longer grace must
+    widen the ceiling with it instead of silently overrunning one. Cheap
+    enough to call per wait (a dict scan over 14 entries).
+    """
+    from .cli_vendors.registry import VENDORS
+
+    return max(
+        (
+            spec.shutdown.grace_s
+            for spec in VENDORS.values()
+            if spec.shutdown is not None and spec.shutdown.graceful
+        ),
+        default=0.0,
+    )
+
+
+def _reap_wait_timeout_s() -> float:
+    """Ceiling on wait_until_reaped().
+
+    Covers exactly the work that runs between the SIGTERM and the moment the
+    child is confirmed down: the vendor's grace, the SIGKILL escalation's own
+    grace, the wait that reaps the zombie, and slack for executor queueing.
+    The breakaway-grandchild sweep is NOT in here — it is a full-system `ps`
+    with a 5s budget of its own, it says nothing about whether this child is
+    down, and leaving it inside made the ceiling smaller than the work under
+    it. A caller that hits this ceiling has a child that survived a SIGKILL.
+    """
+    return (
+        _max_vendor_grace_s()
+        + _KILL_ESCALATION_GRACE_S
+        + _REAP_CONFIRM_S
+        + _REAP_WAIT_SLACK_S
+    )
 # Only a keystroke-sized write arms the echo timer.  Role injection and pastes
 # are bulk writes whose echo is legitimately slower and would only add noise.
 _ECHO_PROBE_MAX_INPUT_CHARS = 16
@@ -319,64 +396,25 @@ _LIFECYCLE_EXECUTOR = ThreadPoolExecutor(
 
 
 def _ps_snapshot() -> dict[int, tuple[int, int, str]]:
-    """pid -> (ppid, pgid, lstart) for every process, from one ps snapshot.
-    lstart (process start time) is the identity that defeats pid recycling;
-    pgid distinguishes detached descendants (own group) from same-group
-    children. The registry's fixed locale (pty_registry._PS_ENV) keeps the
-    lstart string comparable to one captured by a previous backend run.
-    Empty on failure."""
-    try:
-        out = subprocess.run(
-            ["ps", "-Ao", "pid=,ppid=,pgid=,lstart="],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            env=pty_registry._PS_ENV,
-        ).stdout
-    except (OSError, subprocess.TimeoutExpired):
-        return {}
-    snap: dict[int, tuple[int, int, str]] = {}
-    for line in out.splitlines():
-        parts = line.split()
-        if len(parts) < 3:
-            continue
-        try:
-            pid, ppid, pgid = int(parts[0]), int(parts[1]), int(parts[2])
-        except ValueError:
-            continue
-        snap[pid] = (ppid, pgid, " ".join(parts[3:]))
-    return snap
+    """pid -> (ppid, group id, start-time identity) for every process, from
+    one table read (osplat.process_tree.snapshot). The start time is the
+    identity that defeats pid recycling; the group id distinguishes detached
+    descendants (own group) from same-group children. Empty on failure."""
+    return osplat.process_tree.snapshot()
 
 
-def _children_map(snap: dict[int, tuple[int, int, str]]) -> dict[int, list[int]]:
-    children: dict[int, list[int]] = {}
-    for pid, entry in snap.items():
-        children.setdefault(entry[0], []).append(pid)
-    return children
-
-
-def _walk_descendants(children: dict[int, list[int]], root_pid: int) -> list[int]:
-    found: list[int] = []
-    seen: set[int] = {root_pid}  # never re-list root itself if a cycle points back
-    stack = list(children.get(root_pid, []))
-    while stack:
-        pid = stack.pop()
-        if pid in seen:
-            continue  # defends against a recycled-pid cycle in the ps table
-        seen.add(pid)
-        found.append(pid)
-        stack.extend(children.get(pid, []))
-    return found
-
-
-def _descendant_pids(root_pid: int) -> list[int]:
-    """Every PID descended from root_pid (child, grandchild, ...) from one ps
-    snapshot. killpg on the PTY child's process group misses any grandchild
-    that called setsid to start its own session/group (some CLIs do) — those
-    outlive the group kill and become orphans. Snapshot the tree while root is
-    still alive; once it dies the grandchildren reparent to launchd (ppid 1)
-    and the ancestry is gone."""
-    return _walk_descendants(_children_map(_ps_snapshot()), root_pid)
+def _descendant_pids(root_pid: int) -> dict[int, str]:
+    """Every PID descended from root_pid (child, grandchild, ...) with its
+    start-time identity, from one snapshot. killpg on the PTY child's process
+    group misses any grandchild that called setsid to start its own
+    session/group (some CLIs do) — those outlive the group kill and become
+    orphans. Snapshot the tree while root is still alive; once it dies the
+    grandchildren reparent to launchd (ppid 1) and the ancestry is gone. The
+    identity is what `_kill_breakaway` checks before signalling, so a pid
+    recycled between this snapshot and the kill is left alone."""
+    snap = _ps_snapshot()
+    pids = _walk_descendants(_children_map(snap), root_pid)
+    return {pid: snap[pid][2] for pid in pids}
 
 
 # Steady-state cadence of the descendant-snapshot loop. MCP servers and other
@@ -396,59 +434,39 @@ _DESCENDANT_SNAPSHOT_FAST_S = 5.0
 _EXIT_ORPHAN_GRACE_S = 1.0
 
 
-def _kill_breakaway(pids: "list[int] | tuple[int, ...]") -> None:
-    """SIGKILL each pid still alive — the breakaway grandchildren a process-
-    group kill could not reach. Idempotent: pids already reaped by the group
-    kill raise ProcessLookupError and are skipped. Best-effort: a pid recycled
-    within the ~1s grace could in theory be mis-hit, but macOS/Linux recycle
-    pids slowly enough that this is negligible on a kill path."""
-    for pid in pids:
+def _same_process(recorded: str, current: str) -> bool:
+    """Whether two start-time identities name the same process. Empty on
+    either side is never a match — an unverifiable identity must never
+    authorize a kill. Whitespace-normalized: `ps` pads the day-of-month."""
+    return (
+        bool(recorded)
+        and bool(current)
+        and " ".join(recorded.split()) == " ".join(current.split())
+    )
+
+
+def _kill_breakaway(pids: dict[int, str]) -> None:
+    """SIGKILL each recorded pid that is still the recorded process — the
+    breakaway grandchildren a process-group kill could not reach. Takes one
+    fresh snapshot and signals only pids whose start-time identity still
+    matches the one recorded when the tree was snapshotted: a pid recycled
+    since then belongs to someone else. On Windows that someone can be the
+    backend's own next pane (the pid space is small and reused fast), so no
+    identity means no kill; a failed snapshot kills nothing. Blocking (one
+    process-table read) — call via asyncio.to_thread from the loop."""
+    if not pids:
+        return
+    snap = _ps_snapshot()
+    if not snap:
+        return  # cannot verify identities — do not kill blind
+    for pid, recorded in pids.items():
+        entry = snap.get(pid)
+        if entry is None or not _same_process(recorded, entry[2]):
+            continue
         try:
-            os.kill(pid, signal.SIGKILL)
+            osplat.process_tree.kill(pid, force=True)
         except (ProcessLookupError, PermissionError):
             pass
-
-
-def _claim_ctty() -> None:
-    """Give the child a controlling terminal. Runs between fork() and exec().
-
-    start_new_session=True only calls setsid(): the child leads a new session
-    with NO controlling terminal, and dup2'ing the slave onto fd 0/1/2 does not
-    claim one. Without a ctty the kernel never gives the tty a foreground
-    process group, so it delivers neither SIGINT (^C) nor SIGWINCH (resize),
-    job control stays off, and /dev/tty is ENXIO — which is why sudo in a pane
-    refused with "a terminal is required to read the password" while `tty` and
-    `[ -t 0 ]` both looked healthy (those only check isatty()).
-
-    setsid() has already run by this point, so we are a session leader and the
-    ioctl is legal. Keep this minimal: only async-signal-safe work is valid
-    after fork(), so no logging and no allocation beyond the call itself.
-    """
-    try:
-        fcntl.ioctl(0, termios.TIOCSCTTY, 0)
-    except OSError:
-        # Degrade to the historical no-ctty behaviour rather than fail the
-        # spawn: an exception here propagates through Popen's errpipe and
-        # would make every pane unopenable. A pane without sudo and job
-        # control still beats no pane at all.
-        pass
-
-
-def _foreground_pgid(master_fd: int, fallback_pgid: int) -> int:
-    """The process group the tty considers foreground, or fallback_pgid.
-
-    With a ctty in play the PTY child is an interactive login shell whose job
-    control is live, so it puts the CLI in a process group of its OWN and makes
-    that group foreground. Signalling only the shell's group would then leave
-    the CLI untouched — it would die later by SIGHUP when the master closes,
-    with no chance to flush its transcript, which is exactly what resume
-    depends on. Ask the tty who is actually in front instead.
-    """
-    try:
-        fg = os.tcgetpgrp(master_fd)
-    except OSError:
-        return fallback_pgid
-    return fg if fg > 0 else fallback_pgid
 
 
 class TerminalService:
@@ -469,6 +487,35 @@ class TerminalService:
         # re-summing the whole buffer each time is quadratic in chunk count.
         self._out_buf_bytes: dict[str, int] = {}       # session_id -> buffered bytes
         self._out_handles: dict[str, asyncio.TimerHandle] = {}  # session_id -> timer
+        # One in-flight _flush_output drain per session; a flush that lands
+        # while it is on the wire leaves its chunks buffered for the drain to
+        # pick up when it finishes.
+        self._drain_tasks: dict[str, asyncio.Task[None]] = {}
+        # The _READER_PAUSE_MAX_MS timer that resumes the reader under a
+        # stalled drain.
+        self._pause_timers: dict[str, asyncio.TimerHandle] = {}
+        # Per-session lock held by drain_output: while held, nothing else
+        # starts a drain (the barrier emits the remainder itself), so a
+        # streaming CLI cannot keep the resize waiting — and the several
+        # resizes a drag sends run their barriers one after another instead
+        # of interleaving frames.
+        self._resize_barriers: dict[str, asyncio.Lock] = {}
+        # Sessions whose vendor asked for a SIGTERM-first shutdown and whose
+        # grace is still running, each mapped to the event its task sets when
+        # the child is finally down. The session stays in _sessions across the
+        # grace, so without this a second kill() would start a second grace —
+        # and a caller that must not spawn over a live child awaits the event
+        # through wait_until_reaped().
+        self._graceful_kills: dict[str, asyncio.Event] = {}
+        # Live _kill_gracefully tasks. Strong references, because the loop
+        # keeps only weak ones; discarded by the done-callback that logs
+        # whatever the task raised.
+        self._kill_tasks: set[asyncio.Task[None]] = set()
+        # Bytes dropped from _out_buffers in the current overflow episode and
+        # not yet marked in the log mirror.  Present = the episode's warning
+        # was logged; cleared once the buffer has fully drained so the next
+        # overflow reports again.
+        self._out_dropped: dict[str, int] = {}
         # Per-session pending INPUT bytes not yet accepted by the non-blocking
         # PTY master (EAGAIN / partial write). Drained via add_writer.
         self._in_buffers: dict[str, bytearray] = {}    # session_id -> pending bytes
@@ -488,8 +535,9 @@ class TerminalService:
         # resetting the clock and the lag they are feeling would never report.
         self._echo_probe: dict[str, float] = {}
         # Sessions whose PTY refused input (kernel buffer full).  Tracked so the
-        # condition is logged on the transition rather than on every retry.
-        self._input_blocked: set[str] = set()
+        # condition is logged on the transition rather than on every retry,
+        # and so the release can report how long it lasted.
+        self._input_blocked: dict[str, _InputBlock] = {}
         # Background task keeping each live session's descendant snapshot
         # fresh, so the EOF path can reap orphans (see _reap_exit_orphans).
         # The wakeup event lets create() pull the next refresh forward.
@@ -516,17 +564,20 @@ class TerminalService:
         env_remove: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
         output_log_file: str = "",
+        spawn_command: str | list[str] | None = None,
     ) -> TerminalSession:
-        argv = self._resolve_command(command)
+        logical_argv = self._resolve_command(command)
+        argv = self._resolve_command(spawn_command) if spawn_command is not None else logical_argv
         if not os.path.isdir(cwd):
-            raise FileNotFoundError(f"cwd does not exist: {cwd}")
+            # A path that exists as a file is a different mistake from a
+            # missing one — a resumed pipeline once spawned into its own
+            # navide.db and was told the file "does not exist".
+            # lexists, not exists: a broken symlink is a path that is there and
+            # is not a directory, which exists() reports as missing.
+            problem = "is not a directory" if os.path.lexists(cwd) else "does not exist"
+            raise FileNotFoundError(f"cwd {problem}: {cwd}")
         if not shutil.which(argv[0]):
             raise FileNotFoundError(f"executable not found: {argv[0]}")
-
-        master, slave = pty.openpty()
-        self._set_winsize(master, rows, cols)
-        flags = fcntl.fcntl(master, fcntl.F_GETFL)
-        fcntl.fcntl(master, fcntl.F_SETFL, flags | os.O_NONBLOCK)
 
         final_env = os.environ.copy()
         final_env["TERM"] = final_env.get("TERM", "xterm-256color")
@@ -537,32 +588,19 @@ class TerminalService:
         for key in env_remove or ():
             final_env.pop(key, None)
 
+        try:
+            risk_context = risk_runtime_context(final_env, cwd)
+        except ValueError:
+            risk_context = None
+
         started_monotonic = time.monotonic()
-        try:
-            proc = subprocess.Popen(
-                argv,
-                stdin=slave,
-                stdout=slave,
-                stderr=slave,
-                cwd=cwd,
-                env=final_env,
-                close_fds=True,
-                start_new_session=True,
-                # setsid() alone leaves the child without a controlling
-                # terminal; claim the slave so the kernel will deliver ^C,
-                # SIGWINCH and hangups, and so /dev/tty resolves. See
-                # _claim_ctty.
-                preexec_fn=_claim_ctty,
-            )
-        except Exception:
-            os.close(master)
-            os.close(slave)
-            raise
-        try:
-            os.close(slave)
-        except BaseException:
-            self._abort_failed_create(proc, master, registry_future=None)
-            raise
+        # The platform seam owns the PTY and the child's session/controlling
+        # terminal (POSIX: openpty + setsid + claim the ctty; Windows: ConPTY
+        # in a kill-on-close job). Nothing is left open if it raises.
+        handle = osplat.terminal_backend.spawn(
+            argv, cwd=cwd, env=final_env, rows=rows, cols=cols
+        )
+        proc = handle.proc
         # Record the child so a future backend start can reap it if this
         # process dies without running its shutdown sweep. register runs a ps
         # probe + registry-file I/O — keep it off the event loop so the
@@ -577,10 +615,10 @@ class TerminalService:
             try:
                 pty_registry.register(proc.pid, argv)
             except BaseException:
-                self._abort_failed_create(proc, master, registry_future=None)
+                self._abort_failed_create(handle, registry_future=None)
                 raise
         except BaseException:
-            self._abort_failed_create(proc, master, registry_future=None)
+            self._abort_failed_create(handle, registry_future=None)
             raise
 
         # Open output log file if requested (pipeline panes pass a path).
@@ -598,18 +636,19 @@ class TerminalService:
                 id=str(uuid4()),
                 pane_id=pane_id,
                 agent_key=agent_key,
-                command=argv,
+                command=logical_argv,
                 cwd=cwd,
-                master_fd=master,
+                handle=handle,
                 proc=proc,
                 started_monotonic=started_monotonic,
                 metadata=metadata or {},
                 output_log_fp=log_fp,
+                risk_context=risk_context,
             )
             self._sessions[session.id] = session
             if log_fp is not None:
                 _register_live_log(session.id, output_log_file)
-            self._loop.add_reader(master, self._on_readable, session)
+            handle.start_reading(self._loop, lambda: self._on_readable(session))
         except BaseException:
             if session is not None:
                 self._sessions.pop(session.id, None)
@@ -619,7 +658,7 @@ class TerminalService:
                     log_fp.close()
                 except Exception:  # noqa: BLE001
                     pass
-            self._abort_failed_create(proc, master, registry_future=registry_future)
+            self._abort_failed_create(handle, registry_future=registry_future)
             raise
         if self._snapshot_task is None or self._snapshot_task.done():
             try:
@@ -645,18 +684,17 @@ class TerminalService:
 
     def _abort_failed_create(
         self,
-        proc: subprocess.Popen[bytes],
-        master_fd: int,
+        handle: spec.TerminalHandle,
         *,
         registry_future: asyncio.Future[Any] | None,
     ) -> None:
-        """Undo a Popen whose TerminalSession setup did not complete."""
+        """Undo a spawn whose TerminalSession setup did not complete."""
+        proc = handle.proc
+        handle.close()
         try:
-            os.close(master_fd)
-        except OSError:
-            pass
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            osplat.process_tree.kill_group(
+                osplat.process_tree.group_of(proc.pid), force=True
+            )
         except (ProcessLookupError, PermissionError):
             pass
         try:
@@ -740,10 +778,16 @@ class TerminalService:
             and extract_resume_id(s.command) == resume_id
         ]
 
-    def write(self, session_id: str, data: str) -> None:
+    def write(self, session_id: str, data: str) -> int:
+        """Queue `data` for the PTY and return the bytes still pending after
+        the flush attempt (0 = the kernel accepted everything)."""
         session = self._require(session_id)
         if session.closed:
-            return
+            return 0
+        if not data:
+            # A probe of the pending count (the renderer polls this while it
+            # waits out a blocked episode): no bytes, no timers, no flush.
+            return len(self._in_buffers.get(session_id) or b"")
         # Queue the bytes and try to drain now. The PTY master is non-blocking,
         # so a full kernel buffer raises EAGAIN. The old code dropped the chunk
         # on EAGAIN (silent data loss — the agent's input box stayed empty while
@@ -755,6 +799,7 @@ class TerminalService:
         buf = self._in_buffers.setdefault(session_id, bytearray())
         buf.extend(data.encode("utf-8"))
         self._flush_input(session)
+        return len(buf)
 
     def _flush_input(self, session: TerminalSession) -> None:
         """Drain a session's pending input into the PTY master without blocking.
@@ -765,45 +810,108 @@ class TerminalService:
         buf = self._in_buffers.get(session.id)
         if buf is None or session.closed:
             return
+        block = self._input_blocked.get(session.id)
         while buf:
             try:
-                n = os.write(session.master_fd, buf)
+                n = session.handle.write(buf)
             except BlockingIOError:
                 break  # kernel buffer full — resume on writable
             except OSError as err:
                 log.warning("write to session %s failed: %s", session.id, err)
                 buf.clear()
+                self._end_input_block(session)
                 self._unwatch_writable(session)
                 return
             if n <= 0:
                 break
             del buf[:n]
+            if block is not None:
+                block.drained += n
         if buf:
             # The PTY's kernel buffer is full, i.e. the CLI has stopped reading
             # its stdin. The user sees typed characters simply not appear, so
             # this is worth a line even though it usually self-heals.
-            if session.id not in self._input_blocked:
-                self._input_blocked.add(session.id)
+            if block is None:
                 log.warning(
                     "pty input blocked session=%s agent=%s pending=%d bytes",
                     session.id, session.agent_key, len(buf),
                 )
+                self._input_blocked[session.id] = _InputBlock(
+                    since=self._loop.time(),
+                    timer=self._loop.call_later(
+                        _INPUT_BLOCK_NOTIFY_MS / 1000,
+                        self._notify_input_blocked,
+                        session,
+                    ),
+                )
             self._watch_writable(session)
         else:
-            self._input_blocked.discard(session.id)
+            self._end_input_block(session)
             self._unwatch_writable(session)
+
+    def _notify_input_blocked(self, session: TerminalSession) -> None:
+        """_INPUT_BLOCK_NOTIFY_MS after the first EAGAIN: still blocked, so
+        tell the owning window the CLI has not seen those bytes."""
+        block = self._input_blocked.get(session.id)
+        if block is None or session.closed:
+            return
+        block.timer = None
+        block.notified = True
+        buf = self._in_buffers.get(session.id)
+        self._emit_session_event(
+            session, "terminal.input_blocked", {"pending": len(buf) if buf else 0}
+        )
+
+    def _end_input_block(self, session: TerminalSession) -> None:
+        """Close the session's blocked episode, if any.  Only an episode the
+        window was told about gets the release event and the log line; short
+        blips that never crossed _INPUT_BLOCK_NOTIFY_MS stay silent.
+        `drained` is what the PTY actually accepted during the episode —
+        also on close or a write error, where the rest was discarded."""
+        block = self._input_blocked.pop(session.id, None)
+        if block is None:
+            return
+        if block.timer is not None:
+            block.timer.cancel()
+        if not block.notified:
+            return
+        drained = block.drained
+        duration_ms = (self._loop.time() - block.since) * 1000
+        log.warning(
+            "pty input unblocked session=%s agent=%s after=%.0fms drained=%d bytes",
+            session.id, session.agent_key, duration_ms, drained,
+        )
+        self._emit_session_event(
+            session,
+            "terminal.input_unblocked",
+            {"duration_ms": round(duration_ms), "drained": drained},
+        )
+
+    def _emit_session_event(
+        self, session: TerminalSession, type_: str, fields: dict[str, Any]
+    ) -> None:
+        """Route a per-session JSON event to the window that owns the PTY —
+        the same path terminal.exit takes (the sink keys on
+        terminal_session_id)."""
+        event = make_event(
+            type_,
+            {
+                "terminal_session_id": session.id,
+                "session_id": session.id,
+                "pane_id": session.pane_id,
+                **fields,
+            },
+        )
+        self._loop.create_task(self._emit(event))
 
     def _on_writable(self, session: TerminalSession) -> None:
         self._flush_input(session)
 
     def _watch_writable(self, session: TerminalSession) -> None:
-        self._loop.add_writer(session.master_fd, self._on_writable, session)
+        session.handle.watch_writable(self._loop, lambda: self._on_writable(session))
 
     def _unwatch_writable(self, session: TerminalSession) -> None:
-        try:
-            self._loop.remove_writer(session.master_fd)
-        except (ValueError, KeyError, OSError):
-            pass
+        session.handle.unwatch_writable()
 
     def log_sent(self, session_id: str, label: str, text: str) -> None:
         """Append a human-readable record of injected text to the session log.
@@ -830,7 +938,7 @@ class TerminalService:
         session = self._require(session_id)
         if session.closed:
             return
-        self._set_winsize(session.master_fd, rows, cols)
+        session.handle.resize(rows, cols)
 
     def force_redraw(self, session_id: str, cols: int, rows: int) -> None:
         """Nudge the PTY size to raise SIGWINCH so a TUI repaints after reattach.
@@ -840,8 +948,8 @@ class TerminalService:
         session = self._sessions.get(session_id)
         if not session or session.closed:
             return
-        self._set_winsize(session.master_fd, max(rows - 1, 1), cols)
-        self._set_winsize(session.master_fd, rows, cols)
+        session.handle.resize(max(rows - 1, 1), cols)
+        session.handle.resize(rows, cols)
 
     async def drain_output(self, session_id: str) -> None:
         """Flush all pending and kernel-buffered output before the caller's
@@ -857,12 +965,45 @@ class TerminalService:
         session = self._sessions.get(session_id)
         if not session or session.closed:
             return
+        lock = self._resize_barriers.setdefault(session.id, asyncio.Lock())
+        try:
+            async with lock:
+                await self._drain_output_behind_barrier(session)
+        finally:
+            # Output read while the barrier held was deferred by the lock and
+            # its debounce timer may already have fired into nothing.  (A
+            # waiting barrier re-acquires on its next turn, so the lock reads
+            # free here; the drain this starts is what it will wait on.)
+            if not session.closed and not lock.locked() and self._out_buffers.get(session.id):
+                self._flush_output(session)
+
+    async def _drain_output_behind_barrier(self, session: TerminalSession) -> None:
+        if session.closed:
+            return
+        # 0. A batched drain already on the wire carries old-width bytes; let
+        #    it land first or it would follow the ack.  The barrier flag keeps
+        #    its finally (and any debounce timer) from starting another drain
+        #    with what queued behind it — that remainder is emitted below, so
+        #    this is one await even under a CLI that never stops printing.
+        task = self._drain_tasks.get(session.id)
+        if task is not None:
+            try:
+                await asyncio.shield(task)
+            except Exception as err:  # noqa: BLE001
+                log.warning(
+                    "resize barrier: in-flight drain for session %s failed: %s",
+                    session.id, err,
+                )
+            if session.closed:
+                self._out_buf_bytes.pop(session.id, None)
+                self._out_buffers.pop(session.id, None)
+                return
         # 1. Slurp any kernel-buffered bytes the reader hasn't picked up yet.
         #    Raw bytes — the frontend's streaming decoder handles any split
         #    multi-byte character.
         while True:
             try:
-                chunk = os.read(session.master_fd, 4096)
+                chunk = session.handle.read(4096)
             except (BlockingIOError, OSError):
                 break
             if not chunk:
@@ -886,7 +1027,7 @@ class TerminalService:
         combined = b"".join(chunks)
         for piece in self._split_chunks(combined):
             await self._emit(self._build_output_frame(session, piece))
-        self._mirror_to_log(session, combined)
+        self._mirror_flush_to_log(session, combined)
 
     def interrupt(self, session_id: str) -> None:
         session = self._require(session_id)
@@ -897,13 +1038,31 @@ class TerminalService:
 
             spec = vendor(session.agent_key or "")
             seq = spec.interrupt_key if spec is not None and spec.interrupt_key is not None else b"\x03"
-            os.write(session.master_fd, seq)
+            session.handle.write(seq)
         except OSError as err:
             log.warning("interrupt session %s failed: %s", session_id, err)
 
     async def kill(self, session_id: str, force: bool = False) -> None:
         session = self._sessions.get(session_id)
         if not session or session.closed:
+            return
+
+        # A graceful reap already owns this session. Closing a pane kills it and
+        # then sends manual_pane.unspawn, whose sweep addresses the same pane —
+        # and that sweep reaches kill() only because the grace keeps the session
+        # registered (before it, _close had already popped it, so the sweep
+        # found nothing). The sweep stays: it is the only signal for a pane the
+        # renderer had no ref to kill through, and the net under a kill that
+        # failed. Answering here rather than after the snapshot below is the
+        # point — that snapshot is a full-system `ps` with a 5s budget, and one
+        # per pane close to arrive at the same no-op is pure waste. Never
+        # populated for a vendor without a ShutdownSpec.
+        if session_id in self._graceful_kills:
+            log.debug(
+                "terminal kill: graceful already in flight session=%s pane=%s "
+                "vendor=%s",
+                session.id, session.pane_id, session.agent_key,
+            )
             return
 
         # Snapshot the descendant tree BEFORE close: killpg below only reaches
@@ -915,12 +1074,71 @@ class TerminalService:
         # workspace switch would otherwise stall unrelated requests (e.g. the
         # Welcome screen's workspace.list_recent) past their 10s timeout.
         descendants = await asyncio.to_thread(_descendant_pids, session.proc.pid)
-        sig = signal.SIGKILL if force else signal.SIGTERM
         # Read the foreground group BEFORE _close() shuts the master fd.
-        fg_pgid = _foreground_pgid(session.master_fd, 0)
+        fg_pgid = session.handle.foreground_group()
+
+        # A vendor that declares a ShutdownSpec gets a SIGTERM-first prefix in
+        # front of everything below; every other vendor (13 of 14) falls
+        # straight through to the path that has always run here.
+        shutdown = self._shutdown_spec(session)
+        if shutdown is not None and shutdown.graceful:
+            # Re-read the two guards: the descendant snapshot above is a
+            # full-system `ps` off the loop, and across it the child can exit
+            # on its own (its EOF closes the session and pops it) or another
+            # kill can claim the grace. Acting on the pre-await state would
+            # start a second grace whose fg_pgid was read from a handle that
+            # is now closed — a pgid the kernel may already have recycled to
+            # someone else's process group.
+            if session.closed or session.id not in self._sessions:
+                log.info(
+                    "terminal kill: graceful skipped, session already down "
+                    "session=%s pane=%s vendor=%s",
+                    session.id, session.pane_id, session.agent_key,
+                )
+                return
+            if session.id in self._graceful_kills:
+                # The same no-op as the fast path above, reached when a grace
+                # started while this call was in the snapshot.
+                log.debug(
+                    "terminal kill: graceful already in flight session=%s "
+                    "pane=%s vendor=%s",
+                    session.id, session.pane_id, session.agent_key,
+                )
+                return
+            self._graceful_kills[session.id] = asyncio.Event()
+            log.info(
+                "terminal kill: path=graceful session=%s pane=%s vendor=%s "
+                "signal=SIGTERM grace=%.1fs defer_master_close=%s "
+                "force_fallback=%s",
+                session.id, session.pane_id, session.agent_key,
+                shutdown.grace_s, shutdown.defer_master_close, force,
+            )
+            # A task, not an await: kill()'s own latency gates pane close and
+            # the spawn path's replace-a-stale-terminal step, and holding
+            # either open for the grace would be a visible regression.
+            task = self._loop.create_task(
+                self._kill_gracefully(
+                    session, fg_pgid, force, shutdown, descendants
+                )
+            )
+            # kill() has already told its caller the kill is under way, so a
+            # task that dies has nobody to raise to: without this the
+            # traceback surfaces only as asyncio's "Task exception was never
+            # retrieved" at GC time, on stderr rather than in the log. Holding
+            # the reference also keeps the loop's weak set from dropping it.
+            self._kill_tasks.add(task)
+            task.add_done_callback(self._on_graceful_kill_done)
+            return
+
+        log.info(
+            "terminal kill: path=legacy session=%s pane=%s vendor=%s "
+            "signal=%s grace=%.1fs",
+            session.id, session.pane_id, session.agent_key,
+            "SIGKILL" if force else "SIGTERM", _KILL_ESCALATION_GRACE_S,
+        )
         try:
-            pgid = os.getpgid(session.proc.pid)
-            os.killpg(pgid, sig)
+            pgid = osplat.process_tree.group_of(session.proc.pid)
+            osplat.process_tree.kill_group(pgid, force=force)
         except ProcessLookupError:
             # Group already gone — closing the PTY master HUPs the child, so
             # it often dies before the SIGTERM lands. The escalation task
@@ -933,7 +1151,7 @@ class TerminalService:
             # first hear about this as the SIGHUP from the close below and lose
             # the chance to flush the transcript that resume depends on.
             try:
-                os.killpg(fg_pgid, sig)
+                osplat.process_tree.kill_group(fg_pgid, force=force)
             except (ProcessLookupError, PermissionError):
                 pass
 
@@ -948,6 +1166,139 @@ class TerminalService:
             )
         )
 
+    async def wait_until_reaped(
+        self, session_id: str, timeout: float | None = None
+    ) -> bool:
+        """Block until a graceful kill of ``session_id`` has put the child down.
+
+        kill() returns before the grace is over so that closing a pane stays
+        instant, but a caller that spawns a replacement — terminal.create's
+        replaces_terminal_id reap and its resume-id dedup — needs the old CLI
+        gone first, or two of them briefly append to one session file. Those
+        callers await this; nobody else has to, and the direct kill path is
+        still synchronous, so every other caller and every vendor without a
+        ShutdownSpec is unaffected.
+
+        Returns True when there is nothing in flight (the common case, and an
+        immediate return) or the reap finished, False when the wait ran out.
+        False means the child outlived a SIGKILL — the ceiling covers every
+        other bounded step (see _reap_wait_timeout_s), so a caller that must
+        not spawn over a live CLI can treat it as one rather than as noise.
+        """
+        done = self._graceful_kills.get(session_id)
+        if done is None:
+            return True
+        if timeout is None:
+            timeout = _reap_wait_timeout_s()
+        try:
+            await asyncio.wait_for(done.wait(), timeout)
+        except TimeoutError:
+            log.warning(
+                "terminal kill: reap wait timed out session=%s timeout=%.1fs "
+                "— the child survived the escalation and may still be alive",
+                session_id, timeout,
+            )
+            return False
+        return True
+
+    def _on_graceful_kill_done(self, task: "asyncio.Task[None]") -> None:
+        """Log what a graceful-kill task raised, and let go of it."""
+        self._kill_tasks.discard(task)
+        if task.cancelled():
+            return
+        err = task.exception()
+        if err is not None:
+            log.error("terminal kill: graceful task failed: %r", err, exc_info=err)
+
+    def _shutdown_spec(self, session: TerminalSession) -> "Any | None":
+        """This session's vendor ShutdownSpec, or None — for an unknown key,
+        a plain terminal, or a vendor that declares no shutdown behavior."""
+        from .cli_vendors.registry import vendor
+
+        spec = vendor(session.agent_key or "")
+        return spec.shutdown if spec is not None else None
+
+    async def _kill_gracefully(
+        self,
+        session: TerminalSession,
+        fg_pgid: int,
+        force: bool,
+        shutdown: Any,
+        descendants: dict[int, str],
+    ) -> None:
+        """SIGTERM first, then the same close-and-escalate the direct path runs.
+
+        claude rewrites ~/.claude.json from a SIGTERM handler; a SIGKILL skips
+        it and leaves a stale fullscreenBootPending entry, and two of those
+        make claude disable its own fullscreen TUI. So the signal order is
+        inverted for vendors that ask, and with defer_master_close the PTY
+        master stays open across the grace — closing it HUPs the child and
+        takes the far end of its stdout away mid-hook.
+        """
+        started = self._loop.time()
+        done = self._graceful_kills.get(session.id)
+        # Everything below is inside the try: this task owns the only entry in
+        # _graceful_kills for this session, and kill() short-circuits on that
+        # entry. An exception escaping before the finally would leave it there
+        # forever — the session never closed, the child never killable again,
+        # and every reap site burning its full ceiling to learn nothing.
+        try:
+            try:
+                pgid = osplat.process_tree.group_of(session.proc.pid)
+            except (ProcessLookupError, PermissionError):
+                # Already gone, or not ours to ask about; the close and
+                # escalation below still run so the session is unregistered
+                # and its crash-recovery record dropped.
+                pgid = 0
+            # Job control puts the CLI in a group the login shell's pgid does
+            # not cover. Same guard as the direct path.
+            for target in (pgid, fg_pgid if fg_pgid != pgid else 0):
+                if target <= 0:
+                    continue
+                try:
+                    osplat.process_tree.kill_group(target, force=False)
+                except (ProcessLookupError, PermissionError):
+                    pass
+            if not shutdown.defer_master_close:
+                self._close(session, reason="killed")
+            deadline = self._loop.time() + shutdown.grace_s
+            # ASYNC110 suppressed: bounded poll (<= grace_s) with awaited
+            # sleeps, as in _escalate_kill.
+            while (  # noqa: ASYNC110
+                session.proc.poll() is None and self._loop.time() < deadline
+            ):
+                await asyncio.sleep(0.05)
+            waited_ms = int((self._loop.time() - started) * 1000)
+            timed_out = session.proc.poll() is None
+            log.info(
+                "terminal kill: graceful grace ended session=%s pane=%s "
+                "vendor=%s exited=%s after=%dms grace=%.1fs timed_out=%s",
+                session.id, session.pane_id, session.agent_key,
+                not timed_out, waited_ms, shutdown.grace_s, timed_out,
+            )
+            if timed_out:
+                # Still there — hand it back to the caller's own force choice,
+                # exactly as the direct path would have signalled it.
+                for target in (pgid, fg_pgid if fg_pgid != pgid else 0):
+                    if target <= 0:
+                        continue
+                    try:
+                        osplat.process_tree.kill_group(target, force=force)
+                    except (ProcessLookupError, PermissionError):
+                        pass
+            self._close(session, reason="killed")
+            await self._escalate_kill(
+                session, pgid, _KILL_ESCALATION_GRACE_S,
+                descendants=descendants, reaped=done,
+            )
+        finally:
+            # Also the failure release: _escalate_kill sets the event the
+            # moment the child is confirmed down, and this catches every path
+            # that never got there. Event.set() twice is a no-op.
+            stale = self._graceful_kills.pop(session.id, None)
+            if stale is not None:
+                stale.set()
+
     async def _put_down_error_survivor(self, session: TerminalSession) -> None:
         """Kill a child whose PTY master died on a read error while the child
         itself is still alive. The session is already closed and popped from
@@ -958,8 +1309,8 @@ class TerminalService:
         then TERM the group and escalate."""
         descendants = await asyncio.to_thread(_descendant_pids, session.proc.pid)
         try:
-            pgid = os.getpgid(session.proc.pid)
-            os.killpg(pgid, signal.SIGTERM)
+            pgid = osplat.process_tree.group_of(session.proc.pid)
+            osplat.process_tree.kill_group(pgid, force=False)
         except (ProcessLookupError, PermissionError):
             pgid = 0
         await self._escalate_kill(session, pgid, descendants=descendants)
@@ -969,7 +1320,8 @@ class TerminalService:
         session: TerminalSession,
         pgid: int,
         grace: float = 1.0,
-        descendants: "list[int] | tuple[int, ...]" = (),
+        descendants: dict[int, str] | None = None,
+        reaped: asyncio.Event | None = None,
     ) -> None:
         deadline = self._loop.time() + grace
         # ASYNC110 suppressed: bounded poll (<= grace) with awaited sleeps —
@@ -977,9 +1329,17 @@ class TerminalService:
         # child-exit here.
         while session.proc.poll() is None and self._loop.time() < deadline:  # noqa: ASYNC110
             await asyncio.sleep(0.05)
-        if session.proc.poll() is None and pgid > 0:
+        escalated = session.proc.poll() is None and pgid > 0
+        log.info(
+            "terminal kill: escalation session=%s pane=%s vendor=%s "
+            "waited=%dms grace=%.1fs escalated_sigkill=%s",
+            session.id, session.pane_id, session.agent_key,
+            int((self._loop.time() - (deadline - grace)) * 1000), grace,
+            escalated,
+        )
+        if escalated:
             try:
-                os.killpg(pgid, signal.SIGKILL)
+                osplat.process_tree.kill_group(pgid, force=True)
             except (ProcessLookupError, PermissionError):
                 pass
             try:
@@ -989,8 +1349,16 @@ class TerminalService:
                 )
             except subprocess.TimeoutExpired:
                 pass
+        # This child is now as down as this path can make it, which is the
+        # whole of what wait_until_reaped() promises. Release its waiters here
+        # rather than after the sweep below: that sweep is about OTHER
+        # processes (grandchildren that left the group), it is a full-system
+        # `ps` with a 5s budget, and holding the reap across it made the
+        # ceiling smaller than the work under it.
+        if reaped is not None:
+            reaped.set()
         # Reap breakaway grandchildren that escaped the process group via setsid.
-        _kill_breakaway(descendants)
+        await asyncio.to_thread(_kill_breakaway, descendants or {})
         if session.proc.poll() is not None:
             await self._loop.run_in_executor(
                 _LIFECYCLE_EXECUTOR, pty_registry.unregister, session.proc.pid
@@ -1090,29 +1458,30 @@ class TerminalService:
         launchd (ppid 1) or to this backend (observed macOS behavior) — and
         (b) still the same process, verified by comparing its ps lstart
         against the one recorded at snapshot time (defeats pid recycling;
-        empty lstart on either side skips the check). A verified orphan's
-        current subtree is killed with it (a leaked `npm exec` wrapper still
-        parents its own node child at sweep time)."""
+        an empty lstart on either side is no match — never kill unverified).
+        A verified orphan's current subtree is killed with it (a leaked
+        `npm exec` wrapper still parents its own node child at sweep time)."""
         snap = await asyncio.to_thread(_ps_snapshot)
         if not snap:
             return  # ps failed — cannot verify identities, do not kill blind
         children = _children_map(snap)
         me = os.getpid()
-        targets: list[int] = []
+        targets: dict[int, str] = {}
         for pid, recorded_lstart in descendants.items():
             entry = snap.get(pid)
             if entry is None:
                 continue
             ppid, _pgid, lstart = entry
-            if ppid not in (1, me):
+            if not osplat.process_tree.is_orphan_parent(ppid, me):
                 continue  # still parented by a live process — not our orphan
-            if recorded_lstart and lstart and lstart != recorded_lstart:
-                continue  # pid recycled since the snapshot — different process
-            targets.append(pid)
-            targets.extend(_walk_descendants(children, pid))
+            if not _same_process(recorded_lstart, lstart):
+                continue  # recycled since the snapshot, or unverifiable — not ours
+            targets[pid] = lstart
+            for child in _walk_descendants(children, pid):
+                targets[child] = snap[child][2]
         if targets:
-            log.info("reaping %d orphaned descendant(s): %s", len(targets), targets)
-            _kill_breakaway(targets)
+            log.info("reaping %d orphaned descendant(s): %s", len(targets), list(targets))
+            await asyncio.to_thread(_kill_breakaway, targets)
 
     async def kill_all(self, grace: float = 1.0) -> None:
         """Terminate every live PTY child. Children run with
@@ -1123,37 +1492,57 @@ class TerminalService:
             self._snapshot_task.cancel()
             self._snapshot_task = None
         targets: list[tuple[TerminalSession, int]] = []
-        breakaway: list[int] = []
+        breakaway: dict[int, str] = {}
         # One shared ps snapshot for every session's descendant sweep. The
         # previous per-session snapshot (a full `ps -Ao` each, 5s budget)
         # pushed a many-pane shutdown past Electron's SIGKILL deadline, so
         # the sweep never got to the actual kills. Off the loop via to_thread.
-        children = _children_map(await asyncio.to_thread(_ps_snapshot))
+        snap = await asyncio.to_thread(_ps_snapshot)
+        children = _children_map(snap)
         for session in list(self._sessions.values()):
             if session.closed:
                 continue
             # Snapshot descendants while the child is still alive (see kill()).
-            breakaway.extend(_walk_descendants(children, session.proc.pid))
+            for pid in _walk_descendants(children, session.proc.pid):
+                breakaway[pid] = snap[pid][2]
             try:
-                targets.append((session, os.getpgid(session.proc.pid)))
+                targets.append((session, osplat.process_tree.group_of(session.proc.pid)))
             except ProcessLookupError:
                 # Child already gone — still close so the session is removed
                 # and its registry entry is dropped.
                 self._close(session, reason="shutdown")
         for session, pgid in targets:
             try:
-                os.killpg(pgid, signal.SIGTERM)
+                osplat.process_tree.kill_group(pgid, force=False)
             except (ProcessLookupError, PermissionError):
                 pass
             # Job control puts the CLI in its own group; the shell's pgid does
             # not reach it. See the same guard in kill().
-            fg_pgid = _foreground_pgid(session.master_fd, 0)
+            fg_pgid = session.handle.foreground_group()
             if fg_pgid > 0 and fg_pgid != pgid:
                 try:
-                    os.killpg(fg_pgid, signal.SIGTERM)
+                    osplat.process_tree.kill_group(fg_pgid, force=False)
                 except (ProcessLookupError, PermissionError):
                     pass
-        deadline = self._loop.time() + grace
+        # A vendor that declared a grace asked for it because its SIGTERM
+        # handler needs that long to finish — and quitting the app is when
+        # every one of its panes runs that handler at once, against the same
+        # file. Honouring only kill()'s grace here left the exact stale-state
+        # bug the ShutdownSpec exists to prevent alive on the quit path.
+        # The poll below waits on all targets together, so widening this costs
+        # the LARGEST declared grace once, not one per pane.
+        effective = grace
+        for session, _pgid in targets:
+            spec = self._shutdown_spec(session)
+            if spec is not None and spec.graceful:
+                effective = max(effective, spec.grace_s)
+        if effective != grace:
+            log.info(
+                "terminal kill_all: grace widened %.1fs -> %.1fs for %d "
+                "session(s) with a declared shutdown",
+                grace, effective, len(targets),
+            )
+        deadline = self._loop.time() + effective
         # ASYNC110 suppressed: bounded poll with awaited sleeps, as above.
         while (  # noqa: ASYNC110
             any(s.proc.poll() is None for s, _ in targets)
@@ -1163,7 +1552,7 @@ class TerminalService:
         for session, pgid in targets:
             if session.proc.poll() is None:
                 try:
-                    os.killpg(pgid, signal.SIGKILL)
+                    osplat.process_tree.kill_group(pgid, force=True)
                 except (ProcessLookupError, PermissionError):
                     pass
                 try:
@@ -1179,7 +1568,7 @@ class TerminalService:
         if self._reap_task is not None and not self._reap_task.done():
             await asyncio.gather(self._reap_task, return_exceptions=True)
         # Reap breakaway grandchildren that escaped every process group.
-        _kill_breakaway(breakaway)
+        await asyncio.to_thread(_kill_breakaway, breakaway)
 
     def _require(self, session_id: str) -> TerminalSession:
         session = self._sessions.get(session_id)
@@ -1191,13 +1580,10 @@ class TerminalService:
         if isinstance(command, list):
             argv = list(command)
         else:
-            argv = shlex.split(command)
+            argv = osplat.terminal_backend.parse_command(command)
         if not argv:
             raise ValueError("command is empty")
         return argv
-
-    def _set_winsize(self, fd: int, rows: int, cols: int) -> None:
-        fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
 
     def _on_readable(self, session: TerminalSession) -> None:
         if session.closed:
@@ -1209,7 +1595,7 @@ class TerminalService:
         close_reason: str | None = None
         while nbytes < _READ_DRAIN_MAX_BYTES:
             try:
-                chunk = os.read(session.master_fd, _READ_CHUNK_BYTES)
+                chunk = session.handle.read(_READ_CHUNK_BYTES)
             except BlockingIOError:
                 break
             except OSError as err:
@@ -1239,7 +1625,6 @@ class TerminalService:
         """Buffer one drained batch of raw bytes and schedule (or force) a
         flush. No decoding here — bytes ship verbatim in binary frames and the
         frontend's streaming decoder handles chunk-split multi-byte chars."""
-        _BUF_CAP = 5 * 1024 * 1024  # 5 MB — force an immediate flush if exceeded
         buf = self._out_buffers.setdefault(session.id, [])
         buf.append(chunk)
         window = self._recent_chunks.setdefault(session.id, deque(maxlen=512))
@@ -1247,7 +1632,28 @@ class TerminalService:
         window.append((now, nbytes))
         buf_size = self._out_buf_bytes.get(session.id, 0) + len(chunk)
         self._out_buf_bytes[session.id] = buf_size
-        if buf_size >= _BUF_CAP:
+        barrier = self._resize_barriers.get(session.id)
+        if buf_size >= _BUF_CAP and (
+            session.id in self._drain_tasks or (barrier is not None and barrier.locked())
+        ):
+            # A drain (or a resize barrier's inline emit) is already stalled
+            # on the WS and the reader was resumed so the CLI keeps running
+            # (see _READER_PAUSE_MAX_MS) — a flush would only defer, so the
+            # only place left for the pressure is our own buffer.  Drop the
+            # oldest chunks: the newest carry the TUI's current screen state.
+            dropped = 0
+            while buf_size >= _BUF_CAP and len(buf) > 1:
+                old = buf.pop(0)
+                buf_size -= len(old)
+                dropped += len(old)
+            self._out_buf_bytes[session.id] = buf_size
+            if session.id not in self._out_dropped:
+                log.warning(
+                    "pty output dropped session=%s agent=%s bytes=%d (ws not draining)",
+                    session.id, session.agent_key, dropped,
+                )
+            self._out_dropped[session.id] = self._out_dropped.get(session.id, 0) + dropped
+        elif buf_size >= _BUF_CAP:
             # Cancel the pending debounce timer and flush now to avoid OOM.
             existing = self._out_handles.pop(session.id, None)
             if existing:
@@ -1290,9 +1696,16 @@ class TerminalService:
         frame (large frames have been observed to trigger the crash).
         """
         self._out_handles.pop(session.id, None)
+        barrier = self._resize_barriers.get(session.id)
+        if session.id in self._drain_tasks or (barrier is not None and barrier.locked()):
+            # One drain on the wire per session: whatever is buffered now is
+            # picked up by that task when it finishes (see _drain's finally) —
+            # or by the resize barrier, which emits the remainder itself.
+            return
         self._out_buf_bytes.pop(session.id, None)
         chunks = self._out_buffers.pop(session.id, None)
         if not chunks:
+            self._out_dropped.pop(session.id, None)
             return
         combined = b"".join(chunks)
 
@@ -1310,35 +1723,92 @@ class TerminalService:
         # Suspend reading from the PTY while we drain the network buffer.
         # This provides natural backpressure so the CLI blocks when writing
         # instead of OOMing the Python backend or Electron WebSocket receiver.
-        try:
-            self._loop.remove_reader(session.master_fd)
-        except (ValueError, KeyError):
-            pass
+        # The hold is bounded (_READER_PAUSE_MAX_MS): a CLI blocked on its
+        # stdout stops reading its stdin, so past that the reader resumes and
+        # _absorb_output's drop policy takes over as the OOM guard.
+        session.handle.pause_reading()
 
         suspended_at = self._loop.time()
+        resumed_at: float | None = None
+
+        def _resume_reader() -> None:
+            nonlocal resumed_at
+            if resumed_at is not None or session.closed:
+                return
+            resumed_at = self._loop.time()
+            try:
+                session.handle.resume_reading()
+            except (ValueError, OSError) as err:
+                log.warning("re-add reader for session %s failed: %s", session.id, err)
+
+        def _resume_early() -> None:
+            self._pause_timers.pop(session.id, None)
+            _resume_reader()
+
+        self._pause_timers[session.id] = self._loop.call_later(
+            _READER_PAUSE_MAX_MS / 1000, _resume_early
+        )
 
         async def _drain() -> None:
             try:
                 for piece in self._split_chunks(combined):
                     await self._emit(self._build_output_frame(session, piece))
             finally:
+                timer = self._pause_timers.pop(session.id, None)
+                if timer is not None:
+                    timer.cancel()
                 # Nothing is read from the PTY for this whole span, so a long
                 # one is the backpressure path reaching the CLI.
-                held_ms = (self._loop.time() - suspended_at) * 1000
+                held_until = resumed_at if resumed_at is not None else self._loop.time()
+                held_ms = (held_until - suspended_at) * 1000
                 if held_ms >= _READER_SUSPEND_WARN_MS:
                     log.warning(
                         "pty reader suspended session=%s agent=%s held=%.0fms bytes=%d",
                         session.id, session.agent_key, held_ms, len(combined),
                     )
-                if not session.closed:
-                    try:
-                        self._loop.add_reader(session.master_fd, self._on_readable, session)
-                    except (ValueError, OSError) as err:
-                        log.warning("re-add reader for session %s failed: %s", session.id, err)
+                _resume_reader()
+                self._drain_tasks.pop(session.id, None)
+                if session.closed:
+                    # _close ran mid-drain: the fd is gone (its number may
+                    # already be reused), so no further pause/resume — drop
+                    # whatever was deferred to us.
+                    self._out_buffers.pop(session.id, None)
+                    self._out_buf_bytes.pop(session.id, None)
+                    self._out_dropped.pop(session.id, None)
+                    return
+                # Output that arrived while this drain was on the wire is
+                # still buffered (flushes defer to the in-flight drain).  Under
+                # a resize barrier _flush_output defers again and drain_output
+                # emits the remainder itself.
+                if self._out_buffers.get(session.id):
+                    pending = self._out_handles.pop(session.id, None)
+                    if pending:
+                        pending.cancel()
+                    self._flush_output(session)
+                else:
+                    # Fully drained: the next overflow is a new episode.
+                    self._out_dropped.pop(session.id, None)
 
-        self._loop.create_task(_drain())
+        self._drain_tasks[session.id] = self._loop.create_task(_drain())
 
         # Persist cleaned output to the conversation log (if one was opened).
+        self._mirror_flush_to_log(session, combined)
+
+    def _mirror_flush_to_log(self, session: TerminalSession, combined: bytes) -> None:
+        """Mirror one flushed payload into the log, marking any gap first.
+
+        Chunks dropped under a stalled drain never reach the log, so the gap
+        is marked ahead of the survivors (the count is final: drops only
+        happen while a drain is in flight, and a flush runs after it
+        finished).  The marker stays out of the live PTY stream the renderer
+        sees.
+        """
+        dropped = self._out_dropped.get(session.id)
+        if dropped:
+            self._out_dropped[session.id] = 0
+            self._mirror_to_log(
+                session, f"\r\n[navide: {dropped} bytes of output dropped]\r\n".encode()
+            )
         self._mirror_to_log(session, combined)
 
     def _mirror_to_log(self, session: TerminalSession, data: bytes) -> None:
@@ -1396,26 +1866,27 @@ class TerminalService:
         if session.closed:
             return
         session.closed = True
-        try:
-            self._loop.remove_reader(session.master_fd)
-        except (ValueError, KeyError):
-            pass
+        session.handle.stop_reading()
         # Stop any pending input drain and discard unwritten bytes before the
         # fd is closed (remove_writer needs a still-valid fd).
         self._unwatch_writable(session)
         self._in_buffers.pop(session.id, None)
         self._recent_chunks.pop(session.id, None)
         self._echo_probe.pop(session.id, None)
-        self._input_blocked.discard(session.id)
-        try:
-            os.close(session.master_fd)
-        except OSError:
-            pass
+        # An open blocked episode ends here; the window still gets its release
+        # event (with what the PTY had accepted so far) if it was told about
+        # the block.
+        self._end_input_block(session)
+        session.handle.close()
         # Cancel pending batch timer and flush any buffered output before the
         # exit event so the client sees all output in order.
         handle = self._out_handles.pop(session.id, None)
         if handle:
             handle.cancel()
+        timer = self._pause_timers.pop(session.id, None)
+        if timer:
+            timer.cancel()
+        self._resize_barriers.pop(session.id, None)
         self._flush_output(session)
         # The transport ships raw bytes, so nothing is ever held back there —
         # but the log-mirror decoder may still hold a final chunk that ended

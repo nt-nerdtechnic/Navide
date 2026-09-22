@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_team_backend import fs_service
+from agent_team_backend import fs_service, osplat
 
 
 def _ws(tmp_path: Path) -> str:
@@ -185,6 +185,95 @@ def test_plans_subtree_still_reachable_when_named_as_the_root(tmp_path: Path) ->
     plans = str(tmp_path / ".agent-team" / "plans")
     assert fs_service.read_file(plans, "my-plan.html")["ok"] is True
     assert fs_service.list_dir(plans, "")["ok"] is True
+
+
+@pytest.mark.parametrize("root_rel", ["", ".agent-team", ".agent-team/mockups"])
+def test_mockups_readable_under_each_root(tmp_path: Path, root_rel: str) -> None:
+    _ws(tmp_path)
+    mockups = tmp_path / ".agent-team" / "mockups"
+    mockups.mkdir()
+    document = mockups / "preview.html"
+    document.write_text("<h1>mockup</h1>")
+    root = tmp_path / root_rel
+    rel = str(document.relative_to(root))
+
+    result = fs_service.read_file(str(root), rel)
+    assert result["ok"] is True, result
+    assert result["content"] == "<h1>mockup</h1>"
+    assert fs_service.stat_workspace_path(str(root), rel)["exists"] is True
+    listing = fs_service.list_dir(str(root), str(mockups.relative_to(root)))
+    assert [entry["name"] for entry in listing["entries"]] == ["preview.html"]
+
+
+@pytest.mark.parametrize("mode", ["display", "discovery"])
+def test_mockups_visible_without_exposing_internal_state(tmp_path: Path, mode: str) -> None:
+    ws = _ws(tmp_path)
+    (tmp_path / ".agent-team" / "mockups").mkdir()
+    listing = fs_service.list_dir(ws, ".agent-team", show_hidden=True, mode=mode)
+    assert [entry["name"] for entry in listing["entries"]] == ["mockups"]
+
+
+@pytest.mark.parametrize("root_rel", ["", ".agent-team", ".agent-team/mockups"])
+def test_mockups_mutations_remain_protected(tmp_path: Path, monkeypatch, root_rel: str) -> None:
+    _ws(tmp_path)
+    mockups = tmp_path / ".agent-team" / "mockups"
+    mockups.mkdir()
+    document = mockups / "preview.html"
+    document.write_text("original")
+    root = tmp_path / root_rel
+    ws = str(root)
+    rel = str(document.relative_to(root))
+    new = str((mockups / "new.html").relative_to(root))
+    trash_calls = _fake_trash(monkeypatch)
+
+    for result in (
+        fs_service.mkdir(ws, str((mockups / "new-dir").relative_to(root))),
+        fs_service.create_file(ws, new, "new"),
+        fs_service.write_file(ws, new, "new"),
+        fs_service.write_file(ws, rel, "changed", expected_mtime=document.stat().st_mtime),
+        fs_service.rename(ws, rel, new),
+        fs_service.delete(ws, rel),
+    ):
+        assert result["ok"] is False
+        assert "protected" in result["error"]
+    assert document.read_text() == "original"
+    assert list(mockups.iterdir()) == [document]
+    assert trash_calls == []
+
+
+def test_mockups_rename_destination_and_symlink_writes_protected(tmp_path: Path) -> None:
+    ws = _ws(tmp_path)
+    mockups = tmp_path / ".agent-team" / "mockups"
+    mockups.mkdir()
+    document = mockups / "preview.html"
+    document.write_text("original")
+    (tmp_path / "preview-link.html").symlink_to(document)
+
+    for result in (
+        fs_service.rename(ws, "README.md", ".agent-team/mockups/moved.html"),
+        fs_service.rename(ws, ".agent-team/mockups/preview.html", "moved.html"),
+        fs_service.write_file(ws, "preview-link.html", "changed"),
+    ):
+        assert result["ok"] is False
+        assert "protected" in result["error"]
+    assert document.read_text() == "original"
+    assert (tmp_path / "README.md").read_text() == "hi"
+
+
+@pytest.mark.parametrize("subdir", ["plans", "reports"])
+def test_existing_user_facing_subtrees_keep_crud(tmp_path: Path, monkeypatch, subdir: str) -> None:
+    ws = _ws(tmp_path)
+    _fake_trash(monkeypatch)
+    directory = f".agent-team/{subdir}/nested"
+    original, renamed = f"{directory}/original.html", f"{directory}/renamed.html"
+    assert fs_service.mkdir(ws, directory)["ok"] is True
+    assert fs_service.create_file(ws, original, "original")["ok"] is True
+    assert fs_service.read_file(ws, original)["content"] == "original"
+    assert fs_service.write_file(ws, original, "changed")["ok"] is True
+    assert fs_service.rename(ws, original, renamed)["ok"] is True
+    assert fs_service.read_file(ws, renamed)["content"] == "changed"
+    assert fs_service.delete(ws, renamed)["ok"] is True
+    assert not (tmp_path / renamed).exists()
 
 
 # ── list_dir + show_hidden ──────────────────────────────────────────────────
@@ -501,6 +590,10 @@ def test_write_file_expected_mtime_ignored_for_new_file(tmp_path: Path) -> None:
     assert (Path(ws) / "brand-new.txt").read_text() == "x"
 
 
+@pytest.mark.skipif(
+    not osplat.paths.enforces_posix_modes(),
+    reason="preserving a user file's 0o755 is POSIX mode-bit behaviour; NTFS has none",
+)
 def test_write_file_preserves_mode(tmp_path: Path) -> None:
     ws = _ws(tmp_path)
     script = Path(ws) / "run.sh"
@@ -568,9 +661,9 @@ def test_read_image_rejects_escape(tmp_path: Path) -> None:
     assert fs_service.read_image(_ws(tmp_path), "../../etc/secret.png")["ok"] is False
 
 
-def test_stat_path_expands_home(tmp_path: Path, monkeypatch) -> None:
+def test_stat_path_expands_home(tmp_path: Path, set_home) -> None:
     """Terminal output prints '~/...' paths verbatim; stat must expand them."""
-    monkeypatch.setenv("HOME", str(tmp_path))
+    set_home(tmp_path)
     (tmp_path / "cert.pem").write_text("x", encoding="utf-8")
     assert fs_service.stat_path("~/cert.pem") == {"ok": True, "exists": True}
     assert fs_service.stat_path("~/missing.pem") == {"ok": True, "exists": False}

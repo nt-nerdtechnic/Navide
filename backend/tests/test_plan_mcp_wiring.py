@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import json
-import shlex
 import stat
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
-from agent_team_backend import app
+from agent_team_backend import app, osplat
+from agent_team_backend.cli_vendors.registry import vendor as cli_vendor
 from agent_team_backend.plugins import wiring as plugin_wiring
 from agent_team_backend.mcp_server import auth as plan_mcp_auth, wiring as plan_mcp_wiring
 
@@ -49,6 +50,7 @@ def test_write_claude_config_idempotent(tmp_path: Path) -> None:
     assert not path.with_suffix(".json.tmp").exists()
 
 
+@pytest.mark.skipif(not osplat.paths.enforces_posix_modes(), reason="POSIX mode bits")
 def test_write_claude_config_is_owner_only(tmp_path: Path) -> None:
     # The URL embeds the host internal token, so the file must never be
     # group/world readable.
@@ -57,6 +59,7 @@ def test_write_claude_config_is_owner_only(tmp_path: Path) -> None:
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
+@pytest.mark.skipif(not osplat.paths.enforces_posix_modes(), reason="POSIX mode bits")
 def test_write_claude_config_hardens_existing_wide_file(tmp_path: Path) -> None:
     # Unchanged content returns before rewriting, so a file left 0644 by an
     # older version has to be tightened on that path too.
@@ -117,14 +120,14 @@ def test_wire_claude_appends_quoted_flag_to_shell_wrapper(claude_config: Path) -
     assert wired[:2] == ["/bin/zsh", "-ilc"]
     assert wired[2] == (
         "claude --dangerously-skip-permissions "
-        f"--mcp-config {shlex.quote(str(claude_config))}"
+        f"--mcp-config {osplat.paths.quote_arg(str(claude_config))}"
     )
     assert command[2] == "claude --dangerously-skip-permissions"  # input untouched
 
 
 def test_wire_claude_plain_string_command(claude_config: Path) -> None:
     wired = plan_mcp_wiring.wire_command("claude", "claude", 4567, claude_config=claude_config)
-    assert wired == f"claude --mcp-config {shlex.quote(str(claude_config))}"
+    assert wired == f"claude --mcp-config {osplat.paths.quote_arg(str(claude_config))}"
 
 
 def test_wire_claude_second_run_is_noop(claude_config: Path) -> None:
@@ -149,10 +152,8 @@ def test_wire_claude_missing_config_file_is_noop(tmp_path: Path) -> None:
 def test_wire_codex_appends_config_override() -> None:
     wired = plan_mcp_wiring.wire_command("codex", "codex --yolo", 4567)
     # No pane id given, so the override URL carries the host credential.
-    assert wired == (
-        "codex --yolo -c "
-        f"'mcp_servers.navide.url=\"{plan_mcp_wiring.plan_mcp_url(4567)}\"'"
-    )
+    override = f'mcp_servers.navide.url="{plan_mcp_wiring.plan_mcp_url(4567)}"'
+    assert wired == f"codex --yolo -c {osplat.paths.quote_arg(override)}"
     assert "client=host" in wired
 
 
@@ -160,7 +161,10 @@ def test_wire_codex_resume_command() -> None:
     command = ["/bin/zsh", "-lc", "codex resume abc123 --yolo"]
     wired = plan_mcp_wiring.wire_command("codex", command, 4567)
     assert wired[2].startswith("codex resume abc123 --yolo -c ")
-    assert f'mcp_servers.navide.url="{plan_mcp_wiring.plan_mcp_url(4567)}"' in wired[2]
+    # Through the platform's own argv split, so the inner quotes are the
+    # override's and not the quoting's.
+    words = osplat.terminal_backend.parse_command(wired[2])
+    assert words[-2:] == ["-c", f'mcp_servers.navide.url="{plan_mcp_wiring.plan_mcp_url(4567)}"']
 
 
 def test_wire_codex_with_pane_id_uses_pane_credential() -> None:
@@ -183,7 +187,7 @@ def test_wire_codex_second_run_is_noop() -> None:
 def test_wire_copilot_appends_inline_config() -> None:
     wired = plan_mcp_wiring.wire_command("copilot", "copilot --allow-all-tools", 4567)
     inline = plan_mcp_wiring.config_json("copilot", 4567)
-    assert wired == f"copilot --allow-all-tools --additional-mcp-config {shlex.quote(inline)}"
+    assert wired == f"copilot --allow-all-tools --additional-mcp-config {osplat.paths.quote_arg(inline)}"
     assert "client=host" in wired
 
 
@@ -201,6 +205,16 @@ def test_wire_copilot_second_run_is_noop() -> None:
     assert plan_mcp_wiring.wire_command("copilot", once, 4567) == once
 
 
+def test_wire_copilot_detects_its_entry_under_escaped_quotes() -> None:
+    """Already-wired detection reads the argv, not the quoting: the inline
+    JSON escaped the MSVCRT way (``\\"navide\\"``) has no literal ``"navide"``
+    in the command text, and must still count as wired."""
+    inline = plan_mcp_wiring.config_json("copilot", 4567)
+    command = f"copilot --additional-mcp-config {subprocess.list2cmdline([inline])}"
+    assert f'"{plan_mcp_wiring.SERVER_NAME}"' not in command
+    assert plan_mcp_wiring.wire_command("copilot", command, 4567) == command
+
+
 def test_wire_copilot_keeps_user_additional_config() -> None:
     """copilot's flag is additive and repeatable, so a user's own
     --additional-mcp-config is augmented, not stepped aside for."""
@@ -216,7 +230,7 @@ def test_wire_copilot_keeps_user_additional_config() -> None:
 def test_wire_qwen_appends_inline_config_with_http_url() -> None:
     wired = plan_mcp_wiring.wire_command("qwen", "qwen --yolo", 4567, pane_id="p1")
     inline = plan_mcp_wiring.config_json("qwen", 4567, "p1")
-    assert wired == f"qwen --yolo --mcp-config {shlex.quote(inline)}"
+    assert wired == f"qwen --yolo --mcp-config {osplat.paths.quote_arg(inline)}"
     entry = json.loads(inline)["mcpServers"][plan_mcp_wiring.SERVER_NAME]
     # qwen has no "type" discriminator: httpUrl is streamable HTTP, while a
     # plain "url" would be read as SSE.
@@ -431,6 +445,7 @@ def test_wire_cursor_git_exclude_ignores_a_commented_mention(tmp_path: Path) -> 
     assert lines[-1] == ".cursor/mcp.json"
 
 
+@pytest.mark.skipif(not osplat.paths.enforces_posix_modes(), reason="POSIX mode bits")
 def test_wire_cursor_keeps_the_permissions_the_users_file_had(tmp_path: Path) -> None:
     """cursor's mcp.json is where people put API keys for their own servers.
     Rewriting it must not widen a mode the user tightened."""
@@ -530,6 +545,9 @@ class FakeAttribution:
     def register_pane(self, pane_id: str, **kwargs: Any) -> None:
         pass
 
+    def scan_pane_baseline(self, pane_id: str) -> None:
+        pass
+
 
 @pytest.mark.asyncio
 async def test_terminal_create_wires_claude_pane(
@@ -574,7 +592,134 @@ async def test_terminal_create_wires_claude_pane(
     created = session.terminals.created[0]  # type: ignore[attr-defined]
     inline = plan_mcp_wiring.config_json("claude", 4567, "pane-1")
     assert created["command"][2] == (
-        f"claude --dangerously-skip-permissions --mcp-config {shlex.quote(inline)}"
+        f"claude --dangerously-skip-permissions --mcp-config {osplat.paths.quote_arg(inline)}"
     )
     assert "pane=pane-1" in inline
     assert plan_mcp_wiring.caller_token() in inline
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("agent_key", "expected", "shim_env"),
+    [
+        ("claude", "claude auth login", None),
+        ("codex", "codex login", None),
+        # grok and kimi have no MCP flag: their wiring is a per-pane home shim
+        # (mcp_server/pane_home.py), pointed at by the variable named here.
+        # grok has no config-dir variable, so its shim moves HOME itself.
+        ("grok", "grok login", "HOME"),
+        ("kimi", "kimi login", "KIMI_CODE_HOME"),
+        # kilo's push channel appends `--port N --hostname 127.0.0.1`; an
+        # exact-match assertion pins that it stays off the auth subcommand too.
+        ("kilo", "kilo auth login", None),
+    ],
+)
+async def test_terminal_create_leaves_a_login_pane_unwired(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    agent_key: str,
+    expected: str,
+    shim_env: str | None,
+) -> None:
+    """A live login pane gets no MCP flags — its subcommand rejects them.
+
+    `is_login` rewrites the command to the vendor's sign-in subcommand, and
+    a subcommand takes none of the top-level flags this wiring appends:
+    measured against claude 2.1.275, `claude auth login --mcp-config …`
+    exits 1 with `error: unknown option '--mcp-config'`. The guard used to
+    key on `login_profile_id`, which a live login (the active account) does
+    not carry, so the pane died the moment it spawned.
+
+    Both wired vendors are covered: claude takes the config as a flag, codex
+    as `--config` overrides. codex tolerates the flag where claude does not,
+    but a login pane has no business starting MCP servers either way.
+    """
+    (tmp_path / "backend-port").write_text("4567", encoding="utf-8")
+    plan_mcp_wiring.write_claude_config(4567)
+    monkeypatch.setattr(app, "attribution", FakeAttribution())
+    monkeypatch.setattr(app, "_register_workspace_and_backfill", lambda _ws: None)
+
+    async def _no_path_refresh(_agent_key: str) -> None:
+        pass
+
+    monkeypatch.setattr(app, "_ensure_fresh_path_for_spawn", _no_path_refresh)
+    monkeypatch.setattr(app, "_probe_agent_cli_for_spawn", lambda *_a, **_k: None)
+    session = app.Session(FakeWebSocket())  # type: ignore[arg-type]
+    session.terminals = FakeTerminals()  # type: ignore[assignment]
+
+    plugin_wiring.startup(app.plugin_host)
+    try:
+        await app.handle_message(session, {
+            "id": "m1",
+            "type": "terminal.create",
+            "payload": {
+                "pane_id": "login-pane",
+                "agent_key": agent_key,
+                "command": ["/bin/zsh", "-ilc", f"{agent_key} --dangerously-skip-permissions"],
+                "cwd": "/ws",
+                "is_login": True,
+                "metadata": {"workspace_path": "/ws"},
+            },
+        })
+    finally:
+        plugin_wiring.shutdown(app.plugin_host)
+
+    created = session.terminals.created[0]  # type: ignore[attr-defined]
+    assert created["command"][2] == expected
+    # A LIVE login must land in the vendor's real home: signing in under a
+    # shimmed home would write the new credential into the shim instead of
+    # ~/.grok or ~/.kimi-code, leaving the account signed out where it counts.
+    if shim_env is not None:
+        assert shim_env not in (created["env"] or {})
+
+
+@pytest.mark.asyncio
+async def test_terminal_create_still_wires_a_login_pane_that_keeps_its_repl(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`is_login` for a vendor with no sign-in invocation leaves a REPL — wire it.
+
+    Nine vendors declare no `login_command_args`, so `_login_spawn_command`
+    hands their command back unchanged and the pane is an ordinary working
+    pane. `is_login` reaches the backend straight from a request body
+    (`pluginSurfacePorts.ts`), so a caller can set it for any agent; keying
+    the wiring skip on `is_login` would silently strip such a pane's MCP,
+    skills and push wiring. The skip is keyed on the subcommand instead.
+    """
+    (tmp_path / "backend-port").write_text("4567", encoding="utf-8")
+    plan_mcp_wiring.write_claude_config(4567)
+    monkeypatch.setattr(app, "attribution", FakeAttribution())
+    monkeypatch.setattr(app, "_register_workspace_and_backfill", lambda _ws: None)
+
+    async def _no_path_refresh(_agent_key: str) -> None:
+        pass
+
+    monkeypatch.setattr(app, "_ensure_fresh_path_for_spawn", _no_path_refresh)
+    monkeypatch.setattr(app, "_probe_agent_cli_for_spawn", lambda *_a, **_k: None)
+    session = app.Session(FakeWebSocket())  # type: ignore[arg-type]
+    session.terminals = FakeTerminals()  # type: ignore[assignment]
+
+    # qwen: no login_command_args, and its MCP wiring is an appended flag, so
+    # the wiring is observable in the command itself.
+    assert cli_vendor("qwen").login_command_args is None
+
+    plugin_wiring.startup(app.plugin_host)
+    try:
+        await app.handle_message(session, {
+            "id": "m1",
+            "type": "terminal.create",
+            "payload": {
+                "pane_id": "login-pane",
+                "agent_key": "qwen",
+                "command": ["/bin/zsh", "-ilc", "qwen --yolo"],
+                "cwd": "/ws",
+                "is_login": True,
+                "metadata": {"workspace_path": "/ws"},
+            },
+        })
+    finally:
+        plugin_wiring.shutdown(app.plugin_host)
+
+    created = session.terminals.created[0]  # type: ignore[attr-defined]
+    assert created["command"][2].startswith("qwen --yolo ")
+    assert "--mcp-config " in created["command"][2]

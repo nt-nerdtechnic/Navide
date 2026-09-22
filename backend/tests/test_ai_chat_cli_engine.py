@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from typing import Any
 
 import pytest
@@ -46,20 +45,26 @@ def _fake_binary(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
-def killpg_calls(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, int]]:
+def killpg_calls(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, bool]]:
     """Never let _terminate_proc_tree touch real process groups in tests.
 
-    getpgid raises by default (→ per-proc terminate()/kill() fallback);
-    killpg records instead of signalling. Tests that want the killpg path
-    override getpgid and read the recorded calls.
+    The product goes through `osplat.process_tree` (`os.getpgid`/`os.killpg`
+    do not exist on Windows). group_of raises by default (→ per-proc
+    terminate()/kill() fallback); kill_group records instead of signalling.
+    Tests that want the kill_group path override group_of and read the
+    recorded (pgid, force) calls.
     """
-    calls: list[tuple[int, int]] = []
+    calls: list[tuple[int, bool]] = []
 
-    def fake_getpgid(pid: int) -> int:
+    def fake_group_of(pid: int) -> int:
         raise ProcessLookupError(pid)
 
-    monkeypatch.setattr(os, "getpgid", fake_getpgid)
-    monkeypatch.setattr(os, "killpg", lambda pgid, sig: calls.append((pgid, sig)))
+    monkeypatch.setattr(eng.osplat.process_tree, "group_of", fake_group_of)
+    monkeypatch.setattr(
+        eng.osplat.process_tree,
+        "kill_group",
+        lambda pgid, *, force: calls.append((pgid, force)),
+    )
     return calls
 
 
@@ -76,6 +81,23 @@ async def test_run_cli_text_returns_stdout(monkeypatch: pytest.MonkeyPatch) -> N
     assert args[args.index("-p") + 1] == "question"
     assert "--output-format" in args and "text" in args
     assert "--append-system-prompt" in args and "sys" in args
+
+
+@pytest.mark.asyncio
+async def test_run_cli_text_starts_a_windows_shim_through_cmd(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The editor's rewrite/complete path: the binary it resolves on Windows
+    is npm's `claude.cmd`, which CreateProcess refuses to start."""
+    from agent_team_backend.osplat import _windows
+
+    monkeypatch.setattr(eng.osplat, "paths", _windows.paths)
+    monkeypatch.setattr(eng, "resolve_cli_binary", lambda engine="claude": r"C:\npm\claude.cmd")
+    calls = _spawner(monkeypatch, [FakeTextProc(stdout=b"plain answer\n")])
+
+    assert await eng.run_cli_text("question") == "plain answer"
+    assert calls[0][:4] == ["cmd.exe", "/d", "/c", r"C:\npm\claude.cmd"]
+    assert calls[0][calls[0].index("-p") + 1] == "question"
 
 
 @pytest.mark.asyncio

@@ -352,3 +352,40 @@ describe('Plans window — embedded CLI agent panel', () => {
     expect(buildContext()).toContain('No plan document is currently open.')
   })
 })
+
+describe('Plans window — workspace title', () => {
+  it('titles the window with the alias the Host resolved', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      '/?workspace_path=%2FUsers%2Fdev%2Fprojects%2Fagent-team&workspace_display_name=Navide&contribution=window',
+    )
+    await mountPlans()
+    expect(document.title).toBe('Navide — Plans')
+  })
+
+  it('falls back to the folder name when the alias is absent or blank', async () => {
+    for (const search of [
+      '/?workspace_path=%2FUsers%2Fdev%2Fprojects%2Fagent-team&contribution=window',
+      '/?workspace_path=%2FUsers%2Fdev%2Fprojects%2Fagent-team&workspace_display_name=&contribution=window',
+      '/?workspace_path=%2FUsers%2Fdev%2Fprojects%2Fagent-team&workspace_display_name=%20%20&contribution=window',
+    ]) {
+      document.title = 'untouched'
+      window.history.replaceState({}, '', search)
+      const view = await mountPlans()
+      expect(document.title, search).toBe('agent-team — Plans')
+      view.unmount()
+    }
+  })
+
+  it('leaves the title alone for the embedded left contribution, which has none of its own', async () => {
+    document.title = 'Navide'
+    window.history.replaceState(
+      {},
+      '',
+      '/?workspace_path=%2FUsers%2Fdev%2Fprojects%2Fagent-team&workspace_display_name=Navide&contribution=left',
+    )
+    await mountPlans()
+    expect(document.title).toBe('Navide')
+  })
+})

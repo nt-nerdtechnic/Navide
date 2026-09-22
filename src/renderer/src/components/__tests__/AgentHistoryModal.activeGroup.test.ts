@@ -5,6 +5,7 @@
 // filtered list no longer matches what is on screen.
 import { flushPromises, mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
+import { i18n } from '@navide/plugin-ui/foundation'
 import AgentHistoryModal from '../AgentHistoryModal.vue'
 import type { SpawnHistoryEntry } from '../../lib/spawnHistory'
 
@@ -63,6 +64,19 @@ const rowLabels = (wrapper: Awaited<ReturnType<typeof mountModal>>): string[] =>
   wrapper.findAll('.agent-history-row .ah-badge').map((el) => el.text())
 
 describe('AgentHistoryModal working-now group', () => {
+  it('formats older history dates in the selected interface language', async () => {
+    const previous = i18n.global.locale.value
+    i18n.global.locale.value = 'ja-JP'
+    const wrapper = await mountModal(new Set())
+    try {
+      const stamp = new Date('2020-01-02T03:04:05Z')
+      expect(wrapper.text()).toContain(stamp.toLocaleDateString('ja-JP'))
+      i18n.global.locale.value = 'en-US'
+      await wrapper.vm.$nextTick()
+      expect(wrapper.text()).toContain(stamp.toLocaleDateString('en-US'))
+    } finally { wrapper.unmount(); i18n.global.locale.value = previous }
+  })
+
   it('pins a working pane above the day groups and drops it from its day group', async () => {
     const wrapper = await mountModal(new Set(['working']))
 

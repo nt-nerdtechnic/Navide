@@ -695,6 +695,36 @@ describe('TaskerPanel', () => {
     }
   })
 
+  // Windows: neither source exists. Three empty sections titled after
+  // crontab and macOS would describe another operating system to the user;
+  // one platform-level line must say the panel is not broken.
+  it('replaces every section with one platform note when no source is supported', async () => {
+    const none = snapshot()
+    none.platform = 'win32'
+    ;(none.crontab as Record<string, unknown>) = { supported: false, error: null, entries: [] }
+    ;(none.launch_agents as Record<string, unknown>) = { supported: false, error: null, agents: [] }
+    wire.overrides.set('executions.list', none)
+    wrapper = await mountPanel()
+
+    const note = wrapper.find('[data-test="executions-no-source"]')
+    expect(note.exists()).toBe(true)
+    expect(note.text()).toContain('Nothing to list on this platform')
+    expect(note.text()).toContain('Task Scheduler')
+    expect(wrapper.find('[data-section]').exists()).toBe(false)
+    expect(wrapper.find('.tk-unsupported').exists()).toBe(false)
+  })
+
+  it('keeps the sections when only one source is unsupported', async () => {
+    const partial = snapshot()
+    partial.platform = 'linux'
+    ;(partial.launch_agents as Record<string, unknown>) = { supported: false, error: null, agents: [] }
+    wire.overrides.set('executions.list', partial)
+    wrapper = await mountPanel()
+
+    expect(wrapper.find('[data-test="executions-no-source"]').exists()).toBe(false)
+    expect(wrapper.find('[data-section="crontab"]').exists()).toBe(true)
+  })
+
   it('still renders an empty section rather than hiding the category', async () => {
     const none = snapshot()
     ;(none.launch_agents as Record<string, unknown>).agents = []

@@ -656,8 +656,9 @@ watch(() => props.workspacePath, () => { void load({ replaceDraft: !draftDirty.v
 
 <style scoped>
 .execution-policy-pane {
+  /* The Extensions page that hosts this pane owns the scroll, so this is a
+     plain block: a second scroller here would split one page into two. */
   padding: 0 22px 24px;
-  overflow-y: auto;
   font-size: var(--font-sm);
 }
 .ep-section {

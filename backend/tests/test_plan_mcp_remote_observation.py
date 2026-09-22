@@ -179,9 +179,10 @@ async def test_get_status_answers_a_remote_pane_from_the_roster() -> None:
 
 @pytest.mark.asyncio
 async def test_get_status_never_claims_a_local_reading_for_a_remote_pane() -> None:
-    """The two keys that would be a lie: `last_activity` comes from an activity
-    log this machine does not keep for a pane it does not own, and `ui` from a
-    window it cannot reach."""
+    """The keys that would be a lie: `last_activity` comes from an activity
+    log this machine does not keep for a pane it does not own, `ui` from a
+    window it cannot reach, and `usage` from a quota cache for the wrong
+    machine's accounts."""
     _seed_local()
     _seed_remote()
 
@@ -189,6 +190,8 @@ async def test_get_status_never_claims_a_local_reading_for_a_remote_pane() -> No
 
     assert "last_activity" not in result
     assert "ui" not in result
+    # And `usage`: this machine's quota cache is about this machine's logins.
+    assert "usage" not in result
     assert result["source"] == "roster_status"
 
 

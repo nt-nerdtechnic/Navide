@@ -25,6 +25,14 @@ const reclaimFn = () =>
   block('async function reclaimIdlePane(', 'let _idleReclaimTimer')
 
 describe('idle reclaim wiring', () => {
+  it('shares the existing resource poller with risk UI and excludes reclaimed placeholders', () => {
+    const wiring = block('const resourceUsage = useResourceUsage({', 'const resourceRows = computed')
+    expect(wiring).toContain("requestCliRiskAction: (payload) => backend.send('terminal.cli_risk_action', { ...payload })")
+    expect(wiring).toContain('paneCount: realizedPaneCount')
+    expect(wiring).toContain('provide(cliRiskKey, resourceUsage)')
+    expect(appSource).toMatch(/<TerminalPane\s+v-if="p.realized"/)
+  })
+
   // markRemoved unspawns the backend record. A reclaim that did that would
   // survive as a real close on the next restart — the conversation would not
   // come back, which is the opposite of the deal this feature offers.
@@ -210,5 +218,74 @@ describe('idle reclaim wiring', () => {
     expect(sweep).not.toContain('notifyRestore.toast(')
     const onRequest = block('async function reclaimPanesNow(', 'onMounted(() => {')
     expect(onRequest).toContain('pane.terminal.idle-reclaimed')
+  })
+})
+
+// The pane right-click menu is the per-pane entry point, hand-written in the
+// template next to Interrupt and Reapply role. The decision it defers to is
+// already covered above; what rots here is the wiring between the two.
+describe('reclaim in the pane context menu', () => {
+  const menuItem = () => block("$t('action.reapply-role')", "$t('action.remove')")
+
+  it('offers a reclaim on the right-clicked pane', () => {
+    expect(menuItem()).toContain("$t('action.reclaim')")
+  })
+
+  // Any other source for the greyed-out state would let the menu offer a
+  // reclaim the sweep itself refuses — starting with the focused pane.
+  it('takes the greyed-out state from the reclaim candidate list', () => {
+    expect(menuItem()).toContain('disabled: !ctxReclaimable')
+    expect(block('const ctxReclaimable = computed', '// "Send message"')).toContain(
+      'reclaimableNowIds.value.includes('
+    )
+  })
+
+  // Calling reclaimPanesNow straight from the template swallows the refusal:
+  // queued messages and stage watchers live in plain Maps that never invalidate
+  // the candidate list, so a clickable item can still be turned down, and the
+  // count comes back 0 with nothing said.
+  it('reports a refused reclaim instead of looking like a no-op', () => {
+    expect(menuItem()).toContain('reclaimPaneFromMenu(')
+    const handler = block('async function reclaimPaneFromMenu(', '// "Send message"')
+    expect(handler).toContain('resource.reclaim-blocked')
+  })
+})
+
+// The project-level entry point: one row on a workspace heading's menus that
+// reclaims every reclaimable CLI in THAT project. It spans two files, so what
+// rots is the wiring between them — the count App publishes, the prop the menu
+// reads, and the event that comes back.
+describe('reclaim a whole workspace from the sidebar', () => {
+  const controlPane = readFileSync(
+    resolve(__dirname, '../ControlPane.vue'),
+    'utf8'
+  )
+
+  it('counts reclaimable panes per workspace, not window-wide', () => {
+    const counts = block('const reclaimableByWorkspace = computed', '/** "Reclaim this project')
+    expect(counts).toContain('reclaimableNowIds.value')
+    expect(counts).toContain('normWs(p.workspacePath)')
+    expect(appSource).toContain(':reclaimable-by-workspace="reclaimableByWorkspace"')
+  })
+
+  // Reclaiming another project's panes from this heading would be the bug the
+  // per-workspace rebuild count was added to fix.
+  it('reclaims only the panes of the workspace that was clicked', () => {
+    const handler = block('async function onReclaimWorkspacePanes(', 'onMounted(() => {')
+    expect(handler).toContain('reclaimableNowIds.value.filter(')
+    expect(handler).toContain('normWs(panes.value.find')
+    expect(handler).toContain('reclaimPanesNow(ids)')
+    // Same refusal notice the per-pane item shows: the count can go stale.
+    expect(handler).toContain('resource.reclaim-blocked')
+    expect(appSource).toContain('@reclaim-workspace-panes="onReclaimWorkspacePanes"')
+  })
+
+  it('offers the row in both of a heading\'s menus, greyed out at zero', () => {
+    expect(controlPane).toContain("reclaimableByWorkspace?: Record<string, number>")
+    expect(controlPane).toContain("(e: 'reclaim-workspace-panes', workspacePath: string): void")
+    expect(controlPane).toContain("wsMenuAction('reclaim')")
+    expect(controlPane).toContain("wsMoreAction('reclaim')")
+    expect(controlPane).toContain('wsReclaimableCount(wsMenu.path) === 0')
+    expect(controlPane).toContain('wsReclaimableCount(wsMoreMenuPath) === 0')
   })
 })

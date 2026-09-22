@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from agent_team_backend import osplat
 from agent_team_backend.credential_vault import (
     CLAUDE_LIVE_KEYCHAIN_SERVICE,
     DEFAULT_SLOT_ID,
@@ -113,6 +114,10 @@ def test_capture_and_restore_round_trip(tmp_path: Path, agent_key: str, live_rel
     assert live.read_text(encoding="utf-8") == '{"who": "acct-a"}'
 
 
+@pytest.mark.skipif(
+    not osplat.paths.enforces_posix_modes(),
+    reason="POSIX mode bits: NTFS has none, secret_files hardens with an ACL",
+)
 def test_slot_files_are_private(tmp_path: Path) -> None:
     vault = _file_vault(tmp_path)
     _write(tmp_path / "home" / ".codex" / "auth.json", "{}")
@@ -557,7 +562,8 @@ def test_atomic_writes_leave_no_tmp_and_keep_slot_private(tmp_path: Path) -> Non
     )
 
     slot_file = vault.slot_dir("codex", "slot1") / "auth.json"
-    assert stat.S_IMODE(os.stat(slot_file).st_mode) == 0o600
+    if osplat.paths.enforces_posix_modes():  # NTFS has no mode bits
+        assert stat.S_IMODE(os.stat(slot_file).st_mode) == 0o600
     assert list((tmp_path / "home").rglob("*.tmp")) == []
     assert list((tmp_path / "root").rglob("*.tmp")) == []
 
@@ -851,7 +857,8 @@ def test_login_spawn_env_per_agent(tmp_path: Path) -> None:
     assert env_set == {"CLAUDE_CONFIG_DIR": str(home)}
     assert env_remove == ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]
     # The home will hold fresh secrets — private regardless of umask.
-    assert stat.S_IMODE(os.stat(home).st_mode) == 0o700
+    if osplat.paths.enforces_posix_modes():  # NTFS has no mode bits
+        assert stat.S_IMODE(os.stat(home).st_mode) == 0o700
 
     assert vault.login_spawn_env("codex", "s1") == (
         {"CODEX_HOME": str(vault.login_home_path("codex", "s1"))}, []
@@ -1131,20 +1138,78 @@ def test_identity_kilo_slot_snapshot_and_missing_file(tmp_path: Path) -> None:
     assert vault.identity("kilo", "missing") == {"email": None, "signedIn": False}
 
 
-def test_kilo_switch_swaps_the_live_auth_file(tmp_path: Path) -> None:
-    """End to end over the generic file path: capture the live credential into
-    the outgoing slot, publish the target slot to ~/.local/share/kilo."""
+def test_kilo_switch_swaps_only_the_kilo_entry(tmp_path: Path) -> None:
+    """kilo's auth.json is a provider map. A switch rewrites the "kilo" entry
+    and nothing else: the user's other provider keys stay byte-for-byte the
+    same values, and the outgoing entry lands in the default slot."""
     vault = _file_vault(tmp_path)
     live = tmp_path / "home" / ".local" / "share" / "kilo" / "auth.json"
-    _write(live, '{"kilo": {"type": "api", "key": "A"}}')
-    vault.write_slot("kilo", "b", LiveCredentials(
-        secret='{"kilo": {"type": "api", "key": "B"}}'))
+    _write(live, json.dumps({
+        "kilo": {"type": "api", "key": "A"},
+        "anthropic": {"type": "oauth", "access": "keep-me", "refresh": "r"},
+    }))
+    vault.write_slot("kilo", "b", LiveCredentials(secret='{"type": "api", "key": "B"}'))
 
     vault.switch("kilo", DEFAULT_SLOT_ID, "b")
 
-    assert live.read_text(encoding="utf-8") == '{"kilo": {"type": "api", "key": "B"}}'
-    assert vault.read_slot("kilo", DEFAULT_SLOT_ID).secret == \
-        '{"kilo": {"type": "api", "key": "A"}}'
+    after = json.loads(live.read_text(encoding="utf-8"))
+    assert after["kilo"] == {"type": "api", "key": "B"}
+    assert after["anthropic"] == {"type": "oauth", "access": "keep-me", "refresh": "r"}
+    assert json.loads(vault.read_slot("kilo", DEFAULT_SLOT_ID).secret) == {
+        "type": "api", "key": "A",
+    }
+    # The parked document has the vendor's own shape, keyed by scope, and
+    # carries nothing but the kilo entry.
+    parked = json.loads(
+        osplat.secret_files.read_private(vault.slot_dir("kilo", DEFAULT_SLOT_ID) / "auth.json").decode("utf-8")
+    )
+    assert parked == {"kilo": {"type": "api", "key": "A"}}
+
+
+def test_kilo_legacy_whole_file_slot_still_restores(tmp_path: Path) -> None:
+    """Slots parked before the per-provider split hold the whole auth.json;
+    its "kilo" entry is what a restore now publishes, and any other provider
+    that was parked with it stays parked (never pushed over the live one)."""
+    vault = _file_vault(tmp_path)
+    live = tmp_path / "home" / ".local" / "share" / "kilo" / "auth.json"
+    _write(live, '{"kilo": {"type": "api", "key": "A"}, "google": {"type": "api", "key": "G"}}')
+    slot_file = vault.slot_dir("kilo", "b") / "auth.json"
+    slot_file.parent.mkdir(parents=True)
+    slot_file.write_text(
+        '{"kilo": {"type": "oauth", "access": "B"}, "google": {"type": "api", "key": "OLD"}}',
+        encoding="utf-8",
+    )
+
+    vault.switch("kilo", DEFAULT_SLOT_ID, "b")
+
+    after = json.loads(live.read_text(encoding="utf-8"))
+    assert after == {"kilo": {"type": "oauth", "access": "B"}, "google": {"type": "api", "key": "G"}}
+    assert vault.identity("kilo", "b") == {"email": None, "signedIn": True}
+
+
+def test_kilo_switch_uses_xdg_live_credentials(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+    vault = _file_vault(tmp_path)
+    live = tmp_path / "xdg" / "kilo" / "auth.json"
+    fallback = tmp_path / "home" / ".local" / "share" / "kilo" / "auth.json"
+    _write(live, '{"kilo": {"type": "api", "key": "A"}}')
+    _write(fallback, "unrelated fallback credentials")
+    vault.write_slot("kilo", "b", LiveCredentials(secret='{"type": "api", "key": "B"}'))
+
+    vault.switch("kilo", DEFAULT_SLOT_ID, "b")
+
+    assert json.loads(live.read_text(encoding="utf-8")) == {"kilo": {"type": "api", "key": "B"}}
+    assert json.loads(vault.read_slot("kilo", DEFAULT_SLOT_ID).secret) == {"type": "api", "key": "A"}
+    assert fallback.read_text(encoding="utf-8") == "unrelated fallback credentials"
+
+
+def test_kilo_rejects_a_foreign_scope(tmp_path: Path) -> None:
+    vault = _file_vault(tmp_path)
+    with pytest.raises(CredentialVaultError):
+        vault.read_live("kilo", scope="anthropic")
+    # Whole-file vendors take no scope at all.
+    with pytest.raises(CredentialVaultError):
+        vault.read_live("codex", scope="kilo")
 
 
 def test_login_spawn_env_kilo_has_no_isolation(tmp_path: Path) -> None:
@@ -1815,3 +1880,63 @@ def test_a_platform_without_a_keychain_still_uses_the_file(tmp_path, monkeypatch
     )
     vault.write_app_secret("navide-server-token", "tok")
     assert vault.read_app_secret("navide-server-token") == "tok"
+
+
+def test_a_secret_named_with_a_colon_is_stored_on_every_platform(tmp_path, monkeypatch):
+    """Windows has no Keychain, so this file IS the secret there — and a
+    filename holding a colon opens an NTFS alternate data stream instead of a
+    file, failing the write with "the parameter is incorrect".
+
+    `sync_keyring` names the account ring `<prefix>:<namespace>`, so on Windows
+    it could not keep a key at all: every test in test_sync_keyring.py errored
+    in setup, and a signed-in user would have hit exactly the same write.
+    """
+    monkeypatch.setenv("AGENT_TEAM_DATA_DIR", str(tmp_path / "data"))
+    vault = CredentialVault(
+        root=tmp_path / "vault", real_home=tmp_path / "home", platform="linux"
+    )
+    name = "navide-sync-account-key:https-example-com|m1"
+
+    vault.write_app_secret(name, "ring-json")
+
+    path = vault.app_secret_path(name)
+    assert not set(path.name) & set('<>:"/\\|?*'), path.name
+    assert path.exists()
+    assert vault.read_app_secret(name) == "ring-json"
+
+    vault.write_app_secret(name, None)
+    assert vault.read_app_secret(name) is None
+    assert not path.exists()
+
+
+def test_two_secret_names_that_escape_alike_stay_apart(tmp_path, monkeypatch):
+    """The escape has to be one-to-one, or two names would share one file and
+    the second write would silently take the first one's value."""
+    monkeypatch.setenv("AGENT_TEAM_DATA_DIR", str(tmp_path / "data"))
+    vault = CredentialVault(
+        root=tmp_path / "vault", real_home=tmp_path / "home", platform="linux"
+    )
+
+    vault.write_app_secret("navide-x:y", "colon")
+    vault.write_app_secret("navide-x%3Ay", "already-escaped")
+
+    assert vault.read_app_secret("navide-x:y") == "colon"
+    assert vault.read_app_secret("navide-x%3Ay") == "already-escaped"
+
+
+def test_the_fixed_secret_names_keep_the_file_they_already_have(tmp_path, monkeypatch):
+    """Escaping must not move a secret that is already stored: every name the
+    backend uses is a legal filename, so each one maps to itself."""
+    monkeypatch.setenv("AGENT_TEAM_DATA_DIR", str(tmp_path / "data"))
+    vault = CredentialVault(
+        root=tmp_path / "vault", real_home=tmp_path / "home", platform="linux"
+    )
+
+    for name in (
+        "navide-server-token",
+        "navide-device-trust",
+        "navide-sync-account-key",
+        "navide-portable-credential-key",
+        "navide-workspace-digest-salt",
+    ):
+        assert vault.app_secret_path(name).name == name

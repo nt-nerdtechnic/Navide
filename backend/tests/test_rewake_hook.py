@@ -16,13 +16,19 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import re
+import subprocess
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 from fastapi.testclient import TestClient
 
 from agent_team_backend import app as app_module
-from agent_team_backend import claude_hooks, hook_auth, push_delivery
+from agent_team_backend import claude_hooks, hook_auth, osplat, push_delivery
 from agent_team_backend.app import app
+from tests import hook_shell
 
 
 @pytest.fixture()
@@ -316,18 +322,105 @@ def test_the_waiter_names_the_secret_file_and_never_the_secret(tmp_path) -> None
     """The command goes into a world-readable settings file; only the path of
     the 0600 header file may appear in it, and curl reads that when it fires."""
     hook = _rewake_hooks(_installed(tmp_path), "SessionStart")[0]
-    assert f"-H @{hook_auth.header_file()}" in hook["command"] or f"-H @'{hook_auth.header_file()}'" in hook["command"]
+    # Which shell's quoting wraps that path (`-H @'/p'` under sh, `-H '@C:\p'`
+    # under PowerShell) is the renderer's business, so the expected text comes
+    # out of the renderer the installer used, not out of a literal here.
+    reference = osplat.scripts.hook_rewake(
+        port_file=str(tmp_path / "port"),
+        header_file=str(hook_auth.header_file()),
+        url_path="/hooks/claude/rewake",
+        timeout_s=1,
+    )
+    named = re.search(
+        r"""-H\s+['"]?@['"]?""" + re.escape(str(hook_auth.header_file())) + r"""['"]?""",
+        reference,
+    )
+    assert named, f"the renderer stopped pointing curl at the header file: {reference!r}"
+    assert named.group(0) in hook["command"]
     assert hook_auth.token() not in hook["command"]
     assert "?t=" not in hook["command"]
 
 
+# A ceiling on a hung waiter, not an expected duration: once the shell is up
+# the one-shot server answers in milliseconds. The shell is the whole cost —
+# PowerShell 5.1 cold-starts in well under a second on x64 but takes tens of
+# seconds on the emulated Windows arm64 runners, where the flat 20s cap this
+# replaces timed out during the 0.2.7 release dry run with the waiter itself
+# fine. Raising it only makes a genuine hang slower to report, never invisible:
+# the assertions are on the exit code and the stderr, not on the elapsed time.
+_WAITER_TIMEOUT_S = 120.0 if os.name == "nt" else 20.0
+# The listener has to outlive that ceiling. With the shorter one it used to
+# have, a slow shell reached a closed port, curl failed, and the waiter exited
+# 0 with no body — which is exactly what the quiet half asserts, so the test
+# would have passed for the wrong reason instead of reporting the slow start.
+_WAITER_LISTEN_S = _WAITER_TIMEOUT_S + 10.0
+
+
+def test_the_waiter_harness_outlives_its_client() -> None:
+    """The ordering above is the whole reason the quiet half means anything."""
+    assert _WAITER_LISTEN_S > _WAITER_TIMEOUT_S
+
+
 def test_the_waiter_exits_zero_when_the_backend_has_nothing_to_say(tmp_path) -> None:
-    """Exit 2 is the wake signal, so it must be reachable only with a body."""
-    hook = _rewake_hooks(_installed(tmp_path), "SessionStart")[0]
-    command = hook["command"]
-    assert '[ -n "$BODY" ] || exit 0' in command
-    assert command.rstrip().endswith("exit 2")
-    assert ">&2" in command
+    """Exit 2 is the wake signal, so it must be reachable only with a body.
+
+    Fired rather than read: the control flow that reaches exit 2 is written in
+    whichever shell this box installed the hook for, and the guarantee is the
+    exit code and the stderr the CLI turns into a system reminder — not the
+    spelling either shell uses to get there.
+    """
+    quiet = _fire_waiter(tmp_path / "quiet", b"")
+    assert quiet.returncode == 0, f"an empty answer woke the agent: {quiet.stderr!r}"
+    assert quiet.stderr.strip() == ""
+
+    envelope = b'{"kind":"msg","from":"builder"}'
+    woken = _fire_waiter(tmp_path / "woken", envelope)
+    assert woken.returncode == 2, f"a real answer did not wake the agent: {woken!r}"
+    assert envelope.decode() in woken.stderr
+    assert woken.stdout.strip() == ""
+
+
+def _fire_waiter(home, body: bytes):
+    """Install the hooks, then run the parked waiter against a one-shot server
+    that answers `body`; returns the finished process."""
+    home.mkdir(parents=True, exist_ok=True)
+    port_file = home / "backend.port"
+    settings = home / "settings.json"
+    claude_hooks.install_hooks(str(port_file), settings_file=settings)
+    hook = _rewake_hooks(json.loads(settings.read_text(encoding="utf-8"))["hooks"], "Stop")[0]
+    # Resolved before the server thread starts, so a box with neither shell
+    # skips instead of leaving one waiting out its timeout.
+    argv = hook_shell.shell_argv(hook)
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    server.timeout = _WAITER_LISTEN_S
+    thread = threading.Thread(target=server.handle_request)
+    thread.start()
+    port_file.write_text(str(server.server_port), encoding="utf-8")
+    try:
+        return subprocess.run(
+            argv,
+            input='{"hook_event_name":"SessionStart","session_id":"session-1"}',
+            text=True,
+            capture_output=True,
+            timeout=_WAITER_TIMEOUT_S,
+            check=False,
+        )
+    finally:
+        thread.join(timeout=_WAITER_LISTEN_S + 5)
+        server.server_close()
 
 
 def test_reinstalling_does_not_stack_waiters(tmp_path) -> None:

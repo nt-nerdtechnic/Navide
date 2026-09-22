@@ -443,6 +443,10 @@ async def test_cli_send_and_wait_returns_the_turn_the_target_produced(
     await _register(window_b, "pw", "worker", "/ws/beta")
     # B answered something else before this exchange started.
     await log_activity("pw", "/ws/beta", "turn_complete", "the answer to the PREVIOUS question")
+    # The tool tells B's new turn from this one by ts_monotonic; on Windows
+    # (Python 3.12) time.monotonic() ticks every ~15.6 ms, so a delivery that
+    # lands in the same tick would look like no activity at all.
+    await asyncio.sleep(0.05)
 
     async def window_b_behaviour() -> None:
         payload = await _await_delivery(window_b)

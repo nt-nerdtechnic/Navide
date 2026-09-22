@@ -1,5 +1,8 @@
 import { accessSync, constants, existsSync } from 'node:fs'
-import { delimiter, isAbsolute, join } from 'node:path'
+import { homedir } from 'node:os'
+import { delimiter, extname, isAbsolute, join } from 'node:path'
+
+import { editorBundledPaths, isWindows, type EditorInstallHints } from '../shared/osplat'
 
 // Default-editor routing. Every "open this file" in the app funnels through
 // window:openEditor, so this module decides — per request — whether it goes to
@@ -18,23 +21,22 @@ export interface EditorDefinition {
   kind: EditorKind
   /** Executable names looked up on PATH, in order. */
   commands: string[]
-  /** Absolute paths tried when PATH has no hit (macOS ships the CLI inside
-   *  the .app, and installing it onto PATH is a manual opt-in most users skip). */
-  bundledPaths: string[]
+  /** Absolute paths tried when PATH has no hit — the platform's own idea of
+   *  where an installed editor keeps a CLI that never made it onto PATH
+   *  (see editorBundledPaths). A function so the platform is asked at
+   *  resolution time, not at module load. */
+  bundledPaths: () => string[]
   /** Argv after the executable for a file open. */
   fileArgs: (file: string, line?: number) => string[]
   /** Argv after the executable for a folder open. */
   folderArgs: (dir: string) => string[]
 }
 
-const vscodeLike = (id: string, command: string, appName: string): EditorDefinition => ({
+const vscodeLike = (id: string, hints: EditorInstallHints): EditorDefinition => ({
   id,
   kind: 'external',
-  commands: [command],
-  bundledPaths: [
-    `/Applications/${appName}.app/Contents/Resources/app/bin/${command}`,
-    `${process.env.HOME ?? ''}/Applications/${appName}.app/Contents/Resources/app/bin/${command}`,
-  ],
+  commands: [hints.command],
+  bundledPaths: () => editorBundledPaths(homedir(), hints),
   // -g is the goto form: without it the file:line suffix is taken literally as
   // part of the filename.
   fileArgs: (file, line) => (line && line > 0 ? ['-g', `${file}:${line}`] : [file]),
@@ -45,8 +47,16 @@ const vscodeLike = (id: string, command: string, appName: string): EditorDefinit
  *  are handled by the host (plugin view / shell.openPath) and so carry no
  *  command; `custom` is driven entirely by the user's template. */
 export const BUILT_IN_EDITORS: EditorDefinition[] = [
-  vscodeLike('vscode', 'code', 'Visual Studio Code'),
-  vscodeLike('cursor', 'cursor', 'Cursor'),
+  vscodeLike('vscode', {
+    command: 'code',
+    macApp: 'Visual Studio Code',
+    // deb/rpm from Microsoft, and the Arch AUR package, respectively.
+    linuxPrefixes: ['/usr/share/code', '/opt/visual-studio-code'],
+    flatpakId: 'com.visualstudio.code',
+  }),
+  // Cursor on Linux ships as an AppImage with no fixed prefix and no
+  // Flatpak; only a `cursor` the user put on PATH themselves is found.
+  vscodeLike('cursor', { command: 'cursor', macApp: 'Cursor' }),
 ]
 
 /** Editor ids that need no detection because the host implements them. */
@@ -163,10 +173,13 @@ export interface DetectedEditor {
   available: boolean
 }
 
-/** Does this path exist and carry the executable bit? */
+/**
+ * Does this path exist and carry the executable bit? Windows has no such
+ * bit — `X_OK` there is at best `F_OK` — so presence is the whole answer.
+ */
 function isExecutable(path: string, access: (p: string, mode: number) => void = accessSync): boolean {
   try {
-    access(path, constants.X_OK)
+    access(path, isWindows() ? constants.F_OK : constants.X_OK)
     return true
   } catch {
     return false
@@ -174,8 +187,27 @@ function isExecutable(path: string, access: (p: string, mode: number) => void = 
 }
 
 /**
+ * The suffixes a bare command name resolves under on Windows: `code` and
+ * `cursor` on PATH there are `code.cmd` and `cursor.cmd`.
+ */
+const WINDOWS_PATHEXT = ['.exe', '.cmd', '.bat', '.com']
+
+/**
+ * The names a PATH lookup tries on Windows. Only suffixed ones: CreateProcess
+ * never runs an extensionless file, and VS Code's `bin\` (Cursor's too) ships
+ * the POSIX `code` shell script right beside `code.cmd`, so a bare hit there
+ * would be the one file that cannot start. A name that already carries a
+ * suffix is looked up as written.
+ */
+function windowsCandidateNames(name: string): string[] {
+  if (WINDOWS_PATHEXT.includes(extname(name).toLowerCase())) return [name]
+  return WINDOWS_PATHEXT.map((ext) => name + ext)
+}
+
+/**
  * Resolve an executable name against a PATH string. Returns the absolute path
- * of the first executable hit, or null.
+ * of the first executable hit, or null. On Windows a bare name is tried under
+ * each PATHEXT suffix, the way cmd.exe resolves it.
  */
 export function whichIn(
   name: string,
@@ -184,11 +216,39 @@ export function whichIn(
   executable: (p: string) => boolean = isExecutable
 ): string | null {
   if (isAbsolute(name)) return exists(name) && executable(name) ? name : null
+  const names = isWindows() ? windowsCandidateNames(name) : [name]
   for (const dir of pathEnv.split(delimiter).filter(Boolean)) {
-    const candidate = join(dir, name)
-    if (exists(candidate) && executable(candidate)) return candidate
+    for (const candidateName of names) {
+      const candidate = join(dir, candidateName)
+      if (exists(candidate) && executable(candidate)) return candidate
+    }
   }
   return null
+}
+
+/**
+ * Suffixes CreateProcess cannot run on its own: since the CVE-2024-27980 fix
+ * Node refuses to spawn a `.cmd`/`.bat` without `shell: true` (EINVAL), and
+ * that is exactly what `code` and `cursor` are on a Windows PATH.
+ */
+const WINDOWS_SHELL_SCRIPT_EXTS = ['.cmd', '.bat']
+
+/** Whether spawning this command has to go through cmd.exe. */
+export function needsWindowsShell(command: string): boolean {
+  return isWindows() && WINDOWS_SHELL_SCRIPT_EXTS.includes(extname(command).toLowerCase())
+}
+
+/**
+ * Quote one argv element for the cmd.exe command line `shell: true` builds
+ * by joining argv with spaces. Wrapped in double quotes when it holds
+ * whitespace or a cmd.exe metacharacter, so a path with spaces stays one
+ * argument through the `.cmd` shim's `%*` and reaches the editor's own
+ * CommandLineToArgvW intact. A double quote cannot occur in a Windows path,
+ * so escaping it is only for the odd custom argument.
+ */
+export function quoteForCmd(arg: string): string {
+  if (arg !== '' && !/[\s"&|<>^()]/.test(arg)) return arg
+  return `"${arg.replace(/"/g, '\\"')}"`
 }
 
 /**
@@ -208,7 +268,7 @@ export function resolveEditorCommand(
     const hit = whichIn(name, pathEnv, exists, executable)
     if (hit) return hit
   }
-  for (const path of def.bundledPaths) {
+  for (const path of def.bundledPaths()) {
     if (path && exists(path) && executable(path)) return path
   }
   return null

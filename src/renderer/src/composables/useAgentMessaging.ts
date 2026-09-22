@@ -9,6 +9,7 @@ import {
   isQualifiedTarget,
   normalizeMessagingName,
   uniqueMessagingName,
+  PUSH_UNCLEAR_LIMIT,
 } from '../lib/agentMessaging'
 
 /**
@@ -97,8 +98,13 @@ export interface AgentMessage {
    *  a sending pane) rather than one an agent sent. It stops a bounced notice
    *  from producing another one, and it is what the log panel reads to suppress
    *  Resend — so unlike `hold` it is persisted: after a reload the panel must
-   *  still know what a row is without parsing its text. */
-  kind?: 'notice' | 'fallback'
+   *  still know what a row is without parsing its text.
+   *
+   *  'ack' marks a message that is logged and never delivered: a bare
+   *  acknowledgement ("got it", "done") the user may want to read in the log,
+   *  but that must not interrupt the recipient. It is the only kind that never
+   *  enters a queue, so nothing is ever typed into the recipient's pane. */
+  kind?: 'notice' | 'fallback' | 'ack'
   /** Failure reason when status === 'failed'. */
   reason?: MessageReason
   /** Why this message has not been injected yet, while status === 'queued'. */
@@ -112,8 +118,12 @@ export interface AgentMessage {
    *  a recipient that asked for it itself (the `cli_read_incoming` MCP tool),
    *  `push:<kind>` for one of the vendor push channels. Like `hold` it is
    *  in-memory only: it describes how a live row got out, and a restored log has
-   *  no delivery left to explain. */
-  route?: 'hook' | 'read' | `push:${string}`
+   *  no delivery left to explain.
+   *
+   *  'ack' is the odd one out: it records that the message deliberately never
+   *  went out at all. The row is settled and correct — an 'ack' kind is only
+   *  ever logged — so this says how it was settled, not how it was typed in. */
+  route?: 'hook' | 'read' | 'ack' | `push:${string}`
   /** `uid` of the message this one answers, set when the sender echoed back the
    *  correlation id carried in that message's envelope. Persisted (`reply_to`):
    *  a recipient reading its own mail over MCP has to be able to see what a
@@ -158,7 +168,7 @@ export interface PersistedMessageRow {
   recipient_agent?: string
   /** See AgentMessage.kind. Absent on rows written before the column existed,
    *  which is exactly right — every one of them is an ordinary message. */
-  kind?: 'notice' | 'fallback'
+  kind?: 'notice' | 'fallback' | 'ack'
   /** See AgentMessage.inReplyTo — the `uid` of the row this one answers. */
   reply_to?: string
   /** See AgentMessage.correlationId. */
@@ -208,8 +218,11 @@ export interface RouteResult {
 
 export interface MessagingDeps {
   now: () => number
-  /** Inject text into a pane; resolves true when the injection verified OK. */
-  deliver: (paneId: string, text: string) => Promise<boolean>
+  /** Inject text into a pane; resolves true when the injection verified OK.
+   *  `shouldAbort` turns true when the user withdraws the message while the
+   *  pane's PTY is holding it unread (see cancelMessage); an injection that
+   *  honours it clears what it wrote and resolves false. */
+  deliver: (paneId: string, text: string, shouldAbort?: () => boolean) => Promise<boolean>
   /** True when the pane can accept an injection right now (idle + settled). */
   isPaneIdle: (paneId: string) => boolean
   /** Why isPaneIdle() said no, as an i18n key suffix under `msg.hold-*`. Must
@@ -339,6 +352,13 @@ const CANCELLED_REASON: MessageReason = { key: 'cancelled' }
  *  reason rides along only to say HOW it arrived; every consumer of a positive
  *  report ignores it (see resolveRemoteDelivery). */
 export const READ_REASON: MessageReason = { key: 'read' }
+/** Verdict reported back for a message that was logged and never delivered.
+ *
+ *  Paired with `ok: true`, like {@link READ_REASON}: an ack did not fail, it
+ *  was deliberately never typed into the recipient. The sender's
+ *  cli_check_message would otherwise sit on `queued` forever and read as
+ *  stuck. */
+export const ACK_REASON: MessageReason = { key: 'ack' }
 
 // ── Module-level singleton state ──────────────────────────────────────────
 let deps: MessagingDeps | null = null
@@ -399,7 +419,7 @@ function fromPersistedRow(row: PersistedMessageRow): AgentMessage {
   if (row.remote_workspace) m.remoteWorkspace = row.remote_workspace
   if (row.sender_agent) m.fromAgent = row.sender_agent
   if (row.recipient_agent) m.toAgent = row.recipient_agent
-  if (row.kind === 'notice' || row.kind === 'fallback') m.kind = row.kind
+  if (row.kind === 'notice' || row.kind === 'fallback' || row.kind === 'ack') m.kind = row.kind
   if (row.reply_to) m.inReplyTo = row.reply_to
   if (row.correlation_id) m.correlationId = row.correlation_id
   return m
@@ -420,6 +440,12 @@ const delivering = new Set<string>()
 const envelopes = new Map<number, string>()
 /** Enqueue timestamps per `${from}→${to}` pair, for rate limiting. */
 const pairSends = new Map<string, number[]>()
+/** msgKeys this window has already accepted, newest last. The backend
+ *  broadcasts each routed message exactly once, but a window holding two
+ *  sockets (a connect() race) hears every broadcast twice — and each copy
+ *  would otherwise become its own queued row, injected back to back. */
+const acceptedMsgKeys = new Set<string>()
+const ACCEPTED_MSG_KEYS_CAP = 500
 /** Outbound cross-workspace messages awaiting a delivery report, by msgKey. */
 const remoteOutbound = new Map<string, { id: number; sentAt: number }>()
 /** Inbound cross-workspace messages to report back on, message id → msgKey. */
@@ -431,6 +457,14 @@ const correlations = new Map<string, { id: number; sentAt: number }>()
 /** Messages a recipient has reserved but not yet consumed, by message id. See
  *  reserveIncoming(); `reservedAt` is what expireReadReservations() reads. */
 const readReserved = new Map<number, { paneId: string; reservedAt: number }>()
+/** Messages withdrawn while `delivering` on a `pty-blocked` hold — the one
+ *  in-flight state a cancel can still reach, because the pane has not read
+ *  the text yet. The injection polls this and clears what it wrote. */
+const cancelRequested = new Set<number>()
+/** How many times each queued message's push has come back `unclear`, by
+ *  message id. Compared against {@link PUSH_UNCLEAR_LIMIT} in pumpPane();
+ *  cleared when the message gets out or leaves the queue. */
+const pushUnclearCount = new Map<number, number>()
 
 function configureMessaging(d: MessagingDeps): void {
   deps = d
@@ -548,6 +582,7 @@ function failMessage(id: number, reason: MessageReason): void {
     notifySenderOfFailure(m)
   }
   envelopes.delete(id)
+  pushUnclearCount.delete(id)
 }
 
 /**
@@ -761,8 +796,10 @@ export interface SendOptions {
   includeReplyHint?: boolean
   /** Correlation id the sender echoed back, when this message is a reply. */
   replyTo?: string
-  /** Internal: marks a Navide-authored notice. See notifySenderOfFailure(). */
-  kind?: 'notice' | 'fallback'
+  /** Internal: marks a Navide-authored notice. See notifySenderOfFailure().
+   *  'ack' marks a bare acknowledgement: logged for the user to read, never
+   *  injected into the recipient's pane. */
+  kind?: 'notice' | 'fallback' | 'ack'
 }
 
 /**
@@ -816,6 +853,18 @@ function sendMessage(from: string, to: string, content: string, opts: SendOption
 
   const key = pairKey(from, to, false)
   pairSends.set(key, [...(pairSends.get(key) ?? []), now])
+  if (msg.kind === 'ack') {
+    // Never enqueued, so pumpPane can never reach it and deliverAgentMessage is
+    // never called: this is the only point that can guarantee the recipient's
+    // input box is left alone. The row stays in the log for the user to read.
+    //
+    // Deliberately AFTER the rate limit and queue cap checks, and after the
+    // pair's budget is spent above: an ack still costs the loop guard, or it
+    // would be a hole through the rate limit that two agents acking each other
+    // could ride forever.
+    markLoggedOnly(msg)
+    return msg
+  }
   if (msg.kind === 'notice') {
     // A notice is Navide's own text, already in the form the pane must see: its
     // first line says "delivery failed", which is how an agent tells it apart
@@ -936,10 +985,21 @@ function acceptRemoteMessage(args: {
   /** Correlation id the sender echoed back when this message is a reply to one
    *  this window sent. Unknown ids leave the row unlinked. */
   replyTo?: string
+  /** Only ever 'ack', and only from the MCP cli_send tool: the message is
+   *  logged here and never injected. Absent for every other sender. */
+  kind?: 'ack'
 }): boolean {
   if (!deps) return false
   const localName = nameByPane.get(args.targetPaneId)
   if (!localName) return false
+  // Checked after the ownership test so a window that does not own the target
+  // never records the key — the owning window still has to accept it.
+  if (acceptedMsgKeys.has(args.msgKey)) return false
+  acceptedMsgKeys.add(args.msgKey)
+  if (acceptedMsgKeys.size > ACCEPTED_MSG_KEYS_CAP) {
+    const oldest = acceptedMsgKeys.values().next().value
+    if (oldest !== undefined) acceptedMsgKeys.delete(oldest)
+  }
 
   if (args.rateLimit) {
     const now = deps.now()
@@ -981,9 +1041,19 @@ function acceptRemoteMessage(args: {
     // same message its sender does.
     correlationId: args.msgKey,
   }
+  if (args.kind === 'ack') msg.kind = 'ack'
   stampAgents(msg, args.fromAgent, agentByPane.get(args.targetPaneId))
   if (args.replyTo) linkReply(msg, args.replyTo)
   pushLog(msg)
+
+  if (args.kind === 'ack') {
+    // Settled here rather than enqueued: see markLoggedOnly. Reporting `ok:
+    // true` is not optional — without it the sender's cli_check_message sits on
+    // `queued` until it reads as stale two minutes later.
+    markLoggedOnly(msg)
+    deps.reportDelivery?.(args.msgKey, true, ACK_REASON)
+    return true
+  }
 
   const q = queues.get(args.targetPaneId) ?? []
   if (q.length >= QUEUE_CAP) {
@@ -1215,13 +1285,23 @@ async function pumpPane(paneId: string): Promise<void> {
   let ackReason: MessageReason | null = null
   let requeued = false
   try {
-    const ok = await deliverOnce(paneId, msg, envelope, push)
-    if (ok === null) {
+    const ok = await deliverOnce(paneId, msg, envelope, push, () => cancelRequested.has(id))
+    const stuck = ok === 'unclear'
+      && (pushUnclearCount.get(id) ?? 0) + 1 >= PUSH_UNCLEAR_LIMIT
+    if (stuck) {
+      // The composer would not clear after PUSH_UNCLEAR_LIMIT pushes: the
+      // message is never getting through this way, and re-queuing it again
+      // would only park the pane's whole queue behind it. Fail it so the
+      // sender hears about it.
+      ackReason = { key: 'push-stuck' }
+      failMessage(id, ackReason)
+    } else if (ok === null || ok === 'unclear') {
       // Pushed and it did not land, and typing it in now is not an option —
       // either the channel may still be holding the text, or the typed path's
       // own gate is shut because the push was chosen for a pane someone is
       // typing in. Put the message back at the head of its queue with nothing
       // spent: the next pump sends it whichever way is open then.
+      if (ok === 'unclear') pushUnclearCount.set(id, (pushUnclearCount.get(id) ?? 0) + 1)
       requeued = true
       msg.status = 'queued'
       delete msg.route
@@ -1232,6 +1312,13 @@ async function pumpPane(paneId: string): Promise<void> {
       deps.persistUpdate?.([{ uid: msg.uid, status: 'delivered', delivered_at: msg.deliveredAt }])
       envelopes.delete(id)
       ackOk = true
+    } else if (cancelRequested.has(id)) {
+      ackReason = CANCELLED_REASON
+      markCancelled(msg)
+    } else if (msg.status !== 'delivering') {
+      // Settled from outside while the injection was still waiting on the
+      // pane — unregisterPane failed the whole queue as the pane closed, and
+      // told the sender. A second verdict here would tell it twice.
     } else {
       ackReason = { key: 'inject-failed' }
       failMessage(id, ackReason)
@@ -1244,8 +1331,10 @@ async function pumpPane(paneId: string): Promise<void> {
     failMessage(id, ackReason)
   } finally {
     delivering.delete(paneId)
+    cancelRequested.delete(id)
     if (!requeued) {
       q.shift()
+      pushUnclearCount.delete(id)
       ackInbound(id, ackOk, ackReason)
     }
   }
@@ -1255,32 +1344,57 @@ async function pumpPane(paneId: string): Promise<void> {
  * One delivery attempt for the head of a pane's queue.
  *
  * Returns true when the message reached the pane, false when it demonstrably
- * did not, and null when a push failed and typing it in now would be wrong —
- * the caller puts the message back rather than choosing between losing it and
- * writing it into a pane that cannot take it.
+ * did not, and null or 'unclear' when a push failed and typing it in now would
+ * be wrong — the caller puts the message back rather than choosing between
+ * losing it and writing it into a pane that cannot take it.
  *
  * Two separate reasons to hold off, and both have to be checked. The channel
  * may still be holding the text ('unclear'), in which case typing would submit
- * the envelope twice over. And the push may have been chosen precisely because
- * the typed path's gate was shut — someone is typing in the pane — so the
- * fallback is re-gated rather than assumed.
+ * the envelope twice over — passed through by name so the caller can count how
+ * often the same message hits it. And the push may have been chosen precisely
+ * because the typed path's gate was shut — someone is typing in the pane — so
+ * the fallback is re-gated rather than assumed (null).
  */
 async function deliverOnce(
   paneId: string,
   msg: AgentMessage,
   envelope: string,
   push: { kind: string } | null,
-): Promise<boolean | null> {
+  shouldAbort: () => boolean,
+): Promise<boolean | null | 'unclear'> {
   if (!deps) return false
   if (push && deps.pushDeliver) {
     msg.route = `push:${push.kind}`
     const outcome = await deps.pushDeliver(paneId, envelope)
     if (outcome === 'landed') return true
     delete msg.route
-    if (outcome === 'unclear') return null
+    if (outcome === 'unclear') return 'unclear'
     if (!deps.isPaneIdle(paneId)) return null
   }
-  return deps.deliver(paneId, envelope)
+  return deps.deliver(paneId, envelope, shouldAbort)
+}
+
+/**
+ * Why the message being typed into `paneId` has not gone in yet — today only
+ * `pty-blocked`, reported by the injection while the pane's PTY holds the
+ * text unread. Same hold field and the same report to the backend as a queued
+ * message's, so cli_check_message shows it the same way; `undefined` clears it
+ * once the wait ends. No new status: the row stays `delivering`, which is what
+ * it is.
+ */
+function setDeliveringHold(paneId: string, hold: MessageHold | undefined): void {
+  const id = queues.get(paneId)?.[0]
+  if (id === undefined || !delivering.has(paneId)) return
+  const m = findMessage(id)
+  if (!m || m.status !== 'delivering') return
+  setHold(m, hold)
+}
+
+/** A `delivering` message the user may still withdraw: its pane has not read
+ *  the text (see setDeliveringHold), so aborting the injection and clearing
+ *  the composer leaves nothing behind. */
+function withdrawable(m: AgentMessage): boolean {
+  return m.status === 'delivering' && m.hold?.key === 'pty-blocked' && !cancelRequested.has(m.id)
 }
 
 /**
@@ -1549,6 +1663,7 @@ function unqueue(id: number): boolean {
   if (!loc) return false
   if (heldInFlight(loc)) return false
   loc.q.splice(loc.index, 1)
+  pushUnclearCount.delete(id)
   return true
 }
 
@@ -1595,6 +1710,26 @@ function markRead(m: AgentMessage): void {
   ackInbound(m.id, true, READ_REASON)
 }
 
+/**
+ * Settle a message that is logged but never delivered.
+ *
+ * An 'ack' never enters a queue, so nothing downstream will ever settle it:
+ * pumpPane cannot reach a message no queue holds, and the row would sit on
+ * `queued` for good. Mirrors markRead() — the row succeeded, so no `reason` is
+ * written onto it; `route` records how it got out, which here is that it
+ * deliberately did not.
+ *
+ * `route` is not persisted, like 'hook' and 'read' before it: PersistedMessageUpdate
+ * carries no such column, and a restored row has no delivery left to explain.
+ */
+function markLoggedOnly(m: AgentMessage): void {
+  m.status = 'delivered'
+  m.deliveredAt = deps ? deps.now() : m.createdAt
+  m.route = 'ack'
+  delete m.hold
+  deps?.persistUpdate?.([{ uid: m.uid, status: 'delivered', delivered_at: m.deliveredAt }])
+}
+
 /** The routing key an outbound cross-workspace message is known by, while it is
  *  still awaiting a report. */
 function outboundKeyOf(id: number): string | null {
@@ -1617,7 +1752,15 @@ function outboundKeyOf(id: number): string | null {
  */
 function cancelMessage(id: number): boolean {
   const m = findMessage(id)
-  if (!m || m.status !== 'queued') return false
+  if (!m) return false
+  if (withdrawable(m)) {
+    // The injection settles it: pumpPane marks the row cancelled once the
+    // abort has cleared the pane, so the composer is never reported empty
+    // before it is.
+    cancelRequested.add(id)
+    return true
+  }
+  if (m.status !== 'queued') return false
   if (unqueue(id)) {
     markCancelled(m)
     // An inbound cross-workspace row's sender is still waiting on a verdict.
@@ -1649,6 +1792,10 @@ function cancelRemoteInbound(msgKey: string): boolean {
   for (const [id, key] of remoteInbound) {
     if (key !== msgKey) continue
     const m = findMessage(id)
+    if (m && withdrawable(m)) {
+      cancelRequested.add(id)
+      return true
+    }
     if (!m || m.status !== 'queued' || !unqueue(id)) return false
     markCancelled(m)
     ackInbound(id, false, CANCELLED_REASON)
@@ -1676,6 +1823,10 @@ function pauseMessaging(): void {
  *
  * A cancelled row is re-sendable for the same reason a failed one is: the text
  * never reached anyone, so sending it again delivers it once, not twice.
+ *
+ * `kind` is not carried over, and nothing reaches here that would need it to be:
+ * the panel gives a 'notice' and an 'ack' row no Resend button, so neither can
+ * be retried into an ordinary message.
  */
 function retryMessage(id: number): AgentMessage | null {
   const m = findMessage(id)
@@ -1710,10 +1861,13 @@ export function _resetMessagingForTest(): void {
   delivering.clear()
   envelopes.clear()
   pairSends.clear()
+  acceptedMsgKeys.clear()
   remoteOutbound.clear()
   remoteInbound.clear()
   correlations.clear()
   readReserved.clear()
+  pushUnclearCount.clear()
+  cancelRequested.clear()
 }
 
 export function useAgentMessaging() {
@@ -1734,6 +1888,7 @@ export function useAgentMessaging() {
     retryMessage,
     cancelMessage,
     cancelRemoteInbound,
+    setDeliveringHold,
     acceptRemoteMessage,
     noteOutboundMessage,
     resolveRemoteDelivery,

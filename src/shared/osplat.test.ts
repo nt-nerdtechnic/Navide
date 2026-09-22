@@ -4,6 +4,7 @@ import {
   isLinux,
   isMac,
   isWindows,
+  editorBundledPaths,
   loginPathFallbacks,
   loginShellFlags,
   needsDrawnWindowControls,
@@ -11,8 +12,15 @@ import {
   normalizePlatformId,
   platformId,
   setPlatformId,
+  shellCommandArgv,
   type PlatformId,
 } from './osplat'
+
+// The platform to restore after a test that switched it: whatever this file
+// saw when it loaded — the host, or an injection from a vitest setup file.
+// Restoring to the host instead silently undid that injection for every
+// later test in the file (see src/shared/platformBaseline.test.ts).
+const BASELINE = platformId()
 
 // The module caches an injected value, so every test has to hand it back or
 // the next one inherits a platform it did not ask for.
@@ -22,10 +30,9 @@ const asPlatform = (id: PlatformId, run: () => void): void => {
 }
 
 afterEach(() => {
-  // `process.platform` is what main and preload actually resolve against, so
-  // restoring to it rather than to a fixed id keeps the suite honest about
-  // which machine it is on.
-  setPlatformId(normalizePlatformId(process.platform))
+  // Back to what this file loaded with — the host, or a suite-wide
+  // injection — never to a fixed id.
+  setPlatformId(BASELINE)
 })
 
 describe('normalizePlatformId', () => {
@@ -92,10 +99,19 @@ describe('defaultShell', () => {
     asPlatform('win32', () => expect(defaultShell({})).toBe('powershell.exe'))
   })
 
-  it('honours COMSPEC on Windows before guessing at PowerShell', () => {
+  // COMSPEC is set on every Windows session and names cmd.exe, whose syntax
+  // is nothing like what the spawn paths assume — honouring it would have made
+  // cmd.exe the effective default for everyone.
+  it('ignores COMSPEC on Windows and still lands on PowerShell', () => {
     asPlatform('win32', () => {
-      expect(defaultShell({ COMSPEC: 'C:\\Windows\\system32\\cmd.exe' })).toBe(
-        'C:\\Windows\\system32\\cmd.exe'
+      expect(defaultShell({ COMSPEC: 'C:\\Windows\\system32\\cmd.exe' })).toBe('powershell.exe')
+    })
+  })
+
+  it('still prefers SHELL on Windows when a user has set one', () => {
+    asPlatform('win32', () => {
+      expect(defaultShell({ SHELL: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe' })).toBe(
+        'C:\\Program Files\\PowerShell\\7\\pwsh.exe'
       )
     })
   })
@@ -140,10 +156,18 @@ describe('loginShellFlags', () => {
 })
 
 describe('loginPathFallbacks', () => {
-  it('names the Homebrew prefixes on macOS', () => {
+  // The bug this closes: `npm install -g @openai/codex` puts the binary under
+  // whichever version manager owns npm, so a Finder launch whose login-shell
+  // probe timed out reported an installed codex as missing — while claude,
+  // whose installer writes ~/.local/bin, resolved fine.
+  it('names the Homebrew prefixes and the Node manager dirs on macOS', () => {
     asPlatform('darwin', () => {
       expect(loginPathFallbacks('/Users/x')).toEqual([
         '/Users/x/.local/bin',
+        '/Users/x/Library/pnpm',
+        '/Users/x/.npm-global/bin',
+        '/Users/x/.volta/bin',
+        '/Users/x/.bun/bin',
         '/usr/local/bin',
         '/opt/homebrew/bin',
         '/opt/homebrew/sbin',
@@ -159,13 +183,198 @@ describe('loginPathFallbacks', () => {
       expect(loginPathFallbacks('/home/x')).toEqual([
         '/home/x/.local/bin',
         '/home/x/.local/share/pnpm',
+        '/home/x/.npm-global/bin',
+        '/home/x/.cargo/bin',
+        '/home/x/.bun/bin',
         '/usr/local/bin',
         '/snap/bin',
       ])
     })
   })
 
+  // nvm is how most Linux users have node — and `claude`/`codex` with it —
+  // and it exports its bin only from ~/.bashrc, which is what the probe
+  // could not read when this fallback is the one in use.
+  it('slots the nvm bins the caller enumerated ahead of the system dirs on Linux', () => {
+    asPlatform('linux', () => {
+      const nvm = ['/home/x/.nvm/versions/node/v22.11.0/bin', '/home/x/.nvm/versions/node/v20.19.0/bin']
+      const dirs = loginPathFallbacks('/home/x', nvm)
+      expect(dirs.slice(5, 7)).toEqual(nvm)
+      expect(dirs.at(-2)).toBe('/usr/local/bin')
+    })
+  })
+
+  // Ahead of /opt/homebrew/bin an old nvm node would outrank the node of
+  // someone who moved to Homebrew but kept ~/.nvm; last, a CLI only nvm
+  // provides is still found.
+  it('puts the nvm bins after the Homebrew prefixes on macOS', () => {
+    asPlatform('darwin', () => {
+      const nvm = ['/Users/x/.nvm/versions/node/v22.11.0/bin', '/Users/x/.nvm/versions/node/v20.19.0/bin']
+      const dirs = loginPathFallbacks('/Users/x', nvm)
+      expect(dirs.slice(-2)).toEqual(nvm)
+      expect(dirs.indexOf('/opt/homebrew/bin')).toBeLessThan(dirs.indexOf(nvm[0]))
+    })
+  })
+
+  it('never adds nvm bins on Windows', () => {
+    const nvm = ['/Users/x/.nvm/versions/node/v22.11.0/bin']
+    asPlatform('win32', () => expect(loginPathFallbacks('C:\\Users\\x', nvm)).toEqual([]))
+  })
+
   it('has nothing to add on Windows', () => {
     asPlatform('win32', () => expect(loginPathFallbacks('C:\\Users\\x')).toEqual([]))
+  })
+})
+
+describe('shellCommandArgv', () => {
+  // Exactly what App.vue and AiCliDock built inline before the helper existed;
+  // the POSIX arms must not move by a single flag.
+  it('keeps the POSIX form the panes always used', () => {
+    asPlatform('darwin', () => {
+      expect(shellCommandArgv('/bin/zsh', 'claude')).toEqual(['/bin/zsh', '-ilc', 'claude'])
+      expect(shellCommandArgv('/bin/bash', 'claude')).toEqual(['/bin/bash', '-lc', 'claude'])
+    })
+    asPlatform('linux', () => {
+      expect(shellCommandArgv('/usr/bin/zsh', 'codex')).toEqual(['/usr/bin/zsh', '-ilc', 'codex'])
+      expect(shellCommandArgv('/usr/bin/fish', 'codex')).toEqual(['/usr/bin/fish', '-lc', 'codex'])
+    })
+  })
+
+  it('uses -NoExit -Command for both PowerShells on Windows', () => {
+    asPlatform('win32', () => {
+      expect(shellCommandArgv('powershell.exe', 'claude')).toEqual([
+        'powershell.exe',
+        '-NoLogo',
+        '-NoExit',
+        '-Command',
+        'claude',
+      ])
+      expect(shellCommandArgv('C:\\Program Files\\PowerShell\\7\\pwsh.exe', 'claude')).toEqual([
+        'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
+        '-NoLogo',
+        '-NoExit',
+        '-Command',
+        'claude',
+      ])
+      expect(shellCommandArgv('pwsh', 'claude')[1]).toBe('-NoLogo')
+    })
+  })
+
+  it('uses /k for cmd.exe on Windows', () => {
+    asPlatform('win32', () => {
+      expect(shellCommandArgv('C:\\Windows\\system32\\cmd.exe', 'claude')).toEqual([
+        'C:\\Windows\\system32\\cmd.exe',
+        '/k',
+        'claude',
+      ])
+    })
+  })
+
+  it('hands any other Windows shell the POSIX flags', () => {
+    asPlatform('win32', () => {
+      expect(shellCommandArgv('C:\\Program Files\\Git\\bin\\bash.exe', 'claude')).toEqual([
+        'C:\\Program Files\\Git\\bin\\bash.exe',
+        '-lc',
+        'claude',
+      ])
+    })
+  })
+
+  it('does not apply the Windows forms off Windows', () => {
+    asPlatform('linux', () => {
+      expect(shellCommandArgv('powershell.exe', 'x')).toEqual(['powershell.exe', '-lc', 'x'])
+    })
+  })
+
+  // A Windows agent pane must NOT be wrapped in `powershell -Command`: that
+  // re-parses the command as PowerShell, so a `--mcp-config {…}` JSON payload
+  // (braces = script block) and a plan-mcp URL's `&` (call operator) broke
+  // every such pane at launch. Handed the bare string, the backend splits it
+  // with CommandLineToArgvW rules and runs the program directly.
+  it('returns the plain string for a Windows agent pane, untouched', () => {
+    asPlatform('win32', () => {
+      const adversarial = [
+        'claude --mcp-config {"mcpServers":{"a":1}}',
+        'claude --mcp-config {"url":"http://127.0.0.1:1/p?pane=x&t=y"}',
+        `claude --note 'quoted' --other "double" $env:PATH`,
+        'claude --dir C:\\My Projects\\agent team',
+      ]
+      for (const command of adversarial) {
+        // The shell name is irrelevant for an agent pane — no wrapper is added.
+        expect(shellCommandArgv('powershell.exe', command, { agentPane: true })).toBe(command)
+        expect(shellCommandArgv('cmd.exe', command, { agentPane: true })).toBe(command)
+      }
+    })
+  })
+
+  it('still wraps a Windows terminal pane (agentPane false/omitted)', () => {
+    asPlatform('win32', () => {
+      expect(shellCommandArgv('powershell.exe', 'powershell.exe', { agentPane: false })).toEqual([
+        'powershell.exe',
+        '-NoLogo',
+        '-NoExit',
+        '-Command',
+        'powershell.exe',
+      ])
+      // Omitting the option is the same as a terminal pane: wrapped.
+      expect(shellCommandArgv('powershell.exe', 'powershell.exe')).toEqual([
+        'powershell.exe',
+        '-NoLogo',
+        '-NoExit',
+        '-Command',
+        'powershell.exe',
+      ])
+    })
+  })
+
+  it('ignores agentPane off Windows — POSIX still loads the login shell', () => {
+    const command = 'claude --mcp-config {"mcpServers":{"a":1}}'
+    asPlatform('darwin', () => {
+      expect(shellCommandArgv('/bin/zsh', command, { agentPane: true })).toEqual([
+        '/bin/zsh',
+        '-ilc',
+        command,
+      ])
+    })
+    asPlatform('linux', () => {
+      expect(shellCommandArgv('/bin/bash', command, { agentPane: true })).toEqual([
+        '/bin/bash',
+        '-lc',
+        command,
+      ])
+    })
+  })
+})
+
+describe('editorBundledPaths', () => {
+  const hints = {
+    command: 'code',
+    macApp: 'Visual Studio Code',
+    linuxPrefixes: ['/usr/share/code'],
+    flatpakId: 'com.visualstudio.code',
+  }
+
+  it('names the .app-bundled CLI on macOS', () => {
+    asPlatform('darwin', () => {
+      expect(editorBundledPaths('/Users/x', hints)).toEqual([
+        '/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code',
+        '/Users/x/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code',
+      ])
+    })
+  })
+
+  it('names the package prefix, snap and Flatpak launchers on Linux', () => {
+    asPlatform('linux', () => {
+      expect(editorBundledPaths('/home/x', hints)).toEqual([
+        '/usr/share/code/bin/code',
+        '/snap/bin/code',
+        '/var/lib/flatpak/exports/bin/com.visualstudio.code',
+        '/home/x/.local/share/flatpak/exports/bin/com.visualstudio.code',
+      ])
+    })
+  })
+
+  it('has nothing to add on Windows', () => {
+    asPlatform('win32', () => expect(editorBundledPaths('C:\\Users\\x', hints)).toEqual([]))
   })
 })

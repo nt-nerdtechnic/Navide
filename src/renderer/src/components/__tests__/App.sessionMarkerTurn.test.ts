@@ -39,6 +39,46 @@ describe('session-marker gate wiring', () => {
     expect(body.indexOf("data: '\\r'")).toBeLessThan(body.indexOf('pane.markerReplyPending = true'))
   })
 
+  it('the bootstrap holds for a keystroke-swallowing dialog before it pastes', () => {
+    const body = fnBody('async function sendSessionMarkerBootstrap(')
+    const hold = body.indexOf('paneScreenBlocked(pane.id)')
+    const paste = body.indexOf('BRACKETED_PASTE_START + markerText')
+    expect(hold).toBeGreaterThan(-1)
+    // Checked after the CLI settled (a dialog is part of its first screen)
+    // and before anything is typed; an unanswered dialog means no marker,
+    // never a marker pasted into the dialog.
+    expect(body.indexOf('await waitForQuiet(pane.id, 1000, 8000)')).toBeLessThan(hold)
+    expect(hold).toBeLessThan(paste)
+    const held = body.slice(hold, paste)
+    expect(held).toContain('waitForBlockingDialogClear(pane.id, BLOCKING_DIALOG_TIMEOUT_MS)')
+    expect(held).toContain('return false')
+    // Answering the dialog redraws the screen: settle again before the paste.
+    expect(held.indexOf('waitForBlockingDialogClear')).toBeLessThan(held.lastIndexOf('await waitForQuiet(pane.id, 1000, 8000)'))
+  })
+
+  it('the hold never answers the dialog on the user\'s behalf', () => {
+    const body = fnBody('async function waitForBlockingDialogClear(')
+    expect(body).not.toContain('terminal.input')
+    expect(body).not.toContain("'\\r'")
+  })
+
+  it('a fresh restore types the marker like a manual spawn does', () => {
+    // A restart that cannot resume (no session id, or the user chose fresh)
+    // opens a NEW conversation; only this path used to leave it unmarked, so
+    // the pane could never be resumed again after the next restart.
+    const body = fnBody('async function performRealizeRestoredPane(')
+    const resumeBranch = body.indexOf('if (isResume) {')
+    const send = body.indexOf('void sendSessionMarkerBootstrap(fresh')
+    expect(resumeBranch).toBeGreaterThan(-1)
+    expect(send).toBeGreaterThan(resumeBranch)
+    const gate = body.slice(resumeBranch, send)
+    // Only the non-resume branch, and the same gate onManualSpawn applies.
+    expect(gate).toContain('} else {')
+    expect(gate).toContain('fresh.sessionMarker')
+    expect(gate).toContain('!fresh.roleKey && !fresh.kickoffPrompt')
+    expect(gate).toContain("fresh.agentKey !== 'terminal'")
+  })
+
   it('the activity handler consults the gate and disarms it', () => {
     const body = activityHandler()
     expect(body).toContain('markerTurnActionFor(ev)')

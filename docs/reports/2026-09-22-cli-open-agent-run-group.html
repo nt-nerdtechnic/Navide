@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CLI Open Agent Group Selection — Verification Report</title>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, sans-serif; color: #202b3b; background: #f3f5f8; }
+    body { margin: 0; }
+    main { max-width: 1080px; margin: auto; padding: 40px 24px 64px; }
+    h1 { line-height: 1.15; font-size: clamp(1.8rem, 4vw, 2.7rem); }
+    h2 { margin-top: 32px; font-size: 1.3rem; }
+    p, li { line-height: 1.65; }
+    .card { background: #fff; border: 1px solid #d9e0e9; border-radius: 10px; padding: 20px; margin: 20px 0; }
+    .status { border-left: 5px solid #37659a; }
+    .boundary { border-left: 5px solid #aa741c; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { text-align: left; vertical-align: top; padding: 12px; border-bottom: 1px solid #dde3eb; }
+    th { background: #eaf0f7; }
+    code { overflow-wrap: anywhere; font-size: 0.9em; }
+    pre { overflow-x: auto; background: #172437; color: #ecf1f7; padding: 20px; border-radius: 8px; }
+    a { color: #285f9b; }
+    .eyebrow { color: #54687f; font-size: 0.9rem; }
+    @media print { :root { background: #fff; } main { padding: 0; } .card { break-inside: avoid; } }
+  </style>
+</head>
+<body>
+<main>
+  <p class="eyebrow">Navide · 2026-09-22 · Additive MCP parameter</p>
+  <h1>CLI Open Agent Group Selection</h1>
+  <div class="card status" id="verification-status">
+    <strong>Implementation and verification in progress.</strong>
+    <p>This report will be finalized after regression testing and independent code review. No completion or manual UI acceptance is claimed by this draft.</p>
+  </div>
+
+  <h2>Requested behavior</h2>
+  <p>Add optional <code>run_group_id</code> to <code>cli_open_agent</code>, so a caller can choose an existing tab group when opening a new CLI pane. Existing calls that omit the parameter retain their selection rules. The parameter applies to fresh panes and new panes that resume a conversation.</p>
+  <pre><code>{
+  "agent": "codex",
+  "name": "reviewer",
+  "task": "Review the requested change and report the findings.",
+  "run_group_id": "&lt;existing group ID in the target workspace&gt;"
+}</code></pre>
+  <p>Read a saved group ID from <code>cli_list_sessions</code> rows. The example uses a placeholder; it is not a group that this change creates.</p>
+
+  <h2>Compatibility contract</h2>
+  <div class="card table-wrap">
+    <table>
+      <thead><tr><th>Input</th><th>Expected behavior</th></tr></thead>
+      <tbody>
+        <tr><td>Omitted or <code>null</code></td><td>Preserve existing parent inheritance, saved-session fallback, and standalone selection behavior.</td></tr>
+        <tr><td><code>""</code></td><td>Explicitly use the manual, ungrouped tab.</td></tr>
+        <tr><td>Existing group ID</td><td>Use that group in the target workspace, overriding inherited or saved group selection.</td></tr>
+        <tr><td>Unknown or other-workspace ID</td><td>Reject before creating the pane, its PTY, or its persistent pane record.</td></tr>
+        <tr><td><code>pane_id</code> plus an explicit group</td><td>Reject with guidance to use <code>cli_place_pane</code>; reopening an existing pane must not silently move it.</td></tr>
+        <tr><td><code>session_id</code> plus an explicit group</td><td>Resume into a new pane in the selected group while preserving the existing parent-lineage rules.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>Scope and review</h2>
+  <p>Review base: <code>2e58a93a0e5c57b9079b9e8054739c00dedf9c9b</code>. The working tree was clean before this task. Runtime changes are confined to the MCP open-agent contract and the renderer's corresponding pane creation flow. Tests, MCP documentation, the changelog, and this report accompany the change.</p>
+  <ul>
+    <li>The existing vendor, model, effort, session-resume, kickoff, and pane-placement behavior must remain compatible.</li>
+    <li>Explicit group validation must use the target workspace, including a workspace held in the same window but not currently displayed.</li>
+    <li>Explicit empty strings must survive transport; absence and an empty string have different meanings.</li>
+    <li>Invalid requests must not leave a pane or history record behind.</li>
+  </ul>
+  <p id="review-result">Independent code review passed with no blocking findings. Review checked the public optional/nullable schema, unchanged omitted-parameter branches, empty-string preservation, target-workspace validation, resume results, reopening conflicts, and a second explicit-group check after asynchronous spawn preparation. A missing schema assertion was added and verified. The reviewer also approved limiting the new spawn validation to an explicitly supplied parameter, preserving the old spawn path.</p>
+  <p>Implementation and regression sources:
+    <a href="../../backend/agent_team_backend/mcp_server/server.py">MCP server</a>,
+    <a href="../../src/renderer/src/App.vue">renderer spawn flow</a>,
+    <a href="../../backend/tests/test_plan_mcp_open_agent_group.py">backend feature tests</a>,
+    <a href="../../src/renderer/src/components/__tests__/App.mcpSpawnGroup.test.ts">frontend feature tests</a>, and
+    <a href="../en-US/external-mcp-control.md">MCP documentation</a>.
+  </p>
+
+  <h2>Verification evidence</h2>
+  <p>Before implementation, the focused compatibility baseline passed 64 frontend tests and 57 backend tests, both with exit code 0. Newly added feature tests then established a failing baseline: backend 16 failed / 2 passed, frontend 9 failed / 4 passed, both with exit code 1.</p>
+  <div class="card table-wrap">
+    <table id="verification-results">
+      <thead><tr><th>Check</th><th>Result</th><th>Exit code</th></tr></thead>
+      <tbody>
+        <tr><td>New feature and focused regression tests</td><td>Final frontend focus: 121 passed across 7 files, including 20 new behavior cases and the existing Codex session-identity suite. Backend focus: 75 passed across 5 files, including 18 new feature cases. The 18 backend cases passed again after strengthening the schema assertion.</td><td>0 (all runs)</td></tr>
+        <tr><td>First full frontend run</td><td>10,399 passed / 15 skipped / 6 failed. The existing Codex identity harness did not bind the new helper. The new validation is now called only for an explicit group; the existing test was not weakened or changed. See the final full run below.</td><td>1</td></tr>
+        <tr><td>First full backend run</td><td>7,125 passed / 13 skipped / 1 failed. An existing exact MCP property-set assertion still expected the old parameter list. The expected set was updated by adding only <code>run_group_id</code>, keeping exact equality. The affected suite and new feature suite then passed all 140 cases. See the final full run below.</td><td>1; focused follow-up 0</td></tr>
+        <tr><td><code>pnpm test:run --maxWorkers=2</code></td><td>Final full run: 10,406 passed / 15 skipped / 1 failed. The one failure, <code>src/main/plugins/pluginBackendSupervisor.test.ts</code> (cancellation tombstone bound), is outside this change and passed on an isolated rerun of that file.</td><td>1; isolated rerun 0</td></tr>
+        <tr><td><code>uv --project backend run pytest backend/tests</code></td><td>Final full run: 7,125 passed / 15 skipped / 0 failed.</td><td>0</td></tr>
+        <tr><td><code>pnpm typecheck</code></td><td>Passed: Node, integration, Git plugin, Plans plugin, renderer, and public packages.</td><td>0</td></tr>
+        <tr><td><code>pnpm build</code></td><td>Passed: mini-ide, plans, git plugin, pane-helper, and electron-vite bundles built cleanly.</td><td>0</td></tr>
+        <tr><td><code>git diff --check</code> and report validation</td><td>No whitespace errors; report HTML parsed and links resolved.</td><td>0</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Verification commands preserve their own exit codes; no test output is piped through <code>head</code> or <code>tail</code>.</p>
+  <p>The frontend feature harness transpiles and executes the production event handler, pane-creation functions, and the asynchronous spawn boundary. It checks placement and persistence payloads while stubbing PTY creation, messaging, and task injection. Backend tests check the public MCP tool schema as well as event payloads, validation, and response behavior. These are programmatic behavior checks, not live CLI or visual UI tests.</p>
+
+  <h2>Limits and operational status</h2>
+  <div class="card boundary">
+    <ul>
+      <li>No live CLI pane was opened, moved, interrupted, or restarted by this task. Existing user sessions and project data are outside the test fixtures.</li>
+      <li>No UI automation or manual Electron acceptance has been performed. Programmatic checks cannot establish the visual placement of a pane in the running app.</li>
+      <li>No commit, deployment, or restart of the existing app or MCP server is included. The running MCP server must load the new code and clients must refresh its tool schema before the parameter is available there.</li>
+      <li>The pre-existing standalone background-workspace fallback when the new parameter is omitted is unchanged. The earlier static review identified possible use of the displayed workspace's group in that path; this report does not claim that separate behavior is repaired.</li>
+    </ul>
+  </div>
+  <p>For later manual acceptance: open a fresh pane and a resumed conversation with a valid group, verify <code>""</code> selects the manual tab, verify invalid IDs create no pane, and confirm an omitted parameter keeps the previous selection behavior.</p>
+</main>
+</body>
+</html>

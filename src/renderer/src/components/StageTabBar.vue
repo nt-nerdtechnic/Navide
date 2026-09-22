@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, nextTick } from 'vue'
+import { computed, ref, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import RebuildIcon from './RebuildIcon.vue'
 import { tabRunStatePaneStatus, type TabRunState } from '../lib/tabStatus'
@@ -22,6 +22,8 @@ const props = withDefaults(defineProps<{
   canRebuildAll?: boolean
   rebuildingAll?: boolean
   rebuildAllTitle?: string
+  allFamiliesCollapsed?: boolean
+  familyToggleDisabledReason?: 'grid' | 'empty'
 }>(), {
   canRebuildAll: false,
   rebuildingAll: false,
@@ -37,9 +39,14 @@ const emit = defineEmits<{
   (e: 'reorder-tab', fromKey: string, toKey: string): void
   (e: 'detach', key: string, x: number, y: number): void
   (e: 'rebuild-all'): void
+  (e: 'toggleFamilies'): void
 }>()
 
 const { t } = useI18n()
+const familyToggleTitle = computed(() => {
+  if (props.familyToggleDisabledReason) return t(`stageTab.family-toggle-${props.familyToggleDisabledReason}`)
+  return t(props.allFamiliesCollapsed ? 'stageTab.expand-families' : 'stageTab.collapse-families')
+})
 
 /** Hover text for the status dot. Kept on the dot rather than the whole tab so
  *  it does not shadow the ✕ button's own title. */
@@ -186,13 +193,13 @@ function onRenameKeydown(e: KeyboardEvent, key: string): void {
           <span
             v-if="tab.type !== 'manual' || tabs.length > 1"
             class="tab-close"
-            title="刪除此 tab"
+            :title="$t('stageTab.delete-tab')"
             @click.stop="onCloseClick($event, tab.key)"
           >✕</span>
         </template>
       </button>
     </template>
-    <button class="tab-add-btn" title="新增 Pipeline 區塊" @click="emit('add')">+</button>
+    <button class="tab-add-btn" :title="$t('stageTab.add-group')" @click="emit('add')">+</button>
     <button
       class="tab-rebuild-all-btn"
       :class="{ busy: rebuildingAll }"
@@ -203,6 +210,15 @@ function onRenameKeydown(e: KeyboardEvent, key: string): void {
     >
       <RebuildIcon />
     </button>
+    <button
+      type="button"
+      class="tab-family-toggle-btn"
+      :disabled="!!familyToggleDisabledReason"
+      :title="familyToggleTitle"
+      :aria-label="familyToggleTitle"
+      :aria-expanded="!allFamiliesCollapsed"
+      @click="emit('toggleFamilies')"
+    >{{ allFamiliesCollapsed ? '▸' : '▾' }}</button>
     </div>
     <div class="stage-tab-actions"><slot name="actions" /></div>
   </div>
@@ -210,8 +226,8 @@ function onRenameKeydown(e: KeyboardEvent, key: string): void {
   <Teleport to="body">
     <div v-if="actionMenu.show" class="tab-action-backdrop" @click="actionMenu.show = false" />
     <div v-if="actionMenu.show" class="tab-action-menu nv-popover" :style="{ top: actionMenu.y + 'px', left: actionMenu.x + 'px' }">
-      <button class="tab-action-item" @click="chooseMove()">移到其他分組</button>
-      <button class="tab-action-item danger" @click="chooseClose()">關閉所有 pane</button>
+      <button class="tab-action-item" @click="chooseMove()">{{ $t('stageTab.move-to-group') }}</button>
+      <button class="tab-action-item danger" @click="chooseClose()">{{ $t('stageTab.close-all-panes') }}</button>
     </div>
   </Teleport>
 </template>
@@ -268,6 +284,7 @@ function onRenameKeydown(e: KeyboardEvent, key: string): void {
   background: var(--bg-hover);
 }
 .tab-btn.active {
+  background: var(--bg-base);
   color: var(--accent-bright);
   border-bottom-color: var(--accent-focus);
 }
@@ -328,7 +345,7 @@ function onRenameKeydown(e: KeyboardEvent, key: string): void {
   padding: 0 4px;
   border-radius: 8px;
   background: var(--bg-muted);
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-size: var(--font-3xs);
   font-variant-numeric: tabular-nums;
   transition: background var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out);
@@ -352,7 +369,8 @@ function onRenameKeydown(e: KeyboardEvent, key: string): void {
 }
 
 .tab-add-btn,
-.tab-rebuild-all-btn {
+.tab-rebuild-all-btn,
+.tab-family-toggle-btn {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -370,20 +388,26 @@ function onRenameKeydown(e: KeyboardEvent, key: string): void {
   transition: color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out), background var(--motion-fast) var(--ease-out);
 }
 .tab-add-btn:hover,
-.tab-rebuild-all-btn:hover:not(:disabled) {
+.tab-rebuild-all-btn:hover:not(:disabled),
+.tab-family-toggle-btn:hover:not(:disabled) {
   color: var(--text-primary);
   border-color: var(--accent-focus);
   background: var(--bg-hover);
 }
 
-.tab-rebuild-all-btn {
+.tab-rebuild-all-btn,
+.tab-family-toggle-btn {
   margin-left: 2px;
+}
+.tab-family-toggle-btn {
+  font-size: 11px;
 }
 .tab-rebuild-all-btn svg {
   width: 14px;
   height: 14px;
 }
-.tab-rebuild-all-btn:disabled {
+.tab-rebuild-all-btn:disabled,
+.tab-family-toggle-btn:disabled {
   cursor: default;
   opacity: 0.4;
 }

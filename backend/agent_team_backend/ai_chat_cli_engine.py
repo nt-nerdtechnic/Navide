@@ -12,13 +12,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import os
-import shutil
-import signal
 from pathlib import Path
 from typing import Any
 
-from . import onboarding_deps
+from . import onboarding_deps, osplat
 
 log = logging.getLogger("agent_team_backend.ai_chat_cli_engine")
 
@@ -51,7 +48,7 @@ def resolve_cli_binary(engine: str = "claude") -> str:
     override = onboarding_deps.cli_binary_override(spec["agent_key"])
     if override:
         return override
-    return shutil.which(spec["command"]) or ""
+    return osplat.paths.resolve_program(spec["command"]) or ""
 
 
 def _cwd_for(workspace_path: str) -> str | None:
@@ -67,10 +64,10 @@ async def _terminate_proc_tree(proc: Any, grace: float = _KILL_GRACE_S) -> None:
     """
     pgid: int | None = None
     with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
-        pgid = os.getpgid(proc.pid)
+        pgid = osplat.process_tree.group_of(proc.pid)
     if pgid is not None:
         with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
-            os.killpg(pgid, signal.SIGTERM)
+            osplat.process_tree.kill_group(pgid, force=False)
     else:
         with contextlib.suppress(ProcessLookupError):
             proc.terminate()
@@ -81,7 +78,7 @@ async def _terminate_proc_tree(proc: Any, grace: float = _KILL_GRACE_S) -> None:
         pass
     if pgid is not None:
         with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
-            os.killpg(pgid, signal.SIGKILL)
+            osplat.process_tree.kill_group(pgid, force=True)
     with contextlib.suppress(ProcessLookupError):
         proc.kill()
     with contextlib.suppress(Exception):
@@ -107,9 +104,12 @@ async def run_cli_text(
         raise RuntimeError(
             f"{engine} CLI not found — install it or select a binary in onboarding."
         )
-    args = [binary, "-p", prompt, "--output-format", "text"]
+    cli_args = ["-p", prompt, "--output-format", "text"]
     if system_prompt:
-        args += ["--append-system-prompt", system_prompt]
+        cli_args += ["--append-system-prompt", system_prompt]
+    # Through the interpreter the binary needs: an npm-installed CLI is a
+    # `.cmd` shim on Windows, which CreateProcess cannot start on its own.
+    args = osplat.paths.launch_argv(binary, cli_args)
     try:
         proc = await asyncio.create_subprocess_exec(
             *args,

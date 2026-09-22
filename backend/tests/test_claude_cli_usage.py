@@ -139,6 +139,20 @@ async def test_the_report_is_requested_in_print_mode_without_mcp(monkeypatch) ->
     assert "ANTHROPIC_API_KEY" not in calls[0]["env"]
 
 
+async def test_a_windows_shim_is_started_through_cmd(monkeypatch) -> None:
+    """npm installs the CLI as `claude.cmd` on Windows, which CreateProcess
+    cannot start — and this poll fires on a timer, so it would fail forever."""
+    from agent_team_backend.osplat import _windows
+
+    monkeypatch.setattr(cu.osplat, "paths", _windows.paths)
+    calls = _fake_exec(monkeypatch, _FakeProc(stdout=PRINTED_REPORT.encode()))
+
+    await cu.read_usage_panel(r"C:\npm\claude.cmd")
+
+    assert calls[0]["argv"][:4] == ("cmd.exe", "/d", "/c", r"C:\npm\claude.cmd")
+    assert calls[0]["argv"][4:] == cu.USAGE_ARGS
+
+
 async def test_a_hung_cli_is_killed_and_reported_as_a_timeout(monkeypatch) -> None:
     killed: list[int] = []
 

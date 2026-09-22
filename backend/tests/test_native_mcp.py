@@ -4,6 +4,8 @@ import json
 import os
 from pathlib import Path
 
+import pytest
+
 from agent_team_backend import native_mcp
 from agent_team_backend.cli_vendors.registry import VENDORS
 
@@ -34,13 +36,7 @@ def test_scan_reads_every_shape(tmp_path: Path) -> None:
         (".codex", "config.toml"),
         '[mcp_servers.xmind]\nenabled = false\nurl = "https://app.xmind.com/mcp"\n',
     )
-    _write(
-        home,
-        (".grok", "user-settings.json"),
-        json.dumps(
-            {"mcp": {"servers": [{"id": "gk", "transport": "http", "url": "https://g/mcp"}]}}
-        ),
-    )
+    _write(home, (".grok", "config.toml"), '[mcp_servers.gk]\nurl = "https://g/mcp"\n')
 
     found = {(s.agent, s.name): s for s in native_mcp.scan(home)}
 
@@ -247,6 +243,25 @@ def test_both_accepted_filenames_are_read(tmp_path: Path) -> None:
     assert sorted(s.name for s in native_mcp.scan(tmp_path)) == ["a", "b"]
 
 
+def test_a_list_shaped_container_is_still_read_by_its_key(tmp_path: Path) -> None:
+    """No shipping vendor is list-shaped since grok moved to config.toml, so
+    the branch that reads one is driven through a synthetic source. Deleting
+    the branch instead would make the next list-shaped CLI a rewrite."""
+    path = _write(
+        tmp_path,
+        (".listy", "servers.json"),
+        json.dumps({"mcp": {"servers": [{"id": "one", "url": "https://l/mcp"}, {"no": "id"}]}}),
+    )
+    source = native_mcp.NativeMcpSource(
+        "listy", (".listy", "servers.json"), "jsonc", ("mcp", "servers"), "id"
+    )
+
+    found = native_mcp._read_source(source, path)
+
+    # The record without the key is skipped, not guessed at.
+    assert [(s.agent, s.name, s.url) for s in found] == [("listy", "one", "https://l/mcp")]
+
+
 def test_native_sources_agree_with_vendor_wiring() -> None:
     """The reflection's section must not drift from the vendor's own."""
     for source in native_mcp.NATIVE_SOURCES:
@@ -269,6 +284,22 @@ def test_agent_targets_separate_off_from_impossible() -> None:
     # aider has no MCP mechanism at all.
     assert by_key["aider"]["state"] == "unsupported"
     assert by_key["aider"]["reflects"] is False
+
+
+def test_agent_targets_name_what_blocks_a_wired_vendor_here(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Issue #109: `wired` is what the registry promises; without symlink
+    privilege the home-shim vendors still spawn unwired, and the listing says so."""
+    from agent_team_backend import osplat
+
+    monkeypatch.setattr(osplat.paths, "symlinks_available", lambda: False)
+    by_key = {agent["key"]: agent for agent in native_mcp.agent_targets()}
+    assert by_key["antigravity"]["state"] == "wired"
+    assert "Developer Mode" in by_key["antigravity"]["blocked"]
+    assert "blocked" not in by_key["claude"]  # wired by flag, no shim involved
+
+    monkeypatch.setattr(osplat.paths, "symlinks_available", lambda: True)
+    by_key = {agent["key"]: agent for agent in native_mcp.agent_targets()}
+    assert "blocked" not in by_key["antigravity"]
 def test_credentials_inside_a_url_are_redacted(tmp_path: Path) -> None:
     """A URL carries secrets in two places; neither may leave the backend."""
     _write(
@@ -423,3 +454,46 @@ def test_the_roo_style_disabled_flag_is_honoured(tmp_path: Path) -> None:
 def test_every_reflected_agent_is_a_registered_vendor() -> None:
     """A source for an unknown agent would render nowhere in the matrix."""
     assert {source.agent for source in native_mcp.NATIVE_SOURCES} <= set(VENDORS)
+
+
+def test_mask_server_row_masks_a_stdio_row_without_touching_the_original() -> None:
+    """list_servers() rows are unmasked because the Settings page edits them;
+    the wrapper must mask the same three places scan() does, on a copy."""
+    row = {
+        "name": "a",
+        "enabled": True,
+        "transport": "stdio",
+        "command": "npx",
+        "args": ["--api-key=abc", "https://h/?token=t", "--verbose"],
+        "env": {"API_KEY": "sk-1", "MODE": "fast"},
+    }
+    before = json.dumps(row, sort_keys=True)
+
+    masked = native_mcp.mask_server_row(row)
+
+    assert masked["args"] == ["--api-key=***", "https://h/?token=***", "--verbose"]
+    assert masked["env"] == {"API_KEY": native_mcp.REDACTED_SECRET, "MODE": "fast"}
+    assert masked["command"] == "npx"
+    assert masked["name"] == "a"
+    assert json.dumps(row, sort_keys=True) == before
+    assert masked["env"] is not row["env"]
+    assert masked["args"] is not row["args"]
+
+
+def test_mask_server_row_masks_an_http_row_without_touching_the_original() -> None:
+    row = {
+        "name": "b",
+        "enabled": False,
+        "transport": "http",
+        "url": "https://u:p@host/?api_key=x&mode=fast",
+        "headers": {"Authorization": "Bearer y", "Accept": "json"},
+    }
+    before = json.dumps(row, sort_keys=True)
+
+    masked = native_mcp.mask_server_row(row)
+
+    assert masked["url"] == "https://***@host/?api_key=***&mode=fast"
+    assert masked["headers"] == {"Authorization": native_mcp.REDACTED_SECRET, "Accept": "json"}
+    assert masked["enabled"] is False
+    assert json.dumps(row, sort_keys=True) == before
+    assert masked["headers"] is not row["headers"]

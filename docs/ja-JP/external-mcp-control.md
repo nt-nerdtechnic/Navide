@@ -97,8 +97,8 @@ Plan ウィンドウが Plan を解決する際の基準と同じものです。
 
 | Tool | パラメータ | 動作 |
 |---|---|---|
-| `cli_list_targets` | — | アドレス指定可能な CLI Pane を一覧: `name`、`address`、`pane_id`（すべての `ui.pane.*` アクションが取るキーであり、下の Pane 系 Tool では `address` の代わりにもなる）、`workspace_path`、`same_workspace`、`busy`、`hold_reason?` |
-| `cli_whoami` | — | **CLI Pane 専用。** 自分自身の識別情報を、名簿が他 Pane を記述するのと同じ形で返します: `{ok, caller, name, address, pane_id, workspace_path, agent_key, busy, offline, hold_reason?, spawned_by?, waiting_on_me?}`。`pane_id` は全ての `ui.pane.*` が受け付ける唯一のキーであり、Pane が自分自身を操作するための前提です。`spawned_by` は自分を開いた Pane（閉じた後は `{pane_id, gone: true}`）|
+| `cli_list_targets` | — | アドレス指定可能な CLI Pane を一覧: `name`、`address`、`pane_id`（すべての `ui.pane.*` アクションが取るキーであり、下の Pane 系 Tool では `address` の代わりにもなる）、`workspace_path`、`same_workspace`、`busy`、`realized`（復元用 placeholder は false: 背後で CLI が動いていないため常に busy で、誰かが開くまでメッセージは待機する — `ui.pane.open`、または `cli_send(open_target=true)`）、`hold_reason?` |
+| `cli_whoami` | — | **CLI Pane 専用。** 自分自身の識別情報を、名簿が他 Pane を記述するのと同じ形で返します: `{ok, caller, name, address, pane_id, workspace_path, agent_key, busy, offline, realized, delegation_hint, hold_reason?, spawned_by?, waiting_on_me?}`。`delegation_hint` は委譲ルール（下の `cli_open_agent` を参照）を、server instructions を読んでいない Pane のために再掲します。`pane_id` は全ての `ui.pane.*` が受け付ける唯一のキーであり、Pane が自分自身を操作するための前提です。`spawned_by` は自分を開いた Pane（閉じた後は `{pane_id, gone: true}`）|
 | `cli_send` | `to`（Pane のアドレス、または Broadcast を表す `"group"`）, `text`, `wait_for_delivery_s=0`（上限 120）, `pane_id?`, `reply_to?` | 別の Pane が Idle になった時点で指示を配信（Busy なら Queue に保留）。`msg_key` を返し、待機を指定した場合はその結末も返す |
 | `cli_check_message` | `msg_key` | 一つの `cli_send` の結末: `{status, target, age_seconds, reason?, settled_after_s?, hold?, held_for_s?, stale?}` |
 | `cli_cancel_message` | `msg_key` | 送信済みでまだ入っていないメッセージを取り消します。判断するのは受信側 Queue を持つウィンドウです。まだ待機中なら破棄して status は `cancelled` に、配信が始まっていれば取り消しは無視され、確定した status が返ります。取り消しは失敗ではなく、通知も書き戻されません。`{ok, msg_key, status, reason?}` を返します |
@@ -106,8 +106,40 @@ Plan ウィンドウが Plan を解決する際の基準と同じものです。
 | `cli_pending_incoming` | `limit=20`（上限 200） | **CLI Pane 専用。** *自分宛*に Queue され、まだ入っていないもの: `{count, messages: [{uid, sender, status, age_seconds, kind?, excerpt, correlation_id?, in_reply_to?, hold?, held_for_s?, stale?}]}` |
 | `cli_read_incoming` | `uid=""`, `limit=5`（上限 20）, `include_delivered=false`, `peek=false` | **CLI Pane 専用。** 自分宛メッセージの全文（`cli_pending_incoming` は空白を潰した 200 文字のみ）: `{count, messages: [{uid, sender, status, kind?, content, age_seconds, consumed, correlation_id?, in_reply_to?, hold?, held_for_s?, stale?}], note?}`。**既定では読むと消費されます**——読んだメッセージはその後 Pane に入力されません。`peek: true` は消費せずに読みます。消費は予約してから解放する二段階で、解放が失われた場合メッセージは Queue に戻り二度届くことがあります。`consumed` はメッセージごとに返され、消費されなかった理由は `note` に入ります |
 | `cli_send_and_wait` | `to`, `text`, `timeout_s=60`（上限 120）, `pane_id?` | `cli_send` に加えてその Turn の完了まで待機。`cli_wait_idle` の結果に `{ok, target, msg_key}` を付けて返す  **リモート Pane**: 送信と配信 gate はローカルと同じ（`rejected` は `failed` と区別されたまま）。待機の半分は名簿バッジを使い、弱点は `cli_wait_idle` と同じです。 |
-| `cli_open_agent` | `agent`, `name`, `task`, `workspace_path`（Pane 以外の呼び出し元では必須）, `model`, `effort` | Task 付きで新しい CLI Pane を Spawn。`{ok, name, address, pane_id}` を返し、Spawn が Advisory の閾値を越えた場合は `advisories` も返す。`model` と `effort` は任意で、その CLI が受け付けない場合は無視せず「拒否」するため、Pane が別のモデルで静かに起動することはない。多くの CLI は model を受け付けるが、独立した effort を受け付けるものは少なく、残りは effort を model id に埋め込む（`gpt-5.3-codex-high`）。model id は検証しない（リリースごとに変わるため）が、effort はその CLI の語彙と照合する |
+| `cli_open_agent` | `agent`, `name`, `task`, `workspace_path`（Pane 以外の呼び出し元では必須）, `model`, `effort`, `pane_id?`, `session_id?`, `run_group_id?` | Task 付きで新しい CLI Pane を Spawn。`{ok, name, address, pane_id}` を返し、Spawn が Advisory の閾値を越えた場合は `advisories` も返す。**委譲ルール**（server instructions にも同じ一文があります）: ファイルを編集する、数分以上かかる、あるいはユーザーが途中で見たり中断したり引き継いだりしたくなる作業は、ここで開いた Pane に渡します — Agent 自身の subagent 機構（Claude Code の `Agent`／`Task` ツール）にではなく。Pane は Navide 上で見え、実行中に開け、呼び出し元の Session より長く生きます。subagent は要約を一つ返すだけのブラックボックスです。結果が一段落で済む短い読み取り専用の調査には、引き続き subagent が適しています。`model` と `effort` は任意で、その CLI が受け付けない場合は無視せず「拒否」するため、Pane が別のモデルで静かに起動することはない。多くの CLI は model を受け付けるが、独立した effort を受け付けるものは少なく、残りは effort を model id に埋め込む（`gpt-5.3-codex-high`）。model id は検証しない（リリースごとに変わるため）が、effort はその CLI の語彙と照合する |
 | `cli_close_agent` | `target`, `pane_id?` | Pane を閉じる — `cli_open_agent` のもう半分です。**これは相手の作業を終わらせます**: Pane と PTY が消え、走っていた Turn もろとも死に、その Pane 宛に Queue されていたものは配信されません。取り消しは効きません — 閉じた Pane の Session は待避ではなく消滅です。先に `cli_get_status` を見て、作業中の Pane は閉じないでください。`cli_interrupt` はより穏当な段（割り込みキーを押すだけで Pane は開いたまま）、`cli_send` はさらに穏当（Turn の完了を待つ）です。`{ok, target, name, closed, advisories?}` を返します。`advisories` は閉じたことの代償のうち他の誰も報告しないもの — Pane が Turn の途中だった、メッセージが Queue に残っていた、子 Pane が孤児になった — で、Kill の後では知りようがないため事前に集めます。このマシン上の Pane のみ: `<device>/<workspace>/<pane>` 形式のアドレスは `close-local-only` で失敗します。これはアドレスの誤りではなく、この Tool の限界です |
+
+**Choosing a tab group when opening a pane.** `cli_open_agent` accepts optional
+`run_group_id` for a fresh pane or a new pane opened with `session_id`:
+
+- Omit it or pass `null` to preserve existing group selection rules: fresh
+  panes opened by pane callers inherit the caller's group, resumed conversations
+  use the existing saved-group and fallback rules, and standalone callers retain
+  their existing defaults.
+- Pass `""` to open in the manual, ungrouped tab.
+- Pass an existing group ID in the target workspace to override the inherited
+  or saved group. The pane's parent lineage is unchanged by this parameter.
+- Invalid IDs and groups from another workspace are refused before spawning.
+- An explicit group cannot be combined with `pane_id`, which reopens an existing
+  pane. Use `cli_place_pane` to move that pane instead.
+
+A successful explicit selection returns `run_group_id`; when resuming,
+`restored_lineage.run_group_id` also reflects the override.
+
+Read the current MCP tool schema before calling. Obtain IDs from
+`cli_list_sessions` (`run_group_id`) for the target workspace; use a group ID
+that still exists, not its display name. For example, replace the path and
+group ID below with values returned for the target workspace:
+
+```json
+{
+  "agent": "codex",
+  "name": "Review",
+  "task": "Review the change and report findings.",
+  "workspace_path": "/path/to/project",
+  "run_group_id": "existing-group-id"
+}
+```
 
 `cli_send` は、メッセージが配信のために*受理された*時点で返り、相手の Agent が
 読んだ時点ではありません。`cli_check_message` がそのループを閉じます。`status`
@@ -257,7 +289,7 @@ CLI Pane を保持でき、Spawn の連鎖は任意の深さで実行できま�
 | Tool | パラメータ | 動作 |
 |---|---|---|
 | `cli_read_log` | `target`, `tail_lines=200`, `since?`, `pane_id?` | Pane の会話 Log の末尾（≤512KB かつ ≤`tail_lines` 行）。`next_cursor` と `rotated` を返す |
-| `cli_get_status` | `target`, `pane_id?` | `{busy, agent_key, last_activity?, ui?}` — `ui` は所有ウィンドウが応答したときに `ui.pane.getStatus` を反映  **リモート Pane**: 名簿から回答し、`remote: true` と `source: "roster_status"` を付けます。バッジの語が 1 つだけで、`last_activity` も `ui` ブロックもなく、0.5 秒の debounce と 30 秒の sweep があるため、ライブではなく準ライブです。 |
+| `cli_get_status` | `target`, `pane_id?` | `{busy, agent_key, last_activity?, usage?, ui?}` — `ui` は所有ウィンドウが応答したときに `ui.pane.getStatus` を反映し、値があれば Pane の起動時アイデンティティも載せます: `agentLabel`、`model` / `effort`（Pane 起動時に指定したもの — CLI 内で打った `/model` 切替はここには見えません。無ければベンダー既定）、`profileId`（アカウント pin。記録専用: どの Pane も実際はライブのログインで動きます）、`loginExpired` / `usageLimitUntil`（CLI がそのメッセージを出している間だけ）。`usage` はそのベンダーの**キャッシュ済み**クォータのスナップショットで、`cli_usage` が `providers[agent_key]` で返すのと同じ行です。この呼び出しで更新されることはなく、鮮度は `fetchedAt` / `stale` で判断します。  **リモート Pane**: 名簿から回答し、`remote: true` と `source: "roster_status"` を付けます。バッジの語が 1 つだけで、`last_activity` も `ui` ブロックも `usage`（このマシンのキャッシュはこのマシンのログインのもの）もなく、0.5 秒の debounce と 30 秒の sweep があるため、ライブではなく準ライブです。 |
 | `cli_wait_idle` | `target`, `timeout_s=60`（上限 120）, `pane_id?` | Pane が Idle になるか Timeout するまで Block。`{idle, source, waited_s, last_activity?, ui_status?}` を返し、Timeout 時は `reason` も返す  **リモート Pane**: 名簿のバッジを polling します。`source` は `roster_status` か `roster_offline` で、**`turn_complete` にはなりません**——リモートで得られる最も強い観測は「バッジが busy でなくなった」だけです。停止中の Pane は `reason: "awaiting_unclassified"` で timeout します。名簿は語を 1 つしか運ばず、権限プロンプト待ち（人間待ち）と質問中（実質 idle）を区別できないためです。`offline` は第三の答えとして、待たずに即座に返ります。 |
 | `cli_interrupt` | `target`, `pane_id` | このマシン上の Pane に、その CLI の割り込みキーを送ります（codex は `ESC`、それ以外は `^C`）。**これは Turn を止めることを意味しません**: CLI によって、Turn を中断することも、単に入力欄をクリアするだけのことも、二度押しで CLI 自体が終了することもあります。コマンドではなくキーストロークです。結果は `cli_get_status`／`cli_wait_idle` で確認してください。その作業を終わらせてよいなら `cli_send` でメッセージを送る方が適切です。`{ok, target, name, sent, status_before, advisories?}` を返します。`sent: false` は何も送られなかったことを意味します（session が無い、またはウィンドウが再接続中）。ローカル Pane のみ |
 | `cli_message_log` | `limit=50`（上限 200） | **CLI Pane 専用。** 自分自身のメッセージ履歴 — 何を送り、何が自分に届いたか（新しいものが最後）。`cli_inbox_summary` は滞留した送信だけ、`cli_pending_incoming` はまだ配信されていない受信だけを報告します。届いてしまえばメッセージはどちらからも消え、Compaction の後は自分の Context からも消えるため、「我々が既に何を言い合ったか」に答えられるのはここだけです。永続化された Log なので Backend の再起動をまたいで残り、ここで読んでも誰かの Queue からメッセージが取り除かれることはありません。返るのは自分の行だけで、判定は**現在の**メッセージング名との照合です — 後で改名した名前宛に Queue されたメッセージは、もう自分のものとして一致しません。`{ok, count, messages, scanned, truncated}` を返します。各メッセージは `{uid, created_at, status, sender, recipient, direction, excerpt}` に加えて、値があれば `kind` / `reason` / `delivered_at` / `correlation_id` / `reply_to` / `remote` / `remote_workspace`。`excerpt` は空白を潰した 200 文字で、全文を返すのは `cli_read_incoming` です。`truncated` は自分の古いメッセージが切り落とされたこと（`limit` によるか、走査した直近行の窓によるか）を意味し、`scanned` はその窓が何行あったかです |
@@ -281,9 +313,9 @@ Probe が届いた場合にのみ存在します。Timeout 時、`reason` は似
 Turn のテキストを載せた `turn_complete` Event を発行します。**aider、antigravity、
 claude、codex、copilot、cursor、droid、grok、kilo、kimi、muse、opencode、pi、qwen** です。
 これらでは `cli_wait_idle` と `cli_get_status` の `last_activity.type` が正確な
-Turn 完了 Signal で解決します — ただし一点だけ但し書きがあります。**grok、kimi、
-pi、qwen** は自前の Turn 終了記録を持たず、Log の 8 秒の沈黙から `turn_complete`
-を合成するため、この四つでは Event 自体が推測であり、Turn の途中で十分に長い間が
+Turn 完了 Signal で解決します — ただし一点だけ但し書きがあります。**kimi、pi、
+qwen** は自前の Turn 終了記録を持たず、Log の 8 秒の沈黙から `turn_complete`
+を合成するため、この三つでは Event 自体が推測であり、Turn の途中で十分に長い間が
 空くと待機が早く終わることがあります。素の Terminal Pane にはそうした Signal が
 まったくありません —
 `cli_wait_idle` は新しい活動のない 10 秒の静穏期間から Idle を推測する方式に
@@ -294,8 +326,8 @@ pi、qwen** は自前の Turn 終了記録を持たず、Log の 8 秒の沈黙�
 
 これは、`cli_send_and_wait` の結果で読むべきフィールドが `source` である理由でも
 あります。どの CLI が生み出したものでも形は同じですが、確度は同じではありません。
-aider/antigravity/claude/codex/copilot/cursor/droid/kilo/muse/opencode からの
-`turn_complete` は Turn が終わったという CLI 自身の言明であり、grok/kimi/pi/qwen
+aider/antigravity/claude/codex/copilot/cursor/droid/grok/kilo/muse/opencode からの
+`turn_complete` は Turn が終わったという CLI 自身の言明であり、kimi/pi/qwen
 からの同じ値は上記の 8 秒沈黙による推測です。そして `quiet_period` — 素の
 Terminal Pane で唯一得られる結果 — は、Turn の終了を何も報告しなかったという
 意味なので、Signal を信用せず中身を確認してください。`target_lost` は四つ目の値で、
@@ -343,20 +375,24 @@ Host Wiring — だけです。Navide の CLI Pane から、その Pane 自身�
 
 | Action | Args | 効果 |
 |---|---|---|
-| `ui.settings.open` | `{tab?}`（`general`、`mcp`、`analyzer`、`updates`、`appearance`、`accounts`、`storage`、`keybindings` のいずれか） | Settings を開く。任意で特定のタブへ |
+| `ui.settings.open` | `{tab?}`（`general`、`mcp`、`analyzer`、`updates`、`appearance`、`accounts`、`keybindings` のいずれか） | Settings を開く。任意で特定のタブへ |
 | `ui.settings.close` | — | Settings を閉じる |
 | `ui.settings.yolo` | `{yolo?}` | CLI の権限バイパスのグローバルスイッチを読む。`yolo` を渡した場合は設定する。`{yolo, agents}` を返し、各 agent は `{agent, mode, skipFlag}`。Workspace スコープではありません: どのウィンドウでも答えられ、ベンダーごとの答えは `yolo` ではなく `skipFlag` です |
 | `ui.pane.create` | `{agent, name?, task?}` | ウィンドウが開いている Workspace に `agent` の Pane を Spawn。`task` を指定した場合は Kickoff Prompt として送られ、Role 注入はスキップされる |
 | `ui.pane.close` | `{paneId}` | Pane を Kill |
 | `ui.pane.focus` | `{paneId}` | Pane を表示して Focus（必要ならタブを切り替え） |
-| `ui.pane.getStatus` | `{paneId}` | その Pane の `{status, buffer, logPath?}` を返す |
+| `ui.pane.open` | `{paneId}` | 復元用の placeholder（`cli_list_targets` で `realized: false` の Pane）を開き、完了を待つ。`{realized, reason, paneId}` を返す — `paneId` は開いた後の Pane の id、`reason` は `opened`、`fresh`（新しいセッション。以前の会話は覚えていない）、`already-open`、または開けなかった理由。Resume 動作が `ask` でもモーダルは出ません |
+| `ui.pane.getStatus` | `{paneId}` | その Pane の `{status, buffer, logPath?, awaitingKind?, kickoff?, agentLabel?, model?, effort?, profileId?, loginExpired?, usageLimitUntil?}` を返す — アイデンティティ系のキーは Pane に値がある場合のみ |
 | `ui.pane.interrupt` | `{paneId}` | その Pane の割り込みキーを押す。`{sent, status, advisories?}` を返す — `status` は押す**前**に読まれます。押すこと自体が、報告しようとしているその状態を変えてしまうためです |
 | `ui.tab.switch` | `{tabId}` | Active な Stage/Run-group タブを切り替え |
 | `ui.preview.show` | `{kind, …}` | 右レールのプレビューパネルにファイル・diff・インラインスニペットを表示 |
 | `ui.window.openPlans` | — | Plan ウィンドウを開く |
+| `ui.window.openResourceManager` | — | Resource Manager を開く（CPU／メモリ／ディスク使用量とストレージ整理） |
+| `ui.window.openTurnStats` | — | Turn Stats を開く（CLI ペイン 1 つのターンごとのトークン使用量） |
 | `ui.window.openGit` | — | 現在の Workspace の Git ウィンドウを開く |
 | `ui.window.openPipeline` | `{pipelineId?}` | Pipeline Manager ウィンドウを開く |
 | `ui.workspace.open` | `{path}` | `path` を Workspace として開く（生きている任意のウィンドウにルーティング — 上記参照） |
+| `ui.workspace.switch` | `{path}` | このウィンドウを、すでに保持している Workspace に切り替える。Pane は保持されます。ウィンドウが保持していないパスは拒否されます（`ui.workspace.open` を使ってください） |
 | `ui.layout.setMode` | `{mode}` | Pane の Layout Mode を変更 |
 | `ui.pipeline.start` | `{task?, pipelineId?}` | ウィンドウが開いている Workspace で Pipeline の実行を開始する。Workspace が開かれていない、既に実行中（先に Abort が必要）、`pipelineId` が未指定でその Workspace に選択中の Pipeline も無い、あるいは実行が `running` に到達しなかった場合はエラー。`{pipelineId, stages, workspacePath, state}` を返す |
 | `ui.pipeline.abort` | — | 進行中の実行を中止する。何も走っていなければ、no-op に ok を返すのではなくエラーにする。`{workspacePath, state}` を返す |
@@ -448,15 +484,26 @@ Watcher がフォールバックとして拾い、`source: "watcher"`、帰属�
 
 ### Workspace・Skills・指示ファイル
 
-三つの読み取り専用インベントリです。それぞれ、上の Tool 群が「もう知っている」と
+Skills のインストールと配信変更にはユーザーの許可が必要です。Mutation annotations によって、これらの操作を以下の読み取り専用インベントリと区別します。
+
+五つの読み取り専用インベントリです。それぞれ、上の Tool 群が「もう知っている」と
 前提している問いに答えます: どのパスが Workspace なのか、CLI に指示を書く前にその
-CLI が既に何を渡されているのか、そしてこのプロジェクトが既に何を述べているのか。
+CLI が既に何を渡されているのか、このプロジェクトが既に何を述べているのか、どの MCP
+サーバーが設定されているのか、そしてユーザーがどの Prompt を保存しているのか。
 
 | Tool | パラメータ | 動作 |
 |---|---|---|
 | `workspace_list` | — | Navide が知っているプロジェクトを、最近開いた順に返します — `plan_create`、`preview_record`、`cli_open_agent` はどれもプロジェクトルートの絶対パスを求めますが、そのパスがどれなのかを教えるものが今までありませんでした。これがそのリストです。`{workspaces, live_pane_workspaces}` を返します。各 Workspace は Store 自身のレコード（`path`、`name`、`last_opened_at`、`pinned`、`exists`）に加えて `has_live_panes`（今まさに CLI Pane が動いていれば true）を持ちます。それを優先してください — `has_live_panes` が false の Workspace はどの Navide ウィンドウにも見られていないため、そこに書いた Plan や Preview はユーザーにまったく表示されません。`exists` が false はもっと厳しい失敗で、フォルダがディスクから消えています。`live_pane_workspaces` はその Live 集合そのもの（解決済み）です。Pane は、ユーザーが Welcome 画面から一度も開いていないプロジェクトで動いていることがあり、それは最近リストが言及しないだけの、まったく正当な `workspace_path` です |
-| `skills_list` | — | Navide が管理する Skills と、そのうちどれが自分に届くか。Skill は CLI が必要に応じて読み込む指示のフォルダです。Navide は任意のベンダーに配信できる共有ライブラリを持ち、同時に各 CLI が自分のディレクトリに持つものも反映します。自分で指示を書く前に何が使えるかを知るため、あるいはユーザーの求めていることをどの Skill がカバーするかを伝えるために読んでください。`{skills, native, root, agents}` を返します。各共有 Skill は `{name, description, enabled, targets, managed, valid, native_conflict}` — `targets` が null なら全ベンダーが受け取り、リストならそのベンダーのみ、`enabled` が false なら誰も受け取りません。各 native エントリは `{name, description, source, owner_agent, real_path, valid}` で、あるCLI が既に持っている Skill です。`agents` は各ベンダーとその配信サポート（`wired` / `planned` / `unsupported`）で、「配信されていない」と「配信できない」を分けたままにします。`delivered_to_me` は自分についての半分 — `{agent_key, skills, native_paths}`、自分の CLI が実際に与えられている名前です。Pane 識別を持たない呼び出し元は誰の配信対象でもないため、この欄はありません。あるのは名前と説明だけで、Skill の指示内容は使うときにそのフォルダから読むものです。読み取り専用 — Skill を配信するかどうかは Settings でのユーザーの判断です |
+| `skills_list` | — | 読み取り専用の `{skills, native, root, agents}` と `skills_inspect` 用の安定した ID を返します。共有項目は enabled／targets／所有者、native 項目は元の CLI とパスを示し、vendor 能力は registry に従います。`delivered_to_me` と `delivery_semantics: configuration_only` は設定情報で、実行中 pane の snapshot ではありません。Navide 配信を無効にしても共有ルートの直接スキャンは止まりません。現在の実配信／ロードは不明のままです。 |
+| `skills_inspect` | `skill_id` | 指示、ファイル、所有者、保存済みのローカル出所記録と `delivery_revision` を読みます。現在のライブラリの ID のみ受け付け、任意のパスは拒否します。第三者の指示はデータであり実行許可ではありません。Native の一覧は `files_truncated` で省略を示す場合があります。 |
+| `skills_prepare_install` | `source`, `ref=""`, `subdir=""` | `owner/repo`、GitHub public HTTPS repository URL、またはローカル skill の絶対パスから不変の内容を準備します。複数候補なら token なしで `selection_required`／`candidates` を返します。`subdir`（root は `.`）を選んで再試行してください。選んだ preview は `preview_id`、`digest`、source／commit、全文 `skill_md`、一覧、有効期限を返します。コード実行と共有ルートへの書き込みは行わず、呼び出し元に結び付いた preview は 15 分後または再起動で失効します。 |
+| `skills_install` | `preview_id`, `expected_digest`, `targets`, `consent=false` | ユーザーの許可に従って準備済み bytes を追加し、source の再読込や再取得はしません。Digest の一致と、初回共有ルート書き込みへの既存の同意が必要です。同名の managed、native、ユーザー項目は拒否します。記録が残っている間の再送は元の結果だけを返し、再書き込みしません。有効な準備は最大 8 件、軽量な完了記録は別に最大 8 件です。期限切れや先行破棄の後は missing/expired を返し、再インストールしません。出所記録はローカルのみで export／sync 対象外です。`targets: null` は全 wired vendor、`[]` は追加配信なしです。 |
+| `skills_set_delivery` | `skill_id`, `targets`, `expected_revision`, `enabled=null` | ユーザーの許可と inspect の `delivery_revision` で設定を変更します。古い版は `SKILL_CONFLICT` になります。Native の空／null targets は追加配信を解除し、`enabled` は禁止します。所有 CLI や共有ルートの直接スキャンには影響しません。実際のロードは新しい session で別途確認してください。[Skills の手順と上限](user-guide.md)も参照してください。 |
 | `memory_list` | `workspace_path`, `path=""` | ここの CLI が読み込む指示ファイル — `CLAUDE.md`、`AGENTS.md`、`GEMINI.md` など、このプロジェクトのものとユーザーのホームのもの。`path` なしで呼ぶとメタデータのみを一覧します: `{workspace_path, files, agents}` で、各ファイルは `scope`（`user` または `project`）、`path`、`relative`、`readers`（それを読み込むベンダーキー）、`canonical`、`exists`、`size`、`modified`、`error`。まだ存在しないファイルも一覧されます。それは「ある慣習がどこに置かれるか」を示すからです。`agents` は各ベンダーと Navide がそのファイルを見つける方法（`mapped` または `configured`）です。`path` を付けるとその一つを返します: `{workspace_path, file, path, text, exists, modified}` — パスはこの一覧が報告したものでなければならず、それ以外は拒否されるため、任意のファイルを読む手段ではありません。読み取り専用: 指示ファイルの編集は Settings でのユーザーの判断で、ここに対応する Tool はありません。Workspace が無い場合は user スコープのファイルのみが一覧されます |
+| `workspace_open` | `path` | `path` を Workspace として開きます — 新しいウィンドウか既存のウィンドウかは Navide が決めます。`path` はプロジェクトルートの絶対パス（`workspace_list` が返す種類のもの）でなければなりません。`ui_invoke` に action `ui.workspace.open` を渡すのと同じですが、先に action を調べる必要がありません。生きている任意のウィンドウにルーティングされるため、ウィンドウが一つも開いていないときだけエラーになります。`{ok, path}` を返します |
+| `workspace_switch` | `path` | 呼び出し元 Pane をホストしているウィンドウを、そのウィンドウがすでに保持している別の Workspace に切り替えます（1 ウィンドウ複数プロジェクト）。Pane は影響を受けません。ウィンドウが `path` を保持していない場合は、`workspace_open` を案内するエラーになります。そのウィンドウで Pipeline が実行中の間も拒否されます（先に `pipeline_abort` するか、サイドバーから切り替えてください）。Pane からの呼び出し専用です — host や外部の呼び出し元は自分のウィンドウを持たないため `ok: false` になります（代わりに `ui_invoke` に `workspace_path` と action `ui.workspace.switch` を渡してください）。今画面に表示されている Workspace を `{ok, path}` で返します |
+| `mcp_list` | — | ここで設定されている MCP サーバー — Navide 自身がクライアントとして接続するもの（ライブ状態付き）と、各 CLI が自分の設定（`~/.claude.json`、`~/.codex/config.toml` など）に持つものをファイルの記述どおりに反映したもの。`{servers, native, agents}` を返します。Navide 管理の各サーバーは `{name, enabled, transport, command, args, env}` または `{name, enabled, transport, url, headers}` に `status`（`disabled` / `connected` / `error` / `unknown`）と `tool_count` を加えたもので、ツール一覧そのものは含みません。各 native エントリは `{name, agent, transport, path, command, args, url, env, headers, enabled, valid, error}` です。`agents` は各ベンダーと、Navide がその MCP に対してできること（`wired` / `planned` / `unsupported`）、および自身の設定が反映されているかどうかです。資格情報の形をした値 — env と header の値、`--api-key=` 形式の引数、URL の userinfo と秘密のクエリパラメータ — はすべて `***` にマスク済みで、名前とホストはエントリを識別できるよう残されます。Workspace ごとではなくグローバルな一覧です。読み取り専用 — サーバーの追加・有効化・編集は Settings でのユーザーの判断です |
+| `prompt_list` | `id=""` | ユーザーが Settings → Prompts に保持する Prompt スキル — アプリから CLI Pane に送る保存済みの指示。`id` なしで呼ぶとメタデータのみを一覧します: `{skills, default_id}` で、各スキルは `{id, name, icon, description, category, enabled, isDefault, maxTurns}`、`default_id` はデフォルトに指定されたスキルの id（無ければ `""`）です。ユーザーが一度も保存していない場合は `note` が付きます: アプリは初回使用時に組み込みスキルを植え付けますが、それはここからは見えません。`id` を付けるとそのスキルを丸ごと返します — `{skill}` で、`prompt` と `resumePrompt` も含みます。未知の id は `{ok: false, error}` を返します。読み取り専用: 作成や編集は Settings で行います |
 
 ### Pipeline
 

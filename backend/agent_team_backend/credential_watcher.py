@@ -60,7 +60,7 @@ _UNSEEN = object()
 
 
 def _watch_targets(
-    real_home: Path, agent_keys: tuple[str, ...]
+    real_home: Path, agent_keys: tuple[str, ...], resolver=None
 ) -> dict[Path, dict[str, str]]:
     """``{directory: {filename: agentKey}}`` — every directory to watch and the
     exact file names inside it that carry an account identity. Filtering on the
@@ -71,7 +71,11 @@ def _watch_targets(
         spec = VENDORS.get(agent_key)
         if spec is None or spec.live_file is None:
             continue
-        live = real_home.joinpath(*spec.live_file)
+        live = (resolver(agent_key) if resolver else
+                spec.live_file_resolver(real_home) if spec.live_file_resolver else
+                real_home.joinpath(*spec.live_file))
+        if live is None:
+            continue
         targets.setdefault(live.parent, {})[live.name] = agent_key
     if "claude" in agent_keys:
         targets.setdefault(real_home, {})[CLAUDE_CONFIG_FILENAME] = "claude"
@@ -239,6 +243,9 @@ async def reconcile_live_account(agent_key: str) -> None:
 
     try:
         async with app.credential_vault.switch_lock(agent_key):
+            guard = getattr(app.credential_vault, "require_store_mutation", None)
+            if guard is not None:
+                await vault_to_thread(guard, agent_key)
             await vault_to_thread(align_default_to_live, agent_key)
     except Exception as err:  # noqa: BLE001 — a watcher must never crash the loop
         log.warning("reconciling the active %s account failed: %s", agent_key, err)
@@ -272,7 +279,7 @@ class _CredentialDirHandler(FileSystemEventHandler):
         for raw in (event.src_path, getattr(event, "dest_path", "")):
             if not raw:
                 continue
-            agent_key = self._files.get(os.path.basename(str(raw)))
+            agent_key = self._files.get(str(Path(str(raw)).absolute())) or self._files.get(os.path.basename(str(raw)))
             if agent_key is not None:
                 self._on_touched(agent_key)
 
@@ -290,6 +297,7 @@ class CredentialWatcher:
         agent_keys: tuple[str, ...] = SUPPORTED_AGENT_KEYS,
         fingerprint: Callable[[str], object] = live_identity_fingerprint,
         debounce_s: float = 0.8,
+        resolver=None,
     ) -> None:
         self._on_identity_change = on_identity_change
         self._real_home = Path(real_home or Path.home())
@@ -302,6 +310,8 @@ class CredentialWatcher:
         self._pending: dict[str, asyncio.TimerHandle] = {}
         self._seed_task: asyncio.Task | None = None
         self._started = False
+        self._resolver = resolver
+        self._watched_paths: set[Path] = set()
 
     def start(self) -> None:
         if self._started:
@@ -311,24 +321,39 @@ class CredentialWatcher:
         self._observer = Observer()
         self._observer.start()
         watched = 0
-        for directory, files in _watch_targets(self._real_home, self._agent_keys).items():
-            # A missing directory means that CLI was never installed or never
-            # signed in. It must never fail startup, and it cannot hold a
-            # credential to miss.
-            if not directory.is_dir():
-                continue
-            handler = _CredentialDirHandler(files, self._mark_touched_threadsafe)
-            try:
-                self._observer.schedule(handler, str(directory), recursive=False)
-            except Exception as err:  # noqa: BLE001
-                log.warning("CredentialWatcher schedule on %s failed: %s", directory, err)
-                continue
-            watched += 1
+        for directory, files in _watch_targets(self._real_home, self._agent_keys, self._resolver).items():
+            for filename, agent_key in files.items():
+                watched += self._watch_file(directory / filename, agent_key)
         self._seed_task = asyncio.ensure_future(self._seed())
         log.info(
             "CredentialWatcher started (%d dirs, debounce %.0fms)",
             watched, self._debounce_s * 1000,
         )
+
+    def _watch_file(self, path: Path, agent_key: str) -> int:
+        if self._observer is None or path in self._watched_paths:
+            return 0
+        directory = path.parent
+        spec = VENDORS.get(agent_key)
+        if not directory.is_dir() and not (spec and spec.live_file_from_context):
+            return 0
+        while not directory.is_dir() and directory != directory.parent:
+            directory = directory.parent
+        handler = _CredentialDirHandler({str(path.absolute()): agent_key}, self._mark_touched_threadsafe)
+        try:
+            self._observer.schedule(handler, str(directory), recursive=directory != path.parent)
+        except Exception as err:  # noqa: BLE001
+            log.warning("CredentialWatcher schedule for %s failed: %s", agent_key, err)
+            return 0
+        self._watched_paths.add(path)
+        return 1
+
+    async def watch_bound_store(self, agent_key: str, path: Path) -> None:
+        # Bindings cannot be replaced. An unbound vendor had no previous
+        # watch, so old-directory events can never reconcile its new store.
+        if path not in self._watched_paths:
+            self._fingerprints[agent_key] = await vault_to_thread(self._fingerprint, agent_key)
+            self._watch_file(path, agent_key)
 
     def stop(self) -> None:
         if not self._started:

@@ -62,10 +62,19 @@ describe('agent_msg.hook_drain — the window side', () => {
 })
 
 describe('agent.activity — a turn end the Stop hook superseded', () => {
-  it('drops only the signals that say the pane is free', () => {
+  // The whole turn_complete branch, up to the agent_active branch that follows
+  // it — bounded by structure, not by a character count that a new comment
+  // inside the branch would overflow.
+  function turnCompleteBranch(): string {
     const start = appSource.indexOf("if (ev.event_type === 'turn_complete') {")
     expect(start).toBeGreaterThan(-1)
-    const body = appSource.slice(start, start + 3000)
+    const end = appSource.indexOf("} else if (ev.event_type === 'agent_active')", start)
+    expect(end).toBeGreaterThan(start)
+    return appSource.slice(start, end)
+  }
+
+  it('drops only the signals that say the pane is free', () => {
+    const body = turnCompleteBranch()
     // Matched on the guard rather than the exact call: what this test owns is
     // that the idle timestamp is the thing skipped when the turn was
     // superseded, not how that timestamp is recorded.
@@ -77,8 +86,7 @@ describe('agent.activity — a turn end the Stop hook superseded', () => {
   it('still reads the turn text, which is real whether or not the turn ended', () => {
     // The MSG blocks this pane addressed to others, its sentinels and its
     // auto-name all come from this text; the flag only means "not idle yet".
-    const start = appSource.indexOf("if (ev.event_type === 'turn_complete') {")
-    const body = appSource.slice(start, start + 3000)
+    const body = turnCompleteBranch()
     expect(body).toContain('onTurnCompleteForMessaging(ev.pane_id,')
     expect(body).not.toContain('if (ev.superseded) return')
   })

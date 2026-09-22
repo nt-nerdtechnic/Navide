@@ -19,6 +19,7 @@ export const GIT_HOST_READ_ONLY_KEYS = [
   'agentTeam.analyzerModel',
   'agent-team:theme',
   'agent-team:theme-custom',
+  'agent-team:language',
 ] as const
 
 /** Workspace-scoped repository selection owned by the navide.git package. */

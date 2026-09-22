@@ -138,6 +138,30 @@ describe('useTerminal — cursor shortcuts prevent the browser default', () => {
     })
   }
 
+  // Chords reach the PTY through pasteText, the helper injection also uses;
+  // the handler marks its own sends as human, and a bare pasteText (what
+  // App.vue's injection calls) carries nothing.
+  it('Shift+Enter sends its newline flagged as human', async () => {
+    const { mock, scope } = await spawnedTerminal()
+    captured.keyHandler!(keyEvent({ key: 'Enter', shiftKey: true }))
+    const sent = mock.sent.filter((s) => s.type === 'terminal.input').map((s) => s.payload)
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toMatchObject({ terminal_session_id: 'sess-1', human: true })
+    scope.stop()
+  })
+
+  it('pasteText without options sends no human flag', async () => {
+    const mock = createMockBackend()
+    mock.setResponse('terminal.create', { terminal_session_id: 'sess-1', pid: 42 })
+    const { result, scope } = withScope(() => useTerminal('pane-1', mock.backend))
+    result.mount(document.createElement('div'))
+    await result.spawn({ command: 'bash', cwd: '/tmp' })
+    expect(result.pasteText('injected\r')).toBe(true)
+    const sent = mock.sent.filter((s) => s.type === 'terminal.input').map((s) => s.payload)
+    expect(sent).toEqual([{ terminal_session_id: 'sess-1', data: 'injected\r' }])
+    scope.stop()
+  })
+
   it('Shift+Arrow selection extension prevents default', async () => {
     const { mock, scope } = await spawnedTerminal()
     const e = keyEvent({ key: 'ArrowRight', shiftKey: true })

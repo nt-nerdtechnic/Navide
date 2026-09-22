@@ -131,7 +131,15 @@ from ..log_readers.base import (
     set_activity_high_water,
     user_prompt_text,
 )
-from .base import Dep, SkillsWiring, VendorSpec, command_text
+from .base import (
+    AccountSwitchSpec,
+    Dep,
+    SkillsWiring,
+    VendorSpec,
+    command_text,
+    provider_map_extract,
+    provider_map_merge,
+)
 
 log = logging.getLogger("agent_team_backend.log_readers.muse")
 
@@ -371,9 +379,8 @@ class MuseLogReader(LogReader):
                 log.debug("glob %s failed: %s", root, err)
         return out
 
-    def cwd_from_file(self, path: Path) -> str:
-        """The session's exact cwd, from the ``runtime.session.metadata``
-        record's ``workspace_root`` (the log's first row)."""
+    def _metadata_record(self, path: Path) -> dict | None:
+        """The ``runtime.session.metadata`` record (the log's first row)."""
         try:
             with path.open(encoding="utf-8", errors="replace") as fh:
                 for _ in range(_METADATA_SCAN_LINES):
@@ -388,12 +395,22 @@ class MuseLogReader(LogReader):
                         continue
                     if rec.get("payload_type") != "runtime.session.metadata":
                         continue
-                    record = _payload_record(rec)
-                    if record is not None:
-                        return str(record.get("workspace_root") or "")
+                    return _payload_record(rec)
         except OSError as err:
             log.debug("open %s failed: %s", path, err)
-        return ""
+        return None
+
+    def cwd_from_file(self, path: Path) -> str:
+        """The session's exact cwd, from the ``runtime.session.metadata``
+        record's ``workspace_root`` (the log's first row)."""
+        record = self._metadata_record(path)
+        return str(record.get("workspace_root") or "") if record is not None else ""
+
+    def version_from_file(self, path: Path) -> str:
+        """The CLI build that wrote the session (metadata ``build.semver``)."""
+        record = self._metadata_record(path)
+        build = record.get("build") if record is not None else None
+        return str(build.get("semver") or "") if isinstance(build, dict) else ""
 
     def session_id_from_path(self, path: Path) -> str:
         """The session id is the DIRECTORY name — every log file is called
@@ -426,6 +443,7 @@ class MuseLogReader(LogReader):
     ) -> list[TokenUsage]:
         out: list[TokenUsage] = []
         cwd = self.cwd_from_file(path)
+        cli_version = self.version_from_file(path)
         session_id = self.session_id_from_path(path)
         try:
             fh = path.open(encoding="utf-8")
@@ -464,6 +482,7 @@ class MuseLogReader(LogReader):
                     file_path=str(path),
                     dedup_key=usage_id,
                     timestamp=_iso_from_micros(rec.get("recorded_at")),
+                    cli_version=cli_version,
                 ))
         return out
 
@@ -490,6 +509,7 @@ class MuseLogReader(LogReader):
         # The cwd lives in the log's FIRST record, which a tail read has
         # normally already passed — read the head separately for it.
         cwd = self.cwd_from_file(path)
+        cli_version = self.version_from_file(path)
 
         for end, rec in records:
             if rec is None:
@@ -519,6 +539,7 @@ class MuseLogReader(LogReader):
                 dedup_key=usage_id,
                 timestamp=_iso_from_micros(rec.get("recorded_at")),
                 checkpoint=event_checkpoint,
+                cli_version=cli_version,
             ))
 
         final_checkpoint["recent_keys"] = recent
@@ -682,8 +703,59 @@ def _session_exists(workspace_path: str, session_id: str) -> bool:
 
 # ---- vendor spec -----------------------------------------------------------
 
+# Credential store, from Meta's own launcher script (`muse` 1.3.0 is a bash
+# launcher that reads the file read-only before delegating to the binary):
+# ``$XDG_CONFIG_HOME/muse/auth.json``, default ``~/.config/muse/auth.json``,
+# overridable with ``MUSE_AUTH_PATH``; document ``{"providers": {"meta":
+# {"mechanism": "oauth", "access_token": ..., "expires_at": <epoch s>}}}``.
+# Only the ``meta`` provider is an account, so that is the one scope; other
+# ``providers`` keys are left alone by a switch.
+MUSE_AUTH_FILE_REL = (".config", "muse", "auth.json")
+MUSE_AUTH_PATH_ENV = "MUSE_AUTH_PATH"
+
+
+def _muse_auth_file(home: Path, env: dict | None = None) -> Path:
+    env = os.environ if env is None else env
+    explicit = env.get(MUSE_AUTH_PATH_ENV)
+    if explicit:
+        return Path(explicit)
+    xdg = env.get("XDG_CONFIG_HOME")
+    return Path(xdg) / "muse" / "auth.json" if xdg else home.joinpath(*MUSE_AUTH_FILE_REL)
+
+
+def _muse_extract(document: str | None, scope: str) -> str | None:
+    return provider_map_extract(document, scope, path=("providers",))
+
+
+def _muse_merge(document: str | None, scope: str, portion: str | None) -> str:
+    return provider_map_merge(document, scope, portion, path=("providers",))
+
+
+def identity_from_secret(secret):
+    """A scoped slot holds the ``providers.meta`` entry: signed in when it
+    is an oauth entry with an access token. The file carries no email."""
+    data = None
+    if secret is not None:
+        try:
+            data = json.loads(secret)
+        except ValueError:
+            data = None
+    signed_in = (
+        isinstance(data, dict)
+        and data.get("mechanism") == "oauth"
+        and isinstance(data.get("access_token"), str)
+        and bool(data["access_token"])
+    )
+    return {"email": None, "signedIn": signed_in}
+
+
 SPEC = VendorSpec(
     key="muse",
+    # Login/usage observations do not establish Muse's CLI service host set.
+    expected_hosts=(),
+    # Same dedicated XDG root as muse_data_root, with the pane's HOME shim.
+    data_dirs=lambda ctx: (ctx.path(ctx.env.get("XDG_DATA_HOME", "").strip() or ctx.home / ".local" / "share") / "muse",),
+    data_dir_env_vars=("XDG_DATA_HOME",),
     supports_model=True,
     supports_effort=True,
     known_efforts=('none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'),
@@ -696,12 +768,47 @@ SPEC = VendorSpec(
         reads_shared_root=True,
         skills_rel=(".agents", "skills"),
     ),
-    label="Muse Code",
+    label="Muse Code (Meta)",
+    # `muse login` signs in with a Meta account by having the user approve a
+    # code in the browser — a flow a PTY pane can carry. Note META_API_KEY
+    # still takes priority over the account login if it is set in the
+    # environment. Verified against `muse login --help`, 2026-09-18.
+    login_command_args="login",
+    # Quota exhaustion text from the 1.3.0 binary's error/goal-status strings
+    # ("usage limit reached" is a distinct class from "rate limited") and the
+    # quota_hit session failure entry. Source-read only.
+    quota_exhausted_patterns=(
+        r"(usage limit reached|limited by budget|provider_tier_limit|quota_hit)",
+    ),
+    # Multi-account: the ``providers.meta`` entry of the launcher-documented
+    # auth.json is the account. ``MUSE_AUTH_PATH`` names a FILE, not a home,
+    # so it cannot serve as ``login_home_env`` (the vault hands a directory
+    # over) — a sign-in runs against the real file and is captured after.
+    # The launcher reads the file once per run: restart, then
+    # ``muse --resume <id>``.
+    live_file=MUSE_AUTH_FILE_REL,
+    live_file_resolver=lambda home: _muse_auth_file(home),
+    slot_file="auth.json",
+    identity_from_secret=identity_from_secret,
+    account_switch=AccountSwitchSpec(
+        auth_scope="muse",
+        method="restart",
+        store="compound-file",
+        evidence="source",
+        verified_version="1.3.0",
+        scopes=("meta",),
+        extract=_muse_extract,
+        merge=_muse_merge,
+        # `muse login --help`: META_API_KEY takes priority over the login.
+        shadowing_env=("META_API_KEY",),
+        resume="native",
+        todo="layout from Meta's launcher script only (the binary's own writer not inspected); META_API_KEY in the pane env shadows the file; no real-account round-trip recorded",
+    ),
     resume_id_from_command=_resume_id_from_command,
     session_exists=_session_exists,
     make_log_reader=MuseLogReader,
     install_dep=Dep(
-        "muse", "Muse Code", "Meta Muse Code CLI", "agent_cli",
+        "muse", "Muse Code (Meta)", "Meta Muse Code CLI", "agent_cli",
         ["muse", "--version"],
         install_cmd="curl -fsSL https://dev.meta.ai/install.sh | sh",
         needs_terminal=True, requires_binaries=("curl",), optional=True,

@@ -20,6 +20,7 @@ const h = vi.hoisted(() => {
     checkForUpdates: vi.fn(),
     downloadUpdate: vi.fn(),
     quitAndInstall: vi.fn(),
+    setFeedURL: vi.fn(),
   }
   return { listeners, ipcHandlers, appHandlers, autoUpdater, userData: { dir: '' } }
 })
@@ -314,7 +315,10 @@ describe('initUpdater lifecycle', () => {
     emit('update-available', { version: '1.0.1' })
     await flush()
     await flush()
-    expect(h.autoUpdater.downloadUpdate).toHaveBeenCalledTimes(1)
+    // Two attempts, not one: the first network failure is spent switching the
+    // feed from the mirror to GitHub (see updater-mirror-feed), which is a
+    // feed change, not a retry.
+    expect(h.autoUpdater.downloadUpdate).toHaveBeenCalledTimes(2)
   })
 
   it('retries a failed download as many times as the user asked for', async () => {
@@ -325,13 +329,14 @@ describe('initUpdater lifecycle', () => {
     h.autoUpdater.downloadUpdate.mockRejectedValue(new Error('ECONNRESET'))
     emit('update-available', { version: '1.0.1' })
     await flush()
-    expect(h.autoUpdater.downloadUpdate).toHaveBeenCalledTimes(1)
+    // mirror attempt + the immediate GitHub attempt the feed switch makes
+    expect(h.autoUpdater.downloadUpdate).toHaveBeenCalledTimes(2)
 
     await vi.advanceTimersByTimeAsync(5000)
-    expect(h.autoUpdater.downloadUpdate).toHaveBeenCalledTimes(2)
+    expect(h.autoUpdater.downloadUpdate).toHaveBeenCalledTimes(3)
     // One retry was all that was asked for.
     await vi.advanceTimersByTimeAsync(60_000)
-    expect(h.autoUpdater.downloadUpdate).toHaveBeenCalledTimes(2)
+    expect(h.autoUpdater.downloadUpdate).toHaveBeenCalledTimes(3)
   })
 
   it('uses the configured install timeout to release a stuck install', async () => {
@@ -390,5 +395,36 @@ describe('initUpdater lifecycle', () => {
     expect(h.autoUpdater.channel).toBe('beta')
     expect(h.autoUpdater.allowPrerelease).toBe(true)
     expect(getSettings()).toMatchObject({ channel: 'beta' })
+  })
+})
+
+describe('inAppUpdateSupported', () => {
+  // Fresh registry on purpose: earlier tests reset modules, so the osplat
+  // instance ./updater consults is whichever one this import resolves.
+  async function load() {
+    vi.resetModules()
+    const [{ inAppUpdateSupported }, osplat] = await Promise.all([
+      import('./updater'),
+      import('../shared/osplat'),
+    ])
+    return { inAppUpdateSupported, osplat }
+  }
+
+  it('is on for macOS and Windows regardless of the environment', async () => {
+    const { inAppUpdateSupported, osplat } = await load()
+    osplat.setPlatformId('darwin')
+    expect(inAppUpdateSupported({})).toBe(true)
+    // NSIS is handled natively by electron-updater; this used to be off only
+    // because no signed Windows build existed to update to.
+    osplat.setPlatformId('win32')
+    expect(inAppUpdateSupported({})).toBe(true)
+  })
+
+  it('is on for Linux only when running as an AppImage', async () => {
+    const { inAppUpdateSupported, osplat } = await load()
+    osplat.setPlatformId('linux')
+    expect(inAppUpdateSupported({ APPIMAGE: '/tmp/Navide.AppImage' })).toBe(true)
+    // A .deb install belongs to the package manager.
+    expect(inAppUpdateSupported({})).toBe(false)
   })
 })

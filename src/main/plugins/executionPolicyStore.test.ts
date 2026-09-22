@@ -13,6 +13,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { isWindows, normalizePlatformId } from '../../shared/osplat'
 import {
   isHighRiskExecutionPolicy,
   parseExecutionPolicy,
@@ -21,6 +22,9 @@ import {
   executionPolicyV1Schema,
   type ExecutionPolicy,
 } from '../../../packages/plugin-contracts/src/index'
+
+// The real filesystem the suite runs on: NTFS has no POSIX mode bits to assert on.
+const hostIsWindows = normalizePlatformId(process.platform) === 'win32'
 
 const bootstrapFailure = vi.hoisted(() => ({ enabled: false }))
 const chmodCalls = vi.hoisted(() => ({ count: 0 }))
@@ -485,7 +489,8 @@ describe('ExecutionPolicyStore', () => {
     }
   })
 
-  it('fails closed for non-owner-only state and does not follow a policy symlink', () => {
+  // A 0o644 mode cannot be set on NTFS, so the state never becomes non-owner-only there.
+  it.skipIf(hostIsWindows)('fails closed for non-owner-only state and does not follow a policy symlink', () => {
     const permissionUserData = temporaryUserData()
     const symlinkUserData = temporaryUserData()
     try {
@@ -504,7 +509,9 @@ describe('ExecutionPolicyStore', () => {
     }
   })
 
-  it('repairs an existing directory permission drift before reading durable state', () => {
+  // POSIX mode bits: chmod is a no-op on NTFS directories, so the drift can
+  // neither be staged nor repaired there.
+  it.skipIf(isWindows())('repairs an existing directory permission drift before reading durable state', () => {
     const userData = temporaryUserData()
     try {
       writeRevisionFile(userData, persistedRevision(5))
@@ -528,7 +535,7 @@ describe('ExecutionPolicyStore', () => {
     }
   })
 
-  it('does not rewrite an owner-only directory while reading durable state', () => {
+  it.skipIf(isWindows())('does not rewrite an owner-only directory while reading durable state', () => {
     const userData = temporaryUserData()
     try {
       writeRevisionFile(userData, persistedRevision(5))
@@ -602,7 +609,8 @@ describe('ExecutionPolicyStore', () => {
     }
   })
 
-  it('writes the policy directory and file owner-only with no temporary residue', () => {
+  // NTFS reports 0o666 for every file: the owner-only modes cannot be observed there.
+  it.skipIf(hostIsWindows)('writes the policy directory and file owner-only with no temporary residue', () => {
     const userData = temporaryUserData()
     try {
       new ExecutionPolicyStore(userData).setUserPolicy(USER_POLICY)

@@ -85,6 +85,14 @@ _subscriptions: dict[str, dict[str, Any]] = {}
 _bridge_pending: dict[str, queue.Queue[tuple[str, Any]]] = {}
 _bridge_origin_ids: dict[str, set[str]] = {}
 _bridge_watch_origins: set[str] = set()
+# In-flight plans.list scan: {"done": threading.Event, "generation": int,
+# "result": list | None, "error": BaseException | None}. Callers that arrive
+# while it runs wait for it, then share the one scan started after them.
+# The generation counts scans, not time: a clock coarse enough to read the
+# same value twice a millisecond apart (Windows ticks every ~15.6 ms) cannot
+# order a caller against a scan that started beside it.
+_list_flight: dict[str, Any] | None = None
+_list_generation = 0
 
 SERVER_INFO = {"name": "navide.plans", "version": "0.1.0"}
 
@@ -854,6 +862,55 @@ def _list_plans(origin: dict[str, Any]) -> list[dict[str, Any]]:
     return entries
 
 
+def _list_plans_single_flight(origin: dict[str, Any]) -> list[dict[str, Any]]:
+    """Run one full scan at a time; callers that overlap it share one follow-up.
+
+    A burst of plans.changed notifications used to start one scan per caller,
+    and every scan's Host Bridge traffic landed in the same output queue that
+    the notifications were already filling. A caller only takes the result of
+    a scan started after it arrived: a scan already past some directory when
+    the caller's write landed would hand it a pre-write snapshot.
+    """
+    global _list_flight, _list_generation
+    with _state_lock:
+        arrived_after = _list_generation
+    while True:
+        with _state_lock:
+            flight = _list_flight
+            leader = flight is None
+            if leader:
+                _list_generation += 1
+                flight = _list_flight = {
+                    "done": threading.Event(),
+                    "generation": _list_generation,
+                    "result": None,
+                    "error": None,
+                }
+        assert flight is not None
+        if not leader:
+            flight["done"].wait()
+            if flight["generation"] <= arrived_after:
+                continue
+            error = flight["error"]
+            # A leader cancelled by its own caller says nothing about ours:
+            # take the next flight instead of reporting its cancellation.
+            if isinstance(error, BridgeFailure) and error.code == "USER_CANCELLED":
+                continue
+            if error is not None:
+                raise error
+            return flight["result"]
+        try:
+            flight["result"] = _list_plans(origin)
+        except BaseException as error:
+            flight["error"] = error
+            raise
+        finally:
+            with _state_lock:
+                _list_flight = None
+            flight["done"].set()
+        return flight["result"]
+
+
 def _read_plan(origin: dict[str, Any], rel_path: Any) -> dict[str, Any]:
     normalized = _plan_path(rel_path)
     content, mtime = _bridge_read(origin, normalized, include_mtime=True)
@@ -1291,7 +1348,7 @@ def _handle(frame: Any) -> None:
         elif name in {"plans.list", "plans.list_docs"}:
             if arguments:
                 raise BridgeFailure("INVALID_ARGUMENT")
-            result = _list_plans(origin)
+            result = _list_plans_single_flight(origin)
         elif name == "plans.read":
             result = _read_plan(origin, arguments.get("rel_path"))
         elif name == "plans.read_document":

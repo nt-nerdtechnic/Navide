@@ -31,7 +31,17 @@ import os
 import sys
 import time
 
-from .base import Dep, McpServerConfig, McpValue, McpWiring, SkillsWiring, VendorSpec
+from .base import (
+    AccountSwitchSpec,
+    Dep,
+    McpServerConfig,
+    McpValue,
+    McpWiring,
+    SkillsWiring,
+    VendorSpec,
+    keychain_payload_items,
+    simple_command_args,
+)
 from ..usage_common import (
     HTTP_TIMEOUT,
     _KEYCHAIN_COOLDOWN_S,
@@ -53,8 +63,12 @@ log = logging.getLogger("agent_team_backend.log_readers.antigravity")
 
 # A file URI run inside blob text: stop at control bytes (protobuf field
 # boundaries); printable junk that follows the path is trimmed by the
-# is_dir()/most-common selection in _extract_cwd.
-_FILE_URI_RE = re.compile(r"file://(/[^\x00-\x1f\x7f]+)")
+# is_dir()/most-common selection in _extract_cwd. The path is either rooted
+# (`file:///Users/...`, `file:///C:/...`) or a bare drive path (`file://C:\...`).
+_FILE_URI_RE = re.compile(r"file://(/[^\x00-\x1f\x7f]+|[A-Za-z]:[\\/][^\x00-\x1f\x7f]+)")
+# `file:///C:/...` keeps a slash before the drive letter that is not part of
+# the path.
+_DRIVE_SLASH_RE = re.compile(r"^/+(?=[A-Za-z]:)")
 
 
 def _extract_cwd(text: str) -> str:
@@ -67,7 +81,11 @@ def _extract_cwd(text: str) -> str:
     """
     counts: Counter[str] = Counter()
     for m in _FILE_URI_RE.finditer(text):
-        counts[unquote(m.group(1)).rstrip("/")] += 1
+        # Not url2pathname: on Windows it raises on a second ":" in the run,
+        # and a run is often the clean URI plus a junk-suffixed repeat of it.
+        path = unquote(_DRIVE_SLASH_RE.sub("", m.group(1))).rstrip("/")
+        if path:
+            counts[str(Path(path))] += 1
     if not counts:
         return ""
     candidates = sorted(
@@ -86,6 +104,8 @@ _BUSY_TIMEOUT_MS = 250
 # `idx` is a monotonic primary key, so it plays the role a byte offset plays
 # for a JSONL reader.
 _IDX_PREFIX = "agy_idx::"
+# An unfinished assistant row can be updated in place after the idx advances.
+_PENDING_PREFIX = "agy_pending::"
 
 # Steps read per pass. A resumed conversation can be thousands of rows deep;
 # the watcher only needs the recent tail to decide "working" vs "done".
@@ -222,6 +242,9 @@ def _step_timestamp(metadata: bytes) -> str:
 class AntigravityLogReader(LogReader):
     vendor: str = "antigravity"
 
+    #: The log records no token usage, so there are no turns to cut.
+    turns_method: str = "unsupported"
+
     def __init__(self) -> None:
         self._cwd_cache: dict[str, tuple[float, str]] = {}  # path → (mtime, cwd)
 
@@ -331,18 +354,37 @@ class AntigravityLogReader(LogReader):
             if newest is not None:
                 remember(newest)
             return []
-        rows = self._read_steps(path, int(prev))
+        pending_raw = next(
+            (key[len(_PENDING_PREFIX):] for key in seen_keys
+             if key.startswith(_PENDING_PREFIX)), "[]",
+        )
+        pending = set(json.loads(pending_raw))
+        rows = self._read_steps(path, int(prev), pending)
         if not rows:
             return []
-        remember(rows[-1][0])
+        newest = max(int(prev), rows[-1][0])
+        remember(newest)
         cwd = self.cwd_from_file(path)
-        return [
-            ev
-            for i, row in enumerate(rows)
-            for ev in self._step_event(
-                path, session_id, cwd, row, is_last=i == len(rows) - 1
-            )
-        ]
+        events: list[ActivityEvent] = []
+        for row in rows:
+            idx, step_type, status, _, _ = row
+            if step_type == _STEP_ASSISTANT and status != _STATUS_DONE:
+                if idx in pending:
+                    continue  # still streaming; do not repeat the active event
+                pending.add(idx)
+            else:
+                pending.discard(idx)
+            events.extend(self._step_event(
+                path, session_id, cwd, row, is_last=idx == newest
+            ))
+        # One sentinel stays under the watcher's persisted-key count limit,
+        # even when several assistant rows are unfinished at the same time.
+        seen_keys.difference_update(
+            {key for key in seen_keys if key.startswith(_PENDING_PREFIX)}
+        )
+        if pending:
+            seen_keys.add(_PENDING_PREFIX + json.dumps(sorted(pending)))
+        return events
 
     def _max_step_idx(self, path: Path) -> int | None:
         """Highest `steps.idx` in the conversation (None when unreadable)."""
@@ -359,18 +401,23 @@ class AntigravityLogReader(LogReader):
         return int(row[0]) if row and row[0] is not None else None
 
     def _read_steps(
-        self, path: Path, after_idx: int
+        self, path: Path, after_idx: int, pending: set[int] | None = None,
     ) -> list[tuple[int, int, int, bytes, bytes]]:
-        """(idx, step_type, status, metadata, step_payload) rows after
-        `after_idx`, oldest first ([] when the db cannot be read)."""
+        """New rows and pending assistant rows, oldest first
+        ([] when the db cannot be read)."""
         try:
             con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
             try:
                 con.execute(f"PRAGMA busy_timeout = {_BUSY_TIMEOUT_MS}")
+                pending_ids = sorted(pending or ())
+                pending_clause = (
+                    f" OR idx IN ({','.join('?' for _ in pending_ids)})"
+                    if pending_ids else ""
+                )
                 rows = con.execute(
                     "SELECT idx, step_type, status, metadata, step_payload "
-                    "FROM steps WHERE idx > ? ORDER BY idx LIMIT ?",
-                    (after_idx, _MAX_STEPS_PER_PASS),
+                    f"FROM steps WHERE idx > ?{pending_clause} ORDER BY idx LIMIT ?",
+                    (after_idx, *pending_ids, _MAX_STEPS_PER_PASS),
                 ).fetchall()
             finally:
                 con.close()
@@ -550,6 +597,16 @@ def read_antigravity_credentials_file(home: Path) -> str | None:
     except OSError:
         return None
     return _antigravity_refresh_token(raw)
+
+
+def identity_from_secret(secret):
+    """A parked slot holds the vault's keychain payload (macOS) or the bare
+    token file (elsewhere). Signed in when a refresh token can be read out
+    of it; the blob names no account, so ``email`` stays None."""
+    items = keychain_payload_items(secret)
+    raw = next(iter(items.values()), None) if items else secret
+    signed_in = raw is not None and _antigravity_refresh_token(raw) is not None
+    return {"email": None, "signedIn": signed_in}
 
 
 _agy_keychain_failed_at: float | None = None
@@ -741,10 +798,26 @@ async def fetch_antigravity(home: Path) -> dict:
 
 # ---- session ---------------------------------------------------------------
 
+def _resume_id_from_command(command) -> str:
+    args = simple_command_args(command)
+    if not args or args[0] != "agy":
+        return ""
+    for index, arg in enumerate(args[1:], 1):
+        if arg == "--":
+            break
+        if arg == "--conversation" and index + 1 < len(args):
+            value = args[index + 1]
+        elif arg.startswith("--conversation="):
+            value = arg.partition("=")[2]
+        else:
+            continue
+        return value if value and not value.startswith("-") else ""
+    return ""
+
+
 def _session_path(workspace_path: str, session_id: str) -> Path:
     # Each conversation is a SQLite db; the id is the filename stem accepted
-    # by `agy --conversation <id>`. (`agy --conversation` parsing itself
-    # lives frontend-side today — the backend deliberately claims nothing.)
+    # by `agy --conversation <id>`.
     return (Path.home() / ".gemini" / "antigravity-cli" / "conversations"
             / f"{session_id}.db")
 
@@ -753,6 +826,10 @@ def _session_path(workspace_path: str, session_id: str) -> Path:
 
 SPEC = VendorSpec(
     key="antigravity",
+    # Quota/OAuth constants above do not establish CLI service expectations.
+    expected_hosts=(),
+    # Conversation root from AntigravityLogReader; honor the pane HOME shim.
+    data_dirs=lambda ctx: (ctx.path(ctx.home / ".gemini" / "antigravity-cli"),),
     supports_model=True,
     supports_effort=True,
     known_efforts=('low', 'medium', 'high'),
@@ -764,7 +841,30 @@ SPEC = VendorSpec(
         root_env="HOME",
         skills_rel=(".gemini", "skills"),
     ),
-    label="Antigravity",
+    label="Antigravity CLI (Google)",
+    # Multi-account: the refresh token is one fixed-name macOS Keychain item
+    # (service "gemini", account "antigravity" — go-keyring, base64 JSON),
+    # with the token file below as the stale copy the reader falls back to.
+    # There is no config-dir variable, so a login pane cannot be isolated:
+    # `agy` signs in against the real Keychain and the result is captured.
+    # Only macOS is declared — which of the two locations is authoritative
+    # elsewhere has not been established from source. The CLI mints its
+    # access token at startup from the refresh token: restart, then
+    # ``agy --conversation <id>``.
+    live_file=ANTIGRAVITY_TOKEN_FILE_REL,
+    slot_file="credential.json",
+    identity_from_secret=identity_from_secret,
+    account_switch=AccountSwitchSpec(
+        auth_scope="antigravity",
+        method="restart",
+        store="keychain",
+        evidence="source",
+        verified_version="1.2.7",
+        platforms=("darwin",),
+        keychain_items=((ANTIGRAVITY_KEYCHAIN_SERVICE, ANTIGRAVITY_KEYCHAIN_ACCOUNT),),
+        resume="native",
+        todo="Keychain item/file precedence outside macOS not established; the stale token file is left as is after a swap; no real-account round-trip recorded",
+    ),
     # No flag, no config variable, and no config-dir variable either — the
     # config root is hardcoded under the home directory, shared with the
     # Antigravity IDE. "url"/"httpUrl" are rejected as legacy: a remote server
@@ -779,9 +879,10 @@ SPEC = VendorSpec(
     ),
     # Late-bound (module global at call time) so tests can monkeypatch.
     fetch_usage=lambda home: fetch_antigravity(home),
+    resume_id_from_command=_resume_id_from_command,
     session_path=_session_path,
     make_log_reader=AntigravityLogReader,
-    install_dep=Dep("antigravity", "Antigravity", "Google Antigravity CLI", "agent_cli",
+    install_dep=Dep("antigravity", "Antigravity CLI (Google)", "Google Antigravity CLI", "agent_cli",
         ["agy", "--version"], r"(\d+\.\d+\.\d+)",
         install_cmd="curl -fsSL https://antigravity.google/cli/install.sh | bash",
         needs_terminal=True, requires_binaries=("curl",), optional=True,

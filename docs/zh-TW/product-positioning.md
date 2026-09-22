@@ -101,13 +101,13 @@ Navide
 ## 目前可以支持的主張
 
 - Navide 支援多個獨立 Coding Agent 與 Terminal Pane。
-- 目前 Registry 支援 13 種 coding CLI（Aider、Antigravity CLI、Claude Code、Codex、Copilot CLI、Cursor CLI、Grok CLI、Kilo Code、Kimi Code、Muse Code、OpenCode、Pi、Qwen Code）與一般 Terminal Session。
+- 目前 Registry 支援 14 種 coding CLI（Aider、Antigravity CLI、Claude Code、Codex、Copilot CLI、Cursor CLI、Droid、Grok CLI、Kilo Code、Kimi Code、Muse Code、OpenCode、Pi、Qwen Code）與一般 Terminal Session。
 - 受支援的 Session 可以被偵測、保存、重建與恢復。
 - Pipeline 可以定義 Stage、平行 slot、角色、Prompt、問題、文件查詢與完成 sentinel。
 - Workspace 狀態、Run Event、Handoff 與相容 Token 摘要儲存在 `.agent-team/`。
 - Navide 提供 Editor、Diff、Terminal、Diagnostics、Git、Tests 與 Review 介面。
 - Navide 採用 Local-first，而且不要求建立 Navide 帳號。
-- Navide 支援配備 Apple 晶片且執行 macOS 13 以上版本的 Mac，並提供清楚標示為未簽章的 v0.1.47 Preview 下載及原始碼安裝方式。
+- Navide 支援 Apple 晶片的 macOS 13 以上、Linux x64 與 x64／Arm 版 Windows。v0.2.2 提供以 Developer ID 憑證簽章並經 Apple 公證的 macOS 下載版本、Windows x64 安裝程式與 Linux x64 套件，以及原始碼安裝方式；Arm 版 Windows 的原生安裝程式由 Release CI 產出、自下一個版本起發布，Windows 版尚未程式碼簽章。
 - Navide 創辦人使用它作為開發 Navide 的主要環境。
 
 ## 必須標示為方向的主張
@@ -122,7 +122,7 @@ Navide
 
 ## 目前無法支持的主張
 
-- 已提供正式簽章或 Notarized 公開下載版本。
+- 所有支援平台都已提供簽章或 Notarized 的下載版本（Windows 版尚未程式碼簽章）。
 - Navide 已提供完整 Workspace Sandbox。
 - Navide 在所有情況下都完全離線。
 - Navide 讓工程師提升特定倍數的速度。

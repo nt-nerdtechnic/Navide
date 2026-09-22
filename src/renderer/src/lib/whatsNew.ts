@@ -68,6 +68,209 @@ export const WHATS_NEW_CHROME = {
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    version: '0.2.8',
+    title: {
+      'zh-TW': '摺疊群組、整個專案一次回收、Claude 往上滑的先前提示回來了',
+      'en-US': 'Fold a Group, Reclaim a Whole Project, and Claude\u2019s Scroll-Back Row Returns',
+    },
+    highlights: [
+      {
+        'zh-TW': '群組可以整個摺疊起來，側欄與專案標題都能操作。摺疊後拖曳那一列，被藏起來的子代會跟著走——以前只有父列會動，孩子留在原地。多選時只有你抓的那一列會展開成子樹，其他摺疊列仍單獨移動。',
+        'en-US': 'A group folds up everything under it, from the sidebar or the workspace heading. Drag a folded row and the hidden descendants travel with it — before, the parent moved alone and left its children behind. In a multi-selection only the row you grabbed expands into its subtree.',
+      },
+      {
+        'zh-TW': 'Claude Code 全螢幕時往上滑會顯示先前提示的那一列深色橫幅，之前會莫名消失。原因是 Navide 關 pane 時直接強制終止，claude 來不及跑自己的退出處理，在設定檔留下殘跡；累積兩次它就自己把全螢幕關掉。現在 macOS 與 Linux 會先送 SIGTERM 並等它收尾。**Windows 尚未支援**，追蹤於 #120。',
+        'en-US': 'Claude Code\u2019s dim row of previous prompts — the one that appears when you scroll up in fullscreen — stopped showing for some people. Navide was terminating the pane outright, so claude never ran its own exit handler and left a trace behind; two of those and it turns fullscreen off itself. macOS and Linux now send SIGTERM and wait. **Not on Windows yet** — tracked in #120.',
+      },
+      {
+        'zh-TW': '側欄可以一次回收整個專案的 CLI，每個 pane 變成點一下就能接續的佔位。正在使用的、等你回答的、有未送出文字的、還有無法接續的，都不會被收走。',
+        'en-US': 'Reclaim a whole project\u2019s CLIs from the sidebar; each pane becomes a click-to-resume placeholder. The focused pane, one awaiting your answer, one holding unsent text and one that cannot be resumed are left alone.',
+      },
+      {
+        'zh-TW': '在一個視窗裡開多個專案時，切換途中開的 pane 會被歸到「正要離開的那個專案」的群組底下，嚴重時還會把一個專案的群組記錄蓋掉另一個。這版修好了。**如果你在 0.2.7 已經遇到，舊資料要手動清**：關掉 Navide 後執行 scripts/repair-run-group-ids.py（預設乾跑、寫入前自動備份）。',
+        'en-US': 'With two workspaces in one window, a pane opened mid-switch filed itself under the workspace being left, and saving could write one workspace\u2019s groups over another\u2019s. Fixed. **If 0.2.7 already mixed your rows**, the fix only stops new ones — close Navide and run scripts/repair-run-group-ids.py to clean up (dry-runs by default, backs up first).',
+      },
+      {
+        'zh-TW': 'Navide Cloud 的 pane 清單改成依裝置 → 狀態 → 專案分層，可摺疊、可搜尋，不再是一長串。Welcome 的「New…」現在可以直接命名新資料夾，不必再靠系統對話框改名。',
+        'en-US': 'The Navide Cloud pane list nests by device, state and workspace, foldable and searchable, instead of one flat run of rows. Welcome\u2019s New… now asks for a name rather than leaving you to rename in the file picker.',
+      },
+    ],
+  },
+  {
+    version: '0.2.7',
+    title: {
+      'zh-TW': 'Codex pane 不再誤判失敗、更新改走自家載點',
+      'en-US': 'Codex Panes Stop Failing, Updates Come From Our Own Mirror',
+    },
+    highlights: [
+      {
+        'zh-TW': 'Codex pane 開起來約 30 秒後被判「失敗」、但 Codex 自己明明還停在提示字元——這個已修。原因是建立終端機時要先掃完該廠商的整棵 session 樹（Codex 會逐一打開每個 rollout 檔讀檔頭），樹一大就超過前端 30 秒的等待上限。現在 PTY 一起來就先回報成功，掃描在背後跑。',
+        'en-US': 'A Codex pane that reported failed about 30 seconds after starting — while Codex itself sat at its prompt — is fixed. Creating a terminal waited for a scan that opens every rollout file in the vendor\u2019s session tree; on a large tree it ran past the renderer\u2019s 30-second deadline. The pane now reports success as soon as its PTY is up, and the scan runs behind it.',
+      },
+      {
+        'zh-TW': 'Codex CLI 0.155 改了日誌格式，pane 命名因此空白、每呼叫一次工具就誤報回合結束——已跟上新格式，命名恢復，回合以 task_complete 為準。',
+        'en-US': 'Codex CLI 0.155 changed its rollout log, leaving pane names blank and reporting a turn finished on every tool call. The reader now follows the new format: names come back, and a turn ends at task_complete.',
+      },
+      {
+        'zh-TW': 'App 內自動更新改成優先向 dl.navide.dev 取得，和官網下載按鈕同一個載點，連不上時才退回 GitHub。GitHub 的檔案主機在部分網路下只有數十 KB/s，200 MB 的安裝檔常常下不完。',
+        'en-US': 'In-app updates now come from dl.navide.dev first — the same host the website\u2019s download buttons use — and fall back to GitHub only when the mirror cannot be reached. GitHub\u2019s asset host runs at tens of KB/s on some networks, too slow to finish a 200 MB installer.',
+      },
+      {
+        'zh-TW': '「設定」側欄的「外掛程式」群組併入「整合」：擴充功能與市集移到記憶體之後；「通知」從冗長的一般頁獨立成自己的分頁，排在版面之後。搜尋設定仍然找得到每一列。',
+        'en-US': 'The Settings sidebar folds its Plugins group into Integrations — Extensions and Marketplace now sit after Memory — and Notifications leaves the long General page for a tab of its own after Layout. Searching Settings still finds every row.',
+      },
+      {
+        'zh-TW': '從專案標題的 ＋ 選單點另一個 CLI，現在只是「開這一次」，不會把它改成預設。要換預設請用 Ctrl+1～9 或設定。',
+        'en-US': 'Picking another CLI from a workspace heading\u2019s ＋ menu now opens it once instead of changing the default. Ctrl+1\u20269 and Settings still set the default.',
+      },
+    ],
+  },
+  {
+    version: '0.2.6',
+    title: {
+      'zh-TW': 'Marketplace 獨立分頁、原生選單跟隨語言、用量徽章不再誤亮',
+      'en-US': 'Marketplace Page, Localized Native Menu, Usage Badge That Stays Honest',
+    },
+    highlights: [
+      {
+        'zh-TW': '「設定 → 外掛程式」現在是兩頁：搜尋與安裝擴充功能請到新的「市集」；「擴充功能」頁只剩已安裝清單，而原本獨立的「執行政策」分頁變成這一頁最上方的區塊，沒有消失。「Navide Cloud」也從「一般」群組搬到「帳號與代理」。',
+        'en-US': 'Settings → Extensions is now two pages: search and install on the new Marketplace page; Extensions keeps what is installed, with the former Execution Policy tab folded into a block at its top. Navide Cloud moves from General to Accounts & Agents.',
+      },
+      {
+        'zh-TW': 'Electron 原生選單（檔案／編輯／檢視／視窗）跟隨介面語言，切換語言時即時重建。專案標題的 ⋯ 選單收進了原本只有右鍵才有的動作（在 Finder 開啟、複製路徑、重新命名、獨立視窗、關閉工作區）。',
+        'en-US': 'The native application menu follows the UI language and rebuilds when you switch. A workspace\u2019s ⋯ menu gains the actions that used to need a right-click: reveal in Finder, copy path, rename, open in its own window, close.',
+      },
+      {
+        'zh-TW': '用量上限徽章改以帳號的 /usage 讀數為準：終端裡出現的「已達上限」句子若與新讀數矛盾會被否決，不再因為重播歷史或討論額度而誤亮好幾個小時；反過來帳號真的用完時即使 CLI 沒印任何字也會亮。',
+        'en-US': 'The usage-limit badge now trusts the account\u2019s /usage reading: a limit sentence in the terminal that contradicts a fresh reading is overruled, so a replayed transcript or a conversation about quotas no longer lights it for hours; and it lights from the reading alone when the account really is spent.',
+      },
+      {
+        'zh-TW': '裝了 xAI grok 的機器不會再把它當成 Cursor CLI（同名的 agent 執行檔）；從「設定 → 帳號」登入現用 Claude／Kilo 帳號時 pane 不再秒退；Copilot 與 Muse 的登入按鈕現在直接執行各自的 login 指令。',
+        'en-US': 'grok is no longer detected or launched as Cursor CLI (same `agent` binary name); signing in to the current Claude or Kilo account from Settings → Accounts no longer kills the pane; Copilot and Muse sign in with their own login commands.',
+      },
+      {
+        'zh-TW': 'Codex 若每次開 pane 都跳「Hooks need review」，看過一次後這台機器就不再注入該 hook——session 綁定改走 log 偵測，功能不缺但目前沒有 UI 可以重新開啟。',
+        'en-US': 'If Codex asks "Hooks need review" on every pane, seeing it once now stops the hook being injected on this machine; session binding falls back to log detection, and there is no UI yet to turn it back on.',
+      },
+      {
+        'zh-TW': '說明中心新增「Windows、Linux 與跨裝置」主題與「用量」章節，介面標籤改由產品自身的翻譯鍵引用，修正了二十處寫錯的說明。側欄拖曳已折疊的父列會連同隱藏的子樹一起搬。',
+        'en-US': 'Help gains a Windows, Linux & cross-device topic and a Usage section; interface labels in help text now come from the same keys the UI renders, correcting twenty descriptions. Dragging a folded pane row carries its hidden subtree along.',
+      },
+    ],
+  },
+  {
+    version: '0.2.5',
+    title: {
+      'zh-TW': '每個 CLI 的啟動設定、一次關掉整組面板',
+      'en-US': 'Per-CLI Launch Settings, Closing a Whole Branch at Once',
+    },
+    highlights: [
+      {
+        'zh-TW': '「設定 → CLI Agents」現在把每個 CLI 的東西收在同一頁：預設模型與 reasoning effort、自訂啟動指令、額外環境變數、權限略過、推送通道、安裝引導。手動開 pane 的對話框也多了 Model 與 Effort 欄位。注意：填了自訂啟動指令就等於完全接管命令列，Navide 不會再往上加任何參數（包含預設模型與權限略過）。',
+        'en-US': 'Settings → CLI Agents now holds everything about a CLI in one place: a default model and reasoning effort, a custom launch command, extra environment variables, permission bypass, push channels and guided install. The manual spawn dialog gains Model and Effort fields. Note: a custom launch command takes the command line over completely — Navide adds nothing to it, including the default model and the permission-bypass flag.',
+      },
+      {
+        'zh-TW': '面板右鍵選單新增「一次關掉這個與它衍生的全部代理」，不必再看著子代理重新掛到別的父節點上。',
+        'en-US': 'A pane\u2019s context menu can now close it together with every agent it spawned, instead of leaving the children to reattach to another parent.',
+      },
+      {
+        'zh-TW': '額度用盡的 ⛔ 徽章可以點掉了（會先確認），正在等額度的 loop 會立刻續跑；也修好了「關掉一次之後，隔天或切回該帳號再次撞到額度卻完全沒有提示」的問題。',
+        'en-US': 'The out-of-quota badge can be dismissed (with a confirmation), and a loop waiting on quota resumes at once. It also no longer swallows the next real limit the following day, or when you switch back to the account that ran out.',
+      },
+      {
+        'zh-TW': '修好用 npm -g／nvm／volta／pnpm／bun 安裝的 CLI 從 Finder 啟動時開不了 pane（「在終端機跑得動、在 Navide 開不起來」），安裝引導也改成 shell 真的回報找不到指令才提示。',
+        'en-US': 'Fixed panes refusing to open for a CLI installed through npm -g, nvm, volta, pnpm or bun when Navide was started from Finder — the "works in Terminal, will not open in Navide" case. Guided install now waits until the shell actually reports the command is missing.',
+      },
+      {
+        'zh-TW': 'macOS 上 nvm 的路徑順序改了：你用 nvm use 選的 node 版本不會再被換掉。若你原本（無意間）依賴 Navide 把 nvm 的 node 排到最前面，現在拿到的會是你自己 shell PATH 裡的那一個。',
+        'en-US': 'On macOS the nvm directories now come after your own PATH, so the node you selected with nvm use is no longer replaced. If you were relying on Navide putting an nvm node first, you will now get the one your shell would.',
+      },
+      {
+        'zh-TW': 'Pipeline 的「繼續執行」修好了——原本每個開出來的 pane 都會以「cwd does not exist」失敗；連點兩次也不會再重複開。',
+        'en-US': 'Resuming a pipeline stage works again — every pane it opened used to fail with "cwd does not exist" — and pressing Resume twice no longer spawns the stage twice.',
+      },
+    ],
+  },
+  {
+    version: '0.2.4',
+    title: {
+      'zh-TW': 'Token Monitor 與額度週期、下載鏡像',
+      'en-US': 'Token Monitor & Quota Cycles, Download Mirror',
+    },
+    highlights: [
+      {
+        'zh-TW': '新增「視窗 → Token Monitor」獨立視窗：每輪 token 用量與模型分佈、5 小時／月／年額度週期彙總，以及 14／30／90 天的平均與中位數。額度觀測只讀既有輪詢資料，不會多送任何請求。',
+        'en-US': 'New Window → Token Monitor: per-turn token usage and model mix, 5-hour / monthly / yearly quota cycles, and 14/30/90-day averages and medians. Quota observations reuse existing polls and send no extra provider requests.',
+      },
+      {
+        'zh-TW': '更正：原本預告的「設定 → Sharing」分頁在 0.2.4 出貨前已移除、等待重新設計。匯出／匯入設定全集仍可在「設定 → General → 設定管理」使用；雲端分享碼與已配對裝置清單尚未推出。',
+        'en-US': 'Correction: the Settings → Sharing page announced for this release was removed before 0.2.4 shipped and is awaiting a redesign. Exporting and importing the settings bundle is still available under Settings → General → Settings Management; the cloud share code and paired-device list did not ship.',
+      },
+      {
+        'zh-TW': '關閉工作區時可選擇保留 CLI 繼續在背景執行：右鍵選單分成「關閉工作區」與「關閉工作區與 CLI 視窗」，關掉畫面不再等於砍掉正在跑的 agent。',
+        'en-US': 'Closing a workspace can now leave its CLI panes running: the context menu separates "close workspace" from "close workspace and its CLI panes", so putting a project away no longer kills the agents working in it.',
+      },
+      {
+        'zh-TW': '下載改走鏡像 dl.navide.dev：GitHub 載點連不上或太慢時，官網會自動改用鏡像，App 內更新也會在 GitHub 失敗後改走鏡像重試一次。',
+        'en-US': 'Downloads now have a mirror at dl.navide.dev: the website switches to it automatically when GitHub is unreachable or slow, and the in-app updater retries there after a network failure on GitHub.',
+      },
+      {
+        'zh-TW': '終端機輸入在 CLI 大量輸出時不再卡住；工作區側邊欄支援子樹摺疊；Codex 面板重啟後能正確接回原本的對話。',
+        'en-US': 'Terminal input no longer stalls while a CLI floods the pane with output; the workspace sidebar folds subtrees; and Codex panes reconnect to their original conversation after a restart.',
+      },
+    ],
+  },
+  {
+    version: '0.2.3',
+    title: {
+      'zh-TW': '四平台同一版本、Windows ARM64 原生版',
+      'en-US': 'One Build for Four Platforms, Native Windows ARM64',
+    },
+    highlights: [
+      {
+        'zh-TW': 'macOS、Windows x64、Windows ARM64 與 Linux x64 首次由同一個 commit 出貨；Windows on Arm 有了原生安裝檔，不再靠模擬執行。',
+        'en-US': 'macOS, Windows x64, Windows ARM64 and Linux x64 ship from one commit for the first time, and Windows on Arm gets a native installer instead of running emulated.',
+      },
+      {
+        'zh-TW': '修正終端機面板在分析器輪詢期間逾時的問題（外連 TLS 內容改為只建一次且不佔用事件迴圈）。',
+        'en-US': 'Fixed terminal panes timing out while the analyzer polled: the outbound TLS context is now built once, off the event loop.',
+      },
+      {
+        'zh-TW': 'MCP 面板可接續既有的 CLI 對話；側邊欄拖放會建立面板血緣關係。',
+        'en-US': 'MCP panes can resume an existing CLI conversation, and sidebar drag-and-drop assigns pane lineage.',
+      },
+    ],
+  },
+  {
+    version: '0.2.2',
+    title: {
+      'zh-TW': 'Windows 與 Linux 跨平台支援、Prompt Skills 自訂圖示與工作區別名',
+      'en-US': 'Windows & Linux Multi-Platform Support, Custom Prompt Skill Icons & Workspace Aliases',
+    },
+    highlights: [
+      {
+        'zh-TW': 'Windows 與 Linux 正式支援：新增 Windows NSIS 安裝包、ConPTY 終端機與 DPAPI 安全加密；Linux 支援 AppImage（內建靜態 FUSE3 執行期）與桌面整合。',
+        'en-US': 'Windows & Linux support: Official Windows NSIS installer, ConPTY terminal, and DPAPI encryption; Linux AppImage with static FUSE3 runtime and desktop integration.',
+      },
+      {
+        'zh-TW': 'Prompt Skills 升級：支援自訂 Emoji/單字元圖示與 24 款內建向量圖示；非預設技能支援一鍵單次呼叫（One-shot Cast），不再強制循環。',
+        'en-US': 'Prompt Skills enhancements: Support for custom single-character emoji icons and 24 builtin vector icons, plus one-shot casting for non-default skills without loop lock.',
+      },
+      {
+        'zh-TW': '工作區別名與階層狀態：支援設定工作區顯示名稱別名；側邊欄整合子 Agent 樹狀狀態標籤（Subtree Status）、Token 消耗分組與長路徑清晰展示。',
+        'en-US': 'Workspace aliases & hierarchy status: Custom workspace display names, sidebar subtree status badges, token attribution by run group, and clear path hierarchy.',
+      },
+      {
+        'zh-TW': 'Plans 穩定性加固：實作單一飛行（Single-flight）併發掃描合併與防抖機制，支援目錄搬移即時追蹤與重試復原。',
+        'en-US': 'Plans performance & hardening: Single-flight concurrent scan coalescing, debounced watcher events, directory move tracking, and recovery retries.',
+      },
+      {
+        'zh-TW': 'MCP 與訊息協議加強：支援喚醒冷啟動面板、Ack-only 確認訊息不佔用終端輸入、以及多裝置連線感知。',
+        'en-US': 'MCP & messaging extensions: Wake cold-restored agent panes, ack-only receipt messages, and multi-device presence hints.',
+      },
+    ],
+  },
+  {
     version: '0.2.1',
     title: {
       'zh-TW': '外掛架構升級：打包 Plans 執行期與執行策略（Execution Policy）設定',

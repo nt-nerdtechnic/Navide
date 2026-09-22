@@ -165,6 +165,9 @@ def test_invalid_env_and_header_names_are_rejected() -> None:
         json.dumps([{"name": "bad", "transport": "http"}]),
         "x" * 1_000_001,
     ],
+    # Explicit ids: the default id embeds the 1 000 001-char content in
+    # PYTEST_CURRENT_TEST, which exceeds Windows' 32 767-char env limit.
+    ids=["not-json", "bad-shape", "oversized"],
 )
 def test_invalid_corrupt_or_oversized_file_is_never_overwritten(
     tmp_path: Path, content: str

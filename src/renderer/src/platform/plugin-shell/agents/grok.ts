@@ -4,25 +4,29 @@ import type { AgentSpec } from './types'
 
 export const SPEC = {
   agentKey: 'grok',
-  label: 'Grok CLI',
+  label: 'Grok Build (SpaceXAI)',
   defaultCommand: 'grok',
   // `reasoning_effort` exists only in grok's API payload, not as a flag.
   modelArgs: (m) => `--model ${m}`,
-  // no skipPermissionFlag: grok-cli has no per-tool confirmation gate, so
-  // there is no flag to bypass. It does ask once per workspace whether to run
-  // shell commands sandboxed or on the host (answer stored in
-  // ~/.grok/workspace-trust.json); `--sandbox` / `--no-sandbox` answer that
-  // ahead of time, but they are a sandbox choice, not a permission bypass.
-  // Short flag; 12-hex session id.
-  resumeArgs: (id) => `-s ${id}`,
-  // The log has no turn-end record. The reader does emit turn_complete, but
-  // only after its own 8s quiet window (_TURN_IDLE_SECONDS in cli_vendors/
-  // grok.py) — inference one layer down, which is exactly what this flag
-  // means. Matches qwen/pi, whose readers work the same way.
-  turnEndInferredFromSilence: true,
+  // no skipPermissionFlag: this CLI does have `--always-approve` and
+  // `--permission-mode` (verified in `grok --help`, 1.0.30), but wiring either
+  // one in is a change to how panes run, not part of reading its logs — so the
+  // permission surface stays unwired until that is decided on its own.
+  // `--sandbox` / `--no-sandbox` pre-answer the per-workspace host-vs-sandbox
+  // question (stored in ~/.grok/workspace-trust.json); a sandbox choice, not a
+  // permission bypass.
+  // `-r` resumes; `-s`/`--session-id` NAMES A NEW session and errors on an
+  // existing id, so the two are not interchangeable. Ids are UUIDv7.
+  resumeArgs: (id) => `-r ${id}`,
+  // No turnEndInferredFromSilence: the official CLI writes an explicit
+  // `turn_completed` record into updates.jsonl and the reader emits its
+  // turn_complete straight off it. The community grok-cli this replaced wrote
+  // no such record, which is why the flag used to be set here.
   needsSessionMarker: true,
   bracketedPaste: true,
-  resumeCommandPattern: /^grok\s+-s\s+\S+/,
+  resumeCommandPattern: /^grok\s+-r\s+\S+/,
   supportsRebuild: true,
-  hint: 'generalist'
+  hint: 'generalist',
+  // Quota failover: grok.py reports one "Monthly credits" window.
+  quotaSemantics: { hard: ['monthly'], required: ['monthly'] },
 } as const satisfies AgentSpec

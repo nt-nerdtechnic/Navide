@@ -375,3 +375,77 @@ describe('useTerminal — draft and keystroke signals', () => {
     }
   })
 })
+
+// The backend counts development time off `human: true` on terminal.input.
+// Only the keyboard may set it: the paste helpers are what programmatic
+// injection rides, and a mouse report is the terminal talking, not the user.
+describe('useTerminal — human flag on terminal.input', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    captured.dataHandler = undefined
+    localStorage.clear()
+  })
+
+  async function spawnedTerminal() {
+    const mock = createMockBackend()
+    mock.setResponse('terminal.create', { terminal_session_id: 'sess-1', pid: 42 })
+    const { result, scope } = withScope(() => useTerminal('pane-1', mock.backend))
+    result.mount(document.createElement('div'))
+    await result.spawn({ command: 'bash', cwd: '/tmp', agentKey: 'claude' })
+    return { mock, scope, terminal: result }
+  }
+
+  const inputs = (mock: ReturnType<typeof createMockBackend>) =>
+    mock.sent.filter((s) => s.type === 'terminal.input').map((s) => s.payload)
+
+  it('marks a keystroke as human', async () => {
+    const { mock, scope } = await spawnedTerminal()
+    captured.dataHandler!('a')
+    captured.dataHandler!('\x1b[A')
+    expect(inputs(mock)).toEqual([
+      { terminal_session_id: 'sess-1', data: 'a', human: true },
+      { terminal_session_id: 'sess-1', data: '\x1b[A', human: true },
+    ])
+    scope.stop()
+  })
+
+  it.each([
+    ['SGR mouse', '\x1b[<0;10;10M'],
+    ['X10 mouse', '\x1b[M !!'],
+    ['focus in', '\x1b[I'],
+    ['focus out', '\x1b[O'],
+  ])('sends a %s report without the flag', async (_name, report) => {
+    const { mock, scope } = await spawnedTerminal()
+    captured.dataHandler!(report)
+    expect(inputs(mock)).toEqual([{ terminal_session_id: 'sess-1', data: report }])
+    scope.stop()
+  })
+
+  it('never flags pasteText, which injection also rides', async () => {
+    const { mock, scope, terminal } = await spawnedTerminal()
+    expect(terminal.pasteText('review this\r')).toBe(true)
+    expect(inputs(mock)).toEqual([{ terminal_session_id: 'sess-1', data: 'review this\r' }])
+    scope.stop()
+  })
+
+  it('carries the flag on the gated flush when the held bytes were typed', async () => {
+    const { mock, scope, terminal } = await spawnedTerminal()
+    terminal.setDisableStdin(true)
+    captured.dataHandler!('\x1b[I')
+    captured.dataHandler!('h')
+    captured.dataHandler!('i')
+    expect(inputs(mock)).toEqual([])
+    terminal.setDisableStdin(false)
+    expect(inputs(mock)).toEqual([{ terminal_session_id: 'sess-1', data: '\x1b[Ihi', human: true }])
+    scope.stop()
+  })
+
+  it('flushes a gate that only ever held terminal reports without the flag', async () => {
+    const { mock, scope, terminal } = await spawnedTerminal()
+    terminal.setDisableStdin(true)
+    captured.dataHandler!('\x1b[<0;10;10M')
+    terminal.setDisableStdin(false)
+    expect(inputs(mock)).toEqual([{ terminal_session_id: 'sess-1', data: '\x1b[<0;10;10M' }])
+    scope.stop()
+  })
+})

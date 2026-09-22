@@ -126,3 +126,84 @@ def test_unrelated_lineages_are_untouched(store_ws: tuple[ProjectStore, str]) ->
     panes = _panes(store, ws)
     assert panes["c1"].spawned_by == "p1b"
     assert panes["c2"].spawned_by == "p2", "an unrelated lineage must not move"
+
+
+# ── set_pane_parent: re-parenting an existing pane ─────────────────────────
+def test_set_pane_parent_adopts_a_pane(store_ws: tuple[ProjectStore, str]) -> None:
+    """The write half of lineage: a root pane becomes someone's child."""
+    store, ws = store_ws
+    store.record_manual_pane_spawn(ws, pane_id="a", agent="claude")
+    store.record_manual_pane_spawn(ws, pane_id="b", agent="claude")
+
+    outcome = store.set_pane_parent(ws, pane_id="b", spawned_by="a")
+
+    assert not isinstance(outcome, str)
+    assert _panes(store, ws)["b"].spawned_by == "a"
+
+
+def test_set_pane_parent_empty_makes_a_root(store_ws: tuple[ProjectStore, str]) -> None:
+    """'' is a value, not a missing one: the pane is detached to the root."""
+    store, ws = store_ws
+    store.record_manual_pane_spawn(ws, pane_id="a", agent="claude")
+    store.record_manual_pane_spawn(ws, pane_id="b", agent="claude",
+                                   origin="mcp", spawned_by="a")
+
+    outcome = store.set_pane_parent(ws, pane_id="b", spawned_by="")
+
+    assert not isinstance(outcome, str)
+    assert _panes(store, ws)["b"].spawned_by == ""
+
+
+def test_set_pane_parent_refuses_an_unknown_pane(store_ws: tuple[ProjectStore, str]) -> None:
+    store, ws = store_ws
+    assert store.set_pane_parent(ws, pane_id="ghost", spawned_by="") == "not_found"
+
+
+def test_set_pane_parent_refuses_an_unknown_parent(store_ws: tuple[ProjectStore, str]) -> None:
+    """A dangling parent pointer would draw a subtree under nothing."""
+    store, ws = store_ws
+    store.record_manual_pane_spawn(ws, pane_id="a", agent="claude")
+    assert store.set_pane_parent(ws, pane_id="a", spawned_by="ghost") == "parent_not_found"
+    assert _panes(store, ws)["a"].spawned_by == ""
+
+
+def test_set_pane_parent_refuses_self(store_ws: tuple[ProjectStore, str]) -> None:
+    store, ws = store_ws
+    store.record_manual_pane_spawn(ws, pane_id="a", agent="claude")
+    assert store.set_pane_parent(ws, pane_id="a", spawned_by="a") == "cycle"
+
+
+def test_set_pane_parent_refuses_a_descendant(store_ws: tuple[ProjectStore, str]) -> None:
+    """a -> b -> c; parenting a under c would loop, and the sidebar's lineage
+    walk would spin. Refused at every depth, not only the direct child."""
+    store, ws = store_ws
+    store.record_manual_pane_spawn(ws, pane_id="a", agent="claude")
+    store.record_manual_pane_spawn(ws, pane_id="b", agent="claude",
+                                   origin="mcp", spawned_by="a")
+    store.record_manual_pane_spawn(ws, pane_id="c", agent="claude",
+                                   origin="mcp", spawned_by="b")
+
+    assert store.set_pane_parent(ws, pane_id="a", spawned_by="b") == "cycle"
+    assert store.set_pane_parent(ws, pane_id="a", spawned_by="c") == "cycle"
+    # Nothing was written by the refusals.
+    assert _panes(store, ws)["a"].spawned_by == ""
+
+
+def test_set_pane_parent_moving_a_subtree_keeps_it_intact(
+    store_ws: tuple[ProjectStore, str]
+) -> None:
+    """Re-parenting b (with child c) under d moves the whole branch: c still
+    hangs off b, and b now hangs off d."""
+    store, ws = store_ws
+    for pid in ("a", "d"):
+        store.record_manual_pane_spawn(ws, pane_id=pid, agent="claude")
+    store.record_manual_pane_spawn(ws, pane_id="b", agent="claude",
+                                   origin="mcp", spawned_by="a")
+    store.record_manual_pane_spawn(ws, pane_id="c", agent="claude",
+                                   origin="mcp", spawned_by="b")
+
+    store.set_pane_parent(ws, pane_id="b", spawned_by="d")
+
+    panes = _panes(store, ws)
+    assert panes["b"].spawned_by == "d"
+    assert panes["c"].spawned_by == "b"

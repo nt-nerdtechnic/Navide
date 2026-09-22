@@ -15,7 +15,9 @@ from agent_team_backend.cli_vendors.registry import VENDORS
 def _write(root: Path, relative: tuple[str, ...], text: str = "body\n") -> Path:
     path = root.joinpath(*relative)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
+    # newline="" keeps the byte count the size assertions compare against:
+    # text mode on Windows would write "\r\n" for every "\n".
+    path.write_text(text, encoding="utf-8", newline="")
     return path
 
 

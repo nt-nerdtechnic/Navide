@@ -73,9 +73,27 @@ describe('useStatusBadgePrefs', () => {
     setStatusBadgePref('idle', { labelZh: '待命', labelEn: 'Ready' })
     expect(statusBadgeLabelOverride('idle', 'zh-TW')).toBe('待命')
     expect(statusBadgeLabelOverride('idle', 'en-US')).toBe('Ready')
+    expect(statusBadgeLabelOverride('idle', 'ja-JP')).toBe('')
     // A status with only one language customized leaves the other translated.
     setStatusBadgePref('error', { labelZh: '壞了' })
     expect(statusBadgeLabelOverride('error', 'en-US')).toBe('')
+  })
+
+  it('persists, reloads, synchronizes and clears Japanese without altering older language overrides', () => {
+    seed({ idle: { labelZh: '待命', labelEn: 'Ready' } })
+    setStatusBadgePref('idle', { labelJa: '待機' })
+    __reloadStatusBadgePrefsForTest()
+    expect(statusBadgeLabelOverride('idle', 'ja-JP')).toBe('待機')
+    expect(statusBadgeLabelOverride('idle', 'en-US')).toBe('Ready')
+    expect(statusBadgeLabelOverride('idle', 'zh-TW')).toBe('待命')
+    setStatusBadgePref('idle', { labelJa: '  ' })
+    expect(JSON.parse(String(store.get(KEY)))).toEqual({ idle: { labelZh: '待命', labelEn: 'Ready' } })
+    store.set(KEY, JSON.stringify({ idle: { labelJa: '準備完了' } }))
+    h.listener?.([KEY])
+    expect(statusBadgeLabelOverride('idle', 'ja-JP')).toBe('準備完了')
+    expect(statusBadgeLabelOverride('idle', 'en-US')).toBe('')
+    setStatusBadgePref('idle', { labelJa: '' })
+    expect(JSON.parse(String(store.get(KEY)))).toEqual({})
   })
 
   it('stores nothing for a choice that equals the shipped default', () => {

@@ -1,8 +1,11 @@
 import type { TerminalExitDetails, TerminalStartupProbe } from '../lib/terminalLifecycle'
 import type { PortResponse, ReactiveValue } from '@navide/plugin-ui/shared'
+import type { ShellCommandOptions } from '../../../../../shared/osplat'
 import type { InjectionKey } from 'vue'
 
 export interface TerminalSpawnOptions {
+  quotaTransactionId?: string
+  quotaOriginalPaneId?: string
   command: string | string[]
   cwd: string
   env?: Record<string, string>
@@ -13,10 +16,22 @@ export interface TerminalSpawnOptions {
   isResume?: boolean
   restoreMode?: 'memory-resume' | 'fresh'
   skipReattach?: boolean
+  /** Serialized scrollback (from another pane's `serializeScrollback()`) to
+   *  write into this pane's xterm before its PTY starts — the handoff a
+   *  quota-failover restart uses so the conversation's history stays in the
+   *  replacement pane. Display only: never reaches the PTY. */
+  replayScrollback?: string
   loginProfileId?: string
+  /** The pane exists in order to sign in, so the backend runs the vendor's
+   *  sign-in trigger instead of the plain REPL. Independent of
+   *  `loginProfileId`, which only chooses an isolated home: a live login
+   *  (signing in to the already-active account) sets this and not that. */
+  isLogin?: boolean
 }
 
 export interface TerminalCreateRequest {
+  quotaTransactionId?: string
+  quotaOriginalPaneId?: string
   paneId: string
   createGeneration: string
   agentKey: string | null
@@ -28,6 +43,7 @@ export interface TerminalCreateRequest {
   metadata: Record<string, unknown> | null
   outputLogFile: string | null
   loginProfileId: string | null
+  isLogin: boolean
   replacesTerminalId: string | null
 }
 
@@ -35,6 +51,8 @@ export interface TerminalCreateResult {
   terminal_session_id: string
   pid: number
   startup_probe?: TerminalStartupProbe | null
+  /** Why this machine could not wire the pane's MCP, one line each; absent when it could. */
+  wiring_warnings?: string[]
 }
 
 export interface TerminalOutputEvent {
@@ -48,12 +66,31 @@ export interface TerminalFileListResult {
   files?: string[]
 }
 
+export interface TerminalInputOptions {
+  /** The bytes came from the person at the keyboard (xterm onData minus
+   *  mouse/focus reports, or the mention picker) — never from paste helpers,
+   *  which programmatic injection also rides. The backend counts development
+   *  time off this flag; a port that sees it set forwards it as `human: true`
+   *  and sends nothing at all otherwise. */
+  human?: boolean
+}
+
 export interface TerminalDockPort {
   readonly status: ReactiveValue<'starting' | 'connecting' | 'connected' | 'disconnected' | 'error'>
   readonly shell: ReactiveValue<string>
+  /** The command that runs `command` inside `shell` and keeps the shell open —
+   *  the host's call, since only it knows the platform (PowerShell and
+   *  cmd.exe take different flags from a POSIX login shell). A Windows agent
+   *  pane (`opts.agentPane`) comes back as a plain string that runs directly,
+   *  with no PowerShell wrapper. A port that omits it gets the POSIX form. */
+  readonly spawnArgv?: (
+    shell: string,
+    command: string,
+    opts?: ShellCommandOptions,
+  ) => string | string[]
   readonly autoRestart: ReactiveValue<{ attempt: number; max: number; reason: string } | null>
 
-  input(sessionId: string, data: string, timeoutMs?: number): Promise<PortResponse>
+  input(sessionId: string, data: string, timeoutMs?: number, opts?: TerminalInputOptions): Promise<PortResponse>
   create(request: TerminalCreateRequest, timeoutMs: number): Promise<PortResponse<TerminalCreateResult>>
   cancelCreate(paneId: string, createGeneration: string): Promise<PortResponse>
   /** `logs` maps a surviving session id to the transcript it is actually
@@ -69,7 +106,12 @@ export interface TerminalDockPort {
   onExit(callback: (payload: TerminalExitEvent) => void): () => void
 
   listFiles(workspacePath: string, query: string, maxResults: number): Promise<PortResponse<TerminalFileListResult>>
-  listAgentPanes(): Promise<PortResponse<{ panes?: Array<{ pane_id?: string; qualified_name?: string; workspace_label?: string }> }>>
+  /** `workspace_label` / `qualified_name` are the `<folder>/<pane>` addressing
+   *  protocol and are what gets inserted into a CLI. `workspace_path` is the
+   *  unique section key for mention menus (a folder name is not unique), and
+   *  `workspace_display_name` is the workspace's user-set alias — both
+   *  optional, since a backend older than either field sends neither. */
+  listAgentPanes(): Promise<PortResponse<{ panes?: Array<{ pane_id?: string; qualified_name?: string; workspace_label?: string; workspace_path?: string; workspace_display_name?: string }> }>>
   statPath(path: string, timeoutMs?: number): Promise<PortResponse<{ exists: boolean }>>
   getHomeDirectory?(): Promise<string>
   openFile(args: {

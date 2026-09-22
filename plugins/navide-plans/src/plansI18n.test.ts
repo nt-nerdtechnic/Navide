@@ -11,6 +11,7 @@ import { PluginBackendError } from '@navide/plugin-sdk'
 import { backendErrorMessage, KNOWN_BACKEND_ERROR_KEYS } from './backend'
 import enUS from './locales/en-US.json'
 import zhTW from './locales/zh-TW.json'
+import jaJP from './locales/ja-JP.json'
 
 function collectLeafKeys(obj: Record<string, unknown>, prefix = ''): string[] {
   const keys: string[] = []
@@ -26,6 +27,21 @@ function collectLeafKeys(obj: Record<string, unknown>, prefix = ''): string[] {
 }
 
 describe('Plans i18n bootstrap', () => {
+  it('renders Japanese package messages from the query and follows only Host locale updates', () => {
+    const i18n = createI18n({ legacy: false, locale: 'en-US', fallbackLocale: 'zh-TW', messages: { 'en-US': enUS, 'zh-TW': zhTW, 'ja-JP': jaJP } })
+    expect(bootstrapPlansI18n(i18n, '?locale=ja-JP')).toBe('ja-JP')
+    expect(i18n.global.t('pane.plans.v2.no-workspace')).toBe('ワークスペースが選択されていません')
+    let listener!: (payload: unknown) => void
+    const dispose = bindPlansLocale(i18n, (_event, cb) => { listener = cb; return () => {} })
+    listener({ source: 'plugin-storage', settings: { 'agent-team:language': 'en-US' } })
+    expect(i18n.global.locale.value).toBe('ja-JP')
+    listener({ source: 'host', settings: { 'agent-team:language': 'en-US' } })
+    expect(i18n.global.t('pane.plans.v2.no-workspace')).toBe('No workspace selected')
+    listener({ source: 'host', settings: { 'agent-team:language': 'ja-JP' } })
+    expect(i18n.global.locale.value).toBe('ja-JP')
+    dispose()
+  })
+
   it('adds package-owned messages without replacing shared messages', () => {
     const i18n = createI18n({
       legacy: false,
@@ -196,7 +212,7 @@ describe('Plans i18n bootstrap', () => {
 
     expect(extractLocaleFromSettingsEvent({
       source: 'host',
-      settings: { 'agent-team:language': 'ja-JP' },
+      settings: { 'agent-team:language': 'fr-FR' },
     })).toBeNull()
 
     expect(extractLocaleFromSettingsEvent(null)).toBeNull()
@@ -209,6 +225,7 @@ describe('Plans i18n bootstrap', () => {
     const zhKeys = collectLeafKeys(zhTW).sort()
 
     expect(enKeys).toEqual(zhKeys)
+    expect(collectLeafKeys(jaJP).sort()).toEqual(enKeys)
     expect(enKeys.length).toBeGreaterThan(0)
   })
 

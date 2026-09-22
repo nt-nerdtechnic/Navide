@@ -21,7 +21,7 @@ tripping the 32 MB peak-RSS threshold — the probe was silent for the entire
 window it existed to describe. The detector therefore watches several signals
 and reports whichever one rises, so no single blind spot can silence it.
 
-Stdlib only — no new dependency to carry through PyInstaller.
+Stdlib plus the `osplat` seam — no new dependency to carry through PyInstaller.
 """
 
 from __future__ import annotations
@@ -29,14 +29,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import resource
 import sys
 import tempfile
 import threading
 import tracemalloc
 from dataclasses import dataclass
 
-from . import proc_rusage
+from . import osplat, proc_rusage
 
 log = logging.getLogger("agent_team_backend.mem_probe")
 
@@ -154,9 +153,8 @@ def read_arena_stats() -> ArenaStats | None:
 
 
 def peak_rss_bytes() -> int:
-    """Process peak RSS. Darwin reports bytes, Linux kilobytes."""
-    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    return peak if sys.platform == "darwin" else peak * 1024
+    """Process peak RSS in bytes; 0 where the platform cannot say."""
+    return osplat.resource_probe.peak_rss_bytes() or 0
 
 
 def phys_footprint_bytes() -> int | None:

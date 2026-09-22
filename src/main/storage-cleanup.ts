@@ -1,4 +1,4 @@
-import { join, resolve, sep } from 'node:path'
+import { join, posix, resolve, sep, win32 } from 'node:path'
 import type { UpdateStatus } from '../shared/updater'
 
 /**
@@ -47,9 +47,11 @@ export function resolveOsCacheRoot(
   home: string,
   env: NodeJS.ProcessEnv = process.env
 ): string {
-  if (platform === 'darwin') return join(home, 'Library', 'Caches')
-  if (platform === 'win32') return env.LOCALAPPDATA || join(home, 'AppData', 'Local')
-  return env.XDG_CACHE_HOME || join(home, '.cache')
+  // Each arm joins with its own platform's separator: the result describes
+  // `platform`, not the host, so the answer is the same wherever it is asked.
+  if (platform === 'darwin') return posix.join(home, 'Library', 'Caches')
+  if (platform === 'win32') return env.LOCALAPPDATA || win32.join(home, 'AppData', 'Local')
+  return env.XDG_CACHE_HOME || posix.join(home, '.cache')
 }
 
 export interface StorageCleanupDeps {

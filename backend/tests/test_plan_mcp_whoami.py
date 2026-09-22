@@ -157,7 +157,7 @@ async def test_list_targets_still_answers_exactly_as_it_did() -> None:
     assert roster["you"] == "alpha/reviewer"
     assert set(roster["targets"][0]) == {
         "name", "address", "pane_id", "workspace_path", "same_workspace",
-        "busy", "offline",
+        "busy", "offline", "realized",
     }
 
 
@@ -280,6 +280,77 @@ async def test_list_targets_still_reports_no_lineage() -> None:
     assert all("spawned_by" not in target for target in roster["targets"])
 
 
+# ── D. whether this machine is linked to a server ───────────────────────────
+def _cloud(
+    monkeypatch: pytest.MonkeyPatch, state: str, device_id: str = "this-device"
+) -> None:
+    """Put this machine in a link state without a link (or a Keychain)."""
+    from agent_team_backend import server_link
+
+    monkeypatch.setattr(server_link, "link_state", lambda: state)
+    monkeypatch.setattr(server_link, "local_device_id", lambda: device_id)
+
+
+@pytest.mark.asyncio
+async def test_whoami_omits_cloud_on_a_machine_with_no_server_link(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Absent, not empty: a machine that never linked must read exactly as it
+    did before cross-device addressing existed, so an empty dict — which says
+    "there is a link, it just has nothing to report" — is the wrong answer."""
+    from agent_team_backend import server_link
+
+    agent_messaging.register("pa", "reviewer", "/ws/alpha", agent_key="claude")
+    _cloud(monkeypatch, server_link.STATE_UNCONFIGURED)
+
+    me = await plan_mcp.cli_whoami(_ctx())
+    assert "cloud" not in me
+    assert set(me) == {
+        "ok", "caller", "name", "address", "pane_id", "workspace_path",
+        "same_workspace", "agent_key", "busy", "offline", "realized",
+        "delegation_hint",
+    }
+
+
+@pytest.mark.asyncio
+async def test_whoami_reports_the_link_state_and_this_machines_device_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agent_messaging.register("pa", "reviewer", "/ws/alpha", agent_key="claude")
+    _cloud(monkeypatch, "connected", device_id="dev-9")
+
+    me = await plan_mcp.cli_whoami(_ctx())
+    assert me["cloud"] == {"state": "connected", "device_id": "dev-9"}
+
+
+@pytest.mark.asyncio
+async def test_whoami_reports_a_link_that_is_not_carrying_anything_right_now(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Any state but "unconfigured" is a configured machine, and the word is
+    what separates "no server" from "a server this pane cannot reach"."""
+    from agent_team_backend import server_link
+
+    agent_messaging.register("pa", "reviewer", "/ws/alpha", agent_key="claude")
+    _cloud(monkeypatch, server_link.STATE_UNREACHABLE, device_id="dev-9")
+
+    me = await plan_mcp.cli_whoami(_ctx())
+    assert me["cloud"] == {"state": "unreachable", "device_id": "dev-9"}
+
+
+@pytest.mark.asyncio
+async def test_whoami_omits_device_id_before_the_server_has_issued_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A link exists but has no id yet; "" would read as an addressable device
+    whose id happens to be empty, so the key goes rather than the value."""
+    agent_messaging.register("pa", "reviewer", "/ws/alpha", agent_key="claude")
+    _cloud(monkeypatch, "connecting", device_id="")
+
+    me = await plan_mcp.cli_whoami(_ctx())
+    assert me["cloud"] == {"state": "connecting"}
+
+
 # ── B. the parent gets the id of what it opened ─────────────────────────────
 @pytest.mark.asyncio
 async def test_open_agent_returns_the_new_pane_id(
@@ -297,6 +368,7 @@ async def test_open_agent_returns_the_new_pane_id(
                 plan_mcp.resolve_spawn(
                     keys[0], {"ok": True, "pane_id": "child-1", "name": "reviewer"}
                 )
+                plan_mcp.resolve_kickoff(keys[0], {"pane_id": "child-1", "kickoff": "sent"})
                 return
             await asyncio.sleep(0.005)
 
@@ -322,6 +394,7 @@ async def test_open_agent_omits_pane_id_when_the_window_named_none(
             keys = list(plan_mcp._pending_spawns)
             if keys:
                 plan_mcp.resolve_spawn(keys[0], {"ok": True, "name": "reviewer"})
+                plan_mcp.resolve_kickoff(keys[0], {"pane_id": "", "kickoff": "sent"})
                 return
             await asyncio.sleep(0.005)
 

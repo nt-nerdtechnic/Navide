@@ -24,24 +24,52 @@ def _fake_run(stdout: str):
     return run
 
 
+def _resolves_to(monkeypatch: pytest.MonkeyPatch, found: str | None) -> None:
+    """What the launch seam finds on PATH for every name asked about."""
+    monkeypatch.setattr(
+        ob.osplat.paths, "resolve_program", lambda _name, *, path=None: found
+    )
+
+
 def test_detect_ok(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(ob.shutil, "which", lambda _x: "/usr/bin/node")
+    _resolves_to(monkeypatch, "/usr/bin/node")
     monkeypatch.setattr(ob.subprocess, "run", _fake_run("v22.3.0"))
     r = ob.detect_dep(_NODE)
     assert r["status"] == "ok" and r["version"] == "22.3.0"
 
 
 def test_detect_outdated(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(ob.shutil, "which", lambda _x: "/usr/bin/node")
+    _resolves_to(monkeypatch, "/usr/bin/node")
     monkeypatch.setattr(ob.subprocess, "run", _fake_run("v18.0.0"))
     r = ob.detect_dep(_NODE)
     assert r["status"] == "outdated" and r["version"] == "18.0.0"
 
 
 def test_detect_missing(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(ob.shutil, "which", lambda _x: None)
+    _resolves_to(monkeypatch, None)
     r = ob.detect_dep(_NODE)
     assert r["status"] == "missing" and r["version"] == ""
+
+
+# npm on Windows installs a CLI as a `claude.cmd` batch shim, and CreateProcess
+# cannot start one (WinError 193). Without the interpreter in front of it every
+# dep's version probe fails and the wizard reports the whole toolchain missing.
+def test_detect_probes_a_windows_shim_through_cmd(monkeypatch: pytest.MonkeyPatch) -> None:
+    from agent_team_backend.osplat import _windows
+
+    monkeypatch.setattr(ob.osplat, "paths", _windows.paths)
+    monkeypatch.setattr(
+        _windows.paths, "resolve_program", lambda _name, *, path=None: r"C:\npm\node.cmd"
+    )
+    probed: list[list[str]] = []
+
+    def run(cmd, *_a, **_k):
+        probed.append(list(cmd))
+        return subprocess.CompletedProcess(cmd, 0, "v22.3.0", "")
+
+    monkeypatch.setattr(ob.subprocess, "run", run)
+    assert ob.detect_dep(_NODE)["status"] == "ok"
+    assert probed == [["cmd.exe", "/d", "/c", r"C:\npm\node.cmd", "--version"]]
 
 
 # ── install-method classification (picks which official command applies) ──────
@@ -85,13 +113,14 @@ def test_detect_dep_requirements_come_from_the_resolved_install(monkeypatch: pyt
               min_version="22.0.0",
               install_cmds={"darwin": PlatformInstall("brew install node", ("brew",))})
     monkeypatch.setattr(ob.osplat, "platform_id", "darwin")
-    monkeypatch.setattr(ob.shutil, "which", lambda _x: None)
+    monkeypatch.setattr(ob.osplat.paths, "resolve_program", lambda _x, *, path=None: None)  # the requirement probe
+    _resolves_to(monkeypatch, None)
     r = ob.detect_dep(dep)
     assert r["requirements"] == [{"name": "brew", "ok": False}]
 
 
 def test_detect_dep_exposes_official_maintenance_commands(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(ob.shutil, "which", lambda _x: "/usr/local/bin/claude")
+    _resolves_to(monkeypatch, "/usr/local/bin/claude")
     monkeypatch.setattr(ob.subprocess, "run", _fake_run("2.1.219 (Claude Code)"))
     r = ob.detect_dep(ob.DEPS_BY_ID["claude"])
     assert r["update_cmd"] == "claude update"
@@ -151,6 +180,9 @@ def test_install_unknown_id_rejected() -> None:
 def test_install_needs_terminal_returns_command_without_running(monkeypatch: pytest.MonkeyPatch) -> None:
     # homebrew is needs_terminal → must NOT shell out, just hand back the command.
     monkeypatch.setattr(ob.osplat, "platform_id", "darwin")
+    # The bootstrap gate asks the seam for each required binary; answer for
+    # it so the test is about needs_terminal, not about what this host has.
+    monkeypatch.setattr(ob.osplat.paths, "resolve_program", lambda name, *, path=None: f"/usr/bin/{name}")
     called = {"ran": False}
     def boom(*_a, **_k):
         called["ran"] = True
@@ -244,7 +276,7 @@ def _fake_popen(returncode: int, stdout: str = "", stderr: str = "", *, timeout:
 def _brew_present(monkeypatch: pytest.MonkeyPatch) -> None:
     # A Homebrew install only exists on the darwin roster.
     monkeypatch.setattr(ob.osplat, "platform_id", "darwin")
-    monkeypatch.setattr(ob.shutil, "which", lambda name: f"/opt/homebrew/bin/{name}")
+    monkeypatch.setattr(ob.osplat.paths, "resolve_program", lambda name, *, path=None: f"/opt/homebrew/bin/{name}")
 
 
 def test_install_failure_surfaces_output_as_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -282,7 +314,7 @@ def test_install_blocked_when_bootstrap_binary_missing(
     # Fresh Mac without Homebrew: `brew install node` only ever produced a bare
     # exit 127, so the wizard has to name the real blocker instead of running it.
     monkeypatch.setattr(ob.osplat, "platform_id", "darwin")
-    monkeypatch.setattr(ob.shutil, "which", lambda _x: None)
+    monkeypatch.setattr(ob.osplat.paths, "resolve_program", lambda _x, *, path=None: None)
 
     def boom(*_a: object, **_k: object) -> None:
         raise AssertionError("must not shell out when a requirement is missing")
@@ -299,7 +331,7 @@ def test_install_bootstrap_gate_precedes_the_terminal_handoff(
 ) -> None:
     # claude is needs_terminal: without the gate the app reported success while
     # the terminal it opened just printed "npm: command not found".
-    monkeypatch.setattr(ob.shutil, "which", lambda _x: None)
+    monkeypatch.setattr(ob.osplat.paths, "resolve_program", lambda _x, *, path=None: None)
     r = ob.install_dep("claude")
     assert r["ok"] is False
     assert r["missing_requirements"] == ["npm"]
@@ -322,11 +354,17 @@ def test_install_timeout_reaps_the_whole_process_group(
     signals: list[int] = []
     _brew_present(monkeypatch)
     monkeypatch.setattr(ob.subprocess, "Popen", _fake_popen(0, timeout=True))
-    monkeypatch.setattr(ob.os, "getpgid", lambda _pid: 424242)
-    monkeypatch.setattr(ob.os, "killpg", lambda _pgid, sig: signals.append(sig))
+    # The product kills through osplat.process_tree (no getpgid/killpg on
+    # Windows); force=False is the SIGTERM step, force=True the SIGKILL one.
+    monkeypatch.setattr(ob.osplat.process_tree, "group_of", lambda _pid: 424242)
+    monkeypatch.setattr(
+        ob.osplat.process_tree,
+        "kill_group",
+        lambda _pgid, *, force: signals.append(force),
+    )
     r = ob.install_dep("node")
     assert r["ok"] is False and "timed out" in r["error"]
-    assert signals[:1] == [ob.signal.SIGTERM]
+    assert signals[:1] == [False]
 
 
 # ── ollama: installed ≠ serving ───────────────────────────────────────────────
@@ -341,7 +379,7 @@ def test_ollama_status_separates_service_down_from_no_models(
 ) -> None:
     # `ollama list` fails when the daemon is down, which used to be reported
     # identically to "no models installed".
-    monkeypatch.setattr(ob.shutil, "which", lambda _x: "/opt/homebrew/bin/ollama")
+    monkeypatch.setattr(ob.osplat.paths, "resolve_program", lambda _x, *, path=None: "/opt/homebrew/bin/ollama")
     monkeypatch.setattr(
         ob.subprocess, "run", _ollama_list(1, "", "could not connect to ollama app")
     )
@@ -351,7 +389,7 @@ def test_ollama_status_separates_service_down_from_no_models(
 
 
 def test_ollama_status_lists_models_when_reachable(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(ob.shutil, "which", lambda _x: "/opt/homebrew/bin/ollama")
+    monkeypatch.setattr(ob.osplat.paths, "resolve_program", lambda _x, *, path=None: "/opt/homebrew/bin/ollama")
     monkeypatch.setattr(
         ob.subprocess, "run", _ollama_list(0, "NAME\tID\nqwen2.5-coder:7b\tabc\n")
     )
@@ -369,7 +407,7 @@ def test_gate_reports_analyzer_blocked_when_service_is_down() -> None:
 
 
 def test_pull_model_allows_namespaced_names(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(ob.shutil, "which", lambda _x: "/opt/homebrew/bin/ollama")
+    monkeypatch.setattr(ob.osplat.paths, "resolve_program", lambda _x, *, path=None: "/opt/homebrew/bin/ollama")
     monkeypatch.setattr(ob, "ollama_reachable", lambda: True)
     r = ob.pull_model("hf.co/user/repo:q4")
     assert r["ok"] is True and r["command"].endswith("hf.co/user/repo:q4")
@@ -378,7 +416,7 @@ def test_pull_model_allows_namespaced_names(monkeypatch: pytest.MonkeyPatch) -> 
 def test_pull_model_rejects_traversal_flags_and_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(ob.shutil, "which", lambda _x: "/opt/homebrew/bin/ollama")
+    monkeypatch.setattr(ob.osplat.paths, "resolve_program", lambda _x, *, path=None: "/opt/homebrew/bin/ollama")
     monkeypatch.setattr(ob, "ollama_reachable", lambda: True)
     assert ob.pull_model("../../etc/passwd")["ok"] is False
     assert ob.pull_model("-rf")["ok"] is False
@@ -388,7 +426,7 @@ def test_pull_model_rejects_traversal_flags_and_empty(
 def test_pull_model_blocked_while_the_service_is_down(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(ob.shutil, "which", lambda _x: "/opt/homebrew/bin/ollama")
+    monkeypatch.setattr(ob.osplat.paths, "resolve_program", lambda _x, *, path=None: "/opt/homebrew/bin/ollama")
     monkeypatch.setattr(ob, "ollama_reachable", lambda: False)
     r = ob.pull_model("qwen2.5-coder:7b")
     assert r["ok"] is False and r["needs_service"] is True
@@ -397,7 +435,7 @@ def test_pull_model_blocked_while_the_service_is_down(
 def test_start_ollama_service_hands_back_the_official_command(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(ob.shutil, "which", lambda name: f"/opt/homebrew/bin/{name}")
+    monkeypatch.setattr(ob.osplat.paths, "resolve_program", lambda name, *, path=None: f"/opt/homebrew/bin/{name}")
     assert ob.start_ollama_service() == {
         "ok": True,
         "needs_terminal": True,
@@ -406,14 +444,28 @@ def test_start_ollama_service_hands_back_the_official_command(
 
 
 def test_start_ollama_service_requires_ollama(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(ob.shutil, "which", lambda _x: None)
+    monkeypatch.setattr(ob.osplat.paths, "resolve_program", lambda _x, *, path=None: None)
     assert ob.start_ollama_service()["ok"] is False
 
 
-def test_local_bin_is_a_path_fallback() -> None:
+def test_every_program_lookup_goes_through_the_seam() -> None:
+    # `resolve_executable` asked the seam while six sibling checks (install
+    # requirements, ollama, brew) still called shutil.which directly. Same
+    # question — "is this program on this machine" — so the same answer:
+    # on Windows the seam is what knows a bare `npm` is `npm.cmd`, and a
+    # presence check that disagrees with the launch that follows it is a
+    # wizard that says "installed" and then cannot run the thing.
+    source = Path(ob.__file__).read_text(encoding="utf-8")
+    assert "shutil.which(" not in source, "ask osplat.paths.resolve_program instead"
+
+
+def test_local_bin_is_a_path_fallback(tmp_path) -> None:
     # aider / opencode / cursor / kimi install scripts land in ~/.local/bin and
     # export it from a shell rc file the 3s probe can miss.
-    assert any(p.endswith("/.local/bin") for p in ob._FALLBACK_PATH_DIRS)
+    from agent_team_backend.osplat import _darwin, _linux
+
+    for paths in (_darwin.paths, _linux.paths):
+        assert str(tmp_path / ".local" / "bin") in paths.login_path_fallbacks(tmp_path)
 
 
 # ── completion flag ───────────────────────────────────────────────────────────
@@ -498,7 +550,15 @@ def test_legacy_app_data_json_imported_once_and_retired(
     assert ob.is_complete() is True
 
 
+def _exe_name(name: str) -> str:
+    """`name` on POSIX; `name.com`/`.exe`/... on Windows, where PATH lookup
+    only ever tries the PATHEXT spellings."""
+    return ob.osplat.paths.executable_candidates(name)[0]
+
+
 def _make_executable(path: Path) -> Path:
+    if not path.suffix:
+        path = path.with_name(_exe_name(path.name))
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("#!/bin/sh\n", encoding="utf-8")
     path.chmod(0o755)
@@ -523,7 +583,7 @@ def test_cli_health_reports_distinct_duplicate_installations(
 ) -> None:
     first = _make_executable(tmp_path / "nvm" / "claude")
     second = _make_executable(tmp_path / "homebrew" / "claude")
-    monkeypatch.setenv("PATH", f"{first.parent}:{second.parent}")
+    monkeypatch.setenv("PATH", f"{first.parent}{ob.os.pathsep}{second.parent}")
     monkeypatch.setattr(
         ob,
         "_probe_alternate",
@@ -549,7 +609,7 @@ def _make_npm_claude_install(prefix: Path) -> tuple[Path, Path, Path]:
     target = _make_executable(
         prefix / "lib" / "node_modules" / "@anthropic-ai" / "claude-code" / "bin" / "claude.exe"
     )
-    binary = prefix / "bin" / "claude"
+    binary = prefix / "bin" / _exe_name("claude")
     binary.symlink_to(target)
     return npm, binary, target
 
@@ -589,6 +649,37 @@ def test_cli_health_builds_confirmed_npm_removal_for_owned_install(
     assert str(npm) in candidate["removal_command"]
     assert "uninstall -g @anthropic-ai/claude-code" in candidate["removal_command"]
     assert "Continue? [y/N]" in candidate["removal_command"]
+
+
+def test_cli_health_removal_command_is_the_terminal_shells_language(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The user runs this in a terminal the app opens, which is PowerShell on
+    Windows — where the sh spelling (`read -r`, `case ... esac`) is a syntax
+    error before it can ask anything.
+    """
+    from agent_team_backend import osplat
+    from agent_team_backend.osplat import _windows
+
+    _, binary, target = _make_npm_claude_install(tmp_path / "node")
+    other = _make_executable(tmp_path / "native" / "claude")
+    monkeypatch.setattr(ob, "_distinct_executables", lambda _command: [
+        _candidate_entry(binary, target),
+        _candidate_entry(other),
+    ])
+    monkeypatch.setattr(ob, "_probe_alternate", _probe_ok)
+    monkeypatch.setattr(ob, "_dismissed_cli_health_fingerprint", lambda: "")
+    monkeypatch.setattr(osplat, "scripts", _windows.scripts)
+
+    health = ob.build_cli_health([_claude_status(binary)])
+    command = health["entries"][0]["candidates"][0]["removal_command"]
+
+    assert command.startswith("Write-Host 'Remove ")
+    assert "$a = Read-Host 'Continue? [y/N]'" in command
+    assert "if ($a -match '^[Yy]') { & " in command
+    assert "uninstall -g @anthropic-ai/claude-code }" in command
+    assert "else { Write-Host 'Cancelled.' }" in command
+    assert "read -r" not in command
 
 
 def test_cli_health_never_offers_removal_for_the_only_install(
@@ -694,13 +785,13 @@ def test_cli_health_collapses_aliases_to_same_physical_binary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     target = _make_executable(tmp_path / "package" / "claude.exe")
-    first = tmp_path / "bin-a" / "claude"
-    second = tmp_path / "bin-b" / "claude"
+    first = tmp_path / "bin-a" / _exe_name("claude")
+    second = tmp_path / "bin-b" / _exe_name("claude")
     first.parent.mkdir()
     second.parent.mkdir()
     first.symlink_to(target)
     second.symlink_to(target)
-    monkeypatch.setenv("PATH", f"{first.parent}:{second.parent}")
+    monkeypatch.setenv("PATH", f"{first.parent}{ob.os.pathsep}{second.parent}")
     monkeypatch.setattr(ob, "_dismissed_cli_health_fingerprint", lambda: "")
 
     health = ob.build_cli_health([_claude_status(first)])
@@ -748,7 +839,7 @@ def test_cli_binary_selection_persists_path_and_fingerprint_atomically(
     target = _make_executable(
         prefix / "lib" / "node_modules" / "@anthropic-ai" / "claude-code" / "bin" / "claude.exe"
     )
-    binary = prefix / "bin" / "claude"
+    binary = prefix / "bin" / _exe_name("claude")
     binary.parent.mkdir(parents=True, exist_ok=True)
     binary.symlink_to(target)
     monkeypatch.setenv("PATH", str(binary.parent))
@@ -856,9 +947,12 @@ def test_cli_health_ignores_a_failure_the_cli_has_since_moved_past(
     assert health["needs_attention"] is False
 
 
-def test_update_failure_fingerprint_changes_on_a_newer_failure(
+def test_update_failure_does_not_move_the_guide_fingerprint(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """The launch guide never shows update_failed (CLI management does), so a
+    newer failed auto-update must not change the fingerprint a dismissal is
+    keyed by — that re-opened a dismissed guide on the next launch."""
     _default, profiles = _patch_homes(monkeypatch, tmp_path)
     _write_update_result(profiles / "4ad13e88")
     first = _claude_health(monkeypatch, tmp_path, version="2.1.219")["fingerprint"]
@@ -866,7 +960,7 @@ def test_update_failure_fingerprint_changes_on_a_newer_failure(
     _write_update_result(profiles / "4ad13e88", timestamp="2026-07-26T01:00:00.000Z")
     second = _claude_health(monkeypatch, tmp_path, version="2.1.219")["fingerprint"]
 
-    assert first and second and first != second
+    assert first and first == second
 
 
 # ── auto-update policy (the vendor's own switch) ─────────────────────────────

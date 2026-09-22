@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { closeEndsTheRun } from '../workspaceCloseRun'
+import { closeDialogBodyKey, closeEndsTheRun, restoreBlockedByRun } from '../workspaceCloseRun'
 
 const A = '/Users/x/projects/alpha'
 const B = '/Users/x/projects/beta'
@@ -67,5 +67,93 @@ describe('closeEndsTheRun', () => {
       closingWorkspacePath: B,
       doomedOrigins: ['pipeline'],
     })).toBe(false)
+  })
+})
+
+describe('restoreBlockedByRun', () => {
+  it('blocks the workspace the run is in — its panes are already on screen', () => {
+    expect(restoreBlockedByRun({
+      state: 'running', runWorkspacePath: B, restoringWorkspacePath: B,
+    })).toBe(true)
+  })
+
+  it('blocks it while the run is merely PAUSED, because abort leaves panes alive', () => {
+    expect(restoreBlockedByRun({
+      state: 'aborted', runWorkspacePath: B, restoringWorkspacePath: B,
+    })).toBe(true)
+  })
+
+  it('does NOT block another workspace whose panes a close deliberately kept', () => {
+    // The regression this function exists for. A window holds A and B, a run in
+    // B is paused, and the user closes A from the sidebar: A's CLIs end but its
+    // records stay 'spawned' so the reopen can resume them. Asked window-wide,
+    // B's paused run refuses to restore A and the reopen comes back empty —
+    // after a dialog that promised the panes come back.
+    expect(restoreBlockedByRun({
+      state: 'aborted', runWorkspacePath: B, restoringWorkspacePath: A,
+    })).toBe(false)
+    expect(restoreBlockedByRun({
+      state: 'running', runWorkspacePath: B, restoringWorkspacePath: A,
+    })).toBe(false)
+  })
+
+  it('blocks nothing when no run is live or paused', () => {
+    for (const state of ['idle', 'completed']) {
+      expect(restoreBlockedByRun({
+        state, runWorkspacePath: B, restoringWorkspacePath: B,
+      })).toBe(false)
+    }
+  })
+
+  it('blocks when the run workspace is unknown, rather than guessing', () => {
+    // Restoring on top of live panes duplicates them; refusing costs a reopen.
+    // This is also the behaviour of the window-wide gate it replaced.
+    expect(restoreBlockedByRun({
+      state: 'aborted', runWorkspacePath: '', restoringWorkspacePath: A,
+    })).toBe(true)
+  })
+
+  it('compares paths as given, like closeEndsTheRun — callers normalize', () => {
+    expect(restoreBlockedByRun({
+      state: 'running', runWorkspacePath: `${B}/`, restoringWorkspacePath: B,
+    })).toBe(false)
+  })
+})
+
+describe('closeDialogBodyKey', () => {
+  it('speaks for every pane only when every pane comes back', () => {
+    expect(closeDialogBodyKey({ count: 3, pipelineCount: 0 }))
+      .toBe('confirm-close.sidebar-ws-body')
+  })
+
+  it('names the pipeline panes that will NOT come back', () => {
+    // They take the markRemoved branch with the run, so the plain body — which
+    // promises each pane returns as a card — would be a false promise.
+    expect(closeDialogBodyKey({ count: 3, pipelineCount: 1 }))
+      .toBe('confirm-close.sidebar-ws-body-pipeline')
+  })
+
+  it('stops describing survivors when there are none', () => {
+    // The mixed body opens with "the ones you opened come back", which
+    // describes nothing in a workspace holding only pipeline slots.
+    expect(closeDialogBodyKey({ count: 2, pipelineCount: 2 }))
+      .toBe('confirm-close.sidebar-ws-body-pipeline-only')
+  })
+
+  it('does not count panes when there are none to count', () => {
+    expect(closeDialogBodyKey({ count: 0, pipelineCount: 0 }))
+      .toBe('confirm-close.sidebar-ws-body-empty')
+  })
+
+  it('keeps the empty body ahead of the pipeline ones', () => {
+    // A count of zero cannot hold pipeline panes, but if the two ever
+    // disagreed the "0 CLI panes" wording is the one that must not ship.
+    expect(closeDialogBodyKey({ count: 0, pipelineCount: 2 }))
+      .toBe('confirm-close.sidebar-ws-body-empty')
+  })
+
+  it('treats more pipeline panes than panes as all of them', () => {
+    expect(closeDialogBodyKey({ count: 2, pipelineCount: 5 }))
+      .toBe('confirm-close.sidebar-ws-body-pipeline-only')
   })
 })

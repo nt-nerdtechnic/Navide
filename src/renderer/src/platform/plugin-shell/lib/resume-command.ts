@@ -58,6 +58,19 @@ export function normalizeResumeSessionId(agentKey: string, sessionId: string): s
   return specFor(agentKey)?.normalizeSessionId?.(id) ?? id
 }
 
+/** Characters a session id may contain before it is interpolated into a
+ * resume command. The command runs as `[shell, '-ilc', cmd]`, so an id
+ * carrying `;` or a backtick is code, not an argument.
+ *
+ * Mirrors the backend's `_SAFE_SESSION_ID` (mcp_server/server.py), which
+ * refuses such an id before the spawn is ever broadcast; this is the second
+ * layer, for a renderer that must not trust that the first one ran. */
+export const SHELL_SAFE_SESSION_ID = /^[A-Za-z0-9._:/-]{1,255}$/
+
+export function isShellSafeSessionId(sessionId: string): boolean {
+  return SHELL_SAFE_SESSION_ID.test(sessionId)
+}
+
 /** A saved conversation is data, not permission to start a replacement. For a
  * vendor that says so, keep the record untouched when its transcript is
  * unavailable; a fresh spawn stays an explicit user action from Agent History. */
@@ -247,8 +260,13 @@ export function buildResumeCommand(
   if (!id) return '' // no id → caller falls back to a fresh spawn
   // The binary comes from the spec's defaultCommand — never a hardcoded name
   // here. (Custom-binary overrides thread through the caller's baseCommand.)
+  // Both branches take the binary from the spec: the vendor key is an id, not
+  // a command, and the two only coincide because every shipped vendor happens
+  // to be lower case. `||`, not `??`: a spec with an empty defaultCommand has
+  // no binary to offer, so the key is still the better guess.
+  const binary = spec?.defaultCommand || agentKey
   const base = spec?.resumeArgs
-    ? `${spec.defaultCommand} ${spec.resumeArgs(id)}`
-    : `${agentKey} --resume ${id}`
+    ? `${binary} ${spec.resumeArgs(id)}`
+    : `${binary} --resume ${id}`
   return flag ? `${base} ${flag}` : base
 }

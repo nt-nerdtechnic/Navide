@@ -33,6 +33,7 @@ user-scope page.
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
@@ -128,7 +129,7 @@ NATIVE_SOURCES: tuple[NativeMcpSource, ...] = (
     NativeMcpSource("kilo", (".config", "kilo", "kilo.json"), "jsonc", ("mcp",)),
     NativeMcpSource("kilo", (".config", "kilo", "kilo.jsonc"), "jsonc", ("mcp",)),
     NativeMcpSource("kimi", (".kimi-code", "mcp.json"), "jsonc", ("mcpServers",)),
-    NativeMcpSource("grok", (".grok", "user-settings.json"), "jsonc", ("mcp", "servers"), "id"),
+    NativeMcpSource("grok", (".grok", "config.toml"), "toml", ("mcp_servers",)),
     NativeMcpSource(
         "antigravity", (".gemini", "config", "mcp_config.json"), "jsonc", ("mcpServers",)
     ),
@@ -144,9 +145,12 @@ def agent_targets() -> list[dict[str, Any]]:
     CLI has MCP -- a native config proves it -- but Navide has no wiring for
     it yet), ``unsupported`` (no MCP mechanism to wire). ``reflects`` says
     whether this scan can read that CLI's own servers, which is a separate
-    question from whether Navide can deliver to it.
+    question from whether Navide can deliver to it. ``blocked`` names why a
+    ``wired`` vendor still spawns unwired on *this* machine (a home shim
+    without symlink privilege); absent when nothing stands in the way.
     """
     from .cli_vendors.registry import VENDORS
+    from .mcp_server import pane_home
 
     reflected = {source.agent for source in NATIVE_SOURCES}
     agents: list[dict[str, Any]] = []
@@ -158,14 +162,16 @@ def agent_targets() -> list[dict[str, Any]]:
             state = "planned"
         else:
             state = "unsupported"
-        agents.append(
-            {
-                "key": key,
-                "label": spec.label,
-                "state": state,
-                "reflects": key in reflected,
-            }
-        )
+        agent: dict[str, Any] = {
+            "key": key,
+            "label": spec.label,
+            "state": state,
+            "reflects": key in reflected,
+        }
+        blocked = pane_home.unavailable_reason(key)
+        if blocked is not None:
+            agent["blocked"] = blocked
+        agents.append(agent)
     return agents
 
 
@@ -222,6 +228,24 @@ def scan(home: Path | None = None) -> list[NativeMcpServer]:
     for source, path in native_sources(home):
         found.extend(_read_source(source, path))
     return found
+
+
+def mask_server_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Mask the secret-bearing fields of one managed-server row, the same way
+    scan() masks a native one. list_servers() hands rows out unmasked because
+    the Settings page edits them; anything that shows a row to an agent must
+    pass it through here first."""
+    masked = copy.deepcopy(row)
+    args = masked.get("args")
+    if isinstance(args, list):
+        masked["args"] = list(_mask_args(tuple(str(arg) for arg in args)))
+    url = masked.get("url")
+    if isinstance(url, str):
+        masked["url"] = _mask_url(url)
+    for field_name in ("env", "headers"):
+        if isinstance(masked.get(field_name), dict):
+            masked[field_name] = dict(_mask_map(masked[field_name]))
+    return masked
 
 
 def _read_source(source: NativeMcpSource, path: Path) -> list[NativeMcpServer]:

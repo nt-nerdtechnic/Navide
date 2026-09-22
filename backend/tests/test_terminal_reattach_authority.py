@@ -23,6 +23,11 @@ class FakeTerminals:
         self._sessions = {entry.id: entry for entry in entries}
         self.redraws: list[tuple[Any, ...]] = []
 
+    def get(self, term_id: str) -> Any:
+        # The merged quota-failover bookkeeping probes the owner's terminals
+        # through the same dict-shaped lookup the production registry exposes.
+        return self._sessions.get(term_id)
+
     def force_redraw(self, *args: Any, **kwargs: Any) -> None:
         self.redraws.append((*args, *kwargs.values()))
 

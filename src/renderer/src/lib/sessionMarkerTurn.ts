@@ -54,3 +54,46 @@ export function markerTurnActionFor(ev: {
   if (!ev.text || isInjectedMessageText(ev.text)) return null
   return 'disarm'
 }
+
+/** Startup screens that swallow keystrokes until the user answers them.
+ *
+ *  Codex 0.154 stops at "Hooks need review" (enter/esc only) whenever a pane
+ *  home carries hooks the user has not trusted under that path. Pasting the
+ *  session marker into that screen loses it: the rollout never carries the
+ *  marker, cwd matching refuses to guess between sibling panes, and the pane
+ *  ends up with no resume id. These are NOT the trust prompts
+ *  `dismissStartupDialog` answers with Enter — answering a hook-trust question
+ *  on the user's behalf is not ours to do; the bootstrap waits instead. */
+export const STARTUP_BLOCKING_DIALOG_PATTERNS: RegExp[] = [
+  /Hooks need review/i,
+  /Press enter to confirm or esc to go back/i
+]
+
+/** True while the rendered screen tail shows a keystroke-swallowing dialog.
+ *  Whitespace is collapsed so a prompt wrapped across lines still matches. */
+export function screenShowsBlockingDialog(screen: string): boolean {
+  const text = screen.replace(/\s+/g, ' ')
+  return STARTUP_BLOCKING_DIALOG_PATTERNS.some((re) => re.test(text))
+}
+
+/** Codex asking the user to approve a hook it has not seen before.
+ *
+ *  Deliberately narrower than the list above: the other pattern there is any
+ *  confirm prompt, while this one identifies the hook Navide itself injected
+ *  as the thing standing in front of the pane. Acting on the broader match
+ *  would switch the hook off because the user happened to be answering
+ *  something else. */
+const HOOK_TRUST_PROMPT = /Hooks need review/i
+
+export function screenShowsHookTrustPrompt(screen: string): boolean {
+  return HOOK_TRUST_PROMPT.test(screen.replace(/\s+/g, ' '))
+}
+
+/** A restore placeholder names the old conversation, not the current launch. */
+export function hasDetectedCodexSession(pane: {
+  agentKey: string
+  pinnedSessionId?: string
+  pinnedFromRestore?: boolean
+}): boolean {
+  return pane.agentKey === 'codex' && !!pane.pinnedSessionId && !pane.pinnedFromRestore
+}

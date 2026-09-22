@@ -1,0 +1,71 @@
+// @vitest-environment happy-dom
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { describe, expect, it } from 'vitest'
+
+// ui.pane.open is the official form of what ui.pane.focus does as a side
+// effect: it opens a cold-restore placeholder, waits for the restore to end,
+// reports why it did or did not open, and never raises the workspace-wide
+// "resume which?" modal under ask mode. The action bus and the restore path
+// live in App.vue, which the suite cannot mount, so they are asserted against
+// the source the way the other App.*.test.ts files do. The decision rule it
+// leans on — explicitRestoreDecision — is unit-tested in
+// lib/__tests__/resumeBehavior.test.ts.
+const appSource = readFileSync(resolve(process.cwd(), 'src/renderer/src/App.vue'), 'utf8')
+
+function command(name: string): string {
+  const start = appSource.indexOf(`registerCommand('${name}'`)
+  expect(start).toBeGreaterThan(-1)
+  const end = appSource.indexOf('\n})\n', start)
+  expect(end).toBeGreaterThan(start)
+  return appSource.slice(start, end)
+}
+
+function fn(name: string): string {
+  const start = appSource.indexOf(`async function ${name}(`)
+  expect(start).toBeGreaterThan(-1)
+  const end = appSource.indexOf('\n}\n', start)
+  expect(end).toBeGreaterThan(start)
+  return appSource.slice(start, end)
+}
+
+describe('ui.pane.open', () => {
+  it('is registered on the action bus', () => {
+    expect(command('ui.pane.open')).toContain('ui.pane.open requires')
+  })
+
+  it('opens the placeholder through the explicit restore path', () => {
+    // explicit is what keeps ask mode from raising the modal for a pane an
+    // agent named by id.
+    expect(command('ui.pane.open')).toContain('realizeRestoredPane(paneId, false, { explicit: true })')
+  })
+
+  it('answers an already-open pane without restarting it', () => {
+    const body = command('ui.pane.open')
+    const answer = body.indexOf("if (pane.realized) return { realized: true, reason: 'already-open'")
+    expect(answer).toBeGreaterThan(-1)
+    expect(answer).toBeLessThan(body.indexOf('realizeRestoredPane('))
+  })
+
+  it('reports the id the restored pane is known by now', () => {
+    // A restore rebuilds the pane under a fresh runtime id; the old id is an
+    // alias. Looking the pane up by the old id alone would answer realized
+    // false for a pane that just opened.
+    expect(command('ui.pane.open')).toContain('p.formerPaneIds?.includes(paneId)')
+  })
+})
+
+describe('performRealizeRestoredPane', () => {
+  it('takes the explicit decision instead of asking the workspace-wide question', () => {
+    const body = fn('performRealizeRestoredPane')
+    expect(body).toContain('opts?.explicit\n      ? explicitRestoreDecision(session)\n      : await restoreSessionDecision(session, batch, true)')
+  })
+
+  it('answers with an outcome on every exit', () => {
+    const body = fn('performRealizeRestoredPane')
+    expect(body).toContain('Promise<RealizeOutcome>')
+    // A bare `return` would hand ui.pane.open undefined for a reason.
+    expect(body).not.toMatch(/\breturn\n/)
+    expect(body).toContain("return forceFresh ? 'fresh' : 'opened'")
+  })
+})

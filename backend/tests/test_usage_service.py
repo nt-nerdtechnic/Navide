@@ -11,6 +11,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
+from agent_team_backend import osplat
 from agent_team_backend import usage_service as us
 from agent_team_backend.cli_vendors import _protocols as protocols_vendor
 from agent_team_backend.cli_vendors import antigravity as antigravity_vendor
@@ -1205,7 +1208,7 @@ async def test_fetch_antigravity_expired_grant_reads_as_expired(monkeypatch):
 # ── opencode fetch (aggregator over auth.json entries) ──────────────────────
 
 def _with_opencode_auth(monkeypatch, auth: dict | None):
-    monkeypatch.setattr(opencode_vendor, "read_opencode_credentials", lambda home: auth)
+    monkeypatch.setattr(opencode_vendor, "read_opencode_credentials", lambda home, env=None: auth)
 
 
 async def test_fetch_opencode_no_credentials(monkeypatch):
@@ -1410,7 +1413,7 @@ _KILO_PASS_URL = us.KILO_DEFAULT_BASE + us.KILO_PASS_PATH
 
 
 def _with_kilo_creds(monkeypatch, creds={"token": "kilo-tok", "org_id": None}):
-    monkeypatch.setattr(kilo_vendor, "read_kilo_credentials", lambda home, env=None: creds)
+    monkeypatch.setattr(kilo_vendor, "read_kilo_credentials", lambda home, env=None, *, bound_store=False: creds)
 
 
 async def test_fetch_kilo_no_credentials(monkeypatch):
@@ -1882,7 +1885,8 @@ def test_usage_cache_loads_last_good_and_ignores_invalid_files(tmp_path):
     assert "accessToken" not in raw
     assert "refreshToken" not in raw
     assert "must-not-persist" not in raw
-    assert cache.stat().st_mode & 0o777 == 0o600
+    if osplat.paths.enforces_posix_modes():
+        assert cache.stat().st_mode & 0o777 == 0o600
     loaded = us.UsageService(
         cache_path=cache,
         active_claude_slot_reader=lambda: "acct-a",
@@ -2102,12 +2106,18 @@ async def test_refresh_during_poll_runs_next_cycle_with_new_active_account(
 
     monkeypatch.setattr(app, "broadcast", record_broadcast)
     task = asyncio.create_task(svc._run())
-    await asyncio.wait_for(started.wait(), timeout=1)
+    # 5s, the ceiling this file already uses for a wait on real coroutine work.
+    # These three were 1s, which is generous on a developer machine and is not
+    # on a loaded Windows runner: the same suite takes ~3 minutes here and took
+    # 19.5 there, and this test went red on the 0.2.5 dry run with the code
+    # working. Waits on an event that should be set in milliseconds, so a real
+    # hang still fails quickly.
+    await asyncio.wait_for(started.wait(), timeout=5)
     store.set_default("claude", second["id"])
     svc.request_refresh()
     release_first_poll.set()
-    await asyncio.wait_for(completed.wait(), timeout=1)
-    await asyncio.wait_for(task, timeout=1)
+    await asyncio.wait_for(completed.wait(), timeout=5)
+    await asyncio.wait_for(task, timeout=5)
 
     assert len(broadcasts) == 2
     first_payload = broadcasts[0]["payload"]
@@ -2650,13 +2660,80 @@ async def test_grok_billing_rpc_with_fake_stdio(tmp_path, monkeypatch):
     assert windows and windows[0]["usedPercent"] == 10.0
 
 
+async def test_grok_billing_rpc_starts_a_windows_shim_through_cmd(monkeypatch):
+    """`grok` installed by npm is a `.cmd` shim: without cmd.exe in front the
+    RPC never spawns and the badge reports the CLI unavailable."""
+    from agent_team_backend.osplat import _windows
+
+    argv: list[tuple] = []
+
+    class ClosedProc:
+        returncode = 0
+
+        class _Stdin:
+            def write(self, _data): ...
+
+            async def drain(self): ...
+
+        class _Stdout:
+            async def readline(self):
+                return b""
+
+        stdin = _Stdin()
+        stdout = _Stdout()
+
+    async def fake_exec(*a, **_k):
+        argv.append(a)
+        return ClosedProc()
+
+    monkeypatch.setattr(grok_vendor.osplat, "paths", _windows.paths)
+    monkeypatch.setattr(grok_vendor.asyncio, "create_subprocess_exec", fake_exec)
+
+    try:
+        await grok_vendor.grok_billing_rpc(r"C:\npm\grok.cmd")
+    except ConnectionError:
+        pass  # the fake closes stdout at once; the spawn is what is under test
+
+    assert argv[0] == ("cmd.exe", "/d", "/c", r"C:\npm\grok.cmd", "agent", "stdio")
+
+
+async def test_copilot_gh_token_starts_a_windows_shim_through_cmd(monkeypatch):
+    """A scoop- or npm-installed `gh` is a `gh.cmd`, which CreateProcess never
+    finds (it only appends `.exe`) — so the token read used to return None."""
+    from agent_team_backend.osplat import _windows
+
+    argv: list[tuple] = []
+
+    class TokenProc:
+        returncode = 0
+
+        async def communicate(self):
+            return b"gho_shim\n", b""
+
+    async def fake_exec(*a, **_k):
+        argv.append(a)
+        return TokenProc()
+
+    monkeypatch.setattr(copilot_vendor.osplat, "paths", _windows.paths)
+    monkeypatch.setattr(
+        _windows.paths, "resolve_program", lambda _name, *, path=None: r"C:\scoop\gh.cmd"
+    )
+    monkeypatch.setattr(copilot_vendor.asyncio, "create_subprocess_exec", fake_exec)
+
+    assert await copilot_vendor._copilot_gh_token("octo", "github.com") == "gho_shim"
+    assert argv[0] == (
+        "cmd.exe", "/d", "/c", r"C:\scoop\gh.cmd",
+        "auth", "token", "--user", "octo", "--hostname", "github.com",
+    )
+
+
 # ── Codex fetch: stranded in-pane login promotion ───────────────────────────
 
-async def test_fetch_codex_promotes_stranded_pane_login(monkeypatch, tmp_path):
+async def test_fetch_codex_promotes_stranded_pane_login(monkeypatch, tmp_path, set_home):
     """Fresh install: login done inside a manual pane sits in
     ~/.codex-panes/<pane>/auth.json; the poll must adopt it instead of
     reporting no-credentials forever."""
-    monkeypatch.setenv("HOME", str(tmp_path))
+    set_home(tmp_path)
     real = tmp_path / ".codex"
     pane_auth = tmp_path / ".codex-panes" / "pane-1" / "auth.json"
     pane_auth.parent.mkdir(parents=True)
@@ -3355,3 +3432,136 @@ async def test_usage_refresh_handler_forwards_the_card_scope(monkeypatch):
 
     assert calls == [("claude", "p1"), ("codex", None), (None, None)]
     assert [m["payload"]["ok"] for m in session.sent] == [True, True, True]
+
+
+
+def _mute_non_claude_vendors(svc: "us.UsageService") -> None:
+    """Keep a poll to its Claude leg only.
+
+    `poll_once` reaches the other vendors through `spec.fetch_usage`, which
+    holds the vendor module's own function — patching `us.fetch_<vendor>` does
+    not intercept it, and `fetch_cursor` really does shell out to
+    `/usr/bin/security`. A test that cancels a cycle mid-flight would orphan
+    those subprocesses. The cooldown gate is the supported way to skip a
+    provider, and Claude's key is a `(provider, slot)` tuple, so its own read
+    still runs."""
+    blocked = time.monotonic() + 3600
+    for provider in us._CLI_VENDORS:
+        svc._blocked_until[provider] = blocked
+
+
+async def test_a_switch_cancels_the_in_flight_claude_read_instead_of_waiting_it_out(
+    tmp_path, monkeypatch
+):
+    """A switch must not have to sit out the read that was already running.
+
+    The epoch guard throws that read's answer away, but only after awaiting it,
+    and the poller awaits `poll_once` whole — so the read the switch asked for
+    could not even start until the doomed one finished. That wait is the
+    Claude probe's whole budget (minutes, not seconds), which is exactly the
+    "I switched and nothing happened" the announcement exists to prevent."""
+    from agent_team_backend import app
+
+    monkeypatch.setattr(app, "broadcast", lambda event: _append([], event))
+    monkeypatch.setattr(us, "_get_profiles_store", lambda: None)
+    monkeypatch.setattr(us, "_get_credential_vault", lambda: None)
+
+    reading = asyncio.Event()
+    finished = False
+
+    async def slow_claude(home):
+        nonlocal finished
+        reading.set()
+        await asyncio.sleep(30)  # stands in for the CLI boot
+        finished = True
+        return us._snapshot("claude", "ok",
+                            windows=[us._window("session", "Session", 40, None)])
+
+    monkeypatch.setattr(us, "fetch_claude", slow_claude)
+
+    svc = us.UsageService(cache_path=tmp_path / "usage-cache.json")
+    svc.enabled = True
+    _mute_non_claude_vendors(svc)
+
+    poll = asyncio.create_task(svc.poll_once(tmp_path))
+    await asyncio.wait_for(reading.wait(), timeout=5)
+
+    await svc.announce_claude_switch("acct-new")
+
+    # The whole point: the cycle returns now, not in 30 seconds.
+    payload = await asyncio.wait_for(poll, timeout=5)
+
+    assert finished is False  # the read really was dropped, not awaited
+    assert svc._active_claude_slot == "acct-new"
+    # Nothing was filed for the cancelled read, under either slot.
+    assert svc._last_good.get("claude", {}).get("__default__") is None
+    assert payload["accounts"]["claude"]["acct-new"]["refreshPending"] is True
+    # The bookkeeping does not leak into the next cycle.
+    assert svc._claude_reads == {}
+    assert svc._reads_cancelled == set()
+
+
+async def test_a_cancellation_that_is_not_a_switch_still_propagates(
+    tmp_path, monkeypatch
+):
+    """Shutdown cancels the poller. Swallowing that the way a switch's own
+    cancellation is swallowed would leave the cycle running through a stop it
+    was told to obey, so only cancellations this service asked for are eaten."""
+    from agent_team_backend import app
+
+    monkeypatch.setattr(app, "broadcast", lambda event: _append([], event))
+    monkeypatch.setattr(us, "_get_profiles_store", lambda: None)
+    monkeypatch.setattr(us, "_get_credential_vault", lambda: None)
+
+    reading = asyncio.Event()
+
+    async def slow_claude(home):
+        reading.set()
+        await asyncio.sleep(30)
+        return us._snapshot("claude", "ok")
+
+    monkeypatch.setattr(us, "fetch_claude", slow_claude)
+
+    svc = us.UsageService(cache_path=tmp_path / "usage-cache.json")
+    svc.enabled = True
+    _mute_non_claude_vendors(svc)
+
+    poll = asyncio.create_task(svc.poll_once(tmp_path))
+    await asyncio.wait_for(reading.wait(), timeout=5)
+    poll.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await poll
+
+
+async def test_a_read_that_announces_its_own_switch_is_not_cancelled_by_it(
+    tmp_path, monkeypatch
+):
+    """`_cancel_claude_reads` must skip the caller's own task. Announcing from
+    inside a read would otherwise cancel the coroutine doing the announcing,
+    so `announce_claude_switch` would raise `CancelledError` at its caller —
+    and that caller is the account-switch WebSocket handler."""
+    from agent_team_backend import app
+
+    monkeypatch.setattr(app, "broadcast", lambda event: _append([], event))
+    monkeypatch.setattr(us, "_get_profiles_store", lambda: None)
+    monkeypatch.setattr(us, "_get_credential_vault", lambda: None)
+
+    returned = False
+
+    async def self_announcing_claude(home):
+        nonlocal returned
+        await svc.announce_claude_switch("acct-new")
+        returned = True
+        return us._snapshot("claude", "ok",
+                            windows=[us._window("session", "Session", 40, None)])
+
+    monkeypatch.setattr(us, "fetch_claude", self_announcing_claude)
+
+    svc = us.UsageService(cache_path=tmp_path / "usage-cache.json")
+    svc.enabled = True
+    _mute_non_claude_vendors(svc)
+
+    await asyncio.wait_for(svc.poll_once(tmp_path), timeout=5)
+
+    assert returned is True

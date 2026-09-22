@@ -185,7 +185,10 @@ async def test_missing_cli_is_reported_and_briefly_gated(
     )
 
     assert await dr.attempt(FakeVault()) == dr.OUTCOME_CLI_UNAVAILABLE
-    assert 0 < dr.cooldown_remaining_seconds() <= dr.SHORT_COOLDOWN_S
+    # The bound is approximate on purpose: monotonic() counts from boot, so
+    # (t + 20.0) - t is 20.000000000000057 in float64 on a machine that has
+    # been up a while — as the Windows runner is.
+    assert 0 < dr.cooldown_remaining_seconds() == pytest.approx(dr.SHORT_COOLDOWN_S, abs=0.5)
 
 
 async def test_no_baseline_means_unobservable_and_no_probe(
@@ -282,6 +285,34 @@ async def test_a_timed_out_probe_takes_down_the_whole_process_group(
 
     assert (ran, detail) == (False, "timeout")
     assert len(killed) == 1  # the group killer ran, not a bare proc.kill()
+
+
+async def test_the_probe_starts_a_windows_shim_through_cmd(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`auth status` on a `.cmd` shim: without the interpreter the probe
+    reports "spawn failed" and the credential is never renewed."""
+    from agent_team_backend.osplat import _windows
+
+    argv: list[tuple] = []
+
+    class DoneProc:
+        returncode = 0
+
+        async def communicate(self):
+            return b"", b""
+
+    async def fake_exec(*a, **k):
+        argv.append(a)
+        return DoneProc()
+
+    monkeypatch.setattr(dr.osplat, "paths", _windows.paths)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    ran, detail = await dr._run_probe(r"C:\npm\claude.cmd", 5.0)
+
+    assert (ran, detail) == (True, "")
+    assert argv[0] == ("cmd.exe", "/d", "/c", r"C:\npm\claude.cmd", *dr._PROBE_ARGS)
 
 
 def test_fingerprint_never_returns_the_secret() -> None:

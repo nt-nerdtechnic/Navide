@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 
-from agent_team_backend import app, storage_service, terminals
+from agent_team_backend import app, osplat, storage_service, terminals
 from agent_team_backend.storage_service import StorageGuardError
 
 
@@ -111,6 +111,7 @@ def test_group_totals_equal_the_sum_of_their_items(roots: dict[str, Path]) -> No
     assert _item(report, "appDataOther")["bytes"] == 60
 
 
+@pytest.mark.skipif(not osplat.paths.enforces_posix_modes(), reason="chmod(0o000) cannot make a directory unreadable without POSIX mode bits")
 def test_unreadable_directory_becomes_an_error_not_an_exception(
     roots: dict[str, Path]
 ) -> None:
@@ -808,6 +809,7 @@ def test_an_unmounted_volume_still_protects_every_home(
     assert orphan.exists()
 
 
+@pytest.mark.skipif(not osplat.paths.enforces_posix_modes(), reason="chmod(0o000) cannot make a directory unreadable without POSIX mode bits")
 def test_an_unreadable_ancestor_is_unknown_not_deleted(
     roots: dict[str, Path], tmp_path: Path
 ) -> None:

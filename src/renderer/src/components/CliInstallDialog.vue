@@ -29,12 +29,28 @@ const props = defineProps<{
   origin?: 'pane' | 'spawn' | 'settings'
   /** Label to show before the backend status arrives (avoids an empty title). */
   fallbackLabel?: string
+  /**
+   * Sign-in state of this CLI's active account. Three named states, not a
+   * boolean: 'unknown' means the CLI keeps no credential file Navide can read,
+   * and collapsing that into "signed out" would put a false sign-in step on
+   * every CLI Navide cannot inspect.
+   *
+   * A string rather than `boolean | null` for a second reason: Vue casts an
+   * ABSENT boolean prop to `false`, so every caller that omitted it would be
+   * declared signed out.
+   *
+   * Reactive from the opener: when a login lands, this flips and the derived
+   * phase below moves to 'done' on its own.
+   */
+  signInState?: 'signed-in' | 'signed-out' | 'unknown'
 }>()
 
 const emit = defineEmits<{
   close: []
   installed: [depId: string]
   relaunch: [depId: string]
+  /** Installed but signed out: the opener spawns the vendor's sign-in flow. */
+  login: [depId: string]
   /** So the opener can update its own copy without re-running a full probe. */
   'dismiss-changed': [payload: { depId: string; dismissed: boolean }]
 }>()
@@ -92,9 +108,15 @@ const hasPrerequisites = computed(() => chainTotal.value > 1)
  * assigned, so a background re-detect (the terminal watcher) can move the
  * dialog to 'done' without any explicit transition.
  */
-const phase = computed<'intro' | 'installing' | 'waiting' | 'blocked' | 'failed' | 'done'>(() => {
+const phase = computed<
+  'intro' | 'installing' | 'waiting' | 'blocked' | 'failed' | 'signin' | 'done'
+>(() => {
   if (installing.value === props.depId) return 'installing'
-  if (dep.value?.status === 'ok') return 'done'
+  // Installed is not the same as ready. A signed-out CLI passes every check
+  // here and then opens its own sign-in prompt in the pane, with nothing in
+  // Navide explaining why — so the last step asks for the login instead of
+  // declaring success. Only an explicit 'signed-out' qualifies (see the prop).
+  if (dep.value?.status === 'ok') return props.signInState === 'signed-out' ? 'signin' : 'done'
   if (watching.value === props.depId) return 'waiting'
   if (blockers.value.length) return 'blocked'
   if (result.value && (!result.value.ok || result.value.terminal_opened === false)) return 'failed'
@@ -248,6 +270,18 @@ function relaunch(): void {
   emit('relaunch', props.depId)
   emit('close')
 }
+
+/**
+ * Hand the sign-in to the opener, which owns the login-pane spawn.
+ *
+ * The dialog closes: the login runs in a real pane the user has to watch (the
+ * vendor opens a browser and waits), and leaving a modal over it would hide
+ * exactly the thing they need to see.
+ */
+function signIn(): void {
+  emit('login', props.depId)
+  emit('close')
+}
 </script>
 
 <template>
@@ -397,7 +431,21 @@ function relaunch(): void {
 
         <!-- Step 3 · Verify --------------------------------------------------->
         <template v-else>
-          <div class="ci-verdict">
+          <!-- Installed, but with no account behind it. Same step, different
+               verdict: the CLI is there, it just cannot do anything yet. -->
+          <div v-if="phase === 'signin'" class="ci-verdict">
+            <div class="ci-check signin">→</div>
+            <h2>{{ $t('cli-install.signin-title', { label }) }}</h2>
+            <p class="ci-lead">{{ $t('cli-install.signin-desc', { label }) }}</p>
+            <code v-if="dep?.binary_path" class="ci-command">{{ dep.binary_path }}</code>
+            <div class="ci-row center">
+              <button class="ci-btn primary ci-signin nv-btn nv-btn--primary" @click="signIn">
+                {{ $t('cli-install.signin', { label }) }}
+              </button>
+            </div>
+            <p class="ci-hint">{{ $t('cli-install.signin-hint') }}</p>
+          </div>
+          <div v-else class="ci-verdict">
             <div class="ci-check">✓</div>
             <h2>{{ $t('cli-install.done-title', { label }) }}</h2>
             <p class="ci-lead">
@@ -532,6 +580,10 @@ h1 { margin: 6px 0 0; color: var(--text-bright); font-size: 22px; }
 .ci-warn { margin: 10px 0 0; color: var(--attention-fg); font-size: 12.5px; line-height: 1.6; }
 .ci-verdict { text-align: center; padding: 20px 0 8px; }
 .ci-check { display: grid; place-items: center; width: 50px; height: 50px; margin: 0 auto 16px; border-radius: 50%; background: var(--success-emphasis); color: var(--text-on-emphasis); font-size: 24px; }
+/* Same medallion, different verdict: installed but not yet usable is a
+   next step, not a success — so it must not wear the success green. */
+.ci-check.signin { background: var(--accent-emphasis, var(--success-emphasis)); }
+.ci-hint { margin: 14px 0 0; color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
 h2 { margin: 0 0 8px; color: var(--text-bright); font-size: 19px; }
 .ci-footer { display: flex; align-items: center; gap: 10px; margin-top: auto; padding: 14px 28px; border-top: 1px solid var(--border-muted); flex-wrap: wrap; }
 .ci-footer span { flex: 1; }

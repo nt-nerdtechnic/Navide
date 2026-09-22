@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, Notification, powerMonitor, protocol, safeStorage, session, shell, type IpcMainInvokeEvent } from 'electron'
 import { createGuestAttachHooks, type MutableWebPreferences } from './plugins/pluginGuestAttach'
+import { guardLastWindowClose } from './last-window-close'
 import { join, dirname, basename, isAbsolute, relative, sep } from 'node:path'
 import { writeFile, readFile, mkdir } from 'node:fs/promises'
 import { readFileSync, statSync, existsSync, realpathSync } from 'node:fs'
@@ -15,12 +16,15 @@ import {
 import { abandonPendingBackends } from './backend-pending'
 import { installApplicationMenu, type AppMenuHooks, type RecentMenuEntry } from './menu'
 import { LEGAL_LINKS, isLegalRoute } from '../shared/legalLinks'
-import { openNoopPluginView, openFsProbePluginView, openMiniIdePluginView, openPlansPluginView, devPlansPluginDescriptor, devPlansV2PluginBundle, openGitPluginView, openGitLeftPluginView, updateGitLeftPluginView, closeGitLeftPluginView, registerBundledMiniIde, bundledMiniIdeDir, officialPluginArtifactPackageDir, registerBundledPlans, registerLegacyBundledGit, hasCompletePlansContributions, createPluginBackendChildEnvironment, frontendPluginManager } from './plugins/frontendPluginManager'
+import { createWorkspaceFolder } from './workspace-create'
+import type { NewWorkspaceResult } from '../shared/workspaceCreate'
+import { openNoopPluginView, openFsProbePluginView, openMiniIdePluginView, devMiniIdePluginDescriptor, openPlansPluginView, devPlansPluginDescriptor, devPlansV2PluginBundle, openGitPluginView, openGitLeftPluginView, updateGitLeftPluginView, closeGitLeftPluginView, registerBundledMiniIde, bundledMiniIdeDir, officialPluginArtifactPackageDir, registerBundledPlans, registerLegacyBundledGit, hasCompletePlansContributions, createPluginBackendChildEnvironment, frontendPluginManager } from './plugins/frontendPluginManager'
 import { createWindowCloseCoordinator } from './plugins/windowCloseCoordinator'
 import {
   handlePluginFrameAssetRequest,
   PLUGIN_FRAME_SCHEME,
   plansBackendActivation,
+  PLANS_PLUGIN_ID,
 } from './plugins/frontendPluginManager'
 import {
   isTrustedPluginManagementSender,
@@ -59,7 +63,8 @@ import {
   getContributionWindowConfig,
   getContributionWindowKey,
 } from './plansWindowRouting'
-import { HostLocaleManager, readPersistedLocaleFromSettings } from './hostLocale'
+import { MENU_STRINGS } from './menuStrings'
+import { HostLocaleManager, readPersistedLocaleFromSettings, type SupportedLocale } from './hostLocale'
 import {
   activateFactoryGitWithLegacyFallback,
   assertFactoryGitRestoreAllowed,
@@ -87,9 +92,9 @@ import { lockPageZoom } from './web-contents-zoom'
 import { createUiZoomStore, type UiZoomStore } from './ui-zoom-store'
 import { clampUiScale, UI_SCALE_SETTING_KEY } from '../shared/uiScale'
 import { installContextMenu, registerTerminalContextMenu } from './context-menu'
-import { initUpdater } from './updater'
+import { inAppUpdateSupported, initUpdater } from './updater'
 import { withDeadline } from './deadline'
-import { MAX_RESTORE_ATTEMPTS, WindowRegistry, type WindowBounds, type WindowEntry } from './window-registry'
+import { MAX_RESTORE_ATTEMPTS, WindowRegistry, type AuxWindowEntry, type AuxWindowKind, type WindowBounds, type WindowEntry } from './window-registry'
 import { registeredGitLeftWorkspace, trustedGitLeftWindow } from './gitLeftIpc'
 import { setWindowDockTileBadge } from './dock-tile-badge'
 import { writeTempTextArtifact } from './temp-text-artifact'
@@ -124,6 +129,8 @@ import {
   classifyOpenRequest,
   detectEditors,
   launchEditorProcess,
+  needsWindowsShell,
+  quoteForCmd,
   normalizeEditorId,
   DEFAULT_EDITOR_ID,
   type DetectedEditor,
@@ -140,11 +147,12 @@ import {
 } from './permissions'
 import { resolveBackendDataDir, readUiSettingsText, UI_SETTINGS_FILE } from './ui-settings-bootstrap'
 import { PlanWindowRegistry } from './plan-windows'
+import { createTokenMonitorWindowOpener } from './token-monitor-window'
 import { warnMain } from './main-log'
 import { isAppWindowSender, UNTRUSTED_SENDER } from './ipcSender'
-import { installWindowControls } from './window-controls'
+import { drawnFrameWhereNeeded, installWindowControls } from './window-controls'
 import { openInExternalTerminal } from './external-terminal'
-import { isLinux, isMac } from '../shared/osplat'
+import { isMac } from '../shared/osplat'
 import {
   GitAccountsStore,
   type GitAccountCrypto,
@@ -193,7 +201,7 @@ if (
   )
 }
 
-if (process.platform === 'darwin') {
+if (isMac()) {
   app.dock?.setIcon(nativeImage.createFromPath(join(__dirname, '../../resources/icon.png')))
 }
 
@@ -230,6 +238,9 @@ let quitConfirm = {
 let quitConfirmed = false
 let quittingWindowsPrepared = false
 let quittingWindowsPreparation: Promise<boolean> | null = null
+// True while the quit confirmation dialog is on screen, so a second close
+// request cannot stack another one.
+let quitPromptOpen = false
 // Multiple independent main windows (VS Code-style cmd+shift+N). `mainWindow`
 // tracks the most-recently-focused one so dialogs parent to it; `mainWindows`
 // holds them all for lifecycle code that must reach every main window.
@@ -365,7 +376,7 @@ function sendMenuAction(action: string): void {
 let appMenuHooks: AppMenuHooks = {}
 let lastRecents: RecentMenuEntry[] = []
 function rebuildAppMenu(): void {
-  installApplicationMenu(appMenuHooks, lastRecents)
+  installApplicationMenu(appMenuHooks, lastRecents, currentUiLocale())
 }
 // Registered once for the process: `ipcMain.handle` throws on a second
 // registration, and rebuildAppMenu above runs again on every recents change.
@@ -374,6 +385,26 @@ installWindowControls()
 // detected and offered for restore on the next launch (see window-registry.ts).
 // Path resolved lazily — dev re-points userData (…-dev) below, after imports.
 const windowRegistry = new WindowRegistry(() => join(app.getPath('userData'), 'open-windows.json'))
+// Notified with each auxiliary window as it is created, and only while the
+// startup restore is driving an opener. The openers (the plans router, the
+// contribution window host, the standalone opener) all answer with a boolean,
+// and threading a bounds argument down through those three layers to serve one
+// caller would change four signatures for one launch-time concern — so the
+// tracker below, which every auxiliary window already passes through, hands the
+// window to whoever is listening instead.
+let auxWindowCreatedHook: ((win: BrowserWindow) => void) | null = null
+// Track a long-lived auxiliary window (Plans, Git, Token Monitor) so a clean
+// exit can bring it back. Called from the one spot that owns the window, and
+// only for a genuinely new window — the openers focus an existing one instead,
+// and a second addAux for the same window is not what that means.
+function trackAuxWindow(win: BrowserWindow, entry: AuxWindowEntry): void {
+  const winId = win.id // captured — win.id is not readable after destroy
+  windowRegistry.addAux(winId, entry)
+  win.on('moved', () => { if (!win.isDestroyed()) windowRegistry.setAuxBounds(winId, win.getBounds()) })
+  win.on('resized', () => { if (!win.isDestroyed()) windowRegistry.setAuxBounds(winId, win.getBounds()) })
+  win.on('closed', () => windowRegistry.remove(winId))
+  auxWindowCreatedHook?.(win)
+}
 // Health-check timeout: user-configurable via Settings, persisted here so
 // startBackend() (called before any renderer window exists) can read it.
 // Path resolved lazily for the same reason as windowRegistry's, above.
@@ -643,6 +674,20 @@ function requestPipelineManager(): void {
 function requestResourceManager(): void {
   requestMainWindowModal('menu:open-resource-manager')
 }
+
+function requestTurnStats(): void {
+  requestMainWindowModal('menu:open-turn-stats')
+}
+
+const requestTokenMonitor = createTokenMonitorWindowOpener({
+  preload: join(__dirname, '../preload/index.js'),
+  frame: drawnFrameWhereNeeded(),
+  locale: currentUiLocale,
+  load: loadWindow,
+  // Machine-wide: no workspace_path, so the restore filter reopens it without
+  // asking which workspace came back.
+  onWindowCreated: (win) => trackAuxWindow(win, { kind: 'token-monitor' }),
+})
 
 function backendInfoPayload() {
   if (!backend) {
@@ -1643,17 +1688,41 @@ function watchBackendCrash(b: BackendHandle): void {
 // stop against a start.
 let backendBusy = false
 
+// Set once the bounded respawn budget below is spent: this run really did fail
+// to keep a backend alive, so nothing about it may vindicate the workspaces it
+// restored. Read by markCleanExitAndSettleRestores().
+let backendGaveUp = false
+
 // Bounded respawn of a crashed backend (see backend-autorestart.ts for why it
 // is bounded and why a stability window guards the reset).
 const backendAutoRestart = createBackendAutoRestart({
   restart: () => { void autoRestartBackend() },
   onGiveUp: (attempts) => {
+    backendGaveUp = true
     console.error(`[main] backend auto-restart gave up after ${attempts} attempts`)
   },
   // A backend that survived the stability window vindicates whatever
   // workspaces this launch restored — pay back their attempt charges.
   onStable: () => { windowRegistry.clearRestoreFailures() },
 })
+
+/** Mark a clean exit and, with it, pay back whatever restore attempts this run
+ *  charged.
+ *
+ *  beginRestore() charges every restored workspace up front and only the 60s
+ *  stability window pays it back, so three sessions that ended before that
+ *  window elapsed — an update test, a quick relaunch, a glance at the app and
+ *  a quit — burned a workspace's whole budget and got it silently skipped from
+ *  then on, without a single one of them being a restore that broke anything.
+ *
+ *  Reaching a clean exit proves the same thing surviving the stability window
+ *  proves: the app came up and it was the user who ended it. The one exception
+ *  is a run where the auto-restart budget ran out — that run genuinely failed
+ *  to hold a backend, so its charges stand. */
+function markCleanExitAndSettleRestores(): void {
+  windowRegistry.markCleanExit()
+  if (!backendGaveUp) windowRegistry.clearRestoreFailures()
+}
 
 /** One scheduled respawn attempt. A deliberate restart/stop already in flight
  *  wins: it either brings a backend up itself or intends none to be running. */
@@ -1798,9 +1867,9 @@ ipcMain.handle('backend:stop', async () => {
 
 async function pickWorkspacePath(defaultPath?: string): Promise<string | null> {
   const opts: Electron.OpenDialogOptions = {
-    title: 'Pick workspace folder',
+    title: MENU_STRINGS[currentUiLocale()].pickWorkspace,
     properties: ['openDirectory', 'createDirectory'],
-    buttonLabel: 'Use this folder'
+    buttonLabel: MENU_STRINGS[currentUiLocale()].useFolder
   }
   if (defaultPath && typeof defaultPath === 'string') opts.defaultPath = defaultPath
 
@@ -1814,38 +1883,34 @@ async function pickWorkspacePath(defaultPath?: string): Promise<string | null> {
 
 ipcMain.handle('workspace:pick', (_event, defaultPath?: string) => pickWorkspacePath(defaultPath))
 
-ipcMain.handle('workspace:new', async () => {
-  const opts: Electron.OpenDialogOptions = {
-    title: 'Choose where to create the workspace',
-    defaultPath: app.getPath('home'),
-    properties: ['openDirectory', 'createDirectory'],
-    buttonLabel: 'Create here'
+ipcMain.handle('workspace:new', async (): Promise<NewWorkspaceResult> => {
+  // A save dialog rather than a directory picker: it is the one native dialog
+  // that asks for a location and a name at once, so the user names the
+  // workspace in the same step that places it. `defaultPath` seeds both — the
+  // home directory and an editable placeholder name.
+  const opts: Electron.SaveDialogOptions = {
+    title: MENU_STRINGS[currentUiLocale()].createWorkspace,
+    defaultPath: join(app.getPath('home'), 'navide-workspace'),
+    nameFieldLabel: MENU_STRINGS[currentUiLocale()].workspaceName,
+    buttonLabel: MENU_STRINGS[currentUiLocale()].create,
+    // `showOverwriteConfirmation` is Linux-only and deliberately left off:
+    // nothing here overwrites, so asking "replace it?" would promise something
+    // the mkdir below refuses to do. macOS and Windows ask anyway and cannot
+    // be talked out of it — their panel returns the path without deleting
+    // anything, mkdir then fails EEXIST, so that message stays worded for an
+    // "item" rather than a folder: what the name is taken by may be a file.
+    properties: ['createDirectory']
   }
 
   const result = mainWindow
-    ? await dialog.showOpenDialog(mainWindow, opts)
-    : await dialog.showOpenDialog(opts)
+    ? await dialog.showSaveDialog(mainWindow, opts)
+    : await dialog.showSaveDialog(opts)
 
-  if (result.canceled || result.filePaths.length === 0) return null
+  if (result.canceled || !result.filePath) return { ok: false, reason: 'canceled' }
 
-  // Create a fresh empty folder inside the chosen location. mkdir without
-  // `recursive` fails with EEXIST on a taken name, so bumping the suffix never
-  // adopts a folder that already holds someone else's files.
-  const parent = result.filePaths[0]
-  const base = 'navide-workspace'
-  for (let n = 1; n <= 100; n++) {
-    const dir = join(parent, n === 1 ? base : `${base}-${n}`)
-    try {
-      await mkdir(dir)
-      return dir
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'EEXIST') continue
-      console.error('[workspace:new] failed to create', dir, err)
-      return null
-    }
-  }
-  console.error('[workspace:new] no free workspace folder name under', parent)
-  return null
+  const created = await createWorkspaceFolder(result.filePath)
+  if (!created.ok) console.error('[workspace:new] failed to create', created.path, created.detail)
+  return created
 })
 
 ipcMain.handle('app:home-dir', () => app.getPath('home'))
@@ -1863,7 +1928,8 @@ function readUiSettings(): Record<string, unknown> {
       appDataPath: app.getPath('appData'),
       platform: process.platform,
       homeDir: app.getPath('home'),
-      xdgDataHome: process.env.XDG_DATA_HOME
+      xdgDataHome: process.env.XDG_DATA_HOME,
+      appData: process.env.APPDATA
     })
     return JSON.parse(readUiSettingsText(join(dataDir, UI_SETTINGS_FILE))) as Record<string, unknown>
   } catch {
@@ -1898,7 +1964,9 @@ function currentUiTheme(): string {
   return typeof theme === 'string' ? theme : ''
 }
 
-function currentUiLocale(): string {
+// Returns the narrow union, not `string`: the native menu indexes its string
+// table by it. Every other caller takes a string and is unaffected.
+function currentUiLocale(): SupportedLocale {
   return hostLocaleManager.getLocale()
 }
 
@@ -2234,19 +2302,26 @@ function warnEditorUnavailable(target: BrowserWindow | null, editorId: string): 
  * died with a non-zero status right away — the caller then falls back.
  *
  * argv is passed as an array and never through a shell, so a path containing
- * spaces or shell metacharacters stays a single argument. PATH is the
- * login-shell one the backend resolved: the PATH Electron inherits when
- * launched from Finder omits Homebrew and friends.
+ * spaces or shell metacharacters stays a single argument. The one exception
+ * is a `.cmd`/`.bat` on Windows — the shape `code` and `cursor` take there —
+ * which Node will only start through cmd.exe; each element is then quoted
+ * for that command line first. PATH is the login-shell one the backend
+ * resolved: the PATH Electron inherits when launched from Finder omits
+ * Homebrew and friends.
  */
 function launchExternalEditor(argv: string[], cwd?: string): Promise<boolean> {
   const [command, ...args] = argv
   if (!command) return Promise.resolve(false)
+  const viaShell = needsWindowsShell(command)
   return launchEditorProcess(() =>
-    spawn(command, args, {
+    spawn(viaShell ? quoteForCmd(command) : command, viaShell ? args.map(quoteForCmd) : args, {
       ...(cwd ? { cwd } : {}),
       detached: true,
       stdio: 'ignore',
-      env: { ...process.env, PATH: getResolvedUserPath() }
+      env: { ...process.env, PATH: getResolvedUserPath() },
+      // windowsHide keeps the intermediate cmd.exe from flashing a console;
+      // the editor window it starts is not affected.
+      ...(viaShell ? { shell: true, windowsHide: true } : {})
     })
   )
 }
@@ -2356,6 +2431,7 @@ async function openMiniIdeEditor(
     if (await openMiniIdePluginView(workspacePath, httpUrl, extraParams, currentUiTheme(), {
       canDispatch,
       trustedEditorFileTarget,
+      workspaceDisplayName: await frontendPluginManager.peekWorkspaceDisplayName(workspacePath),
     })) return true
   }
   const targetPath = extraParams.filepath
@@ -2396,6 +2472,7 @@ async function openMiniIdeEditor(
       if (await openMiniIdePluginView(workspacePath, httpUrl, extraParams, currentUiTheme(), {
         canDispatch,
         trustedEditorFileTarget,
+        workspaceDisplayName: await frontendPluginManager.peekWorkspaceDisplayName(workspacePath),
       })) return true
     }
   }
@@ -2649,7 +2726,7 @@ function showPlansPreviewUnavailable(workspacePath: string): void {
 function openDiffWindow(host: BrowserWindow | null, params: Record<string, string>): void {
   // EditorWindowApp reads diff_filepath/diff_staged from the entry query on
   // startup (or after the query-change reload) and opens the diff tab.
-  openMiniIdeEditor(host, {
+  void openMiniIdeEditor(host, {
     workspace_path: params.workspace_path ?? '',
     diff_filepath: params.filepath ?? '',
     diff_staged: params.staged ?? '',
@@ -2984,6 +3061,15 @@ ipcMain.handle('window:openDiff', (event, args: Record<string, string>) => {
   return { ok: true }
 })
 
+// The contribution windows worth restoring, by the key that opens them. Both
+// of the restorable per-workspace kinds come through this one host, so the
+// mapping lives here rather than in each caller — and a contribution absent
+// from it (a future one-shot viewer) is simply not tracked.
+const AUX_KIND_BY_CONTRIBUTION: Record<string, AuxWindowKind> = {
+  [`${PLANS_PLUGIN_ID}.window`]: 'plans',
+  'navide.git.window': 'git',
+}
+
 // The standalone Git client plugin view — its own dedicated window (mini-IDE
 // parity), opened from the main window's "open standalone Git" entry. Resolves
 // the backend HTTP base + current theme like openMiniIdeEditor.
@@ -3008,6 +3094,10 @@ async function openCatalogContributionWindow(
     (entry) => entry.contributionKey === contributionKey && entry.location === 'window'
   )
   if (!contribution) return { ok: false, error: 'window contribution is not installed' }
+
+  // Best-effort and bounded (see peekWorkspaceDisplayName): a wedged backend
+  // costs a short delay, then the window opens titled with the folder name.
+  const workspaceDisplayName = await frontendPluginManager.peekWorkspaceDisplayName(workspacePath)
 
   const windowKey = getContributionWindowKey(contributionKey, workspacePath, normalizeWorkspacePath)
   let hostWindow = contributionWindows.get(windowKey)
@@ -3042,7 +3132,13 @@ async function openCatalogContributionWindow(
   }
   const result = await frontendPluginManager.openContributionWindow(hostWindow, contributionKey, {
     workspacePath,
-    query: catalogContributionQuery(contributionKey, workspacePath, extraParams),
+    query: catalogContributionQuery(
+      contributionKey,
+      workspacePath,
+      extraParams,
+      '',
+      workspaceDisplayName,
+    ),
     ...(trustedEditorFileTarget ? { trustedEditorFileTarget } : {}),
     canDispatch,
   })
@@ -3056,6 +3152,21 @@ async function openCatalogContributionWindow(
       hostWindow.close()
     }
     return result
+  }
+  // Only a window this call created is tracked: the reopen path above focuses
+  // an already-tracked window, and it is only now, past the failure branch,
+  // that the window is one the user will actually see.
+  const auxKind = AUX_KIND_BY_CONTRIBUTION[contributionKey]
+  if (auxKind && !hostWindow.isDestroyed()) {
+    if (created) {
+      trackAuxWindow(hostWindow, { kind: auxKind, workspace_path: workspacePath })
+    } else {
+      // Reused window. Git is keyed by contribution alone (getContributionWindowKey
+      // only scopes Plans per workspace), so this call has just re-targeted the
+      // one Git window at another project — the tracked workspace follows it,
+      // or the restore reopens Git on whichever workspace first created it.
+      windowRegistry.setAuxWorkspace(hostWindow.id, workspacePath)
+    }
   }
   if (!hostWindow.isDestroyed()) {
     if (hostWindow.isMinimized()) hostWindow.restore()
@@ -3084,6 +3195,11 @@ function catalogContributionQuery(
   // actually painting, which left an in-window contribution booting on the
   // wrong theme until the next theme change.
   renderedTheme = '',
+  // The workspace's user-set alias, resolved by the caller (only the window
+  // openers do, since an in-window contribution region has no title of its
+  // own). Blank leaves the param out and the view falls back to the folder
+  // name.
+  workspaceDisplayName = '',
 ): string {
   const isGit = contributionKey.startsWith('navide.git.')
   return composePluginContributionQuery({
@@ -3094,6 +3210,7 @@ function catalogContributionQuery(
     ...(isGit && backend ? { httpUrl: `http://${backend.host}:${backend.port}` } : {}),
     ...(isGit ? { gitReadOnly: currentGitReadOnlyQuery() } : {}),
     extraParams,
+    workspaceDisplayName,
   })
 }
 
@@ -3307,7 +3424,7 @@ ipcMain.handle('window:setUiScale', (event, next: unknown) => {
 function openBranchDiffWindow(host: BrowserWindow | null, params: Record<string, string>): void {
   // EditorWindowApp reads branch_diff_base/branch_diff_compare from the entry
   // query on startup (or after the query-change reload) and opens the tab.
-  openMiniIdeEditor(host, {
+  void openMiniIdeEditor(host, {
     workspace_path: params.workspace_path ?? '',
     branch_diff_base: params.branch_diff_base ?? 'main',
     branch_diff_compare: params.branch_diff_compare ?? '',
@@ -3463,10 +3580,9 @@ async function openLegacyPlanWindow(workspacePath: string, relPath?: string): Pr
   if (plansStorageAvailability?.status === 'recovery' && !frontendPluginManager.plansBackendFallbackAllowed()) return false
   const recoveryBootstrap = await getPlansLegacyRecoveryBootstrap(workspacePath)
   if (plansStorageAvailability?.status === 'recovery' && !recoveryBootstrap) return false
-  const existing = planWindows.get(workspacePath)
-  if (existing) {
-    // Already open for this workspace: focus it and, when a plan was clicked,
-    // ask the live window to switch to it instead of reopening a new window.
+  // Already open for this workspace: focus it and, when a plan was clicked,
+  // ask the live window to switch to it instead of reopening a new window.
+  const focusExisting = (existing: BrowserWindow): void => {
     if (existing.isMinimized()) existing.restore()
     existing.show()
     existing.focus()
@@ -3483,12 +3599,41 @@ async function openLegacyPlanWindow(workspacePath: string, relPath?: string): Pr
         existing.webContents.send('plan:open-doc', relPath)
       }
     }
+  }
+  const existing = planWindows.get(workspacePath)
+  if (existing) {
+    focusExisting(existing)
+    return
+  }
+  // Resolved by the Host even though this window runs the core renderer over a
+  // real WebSocket: one param spelling means PlanWindowApp needs a single
+  // title path, shared with the packaged Plans window that cannot query at
+  // all. Blank leaves the param out and it falls back to the folder name.
+  // Before the window exists, so a slow answer delays the window rather than
+  // showing an empty one (see peekWorkspaceDisplayName for the bound).
+  const legacyPlansDisplayName = await frontendPluginManager.peekWorkspaceDisplayName(workspacePath)
+  // Checked AGAIN after the await: two window:openPlans for the same workspace
+  // (a double-click on the sidebar row while the backend is slow) both pass
+  // the check above before either registers a window, since registration
+  // happens below the await. Whichever resumes first creates and registers
+  // its window synchronously; the second then sees it here and focuses it
+  // instead of opening a duplicate that the registry would never know about.
+  const raced = planWindows.get(workspacePath)
+  if (raced) {
+    focusExisting(raced)
     return
   }
   const win = new BrowserWindow({
     width: 1100,
     height: 760,
     title: 'Plans',
+    // The only Host window that still took the system's frame. On Windows and
+    // Linux that made it the odd one out — every other window in the app draws
+    // its own bar there — so it hides the bar and PlanWindowApp draws the
+    // replacement. macOS keeps the system frame it has always had: hiding it
+    // there would change a window that is not in the fix's scope, and the
+    // traffic lights it would then need are the thing that already works.
+    ...drawnFrameWhereNeeded(),
     backgroundColor: '#0d1117',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -3501,6 +3646,9 @@ async function openLegacyPlanWindow(workspacePath: string, relPath?: string): Pr
     }
   })
   planWindows.set(workspacePath, win)
+  // Restored as a plain Plans window: which of the two implementations serves
+  // it next launch is decided then, by the router, exactly as it is here.
+  trackAuxWindow(win, { kind: 'plans', workspace_path: workspacePath })
   // Registered before the renderer subscribes to plan:open-doc. Track the plan
   // this window was launched for; a click on a different plan during load
   // overwrites it, and did-finish-load re-sends the final choice if it differs.
@@ -3521,6 +3669,7 @@ async function openLegacyPlanWindow(workspacePath: string, relPath?: string): Pr
     window: 'plans',
     workspace_path: workspacePath,
     locale: currentUiLocale(),
+    ...(legacyPlansDisplayName ? { workspace_display_name: legacyPlansDisplayName } : {}),
     ...(plansRecoveryEnabled ? { legacy_plans_recovery: '1' } : {}),
     ...(relPath ? { rel_path: relPath } : {})
   })
@@ -3767,14 +3916,16 @@ ipcMain.on(
 // renderer which pane to switch to via `notify:focusPane`.
 ipcMain.handle(
   'window:notify',
-  (event, args: { paneId?: string; title?: string; body?: string }): { ok: boolean } => {
+  (event, args: { paneId?: string; title?: string; body?: string; silent?: boolean }): { ok: boolean } => {
     if (!Notification.isSupported()) return { ok: false }
     const title = String(args?.title ?? '').trim()
     if (!title) return { ok: false }
     const notification = new Notification({
       title,
       body: String(args?.body ?? ''),
-      silent: false,
+      // The renderer's sound toggle covers the OS notification sound too;
+      // otherwise "sound off" still dings through macOS.
+      silent: args?.silent === true,
     })
     const paneId = String(args?.paneId ?? '')
     notification.on('click', () => {
@@ -3794,7 +3945,7 @@ ipcMain.handle(
 // unseen done/attention activity. The renderer tracks WHEN to update it
 // (useSystemNotify's pendingCount); main just reflects the count.
 ipcMain.on('window:setBadgeCount', (event, count: number) => {
-  if (process.platform !== 'darwin') return
+  if (!isMac()) return
   app.dock?.setBadge(count > 0 ? String(count) : '')
   // Mirror the count onto the sender window's own Dock tile (Terminal.app-style):
   // the system red badge shows on its thumbnail while the window is minimized.
@@ -3958,8 +4109,10 @@ ipcMain.handle('shell:openTerminal', async (event, command: string) => {
   if (!command || typeof command !== 'string') return { ok: false, error: 'invalid command' }
   // Run the install command in a visible terminal (sudo / OAuth prompts need
   // a real TTY). Which terminal is the platform's business — see
-  // external-terminal.ts; this used to be AppleScript only.
-  return await openInExternalTerminal(command)
+  // external-terminal.ts; this used to be AppleScript only. The login-shell
+  // PATH, not this process's: a Linux .desktop launch has no nvm on PATH,
+  // and `npm install -g` in the terminal has to find npm.
+  return await openInExternalTerminal(command, getResolvedUserPath())
 })
 
 // macOS TCC permissions (onboarding wizard). Requests are user-initiated only —
@@ -4211,6 +4364,9 @@ ipcMain.on('settings:language-changed', (_event, locale: string) => {
     frontendPluginManager.dispatchHostSettingsChanged({
       settings: { 'agent-team:language': normalizedLocale },
     })
+    // The native menu is built once at startup; Electron has no API to
+    // re-label it in place, so a language change has to install a new one.
+    rebuildAppMenu()
   }
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
@@ -4231,7 +4387,8 @@ ipcMain.on('settings:bootstrap', (event) => {
     appDataPath: app.getPath('appData'),
     platform: process.platform,
     homeDir: app.getPath('home'),
-    xdgDataHome: process.env.XDG_DATA_HOME
+    xdgDataHome: process.env.XDG_DATA_HOME,
+    appData: process.env.APPDATA
   })
   event.returnValue = readUiSettingsText(join(dataDir, UI_SETTINGS_FILE))
 })
@@ -4626,6 +4783,8 @@ app.whenReady().then(async () => {
     onNewWindow: () => void createWindow(),
     onOpenPipelineManager: () => requestPipelineManager(),
     onOpenResourceManager: () => requestResourceManager(),
+    onOpenTurnStats: () => requestTurnStats(),
+    onOpenTokenMonitor: () => requestTokenMonitor(),
     onOpenAccount: () => sendMenuAction('open-account'),
     onOpenRepo: () => void shell.openExternal('https://github.com/nt-nerdtechnic/Navide'),
     onReportIssue: () => void shell.openExternal('https://github.com/nt-nerdtechnic/Navide/issues'),
@@ -4678,23 +4837,26 @@ app.whenReady().then(async () => {
   // Register updater IPC before any renderer can request its state. Packaged
   // builds automatically check GitHub Releases after a short delay.
   initUpdater({
-    // macOS updates through Squirrel.Mac, Linux through electron-updater's
-    // AppImage path — which only works when the app is actually running as an
-    // AppImage, because that is the only shape it can rewrite in place.
-    // A .deb install updates through the distribution's package manager, so
-    // offering in-app updates there would fight the system that owns the file.
-    // Windows (NSIS) is deliberately still off: it has no signed build to
-    // update to yet, and an unsigned installer download is worse than none.
-    enabled: app.isPackaged && (isMac() || (isLinux() && Boolean(process.env.APPIMAGE))),
+    // Packaged builds only; which install shapes can update themselves in
+    // place (Squirrel.Mac, NSIS, AppImage — not .deb) is inAppUpdateSupported's
+    // call. Windows updates go unverified until the build is code-signed.
+    enabled: app.isPackaged && inAppUpdateSupported(),
     currentVersion: app.getVersion(),
     // Installing quits the app by design, and the user already agreed to that
     // when they asked for the install. Without this they get a second "Quit?"
     // dialog on top of the one they just answered — and cancelling it leaves
     // the update staged anyway, so the question is not even truthful.
-    onInstallStarting: () => { quitConfirmed = true },
+    // Freeze the restore snapshot here, not in before-quit: a quit started by
+    // autoUpdater.quitAndInstall() emits before-quit AFTER closing every
+    // window, so by then each window's 'closed' has already remove()d its
+    // entry and the snapshot would be frozen empty. This is the only hook the
+    // update path offers that still runs while the windows are open.
+    onInstallStarting: () => { quitConfirmed = true; markCleanExitAndSettleRestores() },
     // The install did not take the app down (bad precondition, error, or
     // timeout) — restore the confirmation gate the waiver above disabled.
-    onInstallAbandoned: () => { quitConfirmed = false },
+    // ...and the snapshot freeze above goes back with it: the app is still
+    // running, so this run is not a clean exit after all.
+    onInstallAbandoned: () => { quitConfirmed = false; windowRegistry.clearCleanExit() },
   })
   // Detect an unclean previous exit and stash its windows for the restore
   // banner. Always reset the file (start tracking this run) — but only OFFER
@@ -4765,6 +4927,10 @@ app.whenReady().then(async () => {
   for (const p of launchPaths) {
     if (openWorkspaceFromPath(p)) openedAny = true
   }
+  // Workspaces whose main window this launch actually put back, normalized so
+  // a snapshot's spelling can be compared against it. Gates the per-workspace
+  // auxiliary windows below.
+  const restoredWorkspaces = new Set<string>()
   // Clean-exit auto-restore: when nothing was launched explicitly (no Quick
   // Action / CLI path), reopen the windows that were open at the last clean
   // quit — each in its workspace with its saved bounds. Gated by the
@@ -4794,6 +4960,7 @@ app.whenReady().then(async () => {
       for (const entry of [...mainEntries, ...detachedEntries]) {
         if (entry.detached_group) {
           await reopenDetachedGroup(entry.workspace_path, entry.detached_group, entry.bounds)
+          restoredWorkspaces.add(normalizeWorkspacePath(entry.workspace_path))
           openedAny = true
           continue
         }
@@ -4804,11 +4971,45 @@ app.whenReady().then(async () => {
         if (entry.adopted_workspaces?.length) {
           pendingAdoptedWorkspaces.set(restored.id, entry.adopted_workspaces)
         }
+        restoredWorkspaces.add(normalizeWorkspacePath(entry.workspace_path))
         // Only a window that actually opened counts — when every workspace is
         // skipped this stays false and the empty Welcome window below runs, so
         // the app is never left with no window at all.
         openedAny = true
       }
+    }
+  }
+  // Auxiliary windows (Plans, Git, Token Monitor) from the same clean exit.
+  // Runs after the main windows on purpose: a Plans or Git window only comes
+  // back when its workspace's main window did. That keeps a workspace the
+  // failure breaker skipped from being let in through a side door — reopening
+  // its Git window would load the very backend the breaker is protecting the
+  // app from — and it keeps an orphan Plans window, whose workspace has no
+  // window to hand anything to, from appearing on its own. The machine-wide
+  // Token Monitor belongs to no workspace, so nothing gates it.
+  //
+  // None of this touches openedAny: three auxiliary windows and no main window
+  // still needs the Welcome window below.
+  const auxRestore = windowRegistry.cleanExitAuxRestore()
+  for (const entry of auxRestore) {
+    const ownerPath = entry.workspace_path ?? ''
+    if (entry.kind !== 'token-monitor') {
+      const owner = normalizeWorkspacePath(ownerPath)
+      if (!owner || !restoredWorkspaces.has(owner)) continue
+    }
+    // The openers answer with a boolean, so the window itself arrives through
+    // this hook — set only for the one call, and only when there are bounds to
+    // put back (the openers' own defaults are right for a first-time window).
+    const bounds = entry.bounds
+    auxWindowCreatedHook = bounds
+      ? (win) => { if (!win.isDestroyed()) win.setBounds(bounds) }
+      : null
+    try {
+      if (entry.kind === 'token-monitor') requestTokenMonitor()
+      else if (entry.kind === 'plans') await openPlanWindow(ownerPath)
+      else await openGitWindow(ownerPath)
+    } finally {
+      auxWindowCreatedHook = null
     }
   }
   if (!openedAny) await createWindow()
@@ -4817,7 +5018,30 @@ app.whenReady().then(async () => {
 })
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit()
+  if (!isMac()) app.quit()
+})
+
+// Off macOS, closing the last window quits the app (above), so the quit
+// confirmation has to run from that window's own close event, while a Cancel
+// can still keep it (see last-window-close.ts). Every window counts as "last"
+// — a Plans or Git window left open after the main window is the one whose
+// close would quit — so the guard goes on each window as Electron creates it,
+// whichever factory made it. A confirmed quit goes through the same teardown
+// as before-quit; `quitConfirmed` then lets app.quit() close the windows.
+app.on('browser-window-created', (_event, win) => {
+  win.on('close', (e) => {
+    guardLastWindowClose(e, {
+      liveWindows: () => BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed()).length,
+      confirmEnabled: () => quitConfirm.enabled,
+      quitConfirmed: () => quitConfirmed,
+      promptOpen: () => quitPromptOpen,
+      ask: () => askQuitConfirm(win),
+      quit: () => {
+        quitConfirmed = true
+        void teardownBackendAndQuit()
+      },
+    })
+  })
 })
 
 // Shutdown budgets. They are deliberately SEPARATE: a single shared deadline
@@ -4890,29 +5114,42 @@ app.on('will-quit', () => {
   filePickerHostService.dispose()
 })
 
+// The "confirm before quit" dialog. Resolves true when the user chose Quit;
+// the "don't show again" checkbox is applied here so both callers agree.
+async function askQuitConfirm(win: BrowserWindow | undefined): Promise<boolean> {
+  const opts = {
+    type: 'question' as const,
+    buttons: [quitConfirm.quitLabel, quitConfirm.cancelLabel],
+    defaultId: 0,
+    cancelId: 1,
+    message: quitConfirm.message,
+    detail: quitConfirm.detail,
+    checkboxLabel: quitConfirm.dontShowLabel,
+    checkboxChecked: false,
+  }
+  quitPromptOpen = true
+  let res: Electron.MessageBoxReturnValue
+  try {
+    res = win && !win.isDestroyed() ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts)
+  } finally {
+    quitPromptOpen = false
+  }
+  if (res.response === 1) return false
+  if (res.checkboxChecked) {
+    quitConfirm.enabled = false
+    for (const w of BrowserWindow.getAllWindows()) {
+      if (!w.isDestroyed()) w.webContents.send('app:quitConfirmDisabled')
+    }
+  }
+  return true
+}
+
 app.on('before-quit', async (e) => {
   // Confirmation gate — shared "confirm before close" setting, driven by renderer.
   if (quitConfirm.enabled && !quitConfirmed) {
     e.preventDefault()
     const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
-    const opts = {
-      type: 'question' as const,
-      buttons: [quitConfirm.quitLabel, quitConfirm.cancelLabel],
-      defaultId: 0,
-      cancelId: 1,
-      message: quitConfirm.message,
-      detail: quitConfirm.detail,
-      checkboxLabel: quitConfirm.dontShowLabel,
-      checkboxChecked: false,
-    }
-    const res = win ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts)
-    if (res.response === 1) return // cancelled — stay open (default already prevented)
-    if (res.checkboxChecked) {
-      quitConfirm.enabled = false
-      for (const w of BrowserWindow.getAllWindows()) {
-        if (!w.isDestroyed()) w.webContents.send('app:quitConfirmDisabled')
-      }
-    }
+    if (!(await askQuitConfirm(win))) return // cancelled — stay open (default already prevented)
     quitConfirmed = true
     // Re-enter through the normal path so receiver/provider preparation runs
     // before any backend shutdown.
@@ -4943,7 +5180,7 @@ app.on('before-quit', async (e) => {
   // Non-dialog path (disabled, or re-entrant after quitConfirmed).
   // A user-initiated quit is a clean exit — nothing to restore next launch.
   // Must run before the early return below (backend may already be gone).
-  windowRegistry.markCleanExit()
+  markCleanExitAndSettleRestores()
   // Nothing to tear down means the native quit can proceed. hasBackendActivity()
   // now reports live plugin backends only - bound views, headless MCP instances
   // and in-flight calls - so a packaged launch that merely registered the bundled

@@ -915,8 +915,8 @@ describe('PlanReviewToolbar – execute dispatch', () => {
 
     await wrapper.find('.prt-execute').trigger('click')
     const labels = wrapper.findAll('.prt-execute-agent .prt-execute-agent-label').map((b) => b.text())
-    expect(labels).toContain('Claude Code')
-    expect(labels).toContain('Codex')
+    expect(labels).toContain('Claude Code (Anthropic)')
+    expect(labels).toContain('Codex CLI (OpenAI)')
     expect(labels).not.toContain('Terminal')
   })
 

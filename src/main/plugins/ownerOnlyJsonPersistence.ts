@@ -4,7 +4,6 @@ import {
   closeSync,
   constants,
   fstatSync,
-  fsyncSync,
   linkSync,
   lstatSync,
   mkdirSync,
@@ -16,6 +15,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { parseStrictJson } from '../../../packages/plugin-contracts/src/index'
+import { fsyncFileSync, syncDirectorySync } from './fsSync'
 
 const NO_FOLLOW_FLAG = process.platform === 'win32' ? 0 : constants.O_NOFOLLOW
 
@@ -246,24 +246,12 @@ export class OwnerOnlyJsonPersistence {
   private writeTemporaryJson(file: string, serialized: string): void {
     writeFileSync(file, serialized, { encoding: 'utf8', mode: 0o600 })
     chmodSync(file, 0o600)
-    const fd = openSync(file, 'r')
-    try {
-      fsyncSync(fd)
-    } finally {
-      closeSync(fd)
-    }
+    fsyncFileSync(file)
   }
 
   private syncDirectory(): void {
-    if (process.platform === 'win32') return
-    const directory = openSync(
-      this.directory,
-      constants.O_RDONLY | constants.O_DIRECTORY | NO_FOLLOW_FLAG,
-    )
-    try {
-      fsyncSync(directory)
-    } finally {
-      closeSync(directory)
-    }
+    syncDirectorySync(this.directory, {
+      flags: constants.O_RDONLY | constants.O_DIRECTORY | NO_FOLLOW_FLAG,
+    })
   }
 }

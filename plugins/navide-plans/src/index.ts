@@ -5,6 +5,7 @@ import PlansApp from './PlansApp.vue'
 import { plansViewRuntime, subscribeHostEvent } from './backend'
 import { i18n } from '@navide/plugin-ui/foundation'
 import { bootstrapPlansI18n, bindPlansLocale } from './plansI18n'
+import { bootstrapPlansTheme, bindPlansTheme } from './plansTheme'
 import { plansBuildProvenance } from './provenance'
 
 // Both entrypoints intentionally share the package-local surface model. The
@@ -12,6 +13,8 @@ import { plansBuildProvenance } from './provenance'
 // and row-open behavior for the embedded left contribution.
 bootstrapPlansI18n(i18n, window.location.search)
 bindPlansLocale(i18n, subscribeHostEvent)
+bootstrapPlansTheme(window.location.search)
+bindPlansTheme(subscribeHostEvent)
 
 const app = createApp(PlansApp)
 app.use(i18n)

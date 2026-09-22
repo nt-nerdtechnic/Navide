@@ -13,10 +13,12 @@ actually wants to show. This module only takes the readings; the differencing
 lives in the caller, so that two windows sampling at different rates each get
 their own interval instead of fighting over one shared previous sample.
 
-On macOS the counter is read straight from the kernel through `proc_pid_rusage`
-(see `proc_rusage`) — a syscall per pid, no subprocess to spawn or time out,
-and the same figure `ps -o time=` prints once converted out of mach time units.
-Everywhere else `ps` takes the whole pid list in one call.
+The counter is read straight from the kernel through the platform probe (see
+`osplat.resource_probe`) — `proc_pid_rusage` on macOS, `/proc` on Linux,
+psutil on Windows — costing no subprocess to spawn or time out, and giving
+the same figure `ps -o time=` prints. `ps` stays as the fallback for a machine
+where the probe cannot be resolved at all, taking the whole pid list in one
+call.
 """
 
 from __future__ import annotations
@@ -24,8 +26,8 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shutil
 import subprocess
-import sys
 import time
 
 from . import osplat
@@ -39,6 +41,10 @@ _ROW_RE = re.compile(r"^\s*(\d+)\s+(\S+)\s*$")
 #: short still leaves room for a machine deep in swap.
 _SWEEP_TIMEOUT_S = 5.0
 
+#: Whether this machine has a `ps` for the fallback path, resolved on first
+#: use. None until then.
+_HAS_PS: bool | None = None
+
 #: Same cap as the footprint sweep — beyond this the panel is an audit, not a
 #: summary, and the `ps` fallback's argv gets unwieldy.
 _MAX_PIDS = 4000
@@ -47,11 +53,20 @@ _MAX_PIDS = 4000
 def available() -> bool:
     """Whether the CPU sweep can be expected to work.
 
-    `ps -o time=` is POSIX, but the panel it feeds is gated on the macOS-only
-    footprint sweep anyway, so anything that is not Windows is fair game and
-    the panel decides on its own whether to show the column.
+    The platform probe answers first; only when there is none does it matter
+    whether this machine has a `ps` to fall back on. Asking `shutil.which` is
+    what replaced the platform branch that used to live here: Windows has no
+    `ps`, and neither does a stripped container, so the question the sweep
+    actually has is whether the command exists — not which OS this is.
     """
-    return sys.platform != "win32"
+    if osplat.resource_probe.available():
+        return True
+    global _HAS_PS
+    if _HAS_PS is None:
+        # Cached: `available()` runs once per sweep and the sweep is on a
+        # timer, while a PATH scan is filesystem work.
+        _HAS_PS = shutil.which("ps") is not None
+    return _HAS_PS
 
 
 def parse_cpu_time(raw: str) -> float | None:

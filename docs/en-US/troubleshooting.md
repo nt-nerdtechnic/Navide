@@ -18,7 +18,7 @@ English | [繁體中文](../zh-TW/troubleshooting.md) | [日本語](../ja-JP/tro
 ## Backend health stays unavailable
 
 - Confirm another process is not blocking local loopback communication.
-- Check whether macOS security software denied the packaged Python backend.
+- Check whether operating-system security software (Gatekeeper, SmartScreen or Defender, an endpoint agent) denied the packaged Python backend.
 - In development, run `uv --project backend run python -m agent_team_backend` separately to expose startup errors.
 
 ## An agent CLI is missing
@@ -26,20 +26,28 @@ English | [繁體中文](../zh-TW/troubleshooting.md) | [日本語](../ja-JP/tro
 - Run the CLI's version command in a normal interactive terminal.
 - Restart Navide after installation so it receives the updated `PATH`.
 - Complete the CLI's own authentication flow before spawning it in Navide.
-- Confirm the executable name: `claude`, `codex`, `agy`, or `grok`.
+- Confirm the executable name: Settings → CLI Agents lists every supported CLI, shows the resolved path of each detected one, and offers the vendor's install command for a missing one.
 
 ## A CLI reports that its own auto-update failed
 
 A pane may show a vendor message such as `✘ Auto-update failed`. Several panes updating the same CLI at once can collide, because a CLI's installation directory is shared across every pane and profile.
 
 - Open Settings → CLI Agents. A failed update is reported there with the time, the versions involved, and which config home recorded it.
-- Use the update action on that row. It runs the CLI's own update command (`claude update`, `codex update`, `agy update`, `grok update`) in a terminal; Navide never updates a CLI itself. A CLI without an update subcommand links to its vendor documentation instead.
+- Use the update action on that row. It runs the CLI's own update command (for example `claude update`, `codex update`, `agy update`, `grok update`) in a terminal; Navide never updates a CLI itself. A CLI without an update subcommand links to its vendor documentation instead.
 - Set Auto-update to Manual for that CLI if collisions repeat. Navide then passes the vendor's own opt-out variable to every spawn, and you update from this panel instead.
 - A running session keeps the binary it started with; restart the pane after an update.
 
 ## A pane remains on “detecting session”
 
 Codex, Antigravity, and Grok rely on log or database discovery to bind a new CLI session to a Navide pane.
+
+For Codex, open `/hooks` to inspect pending hook reviews. An MCP startup failure or a third-party `SessionEnd` timeout warning needs separate investigation and does not by itself indicate a session ID collision. Codex 0.154 queues `SessionStart` for the first turn; opening the TUI alone does not guarantee that event has run.
+
+Some Codex builds treat the `SessionStart` hook Navide passes on the command line as an unreviewed hook and raise **Hooks need review** on every pane. A version number does not say which do — 0.155 does not here, 0.154 was reported doing so — so Navide observes instead: the first pane that shows the screen records it, every later Codex pane opens without that hook, and the Pipeline Log says so.
+
+- Navide does **not** write your `~/.codex/config.toml`, and does **not** pass `--dangerously-bypass-hook-trust` — that flag would also exempt the hooks in your own `hooks.json` from review.
+- Dropping the hook costs only a shortcut for matching a pane to its session. Sessions are still identified from logs and markers, so nothing stops working.
+- If the screen is already up, answer it for that pane (`2` = trust all and continue) or close the pane; it will not block again.
 
 - Send a normal message so the CLI persists the pane marker.
 - Confirm the CLI can write to its normal session directory.
@@ -52,6 +60,14 @@ Codex, Antigravity, and Grok rely on log or database discovery to bind a new CLI
 - Confirm the original CLI still has the session in its own history.
 - Check that the workspace path has not changed.
 - A CLI upgrade may change resume syntax or session storage; include CLI and Navide versions in a bug report.
+
+## Codex conversations are missing from History
+
+- Codex rollout files in the pane's isolated `~/.codex-panes/<session_home_id>/sessions` directory are separate from Navide's history metadata. A missing History entry does not mean the original conversation file was deleted.
+- History search covers loaded entries. Load more entries to continue searching older conversations, even when the current search has no results; content search runs again for the newly loaded entries.
+- To resume a known conversation outside Navide, use its original `CODEX_HOME` and exact session ID. Do not choose the latest session when several conversations share that home.
+- Detected session IDs are now saved by the backend before notifying the UI and preserved when later snapshots omit them. This does not automatically recover older entries whose session identity was already lost.
+- A removed Codex entry with no **Session** line has no resume id, so History shows no **Resume** button. The common causes were a **Hooks need review** screen swallowing the session marker at startup and a restart that reopened the pane as a fresh conversation without one; both are fixed. The rollout still exists — find it by time and `cwd` under `sessions/` and run `codex resume <id>` with that `CODEX_HOME`.
 
 ## Token Stats is empty or duplicated
 
@@ -69,6 +85,15 @@ Codex, Antigravity, and Grok rely on log or database discovery to bind a new CLI
 ## macOS permissions block a workflow
 
 Open **System Settings → Privacy & Security** and inspect Automation, Files and Folders, Accessibility, and Full Disk Access. Grant only permissions required for the specific CLI and workspace. Restart the affected application after changing permissions.
+
+## Windows blocks the first launch
+
+The Windows installer is not code-signed, so SmartScreen shows "Windows protected your PC" with the publisher listed as unknown. Choose **More info → Run anyway**. This is expected for every Navide installer until Windows code signing ships; it is not a sign of a tampered download — verify the file came from the GitHub release page if in doubt.
+
+## The Linux AppImage does not start
+
+- Make it executable first: `chmod +x Navide-<version>-x86_64.AppImage`. The AppImage bundles its own FUSE runtime, so no `libfuse` package is needed.
+- If you installed the `.deb`, launch `navide` from a terminal to see the startup error; updates for that package come from `apt`, not the in-app updater.
 
 ## Copy and paste behave oddly in a terminal pane
 
@@ -92,7 +117,7 @@ Documentation injection is best-effort. Check the MCP configuration, package run
 Include:
 
 - Navide commit or version
-- macOS version and architecture
+- Operating system version and architecture
 - Agent CLI name and version
 - Reproduction steps
 - Expected and actual behavior

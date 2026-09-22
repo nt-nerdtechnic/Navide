@@ -81,6 +81,20 @@ describe('adopted workspaces', () => {
     expect(body).not.toContain('prev?.bounds ?')
   })
 
+  it('are snapshotted before an update install closes the windows', () => {
+    // Source-scanned, so this proves the wiring and not the ordering: the
+    // ordering is Electron's, documented on quitAndInstall — it emits
+    // before-quit AFTER closing every window, so the before-quit call to
+    // markCleanExit freezes an entries map the 'closed' handlers have already
+    // emptied. onInstallStarting is the only hook that still runs with the
+    // windows open, which is why the freeze has to happen there too.
+    const at = mainSource.indexOf('onInstallStarting:')
+    expect(at).toBeGreaterThan(-1)
+    // ...via the wrapper that also settles this run's restore charges.
+    expect(mainSource.slice(at, mainSource.indexOf('\n', at)))
+      .toContain('markCleanExitAndSettleRestores()')
+  })
+
   it('are handed to the window restored for them, once', () => {
     // Taken, not read: a reload must not resurrect a list the user has since
     // emptied.

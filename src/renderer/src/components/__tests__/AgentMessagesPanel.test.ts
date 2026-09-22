@@ -133,8 +133,8 @@ describe('AgentMessagesPanel', () => {
     m.sendMessage('analysis', 'reviewer', 'take a look')
     wrapper = mountPanel()
 
-    expect(wrapper.get('.msg-from').get('.msg-vendor').text()).toBe('Claude Code ·')
-    expect(wrapper.get('.msg-to').get('.msg-vendor').text()).toBe('Codex ·')
+    expect(wrapper.get('.msg-from').get('.msg-vendor').text()).toBe('Claude Code (Anthropic) ·')
+    expect(wrapper.get('.msg-to').get('.msg-vendor').text()).toBe('Codex CLI (OpenAI) ·')
   })
 
   it('omits the vendor when the handle is still the auto-assigned one', () => {
@@ -145,7 +145,7 @@ describe('AgentMessagesPanel', () => {
     wrapper = mountPanel()
 
     expect(wrapper.get('.msg-from').find('.msg-vendor').exists()).toBe(false)
-    expect(wrapper.get('.msg-to').get('.msg-vendor').text()).toBe('Codex ·')
+    expect(wrapper.get('.msg-to').get('.msg-vendor').text()).toBe('Codex CLI (OpenAI) ·')
   })
 
   it('shows no vendor for a sender that is not a pane we know', () => {
@@ -160,7 +160,7 @@ describe('AgentMessagesPanel', () => {
     wrapper = mountPanel()
 
     expect(wrapper.get('.msg-from').find('.msg-vendor').exists()).toBe(false)
-    expect(wrapper.get('.msg-to').get('.msg-vendor').text()).toBe('Codex ·')
+    expect(wrapper.get('.msg-to').get('.msg-vendor').text()).toBe('Codex CLI (OpenAI) ·')
   })
 
   it('dims the workspace prefix and keeps the pane name whole', () => {

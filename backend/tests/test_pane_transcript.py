@@ -6,7 +6,7 @@ from agent_team_backend.spawn_history import read_pane_transcript
 def _write_day(root, ymd: str, name: str, text: str) -> None:
     day = root / ".agent-team" / "manual" / ymd
     day.mkdir(parents=True, exist_ok=True)
-    (day / name).write_text(text, encoding="utf-8")
+    (day / name).write_text(text, encoding="utf-8", newline="\n")
 
 
 def test_reads_nothing_when_the_pane_has_no_logs(tmp_path):

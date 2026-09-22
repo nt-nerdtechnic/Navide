@@ -1,13 +1,18 @@
 <script setup lang="ts">
 import { computed, ref, watch, type Ref } from 'vue'
 import { CLI_AGENT_SPECS } from '@navide/plugin-shell'
-import { settingsGet, settingsSet } from '@navide/plugin-ui/shared'
+import { executeCommand, settingsGet, settingsSet } from '@navide/plugin-ui/shared'
 import { useTokens, type TokenBucket, type ResetScope } from '../composables/useTokens'
-import { useNotify } from '@navide/plugin-ui/foundation'
+import { buildTokenGroupRows } from '../lib/tokenGroups'
+import { accountUsageFor, formatRemaining, isExhausted, remainingPercent } from '../composables/useUsage'
+import type { useCliProfiles } from '../composables/useCliProfiles'
+import { DEFAULT_PROFILE_ID, UNKNOWN_PROFILE_ID, accountLabel } from '../lib/accountLabel'
+import { i18n, useNotify } from '@navide/plugin-ui/foundation'
 import type { useBackend } from '../composables/useBackend'
 import HistoryPanel from './HistoryPanel.vue'
 import TaskerPanel from './TaskerPanel.vue'
 import AgentMessagesPanel from './AgentMessagesPanel.vue'
+import DevTimePanel from './DevTimePanel.vue'
 import PreviewPanel from '../preview/PreviewPanel.vue'
 import { usePreview } from '../preview/usePreview'
 import type { PipelineStatusView } from './ControlPane.vue'
@@ -20,6 +25,8 @@ interface Stage {
 
 interface ActivePane {
   id: string
+  /** Vendor key; the TIME tab labels each pane's row with it. */
+  agentKey?: string
   agentLabel: string
   roleLabel: string
   stageId?: string
@@ -32,6 +39,9 @@ interface Props {
   backend: ReturnType<typeof useBackend>
   workspacePath: string
   stages: Stage[]
+  /** Sidebar run groups, in sidebar order. Rows come from the snapshot's
+   *  by_group buckets, so a group that spent nothing still lists as zero. */
+  runGroups?: readonly { id: string; name: string }[]
   panes: ActivePane[]
   /** The pane the user is looking at right now. The top block reports this
    *  pane's session alone — a workspace-wide tally answered a question nobody
@@ -45,6 +55,10 @@ interface Props {
    *  them" — the layout store supplies the real list. A view moved to another
    *  slot disappears from here, which is what keeps it a singleton. */
   views?: string[]
+  /** The accounts source the usage badge reads: names the BY ACCOUNT rows
+   *  and finds each account's own quota. Optional — without it the rows show
+   *  ids and no quota. */
+  cliProfiles?: ReturnType<typeof useCliProfiles>
 }
 
 const props = defineProps<Props>()
@@ -70,7 +84,7 @@ function setExpanded(v: boolean): void {
 // Tasker (machine-level crontab / LaunchAgents), the inter-CLI message log, or
 // the read-only preview panel.
 // Unknown or legacy persisted values fall back to the default.
-type RightTab = 'history' | 'tokens' | 'tasker' | 'messages' | 'preview'
+type RightTab = 'history' | 'tokens' | 'time' | 'tasker' | 'messages' | 'preview'
 
 // Icon and label per tab, in the panel's own order. Which of them actually
 // render is the layout's decision (`props.views`); this table only says how.
@@ -94,6 +108,13 @@ const TABS: { id: RightTab; icon: string; labelKey: string; paths: string[] }[] 
       'M2.5 7.5h2.25v6H2.5Z',
       'M6.9 3.5h2.25v10H6.9Z',
       'M11.3 6h2.25v7.5H11.3Z',
+    ],
+  },
+  {
+    id: 'time', icon: '\u23F1', labelKey: 'label.time',
+    paths: [
+      'M8 2a6 6 0 1 0 0 12A6 6 0 0 0 8 2Zm0 1.5a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9Z',
+      'M7.4 4.75h1.2v3.1l2.2 1.3-.6 1.04L7.4 8.6Z',
     ],
   },
   {
@@ -228,6 +249,9 @@ const cumulativeByVendor = computed(
 const cumulativeByStage = computed(
   () => snapshot.value?.workspace?.cumulative?.by_stage ?? {}
 )
+const cumulativeByGroup = computed(
+  () => snapshot.value?.workspace?.cumulative?.by_group ?? {}
+)
 
 const vendorRows = computed(() => {
   const map = cumulativeByVendor.value
@@ -245,6 +269,47 @@ const stageRows = computed(() => {
     label: s.shortTitle ?? s.title ?? s.id,
     bucket: map[s.id] ?? EMPTY
   }))
+})
+
+const groupRows = computed(() =>
+  buildTokenGroupRows(props.runGroups ?? [], cumulativeByGroup.value, {
+    manual: i18n.global.t('label.manual'),
+    orphan: i18n.global.t('label.orphan-group'),
+  })
+)
+
+// BY ACCOUNT: one row per pinned account the workspace's cumulative ledger
+// has a bucket for. Real accounts largest first, then the built-in Default,
+// then the unknown bucket (records from before pinning existed, which must
+// never be folded into an account). The quota column is the account's own
+// slot reading — the same one the badge's switch list shows.
+const cumulativeByAccount = computed(
+  () => snapshot.value?.workspace?.cumulative?.by_account ?? {}
+)
+const accountRows = computed(() => {
+  const map = cumulativeByAccount.value
+  const t = (key: string): string => i18n.global.t(key)
+  const rows = Object.entries(map).map(([id, bucket]) => {
+    const agentKey = props.cliProfiles?.findProfile(id)?.agentKey ?? ''
+    const reserved = id === DEFAULT_PROFILE_ID || id === UNKNOWN_PROFILE_ID
+    const snap = agentKey ? accountUsageFor(agentKey, id) : undefined
+    let quota = '—'
+    if (isExhausted(snap)) quota = t('usage.exhausted-short')
+    else {
+      const remaining = remainingPercent(snap)
+      if (remaining !== null) quota = formatRemaining(remaining)
+    }
+    return {
+      key: id,
+      label: accountLabel(props.cliProfiles, agentKey, id, t),
+      unknown: id === UNKNOWN_PROFILE_ID,
+      bucket,
+      quota,
+      rank: id === UNKNOWN_PROFILE_ID ? 2 : id === DEFAULT_PROFILE_ID ? 1 : 0,
+      size: reserved ? 0 : bucket.input + bucket.output,
+    }
+  })
+  return rows.sort((a, b) => a.rank - b.rank || b.size - a.size || a.label.localeCompare(b.label))
 })
 
 const paneRows = computed(() => {
@@ -307,6 +372,12 @@ async function confirmReset(scope: ResetScope): Promise<void> {
   if (!(await notifyConfirm(msg, { title: 'Reset tokens', confirmText: 'Reset' }))) return
   await reset(scope)
 }
+
+// Per-turn breakdown is App's Turn Stats modal; the command is the same one
+// the Window menu and the palette run, so the three entries cannot drift.
+function openTurnStats(): void {
+  executeCommand('ui.window.openTurnStats')
+}
 </script>
 
 <template>
@@ -355,6 +426,12 @@ async function confirmReset(scope: ResetScope): Promise<void> {
       <HistoryPanel v-if="activeTab === 'history'" :backend="backend" :workspace-path="workspacePath" :pipeline="pipeline" />
       <TaskerPanel v-else-if="activeTab === 'tasker'" :backend="backend" />
       <AgentMessagesPanel v-else-if="activeTab === 'messages'" />
+      <DevTimePanel
+        v-else-if="activeTab === 'time'"
+        :backend="backend"
+        :workspace-path="workspacePath"
+        :panes="panes"
+      />
       <PreviewPanel
         v-else-if="activeTab === 'preview'"
         :backend="backend"
@@ -372,7 +449,16 @@ async function confirmReset(scope: ResetScope): Promise<void> {
         <section class="block">
           <div class="block-hdr">
             <span class="block-title">{{ currentRun ? $t('label.current-run') : $t('label.current-session') }}</span>
-            <button class="reset-btn" title="Reset run counter" @click="confirmReset('run')">⟲</button>
+            <!-- Per-turn breakdown is the Turn Stats modal (Window → Turn Stats);
+                 this is the same entry, reachable from where the figures are. -->
+            <button
+              class="reset-btn open-turns-btn"
+              data-act="open-turn-stats"
+              :title="$t('turn-stats.open-window')"
+              :aria-label="$t('turn-stats.open-window')"
+              @click="openTurnStats"
+            >≡</button>
+            <button class="reset-btn" :title="$t('action.reset-run-counter')" @click="confirmReset('run')">⟲</button>
           </div>
           <div v-if="currentRun" class="run-meta" :title="currentRun.task">
             <span class="run-id">{{ currentRun.run_id || '—' }}</span>
@@ -399,7 +485,7 @@ async function confirmReset(scope: ResetScope): Promise<void> {
         <section class="block">
           <div class="block-hdr">
             <span class="block-title">{{ $t('label.workspace-cumulative') }}</span>
-            <button class="reset-btn" title="Wipe workspace history" @click="confirmReset('workspace')">⟲</button>
+            <button class="reset-btn" :title="$t('action.wipe-workspace-history')" @click="confirmReset('workspace')">⟲</button>
           </div>
           <div class="totals">
             <div class="cell"><div class="big">{{ fmt(cumulative.input) }}</div><div class="lbl">{{ $t('label.in') }}</div></div>
@@ -413,7 +499,7 @@ async function confirmReset(scope: ResetScope): Promise<void> {
         <section class="block">
           <div class="block-hdr">
             <span class="block-title">{{ $t('label.all-time-global') }}</span>
-            <button class="reset-btn" title="Wipe global tally" @click="confirmReset('global')">⟲</button>
+            <button class="reset-btn" :title="$t('action.wipe-global-tally')" @click="confirmReset('global')">⟲</button>
           </div>
           <div class="totals">
             <div class="cell"><div class="big">{{ fmt(allTime.input) }}</div><div class="lbl">{{ $t('label.in') }}</div></div>
@@ -442,6 +528,26 @@ async function confirmReset(scope: ResetScope): Promise<void> {
           </table>
         </section>
 
+        <!-- By Account -->
+        <section class="block" data-block="by-account">
+          <div class="block-hdr"><span class="block-title">{{ $t('label.by-account') }}</span></div>
+          <div v-if="!accountRows.length" class="muted">{{ $t('label.no-accounts') }}</div>
+          <table v-else class="grid grid-accounts">
+            <tbody>
+              <tr v-for="row in accountRows" :key="row.key" data-row="account" :data-account="row.key" :class="{ unknown: row.unknown }">
+                <th :title="row.key">{{ row.label }}</th>
+                <td>{{ fmt(row.bucket.input) }}</td>
+                <td>{{ fmt(row.bucket.output) }}</td>
+                <td class="dim">{{ row.bucket.calls }}</td>
+                <td class="dim quota" data-part="quota">{{ row.quota }}</td>
+              </tr>
+              <tr class="head">
+                <th></th><td>{{ $t('label.in') }}</td><td>{{ $t('label.out') }}</td><td class="dim">{{ $t('label.calls') }}</td><td class="dim">{{ $t('label.quota') }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
         <!-- By Stage -->
         <section class="block">
           <div class="block-hdr"><span class="block-title">{{ $t('label.by-stage') }}</span></div>
@@ -449,6 +555,23 @@ async function confirmReset(scope: ResetScope): Promise<void> {
           <table v-else class="grid">
             <tbody>
               <tr v-for="row in stageRows" :key="row.id">
+                <th>{{ row.label }}</th>
+                <td>{{ fmt(row.bucket.input) }}</td>
+                <td>{{ fmt(row.bucket.output) }}</td>
+                <td class="dim">{{ row.bucket.calls }}</td>
+              </tr>
+
+            </tbody>
+          </table>
+        </section>
+
+        <!-- By Group -->
+        <section class="block">
+          <div class="block-hdr"><span class="block-title">{{ $t('label.by-group') }}</span></div>
+          <div v-if="!groupRows.length" class="muted">{{ $t('label.no-groups') }}</div>
+          <table v-else class="grid">
+            <tbody>
+              <tr v-for="row in groupRows" :key="row.key">
                 <th>{{ row.label }}</th>
                 <td>{{ fmt(row.bucket.input) }}</td>
                 <td>{{ fmt(row.bucket.output) }}</td>
@@ -655,6 +778,7 @@ async function confirmReset(scope: ResetScope): Promise<void> {
   line-height: 1.7;
 }
 .reset-btn:hover { color: var(--danger-fg); border-color: var(--danger-fg); }
+.open-turns-btn:hover { color: var(--text-bright); border-color: var(--border-strong); }
 .run-meta {
   font-size: var(--font-3xs);
   color: var(--text-secondary);
@@ -727,4 +851,6 @@ async function confirmReset(scope: ResetScope): Promise<void> {
   white-space: nowrap;
 }
 .grid td.dim { color: var(--text-secondary); }
+.grid-accounts tr.unknown th { color: var(--text-muted); font-style: italic; }
+.grid-accounts td.quota { width: 5ch; }
 </style>

@@ -458,3 +458,130 @@ def test_join_text_blocks_shared_helper() -> None:
     assert join_text_blocks([{"type": "output_text", "text": "x"}], "output_text") == "x"
     assert join_text_blocks([{"type": "text", "text": "x"}], "output_text") == ""
     assert join_text_blocks(None, "text") == ""
+
+
+# ── turns_for_session (tokens.turns) ────────────────────────────────────────
+
+def _prompt_line(prompt_id: str, text, ts: str, **extra) -> dict:  # noqa: ANN001
+    return {
+        "type": "user", "promptId": prompt_id, "timestamp": ts,
+        "message": {"role": "user", "content": text}, **extra,
+    }
+
+
+def _tool_result_line(prompt_id: str, ts: str) -> dict:
+    return {
+        "type": "user", "promptId": prompt_id, "timestamp": ts, "toolUseResult": {"ok": True},
+        "message": {"role": "user", "content": [{"type": "tool_result", "content": "done"}]},
+    }
+
+
+def _assistant_line(msg_id: str, req_id: str, ts: str, *, inp: int, cr: int, cc: int, out: int,
+                    stop: str = "tool_use") -> dict:
+    return {
+        "type": "assistant", "requestId": req_id, "timestamp": ts,
+        "message": {
+            "id": msg_id, "model": "claude-opus-4-7", "stop_reason": stop,
+            "content": [{"type": "text", "text": "…"}],
+            "usage": {
+                "input_tokens": inp, "cache_read_input_tokens": cr,
+                "cache_creation_input_tokens": cc, "output_tokens": out,
+            },
+        },
+    }
+
+
+def test_turns_group_on_prompt_id_and_keep_the_four_counters_apart(
+    fake_claude: tuple[ClaudeLogReader, Path],
+) -> None:
+    """One turn = one promptId, however many API calls (and tool results) it
+    spans. A streamed message split over two lines (same id + requestId)
+    counts once, and cache is NOT folded into input."""
+    reader, root = fake_claude
+    session = root / "-tmp-demo" / "turns-1.jsonl"
+    _write_jsonl(session, [
+        _prompt_line("p1", "幫我修 login bug", "2026-09-16T00:00:00Z"),
+        _assistant_line("m1", "r1", "2026-09-16T00:00:01Z", inp=2, cr=100, cc=40, out=10),
+        _assistant_line("m1", "r1", "2026-09-16T00:00:02Z", inp=2, cr=100, cc=40, out=10),  # streamed dup
+        _tool_result_line("p1", "2026-09-16T00:00:03Z"),
+        _assistant_line("m2", "r2", "2026-09-16T00:00:05Z", inp=3, cr=200, cc=0, out=20, stop="end_turn"),
+        _prompt_line("p2", [{"type": "text", "text": "再來一次"}, {"type": "image"}], "2026-09-16T00:01:00Z"),
+        _assistant_line("m3", "r3", "2026-09-16T00:01:04Z", inp=1, cr=300, cc=5, out=7, stop="end_turn"),
+    ])
+    assert reader.turns_method == "exact"
+    turns = reader.turns_for_session(session)
+    assert [t.turn_index for t in turns] == [1, 2]
+    first, second = turns
+    assert (first.input, first.cache_read, first.cache_creation, first.output) == (5, 300, 40, 30)
+    assert first.total == 375
+    assert first.call_count == 2
+    assert first.prompt_excerpt == "幫我修 login bug"
+    assert first.started_at == "2026-09-16T00:00:00Z"
+    assert first.ended_at == "2026-09-16T00:00:05Z"
+    assert [c.model for c in first.calls] == ["claude-opus-4-7", "claude-opus-4-7"]
+    # List content: the text blocks make the excerpt, the image is skipped.
+    assert second.prompt_excerpt == "再來一次"
+    assert (second.input, second.cache_read, second.cache_creation, second.output) == (1, 300, 5, 7)
+    assert second.session_id == "turns-1"
+
+
+def test_turns_keep_a_prompts_attachments_and_prefer_the_typed_text(
+    fake_claude: tuple[ClaudeLogReader, Path],
+) -> None:
+    """Extra user records under the same promptId (isMeta attachments, a
+    session marker written before the typed prompt) stay in the turn, and a
+    "<"-prefixed wrapper only stands in for the excerpt until typed text
+    arrives."""
+    reader, root = fake_claude
+    session = root / "-tmp-demo" / "turns-2.jsonl"
+    _write_jsonl(session, [
+        _prompt_line("p1", "<!-- agent-team-session: at-pane:x -->", "2026-09-16T00:00:00Z", isMeta=True),
+        _prompt_line("p1", "真正的提示", "2026-09-16T00:00:00.5Z"),
+        _prompt_line("p1", [{"type": "text", "text": "Base directory for this skill: …"}],
+                     "2026-09-16T00:00:01Z", isMeta=True),
+        _assistant_line("m1", "r1", "2026-09-16T00:00:02Z", inp=1, cr=0, cc=0, out=1, stop="end_turn"),
+    ])
+    turns = reader.turns_for_session(session)
+    assert len(turns) == 1
+    assert turns[0].prompt_excerpt == "真正的提示"
+    assert turns[0].started_at == "2026-09-16T00:00:00Z"
+
+
+def test_turns_follow_a_resumed_session_appended_to_the_same_file(
+    fake_claude: tuple[ClaudeLogReader, Path],
+) -> None:
+    """`claude --resume` keeps writing the same transcript: new promptIds
+    simply become new turns after the old ones, and a prompt that never got
+    an answer (interrupted) is not a turn."""
+    reader, root = fake_claude
+    session = root / "-tmp-demo" / "turns-3.jsonl"
+    _write_jsonl(session, [
+        _prompt_line("p1", "first", "2026-09-16T00:00:00Z"),
+        _assistant_line("m1", "r1", "2026-09-16T00:00:01Z", inp=1, cr=10, cc=0, out=1, stop="end_turn"),
+        _prompt_line("p2", "interrupted", "2026-09-16T00:00:02Z"),
+    ])
+    assert [t.prompt_excerpt for t in reader.turns_for_session(session)] == ["first"]
+    with session.open("a", encoding="utf-8") as f:
+        for rec in [
+            {"type": "summary", "summary": "resumed"},
+            _prompt_line("p3", "after resume", "2026-09-16T01:00:00Z"),
+            _assistant_line("m2", "r2", "2026-09-16T01:00:01Z", inp=4, cr=20, cc=0, out=2),
+            _assistant_line("m3", "r3", "2026-09-16T01:00:02Z", inp=4, cr=24, cc=0, out=3, stop="end_turn"),
+        ]:
+            f.write(json.dumps(rec) + "\n")
+    turns = reader.turns_for_session(session)
+    assert [(t.turn_index, t.prompt_excerpt, t.call_count) for t in turns] == [
+        (1, "first", 1), (2, "after resume", 2),
+    ]
+    assert turns[1].total == 4 + 20 + 2 + 4 + 24 + 3
+    assert turns[1].ended_at == "2026-09-16T01:00:02Z"
+
+
+def test_turns_excerpt_is_capped_at_eighty_chars(fake_claude: tuple[ClaudeLogReader, Path]) -> None:
+    reader, root = fake_claude
+    session = root / "-tmp-demo" / "turns-4.jsonl"
+    _write_jsonl(session, [
+        _prompt_line("p1", "x" * 200, "2026-09-16T00:00:00Z"),
+        _assistant_line("m1", "r1", "2026-09-16T00:00:01Z", inp=1, cr=0, cc=0, out=1, stop="end_turn"),
+    ])
+    assert reader.turns_for_session(session)[0].prompt_excerpt == "x" * 80

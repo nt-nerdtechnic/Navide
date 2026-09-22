@@ -12,7 +12,7 @@ import {
 } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { dirname, isAbsolute, join } from 'node:path'
+import { delimiter, dirname, isAbsolute, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { spawnSync } from 'node:child_process'
 import { planPublicCapabilityCall } from './pluginCapabilityBroker'
@@ -46,7 +46,7 @@ function subprocessEnvironment(): NodeJS.ProcessEnv {
     ...process.env,
     CI: '1',
     PNPM_CONFIG_PM_ON_FAIL: 'ignore',
-    PATH: `${nodeDirectory}:${process.env.PATH ?? ''}`,
+    PATH: `${nodeDirectory}${delimiter}${process.env.PATH ?? ''}`,
   }
 }
 
@@ -77,19 +77,9 @@ function runPnpmOrThrow(args: string[], cwd: string): CommandResult {
 }
 
 function runExternalCli(args: string[], cwd: string): CommandResult {
-  const bin = join(cwd, 'node_modules', '.bin', 'navide-plugin')
-  const result = spawnSync(bin, args, {
-    cwd,
-    encoding: 'utf8',
-    env: subprocessEnvironment(),
-    maxBuffer: 8 * 1024 * 1024,
-  })
-  if (result.error) throw result.error
-  return {
-    status: result.status,
-    stdout: result.stdout ?? '',
-    stderr: result.stderr ?? '',
-  }
+  // pnpm links the bin as a shell script on POSIX and as `.cmd`/`.ps1` shims
+  // on Windows; `pnpm exec` resolves whichever it wrote, as `pnpm run` does.
+  return runPnpm(['exec', 'navide-plugin', ...args], cwd)
 }
 
 function writeManifest(directory: string, manifest: unknown): void {

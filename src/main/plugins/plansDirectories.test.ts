@@ -1,11 +1,12 @@
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   DOC_SUFFIXES,
   isAllowedPlanDocumentPath,
   isPlanDocName,
+  isPlanDocumentChangePath,
   MAX_NESTED_CANDIDATES,
   PLAN_DOC_DIRS,
 } from './plansDirectories'
@@ -45,10 +46,10 @@ describe('plansDirectories', () => {
     }
     vi.mocked(statSync).mockClear()
     expect(isAllowedPlanDocumentPath('parent-0/child-0/.agent-team/plans/missing.html', tempWorkspace)).toBe(false)
-    const probes = vi.mocked(statSync).mock.calls.filter(([path]) => String(path).endsWith('/.git'))
+    const probes = vi.mocked(statSync).mock.calls.filter(([path]) => String(path).endsWith(`${sep}.git`))
     expect(probes.length).toBeGreaterThan(50)
     expect(probes.length).toBeLessThanOrEqual(2000)
-  })
+  }, 30_000) // 2500 directories: slow to create on the Windows runner's disk
 
   it('bounds candidate-collection probes in a directory full of symlinks', () => {
     // The collection phase resolves every symlink entry (an lstat/realpath walk
@@ -66,7 +67,9 @@ describe('plansDirectories', () => {
       isAllowedPlanDocumentPath('link-0000/.agent-team/plans/p.html', tempWorkspace),
     ).toBe(false)
     expect(vi.mocked(statSync).mock.calls.length).toBeLessThanOrEqual(MAX_NESTED_CANDIDATES)
-  })
+    // Creating 3000 directory symlinks takes several seconds on the Windows
+    // runner; what is measured here is the probe count, not the setup.
+  }, 30_000)
 
   it('reuses the discovered allowset instead of re-running the traversal', () => {
     for (let i = 0; i < 300; i++) {
@@ -336,7 +339,7 @@ describe('plansDirectories', () => {
       expect(
         isAllowedPlanDocumentPath('z0000-beyond/.agent-team/plans/p.html', tempWorkspace),
       ).toBe(false)
-    })
+    }, 20_000)
   })
 
   describe('isAllowedPlanDocumentPath - Security & Symlink Containment', () => {
@@ -368,6 +371,64 @@ describe('plansDirectories', () => {
       expect(
         isAllowedPlanDocumentPath('packages/fake-repo/.agent-team/plans/doc.html', tempWorkspace),
       ).toBe(false)
+    })
+  })
+
+  describe('isPlanDocumentChangePath', () => {
+    it('drops the workspace traffic that used to flood the Host→child queue', () => {
+      vi.mocked(statSync).mockClear()
+      for (const noise of [
+        '.agent-team/navide.db',
+        '.agent-team/pipeline.log',
+        '.agent-team/navide.db-journal',
+        '.git/index',
+        'src/renderer/App.vue',
+        '.agent-team/plans/_template.html',
+        '.agent-team/plans/.draft.html',
+        'plan.html',
+      ]) {
+        expect(isPlanDocumentChangePath(noise, tempWorkspace), noise).toBe(false)
+      }
+      expect(vi.mocked(statSync)).not.toHaveBeenCalled()
+    })
+
+    it('keeps top-level plan documents in every canonical directory without a filesystem probe', () => {
+      vi.mocked(statSync).mockClear()
+      for (const planDir of PLAN_DOC_DIRS) {
+        expect(isPlanDocumentChangePath(`${planDir}/doc.html`, tempWorkspace), planDir).toBe(true)
+      }
+      expect(isPlanDocumentChangePath('.cursor/plans/legacy.plan.md', tempWorkspace)).toBe(true)
+      expect(isPlanDocumentChangePath('.agent-team\\plans\\windows.html', tempWorkspace)).toBe(true)
+      expect(vi.mocked(statSync)).not.toHaveBeenCalled()
+    })
+
+    it('keeps directory events for plan directories, but not for the ancestors that also name ordinary traffic', () => {
+      vi.mocked(statSync).mockClear()
+      for (const directory of ['.agent-team/plans', 'docs/reports', 'packages/child/.cursor/plans']) {
+        expect(isPlanDocumentChangePath(directory, tempWorkspace), directory).toBe(true)
+      }
+      // A watcher that reports the parent of a changed file — Windows does —
+      // names these for every database write beside the plans and every edit
+      // under docs, so an ancestor cannot mean "a plan directory moved".
+      for (const ancestor of ['.agent-team', 'docs', '.claude', '.cursor', 'packages/child/.agent-team']) {
+        expect(isPlanDocumentChangePath(ancestor, tempWorkspace), ancestor).toBe(false)
+      }
+      for (const other of ['.agent-team/state', 'documents', 'packages/child', 'node_modules/.agent-team-x']) {
+        expect(isPlanDocumentChangePath(other, tempWorkspace), other).toBe(false)
+      }
+      expect(vi.mocked(statSync)).not.toHaveBeenCalled()
+    })
+
+    it('keeps nested-repository plan documents only for a genuine nested repository', () => {
+      const nestedRepo = join(tempWorkspace, 'packages/child')
+      mkdirSync(join(nestedRepo, '.agent-team/plans'), { recursive: true })
+      mkdirSync(join(nestedRepo, '.git'), { recursive: true })
+      writeFileSync(join(nestedRepo, '.agent-team/plans/doc.html'), '<html></html>')
+      mkdirSync(join(tempWorkspace, 'packages/plain/.agent-team/plans'), { recursive: true })
+
+      expect(isPlanDocumentChangePath('packages/child/.agent-team/plans/doc.html', tempWorkspace)).toBe(true)
+      expect(isPlanDocumentChangePath('packages/plain/.agent-team/plans/doc.html', tempWorkspace)).toBe(false)
+      expect(isPlanDocumentChangePath('packages/child/.agent-team/navide.db', tempWorkspace)).toBe(false)
     })
   })
 })

@@ -10,13 +10,13 @@ It is not another chat panel inside the traditional IDE. Navide is being built a
 
 English | [繁體中文](README.zh-TW.md) | [日本語](README.ja-JP.md)
 
-[Download v0.2.1](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.2.1) | [Getting started](docs/en-US/getting-started.md) | [Documentation](docs/en-US/README.md) | [Roadmap](docs/en-US/roadmap.md)
+[Download v0.2.8](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.2.8) | [Getting started](docs/en-US/getting-started.md) | [Documentation](docs/en-US/README.md) | [Roadmap](docs/en-US/roadmap.md)
 
 [![Latest release](https://img.shields.io/github/v/release/nt-nerdtechnic/Navide?sort=semver&label=release&logo=github)](https://github.com/nt-nerdtechnic/Navide/releases/latest)
-[![Electron](https://img.shields.io/badge/Electron-33-47848F?logo=electron)](https://www.electronjs.org/)
+[![Electron](https://img.shields.io/badge/Electron-44-47848F?logo=electron)](https://www.electronjs.org/)
 [![Vue 3](https://img.shields.io/badge/Vue-3-4FC08D?logo=vue.js)](https://vuejs.org/)
 [![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python)](https://python.org/)
-[![Platform](https://img.shields.io/badge/platform-macOS-lightgrey?logo=apple)](https://www.apple.com/macos/)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)](docs/en-US/getting-started.md)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 ## AI changed execution. Coordination is the new bottleneck.
@@ -81,14 +81,14 @@ This is first-party dogfooding evidence, not independent customer validation. Th
 
 ## Available today
 
-- **Multi-agent workspaces:** run any of 13 supported coding CLIs — Aider, Antigravity CLI, Claude Code, Codex, Copilot CLI, Cursor CLI, Grok CLI, Kilo Code, Kimi Code, Muse Code, OpenCode, Pi, Qwen Code — or a plain terminal, each in its own pane.
+- **Multi-agent workspaces:** run any of 14 supported coding CLIs — Aider, Antigravity CLI, Claude Code, Codex, Copilot CLI, Cursor CLI, Droid, Grok CLI, Kilo Code, Kimi Code, Muse Code, OpenCode, Pi, Qwen Code — or a plain terminal, each in its own pane.
 - **CLI management:** detect installed coding CLIs, their versions and install methods, and run each CLI's own official update and diagnostic commands.
 - **Session lifecycle:** detect, persist, rebuild, and resume supported CLI sessions.
 - **Configurable pipelines:** define stages, parallel slots, agents, roles, kickoff prompts, questions, documentation queries, and completion sentinels.
 - **Manager coordination:** route structured dispatches and worker questions and carry context across stages.
 - **Automation controls:** combine terminal activity, provider logs, hooks, and optional local analysis through Manual, Strict, Continuous, Full Auto, and YOLO modes.
 - **Private project history:** retain workspace-scoped state, run events, handoffs, and compatible token summaries under `.agent-team/`.
-- **Engineering surfaces:** explore and edit files, inspect plans and diffs, resolve conflicts, use terminals, Git and multi-repository workflows, handle issues, review changes, and use AI Chat.
+- **Engineering surfaces:** explore and edit files, inspect plans and diffs, resolve conflicts, use terminals, Git and multi-repository workflows, handle issues, review changes, and use the embedded AI terminal.
 - **Observability:** inspect History and compatible CLI token usage by workspace, stage, pane, and run.
 
 ## Available today and the destination
@@ -115,12 +115,19 @@ Read [Privacy and Data Flows](docs/en-US/privacy.md) and the [Security Policy](S
 
 ## Try Navide
 
-Navide supports macOS 13+ on Apple silicon. The v0.2.1 release is signed with a Developer ID certificate and notarized by Apple:
+Navide supports macOS 13+ on Apple silicon, Linux x64, and Windows on x64 or Arm. The v0.2.8 release ships macOS builds signed with a Developer ID certificate and notarized by Apple, plus Windows x64 and Arm64 installers and Linux x64 packages:
 
-- [Download DMG](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.1/Navide-0.2.1-arm64.dmg)
-- [Download ZIP](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.1/Navide-0.2.1-arm64.zip)
+- [Download DMG](https://dl.navide.dev/releases/v0.2.8/Navide-0.2.8-arm64.dmg) ([GitHub](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.8/Navide-0.2.8-arm64.dmg))
+- [Download ZIP](https://dl.navide.dev/releases/v0.2.8/Navide-0.2.8-arm64.zip) ([GitHub](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.8/Navide-0.2.8-arm64.zip))
+- [Download Windows x64 installer](https://dl.navide.dev/releases/v0.2.8/Navide-0.2.8-win-x64.exe) ([GitHub](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.8/Navide-0.2.8-win-x64.exe))
+- [Download Windows Arm64 installer](https://dl.navide.dev/releases/v0.2.8/Navide-0.2.8-win-arm64.exe) ([GitHub](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.8/Navide-0.2.8-win-arm64.exe))
+- [Download Linux AppImage](https://dl.navide.dev/releases/v0.2.8/Navide-0.2.8-x86_64.AppImage) ([GitHub](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.8/Navide-0.2.8-x86_64.AppImage)) · [Download Linux .deb](https://dl.navide.dev/releases/v0.2.8/Navide-0.2.8-amd64.deb) ([GitHub](https://github.com/nt-nerdtechnic/Navide/releases/download/v0.2.8/Navide-0.2.8-amd64.deb))
+
+Links go to dl.navide.dev, the same host the app updates itself from; the *GitHub* link beside each one is the same file, byte for byte, on the GitHub Release (the release workflow publishes both and checks their checksums match).
 
 Copy Navide to Applications and open it normally — no Gatekeeper workaround is needed. In-app auto-update is available from this release onward.
+
+Linux and Windows run the same CI gates as macOS. The Windows build is not code-signed yet, so SmartScreen warns on first run, the Executions window has nothing to list there by design (it reads the user crontab and macOS launchd; Windows Task Scheduler is deliberately not integrated, since Navide never creates scheduled jobs of its own and Task Scheduler already manages the machine's tasks), per-pane CLI homes and managed skills need Windows Developer Mode or an elevated Navide because they are built from symbolic links, and a CLI is terminated rather than asked to stop, so it may not flush its transcript before a pane closes.
 
 For a development checkout, install from source instead.
 

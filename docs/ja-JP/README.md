@@ -19,7 +19,7 @@ Navide は Agent 時代のエンジニアリングツールです。一人の人
 
 | ドキュメント | 目的 |
 |---|---|
-| [はじめに](getting-started.md) | 未署名 Preview のダウンロード、または Source からのインストールと初回起動 |
+| [はじめに](getting-started.md) | 署名済み macOS ビルドまたは Windows／Linux Installer のダウンロード、または Source からのインストールと初回起動 |
 | [ユーザーガイド](user-guide.md) | Workspace、Pane、Pipeline、協調、Git、History、Editor Workflow の理解 |
 | [トラブルシューティング](troubleshooting.md) | 起動、権限、Agent Session、Analyzer、Token Tracking の問題解決 |
 
@@ -38,6 +38,7 @@ Navide は Agent 時代のエンジニアリングツールです。一人の人
 | [Architecture — English](../en-US/architecture.md) | Process Boundary、State Ownership、主要 Service を理解する |
 | [Adding a CLI Vendor — English](../adding-a-cli-vendor.md) | AI Coding CLI を追加する：2 つの Spec ファイル、登録、CI が強制するチェック |
 | [CLI Extension Guide — English](../en-US/cli-extension-guide.md) | ベンダーごとの統合記録：インストール経路、Resume 構文、Session 保存形式 |
+| [CLI Vendor Matrix — English](../en-US/cli-vendor-matrix.md) | 対応済み CLI の一覧：実際に実行されるコマンドと、各 spec が宣言する機能 |
 | [Plugin Development — English](../en-US/plugin-development.md) | フロントエンド View プラグインまたはバックエンドプラグインを開発し、パッケージ化して署名する |
 | [Plugin Development v2 — English](../en-US/plugin-development-v2.md) | 公開 Contracts、SDK、UI Package、外部 Frontend Package Workflow を使用する |
 | [外部 MCP 制御](external-mcp-control.md) | 外部 MCP クライアントを接続して実行中の Navide ウィンドウを操作し、セキュリティモデルを理解する |

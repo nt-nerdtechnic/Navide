@@ -82,6 +82,9 @@ class FakeAttribution:
     def register_pane(self, pane_id: str, **kwargs: Any) -> None:
         self.registered.append({"pane_id": pane_id, **kwargs})
 
+    def scan_pane_baseline(self, pane_id: str) -> None:
+        pass
+
 
 class FakeCodexHomeManager:
     def __init__(self, root: Path) -> None:
@@ -127,7 +130,9 @@ class FakeVault:
             self._locks[agent_key] = lock
         return lock
 
-    def switch(self, agent_key: str, from_slot_id: str, to_slot_id: str) -> None:
+    def switch(
+        self, agent_key: str, from_slot_id: str, to_slot_id: str, *, scope: str | None = None
+    ) -> None:
         self.switch_calls.append((agent_key, from_slot_id, to_slot_id))
         if self.fail:
             raise RuntimeError("swap boom")
@@ -135,7 +140,7 @@ class FakeVault:
     def login_home_path(self, agent_key: str, slot_id: str) -> Path:
         return (self.root or Path("/nonexistent")) / agent_key / slot_id / "login-home"
 
-    def harvest_login_home(self, agent_key: str, slot_id: str) -> bool:
+    def harvest_login_home(self, agent_key: str, slot_id: str, *, scope: str | None = None) -> bool:
         # Mirrors CredentialVault: a home with a secret is captured + removed,
         # a secretless home (login still pending/abandoned) is a no-op.
         self.login_harvests.append((agent_key, slot_id))
@@ -286,12 +291,11 @@ async def test_cli_profiles_create_and_list(
 
     listing = session.websocket.sent[1]  # type: ignore[attr-defined]
     assert listing["payload"]["profiles"] == [profile]
-    assert listing["payload"]["defaults"] == {
-        "claude": None, "codex": None, "kimi": None, "grok": None, "kilo": None,
-    }
-    assert listing["payload"]["supported_agents"] == [
-        "claude", "codex", "kimi", "grok", "kilo",
-    ]
+    from agent_team_backend.profiles_store import SUPPORTED_AGENT_KEYS
+
+    assert listing["payload"]["defaults"] == {key: None for key in SUPPORTED_AGENT_KEYS}
+    assert listing["payload"]["supported_agents"] == list(SUPPORTED_AGENT_KEYS)
+    assert listing["payload"]["supported_agents"][:4] == ["claude", "codex", "kimi", "grok"]
 
 
 async def test_cli_profiles_list_includes_identities(
@@ -434,7 +438,7 @@ async def test_cli_profiles_create_rejects_unsupported_agent(
     await app.handle_message(session, {
         "id": "c2",
         "type": "cli_profiles.create",
-        "payload": {"agent_key": "antigravity", "name": "X"},
+        "payload": {"agent_key": "aider", "name": "X"},
     })
 
     response = session.websocket.sent[0]  # type: ignore[attr-defined]
@@ -476,9 +480,20 @@ async def test_cli_profiles_rename_delete_set_default_flow(
         "payload": {"id": profile["id"]},
     })
     assert session.websocket.sent[3]["payload"]["profiles"] == []  # type: ignore[attr-defined]
-    assert [e["payload"]["reason"] for e in events] == [
+    # Every mutation announces itself once, in order. A completed switch also
+    # tells the failover authority the user took over (epoch moves, pending
+    # automatic proposals are withdrawn) before announcing profiles, so the
+    # renderer recognizes the manual restart. That is the only other event.
+    assert [e["type"] for e in events] == [
+        "cli_profiles.changed", "quota_failover.changed", "cli_profiles.changed",
+        "quota_failover.changed", "cli_profiles.changed", "cli_profiles.changed",
+    ]
+    profiles_changed = [e for e in events if e["type"] == "cli_profiles.changed"]
+    assert [e["payload"]["reason"] for e in profiles_changed] == [
         "rename", "set_default", "set_default", "delete",
     ]
+    failover = [e["payload"] for e in events if e["type"] == "quota_failover.changed"]
+    assert [f["epochs"]["kimi"] for f in failover] == [1, 2]
 
 
 async def test_cli_profiles_delete_default_clears_credentials(
@@ -544,7 +559,14 @@ async def test_set_default_broadcast_carries_agent_key_and_forced(
         "payload": {"id": profile["id"], "name": "Renamed"},
     })
 
-    plain, forced, renamed = (e["payload"] for e in events)
+    assert [e["type"] for e in events] == [
+        "quota_failover.changed", "cli_profiles.changed",
+        "quota_failover.changed", "cli_profiles.changed",
+        "cli_profiles.changed",
+    ]
+    plain, forced, renamed = (
+        e["payload"] for e in events if e["type"] == "cli_profiles.changed"
+    )
     assert (plain["reason"], plain["agent_key"], plain["forced"]) == (
         "set_default", "kimi", False,
     )
@@ -718,6 +740,89 @@ async def test_cli_profiles_rename_unknown_is_bad_request(
     assert response["error"]["code"] == "BAD_REQUEST"
 
 
+async def test_cli_profiles_rename_default_slot_sets_alias(
+    store: CliProfilesStore, events: list[dict[str, Any]]
+) -> None:
+    session = _session()
+
+    await app.handle_message(session, {
+        "id": "r3",
+        "type": "cli_profiles.rename",
+        "payload": {"id": "__default__", "name": "Personal", "agentKey": "codex"},
+    })
+
+    response = session.websocket.sent[0]  # type: ignore[attr-defined]
+    assert response["ok"] is True
+    assert response["payload"]["defaultNames"] == {"codex": "Personal"}
+    assert store.list()["defaultNames"] == {"codex": "Personal"}
+    assert store.list()["profiles"] == []
+    assert events[0]["type"] == "cli_profiles.changed"
+    assert events[0]["payload"]["reason"] == "rename"
+    assert events[0]["payload"]["defaultNames"] == {"codex": "Personal"}
+
+    await app.handle_message(session, {
+        "id": "l3", "type": "cli_profiles.list", "payload": {},
+    })
+    listing = session.websocket.sent[1]  # type: ignore[attr-defined]
+    assert listing["payload"]["defaultNames"] == {"codex": "Personal"}
+
+
+async def test_cli_profiles_rename_default_slot_accepts_snake_case_agent_key(
+    store: CliProfilesStore, events: list[dict[str, Any]]
+) -> None:
+    """Every other cli_profiles handler takes ``agent_key``; an external
+    caller following that convention must not be turned away."""
+    session = _session()
+
+    await app.handle_message(session, {
+        "id": "r3s",
+        "type": "cli_profiles.rename",
+        "payload": {"id": "__default__", "name": "Personal", "agent_key": "codex"},
+    })
+
+    response = session.websocket.sent[0]  # type: ignore[attr-defined]
+    assert response["ok"] is True
+    assert response["payload"]["defaultNames"] == {"codex": "Personal"}
+    assert store.list()["defaultNames"] == {"codex": "Personal"}
+
+
+async def test_cli_profiles_rename_default_slot_requires_agent_key(
+    store: CliProfilesStore, events: list[dict[str, Any]]
+) -> None:
+    session = _session()
+
+    for i, extra in enumerate(({}, {"agentKey": "terminal"})):
+        await app.handle_message(session, {
+            "id": f"r4-{i}",
+            "type": "cli_profiles.rename",
+            "payload": {"id": "__default__", "name": "X", **extra},
+        })
+        response = session.websocket.sent[i]  # type: ignore[attr-defined]
+        assert response["ok"] is False
+        assert response["error"]["code"] == "BAD_REQUEST"
+    assert events == []
+    assert store.list()["defaultNames"] == {}
+
+
+async def test_cli_profiles_list_carries_name_is_custom(
+    store: CliProfilesStore, events: list[dict[str, Any]]
+) -> None:
+    session = _session()
+    auto = store.create(agent_key="claude", name="Account 1")
+    custom = store.create(agent_key="claude", name="Account 2")
+    store.rename(custom["id"], "Work")
+
+    await app.handle_message(session, {
+        "id": "l4", "type": "cli_profiles.list", "payload": {},
+    })
+
+    listing = session.websocket.sent[0]  # type: ignore[attr-defined]
+    rows = {p["id"]: p for p in listing["payload"]["profiles"]}
+    assert "nameIsCustom" not in rows[auto["id"]]
+    assert rows[custom["id"]]["nameIsCustom"] is True
+    assert listing["payload"]["defaultNames"] == {}
+
+
 # ---- cli_profiles.set_default credential swap semantics ----
 
 
@@ -814,7 +919,8 @@ async def test_set_default_claude_not_gated_by_running_panes(
     assert session.terminals.killed == []  # type: ignore[attr-defined]
     assert t1.proc.poll() is None
     assert vault.switch_calls == [("claude", "__default__", profile["id"])]
-    assert events[0]["payload"]["forced"] is False
+    changed = next(e["payload"] for e in events if e["type"] == "cli_profiles.changed")
+    assert changed["forced"] is False
 
 
 async def test_set_default_claude_announces_the_new_account_before_any_poll(
@@ -932,7 +1038,8 @@ async def test_set_default_claude_broadcast_never_forced(
     })
 
     assert session.websocket.sent[0]["ok"] is True  # type: ignore[attr-defined]
-    assert events[0]["payload"]["forced"] is False
+    changed = next(e["payload"] for e in events if e["type"] == "cli_profiles.changed")
+    assert changed["forced"] is False
 
 
 async def test_set_default_rate_limited_after_burst(
@@ -1132,9 +1239,14 @@ async def test_set_default_harvests_pending_login_before_restore(
     harvested_before_swap: list[bool] = []
     orig_switch = vault.switch
 
-    def switch_spy(*args: str) -> None:
+    scopes_seen: list[str | None] = []
+
+    def switch_spy(*args: str, scope: str | None = None) -> None:
         harvested_before_swap.append(not home.exists())
-        orig_switch(*args)
+        # claude swaps a whole credential, so the handler forwards no
+        # provider scope; a per-provider vendor would get its profile's.
+        scopes_seen.append(scope)
+        orig_switch(*args, scope=scope)
 
     vault.switch = switch_spy  # type: ignore[method-assign]
 
@@ -1149,6 +1261,7 @@ async def test_set_default_harvests_pending_login_before_restore(
     assert vault.login_harvests == [("claude", profile["id"])]
     assert vault.switch_calls == [("claude", "__default__", profile["id"])]
     assert harvested_before_swap == [True]
+    assert scopes_seen == [None]
 
 
 async def test_set_default_swap_failure_keeps_old_default(
@@ -1456,7 +1569,7 @@ async def test_terminal_create_login_profile_kimi_grok(
     ("claude", "claude auth login"),
     ("codex", "codex login"),
     ("kimi", "kimi login"),
-    ("grok", "grok"),  # no login subcommand; first run starts its auth flow
+    ("grok", "grok login"),  # browser OAuth at auth.x.ai; the pane waits
 ])
 async def test_terminal_create_login_pane_runs_direct_login_command(
     store: CliProfilesStore,
@@ -1610,15 +1723,18 @@ async def test_set_default_reports_needs_login_for_an_empty_slot(
     assert sent["payload"]["needsLoginReason"] == "signed-out"
 
 
-async def test_set_default_reports_needs_login_for_an_expired_snapshot(
+async def test_set_default_does_not_ask_login_for_an_expired_but_refreshable_snapshot(
     store: CliProfilesStore,
     events: list[dict[str, Any]],
     vault: FakeVault,
 ) -> None:
     """Nothing renews a parked slot — the CLI is the only refresher — so an
-    aged snapshot goes live expired. The switch offers a sign-in and, crucially,
-    never mints a token itself: rotating one out from under a running Claude
-    Code is what killed accounts before."""
+    aged snapshot goes live expired, and Claude Code renews it from the
+    restored refresh token on its next run. That is routine: the switch must
+    not start a sign-in (every account parked longer than one access-token
+    lifetime would re-login on each switch) and, crucially, never mints a
+    token itself: rotating one out from under a running Claude Code is what
+    killed accounts before."""
     import json
 
     profile = store.create(agent_key="claude", name="Work")
@@ -1635,14 +1751,40 @@ async def test_set_default_reports_needs_login_for_an_expired_snapshot(
 
     sent = session.websocket.sent[0]  # type: ignore[attr-defined]
     assert sent["ok"] is True
-    assert sent["payload"]["needsLogin"] is True
-    # Told apart from a lost login: parking an account does this to it, and
-    # calling it "signed out" reads as the switch having broken something.
-    assert sent["payload"]["needsLoginReason"] == "expired"
+    assert sent["payload"]["needsLogin"] is False
+    assert sent["payload"]["needsLoginReason"] is None
     assert vault.slot_writes == []
     assert json.loads(
         vault.slot_secrets[("claude", profile["id"])]
     )["claudeAiOauth"]["accessToken"] == "dead"
+
+
+async def test_set_default_reports_needs_login_for_an_expired_snapshot_without_refresh_token(
+    store: CliProfilesStore,
+    events: list[dict[str, Any]],
+    vault: FakeVault,
+) -> None:
+    """An expired access token with nothing to refresh it from cannot recover
+    on its own — the switch offers a sign-in. Told apart from a lost login:
+    parking an account does this to it, and calling it "signed out" reads as
+    the switch having broken something."""
+    profile = store.create(agent_key="claude", name="Work")
+    vault.slot_secrets[("claude", profile["id"])] = _claude_slot_secret(
+        "dead", "", 1_000
+    )
+    session = _session()
+
+    await app.handle_message(session, {
+        "id": "n2b",
+        "type": "cli_profiles.set_default",
+        "payload": {"agent_key": "claude", "profile_id": profile["id"]},
+    })
+
+    sent = session.websocket.sent[0]  # type: ignore[attr-defined]
+    assert sent["ok"] is True
+    assert sent["payload"]["needsLogin"] is True
+    assert sent["payload"]["needsLoginReason"] == "expired"
+    assert vault.slot_writes == []
 
 
 async def test_set_default_reports_needs_login_for_a_wiped_snapshot(

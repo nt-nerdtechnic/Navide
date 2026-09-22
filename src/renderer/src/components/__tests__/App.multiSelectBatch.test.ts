@@ -88,7 +88,10 @@ describe('App CLI-pane multi-select + batch context menu', () => {
   it('passes selection state + the click event down to each pane surface', () => {
     expect(appSource).toContain(':is-selected="selectedPaneIds.has(p.id)"')
     expect(appSource).toContain('@set-focus="(ev) => onSetFocus(p.id, ev, stageSurfaceOrderedIds)"')
-    expect(appSource).toContain('@click="(ev) => onSetFocus(p.id, ev, auxiliaryListOrderedIds)"')
+    // The main-window lists route through onAuxiliaryListClick, which hands
+    // rows on the stage to onSetFocus with the list's own order.
+    expect(appSource).toContain('@click="(ev) => onAuxiliaryListClick(p.id, ev)"')
+    expect(appSource).toContain('onSetFocus(paneId, ev, auxiliaryListOrderedIds.value)')
   })
 
   it('wires the sidebar agent list into the same multi-select', () => {
@@ -134,6 +137,10 @@ describe('App CLI-pane multi-select + batch context menu', () => {
       expect(json.action['rebuild-selected']).toBeTruthy()
       expect(json.action['minimize-selected']).toBeTruthy()
       expect(json.action['restore-selected']).toBeTruthy()
+      expect(json.action['reclaim-selected']).toContain('{count}')
+      expect(json.action['reclaim-selected-title']).toBeTruthy()
+      expect(json.action['mute-selected']).toBeTruthy()
+      expect(json.action['unmute-selected']).toBeTruthy()
       expect(json.action['remove-selected']).toBeTruthy()
     }
   })

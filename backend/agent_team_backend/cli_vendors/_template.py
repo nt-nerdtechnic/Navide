@@ -30,8 +30,19 @@ SPEC = VendorSpec(
     # slot_file="auth.json",
     # login_home_secret_file=(".mycli", "auth.json"),
     # profile_home_secret_file=(".mycli", "auth.json"),
+    # How the vault switches the account and what the switch must do to a
+    # running pane; None = never offered for switching. Declare only what
+    # the CLI's source or docs establish, and say so in ``evidence``.
+    # account_switch=AccountSwitchSpec(
+    #     auth_scope="_template", method="restart", store="file",
+    #     evidence="source", verified_version="1.2.3",
+    #     todo="no A -> B -> A round-trip on two real accounts recorded"),
     # --- usage quota: async (home) -> snapshot dict ---
     # fetch_usage=fetch_usage,
+    # Regex sources for THIS CLI's own "quota exhausted" text; never a
+    # generic 429 / rate-limit / login message. Mirror the frontend spec's
+    # ``quotaExhausted.pattern`` exactly (a test compares the two).
+    # quota_exhausted_patterns=(r"usage limit reached",),
     # --- resume / session ---
     # resume_id_from_command=resume_id_from_command,
     # session_path=session_path,

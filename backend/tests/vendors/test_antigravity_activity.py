@@ -9,6 +9,7 @@ conversations (verified by decoding the on-disk ones).
 from __future__ import annotations
 
 import sqlite3
+import json
 from pathlib import Path
 
 from agent_team_backend.cli_vendors import antigravity as antigravity_mod
@@ -153,6 +154,78 @@ def test_unfinished_assistant_step_is_not_a_completed_turn(
 
     (event,) = reader.parse_activity(db, {"agy_idx::-1"})
     assert event.event_type == "agent_active"
+
+
+def test_unfinished_assistant_is_rechecked_until_it_finishes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    reader, db = _db_with(tmp_path, monkeypatch, [
+        (0, 15, 5, b"", _assistant(reply="partial")),
+    ])
+    seen = {"agy_idx::-1"}
+    assert [e.event_type for e in reader.parse_activity(db, seen)] == ["agent_active"]
+    assert reader.parse_activity(db, seen) == []
+    with sqlite3.connect(db) as con:
+        con.execute("UPDATE steps SET status = 3, step_payload = ? WHERE idx = 0",
+                    (_assistant(reply="final reply"),))
+
+    assert [(e.event_type, e.text) for e in reader.parse_activity(db, seen)] == [
+        ("turn_complete", "final reply"),
+    ]
+    assert reader.parse_activity(db, seen) == []
+
+
+def test_older_pending_step_cannot_complete_a_newer_turn(
+    tmp_path: Path, monkeypatch
+) -> None:
+    reader, db = _db_with(tmp_path, monkeypatch, [
+        (0, 15, 5, b"", _assistant(reply="partial")),
+        (1, 21, 3, b"", b""),
+    ])
+    seen = {"agy_idx::-1"}
+    reader.parse_activity(db, seen)
+    with sqlite3.connect(db) as con:
+        con.execute("UPDATE steps SET status = 3, step_payload = ? WHERE idx = 0",
+                    (_assistant(reply="mid-turn narration"),))
+
+    events = reader.parse_activity(db, seen)
+    assert events and all(e.event_type == "agent_active" for e in events)
+    assert reader.parse_activity(db, seen) == []
+
+
+async def test_pending_steps_survive_the_watcher_checkpoint_roundtrip(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    from agent_team_backend.log_readers.watcher import LogWatcher
+
+    reader, db = _db_with(tmp_path, monkeypatch, [
+        (idx, 15, 5, b"", _assistant(reply="partial")) for idx in range(12)
+    ])
+    seen = {"agy_idx::-1"}
+    reader.parse_activity(db, seen)
+    stored = {}
+
+    async def sink(_event):
+        pass
+
+    def persist(key, checkpoint, scope):
+        stored[key, scope] = json.loads(json.dumps(checkpoint))
+
+    watcher = LogWatcher(sink=sink, checkpoint_sink=persist)
+    watcher._persist_activity_seen(str(db), seen)
+    restarted = LogWatcher(
+        sink=sink, checkpoint_provider=lambda key, scope: stored.get((key, scope)),
+    )
+    reader = AntigravityLogReader()
+    restored, _ = await restarted._restore_activity_seen(str(db), db, reader)
+    assert restored == seen
+    with sqlite3.connect(db) as con:
+        con.execute("UPDATE steps SET status = 3, step_payload = ?",
+                    (_assistant(reply="final reply"),))
+    completed = [e for e in reader.parse_activity(db, restored)
+                 if e.event_type == "turn_complete"]
+    assert [e.text for e in completed] == ["final reply"]
+    assert reader.parse_activity(db, restored) == []
 
 
 def test_bot_id_is_never_reported_as_turn_text(

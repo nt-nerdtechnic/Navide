@@ -419,6 +419,26 @@ export interface PaneStatusReply {
   kickoff?: string
   buffer: string
   logPath?: string
+  /** Vendor display name behind `agent_key` ("Claude Code", "Codex", …). */
+  agentLabel?: string
+  /** Model id the pane was LAUNCHED on — what cli_open_agent / the spawn form
+   *  asked for, not what the CLI is running now (a `/model` switch inside the
+   *  CLI is invisible here). Absent = the vendor's own default. */
+  model?: string
+  /** Reasoning-effort level the pane was launched with; absent = not asked. */
+  effort?: string
+  /** CLI account pin the pane was spawned on ('__default__' = real home).
+   *  Bookkeeping only: every pane runs on the vendor's live credentials, so a
+   *  later account switch leaves this stale while the CLI already runs on the
+   *  new login. Absent for vendors without managed accounts. */
+  profileId?: string
+  /** Present (true) only while the pane's CLI has printed its expired-login
+   *  message and the badge has not been clicked to re-login. */
+  loginExpired?: boolean
+  /** Wall-clock ms at which the pane's quota is expected back, present only
+   *  while the CLI has printed its "hit your limit" message and a reset time
+   *  could be resolved. Runtime detection from live output, not a poll. */
+  usageLimitUntil?: number
 }
 
 /** Shape a `ui.pane.getStatus` reply (App.vue's external UI action bus).
@@ -427,16 +447,42 @@ export interface PaneStatusReply {
  *  buffer text — null when the pane exists but hasn't realized its
  *  TerminalPane ref yet (still shows a status, but no scrollback). */
 export function buildPaneStatusReply(
-  pane: { outputLogFile?: string; kickoffStatus?: string } | undefined,
+  pane:
+    | {
+        outputLogFile?: string
+        kickoffStatus?: string
+        realized?: boolean
+        agentLabel?: string
+        model?: string
+        effort?: string
+        profileId?: string
+        loginExpired?: boolean
+        usageLimitUntil?: number | null
+      }
+    | undefined,
   live: { displayStatus?: string; awaitingKind?: string | null; buffer: string } | null
 ): PaneStatusReply {
+  // No ref means one of two things, and they used to share a word. A
+  // cold-restore placeholder (realized false) has no CLI at all and stays that
+  // way until someone opens it — 'waiting'; a realized pane whose ref has not
+  // mounted yet really is booting — 'starting'.
+  const status = pane?.realized === false ? 'waiting' : (live?.displayStatus ?? 'starting')
   const reply: PaneStatusReply = {
-    status: live?.displayStatus ?? 'starting',
+    status,
     buffer: live ? bufferTail(live.buffer, CLI_PASTE_BUFFER_CAP) : '',
     logPath: pane?.outputLogFile || undefined
   }
   if (live?.awaitingKind) reply.awaitingKind = live.awaitingKind
   // 'none' means this pane was never given a task; saying so would be noise.
   if (pane?.kickoffStatus && pane.kickoffStatus !== 'none') reply.kickoff = pane.kickoffStatus
+  // Identity the pane was launched with. Each key is present only when it has
+  // a value: the backend and its tests read "absent" as the answer, and a null
+  // would make that check ambiguous (same reason awaitingKind is omitted).
+  if (pane?.agentLabel) reply.agentLabel = pane.agentLabel
+  if (pane?.model) reply.model = pane.model
+  if (pane?.effort) reply.effort = pane.effort
+  if (pane?.profileId) reply.profileId = pane.profileId
+  if (pane?.loginExpired) reply.loginExpired = true
+  if (typeof pane?.usageLimitUntil === 'number') reply.usageLimitUntil = pane.usageLimitUntil
   return reply
 }

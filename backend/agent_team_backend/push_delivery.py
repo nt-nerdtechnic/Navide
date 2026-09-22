@@ -25,6 +25,10 @@ Ownership is unchanged: the queue, the rate limit, the log and the FIFO all
 stay in the renderer, which decides per message whether to push and falls back
 to the PTY the moment a push does not land. Nothing here is a delivery
 guarantee — see ``deliver`` for what each mechanism can actually prove.
+
+Despite the name, none of this is a user-facing "push notification": the desktop
+notification, sound and Dock badge the user sees live in the renderer
+(``useSystemNotify`` / ``useSoundNotify``) and are unrelated to these channels.
 """
 
 from __future__ import annotations
@@ -33,7 +37,6 @@ import json
 import logging
 import os
 import secrets
-import shlex
 import socket
 import threading
 from collections.abc import Callable, Iterable
@@ -44,6 +47,7 @@ from typing import Any
 import httpx
 
 from .applog import app_data_dir
+from .osplat import paths, secret_files, terminal_backend
 from .cli_vendors import registry
 from .cli_vendors.base import PushChannel
 from .pending_registry import TIMEOUT, PendingRegistry
@@ -175,8 +179,8 @@ def _has_flag(text: str, flag: str) -> bool:
     if not flag:
         return False
     try:
-        tokens = shlex.split(text)
-    except ValueError:
+        tokens = terminal_backend.parse_command(text)
+    except (ValueError, OSError):
         tokens = text.split()
     return any(token == flag or token.startswith(f"{flag}=") for token in tokens)
 
@@ -235,7 +239,7 @@ def wire_spawn(
             command = _append_to_command(command, f"{channel.port_flag} {state.port}")
             if channel.host_flag:
                 command = _append_to_command(
-                    command, f"{channel.host_flag} {shlex.quote(channel.host)}"
+                    command, f"{channel.host_flag} {paths.quote_arg(channel.host)}"
                 )
             if channel.password_env and env is not None:
                 # Only when the CLI's own TUI can authenticate against it; a
@@ -250,7 +254,7 @@ def wire_spawn(
             path = _prepare_input_file(pane_id, channel)
             state.input_file = str(path)
             command = _append_to_command(
-                command, f"{channel.input_file_flag} {shlex.quote(str(path))}"
+                command, f"{channel.input_file_flag} {paths.quote_arg(str(path))}"
             )
         # KIND_HOOK needs nothing at spawn: the CLI's hook arms the channel.
     except Exception as err:  # noqa: BLE001 — a spawn is never broken over this
@@ -271,14 +275,12 @@ def _prepare_input_file(pane_id: str, channel: PushChannel) -> Path:
     from the start. Starting from an empty file makes both agree.
     """
     directory = runtime_dir(KIND_FILE)
-    directory.mkdir(parents=True, exist_ok=True)
     try:
-        os.chmod(directory, 0o700)
+        secret_files.make_private_dir(directory)
     except OSError:
         pass
     path = directory / f"{pane_id}{channel.input_file_suffix}"
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    os.close(fd)
+    secret_files.write_private_plain(path, b"")
     return path
 
 
@@ -572,19 +574,29 @@ async def _push_http(state: PaneChannel, text: str) -> tuple[bool, str]:
             log.debug("push submit to %s failed: %s", state.pane_id, err)
             reason = "submit-error"
         if reason:
-            await _clear_composer(client, base, channel)
+            cleared = await _clear_composer(client, base, channel)
+            if cleared:
+                reason = f"{reason}/cleared"
             return False, reason
     return True, ""
 
 
-async def _clear_composer(client: httpx.AsyncClient, base: str, channel: PushChannel) -> None:
-    """Best-effort undo of an append whose submit never happened."""
+async def _clear_composer(client: httpx.AsyncClient, base: str, channel: PushChannel) -> bool:
+    """Best-effort undo of an append whose submit never happened.
+
+    Returns True only when the CLI confirmed the clear (a 2xx/3xx answer), so
+    the composer is known to be empty again. False covers a channel with no
+    clear endpoint, a refusal, and an outright error alike: in all three the
+    text may still be sitting in the composer.
+    """
     if not channel.clear_path:
-        return
+        return False
     try:
-        await client.post(f"{base}{channel.clear_path}")
+        cleared = await client.post(f"{base}{channel.clear_path}")
     except Exception as err:  # noqa: BLE001 — there is nothing further to try
         log.debug("could not clear composer at %s: %s", base, err)
+        return False
+    return cleared.status_code < 400
 
 
 def leaves_text_behind(kind: str, reason: str) -> bool:
@@ -596,8 +608,16 @@ def leaves_text_behind(kind: str, reason: str) -> bool:
     or has to go back in the queue for the next pump, because clearing is best
     effort and a composer that still holds our text would take the envelope a
     second time.
+
+    A submit failure whose clear the CLI confirmed (`submit-*/cleared`) does
+    not count: the composer is empty again, so the next delivery may proceed
+    as usual. Only a clear that did not happen leaves text behind.
     """
-    return kind == KIND_HTTP and reason.startswith("submit-")
+    return (
+        kind == KIND_HTTP
+        and reason.startswith("submit-")
+        and not reason.endswith("/cleared")
+    )
 
 
 def _push_file(state: PaneChannel, text: str) -> tuple[bool, str]:

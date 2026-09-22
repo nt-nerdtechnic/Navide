@@ -15,7 +15,6 @@ import queue
 import re
 import secrets
 import shutil
-import stat
 import sys
 import threading
 import time
@@ -30,8 +29,11 @@ from urllib.parse import urlparse
 import httpx
 
 from agent_team_backend.applog import app_data_dir
+from agent_team_backend.osplat import paths
 from agent_team_backend import commit_message_prompt
 from agent_team_backend.git_security import is_remote_helper_form
+from agent_team_backend.git_askpass_helper import ASKPASS_FLAG
+from agent_team_backend.http_ssl import default_ssl_context
 from agent_team_backend.host_shell import (
     run_allowlisted,
     run_allowlisted_capped,
@@ -905,7 +907,9 @@ async def list_worktrees(workspace_path: str) -> list[dict[str, Any]]:
             if current:
                 worktrees.append(current)
             current = _blank()
-            current["path"] = line[len("worktree "):].strip()
+            # git prints `C:/Users/...` on Windows; normalise so the path
+            # compares equal to the OS-native one the caller holds.
+            current["path"] = os.path.normpath(line[len("worktree "):].strip())
             current["is_main"] = first
             first = False
         elif not current:
@@ -3006,7 +3010,9 @@ async def generate_commit_message(
 
     # Default: Ollama path
     try:
-        async with httpx.AsyncClient(base_url=ollama_url.rstrip("/"), timeout=remaining) as client:
+        async with httpx.AsyncClient(
+            base_url=ollama_url.rstrip("/"), timeout=remaining, verify=await default_ssl_context()
+        ) as client:
             resp = await client.post("/api/generate", json={
                 "model": model,
                 "system": system,
@@ -3051,12 +3057,20 @@ def _resolve_askpass_helper_path() -> str:
             log.warning("git askpass: stable helper copy failed: %s", err)
             helper = source
 
-    # git execs this path directly (no shell), so keep it executable.
-    try:
-        helper.chmod(helper.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-    except OSError:
-        pass
-    return str(helper)
+    # git execs this path directly (no shell), so the seam writes whatever
+    # launcher this platform can exec around the argv below. That argv is
+    # always this process's own executable and never the name `python`: a
+    # frozen build ships no interpreter for that name to find, and on Windows
+    # it usually resolves to the Store's alias stub, which prints its install
+    # page and answers git with an empty credential. A frozen build re-enters
+    # itself through the askpass entry mode; from a checkout the same mode is
+    # reached with `-m`.
+    launch_argv = (
+        [sys.executable, ASKPASS_FLAG]
+        if getattr(sys, "frozen", False)
+        else [sys.executable, "-m", "agent_team_backend", ASKPASS_FLAG]
+    )
+    return str(paths.askpass_launcher(helper, launch_argv))
 
 
 _ASKPASS_HELPER_PATH = _resolve_askpass_helper_path()
@@ -3077,8 +3091,10 @@ async def create_askpass_context(
     """Start a one-shot loopback TCP server for a GIT_ASKPASS helper to call back into.
 
     Returns (env, cleanup):
-      env     -- vars to merge into the git subprocess environment: GIT_ASKPASS
-                 pointing at git_askpass_helper.py, plus the port/token the
+      env     -- vars to merge into the git subprocess environment: the
+                 platform's `git_subprocess_env` (GIT_ASKPASS pointing at
+                 git_askpass_helper.py and, on POSIX, the SSH_ASKPASS trio so
+                 ssh's own prompts arrive here too), plus the port/token the
                  helper needs to reach this server.
       cleanup -- async function that closes the server; callers must invoke it
                  once the git subprocess has finished (success, failure, or
@@ -3155,7 +3171,7 @@ async def create_askpass_context(
     port = server.sockets[0].getsockname()[1]
 
     env = {
-        "GIT_ASKPASS": _ASKPASS_HELPER_PATH,
+        **paths.git_subprocess_env(_ASKPASS_HELPER_PATH),
         "NAVIDE_ASKPASS_PORT": str(port),
         "NAVIDE_ASKPASS_TOKEN": token,
     }

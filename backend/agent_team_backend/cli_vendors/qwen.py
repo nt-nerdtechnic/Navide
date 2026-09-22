@@ -39,6 +39,7 @@ from ..log_readers.base import (
 )
 from ..log_readers.base import encode_claude_cwd
 from .base import (
+    AccountSwitchSpec,
     Dep,
     McpServerConfig,
     McpValue,
@@ -46,7 +47,10 @@ from .base import (
     PushChannel,
     SkillsWiring,
     VendorSpec,
+    VendorRuntimeContext,
     command_text,
+    dotenv_extract,
+    dotenv_merge,
 )
 from ..usage_common import (
     HTTP_TIMEOUT,
@@ -290,6 +294,8 @@ class QwenLogReader(LogReader):
                         dedup_key=dedup_key,
                         timestamp=str(rec.get("timestamp") or ""),
                         model=str(rec.get("model") or ""),
+                        cli_version=str(rec.get("version") or ""),
+                        cache_read_tokens=_int(usage.get("cachedContentTokenCount")),
                     )
                 )
         return out
@@ -339,6 +345,8 @@ class QwenLogReader(LogReader):
                 timestamp=str(rec.get("timestamp") or ""),
                 model=str(rec.get("model") or ""),
                 checkpoint=event_checkpoint,
+                cli_version=str(rec.get("version") or ""),
+                cache_read_tokens=_int(usage.get("cachedContentTokenCount")),
             ))
 
         final_checkpoint["recent_keys"] = recent
@@ -592,6 +600,102 @@ def read_qwen_credentials(home: Path, env: dict | None = None) -> str | None:
     return _qwen_env_lookup(env_obj) if isinstance(env_obj, dict) else None
 
 
+QWEN_ACCOUNT_SCOPE = "coding-plan"
+
+
+def _qwen_env_file(home: Path) -> Path:
+    return home / ".qwen" / ".env"
+
+
+def _qwen_settings_file(home: Path) -> Path:
+    return home / ".qwen" / "settings.json"
+
+
+def _qwen_credential_file(home: Path) -> Path:
+    """The file a switch rewrites: whichever of ``~/.qwen/.env`` and
+    ``~/.qwen/settings.json`` currently carries the Coding Plan key, in the
+    order qwen-code consults them; ``.env`` when neither does. A key in the
+    process environment outranks both and is out of the vault's reach."""
+    for path in (_qwen_env_file(home), _qwen_settings_file(home)):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if _qwen_extract(text, QWEN_ACCOUNT_SCOPE) is not None:
+            return path
+    return _qwen_env_file(home)
+
+
+def _qwen_extract(document: str | None, scope: str) -> str | None:
+    """The Coding Plan key out of either credential file, as the JSON text
+    ``{"<ENV NAME>": "<key>"}`` so a restore puts it back under the same
+    variable name. A settings.json document is told apart by its shape."""
+    if document is None or scope != QWEN_ACCOUNT_SCOPE:
+        return None
+    if document.lstrip().startswith("{"):
+        try:
+            settings = json.loads(document)
+        except ValueError:
+            return None
+        env_obj = settings.get("env") if isinstance(settings, dict) else None
+        mapping = env_obj if isinstance(env_obj, dict) else {}
+        for key in QWEN_ENV_KEYS:
+            value = mapping.get(key)
+            if isinstance(value, str) and value.strip():
+                return json.dumps({key: value.strip()}, separators=(",", ":"))
+        return None
+    return dotenv_extract(document, QWEN_ENV_KEYS)
+
+
+def _qwen_merge(document: str | None, scope: str, portion: str | None) -> str:
+    """Rewrite only the Coding Plan key: in settings.json the ``env`` object's
+    key-variant entries; in ``.env`` the lines naming them. Everything else
+    in the file is carried through (settings.json is re-serialised; .env
+    lines are kept verbatim)."""
+    if scope != QWEN_ACCOUNT_SCOPE:
+        raise ValueError(f"qwen has no credential scope {scope!r}")
+    text = document or ""
+    if not text.lstrip().startswith("{"):
+        return dotenv_merge(text, QWEN_ENV_KEYS, portion)
+    entry = json.loads(portion) if portion is not None else None
+    if entry is not None and (
+        not isinstance(entry, dict) or len(entry) != 1
+        or next(iter(entry)) not in QWEN_ENV_KEYS
+        or not isinstance(next(iter(entry.values())), str)
+    ):
+        raise ValueError("qwen credential portion must map one Coding Plan variable")
+    settings = json.loads(text)
+    if not isinstance(settings, dict):
+        raise ValueError("settings.json is not a JSON object")
+    env_obj = settings.get("env")
+    if env_obj is None:
+        env_obj = settings["env"] = {}
+    elif not isinstance(env_obj, dict):
+        raise ValueError("settings.json env is not an object")
+    for key in QWEN_ENV_KEYS:
+        env_obj.pop(key, None)
+    if entry:
+        env_obj.update(entry)
+    if not env_obj and entry is None:
+        settings.pop("env")
+    return json.dumps(settings, indent=2)
+
+
+def identity_from_secret(secret):
+    """A scoped slot holds ``{"<ENV NAME>": "<key>"}``; signed in when the key
+    is non-empty. Alibaba's key carries no identity to show."""
+    data = None
+    if secret is not None:
+        try:
+            data = json.loads(secret)
+        except ValueError:
+            data = None
+    signed_in = isinstance(data, dict) and any(
+        isinstance(v, str) and v.strip() for k, v in data.items() if k in QWEN_ENV_KEYS
+    )
+    return {"email": None, "signedIn": signed_in}
+
+
 def qwen_legacy_oauth_present(home: Path) -> bool:
     """True when the defunct Qwen OAuth credential file exists. The free tier
     it belonged to was discontinued and no quota endpoint accepts the token,
@@ -765,8 +869,29 @@ def _install_hooks(port_file: str) -> Any:
     return install_hooks(port_file)
 
 
+def _risk_data_dirs(ctx: VendorRuntimeContext) -> tuple[Path, ...]:
+    # Verified in installed @qwen-code/qwen-code Storage.getRuntimeBaseDir:
+    # QWEN_RUNTIME_DIR overrides runtime output, otherwise QWEN_HOME is used.
+    # Config remains at QWEN_HOME. Storage.resolvePath expands ~/ itself.
+    def path(value: str | Path) -> Path:
+        text = str(value)
+        if text == "~":
+            return ctx.home
+        if text.startswith(("~/", "~\\")):
+            return ctx.home.joinpath(*re.split(r"[/\\]+", text[2:]))
+        return ctx.path(value)
+
+    root = path(ctx.env.get("QWEN_HOME") or ctx.home / ".qwen")
+    runtime = ctx.env.get("QWEN_RUNTIME_DIR")
+    return tuple(dict.fromkeys((root, path(runtime)))) if runtime else (root,)
+
+
 SPEC = VendorSpec(
     key="qwen",
+    # OpenAI-compatible/custom providers; quota hosts cover another interface.
+    expected_hosts=(),
+    data_dirs=_risk_data_dirs,
+    data_dir_env_vars=("QWEN_HOME", "QWEN_RUNTIME_DIR"),
     supports_model=True,
     # Verified 2026-08-15: QWEN_HOME *is* the .qwen directory (its
     # resolveQwenHome falls back to ~/.qwen), so skills sit one level in.
@@ -776,7 +901,7 @@ SPEC = VendorSpec(
         root_home=(".qwen",),
         skills_rel=("skills",),
     ),
-    label="Qwen Code",
+    label="Qwen Code (Alibaba Cloud)",
     # `--mcp-config` is undocumented in `qwen --help` but registered, takes
     # inline JSON or a path, and merges over settings.json. No "type"
     # discriminator: httpUrl is streamable HTTP, a plain url would be SSE.
@@ -813,6 +938,29 @@ SPEC = VendorSpec(
     # the patched function. Binding the function object directly would freeze
     # the original into the spec.
     fetch_usage=lambda home: fetch_qwen(home),
+    # Multi-account: the Coding Plan API key, resolved the way qwen-code does
+    # (process env > ~/.qwen/.env > settings.json "env"). A switch rewrites
+    # the key in whichever file holds it and nothing else in that file. The
+    # key is read at startup: restart, then ``qwen --resume <uuid>``. The
+    # legacy ``oauth_creds.json`` (discontinued free tier) is not an account.
+    live_file=(".qwen", ".env"),
+    live_file_resolver=_qwen_credential_file,
+    slot_file="credential.json",
+    identity_from_secret=identity_from_secret,
+    account_switch=AccountSwitchSpec(
+        auth_scope="qwen",
+        method="restart",
+        store="compound-file",
+        evidence="source",
+        verified_version="0.22.2",
+        scopes=(QWEN_ACCOUNT_SCOPE,),
+        extract=_qwen_extract,
+        merge=_qwen_merge,
+        # read_qwen_credentials: the process environment is consulted first.
+        shadowing_env=QWEN_ENV_KEYS,
+        resume="native",
+        todo="a Coding Plan key in the pane environment outranks both files and cannot be switched; no real-account round-trip recorded",
+    ),
     resume_id_from_command=_resume_id_from_command,
     session_path=_session_path,
     session_exists=_session_exists,
@@ -820,7 +968,7 @@ SPEC = VendorSpec(
     make_log_reader=QwenLogReader,
     # Qwen Code ships `qwen update` but no doctor subcommand; its autoupdate
     # opt-out is a settings.json key, not an env var — autoupdate_env stays empty.
-    install_dep=Dep("qwen", "Qwen Code", "Alibaba Qwen Code coding agent CLI", "agent_cli",
+    install_dep=Dep("qwen", "Qwen Code (Alibaba Cloud)", "Alibaba Qwen Code coding agent CLI", "agent_cli",
         ["qwen", "--version"], r"(\d+\.\d+\.\d+)",
         install_cmd="npm install -g @qwen-code/qwen-code", needs_terminal=True,
         requires_binaries=("npm",),

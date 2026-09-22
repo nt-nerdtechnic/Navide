@@ -26,10 +26,14 @@ VENDORS_DIR = REPO_ROOT / "backend" / "agent_team_backend" / "cli_vendors"
 FRONTEND_AGENTS_DIR = (
     REPO_ROOT / "src" / "renderer" / "src" / "platform" / "plugin-shell" / "agents"
 )
+CLI_AGENTS_HELP = (
+    REPO_ROOT / "src" / "renderer" / "src" / "components" / "CliAgentsHelp.vue"
+)
 
 EXPECTED_KEYS = {
     "aider", "antigravity", "claude", "codex", "copilot", "cursor",
-    "droid", "grok", "kilo", "kimi", "muse", "opencode", "pi", "qwen",
+    "droid", "grok", "kilo", "kimi", "mcode", "muse", "opencode", "pi",
+    "qwen",
 }
 
 # DEPS entries that are infrastructure, not CLI vendors.
@@ -41,9 +45,16 @@ NON_VENDOR_AGENT_KEYS = {"terminal"}
 # Modules a vendor file may import. log_readers.base is the shared reader
 # contract (safe direction: it imports no vendor); kilo→opencode is the
 # single allowed vendor→vendor edge (reader class inheritance).
-ALLOWED_LOCAL_IMPORTS = {"base", "_protocols", "applog", "log_readers.base", "skills_store", "usage_common"}
+# `osplat` is a leaf (it imports nothing vendor-side), so reaching the
+# platform seam from a vendor cannot form a cycle.
+ALLOWED_LOCAL_IMPORTS = {
+    "base", "_protocols", "applog", "log_readers.base", "osplat", "skills_store",
+    "usage_common",
+}
 VENDOR_IMPORT_EXEMPTIONS = {"kilo": {"opencode"}}
-ALLOWED_THIRD_PARTY = {"httpx", "yaml"}
+# psutil is a leaf (codex reads CODEX_HOME off running processes to keep a
+# live pane home out of the startup sweep).
+ALLOWED_THIRD_PARTY = {"httpx", "psutil", "yaml"}
 
 
 def test_registry_matches_expected_vendor_set() -> None:
@@ -117,7 +128,11 @@ def _reader_sources() -> dict[str, str]:
     """
     sources: dict[str, str] = {}
     for key, spec in registry.VENDORS.items():
-        assert spec.make_log_reader is not None, f"{key} has no make_log_reader"
+        # Reader-less vendors have no parse_activity to attribute. This runs
+        # only while the caller is already building a failure message, so an
+        # assert here would replace that message with its own.
+        if spec.make_log_reader is None:
+            continue
         parse_activity = type(spec.make_log_reader()).parse_activity
         sources[key] = parse_activity.__module__.rsplit(".", 1)[-1]
     return sources
@@ -131,6 +146,11 @@ def _backend_infers_turn_end_from_silence() -> set[str]:
     """
     inferring: set[str] = set()
     for key, spec in registry.VENDORS.items():
+        # A vendor may ship no reader at all (docs/adding-a-cli-vendor.md
+        # allows an empty log_readers placeholder); it cannot infer a turn end
+        # from silence when it reads nothing.
+        if spec.make_log_reader is None:
+            continue
         parse_activity = type(spec.make_log_reader()).parse_activity
         module = sys.modules[parse_activity.__module__]
         declared = {n for n in vars(module) if _IDLE_CONST_RE.fullmatch(n)}
@@ -305,6 +325,54 @@ def test_push_channel_matches_the_frontend_agent_spec() -> None:
         )
 
 
+def test_help_panel_sign_in_column_matches_login_command_args() -> None:
+    """Settings ▸ Help prints, per vendor, the command the Accounts pane's
+    sign-in button runs. That table is a hand-maintained mirror, so it can
+    quietly start telling users to expect a flow the button never triggers —
+    which is precisely what this column exists to prevent. `binary + signIn`
+    must therefore reproduce what `_login_spawn_command` actually builds from
+    `login_command_args`; an empty `signIn` means the vendor declares none and
+    the button launches the CLI unchanged."""
+    source = CLI_AGENTS_HELP.read_text(encoding="utf-8")
+    rows = re.findall(
+        r"\{ name: '[^']+', bin: '([^']+)',[^\n]*?signIn: '([^']*)' \}", source
+    )
+    assert len(rows) == len(registry.VENDORS), (
+        f"{CLI_AGENTS_HELP.name} lists {len(rows)} vendors, the registry has "
+        f"{len(registry.VENDORS)} — a vendor was added or removed on one side only"
+    )
+
+    # The table is keyed by binary, the registry by vendor key; the frontend
+    # agent specs are the only place the two are tied together.
+    bin_to_key: dict[str, str] = {}
+    for path in FRONTEND_AGENTS_DIR.glob("*.ts"):
+        if path.stem.startswith("_") or path.stem in {"index", "types", "terminal"}:
+            continue
+        spec_source = path.read_text(encoding="utf-8")
+        key = re.search(r"agentKey: '([a-z]+)'", spec_source)
+        command = re.search(r"defaultCommand: '([^']+)'", spec_source)
+        assert key and command, f"{path.name} declares no agentKey/defaultCommand"
+        bin_to_key[command.group(1)] = key.group(1)
+
+    help_panel = {}
+    for binary, sign_in in rows:
+        assert binary in bin_to_key, (
+            f"{CLI_AGENTS_HELP.name} lists binary {binary!r}, which no agent "
+            f"spec declares as its defaultCommand"
+        )
+        help_panel[bin_to_key[binary]] = sign_in
+    backend = {
+        key: (spec.login_command_args or "")
+        for key, spec in registry.VENDORS.items()
+    }
+
+    assert help_panel == backend, (
+        "the sign-in column drifted from login_command_args — Settings ▸ Help "
+        "would name a sign-in command the button does not run: "
+        f"help={help_panel} backend={backend}"
+    )
+
+
 def test_vendor_modules_import_only_allowed_modules() -> None:
     for path in sorted(VENDORS_DIR.glob("*.py")):
         if path.stem.startswith("_") or path.stem in {"base", "registry"}:
@@ -398,6 +466,74 @@ def test_model_capability_matches_the_frontend_agent_spec() -> None:
         "effort vocabularies drifted; the MCP tool would reject a value the "
         f"CLI accepts: backend={backend_efforts} frontend={frontend_efforts}"
     )
+
+
+def test_session_resume_capability_matches_the_frontend_agent_spec() -> None:
+    """Same drift guard as the model one, for the capability cli_open_agent's
+    `session_id` is refused on.
+
+    The frontend owns the syntax (`resumeArgs` turns an id into the vendor's
+    resume command); the backend mirrors only whether an id can be named at
+    all. Drift here is silent in the worst direction: a vendor marked
+    resumable on the backend but with no `resumeArgs` accepts a session_id,
+    then opens a pane on a FRESH conversation — which reads exactly like a
+    successful resume until someone reads the transcript.
+    """
+    frontend_id_resume: set[str] = set()
+    for path in FRONTEND_AGENTS_DIR.glob("*.ts"):
+        if path.stem.startswith("_") or path.stem in {"index", "types"}:
+            continue
+        source = path.read_text(encoding="utf-8")
+        keys = set(re.findall(r"agentKey: '([a-z]+)'", source))
+        assert len(keys) == 1, f"{path.name} declares agentKeys {sorted(keys)}"
+        key = keys.pop()
+        # resumeArgs takes an id; resumeWithoutId (aider) restores from a file
+        # and has no id to be named.
+        if re.search(r"^\s+resumeArgs:", source, re.M):
+            frontend_id_resume.add(key)
+
+    backend_id_resume = {
+        k for k, s in registry.VENDORS.items() if s.supports_session_resume
+    }
+
+    assert backend_id_resume == frontend_id_resume, (
+        "session-resume support drifted between cli_vendors/<key>.py "
+        "(supports_session_resume) and agents/<key>.ts (resumeArgs): "
+        f"backend={sorted(backend_id_resume)} frontend={sorted(frontend_id_resume)}"
+    )
+
+
+def test_vendors_without_session_ids() -> None:
+    """Asserted rather than left to review, for two different reasons.
+
+    aider is the vendor whose resume takes a chat-history PATH: it has no
+    session id concept at all, so cli_open_agent(session_id=...) has nothing
+    to name for it and refuses with `no-session-support`.
+
+    mcode DOES have session ids (`--session <id>` on its interactive command),
+    but Navide cannot yet learn the id of a session it started, because mcode
+    keeps its history in SQLite and no reader has been written against it. Its
+    entry here is a missing reader, not a missing concept, and should go away
+    when that reader lands.
+    """
+    assert registry.VENDORS["aider"].supports_session_resume is False
+    assert registry.VENDORS["mcode"].supports_session_resume is False
+    others = {
+        k for k, s in registry.VENDORS.items() if not s.supports_session_resume
+    }
+    assert others == {"aider", "mcode"}, (
+        f"unexpected vendors without session ids: {sorted(others)}"
+    )
+
+
+def test_resumable_vendors_declare_a_resume_command_parser() -> None:
+    # Without a parser the shared spawn path cannot claim an explicit id or
+    # reap a still-live PTY resuming that same conversation.
+    missing = [
+        key for key, spec in registry.VENDORS.items()
+        if spec.supports_session_resume and spec.resume_id_from_command is None
+    ]
+    assert missing == []
 
 
 def test_droid_is_never_given_an_effort_capability() -> None:

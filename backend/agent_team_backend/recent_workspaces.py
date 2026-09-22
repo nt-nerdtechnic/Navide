@@ -71,6 +71,11 @@ class RecentWorkspacesStore:
     def _normalize(path: str) -> str:
         return os.path.abspath(os.path.expanduser(path))
 
+    @staticmethod
+    def _default_name(norm: str) -> str:
+        """Folder name shown when the workspace has no user-set alias."""
+        return os.path.basename(norm.rstrip("/")) or norm
+
     def _cap(self, recent: list[dict[str, Any]], max_size: int) -> list[dict[str, Any]]:
         """Drop oldest *unpinned* entries until len <= max_size.
 
@@ -118,7 +123,7 @@ class RecentWorkspacesStore:
             else:
                 entry = {
                     "path": norm,
-                    "name": os.path.basename(norm.rstrip("/")) or norm,
+                    "name": self._default_name(norm),
                     "last_opened_at": now,
                     "pinned": False,
                     "last_known_state": state,
@@ -128,6 +133,28 @@ class RecentWorkspacesStore:
             doc["recent"] = self._cap(recent, doc.get("max_size", DEFAULT_MAX_SIZE))
             self._write(doc)
             return entry
+
+    def set_name(self, path: str, name: str) -> None:
+        """Mirror a workspace's display name onto its recent-list entry.
+
+        The truth for the alias is the workspace's own project document; this
+        store only caches it so the Welcome / sidebar recent lists can be drawn
+        without opening every project's db. An empty ``name`` clears the alias
+        and restores the folder basename.
+
+        No-op when the path has no entry: creating one here would make a
+        workspace the user never opened appear in their recent list.
+        """
+        norm = self._normalize(path)
+        resolved = name.strip() or self._default_name(norm)
+        with self._lock:
+            doc = self._read()
+            for e in doc["recent"]:
+                if e["path"] == norm:
+                    if e.get("name") != resolved:
+                        e["name"] = resolved
+                        self._write(doc)
+                    return
 
     def pin(self, path: str) -> None:
         self._set_pinned(path, True)

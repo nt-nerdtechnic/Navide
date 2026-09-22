@@ -1,9 +1,14 @@
 import { existsSync, readFileSync, statSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
+import { dirname, resolve, sep } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 const repositoryRoot = process.cwd()
 const pluginRoot = resolve(repositoryRoot, 'src/renderer/plugins/git')
+
+/** Repo-relative with `/` separators on every host, so the expectations below can spell paths once. */
+function relativeToRepo(sourcePath: string): string {
+  return sourcePath.slice(repositoryRoot.length + 1).split(sep).join('/')
+}
 
 function resolveRelativeImport(sourcePath: string, specifier: string): string | null {
   const base = resolve(dirname(sourcePath), specifier)
@@ -67,7 +72,7 @@ describe('plugin Git production composition', () => {
 
   it('keeps Host adapters and Host-only review code out of the real plugin import graph', () => {
     const graph = collectImportGraph(resolve(pluginRoot, 'mount.ts'))
-    const graphPaths = [...graph.keys()].map((sourcePath) => sourcePath.slice(repositoryRoot.length + 1))
+    const graphPaths = [...graph.keys()].map(relativeToRepo)
     const graphText = [...graph.values()].join('\n')
 
     expect(graphPaths).toContain('src/renderer/plugins/git/mount.ts')
@@ -87,7 +92,7 @@ describe('plugin Git production composition', () => {
       'src/renderer/plugins/git/sdkGitTransport.ts',
     ])
     for (const [sourcePath, source] of graph) {
-      const relativePath = sourcePath.slice(repositoryRoot.length + 1)
+      const relativePath = relativeToRepo(sourcePath)
       if (compositionBoundary.has(relativePath)) continue
       expect(source, relativePath).not.toMatch(/useBackend|backend\.send|backend\.on|window\.agentTeam|:backend=/)
     }

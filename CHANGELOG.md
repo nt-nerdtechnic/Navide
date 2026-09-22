@@ -1,8 +1,17 @@
 # Changelog
 
-All notable released changes to Navide will be documented in this file. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow Semantic Versioning where practical during the pre-1.0 period.
+All notable released changes to Navide will be documented in this file. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+### Changed
+
+- Align CLI menu, installer, Plans and Help labels with reviewed official product names and selected publisher suffixes, including Grok Build (SpaceXAI), while preserving vendor order, commands and existing pane names.
+- Use the app's font in pane context menus so detached menu rendering does not fall back to a browser serif font.
+- Keep destructive project-menu actions readable with a transparent default background, subtle danger color on hover or focus, and a visible keyboard focus outline, while preserving the existing close actions and confirmations.
+- Move the language picker from Appearance to its own **Settings → Language** page. Settings search opens the new page, and the language preference still applies to every workspace.
+- Replace repeated agent lists in **Settings → CLI Agents** with searchable, filterable cards and a single-agent settings drawer. Cards retain enable controls and drag ordering through the grip to the left of each title; Overview, Launch, Permissions, Push, and Install are stacked on one scrolling drawer page, preserving automatic setting persistence and closing before Settings when Escape is pressed.
+- Show the status bar resource pill as live panes over all panes (`▤ 10 / 100`), so idle-reclaimed placeholders no longer read as open windows; help examples updated in all three locales.
 
 ### Added
 
@@ -18,7 +27,177 @@ All notable released changes to Navide will be documented in this file. The form
   account, and Issue capability adapters for the ongoing miniIDE migration.
   Window targets retain caller/receiver authority separation; missing IDE
   assets no longer silently open files in the OS default editor.
+- Name every CLI account, the built-in Default included, from its card in **Settings → Accounts** or from a row of the quota badge's account list; clearing the field restores the generated name. The name leads in the pane header, the account list, the cards, switch notices and Turn Stats, with the signed-in identity kept beside it. The pane header's quota badge now carries that account in its own section before the percentage — your name, or the part of the email before `@` — falling back to the number alone when an account has no name, no identity and no sibling account to be told apart from. Only the figure takes the warning and out-of-quota colours; the badge stays dashed while a reading is in flight, and a narrow pane shortens the name to its first character. The figure still belongs to the CLI's current account, not necessarily the one an older pane is running on.
+- Add optional `run_group_id` to `cli_open_agent` for selecting an existing tab group or the manual tab when opening a fresh or resumed conversation, while preserving default group inheritance and session restoration.
+- Make account quota history available without open panes, with evidence and local coverage details, stable cycle selection, bounded date ranges and paging, UTC calendar summaries, and full-range CSV exports. Missing token details remain gaps rather than zeros; completed-cycle averages require trusted limit evidence and available detail. Ambiguous weekly CLI clocks no longer invent a dated reset for ledger attribution.
+- Add Japanese interface support, including persisted language selection, onboarding, native Navide menu labels, Plans and Token Monitor windows, and plugin locale propagation. Keep the existing Traditional Chinese fallback, pass the skipped-workspace count to its notice title, and format the audited date displays using the selected interface language.
+- Add a triangle button after refresh to collapse or expand all eligible descendant-card families in the current tab in Auto, Spotlight, and Fullscreen. Mixed states collapse all; expansion opens nested families too. Parent cards, descendant counts, and the main terminal remain visible, other tabs keep their own state, and Grid or tabs without eligible families disable the button.
+- Add backend-owned CLI risk observations in active pane headers: sampled unexpected TCP addresses and newly observed large opaque files, with observed absence/reappearance evidence, persistent Ignore/Allow exact-IP decisions and Reveal in folder. Coverage depends on vendor/platform support; stale or unavailable observations do not imply safety, and no automatic blocking or deletion occurs.
+- Add **Reclaim selected** and selection-wide notification mute/unmute to the multi-pane context menu, with grouped actions. Reclaim keeps existing protection checks, affects only eligible selected panes, and is disabled when none are eligible; muting a mixed selection mutes all of it.
+- Add a Skills MCP workflow for inspection, bounded previews, add-only installation from local packages or public GitHub, and revision-checked delivery settings. Caller-bound previews pin exact content; local provenance survives restart, and delivery responses distinguish configuration from unknown current-session loading. Skills views refresh after committed changes and reconnects while retaining unsaved content and its original revision.
+- Add MiniMax Code (`mcode`) to CLI selection, install detection and sign-in. Session history, resume, token/quota reporting, account switching, MCP and skills wiring remain unsupported.
+- Add account switching when a CLI's active account runs out of quota, with an Off / Notify / Auto policy (Notify by default): one announcement per exhaustion lists the other accounts with the reliability of their readings; Auto makes a single attempt with the best candidate, limited to three automatic switches per rolling five hours and ten minutes apart per credential pool, stops the incident on any failure, never switches back by itself, and never re-sends work. Claude Code switches without restarting panes; other CLIs wait until every affected pane is safely idle, then stop, switch and resume each conversation; Aider asks for a new conversation. Account switched, conversation resumed and quota verified are reported separately, and a switch whose record could not be saved blocks further switches until reconciled. All fifteen CLIs declare an adapter with source-level evidence (no real-account round-trip recorded yet; MiniMax Code's is the newest and cannot resume a conversation). Sign-in is isolated for Claude Code, Codex, Grok, Kimi, Pi, Droid and MiniMax Code; the other CLIs sign in against their live store with the active account snapshotted and restored.
 
+### Fixed
+
+- Make every descendant counted on a parent card reachable in the Auto, Spotlight and Fullscreen pane lists: unfolding a family now also lists descendants that are minimized or live on another tab or project, each with a location hint. Clicking such a row switches project and tab, restores and focuses it like the left agent list; Cmd/Ctrl/Shift-click only selects it without switching or restoring. The bulk collapse/expand button keeps its current-tab scope, and the parent's `↳ n` chip is replaced by a readable summary such as "1 child pane · Running".
+- Bind Kilo and OpenCode account operations to the credential store observed after CLI shell startup, preserving HOME/XDG settings. Refuse ambiguous or conflicting account mutations while retaining ordinary CLI execution; login waits until the outgoing credential snapshot is ready.
+- Allow the Explorer and HTML preview to read interface prototypes and relative assets in `.agent-team/mockups/`, while preserving filesystem mutation protections and the preview's script-disabled sandbox.
+- Stop Codex panes from submitting artificial session-marker turns on launch, fresh rebuild, or fresh restore. Configured prompts remain intact, session identity can arrive after the first real turn, and skills refreshes preserve session/runtime isolation in newly prepared pane homes.
+- Keep Skills refreshes in request order and save/conflict state attached to the edited skill when selection changes. Reject local packages with unreadable subdirectories, and include nested `SKILL.md` attachments in shared and native inspection inventories.
+- Keep active Antigravity and Grok sessions running when another command merely mentions a resume flag: duplicate detection no longer interprets compound shell commands, other executables or positional text after `--` as a resume request.
+- Stop tools launched from a CLI pane on macOS from appearing in the Dock as another running Navide (which looked like the app relaunching in a loop). Every pane now runs under a bundled `Navide Pane` helper that LaunchServices treats as a UI-element application, so anything a pane starts is attributed to it and never gets a Dock tile; the helper forwards signals and exits with the command's status, and `NAVIDE_PANE_HELPER=0` runs panes bare.
+- Preserve a pruned history pane's parent when resuming from another workspace only if the parent still exists in the target workspace; missing parents and explicitly recorded roots stay roots.
+- Keep project overflow menus within the window and let long menus scroll without closing, so the final actions remain reachable near the bottom edge.
+- Block MiniMax Code's legacy `MAVIS_DATA_DIR` data-root override alongside `MINIMAX_DATA_DIR`, including the reserved-variable notice in CLI launch settings.
+- Keep CLI completion and message text across incremental updates: Antigravity rechecks assistant rows completed in place, Kimi streaming postpones inferred idle completion and can finish after new assistant content arrives, and Droid retains reply text when its outcome arrives in a later log poll.
+- Recognize explicit Antigravity and Grok resume IDs when reaping a duplicate CLI process before replacement, and keep Grok's first session visible outside its per-pane home shim. Grok title-based resume remains outside ID-based duplicate detection.
+- Reject Pi resume IDs that exist only in another workspace, where the CLI would otherwise start a new empty conversation. Honor `XDG_DATA_HOME` for OpenCode quota credentials and Kilo account switching and credential watching.
+- Scan the Codex session tree once per pass instead of once per pane home: pane homes whose `sessions` is a symlink back to `~/.codex/sessions` no longer re-enumerate the same rollouts. Reclaim `~/.codex-panes/<id>` when its pane is closed or its spawn fails, and sweep leftover homes at backend start; a home that still holds a rollout is always kept so `codex resume` keeps working (#121).
+- Preserve recorded model and effort when resuming a closed pane from Agent History, including when its original pane record has been pruned. Missing fields in older clients no longer erase those recorded choices; legacy records without choices keep the vendor default.
+
+## [0.2.8] — 2026-09-20 — signed release
+
+### Added
+
+- Fold a group and it closes up everything under it, from the sidebar and from the workspace heading. A folded row now stands for the family it hides when you drag it: the hidden descendants travel with it to another tab or another window, instead of the parent moving alone and leaving its children behind. Only the row you grabbed expands into its subtree — other folded rows in a multi-selection still move alone.
+- Reclaim a whole project's CLIs at once. Every reclaimable pane in it becomes a click-to-resume placeholder, skipping the focused pane, one awaiting your answer, one holding unsent text and one that cannot be resumed.
+- **Navide Cloud**'s pane list is grouped by device, then by state (running / idle / not opened), then by workspace, each group foldable, with a search box over pane, workspace and device names and a height cap so the dialog stops growing with the roster.
+- Welcome's **New…** asks for a location and a name and creates that folder, instead of opening a picker and taking whatever it made. A name already taken, no permission to write there, and anything else now come back as their own message.
+
+### Changed
+
+- A group row's fold button appears when the pointer crosses the row, like the ＋ beside it. The workspace heading keeps its buttons visible — a heading is a landmark you aim at, a group row is one of many.
+
+### Fixed
+
+- Closing a claude pane on **macOS and Linux** now sends SIGTERM and waits before the kill, so claude runs its own exit handler. Without that the entry it writes into `~/.claude.json` on a fullscreen start outlived the process; a pane that did not live long enough to clear it — one opened and closed straight away, one ended moments after the app restored it, one taken by idle reclaim or a rebuild — left a strike behind, and two strikes turn claude's fullscreen renderer off. That is what makes the dim row of previous prompts stop appearing when you scroll up. **On Windows this does not apply yet**: the platform has no SIGTERM and Navide's kill path there terminates outright, tracked in [#120](https://github.com/nt-nerdtechnic/Navide/issues/120).
+- A pane spawned during a workspace switch no longer files itself under the group of the workspace being left, and saving run groups can no longer write one workspace's groups over another's. If you kept two workspaces in one window on 0.2.7 you may already hold mixed rows: the fix only stops new ones, and `scripts/repair-run-group-ids.py` cleans up what is there (it dry-runs by default, backs the database up before writing, and refuses to run while Navide is open).
+- Resuming an old session keeps its place in the pane tree. Pane records are pruned and history is not, so history now carries its own copy of the parent pointer instead of pointing at a record that may be gone.
+- A create that has to reap a previous PTY first refuses to start a second CLI when that reap times out, rather than spawning over a process that may still be alive and letting two of them append to one session file.
+
+## [0.2.7] — 2026-09-19 — signed release
+
+### Changed
+
+- The in-app updater now reads its feed from the dl.navide.dev mirror, the same host the website's download buttons use, and falls back to the GitHub Release only when the mirror cannot be reached on the network. Until now it was the other way round. The READMEs' download links point at the mirror as well, with the GitHub link beside each.
+- Fold the Plugins group of the Settings sidebar into Integrations: **Extensions** and **Marketplace** now sit there after Memory, and the group wrapper is gone. **Notifications** leaves the middle of the long General page for a tab of its own, after Layout. The sidebar is four groups and eighteen tabs; searching Settings still finds every row where it was.
+- Picking another CLI from a workspace heading's **＋** menu now opens it once without making it the default. The ✓ and what ＋ opens next time stay where you left them — only Ctrl+1…9 and Settings change the default.
+
+### Fixed
+
+- A Codex pane no longer reports **failed** about 30 seconds after starting while Codex itself sits at its prompt (#118). Creating a terminal waited for the attribution baseline scan, which opens every rollout file under the vendor's session tree to read its header; on a large tree that ran past the renderer's 30-second deadline. The pane is acknowledged as soon as its PTY is up and the scan runs behind it.
+- Restore Codex pane naming and turn detection under Codex CLI 0.155, whose rollout log dropped the `user_message` event and moved the prompt into `item_completed`. Turns now end at `task_complete` / `turn_aborted` instead of at a per-tool-call `token_count`, so a long turn is no longer reported as finished each time Codex calls a tool.
+
+## [0.2.6] — 2026-09-18 — signed release
+
+### Added
+
+- Give **Marketplace** its own page under Settings → Extensions. Searching the registry, installing, and the publisher-trust and permission dialogs move there from the Extensions page, which now holds only what is installed. **Execution policy is no longer a page of its own**: it is the block at the top of the Extensions page, with its scope badge and storage path, and searching Settings for it opens that page scrolled to the block. Both pages read one plugin inventory, so an install made on Marketplace shows on Extensions without reopening Settings.
+- Translate the native application menu (File, Edit, View, Window…) and rebuild it when the UI language changes. Items with a system role keep the system's own label.
+- Put the actions that needed a right-click into a workspace's **⋯** menu: reveal in Finder, copy path, rename, open in its own window, and — when the window still holds another workspace — close the workspace, with or without its panes. The context menu keeps them all as a second entry point.
+- Dragging a folded pane row now carries its hidden subtree with it, to another tab or another window. Only the row being dragged expands into its subtree; other folded rows in a multi-selection still move alone.
+- Sign in to Copilot CLI and Muse Code from **Settings → Accounts** with their own `login` commands, instead of opening a REPL to sign in inside.
+- Help gains **Windows, Linux and cross-device** as a topic, a **Usage** section under Settings and System covering Token Monitor, Turn Stats and quota cycles, a note that Plans ships as a plugin, the 24 prompt-skill icons in the icon reference, and the full list of 53 MCP tools. Interface labels in help text are now read from the same locale keys the interface renders, which corrected twenty descriptions that had drifted. **Navide Cloud** moves from the General group of the Settings navigation to Accounts & Agents.
+- Localize the model and effort refusal shown by the spawn dialog and Settings → CLI Agents; it read Chinese under the English interface.
+
+### Fixed
+
+- Stop a Claude or Kilo sign-in pane dying on `error: unknown option '--mcp-config'`. Signing in to the current account from Settings → Accounts has no login profile id, which is what the "is this a sign-in pane" check used to look at, so the pane was wired with MCP, skills and push flags that the login subcommand rejects. The check now asks whether the command was actually rewritten to a login subcommand; a vendor with no login subcommand keeps its ordinary REPL and its wiring.
+- Stop grok being detected, spawned and updated as Cursor CLI. grok installs `~/.grok/bin/agent` — the name Cursor's binary uses — and `grok 1.0.34` satisfied a bare version pattern, so Settings showed Cursor CLI 1.0.34 installed, a Cursor pane ran grok, and **Update Cursor CLI** updated grok. Cursor now declares what its version output looks like; a candidate that fails that probe yields to the next name (`cursor-agent`), and the update command runs on the binary that was actually found. A machine with grok and no Cursor now correctly shows Cursor as not installed.
+- Stop a Codex pane asking **Hooks need review** on every open, on Codex builds that gate `-c hooks.SessionStart` from the command line. After the prompt is seen once, no later Codex pane on this machine injects the hook; session binding falls back to log and marker detection, which is slower but complete, and Pipeline Log says so. **This switch is permanent and per machine; there is no UI to turn it back on yet.**
+- Stop the usage-limit badge lighting on text that is not a limit — a replayed transcript, a quoted message, a pane writing *about* limits — and staying lit for hours while the CLI answered normally. A limit sentence in the terminal is now overruled by a fresh `/usage` reading that shows headroom (and triggers one refresh); conversely the badge lights from the reading alone when the account is spent, including a weekly wall with no reset time, shown without a clock. A badge you dismiss stays down until the next new reading. Also: the session-limit pattern no longer joins two unrelated sentences, and a cached reading no longer relights the badge right after an account switch. Cursor, Kilo and Pi keep the terminal-text-only behaviour.
+- Detect CLIs on machines with a slow login shell, and CLIs installed under a custom npm prefix. The PATH probe timed out at 3 s and cached the timeout as an answer for five minutes; `npm config set prefix` was ignored. The probe now has a ceiling per caller — 8 s for status, 15 s for **Re-detect** and post-install rescans, 3 s before a pane opens — retries a failure after 60 s, and reads `prefix` from `npm_config_prefix` or `~/.npmrc` (absolute paths only). Settings waits up to 45 s for the first status instead of 10.
+- Sync **Don't ask again** for the install prompt across windows, and stop asking when the opt-out list could not be loaded. A second window kept offering to install a CLI you had opted out of, and a status timeout was read as "never opted out". The prompt is now held when the list is unavailable, with a line in Pipeline Log.
+
+## [0.2.5] — 2026-09-17 — signed release
+
+### Added
+
+- Give each CLI its own launch settings in **Settings → CLI Agents**: a default model and reasoning effort for new panes, a custom launch command, and extra environment variables. The manual spawn dialog gains Model and Effort fields for the CLIs that declare them, prefilled from that CLI's default. The tab now also carries the per-CLI status chips, the permission-bypass switch, the push channels and guided install, so everything about a CLI is in one place. These settings are per machine, not per project, and apply to panes opened afterwards. A custom launch command takes the command line over completely: Navide adds nothing to it, so the default model, the effort, the permission-bypass flag and the per-pane arguments are all left off, and setting a model alongside one is refused rather than ignored. Rebuilt and restored panes use the vendor's own resume syntax, and a sign-in pane uses the vendor's login command, so neither takes the custom line. Variables Navide manages itself — `ANTHROPIC_API_KEY`, `CODEX_HOME`, `CLAUDE_CONFIG_DIR` and about twenty more — are dropped from the extra environment, with a toast saying so.
+- Add **Remove all N panes** to a pane's context menu: close a pane together with every agent it spawned, in one step. It appears only on a pane that has descendants — previously the choice was to close the children or to close the pane and watch its children reattach to another parent in the sidebar.
+- Let a push channel preference change reach every open window at once, and say what turning them all off costs: messages fall back to being typed into the other pane once it goes idle (slower), Claude Code's rewake stops working, and panes already running keep their old channel until restarted.
+
+### Fixed
+
+- Open panes for a CLI installed through `npm install -g`, nvm, volta, pnpm or bun when Navide was started from Finder. The backend's PATH probe could not see those installs and refused the spawn outright, which read as "works in Terminal, will not open in Navide". A probe that cannot find the binary no longer blocks; the pane's own login shell decides. Guided install follows the same evidence — it now offers itself when the shell actually reports `command not found` (exit 127), instead of appearing over a pane that was about to work.
+- Accept a CLI whose `--version` exits non-zero but still prints a version. Settings counted such a CLI as installed while the spawn probe refused it, so it showed as installed and failed to open every time. A probe that names no version at all is still fatal. Separately, a resume command is now built from the vendor's own binary name rather than its key, which differed for any vendor not spelled in lower case.
+- Keep `nvm use` working on macOS. Every nvm version directory was put at the front of PATH, so the node a user had selected — or the Homebrew node they had moved to while `~/.nvm` still existed — was quietly replaced. Those directories now go after the user's own PATH: the selected node stays first, and a CLI that exists only under nvm is still found. The pnpm home on macOS is `~/Library/pnpm`.
+- Resume a pipeline stage again. Every pane the stage opened failed with `cwd does not exist: …/navide.db`: the project file became a SQLite database, and the front end still derived the working directory by trimming that path, so it handed the database file itself over as the workspace. It now uses the workspace path the backend recorded. A resume the backend refuses rolls the pipeline back and stops rather than spawning the next stage into a run that was never resumed, and the reason it refused survives the rollback. Pressing Resume twice no longer spawns the stage twice.
+- Stop one flooded event queue taking a whole plugin backend down with it. Only protocol frames — request, response, cancel — are fatal on overflow now; a Host notification is dropped and counted, with the first drop recorded. A plugin backend that exits cleanly while ready records why, instead of disappearing without a trace.
+- Label the workspace **⋯** menu's rebuild row instead of describing it in the row. The full sentence was the label, so it wrapped to six lines in a 168px menu next to a one-line **History** and read as broken. The row now carries a short label and the explanation moved to its tooltip. Nothing about the row's position, its order, what it does or when it is available changed.
+- Let the out-of-quota badge be dismissed, and stop a dismissed one swallowing the next real limit. Clicking the badge clears the flag after a confirmation, and a loop waiting on quota resumes immediately. The first version matched any reset with the same clock time and never expired, so hitting the limit again the next day — or switching back to the account that had run out — produced no badge and no quota gate while a loop kept feeding a spent CLI. The suppression now lasts only until the reset it dismissed, and is tied to the account that raised it.
+
+- Keep the user's home directory out of error text shown in the app. `OSError` stringifies with the filename that failed, so an unhandled missing-file error put an absolute path — and the account name inside it — into a toast or banner that ends up in a screenshot. The generic dispatcher now writes `~` instead of the home prefix; the rest of the message is unchanged, so it stays as useful for diagnosis as before.
+- Localize the refusal shown when you switch to an account whose sign-in is still running. It was the one refusal on that path left in untranslated English, and it reached the toast verbatim once every refusal with a message started being toasted. It now uses the same string the delete path has always used.
+- Toast every CLI account switch failure that carries a message, not only `PANES_RUNNING` and `SWITCH_RATE_LIMITED`. The other refusals (e.g. `PROFILE_SWAP_FAILED`) only ever reached the accounts panel's own banner, which sits above the per-agent sections and scrolls out of view once you're looking at one agent's row — clicking **Set as default** on a failing switch looked like it did nothing.
+- Reopen the Plans, Git and Token Monitor windows after a clean quit, alongside the workspace windows that already came back. A Plans or Git window returns only when its workspace's main window did, so a workspace held back by the restore failure breaker cannot be let in through one of them. One-shot viewers — diff, branch diff and the editor — stay closed on purpose: reopening a diff of a change you have long since dealt with is noise, not restore. Their size and position come back with them.
+- Stop a workspace being dropped from restore after three short sessions. Each launch charges every restored workspace one attempt up front, and only a backend that stayed up for a full minute paid it back — so three quick launches in a row spent a workspace's whole budget and it was quietly skipped from then on, without any of them having gone wrong. Reaching a clean quit now settles the charge too. A run whose backend could not be kept alive still counts against the workspace.
+
+## [0.2.4] — 2026-09-17 — signed release
+
+### Fixed
+
+- **Upgrading with two devices:** a device on 0.2.3 and one on 0.2.4 cannot complete a new pairing, in either direction. The pairing handshake now carries an encryption key and has no version negotiation, so the older side is refused before a code is shown. It fails closed — the two machines never show different codes and both believe them — but neither says why: they sit on "waiting for the other device" until the request times out. Pair only once both devices are on 0.2.4. Devices paired on 0.2.3 keep working for messaging; sharing a sync key between them is refused until they are unpaired and paired again. **If you already use cloud sync, upgrade both devices together:** records written on 0.2.4 are sealed in a format 0.2.3 cannot open, so anything you add or edit on the upgraded device while the other is still on 0.2.3 never reaches it — and upgrading the second device afterwards does not backfill it, because the older release has already moved its read position past those records. Editing the item again on either device sends it afresh. Records written before the upgrade are untouched and keep syncing in both directions.
+- Persist detected session identities before UI notification and preserve them across history registration and later snapshots; allow loading more History entries after an empty search and rerun content search for newly loaded entries.
+- Bind Codex sessions to their originating pane using verified resume IDs and launch-scoped first-turn hooks; preserve hook trust and marker fallback, and skip redundant markers when a session is already bound.
+- Hold the session marker while a keystroke-only startup dialog (Codex **Hooks need review**) is on screen instead of pasting into it, and type the marker into panes that a restart reopened as a fresh conversation; both cases left the pane without a resume id, so History showed no **Resume** button for it.
+- Keep the terminal responsive while a CLI floods a pane with output: PTY input is no longer blocked behind the flood, and the reader pauses safely when a write is blocked.
+- Wire per-pane home shims on Windows for MCP, and surface panes that could not be wired instead of failing silently.
+- Keep older History pages reachable after a search, and refine tab and terminal styling.
+
+### Added
+
+- Fall back to the dl.navide.dev release mirror when GitHub's asset host cannot be reached: the updater switches its feed to the mirror after a network failure while checking or downloading and stays there for the session; a 404 or checksum failure is still reported as before. Every release is now mirrored (byte-for-byte, sha256-checked) by the release workflow, and the READMEs carry a mirror link beside each download.
+- Add **Window → Token Monitor**, a separate window for local Claude turn history, model filtering, per-turn trends, and average/median usage over 14, 30, or 90 days. Display incomplete scan coverage and unknown account attribution explicitly; keep the existing Turn Stats modal.
+- Keep local quota observations for the active Claude account slot using existing usage polls, with bounded retention and no extra provider requests. Quota observations are separate from transcript usage and do not estimate an official token allowance.
+- Add a **Credentials** cloud-sync section (off by default) that carries portable CLI credentials pasted in **Settings → Accounts** to your other devices as ciphertext under the account sync key: random item ids, no tombstone by absence (removal stays local), sealed conflict rows, a round that fails rather than skips an unreadable record, and a cursor that waits for a key another device has not handed over yet. Accounts cards gain a per-credential cloud line, one-click use of a credential pasted elsewhere, and cards for credentials imported into named accounts; Settings → Sync shows the sync key id and can rotate it (records are re-sealed and paired devices receive the new key) or adopt a key from before accounts were bound. Physical two-device acceptance and vendor billing checks are pending.
+- Add a **Quota Ledger** behind the token views: per-account quota cycles (the rolling 5-hour window, plus monthly and yearly aggregates), how often a cycle ran out, and which account each pane was bound to over time. A new **Quota Cycles** view charts them, and Turn Stats can be filtered by account and shows the CLI version each turn ran on.
+- Add a per-turn token usage modal (**Turn Stats**) reachable from the menu and from the token panel, with session turn parsing behind it.
+- ~~Add **Settings → Sharing**~~ — *Correction: this page was removed before 0.2.4 shipped and is awaiting a redesign. Exporting and importing the settings bundle is available under **Settings → General → Settings Management**; the cloud share code and the paired-device list described here did not ship.*
+- Closing a workspace can leave its CLI panes running: the sidebar context menu separates **Close workspace** from **Close workspace and its CLI panes**, resumable pane records survive the close, and the confirmation dialog says which one is about to happen. Pipeline slots are retired by pane id on close, and rows show how many descendants a pane has.
+- Fold workspace subtrees in the sidebar, and collapse the per-row rebuild-all action into the row's overflow menu.
+- Add `manual_pane.release_pty`, which ends a pane's process while keeping its record so the pane can be restored later.
+- Report the cached vendor quota and the launch identity in `cli_get_status`.
+
+## [0.2.3] — 2026-09-15 — signed release
+
+
+- First release where macOS, Windows x64, Windows arm64 and Linux x64 ship from the same commit (v0.2.2's Windows and Linux assets were uploaded later from a different commit).
+- Windows: native arm64 installer (#100); ConPTY console host bundled and verified at build time (#86); backend follows the app into exit (#88); CLI panes receive their command directly, not through PowerShell (#87); two CI regressions fixed (#80).
+- Windows/Linux: drawn window controls always above every overlay (#94); Plans window gets a title bar (#96); confirm before the last window closes (#81).
+- Linux: package, binary and desktop entry renamed to navide (#85); hook works without curl (#83); backend follows the app into exit (#84).
+- Backend: outbound TLS context built once, off the event loop — fixes terminal panes timing out on Windows while the analyzer polled (#102).
+- MCP: cli_list_sessions and cli_place_pane; panes can resume an existing CLI conversation; sidebar drag-and-drop assigns pane lineage (#103, #104).
+- Language defaults to the system locale when unset (#82); update manifests present for every platform; docs brought back in line with what ships (#101).
+
+## [0.2.2] — 2026-09-13 — signed release
+
+### Added
+
+- Multi-platform support for Windows and Linux:
+  - Windows: native NSIS installer packaging, ConPTY terminal integration, DPAPI secret encryption, Job Object resource governance, and osplat platform abstraction.
+  - Linux: official AppImage packaging with static FUSE3 runtime, .desktop integration, and /proc resource probe.
+- Prompt Skills enhancements:
+  - Custom single-grapheme character and emoji icons with 24 builtin vector icons.
+  - One-shot prompt casting for non-default skills without entering the infinity loop mode.
+- Workspace & UI hierarchy improvements:
+  - Workspace display name aliases across UI, plugins, and separate windows.
+  - Full directory path display under sidebar workspace headers for clear disambiguation.
+  - Subtree status indicators and badges on parent panes and meeting cards.
+  - Token consumption attribution and display grouped by sidebar run group.
+- MCP and Messaging protocol extensions:
+  - Support waking cold-restored placeholder agents via `cli_send` and `ui.pane.open`.
+  - Ack-only agent messages that log without injecting into terminal input.
+  - Multi-device connectivity presence hints in `cli_whoami`.
+
+### Changed
+
+- Hardened Plans scanning and watcher infrastructure:
+  - Single-flight concurrent scan coalescing to eliminate redundant backend scans.
+  - Debounced watcher events and scan-start timestamps to prevent dropped updates during concurrent edits.
+  - Accurate plan directory move tracking and path preservation.
+  - Plans v2 retry affordance and recovery reason reporting.
 
 ## [0.2.1] — 2026-09-10 — signed release
 

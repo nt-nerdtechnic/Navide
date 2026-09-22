@@ -6,9 +6,9 @@ drive the CLIs here — without anybody at that machine being asked, or even tol
 Whoever was sitting there found out when something started running.
 
 This is the short-authentication-string dance instead. Both sides contribute a
-nonce, both derive the same six digits from *both signing keys and both nonces*,
-and a person at each end confirms the digits match. Neither machine is pinned
-until both have.
+nonce, both derive the same six digits from *both signing keys, both encryption
+keys and both nonces*, and a person at each end confirms the digits match.
+Neither machine is pinned until both have.
 
 **Why the code is derived rather than sent.** The relay carries every one of
 these messages and could rewrite any field in them. What it cannot do is make
@@ -17,6 +17,16 @@ the way past and the two ends compute different codes, so the people comparing
 them see a mismatch. That is the whole of the protection, and it is why the SAS
 covers the keys rather than only the nonces — a code over nonces alone would
 match perfectly while the relay held a key of its own in the middle.
+
+**Why the encryption key is in it too.** The signing key proves who *sent* a
+frame; the X25519 encryption key decides who can *open* what is sealed — the
+account sync key among other things. The first version hashed only the signing
+keys and read the encryption key from the server's directory afterwards, so a
+relay that left the signatures alone and swapped the directory entry had every
+sealed box addressed to itself, with two people happily agreeing on the digits.
+Both keys ride the pairing frames now, both are in the SAS, and both are pinned
+together; a frame without an encryption key is refused rather than filled in
+from the directory.
 
 Six digits is 20 bits: a relay that guesses gets one attempt in a million per
 try, and a mismatch ends the pairing rather than inviting another. That is the
@@ -51,8 +61,25 @@ PAIR_CONFIRM = "pair-confirm"
 PAIR_REJECT = "pair-reject"
 PAIR_REVOKED = "pair-revoked"
 
+#: The account sync key travels between two ALREADY PAIRED devices on the same
+#: reserved address as the pairing exchange, so its two frames are pairing
+#: kinds too: ``envelope`` will not write a kind it does not know, and ``parse``
+#: hands anything it does not know to the ordinary message path. They lived in
+#: server_link alone for a while, which meant exactly that — the offer was
+#: refused on the way out, and would have been typed into a pane on the way in.
+SYNC_KEY_REQUEST = "sync-key-request"
+SYNC_KEY_OFFER = "sync-key-offer"
+
 PAIR_KINDS = frozenset(
-    {PAIR_REQUEST, PAIR_RESPONSE, PAIR_CONFIRM, PAIR_REJECT, PAIR_REVOKED}
+    {
+        PAIR_REQUEST,
+        PAIR_RESPONSE,
+        PAIR_CONFIRM,
+        PAIR_REJECT,
+        PAIR_REVOKED,
+        SYNC_KEY_REQUEST,
+        SYNC_KEY_OFFER,
+    }
 )
 
 #: The marker that tells a pairing message from somebody's chat. Deliberately
@@ -94,6 +121,10 @@ class Pairing:
     #: below exists precisely to check the relay.
     their_key: str
     our_nonce: str
+    #: Their X25519 encryption key, fixed by the first frame that carries one
+    #: and covered by the SAS like the signing key. Same rule about the
+    #: directory: never read from it.
+    their_enc_key: str = ""
     their_nonce: str = ""
     started_at: float = field(default_factory=time.time)
     #: When this exchange stops being answerable. Initialised to
@@ -195,27 +226,41 @@ def new_nonce() -> str:
     return base64.b64encode(secrets.token_bytes(16)).decode("ascii")
 
 
-def sas(*, key_a: str, key_b: str, nonce_a: str, nonce_b: str) -> str:
+def sas(
+    *,
+    key_a: str,
+    key_b: str,
+    enc_a: str,
+    enc_b: str,
+    nonce_a: str,
+    nonce_b: str,
+) -> str:
     """The six digits both machines show, as ``"482 913"``.
 
-    The keys are sorted so that the two ends — which disagree about which of
-    them is "a" — hash the same bytes. The nonces are ordered to match their
-    keys rather than sorted independently, or a relay could pair one side's
-    nonce with the other's key and still land on a matching digest.
+    The signing keys are sorted so that the two ends — which disagree about
+    which of them is "a" — hash the same bytes. The encryption key and the nonce
+    are ordered to match their signing key rather than sorted independently, or
+    a relay could pair one side's nonce (or encryption key) with the other's
+    signing key and still land on a matching digest.
 
     Empty on missing input rather than hashing whatever is there: a code
     computed from half an exchange would be a code two people could still
     successfully compare.
     """
-    if not (key_a and key_b and nonce_a and nonce_b):
+    if not (key_a and key_b and enc_a and enc_b and nonce_a and nonce_b):
         return ""
     first, second = (
-        ((key_a, nonce_a), (key_b, nonce_b))
+        ((key_a, enc_a, nonce_a), (key_b, enc_b, nonce_b))
         if key_a <= key_b
-        else ((key_b, nonce_b), (key_a, nonce_a))
+        else ((key_b, enc_b, nonce_b), (key_a, enc_a, nonce_a))
     )
     payload = "\x00".join(
-        (ENVELOPE_MARKER, first[0], second[0], first[1], second[1])
+        (
+            ENVELOPE_MARKER,
+            first[0], second[0],
+            first[1], second[1],
+            first[2], second[2],
+        )
     ).encode("utf-8")
     digest = hashlib.sha256(payload).digest()
     code = int.from_bytes(digest[:4], "big") % 1_000_000
@@ -223,10 +268,12 @@ def sas(*, key_a: str, key_b: str, nonce_a: str, nonce_b: str) -> str:
     return f"{text[:3]} {text[3:]}"
 
 
-def code_for(pairing: Pairing, *, our_key: str) -> str:
+def code_for(pairing: Pairing, *, our_key: str, our_enc_key: str) -> str:
     return sas(
         key_a=our_key,
         key_b=pairing.their_key,
+        enc_a=our_enc_key,
+        enc_b=pairing.their_enc_key,
         nonce_a=pairing.our_nonce,
         nonce_b=pairing.their_nonce,
     )
@@ -258,7 +305,9 @@ def active() -> list[Pairing]:
         return list(_pairings.values())
 
 
-def begin(device_id: str, *, device_name: str, their_key: str = "") -> Pairing:
+def begin(
+    device_id: str, *, device_name: str, their_key: str = "", their_enc_key: str = ""
+) -> Pairing:
     """Start asking *device_id* to pair. Raises when one is already in flight.
 
     One at a time per device, because two exchanges would produce two codes for
@@ -276,16 +325,31 @@ def begin(device_id: str, *, device_name: str, their_key: str = "") -> Pairing:
             role=ROLE_INITIATOR,
             state=STATE_AWAITING_RESPONSE,
             their_key=their_key,
+            their_enc_key=their_enc_key,
             our_nonce=new_nonce(),
         )
         _pairings[device_id] = pairing
         return pairing
 
 
-def accept_request(device_id: str, *, device_name: str, their_key: str, their_nonce: str) -> Pairing:
-    """Record an incoming request. This side now owes a response and a decision."""
+def accept_request(
+    device_id: str,
+    *,
+    device_name: str,
+    their_key: str,
+    their_enc_key: str,
+    their_nonce: str,
+) -> Pairing:
+    """Record an incoming request. This side now owes a response and a decision.
+
+    A request without an encryption key is refused, not completed from the
+    directory: the directory is the relay's word, and a key taken from there
+    would be the one key the six digits never checked.
+    """
     if not their_key or not their_nonce:
         raise PairingError("the request carries no key or no nonce")
+    if not their_enc_key:
+        raise PairingError("the request carries no encryption key")
     with _lock:
         now = time.time()
         _sweep(now)
@@ -301,6 +365,7 @@ def accept_request(device_id: str, *, device_name: str, their_key: str, their_no
             role=ROLE_RESPONDER,
             state=STATE_AWAITING_LOCAL,
             their_key=their_key,
+            their_enc_key=their_enc_key,
             our_nonce=new_nonce(),
             their_nonce=their_nonce,
         )
@@ -315,7 +380,9 @@ def accept_request(device_id: str, *, device_name: str, their_key: str, their_no
         return pairing
 
 
-def accept_response(device_id: str, *, their_key: str, their_nonce: str) -> Pairing:
+def accept_response(
+    device_id: str, *, their_key: str, their_enc_key: str, their_nonce: str
+) -> Pairing:
     """The other side answered our request. Both nonces are now known."""
     with _lock:
         _sweep(time.time())
@@ -331,7 +398,12 @@ def accept_response(device_id: str, *, their_key: str, their_nonce: str) -> Pair
         # screen and then swap the key it covers.
         if pairing.their_key and their_key and their_key != pairing.their_key:
             raise PairingError("the response offers a different signing key")
+        if not their_enc_key:
+            raise PairingError("the response carries no encryption key")
+        if pairing.their_enc_key and their_enc_key != pairing.their_enc_key:
+            raise PairingError("the response offers a different encryption key")
         pairing.their_key = pairing.their_key or their_key
+        pairing.their_enc_key = pairing.their_enc_key or their_enc_key
         pairing.their_nonce = their_nonce
         pairing.state = STATE_AWAITING_LOCAL
         # The moment this side has six digits to show. Not "they confirmed" —

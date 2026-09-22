@@ -1,6 +1,9 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { createSourceFile, isFunctionDeclaration, ScriptTarget, transpileModule } from 'typescript'
 import { join, resolve } from 'node:path'
 import { classifyEditorOpen, resolveExternalOpenTarget } from './editor-fallback'
+import { composePluginContributionQuery } from './plugins/pluginContributionQuery'
 
 describe('classifyEditorOpen', () => {
   it('classifies a plain file open', () => {
@@ -105,7 +108,7 @@ describe('resolveExternalOpenTarget – out-of-workspace opens (file_ws as the r
   // on a filesystem-root path both emit it — and the containment check must not
   // demand a '//' prefix for that root.
   it('resolves against the filesystem root when file_ws is /', () => {
-    expect(resolveExternalOpenTarget('/', 'notes.txt', always)).toBe('/notes.txt')
+    expect(resolveExternalOpenTarget('/', 'notes.txt', always)).toBe(resolve('/', 'notes.txt'))
   })
 
   it('applies the same containment rule to an external root', () => {
@@ -118,5 +121,54 @@ describe('resolveExternalOpenTarget – out-of-workspace opens (file_ws as the r
     // request into the diff/bare branches.
     expect(classifyEditorOpen({ filepath: 'notes.txt', file_ws: external })).toBe('file')
     expect(classifyEditorOpen({ file_ws: external })).toBe('bare')
+  })
+})
+
+
+describe('Host Mini-IDE locale authority', () => {
+  const extractFunction = (name: string): string => {
+    const source = createSourceFile('index.ts', readFileSync(resolve('src/main/index.ts'), 'utf8'), ScriptTarget.Latest, true)
+    const statement = source.statements.find(item => isFunctionDeclaration(item) && item.name?.text === name)
+    expect(statement).toBeDefined()
+    return transpileModule(statement!.getText(source), { compilerOptions: { target: ScriptTarget.ES2022 } }).outputText
+  }
+
+  it('routes initial and repeated editor opens through the v2 contribution window', async () => {
+    const openCatalogContributionWindow = vi.fn(async () => ({ ok: true }))
+    const createSender = new Function(
+      'miniIdeRecoveryEnabled',
+      'openCatalogContributionWindow',
+      'MINI_IDE_CONTRIBUTION',
+      'resolveExternalOpenTarget',
+      `${extractFunction('openMiniIdeEditor')}\nreturn openMiniIdeEditor`,
+    )
+    const openEditor = createSender(false, openCatalogContributionWindow, 'navide.mini-ide.window', () => null)
+    await expect(openEditor(null, { workspace_path: '/ws', filepath: 'a.ts', locale: 'en-US' })).resolves.toBe(true)
+    expect(openCatalogContributionWindow).toHaveBeenLastCalledWith(
+      'navide.mini-ide.window',
+      '/ws',
+      { filepath: 'a.ts', locale: 'en-US' },
+      undefined,
+      expect.any(Function),
+    )
+  })
+
+  it('keeps the current Host locale authoritative over the caller locale in the entry query', () => {
+    let hostLocale = 'ja-JP'
+    const createQuery = new Function(
+      'composePluginContributionQuery',
+      'currentUiTheme',
+      'currentUiLocale',
+      'backend',
+      'currentGitReadOnlyQuery',
+      `${extractFunction('catalogContributionQuery')}\nreturn catalogContributionQuery`,
+    )
+    const catalogQuery = createQuery(composePluginContributionQuery, () => 'dark', () => hostLocale, null, () => ({}))
+    const first = new URLSearchParams(catalogQuery('navide.mini-ide.window', '/ws', { filepath: 'a.ts', locale: 'en-US' }))
+    expect(first.get('locale')).toBe('ja-JP')
+    expect(first.get('filepath')).toBe('a.ts')
+    hostLocale = 'en-US'
+    const second = new URLSearchParams(catalogQuery('navide.mini-ide.window', '/ws', { filepath: 'b.ts', locale: 'ja-JP' }))
+    expect(second.get('locale')).toBe('en-US')
   })
 })

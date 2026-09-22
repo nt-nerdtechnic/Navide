@@ -1,3 +1,5 @@
+import { extname } from 'node:path'
+import { isWindows } from '../../shared/osplat'
 import { manifestReferencedFiles as publicManifestReferencedFiles } from '../../../packages/plugin-contracts/src/index'
 import { InstalledPluginError } from './pluginManifestErrors'
 import { parseManifestJson } from './pluginManifestJson'
@@ -61,9 +63,31 @@ export function manifestReferencedFiles(manifest: InstalledManifest): string[] {
   return publicManifestReferencedFiles(manifest)
 }
 
+/**
+ * The file a manifest's `backend.entry` names on this platform.
+ *
+ * A package ships one manifest for every platform, so the entry is written
+ * without an extension (`backend/navide-plans`); on Windows the packaged
+ * executable beside it is `navide-plans.exe`, and a bare name resolves to
+ * that the way a PATH lookup would.
+ */
+export function backendEntryOnDisk(entry: string): string {
+  if (!isWindows() || extname(entry) !== '') return entry
+  return `${entry}.exe`
+}
+
+/** `manifestReferencedFiles`, each as the path this platform will read. */
+function manifestReferencedFilesOnDisk(manifest: InstalledManifest): string[] {
+  return manifestReferencedFiles(manifest).map((referenced) =>
+    isManifestV2(manifest) && referenced === manifest.backend?.entry
+      ? backendEntryOnDisk(referenced)
+      : referenced
+  )
+}
+
 export function assertManifestFiles(manifest: InstalledManifest, availablePaths: Iterable<string>): void {
   const available = new Set(availablePaths)
-  for (const path of manifestReferencedFiles(manifest)) {
+  for (const path of manifestReferencedFilesOnDisk(manifest)) {
     if (!available.has(path)) {
       throw new InstalledPluginError(`manifest referenced file is missing: ${path}`)
     }

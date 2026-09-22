@@ -44,11 +44,16 @@ function assertSameIdentity(expected, actual, filePath) {
   }
 }
 
-/** Read a package file without following a replaced final path component. */
+/**
+ * Read a package file without following a replaced final path component.
+ *
+ * `O_NOFOLLOW` makes the kernel refuse a symlink outright. Windows has no such
+ * flag; there the `lstat` before the open still rejects a symlink at the path,
+ * and comparing that identity with the opened descriptor's `fstat` catches a
+ * swap in between, so the guarantee holds without the flag.
+ */
 export function readRegularFileNoFollow(filePath) {
-  if (typeof constants.O_NOFOLLOW !== 'number') {
-    throw new Error('platform does not support no-follow package file reads')
-  }
+  const noFollow = typeof constants.O_NOFOLLOW === 'number' ? constants.O_NOFOLLOW : 0
 
   const before = fileIdentity(lstatSync(filePath, { bigint: true }))
   assertRegularFile(before, filePath)
@@ -57,7 +62,7 @@ export function readRegularFileNoFollow(filePath) {
   try {
     const flags =
       constants.O_RDONLY |
-      constants.O_NOFOLLOW |
+      noFollow |
       (typeof constants.O_CLOEXEC === 'number' ? constants.O_CLOEXEC : 0)
     descriptor = openSync(filePath, flags)
 

@@ -19,7 +19,7 @@ const wire = vi.hoisted(() => ({
   status: 'connected' as string,
   panes: [] as Array<Record<string, unknown>>,
   diskOk: true,
-  calls: [] as Array<{ type: string }>,
+  calls: [] as Array<{ type: string; payload?: Record<string, unknown> }>,
 }))
 
 function fakeBackend() {
@@ -31,14 +31,21 @@ function fakeBackend() {
     port: ref(0),
     pid: ref(0),
     lastError: ref(''),
-    send: vi.fn(async (type: string) => {
-      wire.calls.push({ type })
+    send: vi.fn(async (type: string, sent?: Record<string, unknown>) => {
+      wire.calls.push({ type, payload: sent })
       const payload =
         type === 'agent_msg.list'
           ? { panes: wire.panes }
           : type === 'storage.usage'
             ? wire.diskOk
-              ? { disk: { totalBytes: 500 * GB, freeBytes: 120 * GB } }
+              ? {
+                  generatedAt: '2026-09-13T00:00:00.000Z',
+                  staleDays: 30,
+                  totalBytes: 7 * GB,
+                  disk: { totalBytes: 500 * GB, freeBytes: 120 * GB },
+                  groups: [],
+                  errors: [],
+                }
               : {}
             : { ok: true }
       return { id: 'r', type, ok: true, payload, error: null, timestamp: '' }
@@ -128,6 +135,9 @@ async function mountModal(
     usageOver?: Parameters<typeof fakeUsage>[2]
     localRows?: ReturnType<typeof localRow>[]
     autoReclaimMinutes?: string
+    workspacePaths?: string[]
+    /** Mount the real Teleport into document.body instead of stubbing it. */
+    realTeleport?: boolean
   } = {}
 ): Promise<{ w: VueWrapper; refresh: ReturnType<typeof vi.fn> }> {
   const usage = fakeUsage(opts.bytes ?? DEFAULT_BYTES, opts.cpu ?? DEFAULT_CPU, opts.usageOver)
@@ -139,10 +149,12 @@ async function mountModal(
       localRows: opts.localRows ?? [],
       autoReclaimOn: true,
       autoReclaimMinutes: opts.autoReclaimMinutes ?? '45',
+      workspacePaths: opts.workspacePaths,
     },
     // The modal teleports to <body>; stubbing that keeps the tree inside the
     // wrapper, which is what every query here reads from.
-    global: { plugins: [i18n], stubs: { teleport: true } },
+    global: { plugins: [i18n], stubs: opts.realTeleport ? {} : { teleport: true } },
+    attachTo: opts.realTeleport ? document.body : undefined,
   })
   await flushPromises()
   return { w, refresh: usage.refresh }
@@ -405,15 +417,42 @@ describe('ResourceManagerModal', () => {
 
   // The scan walks several large trees, so it is a button rather than part of
   // the sampling loop — nothing should ask for it on its own.
+  //
+  // These two mount the real Teleport: the stub re-creates its slot content on
+  // every render, which remounts the Storage section and drops its open/closed
+  // state — an artifact of the stub, not of the modal.
   it('does not scan the disk until asked', async () => {
-    const { w } = await mountModal()
+    const { w } = await mountModal({ workspacePaths: ['/Users/test/code/demo'], realTeleport: true })
+    const q = (sel: string) => document.querySelector<HTMLElement>(sel)
     expect(wire.calls.some((c) => c.type === 'storage.usage')).toBe(false)
-    expect(w.get('[data-part="disk"]').text()).toBe(i18n.global.t('resource.disk-unscanned'))
+    expect(q('[data-part="disk"]')?.textContent?.trim()).toBe(i18n.global.t('resource.disk-unscanned'))
+    expect(q('[data-metric="disk"] [data-part="value"]')?.textContent?.trim()).toBe('—')
+    // The Storage section below the table is the same report, also unscanned.
+    expect(q('[data-part="storage"]')?.dataset.open).toBe('false')
 
-    await w.get('[data-act="scan-disk"]').trigger('click')
+    q('[data-act="scan-disk"]')?.click()
     await flushPromises()
-    expect(wire.calls.some((c) => c.type === 'storage.usage')).toBe(true)
-    expect(w.get('[data-part="disk"]').text()).toContain('120 GB')
+    const scan = wire.calls.find((c) => c.type === 'storage.usage')
+    // The host's workspace list rides along, as it did from the Settings page.
+    expect(scan?.payload).toEqual({ workspacePaths: ['/Users/test/code/demo'], staleDays: 30 })
+    expect(q('[data-part="disk"]')?.textContent).toContain('120 GB')
+    expect(q('[data-metric="disk"] [data-part="value"]')?.textContent?.trim()).toBe('7.0 GB')
+    // One scan feeds both surfaces: the section opened on the same report,
+    // and the card's Scan button yields to the section's Rescan.
+    expect(q('[data-part="storage"]')?.dataset.open).toBe('true')
+    expect(q('[data-act="scan-disk"]')).toBeNull()
+    expect(wire.calls.filter((c) => c.type === 'storage.usage')).toHaveLength(1)
+    w.unmount()
+  })
+
+  it('scans from the Storage section header too, sharing the one report', async () => {
+    const { w } = await mountModal({ realTeleport: true })
+    const q = (sel: string) => document.querySelector<HTMLElement>(sel)
+    q('[data-act="rescan"]')?.click()
+    await flushPromises()
+    expect(wire.calls.filter((c) => c.type === 'storage.usage')).toHaveLength(1)
+    expect(q('[data-part="disk"]')?.textContent).toContain('120 GB')
+    expect(q('[data-part="storage"]')?.dataset.open).toBe('true')
     w.unmount()
   })
 

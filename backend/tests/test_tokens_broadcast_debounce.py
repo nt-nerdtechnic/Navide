@@ -21,18 +21,27 @@ from agent_team_backend.log_readers import TokenUsage
 @pytest.fixture(autouse=True)
 def _fast_debounce(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(app, "_TOKENS_BROADCAST_DEBOUNCE_SEC", 0.01)
+    create_task = asyncio.create_task
+    tasks: list[asyncio.Task] = []
+
+    def track_task(coro):
+        task = create_task(coro)
+        tasks.append(task)
+        return task
+
+    monkeypatch.setattr(app.asyncio, "create_task", track_task)
     app._pending_tokens_broadcast.clear()
-    yield
+    yield tasks
     app._pending_tokens_broadcast.clear()
 
 
 @pytest.mark.asyncio
-async def test_burst_coalesces_to_one_broadcast(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_burst_coalesces_to_one_broadcast(monkeypatch: pytest.MonkeyPatch, _fast_debounce) -> None:
     monkeypatch.setattr(app.tokens_store, "snapshot", lambda ws: {"ws": ws})
     with patch.object(app, "broadcast", new_callable=AsyncMock) as mock_broadcast:
         for _ in range(50):
             app._schedule_tokens_broadcast("/ws/a")
-        await asyncio.sleep(0.05)
+        await asyncio.wait_for(asyncio.gather(*_fast_debounce), timeout=5)
         mock_broadcast.assert_called_once()
         event = mock_broadcast.call_args.args[0]
         assert event["type"] == "tokens.changed"
@@ -40,12 +49,12 @@ async def test_burst_coalesces_to_one_broadcast(monkeypatch: pytest.MonkeyPatch)
 
 
 @pytest.mark.asyncio
-async def test_workspaces_debounce_independently(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_workspaces_debounce_independently(monkeypatch: pytest.MonkeyPatch, _fast_debounce) -> None:
     monkeypatch.setattr(app.tokens_store, "snapshot", lambda ws: {"ws": ws})
     with patch.object(app, "broadcast", new_callable=AsyncMock) as mock_broadcast:
         app._schedule_tokens_broadcast("/ws/a")
         app._schedule_tokens_broadcast("/ws/b")
-        await asyncio.sleep(0.05)
+        await asyncio.wait_for(asyncio.gather(*_fast_debounce), timeout=5)
         assert mock_broadcast.call_count == 2
         broadcast_workspaces = {
             call.args[0]["payload"]["ws"] for call in mock_broadcast.call_args_list
@@ -54,13 +63,16 @@ async def test_workspaces_debounce_independently(monkeypatch: pytest.MonkeyPatch
 
 
 @pytest.mark.asyncio
-async def test_new_burst_after_window_broadcasts_again(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_new_burst_after_window_broadcasts_again(monkeypatch: pytest.MonkeyPatch, _fast_debounce) -> None:
     monkeypatch.setattr(app.tokens_store, "snapshot", lambda ws: {"ws": ws})
     with patch.object(app, "broadcast", new_callable=AsyncMock) as mock_broadcast:
         app._schedule_tokens_broadcast("/ws/a")
-        await asyncio.sleep(0.05)
+        # A fixed sleep may expire before _fire even starts on a busy loop.
+        # Wait for the first real broadcast before declaring a new burst;
+        # task completion also drains its trailing quota reconciliation.
+        await asyncio.wait_for(asyncio.gather(*_fast_debounce), timeout=5)
         app._schedule_tokens_broadcast("/ws/a")
-        await asyncio.sleep(0.05)
+        await asyncio.wait_for(asyncio.gather(*_fast_debounce), timeout=5)
         assert mock_broadcast.call_count == 2
 
 

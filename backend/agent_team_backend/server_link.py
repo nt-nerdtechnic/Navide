@@ -65,6 +65,7 @@ from . import (
     osplat,
     pane_policy,
     remote_roster,
+    sync_keyring,
     trust_store,
 )
 
@@ -209,6 +210,19 @@ REASON_UNAUTHENTICATED = "unauthenticated"
 #: filled and the relay is not ours to change.
 PAIRING_WORKSPACE = "_navide"
 PAIRING_PANE = "_pairing"
+
+#: The account sync key travels between two ALREADY PAIRED devices on the same
+#: reserved address as the pairing exchange. It rides that channel rather than
+#: a new one because the signature check in front of it is the one that matters
+#: here — a frame from a pinned device is verified against the pinned key — and
+#: because the wrapped key inside is sealed to the recipient regardless of what
+#: carries it. The kinds are device_pairing's, because that is what decides
+#: which kinds may be written and which are recognised on arrival.
+SYNC_KEY_REQUEST = device_pairing.SYNC_KEY_REQUEST
+SYNC_KEY_OFFER = device_pairing.SYNC_KEY_OFFER
+
+#: How long a device with no key waits for a paired peer to hand one over.
+SYNC_KEY_WAIT_S = 8.0
 
 #: What a device that has never been paired with is told. Distinct from
 #: "policy-denied" on purpose: the rules are not what refused it, and the sender
@@ -615,6 +629,8 @@ class ServerLink:
         # The member id pinned for *this link's* credential. Never the one the
         # last auth.hello asserted: that is the value C1 moved.
         self._own_member = ""
+        #: The keyring namespace this link bound, or None before identity settled.
+        self._sync_namespace: str | None = None
         self._tasks: set[asyncio.Task] = set()
         self._device_id = ""
         #: Whether the id being claimed replaces one the server just refused.
@@ -641,6 +657,9 @@ class ServerLink:
         # the raw rows are kept here as well. None means "never received one",
         # which an empty directory must not be confused with.
         self._directory: list[dict[str, Any]] | None = None
+        #: Built on first use so a link that never connects never touches the
+        #: Keychain looking for a sync key.
+        self._sync_engine: Any = None
         # Device ids the server last reported online, or None while no
         # presence.changed has arrived. Kept apart from the per-session
         # ``hostOnline`` flag because the two facts arrive on different events
@@ -686,6 +705,9 @@ class ServerLink:
 
     async def stop(self) -> None:
         self._stopped = True
+        # No link, no account: the ring stays in the vault for the next
+        # sign-in to the same account, but nothing may read it meanwhile.
+        sync_keyring.unbind()
         task = self._task
         self._task = None
         for spawned in list(self._tasks):
@@ -864,6 +886,12 @@ class ServerLink:
                 # so the cache is realigned from a full directory read once per
                 # connection and kept current by the push after that.
                 await self._refresh_directory()
+                # Everything written on other devices while this one was away
+                # is waiting behind a cursor, and no `sync.changed` will be
+                # re-sent for it. One catch-up round per connection; deliberately
+                # spawned rather than awaited, because a large first sync must
+                # not hold the session open before its reader starts.
+                self._spawn(self._sync_all())
                 reporter = asyncio.create_task(self._report_loop())
                 # Deliberately *not* in the wait below. That set means "the
                 # connection is over when any of these finishes", and this task
@@ -924,6 +952,9 @@ class ServerLink:
         if msg_type == "messages.acked":
             self._on_message_acked(message.get("payload"))
             return
+        if msg_type == "sync.changed":
+            self._spawn(self._on_sync_changed(message.get("payload")))
+            return
         if msg_type == "policy.changed":
             self._spawn(self._on_policy_changed(message.get("payload")))
             return
@@ -942,6 +973,235 @@ class ServerLink:
             self._spawn(self._on_account_verified())
             return
         log.debug("navide-server event %r is not wired yet; ignoring it", msg_type)
+
+    def sync_engine(self) -> Any:
+        """This link's sync engine, built once.
+
+        The engine is handed ``_request`` rather than the link itself: it has
+        no business reaching into the connection, and a plain callable is what
+        lets the tests drive it against a stub server.
+        """
+        if self._sync_engine is None:
+            from . import app, sync_engine as engine_mod, sync_scopes
+            from .ipc import make_event
+
+            def _broadcast(delta: dict[str, Any]) -> None:
+                # Same event ui.settings.set sends, so every open window
+                # converges on a synced change the way it does on a local one.
+                self._spawn(
+                    app.broadcast(make_event("ui.settings_changed", {"settings": delta}))
+                )
+
+            engine = engine_mod.SyncEngine(
+                app.sync_store,
+                self._request,
+                device_id=lambda: self._device_id,
+                enabled=sync_scopes.scope_enabled,
+            )
+            engine.register(sync_scopes.PromptsScope(broadcast=_broadcast))
+            engine.register(sync_scopes.McpScope())
+            engine.register(sync_scopes.SkillsStateScope())
+            engine.register(sync_scopes.MemoryScope())
+            # One instance, shared with the spawn and sign-out paths; see
+            # sync_scopes.credentials_scope.
+            engine.register(sync_scopes.credentials_scope())
+            self._sync_engine = engine
+        return self._sync_engine
+
+    async def _offer_sync_key(self, device_id: str) -> bool:
+        """Wrap this account's sync key for one paired device and send it.
+
+        Nothing in here may raise. ``_finish_pairing`` awaits it as its last
+        step, and the only ``except`` above that is a narrow ``PairingError`` —
+        so an exception escaping this would come out of the pairing exchange
+        itself, after the pin was already written. The send is inside the guard
+        for that reason: it was outside it once, which made this docstring a
+        claim the code did not keep.
+        """
+        try:
+            if not await asyncio.to_thread(sync_keyring.has_account_key):
+                return False
+            # The recipient key comes from the pin the pairing wrote — the one
+            # the six digits covered — and never from the directory. The
+            # directory is the relay's word, and a relay that could name the
+            # recipient here would be handed every record in the account. A
+            # pin taken before the encryption key was part of the exchange
+            # has none, and is refused rather than completed from the
+            # directory: pairing again is the fix, not trusting the relay once.
+            pin = await asyncio.to_thread(trust_store.pin_for, device_id)
+            recipient = self._sync_key_peer(pin, device_id=device_id, kind=SYNC_KEY_OFFER)
+            if not recipient:
+                return False
+            wrapped = await asyncio.to_thread(
+                sync_keyring.wrap_for,
+                recipient_public_key=recipient,
+                from_device=self._device_id,
+                to_device=device_id,
+                namespace=self._sync_namespace,
+            )
+            return await self._send_pair_frame(device_id, SYNC_KEY_OFFER, wrapped=wrapped)
+        except Exception as err:  # noqa: BLE001 - pairing must survive this
+            log.warning("could not hand the sync key to %s: %s", device_id, err)
+            return False
+
+    def _sync_key_peer(self, pin: dict[str, Any] | None, *, device_id: str, kind: str) -> str:
+        """The encryption key the account sync key may travel to or from
+        *device_id*, or "" with the reason logged.
+
+        Paired is not enough. A pairing is a fact about *machines* — this one
+        and that one compared six digits — and pins exist for other people's
+        machines too, the ones the pane policy lets drive a pane here. The
+        account key is a fact about an *account*: it opens every synced
+        record, so it goes only to a device the pin says belongs to this
+        account's own member, approved, and whose pairing pinned an
+        encryption key. The member id in the pin was written by the pairing
+        from this machine's own credential context, never from the frame.
+        The same test guards both directions: a request from a device that
+        must not hold the key is not answered, and an offer from one is not
+        adopted, because an adopted key decides which records this machine
+        can read and whose it writes into.
+        """
+        if not isinstance(pin, dict):
+            log.info("ignoring a %s from %s: that device is not paired with this one", kind, device_id)
+            return ""
+        if pin.get("approved") is not True:
+            log.info("ignoring a %s from %s: that pairing was never approved", kind, device_id)
+            return ""
+        if not self._own_member or str(pin.get("memberId") or "") != self._own_member:
+            log.warning(
+                "refusing a %s with %s: that device is paired but belongs to another "
+                "account, and the sync key never leaves this one",
+                kind, device_id,
+            )
+            return ""
+        recipient = str(pin.get("encKey") or "")
+        if not recipient:
+            log.warning(
+                "refusing a %s with %s: its pairing pinned no encryption key; unpair "
+                "that device and pair it again",
+                kind, device_id,
+            )
+            return ""
+        return recipient
+
+    async def _adopt_sync_key(self, device_id: str, wrapped: str) -> None:
+        """Take the account key a paired device sealed for this one."""
+        try:
+            await asyncio.to_thread(
+                sync_keyring.accept_wrapped,
+                wrapped,
+                from_device=device_id,
+                to_device=self._device_id,
+                namespace=self._sync_namespace,
+            )
+        except sync_keyring.KeyConflict:
+            # Two keys exist for one account, which means one of them was
+            # minted while the other device was away. Said out loud rather than
+            # resolved here: whichever is dropped takes its records with it.
+            log.error(
+                "%s offered a different sync key; this machine keeps the one it has, "
+                "and the two will not read each other's synced records",
+                device_id,
+            )
+        except Exception as err:  # noqa: BLE001 - an unreadable offer is not fatal
+            log.warning("the sync key offered by %s did not open: %s", device_id, err)
+        else:
+            self._spawn(self._sync_all())
+
+    async def offer_sync_key_to_peers(self) -> dict[str, Any]:
+        """Hand the current ring to every device that may hold it — after a
+        rotation, so the others stop writing under the retired key without
+        waiting for their next request. Same gate as any offer
+        (``_sync_key_peer``); a device that fails it is listed as skipped, and
+        one the relay would not take the frame for likewise.
+        """
+        offered: list[str] = []
+        skipped: list[str] = []
+        try:
+            pins = (await asyncio.to_thread(trust_store.load)).get("pins") or {}
+        except Exception as err:  # noqa: BLE001 - an unreadable store offers to nobody
+            log.warning("cannot offer the sync key: the trust store would not answer: %s", err)
+            return {"offered": offered, "skipped": skipped, "error": str(err)}
+        for device_id, pin in pins.items():
+            if device_id == self._device_id:
+                continue
+            if not self._sync_key_peer(pin, device_id=device_id, kind=SYNC_KEY_OFFER):
+                skipped.append(device_id)
+            elif await self._offer_sync_key(device_id):
+                offered.append(device_id)
+            else:
+                skipped.append(device_id)
+        return {"offered": offered, "skipped": skipped}
+
+    async def ensure_sync_key(self) -> bool:
+        """Make sure this machine holds the account key, without minting a second.
+
+        Minting is safe exactly once per account. A machine that mints while a
+        paired device is merely offline would write records that device can
+        never read — and the failure is silent, because both sides go on
+        working. So the rule is narrow: mint only when this machine has paired
+        with nobody. With peers present, ask them and wait; if none answers,
+        say so and sync nothing.
+        """
+        if await asyncio.to_thread(sync_keyring.has_account_key):
+            return True
+        try:
+            pins = (await asyncio.to_thread(trust_store.load)).get("pins") or {}
+        except Exception as err:  # noqa: BLE001 - an unreadable store is not "no peers"
+            log.warning("the trust store would not say who this machine is paired with: %s", err)
+            return False
+        peers = [device for device in pins if device != self._device_id]
+        if not peers:
+            try:
+                await asyncio.to_thread(sync_keyring.ensure_account_key)
+            except sync_keyring.KeyringError as err:
+                # No account bound, or an older key waiting to be adopted:
+                # both mean "do not mint", and sync stays off until resolved.
+                log.warning("not minting a sync key: %s", err)
+                return False
+            log.info("this is the first device of the account; minted its sync key")
+            return True
+        asked = 0
+        for device in peers:
+            if await self._send_pair_frame(device, SYNC_KEY_REQUEST):
+                asked += 1
+        if asked:
+            deadline = time.monotonic() + SYNC_KEY_WAIT_S
+            while time.monotonic() < deadline:
+                await asyncio.sleep(0.25)
+                if await asyncio.to_thread(sync_keyring.has_account_key):
+                    return True
+        log.info(
+            "no paired device answered with the account sync key; syncing nothing "
+            "until one of them is online"
+        )
+        return False
+
+    async def _sync_all(self) -> None:
+        """Catch up every enabled scope. Never raises into the session."""
+        try:
+            from . import sync_scopes
+
+            if not any(sync_scopes.enabled_scopes().values()):
+                return  # nothing is switched on: do not even look for a key
+            if not await self.ensure_sync_key():
+                return
+            await self.sync_engine().sync_all()
+        except Exception as err:  # noqa: BLE001 - sync is never load-bearing
+            log.warning("the sync catch-up round failed: %s", err)
+
+    async def _on_sync_changed(self, payload: Any) -> None:
+        """Another device wrote something; read that one scope."""
+        data = payload if isinstance(payload, dict) else {}
+        scope = str(data.get("scope") or "")
+        if not scope:
+            return
+        try:
+            if not await self.ensure_sync_key():
+                return
+            await self.sync_engine().sync(scope)
+        except Exception as err:  # noqa: BLE001 - same reason as above
+            log.warning("syncing %s after a change notice failed: %s", scope, err)
 
     async def _on_revoked(self, payload: Any) -> None:
         """The server withdrew this member's access mid-connection.
@@ -1155,17 +1415,80 @@ class ServerLink:
             # changes the store's answer has to make adoption run again. That is
             # why `p2p.trust.rebuild` reconnects rather than clearing a string.
             self._trust_locked = ""
+            await self._bind_sync_keyring(config, self.member_id)
         except trust_store.TrustStoreLocked as err:
             # The link stays up: the account view, the roster and the team
             # management calls do not depend on any of this, and dropping the
             # connection would hide the reason. Message traffic is what stops.
             self._trust_locked = str(err)
+            sync_keyring.unbind()
             log.error("cross-device traffic is refused on this machine: %s", err)
             await self._announce_trust_notices()
         except Exception as err:  # noqa: BLE001
             self._trust_locked = f"the device trust store could not be opened ({err})"
+            sync_keyring.unbind()
             log.error("cross-device traffic is refused on this machine: %s", err)
             await self._announce_trust_notices()
+
+    async def _bind_sync_keyring(self, config: ServerLinkConfig, member_id: str) -> None:
+        """Point the sync keyring at this account's ring, now that the pin says
+        which account this is.
+
+        The namespace is the address plus the pinned member, so signing out
+        and back in lands on the same ring and a different account lands on a
+        different one — which has none, and can read nothing written under
+        the first. The ring the first version stored had no account on it.
+        It is adopted here only when this credential is the only one this
+        machine has ever pinned — same server, same member, by construction —
+        so there is exactly one account it can belong to. Otherwise it is left where it is and said so, and the
+        keyring refuses to mint until somebody with more evidence decides;
+        a fresh key minted over it would orphan every record it wrote.
+        """
+        namespace = sync_keyring.namespace_for(config.url, member_id)
+        sync_keyring.bind(namespace)
+        # Named on every key operation this link dispatches off the loop, so
+        # one that starts after a sign-out and a different sign-in is refused
+        # rather than answered for the new account.
+        self._sync_namespace = namespace
+        await _note_account(namespace)
+        try:
+            if not await asyncio.to_thread(sync_keyring.legacy_ring_pending):
+                return
+            # Server and member both: the trust store's one pinned credential
+            # is this (address, token), so the old ring can only have been
+            # written while signed in here, as this member. A machine that
+            # pinned any second credential — another server, another account,
+            # or merely a second sign-in whose server the record does not
+            # name — has no such evidence and gets the explicit route.
+            sole = await asyncio.to_thread(
+                trust_store.only_credential_ever, config.url, config.token
+            )
+        except Exception as err:  # noqa: BLE001 - an unreadable answer is not evidence
+            log.warning("could not tell whether an older sync key needs adopting: %s", err)
+            return
+        if sole:
+            # Attributable, but not adopted here. Adoption moves the key out of
+            # the bare-name secret and deletes it, which an older release reads
+            # as "no key" and answers by minting a fresh one — orphaning every
+            # record the old key wrote, with no way back. A sign-in is not the
+            # moment to make a one-way change nobody asked for, and
+            # `sync.adopt_legacy_key` already exists for the moment somebody
+            # does: `legacy_ring_pending` stays true, so Settings → Sync offers
+            # it. That is also what this module says it does — "explicit, once,
+            # never inferred" — which this call did not.
+            log.info(
+                "a sync key from before accounts were bound is stored here and "
+                "belongs to %s; Settings offers adopting it",
+                member_id,
+            )
+            return
+        log.warning(
+            "a sync key from before accounts were bound is stored here, and this "
+            "machine has pinned more than one credential; it is not attributed "
+            "to %s, and sync stays off for this account until it is adopted or "
+            "discarded explicitly",
+            member_id,
+        )
 
     # ---- roster reporting ----
 
@@ -1506,6 +1829,59 @@ class ServerLink:
                 # adopt it now rather than making them wait for a reconnect.
                 self.email_verified = True
         return reply
+
+    # ---- cross-account shares ----
+
+    async def _carry(self, msg_type: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """One request over the authenticated link, in the reply-frame shape.
+
+        Same contract as ``set_policy`` and ``resend_verification``: the
+        server's reply frame, or a locally minted error frame naming the link
+        state when the request cannot leave this machine. Nothing is retried
+        and nothing is interpreted — the server's own codes come through as
+        they are, so the handler can show them.
+        """
+        if self._ws is None or not self._authenticated:
+            return self._unavailable()
+        try:
+            return await self._request(msg_type, payload)
+        except Exception as err:  # noqa: BLE001
+            log.warning("navide-server %s failed: %s", msg_type, err)
+            return {
+                "ok": False,
+                "error": {
+                    "code": LINK_OFFLINE,
+                    "message": (
+                        f"the navide-server link failed mid-request ({err}); it "
+                        f"reconnects on its own, so retry shortly"
+                    ),
+                },
+            }
+
+    async def create_share(
+        self, *, blob: str, size_bytes: int, ttl_seconds: int
+    ) -> dict[str, Any]:
+        """Store one sealed bundle. The server sees the ciphertext and its size;
+        the key never appears in this payload because there is no field for it."""
+        return await self._carry(
+            "shares.create",
+            {"blob": blob, "sizeBytes": size_bytes, "ttlSeconds": ttl_seconds},
+        )
+
+    async def claim_share(self, share_id: str) -> dict[str, Any]:
+        """Fetch one sealed bundle by id. Opening it is the caller's job."""
+        return await self._carry("shares.claim", {"shareId": share_id})
+
+    async def list_shares(self) -> dict[str, Any]:
+        """The shares this account published and has not revoked."""
+        return await self._carry("shares.list", {})
+
+    async def revoke_share(self, share_id: str) -> dict[str, Any]:
+        return await self._carry("shares.revoke", {"shareId": share_id})
+
+    async def list_devices(self) -> dict[str, Any]:
+        """The account's devices as the server knows them, for the sharing view."""
+        return await self._carry("devices.list", {})
 
     async def _on_account_verified(self) -> None:
         """The server says this account's address is confirmed."""
@@ -1927,8 +2303,24 @@ class ServerLink:
         into cleartext, and nothing on either end would say so. Once a peer has
         been seen with a key, a message that cannot be sealed is refused
         instead.
+
+        *A pinned encryption key outranks the directory.* A completed pairing
+        pins the X25519 key the six digits covered, and for that device the
+        message is sealed to the pin. A directory that then advertises some
+        other key is the substitution the pin exists to catch, and the send is
+        refused rather than addressed to whoever the relay named. A pin taken
+        before the encryption key was part of the exchange holds none, and for
+        that device the two rules above still apply as they always did.
         """
         key = remote_roster.public_key_for(to_device)
+        pinned = await asyncio.to_thread(trust_store.pinned_encryption_key, to_device)
+        if pinned:
+            if key and key != pinned:
+                raise device_crypto.CryptoError(
+                    "the directory names a different encryption key for this device "
+                    "than the one its pairing pinned"
+                )
+            key = pinned
         if key:
             sealed = {
                 "cipher": device_crypto.seal(
@@ -2531,12 +2923,18 @@ class ServerLink:
             return
 
         name = self._device_name_for(device_id)
+        # Their encryption key, from the frame and only the frame. It is
+        # covered by the six digits exactly as the signing key is, and a
+        # frame without one is refused by device_pairing rather than
+        # completed from the directory.
+        their_enc_key = str(frame.get("encKey") or "")
         try:
             if kind == device_pairing.PAIR_REQUEST:
                 pairing = device_pairing.accept_request(
                     device_id,
                     device_name=name,
                     their_key=key,
+                    their_enc_key=their_enc_key,
                     their_nonce=str(frame.get("nonce") or ""),
                 )
                 await self._send_pair_frame(
@@ -2544,11 +2942,25 @@ class ServerLink:
                     device_pairing.PAIR_RESPONSE,
                     nonce=pairing.our_nonce,
                     signKey=await asyncio.to_thread(device_signing.public_key),
+                    encKey=await asyncio.to_thread(device_crypto.public_key),
                 )
             elif kind == device_pairing.PAIR_RESPONSE:
                 device_pairing.accept_response(
-                    device_id, their_key=key, their_nonce=str(frame.get("nonce") or "")
+                    device_id,
+                    their_key=key,
+                    their_enc_key=their_enc_key,
+                    their_nonce=str(frame.get("nonce") or ""),
                 )
+            elif kind in (SYNC_KEY_REQUEST, SYNC_KEY_OFFER):
+                # Only between this account's own approved devices. The
+                # pairing kinds exist to serve strangers; these two must not,
+                # and "paired" alone is not the test — see _sync_key_peer.
+                if not self._sync_key_peer(pin, device_id=device_id, kind=kind):
+                    pass
+                elif kind == SYNC_KEY_REQUEST:
+                    await self._offer_sync_key(device_id)
+                else:
+                    await self._adopt_sync_key(device_id, str(frame.get("wrapped") or ""))
             elif kind == device_pairing.PAIR_CONFIRM:
                 # Recorded first, completed second. They may have confirmed
                 # before this side's person did, in which case there is nothing
@@ -2600,6 +3012,7 @@ class ServerLink:
                 trust_store.pin_paired_device,
                 device_id,
                 sign_key=pairing.their_key,
+                enc_key=pairing.their_enc_key,
                 member_id=member_id or member_id_for(device_id),
                 own_member_id=self._own_member,
             )
@@ -2613,6 +3026,11 @@ class ServerLink:
             device_name=pairing.device_name or self._device_name_for(device_id),
         )
         log.info("paired with device %s", device_id)
+        # A device that has just joined cannot read anything already synced
+        # until it holds the account key, and there is no better moment to hand
+        # it over: the two ends have just authenticated each other by a code a
+        # person compared. Failure is logged, not raised — pairing succeeded.
+        await self._offer_sync_key(device_id)
         return True
 
     async def start_pairing(self, device_id: str) -> dict[str, Any]:
@@ -2646,6 +3064,7 @@ class ServerLink:
             device_pairing.PAIR_REQUEST,
             nonce=pairing.our_nonce,
             signKey=await asyncio.to_thread(device_signing.public_key),
+            encKey=await asyncio.to_thread(device_crypto.public_key),
         )
         if not sent:
             # Nothing is left half-started: the other side has heard nothing, so
@@ -2691,6 +3110,7 @@ class ServerLink:
     def pairing_rows(self) -> list[dict[str, Any]]:
         """The in-flight exchanges, as the account view draws them."""
         our_key = device_signing.public_key()
+        our_enc_key = device_crypto.public_key()
         rows = []
         for pairing in device_pairing.active():
             rows.append(
@@ -2699,7 +3119,9 @@ class ServerLink:
                     "deviceName": pairing.device_name or self._device_name_for(pairing.device_id),
                     "role": pairing.role,
                     "state": pairing.state,
-                    "code": device_pairing.code_for(pairing, our_key=our_key),
+                    "code": device_pairing.code_for(
+                        pairing, our_key=our_key, our_enc_key=our_enc_key
+                    ),
                     "fingerprint": device_signing.fingerprint(pairing.their_key),
                     "startedAt": pairing.started_at,
                 }
@@ -3050,12 +3472,43 @@ class ServerLink:
 _link: ServerLink | None = None
 
 
+#: The namespace of the account the last link settled on, or None when the
+#: process has never settled one or has since signed out. What tells "the
+#: same account reconnected" — which changes nothing — from "a different
+#: account signed in" or "signed out", both of which let go of everything the
+#: previous account imported. Kept at module level because the ServerLink
+#: instance is replaced on every reconfigure.
+_settled_account: str | None = None
+
+
+async def _note_account(namespace: str | None) -> None:
+    """Record which account is settled now; on a real change, tell the sync
+    scopes so imported credentials and the credentials scope's engine state
+    go with the account that owned them. The ring is not touched — it stays
+    under its own namespace for that account's next sign-in."""
+    global _settled_account
+    previous = _settled_account
+    _settled_account = namespace
+    if previous is None or previous == namespace:
+        return
+    try:
+        from . import sync_scopes
+
+        await asyncio.to_thread(sync_scopes.on_account_changed)
+    except Exception as err:  # noqa: BLE001 - the link is not what this protects
+        log.warning("could not clear the previous account's imported state: %s", err)
+
+
 async def start() -> None:
     """Start the process's one link, unless no server is configured."""
     global _link
     link = ServerLink()
     if await link.start():
         _link = link
+    else:
+        # Not configured: signed out, or never signed in. Either way whatever
+        # the previous account imported must not wait here for the next one.
+        await _note_account(None)
 
 
 async def stop() -> None:
@@ -3081,6 +3534,172 @@ async def reconfigure() -> None:
     """
     await stop()
     await start()
+
+
+async def sync_now(scope: str = "") -> list[dict[str, Any]]:
+    """Run a sync round now, for one scope or all of them.
+
+    Answers rather than raises when there is no link: "not connected" is an
+    ordinary state for a Settings pane to be told about, and the UI already
+    shows the link's own status beside it.
+    """
+    link = _link
+    if link is None or not link._authenticated:  # noqa: SLF001 - same module
+        return [{"scope": scope or "all", "skipped": "not-connected"}]
+    if not await link.ensure_sync_key():
+        return [{"scope": scope or "all", "skipped": "no-key"}]
+    engine = link.sync_engine()
+    if scope:
+        return [await engine.sync(scope)]
+    return await engine.sync_all()
+
+
+async def sync_inventory(scope: str = "") -> dict[str, Any]:
+    """What this machine and the account hold, side by side. Reads only.
+
+    Answers rather than raises when there is no link, for the same reason
+    ``sync_now`` does: "not connected" is an ordinary thing for a Settings pane
+    to be told, and it must not arrive looking like an empty cloud — that reads
+    as "nothing is synced" and invites somebody to upload what is already up
+    there.
+
+    The local half is left out when the link is down rather than listed on its
+    own: reaching the adapters means building the engine, which belongs to the
+    link. ``share.inventory`` already lists this machine's own items offline.
+    """
+    from . import sync_engine as engine_mod, sync_scopes
+
+    enabled = await asyncio.to_thread(sync_scopes.enabled_scopes)
+    link = _link
+    connected = link is not None and link._authenticated  # noqa: SLF001 - same module
+    wanted = [scope] if scope else list(engine_mod.SCOPES)
+    scopes: dict[str, Any] = {}
+    for name in wanted:
+        if name not in engine_mod.SCOPES:
+            scopes[name] = {
+                "scope": name,
+                "status": engine_mod.INVENTORY_UNKNOWN_SCOPE,
+                "items": [],
+            }
+        elif not connected or link is None:
+            scopes[name] = {
+                "scope": name,
+                "status": engine_mod.INVENTORY_NOT_CONNECTED,
+                "items": [],
+            }
+        else:
+            try:
+                scopes[name] = await link.sync_engine().inventory(name)
+            except Exception as err:  # noqa: BLE001 - one bad scope must still list
+                log.warning("the inventory of %s could not be read: %s", name, err)
+                scopes[name] = {
+                    "scope": name,
+                    "status": engine_mod.INVENTORY_ERROR,
+                    "error": str(err),
+                    "items": [],
+                }
+    directory = await list_devices() if connected else None
+    return {
+        "status": engine_mod.INVENTORY_OK if connected else engine_mod.INVENTORY_NOT_CONNECTED,
+        "scopes": scopes,
+        "devices": _inventory_devices(scopes, directory),
+        "scopeEnabled": enabled,
+    }
+
+
+def _inventory_devices(
+    scopes: dict[str, Any], directory: dict[str, Any] | None
+) -> list[dict[str, Any]]:
+    """The devices the listed cloud rows were written by, newest write first.
+
+    Two timestamps, named apart because they answer different questions.
+    ``lastWriteAt`` is the newest ``updatedAt`` this account's rows carry for
+    the device — when it last *wrote* — and is derived here from the rows
+    themselves. ``lastSeenAt`` is when the server last saw the device online,
+    from ``devices.list``. A machine that has been on all week and changed
+    nothing has a fresh ``lastSeenAt`` and a stale ``lastWriteAt``; showing
+    only one of them would make it look like one that went away in March.
+
+    ``directory`` is the ``devices.list`` reply frame, or None when it could
+    not be asked. Then ``deviceName`` falls back to what the session directory
+    knows (today: nothing) and ``lastSeenAt`` to null; the rows are still
+    listed, because a name the server would not give is not a reason to hide
+    the records it did.
+    """
+    names = {
+        str(row.get("deviceId") or ""): str(row.get("deviceName") or "")
+        for row in remote_roster.list_devices()
+    }
+    seen: dict[str, str | None] = {}
+    payload = directory.get("payload") if directory and directory.get("ok") else None
+    listed = payload.get("devices") if isinstance(payload, dict) else None
+    for row in listed if isinstance(listed, list) else []:
+        if not isinstance(row, dict):
+            continue
+        device_id = str(row.get("deviceId") or "")
+        if not device_id:
+            continue
+        if row.get("deviceName"):
+            names[device_id] = str(row["deviceName"])
+        seen[device_id] = str(row["lastSeenAt"]) if row.get("lastSeenAt") else None
+    latest: dict[str, str] = {}
+    for scope_row in scopes.values():
+        for item in scope_row.get("items") or []:
+            remote = item.get("remote")
+            if not isinstance(remote, dict):
+                continue
+            device_id = str(remote.get("deviceId") or "")
+            written_at = str(remote.get("updatedAt") or "")
+            if device_id and written_at > latest.get(device_id, ""):
+                latest[device_id] = written_at
+    return sorted(
+        (
+            {
+                "deviceId": device_id,
+                "deviceName": names.get(device_id, ""),
+                "lastSeenAt": seen.get(device_id),
+                "lastWriteAt": written_at,
+            }
+            for device_id, written_at in latest.items()
+        ),
+        key=lambda row: row["lastWriteAt"],
+        reverse=True,
+    )
+
+
+async def sync_push_items(scope: str, item_ids: Any) -> list[dict[str, Any]]:
+    """Send the chosen items of one scope and report what became of each."""
+    link = _link
+    if link is None or not link._authenticated:  # noqa: SLF001 - same module
+        raise ConnectionError("the navide-server link is not connected")
+    if not await link.ensure_sync_key():
+        raise ConnectionError("this machine does not hold the account sync key")
+    return await link.sync_engine().push_items(scope, item_ids)
+
+
+async def sync_pull_items(scope: str, item_ids: Any) -> list[dict[str, Any]]:
+    """Take the chosen items of one scope and report what became of each."""
+    link = _link
+    if link is None or not link._authenticated:  # noqa: SLF001 - same module
+        raise ConnectionError("the navide-server link is not connected")
+    if not await link.ensure_sync_key():
+        raise ConnectionError("this machine does not hold the account sync key")
+    return await link.sync_engine().pull_items(scope, item_ids)
+
+
+def sync_conflicts(scope: str = "") -> list[dict[str, Any]]:
+    """Unresolved conflicts, readable whether or not the link is up."""
+    from . import app
+
+    return app.sync_store.conflicts(scope or None)
+
+
+def resolve_sync_conflict(scope: str, item_id: str, keep: str) -> None:
+    """Answer one conflict. Needs the adapters, so it goes through the link."""
+    link = _link
+    if link is None:
+        raise ConnectionError("the navide-server link is not running")
+    link.sync_engine().resolve(scope, item_id, keep)
 
 
 async def status() -> dict[str, Any]:
@@ -3199,6 +3818,14 @@ def self_fingerprint() -> str:
     return device_signing.fingerprint(device_signing.public_key())
 
 
+async def offer_sync_key_to_peers() -> dict[str, Any]:
+    """Offer the current ring to every eligible paired device, or say that no
+    link is up. Used after ``sync_keyring.rotate_account_key``."""
+    if _link is None:
+        return {"offered": [], "skipped": [], "error": "not-connected"}
+    return await _link.offer_sync_key_to_peers()
+
+
 async def start_pairing(device_id: str) -> dict[str, Any] | None:
     """Ask another device to pair, or None with no server configured."""
     return None if _link is None else await _link.start_pairing(device_id)
@@ -3218,6 +3845,17 @@ async def revoke_pairing(device_id: str) -> None:
 def own_member_id() -> str:
     """The member id pinned for this link's credential, or "" with no link."""
     return _link._own_member if _link is not None else ""
+
+
+def link_state() -> str:
+    """This machine's link state, without paying for ``status()``.
+
+    ``status()`` answers the Settings UI, so it reaches the Keychain for the
+    account email and the fingerprint. A caller that only has to know whether
+    cross-device addressing works right now needs none of that, and one of
+    those callers is an MCP tool answering on every invocation.
+    """
+    return _link.state() if _link is not None else STATE_UNCONFIGURED
 
 
 def local_device_id() -> str:
@@ -3300,6 +3938,38 @@ async def check_verification() -> dict[str, Any] | None:
     if _link is None:
         return None
     return await _link.check_verification()
+
+
+# Cross-account shares. None with no server configured, same as everything
+# above; every other outcome is a reply frame, the server's or a local one.
+async def create_share(*, blob: str, size_bytes: int, ttl_seconds: int) -> dict[str, Any] | None:
+    if _link is None:
+        return None
+    return await _link.create_share(blob=blob, size_bytes=size_bytes, ttl_seconds=ttl_seconds)
+
+
+async def claim_share(share_id: str) -> dict[str, Any] | None:
+    if _link is None:
+        return None
+    return await _link.claim_share(share_id)
+
+
+async def list_shares() -> dict[str, Any] | None:
+    if _link is None:
+        return None
+    return await _link.list_shares()
+
+
+async def revoke_share(share_id: str) -> dict[str, Any] | None:
+    if _link is None:
+        return None
+    return await _link.revoke_share(share_id)
+
+
+async def list_devices() -> dict[str, Any] | None:
+    if _link is None:
+        return None
+    return await _link.list_devices()
 
 
 def roster_changed() -> None:

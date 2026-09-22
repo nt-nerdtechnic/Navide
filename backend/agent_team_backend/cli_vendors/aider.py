@@ -44,12 +44,13 @@ arrive with up-to-rescan-interval latency.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import re
 from pathlib import Path
 from typing import Any
 
-from .base import Dep, VendorSpec
+from .base import AccountSwitchSpec, Dep, VendorSpec, dotenv_extract, dotenv_merge
 from ..log_readers.base import (
     ActivityEvent,
     IncrementalParseResult,
@@ -603,11 +604,91 @@ def _session_lookup_path(workspace_path: str, session_id: str) -> Path:
     return aider_history_path(workspace_path)
 
 
+# Credentials (aider 0.86.2, main.py load_dotenv_files / onboarding.py): the
+# CLI has no login of its own — an account is a provider API key. The one file
+# aider itself writes is ``~/.aider/oauth-keys.env`` (its OpenRouter OAuth
+# flow appends ``OPENROUTER_API_KEY="…"`` there), and it is the FIRST dotenv
+# file loaded, so every later ``.env`` on the git-root/cwd search path and
+# every ``--*-api-key`` flag or ``.aider.conf.yml`` value overrides it
+# (``load_dotenv(override=True)``, so even the process environment loses to a
+# ``.env`` file). Profiles therefore park one ``<PROVIDER>_API_KEY`` line of
+# that file per scope; whether the pane actually uses it depends on those
+# later sources, which the vault cannot see.
+AIDER_KEYS_FILE_REL = (".aider", "oauth-keys.env")
+AIDER_ACCOUNT_SCOPES = ("openrouter", "openai", "anthropic", "gemini", "deepseek")
+
+
+def _aider_env_name(scope: str) -> str:
+    return f"{scope.upper()}_API_KEY"
+
+
+def _aider_extract(document: str | None, scope: str) -> str | None:
+    if scope not in AIDER_ACCOUNT_SCOPES:
+        return None
+    return dotenv_extract(document, (_aider_env_name(scope),))
+
+
+def _aider_merge(document: str | None, scope: str, portion: str | None) -> str:
+    if scope not in AIDER_ACCOUNT_SCOPES:
+        raise ValueError(f"aider has no credential scope {scope!r}")
+    return dotenv_merge(document, (_aider_env_name(scope),), portion)
+
+
+def identity_from_secret(secret):
+    """A scoped slot holds ``{"<PROVIDER>_API_KEY": "<key>"}``: signed in
+    when the key is non-empty. A key names no person."""
+    data = None
+    if secret is not None:
+        try:
+            data = json.loads(secret)
+        except ValueError:
+            data = None
+    signed_in = isinstance(data, dict) and any(
+        isinstance(v, str) and v.strip() for v in data.values()
+    )
+    return {"email": None, "signedIn": signed_in}
+
+
 SPEC = VendorSpec(
     key="aider",
+    # Provider/model selection is open-ended; no verified default host set.
+    expected_hosts=(),
+    # History is a configurable workspace FILE, not a dedicated data root.
+    # Declaring its parent would scan unrelated repository/user files.
+    data_dirs=None,
     # Verified 2026-08-15: aider's package never mentions "skill".
     skills_supported=False,
     label="Aider",
+    # The only vendor here with no session ids at all: resume is
+    # `--chat-history-file <path> --restore-chat-history`, so there is nothing
+    # for a caller to name. cli_open_agent refuses `session_id` on this key
+    # rather than opening a pane that restores something else.
+    supports_session_resume=False,
+    # Multi-account = one provider API key per profile, parked in and
+    # restored to ``~/.aider/oauth-keys.env`` (see AIDER_KEYS_FILE_REL).
+    # "manual": there is no conversation to resume — the pane is relaunched
+    # into a new chat (``--restore-chat-history`` is a lossy summary), which
+    # is the user's call, never the transaction's.
+    live_file=AIDER_KEYS_FILE_REL,
+    slot_file="credential.json",
+    identity_from_secret=identity_from_secret,
+    account_switch=AccountSwitchSpec(
+        auth_scope="aider",
+        method="manual",
+        store="compound-file",
+        evidence="source",
+        verified_version="0.86.2",
+        scopes=AIDER_ACCOUNT_SCOPES,
+        extract=_aider_extract,
+        merge=_aider_merge,
+        # A later dotenv file overrides even these, but the process
+        # environment itself is overridden BY the dotenv files; the flags that
+        # win outright are command-line ones, which arrive through the spawn
+        # command, not the environment.
+        shadowing_env=(),
+        resume="lossy",
+        todo="a project .env / .aider.conf.yml / --api-key flag overrides the parked key and is invisible to switch_preflight; --restore-chat-history is a lossy summary, so the user must accept a new conversation",
+    ),
     session_path=_session_lookup_path,
     home_env_vars=("AIDER_CHAT_HISTORY_FILE", "AIDER_INPUT_HISTORY_FILE"),
     make_log_reader=AiderLogReader,

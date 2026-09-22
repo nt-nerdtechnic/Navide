@@ -4,7 +4,7 @@ import type { AgentSpec } from './types'
 
 export const SPEC = {
   agentKey: 'copilot',
-  label: 'Copilot CLI',
+  label: 'GitHub Copilot CLI',
   defaultCommand: 'copilot',
   // `--effort` is an accepted alias; the long form is used here. GitHub's
   // published CLI reference documents only the settings.json `effortLevel`
@@ -32,5 +32,7 @@ export const SPEC = {
   // Measured on a real PTY: the CLI itself emits `ESC[?1049h` during startup
   // (probe read 333 bytes of startup output) and keeps the conversation there.
   fullScreenTui: true,
-  hint: 'generalist'
+  hint: 'generalist',
+  // Quota failover: copilot.py reports one monthly premium-requests window.
+  quotaSemantics: { hard: ['monthly'], required: ['monthly'] },
 } as const satisfies AgentSpec

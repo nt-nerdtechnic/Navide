@@ -1,5 +1,6 @@
 import { revealPath as shellRevealPath } from './hostShell'
 import type { GitTransport } from '../../../shared/gitCompatibility'
+import { shellCommandArgv } from '../../../shared/osplat'
 import type { useBackend } from './useBackend'
 import type {
   ConflictStages,
@@ -262,8 +263,9 @@ export function createHostTerminalDockPort(backend: HostBackend): TerminalDockPo
   return {
     status: backend.status,
     shell: backend.shell,
+    spawnArgv: shellCommandArgv,
     autoRestart: backend.autoRestart,
-    input: (sessionId, data, timeoutMs) => send('terminal.input', { terminal_session_id: sessionId, data }, timeoutMs),
+    input: (sessionId, data, timeoutMs, opts) => send('terminal.input', { terminal_session_id: sessionId, data, ...(opts?.human ? { human: true } : {}) }, timeoutMs),
     create: (request: TerminalCreateRequest, timeoutMs) => send('terminal.create', {
       pane_id: request.paneId,
       create_generation: request.createGeneration,
@@ -276,7 +278,10 @@ export function createHostTerminalDockPort(backend: HostBackend): TerminalDockPo
       metadata: request.metadata,
       output_log_file: request.outputLogFile,
       login_profile_id: request.loginProfileId,
+      is_login: request.isLogin,
       replaces_terminal_id: request.replacesTerminalId,
+      ...(request.quotaTransactionId ? { quota_transaction_id: request.quotaTransactionId } : {}),
+      ...(request.quotaOriginalPaneId ? { quota_original_pane_id: request.quotaOriginalPaneId } : {}),
     }, timeoutMs),
     cancelCreate: (paneId, createGeneration) => send('terminal.create.cancel', {
       pane_id: paneId,

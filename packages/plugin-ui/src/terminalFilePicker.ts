@@ -64,7 +64,7 @@ export function createTerminalFilePicker(options: TerminalFilePickerOptions): Te
     const root = document.createElement('div')
     root.className = 'term-file-picker-root'
     Object.assign(root.style, {
-      position: 'fixed', inset: '0', zIndex: '99999',
+      position: 'fixed', inset: '0', zIndex: 'calc(var(--z-toast) + 200)',
       display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
       paddingTop: '80px', background: 'rgba(0,0,0,0.35)',
     })

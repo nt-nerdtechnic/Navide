@@ -19,6 +19,8 @@ import { resolvePlanStore, type PlanCtx, type WriteResult } from './composables/
 import { sanitizePlanSectionHtml } from './editor/planRuntime'
 import { resetUiScale, stepUiScaleBy } from './lib/uiScale'
 import PlansPane from './editor/PlansPane.vue'
+import WindowControls from './components/WindowControls.vue'
+import { needsDrawnWindowControls } from '../../shared/osplat'
 import { lastOpenedStorageKey, loadStoredValue, saveStoredChoice } from './editor/plansPaneModel'
 import { initKeybindingsPort, useKeybindings, setContext } from '@navide/plugin-ui/shared'
 import { registerCommand } from '@navide/plugin-ui/shared'
@@ -35,13 +37,24 @@ import { aiTerminalPaneId, buildPlanCliContext, type PlanCliMetaSummary } from '
 const params = new URLSearchParams(window.location.search)
 const workspacePath = params.get('workspace_path') ?? ''
 const workspaceBaseName = workspacePath.split('/').filter(Boolean).at(-1) ?? workspacePath
+// What this window's title calls the workspace: the alias the user gave it,
+// which the Host resolved and passed as `workspace_display_name`, else the
+// folder name. A blank or absent param means "no alias" — that is how clearing
+// one works. KNOWN LIMITATION: a load-time snapshot. Renaming the workspace
+// while this window is open does NOT retitle it; the title is correct again
+// the next time the window opens.
+const workspaceTitleName = params.get('workspace_display_name')?.trim() || workspaceBaseName
+// This window keeps the system's frame on macOS (see drawnFrameWhereNeeded in
+// main), so the bar is drawn only where the system draws none. Rendering it on
+// macOS would put a second title bar underneath the real one.
+const drawsOwnTitleBar = needsDrawnWindowControls()
 // Plan to auto-open on mount: the sidebar list clicked a plan, which opened
 // this window with the plan carried in the query string.
 const initialRelPath = params.get('rel_path') ?? ''
 const rawLocale =
   params.get('locale') ??
   (settingsGet<string | null>('agent-team:language', null) as string | null)
-const initialLocale = rawLocale === 'zh-TW' || rawLocale === 'en-US' ? rawLocale : null
+const initialLocale = rawLocale === 'zh-TW' || rawLocale === 'en-US' || rawLocale === 'ja-JP' ? rawLocale : null
 // Launched without one (Window menu), the window reopens on whichever plan this
 // workspace last had open, keyed per workspace like the sidebar's own choices.
 const lastOpenedKey = lastOpenedStorageKey(workspacePath)
@@ -442,7 +455,7 @@ onBeforeMount(() => {
 })
 
 onMounted(() => {
-  document.title = `${workspaceBaseName} — Plans`
+  document.title = `${workspaceTitleName} — Plans`
   loadTheme()
   offSettingsChange = onSettingsChanged((keys) => {
     if (keys.includes('agent-team:theme') || keys.includes('agent-team:theme-custom')) {
@@ -450,14 +463,14 @@ onMounted(() => {
     }
     if (keys.includes('agent-team:language')) {
       const nextLocale = settingsGet<string>('agent-team:language', '')
-      if (nextLocale === 'zh-TW' || nextLocale === 'en-US') {
+      if (nextLocale === 'zh-TW' || nextLocale === 'en-US' || nextLocale === 'ja-JP') {
         locale.value = nextLocale
         i18n.global.locale.value = nextLocale
       }
     }
   })
   window.agentTeam?.onLanguageChanged?.((nextLocale) => {
-    if (nextLocale === 'zh-TW' || nextLocale === 'en-US') {
+    if (nextLocale === 'zh-TW' || nextLocale === 'en-US' || nextLocale === 'ja-JP') {
       locale.value = nextLocale
       i18n.global.locale.value = nextLocale
       seedSettings({ 'agent-team:language': nextLocale })
@@ -479,6 +492,16 @@ onUnmounted(() => {
 
 <template>
   <div class="plan-window">
+    <!-- The bar the system is no longer drawing here. Draggable, with the
+         window's own controls at the right, like the main and editor windows. -->
+    <div v-if="drawsOwnTitleBar" class="plan-titlebar">
+      <WindowControls />
+      <span class="plan-titlebar-name">{{ workspaceTitleName }}</span>
+    </div>
+    <!-- The list, the document and the AI dock are one row; the bar above is
+         the column's other child. NotificationHost stays outside both — it is
+         a fixed overlay and takes no part in this layout. -->
+    <div class="plan-window-body">
     <aside class="plan-window-side">
       <PlansPane ref="plansPaneRef" :workspace-path="workspacePath" :backend="backend" @open-file="onOpenFile" @deleted="onPlanDeleted" />
     </aside>
@@ -610,6 +633,7 @@ onUnmounted(() => {
       :terminal-port="terminalPort"
       :build-context="buildPlanContext"
     />
+    </div>
     <NotificationHost />
   </div>
 </template>
@@ -618,9 +642,49 @@ onUnmounted(() => {
 .plan-window {
   background: var(--bg-base);
   color: var(--text-primary);
+  /* A column now: the title bar sits above the list / document / dock row,
+     which keeps its own horizontal layout inside `.plan-window-body`. */
   display: flex;
+  flex-direction: column;
   height: 100vh;
   overflow: hidden;
+}
+
+.plan-window-body {
+  display: flex;
+  flex: 1;
+  /* Without this the row refuses to shrink below its content and pushes the
+     title bar off the top of a short window. */
+  min-height: 0;
+  overflow: hidden;
+}
+
+.plan-titlebar {
+  flex-shrink: 0;
+  height: var(--titlebar-height);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  -webkit-app-region: drag;
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border-muted);
+  user-select: none;
+  /* No macOS traffic-light gutter to leave on the left: this bar exists only
+     where we draw the controls ourselves, and WindowControls' own global rule
+     reserves the room they need on the right. */
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
+.plan-titlebar-name {
+  flex: 1;
+  text-align: center;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-xs);
+  color: var(--text-muted);
 }
 
 .plan-window-side {

@@ -208,8 +208,8 @@ Scope:
 - Compatibility test kit and adapter health diagnostics
 - Reusable roles, pipelines, policies, team configurations, and engineering templates
 - Safe template packaging with version and capability metadata
-- Linux support with PTY, paths, permissions, packaging, and update parity
-- Windows support with ConPTY, filesystem behavior, packaging, and policy parity
+- Linux support with PTY, paths, permissions, packaging, and update parity — in `main`, covered by the Linux CI gates and shipped as an AppImage and a `.deb` for x64 since v0.2.2; remaining work is publishing the arm64 build, which release CI currently produces only on a manual dispatch
+- Windows support with ConPTY, filesystem behavior, packaging, and policy parity — in `main`, covered by the Windows CI gates and shipped as an NSIS installer for x64 since v0.2.2; remaining work is code signing and a graceful CLI shutdown signal. Task Scheduler integration is not planned: Navide never creates scheduled jobs of its own, and Task Scheduler already lists, enables, disables and removes the machine's tasks. Revisit only if Navide starts registering tasks itself — then as a third execution kind over the PowerShell `ScheduledTasks` module
 - Platform and adapter capability matrix
 - Internationalization and accessible workflows
 

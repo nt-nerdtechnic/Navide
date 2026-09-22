@@ -20,7 +20,6 @@ import logging
 import os
 import re
 import shlex
-import shutil
 import signal
 import sqlite3
 import subprocess
@@ -87,7 +86,14 @@ DEPS: list[Dep] = [
     Dep("node", "Node.js", "JavaScript runtime (≥ 22)", "foundation",
         ["node", "--version"], r"v?(\d+\.\d+\.\d+)", min_version="22.0.0",
         docs_url="https://nodejs.org",
-        install_cmds={"darwin": PlatformInstall("brew install node", ("brew",))}),
+        install_cmds={
+            "darwin": PlatformInstall("brew install node", ("brew",)),
+            # The LTS MSI installs machine-wide and asks for elevation, so
+            # the UAC prompt needs a terminal the user can see.
+            "win32": PlatformInstall(
+                "winget install --id OpenJS.NodeJS.LTS -e", ("winget",), needs_terminal=True
+            ),
+        }),
     Dep("pnpm", "pnpm", "Package manager", "foundation",
         ["pnpm", "--version"], r"(\d+\.\d+\.\d+)",
         docs_url="https://pnpm.io",
@@ -97,6 +103,14 @@ DEPS: list[Dep] = [
             # and needs no elevation, so it can run inline like the brew one.
             "linux": PlatformInstall(
                 "curl -fsSL https://get.pnpm.io/install.sh | sh -", ("curl",)
+            ),
+            # Per-user standalone exe, no elevation. The agreement flags keep a
+            # first-run winget from stopping at a prompt nobody can answer
+            # when the command runs inline with its output captured.
+            "win32": PlatformInstall(
+                "winget install --id pnpm.pnpm -e "
+                "--accept-source-agreements --accept-package-agreements",
+                ("winget",),
             ),
         }),
     # Unversioned formula on purpose: versioned kegs (python@3.12) only link
@@ -108,7 +122,12 @@ DEPS: list[Dep] = [
     Dep("python", "Python", "Python 3.12+", "foundation",
         ["python3", "--version"], r"Python (\d+\.\d+\.\d+)", min_version="3.12.0",
         docs_url="https://python.org",
-        install_cmds={"darwin": PlatformInstall("brew install python3", ("brew",))}),
+        install_cmds={
+            "darwin": PlatformInstall("brew install python3", ("brew",)),
+            "win32": PlatformInstall(
+                "winget install --id Python.Python.3.12 -e", ("winget",), needs_terminal=True
+            ),
+        }),
     Dep("uv", "uv", "Python package and environment manager", "foundation",
         ["uv", "--version"], r"uv (\d+\.\d+\.\d+)",
         docs_url="https://docs.astral.sh/uv",
@@ -117,6 +136,11 @@ DEPS: list[Dep] = [
             # Astral's own installer. Unpacks into ~/.local/bin, no elevation.
             "linux": PlatformInstall(
                 "curl -LsSf https://astral.sh/uv/install.sh | sh", ("curl",)
+            ),
+            "win32": PlatformInstall(
+                "winget install --id astral-sh.uv -e "
+                "--accept-source-agreements --accept-package-agreements",
+                ("winget",),
             ),
         }),
 
@@ -136,6 +160,10 @@ DEPS: list[Dep] = [
                 "curl -fsSL https://ollama.com/install.sh | sh",
                 ("curl",),
                 needs_terminal=True,
+            ),
+            # OllamaSetup.exe is a GUI installer that also starts the app.
+            "win32": PlatformInstall(
+                "winget install --id Ollama.Ollama -e", ("winget",), needs_terminal=True
             ),
         }),
 ]
@@ -178,33 +206,35 @@ MODEL_CATALOG: list[dict[str, Any]] = [
 ]
 
 
-def _path_probe_command() -> list[str]:
-    """The shell invocation used to read the user's real PATH.
-
-    Uses $SHELL, not bash: installers write PATH exports into the user's own
-    shell config. For zsh that file is ~/.zshrc, which zsh only reads in
-    INTERACTIVE mode — a plain login shell (-lc) misses it (real case: grok's
-    installer writes to ~/.zshrc; `zsh -lc` couldn't see it, so both detection
-    and spawn kept failing with command-not-found after install).
-    """
-    shell = os.environ.get("SHELL") or "/bin/bash"
-    if os.path.basename(shell) == "zsh":
-        return [shell, "-ilc", "echo $PATH"]
-    return [shell, "-lc", "echo $PATH"]
+def _path_probe_command() -> list[str] | None:
+    """The shell invocation used to read the user's real PATH, or None where
+    there is no login shell to ask (Windows). See `Paths.login_path_probe`."""
+    return osplat.paths.login_path_probe()
 
 
-# Standard install prefixes merged into PATH even when the login-shell probe
-# fails (slow shell config hits the 3s timeout, GUI launches get launchd's
-# minimal PATH) — otherwise brew itself is invisible to detection and installs.
-# ~/.local/bin is where vendor install scripts (aider, opencode, cursor, kimi)
-# drop their binary and export the dir from a shell rc file — invisible
-# whenever the rc probe times out, which made a just-installed CLI still read
-# as missing. Kept in this one tuple so tests can disable every fallback at once.
-_FALLBACK_PATH_DIRS = (
-    "/opt/homebrew/bin",
-    "/usr/local/bin",
-    os.path.expanduser("~/.local/bin"),
-)
+def _parse_login_path(stdout: str) -> list[str]:
+    """PATH entries from the probe's stdout: the `LOGIN_PATH_MARKER` line."""
+    marked = [line for line in stdout.splitlines() if line.startswith(osplat.spec.LOGIN_PATH_MARKER)]
+    if not marked:
+        return []
+    value = marked[-1][len(osplat.spec.LOGIN_PATH_MARKER):].strip()
+    return [entry for entry in value.split(os.pathsep) if entry]
+
+
+def _fallback_path_dirs() -> list[str]:
+    """Standard install prefixes merged into PATH even when the login-shell
+    probe fails (slow shell config outruns the per-caller timeout, GUI launches
+    get the session's minimal PATH) — otherwise brew itself is invisible to detection
+    and installs, and a CLI whose installer exported its dir from a shell rc
+    file (aider, opencode, cursor, kimi into ~/.local/bin; nvm and bun on
+    Linux) still reads as missing right after installing. Which dirs those
+    are is the platform's to say — see `Paths.login_path_fallbacks`."""
+    return osplat.paths.login_path_fallbacks(Path.home())
+
+
+def _tail_path_dirs() -> list[str]:
+    """Dirs merged at the END of PATH — see `Paths.login_path_tail_fallbacks`."""
+    return osplat.paths.login_path_tail_fallbacks(Path.home())
 
 
 # The login-shell probe costs ~1-3s (interactive zsh reads the full rc chain),
@@ -213,39 +243,77 @@ _FALLBACK_PATH_DIRS = (
 # the frontend's fresh flag); passive status reads reuse the merged PATH, which
 # persists in os.environ anyway. Benign race: two threads may double-probe.
 _PATH_REFRESH_TTL_S = 300.0
+# A probe that answered nothing leaves detection running on the fallback list,
+# which is a list of guesses. Retry sooner than a success — but not on every
+# status read, because each attempt pays the timeout below.
+_PATH_RETRY_TTL_S = 60.0
+# The probe is the same work everywhere; the budget around it is not, so the
+# ceiling is per caller. One global 15s broke two deadlines at once: the
+# wsClient default of 10s that onboarding.status rides on, and the 30s
+# terminal.create budget that already promises 25s of it to the credential
+# switch lock (see ws_handlers._SWITCH_LOCK_TIMEOUT_SEC).
+#
+# A heavy ~/.zshrc was measured at 13s+ (src/main/backend.ts) and at 6.9s on a
+# developer machine here, so the 3s this used to allow was too short to reach
+# either — but only the caller the user is actually waiting on can afford to
+# wait that long.
+_PATH_PROBE_TIMEOUT_S = 8.0
+# The user asked for a re-detect, or an installer just ran: they are watching a
+# spinner, and App.vue gives this path 45s.
+_PATH_PROBE_TIMEOUT_FORCED_S = 15.0
+# Pre-spawn, where the probe is speculative and 25s of the 30s budget is
+# already spoken for. Anything this misses the pane's own login shell still
+# resolves, so a miss here costs nothing.
+_PATH_PROBE_TIMEOUT_SPAWN_S = 3.0
 _path_refreshed_at: float | None = None
+# Whether the last probe actually returned a PATH. Distinguishes "we know what
+# the login shell exports" from "we fell back to guessing", which decides
+# which of the two TTLs above applies.
+_path_probe_answered = False
 
 
-def _refresh_path_from_login_shell(force: bool = False) -> None:
+def _refresh_path_from_login_shell(
+    force: bool = False, *, timeout_s: float | None = None
+) -> None:
     """Merge PATH from a login shell into os.environ so newly-installed CLIs are visible.
 
-    POSIX-only, best-effort: all failures are swallowed silently.
+    Best-effort: all failures are swallowed silently. A platform with no
+    login shell to probe (Windows) keeps the PATH it already has, homebrew and
+    `~/.local/bin` fallbacks included — they are POSIX layouts and would only
+    ever be missing directories there.
     """
-    global _path_refreshed_at
-    if os.name != "posix":
+    global _path_refreshed_at, _path_probe_answered
+    probe = _path_probe_command()
+    if probe is None:
         return
     now = time.monotonic()
+    ttl = _PATH_REFRESH_TTL_S if _path_probe_answered else _PATH_RETRY_TTL_S
     if (not force and _path_refreshed_at is not None
-            and now - _path_refreshed_at < _PATH_REFRESH_TTL_S):
+            and now - _path_refreshed_at < ttl):
         return
-    _path_refreshed_at = now
+    probe_timeout = timeout_s if timeout_s is not None else (
+        _PATH_PROBE_TIMEOUT_FORCED_S if force else _PATH_PROBE_TIMEOUT_S
+    )
     shell_paths: list[str] = []
     try:
         proc = subprocess.run(
-            _path_probe_command(),
+            probe,
             capture_output=True,
             text=True,
-            timeout=3,
+            timeout=probe_timeout,
         )
-        raw = proc.stdout or ""
-        # Take the last non-empty line (login shells may emit banner text first)
-        lines = [l for l in raw.splitlines() if l.strip()]
-        if lines:
-            shell_paths = lines[-1].split(":")
+        # Only the marked line: rc files print banners, and an interactive
+        # bash's last line was a motd on more than one machine.
+        shell_paths = _parse_login_path(proc.stdout or "")
     except Exception:  # noqa: BLE001
         pass
-    shell_paths.extend(d for d in _FALLBACK_PATH_DIRS if os.path.isdir(d))
-    current_paths = os.environ.get("PATH", "").split(":")
+    # Stamped after the probe, never before. Stamping first recorded a timeout
+    # exactly like a success, so one slow shell at startup put the next five
+    # minutes of detection on a PATH the probe had contributed nothing to.
+    _path_refreshed_at = time.monotonic()
+    _path_probe_answered = bool(shell_paths)
+    shell_paths.extend(d for d in _fallback_path_dirs() if os.path.isdir(d))
+    current_paths = os.environ.get("PATH", "").split(os.pathsep)
     current_set = set(current_paths)
     seen: set[str] = set()
     new_paths: list[str] = []
@@ -253,8 +321,13 @@ def _refresh_path_from_login_shell(force: bool = False) -> None:
         if p and p not in current_set and p not in seen:
             seen.add(p)
             new_paths.append(p)
-    if new_paths:
-        os.environ["PATH"] = ":".join(new_paths + current_paths)
+    tail_paths: list[str] = []
+    for p in _tail_path_dirs():
+        if p and p not in current_set and p not in seen and os.path.isdir(p):
+            seen.add(p)
+            tail_paths.append(p)
+    if new_paths or tail_paths:
+        os.environ["PATH"] = os.pathsep.join(new_paths + current_paths + tail_paths)
 
 
 def _parse_version(text: str, regex: str) -> str:
@@ -287,11 +360,14 @@ def _install_method(resolved_path: str) -> str:
     """
     if not resolved_path:
         return ""
+    # Forward slashes on every platform, so the markers below match a
+    # Windows `realpath` too.
+    resolved_path = Path(resolved_path).as_posix()
     if "/node_modules/" in resolved_path:
         return "npm"
     if resolved_path.startswith(("/opt/homebrew/", "/usr/local/Cellar/")):
         return "homebrew"
-    home = str(Path.home())
+    home = Path.home().as_posix()
     if resolved_path.startswith(f"{home}/.local/share/"):
         return "native"
     if resolved_path.startswith(f"{home}/.") and "/bin/" in resolved_path:
@@ -299,17 +375,67 @@ def _install_method(resolved_path: str) -> str:
     return "unknown"
 
 
-def resolve_executable(dep: Dep) -> str:
+# Identity probes are a subprocess each, so the answer is remembered for the
+# life of the process, keyed by the resolved path. A binary that changes under
+# a running Navide is what the wizard's "re-detect" is for.
+_IDENTITY_CACHE: dict[str, bool] = {}
+_IDENTITY_TIMEOUT_S = 5.0
+
+
+def _is_that_tool(dep: Dep, binary_path: str) -> bool:
+    """Whether `binary_path` really is dep's tool, for deps that can be confused.
+
+    Only deps declaring `identity_regex` are probed; every other dep answers
+    True without spawning anything. A probe that cannot run (missing, slow,
+    crashing) also answers True: refusing a binary on a failed probe would
+    hide an installed CLI, which is worse than the ambiguity this guards.
+    """
+    if not dep.identity_regex:
+        return True
+    cached = _IDENTITY_CACHE.get(binary_path)
+    if cached is not None:
+        return cached
+    try:
+        proc = subprocess.run(  # noqa: S603 - argv from the registry, never user input
+            [binary_path, *dep.check_cmd[1:]],
+            capture_output=True,
+            text=True,
+            timeout=_IDENTITY_TIMEOUT_S,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return True
+    ok = re.search(dep.identity_regex, proc.stdout + proc.stderr) is not None
+    _IDENTITY_CACHE[binary_path] = ok
+    return ok
+
+
+def resolve_executable(dep: Dep, quick: bool = False) -> str:
     """PATH location of the dep's binary — its primary name, else an alternate.
 
     A vendor rename (cursor's `cursor-agent` → `agent`) otherwise reports an
     installed CLI as missing and blocks its spawn.
+
+    A generic name can also be taken by a DIFFERENT vendor — xAI's grok ships
+    `~/.grok/bin/agent`, the name Cursor uses — which had Navide detecting and
+    spawning grok as Cursor. So a candidate that fails the dep's identity probe
+    steps aside for a later one; if none identifies, the first name that
+    resolved is still returned, keeping a format change from hiding a CLI that
+    really is installed.
+
+    quick=True is quick_status's no-subprocess contract: the probe is skipped
+    and the first name on PATH wins, exactly as before. That paint only answers
+    "present or missing", which the squatter does not change, and the full
+    pass that follows grades the binary properly.
     """
+    fallback = ""
     for name in (dep.check_cmd[0], *dep.alt_commands):
-        found = shutil.which(name)
-        if found:
+        found = osplat.paths.resolve_program(name)
+        if not found:
+            continue
+        if quick or _is_that_tool(dep, found):
             return found
-    return ""
+        fallback = fallback or found
+    return fallback
 
 
 def detect_dep(dep: Dep, quick: bool = False) -> dict[str, Any]:
@@ -319,7 +445,7 @@ def detect_dep(dep: Dep, quick: bool = False) -> dict[str, Any]:
     (version empty) until a full pass can grade it. Used by quick_status for
     the wizard's first paint — missing is exact either way.
     """
-    binary_path = resolve_executable(dep)
+    binary_path = resolve_executable(dep, quick=quick)
     exit_code: int | None = None
     signal_name = ""
     duration_ms: int | None = None
@@ -333,7 +459,8 @@ def detect_dep(dep: Dep, quick: bool = False) -> dict[str, Any]:
         started = time.monotonic()
         try:
             proc = subprocess.run(
-                [binary_path, *dep.check_cmd[1:]], capture_output=True, text=True, timeout=8
+                osplat.paths.launch_argv(binary_path, dep.check_cmd[1:]),
+                capture_output=True, text=True, timeout=8,
             )
             duration_ms = max(0, round((time.monotonic() - started) * 1000))
             exit_code = proc.returncode
@@ -376,7 +503,7 @@ def detect_dep(dep: Dep, quick: bool = False) -> dict[str, Any]:
         # "Homebrew is missing" during its check step instead of only after the
         # install command has already failed.
         "requirements": [
-            {"name": name, "ok": shutil.which(name) is not None}
+            {"name": name, "ok": osplat.paths.resolve_program(name) is not None}
             # Read the resolved install, not the Dep: the platform port moved
             # the foundation deps' brew requirement into install_cmds, which
             # left this list empty on macOS and the wizard no longer pulled
@@ -403,19 +530,22 @@ def _distinct_executables(command: str) -> list[dict[str, Any]]:
     for directory in os.environ.get("PATH", "").split(os.pathsep):
         if not directory:
             continue
-        candidate = Path(directory).expanduser() / command
-        if not candidate.is_file() or not os.access(candidate, os.X_OK):
-            continue
-        try:
-            stat = candidate.stat()
-            identity: tuple[int, int] | tuple[str, str] = (stat.st_dev, stat.st_ino)
-            resolved = str(candidate.resolve())
-        except OSError:
-            identity = ("path", str(candidate))
-            resolved = os.path.realpath(candidate)
-        entry = grouped.setdefault(identity, {"path": str(candidate), "resolved_path": resolved, "aliases": []})
-        if str(candidate) not in entry["aliases"]:
-            entry["aliases"].append(str(candidate))
+        # One name on POSIX; `name.exe`/`.cmd`/... on Windows, where a file
+        # is runnable by extension rather than by a mode bit.
+        for filename in osplat.paths.executable_candidates(command):
+            candidate = Path(directory).expanduser() / filename
+            if not candidate.is_file() or not osplat.paths.is_executable(candidate):
+                continue
+            try:
+                stat = candidate.stat()
+                identity: tuple[int, int] | tuple[str, str] = (stat.st_dev, stat.st_ino)
+                resolved = str(candidate.resolve())
+            except OSError:
+                identity = ("path", str(candidate))
+                resolved = os.path.realpath(candidate)
+            entry = grouped.setdefault(identity, {"path": str(candidate), "resolved_path": resolved, "aliases": []})
+            if str(candidate) not in entry["aliases"]:
+                entry["aliases"].append(str(candidate))
     return list(grouped.values())
 
 
@@ -427,7 +557,7 @@ def _probe_alternate(dep: Dep, executable: str) -> dict[str, Any]:
     status = "failed"
     try:
         proc = subprocess.run(
-            [executable, *dep.check_cmd[1:]],
+            osplat.paths.launch_argv(executable, dep.check_cmd[1:]),
             capture_output=True,
             text=True,
             timeout=3,
@@ -457,8 +587,8 @@ def _same_npm_install(first: dict[str, Any], second: dict[str, Any], package: st
     if not package:
         return False
     marker = f"/node_modules/{package}/"
-    first_resolved = str(first.get("resolved_path") or "")
-    second_resolved = str(second.get("resolved_path") or "")
+    first_resolved = Path(str(first.get("resolved_path") or "")).as_posix()
+    second_resolved = Path(str(second.get("resolved_path") or "")).as_posix()
     if marker not in first_resolved or marker not in second_resolved:
         return False
     return first_resolved.split(marker, 1)[0] == second_resolved.split(marker, 1)[0]
@@ -467,20 +597,25 @@ def _same_npm_install(first: dict[str, Any], second: dict[str, Any], package: st
 def _candidate_removal(candidate: dict[str, Any], dep: Dep, version: str) -> dict[str, str]:
     """Return a confirmed removal command only when ownership is unambiguous."""
     package = dep.npm_package
-    resolved = str(candidate.get("resolved_path") or "")
+    resolved = Path(str(candidate.get("resolved_path") or "")).as_posix()
     path = str(candidate.get("path") or "")
     package_marker = f"/node_modules/{package}/" if package else ""
-    npm = Path(path).parent / "npm"
-    if not package_marker or package_marker not in resolved or not npm.is_file() or not os.access(npm, os.X_OK):
+    # The npm beside the binary: `npm` on POSIX, `npm.cmd` on Windows.
+    npm = None
+    for filename in osplat.paths.executable_candidates("npm"):
+        entry = Path(path).parent / filename
+        if entry.is_file() and osplat.paths.is_executable(entry):
+            npm = entry
+            break
+    if not package_marker or package_marker not in resolved or npm is None:
         return {"manager": "", "command": ""}
 
-    uninstall = f"{shlex.quote(str(npm))} uninstall -g {shlex.quote(package)}"
+    quote = osplat.paths.quote_arg
+    uninstall = f"{quote(str(npm))} uninstall -g {quote(package)}"
     description = f"Remove {dep.label} {version or ''} from {path}".replace("  ", " ")
-    confirmed = (
-        f"printf '%s\\n' {shlex.quote(description)}; "
-        "printf 'Continue? [y/N] '; read -r answer; "
-        f"case \"$answer\" in [Yy]*) {uninstall} ;; *) echo 'Cancelled.' ;; esac"
-    )
+    # The user's terminal runs this, so it has to be that terminal's language:
+    # `external-terminal.ts` opens sh on POSIX and PowerShell on Windows.
+    confirmed = osplat.scripts.confirm_then_run(description, uninstall)
     return {"manager": "npm", "command": confirmed}
 
 
@@ -562,6 +697,17 @@ def build_cli_health(dep_statuses: list[dict[str, Any]]) -> dict[str, Any]:
             continue  # Missing optional CLIs are handled by normal onboarding.
         dep_status = status_by_id.get(dep.id, {})
         primary_resolved = str(dep_status.get("resolved_path") or "")
+        # A generic name can belong to a different vendor (grok ships
+        # `~/.grok/bin/agent`, Cursor's name). resolve_executable already
+        # steps past such a squatter when picking the primary; listing it
+        # here would report a duplicate install of a CLI it is not.
+        candidates = [
+            candidate for candidate in candidates
+            if candidate["resolved_path"] == primary_resolved
+            or _is_that_tool(dep, candidate["resolved_path"])
+        ]
+        if not candidates:
+            continue
         probed: list[tuple[dict[str, Any], dict[str, Any], bool]] = []
         for candidate in candidates:
             is_primary = candidate["resolved_path"] == primary_resolved
@@ -638,25 +784,21 @@ def build_cli_health(dep_statuses: list[dict[str, Any]]) -> dict[str, Any]:
                 "candidates": detailed_candidates,
             })
 
+    # The fingerprint scopes a dismissal to what the user actually looked at
+    # in the launch guide: which repairable findings, for which CLIs, on which
+    # binaries. Two things are deliberately left out, because each brought a
+    # dismissed guide back on the next launch with nothing the user could see
+    # having changed: probe outcomes (version, status, exit code, signal) come
+    # from `--version` subprocesses under a few-second ceiling and flip on a
+    # loaded cold start; update_failed findings are not shown by the guide at
+    # all (CLI management surfaces them), so a vendor's next failed
+    # auto-update must not re-open it.
     fingerprint_source = [
         {
             "type": finding["type"],
             "agent_key": finding["agent_key"],
-            # Only update_failed carries records; keeping the key absent
-            # otherwise preserves existing fingerprints (and dismissals).
-            **({"records": [
-                {"home": record["home"], "timestamp": record["timestamp"],
-                 "status": record["status"]}
-                for record in finding["records"]
-            ]} if finding.get("records") else {}),
             "candidates": [
-                {
-                    "resolved_path": candidate["resolved_path"],
-                    "version": candidate["version"],
-                    "status": candidate["status"],
-                    "exit_code": candidate["exit_code"],
-                    "signal": candidate["signal"],
-                }
+                {"resolved_path": candidate["resolved_path"]}
                 for candidate in (
                     finding.get("candidates")
                     or ([finding["primary"]] if finding.get("primary") else [])
@@ -664,6 +806,7 @@ def build_cli_health(dep_statuses: list[dict[str, Any]]) -> dict[str, Any]:
             ],
         }
         for finding in findings
+        if finding["type"] != "update_failed"
     ]
     fingerprint = hashlib.sha256(
         json.dumps(fingerprint_source, sort_keys=True).encode("utf-8")
@@ -685,7 +828,7 @@ def detect_ollama_status() -> dict[str, Any]:
     from "no models installed" if only the parsed list is returned, which left
     the wizard telling users to pull a model that could never succeed.
     """
-    if shutil.which("ollama") is None:
+    if osplat.paths.resolve_program("ollama") is None:
         return {"models": [], "reachable": False, "detail": "ollama not installed"}
     try:
         proc = subprocess.run(
@@ -833,10 +976,30 @@ def maintenance_command(dep_id: str, action: str) -> dict[str, Any]:
             "error": f"{dep.label} has no official {action} command",
             "docs_url": dep.docs_url,
         }
+    command = _command_on_the_resolved_binary(dep, command)
     # Always interactive: an update may prompt, authenticate or need sudo, so it
     # belongs in a terminal the user can see and answer.
     return {"ok": True, "needs_terminal": True, "command": command, "docs_url": dep.docs_url}
 
+
+
+def _command_on_the_resolved_binary(dep: Dep, command: str) -> str:
+    """Point a maintenance command at the binary detection actually resolved.
+
+    `update_cmd` and friends are stored as plain strings naming the CLI
+    (`agent update`), and they are handed to a terminal verbatim. When the name
+    they use is one another vendor also ships, running the string runs the
+    wrong tool — `agent update` on a machine carrying xAI's grok updates grok,
+    not Cursor. Rewriting only the leading token, and only when it is one of
+    this dep's own names, leaves every argument the vendor documented intact.
+    """
+    head, _, rest = command.partition(" ")
+    if head not in (dep.check_cmd[0], *dep.alt_commands):
+        return command
+    resolved = resolve_executable(dep)
+    if not resolved or os.path.basename(resolved) == head:
+        return command
+    return f"{shlex.quote(resolved)} {rest}".strip()
 
 # ── Install (whitelist-driven) ────────────────────────────────────────────────
 INSTALL_TIMEOUT_S = 900
@@ -849,7 +1012,7 @@ def missing_requirements(dep: Dep) -> list[str]:
     the macOS install of `uv` needs Homebrew, the Linux one needs curl.
     """
     install = dep.install_for(osplat.platform_id)
-    return [name for name in install.requires_binaries if shutil.which(name) is None]
+    return [name for name in install.requires_binaries if osplat.paths.resolve_program(name) is None]
 
 
 def _terminate_process_group(proc: subprocess.Popen[str]) -> None:
@@ -859,9 +1022,11 @@ def _terminate_process_group(proc: subprocess.Popen[str]) -> None:
     leaves them running AND keeps the inherited pipes open — the reaping call
     would then block far past the timeout it was supposed to enforce.
     """
-    for sig in (signal.SIGTERM, signal.SIGKILL):
+    for force in (False, True):
         try:
-            os.killpg(os.getpgid(proc.pid), sig)
+            osplat.process_tree.kill_group(
+                osplat.process_tree.group_of(proc.pid), force=force
+            )
         except (ProcessLookupError, PermissionError, OSError):
             proc.kill()
         try:
@@ -915,6 +1080,8 @@ def install_dep(dep_id: str) -> dict[str, Any]:
         return {**context, "ok": True, "needs_terminal": True, "command": install.command}
     # start_new_session puts the shell and its children in their own process
     # group so a timeout can reap the whole tree (see _terminate_process_group).
+    # Windows ignores the flag; there the tree is reached by walking it from
+    # the shell's pid, which is what osplat.process_tree.kill_group does.
     try:
         proc = subprocess.Popen(
             install.command,
@@ -970,7 +1137,7 @@ def pull_model(model: str) -> dict[str, Any]:
     name = model or ""
     if not _MODEL_NAME_RE.fullmatch(name) or ".." in name:
         return {"ok": False, "error": "invalid model name"}
-    if shutil.which("ollama") is None:
+    if osplat.paths.resolve_program("ollama") is None:
         return {"ok": False, "error": "ollama not installed"}
     if not ollama_reachable():
         return {
@@ -989,9 +1156,9 @@ OLLAMA_SERVICE_CMD = "brew services start ollama"
 
 def start_ollama_service() -> dict[str, Any]:
     """Hand the official service-start command to an external Terminal."""
-    if shutil.which("ollama") is None:
+    if osplat.paths.resolve_program("ollama") is None:
         return {"ok": False, "error": "ollama not installed"}
-    if shutil.which("brew") is None:
+    if osplat.paths.resolve_program("brew") is None:
         return {"ok": False, "error": "brew is required to manage the ollama service"}
     return {"ok": True, "needs_terminal": True, "command": OLLAMA_SERVICE_CMD}
 
@@ -1175,9 +1342,11 @@ def cli_binary_override(agent_key: str) -> str:
         return ""
     path = str(overrides.get(agent_key) or "")
     dep = DEPS_BY_ID.get(agent_key)
-    if dep is None or Path(path).name != dep.check_cmd[0]:
+    # The spellings `_distinct_executables` admitted: `claude` on POSIX,
+    # `claude.cmd`/`.exe`/... on Windows.
+    if dep is None or Path(path).name not in osplat.paths.executable_candidates(dep.check_cmd[0]):
         return ""
-    return path if Path(path).is_file() and os.access(path, os.X_OK) else ""
+    return path if Path(path).is_file() and osplat.paths.is_executable(Path(path)) else ""
 
 
 def select_cli_binary(agent_key: str, path: str, fingerprint: str) -> dict[str, Any]:

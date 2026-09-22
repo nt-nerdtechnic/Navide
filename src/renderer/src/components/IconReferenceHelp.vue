@@ -1,1410 +1,1736 @@
 <script setup lang="ts">
-// Read-only icon reference, shown inside Settings → 說明.
-// This is where a user looks up "介面上這顆按鈕是幹嘛的": every icon below is
-// drawn with the same path data the real surface uses, so the shapes match
+import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+import MockFigure from './helpMocks/MockFigure.vue'
+import MockPaneCard from './helpMocks/MockPaneCard.vue'
+import MockRail from './helpMocks/MockRail.vue'
+import MockSidebar from './helpMocks/MockSidebar.vue'
+import MockStage from './helpMocks/MockStage.vue'
+import MockTreeRow from './helpMocks/MockTreeRow.vue'
+import MockWindow from './helpMocks/MockWindow.vue'
+
+// Read-only icon reference, shown inside Settings → Help.
+// This is where a user looks up "what does this button do": every icon below
+// is drawn with the same path data the real surface uses, so the shapes match
 // what is on screen. Static mirror — if a surface changes its icon, this file
-// has to be updated by hand.
+// has to be updated by hand. All prose lives in the locale files under
+// `settings.help.icons.*`; a tooltip or button label quoted here is read from
+// the product's own locale key, so it follows the interface into whatever
+// language the reader has set. Only status IDENTIFIERS (`running`, `awaiting`
+// — the values, not their labels) stay in the template untranslated.
 //
 // Most rows keep their icon cell in the template, because the icon column is
 // sometimes an inline SVG, sometimes a Unicode glyph, sometimes a colour dot,
-// and sometimes just the word 「文字」. Only the two purely textual tables use
-// data rows.
+// and sometimes just a placeholder word. Only the two purely textual tables
+// use data rows.
 
 interface StageBadgeRow {
+  key: string
+  /** The product's own locale key for the badge, not a literal: the badge on
+   *  screen is translated, so a hard-coded 'Draft' here would describe a
+   *  product the reader is not looking at. */
   badge: string
-  color: string
-  meaning: string
-  canStart: string
 }
 
 interface TextButtonRow {
-  name: string
-  where: string
-  effect: string
+  key: string
+  /** Locale keys, one per label — a control offering two of them
+   *  ("Pause delivery / Resume delivery") stays a single row. */
+  name: string[]
 }
 
 // Plan stage badges. The progress bar under the badge uses the same palette,
 // so the two are always consistent.
 const stageBadges: StageBadgeRow[] = [
-  { badge: 'Draft', color: '灰', meaning: '草稿，還在寫。', canStart: '不能' },
-  { badge: 'In Review', color: '黃', meaning: '等你審。', canStart: '不能' },
-  { badge: 'Approved', color: '藍', meaning: '已核准。', canStart: '可以' },
-  { badge: 'In Progress', color: '橘', meaning: '執行中。', canStart: '可以' },
-  { badge: 'Done', color: '綠', meaning: '完成。', canStart: '—' },
-  { badge: 'Abandoned', color: '紅', meaning: '放棄。', canStart: '—' },
+  { key: 'draft', badge: 'pane.plans.stage-draft' },
+  { key: 'inReview', badge: 'pane.plans.stage-in-review' },
+  { key: 'approved', badge: 'pane.plans.stage-approved' },
+  { key: 'inProgress', badge: 'pane.plans.stage-in-progress' },
+  { key: 'done', badge: 'pane.plans.stage-done' },
+  { key: 'abandoned', badge: 'pane.plans.stage-abandoned' },
 ]
 
 // The Messages panel has no icons at all — every control is a text button.
 const messageButtons: TextButtonRow[] = [
-  {
-    name: 'Pause delivery / Resume delivery',
-    where: '面板標題列',
-    effect: '暫停或恢復整條訊息遞送。暫停期間訊息會排隊，不會送進面板。',
-  },
-  {
-    name: 'Clear log',
-    where: '面板標題列',
-    effect: '清掉這份紀錄的顯示（不影響已送達的訊息）。',
-  },
-  {
-    name: 'Withdraw',
-    where: '還在排隊的訊息列上',
-    effect: '撤回這則訊息。只在它還沒送達前有效。提示字串是 Take this message back before it reaches the target pane。',
-  },
-  {
-    name: 'Resend',
-    where: '送失敗或已撤回的訊息列上',
-    effect: '再送一次。',
-  },
+  { key: 'pauseResume', name: ['msg.pause', 'msg.resume'] },
+  { key: 'clearLog', name: ['msg.clear-log'] },
+  { key: 'withdraw', name: ['msg.cancel'] },
+  { key: 'resend', name: ['msg.retry'] },
 ]
+
+const { t } = useI18n()
+
+// ── Chapter locator ─────────────────────────────────────────────────────────
+// The one picture this topic needs. Every table row already DRAWS its icon, so
+// re-drawing the icons would add nothing; what a table cannot give is where a
+// region is, and the callout above asks the reader to start by naming the
+// region. So the marks here are the chapter numbers, not ①②③ — the picture is
+// a table of contents for the main window. Chapters 5 (Git pane) and 6 (Plan
+// window) are separate surfaces, 8 is about colour and 9 about the icons a
+// prompt skill can wear, so they are absent rather than faked.
+const LOCATOR_CHAPTERS = ['1', '2', '3', '4', '7'] as const
+
+/** Sample name, kept in the locale files so the picture hard-codes no prose. */
+function sample(key: string): string {
+  return t(`settings.help.icons.mock.sample.${key}`)
+}
+
+/** The status word the pane pill and the sidebar dot share. */
+function statusWord(status: string): string {
+  return t(`paneStatus.${status}`)
+}
+
+const locatorLegend = computed(() =>
+  (['sidebar', 'panes', 'tabs', 'status', 'rail'] as const).map((row, i) => ({
+    mark: LOCATOR_CHAPTERS[i],
+    label: t(`settings.help.icons.mock.locator.legend.${row}.label`),
+    text: t(`settings.help.icons.mock.locator.legend.${row}.text`),
+  })),
+)
+
+// The sidebar's tab strip and the right rail's, in the order each draws them.
+const locatorSidebarIcons = ['\u{1F916}', '\u{1F500}', '\u{1F4C1}', '\u{1F33F}', '\u{1F4CB}']
+const locatorRail = computed(() => [
+  { icon: '\u{1F4DC}', label: t('label.history') },
+  { icon: '\u{1F4CA}', label: t('label.tokens') },
+  { icon: '\u2709', label: t('label.messages') },
+])
+const locatorTabs = computed(() => [
+  { label: sample('group'), count: 2, status: 'running' as const },
+])
+const locatorStatusLeft = computed(() => [{ text: sample('backend'), dot: true }])
+const locatorStatusRight = computed(() => [sample('clock')])
 </script>
 
 <template>
   <div class="irh">
-    <p class="irh-intro">
-      按鈕圖示查詢表：看到介面上某顆按鈕，來這裡查它叫什麼、在哪一區、按下去會發生什麼。
-      每一顆都對應程式碼裡實際存在的圖示，名稱欄保留原始的英文 <code>title</code> / <code>aria-label</code>。
-    </p>
+    <p class="irh-intro" v-html="$t('settings.help.icons.intro')"></p>
 
     <div class="irh-callout">
-      <div class="irh-callout-title">怎麼用這張表</div>
-      <div class="irh-callout-text">
-        先看畫面上那顆按鈕在哪一區，翻到對應章節，用「圖示」欄比對外形。
-        名稱欄是滑鼠停留時會浮出的原始提示字串——分不出來時，把滑鼠停在按鈕上一秒，
-        浮出來的字直接對得上這一欄。
-      </div>
+      <div class="irh-callout-title">{{ $t('settings.help.icons.howto.title') }}</div>
+      <div class="irh-callout-text">{{ $t('settings.help.icons.howto.text') }}</div>
     </div>
 
-    <!-- ── 1 側欄 ───────────────────────────────────────────────────── -->
-    <section class="irh-section">
-      <h2 class="irh-h2">1 · 側欄</h2>
+    <!-- Where each chapter lives. The marks are chapter numbers, so the
+         picture doubles as this topic's table of contents. -->
+    <MockFigure
+      :caption="$t('settings.help.icons.mock.locator.caption')"
+      :legend="locatorLegend"
+    >
+      <MockWindow
+        :title="sample('workspace')"
+        :branch="sample('branch')"
+        :status-left="locatorStatusLeft"
+        :status-right="locatorStatusRight"
+        :status-mark="LOCATOR_CHAPTERS[3]"
+      >
+        <MockSidebar
+          :icons="locatorSidebarIcons"
+          :active="0"
+          :mark="LOCATOR_CHAPTERS[0]"
+        >
+          <MockTreeRow kind="workspace" :label="sample('workspace')" :count="2" />
+          <MockTreeRow kind="group" :label="sample('group')" :count="2" />
+          <MockTreeRow
+            kind="pane"
+            :label="sample('pane1')"
+            :sub="sample('sub1')"
+            status="running"
+            active
+          />
+          <MockTreeRow kind="pane" :label="sample('pane2')" :sub="sample('sub2')" status="idle" />
+        </MockSidebar>
+        <MockStage
+          :tabs="locatorTabs"
+          :active="0"
+          :tab-mark="LOCATOR_CHAPTERS[2]"
+          :grid-mark="LOCATOR_CHAPTERS[1]"
+          :columns="2"
+        >
+          <MockPaneCard
+            :title="sample('pane1')"
+            status="running"
+            :status-label="statusWord('running')"
+            :lines="3"
+            focus
+          />
+          <MockPaneCard
+            :title="sample('pane2')"
+            status="idle"
+            :status-label="statusWord('idle')"
+            :lines="3"
+          />
+        </MockStage>
+        <MockRail :items="locatorRail" :mark="LOCATOR_CHAPTERS[4]" />
+      </MockWindow>
+    </MockFigure>
 
-      <h3 class="irh-h3">分頁列</h3>
-      <p class="irh-p">
-        側欄頂端一排分頁。<strong>展開時</strong>顯示下表的線稿圖示；<strong>收合成細軌時</strong>，
-        Agents / Pipeline / Explorer / Plans 四個改用 emoji（🤖 🔀 📁 📋），
-        只有 Git 沒有 emoji、細軌上仍畫同一顆 SVG。
-      </p>
+    <!-- ── 1 · Sidebar ──────────────────────────────────────────────────── -->
+    <section class="irh-section">
+      <h2 class="irh-h2">1 · {{ $t('settings.help.icons.s1.title') }}</h2>
+
+      <h3 class="irh-h3">{{ $t('settings.help.icons.s1.h1') }}</h3>
+      <p class="irh-p" v-html="$t('settings.help.icons.s1.p1')"></p>
       <div class="irh-tablewrap">
         <table class="irh-table">
           <thead>
-            <tr><th>圖示</th><th>名稱</th><th>位置</th><th>作用</th></tr>
+            <tr>
+              <th>{{ $t('settings.help.icons.table.icon') }}</th>
+              <th>{{ $t('settings.help.icons.table.name') }}</th>
+              <th>{{ $t('settings.help.icons.table.where') }}</th>
+              <th>{{ $t('settings.help.icons.table.what') }}</th>
+            </tr>
           </thead>
           <tbody>
             <tr>
               <td class="irh-icocell">
                 <svg class="irh-ic irh-ic--filled" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 3.5a1.25 1.25 0 1 1 2.5 0 1.25 1.25 0 0 1-2.5 0Zm0 4.5a1.25 1.25 0 1 1 2.5 0A1.25 1.25 0 0 1 2 8Zm0 4.5a1.25 1.25 0 1 1 2.5 0 1.25 1.25 0 0 1-2.5 0ZM6.5 2.75A.75.75 0 0 1 7.25 2h7a.75.75 0 0 1 0 1.5h-7a.75.75 0 0 1-.75-.75Zm0 4.5A.75.75 0 0 1 7.25 6.5h7a.75.75 0 0 1 0 1.5h-7a.75.75 0 0 1-.75-.75Zm0 4.5a.75.75 0 0 1 .75-.75h7a.75.75 0 0 1 0 1.5h-7a.75.75 0 0 1-.75-.75Z"/></svg>
               </td>
-              <td><code>Agents (⌘1)</code></td>
-              <td>側欄分頁列第 1 顆</td>
-              <td>切到 agent 樹狀清單。</td>
+              <td><code>{{ $t('label.agents') }} (⌘1)</code></td>
+              <td>{{ $t('settings.help.icons.s1.tabs.agents.where') }}</td>
+              <td>{{ $t('settings.help.icons.s1.tabs.agents.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell">
                 <svg class="irh-ic irh-ic--filled" viewBox="0 0 16 16" aria-hidden="true"><path d="M0 1.75C0 .784.784 0 1.75 0h3.5C6.216 0 7 .784 7 1.75v3.5A1.75 1.75 0 0 1 5.25 7H4v4a1 1 0 0 0 1 1h4v-1.25C9 9.784 9.784 9 10.75 9h3.5c.966 0 1.75.784 1.75 1.75v3.5A1.75 1.75 0 0 1 14.25 16h-3.5A1.75 1.75 0 0 1 9 14.25v-.75H5A2.5 2.5 0 0 1 2.5 11V7h-.75A1.75 1.75 0 0 1 0 5.25Zm1.75-.25a.25.25 0 0 0-.25.25v3.5c0 .138.112.25.25.25h3.5a.25.25 0 0 0 .25-.25v-3.5a.25.25 0 0 0-.25-.25Zm9 9a.25.25 0 0 0-.25.25v3.5c0 .138.112.25.25.25h3.5a.25.25 0 0 0 .25-.25v-3.5a.25.25 0 0 0-.25-.25Z"/></svg>
               </td>
-              <td><code>Pipeline (⌘2)</code></td>
-              <td>分頁列第 2 顆</td>
-              <td>切到多階段自動流程。</td>
+              <td><code>{{ $t('label.pipeline') }} (⌘2)</code></td>
+              <td>{{ $t('settings.help.icons.s1.tabs.pipeline.where') }}</td>
+              <td>{{ $t('settings.help.icons.s1.tabs.pipeline.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell">
                 <svg class="irh-ic irh-ic--filled" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5L6.2 1.7A1.75 1.75 0 0 0 4.96 1H1.75Z"/></svg>
               </td>
-              <td><code>Explorer (⌘3)</code></td>
-              <td>分頁列第 3 顆</td>
-              <td>切到檔案總管。</td>
+              <td><code>{{ $t('label.explorer') }} (⌘3)</code></td>
+              <td>{{ $t('settings.help.icons.s1.tabs.explorer.where') }}</td>
+              <td>{{ $t('settings.help.icons.s1.tabs.explorer.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell">
                 <svg class="irh-ic irh-ic--filled" viewBox="0 0 16 16" aria-hidden="true"><path d="M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25z"/></svg>
               </td>
-              <td><code>Git (⌘4)</code></td>
-              <td>分頁列第 4 顆</td>
-              <td>切到版本控制。右上角有數字徽章時，那是未提交的變更檔數（超過 99 顯示 <code>99+</code>）。</td>
+              <td><code>{{ $t('label.git') }} (⌘4)</code></td>
+              <td>{{ $t('settings.help.icons.s1.tabs.git.where') }}</td>
+              <td v-html="$t('settings.help.icons.s1.tabs.git.what')"></td>
             </tr>
             <tr>
               <td class="irh-icocell">
                 <svg class="irh-ic irh-ic--filled" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 2a1 1 0 0 0-1 1H2.75A1.75 1.75 0 0 0 1 4.75v9.5c0 .966.784 1.75 1.75 1.75h10.5A1.75 1.75 0 0 0 15 14.25v-9.5A1.75 1.75 0 0 0 13.25 3H12a1 1 0 0 0-1-1H5Zm0 2h6v1a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4Zm-2.25.5H4a2.5 2.5 0 0 0 2 1h4a2.5 2.5 0 0 0 2-1h1.25a.25.25 0 0 1 .25.25v9.5a.25.25 0 0 1-.25.25H2.75a.25.25 0 0 1-.25-.25v-9.5a.25.25 0 0 1 .25-.25Z"/></svg>
               </td>
-              <td><code>Plans (⌘5)</code></td>
-              <td>分頁列第 5 顆</td>
-              <td>切到計畫文件清單。</td>
+              <td><code>{{ $t('label.plans') }} (⌘5)</code></td>
+              <td>{{ $t('settings.help.icons.s1.tabs.plans.where') }}</td>
+              <td>{{ $t('settings.help.icons.s1.tabs.plans.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">◇</span></td>
-              <td>外掛自訂</td>
-              <td>分頁列尾端</td>
-              <td>外掛提供的分頁。外掛沒帶圖示時就顯示這顆菱形當替身。</td>
+              <td>{{ $t('settings.help.icons.s1.tabs.plugin.name') }}</td>
+              <td>{{ $t('settings.help.icons.s1.tabs.plugin.where') }}</td>
+              <td>{{ $t('settings.help.icons.s1.tabs.plugin.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">‹</span></td>
-              <td><code>Collapse panel</code></td>
-              <td>分頁列最右</td>
-              <td>把整條側欄收成細軌。</td>
+              <td v-html="$t('settings.help.icons.s1.tabs.collapse.name')"></td>
+              <td>{{ $t('settings.help.icons.s1.tabs.collapse.where') }}</td>
+              <td>{{ $t('settings.help.icons.s1.tabs.collapse.what') }}</td>
             </tr>
           </tbody>
         </table>
       </div>
 
-      <h3 class="irh-h3">工作區列</h3>
+      <h3 class="irh-h3">{{ $t('settings.help.icons.s1.h2') }}</h3>
       <div class="irh-tablewrap">
         <table class="irh-table">
           <thead>
-            <tr><th>圖示</th><th>名稱</th><th>位置</th><th>作用</th></tr>
+            <tr>
+              <th>{{ $t('settings.help.icons.table.icon') }}</th>
+              <th>{{ $t('settings.help.icons.table.name') }}</th>
+              <th>{{ $t('settings.help.icons.table.where') }}</th>
+              <th>{{ $t('settings.help.icons.table.what') }}</th>
+            </tr>
           </thead>
           <tbody>
             <tr>
               <td class="irh-icocell">
                 <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><rect x="4.5" y="1.5" width="10" height="10" rx="1"/><rect x="1.5" y="4.5" width="10" height="10" rx="1"/><path d="M4 9.5h5"/></svg>
               </td>
-              <td><code>Collapse all folders</code> / <code>Expand all folders</code></td>
-              <td>Agents 區段標題列</td>
-              <td>一次收合或展開所有工作區。全部收起時圖示裡那一橫會多一豎變成加號。</td>
+              <td v-html="$t('settings.help.icons.s1.ws.collapseAll.name')"></td>
+              <td>{{ $t('settings.help.icons.s1.ws.collapseAll.where') }}</td>
+              <td>{{ $t('settings.help.icons.s1.ws.collapseAll.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">＋</span></td>
-              <td><code>Open workspace…</code></td>
-              <td>Agents 區段標題列</td>
-              <td>叫出工作區選擇器，把另一個專案收進<strong>同一個視窗</strong>。</td>
+              <td v-html="$t('settings.help.icons.s1.ws.openWorkspace.name')"></td>
+              <td>{{ $t('settings.help.icons.s1.ws.openWorkspace.where') }}</td>
+              <td v-html="$t('settings.help.icons.s1.ws.openWorkspace.what')"></td>
             </tr>
             <tr>
               <td class="irh-icocell">
                 <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.75 12.5v-9h4l1.5 2h7v7z"/></svg>
               </td>
-              <td>（無提示字串）</td>
-              <td>每一列工作區名稱前</td>
-              <td>純標記，表示這一列是一個工作區資料夾。</td>
+              <td>{{ $t('settings.help.icons.s1.ws.folderMark.name') }}</td>
+              <td>{{ $t('settings.help.icons.s1.ws.folderMark.where') }}</td>
+              <td>{{ $t('settings.help.icons.s1.ws.folderMark.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">›</span> / <span class="irh-glyph">⌄</span></td>
-              <td><code>Expand subtree</code> / <code>Collapse subtree</code></td>
-              <td>工作區列最左</td>
-              <td>收合這個工作區底下的群組與面板。</td>
+              <td v-html="$t('settings.help.icons.s1.ws.subtree.name')"></td>
+              <td>{{ $t('settings.help.icons.s1.ws.subtree.where') }}</td>
+              <td>{{ $t('settings.help.icons.s1.ws.subtree.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell">
                 <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 3.5v4h-4M2.5 12.5v-4h4M12.7 7A5 5 0 0 0 4 4.5L2.5 6M3.3 9A5 5 0 0 0 12 11.5l1.5-1.5"/></svg>
               </td>
-              <td><code>Rebuild every resumable CLI pane…</code></td>
-              <td>工作區列右側</td>
-              <td>把這個工作區裡每個可續接的 CLI 面板整批重建。會打斷進行中的回合並重印對話。</td>
+              <td><code>{{ $t('action.rebuild-all-cli-panes') }}</code></td>
+              <td>{{ $t('settings.help.icons.s1.ws.rebuildAll.where') }}</td>
+              <td>{{ $t('settings.help.icons.s1.ws.rebuildAll.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell">
                 <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 3.5h-1A1.5 1.5 0 0 0 3 5v8.5A1.5 1.5 0 0 0 4.5 15h7a1.5 1.5 0 0 0 1.5-1.5V5a1.5 1.5 0 0 0-1.5-1.5h-1"/><rect x="5.5" y="1.5" width="5" height="3" rx="1"/><path d="M5.75 8h4.5M5.75 11h3"/></svg>
               </td>
-              <td><code>History</code></td>
-              <td>工作區列右側</td>
-              <td>打開這個工作區的 agent 歷史紀錄。</td>
+              <td v-html="$t('settings.help.icons.s1.ws.history.name')"></td>
+              <td>{{ $t('settings.help.icons.s1.ws.history.where') }}</td>
+              <td>{{ $t('settings.help.icons.s1.ws.history.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell">
                 <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M14 8.6V4.25A1.75 1.75 0 0 0 12.25 2.5h-8.5A1.75 1.75 0 0 0 2 4.25v7.5A1.75 1.75 0 0 0 3.75 13.5H8.6"/><path d="M4.9 5.9 7.4 8.4 4.9 10.9"/><path d="M12.25 9.75v5M9.75 12.25h5"/></svg>
               </td>
-              <td><code>Open Agent</code>（後面接目前選定的 CLI 名稱）</td>
-              <td>工作區列最右</td>
-              <td>
-                開新面板的主入口。按下去彈出 Role 下拉＋CLI 清單＋Terminal／Manual spawn。
-                工作區路徑還沒設定時會變成 <code>Set workspace path first</code> 且不可按。
-              </td>
+              <td v-html="$t('settings.help.icons.s1.ws.openAgent.name')"></td>
+              <td>{{ $t('settings.help.icons.s1.ws.openAgent.where') }}</td>
+              <td v-html="$t('settings.help.icons.s1.ws.openAgent.what')"></td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">＋</span></td>
-              <td><code>New group</code></td>
-              <td>側欄最左緣色軌的飛出選單</td>
-              <td>新增一個<strong>工作區群組</strong>（管很多專案時才用得到的分類層）。</td>
+              <td v-html="$t('settings.help.icons.s1.ws.newGroup.name')"></td>
+              <td>{{ $t('settings.help.icons.s1.ws.newGroup.where') }}</td>
+              <td v-html="$t('settings.help.icons.s1.ws.newGroup.what')"></td>
             </tr>
           </tbody>
         </table>
       </div>
 
-      <h3 class="irh-h3">群組列與面板列</h3>
+      <h3 class="irh-h3">{{ $t('settings.help.icons.s1.h3') }}</h3>
       <div class="irh-tablewrap">
         <table class="irh-table">
           <thead>
-            <tr><th>圖示</th><th>名稱</th><th>位置</th><th>作用</th></tr>
+            <tr>
+              <th>{{ $t('settings.help.icons.table.icon') }}</th>
+              <th>{{ $t('settings.help.icons.table.name') }}</th>
+              <th>{{ $t('settings.help.icons.table.where') }}</th>
+              <th>{{ $t('settings.help.icons.table.what') }}</th>
+            </tr>
           </thead>
           <tbody>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">›</span> / <span class="irh-glyph">⌄</span></td>
-              <td><code>Expand subtree</code> / <code>Collapse subtree</code></td>
-              <td>群組列最左</td>
-              <td>收合這一群的成員。</td>
+              <td v-html="$t('settings.help.icons.s1.group.groupSubtree.name')"></td>
+              <td>{{ $t('settings.help.icons.s1.group.groupSubtree.where') }}</td>
+              <td>{{ $t('settings.help.icons.s1.group.groupSubtree.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">＋</span></td>
-              <td><code>Open an agent in this group</code></td>
-              <td>群組列最右</td>
-              <td>同樣是開新面板，差別在新面板直接落進<strong>這個群組</strong>。</td>
+              <td v-html="$t('settings.help.icons.s1.group.openInGroup.name')"></td>
+              <td>{{ $t('settings.help.icons.s1.group.openInGroup.where') }}</td>
+              <td v-html="$t('settings.help.icons.s1.group.openInGroup.what')"></td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">▸</span> / <span class="irh-glyph">▾</span></td>
-              <td><code>Expand subtree</code> / <code>Collapse subtree</code></td>
-              <td>面板列最左（有子面板時才出現）</td>
-              <td>
-                收合這個 agent 開出來的子面板整棵樹。<strong>注意</strong>：工作區與群組用的是
-                <code>›/⌄</code>，血緣用的是 <code>▸/▾</code>，兩組不同。
-              </td>
+              <td v-html="$t('settings.help.icons.s1.group.lineageSubtree.name')"></td>
+              <td>{{ $t('settings.help.icons.s1.group.lineageSubtree.where') }}</td>
+              <td v-html="$t('settings.help.icons.s1.group.lineageSubtree.what')"></td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">◦</span></td>
-              <td><code>Named automatically from this session's first instruction…</code></td>
-              <td>面板名稱右側</td>
-              <td>純記號：這個名字是自動取的。改過名字就不再出現。</td>
+              <td><code>{{ $t('pane.terminal.auto-named-tooltip') }}</code></td>
+              <td>{{ $t('settings.help.icons.s1.group.autoNamed.where') }}</td>
+              <td>{{ $t('settings.help.icons.s1.group.autoNamed.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">🎯</span></td>
-              <td><code>Stage manager — controls flow and decides ---STAGE-DONE---</code></td>
-              <td>面板名稱旁，顯示為 <code>🎯 Mgr</code></td>
-              <td>純記號：這個面板是 pipeline 的階段總管。</td>
+              <td><code>{{ $t('label.stage-manager-tooltip') }}</code></td>
+              <td v-html="$t('settings.help.icons.s1.group.stageManager.where')"></td>
+              <td>{{ $t('settings.help.icons.s1.group.stageManager.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell">
                 <svg class="irh-ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>
               </td>
-              <td><code>Docked in sidebar</code></td>
-              <td>面板列上，顯示為圖示＋<code>Docked</code></td>
-              <td>純標籤：這個面板已經收起來了，只剩側欄這一列。</td>
+              <td><code>{{ $t('label.docked-in-sidebar') }}</code></td>
+              <td v-html="$t('settings.help.icons.s1.group.docked.where')"></td>
+              <td>{{ $t('settings.help.icons.s1.group.docked.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">▶</span></td>
-              <td>（無提示字串）</td>
-              <td>面板列右側</td>
-              <td>展開這一列的詳細資訊（session id、Interrupt 等）。展開後箭頭轉 90 度朝下。</td>
+              <td>{{ $t('settings.help.icons.s1.group.expandRow.name') }}</td>
+              <td>{{ $t('settings.help.icons.s1.group.expandRow.where') }}</td>
+              <td>{{ $t('settings.help.icons.s1.group.expandRow.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell">
                 <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 3.5v4h-4M2.5 12.5v-4h4M12.7 7A5 5 0 0 0 4 4.5L2.5 6M3.3 9A5 5 0 0 0 12 11.5l1.5-1.5"/></svg>
               </td>
-              <td><code>Rebuild (resume the conversation) ⌘R</code></td>
-              <td>面板列右側</td>
-              <td>只重建這一個面板。沒有可續接的 session 時會變灰，提示改成「先送一則訊息」。</td>
+              <td><code>{{ $t('pane.terminal.rebuild-tooltip') }}</code></td>
+              <td>{{ $t('settings.help.icons.s1.group.rebuild.where') }}</td>
+              <td>{{ $t('settings.help.icons.s1.group.rebuild.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">⊟</span></td>
-              <td><code>Minimize to sidebar</code></td>
-              <td>面板列最右</td>
-              <td>把面板收起來，只留側欄這一列。</td>
+              <td v-html="$t('settings.help.icons.s1.group.minimize.name')"></td>
+              <td>{{ $t('settings.help.icons.s1.group.minimize.where') }}</td>
+              <td>{{ $t('settings.help.icons.s1.group.minimize.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">⚙</span></td>
-              <td><code>Manage pipelines</code></td>
-              <td>Pipeline 分頁標題列</td>
-              <td>打開 Roles / Pipelines 管理視窗。</td>
+              <td><code>{{ $t('action.manage-pipelines') }}</code></td>
+              <td>{{ $t('settings.help.icons.s1.group.managePipelines.where') }}</td>
+              <td>{{ $t('settings.help.icons.s1.group.managePipelines.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">↺</span></td>
-              <td><code>Discard all stage progress and re-run from Stage 01</code></td>
-              <td>Pipeline 的 Resume 卡片，按鈕文字 <code>↺ Start over</code></td>
-              <td>放棄已跑的階段進度，從第一階段重來（會先要你確認）。</td>
+              <td v-html="$t('settings.help.icons.s1.group.startOver.name')"></td>
+              <td v-html="$t('settings.help.icons.s1.group.startOver.where')"></td>
+              <td>{{ $t('settings.help.icons.s1.group.startOver.what') }}</td>
             </tr>
           </tbody>
         </table>
       </div>
     </section>
 
-    <!-- ── 2 面板本體 ───────────────────────────────────────────────── -->
+    <!-- ── 2 · The pane itself ──────────────────────────────────────────── -->
     <section class="irh-section">
-      <h2 class="irh-h2">2 · 面板本體</h2>
+      <h2 class="irh-h2">2 · {{ $t('settings.help.icons.s2.title') }}</h2>
 
-      <h3 class="irh-h3">標題列</h3>
-      <p class="irh-p">由左到右。多數按鈕只在對應狀態下才出現，所以你不會一次看到全部。</p>
+      <h3 class="irh-h3">{{ $t('settings.help.icons.s2.h1') }}</h3>
+      <p class="irh-p">{{ $t('settings.help.icons.s2.p1') }}</p>
       <div class="irh-tablewrap">
         <table class="irh-table">
           <thead>
-            <tr><th>圖示</th><th>名稱</th><th>位置</th><th>作用</th></tr>
+            <tr>
+              <th>{{ $t('settings.help.icons.table.icon') }}</th>
+              <th>{{ $t('settings.help.icons.table.name') }}</th>
+              <th>{{ $t('settings.help.icons.table.where') }}</th>
+              <th>{{ $t('settings.help.icons.table.what') }}</th>
+            </tr>
           </thead>
           <tbody>
             <tr>
               <td class="irh-icocell">
                 <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 3.5v4h-4M2.5 12.5v-4h4M12.7 7A5 5 0 0 0 4 4.5L2.5 6M3.3 9A5 5 0 0 0 12 11.5l1.5-1.5"/></svg>
               </td>
-              <td><code>Rebuild (resume the conversation) ⌘R</code></td>
-              <td>標題列最左</td>
-              <td>
-                關掉再以 <code>--resume</code> 用目前尺寸重開，用來清掉重畫不掉的殘影。
-                <strong>會打斷進行中的回合並重印整段對話。</strong>
-              </td>
+              <td><code>{{ $t('pane.terminal.rebuild-tooltip') }}</code></td>
+              <td>{{ $t('settings.help.icons.s2.titleBar.rebuild.where') }}</td>
+              <td v-html="$t('settings.help.icons.s2.titleBar.rebuild.what')"></td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">⊟</span></td>
-              <td><code>Minimize to sidebar</code></td>
-              <td>rebuild 右側</td>
-              <td>把面板收進側欄，座位讓出來。</td>
+              <td v-html="$t('settings.help.icons.s2.titleBar.minimize.name')"></td>
+              <td>{{ $t('settings.help.icons.s2.titleBar.minimize.where') }}</td>
+              <td>{{ $t('settings.help.icons.s2.titleBar.minimize.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">◦</span></td>
-              <td><code>Named automatically from this session's first instruction — rename it and it stays yours</code></td>
-              <td>標題文字右側</td>
-              <td>純記號：名字是自動取的。雙擊標題改名後就消失。</td>
+              <td v-html="$t('settings.help.icons.s2.titleBar.autoNamed.name')"></td>
+              <td>{{ $t('settings.help.icons.s2.titleBar.autoNamed.where') }}</td>
+              <td>{{ $t('settings.help.icons.s2.titleBar.autoNamed.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">🎯</span></td>
-              <td><code>Global Manager — coordinates across stages…</code></td>
-              <td>標題文字旁，顯示 <code>🎯 Mgr</code></td>
-              <td>純記號：這是 pipeline 的總管面板。</td>
+              <td><code>{{ $t('pane.terminal.commander-tooltip') }}</code></td>
+              <td v-html="$t('settings.help.icons.s2.titleBar.globalManager.where')"></td>
+              <td>{{ $t('settings.help.icons.s2.titleBar.globalManager.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">∞</span></td>
-              <td><code>Loop — send the configured loop prompt to this pane</code></td>
-              <td>標題列</td>
-              <td>開始／停止自動循環：每回合結束就自動把設定好的 loop 提示再送一次。滑鼠停在上面會浮出提示技能環。</td>
+              <td v-html="$t('settings.help.icons.s2.titleBar.loop.name')"></td>
+              <td>{{ $t('settings.help.icons.s2.titleBar.loop.where') }}</td>
+              <td v-html="$t('settings.help.icons.s2.titleBar.loop.what')"></td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">∞</span></td>
-              <td><code>∞ Loop</code>（進行中徽章）</td>
-              <td>標題列，loop 跑起來後取代上面那顆</td>
-              <td>顯示循環狀態；等待中會顯示倒數。點一下處理目前的等待。</td>
+              <td v-html="$t('settings.help.icons.s2.titleBar.loopActive.name')"></td>
+              <td>{{ $t('settings.help.icons.s2.titleBar.loopActive.where') }}</td>
+              <td>{{ $t('settings.help.icons.s2.titleBar.loopActive.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">⚠</span></td>
-              <td><code>⚠ Login expired</code> ／ 提示 <code>The CLI's login has expired — click to send its login command</code></td>
-              <td>標題列</td>
-              <td>這個 CLI 的登入過期了。<strong>點一下會直接把登入指令送進面板。</strong></td>
+              <td v-html="$t('settings.help.icons.s2.titleBar.loginExpired.name')"></td>
+              <td>{{ $t('settings.help.icons.s2.titleBar.loginExpired.where') }}</td>
+              <td v-html="$t('settings.help.icons.s2.titleBar.loginExpired.what')"></td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">⚠</span></td>
-              <td>額度徽章的警告狀態</td>
-              <td>標題列最右</td>
-              <td>額度讀不到時顯示。滑鼠停上去看原因：憑證過期、CLI 不在 PATH，或是正在讀取。</td>
+              <td>{{ $t('settings.help.icons.s2.titleBar.quotaWarn.name') }}</td>
+              <td>{{ $t('settings.help.icons.s2.titleBar.quotaWarn.where') }}</td>
+              <td>{{ $t('settings.help.icons.s2.titleBar.quotaWarn.what') }}</td>
             </tr>
             <tr>
-              <td class="irh-icocell"><span class="irh-plain">數字</span></td>
-              <td><code>Remaining quota — hover for details</code></td>
-              <td>標題列最右</td>
-              <td>
-                剩餘額度。滑鼠移上去展開帳號清單。讀取中顯示 <code>reading</code>；
-                快取值會有 <code>Cached quota</code> 的提示。
-              </td>
+              <td class="irh-icocell"><span class="irh-plain">{{ $t('settings.help.icons.s2.titleBar.quota.sample') }}</span></td>
+              <td v-html="$t('settings.help.icons.s2.titleBar.quota.name')"></td>
+              <td>{{ $t('settings.help.icons.s2.titleBar.quota.where') }}</td>
+              <td v-html="$t('settings.help.icons.s2.titleBar.quota.what')"></td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">✓</span></td>
-              <td>（清單項目，無獨立提示）</td>
-              <td>額度浮層的帳號清單</td>
-              <td>純記號：打勾那個是目前使用中的帳號。點其他列即切換帳號。</td>
+              <td>{{ $t('settings.help.icons.s2.titleBar.activeAccount.name') }}</td>
+              <td>{{ $t('settings.help.icons.s2.titleBar.activeAccount.where') }}</td>
+              <td>{{ $t('settings.help.icons.s2.titleBar.activeAccount.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">～</span></td>
-              <td>（無提示字串）</td>
-              <td>額度浮層裡百分比數字前</td>
-              <td>純記號：這個數字是舊快照，不是剛讀到的。</td>
+              <td>{{ $t('settings.help.icons.s2.titleBar.cachedQuota.name') }}</td>
+              <td>{{ $t('settings.help.icons.s2.titleBar.cachedQuota.where') }}</td>
+              <td>{{ $t('settings.help.icons.s2.titleBar.cachedQuota.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">＋</span></td>
-              <td><code>Add / manage accounts…</code></td>
-              <td>額度浮層底部</td>
-              <td>跳到設定裡的 CLI 帳號頁。</td>
+              <td v-html="$t('settings.help.icons.s2.titleBar.addAccounts.name')"></td>
+              <td>{{ $t('settings.help.icons.s2.titleBar.addAccounts.where') }}</td>
+              <td>{{ $t('settings.help.icons.s2.titleBar.addAccounts.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">↻</span></td>
-              <td><code>↻ Continue</code> ／ 提示 <code>This session was restored and is waiting at the prompt…</code></td>
-              <td>終端機畫面下方</td>
-              <td>面板是重啟後還原的、停在提示符不動時才出現。按下去送出 <em>continue</em>，把工作接回去。</td>
+              <td v-html="$t('settings.help.icons.s2.titleBar.continue.name')"></td>
+              <td>{{ $t('settings.help.icons.s2.titleBar.continue.where') }}</td>
+              <td v-html="$t('settings.help.icons.s2.titleBar.continue.what')"></td>
             </tr>
           </tbody>
         </table>
       </div>
 
-      <h3 class="irh-h3">佔位卡</h3>
-      <p class="irh-p">重開 app、或被閒置回收之後，面板會變成一張卡片。</p>
+      <h3 class="irh-h3">{{ $t('settings.help.icons.s2.h2') }}</h3>
+      <p class="irh-p">{{ $t('settings.help.icons.s2.p2') }}</p>
       <div class="irh-tablewrap">
         <table class="irh-table">
           <thead>
-            <tr><th>圖示</th><th>名稱</th><th>位置</th><th>作用</th></tr>
+            <tr>
+              <th>{{ $t('settings.help.icons.table.icon') }}</th>
+              <th>{{ $t('settings.help.icons.table.name') }}</th>
+              <th>{{ $t('settings.help.icons.table.where') }}</th>
+              <th>{{ $t('settings.help.icons.table.what') }}</th>
+            </tr>
           </thead>
           <tbody>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">↩</span></td>
-              <td><code>Click to resume</code>（進行中變 <code>Resuming…</code>）</td>
-              <td>卡片正中央</td>
-              <td>把 CLI 叫回來、接著原本的對話繼續。<strong>點卡片任何一處都有效</strong>，不必瞄準這顆按鈕。</td>
+              <td v-html="$t('settings.help.icons.s2.placeholder.resume.name')"></td>
+              <td>{{ $t('settings.help.icons.s2.placeholder.resume.where') }}</td>
+              <td v-html="$t('settings.help.icons.s2.placeholder.resume.what')"></td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">⊟</span></td>
-              <td><code>Minimize to sidebar</code></td>
-              <td>卡片右上角</td>
-              <td>連卡片也收進側欄。</td>
+              <td v-html="$t('settings.help.icons.s2.placeholder.minimize.name')"></td>
+              <td>{{ $t('settings.help.icons.s2.placeholder.minimize.where') }}</td>
+              <td>{{ $t('settings.help.icons.s2.placeholder.minimize.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">◦</span></td>
-              <td><code>Named automatically…</code></td>
-              <td>卡片標題旁</td>
-              <td>純記號，同上。</td>
+              <td><code>{{ $t('pane.terminal.auto-named-tooltip') }}</code></td>
+              <td>{{ $t('settings.help.icons.s2.placeholder.autoNamed.where') }}</td>
+              <td>{{ $t('settings.help.icons.s2.placeholder.autoNamed.what') }}</td>
             </tr>
           </tbody>
         </table>
       </div>
     </section>
 
-    <!-- ── 3 舞台與 tab 列 ──────────────────────────────────────────── -->
+    <!-- ── 3 · Stage and tab bar ────────────────────────────────────────── -->
     <section class="irh-section">
-      <h2 class="irh-h2">3 · 舞台與 tab 列</h2>
+      <h2 class="irh-h2">3 · {{ $t('settings.help.icons.s3.title') }}</h2>
 
-      <h3 class="irh-h3">四顆排列模式鈕</h3>
-      <p class="irh-p">在 tab 列右端。四顆都是符號，不是圖檔。</p>
+      <h3 class="irh-h3">{{ $t('settings.help.icons.s3.h1') }}</h3>
+      <p class="irh-p">{{ $t('settings.help.icons.s3.p1') }}</p>
       <div class="irh-tablewrap">
         <table class="irh-table">
           <thead>
-            <tr><th>圖示</th><th>名稱</th><th>位置</th><th>作用</th></tr>
+            <tr>
+              <th>{{ $t('settings.help.icons.table.icon') }}</th>
+              <th>{{ $t('settings.help.icons.table.name') }}</th>
+              <th>{{ $t('settings.help.icons.table.where') }}</th>
+              <th>{{ $t('settings.help.icons.table.what') }}</th>
+            </tr>
           </thead>
           <tbody>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">⊞</span></td>
-              <td><code>Grid — show all panes</code></td>
-              <td>tab 列右端第 1 顆</td>
-              <td>所有面板並排。</td>
+              <td><code>{{ $t('label.view-mode-grid') }}</code></td>
+              <td>{{ $t('settings.help.icons.s3.modes.grid.where') }}</td>
+              <td>{{ $t('settings.help.icons.s3.modes.grid.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">◧</span></td>
-              <td><code>Sidebar — show the selected pane with the Active agents list</code></td>
-              <td>第 2 顆</td>
-              <td>焦點面板佔主區，旁邊一條列出還在跑的 agent。</td>
+              <td><code>{{ $t('label.view-mode-sidebar') }}</code></td>
+              <td>{{ $t('settings.help.icons.s3.modes.sidebar.where') }}</td>
+              <td>{{ $t('settings.help.icons.s3.modes.sidebar.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">◎</span></td>
-              <td><code>Spotlight — show the selected pane with thumbnails</code></td>
-              <td>第 3 顆</td>
-              <td>焦點面板放大，其餘變縮圖條。</td>
+              <td><code>{{ $t('label.view-mode-spotlight') }}</code></td>
+              <td>{{ $t('settings.help.icons.s3.modes.spotlight.where') }}</td>
+              <td>{{ $t('settings.help.icons.s3.modes.spotlight.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">⧉</span></td>
-              <td><code>Fullscreen — fill the workspace with the selected pane</code></td>
-              <td>第 4 顆</td>
-              <td>焦點面板佔滿整個工作區。</td>
+              <td><code>{{ $t('label.view-mode-fullscreen') }}</code></td>
+              <td>{{ $t('settings.help.icons.s3.modes.fullscreen.where') }}</td>
+              <td>{{ $t('settings.help.icons.s3.modes.fullscreen.what') }}</td>
             </tr>
           </tbody>
         </table>
       </div>
 
-      <h3 class="irh-h3">Grid 比例工具列</h3>
-      <p class="irh-p">只在 Grid 模式、且面板超過一個時出現。</p>
+      <h3 class="irh-h3">{{ $t('settings.help.icons.s3.h2') }}</h3>
+      <p class="irh-p">{{ $t('settings.help.icons.s3.p2') }}</p>
       <div class="irh-tablewrap">
         <table class="irh-table">
           <thead>
-            <tr><th>圖示</th><th>名稱</th><th>位置</th><th>作用</th></tr>
+            <tr>
+              <th>{{ $t('settings.help.icons.table.icon') }}</th>
+              <th>{{ $t('settings.help.icons.table.name') }}</th>
+              <th>{{ $t('settings.help.icons.table.where') }}</th>
+              <th>{{ $t('settings.help.icons.table.what') }}</th>
+            </tr>
           </thead>
           <tbody>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">∞</span></td>
-              <td><code>Auto — fit all panes</code></td>
-              <td>比例列第 1 顆</td>
-              <td>自動塞下全部面板，不分頁。</td>
+              <td><code>{{ $t('label.grid-ratio-auto') }}</code></td>
+              <td>{{ $t('settings.help.icons.s3.gridBar.auto.where') }}</td>
+              <td>{{ $t('settings.help.icons.s3.gridBar.auto.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">2×1</span></td>
-              <td><code>2×1 layout — pages of 2 panes</code></td>
-              <td>比例列</td>
-              <td>固定每頁 2 格。</td>
+              <td><code>{{ $t('label.grid-ratio-2x1') }}</code></td>
+              <td>{{ $t('settings.help.icons.s3.gridBar.r2x1.where') }}</td>
+              <td>{{ $t('settings.help.icons.s3.gridBar.r2x1.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">2×2</span></td>
-              <td><code>2×2 layout — pages of 4 panes</code></td>
-              <td>比例列</td>
-              <td>固定每頁 4 格。</td>
+              <td><code>{{ $t('label.grid-ratio-2x2') }}</code></td>
+              <td>{{ $t('settings.help.icons.s3.gridBar.r2x2.where') }}</td>
+              <td>{{ $t('settings.help.icons.s3.gridBar.r2x2.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">3×3</span></td>
-              <td><code>3×3 layout — pages of 9 panes</code></td>
-              <td>比例列</td>
-              <td>固定每頁 9 格。</td>
+              <td><code>{{ $t('label.grid-ratio-3x3') }}</code></td>
+              <td>{{ $t('settings.help.icons.s3.gridBar.r3x3.where') }}</td>
+              <td>{{ $t('settings.help.icons.s3.gridBar.r3x3.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">×</span></td>
-              <td><code>Custom columns</code> / <code>Custom rows</code></td>
-              <td>比例列右側兩個輸入框，中間是 <code>×</code></td>
-              <td>自己填欄數與列數（1–9），按 Enter 或離開欄位就套用。</td>
+              <td><code>{{ $t('label.grid-custom-columns') }}</code> / <code>{{ $t('label.grid-custom-rows') }}</code></td>
+              <td v-html="$t('settings.help.icons.s3.gridBar.custom.where')"></td>
+              <td>{{ $t('settings.help.icons.s3.gridBar.custom.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">‹</span></td>
-              <td><code>Previous page</code></td>
-              <td>比例列最右，頁碼左邊</td>
-              <td>上一頁面板。已在第一頁時是灰的。</td>
+              <td><code>{{ $t('action.prev-page') }}</code></td>
+              <td>{{ $t('settings.help.icons.s3.gridBar.prevPage.where') }}</td>
+              <td>{{ $t('settings.help.icons.s3.gridBar.prevPage.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">›</span></td>
-              <td><code>Next page</code></td>
-              <td>頁碼右邊</td>
-              <td>下一頁面板。中間的 <code>1/3</code> 是目前頁／總頁數。</td>
+              <td><code>{{ $t('action.next-page') }}</code></td>
+              <td>{{ $t('settings.help.icons.s3.gridBar.nextPage.where') }}</td>
+              <td v-html="$t('settings.help.icons.s3.gridBar.nextPage.what')"></td>
             </tr>
           </tbody>
         </table>
       </div>
 
-      <h3 class="irh-h3">tab 列本身</h3>
+      <h3 class="irh-h3">{{ $t('settings.help.icons.s3.h3') }}</h3>
       <div class="irh-tablewrap">
         <table class="irh-table">
           <thead>
-            <tr><th>圖示</th><th>名稱</th><th>位置</th><th>作用</th></tr>
+            <tr>
+              <th>{{ $t('settings.help.icons.table.icon') }}</th>
+              <th>{{ $t('settings.help.icons.table.name') }}</th>
+              <th>{{ $t('settings.help.icons.table.where') }}</th>
+              <th>{{ $t('settings.help.icons.table.what') }}</th>
+            </tr>
           </thead>
           <tbody>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">✕</span></td>
-              <td><code>刪除此 tab</code></td>
-              <td>每個 tab 的右側</td>
-              <td>該 tab 沒有面板時直接刪掉；還有面板時會先跳選單問你要「移到其他分組」還是「關閉所有 pane」。</td>
+              <td v-html="$t('settings.help.icons.s3.tabBar.deleteTab.name')"></td>
+              <td>{{ $t('settings.help.icons.s3.tabBar.deleteTab.where') }}</td>
+              <td>{{ $t('settings.help.icons.s3.tabBar.deleteTab.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">+</span></td>
-              <td><code>新增 Pipeline 區塊</code></td>
-              <td>tab 列末端</td>
-              <td>新增一個分組（tab）。</td>
+              <td v-html="$t('settings.help.icons.s3.tabBar.addTab.name')"></td>
+              <td>{{ $t('settings.help.icons.s3.tabBar.addTab.where') }}</td>
+              <td>{{ $t('settings.help.icons.s3.tabBar.addTab.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell">
                 <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 3.5v4h-4M2.5 12.5v-4h4M12.7 7A5 5 0 0 0 4 4.5L2.5 6M3.3 9A5 5 0 0 0 12 11.5l1.5-1.5"/></svg>
               </td>
-              <td><code>Rebuild every resumable CLI pane in the active tab…</code></td>
-              <td>tab 列最末端</td>
-              <td>把目前這個 tab 裡所有可續接的面板整批重建。執行中圖示會轉。</td>
+              <td><code>{{ $t('action.rebuild-tab-cli-panes') }}</code></td>
+              <td>{{ $t('settings.help.icons.s3.tabBar.rebuildTab.where') }}</td>
+              <td>{{ $t('settings.help.icons.s3.tabBar.rebuildTab.what') }}</td>
             </tr>
           </tbody>
         </table>
       </div>
     </section>
 
-    <!-- ── 4 狀態列 ─────────────────────────────────────────────────── -->
+    <!-- ── 4 · Status bar ───────────────────────────────────────────────── -->
     <section class="irh-section">
-      <h2 class="irh-h2">4 · 狀態列</h2>
+      <h2 class="irh-h2">4 · {{ $t('settings.help.icons.s4.title') }}</h2>
 
-      <h3 class="irh-h3">左半：環境狀態</h3>
+      <h3 class="irh-h3">{{ $t('settings.help.icons.s4.h1') }}</h3>
       <div class="irh-tablewrap">
         <table class="irh-table">
           <thead>
-            <tr><th>圖示</th><th>名稱</th><th>位置</th><th>作用</th></tr>
+            <tr>
+              <th>{{ $t('settings.help.icons.table.icon') }}</th>
+              <th>{{ $t('settings.help.icons.table.name') }}</th>
+              <th>{{ $t('settings.help.icons.table.where') }}</th>
+              <th>{{ $t('settings.help.icons.table.what') }}</th>
+            </tr>
           </thead>
           <tbody>
             <tr>
               <td class="irh-icocell">
                 <svg class="irh-ic" viewBox="0 0 24 24" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
               </td>
-              <td>（無提示字串）</td>
-              <td>狀態列最左，後面接分支名</td>
-              <td>純顯示：目前的 Git 分支。分支名後面的 <code>*</code> 表示有未提交的變更。</td>
+              <td>{{ $t('settings.help.icons.s4.left.branch.name') }}</td>
+              <td>{{ $t('settings.help.icons.s4.left.branch.where') }}</td>
+              <td v-html="$t('settings.help.icons.s4.left.branch.what')"></td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">↓</span> <span class="irh-glyph">↑</span></td>
-              <td>（無提示字串）</td>
-              <td>分支名後面</td>
-              <td>純顯示：落後遠端幾個 commit（<code>↓</code>）、領先幾個（<code>↑</code>）。</td>
+              <td>{{ $t('settings.help.icons.s4.left.aheadBehind.name') }}</td>
+              <td>{{ $t('settings.help.icons.s4.left.aheadBehind.where') }}</td>
+              <td v-html="$t('settings.help.icons.s4.left.aheadBehind.what')"></td>
             </tr>
             <tr>
-              <td class="irh-icocell"><span class="irh-plain">色點</span></td>
-              <td><code>backend</code> / <code>backend down</code> / <code>connecting…</code></td>
-              <td>狀態列左半</td>
-              <td>後端連線狀態，色點跟著狀態變色。點開有位址、PID 與 <em>Restart</em> / <em>Stop</em>。</td>
+              <td class="irh-icocell"><span class="irh-plain">{{ $t('settings.help.icons.s4.left.backend.sample') }}</span></td>
+              <td><code>{{ $t('label.backend-pill-connected') }}</code> / <code>{{ $t('label.backend-pill-down') }}</code> / <code>{{ $t('label.backend-pill-connecting') }}</code></td>
+              <td>{{ $t('settings.help.icons.s4.left.backend.where') }}</td>
+              <td v-html="$t('settings.help.icons.s4.left.backend.what')"></td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">▤</span></td>
-              <td><code>CLI resources</code></td>
-              <td>狀態列左半，顯示為 <code>▤ 3</code> 這種形式</td>
-              <td>目前有幾個面板在跑，以及 CPU／記憶體。點開看每個面板的用量，可以直接回收或跳過去。</td>
+              <td v-html="$t('settings.help.icons.s4.left.resources.name')"></td>
+              <td v-html="$t('settings.help.icons.s4.left.resources.where')"></td>
+              <td>{{ $t('settings.help.icons.s4.left.resources.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">↑</span></td>
-              <td><code>↑</code>＋版本號</td>
-              <td>狀態列左半</td>
-              <td>有新版可下載。點一下開始處理更新。</td>
+              <td v-html="$t('settings.help.icons.s4.left.updateAvailable.name')"></td>
+              <td>{{ $t('settings.help.icons.s4.left.updateAvailable.where') }}</td>
+              <td>{{ $t('settings.help.icons.s4.left.updateAvailable.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">↓</span></td>
-              <td><code>↓</code>＋百分比</td>
-              <td>同上位置</td>
-              <td>
-                更新下載中。下載完會換成 <code>Update ready</code> 或 <code>Restart for new version</code>；
-                失敗則是 <code>Update failed</code> / <code>Update check failed</code>。
-              </td>
+              <td v-html="$t('settings.help.icons.s4.left.updateDownloading.name')"></td>
+              <td>{{ $t('settings.help.icons.s4.left.updateDownloading.where') }}</td>
+              <td v-html="$t('settings.help.icons.s4.left.updateDownloading.what')"></td>
             </tr>
           </tbody>
         </table>
       </div>
 
-      <h3 class="irh-h3">右半：進行中的事</h3>
+      <h3 class="irh-h3">{{ $t('settings.help.icons.s4.h2') }}</h3>
       <div class="irh-tablewrap">
         <table class="irh-table">
           <thead>
-            <tr><th>圖示</th><th>名稱</th><th>位置</th><th>作用</th></tr>
+            <tr>
+              <th>{{ $t('settings.help.icons.table.icon') }}</th>
+              <th>{{ $t('settings.help.icons.table.name') }}</th>
+              <th>{{ $t('settings.help.icons.table.where') }}</th>
+              <th>{{ $t('settings.help.icons.table.what') }}</th>
+            </tr>
           </thead>
           <tbody>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">↻</span></td>
-              <td><code>Backfilling historical token usage in the background</code>，顯示 <code>↻ tidying token history…</code></td>
-              <td>狀態列右半</td>
-              <td>純顯示：背景正在回填歷史用量。不必理它。</td>
+              <td v-html="$t('settings.help.icons.s4.right.tidying.name')"></td>
+              <td>{{ $t('settings.help.icons.s4.right.tidying.where') }}</td>
+              <td>{{ $t('settings.help.icons.s4.right.tidying.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">⚠</span></td>
-              <td><code>Leftover CLI processes</code>，顯示 <code>⚠ N leftover</code></td>
-              <td>狀態列右半</td>
-              <td>有殘留的孤兒終端機行程。<strong>點一下把它們清掉。</strong></td>
+              <td v-html="$t('settings.help.icons.s4.right.leftover.name')"></td>
+              <td>{{ $t('settings.help.icons.s4.right.leftover.where') }}</td>
+              <td v-html="$t('settings.help.icons.s4.right.leftover.what')"></td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">⚡</span></td>
-              <td><code>{count} conversation(s) may have been disconnected — click to recover</code></td>
-              <td>狀態列右半</td>
-              <td>有面板斷線。點文字開重連挑選器。</td>
+              <td v-html="$t('settings.help.icons.s4.right.disconnected.name')"></td>
+              <td>{{ $t('settings.help.icons.s4.right.disconnected.where') }}</td>
+              <td>{{ $t('settings.help.icons.s4.right.disconnected.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">✕</span></td>
-              <td><code>Dismiss</code></td>
-              <td>緊接在 <code>⚡</code> 那條後面</td>
-              <td>忽略這次的斷線提示，不做重連。</td>
+              <td v-html="$t('settings.help.icons.s4.right.dismiss.name')"></td>
+              <td v-html="$t('settings.help.icons.s4.right.dismiss.where')"></td>
+              <td>{{ $t('settings.help.icons.s4.right.dismiss.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">📢</span></td>
-              <td><code>Announcements</code></td>
-              <td>狀態列右半，後面接版本號與未讀數</td>
-              <td>打開公告中心：更新說明與通知，可展開內容、全部標為已讀、直接觸發下載／安裝。</td>
+              <td v-html="$t('settings.help.icons.s4.right.announcements.name')"></td>
+              <td>{{ $t('settings.help.icons.s4.right.announcements.where') }}</td>
+              <td>{{ $t('settings.help.icons.s4.right.announcements.what') }}</td>
             </tr>
             <tr>
-              <td class="irh-icocell"><span class="irh-plain">時間</span></td>
-              <td><code>Time</code></td>
-              <td>狀態列右半</td>
-              <td>
-                點開看現在時間、本次 session 起始、專案建立時間與 build 標記。
-                <strong>build 標記不是時鐘</strong>，不會跟著走。
-              </td>
+              <td class="irh-icocell"><span class="irh-plain">{{ $t('settings.help.icons.s4.right.time.sample') }}</span></td>
+              <td v-html="$t('settings.help.icons.s4.right.time.name')"></td>
+              <td>{{ $t('settings.help.icons.s4.right.time.where') }}</td>
+              <td v-html="$t('settings.help.icons.s4.right.time.what')"></td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">✕</span></td>
-              <td><code>Close all sessions and tabs (history kept)</code></td>
-              <td>狀態列最右</td>
-              <td>關掉所有 session 與 tab。歷史會保留。</td>
+              <td v-html="$t('settings.help.icons.s4.right.closeAll.name')"></td>
+              <td>{{ $t('settings.help.icons.s4.right.closeAll.where') }}</td>
+              <td>{{ $t('settings.help.icons.s4.right.closeAll.what') }}</td>
             </tr>
           </tbody>
         </table>
       </div>
     </section>
 
-    <!-- ── 5 Git 面板 ───────────────────────────────────────────────── -->
+    <!-- ── 5 · Git pane ─────────────────────────────────────────────────── -->
     <section class="irh-section">
-      <h2 class="irh-h2">5 · Git 面板</h2>
+      <h2 class="irh-h2">5 · {{ $t('settings.help.icons.s5.title') }}</h2>
 
-      <h3 class="irh-h3">面板頂端工具列</h3>
+      <h3 class="irh-h3">{{ $t('settings.help.icons.s5.h1') }}</h3>
       <div class="irh-tablewrap">
         <table class="irh-table">
           <thead>
-            <tr><th>圖示</th><th>名稱</th><th>位置</th><th>作用</th></tr>
+            <tr>
+              <th>{{ $t('settings.help.icons.table.icon') }}</th>
+              <th>{{ $t('settings.help.icons.table.name') }}</th>
+              <th>{{ $t('settings.help.icons.table.where') }}</th>
+              <th>{{ $t('settings.help.icons.table.what') }}</th>
+            </tr>
           </thead>
           <tbody>
             <tr>
               <td class="irh-icocell">
                 <svg class="irh-ic irh-ic--filled" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 2.75a.75.75 0 1 1 1.5 0 .75.75 0 0 1-1.5 0zM1.5 8a.75.75 0 1 1 1.5 0A.75.75 0 0 1 1.5 8zm.75 4.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zM4.25 3.5h9.5a.75.75 0 0 0 0-1.5h-9.5a.75.75 0 0 0 0 1.5zM4 8.75h9.75a.75.75 0 0 0 0-1.5H4a.75.75 0 0 0 0 1.5zm0 5.5h9.75a.75.75 0 0 0 0-1.5H4a.75.75 0 0 0 0 1.5z"/></svg>
               </td>
-              <td><code>Switch to List View</code></td>
-              <td>工具列（目前是樹狀時顯示這顆）</td>
-              <td>把變更檔案改成平鋪清單。</td>
+              <td v-html="$t('settings.help.icons.s5.toolbar.listView.name')"></td>
+              <td>{{ $t('settings.help.icons.s5.toolbar.listView.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.toolbar.listView.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell">
                 <svg class="irh-ic irh-ic--filled" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12v1.5H2zm0 3.5h12V9H2zm0 3.5h12v1.5H2z"/></svg>
               </td>
-              <td><code>Switch to Tree View</code></td>
-              <td>工具列（目前是清單時顯示這顆）</td>
-              <td>把變更檔案改成資料夾樹。</td>
+              <td v-html="$t('settings.help.icons.s5.toolbar.treeView.name')"></td>
+              <td>{{ $t('settings.help.icons.s5.toolbar.treeView.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.toolbar.treeView.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell">
                 <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><rect x="4.5" y="1.5" width="10" height="10" rx="1"/><rect x="1.5" y="4.5" width="10" height="10" rx="1"/><path d="M4 9.5h5"/></svg>
               </td>
-              <td><code>Collapse all folders</code></td>
-              <td>工具列（只在樹狀模式）</td>
-              <td>把所有資料夾收起來。</td>
+              <td v-html="$t('settings.help.icons.s5.toolbar.collapseAll.name')"></td>
+              <td>{{ $t('settings.help.icons.s5.toolbar.collapseAll.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.toolbar.collapseAll.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell">
                 <svg class="irh-ic irh-ic--filled" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 7.5A6 6 0 0 1 13 5.185V2.75a.75.75 0 0 1 1.5 0V7a.75.75 0 0 1-.75.75H9.25a.75.75 0 0 1 0-1.5h2.565A4.5 4.5 0 1 0 12 10a.75.75 0 1 1 1.261.815A6 6 0 1 1 1.5 7.5z"/></svg>
               </td>
-              <td><code>Refresh</code></td>
-              <td>工具列</td>
-              <td>重讀一次 Git 狀態。</td>
+              <td v-html="$t('settings.help.icons.s5.toolbar.refresh.name')"></td>
+              <td>{{ $t('settings.help.icons.s5.toolbar.refresh.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.toolbar.refresh.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell">
                 <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="1.5" width="13" height="13" rx="1.5"/><path d="M5.5 1.5v13M1.5 5.5h4"/></svg>
               </td>
-              <td><code>Open in New Window</code></td>
-              <td>工具列（側欄模式才有）</td>
-              <td>把 Git 面板拉到獨立視窗。</td>
+              <td v-html="$t('settings.help.icons.s5.toolbar.newWindow.name')"></td>
+              <td>{{ $t('settings.help.icons.s5.toolbar.newWindow.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.toolbar.newWindow.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell">
                 <svg class="irh-ic irh-ic--filled" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm0 1.5a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13zM7 5v3.5l3 1.5-.5 1L6 9V5z"/></svg>
               </td>
-              <td><code>Diff Review</code></td>
-              <td>工具列（內嵌在編輯器視窗時才有）</td>
-              <td>開一個合併差異＋審查的分頁。</td>
+              <td v-html="$t('settings.help.icons.s5.toolbar.diffReview.name')"></td>
+              <td>{{ $t('settings.help.icons.s5.toolbar.diffReview.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.toolbar.diffReview.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">···</span></td>
-              <td><code>More options</code></td>
-              <td>工具列最右</td>
-              <td>
-                檢視選單：清單／樹狀、依名稱／路徑／狀態排序、顯示被忽略的檔案。
-                目前生效的項目前面有 <code>✓</code>。
-              </td>
+              <td v-html="$t('settings.help.icons.s5.toolbar.moreOptions.name')"></td>
+              <td>{{ $t('settings.help.icons.s5.toolbar.moreOptions.where') }}</td>
+              <td v-html="$t('settings.help.icons.s5.toolbar.moreOptions.what')"></td>
             </tr>
           </tbody>
         </table>
       </div>
 
-      <h3 class="irh-h3">檔案列（Changes / Staged Changes）</h3>
-      <p class="irh-p">
-        這一區的按鈕全是符號，同一顆符號在「資料夾列」「單檔列」「區段標題」上重複出現，作用範圍不同而已。
-      </p>
+      <h3 class="irh-h3">{{ $t('settings.help.icons.s5.h2') }}</h3>
+      <p class="irh-p">{{ $t('settings.help.icons.s5.p1') }}</p>
       <div class="irh-tablewrap">
         <table class="irh-table">
           <thead>
-            <tr><th>圖示</th><th>名稱</th><th>位置</th><th>作用</th></tr>
+            <tr>
+              <th>{{ $t('settings.help.icons.table.icon') }}</th>
+              <th>{{ $t('settings.help.icons.table.name') }}</th>
+              <th>{{ $t('settings.help.icons.table.where') }}</th>
+              <th>{{ $t('settings.help.icons.table.what') }}</th>
+            </tr>
           </thead>
           <tbody>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">＋</span></td>
-              <td><code>Stage</code> / <code>Stage folder</code> / <code>Stage All</code></td>
-              <td>Changes 區的單檔列／資料夾列／區段標題</td>
-              <td>把這個檔案、這個資料夾底下全部、或全部變更加入暫存。</td>
+              <td><code>{{ $t('action.stage') }}</code> / <code>{{ $t('action.stage-folder') }}</code> / <code>{{ $t('action.stage-all') }}</code></td>
+              <td>{{ $t('settings.help.icons.s5.files.stage.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.files.stage.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">−</span></td>
-              <td><code>Unstage</code> / <code>Unstage folder</code> / <code>Unstage All Changes</code></td>
-              <td>Staged Changes 區對應位置</td>
-              <td>把已暫存的內容退回未暫存。</td>
+              <td><code>{{ $t('action.unstage') }}</code> / <code>{{ $t('action.unstage-folder') }}</code> / <code>{{ $t('action.unstage-all') }}</code></td>
+              <td>{{ $t('settings.help.icons.s5.files.unstage.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.files.unstage.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">↩</span></td>
-              <td><code>Discard</code> / <code>Discard folder</code> / <code>Discard All Changes</code></td>
-              <td>Changes 區對應位置</td>
-              <td><strong>丟掉修改</strong>，把檔案還原成上一次提交的樣子。會先確認。</td>
+              <td><code>{{ $t('action.discard') }}</code> / <code>{{ $t('action.discard-folder') }}</code> / <code>{{ $t('action.discard-all') }}</code></td>
+              <td>{{ $t('settings.help.icons.s5.files.discard.where') }}</td>
+              <td v-html="$t('settings.help.icons.s5.files.discard.what')"></td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">⊡</span></td>
-              <td><code>File history + blame</code></td>
-              <td>單檔列</td>
-              <td>展開這個檔案的歷史與逐行歸屬。</td>
+              <td><code>{{ $t('action.file-history-blame') }}</code></td>
+              <td>{{ $t('settings.help.icons.s5.files.blame.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.files.blame.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">↰</span></td>
-              <td><code>Accept Ours</code></td>
-              <td>衝突檔案列（狀態 <code>U</code>）</td>
-              <td>整檔採用「我們這邊」的版本解衝突。</td>
+              <td v-html="$t('settings.help.icons.s5.files.acceptOurs.name')"></td>
+              <td v-html="$t('settings.help.icons.s5.files.acceptOurs.where')"></td>
+              <td>{{ $t('settings.help.icons.s5.files.acceptOurs.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">↱</span></td>
-              <td><code>Accept Theirs</code></td>
-              <td>衝突檔案列</td>
-              <td>整檔採用「對方那邊」的版本解衝突。</td>
+              <td v-html="$t('settings.help.icons.s5.files.acceptTheirs.name')"></td>
+              <td>{{ $t('settings.help.icons.s5.files.acceptTheirs.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.files.acceptTheirs.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell">
                 <svg class="irh-ic irh-ic--filled" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75z"/></svg>
               </td>
-              <td>（無提示字串，旁邊是資料夾路徑）</td>
-              <td>樹狀模式的資料夾列</td>
-              <td>純標記。點整列可收合／展開該資料夾。</td>
+              <td>{{ $t('settings.help.icons.s5.files.folderMark.name') }}</td>
+              <td>{{ $t('settings.help.icons.s5.files.folderMark.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.files.folderMark.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell">
                 <svg class="irh-ic irh-ic--filled" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 1.75C2 .784 2.784 0 3.75 0h6.586c.464 0 .909.184 1.237.513l2.914 2.914c.329.328.513.773.513 1.237v9.586A1.75 1.75 0 0 1 13.25 16h-9.5A1.75 1.75 0 0 1 2 14.25V1.75zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .138.112.25.25.25h9.5a.25.25 0 0 0 .25-.25V6h-2.75A1.75 1.75 0 0 1 9 4.25V1.5H3.75zm6.75.56v2.19c0 .138.112.25.25.25h2.19L10.5 2.06z"/></svg>
               </td>
-              <td><code>Open diff in editor</code></td>
-              <td>History 展開某個 commit 後的檔案清單</td>
-              <td>在編輯器開啟那個檔案在該 commit 的差異。</td>
+              <td><code>{{ $t('action.open-diff-in-editor') }}</code></td>
+              <td>{{ $t('settings.help.icons.s5.files.openDiff.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.files.openDiff.what') }}</td>
             </tr>
           </tbody>
         </table>
       </div>
 
-      <h3 class="irh-h3">Commit 區</h3>
+      <h3 class="irh-h3">{{ $t('settings.help.icons.s5.h3') }}</h3>
       <div class="irh-tablewrap">
         <table class="irh-table">
           <thead>
-            <tr><th>圖示</th><th>名稱</th><th>位置</th><th>作用</th></tr>
+            <tr>
+              <th>{{ $t('settings.help.icons.table.icon') }}</th>
+              <th>{{ $t('settings.help.icons.table.name') }}</th>
+              <th>{{ $t('settings.help.icons.table.where') }}</th>
+              <th>{{ $t('settings.help.icons.table.what') }}</th>
+            </tr>
           </thead>
           <tbody>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">▾</span></td>
-              <td><code>More options</code></td>
-              <td>Commit 按鈕右邊</td>
-              <td>展開下表六個動作。</td>
+              <td v-html="$t('settings.help.icons.s5.commit.moreOptions.name')"></td>
+              <td>{{ $t('settings.help.icons.s5.commit.moreOptions.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.commit.moreOptions.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">✓</span></td>
-              <td><code>Commit</code></td>
-              <td>▾ 選單</td>
-              <td>提交已暫存的內容。</td>
+              <td v-html="$t('settings.help.icons.s5.commit.commit.name')"></td>
+              <td>{{ $t('settings.help.icons.s5.commit.commit.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.commit.commit.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">✎</span></td>
-              <td><code>Amend Commit</code></td>
-              <td>▾ 選單</td>
-              <td>把這次的內容併進上一個 commit。</td>
+              <td v-html="$t('settings.help.icons.s5.commit.amend.name')"></td>
+              <td>{{ $t('settings.help.icons.s5.commit.amend.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.commit.amend.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">↑</span></td>
-              <td><code>Commit &amp; Push</code></td>
-              <td>▾ 選單</td>
-              <td>提交後直接推上遠端。</td>
+              <td><code>{{ $t('action.commit-and-push') }}</code></td>
+              <td>{{ $t('settings.help.icons.s5.commit.commitPush.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.commit.commitPush.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">⇅</span></td>
-              <td><code>Commit &amp; Sync</code></td>
-              <td>▾ 選單</td>
-              <td>提交後先拉再推。</td>
+              <td><code>{{ $t('action.commit-and-sync') }}</code></td>
+              <td>{{ $t('settings.help.icons.s5.commit.commitSync.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.commit.commitSync.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">↺</span></td>
-              <td><code>Undo Last Commit</code></td>
-              <td>▾ 選單</td>
-              <td>撤銷上一個 commit（變更留在工作區）。</td>
+              <td v-html="$t('settings.help.icons.s5.commit.undo.name')"></td>
+              <td>{{ $t('settings.help.icons.s5.commit.undo.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.commit.undo.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">✦</span></td>
-              <td><code>Auto Commit</code></td>
-              <td>▾ 選單</td>
-              <td>切換自動提交開關。</td>
+              <td v-html="$t('settings.help.icons.s5.commit.autoCommit.name')"></td>
+              <td>{{ $t('settings.help.icons.s5.commit.autoCommit.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.commit.autoCommit.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">⟳</span></td>
-              <td>（無提示字串）</td>
-              <td>Commit 訊息欄</td>
-              <td>純顯示：AI 正在幫你生成 commit 訊息。</td>
+              <td>{{ $t('settings.help.icons.s5.commit.generating.name') }}</td>
+              <td>{{ $t('settings.help.icons.s5.commit.generating.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.commit.generating.what') }}</td>
             </tr>
           </tbody>
         </table>
       </div>
 
-      <h3 class="irh-h3">分支列與遠端列</h3>
+      <h3 class="irh-h3">{{ $t('settings.help.icons.s5.h4') }}</h3>
       <div class="irh-tablewrap">
         <table class="irh-table">
           <thead>
-            <tr><th>圖示</th><th>名稱</th><th>位置</th><th>作用</th></tr>
+            <tr>
+              <th>{{ $t('settings.help.icons.table.icon') }}</th>
+              <th>{{ $t('settings.help.icons.table.name') }}</th>
+              <th>{{ $t('settings.help.icons.table.where') }}</th>
+              <th>{{ $t('settings.help.icons.table.what') }}</th>
+            </tr>
           </thead>
           <tbody>
             <tr>
               <td class="irh-icocell">
                 <svg class="irh-ic irh-ic--filled" viewBox="0 0 16 16" aria-hidden="true"><path d="M9.5 3.25a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25z"/></svg>
               </td>
-              <td>分支藥丸（顯示目前分支名）</td>
-              <td>遠端動作列最左</td>
-              <td>展開／收合分支面板。</td>
+              <td>{{ $t('settings.help.icons.s5.branch.branchPill.name') }}</td>
+              <td>{{ $t('settings.help.icons.s5.branch.branchPill.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.branch.branchPill.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell">
                 <svg class="irh-ic irh-ic--filled" viewBox="0 0 16 16" aria-hidden="true"><path d="M10.561 8.073a6.005 6.005 0 0 1 3.432 5.142.75.75 0 1 1-1.498.07 4.5 4.5 0 0 0-8.99 0 .75.75 0 0 1-1.498-.07 6.004 6.004 0 0 1 3.431-5.142 3.999 3.999 0 1 1 5.622 0zM8 1.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z"/></svg>
               </td>
-              <td><code>Account for this workspace</code></td>
-              <td>分支藥丸右邊</td>
-              <td>選這個工作區要用哪組 Git 帳號推送。</td>
+              <td v-html="$t('settings.help.icons.s5.branch.account.name')"></td>
+              <td>{{ $t('settings.help.icons.s5.branch.account.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.branch.account.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell">
                 <svg class="irh-ic irh-ic--filled" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 7.5A6 6 0 0 1 13 5.185V2.75a.75.75 0 0 1 1.5 0V7a.75.75 0 0 1-.75.75H9.25a.75.75 0 0 1 0-1.5h2.565A4.5 4.5 0 1 0 12 10a.75.75 0 1 1 1.261.815A6 6 0 1 1 1.5 7.5z"/></svg>
               </td>
-              <td><code>Fetch</code></td>
-              <td>遠端動作列</td>
-              <td>抓遠端的最新狀態，不動你的工作區。執行中會換成轉動的 <code>⟳</code>。</td>
+              <td v-html="$t('settings.help.icons.s5.branch.fetch.name')"></td>
+              <td>{{ $t('settings.help.icons.s5.branch.fetch.where') }}</td>
+              <td v-html="$t('settings.help.icons.s5.branch.fetch.what')"></td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">↓</span></td>
-              <td><code>Pull</code></td>
-              <td>遠端動作列</td>
-              <td>把遠端的 commit 拉下來。</td>
+              <td v-html="$t('settings.help.icons.s5.branch.pull.name')"></td>
+              <td>{{ $t('settings.help.icons.s5.branch.pull.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.branch.pull.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">↑</span></td>
-              <td><code>Push</code> / <code>Publish Branch</code></td>
-              <td>遠端動作列</td>
-              <td>推上去。後面的數字是領先幾個 commit；分支還沒有遠端時變成 Publish。</td>
+              <td v-html="$t('settings.help.icons.s5.branch.push.name')"></td>
+              <td>{{ $t('settings.help.icons.s5.branch.push.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.branch.push.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">⇅</span></td>
-              <td><code>Sync (pull --rebase + push)</code></td>
-              <td>遠端動作列</td>
-              <td>一次做完先拉（rebase）再推。</td>
+              <td v-html="$t('settings.help.icons.s5.branch.sync.name')"></td>
+              <td>{{ $t('settings.help.icons.s5.branch.sync.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.branch.sync.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">▾</span></td>
-              <td><code>More pull/push options</code></td>
-              <td>遠端動作列最右</td>
-              <td>展開 Pull、Pull (rebase)、Push、Push (force with lease)，以及多個 remote 的個別推送。</td>
+              <td v-html="$t('settings.help.icons.s5.branch.morePushOptions.name')"></td>
+              <td>{{ $t('settings.help.icons.s5.branch.morePushOptions.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.branch.morePushOptions.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">⇔</span></td>
-              <td><code>Compare</code></td>
-              <td>分支面板的每一列（非目前分支）</td>
-              <td>比較那個分支與目前分支的差異。</td>
+              <td v-html="$t('settings.help.icons.s5.branch.compare.name')"></td>
+              <td>{{ $t('settings.help.icons.s5.branch.compare.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.branch.compare.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">⇡</span></td>
-              <td><code>Rebase onto</code></td>
-              <td>分支列</td>
-              <td>把目前分支重定基底到那個分支上。</td>
+              <td v-html="$t('settings.help.icons.s5.branch.rebase.name')"></td>
+              <td>{{ $t('settings.help.icons.s5.branch.rebase.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.branch.rebase.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">⇣</span></td>
-              <td><code>Merge into current</code></td>
-              <td>分支列</td>
-              <td>把那個分支合併進目前分支。</td>
+              <td v-html="$t('settings.help.icons.s5.branch.merge.name')"></td>
+              <td>{{ $t('settings.help.icons.s5.branch.merge.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.branch.merge.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">↵</span></td>
-              <td><code>Switch</code></td>
-              <td>分支列</td>
-              <td>切換到那個分支。</td>
+              <td v-html="$t('settings.help.icons.s5.branch.switch.name')"></td>
+              <td>{{ $t('settings.help.icons.s5.branch.switch.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.branch.switch.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">⇅</span></td>
-              <td><code>Show remote branches</code> / <code>Hide remote branches</code></td>
-              <td>分支面板頂端</td>
-              <td>清單裡要不要一併列出遠端分支。</td>
+              <td v-html="$t('settings.help.icons.s5.branch.showRemotes.name')"></td>
+              <td>{{ $t('settings.help.icons.s5.branch.showRemotes.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.branch.showRemotes.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">⬇</span></td>
-              <td><code>Checkout locally</code></td>
-              <td>遠端分支列（本地還沒有這個分支時）</td>
-              <td>把遠端分支拉成本地分支並切過去。</td>
+              <td v-html="$t('settings.help.icons.s5.branch.checkout.name')"></td>
+              <td>{{ $t('settings.help.icons.s5.branch.checkout.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.branch.checkout.what') }}</td>
             </tr>
           </tbody>
         </table>
       </div>
 
-      <h3 class="irh-h3">Stash 與 Worktree</h3>
+      <h3 class="irh-h3">{{ $t('settings.help.icons.s5.h5') }}</h3>
       <div class="irh-tablewrap">
         <table class="irh-table">
           <thead>
-            <tr><th>圖示</th><th>名稱</th><th>位置</th><th>作用</th></tr>
+            <tr>
+              <th>{{ $t('settings.help.icons.table.icon') }}</th>
+              <th>{{ $t('settings.help.icons.table.name') }}</th>
+              <th>{{ $t('settings.help.icons.table.where') }}</th>
+              <th>{{ $t('settings.help.icons.table.what') }}</th>
+            </tr>
           </thead>
           <tbody>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">⎘</span></td>
-              <td><code>Apply (keep draft)</code></td>
-              <td>Stash 卡片的每一列</td>
-              <td>套用這份草稿，但草稿留著。</td>
+              <td><code>{{ $t('action.stash-apply') }}</code></td>
+              <td>{{ $t('settings.help.icons.s5.stash.apply.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.stash.apply.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">↑</span></td>
-              <td><code>Pop (apply &amp; remove)</code></td>
-              <td>Stash 列</td>
-              <td>套用並把草稿從清單移除。</td>
+              <td><code>{{ $t('action.stash-pop') }}</code></td>
+              <td>{{ $t('settings.help.icons.s5.stash.pop.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.stash.pop.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">✕</span></td>
-              <td><code>Drop</code></td>
-              <td>Stash 列</td>
-              <td>直接丟掉這份草稿。</td>
+              <td v-html="$t('settings.help.icons.s5.stash.drop.name')"></td>
+              <td>{{ $t('settings.help.icons.s5.stash.drop.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.stash.drop.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">↗</span></td>
-              <td><code>Open remote URL</code></td>
-              <td>Remotes 卡片</td>
-              <td>在瀏覽器打開這個 remote 的網址。</td>
+              <td v-html="$t('settings.help.icons.s5.stash.openRemoteUrl.name')"></td>
+              <td>{{ $t('settings.help.icons.s5.stash.openRemoteUrl.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.stash.openRemoteUrl.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">⧉</span></td>
-              <td><code>Open in New Window</code></td>
-              <td>Worktrees 卡片的每一列</td>
-              <td>用新視窗打開那個 worktree。</td>
+              <td v-html="$t('settings.help.icons.s5.stash.openInNewWindow.name')"></td>
+              <td>{{ $t('settings.help.icons.s5.stash.openInNewWindow.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.stash.openInNewWindow.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">◱</span></td>
-              <td><code>Reveal in Finder</code></td>
-              <td>Worktree 列</td>
-              <td>在 Finder 顯示該資料夾。</td>
+              <td v-html="$t('settings.help.icons.s5.stash.revealInFinder.name')"></td>
+              <td>{{ $t('settings.help.icons.s5.stash.revealInFinder.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.stash.revealInFinder.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">🔒</span> <span class="irh-glyph">🔓</span></td>
-              <td><code>Lock</code> / <code>Unlock</code></td>
-              <td>Worktree 列</td>
-              <td>鎖住／解鎖這個 worktree，防止被清理。</td>
+              <td v-html="$t('settings.help.icons.s5.stash.lockUnlock.name')"></td>
+              <td>{{ $t('settings.help.icons.s5.stash.lockUnlock.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.stash.lockUnlock.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">⇄</span></td>
-              <td><code>Move</code></td>
-              <td>Worktree 列</td>
-              <td>把 worktree 搬到別的路徑。</td>
+              <td v-html="$t('settings.help.icons.s5.stash.move.name')"></td>
+              <td>{{ $t('settings.help.icons.s5.stash.move.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.stash.move.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">✕</span></td>
-              <td><code>Remove</code></td>
-              <td>Worktree 列</td>
-              <td>移除這個 worktree。</td>
+              <td v-html="$t('settings.help.icons.s5.stash.remove.name')"></td>
+              <td>{{ $t('settings.help.icons.s5.stash.remove.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.stash.remove.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell">
                 <svg class="irh-ic irh-ic--filled" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75z"/></svg>
               </td>
-              <td><code>Browse folder</code></td>
-              <td>新增 worktree 的輸入列</td>
-              <td>用檔案選擇器挑放置位置。</td>
+              <td v-html="$t('settings.help.icons.s5.stash.browseFolder.name')"></td>
+              <td>{{ $t('settings.help.icons.s5.stash.browseFolder.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.stash.browseFolder.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">＋</span></td>
-              <td><code>Add worktree</code></td>
-              <td>新增 worktree 列最右</td>
-              <td>照上面填的路徑與分支建立 worktree。</td>
+              <td v-html="$t('settings.help.icons.s5.stash.addWorktree.name')"></td>
+              <td>{{ $t('settings.help.icons.s5.stash.addWorktree.where') }}</td>
+              <td>{{ $t('settings.help.icons.s5.stash.addWorktree.what') }}</td>
             </tr>
           </tbody>
         </table>
       </div>
 
       <div class="irh-callout irh-callout--warn">
-        <div class="irh-callout-title">同一顆符號在不同區意思不同</div>
-        <div class="irh-callout-text">
-          <code>↑</code> 在遠端列是 Push、在 Stash 列是 Pop；<code>⇅</code> 在遠端列是 Sync、
-          在分支面板頂端是「顯示遠端分支」；<code>✕</code> 在 Stash 是丟棄草稿、在 Worktree 是移除 worktree。
-          先確認你在哪一區，再對照。
-        </div>
+        <div class="irh-callout-title">{{ $t('settings.help.icons.s5.callout.title') }}</div>
+        <div class="irh-callout-text" v-html="$t('settings.help.icons.s5.callout.text')"></div>
       </div>
     </section>
 
-    <!-- ── 6 計畫視窗 ───────────────────────────────────────────────── -->
+    <!-- ── 6 · Plan window ──────────────────────────────────────────────── -->
     <section class="irh-section">
-      <h2 class="irh-h2">6 · 計畫視窗</h2>
-      <p class="irh-p">
-        計畫文件上方那條工具列。<strong>這裡全部是符號，沒有一顆是圖檔。</strong>
-        視窗變窄時按鈕會由右往左收進 <code>⋯</code> 選單——Todos 最先被收、Approve 最後——
-        所以同一份文件在不同寬度下看到的按鈕數量不一樣。
-      </p>
+      <h2 class="irh-h2">6 · {{ $t('settings.help.icons.s6.title') }}</h2>
+      <p class="irh-p" v-html="$t('settings.help.icons.s6.p1')"></p>
       <div class="irh-tablewrap">
         <table class="irh-table">
           <thead>
-            <tr><th>圖示</th><th>名稱</th><th>位置</th><th>作用</th></tr>
+            <tr>
+              <th>{{ $t('settings.help.icons.table.icon') }}</th>
+              <th>{{ $t('settings.help.icons.table.name') }}</th>
+              <th>{{ $t('settings.help.icons.table.where') }}</th>
+              <th>{{ $t('settings.help.icons.table.what') }}</th>
+            </tr>
           </thead>
           <tbody>
             <tr>
-              <td class="irh-icocell"><span class="irh-plain">文字</span></td>
-              <td>stage 徽章（<code>Draft</code> / <code>In Review</code> / <code>Approved</code> / <code>In Progress</code> / <code>Done</code> / <code>Abandoned</code>）</td>
-              <td>工具列最左</td>
-              <td>純顯示：這份計畫走到哪個階段。顏色見下表。</td>
+              <td class="irh-icocell"><span class="irh-plain">{{ $t('settings.help.icons.s6.toolbar.stageBadge.sample') }}</span></td>
+              <td v-html="$t('settings.help.icons.s6.toolbar.stageBadge.name')"></td>
+              <td>{{ $t('settings.help.icons.s6.toolbar.stageBadge.where') }}</td>
+              <td>{{ $t('settings.help.icons.s6.toolbar.stageBadge.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">☑</span></td>
-              <td><code>Todos</code></td>
-              <td>工具列</td>
-              <td>開關下方的待辦清單面板。</td>
+              <td v-html="$t('settings.help.icons.s6.toolbar.todos.name')"></td>
+              <td>{{ $t('settings.help.icons.s6.toolbar.todos.where') }}</td>
+              <td>{{ $t('settings.help.icons.s6.toolbar.todos.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">💬</span></td>
-              <td><code>Review Notes · N unresolved</code></td>
-              <td>工具列，右上角帶未解決數字</td>
-              <td>
-                開關審查留言面板。<strong>只有還有未解決留言時才出現這顆</strong>；
-                沒有未解決留言時，入口在 <code>⋯</code> 選單裡。
-              </td>
+              <td><code>{{ $t('pane.plans.review-notes') }} · {{ $t('pane.plans.review-unresolved', { count: 'N' }) }}</code></td>
+              <td>{{ $t('settings.help.icons.s6.toolbar.reviewNotes.where') }}</td>
+              <td v-html="$t('settings.help.icons.s6.toolbar.reviewNotes.what')"></td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">▶</span></td>
-              <td><code>Execute</code> ／ 提示 <code>Dispatch this approved plan to a CLI agent</code></td>
-              <td>工具列</td>
-              <td>
-                展開 CLI agent 選擇面板，把這份計畫派給某個 agent 執行。
-                <strong>只有 stage 是 approved 時才出現。</strong>
-              </td>
+              <td v-html="$t('settings.help.icons.s6.toolbar.execute.name')"></td>
+              <td>{{ $t('settings.help.icons.s6.toolbar.execute.where') }}</td>
+              <td v-html="$t('settings.help.icons.s6.toolbar.execute.what')"></td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">✓</span></td>
-              <td><code>Approve</code>（不可按時提示 <code>Requires draft or in-review stage with all notes resolved</code>）</td>
-              <td>工具列</td>
-              <td>把 stage 改成 approved 並蓋上核准時間。留言沒清完、或階段不對就是灰的。</td>
+              <td v-html="$t('settings.help.icons.s6.toolbar.approve.name')"></td>
+              <td>{{ $t('settings.help.icons.s6.toolbar.approve.where') }}</td>
+              <td>{{ $t('settings.help.icons.s6.toolbar.approve.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">⋯</span></td>
-              <td><code>More actions</code></td>
-              <td>工具列最右，永遠都在</td>
-              <td>
-                溢位選單：Outline、Review Notes、History、Share to Git、Open in Browser、
-                Reopen、Archive／Unarchive、Abandon、Delete，以及被收進來的常駐按鈕。
-              </td>
+              <td v-html="$t('settings.help.icons.s6.toolbar.moreActions.name')"></td>
+              <td>{{ $t('settings.help.icons.s6.toolbar.moreActions.where') }}</td>
+              <td>{{ $t('settings.help.icons.s6.toolbar.moreActions.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">▸</span></td>
-              <td><code>Outline</code></td>
-              <td><code>⋯</code> 選單內</td>
-              <td>展開文件章節錨點清單，點標題直接跳過去。</td>
+              <td v-html="$t('settings.help.icons.s6.toolbar.outline.name')"></td>
+              <td v-html="$t('settings.help.icons.s6.toolbar.outline.where')"></td>
+              <td>{{ $t('settings.help.icons.s6.toolbar.outline.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">✕</span></td>
-              <td>清除章節錨點</td>
-              <td>新增留言的輸入框旁</td>
-              <td>把這則留言掛的章節取消，改成整份文件層級的留言。</td>
+              <td>{{ $t('settings.help.icons.s6.toolbar.clearAnchor.name') }}</td>
+              <td>{{ $t('settings.help.icons.s6.toolbar.clearAnchor.where') }}</td>
+              <td>{{ $t('settings.help.icons.s6.toolbar.clearAnchor.what') }}</td>
             </tr>
             <tr>
-              <td class="irh-icocell"><span class="irh-plain">狀態字</span></td>
-              <td><code>Click to cycle status; right-click to toggle skipped</code></td>
-              <td>每一則 todo 前面（顯示 <code>pending</code> / <code>in-progress</code> / <code>done</code> / <code>skipped</code>）</td>
-              <td>左鍵循環切換狀態，右鍵切換「略過」。</td>
+              <td class="irh-icocell"><span class="irh-plain">{{ $t('settings.help.icons.s6.toolbar.todoStatus.sample') }}</span></td>
+              <td v-html="$t('settings.help.icons.s6.toolbar.todoStatus.name')"></td>
+              <td v-html="$t('settings.help.icons.s6.toolbar.todoStatus.where')"></td>
+              <td>{{ $t('settings.help.icons.s6.toolbar.todoStatus.what') }}</td>
             </tr>
           </tbody>
         </table>
       </div>
 
-      <h3 class="irh-h3">stage 徽章的顏色</h3>
+      <h3 class="irh-h3">{{ $t('settings.help.icons.s6.h1') }}</h3>
       <div class="irh-tablewrap">
         <table class="irh-table">
           <thead>
-            <tr><th>徽章</th><th>顏色</th><th>意思</th><th>能不能動工</th></tr>
+            <tr>
+              <th>{{ $t('settings.help.icons.s6.stageTable.badge') }}</th>
+              <th>{{ $t('settings.help.icons.s6.stageTable.color') }}</th>
+              <th>{{ $t('settings.help.icons.s6.stageTable.meaning') }}</th>
+              <th>{{ $t('settings.help.icons.s6.stageTable.canStart') }}</th>
+            </tr>
           </thead>
           <tbody>
-            <tr v-for="row in stageBadges" :key="row.badge">
-              <td><code>{{ row.badge }}</code></td>
-              <td class="irh-nowrap">{{ row.color }}</td>
-              <td>{{ row.meaning }}</td>
-              <td class="irh-nowrap">{{ row.canStart }}</td>
+            <tr v-for="row in stageBadges" :key="row.key">
+              <td><code>{{ $t(row.badge) }}</code></td>
+              <td class="irh-nowrap">{{ $t(`settings.help.icons.s6.stageBadges.${row.key}.color`) }}</td>
+              <td>{{ $t(`settings.help.icons.s6.stageBadges.${row.key}.meaning`) }}</td>
+              <td class="irh-nowrap">{{ $t(`settings.help.icons.s6.stageBadges.${row.key}.canStart`) }}</td>
             </tr>
           </tbody>
         </table>
       </div>
-      <p class="irh-note">徽章下方的進度條用同一組顏色，兩者永遠一致。</p>
+      <p class="irh-note">{{ $t('settings.help.icons.s6.note') }}</p>
     </section>
 
-    <!-- ── 7 右側 rail 與 Messages ──────────────────────────────────── -->
+    <!-- ── 7 · Right rail and Messages ──────────────────────────────────── -->
     <section class="irh-section">
-      <h2 class="irh-h2">7 · 右側 rail 與 Messages</h2>
+      <h2 class="irh-h2">7 · {{ $t('settings.help.icons.s7.title') }}</h2>
 
-      <h3 class="irh-h3">右側五個分頁</h3>
-      <p class="irh-p">
-        同一批分頁有兩種長相：<strong>收合成細軌時是 emoji</strong>，
-        <strong>展開後的分頁列是線稿圖示</strong>。兩欄放在一起對照。
-      </p>
+      <h3 class="irh-h3">{{ $t('settings.help.icons.s7.h1') }}</h3>
+      <p class="irh-p" v-html="$t('settings.help.icons.s7.p1')"></p>
       <div class="irh-tablewrap">
         <table class="irh-table">
           <thead>
-            <tr><th>圖示</th><th>名稱</th><th>位置</th><th>作用</th></tr>
+            <tr>
+              <th>{{ $t('settings.help.icons.table.icon') }}</th>
+              <th>{{ $t('settings.help.icons.table.name') }}</th>
+              <th>{{ $t('settings.help.icons.table.where') }}</th>
+              <th>{{ $t('settings.help.icons.table.what') }}</th>
+            </tr>
           </thead>
           <tbody>
             <tr>
               <td class="irh-icocell">
                 <svg class="irh-ic irh-ic--filled" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM3 8a5 5 0 1 1 10 0A5 5 0 0 1 3 8Z"/><path d="M7.4 4.5h1.2v3.4h2.9v1.2H7.4Z"/></svg>
               </td>
-              <td><code>History</code>（細軌上是 📜）</td>
-              <td>右側 rail 第 1 個</td>
-              <td>看過去的 agent 對話紀錄。</td>
+              <td v-html="$t('settings.help.icons.s7.rail.history.name')"></td>
+              <td>{{ $t('settings.help.icons.s7.rail.history.where') }}</td>
+              <td>{{ $t('settings.help.icons.s7.rail.history.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell">
                 <svg class="irh-ic irh-ic--filled" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 7.5h2.25v6H2.5Z"/><path d="M6.9 3.5h2.25v10H6.9Z"/><path d="M11.3 6h2.25v7.5H11.3Z"/></svg>
               </td>
-              <td><code>Tokens</code>（細軌上是 📊）</td>
-              <td>rail 第 2 個</td>
-              <td>token 用量統計。細軌上這一顆旁邊的小數字就是目前累計量。</td>
+              <td v-html="$t('settings.help.icons.s7.rail.tokens.name')"></td>
+              <td>{{ $t('settings.help.icons.s7.rail.tokens.where') }}</td>
+              <td>{{ $t('settings.help.icons.s7.rail.tokens.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell">
                 <svg class="irh-ic irh-ic--filled" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.75 3h8.5A1.75 1.75 0 0 1 14 4.75v8.5A1.75 1.75 0 0 1 12.25 15h-8.5A1.75 1.75 0 0 1 2 13.25v-8.5A1.75 1.75 0 0 1 3.75 3Zm0 1.5a.25.25 0 0 0-.25.25v8.5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25v-8.5a.25.25 0 0 0-.25-.25Z"/><path d="M2.75 6.5h10.5V8H2.75Z"/><path d="M5 1a.75.75 0 0 1 .75.75v1.5a.75.75 0 0 1-1.5 0v-1.5A.75.75 0 0 1 5 1Zm6 0a.75.75 0 0 1 .75.75v1.5a.75.75 0 0 1-1.5 0v-1.5A.75.75 0 0 1 11 1Z"/></svg>
               </td>
-              <td><code>Schedule</code>（細軌上是 🗓）</td>
-              <td>rail 第 3 個</td>
-              <td>排程任務。<strong>介面上寫的是 Schedule，不是 Tasker。</strong></td>
+              <td v-html="$t('settings.help.icons.s7.rail.schedule.name')"></td>
+              <td>{{ $t('settings.help.icons.s7.rail.schedule.where') }}</td>
+              <td v-html="$t('settings.help.icons.s7.rail.schedule.what')"></td>
             </tr>
             <tr>
               <td class="irh-icocell">
                 <svg class="irh-ic irh-ic--filled" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.75 3h10.5A1.75 1.75 0 0 1 15 4.75v6.5A1.75 1.75 0 0 1 13.25 13H2.75A1.75 1.75 0 0 1 1 11.25v-6.5A1.75 1.75 0 0 1 2.75 3Zm0 1.5a.25.25 0 0 0-.25.25v6.5c0 .138.112.25.25.25h10.5a.25.25 0 0 0 .25-.25v-6.5a.25.25 0 0 0-.25-.25Z"/><path d="M2.4 5.32a.75.75 0 0 1 1.04-.22L8 8.1l4.56-3a.75.75 0 1 1 .82 1.26l-4.97 3.26a.75.75 0 0 1-.82 0L2.62 6.36a.75.75 0 0 1-.22-1.04Z"/></svg>
               </td>
-              <td><code>Messages</code>（細軌上是 ✉）</td>
-              <td>rail 第 4 個</td>
-              <td>跨面板訊息的收送紀錄。</td>
+              <td v-html="$t('settings.help.icons.s7.rail.messages.name')"></td>
+              <td>{{ $t('settings.help.icons.s7.rail.messages.where') }}</td>
+              <td>{{ $t('settings.help.icons.s7.rail.messages.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell">
                 <svg class="irh-ic irh-ic--filled" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3.5c3.1 0 5.7 2.1 6.9 4.2a.6.6 0 0 1 0 .6C13.7 10.4 11.1 12.5 8 12.5S2.3 10.4 1.1 8.3a.6.6 0 0 1 0-.6C2.3 5.6 4.9 3.5 8 3.5Zm0 1.5C5.6 5 3.4 6.6 2.3 8c1.1 1.4 3.3 3 5.7 3s4.6-1.6 5.7-3C12.6 6.6 10.4 5 8 5Z"/><path d="M8 6a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z"/></svg>
               </td>
-              <td><code>Preview</code>（細軌上是 👁）</td>
-              <td>rail 第 5 個</td>
-              <td>檔案預覽與變更記錄軌。</td>
+              <td v-html="$t('settings.help.icons.s7.rail.preview.name')"></td>
+              <td>{{ $t('settings.help.icons.s7.rail.preview.where') }}</td>
+              <td>{{ $t('settings.help.icons.s7.rail.preview.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">›</span></td>
-              <td><code>Collapse</code></td>
-              <td>展開後的分頁列末端</td>
-              <td>把整條 rail 收回細軌。細軌上任一顆圖示則是「展開並切到該分頁」。</td>
+              <td v-html="$t('settings.help.icons.s7.rail.collapse.name')"></td>
+              <td>{{ $t('settings.help.icons.s7.rail.collapse.where') }}</td>
+              <td>{{ $t('settings.help.icons.s7.rail.collapse.what') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">⟲</span></td>
-              <td><code>Reset run counter</code> / <code>Wipe workspace history</code> / <code>Wipe global tally</code></td>
-              <td>Tokens 分頁的三個統計區塊各一顆</td>
-              <td>把該範圍的統計歸零。三顆的作用範圍不同：本次執行、這個工作區、全域。會先確認。</td>
+              <td><code>{{ $t('action.reset-run-counter') }}</code> / <code>{{ $t('action.wipe-workspace-history') }}</code> / <code>{{ $t('action.wipe-global-tally') }}</code></td>
+              <td>{{ $t('settings.help.icons.s7.rail.resetCounters.where') }}</td>
+              <td>{{ $t('settings.help.icons.s7.rail.resetCounters.what') }}</td>
             </tr>
           </tbody>
         </table>
       </div>
 
-      <h3 class="irh-h3">Messages 面板</h3>
+      <h3 class="irh-h3">{{ $t('settings.help.icons.s7.h2') }}</h3>
       <div class="irh-callout irh-callout--warn">
-        <div class="irh-callout-title">這一區沒有圖示</div>
-        <div class="irh-callout-text">
-          Messages 面板上的按鈕<strong>全部是文字按鈕</strong>，沒有任何符號或圖示可以比對。要找的話認文字：
-        </div>
+        <div class="irh-callout-title">{{ $t('settings.help.icons.s7.callout.title') }}</div>
+        <div class="irh-callout-text" v-html="$t('settings.help.icons.s7.callout.text')"></div>
       </div>
       <div class="irh-tablewrap">
         <table class="irh-table">
           <thead>
-            <tr><th>圖示</th><th>名稱</th><th>位置</th><th>作用</th></tr>
+            <tr>
+              <th>{{ $t('settings.help.icons.table.icon') }}</th>
+              <th>{{ $t('settings.help.icons.table.name') }}</th>
+              <th>{{ $t('settings.help.icons.table.where') }}</th>
+              <th>{{ $t('settings.help.icons.table.what') }}</th>
+            </tr>
           </thead>
           <tbody>
-            <tr v-for="row in messageButtons" :key="row.name">
-              <td class="irh-icocell"><span class="irh-plain">文字</span></td>
-              <td><code>{{ row.name }}</code></td>
-              <td>{{ row.where }}</td>
-              <td>{{ row.effect }}</td>
+            <tr v-for="row in messageButtons" :key="row.key">
+              <td class="irh-icocell"><span class="irh-plain">{{ $t('settings.help.icons.s7.messages.sample') }}</span></td>
+              <td><code>{{ row.name.map((k) => $t(k)).join(' / ') }}</code></td>
+              <td>{{ $t(`settings.help.icons.s7.messageButtons.${row.key}.where`) }}</td>
+              <td>{{ $t(`settings.help.icons.s7.messageButtons.${row.key}.effect`) }}</td>
             </tr>
           </tbody>
         </table>
       </div>
     </section>
 
-    <!-- ── 8 狀態色與記號 ───────────────────────────────────────────── -->
+    <!-- ── 8 · Status colors and marks ──────────────────────────────────── -->
     <section class="irh-section">
-      <h2 class="irh-h2">8 · 狀態色與記號</h2>
-      <p class="irh-p">這些不是按鈕，但是使用者最常問「這個點是什麼顏色代表什麼」的地方。</p>
+      <h2 class="irh-h2">8 · {{ $t('settings.help.icons.s8.title') }}</h2>
+      <p class="irh-p">{{ $t('settings.help.icons.s8.p1') }}</p>
 
-      <h3 class="irh-h3">面板列的圓點（側欄每一列面板前面）</h3>
-      <p class="irh-p">圓形、8px。顏色<strong>可以在設定裡自訂</strong>，下表是出廠預設。</p>
+      <h3 class="irh-h3">{{ $t('settings.help.icons.s8.h1') }}</h3>
+      <p class="irh-p" v-html="$t('settings.help.icons.s8.p2')"></p>
       <div class="irh-tablewrap">
         <table class="irh-table">
           <thead>
-            <tr><th>樣子</th><th>狀態</th><th>意思</th><th>要不要理它</th></tr>
+            <tr>
+              <th>{{ $t('settings.help.icons.s8.dotTable.sample') }}</th>
+              <th>{{ $t('settings.help.icons.s8.dotTable.state') }}</th>
+              <th>{{ $t('settings.help.icons.s8.dotTable.meaning') }}</th>
+              <th>{{ $t('settings.help.icons.s8.dotTable.advice') }}</th>
+            </tr>
           </thead>
           <tbody>
             <tr>
-              <td class="irh-nowrap"><span class="irh-dot" data-state="running"></span>綠色、緩慢呼吸</td>
+              <td class="irh-nowrap"><span class="irh-dot" data-state="running"></span>{{ $t('settings.help.icons.s8.dots.running.sample') }}</td>
               <td><code>running</code></td>
-              <td>agent 正在跑。</td>
-              <td>等就好。</td>
+              <td>{{ $t('settings.help.icons.s8.dots.running.meaning') }}</td>
+              <td>{{ $t('settings.help.icons.s8.dots.running.advice') }}</td>
             </tr>
             <tr>
-              <td class="irh-nowrap"><span class="irh-dot" data-state="starting"></span>黃色、快速呼吸</td>
+              <td class="irh-nowrap"><span class="irh-dot" data-state="starting"></span>{{ $t('settings.help.icons.s8.dots.starting.sample') }}</td>
               <td><code>starting</code></td>
-              <td>正在啟動。</td>
-              <td>等就好。</td>
+              <td>{{ $t('settings.help.icons.s8.dots.starting.meaning') }}</td>
+              <td>{{ $t('settings.help.icons.s8.dots.starting.advice') }}</td>
             </tr>
             <tr>
-              <td class="irh-nowrap"><span class="irh-dot" data-state="idle"></span>藍色、靜止</td>
+              <td class="irh-nowrap"><span class="irh-dot" data-state="idle"></span>{{ $t('settings.help.icons.s8.dots.idle.sample') }}</td>
               <td><code>idle</code></td>
-              <td>開著但沒事做。</td>
-              <td>可以下指令。</td>
+              <td>{{ $t('settings.help.icons.s8.dots.idle.meaning') }}</td>
+              <td>{{ $t('settings.help.icons.s8.dots.idle.advice') }}</td>
             </tr>
             <tr>
-              <td class="irh-nowrap"><span class="irh-dot" data-state="awaiting"></span>橘色、呼吸＋光暈</td>
+              <td class="irh-nowrap"><span class="irh-dot" data-state="awaiting"></span>{{ $t('settings.help.icons.s8.dots.awaiting.sample') }}</td>
               <td><code>awaiting</code></td>
-              <td>
-                <strong>CLI 問了你問題，卡在那裡等答案。</strong>
-                做成會動的樣式就是為了不讓它看起來像「沒事發生」。
-              </td>
-              <td>去回答它。</td>
+              <td v-html="$t('settings.help.icons.s8.dots.awaiting.meaning')"></td>
+              <td>{{ $t('settings.help.icons.s8.dots.awaiting.advice') }}</td>
             </tr>
             <tr>
-              <td class="irh-nowrap"><span class="irh-dot" data-state="waiting"></span>空心圓環（灰邊）</td>
+              <td class="irh-nowrap"><span class="irh-dot" data-state="waiting"></span>{{ $t('settings.help.icons.s8.dots.waiting.sample') }}</td>
               <td><code>waiting</code></td>
-              <td>還沒真的開起來的佔位列。</td>
-              <td>點一下才會起來。</td>
+              <td>{{ $t('settings.help.icons.s8.dots.waiting.meaning') }}</td>
+              <td>{{ $t('settings.help.icons.s8.dots.waiting.advice') }}</td>
             </tr>
             <tr>
-              <td class="irh-nowrap"><span class="irh-dot" data-state="error"></span>紅色、靜止＋光暈</td>
+              <td class="irh-nowrap"><span class="irh-dot" data-state="error"></span>{{ $t('settings.help.icons.s8.dots.error.sample') }}</td>
               <td><code>error</code></td>
-              <td>出錯了。</td>
-              <td>要看。</td>
+              <td>{{ $t('settings.help.icons.s8.dots.error.meaning') }}</td>
+              <td>{{ $t('settings.help.icons.s8.dots.error.advice') }}</td>
             </tr>
             <tr>
-              <td class="irh-nowrap"><span class="irh-dot" data-state="exited"></span>深灰、半透明</td>
+              <td class="irh-nowrap"><span class="irh-dot" data-state="exited"></span>{{ $t('settings.help.icons.s8.dots.exited.sample') }}</td>
               <td><code>exited</code></td>
-              <td>已經結束。</td>
-              <td>可重建或移除。</td>
+              <td>{{ $t('settings.help.icons.s8.dots.exited.meaning') }}</td>
+              <td>{{ $t('settings.help.icons.s8.dots.exited.advice') }}</td>
             </tr>
             <tr>
-              <td class="irh-nowrap"><span class="irh-dot" data-state="stopped"></span>中性灰</td>
+              <td class="irh-nowrap"><span class="irh-dot" data-state="stopped"></span>{{ $t('settings.help.icons.s8.dots.stopped.sample') }}</td>
               <td><code>stopped</code> / <code>disconnected</code></td>
-              <td>停掉或斷線。</td>
-              <td>斷線可從狀態列的 <code>⚡</code> 重連。</td>
+              <td>{{ $t('settings.help.icons.s8.dots.stopped.meaning') }}</td>
+              <td v-html="$t('settings.help.icons.s8.dots.stopped.advice')"></td>
             </tr>
           </tbody>
         </table>
       </div>
 
-      <h3 class="irh-h3">群組列與 tab 上的方點</h3>
-      <p class="irh-p">
-        圓角方形、7px，跟上面的圓點<strong>刻意做成不同形狀</strong>，因為它講的是一整群、不是單一面板。
-        側欄群組列與上方 tab 用的是同一套規則、同一組顏色，共四態；
-        <strong>橘色排在綠色之前</strong>——一群裡只要有一個面板在等你回應，
-        整群就顯示橘，即使旁邊還有面板在跑：
-      </p>
+      <h3 class="irh-h3">{{ $t('settings.help.icons.s8.h2') }}</h3>
+      <p class="irh-p" v-html="$t('settings.help.icons.s8.p3')"></p>
       <div class="irh-tablewrap">
         <table class="irh-table">
           <thead>
-            <tr><th>顏色</th><th>狀態</th><th>提示字串（群組列 ／ tab）</th></tr>
+            <tr>
+              <th>{{ $t('settings.help.icons.s8.sqTable.color') }}</th>
+              <th>{{ $t('settings.help.icons.s8.sqTable.state') }}</th>
+              <th>{{ $t('settings.help.icons.s8.sqTable.tooltip') }}</th>
+            </tr>
           </thead>
           <tbody>
             <tr>
-              <td class="irh-nowrap"><span class="irh-sq" data-state="awaiting"></span>橘</td>
+              <td class="irh-nowrap"><span class="irh-sq" data-state="awaiting"></span>{{ $t('settings.help.icons.s8.squares.awaiting.sample') }}</td>
               <td><code>awaiting</code></td>
-              <td>
-                <code>Needs you — an agent in this group is blocked on a permission or a question</code> ／
-                <code>A CLI in this tab is waiting on you</code>
-              </td>
+              <td v-html="$t('settings.help.icons.s8.squares.awaiting.tooltip')"></td>
             </tr>
             <tr>
-              <td class="irh-nowrap"><span class="irh-sq" data-state="active"></span>綠</td>
+              <td class="irh-nowrap"><span class="irh-sq" data-state="active"></span>{{ $t('settings.help.icons.s8.squares.active.sample') }}</td>
               <td><code>active</code></td>
-              <td>
-                <code>Running — an agent in this group is active</code> ／
-                <code>Some CLIs in this tab are running</code>
-              </td>
+              <td v-html="$t('settings.help.icons.s8.squares.active.tooltip')"></td>
             </tr>
             <tr>
-              <td class="irh-nowrap"><span class="irh-sq" data-state="idle"></span>藍</td>
+              <td class="irh-nowrap"><span class="irh-sq" data-state="idle"></span>{{ $t('settings.help.icons.s8.squares.idle.sample') }}</td>
               <td><code>idle</code></td>
-              <td>
-                <code>Idle — agents are open, none running</code> ／
-                <code>Every CLI in this tab is idle</code>
-              </td>
+              <td v-html="$t('settings.help.icons.s8.squares.idle.tooltip')"></td>
             </tr>
             <tr>
-              <td class="irh-nowrap"><span class="irh-sq" data-state="empty"></span>中性灰</td>
+              <td class="irh-nowrap"><span class="irh-sq" data-state="empty"></span>{{ $t('settings.help.icons.s8.squares.empty.sample') }}</td>
               <td><code>empty</code></td>
-              <td>
-                <code>Not opened — every pane here is waiting to be restored</code> ／
-                <code>This tab has no panes</code>
-              </td>
+              <td v-html="$t('settings.help.icons.s8.squares.empty.tooltip')"></td>
             </tr>
           </tbody>
         </table>
       </div>
 
       <div class="irh-callout">
-        <div class="irh-callout-title">三態，不是兩態</div>
-        <div class="irh-callout-text">
-          綠與藍是「有東西在裡面」的兩種狀態；灰是第三態——這一群全部都還沒真的開起來（或根本沒有面板）。
-          看到灰點不代表壞掉。
-        </div>
+        <div class="irh-callout-title">{{ $t('settings.help.icons.s8.callout.title') }}</div>
+        <div class="irh-callout-text">{{ $t('settings.help.icons.s8.callout.text') }}</div>
       </div>
 
-      <h3 class="irh-h3">其他記號</h3>
+      <h3 class="irh-h3">{{ $t('settings.help.icons.s8.h4') }}</h3>
+      <p class="irh-p" v-html="$t('settings.help.icons.s8.p4')"></p>
+
+      <div class="irh-callout">
+        <div class="irh-callout-title">{{ $t('settings.help.icons.s8.callout2.title') }}</div>
+        <div class="irh-callout-text" v-html="$t('settings.help.icons.s8.callout2.text')"></div>
+      </div>
+
+      <h3 class="irh-h3">{{ $t('settings.help.icons.s8.h3') }}</h3>
       <div class="irh-tablewrap">
         <table class="irh-table">
           <thead>
-            <tr><th>圖示</th><th>名稱</th><th>位置</th><th>意思</th></tr>
+            <tr>
+              <th>{{ $t('settings.help.icons.s8.markTable.icon') }}</th>
+              <th>{{ $t('settings.help.icons.s8.markTable.name') }}</th>
+              <th>{{ $t('settings.help.icons.s8.markTable.where') }}</th>
+              <th>{{ $t('settings.help.icons.s8.markTable.meaning') }}</th>
+            </tr>
           </thead>
           <tbody>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">◦</span></td>
-              <td><code>Named automatically from this session's first instruction — rename it and it stays yours</code></td>
-              <td>面板標題與側欄面板列的名稱右側</td>
-              <td>這個名字是系統從本次 session 第一則指令自動取的。<strong>你手動改過名之後就永久消失。</strong></td>
+              <td v-html="$t('settings.help.icons.s8.marks.autoNamed.name')"></td>
+              <td>{{ $t('settings.help.icons.s8.marks.autoNamed.where') }}</td>
+              <td v-html="$t('settings.help.icons.s8.marks.autoNamed.meaning')"></td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">🎯</span></td>
-              <td><code>Global Manager</code> / <code>Stage manager</code>，顯示為 <code>🎯 Mgr</code></td>
-              <td>面板標題與側欄面板列</td>
-              <td>這個面板是 pipeline 的階段總管，負責判斷每個階段何時結束。</td>
+              <td v-html="$t('settings.help.icons.s8.marks.manager.name')"></td>
+              <td>{{ $t('settings.help.icons.s8.marks.manager.where') }}</td>
+              <td>{{ $t('settings.help.icons.s8.marks.manager.meaning') }}</td>
             </tr>
             <tr>
               <td class="irh-icocell"><span class="irh-glyph">▶</span></td>
-              <td>（無提示字串）</td>
-              <td>側欄面板列右側</td>
-              <td>可展開更多資訊。展開後轉 90 度朝下。與計畫視窗的 <code>▶ Execute</code> 是不同的東西。</td>
+              <td>{{ $t('settings.help.icons.s8.marks.expand.name') }}</td>
+              <td>{{ $t('settings.help.icons.s8.marks.expand.where') }}</td>
+              <td v-html="$t('settings.help.icons.s8.marks.expand.meaning')"></td>
             </tr>
           </tbody>
         </table>
       </div>
+    </section>
+
+    <!-- ── 9 · Prompt skill icons ───────────────────────────────────── -->
+    <section class="irh-section">
+      <h2 class="irh-h2">9 · {{ $t('settings.help.icons.s9.title') }}</h2>
+      <p class="irh-p" v-html="$t('settings.help.icons.s9.p1')"></p>
+
+      <div class="irh-tablewrap">
+        <table class="irh-table">
+          <thead>
+            <tr>
+              <th>{{ $t('settings.help.icons.table.icon') }}</th>
+              <th>{{ $t('settings.help.icons.s9.nameCol') }}</th>
+              <th>{{ $t('settings.help.icons.s9.useCol') }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.6 3.8 7 8l-4.4 4.2zM8.6 3.8 13 8l-4.4 4.2z"/></svg>
+              </td>
+              <td><code>advance</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.advance.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.9" /><path d="M5.4 8.2 7.2 10l3.4-3.9"/></svg>
+              </td>
+              <td><code>green</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.green.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.3" /><path d="M10.2 10.2 13.6 13.6"/></svg>
+              </td>
+              <td><code>scan</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.scan.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.2h5l3 3v8.6H4zM9 2.2v3.1h3M6 9.2h4M6 11.2h2.6"/></svg>
+              </td>
+              <td><code>doc</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.doc.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.2 8a5.2 5.2 0 1 1-1.6-3.7M13.2 2.4v2.6h-2.6"/></svg>
+              </td>
+              <td><code>refactor</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.refactor.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M11.1 2.5 13.5 4.9 6.2 12.2l-3.2 0.8 0.8-3.2zM9.9 3.7l2.4 2.4"/></svg>
+              </td>
+              <td><code>edit</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.edit.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.3 6.4a2.7 2.7 0 0 1 5.4 0v2.3a2.7 2.7 0 0 1-5.4 0zM6.4 4.7 5.3 3.2M9.6 4.7l1.1-1.5M5.3 7.2H2.8M10.7 7.2h2.5M5.7 9.8 3.6 11.3M10.3 9.8l2.1 1.5"/></svg>
+              </td>
+              <td><code>bug</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.bug.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M6.5 2.3v3.9L3.4 11.8a1.3 1.3 0 0 0 1.1 2h7a1.3 1.3 0 0 0 1.1-2L9.5 6.2V2.3M5.5 2.3h5M5.1 9.2h5.8"/></svg>
+              </td>
+              <td><code>test</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.test.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.9c2.1 1.8 3.2 4.1 3.2 6.4L8 11.4 4.8 8.3C4.8 6 5.9 3.7 8 1.9zM6.3 10.9 4.8 13.8l2.2-1M9.7 10.9l1.5 2.9-2.2-1M6.9 7.4a1.1 1.1 0 1 0 2.2 0a1.1 1.1 0 1 0-2.2 0"/></svg>
+              </td>
+              <td><code>rocket</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.rocket.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2 13 4v3.5c0 3-2 5.4-5 6.5-3-1.1-5-3.5-5-6.5V4z"/></svg>
+              </td>
+              <td><code>shield</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.shield.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M9.3 1.8 4.3 9h3.1l-.7 5.2L11.7 7H8.6z"/></svg>
+              </td>
+              <td><code>bolt</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.bolt.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.7 2.1 6.8 5l2.9 1.1-2.9 1.1-1.1 2.9-1.1-2.9L1.7 6.1 4.6 5zM11.5 8.6l.7 1.9 1.9.7-1.9.7-.7 1.9-.7-1.9-1.9-.7 1.9-.7z"/></svg>
+              </td>
+              <td><code>sparkle</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.sparkle.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.8 2.1a1.4 1.4 0 1 0 0 2.8a1.4 1.4 0 1 0 0-2.8M4.8 11.1a1.4 1.4 0 1 0 0 2.8a1.4 1.4 0 1 0 0-2.8M11.2 2.1a1.4 1.4 0 1 0 0 2.8a1.4 1.4 0 1 0 0-2.8M4.8 4.9v6.2M4.8 8.2h3.2a3.2 3.2 0 0 0 3.2-3.2"/></svg>
+              </td>
+              <td><code>branch</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.branch.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.3 4.1c0-1.1 2.1-2 4.7-2s4.7.9 4.7 2-2.1 2-4.7 2-4.7-.9-4.7-2zM3.3 4.1v7.8c0 1.1 2.1 2 4.7 2s4.7-.9 4.7-2V4.1M3.3 8c0 1.1 2.1 2 4.7 2s4.7-.9 4.7-2"/></svg>
+              </td>
+              <td><code>database</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.database.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.4 3h11.2v10H2.4zM4.9 6.2 7 8.3l-2.1 2.1M8.7 10.6h2.9"/></svg>
+              </td>
+              <td><code>terminal</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.terminal.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.1 8a5.9 5.9 0 1 0 11.8 0a5.9 5.9 0 1 0-11.8 0M2.3 8h11.4M8 2.1c1.6 1.6 2.5 3.7 2.5 5.9S9.6 12.3 8 13.9C6.4 12.3 5.5 10.2 5.5 8S6.4 3.7 8 2.1z"/></svg>
+              </td>
+              <td><code>globe</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.globe.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.7 13.3h10.6M4.9 11V7.3M8 11V3.7M11.1 11V6.1"/></svg>
+              </td>
+              <td><code>chart</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.chart.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.1 8a5.9 5.9 0 1 0 11.8 0a5.9 5.9 0 1 0-11.8 0M8 4.7V8l2.4 1.6"/></svg>
+              </td>
+              <td><code>clock</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.clock.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.1 7h7.8v6.5H4.1zM5.9 7V5.1a2.1 2.1 0 0 1 4.2 0V7M8 9.4v1.7"/></svg>
+              </td>
+              <td><code>lock</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.lock.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.2 13.5 5v6L8 13.8 2.5 11V5zM2.5 5 8 7.8 13.5 5M8 7.8v6"/></svg>
+              </td>
+              <td><code>package</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.package.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.1 8a5.9 5.9 0 1 0 11.8 0a5.9 5.9 0 1 0-11.8 0M6.3 6.3a1.8 1.8 0 0 1 3.5.5c0 1.2-1.8 1.4-1.8 2.7M8 11.5v.1"/></svg>
+              </td>
+              <td><code>question</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.question.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 4.2h8.1M5.5 8h8.1M5.5 11.8h8.1M2.6 4.2h.1M2.6 8h.1M2.6 11.8h.1"/></svg>
+              </td>
+              <td><code>list</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.list.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M1.8 8s2.4-4.3 6.2-4.3S14.2 8 14.2 8s-2.4 4.3-6.2 4.3S1.8 8 1.8 8zM6.1 8a1.9 1.9 0 1 0 3.8 0a1.9 1.9 0 1 0-3.8 0"/></svg>
+              </td>
+              <td><code>eye</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.eye.what') }}</td>
+            </tr>
+            <tr>
+              <td class="irh-icocell">
+                <svg class="irh-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.2 9.8 5.9l4 .6-2.9 2.8.7 4L8 11.4l-3.6 1.9.7-4L2.2 6.5l4-.6z"/></svg>
+              </td>
+              <td><code>star</code></td>
+              <td>{{ $t('settings.help.icons.s9.builtin.star.what') }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p class="irh-note" v-html="$t('settings.help.icons.s9.p2')"></p>
     </section>
   </div>
 </template>
@@ -1481,7 +1807,7 @@ const messageButtons: TextButtonRow[] = [
 }
 
 /* This page has four-column tables with long English tooltip strings in them,
-   so horizontal scrolling matters more here than anywhere else in 說明. */
+   so horizontal scrolling matters more here than anywhere else in Help. */
 .irh-tablewrap {
   overflow-x: auto;
   border: 1px solid var(--border-muted);
@@ -1592,7 +1918,9 @@ const messageButtons: TextButtonRow[] = [
 .irh-sq[data-state='active'] { background: var(--success-fg); }
 .irh-sq[data-state='idle'] { background: var(--status-idle-emphasis); }
 
-.irh code {
+/* `code` also appears inside v-html prose, which carries no scoped data-v
+   attribute — hence :deep(). */
+.irh :deep(code) {
   font-family: ui-monospace, 'SF Mono', Menlo, monospace;
   font-size: 0.92em;
   background: var(--bg-inset);

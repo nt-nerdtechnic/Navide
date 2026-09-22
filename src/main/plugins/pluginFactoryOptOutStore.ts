@@ -1,11 +1,8 @@
 import {
   chmodSync,
-  closeSync,
   existsSync,
-  fsyncSync,
   lstatSync,
   mkdirSync,
-  openSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -13,6 +10,7 @@ import {
 } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
+import { fsyncFileSync, syncDirectorySync } from './fsSync'
 
 const OPT_OUTS_FILE = '.navide-factory-plugin-opt-outs.json'
 
@@ -95,20 +93,10 @@ export class PluginFactoryOptOutStore {
     try {
       writeFileSync(temporary, `${JSON.stringify(state)}\n`, { encoding: 'utf8', mode: 0o600 })
       chmodSync(temporary, 0o600)
-      const fd = openSync(temporary, 'r')
-      try {
-        fsyncSync(fd)
-      } finally {
-        closeSync(fd)
-      }
+      fsyncFileSync(temporary)
       renameSync(temporary, this.file)
       chmodSync(this.file, 0o600)
-      const dir = openSync(this.root, 'r')
-      try {
-        fsyncSync(dir)
-      } finally {
-        closeSync(dir)
-      }
+      syncDirectorySync(this.root)
     } finally {
       rmSync(temporary, { force: true })
     }

@@ -123,7 +123,7 @@ export function createMockBackend(initialStatus: BackendStatus = 'connected') {
     status,
     shell,
     autoRestart,
-    input: (sessionId, data, timeoutMs) => request('terminal.input', { terminal_session_id: sessionId, data }, timeoutMs),
+    input: (sessionId, data, timeoutMs, opts) => request('terminal.input', { terminal_session_id: sessionId, data, ...(opts?.human ? { human: true } : {}) }, timeoutMs),
     create: (payload, timeoutMs) => request('terminal.create', {
       pane_id: payload.paneId,
       create_generation: payload.createGeneration,
@@ -136,7 +136,10 @@ export function createMockBackend(initialStatus: BackendStatus = 'connected') {
       metadata: payload.metadata,
       output_log_file: payload.outputLogFile,
       login_profile_id: payload.loginProfileId,
+      is_login: payload.isLogin,
       replaces_terminal_id: payload.replacesTerminalId,
+      ...(payload.quotaTransactionId ? { quota_transaction_id: payload.quotaTransactionId } : {}),
+      ...(payload.quotaOriginalPaneId ? { quota_original_pane_id: payload.quotaOriginalPaneId } : {}),
     }, timeoutMs),
     cancelCreate: (paneId, createGeneration) => request('terminal.create.cancel', {
       pane_id: paneId,

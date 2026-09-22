@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, type VueWrapper } from '@vue/test-utils'
-import { nextTick } from 'vue'
+import { nextTick, ref } from 'vue'
 import UsageBadge from '../UsageBadge.vue'
 import { i18n } from '@navide/plugin-ui/foundation'
 import type { UsageSnapshot } from '../../composables/useUsage'
@@ -76,23 +76,38 @@ function makeCliProfiles(
     profiles?: CliProfile[]
     defaultId?: string | null
     identities?: Record<string, CliAccountIdentity>
+    /** The user's alias for the built-in Default slot of this agent. */
+    defaultName?: string
     setDefault?: ReturnType<typeof vi.fn>
+    rename?: ReturnType<typeof vi.fn>
   } = {},
 ) {
   const profiles = opts.profiles ?? []
   const setDefault =
     opts.setDefault ?? vi.fn(async (): Promise<SetDefaultResult> => ({ ok: true }))
+  const rename = opts.rename ?? vi.fn(async (): Promise<CliProfile | null> => null)
   const fake = {
     hasProfiles: vi.fn(() => profiles.length > 0),
     profilesForAgent: vi.fn(() => profiles),
     defaultProfileId: vi.fn(() => opts.defaultId ?? null),
+    findProfile: vi.fn((id: string | null | undefined) =>
+      id ? profiles.find((p) => p.id === id) : undefined,
+    ),
     setDefault,
+    rename,
     identityFor: vi.fn(
       (_agent: string, profileId: string | null): CliAccountIdentity | null =>
         opts.identities?.[profileId ?? '__default__'] ?? null,
     ),
+    aliasFor: vi.fn((_agent: string, profileId: string | null | undefined) => {
+      if (profileId && profileId !== '__default__') {
+        const profile = profiles.find((p) => p.id === profileId)
+        return profile?.nameIsCustom ? profile.name : undefined
+      }
+      return opts.defaultName || undefined
+    }),
   }
-  return { fake, setDefault }
+  return { fake, setDefault, rename }
 }
 
 function mountBadge(
@@ -216,6 +231,51 @@ describe('UsageBadge – badge rendering', () => {
 
     await openPopover(wrapper)
     expect(wrapper.get('.usage-pop-cached').text()).toContain('rate limited')
+  })
+
+  it('shows why the last refresh failed, not just that it did', async () => {
+    // "unavailable" is one word for a timed-out probe, a dead token and a CLI
+    // too old to understand `-p /usage`. The snapshot has carried the real
+    // sentence all along and nothing rendered it, so a loaded machine timing
+    // out read on screen as a broken account.
+    usage.usageFor.mockReturnValue(
+      snapshot({
+        stale: true,
+        lastSuccessAt: '2026-07-25T00:00:00Z',
+        refreshStatus: 'unavailable',
+        error: 'claude -p /usage timed out after 180s',
+      }),
+    )
+    wrapper = mountBadge(makeCliProfiles().fake)
+
+    await openPopover(wrapper)
+    expect(wrapper.get('.usage-pop-reason').text()).toContain('timed out after 180s')
+  })
+
+  it('does not offer a stale reason while the next read is in flight', async () => {
+    // The error belongs to the read that already finished. Showing it next to
+    // "reading now" would attribute a failure to the attempt still running.
+    usage.usageFor.mockReturnValue(
+      snapshot({
+        stale: true,
+        refreshPending: true,
+        lastSuccessAt: '2026-07-25T00:00:00Z',
+        refreshStatus: 'unavailable',
+        error: 'claude -p /usage timed out after 180s',
+      }),
+    )
+    wrapper = mountBadge(makeCliProfiles().fake)
+
+    await openPopover(wrapper)
+    expect(wrapper.find('.usage-pop-reason').exists()).toBe(false)
+  })
+
+  it('stays quiet when a healthy reading carries no error', async () => {
+    usage.usageFor.mockReturnValue(snapshot({ error: null }))
+    wrapper = mountBadge(makeCliProfiles().fake)
+
+    await openPopover(wrapper)
+    expect(wrapper.find('.usage-pop-reason').exists()).toBe(false)
   })
 
   it('says a read is in flight rather than passing the old figure off as new', async () => {
@@ -913,5 +973,222 @@ describe('UsageBadge – quota spent, mid-switch', () => {
     const badge = wrapper.find('.usage-badge')
     expect(badge.classes()).toContain('exhausted')
     expect(badge.find('small').text()).toBe('reading')
+  })
+})
+
+describe('UsageBadge – account name section', () => {
+  const custom = (id: string, name: string): CliProfile => ({ ...profile(id, name), nameIsCustom: true })
+
+  it('puts the account name in its own section of the same pill, tinting only the figure', () => {
+    usage.usageFor.mockReturnValue(
+      snapshot({ windows: [{ kind: 'session', label: 'S', usedPercent: 92, resetsAt: null }] }),
+    )
+    wrapper = mountBadge(makeCliProfiles({ profiles: [custom('p1', 'Work')], defaultId: 'p1' }).fake)
+
+    const badge = wrapper.get('.usage-badge')
+    expect(badge.get('.usage-badge-name-text').text()).toBe('Work')
+    expect(badge.get('.usage-badge-num').text()).toBe('8%')
+    // The account is not "critical" — its quota is.
+    expect(badge.classes()).not.toContain('crit')
+    expect(badge.classes()).toContain('has-name')
+    expect(badge.get('.usage-badge-num').classes()).toContain('crit')
+  })
+
+  it('falls back to the email local part, with the whole address in the tooltip', () => {
+    usage.usageFor.mockReturnValue(snapshot())
+    wrapper = mountBadge(
+      makeCliProfiles({
+        profiles: [profile('p1', 'Account 2')],
+        defaultId: 'p1',
+        identities: { p1: { email: 'neil@nerdtechnic.com', signedIn: true } },
+      }).fake,
+    )
+
+    const name = wrapper.get('.usage-badge-name')
+    expect(name.get('.usage-badge-name-text').text()).toBe('neil')
+    expect(name.attributes('title')).toContain('neil@nerdtechnic.com')
+    // The narrow-pane form is rendered too — CSS cannot shorten text.
+    expect(name.get('.usage-badge-name-initial').text()).toBe('N')
+  })
+
+  it('names the built-in Default by the alias the user gave it', () => {
+    usage.usageFor.mockReturnValue(snapshot())
+    wrapper = mountBadge(makeCliProfiles({ defaultId: null, defaultName: 'Main' }).fake)
+
+    expect(wrapper.get('.usage-badge-name-text').text()).toBe('Main')
+  })
+
+  it('shows nothing extra when there is no alias, no email and no second account', () => {
+    usage.usageFor.mockReturnValue(snapshot())
+    wrapper = mountBadge(makeCliProfiles().fake)
+
+    // Exactly the pill it has always been: no name section, no wrapper around
+    // the figure, the tier still on the badge itself.
+    const badge = wrapper.get('.usage-badge')
+    expect(badge.find('.usage-badge-name').exists()).toBe(false)
+    expect(badge.find('.usage-badge-num').exists()).toBe(false)
+    expect(badge.classes()).not.toContain('has-name')
+    expect(badge.classes()).toContain('ok')
+    expect(badge.text()).toBe('70%')
+  })
+
+  it('keeps the whole pill dashed mid-switch: the name is the new account, the figure the old one', () => {
+    usage.usageFor.mockReturnValue(snapshot({ refreshPending: true }))
+    wrapper = mountBadge(makeCliProfiles({ profiles: [custom('p1', 'Spare')], defaultId: 'p1' }).fake)
+
+    const badge = wrapper.get('.usage-badge')
+    expect(badge.classes()).toContain('pending')
+    expect(badge.get('.usage-badge-name-text').text()).toBe('Spare')
+    expect(badge.get('.usage-badge-num').find('small').text()).toBe('reading')
+  })
+
+  it('a spent quota fills the figure only, so the account reads as "this one ran out"', () => {
+    usage.usageFor.mockReturnValue(
+      snapshot({ windows: [{ kind: 'session', label: 'S', usedPercent: 100, resetsAt: null }] }),
+    )
+    wrapper = mountBadge(makeCliProfiles({ profiles: [custom('p1', 'Work')], defaultId: 'p1' }).fake)
+
+    const badge = wrapper.get('.usage-badge')
+    expect(badge.classes()).not.toContain('exhausted')
+    expect(badge.get('.usage-badge-num').classes()).toContain('exhausted')
+    expect(badge.get('.usage-badge-num').text()).toContain('spent')
+  })
+})
+
+describe('UsageBadge – renaming from the account list', () => {
+  it('renames a profile slot from its row', async () => {
+    usage.usageFor.mockReturnValue(snapshot())
+    const { fake, rename } = makeCliProfiles({ profiles: [profile('p1', 'Account 2')], defaultId: null })
+    wrapper = mountBadge(fake)
+    await openPopover(wrapper)
+
+    await wrapper.findAll('.usage-acct-row')[1].get('.usage-acct-edit').trigger('click')
+    const input = wrapper.get('input.usage-acct-rename')
+    await input.setValue('Work')
+    await input.trigger('keydown.enter')
+    await settle()
+
+    expect(rename).toHaveBeenCalledWith('p1', 'Work', 'claude')
+  })
+
+  it('renames the built-in Default, which has no profile record of its own', async () => {
+    usage.usageFor.mockReturnValue(snapshot())
+    const { fake, rename } = makeCliProfiles({ profiles: [profile('p1', 'Account 2')], defaultId: 'p1' })
+    wrapper = mountBadge(fake)
+    await openPopover(wrapper)
+
+    await wrapper.findAll('.usage-acct-row')[0].get('.usage-acct-edit').trigger('click')
+    const input = wrapper.get('input.usage-acct-rename')
+    await input.setValue('Main')
+    await input.trigger('keydown.enter')
+    await settle()
+
+    expect(rename).toHaveBeenCalledWith('__default__', 'Main', 'claude')
+  })
+
+  it('Esc closes the field without renaming — including the blur it causes', async () => {
+    usage.usageFor.mockReturnValue(snapshot())
+    const { fake, rename } = makeCliProfiles({ profiles: [profile('p1', 'Account 2')], defaultId: null })
+    wrapper = mountBadge(fake)
+    await openPopover(wrapper)
+
+    await wrapper.findAll('.usage-acct-row')[1].get('.usage-acct-edit').trigger('click')
+    const input = wrapper.get('input.usage-acct-rename')
+    await input.setValue('Work')
+    await input.trigger('keydown.esc')
+    await input.trigger('blur')
+    await settle()
+
+    expect(rename).not.toHaveBeenCalled()
+    expect(wrapper.find('input.usage-acct-rename').exists()).toBe(false)
+  })
+
+  it('the field starts from the alias, not the generated name', async () => {
+    usage.usageFor.mockReturnValue(snapshot())
+    const named: CliProfile = { ...profile('p1', 'Work'), nameIsCustom: true }
+    const { fake } = makeCliProfiles({ profiles: [named], defaultId: null })
+    wrapper = mountBadge(fake)
+    await openPopover(wrapper)
+
+    await wrapper.findAll('.usage-acct-row')[1].get('.usage-acct-edit').trigger('click')
+    expect((wrapper.get('input.usage-acct-rename').element as HTMLInputElement).value).toBe('Work')
+  })
+})
+
+describe('UsageBadge – clearing an alias', () => {
+  /** A fake whose rename does what the backend does with an empty name: the
+   *  custom flag goes and the generated "Account N" comes back. Reactive, so
+   *  the chip and the row re-read it. */
+  function makeClearableProfiles(opts: { identities?: Record<string, CliAccountIdentity> } = {}) {
+    const profiles = ref<CliProfile[]>([{ ...profile('p1', 'Work'), nameIsCustom: true }])
+    const rename = vi.fn(async (id: string, name: string): Promise<CliProfile | null> => {
+      const next: CliProfile = name
+        ? { ...profile(id, name), nameIsCustom: true }
+        : profile(id, 'Account 2')
+      profiles.value = profiles.value.map((p) => (p.id === id ? next : p))
+      return next
+    })
+    const fake = {
+      hasProfiles: vi.fn(() => profiles.value.length > 0),
+      profilesForAgent: vi.fn(() => profiles.value),
+      defaultProfileId: vi.fn(() => 'p1'),
+      findProfile: vi.fn((id: string | null | undefined) =>
+        id ? profiles.value.find((p) => p.id === id) : undefined,
+      ),
+      setDefault: vi.fn(async (): Promise<SetDefaultResult> => ({ ok: true })),
+      rename,
+      identityFor: vi.fn(
+        (_agent: string, profileId: string | null): CliAccountIdentity | null =>
+          opts.identities?.[profileId ?? '__default__'] ?? null,
+      ),
+      aliasFor: vi.fn((_agent: string, profileId: string | null | undefined) => {
+        if (profileId && profileId !== '__default__') {
+          const p = profiles.value.find((x) => x.id === profileId)
+          return p?.nameIsCustom ? p.name : undefined
+        }
+        return undefined
+      }),
+    }
+    return { fake, rename }
+  }
+
+  /** Clear the field of the first profile row and submit. */
+  async function clearAlias(w: VueWrapper): Promise<void> {
+    await w.findAll('.usage-acct-row')[1].get('.usage-acct-edit').trigger('click')
+    const input = w.get('input.usage-acct-rename')
+    await input.setValue('')
+    await input.trigger('keydown.enter')
+    await settle()
+    await nextTick()
+  }
+
+  it('sends an empty name and falls back to the signed-in email', async () => {
+    usage.usageFor.mockReturnValue(snapshot())
+    const { fake, rename } = makeClearableProfiles({
+      identities: { p1: { email: 'neil@nerdtechnic.com', signedIn: true } },
+    })
+    wrapper = mountBadge(fake)
+    expect(wrapper.get('.usage-badge-name-text').text()).toBe('Work')
+    await openPopover(wrapper)
+
+    await clearAlias(wrapper)
+
+    expect(rename).toHaveBeenCalledWith('p1', '', 'claude')
+    // Header chip: the local part. Popover row: the whole address.
+    expect(wrapper.get('.usage-badge-name-text').text()).toBe('neil')
+    expect(wrapper.findAll('.usage-acct-name')[1].text()).toBe('neil@nerdtechnic.com')
+  })
+
+  it('falls back to the regenerated name for a vendor that exposes no email', async () => {
+    usage.usageFor.mockReturnValue(snapshot())
+    const { fake, rename } = makeClearableProfiles()
+    wrapper = mountBadge(fake)
+    await openPopover(wrapper)
+
+    await clearAlias(wrapper)
+
+    expect(rename).toHaveBeenCalledWith('p1', '', 'claude')
+    expect(wrapper.get('.usage-badge-name-text').text()).toBe('Account 2')
+    expect(wrapper.findAll('.usage-acct-name')[1].text()).toBe('Account 2')
   })
 })

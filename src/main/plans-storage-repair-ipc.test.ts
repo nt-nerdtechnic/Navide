@@ -75,6 +75,11 @@ vi.mock('./plugins/plansStorageMigrationGate', () => ({
 afterAll(() => rmSync(userDataRoot, { recursive: true, force: true }))
 
 describe('Plans storage record repair IPC', () => {
+  // Both cases import the whole src/main/index.ts module graph, which on its
+  // own eats most of the default 5s budget and overruns it once vitest is
+  // running other files alongside this one.
+  const IMPORT_INDEX_TIMEOUT_MS = 20_000
+
   it('refuses an untrusted sender and leaves the record untouched', async () => {
     mkdirSync(join(userDataRoot, 'plugin-storage-v2'), { recursive: true })
     writeFileSync(lifecyclePath, '{broken')
@@ -91,7 +96,7 @@ describe('Plans storage record repair IPC', () => {
     // durable Host state, and the gate was never re-run for it.
     expect(readFileSync(lifecyclePath, 'utf8')).toBe('{broken')
     expect(gateCalls).toEqual([])
-  })
+  }, IMPORT_INDEX_TIMEOUT_MS)
 
   it('refuses an untrusted sender on the Plans v2 retry', async () => {
     // Leaving recovery re-arms a package the Host withdrew, so it carries the
@@ -105,5 +110,5 @@ describe('Plans storage record repair IPC', () => {
       ok: false,
       reason: 'untrusted sender',
     })
-  })
+  }, IMPORT_INDEX_TIMEOUT_MS)
 })

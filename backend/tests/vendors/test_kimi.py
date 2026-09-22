@@ -406,6 +406,86 @@ def test_parse_activity_reparse_does_not_reemit(fake_kimi_home: Path) -> None:
     assert reader.parse_activity(wire, seen) == []
 
 
+@pytest.mark.parametrize("part_type", ["text", "think"])
+def test_recent_loop_content_keeps_an_old_prompt_active(
+    fake_kimi_home: Path, monkeypatch: pytest.MonkeyPatch, part_type: str,
+) -> None:
+    from agent_team_backend.cli_vendors import kimi
+
+    wire = _session(fake_kimi_home, "/x")
+    part = _text_part("still streaming", time=1_010_000)
+    part["event"]["part"]["type"] = part_type
+    _write_jsonl(wire, [_prompt(time=1_000_000), part])
+    monkeypatch.setattr(kimi.time, "time", lambda: 1_010.0)
+    assert not any(e.event_type == "turn_complete"
+                   for e in KimiLogReader().parse_activity(wire, set()))
+
+
+@pytest.mark.parametrize("resumed_usage", [False, True])
+def test_activity_after_idle_flush_delivers_the_final_reply(
+    fake_kimi_home: Path, monkeypatch: pytest.MonkeyPatch, resumed_usage: bool,
+) -> None:
+    from agent_team_backend.cli_vendors import kimi
+
+    reader, seen = KimiLogReader(), set()
+    wire = _session(fake_kimi_home, "/x")
+    records = [_prompt(time=1_000_000), _text_part("first reply", time=1_000_001)]
+    _write_jsonl(wire, records)
+    monkeypatch.setattr(kimi.time, "time", lambda: 1_010.0)
+    first = [e for e in reader.parse_activity(wire, seen) if e.event_type == "turn_complete"]
+    assert [e.text for e in first] == ["first reply"]
+
+    if resumed_usage:
+        records.append(_usage(10, 0, 5, time=1_020_000))
+    records.append(_text_part("final reply", time=1_020_001))
+    _write_jsonl(wire, records)
+    monkeypatch.setattr(kimi.time, "time", lambda: 1_021.0)
+    assert not any(e.event_type == "turn_complete" for e in reader.parse_activity(wire, seen))
+    monkeypatch.setattr(kimi.time, "time", lambda: 1_030.0)
+    final = [e for e in reader.parse_activity(wire, seen) if e.event_type == "turn_complete"]
+    assert [e.text for e in final] == ["final reply"]
+    assert final[0].dedup_key != first[0].dedup_key
+    assert reader.parse_activity(wire, seen) == []
+
+
+def test_cancelled_turn_is_not_reopened_by_late_stream_records(
+    fake_kimi_home: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agent_team_backend.cli_vendors import kimi
+
+    reader, seen = KimiLogReader(), set()
+    wire = _session(fake_kimi_home, "/x")
+    records = [_prompt(time=1_000_000), {"type": "turn.cancel", "time": 1_000_001}]
+    _write_jsonl(wire, records)
+    monkeypatch.setattr(kimi.time, "time", lambda: 1_001.0)
+    assert [e.detail for e in reader.parse_activity(wire, seen)
+            if e.event_type == "turn_complete"] == ["cancel"]
+    records.extend([_usage(10, 0, 5, time=1_010_000), _text_part("late", time=1_010_001)])
+    _write_jsonl(wire, records)
+    monkeypatch.setattr(kimi.time, "time", lambda: 1_030.0)
+    assert not any(e.event_type == "turn_complete" for e in reader.parse_activity(wire, seen))
+
+
+def test_cancel_after_idle_flush_still_blocks_late_content(
+    fake_kimi_home: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agent_team_backend.cli_vendors import kimi
+
+    reader, seen = KimiLogReader(), set()
+    wire = _session(fake_kimi_home, "/x")
+    records = [_prompt(time=1_000_000), _text_part("first reply", time=1_000_001)]
+    _write_jsonl(wire, records)
+    monkeypatch.setattr(kimi.time, "time", lambda: 1_010.0)
+    assert any(e.event_type == "turn_complete" for e in reader.parse_activity(wire, seen))
+    records.extend([
+        {"type": "turn.cancel", "time": 1_020_000},
+        _text_part("late", time=1_020_001),
+    ])
+    _write_jsonl(wire, records)
+    monkeypatch.setattr(kimi.time, "time", lambda: 1_030.0)
+    assert not any(e.event_type == "turn_complete" for e in reader.parse_activity(wire, seen))
+
+
 # ── parse_activity: the seen_keys bag stays O(1) ─────────────────────────────
 # seen_keys lives as long as wire.jsonl, which grows one usage.record per
 # agentic step, so the walk must leave one high-water mark in it rather than a
@@ -489,3 +569,45 @@ def test_parse_activity_turn_and_text_sentinels_coexist_with_the_mark(
         e for e in reader.parse_activity(wire, seen) if e.event_type == "turn_complete"
     ]
     assert [(e.detail, e.text) for e in completes] == [("idle", "ready")]
+
+
+# ── turns_for_session: the generic cut on turn_complete timestamps ──────────
+
+def test_turns_are_cut_on_turn_complete_timestamps(fake_kimi_home: Path) -> None:
+    """Kimi has no override, so the base cut applies: each usage.record is
+    assigned to the first turn_complete not earlier than it (kimi stamps the
+    boundary with the previous turn's last usage time), the prompt event in
+    the same window names the turn, and TokenUsage's folded input rides as
+    `input` with the cache fields left 0."""
+    reader = KimiLogReader()
+    wire = _session(fake_kimi_home, "/x")
+    _write_jsonl(wire, [
+        _prompt("first question", time=1_000),
+        _usage(10, 100, 5, time=2_000),
+        _usage(20, 200, 8, time=3_000),
+        _usage(30, 300, 9, time=4_000),
+        _prompt("second question", time=10_000),
+        _usage(40, 0, 1, time=11_000),
+    ])
+    assert reader.turns_method == "inferred"
+    turns = reader.turns_for_session(wire, _SID)
+    assert [(t.turn_index, t.prompt_excerpt, t.call_count) for t in turns] == [
+        (1, "first question", 3), (2, "second question", 1),
+    ]
+    first, second = turns
+    assert (first.input, first.cache_read, first.cache_creation, first.output) == (660, 0, 0, 22)
+    assert first.started_at == "1970-01-01T00:00:01.000Z"   # epoch-ms → ISO
+    assert first.ended_at == "1970-01-01T00:00:04.000Z"
+    assert first.calls[0].model == "kimi-code/kimi-for-coding"
+    assert (second.input, second.output) == (40, 1)
+    assert second.started_at == "1970-01-01T00:00:10.000Z"
+    assert first.session_id == _SID
+
+
+def test_turns_without_any_boundary_are_one_turn(fake_kimi_home: Path) -> None:
+    reader = KimiLogReader()
+    wire = _session(fake_kimi_home, "/x")
+    # No turn.prompt → parse_activity never opens a turn → no turn_complete.
+    _write_jsonl(wire, [_usage(1, 0, 1, time=1), _usage(2, 0, 2, time=2)])
+    turns = reader.turns_for_session(wire)
+    assert [(t.turn_index, t.call_count, t.total, t.prompt_excerpt) for t in turns] == [(1, 2, 6, "")]

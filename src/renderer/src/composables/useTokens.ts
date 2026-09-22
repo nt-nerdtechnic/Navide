@@ -5,6 +5,8 @@ export interface TokenBucket {
   input: number
   output: number
   calls: number
+  /** Present on the account / version buckets (newer backends). */
+  total?: number
 }
 
 export interface RunSnapshot {
@@ -23,12 +25,22 @@ export interface CumulativeSnapshot {
   totals: TokenBucket
   by_vendor: Record<string, TokenBucket>
   by_stage: Record<string, TokenBucket>
+  /** Keyed by sidebar run group id; `""` is ungrouped usage. Keys may
+   *  outlive their group — the panel folds those into one orphan row. */
+  by_group: Record<string, TokenBucket>
+  /** Keyed by the pane's pinned profile id ("__default__" = the real home,
+   *  "unknown" = untraceable). Absent from a backend without the dimension. */
+  by_account?: Record<string, TokenBucket>
+  /** Keyed "<vendor>@<version>". */
+  by_version?: Record<string, TokenBucket>
 }
 
 export interface GlobalSnapshot {
   all_time: TokenBucket
   by_vendor: Record<string, TokenBucket>
   by_day: Record<string, TokenBucket>
+  by_account?: Record<string, TokenBucket>
+  by_version?: Record<string, TokenBucket>
 }
 
 export interface TokensSnapshot {

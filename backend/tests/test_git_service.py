@@ -10,7 +10,17 @@ from typing import Any
 import pytest
 
 from agent_team_backend import app as app_module
-from agent_team_backend import git_service
+from agent_team_backend import git_service, osplat
+
+# Every test here drives a real `git`, found through the seam
+# (`host_shell` resolves argv[0] with `osplat.paths.resolve_program`). Gate
+# on that lookup, not on the OS: a host where this platform's resolver cannot
+# see git — none installed, or the seam swapped to another platform's
+# implementation (`-p tests.osplat_win_swap`) — has nothing to run.
+pytestmark = pytest.mark.skipif(
+    osplat.paths.resolve_program("git") is None,
+    reason="git is not resolvable through osplat.paths on this host",
+)
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────

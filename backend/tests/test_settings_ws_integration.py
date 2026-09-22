@@ -10,6 +10,7 @@ import shutil
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -415,6 +416,51 @@ async def test_skills_handlers_map_expected_store_errors(
     assert conflict["error"]["details"]["expected_revision"] == created["revision"]
     assert conflict["error"]["details"]["actual_revision"] != created["revision"]
     assert store_error["error"]["code"] == "SKILLS_STORE_ERROR"
+
+
+@pytest.mark.asyncio
+async def test_skills_ws_mutations_broadcast_committed_changes_only(
+    monkeypatch: pytest.MonkeyPatch,
+    settings_stores: tuple[MCPSettingsStore, SkillsStore, FakeMCPManager],
+) -> None:
+    _mcp, store, _manager = settings_stores
+    broadcast = AsyncMock()
+    monkeypatch.setattr(app, "broadcast", broadcast)
+    session = _session()
+
+    created = await _request(session, "skills.create", {"name": "notify", "consent": True})
+    await _request(session, "skills.get", {"name": "notify"})
+    await _request(session, "skills.list")
+    await _request(session, "skills.save", {
+        "name": "notify", "fields": {}, "body": "Saved instructions",
+        "expected_revision": created["payload"]["skill"]["revision"],
+    })
+    await _request(session, "skills.set_enabled", {"name": "notify", "enabled": False})
+    await _request(session, "skills.set_targets", {"name": "notify", "agents": ["codex"]})
+    await _request(session, "skills.delete", {"name": "notify"})
+    await _request(session, "skills.set_enabled", {"name": "missing", "enabled": True})
+
+    events = [call.args[0] for call in broadcast.await_args_list]
+    assert all(event["type"] == "skills.changed" for event in events)
+    assert [event["payload"] for event in events] == [
+        {"name": "notify", "operation": operation}
+        for operation in ("create", "save", "set_enabled", "set_targets", "delete")
+    ]
+    assert not (store.root / "notify").exists()
+
+
+@pytest.mark.asyncio
+async def test_skills_notification_failure_does_not_fail_a_committed_write(
+    monkeypatch: pytest.MonkeyPatch,
+    settings_stores: tuple[MCPSettingsStore, SkillsStore, FakeMCPManager],
+) -> None:
+    _mcp, store, _manager = settings_stores
+    monkeypatch.setattr(app, "broadcast", AsyncMock(side_effect=RuntimeError("disconnected")))
+
+    response = await _request(_session(), "skills.create", {"name": "retained", "consent": True})
+
+    assert response["ok"] is True
+    assert store.get_skill("retained")["skill"]["name"] == "retained"
 
 
 @pytest.mark.asyncio

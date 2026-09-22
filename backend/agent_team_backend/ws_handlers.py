@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import re
+import functools
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -33,7 +34,10 @@ from . import (
     executions_service,
     native_mcp,
     native_memory,
+    osplat,
     pane_policy,
+    portable_credentials,
+    quota_failover,
     remote_roster,
     server_link,
     storage_service,
@@ -54,6 +58,7 @@ from .mcp_settings import (
 from .plan_index import resolve_plan_root
 from .plan_provisioning import SPEC_FILENAME, TEMPLATE_FILENAME, ensure_plan_assets
 from .profiles_store import SUPPORTED_AGENT_KEYS as PROFILE_AGENT_KEYS
+from .skills_events import notify_skills_changed
 from .skills_store import (
     SkillConflictError,
     SkillConsentRequired,
@@ -1572,6 +1577,22 @@ async def git_push_force(session: "Session", msg_id: str, msg_type: str, payload
 
 
 # ── Codex home cleanup (codex_home.cleanup) ─────────────────────────────────
+async def _reclaim_codex_home(home_id: str) -> None:
+    """Drop a pane home its pane no longer needs (#121). reclaim() keeps any
+    home that still owns a resumable session, so this is safe to call for
+    every pane that goes away; a manager without it (test fakes) is a no-op."""
+    from . import app
+
+    reclaim = getattr(app.codex_home_manager, "reclaim", None)
+    if not home_id or not callable(reclaim):
+        return
+    try:
+        if await asyncio.to_thread(reclaim, home_id):
+            app.log.info("reclaimed codex pane home %s", home_id)
+    except Exception as err:  # noqa: BLE001 — the pane is already gone; only disk is lost
+        app.log.warning("reclaiming codex pane home %s failed: %s", home_id, err)
+
+
 @handler("codex_home.cleanup")
 async def codex_home_cleanup(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     from . import app
@@ -1666,23 +1687,70 @@ def _profile_pin_for_spawn(agent_key: str, payload_profile_id: object) -> str:
     return active["id"] if active else DEFAULT_SLOT_ID
 
 
+#: Terminal metadata key carrying the portable slot a launch was injected
+#: with. Non-secret. Written once at spawn; read by the bookkeeping messages
+#: that follow (pipeline.slot_spawn, manual_pane.spawn) so they record the
+#: launch's identity rather than whatever slot is selected by then.
+PORTABLE_SLOT_METADATA_KEY = "portable_slot_id"
+
+
+def _launch_portable_slot(pane_id: str) -> str:
+    """The portable slot the pane's most recent launch ran on, or "".
+
+    The fact was fixed at terminal.create (``portable_credentials.note_launch``
+    plus the terminal's own metadata) — never the current selection, which
+    can have moved on between the launch and this message. It outlives the
+    terminal: a CLI that exits before the bookkeeping arrives has already
+    been reaped from _PTY_OWNERS, and reading only live terminals would
+    record it as native. A login or native relaunch of the same pane writes
+    "" over it, so a stale portable fact cannot resurface on a respawn."""
+    return portable_credentials.launch_slot(pane_id)
+
+
+def _profile_pin_for_bookkeeping(
+    agent_key: str, pane_id: object, payload_profile_id: object
+) -> str:
+    """``_profile_pin_for_spawn`` for the bookkeeping messages: the launch's
+    own portable slot when the pane has one, else the native rule."""
+    if agent_key in PROFILE_AGENT_KEYS:
+        launched = _launch_portable_slot(str(pane_id or ""))
+        if launched:
+            return launched
+    return _profile_pin_for_spawn(agent_key, payload_profile_id)
+
+
+def _account_pin_for_history(pin: str) -> str:
+    """The id the pane account history records for a bookkeeping pin. A
+    non-account agent pins "" in its restore record, but its usage samples
+    are filed under the Default slot (usage_service._file_quota_samples), and
+    the quota cycle's token side only finds the pane's slices when both name
+    the same account — so the history gets DEFAULT_SLOT_ID for that pane."""
+    return pin or DEFAULT_SLOT_ID
+
+
 async def _broadcast_profiles_changed(
     reason: str,
     harvested_profile_ids: list[str] | None = None,
     agent_key: str | None = None,
     forced: bool | None = None,
+    hot_switched_panes: list[dict[str, Any]] | None = None,
 ) -> None:
     from . import app
 
-    doc = app.cli_profiles_store.list()
     view = await asyncio.to_thread(_profile_account_view)
+    portable = await asyncio.to_thread(_portable_credentials_view)
+    doc = app.cli_profiles_store.list()
     payload = {
         "profiles": doc["profiles"],
         "defaults": doc["defaults"],
+        "defaultNames": doc["defaultNames"],
         "identities": view["identities"],
         # Account rows storing the same login as another row of the same agent
         # — the Accounts pane flags them so the user can delete the spare.
         "duplicates": view["duplicates"],
+        # Pasted portable credentials, metadata only (never the value):
+        # {"<agentKey>/<slotId>": {configured, enabled, kind, updatedAt, ...}}.
+        "portable_credentials": portable,
         "reason": reason,
     }
     if harvested_profile_ids:
@@ -1696,6 +1764,13 @@ async def _broadcast_profiles_changed(
         # its own panes of that agent onto the new credentials.
         payload["agent_key"] = agent_key
         payload["forced"] = bool(forced)
+    if hot_switched_panes is not None:
+        # Another window can switch again while the account views are read.
+        # Never pair rows from that earlier switch with the newer default.
+        payload["hotSwitchedPanes"] = [
+            row for row in hot_switched_panes
+            if agent_key in doc["defaults"] and row["profileId"] == doc["defaults"][agent_key]
+        ]
     await app.broadcast(make_event("cli_profiles.changed", payload))
 
 
@@ -1705,6 +1780,7 @@ async def cli_profiles_list(session: "Session", msg_id: str, msg_type: str, payl
 
     doc = app.cli_profiles_store.list()
     view = await asyncio.to_thread(_profile_account_view)
+    portable = await asyncio.to_thread(_portable_credentials_view)
     await session.send_json(
         make_response(
             msg_id,
@@ -1712,28 +1788,128 @@ async def cli_profiles_list(session: "Session", msg_id: str, msg_type: str, payl
             {
                 "profiles": doc["profiles"],
                 "defaults": doc["defaults"],
+                "defaultNames": doc["defaultNames"],
                 "identities": view["identities"],
                 "duplicates": view["duplicates"],
                 "supported_agents": list(PROFILE_AGENT_KEYS),
+                "portable_credentials": portable,
+                "portable_supported": portable_credentials.supported_agent_keys(),
+                # Per vendor: hot/restart/manual, the credential pool, the
+                # provider scopes a new profile may bind to, resume ability.
+                "account_capabilities": quota_failover.capabilities(),
             },
         )
     )
+
+
+def _portable_credentials_view() -> dict[str, dict]:
+    """Metadata for every pasted portable credential, keyed
+    "<agentKey>/<slotId>" — the value itself is never part of it. Shadowing
+    is checked against the real home only; a pane's cwd is only known at
+    spawn. Blocking; call off the loop."""
+    try:
+        return portable_credentials.describe_all(home=Path.home())
+    except Exception as err:  # noqa: BLE001 - a locked vault must not break the accounts list
+        log.warning("portable credentials could not be listed: %s", err)
+        return {}
+
+
+def _portable_address(payload: dict) -> tuple[str, str]:
+    """(agent_key, slot_id) from a cli_profiles.portable_* payload. The
+    built-in Default row sends "__default__" (or nothing) as its profile id."""
+    agent_key = str(payload.get("agent_key") or "")
+    slot_id = str(payload.get("profile_id") or DEFAULT_SLOT_ID)
+    return agent_key, slot_id
+
+
+async def _reply_portable(
+    session: "Session", msg_id: str, msg_type: str, reason: str, portable: dict | None
+) -> None:
+    body: dict[str, Any] = {"ok": True}
+    if portable is not None:
+        body["portable"] = portable
+    await session.send_json(make_response(msg_id, msg_type, body))
+    await _broadcast_profiles_changed(reason)
+
+
+@handler("cli_profiles.portable_get")
+async def cli_profiles_portable_get(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    agent_key, slot_id = _portable_address(payload)
+    try:
+        portable = await asyncio.to_thread(
+            portable_credentials.describe, agent_key, slot_id, home=Path.home()
+        )
+    except portable_credentials.PortableCredentialError as err:
+        await session.send_json(make_error(msg_id, msg_type, "BAD_REQUEST", _profile_error(err)))
+        return
+    await session.send_json(make_response(msg_id, msg_type, {"ok": True, "portable": portable}))
+
+
+@handler("cli_profiles.portable_set")
+async def cli_profiles_portable_set(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """Store a pasted credential. The reply and the broadcast carry metadata
+    only; the secret is consumed here and never echoed."""
+    agent_key, slot_id = _portable_address(payload)
+    secret = payload.get("secret")
+    if not isinstance(secret, str):
+        await session.send_json(make_error(msg_id, msg_type, "BAD_REQUEST", "secret must be a string"))
+        return
+    try:
+        portable = await asyncio.to_thread(portable_credentials.store, agent_key, slot_id, secret)
+    except portable_credentials.PortableCredentialError as err:
+        await session.send_json(make_error(msg_id, msg_type, "BAD_REQUEST", _profile_error(err)))
+        return
+    # On the loop, after the store: sync schedules its push as a task here.
+    portable_credentials.notify_saved(agent_key, slot_id)
+    await _reply_portable(session, msg_id, msg_type, "portable-set", portable)
+
+
+@handler("cli_profiles.portable_enable")
+async def cli_profiles_portable_enable(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    agent_key, slot_id = _portable_address(payload)
+    try:
+        portable = await asyncio.to_thread(
+            portable_credentials.set_enabled, agent_key, slot_id, bool(payload.get("enabled"))
+        )
+    except portable_credentials.PortableCredentialError as err:
+        await session.send_json(make_error(msg_id, msg_type, "BAD_REQUEST", _profile_error(err)))
+        return
+    await _reply_portable(session, msg_id, msg_type, "portable-enable", portable)
+
+
+@handler("cli_profiles.portable_clear")
+async def cli_profiles_portable_clear(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """Local removal only: the entry on this machine goes away; nothing is
+    deleted anywhere else (the plan's chosen deletion semantics)."""
+    agent_key, slot_id = _portable_address(payload)
+    try:
+        await asyncio.to_thread(portable_credentials.forget, agent_key, slot_id)
+    except portable_credentials.PortableCredentialError as err:
+        await session.send_json(make_error(msg_id, msg_type, "BAD_REQUEST", _profile_error(err)))
+        return
+    await _reply_portable(session, msg_id, msg_type, "portable-clear", None)
 
 
 @handler("cli_profiles.create")
 async def cli_profiles_create(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     from . import app
 
+    # ``scope``: the provider a profile of a per-provider vendor (opencode,
+    # pi …) binds to; the store validates it against the vendor's declared
+    # scopes and refuses a multi-scope vendor without one.
+    raw_scope = payload.get("scope")
     try:
         profile = app.cli_profiles_store.create(
             agent_key=str(payload.get("agent_key") or ""),
             name=str(payload.get("name") or ""),
+            scope=str(raw_scope) if raw_scope else None,
         )
     except ValueError as err:
         await session.send_json(
             make_error(msg_id, msg_type, "BAD_REQUEST", _profile_error(err))
         )
         return
+    session._created_cli_profile_id = profile["id"]
     doc = app.cli_profiles_store.list()
     await session.send_json(
         make_response(
@@ -1749,10 +1925,19 @@ async def cli_profiles_create(session: "Session", msg_id: str, msg_type: str, pa
 async def cli_profiles_rename(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     from . import app
 
+    profile_id = str(payload.get("id") or "")
+    name = str(payload.get("name") or "")
     try:
-        profile = app.cli_profiles_store.rename(
-            str(payload.get("id") or ""), str(payload.get("name") or "")
-        )
+        if profile_id == DEFAULT_SLOT_ID:
+            # The built-in Default slot has no profile record; its alias is
+            # kept per agent, so the agent must be named.
+            agent_key = str(payload.get("agent_key") or payload.get("agentKey") or "")
+            if not agent_key:
+                raise ValueError("agent_key is required to rename the Default account")
+            app.cli_profiles_store.set_default_name(agent_key, name)
+            profile = None
+        else:
+            profile = app.cli_profiles_store.rename(profile_id, name)
     except (KeyError, ValueError) as err:
         await session.send_json(
             make_error(msg_id, msg_type, "BAD_REQUEST", _profile_error(err))
@@ -1763,7 +1948,12 @@ async def cli_profiles_rename(session: "Session", msg_id: str, msg_type: str, pa
         make_response(
             msg_id,
             msg_type,
-            {"profile": profile, "profiles": doc["profiles"], "defaults": doc["defaults"]},
+            {
+                "profile": profile,
+                "profiles": doc["profiles"],
+                "defaults": doc["defaults"],
+                "defaultNames": doc["defaultNames"],
+            },
         )
     )
     await _broadcast_profiles_changed("rename")
@@ -1877,6 +2067,55 @@ async def cli_profiles_delete(session: "Session", msg_id: str, msg_type: str, pa
     )
 
 
+def _live_login_pending(agent_key: str) -> bool:
+    """Has a non-isolated sign-in of any profile of this agent started and
+    not been harvested or discarded yet? Read off the vault's pre-login
+    snapshot, so it survives a backend restart. Blocking — thread it."""
+    from . import app
+
+    vault = app.credential_vault
+    isolated = getattr(vault, "_login_isolated", None)
+    if callable(isolated) and isolated(agent_key):
+        return False
+    try:
+        profiles = app.cli_profiles_store.list()["profiles"]
+    except Exception:  # noqa: BLE001
+        return False
+    for profile in profiles:
+        if profile.get("agentKey") != agent_key or not profile.get("id"):
+            continue
+        slot_id = str(profile["id"])
+        if quota_failover.login_pending(vault, agent_key, slot_id) and not (
+            vault.login_home_path(agent_key, slot_id).is_dir()
+        ):
+            return True
+    return False
+
+
+def _running_live_login_terminals(agent_key: str) -> list[str]:
+    """Terminal ids of the agent's running sign-in panes that write the LIVE
+    credential store (a vendor with no login isolation; marked ``live_login``
+    at spawn). While one runs, the live credential is not any account's own
+    yet: no switch may capture it and no regular pane may be pinned to the
+    store's default on it."""
+    from . import app
+
+    running: list[str] = []
+    for tid, owner in list(app._PTY_OWNERS.items()):
+        # An owner may be another window's opaque handle (no terminals): on
+        # the terminal.create hot path this guard must never raise.
+        lookup = getattr(getattr(owner, "terminals", None), "get", None)
+        term = lookup(tid) if callable(lookup) else None
+        if (
+            term is not None
+            and not getattr(term, "closed", False)
+            and getattr(term, "agent_key", None) == agent_key
+            and getattr(term, "metadata", {}).get("live_login")
+        ):
+            running.append(tid)
+    return running
+
+
 def _running_login_terminals(agent_key: str, profile_id: str) -> list[tuple[str, "Session"]]:
     """(terminal_id, owner session) for every live isolated LOGIN pane of the
     given profile. While one runs, its login home must not be harvested: the
@@ -1968,13 +2207,16 @@ def _slot_login_reason(agent_key: str, slot_id: str) -> str | None:
     — an empty slot signs the user out), or claude's snapshot was wiped in place
     by Claude Code (both tokens emptied after an ``invalid_grant``, so it
     restores as a non-credential). ``expired``: claude's snapshot sat parked
-    long enough for its access token to expire. Nothing renews a parked slot —
-    the CLI is the only refresher — so the expired token goes live and Claude
-    Code renews it from the restored refresh token on its next run; offering a
-    sign-in is the fallback for when that refresh token is dead too, which is
-    why this case must not be announced as "signed out". A claude login with no
-    OAuth block (long-lived token) carries nothing to judge, so it counts as
-    usable. Blocking reads (Keychain) — thread it."""
+    long enough for its access token to expire AND it carries no refresh token
+    to renew it with. Nothing renews a parked slot — the CLI is the only
+    refresher — so an aged access token is routine: it goes live expired and
+    Claude Code renews it from the restored refresh token on its next run. That
+    case is usable and must not start a sign-in (every account parked longer
+    than one access-token lifetime would otherwise re-login on each switch).
+    Only a snapshot with nothing left to refresh from needs one, and it must
+    not be announced as "signed out". A claude login with no OAuth block
+    (long-lived token) carries nothing to judge, so it counts as usable.
+    Blocking reads (Keychain) — thread it."""
     from . import app
     from .credential_vault import _claude_credential_is_wiped
     from .usage_service import claude_token_expired, parse_claude_credentials
@@ -1992,7 +2234,11 @@ def _slot_login_reason(agent_key: str, slot_id: str) -> str | None:
     if _claude_credential_is_wiped(creds.secret):
         return "signed-out"
     oauth = parse_claude_credentials(creds.secret)
-    if oauth is not None and claude_token_expired(oauth):
+    if (
+        oauth is not None
+        and claude_token_expired(oauth)
+        and not oauth.get("refreshToken")
+    ):
         return "expired"
     return None
 
@@ -2020,6 +2266,7 @@ async def cli_profiles_set_default(session: "Session", msg_id: str, msg_type: st
     agent_key = str(payload.get("agent_key") or "")
     raw_profile_id = payload.get("profile_id")
     profile_id = str(raw_profile_id) if raw_profile_id else None
+    hot_switched_panes: list[dict[str, Any]] | None = None
 
     # Validate before touching any credentials.
     if agent_key not in PROFILE_AGENT_KEYS:
@@ -2055,7 +2302,79 @@ async def cli_profiles_set_default(session: "Session", msg_id: str, msg_type: st
     # a slot. Reading current_id inside the lock is essential — a second waiter
     # must see the first switch's persisted result.
     async with app.credential_vault.switch_lock(agent_key):
+        guard = getattr(app.credential_vault, "require_store_mutation", None)
+        if guard is not None:
+            try:
+                await vault_to_thread(guard, agent_key)
+            except ValueError as err:
+                await session.send_json(make_error(msg_id, msg_type, "CREDENTIAL_STORE_UNVERIFIED", str(err)))
+                return
+        pending = app.quota_failover.unreconciled(agent_key)
+        if pending is not None:
+            # A failover swap moved the credentials but could not persist the
+            # default: the store's "current" is not who is live. Capturing
+            # the live account into that slot would destroy the slot's own
+            # credentials. Refuse until quota_failover.reconcile has run.
+            await session.send_json(
+                make_error(
+                    msg_id, msg_type, "UNRECONCILED_STATE",
+                    "an earlier account switch is not reconciled; finish it before "
+                    "switching again",
+                    dict(pending),
+                )
+            )
+            return
         current_id = app.cli_profiles_store.list()["defaults"].get(agent_key)
+        # Optional optimistic-concurrency fields, mandatory when the caller
+        # is confirming an unverifiable live credential (assume_live_is_current):
+        # the answer must be about the state the user was shown. Compared
+        # here, under the lock and before any harvest, capture or write.
+        # ``expected_epoch`` is the agent's failover epoch (quota_failover
+        # State.epochs), which moves on every credential swap and reconcile —
+        # A -> C -> A leaves the account the same but not the epoch.
+        assume = bool(payload.get("assume_live_is_current"))
+        has_expected = (
+            "expected_current_slot_id" in payload and "expected_epoch" in payload
+            and bool(str(payload.get("live_fingerprint") or ""))
+        )
+        if assume and not has_expected:
+            # The epoch cannot see a CLI rewriting the live store during the
+            # dialog; the fingerprint from the refusal can. All three or none.
+            await session.send_json(
+                make_error(
+                    msg_id, msg_type, "BAD_REQUEST",
+                    "assume_live_is_current requires expected_current_slot_id, "
+                    "expected_epoch and live_fingerprint from the refusal it answers",
+                )
+            )
+            return
+        if "expected_current_slot_id" in payload and \
+                str(payload.get("expected_current_slot_id") or DEFAULT_SLOT_ID) != (current_id or DEFAULT_SLOT_ID):
+            await session.send_json(
+                make_error(
+                    msg_id, msg_type, "STALE_STATE",
+                    "the active account changed since this was proposed",
+                    {"currentSlotId": current_id or DEFAULT_SLOT_ID},
+                )
+            )
+            return
+        if "expected_epoch" in payload:
+            try:
+                expected_epoch = int(payload.get("expected_epoch"))
+            except (TypeError, ValueError):
+                await session.send_json(
+                    make_error(msg_id, msg_type, "BAD_REQUEST", "expected_epoch must be an integer")
+                )
+                return
+            if expected_epoch != app.quota_failover.epoch(agent_key):
+                await session.send_json(
+                    make_error(
+                        msg_id, msg_type, "STALE_EPOCH",
+                        "an account switch already happened",
+                        {"epoch": app.quota_failover.epoch(agent_key)},
+                    )
+                )
+                return
         if current_id == profile_id:
             # Already active — nothing to swap, nothing changed.
             await session.send_json(
@@ -2065,6 +2384,23 @@ async def cli_profiles_set_default(session: "Session", msg_id: str, msg_type: st
             )
             return
 
+        # The provider entry a per-provider vendor's swap moves: the profile
+        # on whichever side has one (the built-in default has no record and
+        # takes the other side's). Two profiles must name the same provider.
+        # Whole-file vendors get None, the vault's "the whole file" answer.
+        current_profile = app.cli_profiles_store.get(current_id) if current_id else None
+        target_profile = app.cli_profiles_store.get(profile_id) if profile_id else None
+        scope_from = quota_failover.profile_scope(agent_key, current_profile)
+        scope_to = quota_failover.profile_scope(agent_key, target_profile)
+        if current_profile is not None and target_profile is not None and scope_from != scope_to:
+            await session.send_json(
+                make_error(
+                    msg_id, msg_type, "SCOPE_MISMATCH",
+                    "the two accounts belong to different provider credential pools",
+                )
+            )
+            return
+        switch_scope = scope_to if target_profile is not None else scope_from
         # Rate limit: keeps account switching a manual action (see the
         # SWITCH_RATE_* constants). Checked before anything is touched, and
         # deliberately NOT bypassable by force — force means "I accept the pane
@@ -2100,27 +2436,35 @@ async def cli_profiles_set_default(session: "Session", msg_id: str, msg_type: st
                 )
                 return
 
-        # A pending isolated login home for the target profile must land in
-        # its slot BEFORE restore() — restoring the still-empty slot would
-        # sign the live state out and the next capture() would erase the
-        # completed login. While the login pane's CLI is still running the
-        # home cannot be harvested safely (token rotation, config home
-        # deleted under a live CLI), so refuse the switch (LOGIN_IN_PROGRESS).
-        if profile_id is not None and await vault_to_thread(
-            app.credential_vault.login_home_path(agent_key, profile_id).is_dir
-        ):
-            if _running_login_terminals(agent_key, profile_id):
-                await session.send_json(
-                    make_error(
-                        msg_id, msg_type, "LOGIN_IN_PROGRESS",
-                        f"a {agent_key} sign-in for this account is still running; "
-                        "finish or close its pane first",
-                    )
+        # A running sign-in pane means a credential is still being written:
+        # the target's (its login home, or the live store itself for a vendor
+        # with no login isolation), or — for a live-store sign-in of ANY
+        # profile — the very credential this switch would capture as the
+        # outgoing account's. Refuse for every vendor, home or no home.
+        if (profile_id is not None and _running_login_terminals(agent_key, profile_id)) \
+                or _running_live_login_terminals(agent_key):
+            await session.send_json(
+                make_error(
+                    msg_id, msg_type, "LOGIN_IN_PROGRESS",
+                    f"a {agent_key} sign-in is still running; finish or close its pane first",
                 )
-                return
+            )
+            return
+        # A started, unharvested sign-in for the target must land in its slot
+        # BEFORE restore() — restoring the still-empty slot would sign the
+        # live state out and the next capture() would erase the completed
+        # login. ``login_pending`` covers both the isolated login home and a
+        # non-isolated sign-in's parked pre-login snapshot (the vault then
+        # parks the new credential and puts the outgoing one back live).
+        if profile_id is not None and await vault_to_thread(
+            quota_failover.login_pending, app.credential_vault, agent_key, profile_id
+        ):
             try:
                 await vault_to_thread(
-                    app.credential_vault.harvest_login_home, agent_key, profile_id
+                    functools.partial(
+                        app.credential_vault.harvest_login_home, agent_key, profile_id,
+                        scope=switch_scope,
+                    )
                 )
             except Exception as err:  # noqa: BLE001 — credentials untouched, refuse cleanly
                 await session.send_json(
@@ -2136,18 +2480,103 @@ async def cli_profiles_set_default(session: "Session", msg_id: str, msg_type: st
             _slot_login_reason, agent_key, profile_id or DEFAULT_SLOT_ID
         )
 
-        try:
-            await vault_to_thread(
-                app.credential_vault.switch,
-                agent_key,
-                current_id or DEFAULT_SLOT_ID,
-                profile_id or DEFAULT_SLOT_ID,
+        # Is the live credential still the outgoing account's? switch()
+        # begins by capturing live into the outgoing slot; if a sign-in
+        # against the live store (a vendor with no login isolation) already
+        # replaced it, that capture would overwrite the outgoing account's
+        # only copy with someone else's credential. When the target slot is
+        # empty the live credential can only be the target's fresh sign-in:
+        # park it there and bring nothing else live. Otherwise refuse — the
+        # user has to say which account is live (quota_failover.reconcile).
+        drift = await vault_to_thread(
+            quota_failover.live_drift, app.credential_vault, agent_key,
+            current_id or DEFAULT_SLOT_ID, scope_from,
+        )
+        adopted = False
+        if drift == "unverifiable":
+            # The live payload changed but nothing says whose it is (a vendor
+            # with no readable identity): a token refresh and a foreign
+            # sign-in look alike. Neither is assumed — the user confirms
+            # ``assume_live_is_current`` to proceed as a normal switch, and
+            # that word is bound to what they were shown: the resend must
+            # name the same active account and the same live payload
+            # (``live_fingerprint`` from the refusal), or it is asked again.
+            fingerprint = await vault_to_thread(
+                quota_failover.live_fingerprint, app.credential_vault, agent_key, scope_from,
             )
-        except Exception as err:  # noqa: BLE001 — switch() already rolled the live state back
-            await session.send_json(
-                make_error(msg_id, msg_type, "PROFILE_SWAP_FAILED", _profile_error(err))
+            # expected_current_slot_id / expected_epoch were already enforced
+            # above; the fingerprint from the refusal must still be the live
+            # payload — a CLI rewriting the live store during the dialog does
+            # not move the epoch, only this catches it.
+            offered_fp = str(payload.get("live_fingerprint") or "")
+            confirmed = assume and bool(fingerprint) and offered_fp == fingerprint
+            if not confirmed:
+                await session.send_json(
+                    make_error(
+                        msg_id, msg_type, "LIVE_DRIFT",
+                        f"the live {agent_key} credential changed and carries no identity to "
+                        "compare; confirm it is still the current account before switching",
+                        {"currentSlotId": current_id or DEFAULT_SLOT_ID,
+                         "targetSlotId": profile_id or DEFAULT_SLOT_ID, "verified": False,
+                         "epoch": app.quota_failover.epoch(agent_key),
+                         "liveIdentity": await vault_to_thread(app.credential_vault.identity, agent_key),
+                         "liveFingerprint": fingerprint},
+                    )
+                )
+                return
+        if drift == "drifted":
+            target_slot = profile_id or DEFAULT_SLOT_ID
+            target_empty = await vault_to_thread(
+                lambda: app.credential_vault.read_slot(
+                    agent_key, target_slot, **({"scope": switch_scope} if switch_scope else {})
+                ).secret is None
             )
-            return
+            if not target_empty:
+                await session.send_json(
+                    make_error(
+                        msg_id, msg_type, "LIVE_DRIFT",
+                        f"the live {agent_key} credential is no longer the active "
+                        "account's; say which account is signed in before switching",
+                        {"currentSlotId": current_id or DEFAULT_SLOT_ID,
+                         "targetSlotId": target_slot, "verified": True,
+                         "epoch": app.quota_failover.epoch(agent_key),
+                         "liveIdentity": await vault_to_thread(app.credential_vault.identity, agent_key),
+                         "liveFingerprint": await vault_to_thread(
+                             quota_failover.live_fingerprint, app.credential_vault, agent_key, scope_from,
+                         )},
+                    )
+                )
+                return
+            try:
+                await vault_to_thread(
+                    functools.partial(
+                        app.credential_vault.capture, agent_key, target_slot,
+                        **({"scope": switch_scope} if switch_scope else {}),
+                    )
+                )
+            except Exception as err:  # noqa: BLE001 — nothing moved; refuse cleanly
+                await session.send_json(
+                    make_error(msg_id, msg_type, "PROFILE_SWAP_FAILED", _profile_error(err))
+                )
+                return
+            adopted = True
+            login_reason = None
+        else:
+            try:
+                await vault_to_thread(
+                    functools.partial(
+                        app.credential_vault.switch,
+                        agent_key,
+                        current_id or DEFAULT_SLOT_ID,
+                        profile_id or DEFAULT_SLOT_ID,
+                        scope=switch_scope,
+                    )
+                )
+            except Exception as err:  # noqa: BLE001 — switch() already rolled the live state back
+                await session.send_json(
+                    make_error(msg_id, msg_type, "PROFILE_SWAP_FAILED", _profile_error(err))
+                )
+                return
 
         # The credentials moved — count it, whatever happens to the bookkeeping
         # below (a persisted-default failure still leaves the new account live).
@@ -2160,9 +2589,17 @@ async def cli_profiles_set_default(session: "Session", msg_id: str, msg_type: st
                 make_error(msg_id, msg_type, "BAD_REQUEST", _profile_error(err))
             )
             return
+        if agent_key in HOT_SWAP_AGENTS:
+            auth_scope = quota_failover.auth_scope_for_scope(agent_key, switch_scope)
+            hot_switched_panes = app.quota_failover.rebind_hot_panes(
+                agent_key, profile_id or DEFAULT_SLOT_ID, auth_scope,
+            )
         await session.send_json(
             make_response(msg_id, msg_type, {
                 "defaults": defaults,
+                # True when the live credential was already the target's fresh
+                # sign-in and was parked into its slot instead of swapped.
+                "adoptedLiveLogin": adopted,
                 "needsLogin": login_reason is not None,
                 # Which of the two is on screen decides whether the sign-in
                 # pane reads as "you were logged out" or "this needs
@@ -2170,6 +2607,14 @@ async def cli_profiles_set_default(session: "Session", msg_id: str, msg_type: st
                 "needsLoginReason": login_reason,
             })
         )
+    # The user switched by hand: any automatic proposal still pending for this
+    # agent is withdrawn and the failover epoch moves, so a stale proposal
+    # cannot commit against the account the user just chose. Publish this
+    # before profiles.changed so windows recognize a manual restart.
+    try:
+        await app.quota_failover.on_manual_switch(agent_key, profile_id)
+    except Exception:  # noqa: BLE001 — the switch itself succeeded and was answered
+        app.log.exception("quota_failover: manual switch hook failed")
     # `forced` is what makes every window restart its panes of this agent. A
     # hot-swap agent's panes must never be restarted, so the flag stays False
     # for them even when the caller passed force=true.
@@ -2177,6 +2622,7 @@ async def cli_profiles_set_default(session: "Session", msg_id: str, msg_type: st
         "set_default",
         agent_key=agent_key,
         forced=agent_key not in HOT_SWAP_AGENTS and bool(payload.get("force")),
+        hot_switched_panes=hot_switched_panes,
     )
     # The usage badges read the active account's credentials — force the poller
     # to re-fetch now so the badge reflects the switch immediately.
@@ -2198,6 +2644,134 @@ async def cli_profiles_set_default(session: "Session", msg_id: str, msg_type: st
             app.log.exception("usage: failed to announce the claude account switch")
     else:
         service.request_refresh()
+
+
+# ── Quota failover (quota_failover.*) ────────────────────────────────────────
+# Thin adapters over quota_failover.QuotaFailoverService — the authority for
+# off/notify/auto, incidents, candidates, the persisted automatic budget and
+# switch transactions. See that module's docstring and the plan
+# quota-exhaustion-auto-switch_7b3e91.
+
+async def _failover_call(
+    session: "Session", msg_id: str, msg_type: str, call, *, shape
+) -> None:
+    """Run one authority call and answer it; a FailoverRefused becomes the WS
+    error it names."""
+    try:
+        result = await call()
+    except quota_failover.FailoverRefused as refused:
+        await session.send_json(
+            make_error(msg_id, msg_type, refused.code, refused.message, refused.details)
+        )
+        return
+    await session.send_json(make_response(msg_id, msg_type, shape(result)))
+
+
+@handler("quota_failover.get_state")
+async def quota_failover_get_state(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    await session.send_json(make_response(msg_id, msg_type, app.quota_failover.state()))
+
+
+@handler("quota_failover.set_policy")
+async def quota_failover_set_policy(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    mode = str(payload.get("mode") or "")
+
+    async def call():
+        await app.quota_failover.set_policy(mode)
+        return app.quota_failover.state()
+
+    await _failover_call(session, msg_id, msg_type, call, shape=lambda state: state)
+
+
+@handler("quota_failover.report")
+async def quota_failover_report(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    await _failover_call(
+        session, msg_id, msg_type, lambda: app.quota_failover.report(payload),
+        shape=lambda result: {"incident": result[0].to_dict(), "created": result[1]},
+    )
+
+
+@handler("quota_failover.candidates")
+async def quota_failover_candidates(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    agent_key = str(payload.get("agent_key") or "")
+    await _failover_call(
+        session, msg_id, msg_type, lambda: app.quota_failover.candidates(agent_key),
+        shape=lambda rows: {"agentKey": agent_key, "candidates": rows},
+    )
+
+
+@handler("quota_failover.switch")
+async def quota_failover_switch(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    await _failover_call(
+        session, msg_id, msg_type, lambda: app.quota_failover.begin_switch(payload),
+        shape=lambda tx: {"transaction": tx.to_dict()},
+    )
+
+
+@handler("quota_failover.confirm")
+async def quota_failover_confirm(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    tx_id = str(payload.get("transaction_id") or "")
+    await _failover_call(
+        session, msg_id, msg_type, lambda: app.quota_failover.confirm(tx_id),
+        shape=lambda tx: {"transaction": tx.to_dict()},
+    )
+
+
+@handler("quota_failover.ack")
+async def quota_failover_ack(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    await _failover_call(
+        session, msg_id, msg_type, lambda: app.quota_failover.ack(payload),
+        shape=lambda tx: {"transaction": tx.to_dict()},
+    )
+
+
+@handler("quota_failover.settle")
+async def quota_failover_settle(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    await _failover_call(
+        session, msg_id, msg_type, lambda: app.quota_failover.settle(payload, owner=session),
+        shape=lambda tx: {"transaction": tx.to_dict()},
+    )
+
+
+@handler("quota_failover.reconcile")
+async def quota_failover_reconcile(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    agent_key = str(payload.get("agent_key") or "")
+    tx_id = str(payload.get("transaction_id") or "")
+    live = payload.get("live_slot_id")
+    await _failover_call(
+        session, msg_id, msg_type,
+        lambda: app.quota_failover.reconcile(agent_key, tx_id, str(live) if live else None),
+        shape=lambda result: result,
+    )
+
+
+@handler("quota_failover.cancel")
+async def quota_failover_cancel(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    tx_id = str(payload.get("transaction_id") or "")
+    await _failover_call(
+        session, msg_id, msg_type, lambda: app.quota_failover.cancel(tx_id),
+        shape=lambda tx: {"transaction": tx.to_dict()},
+    )
 
 
 # ── Agent session / orphans (agent.*) ───────────────────────────────────────
@@ -2386,7 +2960,14 @@ async def _run_skill_operation(
     kwargs: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     try:
-        return await asyncio.to_thread(operation, *args, **(kwargs or {}))
+        result = await asyncio.to_thread(operation, *args, **(kwargs or {}))
+        if msg_type in {
+            "skills.create", "skills.save", "skills.set_enabled", "skills.set_targets",
+            "skills.set_native_targets", "skills.migrate_native", "skills.restore_native",
+            "skills.delete",
+        }:
+            await notify_skills_changed(name, msg_type.removeprefix("skills."))
+        return result
     except SkillNotFoundError as err:
         await session.send_json(
             make_error(
@@ -2571,6 +3152,7 @@ async def skills_set_native_targets(
         app.skills_store,
         real_path,
         agents,
+        name=Path(real_path).name,
     )
     if result is not None:
         await session.send_json(make_response(msg_id, msg_type, result))
@@ -2592,6 +3174,7 @@ async def skills_migrate_native(
         msg_type,
         app.skills_store.migrate_native,
         real_path,
+        name=Path(real_path).name,
         kwargs={"consent": payload.get("consent") is True},
     )
     if result is not None:
@@ -2713,6 +3296,267 @@ async def memory_save(session: "Session", msg_id: str, msg_type: str, payload: d
     await session.send_json(make_response(msg_id, msg_type, result))
 
 
+# ── Cross-device sync (sync.*) ──────────────────────────────────────────────
+#
+# The engine lives on the server link, because a round is a conversation with
+# the server; these handlers are the Settings pane's view of it. Everything
+# here answers rather than raises when the link is down — a pane that cannot
+# say "off and not connected" apart from "broken" is a pane that makes people
+# re-enter credentials that were never wrong.
+@handler("sync.status")
+async def sync_status(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app, sync_engine, sync_keyring, sync_scopes
+
+    scopes = await asyncio.to_thread(sync_scopes.enabled_scopes)
+    # Reading the key touches the Keychain, which can block on a dialog.
+    has_key, key_id, legacy_pending = await asyncio.to_thread(_sync_key_facts)
+    conflicts = await asyncio.to_thread(app.sync_store.conflicts, None)
+    await session.send_json(
+        make_response(
+            msg_id,
+            msg_type,
+            {
+                "available": list(sync_engine.SCOPES),
+                "scopes": scopes,
+                "hasKey": has_key,
+                # The active key's id (never the key) so a person can see a
+                # rotation took, and whether a ring from before accounts were
+                # bound is waiting for someone to say whose it is.
+                "keyId": key_id,
+                "legacyRingPending": legacy_pending,
+                "conflicts": len(conflicts),
+                "link": await server_link.status(),
+            },
+        )
+    )
+
+
+def _sync_key_facts() -> tuple[bool, str, bool]:
+    from . import sync_keyring
+
+    has_key = sync_keyring.has_account_key()
+    key_id = (sync_keyring.active_key_id() or "") if has_key else ""
+    try:
+        legacy = bool(sync_keyring.legacy_ring_pending())
+    except Exception:  # noqa: BLE001 - an unreadable vault is "nothing pending"
+        legacy = False
+    return has_key, key_id, legacy
+
+
+@handler("sync.adopt_legacy_key")
+async def sync_adopt_legacy_key(
+    session: "Session", msg_id: str, msg_type: str, payload: dict
+) -> None:
+    """The person says the ring from before accounts were bound is this
+    account's. Explicit, once, never inferred: the module cannot tell whose
+    it was, and minting a fresh key instead would leave everything that ring
+    wrote unreadable."""
+    from . import sync_keyring
+
+    try:
+        await asyncio.to_thread(sync_keyring.adopt_legacy_ring)
+    except sync_keyring.KeyringError as err:
+        await session.send_json(make_error(msg_id, msg_type, "SYNC_KEY_REFUSED", str(err)))
+        return
+    try:
+        results = await server_link.sync_now()
+    except Exception as err:  # noqa: BLE001 - the key is adopted either way
+        results = [{"scope": "all", "error": str(err)}]
+    await session.send_json(make_response(msg_id, msg_type, {"results": results}))
+
+
+@handler("sync.rotate_key")
+async def sync_rotate_key(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """Retire the active sync key and re-seal every record under a new one.
+
+    The old keys stay readable, so nothing already on the server goes dark;
+    the round that follows pushes each unchanged item again under the new
+    key (the engine notices the key id changed). Paired devices receive the
+    new ring over the same signed channel that handed them the first one,
+    and until then write under the old key — which this device reads fine.
+    """
+    from . import sync_keyring
+
+    try:
+        key_id = await asyncio.to_thread(sync_keyring.rotate_account_key)
+    except sync_keyring.KeyringError as err:
+        await session.send_json(make_error(msg_id, msg_type, "SYNC_KEY_REFUSED", str(err)))
+        return
+    # Distribution is part of the rotation, not an extra: a reply that said
+    # "rotated" while every other device still wrote under the old key would
+    # be the leak continuing under a new name. So it is called by name, and
+    # its failure is reported in the reply rather than swallowed.
+    try:
+        offered: Any = await server_link.offer_sync_key_to_peers()
+    except Exception as err:  # noqa: BLE001 - said in the reply, see above
+        offered = {"error": str(err)}
+    try:
+        results = await server_link.sync_now()
+    except Exception as err:  # noqa: BLE001 - the key is rotated either way
+        results = [{"scope": "all", "error": str(err)}]
+    await session.send_json(
+        make_response(msg_id, msg_type, {"keyId": key_id, "results": results, "offered": offered})
+    )
+
+
+@handler("sync.set_scope")
+async def sync_set_scope(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app, sync_engine, sync_scopes
+
+    scope = str(payload.get("scope") or "")
+    enabled = bool(payload.get("enabled"))
+    if scope not in sync_engine.SCOPES:
+        await session.send_json(
+            make_error(msg_id, msg_type, "SYNC_UNKNOWN_SCOPE", f"unknown scope {scope!r}")
+        )
+        return
+    try:
+        scopes = await asyncio.to_thread(sync_scopes.set_scope_enabled, scope, enabled)
+    except sync_engine.SyncError as err:
+        # A scope may refuse to be switched on (credentials, while a paired
+        # device predates encryption-key pinning); the reason is the message.
+        await session.send_json(make_error(msg_id, msg_type, "SYNC_SCOPE_REFUSED", str(err)))
+        return
+    await session.send_json(make_response(msg_id, msg_type, {"scopes": scopes}))
+    # The settings store returns the delta but does not announce it; the
+    # renderer's cloud views listen for this key to drop what they show, so
+    # a successful change is broadcast here (a refused one above is not).
+    await app.broadcast(
+        make_event("ui.settings_changed", {"settings": {sync_scopes.SCOPES_SETTING: scopes}})
+    )
+    if enabled:
+        # Turning a section on is a request to be up to date, not just a flag.
+        asyncio.create_task(_sync_after_enable(scope))
+
+
+async def _sync_after_enable(scope: str) -> None:
+    try:
+        await server_link.sync_now(scope)
+    except Exception as err:  # noqa: BLE001 - the flag is saved either way
+        app_log().warning("the first sync of %s did not run: %s", scope, err)
+
+
+def app_log():
+    from . import app
+
+    return app.log
+
+
+@handler("sync.now")
+async def sync_now(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    scope = str(payload.get("scope") or "")
+    try:
+        results = await server_link.sync_now(scope)
+    except Exception as err:  # noqa: BLE001 - report, never tear down the session
+        await session.send_json(make_error(msg_id, msg_type, "SYNC_FAILED", str(err)))
+        return
+    await session.send_json(make_response(msg_id, msg_type, {"results": results}))
+
+
+@handler("sync.conflicts")
+async def sync_conflicts(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    scope = str(payload.get("scope") or "")
+    rows = await asyncio.to_thread(server_link.sync_conflicts, scope)
+    await session.send_json(make_response(msg_id, msg_type, {"conflicts": rows}))
+
+
+@handler("sync.resolve")
+async def sync_resolve(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import sync_engine
+
+    scope = str(payload.get("scope") or "")
+    item_id = str(payload.get("itemId") or "")
+    keep = str(payload.get("keep") or "")
+    if keep not in (sync_engine.KEEP_LOCAL, sync_engine.KEEP_REMOTE):
+        await session.send_json(
+            make_error(msg_id, msg_type, "SYNC_BAD_CHOICE", "keep must be 'local' or 'remote'")
+        )
+        return
+    try:
+        await asyncio.to_thread(server_link.resolve_sync_conflict, scope, item_id, keep)
+    except Exception as err:  # noqa: BLE001 - a stale conflict is a normal race
+        await session.send_json(make_error(msg_id, msg_type, "SYNC_RESOLVE_FAILED", str(err)))
+        return
+    rows = await asyncio.to_thread(server_link.sync_conflicts, "")
+    await session.send_json(make_response(msg_id, msg_type, {"ok": True, "conflicts": rows}))
+
+
+@handler("sync.inventory")
+async def sync_inventory(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """The local/cloud comparison, for one scope or all four. Writes nothing.
+
+    Answers for a scope that is switched off too: somebody deciding whether to
+    turn one on wants to see what turning it on would bring down, and looking
+    is the one thing this cannot be dangerous for. ``scopeEnabled`` says which
+    are on, so the pane can show it without inferring it from an empty list.
+    """
+    scope = str(payload.get("scope") or "")
+    try:
+        result = await server_link.sync_inventory(scope)
+    except Exception as err:  # noqa: BLE001 - report, never tear down the session
+        await session.send_json(make_error(msg_id, msg_type, "SYNC_INVENTORY_FAILED", str(err)))
+        return
+    await session.send_json(make_response(msg_id, msg_type, result))
+
+
+@handler("sync.push_items")
+async def sync_push_items(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    item_ids = _sync_item_ids(payload)
+    scope = str(payload.get("scope") or "")
+    if not await _sync_selection_ok(session, msg_id, msg_type, scope, item_ids):
+        return
+    try:
+        results = await server_link.sync_push_items(scope, item_ids)
+    except Exception as err:  # noqa: BLE001 - a link that went down is not a crash
+        await session.send_json(make_error(msg_id, msg_type, "SYNC_PUSH_FAILED", str(err)))
+        return
+    await session.send_json(make_response(msg_id, msg_type, {"scope": scope, "results": results}))
+
+
+@handler("sync.pull_items")
+async def sync_pull_items(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    item_ids = _sync_item_ids(payload)
+    scope = str(payload.get("scope") or "")
+    if not await _sync_selection_ok(session, msg_id, msg_type, scope, item_ids):
+        return
+    try:
+        results = await server_link.sync_pull_items(scope, item_ids)
+    except Exception as err:  # noqa: BLE001 - same reason as the push above
+        await session.send_json(make_error(msg_id, msg_type, "SYNC_PULL_FAILED", str(err)))
+        return
+    await session.send_json(make_response(msg_id, msg_type, {"scope": scope, "results": results}))
+
+
+def _sync_item_ids(payload: dict) -> list[str]:
+    raw = payload.get("itemIds")
+    return [str(i) for i in raw if isinstance(i, str) and i] if isinstance(raw, list) else []
+
+
+async def _sync_selection_ok(
+    session: "Session", msg_id: str, msg_type: str, scope: str, item_ids: list[str]
+) -> bool:
+    """Refuse a selective move that names nothing, or names an invented scope.
+
+    An empty selection is a caller bug rather than a request to move
+    everything: ``sync.now`` is how "all of it" is asked for, and reading a
+    missing list as "all" would make a UI that failed to collect a tick box
+    upload the whole scope.
+    """
+    from . import sync_engine
+
+    if scope not in sync_engine.SCOPES:
+        await session.send_json(
+            make_error(msg_id, msg_type, "SYNC_UNKNOWN_SCOPE", f"unknown scope {scope!r}")
+        )
+        return False
+    if not item_ids:
+        await session.send_json(
+            make_error(msg_id, msg_type, "SYNC_NO_ITEMS", "itemIds must name at least one item")
+        )
+        return False
+    return True
+
+
 # ── Recent workspaces (workspace.*) ─────────────────────────────────────────
 @handler("workspace.list_recent")
 async def workspace_list_recent(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
@@ -2743,6 +3587,28 @@ async def workspace_touch(session: "Session", msg_id: str, msg_type: str, payloa
         state=payload.get("state", ""),
         task=payload.get("task", ""),
     )
+    # Re-seed the display-name mirror from the project document, which is the
+    # truth for it. The entry this touch just created — a workspace dropped
+    # from the recent list and then reopened — carries only the folder
+    # basename, so without this the alias the project document still holds
+    # would be gone from every recent list until the next rename.
+    #
+    # Unconditional, in BOTH directions: an alias cleared in the project
+    # document has to push the basename back over a mirror still holding the
+    # old one, or "truth" would only mean truth while it is non-empty
+    # (set_name("") does the basename fallback itself).
+    #
+    # peek() (never load_or_create) — touching a recent entry must not create
+    # files inside the workspace. Offloaded for the same reason as
+    # list_recent above: peek opens a sqlite connection, and on a workspace
+    # with a legacy project.json it also WRITES (the one-time import), neither
+    # of which belongs on the event loop.
+    def _reseed_display_name_mirror() -> None:
+        project = app.project_store.peek(payload["path"])
+        if project is not None:
+            app.recent_workspaces_store.set_name(payload["path"], project.display_name)
+
+    await asyncio.to_thread(_reseed_display_name_mirror)
     recent = app.recent_workspaces_store.list()
     await session.send_json(
         make_response(msg_id, msg_type, {"recent": recent})
@@ -4006,6 +4872,315 @@ async def settings_bundle_import(session: "Session", msg_id: str, msg_type: str,
     }))
 
 
+# ── Shareable settings bundles (share.*) ────────────────────────────────────
+#
+# A different document from settings.bundle.* above: four scopes (prompts, mcp,
+# skills, memory), built to be handed to another person, and stripped of every
+# secret on the way out. The whole of it lives in settings_bundle.py; these are
+# the wire endings. Every call reads files and SQLite, so all four hop off the
+# event loop.
+async def _share_call(
+    session: "Session",
+    msg_id: str,
+    msg_type: str,
+    work: Callable[[], Any],
+) -> Any:
+    """Run one settings_bundle call off the loop, answering an error itself."""
+    from . import settings_bundle
+
+    try:
+        return await asyncio.to_thread(work)
+    except settings_bundle.BundleError as err:
+        await session.send_json(make_error(msg_id, msg_type, err.code, err.message, err.details))
+        return None
+
+
+@handler("share.inventory")
+async def share_inventory(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import settings_bundle
+
+    scopes = await _share_call(session, msg_id, msg_type, settings_bundle.inventory)
+    if scopes is None:
+        return
+    await session.send_json(make_response(msg_id, msg_type, {"scopes": scopes}))
+
+
+@handler("share.export")
+async def share_export(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import settings_bundle
+
+    selection = payload.get("selection")
+    if not isinstance(selection, dict):
+        await session.send_json(
+            make_error(msg_id, msg_type, "INVALID_SELECTION", "selection must be an object")
+        )
+        return
+    name = payload.get("name") if isinstance(payload.get("name"), str) else ""
+    description = payload.get("description") if isinstance(payload.get("description"), str) else ""
+    bundle = await _share_call(
+        session,
+        msg_id,
+        msg_type,
+        lambda: settings_bundle.export_bundle(selection, name=name, description=description),
+    )
+    if bundle is None:
+        return
+    await session.send_json(make_response(msg_id, msg_type, {"bundle": bundle}))
+
+
+@handler("share.import_preview")
+async def share_import_preview(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import settings_bundle
+
+    bundle = payload.get("bundle")
+    rows = await _share_call(
+        session, msg_id, msg_type, lambda: settings_bundle.preview_import(bundle)
+    )
+    if rows is None:
+        return
+    await session.send_json(make_response(msg_id, msg_type, {"items": rows}))
+
+
+@handler("share.import_apply")
+async def share_import_apply(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app, settings_bundle
+
+    bundle = payload.get("bundle")
+    selection = payload.get("selection")
+    if not isinstance(selection, dict):
+        await session.send_json(
+            make_error(msg_id, msg_type, "INVALID_SELECTION", "selection must be an object")
+        )
+        return
+    outcome = await _share_call(
+        session, msg_id, msg_type, lambda: settings_bundle.apply_import(bundle, selection)
+    )
+    if outcome is None:
+        return
+    # The same event ui.settings.set sends, so every open window converges on an
+    # imported prompt the way it does on a locally edited one.
+    for delta in outcome["settings_deltas"]:
+        await app.broadcast(make_event("ui.settings_changed", {"settings": delta}))
+    if outcome["mcp_changed"]:
+        await app.mcp_manager.reload(app.mcp_settings_store.path)
+    await session.send_json(
+        make_response(msg_id, msg_type, {"ok": True, "items": outcome["results"]})
+    )
+
+
+# ── Cross-account shares (share.publish / claim / list / revoke) ─────────────
+# The four handlers above build and apply a bundle on this machine; these move
+# one through navide-server to a *different* account. The seam between the two
+# is the share code: publish seals a bundle under a key the server never sees
+# and hands the code back, claim turns a code back into the bundle and stops
+# there — the window takes it to share.import_preview, the same path a bundle
+# read from a file takes. Nothing here applies anything.
+_SHARE_TTL_DEFAULT_S = 24 * 3600
+
+
+async def _share_code_call(
+    session: "Session",
+    msg_id: str,
+    msg_type: str,
+    work: Callable[[], Any],
+) -> Any:
+    """Run one share_codes call off the loop, answering an error itself.
+
+    The same shape as ``_share_call``, for the other module: sealing gzips and
+    encrypts, opening does the reverse plus a JSON parse, and a bundle near the
+    limit is enough work to keep off the event loop.
+    """
+    from . import share_codes
+
+    try:
+        return await asyncio.to_thread(work)
+    except share_codes.ShareCodeError as err:
+        await session.send_json(make_error(msg_id, msg_type, err.code, err.message, err.details))
+        return None
+
+
+async def _share_link_reply(
+    session: "Session",
+    msg_id: str,
+    msg_type: str,
+    reply: dict | None,
+    fallback_code: str,
+) -> dict | None:
+    """Unwrap a server_link reply frame into its payload, answering errors itself.
+
+    None from the link means no server is configured — the same meaning it has
+    for every other ``server_link`` wrapper. The server's own codes come
+    through unchanged so the window can show them (a claim of a revoked share
+    is the server's word, not this side's guess).
+    """
+    if reply is None:
+        await session.send_json(
+            make_error(
+                msg_id,
+                msg_type,
+                "P2P_NOT_CONFIGURED",
+                "no navide-server is configured, so there is nowhere to send a share",
+            )
+        )
+        return None
+    if not reply.get("ok"):
+        error = reply.get("error") if isinstance(reply.get("error"), dict) else {}
+        await session.send_json(
+            make_error(
+                msg_id,
+                msg_type,
+                str(error.get("code") or fallback_code),
+                str(error.get("message") or "the navide-server refused the request"),
+            )
+        )
+        return None
+    result = reply.get("payload")
+    return result if isinstance(result, dict) else {}
+
+
+@handler("share.publish")
+async def share_publish(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """Seal one bundle, store the ciphertext on the server, hand back the code.
+
+    The size gate runs before the request leaves: over the server's frame
+    limit the connection is closed at the framing layer, which the user sees
+    as a disconnect and nothing else. The error minted here names the file
+    export as the way out instead.
+    """
+    from . import share_codes
+
+    bundle = payload.get("bundle")
+    if not isinstance(bundle, dict):
+        await session.send_json(
+            make_error(msg_id, msg_type, "INVALID_BUNDLE", "bundle must be an object")
+        )
+        return
+    ttl = payload.get("ttlSeconds")
+    if not isinstance(ttl, int) or isinstance(ttl, bool) or ttl <= 0:
+        ttl = _SHARE_TTL_DEFAULT_S
+
+    def seal() -> tuple[bytes, str]:
+        key = share_codes.new_key()
+        blob = share_codes.seal_bundle(bundle, key)
+        share_codes.ensure_blob_within_limit(blob)
+        return key, blob
+
+    sealed = await _share_code_call(session, msg_id, msg_type, seal)
+    if sealed is None:
+        return
+    key, blob = sealed
+    result = await _share_link_reply(
+        session,
+        msg_id,
+        msg_type,
+        await server_link.create_share(blob=blob, size_bytes=len(blob), ttl_seconds=ttl),
+        "SHARE_PUBLISH_FAILED",
+    )
+    if result is None:
+        return
+    share_id = str(result.get("shareId") or "")
+    code = await _share_code_call(
+        session, msg_id, msg_type, lambda: share_codes.encode_share_code(share_id, key)
+    )
+    if code is None:
+        return
+    await session.send_json(
+        make_response(
+            msg_id,
+            msg_type,
+            {
+                "code": code,
+                "shareId": share_codes.normalize_share_id(share_id),
+                "expiresAt": result.get("expiresAt"),
+            },
+        )
+    )
+
+
+@handler("share.claim")
+async def share_claim(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """Turn a share code back into the bundle it names, and stop there.
+
+    A mistyped code is refused by its checksum before anything is asked of the
+    server, so "no such share" only ever means the server said so.
+    """
+    from . import share_codes
+
+    code = payload.get("code")
+    if not isinstance(code, str) or not code.strip():
+        await session.send_json(
+            make_error(msg_id, msg_type, "INVALID_SHARE_CODE", "code must be a non-empty string")
+        )
+        return
+    decoded = await _share_code_call(
+        session, msg_id, msg_type, lambda: share_codes.decode_share_code(code)
+    )
+    if decoded is None:
+        return
+    share_id, key = decoded
+    result = await _share_link_reply(
+        session, msg_id, msg_type, await server_link.claim_share(share_id), "SHARE_CLAIM_FAILED"
+    )
+    if result is None:
+        return
+    blob = result.get("blob")
+    if not isinstance(blob, str) or not blob:
+        await session.send_json(
+            make_error(
+                msg_id, msg_type, "SHARE_CLAIM_FAILED", "the navide-server returned no document"
+            )
+        )
+        return
+    bundle = await _share_code_call(
+        session, msg_id, msg_type, lambda: share_codes.open_bundle(blob, key)
+    )
+    if bundle is None:
+        return
+    await session.send_json(
+        make_response(msg_id, msg_type, {"bundle": bundle, "shareId": share_id})
+    )
+
+
+@handler("share.list_published")
+async def share_list_published(
+    session: "Session", msg_id: str, msg_type: str, payload: dict
+) -> None:
+    result = await _share_link_reply(
+        session, msg_id, msg_type, await server_link.list_shares(), "SHARE_LIST_FAILED"
+    )
+    if result is None:
+        return
+    shares = result.get("shares")
+    await session.send_json(
+        make_response(msg_id, msg_type, {"shares": shares if isinstance(shares, list) else []})
+    )
+
+
+@handler("share.revoke_published")
+async def share_revoke_published(
+    session: "Session", msg_id: str, msg_type: str, payload: dict
+) -> None:
+    from . import share_codes
+
+    raw = payload.get("shareId")
+    if not isinstance(raw, str) or not raw.strip():
+        await session.send_json(
+            make_error(msg_id, msg_type, "BAD_SHARE_ID", "shareId must be a non-empty string")
+        )
+        return
+    try:
+        share_id = share_codes.normalize_share_id(raw)
+    except share_codes.ShareCodeError as err:
+        await session.send_json(make_error(msg_id, msg_type, err.code, err.message, err.details))
+        return
+    result = await _share_link_reply(
+        session, msg_id, msg_type, await server_link.revoke_share(share_id), "SHARE_REVOKE_FAILED"
+    )
+    if result is None:
+        return
+    await session.send_json(make_response(msg_id, msg_type, {"ok": True, "shareId": share_id}))
+
+
 # ── Roles registry (roles.*) ────────────────────────────────────────────────
 async def _broadcast_stage_role_changes(pipeline_ids: list[str], reason: str) -> None:
     """Publish the rewritten stages of every pipeline a role edit touched.
@@ -4635,6 +5810,22 @@ async def tokens_snapshot(session: "Session", msg_id: str, msg_type: str, payloa
     await session.send_json(make_response(msg_id, msg_type, snap))
 
 
+@handler("tokens.turns")
+async def tokens_turns(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    # Per-turn cut of one session log, read on demand (contract: at least
+    # pane_id or session_id; the reply shape is fixed by the Turn Stats
+    # window, errors are ok:false + error code).
+    result = await app.scan_session_turns(
+        pane_id=str(payload.get("pane_id") or ""),
+        session_id=str(payload.get("session_id") or ""),
+        agent_key=str(payload.get("agent_key") or ""),
+        include_calls=bool(payload.get("include_calls")),
+    )
+    await session.send_json(make_response(msg_id, msg_type, result))
+
+
 @handler("tokens.reset")
 async def tokens_reset(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     from . import app
@@ -4643,6 +5834,146 @@ async def tokens_reset(session: "Session", msg_id: str, msg_type: str, payload: 
     snap = app.tokens_store.reset(scope, payload.get("workspace_path") or None)
     await session.send_json(make_response(msg_id, msg_type, snap))
     await app.broadcast(make_event("tokens.changed", snap))
+
+
+@handler("tokens.quota_cycles")
+async def tokens_quota_cycles(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    # One account's quota cycles (contract-dimensions §3): newest reset first,
+    # open cycles summed live. Only an unknown vendor is an error; an account
+    # with nothing recorded answers ok with an empty list.
+    agent_key = str(payload.get("agent_key") or "")
+    profile_id = str(payload.get("profile_id") or "")
+    window_kind = str(payload.get("window_kind") or "") or None
+    if agent_key not in CLI_VENDORS:
+        await session.send_json(make_response(
+            msg_id, msg_type, {"ok": False, "error": "unknown-vendor"}))
+        return
+    try:
+        await asyncio.to_thread(app.quota_ledger.reconcile_pending, app.tokens_store)
+        result = await asyncio.to_thread(
+            app.quota_ledger.query_cycles, agent_key, profile_id, window_kind,
+            **{key: payload[key] for key in (
+                "range_start", "range_end", "include_current", "limit", "cursor", "snapshot", "export",
+            ) if key in payload},
+        )
+    except ValueError as err:
+        result = {"ok": False, "error": str(err)}
+    await session.send_json(make_response(msg_id, msg_type, result))
+
+
+@handler("tokens.quota_accounts")
+async def tokens_quota_accounts(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    agent_key = str(payload.get("agent_key") or "")
+    if agent_key and agent_key not in CLI_VENDORS:
+        await session.send_json(make_response(msg_id, msg_type, {"ok": False, "error": "unknown-vendor"}))
+        return
+    quota = await asyncio.to_thread(app.quota_ledger.identities)
+    tokens = {(a, p) for a, p, _day, _bucket in app.tokens_store.account_day_rows()}
+    await session.send_json(make_response(msg_id, msg_type, {
+        "ok": True, "accounts": [
+            {"agent_key": a, "profile_id": p, "has_quota_history": (a, p) in quota,
+             "has_token_history": (a, p) in tokens}
+            for a, p in sorted(quota | tokens) if not agent_key or a == agent_key
+        ],
+    }))
+
+
+@handler("tokens.quota_exhausted")
+async def tokens_quota_exhausted(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+    from .pane_account_history import UNKNOWN_PROFILE_ID, parse_event_time
+
+    # The renderer saw the CLI's "hit your limit" message in a pane: stamp
+    # the cycle that message named with that moment when it beats the first
+    # 100 % sample. No account for the pane → nothing to stamp (ok, empty).
+    # Same for a message with no reset clock in it: which window ran out is
+    # then unknown, and the ledger declines to guess.
+    agent_key = str(payload.get("agent_key") or "")
+    pane_id = str(payload.get("pane_id") or "")
+    at = parse_event_time(str(payload.get("at") or ""))
+    resets_at = parse_event_time(str(payload.get("resets_at") or ""))
+    if agent_key not in CLI_VENDORS:
+        await session.send_json(make_response(
+            msg_id, msg_type, {"ok": False, "error": "unknown-vendor"}))
+        return
+    profile_id = app.pane_account_history.profile_at(pane_id, at)
+    updated: list[str] = []
+    if at is not None and profile_id != UNKNOWN_PROFILE_ID:
+        updated = await asyncio.to_thread(
+            app.quota_ledger.mark_exhausted, agent_key, profile_id, at, resets_at,
+            window_kind=str(payload.get("window_kind") or "") or None,
+            model_scope=str(payload.get("model_scope") or "") or None,
+            reset_precision=str(payload.get("reset_precision") or "unknown"),
+        )
+    await session.send_json(make_response(msg_id, msg_type, {"ok": True, "updated": updated}))
+    for window_kind in updated:
+        await app.broadcast(make_event("tokens.quota_cycles_changed", {
+            "agent_key": agent_key, "profile_id": profile_id, "window_kind": window_kind,
+        }))
+
+
+@handler("tokens.account_periods")
+async def tokens_account_periods(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    # Monthly / yearly per-account totals (contract-dimensions §4): the
+    # by_account_day ledger summed per period, joined with the quota cycle
+    # counts of the same period. Both filters optional.
+    agent_key = str(payload.get("agent_key") or "")
+    profile_id = str(payload.get("profile_id") or "")
+    granularity = "year" if payload.get("granularity") == "year" else "month"
+    if agent_key and agent_key not in CLI_VENDORS:
+        await session.send_json(make_response(
+            msg_id, msg_type, {"ok": False, "error": "unknown-vendor"}))
+        return
+    try:
+        await asyncio.to_thread(app.quota_ledger.reconcile_pending, app.tokens_store)
+        result = await asyncio.to_thread(
+            app.account_periods, agent_key, profile_id, granularity,
+            **{key: payload[key] for key in (
+                "range_start", "range_end", "window_kind", "offset", "limit", "export",
+            ) if key in payload},
+        )
+    except ValueError as err:
+        result = {"ok": False, "error": str(err)}
+    await session.send_json(make_response(msg_id, msg_type, result))
+
+
+@handler("tokens.monitor")
+async def tokens_monitor(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from .token_monitor import snapshot
+
+    result = await snapshot(payload.get("days", 30))
+    await session.send_json(make_response(msg_id, msg_type, result))
+
+
+@handler("devtime.snapshot")
+async def devtime_snapshot(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    workspace_path = str(payload.get("workspace_path") or "")
+    snap = app.dev_time_store.snapshot(workspace_path)
+    await session.send_json(make_response(msg_id, msg_type, snap))
+    # First look at a workspace: replay its pre-feature Claude transcripts
+    # once, off the loop; the panel hears about the rows via devtime.changed.
+    app.dev_time_store.start_backfill(
+        workspace_path,
+        lambda ws: app.broadcast(make_event("devtime.changed", {"workspace_path": ws})),
+    )
+
+
+@handler("devtime.reset")
+async def devtime_reset(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
+    workspace_path = str(payload.get("workspace_path") or "")
+    app.dev_time_store.reset(workspace_path)
+    await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
+    await app.broadcast(make_event("devtime.changed", {"workspace_path": workspace_path}))
 
 
 # ── Pipeline history (timeline) (history.*) ─────────────────────────────────
@@ -4862,7 +6193,7 @@ async def shell_run(session: "Session", msg_id: str, msg_type: str, payload: dic
         else:
             try:
                 proc = await asyncio.create_subprocess_exec(
-                    "/bin/sh", "-c", cmd,
+                    *osplat.paths.shell_command(cmd),
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.STDOUT,
                     cwd=str(resolved_cwd) if resolved_cwd else None,
@@ -4958,6 +6289,47 @@ async def onboarding_install_prompt(session: "Session", msg_id: str, msg_type: s
         bool(payload.get("dismissed", True)),
     )
     await session.send_json(make_response(msg_id, msg_type, result))
+    # The opt-out is a per-user setting stored once in the backend, but each
+    # window keeps its own mirror of it and only loads that mirror at startup.
+    # Without this a second window keeps prompting for a CLI the user just
+    # switched off. Broadcasting the whole list rather than the one flip keeps
+    # every mirror idempotent — a window that missed an earlier event is
+    # repaired by the next one.
+    if result.get("ok"):
+        await app.broadcast(make_event("cli.install_prompt_changed", {
+            "dismissed_ids": app.onboarding_deps.install_prompt_dismissals(),
+        }))
+
+
+@handler("codex.hook_trust_blocked")
+async def codex_hook_trust_blocked(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """The window saw Codex demand approval for the hook Navide injects.
+
+    Reported rather than predicted: whether a Codex build gates a command-line
+    hook behind its trust screen cannot be read off a version number, and a
+    machine where it does would otherwise open every pane onto a modal. Later
+    spawns leave the hook out; nothing in the user's environment is written.
+    Idempotent — the window may report the same screen more than once.
+    """
+    from . import codex_session_hooks
+
+    blocked = bool(payload.get("blocked", True))
+    changed = await asyncio.to_thread(codex_session_hooks.set_trust_gate_blocked, blocked)
+    if changed:
+        log.info(
+            "codex hook injection %s: trust screen %s",
+            "disabled" if blocked else "re-enabled",
+            "reported by a pane" if blocked else "cleared",
+        )
+        await app_broadcast_hook_trust(blocked)
+    await session.send_json(make_response(msg_id, msg_type, {"ok": True, "blocked": blocked, "changed": changed}))
+
+
+async def app_broadcast_hook_trust(blocked: bool) -> None:
+    """Tell every window, so a second one does not report the same screen."""
+    from . import app
+
+    await app.broadcast(make_event("codex.hook_trust_changed", {"blocked": blocked}))
 
 
 @handler("onboarding.cli_health.dismiss")
@@ -5165,6 +6537,7 @@ async def terminal_create(session: "Session", msg_id: str, msg_type: str, payloa
             "attribution_future": None,
             "attribution_started": False,
             "cleanup_task": None,
+            "codex_home_id": "",
         }
         session._terminal_create_transactions[key] = transaction
         try:
@@ -5186,6 +6559,31 @@ async def terminal_create(session: "Session", msg_id: str, msg_type: str, payloa
                         {"pane_id": pane_id, "create_generation": generation},
                     )
                 )
+        except _TerminalCreateReapTimeout as err:
+            # Its own code, not CREATE_CANCELLED: nobody cancelled this, and a
+            # retry is the right response — the previous CLI has to be gone
+            # first, and saying "cancelled" would hide that from the user.
+            await _rollback_terminal_create(session, transaction)
+            if not session.dead:
+                await session.send_json(
+                    make_error(
+                        msg_id,
+                        msg_type,
+                        "CREATE_REAP_TIMEOUT",
+                        "the previous CLI did not exit; refusing to start a "
+                        "second one on the same session",
+                        {
+                            "pane_id": pane_id,
+                            "create_generation": generation,
+                            "terminal_session_id": err.terminal_id,
+                        },
+                    )
+                )
+        except quota_failover.FailoverRefused as err:
+            await _rollback_terminal_create(session, transaction)
+            session._terminal_create_transactions.pop(key, None)
+            if not session.dead:
+                await session.send_json(make_error(msg_id, msg_type, err.code, str(err), err.details))
         except BaseException:
             await _rollback_terminal_create(session, transaction)
             session._terminal_create_transactions.pop(key, None)
@@ -5194,6 +6592,39 @@ async def terminal_create(session: "Session", msg_id: str, msg_type: str, payloa
 
 class _TerminalCreateCancelled(Exception):
     pass
+
+
+class _TerminalCreateReapTimeout(Exception):
+    """A PTY this create had to reap first outlived its kill.
+
+    Raised instead of spawning. The reap ceiling covers the vendor's grace,
+    the SIGKILL escalation and the wait that reaps the zombie, so reaching it
+    means the old CLI survived a SIGKILL — and spawning the replacement then
+    is the two-CLIs-on-one-session-file corruption both reap sites exist to
+    prevent. Failing the create is recoverable (the user retries, or opens a
+    fresh session); a corrupted transcript is not.
+    """
+
+    def __init__(self, terminal_id: str) -> None:
+        super().__init__(terminal_id)
+        self.terminal_id = terminal_id
+
+
+async def _finish_pane_attribution(
+    attribution_future: "asyncio.Future[None]", pane_id: str, codex_launch_token: str
+) -> None:
+    """Tail of terminal.create's attribution, detached from the ack."""
+    from . import app
+
+    try:
+        await asyncio.shield(attribution_future)
+    except Exception as err:  # noqa: BLE001 — the pane is already running; only its baseline is lost
+        app.log.warning("baseline scan for pane %s failed: %s", pane_id, err)
+        return
+    # A SessionStart callback can arrive before the baseline scan completes.
+    # Retry its already recorded transcript after claiming.
+    if codex_launch_token:
+        await app._retry_codex_session_start(codex_launch_token)
 
 
 async def _rollback_terminal_create(
@@ -5223,6 +6654,16 @@ async def _rollback_terminal_create(
             if app._PTY_OWNERS.get(term_id) is session:
                 app._PTY_OWNERS.pop(term_id, None)
             await session.terminals.kill(term_id, force=True)
+        snapshot = transaction.pop("store_login_snapshot", None)
+        if snapshot is not None:
+            agent_key, slot_id, scope_kw = snapshot
+            async with app.credential_vault.switch_lock(agent_key):
+                await vault_to_thread(functools.partial(
+                    app.credential_vault.discard_pending_login, agent_key, slot_id, **scope_kw))
+        # The per-pane CODEX_HOME this create prepared: without a rollout in
+        # it there is nothing to resume, and a failed spawn used to leave one
+        # behind every time (#121).
+        await _reclaim_codex_home(str(transaction.get("codex_home_id") or ""))
         # The push channel was wired before the spawn, so a rolled-back create
         # would otherwise leave a registered channel — and a watch file — for a
         # pane that never came to exist.
@@ -5246,8 +6687,21 @@ async def _terminal_create_impl(
     from . import app
 
     metadata = payload.get("metadata") or {}
+    # These are server attestations, never renderer-provided metadata.
+    for key in ("quota_transaction_id", "quota_original_pane_id", "credential_epoch",
+                "credential_store_verified", "credential_store_id", "credential_store_error",
+                "credential_launch_term_id"):
+        metadata.pop(key, None)
     agent_key = payload.get("agent_key") or ""
-    env = dict(payload.get("env") or {})
+    # The window's per-vendor env settings, first in the chain on purpose: the
+    # vendor defaults below use setdefault, while onboarding, login profiles,
+    # home management, wiring and portable credentials all update over the top,
+    # so a user value can never displace something the backend must control.
+    # It is also the only untrusted source in the chain — filter it here, and
+    # keep what survived so the window can be told which of its settings a
+    # later source went on to replace (see `cli.env_ignored` after the spawn).
+    env, denied_env_keys = app.filter_spawn_env_request(dict(payload.get("env") or {}))
+    requested_env = dict(env)
     vendor_spec = cli_vendor(agent_key)
     if vendor_spec is not None:
         for key, value in vendor_spec.spawn_env_defaults:
@@ -5271,14 +6725,28 @@ async def _terminal_create_impl(
         # guided install. The error still propagates and cancels the spawn.
         if probe_error.details.get("reason") == "not_found":
             dep = app.onboarding_deps.DEPS_BY_ID.get(agent_key)
-            await session.send_json(make_event("cli.missing", {
+            missing: dict[str, Any] = {
                 "agent_key": agent_key,
                 "label": dep.label if dep else agent_key,
-                "pane_id": str(payload.get("pane_id") or ""),
                 "reason": "not_found",
-            }))
+            }
+            # Carry the pane id only when there really is one. An empty string
+            # used to go out for a spawn that named no pane, and the window
+            # reads a falsy pane id as "no pane at all" — the branch that
+            # bypasses the don't-ask-again opt-out (see promptCliInstall).
+            pane_id = str(payload.get("pane_id") or "")
+            if pane_id:
+                missing["pane_id"] = pane_id
+            await session.send_json(make_event("cli.missing", missing))
         raise
     if startup_probe:
+        # A degraded not_found probe deliberately sends no cli.missing. The
+        # spawn goes ahead because the pane's login shell may well find the
+        # CLI, and the window opens the install wizard on cli.missing
+        # unconditionally — announcing "not installed" for a CLI about to run
+        # puts that wizard over a working pane. One that really is absent exits
+        # 127, and the window's terminal.exit handler offers the install then,
+        # once the shell has confirmed it.
         metadata["startup_probe"] = startup_probe
     # The vendor's own auto-update switch, only when the user opted out of it.
     env.update(app.onboarding_deps.spawn_env_for(agent_key))
@@ -5292,6 +6760,16 @@ async def _terminal_create_impl(
     # profile's slot (see credential_vault.harvest_login_home).
     env_remove: list[str] | None = None
     login_profile_id = str(payload.get("login_profile_id") or "")
+    # Two decisions that used to be one. `is_login` says the pane exists in
+    # order to sign in, and so selects the COMMAND; `login_profile_id` says
+    # where it signs in, and so selects the HOME. A live login — signing in to
+    # the account that is already active — carries the first and not the
+    # second, so keying the rewrite on the profile id left it sitting at a bare
+    # REPL. A profile id still implies a login on its own: an older frontend
+    # sends only that.
+    is_login = bool(payload.get("is_login")) or bool(login_profile_id)
+    stores = getattr(app.credential_vault, "stores", None)
+    managed_path = stores is not None and stores.enabled(agent_key)
     if login_profile_id:
         profile = app.cli_profiles_store.get(login_profile_id)
         if (
@@ -5306,20 +6784,113 @@ async def _terminal_create_impl(
                 )
             )
             return
-        login_set, login_remove = await asyncio.to_thread(
-            app.credential_vault.login_spawn_env, agent_key, login_profile_id
-        )
-        env.update(login_set)
-        env_remove = login_remove or None
-        # Mark the terminal as an isolated LOGIN pane: it cannot touch the
-        # live credentials, and the login-home harvest (on account switch)
-        # must wait for it to exit (see _running_login_terminals).
-        metadata["login_profile_id"] = login_profile_id
+        if managed_path:
+            # Snapshot creation is deferred until this same invocation has
+            # reported its post-rc path under the final spawn lock.
+            metadata["login_profile_id"] = login_profile_id
+            metadata["live_login"] = True
+        else:
+            # The pending snapshot reserves a live credential store before its
+            # PTY exists. Inspect it and create it under the same lock as regular
+            # spawns and swaps; a rejected duplicate must never touch it.
+            login_lock = app.credential_vault.switch_lock(agent_key)
+            await asyncio.wait_for(login_lock.acquire(), timeout=_SWITCH_LOCK_TIMEOUT_SEC)
+            try:
+                isolated = getattr(app.credential_vault, "_login_isolated", None)
+                if callable(isolated) and not isolated(agent_key):
+                    running = _running_regular_terminals(agent_key) + _running_live_login_terminals(agent_key)
+                    pending = await vault_to_thread(_live_login_pending, agent_key)
+                    if running or pending:
+                        await session.send_json(make_error(
+                            msg_id, msg_type, "LOGIN_BLOCKED_BY_LIVE_PANES",
+                            "the live credential is in use or a sign-in is already pending; "
+                            "finish or close it first",
+                            {"count": len(running), "agent_key": agent_key},
+                        ))
+                        return
+                login_set, login_remove = await vault_to_thread(
+                    functools.partial(
+                        app.credential_vault.login_spawn_env, agent_key, login_profile_id,
+                        **quota_failover.scope_kwargs(
+                            app.credential_vault.login_spawn_env, agent_key, profile),
+                    )
+                )
+            except Exception as err:  # noqa: BLE001 — the vault refused before any write
+                # e.g. copilot's plaintext-token mode, or a multi-provider profile
+                # with no scope: the vault cannot say where the sign-in would land,
+                # so no pane opens and nothing was touched.
+                await session.send_json(
+                    make_error(
+                        msg_id, msg_type, "LOGIN_UNAVAILABLE", _profile_error(err),
+                        {"agent_key": agent_key, "profile_id": login_profile_id},
+                    )
+                )
+                await _reclaim_codex_home(str(transaction.get("codex_home_id") or ""))
+                return
+            finally:
+                login_lock.release()
+            env.update(login_set)
+            env_remove = login_remove or None
+            # Mark the terminal as a LOGIN pane: the login harvest (on account
+            # switch) must wait for it to exit (see _running_login_terminals).
+            metadata["login_profile_id"] = login_profile_id
+            if not login_set and not login_remove:
+                # No isolation: this sign-in rewrites the LIVE credential store.
+                # The vault has just parked the pre-login credential; still, a
+                # pane already working on the live credential would be switched
+                # under the user's feet, so refuse while any runs — and give the
+                # parked snapshot back, since no sign-in will happen. A second
+                # live-store sign-in at the same time is refused the same way.
+                running = _running_regular_terminals(agent_key) + _running_live_login_terminals(agent_key)
+                if running:
+                    discard = getattr(app.credential_vault, "discard_pending_login", None)
+                    if callable(discard):
+                        try:
+                            await vault_to_thread(functools.partial(
+                                discard, agent_key, login_profile_id,
+                                **quota_failover.scope_kwargs(discard, agent_key, profile)))
+                        except Exception:  # noqa: BLE001 — the watch discards it later
+                            app.log.exception("login: discard of the pre-login snapshot failed")
+                    await session.send_json(
+                        make_error(
+                            msg_id, msg_type, "LOGIN_BLOCKED_BY_LIVE_PANES",
+                            f"{len(running)} running {agent_key} pane(s) use the live "
+                            "credential this sign-in would replace; finish or close them first",
+                            {"count": len(running), "agent_key": agent_key},
+                        )
+                    )
+                    return
+                metadata["live_login"] = True
+    # True only when the rewrite below really turns the command into an auth
+    # SUBCOMMAND. That, not `is_login` on its own, is what makes the spawn
+    # wiring inapplicable further down — a subcommand takes none of the
+    # top-level flags it appends. Nine vendors declare no sign-in invocation
+    # (`login_command_args is None`, see _login_spawn_command) and keep their
+    # ordinary command: such a pane is a working REPL and must stay wired.
+    login_subcommand = False
+    if is_login:
         # Run the CLI's direct sign-in trigger (e.g. `claude auth login`) so
         # the browser authorization opens by itself — the user never types a
-        # command in the login pane.
+        # command in the login pane. Ahead of the codex home block on purpose:
+        # the rewritten command carries no resume id, so a login pane takes the
+        # fresh-home path instead of being bound to a session's home.
+        login_spec = cli_vendor(agent_key)
+        login_subcommand = bool(login_spec is not None and login_spec.login_command_args)
         payload["command"] = app._login_spawn_command(agent_key, payload["command"])
+    elif app._agent_signed_out(agent_key):
+        # Installed, but with no credentials to run on — the counterpart to
+        # cli.missing, which only ever fires for a CLI that is not there at
+        # all. Advisory: unlike cli.missing the spawn is perfectly valid and
+        # goes ahead, and the vendor's own prompt stays the fallback. A login
+        # pane is skipped by the `elif`: being signed out is its premise.
+        dep = app.onboarding_deps.DEPS_BY_ID.get(agent_key)
+        await session.send_json(make_event("cli.signed_out", {
+            "agent_key": agent_key,
+            "label": dep.label if dep else agent_key,
+            "pane_id": str(payload.get("pane_id") or ""),
+        }))
     if agent_key == "codex" and not login_profile_id:
+        from . import codex_session_hooks, hook_auth
         # Compatibility: `codex resume <id>` only works inside the home
         # that recorded the session. Resume in whichever home owns it;
         # only unknown/fresh sessions get a (new) per-pane home.
@@ -5343,6 +6914,10 @@ async def _terminal_create_impl(
                     payload.get("command"), resume_id, repaired
                 )
                 resume_id = repaired
+            # Resume selectors (names/--last) are not a known thread UUID.
+            known_id = codex_session_hooks.resume_identity(resume_id)
+            if known_id:
+                metadata["explicit_session_id"] = known_id
         session_home = (
             await asyncio.to_thread(app.codex_home_manager.find_session_home, resume_id)
             if resume_id
@@ -5356,12 +6931,28 @@ async def _terminal_create_impl(
             )
             env["CODEX_HOME"] = str(codex_home)
             metadata["session_home_id"] = home_id
+            transaction["codex_home_id"] = home_id
         elif session_home != app.codex_home_manager.real_home:
             env["CODEX_HOME"] = str(session_home)
             metadata["session_home_id"] = session_home.name
         # else: session lives in the real ~/.codex — resume with the
         # default env so codex can find it.
-    if not login_profile_id:
+        if not is_login:
+            payload["command"] = await asyncio.to_thread(
+                codex_session_hooks.wire, payload["command"], env, metadata,
+                Path(env.get("CODEX_HOME") or app.codex_home_manager.real_home),
+                app.backend_port_file(), hook_auth.header_file(),
+            )
+    # Lines the pane prints at startup when this machine cannot wire it (see
+    # wire_command): the only other trace is a backend log the user never sees.
+    wiring_warnings: list[str] = []
+    # Keyed on the sign-in SUBCOMMAND, not on `login_profile_id` (which a live
+    # login does not carry) nor on `is_login` (which a REPL-launching vendor
+    # also sets): a subcommand rejects the top-level flags wired below —
+    # `--mcp-config` from the MCP endpoint, `--add-dir` from skills. An unwired
+    # login pane costs nothing (it signs in and exits); a wired one dies on
+    # `unknown option`, measured against claude 2.1.275.
+    if not login_subcommand:
         # Run plugin-registered spawn transformers over the command (e.g. the
         # builtin navide.plans plugin appends Plan-MCP flags for claude/codex);
         # no-op with no plugins, and a failing transformer never breaks a spawn.
@@ -5381,6 +6972,7 @@ async def _terminal_create_impl(
             str(payload.get("pane_id") or ""),
             env,
             str(payload.get("cwd") or ""),
+            warnings=wiring_warnings,
         )
         payload["command"] = await asyncio.to_thread(
             app.plugin_wiring.apply_spawn_wiring,
@@ -5394,12 +6986,22 @@ async def _terminal_create_impl(
     # Give the pane whatever its push channel needs (a port to serve on, a file
     # to watch) so a message can later reach it without being typed in. Last,
     # so the flags it adds cannot be displaced by MCP or skills wiring; a CLI
-    # with no push channel — most of them — is left untouched.
+    # with no push channel — most of them — is left untouched. Skipped for a
+    # login pane for the same reason as the MCP wiring above: its subcommand
+    # takes no top-level flags.
     push_channel = None
-    if not login_profile_id:
+    if not login_subcommand:
         payload["command"], push_channel = app.push_delivery.wire_spawn(
             agent_key, payload["command"], str(payload.get("pane_id") or ""), env
         )
+    # Skills wiring mirrors ~/.codex/hooks.json into the per-pane CODEX_HOME,
+    # and codex keys hook trust by that path — without this every spawn stops
+    # at "Hooks need review". CODEX_HOME is final only after all wiring above.
+    seeder = getattr(app.codex_home_manager, "seed_hook_trust", None)
+    if agent_key == "codex" and not login_profile_id and env.get("CODEX_HOME") and callable(seeder):
+        seeded = await asyncio.to_thread(seeder, Path(env["CODEX_HOME"]))
+        if seeded:
+            app.log.info("codex hook trust seeded for %s (%d hooks)", env["CODEX_HOME"], seeded)
     if transaction["cancelled"]:
         raise _TerminalCreateCancelled
     # The pane's previous PTY, when this create replaces it (restore/rebuild).
@@ -5423,6 +7025,18 @@ async def _terminal_create_impl(
                     create_pane_id,
                 )
                 await session.terminals.kill(replaces_tid, force=True)
+                # A vendor with a graceful ShutdownSpec (claude) is put down
+                # by a background task, so kill() alone no longer means the
+                # old CLI is gone — and the spawn below would overlap it.
+                # Returns immediately for every other vendor.
+                if not await session.terminals.wait_until_reaped(replaces_tid):
+                    app.log.error(
+                        "terminal.create: replaced PTY %s outlived its kill "
+                        "— refusing to spawn over it for pane %s",
+                        replaces_tid,
+                        create_pane_id,
+                    )
+                    raise _TerminalCreateReapTimeout(replaces_tid)
             else:
                 app.log.warning(
                     "terminal.create: replaces_terminal_id %s is another live "
@@ -5449,7 +7063,21 @@ async def _terminal_create_impl(
                 resume_dedup_id,
             )
             await session.terminals.kill(stale.id, force=True)
-    def _spawn_and_claim() -> Any:
+            # Two CLIs appending to one session file is exactly what this loop
+            # exists to prevent, so wait out a graceful shutdown before the
+            # --resume spawn below rather than only signalling it — and if the
+            # wait runs out, do not spawn at all. Proceeding here would hand
+            # the user the corruption this loop was written to stop.
+            if not await session.terminals.wait_until_reaped(stale.id):
+                app.log.error(
+                    "terminal.create: stale PTY %s resuming %s/%s outlived "
+                    "its kill — refusing to spawn a second one",
+                    stale.id,
+                    agent_key,
+                    resume_dedup_id,
+                )
+                raise _TerminalCreateReapTimeout(stale.id)
+    def _spawn_and_claim(spawn_command=None) -> Any:
         term = session.terminals.create(
             pane_id=payload["pane_id"],
             agent_key=agent_key,
@@ -5461,6 +7089,7 @@ async def _terminal_create_impl(
             env_remove=env_remove,
             metadata=metadata,
             output_log_file=payload.get("output_log_file") or "",
+            **({"spawn_command": spawn_command} if spawn_command is not None else {}),
         )
         transaction["term_id"] = term.id
         # Claim immediately. A CLI can die while attribution registration is
@@ -5468,16 +7097,20 @@ async def _terminal_create_impl(
         app._PTY_OWNERS[term.id] = session
         return term
 
-    if agent_key in PROFILE_AGENT_KEYS and not login_profile_id:
+    # The account this launch is pinned to, resolved ONCE (under the switch
+    # lock, below) and reused by the history pin after the spawn: two reads
+    # could straddle a switch and file the pane under two accounts.
+    history_pin: str | None = None
+    if agent_key in PROFILE_AGENT_KEYS and (not login_profile_id or managed_path):
         # A regular pane of a profile agent starts on the live credentials —
         # the very state an account switch swaps. Spawning under the agent's
         # switch lock closes the quiescence gate's TOCTOU window: the pane is
         # either created and claimed in _PTY_OWNERS before the switch handler
         # takes the lock (so its gate counts the pane), or the spawn waits for
         # the swap to finish and picks up the new account's credentials. The
-        # locked section is synchronous (no awaits), so the lock is held only
-        # for the spawn itself; login panes run in an isolated home and other
-        # agents have no profiles, so neither takes the lock.
+        # lock also covers the post-rc report, binding and GO for managed
+        # destinations. Their live-store logins snapshot inside this same
+        # section; isolated login homes retain their existing separate path.
         # Bounded acquire (_SWITCH_LOCK_TIMEOUT_SEC): if the lock is somehow
         # held forever the spawn must fail visibly instead of hanging with no
         # response and no log.
@@ -5505,12 +7138,225 @@ async def _terminal_create_impl(
                 "respawn, the previous session was already closed — start the "
                 "pane again"
             ) from None
+        launch = None
         try:
-            term = _spawn_and_claim()
+            if managed_path and is_login and _running_regular_terminals(agent_key):
+                raise quota_failover.FailoverRefused("LOGIN_BLOCKED_BY_LIVE_PANES", "close running CLI panes before signing in")
+            if _running_live_login_terminals(agent_key) or await vault_to_thread(
+                _live_login_pending, agent_key
+            ):
+                # Recheck inside the spawn lock: a login may have reserved
+                # the live store while this request was waiting for it.
+                await session.send_json(make_error(
+                    msg_id, msg_type, "LOGIN_IN_PROGRESS",
+                    f"a {agent_key} sign-in is rewriting the live credential; wait for it "
+                    "to finish before opening a new pane",
+                    {"agent_key": agent_key},
+                ))
+                await _reclaim_codex_home(str(transaction.get("codex_home_id") or ""))
+                return
+            # The portable credential this agent's panes are set to run on,
+            # if any — read here, under the same lock, so a switch racing
+            # this spawn cannot pair one account's live files with another's
+            # token. The selection is its own record: it does not follow the
+            # native default profile or the payload's pin (bookkeeping, see
+            # _profile_pin_for_spawn), so a credential synced from another
+            # machine is usable without that account ever signing in here.
+            try:
+                # A login pane — isolated (login_profile_id, which does not
+                # reach this branch) or live (is_login alone) — exists to
+                # sign in; the token would make the CLI skip exactly that.
+                injection = None if is_login else await vault_to_thread(
+                    functools.partial(
+                        portable_credentials.spawn_env, agent_key,
+                        home=Path.home(), cwd=Path(str(payload.get("cwd") or "")),
+                    )
+                )
+            except portable_credentials.PortableCredentialUnavailable as unavailable:
+                # Selected but unusable: refuse rather than start the pane on
+                # whatever login the CLI would fall back to — that would be a
+                # silent switch of identity. The data names what to fix.
+                app.log.warning("terminal.create refused: %s", unavailable)
+                await session.send_json(
+                    make_error(
+                        msg_id, msg_type, "PORTABLE_CREDENTIAL_UNAVAILABLE",
+                        str(unavailable),
+                        {
+                            "agent_key": agent_key,
+                            "profile_id": unavailable.slot_id,
+                            "reason": unavailable.reason,
+                            "shadowedBy": list(unavailable.shadowed_by),
+                        },
+                    )
+                )
+                await _reclaim_codex_home(str(transaction.get("codex_home_id") or ""))
+                return
+            if injection is not None:
+                env.update(injection.env)
+                env_remove = list(env_remove or []) + list(injection.env_remove)
+                metadata[PORTABLE_SLOT_METADATA_KEY] = injection.slot_id
+            # The launch's identity, fixed here for the bookkeeping that
+            # follows in separate messages (see _launch_portable_slot). A
+            # login or native launch writes "" and retires any earlier fact.
+            portable_credentials.note_launch(
+                str(payload["pane_id"]), injection.slot_id if injection else "")
+            # Launch provenance for the account-switch authority: the profile
+            # this pane starts on and the credential pool it resolves to,
+            # decided under the same lock as the credentials themselves. The
+            # failover transaction reads only this to tell which live panes a
+            # swap of that pool touches — never the default of the moment.
+            launch_pin = _profile_pin_for_bookkeeping(
+                agent_key, payload["pane_id"], metadata.get("profile_id"))
+            history_pin = launch_pin
+            launch_profile = (
+                app.cli_profiles_store.get(launch_pin)
+                if launch_pin and launch_pin != DEFAULT_SLOT_ID else None
+            )
+            provenance = quota_failover.pane_auth_scope(
+                agent_key, launch_profile, env=env, env_remove=env_remove or (),
+                portable_slot_id=injection.slot_id if injection else None,
+            )
+            metadata["launch_profile_id"] = provenance["profileId"]
+            metadata["profile_scope"] = provenance["scope"]
+            metadata["auth_scope"] = provenance["authScope"]
+            metadata["credential_source"] = provenance["credentialSource"]
+            metadata["credential_env"] = provenance["credentialEnv"]
+            metadata["credential_epoch"] = app.quota_failover.epoch(agent_key)
+            quota_tx_id = str(payload.get("quota_transaction_id") or "")
+            quota_pane_id = str(payload.get("quota_original_pane_id") or "")
+            if managed_path:
+                from .credential_launch import CredentialLaunch, wrap_command
+                from .credential_store import StoreUnverified
+
+                async def owned_vault_call(fn):
+                    # Cancellation cannot release the vendor lock while its
+                    # executor is still persisting a binding or snapshot.
+                    task = asyncio.create_task(vault_to_thread(fn))
+                    try:
+                        return await asyncio.shield(task)
+                    except asyncio.CancelledError:
+                        await task
+                        raise
+
+                metadata["credential_store_verified"] = False
+                launch = await CredentialLaunch.start(vendor_spec.credential_path_env_vars)
+                names = tuple(dict.fromkeys((*quota_failover.credential_env_vars(agent_key),
+                    *(name for _, values in vendor_spec.account_switch.uncertain_env_by_scope for name in values))))
+                wrapped = wrap_command(payload["command"], vendor_spec,
+                    launch.helper_argv(login=is_login, vendor=agent_key, credential_env=names),
+                    env={key: value for key, value in {**os.environ, **env}.items() if key not in (env_remove or ())})
+                if wrapped is None and is_login:
+                    raise quota_failover.FailoverRefused("CREDENTIAL_STORE_UNVERIFIED", "this login command cannot verify its credential store")
+                if wrapped is not None:
+                    env.update(launch.env)
+                term = _spawn_and_claim(wrapped)
+                metadata["credential_launch_term_id"] = term.id
+                term.metadata.update(metadata)
+                try:
+                    if wrapped is None:
+                        raise StoreUnverified("custom command cannot verify its credential store")
+                    report = await launch.wait_report()
+                    if report["credentialEnv"]:
+                        metadata["credential_source"] = "env-override"
+                        metadata["credential_env"] = report["credentialEnv"]
+                        raise StoreUnverified("the CLI environment overrides file credentials")
+                    doc = app.cli_profiles_store.list()
+                    new_profile = login_profile_id if login_profile_id == getattr(session, "_created_cli_profile_id", "") else ""
+                    has_managed_state = any(p.get("agentKey") == agent_key and p.get("id") != new_profile
+                                            for p in doc["profiles"])
+                    with stores._db.transaction() as cur:
+                        if cur.execute("SELECT 1 FROM sqlite_master WHERE name='pane_account_history'").fetchone():
+                            for row in cur.execute("SELECT DISTINCT pane_id, profile_id FROM pane_account_history"):
+                                known = [p for p in doc["profiles"] if p.get("id") == row["profile_id"]]
+                                live_agents = {
+                                    getattr(other, "agent_key", "")
+                                    for term_id, owner in list(app._PTY_OWNERS.items())
+                                    if (other := owner.terminals.get(term_id)) is not None
+                                    and not getattr(other, "closed", False)
+                                    and getattr(other, "pane_id", "") == row["pane_id"]
+                                }
+                                # A historical default/deleted/ambiguous profile
+                                # remains unknown even if a live pane has a vendor.
+                                known_agent = known[0].get("agentKey") if len(known) == 1 else None
+                                if (known_agent not in CLI_VENDORS or known_agent == agent_key
+                                        or live_agents - {known_agent}):
+                                    has_managed_state = True
+                                    break
+                    metadata["credential_store_id"] = await owned_vault_call(functools.partial(
+                        stores.bind, agent_key, report, vault=app.credential_vault,
+                        slot_id=launch_pin or DEFAULT_SLOT_ID,
+                        scope=quota_failover.profile_scope(agent_key, launch_profile),
+                        has_managed_state=has_managed_state, exclude_term_id=term.id,
+                        new_login_profile=bool(new_profile)))
+                    if new_profile:
+                        session._created_cli_profile_id = ""
+                    metadata["credential_store_verified"] = True
+                    term.metadata.update(metadata)
+                    watcher = getattr(app, "_credential_watcher", None)
+                    if watcher is not None:
+                        await watcher.watch_bound_store(agent_key, stores.path(agent_key))
+                    if login_profile_id:
+                        scope_kw = quota_failover.scope_kwargs(app.credential_vault.login_spawn_env, agent_key, profile)
+                        transaction["store_login_snapshot"] = (agent_key, login_profile_id, scope_kw)
+                        await owned_vault_call(functools.partial(
+                            app.credential_vault.login_spawn_env, agent_key, login_profile_id, **scope_kw))
+                except Exception as err:  # noqa: BLE001 — preserve ordinary CLI launch on observation failure
+                    metadata["credential_store_error"] = str(err) or "credential path report timed out"
+                    metadata["credential_store_verified"] = False
+                    if metadata["credential_source"] == "vault":
+                        metadata["credential_source"] = "unverified-store"
+                    term.metadata.update(metadata)
+                    if is_login:
+                        raise quota_failover.FailoverRefused("CREDENTIAL_STORE_UNVERIFIED", metadata["credential_store_error"]) from err
+            else:
+                term = None
+            if quota_tx_id or quota_pane_id:
+                app.quota_failover.validate_restart_spawn(
+                    quota_tx_id, quota_pane_id, owner=session, agent_key=agent_key, metadata=metadata,
+                )
+                metadata["quota_transaction_id"] = quota_tx_id
+                metadata["quota_original_pane_id"] = quota_pane_id
+            if term is None:
+                term = _spawn_and_claim()
+            if managed_path:
+                term.metadata.update(metadata)
+            if quota_tx_id:
+                app.quota_failover.record_restart_spawn(quota_tx_id, quota_pane_id, term.id)
+            if launch is not None:
+                launch.release(bool(metadata.get("credential_store_verified")))
+                if metadata.get("credential_store_verified") and not await launch.wait_received():
+                    metadata["credential_store_verified"] = False
+                    metadata["credential_source"] = "unverified-store"
+                    metadata["credential_store_error"] = "credential helper timed out before confirming GO"
+                    term.metadata.update(metadata)
+                    if is_login:
+                        raise quota_failover.FailoverRefused("CREDENTIAL_STORE_UNVERIFIED", metadata["credential_store_error"])
         finally:
-            switch_lock.release()
+            try:
+                if launch is not None:
+                    await launch.close()
+            finally:
+                switch_lock.release()
     else:
+        portable_credentials.note_launch(str(payload["pane_id"]), "")
         term = _spawn_and_claim()
+    # What became of the window's own env settings. Only now is the answer
+    # final: `env` is written by six later sources and `env_remove` (applied
+    # last of all, in terminals.spawn) can still delete a key that survived
+    # them. Advisory like cli.signed_out — the pane is already running; this
+    # only tells the window which of its settings never reached the CLI.
+    overridden_env_keys = app.spawn_env_overridden_keys(requested_env, env, env_remove)
+    if denied_env_keys or overridden_env_keys:
+        dep = app.onboarding_deps.DEPS_BY_ID.get(agent_key)
+        await session.send_json(make_event("cli.env_ignored", {
+            "agent_key": agent_key,
+            "label": dep.label if dep else agent_key,
+            "pane_id": str(payload.get("pane_id") or ""),
+            # Refused on the way in: Navide owns these (credentials, CLI homes).
+            "denied": sorted(denied_env_keys),
+            # Accepted, then replaced or removed by a higher-priority source.
+            "overridden": overridden_env_keys,
+        }))
     # Announced only now the PTY exists. Wiring the channel is a spawn-time
     # decision, but advertising it before the CLI is actually running would tell
     # the window it can push into a pane that may still fail to start — and a
@@ -5549,29 +7395,61 @@ async def _terminal_create_impl(
         # must not lose its fresh registration to a pending grace-period
         # cleanup from the previous PTY's exit.
         app._cancel_pane_unregister(term.pane_id)
-        # register_pane's baseline scan enumerates the vendor's whole
-        # session-file tree — run it off-loop (register_pane is
-        # thread-safe via attribution._lock) so the create ack below
-        # isn't delayed past the frontend's timeout. Awaited so the
-        # pane is registered before the ack, as before.
-        attribution_future = asyncio.get_running_loop().run_in_executor(
-            None,
-            app.functools.partial(
-                app.attribution.register_pane,
-                term.pane_id,
-                vendor=agent_key,
-                cwd=payload["cwd"],
-                workspace_path=ws_for_pane,
-                stage_id=metadata.get("stage_id") or metadata.get("stageId"),
-                slot_key=app._stable_pane_key(metadata, ""),
-                explicit_session_id=explicit_session_id,
-                session_marker=str(metadata.get("session_marker") or ""),
-                session_home_id=str(metadata.get("session_home_id") or ""),
+        # Open the pane's account interval now, before the CLI's first call
+        # can land: the bookkeeping message repeats the same pin (a no-op)
+        # a beat later. Non-account agents pin the Default slot.
+        app.pane_account_history.pin(
+            term.pane_id,
+            _account_pin_for_history(
+                history_pin if history_pin is not None else _profile_pin_for_bookkeeping(
+                    agent_key, term.pane_id, metadata.get("profile_id"))
             ),
         )
-        transaction["attribution_future"] = attribution_future
+        # Register now — a lock and a dict insert — so the pane owns its
+        # identity before the ack below; the frontend's next messages
+        # (manual_pane.spawn, pane.set_run_group) and the CLI's first
+        # session-file event all expect it. The baseline scan is the
+        # expensive half: it enumerates the vendor's session tree (Codex
+        # opens every rollout under ~/.codex/sessions and every
+        # ~/.codex-panes/*/sessions to read its header), and awaiting it
+        # here held the ack past the renderer's 30s deadline on large trees
+        # while the CLI itself sat at its prompt (issue #118). It runs
+        # off-loop after the ack; until it lands the pane binds only through
+        # the deterministic paths (explicit id, per-pane home, marker).
+        app.attribution.register_pane(
+            term.pane_id,
+            vendor=agent_key,
+            cwd=payload["cwd"],
+            workspace_path=ws_for_pane,
+            stage_id=metadata.get("stage_id") or metadata.get("stageId"),
+            slot_key=app._stable_pane_key(metadata, ""),
+            group_id=str(metadata.get("run_group_id") or ""),
+            explicit_session_id=explicit_session_id,
+            session_marker=str(metadata.get("session_marker") or ""),
+            session_home_id=str(metadata.get("session_home_id") or ""),
+            defer_baseline=True,
+        )
         transaction["attribution_started"] = True
-        await asyncio.shield(attribution_future)
+        attribution_future = asyncio.get_running_loop().run_in_executor(
+            None, app.attribution.scan_pane_baseline, term.pane_id
+        )
+        # Kept on the transaction so a rollback (cancel, dead socket) waits
+        # for the scan before unregistering — scan_pane_baseline itself
+        # refuses to revive a registration that is gone.
+        transaction["attribution_future"] = attribution_future
+        # Tracked so the task stays reachable (CPython drops an unreferenced
+        # task). The scan itself runs in the executor and installs its result
+        # regardless; a disconnect only cancels the codex retry behind it.
+        tail = asyncio.create_task(
+            _finish_pane_attribution(
+                attribution_future,
+                term.pane_id,
+                str(metadata.get("codex_launch_token") or ""),
+            ),
+            name=f"pane-baseline:{term.pane_id[:8]}",
+        )
+        session._handler_tasks.add(tail)
+        tail.add_done_callback(session._handler_tasks.discard)
         # The live "THIS SESSION" tally is read straight from the vendor log.
         # Now that the pane owns this session id, start tracking it and take
         # the first scan. Fire and forget — a multi-MB parse must not delay
@@ -5615,6 +7493,8 @@ async def _terminal_create_impl(
         "startup_probe": startup_probe,
         "create_generation": generation,
     }
+    if wiring_warnings:
+        response_payload["wiring_warnings"] = wiring_warnings
     await session.send_json(make_response(msg_id, msg_type, response_payload))
     if session.dead or transaction["cancelled"]:
         raise _TerminalCreateCancelled
@@ -5654,8 +7534,22 @@ async def terminal_create_cancel(
 
 @handler("terminal.input")
 async def terminal_input(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
-    session.terminals.write(payload["terminal_session_id"], payload["data"])
-    await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
+    from . import app
+
+    # `pending` = bytes the kernel has not accepted yet; the renderer must not
+    # resend those (they are queued, not lost).  Empty data is a pure probe of
+    # that count and must leave no other trace.
+    pending = session.terminals.write(payload["terminal_session_id"], payload["data"])
+    await session.send_json(make_response(msg_id, msg_type, {"ok": True, "pending": pending}))
+    # A keyboard frame (the renderer flags only those: not mouse/focus reports,
+    # not paste or programmatic injection) is a human dev-time heartbeat for
+    # the pane behind the PTY. human_input never raises.
+    if payload.get("human") is True and payload["data"]:
+        term = session.terminals.get(payload["terminal_session_id"])
+        if term is not None:
+            workspace_path = str(term.metadata.get("workspace_path") or term.cwd)
+            if app.dev_time_store.human_input(workspace_path, term.pane_id):
+                await app.broadcast(make_event("devtime.changed", {"workspace_path": workspace_path}))
 
 
 @handler("terminal.memory_usage")
@@ -5731,16 +7625,51 @@ async def terminal_resource_usage(session: "Session", msg_id: str, msg_type: str
     whole call costs about as much as the slower one. Concurrent callers share
     one sweep — see _RESOURCE_SWEEP_TTL_S.
     """
+    from . import app
+    from .cli_risk import active_panes
+
+    # Sampling is request-triggered but independent of the CPU/memory cache.
+    # A cached CPU response must still deliver the latest completed risk state.
+    app.cli_risk_service.request(active_panes(session.terminals, app._PTY_OWNERS))
     async with _resource_sweep_lock:
         now = time.monotonic()
         cached = _resource_sweep_cache["payload"]
         if cached is not None and now - float(_resource_sweep_cache["at"]) < _RESOURCE_SWEEP_TTL_S:
-            await session.send_json(make_response(msg_id, msg_type, cached))
+            risks = app.cli_risk_service.current(active_panes(session.terminals, app._PTY_OWNERS))
+            await session.send_json(make_response(msg_id, msg_type, {**cached, "cliRisks": risks}))
             return
         result = await _collect_resource_usage(session)
         _resource_sweep_cache["at"] = now
         _resource_sweep_cache["payload"] = result
-    await session.send_json(make_response(msg_id, msg_type, result))
+    risks = app.cli_risk_service.current(active_panes(session.terminals, app._PTY_OWNERS))
+    await session.send_json(make_response(msg_id, msg_type, {**result, "cliRisks": risks}))
+
+
+@handler("terminal.cli_risk_action")
+async def terminal_cli_risk_action(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+    from .cli_risk import active_panes
+
+    pane_id, signal_id, action = (payload.get(key) for key in ("paneId", "signalId", "action"))
+    if not isinstance(pane_id, str) or not isinstance(signal_id, str) or action not in ("ignore", "allow"):
+        await session.send_json(make_error(msg_id, msg_type, "BAD_REQUEST", "invalid CLI risk action"))
+        return
+    owned = {sid: owner for sid, owner in app._PTY_OWNERS.items() if owner is session}
+    panes = active_panes(session.terminals, owned)
+    if not any(pane.pane_id == pane_id for pane in panes):
+        await session.send_json(make_error(msg_id, msg_type, "TERMINAL_NOT_OWNED", "pane is not owned by this connection"))
+        return
+    try:
+        # Disk evidence is vendor-wide, including roots active in another
+        # owned window. Authorization above remains local to the target pane.
+        await app.cli_risk_service.action(
+            active_panes(session.terminals, app._PTY_OWNERS), pane_id, signal_id, action
+        )
+    except ValueError as err:
+        await session.send_json(make_error(msg_id, msg_type, "BAD_REQUEST", str(err)))
+        return
+    risks = app.cli_risk_service.current(active_panes(session.terminals, app._PTY_OWNERS))
+    await session.send_json(make_response(msg_id, msg_type, {"cliRisks": risks}))
 
 
 async def _collect_resource_usage(session: "Session") -> dict:
@@ -5930,6 +7859,11 @@ async def terminal_kill(session: "Session", msg_id: str, msg_type: str, payload:
         if app._PTY_OWNERS.get(term_session_id) is session:
             app._PTY_OWNERS.pop(term_session_id, None)
     await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
+    # The process behind the pane is gone (idle reclaim comes through here
+    # too): nothing can beat for it until a respawn, so close its intervals.
+    if pane_id_for_unreg:
+        for workspace_path in app.dev_time_store.pane_removed(pane_id_for_unreg):
+            await app.broadcast(make_event("devtime.changed", {"workspace_path": workspace_path}))
 
 
 @handler("terminal.reattach")
@@ -6189,6 +8123,20 @@ async def project_set_pane_minimized(session: "Session", msg_id: str, msg_type: 
     await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
 
 
+@handler("project.set_pane_muted")
+async def project_set_pane_muted(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """Per-pane mute: the renderer stops this pane's desktop notification and
+    sound; persisted so a restart keeps the pane quiet."""
+    from . import app
+
+    ws_raw = payload.get("workspace_path", "") or ""
+    pane_id = payload.get("pane_id", "") or ""
+    is_muted = bool(payload.get("is_muted", False))
+    if ws_raw and pane_id:
+        app.project_store.set_pane_muted(ws_raw, pane_id=pane_id, is_muted=is_muted)
+    await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
+
+
 @handler("project.set_pane_collapsed")
 async def project_set_pane_collapsed(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     """Whether this pane's lineage subtree is folded in the agent lists."""
@@ -6270,6 +8218,13 @@ async def project_set_ui_state(session: "Session", msg_id: str, msg_type: str, p
         if full_history is not None:
             prev = app.project_store.peek(ws_raw)
             if prev is not None:
+                # Discovery may precede the first renderer history snapshot.
+                # Keep the backend's durable identity when that snapshot has
+                # not received session.detected yet.
+                sessions = {p.pane_id: p.session_id for p in prev.panes if p.session_id}
+                for entry in full_history:
+                    if not entry.get("sessionId") and entry.get("paneId") in sessions:
+                        entry["sessionId"] = sessions[entry["paneId"]]
                 app.spawn_history_store.merge(
                     ws_raw, full_history, seed=prev.ui_spawn_history
                 )
@@ -6349,6 +8304,86 @@ async def project_get_spawn_history(session: "Session", msg_id: str, msg_type: s
                 ),
             },
         )
+    )
+
+
+@handler("project.set_display_name")
+async def project_set_display_name(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """Persist a user-set display name for the workspace itself.
+
+    The truth lives in the workspace's own project document, alongside that
+    project's other ui state: the alias stays with the project folder, is
+    independent per project, and survives the global settings caches being
+    rebuilt or cleared. It does NOT leave this machine — `.agent-team/` is
+    git-ignored (the repo ignores it, and db.py writes a self-ignoring
+    `.gitignore` inside it), so the alias is never committed, pulled, or seen
+    by a teammate.
+
+    The global recent-workspaces store keeps a `name` mirror on top, because
+    the Welcome and sidebar recent lists draw many workspaces at once and
+    cannot open every project's db to find their names.
+
+    Empty `display_name` clears the alias: the project document goes back to ""
+    and the mirror back to the folder basename. The path stays the only
+    identifier — aliases are cosmetic and may repeat.
+
+    The store uses load_or_create rather than peek, so a workspace that has no
+    project document yet gets one instead of swallowing the rename. `ok`
+    therefore reports whether the name was really persisted: there is no path
+    that answers a rename with a success the user did not get.
+    """
+    from . import app
+
+    ws_raw = payload.get("workspace_path", "") or ""
+    display_name = (payload.get("display_name", "") or "").strip()
+    if not ws_raw.strip():
+        await session.send_json(
+            make_response(
+                msg_id, msg_type, {"ok": False, "error": "workspace_path is required"}
+            )
+        )
+        return
+
+    # Same reason as set_ui_state: the read-modify-write plus save is
+    # blocking, and the store's save lock serializes offloaded callers.
+    def _persist():
+        proj = app.project_store.set_display_name(ws_raw, display_name)
+        if proj is not None:
+            app.recent_workspaces_store.set_name(ws_raw, display_name)
+        return proj
+
+    project = await asyncio.to_thread(_persist)
+    if project is None:
+        await session.send_json(
+            make_response(
+                msg_id,
+                msg_type,
+                {"ok": False, "error": "could not write the project document"},
+            )
+        )
+        return
+
+    # Peer windows adopt the new name live (sidebar, title bar).
+    await app.broadcast(
+        make_event(
+            "project.ui_state_changed",
+            {
+                "workspace_path": project.workspace_path,
+                "display_name": display_name,
+            },
+        ),
+        exclude=session,
+    )
+    # And the Welcome recent list re-reads the mirror.
+    recent = await asyncio.to_thread(app.recent_workspaces_store.list)
+    await app.broadcast(
+        make_event(
+            "workspace.recent_changed",
+            {"recent": recent, "reason": "display_name"},
+        )
+    )
+    await session.send_json(
+        make_response(msg_id, msg_type, {"ok": True, "display_name": display_name})
     )
 
 
@@ -6886,6 +8921,8 @@ async def pipeline_stage_spawn(session: "Session", msg_id: str, msg_type: str, p
 async def pipeline_slot_spawn(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     from . import app
 
+    slot_pin = _profile_pin_for_bookkeeping(
+        payload.get("agent", ""), payload.get("pane_id"), payload.get("profile_id"))
     project = app.project_store.record_slot_spawn(
         payload["workspace_path"],
         stage_index=int(payload["stage_index"]),
@@ -6897,9 +8934,10 @@ async def pipeline_slot_spawn(session: "Session", msg_id: str, msg_type: str, pa
         # "" and persist later via pipeline.slot_session once detected.
         session_id=payload.get("session_id", ""),
         session_home_id=payload.get("session_home_id", ""),
-        profile_id=_profile_pin_for_spawn(payload.get("agent", ""), payload.get("profile_id")),
+        profile_id=slot_pin,
         run_group_id=payload.get("run_group_id", ""),
     )
+    app.pane_account_history.pin(str(payload["pane_id"]), _account_pin_for_history(slot_pin))
     await session.send_json(
         make_response(msg_id, msg_type, app._project_payload(project))
     )
@@ -6920,13 +8958,25 @@ async def pipeline_slot_session(session: "Session", msg_id: str, msg_type: str, 
     )
 
 
-async def _sweep_pane_ptys(session: "Session", pane_id: str) -> None:
+async def _sweep_pane_ptys(session: "Session", pane_id: str, *, force: bool = True) -> None:
     """Take down any PTY still running under a pane whose record is going away.
 
     The renderer kills through its own terminal ref first and this then finds
     nothing; it is the panes without one — a restore placeholder, or a pane
     whose kill was refused — that would otherwise have their record removed
     while the process kept running with nothing left pointing at it.
+
+    force=False for a caller that keeps the record: the CLI it reaches is one
+    the renderer never managed to kill, so it is running normally, and the
+    record left behind promises a resume that reads the transcript it has not
+    finished writing. kill() escalates to SIGKILL after its own grace either
+    way, so the process still goes down.
+
+    Note for a future caller: this also closes the pane's dev-time interval and
+    drops its attribution registration, because every caller so far means "the
+    process behind this pane is ending" even when the record survives (a closed
+    workspace's panes come back as placeholders, which re-register on realize).
+    A caller that keeps the pane RUNNING on screen must not come through here.
     """
     from . import app
 
@@ -6935,9 +8985,11 @@ async def _sweep_pane_ptys(session: "Session", pane_id: str) -> None:
         # would match whatever the lookup returns for "no pane".
         return
     for term_session_id in session.terminals.live_session_ids_for_pane(pane_id):
-        await session.terminals.kill(term_session_id, force=True)
+        await session.terminals.kill(term_session_id, force=force)
         app._PTY_OWNERS.pop(term_session_id, None)
         app.attribution.unregister_pane(pane_id)
+    for workspace_path in app.dev_time_store.pane_removed(pane_id):
+        await app.broadcast(make_event("devtime.changed", {"workspace_path": workspace_path}))
 
 
 @handler("pipeline.slot_unspawn")
@@ -6962,6 +9014,7 @@ async def pipeline_slot_unspawn(session: "Session", msg_id: str, msg_type: str, 
         "",
     )
     await _sweep_pane_ptys(session, pane_id)
+    portable_credentials.forget_launch(str(pane_id or ""))
     await session.send_json(
         make_response(msg_id, msg_type, app._project_payload(project))
     )
@@ -7071,6 +9124,8 @@ async def manual_pane_spawn(session: "Session", msg_id: str, msg_type: str, payl
         await session.send_json(make_error(msg_id, msg_type, "BAD_REQUEST", unsafe))
         return
 
+    manual_pin = _profile_pin_for_bookkeeping(
+        payload.get("agent", ""), payload.get("pane_id"), payload.get("profile_id"))
     project = app.project_store.record_manual_pane_spawn(
         payload["workspace_path"],
         pane_id=payload["pane_id"],
@@ -7082,12 +9137,13 @@ async def manual_pane_spawn(session: "Session", msg_id: str, msg_type: str, payl
         effort=payload.get("effort", ""),
         session_id=payload.get("session_id", ""),
         session_home_id=payload.get("session_home_id", ""),
-        profile_id=_profile_pin_for_spawn(payload.get("agent", ""), payload.get("profile_id")),
+        profile_id=manual_pin,
         run_group_id=payload.get("run_group_id", ""),
         output_log_file=payload.get("output_log_file", ""),
         origin=payload.get("origin", ""),
         spawned_by=payload.get("spawned_by", ""),
     )
+    app.pane_account_history.pin(str(payload["pane_id"]), _account_pin_for_history(manual_pin))
     await session.send_json(
         make_response(msg_id, msg_type, app._project_payload(project))
     )
@@ -7110,9 +9166,70 @@ async def manual_pane_unspawn(session: "Session", msg_id: str, msg_type: str, pa
     )
     for swept_id in dict.fromkeys([pane_id, *removed_pane_ids]):
         await _sweep_pane_ptys(session, swept_id)
+        portable_credentials.forget_launch(str(swept_id))
+    # A Codex pane's home is named after its pane id, or after the id a
+    # restored pane kept using (session_home_id). Its PTY is down by now.
+    for home_id in dict.fromkeys([
+        pane_id,
+        *removed_pane_ids,
+        *(p.session_home_id for p in project.panes
+          if p.pane_id in removed_pane_ids and p.session_home_id),
+    ]):
+        await _reclaim_codex_home(str(home_id))
     await session.send_json(
         make_response(msg_id, msg_type, app._project_payload(project))
     )
+
+
+@handler("pipeline.slot_unspawn_by_pane")
+async def pipeline_slot_unspawn_by_pane(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """Retire a pipeline pane's record by pane id, and take its PTY with it.
+
+    pipeline.slot_unspawn addresses a slot by (stage_index, slot_label), which
+    the renderer can only resolve against the pipeline its window is showing —
+    the wrong one when the workspace being closed ran a different pipeline, and
+    a wrong-but-valid index retires some other slot's record. The pane id is
+    shared verbatim between the live pane and the record, so it cannot drift.
+    """
+    from . import app
+
+    pane_id = payload["pane_id"]
+    # Sweep BEFORE the store: load_or_create raises when the workspace folder
+    # is gone (renamed, deleted, unmounted while Navide held it open), and the
+    # PTY of a pane that never realized has nothing else pointing at it — the
+    # renderer could not kill what it has no terminal ref for. Losing the
+    # record update to that is recoverable; losing the process is not.
+    await _sweep_pane_ptys(session, pane_id)
+    project, retired = app.project_store.record_pane_unspawn_by_id(
+        payload["workspace_path"], pane_id=pane_id
+    )
+    if not retired:
+        # Not an error — the record may already be removed. Worth a line all the
+        # same: the caller closed a workspace after telling the user these panes
+        # would not come back, and a miss here is how they come back anyway.
+        log.info(
+            "slot_unspawn_by_pane matched no live record: pane=%s workspace=%s",
+            pane_id,
+            payload["workspace_path"],
+        )
+    await session.send_json(
+        make_response(msg_id, msg_type, {**app._project_payload(project), "retired": retired})
+    )
+
+
+@handler("manual_pane.release_pty")
+async def manual_pane_release_pty(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """End a pane's PTY while its record stays 'spawned'.
+
+    Closing a workspace ends the CLIs running in it but keeps the records, so
+    reopening it brings the panes back as resumable placeholders. The renderer
+    kills through its own terminal ref — and a pane that never realized has
+    none, which is why unspawn carried the sweep that reached it. A close that
+    keeps the record sends no unspawn, so it says this instead; without it the
+    placeholder's process would keep running with nothing pointing at it.
+    """
+    await _sweep_pane_ptys(session, payload["pane_id"], force=False)
+    await session.send_json(make_response(msg_id, msg_type, {"ok": True}))
 
 
 @handler("manual_pane.session")
@@ -7151,8 +9268,42 @@ async def pane_set_run_group(session: "Session", msg_id: str, msg_type: str, pay
             )
         )
         return
+    # Re-point the live token attribution too, so usage from here on lands in
+    # the new group's bucket. A pane the attribution layer never registered
+    # (e.g. a placeholder) has nothing to move — that is not an error.
+    app.attribution.set_pane_group(
+        payload["pane_id"], str(payload.get("run_group_id") or "")
+    )
     await session.send_json(
         make_response(msg_id, msg_type, app._project_payload(project))
+    )
+
+
+@handler("pane.set_parent")
+async def pane_set_parent(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """Re-parent a pane in the project record — the lineage half of moving a
+    pane, next to pane.set_run_group. "" as spawned_by makes it a root."""
+    from . import app
+
+    outcome = app.project_store.set_pane_parent(
+        payload["workspace_path"],
+        pane_id=payload["pane_id"],
+        spawned_by=str(payload.get("spawned_by") or ""),
+    )
+    if isinstance(outcome, str):
+        # Say so rather than answering ok: the caller re-points the pane
+        # locally on this reply, which must not happen when nothing was
+        # written — and a cycle refused here would otherwise be shown as a
+        # tree that the record does not hold.
+        code, message = {
+            "not_found": ("PANE_NOT_FOUND", f"no pane record for {payload['pane_id']!r} in this workspace"),
+            "parent_not_found": ("PARENT_NOT_FOUND", f"no pane record for parent {payload.get('spawned_by')!r} in this workspace"),
+            "cycle": ("LINEAGE_CYCLE", "that parent is the pane itself or one of its descendants"),
+        }[outcome]
+        await session.send_json(make_error(msg_id, msg_type, code, message))
+        return
+    await session.send_json(
+        make_response(msg_id, msg_type, app._project_payload(outcome))
     )
 
 
@@ -7585,6 +9736,29 @@ async def agent_spawn_result(session: "Session", msg_id: str, msg_type: str, pay
     await session.send_json(make_response(msg_id, msg_type, {"ok": True, "delivered": delivered}))
 
 
+@handler("agent_spawn.kickoff")
+async def agent_spawn_kickoff(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """A window's kickoff verdict for an agent_spawn.request — whether the
+    task was observed landing in the new pane — handed to the cli_open_agent
+    call still waiting on it."""
+    from .mcp_server import server as plan_mcp
+
+    request_id = str(payload.get("request_id") or "")
+    if not request_id:
+        await session.send_json(
+            make_error(msg_id, msg_type, "BAD_REQUEST", "agent_spawn.kickoff needs request_id")
+        )
+        return
+    verdict: dict[str, Any] = {
+        "pane_id": str(payload.get("pane_id") or ""),
+        "kickoff": str(payload.get("kickoff") or ""),
+    }
+    if payload.get("reason"):
+        verdict["reason"] = str(payload["reason"])
+    delivered = plan_mcp.resolve_kickoff(request_id, verdict)
+    await session.send_json(make_response(msg_id, msg_type, {"ok": True, "delivered": delivered}))
+
+
 @handler("ui.invoke.result")
 async def ui_invoke_result(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     """A renderer window's reply to a ui.invoke.request, handed to the
@@ -7610,9 +9784,52 @@ async def ui_invoke_result(session: "Session", msg_id: str, msg_type: str, paylo
 
 @handler("agent_msg.list")
 async def agent_msg_list(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import app
+
     raw_ws = payload.get("workspace_path")
     workspace_path = str(raw_ws) if isinstance(raw_ws, str) and raw_ws else None
     entries = [e.to_dict() for e in agent_messaging.list_panes(workspace_path)]
+
+    # Add `workspace_display_name` — the workspace's user-set alias — so mention
+    # menus can title a section with the name the user chose. Done HERE, on the
+    # dict the roster handed back, rather than in RegisteredPane.to_dict():
+    # workspace_label / qualified_name there are the `<folder>/<pane>`
+    # addressing protocol (also MCP cli_list_targets' `address` and the
+    # cross-device three-part address), so the roster stays a roster and this
+    # stays a presentation detail of one payload.
+    #
+    # Source is the recent-list mirror, which the backend keeps equal to the
+    # display name (alias when set, folder basename otherwise). A path that is
+    # not in the mirror — a workspace never opened from this machine's recent
+    # list — gets NO field at all: the mirror has nothing to say about it, and
+    # the frontend falls back to `workspace_label` (the basename) on its own.
+    # The mirror cannot tell "no alias" from "alias equal to the folder name"
+    # either way — it stores the basename for both.
+    #
+    # Offloaded like workspace.list_recent: the mirror is sqlite plus an
+    # isdir() per entry, and this handler is polled every few seconds by every
+    # AI dock panel — so with nothing to enrich the read is skipped outright.
+    def _display_names() -> dict[str, str]:
+        store = app.recent_workspaces_store
+        return {
+            str(e.get("path", "")): str(e.get("name", "") or "")
+            for e in store.list()
+        }
+
+    names = await asyncio.to_thread(_display_names) if entries else {}
+    if names:
+        normalize = app.recent_workspaces_store._normalize
+        for entry in entries:
+            raw_path = entry.get("workspace_path") or ""
+            if not raw_path:
+                continue
+            # Both sides through the store's own normalization: the mirror keys
+            # are abspath(expanduser(...)) and a roster path is whatever the
+            # window registered, so comparing them raw misses silently.
+            display = names.get(normalize(str(raw_path)), "")
+            if display:
+                entry["workspace_display_name"] = display
+
     await session.send_json(make_response(msg_id, msg_type, {"panes": entries}))
 
 

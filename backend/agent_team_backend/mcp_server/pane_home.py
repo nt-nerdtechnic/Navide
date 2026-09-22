@@ -16,8 +16,8 @@ Two shapes, picked by what the CLI offers:
   mirrored by symlink with the vendor directory rebuilt inside it. This is the
   shape credential_vault already uses for grok login panes.
 
-grok is the awkward one: its MCP servers and its BYO API key live in the *same*
-file (``~/.grok/user-settings.json``), so that file alone cannot be a symlink
+grok is the awkward one: its MCP servers and its own settings live in the
+*same* file (``~/.grok/config.toml``), so that file alone cannot be a symlink
 and is copied instead. Which copy a spawn builds on is decided by mtime (see
 _base_config): a pane that rotated its own key keeps it, and an account switch
 reaches the pane on its next spawn but never one already running. Its OAuth
@@ -36,13 +36,18 @@ import os
 import re
 import shutil
 import tempfile
+import tomllib
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import tomli_w
+
 from agent_team_backend.cli_vendors import registry
 from agent_team_backend.cli_vendors.base import McpWiring, mcp_document
+from agent_team_backend import osplat
+from agent_team_backend.osplat import secret_files
 
 log = logging.getLogger("agent_team_backend.mcp_server.pane_home")
 
@@ -103,7 +108,20 @@ class ShimSpec:
 
     @property
     def env_var(self) -> str:
-        return self.mcp.config_dir_env or "HOME"
+        """The variable the CLI reads for the directory: its own, or the
+        platform's spelling of the home (``USERPROFILE`` on Windows — agy
+        resolves its config root from it and ignores ``HOME``)."""
+        return self.mcp.config_dir_env or osplat.paths.home_env_var()
+
+    def spawn_env(self, root: str) -> dict[str, str]:
+        """Every variable handing ``root`` to the CLI. A relocated home is
+        spelled both ways: the platform's own for CLIs that resolve the home
+        natively, and ``HOME`` for the Node CLIs that consult it first (one key
+        on POSIX, where the two coincide)."""
+        env = {self.env_var: root}
+        if self.shims_home:
+            env["HOME"] = root
+        return env
 
 
 # Only the mirror's own knobs. The vendors are whichever ones the registry says
@@ -115,6 +133,7 @@ _MIRROR_EXTRAS: dict[str, dict[str, tuple[str, ...]]] = {
     # grok shim lists them explicitly: they are absent after a clean shutdown,
     # so "link it only if it already exists" would leave them pane-local.
     "grok": {
+        "seeded_dirs": ("sessions",),
         "seeded_files": ("grok.db", "grok.db-wal", "grok.db-shm"),
         "volatile": ("grok.db-wal", "grok.db-shm"),
     },
@@ -147,6 +166,25 @@ def real_home() -> Path:
 def panes_root() -> Path:
     """Parent of every shim home: ``~/.navide-panes/<agent>/<pane>``."""
     return real_home() / PANES_DIR_NAME
+
+
+def unavailable_reason(agent_key: str) -> str | None:
+    """Why no shim can be built for ``agent_key`` on this machine, or None.
+
+    A shim is a tree of links. Without the privilege (Windows before Developer
+    Mode) every entry would fail one by one, so the answer is known before any
+    filesystem work — and the caller can tell the pane, whose only other trace
+    of the degradation is a backend log line.
+    """
+    if agent_key not in SHIM_SPECS:
+        return None
+    if not osplat.paths.symlinks_available():
+        return (
+            "symbolic links are not available to this process, so the per-pane "
+            f"{agent_key} home cannot be built; enable Windows Developer Mode "
+            "(Settings > For developers) or run Navide elevated"
+        )
+    return None
 
 
 def shim_root(agent_key: str, pane_id: str) -> Path | None:
@@ -259,7 +297,14 @@ def _mirror(
             log.warning("shim symlink %s -> %s failed: %s", link, item, err)
 
 
-def _read_json_object(path: Path) -> dict[str, Any]:
+def _is_toml(path: Path) -> bool:
+    """Which codec this config file speaks. The vendor names the file, so the
+    suffix is the whole decision: grok's is config.toml, kimi's and
+    antigravity's are JSON."""
+    return path.suffix == ".toml"
+
+
+def _read_config_object(path: Path) -> dict[str, Any]:
     """The user's config as a dict; empty for absent, unreadable or non-object.
 
     Unparseable input is treated as empty rather than propagated: the result
@@ -272,6 +317,12 @@ def _read_json_object(path: Path) -> dict[str, Any]:
         return {}
     if not raw:
         return {}
+    if _is_toml(path):
+        try:
+            return tomllib.loads(raw)
+        except tomllib.TOMLDecodeError:
+            log.warning("%s is not valid TOML — shim starts from an empty config", path)
+            return {}
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError:
@@ -280,7 +331,7 @@ def _read_json_object(path: Path) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def _seed_link_targets(spec: ShimSpec, real_vendor: Path) -> None:
+def _seed_link_targets(spec: ShimSpec, real_vendor: Path, shim_vendor: Path) -> None:
     """Create the empty real targets the seeded names need to be linkable."""
     if not real_vendor.is_dir():
         # The CLI has never run. Creating its config directory here would put
@@ -291,6 +342,11 @@ def _seed_link_targets(spec: ShimSpec, real_vendor: Path) -> None:
     for name in spec.seeded_dirs:
         target = real_vendor / name
         if target.exists() or target.is_symlink():
+            continue
+        existing = shim_vendor / name
+        if existing.is_dir() and not existing.is_symlink():
+            # The next mirror pass adopts this directory. An empty seed here
+            # would turn the older pane's only session tree into a conflict.
             continue
         try:
             target.mkdir(parents=True, exist_ok=True)
@@ -310,8 +366,8 @@ def _seed_link_targets(spec: ShimSpec, real_vendor: Path) -> None:
 def _base_config(real: Path, shim: Path) -> dict[str, Any]:
     """The document our entry is merged into: the newer of the two copies.
 
-    grok keeps its API key in the same file as its MCP servers, so a login or
-    a token rotation done inside a pane lives only in the shim copy — always
+    grok keeps its own settings in the same file as its MCP servers, so an
+    edit made inside a pane lives only in the shim copy — always
     rebuilding from the real file would throw it away on the next spawn, and
     the user would be asked to log in again. When the real file is the newer
     one (the user switched accounts or edited it) that one wins instead.
@@ -319,20 +375,25 @@ def _base_config(real: Path, shim: Path) -> dict[str, Any]:
     try:
         shim_mtime = shim.stat().st_mtime
     except OSError:
-        return _read_json_object(real)
+        return _read_config_object(real)
     try:
         real_mtime = real.stat().st_mtime
     except OSError:
-        return _read_json_object(shim)
+        return _read_config_object(shim)
     # Strictly newer, so a tie goes to the real file: coarse filesystem
     # timestamps (1s on HFS+ and exFAT) make ties real, and silently shadowing
     # an account switch is the worse of the two failures.
-    return _read_json_object(shim if shim_mtime > real_mtime else real)
+    return _read_config_object(shim if shim_mtime > real_mtime else real)
 
 
 def _write_config(path: Path, document: dict[str, Any]) -> None:
-    """Atomically write the shim's config, 0600 (grok's carries an API key)."""
-    content = json.dumps(document, indent=2) + "\n"
+    """Atomically write the shim's config, 0600 (grok's carries its settings).
+
+    TOML is re-emitted rather than patched: the shim copy is ours to rebuild,
+    so the user's data survives the round trip while comments and key order do
+    not. Their own file is never written — only this copy.
+    """
+    content = tomli_w.dumps(document) if _is_toml(path) else json.dumps(document, indent=2) + "\n"
     try:
         if path.read_text(encoding="utf-8") == content:
             return
@@ -372,6 +433,10 @@ def prepare(
     root = shim_root(agent_key, pane_id)
     if spec is None or root is None:
         return None
+    reason = unavailable_reason(agent_key)
+    if reason is not None:
+        log.warning("%s pane %s spawns unwired: %s", agent_key, pane_id, reason)
+        return None
     home = real_home()
     if PANES_DIR_NAME in home.parts:
         # The backend was launched from inside a shimmed pane and inherited its
@@ -385,9 +450,7 @@ def prepare(
         # copy of the API key, so no part of the path may be world-readable,
         # even briefly.
         for directory in (panes_root(), root.parent, root):
-            directory.mkdir(parents=True, exist_ok=True)
-            os.chmod(directory, 0o700)
-        _seed_link_targets(spec, real_vendor)
+            secret_files.make_private_dir(directory)
         if spec.shims_home:
             # PANES_DIR_NAME is skipped alongside the vendor dir: it lives in
             # the real home too, and mirroring it would point every shim at the
@@ -396,6 +459,7 @@ def prepare(
             vendor_root = root / spec.vendor_dir
         else:
             vendor_root = root
+        _seed_link_targets(spec, real_vendor, vendor_root)
         # Rebuild each directory on the way to the config file, so only the
         # leaf is ours and every sibling stays a link to the user's.
         src, dst = real_vendor, vendor_root

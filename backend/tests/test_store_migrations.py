@@ -12,6 +12,7 @@ import os
 
 import pytest
 
+from agent_team_backend import osplat
 from agent_team_backend import store_migrations as sm
 from agent_team_backend.stages_store import PIPELINES_FILE, SCHEMA_VERSION, StagesStore
 from agent_team_backend.tokens_store import (
@@ -161,6 +162,7 @@ class TestStartupBackup:
         finally:
             restored.close()
 
+    @pytest.mark.skipif(not osplat.paths.enforces_posix_modes(), reason="POSIX mode bits")
     def test_navide_db_backup_is_owner_only(self, tmp_path):
         # The backup carries the same secrets (API keys) as the live
         # database, which is chmod'd 0600 — the snapshot must match.

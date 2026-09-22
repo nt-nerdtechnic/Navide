@@ -13,6 +13,12 @@ import { usePreview } from '../preview/usePreview'
 
 const props = defineProps<{
   workspacePath: string
+  // The alias the user gave this workspace, when the host knows one. Optional
+  // because the two hosts learn it in different ways — the main window from its
+  // alias store, the mini-IDE from its entry query — so each passes its own
+  // already-resolved value and a host that has none simply omits it, leaving
+  // the folder name (the behaviour before aliases existed).
+  workspaceDisplayName?: string
   backend: ReturnType<typeof useBackend>
   // When embedded inside the editor window, file opens are handled in-place via
   // the `open-file` event instead of spawning a separate editor window.
@@ -86,6 +92,9 @@ const treeView = computed<{ rows: Row[]; notes: Map<string, DirNote[]> }>(() => 
 const rows = computed<Row[]>(() => treeView.value.rows)
 
 const wsName = computed(() => {
+  // A blank alias is the same as none — that is how clearing one works.
+  const alias = props.workspaceDisplayName?.trim()
+  if (alias) return alias
   const p = props.workspacePath.replace(/\/+$/, '')
   return p.split('/').pop() || p
 })

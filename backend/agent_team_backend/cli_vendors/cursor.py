@@ -80,6 +80,7 @@ from ..log_readers.base import (
     user_prompt_text,
 )
 from .base import (
+    AccountSwitchSpec,
     Dep,
     McpServerConfig,
     McpValue,
@@ -87,6 +88,7 @@ from .base import (
     SkillsWiring,
     VendorSpec,
     command_text,
+    keychain_payload_items,
     platform_paths,
 )
 from ..usage_common import (
@@ -136,6 +138,16 @@ _MAX_BLOBS_PER_PASS = 512
 # Cap on the reply text a turn_complete carries (matches the other readers'
 # intent: enough for the messaging protocol, not a transcript dump).
 _MAX_TURN_TEXT = 8000
+
+
+def _cap_text(text: str) -> str:
+    """Head-and-tail cap, same shape as the other readers' _cap_text: the
+    loop's <<LOOP_DONE>> and the messaging ---MSG-END--- both sit on the reply's
+    LAST line, so a head-only slice of a long reply silently dropped them."""
+    if len(text) <= _MAX_TURN_TEXT:
+        return text
+    half = _MAX_TURN_TEXT // 2
+    return f"{text[:half]}\n…\n{text[-half:]}"
 
 # What the user actually typed, inside Cursor's prompt wrapper. Sampled rows:
 #
@@ -222,6 +234,9 @@ def cursor_project_hash(cwd: str) -> str:
 
 class CursorLogReader(LogReader):
     vendor: str = "cursor"
+
+    #: The log records no token usage, so there are no turns to cut.
+    turns_method: str = "unsupported"
 
     def _chats_root(self) -> Path:
         return cursor_chats_root()
@@ -453,7 +468,7 @@ class CursorLogReader(LogReader):
                     vendor="cursor", event_type="turn_complete", cwd=cwd,
                     session_id=session_id, file_path=str(path), dedup_key=key,
                     timestamp=stamp(), detail="assistant",
-                    text=join_text_blocks(content, "text")[:_MAX_TURN_TEXT],
+                    text=_cap_text(join_text_blocks(content, "text")),
                 ))
             elif role == "user":
                 # "user" is the cross-end contract detail panes are named
@@ -531,7 +546,7 @@ def _workspace_match(self, usage, ws_path, owner_workspace=None):
     if owner_workspace is not None and owner_workspace == ws_path:
         return True
     hash_dir = cursor_project_hash(ws_path)
-    if hash_dir and f"/{hash_dir}/" in usage.file_path:
+    if hash_dir and hash_dir in Path(usage.file_path).parts:
         return True
     return False
 
@@ -541,7 +556,7 @@ def _pane_cwd_match(self, usage, pane_cwd, pane_id):
     # path instead. Only the claim fallbacks use this — marker binding never
     # depends on it.
     hash_dir = cursor_project_hash(pane_cwd)
-    return bool(hash_dir) and f"/{hash_dir}/" in usage.file_path
+    return bool(hash_dir) and hash_dir in Path(usage.file_path).parts
 
 
 CursorLogReader.binds_shared_db_by_marker = True
@@ -553,6 +568,8 @@ CursorLogReader.pane_cwd_match = _pane_cwd_match
 # ---- usage quota -----------------------------------------------------------
 
 CURSOR_KEYCHAIN_SERVICE = "cursor-access-token"
+CURSOR_REFRESH_KEYCHAIN_SERVICE = "cursor-refresh-token"
+CURSOR_KEYCHAIN_ACCOUNT = "cursor-user"
 #: Where Cursor keeps `state.vscdb` *below* its own application-support
 #: directory. The part above it differs per platform — `~/Library/Application
 #: Support` on macOS, `~/.config` on Linux, `%APPDATA%` on Windows — so it is
@@ -577,6 +594,16 @@ def _cursor_jwt_claims(token: str) -> dict | None:
     except (ValueError, UnicodeDecodeError):
         return None
     return data if isinstance(data, dict) else None
+
+
+def identity_from_secret(secret):
+    """A parked slot holds both Keychain items (access + refresh). Signed in
+    when the access token is a decodable session JWT; its ``sub`` user id is
+    surfaced as the identity (no email is stored beside the token)."""
+    items = keychain_payload_items(secret)
+    access = items.get(f"{CURSOR_KEYCHAIN_SERVICE}|{CURSOR_KEYCHAIN_ACCOUNT}")
+    user = cursor_user_id(access) if access else None
+    return {"email": user, "signedIn": user is not None}
 
 
 def cursor_user_id(token: str) -> str | None:
@@ -793,6 +820,10 @@ def _session_exists(workspace_path: str, session_id: str) -> bool:
 
 SPEC = VendorSpec(
     key="cursor",
+    # The web quota endpoint is not evidence of the CLI's inference hosts.
+    expected_hosts=(),
+    # Verified CLI conversation store; exclude the IDE's other .cursor data.
+    data_dirs=lambda ctx: (ctx.path(ctx.home / ".cursor" / "chats"),),
     supports_model=True,
     # Verified 2026-08-15 (docs): .cursor/skills and .agents/skills in the
     # project, ~/.cursor/skills globally, and no relocation variable at all —
@@ -806,6 +837,31 @@ SPEC = VendorSpec(
         reads_shared_root=True,
     ),
     label="Cursor CLI",
+    # Multi-account: cursor-agent keeps its session in two macOS Keychain
+    # items (access + refresh, account "cursor-user"), swapped as a pair. No
+    # config-dir variable isolates a login, so a sign-in runs against the
+    # real Keychain and is captured afterwards. The display ``authInfo`` in
+    # cli-config.json is the CLI's own cache and is left alone (it re-derives
+    # it from the token). Non-macOS storage not established from source.
+    # Restart, then ``cursor-agent --resume=<uuid>``.
+    slot_file="credential.json",
+    identity_from_secret=identity_from_secret,
+    account_switch=AccountSwitchSpec(
+        auth_scope="cursor",
+        method="restart",
+        store="keychain",
+        evidence="source",
+        verified_version="2026.08.25-3e8eec8",
+        platforms=("darwin",),
+        keychain_items=(
+            (CURSOR_KEYCHAIN_SERVICE, CURSOR_KEYCHAIN_ACCOUNT),
+            (CURSOR_REFRESH_KEYCHAIN_SERVICE, CURSOR_KEYCHAIN_ACCOUNT),
+        ),
+        # `cursor-agent` honours CURSOR_API_KEY over the stored session.
+        shadowing_env=("CURSOR_API_KEY",),
+        resume="native",
+        todo="cli-config.json authInfo shows the previous account until the CLI refreshes it; non-macOS storage unknown; no real-account round-trip recorded",
+    ),
     # The one CLI with no spawn-time surface — no MCP flag, no config
     # variable — so its per-project config file is the only way in. A bare
     # "url" is read as a remote server (stdio is the shape that names its
@@ -832,8 +888,13 @@ SPEC = VendorSpec(
     # alternate so a machine still carrying the legacy binary is detected and
     # spawnable instead of being reported as not installed.
     install_dep=Dep("cursor", "Cursor CLI", "Cursor terminal coding agent CLI", "agent_cli",
-        ["agent", "--version"], r"(\d+\.\d+\.\d+)",
+        ["agent", "--version"], r"^(\d+\.\d+\.\d+)",
         alt_commands=("cursor-agent",),
+        # Cursor prints a bare version (`2026.08.25-3e8eec8`); a squatter on
+        # the `agent` name prints its own name first. Anchoring the version
+        # pattern and asking for the same shape here is what tells the two
+        # apart — measured against both binaries on 2026-09-18.
+        identity_regex=r"^\d+\.\d+",
         install_cmd="curl https://cursor.com/install -fsS | bash",
         needs_terminal=True, requires_binaries=("curl",), optional=True,
         docs_url="https://cursor.com/docs/cli",

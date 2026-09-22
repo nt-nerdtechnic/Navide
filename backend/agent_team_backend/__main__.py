@@ -4,14 +4,61 @@ import argparse
 import logging
 import sys
 
-import socket
+from .git_askpass_helper import ASKPASS_FLAG, main as askpass_main
+from .credential_path_helper import HELPER_FLAG, main as credential_path_main
 
-import uvicorn
+if len(sys.argv) > 1 and sys.argv[1] == HELPER_FLAG:
+    raise SystemExit(credential_path_main(sys.argv[2:]))
 
-from . import __version__
-from .app import app as _fastapi_app
-from . import confirm_token, ws_auth
-from .applog import backend_port_file, setup_file_logging
+# This process was started by git as GIT_ASKPASS (through the launcher
+# `osplat.paths.askpass_launcher` wrote), not to serve: answer the one prompt
+# on argv and exit, which the helper does itself.
+#
+# Before the imports below, not inside `main()`, and this is why: git takes the
+# FIRST LINE OF STDOUT as the credential, and importing the backend prints to
+# stdout on the way up. It also keeps a credential prompt instant instead of
+# paying for a whole backend import.
+#
+# Deliberately not an argparse subcommand: git's prompt is free text ("Password
+# for 'https://x':") that must never be parsed as options.
+if len(sys.argv) > 1 and sys.argv[1] == ASKPASS_FLAG:
+    askpass_main(sys.argv[2] if len(sys.argv) > 2 else "")
+
+
+def _self_check_conpty() -> int:
+    """Prove the packaged build can actually open a ConPTY, then exit.
+
+    Windows CI runs this against the FROZEN onefile exe after packaging. The
+    unit tests can only see what the spec collects; they cannot see whether the
+    bootloader extracts winpty's `OpenConsole.exe` such that conpty.dll finds
+    it at runtime. The real work lives in the platform seam
+    (`osplat.terminal_backend.self_check_conpty`) so nothing here branches on
+    the platform: Windows spawns a real ConPTY and fails on a torn-down
+    pseudoconsole, POSIX reports a skip. Kept before the heavy imports and
+    behind an explicit flag so it costs a normal launch nothing.
+    """
+    from . import osplat
+
+    ok, message = osplat.terminal_backend.self_check_conpty()
+    print(message)
+    return 0 if ok else 1
+
+
+if len(sys.argv) > 2 and sys.argv[1] == "--self-check" and sys.argv[2] == "conpty":
+    raise SystemExit(_self_check_conpty())
+
+import os  # noqa: E402
+import socket  # noqa: E402
+
+import threading  # noqa: E402
+import time  # noqa: E402
+
+import uvicorn  # noqa: E402
+
+from . import __version__, osplat  # noqa: E402
+from .app import app as _fastapi_app, cli_risk_service  # noqa: E402
+from . import confirm_token, ws_auth  # noqa: E402
+from .applog import backend_port_file, setup_file_logging  # noqa: E402
 
 
 def _read_confirm_key() -> str:
@@ -27,6 +74,65 @@ def _read_confirm_key() -> str:
         return sys.stdin.readline().strip()
     except Exception:  # noqa: BLE001 - startup must not die over a missing pipe
         return ""
+
+
+SHUTDOWN_LINE = "shutdown"
+
+
+def _watch_stdin_for_shutdown(server: "uvicorn.Server", stream=None) -> None:
+    """Turn a `shutdown` line on stdin into uvicorn's cooperative exit.
+
+    The parent process closes stdin right after the confirm key on POSIX, so
+    EOF is the ordinary case there and means nothing. On Windows there is no
+    SIGTERM to deliver, so Electron keeps the pipe open and writes this line
+    to run the same lifespan shutdown (PTY sweep, watcher teardown) a signal
+    would. Any other line is ignored; a missing or tty stdin is never read.
+    """
+    stream = sys.stdin if stream is None else stream
+    try:
+        if stream is None or stream.closed or stream.isatty():
+            return
+        for line in stream:
+            if line.strip() == SHUTDOWN_LINE:
+                logging.getLogger("agent_team_backend.main").info("shutdown requested on stdin")
+                server.should_exit = True
+                return
+    except Exception:  # noqa: BLE001 - a broken pipe must not take the server down
+        return
+
+
+def _watch_parent_for_shutdown(
+    server: "uvicorn.Server", pid: int, *, interval_s: float = 2.0, is_alive=None, identity=None
+) -> None:
+    """The backend dies with the app when the app cannot say so itself.
+
+    Same cooperative exit as a `shutdown` line on stdin: `should_exit` lets
+    uvicorn run the lifespan shutdown (PTY sweep, watcher teardown) instead of
+    leaving every CLI child behind. Polled, because neither platform has a
+    signal for "your parent is gone" that survives the PyInstaller bootloader
+    and `uv run` sitting between the app and this process — and on Windows the
+    normal quit's stdin `shutdown` never runs after a crash or a Task-Manager
+    kill either.
+
+    The pid alone is not enough on Windows, which reuses pids quickly: a dead
+    parent's number can belong to something else within the poll interval and
+    read as "still alive". So capture the parent's `identity` (pid + start
+    time) up front and treat a changed identity as the parent being gone, the
+    same reading `process_tree.identity` is documented for.
+    """
+    alive = is_alive or osplat.process_tree.is_alive
+    identity_of = identity or osplat.process_tree.identity
+    # "" means the identity could not be read (e.g. the parent already exited):
+    # fall back to the liveness check alone rather than exit on an empty match.
+    original_identity = identity_of(pid)
+    while not server.should_exit:
+        if not alive(pid) or (original_identity and identity_of(pid) != original_identity):
+            logging.getLogger("agent_team_backend.main").info(
+                "parent process %d is gone; shutting down", pid
+            )
+            server.should_exit = True
+            return
+        time.sleep(interval_s)
 
 
 def main() -> int:
@@ -55,6 +161,8 @@ def main() -> int:
             s.bind((args.host, 0))
             resolved_port = s.getsockname()[1]
         log.info("resolved free port: %d", resolved_port)
+    # The CLI risk observer must not flag a CLI's calls back to this backend.
+    cli_risk_service.bound_port = resolved_port
 
     # Write the current port to a discovery file so Claude hooks (installed
     # globally in ~/.claude/settings.json) can find us. Best-effort.
@@ -113,6 +221,14 @@ def main() -> int:
         ws_ping_timeout=60.0,
     )
     server = uvicorn.Server(config)
+    threading.Thread(
+        target=_watch_stdin_for_shutdown, args=(server,), name="stdin-shutdown", daemon=True
+    ).start()
+    parent = osplat.process_tree.parent_to_follow(os.environ)
+    if parent is not None:
+        threading.Thread(
+            target=_watch_parent_for_shutdown, args=(server, parent), name="parent-watch", daemon=True
+        ).start()
 
     log.info("listening on http://%s:%s", args.host, resolved_port)
     print(f"AGENT_TEAM_BACKEND_LISTEN host={args.host} port={resolved_port}", flush=True)

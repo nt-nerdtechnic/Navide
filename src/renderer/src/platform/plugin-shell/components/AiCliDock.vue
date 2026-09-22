@@ -193,15 +193,27 @@ async function refreshMentionTargets(): Promise<void> {
     const resp = await props.terminalPort.listAgentPanes()
     // Every address here lives in another window, so none of them carries a
     // status this panel could read — the menu draws hollow dots and says so by
-    // omission rather than inventing one. Grouped by workspace folder, as in
-    // the main window's menu.
+    // omission rather than inventing one. Sections are KEYED on the workspace's
+    // absolute path, as in the main window's menu, so two projects whose
+    // folders share a name do not merge into one section; the header shows the
+    // workspace's display name (its user-set alias) when the roster carries
+    // one, and the folder name otherwise.
     mentionTargets.value = clusterMentionCandidates(
       (resp.payload?.panes ?? [])
         .filter((p) => p.qualified_name && p.pane_id !== props.paneId)
-        .map((p) => ({
-          address: p.qualified_name as string,
-          group: p.workspace_label || (p.qualified_name as string).split('/')[0],
-        }))
+        .map((p) => {
+          const folder = p.workspace_label || (p.qualified_name as string).split('/')[0]
+          // An older backend sends neither field: the key falls back to the
+          // (ambiguous) folder name and the header to the folder name too. The
+          // alias is absent rather than blank when unknown, so a whitespace-only
+          // value never blanks a section header.
+          const label = p.workspace_display_name?.trim() || folder
+          return {
+            address: p.qualified_name as string,
+            group: p.workspace_path || folder,
+            groupLabel: label,
+          }
+        })
     )
   } catch {
     mentionTargets.value = []
@@ -237,9 +249,16 @@ async function start(): Promise<void> {
       permissionStored: settingsGet<string | null>(cliPermissionKey(agentKey.value), null),
     })
     await term.spawn({
-      // zsh reads ~/.zshrc (where installers add PATH) only in interactive
-      // mode — plain -lc misses it (same wrapping as App.vue spawns).
-      command: [shell, shell.endsWith('zsh') ? '-ilc' : '-lc', command],
+      // The host port knows the platform and builds the command (PowerShell and
+      // cmd.exe on Windows; the same wrapping as App.vue spawns elsewhere).
+      // This dock only ever spawns CLI agents, so it is always an agent pane —
+      // on Windows that skips the PowerShell wrapper (a `--mcp-config {…}`
+      // payload would not survive `-Command`). Without a port: zsh reads
+      // ~/.zshrc (where installers add PATH) only in interactive mode — plain
+      // -lc misses it.
+      command:
+        props.terminalPort.spawnArgv?.(shell, command, { agentPane: true }) ??
+        [shell, shell.endsWith('zsh') ? '-ilc' : '-lc', command],
       cwd: props.workspacePath,
       agentKey: agentKey.value,
       metadata: {

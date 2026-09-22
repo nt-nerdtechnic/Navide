@@ -229,6 +229,37 @@ def test_replace_skips_unsafe_path(tmp_path: Path) -> None:
     assert res["total"] == 0
 
 
+@pytest.mark.parametrize("root_rel", ["", ".agent-team", ".agent-team/mockups"])
+def test_replace_cannot_mutate_readable_mockups(tmp_path: Path, root_rel: str) -> None:
+    _ws(tmp_path)
+    document = tmp_path / ".agent-team" / "mockups" / "preview.html"
+    document.parent.mkdir(parents=True)
+    document.write_text("original")
+    root = tmp_path / root_rel
+
+    result = search_service.replace_in_files(
+        str(root), "original", "changed", [str(document.relative_to(root))],
+    )
+
+    assert result == {"ok": True, "changed": [], "total": 0}
+    assert document.read_text() == "original"
+    assert list(document.parent.iterdir()) == [document]
+
+
+@pytest.mark.parametrize("directory", ["src", ".agent-team/plans", ".agent-team/reports"])
+def test_replace_retains_existing_writable_paths(tmp_path: Path, directory: str) -> None:
+    ws = _ws(tmp_path)
+    document = tmp_path / directory / "editable.html"
+    document.parent.mkdir(parents=True, exist_ok=True)
+    document.write_text("original")
+    rel = str(document.relative_to(tmp_path))
+
+    result = search_service.replace_in_files(ws, "original", "changed", [rel])
+
+    assert result == {"ok": True, "changed": [{"rel_path": rel, "count": 1}], "total": 1}
+    assert document.read_text() == "changed"
+
+
 def test_replace_skips_binary(tmp_path: Path) -> None:
     ws = _ws(tmp_path)
     (Path(ws) / "bin.dat").write_bytes(b"\x00\x01foo\xff")

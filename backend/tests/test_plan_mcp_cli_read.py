@@ -291,6 +291,205 @@ async def test_get_status_includes_ui_when_the_window_answers(
     assert result["ui"] == {"status": "idle", "buffer": "$ "}
 
 
+def _ui_reply(status: str):
+    async def _reply(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {"ok": True, "result": {"status": status, "buffer": "$ "}, "error": None}
+    return _reply
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ui_status", ["running", "starting"])
+async def test_get_status_busy_follows_a_running_ui_badge(
+    monkeypatch: pytest.MonkeyPatch, ui_status: str
+) -> None:
+    """The renderer's badge knows things the backend's activity log cannot — a
+    delivered message the CLI has queued but not consumed shows RUNNING there
+    while the backend still says busy:false. One answer, not two that disagree."""
+    agent_messaging.register("pw", "worker", "/ws/alpha")
+    agent_messaging.register("other", "caller", "/ws/somewhere-else")
+    agent_messaging.set_busy("pw", False)
+    monkeypatch.setattr(plan_mcp, "_ui_request", _ui_reply(ui_status))
+
+    result = await plan_mcp.cli_get_status("alpha/worker", _ctx(pane_id="other"))
+
+    assert result["ui"]["status"] == ui_status
+    assert result["busy"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend_busy", [True, False])
+async def test_get_status_busy_is_backend_or_of_idle_ui(
+    monkeypatch: pytest.MonkeyPatch, backend_busy: bool
+) -> None:
+    agent_messaging.register("pw", "worker", "/ws/alpha")
+    agent_messaging.register("other", "caller", "/ws/somewhere-else")
+    agent_messaging.set_busy("pw", backend_busy)
+    monkeypatch.setattr(plan_mcp, "_ui_request", _ui_reply("idle"))
+
+    result = await plan_mcp.cli_get_status("alpha/worker", _ctx(pane_id="other"))
+
+    assert result["busy"] is backend_busy
+
+
+@pytest.mark.asyncio
+async def test_get_status_busy_is_backend_only_when_the_window_does_not_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agent_messaging.register("pw", "worker", "/ws/alpha")
+    agent_messaging.register("other", "caller", "/ws/somewhere-else")
+    agent_messaging.set_busy("pw", False)
+
+    async def _no_reply(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {"ok": False, "result": None, "error": "timed out"}
+
+    monkeypatch.setattr(plan_mcp, "_ui_request", _no_reply)
+
+    result = await plan_mcp.cli_get_status("alpha/worker", _ctx(pane_id="other"))
+
+    assert "ui" not in result
+    assert result["busy"] is False
+
+
+_USAGE_SNAPSHOT = {
+    "provider": "codex",
+    "status": "ok",
+    "planType": "pro",
+    "windows": [{"kind": "5h", "label": "5h", "usedPercent": 42, "resetsAt": "2026-09-15T20:00:00Z"}],
+    "fetchedAt": "2026-09-15T15:00:00Z",
+    "stale": False,
+}
+
+
+def _usage_payload(monkeypatch: pytest.MonkeyPatch, providers: dict[str, Any]) -> list[int]:
+    """Stub usage_service's cached read; returns a call counter so a test can
+    prove nothing but that one cached read was made."""
+    from agent_team_backend import usage_service
+
+    calls: list[int] = []
+
+    def _payload() -> dict[str, Any]:
+        calls.append(1)
+        return {"providers": providers, "accounts": {}, "enabled": True, "intervalSec": 60}
+
+    monkeypatch.setattr(usage_service.service, "payload", _payload)
+    return calls
+
+
+@pytest.mark.asyncio
+async def test_get_status_carries_the_vendors_cached_usage_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The row is the one cli_usage reports under providers[agent_key], passed
+    through unchanged — Navide neither trims nor annotates a vendor's numbers."""
+    agent_messaging.register("pw", "worker", "/ws/alpha", agent_key="codex")
+    agent_messaging.register("other", "caller", "/ws/somewhere-else")
+    _usage_payload(monkeypatch, {"codex": _USAGE_SNAPSHOT, "claude": {"provider": "claude"}})
+
+    result = await plan_mcp.cli_get_status("alpha/worker", _ctx(pane_id="other"))
+
+    assert result["usage"] == _USAGE_SNAPSHOT
+    assert result["usage"] is not _USAGE_SNAPSHOT  # a copy: the cache is not handed out
+
+
+@pytest.mark.asyncio
+async def test_get_status_omits_usage_when_the_vendor_has_no_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agent_messaging.register("pw", "worker", "/ws/alpha", agent_key="aider")
+    agent_messaging.register("other", "caller", "/ws/somewhere-else")
+    _usage_payload(monkeypatch, {"codex": _USAGE_SNAPSHOT})
+
+    result = await plan_mcp.cli_get_status("alpha/worker", _ctx(pane_id="other"))
+
+    assert "usage" not in result
+    assert result["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_get_status_never_refreshes_usage(monkeypatch: pytest.MonkeyPatch) -> None:
+    """cli_get_status sits under cli_wait_idle's one-second poll: a vendor read
+    here would turn a millisecond call into seconds. One cached read, and the
+    refresh entry points are never touched."""
+    from agent_team_backend import usage_service
+
+    agent_messaging.register("pw", "worker", "/ws/alpha", agent_key="codex")
+    agent_messaging.register("other", "caller", "/ws/somewhere-else")
+    calls = _usage_payload(monkeypatch, {"codex": _USAGE_SNAPSHOT})
+    # Record, do not raise: a raise inside the tool's own try/except would be
+    # swallowed into "no usage" and this test would pass against a refresh.
+    refreshes: list[str] = []
+    monkeypatch.setattr(
+        usage_service.service, "request_refresh",
+        lambda *_a, **_k: refreshes.append("request_refresh"),
+    )
+    monkeypatch.setattr(
+        usage_service.service, "poll_once",
+        lambda *_a, **_k: refreshes.append("poll_once"),
+    )
+
+    result = await plan_mcp.cli_get_status("alpha/worker", _ctx(pane_id="other"))
+
+    assert calls == [1]
+    assert refreshes == []
+    assert result["usage"] == _USAGE_SNAPSHOT
+
+
+@pytest.mark.asyncio
+async def test_get_status_still_answers_when_the_usage_read_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Quota is an extra, not a precondition: a broken usage cache degrades to
+    an absent `usage` block, the same way an unanswered window drops `ui`."""
+    from agent_team_backend import usage_service
+
+    agent_messaging.register("pw", "worker", "/ws/alpha", agent_key="codex")
+    agent_messaging.register("other", "caller", "/ws/somewhere-else")
+    agent_messaging.set_busy("pw", True)
+    app._record_pane_activity("pw", "turn_complete", "done")
+
+    def _boom() -> dict[str, Any]:
+        raise RuntimeError("cache unreadable")
+
+    monkeypatch.setattr(usage_service.service, "payload", _boom)
+
+    result = await plan_mcp.cli_get_status("alpha/worker", _ctx(pane_id="other"))
+
+    assert result["ok"] is True
+    assert "usage" not in result
+    assert result["busy"] is True
+    assert result["last_activity"]["type"] == "turn_complete"
+
+
+@pytest.mark.asyncio
+async def test_get_status_passes_the_renderers_identity_keys_through(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The launch identity (model, account pin, live login/quota flags) lives
+    only in the renderer's pane record; cli_get_status relays whatever
+    ui.pane.getStatus put in the reply without renaming or dropping any of it."""
+    agent_messaging.register("pw", "worker", "/ws/alpha")
+    agent_messaging.register("other", "caller", "/ws/somewhere-else")
+    ui = {
+        "status": "idle",
+        "buffer": "$ ",
+        "agentLabel": "Claude Code",
+        "model": "claude-opus-5",
+        "effort": "high",
+        "profileId": "__default__",
+        "loginExpired": True,
+        "usageLimitUntil": 1789000000000,
+    }
+
+    async def _reply(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {"ok": True, "result": dict(ui), "error": None}
+
+    monkeypatch.setattr(plan_mcp, "_ui_request", _reply)
+
+    result = await plan_mcp.cli_get_status("alpha/worker", _ctx(pane_id="other"))
+
+    assert result["ui"] == ui
+
+
 # ── cli_wait_idle ────────────────────────────────────────────────────────
 
 

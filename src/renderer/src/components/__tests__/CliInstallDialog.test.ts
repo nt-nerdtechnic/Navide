@@ -107,6 +107,68 @@ describe('CliInstallDialog', () => {
     expect(mock.sent.filter((s) => s.type === 'onboarding.install')).toHaveLength(0)
   })
 
+  describe('sign-in step', () => {
+    const detected = () => status({ deps: [dep({ id: 'qwen', status: 'ok', version: '1.2.3' })] })
+
+    it('asks for the login when the CLI is installed but signed out', async () => {
+      const mock = createMockBackend('connected')
+      mock.setResponse('onboarding.status', detected())
+      wrapper = await open(mock, { signInState: 'signed-out' })
+
+      expect(wrapper.find('.ci-signin').exists()).toBe(true)
+      expect(wrapper.text()).toContain(i18n.global.t('cli-install.signin-title', { label: 'qwen' }))
+      // "Ready" must not be claimed for a CLI that cannot do anything yet.
+      expect(wrapper.text()).not.toContain(i18n.global.t('cli-install.done-title', { label: 'qwen' }))
+      // Still the verify step; only the verdict inside it changed.
+      expect(wrapper.findAll('.ci-steps li')[2].classes()).toContain('active')
+    })
+
+    it('reports done when the CLI is installed and signed in', async () => {
+      const mock = createMockBackend('connected')
+      mock.setResponse('onboarding.status', detected())
+      wrapper = await open(mock, { signInState: 'signed-in' })
+
+      expect(wrapper.find('.ci-signin').exists()).toBe(false)
+      expect(wrapper.text()).toContain(i18n.global.t('cli-install.done-title', { label: 'qwen' }))
+    })
+
+    it.each([['unknown'], [undefined]])(
+      'stays silent when sign-in state is %s',
+      async (signInState) => {
+        // "no credential file Navide can read" must never be shown as "signed
+        // out" — that would put a false sign-in step on every CLI Navide
+        // cannot inspect. An OMITTED prop has to land here too: a boolean prop
+        // would have been cast to false by Vue and declared every caller that
+        // left it out signed out, which is why this is a string union.
+        const mock = createMockBackend('connected')
+        mock.setResponse('onboarding.status', detected())
+        wrapper = await open(mock, signInState === undefined ? {} : { signInState })
+
+        expect(wrapper.find('.ci-signin').exists()).toBe(false)
+        expect(wrapper.text()).toContain(i18n.global.t('cli-install.done-title', { label: 'qwen' }))
+      },
+    )
+
+    it('emits login with the dep id and closes, so the login pane is visible', async () => {
+      const mock = createMockBackend('connected')
+      mock.setResponse('onboarding.status', detected())
+      wrapper = await open(mock, { signInState: 'signed-out' })
+
+      await wrapper.find('.ci-signin').trigger('click')
+
+      expect(wrapper.emitted('login')).toEqual([['qwen']])
+      expect(wrapper.emitted('close')).toHaveLength(1)
+    })
+
+    it('does not offer a sign-in before the CLI is even installed', async () => {
+      const mock = createMockBackend('connected')
+      mock.setResponse('onboarding.status', status())
+      wrapper = await open(mock, { signInState: 'signed-out' })
+
+      expect(wrapper.find('.ci-signin').exists()).toBe(false)
+    })
+  })
+
   it('moves to the verify step by itself once the CLI is detected', async () => {
     const mock = createMockBackend('connected')
     mock.setResponse('onboarding.status', status({

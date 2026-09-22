@@ -46,6 +46,44 @@ describe('resolveBackendDataDir', () => {
       '/home/u/.local/share/Agent-Team'
     )
   })
+
+  it('uses %APPDATA% on Windows when set', () => {
+    expect(
+      resolveBackendDataDir({
+        ...base,
+        platform: 'win32',
+        homeDir: 'C:\\Users\\u',
+        appData: 'D:\\Roaming',
+        xdgDataHome: '/xdg/data',
+      })
+    ).toBe('D:\\Roaming\\Agent-Team')
+  })
+
+  it('falls back to the profile Roaming dir on Windows without APPDATA', () => {
+    expect(resolveBackendDataDir({ ...base, platform: 'win32', homeDir: 'C:\\Users\\u' })).toBe(
+      'C:\\Users\\u\\AppData\\Roaming\\Agent-Team'
+    )
+  })
+
+  // The contract: this must land on the same directory the backend's
+  // osplat.paths.app_support_dir("Agent-Team") returns per platform, or the
+  // two sides read different ui_settings.json files.
+  it('pins the packaged default for all three platforms', () => {
+    expect(resolveBackendDataDir({ ...base, platform: 'darwin' })).toBe(
+      '/Users/u/Library/Application Support/Agent-Team'
+    )
+    expect(resolveBackendDataDir({ ...base, platform: 'linux', homeDir: '/home/u' })).toBe(
+      '/home/u/.local/share/Agent-Team'
+    )
+    expect(
+      resolveBackendDataDir({
+        ...base,
+        platform: 'win32',
+        homeDir: 'C:\\Users\\u',
+        appData: 'C:\\Users\\u\\AppData\\Roaming',
+      })
+    ).toBe('C:\\Users\\u\\AppData\\Roaming\\Agent-Team')
+  })
 })
 
 describe('readUiSettingsText', () => {

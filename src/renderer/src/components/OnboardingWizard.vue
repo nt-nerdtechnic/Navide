@@ -14,8 +14,8 @@ const emit = defineEmits<{ (e: 'complete'): void; (e: 'close'): void }>()
 
 const { t } = useI18n()
 const settings = useSettings()
-function toggleLanguage(): void {
-  settings.setLanguage(settings.language.value === 'zh-TW' ? 'en-US' : 'zh-TW')
+function selectLanguage(event: Event): void {
+  settings.setLanguage((event.target as HTMLSelectElement).value)
 }
 
 const ob = useOnboarding(props.backend)
@@ -275,11 +275,11 @@ function finish(): void {
           <span v-if="i < steps.length - 1" class="ob-chev" aria-hidden="true">›</span>
         </li>
       </ol>
-      <button class="ob-lang-btn" @click="toggleLanguage">
-        <span :class="{ active: settings.language.value === 'zh-TW' }">繁中</span>
-        <span class="ob-lang-sep">/</span>
-        <span :class="{ active: settings.language.value === 'en-US' }">EN</span>
-      </button>
+      <select class="ob-lang-btn" :value="settings.language.value" :aria-label="$t('settings.appearance.language')" @change="selectLanguage">
+        <option value="zh-TW">{{ $t('settings.appearance.language-zh-TW') }}</option>
+        <option value="en-US">{{ $t('settings.appearance.language-en-US') }}</option>
+        <option value="ja-JP">{{ $t('settings.appearance.language-ja-JP') }}</option>
+      </select>
       <div class="ob-progress"><span :style="{ width: `${progress}%` }" /></div>
     </header>
 
@@ -638,14 +638,6 @@ function finish(): void {
   cursor: pointer;
   font-size: var(--font-2xs);
   color: var(--text-muted);
-}
-.ob-lang-btn span.active {
-  color: var(--text-bright);
-  font-weight: 600;
-}
-.ob-lang-sep {
-  color: var(--text-muted);
-  margin: 0 2px;
 }
 .ob-progress {
   position: absolute;

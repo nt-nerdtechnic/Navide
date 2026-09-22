@@ -9,6 +9,7 @@ type ManifestPermissionsSummary = import('../../shared/executionPolicy').Manifes
 type PackageVersionGrantSummary = import('../../shared/executionPolicy').PackageVersionGrantSummary
 type LegacyPlansPreferenceProjection = import('../../shared/plansPreferences').LegacyPlansPreferenceProjection
 type LegalRoute = import('../../shared/legalLinks').LegalRoute
+type NewWorkspaceResult = import('../../shared/workspaceCreate').NewWorkspaceResult
 
 interface BackendInfo {
   status: 'starting' | 'ready' | 'error'
@@ -88,7 +89,7 @@ declare global {
       setRecentWorkspaces: (list: { path: string; name: string; exists: boolean }[]) => void
       openMainWindow: (args?: { workspace_path?: string }) => Promise<{ ok: boolean }>
       pickWorkspace: (defaultPath?: string) => Promise<string | null>
-      newWorkspace: () => Promise<string | null>
+      newWorkspace: () => Promise<NewWorkspaceResult>
       getHomeDir: () => Promise<string>
       listOpenWorkspaces: () => Promise<string[]>
       focusWorkspaceWindow: (workspacePath: string) => Promise<boolean>
@@ -125,6 +126,7 @@ declare global {
         cb: (values: LegacyPlansPreferenceProjection) => void,
       ) => () => void
       onOpenResourceManager: (handler: () => void) => () => void
+      onOpenTurnStats: (handler: () => void) => () => void
       requestPaneAction: (args: {
         paneId: string
         action: 'focus' | 'reclaim'
@@ -232,7 +234,7 @@ declare global {
       writeHealthCheckTimeout: (timeoutSec: number) => Promise<{ ok: boolean; error?: string }>
       readCdpDebugConfig: () => Promise<{ ok: boolean; config?: { enabled: boolean; port: number } }>
       writeCdpDebugConfig: (config: { enabled: boolean; port: number }) => Promise<{ ok: boolean; error?: string }>
-      notify: (args: { paneId?: string; title: string; body?: string }) => Promise<{ ok: boolean }>
+      notify: (args: { paneId?: string; title: string; body?: string; silent?: boolean }) => Promise<{ ok: boolean }>
       onFocusPane: (cb: (paneId: string) => void) => void
       dispatchPlanExecution: (args: {
         workspace_path: string

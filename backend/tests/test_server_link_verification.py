@@ -329,9 +329,23 @@ def _running_link(server: ScriptedServer) -> ServerLink:
     return link
 
 
-async def _run_briefly(link: ServerLink, seconds: float) -> None:
+async def _run_briefly(link: ServerLink, seconds: float, until=None) -> None:
+    """Run the link for `seconds`; when `until` is given, wait for it to hold
+    first and only then start that window.
+
+    A window measured from the task's first tick lost races on the Windows
+    runner, where timer slices are ~15 ms: the link had not even connected
+    when it closed. Waiting for the thing under test to happen and then
+    watching for `seconds` is both steadier and stricter — the quiet the
+    caller asserts is quiet *after* the event, not instead of it.
+    """
     task = asyncio.create_task(link._run())
     try:
+        if until is not None:
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + max(seconds, 2.0)
+            while not until() and loop.time() < deadline:
+                await asyncio.sleep(0.01)
         await asyncio.sleep(seconds)
     finally:
         link._stopped = True
@@ -356,7 +370,7 @@ async def test_a_verified_account_does_not_reconnect_in_a_loop(
     server = ScriptedServer(verified=True, status=[])
     link = _running_link(server)
 
-    await _run_briefly(link, 0.3)
+    await _run_briefly(link, 0.3, until=lambda: server.hellos >= 1)
 
     assert server.hellos == 1
 
@@ -373,7 +387,7 @@ async def test_an_old_server_does_not_provoke_a_reconnect_loop_either(
     server = ScriptedServer(verified=False, status=[])  # every status: UNKNOWN_TYPE
     link = _running_link(server)
 
-    await _run_briefly(link, 0.3)
+    await _run_briefly(link, 0.3, until=lambda: server.hellos >= 1)
 
     assert server.hellos == 1
 
@@ -407,6 +421,6 @@ async def test_a_fresh_hello_clears_the_fallback(monkeypatch: pytest.MonkeyPatch
     link = _running_link(server)
     link._verify_fallback = True
 
-    await _run_briefly(link, 0.2)
+    await _run_briefly(link, 0.2, until=lambda: link._verify_fallback is False)
 
     assert link._verify_fallback is False

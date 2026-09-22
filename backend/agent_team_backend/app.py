@@ -8,8 +8,6 @@ import mimetypes
 import os
 import re
 import secrets
-import shlex
-import shutil
 import signal
 import subprocess
 import threading
@@ -32,6 +30,8 @@ from . import hook_drain
 from . import ws_auth
 from . import loop_watchdog
 from . import mem_probe
+from . import osplat
+from . import portable_credentials
 from . import push_delivery
 from . import subagent_tracker
 from .analyzer import DEFAULT_MODEL as ANALYZER_DEFAULT_MODEL
@@ -79,8 +79,11 @@ from .mcp_settings import (
 )
 from .plan_index import PlanIndex, resolve_plan_root
 from .plan_provisioning import ensure_plan_assets, plan_spec_exists
+from .pane_account_history import PaneAccountHistory, parse_event_time
+from .quota_ledger import QuotaLedger
+from .quota_failover import QuotaFailoverService
 from .profile_migration import migrate_legacy_claude_homes
-from .profiles_store import CliProfilesStore
+from .profiles_store import CLAUDE_ENV_OVERRIDES, CliProfilesStore
 from .skills_store import SkillsStore
 from .projects import ProjectStore
 from .spawn_history import SpawnHistoryStore
@@ -88,6 +91,7 @@ from .recent_workspaces import RecentWorkspacesStore
 from .roles_store import RolesStore
 from .stages_store import StagesStore
 from .db import DB_FILENAME, Database, WorkspaceDatabases
+from .dev_time_store import DevTimeStore
 from .store_migrations import run_startup_migrations, version_change
 from .terminals import TerminalService, output_frame_session_id
 from .tokens_store import TokensStore
@@ -98,6 +102,9 @@ from .tokens_store import TokensStore
 # shells, PTYs, Git hooks, and CLI helpers must not inherit a Host credential.
 _HOST_SESSION_TOKEN = os.environ.pop("NAVIDE_BACKEND_HOST_TOKEN", "")
 from .ui_settings import UiSettingsStore
+from .cli_risk import CliRiskService
+from .cli_risk_store import CliRiskStore
+from .sync_engine import SyncStore
 from .history_store import HistoryStore
 from .agent_message_log import AgentMessageLog
 from .preview_log import MAX_ROWS as PREVIEW_MAX_ROWS, PreviewLog
@@ -180,14 +187,29 @@ recent_workspaces_store = RecentWorkspacesStore(db=database)
 roles_store = RolesStore(db=database)
 stages_store = StagesStore(db=database)
 tokens_store = TokensStore(db=database)
+# Which account each pane was pinned to, and when — global like the pane ids.
+pane_account_history = PaneAccountHistory(db=database)
+# Quota cycles per account: the usage poller files samples here; an open
+# cycle's token side is summed from the store's per-account slices.
+quota_ledger = QuotaLedger(db=database, totals_provider=tokens_store.account_window_totals)
+# Account-switch failover authority (policy, incidents, persisted auto budget,
+# switch transactions) — global like the profiles it switches.
+quota_failover = QuotaFailoverService(db=database)
 history_store = HistoryStore(databases=workspace_databases)
 plan_index = PlanIndex(databases=workspace_databases)
 preview_log = PreviewLog(databases=workspace_databases)
+# resolve_pane: file activity under the id the pane answers to now, like
+# _current_pane_id below (a rebuilt pane must not split its time in two).
+dev_time_store = DevTimeStore(
+    databases=workspace_databases, resolve_pane=agent_messaging.resolve_alias
+)
 # Cross-workspace by construction, so it lives in the global database.
 agent_message_log = AgentMessageLog(db=database)
 codex_home_manager = CodexHomeManager()
 cli_profiles_store = CliProfilesStore(db=database)
-credential_vault = CredentialVault()
+from .credential_store import CredentialStores, active_store_metadata, managed_watch_path
+
+credential_vault = CredentialVault(stores=CredentialStores(database, active_store_metadata))
 mcp_manager = MCPManager()
 plugin_host = PluginHost()
 mcp_settings_store = MCPSettingsStore()
@@ -195,6 +217,8 @@ skills_store = SkillsStore()
 analyzer_settings_store = AnalyzerSettingsStore(db=database)
 ai_chat_settings_store = AIChatSettingsStore(db=database)
 ui_settings_store = UiSettingsStore(db=database)
+cli_risk_service = CliRiskService(CliRiskStore(database))
+sync_store = SyncStore(database)
 # Module-level stores share the same database handle.
 pty_registry.set_database(database)
 onboarding_deps.set_database(database)
@@ -305,6 +329,9 @@ _readers = [
     if spec.make_log_reader is not None
 ]
 attribution = Attribution(_readers, db=database)
+# Every path that drops a pane's registration (kill, unspawn, PTY death after
+# the grace period) closes its account interval through this one hook.
+attribution.on_unregister = pane_account_history.release
 _log_watcher: LogWatcher | None = None
 _git_watcher: GitWatcher | None = None
 _credential_watcher: CredentialWatcher | None = None
@@ -441,6 +468,8 @@ class Session:
         self._terminal_create_gates: dict[str, asyncio.Lock] = {}
         self._terminal_create_tombstones: set[tuple[str, str]] = set()
         self._terminal_create_transactions: dict[tuple[str, str], dict[str, Any]] = {}
+        # Server-created target for the next add-account login, never persisted.
+        self._created_cli_profile_id = ""
         # In-flight find_in_files cancellation handle: a newer search from
         # this session sets the event so the superseded scan stops early.
         self._search_cancel: threading.Event | None = None
@@ -883,6 +912,7 @@ def _claim_ptys(session: "Session", terminal_session_ids: list[str]) -> None:
     """Transfer ownership of the given PTY ids to `session`."""
     for tid in terminal_session_ids:
         _PTY_OWNERS[tid] = session
+        quota_failover.note_pty_owner(tid, session)
 
 
 # ── Ownerless-PTY janitor ────────────────────────────────────────────────────
@@ -899,6 +929,7 @@ _OWNERLESS_SWEEP_INTERVAL_SEC = 5 * 60.0
 _OWNERLESS_SINCE: dict[str, float] = {}
 _ownerless_sweeper_task: "asyncio.Task[None] | None" = None
 _mem_probe_task: "asyncio.Task[None] | None" = None
+_dev_time_sweeper_task: "asyncio.Task[None] | None" = None
 
 
 async def _sweep_ownerless_ptys_once(now: float | None = None) -> list[str]:
@@ -939,12 +970,93 @@ async def _ownerless_pty_janitor() -> None:
             log.warning("ownerless-pty sweep failed: %s", err)
 
 
+# SessionStart is run at the first turn in Codex 0.154, not at TUI startup.
+# It complements the existing path/marker detector; nothing waits for a hook.
+from . import codex_session_hooks  # noqa: E402
+
+_codex_pending_starts = codex_session_hooks.PendingStarts()
+
+
+def _live_codex_hook_terms() -> dict[str, Any]:
+    live = {}
+    for terminal_id, owner in list(_PTY_OWNERS.items()):
+        term = owner.terminals.get(terminal_id)
+        if term and not term.closed and term.agent_key == "codex":
+            token = term.metadata.get("codex_launch_token")
+            if token:
+                live[str(token)] = term
+    return live
+
+
+async def _retry_codex_session_start(token: str) -> None:
+    if not _codex_pending_starts.has_pending(token):
+        return
+    term = _live_codex_hook_terms().get(token)
+    if term is None:
+        return
+    paths = _codex_pending_starts.paths(token)
+    if not paths:
+        paths = await asyncio.to_thread(
+            _codex_pending_starts.find_paths, token,
+            Path(term.metadata["codex_session_home"]),
+        )
+    for path in paths:
+        await _on_session_file("codex", path)
+
+
 async def _maybe_announce_session(usage: TokenUsage) -> None:
     """Codex/Antigravity/Grok/OpenCode: when a session file is first matched to its pane,
     tell the frontend so it can persist the id/path for resume-on-restart."""
-    bound = await asyncio.to_thread(attribution.maybe_announce_session, usage)
+    bound = None
+    if usage.vendor == "codex" and _codex_pending_starts.has_pending():
+        live = _live_codex_hook_terms()
+        matched = await asyncio.to_thread(
+            _codex_pending_starts.match, Path(usage.file_path),
+            {token: (term.pane_id, term.cwd) for token, term in live.items()},
+        )
+        if matched:
+            token, pane_id, resume_id = matched
+            # Recheck after disk IO: a respawn may have replaced this process.
+            term = _live_codex_hook_terms().get(token)
+            current_id = term.metadata.get("codex_current_session_id") if term else None
+            if term is None or current_id and current_id != resume_id:
+                _codex_pending_starts.consume(token, resume_id)
+                return
+            if term:
+                bound = attribution.bind_confirmed_session(
+                    vendor="codex", pane_id=pane_id, resume_id=resume_id,
+                    session_file=usage.file_path, session_id=usage.session_id,
+                )
+                if bound or attribution.pane_for_session(resume_id)[0] == pane_id:
+                    _codex_pending_starts.consume(token, resume_id)
+    if bound is None:
+        bound = await asyncio.to_thread(attribution.maybe_announce_session, usage)
     if not bound:
         return
+    pane_id = _current_pane_id(bound.pane_id)
+    workspace_path = bound.workspace_path or usage.cwd
+
+    def persist() -> None:
+        project = project_store.record_detected_session(
+            workspace_path, pane_id=pane_id, session_id=bound.resume_id,
+        )
+        spawn_history_store.patch_entry(
+            workspace_path, pane_id, {"sessionId": bound.resume_id},
+            seed=project.ui_spawn_history,
+        )
+
+    try:
+        await asyncio.to_thread(persist)
+    except OSError:
+        # Keep the renderer's existing persistence path available if a local
+        # write failed; a storage error must not suppress live discovery.
+        log.exception("could not persist detected session for pane=%s", pane_id)
+    if usage.vendor == "codex":
+        # Record log-driven changes too (for example /clear). A delayed first
+        # SessionStart must not put an earlier conversation back on the pane.
+        for term in _live_codex_hook_terms().values():
+            if term.pane_id == bound.pane_id:
+                term.metadata["codex_current_session_id"] = bound.resume_id
     # Second tracking hook, for the vendors that cannot pin a session id at
     # spawn (they bind here, at first match) and for a pane that switches to
     # another session mid-life. terminal.create's hook covers the pinned-id
@@ -960,7 +1072,7 @@ async def _maybe_announce_session(usage: TokenUsage) -> None:
     )
     await broadcast(make_event("session.detected", {
         "vendor": usage.vendor,
-        "pane_id": bound.pane_id,
+        "pane_id": pane_id,
         "session_id": bound.resume_id,  # the id/path `<cli> resume` actually needs
         "workspace_path": bound.workspace_path or usage.cwd,
         "session_file": bound.session_file,
@@ -1023,15 +1135,37 @@ def pane_activity(pane_id: str) -> dict[str, Any] | None:
     return _pane_activity.get(_current_pane_id(pane_id))
 
 
-def _record_pane_activity(pane_id: str, event_type: str, text: str) -> None:
+def _record_pane_activity(
+    pane_id: str, event_type: str, text: str, *, detail: str = ""
+) -> None:
     if not pane_id:
         return
-    _pane_activity[_current_pane_id(pane_id)] = {
+    key = _current_pane_id(pane_id)
+    now = time.monotonic()
+    prior = _pane_activity.get(key)
+    # When the turn this event belongs to began: the first agent_active after
+    # the previous turn ended opens a turn, later events of the same turn
+    # carry that start forward, and the turn_complete closes it. The account
+    # failover reads the pair (start, complete) to tell a turn that ran
+    # entirely under the new account from one that began under the old.
+    if prior is not None and prior["event_type"] != "turn_complete":
+        turn_started = prior.get("turn_started_monotonic", prior["ts_monotonic"])
+    elif event_type == "turn_complete":
+        # A turn end with no observed start (the reader saw only the end, or
+        # the pane is new): when it began is unknown, not "now".
+        turn_started = None
+    else:
+        turn_started = now
+    _pane_activity[key] = {
         "event_type": event_type,
         # Same cap as the broadcast path — this dict must not become the one
         # place an unbounded turn_complete text is retained.
         "text": _cap_activity_text(text) if event_type == "turn_complete" else "",
-        "ts_monotonic": time.monotonic(),
+        "ts_monotonic": now,
+        "turn_started_monotonic": turn_started,
+        # The reader's structured detail (a stop reason such as droid's
+        # ``model_usage_exhausted``) — kept only for turn ends, bounded.
+        "detail": (detail or "")[:200] if event_type == "turn_complete" else "",
     }
 
 
@@ -1040,6 +1174,7 @@ def forget_pane_activity(pane_id: str) -> None:
     _pane_activity.pop(pane_id, None)
     hook_drain.forget_pane(pane_id)
     push_delivery.forget_pane(pane_id)
+    portable_credentials.forget_launch(pane_id)
     forget_pane_live_sessions(pane_id)
 
 
@@ -1074,8 +1209,21 @@ async def _on_log_activity(event: ActivityEvent) -> None:
             pane_id
         )
         _record_pane_activity(
-            pane_id, "agent_active" if superseded else event.event_type, event.text
+            pane_id, "agent_active" if superseded else event.event_type, event.text,
+            detail=event.detail,
         )
+        if event.event_type == "turn_complete":
+            # The per-account turn count (by_account_day / quota cycles): the
+            # reader's turn end is the one signal every vendor emits, on the
+            # transcript's own clock. A superseded turn still finished in
+            # the log — only "the pane is free" is wrong about it.
+            tokens_store.record_turn(
+                event.vendor,
+                pane_account_history.profile_at(
+                    pane_id, parse_event_time(event.timestamp)
+                ),
+                event.timestamp,
+            )
         await broadcast(make_event("agent.activity", {
             "vendor": event.vendor,
             "event_type": event.event_type,
@@ -1093,6 +1241,13 @@ async def _on_log_activity(event: ActivityEvent) -> None:
             # generous — see _ACTIVITY_TEXT_MAX_CHARS.
             "text": _cap_activity_text(event.text),
         }))
+        if dev_time_store.agent_event(
+            attributed.workspace_path, pane_id,
+            "agent_active" if superseded else event.event_type, event.timestamp,
+        ):
+            await broadcast(make_event(
+                "devtime.changed", {"workspace_path": attributed.workspace_path}
+            ))
     except Exception as err:  # noqa: BLE001
         log.warning("activity sink failed: %s", err)
 
@@ -1120,6 +1275,13 @@ def _schedule_tokens_broadcast(workspace_path: str) -> None:
         await broadcast(
             make_event("tokens.changed", tokens_store.snapshot(workspace_path))
         )
+        changed = await asyncio.to_thread(quota_ledger.reconcile_pending, tokens_store)
+        for agent, profile, kind in changed:
+            await broadcast(make_event("tokens.quota_cycles_changed", {
+                "agent_key": agent, "profile_id": profile, "window_kind": kind,
+            }))
+        if tokens_store.has_quota_changes():
+            _schedule_tokens_broadcast(workspace_path)
 
     asyncio.create_task(_fire())
 
@@ -1344,6 +1506,242 @@ def forget_pane_live_sessions(pane_id: str) -> None:
             tokens_store.drop_live_session(*key)
 
 
+async def scan_session_turns(
+    *,
+    pane_id: str = "",
+    session_id: str = "",
+    agent_key: str = "",
+    include_calls: bool = False,
+) -> dict[str, Any]:
+    """Per-turn split of one session log, for `tokens.turns`.
+
+    A pane resolves to its session through the live-scan registry — the same
+    binding the "THIS SESSION" tally uses, so the turns are cut from the very
+    file that tally reads. A bare session id is looked up there too, and
+    outside the registry needs `agent_key` to pick the reader. The parse runs
+    on the live-scan pool (single worker), never on the shared executor.
+
+    Each turn is stamped with the account the session's pane was pinned to at
+    the turn's start (pane account history); a session with no pane, or a
+    turn from before the pane's first pin, reads "unknown".
+    """
+    workspace_path = ""
+    session_file = ""
+    vendor = agent_key
+    found = next(
+        (
+            (key, state) for key, state in _live_scans.items()
+            if (pane_id and pane_id in state["panes"])
+            or (not pane_id and session_id and state["session_id"] == session_id)
+        ),
+        None,
+    )
+    account_pane = pane_id
+    if found is not None:
+        (workspace_path, _session_key), state = found
+        vendor = state["vendor"]
+        session_id = state["session_id"]
+        session_file = state["session_file"]
+        if not account_pane:
+            # A bare session id: the pane currently bound to it (a session
+            # has at most a handful; the newest binding names the account).
+            bound = sorted(state["panes"])
+            account_pane = bound[-1] if bound else ""
+    # No pane, not in the registry, and nothing says which reader to try:
+    # that is "no session to read", not an unknown vendor named "".
+    if not session_id or not vendor:
+        return {"ok": False, "error": "no-session"}
+    reader = next((r for r in _readers if r.vendor == vendor), None)
+    if reader is None:
+        return {"ok": False, "error": "unknown-vendor", "detail": vendor}
+
+    def _scan() -> tuple[Path, dict[str, Any]]:
+        if workspace_path:
+            path = _resolve_session_log(reader, workspace_path, session_id, session_file)
+        else:
+            path = next(
+                (
+                    p for p in reader.session_files()
+                    if reader.session_id_from_path(p) == session_id and p.exists()
+                ),
+                None,
+            )
+        if path is None:
+            raise FileNotFoundError(session_id)
+        return path, tokens_store.turns_for(
+            reader, path, session_id, include_calls=include_calls,
+            profile_resolver=lambda started_at: pane_account_history.profile_at(
+                account_pane, parse_event_time(started_at or "")
+            ),
+        )
+
+    try:
+        path, cut = await asyncio.get_running_loop().run_in_executor(_live_scan_pool, _scan)
+    except FileNotFoundError:
+        return {"ok": False, "error": "file-missing", "detail": session_id}
+    except Exception as err:  # noqa: BLE001 — reported to the caller, never fatal
+        log.warning("turn scan failed for session=%s: %s", session_id, err)
+        return {"ok": False, "error": "scan-failed", "detail": str(err)}
+    reply: dict[str, Any] = {"ok": True}
+    if pane_id:
+        reply["pane_id"] = pane_id
+    reply.update({
+        "session_id": session_id,
+        "vendor": vendor,
+        "file_path": str(path),
+        **cut,
+        "scanned_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+    })
+    return reply
+
+
+def account_periods(
+    agent_key: str, profile_id: str, granularity: str, *,
+    range_start: str | None = None, range_end: str | None = None,
+    window_kind: str | None = None, offset: int = 0, limit: int = 50, export: bool = False,
+) -> dict[str, Any]:
+    """`tokens.account_periods`: by_account_day rolled up to months or years
+    per (agent, account), with the quota ledger's cycle counts joined in.
+    Runs off-loop (the ledger reads SQLite)."""
+    from .pane_account_history import parse_event_time
+
+    wall = time.time()
+    start = parse_event_time(str(range_start)) if range_start is not None else wall - 30 * 86400
+    end = parse_event_time(str(range_end)) if range_end is not None else wall
+    if start is None or end is None or start >= end:
+        raise ValueError("invalid-range")
+    if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 200:
+        raise ValueError("invalid-page")
+    if type(export) is not bool:
+        raise ValueError("invalid-query")
+
+    def iso(ts: float) -> str:
+        return datetime.fromtimestamp(ts, timezone.utc).isoformat().replace("+00:00", "Z")
+
+    def bounds(period: str) -> tuple[float, float]:
+        year = int(period[:4])
+        month = 1 if granularity == "year" else int(period[5:7])
+        first = datetime(year, month, 1, tzinfo=timezone.utc)
+        next_year, next_month = (year + 1, 1) if granularity == "year" or month == 12 else (year, month + 1)
+        return first.timestamp(), datetime(next_year, next_month, 1, tzinfo=timezone.utc).timestamp()
+
+    def selected(period: str) -> bool:
+        first, last = bounds(period)
+        return first < end and last > start
+
+    rows: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for agent, profile, day, bucket in tokens_store.account_day_rows():
+        if agent_key and agent != agent_key:
+            continue
+        if profile_id and profile != profile_id:
+            continue
+        period = day[:4] if granularity == "year" else day[:7]
+        if not selected(period):
+            continue
+        row = rows.setdefault((period, agent, profile), {
+            "period": period, "agent_key": agent, "profile_id": profile,
+            "input": 0, "cache_read": 0, "cache_creation": 0, "output": 0,
+            "total": 0, "calls": 0, "turns": 0,
+            "cycles": 0, "exhausted": 0, "avg_total_exhausted": None,
+            "weekly_exhausted": 0,
+        })
+        for field in ("input", "cache_read", "cache_creation", "output", "calls", "turns"):
+            row[field] += int(bucket.get(field, 0))
+        row["total"] = row["input"] + row["cache_read"] + row["cache_creation"] + row["output"]
+    for key, stats in quota_ledger.period_stats(granularity, now=wall, window_kind=window_kind).items():
+        period, agent, profile = key
+        if agent_key and agent != agent_key:
+            continue
+        if profile_id and profile != profile_id:
+            continue
+        if not selected(period):
+            continue
+        row = rows.setdefault(key, {
+            "period": period, "agent_key": agent, "profile_id": profile,
+            "input": 0, "cache_read": 0, "cache_creation": 0, "output": 0,
+            "total": 0, "calls": 0, "turns": 0,
+            "cycles": 0, "exhausted": 0, "avg_total_exhausted": None,
+            "weekly_exhausted": 0,
+        })
+        row.update({
+            "cycles": stats["cycles"], "exhausted": stats["exhausted"],
+            "avg_total_exhausted": stats["avg_total_exhausted"],
+            "weekly_exhausted": stats["weekly_exhausted"],
+            "eligible_count": stats["eligible_count"], "excluded_count": stats["excluded_count"],
+            "exclusions": stats["exclusions"],
+        })
+    if len(rows) > 10000:
+        raise ValueError("range-too-large")
+    # period newest first, then total descending within a period
+    ordered = sorted(rows.values(), key=lambda r: (-r["total"], r["agent_key"], r["profile_id"]))
+    ordered.sort(key=lambda r: r["period"], reverse=True)
+    totals: dict[str, dict[str, Any]] = {}
+    for row in ordered:
+        entry = totals.setdefault(row["period"], {
+            "period": row["period"], "total": 0, "calls": 0, "turns": 0,
+        })
+        entry["total"] += row["total"]
+        entry["calls"] += row["calls"]
+        entry["turns"] += row["turns"]
+    fields = ("input", "cache_read", "cache_creation", "output", "total", "calls", "turns")
+    for row in ordered:
+        first, last = bounds(row["period"])
+        known = first >= tokens_store.slices_since
+        state = "available" if known else (
+            "partial" if min(last, wall) > tokens_store.slices_since else "unavailable"
+        )
+        row.update({
+            "period_start": iso(first), "period_end": iso(last),
+            "coverage_state": state, "coverage_reason": None if known else "collection_started_late",
+            "detail_known": known, "recorded_totals": {f: row[f] for f in fields},
+        })
+        row.setdefault("eligible_count", 0)
+        row.setdefault("excluded_count", 0)
+        row.setdefault("exclusions", {k: 0 for k in ("ongoing", "no_limit", "untrusted_source", "unavailable_detail")})
+        if not known:
+            row.update({f: None for f in fields})
+    for entry in totals.values():
+        components = [r for r in ordered if r["period"] == entry["period"]]
+        known = all(r["detail_known"] for r in components)
+        entry.update({
+            "detail_known": known,
+            "coverage_state": "available" if known else (
+                "unavailable" if all(r["coverage_state"] == "unavailable" for r in components) else "partial"
+            ),
+            "coverage_reason": None if known else "collection_started_late",
+            "recorded_totals": {f: entry[f] for f in ("total", "calls", "turns")},
+            "period_start": components[0]["period_start"], "period_end": components[0]["period_end"],
+        })
+        if not known:
+            entry.update({f: None for f in ("total", "calls", "turns")})
+    eligible = sum(r["eligible_count"] for r in ordered)
+    summary = {
+        "cycles": sum(r["cycles"] for r in ordered),
+        "exhausted": sum(r["exhausted"] for r in ordered),
+        "weekly_exhausted": sum(r["weekly_exhausted"] for r in ordered),
+        "eligible_count": eligible, "excluded_count": sum(r["excluded_count"] for r in ordered),
+        "avg_total_exhausted": sum((r["avg_total_exhausted"] or 0) * r["eligible_count"] for r in ordered) / eligible if eligible else None,
+        "exclusions": {k: sum(r["exclusions"][k] for r in ordered)
+                       for k in ("ongoing", "no_limit", "untrusted_source", "unavailable_detail")},
+    }
+    page = ordered if export else ordered[offset:offset + limit]
+    effective_start = bounds(datetime.fromtimestamp(start, timezone.utc).strftime("%Y" if granularity == "year" else "%Y-%m"))[0]
+    effective_end = bounds(datetime.fromtimestamp(end - 0.000001, timezone.utc).strftime("%Y" if granularity == "year" else "%Y-%m"))[1]
+    return {
+        "ok": True,
+        "schema_version": 2, "calendar_timezone": "UTC", "token_time_key": "event_time",
+        "cycle_time_key": "started_at_or_resets_at", "refreshed_at": iso(wall),
+        "granularity": granularity,
+        "rows": page, "summary": summary, "total_count": len(ordered),
+        "next_offset": offset + len(page) if not export and offset + len(page) < len(ordered) else None,
+        "range_start": iso(start), "range_end": iso(end), "export": export,
+        "effective_range_start": iso(effective_start), "effective_range_end": iso(effective_end),
+        "totals_by_period": sorted(
+            totals.values(), key=lambda t: t["period"], reverse=True
+        ),
+    }
+
+
 # Historic-log backfill can enqueue hundreds of files; coalesce the per-file
 # progress into at most one broadcast per workspace per window (same lesson as
 # the token burst above) so the indicator updates smoothly without flooding.
@@ -1400,6 +1798,13 @@ async def _on_log_token_usage(usage: TokenUsage) -> TokenSinkResult:
         # Namespace the dedup key by vendor + file_path so collisions across
         # vendors (unlikely but possible) can't masquerade as the same event.
         composite_key = f"{usage.vendor}::{usage.file_path}::{usage.dedup_key}"
+        # The account this usage was made on: whatever the pane was pinned to
+        # at the event's own time (a resumed transcript's old turns belong to
+        # whoever ran them, not to the pane resuming it now). No pane, or no
+        # interval covering that moment → "unknown".
+        usage.profile_id = pane_account_history.profile_at(
+            attributed.pane_id or "", parse_event_time(usage.timestamp)
+        )
         handled = tokens_store.record(
             workspace_path,
             source="cli",
@@ -1410,6 +1815,7 @@ async def _on_log_token_usage(usage: TokenUsage) -> TokenSinkResult:
             pane_id=attributed.slot_key or attributed.pane_id,
             session_id=usage.session_id,
             stage_id=attributed.stage_id,
+            group_id=attributed.group_id,
             input_tokens=usage.input_tokens,
             output_tokens=usage.output_tokens,
             dedup_key=composite_key,
@@ -1417,6 +1823,11 @@ async def _on_log_token_usage(usage: TokenUsage) -> TokenSinkResult:
             ingestion_checkpoint=usage.checkpoint,
             replay_workspace=usage.replay_workspace,
             legacy_dedup_key=usage.dedup_key,
+            profile_id=usage.profile_id,
+            cli_version=usage.cli_version,
+            cache_read_tokens=usage.cache_read_tokens,
+            cache_creation_tokens=usage.cache_creation_tokens,
+            timestamp=usage.timestamp,
         )
         # The watcher just told us this session's log grew — the cheapest and
         # most timely rescan trigger there is, since it already carries the
@@ -1516,6 +1927,65 @@ def _inherited_cli_home_vars() -> tuple[str, ...]:
     return tuple(merged)
 
 
+def spawn_env_deny_list() -> frozenset[str]:
+    """Env var names a spawn REQUEST may not set.
+
+    The existing lists are all removal lists — things stripped on the way out.
+    This is the one input filter, and it is deliberately their union rather
+    than a fourth rule, so a var can never be denied here and allowed there:
+
+    * ``CLAUDE_ENV_OVERRIDES`` — API-key vars that displace a managed
+      account's OAuth login.
+    * ``_inherited_cli_home_vars()`` — the legacy table plus every vendor's
+      declared home/config relocators and runtime markers, i.e. exactly what
+      is stripped from the backend's own inherited environment.
+
+    ``cli_vendors.claude._ENV_DROP`` needs no third source: its three names
+    (the two above plus CLAUDE_CONFIG_DIR, which is in claude's
+    ``home_env_vars``) are already covered by the union.
+    """
+    return frozenset(CLAUDE_ENV_OVERRIDES) | frozenset(_inherited_cli_home_vars())
+
+
+def filter_spawn_env_request(requested: dict[str, str]) -> tuple[dict[str, str], list[str]]:
+    """Soft-block: drop the denied keys, keep the rest, name what was dropped.
+
+    Soft because the spawn still goes ahead — a user-configured env var that
+    happens to collide with a home relocator is a misconfiguration to report,
+    not a reason to refuse the pane.
+
+    Names are compared the way the platform's process environment compares
+    them (``osplat.paths.env_name_key``): on Windows ``minimax_data_dir``
+    sets MINIMAX_DATA_DIR and is denied as such, while on POSIX it is a
+    different variable and passes. ``denied`` names the key as requested, so
+    the notice shows the user what they typed.
+    """
+    fold = osplat.paths.env_name_key
+    deny = {fold(name) for name in spawn_env_deny_list()}
+    denied = [key for key in requested if fold(key) in deny]
+    kept = {key: value for key, value in requested.items() if key not in denied}
+    return kept, denied
+
+
+def spawn_env_overridden_keys(
+    requested: dict[str, str],
+    final_env: dict[str, str],
+    env_remove: list[str] | None,
+) -> list[str]:
+    """Requested keys that a later source in the spawn chain went on to win.
+
+    Answerable only once the whole chain has run: vendor defaults, onboarding,
+    login profiles, CLI home management, MCP/plugin/push wiring and portable
+    credentials all write after the request, and ``env_remove`` — applied last
+    of all, in ``terminals.spawn`` — can still delete a key that survived them.
+    """
+    removed = set(env_remove or ())
+    return sorted(
+        key for key, value in requested.items()
+        if key in removed or final_env.get(key) != value
+    )
+
+
 def _sanitize_inherited_cli_env() -> None:
     """Drop CLI home-relocating vars inherited from whatever launched us.
 
@@ -1529,9 +1999,30 @@ def _sanitize_inherited_cli_env() -> None:
             log.info("dropped inherited %s from backend environment", key)
 
 
+async def _reclaim_orphan_codex_homes() -> None:
+    """Startup sweep of ``~/.codex-panes``: closed panes and failed spawns
+    accumulated one home each with nothing to resume (#121). Every removal
+    goes through ``CodexHomeManager.reclaim``, which keeps any home that
+    still holds a rollout."""
+    started = time.monotonic()
+    try:
+        reclaimed = await asyncio.to_thread(codex_home_manager.sweep_orphans)
+    except Exception as err:  # noqa: BLE001
+        log.warning("codex pane home sweep failed: %s", err)
+        return
+    if reclaimed:
+        log.info(
+            "reclaimed %d orphan codex pane home(s) in %.0fms: %s",
+            len(reclaimed), (time.monotonic() - started) * 1000,
+            " ".join(reclaimed),
+        )
+
+
 @app.on_event("startup")
 async def _start_log_watcher() -> None:
     _sanitize_inherited_cli_env()
+    if tokens_store.has_quota_changes():
+        _schedule_tokens_broadcast("")
 
     # Push channels read the user's per-vendor switches through this rather
     # than importing the settings store, which imports back into here.
@@ -1590,6 +2081,11 @@ async def _start_log_watcher() -> None:
     except Exception as err:  # noqa: BLE001
         log.warning("pty orphan reap failed: %s", err)
 
+    # Codex pane homes nothing can resume from (#121). Awaited, after the
+    # reap above and before any renderer can connect: no pane is live, so a
+    # home is kept only because it still owns a rollout.
+    await _reclaim_orphan_codex_homes()
+
     # Kill PTYs whose owning WebSocket never came back (see janitor above).
     global _ownerless_sweeper_task
     _ownerless_sweeper_task = asyncio.create_task(_ownerless_pty_janitor())
@@ -1598,6 +2094,12 @@ async def _start_log_watcher() -> None:
     # a retained-memory report can name the event instead of only the total.
     global _mem_probe_task
     _mem_probe_task = asyncio.create_task(mem_probe.probe_loop())
+
+    # Close dev-time intervals nobody is beating any more (see DevTimeStore).
+    global _dev_time_sweeper_task
+    _dev_time_sweeper_task = asyncio.create_task(dev_time_store.stale_sweeper(
+        lambda ws: broadcast(make_event("devtime.changed", {"workspace_path": ws}))
+    ))
 
     # Name a frozen backend the moment it freezes: a daemon thread logs the
     # loop thread's stack when the loop stops turning (issue #24), instead of
@@ -1641,7 +2143,7 @@ async def _start_log_watcher() -> None:
     # notices the new identity and re-points `defaults[agentKey]` at the account
     # that is actually live — no credential is ever moved.
     global _credential_watcher
-    _credential_watcher = CredentialWatcher(reconcile_live_account)
+    _credential_watcher = CredentialWatcher(reconcile_live_account, resolver=managed_watch_path)
     _credential_watcher.start()
 
     # Navide-Server control-plane link: dials out to the configured server and
@@ -1714,10 +2216,13 @@ async def _start_log_watcher() -> None:
 @app.on_event("shutdown")
 async def _stop_log_watcher() -> None:
     global _log_watcher, _git_watcher, _credential_watcher
+    await cli_risk_service.close()
     if _ownerless_sweeper_task is not None:
         _ownerless_sweeper_task.cancel()
     if _mem_probe_task is not None:
         _mem_probe_task.cancel()
+    if _dev_time_sweeper_task is not None:
+        _dev_time_sweeper_task.cancel()
     await loop_watchdog.stop()
     # PTY children are detached process groups (start_new_session=True); they
     # must be killed here or they outlive the app as CPU-spinning orphans.
@@ -1737,6 +2242,10 @@ async def _stop_log_watcher() -> None:
         tokens_store.flush()
     except Exception as err:  # noqa: BLE001
         log.warning("token store shutdown flush failed: %s", err)
+    try:
+        dev_time_store.shutdown()
+    except Exception as err:  # noqa: BLE001
+        log.warning("dev time store shutdown failed: %s", err)
     if _git_watcher is not None:
         _git_watcher.stop()
     if _credential_watcher is not None:
@@ -1783,6 +2292,10 @@ async def health() -> dict[str, Any]:
 
 # Font mimes served inline (specimen @font-face fetch, /fs/page subresources).
 _FONT_MIMES = ("font/ttf", "font/otf", "font/woff", "font/woff2")
+# Windows' mimetypes table (the registry) knows none of these, so
+# `guess_type` would hand every font to the octet-stream branch there.
+for _mime, _ext in zip(_FONT_MIMES, (".ttf", ".otf", ".woff", ".woff2")):
+    mimetypes.add_type(_mime, _ext)
 
 
 def _serve_workspace_file(workspace: str, rel: str, *, allow_css: bool = False) -> FileResponse:
@@ -1801,7 +2314,7 @@ def _serve_workspace_file(workspace: str, rel: str, *, allow_css: bool = False) 
     to an application/octet-stream attachment.
     """
     try:
-        target = fs_service._resolve_safe(workspace, rel)
+        target = fs_service._resolve_safe(workspace, rel, allow_mockups=True)
     except fs_service.FsError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if target.is_dir():
@@ -1936,7 +2449,9 @@ def _record_hook_file_write(
     root = os.path.realpath(ws_path)
     if resolved != root and not resolved.startswith(root + os.sep):
         return None
-    rel_path = os.path.relpath(resolved, root)
+    # Forward slashes, as `preview_record` over MCP stores them: the same
+    # file must land under one key on Windows too.
+    rel_path = Path(os.path.relpath(resolved, root)).as_posix()
     # The gate above stays the pane's workspace; only the database the row
     # lands in moves up to the project root.
     record_root = _preview_workspace(ws_path)
@@ -1952,6 +2467,24 @@ def _record_hook_file_write(
         tool=tool_name,
     )
     return (record_root, row) if row is not None else None
+
+
+@app.post("/hooks/codex/session-start")
+async def codex_session_start_hook(request: Request) -> Response:
+    if not hook_auth.presented(request.headers.get(hook_auth.HEADER)):
+        return Response(status_code=403)
+    token = request.headers.get(codex_session_hooks.LAUNCH_HEADER, "")
+    if not token or token not in _live_codex_hook_terms():
+        return Response(status_code=403)
+    try:
+        payload = await request.json()
+    except ValueError:
+        return Response(status_code=400)
+    if not isinstance(payload, dict) or not _codex_pending_starts.add(token, payload):
+        return Response(status_code=400)
+    await _retry_codex_session_start(token)
+    # Hook stdout is empty: identity reporting adds no context or model turn.
+    return Response(status_code=200)
 
 
 @app.post("/hooks/{vendor}")
@@ -2094,6 +2627,19 @@ async def cli_hook(vendor: str, request: Request) -> Any:
         # and their panes simply never gate on it.
         "pending_subagents": subagent_tracker.pending(pane_id),
     }))
+    # Dev time: only real work signals. A notification (idle_prompt /
+    # permission_prompt) is mapped to agent_active above for the busy-state
+    # path, but it marks the agent WAITING — beating on it would open an agent
+    # interval at exactly the moment nothing is running. Guarded like the
+    # preview record: this endpoint's response must not depend on the store.
+    if event_kind != "notification":
+        try:
+            if dev_time_store.agent_event(ws_path or cwd, pane_id or "", event_type, ""):
+                await broadcast(
+                    make_event("devtime.changed", {"workspace_path": ws_path or cwd})
+                )
+        except Exception as err:  # noqa: BLE001
+            log.warning("dev time record from %s hook failed: %s", vendor, err)
     if vendor == "claude" and event_kind == "stop":
         # This body is read by Claude Code as the Stop hook's own output, so it
         # is either a valid decision object or nothing at all: an unrecognized
@@ -2431,10 +2977,40 @@ async def _ensure_fresh_path_for_spawn(agent_key: str) -> None:
     # Same dedicated pool as the spawn probe: a login-shell subprocess is the
     # same kind of heavy pre-spawn work and must stay off the shared default
     # executor (see ws_handlers._CLI_PROBE_EXECUTOR).
+    # A tight ceiling on purpose: terminal.create has 30s and has already
+    # promised 25s of it to the credential switch lock, so a probe that waits
+    # longer than this turns the lock's named timeout into a generic
+    # "request terminal.create timeout" the user cannot act on. The probe is
+    # speculative here anyway — whatever it misses, the pane's own login shell
+    # still resolves.
     await asyncio.get_running_loop().run_in_executor(
         ws_handlers._CLI_PROBE_EXECUTOR,
-        onboarding_deps._refresh_path_from_login_shell,
+        lambda: onboarding_deps._refresh_path_from_login_shell(
+            timeout_s=onboarding_deps._PATH_PROBE_TIMEOUT_SPAWN_S
+        ),
     )
+
+
+def _spawn_execs_the_cli_directly(command: Any, known_names: "tuple[str, ...]") -> bool:
+    """Whether the spawn will exec the CLI itself, with no shell in between.
+
+    Decides whether a probe miss is a hint or a verdict. An agent pane runs
+    `zsh -ilc '<cli> ...'`, so argv[0] is the shell and the name gets resolved
+    a second time against rc files this process never read — a miss there is
+    worth spawning through. Two paths exec the CLI directly instead: the
+    plugin `ai.cli.start` capability (aiCliCommand builds a bare argv) and
+    Windows agent panes (shellCommandArgv returns the plain command). No
+    second opinion is coming on those, so a miss is final.
+    """
+    if isinstance(command, list):
+        head = str(command[0]) if command else ""
+    else:
+        try:
+            parts = osplat.terminal_backend.parse_command(str(command or ""))
+        except (ValueError, OSError):
+            return False
+        head = parts[0] if parts else ""
+    return bool(head) and _names_a_known_command(head, known_names)
 
 
 class AgentCliProbeError(RuntimeError):
@@ -2448,13 +3024,31 @@ def _with_replaced_executable(command: Any, text: str, executable: str) -> Any:
     first_token = re.match(r"^\s*(?:'[^']*'|\"[^\"]*\"|\S+)", text)
     if first_token is None:
         return command
-    replaced = f"{text[:first_token.start()]}{shlex.quote(executable)}{text[first_token.end():]}"
+    replaced = f"{text[:first_token.start()]}{osplat.paths.quote_arg(executable)}{text[first_token.end():]}"
     if isinstance(command, list):
         updated = list(command)
         if updated:
             updated[-1] = replaced
         return updated
     return replaced
+
+
+def _names_a_known_command(program: str, names: "tuple[str, ...]") -> bool:
+    """Whether `program` is one of `names`, as this platform spells them.
+
+    A Windows PATH lookup answers `claude.cmd`, so comparing the bare stem
+    against the pinned name would say no and leave the rewrite undone — the
+    very rewrite that exists to make the spawn work. The pinned name itself
+    stays accepted: a pane command names the CLI without an extension, which
+    is not among the candidates Windows would try on PATH.
+    """
+    spelled = {name.casefold() for name in names}
+    spelled.update(
+        candidate.casefold()
+        for name in names
+        for candidate in osplat.paths.executable_candidates(name)
+    )
+    return Path(program).name.casefold() in spelled
 
 
 def _command_with_persisted_cli_binary(agent_key: str, command: Any) -> Any:
@@ -2465,10 +3059,10 @@ def _command_with_persisted_cli_binary(agent_key: str, command: Any) -> Any:
         return command
     text = _command_text(command)
     try:
-        parts = shlex.split(text)
-    except ValueError:
+        parts = osplat.terminal_backend.parse_command(text)
+    except (ValueError, OSError):
         return command
-    if not parts or Path(parts[0]).name != dep.check_cmd[0]:
+    if not parts or not _names_a_known_command(parts[0], (dep.check_cmd[0],)):
         return command
     return _with_replaced_executable(command, text, selected)
 
@@ -2486,12 +3080,12 @@ def _command_with_installed_cli_alias(agent_key: str, command: Any) -> Any:
         return command
     text = _command_text(command)
     try:
-        parts = shlex.split(text)
-    except ValueError:
+        parts = osplat.terminal_backend.parse_command(text)
+    except (ValueError, OSError):
         return command
-    if not parts or Path(parts[0]).name not in (dep.check_cmd[0], *dep.alt_commands):
+    if not parts or not _names_a_known_command(parts[0], (dep.check_cmd[0], *dep.alt_commands)):
         return command
-    if shutil.which(parts[0]):
+    if osplat.paths.resolve_program(parts[0]):
         return command  # the requested name resolves — nothing to fix
     installed = onboarding_deps.resolve_executable(dep)
     if not installed:
@@ -2530,6 +3124,36 @@ def _login_spawn_command(agent_key: str, command: Any) -> Any:
     return replaced
 
 
+def _agent_signed_out(agent_key: str) -> bool:
+    """True when this CLI is installed but its live credentials are absent.
+
+    The spawn probe is a `--version` smoke test, so it can only answer "is it
+    installed" — a signed-out CLI passes it and then opens the pane on the
+    vendor's own sign-in prompt with nothing in Navide to explain why.
+
+    Only vendors that declare a `live_file` can be asked. For every other CLI
+    `credential_vault.identity` answers signedIn=False by default, which is
+    absence of evidence rather than evidence of absence; reporting it would put
+    a false "not signed in" notice on every CLI Navide cannot inspect.
+
+    Display-only, like `identity` itself: never raises, and False means "no
+    evidence of a signed-out state", not "signed in".
+    """
+    spec = cli_vendor(agent_key)
+    if spec is None or spec.live_file is None:
+        return False
+    try:
+        # A selected portable credential that can be put in effect is what
+        # the pane will run on, whatever the live login says. One that is
+        # missing or shadowed does not count: the spawn refuses it with the
+        # reason, and the native answer below stays the honest one.
+        if portable_credentials.selection_usable(agent_key, home=Path.home()):
+            return False
+        return not bool(credential_vault.identity(agent_key).get("signedIn"))
+    except Exception:  # noqa: BLE001 — advisory only, never fails a spawn
+        return False
+
+
 # Aligned with onboarding_deps' detection probe (was 3s here — too tight, so a
 # momentarily overloaded machine timed out and made EVERY CLI unlaunchable).
 _SPAWN_PROBE_TIMEOUT_S = 8
@@ -2549,29 +3173,60 @@ def _probe_agent_cli_for_spawn(agent_key: str, requested_command: Any = None) ->
         return None
     executable = None
     try:
-        command_parts = shlex.split(_command_text(requested_command))
-    except ValueError:
+        command_parts = osplat.terminal_backend.parse_command(_command_text(requested_command))
+    except (ValueError, OSError):
         command_parts = []
     requested_executable = command_parts[0] if command_parts else ""
     known_names = (dep.check_cmd[0], *dep.alt_commands)
-    if requested_executable and Path(requested_executable).name in known_names:
-        executable = shutil.which(requested_executable)
+    if requested_executable and _names_a_known_command(requested_executable, known_names):
+        executable = osplat.paths.resolve_program(requested_executable)
     executable = executable or onboarding_deps.resolve_executable(dep)
     if not executable:
-        raise AgentCliProbeError(
-            f"{dep.label} startup probe failed: executable not found ({dep.check_cmd[0]})",
-            {
-                "agent_key": agent_key,
-                "binary_path": "",
-                "probe_command": dep.check_cmd,
-                "reason": "not_found",
-            },
+        if _spawn_execs_the_cli_directly(requested_command, known_names):
+            # No shell will get a second look at the name, so the miss is a
+            # verdict. Block, and keep the specific error: letting this run on
+            # would only reach terminals.create's own which() and surface as a
+            # bare FileNotFoundError with none of these details.
+            raise AgentCliProbeError(
+                f"{dep.label} startup probe failed: executable not found ({dep.check_cmd[0]})",
+                {
+                    "agent_key": agent_key,
+                    "binary_path": "",
+                    "probe_command": dep.check_cmd,
+                    "reason": "not_found",
+                },
+            )
+        # Otherwise not definitive. This probe sees only the backend's own
+        # PATH, while the pane runs the CLI through an interactive login
+        # shell, which reads the rc files that put nvm, volta and npm-global
+        # on PATH. Blocking here made "runs in Terminal, unlaunchable in
+        # Navide" the norm for every CLI installed by `npm install -g`.
+        # Degrade: let the shell have its say. A real absence then exits 127,
+        # which the window answers with the guided install (see
+        # ws_handlers._terminal_create_impl for why no cli.missing goes out).
+        log.warning(
+            "%s startup probe found no %s on the backend PATH — spawning anyway, "
+            "the pane's login shell may still resolve it",
+            dep.label, dep.check_cmd[0],
         )
+        return {
+            "agent_key": agent_key,
+            "binary_path": "",
+            "resolved_path": "",
+            "probe_command": list(dep.check_cmd),
+            "duration_ms": 0,
+            "reason": "not_found",
+            "degraded": True,
+            "version": None,
+        }
     resolved = os.path.realpath(executable)
     executable_display = (
         f"{executable} → {resolved}" if resolved != executable else executable
     )
-    command = [executable, *dep.check_cmd[1:]]
+    # The interpreter included: a Windows CLI installed by npm is a `.cmd`
+    # shim, which only cmd.exe can start. Reported as the probe command too,
+    # so the detail names what actually ran.
+    command = osplat.paths.launch_argv(executable, dep.check_cmd[1:])
     started = time.monotonic()
     try:
         proc = subprocess.run(
@@ -2638,7 +3293,18 @@ def _probe_agent_cli_for_spawn(agent_key: str, requested_command: Any = None) ->
         "signal": signal_name,
         "version": version,
     }
-    if proc.returncode != 0:
+    if proc.returncode != 0 and version:
+        # The binary ran and identified itself; the exit code is the probe
+        # command's own business. `--version`/`--help` are not always declared
+        # flags — Go's stdlib `flag` exits 0 on ErrHelp, pflag and cobra do not
+        # — and onboarding_deps._probe_one already counts a parsed version as
+        # installed whatever the code was. Disagreeing here is what would show
+        # a CLI as installed in Settings while every pane spawn refused it.
+        log.info(
+            "%s startup probe exited with code %s but reported version %s — accepting",
+            dep.label, proc.returncode, version,
+        )
+    elif proc.returncode != 0:
         cause = f"was terminated by {signal_name}" if signal_name else f"exited with code {proc.returncode}"
         message = f"{dep.label} startup probe {cause} after {duration_ms}ms ({executable_display})"
         error_details = {**details, "reason": "signal" if signal_name else "nonzero_exit"}
@@ -2651,6 +3317,23 @@ def _probe_agent_cli_for_spawn(agent_key: str, requested_command: Any = None) ->
             error_details["hint"] = hint
         raise AgentCliProbeError(message, error_details)
     return details
+
+
+_HOME_PREFIX = str(Path.home())
+# A whole path component only: /Users/neil must not eat /Users/neilson.
+_HOME_RE = re.compile(re.escape(_HOME_PREFIX) + r"(?![\w.-])")
+
+
+def _redact_home(text: str) -> str:
+    """Swap the user's home directory for ``~`` in a message bound for the UI.
+
+    ``OSError.__str__`` embeds the filename, so an unhandled FileNotFoundError
+    puts an absolute path -- and the account name inside it -- into UI text
+    that gets screenshotted into bug reports.
+    """
+    if not _HOME_PREFIX or _HOME_PREFIX == os.sep:
+        return text
+    return _HOME_RE.sub("~", text)
 
 
 async def handle_message(session: Session, msg: dict[str, Any]) -> None:
@@ -2673,7 +3356,7 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
         )
     except FileNotFoundError as err:
         await session.send_json(
-            make_error(msg_id, msg_type, "SETUP_ERROR", str(err))
+            make_error(msg_id, msg_type, "SETUP_ERROR", _redact_home(str(err)))
         )
     except KeyError as err:
         await session.send_json(
@@ -2683,5 +3366,5 @@ async def handle_message(session: Session, msg: dict[str, Any]) -> None:
         log.exception("handle_message failed for type=%s", msg_type)
         if not session.dead:
             await session.send_json(
-                make_error(msg_id, msg_type, "INTERNAL_ERROR", str(err))
+                make_error(msg_id, msg_type, "INTERNAL_ERROR", _redact_home(str(err)))
             )

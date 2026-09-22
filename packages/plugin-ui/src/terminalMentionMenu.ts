@@ -69,7 +69,8 @@ export function createTerminalMentionMenu(
     const root = document.createElement('div')
     root.className = 'term-mention-menu-root'
     Object.assign(root.style, {
-      position: 'fixed', inset: '0', zIndex: '99999', background: 'transparent',
+      position: 'fixed', inset: '0', zIndex: 'calc(var(--z-toast) + 200)',
+      background: 'transparent',
     })
 
     const card = document.createElement('div')
@@ -160,7 +161,9 @@ export function createTerminalMentionMenu(
           lastGroup = cand.group
           const hdr = document.createElement('div')
           hdr.className = 'term-mention-group'
-          hdr.textContent = cand.group
+          // Keyed on `group` (a path for workspace sections), titled with
+          // `groupLabel` — never print a raw key at the user.
+          hdr.textContent = cand.groupLabel ?? cand.group
           Object.assign(hdr.style, {
             padding: '6px 8px 3px', color: 'var(--gray-4)', fontSize: '10.5px',
             letterSpacing: '0.06em', textTransform: 'uppercase',

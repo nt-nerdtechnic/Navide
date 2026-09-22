@@ -502,6 +502,27 @@ def member_for_credential(url: str, token: str) -> str:
         return ""
 
 
+def only_credential_ever(url: str, token: str) -> bool:
+    """Whether this credential is the only one this machine has ever pinned a
+    member for — so anything on this machine that predates accounts being
+    told apart can only belong to it.
+
+    Both halves matter: the fingerprint is over the address and the token, so
+    "one entry, and it is this one" establishes the server as well as the
+    member. A machine with two entries — a second sign-in, a second server —
+    answers no even when both name the same member, because the entries do
+    not say which server each was for. Never raises.
+    """
+    if not url or not token:
+        return False
+    try:
+        with _lock:
+            owners = _load_locked()["ownMembers"]
+    except Exception:  # noqa: BLE001 - unreadable is not evidence
+        return False
+    return set(owners) == {_token_fingerprint(url, token)}
+
+
 def adopt_own_member(url: str, token: str, member_id: str) -> str:
     """Pin the member id this credential belongs to, and return the pinned one.
 
@@ -781,7 +802,12 @@ def note_knock(device_id: str) -> bool:
 
 
 def pin_paired_device(
-    device_id: str, *, sign_key: str, member_id: str, own_member_id: str = ""
+    device_id: str,
+    *,
+    sign_key: str,
+    enc_key: str,
+    member_id: str,
+    own_member_id: str = "",
 ) -> bool:
     """Write the pin a completed pairing earns. Blocking; call off the loop.
 
@@ -797,10 +823,17 @@ def pin_paired_device(
     per device id still holds, and a device whose key later changes becomes
     unreachable rather than impersonable.
 
+    ``enc_key`` is the X25519 encryption key the same six digits covered. It is
+    pinned next to the signing key so that "who may open what this machine
+    seals for that device" is decided here too, and never by the directory. A
+    pin written before this field existed stays as it is — never revised, like
+    the signing key — and a reader that needs the encryption key treats its
+    absence as "not pinned", not as "ask the directory".
+
     Returns whether anything changed.
     """
     with _lock:
-        if not device_id or not sign_key:
+        if not device_id or not sign_key or not enc_key:
             return False
         state = _load_locked()
         pins = state["pins"]
@@ -815,6 +848,7 @@ def pin_paired_device(
             raise TrustStoreFull(f"this machine already pins {len(pins)} devices")
         pins[device_id] = {
             "signKey": sign_key,
+            "encKey": enc_key,
             "memberId": member_id,
             "at": int(time.time()),
             # Approved in the same breath: the approval *is* the pairing, and a
@@ -834,6 +868,36 @@ def pin_paired_device(
         )
         _save_locked(state)
         return True
+
+
+def pinned_encryption_key(device_id: str) -> str:
+    """The X25519 key a completed pairing pinned for *device_id*, or "".
+
+    Empty for a device that is not pinned *and* for one pinned before the
+    encryption key was part of the exchange. Both read the same to a caller
+    about to seal something, on purpose: the alternative — falling back to the
+    directory for the older pin — is the substitution the pin exists to stop,
+    and a legacy pin is fixed by pairing again, not by trusting the relay once
+    more. Raises ``TrustStoreLocked`` like ``pin_for``.
+    """
+    pin = pin_for(device_id)
+    if not isinstance(pin, dict):
+        return ""
+    return str(pin.get("encKey") or "")
+
+
+def legacy_pinned_devices() -> list[str]:
+    """Devices whose pin predates the encryption key being part of the
+    exchange. Nothing is sealed to such a pin; the route back is to unpair
+    the device and pair again. Raises ``TrustStoreLocked`` like ``pin_for``.
+    """
+    with _lock:
+        pins = _state_for_read().get("pins") or {}
+        return sorted(
+            device_id
+            for device_id, pin in pins.items()
+            if isinstance(pin, dict) and not pin.get("encKey")
+        )
 
 
 def unapproved_devices() -> list[dict[str, Any]]:

@@ -53,7 +53,7 @@ describe('resolveCommand — model/effort on a fresh spawn', () => {
   it('still returns a user command override verbatim, untouched by any flag', () => {
     // An override is trusted literally; the resume paths rebuild their own
     // flags into the override before it gets here.
-    const overrideIdx = body.indexOf('if (trimmed) return commandWithSelectedBinary(agentKey, trimmed)')
+    const overrideIdx = body.indexOf("if (launch.source !== 'none') {")
     expect(overrideIdx).toBeGreaterThan(-1)
     expect(body.indexOf('modelArgsFor(')).toBeGreaterThan(overrideIdx)
   })
@@ -78,8 +78,17 @@ describe('spawnPane — the one place argv is assembled', () => {
 
   it('records them on the pane so a later rebuild can reproduce the launch', () => {
     const body = fn('spawnPane')
-    expect(body).toContain('model: opts.model || undefined')
-    expect(body).toContain('effort: opts.effort || undefined')
+    expect(body).toContain('model: launchedModel.model || undefined')
+    expect(body).toContain('effort: launchedModel.effort || undefined')
+  })
+
+  it('records none when the stored launch command kept them off argv', () => {
+    // The pane, every record read back from it and every rebuild built on it
+    // must say what the CLI runs on — a stored launch command appends nothing.
+    const body = fn('spawnPane')
+    expect(body).toMatch(
+      /const launchedModel: CliModelRequest = launch\.source === 'stored'\s*\?\s*NO_MODEL_REQUEST\s*:\s*\{ model: opts\.model \?\? '', effort: opts\.effort \?\? '' \}/,
+    )
   })
 })
 
@@ -162,10 +171,13 @@ describe('every rebuild/restore spawnPane call site carries the model', () => {
   }
 
   it('finds every reconstruction call site', () => {
-    // onManualResume, rebuildPaneViaResume, rebuildPaneClean, spawnRestoredPane.
+    // onManualResume, rebuildPaneViaResume, rebuildPaneClean, spawnRestoredPane,
+    // plus the two cli_open_agent paths — createRequestedPane and
+    // createStandaloneRequestedPane declare isResume when `session_id` names a
+    // conversation to continue, which makes them reconstruction sites too.
     // Exact, not a floor: a new reconstruction path has to come here and be
     // added to the walk rather than quietly launching on the vendor default.
-    expect(rebuildSites.map(([where]) => where)).toHaveLength(4)
+    expect(rebuildSites.map(([where]) => where)).toHaveLength(6)
   })
 
   it.each(rebuildSites)('%s asks spawnPane for the pane\'s model', (_where, options) => {
@@ -183,8 +195,8 @@ describe('onManualResume — launching on the model is not enough', () => {
   const body = fn('onManualResume')
 
   it('launches the resumed pane on the source pane\'s model', () => {
-    expect(body).toContain("model: historyPane?.model ?? ''")
-    expect(body).toContain("effort: historyPane?.effort ?? ''")
+    expect(body).toContain("model: historyPane?.model ?? historyState?.model ?? payload.model ?? ''")
+    expect(body).toContain("effort: historyPane?.effort ?? historyState?.effort ?? payload.effort ?? ''")
     expect(body).toContain('model: modelRequest.model || undefined')
     expect(body).toContain('effort: modelRequest.effort || undefined')
   })
@@ -195,6 +207,18 @@ describe('onManualResume — launching on the model is not enough', () => {
     const payload = body.slice(spawnIdx)
     expect(payload).toContain('model: modelRequest.model')
     expect(payload).toContain('effort: modelRequest.effort')
+  })
+
+  it('carries original choices through history recording, backfill and resume', () => {
+    const spawn = fn('spawnPane')
+    expect(spawn).toContain("model: pane.model ?? ''")
+    expect(spawn).toContain("effort: pane.effort ?? ''")
+    const backfill = appSource.slice(appSource.indexOf('for (const saved of removedManual) {'))
+    expect(backfill).toContain("model: saved.model ?? ''")
+    expect(backfill).toContain("effort: saved.effort ?? ''")
+    const resume = fn('onResumeHistoryAgent')
+    expect(resume).toContain('model: entry.model')
+    expect(resume).toContain('effort: entry.effort')
   })
 })
 
@@ -249,7 +273,7 @@ describe('cli_open_agent — the MCP path from event to persistence', () => {
     expect(body).toContain('model: string')
     expect(body).toContain('effort: string')
     expect(body).toContain(
-      'evaluateSpawnRequest(\n    { agent: ev.agent_key, name: ev.name, task: ev.task, model: ev.model, effort: ev.effort },',
+      'evaluateSpawnRequest(\n    { agent: ev.agent_key, name: ev.name, task: ev.task, model: ev.model, effort: ev.effort, resumesSession:',
     )
   })
 
@@ -284,8 +308,10 @@ describe('cli_open_agent — the MCP path from event to persistence', () => {
       // restart silently reopens on the wrong model. onManualResume writes the
       // same two fields on the resume path (see its own describe); these two
       // are the only writes a cli_open_agent spawn ever gets.
-      expect(payload).toContain("model: req.model ?? ''")
-      expect(payload).toContain("effort: req.effort ?? ''")
+      // Read back from the pane rather than the request, so a model spawnPane
+      // dropped is not written to the record either.
+      expect(payload).toContain("model: panes.value.find((p) => p.id === paneId)?.model ?? ''")
+      expect(payload).toContain("effort: panes.value.find((p) => p.id === paneId)?.effort ?? ''")
     },
   )
 })
@@ -340,20 +366,46 @@ describe('a remote caller cannot supply a raw command', () => {
     })
   }
 
-  it('hardcodes an empty override on every externally reachable spawn', () => {
+  it('never lets an externally reachable spawn take a command from its caller', () => {
     // createRequestedPane / createStandaloneRequestedPane are cli_open_agent
     // (and the SPAWN block, which routes through the first). ui.pane.create is
     // reachable through ui_invoke. These three are the ways a caller that is
     // not sitting at this machine can open a pane.
+    //
+    // The property is about PROVENANCE, not emptiness: the string handed to
+    // spawnPane must be one this window built, never one that travelled in. The
+    // two cli_open_agent paths are allowed to build a resume command out of a
+    // session id (the `session_id` argument), because the id is checked for
+    // shape and existence in the backend tool and the vendor syntax around it
+    // is ours — see mcpSpawnCommandOverride and App.resumeSession.test.ts. What
+    // they must never do is take a command, or any part of one, off the event.
     const reachable = ['createRequestedPane', 'createStandaloneRequestedPane']
     for (const owner of reachable) {
       const site = sites.find((s) => s.owner === owner)
       expect(site, `${owner} no longer calls spawnPane`).toBeDefined()
-      expect(site?.override, `${owner} (App.vue:${site?.line})`).toBe("''")
+      // A variable, not the call inline — so the binding is pinned separately
+      // below. What matters is that the value is one this window computed.
+      expect(site?.override, `${owner} (App.vue:${site?.line})`).toBe('mcpCommand')
+      expect(fn(owner), `${owner} must derive its override from the builder`)
+        .toContain('const mcpCommand = mcpSpawnCommandOverride(req)')
     }
 
+    // The builder's only input is the session id; it composes the rest itself.
+    // A `command`/`commandOverride` reaching it would mean a caller-supplied
+    // string had found a way through after all.
+    const builder = fn('mcpSpawnCommandOverride')
+    expect(builder).toContain('buildResumeCommand(')
+    expect(builder).not.toMatch(/\breq\.command\b/)
+    expect(builder).not.toMatch(/\breq\.commandOverride\b/)
+
+    // And nothing hands a raw command to the MCP spawn entry point either.
+    const handler = fn('handleMcpSpawnRequest')
+    expect(handler).not.toMatch(/\bev\.command\b/)
+    expect(handler).not.toMatch(/\bev\.commandOverride\b/)
+
     // ui.pane.create is an arrow-function handler with no name to match on, so
-    // it is anchored on its own error text instead.
+    // it is anchored on its own error text instead. It has no resume path, so
+    // for that one the override is still hardcoded empty.
     const anchor = appSource.indexOf('ui.pane.create requires an agent')
     expect(anchor, 'ui.pane.create handler not found').toBeGreaterThan(-1)
     const call = appSource.indexOf('spawnPane({', anchor)
@@ -361,7 +413,7 @@ describe('a remote caller cannot supply a raw command', () => {
     expect(optionsAt(call)).toMatch(/\bcommandOverride:\s*''/)
   })
 
-  it('lets only local and restore paths supply one', () => {
+  it('lets only local, restore and verified-resume paths supply one', () => {
     // A site that passes anything other than '' has to appear here, so adding
     // one is a decision someone makes on purpose rather than a default they
     // inherit. If a new name shows up, the question to answer before adding it
@@ -371,9 +423,44 @@ describe('a remote caller cannot supply a raw command', () => {
     // is not a separate exit and does not belong here.
     const filled = sites.filter((s) => s.override !== "''").map((s) => s.owner)
     expect([...new Set(filled)].sort()).toEqual([
+      // MCP-reachable, and the answer to the question above is "yes, it can".
+      // Admitted deliberately: the caller supplies a session ID, never a
+      // command — the backend refuses an id that is not on disk or that
+      // carries shell syntax, and the command around it is built here by the
+      // same buildResumeCommand the two paths below use.
+      'createRequestedPane',
+      'createStandaloneRequestedPane',
       'onManualResume', // the user pressing resume, with their own binary choice
       'rebuildPaneViaResume', // rebuild of a live pane; buildResumeCommand made it
       'spawnRestoredPane', // restore; the override arrives already rebuilt
     ])
+  })
+})
+
+describe('onManualSpawn — the spawn card\'s pick reaches both destinations', () => {
+  // Two destinations, and forgetting either is silent. spawnPane turns the
+  // pick into argv AND records it on the pane (which is what an in-session
+  // rebuild reads); manual_pane.spawn writes the project record (which is
+  // what a COLD restore reads). A pane wired to only the first comes back on
+  // the vendor default after an App restart and looks like it resumed fine.
+  const body = fn('onManualSpawn')
+
+  it('hands the pick to spawnPane', () => {
+    expect(body).toContain('model: payload.model')
+    expect(body).toContain('effort: payload.effort')
+  })
+
+  it('persists it on the project record too', () => {
+    // Sent as '' rather than omitted when unset: the backend guards these
+    // writes with `if model:`, so an empty string leaves an existing value
+    // alone instead of erasing a pick made before a rebuild.
+    // Read back from the pane: spawnPane drops a pick that a stored launch
+    // command kept off argv, and the record must not claim it.
+    const recorded = "model: panes.value.find((p) => p.id === paneId)?.model ?? ''"
+    expect(body).toContain(recorded)
+    expect(body).toContain("effort: panes.value.find((p) => p.id === paneId)?.effort ?? ''")
+    const spawnCall = body.indexOf("'manual_pane.spawn'")
+    expect(spawnCall).toBeGreaterThan(-1)
+    expect(body.indexOf(recorded)).toBeGreaterThan(spawnCall)
   })
 })

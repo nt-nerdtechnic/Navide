@@ -136,6 +136,22 @@ describe('useBackend applyBackendChanged', () => {
     await expect(inflight).resolves.toMatchObject({ ok: true })
   })
 
+  it('opens one socket when backend:changed lands before init()\'s poll resolves', async () => {
+    scope = effectScope()
+    scope.run(() => {
+      useBackend()
+    })
+    // After an update restart main's ready broadcast reaches the window while
+    // init() is still awaiting getBackendInfo: both paths call connect() for
+    // the same wsUrl within milliseconds. Two sockets would double every
+    // broadcast the window receives until the first one's TCP side dropped.
+    backendChangedCb!(READY_INFO)
+    expect(FakeWebSocket.instances).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(FakeWebSocket.instances).toHaveLength(1)
+    expect(FakeWebSocket.instances[0].closed).toBe(false)
+  })
+
   it('still tears down and reconnects when the backend actually changed (new wsUrl)', async () => {
     const { backend, socket } = await setupConnected()
 

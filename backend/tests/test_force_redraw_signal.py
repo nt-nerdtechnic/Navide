@@ -20,22 +20,28 @@ that path still signals anything.
 
 from __future__ import annotations
 
-import fcntl
 import os
-import pty
+
 import select
 import signal
 import struct
 import subprocess
 import sys
-import termios
+
 import time
 from types import SimpleNamespace
 
 import pytest
 
+# Real POSIX PTY behaviour: the module is skipped where these do not exist.
+fcntl = pytest.importorskip("fcntl")
+pty = pytest.importorskip("pty")
+termios = pytest.importorskip("termios")
+
+from agent_team_backend.osplat._posix import PosixTerminalHandle
 from agent_team_backend import app
-from agent_team_backend.terminals import TerminalSession, _claim_ctty
+from agent_team_backend.osplat._posix import _claim_ctty
+from agent_team_backend.terminals import TerminalSession
 
 # All tests here are async even where nothing is awaited: app.Session builds the
 # TerminalService lazily and its constructor needs a running event loop, so a
@@ -45,7 +51,6 @@ ROWS, COLS = 24, 80
 # Long enough for the child to be scheduled and run its handler, short enough
 # that a genuine regression fails fast rather than hanging the suite.
 SIGNAL_WAIT_S = 3.0
-
 
 # Runs in a separate interpreter, not a forked copy of this one. Doing the work
 # in a forked child instead deadlocks: by the time the full suite reaches this
@@ -61,7 +66,6 @@ end = time.monotonic() + 30
 while time.monotonic() < end:
     time.sleep(0.05)
 """
-
 
 def _spawn_winch_counter() -> tuple[subprocess.Popen, int]:
     """Start a process on a real PTY that emits one byte per SIGWINCH received.
@@ -86,7 +90,6 @@ def _spawn_winch_counter() -> tuple[subprocess.Popen, int]:
     fcntl.fcntl(master_fd, fcntl.F_SETFL, os.O_NONBLOCK)
     return proc, master_fd
 
-
 def _read_until(fd: int, marker: bytes, seconds: float) -> bytes:
     """Read until `marker` shows up, or the deadline passes. Returns as soon as
     it has what it came for so a passing test costs milliseconds, not the whole
@@ -107,7 +110,6 @@ def _read_until(fd: int, marker: bytes, seconds: float) -> bytes:
                 return out
     return out
 
-
 def _drain(fd: int) -> None:
     """Discard whatever is already buffered (e.g. the SIGWINCH from setup)."""
     while True:
@@ -120,11 +122,9 @@ def _drain(fd: int) -> None:
         except (OSError, BlockingIOError):
             return
 
-
 def _await_ready(fd: int) -> None:
     if b"R" not in _read_until(fd, b"R", 5.0):
         pytest.fail("child never reported ready on the PTY")
-
 
 def _register(session: app.Session, sid: str, master_fd: int, pid: int) -> None:
     session.terminals._sessions[sid] = TerminalSession(
@@ -133,14 +133,12 @@ def _register(session: app.Session, sid: str, master_fd: int, pid: int) -> None:
         agent_key=None,
         command=["x"],
         cwd="/",
-        master_fd=master_fd,
+        handle=PosixTerminalHandle(master_fd),
         proc=SimpleNamespace(pid=pid, returncode=None),  # type: ignore[arg-type]
     )
 
-
 def _set_size(fd: int, rows: int, cols: int) -> None:
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
-
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(sys.platform == "win32", reason="pty/SIGWINCH are POSIX-only")
@@ -168,7 +166,6 @@ async def test_force_redraw_signals_even_at_an_unchanged_size() -> None:
         proc.wait(timeout=5)
         os.close(master_fd)
 
-
 @pytest.mark.asyncio
 @pytest.mark.skipif(sys.platform == "win32", reason="pty/SIGWINCH are POSIX-only")
 async def test_force_redraw_leaves_the_requested_size_in_place() -> None:
@@ -190,7 +187,6 @@ async def test_force_redraw_leaves_the_requested_size_in_place() -> None:
         proc.kill()
         proc.wait(timeout=5)
         os.close(master_fd)
-
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(sys.platform == "win32", reason="pty/SIGWINCH are POSIX-only")

@@ -3,7 +3,14 @@ import { createHash, generateKeyPairSync, sign as edSign } from 'node:crypto'
 import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
-import { normalizePlatformId, setPlatformId } from '../../shared/osplat'
+import { platformId, setPlatformId } from '../../shared/osplat'
+import { backendEntryOnDisk } from './installedPlugins'
+
+// The platform to restore after a test that switched it: whatever this file
+// saw when it loaded — the host, or an injection from a vitest setup file.
+// Restoring to the host instead silently undid that injection for every
+// later test in the file (see src/shared/platformBaseline.test.ts).
+const BASELINE = platformId()
 
 // The manager imports electron for its view lifecycle. A functional stub backs
 // both the registry tests (which touch none of it) and the view-lifecycle tests
@@ -2680,7 +2687,7 @@ describe('devPlansPluginDescriptor', () => {
     expect(desc.requires).toEqual(['fs', 'ui', 'plans', 'terminal'])
     // Built separately (vite.plans.config.ts) — never served by the dev server.
     expect(desc.devUrl).toBe('')
-    expect(desc.entryFile.endsWith('dist-plugins/plans/index.html')).toBe(true)
+    expect(desc.entryFile.endsWith(join('dist-plugins', 'plans', 'index.html'))).toBe(true)
   })
 
   it('registers only via the builtin/official path (reserved id)', () => {
@@ -5580,7 +5587,7 @@ describe('loadInstalledPlugins official receipt gate', () => {
     }
     if (options.backend) {
       mkdirSync(join(dir, 'backend'), { recursive: true })
-      const backendPath = join(dir, 'backend', 'plugin')
+      const backendPath = join(dir, backendEntryOnDisk('backend/plugin'))
       writeFileSync(backendPath, Buffer.from([0x7f, 0x45, 0x4c, 0x46]))
       chmodSync(backendPath, 0o700)
     }
@@ -8295,12 +8302,12 @@ describe('mini-IDE dedicated window (openMiniIdePluginView)', () => {
   // These tests exercise the module-level singleton + dedicated-window path, so
   // each test must close the live window (module state resets via 'closed').
   beforeEach(() => {
-    frontendPluginManager.registerBuiltin({
+    frontendPluginManager.registerDescriptor({
       id: MINI_IDE_PLUGIN_ID,
-      requires: [],
+      requires: JSON.parse(readFileSync(resolve('src/renderer/plugins/mini-ide/plugin.json'), 'utf8')).requires,
       devUrl: '',
       entryFile: '/plugins/mini-ide/index.html',
-    })
+    }, { builtin: true })
   })
 
   afterEach(() => {
@@ -8308,7 +8315,7 @@ describe('mini-IDE dedicated window (openMiniIdePluginView)', () => {
       if (!win.isDestroyed()) win.close()
     }
     frontendPluginManager.destroy(MINI_IDE_PLUGIN_ID)
-    setPlatformId(normalizePlatformId(process.platform))
+    setPlatformId(BASELINE)
   })
 
   function lastWindow(): FakeWindowLike {
@@ -8338,6 +8345,32 @@ describe('mini-IDE dedicated window (openMiniIdePluginView)', () => {
     const view = lastView()
     expect(win.children).toContain(view)
     expect(view.bounds).toEqual({ x: 0, y: 0, width: 1000, height: 700 })
+  })
+
+  it('delivers Host language changes to an already open Mini-IDE through its shipped ui capability', async () => {
+    await openMiniIdePluginView('/ws', '', { locale: 'en-US' })
+    const view = lastView()
+    view.webContents.emit('did-finish-load')
+    view.webContents.sent.length = 0
+    for (const locale of ['ja-JP', 'en-US']) {
+      frontendPluginManager.dispatchHostSettingsChanged({ settings: { 'agent-team:language': locale } })
+      expect(view.webContents.sent.at(-1)).toEqual({
+        channel: 'plugin:cap:event',
+        args: [{ type: 'ui.settings_changed', data: { source: 'host', settings: { 'agent-team:language': locale } } }],
+      })
+    }
+  })
+
+  it('passes Japanese into the initial editor query and reuses the view for language changes', async () => {
+    await openMiniIdePluginView('/ws', '', { locale: 'ja-JP', filepath: 'a.ts' }, 'light')
+    const view = lastView()
+    expect(view.webContents.loads[0]).toContain('locale=ja-JP')
+    view.webContents.emit('did-finish-load')
+    await openMiniIdePluginView('/ws', '', { locale: 'en-US', filepath: 'b.ts' }, 'light')
+    expect(lastView()).toBe(view)
+    expect(view.webContents.loads).toHaveLength(1)
+    expect(view.webContents.sent.filter(message => message.channel === 'plugin:openTarget').at(-1)?.args[0])
+      .toMatchObject({ locale: 'en-US', filepath: 'b.ts' })
   })
 
   it('passes the current theme in the entry query', async () => {
@@ -8556,7 +8589,7 @@ describe('ui.open_in_editor host capability — workspace containment / caller r
     const { opens, call } = openUiPlugin()
     const resp = await call({ filepath: 'src/app.ts' })
     expect(resp.error).toBeUndefined()
-    expect(opens).toEqual([{ workspace_path: '/ws', filepath: 'src/app.ts' }])
+    expect(opens).toEqual([{ workspace_path: resolve('/ws'), filepath: join('src', 'app.ts') }])
   })
 
   it('rejects a traversal that escapes the workspace', async () => {
@@ -8579,7 +8612,7 @@ describe('ui.open_in_editor host capability — workspace containment / caller r
     // the file's own root, and the target is normalized against it.
     const resp = await call({ workspace_path: '/elsewhere', filepath: 'notes/todo.md' })
     expect(resp.error).toBeUndefined()
-    expect(opens).toEqual([{ workspace_path: '/elsewhere', filepath: 'notes/todo.md' }])
+    expect(opens).toEqual([{ workspace_path: resolve('/elsewhere'), filepath: join('notes', 'todo.md') }])
   })
 
   it('rejects a traversal that escapes a call-supplied root', async () => {
@@ -8593,14 +8626,14 @@ describe('ui.open_in_editor host capability — workspace containment / caller r
     const { opens, call } = openUiPlugin()
     const resp = await call({ workspace_path: '/elsewhere', filepath: '/elsewhere/notes/todo.md' })
     expect(resp.error).toBeUndefined()
-    expect(opens).toEqual([{ workspace_path: '/elsewhere', filepath: 'notes/todo.md' }])
+    expect(opens).toEqual([{ workspace_path: resolve('/elsewhere'), filepath: join('notes', 'todo.md') }])
   })
 
   it('normalizes an in-workspace path before handing it downstream', async () => {
     const { opens, call } = openUiPlugin()
     const resp = await call({ filepath: 'src/../README.md' })
     expect(resp.error).toBeUndefined()
-    expect(opens).toEqual([{ workspace_path: '/ws', filepath: 'README.md' }])
+    expect(opens).toEqual([{ workspace_path: resolve('/ws'), filepath: 'README.md' }])
   })
 
   it('rejects a bare workspace reference (no file to open)', async () => {
@@ -9985,7 +10018,7 @@ describe('first-party Git private bridge', () => {
       writeFileSync(join(packageDir, 'manifest.json'), readFileSync('plugins/navide-plans/manifest.json'))
       writeFileSync(join(packageDir, 'frontend/left/index.html'), '<!doctype html>')
       writeFileSync(join(packageDir, 'frontend/window/index.html'), '<!doctype html>')
-      copyFileSync(process.execPath, join(packageDir, 'backend/navide-plans'))
+      copyFileSync(process.execPath, join(packageDir, backendEntryOnDisk('backend/navide-plans')))
       expect(registerBundledPlans(mgr, {
         isPackaged: false,
         resourcesPath: '',
@@ -10255,23 +10288,24 @@ describe('first-party Git private bridge', () => {
     expect(view.webContents.sent).toHaveLength(2)
   })
 
-  it('does not route Host-owned language settings changes to v2 Git views', async () => {
+  it.each(['zh-TW', 'en-US', 'ja-JP'])('routes only Host-owned %s language to v2 Git views', async (locale) => {
     const { mgr, view } = await openGitView()
-
-    mgr.dispatchHostSettingsChanged({
-      settings: {
-        'agent-team:language': 'zh-TW',
-        'unknown.setting': 'ignored',
+    // The merged Host dispatches both the public editor-preferences event for
+    // views bound to it and the generic host-settings event.
+    mgr.dispatchHostSettingsChanged({ settings: { 'agent-team:language': locale, 'unknown.setting': 'ignored' } })
+    expect(view.webContents.sent).toEqual([
+      {
+        channel: 'plugin:cap:event',
+        args: [{
+          type: 'ui.editorPreferencesChanged',
+          data: { preferences: { 'agent-team:language': locale } },
+        }],
       },
-    })
-
-    expect(view.webContents.sent).toEqual([{
-      channel: 'plugin:cap:event',
-      args: [{
-        type: 'ui.editorPreferencesChanged',
-        data: { preferences: { 'agent-team:language': 'zh-TW' } },
-      }],
-    }])
+      {
+        channel: 'plugin:cap:event',
+        args: [{ type: 'ui.settings_changed', data: { source: 'host', settings: { 'agent-team:language': locale } } }],
+      },
+    ])
   })
 
   it('routes Host-owned language settings changes to active Plans v2 views', async () => {
@@ -10394,6 +10428,7 @@ describe('first-party Git private bridge', () => {
           source: 'host',
           settings: {
             'agentTeam.yolo': '1',
+            'agent-team:language': 'zh-TW',
           },
         },
       }],
@@ -10685,7 +10720,7 @@ describe('first-party Git private bridge', () => {
     })
     expect(opens).toEqual([{
       workspacePath,
-      relPath: '.agent-team/plans/feature.html',
+      relPath: join('.agent-team', 'plans', 'feature.html'),
     }])
   })
 
@@ -10771,7 +10806,7 @@ describe('first-party Git private bridge', () => {
       })
       expect(opens).toContainEqual({
         workspacePath: tempDir,
-        relPath: 'packages/subrepo/.agent-team/plans/nested.html',
+        relPath: join('packages', 'subrepo', '.agent-team', 'plans', 'nested.html'),
       })
 
       // 2. Nested repo with .git FILE (submodule/worktree): REJECTED
@@ -10921,7 +10956,7 @@ describe('first-party Git private bridge', () => {
       expect(editorCalls).toEqual([
         {
           workspace_path: resolve(tempDir),
-          filepath: '.agent-team/plans/feature.html',
+          filepath: join('.agent-team', 'plans', 'feature.html'),
         },
       ])
     } finally {
@@ -11018,7 +11053,7 @@ describe('first-party Git private bridge', () => {
       expect(editorCalls).toEqual([
         {
           workspace_path: resolve(tempDir),
-          filepath: 'src/main/index.ts',
+          filepath: join('src', 'main', 'index.ts'),
           line: '42',
         },
       ])
@@ -11171,7 +11206,7 @@ describe('first-party Git private bridge', () => {
     }
     expect(request).toMatchObject({
       type: 'project.peek',
-      payload: { workspace_path: '/workspace' },
+      payload: { workspace_path: resolve('/workspace') },
     })
     socket.receive({
       id: request.id,
@@ -11292,7 +11327,7 @@ describe('first-party Git private bridge', () => {
     expect(picked).toMatchObject({
       reqId: 'pick-workspace',
       ok: true,
-      result: { path: '/picked/workspace' },
+      result: { path: resolve('/picked/workspace') },
     })
     expect(typeof grant).toBe('string')
 
@@ -11314,7 +11349,7 @@ describe('first-party Git private bridge', () => {
     })
     expect(sent).toEqual([{
       channel: 'git:contribution-action',
-      args: [{ operation: 'open_workspace', payload: { path: '/picked/workspace' } }],
+      args: [{ operation: 'open_workspace', payload: { path: resolve('/picked/workspace') } }],
     }])
 
     await expect(call(view, 'git.contribution', {
@@ -12098,13 +12133,13 @@ describe('first-party Git private bridge', () => {
       operation: 'bind',
       payload: { accountId: 'account-1' },
     }, 'git-bind')).resolves.toMatchObject({ ok: true, result: { accountId: 'account-1' } })
-    expect(bind).toHaveBeenCalledWith('/workspace', 'account-1')
+    expect(bind).toHaveBeenCalledWith(resolve('/workspace'), 'account-1')
 
     await expect(call(view, 'git.account', {
       operation: 'unbind',
       payload: {},
     }, 'git-unbind')).resolves.toMatchObject({ ok: true, result: { accountId: null } })
-    expect(unbind).toHaveBeenCalledWith('/workspace')
+    expect(unbind).toHaveBeenCalledWith(resolve('/workspace'))
 
     await expect(call(view, 'git.account', {
       operation: 'bind',
@@ -12289,7 +12324,7 @@ describe('first-party Git private bridge', () => {
       bind: () => undefined,
       unbind: () => undefined,
       getBinding: () => 'account-1',
-      getCredential: (workspacePath) => workspacePath === '/workspace'
+      getCredential: (workspacePath) => workspacePath === resolve('/workspace')
         ? { username: 'alice', token: 'secret-token', expectedHost: 'github.com' }
         : null,
     })
@@ -12306,7 +12341,7 @@ describe('first-party Git private bridge', () => {
     }
     expect(request.type).toBe('git.push')
     expect(request.payload).toEqual({
-      workspace_path: '/workspace',
+      workspace_path: resolve('/workspace'),
       remote: 'origin',
       branch: 'main',
       credential: { username: 'alice', token: 'secret-token', expectedHost: 'github.com' },
@@ -12361,7 +12396,7 @@ describe('first-party Git private bridge', () => {
     await vi.waitFor(() => expect(socket.sent).toHaveLength(1))
     const request = JSON.parse(socket.sent[0]!)
     expect(request.payload).toMatchObject({
-      workspace_path: '/workspace',
+      workspace_path: resolve('/workspace'),
       remote: 'origin',
       branch: 'main',
     })
@@ -12376,7 +12411,7 @@ describe('first-party Git private bridge', () => {
       timestamp: '',
     })
     await expect(operation).resolves.toMatchObject({ ok: true })
-    expect(getCredential).toHaveBeenCalledWith('/workspace')
+    expect(getCredential).toHaveBeenCalledWith(resolve('/workspace'))
   })
 
   it('releases an interactive credential owner when the backend is unavailable', async () => {
@@ -13136,7 +13171,7 @@ describe('first-party Git private bridge', () => {
     }, 'window-open-clone')).resolves.toEqual({
       reqId: 'window-open-clone', ok: true, result: { accepted: true },
     })
-    expect(opened).toEqual(['/private/tmp/repo'])
+    expect(opened).toEqual([resolve('/private/tmp/repo')])
     expect(sent).toEqual([])
 
     await expect(call(view, 'git.contribution', {
@@ -13168,7 +13203,7 @@ describe('first-party Git private bridge', () => {
     })
     await Promise.resolve()
     const request = JSON.parse(socket.sent.at(-1)!) as { id: string; type: string; payload: Record<string, unknown> }
-    expect(request.payload).toEqual({ workspace_path: '/workspace', limit: 10 })
+    expect(request.payload).toEqual({ workspace_path: resolve('/workspace'), limit: 10 })
     expect(getCredential).not.toHaveBeenCalled()
     socket.receive({
       id: request.id,
@@ -13191,7 +13226,7 @@ describe('first-party Git private bridge', () => {
       payload: Record<string, unknown>
     }
     expect(localRequest.type).toBe('git.status')
-    expect(localRequest.payload).toEqual({ workspace_path: '/workspace' })
+    expect(localRequest.payload).toEqual({ workspace_path: resolve('/workspace') })
     socket.receive({
       id: localRequest.id,
       type: localRequest.type,
@@ -13380,5 +13415,136 @@ describe('Git left legacy rollback composition', () => {
       )
       expect(opened).toBe(true)
     })
+  })
+})
+
+describe('workspace display name for plugin window titles', () => {
+  type Sent = { id: string; type: string; payload: Record<string, unknown> }
+  const recentEntry = (path: string, name: string) => ({
+    path,
+    name,
+    last_opened_at: '2026-01-01T00:00:00Z',
+    pinned: false,
+    last_known_state: '',
+    last_known_task: '',
+    exists: true,
+  })
+
+  async function answerListRecent(
+    socket: InstanceType<typeof wsMock.FakeNodeWebSocket>,
+    recent: unknown[],
+  ): Promise<Sent> {
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1))
+    const request = JSON.parse(socket.sent[0]!) as Sent
+    expect(request).toMatchObject({ type: 'workspace.list_recent' })
+    socket.receive({
+      id: request.id,
+      type: request.type,
+      ok: true,
+      payload: { recent, path: '/tmp/recent.json' },
+      error: null,
+      timestamp: '',
+    })
+    return request
+  }
+
+  it('reports the alias the recent-list mirror has for the workspace, trimmed', async () => {
+    const mgr = new FrontendPluginManager()
+    mgr.setBackendWsUrl('ws://workspace-alias-test')
+    const pending = mgr.peekWorkspaceDisplayName('/workspace')
+    const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+    socket.open()
+    await answerListRecent(socket, [
+      recentEntry(resolve('/other'), 'Other'),
+      recentEntry(resolve('/workspace'), '  Navide  '),
+    ])
+    await expect(pending).resolves.toBe('Navide')
+  })
+
+  it('reports no alias when the mirror holds the folder basename — its own "no alias"', async () => {
+    const mgr = new FrontendPluginManager()
+    mgr.setBackendWsUrl('ws://workspace-alias-basename-test')
+    const pending = mgr.peekWorkspaceDisplayName('/workspace')
+    const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+    socket.open()
+    // touch() writes the basename for a workspace with no alias.
+    await answerListRecent(socket, [recentEntry(resolve('/workspace'), 'workspace')])
+    await expect(pending).resolves.toBe('')
+  })
+
+  // The canary for the read being pure. `project.peek` registers the path as a
+  // workspace and provisions `.agent-team/plans/` inside it; opening a
+  // sub-folder in the editor used to do exactly that to the sub-folder. The
+  // mirror never holds a sub-folder, so the answer is '' and nothing is
+  // written anywhere.
+  it('reports no alias for a path the mirror does not hold, and never sends project.peek', async () => {
+    const mgr = new FrontendPluginManager()
+    mgr.setBackendWsUrl('ws://workspace-alias-miss-test')
+    const pending = mgr.peekWorkspaceDisplayName('/workspace/drafts')
+    const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+    socket.open()
+    await answerListRecent(socket, [recentEntry(resolve('/workspace'), 'Navide')])
+    await expect(pending).resolves.toBe('')
+    const types = socket.sent.map((raw) => (JSON.parse(raw) as Sent).type)
+    expect(types).toEqual(['workspace.list_recent'])
+    expect(types).not.toContain('project.peek')
+  })
+
+  it('matches the mirror entry through a trailing slash on either side', async () => {
+    const mgr = new FrontendPluginManager()
+    mgr.setBackendWsUrl('ws://workspace-alias-slash-test')
+    const pending = mgr.peekWorkspaceDisplayName('/workspace/')
+    const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+    socket.open()
+    await answerListRecent(socket, [recentEntry(`${resolve('/workspace')}/`, 'Navide')])
+    await expect(pending).resolves.toBe('Navide')
+  })
+
+  it('reports no alias when the listing is not a list', async () => {
+    const mgr = new FrontendPluginManager()
+    mgr.setBackendWsUrl('ws://workspace-alias-malformed-test')
+    const pending = mgr.peekWorkspaceDisplayName('/workspace')
+    const socket = wsMock.FakeNodeWebSocket.instances.at(-1)!
+    socket.open()
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1))
+    const request = JSON.parse(socket.sent[0]!) as Sent
+    socket.receive({
+      id: request.id,
+      type: request.type,
+      ok: true,
+      payload: { recent: null },
+      error: null,
+      timestamp: '',
+    })
+    await expect(pending).resolves.toBe('')
+  })
+
+  it('gives up rather than hold a window open when the backend does not answer', async () => {
+    const mgr = new FrontendPluginManager()
+    mgr.setBackendWsUrl('ws://workspace-alias-timeout-test')
+    // WsClient.send waits up to 10s of its own and queues while the transport
+    // is down; the race is what brings that down to a title-sized wait.
+    await expect(mgr.peekWorkspaceDisplayName('/workspace', 5)).resolves.toBe('')
+  })
+
+  it('reports no alias without a backend url or a workspace at all', async () => {
+    const mgr = new FrontendPluginManager()
+    await expect(mgr.peekWorkspaceDisplayName('/workspace')).resolves.toBe('')
+    mgr.setBackendWsUrl('ws://workspace-alias-no-workspace-test')
+    await expect(mgr.peekWorkspaceDisplayName('')).resolves.toBe('')
+  })
+})
+
+describe('plansQuery workspace alias', () => {
+  it('carries a resolved alias and leaves the param out when there is none', () => {
+    const aliased = new URLSearchParams(plansQuery('/ws/agent-team', '', '', '', 'zh-TW', '  Navide  '))
+    expect(aliased.get('workspace_display_name')).toBe('Navide')
+    expect(aliased.get('workspace_path')).toBe('/ws/agent-team')
+
+    for (const alias of ['', '   ']) {
+      const plain = new URLSearchParams(plansQuery('/ws/agent-team', '', '', '', 'zh-TW', alias))
+      expect(plain.has('workspace_display_name')).toBe(false)
+    }
+    expect(new URLSearchParams(plansQuery('/ws/agent-team', '', '', '', 'zh-TW')).has('workspace_display_name')).toBe(false)
   })
 })

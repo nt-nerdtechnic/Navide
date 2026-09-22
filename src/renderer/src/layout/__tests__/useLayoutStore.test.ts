@@ -16,7 +16,7 @@ vi.mock('@navide/plugin-ui/shared', () => ({
 }))
 
 const { useLayoutStore, _resetLayoutStoreForTest } = await import('../useLayoutStore')
-const { LAYOUT_SETTINGS_KEY, RAIL_SIZE, SLOT_LIMITS } = await import('../slots')
+const { LAYOUT_SETTINGS_KEY, LAYOUT_VERSION, RAIL_SIZE, SLOT_LIMITS } = await import('../slots')
 
 function reset(seed: Record<string, unknown> = {}): void {
   store.clear()
@@ -273,8 +273,8 @@ describe('moving views between slots', () => {
     const s = useLayoutStore()
     s.applyPreset('bottom-panel')
     expect(s.layout.value.slots.down.views).toEqual(['history', 'messages'])
-    expect(s.layout.value.slots.right.views).toEqual(['tokens', 'tasker', 'preview'])
-    expect(s.layout.value.slots.right.active).toBe('tokens')
+    expect(s.layout.value.slots.right.views).toEqual(['time', 'tokens', 'tasker', 'preview'])
+    expect(s.layout.value.slots.right.active).toBe('time')
     expect(s.slotOf('history')).toBe('down')
   })
 
@@ -302,5 +302,107 @@ describe('moving views between slots', () => {
     const s = useLayoutStore()
     s.setChrome('statusbar', false)
     expect(s.layout.value.chrome).toEqual({ titlebar: true, statusbar: false })
+  })
+})
+
+describe('v1 → v2: the shipped tab order finally reaches an existing install', () => {
+  // The real order two installs had on disk when this was found: `time` was
+  // added to the right slot after they were saved, so reconcileOccupancy
+  // appended it and it sat BELOW tokens instead of above.
+  const V1_RIGHT = ['history', 'tokens', 'tasker', 'messages', 'preview', 'time']
+  const V1_RIGHT_WITHOUT_TIME = ['history', 'tokens', 'tasker', 'messages', 'preview']
+
+  function v1(right: string[], extra: Record<string, unknown> = {}): string {
+    return JSON.stringify({
+      version: 1,
+      chrome: { titlebar: true, statusbar: true },
+      hidden: [],
+      slots: {
+        left: { views: ['agents'], active: 'agents', size: 300, collapsed: false },
+        right: { views: right, active: right[0] ?? null, size: 260, collapsed: false },
+        up: { views: [], active: null, size: 180, collapsed: false },
+        down: { views: [], active: null, size: 180, collapsed: false },
+      },
+      ...extra,
+    })
+  }
+
+  it('re-sorts a v1 slot into declaration order', () => {
+    reset({ [LAYOUT_SETTINGS_KEY]: v1(V1_RIGHT) })
+
+    expect(useLayoutStore().layout.value.slots.right.views).toEqual([
+      'history', 'time', 'tokens', 'tasker', 'messages', 'preview',
+    ])
+  })
+
+  it('places a view the stored list never knew about by declaration, not at the end', () => {
+    // This is the exact shape that produced the bug: no `time` at all, so
+    // reconcileOccupancy re-homed it — and appended it to the bottom.
+    reset({ [LAYOUT_SETTINGS_KEY]: v1(V1_RIGHT_WITHOUT_TIME) })
+
+    const views = useLayoutStore().layout.value.slots.right.views
+    expect(views.indexOf('time')).toBeLessThan(views.indexOf('tokens'))
+  })
+
+  it('keeps everything that IS a user choice', () => {
+    // Order was never choosable in v1 (moveView refuses a same-slot move and
+    // nothing drags), but which slot a view sits in always was — as are sizes,
+    // collapse, hidden views and chrome.
+    // `tasker` is one of the few views the registry lets leave the right slot.
+    const saved = JSON.parse(v1(['history', 'tokens'], { hidden: ['messages'] }))
+    saved.slots.up = { views: ['tasker'], active: 'tasker', size: 200, collapsed: false }
+    saved.chrome = { titlebar: false, statusbar: true }
+    reset({ [LAYOUT_SETTINGS_KEY]: JSON.stringify(saved) })
+
+    const { layout } = useLayoutStore()
+    expect(layout.value.slots.up.views).toEqual(['tasker'])
+    expect(layout.value.slots.right.views).not.toContain('tasker')
+    expect(layout.value.hidden).toContain('messages')
+    expect(layout.value.slots.right.views).not.toContain('messages')
+    expect(layout.value.slots.right.size).toBe(260)
+    expect(layout.value.slots.left.size).toBe(300)
+    expect(layout.value.chrome.titlebar).toBe(false)
+  })
+
+  it('leaves a v2 document alone', () => {
+    // Once ordering is a user choice, re-sorting would throw it away. v2 is
+    // the promise that it will not.
+    const saved = JSON.parse(v1(['history', 'tokens', 'time']))
+    saved.version = 2
+    reset({ [LAYOUT_SETTINGS_KEY]: JSON.stringify(saved) })
+
+    expect(useLayoutStore().layout.value.slots.right.views.slice(0, 3))
+      .toEqual(['history', 'tokens', 'time'])
+  })
+
+  it('writes the document back at the current version', () => {
+    reset({ [LAYOUT_SETTINGS_KEY]: v1(V1_RIGHT) })
+    const { layout, setSlotSize } = useLayoutStore()
+    setSlotSize('right', 280)
+
+    expect(JSON.parse(store.get(LAYOUT_SETTINGS_KEY) as string).version).toBe(LAYOUT_VERSION)
+    expect(layout.value.slots.right.size).toBe(280)
+  })
+
+  it('falls back to the shipped layout for a version from the future', () => {
+    // A newer build wrote it; this one cannot know what changed, so the whole
+    // document is declined rather than half-understood.
+    //
+    // Asserted on a field the fallback replaces, not on the view order: an
+    // accepted document is re-homed by reconcileOccupancy, which appends the
+    // missing views in declaration order and lands on exactly the default
+    // array — so order alone cannot tell "declined" from "accepted".
+    const saved = JSON.parse(v1(['history']))
+    saved.version = 99
+    saved.slots.right.size = 321
+    saved.chrome = { titlebar: false, statusbar: false }
+    reset({ [LAYOUT_SETTINGS_KEY]: JSON.stringify(saved) })
+
+    const { layout } = useLayoutStore()
+    expect(layout.value.slots.right.size).not.toBe(321)
+    expect(layout.value.chrome.titlebar).toBe(true)
+    expect(layout.value.slots.right.views).toEqual(
+      ['history', 'time', 'tokens', 'tasker', 'messages', 'preview'],
+    )
   })
 })

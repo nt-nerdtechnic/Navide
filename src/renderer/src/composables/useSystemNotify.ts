@@ -1,4 +1,6 @@
 import { computed, readonly, ref } from 'vue'
+import { settingsGet, settingsSet } from '@navide/plugin-ui/shared'
+import { notifySoundEnabled } from './useSoundNotify'
 
 /**
  * Native OS notifications for CLI pane state changes (turn done / needs input).
@@ -24,13 +26,28 @@ import { computed, readonly, ref } from 'vue'
 
 export type NotifyKind = 'done' | 'attention'
 
-/** Pure gate: notify only when the app is backgrounded AND this is not a repeat
- *  of the last kind already notified for the pane. */
+/** Settings → General → Notifications. Off suppresses the OS notification only;
+ *  the Dock badge keeps tracking pending state because it reflects what is
+ *  waiting for the user rather than interrupting them. */
+export const SYSTEM_NOTIFY_ENABLED_KEY = 'agentTeam.systemNotifyEnabled'
+
+export function systemNotifyEnabled(): boolean {
+  return settingsGet<boolean>(SYSTEM_NOTIFY_ENABLED_KEY, true) !== false
+}
+
+export function setSystemNotifyEnabled(enabled: boolean): void {
+  settingsSet(SYSTEM_NOTIFY_ENABLED_KEY, enabled)
+}
+
+/** Pure gate: notify only when enabled, the app is backgrounded AND this is not
+ *  a repeat of the last kind already notified for the pane. */
 export function shouldNotify(args: {
   appFocused: boolean
   lastKind: NotifyKind | undefined
   kind: NotifyKind
+  enabled?: boolean
 }): boolean {
+  if (args.enabled === false) return false
   if (args.appFocused) return false
   return args.lastKind !== args.kind
 }
@@ -46,7 +63,25 @@ const lastKindByPane = new Map<string, NotifyKind>()
 // on markSeen (user switched to the pane), markActive (new turn superseded the
 // pending state), and forgetPane.
 const pendingPanes = ref(new Set<string>())
+// Panes the user muted (pane context menu / header badge). A muted pane never
+// reaches the OS notification or the sound, but still counts toward the Dock
+// badge — like the global toggles, mute means "don't interrupt me", not "don't
+// record it". Persisted per pane by App.vue (PaneRecord.is_muted); this set is
+// the runtime mirror the gate reads.
+const mutedPanes = ref(new Set<string>())
 let listenersBound = false
+
+export function isPaneMuted(paneId: string): boolean {
+  return mutedPanes.value.has(paneId)
+}
+
+export function setPaneMuted(paneId: string, muted: boolean): void {
+  if (mutedPanes.value.has(paneId) === muted) return
+  const next = new Set(mutedPanes.value)
+  if (muted) next.add(paneId)
+  else next.delete(paneId)
+  mutedPanes.value = next
+}
 
 function bindFocusListeners(): void {
   if (listenersBound || typeof window === 'undefined') return
@@ -69,11 +104,22 @@ function notifyPaneState(
 ): void {
   bindFocusListeners()
   pendingPanes.value.add(paneId)
-  if (!shouldNotify({ appFocused: appFocused.value, lastKind: lastKindByPane.get(paneId), kind })) {
+  // Muted panes and the disabled toggle both short-circuit before dedup is
+  // recorded, so unmuting / re-enabling lets the very next signal through
+  // instead of treating it as a repeat.
+  if (mutedPanes.value.has(paneId)) return
+  if (!shouldNotify({
+    appFocused: appFocused.value,
+    lastKind: lastKindByPane.get(paneId),
+    kind,
+    enabled: systemNotifyEnabled(),
+  })) {
     return
   }
   lastKindByPane.set(paneId, kind)
-  void window.agentTeam?.notify({ paneId, title, body })
+  // Sound off also silences the OS notification's own sound; the chime and the
+  // system ding are the same "make noise" decision to the user.
+  void window.agentTeam?.notify({ paneId, title, body, silent: !notifySoundEnabled() })
 }
 
 /** A pane produced new activity (new turn): re-arm notifications for it so the
@@ -93,7 +139,10 @@ function markSeen(paneId: string): void {
   pendingPanes.value.delete(paneId)
 }
 
-/** A pane was removed: drop its dedup and pending state. */
+/** A pane's process is gone: drop its dedup and pending state. Mute is NOT
+ *  dropped here — onKill runs this for rebuilds and idle reclaims too, where
+ *  the seat (and the user's mute on it) survives; the real-close path clears
+ *  mute itself. */
 function forgetPane(paneId: string): void {
   lastKindByPane.delete(paneId)
   pendingPanes.value.delete(paneId)
@@ -106,6 +155,9 @@ export function useSystemNotify() {
   return {
     appFocused: readonly(appFocused),
     pendingCount,
+    mutedPanes: readonly(mutedPanes),
+    isPaneMuted,
+    setPaneMuted,
     notifyPaneState,
     markActive,
     markSeen,

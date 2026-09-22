@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 
 from agent_team_backend import app as app_module
 from agent_team_backend.app import app
-from agent_team_backend import hook_auth
+from agent_team_backend import hook_auth, osplat
 
 
 @pytest.fixture()
@@ -41,8 +41,11 @@ def events(monkeypatch) -> list[dict]:
 
 
 def _payload(events: list[dict]) -> dict:
-    assert len(events) == 1, f"expected exactly one broadcast, got {len(events)}"
-    return events[0]["payload"]
+    # The hook may also emit devtime.changed (dev-time heartbeat); only the
+    # agent.activity broadcast is under test here.
+    activity = [e for e in events if e["type"] == "agent.activity"]
+    assert len(activity) == 1, f"expected exactly one broadcast, got {len(events)}"
+    return activity[0]["payload"]
 
 
 def test_notification_forwards_the_type_that_distinguishes_waiting_from_done(
@@ -478,14 +481,24 @@ def test_the_hook_secret_lives_in_a_private_file_the_command_only_names(tmp_path
 
     path = hook_auth.header_file()
     assert path.is_file()
-    assert os.stat(path).st_mode & 0o077 == 0
+    if osplat.paths.enforces_posix_modes():
+        # NTFS has no mode bits: secret_files hardens with an ACL there.
+        assert os.stat(path).st_mode & 0o077 == 0
     assert path.read_text(encoding="utf-8").startswith(f"{hook_auth.HEADER}: ")
     secret = hook_auth.token()
     for command in (
         _build_curl_command(str(tmp_path / "port"), "stop"),
-        _build_command(str(tmp_path / "port")),
+        # Both of Copilot's spellings: its hook file carries one per shell.
+        _build_command(str(tmp_path / "port"), "bash"),
+        _build_command(str(tmp_path / "port"), "powershell"),
     ):
-        assert f"-H @{path}" in command or f"-H @'{path}'" in command
+        # sh names the file after curl's `@`; PowerShell quotes the whole
+        # argument, because `@` starts a splat there.
+        assert (
+            f"-H @{path}" in command
+            or f"-H @'{path}'" in command
+            or f"-H '@{path}'" in command
+        )
         assert secret not in command
 
 

@@ -140,3 +140,87 @@ describe('production navide.git window composition', () => {
     expect(calls.filter(({ type }) => type === 'git.status').length).toBeGreaterThan(statusCallsBeforeInit)
   })
 })
+
+describe('production navide.git window title', () => {
+  let wrapper: VueWrapper | null = null
+
+  afterEach(() => {
+    wrapper?.unmount()
+    wrapper = null
+    calls.length = 0
+    initialized = false
+  })
+
+  function mountWindow(search: string): VueWrapper {
+    window.history.replaceState({}, '', search)
+    return mount(GitWindowApp, {
+      props: {
+        workspaceGrantPort: {
+          pickWorkspace: vi.fn(async () => null),
+          openWorkspace: vi.fn(async () => undefined),
+          openKnownWorktree: vi.fn(async () => undefined),
+        },
+        aiCliController,
+      },
+      global: {
+        plugins: [i18n],
+        stubs: {
+          SafeAiCliPanel: true,
+          GitCredentialModal: true,
+          GitHistoryModal: true,
+          NotificationHost: true,
+          DiffPane: true,
+          BranchDiffPane: true,
+          ConflictPane: true,
+        },
+        provide: {
+          [GIT_TRANSPORT_KEY as symbol]: transport,
+          [GIT_FILE_ACCESS_KEY as symbol]: {
+            readFile: vi.fn(), writeFile: vi.fn(), readImage: vi.fn(),
+          },
+          [GIT_UI_KEY as symbol]: {
+            openInEditor: vi.fn(), openExternal: vi.fn(), revealPath: vi.fn(), pickFolder: vi.fn(),
+          },
+          [GIT_BRANCH_DIFF_KEY as symbol]: { load: vi.fn() },
+          [GIT_ACCOUNTS_KEY as symbol]: {
+            accounts: { value: [] },
+            available: { value: true },
+            refresh: vi.fn(async () => undefined),
+            addAccount: vi.fn(async () => true),
+            bind: vi.fn(async () => true),
+            unbind: vi.fn(async () => true),
+            getBinding: vi.fn(async () => null),
+          },
+          [GIT_ISSUES_KEY as symbol]: {
+            provider: vi.fn(async () => ({ ok: true, payload: { provider: 'none' }, error: null })),
+            list: vi.fn(), get: vi.fn(), create: vi.fn(), comment: vi.fn(), setState: vi.fn(),
+          },
+        },
+      },
+    })
+  }
+
+  it('wears the alias the Host resolved, in the window title and the toolbar crumb', async () => {
+    wrapper = mountWindow(
+      '/?workspace_path=%2FUsers%2Fdev%2Fprojects%2Fagent-team&workspace_display_name=%20%20Navide%20%20',
+    )
+    await flushPromises()
+    expect(document.title).toBe('Navide — Git')
+    expect(wrapper.get('.toolbar .crumb').text()).toContain('Navide')
+  })
+
+  it('falls back to the folder name when the alias is absent or blank', async () => {
+    for (const search of [
+      '/?workspace_path=%2FUsers%2Fdev%2Fprojects%2Fagent-team',
+      '/?workspace_path=%2FUsers%2Fdev%2Fprojects%2Fagent-team&workspace_display_name=',
+      '/?workspace_path=%2FUsers%2Fdev%2Fprojects%2Fagent-team&workspace_display_name=%20%20',
+    ]) {
+      document.title = 'untouched'
+      const view = mountWindow(search)
+      await flushPromises()
+      expect(document.title, search).toBe('agent-team — Git')
+      expect(view.get('.toolbar .crumb').text(), search).toContain('agent-team')
+      view.unmount()
+    }
+  })
+})

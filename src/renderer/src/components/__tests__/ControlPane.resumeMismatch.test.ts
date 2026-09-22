@@ -24,7 +24,7 @@ const project = (over: Partial<ExistingProjectInfo> = {}): ExistingProjectInfo =
   stagesCompleted: 2,
   nextStageIndex: 2,
   updatedAt: '2026-09-09',
-  projectFile: '/tmp/ws/.agent-team/project.json',
+  workspacePath: '/tmp/ws',
   pipelineId: 'custom',
   runCount: 1,
   ...over,

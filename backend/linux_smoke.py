@@ -83,12 +83,31 @@ def probe() -> str:
 
 
 def paths() -> str:
-    """Where state lands. XDG on Linux, and honouring the explicit override."""
+    """Where state lands. XDG on Linux, and honouring the explicit override.
+
+    The override this script pins at the top is the dev-launcher contract; a
+    packaged app never sets it, so the second half asks the question CI could
+    not see for a whole release: with no override, does the backend land under
+    ``$XDG_DATA_HOME`` — the directory main's ``resolveBackendDataDir`` reads
+    the ws token from — and not under ``$XDG_CONFIG_HOME``, which is where
+    Electron's ``appData`` points on Linux and where main once looked?
+    """
     from agent_team_backend import applog, osplat
 
     data = applog.app_data_dir()
     config = osplat.paths.app_support_dir("Cursor")
-    return f"data={data} cursor={config}"
+
+    override = os.environ.pop("AGENT_TEAM_DATA_DIR")
+    try:
+        packaged = applog.app_data_dir()
+    finally:
+        os.environ["AGENT_TEAM_DATA_DIR"] = override
+    expected = os.path.join(os.environ["XDG_DATA_HOME"], "Agent-Team")
+    if str(packaged) != expected:
+        raise AssertionError(f"no-override data dir is {packaged}, expected {expected}")
+    if str(packaged).startswith(os.environ["XDG_CONFIG_HOME"]):
+        raise AssertionError(f"no-override data dir {packaged} sits under XDG_CONFIG_HOME")
+    return f"data={data} packaged={packaged} cursor={config}"
 
 
 def pty_round_trip() -> str:

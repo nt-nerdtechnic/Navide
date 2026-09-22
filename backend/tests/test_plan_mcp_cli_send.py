@@ -503,6 +503,7 @@ async def test_open_agent_broadcasts_the_request_and_returns_the_verdict(
                 plan_mcp.resolve_spawn(
                     keys[0], {"ok": True, "pane_id": "new-pane", "name": "reviewer2"}
                 )
+                plan_mcp.resolve_kickoff(keys[0], {"pane_id": "new-pane", "kickoff": "sent"})
                 return
             await asyncio.sleep(0.005)
 
@@ -515,6 +516,7 @@ async def test_open_agent_broadcasts_the_request_and_returns_the_verdict(
         "name": "reviewer2",
         "address": "alpha/reviewer2",
         "pane_id": "new-pane",
+        "kickoff": "sent",
     }
     assert len(captured) == 1
     payload = captured[0]["payload"]
@@ -548,6 +550,7 @@ async def test_open_agent_forwards_advisories_from_the_verdict(
                         "advisories": ["此工作區已有 8 個 CLI pane（建議值 8）"],
                     },
                 )
+                plan_mcp.resolve_kickoff(keys[0], {"pane_id": "new-pane", "kickoff": "sent"})
                 return
             await asyncio.sleep(0.005)
 
@@ -560,6 +563,7 @@ async def test_open_agent_forwards_advisories_from_the_verdict(
         "name": "reviewer3",
         "address": "alpha/reviewer3",
         "pane_id": "new-pane",
+        "kickoff": "sent",
         "advisories": ["此工作區已有 8 個 CLI pane（建議值 8）"],
     }
 
@@ -665,11 +669,12 @@ async def test_tools_are_registered_without_a_ctx_argument() -> None:
     }
     # The Context parameter is injected, never asked of the agent.
     assert set((tools["cli_send"].inputSchema.get("properties") or {})) == {
-        "to", "text", "wait_for_delivery_s", "pane_id", "reply_to",
+        "to", "text", "wait_for_delivery_s", "pane_id", "reply_to", "kind", "open_target",
     }
     assert not (tools["cli_list_targets"].inputSchema.get("properties") or {})
     assert set((tools["cli_open_agent"].inputSchema.get("properties") or {})) == {
-        "agent", "name", "task", "workspace_path", "model", "effort",
+        "agent", "name", "task", "workspace_path", "model", "effort", "pane_id",
+        "session_id", "run_group_id",
     }
     assert set((tools["cli_check_message"].inputSchema.get("properties") or {})) == {"msg_key"}
     assert set((tools["cli_send_and_wait"].inputSchema.get("properties") or {})) == {
@@ -765,6 +770,7 @@ async def test_open_agent_from_an_external_caller_sends_target_workspace_with_no
             if keys:
                 agent_messaging.register("new-pane", "worker", "/ws/ext")
                 plan_mcp.resolve_spawn(keys[0], {"ok": True, "pane_id": "new-pane", "name": "worker"})
+                plan_mcp.resolve_kickoff(keys[0], {"pane_id": "new-pane", "kickoff": "sent"})
                 return
             await asyncio.sleep(0.005)
 
@@ -779,6 +785,7 @@ async def test_open_agent_from_an_external_caller_sends_target_workspace_with_no
         "name": "worker",
         "address": "ext/worker",
         "pane_id": "new-pane",
+        "kickoff": "sent",
     }
     payload = captured[0]["payload"]
     assert payload["requester_pane_id"] == ""
@@ -799,6 +806,7 @@ async def test_open_agent_from_a_pane_caller_never_sends_target_workspace(
             if keys:
                 agent_messaging.register("new-pane", "worker2", "/ws/alpha")
                 plan_mcp.resolve_spawn(keys[0], {"ok": True, "pane_id": "new-pane", "name": "worker2"})
+                plan_mcp.resolve_kickoff(keys[0], {"pane_id": "new-pane", "kickoff": "sent"})
                 return
             await asyncio.sleep(0.005)
 
@@ -1097,6 +1105,7 @@ async def test_list_targets_without_a_server_is_byte_for_byte_what_it_always_was
     assert set(result) == {"you", "targets"}
     assert set(result["targets"][0]) == {
         "name", "address", "pane_id", "workspace_path", "same_workspace", "busy", "offline",
+        "realized",
     }
 
 
@@ -1303,6 +1312,99 @@ async def test_a_reply_addressed_by_pane_id_threads_too(
 
     assert result["ok"] is True
     assert captured[0]["payload"]["reply_to"] == "pb:mcp:abc"
+
+
+# ── cli_send(kind="ack") ────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_an_ack_travels_in_the_delivery_payload(
+    captured: list[dict[str, Any]],
+) -> None:
+    """The receiving window reads `ev.kind` to decide whether to inject, so the
+    flag has to reach it or an ack is typed into the pane like anything else."""
+    _seed()
+    result = await plan_mcp.cli_send("beta/reviewer", "got it", _ctx(), kind="ack")
+
+    assert result["ok"] is True
+    assert captured[0]["payload"]["kind"] == "ack"
+
+
+@pytest.mark.asyncio
+async def test_an_ordinary_send_carries_no_kind(
+    captured: list[dict[str, Any]],
+) -> None:
+    """Same reason a non-reply carries no `reply_to`: the payload every existing
+    caller produces must stay byte-for-byte what it was."""
+    _seed()
+    await plan_mcp.cli_send("beta/reviewer", "hi", _ctx())
+
+    assert "kind" not in captured[0]["payload"]
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_kind_sends_an_ordinary_message(
+    captured: list[dict[str, Any]],
+) -> None:
+    """A typo must not fail a send that would otherwise have gone through, and
+    must not silently become an ack nobody reads."""
+    _seed()
+    result = await plan_mcp.cli_send("beta/reviewer", "hi", _ctx(), kind="acknowledge")
+
+    assert result["ok"] is True
+    assert "kind" not in captured[0]["payload"]
+
+
+@pytest.mark.asyncio
+async def test_an_ack_is_refused_rather_than_relayed_to_another_device(
+    monkeypatch: pytest.MonkeyPatch, captured: list[dict[str, Any]]
+) -> None:
+    """The relay frame has no field for `kind`, and there is no capability
+    negotiation, so a peer on an older build would type the ack in regardless.
+    Refusing keeps the guarantee absolute instead of probabilistic."""
+    from agent_team_backend import server_link
+
+    sent: list[dict[str, Any]] = []
+
+    async def fake_send_message(**kwargs: Any) -> dict[str, Any]:
+        sent.append(kwargs)
+        return {"ok": True, "payload": {"msgKey": kwargs["msg_key"], "state": "pending"}}
+
+    monkeypatch.setattr(server_link, "send_message", fake_send_message)
+    _seed()
+
+    result = await plan_mcp.cli_send(
+        f"{REMOTE_DEVICE}/beta/reviewer", "got it", _ctx(), kind="ack"
+    )
+
+    assert result["ok"] is False
+    assert result["error_code"] == "ack-not-relayable"
+    # Neither relayed nor delivered locally: refused outright.
+    assert sent == []
+    assert captured == []
+
+
+@pytest.mark.asyncio
+async def test_an_ordinary_message_still_crosses_devices(
+    monkeypatch: pytest.MonkeyPatch, captured: list[dict[str, Any]]
+) -> None:
+    """The refusal above must be scoped to acks — cross-device sending itself
+    is untouched."""
+    from agent_team_backend import server_link
+
+    sent: list[dict[str, Any]] = []
+
+    async def fake_send_message(**kwargs: Any) -> dict[str, Any]:
+        sent.append(kwargs)
+        return {"ok": True, "payload": {"msgKey": kwargs["msg_key"], "state": "pending"}}
+
+    monkeypatch.setattr(server_link, "send_message", fake_send_message)
+    _seed()
+
+    result = await plan_mcp.cli_send(f"{REMOTE_DEVICE}/beta/reviewer", "hi", _ctx())
+
+    assert result["ok"] is True
+    assert len(sent) == 1
 
 
 # ── cli_send(wait_for_delivery_s=…) ─────────────────────────────────────────
@@ -1773,6 +1875,7 @@ async def test_open_agent_carries_model_and_effort_to_the_window(
                 plan_mcp.resolve_spawn(
                     keys[0], {"ok": True, "pane_id": "new-pane", "name": "worker"}
                 )
+                plan_mcp.resolve_kickoff(keys[0], {"pane_id": "new-pane", "kickoff": "sent"})
                 return
             await asyncio.sleep(0.005)
 
@@ -1804,6 +1907,7 @@ async def test_open_agent_omits_model_keys_when_none_was_asked_for(
                 plan_mcp.resolve_spawn(
                     keys[0], {"ok": True, "pane_id": "new-pane", "name": "worker"}
                 )
+                plan_mcp.resolve_kickoff(keys[0], {"pane_id": "new-pane", "kickoff": "sent"})
                 return
             await asyncio.sleep(0.005)
 

@@ -4,21 +4,24 @@ export type LayoutMode = 'auto' | 'grid' | 'spotlight' | 'fullscreen'
 defineProps<{ modelValue: LayoutMode }>()
 const emit = defineEmits<{ (e: 'update:modelValue', v: LayoutMode): void }>()
 
+// [mode, glyph, tooltip KEY]. The key rather than the text: this array is
+// evaluated once at setup, so a resolved string would freeze at whichever
+// language was active then. `$t` in the template re-resolves on a switch.
 const modes: [LayoutMode, string, string][] = [
-  ['grid',       '⊞', 'Grid — show all panes'],
-  ['auto',       '◧', 'Sidebar — show the selected pane with the Active agents list'],
-  ['spotlight',  '◎', 'Spotlight — show the selected pane with thumbnails'],
-  ['fullscreen', '⧉', 'Fullscreen — fill the workspace with the selected pane'],
+  ['grid',       '⊞', 'label.view-mode-grid'],
+  ['auto',       '◧', 'label.view-mode-sidebar'],
+  ['spotlight',  '◎', 'label.view-mode-spotlight'],
+  ['fullscreen', '⧉', 'label.view-mode-fullscreen'],
 ]
 </script>
 
 <template>
-  <div class="view-panel" role="toolbar" aria-label="View mode">
+  <div class="view-panel" role="toolbar" :aria-label="$t('label.view-mode-toolbar')">
     <button
-      v-for="[mode, icon, label] in modes"
+      v-for="[mode, icon, titleKey] in modes"
       :key="mode"
       :class="['mode-btn', { active: modelValue === mode }]"
-      :title="label"
+      :title="$t(titleKey)"
       :aria-pressed="modelValue === mode"
       @click="emit('update:modelValue', mode)"
     >{{ icon }}</button>

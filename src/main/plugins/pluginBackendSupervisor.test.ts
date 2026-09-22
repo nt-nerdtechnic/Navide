@@ -3,9 +3,9 @@ import { generateKeyPairSync, sign as edSign } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { fileURLToPath } from 'node:url'
 import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
-import { PassThrough } from 'node:stream'
+import { PassThrough, Writable } from 'node:stream'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   BackendPluginError,
@@ -511,9 +511,11 @@ describe('PluginBackendSupervisor', () => {
     supervisors.push(supervisor)
 
     await supervisor.start()
+    // resolve(): on Windows '/workspace' comes back as 'D:\\workspace', so a
+    // literal comparison only holds on POSIX.
     await expect(
-      supervisor.clientFor(authenticatedRuntime, { workspacePath: '/workspace' }).call('fixture.bridge', null)
-    ).resolves.toEqual({ root: '/workspace' })
+      supervisor.clientFor(authenticatedRuntime, { workspacePath: resolve('/workspace') }).call('fixture.bridge', null)
+    ).resolves.toEqual({ root: resolve('/workspace') })
     expect(bridgeRequest).toEqual({
       jsonrpc: '2.0',
       id: 'bridge:child-request',
@@ -1490,7 +1492,9 @@ describe('PluginBackendSupervisor', () => {
     await supervisor.start()
 
     await expect(supervisor.clientFor(authenticatedRuntime).call('fixture.stderr', null)).resolves.toEqual({ ok: true })
-    expect(stderr).toHaveBeenCalledWith('fixture diagnostic: /private/internal/path\n')
+    // The reply and the stderr line travel on different streams, so the call
+    // can resolve first; wait for the line rather than assuming it landed.
+    await vi.waitFor(() => expect(stderr).toHaveBeenCalledWith('fixture diagnostic: /private/internal/path\n'))
   })
 
   it('emits host-only diagnostic and original cause on sync spawn error before generic failure', async () => {
@@ -2231,5 +2235,202 @@ describe('PluginBackendSupervisor', () => {
         arguments: { workspace_path: '/workspace' },
       },
     }))).toThrow('Backend plugin returned an invalid protocol message.')
+  })
+
+  describe('output queue overflow', () => {
+    interface StallableChild {
+      child: ChildProcessWithoutNullStreams
+      kill: ReturnType<typeof vi.fn>
+      hostFrames: string[]
+      stall: () => void
+      release: () => void
+      emitExit: (code: number | null, signal?: NodeJS.Signals | null) => void
+    }
+
+    function makeStallableChild(): StallableChild {
+      const emitter = new EventEmitter()
+      const stdout = new PassThrough()
+      const childStderr = new PassThrough()
+      const hostFrames: string[] = []
+      let stalled = false
+      let held: (() => void) | undefined
+      let input = ''
+      let exited = false
+      let parentCallId = ''
+      const serverInfo = { 'io.modelcontextprotocol/serverInfo': { name: 'stallable', version: '1.0.0' } }
+      const consume = (text: string): void => {
+        input += text
+        while (true) {
+          const newline = input.indexOf('\n')
+          if (newline < 0) return
+          const raw = input.slice(0, newline)
+          input = input.slice(newline + 1)
+          hostFrames.push(raw)
+          const frame = JSON.parse(raw) as {
+            id?: string
+            method?: string
+            params?: { name?: string; arguments?: unknown }
+            result?: { value?: unknown }
+            error?: unknown
+          }
+          if (frame.method === 'navide/health' && frame.id) {
+            stdout.write(`${JSON.stringify({
+              jsonrpc: '2.0',
+              id: frame.id,
+              result: { resultType: 'complete', value: { ok: true }, _meta: serverInfo },
+            })}\n`)
+            continue
+          }
+          if (frame.method === 'navide/call' && frame.id && frame.params?.name === 'fixture.bridge') {
+            parentCallId = frame.id
+            stdout.write(`${JSON.stringify({
+              jsonrpc: '2.0',
+              id: 'bridge:child-request',
+              method: 'navide/host/call',
+              params: {
+                origin: { kind: 'call', requestId: frame.id },
+                port: 'filesystem',
+                operation: 'resolve_root',
+                arguments: {},
+              },
+            })}\n`)
+            continue
+          }
+          if (frame.method === 'navide/call' && frame.id) {
+            stdout.write(`${JSON.stringify({
+              jsonrpc: '2.0',
+              id: frame.id,
+              result: { resultType: 'complete', value: { echoed: true }, _meta: serverInfo },
+            })}\n`)
+            continue
+          }
+          if (frame.id === 'bridge:child-request' && frame.result && parentCallId) {
+            stdout.write(`${JSON.stringify({
+              jsonrpc: '2.0',
+              id: parentCallId,
+              result: { resultType: 'complete', value: frame.result.value, _meta: serverInfo },
+            })}\n`)
+          }
+        }
+      }
+      const stdin = new Writable({
+        write(chunk: Buffer | string, _encoding, callback): void {
+          const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8')
+          if (stalled) {
+            held = (): void => {
+              held = undefined
+              consume(text)
+              callback()
+            }
+            return
+          }
+          consume(text)
+          callback()
+        },
+      })
+      const kill = vi.fn((): boolean => {
+        if (exited) return true
+        exited = true
+        queueMicrotask(() => emitter.emit('exit', 0, null))
+        return true
+      })
+      const child = Object.assign(emitter, {
+        stdin,
+        stdout,
+        stderr: childStderr,
+        kill,
+        pid: 4242,
+      }) as unknown as ChildProcessWithoutNullStreams
+      return {
+        child,
+        kill,
+        hostFrames,
+        stall: (): void => { stalled = true },
+        release: (): void => { stalled = false; held?.() },
+        emitExit: (code, signal = null): void => {
+          if (exited) return
+          exited = true
+          emitter.emit('exit', code, signal)
+        },
+      }
+    }
+
+    it('drops Host event notifications instead of failing the child when the output queue overflows', async () => {
+      const onFailure = vi.fn()
+      const stderrSink = vi.fn()
+      const emitted = 12
+      const payload = 'x'.repeat(48 * 1024)
+      const harness = makeStallableChild()
+      const supervisor = makeSupervisor({
+        onFailure,
+        onStderr: stderrSink,
+        bridgeDispatcher: {
+          dispatch: async (_request, context) => {
+            harness.stall()
+            for (let index = 0; index < emitted; index += 1) {
+              context.emit('plans.changed', { index, payload })
+            }
+            harness.release()
+            return { ok: true }
+          },
+        },
+        spawnProcess: () => harness.child,
+      })
+      supervisors.push(supervisor)
+      await supervisor.start()
+
+      await expect(
+        supervisor
+          .clientFor(authenticatedRuntime, { workspacePath: '/workspace' })
+          .call('fixture.bridge', null)
+      ).resolves.toEqual({ ok: true })
+
+      const delivered = harness.hostFrames.filter((frame) => frame.includes('navide/host/event')).length
+      expect(delivered).toBeGreaterThan(0)
+      expect(delivered).toBeLessThan(emitted)
+      expect(onFailure).not.toHaveBeenCalled()
+      expect(harness.kill).not.toHaveBeenCalled()
+      expect(stderrSink).toHaveBeenCalledWith(expect.stringContaining('output queue limit'))
+    })
+
+    it('still fails the child when a request frame overflows the output queue', async () => {
+      const onFailure = vi.fn()
+      const harness = makeStallableChild()
+      const supervisor = makeSupervisor({ onFailure, spawnProcess: () => harness.child })
+      supervisors.push(supervisor)
+      await supervisor.start()
+      harness.stall()
+
+      const client = supervisor.clientFor(authenticatedRuntime)
+      const payload = 'y'.repeat(48 * 1024)
+      const settled = await Promise.all(
+        Array.from({ length: 12 }, (_, index) =>
+          client.call('fixture.echo', { index, payload }).catch((error: unknown) => error)
+        )
+      )
+      harness.release()
+
+      expect(onFailure).toHaveBeenCalledWith(expect.objectContaining({ code: 'BACKEND_UNAVAILABLE' }))
+      expect(
+        settled.some((entry) => entry instanceof BackendPluginError && entry.code === 'BACKEND_UNAVAILABLE')
+      ).toBe(true)
+    })
+
+    it('records a private cause when a ready child exits cleanly with code 0 and no stderr', async () => {
+      const onFailure = vi.fn()
+      const stderrSink = vi.fn()
+      const harness = makeStallableChild()
+      const supervisor = makeSupervisor({ onFailure, onStderr: stderrSink, spawnProcess: () => harness.child })
+      supervisors.push(supervisor)
+      await supervisor.start()
+
+      harness.emitExit(0, null)
+      await vi.waitFor(() => expect(onFailure).toHaveBeenCalledOnce())
+      const error = onFailure.mock.calls[0]?.[0] as BackendPluginError
+      expect(error.code).toBe('BACKEND_UNAVAILABLE')
+      expect(error.cause).toBeDefined()
+      expect(String(error.cause)).toContain('exit code 0')
+      expect(stderrSink).toHaveBeenCalledWith(expect.stringContaining('exit code 0'))
+    })
   })
 })

@@ -232,6 +232,22 @@ def test_terminal_run_rejects_unregistered_cwd(
         asyncio.run(TerminalCapability().run("echo hi", cwd=str(tmp_path)))
 
 
+def _host_has_the_seam_shell() -> bool:
+    """`TerminalCapability.run` execs whatever `osplat.paths.shell_command()`
+    names. Gate on that program being on this host — not on which OS this
+    is — so the two tests below skip, rather than die on FileNotFoundError,
+    when the seam is swapped to another platform's implementation
+    (`-p tests.osplat_win_swap`)."""
+    import shutil
+
+    from agent_team_backend import osplat
+
+    return shutil.which(osplat.paths.shell_command("")[0]) is not None
+
+
+@pytest.mark.skipif(
+    not _host_has_the_seam_shell(), reason="the seam's shell is not on this host"
+)
 def test_terminal_run_allows_registered_subdir(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -248,6 +264,9 @@ def test_terminal_run_allows_registered_subdir(
     assert result["exit_code"] == 0
 
 
+@pytest.mark.skipif(
+    not _host_has_the_seam_shell(), reason="the seam's shell is not on this host"
+)
 def test_terminal_run_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     import asyncio
 

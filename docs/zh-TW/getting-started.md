@@ -2,23 +2,33 @@
 
 [English](../en-US/getting-started.md) | 繁體中文 | [日本語](../ja-JP/getting-started.md) | [文件中心](README.md)
 
-Navide 支援配備 Apple 晶片且執行 macOS 13 以上版本的 Mac。[v0.1.47 GitHub Prerelease](https://github.com/nt-nerdtechnic/Navide/releases/tag/v0.1.47) 提供未簽章的 DMG 與 ZIP 下載；這些檔案尚未經 Apple 簽章或 Notarization。
+Navide 支援配備 Apple 晶片且執行 macOS 13 以上版本的 Mac，以及 Linux x64 與 x64／Arm 版 Windows。[最新的 GitHub Release](https://github.com/nt-nerdtechnic/Navide/releases/latest) 提供 macOS 的 DMG 與 ZIP 下載（已經 Developer ID 簽章與 Apple Notarization）、Windows x64 與 Arm64 的 NSIS 安裝程式，以及 Linux x64 的 AppImage 與 `.deb`。GitHub 下載很慢或失敗時，同一批檔案也由 dl.navide.dev 鏡像提供——README 的下載清單每個檔案旁都有「鏡像」連結，navide.dev 官網在鏡像可達時會自動改用它。
 
-若要安裝 Preview，請下載 DMG、將 Navide 複製到「應用程式」，然後在 Finder 中按住 Control 點擊 App 並選擇「打開」。若 macOS 仍阻擋執行，請前往「系統設定 → 隱私權與安全性」，針對 Navide 選擇「強制打開」。請勿停用整個系統的 Gatekeeper。
+若要在 macOS 安裝，請下載 DMG、將 Navide 複製到「應用程式」，接著正常開啟即可，無需繞過 Gatekeeper。
+
+Windows 版本尚未經過程式碼簽章，首次執行時 SmartScreen 會出現警告。
+
+## 在 Windows 安裝
+
+從 Release 下載 `Navide-<版本>-win-x64.exe`（Arm 版 Windows 請下載 `Navide-<版本>-win-arm64.exe`）並執行。安裝程式尚未程式碼簽章，首次執行時 SmartScreen 會顯示「Windows 已保護您的電腦」：請點 **其他資訊 → 仍要執行**。Windows 簽章已決定暫緩，在簽章上線前每個新安裝檔都會出現這個提示。Windows 上的 App 內更新可以使用，但同樣不會驗證簽章。
+
+## 在 Linux 安裝
+
+x64 提供兩種套件：
+
+- **AppImage**——`chmod +x Navide-<版本>-x86_64.AppImage` 後直接執行。它自帶 FUSE runtime，並透過 App 內更新器自我更新。
+- **`.deb`**——`sudo apt install ./Navide-<版本>-amd64.deb`。會安裝到 `/opt/Navide/navide`，並在 `PATH` 提供 `navide` 指令與桌面捷徑；更新走套件管理器，不走 App 內更新器。
 
 ## 從原始碼安裝的前置需求
 
-- macOS 13+
+- 配備 Apple 晶片的 macOS 13+、Linux x64，或 x64／Arm 版 Windows
 - Node.js 22.12+（22.x）
 - pnpm 10+
 - Python 3.12+
 - uv 0.11+
-- 至少一個受支援的 Coding CLI：
-  - Claude Code（`claude`）
-  - Codex（`codex`）
-  - Antigravity CLI（`agy`）
-  - Grok CLI（`grok`）
+- 至少一個受支援的 Coding CLI（共 14 種：Aider、Antigravity CLI、Claude Code、Codex、Copilot CLI、Cursor CLI、Droid、Grok CLI、Kilo Code、Kimi Code、Muse Code、OpenCode、Pi、Qwen Code），清單見[使用手冊](user-guide.md)
 - 選用：用於本機分析的 Ollama 或本機 GGUF 模型
+- Windows 專屬：開發人員模式（**設定 → 開發人員專用**）或以系統管理員身分執行 Navide，Navide 才能建立每個 Pane 的 CLI Home 與受管理 Skills 所需的符號連結
 
 每個 Coding CLI 都有自己的安裝、驗證、訂閱與資料政策。Navide 不會取代這些需求。
 
@@ -41,10 +51,10 @@ Onboarding Wizard 會檢查必要 Runtime，並偵測可用的 Agent CLI。依�
 1. 解決任何阻擋啟動的基礎相依套件。
 2. 確認至少一個 Coding CLI 已可使用並完成驗證。
 3. 如果需要 Intent Detection 與自動回答，設定 Local Analyzer。
-4. 只授予實際工作流需要的 macOS 權限。
+4. 在 macOS 上，只授予實際工作流需要的權限。
 5. 開啟一個可信任的專案資料夾作為 Workspace。
 
-Navide 可能依照 Agent 與 Terminal 存取 Workspace 的方式，要求 Automation、Files and Folders 或 Full Disk Access。授予權限前，請先閱讀 macOS 顯示的原因。
+在 macOS 上，Navide 可能依照 Agent 與 Terminal 存取 Workspace 的方式，要求 Automation、Files and Folders 或 Full Disk Access。授予權限前，請先閱讀 macOS 顯示的原因。Windows 與 Linux 沒有對應的權限提示。
 
 完成 Onboarding 後，Settings → CLI Agents 會列出每個偵測到的 CLI，包含版本、安裝方式與上次更新結果，並可執行該 CLI 自己的更新與診斷指令。
 

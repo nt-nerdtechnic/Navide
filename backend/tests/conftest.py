@@ -131,7 +131,7 @@ def _isolated_trust_store():
     ask for it would find a marker with no state — which is exactly the locked
     state the module exists to enforce — and every later test would be refused
     for a reason belonging to an earlier one."""
-    from agent_team_backend import device_signing, trust_store
+    from agent_team_backend import device_signing, sync_keyring, trust_store
 
     # Reset on the way in only. On the way out a test's own monkeypatching may
     # still be in force (one of them swaps pathlib.Path for the Windows flavour
@@ -140,6 +140,9 @@ def _isolated_trust_store():
     # what provides the isolation; resetting again afterwards adds nothing.
     trust_store._reset_for_test()
     device_signing._reset_for_test()
+    # The sync key is cached in-process for the same reason the others are
+    # singletons, and it outlives the per-test vault above.
+    sync_keyring._reset_for_test()
 
 
 @pytest.fixture(autouse=True)
@@ -190,6 +193,25 @@ def _pid_alive(pid: int) -> bool:
     except PermissionError:
         return True
     return True
+
+
+@pytest.fixture
+def set_home(monkeypatch):
+    """Point the product's home at a directory on every platform.
+
+    `Path.home()` reads HOME on POSIX and USERPROFILE on Windows, so a bare
+    `monkeypatch.setenv("HOME", ...)` moves nothing on the Windows runner.
+    """
+    from pathlib import Path
+
+    from agent_team_backend import osplat
+
+    def _set(path) -> Path:
+        monkeypatch.setenv("HOME", str(path))
+        monkeypatch.setenv(osplat.paths.home_env_var(), str(path))
+        return Path(path)
+
+    return _set
 
 
 @pytest.fixture

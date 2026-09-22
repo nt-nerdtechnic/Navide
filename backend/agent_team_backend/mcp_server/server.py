@@ -59,6 +59,20 @@ ROUTE_METHODS = ["GET", "POST", "DELETE"]
 
 PLANS_REL_DIR = ".agent-team/plans"
 
+# The one sentence that decides where delegated work goes. It is quoted in the
+# server instructions, in cli_open_agent's docstring and in cli_whoami's
+# `delegation_hint`, and a test pins all three to this constant so the rule
+# cannot drift into three slightly different rules.
+DELEGATION_RULE = (
+    "Delegation rule: work that edits files, runs longer than a few minutes, "
+    "or that the user may want to watch, interrupt or take over goes to a "
+    "Navide CLI pane via cli_open_agent — not to your own subagent facility "
+    "(Agent / Task tools). A pane is visible in Navide, can be opened mid-run "
+    "and outlives your session; a subagent is a black box that hands back one "
+    "summary. Keep subagents for short read-only lookups whose whole result "
+    "is a paragraph."
+)
+
 server = FastMCP(
     name="navide",
     instructions=(
@@ -98,15 +112,34 @@ server = FastMCP(
         "CLI agent Navide is running — in this workspace or in another "
         "workspace window — with cli_send. Call cli_list_targets first to see "
         "who exists and how to address them (a bare pane name in your own "
-        "workspace, `<folder>/<pane>` for another one). Use it when the user "
-        "asks you to hand work to, ask something of, or coordinate with "
-        "another pane or project; delivery is queued until that pane is idle, "
+        "workspace, `<folder>/<pane>` for another one). Use it to hand work "
+        "to, ask something of, or coordinate with another pane or project — "
+        "on your own judgment, not only when the user asks you to; delivery "
+        "is queued until that pane is idle, "
         "so cli_send returns before the other agent has read anything. It "
         "returns a msg_key — pass it to cli_check_message to find out whether "
         "the message was delivered, refused (with a reason) or still queued. "
         "That table is backend memory, not a log: only the last hour and the "
         "last few hundred sends, gone on restart, so an unknown key means "
         "\"no longer tracked\", not \"never sent\".\n"
+        "\n"
+        "Other machines: when this machine is linked to a Navide-Server, the "
+        "user's other machines are in reach too. cli_list_targets returns "
+        "their panes as a separate `remote_targets` list, addressed by the "
+        "three-part `<device>/<workspace>/<pane>` form that cli_send, "
+        "cli_send_and_wait, cli_get_status and cli_wait_idle all accept. "
+        "Reaching one travels through the server, so it fails in ways a local "
+        "send cannot — the far machine may be offline or refuse on policy "
+        "grounds — and there is no reading its log, interrupting it or "
+        "closing it from here. `remote_targets` is absent whenever there is "
+        "nothing to reach, which covers an unlinked machine and a linked one "
+        "whose other machines simply have no pane open; cli_whoami's `cloud` "
+        "key is what tells those two apart, so read it before telling the "
+        "user anything about why. Linking itself — signing in, pairing a "
+        "device, trusting or blocking one — moves trust state and is on no "
+        "tool by design: it is the user's to do in Navide's account window, "
+        "and saying so is the answer, not hunting for a tool that would do "
+        "it for them.\n"
         "\n"
         "When you need the answer and not just the send, use cli_send_and_wait "
         "instead: it sends and then waits for that pane to finish the turn, "
@@ -119,8 +152,8 @@ server = FastMCP(
         "silent, so check what it actually said before trusting it.\n"
         "\n"
         "Delegating to a new agent: cli_open_agent opens a fresh CLI pane and "
-        "hands it a task. Use it when work is better done in parallel or by a "
-        "different CLI than yours; the new pane is asked to report back to you "
+        "hands it a task. " + DELEGATION_RULE + " The new pane is asked to "
+        "report back to you "
         "by message when it finishes, but that report is the child's own "
         "output rather than something Navide guarantees — it waits until you "
         "are between turns, and it never arrives at all if the child does not "
@@ -129,6 +162,21 @@ server = FastMCP(
         "panes, workspace CLI panes, or spawn-chain depth, but going well past "
         "sane advisory thresholds gets logged as a diagnostic warning (readable "
         "via ui_diagnostics) rather than refused.\n"
+        "\n"
+        "Picking up an earlier conversation: a CLI session outlives the pane "
+        "that ran it — the pane closes, the app restarts, and the vendor's "
+        "transcript stays on disk. cli_list_sessions lists the ones this "
+        "workspace still has, and cli_open_agent(session_id=...) opens a pane "
+        "that starts with that conversation's memory rather than an empty "
+        "one, so `task` should be the follow-up and not a restatement of what "
+        "it already knows. Two flags decide whether a row is usable: "
+        "`resumable: false` is history — the transcript is gone and the id is "
+        "refused — and `live: true` means the pane that owns it is still "
+        "open, where resuming into a second pane forks the conversation and "
+        "cli_send to that pane is the right move instead. This is a different "
+        "call from reopening a pane Navide is itself holding: a "
+        "cli_list_targets row with `realized: false` is a restore placeholder, "
+        "woken with cli_open_agent(pane_id=...).\n"
         "\n"
         "Checking on another pane: cli_read_log reads the tail of a pane's "
         "conversation log, cli_get_status reports whether it is busy and its "
@@ -226,7 +274,7 @@ def _workspace_mismatch_warning(workspace_path: str) -> str | None:
         return None
     known = ", ".join(sorted(set(panes)))
     return (
-        f"no live Navide pane uses workspace_path {workspace_path!r}, so this plan "
+        f"no live Navide pane uses workspace_path '{workspace_path}', so this plan "
         "will not be visible in Navide's plan view (it resolves plans against the "
         f"pane's own workspace). Pane workspaces right now: {known}"
     )
@@ -374,6 +422,11 @@ def _target_view(entry: Any, same_workspace: bool) -> dict[str, Any]:
         "same_workspace": same_workspace,
         "busy": entry.busy,
         "offline": entry.offline,
+        # False for a cold-restore placeholder: the window holds the saved pane
+        # but no CLI is running behind it, so it reads as busy forever and a
+        # message for it parks until someone opens it. Open it with ui.pane.open
+        # (ui_invoke) or cli_send(open_target=True).
+        "realized": entry.realized,
     }
     # Absent, not null, when nothing is queued for the pane: a target with no
     # message in flight has no hold to report, and an explicit null would read
@@ -433,6 +486,25 @@ async def cli_list_targets(ctx: Context) -> dict[str, Any]:
     reachable) and `status` (the server's own word for the pane). `offline` is
     true when either half says the message would not land right now. Prefer a
     local target when one would do.
+
+    Four tools take that three-part address: cli_send, cli_send_and_wait,
+    cli_get_status and cli_wait_idle. So a remote pane can be told something,
+    asked something and watched — but never read, stopped or closed, because
+    those three need the pane's own machine. Two of them say so: cli_interrupt
+    refuses a remote address with "interrupt-local-only" and cli_close_agent
+    with "close-local-only". cli_read_log does not — it has no remote branch,
+    so the address falls through to the local lookup and comes back
+    "unknown-target", which reads like a typo and is not one. `pane_id` is no
+    way around any of it: remote targets carry none, so the three-part name is
+    the only handle there is.
+
+    That key being absent covers two situations that are not the same: this
+    machine has no server link at all, or it has one and no other machine has a
+    pane open. cli_whoami's `cloud` key tells them apart, and only the first is
+    something the user can go do anything about. Linking itself — signing in,
+    pairing a device, trusting or blocking one — moves trust state and is on no
+    tool by design: it is the user's to do in Navide's account window, so say
+    that rather than looking for a tool that would do it for them.
     """
     from agent_team_backend import agent_messaging, remote_roster
 
@@ -503,11 +575,28 @@ async def cli_whoami(ctx: Context) -> dict[str, Any]:
     backend restart forgets every wait, so absence is "nobody is parked on me
     that this backend knows of", not proof that nobody wants your answer.
 
+    `cloud` says whether this machine is linked to a Navide-Server, which is
+    what decides whether panes on the user's OTHER machines can be addressed at
+    all. `state` is "connected" when they can, and "connecting", "unreachable",
+    "unauthorized" or "waiting-for-keychain" when the link exists but is not
+    carrying anything right now — each one a different thing to tell the user.
+    `device_id` is this machine's own id once the server has issued one. The
+    key is ABSENT when no link is configured. Read it when cli_list_targets
+    came back with no `remote_targets`: that absence means "no server" and "a
+    server, but no pane open on any other machine" alike, and this is what
+    tells the two apart. Nothing here is a control: signing in, pairing a
+    device, trusting or blocking one all move trust state, so they are the
+    user's to do in Navide's account window and are deliberately on no tool.
+
+    `delegation_hint` restates the rule for where delegated work goes (a
+    Navide pane via cli_open_agent rather than your own subagents) so that a
+    pane which never read the server instructions still meets it here.
+
     A caller with no pane identity (host / external credential) is not a pane
     and has none of these: it gets {ok, caller} only.
     Returns {ok, caller, name, address, pane_id, workspace_path, agent_key,
-    busy, offline, hold_reason?, spawned_by?, waiting_on_me?} or
-    {ok: false, error}.
+    busy, offline, delegation_hint, hold_reason?, spawned_by?, waiting_on_me?,
+    cloud?} or {ok: false, error}.
     """
     from agent_team_backend import agent_messaging
 
@@ -532,6 +621,7 @@ async def cli_whoami(ctx: Context) -> dict[str, Any]:
     # Not in _target_view because a peer's is on the roster elsewhere; yours is
     # not reported anywhere at all, and it is what tells you which CLI you are.
     result["agent_key"] = me.agent_key
+    result["delegation_hint"] = DELEGATION_RULE
     if me.spawned_by:
         # Through `current`, not `get`: a parent that was rebuilt around its
         # still-running CLI answers to a new id, and the retired one is exactly
@@ -550,6 +640,22 @@ async def cli_whoami(ctx: Context) -> dict[str, Any]:
     waiting = _waiting_on_me(me.pane_id)
     if waiting:
         result["waiting_on_me"] = waiting
+    # Absent on an unlinked machine, for the same reason every optional key
+    # here is: it must read byte-for-byte as it did before cross-device
+    # addressing existed. Present the moment there is a link, because that is
+    # the one question cli_list_targets cannot answer — a missing
+    # `remote_targets` means "no server" and "a server, but nobody else has a
+    # pane open" alike, and only the first of those is worth telling the user
+    # to go fix.
+    from agent_team_backend import server_link
+
+    state = server_link.link_state()
+    if state != server_link.STATE_UNCONFIGURED:
+        cloud: dict[str, Any] = {"state": state}
+        device_id = server_link.local_device_id()
+        if device_id:
+            cloud["device_id"] = device_id
+        result["cloud"] = cloud
     return result
 
 
@@ -558,16 +664,31 @@ async def cli_whoami(ctx: Context) -> dict[str, Any]:
 # tool waits for that verdict instead of reporting "requested", so the agent
 # learns whether it actually got a pane and, if not, why.
 #
-# The verdict lands once the pane exists, not once its CLI has booted: booting
-# a cold CLI can take longer than any deadline an agent would tolerate, so that
-# part continues after the answer and reports failure by message.
+# The verdict lands once the pane exists, not once its CLI has booted. The
+# KICKOFF verdict follows separately: the window emits agent_spawn.kickoff once
+# the task's injection settles (sent / unverified / failed), and the tool waits
+# for that too before answering — a cold CLI can take tens of seconds to reach
+# its prompt, and "ok" without the kickoff was read as "delivered" by every
+# caller, who then never learned the pane sat idle with an empty prompt.
 _SPAWN_VERDICT_TIMEOUT_S = 40.0
+_KICKOFF_VERDICT_TIMEOUT_S = 45.0
 _pending_spawns: dict[str, asyncio.Future[dict[str, Any]]] = {}
+_pending_kickoffs: dict[str, asyncio.Future[dict[str, Any]]] = {}
 
 
 def resolve_spawn(request_id: str, verdict: dict[str, Any]) -> bool:
     """Hand a window's verdict to the waiting cli_open_agent call."""
     future = _pending_spawns.get(request_id)
+    if future is None or future.done():
+        return False
+    future.set_result(verdict)
+    return True
+
+
+def resolve_kickoff(request_id: str, verdict: dict[str, Any]) -> bool:
+    """Hand a window's kickoff verdict ({pane_id, kickoff, reason?}) to the
+    cli_open_agent call waiting on it."""
+    future = _pending_kickoffs.get(request_id)
     if future is None or future.done():
         return False
     future.set_result(verdict)
@@ -627,6 +748,91 @@ def _refuse_unsupported_model(agent_key: str, model: str, effort: str) -> str:
     return ""
 
 
+#: Characters a session id may contain. Every vendor's ids are drawn from this
+#: set — UUIDs (claude, cursor, copilot, qwen, pi), hex (grok), `ses_`-prefixed
+#: slugs (opencode, kilo), `session_<uuid>` directory names (kimi) — and codex's
+#: is a path, which is why `/` is in it.
+#:
+#: This is a SHELL SAFETY boundary, not a formatting preference. buildResumeCommand
+#: interpolates the id into a command string that is run as `[shell, '-ilc', cmd]`,
+#: so an id carrying `;` or a backtick is code, not an argument. The on-disk check
+#: below is not sufficient on its own: a filename may legally contain a semicolon
+#: and a space, so anything that can write into a vendor's session directory could
+#: otherwise turn a resume into arbitrary execution.
+_SAFE_SESSION_ID = re.compile(r"^[A-Za-z0-9._:/-]{1,255}$")
+
+
+def _refuse_unresumable_session(
+    agent_key: str, workspace_path: str, session_id: str
+) -> dict[str, Any] | None:
+    """Why this CLI cannot resume that session id, or None when it can.
+
+    Checked before the spawn is broadcast for the same reason the model guard
+    is: a pane that opens and silently starts a fresh conversation looks
+    exactly like a successful resume until someone reads the transcript, and by
+    then the caller has already sent a follow-up that makes no sense to a CLI
+    with no memory of what it follows.
+
+    The existence check is the vendor's own (``app._session_exists``), which is
+    what the renderer's resume preflight uses, so a refusal here and a greyed
+    out Rebuild button in the UI agree on what "resumable" means.
+    """
+    from agent_team_backend import app
+    from agent_team_backend.cli_vendors import registry
+
+    # Shape first, and regardless of which vendor is being asked: an id that
+    # could split into extra shell words is malformed no matter who receives
+    # it, and answering "unknown session" there would send the caller off to
+    # try the same string against another CLI.
+    if not _SAFE_SESSION_ID.match(session_id):
+        return {
+            "ok": False,
+            "error": (
+                "session_id may only contain letters, digits and . _ : / - — "
+                "it is interpolated into the launch command, so anything else "
+                "would be read as shell syntax rather than as an id"
+            ),
+            "error_code": "malformed-session-id",
+        }
+    spec = registry.VENDORS.get(agent_key)
+    if spec is None:
+        return None  # unknown agent key — the spawn gate reports that itself
+    # A vendor with no session ids cannot be asked for one. aider is the only
+    # such CLI: it restores from a chat-history FILE, so there is no id to name
+    # and nothing this argument could mean. Read from the declared capability,
+    # never from `session_exists is None` — several vendors resume perfectly
+    # well through app._session_exists' path fallback without declaring one.
+    if not spec.supports_session_resume:
+        return {
+            "ok": False,
+            "error": (
+                f"{agent_key} has no session ids to resume — it restores from a "
+                f"chat-history file instead. Open it without `session_id`."
+            ),
+            "error_code": "no-session-support",
+        }
+    if not workspace_path:
+        return {
+            "ok": False,
+            "error": (
+                "resuming a session needs a workspace to look it up in — pass "
+                "workspace_path"
+            ),
+            "error_code": "workspace-required",
+        }
+    if app._session_exists(agent_key, workspace_path, session_id):
+        return None
+    return {
+        "ok": False,
+        "error": (
+            f'{agent_key} has no session "{session_id}" in {workspace_path} — '
+            f"opening it would have started a fresh conversation that looks "
+            f"resumed. Read a current id from cli_list_sessions"
+        ),
+        "error_code": "unknown-session-id",
+    }
+
+
 @server.tool()
 async def cli_open_agent(
     agent: str,
@@ -636,8 +842,19 @@ async def cli_open_agent(
     workspace_path: str = "",
     model: str = "",
     effort: str = "",
+    pane_id: str = "",
+    session_id: str = "",
+    run_group_id: str | None = None,
 ) -> dict[str, Any]:
     """Open a new CLI pane and give it a task.
+
+    Delegation rule: work that edits files, runs longer than a few minutes, or
+    that the user may want to watch, interrupt or take over goes to a Navide
+    CLI pane via cli_open_agent — not to your own subagent facility (Agent /
+    Task tools). A pane is visible in Navide, can be opened mid-run and
+    outlives your session; a subagent is a black box that hands back one
+    summary. Keep subagents for short read-only lookups whose whole result is
+    a paragraph.
 
     `agent` is the CLI to run (e.g. "claude", "codex"), `name` is what the pane
     will be called — that name is also its messaging address, so pick something
@@ -661,19 +878,34 @@ async def cli_open_agent(
     its own; the workspace's CLI-pane count is still tracked for the advisory
     below.
 
-    `ok: true` means the PANE EXISTS — not that the task arrived. The CLI boots
-    and is given the task afterwards, and that half can fail on its own. Check
-    it with cli_get_status: `ui.kickoff` is "sent" when the task was observed
-    landing, "unverified" when the bytes were written but the only echo was a
-    booting CLI repainting (read `ui.buffer`; re-send with cli_send if the
-    prompt is empty), or "failed". A failure is ALSO reported by message to a
-    pane caller — but only to a pane caller, and only when the injection
-    reported failure, which is exactly the case "unverified" exists to cover. For a pane caller, the new pane is asked to report its
-    result to you by message when it finishes — but that report is the child
-    agent's own output, not a guarantee from Navide: it is held until you are
-    between turns, and nothing arrives if the child never writes the block.
-    Poll cli_get_status / cli_wait_idle whenever you need to be sure. An
-    external or host caller gets no such message at all and must poll.
+    `run_group_id` optionally chooses an existing tab group in the pane's
+    workspace. Omit it (or pass null) to keep the usual parent/resume/active
+    tab placement. `""` explicitly selects the ungrouped manual tab. Nonempty
+    ids must belong to that workspace; read them from ui_snapshot or
+    cli_list_sessions. This overrides a resumed conversation's saved group,
+    but keeps its saved parent. It cannot be combined with `pane_id`: reopen
+    that pane first, then use cli_place_pane to move it.
+    When explicitly requested, a successful answer includes `run_group_id`.
+
+    `ok: true` means the pane exists, and `kickoff` says whether the task
+    reached it. The call blocks until the window has booted the CLI, waited
+    for its prompt and typed the task (up to ~45s on top of the spawn), then
+    answers `kickoff: "sent"` — our own text was observed landing and being
+    submitted — or `kickoff: "failed"`: the injection could not be verified
+    after a bounded retry, or no verdict arrived in time. A failed kickoff is
+    still `ok: true` (the pane is open; do NOT open it again) and comes with
+    `hint` and the window's reason in `advisories`. FOLLOW THE HINT: when the
+    window saw the task not go in, it says to resend with cli_send to the
+    returned address; when the window could not tell (its text may be sitting
+    in the composer, or it was still typing when the deadline hit), it says to
+    read cli_get_status first — a blind resend there doubles the task.
+    For a pane caller, the new pane is asked to report its result to you by
+    message when it finishes — but that report is the child agent's own
+    output, not a guarantee from Navide: it is held until you are between
+    turns, and nothing arrives if the child never writes the block. Poll
+    cli_get_status / cli_wait_idle whenever you need to be sure it is still
+    working. An external or host caller gets no such message at all and must
+    poll.
 
     `model` names the model the new pane runs, and `effort` its reasoning
     level. Both are optional, and asking a CLI that cannot take them is
@@ -704,7 +936,40 @@ async def cli_open_agent(
     `ui.pane.focus` and `ui.pane.getStatus` take through ui_invoke, all of which
     refuse a pane NAME. Keep it if you may want to close or focus what you
     opened; `address` remains the right thing to send to.
-    Returns {ok, name, address, pane_id, advisories?} or {ok: false, error}.
+    Returns {ok, name, address, pane_id, kickoff, hint?, advisories?} or
+    {ok: false, error}.
+
+    Passing `pane_id` REOPENS an existing pane instead of creating one: the
+    one whose cli_list_targets row says `realized: false` — a restore
+    placeholder holding a saved pane with no CLI behind it. Use the id, not the
+    name: the placeholder already owns that name, so asking for it by `name`
+    opens a second pane called `<name>-2` and leaves the first one closed.
+    `agent`, `name` and `task` are ignored on this path — the pane keeps its
+    own, and nothing is injected; send the task with cli_send afterwards (or
+    use cli_send(open_target=True) to do both at once). Answers {ok, pane_id,
+    name, address, realized, reason, reopened: true}; `reason: "fresh"` means
+    a new session with no memory of the earlier conversation. A pane that is
+    already open answers reopened: false, reason "already-open" and is left
+    alone. Unknown ids are refused with "unknown-pane-id".
+
+    `session_id` opens a NEW pane that RESUMES an existing conversation — the
+    CLI's own session id, not a Navide pane id. This is what `pane_id` cannot
+    do: a placeholder can only ever resume the one conversation its own record
+    remembers, while this takes any session the vendor still has on disk,
+    including one started outside Navide in a plain terminal. Read the ids from
+    cli_list_sessions. The pane opens with the vendor's own resume syntax
+    (`claude --resume <id>`, `codex resume <id>`, `opencode --session <id>`, …)
+    so it starts with the earlier conversation's memory intact, and `task` is
+    then typed into it as usual — send the follow-up, not a restatement of what
+    that conversation already knows.
+
+    The id is checked against the vendor's own session store before the pane
+    opens: an id with nothing on disk is REFUSED with "unknown-session-id"
+    rather than opening a pane that silently starts fresh, which is
+    indistinguishable from a successful resume until you read the transcript.
+    `session_id` and `pane_id` are mutually exclusive — one reopens a pane
+    Navide already holds, the other opens a new pane onto an old conversation.
+    aider has no session ids at all and is refused.
     """
     from agent_team_backend import agent_messaging, app
     from agent_team_backend.ipc import make_event
@@ -713,13 +978,38 @@ async def cli_open_agent(
         caller = _resolve_caller(ctx)
     except CallerUnknown as err:
         return {"ok": False, "error": str(err)}
+    reopen_id = (pane_id or "").strip()
+    resume_id = (session_id or "").strip()
+    if reopen_id and resume_id:
+        return {
+            "ok": False,
+            "error": (
+                "pane_id and session_id are mutually exclusive — pane_id reopens a "
+                "pane Navide already holds, session_id opens a new pane onto an "
+                "existing conversation. Pass one"
+            ),
+            "error_code": "conflicting-target",
+        }
+    if reopen_id:
+        if run_group_id is not None:
+            return {
+                "ok": False,
+                "error": "run_group_id cannot be combined with pane_id — reopen the "
+                "pane first, then move it with cli_place_pane",
+                "error_code": "conflicting-target",
+            }
+        return await _reopen_pane(reopen_id)
     agent_key = (agent or "").strip()
     pane_name = (name or "").strip()
     if not agent_key:
         return {"ok": False, "error": "agent is required (e.g. \"claude\", \"codex\")"}
     if not pane_name:
         return {"ok": False, "error": "name is required — it doubles as the pane's address"}
-    if not (task or "").strip():
+    # A fresh pane with nothing to do is a mistake; a RESUMED one is not — the
+    # conversation already has its own context and the caller may only want it
+    # back on screen, talking to it later with cli_send. So an empty task is
+    # refused only when there is no session to resume.
+    if not (task or "").strip() and not resume_id:
         return {"ok": False, "error": "task is empty"}
     refusal = _refuse_unsupported_model(agent_key, (model or "").strip(), (effort or "").strip())
     if refusal:
@@ -735,11 +1025,43 @@ async def cli_open_agent(
                 "ok": False,
                 "error": "workspace_path is required for a caller with no pane identity",
             }
+    if run_group_id:
+        group_workspace = target_workspace or _caller_workspace(caller)
+        project = await asyncio.to_thread(app.project_store.peek, group_workspace)
+        groups = project.ui_run_groups if project is not None else None
+        if not any(group.get("id") == run_group_id for group in (groups or [])):
+            return {
+                "ok": False,
+                "error": f'unknown run group "{run_group_id}" in {group_workspace}',
+                "error_code": "unknown-run-group",
+            }
+    if resume_id:
+        # A pane caller's own workspace is where its sessions live, so it never
+        # has to name one; the fallback matches every other tool's default.
+        resume_workspace = target_workspace or _caller_workspace(caller)
+        # Off the loop: for claude this is an iterdir + a stat per project dir
+        # under ~/.claude/projects, for kimi a glob — the same call
+        # _session_rows already offloads for the same reason.
+        refusal = await asyncio.to_thread(
+            _refuse_unresumable_session, agent_key, resume_workspace, resume_id
+        )
+        if refusal:
+            return refusal
+        # Resuming is not opening a new pane under the caller — it is putting a
+        # conversation back where it was. Read the position the pane that last
+        # held it sat in; the window applies it instead of parenting to us.
+        lineage = await asyncio.to_thread(
+            _resume_lineage, resume_workspace, agent_key, resume_id
+        )
 
     request_id = f"{me or caller.kind}:spawn:{secrets.token_hex(8)}"
     loop = asyncio.get_running_loop()
     future: asyncio.Future[dict[str, Any]] = loop.create_future()
     _pending_spawns[request_id] = future
+    # Registered BEFORE the broadcast: the standalone path types the task
+    # before it answers the spawn, so its kickoff verdict can arrive first.
+    kickoff_future: asyncio.Future[dict[str, Any]] = loop.create_future()
+    _pending_kickoffs[request_id] = kickoff_future
     try:
         spawn_payload: dict[str, Any] = {
             "request_id": request_id,
@@ -754,6 +1076,19 @@ async def cli_open_agent(
             spawn_payload["model"] = model.strip()
         if (effort or "").strip():
             spawn_payload["effort"] = effort.strip()
+        if run_group_id is not None:
+            spawn_payload["run_group_id"] = run_group_id
+        # The window turns this into the vendor's own resume command; absent
+        # means a fresh conversation, which is what every older build does with
+        # a key it does not know.
+        if resume_id:
+            spawn_payload["session_id"] = resume_id
+            # Sent even when empty: "" for resume_spawned_by is the real answer
+            # for a conversation that was a root pane, and the window must put
+            # it back at the root rather than fall through to parenting it on
+            # the caller. Only the presence of session_id enables the branch.
+            spawn_payload["resume_spawned_by"] = lineage.get("spawned_by", "")
+            spawn_payload["resume_run_group_id"] = lineage.get("run_group_id", "")
         if target_workspace:
             # No parent pane owns this request — the owning window is decided
             # by workspace match instead (see App.vue's agent_spawn.request
@@ -762,17 +1097,42 @@ async def cli_open_agent(
         await app.broadcast(make_event("agent_spawn.request", spawn_payload))
         verdict = await asyncio.wait_for(future, timeout=_SPAWN_VERDICT_TIMEOUT_S)
     except asyncio.TimeoutError:
+        _pending_kickoffs.pop(request_id, None)
         return {
             "ok": False,
             "error": "no answer from the window that owns your pane — it may have "
             "closed. Check cli_list_targets before retrying: the pane may exist "
             "already, in which case reopening it would duplicate the work",
         }
+    except BaseException:
+        # Nobody is left to answer the kickoff either (a broadcast that threw,
+        # a cancelled call) — drop it with the spawn rather than leaking it.
+        _pending_kickoffs.pop(request_id, None)
+        raise
     finally:
         _pending_spawns.pop(request_id, None)
 
     if not verdict.get("ok"):
+        _pending_kickoffs.pop(request_id, None)
         return {"ok": False, "error": str(verdict.get("error") or "spawn refused")}
+    # The pane exists; now the task. Waited for here rather than reported by
+    # message: the caller acts on this answer, and "ok" alone was taken as
+    # "delivered" by every caller that got it.
+    try:
+        kickoff_verdict = await asyncio.wait_for(
+            kickoff_future, timeout=_KICKOFF_VERDICT_TIMEOUT_S
+        )
+    except asyncio.TimeoutError:
+        # The window may still be typing it (a cold CLI plus its session
+        # marker turn can outlast this deadline), so this is "unknown", not
+        # "did not arrive" — the hint below must not say resend outright.
+        kickoff_verdict = {
+            "kickoff": "unverified",
+            "reason": f"no kickoff verdict from the window within "
+            f"{_KICKOFF_VERDICT_TIMEOUT_S:.0f}s — it may still be typing the task",
+        }
+    finally:
+        _pending_kickoffs.pop(request_id, None)
     new_pane_id = str(verdict.get("pane_id") or "")
     entry = agent_messaging.get(new_pane_id)
     result: dict[str, Any] = {
@@ -788,8 +1148,322 @@ async def cli_open_agent(
     # be handed to ui.pane.close as if it addressed something.
     if new_pane_id:
         result["pane_id"] = new_pane_id
-    if verdict.get("advisories"):
-        result["advisories"] = verdict["advisories"]
+    # Present only on the resume path, and it is the id that was ASKED for: the
+    # window was told to launch with it and the id was verified on disk before
+    # the broadcast, but whether the CLI actually reloaded that transcript is
+    # the CLI's own business and is not observable from here.
+    if resume_id:
+        result["resumed_session_id"] = resume_id
+        # Where it was put back. Absent keys would read as "lineage unknown";
+        # these are always present on a resume so the caller can see that the
+        # pane went back to its own parent and group rather than under them.
+        result["restored_lineage"] = {
+            "spawned_by": lineage.get("spawned_by", ""),
+            "run_group_id": run_group_id if run_group_id is not None else lineage.get("run_group_id", ""),
+        }
+    if run_group_id is not None:
+        result["run_group_id"] = run_group_id
+    advisories = list(verdict.get("advisories") or [])
+    # Two answers only. "unverified" is the window's honest word for "bytes
+    # written, nothing seen" — to the caller that is a task that did not
+    # arrive, and the cure is the same as for an outright failure.
+    kickoff = str(kickoff_verdict.get("kickoff") or "")
+    if kickoff == "sent":
+        result["kickoff"] = "sent"
+    elif kickoff == "failed":
+        result["kickoff"] = "failed"
+        result["hint"] = (
+            f"the task never reached the pane's prompt — resend it with "
+            f"cli_send(to=\"{result['address']}\", text=...); the pane is open, "
+            f"do not open another"
+        )
+    else:
+        # "unverified" (the window saw its text still sitting in the composer,
+        # or could not tell) and the timeout above: the task may well be in.
+        # A blind resend here is what doubles a task, so the caller is told to
+        # look first.
+        result["kickoff"] = "failed"
+        result["hint"] = (
+            f"the task could not be confirmed as delivered — it may already be "
+            f"in the pane. Read cli_get_status(target=\"{result['address']}\") "
+            f"first: resend with cli_send only if ui.kickoff is not \"sent\" and "
+            f"ui.buffer shows an empty prompt; the pane is open, do not open another"
+        )
+    if kickoff != "sent":
+        reason = str(kickoff_verdict.get("reason") or "")
+        if reason:
+            advisories.append(f"kickoff: {reason}")
+    if advisories:
+        result["advisories"] = advisories
+    return result
+
+
+async def _reopen_pane(pane_id: str) -> dict[str, Any]:
+    """cli_open_agent(pane_id=...): open a restore placeholder in place."""
+    from agent_team_backend import agent_messaging
+
+    entry = agent_messaging.current(pane_id)
+    if entry is None:
+        return {
+            "ok": False,
+            "error": (
+                f'unknown pane_id "{pane_id}" — it names no pane on this machine. '
+                "Pane ids change when a pane is rebuilt; read a fresh one from "
+                "cli_list_targets"
+            ),
+            "error_code": "unknown-pane-id",
+        }
+    if entry.realized:
+        return {
+            "ok": True,
+            "pane_id": entry.pane_id,
+            "name": entry.name,
+            "address": entry.qualified_name,
+            "realized": True,
+            "reason": "already-open",
+            "reopened": False,
+        }
+    opened = await _open_placeholder(entry)
+    if not opened["ok"]:
+        return {
+            "ok": False,
+            "error": (
+                f'"{entry.qualified_name}" could not be opened ({opened["reason"]})'
+            ),
+            "error_code": "open-failed",
+            "pane_id": entry.pane_id,
+            "realized": False,
+            "reason": opened["reason"],
+        }
+    pane = opened["pane"]
+    return {
+        "ok": True,
+        "pane_id": pane.pane_id,
+        "name": pane.name,
+        "address": pane.qualified_name,
+        "realized": True,
+        "reason": opened["reason"],
+        "reopened": True,
+    }
+
+
+def _pane_records_by_session(workspace_path: str) -> dict[tuple[str, str], Any]:
+    """(agent, session_id) -> the pane record that conversation last lived in.
+
+    A pane's record OUTLIVES the pane: closing one sets spawn_status
+    "removed" rather than deleting it, so the lineage of a long-gone pane —
+    who opened it, which tab group it sat in — is still on disk and a resumed
+    conversation can be put back where it was.
+
+    Several records can name one session (every rebuild writes a fresh one);
+    the LAST wins, which is the pane that most recently held the conversation
+    and therefore the position it was last in.
+    """
+    from agent_team_backend import app
+
+    # peek, not load_or_create: the latter CREATES and saves a project document
+    # (and emits project_created) for a workspace that has none, and this is
+    # reached from cli_list_sessions — documented read-only and callable by an
+    # external client with any directory as workspace_path.
+    project = app.project_store.peek(workspace_path)
+    if project is None:
+        return {}
+    found: dict[tuple[str, str], Any] = {}
+    for pane in project.panes:
+        session_id = (getattr(pane, "session_id", "") or "").strip()
+        agent = (getattr(pane, "agent", "") or "").strip()
+        if session_id and agent:
+            found[(agent, session_id)] = pane
+    return found
+
+
+def _resume_lineage(workspace_path: str, agent_key: str, session_id: str) -> dict[str, str]:
+    """Where the pane that last held this conversation sat: its parent and tab
+    group, or empty strings when nothing is recorded.
+
+    Empty `spawned_by` is a real answer, not a missing one — it means that pane
+    was a root, and a resumed conversation belongs back at the root rather than
+    under whoever happened to ask for it.
+    """
+    record = _pane_records_by_session(workspace_path).get((agent_key, session_id))
+    if record is None:
+        return {}
+    return {
+        "spawned_by": (getattr(record, "spawned_by", "") or "").strip(),
+        "run_group_id": (getattr(record, "run_group_id", "") or "").strip(),
+    }
+
+
+#: How far back through the spawn history one cli_list_sessions call reads.
+#: The store keeps up to 5000 entries and most of them are long-dead panes, so
+#: a page is scanned and then filtered rather than the whole history — a
+#: workspace with years of panes would otherwise stat every one of them.
+_SESSION_SCAN_LIMIT = 400
+
+
+def _session_rows(
+    workspace_path: str, want_agent: str, limit: int, include_gone: bool
+) -> tuple[list[dict[str, Any]], int]:
+    """Resumable conversations for a workspace, newest first.
+
+    Runs whole in a worker thread: the history read opens the workspace db and
+    every row costs a filesystem check for the vendor's session file, which is
+    exactly the kind of work that must not sit on the event loop.
+    """
+    from agent_team_backend import agent_messaging, app
+    from agent_team_backend.cli_vendors import registry
+
+    # Read once for the whole page: the lineage lives in the project document,
+    # not in the spawn history, and opening it per row would be 400 reads.
+    lineage = _pane_records_by_session(workspace_path)
+    entries, _total = app.spawn_history_store.read_page(
+        workspace_path, offset=0, limit=_SESSION_SCAN_LIMIT
+    )
+    rows: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    scanned = 0
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        scanned += 1
+        session_id = str(entry.get("sessionId") or "").strip()
+        agent_key = str(entry.get("agentKey") or "").strip()
+        if not session_id or not agent_key:
+            continue  # a pane that never bound a session has nothing to resume
+        if want_agent and agent_key != want_agent:
+            continue
+        # One conversation, however many panes have pointed at it: a rebuilt or
+        # restored pane writes a new history entry with the SAME session id, and
+        # resuming any of them resumes the one conversation.
+        key = (agent_key, session_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        pane_id = str(entry.get("paneId") or "")
+        # `live` is the claim "a CLI is holding this conversation open, so a
+        # second reader would fork it". A registered entry is not enough: a
+        # cold-restore placeholder is registered with realized=False and has
+        # no CLI at all, and a closed pane lingers in the registry through
+        # its offline grace. Both would steer the caller to cli_send against
+        # a pane with no PTY.
+        current = agent_messaging.current(pane_id) if pane_id else None
+        live = current is not None and bool(getattr(current, "realized", True)) and not bool(
+            getattr(current, "offline", False)
+        )
+        if not include_gone and not live:
+            continue
+        rows.append(
+            {
+                "session_id": session_id,
+                "agent_key": agent_key,
+                "pane_id": pane_id,
+                "pane_name": str(entry.get("customName") or ""),
+                "spawned_at": str(entry.get("spawnedAt") or ""),
+                "removed_at": str(entry.get("removedAt") or ""),
+                "starred": bool(entry.get("starred")),
+                # Where this conversation sat. Resuming it puts a pane back in
+                # the same place rather than under whoever asked, so these say
+                # in advance where it will land; "" for spawned_by means it was
+                # a root pane, which is a position too.
+                "spawned_by": (
+                    getattr(lineage.get((agent_key, session_id)), "spawned_by", "") or ""
+                ),
+                "run_group_id": (
+                    getattr(lineage.get((agent_key, session_id)), "run_group_id", "") or ""
+                ),
+                # The pane that owned this conversation is still on screen. Its
+                # CLI is holding the session open, so resuming it into a SECOND
+                # pane is what forks or conflicts — talk to the live pane with
+                # cli_send instead.
+                "live": live,
+                # The vendor's own answer, the same check the Rebuild button
+                # uses — and the same capability gate cli_open_agent applies, so
+                # a row marked resumable is one that tool will actually accept.
+                # False means the transcript is gone from disk, or this CLI has
+                # no id-based resume (aider), and the id would be refused.
+                "resumable": (
+                    getattr(
+                        registry.VENDORS.get(agent_key), "supports_session_resume", True
+                    )
+                    and app._session_exists(agent_key, workspace_path, session_id)
+                ),
+            }
+        )
+        if len(rows) >= limit:
+            break
+    return rows, scanned
+
+
+@server.tool()
+async def cli_list_sessions(
+    ctx: Context,
+    agent: str = "",
+    workspace_path: str = "",
+    limit: int = 50,
+    include_gone: bool = True,
+) -> dict[str, Any]:
+    """Conversations in this workspace a new pane could be opened onto.
+
+    This is where the `session_id` cli_open_agent takes comes from. A CLI
+    session outlives the pane that ran it: the pane is closed, the app is
+    restarted, the pane is rebuilt — the vendor's transcript stays on disk, and
+    naming its id opens a pane that starts with that conversation's memory
+    rather than an empty one.
+
+    Newest first. Each row is `{session_id, agent_key, pane_id, pane_name,
+    spawned_at, removed_at, starred, live, resumable}`:
+
+    - `resumable` is the vendor's own on-disk check — the same one behind the
+      Rebuild button. **A row with `resumable: false` is history, not an
+      option**: the transcript is gone and cli_open_agent refuses the id.
+    - `live` says the pane that owned the conversation is still open. Resuming
+      a live session into a second pane is what forks or corrupts it, because
+      the CLI holding it does not expect a second reader — send to that pane
+      with cli_send instead. Pass `include_gone: false` to see only live ones.
+    - `pane_id` is the pane that owned it, and it may be gone; it is for
+      recognising the row, not for addressing anything. Reopening a *placeholder*
+      is cli_open_agent(pane_id=…), which is a different operation.
+
+    `agent` narrows to one vendor key ("claude", "codex", …). `limit` is capped
+    at 200, and one call scans the most recent few hundred panes rather than
+    the whole history, so `scanned` says how deep it actually went. One
+    conversation appears once however many panes pointed at it.
+
+    A pane caller's own workspace is the default; a host or external caller has
+    none and must pass `workspace_path`. Read-only — nothing here opens,
+    closes or changes a pane.
+    """
+    try:
+        caller = _resolve_caller(ctx)
+    except CallerUnknown as err:
+        return {"ok": False, "error": str(err)}
+    chosen = (workspace_path or "").strip() or _caller_workspace(caller)
+    if not chosen:
+        return {
+            "ok": False,
+            "error": (
+                "workspace_path is required for a caller with no pane identity — "
+                "sessions are per project. Read one from workspace_list"
+            ),
+            "error_code": "workspace-required",
+        }
+    try:
+        want = max(1, min(int(limit), 200))
+    except (TypeError, ValueError):
+        want = 50
+    rows, scanned = await asyncio.to_thread(
+        _session_rows, chosen, (agent or "").strip(), want, bool(include_gone)
+    )
+    result: dict[str, Any] = {
+        "ok": True,
+        "workspace_path": chosen,
+        "sessions": rows,
+        "count": len(rows),
+        "scanned": scanned,
+    }
+    warning = await asyncio.to_thread(_workspace_mismatch_warning, chosen)
+    if warning:
+        result["warning"] = warning
     return result
 
 
@@ -833,6 +1507,43 @@ async def _send_to_device(
     }
 
 
+async def _open_placeholder(entry: Any) -> dict[str, Any]:
+    """Ask the window holding *entry* to open it (ui.pane.open) and re-read it.
+
+    Returns {ok, realized, reason, pane} — `pane` is the registry entry the
+    target is known by afterwards. A restore rebuilds the pane under a fresh
+    runtime id and registers the old one as an alias, so the entry that was
+    resolved before the open names a pane the window has already replaced;
+    delivering to it would be dropped by the receiving window. `reason` is the
+    renderer's word: "opened", "fresh" (a new session — resume behavior
+    "never", or the user chose start-fresh — so the agent does not remember
+    its earlier conversation), or why it stayed closed.
+    """
+    from agent_team_backend import agent_messaging
+
+    ui = await _ui_request(
+        entry.workspace_path,
+        "invoke",
+        caller=_pane_caller(entry.pane_id),
+        action="ui.pane.open",
+        args={"paneId": entry.pane_id},
+    )
+    outcome = (ui.get("result") or {}) if ui.get("ok") else {}
+    if not ui.get("ok") or not outcome.get("realized"):
+        return {
+            "ok": False,
+            "realized": False,
+            "reason": outcome.get("reason") or ui.get("error_code") or ui.get("error") or "unknown",
+            "pane": entry,
+        }
+    return {
+        "ok": True,
+        "realized": True,
+        "reason": outcome.get("reason"),
+        "pane": agent_messaging.current(entry.pane_id) or entry,
+    }
+
+
 #: Reserved `to:` value that fans a message out to the sender's own tab group.
 #: Deliberately NOT the bare-line protocol's "all"/"*": that one means every
 #: pane in the window, and one word meaning two scopes would be very hard to
@@ -846,7 +1557,7 @@ def _is_group_target(to: str) -> bool:
 
 
 async def _send_to_group(
-    caller: "_Caller", me: str, text: str, reply_to: str = ""
+    caller: "_Caller", me: str, text: str, reply_to: str = "", kind: str = ""
 ) -> dict[str, Any]:
     """Deliver *text* to every other pane in the sender's own tab group.
 
@@ -895,7 +1606,8 @@ async def _send_to_group(
             )
             continue
         msg_key = await _dispatch_delivery(
-            entry, text, caller=caller, me=me, cross_workspace=False, reply_to=reply_to
+            entry, text, caller=caller, me=me, cross_workspace=False,
+            reply_to=reply_to, kind=kind,
         )
         recipients.append(
             {"name": entry.name, "pane_id": entry.pane_id, "msg_key": msg_key, "accepted": True}
@@ -911,7 +1623,7 @@ async def _send_to_group(
 
 async def _dispatch_delivery(
     entry: Any, text: str, *, caller: "_Caller", me: str, cross_workspace: bool,
-    reply_to: str = "",
+    reply_to: str = "", kind: str = "",
 ) -> str:
     """Hand one message to the windows and record it; returns its msg_key.
 
@@ -925,6 +1637,13 @@ async def _dispatch_delivery(
     rows through the one ``acceptRemoteMessage`` path either way. Absent unless
     the caller passed one, which keeps the payload a non-reply produces exactly
     what it always was.
+
+    ``kind`` is "ack" for a message the receiving window must log and never
+    inject, and empty for every other send. The group broadcast passes it
+    through too: every group peer is a pane in the sender's own window, so an
+    ack reaches each of them under the same guarantee a direct one gets. It
+    rides the payload only when set, for the same reason ``reply_to`` does: an
+    ordinary send produces exactly the payload it always did.
     """
     from agent_team_backend import agent_messaging, app
     from agent_team_backend.ipc import make_event
@@ -956,6 +1675,8 @@ async def _dispatch_delivery(
                 "rate_limit": True,
                 # Only present for a reply — see the docstring.
                 **({"reply_to": reply_to} if reply_to else {}),
+                # Only present for an ack — see the docstring.
+                **({"kind": kind} if kind else {}),
             },
         )
     )
@@ -971,6 +1692,8 @@ async def cli_send(
     wait_for_delivery_s: float = 0.0,
     pane_id: str = "",
     reply_to: str = "",
+    kind: str = "message",
+    open_target: bool = False,
 ) -> dict[str, Any]:
     """Send an instruction to another CLI pane, in this or another workspace.
 
@@ -1023,6 +1746,21 @@ async def cli_send(
     correlation id from the msg_key, so the thread holds over there; what is
     lost is the link back to the row on this machine.
 
+    `kind: "ack"` is for a pure acknowledgement — "got it", "done", "thanks" —
+    and it changes what the message IS. An ack is written to the user's message
+    log and is NEVER put into the receiving agent's input box: that agent is not
+    interrupted, is not woken, and will not know you sent it. Use it to close a
+    loop the user is watching without spending another agent's turn. Anything
+    the other side has to act on, answer, or even know about must go as an
+    ordinary message — an ack carrying an instruction is an instruction nobody
+    reads. Any other value is treated as an ordinary message.
+
+    An ack reaches panes on this machine only, `to: "group"` included. A
+    `<device>/<workspace>/<pane>` target is refused with `ack-not-relayable`:
+    the relay cannot promise a message stays out of an input box on someone
+    else's machine, and a guarantee that holds only sometimes is one no agent
+    should build on. Send it as an ordinary message if it has to cross devices.
+
     Delivery is asynchronous: this returns once the message is accepted for
     delivery, not once the other agent has read it. Returns
     {ok, target, cross_workspace, msg_key} or {ok: false, error, error_code}.
@@ -1074,6 +1812,26 @@ async def cli_send(
     "unauthorized" means somebody has to sign in again. Telling all three to
     retry shortly — which is what this used to do — is advice that works for
     one of them.
+
+    A target whose cli_list_targets row says `realized: false` is a restore
+    placeholder: the window holds the saved pane but no CLI is running behind
+    it, so it is busy forever and the message parks until someone opens it.
+    The send still succeeds, and the answer says so with
+    `target_state: "not-opened"` and a `warning`. `open_target: true` opens it
+    first — the same restore the user's click would do, without the "resume
+    which?" modal — and only then delivers; the answer then carries
+    `opened: {realized: true, reason}`. `reason: "fresh"` means the pane came
+    up on a NEW session (resume behavior "never", or the user had chosen start
+    fresh for that workspace): the agent does not remember its earlier
+    conversation, so say what it needs to know. If the open fails the message
+    is NOT sent — {ok: false, error_code: "open-failed", open: {realized:
+    false, reason}}. A target that is already open is unaffected by the flag.
+
+    `open_target` applies to ONE named pane only. It is ignored — never
+    forwarded, never acted on — for `to: "group"` and for a cross-device
+    target: a broadcast must not be able to pull a whole batch of reclaimed
+    panes back up, and another machine's placeholders are that machine's to
+    open. This is a fixed boundary, not a missing feature.
     """
     from agent_team_backend import agent_messaging, app, message_routing
     from agent_team_backend.ipc import make_event
@@ -1084,6 +1842,9 @@ async def cli_send(
         return {"ok": False, "error": str(err)}
     if not (text or "").strip():
         return {"ok": False, "error": "text is empty"}
+    # Anything but the one special value is an ordinary message; a typo must not
+    # fail a send that would otherwise have gone through.
+    send_kind = "ack" if kind == "ack" else ""
     me = caller.pane_id if caller.kind == "pane" else ""
     target_id = (pane_id or "").strip()
     if not target_id and _is_group_target(to):
@@ -1094,7 +1855,7 @@ async def cli_send(
                 'address panes individually, or by pane_id',
                 "error_code": "no-group",
             }
-        return await _send_to_group(caller, me, text, reply_to)
+        return await _send_to_group(caller, me, text, reply_to, send_kind)
     # An id is already as qualified as an address gets, so the rule that a
     # caller with no workspace of its own must name one does not apply to it.
     if not target_id and caller.kind != "pane" and "/" not in (to or ""):
@@ -1116,6 +1877,29 @@ async def cli_send(
         # bare-line path so the two cannot answer the same address differently.
         routed = message_routing.route(me, to)
         if routed.remote is not None:
+            if send_kind == "ack":
+                # Refused rather than relayed, because the relay cannot carry
+                # the one thing an ack IS. The frame has no field for it
+                # (server_link builds a fixed payload, and the cloud server
+                # rebuilds the forwarded frame from named DB columns), and
+                # there is no capability negotiation — so even once every layer
+                # learns the field, a peer on an older build would still type
+                # the ack straight into its pane.
+                #
+                # An ack whose silence is probabilistic is worse than no ack at
+                # all: an agent picks it precisely because it promises not to
+                # interrupt anyone. Better to say no here than to be quietly
+                # wrong on somebody else's machine.
+                return {
+                    "ok": False,
+                    "error": (
+                        'kind="ack" cannot cross devices: this machine cannot '
+                        "promise the message stays out of that pane's input "
+                        "box. Send it as an ordinary message, or ack a pane on "
+                        "this machine."
+                    ),
+                    "error_code": "ack-not-relayable",
+                }
             relayed = await _send_to_device(routed.remote, text, caller=caller, me=me)
             # None means no server was ever configured on this machine; falling
             # through leaves the answer exactly what it was before cross-device
@@ -1135,23 +1919,49 @@ async def cli_send(
     if me and result.pane.pane_id == me:
         return {"ok": False, "error": "that is your own pane"}
 
+    # Only the single-target path gets here: the group broadcast and the
+    # cross-device relay returned above, so open_target cannot reach them.
+    target = result.pane
+    opened: dict[str, Any] | None = None
+    if not target.realized and open_target:
+        open_result = await _open_placeholder(target)
+        if not open_result["ok"]:
+            return {
+                "ok": False,
+                "error": (
+                    f'"{target.qualified_name}" is a restore placeholder and could not '
+                    f'be opened ({open_result["reason"]}); the message was not sent'
+                ),
+                "error_code": "open-failed",
+                "open": {"realized": False, "reason": open_result["reason"]},
+            }
+        opened = {"realized": True, "reason": open_result["reason"]}
+        target = open_result["pane"]
+
     msg_key = await _dispatch_delivery(
-        result.pane,
+        target,
         text,
         caller=caller,
         me=me,
         cross_workspace=result.cross_workspace,
         reply_to=reply_to,
+        kind=send_kind,
     )
-    return await _with_delivery_wait(
-        {
-            "ok": True,
-            "target": result.pane.qualified_name,
-            "cross_workspace": result.cross_workspace,
-            "msg_key": msg_key,
-        },
-        wait_s,
-    )
+    answer: dict[str, Any] = {
+        "ok": True,
+        "target": target.qualified_name,
+        "cross_workspace": result.cross_workspace,
+        "msg_key": msg_key,
+    }
+    if opened is not None:
+        answer["opened"] = opened
+    elif not target.realized:
+        answer["target_state"] = "not-opened"
+        answer["warning"] = (
+            "the target is a restore placeholder with no CLI running; the message "
+            "waits until someone opens it (ui.pane.open, or open_target=True)"
+        )
+    return await _with_delivery_wait(answer, wait_s)
 
 
 # ── Delivery outcome of a cli_send (cli_check_message) ─────────────────────
@@ -2370,17 +3180,64 @@ def _activity_summary(pane_id: str) -> dict[str, Any] | None:
     return last
 
 
+async def _cached_usage_snapshot(agent_key: str) -> dict[str, Any] | None:
+    """The quota row usage_service already holds for *agent_key*, or None.
+
+    Cache only — the same `payload()` cli_usage serves, off the loop for the
+    same reason (it walks stale snapshots to re-check reset windows). Never
+    asks for a refresh: cli_get_status sits under cli_wait_idle's poll, and a
+    vendor read there would turn a millisecond call into a multi-second one.
+    A payload failure is answered with None rather than failing the status
+    the rest of the reply already has — the same degraded answer `ui` gives.
+    """
+    from agent_team_backend.usage_service import service
+
+    try:
+        payload = await asyncio.to_thread(service.payload)
+    except Exception:  # noqa: BLE001 — status must still answer without quota
+        return None
+    snapshot = (payload.get("providers") or {}).get(agent_key)
+    return dict(snapshot) if isinstance(snapshot, dict) else None
+
+
 @server.tool()
 async def cli_get_status(target: str, ctx: Context, pane_id: str = "") -> dict[str, Any]:
     """Report whether a CLI pane is busy and its most recent activity.
 
     `target` uses the same addressing as cli_send, and `pane_id` names one
     exact pane instead. Returns {ok, name,
-    agent_key, busy, last_activity?, ui?}. `last_activity`, when known, is
-    {type: "agent_active"|"turn_complete", text? (turn_complete only),
+    agent_key, busy, last_activity?, usage?, ui?}. `last_activity`, when known,
+    is {type: "agent_active"|"turn_complete", text? (turn_complete only),
     age_seconds}. `ui`, when the owning Navide window answers in time, is
-    {status, buffer, logPath?, awaitingKind?, kickoff?} straight from the
+    {status, buffer, logPath?, awaitingKind?, kickoff?, agentLabel?, model?,
+    effort?, profileId?, loginExpired?, usageLimitUntil?} straight from the
     renderer; it is omitted (not a failure) when the window does not reply.
+    `busy` is the backend's own activity verdict OR'd with that badge: true
+    when `ui.status` is "running" or "starting", since the renderer sees
+    things the activity log cannot (a delivered message the CLI has queued
+    but not yet consumed). Without a `ui` block it is the backend's alone.
+
+    The identity keys in `ui` describe what the pane was LAUNCHED with, each
+    present only when it has a value: `agentLabel` is the vendor's display
+    name behind `agent_key`; `model` / `effort` are what cli_open_agent or the
+    spawn form asked for — absent means the vendor's own default, and a
+    `/model` switch typed inside the CLI is invisible here; `profileId` is
+    the account pin the pane was spawned on ("__default__" = the real home),
+    bookkeeping only — every pane runs on the vendor's live credentials, so
+    after an account switch it names the old login while the CLI already runs
+    on the new one; `loginExpired` (true) and `usageLimitUntil` (wall-clock
+    ms) appear only while the CLI has printed its expired-login / hit-your-
+    limit message — live detection from the pane's output, not a poll.
+
+    `usage` is the quota snapshot Navide holds for this pane's vendor, the
+    same row cli_usage reports under `providers[agent_key]` and unchanged from
+    what the vendor said: {provider, status, planType, windows, fetchedAt,
+    stale, …}. It is a CACHED read — nothing is refreshed on this call, which
+    cli_wait_idle polls every second — so `fetchedAt` / `stale` say how old it
+    is, and cli_usage or the window's own refresh is where a fresh number
+    comes from. For claude it is the ACTIVE account's snapshot, which is the
+    login every claude pane actually runs on (see `profileId` above). Absent
+    when Navide has no snapshot for that vendor at all.
 
     `ui.kickoff` is how this pane's spawn-time task injection ended, and it is
     the authoritative answer to "did cli_open_agent's task actually arrive":
@@ -2408,6 +3265,8 @@ async def cli_get_status(target: str, ctx: Context, pane_id: str = "") -> dict[s
     uploaded — near-live, not live. `offline` is its own answer, not a kind of
     busy: it means the far machine or its window is away, and the row you are
     reading is the last thing the server said about a pane nobody can reach.
+    There is no `usage` either: this machine's quota cache describes this
+    machine's logins, which is the wrong answer for a pane running elsewhere.
     """
 
     try:
@@ -2438,6 +3297,9 @@ async def cli_get_status(target: str, ctx: Context, pane_id: str = "") -> dict[s
     last = _activity_summary(pane.pane_id)
     if last is not None:
         status["last_activity"] = last
+    usage = await _cached_usage_snapshot(pane.agent_key)
+    if usage is not None:
+        status["usage"] = usage
 
     ui_result = await _ui_request(
         pane.workspace_path,
@@ -2448,6 +3310,9 @@ async def cli_get_status(target: str, ctx: Context, pane_id: str = "") -> dict[s
     )
     if ui_result.get("ok") and isinstance(ui_result.get("result"), dict):
         status["ui"] = ui_result["result"]
+        # One answer, not two that disagree: the badge only ever ADDS busy.
+        if ui_result["result"].get("status") in ("running", "starting"):
+            status["busy"] = True
     return status
 
 
@@ -2931,6 +3796,105 @@ async def cli_interrupt(target: str, ctx: Context, pane_id: str = "") -> dict[st
     if advisories:
         answer["advisories"] = advisories
     return answer
+
+
+@server.tool()
+async def cli_place_pane(
+    target: str,
+    ctx: Context,
+    pane_id: str = "",
+    run_group_id: str | None = None,
+    spawned_by: str | None = None,
+) -> dict[str, Any]:
+    """Move a pane: change the tab group it sits in and/or the pane it is a
+    child of. The write half of the lineage cli_list_targets and
+    cli_list_sessions report.
+
+    Two independent halves, each optional — pass only what should change:
+
+    - `run_group_id`: the tab (run group) to move the pane to. `""` is the
+      ungrouped 手動 tab. Read group ids off cli_list_sessions rows or
+      ui_snapshot; an id no tab has is refused.
+    - `spawned_by`: the pane to make this one a child of, as a `pane_id`
+      (not a name — names are messaging addresses and can change). `""` makes
+      it a root. Refused when the parent is the pane itself or one of its own
+      descendants (the tree would loop), or a pane in another workspace.
+
+    Both take `""` as a real value, which is why a half you do not pass is
+    left alone rather than reset. Group is applied first, then parent, and the
+    answer's `applied` says which halves landed — a parent refusal does not
+    undo a group move that already did. Same write paths as dragging the pane
+    in the sidebar, so the record and the screen agree and a restart keeps
+    the position.
+
+    Use it to tidy up after a resume that landed somewhere unhelpful, to adopt
+    a pane opened by someone else into your own subtree, or to gather related
+    panes onto one tab. It does not touch the pane's CLI: nothing is sent,
+    interrupted or restarted. Local panes only — a `<device>/…` address is
+    refused, since another machine's tree is that machine's to arrange.
+    Returns `{ok, target, name, pane_id, applied, run_group_id, spawned_by}`
+    with the position as it is afterwards.
+    """
+    try:
+        caller = _resolve_caller(ctx)
+    except CallerUnknown as err:
+        return {"ok": False, "error": str(err)}
+    if run_group_id is None and spawned_by is None:
+        return {
+            "ok": False,
+            "error": "pass run_group_id and/or spawned_by — nothing to change",
+            "error_code": "nothing-to-change",
+        }
+    me = caller.pane_id if caller.kind == "pane" else ""
+    result, failure = _resolve_pane_target(caller, me, target, pane_id)
+    if failure is not None:
+        return failure
+    # _resolve_pane_target without allow_remote already refuses a
+    # `<device>/…` address, so only a local pane reaches here.
+    pane = result.pane
+    args: dict[str, Any] = {"paneId": pane.pane_id}
+    if run_group_id is not None:
+        args["runGroupId"] = run_group_id.strip()
+    if spawned_by is not None:
+        parent_id = spawned_by.strip()
+        # Accept an alias for the parent too: ids change across rebuilds and
+        # the caller may be holding one it read a while ago.
+        if parent_id:
+            current = agent_messaging_current(parent_id)
+            if current is not None:
+                parent_id = current.pane_id
+        args["spawnedBy"] = parent_id
+    reply = await _ui_request(
+        pane.workspace_path,
+        "invoke",
+        caller=_pane_caller(pane.pane_id),
+        action="ui.pane.place",
+        args=args,
+    )
+    if not reply.get("ok"):
+        return {
+            "ok": False,
+            "target": pane.qualified_name,
+            "error": str(reply.get("error") or "the window owning this pane did not answer"),
+            "error_code": str(reply.get("error_code") or "ui_action_failed"),
+        }
+    payload = reply.get("result") or {}
+    return {
+        "ok": True,
+        "target": pane.qualified_name,
+        "name": pane.name,
+        "pane_id": pane.pane_id,
+        "applied": payload.get("applied") or {},
+        "run_group_id": str(payload.get("runGroupId") or ""),
+        "spawned_by": str(payload.get("spawnedBy") or ""),
+    }
+
+
+def agent_messaging_current(pane_id: str) -> Any:
+    """Alias-aware pane lookup, split out so the tool body stays readable."""
+    from agent_team_backend import agent_messaging
+
+    return agent_messaging.current(pane_id)
 
 
 # How long to keep watching for the target to pick the message up before
@@ -3448,6 +4412,9 @@ _PANE_PRIVATE_UI_ACTIONS = frozenset({"ui.messaging.readIncoming", "ui.messaging
 # budget. ui.pipeline.reset and ui.pipeline.abort only tear down and stay out.
 _UI_INVOKE_SLOW_ACTIONS = frozenset({
     "ui.pane.create",
+    # Restores a placeholder around a spawned (often resumed) CLI: the same
+    # startup wait as ui.pane.create, plus a session probe before it.
+    "ui.pane.open",
     "ui.pipeline.start",
     "ui.pipeline.next",
     "ui.pipeline.resume",
@@ -4116,6 +5083,23 @@ _NATIVE_SKILL_FIELDS = (
     "valid",
 )
 
+#: The ui-settings key the Prompts settings page saves its skills under. It
+#: must match PROMPT_SKILLS_SETTING_KEY in src/renderer/src/lib/promptSkills.ts
+#: (line 12); the backend has no other knowledge of that page's data.
+_PROMPT_SKILLS_SETTING_KEY = "prompt-skills"
+#: A prompt skill's `prompt` and `resumePrompt` are the instructions themselves
+#: — the fields a listing leaves behind; prompt_list(id=...) returns them.
+_PROMPT_SKILL_FIELDS = (
+    "id",
+    "name",
+    "icon",
+    "description",
+    "category",
+    "enabled",
+    "isDefault",
+    "maxTurns",
+)
+
 #: How many of the caller's own messages one read may return.
 _MESSAGE_LOG_MAX_LIMIT = 200
 #: Rows read before the privacy filter runs. The log is one flat tail of
@@ -4221,6 +5205,83 @@ async def workspace_list(ctx: Context) -> dict[str, Any]:
     """
     _resolve_caller(ctx)
     return await asyncio.to_thread(_recent_workspace_rows)
+
+
+@server.tool()
+async def workspace_open(path: str, ctx: Context) -> dict[str, Any]:
+    """Open `path` as a workspace in Navide.
+
+    Whether that is a new window or an existing one that already has the
+    project open is Navide's decision. `path` must be the absolute path of a
+    project root — the kind `workspace_list` reports. This is the same as
+    `ui_invoke` with action "ui.workspace.open", without having to look the
+    action up first; like it, the request goes to any one live window (the
+    workspace may not have a window yet), so it errors only when no Navide
+    window is open at all.
+
+    Returns {ok: true, path} once the window has handled the request, or the
+    error the window (or the routing) reported.
+    """
+    caller = _resolve_caller(ctx)
+    if not path:
+        return {"ok": False, "result": None, "error": "workspace_open requires path"}
+    result = await _ui_request(
+        "",
+        "invoke",
+        caller=caller,
+        action="ui.workspace.open",
+        args={"path": path},
+        is_global=True,
+    )
+    if not result.get("ok"):
+        return result
+    return {"ok": True, "path": path}
+
+
+@server.tool()
+async def workspace_switch(path: str, ctx: Context) -> dict[str, Any]:
+    """Switch the window you are in to another workspace it already holds.
+
+    One Navide window can hold several projects (the sidebar lists them);
+    this puts `path` on screen in YOUR window. Panes are not affected — the
+    ones of the workspace being left keep running. `path` must be one the
+    window already holds: otherwise the window refuses with an error that
+    points at `workspace_open`, which is the tool for opening a project. The
+    window also refuses while a pipeline is running in it (a switch would
+    abort it, and the confirmation that asks is not yours to answer): call
+    `pipeline_abort` first, or let the user switch from the sidebar.
+
+    Only a CLI pane can call this, because "your window" is the window that
+    hosts the calling pane. A host or external caller has no window of its
+    own and gets ok: false — it can use `ui_invoke` with a workspace_path and
+    action "ui.workspace.switch" instead.
+
+    Returns {ok: true, path} with the workspace now on screen, or the error
+    the window reported.
+    """
+    caller = _resolve_caller(ctx)
+    if caller.kind != "pane":
+        return {
+            "ok": False,
+            "result": None,
+            "error": (
+                "workspace_switch needs a pane caller; use ui_invoke with a "
+                "workspace_path instead"
+            ),
+        }
+    if not path:
+        return {"ok": False, "result": None, "error": "workspace_switch requires path"}
+    result = await _ui_request(
+        _caller_workspace(caller),
+        "invoke",
+        caller=caller,
+        action="ui.workspace.switch",
+        args={"path": path},
+    )
+    if not result.get("ok"):
+        return result
+    switched = result.get("result") or {}
+    return {"ok": True, "path": switched.get("path") if isinstance(switched, dict) else path}
 
 
 def _pipeline_inventory() -> dict[str, Any]:
@@ -4345,15 +5406,21 @@ def _skills_inventory(agent_key: str) -> dict[str, Any]:
     delivery target, so the "mine" half is omitted rather than guessed at.
     """
     from agent_team_backend import app as _app
+    from agent_team_backend.plugins.builtin.navide_skills.skills_tools import delivery_context, skill_id
 
     listing = _app.skills_store.list_skills()
     result: dict[str, Any] = {
-        "skills": [_pick(skill, _SKILL_FIELDS) for skill in listing.get("skills") or []],
+        "skills": [
+            {**_pick(skill, _SKILL_FIELDS), "id": skill_id(skill)}
+            for skill in listing.get("skills") or []
+        ],
         "native": [
-            _pick(skill, _NATIVE_SKILL_FIELDS) for skill in listing.get("native") or []
+            {**_pick(skill, _NATIVE_SKILL_FIELDS), "id": skill_id(skill, native=True)}
+            for skill in listing.get("native") or []
         ],
         "root": listing.get("root", ""),
         "agents": listing.get("agents") or [],
+        **delivery_context(listing.get("agents") or []),
     }
     if agent_key:
         result["delivered_to_me"] = {
@@ -4361,31 +5428,45 @@ def _skills_inventory(agent_key: str) -> dict[str, Any]:
             "skills": _app.skills_store.targets_for(agent_key),
             "native_paths": _app.skills_store.native_targets_for(agent_key),
         }
+        result["configured_for_me"] = {
+            **result["delivered_to_me"],
+            "materialized_in_current_session": None,
+            "loaded_in_current_session": None,
+            "activation": "new_session",
+        }
     return result
 
 
 @server.tool()
 async def skills_list(ctx: Context) -> dict[str, Any]:
-    """List the skills Navide manages, and which of them reach you.
+    """List known skills and configured delivery, not proof of CLI loading.
 
     A skill is a folder of instructions a CLI loads on demand. Navide keeps a
     shared library the user can deliver to any vendor, and also reflects the
     ones each CLI keeps in its own directory. Read this to find out what is
     available before writing an instruction yourself, or to tell the user which
-    skill would cover what they are asking for. Read-only — delivering a skill
-    is the user's decision, made in Settings.
+    skill would cover what they are asking for. Read-only. Use skills_inspect
+    with a listed id for instructions and a delivery revision; authorized
+    changes use skills_set_delivery. Install through skills_prepare_install
+    then skills_install after reviewing the preview.
 
     Returns {skills, native, root, agents}. Each shared skill is {name,
-    description, enabled, targets, managed, valid, native_conflict}: `targets`
+    id, description, enabled, targets, managed, valid, native_conflict}: `targets`
     null means every vendor receives it, a list means only those vendors, and
-    `enabled` false means nobody does. Each native entry is {name, description,
+    `enabled` false disables Navide's projected delivery; automatic shared-root
+    discovery is unaffected. Each native entry is {name, description,
     source, owner_agent, real_path, valid} — a skill some CLI already owns.
     `agents` is every vendor with its delivery support (wired / planned /
     unsupported), so "not delivered" and "cannot be delivered" stay apart.
 
-    `delivered_to_me` is the half about you: {agent_key, skills, native_paths},
-    the names your own CLI is actually given. It is absent for a caller with no
-    pane identity, which is nobody's delivery target.
+    `configured_for_me` contains the current routing decision for your vendor.
+    `delivered_to_me` is its legacy alias: both describe configuration, not a
+    spawn snapshot or proof the running CLI loaded it. Current-session
+    materialization and loading are explicitly unknown; changes take effect in
+    a new session. Both are absent without pane identity.
+    Shared-root readers in `automatic_agents` discover original shared files
+    regardless of Navide routing. `skills_sync_enabled` reports whether managed
+    content and routing are eligible for the user's cross-device Skills sync.
 
     Names and descriptions only. A skill's instructions are read from its own
     folder when you use it, not from here.
@@ -4736,6 +5817,126 @@ async def memory_list(
     # One thread for the whole inventory: scan() stats every candidate in the
     # home and the workspace, and read() opens a file.
     return await asyncio.to_thread(_memory_inventory, chosen, str(path or "").strip())
+
+
+def _managed_mcp_rows() -> list[dict[str, Any]]:
+    """The servers Navide itself connects to, secrets masked.
+
+    list_servers() is unmasked because the Settings page round-trips it; every
+    row here goes through native_mcp.mask_server_row before it leaves.
+    """
+    from agent_team_backend import app as _app
+    from agent_team_backend import native_mcp
+
+    return [native_mcp.mask_server_row(row) for row in _app.mcp_settings_store.list_servers()]
+
+
+def _native_mcp_inventory() -> dict[str, Any]:
+    """What each CLI's own config declares — scan() masks as it reads."""
+    from agent_team_backend import native_mcp
+
+    return {
+        "native": [entry.as_dict() for entry in native_mcp.scan()],
+        "agents": native_mcp.agent_targets(),
+    }
+
+
+@server.tool()
+async def mcp_list(ctx: Context) -> dict[str, Any]:
+    """List the MCP servers configured here — Navide's own and each CLI's.
+
+    Two sources, both the ones Settings → MCP shows. The servers Navide
+    connects to as a client come with their live state; the servers each CLI
+    keeps in its own config (`~/.claude.json`, `~/.codex/config.toml`, ...)
+    are reflected as that file states them. Read it to learn what a server is
+    called, whether it is up, and how many tools it exposes before telling the
+    user a capability is missing. Read-only — adding, enabling or editing a
+    server is the user's decision, made in Settings; there is no tool here for
+    it.
+
+    Returns {servers, native, agents}. Each managed server is {name, enabled,
+    transport, command, args, env} or {name, enabled, transport, url, headers},
+    plus `status` (disabled / connected / error / unknown) and `tool_count`.
+    Each native entry is {name, agent, transport, path, command, args, url,
+    env, headers, enabled, valid, error}. `agents` is every vendor with what
+    Navide can do with its MCP (wired / planned / unsupported) and whether its
+    own config is reflected here.
+
+    Every credential-shaped value — env and header values, `--api-key=` style
+    arguments, URL userinfo and secret query parameters — is already masked
+    as `***` in both halves; names and hosts are kept so an entry stays
+    recognisable. This is a global inventory: it does not vary by workspace.
+    """
+    from agent_team_backend import app as _app
+    from agent_team_backend.mcp_settings import MCPSettingsError
+
+    _resolve_caller(ctx)
+    try:
+        configured = await asyncio.to_thread(_managed_mcp_rows)
+    except (MCPSettingsError, OSError) as err:
+        return {"ok": False, "error": str(err)}
+    live = await _app.mcp_manager.list_status()
+    live_map = {entry["name"]: entry for entry in live}
+    servers = []
+    for row in configured:
+        info = live_map.get(row["name"], {})
+        if not row.get("enabled", True):
+            status = "disabled"
+        else:
+            status = info.get("status", "unknown")
+        # The tool list itself stays out: this is a summary, and a server with
+        # dozens of tools would swamp the answer.
+        servers.append({**row, "status": status, "tool_count": info.get("tool_count", 0)})
+    reflected = await asyncio.to_thread(_native_mcp_inventory)
+    return {"servers": servers, **reflected}
+
+
+def _prompt_skills_inventory(skill_id: str) -> dict[str, Any]:
+    """The Prompts page's saved skills, as a summary or one of them in full."""
+    from agent_team_backend import app as _app
+
+    settings = _app.ui_settings_store.get()
+    raw = settings.get(_PROMPT_SKILLS_SETTING_KEY)
+    rows = [row for row in raw if isinstance(row, dict)] if isinstance(raw, list) else []
+    if skill_id:
+        skill = next((row for row in rows if row.get("id") == skill_id), None)
+        if skill is None:
+            return {"ok": False, "error": f"no prompt skill with id {skill_id!r}"}
+        return {"skill": skill}
+    result: dict[str, Any] = {
+        "skills": [_pick(row, _PROMPT_SKILL_FIELDS) for row in rows],
+        "default_id": next((str(row.get("id", "")) for row in rows if row.get("isDefault")), ""),
+    }
+    if _PROMPT_SKILLS_SETTING_KEY not in settings:
+        # Never saved: the page seeds a builtin skill on first use, and its
+        # text lives in the renderer, so the backend cannot list it here.
+        result["note"] = "no prompt skills saved yet; the app seeds a builtin one on first use"
+    return result
+
+
+@server.tool()
+async def prompt_list(ctx: Context, id: str = "") -> dict[str, Any]:
+    """List the prompt skills the user keeps in Settings → Prompts, or read one.
+
+    A prompt skill is a saved instruction the user fires at a CLI pane from
+    the app — a name, a description and the prompt text itself, optionally
+    with a resume prompt and a turn limit. Read the list to find out what the
+    user has already written before drafting an instruction of your own, or
+    to tell them which saved prompt covers what they are asking. Read-only:
+    creating or editing one is done in Settings.
+
+    Called with no id this lists metadata only — {skills, default_id}. Each
+    skill is {id, name, icon, description, category, enabled, isDefault,
+    maxTurns}; `default_id` is the id of the skill marked default, or "" when
+    none is. A `note` is added when the user has never saved any: the app then
+    seeds a builtin skill on first use, which is not visible from here.
+
+    Called with an id it returns that one skill in full — {skill}, carrying
+    `prompt` and `resumePrompt` as well. An id the list does not contain
+    answers {ok: false, error}.
+    """
+    _resolve_caller(ctx)
+    return await asyncio.to_thread(_prompt_skills_inventory, str(id or "").strip())
 
 
 # ── Closing another pane ─────────────────────────────────────────────────────

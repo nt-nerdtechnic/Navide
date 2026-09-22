@@ -1,127 +1,84 @@
-"""Grok CLI (superagent-ai grok-cli) conversation reader.
+"""Grok CLI (xAI grok-build) conversation reader.
 
-Storage: ONE shared SQLite database ~/.grok/grok.db (WAL journal) holding all
-workspaces and sessions — unlike the per-session files of the other vendors:
+Storage: one directory per session under ``$GROK_HOME/sessions`` (default
+``~/.grok/sessions``), grouped by the working directory the session ran in::
 
-  workspaces   id = sha1(scope_key)[:16]; scope_key = git root | canonical cwd
-  sessions     id = uuid-hex[:12], keyed to a workspace
-  messages     message_json stores the user's text verbatim (marker lives here)
-  usage_events per-turn input/output/total tokens, model, session_id
+    sessions/<url-encoded-cwd>/<session-uuid7>/
+        updates.jsonl   ACP session/update notifications — the transcript
+        usage.json      per-session and per-turn token totals
+        summary.json    title, timestamps, model id, message counts
 
-Responsibilities:
-  • parse_session_file(): new `usage_events` rows → TokenUsage, deduped by the
-    autoincrement row id via seen_keys. cwd is the session's workspace
-    scope_key so Attribution's workspace gate matches the pane's cwd.
-  • find_sessions_by_marker(): resolve `at-pane:<paneId>` kickoff markers to
-    (session_id, workspace_root) by scanning messages.message_json — used by
-    Attribution to emit session.detected (resume id = sessions.id, `grok -s`).
+The group directory is ``urllib.parse.quote(cwd, safe="")``. When that would
+exceed 255 bytes grok uses a slug plus a hash instead and records the real path
+in a ``.cwd`` file inside the group, so the decode below prefers that file
+whenever it exists.
 
-Concurrency: the grok process owns the WAL writer, so every connection here is
-read-only (`file:…?mode=ro` URI), short-lived, and busy/locked-tolerant — any
-sqlite error is treated as "no new data this cycle". A missing db just means
-the CLI isn't installed → silently skip.
+Each ``updates.jsonl`` line is one JSON-RPC notification::
+
+    {"method": "session/update" | "_x.ai/session/update",
+     "timestamp": 1789379453,
+     "params": {"sessionId": "<uuid7>",
+                "_meta": {"eventId": "<sessionId>-<n>",
+                          "agentTimestampMs": 1789379453711},
+                "update": {"sessionUpdate": "<kind>", ...}}}
+
+The kinds this reader acts on:
+
+  ``user_message_chunk`` / ``agent_message_chunk``
+      the conversation text (``content`` is ``{"type": "text", "text": ...}``)
+  ``turn_completed``
+      end of turn, carrying that turn's ``usage``
+
+``turn_completed`` is the important one. The community ``grok-cli`` this
+replaced wrote no end-of-turn record, so the old reader inferred a boundary
+from 8 seconds of silence — which is why a grok pane took 8 seconds to hand a
+message to another CLI. The official CLI writes the record explicitly, with the
+turn's tokens attached, so neither the inference nor a separate usage store is
+needed. Note this contradicts the shipped docs (``17-sessions.md`` documents no
+end-of-turn marker); the events above were read off a real transcript.
+
+``_meta.eventId`` is ``<sessionId>-<n>`` with n ascending per session, and every
+dedup key here is built from it. It is NOT a dense per-file line counter —
+``hook_execution`` events consume the same sequence — so this reader keeps exact
+per-event keys rather than the line high-water mark of
+``activity_resumes_by_line``.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
-import sqlite3
+import os
 import time
 from collections.abc import Iterable
-from datetime import datetime, timezone
 from pathlib import Path
-
-import asyncio
-import shutil
-import time
 from typing import Any
+from urllib.parse import quote, unquote
+from uuid import UUID
 
-from .base import Dep, McpServerConfig, McpValue, McpWiring, SkillsWiring, VendorSpec
+from .. import osplat
+from .base import AccountSwitchSpec, Dep, McpServerConfig, McpValue, McpWiring, SkillsWiring, VendorSpec, simple_command_args
 from ..usage_common import _num, _snapshot, _window
 from ..log_readers.base import (
     ActivityEvent,
     IncrementalParseResult,
     LogReader,
     TokenUsage,
-    join_text_blocks,
+    TurnCall,
+    TurnUsage,
+    merge_prompt_excerpt,
+    read_jsonl_tail,
     user_prompt_text,
 )
 
 log = logging.getLogger("agent_team_backend.log_readers.grok")
 
-_DB_NAME = "grok.db"
-
-# Row-fetch busy wait: long enough to ride out a grok write transaction,
-# short enough not to stall the watcher's drain thread.
-_BUSY_TIMEOUT_MS = 250
-
-_USAGE_SQL = """
-SELECT u.id, u.session_id, u.model, u.input_tokens, u.output_tokens,
-       u.created_at, COALESCE(w.scope_key, '')
-FROM usage_events u
-JOIN sessions s ON s.id = u.session_id
-LEFT JOIN workspaces w ON w.id = s.workspace_id
-ORDER BY u.id
-"""
-
-# The watermark row's own columns, so a replacement db can be recognised even
-# when it lands on the same dev:ino (Linux reuses a freed inode number for
-# the very next file created).
-_ANCHOR_SQL = """
-SELECT session_id, model, input_tokens, output_tokens, created_at
-FROM usage_events WHERE id = ?
-"""
-
-
-def _anchor(values: tuple) -> str:
-    """Fingerprint of one usage row, columns in `_ANCHOR_SQL` order."""
-    return "|".join(str(v) for v in values)
-
-_MARKER_SQL = """
-SELECT m.session_id, m.message_json, COALESCE(w.scope_key, '')
-FROM messages m
-JOIN sessions s ON s.id = m.session_id
-LEFT JOIN workspaces w ON w.id = s.workspace_id
-WHERE m.message_json LIKE '%at-pane:%'
-ORDER BY m.created_at, m.seq
-"""
-
-_ACTIVITY_SQL = """
-SELECT m.rowid, m.session_id, m.seq, m.role, m.message_json, m.created_at,
-       COALESCE(w.scope_key, '')
-FROM messages m
-JOIN sessions s ON s.id = m.session_id
-LEFT JOIN workspaces w ON w.id = s.workspace_id
-WHERE m.rowid > ?
-ORDER BY m.rowid
-"""
-
-_MAX_ROWID_SQL = "SELECT COALESCE(MAX(rowid), 0) FROM messages"
-
-# Grok writes no end-of-turn record, so a turn is closed either by the next
-# user message or — for the latest turn — once that session has been quiet for
-# _TURN_IDLE_SECONDS. Quiet is measured from the session's own last message,
-# not the file: one database holds EVERY session, so a busy pane would
-# otherwise keep every other pane's turn open forever.
-_TURN_IDLE_SECONDS = 8.0
-_STATE_PREFIX = "grok_turn::"
-_TEXT_PREFIX = "grok_text::"
-# One integer marking how far `messages` has been walked, replacing the
-# `act:<session>:<seq>` key this reader used to leave in seen_keys per message
-# row. Those keys grew without bound in a db that holds EVERY session ever run,
-# which pushed the bag past the watcher's persistence limit
-# (_ACTIVITY_KEYS_PERSIST_LIMIT) — so the bag was never written to the durable
-# "@activity" checkpoint and grok replayed its whole history on every backend
-# start (GitHub #28).
-#
-# The mark is GLOBAL, on messages.rowid, not per-session. `seq` is per-session
-# and restarts at 0 for each new session, so a single max over seq would
-# swallow every row of a younger session; rowid is one insertion counter across
-# the whole store, which is the same shape opencode uses for its shared db.
-# The per-session turn state below stays per-session — one db, many concurrent
-# sessions, and a turn boundary belongs to exactly one of them.
-_ROW_PREFIX = "grok_row::"
+_TRANSCRIPT = "updates.jsonl"
+_SESSIONS_DIRNAME = "sessions"
+#: Written by grok inside a group directory whose encoded name had to be
+#: shortened; holds the real cwd.
+_CWD_FILE = ".cwd"
 _TEXT_MAX_CHARS = 4_000
 
 
@@ -132,378 +89,460 @@ def _cap_text(text: str) -> str:
     return f"{text[:half]}\n…\n{text[-half:]}"
 
 
-def _epoch(created_at: str) -> float:
-    """Epoch seconds from grok's ISO timestamp (0.0 when unparseable)."""
-    raw = str(created_at or "").strip()
-    if not raw:
-        return 0.0
-    if raw.endswith("Z"):
-        raw = f"{raw[:-1]}+00:00"
-    try:
-        parsed = datetime.fromisoformat(raw)
-    except ValueError:
-        return 0.0
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.timestamp()
-
-
-def _message_text(message_json: str) -> str:
-    """Visible text of a stored message (content is a string or text blocks)."""
-    try:
-        msg = json.loads(message_json or "")
-    except (json.JSONDecodeError, TypeError):
-        return ""
-    if not isinstance(msg, dict):
-        return ""
-    return join_text_blocks(msg.get("content"), "text")
-
-
-def _read_map(seen_keys: set[str], prefix: str) -> dict:
-    """The per-session sentinel map persisted inside seen_keys."""
-    for k in seen_keys:
-        if k.startswith(prefix):
-            try:
-                val = json.loads(k[len(prefix):])
-            except json.JSONDecodeError:
-                return {}
-            return val if isinstance(val, dict) else {}
-    return {}
-
-
-def _write_map(seen_keys: set[str], prefix: str, value: dict) -> None:
-    seen_keys.difference_update({k for k in seen_keys if k.startswith(prefix)})
-    if value:
-        seen_keys.add(f"{prefix}{json.dumps(value, sort_keys=True)}")
-
-
-def _read_mark(seen_keys: set[str], prefix: str) -> int | None:
-    """The integer sentinel stored under `prefix`, or None when never set.
-
-    None and 0 are NOT the same: 0 is a store that has been walked and held
-    nothing, None is a store no pass has looked at yet.
-    """
-    for k in seen_keys:
-        if k.startswith(prefix):
-            try:
-                return int(k[len(prefix):])
-            except ValueError:
-                return None
-    return None
-
-
-def _write_mark(seen_keys: set[str], prefix: str, value: int) -> None:
-    seen_keys.difference_update({k for k in seen_keys if k.startswith(prefix)})
-    seen_keys.add(f"{prefix}{int(value)}")
-
-
-def _int(v) -> int:  # noqa: ANN001
+def _int(v: Any) -> int:
     try:
         return max(0, int(v))
     except (TypeError, ValueError):
         return 0
 
 
+def _chunk_text(update: dict) -> str:
+    """Visible text of a message chunk.
+
+    ``content`` is a single ``{"type": "text", "text": ...}`` block in every
+    transcript seen, but a list is accepted too so a future multi-block chunk
+    does not read as empty.
+    """
+    content = update.get("content")
+    if isinstance(content, dict):
+        content = [content]
+    if not isinstance(content, list):
+        return ""
+    parts = [
+        str(b.get("text") or "")
+        for b in content
+        if isinstance(b, dict) and b.get("type") == "text"
+    ]
+    return "".join(parts)
+
+
+def _iso(params: dict, record: dict) -> str:
+    """ISO-8601 stamp for one record.
+
+    The frontend dedups messaging turns by timestamp and treats an unparseable
+    one as always-fresh — which would resend a delivered turn and replay history
+    after a backend restart — so this never returns a non-time string.
+    ``_meta.agentTimestampMs`` is preferred for its millisecond resolution; the
+    top-level ``timestamp`` (unix seconds) is the fallback.
+    """
+    meta = params.get("_meta")
+    ms = (meta or {}).get("agentTimestampMs") if isinstance(meta, dict) else None
+    seconds = _num(ms) / 1000.0 if ms is not None else _num(record.get("timestamp"))
+    if not seconds:
+        return ""
+    return (
+        time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(seconds))
+        + f".{int((seconds % 1) * 1000):03d}Z"
+    )
+
+
+#: parse_activity gets no checkpoint argument — only the watcher's per-file
+#: `seen_keys` bag — so its cursor is persisted as ONE sentinel inside that bag.
+#: Exact per-event keys were the obvious alternative and are what the base
+#: guidance prescribes for a per-session sequence counter, but they grow the bag
+#: with the conversation, which is the failure GitHub #28 was (one key per row,
+#: bag too large to persist, whole history replayed on every backend start).
+#: Byte offsets are dense and ascending in file order, which eventId is NOT:
+#: hook_execution records take their number when they are queued and are written
+#: later, so a real transcript runs …4, 3, 50, 55, 51, 56. A high-water mark over
+#: that sequence would swallow every record that arrives out of order.
+_ACT_CURSOR_PREFIX = "grok_act::"
+#: A turn's reply text accumulates over several agent_message_chunk records and
+#: is handed to the turn_completed that follows. Those can land in different
+#: passes, so the partial text rides in the bag too.
+_ACT_TEXT_PREFIX = "grok_text::"
+
+
+def _read_sentinel(seen_keys: set[str], prefix: str) -> Any:
+    for k in seen_keys:
+        if k.startswith(prefix):
+            try:
+                return json.loads(k[len(prefix):])
+            except json.JSONDecodeError:
+                return None
+    return None
+
+
+def _write_sentinel(seen_keys: set[str], prefix: str, value: Any) -> None:
+    seen_keys.difference_update({k for k in seen_keys if k.startswith(prefix)})
+    if value:
+        seen_keys.add(f"{prefix}{json.dumps(value, sort_keys=True)}")
+
+
+class _Event:
+    """One decoded transcript record, or nothing useful."""
+
+    __slots__ = ("kind", "event_id", "session_id", "update", "timestamp")
+
+    def __init__(self, record: Any) -> None:
+        self.kind = ""
+        self.event_id = ""
+        self.session_id = ""
+        self.update: dict = {}
+        self.timestamp = ""
+        if not isinstance(record, dict):
+            return
+        params = record.get("params")
+        if not isinstance(params, dict):
+            return
+        update = params.get("update")
+        if not isinstance(update, dict):
+            return
+        meta = params.get("_meta")
+        self.session_id = str(params.get("sessionId") or "")
+        self.event_id = str((meta or {}).get("eventId") or "") if isinstance(meta, dict) else ""
+        self.kind = str(update.get("sessionUpdate") or "")
+        self.update = update
+        self.timestamp = _iso(params, record)
+
+    def key(self, prefix: str, fallback: object) -> str:
+        """Dedup key for this event.
+
+        eventId is the CLI's own per-session counter and is what makes a key
+        stable across restarts. A record without one (never seen in practice)
+        falls back to the byte offset, which is unique within a file but moves
+        if the file is ever rewritten — acceptable for something that does not
+        occur, and better than dropping the event.
+        """
+        ident = self.event_id or f"{self.session_id}@{fallback}"
+        return f"{prefix}:{ident}"
+
+
 class GrokLogReader(LogReader):
     vendor: str = "grok"
 
-    def _db_path(self) -> Path:
-        return Path.home() / ".grok" / _DB_NAME
+    #: turns_for_session reads the turn_completed record's own usage.
+    turns_method: str = "exact"
 
-    def _grok_dirs(self) -> list[Path]:
-        """The single default ``~/.grok`` dir (as a list for callers that
-        iterate it).
+    # ---- layout ------------------------------------------------------------
 
-        A managed grok pane runs under a HOME shim, but the shim's
-        ``.grok/grok.db`` is symlinked back to the real ``~/.grok``
-        (credential_vault), so every account's sessions live in this one
-        database — no separate shim ``.grok`` scan is needed."""
-        return [Path.home() / ".grok"]
+    def _home(self) -> Path:
+        """grok's home. ``GROK_HOME`` relocates the whole tree (sessions and
+        credentials alike), which is how a pane is isolated."""
+        env = os.environ.get("GROK_HOME")
+        return Path(env) if env else Path.home() / ".grok"
 
-    def _db_paths(self) -> list[Path]:
-        return [d / _DB_NAME for d in self._grok_dirs()]
+    def _sessions_root(self) -> Path:
+        return self._home() / _SESSIONS_DIRNAME
 
     def project_dirs(self) -> list[Path]:
-        return [d for d in self._grok_dirs() if d.is_dir()]
+        root = self._sessions_root()
+        return [root] if root.is_dir() else []
+
+    def watch_dirs(self) -> list[Path]:
+        # The per-cwd groups and per-session dirs below are created as sessions
+        # start, so the stable parent is what can actually be subscribed to.
+        return self.project_dirs()
 
     def session_files(self) -> list[Path]:
-        return [db for db in self._db_paths() if db.is_file()]
-
-    def _query(
-        self, path: Path, sql: str, params: tuple = ()
-    ) -> list[tuple] | None:
-        """Short-lived read-only query. None = db unreadable this cycle
-        (missing / busy / locked / mid-write) — callers treat it as no data."""
+        root = self._sessions_root()
+        if not root.is_dir():
+            return []
         try:
-            con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-            try:
-                con.execute(f"PRAGMA busy_timeout = {_BUSY_TIMEOUT_MS}")
-                return con.execute(sql, params).fetchall()
-            finally:
-                con.close()
-        except (sqlite3.Error, OSError) as err:
-            log.debug("sqlite read %s failed: %s", path, err)
+            return sorted(root.glob(f"*/*/{_TRANSCRIPT}"))
+        except OSError:
+            return []
+
+    def session_files_for_workspace(self, workspace_path: str) -> list[Path] | None:
+        """Only the sessions of one workspace — the group directory IS the
+        index, so a per-workspace rescan never touches another project.
+
+        Returns None (meaning "cannot scope, scan everything") for a workspace
+        whose group name was shortened: the mapping is one-way then, and the
+        real path lives in a ``.cwd`` file the caller would have to read anyway.
+        """
+        if not workspace_path:
             return None
+        group = self._sessions_root() / quote(workspace_path.rstrip("/"), safe="")
+        if not group.is_dir():
+            # Either no sessions yet, or a shortened group name. Distinguishing
+            # them costs a full scan of the root either way.
+            return None if self._has_shortened_group() else []
+        try:
+            return sorted(group.glob(f"*/{_TRANSCRIPT}"))
+        except OSError:
+            return None
+
+    def _has_shortened_group(self) -> bool:
+        root = self._sessions_root()
+        try:
+            return any((d / _CWD_FILE).is_file() for d in root.iterdir() if d.is_dir())
+        except OSError:
+            return False
+
+    def session_id_from_path(self, path: Path) -> str:
+        """The session id is the directory name; every file inside is named
+        after its role (``updates.jsonl``), so the inherited filename-stem
+        default would coin ``updates`` for all of them."""
+        if path.name != _TRANSCRIPT:
+            return ""
+        return path.parent.name
+
+    def cwd_from_file(self, path: Path) -> str:
+        """The cwd this session ran in, from its group directory.
+
+        A ``.cwd`` file wins when present: that group's name was shortened and
+        cannot be decoded back.
+        """
+        group = path.parent.parent
+        marker = group / _CWD_FILE
+        try:
+            if marker.is_file():
+                return marker.read_text(encoding="utf-8").strip()
+        except OSError:
+            pass
+        return unquote(group.name)
+
+    def accepts_watch_path(self, path_str: str) -> bool:
+        # Every session directory holds a dozen sibling files (chat_history,
+        # signals, tool_definitions, lock files) that change on every turn.
+        # Only the transcript carries events, so the rest never wake a parse.
+        return path_str.endswith(_TRANSCRIPT)
+
+    # ---- reading -----------------------------------------------------------
+
+    def _read_records(self, path: Path) -> list[tuple[int, Any]]:
+        """Every complete record in the file, as (byte offset, value)."""
+        records, _checkpoint, _rotated = read_jsonl_tail(path, {})
+        return list(records)
+
+    def _usage_from(
+        self, event: _Event, path: Path, cwd: str, offset: int, checkpoint: dict | None = None
+    ) -> TokenUsage | None:
+        usage = event.update.get("usage")
+        if not isinstance(usage, dict):
+            return None
+        # inputTokens is the whole input: the sample transcripts satisfy
+        # totalTokens == inputTokens + outputTokens with the cache counters
+        # reported alongside rather than added, which is also how Navide models
+        # it (cache folded into input). outputTokens likewise already contains
+        # reasoningTokens.
+        input_tokens = _int(usage.get("inputTokens"))
+        output_tokens = _int(usage.get("outputTokens"))
+        if input_tokens == 0 and output_tokens == 0:
+            return None
+        model = ""
+        per_model = usage.get("modelUsage")
+        if isinstance(per_model, dict) and per_model:
+            model = str(next(iter(per_model)))
+        return TokenUsage(
+            vendor="grok",
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cwd=cwd,
+            session_id=event.session_id,
+            file_path=str(path),
+            dedup_key=event.key("usage", offset),
+            timestamp=event.timestamp,
+            model=model,
+            checkpoint=dict(checkpoint or {}),
+        )
 
     def parse_session_file(
         self, path: Path, seen_keys: set[str]
     ) -> list[TokenUsage]:
-        # The watcher routes every .json/.db under ~/.grok here (e.g.
-        # user-settings.json); only the session db carries usage events.
-        if path.name != _DB_NAME:
+        if path.name != _TRANSCRIPT:
             return []
-        rows = self._query(path, _USAGE_SQL)
-        if rows is None:
+        try:
+            records = self._read_records(path)
+        except OSError as err:
+            log.debug("grok transcript unreadable %s: %s", path, err)
             return []
+        cwd = self.cwd_from_file(path)
         out: list[TokenUsage] = []
-        for row_id, session_id, model, inp, outp, created_at, ws_root in rows:
-            key = f"usage:{row_id}"
-            if key in seen_keys:
+        for offset, value in records:
+            event = _Event(value)
+            if event.kind != "turn_completed":
                 continue
-            seen_keys.add(key)
-            input_tokens = _int(inp)
-            output_tokens = _int(outp)
-            if input_tokens == 0 and output_tokens == 0:
-                continue  # marked seen, nothing to credit
-            out.append(TokenUsage(
-                vendor="grok",
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                cwd=str(ws_root or ""),
-                session_id=str(session_id or ""),
-                file_path=str(path),
-                dedup_key=key,
-                timestamp=str(created_at or ""),
-                model=str(model or ""),
-            ))
+            usage = self._usage_from(event, path, cwd, offset)
+            if usage is None:
+                continue
+            if usage.dedup_key in seen_keys:
+                continue
+            seen_keys.add(usage.dedup_key)
+            out.append(usage)
         return out
+
+    def parse_incremental(
+        self, path: Path, checkpoint: dict
+    ) -> IncrementalParseResult:
+        if path.name != _TRANSCRIPT:
+            return IncrementalParseResult([], dict(checkpoint))
+        try:
+            records, next_checkpoint, _rotated = read_jsonl_tail(path, checkpoint)
+        except OSError as err:
+            log.debug("grok transcript unreadable %s: %s", path, err)
+            return IncrementalParseResult([], dict(checkpoint))
+        cwd = self.cwd_from_file(path)
+        out: list[TokenUsage] = []
+        for offset, value in records:
+            event = _Event(value)
+            if event.kind != "turn_completed":
+                continue
+            cursor = dict(next_checkpoint)
+            cursor["offset"] = offset
+            usage = self._usage_from(event, path, cwd, offset, cursor)
+            if usage is not None:
+                out.append(usage)
+        return IncrementalParseResult(out, next_checkpoint)
+
+    def turns_for_session(self, path: Path, session_id: str = "") -> list[TurnUsage]:
+        """One turn per `turn_completed` record, which carries the whole
+        turn's usage: inputTokens is the full input with cachedReadTokens /
+        cacheCreationTokens reported as parts of it (totalTokens is input +
+        output), so input here is the uncached remainder. The record has no
+        per-call breakdown — `modelCalls` is the count, and `modelUsage`
+        (one entry per model) is what calls_detail shows.
+        """
+        if path.name != _TRANSCRIPT:
+            return []
+        try:
+            records = self._read_records(path)
+        except OSError as err:
+            log.debug("grok transcript unreadable %s: %s", path, err)
+            return []
+        turns: list[TurnUsage] = []
+        pending_text = ""
+        pending_ts: str | None = None
+        for _offset, value in records:
+            event = _Event(value)
+            if session_id and event.session_id != session_id:
+                continue
+            if event.kind == "user_message_chunk":
+                if pending_ts is None:
+                    pending_ts = event.timestamp or None
+                pending_text = merge_prompt_excerpt(pending_text, _chunk_text(event.update))
+                continue
+            if event.kind != "turn_completed":
+                continue
+            usage = event.update.get("usage")
+            if not isinstance(usage, dict):
+                continue
+            turn = TurnUsage(
+                turn_index=0, session_id=event.session_id,
+                started_at=pending_ts, ended_at=event.timestamp or None,
+                prompt_excerpt=pending_text,
+                model_calls=_int(usage.get("modelCalls")) or None,
+            )
+            pending_text, pending_ts = "", None
+            per_model = usage.get("modelUsage")
+            parts = (
+                list(per_model.items())
+                if isinstance(per_model, dict) and per_model
+                else [("", usage)]
+            )
+            for model, counts in parts:
+                if not isinstance(counts, dict):
+                    continue
+                cache_read = _int(counts.get("cachedReadTokens"))
+                cache_creation = _int(counts.get("cacheCreationTokens"))
+                turn.add_call(TurnCall(
+                    ts=event.timestamp or None, model=str(model),
+                    input=max(0, _int(counts.get("inputTokens")) - cache_read - cache_creation),
+                    cache_read=cache_read, cache_creation=cache_creation,
+                    output=_int(counts.get("outputTokens")),
+                ))
+            if turn.total == 0:
+                continue
+            turns.append(turn)
+        for n, turn in enumerate(turns, 1):
+            turn.turn_index = n
+        return turns
 
     def parse_activity(
         self, path: Path, seen_keys: set[str]
     ) -> list[ActivityEvent]:
-        """Emit `agent_active` per message and `turn_complete` per user turn.
+        """`agent_active` per message chunk, `turn_complete` per finished turn.
 
-        Grok stores no end-of-turn record, so the boundary is inferred: the
-        next user message closes the previous turn, and the newest turn of a
-        session is flushed once that session has been quiet for
-        _TURN_IDLE_SECONDS. turn_complete carries the assistant's closing text,
-        which is what lets a Grok pane send inter-CLI messages — the frontend
-        only parses the ---MSG-START--- protocol out of a turn_complete that
-        has text.
+        The turn boundary is read, not inferred: the official CLI writes a
+        ``turn_completed`` record carrying the turn's stop reason. The community
+        grok-cli this replaced wrote none, so the old reader closed a turn after
+        8 seconds of silence — which is why a grok pane took 8 seconds to hand a
+        message to another CLI.
 
-        State is keyed by session because one database holds every session;
-        the same reason the idle test uses each session's own last message
-        rather than the file's mtime.
+        ``turn_complete`` carries the assistant's closing text, which is what
+        lets a grok pane send inter-CLI messages at all — the frontend only
+        parses the ---MSG-START--- protocol out of a turn_complete that has
+        text.
 
-        Only rows past the `_ROW_PREFIX` watermark are read, so a restart
-        resumes instead of replaying (GitHub #28). Everything the flush pass
-        needs about a session that has NO new rows this pass — its cwd and when
-        it was last written to — therefore has to live in the per-session state
-        rather than be recomputed from a full table scan, which is what the
-        `cwd` and `seen` fields are for.
+        Resumes from a byte cursor kept in ``seen_keys`` (see
+        _ACT_CURSOR_PREFIX), so a restart continues instead of replaying and the
+        bag stays one key wide however long the conversation runs.
         """
-        if path.name != _DB_NAME:
+        if path.name != _TRANSCRIPT:
             return []
-        mark = _read_mark(seen_keys, _ROW_PREFIX)
-        watermark = 0 if mark is None else max(0, mark)
-        rows = self._query(path, _ACTIVITY_SQL, (watermark,))
-        if rows is None:
+        cursor = _read_sentinel(seen_keys, _ACT_CURSOR_PREFIX)
+        try:
+            records, next_cursor, rotated = read_jsonl_tail(
+                path, cursor if isinstance(cursor, dict) else {}
+            )
+        except OSError as err:
+            log.debug("grok transcript unreadable %s: %s", path, err)
             return []
-        if not rows and watermark:
-            # No new rows: check the store did not shrink under the mark
-            # (session deleted, db replaced). rowids are handed out as
-            # max(rowid)+1, so they repeat after the newest rows go, and a mark
-            # left standing above the new max would swallow every row written
-            # after it. Re-anchor to 0 rather than to the new max: under
-            # repeating rowids nothing below the mark has been delivered under
-            # the ids it will now be handed. The two errors are not symmetric —
-            # a duplicate is absorbed downstream, because dedup_key is
-            # <session>:<seq> and does not move, while a skipped row has no
-            # second chance.
-            top = self._query(path, _MAX_ROWID_SQL)
-            if top is not None and int(top[0][0] or 0) < watermark:
-                _write_mark(seen_keys, _ROW_PREFIX, 0)
-                return []
+        cwd = self.cwd_from_file(path)
+        # A rewritten file re-reads from zero, so a half-built reply from the
+        # generation before it would be spliced onto a turn it never belonged
+        # to.
+        pending = "" if rotated else str(_read_sentinel(seen_keys, _ACT_TEXT_PREFIX) or "")
 
         out: list[ActivityEvent] = []
-        states = _read_map(seen_keys, _STATE_PREFIX)
-        texts = _read_map(seen_keys, _TEXT_PREFIX)
-        next_row = watermark
-
-        def _complete(sid: str, state: dict, detail: str) -> ActivityEvent:
-            # The turn's own last message supplies the timestamp. It must be a
-            # real one: the frontend dedups messaging turns by timestamp and
-            # treats an unparseable one as always-fresh, which would resend a
-            # turn delivered twice and replay history after a backend restart.
-            return ActivityEvent(
-                vendor="grok", event_type="turn_complete",
-                cwd=str(state.get("cwd") or ""), session_id=sid,
-                file_path=str(path),
-                dedup_key=f"turn:{sid}:{int(state['idx'])}",
-                timestamp=str(state.get("ts") or ""), detail=detail,
-                text=str(texts.get(sid) or ""),
-            )
-
-        def _touch(state: dict, cwd: str, stamp: float) -> None:
-            """Carry forward what the flush pass can no longer rescan for."""
-            state["cwd"] = cwd
-            if stamp > float(state.get("seen") or 0.0):
-                state["seen"] = stamp
-
-        for row_id, session_id, seq, role, message_json, created_at, ws_root in rows:
-            sid = str(session_id or "")
-            key = f"act:{sid}:{seq}"
-            next_row = max(next_row, int(row_id))
-            cwd = str(ws_root or "")
-            stamp = _epoch(created_at)
-            state = states.get(sid)
-            role_name = str(role or "")
-            if role_name not in ("user", "assistant"):
-                # Still evidence the session is being written to, which is what
-                # the idle test measures — the row just carries no event.
-                if state is not None:
-                    _touch(state, cwd, stamp)
+        for offset, value in records:
+            event = _Event(value)
+            if event.kind == "agent_message_chunk":
+                text = _chunk_text(event.update)
+                if text:
+                    pending = _cap_text(pending + text)
+            if event.kind == "turn_completed":
+                out.append(ActivityEvent(
+                    vendor="grok", event_type="turn_complete",
+                    cwd=cwd, session_id=event.session_id, file_path=str(path),
+                    dedup_key=event.key("turn", offset), timestamp=event.timestamp,
+                    detail=str(event.update.get("stop_reason") or "end_turn"),
+                    text=pending,
+                ))
+                pending = ""
                 continue
-            created = str(created_at or "")
-            text = ""
-            if role_name == "user":
-                if state is not None and not state.get("flushed"):
-                    out.append(_complete(sid, state, "boundary"))
-                    texts.pop(sid, None)
-                idx = (int(state["idx"]) + 1) if state is not None else 0
-                states[sid] = {"idx": idx, "flushed": False, "ts": created}
-                text = user_prompt_text(_message_text(message_json))
-            else:
-                if state is None or state.get("flushed"):
-                    idx = (int(state["idx"]) + 1) if state is not None else 0
-                    states[sid] = {"idx": idx, "flushed": False, "ts": created}
-                states[sid]["ts"] = created
-                reply = _message_text(message_json).strip()
-                if reply:
-                    texts[sid] = _cap_text(reply)
-            _touch(states[sid], cwd, stamp)
+            if event.kind not in ("user_message_chunk", "agent_message_chunk"):
+                continue
+            role = "user" if event.kind == "user_message_chunk" else "assistant"
             out.append(ActivityEvent(
                 vendor="grok", event_type="agent_active",
-                cwd=cwd, session_id=sid, file_path=str(path),
-                dedup_key=key, timestamp=str(created_at or ""),
-                detail=role_name, text=text,
+                cwd=cwd, session_id=event.session_id, file_path=str(path),
+                dedup_key=event.key("act", offset), timestamp=event.timestamp,
+                detail=role,
+                text=user_prompt_text(_chunk_text(event.update)) if role == "user" else "",
             ))
 
-        # Flush every session whose newest turn has gone quiet on its own.
-        now = time.time()
-        for sid, state in list(states.items()):
-            if state.get("flushed"):
-                continue
-            seen_at = float(state.get("seen") or 0.0)
-            if seen_at <= 0.0 or now - seen_at < _TURN_IDLE_SECONDS:
-                continue
-            out.append(_complete(sid, state, "idle"))
-            state["flushed"] = True
-            texts.pop(sid, None)
-
-        _write_map(seen_keys, _STATE_PREFIX, states)
-        _write_map(seen_keys, _TEXT_PREFIX, texts)
-        _write_mark(seen_keys, _ROW_PREFIX, next_row)
+        _write_sentinel(seen_keys, _ACT_CURSOR_PREFIX, next_cursor)
+        _write_sentinel(seen_keys, _ACT_TEXT_PREFIX, pending)
         return out
-
-    def parse_incremental(
-        self,
-        path: Path,
-        checkpoint: dict,
-    ) -> IncrementalParseResult:
-        if path.name != _DB_NAME:
-            return IncrementalParseResult([], dict(checkpoint))
-        try:
-            stat = path.stat()
-        except OSError:
-            return IncrementalParseResult([], dict(checkpoint))
-        identity = f"{stat.st_dev}:{stat.st_ino}"
-        replaced = bool(checkpoint.get("identity") and checkpoint.get("identity") != identity)
-        last_row_id = 0 if replaced else max(0, int(checkpoint.get("row_id") or 0))
-        anchor = "" if replaced else str(checkpoint.get("anchor") or "")
-        if last_row_id and anchor:
-            # Same dev:ino is not proof of the same db. A row standing under
-            # the watermark id that is not the row the mark was taken from
-            # means the numbering restarted: rescan from zero, as for a new
-            # inode. A missing row is left to the shrink check below.
-            current = self._query(path, _ANCHOR_SQL, (last_row_id,))
-            if current and _anchor(current[0]) != anchor:
-                replaced = True
-                last_row_id = 0
-                anchor = ""
-        rows = self._query(
-            path,
-            _USAGE_SQL.replace("ORDER BY u.id", f"WHERE u.id > {last_row_id} ORDER BY u.id"),
-        )
-        if rows is None:
-            return IncrementalParseResult([], dict(checkpoint))
-        if not rows and last_row_id:
-            max_rows = self._query(path, "SELECT COALESCE(MAX(id), 0) FROM usage_events")
-            max_row_id = int(max_rows[0][0]) if max_rows else last_row_id
-            if max_row_id < last_row_id:
-                last_row_id = 0
-                rows = self._query(path, _USAGE_SQL)
-                if rows is None:
-                    return IncrementalParseResult([], dict(checkpoint))
-        out: list[TokenUsage] = []
-        next_row_id = last_row_id
-        for row_id, session_id, model, inp, outp, created_at, ws_root in rows:
-            next_row_id = max(next_row_id, int(row_id))
-            anchor = _anchor((session_id, model, inp, outp, created_at))
-            cursor = {
-                "kind": "sqlite", "row_id": next_row_id, "identity": identity, "anchor": anchor,
-            }
-            input_tokens = _int(inp)
-            output_tokens = _int(outp)
-            if input_tokens == 0 and output_tokens == 0:
-                continue
-            out.append(TokenUsage(
-                vendor="grok",
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                cwd=str(ws_root or ""),
-                session_id=str(session_id or ""),
-                file_path=str(path),
-                dedup_key=f"usage:{row_id}",
-                timestamp=str(created_at or ""),
-                model=str(model or ""),
-                checkpoint=cursor,
-            ))
-        return IncrementalParseResult(
-            out,
-            {"kind": "sqlite", "row_id": next_row_id, "identity": identity, "anchor": anchor},
-        )
 
     def find_sessions_by_marker(
         self, markers: Iterable[str]
     ) -> dict[str, tuple[str, str]]:
-        """marker → (session_id, workspace_root) for kickoff markers found in
-        messages.message_json. Earliest match wins per marker. Empty dict when
-        nothing matches or the db is unreadable this cycle."""
+        """marker → (session_id, workspace_root) for kickoff markers found in a
+        transcript. Earliest match wins per marker."""
         wanted = [m for m in markers if m]
         if not wanted:
             return {}
-        # Every account's sessions share the real ~/.grok/grok.db (the shim db
-        # is symlinked back), so a single db scan covers them all.
         found: dict[str, tuple[str, str]] = {}
-        for db in self._db_paths():
-            if not db.is_file():
+        for path in self.session_files():
+            if len(found) == len(wanted):
+                break
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
                 continue
-            rows = self._query(db, _MARKER_SQL)
-            if rows is None:
-                continue
-            for session_id, message_json, ws_root in rows:
-                text = str(message_json or "")
-                for marker in wanted:
-                    if marker not in found and marker in text:
-                        found[marker] = (str(session_id or ""), str(ws_root or ""))
+            for marker in wanted:
+                if marker not in found and marker in text:
+                    found[marker] = (self.session_id_from_path(path), self.cwd_from_file(path))
         return found
 
 
 # ---- attribution/watch hooks ----------------------------------------------
 
 def _workspace_match(self, usage, ws_path, owner_workspace=None):
-    # Reader emits cwd = workspaces.scope_key (git root / canonical cwd).
+    # Reader emits cwd = the session's own group directory, decoded.
     return bool(usage.cwd and usage.cwd == ws_path)
 
 
@@ -511,10 +550,55 @@ def _pane_cwd_match(self, usage, pane_cwd, pane_id):
     return usage.cwd == pane_cwd
 
 
-GrokLogReader.binds_shared_db_by_marker = True
+# One directory per session now, so binding goes through the ordinary
+# marker-FILE path. `binds_shared_db_by_marker` described the community CLI's
+# single ~/.grok/grok.db and no longer applies.
+GrokLogReader.binds_by_marker_file = True
 GrokLogReader.emits_session_sink = True
 GrokLogReader.workspace_match = _workspace_match
 GrokLogReader.pane_cwd_match = _pane_cwd_match
+
+
+def _resume_id_from_command(command) -> str:
+    args = simple_command_args(command)
+    if not args or args[0] != "grok":
+        return ""
+    for index, arg in enumerate(args[1:], 1):
+        if arg == "--":
+            break
+        if arg in ("-r", "--resume") and index + 1 < len(args):
+            value = args[index + 1]
+        elif arg.startswith("--resume="):
+            value = arg.partition("=")[2]
+        else:
+            continue
+        # Grok also accepts titles. Only a UUID identifies the transcript for
+        # attribution and duplicate-PTY reaping without asking the CLI.
+        try:
+            session_id = str(UUID(value))
+        except ValueError:
+            return ""
+        return session_id if session_id == value.lower() else ""
+    return ""
+
+
+def _session_path(workspace_path: str, session_id: str) -> Path | None:
+    """The transcript the resume preflight checks, or None when it cannot be
+    named.
+
+    The per-cwd group directory makes this reconstructable, which the community
+    CLI's one shared SQLite store never allowed. It stays unanswerable for a
+    workspace whose encoded name grok had to shorten: the real path then lives
+    in a ``.cwd`` file inside a group whose name is a hash, so the id alone
+    cannot point at it and "assume resumable" remains the right answer.
+    """
+    if not workspace_path or not session_id:
+        return None
+    reader = GrokLogReader()
+    if reader._has_shortened_group():
+        return None
+    group = reader._sessions_root() / quote(workspace_path.rstrip("/"), safe="")
+    return group / session_id / _TRANSCRIPT
 
 
 # ---- credentials (vault layout + identity) ---------------------------------
@@ -610,7 +694,7 @@ async def grok_billing_rpc(binary: str, env: dict | None = None) -> dict:
     ``env`` (``None`` = inherit the parent environment) lets a profile point the
     CLI at its isolated ``HOME`` shim so billing reflects that account."""
     proc = await asyncio.create_subprocess_exec(
-        binary, "agent", "stdio",
+        *osplat.paths.launch_argv(binary, ("agent", "stdio")),
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.DEVNULL,
@@ -661,7 +745,7 @@ async def fetch_grok(home: Path, env: dict | None = None) -> dict:
     creds = read_grok_credentials(home, env)
     if creds is None:
         return _snapshot("grok", "no-credentials")
-    binary = shutil.which("grok")
+    binary = osplat.paths.resolve_program("grok")
     if not binary:
         return _snapshot("grok", "unavailable", error="grok CLI not found")
     try:
@@ -680,57 +764,99 @@ async def fetch_grok(home: Path, env: dict | None = None) -> dict:
 
 SPEC = VendorSpec(
     key="grok",
+    # auth.x.ai proves login routing only; grok-build service hosts unverified.
+    expected_hosts=(),
+    # GrokLogReader._home layout, including GROK_HOME and the HOME shim.
+    data_dirs=lambda ctx: (ctx.path(ctx.env.get("GROK_HOME") or ctx.home / ".grok"),),
+    data_dir_env_vars=("GROK_HOME",),
     supports_model=True,
-    # Verified 2026-08-15: grok's own error message points at
-    # ~/.agents/skills/<name>/SKILL.md. It has no dedicated relocation
-    # variable, so this rides the HOME shim its MCP wiring already builds.
+    # ~/.agents/skills is still a scanned tier on the official CLI (docs
+    # 08-skills.md lists .agents/skills alongside .grok/skills at every level),
+    # and there is still no variable that relocates the skills root on its own
+    # — only GROK_HOME, which moves the whole tree — so this keeps riding the
+    # HOME shim its MCP wiring builds.
     skills_supported=True,
     skills_wiring=SkillsWiring(
         root_env="HOME",
         reads_shared_root=True,
         skills_rel=(".agents", "skills"),
     ),
-    label="Grok CLI",
-    # No flag, no config variable, no config-dir variable: the config root is
-    # hardcoded under the home directory. Servers are a LIST under mcp.servers
-    # keyed by id, not a map — and the file they share is the one holding the
-    # BYO API key, which is why the caller cannot simply link it.
+    label="Grok Build (SpaceXAI)",
+    # Wired through the per-pane HOME shim (mcp_server/pane_home.py): the
+    # official CLI reads its servers as a MAP of `[mcp_servers.<name>]` tables
+    # in ~/.grok/config.toml, and `config_file` + `section` below is the whole
+    # description of that — pane_home picks the serializer by suffix
+    # (`_is_toml` -> tomli_w) since f3d77f0d, so the TOML is written, not
+    # JSON. config.toml also holds the user's own settings and BYO API key,
+    # which is why the shim copies that one file instead of linking it. The
+    # community grok-cli this replaced kept a `mcp.servers` LIST in
+    # ~/.grok/user-settings.json; nothing reads that any more.
     mcp_wiring=McpWiring(
+        # `[mcp_servers.<name>]` in TOML: a map keyed by the server's name, so
+        # no list_key. A bare `url` is how the CLI's own `grok mcp add` writes
+        # a streamable-HTTP server (transport is inferred from the scheme), and
+        # `enabled` defaults to true.
         config=McpServerConfig(
-            section=("mcp", "servers"),
-            entry=(
-                ("id", McpValue.NAME),
-                ("label", McpValue.LABEL),
-                ("enabled", True),
-                ("transport", "http"),
-                ("url", McpValue.URL),
-            ),
-            list_key="id",
+            section=("mcp_servers",),
+            entry=(("url", McpValue.URL),),
         ),
         config_dir=".grok",
-        config_file=("user-settings.json",),
+        config_file=("config.toml",),
     ),
-    # Empty, not None: grok has no auth subcommand — its TUI prompts for
-    # sign-in on a bare launch — so the flags are stripped and nothing added.
-    login_command_args="",
+    # `grok login` defaults to the browser OAuth flow at auth.x.ai, which a PTY
+    # pane can carry: the CLI opens the browser and waits. `--device-auth` is
+    # the headless alternative and is not what a desktop pane needs.
+    login_command_args="login",
     live_file=(".grok", "auth.json"),
     slot_file="auth.json",
     login_home_secret_file=("home", ".grok", "auth.json"),
     profile_home_secret_file=(".grok", "auth.json"),
     identity_from_secret=identity_from_secret,
+    # Whole-file swap of ``~/.grok/auth.json`` (a map keyed by scope URL —
+    # one file per account, so it is swapped whole); the CLI reads it at
+    # startup, so affected panes restart and resume (``grok -r <id>``). Layout
+    # from the installed CLI; no two-account round-trip on record yet.
+    account_switch=AccountSwitchSpec(
+        auth_scope="grok",
+        method="restart",
+        store="file",
+        evidence="source",
+        verified_version="1.0.34",
+        # The 1.0.34 binary reports "You are using XAI_API_KEY." / "Auth
+        # method: API key (XAI_API_KEY)" when the variable is set: the key
+        # replaces the OAuth login for that process.
+        shadowing_env=("XAI_API_KEY",),
+        resume="native",
+        todo="A -> B -> A round-trip on two real accounts not yet recorded",
+    ),
     # Late-bound (module global at call time) so tests can monkeypatch.
     fetch_usage=lambda home: fetch_grok(home),
     home_env_vars=(
         "GROK_HOME",
-        # Child/daemon runtime markers grok stamps on its own subprocesses —
-        # same inheritance hazard class as claude's child-session marker.
+        # Child/daemon runtime markers the community grok-cli stamped on its
+        # own subprocesses — same inheritance hazard class as claude's
+        # child-session marker. Kept after the move to the official CLI rather
+        # than dropped: a string scan of the official binary finds neither, but
+        # that scan is not evidence of absence — GROK_SANDBOX, which `grok
+        # --help` states outright, does not show up in it either. Stripping a
+        # marker that does exist would reintroduce the hazard; carrying one
+        # that does not costs nothing.
         "GROK_BACKGROUND_CHILD",
         "GROK_DAEMON_CHILD",
     ),
     make_log_reader=GrokLogReader,
-    install_dep=Dep("grok", "Grok CLI", "superagent-ai Grok coding agent", "agent_cli",
+    resume_id_from_command=_resume_id_from_command,
+    # Newly answerable: sessions live at a path derived from the cwd and the
+    # id, so a resume preflight can check instead of assuming.
+    session_path=_session_path,
+    # xAI's own grok-build CLI. A same-named community CLI (superagent-ai/
+    # grok-cli) installs to the same ~/.grok/bin/grok, so `which grok` cannot
+    # tell them apart — the version string can: this one prints
+    # "grok <x.y.z> (<commit>)", the community one a bare "1.1.7".
+    install_dep=Dep("grok", "Grok Build (SpaceXAI)", "xAI Grok coding agent", "agent_cli",
         ["grok", "--version"], r"(\d+\.\d+\.\d+)",
-        install_cmd="curl -fsSL https://raw.githubusercontent.com/superagent-ai/grok-cli/main/install.sh | bash",
-        needs_terminal=True, requires_binaries=("curl",), optional=True, docs_url="https://github.com/superagent-ai/grok-cli",
+        install_cmd="curl -fsSL https://x.ai/cli/install.sh | bash",
+        needs_terminal=True, requires_binaries=("curl",), optional=True,
+        docs_url="https://docs.x.ai/build/cli/reference",
         update_cmd="grok update"),
 )

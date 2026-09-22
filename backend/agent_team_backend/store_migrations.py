@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import shutil
 import sqlite3
 from contextlib import closing
@@ -29,6 +28,7 @@ from typing import Any, Callable
 
 from . import __version__
 from .applog import app_data_dir
+from .osplat import secret_files
 from .db import DB_FILENAME
 from .roles_store import ROLES_FILE
 from .stages_store import PIPELINES_FILE, SCHEMA_VERSION as STORE_SCHEMA_VERSION
@@ -181,9 +181,9 @@ def _backup_database(base: Path, dest: Path) -> bool:
             sqlite3.connect(str(out_file))
         ) as out:
             conn.backup(out)
-        # The backup holds the same secrets as the live database (which gets
-        # 0600 from AIChatSettingsStore); don't leave it at the umask default.
-        os.chmod(out_file, 0o600)
+        # The backup holds the same secrets as the live database (which
+        # AIChatSettingsStore hardens); don't leave it at the umask default.
+        secret_files.harden_file(out_file)
         return True
     except (sqlite3.Error, OSError) as err:  # noqa: BLE001
         log.warning("navide.db backup failed (%s); continuing", err)

@@ -41,8 +41,30 @@ def test_the_command_always_exits_zero(tmp_path) -> None:
     # is not running. Reporting that as a hook failure would be noise at best.
     copilot_hooks.install_hooks("/tmp/port-file", hooks_directory=tmp_path)
 
-    command = _document(tmp_path)["hooks"]["notification"][0]["command"]
-    assert command.rstrip().endswith("exit 0")
+    handler = _document(tmp_path)["hooks"]["notification"][0]
+    for key in ("command", "bash", "powershell"):
+        assert handler[key].rstrip().endswith("exit 0"), key
+
+
+def test_both_shells_are_written_on_every_platform(tmp_path) -> None:
+    """`command` is the cross-platform fallback Copilot copies into whichever
+    shell it runs; `bash` and `powershell` take precedence per platform. This
+    one file is read wherever Copilot runs, not only where it was installed,
+    so all three are written on every platform — a sh one-liner handed to
+    PowerShell is a syntax error, not a failed request.
+    """
+    copilot_hooks.install_hooks("/tmp/port-file", hooks_directory=tmp_path)
+
+    handler = _document(tmp_path)["hooks"]["notification"][0]
+    assert handler["bash"] == handler["command"]
+    assert handler["bash"].startswith("PORT=$(cat /tmp/port-file 2>/dev/null); ")
+    # `curl` alone is a PowerShell alias for Invoke-WebRequest; `@` starts a splat.
+    assert handler["powershell"].startswith(
+        "$PORT = Get-Content -ErrorAction SilentlyContinue '/tmp/port-file'; "
+    )
+    assert "curl.exe -fsS -m 2 -o NUL -X POST" in handler["powershell"]
+    assert "--data-binary '@-'" in handler["powershell"]
+    assert "/hooks/copilot" in handler["powershell"]
 
 
 def test_the_command_reads_the_port_at_fire_time(tmp_path) -> None:
@@ -50,9 +72,10 @@ def test_the_command_reads_the_port_at_fire_time(tmp_path) -> None:
     # must not bake one in.
     copilot_hooks.install_hooks("/var/run/navide.port", hooks_directory=tmp_path)
 
-    command = _document(tmp_path)["hooks"]["notification"][0]["command"]
-    assert "/var/run/navide.port" in command
-    assert "$PORT" in command
+    handler = _document(tmp_path)["hooks"]["notification"][0]
+    for key in ("command", "bash", "powershell"):
+        assert "/var/run/navide.port" in handler[key], key
+        assert "$PORT" in handler[key], key
 
 
 def test_reinstalling_overwrites_rather_than_accumulates(tmp_path) -> None:

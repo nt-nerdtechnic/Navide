@@ -54,6 +54,10 @@ does not remove their recovery behavior.
 
 File reads and writes, workspace checks, AI editing requests, and related operations cross Navide's backend or preload boundaries. The renderer must not gain unrestricted filesystem access merely because Monaco runs in the renderer.
 
+Place standalone interface prototypes in `.agent-team/mockups/`. The Explorer can list this directory, and the editor can read its files and preview HTML with relative CSS and images stored in the same directory tree. These files remain protected from backend filesystem mutations, including writes, creation, renames, and deletion; agents can author them through their normal workspace tools. The existing access rules for `.agent-team/plans/` and `.agent-team/reports/` remain unchanged.
+
+HTML previews retain the existing sandbox with scripts disabled. Reading a prototype in the editor does not enable its JavaScript interactions; use **Open externally** to review those in a browser. Relative resources remain subject to workspace and protected-directory checks.
+
 ## Product role
 
 The editor is Navide's precision Intervention surface. It exists for navigation, inspection, direct modification, refactoring, diagnostics, debugging context, diff review, plan execution, and acceptance when human judgment or exact control adds value.

@@ -15,6 +15,26 @@ export {
 } from './lib/cliPermission'
 export type { CliPermissionMode } from './lib/cliPermission'
 
+export {
+  cliModelKey,
+  parseCliModelDefault,
+  serializeCliModelDefault,
+} from './lib/cliModelDefault'
+export type { CliModelDefault } from './lib/cliModelDefault'
+
+export {
+  SPAWN_ENV_RESERVED_KEYS,
+  chooseLaunchCommand,
+  cliCommandKey,
+  cliEnvKey,
+  isReservedSpawnEnvKey,
+  isValidEnvName,
+  parseCliEnvOverride,
+  serializeCliEnvOverride,
+  spawnEnvOverride,
+} from './lib/cliLaunchOverride'
+export type { CliEnvEntry, LaunchCommandSource } from './lib/cliLaunchOverride'
+
 export { modelArgsFor, supportsEffort, supportsModel } from './lib/cliModel'
 export type {
   CliModelCapability,
@@ -41,6 +61,7 @@ export {
   buildResumeCommand,
   cancelStalePendingCreate,
   dedupeRestorablePanes,
+  isShellSafeSessionId,
   normalizeResumeSessionId,
   paneBusyForRebuild,
   paneCanRebuild,

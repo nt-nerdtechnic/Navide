@@ -160,6 +160,12 @@ MEMORY_SOURCES: tuple[MemorySource, ...] = (
     # -- kimi: $KIMI_CODE_HOME/AGENTS.md, else ~/.kimi-code/AGENTS.md.
     MemorySource("kimi", USER_SCOPE, (".kimi-code", "AGENTS.md"), canonical=True),
     MemorySource("kimi", PROJECT_SCOPE, ("AGENTS.md",), canonical=True),
+    # -- mcode: `mcode init .` writes AGENTS.md from a directory analysis,
+    # which is the only instruction file the CLI documents. No user-scope row:
+    # the data dir (~/.minimax, $MINIMAX_DATA_DIR) holds config.yaml, auth and
+    # the session SQLite, and nothing observed there is an instruction file —
+    # `agents/` is agent DEFINITIONS (agent.md per built-in agent), not memory.
+    MemorySource("mcode", PROJECT_SCOPE, ("AGENTS.md",), canonical=True),
     # -- muse: $XDG_CONFIG_HOME/muse (default ~/.config/muse), then every level
     # from the VCS root down. CLAUDE.md is read only where AGENTS.md is absent.
     MemorySource("muse", USER_SCOPE, (".config", "muse", "AGENTS.md"), canonical=True),
@@ -505,7 +511,7 @@ def _describe(
 
 def _relative(path: Path, root: Path) -> str:
     try:
-        return str(path.relative_to(root))
+        return path.relative_to(root).as_posix()
     except ValueError:
         return str(path)
 

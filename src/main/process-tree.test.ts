@@ -1,5 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { platformId, setPlatformId } from '../shared/osplat'
 import { descendantsFirst, killProcessTree } from './process-tree'
+
+// The platform to restore after a test that switched it: whatever this file
+// saw when it loaded — the host, or an injection from a vitest setup file.
+// Restoring to the host instead silently undid that injection for every
+// later test in the file (see src/shared/platformBaseline.test.ts).
+const BASELINE = platformId()
 
 const execFileSync = vi.hoisted(() => vi.fn())
 vi.mock('node:child_process', () => ({ execFileSync }))
@@ -55,6 +62,8 @@ describe('killProcessTree', () => {
   let kill: ReturnType<typeof spyOnKill>
 
   beforeEach(() => {
+    // The ps-snapshot arm under test is the POSIX one, whichever host runs it.
+    setPlatformId('darwin')
     execFileSync.mockReset()
     execFileSync.mockReturnValue(SNAPSHOT)
     kill = spyOnKill()
@@ -62,6 +71,7 @@ describe('killProcessTree', () => {
 
   afterEach(() => {
     kill.mockRestore()
+    setPlatformId(BASELINE)
   })
 
   it('signals every process in the tree, not just the handle', () => {
@@ -71,6 +81,14 @@ describe('killProcessTree', () => {
 
     expect(kill.mock.calls.map((c) => c[0])).toEqual([4201, 4200, 4103, 4102])
     expect(kill.mock.calls.every((c) => c[1] === 'SIGKILL')).toBe(true)
+  })
+
+  it('looks ps up on PATH rather than pinning /bin/ps', () => {
+    // NixOS/Guix keep no /bin/ps; the absolute path there meant no snapshot
+    // and a kill that reached only the handle.
+    killProcessTree(4102, 'SIGKILL')
+    expect(execFileSync.mock.calls[0][0]).toBe('ps')
+    expect(execFileSync.mock.calls[0][1]).toEqual(['-Ao', 'pid=,ppid='])
   })
 
   it('carries on when a process died between the snapshot and the signal', () => {
@@ -99,5 +117,39 @@ describe('killProcessTree', () => {
 
     expect(kill).not.toHaveBeenCalled()
     expect(execFileSync).not.toHaveBeenCalled()
+  })
+
+  describe('on Windows', () => {
+    beforeEach(() => setPlatformId('win32'))
+    afterEach(() => setPlatformId(BASELINE))
+
+    it('lets taskkill walk the tree instead of parsing ps', () => {
+      execFileSync.mockReturnValue('')
+
+      killProcessTree(4102, 'SIGKILL')
+
+      expect(execFileSync).toHaveBeenCalledTimes(1)
+      const [exe, argv, opts] = execFileSync.mock.calls[0]
+      expect(exe).toBe('taskkill')
+      expect(argv).toEqual(['/PID', '4102', '/T', '/F'])
+      expect(opts).toMatchObject({ windowsHide: true })
+      // There is no POSIX signal to deliver; process.kill would only reach
+      // the handle, which is the bug this module exists to avoid.
+      expect(kill).not.toHaveBeenCalled()
+    })
+
+    it('swallows a taskkill failure the way the POSIX arm swallows ESRCH', () => {
+      execFileSync.mockImplementation(() => {
+        throw new Error('ERROR: The process "4102" not found.')
+      })
+
+      expect(() => killProcessTree(4102, 'SIGKILL')).not.toThrow()
+      expect(kill).not.toHaveBeenCalled()
+    })
+
+    it('still refuses to touch pid 1 or an unspawned child', () => {
+      killProcessTree(undefined, 'SIGKILL')
+      expect(execFileSync).not.toHaveBeenCalled()
+    })
   })
 })

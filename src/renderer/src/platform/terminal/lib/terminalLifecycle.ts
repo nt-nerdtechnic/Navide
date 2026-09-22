@@ -20,6 +20,12 @@ export interface CrashLoopState {
 export const TERMINAL_CREATE_TIMEOUT_MS = 30_000
 
 const FAST_EXIT_MS = 1_000
+// Windows NTSTATUS for a process torn down by a console control event
+// (STATUS_CONTROL_C_EXIT). A CLI that dies this way right after spawn lost its
+// pseudoconsole rather than crashed on its own; it takes about a second, so the
+// plain FAST_EXIT_MS window misses it and the pane would be rebuilt forever.
+export const STATUS_CONTROL_C_EXIT = 0xC000013A
+const CONTROL_C_EXIT_MS = 5_000
 const CRASH_LIMIT = 3
 const crashLoops = new Map<string, CrashLoopState>()
 
@@ -39,9 +45,12 @@ export function recordTerminalExit(
   fastExitMs = FAST_EXIT_MS,
   crashLimit = CRASH_LIMIT,
 ): CrashLoopState {
+  const window = exit.exit_code === STATUS_CONTROL_C_EXIT
+    ? Math.max(fastExitMs, CONTROL_C_EXIT_MS)
+    : fastExitMs
   const isFastCrash = exit.reason === 'exit'
     && typeof exit.uptime_ms === 'number'
-    && exit.uptime_ms <= fastExitMs
+    && exit.uptime_ms <= window
   if (!isFastCrash) {
     crashLoops.delete(key)
     return { count: 0, open: false }
@@ -68,7 +77,9 @@ export function formatTerminalExit(exit: TerminalExitDetails): string {
     ? `was terminated by ${exit.signal}`
     : exit.exit_code === null
       ? `ended (${exit.reason})`
-      : `exited with code ${exit.exit_code}`
+      : exit.exit_code === STATUS_CONTROL_C_EXIT
+        ? `exited with code ${exit.exit_code} (STATUS_CONTROL_C_EXIT: console control event or pseudoconsole closed)`
+        : `exited with code ${exit.exit_code}`
   const binary = exit.startup_probe?.binary_path
   return `Process ${cause}${lifetime}${binary ? ` — ${binary}` : ''}`
 }

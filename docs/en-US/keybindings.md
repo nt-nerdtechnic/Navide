@@ -6,6 +6,8 @@ via `useKeybindings` (capture-phase), with support for chord keys (e.g. `⌘K �
 and when-clause conditions.
 
 > **macOS symbols:** `⌘` Cmd · `⌥` Option/Alt · `⌃` Ctrl · `⇧` Shift · `↩` Enter
+>
+> On Windows and Linux, `⌥` reads as **Alt**. Menu items with accelerators (copy, paste, Settings, New Window, Open Workspace, close window) follow the platform and answer **Ctrl** there. The rules in the table below are written for macOS: their `⌘` resolves to the **Win/Super** key off macOS, not Ctrl, so Windows and Linux users should re-record the ones they need in **Settings → Shortcuts** — the recorder writes a plain `ctrl+…` rule.
 
 Every binding below can be changed in **Settings → Shortcuts**; see
 [Customizing shortcuts](#customizing-shortcuts) for the file format and the

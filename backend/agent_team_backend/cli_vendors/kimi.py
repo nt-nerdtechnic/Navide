@@ -21,7 +21,7 @@ from pathlib import Path
 
 import re
 
-from .base import Dep, McpServerConfig, McpValue, McpWiring, SkillsWiring, VendorSpec, command_text
+from .base import AccountSwitchSpec, Dep, McpServerConfig, McpValue, McpWiring, SkillsWiring, VendorSpec, command_text
 from ..usage_common import HTTP_TIMEOUT, _epoch_to_iso, _num, _snapshot, _window, parse_retry_after
 from ..log_readers.base import (
     ActivityEvent,
@@ -396,7 +396,7 @@ class KimiLogReader(LogReader):
                             text=user_prompt_text(join_text_blocks(rec.get("input"), "text")),
                         ))
                     elif rtype == "usage.record":
-                        if state is not None:
+                        if state is not None and not state.get("flushed"):
                             state["last_ms"] = max(int(state.get("last_ms") or 0), tms)
                         out.append(ActivityEvent(
                             vendor="kimi", event_type="agent_active",
@@ -404,6 +404,10 @@ class KimiLogReader(LogReader):
                             dedup_key=key, timestamp=ts, detail="usage",
                         ))
                     elif rtype == "context.append_loop_event":
+                        if state is not None and state.get("cancelled"):
+                            continue
+                        if state is not None and not state.get("flushed"):
+                            state["last_ms"] = max(int(state.get("last_ms") or 0), tms)
                         # The assistant's visible reply: content.part carries both
                         # `think` and `text` parts, and only the latter is what the
                         # user (and the messaging protocol) sees. Later parts in a
@@ -411,10 +415,16 @@ class KimiLogReader(LogReader):
                         event = rec.get("event")
                         if isinstance(event, dict) and event.get("type") == "content.part":
                             part = event.get("part")
-                            if isinstance(part, dict) and part.get("type") == "text":
+                            if isinstance(part, dict) and part.get("type") in ("text", "think"):
                                 text = str(part.get("text") or "").strip()
                                 if text:
-                                    last_text = _cap_text(text)
+                                    # New content disproves an inferred idle
+                                    # end; late accounting alone does not.
+                                    if state is None or state.get("flushed"):
+                                        idx = (int(state["idx"]) + 1) if state is not None else 0
+                                        state = {"idx": idx, "last_ms": tms, "flushed": False}
+                                    if part.get("type") == "text":
+                                        last_text = _cap_text(text)
                     elif rtype == "turn.cancel":
                         if state is not None and not state.get("flushed"):
                             out.append(_complete(
@@ -422,6 +432,8 @@ class KimiLogReader(LogReader):
                                 max(int(state.get("last_ms") or 0), tms), "cancel",
                             ))
                             state["flushed"] = True
+                        if state is not None:
+                            state["cancelled"] = True
                             last_text = ""
 
                 # The latest (still-open) turn has no following prompt; flush it once
@@ -584,6 +596,11 @@ def _session_exists(workspace_path: str, session_id: str) -> bool:
 
 SPEC = VendorSpec(
     key="kimi",
+    # Configurable provider/base URL; no verified default CLI host set here.
+    expected_hosts=(),
+    # Same runtime root as _kimi_home.
+    data_dirs=lambda ctx: (ctx.path(ctx.env.get("KIMI_CODE_HOME") or ctx.home / ".kimi-code"),),
+    data_dir_env_vars=("KIMI_CODE_HOME",),
     supports_model=True,
     skills_supported=True,
     # --skills-dir is repeatable but replaces auto-discovery outright, so the
@@ -594,7 +611,7 @@ SPEC = VendorSpec(
         discovery_home=((".kimi-code", "skills"), (".agents", "skills")),
         discovery_project=((".agents", "skills"),),
     ),
-    label="Kimi Code",
+    label="Kimi Code CLI (Moonshot AI)",
     # No flag and no config variable, so the MCP config can only be reached
     # through the config directory — which kimi, unlike grok and antigravity,
     # relocates with a variable of its own. A url with no transport field is
@@ -614,6 +631,21 @@ SPEC = VendorSpec(
     login_home_secret_file=("credentials", "kimi-code.json"),
     profile_home_secret_file=("credentials", "kimi-code.json"),
     login_home_env="KIMI_CODE_HOME",
+    # Whole-file swap of the OAuth credential; the CLI loads it at startup,
+    # so affected panes restart and resume. The layout is read from the
+    # installed CLI and exercised by the quota reader, but no A -> B -> A
+    # round-trip on two real accounts is on record — "source" until then.
+    account_switch=AccountSwitchSpec(
+        auth_scope="kimi",
+        method="restart",
+        store="file",
+        evidence="source",
+        verified_version="0.39.0",
+        # read_kimi_credentials: KIMI_CODE_API_KEY wins over the OAuth file.
+        shadowing_env=("KIMI_CODE_API_KEY",),
+        resume="native",
+        todo="A -> B -> A round-trip on two real accounts not yet recorded",
+    ),
     # Late-bound (module global at call time) so tests can monkeypatch.
     fetch_usage=lambda home: fetch_kimi(home),
     resume_id_from_command=_resume_id_from_command,
@@ -626,7 +658,7 @@ SPEC = VendorSpec(
     make_log_reader=KimiLogReader,
     # Kimi Code ships `kimi doctor` and `kimi upgrade` (aliased `update`);
     # verified with `kimi --help` on 1.x.
-    install_dep=Dep("kimi", "Kimi Code", "Moonshot AI Kimi Code CLI", "agent_cli",
+    install_dep=Dep("kimi", "Kimi Code CLI (Moonshot AI)", "Moonshot AI Kimi Code CLI", "agent_cli",
         ["kimi", "--version"], r"(\d+\.\d+\.\d+)",
         install_cmd="curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash",
         needs_terminal=True, requires_binaries=("curl",), optional=True,

@@ -4,7 +4,7 @@ import type { AgentSpec } from './types'
 
 export const SPEC = {
   agentKey: 'codex',
-  label: 'Codex',
+  label: 'Codex CLI (OpenAI)',
   defaultCommand: 'codex',
   // No effort flag: codex takes it as a config override
   // (`-c model_reasoning_effort=<value>`), a different injection shape than
@@ -13,7 +13,9 @@ export const SPEC = {
   skipPermissionFlag: '--dangerously-bypass-approvals-and-sandbox',
   // Subcommand, NOT a --flag.
   resumeArgs: (id) => `resume ${id}`,
-  needsSessionMarker: true,
+  // SessionStart or the pane's own rollout binds the ID after real work starts.
+  // An idle pane must not submit a synthetic prompt just to discover its ID.
+  needsSessionMarker: false,
   resumeCommandPattern: /^codex\s+resume\s+\S+/,
   supportsRebuild: true,
   verifiedTurnText: true,
@@ -58,5 +60,8 @@ export const SPEC = {
   awaitingInput: {
     pattern: /Would you like to (run|make|grant) |No, and tell Codex what to do differently/,
   },
-  hint: 'implementer'
+  hint: 'implementer',
+  // Quota failover: _codex_windows resolves primary/secondary by length to
+  // session (5h) / weekly; the weekly window is not always reported.
+  quotaSemantics: { hard: ['session', 'weekly'], required: ['session'] },
 } as const satisfies AgentSpec
