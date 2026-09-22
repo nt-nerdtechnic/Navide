@@ -268,7 +268,7 @@ function formatWhen(iso: string): string {
   padding: 4px 8px;
   border-radius: 5px;
   border: 1px solid var(--border-default);
-  background: var(--bg-default);
+  background: var(--bg-base);
   color: var(--text-primary);
 }
 .cli-portable-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }

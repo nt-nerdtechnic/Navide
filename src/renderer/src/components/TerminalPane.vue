@@ -888,7 +888,7 @@ onMounted(() => {
   font: inherit;
   font-weight: 600;
   color: var(--text-primary);
-  background: var(--bg-default);
+  background: var(--bg-base);
   border: 1px solid var(--accent-emphasis);
   border-radius: var(--radius-xs);
   padding: 1px 5px;
