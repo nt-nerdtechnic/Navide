@@ -1,6 +1,6 @@
 import { ref } from 'vue'
 import type { PluginContext } from '@navide/plugin-sdk'
-import type { GitAccountPort, GitAccountPublic } from '@navide/navide-git/composition'
+import type { GitAccountPort, GitAccountPublic } from '../git-composition'
 
 /** Account secrets remain in the Host store; views receive account summaries. */
 export function createMiniIdeGitAccountPort(capabilities: PluginContext['capabilities']): GitAccountPort {

@@ -1,5 +1,17 @@
 import { describe, expect, it, vi } from 'vitest'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { createGuestAttachHooks, type MutableWebPreferences } from './pluginGuestAttach'
+import { PluginFrameAssetProtocol, PLUGIN_FRAME_SCHEME } from './pluginFrameAssetProtocol'
+import { PluginFrameBindingRegistry } from './pluginFrameBinding'
+
+vi.mock('electron', () => ({
+  MessageChannelMain: class {
+    port1 = { on: vi.fn(), postMessage: vi.fn(), close: vi.fn(), start: vi.fn() }
+    port2 = { postMessage: vi.fn(), close: vi.fn(), start: vi.fn() }
+  },
+}))
 
 const APPROVED = 'file:///pkg/index.html?workspace_path=/ws&nv_guest=tok'
 
@@ -140,5 +152,64 @@ describe('createGuestAttachHooks', () => {
     // …and the Host's own values are still what the guest gets.
     expect(prefs.preload).toBe('/preload/plugin-preload.js')
     expect(prefs.sandbox).toBe(true)
+  })
+})
+
+describe('PluginFrameAssetProtocol', () => {
+  it('serves only mounted regular assets and rejects foreign, escaping, symlink, and non-GET requests', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'plugin-frame-assets-'))
+    const outside = mkdtempSync(join(tmpdir(), 'plugin-frame-assets-outside-'))
+    try {
+      mkdirSync(join(root, 'frontend'), { recursive: true })
+      writeFileSync(join(root, 'frontend/index.html'), '<!doctype html>')
+      writeFileSync(join(outside, 'secret.html'), 'secret')
+      symlinkSync(join(outside, 'secret.html'), join(root, 'frontend/linked.html'))
+      const protocol = new PluginFrameAssetProtocol()
+      const origin = await protocol.mount({
+        artifactId: 'artifact', packageId: 'acme.viewer', packageVersion: '1.0.0', root,
+      })
+      const ok = await protocol.handle(new Request(`${origin}frontend/index.html`))
+      expect(ok.status).toBe(200)
+      await expect(ok.text()).resolves.toContain('<!doctype html>')
+      expect((await protocol.handle(new Request(`${PLUGIN_FRAME_SCHEME}://foreign/frontend/index.html`))).status).toBe(404)
+      expect((await protocol.handle(new Request(`${origin}../secret.html`))).status).toBe(404)
+      expect((await protocol.handle(new Request(`${origin}frontend/linked.html`))).status).toBe(404)
+      expect((await protocol.handle(new Request(`${origin}frontend/index.html`, { method: 'POST' }))).status).toBe(404)
+      protocol.revoke(origin)
+      expect((await protocol.handle(new Request(`${origin}frontend/index.html`))).status).toBe(404)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+      rmSync(outside, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('PluginFrameBindingRegistry', () => {
+  const identity = {
+    artifactId: 'artifact', contributionKey: 'acme.viewer.left', entryUrl: 'navide-plugin-frame://host/frontend/index.html',
+    instanceId: 'instance-1', packageId: 'acme.viewer', packageVersion: '1.0.0', receiverGeneration: 'nonce-1',
+    receiverWebContentsId: 10, workspacePath: '/workspace',
+  }
+
+  it('rejects wrong frame/state and revocation stops delivery', () => {
+    const registry = new PluginFrameBindingRegistry()
+    const reserved = registry.reserve(identity)
+    const wrong = { detached: true, frameTreeNodeId: 2 }
+    const right = { detached: false, frameTreeNodeId: 1 }
+    expect(registry.beginNavigation(reserved.id, right as never, identity.entryUrl)).toBeNull()
+    expect(registry.bindBlank(reserved.id, wrong as never)).toBeNull()
+    expect(registry.bindBlank(reserved.id, right as never)).not.toBeNull()
+    expect(registry.beginNavigation(reserved.id, wrong as never, identity.entryUrl)).toBeNull()
+    expect(registry.beginNavigation(reserved.id, right as never, identity.entryUrl)).not.toBeNull()
+
+    const second = registry.reserve({ ...identity, instanceId: 'instance-2', receiverGeneration: 'nonce-2' })
+    const rightSecond = { detached: false, frameTreeNodeId: 3 }
+    expect(registry.bindBlank(second.id, rightSecond as never)).not.toBeNull()
+    expect(registry.beginNavigation(second.id, rightSecond as never, identity.entryUrl)).not.toBeNull()
+    expect(registry.admit(rightSecond as never, 10, 'nonce-2', () => undefined)).not.toBeNull()
+    expect(registry.post('instance-2', 'plugin:test', { ok: true })).toBe(true)
+    registry.revoke(second.id)
+    expect(registry.post('instance-2', 'plugin:test', { ok: false })).toBe(false)
+    expect(registry.admit(rightSecond as never, 10, 'nonce-2', () => undefined)).toBeNull()
   })
 })

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, Notification, powerMonitor, safeStorage, session, shell, type IpcMainInvokeEvent } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, Notification, powerMonitor, protocol, safeStorage, session, shell, type IpcMainInvokeEvent } from 'electron'
 import { createGuestAttachHooks, type MutableWebPreferences } from './plugins/pluginGuestAttach'
 import { join, dirname, basename, isAbsolute, relative, sep } from 'node:path'
 import { writeFile, readFile, mkdir } from 'node:fs/promises'
@@ -16,7 +16,12 @@ import { abandonPendingBackends } from './backend-pending'
 import { installApplicationMenu, type AppMenuHooks, type RecentMenuEntry } from './menu'
 import { LEGAL_LINKS, isLegalRoute } from '../shared/legalLinks'
 import { openNoopPluginView, openFsProbePluginView, openMiniIdePluginView, openPlansPluginView, devPlansPluginDescriptor, devPlansV2PluginBundle, openGitPluginView, openGitLeftPluginView, updateGitLeftPluginView, closeGitLeftPluginView, registerBundledMiniIde, bundledMiniIdeDir, officialPluginArtifactPackageDir, registerBundledPlans, registerLegacyBundledGit, hasCompletePlansContributions, createPluginBackendChildEnvironment, frontendPluginManager } from './plugins/frontendPluginManager'
-import { plansBackendActivation } from './plugins/frontendPluginManager'
+import { createWindowCloseCoordinator } from './plugins/windowCloseCoordinator'
+import {
+  handlePluginFrameAssetRequest,
+  PLUGIN_FRAME_SCHEME,
+  plansBackendActivation,
+} from './plugins/frontendPluginManager'
 import {
   isTrustedPluginManagementSender,
   registerPluginIpc,
@@ -147,6 +152,16 @@ import {
 } from './gitAccountsStore'
 import type { EditorNativeHost } from './plugins/editorNativeCapability'
 
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: PLUGIN_FRAME_SCHEME,
+    privileges: {
+      standard: true,
+      secure: true,
+    },
+  },
+])
+
 // Dev isolation: give a `npm run dev` instance its own Electron userData so its
 // renderer localStorage (layout, settings) doesn't clobber the packaged app's
 // when both run at once. Must be set before the app is ready / userData is read
@@ -213,6 +228,8 @@ let quitConfirm = {
   dontShowLabel: "Don't show this again",
 }
 let quitConfirmed = false
+let quittingWindowsPrepared = false
+let quittingWindowsPreparation: Promise<boolean> | null = null
 // Multiple independent main windows (VS Code-style cmd+shift+N). `mainWindow`
 // tracks the most-recently-focused one so dialogs parent to it; `mainWindows`
 // holds them all for lifecycle code that must reach every main window.
@@ -397,6 +414,17 @@ frontendPluginManager.setGitAccountHandlers({
   unbind: (workspacePath) => getGitAccountsStore().unbind(workspacePath),
   getBinding: (workspacePath) => getGitAccountsStore().getBinding(workspacePath),
   getCredential: (workspacePath) => getGitAccountsStore().getCredentialForWorkspace(workspacePath),
+})
+
+// Native close/reload/quit preparation for windows that host a receiver. The
+// coordinator only commits once every participant accepted, so a refusal keeps
+// every uncommitted window and item alive.
+const windowCloseCoordinator = createWindowCloseCoordinator({
+  hasWindowCloseParticipants: (window) => frontendPluginManager.hasWindowCloseParticipants(window),
+  prepareWindowClose: (window, reason) => frontendPluginManager.prepareWindowClose(window, reason),
+  commitWindowClose: (id) => frontendPluginManager.commitWindowClose(id),
+  cancelWindowClose: (id) => frontendPluginManager.cancelWindowClose(id),
+  windowForWebContents: (target) => BrowserWindow.fromWebContents(target),
 })
 // Windows from the previous (uncleanly exited) run, offered to the FIRST
 // renderer that asks via restore:getPending; cleared on apply/dismiss.
@@ -2990,6 +3018,7 @@ async function openCatalogContributionWindow(
     )
     hostWindow = ownedWindow
     created = true
+    windowCloseCoordinator.watch(ownedWindow)
     contributionWindows.set(windowKey, ownedWindow)
     ownedWindow.once('closed', () => {
       // Identity-guarded: 'closed' arrives after close(), and a reopen in that
@@ -4510,6 +4539,7 @@ registerTerminalContextMenu()
 
 app.whenReady().then(async () => {
   if (!gotSingleInstanceLock) return
+  protocol.handle(PLUGIN_FRAME_SCHEME, handlePluginFrameAssetRequest)
   if (gitRecoveryEnabled) {
     const recovery = registerLegacyBundledGit(frontendPluginManager, {
       isPackaged: app.isPackaged,
@@ -4601,6 +4631,14 @@ app.whenReady().then(async () => {
     onReportIssue: () => void shell.openExternal('https://github.com/nt-nerdtechnic/Navide/issues'),
     onShowShortcuts: () => sendMenuAction('show-shortcuts'),
     onOpenLegal: (route) => void shell.openExternal(LEGAL_LINKS[route]),
+    onReloadWindow: (target) => {
+      void windowCloseCoordinator.prepareAndReload(target)
+      // Handled synchronously from the menu's point of view whenever the target
+      // belongs to a window with close participants; the coordinator reloads it
+      // after preparation (or leaves it alone on refusal).
+      const window = BrowserWindow.fromWebContents(target)
+      return Boolean(window && frontendPluginManager.hasWindowCloseParticipants(window))
+    },
     ...(pluginDevEnabled
       ? {
           onOpenNoopPlugin: () => {
@@ -4876,8 +4914,31 @@ app.on('before-quit', async (e) => {
       }
     }
     quitConfirmed = true
-    void teardownBackendAndQuit() // default prevented → drive quit ourselves
+    // Re-enter through the normal path so receiver/provider preparation runs
+    // before any backend shutdown.
+    app.quit()
     return
+  }
+  // Prepare every receiver/editor/provider participant before any window or
+  // backend is committed. A refusal aborts the quit with every window alive.
+  if (!quittingWindowsPrepared) {
+    if (quittingWindowsPreparation) {
+      e.preventDefault()
+      return
+    }
+    const windows = BrowserWindow.getAllWindows()
+    if (windows.some((window) => frontendPluginManager.hasWindowCloseParticipants(window))) {
+      e.preventDefault()
+      quittingWindowsPreparation = windowCloseCoordinator.prepareForQuit(windows).finally(() => {
+        quittingWindowsPreparation = null
+      })
+      const prepared = await quittingWindowsPreparation
+      if (!prepared) return
+      quittingWindowsPrepared = true
+      app.quit()
+      return
+    }
+    quittingWindowsPrepared = true
   }
   // Non-dialog path (disabled, or re-entrant after quitConfirmed).
   // A user-initiated quit is a clean exit — nothing to restore next launch.

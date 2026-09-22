@@ -45,6 +45,9 @@ const props = defineProps<{
 }>()
 
 const paneRoot = ref<HTMLElement | null>(null)
+// Set while a receiver close preparation has frozen this pane. It gates every
+// mutating request through the transport and is released on cancellation.
+const closePrepared = ref(false)
 const menuOwnerId = `git-pane-${++nextMenuOwnerId}`
 const openMenuOwners = new Set<string>()
 let activeMenuOwnerId: string | null = null
@@ -85,7 +88,7 @@ const {
   cloneRepo, connectToRemote, addToGitignore, checkIgnore, abortOperation, stashApply,
   pullRebase, pushForce,
   credentialPrompt, showCredentialPrompt, submitCredential, cancelCredential,
-} = useGit(() => props.workspacePath, props.gitTransport)
+} = useGit(() => props.workspacePath, props.gitTransport, { isPrepared: () => closePrepared.value })
 
 const {
   provider: issueProvider, issues, selectedIssue,
@@ -1584,6 +1587,44 @@ function shortBranch(r: string): string { return r.replace(/^refs\/(heads|remote
 function isHeadCommit(c: import('../composables/useGit').GitCommit): boolean {
   return (c.branches ?? []).some(b => b === 'HEAD' || b.startsWith('HEAD '))
 }
+
+// ── Close preparation ─────────────────────────────────────────────
+// A close transaction must not discard work: in-flight operations are busy,
+// and user drafts (commit/amend text, clone/connect/branch/stash/remote/tag/
+// worktree/config/issue forms) need an explicit receiver decision.
+type GitPaneCloseState = 'accepted' | 'busy' | 'draft'
+
+const closeBusy = computed(() =>
+  isInitializing.value || isCommitting.value || isGenerating.value ||
+  cloning.value || connecting.value ||
+  forcingScan.value || autoCommitPending.value || autoCommitRunning.value ||
+  remoteBusy.value !== '' || branchBusy.value || branchCreating.value ||
+  stashBusy.value || tagBusy.value || worktreeBusy.value !== '' ||
+  isIssueSubmitting.value || credentialPrompt.value !== null
+)
+
+const closeDraft = computed(() =>
+  commitMessage.value !== '' || amendMode.value ||
+  cloneUrl.value !== '' || connectUrl.value !== '' ||
+  newBranchName.value !== '' || stashMessage.value !== '' || showStashPrompt.value ||
+  newRemoteName.value !== '' || newRemoteUrl.value !== '' ||
+  newTagName.value !== '' || newTagMessage.value !== '' ||
+  newWtPath.value !== '' || newWtBranch.value !== '' ||
+  inlineEditKey.value !== '' ||
+  newIssueTitle.value !== '' || newIssueBody.value !== '' || newComment.value !== '' || showNewIssue.value
+)
+
+function getCloseState(): { state: GitPaneCloseState } {
+  if (closeBusy.value) return { state: 'busy' }
+  if (closeDraft.value) return { state: 'draft' }
+  return { state: 'accepted' }
+}
+
+function setClosePrepared(prepared: boolean): void {
+  closePrepared.value = prepared
+}
+
+defineExpose({ getCloseState, setClosePrepared })
 </script>
 
 <template>

@@ -29,6 +29,497 @@ afterEach(() => {
 })
 
 describe('public plugin SDK adapters', () => {
+  it('keeps Host offer location private while mounting only by offerId and host id', async () => {
+    type OfferListener = (offer: { offerId: string; contributionKey: string; title: string; location: 'left' | 'detail' }) => void
+    let offerListener: OfferListener | undefined
+    const getOfferListener = (): OfferListener => {
+      if (!offerListener) throw new Error('offer listener was not registered')
+      return offerListener
+    }
+    const removeOffers = vi.fn()
+    const bridge = {
+      registerReceiver: vi.fn(async () => ({ receiverId: 'receiver-1' })),
+      mountReceiver: vi.fn(async () => ({ itemId: 'item-1' })),
+      requestCloseReceiver: vi.fn(async () => ({ closed: true as const })),
+      abortReceiverItem: vi.fn(async () => undefined),
+      onReceiverOffer: vi.fn((_receiverId: string, listener: OfferListener) => {
+        offerListener = listener
+        return removeOffers
+      }),
+      onReceiverItemClosed: vi.fn(() => vi.fn()),
+      disposeReceiver: vi.fn(async () => undefined),
+      ready: vi.fn(),
+      hideSelf: vi.fn(),
+      onOpenTarget: vi.fn(() => vi.fn()),
+    }
+    ;(globalThis as unknown as { nav: typeof bridge }).nav = bridge
+
+    const receiver = await createPluginViewRuntimeClient().registerReceiver(
+      { protocolVersion: 1, locations: ['detail'] },
+      vi.fn(),
+    )
+    getOfferListener()({ offerId: 'offer-detail', contributionKey: 'provider.detail', title: 'Detail', location: 'detail' })
+
+    await expect(receiver.mount('offer-detail', { mountHostId: 'host-detail' })).resolves.toEqual({ itemId: 'item-1' })
+    expect(bridge.mountReceiver).toHaveBeenCalledWith(
+      'receiver-1',
+      'offer-detail',
+      { mountHostId: 'host-detail' },
+    )
+    expect(bridge.mountReceiver.mock.calls[0]).toHaveLength(3)
+
+    await receiver.dispose()
+    expect(removeOffers).toHaveBeenCalledOnce()
+    await expect(receiver.mount('unknown-offer', { mountHostId: 'host-detail' })).rejects.toMatchObject({ code: 'PLUGIN_STOPPING' })
+  })
+
+  it('forwards a receiver close transaction through the public runtime bridge', async () => {
+    const bridge = {
+      callCapability: vi.fn(() => Promise.resolve({ reqId: 'close-transaction', ok: true, result: null })),
+      on: vi.fn(),
+      registerReceiver: vi.fn(async () => ({ receiverId: 'receiver-transaction' })),
+      requestCloseReceiverTransaction: vi.fn(async () => ({ closed: false as const, reason: 'busy' as const })),
+      onReceiverOffer: vi.fn(() => vi.fn()),
+      onReceiverEditorTarget: vi.fn(() => vi.fn()),
+      onReceiverItemClosed: vi.fn(() => vi.fn()),
+      disposeReceiver: vi.fn(async () => undefined),
+      ready: vi.fn(),
+      hideSelf: vi.fn(),
+      onOpenTarget: vi.fn(() => vi.fn()),
+    }
+    ;(globalThis as unknown as { nav: typeof bridge }).nav = bridge
+    const receiver = await createPluginViewRuntimeClient().registerReceiver(
+      { protocolVersion: 1, locations: ['detail'] }, vi.fn(),
+    )
+    await expect(receiver.requestCloseTransaction(['item-a', 'item-b']))
+      .resolves.toEqual({ closed: false, reason: 'busy' })
+    expect(bridge.requestCloseReceiverTransaction).toHaveBeenCalledWith(
+      'receiver-transaction', ['item-a', 'item-b'],
+    )
+  })
+
+  it('strips close-guard functions from the registration wire and scopes the callback to the receiver', async () => {
+    let prepareListener: ((reason: string) => Promise<unknown>) | undefined
+    const cancelListeners: Array<() => void> = []
+    const removeGuard = vi.fn()
+    const bridge = {
+      registerReceiver: vi.fn(async () => ({ receiverId: 'receiver-guard' })),
+      onReceiverOffer: vi.fn(() => vi.fn()),
+      onReceiverCloseGuard: vi.fn((
+        _receiverId: string,
+        prepare: (reason: string) => Promise<unknown>,
+        cancel: () => void,
+      ) => {
+        prepareListener = prepare
+        cancelListeners.push(cancel)
+        return removeGuard
+      }),
+      onReceiverItemClosed: vi.fn(() => vi.fn()),
+      disposeReceiver: vi.fn(async () => undefined),
+      ready: vi.fn(),
+      hideSelf: vi.fn(),
+      onOpenTarget: vi.fn(() => vi.fn()),
+    }
+    ;(globalThis as unknown as { nav: typeof bridge }).nav = bridge
+    const onPrepare = vi.fn(async () => ({ accepted: true as const, reason: 'accepted' as const }))
+    const onCancelled = vi.fn()
+    const receiver = await createPluginViewRuntimeClient().registerReceiver({
+      protocolVersion: 1,
+      locations: ['detail'],
+      closeGuard: { protocolVersion: 1, onPrepare, onCancelled },
+    }, vi.fn())
+
+    expect(bridge.registerReceiver).toHaveBeenCalledWith({
+      protocolVersion: 1, locations: ['detail'], closeGuard: { protocolVersion: 1 },
+    })
+    expect(bridge.onReceiverCloseGuard).toHaveBeenCalledWith('receiver-guard', expect.any(Function), expect.any(Function))
+    await expect(prepareListener?.('native-window-close')).resolves.toEqual({ accepted: true, reason: 'accepted' })
+    expect(onPrepare).toHaveBeenCalledWith('native-window-close')
+    expect(onCancelled).not.toHaveBeenCalled()
+    cancelListeners[0]?.()
+    expect(onCancelled).toHaveBeenCalledOnce()
+
+    await receiver.dispose()
+    expect(removeGuard).toHaveBeenCalledOnce()
+    onCancelled.mockClear()
+    cancelListeners[0]?.()
+    expect(onCancelled).not.toHaveBeenCalled()
+    await expect(prepareListener?.('quit')).resolves.toEqual({ accepted: false, reason: 'refused' })
+  })
+
+  it('rejects a malformed close guard before registering the receiver', async () => {
+    const bridge = { registerReceiver: vi.fn() }
+    ;(globalThis as unknown as { nav: typeof bridge }).nav = bridge
+    const runtime = createPluginViewRuntimeClient()
+    for (const closeGuard of [
+      { protocolVersion: 2, onPrepare: vi.fn(), onCancelled: vi.fn() },
+      { protocolVersion: 1, onPrepare: vi.fn() },
+      { protocolVersion: 1, onCancelled: vi.fn() },
+    ]) {
+      await expect(runtime.registerReceiver({
+        protocolVersion: 1, locations: ['detail'], closeGuard,
+      } as never, vi.fn())).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' })
+    }
+    expect(bridge.registerReceiver).not.toHaveBeenCalled()
+  })
+
+  it('normalizes a throwing or malformed close-guard decision to refused', async () => {
+    const prepareListeners: Array<(reason: string) => Promise<unknown>> = []
+    const bridge = {
+      registerReceiver: vi.fn(async () => ({ receiverId: 'receiver-guard' })),
+      onReceiverOffer: vi.fn(() => vi.fn()),
+      onReceiverCloseGuard: vi.fn((_receiverId: string, prepare: (reason: string) => Promise<unknown>) => {
+        prepareListeners.push(prepare)
+        return vi.fn()
+      }),
+      onReceiverItemClosed: vi.fn(() => vi.fn()),
+      disposeReceiver: vi.fn(async () => undefined),
+      ready: vi.fn(),
+      hideSelf: vi.fn(),
+      onOpenTarget: vi.fn(() => vi.fn()),
+    }
+    ;(globalThis as unknown as { nav: typeof bridge }).nav = bridge
+    const malformed = [
+      () => { throw new Error('guard failed') },
+      () => Promise.resolve({ accepted: true, reason: 'refused' }),
+      () => Promise.resolve(null as never),
+    ]
+    const runtime = createPluginViewRuntimeClient()
+    for (const onPrepare of malformed) {
+      await runtime.registerReceiver({
+        protocolVersion: 1, locations: ['detail'],
+        closeGuard: { protocolVersion: 1, onPrepare: onPrepare as never, onCancelled: vi.fn() },
+      }, vi.fn())
+    }
+    for (const prepare of prepareListeners) {
+      await expect(prepare('reload')).resolves.toEqual({ accepted: false, reason: 'refused' })
+    }
+  })
+
+  it('forwards paired editor targets with opaque source items and preserves legacy target isolation', async () => {
+    type EditorTargetListener = (target: { path: string; line?: number; column?: number; sourceItem: string }) => Promise<{ opened: boolean }>
+    let editorTargetListener: EditorTargetListener | undefined
+    const getEditorTargetListener = (): EditorTargetListener => {
+      if (!editorTargetListener) throw new Error('editor target listener was not registered')
+      return editorTargetListener
+    }
+    const removeEditorTargets = vi.fn()
+    const legacyTargetListener = vi.fn()
+    const onOpen = vi.fn((target: { path: string; line?: number; column?: number; sourceItem: string }): Promise<{ opened: boolean }> => {
+      expect(target.sourceItem).toBe('opaque-source-item')
+      if (target.path === 'throw') throw new Error('editor failed')
+      if (target.path === 'malformed') return Promise.resolve(null as never)
+      return Promise.resolve({ opened: target.path === 'src/App.ts' })
+    })
+    const bridge = {
+      registerReceiver: vi.fn(async () => ({ receiverId: 'receiver-1' })),
+      listReceiverLeftContributions: vi.fn(async () => [{ contributionKey: 'provider.left', title: 'Provider' }]),
+      openReceiverLeft: vi.fn(async () => undefined),
+      mountReceiver: vi.fn(async () => ({ itemId: 'item-1' })),
+      requestCloseReceiver: vi.fn(async () => ({ closed: true as const })),
+      abortReceiverItem: vi.fn(async () => undefined),
+      onReceiverOffer: vi.fn(() => vi.fn()),
+      onReceiverEditorTarget: vi.fn((_receiverId: string, listener: EditorTargetListener) => {
+        editorTargetListener = listener
+        return removeEditorTargets
+      }),
+      onReceiverItemClosed: vi.fn(() => vi.fn()),
+      disposeReceiver: vi.fn(async () => undefined),
+      ready: vi.fn(),
+      hideSelf: vi.fn(),
+      on: vi.fn(),
+      onOpenTarget: vi.fn((_listener: typeof legacyTargetListener) => vi.fn()),
+    }
+    ;(globalThis as unknown as { nav: typeof bridge }).nav = bridge
+
+    const client = createPluginViewRuntimeClient()
+    const receiver = await client.registerReceiver({
+      protocolVersion: 1,
+      locations: ['left'],
+      editorTargets: { protocolVersion: 1, onOpen },
+    }, vi.fn())
+    expect(bridge.registerReceiver).toHaveBeenCalledWith({
+      protocolVersion: 1,
+      locations: ['left'],
+      editorTargets: { protocolVersion: 1 },
+    })
+    await expect(receiver.listLeftContributions()).resolves.toEqual([{ contributionKey: 'provider.left', title: 'Provider' }])
+    await receiver.openLeft('provider.left')
+    expect(bridge.listReceiverLeftContributions).toHaveBeenCalledWith('receiver-1')
+    expect(bridge.openReceiverLeft).toHaveBeenCalledWith('receiver-1', 'provider.left')
+
+    await expect(getEditorTargetListener()({ path: 'src/App.ts', line: 3, column: 4, sourceItem: 'opaque-source-item' })).resolves.toEqual({ opened: true })
+    await expect(getEditorTargetListener()({ path: '', sourceItem: 'opaque-source-item' })).resolves.toEqual({ opened: false })
+    await expect(getEditorTargetListener()({ path: 'malformed', sourceItem: 'opaque-source-item' })).resolves.toEqual({ opened: false })
+    await expect(getEditorTargetListener()({ path: 'throw', sourceItem: 'opaque-source-item' })).resolves.toEqual({ opened: false })
+    expect(onOpen).toHaveBeenCalledTimes(4)
+
+    const legacy = client.onOpenTarget(legacyTargetListener)
+    expect(legacyTargetListener).not.toHaveBeenCalled()
+    legacy.dispose()
+    await receiver.dispose()
+    expect(removeEditorTargets).toHaveBeenCalledOnce()
+  })
+
+  it('suppresses detail-target callbacks and acknowledgements when disposed before the microtask', async () => {
+    let targetListener: ((payload: unknown) => void) | undefined
+    const callCapability = vi.fn(() => Promise.resolve(undefined))
+    const bridge = {
+      callCapability,
+      on: vi.fn((_channel: string, listener: (payload: unknown) => void) => {
+        targetListener = listener
+        return vi.fn()
+      }),
+    }
+    ;(globalThis as unknown as { nav: typeof bridge }).nav = bridge
+
+    const onTarget = vi.fn(async () => ({ applied: true as const }))
+    const disposable = createPluginViewRuntimeClient().onDetailTarget(onTarget)
+    targetListener?.({ targetId: 'target-1', revision: 1, target: { path: 'src/App.ts' } })
+    disposable.dispose()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(onTarget).not.toHaveBeenCalled()
+    expect(callCapability).not.toHaveBeenCalled()
+  })
+
+  it('keeps target ids one-shot and separates highest-seen revisions from last-applied revisions', async () => {
+    let targetListener: ((payload: unknown) => void) | undefined
+    const resolveTarget = vi.fn(() => Promise.resolve(undefined))
+    const bridge = {
+      callCapability: resolveTarget,
+      on: vi.fn((_channel: string, listener: (payload: unknown) => void) => {
+        targetListener = listener
+        return vi.fn()
+      }),
+    }
+    ;(globalThis as unknown as { nav: typeof bridge }).nav = bridge
+
+    const onTarget = vi.fn(async (update: { revision: number }) =>
+      update.revision === 2 ? { applied: false as const, reason: 'refused' as const } : { applied: true as const })
+    const disposable = createPluginViewRuntimeClient().onDetailTarget(onTarget)
+
+    targetListener?.({ targetId: 'target-1', revision: 2, target: { path: 'src/first.ts' } })
+    await vi.waitFor(() => expect(resolveTarget).toHaveBeenCalledOnce())
+    targetListener?.({ targetId: 'target-1', revision: 2, target: { path: 'src/duplicate.ts' } })
+    targetListener?.({ targetId: 'target-2', revision: 1, target: { path: 'src/stale.ts' } })
+    targetListener?.({ targetId: 'target-3', revision: 3, target: { path: 'src/accepted.ts' } })
+    await vi.waitFor(() => expect(resolveTarget).toHaveBeenCalledTimes(3))
+
+    expect(onTarget).toHaveBeenCalledTimes(2)
+    expect(onTarget).toHaveBeenNthCalledWith(1, { revision: 2, target: { path: 'src/first.ts' } })
+    expect(onTarget).toHaveBeenNthCalledWith(2, { revision: 3, target: { path: 'src/accepted.ts' } })
+    expect(resolveTarget).toHaveBeenCalledWith('ui', 'resolveDetailTarget', {
+      targetId: 'target-1', revision: 2, decision: { applied: false, reason: 'refused' },
+    })
+    expect(resolveTarget).toHaveBeenCalledWith('ui', 'resolveDetailTarget', {
+      targetId: 'target-2', revision: 1, decision: { applied: false, reason: 'refused' },
+    })
+    expect(resolveTarget).toHaveBeenCalledWith('ui', 'resolveDetailTarget', {
+      targetId: 'target-3', revision: 3, decision: { applied: true },
+    })
+    expect(resolveTarget).toHaveBeenCalledTimes(3)
+    disposable.dispose()
+  })
+
+  it('does not acknowledge a guarded close after its disposer cancels a pending decision', async () => {
+    let closeListener: ((payload: unknown) => void) | undefined
+    let release!: (decision: { accepted: true; reason: 'accepted' }) => void
+    const callCapability = vi.fn(() => Promise.resolve({ reqId: 'close-1', ok: true, result: null }))
+    const bridge = {
+      callCapability,
+      on: vi.fn((_channel: string, listener: (payload: unknown) => void) => {
+        closeListener = listener
+        return vi.fn()
+      }),
+    }
+    ;(globalThis as unknown as { nav: typeof bridge }).nav = bridge
+    const pending = new Promise<{ accepted: true; reason: 'accepted' }>((resolve) => { release = resolve })
+    const dispose = createPluginViewRuntimeClient().onPrepareClose(() => pending)
+    closeListener?.({ closeId: 'close-1', itemId: 'item-1', reason: 'user', documentGeneration: 3 })
+    dispose.dispose()
+    release({ accepted: true, reason: 'accepted' })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(callCapability).not.toHaveBeenCalled()
+  })
+
+  it('does not invoke or acknowledge a duplicate guarded-close correlation twice', async () => {
+    let closeListener: ((payload: unknown) => void) | undefined
+    let release!: (decision: { accepted: true; reason: 'accepted' }) => void
+    const callCapability = vi.fn(() => Promise.resolve({ reqId: 'close-2', ok: true, result: null }))
+    const bridge = {
+      callCapability,
+      on: vi.fn((_channel: string, listener: (payload: unknown) => void) => {
+        closeListener = listener
+        return vi.fn()
+      }),
+    }
+    ;(globalThis as unknown as { nav: typeof bridge }).nav = bridge
+    const pending = new Promise<{ accepted: true; reason: 'accepted' }>((resolve) => { release = resolve })
+    const listener = vi.fn(() => pending)
+    createPluginViewRuntimeClient().onPrepareClose(listener)
+    const request = { closeId: 'close-2', itemId: 'item-2', reason: 'user' as const, documentGeneration: 4 }
+    closeListener?.(request)
+    closeListener?.(request)
+    expect(listener).not.toHaveBeenCalled()
+    await vi.waitFor(() => expect(listener).toHaveBeenCalledOnce())
+    release({ accepted: true, reason: 'accepted' })
+    await vi.waitFor(() => expect(callCapability).toHaveBeenCalledOnce())
+    expect(listener).toHaveBeenCalledOnce()
+    expect(callCapability).toHaveBeenCalledWith('ui', 'resolveDetailClose', {
+      closeId: 'close-2', itemId: 'item-2', decision: { accepted: true, reason: 'accepted' },
+    })
+  })
+
+  it('turns an active synchronous close-listener throw into one refusal acknowledgement', async () => {
+    let closeListener: ((payload: unknown) => void) | undefined
+    const callCapability = vi.fn(() => Promise.resolve({ reqId: 'close-throw', ok: true, result: null }))
+    const bridge = {
+      callCapability,
+      on: vi.fn((_channel: string, listener: (payload: unknown) => void) => {
+        closeListener = listener
+        return vi.fn()
+      }),
+    }
+    ;(globalThis as unknown as { nav: typeof bridge }).nav = bridge
+    createPluginViewRuntimeClient().onPrepareClose(() => { throw new Error('provider failed') })
+    closeListener?.({ closeId: 'close-throw', itemId: 'item-throw', reason: 'user', documentGeneration: 5 })
+    await vi.waitFor(() => expect(callCapability).toHaveBeenCalledOnce())
+    expect(callCapability).toHaveBeenCalledWith('ui', 'resolveDetailClose', {
+      closeId: 'close-throw', itemId: 'item-throw', decision: { accepted: false, reason: 'refused' },
+    })
+  })
+
+  it('releases a pending close twice on cancellation and late acceptance without acknowledging', async () => {
+    const listeners = new Map<string, (payload: unknown) => void>()
+    const callCapability = vi.fn(() => Promise.resolve({ reqId: 'close-pending', ok: true, result: null }))
+    const bridge = {
+      callCapability,
+      on: vi.fn((channel: string, listener: (payload: unknown) => void) => {
+        listeners.set(channel, listener)
+        return vi.fn()
+      }),
+      ready: vi.fn(),
+      onOpenTarget: vi.fn(() => vi.fn()),
+    }
+    ;(globalThis as unknown as { nav: typeof bridge }).nav = bridge
+    let release!: (decision: { accepted: true; reason: 'accepted' }) => void
+    const pending = new Promise<{ accepted: true; reason: 'accepted' }>((resolve) => { release = resolve })
+    const cancelled = vi.fn()
+    const runtime = createPluginViewRuntimeClient()
+    runtime.onCloseCancelled(cancelled)
+    runtime.onPrepareClose(() => pending)
+    listeners.get('plugin:view:close-request')?.({ closeId: 'close-pending', itemId: 'item-pending', reason: 'user', documentGeneration: 1 })
+    await Promise.resolve()
+    listeners.get('plugin:view:close-cancelled')?.({ closeId: 'close-pending' })
+    expect(cancelled).toHaveBeenCalledOnce()
+    release({ accepted: true, reason: 'accepted' })
+    await vi.waitFor(() => expect(cancelled).toHaveBeenCalledTimes(2))
+    expect(callCapability).not.toHaveBeenCalled()
+  })
+
+  it('releases an accepted close once and ignores duplicate cancellation', async () => {
+    const listeners = new Map<string, (payload: unknown) => void>()
+    const callCapability = vi.fn(() => Promise.resolve({ reqId: 'close-accepted', ok: true, result: null }))
+    const bridge = {
+      callCapability,
+      on: vi.fn((channel: string, listener: (payload: unknown) => void) => {
+        listeners.set(channel, listener)
+        return vi.fn()
+      }),
+      ready: vi.fn(),
+      onOpenTarget: vi.fn(() => vi.fn()),
+    }
+    ;(globalThis as unknown as { nav: typeof bridge }).nav = bridge
+    const cancelled = vi.fn()
+    const runtime = createPluginViewRuntimeClient()
+    runtime.onCloseCancelled(cancelled)
+    runtime.onPrepareClose(() => ({ accepted: true, reason: 'accepted' }))
+    listeners.get('plugin:view:close-request')?.({ closeId: 'close-accepted', itemId: 'item-accepted', reason: 'user', documentGeneration: 2 })
+    await vi.waitFor(() => expect(callCapability).toHaveBeenCalledOnce())
+    listeners.get('plugin:view:close-cancelled')?.({ closeId: 'close-accepted' })
+    listeners.get('plugin:view:close-cancelled')?.({ closeId: 'close-accepted' })
+    expect(cancelled).toHaveBeenCalledOnce()
+    expect(callCapability).toHaveBeenCalledWith('ui', 'resolveDetailClose', {
+      closeId: 'close-accepted', itemId: 'item-accepted', decision: { accepted: true, reason: 'accepted' },
+    })
+  })
+
+  it('keeps one cancelled async prepare serialized until its late callback settles', async () => {
+    const listeners = new Map<string, (payload: unknown) => void>()
+    const callCapability = vi.fn(() => Promise.resolve({ reqId: 'close-serialized', ok: true, result: null }))
+    const bridge = {
+      callCapability,
+      on: vi.fn((channel: string, listener: (payload: unknown) => void) => {
+        listeners.set(channel, listener)
+        return vi.fn()
+      }),
+      ready: vi.fn(),
+      onOpenTarget: vi.fn(() => vi.fn()),
+    }
+    ;(globalThis as unknown as { nav: typeof bridge }).nav = bridge
+    let releaseA!: (decision: { accepted: true; reason: 'accepted' }) => void
+    const pendingA = new Promise<{ accepted: true; reason: 'accepted' }>((resolve) => { releaseA = resolve })
+    const cancelled = vi.fn()
+    const listener = vi.fn((request: { closeId: string }) =>
+      request.closeId === 'close-C'
+        ? { accepted: true as const, reason: 'accepted' as const }
+        : pendingA)
+    const runtime = createPluginViewRuntimeClient()
+    runtime.onCloseCancelled(cancelled)
+    runtime.onPrepareClose(listener)
+
+    listeners.get('plugin:view:close-request')?.({ closeId: 'close-A', itemId: 'item-A', reason: 'user', documentGeneration: 1 })
+    await Promise.resolve()
+    listeners.get('plugin:view:close-cancelled')?.({ closeId: 'close-A' })
+    listeners.get('plugin:view:close-request')?.({ closeId: 'close-B', itemId: 'item-B', reason: 'user', documentGeneration: 1 })
+    await Promise.resolve()
+    expect(listener).toHaveBeenCalledOnce()
+
+    releaseA({ accepted: true, reason: 'accepted' })
+    await vi.waitFor(() => expect(cancelled).toHaveBeenCalledTimes(2))
+    expect(callCapability).toHaveBeenCalledWith('ui', 'resolveDetailClose', {
+      closeId: 'close-B', itemId: 'item-B', decision: { accepted: false, reason: 'busy' },
+    })
+    expect(callCapability).not.toHaveBeenCalledWith('ui', 'resolveDetailClose', expect.objectContaining({ closeId: 'close-A' }))
+
+    listeners.get('plugin:view:close-request')?.({ closeId: 'close-C', itemId: 'item-C', reason: 'user', documentGeneration: 1 })
+    await vi.waitFor(() => expect(callCapability).toHaveBeenCalledOnce())
+    expect(listener).toHaveBeenCalledTimes(2)
+    expect(listener).toHaveBeenLastCalledWith(expect.objectContaining({ closeId: 'close-C' }))
+  })
+
+  it('suppresses cancellation callback and acknowledgement after close disposer', async () => {
+    const listeners = new Map<string, (payload: unknown) => void>()
+    const callCapability = vi.fn(() => Promise.resolve({ reqId: 'close-disposed', ok: true, result: null }))
+    const bridge = {
+      callCapability,
+      on: vi.fn((channel: string, listener: (payload: unknown) => void) => {
+        listeners.set(channel, listener)
+        return vi.fn()
+      }),
+      ready: vi.fn(),
+      onOpenTarget: vi.fn(() => vi.fn()),
+    }
+    ;(globalThis as unknown as { nav: typeof bridge }).nav = bridge
+    let release!: (decision: { accepted: true; reason: 'accepted' }) => void
+    const pending = new Promise<{ accepted: true; reason: 'accepted' }>((resolve) => { release = resolve })
+    const cancelled = vi.fn()
+    const runtime = createPluginViewRuntimeClient()
+    runtime.onCloseCancelled(cancelled)
+    const disposer = runtime.onPrepareClose(() => pending)
+    listeners.get('plugin:view:close-request')?.({ closeId: 'close-disposed', itemId: 'item-disposed', reason: 'user', documentGeneration: 3 })
+    disposer.dispose()
+    listeners.get('plugin:view:close-cancelled')?.({ closeId: 'close-disposed' })
+    release({ accepted: true, reason: 'accepted' })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(cancelled).not.toHaveBeenCalled()
+    expect(callCapability).not.toHaveBeenCalled()
+  })
+
   it('routes contribution window requests through the fixed capability', async () => {
     const bridge: TestCapabilityBridge = {
       callCapability: vi.fn(() => Promise.resolve({ reqId: 'cap-window', ok: true, result: { ok: true } })),
@@ -129,6 +620,7 @@ describe('public plugin SDK adapters', () => {
     const removeTargetListener = vi.fn()
     const bridge = {
       ready: vi.fn(),
+      on: vi.fn(),
       onOpenTarget: vi.fn(() => removeTargetListener),
     }
     ;(globalThis as unknown as { nav: typeof bridge }).nav = bridge

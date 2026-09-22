@@ -1,6 +1,6 @@
 import { createPluginCapabilityClient } from '@navide/plugin-sdk'
 import { EDITOR_HOST_PREFERENCE_KEYS, EDITOR_WRITABLE_PREFERENCE_KEYS, type JsonValue } from '@navide/plugin-contracts'
-import type { GitSurfacePorts, GitTransport } from '@navide/navide-git/composition'
+import type { GitSurfacePorts, GitTransport } from '../git-composition'
 import type { KeybindingsPort, SettingsBackend } from '@navide/plugin-ui/shared'
 import { createMiniIdeGitAccountPort } from './gitAccounts'
 import { native } from './native'

@@ -19,9 +19,11 @@ const props = withDefaults(defineProps<{
   diagnostics?: Array<{
     line: number; col: number; endLine?: number; severity: string; message: string; source?: string
   }>
+  readOnly?: boolean
 }>(), {
   language: 'plaintext',
   diagnostics: () => [],
+  readOnly: false,
 })
 
 const emit = defineEmits<{
@@ -47,6 +49,26 @@ let conflictActive = false
 // Last value emitted to the parent — lets the modelValue watcher skip the
 // echo round-trip without re-serializing the whole document per keystroke.
 let lastEmittedValue: string | null = null
+// This is separate from the prop so a parent can synchronously freeze Monaco
+// before Vue propagates a render update.
+let readOnly = props.readOnly
+
+function canMutate(): boolean { return !readOnly }
+function setReadOnly(value: boolean): void {
+  readOnly = value
+  editor?.updateOptions({ readOnly: value })
+}
+let observedModel: monaco.editor.ITextModel | null = null
+let modelIdentity: object | null = null
+function getModelIdentity(): object | null {
+  const model = editor?.getModel() ?? null
+  if (!model) return null
+  if (model !== observedModel) {
+    observedModel = model
+    modelIdentity = {}
+  }
+  return modelIdentity
+}
 
 type MonacoTypescriptApi = {
   CompilerOptions: unknown
@@ -201,6 +223,7 @@ onMounted(() => {
     language: normalizeLanguage(props.language),
     theme: 'agent-theme',
     automaticLayout: true,
+    readOnly,
     // ── Appearance (VS Code Dark+ parity) ─────────────────────────────────────
     minimap: { enabled: false },
     fontSize: 13,
@@ -322,11 +345,11 @@ onMounted(() => {
   // transitions can briefly leave its editorTextFocus context unset.
   editor.addCommand(
     monaco.KeyMod.CtrlCmd | monaco.KeyCode.Slash,
-    () => editor?.trigger('keyboard', 'editor.action.commentLine', null),
+    () => triggerEdit('keyboard', 'editor.action.commentLine', null),
   )
   editor.addCommand(
     monaco.KeyMod.CtrlCmd | monaco.KeyMod.Alt | monaco.KeyCode.Slash,
-    () => editor?.trigger('keyboard', 'editor.action.blockComment', null),
+    () => triggerEdit('keyboard', 'editor.action.blockComment', null),
   )
 
   syncConflictSupport(props.modelValue)
@@ -350,11 +373,13 @@ onBeforeUnmount(() => {
   conflictLensProvider = null
   conflictCommandId = null
   conflictActive = false
+  observedModel = null
+  modelIdentity = null
 })
 
 // ── Watchers ──────────────────────────────────────────────────────────────────
 watch(() => props.modelValue, (v) => {
-  if (!editor || v === lastEmittedValue) return
+  if (!canMutate() || !editor || v === lastEmittedValue) return
   const model = editor.getModel()
   if (!model || model.getValue() === v) return
   ignoreNextModelChange = true
@@ -365,6 +390,8 @@ watch(() => props.modelValue, (v) => {
   lastEmittedValue = v
   if (pos) editor.setPosition(pos)
 })
+
+watch(() => props.readOnly, (value) => { setReadOnly(value) })
 
 watch(() => props.language, (lang) => {
   const model = editor?.getModel()
@@ -491,6 +518,7 @@ function conflictSideIsEmpty(section: ConflictSection, choice: ConflictChoice): 
 
 /** Replace one conflict block with the chosen side, keeping the undo stack. */
 function applyConflictChoice(startLine: number, choice: ConflictChoice): void {
+  if (!canMutate()) return
   const model = editor?.getModel()
   if (!model) return
   const block = scanConflictBlocks(model).find((b) => b.startLine === startLine)
@@ -602,6 +630,7 @@ function syncConflictSupport(value: string): void {
 
 // ── Text transform helper ─────────────────────────────────────────────────────
 function transformSelection(fn: (text: string) => string): void {
+  if (!canMutate()) return
   const sel = editor?.getSelection()
   const model = editor?.getModel()
   if (!sel || !model) return
@@ -612,7 +641,7 @@ function transformSelection(fn: (text: string) => string): void {
 // ── Exposed API ───────────────────────────────────────────────────────────────
 // Core
 function getValue(): string { return editor?.getValue() ?? '' }
-function setValue(v: string): void { editor?.setValue(v) }
+function setValue(v: string): void { if (canMutate()) editor?.setValue(v) }
 function focus(): void { editor?.focus() }
 function getCursor(): { line: number; col: number } {
   const pos = editor?.getPosition()
@@ -673,8 +702,12 @@ function jumpToBracket(): void { editor?.trigger('', 'editor.action.jumpToBracke
 function selectToBracket(): void { editor?.trigger('', 'editor.action.selectToBracket', null) }
 
 // Edit operations
-function insertText(text: string): void { editor?.trigger('keyboard', 'type', { text }) }
+function triggerEdit(source: string, action: string, args: unknown): void {
+  if (canMutate()) editor?.trigger(source, action, args)
+}
+function insertText(text: string): void { triggerEdit('keyboard', 'type', { text }) }
 function applyEditExternal(range: { start: { line: number; col: number }; end: { line: number; col: number } }, newText: string): void {
+  if (!canMutate()) return
   const model = editor?.getModel()
   if (!model) return
   ignoreNextModelChange = true
@@ -685,33 +718,33 @@ function applyEditExternal(range: { start: { line: number; col: number }; end: {
   lastEmittedValue = model.getValue()
   emit('update:modelValue', lastEmittedValue)
 }
-function undo(): void { editor?.trigger('', 'undo', null) }
-function redo(): void { editor?.trigger('', 'redo', null) }
-function deleteLine(): void { editor?.trigger('', 'editor.action.deleteLines', null) }
-function insertLineBelow(): void { editor?.trigger('', 'editor.action.insertLineAfter', null) }
-function insertLineAbove(): void { editor?.trigger('', 'editor.action.insertLineBefore', null) }
-function deleteWordLeft(): void { editor?.trigger('', 'deleteWordLeft', null) }
-function deleteWordRight(): void { editor?.trigger('', 'deleteWordRight', null) }
-function deleteLineLeft(): void { editor?.trigger('', 'deleteAllLeft', null) }
-function deleteLineRight(): void { editor?.trigger('', 'deleteAllRight', null) }
-function moveLineUp(): void { editor?.trigger('', 'editor.action.moveLinesUpAction', null) }
-function moveLineDown(): void { editor?.trigger('', 'editor.action.moveLinesDownAction', null) }
-function duplicateLineDown(): void { editor?.trigger('', 'editor.action.copyLinesDownAction', null) }
-function duplicateLineUp(): void { editor?.trigger('', 'editor.action.copyLinesUpAction', null) }
+function undo(): void { triggerEdit('', 'undo', null) }
+function redo(): void { triggerEdit('', 'redo', null) }
+function deleteLine(): void { triggerEdit('', 'editor.action.deleteLines', null) }
+function insertLineBelow(): void { triggerEdit('', 'editor.action.insertLineAfter', null) }
+function insertLineAbove(): void { triggerEdit('', 'editor.action.insertLineBefore', null) }
+function deleteWordLeft(): void { triggerEdit('', 'deleteWordLeft', null) }
+function deleteWordRight(): void { triggerEdit('', 'deleteWordRight', null) }
+function deleteLineLeft(): void { triggerEdit('', 'deleteAllLeft', null) }
+function deleteLineRight(): void { triggerEdit('', 'deleteAllRight', null) }
+function moveLineUp(): void { triggerEdit('', 'editor.action.moveLinesUpAction', null) }
+function moveLineDown(): void { triggerEdit('', 'editor.action.moveLinesDownAction', null) }
+function duplicateLineDown(): void { triggerEdit('', 'editor.action.copyLinesDownAction', null) }
+function duplicateLineUp(): void { triggerEdit('', 'editor.action.copyLinesUpAction', null) }
 
 // Indent / comment
-function indentLine(): void { editor?.trigger('', 'editor.action.indentLines', null) }
-function dedentLine(): void { editor?.trigger('', 'editor.action.outdentLines', null) }
-function toggleLineComment(): void { editor?.trigger('', 'editor.action.commentLine', null) }
-function addLineComment(): void { editor?.trigger('', 'editor.action.addCommentLine', null) }
-function removeLineComment(): void { editor?.trigger('', 'editor.action.removeCommentLine', null) }
-function toggleBlockComment(): void { editor?.trigger('', 'editor.action.blockComment', null) }
-function joinLines(): void { editor?.trigger('', 'editor.action.joinLines', null) }
-function trimTrailingWhitespace(): void { editor?.trigger('', 'editor.action.trimTrailingWhitespace', null) }
+function indentLine(): void { triggerEdit('', 'editor.action.indentLines', null) }
+function dedentLine(): void { triggerEdit('', 'editor.action.outdentLines', null) }
+function toggleLineComment(): void { triggerEdit('', 'editor.action.commentLine', null) }
+function addLineComment(): void { triggerEdit('', 'editor.action.addCommentLine', null) }
+function removeLineComment(): void { triggerEdit('', 'editor.action.removeCommentLine', null) }
+function toggleBlockComment(): void { triggerEdit('', 'editor.action.blockComment', null) }
+function joinLines(): void { triggerEdit('', 'editor.action.joinLines', null) }
+function trimTrailingWhitespace(): void { triggerEdit('', 'editor.action.trimTrailingWhitespace', null) }
 
 // Format
-function formatDocument(): void { editor?.trigger('', 'editor.action.formatDocument', null) }
-function formatSelection(): void { editor?.trigger('', 'editor.action.formatSelection', null) }
+function formatDocument(): void { triggerEdit('', 'editor.action.formatDocument', null) }
+function formatSelection(): void { triggerEdit('', 'editor.action.formatSelection', null) }
 
 // Fold
 function foldAt(_line: number): void { editor?.trigger('', 'editor.fold', null) }
@@ -730,9 +763,9 @@ function unfoldRecursively(line?: number): void {
 }
 
 // Text transforms
-function transformToUppercase(): void { editor?.trigger('', 'editor.action.transformToUppercase', null) }
-function transformToLowercase(): void { editor?.trigger('', 'editor.action.transformToLowercase', null) }
-function transformToTitleCase(): void { editor?.trigger('', 'editor.action.transformToTitlecase', null) }
+function transformToUppercase(): void { triggerEdit('', 'editor.action.transformToUppercase', null) }
+function transformToLowercase(): void { triggerEdit('', 'editor.action.transformToLowercase', null) }
+function transformToTitleCase(): void { triggerEdit('', 'editor.action.transformToTitlecase', null) }
 function transformToSnakeCase(): void { transformSelection(toSnakeCase) }
 function transformToCamelCase(): void { transformSelection(toCamelCase) }
 function transformToKebabCase(): void { transformSelection(toKebabCase) }
@@ -749,9 +782,10 @@ function transformFromUrlEncoded(): void {
 }
 
 // Sort / dedupe / reverse
-function sortLinesAscending(): void { editor?.trigger('', 'editor.action.sortLinesAscending', null) }
-function sortLinesDescending(): void { editor?.trigger('', 'editor.action.sortLinesDescending', null) }
+function sortLinesAscending(): void { triggerEdit('', 'editor.action.sortLinesAscending', null) }
+function sortLinesDescending(): void { triggerEdit('', 'editor.action.sortLinesDescending', null) }
 function reverseLines(): void {
+  if (!canMutate()) return
   const model = editor?.getModel()
   const sel = editor?.getSelection()
   if (!model || !sel || sel.isEmpty()) return
@@ -764,6 +798,7 @@ function reverseLines(): void {
   }])
 }
 function removeDuplicateLines(): void {
+  if (!canMutate()) return
   const model = editor?.getModel()
   const sel = editor?.getSelection()
   if (!model || !sel || sel.isEmpty()) return
@@ -777,6 +812,7 @@ function removeDuplicateLines(): void {
   }])
 }
 function transpose(): void {
+  if (!canMutate()) return
   const model = editor?.getModel()
   const pos = editor?.getPosition()
   if (!model || !pos) return
@@ -792,12 +828,14 @@ function transpose(): void {
 
 // Indentation conversion
 function indentationToSpaces(): void {
+  if (!canMutate()) return
   editor?.updateOptions({ insertSpaces: true })
-  editor?.trigger('', 'editor.action.indentationToSpaces', null)
+  triggerEdit('', 'editor.action.indentationToSpaces', null)
 }
 function indentationToTabs(): void {
+  if (!canMutate()) return
   editor?.updateOptions({ insertSpaces: false })
-  editor?.trigger('', 'editor.action.indentationToTabs', null)
+  triggerEdit('', 'editor.action.indentationToTabs', null)
 }
 
 // Link
@@ -844,17 +882,18 @@ function getWordAtCursor(): string {
 
 // Ghost text (Phase 3 — InlineCompletionsProvider)
 function setGhost(text: string | null): void {
-  pendingGhost = text
-  if (text) editor?.trigger('', 'editor.action.inlineSuggest.trigger', null)
+  pendingGhost = canMutate() ? text : null
+  if (pendingGhost) editor?.trigger('', 'editor.action.inlineSuggest.trigger', null)
   else editor?.trigger('', 'editor.action.inlineSuggest.hide', null)
 }
 function acceptGhost(): void {
-  editor?.trigger('', 'editor.action.inlineSuggest.commit', null)
+  if (!canMutate()) return
+  triggerEdit('', 'editor.action.inlineSuggest.commit', null)
   pendingGhost = null
 }
 
 defineExpose({
-  getValue, setValue, focus, getCursor, getCursorLine,
+  getValue, setValue, focus, getCursor, getCursorLine, getModelIdentity, setReadOnly,
   getSelectionText, getSelectionRange, setSelection,
   selectAll, selectLine, selectCurrentWord, selectNextOccurrence,
   expandSelection, shrinkSelection,

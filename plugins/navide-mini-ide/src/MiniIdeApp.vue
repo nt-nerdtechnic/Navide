@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, reactive, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useBackend, viewRuntime } from './composables/useBackend'
 import { createMiniIdeEditorPort } from './composables/editorPort'
 import { createMiniIdeGitTransport } from './composables/gitPorts'
@@ -9,8 +9,9 @@ import { resetUiScale, stepUiScaleBy } from './lib/uiScale'
 import ExplorerPane from './components/ExplorerPane.vue'
 import WindowControls from './components/WindowControls.vue'
 import SearchPane from './components/SearchPane.vue'
-import { GitPane, DiffPane, ConflictPane } from '@navide/navide-git/composition'
+import { GitPane, DiffPane, ConflictPane } from './git-composition'
 import { EditorPane } from '@navide/plugin-ui/editor'
+import type { PluginDetailCloseDecision, PluginEditorFileTarget, PluginEditorTargetOpenResult, PluginReceiverCloseGuardReason, PluginReceiverLeftContribution } from '@navide/plugin-sdk'
 import ReviewPane from './components/ReviewPane.vue'
 import MiniIdeBranchDiffPane from './editor/MiniIdeBranchDiffPane.vue'
 import NotificationHost from './components/NotificationHost.vue'
@@ -203,13 +204,19 @@ function askSelectionWithAi(file: OpenFile, payload: unknown): void {
 // outside it, in which case it is the file's parent directory — the backend
 // only checks that the target stays inside the given root, so an external file
 // passes every existing guard with its own root and no backend change.
+type StatePreservingMoveElement = Element & {
+  moveBefore(movedNode: Node, referenceNode: Node | null): Node
+}
+
 interface OpenFile { kind: 'file' | 'diff' | 'conflict' | 'branch-diff'; id: number; relPath: string; wsPath?: string; name: string; line: number; dirty: boolean; revealAt?: number; revealSeq: number; filepath?: string; staged?: boolean; commit?: string; base?: string; compare?: string }
+interface ProviderTab { kind: 'provider'; id: number; relPath: string; wsPath?: string; name: string; line: number; dirty: false; revealAt?: number; revealSeq: number; mountHostId: string; resourceKey: string; itemId?: string; closing: boolean }
+type EditorTab = OpenFile | ProviderTab
 // Stable tab identity for template keys: relPath is mutable (tabs follow
 // explorer renames/moves), and keying panes by it would remount EditorPane on
 // rename — losing the Monaco undo stack and any unsaved buffer.
 let tabIdSeq = 1
 function nextTabId(): number { return tabIdSeq++ }
-const openFiles = ref<OpenFile[]>([])
+const openFiles = ref<EditorTab[]>([])
 
 // A tab is identified by (workspace, relPath): the same relPath under two roots
 // is two independent files. Every per-tab map/set below is keyed this way.
@@ -228,7 +235,7 @@ function tabKeyOf(wsPath: string | undefined, relPath: string): string {
   return diagnosticsKey(wsPath || workspacePath, relPath)
 }
 function tabKey(f: { wsPath?: string; relPath: string }): string { return tabKeyOf(f.wsPath, f.relPath) }
-function findTab(key: string): OpenFile | undefined {
+function findTab(key: string): EditorTab | undefined {
   return openFiles.value.find((f) => tabKey(f) === key)
 }
 function absPathOf(f: { wsPath?: string; relPath: string }): string {
@@ -237,7 +244,7 @@ function absPathOf(f: { wsPath?: string; relPath: string }): string {
 /** What to show the user (and the AI) for a tab: external files need their absolute
  *  path. Non-file tabs carry a synthetic relPath (see OpenFile) that is not a path
  *  at all, so they are shown as-is rather than glued onto a root. */
-function tabDisplayPath(f: { wsPath?: string; relPath: string; kind?: OpenFile['kind'] }): string {
+function tabDisplayPath(f: { wsPath?: string; relPath: string; kind?: EditorTab['kind'] }): string {
   return f.wsPath && (f.kind ?? 'file') === 'file' ? absPathOf(f) : f.relPath
 }
 
@@ -289,7 +296,7 @@ const zenMode = ref(false)
 const changesCount = ref(0)
 const activePath = computed(() => {
   const f = findTab(activeKey.value)
-  if (!f) return []
+  if (!f || f.kind === 'provider') return []
   if (f.kind === 'branch-diff') return [f.name]
   const displayPath = (f.kind === 'diff' || f.kind === 'conflict') ? (f.filepath ?? '') : f.relPath
   return displayPath.split('/').filter(Boolean)
@@ -597,6 +604,10 @@ const closedHistory: Array<{ relPath: string; wsPath?: string; name: string }> =
 
 async function closeFile(key: string): Promise<void> {
   const f = findTab(key)
+  if (f?.kind === 'provider') {
+    await requestCloseProviderTab(f)
+    return
+  }
   if (f?.dirty) {
     const ok = await confirm(`"${f.name}" has unsaved changes. Close anyway?`, {
       title: 'Close File', confirmText: 'Close',
@@ -614,43 +625,79 @@ async function closeFile(key: string): Promise<void> {
 }
 
 // ── Tab right-click context menu ──────────────────────────────────────────────
-const tabCtxMenu = ref<{ key: string; x: number; y: number } | null>(null)
+type TabContextGroup = 'primary' | 'secondary'
+type TabContextMenu = { key: string; x: number; y: number; group: TabContextGroup; provider?: ProviderTab }
+const tabCtxMenu = ref<TabContextMenu | null>(null)
 
 // Path actions only apply to real file tabs (diff/conflict/branch-diff are synthetic).
 const tabCtxIsFile = computed(() => findTab(tabCtxMenu.value?.key ?? '')?.kind === 'file')
+const tabCtxProvider = computed(() => tabCtxMenu.value?.provider)
 
 function openTabCtxMenu(e: MouseEvent, key: string): void {
-  tabCtxMenu.value = { key, x: e.clientX, y: e.clientY }
+  const tab = findTab(key)
+  tabCtxMenu.value = {
+    key,
+    x: e.clientX,
+    y: e.clientY,
+    group: 'primary',
+    provider: tab?.kind === 'provider' ? tab : undefined,
+  }
+}
+function onSecondaryTabContextMenu(e: MouseEvent, tab: EditorTab): void {
+  if (tab.kind !== 'provider') return
+  e.preventDefault()
+  tabCtxMenu.value = { key: tabKey(tab), x: e.clientX, y: e.clientY, group: 'secondary', provider: tab }
 }
 function closeTabCtxMenu(): void { tabCtxMenu.value = null }
+async function ctxCloseProviderTab(): Promise<void> {
+  const tab = tabCtxMenu.value?.provider
+  closeTabCtxMenu()
+  if (tab) await requestCloseProviderTab(tab)
+}
+async function ctxMoveProviderTab(): Promise<void> {
+  const context = tabCtxMenu.value
+  closeTabCtxMenu()
+  if (!context?.provider || context.provider.closing || !context.provider.itemId) return
+  await moveProviderTab(context.provider, context.group === 'primary' ? 'secondary' : 'primary')
+}
 
 async function ctxCloseOthers(key: string): Promise<void> {
   closeTabCtxMenu()
-  const dirty = openFiles.value.filter((f) => tabKey(f) !== key && f.kind === 'file' && f.dirty)
+  const closing = openFiles.value.filter((f) => tabKey(f) !== key)
+  const dirty = closing.filter((f) => f.kind === 'file' && f.dirty)
   if (dirty.length) { const ok = await confirm(`${dirty.length} file(s) have unsaved changes. Close other tabs anyway?`, { title: 'Close Other Tabs', confirmText: 'Close' }); if (!ok) return }
-  openFiles.value = openFiles.value.filter((f) => tabKey(f) === key)
+  if (!(await requestCloseProviderTabs(closing))) return
+  openFiles.value = openFiles.value.filter((f) => tabKey(f) === key || f.kind === 'provider')
 }
 async function ctxCloseRight(key: string): Promise<void> {
   closeTabCtxMenu()
   const idx = openFiles.value.findIndex((f) => tabKey(f) === key)
   if (idx < 0) return
-  const dirty = openFiles.value.slice(idx + 1).filter((f) => f.kind === 'file' && f.dirty)
+  const closing = openFiles.value.slice(idx + 1)
+  const dirty = closing.filter((f) => f.kind === 'file' && f.dirty)
   if (dirty.length) { const ok = await confirm(`${dirty.length} file(s) have unsaved changes. Close tabs to the right anyway?`, { title: 'Close Tabs to the Right', confirmText: 'Close' }); if (!ok) return }
-  openFiles.value = openFiles.value.slice(0, idx + 1)
+  const retained = new Set(openFiles.value.slice(0, idx + 1).map(tabKey))
+  if (!(await requestCloseProviderTabs(closing))) return
+  openFiles.value = openFiles.value.filter((f) => retained.has(tabKey(f)) || f.kind === 'provider')
 }
 async function ctxCloseLeft(key: string): Promise<void> {
   closeTabCtxMenu()
   const idx = openFiles.value.findIndex((f) => tabKey(f) === key)
   if (idx <= 0) return
-  const dirty = openFiles.value.slice(0, idx).filter((f) => f.kind === 'file' && f.dirty)
+  const closing = openFiles.value.slice(0, idx)
+  const dirty = closing.filter((f) => f.kind === 'file' && f.dirty)
   if (dirty.length) { const ok = await confirm(`${dirty.length} file(s) have unsaved changes. Close tabs to the left anyway?`, { title: 'Close Tabs to the Left', confirmText: 'Close' }); if (!ok) return }
-  openFiles.value = openFiles.value.slice(idx)
+  const retained = new Set(openFiles.value.slice(idx).map(tabKey))
+  if (!(await requestCloseProviderTabs(closing))) return
+  openFiles.value = openFiles.value.filter((f) => retained.has(tabKey(f)) || f.kind === 'provider')
 }
 async function ctxCloseAll(): Promise<void> {
   closeTabCtxMenu()
   const dirty = openFiles.value.filter((f) => f.kind === 'file' && f.dirty)
   if (dirty.length) { const ok = await confirm(`${dirty.length} file(s) have unsaved changes. Close all anyway?`, { title: 'Close All Tabs', confirmText: 'Close All' }); if (!ok) return }
-  openFiles.value = []; activeKey.value = ''
+  if (!(await requestCloseProviderTabs(openFiles.value))) return
+  openFiles.value = openFiles.value.filter((f) => f.kind === 'provider')
+  activeKey.value = openFiles.value[0] ? tabKey(openFiles.value[0]) : ''
 }
 async function ctxCopyPath(key: string): Promise<void> {
   closeTabCtxMenu()
@@ -678,8 +725,16 @@ function setEditorRef(key: string, el: unknown): void {
   else editorPaneRefs.delete(key)
 }
 
+// Plan/markdown surfaces keep their own observable write state, so they take
+// part in the receiver close preparation exactly like EditorPane panes.
+const planFileRefs = new Map<string, InstanceType<typeof PlanFileView>>()
+function setPlanFileRef(key: string, el: unknown): void {
+  if (el) planFileRefs.set(key, el as InstanceType<typeof PlanFileView>)
+  else planFileRefs.delete(key)
+}
+
 // ── Split Editor — secondary group (Phase D) ──────────────────────────────────
-interface SecondaryGroup { files: OpenFile[]; activeKey: string }
+interface SecondaryGroup { files: EditorTab[]; activeKey: string }
 const secondaryGroup = ref<SecondaryGroup | null>(null)
 const activeGroupIsPrimary = ref(true)
 const editorPaneRefsSecondary = new Map<string, InstanceType<typeof EditorPane>>()
@@ -703,10 +758,15 @@ function splitEditor(): void {
   activeGroupIsPrimary.value = false
 }
 
-function closeFileInSecondary(key: string): void {
+async function closeFileInSecondary(key: string): Promise<void> {
   if (!secondaryGroup.value) return
   const i = secondaryGroup.value.files.findIndex(f => tabKey(f) === key)
-  if (i === -1) return
+  const file = secondaryGroup.value.files[i]
+  if (!file || i === -1) return
+  if (file.kind === 'provider') {
+    await requestCloseProviderTab(file)
+    return
+  }
   secondaryGroup.value.files.splice(i, 1)
   if (secondaryGroup.value.activeKey === key) {
     const next = secondaryGroup.value.files[Math.min(i, secondaryGroup.value.files.length - 1)]
@@ -723,7 +783,7 @@ function openFileInSecondary(key: string): void {
   const exists = secondaryGroup.value.files.find(f => tabKey(f) === key)
   if (!exists) {
     const primary = findTab(key)
-    if (primary) secondaryGroup.value.files.push({ ...primary })
+    if (primary?.kind === 'file') secondaryGroup.value.files.push({ ...primary })
   }
   secondaryGroup.value.activeKey = key
   activeGroupIsPrimary.value = false
@@ -989,48 +1049,57 @@ registerCommand('workbench.action.closeAllEditors', async () => {
     })
     if (!ok) return
   }
-  openFiles.value = []
-  activeKey.value = ''
+  if (!(await requestCloseProviderTabs(openFiles.value))) return
+  openFiles.value = openFiles.value.filter((f) => f.kind === 'provider')
+  activeKey.value = openFiles.value[0] ? tabKey(openFiles.value[0]) : ''
 })
 registerCommand('workbench.action.closeOtherEditors', async () => {
   const cur = activeKey.value
   if (!cur) return
-  const others = openFiles.value.filter((f) => tabKey(f) !== cur && f.kind === 'file' && f.dirty)
-  if (others.length > 0) {
-    const ok = await confirm(`${others.length} file(s) have unsaved changes. Close other tabs anyway?`, {
+  const closing = openFiles.value.filter((f) => tabKey(f) !== cur)
+  const dirty = closing.filter((f) => f.kind === 'file' && f.dirty)
+  if (dirty.length > 0) {
+    const ok = await confirm(`${dirty.length} file(s) have unsaved changes. Close other tabs anyway?`, {
       title: 'Close Other Tabs', confirmText: 'Close',
     })
     if (!ok) return
   }
-  openFiles.value = openFiles.value.filter((f) => tabKey(f) === cur)
+  if (!(await requestCloseProviderTabs(closing))) return
+  openFiles.value = openFiles.value.filter((f) => tabKey(f) === cur || f.kind === 'provider')
 })
 registerCommand('workbench.action.closeEditorsToTheRight', async () => {
   const cur = activeKey.value
   if (!cur) return
   const idx = openFiles.value.findIndex((f) => tabKey(f) === cur)
   if (idx < 0) return
-  const dirty = openFiles.value.slice(idx + 1).filter((f) => f.kind === 'file' && f.dirty)
+  const closing = openFiles.value.slice(idx + 1)
+  const dirty = closing.filter((f) => f.kind === 'file' && f.dirty)
   if (dirty.length > 0) {
     const ok = await confirm(`${dirty.length} file(s) have unsaved changes. Close tabs to the right anyway?`, {
       title: 'Close Tabs to the Right', confirmText: 'Close',
     })
     if (!ok) return
   }
-  openFiles.value = openFiles.value.slice(0, idx + 1)
+  const retained = new Set(openFiles.value.slice(0, idx + 1).map(tabKey))
+  if (!(await requestCloseProviderTabs(closing))) return
+  openFiles.value = openFiles.value.filter((f) => retained.has(tabKey(f)) || f.kind === 'provider')
 })
 registerCommand('workbench.action.closeEditorsToTheLeft', async () => {
   const cur = activeKey.value
   if (!cur) return
   const idx = openFiles.value.findIndex((f) => tabKey(f) === cur)
   if (idx <= 0) return
-  const dirty = openFiles.value.slice(0, idx).filter((f) => f.kind === 'file' && f.dirty)
+  const closing = openFiles.value.slice(0, idx)
+  const dirty = closing.filter((f) => f.kind === 'file' && f.dirty)
   if (dirty.length > 0) {
     const ok = await confirm(`${dirty.length} file(s) have unsaved changes. Close tabs to the left anyway?`, {
       title: 'Close Tabs to the Left', confirmText: 'Close',
     })
     if (!ok) return
   }
-  openFiles.value = openFiles.value.slice(idx)
+  const retained = new Set(openFiles.value.slice(idx).map(tabKey))
+  if (!(await requestCloseProviderTabs(closing))) return
+  openFiles.value = openFiles.value.filter((f) => retained.has(tabKey(f)) || f.kind === 'provider')
 })
 registerCommand('workbench.action.openNextEditor', () => {
   const files = openFiles.value
@@ -1769,14 +1838,7 @@ async function closeEditorWindow(): Promise<void> {
     )
     if (!ok) return
   }
-  // Inside the plugin view there is no window to close — ask the host to hide
-  // the view. The residual `?window=editor` window still closes itself.
-  const navBridge = (window as unknown as { nav?: { hideSelf?: () => void } }).nav
-  if (navBridge?.hideSelf) {
-    navBridge.hideSelf()
-    return
-  }
-  window.close()
+  viewRuntime.hide()
 }
 
 function onAppKeydown(e: KeyboardEvent): void {
@@ -1815,6 +1877,559 @@ let offThemeSettingsChange: (() => void) | null = null
 // `editor:openFile` / `editor:openDiff` / `editor:openBranchDiff` channels:
 // add/reveal the tab in place so open tabs and unsaved buffers survive.
 let offOpenTarget: (() => void) | null = null
+type ViewReceiverOffer = Parameters<Parameters<typeof viewRuntime.registerReceiver>[1]>[0]
+type ViewReceiver = Awaited<ReturnType<typeof viewRuntime.registerReceiver>>
+let viewReceiver: ViewReceiver | null = null
+const viewReceiverLeftContributions = ref<readonly PluginReceiverLeftContribution[]>([])
+let offViewReceiverItemClosed: (() => void) | null = null
+let viewReceiverActive = false
+let viewReceiverOfferMounting = false
+const pendingViewReceiverOffers: ViewReceiverOffer[] = []
+const viewReceiverItemHosts = new Map<string, HTMLElement>()
+const viewReceiverProviderTabs = new Map<string, ProviderTab>()
+const viewReceiverProviderResources = {
+  primary: new Map<string, ProviderTab>(),
+  secondary: new Map<string, ProviderTab>(),
+}
+const pendingViewReceiverProviderResources = {
+  primary: new Set<string>(),
+  secondary: new Set<string>(),
+}
+const viewReceiverContainers = {
+  left: ref<HTMLElement | null>(null),
+}
+const viewReceiverDetailContainers = {
+  primary: ref<HTMLElement | null>(null),
+  secondary: ref<HTMLElement | null>(null),
+}
+
+function providerTabIsOpen(tab: ProviderTab): boolean {
+  return openFiles.value.includes(tab) || secondaryGroup.value?.files.includes(tab) === true
+}
+function removeProviderTab(tab: ProviderTab): void {
+  if (tabCtxMenu.value?.provider === tab) closeTabCtxMenu()
+  const primaryIndex = openFiles.value.indexOf(tab)
+  if (primaryIndex >= 0) {
+    const key = tabKey(tab)
+    openFiles.value.splice(primaryIndex, 1)
+    if (activeKey.value === key) {
+      const next = openFiles.value[Math.min(primaryIndex, openFiles.value.length - 1)]
+      activeKey.value = next ? tabKey(next) : ''
+    }
+    return
+  }
+  const group = secondaryGroup.value
+  if (!group) return
+  const secondaryIndex = group.files.indexOf(tab)
+  if (secondaryIndex < 0) return
+  const key = tabKey(tab)
+  group.files.splice(secondaryIndex, 1)
+  if (group.activeKey === key) {
+    const next = group.files[Math.min(secondaryIndex, group.files.length - 1)]
+    group.activeKey = next ? tabKey(next) : ''
+  }
+  if (group.files.length === 0) {
+    secondaryGroup.value = null
+    activeGroupIsPrimary.value = true
+  }
+}
+function providerMoveHost(tab: ProviderTab): HTMLElement | null {
+  if (!tab.itemId || viewReceiverProviderTabs.get(tab.itemId) !== tab) return null
+  return viewReceiverItemHosts.get(tab.itemId) ?? null
+}
+function detailReceiverContainer(group: TabContextGroup): HTMLElement | null {
+  return group === 'primary'
+    ? viewReceiverDetailContainers.primary.value
+    : viewReceiverDetailContainers.secondary.value
+}
+function providerTabGroup(tab: ProviderTab): TabContextGroup | null {
+  if (openFiles.value.includes(tab)) return 'primary'
+  if (secondaryGroup.value?.files.includes(tab)) return 'secondary'
+  return null
+}
+type SelectedDetailGroup =
+  | { kind: 'primary'; files: EditorTab[] }
+  | { kind: 'secondary'; group: SecondaryGroup }
+function selectedDetailGroup(): SelectedDetailGroup {
+  return !activeGroupIsPrimary.value && secondaryGroup.value
+    ? { kind: 'secondary', group: secondaryGroup.value }
+    : { kind: 'primary', files: openFiles.value }
+}
+function selectedDetailGroupIsCurrent(group: SelectedDetailGroup): boolean {
+  return group.kind === 'primary'
+    ? openFiles.value === group.files
+    : secondaryGroup.value === group.group
+}
+function detailGroupKey(group: SelectedDetailGroup): TabContextGroup {
+  return group.kind
+}
+function indexedProviderTabIsCurrent(
+  tab: ProviderTab,
+  group: SelectedDetailGroup,
+  resourceKey: string,
+): tab is ProviderTab & { itemId: string } {
+  const itemId = tab.itemId
+  return Boolean(
+    itemId &&
+    selectedDetailGroupIsCurrent(group) &&
+    !tab.closing &&
+    tab.resourceKey === resourceKey &&
+    providerTabGroup(tab) === detailGroupKey(group) &&
+    viewReceiverProviderTabs.get(itemId) === tab &&
+    viewReceiverProviderResources[detailGroupKey(group)].get(resourceKey) === tab,
+  )
+}
+function indexProviderTab(tab: ProviderTab, group: TabContextGroup): void {
+  viewReceiverProviderResources[group].set(tab.resourceKey, tab)
+}
+function unindexProviderTab(tab: ProviderTab, group: TabContextGroup): void {
+  const index = viewReceiverProviderResources[group]
+  if (index.get(tab.resourceKey) === tab) index.delete(tab.resourceKey)
+}
+function revealIndexedProviderTab(tab: ProviderTab, group: SelectedDetailGroup, resourceKey: string): boolean {
+  if (!indexedProviderTabIsCurrent(tab, group, resourceKey)) return false
+  if (group.kind === 'primary') {
+    activeKey.value = tabKey(tab)
+    activeGroupIsPrimary.value = true
+  } else {
+    group.group.activeKey = tabKey(tab)
+    activeGroupIsPrimary.value = false
+  }
+  syncViewReceiverDetailHosts()
+  return true
+}
+function canMoveProviderHost(host: HTMLElement, destination: HTMLElement | null): destination is HTMLElement & StatePreservingMoveElement {
+  const movableDestination = destination as (HTMLElement & StatePreservingMoveElement) | null
+  return Boolean(
+    destination &&
+    host.isConnected &&
+    destination.isConnected &&
+    host.ownerDocument === destination.ownerDocument &&
+    typeof movableDestination?.moveBefore === 'function',
+  )
+}
+function moveProviderTabModel(tab: ProviderTab, source: TabContextGroup, destination: TabContextGroup): void {
+  const key = tabKey(tab)
+  if (source === 'primary' && destination === 'secondary') {
+    const sourceIndex = openFiles.value.indexOf(tab)
+    const target = secondaryGroup.value
+    if (sourceIndex < 0 || !target) return
+    openFiles.value.splice(sourceIndex, 1)
+    if (activeKey.value === key) {
+      const next = openFiles.value[Math.min(sourceIndex, openFiles.value.length - 1)]
+      activeKey.value = next ? tabKey(next) : ''
+    }
+    target.files.push(tab)
+    target.activeKey = key
+    activeGroupIsPrimary.value = false
+    return
+  }
+  if (source !== 'secondary' || destination !== 'primary') return
+  const sourceGroup = secondaryGroup.value
+  if (!sourceGroup) return
+  const sourceIndex = sourceGroup.files.indexOf(tab)
+  if (sourceIndex < 0) return
+  sourceGroup.files.splice(sourceIndex, 1)
+  if (sourceGroup.activeKey === key) {
+    const next = sourceGroup.files[Math.min(sourceIndex, sourceGroup.files.length - 1)]
+    sourceGroup.activeKey = next ? tabKey(next) : ''
+  }
+  openFiles.value.push(tab)
+  activeKey.value = key
+  activeGroupIsPrimary.value = true
+  if (sourceGroup.files.length === 0) secondaryGroup.value = null
+}
+async function moveProviderTab(tab: ProviderTab, destination: TabContextGroup): Promise<void> {
+  if (tab.closing || !tab.itemId || providerTabGroup(tab) === destination) return
+  const source = providerTabGroup(tab)
+  const host = providerMoveHost(tab)
+  if (!source || !host || typeof (Element.prototype as StatePreservingMoveElement).moveBefore !== 'function') return
+  const destinationTab = viewReceiverProviderResources[destination].get(tab.resourceKey)
+  if (destinationTab && destinationTab !== tab) return
+  if (pendingViewReceiverProviderResources[destination].has(tab.resourceKey)) return
+
+  let createdSecondary = false
+  if (destination === 'secondary' && !secondaryGroup.value) {
+    secondaryGroup.value = { files: [], activeKey: '' }
+    createdSecondary = true
+    await nextTick()
+  }
+
+  const currentSource = providerTabGroup(tab)
+  const currentHost = providerMoveHost(tab)
+  const target = detailReceiverContainer(destination)
+  if (currentSource !== source || currentHost !== host || !canMoveProviderHost(host, target)) {
+    if (createdSecondary && secondaryGroup.value?.files.length === 0) secondaryGroup.value = null
+    return
+  }
+  try {
+    target.moveBefore(host, null)
+  } catch {
+    if (createdSecondary && secondaryGroup.value?.files.length === 0) secondaryGroup.value = null
+    return
+  }
+
+  if (providerTabGroup(tab) !== source || providerMoveHost(tab) !== host) return
+  moveProviderTabModel(tab, source, destination)
+  unindexProviderTab(tab, source)
+  indexProviderTab(tab, destination)
+  syncViewReceiverDetailHosts()
+}
+function syncViewReceiverDetailHosts(): void {
+  let primaryVisible = false
+  let secondaryVisible = false
+  for (const [itemId, tab] of viewReceiverProviderTabs) {
+    const host = viewReceiverItemHosts.get(itemId)
+    if (!host) continue
+    const inPrimary = openFiles.value.includes(tab)
+    const visible = inPrimary
+      ? activeGroupIsPrimary.value && activeKey.value === tabKey(tab)
+      : !activeGroupIsPrimary.value && secondaryGroup.value?.activeKey === tabKey(tab)
+    host.hidden = !visible
+    if (visible) {
+      if (inPrimary) primaryVisible = true
+      else secondaryVisible = true
+    }
+  }
+  if (viewReceiverDetailContainers.primary.value) viewReceiverDetailContainers.primary.value.hidden = !primaryVisible
+  if (viewReceiverDetailContainers.secondary.value) viewReceiverDetailContainers.secondary.value.hidden = !secondaryVisible
+}
+function createViewReceiverHost(
+  offer: ViewReceiverOffer,
+  selectedGroup?: SelectedDetailGroup,
+): { host: HTMLElement; tab?: ProviderTab } | null {
+  const host = document.createElement('div')
+  host.className = 'ide-receiver-slot-item'
+  const mountHostId = crypto.randomUUID()
+  host.dataset.pluginReceiverMountHost = mountHostId
+  host.dataset.pluginReceiverLocation = offer.location
+  if (offer.location === 'left') {
+    const container = viewReceiverContainers.left.value
+    if (!container) return null
+    container.append(host)
+    return { host }
+  }
+  if (!selectedGroup || !selectedDetailGroupIsCurrent(selectedGroup)) return null
+  const secondary = selectedGroup.kind === 'secondary' ? selectedGroup.group : null
+  const container = secondary
+    ? viewReceiverDetailContainers.secondary.value
+    : viewReceiverDetailContainers.primary.value
+  if (!container) return null
+  const tab = reactive<ProviderTab>({
+    kind: 'provider',
+    id: nextTabId(),
+    relPath: `\x00provider:${mountHostId}`,
+    name: offer.title,
+    line: 0,
+    dirty: false,
+    revealSeq: 0,
+    mountHostId,
+    resourceKey: offer.resourceKey,
+    closing: false,
+  })
+  if (secondary) {
+    secondary.files.push(tab)
+    secondary.activeKey = tabKey(tab)
+    activeGroupIsPrimary.value = false
+  } else {
+    openFiles.value.push(tab)
+    activeKey.value = tabKey(tab)
+    activeGroupIsPrimary.value = true
+  }
+  container.hidden = false
+  container.append(host)
+  return { host, tab }
+}
+function removeViewReceiverItemHost(itemId: string): void {
+  const host = viewReceiverItemHosts.get(itemId)
+  const tab = viewReceiverProviderTabs.get(itemId)
+  viewReceiverItemHosts.delete(itemId)
+  viewReceiverProviderTabs.delete(itemId)
+  if (tab) {
+    const group = providerTabGroup(tab)
+    if (group) unindexProviderTab(tab, group)
+  }
+  host?.remove()
+  if (tab) removeProviderTab(tab)
+  syncViewReceiverDetailHosts()
+}
+// ── Receiver close guard ──────────────────────────────────────────────────────
+// A private Host close request is answered before any provider prepares. The
+// receiver freezes every mounted file surface for the duration of that
+// preparation and releases them on refusal, timeout, cancellation or commit.
+type EditorCloseLease = { isCurrent(): boolean; release(): void }
+type ClosePreparable = { prepareClose?: () => EditorCloseLease | null }
+let receiverClosePreparation: { leases: EditorCloseLease[] } | null = null
+
+function releaseReceiverClosePreparation(): void {
+  const preparation = receiverClosePreparation
+  if (!preparation) return
+  receiverClosePreparation = null
+  for (const lease of preparation.leases) {
+    try {
+      lease.release()
+    } catch {
+      // One failing pane release cannot strand the remaining panes frozen.
+    }
+  }
+}
+
+function collectEditorCloseLeases(): EditorCloseLease[] | null {
+  const leases: EditorCloseLease[] = []
+  const collect = (pane: unknown): boolean => {
+    const lease = (pane as ClosePreparable | undefined)?.prepareClose?.() ?? null
+    if (!lease) return false
+    leases.push(lease)
+    return true
+  }
+  const panes: unknown[] = [...editorPaneRefs.values(), ...editorPaneRefsSecondary.values(), ...planFileRefs.values()]
+  for (const pane of panes) {
+    if (collect(pane)) continue
+    for (const lease of leases) lease.release()
+    return null
+  }
+  return leases
+}
+
+async function confirmReceiverFileClose(reason: PluginReceiverCloseGuardReason): Promise<PluginDetailCloseDecision> {
+  const dirty = [...openFiles.value, ...(secondaryGroup.value?.files ?? [])]
+    .filter((f) => f.kind === 'file' && f.dirty)
+  if (dirty.length === 0) return { accepted: true, reason: 'accepted' }
+  const reload = reason === 'reload'
+  const quit = reason === 'quit'
+  const question = reload
+    ? `${dirty.length} file(s) have unsaved changes. Reload and discard them?`
+    : quit
+      ? `${dirty.length} file(s) have unsaved changes. Quit and discard them?`
+      : `${dirty.length} file(s) have unsaved changes. Close the editor anyway?`
+  const ok = await confirm(question, {
+    title: reload ? 'Reload Window' : quit ? 'Quit' : 'Close Editor',
+    confirmText: reload ? 'Reload' : quit ? 'Quit' : 'Close',
+  })
+  return ok ? { accepted: true, reason: 'accepted' } : { accepted: false, reason: 'refused' }
+}
+
+async function prepareViewReceiverClose(reason: PluginReceiverCloseGuardReason): Promise<PluginDetailCloseDecision> {
+  if (receiverClosePreparation) return { accepted: false, reason: 'busy' }
+  if (reason !== 'receiver-item-batch') {
+    const confirmation = await confirmReceiverFileClose(reason)
+    if (!confirmation.accepted) return confirmation
+  }
+  const leases = collectEditorCloseLeases()
+  if (!leases) return { accepted: false, reason: 'busy' }
+  if (!leases.every((lease) => lease.isCurrent())) {
+    for (const lease of leases) lease.release()
+    return { accepted: false, reason: 'busy' }
+  }
+  receiverClosePreparation = { leases }
+  return { accepted: true, reason: 'accepted' }
+}
+
+async function requestCloseProviderTab(tab: ProviderTab): Promise<void> {
+  const receiver = viewReceiver
+  if (!receiver || !tab.itemId || tab.closing || !providerTabIsOpen(tab)) return
+  tab.closing = true
+  try {
+    const result = await receiver.requestClose(tab.itemId)
+    if (!result.closed && providerTabIsOpen(tab)) tab.closing = false
+  } catch {
+    if (providerTabIsOpen(tab)) tab.closing = false
+  } finally {
+    releaseReceiverClosePreparation()
+  }
+}
+
+/** One all-or-none transaction for every provider tab in the affected set. A
+ *  pending mount without an item id fails busy instead of being omitted, and
+ *  nothing is spliced here: authenticated item-closed removes the tabs. */
+async function requestCloseProviderTabs(tabs: EditorTab[]): Promise<boolean> {
+  const receiver = viewReceiver
+  const providers = tabs.filter((tab): tab is ProviderTab => tab.kind === 'provider')
+  if (providers.length === 0) return true
+  if (!receiver || providers.some((tab) => tab.closing || !tab.itemId || !providerTabIsOpen(tab))) return false
+  for (const tab of providers) tab.closing = true
+  try {
+    const result = await receiver.requestCloseTransaction(providers.map((tab) => tab.itemId!))
+    if (!result.closed) {
+      for (const tab of providers) if (providerTabIsOpen(tab)) tab.closing = false
+      return false
+    }
+    return true
+  } catch {
+    for (const tab of providers) if (providerTabIsOpen(tab)) tab.closing = false
+    return false
+  } finally {
+    releaseReceiverClosePreparation()
+  }
+}
+async function openReceiverEditorTarget(target: PluginEditorFileTarget): Promise<PluginEditorTargetOpenResult> {
+  if (!target.path) return { opened: false }
+  const line = target.line ?? 1
+  const column = target.column ?? 1
+  openFile({ filepath: target.path, line })
+  const paneKey = tabKeyOf(undefined, target.path)
+  await nextTick()
+  const pane = editorPaneRefs.get(paneKey)
+  return { opened: await pane?.revealPositionWhenReady(line, column) === true }
+}
+async function refreshReceiverLeftContributions(receiver: ViewReceiver): Promise<void> {
+  try {
+    const contributions = await receiver.listLeftContributions()
+    if (viewReceiverActive && viewReceiver === receiver) viewReceiverLeftContributions.value = contributions
+  } catch {
+    if (viewReceiver === receiver) viewReceiverLeftContributions.value = []
+  }
+}
+async function openReceiverLeftContribution(contributionKey: string): Promise<void> {
+  const receiver = viewReceiver
+  if (!receiver) return
+  try {
+    await receiver.openLeft(contributionKey)
+  } catch {
+    // The Host owns eligibility and sends any accepted request through onOffer.
+  }
+}
+function mountViewReceiverOffer(offer: ViewReceiverOffer): void {
+  if (!viewReceiverActive) return
+  pendingViewReceiverOffers.push(offer)
+  void flushViewReceiverOffers()
+}
+async function flushViewReceiverOffers(): Promise<void> {
+  const receiver = viewReceiver
+  if (viewReceiverOfferMounting || !viewReceiverActive || !receiver) return
+  viewReceiverOfferMounting = true
+  try {
+    while (viewReceiverActive && viewReceiver === receiver && pendingViewReceiverOffers.length) {
+      const offer = pendingViewReceiverOffers.shift()!
+      if (offer.location === 'left') {
+        const item = createViewReceiverHost(offer)
+        if (!item) continue
+        try {
+          const { itemId } = await receiver.mount(offer.offerId, { mountHostId: item.host.dataset.pluginReceiverMountHost! })
+          if (!viewReceiverActive || viewReceiver !== receiver) {
+            try {
+              await receiver.abort(itemId)
+            } finally {
+              item.host.remove()
+            }
+            continue
+          }
+          viewReceiverItemHosts.set(itemId, item.host)
+        } catch {
+          item.host.remove()
+        }
+        continue
+      }
+
+      const selectedGroup = selectedDetailGroup()
+      const groupKey = detailGroupKey(selectedGroup)
+      const reservations = pendingViewReceiverProviderResources[groupKey]
+      reservations.add(offer.resourceKey)
+      try {
+        const existing = viewReceiverProviderResources[groupKey].get(offer.resourceKey)
+        if (existing && indexedProviderTabIsCurrent(existing, selectedGroup, offer.resourceKey)) {
+          try {
+            const acceptance = await receiver.acceptExistingOffer(offer.offerId, existing.itemId)
+            if (
+              acceptance.accepted &&
+              acceptance.itemId === existing.itemId &&
+              viewReceiverActive &&
+              viewReceiver === receiver
+            ) {
+              revealIndexedProviderTab(existing, selectedGroup, offer.resourceKey)
+            }
+          } catch {
+            // Host consumes a failed existing-item acceptance; mounting is not a fallback.
+          }
+          continue
+        }
+
+        const item = createViewReceiverHost(offer, selectedGroup)
+        if (!item) continue
+        try {
+          const { itemId } = await receiver.mount(offer.offerId, { mountHostId: item.host.dataset.pluginReceiverMountHost! })
+          const collision = viewReceiverProviderResources[groupKey].get(offer.resourceKey)
+          if (
+            !viewReceiverActive ||
+            viewReceiver !== receiver ||
+            !selectedDetailGroupIsCurrent(selectedGroup) ||
+            (collision && collision !== item.tab)
+          ) {
+            try {
+              await receiver.abort(itemId)
+            } finally {
+              item.host.remove()
+              if (item.tab) removeProviderTab(item.tab)
+            }
+            continue
+          }
+          viewReceiverItemHosts.set(itemId, item.host)
+          if (item.tab) {
+            item.tab.itemId = itemId
+            viewReceiverProviderTabs.set(itemId, item.tab)
+            indexProviderTab(item.tab, groupKey)
+            syncViewReceiverDetailHosts()
+          }
+        } catch {
+          item.host.remove()
+          if (item.tab) removeProviderTab(item.tab)
+          syncViewReceiverDetailHosts()
+        }
+      } finally {
+        reservations.delete(offer.resourceKey)
+      }
+    }
+  } finally {
+    viewReceiverOfferMounting = false
+  }
+}
+
+async function mountViewReceiver(): Promise<void> {
+  const subscription = viewRuntime.onOpenTarget(applyOpenTarget)
+  offOpenTarget = () => subscription.dispose()
+  const receiver = await viewRuntime.registerReceiver({
+    protocolVersion: 1,
+    locations: ['left', 'detail'],
+    editorTargets: { protocolVersion: 1, onOpen: openReceiverEditorTarget },
+    closeGuard: {
+      protocolVersion: 1,
+      onPrepare: prepareViewReceiverClose,
+      onCancelled: releaseReceiverClosePreparation,
+    },
+  }, mountViewReceiverOffer)
+  const itemClosed = receiver.onItemClosed((item) => removeViewReceiverItemHost(item.itemId))
+  if (!viewReceiverActive) {
+    itemClosed.dispose()
+    await receiver.dispose()
+    return
+  }
+  viewReceiver = receiver
+  offViewReceiverItemClosed = () => itemClosed.dispose()
+  void refreshReceiverLeftContributions(receiver)
+  void flushViewReceiverOffers()
+}
+async function disposeViewReceiver(): Promise<void> {
+  viewReceiverActive = false
+  releaseReceiverClosePreparation()
+  offOpenTarget?.()
+  offOpenTarget = null
+  offViewReceiverItemClosed?.()
+  offViewReceiverItemClosed = null
+  pendingViewReceiverOffers.length = 0
+  viewReceiverLeftContributions.value = []
+  for (const host of viewReceiverItemHosts.values()) host.remove()
+  viewReceiverItemHosts.clear()
+  viewReceiverProviderTabs.clear()
+  viewReceiverProviderResources.primary.clear()
+  viewReceiverProviderResources.secondary.clear()
+  pendingViewReceiverProviderResources.primary.clear()
+  pendingViewReceiverProviderResources.secondary.clear()
+  const receiver = viewReceiver
+  viewReceiver = null
+  if (receiver) await receiver.dispose()
+}
+
+watch([activeKey, activeGroupIsPrimary, () => secondaryGroup.value?.activeKey], syncViewReceiverDetailHosts)
 
 function applyOpenTarget(p: Record<string, string>): void {
   const sidebar = p.sidebar
@@ -1856,8 +2471,8 @@ onMounted(() => {
   window.addEventListener('keydown', onAppKeydown)
   window.addEventListener('keydown', onBcCaptureKeydown, { capture: true })
   document.addEventListener('click', closeBcDropdown)
-  const targetSubscription = viewRuntime.onOpenTarget(applyOpenTarget)
-  offOpenTarget = () => targetSubscription.dispose()
+  viewReceiverActive = true
+  void mountViewReceiver()
   if (initialBranchDiffBase) openBranchDiff({ base: initialBranchDiffBase, compare: initialBranchDiffCompare })
   // Debounced at 300 ms like useGit's own listener: one git operation reaches
   // us twice (GitWatcher plus app.py's own broadcast).
@@ -1873,8 +2488,7 @@ onMounted(() => {
 onUnmounted(() => {
   offThemeSettingsChange?.()
   offThemeSettingsChange = null
-  offOpenTarget?.()
-  offOpenTarget = null
+  void disposeViewReceiver()
   offGitChanged?.()
   offGitChanged = null
   if (gitChangedTimer !== null) { clearTimeout(gitChangedTimer); gitChangedTimer = null }
@@ -1995,21 +2609,32 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
           pasteToCli(`Fix this problem: ${p.diag.severity.toUpperCase()}: ${p.diag.message} at ${loc}${p.diag.source ? ' (' + p.diag.source + ')' : ''}`)
         }"
       />
+      <div v-if="viewReceiverLeftContributions.length" class="ide-receiver-catalog">
+        <div class="ide-receiver-catalog-title">Available Views</div>
+        <button
+          v-for="contribution in viewReceiverLeftContributions"
+          :key="contribution.contributionKey"
+          type="button"
+          class="ide-receiver-catalog-item"
+          @click="openReceiverLeftContribution(contribution.contributionKey)"
+        >{{ contribution.title }}</button>
+      </div>
+      <div :ref="viewReceiverContainers.left" class="ide-receiver-items ide-receiver-items--left" />
     </div>
     <div v-show="!sidebarHidden" class="ide-resize-handle" @mousedown.prevent="onResizeStart" />
 
     <!-- Editor area -->
     <div class="ide-main-container" :class="{ 'ide-split': secondaryGroup }">
-      <div class="ide-main" :class="{ 'group-active': activeGroupIsPrimary && secondaryGroup }">
+      <div class="ide-main" :class="{ 'group-active': activeGroupIsPrimary && secondaryGroup }" @mousedown="activeGroupIsPrimary = true">
       <div v-if="openFiles.length && !zenMode" class="ide-tab-bar">
         <div ref="tabsEl" class="ide-tabs">
           <div
             v-for="f in openFiles"
             :key="f.id"
             class="ide-tab"
-            :class="{ active: tabKey(f) === activeKey }"
-            :title="(f.kind === 'diff' || f.kind === 'conflict') ? f.filepath : tabDisplayPath(f)"
-            @click="activeKey = tabKey(f)"
+            :class="{ active: tabKey(f) === activeKey, 'ide-tab--closing': f.kind === 'provider' && f.closing }"
+            :title="f.kind === 'provider' ? f.name : (f.kind === 'diff' || f.kind === 'conflict') ? f.filepath : tabDisplayPath(f)"
+            @click="activeKey = tabKey(f); activeGroupIsPrimary = true"
             @contextmenu.prevent="openTabCtxMenu($event, tabKey(f))"
           >
             <span v-if="f.kind === 'diff'" class="ide-tab-diff-badge" :class="f.commit ? 'commit' : f.staged ? 'staged' : 'unstaged'">{{ f.commit ? 'C' : f.staged ? 'S' : 'U' }}</span>
@@ -2017,7 +2642,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
             <span v-else-if="f.kind === 'branch-diff'" class="ide-tab-diff-badge branch-diff-badge">±</span>
             <span class="ide-tab-name">{{ f.name }}</span>
             <span v-if="f.dirty" class="ide-tab-dirty" :title="$t('label.unsaved')">●</span>
-            <button class="ide-tab-close" :title="$t('action.close')" @click.stop="closeFile(tabKey(f))">✕</button>
+            <button class="ide-tab-close" :disabled="f.kind === 'provider' && f.closing" :title="$t('action.close')" @click.stop="closeFile(tabKey(f))">✕</button>
           </div>
         </div>
         <div v-if="activeFile?.kind === 'file'" class="ide-tab-actions">
@@ -2041,7 +2666,7 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
       </div>
 
       <!-- Breadcrumb -->
-      <div v-if="activeKey" class="ide-breadcrumb">
+      <div v-if="activePath.length" class="ide-breadcrumb">
         <template v-for="(seg, i) in activePath" :key="i">
           <span v-if="i > 0" class="ide-bc-sep">›</span>
           <span
@@ -2053,12 +2678,14 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
       </div>
 
       <div class="ide-editors">
+        <div :ref="viewReceiverDetailContainers.primary" class="ide-receiver-items ide-receiver-items--detail" hidden />
         <template v-for="f in openFiles" :key="f.id">
           <!-- Plan view: .plan.md files in plan mode, and plain .md files in
                markdown preview mode (same rendering pipeline). -->
           <PlanFileView
             v-if="f.kind === 'file' && ((isPlanFile(f.relPath) && planViewFiles.has(tabKey(f))) || (isMarkdownFile(f.relPath) && previewFiles.has(tabKey(f))))"
             v-show="tabKey(f) === activeKey"
+            :ref="(el) => setPlanFileRef(tabKey(f), el)"
             :workspace-path="fileWs(f)"
             :rel-path="f.relPath"
             :backend="backend"
@@ -2162,14 +2789,16 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
             v-for="f in secondaryGroup.files"
             :key="f.id"
             class="ide-tab"
-            :class="{ active: tabKey(f) === secondaryGroup.activeKey }"
-            @click="secondaryGroup.activeKey = tabKey(f)"
+            :class="{ active: tabKey(f) === secondaryGroup.activeKey, 'ide-tab--closing': f.kind === 'provider' && f.closing }"
+            @click="secondaryGroup.activeKey = tabKey(f); activeGroupIsPrimary = false"
+            @contextmenu="onSecondaryTabContextMenu($event, f)"
           >
             <span class="ide-tab-name">{{ f.name }}</span>
-            <button class="ide-tab-close" :title="$t('action.close')" @click.stop="closeFileInSecondary(tabKey(f))">✕</button>
+            <button class="ide-tab-close" :disabled="f.kind === 'provider' && f.closing" :title="$t('action.close')" @click.stop="closeFileInSecondary(tabKey(f))">✕</button>
           </div>
         </div>
         <div class="ide-editors">
+          <div :ref="viewReceiverDetailContainers.secondary" class="ide-receiver-items ide-receiver-items--detail" hidden />
           <template v-for="f in secondaryGroup.files" :key="'sec:' + f.id">
             <EditorPane
               v-if="f.kind === 'file'"
@@ -2430,15 +3059,24 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
   <!-- Tab right-click context menu -->
   <teleport to="body">
     <div v-if="tabCtxMenu" class="ide-tab-ctx" :style="{ left: tabCtxMenu.x + 'px', top: tabCtxMenu.y + 'px' }" @click.stop @mousedown.stop>
-      <div class="ide-tab-ctx-item" @click="closeFile(tabCtxMenu!.key).then(closeTabCtxMenu)">{{ $t('action.close') }}</div>
-      <div class="ide-tab-ctx-item" @click="ctxCloseOthers(tabCtxMenu!.key)">{{ $t('action.close-others') }}</div>
-      <div class="ide-tab-ctx-item" @click="ctxCloseRight(tabCtxMenu!.key)">{{ $t('action.close-to-right') }}</div>
-      <div class="ide-tab-ctx-item" @click="ctxCloseLeft(tabCtxMenu!.key)">{{ $t('action.close-to-left') }}</div>
-      <div class="ide-tab-ctx-item" @click="ctxCloseAll">{{ $t('action.close-all') }}</div>
-      <div class="ide-tab-ctx-sep" />
-      <div class="ide-tab-ctx-item" :class="{ disabled: !tabCtxIsFile }" @click="ctxCopyPath(tabCtxMenu!.key)">{{ $t('action.copy-path') }}</div>
-      <div class="ide-tab-ctx-item" :class="{ disabled: !tabCtxIsFile }" @click="ctxCopyRelPath(tabCtxMenu!.key)">{{ $t('action.copy-relative-path') }}</div>
-      <div v-if="tabCtxIsFile" class="ide-tab-ctx-item" @click="ctxRevealInFinder(tabCtxMenu!.key)">{{ $t('action.reveal-in-finder') }}</div>
+      <div v-if="tabCtxProvider" class="ide-tab-ctx-item" @click="ctxCloseProviderTab">{{ $t('action.close') }}</div>
+      <div v-else class="ide-tab-ctx-item" @click="closeFile(tabCtxMenu!.key).then(closeTabCtxMenu)">{{ $t('action.close') }}</div>
+      <div
+        v-if="tabCtxProvider"
+        class="ide-tab-ctx-item"
+        :class="{ disabled: tabCtxProvider.closing || !tabCtxProvider.itemId }"
+        @click="ctxMoveProviderTab"
+      >{{ tabCtxMenu.group === 'primary' ? 'Move to Secondary Editor Group' : 'Move to Primary Editor Group' }}</div>
+      <template v-if="tabCtxMenu.group === 'primary'">
+        <div class="ide-tab-ctx-item" @click="ctxCloseOthers(tabCtxMenu!.key)">{{ $t('action.close-others') }}</div>
+        <div class="ide-tab-ctx-item" @click="ctxCloseRight(tabCtxMenu!.key)">{{ $t('action.close-to-right') }}</div>
+        <div class="ide-tab-ctx-item" @click="ctxCloseLeft(tabCtxMenu!.key)">{{ $t('action.close-to-left') }}</div>
+        <div class="ide-tab-ctx-item" @click="ctxCloseAll">{{ $t('action.close-all') }}</div>
+        <div class="ide-tab-ctx-sep" />
+        <div class="ide-tab-ctx-item" :class="{ disabled: !tabCtxIsFile }" @click="ctxCopyPath(tabCtxMenu!.key)">{{ $t('action.copy-path') }}</div>
+        <div class="ide-tab-ctx-item" :class="{ disabled: !tabCtxIsFile }" @click="ctxCopyRelPath(tabCtxMenu!.key)">{{ $t('action.copy-relative-path') }}</div>
+        <div v-if="tabCtxIsFile" class="ide-tab-ctx-item" @click="ctxRevealInFinder(tabCtxMenu!.key)">{{ $t('action.reveal-in-finder') }}</div>
+      </template>
     </div>
     <div v-if="tabCtxMenu" class="ide-tab-ctx-backdrop" @mousedown="closeTabCtxMenu" />
   </teleport>
@@ -2572,6 +3210,16 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
 }
 .ide-resize-handle:hover { background: var(--accent-emphasis); }
 .ide-sidebar > * { flex: 1; min-height: 0; }
+.ide-receiver-items { display: none; min-width: 0; min-height: 0; }
+.ide-receiver-items:has(.ide-receiver-slot-item > iframe) { display: flex; flex: 1 1 0; flex-direction: column; }
+.ide-receiver-slot-item { flex: 1 1 0; min-width: 0; min-height: 0; }
+.ide-receiver-slot-item > iframe { display: block; width: 100%; height: 100%; border: 0; }
+.ide-sidebar > .ide-receiver-items { flex: 0 0 auto; }
+.ide-sidebar > .ide-receiver-items:has(.ide-receiver-slot-item > iframe) { flex: 1 1 0; }
+.ide-sidebar > .ide-receiver-catalog { flex: 0 0 auto; border-top: 1px solid var(--border-muted); padding: 6px; }
+.ide-receiver-catalog-title { color: var(--text-muted); font-size: 11px; font-weight: 600; padding: 2px 4px 5px; }
+.ide-receiver-catalog-item { display: block; width: 100%; border: 0; border-radius: 3px; background: transparent; color: var(--text-primary); cursor: pointer; overflow: hidden; padding: 4px; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+.ide-receiver-catalog-item:hover { background: var(--bg-hover); }
 
 .ide-main-container {
   flex: 1;

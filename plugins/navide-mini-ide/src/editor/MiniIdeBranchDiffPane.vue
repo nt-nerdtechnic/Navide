@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { BranchDiffPane, useGit, type GitBranchDiffPort, type GitTransport } from '@navide/navide-git/composition'
+import { BranchDiffPane, useGit, type GitBranchDiffPort, type GitTransport } from '../git-composition'
 
 const props = defineProps<{
   workspacePath: string

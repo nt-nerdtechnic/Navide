@@ -83,4 +83,20 @@ describe('plugin contribution catalog', () => {
     expect(entries.map((entry) => entry.location)).toEqual(locations)
     expect(entries.every((entry) => entry.pluginId === 'acme.placements')).toBe(true)
   })
+
+  it('preserves strict composition metadata for Host routing', () => {
+    const [entry] = buildPluginContributionCatalog([
+      descriptor('acme.composed', [{
+        id: 'left', contributionKey: 'acme.composed.left', kind: 'custom', location: 'left',
+        title: 'Left', entryFile: '/acme/left.html', detailView: 'detail',
+        targetSchema: 'schemas/item.json',
+        receives: { protocolVersion: 1, locations: ['left', 'detail'], editorTargets: { protocolVersion: 1 } },
+      }]),
+    ])
+    expect(entry).toMatchObject({
+      detailView: 'detail',
+      targetSchema: 'schemas/item.json',
+      receives: { protocolVersion: 1, locations: ['left', 'detail'], editorTargets: { protocolVersion: 1 } },
+    })
+  })
 })

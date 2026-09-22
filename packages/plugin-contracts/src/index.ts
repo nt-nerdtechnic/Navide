@@ -31,7 +31,8 @@ export type StorageGetResult =
   | { found: true; value: JsonValue }
   | { found: false; value: null }
 
-export const V2_VIEW_LOCATIONS = ['top', 'bottom', 'right', 'left', 'main', 'window'] as const
+export const V2_VIEW_LOCATIONS = ['top', 'bottom', 'right', 'left', 'main', 'window', 'detail'] as const
+export const V2_RECEIVER_LOCATIONS = ['left', 'detail'] as const
 export const V2_SYSTEM_NAMESPACES = ['fs', 'ui', 'aiCli'] as const
 export const V2_SHELL_MODES = ['allowlist', 'full'] as const
 export const EXECUTION_POLICY_SCHEMA_VERSION = 1 as const
@@ -53,6 +54,13 @@ export type PluginManifestV2Permissions = {
   shell?: PluginShellMode
 }
 
+export type PluginManifestV2Receiver = {
+  protocolVersion: 1
+  locations: (typeof V2_RECEIVER_LOCATIONS)[number][]
+  editorTargets?: { protocolVersion: 1 }
+  closeGuard?: { protocolVersion: 1 }
+}
+
 export type PluginManifestV2View = {
   id: string
   kind: 'custom'
@@ -60,6 +68,9 @@ export type PluginManifestV2View = {
   title: string
   icon?: string
   entry: string
+  detailView?: string
+  targetSchema?: string
+  receives?: PluginManifestV2Receiver
 }
 
 export type PluginManifestV2 = {
@@ -432,7 +443,7 @@ function parseViews(value: unknown): { views: PluginManifestV2View[] } {
   }
   const views = contributes.views.map((raw, index) => {
     const view = assertObject(raw, `manifest contributes.views[${index}]`)
-    assertOnlyKeys(view, ['id', 'kind', 'location', 'title', 'icon', 'entry'], `manifest contributes.views[${index}]`)
+    assertOnlyKeys(view, ['id', 'kind', 'location', 'title', 'icon', 'entry', 'detailView', 'targetSchema', 'receives'], `manifest contributes.views[${index}]`)
     const id = stringValue(required(view, 'id', `manifest contributes.views[${index}]`), `manifest contributes.views[${index}].id`)
     if (!VIEW_ID.test(id)) fail(`manifest contributes.views[${index}].id is invalid`)
     if (view.kind !== 'custom') fail(`manifest contributes.views[${index}].kind must be 'custom'`)
@@ -449,12 +460,54 @@ function parseViews(value: unknown): { views: PluginManifestV2View[] } {
       entry,
     }
     if (view.icon !== undefined) parsed.icon = safePath(view.icon, `manifest contributes.views[${index}].icon`)
+    if (view.detailView !== undefined) {
+      parsed.detailView = stringValue(view.detailView, `manifest contributes.views[${index}].detailView`)
+      if (!VIEW_ID.test(parsed.detailView)) fail(`manifest contributes.views[${index}].detailView is invalid`)
+    }
+    if (view.targetSchema !== undefined) {
+      parsed.targetSchema = safePath(view.targetSchema, `manifest contributes.views[${index}].targetSchema`)
+      if (!parsed.targetSchema.endsWith('.json')) fail(`manifest contributes.views[${index}].targetSchema must be a JSON file`)
+    }
+    if (view.receives !== undefined) {
+      const receives = assertObject(view.receives, `manifest contributes.views[${index}].receives`)
+      assertOnlyKeys(receives, ['protocolVersion', 'locations', 'editorTargets', 'closeGuard'], `manifest contributes.views[${index}].receives`)
+      if (receives.protocolVersion !== 1) fail(`manifest contributes.views[${index}].receives.protocolVersion must be 1`)
+      const locations = uniqueStringArray(receives.locations, `manifest contributes.views[${index}].receives.locations`, 1, 2)
+      if (locations.some((location) => !V2_RECEIVER_LOCATIONS.includes(location as (typeof V2_RECEIVER_LOCATIONS)[number]))) {
+        fail(`manifest contributes.views[${index}].receives.locations contains an invalid location`)
+      }
+      const receiver: PluginManifestV2Receiver = {
+        protocolVersion: 1,
+        locations: locations as PluginManifestV2Receiver['locations'],
+      }
+      if (receives.editorTargets !== undefined) {
+        const editorTargets = assertObject(receives.editorTargets, `manifest contributes.views[${index}].receives.editorTargets`)
+        assertOnlyKeys(editorTargets, ['protocolVersion'], `manifest contributes.views[${index}].receives.editorTargets`)
+        if (editorTargets.protocolVersion !== 1) fail(`manifest contributes.views[${index}].receives.editorTargets.protocolVersion must be 1`)
+        receiver.editorTargets = { protocolVersion: 1 }
+      }
+      if (receives.closeGuard !== undefined) {
+        const closeGuard = assertObject(receives.closeGuard, `manifest contributes.views[${index}].receives.closeGuard`)
+        assertOnlyKeys(closeGuard, ['protocolVersion'], `manifest contributes.views[${index}].receives.closeGuard`)
+        if (closeGuard.protocolVersion !== 1) fail(`manifest contributes.views[${index}].receives.closeGuard.protocolVersion must be 1`)
+        receiver.closeGuard = { protocolVersion: 1 }
+      }
+      parsed.receives = receiver
+    }
+    if (parsed.detailView !== undefined && parsed.location !== 'left') fail(`manifest contributes.views[${index}].detailView is only valid for a left view`)
+    if (parsed.targetSchema !== undefined && parsed.location !== 'detail') fail(`manifest contributes.views[${index}].targetSchema is only valid for a detail view`)
+    if (parsed.receives !== undefined && parsed.location !== 'window') fail(`manifest contributes.views[${index}].receives is only valid for a window view`)
     return parsed
   })
   const ids = new Set<string>()
   for (const view of views) {
     if (ids.has(view.id)) fail(`manifest contributes.views contains duplicate id '${view.id}'`)
     ids.add(view.id)
+  }
+  for (const view of views) {
+    if (view.detailView !== undefined && !views.some((candidate) => candidate.id === view.detailView && candidate.location === 'detail')) {
+      fail(`manifest contributes.views detailView '${view.detailView}' must reference a detail view in the same package`)
+    }
   }
   return { views }
 }
@@ -530,6 +583,7 @@ export function manifestReferencedFiles(manifest: PluginManifestV2): string[] {
   for (const view of manifest.contributes?.views ?? []) {
     paths.push(view.entry)
     if (view.icon) paths.push(view.icon)
+    if (view.targetSchema) paths.push(view.targetSchema)
   }
   if (manifest.marketplace.icon) paths.push(manifest.marketplace.icon)
   if (manifest.backend) paths.push(manifest.backend.entry)

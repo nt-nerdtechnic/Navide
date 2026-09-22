@@ -64,6 +64,20 @@ function retryLoad(): void {
   void load()
 }
 const editorRef = ref<InstanceType<typeof EditorViewMonaco> | null>(null)
+const closePrepared = ref(false)
+let closePreparation: { isCurrent(): boolean; release(): void } | null = null
+let readsInFlight = 0
+let writesInFlight = 0
+
+function isClosePrepared(): boolean { return closePrepared.value }
+async function trackRead<T>(operation: () => Promise<T>): Promise<T> {
+  readsInFlight++
+  try { return await operation() } finally { readsInFlight-- }
+}
+async function trackWrite<T>(operation: () => Promise<T>): Promise<T> {
+  writesInFlight++
+  try { return await operation() } finally { writesInFlight-- }
+}
 
 const model = 'qwen2:latest' // analyzer's default; rewrite/complete proxy to local LLM
 const langOverride = ref<string | null>(null)
@@ -164,18 +178,26 @@ function convertToEOL(text: string, target: EOL): string {
   return target === 'CRLF' ? normalized.replace(/\n/g, '\r\n') : normalized
 }
 function changeEOL(target: EOL): void {
-  if (eol.value === target) return
+  if (isClosePrepared() || eol.value === target) return
   content.value = convertToEOL(content.value, target)
   eol.value = target
   dirty.value = true
 }
 
-async function load(): Promise<void> {
+let pendingLoad: Promise<void> | null = null
+function load(): Promise<void> {
+  if (isClosePrepared()) return Promise.resolve()
+  const task = loadFile()
+  pendingLoad = task
+  return task
+}
+async function loadFile(): Promise<void> {
   try {
-    const p = await props.port.readFile({
+    const p = await trackRead(() => props.port.readFile({
       workspacePath: props.workspacePath,
       relPath: props.relPath,
-    })
+    }))
+    if (isClosePrepared()) return
     if (!p?.ok) {
       // Binary / image / oversized file — show special UI instead of error text
       if (p?.is_binary || p?.is_image) {
@@ -187,7 +209,8 @@ async function load(): Promise<void> {
         // Fetch image bytes as a data URL (a raw file:// src is blocked by
         // webSecurity from the dev http origin). Empty result → placeholder.
         if (isImageFile.value) {
-          imageDataUrl.value = await props.port.readImage({ workspacePath: props.workspacePath, relPath: props.relPath })
+          imageDataUrl.value = await trackRead(() => props.port.readImage({ workspacePath: props.workspacePath, relPath: props.relPath }))
+          if (isClosePrepared()) return
         }
         return
       }
@@ -219,6 +242,7 @@ const lastEditLine = ref<number | null>(null)
 const lastEditCol = ref<number | null>(null)
 
 function onChange(v: string): void {
+  if (isClosePrepared()) return
   content.value = v
   dirty.value = true
   const cur = editorRef.value?.getCursor()
@@ -231,7 +255,7 @@ function navigateToLastEdit(): void {
 }
 
 async function save(opts: { force?: boolean } = {}): Promise<void> {
-  if (!dirty.value) return
+  if (isClosePrepared() || !dirty.value) return
   const preContent = content.value // capture before the async write
   const snapshot = convertToEOL(preContent, eol.value)
   try {
@@ -244,7 +268,8 @@ async function save(opts: { force?: boolean } = {}): Promise<void> {
     if (fileCodec.value) params.encoding = fileCodec.value
     // Conflict detection — only when the backend gave us an mtime baseline.
     if (!opts.force && fileMtime.value !== null) params.expectedMtime = fileMtime.value
-    const p = await props.port.writeFile(params)
+    const p = await trackWrite(() => props.port.writeFile(params))
+    if (isClosePrepared()) return
     if (p?.conflict) {
       saveConflict.value = true
       return
@@ -265,13 +290,15 @@ async function save(opts: { force?: boolean } = {}): Promise<void> {
 
 // ── Save conflict actions (file changed on disk while dirty) ─────────────────
 function conflictOverwrite(): void {
+  if (isClosePrepared()) return
   saveConflict.value = false
   void save({ force: true })
 }
 async function conflictReload(): Promise<void> {
+  if (isClosePrepared()) return
   saveConflict.value = false
   await load()
-  dirty.value = false
+  if (!isClosePrepared()) dirty.value = false
 }
 
 // ── Cmd+K rewrite ─────────────────────────────────────────────────────────────
@@ -339,6 +366,7 @@ function computeProposalDiff(oldText: string, newText: string): Array<{ type: '+
 }
 
 function openCmdK(): void {
+  if (isClosePrepared()) return
   const range = toEditorRange(editorRef.value?.getSelectionRange() ?? null)
   const code = editorRef.value?.getSelectionText() ?? ''
   cmdk.value = { open: true, instruction: '', busy: false, range, code }
@@ -354,7 +382,7 @@ function closeCmdK(): void {
 const QUESTION_RE = /^(?:what|how|why|when|where|who|which|explain|does|is|are|can|should|could|would|tell me|describe|what'?s|how'?s)\b/i
 
 async function submitCmdK(): Promise<void> {
-  if (cmdk.value.busy) return
+  if (isClosePrepared() || cmdk.value.busy) return
   const instruction = cmdk.value.instruction.trim()
   if (!instruction) return
   if (!cmdk.value.range || !cmdk.value.code) {
@@ -375,6 +403,7 @@ async function submitCmdK(): Promise<void> {
       language: lang.value,
       model,
     })
+    if (isClosePrepared()) return
     if (!result.ok || !result.text) {
       void alert(result.error || 'Rewrite failed', { title: 'Cmd+K' })
       return
@@ -397,7 +426,7 @@ async function submitCmdK(): Promise<void> {
 }
 
 function acceptProposal(): void {
-  if (!proposal.value) return
+  if (isClosePrepared() || !proposal.value) return
   editorRef.value?.applyEditExternal(proposal.value.range, proposal.value.newText)
   proposal.value = null
   dirty.value = true
@@ -582,7 +611,7 @@ function openReplace(): void {
   void nextTick(() => replaceInputEl.value?.focus())
 }
 function replaceNext(): void {
-  if (findIdx.value < 0 || !findMatches.value.length) return
+  if (isClosePrepared() || findIdx.value < 0 || !findMatches.value.length) return
   const m = findMatches.value[findIdx.value]
   let replacement = replaceQuery.value
   if (findRegex.value) {
@@ -603,7 +632,7 @@ function replaceNext(): void {
   void nextTick(() => computeMatches({ navigate: true }))
 }
 function replaceAll(): void {
-  if (!findMatches.value.length) return
+  if (isClosePrepared() || !findMatches.value.length) return
   const q = findQuery.value
   const oldText = editorRef.value?.getValue() ?? content.value
   let newText: string
@@ -739,9 +768,10 @@ watch(ctxOpen, (open) => {
 })
 async function ctxPaste(): Promise<void> {
   closeContextMenu()
+  if (isClosePrepared()) return
   try {
     const text = await navigator.clipboard.readText()
-    if (text) editorRef.value?.insertText(text)
+    if (!isClosePrepared() && text) editorRef.value?.insertText(text)
   } catch { /* permission denied */ }
   editorRef.value?.focus()
 }
@@ -753,6 +783,7 @@ function ctxCopy(): void {
 }
 function ctxCut(): void {
   closeContextMenu()
+  if (isClosePrepared()) return
   const sel = editorRef.value?.getSelectionText() ?? ''
   if (sel) {
     void navigator.clipboard.writeText(sel)
@@ -784,7 +815,7 @@ function onEditorBodyFocusout(e: FocusEvent): void {
 }
 
 async function requestGhost(): Promise<void> {
-  if (ghostBusy.value) return
+  if (isClosePrepared() || ghostBusy.value) return
   const cur = editorRef.value?.getCursor()
   const value = editorRef.value?.getValue() ?? ''
   if (!cur) return
@@ -796,6 +827,7 @@ async function requestGhost(): Promise<void> {
     const result = await props.port.complete({
       prefix, suffix, language: lang.value, model,
     })
+    if (isClosePrepared()) return
     if (result.ok && result.text) {
       // Guard: cursor may have moved while waiting for the AI response.
       // Showing ghost text at a different position than where it was computed is wrong.
@@ -858,15 +890,15 @@ onMounted(() => {
     // parent directory as workspace root, which no git watcher reports on, so
     // it never auto-reloads here. Correct — that root is not a repo we watch.
     if (workspacePath !== props.workspacePath) return
-    if (!loaded.value || dirty.value) return
+    if (isClosePrepared() || !loaded.value || dirty.value) return
     const preContent = content.value // snapshot to detect edits typed mid-read
     void (async () => {
       try {
-        const result = await props.port.readFile({
+        const result = await trackRead(() => props.port.readFile({
           workspacePath: props.workspacePath,
           relPath: props.relPath,
-        })
-        if (!result.ok) return
+        }))
+        if (isClosePrepared() || !result.ok) return
         // The user may have started typing while the read was in flight —
         // applying the disk version now would clobber those keystrokes.
         if (dirty.value || content.value !== preContent) return
@@ -943,6 +975,7 @@ const ENCODING_OPTIONS = [
 ]
 function openEncodingPicker(): void { encodingPickerOpen.value = !encodingPickerOpen.value; indentPickerOpen.value = false }
 async function reopenWithEncoding(enc: string): Promise<void> {
+  if (isClosePrepared()) return
   encodingPickerOpen.value = false
   // Reopening replaces the buffer with the on-disk content — never silently
   // discard unsaved edits.
@@ -951,7 +984,7 @@ async function reopenWithEncoding(enc: string): Promise<void> {
       'Reopening with a different encoding discards your unsaved changes. Continue?',
       { title: 'Unsaved changes', confirmText: 'Reopen' },
     )
-    if (!ok) return
+    if (!ok || isClosePrepared()) return
   }
   // Map display name → Python codec name for re-open request
   const encMap: Record<string, string> = {
@@ -962,11 +995,12 @@ async function reopenWithEncoding(enc: string): Promise<void> {
     'Shift JIS': 'shift_jis', 'EUC-JP': 'euc_jp', 'EUC-KR': 'euc_kr',
   }
   try {
-    const result = await props.port.readFile({
+    const result = await trackRead(() => props.port.readFile({
       workspacePath: props.workspacePath,
       relPath: props.relPath,
       encoding: encMap[enc] ?? enc.toLowerCase(),
-    })
+    }))
+    if (isClosePrepared()) return
     if (result.ok && result.content !== undefined) {
       content.value = result.content
       fileEncoding.value = enc
@@ -1038,9 +1072,55 @@ function selectAll(): void { editorRef.value?.selectAll() }
 
 function focusEditor(): void { editorRef.value?.focus() }
 
+function prepareClose(): { isCurrent(): boolean; release(): void } | null {
+  if (closePreparation) return closePreparation
+  if (isClosePrepared() || readsInFlight !== 0 || writesInFlight !== 0 || cmdk.value.busy || ghostBusy.value) return null
+  const pane = editorRef.value
+  const modelIdentity = pane?.getModelIdentity()
+  if (!loaded.value || loadError.value || isBinaryFile.value || !pane || !modelIdentity) return null
+
+  const workspacePath = props.workspacePath
+  const relPath = props.relPath
+  closePrepared.value = true
+  pane.setReadOnly(true)
+
+  let released = false
+  const guard = {
+    isCurrent: (): boolean => !released
+      && closePreparation === guard
+      && closePrepared.value
+      && props.workspacePath === workspacePath
+      && props.relPath === relPath
+      && editorRef.value === pane
+      && pane.getModelIdentity() === modelIdentity,
+    release: (): void => {
+      if (released) return
+      released = true
+      if (closePreparation !== guard) return
+      closePreparation = null
+      closePrepared.value = false
+      pane.setReadOnly(false)
+    },
+  }
+  closePreparation = guard
+  return guard
+}
+
+/** Waits for the current load, then positions the existing Monaco model without rereading it. */
+async function revealPositionWhenReady(line: number, column: number): Promise<boolean> {
+  if (!Number.isInteger(line) || line < 1 || !Number.isInteger(column) || column < 1) return false
+  await pendingLoad
+  if (!loaded.value || loadError.value) return false
+  await nextTick()
+  const editor = editorRef.value
+  if (!editor) return false
+  editor.revealPosition(line - 1, column - 1)
+  return true
+}
+
 defineExpose({
-  save, openCmdK, requestGhost, openFind, useSelectionForFind, nextMatch, prevMatch, openGoto,
-  focus: focusEditor,
+  save, prepareClose, openCmdK, requestGhost, openFind, useSelectionForFind, nextMatch, prevMatch, openGoto,
+  focus: focusEditor, revealPositionWhenReady,
   toggleLineComment, addLineComment, removeLineComment, toggleBlockComment, jumpToLine,
   deleteLine, deleteWordLeft, deleteWordRight, deleteLineLeft, deleteLineRight, insertLineBelow, insertLineAbove,
   moveLineUp, moveLineDown, jumpToBracket, selectToBracket, duplicateLineDown, duplicateLineUp,
@@ -1132,6 +1212,7 @@ defineExpose({
         :model-value="content"
         :language="lang"
         :diagnostics="fileDiagnostics"
+        :read-only="closePrepared"
         @update:model-value="onChange"
         @cursor-change="onCursorChange"
       />

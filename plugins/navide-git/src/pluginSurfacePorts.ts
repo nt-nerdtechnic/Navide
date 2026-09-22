@@ -131,12 +131,13 @@ export function createPluginGitFileAccessPort(sdk: PluginCapabilitySdk): GitFile
 
 export function createPluginGitUiPort(sdk: PluginCapabilitySdk): GitWindowUiPort {
   return {
-    async openInEditor({ workspacePath, filepath, line }): Promise<void> {
-      await requireOk(sdk.request('ui.open_in_editor', {
+    async openInEditor({ workspacePath, filepath, line }) {
+      const outcome = await requireOk<{ opened?: boolean; error?: string }>(sdk.request('ui.open_in_editor', {
         workspace_path: workspacePath,
         filepath,
         ...(line === undefined ? {} : { line }),
       }))
+      return { opened: outcome?.opened !== false, ...(outcome?.error ? { error: outcome.error } : {}) }
     },
     async openExternal(url: string): Promise<void> {
       await requireOk(sdk.request('ui.open_external', { url }))
@@ -237,7 +238,7 @@ export function createPluginGitPaneUiPort(sdk: PluginCapabilitySdk): GitPaneUiPo
   const request = <TPayload = unknown>(operation: string, payload: Record<string, unknown> = {}) =>
     requireOk<TPayload>(sdk.hostRequest('git.contribution', { operation, payload }))
   return {
-    openInEditor: windowUi.openInEditor,
+    async openInEditor(args) { await windowUi.openInEditor(args) },
     openExternal: windowUi.openExternal,
     revealPath: windowUi.revealPath,
     async openPath(path) { await request('open_path', { path }) },

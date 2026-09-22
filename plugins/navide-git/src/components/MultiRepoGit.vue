@@ -16,6 +16,8 @@ import {
   settingsReady,
   settingsSet,
 } from '@navide/plugin-ui/shared'
+import { useNotify } from '@navide/plugin-ui/foundation'
+import { preparePaneClose, releasePaneClose, type PaneCloseGuard } from './multiRepoClose'
 
 const GitPane = defineAsyncComponent(() => import('./GitPane.vue'))
 
@@ -47,6 +49,14 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
+const { confirm } = useNotify()
+
+// Mounted panes register here so one close preparation can freeze them all.
+const paneRefs = new Map<string, PaneCloseGuard>()
+function setPaneRef(key: string, el: unknown): void {
+  if (el) paneRefs.set(key, el as PaneCloseGuard)
+  else paneRefs.delete(key)
+}
 
 const gitTransport = props.surfacePorts.gitTransport
 const surfacePorts = props.surfacePorts
@@ -86,9 +96,13 @@ const activeRepo = ref<string>('')
 const savedRepo = ref<string>('')
 // Once the user picks a tab, a late-arriving restore must not override it.
 let userSelected = false
+// Set between an accepted receiver preparation and its commit/cancellation:
+// tab selection, persisted selection and every mounted pane's mutation gate
+// stay frozen so the close transaction cannot race user input.
+const closePrepared = ref(false)
 
 async function restoreSavedRepo(ws: string): Promise<void> {
-  if (!ws) return
+  if (!ws || closePrepared.value) return
   try {
     await settingsReady()
   } catch {
@@ -178,6 +192,7 @@ watch(isMulti, (multi) => {
 watch(
   [allTabs, savedRepo],
   ([tabs, saved]) => {
+    if (closePrepared.value) return
     if (tabs.length === 0) return
 
     const validSaved = !userSelected && saved && tabs.some((r) => r.abs_path === saved)
@@ -194,12 +209,34 @@ watch(
 )
 
 function selectTab(absPath: string): void {
+  if (closePrepared.value) return
   userSelected = true
   activeRepo.value = absPath
   mounted.value.add(absPath)
   if (!props.workspacePath) return
   settingsSet(GIT_WORKSPACE_REPOSITORY_KEY, absPath)
 }
+
+/** Aggregates the mounted panes for one all-or-none receiver preparation. */
+async function prepareClose(): Promise<
+  { accepted: true } | { accepted: false; reason: 'busy' | 'refused' }
+> {
+  if (closePrepared.value) return { accepted: false, reason: 'busy' }
+  const result = await preparePaneClose([...paneRefs.values()], () => confirm(
+    'Git has unsaved input (a commit message or an open form). Close and discard it?',
+    { title: 'Close Git', confirmText: 'Discard and Close' },
+  ))
+  if (result.accepted) closePrepared.value = true
+  return result
+}
+
+function releaseClose(): void {
+  if (!closePrepared.value) return
+  closePrepared.value = false
+  releasePaneClose([...paneRefs.values()])
+}
+
+defineExpose({ prepareClose, releaseClose })
 
 function repoLabel(relPath: string): string {
   if (relPath === '.') return t('label.git-repo-root')
@@ -212,6 +249,7 @@ function repoLabel(relPath: string): string {
   <!-- Single-repo (or 0 repo): transparent passthrough to GitPane -->
   <GitPane
     v-if="!isMulti"
+    :ref="(el) => setPaneRef('single', el)"
     :workspace-path="workspacePath"
     :analyzer-model="analyzerModel"
     :git-transport="gitTransport"
@@ -269,6 +307,7 @@ function repoLabel(relPath: string): string {
         <GitPane
           v-if="mounted.has(repo.abs_path)"
           v-show="activeRepo === repo.abs_path"
+          :ref="(el) => setPaneRef(repo.abs_path, el)"
           :workspace-path="repo.abs_path"
           :analyzer-model="analyzerModel"
           :git-transport="gitTransport"

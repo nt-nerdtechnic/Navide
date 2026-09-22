@@ -132,6 +132,61 @@ describe('B0 integrated Manifest v2 corpus gate', () => {
     expect(() => parseHostManifestJson(raw)).toThrow()
     expect(() => readManifestFromEntries([manifestEntry(raw)])).toThrow()
   })
+
+  it('accepts the strict composition fields through public, Host, and package seams', () => {
+    const manifest = JSON.parse(readFixture('valid', 'frontend-multi-view.json')) as Record<string, any>
+    manifest.contributes.views = [
+      {
+        id: 'left', kind: 'custom', location: 'left', title: 'Left',
+        entry: 'frontend/left/index.html', detailView: 'detail',
+      },
+      {
+        id: 'detail', kind: 'custom', location: 'detail', title: 'Detail',
+        entry: 'frontend/detail/index.html', targetSchema: 'schemas/item.json',
+      },
+      {
+        id: 'window', kind: 'custom', location: 'window', title: 'Window',
+        entry: 'frontend/window/index.html',
+        receives: {
+          protocolVersion: 1, locations: ['left', 'detail'],
+          editorTargets: { protocolVersion: 1 }, closeGuard: { protocolVersion: 1 },
+        },
+      },
+    ]
+    const raw = JSON.stringify(manifest)
+    const parsed = parsePublicManifestV2(parsePublicManifestJson(raw))
+
+    expect(parsed.contributes?.views).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'left', detailView: 'detail' }),
+      expect.objectContaining({ id: 'detail', targetSchema: 'schemas/item.json' }),
+      expect.objectContaining({
+        id: 'window',
+        receives: {
+          protocolVersion: 1, locations: ['left', 'detail'],
+          editorTargets: { protocolVersion: 1 }, closeGuard: { protocolVersion: 1 },
+        },
+      }),
+    ]))
+    expect(parseInstalledManifest(parsed)).toEqual(parsed)
+    expect(parseInstalledManifest(readManifestFromEntries([manifestEntry(raw)]))).toEqual(parsed)
+  })
+
+  it.each([
+    ['detailView on a non-left view', (manifest: Record<string, any>) => { manifest.contributes.views[0].detailView = 'detail' }],
+    ['targetSchema on a non-detail view', (manifest: Record<string, any>) => { manifest.contributes.views[0].targetSchema = 'schemas/item.json' }],
+    ['receives on a non-window view', (manifest: Record<string, any>) => { manifest.contributes.views[0].receives = { protocolVersion: 1, locations: ['left'] } }],
+    ['unsafe targetSchema', (manifest: Record<string, any>) => { manifest.contributes.views[0].location = 'detail'; manifest.contributes.views[0].targetSchema = '../item.json' }],
+    ['unknown receives field', (manifest: Record<string, any>) => { manifest.contributes.views[0].location = 'window'; manifest.contributes.views[0].receives = { protocolVersion: 1, locations: ['left'], extra: true } }],
+    ['unsupported closeGuard version', (manifest: Record<string, any>) => { manifest.contributes.views[0].location = 'window'; manifest.contributes.views[0].receives = { protocolVersion: 1, locations: ['left'], closeGuard: { protocolVersion: 2 } } }],
+    ['unknown closeGuard field', (manifest: Record<string, any>) => { manifest.contributes.views[0].location = 'window'; manifest.contributes.views[0].receives = { protocolVersion: 1, locations: ['left'], closeGuard: { protocolVersion: 1, onPrepare: 'nope' } } }],
+    ['closeGuard without locations', (manifest: Record<string, any>) => { manifest.contributes.views[0].location = 'window'; manifest.contributes.views[0].receives = { protocolVersion: 1, closeGuard: { protocolVersion: 1 } } }],
+  ])('rejects %s through public, Host, and package seams', (_name, mutate) => {
+    const manifest = JSON.parse(readFixture('valid', 'frontend-multi-view.json')) as Record<string, any>
+    mutate(manifest)
+    const raw = JSON.stringify(manifest)
+    expect(() => parsePublicManifestV2(parsePublicManifestJson(raw))).toThrow()
+    expect(() => parseInstalledManifest(JSON.parse(raw))).toThrow()
+  })
 })
 
 describe('Global agent Execution Policy contract gate', () => {

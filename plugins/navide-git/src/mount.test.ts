@@ -41,6 +41,7 @@ vi.mock('./pluginSurfacePorts', () => ({
 }))
 vi.mock('./GitWindowApp.vue', () => ({ default: {} }))
 vi.mock('./GitLeftApp.vue', () => ({ default: {} }))
+vi.mock('./GitDetailApp.vue', () => ({ default: {} }))
 
 describe('Git plugin composition root', () => {
   beforeEach(() => {

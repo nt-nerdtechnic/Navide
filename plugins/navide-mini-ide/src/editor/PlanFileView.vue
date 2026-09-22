@@ -21,11 +21,32 @@ const { toast } = useNotify()
 const { t } = useI18n()
 
 const rawContent = ref('')
+let contentRevision = 0
 const loading = ref(true)
 const loadError = ref('')
 const waitingForBackend = ref(false)
+const closePrepared = ref(false)
+let closePreparation: { isCurrent(): boolean; release(): void } | null = null
+let readsInFlight = 0
+let writesInFlight = 0
+const isReadonly = computed(() => props.readonly === true || closePrepared.value)
+
+function isClosePrepared(): boolean { return closePrepared.value }
+async function trackRead<T>(operation: () => Promise<T>): Promise<T> {
+  readsInFlight++
+  try { return await operation() } finally { readsInFlight-- }
+}
+async function trackWrite<T>(operation: () => Promise<T>): Promise<T> {
+  writesInFlight++
+  try { return await operation() } finally { writesInFlight-- }
+}
+function replaceRawContent(value: string): void {
+  rawContent.value = value
+  contentRevision++
+}
 
 async function loadContent(): Promise<void> {
+  if (isClosePrepared()) return
   if (props.backend.status?.value && props.backend.status.value !== 'connected') {
     loading.value = true
     waitingForBackend.value = true
@@ -36,12 +57,13 @@ async function loadContent(): Promise<void> {
   waitingForBackend.value = false
   loadError.value = ''
   try {
-    const resp = await props.backend.send<{ ok: boolean; content?: string; error?: string }>(
+    const resp = await trackRead(() => props.backend.send<{ ok: boolean; content?: string; error?: string }>(
       'fs.read_file',
       { workspace_path: props.workspacePath, rel_path: props.relPath },
-    )
+    ))
+    if (isClosePrepared()) return
     if (resp.payload?.ok && resp.payload.content !== undefined) {
-      rawContent.value = resp.payload.content
+      replaceRawContent(resp.payload.content)
     } else {
       loadError.value = resp.payload?.error ?? t('pane.plans.file-load-failed')
     }
@@ -192,22 +214,23 @@ const STATUS_CYCLE: Record<TodoStatus, TodoStatus> = {
 }
 
 async function saveTodos(updatedTodos: PlanTodo[]): Promise<boolean> {
-  if (props.readonly) return false
+  if (isReadonly.value) return false
   const plan = parsed.value
   if (!plan) return false
   const newRaw = writePlanFile({ ...plan, todos: updatedTodos }, rawContent.value)
 
   try {
-    const resp = await props.backend.send<{ ok: boolean; error?: string }>('fs.write_file', {
+    const resp = await trackWrite(() => props.backend.send<{ ok: boolean; error?: string }>('fs.write_file', {
       workspace_path: props.workspacePath,
       rel_path: props.relPath,
       content: newRaw,
-    })
+    }))
+    if (isClosePrepared()) return false
     if (!resp.payload?.ok) {
       toast(resp.payload?.error ?? t('pane.plans.save-failed'))
       return false
     }
-    rawContent.value = newRaw
+    replaceRawContent(newRaw)
     toast(t('pane.plans.saved'), { type: 'success' })
     return true
   } catch (err) {
@@ -217,6 +240,7 @@ async function saveTodos(updatedTodos: PlanTodo[]): Promise<boolean> {
 }
 
 async function toggleTodo(todoId: string): Promise<void> {
+  if (isReadonly.value) return
   const plan = parsed.value
   if (!plan) return
   await saveTodos(plan.todos.map((t) => (t.id === todoId ? { ...t, status: STATUS_CYCLE[t.status] } : t)))
@@ -233,6 +257,7 @@ function nextTodoId(todos: PlanTodo[]): string {
 }
 
 async function addTodo(): Promise<void> {
+  if (isReadonly.value) return
   const plan = parsed.value
   const content = newTodoText.value.trim()
   if (!plan || !content) return
@@ -244,6 +269,7 @@ async function addTodo(): Promise<void> {
 }
 
 async function removeTodo(todoId: string): Promise<void> {
+  if (isReadonly.value) return
   const plan = parsed.value
   if (!plan) return
   await saveTodos(plan.todos.filter((t) => t.id !== todoId))
@@ -264,6 +290,7 @@ const editingTodoId = ref<string | null>(null)
 const editTodoText = ref('')
 
 function startEditTodo(todo: PlanTodo): void {
+  if (isReadonly.value) return
   editingTodoId.value = todo.id
   editTodoText.value = todo.content
 }
@@ -274,6 +301,7 @@ function cancelEditTodo(): void {
 }
 
 async function saveEditTodo(todoId: string): Promise<void> {
+  if (isReadonly.value) return
   const plan = parsed.value
   const content = editTodoText.value.trim()
   if (!plan || !content || saving.value) return
@@ -294,6 +322,7 @@ const editingSection = ref<string | null>(null)
 const editSectionText = ref('')
 
 function startEditSection(section: PlanSection): void {
+  if (isReadonly.value) return
   editingSection.value = section.heading
   editSectionText.value = section.body
 }
@@ -307,12 +336,13 @@ function cancelEditSection(): void {
 // lock (expected_mtime). On a conflict, re-read once and retry so a concurrent
 // todo toggle or external edit doesn't clobber the untouched sections.
 async function writeSectionBody(heading: string, edited: string): Promise<boolean> {
-  if (props.readonly) return false
+  if (isReadonly.value) return false
   async function readFresh(): Promise<{ content: string; mtime: number | undefined } | null> {
-    const resp = await props.backend.send<{ ok: boolean; content?: string; mtime?: number; error?: string }>(
+    const resp = await trackRead(() => props.backend.send<{ ok: boolean; content?: string; mtime?: number; error?: string }>(
       'fs.read_file',
       { workspace_path: props.workspacePath, rel_path: props.relPath },
-    )
+    ))
+    if (isClosePrepared()) return null
     if (!resp.payload?.ok || resp.payload.content === undefined) {
       toast(resp.payload?.error ?? t('pane.plans.save-failed'))
       return null
@@ -321,25 +351,27 @@ async function writeSectionBody(heading: string, edited: string): Promise<boolea
   }
 
   try {
-    let fresh = await readFresh()
-    if (!fresh) return false
-    let newRaw = replacePlanSectionBody(fresh.content, heading, edited)
-    let resp = await props.backend.send<{ ok: boolean; conflict?: boolean; error?: string }>('fs.write_file', {
+    const first = await readFresh()
+    if (!first) return false
+    let newRaw = replacePlanSectionBody(first.content, heading, edited)
+    let resp = await trackWrite(() => props.backend.send<{ ok: boolean; conflict?: boolean; error?: string }>('fs.write_file', {
       workspace_path: props.workspacePath,
       rel_path: props.relPath,
       content: newRaw,
-      expected_mtime: fresh.mtime,
-    })
+      expected_mtime: first.mtime,
+    }))
+    if (isClosePrepared()) return false
     if (resp.payload?.conflict) {
-      fresh = await readFresh()
-      if (!fresh) return false
-      newRaw = replacePlanSectionBody(fresh.content, heading, edited)
-      resp = await props.backend.send<{ ok: boolean; conflict?: boolean; error?: string }>('fs.write_file', {
+      const retry = await readFresh()
+      if (!retry) return false
+      newRaw = replacePlanSectionBody(retry.content, heading, edited)
+      resp = await trackWrite(() => props.backend.send<{ ok: boolean; conflict?: boolean; error?: string }>('fs.write_file', {
         workspace_path: props.workspacePath,
         rel_path: props.relPath,
         content: newRaw,
-        expected_mtime: fresh.mtime,
-      })
+        expected_mtime: retry.mtime,
+      }))
+      if (isClosePrepared()) return false
     }
     if (!resp.payload?.ok) {
       toast(resp.payload?.error ?? t('pane.plans.save-failed'))
@@ -354,7 +386,7 @@ async function writeSectionBody(heading: string, edited: string): Promise<boolea
 }
 
 async function saveEditSection(heading: string): Promise<void> {
-  if (saving.value) return
+  if (isReadonly.value || saving.value) return
   saving.value = true
   const ok = await writeSectionBody(heading, editSectionText.value)
   saving.value = false
@@ -362,6 +394,35 @@ async function saveEditSection(heading: string): Promise<void> {
     cancelEditSection()
     await loadContent()
   }
+}
+
+function prepareClose(): { isCurrent(): boolean; release(): void } | null {
+  if (closePreparation) return closePreparation
+  if (props.readonly || isClosePrepared() || loading.value || saving.value || readsInFlight !== 0 || writesInFlight !== 0) return null
+
+  const workspacePath = props.workspacePath
+  const relPath = props.relPath
+  const revision = contentRevision
+  closePrepared.value = true
+
+  let released = false
+  const guard = {
+    isCurrent: (): boolean => !released
+      && closePreparation === guard
+      && closePrepared.value
+      && props.workspacePath === workspacePath
+      && props.relPath === relPath
+      && contentRevision === revision,
+    release: (): void => {
+      if (released) return
+      released = true
+      if (closePreparation !== guard) return
+      closePreparation = null
+      closePrepared.value = false
+    },
+  }
+  closePreparation = guard
+  return guard
 }
 
 function checkboxGlyph(status: TodoStatus): string {
@@ -384,6 +445,8 @@ function badgeClass(status: TodoStatus): string {
   if (status === 'skipped') return 'pfv-badge pfv-badge--skipped'
   return 'pfv-badge pfv-badge--pending'
 }
+
+defineExpose({ prepareClose })
 </script>
 
 <template>
@@ -419,7 +482,7 @@ function badgeClass(status: TodoStatus): string {
         <div class="pfv-card-title-row">
           <div class="pfv-card-title">{{ section.heading }}</div>
           <button
-            v-if="!readonly && editingSection !== section.heading"
+            v-if="!isReadonly && editingSection !== section.heading"
             class="pfv-inline-btn"
             @click="startEditSection(section)"
           >{{ t('pane.plans.edit') }}</button>
@@ -427,17 +490,18 @@ function badgeClass(status: TodoStatus): string {
         <div v-if="editingSection === section.heading" class="pfv-section-edit">
           <textarea
             v-model="editSectionText"
+            :readonly="isReadonly"
             class="pfv-section-textarea"
             :placeholder="t('pane.plans.doc-edit-placeholder')"
             @keydown.esc="cancelEditSection"
           />
           <div class="pfv-edit-actions">
-            <button class="pfv-inline-btn" :disabled="saving" @click="cancelEditSection">
+            <button class="pfv-inline-btn" :disabled="saving || isReadonly" @click="cancelEditSection">
               {{ t('pane.plans.cancel') }}
             </button>
             <button
               class="pfv-inline-btn pfv-inline-btn--primary"
-              :disabled="saving"
+              :disabled="saving || isReadonly"
               @click="saveEditSection(section.heading)"
             >{{ t('pane.plans.save') }}</button>
           </div>
@@ -461,17 +525,18 @@ function badgeClass(status: TodoStatus): string {
       <!-- To-dos header: count + Cursor-style "+ New" -->
       <div class="pfv-todos-head">
         <span class="pfv-todos-count">{{ t('pane.plans.todos-count', { count: parsed.todos.length }) }}</span>
-        <button v-if="!readonly" class="pfv-new-btn" @click="addingTodo = !addingTodo">{{ t('pane.plans.todo-new') }}</button>
+        <button v-if="!isReadonly" class="pfv-new-btn" @click="addingTodo = !addingTodo">{{ t('pane.plans.todo-new') }}</button>
       </div>
       <div v-if="addingTodo" class="pfv-new-row">
         <input
           v-model="newTodoText"
+          :readonly="isReadonly"
           class="pfv-new-input"
           :placeholder="t('pane.plans.todo-describe-placeholder')"
           @keydown.enter="onAddTodoEnter"
           @keydown.esc="addingTodo = false"
         />
-        <button class="pfv-new-btn" @click="addTodo">{{ t('pane.plans.todo-add') }}</button>
+        <button class="pfv-new-btn" :disabled="isReadonly" @click="addTodo">{{ t('pane.plans.todo-add') }}</button>
       </div>
 
       <!-- Phase groups -->
@@ -500,12 +565,13 @@ function badgeClass(status: TodoStatus): string {
           <template v-if="editingTodoId === todo.id">
             <input
               v-model="editTodoText"
+              :readonly="isReadonly"
               class="pfv-todo-edit-input"
               @click.stop
               @keydown.enter="onEditTodoEnter($event, todo.id)"
               @keydown.esc.stop="cancelEditTodo"
             />
-            <button class="pfv-inline-btn" :disabled="saving" @click.stop="cancelEditTodo">{{ t('pane.plans.cancel') }}</button>
+            <button class="pfv-inline-btn" :disabled="saving || isReadonly" @click.stop="cancelEditTodo">{{ t('pane.plans.cancel') }}</button>
             <button
               class="pfv-inline-btn pfv-inline-btn--primary"
               :disabled="saving || !editTodoText.trim()"
@@ -542,12 +608,13 @@ function badgeClass(status: TodoStatus): string {
           <template v-if="editingTodoId === todo.id">
             <input
               v-model="editTodoText"
+              :readonly="isReadonly"
               class="pfv-todo-edit-input"
               @click.stop
               @keydown.enter="onEditTodoEnter($event, todo.id)"
               @keydown.esc.stop="cancelEditTodo"
             />
-            <button class="pfv-inline-btn" :disabled="saving" @click.stop="cancelEditTodo">{{ t('pane.plans.cancel') }}</button>
+            <button class="pfv-inline-btn" :disabled="saving || isReadonly" @click.stop="cancelEditTodo">{{ t('pane.plans.cancel') }}</button>
             <button
               class="pfv-inline-btn pfv-inline-btn--primary"
               :disabled="saving || !editTodoText.trim()"

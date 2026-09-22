@@ -144,4 +144,39 @@ describe('navide-plugin canonical artifacts', () => {
     writeFileSync(join(directory, 'artifact-files.json'), '{"files":["manifest.json"],"files":["manifest.json"]}\n')
     expect(run(['validate', directory], directory).status).not.toBe(0)
   })
+
+  it('admits a manifest-declared detail target schema outside the frontend/assets/backend roots', () => {
+    const manifest = frontendManifest() as {
+      contributes: { views: Array<{ id: string; kind: string; location: string; title: string; entry: string; targetSchema?: string }> }
+    }
+    manifest.contributes.views = [
+      ...manifest.contributes.views,
+      {
+        id: 'detail',
+        kind: 'custom',
+        location: 'detail',
+        title: 'Detail',
+        entry: 'frontend/detail/index.html',
+        targetSchema: 'schemas/detail-target.json',
+      },
+    ]
+    const accepted = root()
+    packageDirectory(accepted, manifest, {
+      'frontend/main/index.html': '<!doctype html>',
+      'frontend/detail/index.html': '<!doctype html>',
+      'schemas/detail-target.json': '{"type":"object"}',
+    })
+    const validated = run(['validate', accepted], accepted)
+    expect(validated.status, validated.stderr).toBe(0)
+
+    // An undeclared file in the same directory is still outside the boundary.
+    const rejected = root()
+    packageDirectory(rejected, manifest, {
+      'frontend/main/index.html': '<!doctype html>',
+      'frontend/detail/index.html': '<!doctype html>',
+      'schemas/detail-target.json': '{"type":"object"}',
+      'schemas/undeclared.json': '{"type":"object"}',
+    })
+    expect(run(['validate', rejected], rejected).status).not.toBe(0)
+  })
 })

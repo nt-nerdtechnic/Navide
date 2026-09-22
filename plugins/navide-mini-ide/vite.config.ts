@@ -1,13 +1,26 @@
 import { defineConfig, type Plugin } from 'vite'
 import vue from '@vitejs/plugin-vue'
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { isAbsolute, resolve } from 'node:path'
 
-const repositoryRoot = resolve(__dirname, '../..')
 const packageRoot = resolve(__dirname)
+const repositoryRoot = resolve(packageRoot, '../..')
 const frontendRoot = resolve(packageRoot, 'frontend')
+const sourceManifest = JSON.parse(readFileSync(resolve(packageRoot, 'manifest.json'), 'utf8'))
+const artifactVersion = process.env.NAVIDE_PLUGIN_ARTIFACT_VERSION
+  ?? (existsSync(resolve(repositoryRoot, 'package.json'))
+    // The repository build stamps the root app version; an external consumer
+    // that copies this config has no root package.json and keeps its own.
+    ? JSON.parse(readFileSync(resolve(repositoryRoot, 'package.json'), 'utf8')).version
+    : sourceManifest.version)
+if (typeof artifactVersion !== 'string' || !/^\d+\.\d+\.\d+$/.test(artifactVersion)) {
+  throw new Error('NAVIDE_PLUGIN_ARTIFACT_VERSION must be strict semver')
+}
 const outputRoot = process.env.NAVIDE_MINI_IDE_DIST_DIR
-  ? resolve(process.env.NAVIDE_MINI_IDE_DIST_DIR)
+  ? (() => {
+      if (!isAbsolute(process.env.NAVIDE_MINI_IDE_DIST_DIR)) throw new Error('NAVIDE_MINI_IDE_DIST_DIR must be absolute')
+      return resolve(process.env.NAVIDE_MINI_IDE_DIST_DIR)
+    })()
   : resolve(repositoryRoot, 'dist-plugins/navide-mini-ide')
 function outputFiles(directory: string): string[] {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => (
@@ -20,8 +33,7 @@ function outputFiles(directory: string): string[] {
 const emitManifest: Plugin = {
   name: 'emit-navide-mini-ide-manifest',
   closeBundle() {
-    const manifest = JSON.parse(readFileSync(resolve(packageRoot, 'manifest.json'), 'utf8'))
-    manifest.version = JSON.parse(readFileSync(resolve(repositoryRoot, 'package.json'), 'utf8')).version
+    const manifest = { ...sourceManifest, version: artifactVersion }
     mkdirSync(outputRoot, { recursive: true })
     writeFileSync(resolve(outputRoot, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`)
     writeFileSync(
@@ -35,20 +47,6 @@ export default defineConfig({
   root: frontendRoot,
   base: './',
   plugins: [vue(), emitManifest],
-  resolve: {
-    // These source mappings correspond exactly to published package exports.
-    // The separate packed-consumer gate verifies their external delivery.
-    alias: [
-      { find: '@navide/navide-git/composition', replacement: resolve(repositoryRoot, 'plugins/navide-git/src/composition.ts') },
-      { find: '@navide/plugin-ui/styles.css', replacement: resolve(repositoryRoot, 'packages/plugin-ui/src/foundation/styles.css') },
-      { find: '@navide/plugin-ui/editor', replacement: resolve(repositoryRoot, 'packages/plugin-ui/src/editor/index.ts') },
-      { find: '@navide/plugin-ui/shared', replacement: resolve(repositoryRoot, 'packages/plugin-ui/src/shared/index.ts') },
-      { find: '@navide/plugin-ui/foundation', replacement: resolve(repositoryRoot, 'packages/plugin-ui/src/foundation/index.ts') },
-      { find: '@navide/plugin-ui', replacement: resolve(repositoryRoot, 'packages/plugin-ui/src/index.ts') },
-      { find: '@navide/plugin-sdk', replacement: resolve(repositoryRoot, 'packages/plugin-sdk/src/index.ts') },
-      { find: '@navide/plugin-contracts', replacement: resolve(repositoryRoot, 'packages/plugin-contracts/src/index.ts') },
-    ],
-  },
   build: {
     outDir: resolve(outputRoot, 'frontend'),
     emptyOutDir: true,

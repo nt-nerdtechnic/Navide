@@ -17,7 +17,7 @@ function sourceText(root: string): string {
 }
 
 describe('navide.git production package boundary', () => {
-  it('declares two custom contributions under one package identity', () => {
+  it('declares left, paired detail, and standalone window contributions under one package identity', () => {
     const manifest = JSON.parse(readFileSync(join(packageRoot, 'manifest.json'), 'utf8')) as {
       schemaVersion: number
       id: string
@@ -32,8 +32,18 @@ describe('navide.git production package boundary', () => {
     expect(manifest.permissions.shell).toBe('allowlist')
     expect(manifest.marketplace.icon).toBe('assets/git.png')
     expect(manifest.contributes?.views).toEqual([
-      { id: 'left', kind: 'custom', location: 'left', title: 'Git', icon: 'assets/git.png', entry: 'frontend/left/index.html' },
-      { id: 'window', kind: 'custom', location: 'window', title: 'Git', icon: 'assets/git.png', entry: 'frontend/window/index.html' },
+      {
+        id: 'left', kind: 'custom', location: 'left', title: 'Git', icon: 'assets/git.png',
+        entry: 'frontend/left/index.html', detailView: 'branch-detail',
+      },
+      {
+        id: 'branch-detail', kind: 'custom', location: 'detail', title: 'Branch Comparison', icon: 'assets/git.png',
+        entry: 'frontend/detail/index.html', targetSchema: 'schemas/branch-comparison.json',
+      },
+      {
+        id: 'window', kind: 'custom', location: 'window', title: 'Git', icon: 'assets/git.png',
+        entry: 'frontend/window/index.html',
+      },
     ])
     expect(existsSync(join(packageRoot, 'assets/git.png'))).toBe(true)
   })
@@ -45,6 +55,7 @@ describe('navide.git production package boundary', () => {
     expect(scanned.descriptor?.packageVersion).toBe('0.1.0')
     expect(scanned.descriptor?.views?.map((view) => view.contributionKey)).toEqual([
       'navide.git.left',
+      'navide.git.branch-detail',
       'navide.git.window',
     ])
   })

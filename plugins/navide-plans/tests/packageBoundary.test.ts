@@ -76,6 +76,8 @@ describe('navide.plans production package boundary', () => {
       '@navide/plugin-sdk',
       '@navide/plugin-ui',
       'vue',
+      'vue-i18n',
+      'yaml',
     ])
 
     const source = sourceText(join(packageRoot, 'src'))
@@ -156,7 +158,11 @@ describe('navide.plans production package boundary', () => {
       scripts?: Record<string, string>
       build?: { extraResources?: Array<{ from?: string; to?: string }> }
     }
-    expect(rootPackage.scripts?.['build:plans:v2']).toContain('plugins/navide-plans/vite.config.ts')
+    const viteConfig = readFileSync(join(packageRoot, 'vite.config.ts'), 'utf8')
+    expect(rootPackage.scripts?.['build:plans:v2']).toBe('vite build --config plugins/navide-plans/vite.config.ts')
+    expect(viteConfig).toContain('NAVIDE_PLANS_DIST_DIR')
+    expect(viteConfig).toContain('NAVIDE_PLUGIN_ARTIFACT_VERSION')
+    expect(viteConfig).toContain("dist-plugins/navide-plans")
     expect(rootPackage.scripts?.['build:plans:backend']).toContain('build-plans-v2-backend.mjs')
     expect(rootPackage.scripts?.['build:plans']).toContain('build:plans:legacy')
     expect(rootPackage.scripts?.['build:plans']).toContain('build:plans:v2')
@@ -185,8 +191,12 @@ describe('navide.plans production package boundary', () => {
     expect(viteConfig).toMatch(/outDir:\s*(?:frontendOutDir|resolve\([^)]*['"]frontend['"]\))/)
     expect(viteConfig).toContain('emptyOutDir: true')
     expect(viteConfig).not.toContain('emptyOutDir: false')
-    expect(viteConfig).toContain("find: '@navide/plugin-contracts'")
-    expect(viteConfig).toContain("packages/plugin-contracts/src/index.ts")
+    expect(viteConfig).toContain('NAVIDE_PLUGIN_ARTIFACT_VERSION')
+    expect(viteConfig).toContain('NAVIDE_PLANS_DIST_DIR')
+    expect(viteConfig).not.toContain('packages/plugin-contracts/src')
+    expect(viteConfig).not.toContain('packages/plugin-sdk/src')
+    expect(viteConfig).not.toContain('packages/plugin-ui/src')
+    expect(viteConfig).not.toContain('alias:')
 
     const realDistBackend = join(repositoryRoot, 'dist-plugins/navide-plans/backend/navide-plans')
     const realBackendStatBefore = existsSync(realDistBackend)

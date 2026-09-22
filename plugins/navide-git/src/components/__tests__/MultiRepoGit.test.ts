@@ -18,6 +18,12 @@ vi.mock('vue-i18n', () => ({
   useI18n: () => ({ t: (k: string) => k }),
 }))
 
+// MultiRepoGit only needs the confirmation affordance from the foundation;
+// loading the real module would require a full i18n instance.
+vi.mock('@navide/plugin-ui/foundation', () => ({
+  useNotify: () => ({ confirm: vi.fn(async () => true), toast: vi.fn(), alert: vi.fn() }),
+}))
+
 // MultiRepoGit owns the lazy composition boundary; the repo-tab tests do not
 // need to load GitPane's transport, menus, or terminal graph. Keeping that
 // boundary mocked also prevents an async child import from outliving a test

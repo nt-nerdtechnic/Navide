@@ -7,17 +7,7 @@
     "strict": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
-    "noEmit": true,
-    "baseUrl": "../..",
-    "paths": {
-      "@navide/navide-git/composition": ["plugins/navide-git/src/composition.ts"],
-      "@navide/plugin-contracts": ["packages/plugin-contracts/src/index.ts"],
-      "@navide/plugin-sdk": ["packages/plugin-sdk/src/index.ts"],
-      "@navide/plugin-ui": ["packages/plugin-ui/src/index.ts"],
-      "@navide/plugin-ui/editor": ["packages/plugin-ui/src/editor/index.ts"],
-      "@navide/plugin-ui/shared": ["packages/plugin-ui/src/shared/index.ts"],
-      "@navide/plugin-ui/foundation": ["packages/plugin-ui/src/foundation/index.ts"]
-    }
+    "noEmit": true
   },
   "include": ["src/**/*.ts", "src/**/*.vue"]
 }

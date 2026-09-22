@@ -28,6 +28,9 @@ const content = ref<string | null>(null)
 const loading = ref(false)
 const loadError = ref('')
 const applying = ref(false)
+// Detail close preparation freezes mutations only when a parent opts in through
+// the exposed private handle; standalone ConflictPane instances stay mutable.
+const closePrepared = ref(false)
 
 // The index's three merge stages (`git show :1:/:2:/:3:`), fetched alongside
 // the working-tree file. Only used to (a) reveal the common ancestor the file
@@ -118,6 +121,7 @@ watch([() => props.filepath], () => {
 })
 
 function choose(conflictIdx: number, choice: ConflictChoice): void {
+  if (closePrepared.value) return
   if (choice === 'manual') {
     // Auto-save current in-progress edit before switching to another conflict's textarea
     if (editingIdx.value !== null && editingIdx.value !== conflictIdx) {
@@ -141,6 +145,7 @@ function choose(conflictIdx: number, choice: ConflictChoice): void {
 }
 
 function saveManual(conflictIdx: number): void {
+  if (closePrepared.value) return
   manualEdits.value = new Map(manualEdits.value).set(conflictIdx, editBuf.value)
   // No longer need the pre-manual backup
   if (_priorChoice.value.has(conflictIdx)) {
@@ -152,6 +157,7 @@ function saveManual(conflictIdx: number): void {
 }
 
 function cancelManual(conflictIdx: number): void {
+  if (closePrepared.value) return
   if (!manualEdits.value.has(conflictIdx)) {
     const prior = _priorChoice.value.get(conflictIdx)
     if (prior !== undefined) {
@@ -173,7 +179,7 @@ function cancelManual(conflictIdx: number): void {
 }
 
 async function applyAndStage(): Promise<void> {
-  if (!allResolved.value || applying.value) return
+  if (closePrepared.value || !allResolved.value || applying.value) return
   // Flush any in-progress textarea edit before applying
   if (editingIdx.value !== null) {
     manualEdits.value = new Map(manualEdits.value).set(editingIdx.value, editBuf.value)
@@ -236,9 +242,33 @@ const blocks = computed<RenderBlock[]>(() => {
   })
 })
 
+function reloadFile(): void {
+  if (!closePrepared.value) void loadFile()
+}
+
+function updateEditBuffer(event: Event): void {
+  if (!closePrepared.value) editBuf.value = (event.target as HTMLTextAreaElement).value
+}
+
+function undoChoice(conflictIdx: number): void {
+  if (!closePrepared.value) choices.value = new Map([...choices.value].filter(([key]) => key !== conflictIdx))
+}
+
 function choiceOf(idx: number): ConflictChoice | undefined {
   return choices.value.get(idx)
 }
+
+function getCloseState(): 'accepted' | 'refused' | 'busy' {
+  if (closePrepared.value || applying.value) return 'busy'
+  if (editingIdx.value !== null || choices.value.size > 0 || manualEdits.value.size > 0) return 'refused'
+  return 'accepted'
+}
+
+function setClosePrepared(prepared: boolean): void {
+  closePrepared.value = prepared
+}
+
+defineExpose({ getCloseState, setClosePrepared })
 </script>
 
 <template>
@@ -257,13 +287,13 @@ function choiceOf(idx: number): ConflictChoice | undefined {
       >{{ $t('label.merge-base') }}</button>
       <button
         class="cp-apply"
-        :disabled="!allResolved || applying || !!mergeAborted || binaryConflict"
+        :disabled="closePrepared || !allResolved || applying || !!mergeAborted || binaryConflict"
         :title="allResolved ? 'Write and stage this file' : 'Resolve all conflicts first'"
         @click="applyAndStage"
       >
         {{ applying ? 'Applying…' : 'Apply & Stage' }}
       </button>
-      <button class="cp-reload" title="Reload" @click="loadFile">
+      <button class="cp-reload" title="Reload" :disabled="closePrepared" @click="reloadFile">
         <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M1.705 8.005a.75.75 0 0 1 .834.656 5.5 5.5 0 0 0 9.592 2.97l-1.204-1.204a.25.25 0 0 1 .177-.427h3.646a.25.25 0 0 1 .25.25v3.646a.25.25 0 0 1-.427.177l-1.38-1.38A7.002 7.002 0 0 1 1.05 8.84a.75.75 0 0 1 .656-.834ZM8 2.5a5.487 5.487 0 0 0-4.131 1.869l1.204 1.204A.25.25 0 0 1 4.896 6H1.25A.25.25 0 0 1 1 5.75V2.104a.25.25 0 0 1 .427-.177l1.38 1.38A7.002 7.002 0 0 1 14.95 7.16a.75.75 0 0 1-1.49.178A5.5 5.5 0 0 0 8 2.5Z"/></svg>
       </button>
     </div>
@@ -303,25 +333,25 @@ function choiceOf(idx: number): ConflictChoice | undefined {
               <span class="cp-head-label theirs">▶ {{ block.theirsLabel || 'theirs' }}</span>
               <div class="cp-conflict-actions">
                 <button
-                  class="cp-btn" :class="{ active: choiceOf(block.conflictIdx!) === 'ours' }"
+                  class="cp-btn" :class="{ active: choiceOf(block.conflictIdx!) === 'ours' }" :disabled="closePrepared"
                   @click="choose(block.conflictIdx!, 'ours')"
                 >{{ $t('action.accept-ours') }}</button>
                 <button
-                  class="cp-btn" :class="{ active: choiceOf(block.conflictIdx!) === 'theirs' }"
-                  @click="choose(block.conflictIdx!, 'theirs')"
+                  class="cp-btn" :class="{ active: choiceOf(block.conflictIdx!) === 'theirs' }" :disabled="closePrepared"
+                  @click="choose(block.conflictIdx!, 'theirs')"},{
                 >{{ $t('action.accept-theirs') }}</button>
                 <button
-                  class="cp-btn" :class="{ active: choiceOf(block.conflictIdx!) === 'both' }"
-                  @click="choose(block.conflictIdx!, 'both')"
+                  class="cp-btn" :class="{ active: choiceOf(block.conflictIdx!) === 'both' }" :disabled="closePrepared"
+                  @click="choose(block.conflictIdx!, 'both')"},{
                 >{{ $t('action.accept-both') }}</button>
                 <button
                   v-if="showBase && block.hasBase"
-                  class="cp-btn" :class="{ active: choiceOf(block.conflictIdx!) === 'base' }"
-                  @click="choose(block.conflictIdx!, 'base')"
+                  class="cp-btn" :class="{ active: choiceOf(block.conflictIdx!) === 'base' }" :disabled="closePrepared"
+                  @click="choose(block.conflictIdx!, 'base')"},{
                 >{{ $t('action.accept-base') }}</button>
                 <button
-                  class="cp-btn edit-btn" :class="{ active: choiceOf(block.conflictIdx!) === 'manual' }"
-                  @click="choose(block.conflictIdx!, 'manual')"
+                  class="cp-btn edit-btn" :class="{ active: choiceOf(block.conflictIdx!) === 'manual' }" :disabled="closePrepared"
+                  @click="choose(block.conflictIdx!, 'manual')"},{
                 >{{ $t('action.edit') }}</button>
               </div>
             </div>
@@ -329,14 +359,16 @@ function choiceOf(idx: number): ConflictChoice | undefined {
             <!-- Manual edit textarea -->
             <div v-if="editingIdx === block.conflictIdx" class="cp-manual-edit">
               <textarea
-                v-model="editBuf"
+                :value="editBuf"
+                :disabled="closePrepared"
+                @input="updateEditBuffer"
                 class="cp-manual-ta"
                 spellcheck="false"
                 rows="6"
               />
               <div class="cp-manual-actions">
-                <button class="cp-btn primary" @click="saveManual(block.conflictIdx!)">{{ $t('action.confirm') }}</button>
-                <button class="cp-btn" @click="cancelManual(block.conflictIdx!)">{{ $t('action.cancel') }}</button>
+                <button class="cp-btn primary" :disabled="closePrepared" @click="saveManual(block.conflictIdx!)">{{ $t('action.confirm') }}</button>
+                <button class="cp-btn" :disabled="closePrepared" @click="cancelManual(block.conflictIdx!)">{{ $t('action.cancel') }}</button>
               </div>
             </div>
 
@@ -393,7 +425,7 @@ function choiceOf(idx: number): ConflictChoice | undefined {
                 <template v-else-if="choiceOf(block.conflictIdx!) === 'base'">✓ {{ $t('label.accepted-base') }}</template>
                 <template v-else>✓ Manually edited</template>
               </span>
-              <button class="cp-undo-btn" @click="choices = new Map([...choices].filter(([k]) => k !== block.conflictIdx!))">Undo</button>
+              <button class="cp-undo-btn" :disabled="closePrepared" @click="undoChoice(block.conflictIdx!)">Undo</button>
             </div>
           </div>
         </div>

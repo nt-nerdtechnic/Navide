@@ -19,7 +19,13 @@
       "kind": "custom",
       "location": "window",
       "title": "Mini-IDE",
-      "entry": "frontend/window/index.html"
+      "entry": "frontend/window/index.html",
+      "receives": {
+        "protocolVersion": 1,
+        "locations": ["left", "detail"],
+        "editorTargets": { "protocolVersion": 1 },
+        "closeGuard": { "protocolVersion": 1 }
+      }
     }]
   }
 }

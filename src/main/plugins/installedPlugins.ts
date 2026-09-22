@@ -144,6 +144,9 @@ function manifestViewsToDescriptors(
       location: view.location,
       title: view.title,
       ...(icon ? { iconFile: join(pluginDir, icon) } : {}),
+      ...(view.detailView ? { detailView: view.detailView } : {}),
+      ...(view.targetSchema ? { targetSchema: view.targetSchema } : {}),
+      ...(view.receives ? { receives: view.receives } : {}),
       entryFile: join(pluginDir, view.entry),
     }
   })

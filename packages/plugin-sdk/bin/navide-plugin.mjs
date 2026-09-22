@@ -178,11 +178,19 @@ function collectFiles(directory, paths, root = realpathSync(directory)) {
 function validateFiles(manifest, files, target, root) {
   const paths = new Set(files.map((file) => file.path))
   if (!paths.has('manifest.json')) fail('package must contain manifest.json at its root')
+  // A view's declared detail target schema is an explicit manifest reference and
+  // may live outside the frontend/assets/backend roots; everything else keeps
+  // the original package boundary.
+  const declaredTargetSchemas = new Set(
+    (manifest.contributes?.views ?? [])
+      .map((view) => view.targetSchema)
+      .filter((path) => typeof path === 'string' && path.length > 0),
+  )
   for (const path of paths) {
     if (path === 'manifest.json' || path === 'README.md') continue
-    if (!path.startsWith('frontend/') && !path.startsWith('assets/') && !path.startsWith('backend/')) {
-      fail(`package entry '${path}' is outside the frontend/assets/backend package boundary`)
-    }
+    if (path.startsWith('frontend/') || path.startsWith('assets/') || path.startsWith('backend/')) continue
+    if (declaredTargetSchemas.has(path)) continue
+    fail(`package entry '${path}' is outside the frontend/assets/backend package boundary`)
   }
   for (const path of manifestReferencedFiles(manifest)) {
     if (!paths.has(path)) fail(`manifest references '${path}', but that file does not exist`)

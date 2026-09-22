@@ -1,14 +1,27 @@
 import { defineConfig, type Plugin } from 'vite'
 import vue from '@vitejs/plugin-vue'
-import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
-import { resolve } from 'node:path'
+import { isAbsolute, relative, resolve } from 'node:path'
 
-const repositoryRoot = resolve(__dirname, '../..')
 const packageRoot = resolve(__dirname)
+const repositoryRoot = resolve(packageRoot, '../..')
 const frontendRoot = resolve(packageRoot, 'frontend')
+const sourceManifest = JSON.parse(readFileSync(resolve(packageRoot, 'manifest.json'), 'utf8'))
+const artifactVersion = process.env.NAVIDE_PLUGIN_ARTIFACT_VERSION
+  ?? (existsSync(resolve(repositoryRoot, 'package.json'))
+    // The repository build stamps the root app version; an external consumer
+    // that copies this config has no root package.json and keeps its own.
+    ? JSON.parse(readFileSync(resolve(repositoryRoot, 'package.json'), 'utf8')).version
+    : sourceManifest.version)
+if (typeof artifactVersion !== 'string' || !/^\d+\.\d+\.\d+$/.test(artifactVersion)) {
+  throw new Error('NAVIDE_PLUGIN_ARTIFACT_VERSION must be strict semver')
+}
 const pluginDistDir = process.env.NAVIDE_PLANS_DIST_DIR
-  ? resolve(process.env.NAVIDE_PLANS_DIST_DIR)
+  ? (() => {
+      if (!isAbsolute(process.env.NAVIDE_PLANS_DIST_DIR)) throw new Error('NAVIDE_PLANS_DIST_DIR must be absolute')
+      return resolve(process.env.NAVIDE_PLANS_DIST_DIR)
+    })()
   : resolve(repositoryRoot, 'dist-plugins/navide-plans')
 const frontendOutDir = resolve(pluginDistDir, 'frontend')
 const legacyAssetsDir = resolve(pluginDistDir, 'assets')
@@ -27,10 +40,30 @@ function sourceFiles(directory: string): string[] {
     .filter((file) => !file.endsWith('.test.ts') && !file.endsWith('.pyc'))
     .sort()
 }
+function packageFiles(packageName: string): string[] {
+  // `require.resolve` cannot resolve these packages: their exports maps expose
+  // only ESM conditions. Mirror Node's node_modules walk instead.
+  let directory = packageRoot
+  for (;;) {
+    const candidate = resolve(directory, 'node_modules', packageName)
+    if (existsSync(resolve(candidate, 'package.json'))) {
+      const files = (current: string): string[] => readdirSync(current, { withFileTypes: true }).flatMap((entry) => {
+        const path = resolve(current, entry.name)
+        return entry.isDirectory() ? files(path) : entry.isFile() ? [path] : []
+      })
+      return files(resolve(candidate, 'dist')).map((file) => relative(candidate, file)).sort()
+        .map((file) => `${packageName}/${file}\0${readFileSync(resolve(candidate, file), 'utf8')}\0`)
+    }
+    const parent = resolve(directory, '..')
+    if (parent === directory) throw new Error(`cannot resolve ${packageName} from ${packageRoot}`)
+    directory = parent
+  }
+}
 const provenanceInputs = [...sourceFiles('src'), ...sourceFiles('backend'), 'manifest.json', 'vite.config.ts']
 const buildId = createHash('sha256')
   .update(provenanceInputs.map((file) => `${file}\0${readFileSync(resolve(packageRoot, file), 'utf8')}\0`).join(''))
-  .update(readFileSync(resolve(repositoryRoot, 'package.json')))
+  .update(`artifact-version\0${artifactVersion}\0`)
+  .update(['@navide/plugin-contracts', '@navide/plugin-sdk', '@navide/plugin-ui'].flatMap(packageFiles).join(''))
   .digest('hex')
   .slice(0, 16)
 
@@ -40,13 +73,7 @@ const emitManifest: Plugin = {
     rmSync(legacyAssetsDir, { recursive: true, force: true })
   },
   closeBundle() {
-    const appVersion = JSON.parse(
-      readFileSync(resolve(repositoryRoot, 'package.json'), 'utf8'),
-    ).version
-    const manifest = JSON.parse(
-      readFileSync(resolve(packageRoot, 'manifest.json'), 'utf8'),
-    )
-    manifest.version = appVersion
+    const manifest = { ...sourceManifest, version: artifactVersion }
     if (process.platform === 'win32') manifest.backend.entry = 'backend/navide-plans.exe'
     mkdirSync(pluginDistDir, { recursive: true })
     writeFileSync(resolve(pluginDistDir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`)
@@ -64,16 +91,6 @@ export default defineConfig({
     __NAVIDE_PLANS_BUILD_ID__: JSON.stringify(buildId),
   },
   plugins: [vue(), emitManifest],
-  resolve: {
-    alias: [
-      { find: '@navide/plugin-ui/styles.css', replacement: resolve(repositoryRoot, 'packages/plugin-ui/src/foundation/styles.css') },
-      { find: '@navide/plugin-ui/shared', replacement: resolve(repositoryRoot, 'packages/plugin-ui/src/shared/index.ts') },
-      { find: '@navide/plugin-ui/foundation', replacement: resolve(repositoryRoot, 'packages/plugin-ui/src/foundation/index.ts') },
-      { find: '@navide/plugin-ui', replacement: resolve(repositoryRoot, 'packages/plugin-ui/src/index.ts') },
-      { find: '@navide/plugin-sdk', replacement: resolve(repositoryRoot, 'packages/plugin-sdk/src/index.ts') },
-      { find: '@navide/plugin-contracts', replacement: resolve(repositoryRoot, 'packages/plugin-contracts/src/index.ts') },
-    ],
-  },
   build: {
     outDir: frontendOutDir,
     emptyOutDir: true,

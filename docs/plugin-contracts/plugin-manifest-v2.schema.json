@@ -88,10 +88,40 @@
       "properties": {
         "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
         "kind": { "const": "custom" },
-        "location": { "enum": ["top", "bottom", "right", "left", "main", "window"] },
+        "location": { "enum": ["top", "bottom", "right", "left", "main", "window", "detail"] },
         "title": { "type": "string", "minLength": 1, "maxLength": 80, "pattern": "^[^\\r\\n<>]+$" },
         "icon": { "$ref": "#/$defs/safePath" },
-        "entry": { "$ref": "#/$defs/htmlPath" }
+        "entry": { "$ref": "#/$defs/htmlPath" },
+        "detailView": { "$ref": "#/$defs/viewId" },
+        "targetSchema": { "$ref": "#/$defs/jsonPath" },
+        "receives": { "$ref": "#/$defs/receives" }
+      }
+    },
+    "receives": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocolVersion", "locations"],
+      "properties": {
+        "protocolVersion": { "const": 1 },
+        "locations": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": { "enum": ["left", "detail"] }
+        },
+        "editorTargets": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["protocolVersion"],
+          "properties": { "protocolVersion": { "const": 1 } }
+        },
+        "closeGuard": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["protocolVersion"],
+          "properties": { "protocolVersion": { "const": 1 } }
+        }
       }
     },
     "backend": {
@@ -107,10 +137,20 @@
         "activation": { "const": "startup" }
       }
     },
+    "viewId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
     "safePath": {
       "type": "string",
       "minLength": 1,
       "pattern": "^(?!/)(?!.*//)(?!.*(?:^|/)\\.(?:/|$))(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)(?!.*\\/$)[A-Za-z0-9._/-]+$"
+    },
+    "jsonPath": {
+      "allOf": [
+        { "$ref": "#/$defs/safePath" },
+        { "pattern": "^[A-Za-z0-9._/-]+\\.json$" }
+      ]
     },
     "backendEntry": {
       "description": "Manifest-level rejection of recognizable source/script filenames. Target executable verification belongs to package validation.",

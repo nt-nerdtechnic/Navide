@@ -34,6 +34,8 @@ vi.mock('electron', () => {
   return {
     app,
     BrowserWindow,
+    // New frame-asset registration runs at module evaluation; tests only need it inert.
+    protocol: { registerSchemesAsPrivileged: () => {}, handle: () => {}, unhandle: () => {} },
     dialog: {
       showMessageBox: () => Promise.resolve({ response: 0 }),
       showOpenDialog: () => Promise.resolve({ canceled: true, filePaths: [] }),

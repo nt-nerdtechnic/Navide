@@ -5,6 +5,16 @@ import { executeCommand } from '@navide/plugin-ui/shared'
 import { _resetKeybindingsState, _resetRegistry } from '@navide/plugin-ui/shared/testing'
 import GitLeftApp from './GitLeftApp.vue'
 
+// The close-guard registration needs a capability bridge that this narrow
+// shortcut test does not stand up; the composition tests cover that seam.
+vi.mock('@navide/plugin-sdk', () => ({
+  createPluginViewRuntimeClient: () => ({
+    openDetail: vi.fn(),
+    onPrepareClose: () => ({ dispose: vi.fn() }),
+    onCloseCancelled: () => ({ dispose: vi.fn() }),
+  }),
+}))
+
 describe('GitLeftApp Host shortcuts', () => {
   beforeEach(() => {
     _resetRegistry()

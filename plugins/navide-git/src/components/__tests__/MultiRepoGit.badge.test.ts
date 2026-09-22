@@ -22,6 +22,10 @@ vi.mock('vue-i18n', () => ({
   useI18n: () => ({ t: (k: string) => k }),
 }))
 
+vi.mock('@navide/plugin-ui/foundation', () => ({
+  useNotify: () => ({ confirm: vi.fn(async () => true), toast: vi.fn(), alert: vi.fn() }),
+}))
+
 // Controllable GitPane stub: renders a marker carrying its workspacePath so a
 // test can locate the pane for a given repo and drive its changes-count emit
 // (the real per-repo count that MultiRepoGit accumulates). Supplied via

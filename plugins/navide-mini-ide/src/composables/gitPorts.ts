@@ -1,4 +1,4 @@
-import { createPluginGitTransport } from '@navide/navide-git/composition'
+import { createPluginGitTransport } from '../git-composition'
 import type { useBackend } from './useBackend'
 
 export function createMiniIdeGitTransport(backend: ReturnType<typeof useBackend>) {

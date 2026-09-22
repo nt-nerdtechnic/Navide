@@ -191,6 +191,22 @@ def test_manifest_v2_referenced_file_is_required() -> None:
         read_package(build_v2_package(manifest, omit_paths={first_entry}))
 
 
+def test_manifest_v2_target_schema_file_is_required() -> None:
+    manifest = contract_manifest()
+    manifest["contributes"]["views"] = [
+        {
+            "id": "detail",
+            "kind": "custom",
+            "location": "detail",
+            "title": "Detail",
+            "entry": "frontend/detail/index.html",
+            "targetSchema": "schemas/item.json",
+        }
+    ]
+    with pytest.raises(PackageError, match="referenced file"):
+        read_package(build_v2_package(manifest, omit_paths={"schemas/item.json"}))
+
+
 def test_duplicate_manifest_key_is_rejected_in_package_reader() -> None:
     raw = (
         CONTRACT_FIXTURES / "invalid-raw" / "duplicate-permission-key.json"

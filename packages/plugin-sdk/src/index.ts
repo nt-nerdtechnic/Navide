@@ -163,16 +163,178 @@ interface RuntimeCapabilityBridge {
   on(type: string, listener: (payload: unknown) => void): () => void
 }
 
+export type PluginEditorFileTarget = {
+  /** Host-validated workspace-relative path. */
+  path: string
+  /** Optional positive, 1-based position. */
+  line?: number
+  column?: number
+  /** Opaque Host-issued source item, scoped to this paired receiver. */
+  sourceItem: string
+}
+
+export type PluginEditorTargetOpenResult = { opened: boolean }
+
+export type PluginReceiverCloseGuardReason =
+  | 'receiver-item-batch'
+  | 'native-window-close'
+  | 'reload'
+  | 'quit'
+
+export type PluginReceiverCloseGuard = {
+  protocolVersion: 1
+  onPrepare(reason: PluginReceiverCloseGuardReason): Promise<PluginDetailCloseDecision>
+  onCancelled(): void
+}
+
+export type PluginReceiverRegistration = {
+  protocolVersion: 1
+  locations: Array<'left' | 'detail'>
+  editorTargets?: {
+    protocolVersion: 1
+    /** Receives only Host-paired editor targets while this registration is live. */
+    onOpen(target: PluginEditorFileTarget): Promise<PluginEditorTargetOpenResult>
+  }
+  closeGuard?: PluginReceiverCloseGuard
+}
+
+export type PluginReceiverOffer =
+  | {
+    offerId: string
+    contributionKey: string
+    title: string
+    /** Host-authored presentation location; never inferred from a contribution key. */
+    location: 'left'
+  }
+  | {
+    offerId: string
+    contributionKey: string
+    title: string
+    /** Host-authored presentation location; never inferred from a contribution key. */
+    location: 'detail'
+    /** Host-derived opaque canonical-resource identity for receiver-local deduplication. */
+    resourceKey: string
+  }
+
+export type PluginReceiverOfferAcceptance =
+  | { accepted: true; itemId: string }
+  | { accepted: false; reason: 'refused' | 'busy' | 'unavailable' | 'timeout' }
+
+export type PluginDetailTargetUpdate = {
+  revision: number
+  target: JsonValue
+}
+
+export type PluginDetailTargetDecision =
+  | { applied: true }
+  | { applied: false; reason: 'refused' | 'busy' }
+
+/** Receiver-selected DOM host. It controls presentation only, never provider authority. */
+export type PluginReceiverMountPlacement = {
+  mountHostId: string
+}
+
+export type PluginReceiverCloseResult =
+  | { closed: true }
+  | { closed: false; reason: 'refused' | 'busy' | 'unavailable' | 'timeout' }
+
+export type PluginOpenDetailParams = {
+  contributionKey: string
+  target: JsonValue
+}
+
+export type PluginOpenDetailResult =
+  | { opened: true }
+  | {
+    opened: false
+    reason: 'provider-missing' | 'provider-unavailable' | 'receiver-unavailable' | 'receiver-unpaired' | 'receiver-refused'
+  }
+
+export type PluginDetailCloseRequest = {
+  closeId: string
+  itemId: string
+  reason: 'user'
+  documentGeneration: number
+}
+
+export type PluginDetailCloseDecision =
+  | { accepted: true; reason: 'accepted' }
+  | { accepted: false; reason: 'refused' | 'busy' }
+
+export type PluginReceiverItemClosed = {
+  itemId: string
+  documentGeneration: number
+}
+
+export type PluginReceiverLeftContribution = {
+  contributionKey: string
+  title: string
+}
+
+export interface PluginViewReceiver {
+  /** Lists Host-catalogued left contributions eligible for this receiver. */
+  listLeftContributions(): Promise<readonly PluginReceiverLeftContribution[]>
+  /** Requests a Host-issued offer; the offer arrives through this receiver's registration callback. */
+  openLeft(contributionKey: string): Promise<void>
+  /** Accepts a matching detail offer by revealing an existing receiver item. */
+  acceptExistingOffer(offerId: string, itemId: string): Promise<PluginReceiverOfferAcceptance>
+  mount(offerId: string, placement: PluginReceiverMountPlacement): Promise<{ itemId: string }>
+  /** Requests the exact provider's guarded normal close; item removal remains Host-notified. */
+  requestClose(itemId: string): Promise<PluginReceiverCloseResult>
+  /** Requests one all-or-none guarded close transaction without exposing its Host identity. */
+  requestCloseTransaction(itemIds: readonly string[]): Promise<PluginReceiverCloseResult>
+  /** Idempotently revoke one exact failed offered item without affecting siblings. */
+  abort(itemId: string): Promise<void>
+  /** Fires after the trusted preload removes the exact item host. */
+  onItemClosed(listener: (item: PluginReceiverItemClosed) => void): Disposable
+  dispose(): Promise<void>
+}
+
 export interface PluginViewRuntimeClient {
   ready(): void
+  hide(): void
+  registerReceiver(registration: PluginReceiverRegistration, onOffer: (offer: PluginReceiverOffer) => void): Promise<PluginViewReceiver>
+  /** Requests the declared paired detail contribution; the Host keeps the target private from the receiver. */
+  openDetail(params: PluginOpenDetailParams): Promise<PluginOpenDetailResult>
+  /** Delivers a revisioned target to this exact admitted detail provider. */
+  onDetailTarget(listener: (update: PluginDetailTargetUpdate) => PluginDetailTargetDecision | Promise<PluginDetailTargetDecision>): Disposable
+  /** Lets a provider decide an exact normal close transaction. */
+  onPrepareClose(listener: (request: PluginDetailCloseRequest) => PluginDetailCloseDecision | Promise<PluginDetailCloseDecision>): Disposable
+  /** Notifies a provider to release a cancelled close preparation without exposing Host identity. */
+  onCloseCancelled(listener: () => void): Disposable
   /** Open an installed window contribution using Host-validated target authority. */
   openContributionWindow(params: Params<'ui.openPluginWindow'>): Promise<Result<'ui.openPluginWindow'>>
   onOpenTarget(listener: (target: Record<string, string>) => void): Disposable
   onBackendStatus(listener: (status: 'connecting' | 'connected' | 'disconnected' | 'error') => void): Disposable
 }
 
+type PluginReceiverRegistrationWire = {
+  protocolVersion: 1
+  locations: Array<'left' | 'detail'>
+  editorTargets?: { protocolVersion: 1 }
+  closeGuard?: { protocolVersion: 1 }
+}
+
 interface RuntimeViewBridge {
   ready(): void
+  hideSelf(): void
+  registerReceiver(registration: PluginReceiverRegistrationWire): Promise<{ receiverId: string }>
+  listReceiverLeftContributions(receiverId: string): Promise<PluginReceiverLeftContribution[]>
+  openReceiverLeft(receiverId: string, contributionKey: string): Promise<void>
+  acceptExistingReceiverOffer(receiverId: string, offerId: string, itemId: string): Promise<PluginReceiverOfferAcceptance>
+  mountReceiver(receiverId: string, offerId: string, placement: PluginReceiverMountPlacement): Promise<{ itemId: string }>
+  requestCloseReceiver(receiverId: string, itemId: string): Promise<PluginReceiverCloseResult>
+  requestCloseReceiverTransaction(receiverId: string, itemIds: readonly string[]): Promise<PluginReceiverCloseResult>
+  abortReceiverItem(receiverId: string, itemId: string): Promise<void>
+  onReceiverOffer(receiverId: string, listener: (offer: PluginReceiverOffer) => void): () => void
+  onReceiverEditorTarget(receiverId: string, listener: (target: PluginEditorFileTarget) => Promise<PluginEditorTargetOpenResult>): () => void
+  onReceiverCloseGuard(
+    receiverId: string,
+    onPrepare: (reason: PluginReceiverCloseGuardReason) => Promise<PluginDetailCloseDecision>,
+    onCancelled: () => void,
+  ): () => void
+  onReceiverItemClosed(receiverId: string, listener: (item: PluginReceiverItemClosed) => void): () => void
+  disposeReceiver(receiverId: string): Promise<void>
   onOpenTarget(listener: (target: Record<string, string>) => void): () => void
 }
 
@@ -186,6 +348,14 @@ function runtimeCapabilityBridge(): RuntimeCapabilityBridge {
     throw new PluginError('BACKEND_UNAVAILABLE', 'Plugin capability runtime is unavailable.')
   }
   return bridge as RuntimeCapabilityBridge
+}
+
+function isJsonValue(value: unknown): value is JsonValue {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return true
+  if (typeof value === 'number') return Number.isFinite(value)
+  if (Array.isArray(value)) return value.every(isJsonValue)
+  if (typeof value !== 'object') return false
+  return Object.values(value).every(isJsonValue)
 }
 
 function runtimeViewBridge(): RuntimeViewBridge {
@@ -203,12 +373,387 @@ function runtimeViewBridge(): RuntimeViewBridge {
 /** Public lifecycle/target adapter for package views. The private preload
  * transport remains an SDK implementation detail. */
 export function createPluginViewRuntimeClient(): PluginViewRuntimeClient {
+  type CloseRecord = {
+    phase: 'pending' | 'accepted' | 'cancelled' | 'busy'
+    owner: object
+  }
+  const closeRecords = new Map<string, CloseRecord>()
+  let closeBarrier: CloseRecord | null = null
+  let closePrepareSubscriptions = 0
+  let closeCancellationUnsubscribe: (() => void) | null = null
+  const closeCancelledListeners = new Set<() => void>()
+  const notifyCloseCancelled = (): void => {
+    for (const listener of closeCancelledListeners) {
+      try {
+        listener()
+      } catch {
+        // Cancellation release listeners are isolated from one another.
+      }
+    }
+  }
+  const maybeDisposeCloseCancellationSubscription = (): void => {
+    if (
+      closePrepareSubscriptions !== 0 ||
+      closeCancelledListeners.size !== 0 ||
+      closeRecords.size !== 0 ||
+      closeBarrier !== null ||
+      !closeCancellationUnsubscribe
+    ) return
+    closeCancellationUnsubscribe()
+    closeCancellationUnsubscribe = null
+  }
+  const retireCloseRecord = (closeId: string, record: CloseRecord): void => {
+    if (closeRecords.get(closeId) === record) closeRecords.delete(closeId)
+    if (closeBarrier === record) closeBarrier = null
+    maybeDisposeCloseCancellationSubscription()
+  }
+  const ensureCloseCancellationSubscription = (): void => {
+    if (closeCancellationUnsubscribe) return
+    closeCancellationUnsubscribe = runtimeCapabilityBridge().on('plugin:view:close-cancelled', payload => {
+      const closeId = typeof (payload as { closeId?: unknown } | null)?.closeId === 'string'
+        ? (payload as { closeId: string }).closeId
+        : ''
+      if (!closeId) return
+      const record = closeRecords.get(closeId)
+      if (!record || record.phase === 'cancelled') return
+      if (record.phase === 'busy') {
+        retireCloseRecord(closeId, record)
+        return
+      }
+      const wasAccepted = record.phase === 'accepted'
+      record.phase = 'cancelled'
+      notifyCloseCancelled()
+      if (wasAccepted) retireCloseRecord(closeId, record)
+    })
+  }
   return Object.freeze({
+    openDetail: async (params: PluginOpenDetailParams): Promise<PluginOpenDetailResult> => {
+      const response = await runtimeCapabilityBridge().callCapability('ui', 'openDetail', params)
+      if (!response || typeof response.ok !== 'boolean') {
+        throw new PluginError('INTERNAL_ERROR', 'Plugin detail request returned an invalid response.')
+      }
+      if (!response.ok) {
+        throw new PluginError(
+          publicCapabilityError(response.error?.code ?? 'INTERNAL_ERROR'),
+          response.error?.message ?? 'Plugin detail request failed.',
+        )
+      }
+      const result = response.result as PluginOpenDetailResult
+      if (
+        !result ||
+        typeof result !== 'object' ||
+        typeof result.opened !== 'boolean' ||
+        (result.opened === false && ![
+          'provider-missing', 'provider-unavailable', 'receiver-unavailable', 'receiver-unpaired', 'receiver-refused',
+        ].includes(result.reason))
+      ) {
+        throw new PluginError('INTERNAL_ERROR', 'Plugin detail request returned an invalid result.')
+      }
+      return result
+    },
+    onDetailTarget(listener: (update: PluginDetailTargetUpdate) => PluginDetailTargetDecision | Promise<PluginDetailTargetDecision>): Disposable {
+      if (typeof listener !== 'function') {
+        throw new PluginError('INVALID_ARGUMENT', 'Plugin detail-target listener is invalid.')
+      }
+      let active = true
+      let highestSeenRevision = -1
+      let lastAppliedRevision = -1
+      let pendingTargetId: string | null = null
+      const targetRecords = new Map<string, { revision: number; acknowledged: boolean }>()
+      const resolve = (targetId: string, revision: number, decision: PluginDetailTargetDecision): void => {
+        const record = targetRecords.get(targetId)
+        if (!active || !record || record.revision !== revision || record.acknowledged) return
+        record.acknowledged = true
+        void runtimeCapabilityBridge().callCapability('ui', 'resolveDetailTarget', {
+          targetId,
+          revision,
+          decision,
+        }).catch(() => undefined)
+      }
+      const unsubscribe = runtimeCapabilityBridge().on('plugin:view:detail-target', payload => {
+        const record = typeof payload === 'object' && payload !== null && !Array.isArray(payload)
+          ? payload as Record<string, unknown>
+          : null
+        const targetId = typeof record?.targetId === 'string' ? record.targetId : ''
+        const revision = record?.revision
+        const target = record?.target
+        if (!active || !targetId || typeof revision !== 'number' || !Number.isInteger(revision) || revision < 0 || !isJsonValue(target)) return
+        if (targetRecords.has(targetId)) return
+        targetRecords.set(targetId, { revision, acknowledged: false })
+        if (revision <= highestSeenRevision) {
+          resolve(targetId, revision, { applied: false, reason: 'refused' })
+          return
+        }
+        highestSeenRevision = revision
+        if (pendingTargetId !== null) {
+          resolve(targetId, revision, { applied: false, reason: 'busy' })
+          return
+        }
+        pendingTargetId = targetId
+        const targetRecord = targetRecords.get(targetId)!
+        const skipped = Symbol('detail-target-skipped')
+        void Promise.resolve().then(() => {
+          if (
+            !active ||
+            pendingTargetId !== targetId ||
+            targetRecords.get(targetId) !== targetRecord ||
+            targetRecord.acknowledged
+          ) return skipped
+          return listener({ revision, target })
+        }).then(
+          (decision) => {
+            if (decision === skipped || !active || targetRecords.get(targetId) !== targetRecord) return
+            if (pendingTargetId === targetId) pendingTargetId = null
+            if (
+              !decision ||
+              typeof decision !== 'object' ||
+              (decision.applied !== true && decision.applied !== false) ||
+              (decision.applied === false && decision.reason !== 'refused' && decision.reason !== 'busy')
+            ) {
+              resolve(targetId, revision, { applied: false, reason: 'refused' })
+              return
+            }
+            if (decision.applied) {
+              if (revision <= lastAppliedRevision) {
+                resolve(targetId, revision, { applied: false, reason: 'refused' })
+                return
+              }
+              lastAppliedRevision = revision
+            }
+            resolve(targetId, revision, decision)
+          },
+          () => {
+            if (!active || targetRecords.get(targetId) !== targetRecord) return
+            if (pendingTargetId === targetId) pendingTargetId = null
+            resolve(targetId, revision, { applied: false, reason: 'refused' })
+          },
+        )
+      })
+      return Object.freeze({ dispose: () => {
+        if (!active) return
+        active = false
+        pendingTargetId = null
+        targetRecords.clear()
+        unsubscribe()
+      } })
+    },
+    onPrepareClose(listener: (request: PluginDetailCloseRequest) => PluginDetailCloseDecision | Promise<PluginDetailCloseDecision>): Disposable {
+      if (typeof listener !== 'function') {
+        throw new PluginError('INVALID_ARGUMENT', 'Plugin close-preparation listener is invalid.')
+      }
+      ensureCloseCancellationSubscription()
+      closePrepareSubscriptions += 1
+      let active = true
+      const owner = {}
+      const resolve = (request: PluginDetailCloseRequest, record: CloseRecord, decision: PluginDetailCloseDecision): void => {
+        if (!active || closeRecords.get(request.closeId) !== record || record.phase !== 'pending') return
+        if (decision.accepted) record.phase = 'accepted'
+        else retireCloseRecord(request.closeId, record)
+        void runtimeCapabilityBridge().callCapability('ui', 'resolveDetailClose', {
+          closeId: request.closeId,
+          itemId: request.itemId,
+          decision,
+        }).catch(() => undefined)
+      }
+      const resolveBusy = (request: PluginDetailCloseRequest, record: CloseRecord): void => {
+        if (!active || closeRecords.get(request.closeId) !== record || record.phase !== 'busy') return
+        void runtimeCapabilityBridge().callCapability('ui', 'resolveDetailClose', {
+          closeId: request.closeId,
+          itemId: request.itemId,
+          decision: { accepted: false, reason: 'busy' },
+        }).catch(() => undefined).finally(() => retireCloseRecord(request.closeId, record))
+      }
+      const unsubscribe = runtimeCapabilityBridge().on('plugin:view:close-request', payload => {
+        const request = payload as Partial<PluginDetailCloseRequest> | null
+        if (
+          !active ||
+          !request ||
+          typeof request.closeId !== 'string' ||
+          typeof request.itemId !== 'string' ||
+          request.reason !== 'user' ||
+          typeof request.documentGeneration !== 'number' ||
+          !Number.isInteger(request.documentGeneration) ||
+          request.documentGeneration < 0 ||
+          closeRecords.has(request.closeId)
+        ) return
+        const exactRequest = request as PluginDetailCloseRequest
+        if (closeBarrier !== null) {
+          const busyRecord: CloseRecord = { phase: 'busy', owner }
+          closeRecords.set(exactRequest.closeId, busyRecord)
+          resolveBusy(exactRequest, busyRecord)
+          return
+        }
+        const record: CloseRecord = { phase: 'pending', owner }
+        closeRecords.set(exactRequest.closeId, record)
+        closeBarrier = record
+        void Promise.resolve().then(() => {
+          if (!active || closeRecords.get(exactRequest.closeId) !== record || record.phase !== 'pending') return null
+          return listener(exactRequest)
+        }).then((decision) => {
+          if (!active || closeRecords.get(exactRequest.closeId) !== record) return
+          if (decision === null) {
+            if (record.phase === 'cancelled') retireCloseRecord(exactRequest.closeId, record)
+            return
+          }
+          if (record.phase === 'cancelled') {
+            if (decision && typeof decision === 'object' && decision.accepted === true && decision.reason === 'accepted') {
+              notifyCloseCancelled()
+            }
+            retireCloseRecord(exactRequest.closeId, record)
+            return
+          }
+          if (
+            !decision ||
+            typeof decision !== 'object' ||
+            (decision.accepted !== true && decision.accepted !== false) ||
+            (decision.accepted === true && decision.reason !== 'accepted') ||
+            (decision.accepted === false && decision.reason !== 'refused' && decision.reason !== 'busy')
+          ) {
+            resolve(exactRequest, record, { accepted: false, reason: 'refused' })
+            return
+          }
+          resolve(exactRequest, record, decision)
+        }).catch(() => {
+          if (!active || closeRecords.get(exactRequest.closeId) !== record) return
+          if (record.phase === 'cancelled') {
+            retireCloseRecord(exactRequest.closeId, record)
+            return
+          }
+          resolve(exactRequest, record, { accepted: false, reason: 'refused' })
+        })
+      })
+      return Object.freeze({ dispose: () => {
+        if (!active) return
+        active = false
+        closePrepareSubscriptions -= 1
+        for (const [closeId, record] of closeRecords) {
+          if (record.owner === owner) retireCloseRecord(closeId, record)
+        }
+        unsubscribe()
+        maybeDisposeCloseCancellationSubscription()
+      } })
+    },
+    onCloseCancelled(listener: () => void): Disposable {
+      if (typeof listener !== 'function') {
+        throw new PluginError('INVALID_ARGUMENT', 'Plugin close-cancellation listener is invalid.')
+      }
+      ensureCloseCancellationSubscription()
+      closeCancelledListeners.add(listener)
+      return Object.freeze({ dispose: () => {
+        closeCancelledListeners.delete(listener)
+        maybeDisposeCloseCancellationSubscription()
+      } })
+    },
     openContributionWindow(params: Params<'ui.openPluginWindow'>): Promise<Result<'ui.openPluginWindow'>> {
       return createPluginCapabilityClient().capabilities.invoke('ui.openPluginWindow', params)
     },
     ready(): void {
       runtimeViewBridge().ready()
+    },
+    hide(): void {
+      runtimeViewBridge().hideSelf()
+    },
+    async registerReceiver(registration: PluginReceiverRegistration, onOffer: (offer: PluginReceiverOffer) => void): Promise<PluginViewReceiver> {
+      if (typeof onOffer !== 'function') throw new PluginError('INVALID_ARGUMENT', 'Receiver offer listener is invalid.')
+      const editorTargets = registration.editorTargets
+      if (editorTargets && (editorTargets.protocolVersion !== 1 || typeof editorTargets.onOpen !== 'function')) {
+        throw new PluginError('INVALID_ARGUMENT', 'Receiver editor-target listener is invalid.')
+      }
+      const closeGuard = registration.closeGuard
+      if (
+        closeGuard &&
+        (closeGuard.protocolVersion !== 1 || typeof closeGuard.onPrepare !== 'function' || typeof closeGuard.onCancelled !== 'function')
+      ) {
+        throw new PluginError('INVALID_ARGUMENT', 'Receiver close guard is invalid.')
+      }
+      const bridge = runtimeViewBridge()
+      const { receiverId } = await bridge.registerReceiver({
+        protocolVersion: registration.protocolVersion,
+        locations: registration.locations,
+        ...(editorTargets ? { editorTargets: { protocolVersion: 1 } } : {}),
+        ...(closeGuard ? { closeGuard: { protocolVersion: 1 } } : {}),
+      })
+      let disposed = false
+      const offers = bridge.onReceiverOffer(receiverId, onOffer)
+      const editorTargetSubscription = editorTargets
+        ? bridge.onReceiverEditorTarget(receiverId, (target) =>
+          Promise.resolve().then(() => {
+            if (disposed) return { opened: false }
+            return editorTargets.onOpen(target)
+          }).then(
+            (result): PluginEditorTargetOpenResult =>
+              !disposed && result && typeof result.opened === 'boolean' ? result : { opened: false },
+            (): PluginEditorTargetOpenResult => ({ opened: false }),
+          )
+        )
+        : () => undefined
+      const closeGuardSubscription = closeGuard
+        ? bridge.onReceiverCloseGuard(
+          receiverId,
+          (reason) => Promise.resolve().then(() => {
+            if (disposed) return { accepted: false, reason: 'busy' } as const
+            return closeGuard.onPrepare(reason)
+          }).then(
+            (decision): PluginDetailCloseDecision =>
+              !disposed && decision && typeof decision === 'object' &&
+              ((decision.accepted === true && decision.reason === 'accepted') ||
+                (decision.accepted === false && (decision.reason === 'refused' || decision.reason === 'busy')))
+                ? decision
+                : { accepted: false, reason: 'refused' },
+            (): PluginDetailCloseDecision => ({ accepted: false, reason: 'refused' }),
+          ),
+          () => {
+            if (!disposed) {
+              try {
+                closeGuard.onCancelled()
+              } catch {
+                // A receiver release callback cannot disrupt private close cleanup.
+              }
+            }
+          },
+        )
+        : () => undefined
+      const unavailable = (): Promise<never> => Promise.reject(new PluginError('PLUGIN_STOPPING', 'Receiver is disposed.'))
+      return Object.freeze({
+        listLeftContributions: () => disposed
+          ? unavailable()
+          : bridge.listReceiverLeftContributions(receiverId),
+        openLeft: (contributionKey: string) => disposed
+          ? unavailable()
+          : bridge.openReceiverLeft(receiverId, contributionKey),
+        acceptExistingOffer: (offerId: string, itemId: string) => disposed
+          ? unavailable()
+          : bridge.acceptExistingReceiverOffer(receiverId, offerId, itemId),
+        mount: (offerId: string, placement: PluginReceiverMountPlacement) => disposed
+          ? unavailable()
+          : bridge.mountReceiver(receiverId, offerId, placement),
+        requestClose: (itemId: string) => disposed
+          ? unavailable()
+          : bridge.requestCloseReceiver(receiverId, itemId),
+        requestCloseTransaction: (itemIds: readonly string[]) => disposed
+          ? unavailable()
+          : bridge.requestCloseReceiverTransaction(receiverId, itemIds),
+        abort: (itemId: string) => disposed
+          ? unavailable()
+          : bridge.abortReceiverItem(receiverId, itemId),
+        onItemClosed: (listener: (item: PluginReceiverItemClosed) => void): Disposable => {
+          if (disposed) {
+            throw new PluginError('PLUGIN_STOPPING', 'Receiver is disposed.')
+          }
+          if (typeof listener !== 'function') {
+            throw new PluginError('INVALID_ARGUMENT', 'Receiver item-close listener is invalid.')
+          }
+          return Object.freeze({ dispose: bridge.onReceiverItemClosed(receiverId, listener) })
+        },
+        dispose: async () => {
+          if (disposed) return
+          disposed = true
+          offers()
+          editorTargetSubscription()
+          closeGuardSubscription()
+          await bridge.disposeReceiver(receiverId)
+        },
+      })
     },
     onOpenTarget(listener: (target: Record<string, string>) => void): Disposable {
       if (typeof listener !== 'function') {

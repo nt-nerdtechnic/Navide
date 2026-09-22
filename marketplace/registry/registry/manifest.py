@@ -132,6 +132,8 @@ def manifest_referenced_files(manifest: ManifestLike) -> list[str]:
             paths.add(view.entry)
             if view.icon is not None:
                 paths.add(view.icon)
+            if view.targetSchema is not None:
+                paths.add(view.targetSchema)
     if manifest.marketplace.icon is not None:
         paths.add(manifest.marketplace.icon)
     if manifest.backend is not None:

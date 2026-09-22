@@ -94,6 +94,8 @@ def build_v2_package(
                 continue
             if isinstance(view.get("entry"), str):
                 paths.add(view["entry"])
+            if isinstance(view.get("targetSchema"), str):
+                paths.add(view["targetSchema"])
             if isinstance(view.get("icon"), str):
                 paths.add(view["icon"])
     backend = manifest.get("backend", {})

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createHash, generateKeyPairSync, sign as edSign } from 'node:crypto'
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { normalizePlatformId, setPlatformId } from '../../shared/osplat'
@@ -15,16 +15,22 @@ vi.mock('electron', () => {
   const ipcListeners = new Map<string, Handler>()
   const views: unknown[] = []
   const windows: unknown[] = []
+  const frameTokens = new Map<string, unknown>()
+  const mainFrames = new Map<number, object>()
   let nextWebContentsId = 1000
 
   class FakeWebContents {
     id = nextWebContentsId++
+    mainFrame = {}
     sent: Array<{ channel: string; args: unknown[] }> = []
     loads: string[] = []
     reloads = 0
     focusCount = 0
     private destroyed = false
     private listeners = new Map<string, Handler[]>()
+    constructor() {
+      mainFrames.set(this.id, this.mainFrame)
+    }
     isDestroyed(): boolean {
       return this.destroyed
     }
@@ -87,6 +93,27 @@ vi.mock('electron', () => {
     }
     setVisible(v: boolean): void {
       this.visible = v
+    }
+  }
+
+  class MessageChannelMain {
+    port1: { on: (event: string, cb: (event: { data: unknown }) => void) => void; postMessage: (data: unknown) => void; close: () => void; start: () => void }
+    port2: { on: (event: string, cb: (event: { data: unknown }) => void) => void; postMessage: (data: unknown) => void; close: () => void; start: () => void }
+    constructor() {
+      const listeners1: Array<(event: { data: unknown }) => void> = []
+      const listeners2: Array<(event: { data: unknown }) => void> = []
+      const port1 = {
+        on: (event: string, cb: (event: { data: unknown }) => void): void => { if (event === 'message') listeners1.push(cb) },
+        postMessage: (data: unknown): void => { listeners2.forEach((listener) => listener({ data })) },
+        close: vi.fn(), start: vi.fn(),
+      }
+      const port2 = {
+        on: (event: string, cb: (event: { data: unknown }) => void): void => { if (event === 'message') listeners2.push(cb) },
+        postMessage: (data: unknown): void => { listeners1.forEach((listener) => listener({ data })) },
+        close: vi.fn(), start: vi.fn(),
+      }
+      this.port1 = port1
+      this.port2 = port2
     }
   }
 
@@ -189,19 +216,37 @@ vi.mock('electron', () => {
 
   const ipcMain = {
     handle: (channel: string, fn: Handler): void => {
-      ipcHandlers.set(channel, fn)
+      ipcHandlers.set(channel, (event, ...args) => {
+        const senderId = (event as { sender?: { id?: unknown } } | undefined)?.sender?.id
+        const senderFrame = (event as { senderFrame?: unknown } | undefined)?.senderFrame
+        const normalized = senderFrame === undefined && typeof senderId === 'number'
+          ? { ...(event as object), senderFrame: mainFrames.get(senderId) ?? null }
+          : event
+        return fn(normalized, ...args)
+      })
     },
     on: (channel: string, fn: Handler): void => {
-      ipcListeners.set(channel, fn)
+      ipcListeners.set(channel, (event, ...args) => {
+        const senderId = (event as { sender?: { id?: unknown } } | undefined)?.sender?.id
+        const senderFrame = (event as { senderFrame?: unknown } | undefined)?.senderFrame
+        const normalized = senderFrame === undefined && typeof senderId === 'number'
+          ? { ...(event as object), senderFrame: mainFrames.get(senderId) ?? null }
+          : event
+        return fn(normalized, ...args)
+      })
     },
   }
 
   return {
     WebContentsView,
+    MessageChannelMain,
+    webFrameMain: {
+      fromFrameToken: (_processId: number, token: string): unknown => frameTokens.get(token) ?? null,
+    },
     BrowserWindow,
     ipcMain,
     app: {},
-    __mock: { ipcHandlers, ipcListeners, views, windows },
+    __mock: { ipcHandlers, ipcListeners, views, windows, frameTokens },
   }
 })
 
@@ -288,6 +333,7 @@ import {
 } from './frontendPluginManager'
 import { PluginBackendHost } from './pluginBackendHost'
 import { BackendPluginError, PluginBackendSupervisor } from './pluginBackendSupervisor'
+import { EditorSelectionGrants } from './editorSelectionGrants'
 import type { PlansBridgeContext } from './plansBridge'
 import { manifestV2CapabilityPolicy } from './pluginPermissions'
 import { PluginActivationSelector } from './pluginActivationSelector'
@@ -316,6 +362,7 @@ import type { FilePickerInvocation } from '../filePicker'
 
 interface FakeWebContentsLike {
   id: number
+  mainFrame: object
   sent: Array<{ channel: string; args: unknown[] }>
   loads: string[]
   reloads: number
@@ -342,18 +389,20 @@ interface FakeWindowLike {
   close(): void
   emit(event: string, ...args: unknown[]): void
 }
-const { ipcHandlers, ipcListeners, views, windows } = (
+const { ipcHandlers, ipcListeners, views, windows, frameTokens } = (
   electron as unknown as {
     __mock: {
       ipcHandlers: Map<string, (...args: unknown[]) => unknown>
       ipcListeners: Map<string, (...args: unknown[]) => unknown>
       views: FakeViewLike[]
       windows: FakeWindowLike[]
+      frameTokens: Map<string, unknown>
     }
   }
 ).__mock
 
 interface FakeHostContents {
+  isDestroyed(): boolean
   on(event: string, cb: (...args: unknown[]) => void): void
   removeListener(event: string, cb: (...args: unknown[]) => void): void
   emit(event: string, ...args: unknown[]): void
@@ -378,6 +427,7 @@ class FakeBrowserWindow {
    *  that supply their own `send` spy keep the listener surface the manager
    *  wires up on every open. */
   private hostContents: FakeHostContents = {
+    isDestroyed: () => false,
     on: (event, cb) => {
       const list = this.hostContentsListeners.get(event) ?? []
       list.push(cb)
@@ -465,6 +515,8 @@ describe('backend Host session registration', () => {
   it('re-registers on the new socket when the previous registration is pending', () => {
     const mgr = new FrontendPluginManager()
     const host = new FakeBrowserWindow()
+    ;(host.webContents as FakeHostContents & { id: number }).id = 7000
+    ;(host.webContents as FakeHostContents & { mainFrame: object }).mainFrame = {}
     mgr.open(
       asHost(host),
       { id: 'acme.host-session', requires: ['terminal'], devUrl: '', entryFile: '/plugins/acme.host-session/index.html' },
@@ -567,6 +619,1738 @@ describe('backend Host session registration', () => {
     expect(mgr.isPlansBackendAvailable()).toBe(true)
     mgr.markPlansBackendUnavailable('child-crash')
     expect(mgr.isPlansBackendAvailable()).toBe(false)
+  })
+
+  it('rejects an unadmitted iframe while preserving the exact Host frame admission seam', async () => {
+    const packageDir = mkdtempSync(join(tmpdir(), 'navide-frame-manager-'))
+    try {
+      mkdirSync(join(packageDir, 'frontend'), { recursive: true })
+      writeFileSync(join(packageDir, 'frontend/index.html'), '<!doctype html>')
+      const mgr = new FrontendPluginManager()
+      const descriptor: PluginLaunchDescriptor = {
+        id: 'acme.frame', packageVersion: '1.0.0', packageDir,
+        requires: [], devUrl: '', entryFile: join(packageDir, 'frontend/index.html'),
+        capabilityPolicy: manifestV2CapabilityPolicy({}),
+        views: [{
+          id: 'left', contributionKey: 'acme.frame.left', kind: 'custom', location: 'left',
+          title: 'Frame', entryFile: join(packageDir, 'frontend/index.html'),
+        }],
+      }
+      mgr.registerDescriptor(descriptor, { builtin: true })
+      mgr.setCapabilityGrantResolver(() => ({
+        packageVersion: '1.0.0', system: [], storage: true,
+      }))
+      const host = new FakeBrowserWindow()
+      const parent = {}
+      ;(host.webContents as FakeHostContents & { id: number; mainFrame: unknown }).id = 42
+      ;(host.webContents as FakeHostContents & { mainFrame: unknown }).mainFrame = parent
+      const reserved = await mgr.reservePluginFrameContribution(asHost(host), 'acme.frame.left', '/workspace')
+      expect(reserved.ok).toBe(true)
+      if (!reserved.ok) return
+
+      const unadmitted = {
+        isDestroyed: () => false,
+        detached: false,
+        frameTreeNodeId: 1,
+        parent: {},
+        url: 'about:blank',
+      }
+      expect(mgr.bindPluginFrameBlank(reserved.bindingId, unadmitted as never)).toBe(false)
+
+      const admittedCandidate = { ...unadmitted, parent }
+      expect(mgr.bindPluginFrameBlank(reserved.bindingId, admittedCandidate as never)).toBe(true)
+      const ready = ipcHandlers.get('plugin:frame:document-ready')
+      expect(ready?.({ sender: { id: 42 }, senderFrame: admittedCandidate }, { nonce: 'wrong-nonce' })).toBe(false)
+    } finally {
+      rmSync(packageDir, { recursive: true, force: true })
+    }
+  })
+
+  it('admits through the document-ready IPC handler and closes only the selected frame instance', async () => {
+    const packageDir = mkdtempSync(join(tmpdir(), 'navide-frame-close-'))
+    const closeGrant = vi.spyOn(EditorSelectionGrants.prototype, 'close')
+    try {
+      mkdirSync(join(packageDir, 'frontend'), { recursive: true })
+      writeFileSync(join(packageDir, 'frontend/index.html'), '<!doctype html>')
+      const mgr = new FrontendPluginManager()
+      const descriptor: PluginLaunchDescriptor = {
+        id: 'acme.frame.close', packageVersion: '1.0.0', packageDir,
+        requires: [], devUrl: '', entryFile: join(packageDir, 'frontend/index.html'),
+        capabilityPolicy: manifestV2CapabilityPolicy({}),
+        views: [
+          { id: 'left', contributionKey: 'acme.frame.close.left', kind: 'custom', location: 'left', title: 'Left', entryFile: join(packageDir, 'frontend/index.html') },
+          { id: 'right', contributionKey: 'acme.frame.close.right', kind: 'custom', location: 'right', title: 'Right', entryFile: join(packageDir, 'frontend/index.html') },
+        ],
+      }
+      mgr.registerDescriptor(descriptor, { builtin: true })
+      mgr.setCapabilityGrantResolver(() => ({ packageVersion: '1.0.0', system: [], storage: true }))
+      const admitDocument = vi.spyOn(mgr as unknown as {
+        admitPluginFrameDocument: (frame: unknown, receiverWebContentsId: number, nonce: string) => boolean
+      }, 'admitPluginFrameDocument')
+      const host = new FakeBrowserWindow()
+      const hostContents = host.webContents as unknown as FakeHostContents & { id: number; mainFrame: object }
+      hostContents.id = 314
+      hostContents.mainFrame = {}
+
+      const admit = async (contributionKey: string, frameTreeNodeId: number) => {
+        const reserved = await mgr.reservePluginFrameContribution(asHost(host), contributionKey, '/workspace')
+        expect(reserved.ok).toBe(true)
+        if (!reserved.ok) throw new Error('frame reservation failed')
+        const frame = {
+          detached: false,
+          frameTreeNodeId,
+          parent: hostContents.mainFrame,
+          url: 'about:blank',
+          origin: 'null',
+          isDestroyed: () => false,
+          postMessage: vi.fn(),
+        }
+        expect(mgr.bindPluginFrameBlank(reserved.bindingId, frame as never)).toBe(true)
+        frame.url = reserved.entryUrl
+        frame.origin = new URL(reserved.entryUrl).origin
+        hostContents.emit('did-start-navigation', {
+          frame,
+          isSameDocument: false,
+          url: reserved.entryUrl,
+        })
+        const pending = (mgr as unknown as {
+          pendingPluginFrames: Map<string, { frame: unknown; hostWindow: { webContents: { id: number } } }>
+        }).pendingPluginFrames.get(reserved.bindingId)
+        expect(pending?.frame).toBe(frame)
+        expect(pending?.hostWindow.webContents.id).toBe(hostContents.id)
+        const running = (mgr as unknown as {
+          running: Map<string, { carrier: string; id: string; workspacePath: string | null; capabilityContext?: { runtimeBinding?: { packageVersion?: string } | null } }>
+        }).running
+        expect([...running.values()][0]).toMatchObject({
+          carrier: 'frame',
+          id: 'acme.frame.close',
+          workspacePath: '/workspace',
+          capabilityContext: { runtimeBinding: { packageVersion: '1.0.0' } },
+        })
+        const ready = ipcHandlers.get('plugin:frame:document-ready')
+        expect(ready).toBeDefined()
+        const event = { sender: { id: hostContents.id }, senderFrame: frame }
+        const childNonce = `child-document-${frameTreeNodeId}`
+        const result = await ready?.(event, { nonce: childNonce })
+        expect(admitDocument).toHaveBeenCalledWith(frame, hostContents.id, childNonce)
+        expect(result).toBe(true)
+        return { reserved, frame }
+      }
+
+      const left = await admit('acme.frame.close.left', 11)
+      const leftInstanceId = (mgr as unknown as {
+        pendingPluginFrames: Map<string, { instanceId: string }>
+      }).pendingPluginFrames.get(left.reserved.bindingId)?.instanceId
+      expect(leftInstanceId).toEqual(expect.any(String))
+      const leftDispose = vi.fn()
+      mgr.registerInstanceSubscription(leftInstanceId!, leftDispose)
+      const right = await admit('acme.frame.close.right', 12)
+
+      expect(mgr.closePluginFrame(left.reserved.bindingId)).toBe(true)
+      expect(mgr.closePluginFrame(left.reserved.bindingId)).toBe(false)
+      expect(leftDispose).toHaveBeenCalledTimes(1)
+      expect(closeGrant).toHaveBeenCalledWith(leftInstanceId)
+      expect(mgr.hasBackendActivity()).toBe(false)
+      expect(mgr.closePluginFrame(right.reserved.bindingId)).toBe(true)
+      expect(closeGrant).toHaveBeenCalledTimes(2)
+    } finally {
+      closeGrant.mockRestore()
+      rmSync(packageDir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('registered receiver frame lifecycle', () => {
+  type ReceiverSetup = {
+    mgr: FrontendPluginManager
+    host: FakeBrowserWindow
+    receiver: FakeViewLike
+    receiverEvent: { sender: { id: number }; senderFrame: object }
+    receiverId: string
+    descriptor: PluginLaunchDescriptor
+    providerView: PluginViewLaunchDescriptor
+    workspacePath: string
+  }
+
+  async function setupReceiver(withDetailPair = false, withEditorTargets = false, workspacePath = '/workspace', withCloseGuard = false): Promise<ReceiverSetup> {
+    const mgr = new FrontendPluginManager()
+    const host = new FakeBrowserWindow()
+    const hostContents = host.webContents as FakeHostContents & { id: number; mainFrame: object }
+    hostContents.id = 7000
+    hostContents.mainFrame = {}
+    expect(hostContents.id).toBe(7000)
+    expect(hostContents.mainFrame).toBeDefined()
+    const packageDir = process.cwd()
+    const entryFile = join(packageDir, 'package.json')
+    const descriptor: PluginLaunchDescriptor = {
+      id: 'acme.receiver-lifecycle',
+      packageVersion: '1.0.0',
+      packageDir,
+      requires: [],
+      devUrl: '',
+      entryFile,
+      capabilityPolicy: manifestV2CapabilityPolicy(withDetailPair ? { system: ['ui'] } : {}),
+      capabilityContext: {
+        publisherEligible: true,
+        userGrant: { packageVersion: '1.0.0', system: withDetailPair ? ['ui'] : [] },
+        runtimeBinding: {
+          pluginId: 'acme.receiver-lifecycle',
+          packageVersion: '1.0.0',
+          workspaceId: 'workspace-1',
+          instanceId: 'host-placeholder',
+          audience: 'receiver-test',
+        },
+      },
+      views: [],
+    }
+    const receiverView: PluginViewLaunchDescriptor = {
+      id: 'receiver', contributionKey: 'acme.receiver-lifecycle.receiver', kind: 'custom',
+      location: 'window', title: 'Receiver', entryFile,
+      receives: {
+        protocolVersion: 1, locations: ['left', 'detail'],
+        ...(withEditorTargets ? { editorTargets: { protocolVersion: 1 as const } } : {}),
+        ...(withCloseGuard ? { closeGuard: { protocolVersion: 1 as const } } : {}),
+      },
+    }
+    const providerView: PluginViewLaunchDescriptor = {
+      id: 'provider', contributionKey: 'acme.receiver-lifecycle.provider', kind: 'custom',
+      location: 'left', title: 'Provider', entryFile,
+      ...(withDetailPair ? { detailView: 'detail' } : {}),
+    }
+    const detailView: PluginViewLaunchDescriptor = {
+      id: 'detail', contributionKey: 'acme.receiver-lifecycle.detail', kind: 'custom',
+      location: 'detail', title: 'Detail', entryFile,
+      targetSchema: 'plugins/navide-git/schemas/branch-comparison.json',
+    }
+    descriptor.views = withDetailPair ? [receiverView, providerView, detailView] : [receiverView, providerView]
+    mgr.registerDescriptor(descriptor, { builtin: true })
+    mgr.setCapabilityGrantResolver(() => ({ packageVersion: '1.0.0', system: withDetailPair ? ['ui'] : [], storage: true }))
+    if (withDetailPair) mgr.setPublicCapabilityHandler((plan) => mgr.executePublicCapability(plan))
+    const handle = await mgr.openView(descriptor, receiverView, {
+      hostWindow: asHost(host), bounds: 'hidden', capabilityContext: descriptor.capabilityContext,
+      workspacePath, initiallyVisible: false,
+    })
+    const running = (mgr as unknown as { running: Map<string, { view: FakeViewLike }> }).running.get(handle.instanceId)
+    if (!running) throw new Error('receiver fixture did not create a running view')
+    const receiver = running.view
+    expect(receiver.webContents.id).not.toBe(7000)
+    expect(receiver.webContents.mainFrame).not.toBe(hostContents.mainFrame)
+    const receiverEvent = { sender: { id: receiver.webContents.id }, senderFrame: receiver.webContents.mainFrame }
+    const register = ipcHandlers.get('plugin:receiver:register')
+    const registration = register?.(receiverEvent, {
+      protocolVersion: 1, locations: ['left', 'detail'],
+      ...(withEditorTargets ? { editorTargets: { protocolVersion: 1 } } : {}),
+      ...(withCloseGuard ? { closeGuard: { protocolVersion: 1 } } : {}),
+    }) as { receiverId: string }
+    expect(registration?.receiverId).toEqual(expect.any(String))
+    return { mgr, host, receiver, receiverEvent, receiverId: registration.receiverId, descriptor, providerView, workspacePath }
+  }
+
+  async function mountOffer(fixture: ReceiverSetup): Promise<{ itemId: string; offerId: string }> {
+    const { mgr, receiver, receiverEvent, receiverId, descriptor, providerView } = fixture
+    expect(mgr.offerReceiverProvider(receiverId, descriptor, providerView, fixture.workspacePath)).toEqual({ ok: true })
+    const offerMessage = receiver.webContents.sent.at(-1)
+    const offerId = (offerMessage?.args[0] as { offer?: { offerId?: unknown } } | undefined)?.offer?.offerId
+    expect(offerId).toEqual(expect.any(String))
+    const mount = ipcHandlers.get('plugin:receiver:mount')
+    const result = await mount?.(receiverEvent, { receiverId, offerId, placement: { mountHostId: `host-${offerId}` } }) as { itemId: string }
+    expect(result.itemId).toEqual(expect.any(String))
+    return { itemId: result.itemId, offerId: offerId as string }
+  }
+
+  async function admitItem(fixture: ReceiverSetup, itemId: string): Promise<{ port: { on: (event: string, cb: (event: { data: unknown }) => void) => void; postMessage: (data: unknown) => void }; frame: { postMessage: ReturnType<typeof vi.fn> } }> {
+    const items = (fixture.mgr as unknown as { receiverItems: Map<string, { bindingId: string }> }).receiverItems
+    const pending = (fixture.mgr as unknown as { pendingPluginFrames: Map<string, { entryUrl: string }> }).pendingPluginFrames
+    const bindingId = items.get(itemId)?.bindingId
+    expect(bindingId).toBeTruthy()
+    const token = `receiver-frame-${itemId}`
+    const frame = {
+      processId: 1,
+      frameToken: token,
+      frameTreeNodeId: 100 + frameTokens.size,
+      detached: false,
+      parent: fixture.receiver.webContents.mainFrame,
+      url: 'about:blank',
+      origin: 'null',
+      isDestroyed: () => false,
+      postMessage: vi.fn(),
+    }
+    frameTokens.set(token, frame)
+    const blankReady = ipcHandlers.get('plugin:receiver:blank-ready')
+    const locator = await blankReady?.(
+      { sender: { id: fixture.receiver.webContents.id }, senderFrame: fixture.receiver.webContents.mainFrame },
+      { itemId, frameToken: token },
+    ) as { locator: string }
+    expect(locator.locator).toBe(pending.get(bindingId!)?.entryUrl)
+    frame.url = locator.locator
+    frame.origin = new URL(locator.locator).origin
+    fixture.receiver.webContents.emit('did-start-navigation', {
+      frame, isSameDocument: false, url: locator.locator,
+    })
+    const hostMainFrame = (fixture.host.webContents as FakeHostContents & { mainFrame: object }).mainFrame
+    const foreignFrame = { ...frame, frameTreeNodeId: frame.frameTreeNodeId + 1, parent: hostMainFrame }
+    const documentReady = ipcHandlers.get('plugin:frame:document-ready')
+    expect(documentReady?.(
+      { sender: { id: fixture.receiver.webContents.id }, senderFrame: foreignFrame },
+      { nonce: `foreign-${itemId}` },
+    )).toBe(false)
+    const nonce = `document-${itemId}`
+    expect(documentReady?.(
+      { sender: { id: fixture.receiver.webContents.id }, senderFrame: frame },
+      { nonce },
+    )).toBe(true)
+    expect(frame.postMessage).toHaveBeenCalledTimes(1)
+    const [channel, payload, ports] = frame.postMessage.mock.calls[0] as [string, { documentGeneration: number; nonce: string }, Array<{ on: Function; postMessage: Function }>]
+    expect(channel).toBe('plugin:frame:port')
+    expect(payload).toMatchObject({ documentGeneration: 1, nonce })
+    expect(ports).toHaveLength(1)
+    return { port: ports[0] as never, frame }
+  }
+
+  async function prepareEditorSource(workspacePath = '/workspace', withCloseGuard = false): Promise<{
+    fixture: ReceiverSetup
+    sourceItemId: string
+    sourcePort: Awaited<ReturnType<typeof admitItem>>['port']
+    providerMessages: unknown[]
+    providerPort: Awaited<ReturnType<typeof admitItem>>['port']
+    sourceMessages: unknown[]
+    detailItemId: string
+  }> {
+    const pending = await startEditorSourceWithoutWaitingForDetailResponse(workspacePath, withCloseGuard)
+    const offer = pending.fixture.receiver.webContents.sent
+      .filter((message) => message.channel === 'plugin:receiver:offer')
+      .map((message) => (message.args[0] as { offer?: { offerId?: string; location?: string } }).offer)
+      .find((candidate) => candidate?.location === 'detail')
+    expect(offer?.offerId).toEqual(expect.any(String))
+    const detail = await ipcHandlers.get('plugin:receiver:mount')?.(pending.fixture.receiverEvent, {
+      receiverId: pending.fixture.receiverId, offerId: offer?.offerId,
+      placement: { mountHostId: `host-${offer?.offerId}` },
+    }) as { itemId: string }
+    const detailReady = await admitItem(pending.fixture, detail.itemId)
+    const sourceMessages: unknown[] = []
+    detailReady.port.on('message', (event) => sourceMessages.push(event.data))
+    detailReady.port.postMessage({ kind: 'cast', channel: 'plugin:ready', payload: null })
+    await vi.waitFor(() => expect(sourceMessages.some((message) =>
+      (message as { channel?: string; payload?: { type?: string } } | null)?.channel === 'plugin:cap:event' &&
+      (message as { payload?: { type?: string } }).payload?.type === 'plugin:view:detail-target',
+    )).toBe(true))
+    const initialTarget = (sourceMessages.find((message) =>
+      (message as { channel?: string; payload?: { type?: string } } | null)?.channel === 'plugin:cap:event' &&
+      (message as { payload?: { type?: string } }).payload?.type === 'plugin:view:detail-target',
+    ) as { payload: { data: { targetId: string; revision: number } } }).payload.data
+    await expect(resolveDetailTarget(
+      detailReady.port,
+      sourceMessages,
+      'prepare-detail-target-ack',
+      initialTarget,
+      { applied: true },
+    )).resolves.toMatchObject({ ok: true })
+    await vi.waitFor(() => expect(pending.providerMessages).toContainEqual(expect.objectContaining({
+      channel: 'plugin:response', payload: expect.objectContaining({ requestId: pending.detailRequestId }),
+    })))
+    return {
+      fixture: pending.fixture,
+      sourceItemId: detail.itemId,
+      sourcePort: detailReady.port,
+      providerMessages: pending.providerMessages,
+      providerPort: pending.providerPort,
+      sourceMessages,
+      detailItemId: detail.itemId,
+    }
+  }
+
+  async function openAdditionalDetail(
+    prepared: Awaited<ReturnType<typeof prepareEditorSource>>,
+    requestId: string,
+    compare: string,
+  ): Promise<{ itemId: string; port: Awaited<ReturnType<typeof admitItem>>['port']; messages: unknown[] }> {
+    const response = new Promise<unknown>((resolve) => {
+      prepared.providerPort.on('message', (event) => {
+        const message = event.data as { channel?: string; payload?: { requestId?: string; response?: unknown } }
+        if (message.channel === 'plugin:response' && message.payload?.requestId === requestId) resolve(message.payload.response)
+      })
+    })
+    const offersBefore = prepared.fixture.receiver.webContents.sent.filter((message) =>
+      message.channel === 'plugin:receiver:offer' &&
+      (message.args[0] as { offer?: { location?: string } }).offer?.location === 'detail',
+    ).length
+    prepared.providerPort.postMessage({
+      kind: 'invoke', channel: 'plugin:cap:call', requestId,
+      payload: { reqId: requestId, ns: 'ui', method: 'openDetail', args: {
+        contributionKey: 'acme.receiver-lifecycle.detail',
+        target: {
+          resource: { kind: 'branch-comparison', repository: '.', base: 'main', compare },
+          presentation: { mode: 'branch-diff' },
+        },
+      } },
+    })
+    await vi.waitFor(() => expect(prepared.fixture.receiver.webContents.sent.filter((message) =>
+      message.channel === 'plugin:receiver:offer' &&
+      (message.args[0] as { offer?: { location?: string } }).offer?.location === 'detail',
+    )).toHaveLength(offersBefore + 1))
+    const offer = prepared.fixture.receiver.webContents.sent
+      .filter((message) => message.channel === 'plugin:receiver:offer')
+      .map((message) => (message.args[0] as { offer?: { offerId?: string; location?: string } }).offer)
+      .filter((candidate) => candidate?.location === 'detail' && candidate.offerId)
+      .at(-1)
+    const mounted = await ipcHandlers.get('plugin:receiver:mount')?.(prepared.fixture.receiverEvent, {
+      receiverId: prepared.fixture.receiverId,
+      offerId: offer?.offerId,
+      placement: { mountHostId: `host-${offer?.offerId}` },
+    }) as { itemId: string }
+    const admitted = await admitItem(prepared.fixture, mounted.itemId)
+    const messages: unknown[] = []
+    admitted.port.on('message', (event) => messages.push(event.data))
+    admitted.port.postMessage({ kind: 'cast', channel: 'plugin:ready', payload: null })
+    await vi.waitFor(() => expect(messages).toContainEqual(expect.objectContaining({
+      channel: 'plugin:cap:event',
+      payload: { type: 'plugin:view:detail-target', data: expect.objectContaining({ revision: 1 }) },
+    })) )
+    const update = (messages.find((message) =>
+      (message as { channel?: string; payload?: { type?: string } } | null)?.channel === 'plugin:cap:event' &&
+      (message as { payload?: { type?: string } }).payload?.type === 'plugin:view:detail-target',
+    ) as { payload: { data: { targetId: string; revision: number } } }).payload.data
+    await expect(resolveDetailTarget(admitted.port, messages, `${requestId}-ack`, update, { applied: true })).resolves.toMatchObject({ ok: true })
+    await expect(response).resolves.toMatchObject({ ok: true, result: { opened: true } })
+    return { itemId: mounted.itemId, port: admitted.port, messages }
+  }
+
+  async function startEditorSourceWithoutWaitingForDetailResponse(workspacePath = '/workspace', withCloseGuard = false): Promise<{
+    fixture: ReceiverSetup
+    sourceItemId: string
+    sourcePort: Awaited<ReturnType<typeof admitItem>>['port']
+    providerMessages: unknown[]
+    providerPort: Awaited<ReturnType<typeof admitItem>>['port']
+    detailRequestId: string
+  }> {
+    const fixture = await setupReceiver(true, true, workspacePath, withCloseGuard)
+    const source = await mountOffer(fixture)
+    const sourceReady = await admitItem(fixture, source.itemId)
+    const providerMessages: unknown[] = []
+    sourceReady.port.on('message', (event) => providerMessages.push(event.data))
+    sourceReady.port.postMessage({ kind: 'cast', channel: 'plugin:ready', payload: null })
+    const detailRequestId = 'detail-pending-until-applied'
+    sourceReady.port.postMessage({
+      kind: 'invoke', channel: 'plugin:cap:call', requestId: detailRequestId,
+      payload: { reqId: detailRequestId, ns: 'ui', method: 'openDetail', args: {
+        contributionKey: 'acme.receiver-lifecycle.detail',
+        target: {
+          resource: { kind: 'branch-comparison', repository: '.', base: 'main', compare: 'pending-ack' },
+          presentation: { mode: 'branch-diff' },
+        },
+      } },
+    })
+    return {
+      fixture,
+      sourceItemId: source.itemId,
+      sourcePort: sourceReady.port,
+      providerMessages,
+      providerPort: sourceReady.port,
+      detailRequestId,
+    }
+  }
+
+  async function invokeOpenInEditor(
+    port: Awaited<ReturnType<typeof admitItem>>['port'],
+    requestId: string,
+    args: Record<string, unknown>,
+    messages: unknown[],
+    waitForResponse = true,
+  ): Promise<{ response: Promise<unknown> }> {
+    const response = new Promise<unknown>((resolve) => {
+      const listener = (event: { data: unknown }) => {
+        const message = event.data as { channel?: string; payload?: { requestId?: string; response?: unknown } }
+        if (message.channel === 'plugin:response' && message.payload?.requestId === requestId) resolve(message.payload.response)
+      }
+      port.on('message', listener)
+    })
+    port.postMessage({ kind: 'invoke', channel: 'plugin:cap:call', requestId,
+      payload: { reqId: requestId, ns: 'ui', method: 'openInEditor', args } })
+    if (waitForResponse) {
+      await vi.waitFor(() => expect(messages.some((message) =>
+        (message as { channel?: string; payload?: { requestId?: string } } | null)?.channel === 'plugin:response' &&
+        (message as { payload?: { requestId?: string } }).payload?.requestId === requestId,
+      )).toBe(true))
+    }
+    return { response }
+  }
+
+  async function resolveDetailTarget(
+    port: Awaited<ReturnType<typeof admitItem>>['port'],
+    messages: unknown[],
+    requestId: string,
+    update: { targetId: string; revision: number },
+    decision: { applied: true } | { applied: false; reason: 'refused' | 'busy' },
+    waitForResponse = true,
+  ): Promise<unknown> {
+    port.postMessage({ kind: 'invoke', channel: 'plugin:cap:call', requestId,
+      payload: { reqId: requestId, ns: 'ui', method: 'resolveDetailTarget', args: {
+        targetId: update.targetId, revision: update.revision, decision,
+      } } })
+    if (waitForResponse) await vi.waitFor(() => expect(messages.some((message) =>
+      (message as { channel?: string; payload?: { requestId?: string } } | null)?.channel === 'plugin:response' &&
+      (message as { payload?: { requestId?: string } }).payload?.requestId === requestId,
+    )).toBe(true))
+    return (messages.find((message) =>
+      (message as { channel?: string; payload?: { requestId?: string } } | null)?.channel === 'plugin:response' &&
+      (message as { payload?: { requestId?: string } }).payload?.requestId === requestId,
+    ) as { payload: { response: unknown } } | undefined)?.payload.response
+  }
+
+  it('admits the legitimate receiver child after details-first navigation and posts one authenticated port', async () => {
+    const fixture = await setupReceiver()
+    const item = await mountOffer(fixture)
+    const admitted = await admitItem(fixture, item.itemId)
+    expect(admitted.port).toBeTruthy()
+    expect((fixture.mgr as unknown as { receiverItems: Map<string, unknown> }).receiverItems.has(item.itemId)).toBe(true)
+  })
+
+  it('settles a refused initial detail open false and removes only its provisional item', async () => {
+    const prepared = await startEditorSourceWithoutWaitingForDetailResponse()
+    await vi.waitFor(() => expect(prepared.fixture.receiver.webContents.sent.some((message) =>
+      message.channel === 'plugin:receiver:offer' &&
+      (message.args[0] as { offer?: { location?: string } }).offer?.location === 'detail',
+    )).toBe(true))
+    const detailOffer = prepared.fixture.receiver.webContents.sent
+      .filter((message) => message.channel === 'plugin:receiver:offer')
+      .map((message) => (message.args[0] as { offer?: { offerId?: string; location?: string } }).offer)
+      .find((offer) => offer?.location === 'detail')
+    const detail = await ipcHandlers.get('plugin:receiver:mount')?.(prepared.fixture.receiverEvent, {
+      receiverId: prepared.fixture.receiverId, offerId: detailOffer?.offerId,
+      placement: { mountHostId: `host-${detailOffer?.offerId}` },
+    }) as { itemId: string }
+    const detailReady = await admitItem(prepared.fixture, detail.itemId)
+    const detailMessages: unknown[] = []
+    detailReady.port.on('message', (event) => detailMessages.push(event.data))
+    detailReady.port.postMessage({ kind: 'cast', channel: 'plugin:ready', payload: null })
+    await vi.waitFor(() => expect(detailMessages.some((message) =>
+      (message as { channel?: string; payload?: { type?: string } } | null)?.channel === 'plugin:cap:event' &&
+      (message as { payload?: { type?: string } }).payload?.type === 'plugin:view:detail-target',
+    )).toBe(true))
+    const update = (detailMessages.find((message) =>
+      (message as { channel?: string; payload?: { type?: string } } | null)?.channel === 'plugin:cap:event' &&
+      (message as { payload?: { type?: string } }).payload?.type === 'plugin:view:detail-target',
+    ) as { payload: { data: { targetId: string; revision: number } } }).payload.data
+    await resolveDetailTarget(detailReady.port, detailMessages, 'initial-refusal', update, { applied: false, reason: 'refused' }, false)
+    await vi.waitFor(() => expect(prepared.providerMessages).toContainEqual(expect.objectContaining({
+      channel: 'plugin:response', payload: expect.objectContaining({
+        requestId: prepared.detailRequestId,
+        response: expect.objectContaining({ ok: true, result: { opened: false, reason: 'provider-unavailable' } }),
+      }),
+    })))
+    const items = (prepared.fixture.mgr as unknown as { receiverItems: Map<string, unknown> }).receiverItems
+    expect(items.has(detail.itemId)).toBe(false)
+    expect(items.has(prepared.sourceItemId)).toBe(true)
+  })
+
+  it('keeps openDetail pending through offer and mount until the initial provider target is applied', async () => {
+    const prepared = await startEditorSourceWithoutWaitingForDetailResponse()
+    const hasDetailResponse = () => prepared.providerMessages.some((message) =>
+      (message as { channel?: string; payload?: { requestId?: string } } | null)?.channel === 'plugin:response' &&
+      (message as { payload?: { requestId?: string } }).payload?.requestId === prepared.detailRequestId,
+    )
+    await vi.waitFor(() => expect(prepared.fixture.receiver.webContents.sent.some((message) =>
+      message.channel === 'plugin:receiver:offer' &&
+      (message.args[0] as { offer?: { location?: string } }).offer?.location === 'detail',
+    )).toBe(true))
+    expect(hasDetailResponse()).toBe(false)
+
+    const detailOffer = prepared.fixture.receiver.webContents.sent
+      .filter((message) => message.channel === 'plugin:receiver:offer')
+      .map((message) => (message.args[0] as { offer?: { offerId?: string; location?: string } }).offer)
+      .find((offer) => offer?.location === 'detail')
+    expect(detailOffer?.offerId).toEqual(expect.any(String))
+    const detail = await ipcHandlers.get('plugin:receiver:mount')?.(prepared.fixture.receiverEvent, {
+      receiverId: prepared.fixture.receiverId,
+      offerId: detailOffer?.offerId,
+      placement: { mountHostId: `host-${detailOffer?.offerId}` },
+    }) as { itemId: string }
+    const detailReady = await admitItem(prepared.fixture, detail.itemId)
+    const detailMessages: unknown[] = []
+    detailReady.port.on('message', (event) => detailMessages.push(event.data))
+    detailReady.port.postMessage({ kind: 'cast', channel: 'plugin:ready', payload: null })
+    await vi.waitFor(() => expect(detailMessages.some((message) =>
+      (message as { channel?: string; payload?: { type?: string } } | null)?.channel === 'plugin:cap:event' &&
+      (message as { payload?: { type?: string } }).payload?.type === 'plugin:view:detail-target',
+    )).toBe(true))
+    expect(hasDetailResponse()).toBe(false)
+
+    const targetMessage = detailMessages.find((message) =>
+      (message as { channel?: string; payload?: { type?: string } } | null)?.channel === 'plugin:cap:event' &&
+      (message as { payload?: { type?: string } }).payload?.type === 'plugin:view:detail-target',
+    ) as { payload: { data: { targetId: string; revision: number } } }
+    await expect(resolveDetailTarget(
+      detailReady.port,
+      detailMessages,
+      'initial-target-applied',
+      targetMessage.payload.data,
+      { applied: true },
+    )).resolves.toMatchObject({ ok: true })
+    await vi.waitFor(() => expect(hasDetailResponse()).toBe(true))
+    expect(prepared.providerMessages.find((message) =>
+      (message as { channel?: string; payload?: { requestId?: string } } | null)?.channel === 'plugin:response' &&
+      (message as { payload?: { requestId?: string } }).payload?.requestId === prepared.detailRequestId,
+    )).toMatchObject({ payload: { response: { ok: true, result: { opened: true } } } })
+  })
+
+  it('rejects malformed, boolean, wrong-version, and extra-field editor target registrations', async () => {
+    const fixture = await setupReceiver()
+    const register = ipcHandlers.get('plugin:receiver:register')
+    expect(() => register?.(fixture.receiverEvent, {
+      protocolVersion: 1, locations: ['left', 'detail'], editorTargets: true,
+    })).toThrow()
+    expect(() => register?.(fixture.receiverEvent, {
+      protocolVersion: 1, locations: ['left', 'detail'], editorTargets: { protocolVersion: 2 },
+    })).toThrow()
+    expect(() => register?.(fixture.receiverEvent, {
+      protocolVersion: 1, locations: ['left', 'detail'], editorTargets: { protocolVersion: 1, extra: false },
+    })).toThrow()
+  })
+
+  it('rejects malformed, wrong-version, extra-field, and undeclared close-guard registrations', async () => {
+    const fixture = await setupReceiver()
+    const register = ipcHandlers.get('plugin:receiver:register')
+    for (const closeGuard of [
+      true,
+      { protocolVersion: 2 },
+      { protocolVersion: 1, extra: false },
+      { protocolVersion: 1, onPrepare: () => undefined },
+    ]) {
+      expect(() => register?.(fixture.receiverEvent, {
+        protocolVersion: 1, locations: ['left', 'detail'], closeGuard,
+      }), JSON.stringify(closeGuard)).toThrow()
+    }
+    // The fixture view does not declare receives.closeGuard, so a live guard is
+    // a declaration mismatch rather than an implicit upgrade.
+    expect(() => register?.(fixture.receiverEvent, {
+      protocolVersion: 1, locations: ['left', 'detail'], closeGuard: { protocolVersion: 1 },
+    })).toThrow()
+  })
+
+  it('lists left contributions and opens only an authenticated receiver-scoped offer', async () => {
+    const fixture = await setupReceiver()
+    const list = ipcHandlers.get('plugin:receiver:list-left-contributions')
+    expect(list?.(fixture.receiverEvent, { receiverId: fixture.receiverId })).toEqual([
+      { contributionKey: 'acme.receiver-lifecycle.provider', title: 'Provider' },
+    ])
+
+    const open = ipcHandlers.get('plugin:receiver:open-left')
+    expect(open?.(fixture.receiverEvent, {
+      receiverId: fixture.receiverId,
+      contributionKey: 'acme.receiver-lifecycle.provider',
+    })).toEqual({ offered: true })
+    expect(fixture.receiver.webContents.sent.at(-1)?.channel).toBe('plugin:receiver:offer')
+
+    const foreignEvent = {
+      sender: { id: (fixture.host.webContents as FakeHostContents & { id: number }).id },
+      senderFrame: fixture.receiver.webContents.mainFrame,
+    }
+    expect(() => list?.(foreignEvent, { receiverId: fixture.receiverId })).toThrow('receiver left catalog is unavailable')
+    expect(() => open?.(fixture.receiverEvent, {
+      receiverId: fixture.receiverId,
+      contributionKey: 'missing.provider',
+    })).toThrow('receiver left contribution is unavailable')
+  })
+
+  it('delivers two independent detail targets through list/open-left, mount, ready, and frame-port paths', async () => {
+    const fixture = await setupReceiver(true)
+    const list = ipcHandlers.get('plugin:receiver:list-left-contributions')
+    const open = ipcHandlers.get('plugin:receiver:open-left')
+    expect(list?.(fixture.receiverEvent, { receiverId: fixture.receiverId })).toEqual([
+      { contributionKey: 'acme.receiver-lifecycle.provider', title: 'Provider' },
+    ])
+    expect(open?.(fixture.receiverEvent, { receiverId: fixture.receiverId, contributionKey: 'acme.receiver-lifecycle.provider' }))
+      .toEqual({ offered: true })
+
+    const mountOfferId = async (offerId: string): Promise<{ itemId: string }> => {
+      return await ipcHandlers.get('plugin:receiver:mount')?.(fixture.receiverEvent, {
+        receiverId: fixture.receiverId, offerId,
+        placement: { mountHostId: `host-${offerId}` },
+      }) as { itemId: string }
+    }
+    const sourceOffer = (fixture.receiver.webContents.sent.at(-1)?.args[0] as { offer?: { offerId?: string } }).offer
+    expect(sourceOffer?.offerId).toEqual(expect.any(String))
+    const source = await mountOfferId(sourceOffer?.offerId as string)
+    const sourceReady = await admitItem(fixture, source.itemId)
+    const sourceMessages: unknown[] = []
+    sourceReady.port.on('message', (event) => sourceMessages.push(event.data))
+    sourceReady.port.postMessage({ kind: 'cast', channel: 'plugin:ready', payload: null })
+    const detailOffers = () => fixture.receiver.webContents.sent
+      .filter((message) => message.channel === 'plugin:receiver:offer')
+      .map((message) => (message.args[0] as { offer?: Record<string, unknown> }).offer)
+      .filter((offer): offer is Record<string, unknown> => offer?.location === 'detail')
+    const invokeDetail = async (requestId: string, target: unknown): Promise<{ response: Promise<unknown>; offer: Record<string, unknown> }> => {
+      const response = new Promise<unknown>((resolve) => {
+        sourceReady.port.on('message', (event) => {
+          const message = event.data as { channel?: string; payload?: { requestId?: string; response?: unknown } }
+          if (message.channel === 'plugin:response' && message.payload?.requestId === requestId) resolve(message.payload.response)
+        })
+      })
+      const offersBefore = detailOffers().length
+      sourceReady.port.postMessage({ kind: 'invoke', channel: 'plugin:cap:call', requestId,
+        payload: { reqId: requestId, ns: 'ui', method: 'openDetail', args: {
+          contributionKey: 'acme.receiver-lifecycle.detail', target,
+        } } })
+      await vi.waitFor(() => expect(detailOffers()).toHaveLength(offersBefore + 1))
+      expect(sourceMessages.some((message) =>
+        (message as { channel?: string; payload?: { requestId?: string } } | null)?.channel === 'plugin:response' &&
+        (message as { payload?: { requestId?: string } }).payload?.requestId === requestId,
+      )).toBe(false)
+      return { response, offer: detailOffers().at(-1)! }
+    }
+    const targetA = { resource: { kind: 'branch-comparison', repository: '.', base: 'main', compare: 'topic-a' }, presentation: { mode: 'branch-diff' } }
+    const targetB = { resource: { kind: 'branch-comparison', repository: '.', base: 'main', compare: 'topic-b' }, presentation: { mode: 'branch-diff' } }
+    const openedA = await invokeDetail('detail-a', targetA)
+    const offerA = openedA.offer
+    const offerAId = offerA?.offerId as string
+    expect(offerA).not.toHaveProperty('target')
+    expect(JSON.stringify(offerA)).not.toContain('topic-a')
+    const detailA = await mountOfferId(offerAId)
+    const readyA = await admitItem(fixture, detailA.itemId)
+    const messagesA: unknown[] = []
+    readyA.port.on('message', (event) => messagesA.push(event.data))
+    readyA.port.postMessage({ kind: 'cast', channel: 'plugin:ready', payload: null })
+    await vi.waitFor(() => expect(messagesA).toContainEqual(expect.objectContaining({
+      channel: 'plugin:cap:event',
+      payload: {
+        type: 'plugin:view:detail-target',
+        data: { targetId: expect.any(String), revision: 1, target: targetA },
+      },
+    })))
+    const updateA = (messagesA.find((message) =>
+      (message as { channel?: string; payload?: { type?: string } } | null)?.channel === 'plugin:cap:event' &&
+      (message as { payload?: { type?: string } }).payload?.type === 'plugin:view:detail-target',
+    ) as { payload: { data: { targetId: string; revision: number } } }).payload.data
+    await resolveDetailTarget(readyA.port, messagesA, 'detail-a-ack', updateA, { applied: true })
+    await expect(openedA.response).resolves.toMatchObject({ ok: true, result: { opened: true } })
+
+    const openedB = await invokeDetail('detail-b', targetB)
+    const offerB = openedB.offer
+    const offerBId = offerB?.offerId as string
+    expect(offerB?.offerId).not.toBe(offerA?.offerId)
+    expect(offerB).not.toHaveProperty('target')
+    expect(JSON.stringify(offerB)).not.toContain('topic-b')
+    const detailB = await mountOfferId(offerBId)
+    const readyB = await admitItem(fixture, detailB.itemId)
+    const messagesB: unknown[] = []
+    readyB.port.on('message', (event) => messagesB.push(event.data))
+    readyB.port.postMessage({ kind: 'cast', channel: 'plugin:ready', payload: null })
+    await vi.waitFor(() => expect(messagesB).toContainEqual(expect.objectContaining({
+      channel: 'plugin:cap:event',
+      payload: {
+        type: 'plugin:view:detail-target',
+        data: { targetId: expect.any(String), revision: 1, target: targetB },
+      },
+    })))
+    const updateB = (messagesB.find((message) =>
+      (message as { channel?: string; payload?: { type?: string } } | null)?.channel === 'plugin:cap:event' &&
+      (message as { payload?: { type?: string } }).payload?.type === 'plugin:view:detail-target',
+    ) as { payload: { data: { targetId: string; revision: number } } }).payload.data
+    await resolveDetailTarget(readyB.port, messagesB, 'detail-b-ack', updateB, { applied: true })
+    await expect(openedB.response).resolves.toMatchObject({ ok: true, result: { opened: true } })
+    expect(messagesA).not.toContainEqual(expect.objectContaining({
+      payload: { type: 'plugin:view:detail-target', data: expect.objectContaining({ target: targetB }) },
+    }))
+    expect(messagesB).not.toContainEqual(expect.objectContaining({
+      payload: { type: 'plugin:view:detail-target', data: expect.objectContaining({ target: targetA }) },
+    }))
+
+    const close = ipcHandlers.get('plugin:receiver:request-close')
+    const resolveClose = (port: { postMessage: (data: unknown) => void }, requestId: string, closeRequest: { closeId: string; itemId: string }, decision: unknown): void => {
+      port.postMessage({ kind: 'invoke', channel: 'plugin:cap:call', requestId,
+        payload: { reqId: requestId, ns: 'ui', method: 'resolveDetailClose', args: {
+          closeId: closeRequest.closeId, itemId: closeRequest.itemId, decision,
+        } } })
+    }
+    const refusalPromise = close?.(fixture.receiverEvent, { receiverId: fixture.receiverId, itemId: detailA.itemId }) as Promise<unknown>
+    await vi.waitFor(() => expect(messagesA.some((message) =>
+      (message as { channel?: string } | null)?.channel === 'plugin:view:close-request',
+    )).toBe(true))
+    const refusalRequest = (messagesA.find((message) =>
+      (message as { channel?: string } | null)?.channel === 'plugin:view:close-request',
+    ) as { payload: { closeId: string; itemId: string } }).payload
+    resolveClose(sourceReady.port, 'wrong-provider', refusalRequest, { accepted: true, reason: 'accepted' })
+    await vi.waitFor(() => expect(sourceMessages.some((message) =>
+      (message as { channel?: string; payload?: { requestId?: string; response?: { ok?: boolean } } } | null)?.channel === 'plugin:response' &&
+      (message as { payload?: { requestId?: string } }).payload?.requestId === 'wrong-provider',
+    )).toBe(true))
+    const wrongProviderResponse = sourceMessages.find((message) =>
+      (message as { channel?: string; payload?: { requestId?: string } } | null)?.channel === 'plugin:response' &&
+      (message as { payload?: { requestId?: string } }).payload?.requestId === 'wrong-provider',
+    ) as { payload: { response: { ok?: boolean; error?: { code?: string } } } }
+    expect(wrongProviderResponse.payload.response).toMatchObject({ ok: false, error: { code: 'CAPABILITY_DENIED' } })
+    resolveClose(readyA.port, 'refuse-close', refusalRequest, { accepted: false, reason: 'refused' })
+    await expect(refusalPromise).resolves.toEqual({ closed: false, reason: 'refused' })
+
+    const busyPromise = close?.(fixture.receiverEvent, { receiverId: fixture.receiverId, itemId: detailB.itemId }) as Promise<unknown>
+    await vi.waitFor(() => expect(messagesB.filter((message) =>
+      (message as { channel?: string } | null)?.channel === 'plugin:view:close-request',
+    )).toHaveLength(1))
+    const busyRequest = (messagesB.find((message) =>
+      (message as { channel?: string } | null)?.channel === 'plugin:view:close-request',
+    ) as { payload: { closeId: string; itemId: string } }).payload
+    resolveClose(readyB.port, 'busy-close', busyRequest, { accepted: false, reason: 'busy' })
+    await expect(busyPromise).resolves.toEqual({ closed: false, reason: 'busy' })
+
+    const acceptedPromise = close?.(fixture.receiverEvent, { receiverId: fixture.receiverId, itemId: detailB.itemId }) as Promise<unknown>
+    await vi.waitFor(() => expect(messagesB.filter((message) =>
+      (message as { channel?: string } | null)?.channel === 'plugin:view:close-request',
+    )).toHaveLength(2))
+    const acceptedRequest = messagesB.filter((message) =>
+      (message as { channel?: string } | null)?.channel === 'plugin:view:close-request',
+    ).at(-1) as { payload: { closeId: string; itemId: string } }
+    resolveClose(readyB.port, 'accept-close', acceptedRequest.payload, { accepted: true, reason: 'accepted' })
+    await expect(acceptedPromise).resolves.toEqual({ closed: true })
+  })
+
+  it('prepares receiver close transactions atomically across refusal, timeout, and commit', async () => {
+    const prepared = await prepareEditorSource()
+    const second = await openAdditionalDetail(prepared, 'atomic-detail-b', 'atomic-b')
+    const third = await openAdditionalDetail(prepared, 'atomic-detail-c', 'atomic-c')
+    const items = (prepared.fixture.mgr as unknown as { receiverItems: Map<string, unknown> }).receiverItems
+    const closeTransaction = ipcHandlers.get('plugin:receiver:request-close-transaction')
+    const requestClose = (itemIds: string[]): Promise<unknown> => closeTransaction?.(prepared.fixture.receiverEvent, {
+      receiverId: prepared.fixture.receiverId, itemIds,
+    }) as Promise<unknown>
+    const detailPorts = [
+      { itemId: prepared.detailItemId, port: prepared.sourcePort, messages: prepared.sourceMessages },
+      second,
+      third,
+    ]
+    const closeRequests = (messages: unknown[]) => messages.filter((message) =>
+      (message as { channel?: string } | null)?.channel === 'plugin:view:close-request',
+    ) as Array<{ payload: { closeId: string; itemId: string } }>
+    const resolveClose = (
+      target: { port: { postMessage: (data: unknown) => void }; messages: unknown[] },
+      request: { closeId: string; itemId: string },
+      requestId: string,
+      decision: { accepted: true; reason: 'accepted' } | { accepted: false; reason: 'refused' | 'busy' },
+    ): void => {
+      target.port.postMessage({ kind: 'invoke', channel: 'plugin:cap:call', requestId,
+        payload: { reqId: requestId, ns: 'ui', method: 'resolveDetailClose', args: {
+          closeId: request.closeId, itemId: request.itemId, decision,
+        } } })
+    }
+    const waitForCloseRequests = async (target: { messages: unknown[] }, count: number) => {
+      await vi.waitFor(() => expect(closeRequests(target.messages)).toHaveLength(count))
+      return closeRequests(target.messages).at(-1)!.payload
+    }
+    const assertLivePort = async (target: { port: { on: (event: string, cb: (event: { data: unknown }) => void) => void; postMessage: (data: unknown) => void }; messages: unknown[] }, requestId: string) => {
+      const response = new Promise<unknown>((resolve) => {
+        target.port.on('message', (event) => {
+          const message = event.data as { channel?: string; payload?: { requestId?: string; response?: unknown } }
+          if (message.channel === 'plugin:response' && message.payload?.requestId === requestId) resolve(message.payload.response)
+        })
+      })
+      target.port.postMessage({ kind: 'invoke', channel: 'plugin:cap:call', requestId, payload: {} })
+      await expect(response).resolves.toMatchObject({ ok: false })
+    }
+
+    const refused = requestClose(detailPorts.slice(0, 2).map((item) => item.itemId))
+    await expect(requestClose([prepared.detailItemId])).resolves.toEqual({ closed: false, reason: 'busy' })
+    const requestA = await waitForCloseRequests(detailPorts[0]!, 1)
+    const requestB = await waitForCloseRequests(detailPorts[1]!, 1)
+
+    const detailOffers = () => prepared.fixture.receiver.webContents.sent
+      .filter((message) => message.channel === 'plugin:receiver:offer')
+      .map((message) => (message.args[0] as { offer?: { offerId?: string; location?: string } }).offer)
+      .filter((offer): offer is { offerId: string; location: 'detail' } =>
+        offer?.location === 'detail' && typeof offer.offerId === 'string')
+    const targetUpdateRequestId = 'atomic-target-update-while-closing'
+    const targetUpdateResponse = new Promise<unknown>((resolve) => {
+      prepared.providerPort.on('message', (event) => {
+        const message = event.data as { channel?: string; payload?: { requestId?: string; response?: unknown } }
+        if (message.channel === 'plugin:response' && message.payload?.requestId === targetUpdateRequestId) {
+          resolve(message.payload.response)
+        }
+      })
+    })
+    const detailOffersBeforeTargetUpdate = detailOffers().length
+    prepared.providerPort.postMessage({
+      kind: 'invoke', channel: 'plugin:cap:call', requestId: targetUpdateRequestId,
+      payload: { reqId: targetUpdateRequestId, ns: 'ui', method: 'openDetail', args: {
+        contributionKey: 'acme.receiver-lifecycle.detail',
+        target: {
+          resource: { kind: 'branch-comparison', repository: '.', base: 'main', compare: 'pending-ack' },
+          presentation: { mode: 'branch-diff' },
+        },
+      } },
+    })
+    await vi.waitFor(() => expect(detailOffers()).toHaveLength(detailOffersBeforeTargetUpdate + 1))
+    const targetUpdateOffer = detailOffers().at(-1)!
+    const targetMessagesBefore = prepared.sourceMessages.filter((message) =>
+      (message as { channel?: string; payload?: { type?: string } } | null)?.channel === 'plugin:cap:event' &&
+      (message as { payload?: { type?: string } }).payload?.type === 'plugin:view:detail-target',
+    ).length
+    await expect(ipcHandlers.get('plugin:receiver:accept-existing')?.(prepared.fixture.receiverEvent, {
+      receiverId: prepared.fixture.receiverId, offerId: targetUpdateOffer.offerId, itemId: prepared.detailItemId,
+    })).resolves.toEqual({ accepted: false, reason: 'busy' })
+    await expect(targetUpdateResponse).resolves.toMatchObject({
+      ok: true, result: { opened: false, reason: 'provider-unavailable' },
+    })
+    expect(prepared.sourceMessages.filter((message) =>
+      (message as { channel?: string; payload?: { type?: string } } | null)?.channel === 'plugin:cap:event' &&
+      (message as { payload?: { type?: string } }).payload?.type === 'plugin:view:detail-target',
+    )).toHaveLength(targetMessagesBefore)
+
+    resolveClose(detailPorts[1]!, requestA, 'atomic-wrong-provider', { accepted: true, reason: 'accepted' })
+    await vi.waitFor(() => expect(second.messages.some((message) =>
+      (message as { channel?: string; payload?: { requestId?: string } } | null)?.channel === 'plugin:response' &&
+      (message as { payload?: { requestId?: string } }).payload?.requestId === 'atomic-wrong-provider',
+    )).toBe(true))
+    resolveClose(detailPorts[0]!, requestA, 'atomic-accept-a', { accepted: true, reason: 'accepted' })
+    for (const [index, decision] of [
+      { accepted: false as const, reason: 'refused' as const },
+      { accepted: false as const, reason: 'busy' as const },
+    ].entries()) {
+      const duplicateRequestId = `atomic-duplicate-${index}`
+      resolveClose(detailPorts[0]!, requestA, duplicateRequestId, decision)
+      await vi.waitFor(() => expect(prepared.sourceMessages.some((message) =>
+        (message as { channel?: string; payload?: { requestId?: string } } | null)?.channel === 'plugin:response' &&
+        (message as { payload?: { requestId?: string } }).payload?.requestId === duplicateRequestId,
+      )).toBe(true))
+      expect(prepared.sourceMessages.find((message) =>
+        (message as { channel?: string; payload?: { requestId?: string } } | null)?.channel === 'plugin:response' &&
+        (message as { payload?: { requestId?: string } }).payload?.requestId === duplicateRequestId,
+      )).toMatchObject({ payload: { response: { ok: false, error: { code: 'CAPABILITY_DENIED' } } } })
+    }
+    resolveClose(detailPorts[1]!, requestB, 'atomic-refuse-b', { accepted: false, reason: 'refused' })
+    await expect(refused).resolves.toEqual({ closed: false, reason: 'refused' })
+    expect(items.has(prepared.detailItemId)).toBe(true)
+    expect(items.has(second.itemId)).toBe(true)
+    expect(closeRequests(prepared.sourceMessages).length).toBe(1)
+    expect(closeRequests(second.messages).length).toBe(1)
+    expect(prepared.sourceMessages.filter((message) =>
+      (message as { channel?: string; payload?: { type?: string } } | null)?.channel === 'plugin:cap:event' &&
+      (message as { payload?: { type?: string } }).payload?.type === 'plugin:view:close-cancelled',
+    )).toHaveLength(1)
+    expect(second.messages.filter((message) =>
+      (message as { channel?: string; payload?: { type?: string } } | null)?.channel === 'plugin:cap:event' &&
+      (message as { payload?: { type?: string } }).payload?.type === 'plugin:view:close-cancelled',
+    )).toHaveLength(1)
+    await assertLivePort(detailPorts[0]!, 'atomic-live-after-refusal-a')
+    await assertLivePort(detailPorts[1]!, 'atomic-live-after-refusal-b')
+
+    vi.useFakeTimers()
+    try {
+      const timedOut = requestClose(detailPorts.map((item) => item.itemId).slice(0, 2))
+      const timeoutA = await waitForCloseRequests(detailPorts[0]!, 2)
+      await waitForCloseRequests(detailPorts[1]!, 2)
+      resolveClose(detailPorts[0]!, timeoutA, 'atomic-timeout-accept-a', { accepted: true, reason: 'accepted' })
+      await vi.advanceTimersByTimeAsync(10_000)
+      await expect(timedOut).resolves.toEqual({ closed: false, reason: 'timeout' })
+      expect(items.has(prepared.detailItemId)).toBe(true)
+      expect(items.has(second.itemId)).toBe(true)
+      await assertLivePort(detailPorts[0]!, 'atomic-live-after-timeout-a')
+      await assertLivePort(detailPorts[1]!, 'atomic-live-after-timeout-b')
+    } finally {
+      vi.useRealTimers()
+    }
+
+    const closeRequestCountsBeforeCommit = detailPorts.map((item) => closeRequests(item.messages).length)
+    const committed = requestClose(detailPorts.map((item) => item.itemId))
+    const commitRequests = await Promise.all(detailPorts.map((item, index) =>
+      waitForCloseRequests(item, closeRequestCountsBeforeCommit[index]! + 1)))
+    detailPorts.forEach((item, index) => {
+      resolveClose(item, commitRequests[index]!, `atomic-commit-${index}`, { accepted: true, reason: 'accepted' })
+    })
+    await expect(committed).resolves.toEqual({ closed: true })
+    expect(items.has(prepared.detailItemId)).toBe(false)
+    expect(items.has(second.itemId)).toBe(false)
+    expect(items.has(third.itemId)).toBe(false)
+  })
+
+  it('requires guarded receiver consent before any provider close preparation', async () => {
+    const prepared = await prepareEditorSource('/workspace', true)
+    const closeTransaction = ipcHandlers.get('plugin:receiver:request-close-transaction')
+    const resolveReceiver = ipcHandlers.get('plugin:receiver:resolve-close')
+    const receiverPayloads = (): Array<{ receiverId: string; closeId: string; reason: string; documentGeneration: number }> =>
+      prepared.fixture.receiver.webContents.sent
+        .filter((message) => message.channel === 'plugin:receiver:close-request')
+        .map((message) => message.args[0] as { receiverId: string; closeId: string; reason: string; documentGeneration: number })
+    const providerCloseRequests = (): Array<{ payload: { closeId: string; itemId: string } }> =>
+      prepared.sourceMessages.filter((message) =>
+        (message as { channel?: string } | null)?.channel === 'plugin:view:close-request',
+      ) as Array<{ payload: { closeId: string; itemId: string } }>
+
+    const pending = closeTransaction?.(prepared.fixture.receiverEvent, {
+      receiverId: prepared.fixture.receiverId, itemIds: [prepared.detailItemId],
+    }) as Promise<unknown>
+    await vi.waitFor(() => expect(receiverPayloads()).toHaveLength(1))
+    expect(receiverPayloads()[0]).toEqual({
+      receiverId: prepared.fixture.receiverId,
+      closeId: expect.any(String),
+      reason: 'receiver-item-batch',
+      documentGeneration: expect.any(Number),
+    })
+    expect(providerCloseRequests()).toHaveLength(0)
+
+    const hostContents = prepared.fixture.host.webContents as FakeHostContents & { id: number; mainFrame: object }
+    expect(() => resolveReceiver?.(
+      { sender: { id: hostContents.id }, senderFrame: hostContents.mainFrame },
+      { receiverId: prepared.fixture.receiverId, closeId: receiverPayloads()[0]!.closeId, decision: { accepted: true, reason: 'accepted' } },
+    )).toThrow()
+    expect(() => resolveReceiver?.(prepared.fixture.receiverEvent, {
+      receiverId: 'foreign-receiver', closeId: receiverPayloads()[0]!.closeId, decision: { accepted: true, reason: 'accepted' },
+    })).toThrow()
+    expect(providerCloseRequests()).toHaveLength(0)
+
+    resolveReceiver?.(prepared.fixture.receiverEvent, {
+      receiverId: prepared.fixture.receiverId, closeId: receiverPayloads()[0]!.closeId, decision: { accepted: true, reason: 'accepted' },
+    })
+    await vi.waitFor(() => expect(providerCloseRequests()).toHaveLength(1))
+    expect(() => resolveReceiver?.(prepared.fixture.receiverEvent, {
+      receiverId: prepared.fixture.receiverId, closeId: receiverPayloads()[0]!.closeId, decision: { accepted: true, reason: 'accepted' },
+    })).toThrow()
+
+    const request = providerCloseRequests()[0]!
+    expect(request.payload.itemId).toBe(prepared.detailItemId)
+    prepared.sourcePort.postMessage({
+      kind: 'invoke', channel: 'plugin:cap:call', requestId: 'guarded-provider-accept',
+      payload: { reqId: 'guarded-provider-accept', ns: 'ui', method: 'resolveDetailClose', args: {
+        closeId: request.payload.closeId, itemId: request.payload.itemId, decision: { accepted: true, reason: 'accepted' },
+      } },
+    })
+    await expect(pending).resolves.toEqual({ closed: true })
+    const items = (prepared.fixture.mgr as unknown as { receiverItems: Map<string, unknown> }).receiverItems
+    expect(items.has(prepared.detailItemId)).toBe(false)
+  })
+
+  it('keeps guarded items alive on receiver refusal and cancels both sides after a provider refusal', async () => {
+    const prepared = await prepareEditorSource('/workspace', true)
+    const closeTransaction = ipcHandlers.get('plugin:receiver:request-close-transaction')
+    const resolveReceiver = ipcHandlers.get('plugin:receiver:resolve-close')
+    const items = (prepared.fixture.mgr as unknown as { receiverItems: Map<string, unknown> }).receiverItems
+    const receiverPayloads = (): Array<{ closeId: string }> =>
+      prepared.fixture.receiver.webContents.sent
+        .filter((message) => message.channel === 'plugin:receiver:close-request')
+        .map((message) => message.args[0] as { closeId: string })
+    const receiverCancellations = (): Array<{ closeId: string }> =>
+      prepared.fixture.receiver.webContents.sent
+        .filter((message) => message.channel === 'plugin:receiver:close-cancelled')
+        .map((message) => message.args[0] as { closeId: string })
+    const providerCloseRequests = (): Array<{ payload: { closeId: string; itemId: string } }> =>
+      prepared.sourceMessages.filter((message) =>
+        (message as { channel?: string } | null)?.channel === 'plugin:view:close-request',
+      ) as Array<{ payload: { closeId: string; itemId: string } }>
+
+    const refused = closeTransaction?.(prepared.fixture.receiverEvent, {
+      receiverId: prepared.fixture.receiverId, itemIds: [prepared.detailItemId],
+    }) as Promise<unknown>
+    await vi.waitFor(() => expect(receiverPayloads()).toHaveLength(1))
+    resolveReceiver?.(prepared.fixture.receiverEvent, {
+      receiverId: prepared.fixture.receiverId, closeId: receiverPayloads()[0]!.closeId, decision: { accepted: false, reason: 'refused' },
+    })
+    await expect(refused).resolves.toEqual({ closed: false, reason: 'refused' })
+    expect(providerCloseRequests()).toHaveLength(0)
+    expect(items.has(prepared.detailItemId)).toBe(true)
+
+    const second = closeTransaction?.(prepared.fixture.receiverEvent, {
+      receiverId: prepared.fixture.receiverId, itemIds: [prepared.detailItemId],
+    }) as Promise<unknown>
+    await vi.waitFor(() => expect(receiverPayloads()).toHaveLength(2))
+    const secondReceiverRequest = receiverPayloads()[1]!
+    resolveReceiver?.(prepared.fixture.receiverEvent, {
+      receiverId: prepared.fixture.receiverId, closeId: secondReceiverRequest.closeId, decision: { accepted: true, reason: 'accepted' },
+    })
+    await vi.waitFor(() => expect(providerCloseRequests()).toHaveLength(1))
+    const providerRequest = providerCloseRequests()[0]!
+    prepared.sourcePort.postMessage({
+      kind: 'invoke', channel: 'plugin:cap:call', requestId: 'guarded-provider-refuse',
+      payload: { reqId: 'guarded-provider-refuse', ns: 'ui', method: 'resolveDetailClose', args: {
+        closeId: providerRequest.payload.closeId, itemId: providerRequest.payload.itemId, decision: { accepted: false, reason: 'refused' },
+      } },
+    })
+    await expect(second).resolves.toEqual({ closed: false, reason: 'refused' })
+    await vi.waitFor(() => expect(receiverCancellations()).toContainEqual({ receiverId: prepared.fixture.receiverId, closeId: secondReceiverRequest.closeId }))
+    expect(prepared.sourceMessages.filter((message) =>
+      (message as { channel?: string; payload?: { type?: string } } | null)?.channel === 'plugin:cap:event' &&
+      (message as { payload?: { type?: string } }).payload?.type === 'plugin:view:close-cancelled',
+    )).toHaveLength(1)
+    expect(items.has(prepared.detailItemId)).toBe(true)
+  })
+
+  it('holds a native window close across receiver consent and provider prepare until commit', async () => {
+    const prepared = await prepareEditorSource('/workspace', true)
+    const mgr = prepared.fixture.mgr
+    const receiverPayloads = (): Array<{ closeId: string; reason: string; receiverId: string }> =>
+      prepared.fixture.receiver.webContents.sent
+        .filter((message) => message.channel === 'plugin:receiver:close-request')
+        .map((message) => message.args[0] as { closeId: string; reason: string; receiverId: string })
+    const closeRequestsIn = (messages: unknown[]): Array<{ payload: { closeId: string; itemId: string } }> =>
+      messages.filter((message) =>
+        (message as { channel?: string } | null)?.channel === 'plugin:view:close-request',
+      ) as Array<{ payload: { closeId: string; itemId: string } }>
+    const items = (mgr as unknown as { receiverItems: Map<string, unknown> }).receiverItems
+    expect(items.size).toBe(2)
+
+    const preparation = mgr.prepareWindowClose(asHost(prepared.fixture.host), 'native-window-close')
+    await vi.waitFor(() => expect(receiverPayloads()).toHaveLength(1))
+    expect(receiverPayloads()[0]).toMatchObject({
+      receiverId: prepared.fixture.receiverId, reason: 'native-window-close',
+    })
+    expect(closeRequestsIn(prepared.providerMessages)).toHaveLength(0)
+    expect(closeRequestsIn(prepared.sourceMessages)).toHaveLength(0)
+
+    ipcHandlers.get('plugin:receiver:resolve-close')?.(prepared.fixture.receiverEvent, {
+      receiverId: prepared.fixture.receiverId, closeId: receiverPayloads()[0]!.closeId,
+      decision: { accepted: true, reason: 'accepted' },
+    })
+    await vi.waitFor(() => {
+      expect(closeRequestsIn(prepared.providerMessages)).toHaveLength(1)
+      expect(closeRequestsIn(prepared.sourceMessages)).toHaveLength(1)
+    })
+    for (const [port, messages, requestId] of [
+      [prepared.providerPort, prepared.providerMessages, 'native-left-accept'],
+      [prepared.sourcePort, prepared.sourceMessages, 'native-detail-accept'],
+    ] as const) {
+      const request = closeRequestsIn(messages)[0]!
+      port.postMessage({
+        kind: 'invoke', channel: 'plugin:cap:call', requestId,
+        payload: { reqId: requestId, ns: 'ui', method: 'resolveDetailClose', args: {
+          closeId: request.payload.closeId, itemId: request.payload.itemId,
+          decision: { accepted: true, reason: 'accepted' },
+        } },
+      })
+    }
+
+    const outcome = await preparation
+    expect(outcome).toEqual({ ok: true, id: expect.any(String) })
+    expect(items.size).toBe(2)
+    mgr.commitWindowClose((outcome as { id: string }).id)
+    expect(items.size).toBe(0)
+  })
+
+  it('keeps provider items alive and cancels the receiver when a native close is refused', async () => {
+    const prepared = await prepareEditorSource('/workspace', true)
+    const mgr = prepared.fixture.mgr
+    const receiverPayloads = (): Array<{ closeId: string }> =>
+      prepared.fixture.receiver.webContents.sent
+        .filter((message) => message.channel === 'plugin:receiver:close-request')
+        .map((message) => message.args[0] as { closeId: string })
+    const providerCloseRequests = (): Array<{ payload: { closeId: string; itemId: string } }> =>
+      prepared.sourceMessages.filter((message) =>
+        (message as { channel?: string } | null)?.channel === 'plugin:view:close-request',
+      ) as Array<{ payload: { closeId: string; itemId: string } }>
+    const items = (mgr as unknown as { receiverItems: Map<string, unknown> }).receiverItems
+
+    const preparation = mgr.prepareWindowClose(asHost(prepared.fixture.host), 'reload')
+    await vi.waitFor(() => expect(receiverPayloads()).toHaveLength(1))
+    expect(prepared.fixture.receiver.webContents.sent.filter((message) =>
+      message.channel === 'plugin:receiver:close-request').map((message) => (message.args[0] as { reason: string }).reason),
+    ).toEqual(['reload'])
+    ipcHandlers.get('plugin:receiver:resolve-close')?.(prepared.fixture.receiverEvent, {
+      receiverId: prepared.fixture.receiverId, closeId: receiverPayloads()[0]!.closeId,
+      decision: { accepted: true, reason: 'accepted' },
+    })
+    await vi.waitFor(() => expect(providerCloseRequests()).toHaveLength(1))
+    const request = providerCloseRequests()[0]!
+    prepared.sourcePort.postMessage({
+      kind: 'invoke', channel: 'plugin:cap:call', requestId: 'native-window-refuse',
+      payload: { reqId: 'native-window-refuse', ns: 'ui', method: 'resolveDetailClose', args: {
+        closeId: request.payload.closeId, itemId: request.payload.itemId, decision: { accepted: false, reason: 'refused' },
+      } },
+    })
+
+    await expect(preparation).resolves.toEqual({ ok: false, reason: 'refused' })
+    expect(items.has(prepared.detailItemId)).toBe(true)
+    await vi.waitFor(() => expect(prepared.fixture.receiver.webContents.sent.some((message) =>
+      message.channel === 'plugin:receiver:close-cancelled' &&
+      (message.args[0] as { closeId: string }).closeId === receiverPayloads()[0]!.closeId,
+    )).toBe(true))
+  })
+
+  it('keeps a receiver that registered during the initial load current across did-finish-load', async () => {
+    const fixture = await setupReceiver(false, false, '/workspace', true)
+    const contents = fixture.receiver.webContents as unknown as { emit: (event: string, ...args: unknown[]) => void }
+    expect(fixture.mgr.hasWindowCloseParticipants(asHost(fixture.host))).toBe(true)
+
+    // The receiver app registers during entry-script execution; the first
+    // completed load must not invalidate that registration.
+    contents.emit('did-finish-load')
+    expect(fixture.mgr.hasWindowCloseParticipants(asHost(fixture.host))).toBe(true)
+    const preparation = fixture.mgr.prepareWindowClose(asHost(fixture.host), 'native-window-close')
+    await vi.waitFor(() => expect(fixture.receiver.webContents.sent.some((message) =>
+      message.channel === 'plugin:receiver:close-request')).toBe(true))
+    const request = fixture.receiver.webContents.sent.filter((message) =>
+      message.channel === 'plugin:receiver:close-request').at(-1)!
+    ipcHandlers.get('plugin:receiver:resolve-close')?.(fixture.receiverEvent, {
+      receiverId: fixture.receiverId,
+      closeId: (request.args[0] as { closeId: string }).closeId,
+      decision: { accepted: false, reason: 'refused' },
+    })
+    await expect(preparation).resolves.toEqual({ ok: false, reason: 'refused' })
+
+    // A later load is a reload: it advances the generation and retires the old
+    // registration, so the window is no longer guarded by that document.
+    contents.emit('did-finish-load')
+    expect(fixture.mgr.hasWindowCloseParticipants(asHost(fixture.host))).toBe(false)
+  })
+
+  it('protects a guarded receiver with zero providers during a native close', async () => {
+    const fixture = await setupReceiver(false, false, '/workspace', true)
+    const mgr = fixture.mgr
+    const receiverPayloads = (): Array<{ closeId: string; reason: string }> =>
+      fixture.receiver.webContents.sent
+        .filter((message) => message.channel === 'plugin:receiver:close-request')
+        .map((message) => message.args[0] as { closeId: string; reason: string })
+    const resolveReceiver = ipcHandlers.get('plugin:receiver:resolve-close')
+
+    const refused = mgr.prepareWindowClose(asHost(fixture.host), 'quit')
+    await vi.waitFor(() => expect(receiverPayloads()).toHaveLength(1))
+    expect(receiverPayloads()[0]).toMatchObject({ reason: 'quit' })
+    resolveReceiver?.(fixture.receiverEvent, {
+      receiverId: fixture.receiverId, closeId: receiverPayloads()[0]!.closeId,
+      decision: { accepted: false, reason: 'busy' },
+    })
+    await expect(refused).resolves.toEqual({ ok: false, reason: 'busy' })
+
+    const accepted = mgr.prepareWindowClose(asHost(fixture.host), 'quit')
+    await vi.waitFor(() => expect(receiverPayloads()).toHaveLength(2))
+    resolveReceiver?.(fixture.receiverEvent, {
+      receiverId: fixture.receiverId, closeId: receiverPayloads()[1]!.closeId,
+      decision: { accepted: true, reason: 'accepted' },
+    })
+    const outcome = await accepted
+    expect(outcome).toEqual({ ok: true, id: expect.any(String) })
+    mgr.cancelWindowClose((outcome as { id: string }).id)
+  })
+
+  it('times out an unanswered guarded consent and releases the receiver lock for the next request', async () => {
+    const prepared = await prepareEditorSource('/workspace', true)
+    const closeTransaction = ipcHandlers.get('plugin:receiver:request-close-transaction')
+    const receiverPayloads = (): unknown[] =>
+      prepared.fixture.receiver.webContents.sent.filter((message) => message.channel === 'plugin:receiver:close-request')
+    const providerCloseRequests = (): unknown[] => prepared.sourceMessages.filter((message) =>
+      (message as { channel?: string } | null)?.channel === 'plugin:view:close-request')
+
+    vi.useFakeTimers()
+    try {
+      const timedOut = closeTransaction?.(prepared.fixture.receiverEvent, {
+        receiverId: prepared.fixture.receiverId, itemIds: [prepared.detailItemId],
+      }) as Promise<unknown>
+      await vi.waitFor(() => expect(receiverPayloads()).toHaveLength(1))
+      await vi.advanceTimersByTimeAsync(10_000)
+      await expect(timedOut).resolves.toEqual({ closed: false, reason: 'timeout' })
+      expect(providerCloseRequests()).toHaveLength(0)
+      const items = (prepared.fixture.mgr as unknown as { receiverItems: Map<string, unknown> }).receiverItems
+      expect(items.has(prepared.detailItemId)).toBe(true)
+
+      const retried = closeTransaction?.(prepared.fixture.receiverEvent, {
+        receiverId: prepared.fixture.receiverId, itemIds: [prepared.detailItemId],
+      }) as Promise<unknown>
+      await vi.waitFor(() => expect(receiverPayloads()).toHaveLength(2))
+      const retryRequest = receiverPayloads()[1] as { args: Array<{ closeId: string }> }
+      ipcHandlers.get('plugin:receiver:resolve-close')?.(prepared.fixture.receiverEvent, {
+        receiverId: prepared.fixture.receiverId, closeId: retryRequest.args[0].closeId, decision: { accepted: false, reason: 'busy' },
+      })
+      await expect(retried).resolves.toEqual({ closed: false, reason: 'busy' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('directs editor targets with exact receiver correlation and settles only the first current reply', async () => {
+    const prepared = await prepareEditorSource()
+    const openCall = invokeOpenInEditor(prepared.sourcePort, 'editor-open', {
+      path: 'src/main.ts', line: 7, column: 9,
+    }, prepared.sourceMessages)
+    await vi.waitFor(() => expect(prepared.fixture.receiver.webContents.sent.some((message) =>
+      message.channel === 'plugin:receiver:editor-target',
+    ), JSON.stringify(prepared.sourceMessages)).toBe(true))
+    const targetMessage = prepared.fixture.receiver.webContents.sent.filter((message) =>
+      message.channel === 'plugin:receiver:editor-target',
+    ).at(-1)
+    const targetPayload = targetMessage?.args[0] as {
+      receiverId: string
+      correlation: string
+      target: { path: string; line: number; column: number; sourceItem: string }
+    }
+    expect(targetPayload).toEqual({
+      receiverId: prepared.fixture.receiverId,
+      correlation: expect.any(String),
+      target: { path: 'src/main.ts', line: 7, column: 9, sourceItem: prepared.sourceItemId },
+    })
+    const resolve = ipcHandlers.get('plugin:receiver:resolve-editor-target')
+    const hostContents = prepared.fixture.host.webContents as FakeHostContents & { id: number; mainFrame: object }
+    expect(() => resolve?.(
+      { sender: { id: hostContents.id }, senderFrame: hostContents.mainFrame },
+      { ...targetPayload, result: { opened: true } },
+    )).toThrow()
+    expect(() => resolve?.(prepared.fixture.receiverEvent, {
+      receiverId: 'stale-receiver', correlation: targetPayload.correlation, result: { opened: true },
+    })).toThrow()
+    expect(() => resolve?.(prepared.fixture.receiverEvent, {
+      receiverId: prepared.fixture.receiverId, correlation: 'stale-correlation', result: { opened: true },
+    })).toThrow()
+    resolve?.(prepared.fixture.receiverEvent, {
+      receiverId: prepared.fixture.receiverId, correlation: targetPayload.correlation, result: { opened: true },
+    })
+    expect(await (await openCall).response).toEqual({ reqId: 'editor-open', ok: true, result: { opened: true } })
+    expect(() => resolve?.(prepared.fixture.receiverEvent, {
+      receiverId: prepared.fixture.receiverId, correlation: targetPayload.correlation, result: { opened: false },
+    })).toThrow()
+
+    const secondCall = invokeOpenInEditor(prepared.sourcePort, 'editor-refused', {
+      path: 'src/other.ts', line: 1, column: 1,
+    }, prepared.sourceMessages)
+    await vi.waitFor(() => expect(prepared.fixture.receiver.webContents.sent.filter((message) =>
+      message.channel === 'plugin:receiver:editor-target',
+    )).toHaveLength(2))
+    const secondPayload = prepared.fixture.receiver.webContents.sent.filter((message) =>
+      message.channel === 'plugin:receiver:editor-target',
+    ).at(-1)?.args[0] as { receiverId: string; correlation: string }
+    resolve?.(prepared.fixture.receiverEvent, {
+      receiverId: prepared.fixture.receiverId, correlation: secondPayload.correlation, result: { opened: false },
+    })
+    expect(await (await secondCall).response).toEqual({ reqId: 'editor-refused', ok: true, result: { opened: false } })
+  })
+
+  it('rejects invalid or outside editor paths before receiver delivery', async () => {
+    const prepared = await prepareEditorSource()
+    const before = prepared.fixture.receiver.webContents.sent.filter((message) =>
+      message.channel === 'plugin:receiver:editor-target',
+    ).length
+    const openCall = await invokeOpenInEditor(prepared.sourcePort, 'editor-invalid-path', {
+      path: '../outside.ts', line: 1, column: 1,
+    }, prepared.sourceMessages)
+    expect(await openCall.response).toMatchObject({ ok: false })
+    expect(prepared.fixture.receiver.webContents.sent.filter((message) =>
+      message.channel === 'plugin:receiver:editor-target',
+    )).toHaveLength(before)
+  })
+
+  it('accepts an inside symlink and sends its canonical root-relative target', async () => {
+    const workspacePath = mkdtempSync(join(tmpdir(), 'navide-editor-canonical-'))
+    const realDirectory = join(workspacePath, 'real')
+    mkdirSync(realDirectory)
+    writeFileSync(join(realDirectory, 'main.ts'), 'export {}')
+    symlinkSync(realDirectory, join(workspacePath, 'linked'))
+    try {
+      const prepared = await prepareEditorSource(workspacePath)
+      const openCall = invokeOpenInEditor(prepared.sourcePort, 'editor-symlink-inside', {
+        path: 'linked/main.ts', line: 7, column: 9,
+      }, prepared.sourceMessages)
+      await vi.waitFor(() => expect(prepared.fixture.receiver.webContents.sent.some((message) =>
+        message.channel === 'plugin:receiver:editor-target',
+      )).toBe(true))
+      const target = prepared.fixture.receiver.webContents.sent.filter((message) =>
+        message.channel === 'plugin:receiver:editor-target',
+      ).at(-1)?.args[0] as { receiverId: string; correlation: string; target: { path: string } }
+      expect(target.target.path).toBe('real/main.ts')
+      ipcHandlers.get('plugin:receiver:resolve-editor-target')?.(prepared.fixture.receiverEvent, {
+        receiverId: target.receiverId, correlation: target.correlation, result: { opened: true },
+      })
+      expect(await (await openCall).response).toMatchObject({ ok: true, result: { opened: true } })
+    } finally {
+      rmSync(workspacePath, { recursive: true, force: true })
+    }
+  })
+
+  it.each([
+    ['outside symlink ancestor', 'outside-link', false],
+    ['dangling outside symlink ancestor', 'dangling-link', false],
+  ])('rejects an %s without receiver delivery', async (_name, linkName) => {
+    const workspacePath = mkdtempSync(join(tmpdir(), 'navide-editor-symlink-reject-'))
+    const outsidePath = mkdtempSync(join(tmpdir(), 'navide-editor-outside-'))
+    if (linkName === 'outside-link') writeFileSync(join(outsidePath, 'main.ts'), 'outside')
+    try {
+      symlinkSync(join(outsidePath, 'main.ts'), join(workspacePath, linkName))
+      const prepared = await prepareEditorSource(workspacePath)
+      const before = prepared.fixture.receiver.webContents.sent.filter((message) =>
+        message.channel === 'plugin:receiver:editor-target',
+      ).length
+      const openCall = await invokeOpenInEditor(prepared.sourcePort, `editor-${linkName}`, {
+        path: `${linkName}/main.ts`,
+      }, prepared.sourceMessages)
+      expect(await openCall.response).toMatchObject({ ok: true, result: { opened: false } })
+      expect(prepared.fixture.receiver.webContents.sent.filter((message) =>
+        message.channel === 'plugin:receiver:editor-target',
+      )).toHaveLength(before)
+    } finally {
+      rmSync(workspacePath, { recursive: true, force: true })
+      rmSync(outsidePath, { recursive: true, force: true })
+    }
+  })
+
+  it('allows a missing ordinary inside leaf and preserves its root-relative spelling', async () => {
+    const workspacePath = mkdtempSync(join(tmpdir(), 'navide-editor-missing-leaf-'))
+    try {
+      const prepared = await prepareEditorSource(workspacePath)
+      const openCall = invokeOpenInEditor(prepared.sourcePort, 'editor-missing-leaf', {
+        path: 'new/ordinary.ts',
+      }, prepared.sourceMessages)
+      await vi.waitFor(() => expect(prepared.fixture.receiver.webContents.sent.some((message) =>
+        message.channel === 'plugin:receiver:editor-target',
+      )).toBe(true))
+      const target = prepared.fixture.receiver.webContents.sent.filter((message) =>
+        message.channel === 'plugin:receiver:editor-target',
+      ).at(-1)?.args[0] as { receiverId: string; correlation: string; target: { path: string } }
+      expect(target.target.path).toBe('new/ordinary.ts')
+      ipcHandlers.get('plugin:receiver:resolve-editor-target')?.(prepared.fixture.receiverEvent, {
+        receiverId: target.receiverId, correlation: target.correlation, result: { opened: false },
+      })
+      expect(await (await openCall).response).toMatchObject({ ok: true, result: { opened: false } })
+    } finally {
+      rmSync(workspacePath, { recursive: true, force: true })
+    }
+  })
+
+  it('settles false when a symlink target changes before acknowledgement', async () => {
+    vi.useFakeTimers()
+    const workspacePath = mkdtempSync(join(tmpdir(), 'navide-editor-identity-drift-'))
+    const realDirectory = join(workspacePath, 'real')
+    const outsideDirectory = mkdtempSync(join(tmpdir(), 'navide-editor-drift-outside-'))
+    mkdirSync(realDirectory)
+    writeFileSync(join(realDirectory, 'main.ts'), 'inside')
+    writeFileSync(join(outsideDirectory, 'main.ts'), 'outside')
+    const linkPath = join(workspacePath, 'linked')
+    symlinkSync(realDirectory, linkPath)
+    try {
+      const prepared = await prepareEditorSource(workspacePath)
+      const openCall = invokeOpenInEditor(prepared.sourcePort, 'editor-identity-drift', {
+        path: 'linked/main.ts',
+      }, prepared.sourceMessages)
+      await vi.waitFor(() => expect(prepared.fixture.receiver.webContents.sent.some((message) =>
+        message.channel === 'plugin:receiver:editor-target',
+      )).toBe(true))
+      const target = prepared.fixture.receiver.webContents.sent.filter((message) =>
+        message.channel === 'plugin:receiver:editor-target',
+      ).at(-1)?.args[0] as { receiverId: string; correlation: string }
+      renameSync(realDirectory, join(workspacePath, 'real-original'))
+      symlinkSync(outsideDirectory, realDirectory)
+      expect(() => ipcHandlers.get('plugin:receiver:resolve-editor-target')?.(prepared.fixture.receiverEvent, {
+        receiverId: target.receiverId, correlation: target.correlation, result: { opened: true },
+      })).toThrow()
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(await (await openCall).response).toMatchObject({ ok: true, result: { opened: false } })
+    } finally {
+      vi.useRealTimers()
+      rmSync(workspacePath, { recursive: true, force: true })
+      rmSync(outsideDirectory, { recursive: true, force: true })
+    }
+  })
+
+  it('settles false and ignores a late acknowledgement after receiver disposal', async () => {
+    const prepared = await prepareEditorSource()
+    const openCall = invokeOpenInEditor(prepared.sourcePort, 'editor-disposed', {
+      path: 'src/disposed.ts', line: 2, column: 3,
+    }, prepared.sourceMessages, false)
+    await vi.waitFor(() => expect(prepared.fixture.receiver.webContents.sent.some((message) =>
+      message.channel === 'plugin:receiver:editor-target',
+    ), JSON.stringify(prepared.sourceMessages)).toBe(true))
+    const targetPayload = prepared.fixture.receiver.webContents.sent.filter((message) =>
+      message.channel === 'plugin:receiver:editor-target',
+    ).at(-1)?.args[0] as { receiverId: string; correlation: string }
+    await ipcHandlers.get('plugin:receiver:dispose')?.(prepared.fixture.receiverEvent, {
+      receiverId: prepared.fixture.receiverId,
+    })
+    await Promise.resolve()
+    expect(prepared.sourceMessages.some((message) =>
+      (message as { channel?: string; payload?: { requestId?: string } } | null)?.channel === 'plugin:response' &&
+      (message as { payload?: { requestId?: string } }).payload?.requestId === 'editor-disposed',
+    )).toBe(false)
+    expect(() => ipcHandlers.get('plugin:receiver:list-left-contributions')?.(
+      prepared.fixture.receiverEvent, { receiverId: prepared.fixture.receiverId },
+    )).toThrow()
+    expect(() => ipcHandlers.get('plugin:receiver:resolve-editor-target')?.(prepared.fixture.receiverEvent, {
+      receiverId: targetPayload.receiverId, correlation: targetPayload.correlation, result: { opened: true },
+    })).toThrow()
+  })
+
+  it('reuses one admitted detail item for equivalent resources and advances revisions after refusal', async () => {
+    const prepared = await prepareEditorSource()
+
+    const detailOffers = () => prepared.fixture.receiver.webContents.sent
+      .filter((message) => message.channel === 'plugin:receiver:offer')
+      .map((message) => (message.args[0] as { offer: { location?: string; offerId?: string; resourceKey?: string } }).offer)
+      .filter((offer) => offer.location === 'detail')
+    const initialOffer = detailOffers()[0]
+    expect(initialOffer).toMatchObject({ offerId: expect.any(String), resourceKey: expect.any(String) })
+    const itemCount = (prepared.fixture.mgr as unknown as { receiverItems: Map<string, unknown> }).receiverItems.size
+    const assertDetailPortPing = async (requestId: string): Promise<void> => {
+      prepared.sourcePort.postMessage({ kind: 'invoke', channel: 'plugin:cap:call', requestId, payload: {} })
+      await vi.waitFor(() => expect(prepared.sourceMessages.some((message) =>
+        (message as { channel?: string; payload?: { requestId?: string } } | null)?.channel === 'plugin:response' &&
+        (message as { payload?: { requestId?: string } }).payload?.requestId === requestId,
+      )).toBe(true))
+      expect(prepared.sourceMessages.find((message) =>
+        (message as { channel?: string; payload?: { requestId?: string } } | null)?.channel === 'plugin:response' &&
+        (message as { payload?: { requestId?: string } }).payload?.requestId === requestId,
+      )).toMatchObject({ payload: { response: { ok: false } } })
+    }
+
+    const openEquivalent = async (requestId: string): Promise<{
+      offerId: string
+      resourceKey: string
+      response: Promise<unknown>
+    }> => {
+      const target = {
+        presentation: { mode: 'branch-diff' },
+        resource: { compare: 'pending-ack', base: 'main', repository: '.', kind: 'branch-comparison' },
+      }
+      const response = new Promise<unknown>((resolve) => {
+        prepared.providerPort.on('message', (event) => {
+          const message = event.data as { channel?: string; payload?: { requestId?: string; response?: unknown } }
+          if (message.channel === 'plugin:response' && message.payload?.requestId === requestId) resolve(message.payload.response)
+        })
+      })
+      prepared.providerPort.postMessage({ kind: 'invoke', channel: 'plugin:cap:call', requestId,
+        payload: { reqId: requestId, ns: 'ui', method: 'openDetail', args: {
+          contributionKey: 'acme.receiver-lifecycle.detail', target,
+        } } })
+      expect(prepared.providerMessages.some((message) =>
+        (message as { channel?: string; payload?: { requestId?: string } } | null)?.channel === 'plugin:response' &&
+        (message as { payload?: { requestId?: string } }).payload?.requestId === requestId,
+      )).toBe(false)
+      const offer = detailOffers().at(-1)
+      expect(offer?.resourceKey).toBe(initialOffer.resourceKey)
+      return { ...offer as { offerId: string; resourceKey: string }, response }
+    }
+
+    const acceptExisting = async (
+      offerId: string,
+      requestId: string,
+      decision?: { applied: true } | { applied: false; reason: 'refused' | 'busy' },
+    ) => {
+      const targetMessageCount = prepared.sourceMessages.filter((message) =>
+        (message as { channel?: string; payload?: { type?: string } } | null)?.channel === 'plugin:cap:event' &&
+        (message as { payload?: { type?: string } }).payload?.type === 'plugin:view:detail-target',
+      ).length
+      const pending = ipcHandlers.get('plugin:receiver:accept-existing')?.(prepared.fixture.receiverEvent, {
+        receiverId: prepared.fixture.receiverId, offerId, itemId: prepared.detailItemId,
+      }) as Promise<unknown>
+      await vi.waitFor(() => expect(prepared.sourceMessages.filter((message) =>
+        (message as { channel?: string; payload?: { type?: string } } | null)?.channel === 'plugin:cap:event' &&
+        (message as { payload?: { type?: string } }).payload?.type === 'plugin:view:detail-target',
+      )).toHaveLength(targetMessageCount + 1))
+      const update = (prepared.sourceMessages.filter((message) =>
+        (message as { channel?: string; payload?: { type?: string } } | null)?.channel === 'plugin:cap:event' &&
+        (message as { payload?: { type?: string } }).payload?.type === 'plugin:view:detail-target',
+      ).at(-1) as { payload: { data: { targetId: string; revision: number } } }).payload.data
+      if (decision === undefined) return { pending, revision: update.revision }
+      await resolveDetailTarget(prepared.sourcePort, prepared.sourceMessages, requestId, update, decision)
+      return { result: await pending, revision: update.revision }
+    }
+
+    const reused = await openEquivalent('detail-reuse')
+    await expect(acceptExisting(reused.offerId, 'detail-reuse-ack', { applied: true })).resolves.toMatchObject({
+      result: { accepted: true, itemId: prepared.detailItemId }, revision: 2,
+    })
+    await expect(reused.response).resolves.toMatchObject({ ok: true, result: { opened: true } })
+    expect((prepared.fixture.mgr as unknown as { receiverItems: Map<string, unknown> }).receiverItems.size).toBe(itemCount)
+
+    const refusedOffer = await openEquivalent('detail-refused')
+    await expect(acceptExisting(refusedOffer.offerId, 'detail-refused-ack', { applied: false, reason: 'refused' })).resolves.toMatchObject({
+      result: { accepted: false, reason: 'refused' }, revision: 3,
+    })
+    await expect(refusedOffer.response).resolves.toMatchObject({ ok: true, result: { opened: false } })
+    await assertDetailPortPing('reused-detail-ping-after-refusal')
+    const acceptedAgain = await openEquivalent('detail-after-refusal')
+    await expect(acceptExisting(acceptedAgain.offerId, 'detail-after-refusal-ack', { applied: true })).resolves.toMatchObject({
+      result: { accepted: true, itemId: prepared.detailItemId }, revision: 4,
+    })
+    await expect(acceptedAgain.response).resolves.toMatchObject({ ok: true, result: { opened: true } })
+    expect((prepared.fixture.mgr as unknown as { receiverItems: Map<string, unknown> }).receiverItems.size).toBe(itemCount)
+
+    vi.useFakeTimers()
+    try {
+      const timedOut = await openEquivalent('detail-timeout')
+      const acceptance = await acceptExisting(timedOut.offerId, 'detail-timeout-accept')
+      await vi.advanceTimersByTimeAsync(10_000)
+      await expect(acceptance.pending).resolves.toEqual({ accepted: false, reason: 'timeout' })
+      await expect(timedOut.response).resolves.toMatchObject({ ok: true, result: { opened: false } })
+      expect((prepared.fixture.mgr as unknown as { receiverItems: Map<string, unknown> }).receiverItems.size).toBe(itemCount)
+    } finally {
+      vi.useRealTimers()
+    }
+
+    await assertDetailPortPing('reused-detail-ping-after-timeout')
+  })
+
+  it('times out an unanswered editor target as opened false', async () => {
+    vi.useFakeTimers()
+    try {
+      const prepared = await prepareEditorSource()
+      const openCall = invokeOpenInEditor(prepared.sourcePort, 'editor-timeout', {
+        path: 'src/timeout.ts', line: 4, column: 5,
+      }, prepared.sourceMessages)
+      await vi.waitFor(() => expect(prepared.fixture.receiver.webContents.sent.some((message) =>
+        message.channel === 'plugin:receiver:editor-target',
+      )).toBe(true))
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(await (await openCall).response).toEqual({ reqId: 'editor-timeout', ok: true, result: { opened: false } })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('cancels a reused open when its left source tears down without deleting the existing detail item', async () => {
+    const prepared = await prepareEditorSource()
+    const items = (prepared.fixture.mgr as unknown as {
+      receiverItems: Map<string, { bindingId: string; offer: { location?: string } }>
+    }).receiverItems
+    const leftItem = [...items.entries()].find(([, item]) => item.offer.location === 'left')
+    expect(leftItem).toBeTruthy()
+    const [leftItemId, leftRecord] = leftItem as [string, { bindingId: string; offer: { location?: string } }]
+    expect(leftItemId).not.toBe(prepared.detailItemId)
+
+    const detailOffers = () => prepared.fixture.receiver.webContents.sent
+      .filter((message) => message.channel === 'plugin:receiver:offer')
+      .map((message) => (message.args[0] as { offer?: { offerId?: string; location?: string; resourceKey?: string } }).offer)
+      .filter((offer) => offer?.location === 'detail') as Array<{ offerId: string; location: 'detail'; resourceKey?: string }>
+    const existingOffer = detailOffers()[0]
+    expect(existingOffer).toMatchObject({ offerId: expect.any(String), location: 'detail' })
+
+    const requestId = 'detail-source-teardown'
+    prepared.providerPort.postMessage({
+      kind: 'invoke', channel: 'plugin:cap:call', requestId,
+      payload: { reqId: requestId, ns: 'ui', method: 'openDetail', args: {
+        contributionKey: 'acme.receiver-lifecycle.detail',
+        target: {
+          resource: { kind: 'branch-comparison', repository: '.', base: 'main', compare: 'pending-ack' },
+          presentation: { mode: 'branch-diff' },
+        },
+      } },
+    })
+    await vi.waitFor(() => expect(detailOffers()).toHaveLength(2))
+    const replacementOffer = detailOffers().at(-1) as { offerId: string; location: 'detail'; resourceKey?: string }
+    expect(replacementOffer.resourceKey).toBe(existingOffer.resourceKey)
+
+    const targetMessagesBefore = prepared.sourceMessages.filter((message) =>
+      (message as { channel?: string; payload?: { type?: string } } | null)?.channel === 'plugin:cap:event' &&
+      (message as { payload?: { type?: string } }).payload?.type === 'plugin:view:detail-target',
+    ).length
+    const acceptance = ipcHandlers.get('plugin:receiver:accept-existing')?.(prepared.fixture.receiverEvent, {
+      receiverId: prepared.fixture.receiverId,
+      offerId: replacementOffer.offerId,
+      itemId: prepared.detailItemId,
+    }) as Promise<unknown>
+    await vi.waitFor(() => expect(prepared.sourceMessages.filter((message) =>
+      (message as { channel?: string; payload?: { type?: string } } | null)?.channel === 'plugin:cap:event' &&
+      (message as { payload?: { type?: string } }).payload?.type === 'plugin:view:detail-target',
+    )).toHaveLength(targetMessagesBefore + 1))
+
+    expect(prepared.fixture.mgr.closePluginFrame(leftRecord.bindingId)).toBe(true)
+    await expect(acceptance).resolves.toEqual({ accepted: false, reason: 'unavailable' })
+    await Promise.resolve()
+    expect(prepared.providerMessages.some((message) =>
+      (message as { channel?: string; payload?: { requestId?: string } } | null)?.channel === 'plugin:response' &&
+      (message as { payload?: { requestId?: string } }).payload?.requestId === requestId,
+    )).toBe(false)
+    expect(items.has(leftItemId)).toBe(false)
+    expect(items.has(prepared.detailItemId)).toBe(true)
+
+    const pingRequestId = 'reused-detail-ping-after-source-teardown'
+    const pingResponse = new Promise<unknown>((resolve) => {
+      prepared.sourcePort.on('message', (event) => {
+        const message = event.data as { channel?: string; payload?: { requestId?: string; response?: unknown } }
+        if (message.channel === 'plugin:response' && message.payload?.requestId === pingRequestId) {
+          resolve(message.payload.response)
+        }
+      })
+    })
+    prepared.sourcePort.postMessage({
+      kind: 'invoke', channel: 'plugin:cap:call', requestId: pingRequestId, payload: {},
+    })
+    await expect(pingResponse).resolves.toMatchObject({ ok: false })
+  })
+
+  it('keeps a surviving admitted sibling live for a directed private-port response after aborting another item', async () => {
+    const fixture = await setupReceiver()
+    const first = await mountOffer(fixture)
+    const sibling = await mountOffer(fixture)
+    await admitItem(fixture, first.itemId)
+    const surviving = await admitItem(fixture, sibling.itemId)
+    const abort = ipcHandlers.get('plugin:receiver:abort')
+    await abort?.(fixture.receiverEvent, { receiverId: fixture.receiverId, itemId: first.itemId })
+    const response = new Promise<{ data: unknown }>((resolve) => surviving.port.on('message', resolve))
+    surviving.port.postMessage({
+      kind: 'invoke', channel: 'plugin:cap:call', requestId: 'sibling-live-request', payload: {},
+    })
+    const message = await response
+    expect(message.data).toMatchObject({
+      channel: 'plugin:response',
+      documentGeneration: 1,
+      payload: { requestId: 'sibling-live-request', response: { ok: false } },
+    })
+    expect((fixture.mgr as unknown as { receiverItems: Map<string, unknown> }).receiverItems.has(sibling.itemId)).toBe(true)
+  })
+
+  it('uses the registered receiver WCV id, rejects foreign abort senders, and preserves siblings', async () => {
+    const fixture = await setupReceiver()
+    const first = await mountOffer(fixture)
+    const second = await mountOffer(fixture)
+    expect((fixture.mgr as unknown as { receiverItems: Map<string, unknown> }).receiverItems.has(second.itemId)).toBe(true)
+    const hostContents = fixture.host.webContents as FakeHostContents & { id: number }
+    const hostMainFrame = (fixture.host.webContents as FakeHostContents & { mainFrame: object }).mainFrame
+    const items = (fixture.mgr as unknown as { receiverItems: Map<string, { bindingId: string }> }).receiverItems
+    const pending = (fixture.mgr as unknown as { pendingPluginFrames: Map<string, { receiverWebContents: { id: number } }> }).pendingPluginFrames
+    const firstBinding = items.get(first.itemId)?.bindingId
+    const secondBinding = items.get(second.itemId)?.bindingId
+    expect(firstBinding).toBeTruthy()
+    expect(secondBinding).toBeTruthy()
+    expect(pending.get(firstBinding!)?.receiverWebContents.id).toBe(fixture.receiver.webContents.id)
+    expect(pending.get(firstBinding!)?.receiverWebContents.id).not.toBe(hostContents.id)
+    expect(fixture.receiver.webContents.mainFrame).not.toBe(hostMainFrame)
+
+    const abort = ipcHandlers.get('plugin:receiver:abort')
+    const foreignEvent = { sender: { id: hostContents.id }, senderFrame: fixture.receiver.webContents.mainFrame }
+    await abort?.(foreignEvent, { receiverId: fixture.receiverId, itemId: first.itemId })
+    await abort?.(fixture.receiverEvent, { receiverId: 'stale-receiver', itemId: first.itemId })
+    expect(items.has(first.itemId)).toBe(true)
+
+    await abort?.(fixture.receiverEvent, { receiverId: fixture.receiverId, itemId: first.itemId })
+    await abort?.(fixture.receiverEvent, { receiverId: fixture.receiverId, itemId: first.itemId })
+    expect(items.has(first.itemId)).toBe(false)
+    expect(items.has(second.itemId)).toBe(true)
+    expect(pending.has(firstBinding!)).toBe(false)
+    expect(pending.has(secondBinding!)).toBe(true)
+  })
+
+  it('sends one exact item-closed payload and suppresses later stale cleanup after dispose', async () => {
+    const fixture = await setupReceiver()
+    const first = await mountOffer(fixture)
+    const second = await mountOffer(fixture)
+    const abort = ipcHandlers.get('plugin:receiver:abort')
+    await abort?.(fixture.receiverEvent, { receiverId: fixture.receiverId, itemId: first.itemId })
+    const dispose = ipcHandlers.get('plugin:receiver:dispose')
+    await dispose?.(fixture.receiverEvent, { receiverId: fixture.receiverId })
+    const closed = fixture.receiver.webContents.sent
+      .filter((message) => message.channel === 'plugin:receiver:item-closed')
+      .map((message) => message.args[0])
+    expect(closed).toEqual([
+      { receiverId: fixture.receiverId, itemId: first.itemId, documentGeneration: 0 },
+    ])
+    await abort?.(fixture.receiverEvent, { receiverId: fixture.receiverId, itemId: first.itemId })
+    await dispose?.(fixture.receiverEvent, { receiverId: fixture.receiverId })
+    expect(fixture.receiver.webContents.sent.filter((message) => message.channel === 'plugin:receiver:item-closed')).toHaveLength(1)
+    expect((fixture.mgr as unknown as { receiverItems: Map<string, unknown> }).receiverItems.size).toBe(0)
+  })
+
+  it('rechecks registration after a delayed reserve and closes the reserved binding before returning an item', async () => {
+    const fixture = await setupReceiver()
+    expect(fixture.mgr.offerReceiverProvider(fixture.receiverId, fixture.descriptor, fixture.providerView, '/workspace')).toEqual({ ok: true })
+    const offerId = ((fixture.receiver.webContents.sent.at(-1)?.args[0] as { offer?: { offerId: string } }).offer?.offerId)
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const original = fixture.mgr.reservePluginFrameContribution.bind(fixture.mgr)
+    let reserved: Awaited<ReturnType<FrontendPluginManager['reservePluginFrameContribution']>> | undefined
+    vi.spyOn(fixture.mgr, 'reservePluginFrameContribution').mockImplementation(async (...args) => {
+      await gate
+      reserved = await original(...args)
+      return reserved
+    })
+    const mount = ipcHandlers.get('plugin:receiver:mount')
+    const mounting = mount?.(fixture.receiverEvent, { receiverId: fixture.receiverId, offerId, placement: { mountHostId: `host-${offerId}` } })
+    await Promise.resolve()
+    await ipcHandlers.get('plugin:receiver:dispose')?.(fixture.receiverEvent, { receiverId: fixture.receiverId })
+    release()
+    await expect(mounting).rejects.toThrow('receiver mount is unavailable')
+    expect(reserved?.ok).toBe(true)
+    const bindingId = reserved?.ok ? reserved.bindingId : ''
+    expect((fixture.mgr as unknown as { pendingPluginFrames: Map<string, unknown> }).pendingPluginFrames.has(bindingId)).toBe(false)
+    expect((fixture.mgr as unknown as { receiverItems: Map<string, unknown> }).receiverItems.size).toBe(0)
   })
 })
 
@@ -5212,6 +6996,37 @@ describe('opaque view instance ownership', () => {
     expect(window.instanceId).toBeTruthy()
   })
 
+  it('does not let a child frame inherit the native sender identity', async () => {
+    const mgr = new FrontendPluginManager()
+    const packageDesc = packageDescriptor()
+    mgr.registerDescriptor(packageDesc)
+    const host = new FakeBrowserWindow()
+    await mgr.openView(packageDesc, packageDesc.views![0], {
+      hostWindow: asHost(host),
+      bounds: 'fill',
+    })
+    const view = host.children[0] as FakeViewLike
+    const call = ipcHandlers.get('plugin:cap:call')
+    expect(call).toBeDefined()
+
+    await expect(call!(
+      {
+        sender: { id: view.webContents.id },
+        senderFrame: {
+          isDestroyed: () => false,
+          parent: {},
+          frameTreeNodeId: 77,
+          url: 'file:///unadmitted-child.html',
+        },
+      },
+      { reqId: 'child-inherit', ns: 'ping', method: 'ping', args: {} },
+    )).resolves.toEqual({
+      reqId: '',
+      ok: false,
+      error: { code: 'BAD_REQUEST', message: 'unknown plugin sender' },
+    })
+  })
+
   it('destroys every live instance when a package is removed', async () => {
     const mgr = new FrontendPluginManager()
     const packageDesc = packageDescriptor()
@@ -6406,8 +8221,8 @@ describe('cast channel (IPC_CAST / handleCast)', () => {
     mgr.noteTerminalRoutes('acme.term', 'terminal.create', { terminal_session_id: 't-1' })
     // No backend transport in tests — reaching 'no-backend' proves the cast
     // passed sender, shape, scoping AND the whitelist.
-    expect(mgr.handleCast(view.webContents.id, castPayload('terminal', 'input'))).toBe('no-backend')
-    expect(mgr.handleCast(view.webContents.id, castPayload('terminal', 'log_sent'))).toBe(
+    expect(mgr.handleCast(view.webContents.id, castPayload('terminal', 'input'), view.webContents.mainFrame as never)).toBe('no-backend')
+    expect(mgr.handleCast(view.webContents.id, castPayload('terminal', 'log_sent'), view.webContents.mainFrame as never)).toBe(
       'no-backend'
     )
   })
@@ -6416,10 +8231,10 @@ describe('cast channel (IPC_CAST / handleCast)', () => {
     const mgr = new FrontendPluginManager()
     const host = new FakeBrowserWindow()
     const view = openPlugin(mgr, host, 'acme.term', ['terminal'])
-    expect(mgr.handleCast(view.webContents.id, castPayload('terminal', 'resize'))).toBe(
+    expect(mgr.handleCast(view.webContents.id, castPayload('terminal', 'resize'), view.webContents.mainFrame as never)).toBe(
       'not-castable'
     )
-    expect(mgr.handleCast(view.webContents.id, castPayload('terminal', 'kill'))).toBe(
+    expect(mgr.handleCast(view.webContents.id, castPayload('terminal', 'kill'), view.webContents.mainFrame as never)).toBe(
       'not-castable'
     )
   })
@@ -6428,7 +8243,7 @@ describe('cast channel (IPC_CAST / handleCast)', () => {
     const mgr = new FrontendPluginManager()
     const host = new FakeBrowserWindow()
     const view = openPlugin(mgr, host, 'acme.fsonly', ['fs'])
-    expect(mgr.handleCast(view.webContents.id, castPayload('terminal', 'input'))).toBe('denied')
+    expect(mgr.handleCast(view.webContents.id, castPayload('terminal', 'input'), view.webContents.mainFrame as never)).toBe('denied')
   })
 
   it('rejects terminal request controls from a sibling route owner', async () => {
@@ -6459,9 +8274,9 @@ describe('cast channel (IPC_CAST / handleCast)', () => {
     const mgr = new FrontendPluginManager()
     const host = new FakeBrowserWindow()
     const view = openPlugin(mgr, host, 'acme.term', ['terminal'])
-    expect(mgr.handleCast(view.webContents.id, castPayload('terminal', 'nope'))).toBe('unmapped')
+    expect(mgr.handleCast(view.webContents.id, castPayload('terminal', 'nope'), view.webContents.mainFrame as never)).toBe('unmapped')
     expect(mgr.handleCast(999999, castPayload('terminal', 'input'))).toBe('unknown-sender')
-    expect(mgr.handleCast(view.webContents.id, { nope: true })).toBe('malformed')
+    expect(mgr.handleCast(view.webContents.id, { nope: true }, view.webContents.mainFrame as never)).toBe('malformed')
   })
 
   it('is wired to the plugin:cap:cast IPC channel', () => {

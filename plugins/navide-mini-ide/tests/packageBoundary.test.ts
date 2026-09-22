@@ -10,7 +10,6 @@ import {
   realpathSync,
   rmSync,
   symlinkSync,
-  writeFileSync,
 } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
@@ -28,7 +27,6 @@ const packageRoots = {
   contracts: join(repositoryRoot, 'packages/plugin-contracts'),
   sdk: join(repositoryRoot, 'packages/plugin-sdk'),
   ui: join(repositoryRoot, 'packages/plugin-ui'),
-  git: join(repositoryRoot, 'plugins/navide-git'),
 }
 
 function packageManager(): { command: string; prefix: string[] } {
@@ -47,15 +45,18 @@ function subprocessEnvironment(): NodeJS.ProcessEnv {
     ...process.env,
     CI: '1',
     PNPM_CONFIG_PM_ON_FAIL: 'ignore',
+    // A newer pnpm than the repo's pinned 10.x enables verify-deps-before-run
+    // by default and can wipe node_modules on a lockfile-config mismatch.
+    npm_config_verify_deps_before_run: 'false',
     PATH: `${nodeDirectory}:${process.env.PATH ?? ''}`,
   }
 }
 
-function run(command: string, args: string[], cwd: string): CommandResult {
+function run(command: string, args: string[], cwd: string, extraEnv: NodeJS.ProcessEnv = {}): CommandResult {
   const result = spawnSync(command, args, {
     cwd,
     encoding: 'utf8',
-    env: subprocessEnvironment(),
+    env: { ...subprocessEnvironment(), ...extraEnv },
     maxBuffer: 32 * 1024 * 1024,
   })
   if (result.error) throw result.error
@@ -75,8 +76,8 @@ function runPnpmOrThrow(args: string[], cwd: string): CommandResult {
   return result
 }
 
-function runNodeEntryOrThrow(entry: string, args: string[], cwd: string): CommandResult {
-  const result = run(process.execPath, [entry, ...args], cwd)
+function runNodeEntryOrThrow(entry: string, args: string[], cwd: string, extraEnv: NodeJS.ProcessEnv = {}): CommandResult {
+  const result = run(process.execPath, [entry, ...args], cwd, extraEnv)
   if (result.status !== 0) {
     throw new Error(`node ${entry} ${args.join(' ')} failed in ${cwd}\n${result.stdout}\n${result.stderr}`)
   }
@@ -127,12 +128,6 @@ function resolveInstalledPackageBin(
   return join(packageDirectory, bin)
 }
 
-function installedVersion(repository: string, packageName: string): string {
-  const require = createRequire(join(repository, 'package.json'))
-  const directory = resolveInstalledPackageDirectory(repository, packageName, require)
-  return (JSON.parse(readFileSync(join(directory, 'package.json'), 'utf8')) as { version: string }).version
-}
-
 function packedPath(result: CommandResult, artifacts: string, packageName: string): string {
   const reportedPath = result.stdout
     .split('\n')
@@ -173,145 +168,17 @@ function collectFiles(directory: string): string[] {
   })
 }
 
-function writeConsumerProject(project: string, sourceRoot: string, tarballs: Record<string, string>): void {
-  const versions = {
-    '@types/node': installedVersion(repositoryRoot, '@types/node'),
-    '@vitejs/plugin-vue': installedVersion(repositoryRoot, '@vitejs/plugin-vue'),
-    monaco: installedVersion(repositoryRoot, 'monaco-editor'),
-    mermaid: installedVersion(repositoryRoot, 'mermaid'),
-    typescript: installedVersion(repositoryRoot, 'typescript'),
-    vite: installedVersion(repositoryRoot, 'vite'),
-    vue: installedVersion(repositoryRoot, 'vue'),
-    'vue-i18n': installedVersion(repositoryRoot, 'vue-i18n'),
-    'vue-tsc': installedVersion(repositoryRoot, 'vue-tsc'),
-    yaml: installedVersion(repositoryRoot, 'yaml'),
+function writeConsumerProject(project: string, packageRoot: string): void {
+  for (const file of ['package.json', 'tsconfig.json', 'vite.config.ts', 'manifest.json']) {
+    cpSync(join(packageRoot, file), join(project, file))
   }
-  writeFileSync(
-    join(project, 'package.json'),
-    `${JSON.stringify({
-      name: 'navide-mini-ide-external-consumer',
-      private: true,
-      type: 'module',
-      dependencies: {
-        '@navide/navide-git': `file:${tarballs['@navide/navide-git']}`,
-        '@navide/plugin-contracts': `file:${tarballs['@navide/plugin-contracts']}`,
-        '@navide/plugin-sdk': `file:${tarballs['@navide/plugin-sdk']}`,
-        '@navide/plugin-ui': `file:${tarballs['@navide/plugin-ui']}`,
-        'monaco-editor': versions.monaco,
-        vue: versions.vue,
-        'vue-i18n': versions['vue-i18n'],
-        yaml: versions.yaml,
-        mermaid: versions.mermaid,
-      },
-      devDependencies: {
-        '@types/node': versions['@types/node'],
-        '@vitejs/plugin-vue': versions['@vitejs/plugin-vue'],
-        typescript: versions.typescript,
-        vite: versions.vite,
-        'vue-tsc': versions['vue-tsc'],
-      },
-    }, null, 2)}\n`,
-  )
-  cpSync(sourceRoot, join(project, 'src'), { recursive: true })
-  writeFileSync(
-    join(project, 'index.html'),
-    '<!doctype html><html><body><div id="app"></div><script type="module" src="/src/index.ts"></script></body></html>\n',
-  )
-  writeFileSync(
-    join(project, 'tsconfig.json'),
-    `${JSON.stringify({
-      compilerOptions: {
-        target: 'ES2022',
-        module: 'ESNext',
-        moduleResolution: 'Bundler',
-        strict: true,
-        skipLibCheck: true,
-        noEmit: true,
-        types: ['vite/client'],
-      },
-      include: ['src/**/*.ts', 'src/**/*.vue', 'vite.config.ts'],
-    }, null, 2)}\n`,
-  )
-  writeFileSync(
-    join(project, 'vite.config.ts'),
-    `import { defineConfig, type Plugin } from 'vite'
-import vue from '@vitejs/plugin-vue'
-
-function compositionBoundaryGuard(): Plugin {
-  return {
-    name: 'mini-ide-composition-boundary-guard',
-    generateBundle() {
-      const moduleIds = [...this.getModuleIds()]
-      const expectedGitComponents = [
-        'src/components/GitPane.vue',
-        'src/editor/DiffPane.vue',
-        'src/editor/BranchDiffPane.vue',
-        'src/editor/ConflictPane.vue',
-      ]
-      const missingComponents = expectedGitComponents.filter((path) =>
-        !moduleIds.some((id) => id.endsWith('/node_modules/@navide/navide-git/' + path)),
-      )
-      if (missingComponents.length) {
-        this.error('Git composition components missing from Rollup graph:\\n' + missingComponents.join('\\n'))
-      }
-      const violations = moduleIds.filter((id) =>
-        /[/\\\\]src[/\\\\]renderer[/\\\\]/.test(id) ||
-        /[/\\\\]node_modules[/\\\\]@navide[/\\\\]navide-git[/\\\\]src[/\\\\](?:index|mount|capabilityBackend)\\.ts$/.test(id),
-      )
-      if (violations.length) {
-        this.error('forbidden Mini-IDE module graph entries:\\n' + violations.join('\\n'))
-      }
-    },
-  }
-}
-
-export default defineConfig({
-  base: './',
-  plugins: [vue(), compositionBoundaryGuard()],
-  build: {
-    outDir: ${JSON.stringify(join(project, 'dist'))},
-    emptyOutDir: true,
-  },
-})
-`,
-  )
-  writeFileSync(
-    join(project, 'picker.html'),
-    '<!doctype html><html><body><script type="module" src="/src/picker-entry.ts"></script></body></html>\n',
-  )
-  writeFileSync(
-    join(project, 'src/picker-entry.ts'),
-    `import {
-  createTerminalFilePicker,
-  mergePreferredPath,
-  type PickerItem,
-} from '@navide/plugin-ui/file-picker'
-
-const items: PickerItem[] = [{ abs: '/workspace/main.ts', name: 'main.ts', dir: '/workspace' }]
-const preferred = mergePreferredPath(items, '/workspace/main.ts', true)
-const picker = createTerminalFilePicker({
-  query: async () => preferred,
-  onPick: () => undefined,
-})
-picker.close()
-`,
-  )
-  writeFileSync(
-    join(project, 'picker.vite.config.ts'),
-    `import { defineConfig } from 'vite'
-
-export default defineConfig({
-  base: './',
-  build: {
-    outDir: ${JSON.stringify(join(project, 'picker-dist'))},
-    emptyOutDir: true,
-    rollupOptions: {
-      input: ${JSON.stringify(join(project, 'picker.html'))},
-    },
-  },
-})
-`,
-  )
+  cpSync(join(packageRoot, 'frontend'), join(project, 'frontend'), { recursive: true })
+  // Test sources are not part of the shipped package and would demand test-only
+  // dev dependencies in the external consumer typecheck.
+  cpSync(join(packageRoot, 'src'), join(project, 'src'), {
+    recursive: true,
+    filter: (source) => !/(?:[/\\]__tests__[/\\]|\.test\.ts$)/.test(source),
+  })
 }
 
 describe('navide Mini-IDE public package boundary', () => {
@@ -333,28 +200,27 @@ describe('navide Mini-IDE public package boundary', () => {
           packageTarballs[packageName] = packedPath(result, artifacts, key)
         }
         expect(Object.keys(packageTarballs).sort()).toEqual([
-          '@navide/navide-git',
           '@navide/plugin-contracts',
           '@navide/plugin-sdk',
           '@navide/plugin-ui',
         ])
 
-        writeConsumerProject(externalProject, join(repositoryRoot, 'plugins/navide-mini-ide/src'), packageTarballs)
+        const packageRoot = join(repositoryRoot, 'plugins/navide-mini-ide')
+        writeConsumerProject(externalProject, packageRoot)
+        const copiedPackageJson = JSON.parse(readFileSync(join(externalProject, 'package.json'), 'utf8')) as {
+          dependencies?: Record<string, unknown>
+          devDependencies?: Record<string, unknown>
+        }
+        expect(copiedPackageJson.dependencies).not.toHaveProperty('@navide/navide-git')
+        expect(existsSync(join(externalProject, 'node_modules/@navide/navide-git'))).toBe(false)
+        expect(collectFiles(externalProject).some((path) => /[/\\]src[/\\]renderer[/\\]/.test(path))).toBe(false)
+        expect(collectFiles(externalProject).some((path) => /[/\\]plugins[/\\]navide-(git|plans)[/\\]/.test(path))).toBe(false)
         for (const packageName of Object.keys(packageTarballs)) {
           const installedPackage = join(externalProject, 'node_modules', packageName)
           extractPackageTarball(packageTarballs[packageName], installedPackage, externalProject)
           expect(lstatSync(installedPackage).isSymbolicLink(), packageName).toBe(false)
           expect(realpathSync(installedPackage)).not.toContain(repositoryRoot)
         }
-
-        const externalGitPackage = join(externalProject, 'node_modules/@navide/navide-git')
-        const gitPackageJson = JSON.parse(readFileSync(join(externalGitPackage, 'package.json'), 'utf8')) as {
-          imports?: Record<string, string>
-          exports?: Record<string, unknown>
-        }
-        expect(gitPackageJson.exports).toHaveProperty('./composition', './src/composition.ts')
-        expect(gitPackageJson.imports).toMatchObject({ '#git-feature': './src/git-feature/index.ts' })
-        expect(existsSync(join(externalGitPackage, 'src/git-feature/index.ts'))).toBe(true)
 
         for (const packageName of [
           '@types/node',
@@ -376,33 +242,10 @@ describe('navide Mini-IDE public package boundary', () => {
         runNodeEntryOrThrow(vueTscCli, ['--noEmit', '--project', join(externalProject, 'tsconfig.json')], externalProject)
 
         const viteCli = resolveInstalledPackageBin(externalProject, 'vite', 'vite', externalRequire)
-        runNodeEntryOrThrow(viteCli, ['build', '--config', join(externalProject, 'vite.config.ts')], externalProject)
-        runNodeEntryOrThrow(
-          viteCli,
-          ['build', '--config', join(externalProject, 'picker.vite.config.ts')],
-          externalProject,
-        )
+        runNodeEntryOrThrow(viteCli, ['build', '--config', join(externalProject, 'vite.config.ts')], externalProject, {
+          NAVIDE_MINI_IDE_DIST_DIR: join(externalProject, 'dist'),
+        })
 
-        const pickerDistFiles = collectFiles(join(externalProject, 'picker-dist'))
-        const pickerJavaScript = pickerDistFiles
-          .filter((path) => path.endsWith('.js'))
-          .map((path) => readFileSync(path, 'utf8'))
-          .join('\n')
-        expect(pickerJavaScript).toContain('term-file-picker-root')
-        expect(pickerJavaScript).toContain('Search files...')
-        expect(pickerJavaScript).toContain('/workspace/main.ts')
-        for (const forbiddenModule of [
-          'SafeAiCliPanel',
-          'MiniIdeApp',
-          'EditorPane',
-          'AiCliTerminal',
-          'terminalInput',
-        ]) {
-          expect(pickerJavaScript, forbiddenModule).not.toContain(forbiddenModule)
-        }
-
-        rmSync(externalGitPackage, { recursive: true, force: true })
-        expect(existsSync(externalGitPackage)).toBe(false)
         const distFiles = collectFiles(join(externalProject, 'dist'))
         const workerFiles = distFiles.filter((path) => /(?:editor|ts|json|css|html)\.worker-[^/]+\.js$/.test(path))
         const workerPrefixes = ['editor.worker-', 'ts.worker-', 'json.worker-', 'css.worker-', 'html.worker-']
