@@ -2,21 +2,17 @@
 import { ref, computed, reactive, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useBackend, viewRuntime } from './composables/useBackend'
 import { createMiniIdeEditorPort } from './composables/editorPort'
-import { createMiniIdeGitTransport } from './composables/gitPorts'
-import { createMiniIdeSettingsPort, createMiniIdeGitSurfacePorts, createMiniIdeKeybindingsPort } from './composables/surfacePorts'
+import { createMiniIdeSettingsPort, createMiniIdeKeybindingsPort } from './composables/surfacePorts'
 import { native, revealPath } from './composables/native'
 import { resetUiScale, stepUiScaleBy } from './lib/uiScale'
 import ExplorerPane from './components/ExplorerPane.vue'
 import WindowControls from './components/WindowControls.vue'
 import SearchPane from './components/SearchPane.vue'
-import { GitPane, DiffPane, ConflictPane } from './git-composition'
 import { EditorPane } from '@navide/plugin-ui/editor'
 import type { PluginDetailCloseDecision, PluginEditorFileTarget, PluginEditorTargetOpenResult, PluginReceiverCloseGuardReason, PluginReceiverLeftContribution } from '@navide/plugin-sdk'
-import ReviewPane from './components/ReviewPane.vue'
-import MiniIdeBranchDiffPane from './editor/MiniIdeBranchDiffPane.vue'
 import NotificationHost from './components/NotificationHost.vue'
 // Shared right-side AI CLI terminal shell (rail toggle + resize + embedded
-// PTY terminal), same panel the Git/Plan windows embed.
+// PTY terminal), the same panel other plugin windows embed.
 import AiCliDock from './components/MiniIdeAiDock.vue'
 import { aiTerminalPaneId, bracketedPaste, truncateText } from './lib/aiContext'
 import ProblemsPane from './components/ProblemsPane.vue'
@@ -30,8 +26,6 @@ import { initSettingsBackend, settingsGet, settingsSet, onSettingsChanged } from
 import { useNotify } from '@navide/plugin-ui/foundation'
 import { allDiagnosticsSorted, setDiagnostics, diagnosticsKey } from './editor/diagnostics'
 import type { Diagnostic } from './editor/diagnostics'
-// Type-only — erased at build time, no useGit in this window's bundle.
-import type { ListConflictsResult } from './composables/useGit'
 
 // ── window params (Electron appends ?window=editor&workspace_path=…&filepath=…) ──
 const params = new URLSearchParams(window.location.search)
@@ -58,19 +52,8 @@ const initialRel = params.get('filepath') ?? ''
 const initialFileWs = params.get('file_ws') ?? ''
 const initialName = params.get('name') ?? (initialRel.split('/').pop() || initialRel)
 const initialLine = Number(params.get('line')) || 0
-// diff pre-load: when opened via openDiffWindow with no existing editor window
-const initialDiffFile = params.get('diff_filepath') ?? ''
-const initialDiffStaged = params.get('diff_staged') === 'true'
-const initialDiffName = params.get('diff_name') ?? (initialDiffFile.split('/').pop() || initialDiffFile)
-const initialDiffCommit = params.get('diff_commit') ?? ''
-// branch-diff pre-load: when opened via openBranchDiffWindow with no existing editor window
-const initialBranchDiffBase = params.get('branch_diff_base') ?? ''
-const initialBranchDiffCompare = params.get('branch_diff_compare') ?? ''
-
 const backend = useBackend()
 const editorPort = createMiniIdeEditorPort(backend)
-const gitTransport = createMiniIdeGitTransport(backend)
-const surfacePorts = createMiniIdeGitSurfacePorts(backend, gitTransport)
 // Hook the settings cache to this window's own ws connection: flushes writes
 // (sidebar/panel widths) and receives ui.settings_changed broadcasts from the
 // main window (theme changes — see the onSettingsChanged subscription below).
@@ -208,7 +191,7 @@ type StatePreservingMoveElement = Element & {
   moveBefore(movedNode: Node, referenceNode: Node | null): Node
 }
 
-interface OpenFile { kind: 'file' | 'diff' | 'conflict' | 'branch-diff'; id: number; relPath: string; wsPath?: string; name: string; line: number; dirty: boolean; revealAt?: number; revealSeq: number; filepath?: string; staged?: boolean; commit?: string; base?: string; compare?: string }
+interface OpenFile { kind: 'file'; id: number; relPath: string; wsPath?: string; name: string; line: number; dirty: boolean; revealAt?: number; revealSeq: number }
 interface ProviderTab { kind: 'provider'; id: number; relPath: string; wsPath?: string; name: string; line: number; dirty: false; revealAt?: number; revealSeq: number; mountHostId: string; resourceKey: string; itemId?: string; closing: boolean }
 type EditorTab = OpenFile | ProviderTab
 // Stable tab identity for template keys: relPath is mutable (tabs follow
@@ -287,19 +270,18 @@ function togglePreview(key: string): void {
   previewFiles.value = s
 }
 
-const initialSidebar = (['explorer', 'search', 'git', 'problems'] as const).find(
+const initialSidebar = (['explorer', 'search', 'problems'] as const).find(
   (v) => v === params.get('sidebar'),
 ) ?? 'explorer'
-const sidebarView = ref<'explorer' | 'search' | 'git' | 'problems'>(initialSidebar)
+// An empty value means a plugin-provided view fills the sidebar instead of one
+// of this window's own panes.
+const sidebarView = ref<'explorer' | 'search' | 'problems' | ''>(initialSidebar)
 const sidebarHidden = ref(false)
 const zenMode = ref(false)
-const changesCount = ref(0)
 const activePath = computed(() => {
   const f = findTab(activeKey.value)
   if (!f || f.kind === 'provider') return []
-  if (f.kind === 'branch-diff') return [f.name]
-  const displayPath = (f.kind === 'diff' || f.kind === 'conflict') ? (f.filepath ?? '') : f.relPath
-  return displayPath.split('/').filter(Boolean)
+  return f.relPath.split('/').filter(Boolean)
 })
 
 // ── Breadcrumb dropdown ───────────────────────────────────────────────────────
@@ -495,70 +477,6 @@ function openFile(p: { filepath: string; name?: string; line?: number; wsPath?: 
       s.add(key)
       previewFiles.value = s
     }
-  }
-  activeKey.value = key
-}
-
-function openDiff(p: { filepath: string; staged: boolean; name?: string; commit?: string }): void {
-  const relPath = `\x00diff:${p.commit || (p.staged ? '1' : '0')}:${p.filepath}`
-  const name = p.name ?? (p.filepath.split('/').pop() || p.filepath)
-  const key = tabKeyOf(undefined, relPath)
-  if (!findTab(key)) {
-    openFiles.value.push({ kind: 'diff', id: nextTabId(), relPath, filepath: p.filepath, staged: p.staged, commit: p.commit || undefined, name, line: 0, dirty: false, revealSeq: 0 })
-  }
-  activeKey.value = key
-}
-
-function openConflict(p: { filepath: string; name?: string }): void {
-  const relPath = `\x00conflict:${p.filepath}`
-  const name = p.name ?? (p.filepath.split('/').pop() || p.filepath)
-  const key = tabKeyOf(undefined, relPath)
-  if (!findTab(key)) {
-    openFiles.value.push({ kind: 'conflict', id: nextTabId(), relPath, filepath: p.filepath, name, line: 0, dirty: false, revealSeq: 0 })
-  }
-  activeKey.value = key
-  void loadConflictPaths()
-}
-
-// ── Conflict tabs: is the merge that produced them still in progress? ────────
-// ConflictPane refuses to write once its file is no longer an unmerged path
-// (`merge --abort` run in the Git window or a terminal), but that guard only
-// works if this host feeds it. GitPane keeps its useGit instance private, so
-// the unmerged paths are read straight from the index here and re-read on the
-// backend's git.changed broadcast. `null` = never read; only a successful read
-// is allowed to declare a file no longer conflicted.
-const conflictPaths = ref<Set<string> | null>(null)
-
-async function loadConflictPaths(): Promise<void> {
-  if (!workspacePath) return
-  try {
-    const resp = await backend.send<ListConflictsResult>(
-      'git.list_conflicts', { workspace_path: workspacePath },
-    )
-    if (resp.ok && resp.payload?.ok) {
-      conflictPaths.value = new Set(resp.payload.conflicts.map((c) => c.path))
-    }
-  } catch { /* keep the last known list rather than falsely aborting a merge */ }
-}
-
-function mergeAbortedFor(filepath: string): boolean {
-  return conflictPaths.value !== null && !conflictPaths.value.has(filepath)
-}
-
-let offGitChanged: (() => void) | null = null
-let gitChangedTimer: ReturnType<typeof setTimeout> | null = null
-
-function openBranchDiff(p: { base: string; compare?: string; workspacePath?: string }): void {
-  const base = p.base || 'main'
-  const relPath = `\x00branch-diff:${base}`
-  const name = `Diff with ${base}`
-  // A branch diff carries its own repo root like any other tab (this used to
-  // live in `filepath`); the root is part of the tab identity, so a diff of
-  // another repo gets its own tab instead of overwriting this one.
-  const wsPath = normWs(p.workspacePath)
-  const key = tabKeyOf(wsPath, relPath)
-  if (!findTab(key)) {
-    openFiles.value.push({ kind: 'branch-diff', id: nextTabId(), relPath, wsPath, base, compare: p.compare ?? '', name, line: 0, dirty: false, revealSeq: 0 })
   }
   activeKey.value = key
 }
@@ -816,7 +734,6 @@ registerCommand('workbench.action.focusExplorer', () => {
   sidebarView.value = 'explorer'
   void nextTick(() => explorerRef.value?.focusTree())
 })
-registerCommand('workbench.action.focusSourceControl', () => { sidebarHidden.value = false; sidebarView.value = 'git' })
 registerCommand('workbench.action.toggleAIChat', () => { aiPanelOpen.value = !aiPanelOpen.value })
 registerCommand('workbench.action.addSelectionToChat', () => {
   const sel = activeEditor()?.getSelection() || activeEditor()?.getWordAtCursor?.() || ''
@@ -1303,7 +1220,6 @@ const PALETTE_COMMANDS: PaletteCmd[] = [
   { id: 'editor.action.triggerGhost',    label: 'AI Completion (Cmd+I)',keys: '⌘I' },
   { id: 'workbench.action.toggleSidebar',label: 'Toggle Sidebar',     keys: '⌘B' },
   { id: 'workbench.action.focusExplorer',label: 'Show Explorer',   keys: '⌘⇧E' },
-  { id: 'workbench.action.focusSourceControl', label: 'Show Source Control', keys: '⌘⇧G' },
   { id: 'workbench.action.focusActiveEditorGroup', label: 'Focus Editor', keys: '⌘K ⌘E' },
   { id: 'workbench.action.findInFiles',  label: 'Find in Files',   keys: '⌘⇧F' },
   { id: 'workbench.action.openMiniIDE', label: 'Open Mini-IDE',   keys: '⌘⇧I' },
@@ -2094,6 +2010,11 @@ function syncViewReceiverDetailHosts(): void {
   if (viewReceiverDetailContainers.primary.value) viewReceiverDetailContainers.primary.value.hidden = !primaryVisible
   if (viewReceiverDetailContainers.secondary.value) viewReceiverDetailContainers.secondary.value.hidden = !secondaryVisible
 }
+// Which host element holds each mounted item, per container: the sidebar view
+// and each editor group size themselves from this, so a mounted frame always
+// takes the full box instead of falling back to its content height.
+const mountedLeftItems = ref(new Set<string>())
+const mountedDetailItems = ref(new Set<string>())
 function createViewReceiverHost(
   offer: ViewReceiverOffer,
   selectedGroup?: SelectedDetailGroup,
@@ -2145,6 +2066,8 @@ function removeViewReceiverItemHost(itemId: string): void {
   const tab = viewReceiverProviderTabs.get(itemId)
   viewReceiverItemHosts.delete(itemId)
   viewReceiverProviderTabs.delete(itemId)
+  mountedLeftItems.value.delete(itemId)
+  mountedDetailItems.value.delete(itemId)
   if (tab) {
     const group = providerTabGroup(tab)
     if (group) unindexProviderTab(tab, group)
@@ -2282,11 +2205,82 @@ async function refreshReceiverLeftContributions(receiver: ViewReceiver): Promise
 }
 async function openReceiverLeftContribution(contributionKey: string): Promise<void> {
   const receiver = viewReceiver
-  if (!receiver) return
+  if (!receiver) {
+    recordPluginViewFailure('the window is not ready for plugin views')
+    return
+  }
   try {
     await receiver.openLeft(contributionKey)
-  } catch {
-    // The Host owns eligibility and sends any accepted request through onOffer.
+  } catch (error) {
+    // The Host owns eligibility; a refusal is the answer the view must show.
+    recordPluginViewFailure(error)
+  }
+}
+
+// ── Plugin-provided sidebar views ────────────────────────────────────────────
+// The sidebar shows whatever left contributions the Host catalogs for the
+// installed plugins, and this window names none of them: a view's key, title,
+// frame and lifetime all come from the Host. A view that cannot be mounted says
+// so in place instead of leaving an empty pane.
+const pluginSidebarKey = ref('')
+const pluginViewError = ref('')
+const viewReceiverItemKeys = new Map<string, string>()
+const requestedPluginViews = new Set<string>()
+const failedPluginIcons = ref(new Set<string>())
+function pluginIconFailureKey(contribution: PluginReceiverLeftContribution): string {
+  return `${contribution.contributionKey}\u0000${contribution.icon ?? ''}`
+}
+function hasPluginIcon(contribution: PluginReceiverLeftContribution): boolean {
+  return Boolean(contribution.icon) && !failedPluginIcons.value.has(pluginIconFailureKey(contribution))
+}
+/** Single-colour artwork is painted with CSS rather than shown as an image: the
+ *  icon masks `currentColor`, so it follows the tab's colour like the app's own
+ *  SVG icons instead of keeping the shade its author baked in. */
+function isMonoPluginIcon(contribution: PluginReceiverLeftContribution): boolean {
+  return hasPluginIcon(contribution) && contribution.iconMonochrome === true
+}
+function pluginIconMask(contribution: PluginReceiverLeftContribution): Record<string, string> {
+  return { '--plugin-icon': `url("${contribution.icon}")` }
+}
+function markPluginIconFailed(contribution: PluginReceiverLeftContribution): void {
+  const failures = new Set(failedPluginIcons.value)
+  failures.add(pluginIconFailureKey(contribution))
+  failedPluginIcons.value = failures
+}
+function recordPluginViewFailure(error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error)
+  pluginViewError.value = message
+  console.warn('[mini-ide] plugin view failed:', message)
+}
+/** Show one catalogued view: reveal it if it is mounted, otherwise ask the Host. */
+function showPluginView(contributionKey: string): void {
+  pluginSidebarKey.value = contributionKey
+  sidebarView.value = ''
+  sidebarHidden.value = false
+  pluginViewError.value = ''
+  syncPluginViewVisibility()
+  if ([...viewReceiverItemKeys.values()].includes(contributionKey)) return
+  if (requestedPluginViews.has(contributionKey)) return
+  requestedPluginViews.add(contributionKey)
+  void openReceiverLeftContribution(contributionKey).then(() => {
+    // An accepted request that never produces a frame leaves an empty pane with
+    // no explanation; report that case instead of showing nothing.
+    window.setTimeout(() => {
+      if (pluginSidebarKey.value !== contributionKey || pluginViewError.value) return
+      if (![...viewReceiverItemKeys.values()].includes(contributionKey)) {
+        recordPluginViewFailure(new Error('the offered view never mounted'))
+      }
+    }, 2_500)
+  })
+}
+/** Only the selected view's frame is visible; the rest stay mounted but hidden. */
+function syncPluginViewVisibility(): void {
+  // Only the sidebar's own views are switched here. Detail items live in the
+  // editor area and have no view key: touching them hid a perfectly good detail
+  // pane (the frame stayed alive but invisible) whenever a plugin view changed.
+  for (const itemId of mountedLeftItems.value) {
+    const host = viewReceiverItemHosts.get(itemId)
+    if (host) host.hidden = viewReceiverItemKeys.get(itemId) !== pluginSidebarKey.value
   }
 }
 function mountViewReceiverOffer(offer: ViewReceiverOffer): void {
@@ -2303,7 +2297,10 @@ async function flushViewReceiverOffers(): Promise<void> {
       const offer = pendingViewReceiverOffers.shift()!
       if (offer.location === 'left') {
         const item = createViewReceiverHost(offer)
-        if (!item) continue
+        if (!item) {
+          console.warn(`[mini-ide] plugin view '${offer.contributionKey}' could not be placed in the sidebar`)
+          continue
+        }
         try {
           const { itemId } = await receiver.mount(offer.offerId, { mountHostId: item.host.dataset.pluginReceiverMountHost! })
           if (!viewReceiverActive || viewReceiver !== receiver) {
@@ -2315,8 +2312,15 @@ async function flushViewReceiverOffers(): Promise<void> {
             continue
           }
           viewReceiverItemHosts.set(itemId, item.host)
-        } catch {
+          viewReceiverItemKeys.set(itemId, offer.contributionKey)
+          if (offer.location === 'left') mountedLeftItems.value.add(itemId)
+          else mountedDetailItems.value.add(itemId)
+          syncPluginViewVisibility()
+        } catch (error) {
+          // A refused or failed mount must be visible: silently leaving the pane
+          // empty reads as a broken view, not as a missing provider.
           item.host.remove()
+          recordPluginViewFailure(error)
         }
         continue
       }
@@ -2345,7 +2349,15 @@ async function flushViewReceiverOffers(): Promise<void> {
         }
 
         const item = createViewReceiverHost(offer, selectedGroup)
-        if (!item) continue
+        if (!item) {
+          // The Host offered a detail but this window has no group to put it in
+          // (a stale group, or no editor area): say so instead of dropping it.
+          console.warn(
+            `[mini-ide] plugin detail '${offer.contributionKey}' could not be placed ` +
+            `(group ${groupKey}, current=${selectedDetailGroupIsCurrent(selectedGroup)})`,
+          )
+          continue
+        }
         try {
           const { itemId } = await receiver.mount(offer.offerId, { mountHostId: item.host.dataset.pluginReceiverMountHost! })
           const collision = viewReceiverProviderResources[groupKey].get(offer.resourceKey)
@@ -2364,6 +2376,10 @@ async function flushViewReceiverOffers(): Promise<void> {
             continue
           }
           viewReceiverItemHosts.set(itemId, item.host)
+          // The container is only `display: flex` while it holds an item; a
+          // detail frame mounted without this bookkeeping gets a 0x0 box and the
+          // pane looks empty although every host-side step succeeded.
+          mountedDetailItems.value.add(itemId)
           if (item.tab) {
             item.tab.itemId = itemId
             viewReceiverProviderTabs.set(itemId, item.tab)
@@ -2433,22 +2449,9 @@ watch([activeKey, activeGroupIsPrimary, () => secondaryGroup.value?.activeKey], 
 
 function applyOpenTarget(p: Record<string, string>): void {
   const sidebar = p.sidebar
-  if (sidebar === 'explorer' || sidebar === 'search' || sidebar === 'git') {
+  if (sidebar === 'explorer' || sidebar === 'search' || sidebar === 'problems') {
     sidebarView.value = sidebar
     sidebarHidden.value = false
-  }
-  if (p.diff_filepath) {
-    openDiff({
-      filepath: p.diff_filepath,
-      staged: p.diff_staged === 'true',
-      name: p.diff_name || undefined,
-      commit: p.diff_commit || undefined,
-    })
-    return
-  }
-  if (p.branch_diff_base) {
-    openBranchDiff({ base: p.branch_diff_base, compare: p.branch_diff_compare ?? '' })
-    return
   }
   if (p.filepath) {
     const line = Number(p.line)
@@ -2473,25 +2476,11 @@ onMounted(() => {
   document.addEventListener('click', closeBcDropdown)
   viewReceiverActive = true
   void mountViewReceiver()
-  if (initialBranchDiffBase) openBranchDiff({ base: initialBranchDiffBase, compare: initialBranchDiffCompare })
-  // Debounced at 300 ms like useGit's own listener: one git operation reaches
-  // us twice (GitWatcher plus app.py's own broadcast).
-  offGitChanged = backend.on('git.changed', () => {
-    if (!openFiles.value.some((f) => f.kind === 'conflict')) return
-    if (gitChangedTimer !== null) clearTimeout(gitChangedTimer)
-    gitChangedTimer = setTimeout(() => {
-      gitChangedTimer = null
-      void loadConflictPaths()
-    }, 300)
-  })
 })
 onUnmounted(() => {
   offThemeSettingsChange?.()
   offThemeSettingsChange = null
   void disposeViewReceiver()
-  offGitChanged?.()
-  offGitChanged = null
-  if (gitChangedTimer !== null) { clearTimeout(gitChangedTimer); gitChangedTimer = null }
   window.removeEventListener('keydown', onAppKeydown)
   window.removeEventListener('keydown', onBcCaptureKeydown, { capture: true })
   document.removeEventListener('click', closeBcDropdown)
@@ -2515,7 +2504,6 @@ watch(
 )
 
 if (workspacePath && initialRel) openFile({ filepath: initialRel, name: initialName, line: initialLine, wsPath: initialFileWs || undefined })
-if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, staged: initialDiffStaged, name: initialDiffName, commit: initialDiffCommit || undefined })
 </script>
 
 <template>
@@ -2546,21 +2534,39 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
       </button>
       <button
         class="ide-act-btn"
-        :class="{ active: sidebarView === 'git' }"
-        :title="$t('pane.git.tab')"
-        @click="sidebarView = 'git'"
-      >
-        <svg width="20" height="20" viewBox="0 0 16 16" fill="currentColor"><path d="M11.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zm-2.25.75a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25zM3.75 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5zm0-9.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5z"/></svg>
-        <span v-if="changesCount" class="ide-act-badge">{{ changesCount > 99 ? '99+' : changesCount }}</span>
-      </button>
-      <button
-        class="ide-act-btn"
         :class="{ active: sidebarView === 'problems' }"
         :title="$t('pane.problems.tab-shortcut')"
         @click="sidebarView = 'problems'; sidebarHidden = false"
       >
         <svg width="19" height="19" viewBox="0 0 16 16" fill="currentColor"><path d="M8.22 1.754a.25.25 0 0 0-.44 0L1.698 13.132a.25.25 0 0 0 .22.368h12.164a.25.25 0 0 0 .22-.368Zm-1.763-.707c.659-1.234 2.427-1.234 3.086 0l6.082 11.378A1.75 1.75 0 0 1 14.082 15H1.918a1.75 1.75 0 0 1-1.543-2.575ZM9 11a1 1 0 1 1-2 0 1 1 0 0 1 2 0Zm-.25-5.25a.75.75 0 0 0-1.5 0v2.5a.75.75 0 0 0 1.5 0Z"/></svg>
         <span v-if="allDiagnosticsSorted().filter(d => d.severity === 'error').length" class="ide-act-badge ide-act-badge--err">{{ allDiagnosticsSorted().filter(d => d.severity === 'error').length }}</span>
+      </button>
+      <!-- Plugin views continue the same column, in the Host's catalogue order,
+           painted with the icon the contribution declares. -->
+      <button
+        v-for="contribution in viewReceiverLeftContributions"
+        :key="contribution.contributionKey"
+        class="ide-act-btn"
+        :class="{ active: pluginSidebarKey === contribution.contributionKey }"
+        :title="contribution.title"
+        @click="showPluginView(contribution.contributionKey)"
+      >
+        <span
+          v-if="isMonoPluginIcon(contribution)"
+          class="ide-act-plugin-icon ide-act-plugin-icon--mono"
+          :style="pluginIconMask(contribution)"
+          aria-hidden="true"
+        ></span>
+        <img
+          v-else-if="hasPluginIcon(contribution)"
+          class="ide-act-plugin-icon"
+          :src="contribution.icon ?? ''"
+          width="18"
+          height="18"
+          alt=""
+          @error="markPluginIconFailed(contribution)"
+        />
+        <span v-else class="ide-act-plugin-initial" aria-hidden="true">{{ contribution.title.slice(0, 1) }}</span>
       </button>
     </div>
 
@@ -2585,21 +2591,12 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
         :active="sidebarView === 'search'"
         @open-file="openFile"
       />
-      <GitPane
-        v-show="sidebarView === 'git'"
-        :workspace-path="workspacePath"
-        :git-transport="gitTransport"
-        :file-access="surfacePorts.fileAccess"
-        :ui="surfacePorts.paneUi"
-        :issue-port="surfacePorts.issues"
-        :accounts="surfacePorts.accounts"
-        embedded
-        @open-file="openFile"
-        @open-diff="openDiff"
-        @open-conflict="openConflict"
-        @open-branch-diff="openBranchDiff"
-        @changes-count="changesCount = $event"
-      />
+      <!-- A plugin view that could not be mounted says so in place of its
+           frame; this window never substitutes one of its own. -->
+      <div v-if="pluginSidebarKey && pluginViewError" class="ide-plugin-view-note" role="alert">
+        {{ $t('pane.pluginViews.unavailable') }}
+        <span class="ide-plugin-view-note-detail">{{ pluginViewError }}</span>
+      </div>
       <ProblemsPane
         v-show="sidebarView === 'problems'"
         :workspace-path="workspacePath"
@@ -2609,17 +2606,11 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
           pasteToCli(`Fix this problem: ${p.diag.severity.toUpperCase()}: ${p.diag.message} at ${loc}${p.diag.source ? ' (' + p.diag.source + ')' : ''}`)
         }"
       />
-      <div v-if="viewReceiverLeftContributions.length" class="ide-receiver-catalog">
-        <div class="ide-receiver-catalog-title">Available Views</div>
-        <button
-          v-for="contribution in viewReceiverLeftContributions"
-          :key="contribution.contributionKey"
-          type="button"
-          class="ide-receiver-catalog-item"
-          @click="openReceiverLeftContribution(contribution.contributionKey)"
-        >{{ contribution.title }}</button>
-      </div>
-      <div :ref="viewReceiverContainers.left" class="ide-receiver-items ide-receiver-items--left" />
+      <div
+        :ref="viewReceiverContainers.left"
+        class="ide-receiver-items ide-receiver-items--left"
+        :class="{ 'ide-receiver-items--filled': mountedLeftItems.size > 0 }"
+      />
     </div>
     <div v-show="!sidebarHidden" class="ide-resize-handle" @mousedown.prevent="onResizeStart" />
 
@@ -2633,13 +2624,10 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
             :key="f.id"
             class="ide-tab"
             :class="{ active: tabKey(f) === activeKey, 'ide-tab--closing': f.kind === 'provider' && f.closing }"
-            :title="f.kind === 'provider' ? f.name : (f.kind === 'diff' || f.kind === 'conflict') ? f.filepath : tabDisplayPath(f)"
+            :title="f.kind === 'provider' ? f.name : tabDisplayPath(f)"
             @click="activeKey = tabKey(f); activeGroupIsPrimary = true"
             @contextmenu.prevent="openTabCtxMenu($event, tabKey(f))"
           >
-            <span v-if="f.kind === 'diff'" class="ide-tab-diff-badge" :class="f.commit ? 'commit' : f.staged ? 'staged' : 'unstaged'">{{ f.commit ? 'C' : f.staged ? 'S' : 'U' }}</span>
-            <span v-else-if="f.kind === 'conflict'" class="ide-tab-diff-badge conflict-badge">!</span>
-            <span v-else-if="f.kind === 'branch-diff'" class="ide-tab-diff-badge branch-diff-badge">±</span>
             <span class="ide-tab-name">{{ f.name }}</span>
             <span v-if="f.dirty" class="ide-tab-dirty" :title="$t('label.unsaved')">●</span>
             <button class="ide-tab-close" :disabled="f.kind === 'provider' && f.closing" :title="$t('action.close')" @click.stop="closeFile(tabKey(f))">✕</button>
@@ -2678,7 +2666,12 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
       </div>
 
       <div class="ide-editors">
-        <div :ref="viewReceiverDetailContainers.primary" class="ide-receiver-items ide-receiver-items--detail" hidden />
+        <div
+          :ref="viewReceiverDetailContainers.primary"
+          class="ide-receiver-items ide-receiver-items--detail"
+          :class="{ 'ide-receiver-items--filled': mountedDetailItems.size > 0 }"
+          hidden
+        />
         <template v-for="f in openFiles" :key="f.id">
           <!-- Plan view: .plan.md files in plan mode, and plain .md files in
                markdown preview mode (same rendering pipeline). -->
@@ -2728,53 +2721,6 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
             @write-tests-with-ai="writeTestsWithAi(f, $event)"
             @ask-with-ai="askSelectionWithAi(f, $event)"
           />
-          <DiffPane
-            v-else-if="f.kind === 'diff'"
-            v-show="tabKey(f) === activeKey"
-            :workspace-path="workspacePath"
-            :filepath="f.filepath!"
-            :staged="f.staged!"
-            :commit="f.commit"
-            :name="f.name"
-            :git-transport="gitTransport"
-            :file-access="surfacePorts.fileAccess"
-            @open-file="openFile"
-          />
-          <ConflictPane
-            v-else-if="f.kind === 'conflict'"
-            v-show="tabKey(f) === activeKey"
-            :workspace-path="workspacePath"
-            :filepath="f.filepath!"
-            :name="f.name"
-            :git-transport="gitTransport"
-            :file-access="surfacePorts.fileAccess"
-            :merge-aborted="mergeAbortedFor(f.filepath!)"
-            @resolved="closeFile(tabKey(f))"
-          />
-          <MiniIdeBranchDiffPane
-            v-else-if="f.kind === 'branch-diff'"
-            v-show="tabKey(f) === activeKey"
-            :workspace-path="fileWs(f)"
-            :base="f.base!"
-            :compare="f.compare ?? ''"
-            :git-transport="gitTransport"
-            :branch-diff="surfacePorts.branchDiff"
-            @open-file="(p) => openFile({ ...p, wsPath: f.wsPath })"
-            @ask-ai-fix="(text) => pasteToCli(text)"
-          >
-            <template #review="{ workspacePath: reviewWorkspacePath, gitStatus: reviewGitStatus, gitBranches: reviewGitBranches, close, openFile: reviewOpenFile, askAiFix }">
-              <ReviewPane
-                :workspace-path="reviewWorkspacePath"
-                :backend="backend"
-                :git-status="reviewGitStatus"
-                :git-branches="reviewGitBranches"
-                :hide-header="true"
-                @close="close"
-                @open-file="reviewOpenFile"
-                @ask-ai-fix="askAiFix"
-              />
-            </template>
-          </MiniIdeBranchDiffPane>
         </template>
         <div v-if="!openFiles.length" class="ide-empty">
           Open a file from the Explorer or Search pane on the left
@@ -2798,7 +2744,12 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
           </div>
         </div>
         <div class="ide-editors">
-          <div :ref="viewReceiverDetailContainers.secondary" class="ide-receiver-items ide-receiver-items--detail" hidden />
+          <div
+            :ref="viewReceiverDetailContainers.secondary"
+            class="ide-receiver-items ide-receiver-items--detail"
+            :class="{ 'ide-receiver-items--filled': mountedDetailItems.size > 0 }"
+            hidden
+          />
           <template v-for="f in secondaryGroup.files" :key="'sec:' + f.id">
             <EditorPane
               v-if="f.kind === 'file'"
@@ -3200,6 +3151,18 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
   flex-direction: column;
   overflow: hidden;
 }
+.ide-plugin-view-note {
+  padding: 12px;
+  color: var(--text-muted, #888);
+  font-size: var(--font-sm);
+  line-height: 1.45;
+}
+.ide-plugin-view-note-detail {
+  display: block;
+  margin-top: 6px;
+  font-size: var(--font-xs);
+  word-break: break-word;
+}
 .ide-resize-handle {
   flex-shrink: 0;
   width: 4px;
@@ -3211,15 +3174,33 @@ if (workspacePath && initialDiffFile) openDiff({ filepath: initialDiffFile, stag
 .ide-resize-handle:hover { background: var(--accent-emphasis); }
 .ide-sidebar > * { flex: 1; min-height: 0; }
 .ide-receiver-items { display: none; min-width: 0; min-height: 0; }
-.ide-receiver-items:has(.ide-receiver-slot-item > iframe) { display: flex; flex: 1 1 0; flex-direction: column; }
-.ide-receiver-slot-item { flex: 1 1 0; min-width: 0; min-height: 0; }
-.ide-receiver-slot-item > iframe { display: block; width: 100%; height: 100%; border: 0; }
-.ide-sidebar > .ide-receiver-items { flex: 0 0 auto; }
-.ide-sidebar > .ide-receiver-items:has(.ide-receiver-slot-item > iframe) { flex: 1 1 0; }
-.ide-sidebar > .ide-receiver-catalog { flex: 0 0 auto; border-top: 1px solid var(--border-muted); padding: 6px; }
-.ide-receiver-catalog-title { color: var(--text-muted); font-size: 11px; font-weight: 600; padding: 2px 4px 5px; }
-.ide-receiver-catalog-item { display: block; width: 100%; border: 0; border-radius: 3px; background: transparent; color: var(--text-primary); cursor: pointer; overflow: hidden; padding: 4px; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
-.ide-receiver-catalog-item:hover { background: var(--bg-hover); }
+/* `hidden` still wins: the editor groups toggle it to show only their own
+   detail pane, and an author rule must not override that. */
+.ide-receiver-items--filled:not([hidden]) { display: flex; flex: 1 1 0; flex-direction: column; }
+/* Mounted items are created by the receiver preload, not by this template, so
+   they carry no scoped-style attribute: without `:deep()` these rules never
+   match the real frame (it stayed at its default 300x150 box). */
+.ide-receiver-items :deep(.ide-receiver-slot-item) { display: none; flex: 1 1 0; min-width: 0; min-height: 0; }
+.ide-receiver-items :deep(.ide-receiver-slot-item:not([hidden])) { display: flex; }
+/* The frame is a flex child, not a percentage-height box: `height: 100%` cannot
+   resolve against an auto-height parent, which also left a mounted view at its
+   content height (a tall sidebar with a short pane at the top). */
+.ide-receiver-items :deep(.ide-receiver-slot-item > iframe) { flex: 1 1 0; width: 100%; min-width: 0; min-height: 0; height: auto; border: 0; }
+/* A plugin view takes a slot in the activity column like a built-in one, drawn
+   with the contribution's own artwork (silhouettes are inked like the SVGs). */
+.ide-act-plugin-icon { display: block; width: 18px; height: 18px; object-fit: contain; }
+.ide-act-plugin-icon--mono {
+  background-color: currentColor;
+  -webkit-mask-image: var(--plugin-icon);
+  mask-image: var(--plugin-icon);
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+.ide-act-plugin-initial { font-size: 13px; font-weight: 600; line-height: 1; }
 
 .ide-main-container {
   flex: 1;

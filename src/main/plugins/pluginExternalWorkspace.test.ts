@@ -46,6 +46,11 @@ function subprocessEnvironment(): NodeJS.ProcessEnv {
     ...process.env,
     CI: '1',
     PNPM_CONFIG_PM_ON_FAIL: 'ignore',
+    // A newer pnpm resolved from PATH re-verifies the workspace before running
+    // and, when this checkout's `pnpm` field is not one it reads, replaces
+    // node_modules before failing. This test only ever packs and installs into a
+    // temp directory, so the implicit install is never what it wants.
+    npm_config_verify_deps_before_run: 'false',
     PATH: `${nodeDirectory}${delimiter}${process.env.PATH ?? ''}`,
   }
 }

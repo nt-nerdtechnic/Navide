@@ -6,6 +6,14 @@ import { tmpdir } from 'node:os'
 import { platformId, setPlatformId } from '../../shared/osplat'
 import { backendEntryOnDisk } from './installedPlugins'
 
+// A frame on a non-special scheme reports its real origin (`scheme://host`);
+// `new URL(url).origin` is opaque ("null") for such schemes, so the fixture
+// derives the origin the way Electron does.
+function frameOrigin(url: string): string {
+  const parsed = new URL(url)
+  return `${parsed.protocol}//${parsed.host}`
+}
+
 // The platform to restore after a test that switched it: whatever this file
 // saw when it loaded — the host, or an injection from a vitest setup file.
 // Restoring to the host instead silently undid that injection for every
@@ -714,7 +722,7 @@ describe('backend Host session registration', () => {
         }
         expect(mgr.bindPluginFrameBlank(reserved.bindingId, frame as never)).toBe(true)
         frame.url = reserved.entryUrl
-        frame.origin = new URL(reserved.entryUrl).origin
+        frame.origin = frameOrigin(reserved.entryUrl)
         hostContents.emit('did-start-navigation', {
           frame,
           isSameDocument: false,
@@ -890,7 +898,7 @@ describe('registered receiver frame lifecycle', () => {
     ) as { locator: string }
     expect(locator.locator).toBe(pending.get(bindingId!)?.entryUrl)
     frame.url = locator.locator
-    frame.origin = new URL(locator.locator).origin
+    frame.origin = frameOrigin(locator.locator)
     fixture.receiver.webContents.emit('did-start-navigation', {
       frame, isSameDocument: false, url: locator.locator,
     })
@@ -1238,7 +1246,13 @@ describe('registered receiver frame lifecycle', () => {
     const fixture = await setupReceiver()
     const list = ipcHandlers.get('plugin:receiver:list-left-contributions')
     expect(list?.(fixture.receiverEvent, { receiverId: fixture.receiverId })).toEqual([
-      { contributionKey: 'acme.receiver-lifecycle.provider', title: 'Provider' },
+      {
+        contributionKey: 'acme.receiver-lifecycle.provider',
+        title: 'Provider',
+        // Display metadata only: the receiver paints the icon, never learns the plugin.
+        icon: null,
+        iconMonochrome: false,
+      },
     ])
 
     const open = ipcHandlers.get('plugin:receiver:open-left')
@@ -1264,7 +1278,12 @@ describe('registered receiver frame lifecycle', () => {
     const list = ipcHandlers.get('plugin:receiver:list-left-contributions')
     const open = ipcHandlers.get('plugin:receiver:open-left')
     expect(list?.(fixture.receiverEvent, { receiverId: fixture.receiverId })).toEqual([
-      { contributionKey: 'acme.receiver-lifecycle.provider', title: 'Provider' },
+      {
+        contributionKey: 'acme.receiver-lifecycle.provider',
+        title: 'Provider',
+        icon: null,
+        iconMonochrome: false,
+      },
     ])
     expect(open?.(fixture.receiverEvent, { receiverId: fixture.receiverId, contributionKey: 'acme.receiver-lifecycle.provider' }))
       .toEqual({ offered: true })
@@ -10172,7 +10191,7 @@ describe('first-party Git private bridge', () => {
     expect(handler).not.toHaveBeenCalled()
   })
 
-  it('uses the global policy for an agent plugin-scoped UI call without a workspace', async () => {
+  it('applies the global policy to an agent plugin-scoped UI call and withholds it without a user gesture', async () => {
     const mgr = new FrontendPluginManager()
     const pluginId = 'acme.plugin-ui'
     const packageVersion = '1.0.0'
@@ -10223,13 +10242,20 @@ describe('first-party Git private bridge', () => {
         capabilityContext: context,
       })
 
+      // The execution policy allows this plugin-scoped UI call without a
+      // workspace (otherwise the code below would be CAPABILITY_DENIED), but the
+      // Host still withholds a gesture-gated address from an agent-driven call.
       await expect(mgr.executeAgentCapability(handle.instanceId, {
         reqId: 'agent-plugin-ui-1',
         ns: 'ui',
         method: 'openExternal',
         args: { url: 'https://example.com' },
-      })).resolves.toMatchObject({ reqId: 'agent-plugin-ui-1', ok: true })
-      expect(handler).toHaveBeenCalledOnce()
+      })).resolves.toMatchObject({
+        reqId: 'agent-plugin-ui-1',
+        ok: false,
+        error: { code: 'USER_CANCELLED' },
+      })
+      expect(handler).not.toHaveBeenCalled()
     } finally {
       await mgr.closeBackendPlugins()
     }

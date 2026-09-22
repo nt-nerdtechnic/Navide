@@ -145,5 +145,10 @@ function mountPlugin(): void {
 try {
   mountPlugin()
 } catch (error: unknown) {
-  console.error('[navide.git] Failed to mount the plugin view.', error)
+  // A composition failure leaves an empty frame; the frame's own console is the
+  // only place that can say why.
+  console.error(
+    `[navide.git] failed to mount the ${isDetailContribution ? 'detail' : isLeftContribution ? 'left' : 'window'} view.`,
+    error,
+  )
 }

@@ -284,6 +284,10 @@ onUnmounted(() => {
 })
 
 function showDiffTarget(params: Record<string, string>): void {
+  if (params['git_diff_base']) {
+    pendingBranchDiffTarget = params
+    return
+  }
   const filepath = params['git_diff_filepath'] ?? ''
   if (!filepath) return
   view.value = 'status'
@@ -1096,6 +1100,20 @@ function issueProviderLabel(): string {
 // ── Branch diff view ─────────────────────────────────────────────────────────
 const diffBase = ref('')
 const diffCompare = ref('')
+// A branch-comparison target can arrive before these refs exist (the entry
+// query is read during setup), so it is held here until they do.
+let pendingBranchDiffTarget: Record<string, string> | null = null
+function applyPendingBranchDiffTarget(): void {
+  const target = pendingBranchDiffTarget
+  pendingBranchDiffTarget = null
+  if (!target) return
+  diffBase.value = target['git_diff_base'] ?? ''
+  diffCompare.value = target['git_diff_compare'] ?? ''
+  if (diffBase.value) view.value = 'branchdiff'
+  externalDiff.value = null
+  resetDetailAux()
+}
+applyPendingBranchDiffTarget()
 
 function openBranchDiff(): void {
   view.value = 'branchdiff'

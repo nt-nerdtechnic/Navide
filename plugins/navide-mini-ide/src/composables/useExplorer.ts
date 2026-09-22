@@ -1,6 +1,5 @@
 import { ref, watch, onScopeDispose, type Ref } from 'vue'
 import type { useBackend } from './useBackend'
-import type { GitStatus } from './useGit'
 
 export interface FsEntry {
   name: string
@@ -33,9 +32,8 @@ const FOCUS_REFRESH_INTERVAL_MS = 5000
  * useExplorer — lazy directory tree backed by the `fs.*` WebSocket API.
  *
  * State is per-instance (keyed off the given workspace). Children are loaded on
- * demand and cached; toggling `showHidden` or a `git.changed` event invalidates
- * the cache and reloads whatever is currently expanded. Git status is NOT
- * fetched here — the host merges it as an overlay via {@link statusFor}.
+ * demand and cached; toggling `showHidden` or a `workspace.changed` event
+ * invalidates the cache and reloads whatever is currently expanded.
  *
  * Because there is no fs watcher, a window `focus` also refreshes the visible
  * tree (throttled; skipped while `opts.isRefreshBlocked()` is true, e.g. an
@@ -198,24 +196,10 @@ export function useExplorer(
     void reloadAll()
   }
 
-  // ── Git status overlay ────────────────────────────────────────────────────
-  /**
-   * Build a relPath → status-letter map from a GitStatus. staged paths win
-   * (so the Explorer can pass the right `staged` flag when opening a diff).
-   */
-  function buildStatusMap(status: GitStatus | null): Map<string, { letter: string; staged: boolean }> {
-    const map = new Map<string, { letter: string; staged: boolean }>()
-    if (!status) return map
-    for (const e of status.unstaged ?? []) map.set(e.path, { letter: e.status.trim() || 'M', staged: false })
-    for (const e of status.untracked ?? []) map.set(e.path, { letter: 'U', staged: false })
-    for (const e of status.staged ?? []) map.set(e.path, { letter: e.status.trim() || 'M', staged: true })
-    return map
-  }
-
-  // ── git.changed → invalidate ──────────────────────────────────────────────
+  // ── workspace.changed → invalidate ────────────────────────────────────────
   // Only refresh for events from this workspace (broadcasts reach every
-  // session); refresh on a missing workspace_path for safety, like useGit.
-  const off = backend.on('git.changed', (payload: unknown) => {
+  // session); refresh on a missing workspace_path for safety.
+  const off = backend.on('workspace.changed', (payload: unknown) => {
     if (!ws()) return
     const p = payload as { workspace_path?: string } | null
     if (p?.workspace_path && p.workspace_path !== ws()) return
@@ -225,7 +209,7 @@ export function useExplorer(
 
   // ── window focus → refresh ────────────────────────────────────────────────
   // External tools (terminals, other editors) create/delete files without any
-  // git.changed event; re-list what's visible when the app regains focus.
+  // workspace.changed event; re-list what's visible when the app regains focus.
   let lastFocusRefreshAt = 0
   function onWindowFocus(): void {
     if (!ws()) return
@@ -263,6 +247,5 @@ export function useExplorer(
     refreshVisible,
     pruneDir,
     setShowHidden,
-    buildStatusMap,
   }
 }

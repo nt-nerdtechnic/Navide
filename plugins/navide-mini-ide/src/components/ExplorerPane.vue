@@ -5,8 +5,6 @@ import { ref, computed, onMounted, onUnmounted, watch, toRef, nextTick } from 'v
 import type { useBackend } from '../composables/useBackend'
 import { useEditorTargets } from '../composables/useEditorTargets'
 import { useExplorer, type FsEntry } from '../composables/useExplorer'
-import { useGit } from '../composables/useGit'
-import { createMiniIdeGitTransport } from '../composables/gitPorts'
 import { revealPath } from '../composables/native'
 import { useNotify } from '@navide/plugin-ui/foundation'
 
@@ -35,12 +33,9 @@ const wsRef = toRef(props, 'workspacePath')
 // user's input is never clobbered. (`prompt` is declared below; the guard only
 // runs on later focus events.)
 const explorer = useExplorer(props.backend, wsRef, { isRefreshBlocked: () => prompt.value !== null })
-const git = useGit(() => props.workspacePath, createMiniIdeGitTransport(props.backend))
 const { toast, alert, confirm } = useNotify()
 
 type FsResult = { ok: boolean; error?: string }
-
-const statusMap = computed(() => explorer.buildStatusMap(git.gitStatus.value))
 
 interface Row {
   entry: FsEntry
@@ -93,39 +88,6 @@ const wsName = computed(() => {
 
 function absPath(rel: string): string {
   return `${props.workspacePath.replace(/\/+$/, '')}/${rel}`
-}
-
-function statusFor(rel: string): { letter: string; staged: boolean } | undefined {
-  return statusMap.value.get(rel)
-}
-
-const STATUS_CLASS: Record<string, string> = {
-  M: 'st-mod', A: 'st-add', D: 'st-del', U: 'st-untracked',
-  R: 'st-mod', C: 'st-mod', '?': 'st-untracked',
-}
-
-// Folders inheriting the status of any descendant change (VS Code-style):
-// a tracked change (M/A/D/R/C) tints the folder yellow, untracked-only green.
-const dirStatusMap = computed(() => {
-  const map = new Map<string, string>()
-  for (const [path, info] of statusMap.value) {
-    const cls = info.letter === 'U' ? 'st-untracked' : 'st-mod'
-    let idx = path.lastIndexOf('/')
-    while (idx > 0) {
-      const dir = path.slice(0, idx)
-      if (map.get(dir) !== 'st-mod') map.set(dir, cls) // tracked wins over untracked
-      idx = dir.lastIndexOf('/')
-    }
-  }
-  return map
-})
-
-// Status class for an entry, applied to the filename (VS Code-style tint) and
-// the trailing letter badge. Folders inherit from descendants; '' = clean.
-function statusClassFor(entry: FsEntry): string {
-  if (entry.is_dir) return dirStatusMap.value.get(entry.rel_path) || ''
-  const st = statusFor(entry.rel_path)
-  return st ? STATUS_CLASS[st.letter] || 'st-mod' : ''
 }
 
 // ── Multi-select ──────────────────────────────────────────────────────────────
@@ -237,27 +199,6 @@ function previewFile(entry: FsEntry): void {
     workspacePath: props.workspacePath,
     relPath: entry.rel_path,
     source: 'user',
-  })
-}
-
-function previewDiff(entry: FsEntry): void {
-  const st = statusFor(entry.rel_path)
-  preview.show({
-    kind: 'diff',
-    workspacePath: props.workspacePath,
-    relPath: entry.rel_path,
-    staged: st?.staged ?? false,
-    source: 'user',
-  })
-}
-
-function openDiff(entry: FsEntry): void {
-  const st = statusFor(entry.rel_path)
-  void native?.openDiffWindow({
-    workspace_path: props.workspacePath,
-    filepath: entry.rel_path,
-    staged: st?.staged ?? false,
-    name: entry.name,
   })
 }
 
@@ -538,7 +479,6 @@ async function moveEntries(draggedRel: string, targetDir: string): Promise<void>
 function doInitialLoad(): void {
   if (!props.workspacePath) return
   void explorer.loadDir('')
-  void git.loadStatus()
 }
 
 // The tree never loaded successfully: nothing cached yet, or the last load
@@ -708,10 +648,7 @@ defineExpose({ revealFile, focusTree })
             <svg v-if="row.entry.is_dir" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M1.75 2A1.75 1.75 0 0 0 0 3.75v8.5C0 13.216.784 14 1.75 14h12.5A1.75 1.75 0 0 0 16 12.25v-7.5A1.75 1.75 0 0 0 14.25 3H7.5L6.2 1.7A1.75 1.75 0 0 0 4.96 1H1.75Z"/></svg>
             <svg v-else width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M3.75 1A1.75 1.75 0 0 0 2 2.75v10.5c0 .966.784 1.75 1.75 1.75h8.5A1.75 1.75 0 0 0 14 13.25V5.5L9.5 1H3.75ZM9 2.5 12.5 6H9V2.5Z"/></svg>
           </span>
-          <span class="exp-name" :class="statusClassFor(row.entry)">{{ row.entry.name }}</span>
-          <span v-if="statusFor(row.entry.rel_path)" class="exp-status" :class="statusClassFor(row.entry)">
-            {{ statusFor(row.entry.rel_path)!.letter }}
-          </span>
+          <span class="exp-name">{{ row.entry.name }}</span>
         </div>
         <div
           v-for="note in treeView.notes.get(row.entry.rel_path) ?? []"
@@ -776,8 +713,6 @@ defineExpose({ revealFile, focusTree })
         <template v-if="ctx.entry">
           <div class="exp-ctx-sep" />
           <button v-if="!ctx.entry.is_dir && !props.embedded" class="exp-ctx-item" @click="previewFile(ctx.entry!); closeCtx()">{{ $t('preview.show-file') }}</button>
-          <button v-if="!ctx.entry.is_dir && !props.embedded" class="exp-ctx-item" @click="previewDiff(ctx.entry!); closeCtx()">{{ $t('preview.show-diff') }}</button>
-          <button v-if="!ctx.entry.is_dir" class="exp-ctx-item" @click="openDiff(ctx.entry!); closeCtx()">{{ $t('action.open-diff') }}</button>
           <button v-if="!ctx.entry.is_dir" class="exp-ctx-item" @click="openInEditor(ctx.entry!); closeCtx()">{{ $t('action.open-in-editor') }}</button>
           <button v-if="!ctx.entry.is_dir && props.onAskAiAboutFile" class="exp-ctx-item" @click="props.onAskAiAboutFile!(ctx.entry!.rel_path); closeCtx()">{{ $t('action.ask-ai-about-file') }}</button>
           <template v-if="ctx.entry.is_dir && canOpenFolderInEditor()">
@@ -889,17 +824,6 @@ defineExpose({ revealFile, focusTree })
   text-overflow: ellipsis;
   color: var(--text-primary);
 }
-.exp-status {
-  font-size: var(--font-3xs);
-  font-weight: 700;
-  flex-shrink: 0;
-  width: 14px;
-  text-align: center;
-}
-.st-mod { color: var(--attention-fg); }
-.st-add { color: var(--success-fg); }
-.st-del { color: var(--danger-fg); }
-.st-untracked { color: var(--success-fg); }
 
 .exp-empty {
   padding: 16px 12px;

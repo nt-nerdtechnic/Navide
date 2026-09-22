@@ -30,7 +30,7 @@ export function createMiniIdeEditorPort(backend: ReturnType<typeof useBackend>):
     },
     rewrite: request => invoke<EditorAiResult>('editor.rewrite', { ...request }),
     complete: request => invoke<EditorAiResult>('editor.complete', { ...request }),
-    onFilesChanged: listener => backend.on('git.changed', payload => {
+    onFilesChanged: listener => backend.on('workspace.changed', payload => {
       const workspacePath = (payload as { workspace_path?: unknown } | null)?.workspace_path
       if (typeof workspacePath === 'string') listener(workspacePath)
     }),

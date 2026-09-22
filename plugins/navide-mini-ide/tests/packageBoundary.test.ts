@@ -263,6 +263,21 @@ describe('navide Mini-IDE public package boundary', () => {
         expect(builtJavaScript).not.toContain('capabilityBackend')
         expect(builtJavaScript).not.toContain('GitWindowApp')
         expect(builtJavaScript).not.toMatch(/(?:from|import)\s*['"][^'"]*navide-git/)
+        // No copied Git product code: the IDE asks the Git plugin for its
+        // surfaces, so the Git feature's own transport inventory — the request
+        // literals only that implementation emits — must not ship here. The
+        // IDE's own reads (`git.status`, `git.branches`) stay out of this list
+        // because they are part of its explorer and review affordances.
+        for (const gitFeatureRequest of [
+          'git.compare_branches',
+          'git.list_conflicts',
+          'git.mark_resolved',
+          'git.stash_pop',
+          'git.diff_blame',
+          'resolveTheirs',
+        ]) {
+          expect(builtJavaScript, gitFeatureRequest).not.toContain(gitFeatureRequest)
+        }
       } finally {
         rmSync(temporaryRoot, { recursive: true, force: true })
       }

@@ -1,7 +1,6 @@
 import { ref } from 'vue'
 import { createPluginCapabilityClient, createPluginViewRuntimeClient, type PublicMethod, type Params } from '@navide/plugin-sdk'
 import { fileGrant, directoryGrant, rememberOpenTarget, targetPath } from './selectionTargets'
-import { GIT_OPERATION_FIELDS, gitCapabilityMethod, ISSUE_CAPABILITY_OPERATIONS, type GitOperation } from '@navide/plugin-contracts'
 
 export interface BackendResponse<T = unknown> {
   ok: boolean
@@ -27,15 +26,9 @@ function emit(type: string, payload: unknown): void {
   for (const listener of listeners.get(type) ?? []) listener(payload)
 }
 
-disposables.push(client.events.subscribe('workspace.filesChanged', () => emit('git.changed', { workspace_path: workspacePath })))
-disposables.push(
-  client.events.subscribe('shell.gitCredentialRequested', event => emit('git.credential_request', {
-    request_id: event.requestId, host: event.host, prompt: event.prompt,
-  })),
-  client.events.subscribe('shell.gitCredentialCancelled', event => emit('git.credential_cancelled', {
-    request_id: event.requestId,
-  })),
-)
+// The Host's file-change signal, named for what it is: this window reacts to
+// files changing anywhere, not to a Git operation.
+disposables.push(client.events.subscribe('workspace.filesChanged', () => emit('workspace.changed', { workspace_path: workspacePath })))
 
 interface ReviewRequest { localId: string; hostId?: string; cancelled: boolean }
 let review: ReviewRequest | null = null
@@ -75,43 +68,6 @@ async function request(type: string, payload: Record<string, unknown>): Promise<
   // name; an external file already arrives as (parent directory, name).
   const selectionPath = selectionGrant ? path.slice(path.lastIndexOf('/') + 1) : path
   const selectedPath = { path: selectionPath, ...(selectionGrant ? { selectionGrant } : {}) }
-  if (type.startsWith('issues.')) {
-    const method = Object.keys(ISSUE_CAPABILITY_OPERATIONS).find(key =>
-      ISSUE_CAPABILITY_OPERATIONS[key as keyof typeof ISSUE_CAPABILITY_OPERATIONS] === type.slice(7),
-    ) as keyof typeof ISSUE_CAPABILITY_OPERATIONS | undefined
-    if (!method) throw new Error(`Unmapped Issue operation: ${type}`)
-    const { workspace_path: _workspace, ...fields } = payload
-    return invoke(method, { ...fields, repositoryPath: sourceWorkspace } as Params<typeof method>)
-  }
-  if (type.startsWith('git.')) {
-    const operation = type.slice(4)
-    if (!Object.hasOwn(GIT_OPERATION_FIELDS, operation)) throw new Error(`Unmapped Git operation: ${type}`)
-    const { workspace_path: _workspace, target_grant: targetGrant, ...fields } = payload
-    const selectedDirectory = typeof targetGrant === 'string' ? targetGrant
-      : typeof payload.target_dir === 'string' ? directoryGrant(payload.target_dir) : undefined
-    // A commit-scoped file diff is the one legacy payload without a public
-    // `diff_file` field; the fixed contract carries it as its own operation.
-    const commit = typeof fields.commit === 'string' ? fields.commit : ''
-    if (operation === 'diff_file' && commit) {
-      const filepath = fields.filepath
-      if (typeof filepath !== 'string') throw new Error('git.diff_file requires a filepath')
-      const method = gitCapabilityMethod('commit_file_diff')
-      return invoke(method, {
-        commit_hash: commit, filepath, repositoryPath: sourceWorkspace,
-      } as Params<typeof method>)
-    }
-    // Read-only wire extras (the legacy `commit` field above) are rejected by
-    // the operation schema, so only declared fields reach the broker.
-    const declared = GIT_OPERATION_FIELDS[operation as GitOperation]
-    const accepted = Object.fromEntries(
-      Object.entries(fields).filter(([key]) => Object.hasOwn(declared, key)),
-    )
-    const method = gitCapabilityMethod(operation as GitOperation)
-    return invoke(method, {
-      ...accepted, repositoryPath: sourceWorkspace,
-      ...(selectedDirectory && Object.hasOwn(declared, 'selectionGrant') ? { selectionGrant: selectedDirectory } : {}),
-    } as Params<typeof method>)
-  }
   const search = {
     query: String(payload.query ?? ''), isRegex: Boolean(payload.is_regex),
     caseSensitive: Boolean(payload.case_sensitive), wholeWord: Boolean(payload.whole_word),

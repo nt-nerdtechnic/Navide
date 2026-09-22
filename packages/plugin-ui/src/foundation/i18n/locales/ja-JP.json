@@ -200,6 +200,7 @@
       "open-accounts": "Git アカウントを開く"
     },
     "left-view-unavailable": "埋め込み Git ビューは一時的に利用できません。",
+    "detail-open-failed": "詳細ビューを開けませんでした。Git パネルは現在のターゲットを保持します。",
     "open-workspace": "Git を使用するにはワークスペースを開いてください。",
     "settings-unavailable": "Git の設定を読み込めませんでした。",
     "settings-retry": "再試行",
@@ -222,6 +223,9 @@
     "problems": {
       "title": "問題",
       "tab-shortcut": "問題 (⌘⇧M)"
+    },
+    "pluginViews": {
+      "unavailable": "このビューはプラグインが提供しており、開けませんでした。"
     },
     "plans": {
       "stage-in-review": "レビュー中",

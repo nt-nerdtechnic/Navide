@@ -73,7 +73,11 @@ export class PluginFrameAssetProtocol {
     }
     if (url.protocol !== `${PLUGIN_FRAME_SCHEME}:` || request.method !== 'GET') return response(404)
     const mount = this.mounts.get(url.hostname)
-    if (!mount || url.username || url.password || url.port || url.search || url.hash) return response(404)
+    // The Host-generated locator carries a load-time context query
+    // (`workspace_path`, `v2`, `contribution`). Resolution is by path only, so
+    // the query cannot escape the mount; credentials, ports and fragments still
+    // name something other than the mounted package and are refused.
+    if (!mount || url.username || url.password || url.port || url.hash) return response(404)
 
     let decodedPath: string
     try {

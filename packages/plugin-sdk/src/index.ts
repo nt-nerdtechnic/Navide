@@ -269,6 +269,11 @@ export type PluginReceiverItemClosed = {
 export type PluginReceiverLeftContribution = {
   contributionKey: string
   title: string
+  /** Host-resolved icon URL for the contribution, when its manifest declares
+   *  one. Display metadata only: the receiver never learns which plugin owns it. */
+  icon: string | null
+  /** The icon is a single-colour silhouette to paint in the current text colour. */
+  iconMonochrome: boolean
 }
 
 export interface PluginViewReceiver {

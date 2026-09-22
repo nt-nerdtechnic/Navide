@@ -18,6 +18,44 @@ const pluginId =
   process.argv.find((a) => a.startsWith(PLUGIN_ID_PREFIX))?.slice(PLUGIN_ID_PREFIX.length) ?? ''
 const packageBackendEnabled = process.argv.includes(`${PACKAGE_BACKEND_PREFIX}1`)
 
+// ── Host-observed user gesture ────────────────────────────────────────────
+// Catalog addresses marked `requiresUserGesture` (today only `ui.openExternal`)
+// are refused by the Host unless the request carries a gesture the Host itself
+// observed. Plugin page script runs in an isolated world and cannot produce a
+// trusted event, so `isTrusted` recorded here is not forgeable from page
+// content; this listener is registered before any page script runs, so a plugin
+// cannot suppress it from its own capture listener either. The window matches
+// the browser's transient-activation budget: long enough for a click handler to
+// await work before it opens a link, short enough that an unattended view
+// cannot reuse an old gesture.
+const USER_GESTURE_WINDOW_MS = 5_000
+let lastUserGestureAt = Number.NEGATIVE_INFINITY
+// Typed locally: this preload is compiled without the DOM lib (it is Node-free
+// by design), yet a real plugin view always has a window. Unit tests import this
+// module without one, so the subscription stays optional.
+interface HostGestureTarget {
+  addEventListener(
+    type: 'pointerdown' | 'keydown',
+    listener: (event: { isTrusted: boolean }) => void,
+    capture: boolean,
+  ): void
+}
+const hostWindow = (globalThis as { window?: HostGestureTarget }).window
+if (hostWindow && typeof hostWindow.addEventListener === 'function') {
+  for (const type of ['pointerdown', 'keydown'] as const) {
+    hostWindow.addEventListener(
+      type,
+      (event) => {
+        if (event.isTrusted) lastUserGestureAt = performance.now()
+      },
+      true,
+    )
+  }
+}
+function hasFreshUserGesture(): boolean {
+  return performance.now() - lastUserGestureAt <= USER_GESTURE_WINDOW_MS
+}
+
 interface CapabilityResponse {
   reqId: string
   ok: boolean
@@ -221,6 +259,9 @@ const nav = {
       method,
       args,
       reqId: globalThis.crypto.randomUUID(),
+      // Sent on every call: whether it is required is a catalog decision the
+      // Host owns, not a decision this bridge makes.
+      userGesture: hasFreshUserGesture(),
     })
   },
   /** Fixed Host-owned first-party action bridge used by the bundled Git
@@ -342,7 +383,7 @@ const nav = {
     clearReceiverCloseGuard(result.receiverId)
     return { receiverId: result.receiverId }
   },
-  async listReceiverLeftContributions(receiverId: string): Promise<Array<{ contributionKey: string; title: string }>> {
+  async listReceiverLeftContributions(receiverId: string): Promise<Array<{ contributionKey: string; title: string; icon: string | null; iconMonochrome: boolean }>> {
     const result = await ipcRenderer.invoke('plugin:receiver:list-left-contributions', { receiverId }) as unknown
     if (!Array.isArray(result) || result.some((entry) =>
       !entry || typeof entry !== 'object' || Array.isArray(entry) ||
@@ -351,7 +392,16 @@ const nav = {
     )) throw new Error('Receiver left contributions are unavailable.')
     return result.map((entry) => {
       const record = entry as Record<string, unknown>
-      return { contributionKey: record.contributionKey as string, title: record.title as string }
+      const icon = typeof record.icon === 'string' && record.icon.length > 0 ? record.icon : null
+      return {
+        contributionKey: record.contributionKey as string,
+        title: record.title as string,
+        // Display metadata only: the Host resolves a manifest icon path to a
+        // URL a sandboxed frame can paint, and marks silhouettes so receivers
+        // can ink them like the app's own icons.
+        icon,
+        iconMonochrome: icon !== null && record.iconMonochrome === true,
+      }
     })
   },
   async openReceiverLeft(receiverId: string, contributionKey: string): Promise<void> {
@@ -741,6 +791,35 @@ function settleFrameTransport(message: string): void {
   }
 }
 
+// View-level close preparation for a plugin's own (non-composed) view. The
+// Host waits for one answer per view: forward to the page's guard when it
+// registered one, otherwise accept immediately — no guard means nothing to
+// protect, and silence would stall the window close until the Host times out.
+ipcRenderer.on('plugin:view:close-request', (_event, payload: unknown) => {
+  const request = typeof payload === 'object' && payload !== null && !Array.isArray(payload)
+    ? payload as Record<string, unknown>
+    : null
+  const closeId = typeof request?.closeId === 'string' ? request.closeId : ''
+  const itemId = typeof request?.itemId === 'string' ? request.itemId : ''
+  if (!closeId || !itemId) return
+  const subscribers = listeners.get('plugin:view:close-request')
+  if (subscribers && subscribers.size > 0) {
+    for (const listener of subscribers) {
+      try {
+        listener(request)
+      } catch {
+        // A throwing guard cannot answer; the Host's timeout stays authoritative.
+      }
+    }
+    return
+  }
+  void nav.callCapability('ui', 'resolveDetailClose', {
+    closeId,
+    itemId,
+    decision: { accepted: true, reason: 'accepted' },
+  }).catch(() => undefined)
+})
+
 ipcRenderer.on('plugin:frame:port', (event, payload: { documentGeneration?: unknown; nonce?: unknown }) => {
   const port = event.ports[0]
   if (framePort || !port || typeof payload?.documentGeneration !== 'number' || payload.nonce !== frameNonce) return
@@ -789,6 +868,31 @@ ipcRenderer.on('plugin:frame:port', (event, payload: { documentGeneration?: unkn
     }
     if (incoming.channel === 'plugin:frame:revoked') {
       settleFrameTransport('Plugin frame was revoked.')
+      return
+    }
+    // View-level events (`plugin:view:*`) belong to the page's own runtime
+    // bridge. A close request with no registered guard is accepted here: only
+    // the frame can answer, and never answering would time the Host out and
+    // make the window (or the quit) refuse to close.
+    if (typeof incoming.channel === 'string' && incoming.channel.startsWith('plugin:view:')) {
+      const subscribers = frameListeners.get(incoming.channel)
+      if (subscribers && subscribers.size > 0) {
+        subscribers.forEach((listener) => listener(incoming.payload))
+        return
+      }
+      if (incoming.channel === 'plugin:view:close-request') {
+        const request = incoming.payload as { closeId?: unknown; itemId?: unknown } | null
+        const closeId = typeof request?.closeId === 'string' ? request.closeId : ''
+        const itemId = typeof request?.itemId === 'string' ? request.itemId : ''
+        if (closeId && itemId) {
+          void frameRequest('plugin:cap:call', {
+            ns: 'ui',
+            method: 'resolveDetailClose',
+            args: { closeId, itemId, decision: { accepted: true, reason: 'accepted' } },
+            reqId: globalThis.crypto.randomUUID(),
+          })
+        }
+      }
     }
   }
   framePort.onmessageerror = () => settleFrameTransport('Plugin frame transport failed.')

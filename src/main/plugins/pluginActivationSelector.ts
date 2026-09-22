@@ -503,7 +503,8 @@ export class PluginActivationSelector {
     return next
   }
 
-  /** Explicit user removal is the only lifecycle path that clears its record. */
+  /** Explicit user removal and a legacy v1 install replace the whole package
+   *  tree, so those are the lifecycle paths that clear the selection record. */
   clear(pluginId: string): void {
     if (!isValidManifestV2PluginId(pluginId)) throw new Error('invalid plugin id')
     try {

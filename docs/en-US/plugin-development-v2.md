@@ -480,6 +480,7 @@ rejected. A manifest may declare at most 16 views.
 | `right` | Right workbench region |
 | `left` | Left workbench region; use this when migrating a legacy sidebar contribution |
 | `main` | Primary workbench content region |
+| `detail` | Detail region filled by a composed receiver; never opens on its own |
 | `window` | Separate top-level window |
 
 `sidebar` is not a v2 location value. Unknown locations fail schema validation.
@@ -605,6 +606,61 @@ fields, unknown permissions, duplicate JSON object keys, and unknown view kinds
 fail closed. Manifest v2 initially supports only `custom` views.
 `tree`/`provider` is deferred until its provider registration, item shape,
 pagination, cancellation, error, and lifecycle Interface is published.
+
+### Composed View Contracts
+
+> Provisional. These fields are implemented and enforced by the Host, but the
+> composition contract is still being stabilised; treat them as an evolving
+> Interface rather than a frozen one.
+
+A `detail` view is the region a receiver fills with plugin-rendered detail
+pages. It never opens on its own: the Host mounts it only when the receiver
+that owns it accepts a detail request. Three manifest fields wire the
+composition, and each is valid for exactly one location:
+
+| Field | Valid on | Meaning |
+|---|---|---|
+| `detailView` | `left` | Id of the `detail` view in the same package that presents this surface's detail pages |
+| `targetSchema` | `detail` | Package-relative `.json` path describing the payload this detail view accepts |
+| `receives` | `window` | Declares this window as a composition receiver |
+
+```json
+{
+  "contributes": {
+    "views": [
+      { "id": "left", "kind": "custom", "location": "left", "title": "Changes",
+        "entry": "frontend/left/index.html", "detailView": "detail" },
+      { "id": "detail", "kind": "custom", "location": "detail", "title": "Change",
+        "entry": "frontend/detail/index.html", "targetSchema": "schemas/target.json" },
+      { "id": "window", "kind": "custom", "location": "window", "title": "Workspace",
+        "entry": "frontend/window/index.html",
+        "receives": { "protocolVersion": 1, "locations": ["left", "detail"],
+                      "closeGuard": { "protocolVersion": 1 } } }
+    ]
+  }
+}
+```
+
+`detailView` must reference a `detail` view declared in the same package. A
+left surface without `detailView` has no detail region, so the Host refuses its
+detail requests instead of silently dropping them. `receives.locations` lists
+the source locations this receiver serves (`left` and/or `detail`, at most two,
+unique); `receives.editorTargets` additionally lets the receiver accept opens
+of host editor targets, and `receives.closeGuard` makes it part of the close
+transaction:
+
+The Host asks a guarded receiver before it destroys a window. The receiver
+answers busy, accepts, or cancels; an accepted close is committed only after
+every other receiver and provider in the same transaction accepts, so a refusal
+or an unanswered request keeps the window, its views, and their uncommitted
+state alive. Each block carries `protocolVersion: 1` and is frozen until a
+later profile is published.
+
+Declaring a contract is not registering it. A `receives` declaration without
+the corresponding runtime registration fails closed: the Host refuses requests
+to that surface instead of routing them to an unguarded view. The same applies
+to `editorTargets` and `closeGuard` — a receiver that declares but does not
+register is unavailable for that capability, never implicitly trusted.
 
 ## Agent Execution Policy
 
@@ -1228,8 +1284,12 @@ Directed output and exit events are delivered only to the authenticated
 audience that created or reattached the session.
 `shell.run`, raw command/executable/arguments/environment/working-directory
 parameters, and PID control have no `aiCli` mapping and must fail closed.
-The Host executor also applies the catalog's active user-gesture requirement
-for `ui.openExternal` before opening a URL.
+The Host executor also enforces the catalog's `requiresUserGesture` flag for
+`ui.openExternal` before opening a URL: the plugin preload records a Host-observed
+trusted pointer or key event for its own view, and the broker refuses the address
+with `USER_CANCELLED` when the request carries no such gesture from the last five
+seconds. Agent- and backend-originated calls never carry one, so an unattended
+view cannot hand a URL to the OS browser.
 Filesystem calls used by the dock's `@`-file picker remain authorized by
 the public `system:fs` catalog; they are not absorbed into the AI CLI
 permission.

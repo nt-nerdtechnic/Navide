@@ -47,17 +47,7 @@ export const native = {
       ...(args.line === undefined ? {} : { line: args.line }), ...(args.sidebar ? { sidebar: args.sidebar } : {}),
     })
   },
-  openDiffWindow(args: { workspace_path: string; filepath: string; staged?: boolean; name?: string }) {
-    return invoke('ui.openGitWindow', {
-      path: args.filepath,
-      repositoryPath: args.workspace_path,
-      ...(args.name === undefined ? {} : { name: args.name }),
-      ...(args.staged === undefined ? {} : { staged: args.staged }),
-    })
-  },
   openMainWindow: (path: string) => invoke('ui.openMainWindow', { path, ...(directoryGrant(path) ? { grant: directoryGrant(path) } : {}) }),
-  openBranchDiffWindow: (repositoryPath: string, base: string) => invoke('ui.openBranchDiffWindow', { repositoryPath, base }),
-  openGitHistoryWindow: (repositoryPath: string) => invoke('ui.openGitHistoryWindow', { repositoryPath }),
   readKeybindings: () => invoke('ui.readKeybindings', {}),
   writeKeybindings: (content: string) => invoke('ui.writeKeybindings', { content }),
   onKeybindingsChanged: (listener: (content: string) => void) => {

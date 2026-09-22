@@ -15,6 +15,7 @@ import {
 } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { TextDecoder } from 'node:util'
+import { deflateRawSync } from 'node:zlib'
 import {
   canonicalArchivePath,
   comparePortableArchivePaths,
@@ -274,6 +275,13 @@ function u32(value) {
   return buffer
 }
 
+/** Write one deflated (method 8, level 9) ZIP with fixed metadata.
+ *
+ * Fixed timestamps, modes, and deflate level keep one canonical file list
+ * reproducible: rebuilding the same tree yields the same bytes, so the signed
+ * digest it produces can be rebuilt. The registry's Python builder
+ * (`registry.package.build_package`) applies the same method and level; whether
+ * the two match byte-for-byte also depends on their zlib implementations. */
 function makeZip(files) {
   const local = []
   const central = []
@@ -281,20 +289,21 @@ function makeZip(files) {
   for (const file of files) {
     const name = Buffer.from(file.path, 'utf8')
     const checksum = crc32(file.bytes)
+    const deflated = deflateRawSync(file.bytes, { level: 9 })
     const header = Buffer.concat([
       u32(0x04034b50),
       u16(20),
       u16(0x0800),
-      u16(0),
+      u16(8),
       u16(0x21),
       u16(0),
       u32(checksum),
-      u32(file.bytes.length),
+      u32(deflated.length),
       u32(file.bytes.length),
       u16(name.length),
       u16(0),
       name,
-      file.bytes,
+      deflated,
     ])
     local.push(header)
     central.push(
@@ -303,11 +312,11 @@ function makeZip(files) {
         u16(0x0314),
         u16(20),
         u16(0x0800),
-        u16(0),
+        u16(8),
         u16(0x21),
         u16(0),
         u32(checksum),
-        u32(file.bytes.length),
+        u32(deflated.length),
         u32(file.bytes.length),
         u16(name.length),
         u16(0),

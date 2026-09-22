@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 import { describe, expect, it, vi } from 'vitest'
 
 const state = vi.hoisted(() => ({
@@ -77,18 +78,27 @@ function port(): Port {
 describe('plugin preload frame admission', () => {
   it('does not bootstrap from a DOM message and requests trusted document-ready admission', async () => {
     const addEventListener = vi.fn()
+    const original = Object.getOwnPropertyDescriptor(globalThis, 'addEventListener')
     Object.defineProperty(globalThis, 'addEventListener', {
       configurable: true,
       value: addEventListener,
     })
-    state.invoke.mockResolvedValue({ ok: false })
-    await loadPreload(false)
+    try {
+      state.invoke.mockResolvedValue({ ok: false })
+      await loadPreload(false)
 
-    expect(addEventListener).not.toHaveBeenCalled()
-    expect(state.invoke).toHaveBeenCalledWith(
-      'plugin:frame:document-ready',
-      expect.objectContaining({ nonce: expect.any(String) }),
-    )
+      // The preload's only DOM subscription is the Host-observed gesture
+      // listener pair; it never bootstraps from a DOM `message`.
+      expect([...new Set(addEventListener.mock.calls.map(([type]) => type))].sort())
+        .toEqual(['keydown', 'pointerdown'])
+      expect(state.invoke).toHaveBeenCalledWith(
+        'plugin:frame:document-ready',
+        expect.objectContaining({ nonce: expect.any(String) }),
+      )
+    } finally {
+      if (original) Object.defineProperty(globalThis, 'addEventListener', original)
+      else Reflect.deleteProperty(globalThis, 'addEventListener')
+    }
   })
 
   it('admits one Host IPC port for the exact nonce and rejects mismatched or replacement ports', async () => {
@@ -115,6 +125,61 @@ describe('plugin preload frame admission', () => {
 })
 
 describe('plugin preload Host channels', () => {
+  it('marks a capability call only with a trusted gesture inside the activation window', async () => {
+    // `globalThis` is the window in a renderer, which is where the preload
+    // subscribes; spy on it so the test drives the Host's own listener.
+    const addEventListener = vi.spyOn(
+      globalThis as unknown as {
+        addEventListener: (type: string, listener: unknown, capture?: boolean) => void
+      },
+      'addEventListener',
+    )
+    const nav = await loadPreload(true)
+    const call = (): Promise<unknown> =>
+      (nav.callCapability as (ns: string, method: string, args?: unknown) => Promise<unknown>)(
+        'ui',
+        'openExternal',
+        { url: 'https://example.com' },
+      )
+    const payload = (): Record<string, unknown> =>
+      state.invoke.mock.calls.at(-1)?.[1] as Record<string, unknown>
+    // Drive the Host's own listener: it only reads `isTrusted`, and page script
+    // cannot produce a trusted event, which is the whole point of the signal.
+    const gesture = (event: { isTrusted: boolean }): void => {
+      const listener = addEventListener.mock.calls.filter(([type]) => type === 'pointerdown').at(-1)?.[1]
+      if (typeof listener !== 'function') throw new Error('gesture listener not registered')
+      ;(listener as unknown as (value: { isTrusted: boolean }) => void)(event)
+    }
+    const now = vi.spyOn(performance, 'now')
+    try {
+      state.invoke.mockResolvedValue({ ok: true })
+      // Nothing has happened in this view: an agent-driven call must not look
+      // like a user gesture.
+      await call()
+      expect(payload()).toMatchObject({ ns: 'ui', method: 'openExternal', userGesture: false })
+
+      // A synthetic event cannot claim a gesture.
+      gesture({ isTrusted: false })
+      await call()
+      expect(payload()).toMatchObject({ userGesture: false })
+
+      now.mockReturnValue(1_000)
+      gesture({ isTrusted: true })
+      await call()
+      expect(payload()).toMatchObject({ userGesture: true })
+
+      // The window is inclusive of its last millisecond and then closes.
+      now.mockReturnValue(1_000 + 5_000)
+      await call()
+      expect(payload()).toMatchObject({ userGesture: true })
+      now.mockReturnValue(1_000 + 5_001)
+      await call()
+      expect(payload()).toMatchObject({ userGesture: false })
+    } finally {
+      now.mockRestore()
+      addEventListener.mockRestore()
+    }
+  })
   it('forwards an all-or-none receiver close transaction and preserves its result union', async () => {
     const nav = await loadPreload(true)
     state.invoke.mockResolvedValue({ closed: false, reason: 'busy' })
@@ -446,7 +511,7 @@ describe('plugin preload Host channels', () => {
     const r2Listener = vi.fn(async () => ({ opened: true }))
     state.invoke.mockImplementation(async (channel: string, payload: Record<string, unknown>) => {
       if (channel === 'plugin:receiver:register') return { receiverId: payload.editorTargets ? 'receiver-1' : 'receiver-2' }
-      if (channel === 'plugin:receiver:list-left-contributions') return [{ contributionKey: 'provider.left', title: 'Provider' }]
+      if (channel === 'plugin:receiver:list-left-contributions') return [{ contributionKey: 'provider.left', title: 'Provider', icon: 'data:image/png;base64,AA', iconMonochrome: true }]
       if (channel === 'plugin:receiver:open-left') return { offered: payload.receiverId === 'receiver-1' }
       if (channel === 'plugin:receiver:dispose') return undefined
       if (channel === 'plugin:receiver:resolve-editor-target') {
@@ -464,7 +529,14 @@ describe('plugin preload Host channels', () => {
     const registration: EditorTargetRegistration = { protocolVersion: 1, locations: ['left'], editorTargets: { protocolVersion: 1 } }
     expect(await (nav.registerReceiver as (value: EditorTargetRegistration) => Promise<{ receiverId: string }>)(registration)).toEqual({ receiverId: 'receiver-1' })
     await expect((nav.listReceiverLeftContributions as (receiverId: string) => Promise<unknown>)('receiver-1'))
-      .resolves.toEqual([{ contributionKey: 'provider.left', title: 'Provider' }])
+      .resolves.toEqual([{
+        contributionKey: 'provider.left',
+        title: 'Provider',
+        // The Host resolves the manifest icon; the preload only validates and
+        // forwards the display metadata.
+        icon: 'data:image/png;base64,AA',
+        iconMonochrome: true,
+      }])
     await expect((nav.openReceiverLeft as (receiverId: string, contributionKey: string) => Promise<void>)('receiver-1', 'provider.left')).resolves.toBeUndefined()
     expect(state.invoke).toHaveBeenCalledWith('plugin:receiver:list-left-contributions', { receiverId: 'receiver-1' })
     expect(state.invoke).toHaveBeenCalledWith('plugin:receiver:open-left', { receiverId: 'receiver-1', contributionKey: 'provider.left' })

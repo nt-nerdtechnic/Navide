@@ -7,6 +7,9 @@ export type WindowCloseOutcome =
 
 export interface WindowCloseHost {
   hasWindowCloseParticipants(hostWindow: BrowserWindow): boolean
+  /** Report a refused close preparation so the user sees why the close did not
+   *  happen instead of reaching for a force-quit. */
+  notifyCloseRefused?(window: BrowserWindow, reason: NativeWindowCloseReason, cause: string): void
   prepareWindowClose(hostWindow: BrowserWindow, reason: NativeWindowCloseReason): Promise<WindowCloseOutcome>
   commitWindowClose(id: string): void
   cancelWindowClose(id: string): void

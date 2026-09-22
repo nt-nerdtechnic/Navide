@@ -2,6 +2,7 @@
 import { flushPromises, shallowMount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { executeCommand } from '@navide/plugin-ui/shared'
+import { i18n } from '@navide/plugin-ui/foundation'
 import { _resetKeybindingsState, _resetRegistry } from '@navide/plugin-ui/shared/testing'
 import GitLeftApp from './GitLeftApp.vue'
 
@@ -30,6 +31,7 @@ describe('GitLeftApp Host shortcuts', () => {
   it('forwards only the registered Host command through the contribution port', async () => {
     const dispatch = vi.fn().mockResolvedValue(undefined)
     const wrapper = shallowMount(GitLeftApp, {
+      global: { plugins: [i18n] },
       props: {
         surfacePorts: {} as never,
         legacyRepoSelection: {} as never,

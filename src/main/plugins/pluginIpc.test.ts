@@ -1473,8 +1473,13 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
       await expect(commitHandler(null, { id: 'acme.demo' })).rejects.toThrow(/publisher trust confirmation/)
       await expect(
         commitHandler(null, { id: 'acme.demo', publisherConfirmed: true })
-      ).rejects.toThrow(/Manifest v2 candidate/)
-      expect(manager.listInstalledPackages()).toEqual([])
+      ).resolves.toEqual({ id: 'acme.demo', requires: ['git'] })
+      // Legacy v1 has no activation to stage: the package installs immediately
+      // through the mutable path, with no restart step.
+      expect(manager.listInstalledPackages()).toEqual([
+        expect.objectContaining({ id: 'acme.demo', requires: ['git'] }),
+      ])
+      expect(manager.listInstalledPackages()[0]?.packageVersion).toBeUndefined()
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
@@ -1999,6 +2004,61 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
         schemaVersion: 1,
         packages: [],
       })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('installs a legacy v1 replacement immediately and clears its staged selection', async () => {
+    const backend = buildBackendPkg()
+    installFetch(signedDetail(backend.digest), backend.bytes, backend.digest)
+    const root = mkdtempSync(join(tmpdir(), 'navide-legacy-downgrade-'))
+    const active = new Map<string, PluginActivationCatalogEntry>()
+    const changes: Array<{ pluginId: string; activation?: PluginActivationCatalogEntry }> = []
+    try {
+      const manager = new FrontendPluginManager()
+      registerPluginIpc(manager, root, () => true, TRUST_CONFIG, undefined, {
+        ...TEST_PREFLIGHT_OPTIONS,
+        onActivationChange: (change) => {
+          changes.push(change)
+          active.delete(change.pluginId)
+          if (change.activation) active.set(change.pluginId, change.activation)
+        },
+      })
+      const prepareHandler = handlers.get('plugins:prepareInstall')
+      const commitHandler = handlers.get('plugins:commitInstall')
+      const restartHandler = handlers.get('plugins:restart')
+      if (!prepareHandler || !commitHandler || !restartHandler) throw new Error('install handlers not registered')
+
+      await prepareHandler(null, { namespace: 'acme', name: 'demo' })
+      await commitHandler(null, { id: 'acme.demo', publisherConfirmed: true, riskConfirmed: true })
+      await restartHandler(null, { id: 'acme.demo' })
+      expect(active.get('acme.demo')?.backend).toBeDefined()
+      expect(new PluginActivationSelector(root).read('acme.demo')).not.toBeNull()
+      changes.length = 0
+
+      const legacy = buildLegacyPkg()
+      installFetch(signedDetail(legacy.digest), legacy.bytes, legacy.digest)
+      await prepareHandler(null, { namespace: 'acme', name: 'demo' })
+
+      // Manifest v1 carries no activation to stage, so the commit installs the
+      // mutable package and clears the prior backend activation in one step.
+      await expect(
+        commitHandler(null, { id: 'acme.demo', publisherConfirmed: true })
+      ).resolves.toEqual({ id: 'acme.demo', requires: [] })
+      expect(changes).toEqual([{ pluginId: 'acme.demo' }])
+      expect(active.has('acme.demo')).toBe(false)
+      expect(projectBackendPluginActivationCatalog([...active.values()])).toEqual({
+        schemaVersion: 1,
+        packages: [],
+      })
+      expect(manager.listInstalledPackages()).toEqual([
+        expect.objectContaining({ id: 'acme.demo', requires: [] }),
+      ])
+      expect(manager.listInstalledPackages()[0]?.packageVersion).toBeUndefined()
+      // The v1 write replaced `<root>/acme.demo`, so the record that pointed at
+      // the promoted v2 candidate must not survive.
+      expect(new PluginActivationSelector(root).read('acme.demo')).toBeNull()
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

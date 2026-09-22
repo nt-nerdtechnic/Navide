@@ -4,10 +4,16 @@ import io
 import json
 import stat
 import zipfile
+from pathlib import Path
 
 import pytest
 
-from registry.package import PackageError, _validate_archive_entries, read_package
+from registry.package import (
+    PackageError,
+    _validate_archive_entries,
+    build_package as build_registry_package,
+    read_package,
+)
 from tests.fixtures import (
     CONTRACT_FIXTURES,
     build_package,
@@ -86,6 +92,38 @@ def test_read_valid_package() -> None:
 def test_digest_is_stable() -> None:
     data = build_package()
     assert read_package(data).digest == read_package(data).digest
+
+
+def test_registry_builder_deflates_entries_and_rebuilds_identical_bytes(tmp_path: Path) -> None:
+    """The registry builder deflates every entry and is deterministic.
+
+    The digest is signed and recorded, so one canonical file list must produce
+    the same archive bytes; the SDK's `makeZip` applies the same method and
+    level, and a silent switch away from deflate would fork the two builders
+    into different variants of the same package.
+    """
+    source = tmp_path / "acme.hello"
+    source.mkdir()
+    manifest = valid_manifest()
+    (source / "manifest.json").write_text(json.dumps(manifest))
+    (source / "README.md").write_text("# Hello\n")
+    (source / "dist").mkdir()
+    (source / "dist" / "hello.js").write_text("console.log('hello')\n")
+    (source / "dist" / "bundle.js").write_text("export const value = 1\n" * 400)
+    (source / "icon.png").write_bytes(b"\x89PNG\r\n\x1a\n-fake-icon-bytes")
+    files = ["README.md", "dist/bundle.js", "dist/hello.js", "icon.png", "manifest.json"]
+
+    data = build_registry_package(source, files)
+
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        infos = archive.infolist()
+    assert [info.filename for info in infos] == files
+    assert {info.compress_type for info in infos} == {zipfile.ZIP_DEFLATED}
+    # The compressible body must actually shrink; tiny entries may not.
+    bundle = next(info for info in infos if info.filename == "dist/bundle.js")
+    assert bundle.compress_size < bundle.file_size
+    assert read_package(data).manifest.id == manifest["id"]
+    assert build_registry_package(source, files) == data
 
 
 def test_not_a_zip_rejected() -> None:

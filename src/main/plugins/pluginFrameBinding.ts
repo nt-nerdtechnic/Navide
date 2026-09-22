@@ -95,15 +95,24 @@ export class PluginFrameBindingRegistry {
 
   revoke(id: string): void {
     const binding = this.bindings.get(id)
-    if (!binding || binding.state === 'revoked') return
-    binding.state = 'revoked'
+    if (!binding) return
     binding.port?.close()
     binding.port = null
+    // Drop the record instead of retaining a 'revoked' terminal state: it can
+    // never be admitted again, and keeping one entry per composed frame the Host
+    // ever opened would grow this map — and the admit/active scans with it —
+    // without bound.
+    this.bindings.delete(id)
   }
 
   revokeInstance(instanceId: string): void {
-    for (const binding of this.bindings.values()) {
+    for (const binding of [...this.bindings.values()]) {
       if (binding.instanceId === instanceId) this.revoke(binding.id)
     }
+  }
+
+  /** Live bindings: reserved, bound, loading, or active. Revoked ids are dropped. */
+  get size(): number {
+    return this.bindings.size
   }
 }

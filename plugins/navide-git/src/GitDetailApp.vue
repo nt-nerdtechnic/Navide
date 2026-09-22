@@ -46,7 +46,18 @@ function isSameResource(current: DetailTarget, next: DetailTarget): boolean {
 const workspacePath = new URLSearchParams(window.location.search).get('workspace_path') ?? ''
 function resolveRepository(repository: string): string { return repository === '.' ? workspacePath : `${workspacePath.replace(/\/+$/, '')}/${repository}` }
 const gitTransport = inject(GIT_TRANSPORT_KEY); const branchDiff = inject(GIT_BRANCH_DIFF_KEY); const fileAccess = inject(GIT_FILE_ACCESS_KEY); const ui = inject(GIT_UI_KEY)
-if (!gitTransport || !branchDiff || !fileAccess || !ui) throw new Error('Git detail ports were not provided by the composition root')
+if (!gitTransport || !branchDiff || !fileAccess || !ui) {
+  // Say which port is missing before throwing: a blank detail pane with no
+  // message is impossible to diagnose from the outside.
+  const missing = [
+    !gitTransport ? 'gitTransport' : '',
+    !branchDiff ? 'branchDiff' : '',
+    !fileAccess ? 'fileAccess' : '',
+    !ui ? 'ui' : '',
+  ].filter(Boolean).join(', ')
+  console.error(`[navide.git] detail ports missing: ${missing}`)
+  throw new Error(`Git detail ports were not provided by the composition root: ${missing}`)
+}
 const gitUi = ui
 const target = ref<DetailTarget | null>(null)
 const targetRevision = ref<number | null>(null)

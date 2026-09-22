@@ -12,6 +12,10 @@ All notable released changes to Navide will be documented in this file. The form
 - Move the language picker from Appearance to its own **Settings → Language** page. Settings search opens the new page, and the language preference still applies to every workspace.
 - Replace repeated agent lists in **Settings → CLI Agents** with searchable, filterable cards and a single-agent settings drawer. Cards retain enable controls and drag ordering through the grip to the left of each title; Overview, Launch, Permissions, Push, and Install are stacked on one scrolling drawer page, preserving automatic setting persistence and closing before Settings when Escape is pressed.
 - Show the status bar resource pill as live panes over all panes (`▤ 10 / 100`), so idle-reclaimed placeholders no longer read as open windows; help examples updated in all three locales.
+- Deflate official plugin artifacts, keeping the archive deterministic for a canonical file list; the mini-IDE package drops from about 29 MB to about 7 MB.
+- Require a Host-observed user gesture for the public `ui.openExternal` capability: the plugin preload marks a trusted pointer or key event from the last five seconds, and agent- or backend-initiated calls are refused with `USER_CANCELLED`.
+- Mount plugin views inside the Mini IDE instead of bundling a copy of them; a mounted view now receives the workspace it was opened for and can call the Host, so it renders instead of showing an empty pane. The activity column continues with one entry per left contribution the Host catalogued for the installed extensions, drawn with the icon the extension declares, and mounts the one you pick; a view that cannot be mounted says so in place rather than leaving an empty pane. The IDE contains no Git or Plans code at all — about twenty duplicated Git UI files are gone — and **file diffs and branch comparisons now open in the Git window**, which owns those surfaces.
+- Compose plugin views end to end: a mounted view receives the workspace it was opened for, can call the Host, opens its own detail views there (including a target such as a branch comparison), and takes part in close preparation — and a close or quit refused during that preparation now says so instead of appearing to hang.
 
 ### Added
 
@@ -40,6 +44,8 @@ All notable released changes to Navide will be documented in this file. The form
 
 ### Fixed
 
+- Keep the embedded Git left surface usable when no detail receiver is paired: file and conflict requests fall back to the existing Host routes instead of silently doing nothing, and a refused detail request now reports the failure.
+- Keep installing Manifest v1 packages through the legacy mutable path; Manifest v2 installs continue to stage an immutable candidate for the next restart.
 - Make every descendant counted on a parent card reachable in the Auto, Spotlight and Fullscreen pane lists: unfolding a family now also lists descendants that are minimized or live on another tab or project, each with a location hint. Clicking such a row switches project and tab, restores and focuses it like the left agent list; Cmd/Ctrl/Shift-click only selects it without switching or restoring. The bulk collapse/expand button keeps its current-tab scope, and the parent's `↳ n` chip is replaced by a readable summary such as "1 child pane · Running".
 - Bind Kilo and OpenCode account operations to the credential store observed after CLI shell startup, preserving HOME/XDG settings. Refuse ambiguous or conflicting account mutations while retaining ordinary CLI execution; login waits until the outgoing credential snapshot is ready.
 - Allow the Explorer and HTML preview to read interface prototypes and relative assets in `.agent-team/mockups/`, while preserving filesystem mutation protections and the preview's script-disabled sandbox.

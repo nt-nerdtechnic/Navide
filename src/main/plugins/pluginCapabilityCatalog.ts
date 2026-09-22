@@ -38,6 +38,9 @@ interface PublicCapabilityCatalogBase {
   kind: 'method' | 'event'
   eligibility: PublicCapabilityEligibility
   validateRequest?: (value: unknown) => value is Record<string, unknown>
+  /** Mirrors the JSON catalog's `requiresUserGesture`: the Host refuses the
+   *  address unless the request carries a gesture it observed itself. */
+  requiresUserGesture?: boolean
 }
 
 /** Public storage entries are deliberately a separate union member: they do
@@ -334,7 +337,10 @@ export const PUBLIC_CAPABILITY_CATALOG: Readonly<Record<string, PublicCapability
     validatePlansWindowRequest,
     'firstParty',
   ),
-  'ui.openExternal': systemMethod('ui.openExternal', 'ui', validateExternalRequest),
+  'ui.openExternal': {
+    ...systemMethod('ui.openExternal', 'ui', validateExternalRequest),
+    requiresUserGesture: true,
+  },
   'storage.get': storageMethod('storage.get'),
   'storage.set': storageMethod('storage.set'),
   'storage.delete': storageMethod('storage.delete'),

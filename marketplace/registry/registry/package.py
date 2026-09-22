@@ -37,7 +37,7 @@ _HOST_OWNED_ARCHIVE_NAMES = frozenset(
         ".navide-registry-receipt.json",
         ".navide-package.zip",
         ".navide-registry-trust.json",
-    ".navide-backend-activation.json",
+        ".navide-backend-activation.json",
         ".navide-quarantined.json",
     }
 )
@@ -401,6 +401,11 @@ def build_package(src_dir: Path | str, files: list[str]) -> bytes:
     if MANIFEST_NAME not in files:
         raise PackageError("canonical file list must include manifest.json")
     buffer = BytesIO()
+    # Deflated (method 8) with a pinned level: fixed timestamps, modes, and
+    # compression level keep one canonical file list reproducible, so the signed
+    # digest the builder records can be rebuilt. The SDK's `makeZip` applies the
+    # same method and level; matching byte-for-byte across the two also depends on
+    # their zlib implementations.
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
         for arcname, path in sorted(paths):
             info = zipfile.ZipInfo(arcname, date_time=(1980, 1, 1, 0, 0, 0))
@@ -408,8 +413,8 @@ def build_package(src_dir: Path | str, files: list[str]) -> bytes:
             mode = 0o755 if arcname.startswith("backend/") else 0o644
             info.external_attr = (stat.S_IFREG | mode) << 16
             info.flag_bits = 0x800
-            info.compress_type = zipfile.ZIP_STORED
-            zf.writestr(info, path.read_bytes())
+            info.compress_type = zipfile.ZIP_DEFLATED
+            zf.writestr(info, path.read_bytes(), compresslevel=9)
     data = buffer.getvalue()
     # Validate the built archive (also surfaces a bad manifest early).
     read_package(data)

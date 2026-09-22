@@ -291,6 +291,8 @@ describe('Issue 03/04 public Host planner', () => {
         method: 'openExternal',
         args: { url: 'https://example.com' },
         reqId: 'v2-address',
+        // The v2 address resolves; its gesture gate is covered separately.
+        userGesture: true,
       },
       uiPolicy,
       uiContext,

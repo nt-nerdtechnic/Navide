@@ -208,8 +208,29 @@ describe('PluginFrameBindingRegistry', () => {
     expect(registry.beginNavigation(second.id, rightSecond as never, identity.entryUrl)).not.toBeNull()
     expect(registry.admit(rightSecond as never, 10, 'nonce-2', () => undefined)).not.toBeNull()
     expect(registry.post('instance-2', 'plugin:test', { ok: true })).toBe(true)
+    expect(registry.size).toBe(2)
     registry.revoke(second.id)
     expect(registry.post('instance-2', 'plugin:test', { ok: false })).toBe(false)
     expect(registry.admit(rightSecond as never, 10, 'nonce-2', () => undefined)).toBeNull()
+    // A revoked reservation is dropped, so repeated open/close cycles cannot
+    // grow the registry.
+    expect(registry.size).toBe(1)
+    registry.revokeInstance(identity.instanceId)
+    expect(registry.size).toBe(0)
+    registry.revoke(second.id)
+    expect(registry.size).toBe(0)
+  })
+
+  it('keeps only live bindings across repeated reserve/revoke cycles', () => {
+    const registry = new PluginFrameBindingRegistry()
+    for (let index = 0; index < 25; index += 1) {
+      const reserved = registry.reserve({ ...identity, instanceId: `instance-${index}` })
+      const frame = { detached: false, frameTreeNodeId: 100 + index }
+      expect(registry.bindBlank(reserved.id, frame as never)).not.toBeNull()
+      expect(registry.beginNavigation(reserved.id, frame as never, identity.entryUrl)).not.toBeNull()
+      expect(registry.admit(frame as never, 10, 'nonce', () => undefined)).not.toBeNull()
+      registry.revokeInstance(`instance-${index}`)
+    }
+    expect(registry.size).toBe(0)
   })
 })

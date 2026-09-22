@@ -452,6 +452,25 @@ frontendPluginManager.setGitAccountHandlers({
 // every uncommitted window and item alive.
 const windowCloseCoordinator = createWindowCloseCoordinator({
   hasWindowCloseParticipants: (window) => frontendPluginManager.hasWindowCloseParticipants(window),
+  notifyCloseRefused: (window, reason, cause) => {
+    // A refusal is a normal outcome (a plugin keeps a draft), but silence would
+    // look like a hang. Say what happened and where it comes from.
+    const detail = cause === 'timeout'
+      ? 'A plugin did not answer in time.'
+      : cause === 'busy'
+        ? 'A plugin is still busy.'
+        : 'A plugin refused the close.'
+    const options: Electron.MessageBoxOptions = {
+      type: 'warning',
+      title: reason === 'quit' ? 'Quit cancelled' : reason === 'reload' ? 'Reload cancelled' : 'Close cancelled',
+      message: reason === 'reload'
+        ? 'The window was not reloaded.'
+        : 'The window stays open.',
+      detail: `${detail} Finish or discard the pending work in the plugin's own view, then try again.`,
+    }
+    void (window.isDestroyed() ? dialog.showMessageBox(options) : dialog.showMessageBox(window, options))
+      .catch(() => undefined)
+  },
   prepareWindowClose: (window, reason) => frontendPluginManager.prepareWindowClose(window, reason),
   commitWindowClose: (id) => frontendPluginManager.commitWindowClose(id),
   cancelWindowClose: (id) => frontendPluginManager.cancelWindowClose(id),
@@ -939,6 +958,7 @@ const miniIdeSource = {
   artifactVersion: app.getVersion(),
 }
 const installedMiniIdeDescriptorPresent = frontendPluginManager.getDescriptor(MINI_IDE_PLUGIN_ID) !== undefined
+frontendPluginManager.setContributionIconResolver(contributionIcon)
 frontendPluginManager.setCapabilityGrantResolver((pluginId, packageVersion) =>
   pluginCapabilityGrants.get(pluginId, packageVersion)
 )
@@ -2336,6 +2356,7 @@ async function routeEditorOpen(
   host: BrowserWindow | null,
   params: Record<string, string>
 ): Promise<boolean> {
+  if (classifyEditorOpen(params) === 'diff') return openGitDiffRequest(host, params)
   const preference = currentEditorPreference()
   const route = classifyOpenRequest(params, preference)
   if (route.via === 'mini-ide') return openMiniIdeEditor(host, params)
@@ -2724,16 +2745,49 @@ function showPlansPreviewUnavailable(workspacePath: string): void {
 }
 
 function openDiffWindow(host: BrowserWindow | null, params: Record<string, string>): void {
-  // EditorWindowApp reads diff_filepath/diff_staged from the entry query on
-  // startup (or after the query-change reload) and opens the diff tab.
-  void openMiniIdeEditor(host, {
-    workspace_path: params.workspace_path ?? '',
-    diff_filepath: params.filepath ?? '',
-    diff_staged: params.staged ?? '',
-    diff_name: params.name ?? params.filepath ?? '',
-    diff_commit: params.commit ?? '',
-    sidebar: 'git',
-  })
+  // Diff surfaces belong to the Git extension: the request is forwarded to its
+  // window, which selects the file there. The IDE never renders a diff.
+  void openGitWindow(params.workspace_path ?? '', gitWindowExtraParams({
+    filepath: params.filepath,
+    ...(params.name === undefined ? {} : { name: params.name }),
+    ...(params.staged === undefined ? {} : { staged: params.staged }),
+    ...(params.commit === undefined ? {} : { commit: params.commit }),
+  }))
+}
+
+/** Route a diff-shaped editor request to the Git extension's own window. The
+ *  request is the one the editor window used to receive (`diff_filepath`,
+ *  `branch_diff_base`, …), so callers keep passing the same params. */
+async function openGitDiffRequest(host: BrowserWindow | null, params: Record<string, string>): Promise<boolean> {
+  const workspacePath = params.workspace_path ?? ''
+  const extraParams = params.branch_diff_base
+    ? {
+        git_diff_base: params.branch_diff_base,
+        git_diff_compare: params.branch_diff_compare ?? '',
+      }
+    : gitWindowExtraParams({
+        filepath: params.diff_filepath,
+        ...(params.diff_name === undefined ? {} : { name: params.diff_name }),
+        ...(params.diff_staged === undefined ? {} : { staged: params.diff_staged }),
+        ...(params.diff_commit === undefined ? {} : { commit: params.diff_commit }),
+      })
+  if (await openGitWindow(workspacePath, extraParams)) return true
+  await showGitViewUnavailable(host)
+  return false
+}
+
+/** The Git extension owns diffs; say so when it is missing instead of opening
+ *  an editor window that cannot show them. */
+async function showGitViewUnavailable(target: BrowserWindow | null): Promise<void> {
+  const options: Electron.MessageBoxOptions = {
+    type: 'error',
+    title: 'Git view unavailable',
+    message: 'Unable to open the diff because the Git extension is unavailable.',
+    detail: 'The Git extension is not installed or could not be loaded. Open Settings → Extensions to inspect its status.',
+  }
+  await (target && !target.isDestroyed()
+    ? dialog.showMessageBox(target, options)
+    : dialog.showMessageBox(options))
 }
 
 function openMainWindow(workspacePath = ''): void {
@@ -3422,12 +3476,9 @@ ipcMain.handle('window:setUiScale', (event, next: unknown) => {
 })
 
 function openBranchDiffWindow(host: BrowserWindow | null, params: Record<string, string>): void {
-  // EditorWindowApp reads branch_diff_base/branch_diff_compare from the entry
-  // query on startup (or after the query-change reload) and opens the tab.
-  void openMiniIdeEditor(host, {
-    workspace_path: params.workspace_path ?? '',
-    branch_diff_base: params.branch_diff_base ?? 'main',
-    branch_diff_compare: params.branch_diff_compare ?? '',
+  void openGitWindow(params.workspace_path ?? '', {
+    git_diff_base: params.branch_diff_base ?? 'main',
+    git_diff_compare: params.branch_diff_compare ?? '',
   })
 }
 

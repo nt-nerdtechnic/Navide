@@ -37,7 +37,7 @@ rules the editor writes.
 |----------|--------|
 | `⌘B` | Toggle sidebar |
 | `⌘⇧E` | Focus Explorer |
-| `⌘⇧G` | Open the Git window when Git is active; focus the Source Control sidebar inside the Mini IDE (when find is closed) |
+| `⌘⇧G` | Open the Git window when Git is active; focus a Source Control view where a window owns one, such as the legacy Mini IDE editor window (when find is closed) |
 | `⌘⇧I` | Open the Mini IDE window |
 | `⌥⌘V` | Focus the right rail's Preview panel (main window) |
 | `⌘J` | Toggle AI Terminal panel |
@@ -435,7 +435,8 @@ every condition any rule tests, and every one any window publishes.
 
 **Window identity.** No window ever sets two of these, which is what lets the
 same key mean different things in different windows (`⌘⇧G` is `openGitWindow` in
-the main window and `focusSourceControl` in the Mini IDE). Settings' conflict
+the main window and `focusSourceControl` in a window that owns a Source Control
+view, such as the legacy Mini IDE editor window). Settings' conflict
 detection relies on it: without knowing the two can never meet, almost every
 shared key would report as broken.
 
@@ -491,9 +492,10 @@ defaults:
 A command prefixed with `-` is a **removal**: it cancels the rule that binds
 that same key to that same command. Removal is deliberately narrow rather than
 "blank the key", because several keys carry more than one command separated
-only by their `when` clause — `⌘⇧G` is `focusSourceControl` in the Mini IDE and
-`openGitWindow` in the main window, and unbinding one must not take the other
-down with it. Removals are matched on the canonical form of the key, so
+only by their `when` clause — `⌘⇧G` is `focusSourceControl` in the legacy Mini
+IDE editor window and `openGitWindow` in the main window, and unbinding one must
+not take the other down with it. Removals are matched on the canonical form of
+the key, so
 `shift+cmd+p` and `cmd+shift+p` refer to the same binding.
 
 A malformed entry is skipped rather than discarding the whole file.

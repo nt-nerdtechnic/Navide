@@ -200,6 +200,7 @@
       "open-accounts": "Open Git accounts"
     },
     "left-view-unavailable": "The embedded Git view is temporarily unavailable.",
+    "detail-open-failed": "Could not open the detail view. The Git pane keeps the current target.",
     "open-workspace": "Open a workspace to use Git.",
     "settings-unavailable": "Git preferences could not be loaded.",
     "settings-retry": "Retry",
@@ -222,6 +223,9 @@
     "problems": {
       "title": "Problems",
       "tab-shortcut": "Problems (⌘⇧M)"
+    },
+    "pluginViews": {
+      "unavailable": "This view is provided by a plugin and could not be opened."
     },
     "plans": {
       "stage-in-review": "In Review",

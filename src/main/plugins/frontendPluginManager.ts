@@ -10,6 +10,7 @@
 import { BrowserWindow, WebContentsView, ipcMain, webFrameMain, type WebContents, type WebFrameMain } from 'electron'
 import { warnMain } from '../main-log'
 import { validateSupportedLocale } from '../hostLocale'
+import { composePluginFrameQuery } from './pluginContributionQuery'
 import { systemFrameUnlessMac } from '../window-controls'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, lstatSync, realpathSync } from 'node:fs'
@@ -375,6 +376,7 @@ interface PendingEditorTarget {
 interface PendingPluginFrame {
   readonly bindingId: string
   readonly instanceId: string
+  readonly contributionKey: string
   readonly hostWindow: BrowserWindow
   readonly receiverWebContents: WebContents
   readonly receiverInstanceId: string | null
@@ -1398,6 +1400,7 @@ export class FrontendPluginManager {
   private readonly gitContributionStates = new Map<number, GitContributionState>()
   /** Main-owned safeStorage adapter for the first-party Git account surface. */
   private gitAccountHandlers: GitAccountHandlers | null = null
+  private contributionIconResolver: ((iconFile: string) => { url: string; monochrome?: boolean } | null) | null = null
   private capabilityGrantResolver:
     | ((pluginId: string, packageVersion: string) => HostCapabilityGrant | null)
     | null = null
@@ -2501,9 +2504,69 @@ export class FrontendPluginManager {
         this.running.get(pending.receiverInstanceId)?.documentGeneration !== pending.receiverDocumentGeneration) ||
       pending.frame.parent !== pending.receiverWebContents.mainFrame ||
       pending.frame.url !== active.entryUrl ||
-      pending.frame.origin !== new URL(active.entryUrl).origin
+      // Non-special scheme: the frame's origin is `scheme://host`, while
+      // `new URL(...).origin` is opaque ("null") for such schemes.
+      pending.frame.origin !== pending.assetOrigin.replace(/\/$/, '')
     ) return undefined
     return plugin
+  }
+
+  /** Why a recorded pair is no longer usable, or '' when it is current. Kept
+   *  beside {@link currentDetailPair} so a refused detail open can name the
+   *  condition that failed instead of answering a bare `receiver-unavailable`. */
+  private detailPairRefusal(pair: DetailPair): string {
+    const source = this.running.get(pair.sourceInstanceId)
+    const registration = this.receiverRegistrations.get(pair.receiverId)
+    const receiver = registration ? this.running.get(registration.receiverInstanceId) : undefined
+    const descriptor = source ? this.descriptors.get(source.id) : undefined
+    const sourceView = descriptor?.views?.find((view) => view.contributionKey === source?.contributionKey)
+    const receiverDescriptor = receiver ? this.descriptors.get(receiver.id) : undefined
+    const receiverView = receiverDescriptor?.views?.find((view) => view.contributionKey === receiver?.contributionKey)
+    const sourceBinding = source?.carrier === 'frame'
+      ? this.pluginFrameBindings.activeForInstance(source.instanceId)
+      : null
+    if (!source) return 'source instance is not running'
+    if (!receiver || !registration) return 'receiver is not registered'
+    if (!descriptor || !sourceView) return 'source view is unavailable'
+    if (!receiverDescriptor || !receiverView) return 'receiver view is unavailable'
+    if (!source.hasV2DescriptorIdentity || !receiver.hasV2DescriptorIdentity) return 'instances are not Manifest v2'
+    if (source.workspacePath === null || receiver.workspacePath === null) return 'a workspace path is missing'
+    if (resolve(source.workspacePath) !== pair.workspacePath || resolve(receiver.workspacePath) !== pair.workspacePath) {
+      return 'source and receiver workspaces differ'
+    }
+    if (source.hostWindow !== receiver.hostWindow) return 'source and receiver live in different windows'
+    if (sourceView.location !== 'left') return 'source view is not a left contribution'
+    if (sourceView.detailView !== pair.detailView.id) return 'source no longer declares this detail view'
+    if (!descriptor.views?.includes(pair.detailView)) return 'detail view is not part of the source descriptor'
+    if (pair.detailView.location !== 'detail') return 'detail view is not a detail contribution'
+    if (!pair.detailView.targetSchema) return 'detail view declares no target schema'
+    if (this.descriptors.get(descriptor.id) !== descriptor) return 'source descriptor changed'
+    if (this.descriptors.get(receiverDescriptor.id) !== receiverDescriptor) return 'receiver descriptor changed'
+    if (this.isPackageVersionStopping(descriptor.id, descriptor.packageVersion)) return 'source package is stopping'
+    if (this.isPackageVersionStopping(receiverDescriptor.id, receiverDescriptor.packageVersion)) {
+      return 'receiver package is stopping'
+    }
+    if (this.currentReceiverRegistration(pair.receiverId, receiver) !== registration) return 'receiver registration is stale'
+    if (!registration.declaration.locations.includes('detail')) return 'receiver does not declare the detail location'
+    if (!sourceBinding || this.activePluginFrame(sourceBinding) !== source) return 'source frame is not active'
+    if (!source.capabilityContext?.runtimeBinding) return 'source has no runtime binding'
+    if (source.capabilityContext.runtimeBinding.instanceId !== source.instanceId) {
+      return 'source runtime binding is not this instance'
+    }
+    if (!receiver.capabilityContext?.runtimeBinding) return 'receiver has no runtime binding'
+    if (receiver.capabilityContext.runtimeBinding.instanceId !== receiver.instanceId) {
+      return 'receiver runtime binding is not this instance'
+    }
+    const sourceContext = this.contributionCapabilityContext(descriptor, sourceView, pair.workspacePath)
+    const detailContext = this.contributionCapabilityContext(descriptor, pair.detailView, pair.workspacePath)
+    const receiverContext = this.contributionCapabilityContext(receiverDescriptor, receiverView, pair.workspacePath)
+    if (!sourceContext?.userGrant?.system.includes('ui')) return 'source has no ui grant'
+    if (descriptor.capabilityPolicy?.kind !== 'manifest-v2' || !descriptor.capabilityPolicy.system.includes('ui')) {
+      return 'source policy does not allow ui'
+    }
+    if (!detailContext) return 'detail capability context is unavailable'
+    if (!receiverContext) return 'receiver capability context is unavailable'
+    return ''
   }
 
   private markPluginReady(plugin: RunningPlugin): void {
@@ -2663,10 +2726,20 @@ export class FrontendPluginManager {
         return
       }
       pending.timer = setTimeout(
-        () => this.settlePendingDetailTarget(target.targetId, { applied: false, reason: 'timeout' }),
+        () => {
+          console.warn(
+            `[plugins] detail target timed out: '${provider.contributionKey}' never applied ` +
+            `revision ${target.revision} of resource '${target.resourceKey}'`,
+          )
+          this.settlePendingDetailTarget(target.targetId, { applied: false, reason: 'timeout' })
+        },
         10_000,
       )
       this.pendingDetailTargets.set(target.targetId, pending)
+      console.warn(
+        `[plugins] detail target dispatched to '${provider.contributionKey}' ` +
+        `(revision ${target.revision}, resource '${target.resourceKey}')`,
+      )
       if (!this.sendToPlugin(provider, IPC_EVENT, {
         type: 'plugin:view:detail-target',
         data: { targetId: target.targetId, revision: target.revision, target: target.target },
@@ -3116,6 +3189,11 @@ export class FrontendPluginManager {
       }
       item.detailTarget = pending.target
       item.appliedDetailTarget = pending.target
+      console.warn(
+        `[plugins] detail target applied by ` +
+        `'${this.running.get(pending.providerInstanceId)?.contributionKey ?? pending.providerInstanceId}' ` +
+        `(revision ${pending.target.revision})`,
+      )
       pending.resolve({ applied: true })
       if (pending.openId !== undefined) {
         const open = this.pendingDetailOpens.get(pending.openId)
@@ -3249,44 +3327,7 @@ export class FrontendPluginManager {
 
   /** Revalidates every live identity and Grant participating in a paired detail. */
   private currentDetailPair(pair: DetailPair): boolean {
-    const source = this.running.get(pair.sourceInstanceId)
-    const registration = this.receiverRegistrations.get(pair.receiverId)
-    const receiver = registration ? this.running.get(registration.receiverInstanceId) : undefined
-    const descriptor = source ? this.descriptors.get(source.id) : undefined
-    const sourceView = descriptor?.views?.find((view) => view.contributionKey === source?.contributionKey)
-    const receiverDescriptor = receiver ? this.descriptors.get(receiver.id) : undefined
-    const receiverView = receiverDescriptor?.views?.find((view) => view.contributionKey === receiver?.contributionKey)
-    const sourceBinding = source?.carrier === 'frame'
-      ? this.pluginFrameBindings.activeForInstance(source.instanceId)
-      : null
-    if (
-      !source || !receiver || !registration || !descriptor || !sourceView || !receiverDescriptor || !receiverView ||
-      !source.hasV2DescriptorIdentity || !receiver.hasV2DescriptorIdentity ||
-      source.workspacePath === null || receiver.workspacePath === null ||
-      resolve(source.workspacePath) !== pair.workspacePath || resolve(receiver.workspacePath) !== pair.workspacePath ||
-      source.hostWindow !== receiver.hostWindow || sourceView.location !== 'left' ||
-      sourceView.detailView !== pair.detailView.id || !descriptor.views?.includes(pair.detailView) ||
-      pair.detailView.location !== 'detail' || !pair.detailView.targetSchema ||
-      this.descriptors.get(descriptor.id) !== descriptor ||
-      this.descriptors.get(receiverDescriptor.id) !== receiverDescriptor ||
-      this.isPackageVersionStopping(descriptor.id, descriptor.packageVersion) ||
-      this.isPackageVersionStopping(receiverDescriptor.id, receiverDescriptor.packageVersion) ||
-      this.currentReceiverRegistration(pair.receiverId, receiver) !== registration ||
-      !registration.declaration.locations.includes('detail') ||
-      !sourceBinding || this.activePluginFrame(sourceBinding) !== source ||
-      !source.capabilityContext?.runtimeBinding ||
-      source.capabilityContext.runtimeBinding.instanceId !== source.instanceId ||
-      !receiver.capabilityContext?.runtimeBinding ||
-      receiver.capabilityContext.runtimeBinding.instanceId !== receiver.instanceId
-    ) return false
-    const sourceContext = this.contributionCapabilityContext(descriptor, sourceView, pair.workspacePath)
-    const detailContext = this.contributionCapabilityContext(descriptor, pair.detailView, pair.workspacePath)
-    const receiverContext = this.contributionCapabilityContext(receiverDescriptor, receiverView, pair.workspacePath)
-    return Boolean(
-      sourceContext?.userGrant?.system.includes('ui') &&
-      descriptor.capabilityPolicy?.kind === 'manifest-v2' && descriptor.capabilityPolicy.system.includes('ui') &&
-      detailContext && receiverContext
-    )
+    return this.detailPairRefusal(pair) === ''
   }
 
   /** Build an opaque, canonical resource identity without exposing target data. */
@@ -3358,10 +3399,21 @@ export class FrontendPluginManager {
       return buildError(reqId, 'INVALID_ARGUMENT', 'detail request is invalid')
     }
     const pair = this.detailPairs.get(plugin.instanceId)
-    if (!pair) return buildSuccess(reqId, { opened: false, reason: 'receiver-unpaired' })
-    if (!this.currentDetailPair(pair)) return buildSuccess(reqId, { opened: false, reason: 'receiver-unavailable' })
+    if (!pair) {
+      console.warn(`[plugins] detail open refused: '${plugin.id}' has no paired receiver`)
+      return buildSuccess(reqId, { opened: false, reason: 'receiver-unpaired' })
+    }
+    const pairRefusal = this.detailPairRefusal(pair)
+    if (pairRefusal) {
+      console.warn(`[plugins] detail open refused: ${pairRefusal}`)
+      return buildSuccess(reqId, { opened: false, reason: 'receiver-unavailable' })
+    }
     const descriptor = this.descriptors.get(plugin.id)
     if (!descriptor || record.contributionKey !== pair.detailView.contributionKey) {
+      console.warn(
+        `[plugins] detail open refused: '${plugin.id}' asked for '${record.contributionKey}' ` +
+        `but its declared detail view is '${pair.detailView.contributionKey}'`,
+      )
       return buildError(reqId, 'INVALID_ARGUMENT', 'detail contribution is not declared by this source')
     }
     const validation = validatePluginDetailTarget({
@@ -3370,6 +3422,7 @@ export class FrontendPluginManager {
       target: record.target,
     })
     if (!validation.ok) {
+      console.warn(`[plugins] detail open refused: ${validation.reason}`)
       return validation.reason === 'invalid-target'
         ? buildError(reqId, 'INVALID_ARGUMENT', 'detail target is invalid')
         : buildSuccess(reqId, { opened: false, reason: 'provider-unavailable' })
@@ -3395,12 +3448,19 @@ export class FrontendPluginManager {
         timer: null,
       }
       this.pendingDetailOpens.set(openId, pending)
-      pending.timer = setTimeout(() => this.settlePendingDetailOpen(
-        openId,
-        buildSuccess(reqId, { opened: false, reason: 'receiver-unavailable' }),
-        true,
-      ), DETAIL_OPEN_TIMEOUT_MS)
+      pending.timer = setTimeout(() => {
+        console.warn(
+          `[plugins] detail open timed out: '${plugin.id}' → '${pair.detailView.contributionKey}' ` +
+          `(the receiver mounted the item but the provider never applied the target)`,
+        )
+        this.settlePendingDetailOpen(
+          openId,
+          buildSuccess(reqId, { opened: false, reason: 'receiver-unavailable' }),
+          true,
+        )
+      }, DETAIL_OPEN_TIMEOUT_MS)
       if (!this.offerPairedDetail(pair, descriptor, validation.target, resourceKey, openId, offerId)) {
+        console.warn('[plugins] detail open refused: the receiver could not be offered the target')
         this.settlePendingDetailOpen(
           openId,
           buildSuccess(reqId, { opened: false, reason: 'receiver-unavailable' }),
@@ -4699,18 +4759,41 @@ export class FrontendPluginManager {
       if (!receiver || !registration || !workspacePath || !descriptor || !receiverView ||
         !registration.declaration.locations.includes('left') ||
         !this.contributionCapabilityContext(descriptor, receiverView, workspacePath)) {
+        console.warn('[plugins] receiver left catalog refused: the receiver registration or its capability context is not current')
         throw new Error('receiver left catalog is unavailable')
       }
-      return this.listContributionCatalog().flatMap((entry) => {
+      const catalogued = this.listContributionCatalog().flatMap((entry) => {
         if (entry.location !== 'left') return []
         const provider = this.descriptors.get(entry.pluginId)
         const view = provider?.views?.find((candidate) => candidate.contributionKey === entry.contributionKey)
-        return provider && view && this.descriptors.get(provider.id) === provider &&
-          provider.views?.includes(view) && !this.isPackageVersionStopping(provider.id, provider.packageVersion) &&
-          this.contributionCapabilityContext(provider, view, workspacePath)
-          ? [{ contributionKey: entry.contributionKey, title: entry.title }]
-          : []
+        if (!provider || !view || this.descriptors.get(provider.id) !== provider ||
+          !provider.views?.includes(view) || this.isPackageVersionStopping(provider.id, provider.packageVersion) ||
+          !this.contributionCapabilityContext(provider, view, workspacePath)) {
+          console.warn(
+            `[plugins] receiver left catalog skips '${entry.contributionKey}': ` +
+            `${!provider ? 'no descriptor' :
+              !view ? 'no view' :
+                this.descriptors.get(provider.id) !== provider ? 'descriptor changed' :
+                  !provider.views?.includes(view) ? 'view not current' :
+                    this.isPackageVersionStopping(provider.id, provider.packageVersion) ? 'package stopping' :
+                      'capability context unavailable'}`,
+          )
+          return []
+        }
+        // Display metadata only: the receiver learns what to paint, never which
+        // plugin provides the view.
+        const icon = entry.iconFile && this.contributionIconResolver
+          ? this.contributionIconResolver(entry.iconFile)
+          : null
+        return [{
+          contributionKey: entry.contributionKey,
+          title: entry.title,
+          icon: icon?.url ?? null,
+          iconMonochrome: icon?.monochrome ?? false,
+        }]
       })
+      console.warn(`[plugins] receiver left catalog: ${catalogued.length} contribution(s) offered`)
+      return catalogued
     })
 
     ipcMain.handle(IPC_RECEIVER_OPEN_LEFT, (event, payload: unknown): { offered: true } => {
@@ -4731,8 +4814,16 @@ export class FrontendPluginManager {
       )
       const descriptor = entry ? this.descriptors.get(entry.pluginId) : undefined
       const view = descriptor?.views?.find((candidate) => candidate.contributionKey === contributionKey)
-      if (!descriptor || !view || !this.offerReceiverProvider(receiverId, descriptor, view, workspacePath)) {
+      if (!descriptor || !view) {
+        console.warn(`[plugins] receiver left contribution '${contributionKey}' is not in the catalog`)
         throw new Error('receiver left contribution is unavailable')
+      }
+      const offer = this.offerReceiverProvider(receiverId, descriptor, view, workspacePath)
+      if (!offer.ok) {
+        console.warn(
+          `[plugins] receiver left contribution '${contributionKey}' was refused (${offer.reason})`,
+        )
+        throw new Error(`receiver left contribution is unavailable: ${offer.reason}`)
       }
       return { offered: true }
     })
@@ -4777,6 +4868,7 @@ export class FrontendPluginManager {
         receiver,
       )
       if (!reserved.ok) {
+        console.warn(`[plugins] receiver mount refused: ${reserved.error}`)
         if (opening) this.settlePendingDetailOpen(
           opening.id,
           buildSuccess(opening.reqId, { opened: false, reason: 'provider-unavailable' }),
@@ -4821,9 +4913,14 @@ export class FrontendPluginManager {
         }
       }
       if (offer.location === 'left' && offer.view.detailView) {
-        if (!this.pairDetailSource(pending.instanceId, receiverId).ok) {
+        const pairing = this.pairDetailSource(pending.instanceId, receiverId)
+        if (!pairing.ok) {
           this.closePluginFrame(reserved.bindingId)
-          throw new Error('receiver detail pairing is unavailable')
+          console.warn(
+            `[plugins] receiver mount refused: provider detail pairing failed for ` +
+            `'${offer.view.contributionKey}' (${pairing.reason})`,
+          )
+          throw new Error(`receiver detail pairing is unavailable: ${pairing.reason}`)
         }
       }
       if (offer.detailSourceInstanceId) {
@@ -7015,6 +7112,14 @@ export class FrontendPluginManager {
   /** Install the Host-owned durable storage adapter for an already-authorized
    * storage plan. The adapter receives only the derived partition and snapshot
    * identity; it never receives the raw renderer request as an authority. */
+  /** Host-owned projection from a manifest icon file to a paintable URL, shared
+   *  by the main window's contribution list and receiver catalogues. */
+  setContributionIconResolver(
+    fn: ((iconFile: string) => { url: string; monochrome?: boolean } | null) | null
+  ): void {
+    this.contributionIconResolver = fn
+  }
+
   setPublicStorageHandler(
     fn: ((execution: StorageExecution) => unknown | Promise<unknown>) | null
   ): void {
@@ -9089,11 +9194,20 @@ export class FrontendPluginManager {
     }
 
     const preload = join(__dirname, '../preload/plugin-preload.js')
+    // A receiver window hosts provider frames as iframes, and each of those
+    // frames is a plugin view in its own right: the same Host-owned, node-free
+    // preload has to run inside it to announce the document and carry the
+    // frame's capability port. Electron only runs preloads in sub-frames when
+    // this is on, and only a window that declares `receives` can be a receiver.
+    const hostsProviderFrames =
+      viewDescriptor?.receives !== undefined ||
+      descriptor.views?.some((candidate) => candidate.receives !== undefined) === true
     const view = new WebContentsView({
       webPreferences: {
         preload,
         contextIsolation: true,
         nodeIntegration: false,
+        ...(hostsProviderFrames ? { nodeIntegrationInSubFrames: true } : {}),
         // The plugin preload is node-free (webcrypto only), so views run fully
         // sandboxed.
         sandbox: true,
@@ -9846,7 +9960,7 @@ export class FrontendPluginManager {
 
   /** Host-only left/detail pairing. The Host supplies opaque live identities;
    * neither receiver nor provider selects its counterpart. */
-  pairDetailSource(sourceInstanceId: string, receiverId: string): { ok: boolean } {
+  pairDetailSource(sourceInstanceId: string, receiverId: string): { ok: true } | { ok: false; reason: string } {
     const source = this.running.get(sourceInstanceId)
     const receiver = this.receiverRegistrations.get(receiverId)
     const sourceDescriptor = source ? this.descriptors.get(source.id) : undefined
@@ -9858,17 +9972,39 @@ export class FrontendPluginManager {
     const receiverDescriptor = receiverPlugin ? this.descriptors.get(receiverPlugin.id) : undefined
     const receiverView = receiverDescriptor?.views?.find((view) => view.contributionKey === receiverPlugin?.contributionKey)
     const workspacePath = source?.workspacePath ? resolve(source.workspacePath) : null
-    if (!source || !receiver || !receiverPlugin || !sourceDescriptor || !sourceView || !detailView ||
-      !receiverDescriptor || !receiverView || sourceView.location !== 'left' || !detailView.targetSchema ||
-      !source.hasV2DescriptorIdentity || !receiverPlugin.hasV2DescriptorIdentity || !source.capabilityContext ||
-      !receiverPlugin.capabilityContext || !workspacePath || receiverPlugin.workspacePath === null ||
-      resolve(receiverPlugin.workspacePath) !== workspacePath || source.hostWindow !== receiverPlugin.hostWindow ||
-      this.currentReceiverRegistration(receiverId, receiverPlugin) !== receiver ||
-      !receiver.declaration.locations.includes('detail') ||
-      !this.contributionCapabilityContext(sourceDescriptor, sourceView, workspacePath) ||
+    if (!source) return { ok: false, reason: 'source instance is not running' }
+    if (!receiver) return { ok: false, reason: 'receiver is not registered' }
+    if (!receiverPlugin) return { ok: false, reason: 'receiver instance is not running' }
+    if (!sourceDescriptor || !sourceView) return { ok: false, reason: 'source view is unavailable' }
+    if (!detailView) return { ok: false, reason: 'source declares no detail view' }
+    if (!receiverDescriptor || !receiverView) return { ok: false, reason: 'receiver view is unavailable' }
+    if (sourceView.location !== 'left') return { ok: false, reason: 'source view is not a left contribution' }
+    if (!detailView.targetSchema) return { ok: false, reason: 'detail view declares no target schema' }
+    if (!source.hasV2DescriptorIdentity || !receiverPlugin.hasV2DescriptorIdentity) {
+      return { ok: false, reason: 'source and receiver must both be Manifest v2 instances' }
+    }
+    if (!source.capabilityContext || !receiverPlugin.capabilityContext) {
+      return { ok: false, reason: 'capability context is missing' }
+    }
+    if (!workspacePath || receiverPlugin.workspacePath === null) {
+      return { ok: false, reason: 'workspace path is missing' }
+    }
+    if (resolve(receiverPlugin.workspacePath) !== workspacePath) {
+      return { ok: false, reason: 'source and receiver workspaces differ' }
+    }
+    if (source.hostWindow !== receiverPlugin.hostWindow) {
+      return { ok: false, reason: 'source and receiver live in different windows' }
+    }
+    if (this.currentReceiverRegistration(receiverId, receiverPlugin) !== receiver) {
+      return { ok: false, reason: 'receiver registration is stale' }
+    }
+    if (!receiver.declaration.locations.includes('detail')) {
+      return { ok: false, reason: 'receiver does not declare the detail location' }
+    }
+    if (!this.contributionCapabilityContext(sourceDescriptor, sourceView, workspacePath) ||
       !this.contributionCapabilityContext(sourceDescriptor, detailView, workspacePath) ||
       !this.contributionCapabilityContext(receiverDescriptor, receiverView, workspacePath)) {
-      return { ok: false }
+      return { ok: false, reason: 'a capability context is unavailable' }
     }
     this.detailPairs.set(sourceInstanceId, {
       sourceInstanceId,
@@ -9886,15 +10022,26 @@ export class FrontendPluginManager {
     descriptor: PluginLaunchDescriptor,
     view: PluginViewLaunchDescriptor,
     workspacePath: string,
-  ): { ok: boolean } {
+  ): { ok: true } | { ok: false; reason: string } {
     const registration = this.receiverRegistrations.get(receiverId)
     const receiver = registration ? this.running.get(registration.receiverInstanceId) : undefined
     const location = view.location === 'left' || view.location === 'detail' ? view.location : null
-    if (!registration || !receiver || receiver.documentGeneration !== registration.documentGeneration ||
-      !location || !registration.declaration.locations.includes(location) ||
-      this.descriptors.get(descriptor.id) !== descriptor ||
-      !descriptor.views?.includes(view) ||
-      !this.contributionCapabilityContext(descriptor, view, workspacePath)) return { ok: false }
+    if (!registration) return { ok: false, reason: 'receiver is not registered' }
+    if (!receiver) return { ok: false, reason: 'receiver instance is not running' }
+    if (receiver.documentGeneration !== registration.documentGeneration) {
+      return { ok: false, reason: 'receiver document changed' }
+    }
+    if (!location) return { ok: false, reason: 'contribution is not a receiver location' }
+    if (!registration.declaration.locations.includes(location)) {
+      return { ok: false, reason: 'receiver does not declare this location' }
+    }
+    if (this.descriptors.get(descriptor.id) !== descriptor) {
+      return { ok: false, reason: 'provider descriptor changed' }
+    }
+    if (!descriptor.views?.includes(view)) return { ok: false, reason: 'provider view is not current' }
+    if (!this.contributionCapabilityContext(descriptor, view, workspacePath)) {
+      return { ok: false, reason: 'provider capability context is unavailable' }
+    }
     const offer: ReceiverOffer = {
       id: randomUUID(),
       location,
@@ -9902,6 +10049,7 @@ export class FrontendPluginManager {
       view,
       workspacePath: resolve(workspacePath),
     }
+    console.warn(`[plugins] receiver offer sent: '${view.contributionKey}' (${location})`)
     registration.offers.set(offer.id, offer)
     receiver.view.webContents.send('plugin:receiver:offer', {
       receiverId,
@@ -9957,8 +10105,25 @@ export class FrontendPluginManager {
     } catch {
       return { ok: false, error: 'frame assets are unavailable' }
     }
-    const entryUrl = new URL(entryPath.split(sep).map(encodeURIComponent).join('/'), assetOrigin).toString()
+    // A provider frame is the plugin's own UI for one workspace, so it needs the
+    // same load-time context a contribution window gets. Without it the app
+    // starts with an empty workspace and renders a blank pane — the query is
+    // what tells it which workspace it belongs to and that it runs on the
+    // manifest-v2 capability runtime.
+    // A detail frame that gets no view id mounts the wrong surface: the shipped
+    // Git package then boots its window app, never registers the detail-target
+    // listener, and the Host's target is dropped.
+    const frameQuery = composePluginFrameQuery(contributionKey, resolve(workspacePath))
+    const entryUrl = new URL(
+      `${entryPath.split(sep).map(encodeURIComponent).join('/')}${frameQuery}`,
+      assetOrigin,
+    ).toString()
     const instanceId = this.nextInstanceId()
+    // A composed frame is a view instance like any other: its context carries
+    // this instance's Host-created id, which is what later pairs the frame with
+    // the detail it opens (`currentDetailPair` compares it).
+    const boundCapabilityContext = this.bindCapabilityContext(capabilityContext, instanceId)
+    if (!boundCapabilityContext) return { ok: false, error: 'package-version capability grant is missing' }
     const receiverGeneration = randomUUID()
     const identity: PluginFrameBindingIdentity = {
       artifactId,
@@ -9984,8 +10149,8 @@ export class FrontendPluginManager {
       },
       hostWindow,
       workspacePath: resolve(workspacePath),
-      query: '',
-      capabilityContext,
+      query: frameQuery,
+      capabilityContext: boundCapabilityContext,
       contributionKey,
       isV2Identity: true,
       openedViaLegacyAdapter: false,
@@ -9999,6 +10164,7 @@ export class FrontendPluginManager {
     this.pendingPluginFrames.set(binding.id, {
       bindingId: binding.id,
       instanceId,
+      contributionKey,
       hostWindow,
       receiverWebContents,
       receiverInstanceId,
@@ -10023,15 +10189,27 @@ export class FrontendPluginManager {
    * is accepted from renderer input. */
   bindPluginFrameBlank(bindingId: string, frame: WebFrameMain): boolean {
     const pending = this.pendingPluginFrames.get(bindingId)
-    if (
-      !pending ||
-      pending.hostWindow.isDestroyed() ||
-      frame.isDestroyed() ||
-      frame.parent !== pending.receiverWebContents.mainFrame ||
-      frame.url !== 'about:blank'
-    ) return false
+    if (!pending) {
+      console.warn(`[plugins] receiver frame blank refused: binding ${bindingId} is not pending`)
+      return false
+    }
+    if (pending.hostWindow.isDestroyed() || frame.isDestroyed()) {
+      console.warn('[plugins] receiver frame blank refused: window or frame is gone')
+      return false
+    }
+    if (frame.parent !== pending.receiverWebContents.mainFrame) {
+      console.warn('[plugins] receiver frame blank refused: frame is not a child of the receiver document')
+      return false
+    }
+    if (frame.url !== 'about:blank') {
+      console.warn(`[plugins] receiver frame blank refused: frame is not blank (${frame.url})`)
+      return false
+    }
     const binding = this.pluginFrameBindings.bindBlank(bindingId, frame)
-    if (!binding) return false
+    if (!binding) {
+      console.warn(`[plugins] receiver frame blank refused: binding ${bindingId} could not be reserved`)
+      return false
+    }
     pending.frame = frame
     const onNavigation = (details: {
       frame: WebFrameMain | null
@@ -10087,15 +10265,26 @@ export class FrontendPluginManager {
       candidate.frame === frame &&
       candidate.receiverWebContents.id === receiverWebContentsId
     )
-    if (!pending) return false
-    if (
-      pending.documentNonce !== null ||
-      pending.hostWindow.isDestroyed() ||
-      frame.isDestroyed() ||
-      frame.parent !== pending.receiverWebContents.mainFrame ||
-      frame.url !== pending.entryUrl ||
-      frame.origin !== new URL(pending.entryUrl).origin
-    ) {
+    if (!pending) {
+      console.warn('[plugins] receiver frame document refused: no pending frame for this sender')
+      return false
+    }
+    const refusal = pending.documentNonce !== null
+      ? 'the frame already reported a document'
+      : pending.hostWindow.isDestroyed() || frame.isDestroyed()
+        ? 'window or frame is gone'
+        : frame.parent !== pending.receiverWebContents.mainFrame
+          ? 'frame is not a child of the receiver document'
+          : frame.url !== pending.entryUrl
+            ? `frame url is not the reserved entry (${frame.url})`
+            : frame.origin !== pending.assetOrigin.replace(/\/$/, '')
+              // A non-special scheme (`navide-plugin-frame:`) has an opaque
+              // `origin` in WHATWG URL terms, so the expected value is the
+              // Host-generated asset origin, never `new URL(...).origin`.
+              ? `frame origin is not the reserved origin (${frame.origin} != ${pending.assetOrigin})`
+              : ''
+    if (refusal) {
+      console.warn(`[plugins] receiver frame document refused: ${refusal}`)
       this.destroyInstance(pending.instanceId)
       return false
     }
@@ -10112,9 +10301,11 @@ export class FrontendPluginManager {
       admission.binding.receiverGeneration !== pending.receiverGeneration ||
       !this.activePluginFrame(admission.binding)
     ) {
+      console.warn('[plugins] receiver frame document refused: the frame could not be admitted')
       this.destroyInstance(pending.instanceId)
       return false
     }
+    console.warn(`[plugins] receiver frame live: '${pending.contributionKey}'`)
     try {
       frame.postMessage('plugin:frame:port', {
         documentGeneration: admission.binding.documentGeneration,

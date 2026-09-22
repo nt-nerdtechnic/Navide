@@ -67,7 +67,13 @@ def _load_wire_frame(path: Path) -> Any:
 
 
 def _validate_manifest_semantics(manifest: Any) -> None:
-    """Validate invariants that Draft 2020-12 cannot express by itself."""
+    """Validate invariants that Draft 2020-12 cannot express by itself.
+
+    The three composition location rules (detailView only on a left view,
+    targetSchema only on a detail view, receives only on a window view) live in
+    the schema itself; a detailView must additionally resolve to a detail view
+    declared by the same package, which needs the whole views array.
+    """
     if not isinstance(manifest, dict):
         return
     contributes = manifest.get("contributes")
@@ -79,11 +85,24 @@ def _validate_manifest_semantics(manifest: Any) -> None:
     view_ids = [view.get("id") for view in views if isinstance(view, dict)]
     if len(view_ids) != len(set(view_ids)):
         raise ValueError("contributes.views must contain unique ids")
+    by_id = {view["id"]: view for view in views if isinstance(view, dict) and isinstance(view.get("id"), str)}
+    for view in views:
+        if not isinstance(view, dict):
+            continue
+        detail_view = view.get("detailView")
+        if detail_view is None:
+            continue
+        referenced = by_id.get(detail_view)
+        if referenced is None or referenced.get("location") != "detail":
+            raise ValueError(
+                f"contributes.views detailView {detail_view!r} must reference a detail view in the same package"
+            )
 
 
 def _catalog_permissions(catalog: dict[str, Any]) -> tuple[set[str], int]:
     system_namespaces: set[str] = set()
     shell_entries = 0
+    shell_addresses: set[str] = set()
     allowed_system = {"fs", "ui", "aiCli"}
     for item in [*catalog["methods"], *catalog["events"]]:
         if item["visibility"] != "public":
@@ -115,15 +134,20 @@ def _catalog_permissions(catalog: dict[str, Any]) -> tuple[set[str], int]:
                 )
             system_namespaces.add(access)
         elif permission_id == "shell":
-            if (
-                set(permission) != {"id", "scope"}
-                or item["address"] != "shell.run"
-                or scope != "workspace"
-            ):
+            # Every public shell entry (shell.run plus the fixed Host operations
+            # such as shell.git* / shell.issue*) carries exactly the same coarse
+            # permission object; the manifest's shell mode gates the whole family,
+            # so no per-address rule is defined here.
+            if set(permission) != {"id", "scope"} or scope != "workspace":
                 raise AssertionError(f"shell catalog entry is malformed: {item['address']}")
+            shell_addresses.add(item["address"])
             shell_entries += 1
         else:
             raise AssertionError(f"catalog has unsupported permission id: {permission_id!r}")
+    if "shell.run" not in shell_addresses:
+        raise AssertionError(
+            f"catalog must publish the shell.run entry the manifest shell mode gates: {sorted(shell_addresses)}"
+        )
     return system_namespaces, shell_entries
 
 
@@ -210,8 +234,8 @@ def main() -> None:
             f"schema-only={sorted(schema_system_namespaces - catalog_system_namespaces)}, "
             f"catalog-only={sorted(catalog_system_namespaces - schema_system_namespaces)}"
         )
-    if shell_entries != 1:
-        raise AssertionError(f"expected one public shell.run catalog entry, got {shell_entries}")
+    if shell_entries < 1:
+        raise AssertionError("expected at least one public shell catalog entry")
     if schema_shell_modes != {"allowlist", "full"}:
         raise AssertionError("manifest shell modes and public capability policy differ")
     if catalog.get("hostShellExecutableAllowlist") != ["git", "gh", "glab"]:
@@ -220,7 +244,7 @@ def main() -> None:
         raise AssertionError("Host shell contract must not define subcommand or argument rules")
     print(
         f"CATALOG {len(catalog_system_namespaces)} system namespaces + "
-        f"{shell_entries} shell entry"
+        f"{shell_entries} shell entries"
     )
 
     wire_schema = _load_strict(ROOT / "backend-wire-v1.schema.json")

@@ -37,12 +37,17 @@ vi.mock('@navide/plugin-ui/shared', () => ({
 
 vi.mock('@navide/plugin-ui/foundation', () => ({
   useTheme: () => ({ loadTheme }),
+  useNotify: () => ({ toast: notifyState.toast }),
 }))
+
+vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
 
 const multiRepoState = vi.hoisted(() => ({
   prepareClose: vi.fn(async () => ({ accepted: true as const })),
   releaseClose: vi.fn(),
 }))
+
+const notifyState = vi.hoisted(() => ({ toast: vi.fn() }))
 
 vi.mock('../components/MultiRepoGit.vue', () => ({
   default: {
@@ -77,6 +82,7 @@ describe('GitLeftApp', () => {
     multiRepoState.prepareClose.mockReset()
     multiRepoState.prepareClose.mockResolvedValue({ accepted: true })
     multiRepoState.releaseClose.mockClear()
+    notifyState.toast.mockClear()
   })
 
   it('owns a full-height shell around the Git contribution', () => {
@@ -162,8 +168,53 @@ describe('GitLeftApp', () => {
     wrapper.unmount()
   })
 
-  it('answers a receiver close preparation through MultiRepoGit and releases on cancellation', async () => {
-    const MultiRepoStub = (await import('../components/MultiRepoGit.vue')).default
+  it.each([
+    {
+      name: 'file diff',
+      event: 'open-diff',
+      payload: { workspace_path: '/repo', filepath: 'src/a.ts', staged: false, name: 'a.ts' },
+      fallback: 'open_diff',
+    },
+    {
+      name: 'merge conflict',
+      event: 'open-conflict',
+      payload: { workspace_path: '/repo', filepath: 'src/b.ts', name: 'b.ts' },
+      fallback: 'open_conflict',
+    },
+  ])('falls back to the legacy $name route when no receiver is paired', async ({ event, payload, fallback }) => {
+    runtimeState.openDetail.mockResolvedValueOnce({ opened: false, reason: 'receiver-unpaired' })
+    const dispatch = vi.fn(async () => undefined)
+    const wrapper = shallowMount(GitLeftApp, { props: props(dispatch) })
+    const child = wrapper.findComponent({ name: 'MultiRepoGit' })
+
+    child.vm.$emit(event, payload)
+    await flushPromises()
+
+    expect(dispatch).toHaveBeenCalledWith({ operation: fallback, payload })
+    expect(notifyState.toast).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('surfaces a detail refusal that has no fallback route', async () => {
+    runtimeState.openDetail.mockResolvedValueOnce({ opened: false, reason: 'provider-unavailable' })
+    const dispatch = vi.fn(async () => undefined)
+    const wrapper = shallowMount(GitLeftApp, { props: props(dispatch) })
+    const child = wrapper.findComponent({ name: 'MultiRepoGit' })
+
+    child.vm.$emit('open-diff', { workspace_path: '/repo', filepath: 'src/a.ts', staged: false, name: 'a.ts' })
+    await flushPromises()
+
+    expect(runtimeState.openDetail).toHaveBeenCalledWith(expect.objectContaining({
+      target: expect.objectContaining({
+        resource: expect.objectContaining({ kind: 'file-diff', repository: '.', filepath: 'src/a.ts' }),
+      }),
+    }))
+    expect(dispatch).not.toHaveBeenCalled()
+    expect(notifyState.toast).toHaveBeenCalledWith('git.detail-open-failed', { type: 'error' })
+    wrapper.unmount()
+  })
+
+  it('answers a receiver close preparation through MultiRepoGit and releases on cancellation', async () => {    const MultiRepoStub = (await import('../components/MultiRepoGit.vue')).default
     const wrapper = shallowMount(GitLeftApp, {
       props: props(),
       global: { stubs: { MultiRepoGit: MultiRepoStub } },

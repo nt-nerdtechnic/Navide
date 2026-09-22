@@ -95,7 +95,12 @@
         "detailView": { "$ref": "#/$defs/viewId" },
         "targetSchema": { "$ref": "#/$defs/jsonPath" },
         "receives": { "$ref": "#/$defs/receives" }
-      }
+      },
+      "allOf": [
+        { "if": { "required": ["detailView"] }, "then": { "properties": { "location": { "const": "left" } } } },
+        { "if": { "required": ["targetSchema"] }, "then": { "properties": { "location": { "const": "detail" } } } },
+        { "if": { "required": ["receives"] }, "then": { "properties": { "location": { "const": "window" } } } }
+      ]
     },
     "receives": {
       "type": "object",

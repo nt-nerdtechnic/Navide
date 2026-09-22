@@ -200,6 +200,7 @@
       "open-accounts": "開啟 Git 帳號"
     },
     "left-view-unavailable": "嵌入式 Git View 暫時無法使用。",
+    "detail-open-failed": "無法開啟詳細檢視，Git 面板會保留目前的目標。",
     "open-workspace": "請先開啟工作區以使用 Git。",
     "settings-unavailable": "Git 偏好設定載入失敗。",
     "settings-retry": "重試",
@@ -222,6 +223,9 @@
     "problems": {
       "title": "問題",
       "tab-shortcut": "問題 (⌘⇧M)"
+    },
+    "pluginViews": {
+      "unavailable": "此檢視由外掛提供，目前無法開啟。"
     },
     "plans": {
       "stage-in-review": "審查中",

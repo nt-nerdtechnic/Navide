@@ -247,11 +247,21 @@ onMounted(() => {
   font-size: 11px;
 }
 .ext-remove,
-.ext-install,
 .ext-restore,
 .ext-restart {
   margin-left: auto;
 }
+/* These buttons declare nothing of their own — they are native browser
+ * buttons. Hover therefore darkens what the platform already painted instead
+ * of replacing the fill: an overlay colour here would flip a light native
+ * button to a dark one on hover, which is a bigger change than the missing
+ * feedback it fixes. */
+.ext-remove,
+.ext-restart {
+  transition: filter var(--motion-fast) var(--ease-out);
+}
+.ext-remove:hover:not(:disabled),
+.ext-restart:hover:not(:disabled) {
   filter: brightness(0.93);
 }
 </style>
