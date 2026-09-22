@@ -3129,7 +3129,7 @@
               "detail": "就地確認。連同儲存的憑證一起移除。"
             }
           },
-          "note1": "這個面板<strong>沒有改名功能</strong>。帳號名稱是自動產生的（Account 1、Account 2…），卡片上顯示的是登入身分，名字只是內部識別。",
+          "note1": "每個帳號<strong>都可以改名</strong>，包含內建的 Default：滑到卡片上按鉛筆即可（額度徽章的帳號清單每一列也有同一個鉛筆）。你取的名字會成為各處的主要顯示——面板標題列、帳號清單與卡片——登入身分則留在它下面。把欄位清空就回到自動產生的名稱（Account 1、Account 2…）。",
           "p4": "兩種刪不掉的情況會被擋下並說明原因：帳號<strong>目前使用中</strong>（請先切到別的帳號），或該帳號的<strong>登入程序還在跑</strong>（請先完成或關掉它的登入面板）。",
           "p5": "<strong>切換時正在跑的 CLI 會怎樣？</strong>Navide 不會砍掉它們。預設行為是<strong>拒絕切換</strong>並告訴你「有 N 個運行中的 CLI pane 正在使用此帳號，請先關閉再切換。」如果你堅持，會跳一個確認框：<em>切換帳號將重啟 N 個運行中的 {'{'}CLI{'}'} pane，繼續？</em> 按下「切換並重啟」後，那些面板是被 <strong>resume 重建</strong>（接回原本的對話），不是被殺掉。有面板重建失敗會出一則摘要通知。",
           "p6": "Claude Code 是例外：它每次請求前都重讀憑證，所以切換是熱替換——不跳確認框、也不重啟任何面板。",
@@ -6467,6 +6467,7 @@
         "set-default": "設為預設",
         "switching": "切換中…",
         "not-signed-in": "尚未登入",
+        "rename": "重新命名",
         "sign-in": "登入",
         "delete": "刪除",
         "cancel": "取消",
@@ -7906,6 +7907,8 @@
   },
   "usage": {
     "badge-tooltip": "剩餘額度 — 滑鼠停留看詳細",
+    "account-tooltip": "帳號：{account}",
+    "rename-account": "重新命名帳號",
     "cached-tooltip": "快取額度 — 滑鼠停留看刷新詳情",
     "cached-short": "快取",
     "cached-at": "快取 · 上次成功於 {time}",

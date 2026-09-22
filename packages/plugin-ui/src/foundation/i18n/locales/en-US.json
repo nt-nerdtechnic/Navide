@@ -3129,7 +3129,7 @@
               "detail": "Confirms in place. Removes the stored credentials as well."
             }
           },
-          "note1": "This panel <strong>has no rename</strong>. Account names are generated (Account 1, Account 2…); the card shows the signed-in identity and the name is only an internal id.",
+          "note1": "Every account <strong>can be renamed</strong>, the built-in Default included: hover a card and click the pencil (the same pencil sits on each row of the quota badge's account list). The name you give it leads everywhere — the pane header, the account list and the cards — with the signed-in identity kept below it. Clear the field to go back to the generated name (Account 1, Account 2…).",
           "p4": "Two cases refuse deletion and say why: the account is <strong>currently active</strong> (switch to another one first), or its <strong>sign-in is still running</strong> (finish or close its login pane first).",
           "p5": "<strong>What happens to running CLIs when you switch?</strong> Navide does not kill them. The default is to <strong>refuse the switch</strong> and tell you \"N running CLI pane(s) are using this account — close them before switching.\" If you insist, a confirmation appears: <em>Switching accounts will restart N running {'{'}CLI{'}'} pane(s). Continue?</em> After \"Switch & restart\", those panes are <strong>rebuilt with resume</strong> (reconnecting the original conversation), not killed. If any pane fails to rebuild, a summary notification appears.",
           "p6": "Claude Code is the exception: it re-reads its credentials before every request, so the switch is a hot swap — no confirmation and no pane restart.",
@@ -6467,6 +6467,7 @@
         "set-default": "Set as default",
         "switching": "Switching…",
         "not-signed-in": "Not signed in",
+        "rename": "Rename",
         "sign-in": "Sign in",
         "delete": "Delete",
         "cancel": "Cancel",
@@ -7906,6 +7907,8 @@
   },
   "usage": {
     "badge-tooltip": "Remaining quota — hover for details",
+    "account-tooltip": "Account: {account}",
+    "rename-account": "Rename account",
     "cached-tooltip": "Cached quota — hover for refresh details",
     "cached-short": "cached",
     "cached-at": "Cached · last successful {time}",
