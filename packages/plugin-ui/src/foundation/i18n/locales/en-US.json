@@ -7584,6 +7584,7 @@
     "fit-window": "Fit to window",
     "actual-size": "Actual size",
     "pdf-unavailable": "The embedded PDF viewer is not available in this window.",
+    "raw-error": "Could not load this file for preview.",
     "hex-loading": "Loading hex dump…",
     "hex-error": "Failed to load file contents.",
     "hex-truncated": "Showing the first 64 KB of {total}.",

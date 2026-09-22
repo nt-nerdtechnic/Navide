@@ -7584,6 +7584,7 @@
     "fit-window": "ウィンドウに合わせる",
     "actual-size": "実際のサイズ",
     "pdf-unavailable": "このウィンドウでは埋め込み PDF ビューアーを利用できません。",
+    "raw-error": "プレビュー用にこのファイルを読み込めませんでした。",
     "hex-loading": "16 進ダンプを読み込み中…",
     "hex-error": "ファイルの内容を読み込めませんでした。",
     "hex-truncated": "{total} のうち先頭の 64 KB を表示しています。",
