@@ -229,6 +229,24 @@ def test_manifest_v2_referenced_file_is_required() -> None:
         read_package(build_v2_package(manifest, omit_paths={first_entry}))
 
 
+def test_frontend_only_packages_must_target_universal() -> None:
+    """A frontend-only artifact is one universal package: the published target
+    is the universal one, and any platform-specific target is refused."""
+    assert read_package(build_package(), target="universal").manifest.id
+    with pytest.raises(PackageError, match="frontend-only package target must be universal"):
+        read_package(build_package(), target="darwin-arm64")
+
+
+def test_backend_packages_require_one_exact_platform_architecture() -> None:
+    """A package with a native backend must name the platform-architecture it
+    was built for; 'universal' and a bare platform are both refused."""
+    manifest = contract_manifest("backend-only-skills.json")
+    for target in ("universal", "darwin"):
+        with pytest.raises(PackageError, match="backend package target must be one exact"):
+            read_package(build_v2_package(manifest), target=target)
+    # The manager delegates the runner platform to osplat (see the L6 agreement).
+
+
 def test_manifest_v2_target_schema_file_is_required() -> None:
     manifest = contract_manifest()
     manifest["contributes"]["views"] = [
