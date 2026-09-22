@@ -1807,10 +1807,28 @@ describe('registered receiver frame lifecycle', () => {
     })
     await expect(preparation).resolves.toEqual({ ok: false, reason: 'refused' })
 
-    // A later load is a reload: it advances the generation and retires the old
-    // registration, so the window is no longer guarded by that document.
-    contents.emit('did-finish-load')
+    // A reload retires the old registration when the new document STARTS
+    // loading — the moment the document is actually replaced. Advancing the
+    // generation at load completion instead invalidated every registration the
+    // incoming document made while it was loading (a reloaded window could not
+    // compose at all).
+    contents.emit('did-start-navigation', {
+      frame: (fixture.receiver.webContents as unknown as { mainFrame: unknown }).mainFrame,
+      isSameDocument: false,
+    })
     expect(fixture.mgr.hasWindowCloseParticipants(asHost(fixture.host))).toBe(false)
+
+    // The incoming document's own registration stays current across its load:
+    // the generation already advanced when this navigation started.
+    const register = ipcHandlers.get('plugin:receiver:register')
+    const reloaded = register?.(fixture.receiverEvent, {
+      protocolVersion: 1,
+      locations: ['left', 'detail'],
+      closeGuard: { protocolVersion: 1 },
+    }) as { receiverId: string }
+    expect(reloaded.receiverId).toEqual(expect.any(String))
+    contents.emit('did-finish-load')
+    expect(fixture.mgr.hasWindowCloseParticipants(asHost(fixture.host))).toBe(true)
   })
 
   it('protects a guarded receiver with zero providers during a native close', async () => {

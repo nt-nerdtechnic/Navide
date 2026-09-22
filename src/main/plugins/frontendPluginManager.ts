@@ -2503,6 +2503,11 @@ export class FrontendPluginManager {
       (pending.receiverInstanceId !== null &&
         this.running.get(pending.receiverInstanceId)?.documentGeneration !== pending.receiverDocumentGeneration) ||
       pending.frame.parent !== pending.receiverWebContents.mainFrame ||
+      // A detached frame keeps its port and would keep answering over it: the
+      // receiver can remove the element (or re-parent it) while the frame lives
+      // on. Detached frames have no place in a composed surface, so they lose
+      // their authority the moment they leave the tree.
+      pending.frame.detached ||
       pending.frame.url !== active.entryUrl ||
       // Non-special scheme: the frame's origin is `scheme://host`, while
       // `new URL(...).origin` is opaque ("null") for such schemes.
@@ -8865,6 +8870,12 @@ export class FrontendPluginManager {
     const onReceiverNavigation = (details: { frame: WebFrameMain | null; isSameDocument: boolean }): void => {
       if (details.frame === contents.mainFrame && !details.isSameDocument) {
         this.revokeReceiverFrames(instanceId)
+        // A new document is in flight: advance the generation now, so every
+        // registration the incoming document makes records the new value. Doing
+        // it after the load (did-finish-load) invalidated every registration made
+        // during that load — a reloaded receiver window could not compose at all.
+        const current = this.running.get(instanceId)
+        if (current?.view.webContents === contents) current.documentGeneration += 1
       }
     }
     contents.on('did-start-navigation', onReceiverNavigation)
@@ -9059,11 +9070,6 @@ export class FrontendPluginManager {
     contents.on('did-finish-load', () => {
       const current = this.running.get(instanceId)
       if (current?.view.webContents !== contents) return
-      // The first completed load is the document the receiver registered in;
-      // only a reload advances the generation (navigation already revoked the
-      // old registrations at did-start-navigation). Bumping on the first load
-      // would invalidate every registration made while the entry was loading.
-      if (current.ready) current.documentGeneration += 1
       current.ready = true
       if (
         this.pendingActivations.get(instanceId) === null &&
