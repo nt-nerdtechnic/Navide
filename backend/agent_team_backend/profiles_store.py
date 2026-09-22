@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 import time
 import unicodedata
@@ -131,12 +132,34 @@ def profile_config_homes(agent_key: str, root: Path | None = None) -> list[Path]
     return homes
 
 
+_AUTO_NAME_RE = re.compile(r"^Account (\d+)$")
+
+
+def _next_auto_name(
+    profiles: list[dict[str, Any]], agent_key: str, exclude_id: str | None = None
+) -> str:
+    """The name the Accounts pane would mint for a new profile of
+    ``agent_key``: max existing "Account N" + 1, "Account 1" being the
+    built-in Default (mirrors CliAccountsPane.vue's generator). Deletions
+    leave gaps, so counting rows could mint a duplicate label."""
+    numbers = [
+        int(m.group(1))
+        for p in profiles
+        if p.get("agentKey") == agent_key and p.get("id") != exclude_id
+        for m in [_AUTO_NAME_RE.match(str(p.get("name") or ""))]
+        if m is not None
+    ]
+    return f"Account {max(numbers) + 1 if numbers else 2}"
+
+
 def _empty_doc() -> dict[str, Any]:
     return {
         "schemaVersion": PROFILES_SCHEMA_VERSION,
         "profiles": [],
         # None = built-in default (the user's real home; no env injection).
         "defaults": {key: None for key in SUPPORTED_AGENT_KEYS},
+        # User alias for each agent's built-in Default slot; absent = unnamed.
+        "defaultNames": {},
     }
 
 
@@ -179,6 +202,12 @@ class CliProfilesStore:
             for key in SUPPORTED_AGENT_KEYS:
                 value = defaults.get(key)
                 doc["defaults"][key] = str(value) if value else None
+        default_names = data.get("defaultNames")
+        if isinstance(default_names, dict):
+            for key in SUPPORTED_AGENT_KEYS:
+                value = default_names.get(key)
+                if isinstance(value, str) and value.strip():
+                    doc["defaultNames"][key] = value
         return doc
 
     def _import_legacy(self, cur: Any, data: Any) -> None:
@@ -220,7 +249,11 @@ class CliProfilesStore:
 
     def list(self) -> dict[str, Any]:
         doc = self._read()
-        return {"profiles": doc["profiles"], "defaults": doc["defaults"]}
+        return {
+            "profiles": doc["profiles"],
+            "defaults": doc["defaults"],
+            "defaultNames": doc["defaultNames"],
+        }
 
     def get(self, profile_id: str) -> dict[str, Any] | None:
         for p in self._read()["profiles"]:
@@ -275,18 +308,39 @@ class CliProfilesStore:
             return profile
 
     def rename(self, profile_id: str, name: str) -> dict[str, Any]:
-        """Change the display name only — the home directory never moves."""
+        """Change the display name only — the home directory never moves.
+        A blank name drops the user's alias: the profile goes back to an
+        auto-generated "Account N" and counts as non-custom again."""
         clean_name = name.strip()
-        if not clean_name:
-            raise ValueError("profile name is required")
         with self._lock:
             doc = self._read()
             for p in doc["profiles"]:
                 if p.get("id") == profile_id:
-                    p["name"] = clean_name
+                    if clean_name:
+                        p["name"] = clean_name
+                        p["nameIsCustom"] = True
+                    else:
+                        p["name"] = _next_auto_name(
+                            doc["profiles"], str(p.get("agentKey") or ""), profile_id
+                        )
+                        p.pop("nameIsCustom", None)
                     self._write(doc)
                     return p
             raise KeyError(f"profile not found: {profile_id}")
+
+    def set_default_name(self, agent_key: str, name: str) -> dict[str, str]:
+        """Alias the built-in Default slot of ``agent_key``; a blank name
+        clears it back to unnamed. Returns every agent's Default alias."""
+        self._validate_agent_key(agent_key)
+        clean_name = name.strip()
+        with self._lock:
+            doc = self._read()
+            if clean_name:
+                doc["defaultNames"][agent_key] = clean_name
+            else:
+                doc["defaultNames"].pop(agent_key, None)
+            self._write(doc)
+            return doc["defaultNames"]
 
     def delete(self, profile_id: str) -> dict[str, Any]:
         """Unregister the profile. The home dir is renamed aside, NEVER

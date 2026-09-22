@@ -740,6 +740,89 @@ async def test_cli_profiles_rename_unknown_is_bad_request(
     assert response["error"]["code"] == "BAD_REQUEST"
 
 
+async def test_cli_profiles_rename_default_slot_sets_alias(
+    store: CliProfilesStore, events: list[dict[str, Any]]
+) -> None:
+    session = _session()
+
+    await app.handle_message(session, {
+        "id": "r3",
+        "type": "cli_profiles.rename",
+        "payload": {"id": "__default__", "name": "Personal", "agentKey": "codex"},
+    })
+
+    response = session.websocket.sent[0]  # type: ignore[attr-defined]
+    assert response["ok"] is True
+    assert response["payload"]["defaultNames"] == {"codex": "Personal"}
+    assert store.list()["defaultNames"] == {"codex": "Personal"}
+    assert store.list()["profiles"] == []
+    assert events[0]["type"] == "cli_profiles.changed"
+    assert events[0]["payload"]["reason"] == "rename"
+    assert events[0]["payload"]["defaultNames"] == {"codex": "Personal"}
+
+    await app.handle_message(session, {
+        "id": "l3", "type": "cli_profiles.list", "payload": {},
+    })
+    listing = session.websocket.sent[1]  # type: ignore[attr-defined]
+    assert listing["payload"]["defaultNames"] == {"codex": "Personal"}
+
+
+async def test_cli_profiles_rename_default_slot_accepts_snake_case_agent_key(
+    store: CliProfilesStore, events: list[dict[str, Any]]
+) -> None:
+    """Every other cli_profiles handler takes ``agent_key``; an external
+    caller following that convention must not be turned away."""
+    session = _session()
+
+    await app.handle_message(session, {
+        "id": "r3s",
+        "type": "cli_profiles.rename",
+        "payload": {"id": "__default__", "name": "Personal", "agent_key": "codex"},
+    })
+
+    response = session.websocket.sent[0]  # type: ignore[attr-defined]
+    assert response["ok"] is True
+    assert response["payload"]["defaultNames"] == {"codex": "Personal"}
+    assert store.list()["defaultNames"] == {"codex": "Personal"}
+
+
+async def test_cli_profiles_rename_default_slot_requires_agent_key(
+    store: CliProfilesStore, events: list[dict[str, Any]]
+) -> None:
+    session = _session()
+
+    for i, extra in enumerate(({}, {"agentKey": "terminal"})):
+        await app.handle_message(session, {
+            "id": f"r4-{i}",
+            "type": "cli_profiles.rename",
+            "payload": {"id": "__default__", "name": "X", **extra},
+        })
+        response = session.websocket.sent[i]  # type: ignore[attr-defined]
+        assert response["ok"] is False
+        assert response["error"]["code"] == "BAD_REQUEST"
+    assert events == []
+    assert store.list()["defaultNames"] == {}
+
+
+async def test_cli_profiles_list_carries_name_is_custom(
+    store: CliProfilesStore, events: list[dict[str, Any]]
+) -> None:
+    session = _session()
+    auto = store.create(agent_key="claude", name="Account 1")
+    custom = store.create(agent_key="claude", name="Account 2")
+    store.rename(custom["id"], "Work")
+
+    await app.handle_message(session, {
+        "id": "l4", "type": "cli_profiles.list", "payload": {},
+    })
+
+    listing = session.websocket.sent[0]  # type: ignore[attr-defined]
+    rows = {p["id"]: p for p in listing["payload"]["profiles"]}
+    assert "nameIsCustom" not in rows[auto["id"]]
+    assert rows[custom["id"]]["nameIsCustom"] is True
+    assert listing["payload"]["defaultNames"] == {}
+
+
 # ---- cli_profiles.set_default credential swap semantics ----
 
 

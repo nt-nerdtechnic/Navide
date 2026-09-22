@@ -96,6 +96,37 @@ def test_rename_updates_name_not_directory(tmp_path: Path) -> None:
     assert home_before.is_dir()
 
 
+def test_rename_blank_clears_the_alias_and_auto_names(tmp_path: Path) -> None:
+    """Clearing the field is how the UI drops a custom name: the profile goes
+    back to a generated "Account N" (max existing + 1, ignoring itself) and
+    stops counting as custom."""
+    store = _store(tmp_path)
+    store.create(agent_key="claude", name="Account 2")
+    store.create(agent_key="claude", name="Account 5")
+    other = store.create(agent_key="codex", name="Account 9")
+    profile = store.create(agent_key="claude", name="Account 3")
+    store.rename(profile["id"], "Work")
+
+    cleared = store.rename(profile["id"], "")
+
+    assert cleared["name"] == "Account 6"
+    assert "nameIsCustom" not in cleared
+    assert store.get(profile["id"])["name"] == "Account 6"
+    # Another agent's rows never take part in the numbering.
+    assert store.get(other["id"])["name"] == "Account 9"
+
+
+def test_rename_whitespace_clears_like_an_empty_name(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    profile = store.create(agent_key="grok", name="Work")
+
+    cleared = store.rename(profile["id"], "   ")
+
+    # No "Account N" row exists yet: "Account 1" is the built-in Default.
+    assert cleared["name"] == "Account 2"
+    assert "nameIsCustom" not in cleared
+
+
 def test_rename_unknown_raises(tmp_path: Path) -> None:
     store = _store(tmp_path)
     with pytest.raises(KeyError):
@@ -197,6 +228,7 @@ def test_corrupt_registry_starts_empty(tmp_path: Path) -> None:
     assert store.list() == {
         "profiles": [],
         "defaults": {key: None for key in profiles_mod.SUPPORTED_AGENT_KEYS},
+        "defaultNames": {},
     }
 
 
@@ -248,3 +280,56 @@ def test_home_path_absolute_nfc_stable(tmp_path: Path) -> None:
 def test_canonical_path_str_strips_trailing_slash(tmp_path: Path) -> None:
     base = str(tmp_path / "a" / "b")
     assert canonical_path_str(base + os.sep) == base
+
+
+# ---- user aliases (Default slot names, nameIsCustom) ----
+
+
+def test_set_default_name_sets_and_clears(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    assert store.list()["defaultNames"] == {}
+
+    assert store.set_default_name("claude", "  Personal  ") == {"claude": "Personal"}
+    store.set_default_name("codex", "Team")
+    assert store.list()["defaultNames"] == {"claude": "Personal", "codex": "Team"}
+
+    # A blank name clears the alias back to unnamed.
+    store.set_default_name("claude", "   ")
+    assert store.list()["defaultNames"] == {"codex": "Team"}
+    store.set_default_name("kimi", "")
+    assert store.list()["defaultNames"] == {"codex": "Team"}
+
+
+def test_set_default_name_rejects_unsupported_agent(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    with pytest.raises(ValueError):
+        store.set_default_name("terminal", "X")
+    assert store.list()["defaultNames"] == {}
+
+
+def test_legacy_doc_without_default_names_reads_empty(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    legacy = {
+        "schemaVersion": 1,
+        "profiles": [{"id": "abcd1234", "agentKey": "claude", "name": "Account 1"}],
+        "defaults": {"claude": "abcd1234"},
+    }
+    store._db.kv_set(profiles_mod._KV_KEY, legacy, now=0)
+
+    doc = store.list()
+    assert doc["defaultNames"] == {}
+    assert "nameIsCustom" not in doc["profiles"][0]
+    # Writing through another path keeps the aliases field in the document.
+    store.set_default_name("claude", "Home")
+    store.rename("abcd1234", "Work")
+    assert store._db.kv_get(profiles_mod._KV_KEY)["defaultNames"] == {"claude": "Home"}
+
+
+def test_rename_marks_name_custom_create_does_not(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    profile = store.create(agent_key="claude", name="Account 1")
+    assert "nameIsCustom" not in profile
+
+    renamed = store.rename(profile["id"], "Work")
+    assert renamed["nameIsCustom"] is True
+    assert store.get(profile["id"])["nameIsCustom"] is True

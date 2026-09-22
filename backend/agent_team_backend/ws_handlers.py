@@ -1743,6 +1743,7 @@ async def _broadcast_profiles_changed(
     payload = {
         "profiles": doc["profiles"],
         "defaults": doc["defaults"],
+        "defaultNames": doc["defaultNames"],
         "identities": view["identities"],
         # Account rows storing the same login as another row of the same agent
         # — the Accounts pane flags them so the user can delete the spare.
@@ -1787,6 +1788,7 @@ async def cli_profiles_list(session: "Session", msg_id: str, msg_type: str, payl
             {
                 "profiles": doc["profiles"],
                 "defaults": doc["defaults"],
+                "defaultNames": doc["defaultNames"],
                 "identities": view["identities"],
                 "duplicates": view["duplicates"],
                 "supported_agents": list(PROFILE_AGENT_KEYS),
@@ -1923,10 +1925,19 @@ async def cli_profiles_create(session: "Session", msg_id: str, msg_type: str, pa
 async def cli_profiles_rename(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     from . import app
 
+    profile_id = str(payload.get("id") or "")
+    name = str(payload.get("name") or "")
     try:
-        profile = app.cli_profiles_store.rename(
-            str(payload.get("id") or ""), str(payload.get("name") or "")
-        )
+        if profile_id == DEFAULT_SLOT_ID:
+            # The built-in Default slot has no profile record; its alias is
+            # kept per agent, so the agent must be named.
+            agent_key = str(payload.get("agent_key") or payload.get("agentKey") or "")
+            if not agent_key:
+                raise ValueError("agent_key is required to rename the Default account")
+            app.cli_profiles_store.set_default_name(agent_key, name)
+            profile = None
+        else:
+            profile = app.cli_profiles_store.rename(profile_id, name)
     except (KeyError, ValueError) as err:
         await session.send_json(
             make_error(msg_id, msg_type, "BAD_REQUEST", _profile_error(err))
@@ -1937,7 +1948,12 @@ async def cli_profiles_rename(session: "Session", msg_id: str, msg_type: str, pa
         make_response(
             msg_id,
             msg_type,
-            {"profile": profile, "profiles": doc["profiles"], "defaults": doc["defaults"]},
+            {
+                "profile": profile,
+                "profiles": doc["profiles"],
+                "defaults": doc["defaults"],
+                "defaultNames": doc["defaultNames"],
+            },
         )
     )
     await _broadcast_profiles_changed("rename")
