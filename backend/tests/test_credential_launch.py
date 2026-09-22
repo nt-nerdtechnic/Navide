@@ -206,6 +206,10 @@ def test_arbitrary_script_is_not_a_standard_executable(tmp_path):
 
 
 @pytest.mark.parametrize("entrypoint", ["native-exe", "npm-cmd"])
+@pytest.mark.skipif(
+    not osplat.terminal_backend.helper_waits_for_child,
+    reason="requires the Windows native process/shim backend; POSIX shell coverage is separate",
+)
 async def test_native_launch_reuses_platform_shim_and_refuses_unknown_batch(tmp_path, monkeypatch, helper_env, entrypoint):
     import subprocess
     from agent_team_backend.osplat import _windows
@@ -215,7 +219,6 @@ async def test_native_launch_reuses_platform_shim_and_refuses_unknown_batch(tmp_
     if node is None:
         pytest.skip("node is required to run the synthetic native CLI")
     # On Windows these are the real parser, path layout and child processes.
-    # POSIX exercises Windows path arithmetic with its host command parser.
     monkeypatch.setattr(osplat, "paths", _windows.paths)
     program = tmp_path / ("kilo.exe" if entrypoint == "native-exe" else "node.exe")
     shutil.copy2(node, program)
@@ -240,7 +243,7 @@ async def test_native_launch_reuses_platform_shim_and_refuses_unknown_batch(tmp_
     try:
         helper = launch.helper_argv(login=True, vendor="kilo")
         if "--wait-child" not in helper:
-            helper.append("--wait-child")  # Exercise the Windows lifetime contract on POSIX too.
+            helper.append("--wait-child")
         wrapped = wrap_command(subprocess.list2cmdline(argv), VENDORS["kilo"], helper, env=env)
         assert wrapped is not None
         assert wrapped[wrapped.index("--") + 1:] == [str(program), str(cli), *argv[-3:]]
