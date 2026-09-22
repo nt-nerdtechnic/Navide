@@ -73,10 +73,11 @@ describe('closing a family in place', () => {
     expect(bodyOf('const paneListCollapsed = ref(new Set<string>())')).not.toContain('settingsSet')
   })
 
-  it('hides a row only when an ancestor in the active tab is closed', () => {
-    // Closed ancestors in other tabs must not hide this tab's rows.
+  it('hides a row only when an ancestor the list draws is closed', () => {
+    // Closed ancestors outside the list (other tabs, workspaces) must not hide
+    // this tab's rows; App.tabFamilyCollapse.test.ts runs the behavior.
     const body = bodyOf('const auxiliaryListPanes = computed(() => {')
-    expect(body).toContain('r.ancestors.some((id) => tabFilteredPaneIds.value.has(id) && closed.has(id))')
+    expect(body).toContain('r.ancestors.some((id) => listed.has(id) && closed.has(id))')
   })
 
   it('replaces the Set rather than mutating it', () => {

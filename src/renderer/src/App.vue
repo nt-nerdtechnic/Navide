@@ -16114,6 +16114,16 @@ function reorderPane(fromId: string, toId: string): void {
   void persistPaneOrder()
 }
 
+/** A reorder dropped on a row of the main-window pane lists. Those lists also
+ *  carry descendants from other tabs and workspaces, and reorderPane splices by
+ *  global position — dropping on one of them would throw the dragged pane to
+ *  wherever that pane sits in the whole window. Only a row of this tab is a
+ *  reorder target. */
+function reorderAuxiliaryPane(fromId: string, toId: string): void {
+  if (!tabFilteredPaneIds.value.has(toId)) return
+  reorderPane(fromId, toId)
+}
+
 /** Apply a lineage drop the helper accepted: parent changes first, then the
  *  group moves that follow them, each through the write path that already
  *  owns it. Parent BEFORE group — the opposite of ui.pane.place, whose two
@@ -16192,7 +16202,7 @@ const {
     }
   },
   batchFor: auxiliaryDragBatch,
-  reorder: reorderPane,
+  reorder: reorderAuxiliaryPane,
   handOff: (paneId, screenX, screenY) => {
     window.agentTeam?.cliPaneDragEnd?.(paneId, screenX, screenY, paneDragBatch(paneId))
   },
@@ -17099,16 +17109,7 @@ function onSetFocus(paneId: string, ev?: MouseEvent, orderedIds?: string[]): voi
     return
   }
   if (ev && (ev.metaKey || ev.ctrlKey)) {
-    const next = new Set(selectedPaneIds.value)
-    // Seed with the pane the user was already focused on, so the first
-    // modifier-click extends from the current single selection.
-    if (next.size === 0 && focusPaneId.value && focusPaneId.value !== paneId) {
-      next.add(focusPaneId.value)
-    }
-    if (next.has(paneId)) next.delete(paneId)
-    else next.add(paneId)
-    selectedPaneIds.value = next
-    lastClickPaneId.value = paneId
+    togglePaneSelection(paneId)
     revealPaneTab(paneId)
     selectPane(paneId, { userInitiated: false })
     return
@@ -17117,6 +17118,44 @@ function onSetFocus(paneId: string, ev?: MouseEvent, orderedIds?: string[]): voi
   lastClickPaneId.value = paneId
   revealPaneTab(paneId)
   selectPane(paneId, { userInitiated: true })
+}
+
+/** Cmd/Ctrl-click: toggle one pane in the multi-select set. */
+function togglePaneSelection(paneId: string): void {
+  const next = new Set(selectedPaneIds.value)
+  // Seed with the pane the user was already focused on, so the first
+  // modifier-click extends from the current single selection.
+  if (next.size === 0 && focusPaneId.value && focusPaneId.value !== paneId) {
+    next.add(focusPaneId.value)
+  }
+  if (next.has(paneId)) next.delete(paneId)
+  else next.add(paneId)
+  selectedPaneIds.value = next
+  lastClickPaneId.value = paneId
+}
+
+/** A row click in the main-window pane lists (Auto, Spotlight, fullscreen).
+ *
+ *  A row on the stage keeps the click it always had. A descendant the list
+ *  carries from elsewhere — minimized, another tab, another workspace — is
+ *  reached the way the sidebar reaches it: workspace, restore, tab, focus. A
+ *  modifier click on one only selects, in this list's order: onSetFocus's
+ *  modifier branches reveal the pane's tab, and adding a pane to a selection
+ *  must not move the stage. */
+function onAuxiliaryListClick(paneId: string, ev: MouseEvent): void {
+  if (tabVisiblePanes.value.some((p) => p.id === paneId)) {
+    onSetFocus(paneId, ev, auxiliaryListOrderedIds.value)
+    return
+  }
+  if (ev.shiftKey) {
+    rangeSelectPanes(paneId, auxiliaryListOrderedIds.value)
+    return
+  }
+  if (ev.metaKey || ev.ctrlKey) {
+    togglePaneSelection(paneId)
+    return
+  }
+  void onSidebarFocusPane(paneId)
 }
 
 function rangeSelectPanes(toId: string, orderedIds?: string[]): void {
@@ -18223,18 +18262,25 @@ const tabFamilyToggleDisabledReason = computed<'grid' | 'empty' | undefined>(() 
  *  Structure and status stay separate right up to here, where they are joined
  *  for one frame. */
 const auxiliaryListPanes = computed(() => {
-  const visible = new Map(
-    paneViews.value
-      .filter((v) => !v.isMinimized && tabFilteredPaneIds.value.has(v.id))
-      .map((v) => [v.id, v] as const)
+  const views = new Map(paneViews.value.map((v) => [v.id, v] as const))
+  // The entries are what this tab shows on its own. Every descendant of one
+  // joins the list wherever it lives — minimized, another tab, another
+  // workspace — because the parent's count includes it and opening the family
+  // is how the user reaches it.
+  const entries = new Set(
+    paneViews.value.filter((v) => !v.isMinimized && tabFilteredPaneIds.value.has(v.id)).map((v) => v.id)
   )
-  // Only ancestors in this tab can hide a row: families may span tabs or
-  // workspaces, whose fold state must not change this list.
+  const rows = paneListLineage.value.filter(
+    (r) => views.has(r.id) && (entries.has(r.id) || r.ancestors.some((id) => entries.has(id)))
+  )
+  // Only ancestors the list itself draws can hide a row: a family closed in
+  // another tab or workspace has no caret here to reopen it.
+  const listed = new Set(rows.map((r) => r.id))
   const closed = paneListCollapsed.value
-  return paneListLineage.value.flatMap((r) => {
-    if (r.ancestors.some((id) => tabFilteredPaneIds.value.has(id) && closed.has(id))) return []
-    const view = visible.get(r.id)
-    return view ? [{ ...view, ancestors: r.ancestors, descendantCount: r.descendantCount, expanded: !closed.has(r.id) }] : []
+  return rows.flatMap((r) => {
+    if (r.ancestors.some((id) => listed.has(id) && closed.has(id))) return []
+    const view = views.get(r.id) as ActivePaneView
+    return [{ ...view, ancestors: r.ancestors, descendantCount: r.descendantCount, expanded: !closed.has(r.id) }]
   })
 })
 
@@ -18247,7 +18293,7 @@ function paneListTrail(ancestors: readonly string[]): string {
   return ancestorTrail(ancestors, (id) => paneNameById.value.get(id) ?? '')
 }
 
-/** Each parent card's "↳ n" subtree signal — the loudest status among the
+/** Each parent card's subtree signal — the loudest status among the
  *  panes it spawned and how many are in it. Read from paneViews, not the
  *  lineage tree, because it is live status; see subtreeSignals for why it is
  *  walked over all panes and kept out of the pane's own status. */
@@ -18267,6 +18313,45 @@ function paneListSubtreeAttrs(id: string): Record<string, unknown> {
     }),
   }
 }
+
+/** The subtree signal in words — "1 child pane · Running" — for the card's
+ *  second line; a bare "↳ 1" read as a count of something unnamed. */
+function paneListSubtreeText(id: string): string {
+  const sub = paneListSubtree.value.get(id)
+  if (!sub) return ''
+  return i18n.global.t('pane.terminal.subtree-summary', {
+    count: sub.count,
+    status: paneStatusLabelText(sub.state),
+  })
+}
+
+/** Where a list row's pane lives, for the rows where that is not simply
+ *  "here". The lists carry a family's descendants from the minimized set,
+ *  other tabs and other workspaces, and a row that does not say so looks like
+ *  one a click will merely focus. Absent for a pane on the stage. */
+const paneListLocation = computed(() => {
+  const t = i18n.global.t
+  const tabLabels = new Map(stageTabShapes.value.map((tab) => [tab.key, tab.label]))
+  const wsLabels = new Map(workspaceGroups.value.map((ws) => [normWs(ws.path), ws.label]))
+  const out = new Map<string, string[]>()
+  for (const p of panes.value) {
+    const hints: string[] = []
+    if (!tabFilteredPaneIds.value.has(p.id)) {
+      const ws = normWs(p.workspacePath ?? '')
+      if (ws && ws !== normWs(currentWorkspace.value)) {
+        hints.push(t('pane.terminal.location-workspace', { name: wsLabels.get(ws) ?? ws }))
+        const group = p.runGroupId ? runGroupsByWorkspace.value[ws]?.find((g) => g.id === p.runGroupId) : undefined
+        hints.push(t('pane.terminal.location-tab', { name: group?.name ?? t('label.manual') }))
+      } else {
+        const name = tabLabels.get(p.runGroupId || 'manual')
+        if (name) hints.push(t('pane.terminal.location-tab', { name }))
+      }
+    }
+    if (minimizedPanes.value.has(p.id)) hints.push(t('pane.terminal.location-minimized'))
+    if (hints.length) out.set(p.id, hints)
+  }
+  return out
+})
 
 /** How far a nested card sits in from its parent's edge. Deliberately small,
  *  and capped: these lists are narrow, and past three levels the indent would
@@ -19297,7 +19382,7 @@ function paneIsCommander(p: ActivePane): boolean {
             @dragenter="onAuxiliaryPaneDragOver($event, p.id)"
             @dragleave="onAuxiliaryPaneDragLeave($event, p.id)"
             @drop.prevent="onAuxiliaryPaneDrop($event, p.id)"
-            @click="(ev) => onSetFocus(p.id, ev, auxiliaryListOrderedIds)"
+            @click="(ev) => onAuxiliaryListClick(p.id, ev)"
             @contextmenu.prevent="openPaneCtxMenu($event, p.id)"
           >
             <div class="meeting-info">
@@ -19318,6 +19403,7 @@ function paneIsCommander(p: ActivePane): boolean {
                   v-if="p.descendantCount > 0"
                   class="pane-list-kids"
                   :class="{ 'is-open': p.expanded }"
+                  :aria-expanded="p.expanded"
                   :title="$t('label.descendant-count', { count: p.descendantCount })"
                   @click.stop="togglePaneFamily(p.id)"
                   @dragover.stop
@@ -19356,6 +19442,22 @@ function paneIsCommander(p: ActivePane): boolean {
               <span class="meeting-sub">
                 {{ agentSpecs.find(s => s.agentKey === p.agentKey)?.label ?? p.agentKey }}<span v-if="p.roleLabel"> · {{ p.roleLabel }}</span>
               </span>
+              <!-- What the family is doing, on the parent: the card's own badge
+                   says only what its terminal is doing, and a closed family's
+                   running or blocked child was otherwise invisible. A line of
+                   its own, so the words can wrap without squeezing the name. -->
+              <span
+                v-if="paneListSubtree.has(p.id)"
+                class="meeting-subtree"
+                v-bind="paneListSubtreeAttrs(p.id)"
+              >{{ paneListSubtreeText(p.id) }}</span>
+              <!-- Where a carried descendant lives, so a click that switches
+                   tab, workspace or restores it is not a surprise. -->
+              <span
+                v-if="paneListLocation.has(p.id)"
+                class="pane-list-location"
+                :title="paneListLocation.get(p.id)?.join(' · ')"
+              >{{ paneListLocation.get(p.id)?.join(' · ') }}</span>
             </div>
             <span
               v-if="p.loopActive"
@@ -19363,14 +19465,6 @@ function paneIsCommander(p: ActivePane): boolean {
               :class="{ waiting: p.loopWaitUntil != null }"
               :title="$t('pane.terminal.loop-tag-tooltip')"
             >∞</span>
-            <!-- What the family is doing, on the parent: the card's own badge
-                 says only what its terminal is doing, and a closed family's
-                 running or blocked child was otherwise invisible. -->
-            <span
-              v-if="paneListSubtree.has(p.id)"
-              class="meeting-subtree"
-              v-bind="paneListSubtreeAttrs(p.id)"
-            >↳ {{ paneListSubtree.get(p.id)?.count }}</span>
             <span class="meeting-badge" :data-status="p.status" :style="statusBadgeStyle(p.status)">{{ paneStatusLabelText(p.status) }}</span>
           </div>
           <div v-if="auxiliaryListPanes.length === 0" class="meeting-empty">
@@ -19393,7 +19487,7 @@ function paneIsCommander(p: ActivePane): boolean {
           @dragenter="onAuxiliaryPaneDragOver($event, p.id)"
           @dragleave="onAuxiliaryPaneDragLeave($event, p.id)"
           @drop.prevent="onAuxiliaryPaneDrop($event, p.id)"
-          @click="(ev) => onSetFocus(p.id, ev, auxiliaryListOrderedIds)"
+          @click="(ev) => onAuxiliaryListClick(p.id, ev)"
           @contextmenu.prevent="openPaneCtxMenu($event, p.id)"
         >
           <div class="spotlight-thumb-info">
@@ -19431,6 +19525,11 @@ function paneIsCommander(p: ActivePane): boolean {
             <span class="spotlight-thumb-role">
               {{ agentSpecs.find(s => s.agentKey === p.agentKey)?.label ?? p.agentKey }}<span v-if="p.roleLabel"> · {{ p.roleLabel }}</span>
             </span>
+            <span
+              v-if="paneListLocation.has(p.id)"
+              class="pane-list-location"
+              :title="paneListLocation.get(p.id)?.join(' · ')"
+            >{{ paneListLocation.get(p.id)?.join(' · ') }}</span>
           </div>
           <div class="spotlight-thumb-badges">
             <span
@@ -19446,6 +19545,7 @@ function paneIsCommander(p: ActivePane): boolean {
               v-if="p.descendantCount > 0"
               class="pane-list-kids pane-list-kids--compact"
               :class="{ 'is-open': p.expanded }"
+              :aria-expanded="p.expanded"
               :title="$t('label.descendant-count', { count: p.descendantCount })"
               @click.stop="togglePaneFamily(p.id)"
               @dragover.stop
@@ -19499,7 +19599,7 @@ function paneIsCommander(p: ActivePane): boolean {
             @dragenter="onAuxiliaryPaneDragOver($event, p.id)"
             @dragleave="onAuxiliaryPaneDragLeave($event, p.id)"
             @drop.prevent="onAuxiliaryPaneDrop($event, p.id)"
-            @click="(ev) => onSetFocus(p.id, ev, auxiliaryListOrderedIds)"
+            @click="(ev) => onAuxiliaryListClick(p.id, ev)"
             @contextmenu.prevent="openPaneCtxMenu($event, p.id)"
           >
             <div class="meeting-info">
@@ -19520,6 +19620,7 @@ function paneIsCommander(p: ActivePane): boolean {
                   v-if="p.descendantCount > 0"
                   class="pane-list-kids"
                   :class="{ 'is-open': p.expanded }"
+                  :aria-expanded="p.expanded"
                   :title="$t('label.descendant-count', { count: p.descendantCount })"
                   @click.stop="togglePaneFamily(p.id)"
                   @dragover.stop
@@ -19558,6 +19659,22 @@ function paneIsCommander(p: ActivePane): boolean {
               <span class="meeting-sub">
                 {{ agentSpecs.find(s => s.agentKey === p.agentKey)?.label ?? p.agentKey }}<span v-if="p.roleLabel"> · {{ p.roleLabel }}</span>
               </span>
+              <!-- What the family is doing, on the parent: the card's own badge
+                   says only what its terminal is doing, and a closed family's
+                   running or blocked child was otherwise invisible. A line of
+                   its own, so the words can wrap without squeezing the name. -->
+              <span
+                v-if="paneListSubtree.has(p.id)"
+                class="meeting-subtree"
+                v-bind="paneListSubtreeAttrs(p.id)"
+              >{{ paneListSubtreeText(p.id) }}</span>
+              <!-- Where a carried descendant lives, so a click that switches
+                   tab, workspace or restores it is not a surprise. -->
+              <span
+                v-if="paneListLocation.has(p.id)"
+                class="pane-list-location"
+                :title="paneListLocation.get(p.id)?.join(' · ')"
+              >{{ paneListLocation.get(p.id)?.join(' · ') }}</span>
             </div>
             <span
               v-if="p.loopActive"
@@ -19565,14 +19682,6 @@ function paneIsCommander(p: ActivePane): boolean {
               :class="{ waiting: p.loopWaitUntil != null }"
               :title="$t('pane.terminal.loop-tag-tooltip')"
             >∞</span>
-            <!-- What the family is doing, on the parent: the card's own badge
-                 says only what its terminal is doing, and a closed family's
-                 running or blocked child was otherwise invisible. -->
-            <span
-              v-if="paneListSubtree.has(p.id)"
-              class="meeting-subtree"
-              v-bind="paneListSubtreeAttrs(p.id)"
-            >↳ {{ paneListSubtree.get(p.id)?.count }}</span>
             <span class="meeting-badge" :data-status="p.status" :style="statusBadgeStyle(p.status)">{{ paneStatusLabelText(p.status) }}</span>
           </div>
           <div v-if="auxiliaryListPanes.length === 0" class="meeting-empty">
@@ -21148,8 +21257,9 @@ function paneIsCommander(p: ActivePane): boolean {
 .meeting-loop.waiting {
   opacity: 0.55;
 }
-/* The parent card's subtree chip, "↳ n", painted in the loudest status among
-   its spawned descendants (see paneListSubtree). Only the states that mean
+/* The parent card's subtree summary, "1 child pane · Running", on its own
+   line and painted in the loudest status among its spawned descendants (see
+   paneListSubtree). Only the states that mean
    something is still moving or stuck get a rule — idle and below never render
    the chip. Same shape and --status-badge-* hooks as .meeting-badge so a
    recoloured status in Settings moves this with it. */
@@ -21157,8 +21267,17 @@ function paneIsCommander(p: ActivePane): boolean {
   font-size: var(--font-3xs);
   padding: 2px 6px;
   border-radius: 3px;
-  flex-shrink: 0;
+  align-self: flex-start;
+  overflow-wrap: anywhere;
+}
+/* A carried descendant's whereabouts: minimized, another tab, another
+   workspace. One line, cut short with the full text on hover. */
+.pane-list-location {
+  font-size: var(--font-3xs);
+  color: var(--text-secondary);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .meeting-subtree[data-status="running"]  { background: var(--status-badge-bg, var(--success-subtle)); color: var(--status-badge-fg, var(--success-fg)); border: 1px solid var(--status-badge-fg, var(--success-emphasis)); }
 .meeting-subtree[data-status="starting"] { background: var(--status-badge-bg, var(--status-starting-subtle)); color: var(--status-badge-fg, var(--status-starting-fg)); border: 1px solid var(--status-badge-fg, var(--status-starting-emphasis)); }

@@ -44,6 +44,8 @@ Navide 將個人私有 Project Intelligence 儲存在 Workspace 內的 `.agent-t
 
 收合會隱藏後代卡片，保留最上層父卡片、後代數量與主終端機。各分頁的群組狀態互相獨立，僅保留於目前視窗的記憶體中。Grid Layout 或目前分頁沒有符合條件的父群組時，批次按鈕會停用。
 
+父卡片的後代數量涵蓋它派生的所有 Pane；即使後代已最小化、位於其他分頁或其他工作區，展開群組後都找得到。這類列會附上位置提示（**已縮到側欄**、**分頁：名稱**、**工作區：名稱**；名稱過長時截斷，滑過可看完整文字）。展開只改變清單內容；點選後代列時，會沿用左側代理清單的流程，切換到它的工作區與分頁、必要時還原，再聚焦。對這類列按 Cmd/Ctrl 或 Shift 點選，只會依清單順序加入選取，不切換分頁，也不還原。批次按鈕仍只作用於目前分頁且未最小化的父 Pane。派生的 Pane 有狀態需要注意時，Auto 與 Fullscreen 的父卡片第二列會顯示可讀摘要（Spotlight 縮圖只顯示位置提示），例如 **1 個子視窗執行中**，說明後代中最需要注意的狀態與其數量。
+
 A new empty Codex pane waits for your input without sending an artificial session-discovery message. Its session ID may become available only after the first real user or configured task turn; until then, Rebuild remains unavailable. The same applies to a fresh rebuild or restore. If Codex asks to review the Navide session hook, review it in Codex; YOLO mode does not approve hooks. Existing shared session homes may need that trusted hook to associate the new conversation with its pane.
 
 Select multiple pane headers with Cmd/Ctrl-click or Shift-click, then right-click a selected pane to open the batch menu. Its groups contain Interrupt/Rebuild, Minimize/Restore/Reclaim, notification controls, and Remove. **Restore selected** also opens selected panes that have not yet been opened or were reclaimed. Pane and project overflow menus stay within the window; long menus scroll so their final actions remain reachable.

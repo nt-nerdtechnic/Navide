@@ -5,6 +5,7 @@ import { computed, ref } from 'vue'
 import { describe, expect, it, vi } from 'vitest'
 import { buildPaneLineage } from '../../lib/paneLineage'
 import { panesOfActiveTab, panesOfViewedWorkspace } from '../../lib/paneVisibility'
+import { computeRangeSelection } from '../../lib/paneSelection'
 
 const source = readFileSync(resolve(process.cwd(), 'src/renderer/src/App.vue'), 'utf8')
 
@@ -187,5 +188,157 @@ describe('active-tab family folding', () => {
     expect(toolbar).toContain(':all-families-collapsed="tabFamiliesCollapsed"')
     expect(toolbar).toContain(':family-toggle-disabled-reason="tabFamilyToggleDisabledReason"')
     expect(toolbar).toContain('@toggle-families="toggleTabFamilies"')
+  })
+})
+
+// A parent's count walks every pane, so each counted descendant must be
+// reachable by opening the family in the list — even when it is minimized or
+// lives on another tab or in another workspace.
+const reachableFamily = () => [
+  pane('lead'), pane('mini', 'lead'), pane('away', 'lead', 'fix'), pane('remote', 'lead', 'feature', '/other'),
+  pane('deep', 'away', 'fix'), pane('deeper', 'deep', 'feature', '/other'),
+  pane('unrelated', undefined, 'fix'), pane('unrelated-mini'), pane('unrelated-remote', undefined, 'feature', '/other'),
+]
+
+describe('descendants reachable from the pane lists', () => {
+  it('lists every counted descendant of a current-tab entry, wherever it lives', () => {
+    const h = harness(reachableFamily(), [], false)
+    h.minimizedPanes.value = new Set(['mini', 'unrelated-mini', 'deeper'])
+    const rows = h.auxiliaryListPanes.value
+    expect(rows.map(r => r.id)).toEqual(['lead', 'mini', 'away', 'deep', 'deeper', 'remote'])
+    const lead = rows.find(r => r.id === 'lead')!
+    expect(lead.descendantCount).toBe(5)
+    expect(rows.filter(r => (r as unknown as { ancestors: string[] }).ancestors.includes('lead'))).toHaveLength(lead.descendantCount)
+  })
+
+  it('never adds unrelated panes and lists an overlapping entry once', () => {
+    const h = harness(reachableFamily(), [], false)
+    const ids = h.auxiliaryListPanes.value.map(r => r.id)
+    for (const id of ['unrelated', 'unrelated-mini', 'unrelated-remote']) {
+      if (id === 'unrelated-mini') expect(ids).toContain(id)
+      else expect(ids).not.toContain(id)
+    }
+    h.minimizedPanes.value = new Set(['unrelated-mini'])
+    expect(h.auxiliaryListPanes.value.map(r => r.id)).not.toContain('unrelated-mini')
+    expect(new Set(h.auxiliaryListPanes.value.map(r => r.id)).size).toBe(h.auxiliaryListPanes.value.length)
+  })
+
+  it('folds a carried nested parent with its own caret, level by level', () => {
+    const h = harness(reachableFamily(), ['away'], false)
+    expect(h.auxiliaryListPanes.value.map(r => r.id)).toEqual(['lead', 'mini', 'away', 'remote', 'unrelated-mini'])
+    h.togglePaneFamily('away')
+    h.togglePaneFamily('deep')
+    expect(h.auxiliaryListPanes.value.map(r => r.id)).toEqual(['lead', 'mini', 'away', 'deep', 'remote', 'unrelated-mini'])
+    h.togglePaneFamily('deep')
+    expect(h.auxiliaryListPanes.value.map(r => r.id)).toContain('deeper')
+  })
+
+  it('does not let a closed ancestor outside the list hide a current-tab entry', () => {
+    const h = harness([pane('root', undefined, 'fix'), pane('entry', 'root'), pane('leaf', 'entry', 'fix')], ['root'], false)
+    expect(h.auxiliaryListPanes.value.map(r => r.id)).toEqual(['entry', 'leaf'])
+  })
+
+  it('keeps batch collapse on current-tab parents and leaves carried parents alone', () => {
+    const h = harness(reachableFamily())
+    h.toggleTabFamilies()
+    expect([...h.paneListCollapsed.value]).toEqual(['lead'])
+    h.toggleTabFamilies()
+    h.togglePaneFamily('away')
+    h.toggleTabFamilies()
+    expect([...h.paneListCollapsed.value].sort()).toEqual(['away', 'lead'])
+    h.toggleTabFamilies()
+    expect([...h.paneListCollapsed.value]).toEqual(['away'])
+  })
+
+  it('drops a closed child and its count together', () => {
+    const h = harness(reachableFamily(), [], false)
+    h.panes.value = h.panes.value.filter(p => p.id !== 'away')
+    const rows = h.auxiliaryListPanes.value
+    expect(rows.map(r => r.id)).toEqual(['lead', 'mini', 'remote', 'unrelated-mini'])
+    expect(rows[0].descendantCount).toBe(2)
+  })
+})
+
+// The list's row click: rows on the stage keep onSetFocus; a carried row is
+// reached through the sidebar's jump, and a modifier click only selects.
+function clickHarness(onStage: string[]) {
+  const selectedPaneIds = ref(new Set<string>())
+  const focusPaneId = ref<string | null>('lead')
+  const lastClickPaneId = ref<string | null>(null)
+  const tabVisiblePanes = computed(() => onStage.map(id => ({ id })))
+  const auxiliaryListOrderedIds = computed(() => ['lead', 'mini', 'away', 'remote'])
+  const panes = ref(['lead', 'mini', 'away', 'remote'].map(id => ({ id })))
+  const deps = {
+    selectedPaneIds, focusPaneId, lastClickPaneId, tabVisiblePanes, auxiliaryListOrderedIds, panes,
+    computeRangeSelection,
+    revealPaneTab: vi.fn(), selectPane: vi.fn(), restorePane: vi.fn(), onSidebarFocusPane: vi.fn(),
+  }
+  const javascript = ts.transpileModule(
+    ['onAuxiliaryListClick', 'togglePaneSelection', 'onSetFocus', 'rangeSelectPanes'].map(fn).join('\n'),
+    { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
+  ).outputText
+  const run = new Function(...Object.keys(deps), `${javascript}; return onAuxiliaryListClick`)(...Object.values(deps)) as
+    (id: string, ev: Partial<MouseEvent>) => void
+  const click = (id: string, ev: Partial<MouseEvent> = {}) => run(id, { shiftKey: false, metaKey: false, ctrlKey: false, ...ev })
+  return { ...deps, click }
+}
+
+describe('clicking a row in the pane lists', () => {
+  it('jumps to a carried row through the sidebar flow', () => {
+    const h = clickHarness(['lead'])
+    h.click('away')
+    expect(h.onSidebarFocusPane).toHaveBeenCalledWith('away')
+    expect(h.selectPane).not.toHaveBeenCalled()
+  })
+
+  it('keeps the on-stage click exactly as before', () => {
+    const h = clickHarness(['lead', 'mini'])
+    h.click('mini')
+    expect(h.selectPane).toHaveBeenCalledWith('mini', { userInitiated: true })
+    expect(h.onSidebarFocusPane).not.toHaveBeenCalled()
+    h.click('lead', { metaKey: true })
+    expect([...h.selectedPaneIds.value]).toEqual(['lead'])
+    expect(h.selectPane).toHaveBeenLastCalledWith('lead', { userInitiated: false })
+  })
+
+  it.each([{ metaKey: true }, { ctrlKey: true }, { shiftKey: true }])('only selects a carried row on %o', ev => {
+    const h = clickHarness(['lead'])
+    h.click('away', ev)
+    expect([...h.selectedPaneIds.value].sort()).toEqual(ev.shiftKey ? ['away', 'lead', 'mini'] : ['away', 'lead'])
+    for (const effect of [h.revealPaneTab, h.selectPane, h.restorePane, h.onSidebarFocusPane]) {
+      expect(effect).not.toHaveBeenCalled()
+    }
+    expect(h.focusPaneId.value).toBe('lead')
+  })
+})
+
+describe('reordering from the pane lists', () => {
+  function reorderHarness() {
+    const reorderPane = vi.fn()
+    const tabFilteredPaneIds = computed(() => new Set(['lead', 'mini']))
+    const javascript = ts.transpileModule(fn('reorderAuxiliaryPane'), {
+      compilerOptions: { target: ts.ScriptTarget.ES2022 },
+    }).outputText
+    const reorder = new Function('tabFilteredPaneIds', 'reorderPane', `${javascript}; return reorderAuxiliaryPane`)(
+      tabFilteredPaneIds, reorderPane,
+    ) as (from: string, to: string) => void
+    return { reorder, reorderPane }
+  }
+
+  it('refuses a drop on a carried row from another tab or workspace', () => {
+    const h = reorderHarness()
+    h.reorder('lead', 'away')
+    h.reorder('lead', 'remote')
+    expect(h.reorderPane).not.toHaveBeenCalled()
+  })
+
+  it('reorders on a row of this tab exactly as before', () => {
+    const h = reorderHarness()
+    h.reorder('lead', 'mini')
+    expect(h.reorderPane).toHaveBeenCalledWith('lead', 'mini')
+  })
+
+  it('is the reorder the auxiliary lists use', () => {
+    expect(source).toContain('  batchFor: auxiliaryDragBatch,\n  reorder: reorderAuxiliaryPane,\n')
   })
 })

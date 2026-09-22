@@ -96,3 +96,10 @@ describe('the family control on the two card lists', () => {
     expect(onCard).not.toHaveBeenCalled()
   })
 })
+
+describe('the family control state for assistive tech', () => {
+  it.each([true, false])('exposes aria-expanded=%s', (expanded) => {
+    const { wrapper } = mountControl(cardListControls()[0], { id: 'a', descendantCount: 1, expanded })
+    expect(wrapper.get('button.pane-list-kids').attributes('aria-expanded')).toBe(String(expanded))
+  })
+})
