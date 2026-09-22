@@ -62,7 +62,25 @@
     "allow-ip": "{vendor} にこの IP を許可",
     "reveal": "フォルダー内に表示",
     "action-failed": "この選択を保存できませんでした。もう一度お試しください。",
-    "reveal-failed": "このパスをファイルマネージャーで表示できませんでした。"
+    "reveal-failed": "このパスをファイルマネージャーで表示できませんでした。",
+    "shared-cdn-field": "共有 CDN",
+    "shared-cdn": "{label}（共有 CDN のためサイトを特定できません）",
+    "ranges-title": "共有 CDN のアドレス範囲",
+    "ranges-hint": "有効な範囲内のアドレスへの接続は記録のみで、リスク表示は点灯しません。IP ごとの無視と許可には影響しません。組み込みの範囲は Cloudflare と Fastly が公開している一覧に基づき、無効にはできますが削除はできません。",
+    "ranges-cidr": "CIDR",
+    "ranges-cidr-placeholder": "例：192.0.2.0/24 または 2001:db8::/32",
+    "ranges-label": "名前",
+    "ranges-source": "出典",
+    "ranges-source-builtin": "組み込み",
+    "ranges-source-user": "カスタム",
+    "ranges-enabled": "有効",
+    "ranges-toggle": "{cidr} を有効にする",
+    "ranges-add": "追加",
+    "ranges-delete": "削除",
+    "ranges-invalid-cidr": "CIDR の形式が正しくありません（例：192.0.2.0/24）。",
+    "ranges-label-required": "名前を入力してください。",
+    "ranges-load-failed": "アドレス範囲を読み込めませんでした。",
+    "ranges-save-failed": "変更を保存できませんでした。もう一度お試しください。"
   },
   "spawn": {
     "model": {

@@ -62,7 +62,25 @@
     "allow-ip": "允許 {vendor} 使用此 IP",
     "reveal": "在資料夾中顯示",
     "action-failed": "無法儲存此決定，請再試一次。",
-    "reveal-failed": "無法在檔案管理員中顯示此路徑。"
+    "reveal-failed": "無法在檔案管理員中顯示此路徑。",
+    "shared-cdn-field": "共用 CDN",
+    "shared-cdn": "{label}（共用 CDN，無法分辨網站）",
+    "ranges-title": "共用 CDN 位址範圍",
+    "ranges-hint": "連到已啟用範圍內的位址只會記錄，不會亮起風險提示；個別 IP 的忽略與允許不受影響。內建範圍取自 Cloudflare 與 Fastly 官方公布的清單，可停用但不可刪除。",
+    "ranges-cidr": "CIDR",
+    "ranges-cidr-placeholder": "例如 192.0.2.0/24 或 2001:db8::/32",
+    "ranges-label": "名稱",
+    "ranges-source": "來源",
+    "ranges-source-builtin": "內建",
+    "ranges-source-user": "自訂",
+    "ranges-enabled": "啟用",
+    "ranges-toggle": "啟用 {cidr}",
+    "ranges-add": "新增",
+    "ranges-delete": "刪除",
+    "ranges-invalid-cidr": "CIDR 格式不正確，例如 192.0.2.0/24。",
+    "ranges-label-required": "請填寫名稱。",
+    "ranges-load-failed": "無法載入位址範圍。",
+    "ranges-save-failed": "無法儲存變更，請再試一次。"
   },
   "spawn": {
     "model": {

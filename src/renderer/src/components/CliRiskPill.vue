@@ -13,7 +13,8 @@ const props = defineProps<{
 }>()
 
 const t = i18n.global.t
-const first = computed(() => props.state?.signals[0])
+// Shared-CDN endpoints are record-only: shown in the dialog, never the pill.
+const first = computed(() => props.state?.signals.find((signal) => !signal.sharedCdn))
 const open = ref(false)
 const badgeRef = ref<HTMLButtonElement | null>(null)
 const popRef = ref<HTMLElement | null>(null)
@@ -198,6 +199,9 @@ async function reveal(signal: CliRiskSignal): Promise<void> {
           <dt>{{ t('cli-risk.vendor') }}</dt><dd>{{ signal.vendor }}</dd>
           <template v-if="signal.kind === 'network'">
             <dt>{{ t('cli-risk.endpoint') }}</dt><dd><code>{{ endpoint(signal) }}</code></dd>
+            <template v-if="signal.sharedCdn">
+              <dt>{{ t('cli-risk.shared-cdn-field') }}</dt><dd>{{ t('cli-risk.shared-cdn', { label: signal.sharedCdn }) }}</dd>
+            </template>
             <dt>{{ t('cli-risk.connections') }}</dt><dd>{{ signal.connections === undefined ? t('cli-risk.unknown-value') : t('cli-risk.connection-count', { count: signal.connections }) }}</dd>
           </template>
           <template v-else>

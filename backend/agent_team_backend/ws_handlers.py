@@ -7581,6 +7581,27 @@ async def terminal_cli_risk_action(session: "Session", msg_id: str, msg_type: st
     await session.send_json(make_response(msg_id, msg_type, {"cliRisks": risks}))
 
 
+@handler("cli_risk.ranges.list", "cli_risk.ranges.add", "cli_risk.ranges.update", "cli_risk.ranges.delete")
+async def cli_risk_ranges(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """Shared-CDN ranges whose connections are recorded without lighting the pill."""
+    from . import app
+
+    ranges = app.cli_risk_service.store.ranges
+    operation = msg_type.rsplit(".", 1)[1]
+    try:
+        if operation == "add":
+            await asyncio.to_thread(ranges.add, payload.get("cidr"), payload.get("label"))
+        elif operation == "update":
+            await asyncio.to_thread(ranges.set_enabled, payload.get("cidr"), payload.get("enabled"))
+        elif operation == "delete":
+            await asyncio.to_thread(ranges.delete, payload.get("cidr"))
+        result = await asyncio.to_thread(ranges.list)
+    except ValueError as err:
+        await session.send_json(make_error(msg_id, msg_type, "BAD_REQUEST", str(err)))
+        return
+    await session.send_json(make_response(msg_id, msg_type, {"ranges": result}))
+
+
 async def _collect_resource_usage(session: "Session") -> dict:
     """One CPU + memory sweep over every live PTY this backend owns."""
     from . import process_cpu, process_memory

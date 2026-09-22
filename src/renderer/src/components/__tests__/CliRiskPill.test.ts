@@ -64,6 +64,17 @@ describe('CliRiskPill', () => {
     expect(pop.textContent).toContain('not connection duration')
   })
 
+  it('never lights the pill for a shared-CDN record but lists it in the dialog', async () => {
+    const cdn = networkSignal({ id: 'cdn', ip: '162.159.130.53', sharedCdn: 'Cloudflare' })
+    render(riskState([cdn]))
+    expect(wrapper.find('.cli-risk-inline').exists()).toBe(false)
+    wrapper.unmount()
+    render(riskState([networkSignal(), cdn]))
+    expect(wrapper.get('.cli-risk-inline').text()).toBe('▲ 198.51.100.25:443')
+    const pop = await open()
+    expect(pop.querySelector('[data-signal-id="cdn"]')?.textContent).toContain('Cloudflare (shared CDN; the site cannot be identified)')
+  })
+
   it('brackets an IPv6 address for the endpoint without resolving a hostname', async () => {
     render(riskState([networkSignal({ ip: '2001:db8::25' })]))
     expect(wrapper.get('.cli-risk-inline').text()).toBe('▲ [2001:db8::25]:443')

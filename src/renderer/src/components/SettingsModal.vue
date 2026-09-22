@@ -105,6 +105,7 @@ import { useGitAccounts } from '../composables/useGitAccounts'
 import GitAccountsPane from './GitAccountsPane.vue'
 import CliAccountsPane from './CliAccountsPane.vue'
 import CliManagementPanel from './CliManagementPanel.vue'
+import CliRiskRangesPane from './CliRiskRangesPane.vue'
 import type { useCliProfiles } from '../composables/useCliProfiles'
 import KeyboardShortcutsEditor from './KeyboardShortcutsEditor.vue'
 import CliMessagingHelp from './CliMessagingHelp.vue'
@@ -3041,6 +3042,7 @@ watch(activeTab, (tab) => {
             </ul>
             <p v-if="!filteredCliRows.length" class="cli-agent-empty">{{ $t('settings.cliAgents.no-results') }}</p>
           </section>
+          <CliRiskRangesPane v-if="activeTab === 'cliAgents'" :backend="props.backend" />
           </div>
           <Transition name="cli-drawer">
           <div v-if="selectedCli" class="cli-drawer-layer">

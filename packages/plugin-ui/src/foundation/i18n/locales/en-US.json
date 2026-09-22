@@ -62,7 +62,25 @@
     "allow-ip": "Allow this IP for {vendor}",
     "reveal": "Reveal in folder",
     "action-failed": "Could not save this decision. Try again.",
-    "reveal-failed": "Could not reveal this path in the file manager."
+    "reveal-failed": "Could not reveal this path in the file manager.",
+    "shared-cdn-field": "Shared CDN",
+    "shared-cdn": "{label} (shared CDN; the site cannot be identified)",
+    "ranges-title": "Shared CDN address ranges",
+    "ranges-hint": "Connections to an address inside an enabled range are recorded but never light the risk pill; per-IP Ignore and Allow are unaffected. Built-in ranges come from the lists Cloudflare and Fastly publish; they can be disabled but not deleted.",
+    "ranges-cidr": "CIDR",
+    "ranges-cidr-placeholder": "e.g. 192.0.2.0/24 or 2001:db8::/32",
+    "ranges-label": "Label",
+    "ranges-source": "Source",
+    "ranges-source-builtin": "Built-in",
+    "ranges-source-user": "Custom",
+    "ranges-enabled": "Enabled",
+    "ranges-toggle": "Enable {cidr}",
+    "ranges-add": "Add",
+    "ranges-delete": "Delete",
+    "ranges-invalid-cidr": "Invalid CIDR, e.g. 192.0.2.0/24.",
+    "ranges-label-required": "A label is required.",
+    "ranges-load-failed": "Could not load the address ranges.",
+    "ranges-save-failed": "Could not save the change. Try again."
   },
   "spawn": {
     "model": {
