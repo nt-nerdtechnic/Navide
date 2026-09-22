@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { inject, onMounted, onUnmounted, ref, watch } from 'vue'
+import { inject, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { CLI_AGENT_SPECS } from '@navide/plugin-shell'
 import { cliAccountSwitchKey, tLogin, type useCliProfiles, type CliProfile } from '../composables/useCliProfiles'
 import PortableCredentialBlock from './PortableCredentialBlock.vue'
@@ -52,6 +52,62 @@ function rowName(agentKey: string, profile: CliProfile | null): string {
   // Signed in but the CLI stores no identity (kimi): fall back to the label.
   if (identity?.signedIn) return profile?.name ?? t('cli-account.default')
   return profile ? t('settings.accounts.cli.not-signed-in') : t('cli-account.default')
+}
+
+// The card's headline: the user's own name for the account when they gave it
+// one, the signed-in identity otherwise. With an alias the identity moves to
+// the line below rather than disappearing — for the vendors that expose an
+// email it is still how the account is recognised elsewhere.
+function cardAlias(agentKey: string, profile: CliProfile | null): string {
+  return props.api.aliasFor(agentKey, profile?.id ?? null) ?? ''
+}
+
+function cardTitle(agentKey: string, profile: CliProfile | null): string {
+  return cardAlias(agentKey, profile) || rowName(agentKey, profile)
+}
+
+function cardSubtitle(agentKey: string, profile: CliProfile | null): string {
+  return cardAlias(agentKey, profile) ? rowName(agentKey, profile) : ''
+}
+
+// ── Renaming a card ──────────────────────────────────────────────────────────
+// One row at a time, keyed by agent + slot because slot ids are unique but the
+// built-in Default's "__default__" repeats across vendors. The field holds the
+// ALIAS only: empty clears it and the card falls back to the identity.
+const renamingKey = ref<string | null>(null)
+const renameDraft = ref('')
+const renameInput = ref<HTMLInputElement | null>(null)
+// Esc must not be undone by the blur it causes.
+let renameAborted = false
+
+function slotKey(agentKey: string, profile: CliProfile | null): string {
+  return `${agentKey}/${profile?.id ?? '__default__'}`
+}
+
+function setRenameInput(el: unknown): void {
+  renameInput.value = (el as HTMLInputElement | null) ?? null
+}
+
+function startRename(agentKey: string, profile: CliProfile | null): void {
+  renamingKey.value = slotKey(agentKey, profile)
+  renameDraft.value = cardAlias(agentKey, profile)
+  renameAborted = false
+  void nextTick(() => {
+    renameInput.value?.focus()
+    renameInput.value?.select()
+  })
+}
+
+function cancelRename(): void {
+  renameAborted = true
+  renamingKey.value = null
+}
+
+async function commitRename(agentKey: string, profile: CliProfile | null): Promise<void> {
+  if (renameAborted || renamingKey.value !== slotKey(agentKey, profile)) return
+  const name = renameDraft.value.trim()
+  renamingKey.value = null
+  await props.api.rename(profile?.id ?? '__default__', name, agentKey)
 }
 
 // ── Duplicate accounts (two rows storing the same login) ─────────────────────
@@ -508,14 +564,38 @@ onMounted(() => void props.api.refreshCloud())
                 :class="{ default: !p }"
                 :style="p ? { background: avatarColor(p.id) } : undefined"
               >
-                {{ avatarInitial(rowName(spec.agentKey, p)) }}
+                {{ avatarInitial(cardTitle(spec.agentKey, p)) }}
               </span>
+              <input
+                v-if="renamingKey === slotKey(spec.agentKey, p)"
+                :ref="setRenameInput"
+                v-model="renameDraft"
+                class="cli-card-rename"
+                :placeholder="rowName(spec.agentKey, p)"
+                :aria-label="$t('settings.accounts.cli.rename')"
+                @keydown.enter.prevent="commitRename(spec.agentKey, p)"
+                @keydown.esc.prevent="cancelRename"
+                @blur="commitRename(spec.agentKey, p)"
+              />
               <span
+                v-else
                 class="cli-card-id"
                 :class="{ dim: p && !rowIdentity(spec.agentKey, p.id)?.signedIn }"
               >
-                {{ rowName(spec.agentKey, p) }}
+                {{ cardTitle(spec.agentKey, p) }}
               </span>
+              <!-- The built-in Default is renamable too: it is a real account
+                   like any other, and for a vendor with no email it is the
+                   only way to tell it apart. -->
+              <button
+                v-if="renamingKey !== slotKey(spec.agentKey, p)"
+                class="cli-card-rename-btn"
+                :title="$t('settings.accounts.cli.rename')"
+                :aria-label="$t('settings.accounts.cli.rename')"
+                @click="startRename(spec.agentKey, p)"
+              >
+                ✎
+              </button>
               <span
                 v-if="api.defaultProfileId(spec.agentKey) === (p?.id ?? null)"
                 class="cli-badge"
@@ -523,6 +603,10 @@ onMounted(() => void props.api.refreshCloud())
                 {{ $t('settings.accounts.cli.is-default') }}
               </span>
             </div>
+            <!-- With an alias on top, the signed-in identity moves here. -->
+            <span v-if="cardSubtitle(spec.agentKey, p)" class="cli-card-meta">{{
+              cardSubtitle(spec.agentKey, p)
+            }}</span>
             <span v-if="!p" class="cli-card-meta">{{
               rowIdentity(spec.agentKey, null)?.signedIn
                 ? $t('settings.accounts.cli.default-hint')
@@ -787,6 +871,36 @@ onMounted(() => void props.api.refreshCloud())
   white-space: nowrap;
 }
 .cli-card-id.dim { font-weight: 400; color: var(--text-muted); }
+.cli-card-rename-btn {
+  flex-shrink: 0;
+  visibility: hidden;
+  padding: 1px 4px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--font-2xs);
+  cursor: pointer;
+}
+.cli-card:hover .cli-card-rename-btn,
+.cli-card-rename-btn:focus-visible {
+  visibility: visible;
+}
+.cli-card-rename-btn:hover {
+  color: var(--accent-fg);
+  background: var(--bg-hover);
+}
+.cli-card-rename {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 6px;
+  border: 1px solid var(--accent-fg);
+  border-radius: 5px;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: var(--font-xs);
+  font-family: inherit;
+}
 .cli-card-meta { font-size: 10.5px; color: var(--text-secondary); }
 .cli-card-dup {
   display: flex;

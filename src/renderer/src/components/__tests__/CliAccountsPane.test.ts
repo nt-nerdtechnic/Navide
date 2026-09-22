@@ -59,6 +59,8 @@ interface ApiOptions {
   profiles?: CliProfile[]
   defaults?: CliProfileDefaults
   identities?: CliProfileIdentities
+  /** agentKey -> the user's alias for that agent's built-in Default slot. */
+  defaultNames?: Record<string, string>
   duplicates?: CliProfileDuplicates
   supported?: string[]
   error?: string
@@ -78,6 +80,7 @@ function makeApi(opts: ApiOptions = {}) {
   const profiles = ref<CliProfile[]>(opts.profiles ?? [])
   const defaults = ref<CliProfileDefaults>(opts.defaults ?? {})
   const identities = ref<CliProfileIdentities>(opts.identities ?? {})
+  const defaultNames = ref<Record<string, string>>(opts.defaultNames ?? {})
   const duplicates = ref<CliProfileDuplicates>(opts.duplicates ?? {})
   const supportedAgents = ref<string[]>(opts.supported ?? SUPPORTED)
   const error = ref<string>(opts.error ?? '')
@@ -90,6 +93,7 @@ function makeApi(opts: ApiOptions = {}) {
     profiles,
     defaults,
     identities,
+    defaultNames,
     duplicates,
     supportedAgents,
     loaded: ref(true),
@@ -114,6 +118,13 @@ function makeApi(opts: ApiOptions = {}) {
       id ? profiles.value.find((p) => p.id === id) : undefined,
     identityFor: (agentKey: string, profileId: string | null) =>
       identities.value[agentKey]?.[profileId ?? '__default__'] ?? null,
+    aliasFor: (agentKey: string, profileId: string | null | undefined) => {
+      if (profileId && profileId !== '__default__') {
+        const profile = profiles.value.find((p) => p.id === profileId)
+        return profile?.nameIsCustom ? profile.name : undefined
+      }
+      return defaultNames.value[agentKey] || undefined
+    },
     duplicateFor: (agentKey: string, profileId: string | null) =>
       duplicates.value[agentKey]?.[profileId ?? '__default__'] ?? null,
     portable,
@@ -271,6 +282,118 @@ describe('CliAccountsPane', () => {
       .map((n) => n.text())
     // Row 0 is the built-in Default (no identity -> "Default" label).
     expect(names).toEqual(['Default', 'me@example.com', 'Account 3', 'Not signed in'])
+  })
+
+  // ── renaming a card ────────────────────────────────────────────────────────
+
+  it('leads with the name the user gave an account and keeps the identity below it', () => {
+    const api = makeApi({
+      profiles: [{ ...profile('p1', 'claude', 'Work'), nameIsCustom: true }],
+      identities: { claude: { p1: { email: 'me@example.com', signedIn: true } } },
+      defaultNames: { claude: 'Main' },
+    })
+    const w = mountPane(api)
+
+    const cards = section(w, 0).findAll('.cli-card')
+    expect(cards[0].get('.cli-card-id').text()).toBe('Main')
+    expect(cards[1].get('.cli-card-id').text()).toBe('Work')
+    // The email is how the account is recognised elsewhere; it moves down,
+    // it does not disappear.
+    expect(cards[1].get('.cli-card-meta').text()).toBe('me@example.com')
+  })
+
+  it('renames a profile card from the pencil, agent key included', async () => {
+    const api = makeApi({ profiles: [profile('p1', 'claude', 'Account 2')] })
+    const w = mountPane(api)
+
+    const card = section(w, 0).findAll('.cli-card')[1]
+    await card.get('.cli-card-rename-btn').trigger('click')
+    const input = w.get('input.cli-card-rename')
+    await input.setValue('Work')
+    await input.trigger('keydown.enter')
+    await flushPromises()
+
+    expect(api.rename).toHaveBeenCalledWith('p1', 'Work', 'claude')
+  })
+
+  it('renames the built-in Default card too — for a vendor with no email it is the only way to tell it apart', async () => {
+    const api = makeApi()
+    const w = mountPane(api)
+
+    const card = section(w, 0).findAll('.cli-card')[0]
+    await card.get('.cli-card-rename-btn').trigger('click')
+    const input = w.get('input.cli-card-rename')
+    await input.setValue('Main')
+    await input.trigger('keydown.enter')
+    await flushPromises()
+
+    expect(api.rename).toHaveBeenCalledWith('__default__', 'Main', 'claude')
+  })
+
+  it('an emptied field clears the alias rather than storing a blank name', async () => {
+    const api = makeApi({
+      profiles: [{ ...profile('p1', 'claude', 'Work'), nameIsCustom: true }],
+    })
+    const w = mountPane(api)
+
+    const card = section(w, 0).findAll('.cli-card')[1]
+    await card.get('.cli-card-rename-btn').trigger('click')
+    const input = w.get('input.cli-card-rename')
+    expect((input.element as HTMLInputElement).value).toBe('Work')
+    await input.setValue('   ')
+    await input.trigger('keydown.enter')
+    await flushPromises()
+
+    expect(api.rename).toHaveBeenCalledWith('p1', '', 'claude')
+  })
+
+  it('a cleared alias leaves the card on the identity the backend regenerates', async () => {
+    const api = makeApi({
+      profiles: [{ ...profile('p1', 'claude', 'Work'), nameIsCustom: true }],
+      identities: { claude: { p1: { email: 'me@example.com', signedIn: true } } },
+    })
+    // What the backend does with an empty name: the custom flag goes and the
+    // generated "Account N" comes back.
+    ;(api.rename as ReturnType<typeof vi.fn>).mockImplementation(async (id: string, name: string) => {
+      api.profiles.value = api.profiles.value.map((p) =>
+        p.id === id
+          ? name
+            ? { ...p, name, nameIsCustom: true }
+            : { id, agentKey: p.agentKey, name: 'Account 2', createdAt: p.createdAt }
+          : p,
+      )
+      return null
+    })
+    const w = mountPane(api)
+    expect(section(w, 0).findAll('.cli-card')[1].get('.cli-card-id').text()).toBe('Work')
+
+    const card = section(w, 0).findAll('.cli-card')[1]
+    await card.get('.cli-card-rename-btn').trigger('click')
+    const input = w.get('input.cli-card-rename')
+    await input.setValue('')
+    await input.trigger('keydown.enter')
+    await flushPromises()
+
+    const after = section(w, 0).findAll('.cli-card')[1]
+    expect(after.get('.cli-card-id').text()).toBe('me@example.com')
+    // With no alias on top there is no second line repeating the identity.
+    expect(after.find('.cli-card-meta').exists()).toBe(false)
+  })
+
+  it('Esc leaves the name alone, blur included', async () => {
+    const api = makeApi({ profiles: [profile('p1', 'claude', 'Account 2')] })
+    const w = mountPane(api)
+
+    const card = section(w, 0).findAll('.cli-card')[1]
+    await card.get('.cli-card-rename-btn').trigger('click')
+    const input = w.get('input.cli-card-rename')
+    await input.setValue('Work')
+    await input.trigger('keydown.esc')
+    await input.trigger('blur')
+    await flushPromises()
+
+    expect(api.rename).not.toHaveBeenCalled()
+    expect(w.find('input.cli-card-rename').exists()).toBe(false)
   })
 
   // ── duplicate accounts ─────────────────────────────────────────────────────
