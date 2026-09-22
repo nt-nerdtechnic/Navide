@@ -27,6 +27,9 @@ class FakeTerminals:
     def __init__(self, ids: list[str]) -> None:
         self._sessions = {i: SimpleNamespace(id=i, closed=False) for i in ids}
 
+    def get(self, session_id: str) -> SimpleNamespace | None:
+        return self._sessions.get(session_id)
+
     def force_redraw(self, *_args: Any, **_kwargs: Any) -> None:
         return None
 

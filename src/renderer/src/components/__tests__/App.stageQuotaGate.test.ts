@@ -135,7 +135,7 @@ describe('the loop no longer resends into an exhausted CLI', () => {
     // null, and the next poll used to fall through to auto-continue.
     const watcher = body('function startLoopLimitWatcher(', '}, LOOP_LIMIT_POLL_MS)')
     const call = watcher.slice(watcher.indexOf('loopContinueReady({'))
-    expect(call).toContain('quotaBlocked: pane.usageLimitAt != null')
+    expect(call).toContain('quotaBlocked: paneUsageLimited(paneId)')
   })
 })
 

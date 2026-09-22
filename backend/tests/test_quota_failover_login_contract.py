@@ -17,19 +17,235 @@ account switch never loses the outgoing account.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
-from agent_team_backend import app, usage_service
+from agent_team_backend import app, usage_service, ws_handlers
 from agent_team_backend.credential_vault import LiveCredentials
 from agent_team_backend.db import Database
 from agent_team_backend.profiles_store import CliProfilesStore
 from agent_team_backend.quota_failover import QuotaFailoverService
+
+
+async def test_scoped_login_watch_harvests_completed_login(rig, monkeypatch):
+    profile = rig.store.create(agent_key="pi", name="Scoped", scope="xai")
+    slot = profile["id"]
+    rig.vault.login_spawn_env("pi", slot, scope="xai")
+    home = rig.vault.login_home_path("pi", slot)
+    (home / "auth.json").write_text(json.dumps({"xai": {"type": "oauth", "access": "NEW"}}), encoding="utf-8")
+    ticks = iter([0.0, 0.0, 11.0])
+    monkeypatch.setattr(usage_service, "time", SimpleNamespace(monotonic=lambda: next(ticks)))
+    monkeypatch.setattr(usage_service, "LOGIN_WATCH_TIMEOUT_SEC", 10)
+    monkeypatch.setattr(usage_service, "LOGIN_WATCH_INTERVAL_SEC", 0)
+    await usage_service._login_watch("pi", slot)
+    assert rig.vault.read_slot("pi", slot, scope="xai").secret is not None
+    assert not home.exists()
+
+
+async def test_scoped_active_profile_relogin_restores_live(rig):
+    profile = rig.store.create(agent_key="pi", name="Scoped", scope="xai")
+    slot = profile["id"]
+    old = LiveCredentials(secret=json.dumps({"type": "oauth", "access": "OLD"}))
+    other = LiveCredentials(secret=json.dumps({"type": "oauth", "access": "OTHER"}))
+    rig.vault.write_slot("pi", slot, old, scope="xai")
+    rig.vault.write_live("pi", old, scope="xai")
+    rig.vault.write_live("pi", other, scope="anthropic")
+    rig.store.set_default("pi", slot)
+    rig.vault.login_spawn_env("pi", slot, scope="xai")
+    home = rig.vault.login_home_path("pi", slot)
+    (home / "auth.json").write_text(json.dumps({"xai": {"type": "oauth", "access": "NEW"}}), encoding="utf-8")
+    assert await usage_service._harvest_login_home_locked(rig.vault, "pi", slot)
+    assert json.loads(rig.vault.read_live("pi", scope="xai").secret)["access"] == "NEW"
+    assert json.loads(rig.vault.read_live("pi", scope="anthropic").secret)["access"] == "OTHER"
+
+
+async def test_rejected_duplicate_live_login_preserves_snapshot_bytes(rig):
+    s = session()
+    rig.vault.write_live("kilo", LiveCredentials(secret=secret("kilo", "A")))
+    slot = rig.store.create(agent_key="kilo", name="B")["id"]
+    assert (await spawn_login_pane(s, "kilo", slot))["ok"]
+    snapshot = rig.vault._pre_login_snapshot_path("kilo", slot)
+    original_bytes = snapshot.read_bytes()
+    register_login_pane(s, "kilo", slot)
+    term = s.terminals.registry["login-1"]
+    term.metadata["live_login"] = True
+    rig.vault.write_live("kilo", LiveCredentials(secret=secret("kilo", "B")))
+    duplicate = await spawn_login_pane(s, "kilo", slot, msg_id="duplicate")
+    assert not duplicate["ok"] and duplicate["error"]["code"] == "LOGIN_BLOCKED_BY_LIVE_PANES"
+    assert snapshot.exists() and snapshot.read_bytes() == original_bytes
+    term.closed = True
+    assert await usage_service._harvest_login_home_locked(rig.vault, "kilo", slot)
+    assert same(rig.vault.read_live("kilo").secret, secret("kilo", "A"))
+    assert same(rig.vault.read_slot("kilo", slot).secret, secret("kilo", "B"))
+
+
+@pytest.mark.parametrize("competitor", ["same-profile", "other-profile", "regular"])
+async def test_live_login_reserves_store_under_spawn_lock(rig, monkeypatch, competitor):
+    s = session()
+    second_session = session()
+    rig.vault.write_live("kilo", LiveCredentials(secret=secret("kilo", "A")))
+    slot = rig.store.create(agent_key="kilo", name="B")["id"]
+    other = rig.store.create(agent_key="kilo", name="C")["id"]
+    waiting = asyncio.Event()
+
+    class ObservedLock(asyncio.Lock):
+        async def acquire(self):
+            if self.locked():
+                waiting.set()
+            return await super().acquire()
+
+    lock = ObservedLock()
+    monkeypatch.setattr(rig.vault, "switch_lock", lambda _agent: lock)
+    entered, release = threading.Event(), threading.Event()
+    snapshots = []
+    original = rig.vault.login_spawn_env
+
+    def paused(*args, **kwargs):
+        assert lock.locked()
+        result = original(*args, **kwargs)
+        snapshots.append(rig.vault._pre_login_snapshot_path("kilo", slot).read_bytes())
+        entered.set()
+        assert release.wait(5)
+        return result
+
+    monkeypatch.setattr(rig.vault, "login_spawn_env", paused)
+    tasks = [asyncio.create_task(spawn_login_pane(s, "kilo", slot))]
+    try:
+        assert await asyncio.to_thread(entered.wait, 2)
+        if competitor == "regular":
+            request = call(s, "terminal.create", {
+                "agent_key": "kilo", "pane_id": "regular-new", "cwd": "/ws",
+                "command": ["kilo"], "cols": 80, "rows": 24,
+            }, msg_id="competitor")
+        else:
+            request = spawn_login_pane(second_session, "kilo", slot if competitor == "same-profile" else other,
+                                       msg_id="competitor")
+        tasks.append(asyncio.create_task(request))
+        await asyncio.wait_for(waiting.wait(), 2)
+        release.set()
+        first, second = await asyncio.gather(*tasks)
+        assert first["ok"] and not second["ok"]
+        assert second["error"]["code"] == (
+            "LOGIN_IN_PROGRESS" if competitor == "regular" else "LOGIN_BLOCKED_BY_LIVE_PANES")
+        assert len(s.terminals.created) == 1
+        assert not second_session.terminals.created
+        assert len(snapshots) == 1
+        assert rig.vault._pre_login_snapshot_path("kilo", slot).read_bytes() == snapshots[0]
+        assert not rig.vault.login_pending("kilo", other)
+    finally:
+        release.set()
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+    assert not lock.locked()
+
+
+async def test_login_lock_timeout_responds_without_snapshot_or_pty(rig, monkeypatch):
+    slot = rig.store.create(agent_key="kilo", name="B")["id"]
+    lock = rig.vault.switch_lock("kilo")
+    await lock.acquire()
+    monkeypatch.setattr(ws_handlers, "_SWITCH_LOCK_TIMEOUT_SEC", 0.01)
+    s = session()
+    try:
+        answer = await spawn_login_pane(s, "kilo", slot)
+        assert not answer["ok"]
+        assert not s.terminals.created
+        assert not rig.vault.login_pending("kilo", slot)
+        assert not s._terminal_create_transactions
+        assert lock.locked()  # A failed waiter must not release somebody else's lock.
+    finally:
+        lock.release()
+
+
+async def test_manual_hot_switch_announces_only_proven_vault_panes(rig):
+    first, second = session(), session()
+    old = active_account(rig, "claude")
+    target = rig.store.create(agent_key="claude", name="B")["id"]
+    rig.vault.write_slot("claude", target, LiveCredentials(secret=secret("claude", "B")))
+    panes = []
+    sources = ("vault", "vault", "env-override", "portable", "unknown", "vault", "vault", "vault")
+    for index, source in enumerate(sources):
+        owner = first if index % 2 == 0 else second
+        term = SimpleNamespace(id=f"term-{index}", pane_id=f"pane-{index}", agent_key="claude", closed=False,
+                               metadata={"workspace_path": "/ws", "launch_profile_id": old,
+                                         "auth_scope": "claude", "credential_source": source})
+        if index == 5:
+            term.metadata["login_profile_id"] = "another-login"
+        if index == 6:
+            term.metadata["auth_scope"] = "other-pool"
+        if index == 7:
+            term.closed = True
+        owner.terminals.registry[term.id] = term
+        app._PTY_OWNERS[term.id] = owner
+        app.pane_account_history.pin(term.pane_id, old)
+        panes.append(term)
+    answer = await call(first, "cli_profiles.set_default", {"agent_key": "claude", "profile_id": target})
+    assert answer["ok"], answer
+    changed = [e["payload"] for e in rig.events if e["type"] == "cli_profiles.changed"][-1]
+    assert changed["hotSwitchedPanes"] == [
+        {"paneId": "pane-0", "termId": "term-0", "profileId": target},
+        {"paneId": "pane-1", "termId": "term-1", "profileId": target},
+    ]
+    assert [p.metadata["launch_profile_id"] for p in panes] == [target, target] + [old] * 6
+    assert app.pane_account_history.profile_at("pane-0", float("inf")) == target
+    assert app.pane_account_history.profile_at("pane-2", float("inf")) == old
+    before = len(rig.events)
+    noop = await call(first, "cli_profiles.set_default", {"agent_key": "claude", "profile_id": target}, msg_id="noop")
+    assert noop["ok"] and len(rig.events) == before
+    rejected = await call(first, "cli_profiles.set_default", {"agent_key": "claude", "profile_id": "absent"}, msg_id="bad")
+    assert not rejected["ok"] and len(rig.events) == before
+    rig.vault.write_slot("claude", "__default__", LiveCredentials(secret=secret("claude", "Default")))
+    default = await call(first, "cli_profiles.set_default", {"agent_key": "claude", "profile_id": None}, msg_id="default")
+    assert default["ok"]
+    changed = [e["payload"] for e in rig.events if e["type"] == "cli_profiles.changed"][-1]
+    assert [row["profileId"] for row in changed["hotSwitchedPanes"]] == [None, None]
+
+
+async def test_manual_hot_broadcast_drops_rows_overtaken_by_another_window(rig, monkeypatch):
+    first, second = session(), session()
+    old = active_account(rig, "claude")
+    b, c = (rig.store.create(agent_key="claude", name=name)["id"] for name in ("B", "C"))
+    for slot in (b, c):
+        rig.vault.write_slot("claude", slot, LiveCredentials(secret=secret("claude", slot)))
+    term = SimpleNamespace(id="term", pane_id="pane", agent_key="claude", closed=False,
+                           metadata={"launch_profile_id": old, "auth_scope": "claude", "credential_source": "vault"})
+    first.terminals.registry[term.id] = term
+    app._PTY_OWNERS[term.id] = first
+    reached, release = asyncio.Event(), asyncio.Event()
+
+    async def broadcast(event, **_kwargs):
+        rig.events.append(event)
+        if event["type"] == "quota_failover.changed" and not reached.is_set():
+            reached.set()
+            await release.wait()
+
+    monkeypatch.setattr(app, "broadcast", broadcast)
+    pending = asyncio.create_task(call(first, "cli_profiles.set_default", {"agent_key": "claude", "profile_id": b}))
+    try:
+        await asyncio.wait_for(reached.wait(), 1)
+        assert (await call(second, "cli_profiles.set_default", {"agent_key": "claude", "profile_id": c}))["ok"]
+        release.set()
+        assert (await pending)["ok"]
+    finally:
+        release.set()
+        if not pending.done():
+            pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
+    changed = [event["payload"] for event in rig.events if event["type"] == "cli_profiles.changed"]
+    assert len(changed) == 2
+    assert [event["defaults"]["claude"] for event in changed] == [c, c]
+    assert changed[0]["hotSwitchedPanes"] == [{"paneId": "pane", "termId": "term", "profileId": c}]
+    assert changed[1]["hotSwitchedPanes"] == []
+    assert term.metadata["launch_profile_id"] == c
+    assert app.pane_account_history.profile_at("pane", float("inf")) == c
 
 # Per-vendor credential payloads in the shape the vault stores for that
 # vendor's credential store (a Keychain item map, a pointer entry, a file).

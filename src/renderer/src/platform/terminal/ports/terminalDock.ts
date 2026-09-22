@@ -4,6 +4,8 @@ import type { ShellCommandOptions } from '../../../../../shared/osplat'
 import type { InjectionKey } from 'vue'
 
 export interface TerminalSpawnOptions {
+  quotaTransactionId?: string
+  quotaOriginalPaneId?: string
   command: string | string[]
   cwd: string
   env?: Record<string, string>
@@ -28,6 +30,8 @@ export interface TerminalSpawnOptions {
 }
 
 export interface TerminalCreateRequest {
+  quotaTransactionId?: string
+  quotaOriginalPaneId?: string
   paneId: string
   createGeneration: string
   agentKey: string | null

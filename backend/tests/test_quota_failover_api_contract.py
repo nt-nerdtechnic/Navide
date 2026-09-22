@@ -150,10 +150,12 @@ CLAUDE_OK_SECRET = json.dumps({"claudeAiOauth": {
 def snapshot(*, used: float, fetched_at: float, resets_at: float | None = None,
              stale: bool = False, kind: str = "session") -> dict[str, Any]:
     return {
-        "status": "ok", "stale": stale,
+        "provider": "claude", "status": "ok", "stale": stale,
         "fetchedAt": iso(fetched_at), "lastSuccessAt": iso(fetched_at),
         "windows": [{"kind": kind, "usedPercent": used,
-                     "resetsAt": iso(resets_at if resets_at is not None else fetched_at + 3600)}],
+                     "resetsAt": iso(resets_at if resets_at is not None else fetched_at + 3600)}]
+                   + ([{"kind": "weekly", "usedPercent": used, "resetsAt": iso(fetched_at + 86400)}]
+                      if kind == "session" else []),
     }
 
 
@@ -461,6 +463,23 @@ def prepare_events(s: app.Session) -> list[dict[str, Any]]:
 def ready_ack(tx_id: str, pane_id: str, **extra: Any) -> dict[str, Any]:
     return {"transaction_id": tx_id, "pane_id": pane_id, "ready": True, "idle": "turn-boundary",
             "resume": {"resumable": True, "session_id": f"sess-{pane_id}"}, **extra}
+
+
+@pytest.mark.parametrize("check", ["restart-field", "withdraw-order"])
+async def test_manual_restart_switch_withdraws_proposal_before_profiles_changed(rig, check):
+    w1, _w2, _a, b, _incident = await _codex_two_windows(rig)
+    rig.events.clear()
+    ok(await call(w1, "cli_profiles.set_default", {"agent_key": "codex", "profile_id": b, "force": True}))
+    changed_index = next(i for i, event in enumerate(rig.events) if event["type"] == "cli_profiles.changed")
+    changed = rig.events[changed_index]["payload"]
+    assert changed["forced"] is True
+    if check == "restart-field":
+        assert "hotSwitchedPanes" not in changed
+    else:
+        quota_index = next(i for i, event in enumerate(rig.events) if event["type"] == "quota_failover.changed")
+        assert quota_index < changed_index
+        assert not rig.events[quota_index]["payload"]["transactions"]
+        assert rig.service.epoch("codex") == 1
 
 
 async def test_restart_vendor_asks_every_owning_window_and_waits_for_busy_panes_without_forcing(rig) -> None:

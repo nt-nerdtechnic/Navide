@@ -195,6 +195,14 @@ describe('useTerminal — scrollback handoff', () => {
     scope.stop()
   })
 
+  it('carries quota lineage through the real fresh-create path without replacing a live terminal', async () => {
+    const { mock, scope } = await spawnPane({ restoreMode: 'fresh', skipReattach: true, quotaTransactionId: 'tx-1', quotaOriginalPaneId: 'old-pane' })
+    const create = mock.sent.find((s) => s.type === 'terminal.create')!
+    expect(create.payload).toMatchObject({ quota_transaction_id: 'tx-1', quota_original_pane_id: 'old-pane', replaces_terminal_id: null })
+    expect(mock.sent.some((s) => s.type === 'terminal.input' || s.type === 'terminal.kill')).toBe(false)
+    scope.stop()
+  })
+
   it('a fresh spawn without a handoff replays nothing — the ordinary rebuild is unchanged', async () => {
     localStorage.setItem('terminal-scroll:cli-session', 'nv1\nSTORED')
     const { scope } = await spawnPane({ resumeKey: 'cli-session', restoreMode: 'fresh', isResume: true })

@@ -108,7 +108,7 @@ describe('quota failover wiring: commit', () => {
       expect(body, name).not.toContain('kickoffPrompt')
     }
     const clear = functionBody('clearPaneUsageLimit')
-    expect(clear).toContain('if (waitingOnThisLimit && !opts.resumeLoop)')
+    expect(clear).toContain('if (pane.loopActive && !opts.resumeLoop)')
     expect(clear).toContain('pane.resumeContinueAvailable = true')
   })
 
@@ -154,7 +154,7 @@ describe('quota failover wiring: commit', () => {
 })
 
 describe('quota failover wiring: pipeline gate', () => {
-  it('holds the stage quota gate on affected panes from commit until verified recovery, a current reading, or the user', () => {
+  it('holds the stage quota gate on affected panes from commit until backend verified recovery or the user', () => {
     expect(functionBody('paneUsageLimited')).toContain('pane?.quotaGateIncidentId != null')
     const init = appSource.slice(appSource.indexOf('quotaFailover.initQuotaFailover(backend, {'))
     const commit = init.slice(init.indexOf('onSwitchCommitted:'), init.indexOf('onIncidentReady:'))
@@ -167,7 +167,7 @@ describe('quota failover wiring: pipeline gate', () => {
     expect(appSource).not.toContain("inc.state === 'notify-stopped') releaseQuotaGate")
     // Evidence that does: a current reading with headroom, or the user's dismiss.
     const check = functionBody('checkPaneUsageLimit')
-    expect(check).toContain('if (pane.quotaGateIncidentId && hasHeadlineHeadroom(usageFor(pane.agentKey))) {')
+    expect(check).not.toContain('pane.quotaGateIncidentId = null')
     expect(functionBody('dismissPaneUsageLimit')).toContain('pane.quotaGateIncidentId = null')
   })
 

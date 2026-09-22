@@ -211,6 +211,8 @@ export function createPluginTerminalDockPort(sdk: PluginCapabilitySdk): Terminal
       login_profile_id: requestBody.loginProfileId,
       is_login: requestBody.isLogin,
       replaces_terminal_id: requestBody.replacesTerminalId,
+      ...(requestBody.quotaTransactionId ? { quota_transaction_id: requestBody.quotaTransactionId } : {}),
+      ...(requestBody.quotaOriginalPaneId ? { quota_original_pane_id: requestBody.quotaOriginalPaneId } : {}),
     }, timeoutMs),
     cancelCreate: (paneId, createGeneration) => request('terminal.create.cancel', {
       pane_id: paneId,

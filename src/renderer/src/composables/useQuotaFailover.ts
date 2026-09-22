@@ -90,7 +90,9 @@ export interface FailoverTransactionPane {
   settle: null | 'resumed' | 'failed' | 'new-conversation'
   settleReason: string | null
   sessionId?: string
+  newPaneId?: string
   newTermId?: string
+  newSessionId?: string
 }
 
 export type FailoverTransactionState =
@@ -101,6 +103,12 @@ export type FailoverTransactionState =
   | 'cancelled'
   | 'failed'
   | 'partial'
+
+export interface HotSwitchedPane {
+  paneId: string
+  termId: string
+  profileId: string | null
+}
 
 export interface FailoverTransaction {
   id: string
@@ -124,6 +132,7 @@ export interface FailoverTransaction {
   /** Panes whose credential comes from their environment: the swap cannot
    *  reach them, so they are neither restarted nor counted as switched. */
   overriddenPanes?: string[]
+  hotSwitchedPanes?: HotSwitchedPane[]
   /** What the vault saw live when it refused (live-drift): display only. */
   liveIdentity?: { email?: string | null; signedIn?: boolean } | null
   /** live-drift-unverified: digest of the live credential the refusal saw
@@ -176,6 +185,8 @@ export interface FailoverCandidate {
 
 export interface PrepareEventPane {
   paneId: string
+  /** Explicit retry may act on a replacement while retaining the tx key. */
+  originalPaneId?: string
   termId: string
   agentKey: string
   workspacePath: string
@@ -195,6 +206,7 @@ export interface PrepareEvent {
 }
 
 export interface CommitEvent {
+  hotSwitchedPanes?: HotSwitchedPane[]
   transactionId: string
   incidentId: string
   agentKey: string
@@ -363,6 +375,12 @@ const knownTransactions = new Map<string, FailoverTransaction>()
 const candidateCache = new Map<string, { at: string; list: FailoverCandidate[] }>()
 /** Transactions this window has already restarted panes for: (tx, pane). */
 const restarted = new Set<string>()
+// Keep completed work across a lost settle response. Reconnect retries proof,
+// never the already completed rebuild.
+const pendingRestarts = new Map<string, { ev: CommitEvent; pane: PrepareEventPane; result: RestartOutcome }>()
+/** Gate installation is independent of restart delivery, and once per pane:
+ *  replaying a commit must not re-block a pane whose recovery was verified. */
+const commitNotified = new Set<string>()
 /** Pane id after a restart → the transaction and the pane id it listed, so
  *  the turn-complete settle names the pane the backend knows. */
 const restartedPanes = new Map<string, { txId: string; originalPaneId: string; termId: string | null }>()
@@ -401,6 +419,17 @@ function applyState(next: FailoverState): void {
   state.value = next
   for (const inc of [...next.incidents, ...(next.recentIncidents ?? [])]) knownIncidents.set(inc.id, inc)
   for (const tx of [...next.transactions, ...(next.recentTransactions ?? [])]) knownTransactions.set(tx.id, tx)
+  for (const tx of next.transactions) {
+    if (tx.swapped && tx.closedAt === null && (tx.state === 'committed' || tx.state === 'partial')) {
+      notifyCommit(commitEvent(tx, tx.panes))
+      for (const p of tx.panes) {
+        if (p.newPaneId && p.newTermId && hooks?.ownsPane(p.newPaneId) && hooks.paneTermId(p.newPaneId) === p.newTermId &&
+          (!p.newSessionId || hooks.paneSessionId(p.newPaneId) === p.newSessionId)) {
+          notifyCommit(commitEvent(tx, [{ ...p, paneId: p.newPaneId, termId: p.newTermId }]))
+        }
+      }
+    }
+  }
   // An incident the backend stopped listing without a terminal state (it
   // keeps only open ones) is closed as far as we can tell; keep what we
   // last saw rather than invent a result.
@@ -501,16 +530,15 @@ async function loadState(): Promise<void> {
   }
 }
 
-/** After a (re)connect: answer prepares still waiting on our panes, and
- *  report restarts we already made (a pane whose PTY is no longer the one the
- *  transaction listed was restarted before this window came back). */
+/** After reconnect, replay local results or restore backend-validated pane
+ *  associations. A changed PTY alone is not proof of our restart. */
 async function reconcile(): Promise<void> {
   const h = hooks
   const s = state.value
   if (!h || !s) return
   for (const tx of s.transactions) {
+    if (tx.epochAfter !== null && (s.epochs[tx.agentKey] ?? tx.epochAfter) > tx.epochAfter) continue
     const mine = tx.panes.filter((p) => h.ownsPane(p.paneId))
-    if (mine.length === 0) continue
     if (tx.state === 'preparing' || tx.state === 'waiting-safe') {
       const ev: PrepareEvent = {
         transactionId: tx.id, incidentId: tx.incidentId, agentKey: tx.agentKey, authScope: tx.authScope,
@@ -518,33 +546,71 @@ async function reconcile(): Promise<void> {
         automatic: tx.automatic, deadlineAt: '', panes: mine.filter((p) => p.ack !== 'ready'),
       }
       if (ev.panes.length > 0) await onPrepare(ev)
-    } else if (tx.state === 'committed' || tx.state === 'partial') {
-      for (const p of mine) {
-        if (p.settle !== null || tx.switchMode === 'hot') continue
-        const termNow = h.paneTermId(p.paneId)
-        const sessionNow = h.paneSessionId(p.paneId)
-        if (termNow && termNow !== p.termId) {
-          // A new PTY since the commit. It is OUR resume only if the pane is
-          // still on the session the transaction listed — a pane the user
-          // restarted into a fresh conversation is a new conversation, not
-          // a resumed one, and is reported as such.
-          restarted.add(`${tx.id}:${p.paneId}`)
-          const resumed = !!p.sessionId && sessionNow === p.sessionId
-          void send('quota_failover.settle', {
-            transaction_id: tx.id, pane_id: p.paneId, outcome: resumed ? 'resumed' : 'new-conversation',
-            term_id: termNow, session_id: resumed ? p.sessionId : '',
-          })
-        } else if (!restarted.has(`${tx.id}:${p.paneId}`)) {
-          const ev: CommitEvent = {
-            transactionId: tx.id, incidentId: tx.incidentId, agentKey: tx.agentKey, authScope: tx.authScope,
-            fromSlotId: tx.fromSlotId, toSlotId: tx.toSlotId, epoch: tx.epochAfter, switchMode: tx.switchMode,
-            restartStrategy: tx.restartStrategy, state: tx.state, needsLogin: false, needsLoginReason: null, panes: [p],
+    } else if (tx.swapped && tx.closedAt === null && (tx.state === 'committed' || tx.state === 'partial')) {
+      for (const p of tx.panes) {
+        const key = `${tx.id}:${p.paneId}`
+        if (pendingRestarts.has(key)) {
+          await settleRestart(key)
+        } else if (p.newPaneId && p.newTermId && h.ownsPane(p.newPaneId) && h.paneTermId(p.newPaneId) === p.newTermId &&
+          (!p.newSessionId || h.paneSessionId(p.newPaneId) === p.newSessionId)) {
+          restarted.add(key)
+          restartedPanes.set(p.newPaneId, { txId: tx.id, originalPaneId: p.paneId, termId: p.newTermId })
+          notifyCommit(commitEvent(tx, [{ ...p, paneId: p.newPaneId, termId: p.newTermId }]))
+          // The server may have recorded the create before the renderer lost
+          // its settle result. Lineage permits submitting proof, not claiming
+          // readiness: only an accepted settle validates the session.
+          if (tx.state === 'committed' && p.settle === null) {
+            const result: RestartOutcome = tx.restartStrategy === 'new-conversation'
+              ? { outcome: 'new-conversation', paneId: p.newPaneId, termId: p.newTermId }
+              : { outcome: 'resumed', paneId: p.newPaneId, termId: p.newTermId, sessionId: p.sessionId ?? h.paneSessionId(p.newPaneId) }
+            pendingRestarts.set(key, { ev: commitEvent(tx, [p]), pane: p, result })
+            await settleRestart(key)
           }
-          await onCommit(ev, { notifyApp: false })
+        } else if (tx.state === 'committed' && p.settle === null && tx.switchMode !== 'hot' && h.ownsPane(p.paneId) && h.paneTermId(p.paneId) === p.termId && !restarted.has(key)) {
+          await onCommit(commitEvent(tx, [p]))
         }
       }
     }
   }
+}
+
+async function settleRestart(key: string): Promise<boolean> {
+  const pending = pendingRestarts.get(key)
+  if (!pending) return true
+  const { ev, pane, result } = pending
+  const tx = knownTransactions.get(ev.transactionId)
+  const epoch = state.value?.epochs[ev.agentKey]
+  if (tx?.closedAt || (epoch !== undefined && ev.epoch !== null && epoch > ev.epoch)) return false
+  const res = await send('quota_failover.settle', {
+    transaction_id: ev.transactionId, pane_id: pane.paneId, outcome: result.outcome,
+    ...(result.outcome === 'failed' ? { reason: result.reason } : {
+      new_pane_id: result.paneId, term_id: result.termId ?? '',
+      session_id: result.outcome === 'resumed' ? (result.sessionId ?? '') : '',
+    }),
+  })
+  if (res.ok && pendingRestarts.get(key) === pending) pendingRestarts.delete(key)
+  return res.ok
+}
+
+function commitEvent(tx: FailoverTransaction, panes: PrepareEventPane[]): CommitEvent {
+  return {
+    transactionId: tx.id, incidentId: tx.incidentId, agentKey: tx.agentKey, authScope: tx.authScope,
+    fromSlotId: tx.fromSlotId, toSlotId: tx.toSlotId, epoch: tx.epochAfter, switchMode: tx.switchMode,
+    restartStrategy: tx.restartStrategy, state: tx.state === 'partial' ? 'partial' : 'committed',
+    needsLogin: false, needsLoginReason: null, panes,
+    hotSwitchedPanes: tx.hotSwitchedPanes,
+  }
+}
+
+function notifyCommit(ev: CommitEvent): void {
+  const h = hooks
+  if (!h) return
+  if (readyNotified.has(ev.incidentId)) return
+  if (knownTransactions.get(ev.transactionId)?.closedAt || (ev.epoch !== null && (state.value?.epochs[ev.agentKey] ?? ev.epoch) > ev.epoch)) return
+  const panes = ev.panes.filter((p) => h.ownsPane(p.paneId) && !commitNotified.has(`${ev.transactionId}:${p.paneId}`))
+  if (panes.length === 0) return
+  for (const p of panes) commitNotified.add(`${ev.transactionId}:${p.paneId}`)
+  h.onSwitchCommitted({ ...ev, panes })
 }
 
 function dropPendingPrepare(txId: string): void {
@@ -610,33 +676,50 @@ async function recheckPrepare(txId: string): Promise<void> {
   entry.timer = setTimeout(() => void recheckPrepare(txId), PREPARE_RECHECK_MS)
 }
 
-async function onCommit(ev: CommitEvent, opts: { notifyApp: boolean } = { notifyApp: true }): Promise<void> {
+function retryPane(pane: PrepareEventPane, txId: string): PrepareEventPane | null {
+  const h = hooks
+  if (!h) return null
+  const proof = knownTransactions.get(txId)?.panes.find((p) => p.paneId === pane.paneId)
+  const local = [...restartedPanes].find(([id, p]) => p.txId === txId && p.originalPaneId === pane.paneId &&
+    h.ownsPane(id) && p.termId !== null && h.paneTermId(id) === p.termId)
+  const id = local?.[0] ?? proof?.newPaneId
+  const termId = local?.[1].termId ?? proof?.newTermId
+  if (id && termId && h.ownsPane(id) && h.paneTermId(id) === termId) {
+    return { ...pane, paneId: id, termId, originalPaneId: pane.paneId }
+  }
+  return h.ownsPane(pane.paneId) && h.paneTermId(pane.paneId) === pane.termId ? pane : null
+}
+
+async function onCommit(ev: CommitEvent, opts: { notifyApp: boolean; retry?: boolean } = { notifyApp: true }): Promise<void> {
   const h = hooks
   if (!h) return
+  if (knownTransactions.get(ev.transactionId)?.closedAt || (ev.epoch !== null && (state.value?.epochs[ev.agentKey] ?? ev.epoch) > ev.epoch)) return
   dropPendingPrepare(ev.transactionId)
-  if (opts.notifyApp) h.onSwitchCommitted(ev)
+  if (opts.notifyApp) notifyCommit(ev)
   if (ev.switchMode === 'hot' || ev.restartStrategy === 'none') return
+  if (!opts.retry && (ev.state === 'partial' || knownTransactions.get(ev.transactionId)?.state === 'partial')) return
   const overridden = new Set(knownTransactions.get(ev.transactionId)?.overriddenPanes ?? [])
   for (const pane of ev.panes) {
-    if (!h.ownsPane(pane.paneId) || overridden.has(pane.paneId)) continue
+    const target = opts.retry ? retryPane(pane, ev.transactionId)
+      : h.ownsPane(pane.paneId) && h.paneTermId(pane.paneId) === pane.termId ? pane : null
+    if (!target || overridden.has(pane.paneId)) continue
     const key = `${ev.transactionId}:${pane.paneId}`
     if (restarted.has(key)) continue
     restarted.add(key)
-    const result = ev.restartStrategy === 'new-conversation'
-      ? await h.openNewConversation(pane, ev)
-      : await h.restartPane(pane, ev)
-    if (result.outcome === 'failed') {
-      await send('quota_failover.settle', { transaction_id: ev.transactionId, pane_id: pane.paneId, outcome: 'failed', reason: result.reason })
-      continue
+    let result: RestartOutcome
+    try {
+      result = ev.restartStrategy === 'new-conversation'
+        ? await h.openNewConversation(target, ev)
+        : await h.restartPane(target, ev)
+    } catch {
+      result = { outcome: 'failed', reason: 'restart-failed' }
     }
-    restartedPanes.set(result.paneId, { txId: ev.transactionId, originalPaneId: pane.paneId, termId: result.termId })
-    await send('quota_failover.settle', {
-      transaction_id: ev.transactionId,
-      pane_id: pane.paneId,
-      outcome: result.outcome,
-      term_id: result.termId ?? '',
-      session_id: result.outcome === 'resumed' ? (result.sessionId ?? '') : '',
-    })
+    pendingRestarts.set(key, { ev, pane, result })
+    if (result.outcome !== 'failed') {
+      restartedPanes.set(result.paneId, { txId: ev.transactionId, originalPaneId: pane.paneId, termId: result.termId })
+      notifyCommit({ ...ev, panes: [{ ...pane, paneId: result.paneId, termId: result.termId ?? '' }] })
+    }
+    await settleRestart(key)
   }
 }
 
@@ -644,8 +727,9 @@ async function onCommit(ev: CommitEvent, opts: { notifyApp: boolean } = { notify
  *  transaction (or is the pane a restart produced), that turn is the evidence
  *  the backend waits for — with the turn's own start time, so a turn that
  *  began under the old account cannot pass. */
-function noteTurnComplete(paneId: string, termId: string | null, turnStartedAt: number | null): void {
+async function noteTurnComplete(paneId: string, termId: string | null, turnStartedAt: number | null): Promise<void> {
   const restart = restartedPanes.get(paneId)
+  if (restart && restart.termId !== termId) return
   const candidates = restart
     ? [{ txId: restart.txId, originalPaneId: restart.originalPaneId }]
     : allTransactions()
@@ -654,6 +738,7 @@ function noteTurnComplete(paneId: string, termId: string | null, turnStartedAt: 
   for (const c of candidates) {
     const tx = knownTransactions.get(c.txId)
     if (!tx || tx.closedAt !== null) continue
+    if (pendingRestarts.has(`${c.txId}:${c.originalPaneId}`) && !await settleRestart(`${c.txId}:${c.originalPaneId}`)) continue
     void send('quota_failover.settle', {
       transaction_id: c.txId,
       pane_id: c.originalPaneId,
@@ -739,15 +824,16 @@ async function actOn(action: QuotaAnnouncementAction): Promise<void> {
       return
     }
     for (const p of tx.panes) {
-      if (p.settle !== 'failed' || !h.ownsPane(p.paneId)) continue
+      if (p.settle !== 'failed' || !retryPane(p, tx.id)) continue
       restarted.delete(`${tx.id}:${p.paneId}`)
+      pendingRestarts.delete(`${tx.id}:${p.paneId}`)
     }
     await onCommit({
       transactionId: tx.id, incidentId: tx.incidentId, agentKey: tx.agentKey, authScope: tx.authScope,
       fromSlotId: tx.fromSlotId, toSlotId: tx.toSlotId, epoch: tx.epochAfter, switchMode: tx.switchMode,
       restartStrategy: tx.restartStrategy, state: tx.state === 'partial' ? 'partial' : 'committed',
       needsLogin: false, needsLoginReason: null, panes: tx.panes.filter((p) => p.settle === 'failed'),
-    }, { notifyApp: false })
+    }, { notifyApp: false, retry: true })
     return
   }
   const incident = knownIncidents.get(action.incidentId)
@@ -847,6 +933,26 @@ function initQuotaFailover(b: Backend, h: QuotaFailoverHooks): void {
   offs.push(b.on('quota_failover.changed', (raw) => applyState(raw as FailoverState)))
   offs.push(b.on('quota_failover.prepare', (raw) => void onPrepare(raw as PrepareEvent)))
   offs.push(b.on('quota_failover.commit', (raw) => void onCommit(raw as CommitEvent)))
+  offs.push(b.on('session.detected', (raw) => {
+    const paneId = (raw as { pane_id?: string }).pane_id
+    for (const [key, pending] of pendingRestarts) {
+      if (pending.result.outcome !== 'failed' && pending.result.paneId === paneId) void settleRestart(key)
+    }
+  }))
+  // State can arrive before restore realizes the owned panes. Reconcile when
+  // their ownership/binding becomes available as well as on socket reconnect.
+  offs.push(watch(
+    [() => state.value, () => state.value?.transactions.flatMap((tx) => tx.panes.flatMap((p) => [p.paneId, p.newPaneId]
+      .filter((id): id is string => !!id)
+      .map((id) => `${id}:${h.ownsPane(id)}:${h.paneTermId(id)}:${h.paneSessionId(id)}`))).join('|')],
+    ([current], [previous]) => {
+      // New server state is handled by loadState/commit; this watcher only
+      // handles local pane realization or a later session binding.
+      if (!current || current !== previous) return
+      applyState(current)
+      void reconcile()
+    },
+  ))
   offs.push(
     watch(
       () => b.status.value,
@@ -868,6 +974,8 @@ function __resetQuotaFailoverForTest(): void {
   knownTransactions.clear()
   candidateCache.clear()
   restarted.clear()
+  pendingRestarts.clear()
+  commitNotified.clear()
   restartedPanes.clear()
   readyNotified.clear()
   for (const id of [...pendingPrepares.keys()]) dropPendingPrepare(id)

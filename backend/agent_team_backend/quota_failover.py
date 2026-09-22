@@ -98,10 +98,19 @@ REPORT_SOURCES = ("cli-text", "usage-window", "structured")
 # long of the report's own timestamp.
 STRUCTURED_MATCH_WINDOW_S = 10 * 60.0
 
-# Window kinds that bind an account (mirrors useUsage.ts HEADLINE_KINDS). A
-# per-model promotional bucket (kind "weekly-model") at 100 % is not enforced
-# by the provider and must never veto a candidate on its own.
-BINDING_KINDS = frozenset({"session", "weekly", "monthly"})
+# Mirrors each renderer vendor's quotaSemantics; a contract test pins parity.
+# Undeclared vendors may veto a known spent window, but cannot prove headroom.
+QUOTA_SEMANTICS = {
+    "claude": {"hard": ("session", "weekly"), "required": ("session", "weekly"), "scoped": ("weekly-model",)},
+    "codex": {"hard": ("session", "weekly"), "required": ("session",)},
+    "grok": {"hard": ("monthly",), "required": ("monthly",)},
+    "copilot": {"hard": ("monthly",), "required": ("monthly",)},
+    "pi": {"hard": ("credits",), "required": ("credits",)},
+    "cursor": {"hard": ("cycle",), "required": ("cycle",), "alternate": ("on-demand",)},
+    "kilo": {"hard": ("credits", "period"), "required": ()},
+    "qwen": {"hard": ("session", "weekly", "monthly"), "required": ("session",)},
+    "kimi": {"hard": ("weekly", "session"), "required": ("weekly",)},
+}
 EXHAUSTED_USED_PCT = 100.0
 
 INCIDENT_STATES = (
@@ -598,9 +607,9 @@ def live_drift(vault: Any, agent_key: str, current_slot_id: str, scope: str | No
 
 def _binding_windows(snapshot: dict[str, Any] | None) -> list[dict[str, Any]]:
     windows = [w for w in (snapshot or {}).get("windows", []) if isinstance(w, dict)]
-    binding = [w for w in windows if w.get("kind") in BINDING_KINDS]
-    if binding:
-        return binding
+    semantics = QUOTA_SEMANTICS.get(str((snapshot or {}).get("provider") or ""))
+    if semantics is not None:
+        return [w for w in windows if w.get("kind") in semantics["hard"]]
     return [w for w in windows if not str(w.get("kind") or "").endswith("-model")]
 
 
@@ -609,29 +618,57 @@ def _window_reset_passed(window: dict[str, Any], now: float) -> bool:
     return resets is not None and resets <= now
 
 
-def _window_exhausted(window: dict[str, Any], now: float) -> bool:
+def _finite_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _window_remaining(window: dict[str, Any]) -> float | None:
+    balance = window.get("balance")
+    if balance is not None:
+        return (100.0 if balance > 0 else 0.0) if _finite_number(balance) else None
+    if window.get("kind") == "credits":
+        limit, usage = window.get("limit"), window.get("usage")
+        if not _finite_number(limit) or limit <= 0:
+            return None
+        if usage is not None:
+            if not _finite_number(usage) or usage < 0:
+                return None
+            return max(0.0, min(100.0, 100.0 * (1.0 - usage / limit)))
     used = window.get("usedPercent")
-    return (
-        isinstance(used, (int, float)) and not isinstance(used, bool)
-        and float(used) >= EXHAUSTED_USED_PCT
-        and not _window_reset_passed(window, now)
-    )
+    if not _finite_number(used) or used < 0:
+        return None
+    return max(0.0, min(100.0, 100.0 - used))
+
+
+def _window_exhausted(window: dict[str, Any], now: float) -> bool:
+    return (_window_remaining(window) == 0 and not window.get("expired")
+            and not _window_reset_passed(window, now))
+
+
+def _quota_verdict(snapshot: dict[str, Any] | None, now: float) -> tuple[bool, bool, float | None]:
+    """One vendor verdict shared by signal validation, ranking and recovery."""
+    semantics = QUOTA_SEMANTICS.get(str((snapshot or {}).get("provider") or ""))
+    windows = _binding_windows(snapshot)
+    current = [w for w in windows if not w.get("expired") and not _window_reset_passed(w, now)]
+    spent = any(_window_exhausted(w, now) for w in windows)
+    if semantics and any(
+        isinstance(w, dict) and w.get("kind") in semantics.get("alternate", ())
+        and not w.get("expired") and not _window_reset_passed(w, now)
+        and (_window_remaining(w) or 0) > 0
+        for w in (snapshot or {}).get("windows", [])
+    ):
+        spent = False
+    remaining = [_window_remaining(w) for w in current]
+    measured = [value for value in remaining if value is not None]
+    positive = bool(semantics is not None and current and not spent and None not in remaining
+                    and set(semantics["required"]) <= {w.get("kind") for w in current})
+    return spent, positive, min(measured) if measured else None
 
 
 def snapshot_exhausted(snapshot: dict[str, Any] | None, now: float | None = None) -> bool:
     """A binding window at 100 % whose reset has not passed."""
     now = time.time() if now is None else now
-    return any(_window_exhausted(w, now) for w in _binding_windows(snapshot))
-
-
-def _weakest_headroom(windows: list[dict[str, Any]], now: float) -> float | None:
-    values = []
-    for w in windows:
-        used = w.get("usedPercent")
-        if isinstance(used, bool) or not isinstance(used, (int, float)):
-            continue
-        values.append(100.0 if _window_reset_passed(w, now) else 100.0 - float(used))
-    return min(values) if values else None
+    return _quota_verdict(snapshot, now)[0]
 
 
 def classify_candidate(
@@ -654,18 +691,19 @@ def classify_candidate(
     if fetched_at > now + FUTURE_STAMP_TOLERANCE_S:
         # A reading stamped in the future is a clock problem, not freshness.
         return "unknown", None, fetched_at
-    if any(_window_exhausted(w, now) for w in windows):
+    exhausted, positive, headroom = _quota_verdict(snapshot, now)
+    if exhausted:
         return "exhausted", 0.0, fetched_at
-    headroom = _weakest_headroom(windows, now)
     was_exhausted = any(
-        isinstance(w.get("usedPercent"), (int, float))
-        and float(w["usedPercent"]) >= EXHAUSTED_USED_PCT
+        _window_remaining(w) == 0
         and _window_reset_passed(w, now)
         for w in windows
     )
     if was_exhausted:
         return "reset-expected", headroom, fetched_at
-    stale = bool(snapshot.get("stale")) or snapshot.get("status") != "ok" \
+    if not positive:
+        return "unknown", headroom, fetched_at
+    stale = bool(snapshot.get("stale") or snapshot.get("staleExpired") or snapshot.get("refreshPending")) or snapshot.get("status") != "ok" \
         or (now - fetched_at) > FRESH_READING_MAX_AGE_S
     return ("stale-headroom" if stale else "fresh-headroom"), headroom, fetched_at
 
@@ -984,6 +1022,12 @@ class Transaction:
         self.epoch_after: int | None = None
         # pane_id -> {paneId, termId, workspacePath, agentKey, ack, ackReason, settle, settleReason}
         self.panes: dict[str, dict[str, Any]] = {}
+        self.restart_owners: dict[str, Any] = {}
+        self.restart_terms: dict[str, str] = {}
+        self.retry_requested = False
+        self.proof_after_at: float | None = None
+        self.proof_after_monotonic: float | None = None
+        self.hot_switched_panes: list[dict[str, Any]] = []
         self.created_at = now
         self.prepare_sent_at: float | None = None
         self.waiting_since: float | None = None
@@ -1034,6 +1078,7 @@ class Transaction:
             "epochBefore": self.epoch_before,
             "epochAfter": self.epoch_after,
             "panes": list(self.panes.values()),
+            "hotSwitchedPanes": self.hot_switched_panes,
             "overriddenPanes": list(self.overridden_panes),
             "createdAt": _now_iso(self.created_at),
             "committedAt": _now_iso(self.committed_at) if self.committed_at is not None else None,
@@ -1183,25 +1228,39 @@ class QuotaFailoverService:
         if live != DEFAULT_SLOT_ID and self._profile(agent_key, live) is None:
             raise FailoverRefused("BAD_REQUEST", f"unknown account slot: {live}")
         now = self._now()
+        lock = app.credential_vault.switch_lock(agent_key)
         try:
-            app.cli_profiles_store.set_default(agent_key, None if live == DEFAULT_SLOT_ID else live)
-        except Exception as err:  # noqa: BLE001 — still not persisted: still blocked
-            raise FailoverRefused("PERSIST_FAILED", f"could not persist the default: {err}") from err
-        self.store.mark_reconciled(transaction_id, live, now=now)
-        self._unreconciled.pop(agent_key, None)
-        self._bump_epoch(agent_key)
-        tx = self.transactions.get(transaction_id)
-        if tx is not None:
-            tx.reason = "reconciled"
-            tx.closed_at = tx.closed_at or now
+            await asyncio.wait_for(lock.acquire(), timeout=10.0)
+        except asyncio.TimeoutError as err:
+            raise FailoverRefused("SWITCH_LOCK_TIMEOUT", "could not acquire the credential switch lock") from err
+        try:
+            if self._unreconciled.get(agent_key) is not pending:
+                raise FailoverRefused("STALE_STATE", "the pending reconciliation changed")
+            try:
+                app.cli_profiles_store.set_default(agent_key, None if live == DEFAULT_SLOT_ID else live)
+            except Exception as err:  # noqa: BLE001 — still not persisted: still blocked
+                raise FailoverRefused("PERSIST_FAILED", f"could not persist the default: {err}") from err
+            self.store.mark_reconciled(transaction_id, live, now=now)
+            self._unreconciled.pop(agent_key, None)
+            self._bump_epoch(agent_key)
+            rebound = self.rebind_hot_panes(agent_key, live, pending["authScope"])
+            tx = self.transactions.get(transaction_id)
+            if tx is not None:
+                tx.hot_switched_panes = rebound
+                tx.reason = "reconciled"
+                tx.closed_at = tx.closed_at or now
+        finally:
+            lock.release()
         try:
             from .ws_handlers import _broadcast_profiles_changed
 
-            await _broadcast_profiles_changed("set_default", agent_key=agent_key, forced=False)
+            await _broadcast_profiles_changed("set_default", agent_key=agent_key, forced=False,
+                                              hot_switched_panes=rebound)
         except Exception:  # noqa: BLE001
             log.exception("quota_failover: profiles broadcast failed")
         await self._broadcast_changed()
-        return {"agentKey": agent_key, "liveSlotId": live, "transactionId": transaction_id}
+        return {"agentKey": agent_key, "liveSlotId": live, "transactionId": transaction_id,
+                "hotSwitchedPanes": rebound}
 
     async def set_policy(self, mode: str) -> dict[str, Any]:
         if mode not in POLICY_MODES:
@@ -1465,7 +1524,7 @@ class QuotaFailoverService:
                 agent_key, slot_id, source, str(payload.get("text") or ""), window_kind,
                 pane_id=pane_id, at=at,
             )
-        if attribution != "unknown" and at is not None:
+        if trusted and at is not None:
             try:
                 updated = await asyncio.to_thread(
                     app.quota_ledger.mark_exhausted, agent_key, slot_id, at, resets_at
@@ -1479,6 +1538,25 @@ class QuotaFailoverService:
                     "agent_key": agent_key, "profile_id": slot_id, "window_kind": kind,
                 }))
 
+        if not trusted:
+            # Unverified notices cannot chain/close an authoritative incident
+            # or poison the tried set that drives later candidate selection.
+            incident = next((inc for inc in self.incidents.values()
+                             if not inc.trusted and inc.agent_key == agent_key
+                             and inc.outgoing_slot_id == slot_id and idem in inc.reports), None) if idem else None
+            created = incident is None
+            if incident is None:
+                incident = Incident(agent_key=agent_key, auth_scope=auth_scope, outgoing_slot_id=slot_id,
+                                    epoch=epoch, now=now, trusted=False, attribution=attribution,
+                                    resets_at=resets_at, window_kind=window_kind, auto_allowed=False)
+                incident.reason, incident.closed_at = why, now
+                self.incidents[incident.id] = incident
+            if idem:
+                incident.reports.add(idem)
+            if pane_id:
+                incident.panes[pane_id] = workspace_path
+            await self._broadcast_changed()
+            return incident, created
         prior = self._open_incident_for_scope(agent_key, auth_scope)
         created = False
         if prior is not None and prior.outgoing_slot_id == slot_id:
@@ -1755,6 +1833,28 @@ class QuotaFailoverService:
         from . import app
 
         return app._PTY_OWNERS.get(term_id)
+
+    def rebind_hot_panes(self, agent_key: str, slot_id: str, auth_scope: str) -> list[dict[str, Any]]:
+        """Re-pin proven hot vault consumers; the caller holds the switch lock."""
+        from . import app
+
+        if capability(agent_key)["switchMode"] != "hot":
+            return []
+        rebound = []
+        for term_id, owner in list(app._PTY_OWNERS.items()):
+            lookup = getattr(getattr(owner, "terminals", None), "get", None)
+            term = lookup(term_id) if callable(lookup) else None
+            if term is None or getattr(term, "closed", False) or term.agent_key != agent_key:
+                continue
+            meta = term.metadata
+            if (meta.get("login_profile_id") or meta.get("credential_source") != "vault"
+                    or meta.get("auth_scope") != auth_scope):
+                continue
+            meta["launch_profile_id"] = slot_id
+            app.pane_account_history.pin(term.pane_id, slot_id, ts=self._now())
+            rebound.append({"paneId": term.pane_id, "termId": term_id,
+                            "profileId": None if slot_id == DEFAULT_SLOT_ID else slot_id})
+        return rebound
 
     def _pane_busy(self, pane_id: str) -> bool:
         """Backend-side defence only: the last activity event is a running
@@ -2092,6 +2192,7 @@ class QuotaFailoverService:
                 incident.reason = "pane-unowned"
                 return
             by_owner.setdefault(owner, []).append(pane)
+            tx.restart_owners[pane["paneId"]] = owner
         deadline = now + PREPARE_ACK_DEADLINE_S
         for owner, panes in by_owner.items():
             await owner.send_json(make_event("quota_failover.prepare", {
@@ -2372,6 +2473,7 @@ class QuotaFailoverService:
                     tx.agent_key, None if tx.to_slot_id == DEFAULT_SLOT_ID else tx.to_slot_id
                 )
                 tx.state = "committed"
+                tx.hot_switched_panes = self.rebind_hot_panes(tx.agent_key, tx.to_slot_id, tx.auth_scope)
             except Exception as err:  # noqa: BLE001 — live state moved; say so, do not roll back
                 tx.state = "partial"
                 tx.error = str(err)
@@ -2444,7 +2546,8 @@ class QuotaFailoverService:
         from .ws_handlers import _broadcast_profiles_changed
 
         try:
-            await _broadcast_profiles_changed("set_default", agent_key=tx.agent_key, forced=False)
+            await _broadcast_profiles_changed("set_default", agent_key=tx.agent_key, forced=False,
+                                              hot_switched_panes=tx.hot_switched_panes)
         except Exception:  # noqa: BLE001
             log.exception("quota_failover: profiles broadcast failed")
         try:
@@ -2467,6 +2570,7 @@ class QuotaFailoverService:
             "switchMode": tx.switch_mode,
             "restartStrategy": tx.restart_strategy,
             "state": tx.state,
+            "hotSwitchedPanes": tx.hot_switched_panes,
             "needsLogin": login_state != "ok",
             "needsLoginReason": None if login_state == "ok" else login_state,
             "panes": [
@@ -2479,7 +2583,109 @@ class QuotaFailoverService:
 
     # ── settling ──────────────────────────────────────────────────────────
 
-    async def settle(self, payload: dict[str, Any]) -> Transaction:
+    def _restart_context(self, transaction_id: str, pane_id: str) -> tuple[Transaction, dict[str, Any]]:
+        tx = self.transactions.get(transaction_id)
+        if tx is None:
+            raise FailoverRefused("NOT_FOUND", "unknown transaction")
+        pane = tx.panes.get(pane_id)
+        if (pane is None or tx.switch_mode != "restart" or not tx.swapped or tx.closed_at is not None
+                or tx.state not in ("committed", "partial")
+                or tx.state == "partial" and tx.reason != "resume-failed"):
+            raise FailoverRefused("BAD_RESTART_PROOF", "no committed restart for this pane")
+        if tx.epoch_after != self.epoch(tx.agent_key) or self._current_slot(tx.agent_key) != tx.to_slot_id:
+            raise FailoverRefused("STALE_EPOCH", "the restart belongs to an earlier account switch")
+        return tx, pane
+
+    @staticmethod
+    def _restart_provenance_matches(tx: Transaction, pane: dict[str, Any], agent_key: str,
+                                    metadata: dict[str, Any]) -> bool:
+        return (
+            agent_key == pane["agentKey"]
+            and metadata.get("workspace_path") == pane["workspacePath"]
+            and metadata.get("auth_scope") == tx.auth_scope
+            and metadata.get("credential_source") == "vault"
+            and metadata.get("launch_profile_id") == tx.to_slot_id
+            and metadata.get("credential_epoch") == tx.epoch_after
+            and not metadata.get("login_profile_id")
+        )
+
+    def validate_restart_spawn(self, transaction_id: str, pane_id: str, *, owner: Any,
+                               agent_key: str, metadata: dict[str, Any]) -> None:
+        """Validate a renderer's spawn claim while the credential lock is held."""
+        tx, pane = self._restart_context(transaction_id, pane_id)
+        if not tx.unsettled:
+            raise FailoverRefused("BAD_RESTART_PROOF", "the restart has already settled")
+        expected_owner = self._owner_of(pane["termId"]) or tx.restart_owners.get(pane_id)
+        if owner is not expected_owner or not self._restart_provenance_matches(tx, pane, agent_key, metadata):
+            raise FailoverRefused("BAD_RESTART_PROOF", "restart owner or credential provenance differs")
+        previous_id = tx.restart_terms.get(pane_id)
+        previous_owner = self._owner_of(previous_id) if previous_id else None
+        previous = previous_owner.terminals.get(previous_id) if previous_owner is not None else None
+        if previous is not None and not getattr(previous, "closed", False):
+            raise FailoverRefused("BAD_RESTART_PROOF", "this pane already has a live restart")
+
+    def record_restart_spawn(self, transaction_id: str, pane_id: str, term_id: str) -> None:
+        tx = self.transactions[transaction_id]
+        tx.restart_terms[pane_id] = term_id
+        owner = self._owner_of(term_id)
+        term = owner.terminals.get(term_id) if owner is not None else None
+        if term is not None:
+            tx.panes[pane_id].update(newPaneId=term.pane_id, newTermId=term_id, newSessionId="")
+        if tx.state == "partial" and tx.reason == "resume-failed" and tx.panes[pane_id].get("settle") == "failed":
+            tx.retry_requested = True
+
+    def note_pty_owner(self, term_id: str, owner: Any) -> None:
+        """Keep a verified PTY takeover after a reconnect, even if it is then killed."""
+        if self._owner_of(term_id) is not owner or owner.terminals.get(term_id) is None:
+            return
+        for tx in self.transactions.values():
+            if not tx.unsettled and not tx.open:
+                continue
+            for pane_id, pane in tx.panes.items():
+                if term_id in (pane["termId"], tx.restart_terms.get(pane_id)):
+                    tx.restart_owners[pane_id] = owner
+
+    def _restart_proof(self, tx: Transaction, pane: dict[str, Any], payload: dict[str, Any],
+                       owner: Any = None) -> tuple[str, str, str]:
+        from . import app
+
+        self._restart_context(tx.id, pane["paneId"])
+        term_id = str(payload.get("term_id") or pane.get("newTermId") or "")
+        actual_owner = self._owner_of(term_id)
+        term = actual_owner.terminals.get(term_id) if actual_owner is not None else None
+        if (term is None or getattr(term, "closed", False)
+                or owner is not None and owner is not actual_owner
+                or tx.committed_monotonic is None
+                or float(getattr(term, "started_monotonic", 0) or 0) <= tx.committed_monotonic
+                or not self._restart_provenance_matches(tx, pane, term.agent_key, term.metadata)):
+            raise FailoverRefused("BAD_RESTART_PROOF", "PTY owner, start or credential provenance differs")
+        new_pane_id = str(term.pane_id)
+        if payload.get("new_pane_id") and str(payload["new_pane_id"]) != new_pane_id:
+            raise FailoverRefused("BAD_RESTART_PROOF", "new pane does not own the PTY")
+        if pane.get("newTermId") and pane["newTermId"] != term_id and pane.get("settle") != "failed":
+            raise FailoverRefused("BAD_RESTART_PROOF", "restart PTY changed after settlement")
+        claimed_tx = term.metadata.get("quota_transaction_id")
+        if claimed_tx:
+            if (claimed_tx != tx.id or term.metadata.get("quota_original_pane_id") != pane["paneId"]
+                    or tx.restart_terms.get(pane["paneId"]) != term_id):
+                raise FailoverRefused("BAD_RESTART_PROOF", "PTY belongs to another restart")
+        elif tx.restart_strategy != "resume":
+            raise FailoverRefused("BAD_RESTART_PROOF", "new conversation has no validated spawn claim")
+        elif actual_owner is not (self._owner_of(pane["termId"]) or tx.restart_owners.get(pane["paneId"])):
+            raise FailoverRefused("BAD_RESTART_PROOF", "legacy resume belongs to another owner")
+        expected = str(pane.get("sessionId") or "") if tx.restart_strategy == "resume" else ""
+        session_id = str(payload.get("session_id") or pane.get("newSessionId") or expected)
+        if expected and session_id != expected:
+            raise FailoverRefused("BAD_RESTART_PROOF", "resumed session differs from prepare")
+        if expected or session_id:
+            bound_pane, workspace, _stage = app.attribution.pane_for_session(session_id)
+            if bound_pane != new_pane_id or workspace != pane["workspacePath"]:
+                raise FailoverRefused("BAD_RESTART_PROOF", "session is not bound to the restarted pane")
+        elif tx.restart_strategy == "resume":
+            raise FailoverRefused("BAD_RESTART_PROOF", "expected resume session is missing")
+        return new_pane_id, term_id, session_id
+
+    async def settle(self, payload: dict[str, Any], *, owner: Any = None) -> Transaction:
         """Per-pane restart evidence from the renderer: ``resumed`` (with the
         session id it landed on), ``failed`` (with why), or ``turn-complete``
         (the pane finished a whole turn under the new account — the recovery
@@ -2499,7 +2705,7 @@ class QuotaFailoverService:
         if pane is None:
             raise FailoverRefused("BAD_REQUEST", f"pane {pane_id} is not part of this transaction")
         if outcome == "turn-complete":
-            if self._turn_completed_after_commit(tx, pane, payload) and incident.open \
+            if self._turn_completed_after_commit(tx, pane, payload, owner=owner) and incident.open \
                     and incident.state == "settling" and tx.state == "committed" \
                     and self._restarts_settled(tx):
                 self._close_incident(incident, "ready", "turn-complete", now)
@@ -2508,19 +2714,29 @@ class QuotaFailoverService:
             return tx
         if outcome not in ("resumed", "failed", "new-conversation"):
             raise FailoverRefused("BAD_REQUEST", f"unknown settle outcome: {outcome!r}")
+        if outcome in ("resumed", "new-conversation"):
+            if outcome != ("resumed" if tx.restart_strategy == "resume" else "new-conversation"):
+                raise FailoverRefused("BAD_RESTART_PROOF", "outcome differs from the restart strategy")
+            new_pane_id, term_id, session_id = self._restart_proof(tx, pane, payload, owner)
+            pane.update(newPaneId=new_pane_id, newTermId=term_id, newSessionId=session_id)
         pane["settle"] = outcome
         pane["settleReason"] = str(payload.get("reason") or "") or None
-        if payload.get("session_id"):
-            pane["sessionId"] = str(payload["session_id"])
-        if payload.get("term_id"):
-            # The PTY the pane runs on after its restart — the lineage a later
-            # turn-complete is checked against.
-            pane["newTermId"] = str(payload["term_id"])
         if outcome == "failed":
             tx.state = "partial"
             tx.reason = "resume-failed"
             if incident.open:
                 self._close_incident(incident, "notify-stopped", "resume-failed", now)
+            # The automatic recovery stopped; an explicit retry may still
+            # restore this pane, and other panes must be able to report back.
+            tx.closed_at = None
+        elif tx.retry_requested and self._restarts_settled(tx):
+            # Only a user-requested replacement of a failed pane reopens
+            # recovery. Successful spawn/resume is not yet quota evidence.
+            tx.state, tx.reason, tx.retry_requested = "committed", None, False
+            tx.proof_after_at, tx.proof_after_monotonic = self._now(), time.monotonic()
+            incident.state, incident.reason, incident.closed_at = "settling", None, None
+            incident.updated_at = now
+            self._arm_timer(f"settle:{tx.id}", SETTLE_TIMEOUT_S)
         try:
             self.store.record(tx, now=now)
         except Exception:  # noqa: BLE001
@@ -2538,7 +2754,7 @@ class QuotaFailoverService:
         return all(p.get("settle") == "resumed" for p in tx.panes.values())
 
     def _turn_completed_after_commit(
-        self, tx: Transaction, pane: dict[str, Any], payload: dict[str, Any]
+        self, tx: Transaction, pane: dict[str, Any], payload: dict[str, Any], *, owner: Any = None
     ) -> bool:
         """Is this pane's turn evidence of the *new* account working?
 
@@ -2553,12 +2769,23 @@ class QuotaFailoverService:
         after it is the old account's work."""
         from . import app
 
-        if tx.committed_monotonic is None or tx.committed_at is None:
+        if (tx.committed_monotonic is None or tx.committed_at is None
+                or tx.epoch_after != self.epoch(tx.agent_key)
+                or self._current_slot(tx.agent_key) != tx.to_slot_id):
             return False
-        activity = app.pane_activity(pane["paneId"])
+        proof_after = tx.proof_after_monotonic or tx.committed_monotonic
+        activity_pane = pane["paneId"]
+        if tx.switch_mode == "restart":
+            if pane.get("settle") != "resumed":
+                return False
+            try:
+                activity_pane, _term_id, _session_id = self._restart_proof(tx, pane, payload, owner)
+            except FailoverRefused:
+                return False
+        activity = app.pane_activity(activity_pane)
         if (
             activity is None or activity.get("event_type") != "turn_complete"
-            or float(activity.get("ts_monotonic") or 0) <= tx.committed_monotonic
+            or float(activity.get("ts_monotonic") or 0) <= proof_after
         ):
             return False
         detail = str(activity.get("detail") or "")
@@ -2571,7 +2798,7 @@ class QuotaFailoverService:
             # and ended after it is the old account's work, whatever the
             # renderer says about it.
             started = activity.get("turn_started_monotonic")
-            return started is not None and float(started) > tx.committed_monotonic
+            return started is not None and float(started) > proof_after
         if pane.get("settle") != "resumed":
             return False
         new_term_id = str(payload.get("term_id") or pane.get("newTermId") or "")
@@ -2613,7 +2840,9 @@ class QuotaFailoverService:
                 )
                 if tx is None or slot_id != tx.to_slot_id or tx.committed_at is None:
                     continue
-                if fetched <= tx.committed_at:
+                if (fetched <= (tx.proof_after_at or tx.committed_at)
+                        or tx.epoch_after != self.epoch(agent_key)
+                        or self._current_slot(agent_key) != tx.to_slot_id):
                     continue
                 if exhausted:
                     self._close_incident(incident, "notify-stopped", "target-exhausted", now)

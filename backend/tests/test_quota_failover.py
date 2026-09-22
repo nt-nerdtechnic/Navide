@@ -18,6 +18,7 @@ import pytest
 
 from agent_team_backend import app, quota_failover as qf, usage_service, ws_handlers
 from agent_team_backend.db import Database
+from agent_team_backend.log_readers.attribution import Attribution
 from agent_team_backend.pane_account_history import PaneAccountHistory
 from agent_team_backend.profiles_store import CliProfilesStore
 from agent_team_backend.quota_ledger import QuotaLedger
@@ -166,6 +167,7 @@ class Harness:
         monkeypatch.setattr(app, "quota_failover", self.service)
         monkeypatch.setattr(app, "_PTY_OWNERS", self.owners)
         monkeypatch.setattr(app, "_pane_activity", self.activity)
+        monkeypatch.setattr(app, "attribution", Attribution(app._readers, db=self.db))
 
         async def record(event: dict[str, Any], *, exclude: Any = None) -> None:
             self.events.append(event)
@@ -318,7 +320,7 @@ def test_weekly_exhaustion_vetoes_even_when_the_session_window_reset() -> None:
 
 
 def test_promotional_per_model_window_never_vetoes_alone() -> None:
-    promo = snap("claude", [window("session", 20, 3600), window("weekly-model", 100, 86400)])
+    promo = snap("claude", [window("session", 20, 3600), window("weekly", 20, 86400), window("weekly-model", 100, 86400)])
     rows = qf.rank_candidates(
         slot_ids=["a"], current_slot_id="cur", snapshots={"a": promo},
         login_states={}, tried=set(), now=NOW,
@@ -803,12 +805,13 @@ async def test_a_partial_swap_blocks_every_switch_until_reconciled(
 
     monkeypatch.setattr(h.store, "set_default", flaky)
     s = h.session()
-    h.pane(s, "t1", "claude", "pane-1", pin="__default__", auth_scope="claude")
+    term = h.pane(s, "t1", "claude", "pane-1", pin="__default__", auth_scope="claude", credential_source="vault")
     h.exhausted_reading("claude", "__default__")
     h.headroom_reading("claude", b)
     incident, _ = await h.service.report(h.report_payload("claude", "pane-1"))
     tx = h.service.transactions[incident.transaction_ids[0]]
     assert tx.state == "partial" and tx.reason == "default-persist-failed"
+    assert h.history.profile_at("pane-1", h.clock.now()) == "__default__"
     assert h.store.list()["defaults"]["claude"] is None            # store: A
     assert h.vault.switch_calls == [("claude", "__default__", b, None)]  # live: B
     pending = h.service.state()["unreconciled"]["claude"]
@@ -837,6 +840,9 @@ async def test_a_partial_swap_blocks_every_switch_until_reconciled(
     assert h.store.list()["defaults"]["claude"] is None and h.service.unreconciled("claude")
     got = await _call(s, "quota_failover.reconcile", {"agent_key": "claude", "transaction_id": tx.id})
     assert got["ok"] and got["payload"]["liveSlotId"] == b
+    assert got["payload"]["hotSwitchedPanes"] == [{"paneId": "pane-1", "termId": "t1", "profileId": b}]
+    assert h.history.profile_at("pane-1", h.clock.now()) == b
+    assert term.metadata["launch_profile_id"] == b
     assert h.store.list()["defaults"]["claude"] == b
     assert h.service.unreconciled("claude") is None
     assert len(h.vault.switch_calls) == 1  # reconciling moved nothing
@@ -891,7 +897,7 @@ async def test_changed_events_carry_the_final_incident_state(h: Harness) -> None
     incident, _ = await h.service.report(h.report_payload("claude", "pane-1"))
     h.events.clear()
     h.clock.advance(5)
-    h.service.observe_usage("claude", b, snap("claude", [window("session", 12, 3600, now=h.clock.now())], fetched_at=h.clock.now()))
+    h.service.observe_usage("claude", b, snap("claude", [window("session", 12, 3600, now=h.clock.now()), window("weekly", 12, 86400, now=h.clock.now())], fetched_at=h.clock.now()))
     await asyncio.sleep(0.01)  # observe_usage schedules the broadcast
     changed = h.events_of("quota_failover.changed")
     assert changed, "closing an incident must announce it"
@@ -1005,6 +1011,17 @@ async def _codex_incident(h: Harness, *, panes: list[tuple[app.Session, str, str
 def _ready(tx_id: str, pane_id: str, session_id: str = "sess-1") -> dict[str, Any]:
     return {"transaction_id": tx_id, "pane_id": pane_id, "ready": True, "idle": "turn-boundary",
             "resume": {"resumable": True, "session_id": session_id}}
+
+
+def _restarted_pane(h: Harness, owner: app.Session, tx: qf.Transaction,
+                    pane_id: str, term_id: str) -> None:
+    pane = tx.panes[pane_id]
+    term = h.pane(owner, term_id, tx.agent_key, pane_id, auth_scope=tx.auth_scope,
+                  workspace=pane["workspacePath"], credential_source="vault",
+                  started=tx.committed_monotonic + 0.5)
+    term.metadata.update(launch_profile_id=tx.to_slot_id, credential_epoch=tx.epoch_after)
+    app.attribution.register_pane(pane_id, vendor=tx.agent_key, cwd=pane["workspacePath"],
+                                  explicit_session_id=pane["sessionId"], defer_baseline=True)
 
 
 @pytest.mark.asyncio
@@ -1231,8 +1248,9 @@ async def test_identity_less_vendors_never_switch_automatically_or_confirm_quota
     await h.service.ack(_ready(tx.id, "pane-1"))
     assert tx.state == "committed"
     manual = h.service.incidents[tx.incident_id]
+    _restarted_pane(h, s, tx, "pane-1", "t1-new")
     await h.service.settle({"transaction_id": tx.id, "pane_id": "pane-1", "outcome": "resumed",
-                            "session_id": "sess-1"})
+                            "session_id": "sess-1", "term_id": "t1-new"})
     h.clock.advance(5)
     h.service.observe_usage("codex", b, snap("codex", [window("session", 5, 3600, now=h.clock.now())], fetched_at=h.clock.now()))
     assert manual.state == "settling"
@@ -1365,6 +1383,8 @@ async def test_kilo_legacy_and_explicit_profiles_share_one_pool_and_one_budget(h
     h.pane(s, "t1", "kilo", "pane-1", pin="__default__", auth_scope="kilo:kilo")
     h.exhausted_reading("kilo", "__default__")
     h.headroom_reading("kilo", b)
+    h.usage.account_snapshots["kilo"]["__default__"]["windows"] = [{"kind": "credits", "balance": 0}]
+    h.usage.account_snapshots["kilo"][b]["windows"] = [{"kind": "credits", "balance": 10}]
     incident, _ = await h.service.report(h.report_payload("kilo", "pane-1"))
     assert incident.auth_scope == "kilo:kilo"
     tx = h.service.transactions[incident.transaction_ids[0]]
@@ -1398,7 +1418,7 @@ async def test_settling_needs_a_positive_reading_of_the_target_after_the_commit(
     h.service.observe_usage("claude", "__default__", snap("claude", [window("session", 1, 3600)], fetched_at=h.clock.now()))
     assert incident.state == "settling"
     # A positive, fresh reading of the target settles it.
-    h.service.observe_usage("claude", b, snap("claude", [window("session", 12, 3600, now=h.clock.now())], fetched_at=h.clock.now()))
+    h.service.observe_usage("claude", b, snap("claude", [window("session", 12, 3600, now=h.clock.now()), window("weekly", 12, 86400, now=h.clock.now())], fetched_at=h.clock.now()))
     assert incident.state == "ready" and incident.reason == "quota-confirmed"
     assert tx.closed_at is not None
 
@@ -1460,8 +1480,8 @@ async def test_turn_complete_evidence_requires_membership_lineage_and_resume(h: 
     await h.service.settle({"transaction_id": tx.id, "pane_id": "pane-1", "outcome": "turn-complete"})
     assert incident.state == "settling"
     # Both panes come back on new PTYs started after the commit ...
-    h.pane(s, "t1-new", "codex", "pane-1", auth_scope="codex", started=tx.committed_monotonic + 0.5)
-    h.pane(s, "t2-new", "codex", "pane-2", auth_scope="codex", started=tx.committed_monotonic + 0.5)
+    _restarted_pane(h, s, tx, "pane-1", "t1-new")
+    _restarted_pane(h, s, tx, "pane-2", "t2-new")
     await h.service.settle({"transaction_id": tx.id, "pane_id": "pane-1", "outcome": "resumed",
                             "session_id": "sess-1", "term_id": "t1-new"})
     # ... but pane-2 has not reported yet: quota cannot paper over it.

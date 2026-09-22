@@ -247,6 +247,9 @@ describe('useQuotaFailover (fake backend)', () => {
     handlers.clear()
     sent.length = 0
     readiness.clear()
+    owned.clear(); owned.add('p1'); owned.add('p2')
+    termIds.clear(); termIds.set('p1', 't1'); termIds.set('p2', 't2')
+    sessionIds.clear(); sessionIds.set('p1', 's-p1'); sessionIds.set('p2', 's-p2')
     responder = (type) => {
       if (type === 'quota_failover.get_state') return state()
       if (type === 'quota_failover.candidates') return { candidates: [] }
@@ -360,11 +363,11 @@ describe('useQuotaFailover (fake backend)', () => {
     }
     emit('quota_failover.commit', ev)
     await flush()
-    expect(hooks.onSwitchCommitted).toHaveBeenCalledWith(ev)
+    expect(hooks.onSwitchCommitted).toHaveBeenCalledWith({ ...ev, panes: [ev.panes[0]] })
     expect(hooks.restartPane).toHaveBeenCalledTimes(1)
     expect(hooks.restartPane.mock.calls[0][0]).toMatchObject({ paneId: 'p1' })
     expect(sentOf('quota_failover.settle')).toEqual([
-      { transaction_id: 'tx-1', pane_id: 'p1', outcome: 'resumed', term_id: 't1-new', session_id: 's-p1' },
+      { transaction_id: 'tx-1', pane_id: 'p1', outcome: 'resumed', new_pane_id: 'p1-new', term_id: 't1-new', session_id: 's-p1' },
     ])
     // The same commit replayed (a second window relays it, a reconnect
     // re-reads it): no second restart, no second settle.
@@ -405,7 +408,7 @@ describe('useQuotaFailover (fake backend)', () => {
     await flush()
     expect(hooks.restartPane).not.toHaveBeenCalled()
     expect(hooks.openNewConversation).toHaveBeenCalledTimes(1)
-    expect(sentOf('quota_failover.settle')).toEqual([{ transaction_id: 'tx-n', pane_id: 'p1', outcome: 'new-conversation', term_id: 't1-fresh', session_id: '' }])
+    expect(sentOf('quota_failover.settle')).toEqual([{ transaction_id: 'tx-n', pane_id: 'p1', outcome: 'new-conversation', new_pane_id: 'p1-fresh', term_id: 't1-fresh', session_id: '' }])
   })
 
   it('a turn completed by the restarted pane settles as turn-complete under the listed pane id', async () => {
@@ -441,7 +444,7 @@ describe('useQuotaFailover (fake backend)', () => {
     expect(sentOf('quota_failover.settle')).toEqual([])
   })
 
-  it('on reconnect, a committed transaction whose pane already runs a new PTY is settled, not restarted again', async () => {
+  it('on reconnect, a different PTY on the expected session is not restart proof', async () => {
     termIds.set('p1', 't1-after')
     responder = (type) => {
       if (type === 'quota_failover.get_state') {
@@ -453,11 +456,11 @@ describe('useQuotaFailover (fake backend)', () => {
     }
     await reconnect()
     expect(hooks.restartPane).not.toHaveBeenCalled()
-    expect(sentOf('quota_failover.settle')).toEqual([{ transaction_id: 'tx-1', pane_id: 'p1', outcome: 'resumed', term_id: 't1-after', session_id: 's-p1' }])
+    expect(sentOf('quota_failover.settle')).toEqual([])
     termIds.set('p1', 't1')
   })
 
-  it('on reconnect, a pane on a new PTY but a different session was not resumed — it is a new conversation', async () => {
+  it('on reconnect, a different PTY/session cannot be claimed as our new conversation', async () => {
     termIds.set('p1', 't1-after')
     sessionIds.set('p1', 's-other')
     responder = (type) => {
@@ -470,9 +473,99 @@ describe('useQuotaFailover (fake backend)', () => {
     }
     await reconnect()
     expect(hooks.restartPane).not.toHaveBeenCalled()
-    expect(sentOf('quota_failover.settle')).toEqual([{ transaction_id: 'tx-1', pane_id: 'p1', outcome: 'new-conversation', term_id: 't1-after', session_id: '' }])
+    expect(sentOf('quota_failover.settle')).toEqual([])
     termIds.set('p1', 't1')
     sessionIds.set('p1', 's-p1')
+  })
+
+  it('installs a missed hot commit gate when restore realizes the pane after state arrived', async () => {
+    const visible = ref(false)
+    api.__resetQuotaFailoverForTest()
+    hooks.ownsPane = (id) => visible.value && id === 'p1'
+    responder = () => state({ transactions: [transaction({ state: 'committed', swapped: true, epochAfter: 8, switchMode: 'hot', restartStrategy: 'none' })] })
+    api.initQuotaFailover(backend as never, hooks)
+    await flush(); await nextTick()
+    expect(hooks.onSwitchCommitted).not.toHaveBeenCalled()
+    visible.value = true
+    await nextTick(); await flush()
+    expect(hooks.onSwitchCommitted).toHaveBeenCalledTimes(1)
+    expect(hooks.onSwitchCommitted).toHaveBeenCalledWith(expect.objectContaining({ panes: [expect.objectContaining({ paneId: 'p1' })] }))
+    expect(hooks.restartPane).not.toHaveBeenCalled()
+  })
+
+  it('replays a missed hot commit gate once, before validated ready releases it', async () => {
+    const tx = transaction({ state: 'committed', swapped: true, epochAfter: 8, switchMode: 'hot', restartStrategy: 'none', hotSwitchedPanes: [{ paneId: 'p1', termId: 't1', profileId: 'slot-b' }] })
+    const ready = incident({ state: 'ready', transactionIds: [tx.id] })
+    responder = () => state({ transactions: [tx], incidents: [ready] })
+    await reconnect()
+    expect(hooks.onSwitchCommitted).toHaveBeenCalledTimes(1)
+    expect(hooks.onSwitchCommitted).toHaveBeenCalledWith(expect.objectContaining({ hotSwitchedPanes: tx.hotSwitchedPanes }))
+    expect(hooks.onIncidentReady).toHaveBeenCalledWith(ready)
+    expect(hooks.onSwitchCommitted.mock.invocationCallOrder[0]).toBeLessThan(hooks.onIncidentReady.mock.invocationCallOrder[0])
+    await reconnect()
+    emit('quota_failover.commit', hooks.onSwitchCommitted.mock.calls[0][0])
+    expect(hooks.onSwitchCommitted).toHaveBeenCalledTimes(1)
+    expect(hooks.restartPane).not.toHaveBeenCalled()
+  })
+
+  it.each(['disconnected', 'BAD_RESTART_PROOF', 'session-detected'])('retains a completed replacement after %s and retries proof without rebuilding', async (failure) => {
+    const tx = transaction({ state: 'committed', swapped: true, epochAfter: 8, panes: [transaction().panes[0]] })
+    const ev: CommitEvent = {
+      transactionId: tx.id, incidentId: tx.incidentId, agentKey: tx.agentKey, authScope: tx.authScope,
+      fromSlotId: tx.fromSlotId, toSlotId: tx.toSlotId, epoch: 8, switchMode: 'restart', restartStrategy: 'resume',
+      state: 'committed', needsLogin: false, needsLoginReason: null, panes: tx.panes,
+    }
+    let accepted = false
+    responder = (type) => type === 'quota_failover.get_state' ? state({ transactions: [tx] })
+      : type === 'quota_failover.settle' && !accepted ? { error: { code: 'BAD_RESTART_PROOF', message: 'session pending' } } : { transaction: tx }
+    hooks.restartPane.mockImplementationOnce(async () => {
+      owned.delete('p1'); owned.add('p1-new'); termIds.set('p1-new', 't1-new'); sessionIds.set('p1-new', 's-p1')
+      if (failure === 'disconnected') status.value = 'disconnected'
+      return { outcome: 'resumed', paneId: 'p1-new', termId: 't1-new', sessionId: 's-p1' }
+    })
+    emit('quota_failover.changed', state({ transactions: [tx] }))
+    emit('quota_failover.commit', ev)
+    await flush()
+    accepted = true
+    if (failure === 'disconnected') await reconnect()
+    else if (failure === 'session-detected') { emit('session.detected', { pane_id: 'p1-new', session_id: 's-p1' }); await flush() }
+    else await api.noteTurnComplete('p1-new', 't1-new', Date.parse(T1) + 1000)
+    expect(hooks.restartPane).toHaveBeenCalledTimes(1)
+    expect(sentOf('quota_failover.settle')).toContainEqual({ transaction_id: tx.id, pane_id: 'p1', outcome: 'resumed', new_pane_id: 'p1-new', term_id: 't1-new', session_id: 's-p1' })
+    sent.length = 0
+    await api.noteTurnComplete('p1-new', 't1-new', Date.parse(T1) + 2000)
+    expect(sentOf('quota_failover.settle')).toEqual([expect.objectContaining({ pane_id: 'p1', outcome: 'turn-complete', term_id: 't1-new' })])
+    await api.noteTurnComplete('p1-new', 'unrelated-term', Date.parse(T1) + 2000)
+    expect(sentOf('quota_failover.settle')).toHaveLength(1)
+  })
+
+  it('restores a backend-validated new pane mapping after renderer state loss', async () => {
+    owned.delete('p1'); owned.add('replacement')
+    termIds.set('replacement', 'new-term'); sessionIds.set('replacement', 'new-session')
+    const tx = transaction({ state: 'committed', swapped: true, epochAfter: 8, panes: [{
+      ...transaction().panes[0], sessionId: 'expected-session', settle: 'resumed',
+      newPaneId: 'replacement', newTermId: 'new-term', newSessionId: 'new-session',
+    }] })
+    responder = () => state({ transactions: [tx] })
+    await reconnect()
+    expect(hooks.restartPane).not.toHaveBeenCalled()
+    expect(hooks.onSwitchCommitted).toHaveBeenCalledWith(expect.objectContaining({ panes: [expect.objectContaining({ paneId: 'replacement' })] }))
+    await api.noteTurnComplete('replacement', 'new-term', Date.parse(T1) + 1000)
+    expect(sentOf('quota_failover.settle')).toEqual([expect.objectContaining({ pane_id: 'p1', outcome: 'turn-complete', term_id: 'new-term' })])
+    await reconnect()
+    expect(hooks.onSwitchCommitted).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not accept backend mapping when the current replacement term disagrees', async () => {
+    owned.delete('p1'); owned.add('replacement'); termIds.set('replacement', 'unrelated')
+    responder = () => state({ transactions: [transaction({ state: 'committed', swapped: true, epochAfter: 8, panes: [{
+      ...transaction().panes[0], settle: 'resumed', newPaneId: 'replacement', newTermId: 'proof-term', newSessionId: 'proof-session',
+    }] })] })
+    await reconnect()
+    await api.noteTurnComplete('replacement', 'unrelated', Date.parse(T1) + 1000)
+    expect(hooks.restartPane).not.toHaveBeenCalled()
+    expect(hooks.onSwitchCommitted).not.toHaveBeenCalled()
+    expect(sentOf('quota_failover.settle')).toEqual([])
   })
 
   it('on reconnect, a transaction still preparing gets our panes re-acked', async () => {
@@ -669,8 +762,54 @@ describe('useQuotaFailover (fake backend)', () => {
     await api.actOn({ kind: 'quota-retry-resume', incidentId: 'inc-1', agentKey: 'claude', epoch: 8 })
     expect(hooks.restartPane).toHaveBeenCalledTimes(1)
     expect(hooks.restartPane.mock.calls[0][0]).toMatchObject({ paneId: 'p2' })
-    expect(sentOf('quota_failover.settle')).toEqual([{ transaction_id: 'tx-1', pane_id: 'p2', outcome: 'resumed', term_id: 't2-new', session_id: 's-p2' }])
-    expect(hooks.onSwitchCommitted).not.toHaveBeenCalled()
+    expect(sentOf('quota_failover.settle')).toEqual([{ transaction_id: 'tx-1', pane_id: 'p2', outcome: 'resumed', new_pane_id: 'p2-new', term_id: 't2-new', session_id: 's-p2' }])
+    expect(hooks.onSwitchCommitted).toHaveBeenCalledTimes(1)
+  })
+
+  it('partial failure after replacement waits for explicit retry, then for backend proof before ready', async () => {
+    owned.delete('p1'); owned.add('failed-replacement')
+    termIds.set('failed-replacement', 'failed-term')
+    sessionIds.set('failed-replacement', 's-p1')
+    let tx = transaction({ state: 'partial', reason: 'resume-failed', swapped: true, epochAfter: 8, panes: [{
+      ...transaction().panes[0], settle: 'failed', settleReason: 'timeout', sessionId: 's-p1',
+      newPaneId: 'failed-replacement', newTermId: 'failed-term', newSessionId: '',
+    }, { ...transaction().panes[1], settle: 'resumed', newPaneId: 'p2', newTermId: 't2', newSessionId: 's-p2' }] })
+    let inc = incident({ state: 'notify-stopped', reason: 'resume-failed', transactionIds: [tx.id] })
+    responder = (type) => type === 'quota_failover.get_state' ? state({ epochs: { claude: 8 }, transactions: [tx], incidents: [inc] }) : { transaction: tx }
+    await reconnect()
+    emit('quota_failover.changed', state({ epochs: { claude: 8 }, transactions: [tx], incidents: [inc] }))
+    emit('quota_failover.commit', { ...hooks.onSwitchCommitted.mock.calls[0][0], panes: tx.panes })
+    await flush()
+    expect(hooks.restartPane).not.toHaveBeenCalled()
+    expect(hooks.onIncidentReady).not.toHaveBeenCalled()
+    hooks.restartPane.mockImplementationOnce(async (pane, ev) => {
+      expect(pane).toMatchObject({ paneId: 'failed-replacement', originalPaneId: 'p1', termId: 'failed-term' })
+      expect(ev.transactionId).toBe('tx-1')
+      owned.delete('failed-replacement'); owned.add('retry-pane'); termIds.set('retry-pane', 'retry-term')
+      return { outcome: 'resumed', paneId: 'retry-pane', termId: 'retry-term', sessionId: 's-p1' }
+    })
+    await api.actOn({ kind: 'quota-retry-resume', incidentId: inc.id, agentKey: 'claude', epoch: 8 })
+    expect(hooks.restartPane).toHaveBeenCalledTimes(1)
+    expect(sentOf('quota_failover.settle')).toContainEqual({ transaction_id: tx.id, pane_id: 'p1', outcome: 'resumed', new_pane_id: 'retry-pane', term_id: 'retry-term', session_id: 's-p1' })
+    expect(hooks.onIncidentReady).not.toHaveBeenCalled()
+    tx = { ...tx, state: 'committed', reason: null, panes: [{ ...tx.panes[0], settle: 'resumed', newPaneId: 'retry-pane', newTermId: 'retry-term', newSessionId: 's-p1' }, tx.panes[1]] }
+    inc = { ...inc, state: 'settling', reason: null }
+    emit('quota_failover.changed', state({ epochs: { claude: 8 }, transactions: [tx], incidents: [inc] }))
+    await api.noteTurnComplete('retry-pane', 'retry-term', Date.parse(T1) + 1000)
+    expect(sentOf('quota_failover.settle')).toContainEqual(expect.objectContaining({ pane_id: 'p1', outcome: 'turn-complete', term_id: 'retry-term' }))
+    expect(hooks.onIncidentReady).not.toHaveBeenCalled()
+    emit('quota_failover.changed', state({ epochs: { claude: 8 }, recentTransactions: [{ ...tx, closedAt: T1 }], recentIncidents: [{ ...inc, state: 'ready', closedAt: T1 }] }))
+    expect(hooks.onIncidentReady).toHaveBeenCalledTimes(1)
+  })
+
+  it('server spawn lineage can recover a lost settle claim without treating it as validated resume', async () => {
+    owned.delete('p1'); owned.add('replacement'); termIds.set('replacement', 'new-term'); sessionIds.set('replacement', 's-p1')
+    const tx = transaction({ state: 'committed', swapped: true, epochAfter: 8, panes: [{ ...transaction().panes[0], sessionId: 's-p1', newPaneId: 'replacement', newTermId: 'new-term', newSessionId: '' }] })
+    responder = (type) => type === 'quota_failover.get_state' ? state({ transactions: [tx] }) : { error: { code: 'BAD_RESTART_PROOF', message: 'pending session' } }
+    await reconnect()
+    expect(hooks.restartPane).not.toHaveBeenCalled()
+    expect(sentOf('quota_failover.settle')).toEqual([expect.objectContaining({ pane_id: 'p1', new_pane_id: 'replacement', outcome: 'resumed', session_id: 's-p1' })])
+    expect(hooks.onIncidentReady).not.toHaveBeenCalled()
   })
 
   it('report sends the contract payload and applies the incident it comes back with', async () => {

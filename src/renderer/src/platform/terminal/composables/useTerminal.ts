@@ -4092,6 +4092,8 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
         loginProfileId: opts.loginProfileId ?? null,
         isLogin: opts.isLogin ?? false,
         replacesTerminalId: replacesPtyId || null,
+        quotaTransactionId: opts.quotaTransactionId,
+        quotaOriginalPaneId: opts.quotaOriginalPaneId,
       }, TERMINAL_CREATE_TIMEOUT_MS)
       // A cancellation or replacement can land while the RPC is in flight.
       // The backend cancellation owns rollback; a late result must never bind

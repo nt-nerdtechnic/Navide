@@ -482,10 +482,11 @@ async def test_cli_profiles_rename_delete_set_default_flow(
     assert session.websocket.sent[3]["payload"]["profiles"] == []  # type: ignore[attr-defined]
     # Every mutation announces itself once, in order. A completed switch also
     # tells the failover authority the user took over (epoch moves, pending
-    # automatic proposals are withdrawn) — that is the only other event.
+    # automatic proposals are withdrawn) before announcing profiles, so the
+    # renderer recognizes the manual restart. That is the only other event.
     assert [e["type"] for e in events] == [
-        "cli_profiles.changed", "cli_profiles.changed", "quota_failover.changed",
         "cli_profiles.changed", "quota_failover.changed", "cli_profiles.changed",
+        "quota_failover.changed", "cli_profiles.changed", "cli_profiles.changed",
     ]
     profiles_changed = [e for e in events if e["type"] == "cli_profiles.changed"]
     assert [e["payload"]["reason"] for e in profiles_changed] == [
@@ -559,8 +560,8 @@ async def test_set_default_broadcast_carries_agent_key_and_forced(
     })
 
     assert [e["type"] for e in events] == [
-        "cli_profiles.changed", "quota_failover.changed",
-        "cli_profiles.changed", "quota_failover.changed",
+        "quota_failover.changed", "cli_profiles.changed",
+        "quota_failover.changed", "cli_profiles.changed",
         "cli_profiles.changed",
     ]
     plain, forced, renamed = (
@@ -835,7 +836,8 @@ async def test_set_default_claude_not_gated_by_running_panes(
     assert session.terminals.killed == []  # type: ignore[attr-defined]
     assert t1.proc.poll() is None
     assert vault.switch_calls == [("claude", "__default__", profile["id"])]
-    assert events[0]["payload"]["forced"] is False
+    changed = next(e["payload"] for e in events if e["type"] == "cli_profiles.changed")
+    assert changed["forced"] is False
 
 
 async def test_set_default_claude_announces_the_new_account_before_any_poll(
@@ -953,7 +955,8 @@ async def test_set_default_claude_broadcast_never_forced(
     })
 
     assert session.websocket.sent[0]["ok"] is True  # type: ignore[attr-defined]
-    assert events[0]["payload"]["forced"] is False
+    changed = next(e["payload"] for e in events if e["type"] == "cli_profiles.changed")
+    assert changed["forced"] is False
 
 
 async def test_set_default_rate_limited_after_burst(

@@ -138,6 +138,8 @@ export function createMockBackend(initialStatus: BackendStatus = 'connected') {
       login_profile_id: payload.loginProfileId,
       is_login: payload.isLogin,
       replaces_terminal_id: payload.replacesTerminalId,
+      ...(payload.quotaTransactionId ? { quota_transaction_id: payload.quotaTransactionId } : {}),
+      ...(payload.quotaOriginalPaneId ? { quota_original_pane_id: payload.quotaOriginalPaneId } : {}),
     }, timeoutMs),
     cancelCreate: (paneId, createGeneration) => request('terminal.create.cancel', {
       pane_id: paneId,

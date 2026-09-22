@@ -1,0 +1,802 @@
+{
+  "now": "2026-09-21T12:00:00.000Z",
+  "cases": [
+    {
+      "name": "claude-headroom",
+      "agentKey": "claude",
+      "windows": [
+        {
+          "kind": "session",
+          "label": "session",
+          "usedPercent": 20,
+          "resetsAt": "2026-09-22T12:00:00.000Z"
+        },
+        {
+          "kind": "weekly",
+          "label": "weekly",
+          "usedPercent": 20,
+          "resetsAt": "2026-09-22T12:00:00.000Z"
+        }
+      ],
+      "spent": false,
+      "positive": true
+    },
+    {
+      "name": "claude-spent",
+      "agentKey": "claude",
+      "windows": [
+        {
+          "kind": "session",
+          "label": "session",
+          "usedPercent": 100,
+          "resetsAt": "2026-09-22T12:00:00.000Z"
+        },
+        {
+          "kind": "weekly",
+          "label": "weekly",
+          "usedPercent": 20,
+          "resetsAt": "2026-09-22T12:00:00.000Z"
+        }
+      ],
+      "spent": true,
+      "positive": false
+    },
+    {
+      "name": "claude-missing-required",
+      "agentKey": "claude",
+      "windows": [],
+      "spent": false,
+      "positive": false
+    },
+    {
+      "name": "codex-headroom",
+      "agentKey": "codex",
+      "windows": [
+        {
+          "kind": "session",
+          "label": "session",
+          "usedPercent": 20,
+          "resetsAt": "2026-09-22T12:00:00.000Z"
+        }
+      ],
+      "spent": false,
+      "positive": true
+    },
+    {
+      "name": "codex-spent",
+      "agentKey": "codex",
+      "windows": [
+        {
+          "kind": "session",
+          "label": "session",
+          "usedPercent": 100,
+          "resetsAt": "2026-09-22T12:00:00.000Z"
+        }
+      ],
+      "spent": true,
+      "positive": false
+    },
+    {
+      "name": "codex-missing-required",
+      "agentKey": "codex",
+      "windows": [],
+      "spent": false,
+      "positive": false
+    },
+    {
+      "name": "kimi-headroom",
+      "agentKey": "kimi",
+      "windows": [
+        {
+          "kind": "weekly",
+          "label": "weekly",
+          "usedPercent": 20,
+          "resetsAt": "2026-09-22T12:00:00.000Z"
+        }
+      ],
+      "spent": false,
+      "positive": true
+    },
+    {
+      "name": "kimi-spent",
+      "agentKey": "kimi",
+      "windows": [
+        {
+          "kind": "weekly",
+          "label": "weekly",
+          "usedPercent": 100,
+          "resetsAt": "2026-09-22T12:00:00.000Z"
+        }
+      ],
+      "spent": true,
+      "positive": false
+    },
+    {
+      "name": "kimi-missing-required",
+      "agentKey": "kimi",
+      "windows": [],
+      "spent": false,
+      "positive": false
+    },
+    {
+      "name": "grok-headroom",
+      "agentKey": "grok",
+      "windows": [
+        {
+          "kind": "monthly",
+          "label": "monthly",
+          "usedPercent": 20,
+          "resetsAt": "2026-09-22T12:00:00.000Z"
+        }
+      ],
+      "spent": false,
+      "positive": true
+    },
+    {
+      "name": "grok-spent",
+      "agentKey": "grok",
+      "windows": [
+        {
+          "kind": "monthly",
+          "label": "monthly",
+          "usedPercent": 100,
+          "resetsAt": "2026-09-22T12:00:00.000Z"
+        }
+      ],
+      "spent": true,
+      "positive": false
+    },
+    {
+      "name": "grok-missing-required",
+      "agentKey": "grok",
+      "windows": [],
+      "spent": false,
+      "positive": false
+    },
+    {
+      "name": "copilot-headroom",
+      "agentKey": "copilot",
+      "windows": [
+        {
+          "kind": "monthly",
+          "label": "monthly",
+          "usedPercent": 20,
+          "resetsAt": "2026-09-22T12:00:00.000Z"
+        }
+      ],
+      "spent": false,
+      "positive": true
+    },
+    {
+      "name": "copilot-spent",
+      "agentKey": "copilot",
+      "windows": [
+        {
+          "kind": "monthly",
+          "label": "monthly",
+          "usedPercent": 100,
+          "resetsAt": "2026-09-22T12:00:00.000Z"
+        }
+      ],
+      "spent": true,
+      "positive": false
+    },
+    {
+      "name": "copilot-missing-required",
+      "agentKey": "copilot",
+      "windows": [],
+      "spent": false,
+      "positive": false
+    },
+    {
+      "name": "qwen-headroom",
+      "agentKey": "qwen",
+      "windows": [
+        {
+          "kind": "session",
+          "label": "session",
+          "usedPercent": 20,
+          "resetsAt": "2026-09-22T12:00:00.000Z"
+        }
+      ],
+      "spent": false,
+      "positive": true
+    },
+    {
+      "name": "qwen-spent",
+      "agentKey": "qwen",
+      "windows": [
+        {
+          "kind": "session",
+          "label": "session",
+          "usedPercent": 100,
+          "resetsAt": "2026-09-22T12:00:00.000Z"
+        }
+      ],
+      "spent": true,
+      "positive": false
+    },
+    {
+      "name": "qwen-missing-required",
+      "agentKey": "qwen",
+      "windows": [],
+      "spent": false,
+      "positive": false
+    },
+    {
+      "name": "cursor-headroom",
+      "agentKey": "cursor",
+      "windows": [
+        {
+          "kind": "cycle",
+          "label": "cycle",
+          "usedPercent": 20,
+          "resetsAt": "2026-09-22T12:00:00.000Z"
+        }
+      ],
+      "spent": false,
+      "positive": true
+    },
+    {
+      "name": "cursor-spent",
+      "agentKey": "cursor",
+      "windows": [
+        {
+          "kind": "cycle",
+          "label": "cycle",
+          "usedPercent": 100,
+          "resetsAt": "2026-09-22T12:00:00.000Z"
+        }
+      ],
+      "spent": true,
+      "positive": false
+    },
+    {
+      "name": "cursor-missing-required",
+      "agentKey": "cursor",
+      "windows": [],
+      "spent": false,
+      "positive": false
+    },
+    {
+      "name": "claude-missing-weekly",
+      "agentKey": "claude",
+      "windows": [
+        {
+          "kind": "session",
+          "label": "session",
+          "usedPercent": 5,
+          "resetsAt": "2026-09-22T12:00:00.000Z"
+        }
+      ],
+      "spent": false,
+      "positive": false
+    },
+    {
+      "name": "claude-scoped-spent",
+      "agentKey": "claude",
+      "windows": [
+        {
+          "kind": "session",
+          "label": "session",
+          "usedPercent": 20,
+          "resetsAt": "2026-09-22T12:00:00.000Z"
+        },
+        {
+          "kind": "weekly",
+          "label": "weekly",
+          "usedPercent": 20,
+          "resetsAt": "2026-09-22T12:00:00.000Z"
+        },
+        {
+          "kind": "weekly-model",
+          "label": "weekly-model",
+          "usedPercent": 100,
+          "resetsAt": "2026-09-22T12:00:00.000Z"
+        }
+      ],
+      "spent": false,
+      "positive": true
+    },
+    {
+      "name": "claude-expired-required",
+      "agentKey": "claude",
+      "windows": [
+        {
+          "kind": "session",
+          "label": "session",
+          "usedPercent": 20,
+          "resetsAt": "2026-09-22T12:00:00.000Z"
+        },
+        {
+          "kind": "weekly",
+          "label": "weekly",
+          "usedPercent": 10,
+          "resetsAt": "2026-09-22T12:00:00.000Z",
+          "expired": true
+        }
+      ],
+      "spent": false,
+      "positive": false
+    },
+    {
+      "name": "claude-past-reset-required",
+      "agentKey": "claude",
+      "windows": [
+        {
+          "kind": "session",
+          "label": "session",
+          "usedPercent": 20,
+          "resetsAt": "2026-09-22T12:00:00.000Z"
+        },
+        {
+          "kind": "weekly",
+          "label": "weekly",
+          "usedPercent": 10,
+          "resetsAt": "2026-09-21T11:00:00.000Z"
+        }
+      ],
+      "spent": false,
+      "positive": false
+    },
+    {
+      "name": "claude-reset-is-not-recovery",
+      "agentKey": "claude",
+      "windows": [
+        {
+          "kind": "session",
+          "label": "session",
+          "usedPercent": 100,
+          "resetsAt": "2026-09-21T11:00:00.000Z"
+        },
+        {
+          "kind": "weekly",
+          "label": "weekly",
+          "usedPercent": 20,
+          "resetsAt": "2026-09-22T12:00:00.000Z"
+        }
+      ],
+      "spent": false,
+      "positive": false
+    },
+    {
+      "name": "claude-weekly-still-blocks",
+      "agentKey": "claude",
+      "windows": [
+        {
+          "kind": "session",
+          "label": "session",
+          "usedPercent": 100,
+          "resetsAt": "2026-09-21T11:00:00.000Z"
+        },
+        {
+          "kind": "weekly",
+          "label": "weekly",
+          "usedPercent": 100,
+          "resetsAt": "2026-09-22T12:00:00.000Z"
+        }
+      ],
+      "spent": true,
+      "positive": false
+    },
+    {
+      "name": "cursor-alternate",
+      "agentKey": "cursor",
+      "windows": [
+        {
+          "kind": "cycle",
+          "label": "cycle",
+          "usedPercent": 100,
+          "resetsAt": "2026-09-22T12:00:00.000Z"
+        },
+        {
+          "kind": "on-demand",
+          "label": "on-demand",
+          "usedPercent": 20,
+          "resetsAt": "2026-09-22T12:00:00.000Z"
+        }
+      ],
+      "spent": false,
+      "positive": true
+    },
+    {
+      "name": "cursor-alternate-spent",
+      "agentKey": "cursor",
+      "windows": [
+        {
+          "kind": "cycle",
+          "label": "cycle",
+          "usedPercent": 100,
+          "resetsAt": "2026-09-22T12:00:00.000Z"
+        },
+        {
+          "kind": "on-demand",
+          "label": "on-demand",
+          "usedPercent": 100,
+          "resetsAt": "2026-09-22T12:00:00.000Z"
+        }
+      ],
+      "spent": true,
+      "positive": false
+    },
+    {
+      "name": "cursor-alternate-expired",
+      "agentKey": "cursor",
+      "windows": [
+        {
+          "kind": "cycle",
+          "label": "cycle",
+          "usedPercent": 100,
+          "resetsAt": "2026-09-22T12:00:00.000Z"
+        },
+        {
+          "kind": "on-demand",
+          "label": "on-demand",
+          "usedPercent": 20,
+          "resetsAt": "2026-09-22T12:00:00.000Z",
+          "expired": true
+        }
+      ],
+      "spent": true,
+      "positive": false
+    },
+    {
+      "name": "cursor-alternate-reset",
+      "agentKey": "cursor",
+      "windows": [
+        {
+          "kind": "cycle",
+          "label": "cycle",
+          "usedPercent": 100,
+          "resetsAt": "2026-09-22T12:00:00.000Z"
+        },
+        {
+          "kind": "on-demand",
+          "label": "on-demand",
+          "usedPercent": 20,
+          "resetsAt": "2026-09-21T11:00:00.000Z"
+        }
+      ],
+      "spent": true,
+      "positive": false
+    },
+    {
+      "name": "kilo-balance-3",
+      "agentKey": "kilo",
+      "windows": [
+        {
+          "kind": "credits",
+          "label": "Credits",
+          "resetsAt": null,
+          "balance": 3
+        }
+      ],
+      "spent": false,
+      "positive": true
+    },
+    {
+      "name": "kilo-balance-0",
+      "agentKey": "kilo",
+      "windows": [
+        {
+          "kind": "credits",
+          "label": "Credits",
+          "resetsAt": null,
+          "balance": 0
+        }
+      ],
+      "spent": true,
+      "positive": false
+    },
+    {
+      "name": "kilo-balance--1",
+      "agentKey": "kilo",
+      "windows": [
+        {
+          "kind": "credits",
+          "label": "Credits",
+          "resetsAt": null,
+          "balance": -1
+        }
+      ],
+      "spent": true,
+      "positive": false
+    },
+    {
+      "name": "kilo-balance-None",
+      "agentKey": "kilo",
+      "windows": [
+        {
+          "kind": "credits",
+          "label": "Credits",
+          "resetsAt": null,
+          "balance": null
+        }
+      ],
+      "spent": false,
+      "positive": false
+    },
+    {
+      "name": "kilo-balance-invalid",
+      "agentKey": "kilo",
+      "windows": [
+        {
+          "kind": "credits",
+          "label": "Credits",
+          "resetsAt": null,
+          "balance": "invalid"
+        }
+      ],
+      "spent": false,
+      "positive": false
+    },
+    {
+      "name": "pi-raw-positive",
+      "agentKey": "pi",
+      "windows": [
+        {
+          "kind": "credits",
+          "label": "Credits",
+          "resetsAt": null,
+          "usage": 4,
+          "limit": 10
+        }
+      ],
+      "spent": false,
+      "positive": true
+    },
+    {
+      "name": "pi-raw-spent",
+      "agentKey": "pi",
+      "windows": [
+        {
+          "kind": "credits",
+          "label": "Credits",
+          "resetsAt": null,
+          "usage": 10,
+          "limit": 10
+        }
+      ],
+      "spent": true,
+      "positive": false
+    },
+    {
+      "name": "pi-raw-over",
+      "agentKey": "pi",
+      "windows": [
+        {
+          "kind": "credits",
+          "label": "Credits",
+          "resetsAt": null,
+          "usage": 12,
+          "limit": 10
+        }
+      ],
+      "spent": true,
+      "positive": false
+    },
+    {
+      "name": "pi-raw-negative",
+      "agentKey": "pi",
+      "windows": [
+        {
+          "kind": "credits",
+          "label": "Credits",
+          "resetsAt": null,
+          "usage": -1,
+          "limit": 10
+        }
+      ],
+      "spent": false,
+      "positive": false
+    },
+    {
+      "name": "pi-raw-uncapped",
+      "agentKey": "pi",
+      "windows": [
+        {
+          "kind": "credits",
+          "label": "Credits",
+          "resetsAt": null,
+          "usage": 10,
+          "limit": null
+        }
+      ],
+      "spent": false,
+      "positive": false
+    },
+    {
+      "name": "pi-raw-zero-limit",
+      "agentKey": "pi",
+      "windows": [
+        {
+          "kind": "credits",
+          "label": "Credits",
+          "resetsAt": null,
+          "usage": 10,
+          "limit": 0
+        }
+      ],
+      "spent": false,
+      "positive": false
+    },
+    {
+      "name": "pi-raw-negative-limit",
+      "agentKey": "pi",
+      "windows": [
+        {
+          "kind": "credits",
+          "label": "Credits",
+          "resetsAt": null,
+          "usage": 10,
+          "limit": -1
+        }
+      ],
+      "spent": false,
+      "positive": false
+    },
+    {
+      "name": "pi-raw-unknown",
+      "agentKey": "pi",
+      "windows": [
+        {
+          "kind": "credits",
+          "label": "Credits",
+          "resetsAt": null,
+          "usage": null,
+          "limit": 10
+        }
+      ],
+      "spent": false,
+      "positive": false
+    },
+    {
+      "name": "pi-raw-invalid",
+      "agentKey": "pi",
+      "windows": [
+        {
+          "kind": "credits",
+          "label": "Credits",
+          "resetsAt": null,
+          "usage": "invalid",
+          "limit": 10
+        }
+      ],
+      "spent": false,
+      "positive": false
+    },
+    {
+      "name": "kilo-period-veto",
+      "agentKey": "kilo",
+      "windows": [
+        {
+          "kind": "credits",
+          "label": "Credits",
+          "resetsAt": null,
+          "balance": 3
+        },
+        {
+          "kind": "period",
+          "label": "period",
+          "usedPercent": 100,
+          "resetsAt": "2026-09-22T12:00:00.000Z"
+        }
+      ],
+      "spent": true,
+      "positive": false
+    },
+    {
+      "name": "codex-percent--1",
+      "agentKey": "codex",
+      "windows": [
+        {
+          "kind": "session",
+          "label": "session",
+          "usedPercent": -1,
+          "resetsAt": "2026-09-22T12:00:00.000Z"
+        }
+      ],
+      "spent": false,
+      "positive": false
+    },
+    {
+      "name": "codex-percent-None",
+      "agentKey": "codex",
+      "windows": [
+        {
+          "kind": "session",
+          "label": "session",
+          "usedPercent": null,
+          "resetsAt": "2026-09-22T12:00:00.000Z"
+        }
+      ],
+      "spent": false,
+      "positive": false
+    },
+    {
+      "name": "codex-percent-invalid",
+      "agentKey": "codex",
+      "windows": [
+        {
+          "kind": "session",
+          "label": "session",
+          "usedPercent": "invalid",
+          "resetsAt": "2026-09-22T12:00:00.000Z"
+        }
+      ],
+      "spent": false,
+      "positive": false
+    },
+    {
+      "name": "codex-percent-False",
+      "agentKey": "codex",
+      "windows": [
+        {
+          "kind": "session",
+          "label": "session",
+          "usedPercent": false,
+          "resetsAt": "2026-09-22T12:00:00.000Z"
+        }
+      ],
+      "spent": false,
+      "positive": false
+    },
+    {
+      "name": "codex-exact-reset-boundary",
+      "agentKey": "codex",
+      "windows": [
+        {
+          "kind": "session",
+          "label": "session",
+          "usedPercent": 100,
+          "resetsAt": "2026-09-21T12:00:00.000Z"
+        }
+      ],
+      "spent": false,
+      "positive": false
+    },
+    {
+      "name": "codex-expired-spent",
+      "agentKey": "codex",
+      "windows": [
+        {
+          "kind": "session",
+          "label": "session",
+          "usedPercent": 100,
+          "resetsAt": "2026-09-22T12:00:00.000Z",
+          "expired": true
+        }
+      ],
+      "spent": false,
+      "positive": false
+    },
+    {
+      "name": "codex-unknown-reset-spent",
+      "agentKey": "codex",
+      "windows": [
+        {
+          "kind": "session",
+          "label": "session",
+          "usedPercent": 100,
+          "resetsAt": null
+        }
+      ],
+      "spent": true,
+      "positive": false
+    },
+    {
+      "name": "codex-invalid-reset-spent",
+      "agentKey": "codex",
+      "windows": [
+        {
+          "kind": "session",
+          "label": "session",
+          "usedPercent": 100,
+          "resetsAt": "invalid"
+        }
+      ],
+      "spent": true,
+      "positive": false
+    }
+  ]
+}

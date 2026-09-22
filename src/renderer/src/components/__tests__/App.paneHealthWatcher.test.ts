@@ -197,7 +197,7 @@ describe('an account switch lets go of the quota flag', () => {
     // unless the clear came from a quota-failover switch, which offers the
     // continue button instead of sending anything.
     expect(helper).toContain('if (waitingOnThisLimit) void fireLoopResume(pane.id, logLabel)')
-    expect(helper).toContain('if (waitingOnThisLimit && !opts.resumeLoop) {')
+    expect(helper).toContain('if (pane.loopActive && !opts.resumeLoop) {')
     expect(helper).toContain('pane.resumeContinueAvailable = true')
   })
 
@@ -268,7 +268,7 @@ describe('the account reading can lower the flag before its stated reset', () =>
     const check = checkUsageLimitBody()
     const flagged = check.indexOf('if (pane.usageLimitAt != null) {')
     const due = check.indexOf('usageLimitDue(pane.usageLimitAt')
-    const headroom = check.indexOf('hasHeadlineHeadroom(usageFor(pane.agentKey))')
+    const headroom = check.indexOf('judgeReading(snap, quotaSemanticsFor(pane.agentKey), now).positive')
     expect(flagged).toBeGreaterThan(-1)
     expect(headroom).toBeGreaterThan(due)
     expect(headroom).toBeLessThan(check.indexOf('const tail ='))
@@ -280,7 +280,7 @@ describe('the account reading can lower the flag before its stated reset', () =>
     // still on screen able to re-light the flag on the next poll, and lose the
     // dismissed-reset record that stops exactly that.
     const check = checkUsageLimitBody()
-    const headroom = check.indexOf('hasHeadlineHeadroom(usageFor(pane.agentKey))')
+    const headroom = check.indexOf('judgeReading(snap, quotaSemanticsFor(pane.agentKey), now).positive')
     expect(check.slice(headroom, headroom + 200)).toContain(
       "clearPaneUsageLimit(pane, 'quota-back', false)"
     )
@@ -322,10 +322,11 @@ describe('the account reading can raise the flag with nothing in the buffer', ()
     // Claude's panel prints a reset for a window only sometimes. A spent
     // weekly window without one, next to a session window with one, must NOT
     // borrow the session clock: that prints "back at 16:32" over a wall that
-    // stands for days and wakes a parked loop into it. usageResumeAt already
-    // answers null for that shape; the raise passes it through as unknown
+    // stands for days and wakes a parked loop into it. The spent window alone
+    // supplies the clock; no reset passes through as unknown
     // instead of refusing to light.
-    expect(raise).toContain('const resumeAt = usageResumeAt(pane.agentKey, now)')
+    expect(raise).toContain('const resetAt = spent.resetsAt ? Date.parse(spent.resetsAt) : NaN')
+    expect(raise).toContain('resetAt + LIMIT_RESET_BUFFER_MS : null')
     expect(raise).not.toContain('if (resumeAt == null) return')
     expect(raise).toContain('pane.usageLimitUntil = resumeAt')
   })
@@ -342,13 +343,13 @@ describe('the account reading can raise the flag with nothing in the buffer', ()
     // the flag, the next reading (new evidence) may. Recorded only where a
     // judgement was made — dismiss and account switch — never by the
     // reading-driven clear, for the same reason dismissedLimitUntil is not.
-    expect(raise).toContain('if (snap!.fetchedAt === watcher.dismissedReadingAt) return')
+    expect(raise).toContain('if (sameAccount && snap!.fetchedAt === watcher.dismissedReadingAt) return')
     const clear = appSource.slice(appSource.indexOf('function clearPaneUsageLimit('))
     const clearBody = clear.slice(0, clear.indexOf('\n}'))
     const remember = clearBody.indexOf('if (remember) {')
     expect(remember).toBeGreaterThan(-1)
     expect(clearBody.slice(remember)).toContain(
-      'w.dismissedReadingAt = usageFor(pane.agentKey)?.fetchedAt ?? null'
+      'w.dismissedReadingAt = paneQuotaReading(pane)?.fetchedAt ?? null'
     )
   })
 
@@ -382,7 +383,7 @@ describe('the account reading can raise the flag with nothing in the buffer', ()
     // clearPaneUsageLimits compares this against the incoming default to
     // decide whether switching BACK makes an old banner a genuine hit again.
     expect(raise).toContain(
-      'watcher.limitProfileId = cliProfilesApi.defaultProfileId(pane.agentKey)'
+      'watcher.limitProfileId = pane.profileId ?? null'
     )
   })
 })
@@ -428,6 +429,6 @@ describe('both ends of the flag answer to the same freshness bar', () => {
       appSource.indexOf('function raiseFromQuotaReading('),
       appSource.indexOf('/** Account switch:')
     )
-    expect(raise).toContain('if (!readingIsCurrent(snap) || exhaustedWindow(snap) === undefined) return')
+    expect(raise).toContain('if (!readingIsCurrent(snap)) return')
   })
 })

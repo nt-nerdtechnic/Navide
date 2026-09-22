@@ -251,11 +251,13 @@ const SlotHistory = defineAsyncComponent(() => import('./components/HistoryPanel
 const SlotTasker = defineAsyncComponent(() => import('./components/TaskerPanel.vue'))
 const SlotMessages = defineAsyncComponent(() => import('./components/AgentMessagesPanel.vue'))
 import { pickWhatsNew, type WhatsNewEntry } from './lib/whatsNew'
-import { exhaustedWindow, hasHeadlineHeadroom, initUsage, readingIsCurrent, refreshUsage, usageFor } from './composables/useUsage'
+import { accountUsageFor, initUsage, readingIsCurrent, refreshUsage } from './composables/useUsage'
+import { judgeReading, quotaSemanticsFor } from './lib/quotaFailover'
 import {
   LOOP_RESUME_SETTING_KEY,
   DEFAULT_LOOP_RESUME,
   LOOP_ESTIMATE_WINDOW_MS,
+  LIMIT_RESET_BUFFER_MS,
   LOOP_DONE_MARKER,
   LOOP_WAIT_MARKER,
   withLoopDoneInstruction,
@@ -265,7 +267,7 @@ import {
 import { isLoopSkill, resolvePromptSkill } from './lib/promptSkills'
 import { usePromptSkills } from './composables/usePromptSkills'
 import { loginCommandFor, matchLoginExpired } from './lib/cliLoginExpired'
-import { QUOTA_READING_VETO, detectUsageLimit, isDismissedUsageLimit, quotaExhaustedPayload, usageLimitDue, usageResumeAt } from './lib/cliUsageLimit'
+import { QUOTA_READING_VETO, detectUsageLimit, isDismissedUsageLimit, quotaExhaustedPayload, usageLimitDue } from './lib/cliUsageLimit'
 import {
   awaitingClearsOnMiss,
   hasAwaitingPattern,
@@ -286,6 +288,7 @@ import { useUiActionBus } from './composables/useUiActionBus'
 import { releaseAnnouncementId, useAnnouncements } from './composables/useAnnouncements'
 import {
   useQuotaFailover,
+  type HotSwitchedPane,
   type CommitEvent as QuotaCommitEvent,
   type FailoverIncident,
   type PaneReadiness,
@@ -4192,9 +4195,11 @@ async function togglePaneLoop(paneId: string, skillId?: string): Promise<void> {
  *  the poll loop returns to matching mode and neither route can double-inject.
  *  Injection failure re-arms loopWaitUntil 60s out so the watcher's existing
  *  due-check retries instead of silently dropping the resume. */
-async function fireLoopResume(paneId: string, logLabel: string): Promise<void> {
+async function fireLoopResume(paneId: string, logLabel: string, manual = false): Promise<void> {
   const pane = panes.value.find((p) => p.id === paneId)
   if (!pane || !pane.loopActive || pane.loopWaitUntil == null) return
+  const held = () => !manual && (pane.quotaGateIncidentId != null || pane.resumeContinueAvailable === true)
+  if (held()) return
   const gen = loopGen.get(paneId)
   pane.loopWaitUntil = null
   // Consume everything the pane emitted during the wait — TUI repaints keep
@@ -4207,13 +4212,13 @@ async function fireLoopResume(paneId: string, logLabel: string): Promise<void> {
   await acquireInjectionSlot()
   let ok = false
   try {
-    if (loopGen.get(paneId) !== gen || !pane.loopActive) return
+    if (loopGen.get(paneId) !== gen || !pane.loopActive || held()) return
     ok = await injectPane(
       paneId,
       withLoopDoneInstruction(loopResumeTextFor(paneId)),
       logLabel,
       true,
-      () => loopGen.get(paneId) !== gen
+      () => loopGen.get(paneId) !== gen || held()
     )
   } finally {
     releaseInjectionSlot()
@@ -4251,6 +4256,8 @@ async function fireLoopContinue(paneId: string): Promise<void> {
   const pane = panes.value.find((p) => p.id === paneId)
   const watcher = loopLimitWatchers.get(paneId)
   if (!pane || !pane.loopActive || !watcher || watcher.continuing) return
+  const held = () => pane.quotaGateIncidentId != null || pane.resumeContinueAvailable === true
+  if (held()) return
   // The cast skill's turn cap. Checked here rather than on a counter of its
   // own so it shares the existing continue gate — one place decides whether a
   // turn happens at all.
@@ -4267,13 +4274,13 @@ async function fireLoopContinue(paneId: string): Promise<void> {
   try {
     // Cancelled / restarted while queued on the semaphore? Abort before the
     // inject so no stray "繼續" lands in a CLI whose loop was just turned off.
-    if (loopGen.get(paneId) !== gen || !pane.loopActive) return
+    if (loopGen.get(paneId) !== gen || !pane.loopActive || held()) return
     ok = await injectPane(
       paneId,
       withLoopDoneInstruction(loopResumeTextFor(paneId)),
       'loop-continue',
       true,
-      () => loopGen.get(paneId) !== gen
+      () => loopGen.get(paneId) !== gen || held()
     )
   } finally {
     releaseInjectionSlot()
@@ -4444,7 +4451,7 @@ function stopLoopOnDoneMarker(paneId: string, timestamp: string): void {
 
 /** Waiting badge clicked: the user wants the loop resumed immediately. */
 function resumeLoopNow(paneId: string): void {
-  void fireLoopResume(paneId, 'loop-resume-now')
+  void fireLoopResume(paneId, 'loop-resume-now', true)
 }
 
 // While a pane's loop is active, watch its raw PTY buffer for the CLI
@@ -4564,6 +4571,9 @@ function startLoopLimitWatcher(paneId: string): void {
       stopLoopLimitWatcher(paneId)
       return
     }
+    // A switch can clear the old badge while quota is still unverified. Even
+    // after verification, a failover's continue offer awaits the user's action.
+    if (pane.quotaGateIncidentId != null || pane.resumeContinueAvailable) return
     if (pane.loopWaitUntil != null) {
       // Waiting mode: matching is suspended so TUI redraws of the same limit
       // message cannot double-schedule. Resume once the quota window is due.
@@ -4660,7 +4670,7 @@ function startLoopLimitWatcher(paneId: string): void {
         // leaves loopWaitUntil null. Without this the very next poll falls
         // through to here and resends "continue" into a CLI that cannot run —
         // which is the one thing that branch says it does not do.
-        quotaBlocked: pane.usageLimitAt != null,
+        quotaBlocked: paneUsageLimited(paneId),
       })
     ) {
       void fireLoopContinue(paneId)
@@ -4716,6 +4726,13 @@ function stopPaneHealthWatcher(paneId: string): void {
   }
 }
 
+function paneQuotaReading(pane: ActivePane) {
+  // An unrecorded launch has no account evidence. Never substitute whichever
+  // account happens to be active now for a retained or unknown pane.
+  if (pane.profileId === undefined || pane.profileId === '') return undefined
+  return accountUsageFor(pane.agentKey, pane.profileId)
+}
+
 /** The quota half of the pane health watch: light `usageLimitAt/Until` on a
  *  fresh limit message, and drop them once the quota is due back. */
 function checkPaneUsageLimit(
@@ -4745,18 +4762,14 @@ function checkPaneUsageLimit(
     // baseline. Without its third part, though — the reset is NOT recorded as
     // judged, or one reading under the line would leave the pane unflaggable
     // until that reset passed. See clearPaneUsageLimit.
-    if (hasHeadlineHeadroom(usageFor(pane.agentKey))) {
+    const snap = paneQuotaReading(pane)
+    if (readingIsCurrent(snap) && judgeReading(snap, quotaSemanticsFor(pane.agentKey), now).positive) {
       clearPaneUsageLimit(pane, 'quota-back', false)
     }
     return
   }
-  // A quota-failover hold with no flag: the switch moved the account and the
-  // ordinary flag is gone, but the pipeline gate stays shut until a CURRENT
-  // reading of this account positively shows headroom (readingIsCurrent
-  // rejects the refreshPending figures a switch publishes first).
-  if (pane.quotaGateIncidentId && hasHeadlineHeadroom(usageFor(pane.agentKey))) {
-    pane.quotaGateIncidentId = null
-  }
+  // Provider readings carry no account/epoch proof. Only the backend's ready
+  // incident can release a failover hold after validating that attribution.
   const tail = unseenTail(buf, bytes, watcher.limitBaseline, PANE_HEALTH_TAIL_CHARS)
   const hit = detectUsageLimit(pane.agentKey, tail, now)
   if (hit === QUOTA_READING_VETO) {
@@ -4879,23 +4892,26 @@ function checkPaneUsageLimit(
  *  No notification either: this observes a state that may have been true for a
  *  quarter of an hour, and every notification the pane has says "just now". */
 function raiseFromQuotaReading(pane: ActivePane, watcher: PaneHealthWatcher, now: number): void {
-  const snap = usageFor(pane.agentKey)
+  const snap = paneQuotaReading(pane)
   // Same freshness bar the lowering side answers to. Without it the two ends
   // disagree about what "not known yet" means, and the case that exposes it is
   // an account switch: the incoming account publishes cached figures carrying
   // refreshPending, still `status: 'ok'`, so this would re-light the badge one
   // tick later from a reading nobody has taken — defeating the switch's own
   // clear and making the claim in clearPaneUsageLimits untrue.
-  if (!readingIsCurrent(snap) || exhaustedWindow(snap) === undefined) return
-  if (snap!.fetchedAt === watcher.dismissedReadingAt) return
-  const resumeAt = usageResumeAt(pane.agentKey, now)
-  if (isDismissedUsageLimit(watcher.dismissedLimitUntil, resumeAt, now)) return
+  if (!readingIsCurrent(snap)) return
+  const spent = judgeReading(snap, quotaSemanticsFor(pane.agentKey), now).spent[0]
+  if (!spent) return
+  const sameAccount = (watcher.limitProfileId ?? '__default__') === (pane.profileId ?? '__default__')
+  if (sameAccount && snap!.fetchedAt === watcher.dismissedReadingAt) return
+  const resetAt = spent.resetsAt ? Date.parse(spent.resetsAt) : NaN
+  const resumeAt = Number.isFinite(resetAt) && resetAt > now ? resetAt + LIMIT_RESET_BUFFER_MS : null
+  if (sameAccount && isDismissedUsageLimit(watcher.dismissedLimitUntil, resumeAt, now)) return
   pane.usageLimitAt = now
   pane.usageLimitUntil = resumeAt
-  watcher.limitProfileId = cliProfilesApi.defaultProfileId(pane.agentKey)
+  watcher.limitProfileId = pane.profileId ?? null
   // The reading itself is the signal here (no text): the backend checks its
   // own snapshot of the slot before trusting it.
-  const spent = exhaustedWindow(snap)
   void quotaFailover.report({
     agentKey: pane.agentKey,
     paneId: pane.id,
@@ -4927,10 +4943,16 @@ function raiseFromQuotaReading(pane: ActivePane, watcher: PaneHealthWatcher, now
 function clearPaneUsageLimits(
   agentKey: string,
   newDefaultId: string | null,
-  opts: { resumeLoop: boolean } = { resumeLoop: true },
+  opts: { resumeLoop: boolean; paneIds?: ReadonlySet<string> } = { resumeLoop: true },
 ): void {
   for (const pane of panes.value) {
     if (pane.agentKey !== agentKey) continue
+    if (opts.paneIds && !opts.paneIds.has(pane.id)) continue
+    if (opts.resumeLoop) {
+      // A manual account switch is the user's explicit continuation choice.
+      pane.quotaGateIncidentId = null
+      pane.resumeContinueAvailable = false
+    }
     if (pane.usageLimitAt == null) {
       // A pane that is not flagged may still hold the suppression from an
       // earlier clear. Switching back to the exhausted account makes a later
@@ -4974,7 +4996,7 @@ function clearPaneUsageLimit(
     w.limitBaseline = paneCleanBytes(pane.id)
     if (remember) {
       w.dismissedLimitUntil = pane.usageLimitUntil ?? null
-      w.dismissedReadingAt = usageFor(pane.agentKey)?.fetchedAt ?? null
+      w.dismissedReadingAt = paneQuotaReading(pane)?.fetchedAt ?? null
     }
   }
   pane.usageLimitAt = null
@@ -4982,7 +5004,7 @@ function clearPaneUsageLimit(
   // A quota-failover switch never resumes the loop on the user's behalf: the
   // account moved, but whether the work should go on is theirs to say. The
   // parked loop keeps its wait and the pane offers the explicit continue.
-  if (waitingOnThisLimit && !opts.resumeLoop) {
+  if (pane.loopActive && !opts.resumeLoop) {
     pane.resumeContinueAvailable = true
     return
   }
@@ -4995,6 +5017,7 @@ function dismissPaneUsageLimit(paneId: string): void {
   if (!pane) return
   // The user's explicit judgement also lifts a quota-failover hold.
   pane.quotaGateIncidentId = null
+  pane.resumeContinueAvailable = false
   if (pane.usageLimitAt == null) return
   clearPaneUsageLimit(pane, 'usage-limit-dismiss')
 }
@@ -5857,6 +5880,8 @@ function scheduleInjection(pane: ActivePane): void {
 }
 
 interface SpawnInternal {
+  quotaTransactionId?: string
+  quotaOriginalPaneId?: string
   agentKey: string
   roleKey: RoleKey
   stageId: StageId
@@ -6279,6 +6304,8 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
       restoreMode: opts.restoreMode,
       skipReattach: opts.restoreMode === 'fresh',
       replayScrollback: opts.scrollbackHandoff,
+      quotaTransactionId: opts.quotaTransactionId,
+      quotaOriginalPaneId: opts.quotaOriginalPaneId,
       loginProfileId: opts.loginProfileId,
       isLogin: opts.isLogin,
     })
@@ -6336,7 +6363,7 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
   return id
 }
 
-async function onManualSpawn(payload: SpawnPayload): Promise<string | null> {
+async function onManualSpawn(payload: SpawnPayload, quota?: { transactionId: string; originalPaneId: string }): Promise<string | null> {
   // The synthetic manual tab deliberately has no run-group id; a real tab
   // keeps its own id instead of falling back to a background pipeline group.
   //
@@ -6372,6 +6399,8 @@ async function onManualSpawn(payload: SpawnPayload): Promise<string | null> {
     runGroupId: spawnGroupId || undefined,
     loginProfileId: payload.loginProfileId,
     isLogin: payload.isLogin,
+    quotaTransactionId: quota?.transactionId,
+    quotaOriginalPaneId: quota?.originalPaneId,
   })
   if (paneId) {
     const resp = await sendQuiet<ProjectPayload>('manual_pane.spawn', {
@@ -7111,6 +7140,8 @@ async function rebuildPaneViaResume(
      *  new one before its PTY starts. Off for an ordinary rebuild, whose
      *  history the CLI's own resume reprints. */
     preserveScrollback?: boolean
+    quotaCommit?: QuotaCommitEvent
+    quotaOriginalPaneId?: string
   }
 ): Promise<RebuildFailure | undefined> {
   const pane = panes.value.find((p) => p.id === paneId)
@@ -7289,12 +7320,14 @@ async function rebuildPaneViaResume(
       skipRoleInjection: true,
       restoreMode: 'fresh',
       sessionHomeId: snap.sessionHomeId,
-      profileId: snap.profileId,
+      profileId: opts?.quotaCommit?.toSlotId ?? snap.profileId,
       resumeSessionId: sessionId,
       model: snap.model,
       effort: snap.effort,
       replacePaneId: paneId, // Atomic swap to prevent layout shift
       scrollbackHandoff: scrollbackHandoff || undefined,
+      quotaTransactionId: opts?.quotaCommit?.transactionId,
+      quotaOriginalPaneId: opts?.quotaOriginalPaneId,
     })
     if (newId) {
       // A rebuild retires the old pane id exactly like a restore does, so the
@@ -8014,12 +8047,14 @@ async function quotaPaneReadiness(paneId: string, opts: { needsResume: boolean }
   return { ready: true, sessionId, resumable: !!sessionId }
 }
 
-async function quotaRestartPane(pane: PrepareEventPane): Promise<RestartOutcome> {
+async function quotaRestartPane(pane: PrepareEventPane, ev: QuotaCommitEvent): Promise<RestartOutcome> {
   let newPaneId: string | null = null
   const failure = await rebuildPaneViaResume(pane.paneId, {
     suppressBusyToast: true,
     offerContinue: true,
     preserveScrollback: true,
+    quotaCommit: ev,
+    quotaOriginalPaneId: pane.originalPaneId ?? pane.paneId,
     onReplaced: (id) => { newPaneId = id },
   })
   if (failure) return { outcome: 'failed', reason: failure }
@@ -8033,7 +8068,7 @@ async function quotaRestartPane(pane: PrepareEventPane): Promise<RestartOutcome>
   }
 }
 
-async function quotaOpenNewConversation(pane: PrepareEventPane): Promise<RestartOutcome> {
+async function quotaOpenNewConversation(pane: PrepareEventPane, ev: QuotaCommitEvent): Promise<RestartOutcome> {
   // A fresh conversation the user agreed to — NOT the old pane's task. It
   // keeps the CLI, model and effort so the account is used the same way, but
   // no role, no stage and no kickoff: nothing from the interrupted work is
@@ -8047,9 +8082,17 @@ async function quotaOpenNewConversation(pane: PrepareEventPane): Promise<Restart
     model: old?.model ?? '',
     effort: old?.effort ?? '',
     workspacePath: pane.workspacePath || old?.workspacePath || currentWorkspace.value,
-  } as SpawnPayload)
+  } as SpawnPayload, { transactionId: ev.transactionId, originalPaneId: pane.originalPaneId ?? pane.paneId })
   if (!id) return { outcome: 'failed', reason: 'spawn-failed' }
   return { outcome: 'new-conversation', paneId: id, termId: (paneRefs[id]?.sessionId as string | undefined) ?? null }
+}
+
+function verifiedHotSwitchedPanes(agentKey: string, proofs: HotSwitchedPane[] | undefined, targetSlotId: string | null | undefined): HotSwitchedPane[] | undefined {
+  return proofs?.filter((proof) => targetSlotId !== undefined &&
+    (proof.profileId ?? '__default__') === (targetSlotId ?? '__default__') && proof.termId &&
+    (proof.profileId === null || typeof proof.profileId === 'string' && proof.profileId !== '') &&
+    panes.value.some((pane) => pane.id === proof.paneId && pane.agentKey === agentKey) &&
+    paneRefs[proof.paneId]?.sessionId === proof.termId)
 }
 
 quotaFailover.initQuotaFailover(backend, {
@@ -8092,13 +8135,19 @@ quotaFailover.initQuotaFailover(backend, {
   slotLabel: (agentKey, slotId) =>
     accountLabel(cliProfilesApi, agentKey, slotId === '__default__' ? null : slotId, i18n.global.t),
   onSwitchCommitted: (ev: QuotaCommitEvent) => {
+    for (const proof of verifiedHotSwitchedPanes(ev.agentKey, ev.hotSwitchedPanes, ev.toSlotId) ?? []) {
+      panes.value.find((p) => p.id === proof.paneId)!.profileId = proof.profileId ?? '__default__'
+    }
     // Hold the pipeline quota gate on the affected panes until the incident
     // is verified (or stops): the exhausted-account flag is cleared by the
     // cli_profiles.changed that accompanies the commit, and without this a
     // replacement pane's blank flag would read as "quota back".
     for (const listed of ev.panes) {
       const pane = panes.value.find((p) => p.id === listed.paneId)
-      if (pane) pane.quotaGateIncidentId = ev.incidentId
+      if (pane) {
+        pane.quotaGateIncidentId = ev.incidentId
+        if (pane.loopActive) pane.resumeContinueAvailable = true
+      }
     }
   },
   onIncidentReady: (incident: FailoverIncident) => releaseQuotaGate(incident.id),
@@ -8121,8 +8170,7 @@ function releaseQuotaGate(incidentId: string): void {
 }
 // A stopped incident does NOT release the hold: "switched, quota
 // unconfirmed" or "the new account ran out too" is not a recovery. The hold
-// lifts on evidence only — the incident reaching `ready`, a current reading
-// of the pane's account with headroom (checkPaneUsageLimit), or the user
+// lifts on evidence only — the incident reaching `ready`, or the user
 // dismissing the pane's quota badge (dismissPaneUsageLimit).
 // A run of failed background checks is not an update status of its own — it
 // rides alongside whatever the status is. Surface it in the status bar only
@@ -12979,6 +13027,7 @@ backend.on('cli_profiles.changed', (raw) => {
     harvestedProfileIds?: string[]
     identities?: Record<string, Record<string, { email?: string | null }>>
     defaults?: Record<string, string | null>
+    hotSwitchedPanes?: HotSwitchedPane[]
   }
   // Forced account switch: credentials were swapped under live panes. Every
   // main window receives this broadcast and restarts its own panes for the
@@ -12988,12 +13037,18 @@ backend.on('cli_profiles.changed', (raw) => {
   // Any account switch, quiet or forced, moves this agent's panes onto
   // quota that is not the exhausted one (see clearPaneUsageLimits).
   if (ev?.reason === 'set_default' && ev.agent_key) {
+    const hotSwitched = verifiedHotSwitchedPanes(ev.agent_key, ev.hotSwitchedPanes, ev.defaults?.[ev.agent_key])
     // A switch the quota-failover transaction made clears the flag but must
     // not resume a parked loop or replay anything (the plan's no-auto-continue
     // rule); a manual switch keeps the behaviour it always had.
     clearPaneUsageLimits(ev.agent_key, ev.defaults?.[ev.agent_key] ?? null, {
       resumeLoop: !quotaFailover.agentHasActiveTransaction(ev.agent_key),
+      paneIds: hotSwitched ? new Set(hotSwitched.map((proof) => proof.paneId)) : undefined,
     })
+    for (const proof of hotSwitched ?? []) {
+      const pane = panes.value.find((p) => p.id === proof.paneId)!
+      pane.profileId = proof.profileId ?? '__default__'
+    }
   }
   const restartKey = forcedRestartAgentKey(ev)
   if (restartKey) {

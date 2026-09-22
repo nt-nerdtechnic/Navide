@@ -96,6 +96,13 @@ export function runTerminalDockContract(createHarness: () => TerminalDockContrac
       ])
     })
 
+    it('sends quota lineage as top-level claims without using replacement-kill semantics', async () => {
+      const harness = createHarness()
+      await harness.port.create({ ...createRequest(), replacesTerminalId: null, quotaTransactionId: 'tx-1', quotaOriginalPaneId: 'original-pane' }, 22)
+      expect(harness.sent[0].payload).toMatchObject({ quota_transaction_id: 'tx-1', quota_original_pane_id: 'original-pane', replaces_terminal_id: null })
+      expect(harness.sent[0].payload.metadata).toEqual({ origin: 'contract' })
+    })
+
     it('delivers output and exit events through named subscriptions with cleanup', () => {
       const harness = createHarness()
       const outputs: TerminalOutputEvent[] = []

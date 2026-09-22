@@ -1733,12 +1733,13 @@ async def _broadcast_profiles_changed(
     harvested_profile_ids: list[str] | None = None,
     agent_key: str | None = None,
     forced: bool | None = None,
+    hot_switched_panes: list[dict[str, Any]] | None = None,
 ) -> None:
     from . import app
 
-    doc = app.cli_profiles_store.list()
     view = await asyncio.to_thread(_profile_account_view)
     portable = await asyncio.to_thread(_portable_credentials_view)
+    doc = app.cli_profiles_store.list()
     payload = {
         "profiles": doc["profiles"],
         "defaults": doc["defaults"],
@@ -1762,6 +1763,13 @@ async def _broadcast_profiles_changed(
         # its own panes of that agent onto the new credentials.
         payload["agent_key"] = agent_key
         payload["forced"] = bool(forced)
+    if hot_switched_panes is not None:
+        # Another window can switch again while the account views are read.
+        # Never pair rows from that earlier switch with the newer default.
+        payload["hotSwitchedPanes"] = [
+            row for row in hot_switched_panes
+            if agent_key in doc["defaults"] and row["profileId"] == doc["defaults"][agent_key]
+        ]
     await app.broadcast(make_event("cli_profiles.changed", payload))
 
 
@@ -2241,6 +2249,7 @@ async def cli_profiles_set_default(session: "Session", msg_id: str, msg_type: st
     agent_key = str(payload.get("agent_key") or "")
     raw_profile_id = payload.get("profile_id")
     profile_id = str(raw_profile_id) if raw_profile_id else None
+    hot_switched_panes: list[dict[str, Any]] | None = None
 
     # Validate before touching any credentials.
     if agent_key not in PROFILE_AGENT_KEYS:
@@ -2556,6 +2565,11 @@ async def cli_profiles_set_default(session: "Session", msg_id: str, msg_type: st
                 make_error(msg_id, msg_type, "BAD_REQUEST", _profile_error(err))
             )
             return
+        if agent_key in HOT_SWAP_AGENTS:
+            auth_scope = quota_failover.auth_scope_for_scope(agent_key, switch_scope)
+            hot_switched_panes = app.quota_failover.rebind_hot_panes(
+                agent_key, profile_id or DEFAULT_SLOT_ID, auth_scope,
+            )
         await session.send_json(
             make_response(msg_id, msg_type, {
                 "defaults": defaults,
@@ -2569,6 +2583,14 @@ async def cli_profiles_set_default(session: "Session", msg_id: str, msg_type: st
                 "needsLoginReason": login_reason,
             })
         )
+    # The user switched by hand: any automatic proposal still pending for this
+    # agent is withdrawn and the failover epoch moves, so a stale proposal
+    # cannot commit against the account the user just chose. Publish this
+    # before profiles.changed so windows recognize a manual restart.
+    try:
+        await app.quota_failover.on_manual_switch(agent_key, profile_id)
+    except Exception:  # noqa: BLE001 — the switch itself succeeded and was answered
+        app.log.exception("quota_failover: manual switch hook failed")
     # `forced` is what makes every window restart its panes of this agent. A
     # hot-swap agent's panes must never be restarted, so the flag stays False
     # for them even when the caller passed force=true.
@@ -2576,14 +2598,8 @@ async def cli_profiles_set_default(session: "Session", msg_id: str, msg_type: st
         "set_default",
         agent_key=agent_key,
         forced=agent_key not in HOT_SWAP_AGENTS and bool(payload.get("force")),
+        hot_switched_panes=hot_switched_panes,
     )
-    # The user switched by hand: any automatic proposal still pending for this
-    # agent is withdrawn and the failover epoch moves, so a stale proposal
-    # cannot commit against the account the user just chose.
-    try:
-        await app.quota_failover.on_manual_switch(agent_key, profile_id)
-    except Exception:  # noqa: BLE001 — the switch itself succeeded and was answered
-        app.log.exception("quota_failover: manual switch hook failed")
     # The usage badges read the active account's credentials — force the poller
     # to re-fetch now so the badge reflects the switch immediately.
     from .usage_service import service
@@ -2704,7 +2720,7 @@ async def quota_failover_settle(session: "Session", msg_id: str, msg_type: str, 
     from . import app
 
     await _failover_call(
-        session, msg_id, msg_type, lambda: app.quota_failover.settle(payload),
+        session, msg_id, msg_type, lambda: app.quota_failover.settle(payload, owner=session),
         shape=lambda tx: {"transaction": tx.to_dict()},
     )
 
@@ -6474,6 +6490,11 @@ async def terminal_create(session: "Session", msg_id: str, msg_type: str, payloa
                         },
                     )
                 )
+        except quota_failover.FailoverRefused as err:
+            await _rollback_terminal_create(session, transaction)
+            session._terminal_create_transactions.pop(key, None)
+            if not session.dead:
+                await session.send_json(make_error(msg_id, msg_type, err.code, str(err), err.details))
         except BaseException:
             await _rollback_terminal_create(session, transaction)
             session._terminal_create_transactions.pop(key, None)
@@ -6571,6 +6592,9 @@ async def _terminal_create_impl(
     from . import app
 
     metadata = payload.get("metadata") or {}
+    # These are server attestations, never renderer-provided metadata.
+    for key in ("quota_transaction_id", "quota_original_pane_id", "credential_epoch"):
+        metadata.pop(key, None)
     agent_key = payload.get("agent_key") or ""
     # The window's per-vendor env settings, first in the chain on purpose: the
     # vendor defaults below use setdefault, while onboarding, login profiles,
@@ -6661,8 +6685,25 @@ async def _terminal_create_impl(
                 )
             )
             return
+        # The pending snapshot reserves a live credential store before its
+        # PTY exists. Inspect it and create it under the same lock as regular
+        # spawns and swaps; a rejected duplicate must never touch it.
+        login_lock = app.credential_vault.switch_lock(agent_key)
+        await asyncio.wait_for(login_lock.acquire(), timeout=_SWITCH_LOCK_TIMEOUT_SEC)
         try:
-            login_set, login_remove = await asyncio.to_thread(
+            isolated = getattr(app.credential_vault, "_login_isolated", None)
+            if callable(isolated) and not isolated(agent_key):
+                running = _running_regular_terminals(agent_key) + _running_live_login_terminals(agent_key)
+                pending = await vault_to_thread(_live_login_pending, agent_key)
+                if running or pending:
+                    await session.send_json(make_error(
+                        msg_id, msg_type, "LOGIN_BLOCKED_BY_LIVE_PANES",
+                        "the live credential is in use or a sign-in is already pending; "
+                        "finish or close it first",
+                        {"count": len(running), "agent_key": agent_key},
+                    ))
+                    return
+            login_set, login_remove = await vault_to_thread(
                 functools.partial(
                     app.credential_vault.login_spawn_env, agent_key, login_profile_id,
                     **quota_failover.scope_kwargs(
@@ -6681,6 +6722,8 @@ async def _terminal_create_impl(
             )
             await _reclaim_codex_home(str(transaction.get("codex_home_id") or ""))
             return
+        finally:
+            login_lock.release()
         env.update(login_set)
         env_remove = login_remove or None
         # Mark the terminal as a LOGIN pane: the login harvest (on account
@@ -6952,26 +6995,6 @@ async def _terminal_create_impl(
     # lock, below) and reused by the history pin after the spawn: two reads
     # could straddle a switch and file the pane under two accounts.
     history_pin: str | None = None
-    if agent_key in PROFILE_AGENT_KEYS and not login_profile_id and (
-        _running_live_login_terminals(agent_key)
-        or await vault_to_thread(_live_login_pending, agent_key)
-    ):
-        # A sign-in against the live credential store is under way (or has
-        # written a credential nobody has parked yet): a pane started now
-        # would run on that temporary credential while being pinned to the
-        # store's default — every usage figure it produced would be filed
-        # under the wrong account. Refuse until the sign-in is harvested or
-        # discarded.
-        await session.send_json(
-            make_error(
-                msg_id, msg_type, "LOGIN_IN_PROGRESS",
-                f"a {agent_key} sign-in is rewriting the live credential; wait for it "
-                "to finish before opening a new pane",
-                {"agent_key": agent_key},
-            )
-        )
-        await _reclaim_codex_home(str(transaction.get("codex_home_id") or ""))
-        return
     if agent_key in PROFILE_AGENT_KEYS and not login_profile_id:
         # A regular pane of a profile agent starts on the live credentials —
         # the very state an account switch swaps. Spawning under the agent's
@@ -7010,6 +7033,19 @@ async def _terminal_create_impl(
                 "pane again"
             ) from None
         try:
+            if _running_live_login_terminals(agent_key) or await vault_to_thread(
+                _live_login_pending, agent_key
+            ):
+                # Recheck inside the spawn lock: a login may have reserved
+                # the live store while this request was waiting for it.
+                await session.send_json(make_error(
+                    msg_id, msg_type, "LOGIN_IN_PROGRESS",
+                    f"a {agent_key} sign-in is rewriting the live credential; wait for it "
+                    "to finish before opening a new pane",
+                    {"agent_key": agent_key},
+                ))
+                await _reclaim_codex_home(str(transaction.get("codex_home_id") or ""))
+                return
             # The portable credential this agent's panes are set to run on,
             # if any — read here, under the same lock, so a switch racing
             # this spawn cannot pair one account's live files with another's
@@ -7076,7 +7112,18 @@ async def _terminal_create_impl(
             metadata["auth_scope"] = provenance["authScope"]
             metadata["credential_source"] = provenance["credentialSource"]
             metadata["credential_env"] = provenance["credentialEnv"]
+            metadata["credential_epoch"] = app.quota_failover.epoch(agent_key)
+            quota_tx_id = str(payload.get("quota_transaction_id") or "")
+            quota_pane_id = str(payload.get("quota_original_pane_id") or "")
+            if quota_tx_id or quota_pane_id:
+                app.quota_failover.validate_restart_spawn(
+                    quota_tx_id, quota_pane_id, owner=session, agent_key=agent_key, metadata=metadata,
+                )
+                metadata["quota_transaction_id"] = quota_tx_id
+                metadata["quota_original_pane_id"] = quota_pane_id
             term = _spawn_and_claim()
+            if quota_tx_id:
+                app.quota_failover.record_restart_spawn(quota_tx_id, quota_pane_id, term.id)
         finally:
             switch_lock.release()
     else:

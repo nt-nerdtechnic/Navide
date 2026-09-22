@@ -5,6 +5,8 @@
 // same wall, a different provider scope, and 429 / auth / network / context /
 // payment failures that must NOT read as quota exhaustion.
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import type { UsageSnapshot } from '../../composables/useUsage'
 import {
   DEFAULT_FRESH_WINDOW_MS,
@@ -148,6 +150,20 @@ describe('vendor quota semantics and judgeReading', () => {
     expect(lifted.positive).toBe(true)
     expect(lifted.spent).toEqual([])
     expect(judgeReading(snap([win('cycle', 100), win('on-demand', 100)]), cursor).positive).toBe(false)
+  })
+
+  it('judges raw credit usage/limit without requiring a derived percentage', () => {
+    const raw = { kind: 'credits', label: 'Credits', resetsAt: null, usage: 4, limit: 10 } as QuotaWindowReading
+    expect(windowRemaining(raw)).toBe(60)
+    expect(judgeReading(snap([raw]), quotaSemanticsFor('pi')).positive).toBe(true)
+    expect(windowRemaining({ ...raw, usage: 10 })).toBe(0)
+    expect(windowRemaining({ ...raw, usage: Number.NaN, usedPercent: 0 })).toBeNull()
+    expect(windowRemaining({ ...raw, usage: Number.POSITIVE_INFINITY })).toBeNull()
+    expect(windowRemaining({ ...raw, limit: 0 })).toBeNull()
+    expect(windowRemaining({ ...raw, limit: null })).toBeNull()
+    const balance = { kind: 'credits', label: 'Credits', resetsAt: null, balance: 3 } as QuotaWindowReading
+    expect(judgeReading(snap([balance]), quotaSemanticsFor('kilo')).positive).toBe(true)
+    expect(windowRemaining({ ...balance, balance: 0 })).toBe(0)
   })
 
   it('credits: kilo balance sign decides, pi needs a limit, uncapped is unknown', () => {
@@ -604,5 +620,20 @@ describe('pickAutoCandidate', () => {
     expect(pickAutoCandidate(onlyUnknown)?.slotId).toBe('c')
     expect(pickAutoCandidate(onlyUnknown, { unknownAttempted: true })).toBeNull()
     expect(pickAutoCandidate(rankCandidates(ctx(), []))).toBeNull()
+  })
+})
+
+
+// Shared with backend/tests/test_quota_failover.py: actual payload shapes and
+// the same observation clock, not a second copy of the vendor declarations.
+const readingContract = JSON.parse(readFileSync(resolve(process.cwd(), 'tests/fixtures/quota-reading-contract.json'), 'utf8')) as {
+  now: string
+  cases: { name: string; agentKey: string; windows: QuotaWindowReading[]; spent: boolean; positive: boolean }[]
+}
+describe('shared quota reading contract', () => {
+  it.each(readingContract.cases)('$name', (row) => {
+    const verdict = judgeReading(snap(row.windows, { provider: row.agentKey }), quotaSemanticsFor(row.agentKey), Date.parse(readingContract.now))
+    expect(verdict.spent.length > 0).toBe(row.spent)
+    expect(verdict.positive).toBe(row.positive)
   })
 })

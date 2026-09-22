@@ -908,6 +908,7 @@ def _claim_ptys(session: "Session", terminal_session_ids: list[str]) -> None:
     """Transfer ownership of the given PTY ids to `session`."""
     for tid in terminal_session_ids:
         _PTY_OWNERS[tid] = session
+        quota_failover.note_pty_owner(tid, session)
 
 
 # ── Ownerless-PTY janitor ────────────────────────────────────────────────────

@@ -488,7 +488,10 @@ async def _harvest_login_home_locked(vault, agent_key: str, profile_id: str) -> 
             except Exception as err:  # noqa: BLE001 — both profiles stay usable
                 log.warning("de-duplicating the %s login failed: %s", agent_key, err)
         if _active_profile_id(agent_key) == slot_id:
-            await vault_to_thread(vault.restore, agent_key, slot_id)
+            await vault_to_thread(functools.partial(
+                vault.restore, agent_key, slot_id,
+                **_scope_kwargs(vault.restore, agent_key, slot_id),
+            ))
         return True
 
 
@@ -585,7 +588,10 @@ async def _login_watch(agent_key: str, profile_id: str) -> None:
         try:
             if not _login_pending(vault, agent_key, profile_id):
                 return  # harvested elsewhere (usage poll) or profile deleted
-            if vault.login_secret_present(agent_key, profile_id):
+            if await vault_to_thread(functools.partial(
+                vault.login_secret_present, agent_key, profile_id,
+                **_scope_kwargs(vault.login_secret_present, agent_key, profile_id),
+            )):
                 await _kill_completed_login_panes(agent_key, profile_id)
             elif _login_against_live_store(vault, agent_key) and not _login_pane_running(
                 agent_key, profile_id

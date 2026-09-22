@@ -108,8 +108,14 @@ export function windowRemaining(w: QuotaWindowReading): number | null {
     // A prepaid balance has no percentage; the sign is the whole answer.
     return w.balance > 0 ? 100 : 0
   }
-  if (w.kind === 'credits' && !(Number.isFinite(w.limit) && (w.limit as number) > 0)) return null
-  if (!Number.isFinite(w.usedPercent)) return null
+  if (w.kind === 'credits') {
+    if (!(Number.isFinite(w.limit) && (w.limit as number) > 0)) return null
+    if (w.usage !== undefined && w.usage !== null) {
+      if (!Number.isFinite(w.usage) || w.usage < 0) return null
+      return Math.max(0, Math.min(100, 100 - 100 * w.usage / (w.limit as number)))
+    }
+  }
+  if (!Number.isFinite(w.usedPercent) || w.usedPercent < 0) return null
   return Math.max(0, Math.min(100, 100 - w.usedPercent))
 }
 
@@ -137,10 +143,14 @@ function isCurrentReading(snap: UsageSnapshot | null | undefined): snap is Usage
 export function judgeReading(
   snap: UsageSnapshot | null | undefined,
   semantics: VendorQuotaSemantics | undefined,
+  now?: number,
 ): QuotaReadingVerdict {
   const none: QuotaReadingVerdict = { positive: false, spent: [], missing: [], weakestRemaining: null, measured: new Map() }
   if (!snap || snap.status !== 'ok') return none
-  const windows = (snap.windows as QuotaWindowReading[]).filter((w) => !w.expired)
+  // A reset that passed is only an expectation, never a new measurement.
+  // Historical ranking omits the clock and judges its reset ledger separately.
+  const windows = (snap.windows as QuotaWindowReading[]).filter((w) => !w.expired &&
+    !(now !== undefined && w.resetsAt && Date.parse(w.resetsAt) <= now))
   const present = new Set(windows.map((w) => w.kind))
   const scoped = new Set(semantics?.scoped ?? [])
   // Without declared semantics every non-scoped window is taken as hard: a
