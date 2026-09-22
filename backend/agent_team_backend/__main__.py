@@ -56,7 +56,7 @@ import time  # noqa: E402
 import uvicorn  # noqa: E402
 
 from . import __version__, osplat  # noqa: E402
-from .app import app as _fastapi_app  # noqa: E402
+from .app import app as _fastapi_app, cli_risk_service  # noqa: E402
 from . import confirm_token, ws_auth  # noqa: E402
 from .applog import backend_port_file, setup_file_logging  # noqa: E402
 
@@ -161,6 +161,8 @@ def main() -> int:
             s.bind((args.host, 0))
             resolved_port = s.getsockname()[1]
         log.info("resolved free port: %d", resolved_port)
+    # The CLI risk observer must not flag a CLI's calls back to this backend.
+    cli_risk_service.bound_port = resolved_port
 
     # Write the current port to a discovery file so Claude hooks (installed
     # globally in ~/.claude/settings.json) can find us. Best-effort.

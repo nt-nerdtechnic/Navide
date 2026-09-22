@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from agent_team_backend import app, cli_risk, ws_handlers
+from agent_team_backend import app, applog, cli_risk, ws_handlers
 from agent_team_backend.cli_risk import CliRiskService, RiskPane
 from agent_team_backend.cli_risk_observers import DiskFile, DiskSample, ExpectedAddresses, MIB100
 from agent_team_backend.cli_risk_store import CliRiskStore
@@ -121,6 +121,27 @@ async def test_positive_negative_unknown_and_unsupported(store, expected_status,
         assert len(result["signals"]) == 1 and result["signals"][0]["ip"] == "198.51.100.1"
     if expected_status == "unknown":
         network.assert_not_called()
+    await service.close()
+
+
+async def test_own_backend_loopback_ports_are_not_unexpected(store, tmp_path):
+    """A CLI calling Navide back (hooks, the navide MCP server) is internal:
+    the bound port and the discovery-file port are excluded, other loopback
+    ports and other addresses still count."""
+    applog.backend_port_file().write_text("50410", encoding="utf-8")
+    known = ExpectedAddresses("successful", frozenset({"192.0.2.1"}), 100)
+    network = AsyncMock(return_value=NetworkSample("successful", (
+        Connection(10, "127.0.0.1", 50410), Connection(10, "::1", 50410),
+        Connection(11, "127.0.0.1", 64796), Connection(11, "127.0.0.1", 50411),
+        Connection(11, "198.51.100.1", 50410))))
+    service = CliRiskService(store, clock=lambda: 100, network_collector=network,
+                             resolver=SimpleNamespace(resolve=AsyncMock(return_value=known)))
+    service.bound_port = 64796
+    panes = [pane(roots=())]
+    service.request(panes)
+    await settle(service)
+    flagged = {(signal["ip"], signal["port"]) for signal in service.current(panes)["pane"]["signals"]}
+    assert flagged == {("127.0.0.1", 50411), ("198.51.100.1", 50410)}
     await service.close()
 
 

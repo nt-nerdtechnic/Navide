@@ -9,12 +9,27 @@ from collections import Counter
 from dataclasses import dataclass
 
 from . import osplat
+from .applog import backend_port_file
 from .cli_risk_observers import DISK_TIMEOUT, DNS_TTL, DiskSample, ExpectedAddresses, ExpectedResolver, scan_disk
 from .cli_risk_store import CliRiskStore, project
 from .cli_vendors.registry import expected_hosts_for_context, vendor
 
 log = logging.getLogger(__name__)
 DISK_INTERVAL = 300.0
+LOOPBACK = ("127.0.0.1", "::1")
+
+
+def discovered_backend_port() -> int | None:
+    """Port in the discovery file the CLI hooks and MCP server connect to.
+
+    Another Navide instance (installed vs dev) may have written it, so it is
+    consulted alongside the port this process is bound to.
+    """
+    try:
+        text = backend_port_file().read_text(encoding="utf-8").strip()
+        return int(text) if text else None
+    except (OSError, ValueError):
+        return None
 
 
 @dataclass(frozen=True)
@@ -65,6 +80,7 @@ class CliRiskService:
         self.network_collector = network_collector or osplat.collect_cli_connections
         self.disk_collector = disk_collector
         self.resolver = resolver or ExpectedResolver(clock=clock)
+        self.bound_port: int | None = None
         self._snapshot = store.snapshot()
         self._disk_attempts = {key: value["at"] for key, value in store.records["attempts"].items()}
         self._network_task: asyncio.Task | None = None
@@ -91,6 +107,13 @@ class CliRiskService:
 
     def current(self, panes: list[RiskPane]) -> dict:
         return project(self._snapshot, panes, self.clock())
+
+    def _internal_endpoints(self) -> frozenset[tuple[str, int]]:
+        """Loopback endpoints of Navide backends: a CLI calling its own host
+        (hooks, the navide MCP server) is not an unexpected connection. Only
+        these exact ports are excluded, never loopback as a whole."""
+        ports = {port for port in (self.bound_port, discovered_backend_port()) if port}
+        return frozenset((ip, port) for ip in LOOPBACK for port in ports)
 
     async def _apply(self, operation, *args):
         async with self._apply_lock:
@@ -120,6 +143,7 @@ class CliRiskService:
             comparable = [pane for pane in supported
                           if expected_by_profile[(pane.vendor, pane.hosts)].status == "successful"]
             sample = await self.network_collector(sorted({pid for pane in comparable for pid in pane.pids})) if comparable else None
+            internal = await asyncio.to_thread(self._internal_endpoints)
             now = self.clock()
             for pane in panes:
                 expected = expected_by_profile.get((pane.vendor, pane.hosts), ExpectedAddresses("unsupported"))
@@ -131,7 +155,8 @@ class CliRiskService:
                         status = "unknown"
                     if status == "successful":
                         endpoints.update((c.ip, c.port) for c in sample.connections
-                                         if c.pid in pane.pids and c.ip not in expected.addresses)
+                                         if c.pid in pane.pids and c.ip not in expected.addresses
+                                         and (c.ip, c.port) not in internal)
                 await self._apply(self.store.apply_network, pane.pane_id, pane.vendor,
                                   status, endpoints, expected, now)
         except Exception:  # A failed background observation must not break resource responses.
