@@ -330,3 +330,38 @@ Record shapes came from droid's own zod schemas and read loops inside the
 250MB bundle, cross-checked against a real session file. `verifiedTurnText`
 stays unset: no authenticated session has exercised the assistant/outcome path
 yet.
+
+
+### Managed credential destinations
+
+Kilo and OpenCode declare `credential_path_env_vars`, `live_file_from_context`
+and `fetch_usage_from_context`. Their launch helper reports only the declared
+path inputs, effective home/cwd, and credential-override variable names over an
+authenticated, single-use loopback connection after shell startup. Credential
+values and the rest of the environment are never reported. The owning create
+coroutine keeps the vendor lock through binding and the pre-login snapshot,
+then releases the CLI with GO. It preserves the original logical command for
+resume/history and does not override HOME or XDG_DATA_HOME.
+
+Each vendor has one managed store. Vault reads/writes, credential-file watches
+and native usage reads use that destination. Existing SQLite KV storage keeps
+only canonical path, home, cwd and declared path inputs; launch tokens and
+credential contents are not stored in that record. A saved destination is not
+fresh proof for another pane. Account mutations require compatible launch
+proof from every running pane of that vendor.
+
+A clean installation can bind its first observed store. Upgrades must agree
+with existing live credentials, the active slot and recorded ownership. An
+ambiguous upgrade or a different destination leaves normal CLI execution
+available but refuses account mutation with a reason. There is no store picker,
+automatic replacement, credential migration or independent default per store.
+
+The literal bash/zsh command seam recognizes native vendor executables and
+package-declared entrypoints; arbitrary functions/scripts retain their original
+shell command and error semantics without account-mutation authority. Native
+Windows launches reuse the existing command parser and recognized npm `.cmd`
+unwrapping; unknown batch wrappers keep their original launch. The Windows
+helper waits for its child within the existing ConPTY job. Source helper tests
+and platform substitutes do not certify a packaged build or real Windows
+execution. Other ambient-path adapters still require explicit declarations and
+same-launch coverage before this contract can be claimed for them.

@@ -1106,7 +1106,7 @@ class UsageService:
         home = home or Path.home()
         codex_home = Path(os.environ["CODEX_HOME"]) if os.environ.get("CODEX_HOME") \
             else home / ".codex"
-        # Non-Claude providers retain their real-home reads. Claude resolves
+        # Providers with a managed destination read its bound context. Claude resolves
         # every account independently without switching the active profile.
         await self._harvest_active_slots()
         now = time.monotonic()
@@ -1155,7 +1155,14 @@ class UsageService:
             if self._blocked_until.get(provider, 0) > now:
                 continue
             fetch = spec.fetch_usage
-            tasks[provider] = asyncio.create_task(fetch(home))
+            vault = _get_credential_vault()
+            stores = getattr(vault, "stores", None)
+            if stores is not None and stores.enabled(provider) and spec.fetch_usage_from_context:
+                async def bound_fetch(key=provider, adapter=spec):
+                    return await adapter.fetch_usage_from_context(stores.context(key))
+                tasks[provider] = asyncio.create_task(bound_fetch())
+            else:
+                tasks[provider] = asyncio.create_task(fetch(home))
         for slot_id, task in claude_tasks.items():
             try:
                 snap = await task

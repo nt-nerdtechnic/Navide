@@ -1208,7 +1208,7 @@ async def test_fetch_antigravity_expired_grant_reads_as_expired(monkeypatch):
 # ── opencode fetch (aggregator over auth.json entries) ──────────────────────
 
 def _with_opencode_auth(monkeypatch, auth: dict | None):
-    monkeypatch.setattr(opencode_vendor, "read_opencode_credentials", lambda home: auth)
+    monkeypatch.setattr(opencode_vendor, "read_opencode_credentials", lambda home, env=None: auth)
 
 
 async def test_fetch_opencode_no_credentials(monkeypatch):
@@ -1413,7 +1413,7 @@ _KILO_PASS_URL = us.KILO_DEFAULT_BASE + us.KILO_PASS_PATH
 
 
 def _with_kilo_creds(monkeypatch, creds={"token": "kilo-tok", "org_id": None}):
-    monkeypatch.setattr(kilo_vendor, "read_kilo_credentials", lambda home, env=None: creds)
+    monkeypatch.setattr(kilo_vendor, "read_kilo_credentials", lambda home, env=None, *, bound_store=False: creds)
 
 
 async def test_fetch_kilo_no_credentials(monkeypatch):

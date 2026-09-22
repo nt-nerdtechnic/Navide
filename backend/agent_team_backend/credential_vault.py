@@ -324,12 +324,14 @@ class CredentialVault:
         real_home: Path | None = None,
         security_runner: SecurityRunner | None = None,
         platform: str | None = None,
+        stores=None,
     ) -> None:
         self._root = Path(canonical_path_str(root or default_profiles_root()))
         self._real_home = Path(real_home or Path.home())
         self._security = security_runner or _default_security_runner
         self._platform = platform or sys.platform
         self._switch_locks: dict[str, asyncio.Lock] = {}
+        self.stores = stores
 
     def switch_lock(self, agent_key: str) -> asyncio.Lock:
         """Per-agent lock serializing credential swaps and opportunistic
@@ -358,7 +360,13 @@ class CredentialVault:
     def _slot_service(self, agent_key: str, slot_id: str) -> str:
         return f"{_SLOT_SERVICE_PREFIX}{agent_key}-{slot_id}"
 
+    def require_store_mutation(self, agent_key: str) -> None:
+        if self.stores is not None:
+            self.stores.require_mutation(agent_key)
+
     def _live_file(self, agent_key: str) -> Path:
+        if self.stores is not None and self.stores.enabled(agent_key):
+            return self.stores.path(agent_key)
         spec = _cli_vendor_spec(agent_key)
         if spec is not None and spec.live_file_resolver is not None:
             try:
@@ -575,6 +583,7 @@ class CredentialVault:
     def write_live(
         self, agent_key: str, creds: LiveCredentials, *, scope: str | None = None
     ) -> None:
+        self.require_store_mutation(agent_key)
         if agent_key == "claude":
             if creds.secret is None:
                 if self._is_macos:
@@ -949,6 +958,7 @@ class CredentialVault:
         whose tokens Claude Code wiped in place leaves the slot's stored secret
         alone (``write_slot``); the returned snapshot still mirrors the live
         state so callers can roll it back."""
+        self.require_store_mutation(agent_key)
         creds = self.read_live(agent_key, strict=True, scope=scope)
         self.write_slot(agent_key, slot_id, creds, scope=scope)
         return creds
@@ -992,6 +1002,7 @@ class CredentialVault:
         No-op when the slot already holds a secret or nothing is signed in — a
         claude credential whose tokens were wiped counts as nothing.
         Returns True when something was harvested."""
+        self.require_store_mutation(agent_key)
         if not self.slot_is_empty(agent_key, slot_id, scope=scope):
             return False
         creds = self.read_live(agent_key, scope=scope)
@@ -1177,6 +1188,7 @@ class CredentialVault:
         the live credential taken now (see ``_PRE_LOGIN_SNAPSHOT_FILE``).
         ``scope`` is the profile's provider scope for a per-provider store.
         Blocking I/O — call off the event loop."""
+        self.require_store_mutation(agent_key)
         if agent_key not in _SLOT_FILES:
             raise ValueError(f"unsupported agent for CLI login homes: {agent_key!r}")
         spec = _cli_vendor_spec(agent_key)

@@ -1907,6 +1907,7 @@ async def cli_profiles_create(session: "Session", msg_id: str, msg_type: str, pa
             make_error(msg_id, msg_type, "BAD_REQUEST", _profile_error(err))
         )
         return
+    session._created_cli_profile_id = profile["id"]
     doc = app.cli_profiles_store.list()
     await session.send_json(
         make_response(
@@ -2285,6 +2286,13 @@ async def cli_profiles_set_default(session: "Session", msg_id: str, msg_type: st
     # a slot. Reading current_id inside the lock is essential — a second waiter
     # must see the first switch's persisted result.
     async with app.credential_vault.switch_lock(agent_key):
+        guard = getattr(app.credential_vault, "require_store_mutation", None)
+        if guard is not None:
+            try:
+                await vault_to_thread(guard, agent_key)
+            except ValueError as err:
+                await session.send_json(make_error(msg_id, msg_type, "CREDENTIAL_STORE_UNVERIFIED", str(err)))
+                return
         pending = app.quota_failover.unreconciled(agent_key)
         if pending is not None:
             # A failover swap moved the credentials but could not persist the
@@ -6565,6 +6573,12 @@ async def _rollback_terminal_create(
             if app._PTY_OWNERS.get(term_id) is session:
                 app._PTY_OWNERS.pop(term_id, None)
             await session.terminals.kill(term_id, force=True)
+        snapshot = transaction.pop("store_login_snapshot", None)
+        if snapshot is not None:
+            agent_key, slot_id, scope_kw = snapshot
+            async with app.credential_vault.switch_lock(agent_key):
+                await vault_to_thread(functools.partial(
+                    app.credential_vault.discard_pending_login, agent_key, slot_id, **scope_kw))
         # The per-pane CODEX_HOME this create prepared: without a rollout in
         # it there is nothing to resume, and a failed spawn used to leave one
         # behind every time (#121).
@@ -6593,7 +6607,9 @@ async def _terminal_create_impl(
 
     metadata = payload.get("metadata") or {}
     # These are server attestations, never renderer-provided metadata.
-    for key in ("quota_transaction_id", "quota_original_pane_id", "credential_epoch"):
+    for key in ("quota_transaction_id", "quota_original_pane_id", "credential_epoch",
+                "credential_store_verified", "credential_store_id", "credential_store_error",
+                "credential_launch_term_id"):
         metadata.pop(key, None)
     agent_key = payload.get("agent_key") or ""
     # The window's per-vendor env settings, first in the chain on purpose: the
@@ -6671,6 +6687,8 @@ async def _terminal_create_impl(
     # REPL. A profile id still implies a login on its own: an older frontend
     # sends only that.
     is_login = bool(payload.get("is_login")) or bool(login_profile_id)
+    stores = getattr(app.credential_vault, "stores", None)
+    managed_path = stores is not None and stores.enabled(agent_key)
     if login_profile_id:
         profile = app.cli_profiles_store.get(login_profile_id)
         if (
@@ -6685,77 +6703,83 @@ async def _terminal_create_impl(
                 )
             )
             return
-        # The pending snapshot reserves a live credential store before its
-        # PTY exists. Inspect it and create it under the same lock as regular
-        # spawns and swaps; a rejected duplicate must never touch it.
-        login_lock = app.credential_vault.switch_lock(agent_key)
-        await asyncio.wait_for(login_lock.acquire(), timeout=_SWITCH_LOCK_TIMEOUT_SEC)
-        try:
-            isolated = getattr(app.credential_vault, "_login_isolated", None)
-            if callable(isolated) and not isolated(agent_key):
-                running = _running_regular_terminals(agent_key) + _running_live_login_terminals(agent_key)
-                pending = await vault_to_thread(_live_login_pending, agent_key)
-                if running or pending:
-                    await session.send_json(make_error(
-                        msg_id, msg_type, "LOGIN_BLOCKED_BY_LIVE_PANES",
-                        "the live credential is in use or a sign-in is already pending; "
-                        "finish or close it first",
-                        {"count": len(running), "agent_key": agent_key},
-                    ))
-                    return
-            login_set, login_remove = await vault_to_thread(
-                functools.partial(
-                    app.credential_vault.login_spawn_env, agent_key, login_profile_id,
-                    **quota_failover.scope_kwargs(
-                        app.credential_vault.login_spawn_env, agent_key, profile),
-                )
-            )
-        except Exception as err:  # noqa: BLE001 — the vault refused before any write
-            # e.g. copilot's plaintext-token mode, or a multi-provider profile
-            # with no scope: the vault cannot say where the sign-in would land,
-            # so no pane opens and nothing was touched.
-            await session.send_json(
-                make_error(
-                    msg_id, msg_type, "LOGIN_UNAVAILABLE", _profile_error(err),
-                    {"agent_key": agent_key, "profile_id": login_profile_id},
-                )
-            )
-            await _reclaim_codex_home(str(transaction.get("codex_home_id") or ""))
-            return
-        finally:
-            login_lock.release()
-        env.update(login_set)
-        env_remove = login_remove or None
-        # Mark the terminal as a LOGIN pane: the login harvest (on account
-        # switch) must wait for it to exit (see _running_login_terminals).
-        metadata["login_profile_id"] = login_profile_id
-        if not login_set and not login_remove:
-            # No isolation: this sign-in rewrites the LIVE credential store.
-            # The vault has just parked the pre-login credential; still, a
-            # pane already working on the live credential would be switched
-            # under the user's feet, so refuse while any runs — and give the
-            # parked snapshot back, since no sign-in will happen. A second
-            # live-store sign-in at the same time is refused the same way.
-            running = _running_regular_terminals(agent_key) + _running_live_login_terminals(agent_key)
-            if running:
-                discard = getattr(app.credential_vault, "discard_pending_login", None)
-                if callable(discard):
-                    try:
-                        await vault_to_thread(functools.partial(
-                            discard, agent_key, login_profile_id,
-                            **quota_failover.scope_kwargs(discard, agent_key, profile)))
-                    except Exception:  # noqa: BLE001 — the watch discards it later
-                        app.log.exception("login: discard of the pre-login snapshot failed")
-                await session.send_json(
-                    make_error(
-                        msg_id, msg_type, "LOGIN_BLOCKED_BY_LIVE_PANES",
-                        f"{len(running)} running {agent_key} pane(s) use the live "
-                        "credential this sign-in would replace; finish or close them first",
-                        {"count": len(running), "agent_key": agent_key},
+        if managed_path:
+            # Snapshot creation is deferred until this same invocation has
+            # reported its post-rc path under the final spawn lock.
+            metadata["login_profile_id"] = login_profile_id
+            metadata["live_login"] = True
+        else:
+            # The pending snapshot reserves a live credential store before its
+            # PTY exists. Inspect it and create it under the same lock as regular
+            # spawns and swaps; a rejected duplicate must never touch it.
+            login_lock = app.credential_vault.switch_lock(agent_key)
+            await asyncio.wait_for(login_lock.acquire(), timeout=_SWITCH_LOCK_TIMEOUT_SEC)
+            try:
+                isolated = getattr(app.credential_vault, "_login_isolated", None)
+                if callable(isolated) and not isolated(agent_key):
+                    running = _running_regular_terminals(agent_key) + _running_live_login_terminals(agent_key)
+                    pending = await vault_to_thread(_live_login_pending, agent_key)
+                    if running or pending:
+                        await session.send_json(make_error(
+                            msg_id, msg_type, "LOGIN_BLOCKED_BY_LIVE_PANES",
+                            "the live credential is in use or a sign-in is already pending; "
+                            "finish or close it first",
+                            {"count": len(running), "agent_key": agent_key},
+                        ))
+                        return
+                login_set, login_remove = await vault_to_thread(
+                    functools.partial(
+                        app.credential_vault.login_spawn_env, agent_key, login_profile_id,
+                        **quota_failover.scope_kwargs(
+                            app.credential_vault.login_spawn_env, agent_key, profile),
                     )
                 )
+            except Exception as err:  # noqa: BLE001 — the vault refused before any write
+                # e.g. copilot's plaintext-token mode, or a multi-provider profile
+                # with no scope: the vault cannot say where the sign-in would land,
+                # so no pane opens and nothing was touched.
+                await session.send_json(
+                    make_error(
+                        msg_id, msg_type, "LOGIN_UNAVAILABLE", _profile_error(err),
+                        {"agent_key": agent_key, "profile_id": login_profile_id},
+                    )
+                )
+                await _reclaim_codex_home(str(transaction.get("codex_home_id") or ""))
                 return
-            metadata["live_login"] = True
+            finally:
+                login_lock.release()
+            env.update(login_set)
+            env_remove = login_remove or None
+            # Mark the terminal as a LOGIN pane: the login harvest (on account
+            # switch) must wait for it to exit (see _running_login_terminals).
+            metadata["login_profile_id"] = login_profile_id
+            if not login_set and not login_remove:
+                # No isolation: this sign-in rewrites the LIVE credential store.
+                # The vault has just parked the pre-login credential; still, a
+                # pane already working on the live credential would be switched
+                # under the user's feet, so refuse while any runs — and give the
+                # parked snapshot back, since no sign-in will happen. A second
+                # live-store sign-in at the same time is refused the same way.
+                running = _running_regular_terminals(agent_key) + _running_live_login_terminals(agent_key)
+                if running:
+                    discard = getattr(app.credential_vault, "discard_pending_login", None)
+                    if callable(discard):
+                        try:
+                            await vault_to_thread(functools.partial(
+                                discard, agent_key, login_profile_id,
+                                **quota_failover.scope_kwargs(discard, agent_key, profile)))
+                        except Exception:  # noqa: BLE001 — the watch discards it later
+                            app.log.exception("login: discard of the pre-login snapshot failed")
+                    await session.send_json(
+                        make_error(
+                            msg_id, msg_type, "LOGIN_BLOCKED_BY_LIVE_PANES",
+                            f"{len(running)} running {agent_key} pane(s) use the live "
+                            "credential this sign-in would replace; finish or close them first",
+                            {"count": len(running), "agent_key": agent_key},
+                        )
+                    )
+                    return
+                metadata["live_login"] = True
     # True only when the rewrite below really turns the command into an auth
     # SUBCOMMAND. That, not `is_login` on its own, is what makes the spawn
     # wiring inapplicable further down — a subcommand takes none of the
@@ -6972,7 +6996,7 @@ async def _terminal_create_impl(
                     resume_dedup_id,
                 )
                 raise _TerminalCreateReapTimeout(stale.id)
-    def _spawn_and_claim() -> Any:
+    def _spawn_and_claim(spawn_command=None) -> Any:
         term = session.terminals.create(
             pane_id=payload["pane_id"],
             agent_key=agent_key,
@@ -6984,6 +7008,7 @@ async def _terminal_create_impl(
             env_remove=env_remove,
             metadata=metadata,
             output_log_file=payload.get("output_log_file") or "",
+            **({"spawn_command": spawn_command} if spawn_command is not None else {}),
         )
         transaction["term_id"] = term.id
         # Claim immediately. A CLI can die while attribution registration is
@@ -6995,16 +7020,16 @@ async def _terminal_create_impl(
     # lock, below) and reused by the history pin after the spawn: two reads
     # could straddle a switch and file the pane under two accounts.
     history_pin: str | None = None
-    if agent_key in PROFILE_AGENT_KEYS and not login_profile_id:
+    if agent_key in PROFILE_AGENT_KEYS and (not login_profile_id or managed_path):
         # A regular pane of a profile agent starts on the live credentials —
         # the very state an account switch swaps. Spawning under the agent's
         # switch lock closes the quiescence gate's TOCTOU window: the pane is
         # either created and claimed in _PTY_OWNERS before the switch handler
         # takes the lock (so its gate counts the pane), or the spawn waits for
         # the swap to finish and picks up the new account's credentials. The
-        # locked section is synchronous (no awaits), so the lock is held only
-        # for the spawn itself; login panes run in an isolated home and other
-        # agents have no profiles, so neither takes the lock.
+        # lock also covers the post-rc report, binding and GO for managed
+        # destinations. Their live-store logins snapshot inside this same
+        # section; isolated login homes retain their existing separate path.
         # Bounded acquire (_SWITCH_LOCK_TIMEOUT_SEC): if the lock is somehow
         # held forever the spawn must fail visibly instead of hanging with no
         # response and no log.
@@ -7032,7 +7057,10 @@ async def _terminal_create_impl(
                 "respawn, the previous session was already closed — start the "
                 "pane again"
             ) from None
+        launch = None
         try:
+            if managed_path and is_login and _running_regular_terminals(agent_key):
+                raise quota_failover.FailoverRefused("LOGIN_BLOCKED_BY_LIVE_PANES", "close running CLI panes before signing in")
             if _running_live_login_terminals(agent_key) or await vault_to_thread(
                 _live_login_pending, agent_key
             ):
@@ -7115,17 +7143,119 @@ async def _terminal_create_impl(
             metadata["credential_epoch"] = app.quota_failover.epoch(agent_key)
             quota_tx_id = str(payload.get("quota_transaction_id") or "")
             quota_pane_id = str(payload.get("quota_original_pane_id") or "")
+            if managed_path:
+                from .credential_launch import CredentialLaunch, wrap_command
+                from .credential_store import StoreUnverified
+
+                async def owned_vault_call(fn):
+                    # Cancellation cannot release the vendor lock while its
+                    # executor is still persisting a binding or snapshot.
+                    task = asyncio.create_task(vault_to_thread(fn))
+                    try:
+                        return await asyncio.shield(task)
+                    except asyncio.CancelledError:
+                        await task
+                        raise
+
+                metadata["credential_store_verified"] = False
+                launch = await CredentialLaunch.start(vendor_spec.credential_path_env_vars)
+                names = tuple(dict.fromkeys((*quota_failover.credential_env_vars(agent_key),
+                    *(name for _, values in vendor_spec.account_switch.uncertain_env_by_scope for name in values))))
+                wrapped = wrap_command(payload["command"], vendor_spec,
+                    launch.helper_argv(login=is_login, vendor=agent_key, credential_env=names),
+                    env={key: value for key, value in {**os.environ, **env}.items() if key not in (env_remove or ())})
+                if wrapped is None and is_login:
+                    raise quota_failover.FailoverRefused("CREDENTIAL_STORE_UNVERIFIED", "this login command cannot verify its credential store")
+                if wrapped is not None:
+                    env.update(launch.env)
+                term = _spawn_and_claim(wrapped)
+                metadata["credential_launch_term_id"] = term.id
+                term.metadata.update(metadata)
+                try:
+                    if wrapped is None:
+                        raise StoreUnverified("custom command cannot verify its credential store")
+                    report = await launch.wait_report()
+                    if report["credentialEnv"]:
+                        metadata["credential_source"] = "env-override"
+                        metadata["credential_env"] = report["credentialEnv"]
+                        raise StoreUnverified("the CLI environment overrides file credentials")
+                    doc = app.cli_profiles_store.list()
+                    new_profile = login_profile_id if login_profile_id == getattr(session, "_created_cli_profile_id", "") else ""
+                    has_managed_state = any(p.get("agentKey") == agent_key and p.get("id") != new_profile
+                                            for p in doc["profiles"])
+                    with stores._db.transaction() as cur:
+                        if cur.execute("SELECT 1 FROM sqlite_master WHERE name='pane_account_history'").fetchone():
+                            for row in cur.execute("SELECT DISTINCT pane_id, profile_id FROM pane_account_history"):
+                                known = [p for p in doc["profiles"] if p.get("id") == row["profile_id"]]
+                                live_agents = {
+                                    getattr(other, "agent_key", "")
+                                    for term_id, owner in list(app._PTY_OWNERS.items())
+                                    if (other := owner.terminals.get(term_id)) is not None
+                                    and not getattr(other, "closed", False)
+                                    and getattr(other, "pane_id", "") == row["pane_id"]
+                                }
+                                # A historical default/deleted/ambiguous profile
+                                # remains unknown even if a live pane has a vendor.
+                                known_agent = known[0].get("agentKey") if len(known) == 1 else None
+                                if (known_agent not in CLI_VENDORS or known_agent == agent_key
+                                        or live_agents - {known_agent}):
+                                    has_managed_state = True
+                                    break
+                    metadata["credential_store_id"] = await owned_vault_call(functools.partial(
+                        stores.bind, agent_key, report, vault=app.credential_vault,
+                        slot_id=launch_pin or DEFAULT_SLOT_ID,
+                        scope=quota_failover.profile_scope(agent_key, launch_profile),
+                        has_managed_state=has_managed_state, exclude_term_id=term.id,
+                        new_login_profile=bool(new_profile)))
+                    if new_profile:
+                        session._created_cli_profile_id = ""
+                    metadata["credential_store_verified"] = True
+                    term.metadata.update(metadata)
+                    watcher = getattr(app, "_credential_watcher", None)
+                    if watcher is not None:
+                        await watcher.watch_bound_store(agent_key, stores.path(agent_key))
+                    if login_profile_id:
+                        scope_kw = quota_failover.scope_kwargs(app.credential_vault.login_spawn_env, agent_key, profile)
+                        transaction["store_login_snapshot"] = (agent_key, login_profile_id, scope_kw)
+                        await owned_vault_call(functools.partial(
+                            app.credential_vault.login_spawn_env, agent_key, login_profile_id, **scope_kw))
+                except Exception as err:  # noqa: BLE001 — preserve ordinary CLI launch on observation failure
+                    metadata["credential_store_error"] = str(err) or "credential path report timed out"
+                    metadata["credential_store_verified"] = False
+                    if metadata["credential_source"] == "vault":
+                        metadata["credential_source"] = "unverified-store"
+                    term.metadata.update(metadata)
+                    if is_login:
+                        raise quota_failover.FailoverRefused("CREDENTIAL_STORE_UNVERIFIED", metadata["credential_store_error"]) from err
+            else:
+                term = None
             if quota_tx_id or quota_pane_id:
                 app.quota_failover.validate_restart_spawn(
                     quota_tx_id, quota_pane_id, owner=session, agent_key=agent_key, metadata=metadata,
                 )
                 metadata["quota_transaction_id"] = quota_tx_id
                 metadata["quota_original_pane_id"] = quota_pane_id
-            term = _spawn_and_claim()
+            if term is None:
+                term = _spawn_and_claim()
+            if managed_path:
+                term.metadata.update(metadata)
             if quota_tx_id:
                 app.quota_failover.record_restart_spawn(quota_tx_id, quota_pane_id, term.id)
+            if launch is not None:
+                launch.release(bool(metadata.get("credential_store_verified")))
+                if metadata.get("credential_store_verified") and not await launch.wait_received():
+                    metadata["credential_store_verified"] = False
+                    metadata["credential_source"] = "unverified-store"
+                    metadata["credential_store_error"] = "credential helper timed out before confirming GO"
+                    term.metadata.update(metadata)
+                    if is_login:
+                        raise quota_failover.FailoverRefused("CREDENTIAL_STORE_UNVERIFIED", metadata["credential_store_error"])
         finally:
-            switch_lock.release()
+            try:
+                if launch is not None:
+                    await launch.close()
+            finally:
+                switch_lock.release()
     else:
         portable_credentials.note_launch(str(payload["pane_id"]), "")
         term = _spawn_and_claim()

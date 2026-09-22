@@ -158,7 +158,7 @@ def _kilo_auth_file(home: Path, env: dict) -> Path:
     return home.joinpath(*KILO_AUTH_FILE_REL)
 
 
-def read_kilo_credentials(home: Path, env: dict | None = None) -> dict | None:
+def read_kilo_credentials(home: Path, env: dict | None = None, *, bound_store: bool = False) -> dict | None:
     """The Kilo bearer token + optional organization id, resolved the way the
     Kilo CLI does (read-only): ``KILO_AUTH_CONTENT`` env injects the whole
     auth.json content, otherwise ``<XDG_DATA_HOME|~/.local/share>/kilo/auth.json``
@@ -181,7 +181,7 @@ def read_kilo_credentials(home: Path, env: dict | None = None) -> dict | None:
         if isinstance(data, dict) else None
     if creds is not None:
         return creds
-    return _kilo_legacy_credentials(home)
+    return None if bound_store else _kilo_legacy_credentials(home)
 
 
 def kilo_base_url(token: str, env: dict | None = None) -> str:
@@ -253,9 +253,9 @@ def normalize_kilo_pass(data: Any) -> list[dict]:
 
 
 
-async def fetch_kilo(home: Path, env: dict | None = None) -> dict:
+async def fetch_kilo(home: Path, env: dict | None = None, *, bound_store: bool = False) -> dict:
     env = env if env is not None else dict(os.environ)
-    creds = read_kilo_credentials(home, env)
+    creds = read_kilo_credentials(home, env, bound_store=bound_store)
     if creds is None:
         return _snapshot("kilo", "no-credentials")
     import httpx
@@ -375,6 +375,8 @@ SPEC = VendorSpec(
     # The vault follows the same XDG path as the CLI and quota reader.
     live_file=KILO_AUTH_FILE_REL,
     live_file_resolver=lambda home: _kilo_auth_file(home, os.environ),
+    live_file_from_context=lambda ctx: ctx.path(_kilo_auth_file(ctx.home, ctx.env)),
+    credential_path_env_vars=("XDG_DATA_HOME",),
     slot_file="auth.json",
     identity_from_secret=identity_from_secret,
     # ``auth.json`` is an OpenCode-shaped provider map; only the "kilo" entry
@@ -407,6 +409,7 @@ SPEC = VendorSpec(
     # afterwards (see credential_vault.login_spawn_env).
     # Late-bound (module global at call time) so tests can monkeypatch.
     fetch_usage=lambda home: fetch_kilo(home),
+    fetch_usage_from_context=lambda ctx: fetch_kilo(ctx.home, dict(ctx.env), bound_store=True),
     resume_id_from_command=_resume_id_from_command,
     session_exists=_session_exists,
     # Only the env vars Kilo actually documents (kilo-config.md defines

@@ -582,13 +582,12 @@ def _opencode_auth_file(home: Path, env: dict | None = None) -> Path:
 OPENCODE_MINIMAX_USAGE_URL = "https://api.minimax.io/v1/token_plan/remains"
 
 
-def read_opencode_credentials(home: Path) -> dict | None:
+def read_opencode_credentials(home: Path, env: dict | None = None) -> dict | None:
     """Parse ``<XDG_DATA_HOME|~/.local/share>/opencode/auth.json``: providerID ->
     credential entry ({type: "api", key} or {type: "oauth", access, refresh,
     expires}). Returns the dict-valued entries, or None when the file is
     absent/malformed/empty."""
-    xdg = os.environ.get("XDG_DATA_HOME")
-    path = Path(xdg) / "opencode" / "auth.json" if xdg else home.joinpath(*OPENCODE_AUTH_FILE_REL)
+    path = _opencode_auth_file(home, env)
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -677,13 +676,13 @@ async def _fetch_opencode_minimax(key: str) -> dict:
     return _snapshot("opencode", "ok", windows=normalize_opencode_minimax(payload))
 
 
-async def fetch_opencode(home: Path) -> dict:
+async def fetch_opencode(home: Path, env: dict | None = None) -> dict:
     """opencode is an aggregator: each supported ``auth.json`` entry is asked
     its own provider's usage endpoint. Any source that answers makes the
     snapshot "ok" (windows combined); with none answering the first failure
     is surfaced; entries without a usage surface (Zen, BYOK keys) alone ->
     unavailable."""
-    auth = read_opencode_credentials(home)
+    auth = read_opencode_credentials(home, env)
     if auth is None:
         return _snapshot("opencode", "no-credentials")
     sub_snaps: list[dict] = []
@@ -802,6 +801,8 @@ SPEC = VendorSpec(
     # startup: restart, then ``opencode --session <id>``.
     live_file=OPENCODE_AUTH_FILE_REL,
     live_file_resolver=lambda home: _opencode_auth_file(home),
+    live_file_from_context=lambda ctx: ctx.path(_opencode_auth_file(ctx.home, ctx.env)),
+    credential_path_env_vars=("XDG_DATA_HOME",),
     slot_file="auth.json",
     identity_from_secret=provider_entry_identity,
     account_switch=AccountSwitchSpec(
@@ -832,6 +833,7 @@ SPEC = VendorSpec(
     ),
     # Late-bound (module global at call time) so tests can monkeypatch.
     fetch_usage=lambda home: fetch_opencode(home),
+    fetch_usage_from_context=lambda ctx: fetch_opencode(ctx.home, dict(ctx.env)),
     resume_id_from_command=_resume_id_from_command,
     session_exists=_session_exists,
     home_env_vars=("OPENCODE_CONFIG_DIR", "OPENCODE_CONFIG"),

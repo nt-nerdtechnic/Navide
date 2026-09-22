@@ -289,6 +289,8 @@ class PosixTerminalHandle:
 class PosixTerminalBackend:
     """`pty.openpty` + `Popen(start_new_session=True, preexec_fn=_claim_ctty)`."""
 
+    helper_waits_for_child: bool = False
+
     def parse_command(self, command: str) -> list[str]:
         return shlex.split(command)
 

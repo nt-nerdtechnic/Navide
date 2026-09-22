@@ -207,7 +207,9 @@ dev_time_store = DevTimeStore(
 agent_message_log = AgentMessageLog(db=database)
 codex_home_manager = CodexHomeManager()
 cli_profiles_store = CliProfilesStore(db=database)
-credential_vault = CredentialVault()
+from .credential_store import CredentialStores, active_store_metadata, managed_watch_path
+
+credential_vault = CredentialVault(stores=CredentialStores(database, active_store_metadata))
 mcp_manager = MCPManager()
 plugin_host = PluginHost()
 mcp_settings_store = MCPSettingsStore()
@@ -466,6 +468,8 @@ class Session:
         self._terminal_create_gates: dict[str, asyncio.Lock] = {}
         self._terminal_create_tombstones: set[tuple[str, str]] = set()
         self._terminal_create_transactions: dict[tuple[str, str], dict[str, Any]] = {}
+        # Server-created target for the next add-account login, never persisted.
+        self._created_cli_profile_id = ""
         # In-flight find_in_files cancellation handle: a newer search from
         # this session sets the event so the superseded scan stops early.
         self._search_cancel: threading.Event | None = None
@@ -2139,7 +2143,7 @@ async def _start_log_watcher() -> None:
     # notices the new identity and re-points `defaults[agentKey]` at the account
     # that is actually live — no credential is ever moved.
     global _credential_watcher
-    _credential_watcher = CredentialWatcher(reconcile_live_account)
+    _credential_watcher = CredentialWatcher(reconcile_live_account, resolver=managed_watch_path)
     _credential_watcher.start()
 
     # Navide-Server control-plane link: dials out to the configured server and

@@ -920,6 +920,10 @@ class VendorSpec:
     # Resolve a vendor's environment-dependent live credential path from the
     # real home. Unset retains the fixed live_file layout above.
     live_file_resolver: Callable[[Path], Path] | None = None
+    # Path-only context reported by this launch after shell startup. The
+    # legacy resolver remains for compatibility and upgrade comparison.
+    live_file_from_context: Callable[[VendorRuntimeContext], Path] | None = None
+    credential_path_env_vars: tuple[str, ...] = ()
     # Filename of the parked copy inside the vendor's slot directory.
     slot_file: str | None = None
     # Path parts of the secret inside an isolated login home; None for
@@ -978,6 +982,7 @@ class VendorSpec:
     # async (home: Path) -> snapshot dict, same shape usage_service._snapshot
     # produces. None = vendor has no quota interface (aider) or not migrated.
     fetch_usage: Callable[[Path], Any] | None = None
+    fetch_usage_from_context: Callable[[VendorRuntimeContext], Any] | None = None
 
     # --- resume / session ---
     # (command) -> session id the launch command targets, "" when none.

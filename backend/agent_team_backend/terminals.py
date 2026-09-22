@@ -564,8 +564,10 @@ class TerminalService:
         env_remove: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
         output_log_file: str = "",
+        spawn_command: str | list[str] | None = None,
     ) -> TerminalSession:
-        argv = self._resolve_command(command)
+        logical_argv = self._resolve_command(command)
+        argv = self._resolve_command(spawn_command) if spawn_command is not None else logical_argv
         if not os.path.isdir(cwd):
             # A path that exists as a file is a different mistake from a
             # missing one — a resumed pipeline once spawned into its own
@@ -634,7 +636,7 @@ class TerminalService:
                 id=str(uuid4()),
                 pane_id=pane_id,
                 agent_key=agent_key,
-                command=argv,
+                command=logical_argv,
                 cwd=cwd,
                 handle=handle,
                 proc=proc,

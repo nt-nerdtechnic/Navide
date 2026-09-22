@@ -536,6 +536,8 @@ class TerminalHandle(Protocol):
 class TerminalBackend(Protocol):
     """Spawn a child on a pseudo-terminal."""
 
+    helper_waits_for_child: bool = False
+
     def parse_command(self, command: str) -> list[str]:
         """Split a command-line string into argv the way this platform's shell would."""
         ...

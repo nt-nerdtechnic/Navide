@@ -1774,6 +1774,13 @@ class QuotaFailoverService:
                 pass
         return _slot_login_reason(agent_key, slot_id) or "ok"
 
+    @staticmethod
+    def _store_matches(agent_key: str, metadata: dict) -> bool:
+        from . import app
+
+        stores = getattr(app.credential_vault, "stores", None)
+        return stores is None or not stores.enabled(agent_key) or stores.matches(agent_key, metadata)
+
     # ── switch transactions ───────────────────────────────────────────────
 
     def _affected_terminals(self, auth_scope: str) -> list[dict[str, Any]]:
@@ -1814,7 +1821,8 @@ class QuotaFailoverService:
             elif recorded and recorded.split(":", 1)[0] != auth_scope.split(":", 1)[0]:
                 continue
             out.append({
-                "scopeUnknown": scope_unknown,
+                "scopeUnknown": scope_unknown or not self._store_matches(term.agent_key, term.metadata),
+                "credentialStoreId": term.metadata.get("credential_store_id"),
                 # Recorded at launch; a pane older than provenance says "vault"
                 # only because nothing else could have put it elsewhere.
                 "credentialSource": str(term.metadata.get("credential_source") or "vault"),
@@ -1848,7 +1856,8 @@ class QuotaFailoverService:
                 continue
             meta = term.metadata
             if (meta.get("login_profile_id") or meta.get("credential_source") != "vault"
-                    or meta.get("auth_scope") != auth_scope):
+                    or meta.get("auth_scope") != auth_scope
+                    or not self._store_matches(agent_key, meta)):
                 continue
             meta["launch_profile_id"] = slot_id
             app.pane_account_history.pin(term.pane_id, slot_id, ts=self._now())
@@ -1887,6 +1896,14 @@ class QuotaFailoverService:
         existing_id = self._idempotency.get(idem)
         if existing_id is not None and existing_id in self.transactions:
             return self.transactions[existing_id]
+        from . import app
+        from .credential_vault import vault_to_thread
+        guard = getattr(app.credential_vault, "require_store_mutation", None)
+        if guard is not None:
+            try:
+                await vault_to_thread(guard, agent_key)
+            except ValueError as err:
+                raise FailoverRefused("CREDENTIAL_STORE_UNVERIFIED", str(err)) from err
         cap = capability(agent_key)
         if not cap["supported"]:
             raise FailoverRefused("UNSUPPORTED", cap["todo"] or f"{agent_key} declares no account switch")
@@ -2326,6 +2343,13 @@ class QuotaFailoverService:
                 self._settle_stopped(incident, tx.reason or "switch-lock-timeout", now)
             return
         try:
+            guard = getattr(vault, "require_store_mutation", None)
+            if guard is not None:
+                try:
+                    await vault_to_thread(guard, tx.agent_key)
+                except ValueError:
+                    self._fail(tx, incident, "failed", "credential-store-unverified", now)
+                    return
             # The wait for the lock (and every await below) is a window in
             # which the user may have cancelled, switched by hand or turned
             # auto off. Nothing here may revive a closed transaction.
@@ -2607,6 +2631,8 @@ class QuotaFailoverService:
             and metadata.get("launch_profile_id") == tx.to_slot_id
             and metadata.get("credential_epoch") == tx.epoch_after
             and not metadata.get("login_profile_id")
+            and QuotaFailoverService._store_matches(agent_key, metadata)
+            and metadata.get("credential_store_id") == pane.get("credentialStoreId")
         )
 
     def validate_restart_spawn(self, transaction_id: str, pane_id: str, *, owner: Any,

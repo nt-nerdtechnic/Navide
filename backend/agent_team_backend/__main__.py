@@ -5,6 +5,10 @@ import logging
 import sys
 
 from .git_askpass_helper import ASKPASS_FLAG, main as askpass_main
+from .credential_path_helper import HELPER_FLAG, main as credential_path_main
+
+if len(sys.argv) > 1 and sys.argv[1] == HELPER_FLAG:
+    raise SystemExit(credential_path_main(sys.argv[2:]))
 
 # This process was started by git as GIT_ASKPASS (through the launcher
 # `osplat.paths.askpass_launcher` wrote), not to serve: answer the one prompt
