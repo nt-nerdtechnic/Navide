@@ -15850,8 +15850,8 @@ async function movePaneToGroup(paneId: string, targetKey: string): Promise<void>
  */
 async function closeRunGroup(id: string): Promise<void> {
   const affected = id === 'manual'
-    ? panes.value.filter((p) => !p.runGroupId)
-    : panes.value.filter((p) => p.runGroupId === id)
+    ? panesInView.value.filter((p) => !p.runGroupId)
+    : panesInView.value.filter((p) => p.runGroupId === id)
   // Closing the tab takes every pane of the run with it. A running pipeline
   // would be left at state='running' with no panes and its slot counts intact
   // — an orchestration waiting on agents that no longer exist. Abort it first
@@ -15880,7 +15880,7 @@ async function deleteRunGroup(id: string): Promise<void> {
     if (stageTabs.value.length <= 1) return  // only the manual tab left — nothing to do
     const target = runGroups.value[0]
     if (!target) return
-    const affected = panes.value.filter((p) => !p.runGroupId)
+    const affected = panesInView.value.filter((p) => !p.runGroupId)
     const saved = await Promise.all(affected.map((p) => persistPaneRunGroup(p, target.id)))
     if (!saved.every(Boolean)) {
       pipelineLog(`✕ delete tab aborted — pane reassignment did not persist`)
@@ -15891,7 +15891,7 @@ async function deleteRunGroup(id: string): Promise<void> {
     return
   }
   const target = runGroups.value.find((g) => g.id !== id)
-  const affected = panes.value.filter((p) => p.runGroupId === id)
+  const affected = panesInView.value.filter((p) => p.runGroupId === id)
 
   if (!target) {
     const saved = await Promise.all(affected.map((p) => persistPaneRunGroup(p, '')))
