@@ -96,8 +96,40 @@ Tool 都回傳單一物件，因此這個問題只會在 `plan_list` 上出現�
 | `cli_pending_incoming` | `limit=20`（上限 200） | **僅限 CLI Pane。** 目前排給*你*、還沒送進來的訊息：`{count, messages: [{uid, sender, status, age_seconds, kind?, excerpt, correlation_id?, in_reply_to?, hold?, held_for_s?, stale?}]}` |
 | `cli_read_incoming` | `uid=""`、`limit=5`（上限 20）、`include_delivered=false`、`peek=false` | **僅限 CLI Pane。** 寄給你的訊息**全文**——`cli_pending_incoming` 只給 200 字元且壓平空白：`{count, messages: [{uid, sender, status, kind?, content, age_seconds, consumed, correlation_id?, in_reply_to?, hold?, held_for_s?, stale?}], note?}`。**預設讀取即消費**，讀過的訊息不會再注入你的輸入框；`peek: true` 只讀不消費。消費採「先保留、後釋放」，釋放若遺失，訊息會退回佇列並可能再送達一次；`consumed` 逐則回報，未消費的原因寫在 `note` |
 | `cli_send_and_wait` | `to`、`text`、`timeout_s=60`（上限 120）、`pane_id?` | `cli_send` 再加上等待該回合結束；回傳 `cli_wait_idle` 的結果，外加 `{ok, target, msg_key}`  **遠端 Pane**：送出與送達閘門與本機相同（`rejected` 仍與 `failed` 分開）；等待那半用名冊狀態字，弱點與 `cli_wait_idle` 相同。 |
-| `cli_open_agent` | `agent`、`name`、`task`、`workspace_path`（非 Pane 呼叫端必填）、`model`、`effort` | 帶著一項任務 Spawn 新的 CLI Pane；回傳 `{ok, name, address, pane_id}`，若該次 Spawn 跨過 Advisory 門檻則另附 `advisories`。**派工原則**（server instructions 也有同一句）：會改檔案、跑超過幾分鐘、或使用者可能想看、中斷或接手的工作，要派給這裡開出的 Pane —— 不是 Agent 自己的 subagent 機制（Claude Code 的 `Agent`／`Task` 工具）。Pane 在 Navide 裡看得到、跑到一半可以打開、比呼叫端的 Session 活得久；subagent 是只交回一段摘要的黑盒。純唯讀、整個結果只有一段話的短查詢仍適合用 subagent。`model` 與 `effort` 為選填，該 CLI 不支援時會「拒絕」而非忽略，Pane 不會悄悄用別的模型啟動。多數 CLI 接受 model；接受獨立 effort 的較少，其餘把 effort 編在 model id 裡（`gpt-5.3-codex-high`）。model id 不做驗證（每次改版都會變），effort 則會對照該 CLI 的合法值檢查 |
+| `cli_open_agent` | `agent`、`name`、`task`、`workspace_path`（非 Pane 呼叫端必填）、`model`、`effort`、`pane_id?`、`session_id?`、`run_group_id?` | 帶著一項任務 Spawn 新的 CLI Pane；回傳 `{ok, name, address, pane_id}`，若該次 Spawn 跨過 Advisory 門檻則另附 `advisories`。**派工原則**（server instructions 也有同一句）：會改檔案、跑超過幾分鐘、或使用者可能想看、中斷或接手的工作，要派給這裡開出的 Pane —— 不是 Agent 自己的 subagent 機制（Claude Code 的 `Agent`／`Task` 工具）。Pane 在 Navide 裡看得到、跑到一半可以打開、比呼叫端的 Session 活得久；subagent 是只交回一段摘要的黑盒。純唯讀、整個結果只有一段話的短查詢仍適合用 subagent。`model` 與 `effort` 為選填，該 CLI 不支援時會「拒絕」而非忽略，Pane 不會悄悄用別的模型啟動。多數 CLI 接受 model；接受獨立 effort 的較少，其餘把 effort 編在 model id 裡（`gpt-5.3-codex-high`）。model id 不做驗證（每次改版都會變），effort 則會對照該 CLI 的合法值檢查 |
 | `cli_close_agent` | `target`、`pane_id?` | 關掉一個 Pane —— `cli_open_agent` 的另一半。**這會直接終結對方的工作**：Pane 與它的 PTY 一併消失，正在跑的回合跟著死掉，排給它的訊息永遠不會送達，而且無法復原 —— 關掉的 Pane 是 Session 沒了，不是暫存起來。動手前先用 `cli_get_status` 看它是不是正在做事；`cli_interrupt` 是比較軟的一階，`cli_send` 更軟（它會等回合做完）。回傳 `{ok, target, name, closed, advisories?}`，`advisories` 說明這次關閉的代價，而且是別人不會回報的那些：Pane 正在回合中、有訊息排在它的佇列裡、它底下有子 Pane 現在變成孤兒。這些都在 Kill 之前先蒐集，因為事後就再也問不到了。僅限本機 Pane：`<device>/<workspace>/<pane>` 這種位址會以 `close-local-only` 失敗，那是這個 Tool 的限制，不是位址寫錯 |
+
+**Choosing a tab group when opening a pane.** `cli_open_agent` accepts optional
+`run_group_id` for a fresh pane or a new pane opened with `session_id`:
+
+- Omit it or pass `null` to preserve existing group selection rules: fresh
+  panes opened by pane callers inherit the caller's group, resumed conversations
+  use the existing saved-group and fallback rules, and standalone callers retain
+  their existing defaults.
+- Pass `""` to open in the manual, ungrouped tab.
+- Pass an existing group ID in the target workspace to override the inherited
+  or saved group. The pane's parent lineage is unchanged by this parameter.
+- Invalid IDs and groups from another workspace are refused before spawning.
+- An explicit group cannot be combined with `pane_id`, which reopens an existing
+  pane. Use `cli_place_pane` to move that pane instead.
+
+A successful explicit selection returns `run_group_id`; when resuming,
+`restored_lineage.run_group_id` also reflects the override.
+
+Read the current MCP tool schema before calling. Obtain IDs from
+`cli_list_sessions` (`run_group_id`) for the target workspace; use a group ID
+that still exists, not its display name. For example, replace the path and
+group ID below with values returned for the target workspace:
+
+```json
+{
+  "agent": "codex",
+  "name": "Review",
+  "task": "Review the change and report findings.",
+  "workspace_path": "/path/to/project",
+  "run_group_id": "existing-group-id"
+}
+```
 
 `cli_send` 在訊息*被接受*遞送時就回傳，不是在另一個 Agent 讀到時才回傳。
 `cli_check_message` 補上這個閉環：`status` 可能是 `queued`（已廣播，尚無視窗

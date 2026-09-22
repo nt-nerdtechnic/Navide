@@ -15,6 +15,7 @@ All notable released changes to Navide will be documented in this file. The form
 
 ### Added
 
+- Add optional `run_group_id` to `cli_open_agent` for selecting an existing tab group or the manual tab when opening a fresh or resumed conversation, while preserving default group inheritance and session restoration.
 - Make account quota history available without open panes, with evidence and local coverage details, stable cycle selection, bounded date ranges and paging, UTC calendar summaries, and full-range CSV exports. Missing token details remain gaps rather than zeros; completed-cycle averages require trusted limit evidence and available detail. Ambiguous weekly CLI clocks no longer invent a dated reset for ledger attribution.
 - Add Japanese interface support, including persisted language selection, onboarding, native Navide menu labels, Plans and Token Monitor windows, and plugin locale propagation. Keep the existing Traditional Chinese fallback, pass the skipped-workspace count to its notice title, and format the audited date displays using the selected interface language.
 - Add a triangle button after refresh to collapse or expand all eligible descendant-card families in the current tab in Auto, Spotlight, and Fullscreen. Mixed states collapse all; expansion opens nested families too. Parent cards, descendant counts, and the main terminal remain visible, other tabs keep their own state, and Grid or tabs without eligible families disable the button.

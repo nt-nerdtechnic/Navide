@@ -106,8 +106,40 @@ Plan ウィンドウが Plan を解決する際の基準と同じものです。
 | `cli_pending_incoming` | `limit=20`（上限 200） | **CLI Pane 専用。** *自分宛*に Queue され、まだ入っていないもの: `{count, messages: [{uid, sender, status, age_seconds, kind?, excerpt, correlation_id?, in_reply_to?, hold?, held_for_s?, stale?}]}` |
 | `cli_read_incoming` | `uid=""`, `limit=5`（上限 20）, `include_delivered=false`, `peek=false` | **CLI Pane 専用。** 自分宛メッセージの全文（`cli_pending_incoming` は空白を潰した 200 文字のみ）: `{count, messages: [{uid, sender, status, kind?, content, age_seconds, consumed, correlation_id?, in_reply_to?, hold?, held_for_s?, stale?}], note?}`。**既定では読むと消費されます**——読んだメッセージはその後 Pane に入力されません。`peek: true` は消費せずに読みます。消費は予約してから解放する二段階で、解放が失われた場合メッセージは Queue に戻り二度届くことがあります。`consumed` はメッセージごとに返され、消費されなかった理由は `note` に入ります |
 | `cli_send_and_wait` | `to`, `text`, `timeout_s=60`（上限 120）, `pane_id?` | `cli_send` に加えてその Turn の完了まで待機。`cli_wait_idle` の結果に `{ok, target, msg_key}` を付けて返す  **リモート Pane**: 送信と配信 gate はローカルと同じ（`rejected` は `failed` と区別されたまま）。待機の半分は名簿バッジを使い、弱点は `cli_wait_idle` と同じです。 |
-| `cli_open_agent` | `agent`, `name`, `task`, `workspace_path`（Pane 以外の呼び出し元では必須）, `model`, `effort` | Task 付きで新しい CLI Pane を Spawn。`{ok, name, address, pane_id}` を返し、Spawn が Advisory の閾値を越えた場合は `advisories` も返す。**委譲ルール**（server instructions にも同じ一文があります）: ファイルを編集する、数分以上かかる、あるいはユーザーが途中で見たり中断したり引き継いだりしたくなる作業は、ここで開いた Pane に渡します — Agent 自身の subagent 機構（Claude Code の `Agent`／`Task` ツール）にではなく。Pane は Navide 上で見え、実行中に開け、呼び出し元の Session より長く生きます。subagent は要約を一つ返すだけのブラックボックスです。結果が一段落で済む短い読み取り専用の調査には、引き続き subagent が適しています。`model` と `effort` は任意で、その CLI が受け付けない場合は無視せず「拒否」するため、Pane が別のモデルで静かに起動することはない。多くの CLI は model を受け付けるが、独立した effort を受け付けるものは少なく、残りは effort を model id に埋め込む（`gpt-5.3-codex-high`）。model id は検証しない（リリースごとに変わるため）が、effort はその CLI の語彙と照合する |
+| `cli_open_agent` | `agent`, `name`, `task`, `workspace_path`（Pane 以外の呼び出し元では必須）, `model`, `effort`, `pane_id?`, `session_id?`, `run_group_id?` | Task 付きで新しい CLI Pane を Spawn。`{ok, name, address, pane_id}` を返し、Spawn が Advisory の閾値を越えた場合は `advisories` も返す。**委譲ルール**（server instructions にも同じ一文があります）: ファイルを編集する、数分以上かかる、あるいはユーザーが途中で見たり中断したり引き継いだりしたくなる作業は、ここで開いた Pane に渡します — Agent 自身の subagent 機構（Claude Code の `Agent`／`Task` ツール）にではなく。Pane は Navide 上で見え、実行中に開け、呼び出し元の Session より長く生きます。subagent は要約を一つ返すだけのブラックボックスです。結果が一段落で済む短い読み取り専用の調査には、引き続き subagent が適しています。`model` と `effort` は任意で、その CLI が受け付けない場合は無視せず「拒否」するため、Pane が別のモデルで静かに起動することはない。多くの CLI は model を受け付けるが、独立した effort を受け付けるものは少なく、残りは effort を model id に埋め込む（`gpt-5.3-codex-high`）。model id は検証しない（リリースごとに変わるため）が、effort はその CLI の語彙と照合する |
 | `cli_close_agent` | `target`, `pane_id?` | Pane を閉じる — `cli_open_agent` のもう半分です。**これは相手の作業を終わらせます**: Pane と PTY が消え、走っていた Turn もろとも死に、その Pane 宛に Queue されていたものは配信されません。取り消しは効きません — 閉じた Pane の Session は待避ではなく消滅です。先に `cli_get_status` を見て、作業中の Pane は閉じないでください。`cli_interrupt` はより穏当な段（割り込みキーを押すだけで Pane は開いたまま）、`cli_send` はさらに穏当（Turn の完了を待つ）です。`{ok, target, name, closed, advisories?}` を返します。`advisories` は閉じたことの代償のうち他の誰も報告しないもの — Pane が Turn の途中だった、メッセージが Queue に残っていた、子 Pane が孤児になった — で、Kill の後では知りようがないため事前に集めます。このマシン上の Pane のみ: `<device>/<workspace>/<pane>` 形式のアドレスは `close-local-only` で失敗します。これはアドレスの誤りではなく、この Tool の限界です |
+
+**Choosing a tab group when opening a pane.** `cli_open_agent` accepts optional
+`run_group_id` for a fresh pane or a new pane opened with `session_id`:
+
+- Omit it or pass `null` to preserve existing group selection rules: fresh
+  panes opened by pane callers inherit the caller's group, resumed conversations
+  use the existing saved-group and fallback rules, and standalone callers retain
+  their existing defaults.
+- Pass `""` to open in the manual, ungrouped tab.
+- Pass an existing group ID in the target workspace to override the inherited
+  or saved group. The pane's parent lineage is unchanged by this parameter.
+- Invalid IDs and groups from another workspace are refused before spawning.
+- An explicit group cannot be combined with `pane_id`, which reopens an existing
+  pane. Use `cli_place_pane` to move that pane instead.
+
+A successful explicit selection returns `run_group_id`; when resuming,
+`restored_lineage.run_group_id` also reflects the override.
+
+Read the current MCP tool schema before calling. Obtain IDs from
+`cli_list_sessions` (`run_group_id`) for the target workspace; use a group ID
+that still exists, not its display name. For example, replace the path and
+group ID below with values returned for the target workspace:
+
+```json
+{
+  "agent": "codex",
+  "name": "Review",
+  "task": "Review the change and report findings.",
+  "workspace_path": "/path/to/project",
+  "run_group_id": "existing-group-id"
+}
+```
 
 `cli_send` は、メッセージが配信のために*受理された*時点で返り、相手の Agent が
 読んだ時点ではありません。`cli_check_message` がそのループを閉じます。`status`

@@ -2527,10 +2527,17 @@ function resumableGroupId(recorded: string | undefined, workspacePath: string): 
   return runGroupsOf(workspacePath).some((g) => g.id === id) ? id : ''
 }
 
+function assertRequestedSpawnGroup(workspacePath: string, groupId: string | undefined): void {
+  if (groupId && !runGroupsOf(workspacePath).some((group) => group.id === groupId)) {
+    throw new Error(`unknown run group "${groupId}" in ${workspacePath}`)
+  }
+}
+
 async function createRequestedPane(
   parent: ActivePane,
-  req: { agentKey: string; name: string; model?: string; effort?: string; sessionId?: string; resumeSpawnedBy?: string; resumeRunGroupId?: string },
+  req: { agentKey: string; name: string; model?: string; effort?: string; sessionId?: string; resumeSpawnedBy?: string; resumeRunGroupId?: string; runGroupId?: string },
 ): Promise<string | null> {
+  assertRequestedSpawnGroup(parent.workspacePath, req.runGroupId)
   const mcpCommand = mcpSpawnCommandOverride(req)
   const mcpResumeId = mcpCommand ? (req.sessionId ?? '').trim() : ''
   // Resuming is not opening a new pane under the caller — it is putting a
@@ -2545,9 +2552,9 @@ async function createRequestedPane(
   // have been closed since (closeRunGroup drops the group; the pane record
   // keeps its id). A pane placed in a group no tab knows is shown on neither
   // 手動 nor any tab until the next restart, so fall back to the caller's.
-  const resumeRunGroupId = mcpResumeId
+  const resumeRunGroupId = req.runGroupId ?? (mcpResumeId
     ? (resumableGroupId(req.resumeRunGroupId, parent.workspacePath) || parent.runGroupId)
-    : parent.runGroupId
+    : parent.runGroupId)
   const paneId = await spawnPane({
     agentKey: req.agentKey,
     roleKey: '' as RoleKey,
@@ -2564,6 +2571,7 @@ async function createRequestedPane(
     workspacePath: parent.workspacePath,
     origin: 'mcp',
     runGroupId: resumeRunGroupId,
+    requestedRunGroupId: req.runGroupId,
     preferredMessagingName: req.name,
     spawnedBy: resumeSpawnedBy,
     model: req.model,
@@ -2642,8 +2650,9 @@ function standaloneTaskDeps(): StandaloneTaskInjectionDeps {
  *  would never actually be injected. */
 async function createStandaloneRequestedPane(
   workspacePath: string,
-  req: { agentKey: string; name: string; task: string; model?: string; effort?: string; sessionId?: string; resumeSpawnedBy?: string; resumeRunGroupId?: string },
+  req: { agentKey: string; name: string; task: string; model?: string; effort?: string; sessionId?: string; resumeSpawnedBy?: string; resumeRunGroupId?: string; runGroupId?: string },
 ): Promise<string | null> {
+  assertRequestedSpawnGroup(workspacePath, req.runGroupId)
   const mcpCommand = mcpSpawnCommandOverride(req)
   const mcpResumeId = mcpCommand ? (req.sessionId ?? '').trim() : ''
   // Same rule as createRequestedPane: a resumed conversation goes back to the
@@ -2651,10 +2660,10 @@ async function createStandaloneRequestedPane(
   // requesting pane, so a fresh one is a root in the active tab's group — but
   // a resumed one must not be, or every resume from an external client would
   // strand the conversation as an orphan at the root.
-  const runGroupId = mcpResumeId
+  const runGroupId = req.runGroupId ?? (mcpResumeId
     ? (resumableGroupId(req.resumeRunGroupId, workspacePath)
         || resolveReadySpawnGroupId(runGroups.value, activeTab.value, runGroupsReady.value))
-    : resolveReadySpawnGroupId(runGroups.value, activeTab.value, runGroupsReady.value)
+    : resolveReadySpawnGroupId(runGroups.value, activeTab.value, runGroupsReady.value))
   const resumeSpawnedBy = mcpResumeId ? (req.resumeSpawnedBy ?? '') : ''
   const paneId = await spawnPane({
     agentKey: req.agentKey,
@@ -2672,6 +2681,7 @@ async function createStandaloneRequestedPane(
     workspacePath,
     origin: 'mcp',
     runGroupId: runGroupId || undefined,
+    requestedRunGroupId: req.runGroupId,
     preferredMessagingName: req.name,
     spawnedBy: resumeSpawnedBy || undefined,
     model: req.model,
@@ -3021,6 +3031,7 @@ async function handleMcpSpawnRequest(ev: {
    *  An empty parent is a real answer (it was a root), not a missing one. */
   resume_spawned_by?: string
   resume_run_group_id?: string
+  run_group_id?: string
 }): Promise<void> {
   const standalone = !!ev.target_workspace
   let parent: ActivePane | undefined
@@ -3084,7 +3095,7 @@ async function handleMcpSpawnRequest(ev: {
   try {
     // The gate decides identity (name collisions, model/effort); the session to
     // resume is not its business, so it rides alongside rather than through it.
-    const spawnReq = { ...gate, sessionId: (ev.session_id ?? '').trim(), resumeSpawnedBy: ev.resume_spawned_by ?? '', resumeRunGroupId: ev.resume_run_group_id ?? '' }
+    const spawnReq = { ...gate, sessionId: (ev.session_id ?? '').trim(), resumeSpawnedBy: ev.resume_spawned_by ?? '', resumeRunGroupId: ev.resume_run_group_id ?? '', runGroupId: ev.run_group_id }
     paneId = parent
       ? await createRequestedPane(parent, spawnReq)
       : await createStandaloneRequestedPane(ev.target_workspace as string, spawnReq)
@@ -5912,6 +5923,8 @@ interface SpawnInternal {
   workspacePath: string
   origin: 'manual' | 'pipeline' | 'mcp'
   runGroupId?: string
+  /** Only explicit MCP placement is revalidated after async spawn preparation. */
+  requestedRunGroupId?: string
   previousPaneId?: string
   kickoffPrompt?: string
   skipRoleInjection?: boolean
@@ -6056,6 +6069,11 @@ async function spawnPane(opts: SpawnInternal): Promise<string | null> {
   const paneArgCtx: PaneArgContext | undefined = spec.paneArg && opts.workspacePath
     ? { paneId: id, historyRoot: await paneHistoryRootFor(opts.agentKey, opts.workspacePath) }
     : undefined
+  // A group can disappear while pane history is being prepared. Refuse before
+  // adding a pane, registering its address, or starting its PTY.
+  if (opts.requestedRunGroupId !== undefined) {
+    assertRequestedSpawnGroup(opts.workspacePath, opts.requestedRunGroupId)
+  }
   const launch = resolveCommand(opts.agentKey, opts.commandOverride, paneArgCtx, {
     model: opts.model ?? '',
     effort: opts.effort ?? '',
@@ -12747,6 +12765,7 @@ backend.on('agent_spawn.request', (raw) => {
     // own record remembers. Only meaningful alongside session_id.
     resume_spawned_by?: string
     resume_run_group_id?: string
+    run_group_id?: string
   }
   // An external caller (no requesting pane) addresses this by target_workspace
   // instead — accept the event as long as one of the two identifies an owner.
@@ -12769,6 +12788,7 @@ backend.on('agent_spawn.request', (raw) => {
     session_id: ev.session_id ?? '',
     resume_spawned_by: ev.resume_spawned_by ?? '',
     resume_run_group_id: ev.resume_run_group_id ?? '',
+    run_group_id: ev.run_group_id ?? undefined,
   })
 })
 

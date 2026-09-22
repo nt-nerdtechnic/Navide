@@ -674,7 +674,7 @@ async def test_tools_are_registered_without_a_ctx_argument() -> None:
     assert not (tools["cli_list_targets"].inputSchema.get("properties") or {})
     assert set((tools["cli_open_agent"].inputSchema.get("properties") or {})) == {
         "agent", "name", "task", "workspace_path", "model", "effort", "pane_id",
-        "session_id",
+        "session_id", "run_group_id",
     }
     assert set((tools["cli_check_message"].inputSchema.get("properties") or {})) == {"msg_key"}
     assert set((tools["cli_send_and_wait"].inputSchema.get("properties") or {})) == {

@@ -844,6 +844,7 @@ async def cli_open_agent(
     effort: str = "",
     pane_id: str = "",
     session_id: str = "",
+    run_group_id: str | None = None,
 ) -> dict[str, Any]:
     """Open a new CLI pane and give it a task.
 
@@ -876,6 +877,15 @@ async def cli_open_agent(
     the pane opens there with no parent, so it has no child/depth counts of
     its own; the workspace's CLI-pane count is still tracked for the advisory
     below.
+
+    `run_group_id` optionally chooses an existing tab group in the pane's
+    workspace. Omit it (or pass null) to keep the usual parent/resume/active
+    tab placement. `""` explicitly selects the ungrouped manual tab. Nonempty
+    ids must belong to that workspace; read them from ui_snapshot or
+    cli_list_sessions. This overrides a resumed conversation's saved group,
+    but keeps its saved parent. It cannot be combined with `pane_id`: reopen
+    that pane first, then use cli_place_pane to move it.
+    When explicitly requested, a successful answer includes `run_group_id`.
 
     `ok: true` means the pane exists, and `kickoff` says whether the task
     reached it. The call blocks until the window has booted the CLI, waited
@@ -981,6 +991,13 @@ async def cli_open_agent(
             "error_code": "conflicting-target",
         }
     if reopen_id:
+        if run_group_id is not None:
+            return {
+                "ok": False,
+                "error": "run_group_id cannot be combined with pane_id — reopen the "
+                "pane first, then move it with cli_place_pane",
+                "error_code": "conflicting-target",
+            }
         return await _reopen_pane(reopen_id)
     agent_key = (agent or "").strip()
     pane_name = (name or "").strip()
@@ -1007,6 +1024,16 @@ async def cli_open_agent(
             return {
                 "ok": False,
                 "error": "workspace_path is required for a caller with no pane identity",
+            }
+    if run_group_id:
+        group_workspace = target_workspace or _caller_workspace(caller)
+        project = await asyncio.to_thread(app.project_store.peek, group_workspace)
+        groups = project.ui_run_groups if project is not None else None
+        if not any(group.get("id") == run_group_id for group in (groups or [])):
+            return {
+                "ok": False,
+                "error": f'unknown run group "{run_group_id}" in {group_workspace}',
+                "error_code": "unknown-run-group",
             }
     if resume_id:
         # A pane caller's own workspace is where its sessions live, so it never
@@ -1049,6 +1076,8 @@ async def cli_open_agent(
             spawn_payload["model"] = model.strip()
         if (effort or "").strip():
             spawn_payload["effort"] = effort.strip()
+        if run_group_id is not None:
+            spawn_payload["run_group_id"] = run_group_id
         # The window turns this into the vendor's own resume command; absent
         # means a fresh conversation, which is what every older build does with
         # a key it does not know.
@@ -1130,8 +1159,10 @@ async def cli_open_agent(
         # pane went back to its own parent and group rather than under them.
         result["restored_lineage"] = {
             "spawned_by": lineage.get("spawned_by", ""),
-            "run_group_id": lineage.get("run_group_id", ""),
+            "run_group_id": run_group_id if run_group_id is not None else lineage.get("run_group_id", ""),
         }
+    if run_group_id is not None:
+        result["run_group_id"] = run_group_id
     advisories = list(verdict.get("advisories") or [])
     # Two answers only. "unverified" is the window's honest word for "bytes
     # written, nothing seen" — to the caller that is a task that did not
