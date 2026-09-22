@@ -316,6 +316,13 @@ describe('CliAccountsPane', () => {
     expect(api.rename).toHaveBeenCalledWith('p1', 'Work', 'claude')
   })
 
+  it('caps the rename field at 64 characters', async () => {
+    const api = makeApi({ profiles: [profile('p1', 'claude', 'Account 2')] })
+    const w = mountPane(api)
+    await section(w, 0).findAll('.cli-card')[1].get('.cli-card-rename-btn').trigger('click')
+    expect(w.get('input.cli-card-rename').attributes('maxlength')).toBe('64')
+  })
+
   it('renames the built-in Default card too — for a vendor with no email it is the only way to tell it apart', async () => {
     const api = makeApi()
     const w = mountPane(api)

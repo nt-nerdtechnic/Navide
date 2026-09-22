@@ -333,3 +333,55 @@ def test_rename_marks_name_custom_create_does_not(tmp_path: Path) -> None:
     renamed = store.rename(profile["id"], "Work")
     assert renamed["nameIsCustom"] is True
     assert store.get(profile["id"])["nameIsCustom"] is True
+
+
+# ---- alias cleaning (rename / set_default_name) ----
+
+
+def test_rename_strips_control_and_format_characters(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    profile = store.create(agent_key="claude", name="Old")
+
+    renamed = store.rename(profile["id"], "Wo​rk\x07\n")
+
+    assert renamed["name"] == "Work"
+
+
+def test_rename_normalises_to_nfc(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    profile = store.create(agent_key="claude", name="Old")
+
+    renamed = store.rename(profile["id"], "Café")
+
+    assert renamed["name"] == "Café"
+    assert unicodedata.is_normalized("NFC", renamed["name"])
+
+
+def test_rename_only_control_characters_clears_like_blank(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    profile = store.create(agent_key="claude", name="Old")
+    store.rename(profile["id"], "Work")
+
+    cleared = store.rename(profile["id"], "​\x00")
+
+    assert "nameIsCustom" not in cleared
+
+
+def test_rename_accepts_64_characters_and_rejects_65(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    profile = store.create(agent_key="claude", name="Old")
+
+    assert store.rename(profile["id"], "x" * 64)["name"] == "x" * 64
+    with pytest.raises(ValueError, match="64"):
+        store.rename(profile["id"], "y" * 65)
+    # A rejected name leaves the stored one untouched.
+    assert store.list()["profiles"][0]["name"] == "x" * 64
+
+
+def test_set_default_name_cleans_like_rename(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+
+    assert store.set_default_name("claude", "Ho​me\x1b") == {"claude": "Home"}
+    with pytest.raises(ValueError, match="64"):
+        store.set_default_name("claude", "z" * 65)
+    assert store.list()["defaultNames"] == {"claude": "Home"}

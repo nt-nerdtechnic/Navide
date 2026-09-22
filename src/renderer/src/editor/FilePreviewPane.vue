@@ -121,7 +121,8 @@ async function probePdf(url: string): Promise<void> {
   let detail: string | null = null
   try {
     const resp = await fetch(url, { headers: { Range: 'bytes=0-0' } })
-    if (!resp.ok) detail = `HTTP ${resp.status}`
+    // 416: the file exists but is empty, so no byte range can be satisfied.
+    if (!resp.ok && resp.status !== 416) detail = `HTTP ${resp.status}`
   } catch (err) {
     detail = err instanceof Error ? err.message : String(err)
   }
@@ -129,14 +130,18 @@ async function probePdf(url: string): Promise<void> {
   if (detail !== null && url === rawUrl.value) rawError.value = detail
 }
 
-watch(
-  rawUrl,
-  (url) => {
-    rawError.value = null
-    if (kind.value === 'pdf' && pdfSupported) void probePdf(url)
-  },
-  { immediate: true },
-)
+function loadRaw(url: string): void {
+  rawError.value = null
+  if (kind.value === 'pdf' && pdfSupported) void probePdf(url)
+}
+
+watch(rawUrl, loadRaw, { immediate: true })
+
+// Clearing the error remounts <img>/<video>/<audio>, which loads again; the
+// PDF branch re-probes.
+function retryRaw(): void {
+  loadRaw(rawUrl.value)
+}
 
 // ── Hex dump (unknown binary) ─────────────────────────────────────────────────
 const HEX_LIMIT = 65536
@@ -219,6 +224,7 @@ onMounted(() => {
     <div v-if="kind === 'image'" class="fpv-body fpv-image-body">
       <div v-if="rawError !== null" class="fpv-raw-error">
         {{ $t('preview.raw-error') }}<template v-if="rawError"> ({{ rawError }})</template>
+        <button class="fpv-btn fpv-retry-btn" @click="retryRaw">{{ $t('preview.retry') }}</button>
       </div>
       <img
         v-else
@@ -235,6 +241,7 @@ onMounted(() => {
     <div v-else-if="kind === 'video'" class="fpv-body fpv-media-body">
       <div v-if="rawError !== null" class="fpv-raw-error">
         {{ $t('preview.raw-error') }}<template v-if="rawError"> ({{ rawError }})</template>
+        <button class="fpv-btn fpv-retry-btn" @click="retryRaw">{{ $t('preview.retry') }}</button>
       </div>
       <video v-else class="fpv-video" controls :src="rawUrl" @error="onRawError" />
     </div>
@@ -243,6 +250,7 @@ onMounted(() => {
     <div v-else-if="kind === 'audio'" class="fpv-body fpv-media-body">
       <div v-if="rawError !== null" class="fpv-raw-error">
         {{ $t('preview.raw-error') }}<template v-if="rawError"> ({{ rawError }})</template>
+        <button class="fpv-btn fpv-retry-btn" @click="retryRaw">{{ $t('preview.retry') }}</button>
       </div>
       <audio v-else class="fpv-audio" controls :src="rawUrl" @error="onRawError" />
     </div>
@@ -252,6 +260,7 @@ onMounted(() => {
       <div v-if="pdfSupported && rawError !== null" class="fpv-body fpv-media-body">
         <div class="fpv-raw-error">
           {{ $t('preview.raw-error') }}<template v-if="rawError"> ({{ rawError }})</template>
+        <button class="fpv-btn fpv-retry-btn" @click="retryRaw">{{ $t('preview.retry') }}</button>
         </div>
       </div>
       <div v-else-if="pdfSupported" class="fpv-body fpv-pdf-body">
@@ -497,6 +506,9 @@ onMounted(() => {
   color: var(--danger-fg, #e5534b);
   font-size: var(--font-xs);
   text-align: center;
+}
+.fpv-retry-btn {
+  margin-left: 8px;
 }
 .fpv-hex-status {
   color: var(--text-secondary);

@@ -7586,6 +7586,7 @@
     "actual-size": "實際大小",
     "pdf-unavailable": "此視窗無法使用內嵌 PDF 檢視器。",
     "raw-error": "無法載入此檔案以供預覽。",
+    "retry": "重試",
     "hex-loading": "正在載入 hex 內容…",
     "hex-error": "無法載入檔案內容。",
     "hex-truncated": "僅顯示前 64 KB（共 {total}）。",

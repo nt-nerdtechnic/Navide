@@ -1926,8 +1926,12 @@ async def cli_profiles_rename(session: "Session", msg_id: str, msg_type: str, pa
     from . import app
 
     profile_id = str(payload.get("id") or "")
-    name = str(payload.get("name") or "")
+    name = payload.get("name")
     try:
+        # Only an explicit "" clears an alias; a missing or non-string name
+        # is malformed, not a request to clear.
+        if not isinstance(name, str):
+            raise ValueError("name must be a string")
         if profile_id == DEFAULT_SLOT_ID:
             # The built-in Default slot has no profile record; its alias is
             # kept per agent, so the agent must be named.

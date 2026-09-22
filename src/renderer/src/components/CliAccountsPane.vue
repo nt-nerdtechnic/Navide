@@ -573,6 +573,7 @@ onMounted(() => void props.api.refreshCloud())
                 class="cli-card-rename"
                 :placeholder="rowName(spec.agentKey, p)"
                 :aria-label="$t('settings.accounts.cli.rename')"
+                maxlength="64"
                 @keydown.enter.prevent="commitRename(spec.agentKey, p)"
                 @keydown.esc.prevent="cancelRename"
                 @blur="commitRename(spec.agentKey, p)"
