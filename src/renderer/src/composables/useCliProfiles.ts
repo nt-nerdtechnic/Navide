@@ -13,6 +13,10 @@ export interface CliProfile {
   agentKey: string
   name: string
   createdAt: string
+  /** True once the user renamed this slot. `name` also holds the generated
+   *  "Account N", so the flag is what tells a user's alias from a placeholder
+   *  — never the shape of the string. Absent = auto-named. */
+  nameIsCustom?: boolean
   /** Provider entry this slot binds to, for a CLI whose credential store
    *  holds several providers (opencode, pi, …). Absent = the whole store. */
   scope?: string | null
@@ -177,6 +181,11 @@ export type SetDefaultResult =
 // (the user's real home directory).
 export type CliProfileDefaults = Record<string, string | null>
 
+// Map of agentKey -> the user's alias for that agent's built-in Default slot.
+// The Default is not a profile record, so its alias lives beside the defaults
+// rather than in a `name` field. Absent key = never named.
+export type CliProfileDefaultNames = Record<string, string>
+
 // Display-only identity of one account slot, resolved by the backend from the
 // CLI's own credential files. `email` is null when the CLI stores no identity
 // (kimi) or nobody is signed in.
@@ -271,6 +280,7 @@ export type CliCloudCredentials = Record<string, Record<string, CloudCredential[
 export function useCliProfiles(backend: ReturnType<typeof useBackend>) {
   const profiles = ref<CliProfile[]>([])
   const defaults = ref<CliProfileDefaults>({})
+  const defaultNames = ref<CliProfileDefaultNames>({})
   const identities = ref<CliProfileIdentities>({})
   const duplicates = ref<CliProfileDuplicates>({})
   const supportedAgents = ref<string[]>([])
@@ -300,6 +310,7 @@ export function useCliProfiles(backend: ReturnType<typeof useBackend>) {
       const resp = await backend.send<{
         profiles: CliProfile[]
         defaults: CliProfileDefaults
+        defaultNames?: CliProfileDefaultNames
         identities?: CliProfileIdentities
         duplicates?: CliProfileDuplicates
         supported_agents: string[]
@@ -313,6 +324,7 @@ export function useCliProfiles(backend: ReturnType<typeof useBackend>) {
       }
       profiles.value = resp.payload.profiles
       defaults.value = resp.payload.defaults
+      defaultNames.value = resp.payload.defaultNames ?? {}
       identities.value = resp.payload.identities ?? {}
       duplicates.value = resp.payload.duplicates ?? {}
       supportedAgents.value = resp.payload.supported_agents
@@ -354,19 +366,27 @@ export function useCliProfiles(backend: ReturnType<typeof useBackend>) {
     }
   }
 
-  async function rename(id: string, name: string): Promise<CliProfile | null> {
+  /** Rename one account slot. `id` "__default__" names the built-in Default,
+   *  which has no profile record — the backend then needs `agentKey` to know
+   *  whose Default it is, and returns a null profile. An empty `name` clears
+   *  the alias. */
+  async function rename(id: string, name: string, agentKey?: string): Promise<CliProfile | null> {
     try {
+      const payload: Record<string, unknown> = { id, name }
+      if (agentKey) payload.agentKey = agentKey
       const resp = await backend.send<{
-        profile: CliProfile
+        profile: CliProfile | null
         profiles: CliProfile[]
         defaults: CliProfileDefaults
-      }>('cli_profiles.rename', { id, name })
+        defaultNames?: CliProfileDefaultNames
+      }>('cli_profiles.rename', payload)
       if (!resp.ok || !resp.payload) {
         error.value = resp.error?.message ?? 'rename failed'
         return null
       }
       profiles.value = resp.payload.profiles
       defaults.value = resp.payload.defaults
+      if (resp.payload.defaultNames) defaultNames.value = resp.payload.defaultNames
       return resp.payload.profile
     } catch (err) {
       error.value = err instanceof Error ? err.message : 'rename failed'
@@ -537,6 +557,17 @@ export function useCliProfiles(backend: ReturnType<typeof useBackend>) {
   function findProfile(id: string | null | undefined): CliProfile | undefined {
     if (!id) return undefined
     return profiles.value.find((p) => p.id === id)
+  }
+
+  /** The user's own name for one account row, or undefined when it only has
+   *  the generated "Account N". `profileId` null (or "__default__") = the
+   *  built-in Default, whose alias is kept per agent. */
+  function aliasFor(agentKey: string, profileId: string | null | undefined): string | undefined {
+    if (profileId && profileId !== DEFAULT_SLOT_ID) {
+      const profile = findProfile(profileId)
+      return profile?.nameIsCustom ? profile.name : undefined
+    }
+    return defaultNames.value[agentKey] || undefined
   }
 
   /** Display identity of one account row; `profileId` null = built-in Default. */
@@ -733,12 +764,16 @@ export function useCliProfiles(backend: ReturnType<typeof useBackend>) {
     const payload = raw as {
       profiles?: CliProfile[]
       defaults?: CliProfileDefaults
+      defaultNames?: CliProfileDefaultNames
       identities?: CliProfileIdentities
       duplicates?: CliProfileDuplicates
       portable_credentials?: CliPortableCredentials
     }
     if (payload?.profiles) profiles.value = payload.profiles
     if (payload?.defaults) defaults.value = payload.defaults
+    // Assigned on presence, not truthiness: clearing the last alias broadcasts
+    // an empty map, and skipping it would keep the removed name on screen.
+    if (payload?.defaultNames !== undefined) defaultNames.value = payload.defaultNames
     if (payload?.identities) identities.value = payload.identities
     if (payload?.portable_credentials !== undefined) {
       portable.value = payload.portable_credentials
@@ -794,6 +829,7 @@ export function useCliProfiles(backend: ReturnType<typeof useBackend>) {
     loginIsGlobal,
     profiles,
     defaults,
+    defaultNames,
     identities,
     duplicates,
     supportedAgents,
@@ -809,6 +845,7 @@ export function useCliProfiles(backend: ReturnType<typeof useBackend>) {
     hasProfiles,
     defaultProfileId,
     findProfile,
+    aliasFor,
     identityFor,
     duplicateFor,
     portable,

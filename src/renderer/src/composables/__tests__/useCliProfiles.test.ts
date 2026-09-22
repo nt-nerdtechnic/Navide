@@ -313,6 +313,122 @@ describe('useCliProfiles', () => {
     scope.stop()
   })
 
+  it('loads the Default slots\' aliases and keeps them in sync with the broadcast', async () => {
+    const mock = createMockBackend('connected')
+    mock.setResponse('cli_profiles.list', {
+      profiles: [],
+      defaults: {},
+      defaultNames: { claude: 'Main' },
+      supported_agents: SUPPORTED,
+    })
+    const { result, scope } = withScope(() => useCliProfiles(mock.backend))
+    await flush()
+
+    expect(result.defaultNames.value).toEqual({ claude: 'Main' })
+    expect(result.aliasFor('claude', null)).toBe('Main')
+    expect(result.aliasFor('claude', '__default__')).toBe('Main')
+    expect(result.aliasFor('codex', null)).toBeUndefined()
+
+    // Clearing the last alias broadcasts an empty map — it must not be
+    // mistaken for "no news" and leave the removed name on screen.
+    mock.emit('cli_profiles.changed', { defaultNames: {}, reason: 'rename' })
+    expect(result.defaultNames.value).toEqual({})
+    expect(result.aliasFor('claude', null)).toBeUndefined()
+    scope.stop()
+  })
+
+  it('aliasFor tells a user-given name from the generated one', async () => {
+    const mock = createMockBackend('connected')
+    mock.setResponse('cli_profiles.list', {
+      profiles: [
+        { ...profile('p1', 'claude', 'Work'), nameIsCustom: true },
+        profile('p2', 'claude', 'Account 3'),
+      ],
+      defaults: {},
+      supported_agents: SUPPORTED,
+    })
+    const { result, scope } = withScope(() => useCliProfiles(mock.backend))
+    await flush()
+
+    expect(result.aliasFor('claude', 'p1')).toBe('Work')
+    // "Account 3" is a placeholder the app minted, not a name the user chose.
+    expect(result.aliasFor('claude', 'p2')).toBeUndefined()
+    expect(result.aliasFor('claude', 'gone')).toBeUndefined()
+    scope.stop()
+  })
+
+  it('rename carries the agent key for the built-in Default and adopts the returned aliases', async () => {
+    const mock = createMockBackend('connected')
+    mock.setResponse('cli_profiles.list', { profiles: [], defaults: {}, supported_agents: SUPPORTED })
+    mock.setResponse('cli_profiles.rename', {
+      profile: null,
+      profiles: [],
+      defaults: {},
+      defaultNames: { claude: 'Main' },
+    })
+    const { result, scope } = withScope(() => useCliProfiles(mock.backend))
+    await flush()
+
+    // The Default has no profile record, so the backend cannot tell whose
+    // Default it is without the agent key.
+    await result.rename('__default__', 'Main', 'claude')
+    const call = mock.sent.find((s) => s.type === 'cli_profiles.rename')
+    expect(call?.payload).toEqual({ id: '__default__', name: 'Main', agentKey: 'claude' })
+    expect(result.defaultNames.value).toEqual({ claude: 'Main' })
+    scope.stop()
+  })
+
+  it('renaming a profile slot sends no agent key when none is given', async () => {
+    const mock = createMockBackend('connected')
+    mock.setResponse('cli_profiles.list', { profiles: [], defaults: {}, supported_agents: SUPPORTED })
+    const renamed = { ...profile('p1', 'claude', 'Work'), nameIsCustom: true }
+    mock.setResponse('cli_profiles.rename', { profile: renamed, profiles: [renamed], defaults: {} })
+    const { result, scope } = withScope(() => useCliProfiles(mock.backend))
+    await flush()
+
+    const out = await result.rename('p1', 'Work')
+    expect(out?.nameIsCustom).toBe(true)
+    expect(mock.sent.find((s) => s.type === 'cli_profiles.rename')?.payload).toEqual({
+      id: 'p1',
+      name: 'Work',
+    })
+    expect(result.aliasFor('claude', 'p1')).toBe('Work')
+    scope.stop()
+  })
+
+  it('clearing a profile alias adopts the row the backend regenerates', async () => {
+    const mock = createMockBackend('connected')
+    const named = { ...profile('p1', 'claude', 'Work'), nameIsCustom: true }
+    mock.setResponse('cli_profiles.list', {
+      profiles: [named],
+      defaults: {},
+      supported_agents: SUPPORTED,
+    })
+    // What the backend does with an empty name: the custom flag goes and the
+    // generated "Account N" comes back (max + 1 over the existing ones).
+    const cleared = profile('p1', 'claude', 'Account 2')
+    mock.setResponse('cli_profiles.rename', { profile: cleared, profiles: [cleared], defaults: {} })
+    const { result, scope } = withScope(() => useCliProfiles(mock.backend))
+    await flush()
+    expect(result.aliasFor('claude', 'p1')).toBe('Work')
+
+    await result.rename('p1', '', 'claude')
+    expect(mock.sent.find((s) => s.type === 'cli_profiles.rename')?.payload).toEqual({
+      id: 'p1',
+      name: '',
+      agentKey: 'claude',
+    })
+    expect(result.aliasFor('claude', 'p1')).toBeUndefined()
+    expect(result.findProfile('p1')?.name).toBe('Account 2')
+
+    // Another window clearing it reaches here as a broadcast, not a reply.
+    mock.emit('cli_profiles.changed', { profiles: [named], reason: 'rename' })
+    expect(result.aliasFor('claude', 'p1')).toBe('Work')
+    mock.emit('cli_profiles.changed', { profiles: [cleared], reason: 'rename' })
+    expect(result.aliasFor('claude', 'p1')).toBeUndefined()
+    scope.stop()
+  })
+
   it('surfaces the error message when a mutation fails', async () => {
     const mock = createMockBackend('connected')
     mock.setResponse('cli_profiles.list', { profiles: [], defaults: {}, supported_agents: SUPPORTED })

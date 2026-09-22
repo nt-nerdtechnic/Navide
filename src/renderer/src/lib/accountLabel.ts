@@ -16,6 +16,9 @@ export const UNKNOWN_PROFILE_ID = 'unknown'
 export interface AccountLabelSource {
   identityFor(agentKey: string, profileId: string | null): { email: string | null } | null
   findProfile(id: string | null | undefined): { name: string } | undefined
+  /** The user's own name for this account, when they gave it one. Optional so
+   *  a caller holding an older/narrower source still type-checks. */
+  aliasFor?(agentKey: string, profileId: string | null): string | undefined
 }
 
 /** Translator shape: vue-i18n's `t` for a bare key. */
@@ -35,25 +38,67 @@ export function accountKey(agentKey: string, profileId: string | null | undefine
 
 /**
  * Display name of one account, in the same order the badge resolves rows:
- * signed-in email → the profile's given name → "Default" for the built-in
- * slot → "Unknown" for untraceable records → a shortened id marked as removed
- * when the profile no longer exists (its id survives in old records).
+ * the user's alias → signed-in email → the profile's given name → "Default"
+ * for the built-in slot → "Unknown" for untraceable records → a shortened id
+ * marked as removed when the profile no longer exists (its id survives in old
+ * records). The alias leads because it is the only part the user wrote; for
+ * the half of the vendors that expose no email it is the only thing that
+ * tells two accounts apart.
+ *
+ * `defaultLabel` replaces the generic "Default" where the surface already has
+ * a wordier name for the built-in slot (the badge popover's "Default
+ * (built-in)").
  */
 export function accountLabel(
   source: AccountLabelSource | null | undefined,
   agentKey: string,
   profileId: string | null | undefined,
-  t: AccountLabelT
+  t: AccountLabelT,
+  opts: { defaultLabel?: string } = {}
 ): string {
   const id = normalizeProfileId(profileId)
   if (id === UNKNOWN_PROFILE_ID) return t('account-dim.unknown')
   const slot = id === DEFAULT_PROFILE_ID ? null : id
+  const alias = source?.aliasFor?.(agentKey, slot)
+  if (alias) return alias
   const email = source?.identityFor(agentKey, slot)?.email
   if (email) return email
   const name = source?.findProfile(slot)?.name
   if (name) return name
-  if (id === DEFAULT_PROFILE_ID) return t('account-dim.default')
+  if (id === DEFAULT_PROFILE_ID) return opts.defaultLabel ?? t('account-dim.default')
   return `${id.slice(0, 8)} · ${t('account-dim.removed')}`
+}
+
+/**
+ * The same account, shortened for a pane header chip: alias → the email's
+ * local part → the profile's (generated) name → "Default". A full email is
+ * over 110px at the header's 9px type, which the title bar has no room for;
+ * the whole address stays in the tooltip and the popover.
+ */
+export function accountChipLabel(
+  source: AccountLabelSource | null | undefined,
+  agentKey: string,
+  profileId: string | null | undefined,
+  t: AccountLabelT,
+  opts: { defaultLabel?: string } = {}
+): string {
+  const id = normalizeProfileId(profileId)
+  if (id === UNKNOWN_PROFILE_ID) return t('account-dim.unknown')
+  const slot = id === DEFAULT_PROFILE_ID ? null : id
+  const alias = source?.aliasFor?.(agentKey, slot)
+  if (alias) return alias
+  const email = source?.identityFor(agentKey, slot)?.email
+  if (email) return emailLocalPart(email)
+  const name = source?.findProfile(slot)?.name
+  if (name) return name
+  if (id === DEFAULT_PROFILE_ID) return opts.defaultLabel ?? t('account-dim.default')
+  return `${id.slice(0, 8)} · ${t('account-dim.removed')}`
+}
+
+/** The part before "@", or the whole string when there is none. */
+export function emailLocalPart(email: string): string {
+  const at = email.indexOf('@')
+  return at > 0 ? email.slice(0, at) : email
 }
 
 /** True when the id names a profile that no longer exists (and is not one of
