@@ -7,7 +7,7 @@ import pytest
 from mcp.server.fastmcp import FastMCP
 from mcp.shared.memory import create_connected_server_and_client_session
 
-from agent_team_backend import agent_messaging, native_skills, skills_events
+from agent_team_backend import agent_messaging, native_skills, skills_approvals, skills_events
 from agent_team_backend import app as backend_app
 from agent_team_backend.mcp_server import wiring
 from agent_team_backend.plugins.builtin.navide_skills import skills_tools
@@ -22,6 +22,7 @@ def _context(token: str | None = None):
 @pytest.fixture
 def service(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     agent_messaging._reset_for_test()
+    skills_approvals.registry._reset_for_test()
     agent_messaging.register("skill-contract", "contract", str(tmp_path), agent_key="codex")
     monkeypatch.setattr(native_skills, "native_roots", lambda home=None: [])
     store = SkillsStore(root=tmp_path / "shared", state_path=tmp_path / "state.json",
@@ -76,7 +77,7 @@ async def test_unauthenticated_prepare_never_reads_the_source(service, monkeypat
     assert service[1] == []
 
 
-async def test_consent_retry_installs_snapshot_and_provenance_survives_restart(service, tmp_path, monkeypatch):
+async def test_user_approval_installs_snapshot_and_provenance_survives_restart(service, tmp_path, monkeypatch):
     store, notifications = service
     source = tmp_path / "source"
     source.mkdir()
@@ -85,11 +86,11 @@ async def test_consent_retry_installs_snapshot_and_provenance_survives_restart(s
     preview = await skills_tools.skills_prepare_install(str(source), _context())
     assert preview["ok"] and not store.root.exists()
     (source / "SKILL.md").write_text(content.replace("Reviewed", "Changed"), encoding="utf-8")
-    refused = await skills_tools.skills_install(preview["preview_id"], preview["digest"], [], _context())
-    assert refused["error"]["code"] == "SKILL_CONSENT_REQUIRED"
+    requested = await skills_tools.skills_install(preview["preview_id"], preview["digest"], [], _context())
+    assert requested["status"] == "pending_approval"
     assert not store.root.exists() and not store.write_consented() and notifications == []
-    installed = await skills_tools.skills_install(preview["preview_id"], preview["digest"], [], _context(), consent=True)
-    assert installed["ok"], installed
+    approval = await skills_approvals.decide(requested["approval_id"], True, skills_tools._installer())
+    assert approval["status"] == "installed", approval
     assert (store.root / "contract-skill" / "SKILL.md").read_text(encoding="utf-8") == content
     inspected = await skills_tools.skills_inspect("shared:contract-skill", _context())
     provenance = inspected["skill"]["provenance"]

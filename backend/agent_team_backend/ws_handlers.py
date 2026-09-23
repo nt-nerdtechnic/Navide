@@ -3182,6 +3182,28 @@ async def skills_delete(session: "Session", msg_id: str, msg_type: str, payload:
         await session.send_json(make_response(msg_id, msg_type, result))
 
 
+@handler("skills.install_approvals.list")
+async def skills_install_approvals_list(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from .skills_approvals import public, registry
+
+    approvals = [public(record) for record in registry.pending()]
+    await session.send_json(make_response(msg_id, msg_type, {"approvals": approvals}))
+
+
+@handler("skills.install_approval.decide")
+async def skills_install_approval_decide(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from .plugins.builtin.navide_skills.skills_tools import _installer
+    from .skills_approvals import SkillApprovalError, decide
+
+    approval_id = str(payload.get("approval_id") or "")
+    try:
+        approval = await decide(approval_id, payload.get("approve") is True, _installer())
+    except SkillApprovalError as err:
+        await session.send_json(make_error(msg_id, msg_type, err.code, str(err), {"approval_id": approval_id}))
+        return
+    await session.send_json(make_response(msg_id, msg_type, {"approval": approval}))
+
+
 # ── CLI instruction files (memory.*) ────────────────────────────────────────
 def _memory_workspace(payload: dict) -> Path | None:
     """The workspace root a memory request is scoped to, or None.

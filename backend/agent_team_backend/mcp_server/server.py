@@ -5477,7 +5477,8 @@ async def skills_list(ctx: Context) -> dict[str, Any]:
     skill would cover what they are asking for. Read-only. Use skills_inspect
     with a listed id for instructions and a delivery revision; authorized
     changes use skills_set_delivery. Install through skills_prepare_install
-    then skills_install after reviewing the preview.
+    then skills_install after reviewing the preview; the user approves the
+    install in Navide, and skills_install_status reports the outcome.
 
     Returns {skills, native, root, agents}. Each shared skill is {name,
     id, description, enabled, targets, managed, valid, native_conflict}: `targets`

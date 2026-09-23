@@ -165,6 +165,24 @@ class SkillInstaller:
         if sum(record["result"] is None for record in self._previews.values()) >= MAX_PREVIEWS:
             raise SkillValidationError("too many active previews; wait for expiry")
 
+    def peek(self, preview_id: str, expected_digest: str, *, owner_key: str,
+             targets: list[str] | None) -> dict:
+        """Check a preview without writing: {"receipt": ...} once installed, else {"preview": ...}."""
+        with self._lock:
+            self._expire()
+            record = self._previews.get(preview_id)
+            if record is None:
+                raise SkillValidationError("preview missing or expired; create a new preview")
+            if record["owner"] != owner_key or record["digest"] != expected_digest:
+                raise SkillValidationError("preview owner or digest mismatch")
+            if record["result"] is not None:
+                if targets != record["installed_targets"]:
+                    raise SkillValidationError("preview already installed with different targets; use delivery settings")
+                return {"receipt": copy.deepcopy({**record["result"], "changed": False})}
+            keys = ("preview_id", "digest", "name", "source", "files", "skill_md",
+                    "warnings", "expires_at", "prepared_at")
+            return {"preview": copy.deepcopy({key: record[key] for key in keys})}
+
     def install(self, preview_id: str, expected_digest: str, *, owner_key: str,
                 targets: list[str] | None, consent: bool = False) -> dict:
         with self._lock:

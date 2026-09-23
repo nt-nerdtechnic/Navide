@@ -12,7 +12,7 @@ import pytest
 from mcp.server.fastmcp import FastMCP
 from mcp.shared.memory import create_connected_server_and_client_session
 
-from agent_team_backend import agent_messaging, native_skills, skills_events
+from agent_team_backend import agent_messaging, native_skills, skills_approvals, skills_events
 from agent_team_backend import app as backend_app
 from agent_team_backend.mcp_server import auth, wiring
 from agent_team_backend.plugins.builtin.navide_skills import skills_tools
@@ -26,9 +26,15 @@ def _ctx(pane_id: str = "pa", *, token: str | None = None, client: str = "") -> 
     return SimpleNamespace(request_context=SimpleNamespace(request=SimpleNamespace(query_params=params)))
 
 
+async def _approve(requested: dict[str, Any]) -> dict[str, Any]:
+    assert requested["status"] == "pending_approval", requested
+    return await skills_approvals.decide(requested["approval_id"], True, skills_tools._installer())
+
+
 @pytest.fixture
 def library(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[SkillsStore, Path, list[tuple[str, str]]]:
     agent_messaging._reset_for_test()
+    skills_approvals.registry._reset_for_test()
     agent_messaging.register("pa", "reviewer", str(tmp_path), agent_key="codex")
     agent_messaging.register("pb", "other", str(tmp_path), agent_key="claude")
     native_root = tmp_path / "native"
@@ -55,11 +61,16 @@ async def test_tools_are_registered_with_effect_annotations() -> None:
     server = FastMCP("skills-test")
     skills_tools.install(server)
     tools = {tool.name: tool for tool in await server.list_tools()}
-    assert set(tools) == {"skills_inspect", "skills_prepare_install", "skills_install", "skills_set_delivery"}
+    assert set(tools) == {
+        "skills_inspect", "skills_prepare_install", "skills_install", "skills_install_status",
+        "skills_set_delivery",
+    }
     assert tools["skills_inspect"].annotations.readOnlyHint is True
     assert tools["skills_prepare_install"].annotations.openWorldHint is True
     assert tools["skills_install"].annotations.readOnlyHint is False
     assert tools["skills_install"].annotations.destructiveHint is False
+    assert tools["skills_install_status"].annotations.readOnlyHint is True
+    assert "consent" not in tools["skills_install"].inputSchema["properties"]
     assert "ctx" not in tools["skills_inspect"].inputSchema["properties"]
 
 
@@ -126,8 +137,8 @@ async def test_inspect_lists_nested_manifest_attachments(library, tmp_path, kind
     if kind == "shared":
         preview = await skills_tools.skills_prepare_install(str(source), _ctx())
         assert "docs/SKILL.md" in {row["path"] for row in preview["files"]}
-        installed = await skills_tools.skills_install(preview["preview_id"], preview["digest"], [], _ctx())
-        assert installed["ok"]
+        requested = await skills_tools.skills_install(preview["preview_id"], preview["digest"], [], _ctx())
+        assert (await _approve(requested))["status"] == "installed"
         identity = "shared:nested-docs"
         installed_root = store.root / "nested-docs"
     else:
@@ -255,15 +266,14 @@ async def test_preview_install_retains_owner_and_same_installer(library, tmp_pat
     assert "codex" in preview["automatic_agents"]
     assert preview["skills_sync_enabled"] is False
     wrong_owner = await skills_tools.skills_install(
-        preview["preview_id"], preview["digest"], ["codex"], _ctx("pb"), consent=True
+        preview["preview_id"], preview["digest"], ["codex"], _ctx("pb")
     )
     assert wrong_owner["ok"] is False
-    result = await skills_tools.skills_install(
-        preview["preview_id"], preview["digest"], ["codex"], _ctx(), consent=True
+    requested = await skills_tools.skills_install(
+        preview["preview_id"], preview["digest"], ["codex"], _ctx()
     )
-    assert result["ok"] is True and result["name"] == "installed"
-    assert result["materialized_in_current_session"] is None
-    assert result["loaded_in_current_session"] is None
+    approval = await _approve(requested)
+    assert approval["status"] == "installed" and approval["result"]["name"] == "installed"
     assert (library[0].root / "installed" / "SKILL.md").is_file()
     inspected = await skills_tools.skills_inspect("shared:installed", _ctx())
     provenance = inspected["skill"]["provenance"]
@@ -271,7 +281,9 @@ async def test_preview_install_retains_owner_and_same_installer(library, tmp_pat
     assert provenance["digest"] == preview["digest"]
     assert provenance["installed_at"]
     again = await skills_tools.skills_install(
-        preview["preview_id"], preview["digest"], ["codex"], _ctx(), consent=True
+        preview["preview_id"], preview["digest"], ["codex"], _ctx()
     )
-    assert again["ok"] is True
+    assert again["ok"] is True and again["status"] == "installed" and again["changed"] is False
+    assert again["materialized_in_current_session"] is None
+    assert again["loaded_in_current_session"] is None
     assert library[2] == [("installed", "installed")]

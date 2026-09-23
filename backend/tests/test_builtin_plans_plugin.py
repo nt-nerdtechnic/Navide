@@ -95,7 +95,8 @@ async def test_plugin_tools_are_installed_on_the_core_server(host: PluginHost) -
     assert "cli_get_status" in names
     assert "cli_interrupt" in names
     assert "ui_invoke" in names
-    for name in ("skills_inspect", "skills_prepare_install", "skills_install", "skills_set_delivery"):
+    for name in ("skills_inspect", "skills_prepare_install", "skills_install", "skills_install_status",
+                 "skills_set_delivery"):
         assert names.count(name) == 1
     assert host.registered_routes() == []
 

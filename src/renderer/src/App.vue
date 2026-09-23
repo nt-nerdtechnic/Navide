@@ -327,6 +327,7 @@ const OnboardingWizard = defineAsyncComponent(() => import('./components/Onboard
 const WhatsNewModal = defineAsyncComponent(() => import('./components/WhatsNewModal.vue'))
 const CliHealthGuide = defineAsyncComponent(() => import('./components/CliHealthGuide.vue'))
 const CliInstallDialog = defineAsyncComponent(() => import('./components/CliInstallDialog.vue'))
+const SkillInstallApprovalDialog = defineAsyncComponent(() => import('./components/SkillInstallApprovalDialog.vue'))
 const DebugModal = defineAsyncComponent(() => import('./components/DebugModal.vue'))
 const RestoreScopeModal = defineAsyncComponent(() => import('./components/RestoreScopeModal.vue'))
 const PipelineManagerModal = defineAsyncComponent(() => import('./components/PipelineManagerModal.vue'))
@@ -18789,6 +18790,8 @@ function paneIsCommander(p: ActivePane): boolean {
     @login="onCliLoginSpawn"
     @dismiss-changed="onCliInstallDismissChanged"
   />
+  <!-- An agent's skills_install waits here for the user's approval. -->
+  <SkillInstallApprovalDialog :backend="backend" />
   <RestoreScopeModal
     v-if="showRestoreScopeModal"
     :open="showRestoreScopeModal"
