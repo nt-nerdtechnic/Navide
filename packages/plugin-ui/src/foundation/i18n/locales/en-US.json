@@ -1009,6 +1009,10 @@
           "title": "Account switch when quota runs out",
           "summary": "Off / notify / automatic, and what each CLI can do"
         },
+        "general-quota-failover-loop": {
+          "title": "Resume a loop right after switching when quota runs out",
+          "summary": "Looping panes switch account and continue without waiting for the reset"
+        },
         "accounts": {
           "title": "Git Accounts",
           "summary": "Add, edit, and remove encrypted Git host credentials and tokens."
@@ -7973,6 +7977,8 @@
     "settings-hint": "Shows CLI quota for 11 providers: claude, codex, kimi, grok, antigravity, opencode, qwen, kilo, pi, copilot and cursor. Most read local CLI credentials to query that provider's own usage API — read-only, credentials are never written. Claude is different: it drives the Claude CLI's built-in /usage panel instead of reading credentials.",
     "failover-title": "Account switch when quota runs out",
     "failover-hint": "What Navide does when a CLI account hits its quota: do nothing, list the accounts it could switch to (default), or switch automatically — at most 3 automatic switches per 5 hours per CLI, never back to the exhausted account on its own. The table shows what each CLI can do; the switch itself is decided by the backend.",
+    "failover-loop-title": "Resume a loop right after switching when quota runs out",
+    "failover-loop-hint": "When a pane running a loop runs out of quota, switch to an account that still has quota and send continue right away instead of waiting for the reset. Requires \"Switch automatically\" above.",
     "failover-mode-off": "Off",
     "failover-mode-notify": "Notify me",
     "failover-mode-auto": "Switch automatically",

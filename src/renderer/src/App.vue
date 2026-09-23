@@ -264,6 +264,11 @@ import {
   unseenTail,
   formatLoopTime,
 } from './lib/loopPrompt'
+import {
+  LOOP_FAILOVER_RESUME_SETTING_KEY,
+  loopFailoverResumeStep,
+  shouldResumeLoopAfterFailover,
+} from './lib/loopFailoverResume'
 import { isLoopSkill, resolvePromptSkill } from './lib/promptSkills'
 import { usePromptSkills } from './composables/usePromptSkills'
 import { loginCommandFor, matchLoginExpired } from './lib/cliLoginExpired'
@@ -4528,6 +4533,10 @@ interface LoopLimitWatcher {
 }
 const loopLimitWatchers = new Map<string, LoopLimitWatcher>()
 const LOOP_LIMIT_POLL_MS = 5000
+/** Panes whose loop resumes on its own once an automatic failover switch
+ *  settles (LOOP_FAILOVER_RESUME_SETTING_KEY), keyed to when they were armed.
+ *  Lives and dies with the pane's loop watcher. */
+const loopFailoverResumeArmed = new Map<string, number>()
 
 function stopLoopLimitWatcher(paneId: string): void {
   const watcher = loopLimitWatchers.get(paneId)
@@ -4535,6 +4544,7 @@ function stopLoopLimitWatcher(paneId: string): void {
     clearInterval(watcher.timer)
     loopLimitWatchers.delete(paneId)
   }
+  loopFailoverResumeArmed.delete(paneId)
   // Drop the subagent count with the watcher that reads it. A count left above
   // zero — the pane's CLI exited while a subagent was running, so its
   // SubagentStop never arrived — would otherwise gate the NEXT loop started on
@@ -4580,6 +4590,24 @@ function startLoopLimitWatcher(paneId: string): void {
       pane.loopWaitUntil = null
       pane.loopEstimateResetAt = null
       stopLoopLimitWatcher(paneId)
+      return
+    }
+    // The user opted in to resuming the loop after an automatic switch: wait
+    // for the switch to clear the exhausted account's flag and the CLI to be
+    // free at its prompt, then resume; past the timeout, offer the Continue
+    // button the switch would otherwise have offered.
+    const failoverArmedAt = loopFailoverResumeArmed.get(paneId)
+    if (failoverArmedAt !== undefined) {
+      const step = loopFailoverResumeStep({
+        armedAt: failoverArmedAt,
+        now: Date.now(),
+        limitLit: pane.usageLimitAt != null,
+        promptFree: status === 'idle' && messagingHoldKey(paneId) === null,
+      })
+      if (step === 'wait') return
+      loopFailoverResumeArmed.delete(paneId)
+      if (step === 'give-up') pane.resumeContinueAvailable = true
+      else void resumeLoopAfterFailover(paneId)
       return
     }
     // A switch can clear the old badge while quota is still unverified. Even
@@ -5016,10 +5044,42 @@ function clearPaneUsageLimit(
   // account moved, but whether the work should go on is theirs to say. The
   // parked loop keeps its wait and the pane offers the explicit continue.
   if (pane.loopActive && !opts.resumeLoop) {
-    pane.resumeContinueAvailable = true
+    if (!loopFailoverResumeArmed.has(pane.id)) pane.resumeContinueAvailable = true
     return
   }
   if (waitingOnThisLimit) void fireLoopResume(pane.id, logLabel)
+}
+
+/** Whether this committed failover switch resumes the pane's loop by itself
+ *  (the user's LOOP_FAILOVER_RESUME_SETTING_KEY opt-in) instead of offering
+ *  the Continue button. */
+function loopResumesAfterFailover(pane: ActivePane, ev: QuotaCommitEvent): boolean {
+  return shouldResumeLoopAfterFailover({
+    enabled: settingsGet<boolean>(LOOP_FAILOVER_RESUME_SETTING_KEY, false) === true,
+    policyMode: quotaFailover.state.value?.policy.mode,
+    loopActive: !!pane.loopActive,
+    commitState: ev.state,
+    switchMode: ev.switchMode,
+    restartStrategy: ev.restartStrategy,
+  })
+}
+
+/** An armed pane's switch settled: resume its loop now, through the same path
+ *  the badge click takes. A resume that could not be typed puts the loop back
+ *  where it was parked and offers the Continue button instead. */
+async function resumeLoopAfterFailover(paneId: string): Promise<void> {
+  const pane = panes.value.find((p) => p.id === paneId)
+  if (!pane?.loopActive) return
+  const parkedUntil = pane.loopWaitUntil ?? null
+  pane.resumeContinueAvailable = false
+  // fireLoopResume only resumes a parked loop, and the switch can land before
+  // the loop watcher parked this one on the limit.
+  pane.loopWaitUntil = Date.now()
+  await fireLoopResume(paneId, 'loop-failover-resume', true)
+  if (pane.loopActive && pane.loopWaitUntil != null) {
+    pane.loopWaitUntil = parkedUntil
+    pane.resumeContinueAvailable = true
+  }
 }
 
 /** Quota badge dismissed by the user (TerminalPane already confirmed). */
@@ -8067,13 +8127,32 @@ async function quotaPaneReadiness(paneId: string, opts: { needsResume: boolean }
 
 async function quotaRestartPane(pane: PrepareEventPane, ev: QuotaCommitEvent): Promise<RestartOutcome> {
   let newPaneId: string | null = null
+  // The loop lives on the pane entry the rebuild replaces. When it is to
+  // resume after the switch, carry it onto the replacement and arm it there —
+  // never on the old pane, which is still on the exhausted process.
+  const old = panes.value.find((p) => p.id === pane.paneId)
+  const carryLoop = old && loopResumesAfterFailover(old, ev)
+    ? { skillId: old.loopSkillId ?? null, turnCount: old.loopTurnCount ?? 0, maxTurns: old.loopMaxTurns ?? 0 }
+    : null
   const failure = await rebuildPaneViaResume(pane.paneId, {
     suppressBusyToast: true,
     offerContinue: true,
     preserveScrollback: true,
     quotaCommit: ev,
     quotaOriginalPaneId: pane.originalPaneId ?? pane.paneId,
-    onReplaced: (id) => { newPaneId = id },
+    onReplaced: (id) => {
+      newPaneId = id
+      const revived = carryLoop ? panes.value.find((p) => p.id === id) : undefined
+      if (!carryLoop || !revived) return
+      revived.loopActive = true
+      revived.loopSkillId = carryLoop.skillId
+      revived.loopTurnCount = carryLoop.turnCount
+      revived.loopMaxTurns = carryLoop.maxTurns
+      bumpLoopGen(id)
+      startLoopLimitWatcher(id)
+      revived.resumeContinueAvailable = false
+      loopFailoverResumeArmed.set(id, Date.now())
+    },
   })
   if (failure) return { outcome: 'failed', reason: failure }
   const id = newPaneId ?? pane.paneId
@@ -8164,7 +8243,13 @@ quotaFailover.initQuotaFailover(backend, {
       const pane = panes.value.find((p) => p.id === listed.paneId)
       if (pane) {
         pane.quotaGateIncidentId = ev.incidentId
-        if (pane.loopActive) pane.resumeContinueAvailable = true
+        // A hot swap keeps the pane, so its loop is armed here; a restart
+        // armed its replacement pane already (quotaRestartPane).
+        if (ev.switchMode === 'hot' && loopResumesAfterFailover(pane, ev)) {
+          loopFailoverResumeArmed.set(pane.id, Date.now())
+        }
+        if (loopFailoverResumeArmed.has(pane.id)) pane.resumeContinueAvailable = false
+        else if (pane.loopActive) pane.resumeContinueAvailable = true
       }
     }
   },

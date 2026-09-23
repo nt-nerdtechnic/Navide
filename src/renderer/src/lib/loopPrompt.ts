@@ -131,10 +131,19 @@ export function unseenTail(
 }
 
 /** Local HH:mm (24h) for the loop badge's resume/estimate times and the
- *  loop-paused notification. Single source — badge and notification must
- *  render the same clock. */
-export function formatLoopTime(epochMs: number): string {
-  return new Date(epochMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+ *  loop-paused notification, prefixed with M/D when the time is not on the
+ *  local current day ("9/28 01:46") so a multi-day reset doesn't read as
+ *  minutes away. Single source — badge and notification must render the
+ *  same clock. */
+export function formatLoopTime(epochMs: number, now: number = Date.now()): string {
+  const at = new Date(epochMs)
+  const clock = at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+  const today = new Date(now)
+  const sameDay =
+    at.getFullYear() === today.getFullYear() &&
+    at.getMonth() === today.getMonth() &&
+    at.getDate() === today.getDate()
+  return sameDay ? clock : `${at.getMonth() + 1}/${at.getDate()} ${clock}`
 }
 
 /** Safety margin added past the parsed reset time before resuming. */

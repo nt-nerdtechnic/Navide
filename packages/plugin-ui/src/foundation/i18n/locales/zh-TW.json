@@ -1009,6 +1009,10 @@
           "title": "額度耗盡時的帳號切換",
           "summary": "關閉／通知／自動，以及各 CLI 的能力"
         },
+        "general-quota-failover-loop": {
+          "title": "迴圈遇到額度耗盡時，切換後立即繼續",
+          "summary": "跑迴圈的 pane 切換帳號後直接繼續，不等額度重置"
+        },
         "accounts": {
           "title": "Git 帳號",
           "summary": "新增、編輯與移除加密保存的 Git 主機憑證與權杖。"
@@ -7973,6 +7977,8 @@
     "settings-hint": "顯示 11 家 CLI 的額度：claude、codex、kimi、grok、antigravity、opencode、qwen、kilo、pi、copilot、cursor。多數是讀取本機 CLI 憑證查詢該供應商的官方用量 API，僅讀取、不寫入憑證。claude 則不同，改為驅動 Claude CLI 內建的 /usage 面板，不讀取憑證。",
     "failover-title": "額度耗盡時的帳號切換",
     "failover-hint": "CLI 帳號額度用完時 Navide 的做法：不處理、列出可切換的帳號（預設），或自動切換——每個 CLI 每 5 小時最多自動切換 3 次，且不會自動切回耗盡的帳號。表格列出各 CLI 的能力；是否切換由後端決定。",
+    "failover-loop-title": "迴圈遇到額度耗盡時，切換後立即繼續",
+    "failover-loop-hint": "正在跑迴圈的 pane 額度用完時，自動切換到還有額度的帳號並立刻送出繼續，不等額度重置。需要上方選「自動切換」。",
     "failover-mode-off": "關閉",
     "failover-mode-notify": "通知我",
     "failover-mode-auto": "自動切換",
