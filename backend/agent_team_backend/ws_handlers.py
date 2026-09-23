@@ -10217,3 +10217,109 @@ async def preview_log_clear(session: "Session", msg_id: str, msg_type: str, payl
             )
         )
     await session.send_json(make_response(msg_id, msg_type, {"removed": removed}))
+
+
+# ── Navide scheduler (scheduler.*) ──────────────────────────────────────────
+# Thin wrappers over scheduler.SchedulerService, which the scheduler_* MCP
+# tools call too. Malformed requests are BAD_REQUEST; an operation that fails
+# (unknown id, already running) answers {ok: false, error}. Mutations answer
+# first, then push the whole job list to the other windows.
+
+
+def _scheduler_id(payload: dict) -> str | None:
+    job_id = payload.get("id")
+    return job_id if isinstance(job_id, str) and job_id.strip() else None
+
+
+async def _scheduler_bad_request(session: "Session", msg_id: str, msg_type: str, message: str) -> None:
+    await session.send_json(make_error(msg_id, msg_type, "BAD_REQUEST", message))
+
+
+@handler("scheduler.list")
+async def scheduler_list(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import scheduler
+
+    await session.send_json(
+        make_response(msg_id, msg_type, await scheduler.get_service().list())
+    )
+
+
+@handler("scheduler.upsert")
+async def scheduler_upsert(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """Create (no id) or update (with id) a job; the definition is validated
+    by the same function the MCP tool uses."""
+    from . import scheduler
+
+    job = payload.get("job")
+    if not isinstance(job, dict):
+        await _scheduler_bad_request(session, msg_id, msg_type, "scheduler.upsert needs a job object")
+        return
+    try:
+        result = await scheduler.get_service().upsert(job)
+    except scheduler.JobInvalid as err:
+        await _scheduler_bad_request(session, msg_id, msg_type, str(err))
+        return
+    await session.send_json(make_response(msg_id, msg_type, result))
+    await scheduler.broadcast_changed(exclude=session)
+
+
+@handler("scheduler.remove")
+async def scheduler_remove(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import scheduler
+
+    job_id = _scheduler_id(payload)
+    if job_id is None:
+        await _scheduler_bad_request(session, msg_id, msg_type, "scheduler.remove needs an id")
+        return
+    result = await scheduler.get_service().remove(job_id)
+    await session.send_json(make_response(msg_id, msg_type, result))
+    if result.get("ok"):
+        await scheduler.broadcast_changed(exclude=session)
+
+
+@handler("scheduler.set_enabled")
+async def scheduler_set_enabled(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import scheduler
+
+    job_id = _scheduler_id(payload)
+    enabled = payload.get("enabled")
+    if job_id is None or not isinstance(enabled, bool):
+        await _scheduler_bad_request(
+            session, msg_id, msg_type, "scheduler.set_enabled needs an id and enabled (true|false)"
+        )
+        return
+    result = await scheduler.get_service().set_enabled(job_id, enabled)
+    await session.send_json(make_response(msg_id, msg_type, result))
+    if result.get("ok"):
+        await scheduler.broadcast_changed(exclude=session)
+
+
+@handler("scheduler.run_now")
+async def scheduler_run_now(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """Start one run and answer at once; the run's own start and end reach
+    every window (this one included) as scheduler.changed."""
+    from . import scheduler
+
+    job_id = _scheduler_id(payload)
+    if job_id is None:
+        await _scheduler_bad_request(session, msg_id, msg_type, "scheduler.run_now needs an id")
+        return
+    await session.send_json(
+        make_response(msg_id, msg_type, await scheduler.get_service().run_now(job_id))
+    )
+
+
+@handler("scheduler.runs")
+async def scheduler_runs(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import scheduler
+
+    job_id = _scheduler_id(payload)
+    limit = payload.get("limit", 20)
+    if job_id is None or isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 200:
+        await _scheduler_bad_request(
+            session, msg_id, msg_type, "scheduler.runs needs an id and an optional limit of 1..200"
+        )
+        return
+    await session.send_json(
+        make_response(msg_id, msg_type, await scheduler.get_service().runs(job_id, limit))
+    )

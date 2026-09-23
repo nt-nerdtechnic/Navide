@@ -2101,6 +2101,15 @@ async def _start_log_watcher() -> None:
         lambda ws: broadcast(make_event("devtime.changed", {"workspace_path": ws}))
     ))
 
+    # Navide's in-process scheduler (timed messages to CLI panes). Built off
+    # the loop: its first use runs the schema migration.
+    from . import scheduler
+
+    try:
+        await (await asyncio.to_thread(scheduler.get_service)).start()
+    except Exception as err:  # noqa: BLE001
+        log.warning("scheduler startup failed: %s", err)
+
     # Name a frozen backend the moment it freezes: a daemon thread logs the
     # loop thread's stack when the loop stops turning (issue #24), instead of
     # the freeze being reproducible only under sample(1).
@@ -2223,6 +2232,9 @@ async def _stop_log_watcher() -> None:
         _mem_probe_task.cancel()
     if _dev_time_sweeper_task is not None:
         _dev_time_sweeper_task.cancel()
+    from . import scheduler
+
+    await scheduler.shutdown()
     await loop_watchdog.stop()
     # PTY children are detached process groups (start_new_session=True); they
     # must be killed here or they outlive the app as CPU-spinning orphans.

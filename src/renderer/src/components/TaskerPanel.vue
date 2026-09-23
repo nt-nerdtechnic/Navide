@@ -36,6 +36,7 @@ import {
   type LaunchAgentEntry,
   type Translate,
 } from '../lib/cronDescribe'
+import SchedulerJobsSection from './SchedulerJobsSection.vue'
 
 type CronFilter = 'all' | 'enabled' | 'disabled'
 type AgentFilter = 'all' | 'running' | 'stopped'
@@ -348,6 +349,7 @@ onUnmounted(() => {
       {{ t('executions.scan-failed', { message: scanError }) }}
     </p>
 
+    <SchedulerJobsSection :backend="backend" />
     <div v-if="noSourceOnPlatform" class="tk-body tk-body--none" data-test="executions-no-source">
       <p class="tk-platform-note">{{ t('executions.no-source') }}</p>
       <p v-if="snapshot?.platform === 'win32'" class="tk-platform-note tk-platform-hint">

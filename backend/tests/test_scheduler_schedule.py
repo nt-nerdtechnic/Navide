@@ -1,0 +1,144 @@
+"""Schedule arithmetic and the one job validator of the in-process scheduler."""
+
+from __future__ import annotations
+
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+import pytest
+
+from agent_team_backend.scheduler import JobInvalid, next_run_after, normalize_job
+
+TPE = ZoneInfo("Asia/Taipei")
+NY = ZoneInfo("America/New_York")
+
+
+def ms(dt: datetime) -> int:
+    return int(dt.timestamp() * 1000)
+
+
+def local(ms_value: int, tz: ZoneInfo) -> datetime:
+    return datetime.fromtimestamp(ms_value / 1000, tz)
+
+
+def _job(**over) -> dict:
+    job = {
+        "name": "weekly report",
+        "schedule": {"kind": "daily", "at": "09:00", "tz": "Asia/Taipei"},
+        "action": {"kind": "message", "workspace": "/ws", "pane_name": "report", "text": "go"},
+    }
+    job.update(over)
+    return job
+
+
+def test_every_is_anchored_and_strictly_after() -> None:
+    sched = {"kind": "every", "every_ms": 120_000, "anchor_ms": 1_000_000}
+    assert next_run_after(sched, 0) == 1_000_000
+    assert next_run_after(sched, 1_000_000) == 1_120_000
+    assert next_run_after(sched, 1_119_999) == 1_120_000
+    # No drift: a late evaluation lands on the anchor grid, not "now + every".
+    assert next_run_after(sched, 1_500_000) == 1_600_000
+
+
+def test_daily_today_or_tomorrow() -> None:
+    sched = {"kind": "daily", "at": "09:00", "tz": "Asia/Taipei"}
+    before = ms(datetime(2026, 9, 23, 8, 0, tzinfo=TPE))
+    after = ms(datetime(2026, 9, 23, 9, 0, tzinfo=TPE))
+    assert local(next_run_after(sched, before), TPE) == datetime(2026, 9, 23, 9, 0, tzinfo=TPE)
+    assert local(next_run_after(sched, after), TPE) == datetime(2026, 9, 24, 9, 0, tzinfo=TPE)
+
+
+def test_weekly_picks_next_listed_day() -> None:
+    # 2026-09-23 is a Wednesday (isoweekday 3).
+    sched = {"kind": "weekly", "days": [1, 5], "at": "02:00", "tz": "Asia/Taipei"}
+    wed = ms(datetime(2026, 9, 23, 12, 0, tzinfo=TPE))
+    friday = local(next_run_after(sched, wed), TPE)
+    assert friday == datetime(2026, 9, 25, 2, 0, tzinfo=TPE)
+    monday = local(next_run_after(sched, ms(friday)), TPE)
+    assert monday == datetime(2026, 9, 28, 2, 0, tzinfo=TPE)
+
+
+def test_daily_keeps_wall_clock_across_dst_spring_forward() -> None:
+    # America/New_York springs forward on 2026-03-08: 09:00 stays 09:00 local,
+    # so the UTC gap between the two slots is 23 hours, not 24.
+    sched = {"kind": "daily", "at": "09:00", "tz": "America/New_York"}
+    first = next_run_after(sched, ms(datetime(2026, 3, 7, 8, 0, tzinfo=NY)))
+    second = next_run_after(sched, first)
+    assert local(first, NY).hour == 9 and local(second, NY).hour == 9
+    assert second - first == 23 * 3600 * 1000
+
+
+def test_daily_keeps_wall_clock_across_dst_fall_back() -> None:
+    sched = {"kind": "daily", "at": "09:00", "tz": "America/New_York"}
+    first = next_run_after(sched, ms(datetime(2026, 10, 31, 8, 0, tzinfo=NY)))
+    second = next_run_after(sched, first)
+    assert local(second, NY) == datetime(2026, 11, 1, 9, 0, tzinfo=NY)
+    assert second - first == 25 * 3600 * 1000
+
+
+def test_daily_in_the_spring_forward_gap_still_fires_that_day() -> None:
+    sched = {"kind": "daily", "at": "02:30", "tz": "America/New_York"}
+    slot = next_run_after(sched, ms(datetime(2026, 3, 8, 0, 0, tzinfo=NY)))
+    assert local(slot, NY).date().isoformat() == "2026-03-08"
+
+
+def test_resave_does_not_advance_an_overdue_next_run() -> None:
+    now = ms(datetime(2026, 9, 23, 8, 0, tzinfo=TPE))
+    job = normalize_job(_job(), None, now)
+    due = job["state"]["next_run_at"]
+    # Later than the slot, the job is saved again unchanged (and listed).
+    later = due + 3_600_000
+    resaved = normalize_job({**_job(), "id": job["id"]}, job, later)
+    assert resaved["state"]["next_run_at"] == due
+
+
+def test_changed_schedule_rearms_from_now() -> None:
+    now = ms(datetime(2026, 9, 23, 8, 0, tzinfo=TPE))
+    job = normalize_job(_job(), None, now)
+    later = now + 7_200_000
+    changed = normalize_job(
+        _job(schedule={"kind": "daily", "at": "18:00", "tz": "Asia/Taipei"}), job, later
+    )
+    assert local(changed["state"]["next_run_at"], TPE) == datetime(2026, 9, 23, 18, 0, tzinfo=TPE)
+
+
+def test_new_job_defaults() -> None:
+    job = normalize_job(_job(), None, 1_000)
+    assert job["enabled"] is True
+    assert job["policy"] == {"catch_up": "once", "max_runs_per_day": 24, "timeout_s": 1800}
+    assert job["state"]["consecutive_errors"] == 0 and job["state"]["running_at"] is None
+    assert len(job["id"]) == 36
+
+
+def test_client_state_is_ignored() -> None:
+    job = normalize_job(_job(state={"running_at": 5, "consecutive_errors": 9}), None, 1_000)
+    assert job["state"]["running_at"] is None and job["state"]["consecutive_errors"] == 0
+
+
+@pytest.mark.parametrize(
+    "over, needle",
+    [
+        ({"name": ""}, "name"),
+        ({"schedule": {"kind": "cron", "expr": "* * * * *"}}, "schedule.kind"),
+        ({"schedule": {"kind": "every", "every_ms": 1000}}, "every_ms"),
+        ({"schedule": {"kind": "daily", "at": "25:00", "tz": "UTC"}}, "HH:MM"),
+        ({"schedule": {"kind": "daily", "at": "09:00", "tz": "Mars/Base"}}, "time zone"),
+        ({"schedule": {"kind": "weekly", "days": [0], "at": "09:00", "tz": "UTC"}}, "days"),
+        ({"action": {"kind": "spawn", "workspace": "/ws", "agent": "claude", "prompt": "x"}}, "message"),
+        ({"action": {"kind": "message", "workspace": "/ws", "text": "x"}}, "pane_id or pane_name"),
+        ({"action": {"kind": "message", "workspace": "/ws", "pane_name": "a", "text": " "}}, "text"),
+        ({"action": {"kind": "message", "pane_name": "a", "text": "x"}}, "workspace"),
+        ({"policy": {"catch_up": "all"}}, "catch_up"),
+        ({"policy": {"max_runs_per_day": 0}}, "max_runs_per_day"),
+    ],
+)
+def test_validation_rejects(over: dict, needle: str) -> None:
+    with pytest.raises(JobInvalid, match=needle):
+        normalize_job(_job(**over), None, 1_000)
+
+
+def test_pane_id_alone_is_enough() -> None:
+    job = normalize_job(
+        _job(action={"kind": "message", "workspace": "/ws", "pane_id": "p-1", "text": "x"}), None, 1
+    )
+    assert job["action"] == {"kind": "message", "workspace": "/ws", "pane_id": "p-1", "text": "x"}

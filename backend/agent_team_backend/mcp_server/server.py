@@ -1833,13 +1833,42 @@ async def cli_send(
     panes back up, and another machine's placeholders are that machine's to
     open. This is a fixed boundary, not a missing feature.
     """
-    from agent_team_backend import agent_messaging, app, message_routing
-    from agent_team_backend.ipc import make_event
-
     try:
         caller = _resolve_caller(ctx)
     except CallerUnknown as err:
         return {"ok": False, "error": str(err)}
+    return await _send(
+        caller,
+        to,
+        text,
+        wait_for_delivery_s=wait_for_delivery_s,
+        pane_id=pane_id,
+        reply_to=reply_to,
+        kind=kind,
+        open_target=open_target,
+    )
+
+
+async def _send(
+    caller: _Caller,
+    to: str,
+    text: str,
+    *,
+    wait_for_delivery_s: float = 0.0,
+    pane_id: str = "",
+    reply_to: str = "",
+    kind: str = "message",
+    open_target: bool = False,
+) -> dict[str, Any]:
+    """cli_send once its caller is resolved.
+
+    Shared with the scheduler (scheduler.LiveBridge), which sends as the host
+    with open_target=True, so a scheduled message takes exactly the path — and
+    gets exactly the answer — an agent's cli_send does.
+    """
+    from agent_team_backend import agent_messaging, app, message_routing
+    from agent_team_backend.ipc import make_event
+
     if not (text or "").strip():
         return {"ok": False, "error": "text is empty"}
     # Anything but the one special value is an ordinary message; a typo must not
@@ -6789,6 +6818,172 @@ async def pipeline_restart(ctx: Context, workspace_path: str = "") -> dict[str, 
     return await _ui_request(
         workspace_path, "invoke", caller=caller, action="ui.pipeline.restart", args={}
     )
+
+
+# ── Scheduler: timed messages to a CLI pane ─────────────────────────────────
+# The same SchedulerService the scheduler.* WS handlers drive, called directly
+# rather than through a WS round trip; a job saved here is the job the Schedule
+# panel shows. Every mutation broadcasts scheduler.changed, as the WS twins do,
+# so an open panel redraws itself.
+
+
+def _scheduler_service() -> Any:
+    from agent_team_backend import scheduler
+
+    return scheduler.get_service()
+
+
+async def _announce_scheduler() -> None:
+    from agent_team_backend import scheduler
+
+    await scheduler.broadcast_changed()
+
+
+@server.tool()
+async def scheduler_list(ctx: Context) -> dict[str, Any]:
+    """List Navide's scheduled jobs. Returns {ok, jobs, now}.
+
+    Jobs fire only while Navide is running; nothing wakes the machine or the
+    app. See scheduler_upsert for the shape of a job.
+    """
+    try:
+        _resolve_caller(ctx)
+    except CallerUnknown as err:
+        return {"ok": False, "error": str(err)}
+    return await _scheduler_service().list()
+
+
+@server.tool()
+async def scheduler_upsert(job: dict[str, Any], ctx: Context) -> dict[str, Any]:
+    """Create a scheduled job, or update one (pass its `id`). Returns {ok, job}.
+
+    A job wakes a CLI pane on a timetable and sends it an instruction. It fires
+    ONLY WHILE NAVIDE IS RUNNING: a slot missed while the app was closed is run
+    once on the next start (catch_up "once") or dropped (catch_up "skip").
+
+    UNATTENDED RUNS SPEND QUOTA. Every run is a turn the target agent pays for,
+    with nobody watching. Each job is capped at max_runs_per_day (default 24),
+    a run whose target CLI is marked out of quota is skipped, and failures back
+    off 30s → 1m → 5m → 15m → 60m. Pick the slowest schedule that does the job.
+
+    Skips are not errors: "no_window" (no Navide window open), "busy" (this
+    job's previous message is still queued at the pane), "budget" (daily cap or
+    quota), "target_gone" (pane_id no longer names a pane). A message to a pane
+    that is mid-turn is queued by the normal delivery path and runs as "ok".
+
+    Defaults for a pane caller: action.workspace is your own workspace, and an
+    action with neither pane_id nor pane_name targets YOUR OWN pane — so
+    "wake me up in an hour and continue" is a job with just `text`. A caller
+    with no pane identity must pass workspace and a target.
+
+    Invalid definitions answer {ok: false, error} and save nothing.
+
+    A job is {id, name, enabled, created_at, updated_at, schedule, action, policy,
+    state}; times are epoch milliseconds.
+
+      schedule — one of:
+        {kind: "every",  every_ms, anchor_ms?}   every N ms (60000 .. 7 days),
+                                                 on a grid from anchor_ms (default: now)
+        {kind: "daily",  at: "HH:MM", tz}        tz is an IANA zone, e.g. "Asia/Taipei"
+        {kind: "weekly", days: [1..7], at, tz}   1 = Monday .. 7 = Sunday
+      action — {kind: "message", workspace, pane_id?, pane_name?, text}: wake that
+        CLI pane (a closed-idle restore placeholder is opened first) and send
+        `text`, exactly as cli_send(open_target=True) would. At least one of
+        pane_id / pane_name. pane_id pins one exact pane (read it from
+        cli_list_targets or cli_whoami); if that pane is gone the run is skipped as
+        "target_gone" — it never falls back to another pane of the same name.
+      policy — optional {catch_up: "once" | "skip", max_runs_per_day, timeout_s};
+        defaults {"once", 24, 1800}.
+      state — owned by Navide (next_run_at, running_at, last_status, last_error,
+        consecutive_errors, backoff_until, ...); anything sent there is ignored.
+    """
+    from agent_team_backend import agent_messaging
+    from agent_team_backend.scheduler import JobInvalid
+
+    try:
+        caller = _resolve_caller(ctx)
+    except CallerUnknown as err:
+        return {"ok": False, "error": str(err)}
+    if not isinstance(job, dict):
+        return {"ok": False, "error": "job must be an object"}
+    job = dict(job)
+    action = job.get("action")
+    if caller.kind == "pane" and isinstance(action, dict):
+        action = dict(action)
+        if not action.get("workspace"):
+            action["workspace"] = _caller_workspace(caller)
+        if not action.get("pane_id") and not action.get("pane_name"):
+            me = agent_messaging.get(caller.pane_id)
+            action["pane_id"] = caller.pane_id
+            if me is not None:
+                action["pane_name"] = me.name
+        job["action"] = action
+    try:
+        result = await _scheduler_service().upsert(job)
+    except JobInvalid as err:
+        return {"ok": False, "error": str(err)}
+    await _announce_scheduler()
+    return result
+
+
+@server.tool()
+async def scheduler_remove(id: str, ctx: Context) -> dict[str, Any]:
+    """Delete a scheduled job and its run history. Returns {ok} or {ok: false, error}."""
+    try:
+        _resolve_caller(ctx)
+    except CallerUnknown as err:
+        return {"ok": False, "error": str(err)}
+    result = await _scheduler_service().remove(str(id or ""))
+    if result.get("ok"):
+        await _announce_scheduler()
+    return result
+
+
+@server.tool()
+async def scheduler_set_enabled(id: str, enabled: bool, ctx: Context) -> dict[str, Any]:
+    """Pause (enabled=false) or resume a scheduled job. Returns {ok}.
+
+    Resuming never fires a slot that passed while the job was paused; it waits
+    for the next one.
+    """
+    try:
+        _resolve_caller(ctx)
+    except CallerUnknown as err:
+        return {"ok": False, "error": str(err)}
+    result = await _scheduler_service().set_enabled(str(id or ""), bool(enabled))
+    if result.get("ok"):
+        await _announce_scheduler()
+    return result
+
+
+@server.tool()
+async def scheduler_run_now(id: str, ctx: Context) -> dict[str, Any]:
+    """Run a job once, right now, outside its timetable. Returns {ok, enqueued}.
+
+    Answers as soon as the run has started, not when it ends — read
+    scheduler_runs for the outcome. Refused while that job is already running.
+    Clears a failure backoff; the error count resets only if this run succeeds.
+    The run does not move the job's next scheduled slot.
+    """
+    try:
+        _resolve_caller(ctx)
+    except CallerUnknown as err:
+        return {"ok": False, "error": str(err)}
+    return await _scheduler_service().run_now(str(id or ""))
+
+
+@server.tool()
+async def scheduler_runs(id: str, ctx: Context, limit: int = 20) -> dict[str, Any]:
+    """A job's run history, newest first (up to 200 kept). Returns {ok, runs}.
+
+    Each run is {id, job_id, started_at, ended_at, status: "ok" | "error" |
+    "skipped", reason, detail}.
+    """
+    try:
+        _resolve_caller(ctx)
+    except CallerUnknown as err:
+        return {"ok": False, "error": str(err)}
+    return await _scheduler_service().runs(str(id or ""), limit)
 
 
 # ── The CLI permission switch ───────────────────────────────────────────────

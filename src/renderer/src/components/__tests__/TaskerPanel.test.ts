@@ -710,7 +710,7 @@ describe('TaskerPanel', () => {
     expect(note.exists()).toBe(true)
     expect(note.text()).toContain('Nothing to list on this platform')
     expect(note.text()).toContain('Task Scheduler')
-    expect(wrapper.find('[data-section]').exists()).toBe(false)
+    expect(wrapper.find('.tk-body [data-section]').exists()).toBe(false)
     expect(wrapper.find('.tk-unsupported').exists()).toBe(false)
   })
 
