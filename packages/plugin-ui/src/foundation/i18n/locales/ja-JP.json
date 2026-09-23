@@ -62,7 +62,25 @@
     "allow-ip": "{vendor} にこの IP を許可",
     "reveal": "フォルダー内に表示",
     "action-failed": "この選択を保存できませんでした。もう一度お試しください。",
-    "reveal-failed": "このパスをファイルマネージャーで表示できませんでした。"
+    "reveal-failed": "このパスをファイルマネージャーで表示できませんでした。",
+    "shared-cdn-field": "共有 CDN",
+    "shared-cdn": "{label}（共有 CDN のためサイトを特定できません）",
+    "ranges-title": "共有 CDN のアドレス範囲",
+    "ranges-hint": "有効な範囲内のアドレスへの接続は記録のみで、リスク表示は点灯しません。IP ごとの無視と許可には影響しません。組み込みの範囲は Cloudflare と Fastly が公開している一覧に基づき、無効にはできますが削除はできません。",
+    "ranges-cidr": "CIDR",
+    "ranges-cidr-placeholder": "例：192.0.2.0/24 または 2001:db8::/32",
+    "ranges-label": "名前",
+    "ranges-source": "出典",
+    "ranges-source-builtin": "組み込み",
+    "ranges-source-user": "カスタム",
+    "ranges-enabled": "有効",
+    "ranges-toggle": "{cidr} を有効にする",
+    "ranges-add": "追加",
+    "ranges-delete": "削除",
+    "ranges-invalid-cidr": "CIDR の形式が正しくありません（例：192.0.2.0/24）。",
+    "ranges-label-required": "名前を入力してください。",
+    "ranges-load-failed": "アドレス範囲を読み込めませんでした。",
+    "ranges-save-failed": "変更を保存できませんでした。もう一度お試しください。"
   },
   "spawn": {
     "model": {
@@ -1047,6 +1065,10 @@
         "general-quota-failover": {
           "title": "利用枠を使い切ったときのアカウント切り替え",
           "summary": "無効／通知／自動切り替えと、各 CLI が対応する操作"
+        },
+        "general-quota-failover-loop": {
+          "title": "ループ中に利用枠を使い切ったら、切り替え後すぐに再開する",
+          "summary": "ループ中の pane がアカウントを切り替え、リセットを待たずに続行"
         }
       },
       "no-results": "一致する設定はありません"
@@ -1944,7 +1966,7 @@
             "text": "Electron 標準のウィンドウ全体のズーム（<em>拡大</em> / <em>縮小</em> / <em>実際のサイズ</em>）は削除しています。Navide には独自の 2 つの拡大縮小設定があるためです。<kbd class=\"syh-kbd\">⌘=</kbd> / <kbd class=\"syh-kbd\">⌘-</kbd> / <kbd class=\"syh-kbd\">⌘0</kbd> はターミナルの<strong>内容</strong>の文字サイズを変更し、<kbd class=\"syh-kbd\">⇧⌘=</kbd> / <kbd class=\"syh-kbd\">⇧⌘-</kbd> / <kbd class=\"syh-kbd\">⇧⌘0</kbd> は<strong>表示倍率</strong>（設定 ▸ 外観 ▸ 表示倍率）を変更します。標準のメニュー機能を残すと、そのショートカットが先に反応してしまいます。<kbd class=\"syh-kbd\">⌘R</kbd> も「フォーカス中のペインを再構築」に変更し、ウィンドウ全体の再読み込みは <kbd class=\"syh-kbd\">⇧⌘R</kbd> に移しました。メニューの<em>ウィンドウを再読み込み</em>項目にはショートカットを付けていません。macOS の <kbd class=\"syh-kbd\">⌘W</kbd> は「タブを閉じる」用です。ウィンドウは左上のウィンドウボタン、または <kbd class=\"syh-kbd\">⌘Q</kbd> で閉じます。"
           },
           "h3": "スケジュール — 独立ウィンドウではありません",
-          "p1": "このマシンのバックグラウンドスケジュールは、<strong>右スロットのタブ</strong>に<strong>スケジュール</strong>（🗓）として表示され、上または下のスロットへ移動できます。「ウィンドウ」メニューから開くウィンドウではありません。macOS には 3 つのセクションがあり、Linux では crontab のセクションのみが対象です。Windows では意図的に何も表示しません。Navide 自体はスケジュールジョブを作成せず、マシンのタスクはタスクスケジューラで管理されるためです。",
+          "p1": "このマシンのバックグラウンドスケジュールは、<strong>右スロットのタブ</strong>に<strong>スケジュール</strong>（🗓）として表示され、上または下のスロットへ移動できます。「ウィンドウ」メニューから開くウィンドウではありません。Navide 自身のジョブ、自分の crontab、macOS の launchd ジョブは一つの一覧にまとめられます。先頭の<strong>この後</strong>には、次回実行を正確に計算できる項目が時刻順に並び、細い区切り線<strong>固定間隔</strong>の下に、数分ごとに実行される項目や正確な時刻を計算できない項目が、時刻ではなく間隔で頻度の高い順に並びます。その下に、既定で折りたたまれた<strong>常駐・オンデマンド</strong>と<strong>無効</strong>が続きます。Linux では crontab のみが対象です。Windows では Navide 自身のジョブだけを表示します。マシンのタスクはタスクスケジューラで管理されるためです。",
           "scheduleTable": {
             "section": "セクション",
             "source": "取得元",
@@ -1957,14 +1979,14 @@
             },
             "agents": {
               "source": "~/Library/LaunchAgents と /Library/LaunchAgents",
-              "actions": "~/Library/LaunchAgents 内の自分の項目にのみ ⏸ / ▶ と 🗑 が付きます。システムレベルの項目にボタンはありません"
+              "actions": "~/Library/LaunchAgents 内の自分の項目にのみ ⏸ / ▶ と ⋯ メニューが付きます。システムレベルの項目にボタンはありません"
             },
             "daemons": {
               "source": "/Library/LaunchDaemons",
-              "actions": "セクション全体が読み取り専用です"
+              "actions": "すべて読み取り専用です"
             }
           },
-          "p2": "システムレベルの変更には root が必要ですが、Navide は要求しないため読み取り専用です。画面だけでなく、バックエンドでも変更を拒否します。デーモンが独立したセクションになっているのもこのためで、通常は状態を <code>状態不明（root が必要）</code>としか表示できません。各行を展開すると、スケジュール / コマンド / 元の行、またはラベル / 範囲 / Plist のパス / 最後の終了コード / 状態を表示します。LaunchAgent を削除すると、<strong>アンロードして plist を完全に削除します</strong>。事前に確認が表示されます。",
+          "p2": "システムレベルの変更には root が必要ですが、Navide は要求しないため読み取り専用です。画面だけでなく、バックエンドでも変更を拒否します。特にデーモンは、通常は状態を <code>状態不明（root が必要）</code>としか表示できません。各行を展開すると、スケジュール / コマンド / 元の行、またはラベル / 範囲 / Plist のパス / 最後の終了コード / 状態を表示します。削除は各行の ⋯ メニューにあります。LaunchAgent を削除すると、<strong>アンロードして plist を完全に削除します</strong>。事前に確認が表示されます。",
           "note2": "ここには<strong>「今すぐ実行」や「Finder で表示」はありません</strong>。無効化・有効化と削除のみです。上部に<em>再スキャン</em>と最終スキャン時刻があります。",
           "h4": "画面から開くその他のウィンドウ",
           "otherTable": {
@@ -4049,7 +4071,7 @@
         },
         "s1": {
           "title": "方向 1：Navide が CLI エージェントに提供するツール",
-          "p1": "ペインが起動すると、エージェントのツール一覧に表示されます。教え込んだり設定したりする必要はなく、「この計画の第 2 段階を完了にして」のように普通の言葉で依頼できます。現在は<strong>53 個</strong>（コア 47 個と計画プラグインの 6 個）のツールに加え、読み取り専用リソース 3 個とプロンプトテンプレート 3 個があります。",
+          "p1": "ペインが起動すると、エージェントのツール一覧に表示されます。教え込んだり設定したりする必要はなく、「この計画の第 2 段階を完了にして」のように普通の言葉で依頼できます。現在は<strong>59 個</strong>（コア 53 個と計画プラグインの 6 個）のツールに加え、読み取り専用リソース 3 個とプロンプトテンプレート 3 個があります。",
           "h1": "計画文書",
           "planTools": {
             "plan_list": "このワークスペースの全計画を、段階とタスクの進捗付きで一覧表示します",
@@ -4076,6 +4098,12 @@
             "pipeline_define": "パイプラインの作成・名前変更・削除、有効なパイプラインの設定、組み込み設定のリセットを行います。実行中は delete と set_active が拒否されます",
             "stage_define": "段階の追加、編集、削除、並べ替え、リセットを行います。そのパイプラインが実行中の場合、これらの操作は拒否されます",
             "role_define": "ロールの追加、編集、名前変更、削除、リセットを行います。名前変更は参照するすべてのスロットも更新します。参照中のロールは削除できません",
+            "scheduler_list": "Navide のスケジュールジョブを一覧します。Navide の実行中にだけ発火し、マシンやアプリを起こすことはありません",
+            "scheduler_upsert": "スケジュールジョブを作成、または id を渡して更新します。時刻表（N 分ごと、毎日・毎週の HH:MM、タイムゾーン付き）に従って CLI ペインを起こし、指示を送ります。無人実行は残量を消費するため、ジョブごとに 1 日の上限があり、失敗するとバックオフします。ペインから対象を指定せずに呼ぶと自分自身が対象になります",
+            "scheduler_remove": "スケジュールジョブを実行履歴ごと削除します",
+            "scheduler_set_enabled": "スケジュールジョブを一時停止・再開します。再開しても停止中に過ぎた時刻は実行しません",
+            "scheduler_run_now": "時刻表とは別に今すぐ 1 回実行します。実行が始まった時点で応答し、失敗のバックオフを解除し、次の予定時刻は動かしません",
+            "scheduler_runs": "ジョブの実行履歴を新しい順に返します。ok・error・skipped と理由付きで、スキップ（ウィンドウなし、使用中、1 日の上限や残量、対象の消失）はエラーではありません",
             "cli_permission_settings": "CLI の権限確認をスキップするフラグ（yolo）を読み書きします。パイプライン固有ではなく全体設定で、以後に開くペインにのみ適用されます。各 CLI に実際にフラグが付くかは、全体の値だけでなく、返された agents[].skipFlag を確認します",
             "workspace_open": "プロジェクトを Navide のワークスペースとして開きます。新しいウィンドウにするか、すでにそのプロジェクトを開いているウィンドウを使うかは、Navide が判断します",
             "workspace_switch": "自分のウィンドウを、そのウィンドウが保持する別のプロジェクトに切り替えます。元のプロジェクトのペインは実行を続けます。そのウィンドウでパイプラインが動作中の場合は、切り替えで実行が中止されるため拒否します",
@@ -5444,7 +5472,7 @@
           "win": {
             "signing": "<strong>インストーラーにはコード署名がありません。</strong>新しいバージョンごとに SmartScreen が再び警告し、アプリ内更新も同じ理由で署名を検証せずにインストールします。",
             "symlinks": "<strong>ペインごとの CLI ホームと管理対象スキルにはシンボリックリンクを使います</strong>が、Windows の通常のプロセスでは作成できません。Windows の開発者モード（<em>設定 ▸ 開発者向け</em>）を有効にするか、Navide を管理者として実行してください。どちらも行わない場合でも黙って失敗せず、対象ペインの起動時に黄色の <code>[mcp]</code> 行で理由を説明します。影響するのは、設定ディレクトリ内のファイルで MCP を接続する Antigravity CLI、Grok CLI、Kimi Code です。",
-            "schedule": "<strong>スケジュールタブには項目が表示されません。</strong>Navide はユーザーの crontab と macOS の launchd ジョブを読み取りますが、Windows にはどちらもありません。Navide 自身はジョブを作成せず、Windows のタスクスケジューラ（taskschd.msc）がマシンのタスクを管理しているため、意図的に連携していません。空の一覧ではなく、その理由を画面に表示します。"
+            "schedule": "<strong>スケジュールタブには Navide 自身のジョブ（Navide Jobs）だけが表示されます。</strong>Navide はユーザーの crontab と macOS の launchd ジョブを読み取りますが、Windows にはどちらもありません。Navide が OS の定期ジョブを作成することはなく、Windows のタスクスケジューラ（taskschd.msc）がマシンのタスクを管理しているため、意図的に連携していません。空の一覧ではなく、その理由を画面に表示します。"
           },
           "h2": "Linux",
           "linux": {
@@ -7590,6 +7618,7 @@
     "actual-size": "実際のサイズ",
     "pdf-unavailable": "このウィンドウでは埋め込み PDF ビューアーを利用できません。",
     "raw-error": "プレビュー用にこのファイルを読み込めませんでした。",
+    "retry": "再試行",
     "hex-loading": "16 進ダンプを読み込み中…",
     "hex-error": "ファイルの内容を読み込めませんでした。",
     "hex-truncated": "{total} のうち先頭の 64 KB を表示しています。",
@@ -7959,6 +7988,8 @@
     "settings-signing-error": "失敗",
     "failover-title": "利用枠を使い切ったときのアカウント切り替え",
     "failover-hint": "CLI アカウントが利用上限に達したときの Navide の動作を選びます。何もしない、切り替え候補のアカウントを表示する（初期設定）、または自動で切り替える、のいずれかです。自動切り替えは CLI ごとに 5 時間あたり最大 3 回で、利用枠を使い切ったアカウントへ自動で戻ることはありません。表には各 CLI が対応する操作を示します。実際に切り替えるかどうかはバックエンドが判断します。",
+    "failover-loop-title": "ループ中に利用枠を使い切ったら、切り替え後すぐに再開する",
+    "failover-loop-hint": "ループ実行中の pane が利用枠を使い切ったとき、利用枠の残っているアカウントへ自動で切り替え、リセットを待たずにすぐ続行を送信します。上で「自動で切り替える」を選択している必要があります。",
     "failover-mode-off": "無効",
     "failover-mode-notify": "通知する",
     "failover-mode-auto": "自動で切り替える",
@@ -8052,22 +8083,40 @@
     "rescan": "再スキャン",
     "scanning": "スキャン中…",
     "scan-failed": "スキャンに失敗しました：{message}",
-    "count": "{count} 項目",
-    "empty": "項目はありません",
+    "retry": "再試行",
+    "failing": "{count} 件が失敗中",
+    "only-failing": "失敗のみ",
+    "show-all": "すべて表示",
+    "create-first": "作成する",
+    "backend-outdated": "バックエンドがこのウィンドウより古いため、Navide を再起動してスケジュールを読み込んでください。",
+    "timeline": {
+      "title": "この後",
+      "empty": "予定されている項目はありません"
+    },
+    "bucket": {
+      "today": "今日",
+      "tomorrow": "明日",
+      "week": "今週",
+      "later": "それ以降",
+      "interval": "固定間隔"
+    },
+    "group": {
+      "other": "常駐・オンデマンド",
+      "disabled": "無効"
+    },
+    "interval": {
+      "seconds": "{n}秒",
+      "minutes": "{n}分",
+      "hours": "{n}時間"
+    },
     "unsupported": "このプラットフォームには対応していません",
-    "no-source": "このプラットフォームには表示できる項目がありません。Navide はユーザーの crontab と macOS の launchd ジョブを読み取りますが、このシステムにはどちらもありません。Navide 自身が定期ジョブを作成することはないため、表示の欠落ではありません。",
+    "no-source": "このプラットフォームには表示できる項目がありません。Navide はユーザーの crontab と macOS の launchd ジョブを読み取りますが、このシステムにはどちらもありません。Navide が OS の定期ジョブを作成することはないため、表示の欠落ではありません。Navide 自身のジョブは上に表示されます。",
     "no-source-windows": "Windows の定期タスクはタスク スケジューラ（taskschd.msc）で管理され、一覧表示、有効化、無効化、削除ができます。Navide は設計上これを統合していません。",
     "crontab": {
-      "title": "システム crontab",
-      "filter-all": "すべて",
-      "filter-enabled": "有効",
-      "filter-disabled": "無効"
+      "title": "システム crontab"
     },
     "launchagents": {
-      "title": "macOS エージェント",
-      "filter-all": "すべて",
-      "filter-running": "実行中",
-      "filter-stopped": "停止中"
+      "title": "macOS エージェント"
     },
     "daemons": {
       "title": "macOS デーモン"
@@ -8078,7 +8127,6 @@
       "system-daemon": "デーモン"
     },
     "tag": {
-      "disabled": "無効",
       "pid": "PID {pid}",
       "exit": "終了コード {code}"
     },
@@ -8090,7 +8138,10 @@
     "action": {
       "enable": "有効化",
       "disable": "無効化",
-      "remove": "削除"
+      "remove": "削除",
+      "more": "その他の操作",
+      "copy-raw": "crontab の行をコピー",
+      "copy-label": "label をコピー"
     },
     "detail": {
       "schedule": "スケジュール",
@@ -8121,6 +8172,9 @@
       "monthly": "毎月",
       "yearly": "毎年",
       "every-minutes": "{n} 分ごと",
+      "every-minute": "毎分",
+      "hourly-at": "毎時 {minute} 分",
+      "every-hours-at": "{n} 時間ごと（{minute} 分）",
       "daily-at": "毎日 {time}",
       "weekly-at": "毎週 {weekday} {time}",
       "monthly-at": "毎月 {day} 日 {time}"
@@ -8134,7 +8188,7 @@
       "keep-alive": "常駐サービス (KeepAlive)",
       "run-at-load": "読み込み時に実行 (RunAtLoad)",
       "calendar": "カレンダースケジュールに従って実行（plist を参照）",
-      "unknown": "—"
+      "unknown": "オンデマンド"
     },
     "weekday-0": "日曜日",
     "weekday-1": "月曜日",
@@ -8143,6 +8197,76 @@
     "weekday-4": "木曜日",
     "weekday-5": "金曜日",
     "weekday-6": "土曜日"
+  },
+  "scheduler": {
+    "add": "＋ 新規",
+    "empty": "スケジュールされたジョブはまだありません",
+    "list-failed": "ジョブを読み込めませんでした：{message}",
+    "edit": "編集",
+    "failed": "失敗 ×{n}",
+    "repair": "修復",
+    "enable": "有効化",
+    "disable": "無効化",
+    "run-now": "今すぐ実行",
+    "when-backoff": "{time} まで backoff",
+    "target": "→ pane「{name}」を起こして送信",
+    "target-with-id": "→ pane「{name}」（#{id}）を起こして送信",
+    "retarget": "再指定",
+    "every-minutes": "{n} 分ごと",
+    "every-hours": "{n} 時間ごと",
+    "daily-at": "毎日 {time}",
+    "weekly-at": "毎週 {days} {time}",
+    "day-separator": "・",
+    "once-at": "1 回：{time}",
+    "once-done": "実行済み（1 回）",
+    "skip": {
+      "no_window": "スキップ：ウィンドウなし",
+      "busy": "スキップ：pane が使用中",
+      "budget": "スキップ：上限または残量不足",
+      "target_gone": "対象の pane はもう存在しません",
+      "missed": "スキップ：時刻を逃した",
+      "interrupted": "スキップ：中断",
+      "unknown": "スキップ"
+    },
+    "editor": {
+      "title-new": "スケジュールジョブを追加",
+      "title-edit": "スケジュールジョブを編集",
+      "name": "名前",
+      "frequency": "頻度",
+      "freq-every": "N 分ごと",
+      "freq-daily": "毎日",
+      "freq-weekly": "毎週",
+      "freq-once": "1 回",
+      "minutes": "分",
+      "workspace": "Workspace",
+      "pick-workspace": "workspace を選択",
+      "target": "対象 pane",
+      "pick-pane": "pane を選択",
+      "pane-option": "{name} · {agent} · #{id}",
+      "pane-by-name": "{name}（名前指定）",
+      "pane-missing": "{name} #{id}（存在しません）",
+      "text": "指示内容",
+      "text-placeholder": "時刻になったらこの pane に送る指示…",
+      "catch-up": "逃した場合",
+      "catch-up-once": "1 回だけ実行",
+      "catch-up-skip": "スキップ",
+      "max-runs": "1 日の上限（回）",
+      "next-preview": "次回実行：{time}（{schedule}）",
+      "err-name": "名前を入力してください",
+      "err-every": "1〜{max} の整数（分）を入力してください",
+      "err-time": "時刻は HH:MM 形式で入力してください",
+      "err-tz": "無効なタイムゾーンです（Asia/Taipei などの IANA 名）",
+      "err-days": "少なくとも 1 日選んでください",
+      "err-once": "未来の日時を選んでください",
+      "err-workspace": "workspace を選択してください",
+      "err-target": "対象 pane を選択してください",
+      "err-text": "指示内容を入力してください",
+      "err-max-runs": "1 日の上限は 1〜{max} の整数です",
+      "remove": "削除",
+      "remove-confirm": "このスケジュールジョブを削除しますか？",
+      "cancel": "キャンセル",
+      "save": "保存"
+    }
   },
   "turn-stats": {
     "title": "ターン統計",

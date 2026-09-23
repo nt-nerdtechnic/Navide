@@ -378,6 +378,30 @@ describe('useCliProfiles', () => {
     scope.stop()
   })
 
+  it('a successful rename clears an earlier error, so a null Default reply reads as success', async () => {
+    const mock = createMockBackend('connected')
+    mock.setResponse('cli_profiles.list', { profiles: [], defaults: {}, supported_agents: SUPPORTED })
+    mock.setResponse('cli_profiles.rename', null as unknown as object, {
+      ok: false,
+      error: { code: 'BAD_REQUEST', message: 'too long' },
+    })
+    const { result, scope } = withScope(() => useCliProfiles(mock.backend))
+    await flush()
+
+    expect(await result.rename('__default__', 'x', 'claude')).toBeNull()
+    expect(result.error.value).toBe('too long')
+
+    mock.setResponse('cli_profiles.rename', {
+      profile: null,
+      profiles: [],
+      defaults: {},
+      defaultNames: { claude: 'Main' },
+    })
+    expect(await result.rename('__default__', 'Main', 'claude')).toBeNull()
+    expect(result.error.value).toBe('')
+    scope.stop()
+  })
+
   it('renaming a profile slot sends no agent key when none is given', async () => {
     const mock = createMockBackend('connected')
     mock.setResponse('cli_profiles.list', { profiles: [], defaults: {}, supported_agents: SUPPORTED })

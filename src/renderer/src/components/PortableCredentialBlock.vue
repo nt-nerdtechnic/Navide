@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { i18n, useNotify } from '@navide/plugin-ui/foundation'
 import type { useCliProfiles, PortableCredentialMeta } from '../composables/useCliProfiles'
 
@@ -22,7 +22,11 @@ const props = defineProps<{
    *  nothing local to paste into, only a cloud copy to take or drop. (A
    *  positive flag on purpose — an absent boolean prop is `false` in Vue.) */
   cloudOnly?: boolean
+  /** Open the paste form on mount: the pane shows an empty slot's block only
+   *  once its compact "Paste credential" button is pressed. */
+  startOpen?: boolean
 }>()
+const emit = defineEmits<{ close: [] }>()
 
 const { toast } = useNotify()
 const t = i18n.global.t
@@ -62,7 +66,12 @@ async function openForm(): Promise<void> {
 function cancel(): void {
   open.value = false
   draft.value = ''
+  emit('close')
 }
+
+onMounted(() => {
+  if (props.startOpen) void openForm()
+})
 
 async function save(): Promise<void> {
   const value = draft.value.trim()
@@ -76,6 +85,7 @@ async function save(): Promise<void> {
       return
     }
     open.value = false
+    emit('close')
     toast(t('settings.accounts.cli.portable-saved'), { type: 'success' })
   } finally {
     busy.value = false
@@ -193,9 +203,10 @@ function formatWhen(iso: string): string {
       </a>
     </div>
 
-    <div class="cli-portable-cloud">
-      <span v-if="cloudStatus === 'off'" class="cli-cloud-note">{{ $t('settings.accounts.cli.cloud-off') }}</span>
-      <span v-else-if="cloudStatus !== 'ok'" class="cli-cloud-note">{{
+    <!-- Nothing while the scope is off: Settings → Sync cannot switch it on yet
+         (SyncSettings READY holds 'credentials' out), so a pointer there misleads. -->
+    <div v-if="cloudStatus !== 'off'" class="cli-portable-cloud">
+      <span v-if="cloudStatus !== 'ok'" class="cli-cloud-note">{{
         $t('settings.accounts.cli.cloud-status-' + cloudStatus, { error: cloudError })
       }}</span>
       <template v-else>

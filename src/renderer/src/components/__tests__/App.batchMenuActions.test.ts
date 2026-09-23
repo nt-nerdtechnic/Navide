@@ -3,7 +3,7 @@ import { resolve } from 'node:path'
 import ts from 'typescript'
 import { computed, ref } from 'vue'
 import { describe, expect, it, vi } from 'vitest'
-import { reclaimBlockedBy, RECLAIM_NOW_THRESHOLD_MS, type ReclaimCandidate } from '../../lib/idleReclaim'
+import { reclaimBlockedBy, namedReclaimBlockedBy, RECLAIM_NOW_THRESHOLD_MS, type ReclaimCandidate } from '../../lib/idleReclaim'
 
 const source = readFileSync(resolve(process.cwd(), 'src/renderer/src/App.vue'), 'utf8')
 
@@ -50,7 +50,7 @@ function harness(initial: TestPane[], selected: string[], muted: string[] = []) 
   })
   const deps = {
     computed, panes, selectedPaneIds, paneCtxMenu, reclaimIdlePane,
-    reclaimBlockedBy, RECLAIM_NOW_THRESHOLD_MS,
+    reclaimBlockedBy, namedReclaimBlockedBy, RECLAIM_NOW_THRESHOLD_MS,
     reclaimCandidate: (p: TestPane) => p,
     closePaneCtxMenu: () => { paneCtxMenu.value = null },
     notifyRestore: { toast },
@@ -62,6 +62,7 @@ function harness(initial: TestPane[], selected: string[], muted: string[] = []) 
   const declarations = [
     block('const reclaimableNowIds = computed<string[]>', '/** Rough bytes'),
     block('const ctxTargetIds = computed<string[]>', '// Spawned descendants'),
+    fn('namedReclaimable'),
     block('const ctxReclaimableIds = computed<string[]>', '// Greying the item'),
     fn('reclaimPanesNow'), fn('reclaimSelectedFromMenu'), fn('setSelectedPaneMutedFromMenu'),
   ].join('\n')
@@ -106,8 +107,16 @@ describe('selected-pane menu actions', () => {
     }, { type: 'info' })
   })
 
+  // Multi-select hands focus to the last pane clicked, so a focus guard here
+  // would always drop one of the panes the user picked.
+  it('reclaims the focused pane when it is part of the selection', async () => {
+    const h = harness([pane('first'), pane('focused', { focused: true })], ['first', 'focused'])
+    expect(h.ctxReclaimableIds.value).toEqual(['first', 'focused'])
+    await h.reclaimSelectedFromMenu()
+    expect(h.reclaimIdlePane.mock.calls).toEqual([['first'], ['focused']])
+  })
+
   it.each([
-    ['focused', { focused: true }],
     ['awaiting', { displayStatus: 'awaiting' }],
     ['unsent input', { hasDraft: true }],
     ['no resume ID', { resumeSessionId: '' }],
@@ -123,7 +132,7 @@ describe('selected-pane menu actions', () => {
   })
 
   it('has zero eligible count and reports refusal when all selected panes are blocked', async () => {
-    const h = harness([pane('busy', { displayStatus: 'running' }), pane('focused', { focused: true })], ['busy', 'focused'])
+    const h = harness([pane('busy', { displayStatus: 'running' }), pane('draft', { hasDraft: true })], ['busy', 'draft'])
     expect(h.ctxReclaimableIds.value).toEqual([])
     await h.reclaimSelectedFromMenu()
     expect(h.reclaimIdlePane).not.toHaveBeenCalled()

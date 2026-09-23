@@ -121,6 +121,7 @@ class DiskSample:
 def recognized_content(path: Path, data: bytes) -> bool:
     """Content signatures plus compatible suffixes; extensions never suffice."""
     suffix = path.suffix.lower()
+    mach_o = {".dylib", ".so", ".node", ".bundle", ".bin"}
     formats = (
         (b"SQLite format 3\x00", {".db", ".sqlite", ".sqlite3"}),
         (b"PK\x03\x04", {".zip", ".jar", ".whl", ".npz", ".docx", ".xlsx"}),
@@ -133,7 +134,16 @@ def recognized_content(path: Path, data: bytes) -> bool:
         (b"\x89PNG\r\n\x1a\n", {".png"}),
         (b"\xff\xd8\xff", {".jpg", ".jpeg"}),
         (b"GGUF", {".gguf"}),
-        (b"\x7fELF", {".so", ".bin"}),
+        (b"\x7fELF", {".so", ".bin", ".node"}),
+        (b"\xcf\xfa\xed\xfe", mach_o),
+        (b"\xfe\xed\xfa\xcf", mach_o),
+        (b"\xce\xfa\xed\xfe", mach_o),
+        (b"\xfe\xed\xfa\xce", mach_o),
+        # Universal (fat) Mach-O; 0xCAFEBABE is also the Java class-file magic.
+        (b"\xca\xfe\xba\xbe", mach_o | {".class"}),
+        (b"\xbe\xba\xfe\xca", mach_o),
+        (b"\xca\xfe\xba\xbf", mach_o),
+        (b"MZ", {".exe", ".dll", ".node", ".sys"}),
     )
     for magic, suffixes in formats:
         if data.startswith(magic):

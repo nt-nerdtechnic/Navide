@@ -141,6 +141,34 @@ def test_disk_large_opaque_real_content_and_sniff_bound(tmp_path, monkeypatch):
     assert reads == [65536] * 3
 
 
+@pytest.mark.parametrize(
+    ("name", "prefix"),
+    [
+        ("claude", b"\xcf\xfa\xed\xfe"),
+        ("tool", b"\xfe\xed\xfa\xcf"),
+        ("legacy", b"\xce\xfa\xed\xfe"),
+        ("universal", b"\xca\xfe\xba\xbe"),
+        ("universal64", b"\xca\xfe\xba\xbf"),
+        ("libfoo.dylib", b"\xcf\xfa\xed\xfe"),
+        ("addon.node", b"\xcf\xfa\xed\xfe"),
+        ("Main.class", b"\xca\xfe\xba\xbe"),
+        ("claude.exe", b"MZ\x90\x00"),
+        ("helper.dll", b"MZ\x90\x00"),
+        ("addon.node", b"\x7fELF"),
+    ],
+)
+def test_native_executables_are_recognized(tmp_path, name, prefix):
+    assert obs.recognized_content(tmp_path / name, prefix + b"\x00" * 508)
+
+
+@pytest.mark.parametrize(
+    ("name", "prefix"),
+    [("image.png", b"\xcf\xfa\xed\xfe"), ("image.png", b"\xca\xfe\xba\xbe"), ("notes.txt", b"MZ\x90\x00")],
+)
+def test_native_signature_with_incompatible_suffix_stays_opaque(tmp_path, name, prefix):
+    assert not obs.recognized_content(tmp_path / name, prefix + b"\x00" * 508)
+
+
 def test_disk_read_or_traversal_failure_is_unknown(tmp_path, monkeypatch):
     sparse(tmp_path / "blob")
     def denied(*_args, **_kwargs):

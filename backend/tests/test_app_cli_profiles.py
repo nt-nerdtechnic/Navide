@@ -1835,3 +1835,67 @@ async def test_set_default_reports_no_login_needed_for_a_usable_slot(
     sent = session.websocket.sent[0]  # type: ignore[attr-defined]
     assert sent["payload"]["needsLogin"] is False
     assert sent["payload"]["needsLoginReason"] is None
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [{}, {"name": None}, {"name": 0}, {"name": False}, {"name": ["Work"]}],
+    ids=["missing", "null", "zero", "false", "list"],
+)
+async def test_cli_profiles_rename_without_a_string_name_is_bad_request(
+    store: CliProfilesStore, events: list[dict[str, Any]], extra: dict[str, Any]
+) -> None:
+    """Only an explicit "" clears an alias; a missing or non-string name is a
+    malformed request, not a request to clear."""
+    profile = store.create(agent_key="claude", name="Old")
+    store.rename(profile["id"], "Work")
+    store.set_default_name("claude", "Main")
+    session = _session()
+
+    await app.handle_message(session, {
+        "id": "rn1", "type": "cli_profiles.rename", "payload": {"id": profile["id"], **extra},
+    })
+    await app.handle_message(session, {
+        "id": "rn2",
+        "type": "cli_profiles.rename",
+        "payload": {"id": "__default__", "agentKey": "claude", **extra},
+    })
+
+    for response in session.websocket.sent[:2]:  # type: ignore[attr-defined]
+        assert response["ok"] is False
+        assert response["error"]["code"] == "BAD_REQUEST"
+    assert store.list()["profiles"][0]["name"] == "Work"
+    assert store.list()["defaultNames"] == {"claude": "Main"}
+    assert events == []
+
+
+async def test_cli_profiles_rename_empty_string_still_clears(
+    store: CliProfilesStore, events: list[dict[str, Any]]
+) -> None:
+    profile = store.create(agent_key="claude", name="Old")
+    store.rename(profile["id"], "Work")
+    session = _session()
+
+    await app.handle_message(session, {
+        "id": "rn3", "type": "cli_profiles.rename", "payload": {"id": profile["id"], "name": ""},
+    })
+
+    response = session.websocket.sent[0]  # type: ignore[attr-defined]
+    assert response["ok"] is True
+    assert "nameIsCustom" not in response["payload"]["profile"]
+
+
+async def test_cli_profiles_rename_too_long_is_bad_request(
+    store: CliProfilesStore, events: list[dict[str, Any]]
+) -> None:
+    profile = store.create(agent_key="claude", name="Old")
+    session = _session()
+
+    await app.handle_message(session, {
+        "id": "rn4", "type": "cli_profiles.rename", "payload": {"id": profile["id"], "name": "x" * 65},
+    })
+
+    response = session.websocket.sent[0]  # type: ignore[attr-defined]
+    assert response["ok"] is False
+    assert response["error"]["code"] == "BAD_REQUEST"
+    assert "64" in response["error"]["message"]

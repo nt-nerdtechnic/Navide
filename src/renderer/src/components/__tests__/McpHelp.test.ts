@@ -54,7 +54,7 @@ describe('McpHelp', () => {
     const tables = wrapper.findAll('.mh-table')
     expect(tables).toHaveLength(7)
     expect(tables[0].findAll('tbody tr')).toHaveLength(6) // plan tools
-    expect(tables[1].findAll('tbody tr')).toHaveLength(19) // workspace tools
+    expect(tables[1].findAll('tbody tr')).toHaveLength(25) // workspace tools
     expect(tables[2].findAll('tbody tr')).toHaveLength(4) // preview tools
     expect(tables[3].findAll('tbody tr')).toHaveLength(20) // cli tools
     expect(tables[4].findAll('tbody tr')).toHaveLength(4) // ui tools

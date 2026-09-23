@@ -1926,8 +1926,12 @@ async def cli_profiles_rename(session: "Session", msg_id: str, msg_type: str, pa
     from . import app
 
     profile_id = str(payload.get("id") or "")
-    name = str(payload.get("name") or "")
+    name = payload.get("name")
     try:
+        # Only an explicit "" clears an alias; a missing or non-string name
+        # is malformed, not a request to clear.
+        if not isinstance(name, str):
+            raise ValueError("name must be a string")
         if profile_id == DEFAULT_SLOT_ID:
             # The built-in Default slot has no profile record; its alias is
             # kept per agent, so the agent must be named.
@@ -2486,67 +2490,34 @@ async def cli_profiles_set_default(session: "Session", msg_id: str, msg_type: st
         # replaced it, that capture would overwrite the outgoing account's
         # only copy with someone else's credential. When the target slot is
         # empty the live credential can only be the target's fresh sign-in:
-        # park it there and bring nothing else live. Otherwise refuse — the
-        # user has to say which account is live (quota_failover.reconcile).
+        # park it there and bring nothing else live. Otherwise the user's
+        # pick wins: a manual switch is never refused for drift (the
+        # reconcile gate belongs to the quota failover transaction alone),
+        # so the risk is logged and reported as ``warning``.
         drift = await vault_to_thread(
             quota_failover.live_drift, app.credential_vault, agent_key,
             current_id or DEFAULT_SLOT_ID, scope_from,
         )
         adopted = False
-        if drift == "unverifiable":
-            # The live payload changed but nothing says whose it is (a vendor
-            # with no readable identity): a token refresh and a foreign
-            # sign-in look alike. Neither is assumed — the user confirms
-            # ``assume_live_is_current`` to proceed as a normal switch, and
-            # that word is bound to what they were shown: the resend must
-            # name the same active account and the same live payload
-            # (``live_fingerprint`` from the refusal), or it is asked again.
-            fingerprint = await vault_to_thread(
-                quota_failover.live_fingerprint, app.credential_vault, agent_key, scope_from,
-            )
-            # expected_current_slot_id / expected_epoch were already enforced
-            # above; the fingerprint from the refusal must still be the live
-            # payload — a CLI rewriting the live store during the dialog does
-            # not move the epoch, only this catches it.
-            offered_fp = str(payload.get("live_fingerprint") or "")
-            confirmed = assume and bool(fingerprint) and offered_fp == fingerprint
-            if not confirmed:
-                await session.send_json(
-                    make_error(
-                        msg_id, msg_type, "LIVE_DRIFT",
-                        f"the live {agent_key} credential changed and carries no identity to "
-                        "compare; confirm it is still the current account before switching",
-                        {"currentSlotId": current_id or DEFAULT_SLOT_ID,
-                         "targetSlotId": profile_id or DEFAULT_SLOT_ID, "verified": False,
-                         "epoch": app.quota_failover.epoch(agent_key),
-                         "liveIdentity": await vault_to_thread(app.credential_vault.identity, agent_key),
-                         "liveFingerprint": fingerprint},
-                    )
-                )
-                return
+        warning = None
+        target_slot = profile_id or DEFAULT_SLOT_ID
         if drift == "drifted":
-            target_slot = profile_id or DEFAULT_SLOT_ID
             target_empty = await vault_to_thread(
                 lambda: app.credential_vault.read_slot(
                     agent_key, target_slot, **({"scope": switch_scope} if switch_scope else {})
                 ).secret is None
             )
             if not target_empty:
-                await session.send_json(
-                    make_error(
-                        msg_id, msg_type, "LIVE_DRIFT",
-                        f"the live {agent_key} credential is no longer the active "
-                        "account's; say which account is signed in before switching",
-                        {"currentSlotId": current_id or DEFAULT_SLOT_ID,
-                         "targetSlotId": target_slot, "verified": True,
-                         "epoch": app.quota_failover.epoch(agent_key),
-                         "liveIdentity": await vault_to_thread(app.credential_vault.identity, agent_key),
-                         "liveFingerprint": await vault_to_thread(
-                             quota_failover.live_fingerprint, app.credential_vault, agent_key, scope_from,
-                         )},
-                    )
-                )
-                return
+                warning = "live-drift"
+        elif drift == "unverifiable":
+            warning = "live-drift-unverified"
+        if warning is not None:
+            app.log.warning(
+                "manual %s switch %s -> %s: %s; the live credential is captured into "
+                "the outgoing slot as-is", agent_key, current_id or DEFAULT_SLOT_ID,
+                target_slot, warning,
+            )
+        if drift == "drifted" and warning is None:
             try:
                 await vault_to_thread(
                     functools.partial(
@@ -2605,6 +2576,9 @@ async def cli_profiles_set_default(session: "Session", msg_id: str, msg_type: st
                 # pane reads as "you were logged out" or "this needs
                 # re-authenticating" — the latter is routine after parking.
                 "needsLoginReason": login_reason,
+                # "live-drift" / "live-drift-unverified": the live credential
+                # captured into the outgoing slot may not have been its own.
+                "warning": warning,
             })
         )
     # The user switched by hand: any automatic proposal still pending for this
@@ -7672,6 +7646,27 @@ async def terminal_cli_risk_action(session: "Session", msg_id: str, msg_type: st
     await session.send_json(make_response(msg_id, msg_type, {"cliRisks": risks}))
 
 
+@handler("cli_risk.ranges.list", "cli_risk.ranges.add", "cli_risk.ranges.update", "cli_risk.ranges.delete")
+async def cli_risk_ranges(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """Shared-CDN ranges whose connections are recorded without lighting the pill."""
+    from . import app
+
+    ranges = app.cli_risk_service.store.ranges
+    operation = msg_type.rsplit(".", 1)[1]
+    try:
+        if operation == "add":
+            await asyncio.to_thread(ranges.add, payload.get("cidr"), payload.get("label"))
+        elif operation == "update":
+            await asyncio.to_thread(ranges.set_enabled, payload.get("cidr"), payload.get("enabled"))
+        elif operation == "delete":
+            await asyncio.to_thread(ranges.delete, payload.get("cidr"))
+        result = await asyncio.to_thread(ranges.list)
+    except ValueError as err:
+        await session.send_json(make_error(msg_id, msg_type, "BAD_REQUEST", str(err)))
+        return
+    await session.send_json(make_response(msg_id, msg_type, {"ranges": result}))
+
+
 async def _collect_resource_usage(session: "Session") -> dict:
     """One CPU + memory sweep over every live PTY this backend owns."""
     from . import process_cpu, process_memory
@@ -10349,3 +10344,109 @@ async def preview_log_clear(session: "Session", msg_id: str, msg_type: str, payl
             )
         )
     await session.send_json(make_response(msg_id, msg_type, {"removed": removed}))
+
+
+# ── Navide scheduler (scheduler.*) ──────────────────────────────────────────
+# Thin wrappers over scheduler.SchedulerService, which the scheduler_* MCP
+# tools call too. Malformed requests are BAD_REQUEST; an operation that fails
+# (unknown id, already running) answers {ok: false, error}. Mutations answer
+# first, then push the whole job list to the other windows.
+
+
+def _scheduler_id(payload: dict) -> str | None:
+    job_id = payload.get("id")
+    return job_id if isinstance(job_id, str) and job_id.strip() else None
+
+
+async def _scheduler_bad_request(session: "Session", msg_id: str, msg_type: str, message: str) -> None:
+    await session.send_json(make_error(msg_id, msg_type, "BAD_REQUEST", message))
+
+
+@handler("scheduler.list")
+async def scheduler_list(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import scheduler
+
+    await session.send_json(
+        make_response(msg_id, msg_type, await scheduler.get_service().list())
+    )
+
+
+@handler("scheduler.upsert")
+async def scheduler_upsert(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """Create (no id) or update (with id) a job; the definition is validated
+    by the same function the MCP tool uses."""
+    from . import scheduler
+
+    job = payload.get("job")
+    if not isinstance(job, dict):
+        await _scheduler_bad_request(session, msg_id, msg_type, "scheduler.upsert needs a job object")
+        return
+    try:
+        result = await scheduler.get_service().upsert(job)
+    except scheduler.JobInvalid as err:
+        await _scheduler_bad_request(session, msg_id, msg_type, str(err))
+        return
+    await session.send_json(make_response(msg_id, msg_type, result))
+    await scheduler.broadcast_changed(exclude=session)
+
+
+@handler("scheduler.remove")
+async def scheduler_remove(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import scheduler
+
+    job_id = _scheduler_id(payload)
+    if job_id is None:
+        await _scheduler_bad_request(session, msg_id, msg_type, "scheduler.remove needs an id")
+        return
+    result = await scheduler.get_service().remove(job_id)
+    await session.send_json(make_response(msg_id, msg_type, result))
+    if result.get("ok"):
+        await scheduler.broadcast_changed(exclude=session)
+
+
+@handler("scheduler.set_enabled")
+async def scheduler_set_enabled(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import scheduler
+
+    job_id = _scheduler_id(payload)
+    enabled = payload.get("enabled")
+    if job_id is None or not isinstance(enabled, bool):
+        await _scheduler_bad_request(
+            session, msg_id, msg_type, "scheduler.set_enabled needs an id and enabled (true|false)"
+        )
+        return
+    result = await scheduler.get_service().set_enabled(job_id, enabled)
+    await session.send_json(make_response(msg_id, msg_type, result))
+    if result.get("ok"):
+        await scheduler.broadcast_changed(exclude=session)
+
+
+@handler("scheduler.run_now")
+async def scheduler_run_now(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """Start one run and answer at once; the run's own start and end reach
+    every window (this one included) as scheduler.changed."""
+    from . import scheduler
+
+    job_id = _scheduler_id(payload)
+    if job_id is None:
+        await _scheduler_bad_request(session, msg_id, msg_type, "scheduler.run_now needs an id")
+        return
+    await session.send_json(
+        make_response(msg_id, msg_type, await scheduler.get_service().run_now(job_id))
+    )
+
+
+@handler("scheduler.runs")
+async def scheduler_runs(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    from . import scheduler
+
+    job_id = _scheduler_id(payload)
+    limit = payload.get("limit", 20)
+    if job_id is None or isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 200:
+        await _scheduler_bad_request(
+            session, msg_id, msg_type, "scheduler.runs needs an id and an optional limit of 1..200"
+        )
+        return
+    await session.send_json(
+        make_response(msg_id, msg_type, await scheduler.get_service().runs(job_id, limit))
+    )

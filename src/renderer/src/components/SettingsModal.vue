@@ -92,6 +92,7 @@ import {
 } from '../lib/panePolicy'
 import { CLI_AGENT_SPECS } from '@navide/plugin-shell'
 import { useQuotaFailover, type FailoverMode } from '../composables/useQuotaFailover'
+import { LOOP_FAILOVER_RESUME_SETTING_KEY } from '../lib/loopFailoverResume'
 import { platformId } from '../../../shared/osplat'
 import { useUpdater } from '../composables/useUpdater'
 import { updateStages } from '../lib/updaterStages'
@@ -105,6 +106,7 @@ import { useGitAccounts } from '../composables/useGitAccounts'
 import GitAccountsPane from './GitAccountsPane.vue'
 import CliAccountsPane from './CliAccountsPane.vue'
 import CliManagementPanel from './CliManagementPanel.vue'
+import CliRiskRangesPane from './CliRiskRangesPane.vue'
 import type { useCliProfiles } from '../composables/useCliProfiles'
 import KeyboardShortcutsEditor from './KeyboardShortcutsEditor.vue'
 import CliMessagingHelp from './CliMessagingHelp.vue'
@@ -583,7 +585,9 @@ async function openCliDrawer(key: string, trigger?: EventTarget | null): Promise
   envDraftName.value = ''
   envDraftValue.value = ''
   await nextTick()
-  cliDrawerRef.value?.querySelector<HTMLButtonElement>('.cli-drawer-close')?.focus()
+  // The drawer is still at translateX(100%) here; without preventScroll the
+  // clipped container scrolls to the off-screen button and snaps back.
+  cliDrawerRef.value?.querySelector<HTMLButtonElement>('.cli-drawer-close')?.focus({ preventScroll: true })
 }
 
 async function closeCliDrawer(restoreFocus = true): Promise<void> {
@@ -961,6 +965,15 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
     keywords: 'quota exhausted account switch failover auto notify off hot restart resume 額度 耗盡 切換 帳號 自動 通知 關閉 熱切 重啟 接續',
   },
   {
+    id: 'general-quota-failover-loop',
+    tab: 'general',
+    section: 'general-quota-failover-loop',
+    title: t('settings.search.item.general-quota-failover-loop.title'),
+    group: t('settings.nav.group.general'),
+    summary: t('settings.search.item.general-quota-failover-loop.summary'),
+    keywords: 'loop quota exhausted account switch failover auto resume continue 迴圈 額度 耗盡 切換 帳號 自動 繼續 接續',
+  },
+  {
     id: 'accounts',
     tab: 'accounts',
     section: 'accounts',
@@ -1250,6 +1263,12 @@ async function onFailoverModeChange(raw: string): Promise<void> {
   } finally {
     failoverBusy.value = false
   }
+}
+// Opt-in on top of the "auto" policy: a looping pane resumes its loop right
+// after the automatic switch instead of offering the Continue button.
+const loopFailoverResumeModel = ref(settingsGet<boolean>(LOOP_FAILOVER_RESUME_SETTING_KEY, false) === true)
+function onLoopFailoverResumeChange(): void {
+  settingsSet(LOOP_FAILOVER_RESUME_SETTING_KEY, loopFailoverResumeModel.value)
 }
 interface FailoverCapabilityRow {
   agentKey: string
@@ -3041,6 +3060,7 @@ watch(activeTab, (tab) => {
             </ul>
             <p v-if="!filteredCliRows.length" class="cli-agent-empty">{{ $t('settings.cliAgents.no-results') }}</p>
           </section>
+          <CliRiskRangesPane v-if="activeTab === 'cliAgents'" :backend="props.backend" />
           </div>
           <Transition name="cli-drawer">
           <div v-if="selectedCli" class="cli-drawer-layer">
@@ -3522,6 +3542,21 @@ watch(activeTab, (tab) => {
                       {{ $t(`usage.failover-mode-${mode}`) }}
                     </option>
                   </select>
+                </template>
+              </SettingRow>
+              <SettingRow
+                data-settings-section="general-quota-failover-loop"
+                :title="$t('usage.failover-loop-title')"
+                :description="$t('usage.failover-loop-hint')"
+              >
+                <template #control>
+                  <ToggleSwitch
+                    v-model="loopFailoverResumeModel"
+                    data-testid="quota-failover-loop"
+                    :disabled="failoverMode !== 'auto'"
+                    :aria-label="$t('usage.failover-loop-title')"
+                    @update:modelValue="onLoopFailoverResumeChange"
+                  />
                 </template>
               </SettingRow>
               <div v-if="quotaFailover.state.value" class="failover-caps" data-settings-section="general-quota-failover-caps">

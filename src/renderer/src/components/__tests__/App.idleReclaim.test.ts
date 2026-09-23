@@ -167,7 +167,9 @@ describe('idle reclaim wiring', () => {
   // pressing the button skips is the waiting.
   it('runs manual reclaim through the same guards, minus the age check', () => {
     const fn = block('async function reclaimPanesNow(', 'onMounted(() => {')
-    expect(fn).toContain('reclaimBlockedBy(reclaimCandidate(pane), RECLAIM_NOW_THRESHOLD_MS, Date.now()) !== null) continue')
+    expect(fn).toContain(': reclaimBlockedBy(reclaimCandidate(pane), RECLAIM_NOW_THRESHOLD_MS, Date.now())')
+    expect(fn).toContain('? namedReclaimBlockedBy(reclaimCandidate(pane), Date.now())')
+    expect(fn).toContain('if (blocked !== null) continue')
   })
 
   it('offers the same candidate list to every reclaim-now control', () => {
@@ -231,13 +233,14 @@ describe('reclaim in the pane context menu', () => {
     expect(menuItem()).toContain("$t('action.reclaim')")
   })
 
-  // Any other source for the greyed-out state would let the menu offer a
-  // reclaim the sweep itself refuses — starting with the focused pane.
-  it('takes the greyed-out state from the reclaim candidate list', () => {
+  // The greyed-out state must come from the same guard the click runs, or the
+  // menu offers a reclaim it then refuses. The right-clicked pane is named by
+  // the user, so it uses the named guard, which lets the focused pane through.
+  it('takes the greyed-out state from the named reclaim guard', () => {
     expect(menuItem()).toContain('disabled: !ctxReclaimable')
-    expect(block('const ctxReclaimable = computed', '// "Send message"')).toContain(
-      'reclaimableNowIds.value.includes('
-    )
+    const menu = block('const ctxReclaimable = computed', '// "Send message"')
+    expect(menu).toContain('return namedReclaimable(m.paneId, Date.now())')
+    expect(menu).toContain('reclaimPanesNow([paneId], true)')
   })
 
   // Calling reclaimPanesNow straight from the template swallows the refusal:

@@ -8,6 +8,7 @@ import json
 from datetime import datetime, timezone
 
 from .cli_risk_observers import DNS_TTL, MIB100, DiskSample, ExpectedAddresses
+from .cli_risk_ranges import SharedRangeStore
 from .db import Database
 from .ui_settings import UiSettingsStore
 
@@ -31,6 +32,7 @@ class CliRiskStore:
     def __init__(self, db: Database):
         self.db = db
         self.settings = UiSettingsStore(path=db.path.with_name("ui_settings.json"), db=db)
+        self.ranges = SharedRangeStore(db)
         with db.transaction() as cur:
             cur.execute("CREATE TABLE IF NOT EXISTS cli_risk_records ("
                         "category TEXT NOT NULL, key TEXT NOT NULL, data TEXT NOT NULL, "
@@ -102,6 +104,11 @@ class CliRiskStore:
                     "lastObservedAt": iso(now), "expectedSetObservedAt": iso(expected.observed_at),
                     "stale": False,
                 }
+                # Record-only: a shared-CDN address is kept for the dialog but
+                # never lights the pill on its own.
+                shared = self.ranges.label_for(ip)
+                if shared:
+                    data["sharedCdn"] = shared
                 changes[key] = {"kind": "network", "pane": pane, "vendor": vendor,
                                 "target": ip, "active": True, "data": data}
         self._commit({"availability": {identity("network", pane): availability}, "signals": changes})
@@ -232,6 +239,6 @@ def project(snapshot: dict, panes: list, now: float) -> dict[str, dict]:
                 data["stale"] = True
                 network["status"] = "unknown" if pane.hosts else "unsupported"
             signals.append(data)
-        signals.sort(key=lambda s: (0 if s["severity"] == "red" else 1, s["firstObservedAt"], s["id"]))
+        signals.sort(key=lambda s: ("sharedCdn" in s, 0 if s["severity"] == "red" else 1, s["firstObservedAt"], s["id"]))
         result[pane.pane_id] = {"signals": signals, "network": network, "disk": disk}
     return result

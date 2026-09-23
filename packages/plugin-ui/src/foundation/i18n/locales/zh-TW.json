@@ -62,7 +62,25 @@
     "allow-ip": "允許 {vendor} 使用此 IP",
     "reveal": "在資料夾中顯示",
     "action-failed": "無法儲存此決定，請再試一次。",
-    "reveal-failed": "無法在檔案管理員中顯示此路徑。"
+    "reveal-failed": "無法在檔案管理員中顯示此路徑。",
+    "shared-cdn-field": "共用 CDN",
+    "shared-cdn": "{label}（共用 CDN，無法分辨網站）",
+    "ranges-title": "共用 CDN 位址範圍",
+    "ranges-hint": "連到已啟用範圍內的位址只會記錄，不會亮起風險提示；個別 IP 的忽略與允許不受影響。內建範圍取自 Cloudflare 與 Fastly 官方公布的清單，可停用但不可刪除。",
+    "ranges-cidr": "CIDR",
+    "ranges-cidr-placeholder": "例如 192.0.2.0/24 或 2001:db8::/32",
+    "ranges-label": "名稱",
+    "ranges-source": "來源",
+    "ranges-source-builtin": "內建",
+    "ranges-source-user": "自訂",
+    "ranges-enabled": "啟用",
+    "ranges-toggle": "啟用 {cidr}",
+    "ranges-add": "新增",
+    "ranges-delete": "刪除",
+    "ranges-invalid-cidr": "CIDR 格式不正確，例如 192.0.2.0/24。",
+    "ranges-label-required": "請填寫名稱。",
+    "ranges-load-failed": "無法載入位址範圍。",
+    "ranges-save-failed": "無法儲存變更，請再試一次。"
   },
   "spawn": {
     "model": {
@@ -994,6 +1012,10 @@
         "general-quota-failover": {
           "title": "額度耗盡時的帳號切換",
           "summary": "關閉／通知／自動，以及各 CLI 的能力"
+        },
+        "general-quota-failover-loop": {
+          "title": "迴圈遇到額度耗盡時，切換後立即繼續",
+          "summary": "跑迴圈的 pane 切換帳號後直接繼續，不等額度重置"
         },
         "accounts": {
           "title": "Git 帳號",
@@ -1944,7 +1966,7 @@
             "text": "Electron 內建的整窗縮放（<em>Zoom In</em>／<em>Zoom Out</em>／<em>Actual Size</em>）被拿掉了，因為 Navide 自己有兩條縮放軸：<kbd class=\"syh-kbd\">⌘=</kbd>／<kbd class=\"syh-kbd\">⌘-</kbd>／<kbd class=\"syh-kbd\">⌘0</kbd> 改終端機<strong>內容</strong>的字級，<kbd class=\"syh-kbd\">⇧⌘=</kbd>／<kbd class=\"syh-kbd\">⇧⌘-</kbd>／<kbd class=\"syh-kbd\">⇧⌘0</kbd> 改<strong>整體介面縮放</strong>（設定 ▸ 外觀 ▸ 介面縮放）。原生 role 留著的話，它們的 accelerator 會搶在這兩者前面。<kbd class=\"syh-kbd\">⌘R</kbd> 也改成「重建焦點面板」，重新載入整個視窗改用 <kbd class=\"syh-kbd\">⇧⌘R</kbd>，選單裡則是一個不帶快捷鍵的 <em>重新載入視窗</em>。<kbd class=\"syh-kbd\">⌘W</kbd> 在 macOS 上留給了「關閉分頁」，所以關視窗只剩紅綠燈或 <kbd class=\"syh-kbd\">⌘Q</kbd>。"
           },
           "h3": "Schedule（排程）— 不是獨立視窗",
-          "p1": "這台機器的背景排程列在<strong>右側槽的一個分頁</strong>裡，分頁名稱是 <strong>排程</strong>（🗓），也可以搬到上下兩槽。它不是從 Window 選單開的視窗。macOS 上分三段；Linux 只有 crontab 一段；Windows 依設計什麼都不列——Navide 本身從不建立排程工作，而工作排程器已經在管理機器上的工作。",
+          "p1": "這台機器的背景排程列在<strong>右側槽的一個分頁</strong>裡，分頁名稱是 <strong>排程</strong>（🗓），也可以搬到上下兩槽。它不是從 Window 選單開的視窗。Navide 自己的排程、你的 crontab 與 macOS 的 launchd 工作放在同一份清單：最上面是<strong>接下來</strong>：先放算得準下次時間的項目、依時間排序，再隔一條細線<strong>固定間隔</strong>，放每隔幾分鐘執行或算不出確切時間的項目，只顯示間隔、不顯示時刻，頻率高的在前；其下是預設摺疊的<strong>常駐／按需</strong>與<strong>已停用</strong>。Linux 只有 crontab 這個來源；Windows 只會列出 Navide 自己的排程——機器上的工作由工作排程器管理。",
           "scheduleTable": {
             "section": "區塊",
             "source": "來源",
@@ -1957,14 +1979,14 @@
             },
             "agents": {
               "source": "~/Library/LaunchAgents 與 /Library/LaunchAgents",
-              "actions": "只有 ~/Library/LaunchAgents 裡你自己的那些有 ⏸／▶ 與 🗑；系統層的只顯示、沒有按鈕"
+              "actions": "只有 ~/Library/LaunchAgents 裡你自己的那些有 ⏸／▶ 與 ⋯ 選單；系統層的只顯示、沒有按鈕"
             },
             "daemons": {
               "source": "/Library/LaunchDaemons",
-              "actions": "整段唯讀"
+              "actions": "全部唯讀"
             }
           },
-          "p2": "系統層唯讀是因為動它們需要 root，而 Navide 從不要求——後端也擋著，不只是介面不給按。這也是為什麼 daemon 自成一段：它們的狀態多半只能顯示成 <code>狀態未知（需 root）</code>。每一列可展開看 排程／指令／原始內容，或 Label／層級／plist 路徑／上次結束碼／狀態。移除 LaunchAgent 會<strong>卸載並永久刪除它的 plist</strong>，會先跳確認。",
+          "p2": "系統層唯讀是因為動它們需要 root，而 Navide 從不要求——後端也擋著，不只是介面不給按。尤其 daemon 的狀態多半只能顯示成 <code>狀態未知（需 root）</code>。每一列可展開看 排程／指令／原始內容，或 Label／層級／plist 路徑／上次結束碼／狀態。移除放在每一列的 ⋯ 選單裡；移除 LaunchAgent 會<strong>卸載並永久刪除它的 plist</strong>，會先跳確認。",
           "note2": "這裡<strong>沒有「立刻執行」也沒有「在 Finder 顯示」</strong>，只有停用／啟用與移除兩種動作。上方有 <em>重新掃描</em> 與上次掃描時間。",
           "h4": "其他從 UI 開的視窗",
           "otherTable": {
@@ -4049,7 +4071,7 @@
         },
         "s1": {
           "title": "方向一：Navide 提供給 CLI agent 的工具",
-          "p1": "pane 一啟動，agent 的工具清單裡就會多出這些。你不需要教它，也不用設定——直接用中文交代就好，例如「幫我把這份計畫的第二階段標成完成」。目前一共 <strong>53 個</strong>（核心 47 個，加上計畫外掛註冊的 6 個），另外還有 3 份唯讀資源與 3 個提示樣板。",
+          "p1": "pane 一啟動，agent 的工具清單裡就會多出這些。你不需要教它，也不用設定——直接用中文交代就好，例如「幫我把這份計畫的第二階段標成完成」。目前一共 <strong>59 個</strong>（核心 53 個，加上計畫外掛註冊的 6 個），另外還有 3 份唯讀資源與 3 個提示樣板。",
           "h1": "計畫文件",
           "planTools": {
             "plan_list": "列出這個工作區的所有計畫，含階段與待辦進度",
@@ -4076,6 +4098,12 @@
             "pipeline_define": "建立／改名／刪除 pipeline、設為使用中、重設內建；run 進行中時 delete 與 set_active 會被拒絕",
             "stage_define": "階段的新增修改／刪除／重新排序／重設；run 正在用那個 pipeline 時四個操作都會被拒絕",
             "role_define": "角色的新增修改／改名／刪除／重設；改名會連帶改寫所有引用它的 slot，仍被引用的角色不給刪",
+            "scheduler_list": "列出 Navide 的排程工作；只在 Navide 執行中才會觸發，不會喚醒電腦或 App",
+            "scheduler_upsert": "建立排程工作，或帶 id 更新既有的：依時間表（每 N 分鐘、每天或每週 HH:MM，含時區）喚醒某個 CLI pane 並送出指令。無人值守會燒額度，所以每個 job 有每日上限、失敗會退避；pane 呼叫時不指定目標就是排給自己",
+            "scheduler_remove": "刪除一個排程工作，連同它的執行紀錄",
+            "scheduler_set_enabled": "暫停或恢復排程工作；恢復時不會補跑暫停期間錯過的時段",
+            "scheduler_run_now": "不照時間表、立刻跑一次；執行一開始就回覆，會清除失敗退避，不會移動下次排定的時段",
+            "scheduler_runs": "某個 job 的執行紀錄，新的在前：ok、error 或 skipped 加原因——略過（無視窗、忙碌、每日上限或額度、目標不存在）不算錯誤",
             "cli_permission_settings": "讀寫 CLI 權限略過旗標（yolo）。這是全域設定，不是 pipeline 專屬，只影響之後開的 pane；某家 CLI 實際會不會帶旗標要看回傳的 agents[].skipFlag，不是只看全域值",
             "workspace_open": "在 Navide 裡開啟一個專案；要開成新視窗還是併進已經開著它的視窗，由 Navide 決定",
             "workspace_switch": "把自己所在的視窗切到它本來就持有的另一個專案；被切走的專案，它的 pane 會繼續跑。視窗裡有 pipeline 正在跑時會拒絕，因為切換會中止它",
@@ -5444,7 +5472,7 @@
           "win": {
             "signing": "<strong>安裝檔沒有程式碼簽章。</strong>每一個新版本都會再被 SmartScreen 警告一次，而且 App 內更新也是在不驗證簽章的情況下裝上去的。",
             "symlinks": "<strong>每個面板一份的 CLI 家目錄、以及受管技能，是用符號連結做出來的</strong>，而 Windows 預設不讓一般程式建立符號連結。要嘛開啟 Windows 的開發人員模式（<em>Settings ▸ For developers</em>），要嘛用系統管理員身分執行 Navide。沒開也不會無聲失敗：受影響的面板會在啟動後印一行黃色的 <code>[mcp]</code> 說明告訴你原因。會碰到這件事的是靠設定檔接 MCP 的那幾家——Antigravity CLI、Grok CLI、Kimi Code。",
-            "schedule": "<strong>Schedule 分頁什麼都不會列。</strong>Navide 讀的是使用者的 crontab 與 macOS 的 launchd，Windows 兩者都沒有；工作排程器（taskschd.msc）是刻意沒有接進來的，因為 Navide 從來不自己建立排程工作，而工作排程器本來就在管這台機器上的工作。畫面會直接把這件事寫出來，而不是給你一份空清單。"
+            "schedule": "<strong>Schedule 分頁只會列出 Navide 自己的排程（Navide Jobs）。</strong>Navide 讀的是使用者的 crontab 與 macOS 的 launchd，Windows 兩者都沒有；工作排程器（taskschd.msc）是刻意沒有接進來的，因為 Navide 從不建立作業系統的排程工作，而工作排程器本來就在管這台機器上的工作。畫面會直接把這件事寫出來，而不是給你一份空清單。"
           },
           "h2": "Linux",
           "linux": {
@@ -7590,6 +7618,7 @@
     "actual-size": "實際大小",
     "pdf-unavailable": "此視窗無法使用內嵌 PDF 檢視器。",
     "raw-error": "無法載入此檔案以供預覽。",
+    "retry": "重試",
     "hex-loading": "正在載入 hex 內容…",
     "hex-error": "無法載入檔案內容。",
     "hex-truncated": "僅顯示前 64 KB（共 {total}）。",
@@ -7952,6 +7981,8 @@
     "settings-hint": "顯示 11 家 CLI 的額度：claude、codex、kimi、grok、antigravity、opencode、qwen、kilo、pi、copilot、cursor。多數是讀取本機 CLI 憑證查詢該供應商的官方用量 API，僅讀取、不寫入憑證。claude 則不同，改為驅動 Claude CLI 內建的 /usage 面板，不讀取憑證。",
     "failover-title": "額度耗盡時的帳號切換",
     "failover-hint": "CLI 帳號額度用完時 Navide 的做法：不處理、列出可切換的帳號（預設），或自動切換——每個 CLI 每 5 小時最多自動切換 3 次，且不會自動切回耗盡的帳號。表格列出各 CLI 的能力；是否切換由後端決定。",
+    "failover-loop-title": "迴圈遇到額度耗盡時，切換後立即繼續",
+    "failover-loop-hint": "正在跑迴圈的 pane 額度用完時，自動切換到還有額度的帳號並立刻送出繼續，不等額度重置。需要上方選「自動切換」。",
     "failover-mode-off": "關閉",
     "failover-mode-notify": "通知我",
     "failover-mode-auto": "自動切換",
@@ -8052,22 +8083,40 @@
     "rescan": "重新掃描",
     "scanning": "掃描中…",
     "scan-failed": "掃描失敗：{message}",
-    "count": "{count} 項",
-    "empty": "沒有項目",
+    "retry": "重試",
+    "failing": "{count} 個項目失敗中",
+    "only-failing": "只看失敗",
+    "show-all": "顯示全部",
+    "create-first": "建立一個",
+    "backend-outdated": "後端版本比這個視窗舊，請重新啟動 Navide 以載入排程。",
+    "timeline": {
+      "title": "接下來",
+      "empty": "接下來沒有排定的項目"
+    },
+    "bucket": {
+      "today": "今天",
+      "tomorrow": "明天",
+      "week": "本週",
+      "later": "更晚",
+      "interval": "固定間隔"
+    },
+    "group": {
+      "other": "常駐／按需",
+      "disabled": "已停用"
+    },
+    "interval": {
+      "seconds": "{n} 秒",
+      "minutes": "{n} 分",
+      "hours": "{n} 時"
+    },
     "unsupported": "此平台不支援",
-    "no-source": "此平台沒有可列出的來源：Navide 讀的是使用者的 crontab 與 macOS 的 launchd 工作，這個系統兩者都沒有。Navide 本身從不建立排程工作，所以這裡沒有東西缺失。",
+    "no-source": "此平台沒有可列出的來源：Navide 讀的是使用者的 crontab 與 macOS 的 launchd 工作，這個系統兩者都沒有。Navide 從不建立作業系統的排程工作，所以這裡沒有東西缺失；Navide 自己的排程列在上方。",
     "no-source-windows": "Windows 的排程工作在「工作排程器」（taskschd.msc）裡，那裡可以列出、啟用、停用與移除；Navide 刻意不整合它。",
     "crontab": {
-      "title": "系統 crontab",
-      "filter-all": "全部",
-      "filter-enabled": "啟用中",
-      "filter-disabled": "已停用"
+      "title": "系統 crontab"
     },
     "launchagents": {
-      "title": "macOS Agents",
-      "filter-all": "全部",
-      "filter-running": "執行中",
-      "filter-stopped": "已停止"
+      "title": "macOS Agents"
     },
     "daemons": {
       "title": "macOS Daemons"
@@ -8078,7 +8127,6 @@
       "system-daemon": "Daemon"
     },
     "tag": {
-      "disabled": "已停用",
       "pid": "PID {pid}",
       "exit": "exit {code}"
     },
@@ -8090,7 +8138,10 @@
     "action": {
       "enable": "啟用",
       "disable": "停用",
-      "remove": "刪除"
+      "remove": "刪除",
+      "more": "更多動作",
+      "copy-raw": "複製 crontab 原始行",
+      "copy-label": "複製 label"
     },
     "detail": {
       "schedule": "排程",
@@ -8121,6 +8172,9 @@
       "monthly": "每月",
       "yearly": "每年",
       "every-minutes": "每 {n} 分鐘",
+      "every-minute": "每分鐘",
+      "hourly-at": "每小時 :{minute}",
+      "every-hours-at": "每 {n} 小時（:{minute}）",
       "daily-at": "每天 {time}",
       "weekly-at": "每{weekday} {time}",
       "monthly-at": "每月 {day} 日 {time}"
@@ -8134,7 +8188,7 @@
       "keep-alive": "常駐服務（KeepAlive）",
       "run-at-load": "啟動時執行（RunAtLoad）",
       "calendar": "依日期排程（詳見 plist）",
-      "unknown": "—"
+      "unknown": "按需啟動"
     },
     "weekday-0": "週日",
     "weekday-1": "週一",
@@ -8143,6 +8197,76 @@
     "weekday-4": "週四",
     "weekday-5": "週五",
     "weekday-6": "週六"
+  },
+  "scheduler": {
+    "add": "＋ 新增",
+    "empty": "還沒有排程工作",
+    "list-failed": "讀取排程失敗：{message}",
+    "edit": "編輯",
+    "failed": "失敗 ×{n}",
+    "repair": "修復",
+    "enable": "啟用",
+    "disable": "停用",
+    "run-now": "立即執行",
+    "when-backoff": "backoff 至 {time}",
+    "target": "→ 喚醒並傳給 pane「{name}」",
+    "target-with-id": "→ 喚醒並傳給 pane「{name}」（#{id}）",
+    "retarget": "重新指定",
+    "every-minutes": "每 {n} 分鐘",
+    "every-hours": "每 {n} 小時",
+    "daily-at": "每天 {time}",
+    "weekly-at": "每{days} {time}",
+    "day-separator": "、",
+    "once-at": "一次：{time}",
+    "once-done": "已執行（一次）",
+    "skip": {
+      "no_window": "略過：無視窗",
+      "busy": "略過：pane 忙碌",
+      "budget": "略過：已達上限或額度不足",
+      "target_gone": "目標 pane 已不存在",
+      "missed": "略過：錯過時段",
+      "interrupted": "略過：執行中斷",
+      "unknown": "略過"
+    },
+    "editor": {
+      "title-new": "新增排程工作",
+      "title-edit": "編輯排程工作",
+      "name": "名稱",
+      "frequency": "頻率",
+      "freq-every": "每 N 分鐘",
+      "freq-daily": "每天",
+      "freq-weekly": "每週",
+      "freq-once": "一次",
+      "minutes": "分鐘",
+      "workspace": "Workspace",
+      "pick-workspace": "選擇 workspace",
+      "target": "目標 pane",
+      "pick-pane": "選擇 pane",
+      "pane-option": "{name} · {agent} · #{id}",
+      "pane-by-name": "{name}（依名稱）",
+      "pane-missing": "{name} #{id}（已不存在）",
+      "text": "指令內容",
+      "text-placeholder": "時間到時要送給這個 pane 的指令…",
+      "catch-up": "錯過時",
+      "catch-up-once": "補一次",
+      "catch-up-skip": "跳過",
+      "max-runs": "每日上限（次）",
+      "next-preview": "下次執行：{time}（{schedule}）",
+      "err-name": "請輸入名稱",
+      "err-every": "請輸入 1 到 {max} 之間的整數分鐘",
+      "err-time": "時間格式須為 HH:MM",
+      "err-tz": "無效的時區（請用 IANA 名稱，例如 Asia/Taipei）",
+      "err-days": "至少選一天",
+      "err-once": "請選擇未來的日期與時間",
+      "err-workspace": "請選擇 workspace",
+      "err-target": "請選擇目標 pane",
+      "err-text": "請輸入指令內容",
+      "err-max-runs": "每日上限須為 1 到 {max} 之間的整數",
+      "remove": "刪除",
+      "remove-confirm": "確定刪除這個排程工作？",
+      "cancel": "取消",
+      "save": "儲存"
+    }
   },
   "turn-stats": {
     "title": "每輪消耗",

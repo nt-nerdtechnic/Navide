@@ -317,4 +317,57 @@ describe('FilePreviewPane – raw load failure', () => {
     expect(wrapper.find('.fpv-raw-error').exists()).toBe(false)
     expect(wrapper.find('iframe.fpv-pdf-frame').attributes('src')).toContain('rel=good.pdf')
   })
+
+  it('treats a 416 PDF probe as an empty file, not an error', async () => {
+    Object.defineProperty(navigator, 'pdfViewerEnabled', { value: true, configurable: true })
+    // A 0-byte file cannot satisfy "bytes=0-0": the server answers 416.
+    fetchMock.mockImplementation(async () => ({
+      ok: false,
+      status: 416,
+      headers: { get: (key: string) => (key.toLowerCase() === 'content-range' ? 'bytes */0' : null) },
+      arrayBuffer: async () => new ArrayBuffer(0),
+    }))
+    const wrapper = mountPane('empty.pdf')
+    await flushPromises()
+    expect(wrapper.find('.fpv-raw-error').exists()).toBe(false)
+    expect(wrapper.find('iframe.fpv-pdf-frame').exists()).toBe(true)
+  })
+
+  it('retry re-runs the PDF probe and clears the error once it succeeds', async () => {
+    Object.defineProperty(navigator, 'pdfViewerEnabled', { value: true, configurable: true })
+    fetchMock.mockImplementation(forbidden)
+    const wrapper = mountPane('doc.pdf')
+    await flushPromises()
+    expect(wrapper.find('.fpv-raw-error').text()).toContain('(HTTP 403)')
+    const probesBefore = fetchMock.mock.calls.length
+
+    fetchMock.mockImplementation(async () => fakeResponse(new Uint8Array(1), 1))
+    await wrapper.find('.fpv-retry-btn').trigger('click')
+    await flushPromises()
+    expect(fetchMock.mock.calls.length).toBe(probesBefore + 1)
+    expect(wrapper.find('.fpv-raw-error').exists()).toBe(false)
+    expect(wrapper.find('iframe.fpv-pdf-frame').exists()).toBe(true)
+  })
+
+  it('retry shows the error again when the PDF probe still fails', async () => {
+    Object.defineProperty(navigator, 'pdfViewerEnabled', { value: true, configurable: true })
+    fetchMock.mockImplementation(forbidden)
+    const wrapper = mountPane('doc.pdf')
+    await flushPromises()
+
+    await wrapper.find('.fpv-retry-btn').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.fpv-raw-error').text()).toContain('(HTTP 403)')
+  })
+
+  it('retry remounts a failed image so it loads again', async () => {
+    const wrapper = mountPane('photo.png')
+    await flushPromises()
+    await wrapper.find('img.fpv-img').trigger('error')
+    expect(wrapper.find('.fpv-retry-btn').text()).toBe('Retry')
+
+    await wrapper.find('.fpv-retry-btn').trigger('click')
+    expect(wrapper.find('.fpv-raw-error').exists()).toBe(false)
+    expect(wrapper.find('img.fpv-img').exists()).toBe(true)
+  })
 })

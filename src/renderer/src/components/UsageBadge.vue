@@ -196,6 +196,8 @@ function flipIfOffscreen(): void {
 }
 
 function onLeave(): void {
+  // A half-typed name must not vanish because the pointer drifted off.
+  if (renamingId.value !== null) return
   if (openTimer) {
     clearTimeout(openTimer)
     openTimer = null
@@ -227,7 +229,10 @@ function closePop(): void {
 // case. Listeners are attached only while open (capture phase, so a stopped
 // click deeper in the tree still dismisses).
 function onDocKeydown(e: KeyboardEvent): void {
-  if (e.key === 'Escape') closePop()
+  // While a row is being renamed, Esc belongs to that field: it cancels the
+  // edit and leaves the panel open. This listener runs in the capture phase,
+  // ahead of the field's own handler, so a stop there cannot shield it.
+  if (e.key === 'Escape' && renamingId.value === null) closePop()
 }
 
 function onDocPointerDown(e: Event): void {
@@ -294,6 +299,8 @@ const renameDraft = ref('')
 const renameInput = ref<HTMLInputElement | null>(null)
 // Esc must not be undone by the blur it causes; this says the edit is over.
 let renameAborted = false
+// Enter followed by the blur it can cause must not send the name twice.
+let renameSaving = false
 
 /** Template ref set from inside a v-for, where a plain `ref` would collect an
  *  array; only one row is ever in edit mode, so the last one set is it. */
@@ -317,11 +324,31 @@ function cancelRename(): void {
 }
 
 async function commitRename(): Promise<void> {
-  if (renameAborted || renamingId.value === null) return
+  if (renameAborted || renameSaving || renamingId.value === null) return
   const id = renamingId.value
   const name = renameDraft.value.trim()
-  renamingId.value = null
-  await props.cliProfiles.rename(id || DEFAULT_PROFILE_ID, name, props.agentKey)
+  renameSaving = true
+  try {
+    // The Default slot has no profile record, so its successful reply is a
+    // null profile too; the composable's error is what tells a failure.
+    const saved = await props.cliProfiles.rename(id || DEFAULT_PROFILE_ID, name, props.agentKey)
+    if (!saved && props.cliProfiles.error.value) {
+      // Keep the field and the draft so the user can fix it and retry.
+      void notifyAlert(props.cliProfiles.error.value, { title: t('usage.rename-account') })
+      return
+    }
+    if (renamingId.value === id) renamingId.value = null
+  } finally {
+    renameSaving = false
+  }
+}
+
+// Two rows the user gave the same name still need telling apart, so a named
+// row also shows the email it stands for. Rows without an alias already read
+// as their email and get no second line.
+function rowEmail(profileId: string | null): string {
+  if (!props.cliProfiles.aliasFor?.(props.agentKey, profileId)) return ''
+  return props.cliProfiles.identityFor(props.agentKey, profileId)?.email ?? ''
 }
 
 // Rows read the same way the header chip does — alias, then the signed-in
@@ -547,7 +574,8 @@ function acctTitle(profileId: string | null): string {
               :placeholder="rowLabel(null, $t('usage.switch-default'))"
               :aria-label="$t('usage.rename-account')"
               @keydown.enter.prevent="commitRename"
-              @keydown.esc.prevent="cancelRename"
+              maxlength="64"
+              @keydown.esc.stop.prevent="cancelRename"
               @blur="commitRename"
               @click.stop
             />
@@ -563,7 +591,10 @@ function acctTitle(profileId: string | null): string {
               <span class="usage-acct-av default">{{
                 avatarInitial(rowLabel(null, $t('usage.switch-default')))
               }}</span>
-              <span class="usage-acct-name">{{ rowLabel(null, $t('usage.switch-default')) }}</span>
+              <span class="usage-acct-text">
+                <span class="usage-acct-name">{{ rowLabel(null, $t('usage.switch-default')) }}</span>
+                <span v-if="rowEmail(null)" class="usage-acct-email">{{ rowEmail(null) }}</span>
+              </span>
               <span v-if="acctSignedOut(null)" class="usage-acct-out">{{
                 $t('settings.accounts.cli.not-signed-in')
               }}</span>
@@ -602,7 +633,8 @@ function acctTitle(profileId: string | null): string {
               :placeholder="rowLabel(p.id)"
               :aria-label="$t('usage.rename-account')"
               @keydown.enter.prevent="commitRename"
-              @keydown.esc.prevent="cancelRename"
+              maxlength="64"
+              @keydown.esc.stop.prevent="cancelRename"
               @blur="commitRename"
               @click.stop
             />
@@ -618,7 +650,10 @@ function acctTitle(profileId: string | null): string {
               <span class="usage-acct-av" :style="{ background: avatarColor(p.id) }">{{
                 avatarInitial(rowLabel(p.id))
               }}</span>
-              <span class="usage-acct-name">{{ rowLabel(p.id) }}</span>
+              <span class="usage-acct-text">
+                <span class="usage-acct-name">{{ rowLabel(p.id) }}</span>
+                <span v-if="rowEmail(p.id)" class="usage-acct-email">{{ rowEmail(p.id) }}</span>
+              </span>
               <span v-if="acctSignedOut(p.id)" class="usage-acct-out">{{
                 $t('settings.accounts.cli.not-signed-in')
               }}</span>
@@ -999,11 +1034,21 @@ function acctTitle(profileId: string | null): string {
     0 0 0 2px var(--bg-overlay),
     0 0 0 3px var(--accent-fg);
 }
-.usage-acct-name {
+.usage-acct-text {
+  display: flex;
   flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+.usage-acct-name,
+.usage-acct-email {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.usage-acct-email {
+  font-size: var(--font-3xs);
+  color: var(--text-secondary);
 }
 .usage-acct-tick {
   flex-shrink: 0;

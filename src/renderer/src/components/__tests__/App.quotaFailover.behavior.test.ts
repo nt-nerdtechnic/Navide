@@ -11,6 +11,12 @@ import { LIMIT_RESET_BUFFER_MS } from '../../lib/loopPrompt'
 import { detectUsageLimit, QUOTA_READING_VETO, usageLimitDue, usageResumeAt } from '../../lib/cliUsageLimit'
 vi.mock('@navide/plugin-ui/shared', () => ({ settingsGet: (_: string, fallback: unknown) => fallback, settingsSet: vi.fn() }))
 import { loopBackoffMs, loopContinueReady, loopSettleMs, loopStallVerdict, loopWaitingOnSubagents } from '../../lib/completion'
+import {
+  LOOP_FAILOVER_RESUME_SETTING_KEY,
+  LOOP_FAILOVER_RESUME_TIMEOUT_MS,
+  loopFailoverResumeStep,
+  shouldResumeLoopAfterFailover,
+} from '../../lib/loopFailoverResume'
 
 // Execute the actual App functions, with IO replaced at their boundaries.
 // Mounting App would start terminal/backend lifecycles; copying the functions
@@ -21,6 +27,7 @@ const names = [
   'fireLoopResume', 'fireLoopContinue', 'startLoopLimitWatcher',
   'clearPaneUsageLimit', 'clearPaneUsageLimits', 'dismissPaneUsageLimit',
   'resumeLoopNow', 'continueRestoredPane', 'paneUsageLimited',
+  'resumeLoopAfterFailover', 'loopResumesAfterFailover', 'verifiedHotSwitchedPanes',
 ]
 function appFunctions(names: string[], scope: Record<string, unknown>) {
   const selected = ast.statements.filter((node) => ts.isFunctionDeclaration(node) && names.includes(node.name?.text ?? ''))
@@ -49,7 +56,16 @@ function quotaCommitHandler(scope: Record<string, unknown>) {
   return new Function(...Object.keys(scope), `${js}\nreturn handler`)(...Object.values(scope)) as (payload: unknown) => void
 }
 
-function harness() {
+/** Scope for loopResumesAfterFailover: the opt-in setting and the policy. */
+function loopFailoverScope(enabled: boolean, mode = 'auto') {
+  return {
+    settingsGet: (key: string, fallback: unknown) => (key === LOOP_FAILOVER_RESUME_SETTING_KEY ? enabled : fallback),
+    LOOP_FAILOVER_RESUME_SETTING_KEY, shouldResumeLoopAfterFailover, loopFailoverResumeStep,
+    quotaFailover: { state: { value: { policy: { mode } } } },
+  }
+}
+
+function harness(opts: { loopFailoverResume?: boolean } = {}) {
   const now = Date.now()
   const panes = ref([{
     id: 'p1', agentKey: 'claude', loopActive: true, loopWaitUntil: now + 5000 as number | null,
@@ -76,14 +92,76 @@ function harness() {
     injectPane: inject, withLoopDoneInstruction: (s: string) => s, loopResumeTextFor: () => 'continue',
     LOOP_ESTIMATE_WINDOW_MS: 18000000, armLoopTurn: vi.fn(), stopLoopComplete: vi.fn(),
     continueInFlight: new Set(), messagingHoldKey: () => null,
-    settingsGet: (_key: string, fallback: string) => fallback,
     LOOP_RESUME_SETTING_KEY: 'loop-resume', DEFAULT_LOOP_RESUME: 'continue',
+    loopFailoverResumeArmed: new Map<string, number>(),
+    ...loopFailoverScope(!!opts.loopFailoverResume),
   }
   const fns = appFunctions(names, scope)
   fns.startLoopLimitWatcher('p1')
   watchers.get('p1')!.armedAt = now - 30000
-  return { pane, fns, watchers, acquire, inject }
+  const commit = quotaCommitHandler({ ...scope, ...fns })
+  return { pane, fns, watchers, acquire, inject, commit, armed: scope.loopFailoverResumeArmed }
 }
+
+const hotCommit = { agentKey: 'claude', incidentId: 'inc', switchMode: 'hot', restartStrategy: 'none', state: 'committed', toSlotId: 'b', panes: [{ paneId: 'p1' }] }
+
+describe('loop resume after an automatic failover switch (opt-in)', () => {
+  beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(new Date('2026-09-21T10:01:00Z')) })
+  afterEach(() => { vi.clearAllTimers(); vi.useRealTimers() })
+
+  it('resumes the loop once the switch clears the flag, with no Continue button', async () => {
+    const h = harness({ loopFailoverResume: true })
+    h.commit(hotCommit)
+    expect(h.pane.resumeContinueAvailable).toBe(false)
+    h.fns.clearPaneUsageLimit(h.pane, 'account-switch', true, { resumeLoop: false })
+    expect(h.pane.resumeContinueAvailable).toBe(false)
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(h.inject).toHaveBeenCalledTimes(1)
+    expect(h.inject.mock.calls[0][2]).toBe('loop-failover-resume')
+    expect(h.pane.loopWaitUntil).toBeNull()
+    expect(h.pane.resumeContinueAvailable).toBe(false)
+    expect(h.armed.has('p1')).toBe(false)
+  })
+
+  it('does not resume while the exhausted flag is still lit', async () => {
+    const h = harness({ loopFailoverResume: true })
+    h.commit(hotCommit)
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(h.inject).not.toHaveBeenCalled()
+    expect(h.armed.has('p1')).toBe(true)
+  })
+
+  it('falls back to the Continue button when the switch never settles', async () => {
+    const h = harness({ loopFailoverResume: true })
+    h.commit(hotCommit)
+    await vi.advanceTimersByTimeAsync(LOOP_FAILOVER_RESUME_TIMEOUT_MS + 5000)
+    expect(h.inject).not.toHaveBeenCalled()
+    expect(h.pane.resumeContinueAvailable).toBe(true)
+    expect(h.armed.has('p1')).toBe(false)
+  })
+
+  it('restores the parked wait and offers Continue when the resume cannot be typed', async () => {
+    const h = harness({ loopFailoverResume: true })
+    const parked = h.pane.loopWaitUntil
+    h.inject.mockResolvedValueOnce(false)
+    h.commit(hotCommit)
+    h.fns.clearPaneUsageLimit(h.pane, 'account-switch', true, { resumeLoop: false })
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(h.inject).toHaveBeenCalledTimes(1)
+    expect(h.pane.loopWaitUntil).toBe(parked)
+    expect(h.pane.resumeContinueAvailable).toBe(true)
+  })
+
+  it('keeps the existing Continue offer when the setting is off', async () => {
+    const h = harness()
+    h.commit(hotCommit)
+    expect(h.pane.resumeContinueAvailable).toBe(true)
+    h.fns.clearPaneUsageLimit(h.pane, 'account-switch', true, { resumeLoop: false })
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(h.inject).not.toHaveBeenCalled()
+    expect(h.armed.size).toBe(0)
+  })
+})
 
 describe('App quota failover loop consumers', () => {
   beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(new Date('2026-09-21T10:01:00Z')) })
@@ -326,6 +404,33 @@ describe('App quota spawn hooks', () => {
     expect(rebuild).toHaveBeenCalledWith('old-pane', expect.objectContaining({ quotaCommit: ev, preserveScrollback: true, offerContinue: true }))
   })
 
+  it.each([true, false])('carries an opted-in loop onto the restarted pane and arms it (enabled=%s)', async (enabled) => {
+    const rebuild = vi.fn(async (_id: string, opts: any) => { opts.onReplaced('new-pane') })
+    const panes = ref<Record<string, any>[]>([
+      { id: 'old-pane', loopActive: true, loopSkillId: 'skill', loopTurnCount: 3, loopMaxTurns: 10 },
+      { id: 'new-pane', resumeContinueAvailable: true },
+    ])
+    const armed = new Map<string, number>()
+    const startLoopLimitWatcher = vi.fn()
+    const fns = appFunctions(['quotaRestartPane', 'loopResumesAfterFailover'], {
+      rebuildPaneViaResume: rebuild, panes, paneRefs: { 'new-pane': { sessionId: 'new-term' } },
+      paneResumeSessionId: () => 's', bumpLoopGen: vi.fn(), startLoopLimitWatcher,
+      loopFailoverResumeArmed: armed, ...loopFailoverScope(enabled),
+    })
+    const ev = { transactionId: 'tx-1', toSlotId: 'slot-b', state: 'committed', switchMode: 'restart', restartStrategy: 'resume' }
+    await fns.quotaRestartPane({ paneId: 'old-pane' }, ev)
+    const revived = panes.value[1]
+    if (enabled) {
+      expect(revived).toMatchObject({ loopActive: true, loopSkillId: 'skill', loopTurnCount: 3, loopMaxTurns: 10, resumeContinueAvailable: false })
+      expect(startLoopLimitWatcher).toHaveBeenCalledWith('new-pane')
+      expect(armed.has('new-pane')).toBe(true)
+    } else {
+      expect(revived.loopActive).toBeUndefined()
+      expect(revived.resumeContinueAvailable).toBe(true)
+      expect(armed.size).toBe(0)
+    }
+  })
+
   it('new conversation preserves the old pane and carries only model/effort plus transaction lineage', async () => {
     const old = { id: 'old-pane', model: 'model', effort: 'high', roleKey: 'worker', stageId: 'stage', kickoffPrompt: 'private task' }
     const panes = ref([old])
@@ -361,6 +466,7 @@ describe('manual hot account change consumed by the next health tick', () => {
       unseenTail: () => '', detectUsageLimit, QUOTA_READING_VETO, PANE_HEALTH_TAIL_CHARS: 2000,
       quotaFailover: { agentHasActiveTransaction: () => false, report },
       forcedRestartAgentKey: () => null, fireLoopResume: vi.fn(),
+      loopFailoverResumeArmed: new Map(), loopResumesAfterFailover: () => false,
     }
     const fns = appFunctions(['verifiedHotSwitchedPanes', 'paneQuotaReading', 'clearPaneUsageLimits', 'clearPaneUsageLimit', 'checkPaneUsageLimit', 'raiseFromQuotaReading'], scope)
     const changed = backendHandler('cli_profiles.changed', { ...scope, ...fns })

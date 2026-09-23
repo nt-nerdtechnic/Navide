@@ -493,6 +493,31 @@ function importedSlots(agentKey: string) {
   return props.api.importedSlotsFor(agentKey)
 }
 
+// An empty slot shows no block, only a compact "Paste credential" button in
+// its action row (a pasted credential works locally, with or without sync).
+// Pressing it opens the block with its form until the paste is saved or
+// cancelled; a stored credential or a cloud copy keeps the block up.
+const portablePasting = ref(new Set<string>())
+
+function portableShown(agentKey: string, slotId: string): boolean {
+  return (
+    Boolean(portableMeta(agentKey, slotId)?.configured) ||
+    portablePasting.value.has(`${agentKey}/${slotId}`) ||
+    props.api.cloudFor(agentKey, slotId === '__default__' ? null : slotId).length > 0
+  )
+}
+
+function canStartPortable(agentKey: string, slotId: string): boolean {
+  return portableAgent(agentKey) && !portableShown(agentKey, slotId)
+}
+
+function setPortablePasting(agentKey: string, slotId: string, on: boolean): void {
+  const next = new Set(portablePasting.value)
+  if (on) next.add(`${agentKey}/${slotId}`)
+  else next.delete(`${agentKey}/${slotId}`)
+  portablePasting.value = next
+}
+
 // Cloud state is read when the pane opens; the metadata itself rides on the
 // profile list and its `.changed` broadcasts.
 onMounted(() => void props.api.refreshCloud())
@@ -573,6 +598,7 @@ onMounted(() => void props.api.refreshCloud())
                 class="cli-card-rename"
                 :placeholder="rowName(spec.agentKey, p)"
                 :aria-label="$t('settings.accounts.cli.rename')"
+                maxlength="64"
                 @keydown.enter.prevent="commitRename(spec.agentKey, p)"
                 @keydown.esc.prevent="cancelRename"
                 @blur="commitRename(spec.agentKey, p)"
@@ -634,11 +660,13 @@ onMounted(() => void props.api.refreshCloud())
             </template>
 
             <PortableCredentialBlock
-              v-if="portableAgent(spec.agentKey)"
+              v-if="portableAgent(spec.agentKey) && portableShown(spec.agentKey, p?.id ?? '__default__')"
               :api="api"
               :agent-key="spec.agentKey"
               :slot-id="p?.id ?? '__default__'"
               :meta="portableMeta(spec.agentKey, p?.id ?? '__default__')"
+              :start-open="portablePasting.has(`${spec.agentKey}/${p?.id ?? '__default__'}`)"
+              @close="setPortablePasting(spec.agentKey, p?.id ?? '__default__', false)"
             />
 
             <!-- Quota area (single-element v-for = local display-model alias). -->
@@ -749,6 +777,13 @@ onMounted(() => void props.api.refreshCloud())
                   @click="signIn(spec.agentKey, p?.id ?? null)"
                 >
                   {{ $t('settings.accounts.cli.sign-in') }}
+                </button>
+                <button
+                  v-if="canStartPortable(spec.agentKey, p?.id ?? '__default__')"
+                  class="cli-btn ghost sm"
+                  @click="setPortablePasting(spec.agentKey, p?.id ?? '__default__', true)"
+                >
+                  {{ $t('settings.accounts.cli.portable-paste') }}
                 </button>
                 <button
                   v-if="p || rowIdentity(spec.agentKey, null)?.signedIn"

@@ -163,6 +163,23 @@ def _empty_doc() -> dict[str, Any]:
     }
 
 
+MAX_NAME_LENGTH = 64
+
+
+def _clean_name(name: str) -> str:
+    """A user-given alias as stored: NFC, control (Cc) and format (Cf)
+    characters dropped, surrounding whitespace trimmed. An alias longer than
+    ``MAX_NAME_LENGTH`` is rejected rather than truncated, so what is saved is
+    always what the user typed."""
+    kept = "".join(
+        ch for ch in unicodedata.normalize("NFC", name)
+        if unicodedata.category(ch) not in ("Cc", "Cf")
+    ).strip()
+    if len(kept) > MAX_NAME_LENGTH:
+        raise ValueError(f"account name is longer than {MAX_NAME_LENGTH} characters")
+    return kept
+
+
 class CliProfilesStore:
     """SQLite-backed registry of CLI account profiles (kv document, lazy dirs)."""
 
@@ -311,7 +328,7 @@ class CliProfilesStore:
         """Change the display name only — the home directory never moves.
         A blank name drops the user's alias: the profile goes back to an
         auto-generated "Account N" and counts as non-custom again."""
-        clean_name = name.strip()
+        clean_name = _clean_name(name)
         with self._lock:
             doc = self._read()
             for p in doc["profiles"]:
@@ -332,7 +349,7 @@ class CliProfilesStore:
         """Alias the built-in Default slot of ``agent_key``; a blank name
         clears it back to unnamed. Returns every agent's Default alias."""
         self._validate_agent_key(agent_key)
-        clean_name = name.strip()
+        clean_name = _clean_name(name)
         with self._lock:
             doc = self._read()
             if clean_name:

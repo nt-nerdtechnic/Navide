@@ -387,6 +387,9 @@ export function useCliProfiles(backend: ReturnType<typeof useBackend>) {
       profiles.value = resp.payload.profiles
       defaults.value = resp.payload.defaults
       if (resp.payload.defaultNames) defaultNames.value = resp.payload.defaultNames
+      // A Default rename succeeds with a null profile, so callers read
+      // failure from `error`; a stale one must not outlive this success.
+      error.value = ''
       return resp.payload.profile
     } catch (err) {
       error.value = err instanceof Error ? err.message : 'rename failed'
