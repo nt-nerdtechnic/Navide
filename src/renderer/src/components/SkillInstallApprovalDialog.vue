@@ -96,9 +96,12 @@ async function decide(approve: boolean): Promise<void> {
   busy.value = true
   error.value = ''
   try {
+    const confirm = await window.agentTeam?.trustConfirm(
+      'skills.install_approval.decide', '', `${approval.approval_id}:${approve ? 'approve' : 'reject'}`,
+    )
     const res = await props.backend.send<{ approval: { status: string; error: string | null } }>(
       'skills.install_approval.decide',
-      { approval_id: approval.approval_id, approve },
+      { approval_id: approval.approval_id, approve, confirm },
       120_000,
     )
     if (!res.ok) {
@@ -126,9 +129,18 @@ onMounted(() => {
   clock = setInterval(() => { now.value = Date.now() }, 5_000)
   offs.push(props.backend.on('skills.install_approval_request', (raw) => enqueue(raw as SkillInstallApproval)))
   offs.push(props.backend.on('skills.install_approval_resolved', (raw) => {
-    const { approval_id: approvalId, status } = raw as { approval_id: string; status: string }
+    const { approval_id: approvalId, status, error: reason } = raw as {
+      approval_id: string
+      status: string
+      error: string | null
+    }
     // A failed install stays open so the user can read why.
     if (status !== 'failed' || current.value?.approval_id !== approvalId) drop(approvalId)
+    else if (!busy.value && !failed.value) {
+      // Approved in another window: this one has nothing left to decide.
+      failed.value = true
+      error.value = reason || t('skill-approval.failed')
+    }
   }))
   void refresh()
 })

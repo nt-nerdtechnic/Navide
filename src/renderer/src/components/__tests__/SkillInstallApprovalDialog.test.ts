@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import SkillInstallApprovalDialog, { type SkillInstallApproval } from '../SkillInstallApprovalDialog.vue'
 import { i18n } from '@navide/plugin-ui/foundation'
@@ -25,9 +25,18 @@ function approval(over: Partial<SkillInstallApproval> = {}): SkillInstallApprova
 describe('SkillInstallApprovalDialog', () => {
   let wrapper: VueWrapper | undefined
 
+  const trustConfirm = vi.fn(async (action: string, deviceId: string, subject: string) => ({
+    nonce: 'n', expires: '0', mac: `${action}|${deviceId}|${subject}`,
+  }))
+
+  beforeEach(() => {
+    ;(window as unknown as { agentTeam: unknown }).agentTeam = { trustConfirm }
+  })
+
   afterEach(() => {
     wrapper?.unmount()
     wrapper = undefined
+    delete (window as unknown as { agentTeam?: unknown }).agentTeam
   })
 
   async function open(mock: ReturnType<typeof createMockBackend>): Promise<VueWrapper> {
@@ -70,7 +79,10 @@ describe('SkillInstallApprovalDialog', () => {
     await wrapper.find('.sa-approve').trigger('click')
     await flushPromises()
     const decide = mock.sent.find((s) => s.type === 'skills.install_approval.decide')
-    expect(decide?.payload).toEqual({ approval_id: 'a1', approve: true })
+    expect(decide?.payload).toEqual({
+      approval_id: 'a1', approve: true,
+      confirm: { nonce: 'n', expires: '0', mac: 'skills.install_approval.decide||a1:approve' },
+    })
     expect(wrapper.find('.sa-dialog').exists()).toBe(false)
   })
 
@@ -83,7 +95,10 @@ describe('SkillInstallApprovalDialog', () => {
     await wrapper.find('.sa-reject').trigger('click')
     await flushPromises()
     const decide = mock.sent.find((s) => s.type === 'skills.install_approval.decide')
-    expect(decide?.payload).toEqual({ approval_id: 'a1', approve: false })
+    expect(decide?.payload).toEqual({
+      approval_id: 'a1', approve: false,
+      confirm: { nonce: 'n', expires: '0', mac: 'skills.install_approval.decide||a1:reject' },
+    })
   })
 
   it('closes when another window resolves the request', async () => {
@@ -110,6 +125,18 @@ describe('SkillInstallApprovalDialog', () => {
     expect(wrapper.find('.sa-approve').exists()).toBe(false)
     await wrapper.find('.sa-dismiss').trigger('click')
     expect(wrapper.find('.sa-dialog').exists()).toBe(false)
+  })
+
+  it('shows the failure when another window approved the request', async () => {
+    const mock = createMockBackend('connected')
+    mock.setResponse('skills.install_approvals.list', { approvals: [approval()] })
+    wrapper = await open(mock)
+    mock.emit('skills.install_approval_resolved', { approval_id: 'a1', status: 'failed', error: 'name taken' })
+    await flushPromises()
+    expect(wrapper.find('.sa-error').text()).toContain('name taken')
+    expect(wrapper.find('.sa-approve').exists()).toBe(false)
+    expect(wrapper.find('.sa-dismiss').exists()).toBe(true)
+    expect(mock.sent.some((s) => s.type === 'skills.install_approval.decide')).toBe(false)
   })
 
   it('offers only a dismiss for an expired request', async () => {

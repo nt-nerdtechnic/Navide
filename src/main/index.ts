@@ -3509,6 +3509,8 @@ const TRUST_CONFIRM_ACTIONS = new Set([
   // Destroys every pairing on this machine, so it is exactly the kind of act
   // this list exists for: only a window can ask for it.
   'p2p.trust.rebuild',
+  // Writes an agent-requested skill into the shared library.
+  'skills.install_approval.decide',
 ])
 ipcMain.handle('trust:confirm', async (event, action: unknown, deviceId: unknown, subject: unknown) => {
   // Minting is the one thing this list exists to keep away from anything

@@ -45,6 +45,11 @@ class ApprovalRegistry:
         with self._lock:
             self._expire()
             for record in self._records.values():
+                if (record["status"] == "rejected" and record["owner"] == owner
+                        and record["preview_id"] == preview["preview_id"]):
+                    raise SkillApprovalError(
+                        "SKILL_APPROVAL_REJECTED", "the user rejected installing this preview"
+                    )
                 if (record["status"] == "pending" and record["owner"] == owner
                         and record["preview_id"] == preview["preview_id"]
                         and record["expected_digest"] == preview["digest"]):

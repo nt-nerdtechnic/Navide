@@ -232,8 +232,9 @@ async def skills_install(
     digest from skills_prepare_install and explicit targets (null means all
     wired vendors); shared-root readers discover the skill automatically
     regardless of targets. Repeating the call for the same preview returns the
-    same pending request, and an already installed preview returns its original
-    receipt. Installation never executes bundled scripts or configures
+    same pending request, a preview the user rejected returns
+    SKILL_APPROVAL_REJECTED, and an already installed preview returns its
+    original receipt. Installation never executes bundled scripts or configures
     secrets, is add-only, and existing panes may need reopening. Enabled
     Skills sync can copy managed content and delivery settings to the user's
     other devices.
@@ -283,7 +284,9 @@ async def skills_install_status(approval_id: str, ctx: Context, wait_s: float = 
             record = await skills_approvals.wait(approval_id, min(float(wait_s), 60.0))
         if record is None or record["owner"] != owner:
             raise skills_approvals.SkillApprovalError(
-                "SKILL_APPROVAL_NOT_FOUND", "approval request not found"
+                "SKILL_APPROVAL_NOT_FOUND",
+                "approval request not found; requests are lost on a backend restart "
+                "and old ones are pruned, so prepare a new preview",
             )
         return {
             "ok": True,

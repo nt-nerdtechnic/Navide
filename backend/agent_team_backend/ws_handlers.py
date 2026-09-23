@@ -3196,8 +3196,14 @@ async def skills_install_approval_decide(session: "Session", msg_id: str, msg_ty
     from .skills_approvals import SkillApprovalError, decide
 
     approval_id = str(payload.get("approval_id") or "")
+    approve = payload.get("approve") is True
+    # MCP and the plugin broker hold this socket too; only a window can mint the
+    # confirmation, so an agent cannot approve its own request.
+    subject = f"{approval_id}:{'approve' if approve else 'reject'}"
+    if not await _confirmed(session, msg_id, msg_type, payload, subject=subject):
+        return
     try:
-        approval = await decide(approval_id, payload.get("approve") is True, _installer())
+        approval = await decide(approval_id, approve, _installer())
     except SkillApprovalError as err:
         await session.send_json(make_error(msg_id, msg_type, err.code, str(err), {"approval_id": approval_id}))
         return

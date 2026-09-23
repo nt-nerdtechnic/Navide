@@ -45,7 +45,7 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(skills_events, "notify_skills_changed", notify)
     source = tmp_path / "source"
     source.mkdir()
-    (source / "SKILL.md").write_text("---\nname: gated\ndescription: Gated skill\n---\nBody.\n")
+    (source / "SKILL.md").write_bytes(b"---\nname: gated\ndescription: Gated skill\n---\nBody.\n")
     yield SimpleNamespace(store=store, source=source, events=events, notifications=notifications)
     agent_messaging._reset_for_test()
     skills_approvals.registry._reset_for_test()
@@ -124,6 +124,15 @@ async def test_reject_writes_nothing(env) -> None:
     assert status["status"] == "rejected"
 
 
+async def test_a_rejected_preview_cannot_be_filed_again(env) -> None:
+    preview, requested = await _request(env)
+    await skills_approvals.decide(requested["approval_id"], False, skills_tools._installer())
+    events = len(env.events)
+    again = await skills_tools.skills_install(preview["preview_id"], preview["digest"], None, _ctx())
+    assert again["ok"] is False and again["error"]["code"] == "SKILL_APPROVAL_REJECTED"
+    assert skills_approvals.registry.pending() == [] and len(env.events) == events
+
+
 async def test_other_owner_cannot_see_the_request(env) -> None:
     _, requested = await _request(env)
     other = await skills_tools.skills_install_status(requested["approval_id"], _ctx("pb"))
@@ -196,7 +205,48 @@ async def test_failed_install_reports_error(env) -> None:
     assert env.events[-1]["payload"]["status"] == "failed"
 
 
-async def test_ws_handlers_list_and_decide(env) -> None:
+def _confirm(approval_id: str, approve: bool) -> dict[str, str]:
+    """What the main process mints for the window, as test_ws_handlers_trust does."""
+    import hashlib
+    import hmac
+    import uuid
+
+    nonce, expires = uuid.uuid4().hex, str(time.time() + 30)
+    subject = f"{approval_id}:{'approve' if approve else 'reject'}"
+    payload = "\x00".join(("navide/trust-confirm/v2", nonce, expires,
+                           "skills.install_approval.decide", "", subject))
+    mac = hmac.new(b"test-confirmation-key", payload.encode(), hashlib.sha256).hexdigest()
+    return {"nonce": nonce, "expires": expires, "mac": mac}
+
+
+@pytest.fixture
+def confirmable():
+    from agent_team_backend import confirm_token
+
+    confirm_token._reset_for_test("test-confirmation-key")
+    yield
+    confirm_token._reset_for_test()
+
+
+async def test_ws_decide_without_a_window_confirmation_is_refused(env, confirmable) -> None:
+    from tests.test_settings_ws_integration import _request as ws_request, _session
+
+    _, requested = await _request(env)
+    session = _session()
+    approval_id = requested["approval_id"]
+    refused = await ws_request(session, "skills.install_approval.decide",
+                               {"approval_id": approval_id, "approve": True})
+    assert refused["error"]["code"] == "CONFIRMATION_REQUIRED"
+    # A reject confirmation cannot be spent as an approval.
+    swapped = await ws_request(session, "skills.install_approval.decide",
+                               {"approval_id": approval_id, "approve": True,
+                                "confirm": _confirm(approval_id, False)})
+    assert swapped["error"]["code"] == "CONFIRMATION_REQUIRED"
+    assert skills_approvals.registry.get(approval_id)["status"] == "pending"
+    assert not (env.store.root / "gated").exists()
+
+
+async def test_ws_handlers_list_and_decide(env, confirmable) -> None:
     from tests.test_settings_ws_integration import _request as ws_request, _session
 
     _, requested = await _request(env)
@@ -205,10 +255,12 @@ async def test_ws_handlers_list_and_decide(env) -> None:
     [approval] = listed["payload"]["approvals"]
     assert approval["approval_id"] == requested["approval_id"] and approval["status"] == "pending"
     decided = await ws_request(session, "skills.install_approval.decide",
-                               {"approval_id": requested["approval_id"], "approve": True})
+                               {"approval_id": requested["approval_id"], "approve": True,
+                                "confirm": _confirm(requested["approval_id"], True)})
     assert decided["payload"]["approval"]["status"] == "installed"
     assert (env.store.root / "gated" / "SKILL.md").is_file()
     again = await ws_request(session, "skills.install_approval.decide",
-                             {"approval_id": requested["approval_id"], "approve": True})
+                             {"approval_id": requested["approval_id"], "approve": True,
+                              "confirm": _confirm(requested["approval_id"], True)})
     assert again["error"]["code"] == "SKILL_APPROVAL_NOT_PENDING"
     assert (await ws_request(session, "skills.install_approvals.list"))["payload"]["approvals"] == []
