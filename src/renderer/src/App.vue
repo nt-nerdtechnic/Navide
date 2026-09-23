@@ -115,7 +115,7 @@ import { i18n } from '@navide/plugin-ui/foundation'
 import { deriveAutoName, stripCliSessionContext } from './lib/autoName'
 import { bootWorkspaceToRecord } from './lib/bootWorkspace'
 import { diagLog } from '@navide/terminal'
-import { reclaimBlockedBy, focusedForReclaim, idleReclaimDisabled, idleReclaimThresholdMs, RECLAIM_NOW_THRESHOLD_MS, type ReclaimCandidate } from './lib/idleReclaim'
+import { reclaimBlockedBy, namedReclaimBlockedBy, focusedForReclaim, idleReclaimDisabled, idleReclaimThresholdMs, RECLAIM_NOW_THRESHOLD_MS, type ReclaimCandidate } from './lib/idleReclaim'
 import { findConsecutiveQuestionBlocks, findSentinel } from '@navide/terminal'
 import {
   buildCliPaneBufferReply,
@@ -15188,8 +15188,11 @@ const reclaimableNowIds = computed<string[]>(() => {
  *  does measure, never uses this. */
 const RECLAIM_ESTIMATE_BYTES_PER_CLI = 250 * 1024 * 1024
 
-/** Reclaim now, by explicit request. Returns how many actually went. */
-async function reclaimPanesNow(paneIds?: string[]): Promise<number> {
+/** Reclaim now, by explicit request. Returns how many actually went.
+ *
+ *  `named` marks panes the user picked out one by one, which may include the
+ *  focused one (see namedReclaimBlockedBy). */
+async function reclaimPanesNow(paneIds?: string[], named = false): Promise<number> {
   const targets = paneIds ?? reclaimableNowIds.value
   let reclaimed = 0
   for (const paneId of targets) {
@@ -15198,7 +15201,10 @@ async function reclaimPanesNow(paneIds?: string[]): Promise<number> {
     // while it runs.
     const pane = panes.value.find((p) => p.id === paneId)
     if (!pane) continue
-    if (reclaimBlockedBy(reclaimCandidate(pane), RECLAIM_NOW_THRESHOLD_MS, Date.now()) !== null) continue
+    const blocked = named
+      ? namedReclaimBlockedBy(reclaimCandidate(pane), Date.now())
+      : reclaimBlockedBy(reclaimCandidate(pane), RECLAIM_NOW_THRESHOLD_MS, Date.now())
+    if (blocked !== null) continue
     if (await reclaimIdlePane(paneId)) reclaimed++
   }
   if (reclaimed > 0) {
@@ -17399,16 +17405,22 @@ const ctxDescendantIds = computed<string[]>(() =>
 
 // "Reclaim": the per-pane release the Resource Manager already offers, on the
 // pane that was right-clicked. Greyed out under the conditions a sweep skips a
-// pane: focused, busy, unsent text, nothing to resume from.
+// pane — busy, unsent text, nothing to resume from — except focus: the user
+// picked this pane, so being in front of them is no reason to refuse.
+function namedReclaimable(paneId: string, now: number): boolean {
+  const pane = panes.value.find((p) => p.id === paneId)
+  return !!pane && namedReclaimBlockedBy(reclaimCandidate(pane), now) === null
+}
+
 const ctxReclaimable = computed<boolean>(() => {
   const m = paneCtxMenu.value
   if (!m || ctxIsBatch.value) return false
-  return reclaimableNowIds.value.includes(m.paneId)
+  return namedReclaimable(m.paneId, Date.now())
 })
 
 const ctxReclaimableIds = computed<string[]>(() => {
-  const reclaimable = new Set(reclaimableNowIds.value)
-  return ctxTargetIds.value.filter((id) => reclaimable.has(id))
+  const now = Date.now()
+  return ctxTargetIds.value.filter((id) => namedReclaimable(id, now))
 })
 const ctxAllMuted = computed(() =>
   ctxTargetIds.value.length > 0 && ctxTargetIds.value.every((id) => isPaneMuted(id))
@@ -17422,14 +17434,14 @@ const ctxAllMuted = computed(() =>
 // than leaving a click that appears to do nothing.
 async function reclaimPaneFromMenu(paneId: string): Promise<void> {
   closePaneCtxMenu()
-  if (await reclaimPanesNow([paneId])) return
+  if (await reclaimPanesNow([paneId], true)) return
   notifyRestore.toast(i18n.global.t('resource.reclaim-blocked'), { type: 'info' })
 }
 
 async function reclaimSelectedFromMenu(): Promise<void> {
   const ids = [...ctxTargetIds.value]
   closePaneCtxMenu()
-  if (await reclaimPanesNow(ids)) return
+  if (await reclaimPanesNow(ids, true)) return
   notifyRestore.toast(i18n.global.t('resource.reclaim-blocked'), { type: 'info' })
 }
 

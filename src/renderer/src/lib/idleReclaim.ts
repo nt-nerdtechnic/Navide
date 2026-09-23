@@ -164,6 +164,17 @@ export function focusedForReclaim(
  *  already answered the question the timer exists to answer. */
 export const RECLAIM_NOW_THRESHOLD_MS = 0
 
+/** Guard for a reclaim aimed at panes the user picked out one by one — the
+ *  right-clicked pane, or the multi-selection.
+ *
+ *  The focus guard exists so nothing is taken from in front of the user
+ *  without asking. Picking the pane is the asking, and multi-select hands
+ *  focus to the last pane clicked, so keeping the guard here always dropped
+ *  one of the selection. Every other guard still applies. */
+export function namedReclaimBlockedBy(pane: ReclaimCandidate, now: number): ReclaimBlock | null {
+  return reclaimBlockedBy({ ...pane, focused: false }, RECLAIM_NOW_THRESHOLD_MS, now)
+}
+
 /** Lower bound on the configured threshold, so a bad stored value cannot turn
  *  the sweep into "reclaim as soon as it stops typing". */
 export const IDLE_RECLAIM_MIN_MINUTES = 15
