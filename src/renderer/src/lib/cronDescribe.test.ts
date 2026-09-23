@@ -63,6 +63,14 @@ describe('describeCron', () => {
     expect(describeCron('*/15 * * * *', t)).toBe('executions.cron.every-minutes(n=15)')
   })
 
+  it('describes every minute, a fixed minute of every hour, and of every Nth hour', () => {
+    expect(describeCron('* * * * *', t)).toBe('executions.cron.every-minute')
+    expect(describeCron('5 * * * *', t)).toBe('executions.cron.hourly-at(minute=05)')
+    expect(describeCron('0 */2 * * *', t)).toBe('executions.cron.every-hours-at(n=2,minute=00)')
+    // A minute wildcard inside one hour is a window, not "every minute".
+    expect(describeCron('* 3 * * *', t)).toBe('* 3 * * *')
+  })
+
   it('describes a weekday, treating 7 as Sunday', () => {
     expect(describeCron('0 9 * * 1', t)).toBe(
       'executions.cron.weekly-at(weekday=executions.weekday-1,time=09:00)'
@@ -89,7 +97,7 @@ describe('describeCron', () => {
     // Lists, ranges and steps in the hour field.
     expect(describeCron('0 9-17 * * *', t)).toBe('0 9-17 * * *')
     expect(describeCron('0 1,13 * * *', t)).toBe('0 1,13 * * *')
-    expect(describeCron('0 */2 * * *', t)).toBe('0 */2 * * *')
+    expect(describeCron('0 */2 1 * *', t)).toBe('0 */2 1 * *')
     // Out-of-range numbers.
     expect(describeCron('0 25 * * *', t)).toBe('0 25 * * *')
     // Wrong field count.

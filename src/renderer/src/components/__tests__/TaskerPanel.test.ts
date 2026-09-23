@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
-// TaskerPanel (the right-rail "Tasker" tab) — filter semantics, row expansion,
-// the mandatory delete confirmation, inline `ok: false` error reporting, and the
+// TaskerPanel (the right-rail "Tasker" tab) — how rows are grouped into the
+// timeline / recurring / other / disabled lists, row expansion, the ⋯ menu and
+// the mandatory delete confirmation, one-line error reporting, and the
 // executions.changed rescan. The backend is passed in as a prop, so every
 // assertion is on the real wire payloads.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -245,37 +246,41 @@ async function mountPanel(
 ): Promise<VueWrapper> {
   const wrapper = mount(TaskerPanel, {
     props: { backend },
-    global: { plugins: [i18n] },
+    global: { plugins: [i18n], stubs: { teleport: true } },
   })
   await flushPromises()
   return wrapper
 }
 
-function cronSection(wrapper: VueWrapper) {
-  return wrapper.get('[data-section="crontab"]')
+function section(wrapper: VueWrapper, id: string) {
+  return wrapper.get(`[data-section="${id}"]`)
 }
-function agentSection(wrapper: VueWrapper) {
-  return wrapper.get('[data-section="launchagent"]')
+/** Expand a collapsible group (other / disabled start closed). */
+async function openGroup(wrapper: VueWrapper, id: string): Promise<void> {
+  const btn = section(wrapper, id).get('.tk-group')
+  if (btn.attributes('aria-expanded') !== 'true') await btn.trigger('click')
 }
-function daemonSection(wrapper: VueWrapper) {
-  return wrapper.get('[data-section="daemon"]')
+async function openAllGroups(wrapper: VueWrapper): Promise<void> {
+  for (const id of ['recurring', 'other', 'disabled']) {
+    if (wrapper.find(`[data-section="${id}"]`).exists()) await openGroup(wrapper, id)
+  }
 }
 function cronIds(wrapper: VueWrapper): (string | undefined)[] {
-  return cronSection(wrapper)
-    .findAll('[data-entry-id]')
-    .map((el) => el.attributes('data-entry-id'))
+  return wrapper.findAll('[data-entry-id]').map((el) => el.attributes('data-entry-id'))
 }
-function labelsIn(section: ReturnType<typeof agentSection>): (string | undefined)[] {
-  return section.findAll('[data-agent-label]').map((el) => el.attributes('data-agent-label'))
+function labelsIn(el: ReturnType<VueWrapper['get']>): (string | undefined)[] {
+  return el.findAll('[data-agent-label]').map((r) => r.attributes('data-agent-label'))
 }
-function agentLabels(wrapper: VueWrapper): (string | undefined)[] {
-  return labelsIn(agentSection(wrapper))
+function agentRow(wrapper: VueWrapper, label: string) {
+  return wrapper.get(`[data-agent-label="${label}"]`)
 }
-function daemonLabels(wrapper: VueWrapper): (string | undefined)[] {
-  return labelsIn(daemonSection(wrapper))
+function cronRow(wrapper: VueWrapper, id: string) {
+  return wrapper.get(`[data-entry-id="${id}"]`)
 }
-function scopesIn(section: ReturnType<typeof agentSection>): (string | undefined)[] {
-  return section.findAll('[data-scope]').map((el) => el.attributes('data-scope'))
+/** Removal lives behind the row's ⋯ menu. */
+async function clickRemove(row: ReturnType<VueWrapper['get']>): Promise<void> {
+  await row.get('.tk-act-more').trigger('click')
+  await row.get('.tk-act-remove').trigger('click')
 }
 
 describe('TaskerPanel', () => {
@@ -288,211 +293,227 @@ describe('TaskerPanel', () => {
     wire.listeners.clear()
     wire.holdType = null
     wire.hold = Promise.resolve()
+    localStorage.clear()
     // The panel keeps its last scan at module scope so remounting the rail tab
     // doesn't shell out again; a fresh module per test starts that cache empty.
     vi.resetModules()
     TaskerPanel = ((await import('../TaskerPanel.vue')) as { default: Component }).default
-  })
+    // A fresh module graph is transformed on the first import; under a loaded
+    // machine that alone can exceed the 10s default.
+  }, 30_000)
 
   afterEach(() => {
     wrapper?.unmount()
     wrapper = undefined
   })
 
-  it('scans on mount, and the Agents section defaults to showing all', async () => {
-    wrapper = await mountPanel()
+  // ── grouping ─────────────────────────────────────────────────────────────
 
+  it('scans on mount and sorts every row into the group its schedule allows', async () => {
+    wrapper = await mountPanel()
     expect(wire.calls.filter((c) => c.type === 'executions.list')).toHaveLength(1)
-    // crontab defaults to "enabled" — the disabled entry is hidden.
-    expect(cronIds(wrapper)).toEqual(['c1', 'c2'])
-    // Agents default to "all": the point of the section is seeing what is
-    // registered, not only what happens to be up right now.
-    expect(agentSection(wrapper).get('[data-filter="all"]').classes()).toContain('on')
-    expect(agentLabels(wrapper)).toHaveLength(4)
-  })
 
-  it('splits agents and daemons into their own sections by scope', async () => {
-    wrapper = await mountPanel()
+    // Exactly computable next runs: the daily crontab line (02:30) and the
+    // calendar LaunchAgent (03:00), soonest first.
+    const timeline = section(wrapper, 'timeline')
+    expect(timeline.findAll('.tk-item').map((el) => el.attributes('data-kind'))).toEqual([
+      'crontab',
+      'launchagent',
+    ])
+    expect(cronIds(wrapper)).toEqual(['c1'])
+    expect(labelsIn(timeline)).toEqual(['local.nightly.index'])
+    expect(timeline.findAll('[data-test="when-col"]').map((el) => el.text())).toEqual([
+      expect.stringContaining('02:30'),
+      expect.stringContaining('03:00'),
+    ])
 
-    // Agents: both the user's own and /Library/LaunchAgents — never a daemon.
-    expect(agentLabels(wrapper)).toEqual([
+    // Always-on, on-demand and unknowable schedules start collapsed, with a count.
+    const other = section(wrapper, 'other')
+    expect(other.get('.tk-group').attributes('aria-expanded')).toBe('false')
+    expect(other.get('.tk-count').text()).toBe('5')
+    expect(labelsIn(other)).toEqual([])
+
+    await openAllGroups(wrapper)
+    expect(cronIds(wrapper).sort()).toEqual(['c1', 'c2', 'c3'])
+    expect(labelsIn(section(wrapper, 'other')).sort()).toEqual([
       'com.syncthing.syncthing',
-      'local.nightly.index',
-      'local.legacy.backup',
+      'com.vendor.daemon',
       'com.vendor.updater',
+      'com.vendor.visible',
     ])
-    expect(scopesIn(agentSection(wrapper))).toEqual([
-      'user',
-      'user',
-      'user',
-      'system-agent',
-    ])
-
-    // Daemons: nothing but /Library/LaunchDaemons.
-    expect(daemonLabels(wrapper)).toEqual(['com.vendor.daemon', 'com.vendor.visible'])
-    expect(new Set(scopesIn(daemonSection(wrapper)))).toEqual(new Set(['system-daemon']))
-
-    // Each header counts its own section, not the whole payload.
-    expect(agentSection(wrapper).get('.tk-count').text()).toBe(
-      i18n.global.t('executions.count', { count: 4 })
-    )
-    expect(daemonSection(wrapper).get('.tk-count').text()).toBe(
-      i18n.global.t('executions.count', { count: 2 })
-    )
+    // Disabled: the switched-off crontab line and the unloaded agent.
+    expect(labelsIn(section(wrapper, 'disabled'))).toEqual(['local.legacy.backup'])
+    expect(section(wrapper, 'disabled').find('[data-entry-id="c3"]').exists()).toBe(true)
   })
 
-  it('gives the Daemons section no filters and no actions at all', async () => {
+  it('heads each day of the timeline once', async () => {
+    wrapper = await mountPanel()
+    const buckets = section(wrapper, 'timeline').findAll('.tk-bucket').map((el) => el.attributes('data-bucket'))
+    expect(buckets.length).toBeGreaterThanOrEqual(1)
+    expect(new Set(buckets).size).toBe(buckets.length)
+  })
+
+  it('puts a StartInterval job under Recurring, never on the clock', async () => {
+    const snap = snapshot()
+    ;(snap.launch_agents as { agents: Record<string, unknown>[] }).agents[0].keep_alive = false
+    ;(snap.launch_agents as { agents: Record<string, unknown>[] }).agents[0].start_interval = 1800
+    wire.overrides.set('executions.list', snap)
     wrapper = await mountPanel()
 
-    // A filter over rows that are read-only and mostly unknowable would be a
-    // control that changes nothing.
-    expect(daemonSection(wrapper).findAll('.tk-chip')).toHaveLength(0)
-    expect(daemonSection(wrapper).findAll('.tk-act')).toHaveLength(0)
-    expect(daemonSection(wrapper).findAll('.tk-acts')).toHaveLength(0)
+    // Recurring starts open.
+    const recurring = section(wrapper, 'recurring')
+    expect(recurring.get('.tk-group').attributes('aria-expanded')).toBe('true')
+    expect(labelsIn(recurring)).toEqual(['com.syncthing.syncthing'])
+    expect(recurring.find('[data-test="when-col"]').exists()).toBe(false)
+  })
+
+  it('remembers which groups the user opened', async () => {
+    wrapper = await mountPanel()
+    await openGroup(wrapper, 'other')
+    expect(localStorage.getItem('tasker.group.other')).toBe('1')
+    wrapper.unmount()
+
+    wrapper = await mountPanel()
+    expect(section(wrapper, 'other').get('.tk-group').attributes('aria-expanded')).toBe('true')
+  })
+
+  it('shows a failure bar and a flat failures-only list across all groups', async () => {
+    const snap = snapshot()
+    const agents = (snap.launch_agents as { agents: Record<string, unknown>[] }).agents
+    // A failing system agent sits in the collapsed "other" group.
+    agents[3].last_exit_code = 2
+    wire.overrides.set('executions.list', snap)
+    wrapper = await mountPanel()
+
+    const bar = wrapper.get('[data-test="failing-bar"]')
+    expect(bar.text()).toContain(i18n.global.t('executions.failing', { count: 2 }))
+    // The collapsed group still says it hides a failure.
+    expect(section(wrapper, 'other').find('.tk-group-err').exists()).toBe(true)
+
+    await bar.get('[data-test="only-failing"]').trigger('click')
+    expect(wrapper.find('[data-section="timeline"]').exists()).toBe(false)
+    expect(labelsIn(section(wrapper, 'failing')).sort()).toEqual(['com.vendor.updater', 'local.nightly.index'])
+
+    await wrapper.get('[data-test="only-failing"]').trigger('click')
+    expect(wrapper.find('[data-section="timeline"]').exists()).toBe(true)
+  })
+
+  it('shows no failure bar when nothing is failing', async () => {
+    const snap = snapshot()
+    ;(snap.launch_agents as { agents: Record<string, unknown>[] }).agents[1].last_exit_code = 0
+    wire.overrides.set('executions.list', snap)
+    wrapper = await mountPanel()
+    expect(wrapper.find('[data-test="failing-bar"]').exists()).toBe(false)
+  })
+
+  it('says when nothing is scheduled ahead, and offers to create the first job', async () => {
+    const snap = snapshot()
+    ;(snap.crontab as { entries: unknown[] }).entries = []
+    ;(snap.launch_agents as { agents: unknown[] }).agents = []
+    wire.overrides.set('executions.list', snap)
+    wrapper = await mountPanel()
+
+    expect(section(wrapper, 'timeline').get('.tk-empty').text()).toBe(i18n.global.t('executions.timeline.empty'))
+    expect(wrapper.get('[data-test="jobs-empty"]').text()).toContain(i18n.global.t('scheduler.empty'))
+    // Empty groups are not rendered at all.
+    expect(wrapper.find('[data-section="other"]').exists()).toBe(false)
+  })
+
+  // ── launchd rows ─────────────────────────────────────────────────────────
+
+  it('tells same-named launchd jobs apart by their vendor', async () => {
+    const snap = snapshot()
+    const base = (snap.launch_agents as { agents: Record<string, unknown>[] }).agents[0]
+    ;(snap.launch_agents as { agents: Record<string, unknown>[] }).agents = [
+      { ...base, label: 'com.google.GoogleUpdater.wake', name: 'wake', plist_path: '/u/g.plist' },
+      { ...base, label: 'com.citrolabs.EgoUpdater.wake', name: 'wake', plist_path: '/u/c.plist' },
+      { ...base, label: 'com.example.sync', name: 'sync', plist_path: '/u/s.plist' },
+    ]
+    wire.overrides.set('executions.list', snap)
+    wrapper = await mountPanel()
+    await openAllGroups(wrapper)
+
+    expect(agentRow(wrapper, 'com.google.GoogleUpdater.wake').get('.tk-name').text()).toBe('google · wake')
+    expect(agentRow(wrapper, 'com.citrolabs.EgoUpdater.wake').get('.tk-name').text()).toBe('citrolabs · wake')
+    expect(agentRow(wrapper, 'com.example.sync').get('.tk-name').text()).toBe('sync')
   })
 
   it('does not hardcode a daemon as unknown when launchctl can see it', async () => {
     wrapper = await mountPanel()
+    await openGroup(wrapper, 'other')
 
-    const visible = daemonSection(wrapper).get('[data-agent-label="com.vendor.visible"]')
+    const visible = agentRow(wrapper, 'com.vendor.visible')
     expect(visible.get('.tk-dot').classes()).toEqual(['tk-dot'])
     expect(visible.text()).toContain(i18n.global.t('executions.tag.pid', { pid: 77 }))
 
-    const unknown = daemonSection(wrapper).get('[data-agent-label="com.vendor.daemon"]')
+    const unknown = agentRow(wrapper, 'com.vendor.daemon')
     expect(unknown.get('.tk-dot').classes()).toEqual(['tk-dot', 'unknown'])
   })
 
-  it('expands and collapses rows in both launchd sections', async () => {
+  it('expands and collapses rows independently', async () => {
     wrapper = await mountPanel()
+    await openGroup(wrapper, 'other')
 
-    const agent = agentSection(wrapper).get('[data-agent-label="com.vendor.updater"]')
-    const daemon = daemonSection(wrapper).get('[data-agent-label="com.vendor.daemon"]')
+    const agent = agentRow(wrapper, 'com.vendor.updater')
+    const daemon = agentRow(wrapper, 'com.vendor.daemon')
 
     await agent.get('.tk-row-head').trigger('click')
     await daemon.get('.tk-row-head').trigger('click')
-    // One expanded set across both sections, so both stay open at once.
     expect(agent.find('.tk-detail').exists()).toBe(true)
-    expect(daemon.get('.tk-detail').text()).toContain(
-      '/Library/LaunchDaemons/com.vendor.daemon.plist'
-    )
+    expect(daemon.get('.tk-detail').text()).toContain('/Library/LaunchDaemons/com.vendor.daemon.plist')
 
     await daemon.get('.tk-row-head').trigger('click')
     expect(daemon.find('.tk-detail').exists()).toBe(false)
     expect(agent.find('.tk-detail').exists()).toBe(true)
   })
 
-  it('filters crontab entries by enabled state', async () => {
-    wrapper = await mountPanel()
-
-    await cronSection(wrapper).get('[data-filter="disabled"]').trigger('click')
-    expect(cronIds(wrapper)).toEqual(['c3'])
-
-    await cronSection(wrapper).get('[data-filter="all"]').trigger('click')
-    expect(cronIds(wrapper)).toEqual(['c1', 'c2', 'c3'])
-
-    await cronSection(wrapper).get('[data-filter="enabled"]').trigger('click')
-    expect(cronIds(wrapper)).toEqual(['c1', 'c2'])
-  })
-
-  it('filters Agents by running-or-loaded, and never touches the Daemons section', async () => {
-    wrapper = await mountPanel()
-
-    await agentSection(wrapper).get('[data-filter="stopped"]').trigger('click')
-    expect(agentLabels(wrapper)).toEqual(['local.legacy.backup'])
-    expect(daemonLabels(wrapper)).toHaveLength(2)
-
-    await agentSection(wrapper).get('[data-filter="all"]').trigger('click')
-    expect(agentLabels(wrapper)).toHaveLength(4)
-
-    await agentSection(wrapper).get('[data-filter="running"]').trigger('click')
-    expect(agentLabels(wrapper)).toEqual([
-      'com.syncthing.syncthing',
-      'local.nightly.index',
-      'com.vendor.updater',
-    ])
-    expect(daemonLabels(wrapper)).toHaveLength(2)
-  })
-
-  // ── system-level jobs (read-only) ─────────────────────────────────────────
-
   it('gives read-only rows no action buttons at all', async () => {
     wrapper = await mountPanel()
+    await openGroup(wrapper, 'other')
 
-    const managed = agentSection(wrapper).get('[data-agent-label="com.syncthing.syncthing"]')
+    const managed = agentRow(wrapper, 'com.syncthing.syncthing')
     expect(managed.find('.tk-act-toggle').exists()).toBe(true)
-    expect(managed.find('.tk-act-remove').exists()).toBe(true)
+    expect(managed.find('.tk-act-more').exists()).toBe(true)
 
-    // /Library/LaunchAgents lives in the Agents section but stays read-only.
-    expect(
-      agentSection(wrapper).get('[data-agent-label="com.vendor.updater"]').findAll('.tk-act')
-    ).toHaveLength(0)
+    for (const label of ['com.vendor.updater', 'com.vendor.daemon', 'com.vendor.visible']) {
+      expect(agentRow(wrapper, label).findAll('.tk-act')).toHaveLength(0)
+    }
   })
 
-  it('never calls an unknown state "stopped"', async () => {
+  it('never calls an unknown state "stopped", nor fades it', async () => {
     wrapper = await mountPanel()
+    await openGroup(wrapper, 'other')
     const stopped = i18n.global.t('executions.state.not-loaded')
     const unknown = i18n.global.t('executions.state.unknown')
 
-    const row = daemonSection(wrapper).get('[data-agent-label="com.vendor.daemon"]')
+    const row = agentRow(wrapper, 'com.vendor.daemon')
     await row.get('.tk-row-head').trigger('click')
     expect(row.text()).not.toContain(stopped)
     expect(row.get('.tk-detail').text()).toContain(unknown)
-    // A hollow dot, not the grey "stopped" one, and no dimmed row.
     expect(row.get('.tk-dot').classes()).toEqual(['tk-dot', 'unknown'])
-    expect(row.classes()).not.toContain('off')
+    expect(row.element.closest('.tk-item')?.classList.contains('off')).toBe(false)
   })
 
-  it('keeps an unknown state out of both Agents filters', async () => {
-    // The backend only reports runtime_known: false for system daemons, so this
-    // shape cannot reach the Agents section today — but the filter guard is what
-    // keeps "unknown" from being silently counted as stopped, so pin it here.
-    const opaque = snapshot()
-    const agents = (opaque.launch_agents as { agents: Record<string, unknown>[] }).agents
-    agents.push({
-      ...agents[3],
-      label: 'com.vendor.opaque',
-      name: 'Opaque Agent',
-      plist_path: '/Library/LaunchAgents/com.vendor.opaque.plist',
-      runtime_known: false,
-      loaded: null,
-      running: null,
-      pid: null,
-    })
-    wire.overrides.set('executions.list', opaque)
+  it('fades only the rows in the Disabled group', async () => {
     wrapper = await mountPanel()
-
-    // Unknown is neither running nor stopped: it appears under "all" only.
-    await agentSection(wrapper).get('[data-filter="running"]').trigger('click')
-    expect(agentLabels(wrapper)).not.toContain('com.vendor.opaque')
-    await agentSection(wrapper).get('[data-filter="stopped"]').trigger('click')
-    expect(agentLabels(wrapper)).not.toContain('com.vendor.opaque')
-    await agentSection(wrapper).get('[data-filter="all"]').trigger('click')
-    expect(agentLabels(wrapper)).toContain('com.vendor.opaque')
+    await openAllGroups(wrapper)
+    const faded = wrapper.findAll('.tk-item.off')
+    expect(faded.length).toBe(2)
+    for (const el of faded) expect(el.element.closest('[data-section]')?.getAttribute('data-section')).toBe('disabled')
   })
 
   it('tags each system row with its scope and leaves user rows untagged', async () => {
     wrapper = await mountPanel()
+    await openGroup(wrapper, 'other')
 
-    const tagsOf = (
-      section: ReturnType<typeof agentSection>,
-      label: string
-    ): string[] =>
-      section
-        .get(`[data-agent-label="${label}"]`)
-        .findAll('.tk-tag.scope')
-        .map((el) => el.text())
+    const tagsOf = (label: string): string[] =>
+      agentRow(wrapper!, label).findAll('.tk-tag.scope').map((el) => el.text())
 
-    expect(tagsOf(agentSection(wrapper), 'com.syncthing.syncthing')).toEqual([])
-    expect(tagsOf(agentSection(wrapper), 'com.vendor.updater')).toEqual([
-      i18n.global.t('executions.scope.system-agent'),
-    ])
-    expect(tagsOf(daemonSection(wrapper), 'com.vendor.daemon')).toEqual([
-      i18n.global.t('executions.scope.system-daemon'),
-    ])
+    expect(tagsOf('com.syncthing.syncthing')).toEqual([])
+    expect(tagsOf('com.vendor.updater')).toEqual([i18n.global.t('executions.scope.system-agent')])
+    expect(tagsOf('com.vendor.daemon')).toEqual([i18n.global.t('executions.scope.system-daemon')])
 
-    // The expanded detail names the scope and the full plist path, so the user
-    // can tell which directory a job came from.
-    const row = agentSection(wrapper).get('[data-agent-label="com.vendor.updater"]')
+    const row = agentRow(wrapper, 'com.vendor.updater')
     await row.get('.tk-row-head').trigger('click')
     const detail = row.get('.tk-detail').text()
     expect(detail).toContain(i18n.global.t('executions.scope.system-agent'))
@@ -502,12 +523,7 @@ describe('TaskerPanel', () => {
   it('keeps the same label registered in two directories as two rows', async () => {
     const twins = snapshot()
     const label = 'com.google.keystone.agent'
-    const base = (
-      (twins.launch_agents as { agents: Record<string, unknown>[] }).agents as Record<
-        string,
-        unknown
-      >[]
-    )[0]
+    const base = (twins.launch_agents as { agents: Record<string, unknown>[] }).agents[0]
     ;(twins.launch_agents as { agents: Record<string, unknown>[] }).agents = [
       { ...base, label, name: 'Keystone', plist_path: `/Users/t/Library/LaunchAgents/${label}.plist` },
       {
@@ -521,21 +537,49 @@ describe('TaskerPanel', () => {
     ]
     wire.overrides.set('executions.list', twins)
     wrapper = await mountPanel()
+    await openGroup(wrapper, 'other')
 
-    expect(agentLabels(wrapper)).toEqual([label, label])
-    // Rows are keyed by plist path, so expanding one must not expand the other.
-    const rows = agentSection(wrapper).findAll('[data-agent-key]')
+    expect(labelsIn(section(wrapper, 'other'))).toEqual([label, label])
+    const rows = section(wrapper, 'other').findAll('[data-agent-key]')
     await rows[0].get('.tk-row-head').trigger('click')
     expect(rows[0].find('.tk-detail').exists()).toBe(true)
     expect(rows[1].find('.tk-detail').exists()).toBe(false)
-    // Only the user copy is actionable.
+    // Only the user copy is actionable; the scope tag tells the two apart.
     expect(rows[0].findAll('.tk-act')).toHaveLength(2)
     expect(rows[1].findAll('.tk-act')).toHaveLength(0)
+    expect(rows[1].find('.tk-tag.scope').exists()).toBe(true)
   })
+
+  it('describes an agent with no trigger as on demand, not a dash', async () => {
+    const snap = snapshot()
+    const a = (snap.launch_agents as { agents: Record<string, unknown>[] }).agents[0]
+    a.keep_alive = false
+    wire.overrides.set('executions.list', snap)
+    wrapper = await mountPanel()
+    await openGroup(wrapper, 'other')
+    expect(agentRow(wrapper, 'com.syncthing.syncthing').get('.tk-desc').text()).toBe(
+      i18n.global.t('executions.agent.unknown')
+    )
+    expect(i18n.global.t('executions.agent.unknown')).not.toBe('—')
+  })
+
+  it('reveals a LaunchAgent label and plist path when its row is expanded', async () => {
+    wrapper = await mountPanel()
+    const row = agentRow(wrapper, 'local.nightly.index')
+
+    expect(row.find('.tk-detail').exists()).toBe(false)
+    await row.get('.tk-row-head').trigger('click')
+
+    const detail = row.get('.tk-detail')
+    expect(detail.text()).toContain('local.nightly.index')
+    expect(detail.text()).toContain('/Users/t/Library/LaunchAgents/local.nightly.index.plist')
+  })
+
+  // ── crontab rows ─────────────────────────────────────────────────────────
 
   it('collapses a crontab row by default and reveals command + raw when expanded', async () => {
     wrapper = await mountPanel()
-    const row = cronSection(wrapper).get('[data-entry-id="c1"]')
+    const row = cronRow(wrapper, 'c1')
 
     expect(row.find('.tk-detail').exists()).toBe(false)
     expect(row.text()).not.toContain('/Volumes/Archive')
@@ -549,22 +593,22 @@ describe('TaskerPanel', () => {
     expect(row.find('.tk-detail').exists()).toBe(false)
   })
 
-  it('reveals a LaunchAgent label and plist path when its row is expanded', async () => {
+  it('words an every-minute crontab line instead of showing the raw fields', async () => {
+    const snap = snapshot()
+    const e = (snap.crontab as { entries: Record<string, unknown>[] }).entries[0]
+    e.schedule = '* * * * *'
+    wire.overrides.set('executions.list', snap)
     wrapper = await mountPanel()
-    const row = agentSection(wrapper).get('[data-agent-label="local.nightly.index"]')
 
-    expect(row.find('.tk-detail').exists()).toBe(false)
-    await row.get('.tk-row-head').trigger('click')
-
-    const detail = row.get('.tk-detail')
-    expect(detail.text()).toContain('local.nightly.index')
-    expect(detail.text()).toContain('/Users/t/Library/LaunchAgents/local.nightly.index.plist')
+    // Every minute is a heartbeat: Recurring, not the timeline.
+    const row = section(wrapper, 'recurring').get('[data-entry-id="c1"]')
+    expect(row.get('.tk-desc').text()).toBe(i18n.global.t('executions.cron.every-minute'))
   })
 
   it('toggles a crontab entry with its raw line as the target', async () => {
     wrapper = await mountPanel()
 
-    await cronSection(wrapper).get('[data-entry-id="c1"] .tk-act-toggle').trigger('click')
+    await cronRow(wrapper, 'c1').get('.tk-act-toggle').trigger('click')
     await flushPromises()
 
     const toggles = wire.calls.filter((c) => c.type === 'executions.set_enabled')
@@ -578,19 +622,32 @@ describe('TaskerPanel', () => {
     expect(wire.calls.filter((c) => c.type === 'executions.list')).toHaveLength(2)
   })
 
+  // ── removal ──────────────────────────────────────────────────────────────
+
+  it('keeps Remove behind the ⋯ menu, not on the row', async () => {
+    wrapper = await mountPanel()
+    const row = cronRow(wrapper, 'c1')
+    expect(row.find('.tk-act-remove').exists()).toBe(false)
+
+    await row.get('.tk-act-more').trigger('click')
+    expect(row.find('.tk-menu .tk-act-remove').exists()).toBe(true)
+
+    // A click anywhere else closes it.
+    window.dispatchEvent(new Event('click'))
+    await flushPromises()
+    expect(row.find('.tk-menu').exists()).toBe(false)
+  })
+
   it('never removes a crontab entry without a confirmation', async () => {
     wrapper = await mountPanel()
-    const row = cronSection(wrapper).get('[data-entry-id="c1"]')
+    const row = cronRow(wrapper, 'c1')
 
-    await row.get('.tk-act-remove').trigger('click')
-    // Clicking the trash icon must not reach the backend on its own.
+    await clickRemove(row)
     expect(wire.calls.filter((c) => c.type === 'executions.remove')).toHaveLength(0)
+    expect(row.find('.tk-menu').exists()).toBe(false)
 
     const confirm = row.get('.tk-confirm')
-    // The prompt shows the exact line that will disappear from the crontab.
-    expect(confirm.text()).toContain(
-      '30 2 * * * ~/bin/backup-photos.sh --destination /Volumes/Archive'
-    )
+    expect(confirm.text()).toContain('30 2 * * * ~/bin/backup-photos.sh --destination /Volumes/Archive')
 
     await confirm.get('.tk-confirm-ok').trigger('click')
     await flushPromises()
@@ -605,9 +662,9 @@ describe('TaskerPanel', () => {
 
   it('cancelling the confirmation sends nothing', async () => {
     wrapper = await mountPanel()
-    const row = cronSection(wrapper).get('[data-entry-id="c1"]')
+    const row = cronRow(wrapper, 'c1')
 
-    await row.get('.tk-act-remove').trigger('click')
+    await clickRemove(row)
     await row.get('.tk-confirm .tk-confirm-cancel').trigger('click')
 
     expect(row.find('.tk-confirm').exists()).toBe(false)
@@ -616,9 +673,9 @@ describe('TaskerPanel', () => {
 
   it('confirms a LaunchAgent removal with its label and plist path', async () => {
     wrapper = await mountPanel()
-    const row = agentSection(wrapper).get('[data-agent-label="local.nightly.index"]')
+    const row = agentRow(wrapper, 'local.nightly.index')
 
-    await row.get('.tk-act-remove').trigger('click')
+    await clickRemove(row)
     expect(wire.calls.filter((c) => c.type === 'executions.remove')).toHaveLength(0)
 
     const confirm = row.get('.tk-confirm')
@@ -633,33 +690,80 @@ describe('TaskerPanel', () => {
     expect(removals[0].payload).toEqual({ kind: 'launchagent', target: 'local.nightly.index' })
   })
 
-  it('surfaces an ok:false error inline under the section that failed', async () => {
+  it('confirms only the clicked row when two crontab lines are identical', async () => {
+    const twins = snapshot()
+    const raw = '0 * * * * ~/bin/twin.sh'
+    const twin = (id: string) => ({
+      id,
+      name: 'twin',
+      schedule: '0 * * * *',
+      schedule_kind: 'standard',
+      command: '~/bin/twin.sh',
+      raw,
+      enabled: true,
+    })
+    ;(twins.crontab as Record<string, unknown>).entries = [twin('abc123-0'), twin('abc123-1')]
+    wire.overrides.set('executions.list', twins)
     wrapper = await mountPanel()
+
+    await clickRemove(cronRow(wrapper, 'abc123-1'))
+
+    expect(wrapper.findAll('.tk-confirm')).toHaveLength(1)
+    expect(cronRow(wrapper, 'abc123-1').find('.tk-confirm').exists()).toBe(true)
+    expect(cronRow(wrapper, 'abc123-0').find('.tk-confirm').exists()).toBe(false)
+  })
+
+  it('disables the confirmation OK while another mutation is in flight', async () => {
+    wrapper = await mountPanel()
+    await openGroup(wrapper, 'other')
+
+    const row = cronRow(wrapper, 'c1')
+    await clickRemove(row)
+    expect(row.get('.tk-confirm-ok').attributes('disabled')).toBeUndefined()
+
+    const releaseToggle = holdNext('executions.set_enabled')
+    await cronRow(wrapper, 'c2').get('.tk-act-toggle').trigger('click')
+    await flushPromises()
+
+    expect(row.get('.tk-confirm-ok').attributes('disabled')).toBeDefined()
+
+    releaseToggle()
+    await flushPromises()
+  })
+
+  // ── errors ───────────────────────────────────────────────────────────────
+
+  it('surfaces an ok:false error as one inline line for the source that failed', async () => {
+    wrapper = await mountPanel()
+    await openGroup(wrapper, 'other')
     wire.overrides.set('executions.set_enabled', {
       ok: false,
       error: 'Boot-out failed: 5: Input/output error',
     })
 
-    await agentSection(wrapper)
-      .get('[data-agent-label="com.syncthing.syncthing"] .tk-act-toggle')
-      .trigger('click')
+    await agentRow(wrapper, 'com.syncthing.syncthing').get('.tk-act-toggle').trigger('click')
     await flushPromises()
 
     const err = wrapper.get('[data-error-section="launchagent"]')
     expect(err.text()).toContain('Boot-out failed: 5: Input/output error')
+    // The full message stays reachable when the line is cut.
+    expect(err.attributes('title')).toBe('Boot-out failed: 5: Input/output error')
+    expect(err.classes()).toContain('tk-hint')
     // A failed mutation must not claim success by rescanning.
     expect(wire.calls.filter((c) => c.type === 'executions.list')).toHaveLength(1)
-    // The error belongs to its own section only.
     expect(wrapper.find('[data-error-section="crontab"]').exists()).toBe(false)
   })
 
-  it('clears the inline error on the next rescan', async () => {
+  it('keeps an unread error through a broadcast refresh but clears it on rescan', async () => {
     wrapper = await mountPanel()
-    wire.overrides.set('executions.set_enabled', { ok: false, error: 'nope' })
+    await openGroup(wrapper, 'other')
+    wire.overrides.set('executions.set_enabled', { ok: false, error: 'Boot-out failed' })
 
-    await agentSection(wrapper)
-      .get('[data-agent-label="com.syncthing.syncthing"] .tk-act-toggle')
-      .trigger('click')
+    await agentRow(wrapper, 'com.syncthing.syncthing').get('.tk-act-toggle').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-error-section="launchagent"]').exists()).toBe(true)
+
+    wire.listeners.get('executions.changed')?.forEach((cb) => cb(undefined))
     await flushPromises()
     expect(wrapper.find('[data-error-section="launchagent"]').exists()).toBe(true)
 
@@ -668,37 +772,60 @@ describe('TaskerPanel', () => {
     expect(wrapper.find('[data-error-section="launchagent"]').exists()).toBe(false)
   })
 
-  it('rescans when the backend broadcasts executions.changed', async () => {
+  it('surfaces an envelope-level failure of a mutation', async () => {
     wrapper = await mountPanel()
-    expect(wire.calls.filter((c) => c.type === 'executions.list')).toHaveLength(1)
+    wire.envelopeErrors.set('executions.set_enabled', 'backend disconnected')
 
-    wire.listeners.get('executions.changed')?.forEach((cb) => cb(undefined))
+    await cronRow(wrapper, 'c1').get('.tk-act-toggle').trigger('click')
     await flushPromises()
 
-    expect(wire.calls.filter((c) => c.type === 'executions.list')).toHaveLength(2)
+    expect(wrapper.get('[data-error-section="crontab"]').text()).toContain('backend disconnected')
+    expect(wire.calls.filter((c) => c.type === 'executions.list')).toHaveLength(1)
   })
 
-  it('says the platform is unsupported instead of showing an empty list', async () => {
+  it('surfaces a failed scan as one line with a retry', async () => {
+    wire.envelopeErrors.set('executions.list', 'session closed')
+    wrapper = await mountPanel()
+
+    const hint = wrapper.get('.tk-scan-error')
+    expect(hint.text()).toContain('session closed')
+    wire.envelopeErrors.clear()
+    await hint.get('.tk-hint-btn').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.tk-scan-error').exists()).toBe(false)
+  })
+
+  it('shows a source-level scan error reported by the backend', async () => {
+    const broken = snapshot()
+    ;(broken.crontab as Record<string, unknown>) = {
+      supported: true,
+      error: 'crontab: permission denied',
+      entries: [],
+    }
+    wire.overrides.set('executions.list', broken)
+    wrapper = await mountPanel()
+
+    expect(wrapper.get('[data-error-source="crontab"]').text()).toContain('permission denied')
+  })
+
+  // ── platforms ────────────────────────────────────────────────────────────
+
+  it('names an unsupported source in one line instead of showing it empty', async () => {
     const unsupported = snapshot()
     unsupported.platform = 'linux'
-    ;(unsupported.launch_agents as Record<string, unknown>) = {
-      supported: false,
-      error: null,
-      agents: [],
-    }
+    ;(unsupported.launch_agents as Record<string, unknown>) = { supported: false, error: null, agents: [] }
     wire.overrides.set('executions.list', unsupported)
     wrapper = await mountPanel()
 
-    for (const section of [agentSection(wrapper), daemonSection(wrapper)]) {
-      expect(section.find('.tk-unsupported').exists()).toBe(true)
-      expect(section.find('.tk-empty').exists()).toBe(false)
-    }
+    expect(wrapper.find('[data-unsupported="launchagent"]').exists()).toBe(true)
+    expect(wrapper.find('[data-unsupported="crontab"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="executions-no-source"]').exists()).toBe(false)
+    expect(cronIds(wrapper)).toContain('c1')
   })
 
-  // Windows: neither source exists. Three empty sections titled after
-  // crontab and macOS would describe another operating system to the user;
-  // one platform-level line must say the panel is not broken.
-  it('replaces every section with one platform note when no source is supported', async () => {
+  // Windows: neither source exists. One platform-level line must say the panel
+  // is not broken, instead of naming crontab and launchd to a Windows user.
+  it('replaces the per-source notes with one platform note when no source is supported', async () => {
     const none = snapshot()
     none.platform = 'win32'
     ;(none.crontab as Record<string, unknown>) = { supported: false, error: null, entries: [] }
@@ -710,111 +837,61 @@ describe('TaskerPanel', () => {
     expect(note.exists()).toBe(true)
     expect(note.text()).toContain('Nothing to list on this platform')
     expect(note.text()).toContain('Task Scheduler')
-    expect(wrapper.find('.tk-body [data-section]').exists()).toBe(false)
     expect(wrapper.find('.tk-unsupported').exists()).toBe(false)
+    // Navide's own jobs still have their timeline.
+    expect(wrapper.find('[data-section="timeline"]').exists()).toBe(true)
   })
 
-  it('keeps the sections when only one source is unsupported', async () => {
-    const partial = snapshot()
-    partial.platform = 'linux'
-    ;(partial.launch_agents as Record<string, unknown>) = { supported: false, error: null, agents: [] }
-    wire.overrides.set('executions.list', partial)
+  it('renders no untranslated i18n keys, including expanded, menu and confirming rows', async () => {
+    const snap = snapshot()
+    ;(snap.launch_agents as { agents: Record<string, unknown>[] }).agents[0].start_interval = 300
+    wire.overrides.set('executions.list', snap)
     wrapper = await mountPanel()
+    await openAllGroups(wrapper)
 
-    expect(wrapper.find('[data-test="executions-no-source"]').exists()).toBe(false)
-    expect(wrapper.find('[data-section="crontab"]').exists()).toBe(true)
-  })
-
-  it('still renders an empty section rather than hiding the category', async () => {
-    const none = snapshot()
-    ;(none.launch_agents as Record<string, unknown>).agents = []
-    wire.overrides.set('executions.list', none)
-    wrapper = await mountPanel()
-
-    // The user has to be able to tell "this category exists, it is just empty"
-    // apart from "this category is gone".
-    for (const section of [agentSection(wrapper), daemonSection(wrapper)]) {
-      expect(section.get('.tk-empty').text()).toBe(i18n.global.t('executions.empty'))
-      expect(section.get('.tk-count').text()).toBe(
-        i18n.global.t('executions.count', { count: 0 })
-      )
-    }
-    expect(daemonSection(wrapper).get('.tk-sec-title').text()).toBe(
-      i18n.global.t('executions.daemons.title')
-    )
-  })
-
-  it('renders the Daemons section even when only agents are registered', async () => {
-    const agentsOnly = snapshot()
-    const section = agentsOnly.launch_agents as { agents: Record<string, unknown>[] }
-    section.agents = section.agents.filter((a) => a.scope !== 'system-daemon')
-    wire.overrides.set('executions.list', agentsOnly)
-    wrapper = await mountPanel()
-
-    expect(agentLabels(wrapper)).toHaveLength(4)
-    expect(daemonLabels(wrapper)).toHaveLength(0)
-    expect(daemonSection(wrapper).find('.tk-empty').exists()).toBe(true)
-  })
-
-  it('shows a section-level scan error reported by the backend', async () => {
-    const broken = snapshot()
-    ;(broken.crontab as Record<string, unknown>) = {
-      supported: true,
-      error: 'crontab: permission denied',
-      entries: [],
-    }
-    wire.overrides.set('executions.list', broken)
-    wrapper = await mountPanel()
-
-    expect(cronSection(wrapper).get('.tk-sec-error').text()).toContain('permission denied')
-  })
-
-  it('renders no untranslated i18n keys, including expanded and confirming rows', async () => {
-    wrapper = await mountPanel()
-
-    // Show every row shape: disabled crontab entries and stopped agents too.
-    await cronSection(wrapper).get('[data-filter="all"]').trigger('click')
-    await agentSection(wrapper).get('[data-filter="all"]').trigger('click')
-    // Expanded detail blocks (including the "loaded, not running" state note).
-    await cronSection(wrapper).get('[data-entry-id="c1"] .tk-row-head').trigger('click')
-    await agentSection(wrapper)
-      .get('[data-agent-label="local.nightly.index"] .tk-row-head')
-      .trigger('click')
-    // …and the read-only daemon, whose scope tag and "state unknown" note are
-    // the only place several of the new keys appear.
-    await daemonSection(wrapper)
-      .get('[data-agent-label="com.vendor.daemon"] .tk-row-head')
-      .trigger('click')
-    // Both section titles are on screen, so a missing one would show up below.
-    expect(wrapper.text()).toContain(i18n.global.t('executions.launchagents.title'))
-    expect(wrapper.text()).toContain(i18n.global.t('executions.daemons.title'))
-    // vue-i18n only warns on a missing key and renders the key itself, so a
-    // typo would otherwise sail through every structural assertion above.
+    await cronRow(wrapper, 'c1').get('.tk-row-head').trigger('click')
+    await agentRow(wrapper, 'local.nightly.index').get('.tk-row-head').trigger('click')
+    await agentRow(wrapper, 'com.vendor.daemon').get('.tk-row-head').trigger('click')
     expect(wrapper.findAll('.tk-detail')).toHaveLength(3)
-    expect(wrapper.text()).not.toContain('executions.')
-    // html() also covers the keys that only reach `title` attributes.
+    for (const id of ['timeline', 'recurring', 'other', 'disabled']) {
+      expect(wrapper.find(`[data-section="${id}"]`).exists()).toBe(true)
+    }
+    expect(wrapper.find('[data-test="failing-bar"]').exists()).toBe(true)
+    // vue-i18n only warns on a missing key and renders the key itself.
+    expect(wrapper.html()).not.toContain('executions.')
+    expect(wrapper.html()).not.toContain('scheduler.')
+
+    await cronRow(wrapper, 'c1').get('.tk-act-more').trigger('click')
+    expect(wrapper.html()).not.toContain('executions.')
+    await cronRow(wrapper, 'c1').get('.tk-act-remove').trigger('click')
+    expect(wrapper.findAll('.tk-confirm')).toHaveLength(1)
     expect(wrapper.html()).not.toContain('executions.')
 
-    // Only one confirmation can be open at a time, so check each in turn.
-    await cronSection(wrapper).get('[data-entry-id="c1"] .tk-act-remove').trigger('click')
-    expect(cronSection(wrapper).findAll('.tk-confirm')).toHaveLength(1)
+    await clickRemove(agentRow(wrapper, 'local.nightly.index'))
     expect(wrapper.html()).not.toContain('executions.')
 
-    await agentSection(wrapper)
-      .get('[data-agent-label="local.nightly.index"] .tk-act-remove')
-      .trigger('click')
-    expect(agentSection(wrapper).findAll('.tk-confirm')).toHaveLength(1)
+    await wrapper.get('[data-test="only-failing"]').trigger('click')
     expect(wrapper.html()).not.toContain('executions.')
+  })
+
+  // ── scanning ─────────────────────────────────────────────────────────────
+
+  it('rescans when the backend broadcasts executions.changed', async () => {
+    wrapper = await mountPanel()
+    expect(wire.calls.filter((c) => c.type === 'executions.list')).toHaveLength(1)
+
+    wire.listeners.get('executions.changed')?.forEach((cb) => cb(undefined))
+    await flushPromises()
+
+    expect(wire.calls.filter((c) => c.type === 'executions.list')).toHaveLength(2)
   })
 
   it('discards a scan that started before a mutation and landed after it', async () => {
     wrapper = await mountPanel()
 
-    // A rescan is still in flight (the backend shells out; this can take a while).
     const releaseStaleScan = holdNext('executions.list')
     await wrapper.get('.tk-rescan').trigger('click')
 
-    // Meanwhile the user disables c1 and the post-mutation scan comes back first.
     const disabled = snapshot()
     const entries = (disabled.crontab as { entries: Record<string, unknown>[] }).entries
     entries[0].id = 'c1-off'
@@ -822,108 +899,13 @@ describe('TaskerPanel', () => {
     entries[0].raw = `# [NAVIDE-DISABLED] ${entries[0].raw}`
     wire.overrides.set('executions.list', disabled)
 
-    await cronSection(wrapper).get('[data-entry-id="c1"] .tk-act-toggle').trigger('click')
+    await cronRow(wrapper, 'c1').get('.tk-act-toggle').trigger('click')
     await flushPromises()
-    expect(cronIds(wrapper)).toEqual(['c2'])
+    expect(wrapper.find('[data-entry-id="c1"]').exists()).toBe(false)
 
-    // The stale scan (captured before the mutation) must not resurrect c1.
     releaseStaleScan()
     await flushPromises()
-    expect(cronIds(wrapper)).toEqual(['c2'])
-  })
-
-  it('disables the confirmation OK while another mutation is in flight', async () => {
-    wrapper = await mountPanel()
-
-    const row = cronSection(wrapper).get('[data-entry-id="c1"]')
-    await row.get('.tk-act-remove').trigger('click')
-    expect(row.get('.tk-confirm-ok').attributes('disabled')).toBeUndefined()
-
-    // A second row starts a mutation while this prompt is open.
-    const releaseToggle = holdNext('executions.set_enabled')
-    await cronSection(wrapper).get('[data-entry-id="c2"] .tk-act-toggle').trigger('click')
-    await flushPromises()
-
-    // mutate() would early-return, so the button must not look clickable.
-    expect(row.get('.tk-confirm-ok').attributes('disabled')).toBeDefined()
-
-    releaseToggle()
-    await flushPromises()
-  })
-
-  it('confirms only the clicked row when two crontab lines are identical', async () => {
-    const twins = snapshot()
-    const raw = '0 * * * * ~/bin/twin.sh'
-    ;(twins.crontab as Record<string, unknown>).entries = [
-      {
-        id: 'abc123-0',
-        name: 'twin',
-        schedule: '0 * * * *',
-        schedule_kind: 'standard',
-        command: '~/bin/twin.sh',
-        raw,
-        enabled: true,
-      },
-      {
-        id: 'abc123-1',
-        name: 'twin',
-        schedule: '0 * * * *',
-        schedule_kind: 'standard',
-        command: '~/bin/twin.sh',
-        raw,
-        enabled: true,
-      },
-    ]
-    wire.overrides.set('executions.list', twins)
-    wrapper = await mountPanel()
-
-    await cronSection(wrapper).get('[data-entry-id="abc123-1"] .tk-act-remove').trigger('click')
-
-    expect(cronSection(wrapper).findAll('.tk-confirm')).toHaveLength(1)
-    expect(
-      cronSection(wrapper).get('[data-entry-id="abc123-1"]').find('.tk-confirm').exists()
-    ).toBe(true)
-    expect(
-      cronSection(wrapper).get('[data-entry-id="abc123-0"]').find('.tk-confirm').exists()
-    ).toBe(false)
-  })
-
-  it('surfaces an envelope-level failure of a mutation', async () => {
-    wrapper = await mountPanel()
-    wire.envelopeErrors.set('executions.set_enabled', 'backend disconnected')
-
-    await cronSection(wrapper).get('[data-entry-id="c1"] .tk-act-toggle').trigger('click')
-    await flushPromises()
-
-    expect(wrapper.get('[data-error-section="crontab"]').text()).toContain('backend disconnected')
-    expect(wire.calls.filter((c) => c.type === 'executions.list')).toHaveLength(1)
-  })
-
-  it('surfaces an envelope-level failure of the scan itself', async () => {
-    wire.envelopeErrors.set('executions.list', 'session closed')
-    wrapper = await mountPanel()
-
-    expect(wrapper.get('.tk-scan-error').text()).toContain('session closed')
-  })
-
-  it('keeps an unread error through a broadcast refresh but clears it on rescan', async () => {
-    wrapper = await mountPanel()
-    wire.overrides.set('executions.set_enabled', { ok: false, error: 'Boot-out failed' })
-
-    await agentSection(wrapper)
-      .get('[data-agent-label="com.syncthing.syncthing"] .tk-act-toggle')
-      .trigger('click')
-    await flushPromises()
-    expect(wrapper.find('[data-error-section="launchagent"]').exists()).toBe(true)
-
-    // Another window's mutation must not wipe an error the user hasn't read.
-    wire.listeners.get('executions.changed')?.forEach((cb) => cb(undefined))
-    await flushPromises()
-    expect(wrapper.find('[data-error-section="launchagent"]').exists()).toBe(true)
-
-    await wrapper.get('.tk-rescan').trigger('click')
-    await flushPromises()
-    expect(wrapper.find('[data-error-section="launchagent"]').exists()).toBe(false)
+    expect(wrapper.find('[data-entry-id="c1"]').exists()).toBe(false)
   })
 
   it('reuses the cached scan when the panel is remounted', async () => {
@@ -932,17 +914,15 @@ describe('TaskerPanel', () => {
 
     wrapper = await mountPanel()
 
-    // Switching rail tabs must not shell out to crontab/launchctl again.
     expect(wire.calls.filter((c) => c.type === 'executions.list')).toHaveLength(1)
-    expect(cronIds(wrapper)).toEqual(['c1', 'c2'])
+    expect(cronIds(wrapper)).toEqual(['c1'])
   })
 
   it('forgets expanded rows whose ids disappeared from the latest scan', async () => {
     wrapper = await mountPanel()
-    await cronSection(wrapper).get('[data-entry-id="c1"] .tk-row-head').trigger('click')
-    expect(cronSection(wrapper).get('[data-entry-id="c1"]').find('.tk-detail').exists()).toBe(true)
+    await cronRow(wrapper, 'c1').get('.tk-row-head').trigger('click')
+    expect(cronRow(wrapper, 'c1').find('.tk-detail').exists()).toBe(true)
 
-    // Disabling rewrites the raw line, so the backend hands back a different id.
     const renamed = snapshot()
     const entries = (renamed.crontab as { entries: Record<string, unknown>[] }).entries
     entries[0].id = 'c1-renamed'
@@ -950,14 +930,11 @@ describe('TaskerPanel', () => {
     await wrapper.get('.tk-rescan').trigger('click')
     await flushPromises()
 
-    expect(cronSection(wrapper).get('[data-entry-id="c1-renamed"]').find('.tk-detail').exists()).toBe(
-      false
-    )
-    // And the orphan id is gone, so the old row would not reappear expanded.
+    expect(cronRow(wrapper, 'c1-renamed').find('.tk-detail').exists()).toBe(false)
     wire.overrides.delete('executions.list')
     await wrapper.get('.tk-rescan').trigger('click')
     await flushPromises()
-    expect(cronSection(wrapper).get('[data-entry-id="c1"]').find('.tk-detail').exists()).toBe(false)
+    expect(cronRow(wrapper, 'c1').find('.tk-detail').exists()).toBe(false)
   })
 
   it('stops listening for executions.changed once unmounted', async () => {
@@ -970,10 +947,10 @@ describe('TaskerPanel', () => {
 
     expect(wire.calls.filter((c) => c.type === 'executions.list')).toHaveLength(1)
   })
+
   // Regression: the panel mounts with the app when Tasker was the last active
   // tab, i.e. while the backend is still starting. Scanning then would burn the
-  // client timeout ("Scan failed: request executions.list timeout") and, with no
-  // retry, leave both sections permanently empty.
+  // client timeout and, with no retry, leave the panel permanently empty.
   it('does not scan before the backend is connected', async () => {
     const backend = fakeBackend()
     ;(backend.status as Ref<string>).value = 'starting'
@@ -981,6 +958,7 @@ describe('TaskerPanel', () => {
     wrapper = await mountPanel(backend)
 
     expect(wire.calls.filter((c) => c.type === 'executions.list')).toHaveLength(0)
+    expect(wire.calls.filter((c) => c.type === 'scheduler.list')).toHaveLength(0)
     expect(wrapper.find('.tk-scan-error').exists()).toBe(false)
   })
 
@@ -994,7 +972,8 @@ describe('TaskerPanel', () => {
     await flushPromises()
 
     expect(wire.calls.filter((c) => c.type === 'executions.list')).toHaveLength(1)
-    expect(cronIds(wrapper)).toEqual(['c1', 'c2'])
+    expect(wire.calls.filter((c) => c.type === 'scheduler.list')).toHaveLength(1)
+    expect(cronIds(wrapper)).toEqual(['c1'])
   })
 
   it('rescans after a reconnect', async () => {
@@ -1012,8 +991,6 @@ describe('TaskerPanel', () => {
   })
 
   it('gives the shelling-out RPCs more budget than the client default', async () => {
-    // executions.* run crontab/launchctl, and the service allows each command
-    // 10s — the same as the client default, which leaves zero headroom.
     const backend = fakeBackend()
     wrapper = await mountPanel(backend)
 

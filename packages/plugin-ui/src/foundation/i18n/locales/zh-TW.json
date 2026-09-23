@@ -1962,7 +1962,7 @@
             "text": "Electron 內建的整窗縮放（<em>Zoom In</em>／<em>Zoom Out</em>／<em>Actual Size</em>）被拿掉了，因為 Navide 自己有兩條縮放軸：<kbd class=\"syh-kbd\">⌘=</kbd>／<kbd class=\"syh-kbd\">⌘-</kbd>／<kbd class=\"syh-kbd\">⌘0</kbd> 改終端機<strong>內容</strong>的字級，<kbd class=\"syh-kbd\">⇧⌘=</kbd>／<kbd class=\"syh-kbd\">⇧⌘-</kbd>／<kbd class=\"syh-kbd\">⇧⌘0</kbd> 改<strong>整體介面縮放</strong>（設定 ▸ 外觀 ▸ 介面縮放）。原生 role 留著的話，它們的 accelerator 會搶在這兩者前面。<kbd class=\"syh-kbd\">⌘R</kbd> 也改成「重建焦點面板」，重新載入整個視窗改用 <kbd class=\"syh-kbd\">⇧⌘R</kbd>，選單裡則是一個不帶快捷鍵的 <em>重新載入視窗</em>。<kbd class=\"syh-kbd\">⌘W</kbd> 在 macOS 上留給了「關閉分頁」，所以關視窗只剩紅綠燈或 <kbd class=\"syh-kbd\">⌘Q</kbd>。"
           },
           "h3": "Schedule（排程）— 不是獨立視窗",
-          "p1": "這台機器的背景排程列在<strong>右側槽的一個分頁</strong>裡，分頁名稱是 <strong>排程</strong>（🗓），也可以搬到上下兩槽。它不是從 Window 選單開的視窗。macOS 上分三段；Linux 只有 crontab 一段；Windows 依設計什麼都不列——Navide 本身從不建立排程工作，而工作排程器已經在管理機器上的工作。",
+          "p1": "這台機器的背景排程列在<strong>右側槽的一個分頁</strong>裡，分頁名稱是 <strong>排程</strong>（🗓），也可以搬到上下兩槽。它不是從 Window 選單開的視窗。Navide 自己的排程、你的 crontab 與 macOS 的 launchd 工作放在同一份清單：最上面是<strong>接下來</strong>，只放算得準下次時間的項目、依時間排序；其下依序是<strong>週期性</strong>、<strong>常駐／按需</strong>、<strong>已停用</strong>。Linux 只有 crontab 這個來源；Windows 只會列出 Navide 自己的排程——機器上的工作由工作排程器管理。",
           "scheduleTable": {
             "section": "區塊",
             "source": "來源",
@@ -1975,14 +1975,14 @@
             },
             "agents": {
               "source": "~/Library/LaunchAgents 與 /Library/LaunchAgents",
-              "actions": "只有 ~/Library/LaunchAgents 裡你自己的那些有 ⏸／▶ 與 🗑；系統層的只顯示、沒有按鈕"
+              "actions": "只有 ~/Library/LaunchAgents 裡你自己的那些有 ⏸／▶ 與 ⋯ 選單；系統層的只顯示、沒有按鈕"
             },
             "daemons": {
               "source": "/Library/LaunchDaemons",
-              "actions": "整段唯讀"
+              "actions": "全部唯讀"
             }
           },
-          "p2": "系統層唯讀是因為動它們需要 root，而 Navide 從不要求——後端也擋著，不只是介面不給按。這也是為什麼 daemon 自成一段：它們的狀態多半只能顯示成 <code>狀態未知（需 root）</code>。每一列可展開看 排程／指令／原始內容，或 Label／層級／plist 路徑／上次結束碼／狀態。移除 LaunchAgent 會<strong>卸載並永久刪除它的 plist</strong>，會先跳確認。",
+          "p2": "系統層唯讀是因為動它們需要 root，而 Navide 從不要求——後端也擋著，不只是介面不給按。尤其 daemon 的狀態多半只能顯示成 <code>狀態未知（需 root）</code>。每一列可展開看 排程／指令／原始內容，或 Label／層級／plist 路徑／上次結束碼／狀態。移除放在每一列的 ⋯ 選單裡；移除 LaunchAgent 會<strong>卸載並永久刪除它的 plist</strong>，會先跳確認。",
           "note2": "這裡<strong>沒有「立刻執行」也沒有「在 Finder 顯示」</strong>，只有停用／啟用與移除兩種動作。上方有 <em>重新掃描</em> 與上次掃描時間。",
           "h4": "其他從 UI 開的視窗",
           "otherTable": {
@@ -5468,7 +5468,7 @@
           "win": {
             "signing": "<strong>安裝檔沒有程式碼簽章。</strong>每一個新版本都會再被 SmartScreen 警告一次，而且 App 內更新也是在不驗證簽章的情況下裝上去的。",
             "symlinks": "<strong>每個面板一份的 CLI 家目錄、以及受管技能，是用符號連結做出來的</strong>，而 Windows 預設不讓一般程式建立符號連結。要嘛開啟 Windows 的開發人員模式（<em>Settings ▸ For developers</em>），要嘛用系統管理員身分執行 Navide。沒開也不會無聲失敗：受影響的面板會在啟動後印一行黃色的 <code>[mcp]</code> 說明告訴你原因。會碰到這件事的是靠設定檔接 MCP 的那幾家——Antigravity CLI、Grok CLI、Kimi Code。",
-            "schedule": "<strong>Schedule 分頁什麼都不會列。</strong>Navide 讀的是使用者的 crontab 與 macOS 的 launchd，Windows 兩者都沒有；工作排程器（taskschd.msc）是刻意沒有接進來的，因為 Navide 從來不自己建立排程工作，而工作排程器本來就在管這台機器上的工作。畫面會直接把這件事寫出來，而不是給你一份空清單。"
+            "schedule": "<strong>Schedule 分頁只會列出 Navide 自己的排程（Navide Jobs）。</strong>Navide 讀的是使用者的 crontab 與 macOS 的 launchd，Windows 兩者都沒有；工作排程器（taskschd.msc）是刻意沒有接進來的，因為 Navide 從不建立作業系統的排程工作，而工作排程器本來就在管這台機器上的工作。畫面會直接把這件事寫出來，而不是給你一份空清單。"
           },
           "h2": "Linux",
           "linux": {
@@ -8079,22 +8079,35 @@
     "rescan": "重新掃描",
     "scanning": "掃描中…",
     "scan-failed": "掃描失敗：{message}",
-    "count": "{count} 項",
-    "empty": "沒有項目",
+    "retry": "重試",
+    "failing": "{count} 個項目失敗中",
+    "only-failing": "只看失敗",
+    "show-all": "顯示全部",
+    "create-first": "建立一個",
+    "backend-outdated": "後端版本比這個視窗舊，請重新啟動 Navide 以載入排程。",
+    "timeline": {
+      "title": "接下來",
+      "empty": "接下來沒有排定的項目"
+    },
+    "bucket": {
+      "today": "今天",
+      "tomorrow": "明天",
+      "week": "本週",
+      "later": "更晚"
+    },
+    "group": {
+      "recurring": "週期性",
+      "other": "常駐／按需",
+      "disabled": "已停用"
+    },
     "unsupported": "此平台不支援",
-    "no-source": "此平台沒有可列出的來源：Navide 讀的是使用者的 crontab 與 macOS 的 launchd 工作，這個系統兩者都沒有。Navide 從不建立作業系統的排程工作，所以這裡沒有東西缺失；Navide 自己的排程列在上方的 Navide Jobs。",
+    "no-source": "此平台沒有可列出的來源：Navide 讀的是使用者的 crontab 與 macOS 的 launchd 工作，這個系統兩者都沒有。Navide 從不建立作業系統的排程工作，所以這裡沒有東西缺失；Navide 自己的排程列在上方。",
     "no-source-windows": "Windows 的排程工作在「工作排程器」（taskschd.msc）裡，那裡可以列出、啟用、停用與移除；Navide 刻意不整合它。",
     "crontab": {
-      "title": "系統 crontab",
-      "filter-all": "全部",
-      "filter-enabled": "啟用中",
-      "filter-disabled": "已停用"
+      "title": "系統 crontab"
     },
     "launchagents": {
-      "title": "macOS Agents",
-      "filter-all": "全部",
-      "filter-running": "執行中",
-      "filter-stopped": "已停止"
+      "title": "macOS Agents"
     },
     "daemons": {
       "title": "macOS Daemons"
@@ -8105,7 +8118,6 @@
       "system-daemon": "Daemon"
     },
     "tag": {
-      "disabled": "已停用",
       "pid": "PID {pid}",
       "exit": "exit {code}"
     },
@@ -8117,7 +8129,10 @@
     "action": {
       "enable": "啟用",
       "disable": "停用",
-      "remove": "刪除"
+      "remove": "刪除",
+      "more": "更多動作",
+      "copy-raw": "複製 crontab 原始行",
+      "copy-label": "複製 label"
     },
     "detail": {
       "schedule": "排程",
@@ -8148,6 +8163,9 @@
       "monthly": "每月",
       "yearly": "每年",
       "every-minutes": "每 {n} 分鐘",
+      "every-minute": "每分鐘",
+      "hourly-at": "每小時 :{minute}",
+      "every-hours-at": "每 {n} 小時（:{minute}）",
       "daily-at": "每天 {time}",
       "weekly-at": "每{weekday} {time}",
       "monthly-at": "每月 {day} 日 {time}"
@@ -8161,7 +8179,7 @@
       "keep-alive": "常駐服務（KeepAlive）",
       "run-at-load": "啟動時執行（RunAtLoad）",
       "calendar": "依日期排程（詳見 plist）",
-      "unknown": "—"
+      "unknown": "按需啟動"
     },
     "weekday-0": "週日",
     "weekday-1": "週一",
@@ -8172,8 +8190,6 @@
     "weekday-6": "週六"
   },
   "scheduler": {
-    "title": "Navide Jobs",
-    "count": "{count} 項",
     "add": "＋ 新增",
     "empty": "還沒有排程工作",
     "list-failed": "讀取排程失敗：{message}",
@@ -8183,9 +8199,7 @@
     "enable": "啟用",
     "disable": "停用",
     "run-now": "立即執行",
-    "when-disabled": "已停用",
     "when-backoff": "backoff 至 {time}",
-    "when-next": "下次 {time}",
     "target": "→ 喚醒並傳給 pane「{name}」",
     "target-with-id": "→ 喚醒並傳給 pane「{name}」（#{id}）",
     "retarget": "重新指定",

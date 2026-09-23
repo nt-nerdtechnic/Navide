@@ -1962,7 +1962,7 @@
             "text": "Electron 標準のウィンドウ全体のズーム（<em>拡大</em> / <em>縮小</em> / <em>実際のサイズ</em>）は削除しています。Navide には独自の 2 つの拡大縮小設定があるためです。<kbd class=\"syh-kbd\">⌘=</kbd> / <kbd class=\"syh-kbd\">⌘-</kbd> / <kbd class=\"syh-kbd\">⌘0</kbd> はターミナルの<strong>内容</strong>の文字サイズを変更し、<kbd class=\"syh-kbd\">⇧⌘=</kbd> / <kbd class=\"syh-kbd\">⇧⌘-</kbd> / <kbd class=\"syh-kbd\">⇧⌘0</kbd> は<strong>表示倍率</strong>（設定 ▸ 外観 ▸ 表示倍率）を変更します。標準のメニュー機能を残すと、そのショートカットが先に反応してしまいます。<kbd class=\"syh-kbd\">⌘R</kbd> も「フォーカス中のペインを再構築」に変更し、ウィンドウ全体の再読み込みは <kbd class=\"syh-kbd\">⇧⌘R</kbd> に移しました。メニューの<em>ウィンドウを再読み込み</em>項目にはショートカットを付けていません。macOS の <kbd class=\"syh-kbd\">⌘W</kbd> は「タブを閉じる」用です。ウィンドウは左上のウィンドウボタン、または <kbd class=\"syh-kbd\">⌘Q</kbd> で閉じます。"
           },
           "h3": "スケジュール — 独立ウィンドウではありません",
-          "p1": "このマシンのバックグラウンドスケジュールは、<strong>右スロットのタブ</strong>に<strong>スケジュール</strong>（🗓）として表示され、上または下のスロットへ移動できます。「ウィンドウ」メニューから開くウィンドウではありません。macOS には 3 つのセクションがあり、Linux では crontab のセクションのみが対象です。Windows では意図的に何も表示しません。Navide 自体はスケジュールジョブを作成せず、マシンのタスクはタスクスケジューラで管理されるためです。",
+          "p1": "このマシンのバックグラウンドスケジュールは、<strong>右スロットのタブ</strong>に<strong>スケジュール</strong>（🗓）として表示され、上または下のスロットへ移動できます。「ウィンドウ」メニューから開くウィンドウではありません。Navide 自身のジョブ、自分の crontab、macOS の launchd ジョブは一つの一覧にまとめられます。先頭の<strong>この後</strong>には次回実行を正確に計算できる項目だけが時刻順に並び、その下に<strong>定期実行</strong>、<strong>常駐・オンデマンド</strong>、<strong>無効</strong>が続きます。Linux では crontab のみが対象です。Windows では Navide 自身のジョブだけを表示します。マシンのタスクはタスクスケジューラで管理されるためです。",
           "scheduleTable": {
             "section": "セクション",
             "source": "取得元",
@@ -1975,14 +1975,14 @@
             },
             "agents": {
               "source": "~/Library/LaunchAgents と /Library/LaunchAgents",
-              "actions": "~/Library/LaunchAgents 内の自分の項目にのみ ⏸ / ▶ と 🗑 が付きます。システムレベルの項目にボタンはありません"
+              "actions": "~/Library/LaunchAgents 内の自分の項目にのみ ⏸ / ▶ と ⋯ メニューが付きます。システムレベルの項目にボタンはありません"
             },
             "daemons": {
               "source": "/Library/LaunchDaemons",
-              "actions": "セクション全体が読み取り専用です"
+              "actions": "すべて読み取り専用です"
             }
           },
-          "p2": "システムレベルの変更には root が必要ですが、Navide は要求しないため読み取り専用です。画面だけでなく、バックエンドでも変更を拒否します。デーモンが独立したセクションになっているのもこのためで、通常は状態を <code>状態不明（root が必要）</code>としか表示できません。各行を展開すると、スケジュール / コマンド / 元の行、またはラベル / 範囲 / Plist のパス / 最後の終了コード / 状態を表示します。LaunchAgent を削除すると、<strong>アンロードして plist を完全に削除します</strong>。事前に確認が表示されます。",
+          "p2": "システムレベルの変更には root が必要ですが、Navide は要求しないため読み取り専用です。画面だけでなく、バックエンドでも変更を拒否します。特にデーモンは、通常は状態を <code>状態不明（root が必要）</code>としか表示できません。各行を展開すると、スケジュール / コマンド / 元の行、またはラベル / 範囲 / Plist のパス / 最後の終了コード / 状態を表示します。削除は各行の ⋯ メニューにあります。LaunchAgent を削除すると、<strong>アンロードして plist を完全に削除します</strong>。事前に確認が表示されます。",
           "note2": "ここには<strong>「今すぐ実行」や「Finder で表示」はありません</strong>。無効化・有効化と削除のみです。上部に<em>再スキャン</em>と最終スキャン時刻があります。",
           "h4": "画面から開くその他のウィンドウ",
           "otherTable": {
@@ -5468,7 +5468,7 @@
           "win": {
             "signing": "<strong>インストーラーにはコード署名がありません。</strong>新しいバージョンごとに SmartScreen が再び警告し、アプリ内更新も同じ理由で署名を検証せずにインストールします。",
             "symlinks": "<strong>ペインごとの CLI ホームと管理対象スキルにはシンボリックリンクを使います</strong>が、Windows の通常のプロセスでは作成できません。Windows の開発者モード（<em>設定 ▸ 開発者向け</em>）を有効にするか、Navide を管理者として実行してください。どちらも行わない場合でも黙って失敗せず、対象ペインの起動時に黄色の <code>[mcp]</code> 行で理由を説明します。影響するのは、設定ディレクトリ内のファイルで MCP を接続する Antigravity CLI、Grok CLI、Kimi Code です。",
-            "schedule": "<strong>スケジュールタブには項目が表示されません。</strong>Navide はユーザーの crontab と macOS の launchd ジョブを読み取りますが、Windows にはどちらもありません。Navide 自身はジョブを作成せず、Windows のタスクスケジューラ（taskschd.msc）がマシンのタスクを管理しているため、意図的に連携していません。空の一覧ではなく、その理由を画面に表示します。"
+            "schedule": "<strong>スケジュールタブには Navide 自身のジョブ（Navide Jobs）だけが表示されます。</strong>Navide はユーザーの crontab と macOS の launchd ジョブを読み取りますが、Windows にはどちらもありません。Navide が OS の定期ジョブを作成することはなく、Windows のタスクスケジューラ（taskschd.msc）がマシンのタスクを管理しているため、意図的に連携していません。空の一覧ではなく、その理由を画面に表示します。"
           },
           "h2": "Linux",
           "linux": {
@@ -8079,22 +8079,35 @@
     "rescan": "再スキャン",
     "scanning": "スキャン中…",
     "scan-failed": "スキャンに失敗しました：{message}",
-    "count": "{count} 項目",
-    "empty": "項目はありません",
+    "retry": "再試行",
+    "failing": "{count} 件が失敗中",
+    "only-failing": "失敗のみ",
+    "show-all": "すべて表示",
+    "create-first": "作成する",
+    "backend-outdated": "バックエンドがこのウィンドウより古いため、Navide を再起動してスケジュールを読み込んでください。",
+    "timeline": {
+      "title": "この後",
+      "empty": "予定されている項目はありません"
+    },
+    "bucket": {
+      "today": "今日",
+      "tomorrow": "明日",
+      "week": "今週",
+      "later": "それ以降"
+    },
+    "group": {
+      "recurring": "定期実行",
+      "other": "常駐・オンデマンド",
+      "disabled": "無効"
+    },
     "unsupported": "このプラットフォームには対応していません",
-    "no-source": "このプラットフォームには表示できる項目がありません。Navide はユーザーの crontab と macOS の launchd ジョブを読み取りますが、このシステムにはどちらもありません。Navide が OS の定期ジョブを作成することはないため、表示の欠落ではありません。Navide 自身のジョブは上の Navide Jobs に表示されます。",
+    "no-source": "このプラットフォームには表示できる項目がありません。Navide はユーザーの crontab と macOS の launchd ジョブを読み取りますが、このシステムにはどちらもありません。Navide が OS の定期ジョブを作成することはないため、表示の欠落ではありません。Navide 自身のジョブは上に表示されます。",
     "no-source-windows": "Windows の定期タスクはタスク スケジューラ（taskschd.msc）で管理され、一覧表示、有効化、無効化、削除ができます。Navide は設計上これを統合していません。",
     "crontab": {
-      "title": "システム crontab",
-      "filter-all": "すべて",
-      "filter-enabled": "有効",
-      "filter-disabled": "無効"
+      "title": "システム crontab"
     },
     "launchagents": {
-      "title": "macOS エージェント",
-      "filter-all": "すべて",
-      "filter-running": "実行中",
-      "filter-stopped": "停止中"
+      "title": "macOS エージェント"
     },
     "daemons": {
       "title": "macOS デーモン"
@@ -8105,7 +8118,6 @@
       "system-daemon": "デーモン"
     },
     "tag": {
-      "disabled": "無効",
       "pid": "PID {pid}",
       "exit": "終了コード {code}"
     },
@@ -8117,7 +8129,10 @@
     "action": {
       "enable": "有効化",
       "disable": "無効化",
-      "remove": "削除"
+      "remove": "削除",
+      "more": "その他の操作",
+      "copy-raw": "crontab の行をコピー",
+      "copy-label": "label をコピー"
     },
     "detail": {
       "schedule": "スケジュール",
@@ -8148,6 +8163,9 @@
       "monthly": "毎月",
       "yearly": "毎年",
       "every-minutes": "{n} 分ごと",
+      "every-minute": "毎分",
+      "hourly-at": "毎時 {minute} 分",
+      "every-hours-at": "{n} 時間ごと（{minute} 分）",
       "daily-at": "毎日 {time}",
       "weekly-at": "毎週 {weekday} {time}",
       "monthly-at": "毎月 {day} 日 {time}"
@@ -8161,7 +8179,7 @@
       "keep-alive": "常駐サービス (KeepAlive)",
       "run-at-load": "読み込み時に実行 (RunAtLoad)",
       "calendar": "カレンダースケジュールに従って実行（plist を参照）",
-      "unknown": "—"
+      "unknown": "オンデマンド"
     },
     "weekday-0": "日曜日",
     "weekday-1": "月曜日",
@@ -8172,8 +8190,6 @@
     "weekday-6": "土曜日"
   },
   "scheduler": {
-    "title": "Navide Jobs",
-    "count": "{count} 件",
     "add": "＋ 新規",
     "empty": "スケジュールされたジョブはまだありません",
     "list-failed": "ジョブを読み込めませんでした：{message}",
@@ -8183,9 +8199,7 @@
     "enable": "有効化",
     "disable": "無効化",
     "run-now": "今すぐ実行",
-    "when-disabled": "無効",
     "when-backoff": "{time} まで backoff",
-    "when-next": "次回 {time}",
     "target": "→ pane「{name}」を起こして送信",
     "target-with-id": "→ pane「{name}」（#{id}）を起こして送信",
     "retarget": "再指定",

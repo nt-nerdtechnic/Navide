@@ -1,16 +1,15 @@
 // @vitest-environment happy-dom
-// SchedulerJobsSection (NAVIDE JOBS in the Tasker tab) and its JobEditorModal —
-// the four status lights, the failed ×N | repair pill, the ▶ grace window, the
-// target_gone row, same-named panes told apart by id, editor validation, and
-// that mounting the section inside TaskerPanel leaves the crontab block alone.
+// Navide's own jobs in the Tasker tab (SchedulerJobRow + useSchedulerJobs) and
+// JobEditorModal — the four status lights, the failed ×N | repair pill, the ▶
+// grace window, the target_gone row, same-named panes told apart by id, editor
+// validation, and where a job lands among the timeline / recurring / disabled
+// groups next to the crontab rows.
 // The backend is a prop, so every assertion is on the real wire payloads.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { nextTick, ref, type Component } from 'vue'
 import { i18n } from '@navide/plugin-ui/foundation'
 import type { useBackend } from '../../composables/useBackend'
-import SchedulerJobsSection from '../SchedulerJobsSection.vue'
-import TaskerPanel from '../TaskerPanel.vue'
 import type { SchedulerJob } from '../../lib/schedulerJobs'
 
 const t = (key: string, params?: Record<string, unknown>): string =>
@@ -103,10 +102,27 @@ const mountOpts = (backend: ReturnType<typeof useBackend>) => ({
   global: { plugins: [i18n], stubs: { teleport: true } },
 })
 
+/** Freshly imported per test: TaskerPanel caches its last scan at module scope. */
+let TaskerPanel: Component
+
+/** Mounts the panel with every group expanded, so each job row is reachable
+ *  whichever group its fixture lands in (most fixtures carry no next_run_at). */
 async function mountSection(): Promise<VueWrapper> {
-  const wrapper = mount(SchedulerJobsSection, mountOpts(fakeBackend()))
+  const wrapper = mount(TaskerPanel, mountOpts(fakeBackend()))
   await flushPromises()
+  for (const btn of wrapper.findAll('.tk-group')) {
+    if (btn.attributes('aria-expanded') !== 'true') await btn.trigger('click')
+  }
   return wrapper
+}
+
+async function openGroup(wrapper: VueWrapper, id: string): Promise<void> {
+  const btn = wrapper.get(`[data-section="${id}"] .tk-group`)
+  if (btn.attributes('aria-expanded') !== 'true') await btn.trigger('click')
+}
+
+function groupOf(wrapper: VueWrapper, id: string): string | null | undefined {
+  return row(wrapper, id).element.closest('[data-section]')?.getAttribute('data-section')
 }
 
 function row(wrapper: VueWrapper, id: string) {
@@ -128,17 +144,20 @@ async function settle(): Promise<void> {
   await nextTick()
 }
 
-describe('SchedulerJobsSection', () => {
+describe('TaskerPanel — Navide jobs', () => {
   let wrapper: VueWrapper | undefined
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    localStorage.clear()
+    vi.resetModules()
+    TaskerPanel = ((await import('../TaskerPanel.vue')) as { default: Component }).default
     wire.calls.length = 0
     wire.jobs = []
     wire.roster = []
     wire.overrides.clear()
     wire.envelopeErrors.clear()
     wire.listeners.clear()
-  })
+  }, 30_000)
 
   afterEach(() => {
     wrapper?.unmount()
@@ -155,14 +174,15 @@ describe('SchedulerJobsSection', () => {
       job('off', { enabled: false, state: { last_status: 'ok', consecutive_errors: 0 } }),
     ]
     wrapper = await mountSection()
+    await openGroup(wrapper, 'disabled')
     expect(lightOf(wrapper, 'ok')).toBe('ok')
     expect(lightOf(wrapper, 'run')).toBe('running')
     expect(lightOf(wrapper, 'err')).toBe('err')
     expect(lightOf(wrapper, 'skip')).toBe('skip')
     expect(lightOf(wrapper, 'off')).toBe('off')
-    // Grey carries its reason; a disabled row says so instead of a next time.
+    // Grey carries its reason; a disabled job sits in the Disabled group.
     expect(row(wrapper, 'skip').get('[data-test="skip-tag"]').text()).toBe(t('scheduler.skip.no_window'))
-    expect(row(wrapper, 'off').get('[data-test="when"]').text()).toContain(t('scheduler.when-disabled'))
+    expect(groupOf(wrapper, 'off')).toBe('disabled')
   })
 
   it('shows the failed ×N | repair pill and repair re-runs the job', async () => {
@@ -342,17 +362,62 @@ describe('SchedulerJobsSection', () => {
     expect(callsOf('scheduler.list').length).toBe(before + 1)
   })
 
-  it('sits above the untouched crontab block inside TaskerPanel', async () => {
-    wire.jobs = [job('a')]
-    wrapper = mount(TaskerPanel, mountOpts(fakeBackend()))
-    await flushPromises()
-    const sections = wrapper.findAll('section').map((s) => s.attributes('data-section'))
-    expect(sections[0]).toBe('navide-jobs')
-    expect(sections).toContain('crontab')
-    expect(wrapper.get('[data-section="crontab"]').find('[data-entry-id="c1"]').exists()).toBe(true)
+  it('places each job by its schedule, next to the crontab rows', async () => {
+    wire.jobs = [
+      job('daily'),
+      job('minutely', { schedule: { kind: 'every', every_ms: 60_000 } }),
+      job('off', { enabled: false }),
+      job('unscheduled', { state: { consecutive_errors: 0 } }),
+    ]
+    wrapper = await mountSection()
+    await openGroup(wrapper, 'other')
+    await openGroup(wrapper, 'disabled')
+
+    // The backend's next_run_at puts a job on the timeline, with its time.
+    expect(groupOf(wrapper, 'daily')).toBe('timeline')
+    expect(row(wrapper, 'daily').element.closest('.tk-item')?.querySelector('[data-test="when-col"]')).not.toBeNull()
+    expect(groupOf(wrapper, 'minutely')).toBe('recurring')
+    expect(groupOf(wrapper, 'off')).toBe('disabled')
+    expect(groupOf(wrapper, 'unscheduled')).toBe('other')
+    // The OS rows share the same timeline.
+    expect(wrapper.get('[data-section="timeline"]').find('[data-entry-id="c1"]').exists()).toBe(true)
+    // Every job row names its source.
+    expect(row(wrapper, 'daily').get('.sj-src').text()).toBe('Navide')
   })
 
-  it('still shows NAVIDE JOBS on a platform with no crontab or launchd (win32)', async () => {
+  it('counts a failing job in the failure bar', async () => {
+    wire.jobs = [job('err', { state: { last_status: 'error', consecutive_errors: 2, next_run_at: 1_900_000_000_000 } })]
+    wrapper = await mountSection()
+    expect(wrapper.get('[data-test="failing-bar"]').text()).toContain(t('executions.failing', { count: 1 }))
+    await wrapper.get('[data-test="only-failing"]').trigger('click')
+    expect(groupOf(wrapper, 'err')).toBe('failing')
+  })
+
+  it('tells the user to restart when the backend predates scheduler.*', async () => {
+    wire.envelopeErrors.set('scheduler.list', "Unsupported message type: 'scheduler.list'")
+    wrapper = await mountSection()
+    const hint = wrapper.get('[data-test="jobs-error"]')
+    expect(hint.text()).toContain(t('executions.backend-outdated'))
+    // The raw protocol error stays reachable, and the line offers a retry.
+    expect(hint.attributes('title')).toContain('scheduler.list')
+
+    wire.envelopeErrors.clear()
+    await hint.get('.tk-hint-btn').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="jobs-error"]').exists()).toBe(false)
+  })
+
+  it('shows any other list failure with its message', async () => {
+    wire.envelopeErrors.set('scheduler.list', 'database is locked')
+    wrapper = await mountSection()
+    expect(wrapper.get('[data-test="jobs-error"] .tk-hint-text').text()).toBe(
+      t('scheduler.list-failed', { message: 'database is locked' })
+    )
+    // No "create your first job" prompt while the list is unknown.
+    expect(wrapper.find('[data-test="jobs-empty"]').exists()).toBe(false)
+  })
+
+  it('still shows Navide jobs on a platform with no crontab or launchd (win32)', async () => {
     wire.jobs = [job('a')]
     wire.overrides.set('executions.list', {
       platform: 'win32',
@@ -360,13 +425,9 @@ describe('SchedulerJobsSection', () => {
       crontab: { supported: false, error: null, entries: [] },
       launch_agents: { supported: false, error: null, agents: [] },
     })
-    // Fresh module: TaskerPanel caches its last scan at module scope.
-    vi.resetModules()
-    const Fresh = ((await import('../TaskerPanel.vue')) as { default: Component }).default
-    wrapper = mount(Fresh, mountOpts(fakeBackend()))
-    await flushPromises()
+    wrapper = await mountSection()
     expect(wrapper.find('[data-test="executions-no-source"]').exists()).toBe(true)
-    expect(wrapper.find('[data-section="crontab"]').exists()).toBe(false)
-    expect(wrapper.get('[data-section="navide-jobs"]').find('[data-job-id="a"]').exists()).toBe(true)
+    expect(wrapper.find('[data-entry-id]').exists()).toBe(false)
+    expect(wrapper.get('[data-section="timeline"]').find('[data-job-id="a"]').exists()).toBe(true)
   })
 })

@@ -1962,7 +1962,7 @@
             "text": "Electron's built-in whole-window zoom (<em>Zoom In</em> / <em>Zoom Out</em> / <em>Actual Size</em>) was removed, because Navide has two zoom axes of its own: <kbd class=\"syh-kbd\">⌘=</kbd> / <kbd class=\"syh-kbd\">⌘-</kbd> / <kbd class=\"syh-kbd\">⌘0</kbd> change the terminal <strong>content</strong> font size, and <kbd class=\"syh-kbd\">⇧⌘=</kbd> / <kbd class=\"syh-kbd\">⇧⌘-</kbd> / <kbd class=\"syh-kbd\">⇧⌘0</kbd> change the <strong>interface scale</strong> (Settings ▸ Appearance ▸ Interface Scale). Left in place, the native roles' accelerators would fire ahead of both. <kbd class=\"syh-kbd\">⌘R</kbd> was also changed to \"rebuild the focused pane\", and reloading the whole window moved to <kbd class=\"syh-kbd\">⇧⌘R</kbd>, with a <em>Reload Window</em> item in the menu that carries no shortcut. <kbd class=\"syh-kbd\">⌘W</kbd> is reserved for \"close tab\" on macOS, so closing a window is left to the traffic lights or <kbd class=\"syh-kbd\">⌘Q</kbd>."
           },
           "h3": "Schedule — not a standalone window",
-          "p1": "This machine's background schedules are listed in <strong>a tab in the right slot</strong>, named <strong>Schedule</strong> (🗓), and it can be moved to the top or bottom slot. It is not a window opened from the Window menu. On macOS there are three sections; on Linux only the crontab section applies; on Windows the tab lists nothing by design — Navide never creates scheduled jobs of its own, and Task Scheduler already manages the machine's tasks.",
+          "p1": "This machine's background schedules are listed in <strong>a tab in the right slot</strong>, named <strong>Schedule</strong> (🗓), and it can be moved to the top or bottom slot. It is not a window opened from the Window menu. Navide's own jobs, your crontab and the macOS launchd jobs share one list: first <strong>Up next</strong>, holding only the rows whose next run can be computed exactly, in time order; then <strong>Recurring</strong>, <strong>Always on / on demand</strong> and <strong>Disabled</strong>. On Linux only the crontab source applies; on Windows only Navide's own jobs are listed — Task Scheduler already manages the machine's tasks.",
           "scheduleTable": {
             "section": "Section",
             "source": "Source",
@@ -1975,14 +1975,14 @@
             },
             "agents": {
               "source": "~/Library/LaunchAgents and /Library/LaunchAgents",
-              "actions": "Only your own entries in ~/Library/LaunchAgents get ⏸ / ▶ and 🗑; system-level ones are shown without buttons"
+              "actions": "Only your own entries in ~/Library/LaunchAgents get ⏸ / ▶ and a ⋯ menu; system-level ones are shown without buttons"
             },
             "daemons": {
               "source": "/Library/LaunchDaemons",
-              "actions": "The whole section is read-only"
+              "actions": "All read-only"
             }
           },
-          "p2": "The system level is read-only because touching it needs root, and Navide never asks for it — the backend blocks it too, not just the interface. That is also why daemons get their own section: their state can usually only be shown as <code>State unknown (requires root)</code>. Every row expands to show Schedule / Command / Raw line, or Label / Scope / Plist path / Last exit code / State. Removing a LaunchAgent <strong>unloads it and permanently deletes its plist</strong>, and asks for confirmation first.",
+          "p2": "The system level is read-only because touching it needs root, and Navide never asks for it — the backend blocks it too, not just the interface. Daemons in particular can usually only show their state as <code>State unknown (requires root)</code>. Every row expands to show Schedule / Command / Raw line, or Label / Scope / Plist path / Last exit code / State. Remove sits in each row's ⋯ menu; removing a LaunchAgent <strong>unloads it and permanently deletes its plist</strong>, and asks for confirmation first.",
           "note2": "There is <strong>no \"run now\" and no \"reveal in Finder\"</strong> here, only disable/enable and remove. Above them are <em>Rescan</em> and the time of the last scan.",
           "h4": "The other windows opened from the UI",
           "otherTable": {
@@ -5468,7 +5468,7 @@
           "win": {
             "signing": "<strong>The installer is not code-signed.</strong> Every new version is flagged by SmartScreen again, and in-app updates are installed without signature verification for the same reason.",
             "symlinks": "<strong>Per-pane CLI homes and managed skills are built from symbolic links</strong>, which Windows does not let an ordinary process create. Either turn on Windows Developer Mode (<em>Settings ▸ For developers</em>) or run Navide elevated. Without it nothing fails silently: the affected pane prints a yellow <code>[mcp]</code> line explaining why once it starts. This only reaches the CLIs whose MCP wiring is a file in their config directory — Antigravity CLI, Grok CLI and Kimi Code.",
-            "schedule": "<strong>The Schedule tab lists nothing.</strong> Navide reads the user crontab and macOS launchd jobs, and Windows has neither; Task Scheduler (taskschd.msc) is deliberately not integrated, because Navide never creates scheduled jobs of its own and Task Scheduler already manages the machine's. The screen says so rather than showing you an empty list."
+            "schedule": "<strong>The Schedule tab lists only Navide's own jobs (Navide Jobs).</strong> Navide reads the user crontab and macOS launchd jobs, and Windows has neither; Task Scheduler (taskschd.msc) is deliberately not integrated, because Navide never creates OS scheduled jobs and Task Scheduler already manages the machine's. The screen says so rather than showing you an empty list."
           },
           "h2": "Linux",
           "linux": {
@@ -8079,22 +8079,35 @@
     "rescan": "Rescan",
     "scanning": "Scanning…",
     "scan-failed": "Scan failed: {message}",
-    "count": "{count} items",
-    "empty": "Nothing here",
+    "retry": "Retry",
+    "failing": "{count} failing",
+    "only-failing": "Only failing",
+    "show-all": "Show all",
+    "create-first": "Create one",
+    "backend-outdated": "The backend is older than this window — restart Navide to load scheduled jobs.",
+    "timeline": {
+      "title": "Up next",
+      "empty": "Nothing scheduled ahead"
+    },
+    "bucket": {
+      "today": "Today",
+      "tomorrow": "Tomorrow",
+      "week": "This week",
+      "later": "Later"
+    },
+    "group": {
+      "recurring": "Recurring",
+      "other": "Always on / on demand",
+      "disabled": "Disabled"
+    },
     "unsupported": "Not supported on this platform",
-    "no-source": "Nothing to list on this platform: Navide reads the user crontab and macOS launchd jobs, and this system has neither. Navide never creates OS scheduled jobs, so nothing is missing here; its own jobs are listed under Navide Jobs above.",
+    "no-source": "Nothing to list on this platform: Navide reads the user crontab and macOS launchd jobs, and this system has neither. Navide never creates OS scheduled jobs, so nothing is missing here; its own jobs are listed above.",
     "no-source-windows": "Windows keeps its scheduled tasks in Task Scheduler (taskschd.msc), which lists, enables, disables and removes them; Navide does not integrate it by design.",
     "crontab": {
-      "title": "System crontab",
-      "filter-all": "All",
-      "filter-enabled": "Enabled",
-      "filter-disabled": "Disabled"
+      "title": "System crontab"
     },
     "launchagents": {
-      "title": "macOS Agents",
-      "filter-all": "All",
-      "filter-running": "Running",
-      "filter-stopped": "Stopped"
+      "title": "macOS Agents"
     },
     "daemons": {
       "title": "macOS Daemons"
@@ -8105,7 +8118,6 @@
       "system-daemon": "Daemon"
     },
     "tag": {
-      "disabled": "Disabled",
       "pid": "PID {pid}",
       "exit": "exit {code}"
     },
@@ -8117,7 +8129,10 @@
     "action": {
       "enable": "Enable",
       "disable": "Disable",
-      "remove": "Remove"
+      "remove": "Remove",
+      "more": "More actions",
+      "copy-raw": "Copy crontab line",
+      "copy-label": "Copy label"
     },
     "detail": {
       "schedule": "Schedule",
@@ -8148,6 +8163,9 @@
       "monthly": "Every month",
       "yearly": "Every year",
       "every-minutes": "Every {n} minutes",
+      "every-minute": "Every minute",
+      "hourly-at": "Every hour at :{minute}",
+      "every-hours-at": "Every {n} hours at :{minute}",
       "daily-at": "Every day at {time}",
       "weekly-at": "Every {weekday} at {time}",
       "monthly-at": "Day {day} of every month at {time}"
@@ -8161,7 +8179,7 @@
       "keep-alive": "Resident service (KeepAlive)",
       "run-at-load": "Runs at load (RunAtLoad)",
       "calendar": "On a calendar schedule (see the plist)",
-      "unknown": "—"
+      "unknown": "On demand"
     },
     "weekday-0": "Sunday",
     "weekday-1": "Monday",
@@ -8172,8 +8190,6 @@
     "weekday-6": "Saturday"
   },
   "scheduler": {
-    "title": "Navide Jobs",
-    "count": "{count} items",
     "add": "+ New",
     "empty": "No scheduled jobs yet",
     "list-failed": "Could not load jobs: {message}",
@@ -8183,9 +8199,7 @@
     "enable": "Enable",
     "disable": "Disable",
     "run-now": "Run now",
-    "when-disabled": "Disabled",
     "when-backoff": "backoff until {time}",
-    "when-next": "next {time}",
     "target": "→ wake and send to pane \"{name}\"",
     "target-with-id": "→ wake and send to pane \"{name}\" (#{id})",
     "retarget": "Retarget",
