@@ -584,7 +584,9 @@ async function openCliDrawer(key: string, trigger?: EventTarget | null): Promise
   envDraftName.value = ''
   envDraftValue.value = ''
   await nextTick()
-  cliDrawerRef.value?.querySelector<HTMLButtonElement>('.cli-drawer-close')?.focus()
+  // The drawer is still at translateX(100%) here; without preventScroll the
+  // clipped container scrolls to the off-screen button and snaps back.
+  cliDrawerRef.value?.querySelector<HTMLButtonElement>('.cli-drawer-close')?.focus({ preventScroll: true })
 }
 
 async function closeCliDrawer(restoreFocus = true): Promise<void> {
