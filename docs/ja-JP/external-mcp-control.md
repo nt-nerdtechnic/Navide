@@ -606,7 +606,7 @@ job はすぐにパネルにも表示されます —— 変更のたびに `sch
 | Tool | パラメータ | 内容 |
 |---|---|---|
 | `scheduler_list` | — | `{ok, jobs, now}` |
-| `scheduler_upsert` | `job` | job を作成（`id` なし）または更新（`id` あり）。`{ok, job}` を返し、定義が不正なら `{ok: false, error}`。`schedule` は `{kind: "every", every_ms, anchor_ms?}`、`{kind: "daily", at: "HH:MM", tz}`、`{kind: "weekly", days: [1..7], at, tz}` のいずれか。`action` は `{kind: "message", workspace, pane_id?, pane_name?, text}`。`policy` は省略可能な `{catch_up, max_runs_per_day, timeout_s}`。Pane からの呼び出しでは `workspace` の既定は自分の Workspace で、Pane を指定しない action は呼び出し元自身の Pane が対象になります |
+| `scheduler_upsert` | `job` | job を作成（`id` なし）または更新（`id` あり）。`{ok, job}` を返し、定義が不正なら `{ok: false, error}`。更新時は変える項目だけを送れば済みます：送らなかった項目は保存済みの値のまま、`policy` はキーごとにマージ、送った `action` は丸ごと検証されます。`schedule` は `{kind: "every", every_ms, anchor_ms?}`、`{kind: "daily", at: "HH:MM", tz}`、`{kind: "weekly", days: [1..7], at, tz}` のいずれか。`action` は `{kind: "message", workspace, pane_id?, pane_name?, text}`。`policy` は省略可能な `{catch_up, max_runs_per_day, timeout_s}`。Pane からの呼び出しでは `workspace` の既定は自分の Workspace で、Pane を指定しない action は呼び出し元自身の Pane が対象になります |
 | `scheduler_remove` | `id` | job とその実行履歴を削除 |
 | `scheduler_set_enabled` | `id`、`enabled` | 一時停止または再開。再開時は過ぎたスロットを実行せず、次のスロットを待ちます |
 | `scheduler_run_now` | `id` | 今すぐ一度実行し、終了を待たずに `{ok, enqueued}` を返します。失敗バックオフを解除します |

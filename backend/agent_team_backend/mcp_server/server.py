@@ -6878,6 +6878,11 @@ async def scheduler_upsert(job: dict[str, Any], ctx: Context) -> dict[str, Any]:
 
     Invalid definitions answer {ok: false, error} and save nothing.
 
+    Updating (with `id`) is partial: send only what changes — a field left out
+    keeps its stored value, and `policy` merges key by key. A sent `action` is
+    validated whole (it replaces the stored one; it is not merged). Creating
+    (no `id`) needs name, schedule and action.
+
     A job is {id, name, enabled, created_at, updated_at, schedule, action, policy,
     state}; times are epoch milliseconds.
 

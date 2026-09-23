@@ -172,3 +172,19 @@ async def test_pane_caller_keeps_an_explicit_target(wired, tmp_path) -> None:
 async def test_unwired_caller_is_refused(wired) -> None:
     ctx = SimpleNamespace(request_context=SimpleNamespace(request=None))
     assert (await plan_mcp.scheduler_list(ctx))["ok"] is False
+
+
+async def test_update_sends_only_what_changes(wired) -> None:
+    ctx = _host_ctx()
+    created = (await plan_mcp.scheduler_upsert(
+        {**JOB, "policy": {"max_runs_per_day": 5}}, ctx
+    ))["job"]
+    updated = await plan_mcp.scheduler_upsert(
+        {"id": created["id"], "policy": {"catch_up": "skip"}}, ctx
+    )
+    assert updated["ok"] is True
+    job = updated["job"]
+    assert job["name"] == created["name"] and job["action"] == created["action"]
+    assert job["schedule"] == created["schedule"]
+    assert job["policy"] == {"catch_up": "skip", "max_runs_per_day": 5, "timeout_s": 1800}
+    assert job["state"]["next_run_at"] == created["state"]["next_run_at"]

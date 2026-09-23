@@ -213,12 +213,13 @@ def _normalize_action(raw: Any) -> dict[str, Any]:
     return action
 
 
-def _normalize_policy(raw: Any) -> dict[str, Any]:
+def _normalize_policy(raw: Any, previous: dict[str, Any] | None) -> dict[str, Any]:
+    """Validate ``raw`` key by key over ``previous`` (defaults for a new job)."""
     if raw is None:
         raw = {}
     if not isinstance(raw, dict):
         raise JobInvalid("policy must be an object")
-    policy = dict(DEFAULT_POLICY)
+    policy = {**DEFAULT_POLICY, **(previous or {})}
     if raw.get("catch_up") is not None:
         if raw["catch_up"] not in ("once", "skip"):
             raise JobInvalid('policy.catch_up must be "once" or "skip"')
@@ -252,18 +253,31 @@ def normalize_job(raw: Any, existing: dict[str, Any] | None, now_ms: int) -> dic
     is server-owned: anything the client sends there is ignored. ``next_run_at``
     is recomputed only when the schedule changes or the job is (re-)enabled —
     never merely because the job was saved again (see the module invariant).
+
+    Updating an existing job is partial: a field left out (or null) keeps its
+    stored value, and ``policy`` merges key by key. ``action``, when sent, is
+    validated whole — never merged — so a target cannot end up half old, half
+    new.
     """
     if not isinstance(raw, dict):
         raise JobInvalid("job must be an object")
-    name = _require_str(raw, "name", "name", limit=_MAX_NAME)
-    enabled = raw.get("enabled", existing["enabled"] if existing else True)
+
+    def keep(key: str) -> bool:
+        return existing is not None and raw.get(key) is None
+
+    name = existing["name"] if keep("name") else _require_str(raw, "name", "name", limit=_MAX_NAME)
+    enabled = raw.get("enabled")
+    if enabled is None:
+        enabled = existing["enabled"] if existing else True
     if not isinstance(enabled, bool):
         raise JobInvalid("enabled must be true or false")
-    schedule = _normalize_schedule(
-        raw.get("schedule"), now_ms, existing["schedule"] if existing else None
+    schedule = (
+        dict(existing["schedule"]) if keep("schedule") else _normalize_schedule(
+            raw.get("schedule"), now_ms, existing["schedule"] if existing else None
+        )
     )
-    action = _normalize_action(raw.get("action"))
-    policy = _normalize_policy(raw.get("policy"))
+    action = dict(existing["action"]) if keep("action") else _normalize_action(raw.get("action"))
+    policy = _normalize_policy(raw.get("policy"), existing["policy"] if existing else None)
     state = dict(existing["state"]) if existing else _initial_state()
     rearm = (
         existing is None

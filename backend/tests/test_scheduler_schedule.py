@@ -142,3 +142,44 @@ def test_pane_id_alone_is_enough() -> None:
         _job(action={"kind": "message", "workspace": "/ws", "pane_id": "p-1", "text": "x"}), None, 1
     )
     assert job["action"] == {"kind": "message", "workspace": "/ws", "pane_id": "p-1", "text": "x"}
+
+
+def test_update_keeps_fields_it_does_not_send() -> None:
+    now = ms(datetime(2026, 9, 23, 8, 0, tzinfo=TPE))
+    job = normalize_job(_job(policy={"max_runs_per_day": 3, "timeout_s": 600}), None, now)
+    renamed = normalize_job({"id": job["id"], "name": "renamed"}, job, now + 1_000)
+    assert renamed["name"] == "renamed"
+    for key in ("schedule", "action", "policy", "enabled", "created_at", "id"):
+        assert renamed[key] == job[key]
+    assert renamed["state"]["next_run_at"] == job["state"]["next_run_at"]
+    # null counts as "not sent" on an update.
+    same = normalize_job({"id": job["id"], "schedule": None, "action": None}, job, now + 2_000)
+    assert same["schedule"] == job["schedule"] and same["action"] == job["action"]
+
+
+def test_update_merges_policy_key_by_key() -> None:
+    job = normalize_job(_job(policy={"catch_up": "skip", "max_runs_per_day": 3}), None, 1_000)
+    merged = normalize_job({"id": job["id"], "policy": {"timeout_s": 120}}, job, 2_000)
+    assert merged["policy"] == {"catch_up": "skip", "max_runs_per_day": 3, "timeout_s": 120}
+    with pytest.raises(JobInvalid, match="catch_up"):
+        normalize_job({"id": job["id"], "policy": {"catch_up": "all"}}, job, 2_000)
+
+
+def test_update_validates_a_sent_action_whole() -> None:
+    job = normalize_job(_job(), None, 1_000)
+    # No merge onto the stored action: the partial action lacks workspace.
+    with pytest.raises(JobInvalid, match="workspace"):
+        normalize_job({"id": job["id"], "action": {"kind": "message", "text": "new"}}, job, 2_000)
+    swapped = normalize_job(
+        {"id": job["id"], "action": {"kind": "message", "workspace": "/w2", "pane_id": "p9", "text": "t"}},
+        job, 2_000,
+    )
+    assert swapped["action"] == {"kind": "message", "workspace": "/w2", "pane_id": "p9", "text": "t"}
+
+
+def test_new_job_still_requires_every_field() -> None:
+    for missing in ("name", "schedule", "action"):
+        raw = _job()
+        del raw[missing]
+        with pytest.raises(JobInvalid):
+            normalize_job(raw, None, 1_000)

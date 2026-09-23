@@ -623,7 +623,7 @@ back off 30s → 1m → 5m → 15m → 60m.
 | Tool | Parameters | What it does |
 |---|---|---|
 | `scheduler_list` | — | `{ok, jobs, now}` |
-| `scheduler_upsert` | `job` | Create (no `id`) or update (with `id`) a job; returns `{ok, job}`, or `{ok: false, error}` for an invalid definition. `schedule` is `{kind: "every", every_ms, anchor_ms?}`, `{kind: "daily", at: "HH:MM", tz}` or `{kind: "weekly", days: [1..7], at, tz}`; `action` is `{kind: "message", workspace, pane_id?, pane_name?, text}`; `policy` is optional `{catch_up, max_runs_per_day, timeout_s}`. For a pane caller `workspace` defaults to its own, and an action naming no pane targets the caller's own pane |
+| `scheduler_upsert` | `job` | Create (no `id`) or update (with `id`) a job; returns `{ok, job}`, or `{ok: false, error}` for an invalid definition. An update sends only what changes: omitted fields keep their stored value, `policy` merges key by key, and a sent `action` is validated whole. `schedule` is `{kind: "every", every_ms, anchor_ms?}`, `{kind: "daily", at: "HH:MM", tz}` or `{kind: "weekly", days: [1..7], at, tz}`; `action` is `{kind: "message", workspace, pane_id?, pane_name?, text}`; `policy` is optional `{catch_up, max_runs_per_day, timeout_s}`. For a pane caller `workspace` defaults to its own, and an action naming no pane targets the caller's own pane |
 | `scheduler_remove` | `id` | Deletes the job and its run history |
 | `scheduler_set_enabled` | `id`, `enabled` | Pause or resume; resuming waits for the next slot instead of firing one that passed |
 | `scheduler_run_now` | `id` | Starts one run now and answers `{ok, enqueued}` before it ends; clears a failure backoff |
