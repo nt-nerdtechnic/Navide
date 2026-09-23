@@ -8076,7 +8076,7 @@
     "count": "{count} 項目",
     "empty": "項目はありません",
     "unsupported": "このプラットフォームには対応していません",
-    "no-source": "このプラットフォームには表示できる項目がありません。Navide はユーザーの crontab と macOS の launchd ジョブを読み取りますが、このシステムにはどちらもありません。Navide 自身が定期ジョブを作成することはないため、表示の欠落ではありません。",
+    "no-source": "このプラットフォームには表示できる項目がありません。Navide はユーザーの crontab と macOS の launchd ジョブを読み取りますが、このシステムにはどちらもありません。Navide が OS の定期ジョブを作成することはないため、表示の欠落ではありません。Navide 自身のジョブは上の Navide Jobs に表示されます。",
     "no-source-windows": "Windows の定期タスクはタスク スケジューラ（taskschd.msc）で管理され、一覧表示、有効化、無効化、削除ができます。Navide は設計上これを統合していません。",
     "crontab": {
       "title": "システム crontab",
