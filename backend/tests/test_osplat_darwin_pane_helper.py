@@ -203,10 +203,17 @@ def test_helper_is_transparent_to_the_pane_contract(tmp_path):
     assert handle.proc.returncode == 7
 
 
+_SLEEP_MARK = "30.7171"
+_SLEEP_PATTERN = "^sleep 30\\.7171$"
+
+
 @needs_helper
 def test_helper_forwards_signals_and_reports_the_signal_exit():
     backend = _darwin.DarwinTerminalBackend(HELPER)
-    handle = _spawn(backend, ["/bin/sh", "-c", "echo up; sleep 30"])
+    # A duration no other process on the machine will be sleeping for: the
+    # check below is a machine-wide pgrep, and other sessions poll with
+    # `sleep 30`.
+    handle = _spawn(backend, ["/bin/sh", "-c", f"echo up; sleep {_SLEEP_MARK}"])
     _wait_for_output(handle, b"up")
     # SIGTERM to the pane root (what kill_group reaches) must land on the shell.
     os.kill(handle.pid, signal.SIGTERM)
@@ -217,11 +224,11 @@ def test_helper_forwards_signals_and_reports_the_signal_exit():
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
         if not subprocess.run(
-            ["pgrep", "-f", "^sleep 30$"], capture_output=True
+            ["pgrep", "-f", _SLEEP_PATTERN], capture_output=True
         ).stdout:
             break
         time.sleep(0.1)
-    assert not subprocess.run(["pgrep", "-f", "^sleep 30$"], capture_output=True).stdout
+    assert not subprocess.run(["pgrep", "-f", _SLEEP_PATTERN], capture_output=True).stdout
 
 
 @needs_helper
