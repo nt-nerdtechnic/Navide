@@ -1254,11 +1254,20 @@ describe('CliAccountsPane', () => {
     expect(buttonByText(section(w, 1), 'Paste credential')).toBeUndefined()
   })
 
-  it('offers no paste button while credential sync is off', () => {
+  it('offers the paste button and saves while credential sync is off', async () => {
     const api = makeApi({ portableSupported: ['claude'], cloudStatus: 'off' })
     const w = mountPane(api)
-    expect(section(w, 0).find('.cli-card-portable').exists()).toBe(false)
-    expect(buttonByText(section(w, 0), 'Paste credential')).toBeUndefined()
+    const card = section(w, 0).findAll('.cli-card')[0]
+    expect(card.find('.cli-card-portable').exists()).toBe(false)
+    await buttonByText(card.find('.cli-card-actions'), 'Paste credential')!.trigger('click')
+    await flushPromises()
+    await card.get('input.cli-portable-input').setValue('sk-ant-oat01-SYNTHETIC')
+    await card.get('form').trigger('submit')
+    await flushPromises()
+    expect(api.portableSet).toHaveBeenCalledWith('claude', null, 'sk-ant-oat01-SYNTHETIC')
+    expect(card.get('.cli-portable-flag').text()).toBe('Set')
+    // Sync is off, so the stored credential shows no cloud column.
+    expect(card.find('.cli-portable-cloud').exists()).toBe(false)
   })
 
   it('keeps a stored credential manageable while credential sync is off', () => {

@@ -494,7 +494,7 @@ function importedSlots(agentKey: string) {
 }
 
 // An empty slot shows no block, only a compact "Paste credential" button in
-// its action row, and only while credential sync is on (Settings → Sync).
+// its action row (a pasted credential works locally, with or without sync).
 // Pressing it opens the block with its form until the paste is saved or
 // cancelled; a stored credential or a cloud copy keeps the block up.
 const portablePasting = ref(new Set<string>())
@@ -508,11 +508,7 @@ function portableShown(agentKey: string, slotId: string): boolean {
 }
 
 function canStartPortable(agentKey: string, slotId: string): boolean {
-  return (
-    portableAgent(agentKey) &&
-    props.api.cloudStatus.value !== 'off' &&
-    !portableShown(agentKey, slotId)
-  )
+  return portableAgent(agentKey) && !portableShown(agentKey, slotId)
 }
 
 function setPortablePasting(agentKey: string, slotId: string, on: boolean): void {
