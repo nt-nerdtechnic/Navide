@@ -484,3 +484,107 @@ async def test_pane_id_gone_never_falls_back_to_same_name(monkeypatch, tmp_path)
         assert deliver[0]["payload"]["rate_limit"] is True
     finally:
         agent_messaging._reset_for_test()
+
+
+# ── once ───────────────────────────────────────────────────────────────────
+
+
+def once_job(in_ms: int = 5 * MINUTE, **over) -> dict:
+    return every_job(schedule={"kind": "once", "in_ms": in_ms}, **over)
+
+
+async def job_row(service: SchedulerService, job_id: str) -> dict:
+    return await service.store.get_job(job_id)
+
+
+@pytest.mark.parametrize("outcome", [
+    {"status": "ok", "detail": "delivered", "msg_key": "k"},
+    {"status": "error", "detail": "boom"},
+    {"status": "skipped", "reason": "target_gone", "detail": "gone"},
+])
+async def test_once_runs_once_then_disables_itself(env, outcome) -> None:
+    service = env["make"]()
+    job = (await service.upsert(once_job()))["job"]
+    env["bridge"].outcomes = [outcome]
+    env["clock"].advance_ms(5 * MINUTE)
+    await service.tick()
+    await settle(service)
+    row = await job_row(service, job["id"])
+    assert row["enabled"] is False
+    assert row["state"]["last_status"] == outcome["status"]
+    assert row["state"]["next_run_at"] is None
+    env["clock"].advance_ms(60 * MINUTE)
+    await service.tick()
+    assert len(env["bridge"].delivered) == 1
+
+
+async def test_once_gate_skip_also_disables(env) -> None:
+    service = env["make"]()
+    job = (await service.upsert(once_job()))["job"]
+    env["bridge"].window = False
+    env["clock"].advance_ms(5 * MINUTE)
+    await service.tick()
+    row = await job_row(service, job["id"])
+    assert row["enabled"] is False and row["state"]["last_skip_reason"] == "no_window"
+    assert env["bridge"].delivered == []
+
+
+async def test_once_missed_while_closed_is_caught_up_once(env) -> None:
+    service = env["make"]()
+    job = (await service.upsert(once_job()))["job"]
+    env["clock"].advance_ms(60 * MINUTE)
+    restarted = env["make"]()
+    await restarted.start()
+    try:
+        await asyncio.wait_for(restarted._catch_up_task, 5)  # noqa: SLF001
+        await settle(restarted)
+        assert len(env["bridge"].delivered) == 1
+        row = await job_row(restarted, job["id"])
+        assert row["enabled"] is False and row["state"]["last_status"] == "ok"
+    finally:
+        await restarted.close()
+
+
+async def test_once_missed_with_catch_up_skip_is_recorded_and_disabled(env) -> None:
+    service = env["make"]()
+    job = (await service.upsert(once_job(policy={"catch_up": "skip"})))["job"]
+    env["clock"].advance_ms(60 * MINUTE)
+    restarted = env["make"]()
+    await restarted.start()
+    try:
+        row = await job_row(restarted, job["id"])
+        assert row["enabled"] is False and row["state"]["last_skip_reason"] == "missed"
+        assert restarted._catch_up_task is None  # noqa: SLF001
+        assert env["bridge"].delivered == []
+    finally:
+        await restarted.close()
+
+
+async def test_reenabling_a_passed_once_job_is_refused(env) -> None:
+    service = env["make"]()
+    job = (await service.upsert(once_job()))["job"]
+    env["clock"].advance_ms(5 * MINUTE)
+    await service.tick()
+    await settle(service)
+    answer = await service.set_enabled(job["id"], True)
+    assert answer["ok"] is False and "time has passed" in answer["error"]
+    assert (await job_row(service, job["id"]))["enabled"] is False
+
+
+async def test_reenabling_a_future_once_job_keeps_its_moment(env) -> None:
+    service = env["make"]()
+    job = (await service.upsert(once_job(in_ms=30 * MINUTE)))["job"]
+    await service.set_enabled(job["id"], False)
+    assert await service.set_enabled(job["id"], True) == {"ok": True}
+    assert (await state(service, job["id"]))["next_run_at"] == job["schedule"]["at_ms"]
+
+
+async def test_run_now_works_on_a_once_job(env) -> None:
+    service = env["make"]()
+    job = (await service.upsert(once_job(in_ms=30 * MINUTE)))["job"]
+    assert await service.run_now(job["id"]) == {"ok": True, "enqueued": True}
+    await settle(service)
+    row = await job_row(service, job["id"])
+    # A manual run is not its slot: the job stays armed for its moment.
+    assert row["enabled"] is True and row["state"]["next_run_at"] == job["schedule"]["at_ms"]
+    assert len(env["bridge"].delivered) == 1

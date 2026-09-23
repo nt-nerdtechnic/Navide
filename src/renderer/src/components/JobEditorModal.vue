@@ -12,6 +12,7 @@ import { computed, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { useBackend } from '../composables/useBackend'
 import {
+  HOUR_MS,
   MINUTE_MS,
   describeSchedule,
   formatDateTime,
@@ -46,8 +47,8 @@ interface RosterPane {
   agent_key?: string
 }
 
-type Freq = 'every' | 'daily' | 'weekly'
-const FREQS: Freq[] = ['every', 'daily', 'weekly']
+type Freq = 'every' | 'daily' | 'weekly' | 'once'
+const FREQS: Freq[] = ['every', 'daily', 'weekly', 'once']
 /** ISO weekdays, Monday first. */
 const DAYS = [1, 2, 3, 4, 5, 6, 7]
 /** backend bounds: every_ms 60 000 … 7 days; max_runs_per_day 1 … 1440. */
@@ -60,6 +61,12 @@ const everyMin = ref(60)
 const at = ref('09:00')
 const tz = ref(localTimeZone())
 const days = ref<number[]>([1, 2, 3, 4, 5])
+/** `<input type="datetime-local">` value, local wall clock to the minute. */
+const onceAt = ref('')
+/** What reset() put in onceAt, and the exact at_ms it stands for: an untouched
+ *  field keeps the stored moment (seconds included) instead of re-deriving it. */
+let onceInitial = ''
+let onceInitialMs: number | null = null
 const workspace = ref('')
 /** Select value: a pane id, or `NAME_PREFIX + name` for a job that was created
  *  by name only (MCP) and has no pane id to show. */
@@ -89,9 +96,13 @@ function reset(job: SchedulerJob | null): void {
   const s = job?.schedule
   freq.value = s?.kind ?? 'daily'
   everyMin.value = s?.kind === 'every' ? Math.round(s.every_ms / MINUTE_MS) : 60
-  at.value = s && s.kind !== 'every' ? s.at : '09:00'
-  tz.value = s && s.kind !== 'every' ? s.tz : localTimeZone()
+  at.value = s && (s.kind === 'daily' || s.kind === 'weekly') ? s.at : '09:00'
+  tz.value = s && (s.kind === 'daily' || s.kind === 'weekly') ? s.tz : localTimeZone()
   days.value = s?.kind === 'weekly' ? [...s.days] : [1, 2, 3, 4, 5]
+  onceInitialMs = s?.kind === 'once' ? s.at_ms : null
+  // A new once job defaults to an hour from now, on the minute.
+  onceAt.value = toLocalInput(onceInitialMs ?? Math.ceil((Date.now() + HOUR_MS) / MINUTE_MS) * MINUTE_MS)
+  onceInitial = onceInitialMs === null ? '' : onceAt.value
   workspace.value = job?.action.workspace ?? ''
   target.value = job?.action.pane_id
     ? job.action.pane_id
@@ -178,6 +189,20 @@ function onWorkspacePicked(): void {
   target.value = ''
 }
 
+function toLocalInput(ms: number): string {
+  const d = new Date(ms)
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+/** at_ms for the once field; NaN when the field is empty or malformed. */
+const onceMs = computed(() => {
+  if (onceInitialMs !== null && onceAt.value === onceInitial) return onceInitialMs
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(onceAt.value)
+  if (!m) return Number.NaN
+  return new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]).getTime()
+})
+
 function toggleDay(d: number): void {
   days.value = days.value.includes(d) ? days.value.filter((x) => x !== d) : [...days.value, d]
 }
@@ -192,6 +217,7 @@ const schedule = computed<JobSchedule>(() => {
       ? { kind: 'every', every_ms: everyMs, anchor_ms: anchor }
       : { kind: 'every', every_ms: everyMs }
   }
+  if (freq.value === 'once') return { kind: 'once', at_ms: onceMs.value }
   if (freq.value === 'daily') return { kind: 'daily', at: at.value, tz: tz.value.trim() }
   return { kind: 'weekly', days: [...days.value].sort((a, b) => a - b), at: at.value, tz: tz.value.trim() }
 })
@@ -203,6 +229,12 @@ const errors = computed<Record<string, string>>(() => {
     const n = Number(everyMin.value)
     if (!Number.isInteger(n) || n < 1 || n > EVERY_MAX_MIN)
       e.schedule = t('scheduler.editor.err-every', { max: EVERY_MAX_MIN })
+  } else if (freq.value === 'once') {
+    const ms = onceMs.value
+    // The stored moment of a job being re-saved may lie in the past; a new one
+    // may not (the backend allows one minute of slack).
+    if (Number.isNaN(ms) || (ms !== onceInitialMs && ms < now.value - MINUTE_MS))
+      e.schedule = t('scheduler.editor.err-once')
   } else {
     if (!isValidHhmm(at.value)) e.schedule = t('scheduler.editor.err-time')
     else if (!isValidTimeZone(tz.value.trim())) e.schedule = t('scheduler.editor.err-tz')
@@ -343,6 +375,9 @@ async function remove(): Promise<void> {
                 :max="EVERY_MAX_MIN"
               />
               <span class="je-unit">{{ t('scheduler.editor.minutes') }}</span>
+            </div>
+            <div v-else-if="freq === 'once'" class="je-row">
+              <input v-model="onceAt" class="nv-input je-once" data-field="once" type="datetime-local" />
             </div>
             <template v-else>
               <div v-if="freq === 'weekly'" class="je-days">
@@ -519,6 +554,9 @@ async function remove(): Promise<void> {
 }
 .je-time {
   width: 110px;
+}
+.je-once {
+  width: 200px;
 }
 .je-tz {
   flex: 1;

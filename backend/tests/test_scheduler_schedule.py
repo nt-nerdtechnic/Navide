@@ -183,3 +183,61 @@ def test_new_job_still_requires_every_field() -> None:
         del raw[missing]
         with pytest.raises(JobInvalid):
             normalize_job(raw, None, 1_000)
+
+
+# ── once ───────────────────────────────────────────────────────────────────
+
+NOW = 1_800_000_000_000
+TEN_YEARS = 10 * 365 * 24 * 3600 * 1000
+
+
+def test_once_next_run_is_its_moment_then_nothing() -> None:
+    sched = {"kind": "once", "at_ms": NOW}
+    assert next_run_after(sched, NOW - 1) == NOW
+    assert next_run_after(sched, NOW) is None
+    assert next_run_after(sched, NOW + 5) is None
+
+
+def test_once_in_ms_is_stored_as_at_ms() -> None:
+    job = normalize_job(_job(schedule={"kind": "once", "in_ms": 3_600_000}), None, NOW)
+    assert job["schedule"] == {"kind": "once", "at_ms": NOW + 3_600_000}
+    assert job["state"]["next_run_at"] == NOW + 3_600_000
+
+
+def test_once_within_the_grace_minute_fires_right_away() -> None:
+    job = normalize_job(_job(schedule={"kind": "once", "at_ms": NOW - 59_000}), None, NOW)
+    assert job["state"]["next_run_at"] == NOW - 59_000
+    in_zero = normalize_job(_job(schedule={"kind": "once", "in_ms": 0}), None, NOW)
+    assert in_zero["state"]["next_run_at"] == NOW
+
+
+@pytest.mark.parametrize(
+    "schedule, needle",
+    [
+        ({"kind": "once", "at_ms": NOW - 61_000}, "past"),
+        ({"kind": "once", "at_ms": NOW + TEN_YEARS + 1}, "10 years"),
+        ({"kind": "once", "in_ms": -1}, "in_ms"),
+        ({"kind": "once", "in_ms": TEN_YEARS + 1}, "in_ms"),
+        ({"kind": "once"}, "at_ms or schedule.in_ms"),
+        ({"kind": "once", "at_ms": "soon"}, "integer"),
+    ],
+)
+def test_once_validation(schedule: dict, needle: str) -> None:
+    with pytest.raises(JobInvalid, match=needle):
+        normalize_job(_job(schedule=schedule), None, NOW)
+
+
+def test_once_passed_moment_survives_a_resave_but_not_a_reenable() -> None:
+    job = normalize_job(_job(schedule={"kind": "once", "at_ms": NOW + 1_000}), None, NOW)
+    ran = {**job, "enabled": False, "state": {**job["state"], "next_run_at": None}}
+    later = NOW + 3_600_000
+    # A full re-save of the finished job (as the editor sends it) still works.
+    renamed = normalize_job({**_job(schedule=job["schedule"]), "name": "x", "enabled": False, "id": job["id"]}, ran, later)
+    assert renamed["name"] == "x" and renamed["enabled"] is False
+    with pytest.raises(JobInvalid, match="time has passed"):
+        normalize_job({"id": job["id"], "enabled": True}, ran, later)
+    # A new moment re-arms it.
+    rearmed = normalize_job(
+        {"id": job["id"], "enabled": True, "schedule": {"kind": "once", "in_ms": 60_000}}, ran, later
+    )
+    assert rearmed["enabled"] is True and rearmed["state"]["next_run_at"] == later + 60_000

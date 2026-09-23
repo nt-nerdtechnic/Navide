@@ -188,3 +188,18 @@ async def test_update_sends_only_what_changes(wired) -> None:
     assert job["schedule"] == created["schedule"]
     assert job["policy"] == {"catch_up": "skip", "max_runs_per_day": 5, "timeout_s": 1800}
     assert job["state"]["next_run_at"] == created["state"]["next_run_at"]
+
+
+async def test_wake_me_in_an_hour_is_a_once_job(wired, tmp_path) -> None:
+    tools = {tool.name: tool for tool in await plan_mcp.server.list_tools()}
+    doc = tools["scheduler_upsert"].description or ""
+    assert '{kind: "once", in_ms: 3600000}' in doc and "disables itself" in doc
+    agent_messaging.register("me-1", "planner", str(tmp_path), "claude")
+    job = {
+        "name": "resume",
+        "schedule": {"kind": "once", "in_ms": 3_600_000},
+        "action": {"kind": "message", "text": "wake up and continue"},
+    }
+    result = await plan_mcp.scheduler_upsert(job, _pane_ctx("me-1"))
+    assert result["ok"] is True
+    assert result["job"]["schedule"] == {"kind": "once", "at_ms": 1_800_000_000_000 + 3_600_000}

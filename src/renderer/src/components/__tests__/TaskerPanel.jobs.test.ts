@@ -352,6 +352,77 @@ describe('TaskerPanel — Navide jobs', () => {
     expect(editorOf(wrapper).get('[data-test="editor-error"]').text()).toBe('schedule.at must be HH:MM')
   })
 
+  it('describes a once job, and a spent one as done', async () => {
+    const atMs = new Date(2031, 8, 24, 14, 0).getTime()
+    wire.jobs = [
+      job('pending', { schedule: { kind: 'once', at_ms: atMs }, state: { next_run_at: atMs, consecutive_errors: 0 } }),
+      job('spent', {
+        enabled: false,
+        schedule: { kind: 'once', at_ms: atMs },
+        state: { next_run_at: null, last_status: 'skipped', consecutive_errors: 0 },
+      }),
+    ]
+    wrapper = await mountSection()
+    await openGroup(wrapper, 'disabled')
+    expect(groupOf(wrapper, 'pending')).toBe('timeline')
+    expect(row(wrapper, 'pending').get('[data-test="desc"]').text()).toBe(
+      t('scheduler.once-at', { time: new Date(atMs).toLocaleString(undefined, {
+        month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false,
+      }) })
+    )
+    expect(row(wrapper, 'spent').get('[data-test="desc"]').text()).toBe(t('scheduler.once-done'))
+  })
+
+  it('edits a once job as once, keeping its exact moment when the time is untouched', async () => {
+    // A past moment with seconds: re-saving must send it back unchanged.
+    const atMs = new Date(2020, 0, 2, 3, 4, 56).getTime()
+    wire.jobs = [
+      job('o', {
+        enabled: false,
+        schedule: { kind: 'once', at_ms: atMs },
+        state: { next_run_at: null, last_status: 'ok', consecutive_errors: 0 },
+      }),
+    ]
+    wire.roster = [{ pane_id: PANE_A, name: '週報', workspace_path: WS, workspace_label: 'proj', agent_key: 'claude' }]
+    wrapper = await mountSection()
+    await openGroup(wrapper, 'disabled')
+    await row(wrapper, 'o').get('.sj-name').trigger('click')
+    await flushPromises()
+    expect(editorOf(wrapper).get('[data-freq="once"]').classes()).toContain('on')
+    expect((editorOf(wrapper).get('[data-field="once"]').element as HTMLInputElement).value).toBe('2020-01-02T03:04')
+    await editorOf(wrapper).get('[data-field="name"]').setValue('renamed')
+    await editorOf(wrapper).get('[data-test="save"]').trigger('click')
+    await flushPromises()
+    const sent = callsOf('scheduler.upsert')[0].payload.job as { schedule: unknown; enabled: boolean }
+    expect(sent.schedule).toEqual({ kind: 'once', at_ms: atMs })
+    expect(sent.enabled).toBe(false)
+  })
+
+  it('creates a once job from a date and time, and refuses one in the past', async () => {
+    wire.roster = [{ pane_id: PANE_A, name: '週報', workspace_path: WS, workspace_label: 'proj', agent_key: 'claude' }]
+    wrapper = await mountSection()
+    await wrapper.get('[data-test="add-job"]').trigger('click')
+    await flushPromises()
+    await editorOf(wrapper).get('[data-freq="once"]').trigger('click')
+    await editorOf(wrapper).get('[data-field="name"]').setValue('wake')
+    await editorOf(wrapper).get('[data-field="target"]').setValue(PANE_A)
+    await editorOf(wrapper).get('[data-field="text"]').setValue('continue')
+    await editorOf(wrapper).get('[data-field="once"]').setValue('2020-01-01T09:00')
+    await editorOf(wrapper).get('[data-test="save"]').trigger('click')
+    await flushPromises()
+    expect(callsOf('scheduler.upsert')).toHaveLength(0)
+    expect(editorOf(wrapper).get('[data-error="schedule"]').text()).toBe(t('scheduler.editor.err-once'))
+
+    await editorOf(wrapper).get('[data-field="once"]').setValue('2099-09-24T14:00')
+    expect(editorOf(wrapper).find('[data-test="next-preview"]').exists()).toBe(true)
+    await editorOf(wrapper).get('[data-test="save"]').trigger('click')
+    await flushPromises()
+    expect((callsOf('scheduler.upsert')[0].payload.job as { schedule: unknown }).schedule).toEqual({
+      kind: 'once',
+      at_ms: new Date(2099, 8, 24, 14, 0).getTime(),
+    })
+  })
+
   it('toggles a job and re-reads the list (the broadcast skips the sender)', async () => {
     wire.jobs = [job('a')]
     wrapper = await mountSection()

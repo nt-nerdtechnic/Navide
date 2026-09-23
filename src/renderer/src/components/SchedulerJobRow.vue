@@ -19,6 +19,7 @@ const gone = computed(() => props.api.targetGone(props.job))
 const busy = computed(() => props.api.pendingId.value !== null)
 const backoff = computed(() => props.api.backoffLabel(props.job))
 const target = computed(() => props.api.targetLabel(props.job))
+const desc = computed(() => describeSchedule(props.job.schedule, tr, props.job.state))
 </script>
 
 <template>
@@ -63,8 +64,8 @@ const target = computed(() => props.api.targetLabel(props.job))
         </button>
       </span>
     </div>
-    <div class="sj-line2" :title="`${describeSchedule(job.schedule, tr)} · ${target}\n${job.action.workspace}`">
-      <span class="sj-desc">{{ describeSchedule(job.schedule, tr) }}</span>
+    <div class="sj-line2" :title="`${desc} · ${target}\n${job.action.workspace}`">
+      <span class="sj-desc" data-test="desc">{{ desc }}</span>
       <span v-if="backoff" class="sj-when" data-test="when">· {{ backoff }}</span>
       <span class="sj-sep">·</span>
       <span class="sj-target" data-test="target">{{ target }}</span>

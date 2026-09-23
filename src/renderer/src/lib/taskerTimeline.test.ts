@@ -139,6 +139,16 @@ describe('classification', () => {
     expect(classifyJob(job(), true).failing).toBe(true)
   })
 
+  it('puts a pending once job on the timeline and a spent one under disabled', () => {
+    const once = { kind: 'once' as const, at_ms: at(25, 14, 0) }
+    expect(classifyJob(job({ schedule: once, state: { next_run_at: once.at_ms } }), false)).toMatchObject({
+      group: 'timeline',
+      next: once.at_ms,
+    })
+    const spent = job({ schedule: once, enabled: false, state: { next_run_at: null, last_status: 'ok' } })
+    expect(classifyJob(spent, false).group).toBe('disabled')
+  })
+
   it('sorts crontab entries by what can be known about them', () => {
     expect(classifyCron(entry(), NOW)).toMatchObject({ group: 'timeline', next: at(24, 2, 30) })
     expect(classifyCron(entry({ schedule: '* * * * *' }), NOW)).toMatchObject({ group: 'interval', intervalMs: 60_000 })

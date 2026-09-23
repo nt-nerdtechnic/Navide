@@ -6873,8 +6873,14 @@ async def scheduler_upsert(job: dict[str, Any], ctx: Context) -> dict[str, Any]:
 
     Defaults for a pane caller: action.workspace is your own workspace, and an
     action with neither pane_id nor pane_name targets YOUR OWN pane — so
-    "wake me up in an hour and continue" is a job with just `text`. A caller
-    with no pane identity must pass workspace and a target.
+    "wake me up in an hour and continue" is a once job whose action is just
+    `text`: {name, schedule: {kind: "once", in_ms: 3600000}, action: {kind:
+    "message", text}}. Do not use "every" for a one-off wake-up — it repeats. A
+    caller with no pane identity must pass workspace and a target.
+
+    A once job runs a single time, then disables itself whatever the outcome
+    (ok, error or skipped); it stays listed with its state. Enabling it again
+    after its moment has passed is refused — give it a new at_ms / in_ms.
 
     Invalid definitions answer {ok: false, error} and save nothing.
 
@@ -6891,6 +6897,9 @@ async def scheduler_upsert(job: dict[str, Any], ctx: Context) -> dict[str, Any]:
                                                  on a grid from anchor_ms (default: now)
         {kind: "daily",  at: "HH:MM", tz}        tz is an IANA zone, e.g. "Asia/Taipei"
         {kind: "weekly", days: [1..7], at, tz}   1 = Monday .. 7 = Sunday
+        {kind: "once",   at_ms}                  one run at that moment (at most 1 min
+                                                 in the past, at most 10 years ahead)
+        {kind: "once",   in_ms}                  shorthand: saved as at_ms = now + in_ms
       action — {kind: "message", workspace, pane_id?, pane_name?, text}: wake that
         CLI pane (a closed-idle restore placeholder is opened first) and send
         `text`, exactly as cli_send(open_target=True) would. At least one of
@@ -6949,7 +6958,8 @@ async def scheduler_set_enabled(id: str, enabled: bool, ctx: Context) -> dict[st
     """Pause (enabled=false) or resume a scheduled job. Returns {ok}.
 
     Resuming never fires a slot that passed while the job was paused; it waits
-    for the next one.
+    for the next one. Resuming a once job whose moment has passed answers
+    {ok: false, error} — set a new time with scheduler_upsert instead.
     """
     try:
         _resolve_caller(ctx)

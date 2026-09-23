@@ -541,9 +541,9 @@ WS 訊息）同一個後端排程器，所以在這裡建立的 job 會立刻出
 | Tool | 參數 | 作用 |
 |---|---|---|
 | `scheduler_list` | — | `{ok, jobs, now}` |
-| `scheduler_upsert` | `job` | 建立（不帶 `id`）或更新（帶 `id`）job；回 `{ok, job}`，定義不合法時回 `{ok: false, error}`。更新時只需傳要改的欄位：沒傳的欄位保留原值，`policy` 逐鍵合併，有傳 `action` 則整個驗證。`schedule` 是 `{kind: "every", every_ms, anchor_ms?}`、`{kind: "daily", at: "HH:MM", tz}` 或 `{kind: "weekly", days: [1..7], at, tz}`；`action` 是 `{kind: "message", workspace, pane_id?, pane_name?, text}`；`policy` 可省略，為 `{catch_up, max_runs_per_day, timeout_s}`。Pane 呼叫端省略 `workspace` 時預設為自己的 Workspace，沒指定 Pane 時目標就是呼叫者自己的 Pane |
+| `scheduler_upsert` | `job` | 建立（不帶 `id`）或更新（帶 `id`）job；回 `{ok, job}`，定義不合法時回 `{ok: false, error}`。更新時只需傳要改的欄位：沒傳的欄位保留原值，`policy` 逐鍵合併，有傳 `action` 則整個驗證。`schedule` 是 `{kind: "every", every_ms, anchor_ms?}`、`{kind: "daily", at: "HH:MM", tz}` 、`{kind: "weekly", days: [1..7], at, tz}` 或 `{kind: "once", at_ms}` —— 也接受 `{kind: "once", in_ms}`，存檔時換算成 `at_ms = now + in_ms`（最多早於現在 1 分鐘、最晚 10 年後）。once job 只跑一次，跑完不論結果都會自動停用，所以「一小時後叫醒我」要用 `{kind: "once", in_ms: 3600000}`，不是 `every`；`action` 是 `{kind: "message", workspace, pane_id?, pane_name?, text}`；`policy` 可省略，為 `{catch_up, max_runs_per_day, timeout_s}`。Pane 呼叫端省略 `workspace` 時預設為自己的 Workspace，沒指定 Pane 時目標就是呼叫者自己的 Pane |
 | `scheduler_remove` | `id` | 刪除 job 與其執行紀錄 |
-| `scheduler_set_enabled` | `id`、`enabled` | 暫停或恢復；恢復後等下一個槽，不會補跑暫停期間經過的槽 |
+| `scheduler_set_enabled` | `id`、`enabled` | 暫停或恢復；恢復後等下一個槽，不會補跑暫停期間經過的槽。時間已過的 once job 無法恢復，會回 `{ok: false, error}`，請改設新的時間 |
 | `scheduler_run_now` | `id` | 立刻執行一次，不等結束就回 `{ok, enqueued}`；會清除失敗退避 |
 | `scheduler_runs` | `id`、`limit` | 執行紀錄，新的在前：`{id, job_id, started_at, ended_at, status, reason, detail}` |
 

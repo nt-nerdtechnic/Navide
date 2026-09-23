@@ -9,6 +9,8 @@ export type JobSchedule =
   | { kind: 'every'; every_ms: number; anchor_ms?: number }
   | { kind: 'daily'; at: string; tz: string }
   | { kind: 'weekly'; days: number[]; at: string; tz: string }
+  /** One run at `at_ms`; the backend disables the job after it. */
+  | { kind: 'once'; at_ms: number }
 
 /** The only action: wake a CLI pane and send it `text`. At least one of
  *  pane_id / pane_name is present; with pane_id the backend delivers to that
@@ -96,7 +98,16 @@ export function shortId(id: string | undefined | null): string {
   return (id ?? '').slice(0, 8)
 }
 
-export function describeSchedule(s: JobSchedule, t: Translate): string {
+/** A once job whose single slot is spent: it has an outcome and no next run.
+ *  A ▶ run leaves next_run_at in place, so it does not count. */
+export function onceDone(s: JobSchedule, state: JobState | undefined): boolean {
+  return s.kind === 'once' && !!state?.last_status && state.next_run_at == null
+}
+
+export function describeSchedule(s: JobSchedule, t: Translate, state?: JobState): string {
+  if (s.kind === 'once') {
+    return onceDone(s, state) ? t('scheduler.once-done') : t('scheduler.once-at', { time: formatDateTime(s.at_ms) })
+  }
   if (s.kind === 'every') {
     if (s.every_ms % HOUR_MS === 0) return t('scheduler.every-hours', { n: s.every_ms / HOUR_MS })
     return t('scheduler.every-minutes', { n: Math.round(s.every_ms / MINUTE_MS) })
@@ -163,6 +174,7 @@ function zonedToUtc(y: number, mo: number, d: number, h: number, mi: number, tz:
 /** The next slot strictly after `now`, or null when the schedule is not
  *  complete enough to have one. A preview: the backend computes the real one. */
 export function previewNextRun(s: JobSchedule, now: number): number | null {
+  if (s.kind === 'once') return s.at_ms > now ? s.at_ms : null
   if (s.kind === 'every') {
     if (!(s.every_ms > 0)) return null
     const anchor = s.anchor_ms ?? now

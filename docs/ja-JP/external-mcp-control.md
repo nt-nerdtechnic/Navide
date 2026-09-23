@@ -606,9 +606,9 @@ job はすぐにパネルにも表示されます —— 変更のたびに `sch
 | Tool | パラメータ | 内容 |
 |---|---|---|
 | `scheduler_list` | — | `{ok, jobs, now}` |
-| `scheduler_upsert` | `job` | job を作成（`id` なし）または更新（`id` あり）。`{ok, job}` を返し、定義が不正なら `{ok: false, error}`。更新時は変える項目だけを送れば済みます：送らなかった項目は保存済みの値のまま、`policy` はキーごとにマージ、送った `action` は丸ごと検証されます。`schedule` は `{kind: "every", every_ms, anchor_ms?}`、`{kind: "daily", at: "HH:MM", tz}`、`{kind: "weekly", days: [1..7], at, tz}` のいずれか。`action` は `{kind: "message", workspace, pane_id?, pane_name?, text}`。`policy` は省略可能な `{catch_up, max_runs_per_day, timeout_s}`。Pane からの呼び出しでは `workspace` の既定は自分の Workspace で、Pane を指定しない action は呼び出し元自身の Pane が対象になります |
+| `scheduler_upsert` | `job` | job を作成（`id` なし）または更新（`id` あり）。`{ok, job}` を返し、定義が不正なら `{ok: false, error}`。更新時は変える項目だけを送れば済みます：送らなかった項目は保存済みの値のまま、`policy` はキーごとにマージ、送った `action` は丸ごと検証されます。`schedule` は `{kind: "every", every_ms, anchor_ms?}`、`{kind: "daily", at: "HH:MM", tz}`、`{kind: "weekly", days: [1..7], at, tz}`、`{kind: "once", at_ms}` のいずれか。`{kind: "once", in_ms}` も受け付け、保存時に `at_ms = now + in_ms` に換算します（現在より 1 分以上前、または 10 年より先は不可）。once job は一度だけ実行され、結果にかかわらずその後自動で無効になります。「1 時間後に起こして」は `every` ではなく `{kind: "once", in_ms: 3600000}` です。`action` は `{kind: "message", workspace, pane_id?, pane_name?, text}`。`policy` は省略可能な `{catch_up, max_runs_per_day, timeout_s}`。Pane からの呼び出しでは `workspace` の既定は自分の Workspace で、Pane を指定しない action は呼び出し元自身の Pane が対象になります |
 | `scheduler_remove` | `id` | job とその実行履歴を削除 |
-| `scheduler_set_enabled` | `id`、`enabled` | 一時停止または再開。再開時は過ぎたスロットを実行せず、次のスロットを待ちます |
+| `scheduler_set_enabled` | `id`、`enabled` | 一時停止または再開。再開時は過ぎたスロットを実行せず、次のスロットを待ちます。時刻を過ぎた once job は再開できず `{ok: false, error}` を返すので、新しい時刻を設定してください |
 | `scheduler_run_now` | `id` | 今すぐ一度実行し、終了を待たずに `{ok, enqueued}` を返します。失敗バックオフを解除します |
 | `scheduler_runs` | `id`、`limit` | 実行履歴（新しい順）：`{id, job_id, started_at, ended_at, status, reason, detail}` |
 

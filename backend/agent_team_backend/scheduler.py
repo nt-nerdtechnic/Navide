@@ -10,6 +10,9 @@ rate limit all apply to a scheduled message just as they do to an agent's.
 It runs only while the backend runs. Slots missed while Navide was closed are
 caught up at most once per job (``catch_up: "once"``) or dropped (``"skip"``).
 
+A ``once`` job has a single slot. Its first scheduled run — ok, error or
+skipped — disables it; the job and its state stay for inspection.
+
 Loop structure follows usage_service: a ``_wake`` event plus
 ``wait_for(timeout=_next_sleep)``; the sleep is the distance to the nearest due
 job, capped at 60s and floored at 2s. The clock and the sleep are injectable
@@ -55,6 +58,10 @@ DELIVERY_WAIT_S = 30.0
 
 MIN_EVERY_MS = 60_000
 MAX_EVERY_MS = 7 * 24 * 3600 * 1000
+#: A once job may be saved up to this far in the past (it then fires right
+#: away) and no further ahead than MAX_ONCE_AHEAD_MS.
+ONCE_PAST_GRACE_MS = 60_000
+MAX_ONCE_AHEAD_MS = 10 * 365 * 24 * 3600 * 1000
 DEFAULT_POLICY: dict[str, Any] = {"catch_up": "once", "max_runs_per_day": 24, "timeout_s": 1800}
 _MAX_NAME = 200
 _MAX_TEXT = 64 * 1024
@@ -97,9 +104,15 @@ def _local_ms(day: date, at: str, tz: ZoneInfo) -> int:
     return int(when.timestamp() * 1000)
 
 
-def next_run_after(schedule: dict[str, Any], after_ms: int) -> int:
-    """The first slot strictly later than ``after_ms`` (epoch ms)."""
+def next_run_after(schedule: dict[str, Any], after_ms: int) -> int | None:
+    """The first slot strictly later than ``after_ms`` (epoch ms).
+
+    None only for a once job whose moment has passed: it has no next slot.
+    """
     kind = schedule.get("kind")
+    if kind == "once":
+        at = int(schedule["at_ms"])
+        return at if at > after_ms else None
     if kind == "every":
         every = int(schedule["every_ms"])
         anchor = int(schedule["anchor_ms"])
@@ -188,7 +201,23 @@ def _normalize_schedule(raw: Any, now_ms: int, previous: dict | None) -> dict[st
             "kind": "weekly", "days": clean,
             "at": _valid_at(raw.get("at")), "tz": _valid_tz(raw.get("tz")),
         }
-    raise JobInvalid('schedule.kind must be "every", "daily" or "weekly"')
+    if kind == "once":
+        if raw.get("at_ms") is not None:
+            at = _int(raw["at_ms"], "schedule.at_ms", 0, 2**53)
+        elif raw.get("in_ms") is not None:
+            at = now_ms + _int(raw["in_ms"], "schedule.in_ms", 0, MAX_ONCE_AHEAD_MS)
+        else:
+            raise JobInvalid("schedule.at_ms or schedule.in_ms is required for a once job")
+        # An unchanged moment is not re-checked: renaming a job that already
+        # ran must not fail because its time is now in the past.
+        unchanged = previous is not None and previous.get("kind") == "once" and previous.get("at_ms") == at
+        if not unchanged:
+            if at < now_ms - ONCE_PAST_GRACE_MS:
+                raise JobInvalid("schedule.at_ms is in the past; pick a future time")
+            if at > now_ms + MAX_ONCE_AHEAD_MS:
+                raise JobInvalid("schedule.at_ms is more than 10 years ahead")
+        return {"kind": "once", "at_ms": at}
+    raise JobInvalid('schedule.kind must be "every", "daily", "weekly" or "once"')
 
 
 def _normalize_action(raw: Any) -> dict[str, Any]:
@@ -246,6 +275,16 @@ def _initial_state() -> dict[str, Any]:
     }
 
 
+def _once_rearm(schedule: dict[str, Any], now_ms: int) -> int:
+    """The slot a re-enabled once job waits for; refuses one whose time passed."""
+    slot = next_run_after(schedule, now_ms)
+    if slot is None:
+        raise JobInvalid(
+            "this once job's time has passed; set a new schedule.at_ms or in_ms to enable it"
+        )
+    return slot
+
+
 def normalize_job(raw: Any, existing: dict[str, Any] | None, now_ms: int) -> dict[str, Any]:
     """Validate a job from a client and merge it onto the stored one.
 
@@ -279,13 +318,15 @@ def normalize_job(raw: Any, existing: dict[str, Any] | None, now_ms: int) -> dic
     action = dict(existing["action"]) if keep("action") else _normalize_action(raw.get("action"))
     policy = _normalize_policy(raw.get("policy"), existing["policy"] if existing else None)
     state = dict(existing["state"]) if existing else _initial_state()
-    rearm = (
-        existing is None
-        or schedule != existing["schedule"]
-        or (enabled and not existing["enabled"])
-        or state.get("next_run_at") is None
-    )
-    if rearm:
+    changed = existing is None or schedule != existing["schedule"]
+    reenabled = existing is not None and enabled and not existing["enabled"]
+    if schedule["kind"] == "once":
+        if changed:
+            # Its one slot, even if it lies within the grace minute behind now.
+            state["next_run_at"] = schedule["at_ms"]
+        elif reenabled:
+            state["next_run_at"] = _once_rearm(schedule, now_ms)
+    elif changed or reenabled or state.get("next_run_at") is None:
         state["next_run_at"] = next_run_after(schedule, now_ms)
     return {
         "id": existing["id"] if existing else str(uuid.uuid4()),
@@ -647,7 +688,10 @@ class SchedulerService:
                 state["last_error"] = outcome.get("detail") or outcome.get("reason") or "error"
             if not manual:
                 state["next_run_at"] = next_run_after(job["schedule"], now)
-            await self.store.set_state(job_id, state)
+            if not manual and job["schedule"]["kind"] == "once":
+                await self.store.set_enabled(job_id, False, state, now)
+            else:
+                await self.store.set_state(job_id, state)
             await self.store.append_run(job_id, {
                 "started_at": started, "ended_at": now, "status": status,
                 "reason": outcome.get("reason"), "detail": outcome.get("detail"),
@@ -675,7 +719,10 @@ class SchedulerService:
         state["last_status"] = "skipped"
         state["last_skip_reason"] = reason
         state["next_run_at"] = next_run_after(job["schedule"], now)
-        await self.store.set_state(job["id"], state)
+        if job["schedule"]["kind"] == "once":
+            await self.store.set_enabled(job["id"], False, state, now)
+        else:
+            await self.store.set_state(job["id"], state)
         await self.store.append_run(job["id"], {
             "started_at": now, "ended_at": now, "status": "skipped",
             "reason": reason, "detail": detail,
@@ -727,7 +774,13 @@ class SchedulerService:
             state = job["state"]
             if enabled and not job["enabled"]:
                 # Re-enabling never fires a slot that passed while disabled.
-                state["next_run_at"] = next_run_after(job["schedule"], self.now_ms())
+                if job["schedule"]["kind"] == "once":
+                    try:
+                        state["next_run_at"] = _once_rearm(job["schedule"], self.now_ms())
+                    except JobInvalid as err:
+                        return {"ok": False, "error": str(err)}
+                else:
+                    state["next_run_at"] = next_run_after(job["schedule"], self.now_ms())
             await self.store.set_enabled(job_id, enabled, state, self.now_ms())
         self.wake()
         return {"ok": True}
