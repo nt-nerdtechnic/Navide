@@ -117,16 +117,21 @@ def test_flush_serializes_documents_before_the_write_transaction(
 
     events: list[str] = []
     original_dump = tokens_store_module._dump_compact
+    # _dump_compact is module-global, so the save-loop threads of stores left
+    # behind by earlier tests hit the spy too; record only this flush's thread.
+    flushing_thread = threading.current_thread()
 
     def spying_dump(data):
-        events.append("dump")
+        if threading.current_thread() is flushing_thread:
+            events.append("dump")
         return original_dump(data)
 
     monkeypatch.setattr(tokens_store_module, "_dump_compact", spying_dump)
     original_txn = store._db.transaction
 
     def spying_txn():
-        events.append("transaction")
+        if threading.current_thread() is flushing_thread:
+            events.append("transaction")
         return original_txn()
 
     monkeypatch.setattr(store._db, "transaction", spying_txn)
