@@ -1447,11 +1447,21 @@ describe('CliAccountsPane', () => {
 
   // ── cloud column ───────────────────────────────────────────────────────────
 
-  it('says cloud sync is off rather than showing an empty cloud state', () => {
+  it('shows no cloud column for a stored credential while cloud sync is off', () => {
+    const api = makeApi({
+      portableSupported: ['claude'],
+      portable: { 'claude/__default__': { ...PORTABLE_META, configured: true, enabled: true } },
+      cloudStatus: 'off',
+    })
+    const w = mountPane(api)
+    expect(section(w, 0).find('.cli-portable-cloud').exists()).toBe(false)
+    expect(section(w, 0).text()).not.toContain('Cloud sync for credentials is off')
+  })
+
+  it('shows no cloud column for an empty slot while cloud sync is off', () => {
     const api = makeApi({ portableSupported: ['claude'], cloudStatus: 'off' })
     const w = mountPane(api)
-    expect(section(w, 0).get('.cli-portable-cloud').text()).toContain('Cloud sync for credentials is off')
-    expect(section(w, 0).find('.cli-cloud-badge').exists()).toBe(false)
+    expect(section(w, 0).find('.cli-portable-cloud').exists()).toBe(false)
   })
 
   it('shows each cloud copy by state, with when and where it last changed', () => {

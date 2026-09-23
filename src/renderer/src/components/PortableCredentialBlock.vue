@@ -193,9 +193,10 @@ function formatWhen(iso: string): string {
       </a>
     </div>
 
-    <div class="cli-portable-cloud">
-      <span v-if="cloudStatus === 'off'" class="cli-cloud-note">{{ $t('settings.accounts.cli.cloud-off') }}</span>
-      <span v-else-if="cloudStatus !== 'ok'" class="cli-cloud-note">{{
+    <!-- Nothing while the scope is off: Settings → Sync cannot switch it on yet
+         (SyncSettings READY holds 'credentials' out), so a pointer there misleads. -->
+    <div v-if="cloudStatus !== 'off'" class="cli-portable-cloud">
+      <span v-if="cloudStatus !== 'ok'" class="cli-cloud-note">{{
         $t('settings.accounts.cli.cloud-status-' + cloudStatus, { error: cloudError })
       }}</span>
       <template v-else>
