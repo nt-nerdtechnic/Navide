@@ -4146,8 +4146,28 @@ async function togglePaneLoop(paneId: string, skillId?: string): Promise<void> {
   // badge, no auto-continue, no turn cap. Only the default skill loops. A
   // running loop keeps running.
   if (skillId != null && !isLoopSkill(skill)) {
-    const ok = await injectPane(paneId, skill.prompt, 'skill-cast', true)
-    if (!ok) console.warn(`[loop] pane ${paneId}: skill "${skill.id}" injection failed`)
+    // A running loop's continue must not land on top of the cast: refuse while
+    // one is in flight, and hold further continues until the cast has landed.
+    const watcher = pane.loopActive ? loopLimitWatchers.get(paneId) : undefined
+    if (watcher?.continuing) {
+      notifyRestore.toast(i18n.global.t('pane.terminal.skill-cast-busy', { name: skill.name }), { type: 'info' })
+      return
+    }
+    if (watcher) watcher.continuing = true
+    let ok = false
+    try {
+      ok = await injectPane(paneId, skill.prompt, 'skill-cast', true)
+    } finally {
+      if (watcher) watcher.continuing = false
+    }
+    if (!ok) {
+      console.warn(`[loop] pane ${paneId}: skill "${skill.id}" injection failed`)
+      notifyRestore.toast(i18n.global.t('pane.terminal.skill-cast-failed', { name: skill.name }), { type: 'error' })
+      return
+    }
+    // The skill's turn is the one the next continue waits on — without this a
+    // continue could fire off the previous turn's end before the cast wakes the CLI.
+    if (pane.loopActive) armLoopTurn(paneId)
     return
   }
   if (pane.loopActive) {
@@ -4161,11 +4181,6 @@ async function togglePaneLoop(paneId: string, skillId?: string): Promise<void> {
     // a stray prompt (and never re-arms a loop the user just turned off).
     bumpLoopGen(paneId)
     stopLoopLimitWatcher(paneId)
-    return
-  }
-  if (!isLoopSkill(skill)) {
-    const ok = await injectPane(paneId, skill.prompt, 'skill-cast', true)
-    if (!ok) console.warn(`[loop] pane ${paneId}: skill "${skill.id}" injection failed`)
     return
   }
   // Optimistic UI: badge + watcher arm immediately; rolled back below if the

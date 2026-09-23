@@ -532,7 +532,11 @@ const { skills: promptSkills } = usePromptSkills()
 /** The skill picker is showing (or about to). The header's own native tooltip
  *  would otherwise be drawn on top of the ring. */
 const skillMenuActive = ref(false)
-const castableSkills = computed(() => castablePromptSkills(promptSkills.value))
+/** While the loop runs the default skill is left out: casting it would toggle
+ *  the loop off, and the badge is already the off-switch. */
+const castableSkills = computed(() =>
+  castablePromptSkills(promptSkills.value).filter((s) => !(props.loopActive && s.isDefault))
+)
 
 /** Single source for the loop badge's 3-way state machine (waiting /
  *  estimate / plain): which i18n keys to render and the formatted time they
@@ -631,14 +635,14 @@ onMounted(() => {
           @click="onLoopBadgeClick"
         >{{ loopBadge.textKey ? $t(loopBadge.textKey, { time: loopBadge.time }) : '∞ Loop' }}</span>
         <PromptSkillPicker
-          v-if="displayStatus !== 'exited' && displayStatus !== 'error'"
+          v-if="displayStatus !== 'exited' && displayStatus !== 'error' && (!loopActive || castableSkills.length > 0)"
           :skills="castableSkills"
           @cast="(id: string) => emit('toggle-loop', id)"
           @active="(v: boolean) => (skillMenuActive = v)"
         >
           <button
             class="loop-btn"
-            @click.stop="emit('toggle-loop')"
+            @click.stop="!loopActive && emit('toggle-loop')"
             :aria-label="$t('pane.terminal.loop-tooltip')"
           >∞</button>
         </PromptSkillPicker>

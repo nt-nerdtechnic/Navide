@@ -505,6 +505,8 @@
       "location-tab": "分頁：{name}",
       "location-workspace": "工作區：{name}",
       "loop-tooltip": "Loop — 將設定的 Loop 提示詞送入此 pane",
+      "skill-cast-failed": "無法將技能「{name}」送入此 pane",
+      "skill-cast-busy": "Loop 正在送出下一則提示詞 — 請稍後再施放「{name}」",
       "loop-badge-tooltip": "已對此 pane 送出 Loop 提示詞 — 點擊標籤可關閉 Loop",
       "loop-waiting-tooltip": "Loop 暫停 — 已達工作階段上限；將於 {time} 自動續跑，點擊標籤可立即續跑",
       "loop-badge-estimate": "∞ Loop · ~{time}",

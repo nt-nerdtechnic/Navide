@@ -7,13 +7,25 @@ import { formatLoopTime } from '../../lib/loopPrompt'
 import { createTerminalDockStub } from '../../ports/__tests__/terminalDock.stub'
 
 // Coverage for the loop launch button: the LOOP badge renders only while
-// loopActive is set and doubles as the off-switch (the ∞ start button is
-// hidden while the loop runs), clicking emits 'toggle-loop' (App.vue owns the
-// injection/clear logic), and the button is hidden once the pane's CLI has
-// exited. useTerminal is mocked out — no xterm instance, no backend traffic
+// loopActive is set and is the only off-switch (while the loop runs the ∞
+// button just hosts the picker for one-shot skills), clicking emits
+// 'toggle-loop' (App.vue owns the injection/clear logic), and the button is
+// hidden once the pane's CLI has exited. useTerminal is mocked out — no xterm instance, no backend traffic
 // (same setup as TerminalPane.cliContextDrag.test.ts).
 
 const mockTerminal = vi.hoisted(() => ({ displayStatus: null as unknown as Ref<string> }))
+
+// Two castable skills: the default (loop) one and a one-shot one.
+const mockSkills = vi.hoisted(() => ({ list: null as unknown as Ref<Array<Record<string, unknown>>> }))
+vi.mock('../../composables/usePromptSkills', async () => {
+  const { ref } = await import('vue')
+  const skill = (id: string, isDefault: boolean) => ({
+    id, name: id, icon: 'infinity', description: '', prompt: id, resumePrompt: '',
+    maxTurns: 0, category: '', enabled: true, isDefault,
+  })
+  mockSkills.list = ref([skill('advance', true), skill('review', false)])
+  return { usePromptSkills: () => ({ skills: mockSkills.list, save: vi.fn() }) }
+})
 
 vi.mock('@navide/terminal', async (importOriginal) => {
   const { ref } = await import('vue')
@@ -97,6 +109,34 @@ describe('TerminalPane – loop launch button', () => {
     wrapper = mountPane({ loopActive: true })
     expect(wrapper.find('.loop-btn').exists()).toBe(true)
     expect(wrapper.find('.loop-inline').exists()).toBe(true)
+  })
+
+  it('does not turn the loop off when the ∞ button is clicked while the loop runs', async () => {
+    wrapper = mountPane({ loopActive: true })
+    await wrapper.find('.loop-btn').trigger('click')
+    expect(wrapper.emitted('toggle-loop')).toBeUndefined()
+  })
+
+  it('offers only the one-shot skills while the loop runs', async () => {
+    wrapper = mountPane({ loopActive: true })
+    const picker = wrapper.findComponent({ name: 'PromptSkillPicker' })
+    expect((picker.props('skills') as Array<{ id: string }>).map((s) => s.id)).toEqual(['review'])
+
+    await wrapper.setProps({ loopActive: false })
+    expect((picker.props('skills') as Array<{ id: string }>).map((s) => s.id)).toEqual(['advance', 'review'])
+  })
+
+  it('hides the loop button while the loop runs when the default skill is the only one', async () => {
+    const all = mockSkills.list.value
+    mockSkills.list.value = all.filter((s) => s.isDefault)
+    try {
+      wrapper = mountPane({ loopActive: true })
+      expect(wrapper.find('.loop-btn').exists()).toBe(false)
+      await wrapper.setProps({ loopActive: false })
+      expect(wrapper.find('.loop-btn').exists()).toBe(true)
+    } finally {
+      mockSkills.list.value = all
+    }
   })
 
   it('shows the dimmed waiting badge variant while a session-limit auto-resume is pending', async () => {

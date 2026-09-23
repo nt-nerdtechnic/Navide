@@ -505,6 +505,8 @@
       "location-tab": "タブ：{name}",
       "location-workspace": "プロジェクト：{name}",
       "loop-tooltip": "ループ — 設定済みのループ用プロンプトをこのペインに送信します",
+      "skill-cast-failed": "スキル「{name}」をこのペインに送信できませんでした",
+      "skill-cast-busy": "ループが次のプロンプトを送信中です。少し待ってから「{name}」をもう一度使用してください",
       "loop-badge-tooltip": "ループ用プロンプトをこのペインに送信しました。クリックでループを無効にします",
       "loop-waiting-tooltip": "ループは一時停止中です。セッションの上限に達したため、{time} に自動再開します。クリックですぐに再開します",
       "loop-badge-estimate": "∞ ループ · 約 {time}",
