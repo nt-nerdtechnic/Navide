@@ -555,8 +555,8 @@ const loopBadge = computed(() => {
   return { textKey: null as string | null, titleKey: 'pane.terminal.loop-badge-tooltip', time: '' }
 })
 
-/** The badge is the off-switch while the loop runs (the ∞ start button is
- *  hidden then); while waiting it is a click-to-resume-now affordance. */
+/** The badge is the off-switch while the loop runs; while waiting it is a
+ *  click-to-resume-now affordance. */
 function onLoopBadgeClick(e: MouseEvent): void {
   e.stopPropagation()
   if (props.loopWaitUntil != null) emit('loop-resume-now')
@@ -631,7 +631,7 @@ onMounted(() => {
           @click="onLoopBadgeClick"
         >{{ loopBadge.textKey ? $t(loopBadge.textKey, { time: loopBadge.time }) : '∞ Loop' }}</span>
         <PromptSkillPicker
-          v-if="!loopActive && displayStatus !== 'exited' && displayStatus !== 'error'"
+          v-if="displayStatus !== 'exited' && displayStatus !== 'error'"
           :skills="castableSkills"
           @cast="(id: string) => emit('toggle-loop', id)"
           @active="(v: boolean) => (skillMenuActive = v)"

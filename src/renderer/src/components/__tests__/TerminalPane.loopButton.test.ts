@@ -93,9 +93,9 @@ describe('TerminalPane – loop launch button', () => {
     expect(wrapper.find('.loop-btn').exists()).toBe(false)
   })
 
-  it('hides the loop button while the loop is active (the badge is the off-switch)', () => {
+  it('keeps the loop button beside the badge while the loop is active', () => {
     wrapper = mountPane({ loopActive: true })
-    expect(wrapper.find('.loop-btn').exists()).toBe(false)
+    expect(wrapper.find('.loop-btn').exists()).toBe(true)
     expect(wrapper.find('.loop-inline').exists()).toBe(true)
   })
 

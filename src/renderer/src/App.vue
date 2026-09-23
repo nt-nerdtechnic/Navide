@@ -4138,6 +4138,18 @@ function bumpLoopGen(paneId: string): number {
 async function togglePaneLoop(paneId: string, skillId?: string): Promise<void> {
   const pane = panes.value.find((p) => p.id === paneId)
   if (!pane?.realized) return
+  // Which skill is being cast: the picker's choice, else the default one.
+  // resolvePromptSkill falls back to the default for an id whose skill the
+  // user has since deleted.
+  const skill = resolvePromptSkill(promptSkills.value, skillId)
+  // A non-default skill is a plain prompt: send it once and stop — no LOOP
+  // badge, no auto-continue, no turn cap. Only the default skill loops. A
+  // running loop keeps running.
+  if (skillId != null && !isLoopSkill(skill)) {
+    const ok = await injectPane(paneId, skill.prompt, 'skill-cast', true)
+    if (!ok) console.warn(`[loop] pane ${paneId}: skill "${skill.id}" injection failed`)
+    return
+  }
   if (pane.loopActive) {
     pane.loopActive = false
     pane.loopWaitUntil = null
@@ -4151,12 +4163,6 @@ async function togglePaneLoop(paneId: string, skillId?: string): Promise<void> {
     stopLoopLimitWatcher(paneId)
     return
   }
-  // Which skill is being cast: the picker's choice, else the default one.
-  // resolvePromptSkill falls back to the default for an id whose skill the
-  // user has since deleted.
-  const skill = resolvePromptSkill(promptSkills.value, skillId)
-  // A non-default skill is a plain prompt: send it once and stop — no LOOP
-  // badge, no auto-continue, no turn cap. Only the default skill loops.
   if (!isLoopSkill(skill)) {
     const ok = await injectPane(paneId, skill.prompt, 'skill-cast', true)
     if (!ok) console.warn(`[loop] pane ${paneId}: skill "${skill.id}" injection failed`)
