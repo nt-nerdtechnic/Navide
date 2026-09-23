@@ -1962,7 +1962,7 @@
             "text": "Electron 內建的整窗縮放（<em>Zoom In</em>／<em>Zoom Out</em>／<em>Actual Size</em>）被拿掉了，因為 Navide 自己有兩條縮放軸：<kbd class=\"syh-kbd\">⌘=</kbd>／<kbd class=\"syh-kbd\">⌘-</kbd>／<kbd class=\"syh-kbd\">⌘0</kbd> 改終端機<strong>內容</strong>的字級，<kbd class=\"syh-kbd\">⇧⌘=</kbd>／<kbd class=\"syh-kbd\">⇧⌘-</kbd>／<kbd class=\"syh-kbd\">⇧⌘0</kbd> 改<strong>整體介面縮放</strong>（設定 ▸ 外觀 ▸ 介面縮放）。原生 role 留著的話，它們的 accelerator 會搶在這兩者前面。<kbd class=\"syh-kbd\">⌘R</kbd> 也改成「重建焦點面板」，重新載入整個視窗改用 <kbd class=\"syh-kbd\">⇧⌘R</kbd>，選單裡則是一個不帶快捷鍵的 <em>重新載入視窗</em>。<kbd class=\"syh-kbd\">⌘W</kbd> 在 macOS 上留給了「關閉分頁」，所以關視窗只剩紅綠燈或 <kbd class=\"syh-kbd\">⌘Q</kbd>。"
           },
           "h3": "Schedule（排程）— 不是獨立視窗",
-          "p1": "這台機器的背景排程列在<strong>右側槽的一個分頁</strong>裡，分頁名稱是 <strong>排程</strong>（🗓），也可以搬到上下兩槽。它不是從 Window 選單開的視窗。Navide 自己的排程、你的 crontab 與 macOS 的 launchd 工作放在同一份清單：最上面是<strong>接下來</strong>，只放算得準下次時間的項目、依時間排序；其下依序是<strong>週期性</strong>、<strong>常駐／按需</strong>、<strong>已停用</strong>。Linux 只有 crontab 這個來源；Windows 只會列出 Navide 自己的排程——機器上的工作由工作排程器管理。",
+          "p1": "這台機器的背景排程列在<strong>右側槽的一個分頁</strong>裡，分頁名稱是 <strong>排程</strong>（🗓），也可以搬到上下兩槽。它不是從 Window 選單開的視窗。Navide 自己的排程、你的 crontab 與 macOS 的 launchd 工作放在同一份清單：最上面是<strong>接下來</strong>：先放算得準下次時間的項目、依時間排序，再隔一條細線<strong>固定間隔</strong>，放每隔幾分鐘執行或算不出確切時間的項目，只顯示間隔、不顯示時刻，頻率高的在前；其下是預設摺疊的<strong>常駐／按需</strong>與<strong>已停用</strong>。Linux 只有 crontab 這個來源；Windows 只會列出 Navide 自己的排程——機器上的工作由工作排程器管理。",
           "scheduleTable": {
             "section": "區塊",
             "source": "來源",
@@ -8093,12 +8093,17 @@
       "today": "今天",
       "tomorrow": "明天",
       "week": "本週",
-      "later": "更晚"
+      "later": "更晚",
+      "interval": "固定間隔"
     },
     "group": {
-      "recurring": "週期性",
       "other": "常駐／按需",
       "disabled": "已停用"
+    },
+    "interval": {
+      "seconds": "{n} 秒",
+      "minutes": "{n} 分",
+      "hours": "{n} 時"
     },
     "unsupported": "此平台不支援",
     "no-source": "此平台沒有可列出的來源：Navide 讀的是使用者的 crontab 與 macOS 的 launchd 工作，這個系統兩者都沒有。Navide 從不建立作業系統的排程工作，所以這裡沒有東西缺失；Navide 自己的排程列在上方。",

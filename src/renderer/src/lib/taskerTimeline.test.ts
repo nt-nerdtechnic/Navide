@@ -131,21 +131,30 @@ describe('classification', () => {
     expect(classifyJob(job(), false)).toMatchObject({ group: 'timeline', next: at(24, 9, 0), key: 'job:j1' })
     expect(classifyJob(job({ enabled: false }), false).group).toBe('disabled')
     expect(classifyJob(job({ state: {} }), false).group).toBe('other')
-    expect(classifyJob(job({ schedule: { kind: 'every', every_ms: 60_000 } }), false).group).toBe('recurring')
+    expect(classifyJob(job({ schedule: { kind: 'every', every_ms: 60_000 } }), false)).toMatchObject({
+      group: 'interval',
+      intervalMs: 60_000,
+    })
     expect(classifyJob(job({ schedule: { kind: 'every', every_ms: 3_600_000 } }), false).group).toBe('timeline')
     expect(classifyJob(job(), true).failing).toBe(true)
   })
 
   it('sorts crontab entries by what can be known about them', () => {
     expect(classifyCron(entry(), NOW)).toMatchObject({ group: 'timeline', next: at(24, 2, 30) })
-    expect(classifyCron(entry({ schedule: '* * * * *' }), NOW).group).toBe('recurring')
+    expect(classifyCron(entry({ schedule: '* * * * *' }), NOW)).toMatchObject({ group: 'interval', intervalMs: 60_000 })
+    expect(classifyCron(entry({ schedule: '*/5 * * * *' }), NOW)).toMatchObject({ group: 'interval', intervalMs: 300_000 })
     expect(classifyCron(entry({ schedule: '@reboot' }), NOW).group).toBe('other')
-    expect(classifyCron(entry({ schedule: '0 9-17 * * *' }), NOW).group).toBe('other')
+    // Not computable: fixed-interval tail, interval unknown — never a guessed time.
+    expect(classifyCron(entry({ schedule: '0 9-17 * * *' }), NOW)).toMatchObject({ group: 'interval', intervalMs: null })
     expect(classifyCron(entry({ enabled: false }), NOW).group).toBe('disabled')
   })
 
   it('never puts a launchd StartInterval on the clock — its phase is unknowable', () => {
-    expect(classifyAgent(agent({ start_interval: 1800 }), NOW).group).toBe('recurring')
+    expect(classifyAgent(agent({ start_interval: 1800 }), NOW)).toMatchObject({
+      group: 'interval',
+      next: null,
+      intervalMs: 1_800_000,
+    })
     expect(classifyAgent(agent({ start_calendar: [{ Hour: 3, Minute: 0 }] }), NOW)).toMatchObject({
       group: 'timeline',
       next: at(24, 3, 0),
@@ -169,6 +178,23 @@ describe('classification', () => {
     const ok = classifyAgent(agent({ name: 'aaa', plist_path: '/a' }), NOW)
     const bad = classifyAgent(agent({ name: 'zzz', plist_path: '/z', last_exit_code: 1 }), NOW)
     expect(sortItems([ok, bad], 'other').map((i) => i.key)).toEqual(['/z', '/a'])
+  })
+
+  it('fills the list with fixed-interval rows when nothing has an exact time', () => {
+    // The reported machine: no Navide job, launchd all StartInterval, one
+    // every-minute crontab line. The list must not come out empty.
+    const items = [
+      classifyAgent(agent({ name: 'hourly', plist_path: '/h', start_interval: 3600 }), NOW),
+      classifyAgent(agent({ name: 'half', plist_path: '/m', start_interval: 1800, last_exit_code: 3 }), NOW),
+      classifyAgent(agent({ name: 'fast', plist_path: '/f', start_interval: 30 }), NOW),
+      classifyCron(entry({ id: 'artisan', name: 'artisan', schedule: '* * * * *' }), NOW),
+      classifyCron(entry({ id: 'list', name: 'list', schedule: '0,30 * * * *' }), NOW),
+    ]
+    expect(items.filter((i) => i.group === 'timeline')).toEqual([])
+    const interval = sortItems(items.filter((i) => i.group === 'interval'), 'interval')
+    // Most frequent first, unknown interval last; a failure keeps its place.
+    expect(interval.map((i) => i.key)).toEqual(['/f', 'artisan', '/m', '/h', 'list'])
+    expect(interval.find((i) => i.key === '/m')?.failing).toBe(true)
   })
 })
 

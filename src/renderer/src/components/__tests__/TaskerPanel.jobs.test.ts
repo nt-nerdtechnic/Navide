@@ -2,8 +2,8 @@
 // Navide's own jobs in the Tasker tab (SchedulerJobRow + useSchedulerJobs) and
 // JobEditorModal — the four status lights, the failed ×N | repair pill, the ▶
 // grace window, the target_gone row, same-named panes told apart by id, editor
-// validation, and where a job lands among the timeline / recurring / disabled
-// groups next to the crontab rows.
+// validation, and where a job lands among the timeline (and its fixed-interval
+// tail) / other / disabled groups next to the crontab rows.
 // The backend is a prop, so every assertion is on the real wire payloads.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
@@ -376,7 +376,11 @@ describe('TaskerPanel — Navide jobs', () => {
     // The backend's next_run_at puts a job on the timeline, with its time.
     expect(groupOf(wrapper, 'daily')).toBe('timeline')
     expect(row(wrapper, 'daily').element.closest('.tk-item')?.querySelector('[data-test="when-col"]')).not.toBeNull()
-    expect(groupOf(wrapper, 'minutely')).toBe('recurring')
+    // A heartbeat job sits in the timeline's fixed-interval tail, shown as its interval.
+    expect(groupOf(wrapper, 'minutely')).toBe('timeline')
+    expect(row(wrapper, 'minutely').element.closest('.tk-item')?.querySelector('[data-test="interval-col"]')?.textContent?.trim()).toBe(
+      t('executions.interval.minutes', { n: 1 })
+    )
     expect(groupOf(wrapper, 'off')).toBe('disabled')
     expect(groupOf(wrapper, 'unscheduled')).toBe('other')
     // The OS rows share the same timeline.

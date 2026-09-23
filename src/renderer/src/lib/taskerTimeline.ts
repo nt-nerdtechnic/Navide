@@ -2,15 +2,18 @@
 // crontab and the launchd jobs, sorted into four groups.
 //
 //   timeline   the next run is known exactly — sorted by that time
-//   recurring  fires every few minutes, or on a launchd StartInterval
-//   other      always-on, on-demand, or a schedule we cannot state exactly
+//   interval   fires every few minutes, on a launchd StartInterval, or on a
+//              cron line we cannot compute — sorted by interval, unknown last
+//   other      always-on, on-demand, or a launchd schedule we cannot state
 //   disabled   switched off (or, for launchd, not loaded)
 //
-// The rule that shapes everything here: a clock time is shown only when it can
-// be computed exactly. A launchd StartInterval counts from whenever the job was
-// loaded, which the panel cannot see, and cron lists/ranges are not parsed — so
-// those land in "recurring"/"other" with their description instead of a time
-// that looks precise and is wrong (the same reasoning as cronDescribe.ts).
+// The panel shows timeline and interval as one list, interval rows below a
+// divider. The rule that shapes everything here: a clock time is shown only
+// when it can be computed exactly. A launchd StartInterval counts from whenever
+// the job was loaded, which the panel cannot see, and cron lists/ranges are not
+// parsed — so those carry an interval (or none) and their description instead
+// of a time that looks precise and is wrong (the same reasoning as
+// cronDescribe.ts).
 import type { CrontabEntry, LaunchAgentEntry, StartCalendarInterval } from './cronDescribe'
 import { MINUTE_MS, type SchedulerJob } from './schedulerJobs'
 
@@ -18,7 +21,7 @@ import { MINUTE_MS, type SchedulerJob } from './schedulerJobs'
  *  timeline row for it would read "in a minute" forever and bury the rest. */
 export const HIGH_FREQUENCY_MS = 5 * MINUTE_MS
 
-export type Group = 'timeline' | 'recurring' | 'other' | 'disabled'
+export type Group = 'timeline' | 'interval' | 'other' | 'disabled'
 export type Bucket = 'today' | 'tomorrow' | 'week' | 'later'
 
 interface ItemBase {
@@ -27,6 +30,8 @@ interface ItemBase {
   group: Group
   /** Epoch ms of the next run; non-null only in the timeline group. */
   next: number | null
+  /** How often it fires, in ms; only in the interval group, null when unknown. */
+  intervalMs: number | null
   failing: boolean
 }
 
@@ -152,6 +157,11 @@ export function cronIsHighFrequency(spec: CronSpec): boolean {
   return spec.minute.kind === 'step' && spec.minute.n * MINUTE_MS <= HIGH_FREQUENCY_MS
 }
 
+/** Minute cadence of a high-frequency line (within its hours, if restricted). */
+function cronIntervalMs(spec: CronSpec): number {
+  return spec.minute.kind === 'step' ? spec.minute.n * MINUTE_MS : MINUTE_MS
+}
+
 /** Next run of a StartCalendarInterval. launchd treats a missing key as a
  *  wildcard, so an entry without Minute fires every minute of its window —
  *  that is not a single time, and gives null. Day together with Weekday is
@@ -194,23 +204,27 @@ export function agentFailed(agent: LaunchAgentEntry): boolean {
 /** `failing` comes from the caller: a job's error light also depends on the
  *  ▶ grace window, which only the jobs composable knows about. */
 export function classifyJob(job: SchedulerJob, failing: boolean): TaskerItem {
-  const base = { kind: 'job' as const, key: `job:${job.id}`, job, failing, next: null }
+  const base = { kind: 'job' as const, key: `job:${job.id}`, job, failing, next: null, intervalMs: null }
   if (!job.enabled) return { ...base, group: 'disabled' }
   const s = job.schedule
-  if (s.kind === 'every' && s.every_ms <= HIGH_FREQUENCY_MS) return { ...base, group: 'recurring' }
+  if (s.kind === 'every' && s.every_ms <= HIGH_FREQUENCY_MS) {
+    return { ...base, group: 'interval', intervalMs: s.every_ms }
+  }
   const next = job.state?.next_run_at
   if (typeof next === 'number') return { ...base, group: 'timeline', next }
   return { ...base, group: 'other' }
 }
 
 export function classifyCron(entry: CrontabEntry, now: number): TaskerItem {
-  const base = { kind: 'crontab' as const, key: entry.id, entry, failing: false, next: null }
+  const base = { kind: 'crontab' as const, key: entry.id, entry, failing: false, next: null, intervalMs: null }
   if (!entry.enabled) return { ...base, group: 'disabled' }
+  // @reboot runs once per boot — on demand, not on any interval.
+  if (entry.schedule.trim().toLowerCase() === '@reboot') return { ...base, group: 'other' }
   const spec = parseCron(entry.schedule)
-  if (!spec) return { ...base, group: 'other' }
-  if (cronIsHighFrequency(spec)) return { ...base, group: 'recurring' }
+  if (!spec) return { ...base, group: 'interval' }
+  if (cronIsHighFrequency(spec)) return { ...base, group: 'interval', intervalMs: cronIntervalMs(spec) }
   const next = nextCronRun(spec, now)
-  return next === null ? { ...base, group: 'other' } : { ...base, group: 'timeline', next }
+  return next === null ? { ...base, group: 'interval' } : { ...base, group: 'timeline', next }
 }
 
 export function classifyAgent(agent: LaunchAgentEntry, now: number): TaskerItem {
@@ -220,12 +234,13 @@ export function classifyAgent(agent: LaunchAgentEntry, now: number): TaskerItem 
     agent,
     failing: agentFailed(agent),
     next: null,
+    intervalMs: null,
   }
   if (agent.runtime_known && agent.loaded === false && agent.running !== true) {
     return { ...base, group: 'disabled' }
   }
   if (typeof agent.start_interval === 'number' && agent.start_interval > 0) {
-    return { ...base, group: 'recurring' }
+    return { ...base, group: 'interval', intervalMs: agent.start_interval * 1000 }
   }
   const next = nextCalendarRun(agent.start_calendar ?? [], now)
   return next === null ? { ...base, group: 'other' } : { ...base, group: 'timeline', next }
@@ -237,10 +252,15 @@ export function itemName(item: TaskerItem): string {
   return item.agent.name
 }
 
-/** Timeline: soonest first. Other groups: failing first, then by name. */
+/** Timeline: soonest first. Interval: most frequent first, unknown last.
+ *  Other groups: failing first, then by name. */
 export function sortItems(items: TaskerItem[], group: Group): TaskerItem[] {
   const byName = (a: TaskerItem, b: TaskerItem): number => itemName(a).localeCompare(itemName(b))
   if (group === 'timeline') return [...items].sort((a, b) => (a.next ?? 0) - (b.next ?? 0) || byName(a, b))
+  if (group === 'interval') {
+    const ms = (i: TaskerItem): number => i.intervalMs ?? Number.POSITIVE_INFINITY
+    return [...items].sort((a, b) => ms(a) - ms(b) || byName(a, b))
+  }
   return [...items].sort((a, b) => Number(b.failing) - Number(a.failing) || byName(a, b))
 }
 

@@ -1962,7 +1962,7 @@
             "text": "Electron 標準のウィンドウ全体のズーム（<em>拡大</em> / <em>縮小</em> / <em>実際のサイズ</em>）は削除しています。Navide には独自の 2 つの拡大縮小設定があるためです。<kbd class=\"syh-kbd\">⌘=</kbd> / <kbd class=\"syh-kbd\">⌘-</kbd> / <kbd class=\"syh-kbd\">⌘0</kbd> はターミナルの<strong>内容</strong>の文字サイズを変更し、<kbd class=\"syh-kbd\">⇧⌘=</kbd> / <kbd class=\"syh-kbd\">⇧⌘-</kbd> / <kbd class=\"syh-kbd\">⇧⌘0</kbd> は<strong>表示倍率</strong>（設定 ▸ 外観 ▸ 表示倍率）を変更します。標準のメニュー機能を残すと、そのショートカットが先に反応してしまいます。<kbd class=\"syh-kbd\">⌘R</kbd> も「フォーカス中のペインを再構築」に変更し、ウィンドウ全体の再読み込みは <kbd class=\"syh-kbd\">⇧⌘R</kbd> に移しました。メニューの<em>ウィンドウを再読み込み</em>項目にはショートカットを付けていません。macOS の <kbd class=\"syh-kbd\">⌘W</kbd> は「タブを閉じる」用です。ウィンドウは左上のウィンドウボタン、または <kbd class=\"syh-kbd\">⌘Q</kbd> で閉じます。"
           },
           "h3": "スケジュール — 独立ウィンドウではありません",
-          "p1": "このマシンのバックグラウンドスケジュールは、<strong>右スロットのタブ</strong>に<strong>スケジュール</strong>（🗓）として表示され、上または下のスロットへ移動できます。「ウィンドウ」メニューから開くウィンドウではありません。Navide 自身のジョブ、自分の crontab、macOS の launchd ジョブは一つの一覧にまとめられます。先頭の<strong>この後</strong>には次回実行を正確に計算できる項目だけが時刻順に並び、その下に<strong>定期実行</strong>、<strong>常駐・オンデマンド</strong>、<strong>無効</strong>が続きます。Linux では crontab のみが対象です。Windows では Navide 自身のジョブだけを表示します。マシンのタスクはタスクスケジューラで管理されるためです。",
+          "p1": "このマシンのバックグラウンドスケジュールは、<strong>右スロットのタブ</strong>に<strong>スケジュール</strong>（🗓）として表示され、上または下のスロットへ移動できます。「ウィンドウ」メニューから開くウィンドウではありません。Navide 自身のジョブ、自分の crontab、macOS の launchd ジョブは一つの一覧にまとめられます。先頭の<strong>この後</strong>には、次回実行を正確に計算できる項目が時刻順に並び、細い区切り線<strong>固定間隔</strong>の下に、数分ごとに実行される項目や正確な時刻を計算できない項目が、時刻ではなく間隔で頻度の高い順に並びます。その下に、既定で折りたたまれた<strong>常駐・オンデマンド</strong>と<strong>無効</strong>が続きます。Linux では crontab のみが対象です。Windows では Navide 自身のジョブだけを表示します。マシンのタスクはタスクスケジューラで管理されるためです。",
           "scheduleTable": {
             "section": "セクション",
             "source": "取得元",
@@ -8093,12 +8093,17 @@
       "today": "今日",
       "tomorrow": "明日",
       "week": "今週",
-      "later": "それ以降"
+      "later": "それ以降",
+      "interval": "固定間隔"
     },
     "group": {
-      "recurring": "定期実行",
       "other": "常駐・オンデマンド",
       "disabled": "無効"
+    },
+    "interval": {
+      "seconds": "{n}秒",
+      "minutes": "{n}分",
+      "hours": "{n}時間"
     },
     "unsupported": "このプラットフォームには対応していません",
     "no-source": "このプラットフォームには表示できる項目がありません。Navide はユーザーの crontab と macOS の launchd ジョブを読み取りますが、このシステムにはどちらもありません。Navide が OS の定期ジョブを作成することはないため、表示の欠落ではありません。Navide 自身のジョブは上に表示されます。",

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 // TaskerPanel (the right-rail "Tasker" tab) — how rows are grouped into the
-// timeline / recurring / other / disabled lists, row expansion, the ⋯ menu and
+// timeline (with its fixed-interval tail) / other / disabled lists, row expansion, the ⋯ menu and
 // the mandatory delete confirmation, one-line error reporting, and the
 // executions.changed rescan. The backend is passed in as a prop, so every
 // assertion is on the real wire payloads.
@@ -261,7 +261,7 @@ async function openGroup(wrapper: VueWrapper, id: string): Promise<void> {
   if (btn.attributes('aria-expanded') !== 'true') await btn.trigger('click')
 }
 async function openAllGroups(wrapper: VueWrapper): Promise<void> {
-  for (const id of ['recurring', 'other', 'disabled']) {
+  for (const id of ['other', 'disabled']) {
     if (wrapper.find(`[data-section="${id}"]`).exists()) await openGroup(wrapper, id)
   }
 }
@@ -353,18 +353,50 @@ describe('TaskerPanel', () => {
     expect(new Set(buckets).size).toBe(buckets.length)
   })
 
-  it('puts a StartInterval job under Recurring, never on the clock', async () => {
+  it('puts a StartInterval job below the fixed-interval divider, never on the clock', async () => {
     const snap = snapshot()
     ;(snap.launch_agents as { agents: Record<string, unknown>[] }).agents[0].keep_alive = false
     ;(snap.launch_agents as { agents: Record<string, unknown>[] }).agents[0].start_interval = 1800
     wire.overrides.set('executions.list', snap)
     wrapper = await mountPanel()
 
-    // Recurring starts open.
-    const recurring = section(wrapper, 'recurring')
-    expect(recurring.get('.tk-group').attributes('aria-expanded')).toBe('true')
-    expect(labelsIn(recurring)).toEqual(['com.syncthing.syncthing'])
-    expect(recurring.find('[data-test="when-col"]').exists()).toBe(false)
+    expect(wrapper.find('[data-section="recurring"]').exists()).toBe(false)
+    const timeline = section(wrapper, 'timeline')
+    const buckets = timeline.findAll('.tk-bucket').map((el) => el.attributes('data-bucket'))
+    // The divider comes after every dated bucket.
+    expect(buckets[buckets.length - 1]).toBe('interval')
+    const item = timeline.findAll('.tk-item').find((el) => el.find('[data-agent-label="com.syncthing.syncthing"]').exists())!
+    expect(item.find('[data-test="when-col"]').exists()).toBe(false)
+    expect(item.get('[data-test="interval-col"]').text()).toBe(i18n.global.t('executions.interval.minutes', { n: 30 }))
+  })
+
+  it('never leaves the timeline empty when everything runs on an interval', async () => {
+    // The reported machine: no Navide job, every launchd job on StartInterval,
+    // one every-minute crontab line.
+    const snap = snapshot()
+    const cron = snap.crontab as { entries: Record<string, unknown>[] }
+    cron.entries = [{ ...cron.entries[0], id: 'artisan', name: 'artisan', schedule: '* * * * *' }]
+    const la = snap.launch_agents as { agents: Record<string, unknown>[] }
+    const base = { ...la.agents[1], start_calendar: [], last_exit_code: 0 }
+    la.agents = [
+      { ...base, label: 'x.hourly', name: 'hourly', plist_path: '/h', start_interval: 3600 },
+      { ...base, label: 'x.half', name: 'half', plist_path: '/m', start_interval: 1800, last_exit_code: 3 },
+      { ...base, label: 'x.fast', name: 'fast', plist_path: '/f', start_interval: 30 },
+    ]
+    wire.overrides.set('executions.list', snap)
+    wrapper = await mountPanel()
+
+    const timeline = section(wrapper, 'timeline')
+    expect(timeline.find('.tk-empty').exists()).toBe(false)
+    const order = timeline
+      .findAll('.tk-item')
+      .map((el) => el.get('[data-agent-label], [data-entry-id]'))
+      .map((el) => el.attributes('data-agent-label') ?? el.attributes('data-entry-id'))
+    expect(order).toEqual(['x.fast', 'artisan', 'x.half', 'x.hourly'])
+    // A failing interval row keeps its exit badge and red edge.
+    const half = timeline.findAll('.tk-item')[2]
+    expect(half.classes()).toContain('failing')
+    expect(half.find('.tk-tag.exit').exists()).toBe(true)
   })
 
   it('remembers which groups the user opened', async () => {
@@ -600,8 +632,8 @@ describe('TaskerPanel', () => {
     wire.overrides.set('executions.list', snap)
     wrapper = await mountPanel()
 
-    // Every minute is a heartbeat: Recurring, not the timeline.
-    const row = section(wrapper, 'recurring').get('[data-entry-id="c1"]')
+    // Every minute is a heartbeat: below the fixed-interval divider, no clock.
+    const row = section(wrapper, 'timeline').get('[data-entry-id="c1"]')
     expect(row.get('.tk-desc').text()).toBe(i18n.global.t('executions.cron.every-minute'))
   })
 
@@ -853,7 +885,7 @@ describe('TaskerPanel', () => {
     await agentRow(wrapper, 'local.nightly.index').get('.tk-row-head').trigger('click')
     await agentRow(wrapper, 'com.vendor.daemon').get('.tk-row-head').trigger('click')
     expect(wrapper.findAll('.tk-detail')).toHaveLength(3)
-    for (const id of ['timeline', 'recurring', 'other', 'disabled']) {
+    for (const id of ['timeline', 'other', 'disabled']) {
       expect(wrapper.find(`[data-section="${id}"]`).exists()).toBe(true)
     }
     expect(wrapper.find('[data-test="failing-bar"]').exists()).toBe(true)

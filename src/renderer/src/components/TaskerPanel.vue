@@ -3,8 +3,8 @@
 // this Mac, as one "what runs next" list — Navide's own jobs, the user's Unix
 // crontab, and the launchd jobs (~/Library/LaunchAgents, /Library/LaunchAgents,
 // /Library/LaunchDaemons). Rows are sorted into four groups by
-// lib/taskerTimeline.ts: a timeline of exactly-known next runs, then
-// recurring, always-on / on-demand, and disabled. Only crontab entries and the
+// lib/taskerTimeline.ts: a timeline of exactly-known next runs followed by the
+// fixed-interval rows, then always-on / on-demand, and disabled. Only crontab entries and the
 // user's own LaunchAgents (`managed`) get action buttons; system launchd jobs
 // are shown for visibility and are read-only.
 // All scanning and mutation lives in the backend (`executions.*` and
@@ -54,7 +54,9 @@ import JobEditorModal from './JobEditorModal.vue'
 import SchedulerJobRow from './SchedulerJobRow.vue'
 
 type Kind = 'crontab' | 'launchagent'
-type FoldGroup = Exclude<Group, 'timeline'>
+type FoldGroup = Exclude<Group, 'timeline' | 'interval'>
+/** Timeline rows: a day bucket, or the fixed-interval tail below the divider. */
+type RowBucket = Bucket | 'interval'
 
 // Inline (not a named `Props` interface): with the module-scope `<script>` block
 // above, a local interface name would leak into the default export's type.
@@ -117,6 +119,11 @@ function isAgentUp(agent: LaunchAgentEntry): boolean {
 
 // ─────────────────────── Grouping ───────────────────────
 
+interface SectionRow {
+  item: TaskerItem
+  bucket: RowBucket
+}
+
 const vendors = computed(() => vendorPrefixes(launchAgents.value?.agents ?? []))
 
 const items = computed<TaskerItem[]>(() => {
@@ -145,13 +152,16 @@ watch(
   }
 )
 
-const timeline = computed(() => {
+const timeline = computed<SectionRow[]>(() => {
   const now = jobsApi.now.value
-  return itemsIn('timeline').map((item) => ({ item, bucket: bucketOf(item.next ?? now, now) }))
+  return [
+    ...itemsIn('timeline').map((item) => ({ item, bucket: bucketOf(item.next ?? now, now) })),
+    ...itemsIn('interval').map((item) => ({ item, bucket: 'interval' as const })),
+  ]
 })
 
-const FOLD_GROUPS: FoldGroup[] = ['recurring', 'other', 'disabled']
-const FOLD_DEFAULTS: Record<FoldGroup, boolean> = { recurring: true, other: false, disabled: false }
+const FOLD_GROUPS: FoldGroup[] = ['other', 'disabled']
+const FOLD_DEFAULTS: Record<FoldGroup, boolean> = { other: false, disabled: false }
 
 const folds = computed(() =>
   FOLD_GROUPS.map((id) => ({ id, items: itemsIn(id) })).filter((g) => g.items.length > 0)
@@ -170,7 +180,6 @@ function readOpen(id: FoldGroup): boolean {
   return FOLD_DEFAULTS[id]
 }
 const openGroups = reactive<Record<FoldGroup, boolean>>({
-  recurring: readOpen('recurring'),
   other: readOpen('other'),
   disabled: readOpen('disabled'),
 })
@@ -185,10 +194,6 @@ function toggleGroup(id: FoldGroup): void {
 
 /** What the body renders, top to bottom. Under "only failing" it is one flat
  *  list, so a failure inside a collapsed group is never hidden by the filter. */
-interface SectionRow {
-  item: TaskerItem
-  bucket: Bucket
-}
 const sections = computed<{ id: Group | 'failing'; rows: SectionRow[] }[]>(() => {
   const plain = (list: TaskerItem[]): SectionRow[] => list.map((item) => ({ item, bucket: 'today' }))
   if (onlyFailing.value) return [{ id: 'failing', rows: plain(failing.value) }]
@@ -212,10 +217,19 @@ function clockOf(ms: number): string {
 
 /** The small line above the clock in the time column: nothing for today and
  *  tomorrow (the bucket header says it), a weekday this week, a date later. */
-function dayOf(ms: number, bucket: Bucket): string {
+function dayOf(ms: number, bucket: RowBucket): string {
   if (bucket === 'week') return new Date(ms).toLocaleDateString(locale.value, { weekday: 'short' })
   if (bucket === 'later') return new Date(ms).toLocaleDateString(locale.value, { month: 'numeric', day: 'numeric' })
   return ''
+}
+
+/** The time column of a fixed-interval row: its cadence, never a clock time. */
+function intervalOf(ms: number | null): string {
+  if (ms === null) return '—'
+  const s = Math.round(ms / 1000)
+  if (s % 3600 === 0) return t('executions.interval.hours', { n: s / 3600 })
+  if (s % 60 === 0) return t('executions.interval.minutes', { n: s / 60 })
+  return t('executions.interval.seconds', { n: s })
 }
 
 function agentName(agent: LaunchAgentEntry): string {
@@ -528,6 +542,7 @@ onUnmounted(() => {
               <div
                 v-if="section.id === 'timeline' && (idx === 0 || section.rows[idx - 1].bucket !== row.bucket)"
                 class="tk-bucket"
+                :class="{ divider: row.bucket === 'interval' }"
                 :data-bucket="row.bucket"
               >
                 {{ t(`executions.bucket.${row.bucket}`) }}
@@ -537,7 +552,10 @@ onUnmounted(() => {
                 :class="{ off: section.id === 'disabled', failing: row.item.failing }"
                 :data-kind="row.item.kind"
               >
-                <div v-if="section.id === 'timeline' && row.item.next !== null" class="tk-when" data-test="when-col">
+                <div v-if="section.id === 'timeline' && row.bucket === 'interval'" class="tk-when" data-test="interval-col">
+                  <span class="tk-when-clock every">{{ intervalOf(row.item.intervalMs) }}</span>
+                </div>
+                <div v-else-if="section.id === 'timeline' && row.item.next !== null" class="tk-when" data-test="when-col">
                   <span v-if="dayOf(row.item.next, row.bucket)" class="tk-when-day">{{ dayOf(row.item.next, row.bucket) }}</span>
                   <span class="tk-when-clock">{{ clockOf(row.item.next) }}</span>
                 </div>
@@ -990,6 +1008,11 @@ onUnmounted(() => {
   font-weight: 700;
   color: var(--text-secondary);
 }
+/* Fixed-interval rows follow the dated ones, below a thin rule. */
+.tk-bucket.divider {
+  margin-top: 4px;
+  border-top: 1px solid var(--border-muted);
+}
 
 /* One list row: the time column (timeline only) + the row itself. */
 .tk-item {
@@ -1028,6 +1051,10 @@ onUnmounted(() => {
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   color: var(--text-bright);
+}
+.tk-when-clock.every {
+  font-weight: 400;
+  color: var(--text-secondary);
 }
 
 .tk-row {

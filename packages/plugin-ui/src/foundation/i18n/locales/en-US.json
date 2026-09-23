@@ -1962,7 +1962,7 @@
             "text": "Electron's built-in whole-window zoom (<em>Zoom In</em> / <em>Zoom Out</em> / <em>Actual Size</em>) was removed, because Navide has two zoom axes of its own: <kbd class=\"syh-kbd\">⌘=</kbd> / <kbd class=\"syh-kbd\">⌘-</kbd> / <kbd class=\"syh-kbd\">⌘0</kbd> change the terminal <strong>content</strong> font size, and <kbd class=\"syh-kbd\">⇧⌘=</kbd> / <kbd class=\"syh-kbd\">⇧⌘-</kbd> / <kbd class=\"syh-kbd\">⇧⌘0</kbd> change the <strong>interface scale</strong> (Settings ▸ Appearance ▸ Interface Scale). Left in place, the native roles' accelerators would fire ahead of both. <kbd class=\"syh-kbd\">⌘R</kbd> was also changed to \"rebuild the focused pane\", and reloading the whole window moved to <kbd class=\"syh-kbd\">⇧⌘R</kbd>, with a <em>Reload Window</em> item in the menu that carries no shortcut. <kbd class=\"syh-kbd\">⌘W</kbd> is reserved for \"close tab\" on macOS, so closing a window is left to the traffic lights or <kbd class=\"syh-kbd\">⌘Q</kbd>."
           },
           "h3": "Schedule — not a standalone window",
-          "p1": "This machine's background schedules are listed in <strong>a tab in the right slot</strong>, named <strong>Schedule</strong> (🗓), and it can be moved to the top or bottom slot. It is not a window opened from the Window menu. Navide's own jobs, your crontab and the macOS launchd jobs share one list: first <strong>Up next</strong>, holding only the rows whose next run can be computed exactly, in time order; then <strong>Recurring</strong>, <strong>Always on / on demand</strong> and <strong>Disabled</strong>. On Linux only the crontab source applies; on Windows only Navide's own jobs are listed — Task Scheduler already manages the machine's tasks.",
+          "p1": "This machine's background schedules are listed in <strong>a tab in the right slot</strong>, named <strong>Schedule</strong> (🗓), and it can be moved to the top or bottom slot. It is not a window opened from the Window menu. Navide's own jobs, your crontab and the macOS launchd jobs share one list: first <strong>Up next</strong>: the rows whose next run can be computed exactly, in time order, and below a thin <strong>Fixed interval</strong> divider the rows that repeat every few minutes or on a schedule with no exact time, shown as their interval rather than a clock time, most frequent first; then <strong>Always on / on demand</strong> and <strong>Disabled</strong>, folded by default. On Linux only the crontab source applies; on Windows only Navide's own jobs are listed — Task Scheduler already manages the machine's tasks.",
           "scheduleTable": {
             "section": "Section",
             "source": "Source",
@@ -8093,12 +8093,17 @@
       "today": "Today",
       "tomorrow": "Tomorrow",
       "week": "This week",
-      "later": "Later"
+      "later": "Later",
+      "interval": "Fixed interval"
     },
     "group": {
-      "recurring": "Recurring",
       "other": "Always on / on demand",
       "disabled": "Disabled"
+    },
+    "interval": {
+      "seconds": "{n}s",
+      "minutes": "{n}m",
+      "hours": "{n}h"
     },
     "unsupported": "Not supported on this platform",
     "no-source": "Nothing to list on this platform: Navide reads the user crontab and macOS launchd jobs, and this system has neither. Navide never creates OS scheduled jobs, so nothing is missing here; its own jobs are listed above.",
