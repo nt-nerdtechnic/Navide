@@ -55,7 +55,7 @@ export function setupVoiceInput(host: VoiceWiringHost) {
       if (!media) return true
       return (await media.askMicrophone()).granted
     },
-    openCapture: openMicCapture,
+    openCapture: (onChunk) => openMicCapture(onChunk, settings.voiceInputDeviceId.value),
     resolveTarget: (paneId): VoiceTarget => {
       const pane = host.paneInfo(paneId)
       if (!pane || !pane.messagingName) return { ok: false, reason: 'not-cli' }

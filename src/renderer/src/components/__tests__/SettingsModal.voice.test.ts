@@ -121,3 +121,129 @@ describe('VoiceSettingsSection model sizes', () => {
     expect(wrapper.text()).toContain('148.0 MB')
   })
 })
+
+describe('VoiceSettingsSection microphone device', () => {
+  let wrapper: VueWrapper | undefined
+  let media: {
+    enumerateDevices: ReturnType<typeof vi.fn>
+    addEventListener: ReturnType<typeof vi.fn>
+    removeEventListener: ReturnType<typeof vi.fn>
+    getUserMedia: ReturnType<typeof vi.fn>
+  }
+
+  const dev = (deviceId: string, label: string, kind = 'audioinput') => ({ deviceId, label, kind, groupId: 'g' })
+
+  beforeEach(() => {
+    __resetSettingsForTest()
+    i18n.global.locale.value = 'en-US'
+    useVoiceSettings().setVoiceInputDevice('', '')
+    media = {
+      enumerateDevices: vi.fn(async () => [
+        dev('default', 'Default - MacBook Mic'),
+        dev('communications', 'Communications'),
+        dev('mac', 'MacBook Mic'),
+        dev('usb', 'USB Mic'),
+        dev('cam', 'FaceTime Camera', 'videoinput'),
+      ]),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      getUserMedia: vi.fn(),
+    }
+    Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: media })
+  })
+
+  afterEach(() => {
+    wrapper?.unmount()
+    wrapper = undefined
+    useVoiceSettings().setVoiceInputEnabled(false)
+    useVoiceSettings().setVoiceInputDevice('', '')
+    delete (navigator as { mediaDevices?: unknown }).mediaDevices
+  })
+
+  async function mountSection() {
+    const mock = createMockBackend('connected')
+    mock.setResponse('voice.status', { ok: true, sidecar: 'ok', model: { present: true, bytes: MODEL_BYTES }, gpu: true })
+    wrapper = mount(VoiceSettingsSection, { props: { backend: mock.backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+    return wrapper
+  }
+
+  const optionTexts = (w: VueWrapper) => w.findAll('[data-settings-section="voice-device"] option').map((o) => o.text())
+
+  it('voice input OFF: no device row and not a single mediaDevices call', async () => {
+    useVoiceSettings().setVoiceInputEnabled(false)
+    const w = await mountSection()
+    expect(w.find('[data-settings-section="voice-device"]').exists()).toBe(false)
+    expect(media.enumerateDevices).not.toHaveBeenCalled()
+    expect(media.addEventListener).not.toHaveBeenCalled()
+    expect(media.getUserMedia).not.toHaveBeenCalled()
+  })
+
+  it('voice input ON: lists audio inputs after System default, without the default/communications aliases', async () => {
+    useVoiceSettings().setVoiceInputEnabled(true)
+    const w = await mountSection()
+    expect(optionTexts(w)).toEqual(['System default', 'MacBook Mic', 'USB Mic'])
+    expect((w.get('[data-settings-section="voice-device"] select').element as HTMLSelectElement).value).toBe('')
+    expect(media.addEventListener).toHaveBeenCalledWith('devicechange', expect.any(Function))
+    expect(media.getUserMedia).not.toHaveBeenCalled()
+  })
+
+  it('numbers unnamed devices and says when names will appear', async () => {
+    media.enumerateDevices.mockResolvedValue([dev('a', ''), dev('b', '')])
+    useVoiceSettings().setVoiceInputEnabled(true)
+    const w = await mountSection()
+    expect(optionTexts(w)).toEqual(['System default', 'Microphone 1', 'Microphone 2'])
+    expect(w.get('[data-settings-section="voice-device"]').text()).toContain('Device names appear after the first voice use')
+    expect(media.getUserMedia).not.toHaveBeenCalled()
+  })
+
+  it('choosing a device saves its id and label', async () => {
+    useVoiceSettings().setVoiceInputEnabled(true)
+    const w = await mountSection()
+    await w.get('[data-settings-section="voice-device"] select').setValue('usb')
+    expect(useVoiceSettings().voiceInputDeviceId.value).toBe('usb')
+    expect(useVoiceSettings().voiceInputDeviceLabel.value).toBe('USB Mic')
+  })
+
+  it('a saved device that is gone shows as not connected, with the system default used', async () => {
+    useVoiceSettings().setVoiceInputDevice('old', 'Studio Mic')
+    useVoiceSettings().setVoiceInputEnabled(true)
+    const w = await mountSection()
+    const row = w.get('[data-settings-section="voice-device"]')
+    const missing = row.findAll('option').at(-1)!
+    expect(missing.text()).toBe('Studio Mic (not connected)')
+    expect(missing.attributes('disabled')).toBeDefined()
+    expect(row.text()).toContain('the system default will be used')
+    expect(useVoiceSettings().voiceInputDeviceId.value).toBe('old')
+  })
+
+  it('re-finds a saved device by label when its id differs (another origin)', async () => {
+    useVoiceSettings().setVoiceInputDevice('id-from-dev-origin', 'USB Mic')
+    useVoiceSettings().setVoiceInputEnabled(true)
+    const w = await mountSection()
+    expect(useVoiceSettings().voiceInputDeviceId.value).toBe('usb')
+    expect(optionTexts(w)).toEqual(['System default', 'MacBook Mic', 'USB Mic'])
+    expect((w.get('[data-settings-section="voice-device"] select').element as HTMLSelectElement).value).toBe('usb')
+  })
+
+  it('re-lists on devicechange, and stops listening when turned off or unmounted', async () => {
+    useVoiceSettings().setVoiceInputEnabled(true)
+    const w = await mountSection()
+    const handler = media.addEventListener.mock.calls[0][1] as () => void
+    media.enumerateDevices.mockResolvedValue([dev('usb', 'USB Mic')])
+    handler()
+    await flushPromises()
+    expect(optionTexts(w)).toEqual(['System default', 'USB Mic'])
+
+    useVoiceSettings().setVoiceInputEnabled(false)
+    await flushPromises()
+    expect(media.removeEventListener).toHaveBeenCalledWith('devicechange', handler)
+
+    useVoiceSettings().setVoiceInputEnabled(true)
+    await flushPromises()
+    expect(media.addEventListener).toHaveBeenCalledTimes(2)
+    w.unmount()
+    wrapper = undefined
+    expect(media.removeEventListener).toHaveBeenCalledTimes(2)
+  })
+})

@@ -19,15 +19,35 @@ function workletModuleUrl(): string {
   return workletUrl
 }
 
-/**
- * Open the default microphone. Only ever called from a hold-to-talk press with
- * voice input switched on — this is the one place the app calls getUserMedia.
- */
-export async function openMicCapture(onChunk: (pcm: Int16Array) => void): Promise<VoiceCapture> {
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+function requestStream(deviceId: string): Promise<MediaStream> {
+  return navigator.mediaDevices.getUserMedia({
+    audio: {
+      channelCount: 1,
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+      ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+    },
     video: false,
   })
+}
+
+/**
+ * Open the chosen microphone ('' = system default). Only ever called from a
+ * hold-to-talk press with voice input switched on — this is the one place the
+ * app calls getUserMedia. A chosen device that is gone (unplugged, or an id
+ * from another origin) falls back to the system default once; a denied
+ * permission is never retried.
+ */
+export async function openMicCapture(onChunk: (pcm: Int16Array) => void, deviceId = ''): Promise<VoiceCapture> {
+  let stream: MediaStream
+  try {
+    stream = await requestStream(deviceId)
+  } catch (err) {
+    const name = (err as { name?: string } | null)?.name
+    if (!deviceId || (name !== 'OverconstrainedError' && name !== 'NotFoundError')) throw err
+    stream = await requestStream('')
+  }
   let ctx: AudioContext | null = null
   try {
     ctx = new AudioContext()

@@ -14,7 +14,15 @@ import type { useBackend } from '../../composables/useBackend'
 
 const props = defineProps<{ backend: ReturnType<typeof useBackend> }>()
 const { t } = useI18n()
-const { voiceInputEnabled, voiceReadbackEnabled, setVoiceInputEnabled, setVoiceReadbackEnabled } = useVoiceSettings()
+const {
+  voiceInputEnabled,
+  voiceReadbackEnabled,
+  voiceInputDeviceId,
+  voiceInputDeviceLabel,
+  setVoiceInputEnabled,
+  setVoiceReadbackEnabled,
+  setVoiceInputDevice,
+} = useVoiceSettings()
 
 interface VoiceStatus {
   ok?: boolean
@@ -53,19 +61,96 @@ function unsubscribeProgress(): void {
   offProgress = null
 }
 
+// ── Microphone device ─────────────────────────────────────────────────────────
+// Listed only while voice input is on. The page never opens the mic
+// (getUserMedia) to learn device names: before the first voice take the list
+// may be unlabeled, and unnamed entries are numbered instead.
+interface MicDevice { deviceId: string; label: string }
+const devices = ref<MicDevice[]>([])
+const devicesLoaded = ref(false)
+let listeningDevices = false
+
+async function refreshDevices(): Promise<void> {
+  const md = navigator.mediaDevices
+  if (!md?.enumerateDevices) return
+  try {
+    const all = await md.enumerateDevices()
+    if (!voiceInputEnabled.value) return
+    devices.value = all
+      .filter((d) => d.kind === 'audioinput' && d.deviceId !== 'default' && d.deviceId !== 'communications')
+      .map((d) => ({ deviceId: d.deviceId, label: d.label }))
+    devicesLoaded.value = true
+    rematchSavedDevice()
+  } catch {
+    devices.value = []
+  }
+}
+
+function onDeviceChange(): void {
+  void refreshDevices()
+}
+
+function listenDevices(): void {
+  if (listeningDevices) return
+  listeningDevices = true
+  navigator.mediaDevices?.addEventListener?.('devicechange', onDeviceChange)
+}
+
+function unlistenDevices(): void {
+  if (!listeningDevices) return
+  listeningDevices = false
+  navigator.mediaDevices?.removeEventListener?.('devicechange', onDeviceChange)
+}
+
+/** A saved id from another origin (dev vs packaged) re-found by its label. */
+function rematchSavedDevice(): void {
+  const id = voiceInputDeviceId.value
+  if (!id || devices.value.some((d) => d.deviceId === id)) return
+  const label = voiceInputDeviceLabel.value
+  const match = label ? devices.value.find((d) => d.label === label) : undefined
+  if (match) setVoiceInputDevice(match.deviceId, match.label)
+}
+
+const savedDeviceMissing = computed(
+  () => devicesLoaded.value && voiceInputDeviceId.value !== '' && !devices.value.some((d) => d.deviceId === voiceInputDeviceId.value),
+)
+const hasUnnamedDevice = computed(() => devices.value.some((d) => !d.label))
+
+function deviceName(d: MicDevice, index: number): string {
+  return d.label || t('settings.voice.device-unnamed', { n: index + 1 })
+}
+
+const deviceDescription = computed(() => {
+  if (savedDeviceMissing.value) return t('settings.voice.device-missing-note')
+  if (hasUnnamedDevice.value) return t('settings.voice.device-hint')
+  return ''
+})
+
+function onSelectDevice(e: Event): void {
+  const id = (e.target as HTMLSelectElement).value
+  const index = devices.value.findIndex((d) => d.deviceId === id)
+  setVoiceInputDevice(id, index >= 0 ? devices.value[index].label : '')
+}
+
 watch(
   voiceInputEnabled,
   (on) => {
     if (on) {
       subscribeProgress()
       void refreshStatus()
+      listenDevices()
+      void refreshDevices()
     } else {
       unsubscribeProgress()
+      unlistenDevices()
     }
   },
   { immediate: true },
 )
-onBeforeUnmount(unsubscribeProgress)
+onBeforeUnmount(() => {
+  unsubscribeProgress()
+  unlistenDevices()
+})
 
 const downloading = computed(() => progress.value !== null && !progress.value.done)
 
@@ -135,6 +220,28 @@ const canDownload = computed(
       </SettingRow>
 
       <SettingRow
+        v-if="voiceInputEnabled"
+        data-settings-section="voice-device"
+        :title="t('settings.voice.device')"
+        :description="deviceDescription"
+      >
+        <template #control>
+          <select
+            class="voice-select"
+            :aria-label="t('settings.voice.device')"
+            :value="voiceInputDeviceId"
+            @change="onSelectDevice"
+          >
+            <option value="">{{ t('settings.voice.device-default') }}</option>
+            <option v-for="(d, i) in devices" :key="d.deviceId" :value="d.deviceId">{{ deviceName(d, i) }}</option>
+            <option v-if="savedDeviceMissing" :value="voiceInputDeviceId" disabled>
+              {{ voiceInputDeviceLabel || t('settings.voice.device') }} {{ t('settings.voice.device-unavailable') }}
+            </option>
+          </select>
+        </template>
+      </SettingRow>
+
+      <SettingRow
         data-settings-section="voice-readback"
         :title="t('settings.voice.readback')"
         :description="t('settings.voice.readback-hint')"
@@ -185,6 +292,15 @@ const canDownload = computed(
 }
 .voice-btn:hover:not(:disabled) { color: var(--text-primary); border-color: var(--accent-emphasis); }
 .voice-btn:disabled { opacity: 0.5; cursor: default; }
+.voice-select {
+  font-size: var(--font-2xs);
+  padding: 4px 8px;
+  max-width: 240px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--bg-base);
+  color: var(--text-primary);
+}
 .voice-progress {
   width: 120px;
   accent-color: var(--accent-emphasis);

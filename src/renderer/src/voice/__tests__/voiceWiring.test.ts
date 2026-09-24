@@ -120,6 +120,30 @@ describe('voice wiring', () => {
     expect(voice.state.phase).toBe('idle')
   })
 
+  it('opens the microphone the user chose in settings', async () => {
+    settings.setVoiceInputEnabled(true)
+    settings.setVoiceInputDevice('mic-usb', 'USB Mic')
+    await nextTick()
+    executeCommand('workbench.action.holdToTalk')
+    await settle()
+    expect(openMicCapture).toHaveBeenCalledTimes(1)
+    expect(openMicCapture.mock.calls[0][1]).toBe('mic-usb')
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'm' }))
+    await settle()
+
+    settings.setVoiceInputDevice('', '')
+    vi.advanceTimersByTime(COUNTDOWN_MS)
+    await settle()
+    executeCommand('workbench.action.holdToTalk')
+    await settle()
+    expect(openMicCapture.mock.calls.at(-1)![1]).toBe('')
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'm' }))
+    await settle()
+    vi.advanceTimersByTime(COUNTDOWN_MS)
+    await settle()
+    expect(voice.state.phase).toBe('idle')
+  })
+
   it('a busy pane holds the message; Esc passes through to the CLI, the withdraw button takes it back', async () => {
     settings.setVoiceInputEnabled(true)
     await nextTick()
