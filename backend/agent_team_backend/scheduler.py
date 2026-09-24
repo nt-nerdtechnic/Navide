@@ -12,6 +12,13 @@ who may change any job; an agent (an MCP caller) may change only the jobs it
 created. A job whose creating pane is gone belongs to nobody an agent can act
 as, so only the user can change it — see :func:`may_change`.
 
+Jobs an agent owns are also limited (the user's own jobs are not): at most
+AGENT_ENABLED_PER_OWNER enabled per owner and AGENT_ENABLED_TOTAL enabled in
+all, no interval under AGENT_MIN_EVERY_MS, AGENT_RUNS_PER_DAY_TOTAL runs a day
+between them (an agent's run_now included), a periodic job disables itself
+AGENT_EXPIRE_MS after it was last saved or enabled unless the user keeps it,
+and a finished once job is deleted AGENT_ONCE_KEEP_MS after it ran.
+
 It runs only while the backend runs. Slots missed while Navide was closed are
 caught up at most once per job (``catch_up: "once"``) or dropped (``"skip"``).
 
@@ -80,11 +87,24 @@ SKIP_BUDGET = "budget"
 SKIP_TARGET_GONE = "target_gone"
 SKIP_MISSED = "missed"
 SKIP_INTERRUPTED = "interrupted"
+#: An agent-owned job skipped because agent jobs used up the day's total.
+SKIP_BUDGET_GLOBAL = "budget_global"
+#: An agent-owned periodic job disabled because it expired.
+SKIP_EXPIRED = "expired"
+
+AGENT_ENABLED_PER_OWNER = 10
+AGENT_ENABLED_TOTAL = 100
+AGENT_MIN_EVERY_MS = 5 * 60_000
+AGENT_MAX_RUNS_PER_DAY = 288
+AGENT_RUNS_PER_DAY_TOTAL = 300
+AGENT_EXPIRE_MS = 7 * 24 * 3600 * 1000
+AGENT_ONCE_KEEP_MS = 30 * 24 * 3600 * 1000
 
 
 #: The actor behind a change made in a Navide window.
 USER: dict[str, Any] = {"kind": "user"}
 NOT_OWNER = "SCHEDULER_NOT_OWNER"
+LIMIT = "SCHEDULER_LIMIT"
 
 
 class JobInvalid(ValueError):
@@ -410,6 +430,51 @@ def _not_owner(job: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _limit(limit: str, bound: int, used: int, error: str) -> dict[str, Any]:
+    """An agent limit refusal. ``max`` is the bound, a minimum for an interval."""
+    return {"ok": False, "code": LIMIT, "limit": limit, "max": bound, "used": used, "error": error}
+
+
+def _agent_definition_limit(job: dict[str, Any]) -> dict[str, Any] | None:
+    schedule = job["schedule"]
+    if schedule["kind"] == "every" and schedule["every_ms"] < AGENT_MIN_EVERY_MS:
+        return _limit(
+            "min_every_ms", AGENT_MIN_EVERY_MS, schedule["every_ms"],
+            "an agent's job may run at most every 5 minutes (every_ms >= 300000); "
+            "to watch a pane, use cli_wait_idle instead",
+        )
+    runs = int(job["policy"].get("max_runs_per_day", DEFAULT_POLICY["max_runs_per_day"]))
+    if runs > AGENT_MAX_RUNS_PER_DAY:
+        return _limit(
+            "max_runs_per_day", AGENT_MAX_RUNS_PER_DAY, runs,
+            f"an agent's job may run at most {AGENT_MAX_RUNS_PER_DAY} times a day",
+        )
+    return None
+
+
+def _stamp_expiry(job: dict[str, Any], now: int, *, refresh: bool) -> None:
+    """Set an agent-owned periodic job's expiry; a once job has none.
+
+    ``expires_at: None`` means the user chose to keep the job; that is never
+    overwritten.
+    """
+    owner = dict(job.get("owner") or USER)
+    if not is_agent(owner):
+        return
+    if job["schedule"]["kind"] == "once":
+        owner.pop("expires_at", None)
+    elif "expires_at" in owner and owner["expires_at"] is None:
+        return
+    elif refresh or "expires_at" not in owner:
+        owner["expires_at"] = now + AGENT_EXPIRE_MS
+    job["owner"] = owner
+
+
+def _usage_day(now_ms: int) -> str:
+    """The local calendar day the agent run total is counted in."""
+    return datetime.fromtimestamp(now_ms / 1000).date().isoformat()
+
+
 def view(job: dict[str, Any]) -> dict[str, Any]:
     """A job as clients see it: with ``owner_gone`` for a pane owner that is gone."""
     return {**job, "owner_gone": owner_gone(job.get("owner") or USER)}
@@ -650,6 +715,8 @@ class SchedulerService:
                 nearest = at if nearest is None else min(nearest, at)
 
             for job in await self.store.list_jobs():
+                if await self._sweep_agent_job(job, now):
+                    continue
                 state = job["state"]
                 running_at = state.get("running_at")
                 if running_at is not None:
@@ -678,6 +745,39 @@ class SchedulerService:
         finally:
             self._ticking = False
 
+    async def _sweep_agent_job(self, job: dict[str, Any], now: int) -> bool:
+        """Expire or delete an agent-owned job whose time is up; True if it was."""
+        owner = job.get("owner") or USER
+        if not is_agent(owner) or job["state"].get("running_at") is not None:
+            return False
+        expires = owner.get("expires_at")
+        if job["enabled"] and isinstance(expires, int) and now >= expires:
+            async with self._lock:
+                fresh = await self.store.get_job(job["id"])
+                if fresh is None or not fresh["enabled"] or fresh["state"].get("running_at"):
+                    return True
+                state = fresh["state"]
+                state["last_status"] = "skipped"
+                state["last_skip_reason"] = SKIP_EXPIRED
+                await self.store.set_enabled(job["id"], False, state, now)
+                await self.store.append_run(job["id"], {
+                    "started_at": now, "ended_at": now, "status": "skipped",
+                    "reason": SKIP_EXPIRED,
+                    "detail": "an agent's periodic job stops 7 days after it was last saved "
+                    "or enabled, unless the user keeps it",
+                })
+            await self._changed()
+            return True
+        if (
+            not job["enabled"] and job["schedule"]["kind"] == "once"
+            and now - int(job["updated_at"]) >= AGENT_ONCE_KEEP_MS
+        ):
+            async with self._lock:
+                await self.store.delete_job(job["id"])
+            await self._changed()
+            return True
+        return False
+
     async def _gate(self, job: dict[str, Any], now: int) -> str | None:
         if not self.bridge.has_window():
             return SKIP_NO_WINDOW
@@ -687,6 +787,35 @@ class SchedulerService:
         used = await self.store.count_dispatched_since(job["id"], _day_start_ms(job["schedule"], now))
         if used >= cap or await self.bridge.budget_limited(job["action"]):
             return SKIP_BUDGET
+        if is_agent(job.get("owner")) and await self._agent_runs_spent(now):
+            return SKIP_BUDGET_GLOBAL
+        return None
+
+    async def _agent_runs_spent(self, now: int) -> bool:
+        return await self.store.usage(_usage_day(now)) >= AGENT_RUNS_PER_DAY_TOTAL
+
+    async def _agent_enable_limit(
+        self, actor: dict[str, Any], job_id: str | None
+    ) -> dict[str, Any] | None:
+        """Refusal when ``actor`` enabling one more job would pass a limit.
+        Only agent-owned jobs count, and ``job_id`` itself is not counted."""
+        enabled = [
+            other for other in await self.store.list_jobs()
+            if other["enabled"] and other["id"] != job_id and is_agent(other.get("owner"))
+        ]
+        mine = sum(1 for other in enabled if may_change(actor, other))
+        if mine >= AGENT_ENABLED_PER_OWNER:
+            return _limit(
+                "per_owner_enabled", AGENT_ENABLED_PER_OWNER, mine,
+                f"you already have {mine} enabled jobs, the most an agent may have; "
+                "disable or remove one of yours first, or ask the user",
+            )
+        if len(enabled) >= AGENT_ENABLED_TOTAL:
+            return _limit(
+                "global_enabled", AGENT_ENABLED_TOTAL, len(enabled),
+                f"agents already have {len(enabled)} enabled jobs between them, the most "
+                "allowed; disable or remove one of yours first, or ask the user",
+            )
         return None
 
     async def _fire(self, job: dict[str, Any], now: int) -> asyncio.Task | None:
@@ -698,9 +827,12 @@ class SchedulerService:
                     await self._record_skip(fresh, now, reason, None)
             await self._changed()
             return None
-        return await self._start(job["id"], manual=False)
+        return await self._start(job["id"], manual=False, count=is_agent(job.get("owner")))
 
-    async def _start(self, job_id: str, *, manual: bool) -> asyncio.Task | None:
+    async def _start(
+        self, job_id: str, *, manual: bool, count: bool = False
+    ) -> asyncio.Task | None:
+        """Start a run. ``count`` adds it to the day's agent run total."""
         async with self._lock:
             job = await self.store.get_job(job_id)
             if job is None or job["state"].get("running_at") is not None:
@@ -709,6 +841,8 @@ class SchedulerService:
             job["state"]["running_at"] = started
             # Written before anything is dispatched: this is the reentry lock.
             await self.store.set_state(job_id, job["state"])
+            if count:
+                await self.store.add_usage(_usage_day(started))
             task = asyncio.create_task(self._execute(job, started, manual))
             self._runs[job_id] = (task, manual)
         await self._changed()
@@ -812,7 +946,19 @@ class SchedulerService:
 
     async def list(self) -> dict[str, Any]:
         jobs = [view(job) for job in await self.store.list_jobs()]
-        return {"ok": True, "jobs": jobs, "now": self.now_ms()}
+        now = self.now_ms()
+        limits = {
+            "agent_enabled_per_owner": AGENT_ENABLED_PER_OWNER,
+            "agent_enabled_total": AGENT_ENABLED_TOTAL,
+            "agent_enabled": sum(1 for j in jobs if j["enabled"] and is_agent(j["owner"])),
+            "agent_min_every_ms": AGENT_MIN_EVERY_MS,
+            "agent_max_runs_per_day": AGENT_MAX_RUNS_PER_DAY,
+            "agent_runs_per_day": AGENT_RUNS_PER_DAY_TOTAL,
+            "agent_runs_today": await self.store.usage(_usage_day(now)),
+            "agent_expire_ms": AGENT_EXPIRE_MS,
+            "agent_once_keep_ms": AGENT_ONCE_KEEP_MS,
+        }
+        return {"ok": True, "jobs": jobs, "now": now, "limits": limits}
 
     async def upsert(self, raw: Any, actor: dict[str, Any] = USER) -> dict[str, Any]:
         """Create or update a job on behalf of ``actor``.
@@ -831,9 +977,18 @@ class SchedulerService:
                     raise JobInvalid(f'unknown job id "{job_id}"')
                 if not may_change(actor, existing):
                     return _not_owner(existing)
-            job = normalize_job(raw, existing, self.now_ms())
+            now = self.now_ms()
+            job = normalize_job(raw, existing, now)
             job["owner"] = existing["owner"] if existing else owner_of(actor)
             job["updated_by"] = owner_of(actor)
+            enabling = job["enabled"] and (existing is None or not existing["enabled"])
+            if is_agent(actor):
+                refusal = _agent_definition_limit(job)
+                if refusal is None and enabling:
+                    refusal = await self._agent_enable_limit(actor, job["id"])
+                if refusal is not None:
+                    return refusal
+            _stamp_expiry(job, now, refresh=is_agent(actor) or enabling)
             await self.store.put_job(job)
         self.wake()
         return {"ok": True, "job": view(job)}
@@ -864,6 +1019,21 @@ class SchedulerService:
             await self.store.put_job(job)
         return {"ok": True, "job": view(job)}
 
+    async def keep(self, job_id: str) -> dict[str, Any]:
+        """Stop an agent's job from expiring ("keep"); only a window calls this."""
+        async with self._lock:
+            job = await self.store.get_job(job_id)
+            if job is None:
+                return {"ok": False, "error": f'unknown job id "{job_id}"'}
+            if not is_agent(job["owner"]):
+                return {"ok": False, "error": "only an agent's job expires"}
+            job["owner"] = {**job["owner"], "expires_at": None}
+            job["updated_by"] = dict(USER)
+            job["updated_at"] = self.now_ms()
+            await self.store.put_job(job)
+        self.wake()
+        return {"ok": True, "job": view(job)}
+
     async def set_enabled(
         self, job_id: str, enabled: bool, actor: dict[str, Any] = USER
     ) -> dict[str, Any]:
@@ -873,6 +1043,14 @@ class SchedulerService:
                 return {"ok": False, "error": f'unknown job id "{job_id}"'}
             if not may_change(actor, job):
                 return _not_owner(job)
+            owner = None
+            if enabled and not job["enabled"]:
+                if is_agent(actor):
+                    refusal = await self._agent_enable_limit(actor, job_id)
+                    if refusal is not None:
+                        return refusal
+                _stamp_expiry(job, self.now_ms(), refresh=True)
+                owner = job["owner"]
             state = job["state"]
             if enabled and not job["enabled"]:
                 # Re-enabling never fires a slot that passed while disabled.
@@ -884,7 +1062,7 @@ class SchedulerService:
                 else:
                     state["next_run_at"] = next_run_after(job["schedule"], self.now_ms())
             await self.store.set_enabled(
-                job_id, enabled, state, self.now_ms(), updated_by=owner_of(actor)
+                job_id, enabled, state, self.now_ms(), updated_by=owner_of(actor), owner=owner
             )
         self.wake()
         return {"ok": True}
@@ -904,10 +1082,19 @@ class SchedulerService:
                 return _not_owner(job)
             if job["state"].get("running_at") is not None:
                 return {"ok": False, "error": "that job is already running"}
+            if is_agent(actor):
+                now = self.now_ms()
+                used = await self.store.usage(_usage_day(now))
+                if used >= AGENT_RUNS_PER_DAY_TOTAL:
+                    return _limit(
+                        "agent_runs_per_day", AGENT_RUNS_PER_DAY_TOTAL, used,
+                        "agents' jobs have used up today's runs; try again tomorrow, "
+                        "or ask the user to run it",
+                    )
             if job["state"].get("backoff_until") is not None:
                 job["state"]["backoff_until"] = None
                 await self.store.set_state(job_id, job["state"])
-        task = await self._start(job_id, manual=True)
+        task = await self._start(job_id, manual=True, count=is_agent(actor))
         if task is None:
             return {"ok": False, "error": "that job is already running"}
         return {"ok": True, "enqueued": True}

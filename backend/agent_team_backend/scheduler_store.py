@@ -7,6 +7,9 @@ Two tables in the global ``navide.db``:
   state write never rewrites what the user configured.
 - ``scheduler_runs`` — append-only run history, trimmed to the newest
   :data:`RUNS_PER_JOB` rows of a job on every append.
+- ``scheduler_usage`` (schema v3) — dispatched runs of agent-owned jobs per
+  local day. Kept apart from the run history because deleting a job deletes
+  its runs, which would otherwise let an agent reset its own daily total.
 
 Schema v2 adds ``owner`` (who created the job) and ``updated_by`` (who
 last changed it) to ``scheduler_jobs``. Rows that predate v2 — and any written
@@ -70,6 +73,10 @@ def _add_owners(cur: sqlite3.Cursor) -> None:
     cur.execute("UPDATE scheduler_jobs SET owner = ?", (_dumps(LEGACY_OWNER),))
 
 
+def _create_usage(cur: sqlite3.Cursor) -> None:
+    cur.execute("CREATE TABLE scheduler_usage (day TEXT PRIMARY KEY, runs INTEGER NOT NULL)")
+
+
 def _dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
@@ -119,6 +126,7 @@ class SchedulerStore:
         self.db = db
         db.migrate(_COMPONENT, 1, _create_scheduler_schema)
         db.migrate(_COMPONENT, 2, _add_owners)
+        db.migrate(_COMPONENT, 3, _create_usage)
 
     # ── sync bodies (always called through to_thread) ────────────────────
 
@@ -221,6 +229,21 @@ class SchedulerStore:
             ).fetchone()
         return int(row[0])
 
+    def _usage(self, day: str) -> int:
+        with self.db.transaction() as cur:
+            row = cur.execute("SELECT runs FROM scheduler_usage WHERE day = ?", (day,)).fetchone()
+        return int(row[0]) if row is not None else 0
+
+    def _add_usage(self, day: str) -> None:
+        with self.db.transaction() as cur:
+            # Only today's row is ever read, so older days are dropped here.
+            cur.execute("DELETE FROM scheduler_usage WHERE day <> ?", (day,))
+            cur.execute(
+                "INSERT INTO scheduler_usage (day, runs) VALUES (?, 1)"
+                " ON CONFLICT(day) DO UPDATE SET runs = runs + 1",
+                (day,),
+            )
+
     # ── async API ────────────────────────────────────────────────────────
 
     async def list_jobs(self) -> list[dict[str, Any]]:
@@ -255,3 +278,8 @@ class SchedulerStore:
     async def count_dispatched_since(self, job_id: str, since: int) -> int:
         return await asyncio.to_thread(self._count_dispatched_since, job_id, since)
 
+    async def usage(self, day: str) -> int:
+        return await asyncio.to_thread(self._usage, day)
+
+    async def add_usage(self, day: str) -> None:
+        await asyncio.to_thread(self._add_usage, day)

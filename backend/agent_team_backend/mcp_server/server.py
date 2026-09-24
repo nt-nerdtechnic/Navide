@@ -6867,7 +6867,9 @@ async def scheduler_list(ctx: Context) -> dict[str, Any]:
     whether you may (you may change only jobs you created), `owner` says who
     created it ({kind: "user"}, {kind: "pane", pane_id, pane_name, workspace}
     or {kind: "external"}), and `owner_gone` is true when the creating pane is
-    gone — such a job is the user's to change now.
+    gone — such a job is the user's to change now. `limits` reports the agent
+    limits (see scheduler_upsert, LIMITS) and how much of them is in use:
+    yours_enabled, agent_enabled, agent_runs_today.
 
     Jobs fire only while Navide is running; nothing wakes the machine or the
     app. See scheduler_upsert for the shape of a job.
@@ -6881,6 +6883,9 @@ async def scheduler_list(ctx: Context) -> dict[str, Any]:
     actor = _scheduler_actor(caller)
     result = await _scheduler_service().list()
     result["jobs"] = [{**job, "editable": may_change(actor, job)} for job in result["jobs"]]
+    result["limits"]["yours_enabled"] = sum(
+        1 for job in result["jobs"] if job["editable"] and job["enabled"]
+    )
     return result
 
 
@@ -6899,7 +6904,8 @@ async def scheduler_upsert(job: dict[str, Any], ctx: Context) -> dict[str, Any]:
 
     Skips are not errors: "no_window" (no Navide window open), "busy" (this
     job's previous message is still queued at the pane), "budget" (daily cap or
-    quota), "target_gone" (pane_id no longer names a pane). A message to a pane
+    quota), "budget_global" (agent jobs' daily total), "expired" (see LIMITS),
+    "target_gone" (pane_id no longer names a pane). A message to a pane
     that is mid-turn is queued by the normal delivery path and runs as "ok".
 
     Defaults for a pane caller: action.workspace is your own workspace, and an
@@ -6916,6 +6922,17 @@ async def scheduler_upsert(job: dict[str, Any], ctx: Context) -> dict[str, Any]:
     pane caller may only target panes in its own workspace (another workspace
     answers code "SCHEDULER_CROSS_WORKSPACE"); a caller with no pane identity
     has no own workspace and is not limited this way.
+
+    LIMITS on agents' jobs (the user's own jobs have none): at most 10 enabled
+    jobs of yours and 100 enabled agent jobs in all; every_ms at least 300000
+    (5 minutes) and max_runs_per_day at most 288; 300 runs a day across all
+    agent jobs (your run_now included) — past that a slot is skipped as
+    "budget_global". A periodic job of yours disables itself 7 days after you
+    last saved or enabled it (skip reason "expired"; the user can keep it), so
+    save or re-enable it to keep it going. A finished once job of yours is
+    deleted 30 days after it ran. A limit answers {ok: false, code:
+    "SCHEDULER_LIMIT", limit, max, used, error}; `max` is the bound (the
+    minimum, for "min_every_ms").
 
     A once job runs a single time, then disables itself whatever the outcome
     (ok, error or skipped); it stays listed with its state. Enabling it again

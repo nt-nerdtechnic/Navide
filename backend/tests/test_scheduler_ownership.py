@@ -99,10 +99,9 @@ async def refused_everywhere(job_id: str, ctx: Any) -> list[dict[str, Any]]:
 
 async def test_owner_and_updated_by_are_recorded(env) -> None:
     created = await by_agent(env)
-    assert created["owner"] == {
-        "kind": "pane", "pane_id": "a-1", "pane_name": "alpha", "workspace": env.ws,
-    }
-    assert created["updated_by"] == created["owner"] and created["owner_gone"] is False
+    identity = {"kind": "pane", "pane_id": "a-1", "pane_name": "alpha", "workspace": env.ws}
+    assert created["owner"] == {**identity, "expires_at": 1_800_000_000_000 + 7 * 86_400_000}
+    assert created["updated_by"] == identity and created["owner_gone"] is False
     assert (await by_user(env))["owner"] == {"kind": "user"}
     # A window edit keeps the agent as owner but records who changed it.
     edited = (await env.service.upsert({"id": created["id"], "name": "renamed"}))["job"]
@@ -210,7 +209,7 @@ async def test_cross_workspace_target_is_refused_for_a_pane(env, tmp_path) -> No
 
 async def test_caller_without_pane_identity_is_one_external_agent(env, tmp_path) -> None:
     created = await plan_mcp.scheduler_upsert(job(str(tmp_path / "anywhere")), host())
-    assert created["ok"] is True and created["job"]["owner"] == {"kind": "external"}
+    assert created["ok"] is True and created["job"]["owner"]["kind"] == "external"
     job_id = created["job"]["id"]
     assert await plan_mcp.scheduler_set_enabled(job_id, False, host()) == {"ok": True}
     for result in await refused_everywhere(job_id, pane("a-1")):

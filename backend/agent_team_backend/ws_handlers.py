@@ -10338,6 +10338,22 @@ async def scheduler_adopt(session: "Session", msg_id: str, msg_type: str, payloa
         await scheduler.broadcast_changed(exclude=session)
 
 
+@handler("scheduler.keep")
+async def scheduler_keep(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """Stop an agent's periodic job from expiring. Not an MCP tool, for the same
+    reason as scheduler.adopt: the expiry exists to outlive a forgetful agent."""
+    from . import scheduler
+
+    job_id = _scheduler_id(payload)
+    if job_id is None:
+        await _scheduler_bad_request(session, msg_id, msg_type, "scheduler.keep needs an id")
+        return
+    result = await scheduler.get_service().keep(job_id)
+    await session.send_json(make_response(msg_id, msg_type, result))
+    if result.get("ok"):
+        await scheduler.broadcast_changed(exclude=session)
+
+
 @handler("scheduler.run_now")
 async def scheduler_run_now(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     """Start one run and answer at once; the run's own start and end reach
