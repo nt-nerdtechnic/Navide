@@ -3452,12 +3452,14 @@ ipcMain.handle(
 // pressed the hotkey — nothing prompts at startup. Elsewhere there is no OS
 // gate beyond getUserMedia itself, so this answers granted.
 ipcMain.handle('media:ask-microphone', async () => {
-  if (!isMac()) return { granted: true, status: 'not-applicable' }
+  if (!isMac()) return { granted: true, status: 'not-applicable', prompted: false }
   const status = systemPreferences.getMediaAccessStatus('microphone')
-  if (status === 'granted') return { granted: true, status }
+  if (status === 'granted') return { granted: true, status, prompted: false }
   // 'denied'/'restricted' never prompt again; askForMediaAccess answers false.
+  // 'not-determined' shows the system dialog: `prompted` lets the caller know
+  // the user spent this press answering it rather than speaking.
   const granted = await systemPreferences.askForMediaAccess('microphone')
-  return { granted, status: granted ? 'granted' : status }
+  return { granted, status: granted ? 'granted' : status, prompted: status === 'not-determined' }
 })
 
 ipcMain.handle('permissions:open-settings', async (_event, key: PermissionKey) => {

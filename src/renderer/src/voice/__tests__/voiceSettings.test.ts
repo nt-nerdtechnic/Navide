@@ -61,3 +61,31 @@ describe('voice input device setting', () => {
     expect(s.voiceInputDeviceLabel.value).toBe('Desk Mic')
   })
 })
+
+describe('voice recording mode setting', () => {
+  let ctx: Awaited<ReturnType<typeof load>>
+
+  beforeEach(async () => {
+    ctx = await load()
+  }, 60_000)
+  afterEach(() => {
+    ctx.testing.__resetSettingsForTest()
+  })
+
+  it('defaults to hold with quick-tap lock, persists a choice and rejects unknown values', () => {
+    const { mod, shared, createMockBackend } = ctx
+    const { backend, emit } = createMockBackend('connected')
+    shared.initSettingsBackend(backend)
+    const s = mod.useVoiceSettings()
+    expect(s.voiceRecordingMode.value).toBe('hold-tap')
+    // Another window's choice is followed; an unknown value falls back.
+    emit('ui.settings_changed', { settings: { [mod.VOICE_RECORDING_MODE_KEY]: 'hold' } })
+    expect(s.voiceRecordingMode.value).toBe('hold')
+    emit('ui.settings_changed', { settings: { [mod.VOICE_RECORDING_MODE_KEY]: 'bogus' } })
+    expect(s.voiceRecordingMode.value).toBe('hold-tap')
+
+    s.setVoiceRecordingMode('toggle')
+    expect(s.voiceRecordingMode.value).toBe('toggle')
+    expect(shared.settingsGet(mod.VOICE_RECORDING_MODE_KEY, null)).toBe('toggle')
+  })
+})

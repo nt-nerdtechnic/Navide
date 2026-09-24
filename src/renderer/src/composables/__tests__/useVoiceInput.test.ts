@@ -8,6 +8,8 @@ import {
   voiceErrorI18nKey,
   ERROR_VISIBLE_MS,
   MAX_RECORDING_MS,
+  HANDS_FREE_MAX_MS,
+  RELEASE_TAIL_MS,
   useVoiceInput,
   type DeliveredMessageView,
   type VoiceDeps,
@@ -31,6 +33,8 @@ interface Harness {
   stopText: string
   targets: Record<string, VoiceTarget>
   noted: string[]
+  logs: string[]
+  stopExtra: Record<string, unknown>
 }
 
 function harness(): Harness {
@@ -45,6 +49,8 @@ function harness(): Harness {
     stopText: '幫我跑測試',
     targets: { p1: { ok: true, name: 'claude-1' } },
     noted: [],
+    logs: [],
+    stopExtra: {},
     deps: null as unknown as VoiceDeps,
   }
   let nextId = 100
@@ -53,10 +59,12 @@ function harness(): Harness {
     request: async (type, payload) => {
       h.requests.push({ type, payload })
       if (type === 'voice.start') return { ok: true, payload: { ok: true, sessionId: 's1' } as never }
-      if (type === 'voice.stop') return { ok: true, payload: { ok: true, text: h.stopText, ms: 10, durationMs: 900 } as never }
+      if (type === 'voice.stop') {
+        return { ok: true, payload: { ok: true, text: h.stopText, ms: 10, durationMs: 900, peak: 3000, ...h.stopExtra } as never }
+      }
       return { ok: true, payload: { ok: true } as never }
     },
-    askMicrophone: async () => true,
+    askMicrophone: async () => ({ granted: true, prompted: false }),
     openCapture: async (onChunk) => {
       h.onChunk = onChunk
       return {
@@ -78,11 +86,19 @@ function harness(): Harness {
       return true
     },
     onDelivered: (paneId) => h.noted.push(paneId),
+    log: (line) => h.logs.push(line),
   }
   return h
 }
 
 const types = (h: Harness): string[] => h.requests.map((r) => r.type)
+
+/** Let go of the key and let the release tail run out. */
+async function releaseAndStop(v: ReturnType<typeof useVoiceInput>, reason?: string): Promise<void> {
+  v.release(reason)
+  vi.advanceTimersByTime(RELEASE_TAIL_MS)
+  await settle()
+}
 
 describe('useVoiceInput — capsule state machine', () => {
   beforeEach(() => { vi.useFakeTimers() })
@@ -99,6 +115,11 @@ describe('useVoiceInput — capsule state machine', () => {
 
     h.onChunk!(Int16Array.from([1, 2, 3]))
     v.release()
+    // The tail keeps recording for a moment after the key is let go.
+    expect(v.state.phase).toBe('recording')
+    vi.advanceTimersByTime(RELEASE_TAIL_MS - 1)
+    expect(v.state.phase).toBe('recording')
+    vi.advanceTimersByTime(1)
     expect(v.state.phase).toBe('transcribing')
     await settle()
     expect(v.state.phase).toBe('countdown')
@@ -131,8 +152,7 @@ describe('useVoiceInput — capsule state machine', () => {
     const v = useVoiceInput(h.deps)
     v.press('p1')
     await settle()
-    v.release()
-    await settle()
+    await releaseAndStop(v)
     expect(v.state.phase).toBe('countdown')
     expect(v.cancel()).toBe(true)
     expect(v.state.phase).toBe('idle')
@@ -150,8 +170,7 @@ describe('useVoiceInput — capsule state machine', () => {
     expect(h.captureClosed).toBe(1)
     expect(h.requests.at(-1)).toEqual({ type: 'voice.cancel', payload: { sessionId: 's1' } })
     // A late release does nothing.
-    v.release()
-    await settle()
+    await releaseAndStop(v)
     expect(types(h)).not.toContain('voice.stop')
   })
 
@@ -166,8 +185,7 @@ describe('useVoiceInput — capsule state machine', () => {
     const v = useVoiceInput(h.deps)
     v.press('p1')
     await settle()
-    v.release()
-    await settle()
+    await releaseAndStop(v)
     expect(v.state.phase).toBe('transcribing')
     expect(v.cancel()).toBe(true)
     answer({ ok: true, payload: { ok: true, text: 'late' } })
@@ -182,8 +200,7 @@ describe('useVoiceInput — capsule state machine', () => {
     const v = useVoiceInput(h.deps)
     v.press('p1')
     await settle()
-    v.release()
-    await settle()
+    await releaseAndStop(v)
     vi.advanceTimersByTime(COUNTDOWN_MS)
     h.rows[100] = { status: 'queued', hold: { key: 'typing' } }
     await nextTick()
@@ -209,8 +226,7 @@ describe('useVoiceInput — capsule state machine', () => {
     const v = useVoiceInput(h.deps)
     v.press('p1')
     await settle()
-    v.release()
-    await settle()
+    await releaseAndStop(v)
     vi.advanceTimersByTime(COUNTDOWN_MS)
     expect(v.state.phase).toBe('error')
     expect(v.state.error?.reason?.key).toBe('rate-limit')
@@ -223,8 +239,7 @@ describe('useVoiceInput — capsule state machine', () => {
     const v = useVoiceInput(h.deps)
     v.press('p1')
     await settle()
-    v.release()
-    await settle()
+    await releaseAndStop(v)
     vi.advanceTimersByTime(COUNTDOWN_MS)
     h.rows[100] = { status: 'delivering' }
     await nextTick()
@@ -254,7 +269,7 @@ describe('useVoiceInput — capsule state machine', () => {
     const h = harness()
     h.targets.p2 = { ok: false, reason: 'asleep' }
     let micAsked = false
-    h.deps.askMicrophone = async () => { micAsked = true; return true }
+    h.deps.askMicrophone = async () => { micAsked = true; return { granted: true, prompted: false } }
     const v = useVoiceInput(h.deps)
     expect(v.press('p2')).toBe(true)
     await settle()
@@ -270,20 +285,21 @@ describe('useVoiceInput — capsule state machine', () => {
     const v = useVoiceInput(h.deps)
     v.press('p1')
     await settle()
-    v.release()
-    await settle()
+    await releaseAndStop(v)
     h.targets.p1 = { ok: false, reason: 'asleep' }
     vi.advanceTimersByTime(COUNTDOWN_MS)
     expect(h.delivered).toEqual([])
     expect(v.state.error?.key).toBe('pane-asleep')
   })
 
-  it('release before the mic is open still ends the take once it opens', async () => {
+  it('release before the mic is open still ends the take once it opens (after the tail)', async () => {
     const h = harness()
     const v = useVoiceInput(h.deps)
     v.press('p1')
-    v.release()
-    await settle()
+    await releaseAndStop(v)
+    expect(v.state.phase).toBe('recording')
+    expect(types(h)).not.toContain('voice.stop')
+    vi.advanceTimersByTime(RELEASE_TAIL_MS)
     await settle()
     expect(types(h)).toContain('voice.stop')
     expect(v.state.phase).toBe('countdown')
@@ -304,8 +320,7 @@ describe('useVoiceInput — capsule state machine', () => {
     const v = useVoiceInput(h.deps)
     v.press('p1')
     await settle()
-    v.release()
-    await settle()
+    await releaseAndStop(v)
     expect(v.state.error?.key).toBe('no-speech')
 
     const h2 = harness()
@@ -319,7 +334,7 @@ describe('useVoiceInput — capsule state machine', () => {
 
   it('mic denial stops before voice.start', async () => {
     const h = harness()
-    h.deps.askMicrophone = async () => false
+    h.deps.askMicrophone = async () => ({ granted: false, prompted: false })
     const v = useVoiceInput(h.deps)
     v.press('p1')
     await settle()
@@ -360,6 +375,194 @@ describe('useVoiceInput — capsule state machine', () => {
     expect(v.state.phase).toBe('idle')
     expect(h.requests).toEqual([])
     expect(captured).toBe(false)
+  })
+})
+
+describe('useVoiceInput — capture during start-up, endings and diagnostics', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+
+  const samples = (b64: unknown): number[] => {
+    const buf = Buffer.from(String(b64), 'base64')
+    return Array.from({ length: buf.length / 2 }, (_, i) => buf.readInt16LE(i * 2))
+  }
+
+  /** voice.start answers only when `answer` is called. */
+  function slowStart(h: Harness): (reply?: Record<string, unknown>) => void {
+    let answer!: (v: unknown) => void
+    const base = h.deps.request
+    h.deps.request = (type, payload, t) => {
+      if (type !== 'voice.start') return base(type, payload, t)
+      h.requests.push({ type, payload })
+      return new Promise((r) => { answer = r as never })
+    }
+    return (reply = { ok: true, sessionId: 's1' }) => answer({ ok: true, payload: reply })
+  }
+
+  it('opens the mic before voice.start answers and flushes the early chunks in order', async () => {
+    const h = harness()
+    const answer = slowStart(h)
+    const v = useVoiceInput(h.deps)
+    v.press('p1')
+    await settle()
+    // Recording while the sidecar is still loading.
+    expect(v.state.phase).toBe('recording')
+    h.onChunk!(Int16Array.from([1, 1]))
+    h.onChunk!(Int16Array.from([2, 2]))
+    expect(types(h)).toEqual(['voice.start'])
+    answer()
+    await settle()
+    h.onChunk!(Int16Array.from([3, 3]))
+    const chunks = h.requests.filter((r) => r.type === 'voice.chunk')
+    expect(chunks.map((c) => c.payload.seq)).toEqual([0, 1, 2])
+    expect(chunks.map((c) => samples(c.payload.pcm))).toEqual([[1, 1], [2, 2], [3, 3]])
+    expect(chunks.every((c) => c.payload.sessionId === 's1')).toBe(true)
+  })
+
+  it('a release while the sidecar is still loading sends the buffered audio and the tail, then stops', async () => {
+    const h = harness()
+    const answer = slowStart(h)
+    const v = useVoiceInput(h.deps)
+    v.press('p1')
+    await settle()
+    h.onChunk!(Int16Array.from([5]))
+    await releaseAndStop(v)
+    expect(v.state.phase).toBe('transcribing')
+    expect(types(h)).toEqual(['voice.start'])
+    answer()
+    await settle()
+    // Early chunk, the flushed tail, then stop.
+    expect(types(h)).toEqual(['voice.start', 'voice.chunk', 'voice.chunk', 'voice.stop'])
+    expect(v.state.phase).toBe('countdown')
+  })
+
+  it('a failed voice.start after the mic opened frees the mic', async () => {
+    const h = harness()
+    const answer = slowStart(h)
+    const v = useVoiceInput(h.deps)
+    v.press('p1')
+    await settle()
+    answer({ ok: false, reason: 'sidecar-failed' })
+    await settle()
+    expect(v.state.error?.key).toBe('start-sidecar-failed')
+    expect(h.captureClosed).toBe(1)
+  })
+
+  it('an abandoned start is cancelled once it answers', async () => {
+    const h = harness()
+    const answer = slowStart(h)
+    const v = useVoiceInput(h.deps)
+    v.press('p1')
+    await settle()
+    expect(v.cancel()).toBe(true)
+    answer()
+    await settle()
+    expect(h.requests.at(-1)).toEqual({ type: 'voice.cancel', payload: { sessionId: 's1' } })
+  })
+
+  it('silent input, no words and a slip of the key end three different ways', async () => {
+    const silent = harness()
+    silent.stopText = ''
+    silent.stopExtra = { durationMs: 1500, peak: 0 }
+    const v1 = useVoiceInput(silent.deps)
+    v1.press('p1')
+    await settle()
+    await releaseAndStop(v1)
+    expect(v1.state.error?.key).toBe('mic-silent')
+
+    const quiet = harness()
+    quiet.stopText = ''
+    quiet.stopExtra = { durationMs: 1500, peak: 900 }
+    const v2 = useVoiceInput(quiet.deps)
+    v2.press('p1')
+    await settle()
+    await releaseAndStop(v2)
+    expect(v2.state.error?.key).toBe('no-speech')
+
+    const short = harness()
+    short.stopText = ''
+    short.stopExtra = { durationMs: 120, peak: 0 }
+    const v3 = useVoiceInput(short.deps)
+    v3.press('p1')
+    await settle()
+    await releaseAndStop(v3)
+    expect(v3.state.phase).toBe('idle')
+    expect(v3.state.error).toBeNull()
+    expect(short.logs.at(-1)).toContain('outcome=too-short')
+  })
+
+  it('the press that showed the first-time mic dialog only authorises', async () => {
+    const h = harness()
+    h.deps.askMicrophone = async () => ({ granted: true, prompted: true })
+    let opened = false
+    h.deps.openCapture = async () => { opened = true; throw new Error('no') }
+    const v = useVoiceInput(h.deps)
+    v.press('p1')
+    await settle()
+    expect(v.state.phase).toBe('error')
+    expect(v.state.error?.key).toBe('mic-authorized')
+    expect(h.requests).toEqual([])
+    expect(opened).toBe(false)
+  })
+
+  it('lock() turns a held take hands-free with the long cap; release then ends it', async () => {
+    const h = harness()
+    const v = useVoiceInput(h.deps)
+    v.press('p1')
+    await settle()
+    expect(v.lock()).toBe(true)
+    expect(v.state.handsFree).toBe(true)
+    vi.advanceTimersByTime(MAX_RECORDING_MS + 1_000)
+    await settle()
+    expect(v.state.phase).toBe('recording')
+    await releaseAndStop(v, 'toggle')
+    expect(v.state.phase).toBe('countdown')
+    expect(h.logs.at(-1)).toContain('end=toggle')
+    expect(h.logs.at(-1)).toContain('mode=hands-free')
+  })
+
+  it('a hands-free take stops by itself at the 5 minute cap', async () => {
+    const h = harness()
+    const v = useVoiceInput(h.deps)
+    v.press('p1', { handsFree: true })
+    await settle()
+    expect(v.state.capEndsAt - Date.now()).toBe(HANDS_FREE_MAX_MS)
+    vi.advanceTimersByTime(HANDS_FREE_MAX_MS - 1)
+    await settle()
+    expect(v.state.phase).toBe('recording')
+    vi.advanceTimersByTime(1)
+    await settle()
+    expect(v.state.phase).toBe('countdown')
+    expect(h.logs.at(-1)).toContain('end=cap')
+  })
+
+  it('logs one line per take with timings, end reason, audio length and peak', async () => {
+    const h = harness()
+    const v = useVoiceInput(h.deps)
+    v.press('p1')
+    await settle()
+    h.onChunk!(Int16Array.from({ length: 1600 }, (_, i) => (i === 3 ? -1234 : 10)))
+    await releaseAndStop(v, 'keyup:KeyM')
+    expect(h.logs).toHaveLength(1)
+    const line = h.logs[0]
+    expect(line).toMatch(/^\[voice\] outcome=text end=keyup:KeyM mode=hold mic=\d+ms capture=\d+ms session=\d+ms release=\d+ms stop=\d+ms /)
+    // 1600 samples + the 2-sample flush at 16 kHz.
+    expect(line).toContain('audio=100ms')
+    expect(line).toContain('peak=1234')
+    vi.advanceTimersByTime(COUNTDOWN_MS)
+    expect(h.logs).toHaveLength(1)
+  })
+
+  it('shows the input level while recording', async () => {
+    const h = harness()
+    const v = useVoiceInput(h.deps)
+    v.press('p1')
+    await settle()
+    expect(v.state.level).toBe(0)
+    h.onChunk!(Int16Array.from({ length: 400 }, () => 8000))
+    expect(v.state.level).toBeGreaterThan(0.5)
+    h.onChunk!(Int16Array.from({ length: 400 }, () => 0))
+    expect(v.state.level).toBe(0)
   })
 })
 

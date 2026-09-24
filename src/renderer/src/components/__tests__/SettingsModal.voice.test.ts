@@ -197,6 +197,24 @@ describe('VoiceSettingsSection microphone device', () => {
     expect(media.getUserMedia).not.toHaveBeenCalled()
   })
 
+  it('recording mode: hidden while off; three choices with hold-tap default; choosing one saves it', async () => {
+    useVoiceSettings().setVoiceInputEnabled(false)
+    const off = await mountSection()
+    expect(off.find('[data-settings-section="voice-mode"]').exists()).toBe(false)
+    off.unmount()
+
+    useVoiceSettings().setVoiceInputEnabled(true)
+    const w = await mountSection()
+    const select = w.get('[data-settings-section="voice-mode"] select')
+    expect((select.element as HTMLSelectElement).value).toBe('hold-tap')
+    expect(select.findAll('option').map((o) => o.attributes('value'))).toEqual(['hold-tap', 'hold', 'toggle'])
+    expect(select.findAll('option').every((o) => !o.text().startsWith('settings.'))).toBe(true)
+    await select.setValue('toggle')
+    expect(useVoiceSettings().voiceRecordingMode.value).toBe('toggle')
+    expect(w.get('[data-settings-section="voice-mode"]').text()).toContain('again to send')
+    useVoiceSettings().setVoiceRecordingMode('hold-tap')
+  })
+
   it('choosing a device saves its id and label', async () => {
     useVoiceSettings().setVoiceInputEnabled(true)
     const w = await mountSection()

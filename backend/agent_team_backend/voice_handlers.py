@@ -9,12 +9,16 @@ the sidecar to transcribe it and deletes the file. Nothing here runs until a
 
 from __future__ import annotations
 
+import array
 import asyncio
 import base64
 import binascii
 import contextlib
 import logging
+import math
+import operator
 import os
+import sys
 import tempfile
 import time
 import uuid
@@ -31,11 +35,20 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 _BYTES_PER_SECOND = 16_000 * 2
-MAX_PCM_BYTES = _BYTES_PER_SECOND * 60
+# Hands-free (locked / toggle) takes run up to 5 minutes; hold-to-talk stops
+# itself at 60 s in the window.
+MAX_PCM_BYTES = _BYTES_PER_SECOND * 300
 MIN_PCM_BYTES = int(_BYTES_PER_SECOND * 0.3)
+# Whole-take s16 peak below this is a mic that delivered (near-)digital
+# silence — a denied/misattributed TCC grant or a dead device — not a quiet
+# speaker. ~NT-type's RMS < 0.002 of full scale (pipeline.rs SILENCE_PEAK).
+SILENT_PEAK = 64
+# Zeros appended before transcription: Whisper clips the last word of audio
+# that ends mid-syllable.
+_TAIL_PAD_BYTES = _BYTES_PER_SECOND // 2
 # A recording whose window stopped talking to us (crashed mid-press) must not
-# hold the recorder forever: past the 60 s cap plus slack it is abandoned.
-_STALE_AFTER_S = 90.0
+# hold the recorder forever: past the 5 min cap plus slack it is abandoned.
+_STALE_AFTER_S = 330.0
 DEFAULT_LANGUAGE = "zh"
 
 
@@ -45,6 +58,9 @@ class _Recording:
     owner: Any
     chunks: dict[int, bytes] = field(default_factory=dict)
     size: int = 0
+    # Level stats, folded in per chunk so stop does not rescan minutes of audio.
+    peak: int = 0
+    sum_sq: int = 0
     touched: float = field(default_factory=time.monotonic)
 
     def stale(self) -> bool:
@@ -53,6 +69,22 @@ class _Recording:
 
 _active: _Recording | None = None
 _download_task: asyncio.Task | None = None
+# Set by voice.shutdown (voice input switched off), cleared by every prewarm
+# and start. A prewarm or start still awaiting when the switch-off ran finds it
+# set after its spawn and stops the sidecar again, instead of leaving it loaded
+# for the idle timeout. A later prewarm/start (switched back on) clears it, so a
+# late answer from before the switch-off never stops a sidecar that is wanted.
+_disabled = False
+
+
+async def _switched_off() -> bool:
+    """True (and the sidecar stopped) if voice input is switched off."""
+    if not _disabled:
+        return False
+    sidecar = stt_service.peek_sidecar()
+    if sidecar is not None:
+        await sidecar.stop()
+    return True
 
 
 def _take(session: Any, session_id: Any) -> _Recording | None:
@@ -86,6 +118,39 @@ async def voice_status(session: "Session", msg_id: str, msg_type: str, payload: 
         "running": bool(sidecar and sidecar.running),
         "gpu": sidecar.gpu if sidecar is not None else None,
     })
+
+
+async def voice_prewarm(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """Load the sidecar ahead of the first press. Claims no recording."""
+    global _disabled
+    _disabled = False
+    if await stt_service.run_blocking(stt_service.sidecar_path) is None:
+        await _reply(session, msg_id, msg_type, {"ok": False, "reason": "sidecar-missing"})
+        return
+    if not (await stt_service.run_blocking(stt_service.model_info))["present"]:
+        await _reply(session, msg_id, msg_type, {"ok": False, "reason": "model-missing"})
+        return
+    try:
+        await stt_service.get_sidecar().ensure_started()
+    except stt_service.SidecarError as err:
+        log.warning("voice.prewarm: sidecar failed: %s", err)
+        await _reply(session, msg_id, msg_type, {"ok": False, "reason": "sidecar-failed"})
+        return
+    if await _switched_off():
+        await _reply(session, msg_id, msg_type, {"ok": False, "reason": "disabled"})
+        return
+    await _reply(session, msg_id, msg_type, {"ok": True})
+
+
+async def voice_shutdown(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """Voice input was switched off: drop any recording and stop the sidecar."""
+    global _active, _disabled
+    _disabled = True
+    _active = None
+    sidecar = stt_service.peek_sidecar()
+    if sidecar is not None:
+        await sidecar.stop()
+    await _reply(session, msg_id, msg_type, {"ok": True})
 
 
 async def _broadcast_progress(data: dict) -> None:
@@ -126,14 +191,17 @@ async def voice_model_download(session: "Session", msg_id: str, msg_type: str, p
 
 
 async def voice_start(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
-    global _active
+    global _active, _disabled
+    _disabled = False
     if await stt_service.run_blocking(stt_service.sidecar_path) is None:
         await _reply(session, msg_id, msg_type, {"ok": False, "reason": "sidecar-missing"})
         return
     if not (await stt_service.run_blocking(stt_service.model_info))["present"]:
         await _reply(session, msg_id, msg_type, {"ok": False, "reason": "model-missing"})
         return
-    if _active is not None and not _active.stale():
+    # A window runs one take at a time, so its own earlier claim (a start it
+    # gave up on while the sidecar was still loading) is superseded, not busy.
+    if _active is not None and _active.owner is not session and not _active.stale():
         await _reply(session, msg_id, msg_type, {"ok": False, "reason": "busy"})
         return
     rec = _Recording(id=uuid.uuid4().hex, owner=session)
@@ -147,12 +215,17 @@ async def voice_start(session: "Session", msg_id: str, msg_type: str, payload: d
         reason = "sidecar-missing" if str(err) == "sidecar-missing" else "sidecar-failed"
         await _reply(session, msg_id, msg_type, {"ok": False, "reason": reason})
         return
+    if await _switched_off():
+        if _active is rec:
+            _active = None
+        await _reply(session, msg_id, msg_type, {"ok": False, "reason": "disabled"})
+        return
     rec.touched = time.monotonic()
     await _reply(session, msg_id, msg_type, {"ok": True, "sessionId": rec.id})
 
 
 async def voice_chunk(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
-    """No reply. Chunks past the 60 s cap, duplicates and bad frames are dropped."""
+    """No reply. Chunks past the 5 min cap, duplicates and bad frames are dropped."""
     rec = _active
     if rec is None or rec.owner is not session or payload.get("sessionId") != rec.id:
         return
@@ -172,6 +245,20 @@ async def voice_chunk(session: "Session", msg_id: str, msg_type: str, payload: d
     data = data[: room - (room % 2)] if len(data) > room else data
     rec.chunks[seq] = data
     rec.size += len(data)
+    peak, sum_sq = _levels(data)
+    rec.peak = max(rec.peak, peak)
+    rec.sum_sq += sum_sq
+
+
+def _levels(pcm: bytes) -> tuple[int, int]:
+    """Peak and sum of squares of s16le audio."""
+    samples = array.array("h")
+    samples.frombytes(pcm[: len(pcm) - len(pcm) % 2])
+    if sys.byteorder == "big":
+        samples.byteswap()
+    if not samples:
+        return 0, 0
+    return max(max(samples), -min(samples)), sum(map(operator.mul, samples, samples))
 
 
 def _write_temp_pcm(pcm: bytes) -> Path:
@@ -193,9 +280,20 @@ async def voice_stop(session: "Session", msg_id: str, msg_type: str, payload: di
         return
     pcm = b"".join(rec.chunks[seq] for seq in sorted(rec.chunks))
     duration_ms = len(pcm) * 1000 // _BYTES_PER_SECOND
-    if len(pcm) < MIN_PCM_BYTES:
-        await _reply(session, msg_id, msg_type, {"ok": True, "text": "", "ms": 0, "durationMs": duration_ms})
+    peak = rec.peak
+    rms = math.sqrt(rec.sum_sq / (len(pcm) // 2)) if len(pcm) >= 2 else 0.0
+    log.info(
+        "voice.stop duration_ms=%d chunks=%d bytes=%d peak=%d rms=%.1f",
+        duration_ms, len(rec.chunks), len(pcm), peak, rms,
+    )
+    # Too short to hold a word, or silence from the device: nothing to
+    # transcribe. The window tells the two apart from durationMs and peak.
+    if len(pcm) < MIN_PCM_BYTES or peak < SILENT_PEAK:
+        await _reply(session, msg_id, msg_type, {
+            "ok": True, "text": "", "ms": 0, "durationMs": duration_ms, "peak": peak,
+        })
         return
+    pcm += bytes(_TAIL_PAD_BYTES)
     language = payload.get("language")
     language = language if isinstance(language, str) and language else DEFAULT_LANGUAGE
     prompt = payload.get("initialPrompt")
@@ -218,6 +316,7 @@ async def voice_stop(session: "Session", msg_id: str, msg_type: str, payload: di
         "text": str(result.get("text") or ""),
         "ms": int(result.get("ms") or 0),
         "durationMs": duration_ms,
+        "peak": peak,
     })
 
 

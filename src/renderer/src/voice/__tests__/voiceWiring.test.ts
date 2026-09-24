@@ -1,19 +1,19 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { effectScope, nextTick } from 'vue'
-import { canonicalizeKeySpec, defaults, executeCommand, getContext } from '@navide/plugin-ui/shared'
+import { canonicalizeKeySpec, defaults, executeCommand, getContext, parseKeySpec } from '@navide/plugin-ui/shared'
 import {
   NOTICE_SENDER,
   _resetMessagingForTest,
   useAgentMessaging,
 } from '../../composables/useAgentMessaging'
-import { COUNTDOWN_MS } from '../../composables/useVoiceInput'
+import { COUNTDOWN_MS, HANDS_FREE_MAX_MS, RELEASE_TAIL_MS } from '../../composables/useVoiceInput'
 import { useVoiceSettings } from '../voiceSettings'
 
 const openMicCapture = vi.fn()
 vi.mock('../micCapture', () => ({ openMicCapture: (...a: unknown[]) => openMicCapture(...a) }))
 
-import { setupVoiceInput } from '../voiceWiring'
+import { TAP_LOCK_MS, isChordKeyUp, setupVoiceInput } from '../voiceWiring'
 
 async function settle(): Promise<void> {
   for (let i = 0; i < 10; i++) await Promise.resolve()
@@ -34,6 +34,7 @@ describe('voice wiring', () => {
     _resetMessagingForTest()
     settings.setVoiceInputEnabled(false)
     settings.setVoiceReadbackEnabled(false)
+    settings.setVoiceRecordingMode('hold')
     sent = []
     delivered = []
     idle = true
@@ -84,10 +85,14 @@ describe('voice wiring', () => {
     expect(getContext().voiceInput).toBe(false)
     expect(executeCommand('workbench.action.holdToTalk')).toBe(false)
     window.dispatchEvent(new KeyboardEvent('keyup', { key: 'm' }))
+    vi.advanceTimersByTime(RELEASE_TAIL_MS)
     await settle()
     expect(sent).toEqual([])
     expect(openMicCapture).not.toHaveBeenCalled()
-    expect(add.mock.calls.filter(([t]) => t === 'keyup' || t === 'keydown')).toEqual([])
+    expect(add.mock.calls.filter(([t]) => ['keyup', 'keydown', 'blur', 'focus'].includes(t as string))).toEqual([])
+    window.dispatchEvent(new Event('focus'))
+    await settle()
+    expect(sent).toEqual([])
     expect(voice.state.phase).toBe('idle')
     add.mockRestore()
   })
@@ -104,9 +109,10 @@ describe('voice wiring', () => {
     expect(executeCommand('workbench.action.holdToTalk')).toBe(true)
 
     window.dispatchEvent(new KeyboardEvent('keyup', { key: 'm' }))
+    vi.advanceTimersByTime(RELEASE_TAIL_MS)
     await settle()
     expect(voice.state.phase).toBe('countdown')
-    expect(sent.map((s) => s.type)).toEqual(['voice.start', 'voice.chunk', 'voice.stop'])
+    expect(sent.map((s) => s.type)).toEqual(['voice.prewarm', 'voice.start', 'voice.chunk', 'voice.stop'])
 
     vi.advanceTimersByTime(COUNTDOWN_MS)
     await settle()
@@ -129,6 +135,7 @@ describe('voice wiring', () => {
     expect(openMicCapture).toHaveBeenCalledTimes(1)
     expect(openMicCapture.mock.calls[0][1]).toBe('mic-usb')
     window.dispatchEvent(new KeyboardEvent('keyup', { key: 'm' }))
+    vi.advanceTimersByTime(RELEASE_TAIL_MS)
     await settle()
 
     settings.setVoiceInputDevice('', '')
@@ -138,6 +145,7 @@ describe('voice wiring', () => {
     await settle()
     expect(openMicCapture.mock.calls.at(-1)![1]).toBe('')
     window.dispatchEvent(new KeyboardEvent('keyup', { key: 'm' }))
+    vi.advanceTimersByTime(RELEASE_TAIL_MS)
     await settle()
     vi.advanceTimersByTime(COUNTDOWN_MS)
     await settle()
@@ -151,6 +159,7 @@ describe('voice wiring', () => {
     executeCommand('workbench.action.holdToTalk')
     await settle()
     window.dispatchEvent(new KeyboardEvent('keyup', { key: 'Control' }))
+    vi.advanceTimersByTime(RELEASE_TAIL_MS)
     await settle()
     vi.advanceTimersByTime(COUNTDOWN_MS)
     await settle()
@@ -199,8 +208,160 @@ describe('voice wiring', () => {
     settings.setVoiceInputEnabled(false)
     await nextTick()
     expect(voice.state.phase).toBe('idle')
-    expect(sent.at(-1)?.type).toBe('voice.cancel')
+    expect(sent.slice(-2).map((s) => s.type)).toEqual(['voice.cancel', 'voice.shutdown'])
     expect(getContext().voiceInput).toBe(false)
+  })
+
+  async function start(): Promise<void> {
+    settings.setVoiceInputEnabled(true)
+    await nextTick()
+    expect(executeCommand('workbench.action.holdToTalk')).toBe(true)
+    await settle()
+  }
+  const keyup = (init: KeyboardEventInit): KeyboardEvent => {
+    const e = new KeyboardEvent('keyup', { cancelable: true, ...init })
+    window.dispatchEvent(e)
+    return e
+  }
+  const types = (): string[] => sent.map((s) => s.type).filter((t) => t !== 'voice.prewarm')
+
+  it('an unrelated keyup does not end a held take; letting go of a chord modifier does, after the tail', async () => {
+    await start()
+    expect(voice.state.phase).toBe('recording')
+    const other = keyup({ key: 'x', code: 'KeyX', ctrlKey: true, altKey: true })
+    await settle()
+    expect(other.defaultPrevented).toBe(false)
+    expect(voice.state.phase).toBe('recording')
+    const alt = keyup({ key: 'Alt', code: 'AltLeft', ctrlKey: true })
+    expect(alt.defaultPrevented).toBe(true)
+    await settle()
+    expect(voice.state.phase).toBe('recording')
+    vi.advanceTimersByTime(RELEASE_TAIL_MS)
+    await settle()
+    expect(voice.state.phase).toBe('countdown')
+  })
+
+  it('blur is ignored while the take is starting (the mic dialog), and ends it once recording', async () => {
+    let grant!: (v: { granted: boolean; status: string }) => void
+    vi.stubGlobal('agentTeam', { media: { askMicrophone: () => new Promise((r) => { grant = r }) } })
+    try {
+      await start()
+      expect(voice.state.phase).toBe('starting')
+      window.dispatchEvent(new Event('blur'))
+      await settle()
+      expect(voice.state.phase).toBe('starting')
+      grant({ granted: true, status: 'granted' })
+      await settle()
+      expect(voice.state.phase).toBe('recording')
+      window.dispatchEvent(new Event('blur'))
+      vi.advanceTimersByTime(RELEASE_TAIL_MS)
+      await settle()
+      expect(voice.state.phase).toBe('countdown')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('the press that showed the first-time mic dialog only authorises', async () => {
+    vi.stubGlobal('agentTeam', { media: { askMicrophone: async () => ({ granted: true, status: 'granted', prompted: true }) } })
+    try {
+      await start()
+      expect(voice.state.error?.key).toBe('mic-authorized')
+      expect(types()).toEqual([])
+      expect(openMicCapture).not.toHaveBeenCalled()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('hold-tap: a quick tap locks hands-free until the next press', async () => {
+    settings.setVoiceRecordingMode('hold-tap')
+    await start()
+    vi.advanceTimersByTime(TAP_LOCK_MS - 100)
+    keyup({ key: 'm', code: 'KeyM' })
+    vi.advanceTimersByTime(RELEASE_TAIL_MS * 4)
+    await settle()
+    expect(voice.state.phase).toBe('recording')
+    expect(voice.state.handsFree).toBe(true)
+    // Hands-free ignores blur and further keyups.
+    window.dispatchEvent(new Event('blur'))
+    keyup({ key: 'Control' })
+    await settle()
+    expect(voice.state.phase).toBe('recording')
+    expect(executeCommand('workbench.action.holdToTalk')).toBe(true)
+    vi.advanceTimersByTime(RELEASE_TAIL_MS)
+    await settle()
+    expect(voice.state.phase).toBe('countdown')
+    expect(types()).toEqual(['voice.start', 'voice.chunk', 'voice.stop'])
+  })
+
+  it('hold-tap: a real hold is push-to-talk', async () => {
+    settings.setVoiceRecordingMode('hold-tap')
+    await start()
+    vi.advanceTimersByTime(TAP_LOCK_MS + 200)
+    keyup({ key: 'm', code: 'KeyM', ctrlKey: true, altKey: true })
+    vi.advanceTimersByTime(RELEASE_TAIL_MS)
+    await settle()
+    expect(voice.state.phase).toBe('countdown')
+    expect(voice.state.handsFree).toBe(false)
+  })
+
+  it('toggle: press starts hands-free, key repeat and keyups do nothing, the next press stops', async () => {
+    settings.setVoiceRecordingMode('toggle')
+    await start()
+    expect(voice.state.handsFree).toBe(true)
+    expect(voice.state.capEndsAt - Date.now()).toBe(HANDS_FREE_MAX_MS)
+    // Key repeat of the starting press.
+    expect(executeCommand('workbench.action.holdToTalk')).toBe(true)
+    await settle()
+    expect(voice.state.phase).toBe('recording')
+    vi.advanceTimersByTime(5_000)
+    keyup({ key: 'm', code: 'KeyM' })
+    keyup({ key: 'Control' })
+    vi.advanceTimersByTime(RELEASE_TAIL_MS)
+    await settle()
+    expect(voice.state.phase).toBe('recording')
+    executeCommand('workbench.action.holdToTalk')
+    vi.advanceTimersByTime(RELEASE_TAIL_MS)
+    await settle()
+    expect(voice.state.phase).toBe('countdown')
+  })
+
+  it('toggle: Esc cancels the take', async () => {
+    settings.setVoiceRecordingMode('toggle')
+    await start()
+    const esc = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true })
+    window.dispatchEvent(esc)
+    await settle()
+    expect(esc.defaultPrevented).toBe(true)
+    expect(voice.state.phase).toBe('idle')
+    expect(types().at(-1)).toBe('voice.cancel')
+    // The next press starts a fresh take.
+    executeCommand('workbench.action.holdToTalk')
+    await settle()
+    expect(voice.state.phase).toBe('recording')
+  })
+
+  it('pre-warms only while the setting is on: at switch-on and on focus (throttled); switching off shuts down', async () => {
+    window.dispatchEvent(new Event('focus'))
+    await settle()
+    expect(sent).toEqual([])
+    settings.setVoiceInputEnabled(true)
+    await nextTick()
+    expect(sent.map((s) => s.type)).toEqual(['voice.prewarm'])
+    window.dispatchEvent(new Event('focus'))
+    expect(sent).toHaveLength(1)
+    vi.advanceTimersByTime(60_000)
+    window.dispatchEvent(new Event('focus'))
+    expect(sent.map((s) => s.type)).toEqual(['voice.prewarm', 'voice.prewarm'])
+    settings.setVoiceInputEnabled(false)
+    await nextTick()
+    expect(sent.at(-1)?.type).toBe('voice.shutdown')
+    vi.advanceTimersByTime(60_000)
+    window.dispatchEvent(new Event('focus'))
+    await settle()
+    expect(sent.at(-1)?.type).toBe('voice.shutdown')
+    expect(sent).toHaveLength(3)
   })
 
   it('readback speaks only after a voice message reached the pane', async () => {
@@ -216,6 +377,7 @@ describe('voice wiring', () => {
     executeCommand('workbench.action.holdToTalk')
     await settle()
     window.dispatchEvent(new KeyboardEvent('keyup', { key: 'm' }))
+    vi.advanceTimersByTime(RELEASE_TAIL_MS)
     await settle()
     vi.advanceTimersByTime(COUNTDOWN_MS)
     await settle()
@@ -234,5 +396,28 @@ describe('hold-to-talk default binding', () => {
     const clashes = defaults.filter((r) => r !== rule && r.key.split(/\s+/).some((seg) => canonicalizeKeySpec(seg) === key))
     expect(clashes).toEqual([])
     expect(key).not.toContain('cmd')
+  })
+})
+
+describe('isChordKeyUp', () => {
+  const chord = parseKeySpec('ctrl+alt+m')
+  const up = (init: KeyboardEventInit) => new KeyboardEvent('keyup', init)
+
+  it('matches the main key (also as Option+letter), its modifiers, and a missed modifier', () => {
+    expect(isChordKeyUp(up({ key: 'µ', code: 'KeyM', ctrlKey: true, altKey: true }), chord)).toBe(true)
+    expect(isChordKeyUp(up({ key: 'Control', altKey: true }), chord)).toBe(true)
+    expect(isChordKeyUp(up({ key: 'Alt', ctrlKey: true }), chord)).toBe(true)
+    // Shift is not in the chord; x with the chord still down is unrelated.
+    expect(isChordKeyUp(up({ key: 'Shift', ctrlKey: true, altKey: true }), chord)).toBe(false)
+    expect(isChordKeyUp(up({ key: 'x', code: 'KeyX', ctrlKey: true, altKey: true }), chord)).toBe(false)
+    // x arriving with Ctrl already up: Ctrl's own keyup was missed.
+    expect(isChordKeyUp(up({ key: 'x', code: 'KeyX', altKey: true }), chord)).toBe(true)
+  })
+
+  it('follows a rebinding', () => {
+    const rebound = parseKeySpec('shift+f5')
+    expect(isChordKeyUp(up({ key: 'F5', shiftKey: true }), rebound)).toBe(true)
+    expect(isChordKeyUp(up({ key: 'Shift' }), rebound)).toBe(true)
+    expect(isChordKeyUp(up({ key: 'Control', shiftKey: true }), rebound)).toBe(false)
   })
 })

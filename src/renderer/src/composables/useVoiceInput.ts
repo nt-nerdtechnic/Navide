@@ -7,21 +7,38 @@ import { int16ToBase64 } from '../voice/pcm'
  * Hold-to-talk voice input for CLI panes.
  *
  * Press the hotkey → the focused CLI pane at that instant becomes the target,
- * the mic opens and ~250 ms s16le chunks stream to the backend (voice.chunk).
- * Release → voice.stop returns the transcript, which sits in a capsule on the
- * target pane for COUNTDOWN_MS so Esc can still drop it, and is then handed to
- * the ordinary messaging queue as bare text (see VoiceDeps.deliver).
+ * and the mic opens at once while voice.start (which may have to load the
+ * sidecar) runs alongside; ~250 ms s16le chunks are kept locally until the
+ * session id arrives, then stream to the backend (voice.chunk) in order.
+ * Release → RELEASE_TAIL_MS more audio, then voice.stop returns the
+ * transcript, which sits in a capsule on the target pane for COUNTDOWN_MS so
+ * Esc can still drop it, and is then handed to the ordinary messaging queue as
+ * bare text (see VoiceDeps.deliver).
  *
  * Inert while the setting is off: every entry point checks `enabled()` first,
  * so no mic, no voice.* request and no listener runs.
  */
 
 export const COUNTDOWN_MS = 1_500
+/** Cap of a held take. */
 export const MAX_RECORDING_MS = 60_000
+/** Cap of a hands-free take (quick-tap lock or toggle mode). */
+export const HANDS_FREE_MAX_MS = 300_000
+/** The capsule counts down the last stretch before a hands-free cap. */
+export const CAP_WARNING_MS = 10_000
+/** Audio kept after the key is let go, so the last syllable is not clipped. */
+export const RELEASE_TAIL_MS = 250
+/** Shorter than this holds no word: dropped quietly, no "nothing heard". */
+export const MIN_SPEECH_MS = 300
+/** Whole-take s16 peak below this is a mic delivering silence (mirrors the
+ *  backend's SILENT_PEAK). */
+export const SILENT_PEAK = 64
 /** How long an error or "nothing heard" capsule stays up on its own. */
 export const ERROR_VISIBLE_MS = 4_000
-const START_TIMEOUT_MS = 30_000
-const STOP_TIMEOUT_MS = 60_000
+// Past the backend's 120 s sidecar READY timeout, so a cold start always
+// answers (and frees its claim) before the window gives up on it.
+const START_TIMEOUT_MS = 125_000
+const STOP_TIMEOUT_MS = 120_000
 const CANCEL_TIMEOUT_MS = 5_000
 /** voice.chunk has no reply; the request is only kept briefly before being dropped. */
 const CHUNK_TIMEOUT_MS = 1_000
@@ -45,6 +62,12 @@ export interface VoiceCapsuleState {
   countdownEndsAt: number
   /** Why the message is still queued, while phase === 'held'. */
   hold: MessageHold | null
+  /** The take runs hands-free (locked by a quick tap, or toggle mode). */
+  handsFree: boolean
+  /** Wall-clock time the recording cap ends the take, while recording. */
+  capEndsAt: number
+  /** Input level 0..1 of the latest chunk, while recording. */
+  level: number
   /** i18n key under `voice.error.` (or a messaging reason), while phase === 'error'. */
   error: { key: string; params?: Record<string, string | number>; reason?: MessageReason } | null
 }
@@ -56,13 +79,16 @@ export const VOICE_ERROR_CODES = [
   'pane-asleep',
   'not-cli',
   'mic-denied',
+  'mic-authorized',
   'mic-failed',
+  'mic-silent',
   'backend',
   'no-speech',
   'start-sidecar-missing',
   'start-model-missing',
   'start-sidecar-failed',
   'start-busy',
+  'start-disabled',
   'start-failed',
   'stop-no-session',
   'stop-sidecar-failed',
@@ -94,8 +120,9 @@ export interface DeliveredMessageView {
 export interface VoiceDeps {
   enabled: () => boolean
   request: <T>(type: string, payload: Record<string, unknown>, timeoutMs: number) => Promise<VoiceResponse<T>>
-  /** macOS mic consent; true elsewhere. */
-  askMicrophone: () => Promise<boolean>
+  /** macOS mic consent (granted elsewhere); `prompted` when this call showed
+   *  the first-time system dialog. */
+  askMicrophone: () => Promise<{ granted: boolean; prompted: boolean }>
   openCapture: (onChunk: (pcm: Int16Array) => void) => Promise<VoiceCapture>
   /** Whether a pane can take a voice message right now. */
   resolveTarget: (paneId: string) => VoiceTarget
@@ -107,19 +134,46 @@ export interface VoiceDeps {
   /** Called when a voice message reached its pane (readback bookkeeping). */
   onDelivered?: (paneId: string) => void
   now?: () => number
+  /** One diagnostic line per take (default console.info). */
+  log?: (line: string) => void
 }
 
 interface StartResult { ok?: boolean; sessionId?: string; reason?: string }
-interface StopResult { ok?: boolean; text?: string; reason?: string }
+interface StopResult { ok?: boolean; text?: string; reason?: string; durationMs?: number; peak?: number }
+
+/** Per-take timings (ms since the press) and capture figures for the log line. */
+interface TakeStats {
+  t0: number
+  mic?: number
+  capture?: number
+  session?: number
+  release?: number
+  stop?: number
+  end: string
+  samples: number
+  peak: number
+  chunks: number
+}
+
+/** Chunk RMS → 0..1 on a -60..0 dBFS scale, for the capsule's level meter. */
+export function levelOf(rms: number): number {
+  if (rms <= 0) return 0
+  const db = 20 * Math.log10(rms / 32768)
+  return Math.max(0, Math.min(1, (db + 60) / 60))
+}
 
 export function useVoiceInput(deps: VoiceDeps) {
   const now = deps.now ?? (() => Date.now())
+  const log = deps.log ?? ((line: string) => console.info(line))
   const state = reactive<VoiceCapsuleState>({
     phase: 'idle',
     paneId: null,
     text: '',
     countdownEndsAt: 0,
     hold: null,
+    handsFree: false,
+    capEndsAt: 0,
+    level: 0,
     error: null,
   })
   const visible = computed(() => state.phase !== 'idle')
@@ -131,39 +185,81 @@ export function useVoiceInput(deps: VoiceDeps) {
   let capture: VoiceCapture | null = null
   let seq = 0
   let released = false
+  // Chunks captured before voice.start answered, sent in order once it does.
+  let pending: Int16Array[] = []
+  let sessionWaiter: ((sid: string | null) => void) | null = null
+  let sessionReady: Promise<string | null> = Promise.resolve(null)
+  let recordingSince = 0
+  let stats: TakeStats | null = null
   let messageId: number | null = null
   let stopWatch: WatchStopHandle | null = null
   let timer: ReturnType<typeof setTimeout> | null = null
   let maxTimer: ReturnType<typeof setTimeout> | null = null
+  let tailTimer: ReturnType<typeof setTimeout> | null = null
 
   function clearTimer(): void {
     if (timer !== null) clearTimeout(timer)
     timer = null
   }
 
-  function reset(): void {
-    clearTimer()
+  function clearTakeTimers(): void {
     if (maxTimer !== null) clearTimeout(maxTimer)
     maxTimer = null
+    if (tailTimer !== null) clearTimeout(tailTimer)
+    tailTimer = null
+  }
+
+  function reset(): void {
+    clearTimer()
+    clearTakeTimers()
     stopWatch?.()
     stopWatch = null
     messageId = null
     capture?.close()
     capture = null
     sessionId = null
+    pending = []
+    sessionWaiter?.(null)
+    sessionWaiter = null
+    stats = null
     state.phase = 'idle'
     state.paneId = null
     state.text = ''
     state.countdownEndsAt = 0
     state.hold = null
+    state.handsFree = false
+    state.capEndsAt = 0
+    state.level = 0
     state.error = null
   }
 
+  function mark(key: 'mic' | 'capture' | 'session' | 'release' | 'stop'): void {
+    if (stats) stats[key] = now()
+  }
+
+  /** The take's one diagnostic line; later calls for the same take are no-ops. */
+  function logTake(outcome: string): void {
+    const s = stats
+    if (!s) return
+    stats = null
+    const at = (t: number | undefined): string => (t === undefined ? '-' : `${Math.round(t - s.t0)}ms`)
+    log(
+      `[voice] outcome=${outcome} end=${s.end || '-'} mode=${state.handsFree ? 'hands-free' : 'hold'}` +
+        ` mic=${at(s.mic)} capture=${at(s.capture)} session=${at(s.session)} release=${at(s.release)}` +
+        ` stop=${at(s.stop)} audio=${Math.round(s.samples / 16)}ms chunks=${s.chunks} peak=${s.peak}`,
+    )
+  }
+
+  function cancelSession(sid: string): void {
+    void deps.request('voice.cancel', { sessionId: sid }, CANCEL_TIMEOUT_MS).catch(() => {})
+  }
+
   function fail(key: string, params?: Record<string, string | number>, reason?: MessageReason): void {
+    logTake(key)
     const paneId = state.paneId
     const sid = sessionId
     reset()
-    if (sid) void deps.request('voice.cancel', { sessionId: sid }, CANCEL_TIMEOUT_MS).catch(() => {})
+    if (sid) cancelSession(sid)
     take++
     state.phase = 'error'
     state.paneId = paneId
@@ -174,17 +270,38 @@ export function useVoiceInput(deps: VoiceDeps) {
   }
 
   function sendChunk(pcm: Int16Array, sid: string): void {
-    if (pcm.length === 0) return
+    if (stats) stats.chunks++
     void deps
       .request('voice.chunk', { sessionId: sid, seq: seq++, pcm: int16ToBase64(pcm) }, CHUNK_TIMEOUT_MS)
       .catch(() => {})
   }
 
+  function onChunk(mine: number, pcm: Int16Array): void {
+    if (mine !== take || pcm.length === 0) return
+    let peak = 0
+    let sq = 0
+    for (let i = 0; i < pcm.length; i++) {
+      const x = pcm[i]
+      const a = x < 0 ? -x : x
+      if (a > peak) peak = a
+      sq += x * x
+    }
+    if (stats) {
+      stats.samples += pcm.length
+      stats.peak = Math.max(stats.peak, peak)
+    }
+    if (state.phase === 'recording') state.level = levelOf(Math.sqrt(sq / pcm.length))
+    if (sessionId) sendChunk(pcm, sessionId)
+    else pending.push(pcm)
+  }
+
   /**
    * Hotkey pressed. Returns true when the press was consumed. Key repeat while
-   * a take is already running is consumed and ignored.
+   * a take is already running is consumed and ignored. `handsFree` starts the
+   * take locked (toggle mode): it runs until the next press, up to
+   * HANDS_FREE_MAX_MS.
    */
-  function press(paneId: string | null): boolean {
+  function press(paneId: string | null, opts: { handsFree?: boolean } = {}): boolean {
     if (!deps.enabled()) return false
     if (state.phase === 'starting' || state.phase === 'recording' || state.phase === 'transcribing') return true
     if (!paneId) return false
@@ -201,47 +318,41 @@ export function useVoiceInput(deps: VoiceDeps) {
     const mine = ++take
     released = false
     seq = 0
+    stats = { t0: now(), end: '', samples: 0, peak: 0, chunks: 0 }
     state.phase = 'starting'
     state.paneId = paneId
+    state.handsFree = opts.handsFree === true
     void begin(mine)
     return true
   }
 
   async function begin(mine: number): Promise<void> {
-    let granted = false
+    let mic: { granted: boolean; prompted: boolean }
     try {
-      granted = await deps.askMicrophone()
+      mic = await deps.askMicrophone()
     } catch {
-      granted = false
+      mic = { granted: false, prompted: false }
     }
     if (mine !== take) return
-    if (!granted) return fail('mic-denied')
+    mark('mic')
+    if (!mic.granted) return fail('mic-denied')
+    // The press went into answering the system dialog, and the key is long
+    // up: recording now would only ever hear nothing.
+    if (mic.prompted) return fail('mic-authorized')
 
-    let res: VoiceResponse<StartResult>
-    try {
-      res = await deps.request<StartResult>('voice.start', {}, START_TIMEOUT_MS)
-    } catch {
-      if (mine === take) fail('backend')
-      return
-    }
-    const sid = res.payload?.sessionId
-    if (!res.ok || !res.payload?.ok || !sid) {
-      if (mine === take) fail(`start-${res.payload?.reason ?? 'failed'}`)
-      else if (sid) void deps.request('voice.cancel', { sessionId: sid }, CANCEL_TIMEOUT_MS).catch(() => {})
-      return
-    }
-    if (mine !== take) {
-      void deps.request('voice.cancel', { sessionId: sid }, CANCEL_TIMEOUT_MS).catch(() => {})
-      return
-    }
-    sessionId = sid
+    // The mic opens at once; voice.start (possibly loading the sidecar) runs
+    // alongside, and what is said meanwhile waits in `pending`.
+    sessionReady = new Promise((resolve) => { sessionWaiter = resolve })
+    deps.request<StartResult>('voice.start', {}, START_TIMEOUT_MS).then(
+      (res) => onStarted(mine, res),
+      () => { if (mine === take) fail('backend') },
+    )
 
     let cap: VoiceCapture
     try {
-      cap = await deps.openCapture((pcm) => sendChunk(pcm, sid))
+      cap = await deps.openCapture((pcm) => onChunk(mine, pcm))
     } catch (err) {
       if (mine === take) fail('mic-failed', { error: err instanceof Error ? err.message : String(err) })
-      else void deps.request('voice.cancel', { sessionId: sid }, CANCEL_TIMEOUT_MS).catch(() => {})
       return
     }
     if (mine !== take) {
@@ -249,30 +360,77 @@ export function useVoiceInput(deps: VoiceDeps) {
       return
     }
     capture = cap
+    mark('capture')
+    recordingSince = now()
     state.phase = 'recording'
-    maxTimer = setTimeout(() => {
-      if (mine === take && state.phase === 'recording') void finish(mine)
-    }, MAX_RECORDING_MS)
-    if (released) void finish(mine)
+    armCap(mine)
+    if (released) tailTimer = setTimeout(() => void finish(mine), RELEASE_TAIL_MS)
   }
 
-  /** Hotkey released. */
-  function release(): void {
-    if (state.phase === 'starting') released = true
-    else if (state.phase === 'recording') void finish(take)
+  function onStarted(mine: number, res: VoiceResponse<StartResult>): void {
+    const sid = res.payload?.sessionId
+    if (mine !== take) {
+      if (sid) cancelSession(sid)
+      return
+    }
+    if (!res.ok || !res.payload?.ok || !sid) return fail(`start-${res.payload?.reason ?? 'failed'}`)
+    sessionId = sid
+    mark('session')
+    const early = pending
+    pending = []
+    for (const pcm of early) sendChunk(pcm, sid)
+    sessionWaiter?.(sid)
+    sessionWaiter = null
+  }
+
+  /** (Re)arm the recording cap for the take's current mode. */
+  function armCap(mine: number): void {
+    if (maxTimer !== null) clearTimeout(maxTimer)
+    state.capEndsAt = recordingSince + (state.handsFree ? HANDS_FREE_MAX_MS : MAX_RECORDING_MS)
+    maxTimer = setTimeout(() => {
+      maxTimer = null
+      if (mine !== take || state.phase !== 'recording') return
+      if (stats && !stats.end) stats.end = 'cap'
+      void finish(mine)
+    }, Math.max(0, state.capEndsAt - now()))
+  }
+
+  /** A quick tap: keep the take running hands-free until the next press. */
+  function lock(): boolean {
+    if ((state.phase !== 'starting' && state.phase !== 'recording') || released) return false
+    if (state.handsFree) return true
+    state.handsFree = true
+    if (state.phase === 'recording') armCap(take)
+    return true
+  }
+
+  /** Hotkey released (or pressed again hands-free): stop after the tail.
+   *  `reason` goes into the take's log line. */
+  function release(reason = 'release'): void {
+    if (state.phase !== 'starting' && state.phase !== 'recording') return
+    if (released) return
+    released = true
+    if (stats) stats.end = reason
+    mark('release')
+    if (state.phase === 'recording') {
+      const mine = take
+      tailTimer = setTimeout(() => void finish(mine), RELEASE_TAIL_MS)
+    }
   }
 
   async function finish(mine: number): Promise<void> {
-    const sid = sessionId
     const cap = capture
-    if (!sid || !cap) return
-    if (maxTimer !== null) clearTimeout(maxTimer)
-    maxTimer = null
+    if (mine !== take || state.phase !== 'recording' || !cap) return
+    clearTakeTimers()
     state.phase = 'transcribing'
+    state.level = 0
+    mark('stop')
     await cap.flush()
     cap.close()
     if (capture === cap) capture = null
     if (mine !== take) return
+    const sid = sessionId ?? (await sessionReady)
+    if (mine !== take || !sid) return
 
     let res: VoiceResponse<StopResult>
     try {
@@ -285,7 +443,18 @@ export function useVoiceInput(deps: VoiceDeps) {
     sessionId = null
     if (!res.ok || !res.payload?.ok) return fail(`stop-${res.payload?.reason ?? 'failed'}`)
     const text = (res.payload.text ?? '').trim()
-    if (!text) return fail('no-speech')
+    if (!text) {
+      const durationMs = res.payload.durationMs ?? Math.round((stats?.samples ?? 0) / 16)
+      const peak = res.payload.peak ?? stats?.peak ?? 0
+      if (durationMs < MIN_SPEECH_MS) {
+        // A slip of the key: nothing to say about it.
+        logTake('too-short')
+        take++
+        return reset()
+      }
+      return fail(peak < SILENT_PEAK ? 'mic-silent' : 'no-speech')
+    }
+    logTake('text')
     state.text = text
     state.phase = 'countdown'
     state.countdownEndsAt = now() + COUNTDOWN_MS
@@ -350,7 +519,8 @@ export function useVoiceInput(deps: VoiceDeps) {
       case 'starting':
       case 'recording':
       case 'transcribing':
-        if (sessionId) void deps.request('voice.cancel', { sessionId }, CANCEL_TIMEOUT_MS).catch(() => {})
+        logTake('cancelled')
+        if (sessionId) cancelSession(sessionId)
         break
       default:
         return false
@@ -376,12 +546,13 @@ export function useVoiceInput(deps: VoiceDeps) {
   /** The setting went off (or the window is going away): drop any take. */
   function disable(): void {
     if (state.phase === 'idle') return
-    if (sessionId) void deps.request('voice.cancel', { sessionId }, CANCEL_TIMEOUT_MS).catch(() => {})
+    logTake('disabled')
+    if (sessionId) cancelSession(sessionId)
     take++
     reset()
   }
 
-  return { state, visible, press, release, cancel, withdraw, dismiss, disable }
+  return { state, visible, press, lock, release, cancel, withdraw, dismiss, disable }
 }
 
 export type VoiceInput = ReturnType<typeof useVoiceInput>

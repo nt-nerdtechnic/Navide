@@ -10392,6 +10392,8 @@ from . import voice_handlers  # noqa: E402
 
 handler("voice.status")(voice_handlers.voice_status)
 handler("voice.model.download")(voice_handlers.voice_model_download)
+handler("voice.prewarm")(voice_handlers.voice_prewarm)
+handler("voice.shutdown")(voice_handlers.voice_shutdown)
 handler("voice.start")(voice_handlers.voice_start)
 handler("voice.chunk")(voice_handlers.voice_chunk)
 handler("voice.stop")(voice_handlers.voice_stop)

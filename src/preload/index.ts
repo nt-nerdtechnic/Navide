@@ -767,7 +767,7 @@ contextBridge.exposeInMainWorld('agentTeam', {
   },
   media: {
     /** macOS microphone consent for voice input; granted elsewhere. */
-    askMicrophone: (): Promise<{ granted: boolean; status: string }> =>
+    askMicrophone: (): Promise<{ granted: boolean; status: string; prompted?: boolean }> =>
       ipcRenderer.invoke('media:ask-microphone'),
   },
   executionPolicy: {

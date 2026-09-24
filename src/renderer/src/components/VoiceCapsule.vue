@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { COUNTDOWN_MS, voiceErrorI18nKey, type VoiceCapsuleState } from '../composables/useVoiceInput'
+import { CAP_WARNING_MS, COUNTDOWN_MS, voiceErrorI18nKey, type VoiceCapsuleState } from '../composables/useVoiceInput'
 
 // The voice input capsule: a small pill pinned to the bottom of the target
 // pane. Positioned from the pane's own rect (found by its data-pane-id) rather
@@ -13,6 +13,8 @@ const { t } = useI18n()
 
 const rect = ref<{ left: number; top: number; width: number } | null>(null)
 const remaining = ref(1)
+/** Whole seconds left before the cap, in its last CAP_WARNING_MS; else 0. */
+const capSeconds = ref(0)
 let frame = 0
 
 function measure(): void {
@@ -34,6 +36,8 @@ function tick(): void {
     const left = props.state.countdownEndsAt - Date.now()
     remaining.value = Math.max(0, Math.min(1, left / COUNTDOWN_MS))
   }
+  const capLeft = props.state.phase === 'recording' && props.state.capEndsAt ? props.state.capEndsAt - Date.now() : Infinity
+  capSeconds.value = capLeft <= CAP_WARNING_MS ? Math.max(0, Math.ceil(capLeft / 1000)) : 0
   frame = requestAnimationFrame(tick)
 }
 
@@ -56,6 +60,9 @@ const style = computed(() => {
   }
 })
 
+// Not a failure: the press was spent granting mic access; the next one records.
+const isNotice = computed(() => props.state.phase === 'error' && props.state.error?.key === 'mic-authorized')
+
 const errorText = computed(() => {
   const e = props.state.error
   if (!e) return ''
@@ -68,7 +75,7 @@ const errorText = computed(() => {
   <div
     v-if="state.phase !== 'idle'"
     class="voice-capsule"
-    :class="`voice-capsule--${state.phase}`"
+    :class="[`voice-capsule--${state.phase}`, { 'voice-capsule--notice': isNotice }]"
     :style="style"
     role="status"
     aria-live="polite"
@@ -79,7 +86,9 @@ const errorText = computed(() => {
     </template>
     <template v-else-if="state.phase === 'recording'">
       <span class="vc-dot vc-dot--rec" />
-      <span>{{ t('voice.capsule.recording') }}</span>
+      <span class="vc-meter" aria-hidden="true"><span class="vc-meter-fill" :style="{ transform: `scaleX(${state.level})` }" /></span>
+      <span>{{ t(state.handsFree ? 'voice.capsule.recording-hands-free' : 'voice.capsule.recording') }}</span>
+      <span v-if="capSeconds > 0" class="vc-hint vc-cap">{{ t('voice.capsule.cap-left', { s: capSeconds }) }}</span>
       <span class="vc-hint">{{ t('voice.capsule.esc-cancel') }}</span>
     </template>
     <template v-else-if="state.phase === 'transcribing'">
@@ -101,7 +110,7 @@ const errorText = computed(() => {
       <button type="button" class="vc-action" @click="emit('withdraw')">✕ {{ t('voice.capsule.withdraw') }}</button>
     </template>
     <template v-else-if="state.phase === 'error'">
-      <span class="vc-dot vc-dot--error" />
+      <span class="vc-dot" :class="isNotice ? 'vc-dot--idle' : 'vc-dot--error'" />
       <span>{{ errorText }}</span>
       <button type="button" class="vc-action" :aria-label="t('voice.capsule.dismiss')" @click="emit('dismiss')">✕</button>
     </template>
@@ -139,6 +148,7 @@ const errorText = computed(() => {
 }
 .vc-action:hover { color: var(--text-primary); border-color: var(--accent-emphasis); }
 .voice-capsule--error { border-color: var(--danger-fg); }
+.voice-capsule--notice { border-color: var(--accent-emphasis); }
 .voice-capsule--held { border-color: var(--attention-fg); }
 .vc-text {
   min-width: 0;
@@ -179,6 +189,23 @@ const errorText = computed(() => {
   background: var(--accent-emphasis);
   transform-origin: left;
 }
+.vc-meter {
+  flex-shrink: 0;
+  width: 28px;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--border-muted);
+}
+.vc-meter-fill {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--success-fg, var(--accent-emphasis));
+  transform-origin: left;
+  transition: transform 0.12s linear;
+}
+.vc-cap { color: var(--attention-fg); }
 @keyframes vc-pulse { 50% { opacity: 0.35; } }
 @keyframes vc-spin { to { transform: rotate(360deg); } }
 </style>

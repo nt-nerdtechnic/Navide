@@ -115,6 +115,8 @@
     "capsule": {
       "starting": "マイクを準備中…",
       "recording": "録音中 — 離すと送信",
+      "recording-hands-free": "ハンズフリーで録音中 — もう一度ショートカットで送信",
+      "cap-left": "残り {s} 秒",
       "esc-cancel": "Esc でキャンセル",
       "withdraw": "取り下げ",
       "dismiss": "閉じる",
@@ -133,12 +135,15 @@
       "start-model-missing": "音声モデルが未ダウンロードです — 設定 → 一般 → 音声入力",
       "start-sidecar-failed": "音声エンジンを起動できませんでした",
       "start-busy": "別の録音が進行中です",
+      "start-disabled": "音声入力がオフになりました",
       "start-failed": "録音を開始できませんでした",
       "stop-no-session": "録音セッションが失われました",
       "stop-sidecar-failed": "音声エンジンがクラッシュまたはタイムアウトしました",
       "stop-transcribe-failed": "文字起こしに失敗しました",
       "stop-failed": "文字起こしに失敗しました",
-      "no-speech": "音声が検出されませんでした"
+      "no-speech": "音声が検出されませんでした",
+      "mic-silent": "マイクに音が入っていません — システム設定 → プライバシーとセキュリティ → マイク で Navide を許可するか、音声設定で別のマイクを選んでください（Bluetooth ヘッドセットがスリープしている可能性があります）",
+      "mic-authorized": "マイクを許可しました — もう一度ショートカットを押しながら話してください"
     },
     "readback": {
       "done": "{name} が完了しました"
@@ -1316,6 +1321,13 @@
       "device-unnamed": "マイク {n}",
       "device-hint": "デバイス名は初めて音声入力を使った後に表示されます。",
       "device-missing-note": "選択したマイクが接続されていないため、システムの既定のマイクを使用します。",
+      "mode": "録音方法",
+      "mode-hold-tap": "押して話す・タップで固定",
+      "mode-hold-tap-hint": "ショートカットを押している間に話し、離すと送信。素早くタップするともう一度押すまでハンズフリーで録音します（最長 5 分）。",
+      "mode-hold": "押して話す",
+      "mode-hold-hint": "話している間ショートカットを押し続け、離すと送信。最長 60 秒。",
+      "mode-toggle": "押して開始・もう一度押して終了",
+      "mode-toggle-hint": "ショートカットを一度押すと録音開始、もう一度押すと送信。Esc でキャンセル。最長 5 分。",
       "readback": "返答を読み上げる",
       "readback-hint": "話しかけたペインがターンを終えると、短い要約をシステム音声で読み上げます。",
       "model": "音声モデル",

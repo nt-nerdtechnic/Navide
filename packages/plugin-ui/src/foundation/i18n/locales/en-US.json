@@ -115,6 +115,8 @@
     "capsule": {
       "starting": "Preparing microphone…",
       "recording": "Listening — release to send",
+      "recording-hands-free": "Listening hands-free — press the shortcut again to send",
+      "cap-left": "{s}s left",
       "esc-cancel": "Esc to cancel",
       "withdraw": "Withdraw",
       "dismiss": "Dismiss",
@@ -133,12 +135,15 @@
       "start-model-missing": "Speech model not downloaded — Settings → General → Voice input",
       "start-sidecar-failed": "The speech engine failed to start",
       "start-busy": "Another recording is already in progress",
+      "start-disabled": "Voice input was switched off",
       "start-failed": "Could not start recording",
       "stop-no-session": "The recording session was lost",
       "stop-sidecar-failed": "The speech engine crashed or timed out",
       "stop-transcribe-failed": "Transcription failed",
       "stop-failed": "Transcription failed",
-      "no-speech": "No speech detected"
+      "no-speech": "No speech detected",
+      "mic-silent": "The microphone is not picking up any sound — allow Navide in System Settings → Privacy & Security → Microphone, or choose another microphone in the voice settings (a Bluetooth headset may be asleep)",
+      "mic-authorized": "Microphone allowed — hold the shortcut again to speak"
     },
     "readback": {
       "done": "{name} is done"
@@ -1316,6 +1321,13 @@
       "device-unnamed": "Microphone {n}",
       "device-hint": "Device names appear after the first voice use.",
       "device-missing-note": "The chosen microphone is not connected; the system default will be used.",
+      "mode": "Recording mode",
+      "mode-hold-tap": "Hold, or tap to lock",
+      "mode-hold-tap-hint": "Hold the shortcut to talk and let go to send; a quick tap keeps listening hands-free until you press it again (up to 5 minutes).",
+      "mode-hold": "Hold to talk",
+      "mode-hold-hint": "Hold the shortcut while you speak; letting go sends. Up to 60 seconds.",
+      "mode-toggle": "Press to start, press again to stop",
+      "mode-toggle-hint": "Press the shortcut once to start and again to send; Esc cancels. Up to 5 minutes.",
       "readback": "Read replies aloud",
       "readback-hint": "When a pane you spoke to finishes its turn, speak a short summary with the system voice.",
       "model": "Speech model",

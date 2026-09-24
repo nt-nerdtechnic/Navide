@@ -12,6 +12,12 @@ export const VOICE_READBACK_ENABLED_KEY = 'agentTeam.voiceReadbackEnabled'
 // the label is what lets a saved choice be found again.
 export const VOICE_INPUT_DEVICE_KEY = 'agentTeam.voiceInputDeviceId'
 export const VOICE_INPUT_DEVICE_LABEL_KEY = 'agentTeam.voiceInputDeviceLabel'
+// How the hotkey records: 'hold-tap' = hold to talk, a quick tap locks
+// hands-free until the next press; 'hold' = hold only; 'toggle' = press to
+// start, press again to stop.
+export const VOICE_RECORDING_MODE_KEY = 'agentTeam.voiceRecordingMode'
+export const VOICE_RECORDING_MODES = ['hold-tap', 'hold', 'toggle'] as const
+export type VoiceRecordingMode = (typeof VOICE_RECORDING_MODES)[number]
 
 function read(key: string): boolean {
   return settingsGet<boolean>(key, false) === true
@@ -22,10 +28,16 @@ function readString(key: string): string {
   return typeof v === 'string' ? v : ''
 }
 
+function readMode(): VoiceRecordingMode {
+  const v = settingsGet<unknown>(VOICE_RECORDING_MODE_KEY, 'hold-tap')
+  return (VOICE_RECORDING_MODES as readonly unknown[]).includes(v) ? (v as VoiceRecordingMode) : 'hold-tap'
+}
+
 const voiceInputEnabled = ref(read(VOICE_INPUT_ENABLED_KEY))
 const voiceReadbackEnabled = ref(read(VOICE_READBACK_ENABLED_KEY))
 const voiceInputDeviceId = ref(readString(VOICE_INPUT_DEVICE_KEY))
 const voiceInputDeviceLabel = ref(readString(VOICE_INPUT_DEVICE_LABEL_KEY))
+const voiceRecordingMode = ref<VoiceRecordingMode>(readMode())
 
 let unsubscribe: (() => void) | null = null
 
@@ -37,6 +49,7 @@ function ensureSubscription(): void {
     if (keys.includes(VOICE_READBACK_ENABLED_KEY)) voiceReadbackEnabled.value = read(VOICE_READBACK_ENABLED_KEY)
     if (keys.includes(VOICE_INPUT_DEVICE_KEY)) voiceInputDeviceId.value = readString(VOICE_INPUT_DEVICE_KEY)
     if (keys.includes(VOICE_INPUT_DEVICE_LABEL_KEY)) voiceInputDeviceLabel.value = readString(VOICE_INPUT_DEVICE_LABEL_KEY)
+    if (keys.includes(VOICE_RECORDING_MODE_KEY)) voiceRecordingMode.value = readMode()
   })
 }
 
@@ -45,9 +58,11 @@ export function useVoiceSettings(): {
   voiceReadbackEnabled: Readonly<Ref<boolean>>
   voiceInputDeviceId: Readonly<Ref<string>>
   voiceInputDeviceLabel: Readonly<Ref<string>>
+  voiceRecordingMode: Readonly<Ref<VoiceRecordingMode>>
   setVoiceInputEnabled: (on: boolean) => void
   setVoiceReadbackEnabled: (on: boolean) => void
   setVoiceInputDevice: (id: string, label: string) => void
+  setVoiceRecordingMode: (mode: VoiceRecordingMode) => void
 } {
   ensureSubscription()
   return {
@@ -55,6 +70,7 @@ export function useVoiceSettings(): {
     voiceReadbackEnabled,
     voiceInputDeviceId,
     voiceInputDeviceLabel,
+    voiceRecordingMode,
     setVoiceInputEnabled: (on) => {
       voiceInputEnabled.value = on
       settingsSet(VOICE_INPUT_ENABLED_KEY, on)
@@ -68,6 +84,10 @@ export function useVoiceSettings(): {
       voiceInputDeviceLabel.value = id ? label : ''
       settingsSet(VOICE_INPUT_DEVICE_KEY, id)
       settingsSet(VOICE_INPUT_DEVICE_LABEL_KEY, id ? label : '')
+    },
+    setVoiceRecordingMode: (mode) => {
+      voiceRecordingMode.value = mode
+      settingsSet(VOICE_RECORDING_MODE_KEY, mode)
     },
   }
 }

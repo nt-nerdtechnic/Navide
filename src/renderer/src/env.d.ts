@@ -352,7 +352,7 @@ declare global {
         openSettings: (key: TccPermissionKey) => Promise<{ ok: boolean; error?: string }>
       }
       media?: {
-        askMicrophone: () => Promise<{ granted: boolean; status: string }>
+        askMicrophone: () => Promise<{ granted: boolean; status: string; prompted?: boolean }>
       }
       executionPolicy?: ExecutionPolicyApi
       plugins?: {
