@@ -541,17 +541,42 @@ WS 訊息）同一個後端排程器，所以在這裡建立的 job 會立刻出
 
 | Tool | 參數 | 作用 |
 |---|---|---|
-| `scheduler_list` | — | `{ok, jobs, now}` |
-| `scheduler_upsert` | `job` | 建立（不帶 `id`）或更新（帶 `id`）job；回 `{ok, job}`，定義不合法時回 `{ok: false, error}`。更新時只需傳要改的欄位：沒傳的欄位保留原值，`policy` 逐鍵合併，有傳 `action` 則整個驗證。`schedule` 是 `{kind: "every", every_ms, anchor_ms?}`、`{kind: "daily", at: "HH:MM", tz}` 、`{kind: "weekly", days: [1..7], at, tz}` 或 `{kind: "once", at_ms}` —— 也接受 `{kind: "once", in_ms}`，存檔時換算成 `at_ms = now + in_ms`（最多早於現在 1 分鐘、最晚 10 年後）。once job 只跑一次，跑完不論結果都會自動停用，所以「一小時後叫醒我」要用 `{kind: "once", in_ms: 3600000}`，不是 `every`；`action` 是 `{kind: "message", workspace, pane_id?, pane_name?, text}`；`policy` 可省略，為 `{catch_up, max_runs_per_day, timeout_s}`。Pane 呼叫端省略 `workspace` 時預設為自己的 Workspace，沒指定 Pane 時目標就是呼叫者自己的 Pane |
-| `scheduler_remove` | `id` | 刪除 job 與其執行紀錄 |
-| `scheduler_set_enabled` | `id`、`enabled` | 暫停或恢復；恢復後等下一個槽，不會補跑暫停期間經過的槽。時間已過的 once job 無法恢復，會回 `{ok: false, error}`，請改設新的時間 |
-| `scheduler_run_now` | `id` | 立刻執行一次，不等結束就回 `{ok, enqueued}`；會清除失敗退避 |
-| `scheduler_runs` | `id`、`limit` | 執行紀錄，新的在前：`{id, job_id, started_at, ended_at, status, reason, detail}` |
+| `scheduler_list` | — | `{ok, jobs, now, limits}` —— 列出所有 job，包括你不能修改的。每個 job 帶有 `owner`（`{kind: "user"}`、`{kind: "pane", pane_id, pane_name, workspace}` 或 `{kind: "external"}`；agent 建的週期 job 另有 `expires_at`）、`updated_by`、`owner_gone`（建立者 Pane 已關閉）與 `editable`（你能否修改）。`limits` 為 `{agent_enabled_per_owner, agent_enabled_total, agent_enabled, agent_min_every_ms, agent_max_runs_per_day, agent_runs_per_day, agent_runs_today, agent_expire_ms, agent_once_keep_ms, yours_enabled}` |
+| `scheduler_upsert` | `job` | 建立（不帶 `id`）或更新（帶 `id`）job；回 `{ok, job}`，定義不合法時回 `{ok: false, error}`。更新時只需傳要改的欄位：沒傳的欄位保留原值，`policy` 逐鍵合併，有傳 `action` 則整個驗證。`schedule` 是 `{kind: "every", every_ms, anchor_ms?}`、`{kind: "daily", at: "HH:MM", tz}` 、`{kind: "weekly", days: [1..7], at, tz}` 或 `{kind: "once", at_ms}` —— 也接受 `{kind: "once", in_ms}`，存檔時換算成 `at_ms = now + in_ms`（最多早於現在 1 分鐘、最晚 10 年後）。once job 只跑一次，跑完不論結果都會自動停用，所以「一小時後叫醒我」要用 `{kind: "once", in_ms: 3600000}`，不是 `every`；`action` 是 `{kind: "message", workspace, pane_id?, pane_name?, text}`；`policy` 可省略，為 `{catch_up, max_runs_per_day, timeout_s}`。Pane 呼叫端省略 `workspace` 時預設為自己的 Workspace，沒指定 Pane 時目標就是呼叫者自己的 Pane，而且只能指定自己 Workspace 裡的 Pane。更新只限自己建的 job |
+| `scheduler_remove` | `id` | 刪除自己建的 job 與其執行紀錄 |
+| `scheduler_set_enabled` | `id`、`enabled` | 暫停或恢復；恢復後等下一個槽，不會補跑暫停期間經過的槽。時間已過的 once job 無法恢復，會回 `{ok: false, error}`，請改設新的時間。只限自己建的 job；恢復時計入啟用中的上限 |
+| `scheduler_run_now` | `id` | 立刻執行一次，不等結束就回 `{ok, enqueued}`；會清除失敗退避。只限自己建的 job，這次執行計入 agent 每日總量 |
+| `scheduler_runs` | `id`、`limit` | 執行紀錄，新的在前：`{id, job_id, started_at, ended_at, status, reason, detail}`。任何 job 的紀錄都能讀 |
 
 每次執行就是 `cli_send(open_target=True)`：被回收成 placeholder 的 Pane 會先被喚醒，
 正在忙的 Pane 照常排隊。`pane_id` 精確指定一個 Pane；它若已不存在，這次執行記為略過
 `target_gone`，絕不改送到同名的其他 Pane。其他略過原因 —— `no_window`、`busy`（這個 job
-上一則訊息還在排隊）、`budget` —— 都不是錯誤，也不會觸發退避。
+上一則訊息還在排隊）、`budget`，以及下方說明的 `budget_global` 與 `expired` —— 都不是錯誤，
+也不會觸發退避。
+
+**擁有權。** 每個 job 都記錄建立者（`owner`）與最後修改者（`updated_by`）。在 Navide 視窗建的
+job 屬於使用者；透過這些 Tool 建的屬於呼叫的 agent。agent 只能更新、刪除、暫停／恢復或
+`run_now` 自己建的 job，其他 job 一律回 `{ok: false, code: "SCHEDULER_NOT_OWNER", owner, error}`；
+列表與執行紀錄則所有人都能讀。Navide 視窗代表使用者，可以修改任何 job。建立 job 的 Pane
+關閉後，job 照常執行，但改由使用者管理（`owner_gone: true`）；之後同名的新 Pane 不會繼承，
+面板上會出現「改為我的」。在記錄建立者之前就存在的 job 一律屬於使用者。Pane 只能指定自己
+Workspace 裡的 Pane（否則回 `{ok: false, code: "SCHEDULER_CROSS_WORKSPACE", error}`）。沒有
+Pane 身分的呼叫端（host 或外部 client）同樣比照 agent：它們共用同一個 `{kind: "external"}`
+擁有者；因為沒有自己的 Workspace，不套用跨 Workspace 的規則。
+
+**agent job 的上限**（使用者自己建的 job 不受限）：
+
+| 上限 | 數值 | 超過時 |
+|---|---|---|
+| 每個 agent 的啟用中 job | 10 | 再新增或啟用會被拒絕（`limit: "per_owner_enabled"`） |
+| 全體 agent 的啟用中 job | 100 | 再新增或啟用會被拒絕（`limit: "global_enabled"`）；使用者的 job 不計入 |
+| 最短間隔 | `every_ms` ≥ 300000（5 分鐘）；`max_runs_per_day` ≤ 288 | 存檔被拒絕（`limit: "min_every_ms"` 或 `"max_runs_per_day"`） |
+| 全體 agent job 每日執行次數 | 300（以本機日期計） | 排定的時段記為略過 `budget_global`；agent 的 `run_now` 會被拒絕（`limit: "agent_runs_per_day"`），且 `run_now` 也計入總量。刪除 job 不會歸零 |
+
+超過上限時回 `{ok: false, code: "SCHEDULER_LIMIT", limit, max, used, error}`；`max` 是上下限值
+（`min_every_ms` 時為最小值）。agent 建的週期 job 在擁有者最後一次儲存或啟用、或任何人重新
+啟用的 7 天後自動停用（略過原因 `expired`）；使用者可以設為保留、不再到期。agent 建的 once
+job 跑完 30 天後自動刪除。
 
 ### CLI 權限
 

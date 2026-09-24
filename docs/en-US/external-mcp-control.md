@@ -623,19 +623,50 @@ back off 30s → 1m → 5m → 15m → 60m.
 
 | Tool | Parameters | What it does |
 |---|---|---|
-| `scheduler_list` | — | `{ok, jobs, now}` |
-| `scheduler_upsert` | `job` | Create (no `id`) or update (with `id`) a job; returns `{ok, job}`, or `{ok: false, error}` for an invalid definition. An update sends only what changes: omitted fields keep their stored value, `policy` merges key by key, and a sent `action` is validated whole. `schedule` is `{kind: "every", every_ms, anchor_ms?}`, `{kind: "daily", at: "HH:MM", tz}` `{kind: "weekly", days: [1..7], at, tz}` or `{kind: "once", at_ms}` — `{kind: "once", in_ms}` is accepted and saved as `at_ms = now + in_ms` (at most 1 minute in the past, at most 10 years ahead). A once job runs a single time and then disables itself whatever the outcome, so "wake me in an hour" is `{kind: "once", in_ms: 3600000}`, not `every`; `action` is `{kind: "message", workspace, pane_id?, pane_name?, text}`; `policy` is optional `{catch_up, max_runs_per_day, timeout_s}`. For a pane caller `workspace` defaults to its own, and an action naming no pane targets the caller's own pane |
-| `scheduler_remove` | `id` | Deletes the job and its run history |
-| `scheduler_set_enabled` | `id`, `enabled` | Pause or resume; resuming waits for the next slot instead of firing one that passed. Resuming a once job whose moment has passed answers `{ok: false, error}` — give it a new time |
-| `scheduler_run_now` | `id` | Starts one run now and answers `{ok, enqueued}` before it ends; clears a failure backoff |
-| `scheduler_runs` | `id`, `limit` | Run history, newest first: `{id, job_id, started_at, ended_at, status, reason, detail}` |
+| `scheduler_list` | — | `{ok, jobs, now, limits}` — every job, including ones you may not change. Each job carries `owner` (`{kind: "user"}`, `{kind: "pane", pane_id, pane_name, workspace}` or `{kind: "external"}`; an agent's periodic job also has `expires_at`), `updated_by`, `owner_gone` (the creating pane is closed) and `editable` (whether you may change it). `limits` is `{agent_enabled_per_owner, agent_enabled_total, agent_enabled, agent_min_every_ms, agent_max_runs_per_day, agent_runs_per_day, agent_runs_today, agent_expire_ms, agent_once_keep_ms, yours_enabled}` |
+| `scheduler_upsert` | `job` | Create (no `id`) or update (with `id`) a job; returns `{ok, job}`, or `{ok: false, error}` for an invalid definition. An update sends only what changes: omitted fields keep their stored value, `policy` merges key by key, and a sent `action` is validated whole. `schedule` is `{kind: "every", every_ms, anchor_ms?}`, `{kind: "daily", at: "HH:MM", tz}` `{kind: "weekly", days: [1..7], at, tz}` or `{kind: "once", at_ms}` — `{kind: "once", in_ms}` is accepted and saved as `at_ms = now + in_ms` (at most 1 minute in the past, at most 10 years ahead). A once job runs a single time and then disables itself whatever the outcome, so "wake me in an hour" is `{kind: "once", in_ms: 3600000}`, not `every`; `action` is `{kind: "message", workspace, pane_id?, pane_name?, text}`; `policy` is optional `{catch_up, max_runs_per_day, timeout_s}`. For a pane caller `workspace` defaults to its own, and an action naming no pane targets the caller's own pane, and it may only target panes in its own workspace. Updating needs a job you created |
+| `scheduler_remove` | `id` | Deletes a job you created and its run history |
+| `scheduler_set_enabled` | `id`, `enabled` | Pause or resume; resuming waits for the next slot instead of firing one that passed. Resuming a once job whose moment has passed answers `{ok: false, error}` — give it a new time. Only a job you created; resuming counts toward the enabled-job limits |
+| `scheduler_run_now` | `id` | Starts one run now and answers `{ok, enqueued}` before it ends; clears a failure backoff. Only a job you created; the run counts toward the agents' daily total |
+| `scheduler_runs` | `id`, `limit` | Run history, newest first: `{id, job_id, started_at, ended_at, status, reason, detail}`. Any job's history may be read |
 
 A run is exactly `cli_send(open_target=True)`: a restore placeholder is opened
 first, and a pane that is mid-turn queues the message as usual. `pane_id` pins
 one pane; if it no longer names a pane the run is skipped as `target_gone`,
 never redirected to another pane of the same name. The other skip reasons —
-`no_window`, `busy` (this job's previous message is still queued), `budget` —
-are not errors and do not trigger backoff.
+`no_window`, `busy` (this job's previous message is still queued), `budget`,
+`budget_global` and `expired` (both below) — are not errors and do not trigger
+backoff.
+
+**Ownership.** Every job records who created it (`owner`) and who last changed
+it (`updated_by`). A job made in the Navide window belongs to the user; one
+made through these tools belongs to the calling agent. An agent may update,
+remove, pause/resume or `run_now` only its own jobs — anything else answers
+`{ok: false, code: "SCHEDULER_NOT_OWNER", owner, error}`; reading the list and
+run history is open to everyone. The Navide window acts as the user and may
+change any job. When the pane that created a job closes, the job keeps running
+but is the user's to change (`owner_gone: true`); a new pane with the same name
+does not inherit it, and the panel offers "Make it mine". Jobs saved before
+owners were recorded are the user's. A pane may only target panes in its own
+workspace (`{ok: false, code: "SCHEDULER_CROSS_WORKSPACE", error}`). A caller
+with no pane identity — the host or an external client — is treated as an agent
+too: all such callers share one `{kind: "external"}` owner, and since they have
+no workspace of their own the workspace rule does not apply to them.
+
+**Limits on agents' jobs** (the user's own jobs have none):
+
+| Limit | Value | When it is exceeded |
+|---|---|---|
+| Enabled jobs per agent | 10 | Creating or enabling one more is refused (`limit: "per_owner_enabled"`) |
+| Enabled agent jobs in all | 100 | Creating or enabling one more is refused (`limit: "global_enabled"`); the user's jobs are not counted |
+| Shortest interval | `every_ms` ≥ 300000 (5 minutes); `max_runs_per_day` ≤ 288 | Saving is refused (`limit: "min_every_ms"` or `"max_runs_per_day"`) |
+| Runs a day across all agent jobs | 300, per local calendar day | A scheduled slot is skipped as `budget_global`; an agent's `run_now` is refused (`limit: "agent_runs_per_day"`) and counts toward the total. Deleting a job does not reset it |
+
+A refusal answers `{ok: false, code: "SCHEDULER_LIMIT", limit, max, used, error}`;
+`max` is the bound (the minimum, for `min_every_ms`). An agent's periodic job
+disables itself (skip reason `expired`) 7 days after it was last saved or
+enabled by its owner, or re-enabled by anyone; the user can keep it from
+expiring. An agent's finished once job is deleted 30 days after it ran.
 
 ### CLI permissions
 

@@ -606,18 +606,45 @@ job はすぐにパネルにも表示されます —— 変更のたびに `sch
 
 | Tool | パラメータ | 内容 |
 |---|---|---|
-| `scheduler_list` | — | `{ok, jobs, now}` |
-| `scheduler_upsert` | `job` | job を作成（`id` なし）または更新（`id` あり）。`{ok, job}` を返し、定義が不正なら `{ok: false, error}`。更新時は変える項目だけを送れば済みます：送らなかった項目は保存済みの値のまま、`policy` はキーごとにマージ、送った `action` は丸ごと検証されます。`schedule` は `{kind: "every", every_ms, anchor_ms?}`、`{kind: "daily", at: "HH:MM", tz}`、`{kind: "weekly", days: [1..7], at, tz}`、`{kind: "once", at_ms}` のいずれか。`{kind: "once", in_ms}` も受け付け、保存時に `at_ms = now + in_ms` に換算します（現在より 1 分以上前、または 10 年より先は不可）。once job は一度だけ実行され、結果にかかわらずその後自動で無効になります。「1 時間後に起こして」は `every` ではなく `{kind: "once", in_ms: 3600000}` です。`action` は `{kind: "message", workspace, pane_id?, pane_name?, text}`。`policy` は省略可能な `{catch_up, max_runs_per_day, timeout_s}`。Pane からの呼び出しでは `workspace` の既定は自分の Workspace で、Pane を指定しない action は呼び出し元自身の Pane が対象になります |
-| `scheduler_remove` | `id` | job とその実行履歴を削除 |
-| `scheduler_set_enabled` | `id`、`enabled` | 一時停止または再開。再開時は過ぎたスロットを実行せず、次のスロットを待ちます。時刻を過ぎた once job は再開できず `{ok: false, error}` を返すので、新しい時刻を設定してください |
-| `scheduler_run_now` | `id` | 今すぐ一度実行し、終了を待たずに `{ok, enqueued}` を返します。失敗バックオフを解除します |
-| `scheduler_runs` | `id`、`limit` | 実行履歴（新しい順）：`{id, job_id, started_at, ended_at, status, reason, detail}` |
+| `scheduler_list` | — | `{ok, jobs, now, limits}` —— 変更できない job も含めてすべてを返します。各 job には `owner`（`{kind: "user"}`、`{kind: "pane", pane_id, pane_name, workspace}`、`{kind: "external"}` のいずれか。agent の定期 job には `expires_at` も付きます）、`updated_by`、`owner_gone`（作成した Pane が閉じられた）、`editable`（変更できるか）が付きます。`limits` は `{agent_enabled_per_owner, agent_enabled_total, agent_enabled, agent_min_every_ms, agent_max_runs_per_day, agent_runs_per_day, agent_runs_today, agent_expire_ms, agent_once_keep_ms, yours_enabled}` |
+| `scheduler_upsert` | `job` | job を作成（`id` なし）または更新（`id` あり）。`{ok, job}` を返し、定義が不正なら `{ok: false, error}`。更新時は変える項目だけを送れば済みます：送らなかった項目は保存済みの値のまま、`policy` はキーごとにマージ、送った `action` は丸ごと検証されます。`schedule` は `{kind: "every", every_ms, anchor_ms?}`、`{kind: "daily", at: "HH:MM", tz}`、`{kind: "weekly", days: [1..7], at, tz}`、`{kind: "once", at_ms}` のいずれか。`{kind: "once", in_ms}` も受け付け、保存時に `at_ms = now + in_ms` に換算します（現在より 1 分以上前、または 10 年より先は不可）。once job は一度だけ実行され、結果にかかわらずその後自動で無効になります。「1 時間後に起こして」は `every` ではなく `{kind: "once", in_ms: 3600000}` です。`action` は `{kind: "message", workspace, pane_id?, pane_name?, text}`。`policy` は省略可能な `{catch_up, max_runs_per_day, timeout_s}`。Pane からの呼び出しでは `workspace` の既定は自分の Workspace で、Pane を指定しない action は呼び出し元自身の Pane が対象になります。対象にできるのは自分の Workspace の Pane だけです。更新できるのは自分が作成した job だけです |
+| `scheduler_remove` | `id` | 自分が作成した job とその実行履歴を削除 |
+| `scheduler_set_enabled` | `id`、`enabled` | 一時停止または再開。再開時は過ぎたスロットを実行せず、次のスロットを待ちます。時刻を過ぎた once job は再開できず `{ok: false, error}` を返すので、新しい時刻を設定してください。自分が作成した job のみ。再開は有効 job の上限に数えられます |
+| `scheduler_run_now` | `id` | 今すぐ一度実行し、終了を待たずに `{ok, enqueued}` を返します。失敗バックオフを解除します。自分が作成した job のみで、この実行は agent の 1 日の合計に数えられます |
+| `scheduler_runs` | `id`、`limit` | 実行履歴（新しい順）：`{id, job_id, started_at, ended_at, status, reason, detail}`。どの job の履歴も読めます |
 
 1 回の実行は `cli_send(open_target=True)` そのものです：placeholder に回収された Pane は
 先に開かれ、作業中の Pane には通常どおりキューされます。`pane_id` は 1 つの Pane を固定し、
 その Pane がもう存在しなければ実行は `target_gone` としてスキップされ、同名の別 Pane に
 送られることはありません。その他のスキップ理由 —— `no_window`、`busy`（この job の前回の
-メッセージがまだキューにある）、`budget` —— はエラーではなく、バックオフも起きません。
+メッセージがまだキューにある）、`budget`、および後述の `budget_global` と `expired` —— は
+エラーではなく、バックオフも起きません。
+
+**所有権。** 各 job には作成者（`owner`）と最終変更者（`updated_by`）が記録されます。Navide の
+ウィンドウで作った job はユーザーのもの、これらの Tool で作った job は呼び出した agent のもの
+です。agent が更新・削除・一時停止／再開・`run_now` できるのは自分の job だけで、それ以外は
+`{ok: false, code: "SCHEDULER_NOT_OWNER", owner, error}` を返します。一覧と実行履歴は誰でも
+読めます。Navide のウィンドウはユーザーとして動作し、どの job でも変更できます。job を作成した
+Pane が閉じられると、job は動き続けますがユーザーの管理になり（`owner_gone: true`）、同名の新しい
+Pane は引き継ぎません。パネルには「自分のものにする」が表示されます。作成者の記録が始まる前から
+ある job はユーザーのものです。Pane が対象にできるのは自分の Workspace の Pane だけです
+（それ以外は `{ok: false, code: "SCHEDULER_CROSS_WORKSPACE", error}`）。Pane の身元を持たない
+呼び出し元（host や外部クライアント）も agent と同じ扱いで、すべて 1 つの `{kind: "external"}`
+所有者を共有します。自分の Workspace を持たないため、Workspace の制限は適用されません。
+
+**agent の job の上限**（ユーザー自身の job には上限はありません）：
+
+| 上限 | 値 | 超えたとき |
+|---|---|---|
+| agent ごとの有効な job | 10 | 追加や有効化は拒否（`limit: "per_owner_enabled"`） |
+| agent 全体の有効な job | 100 | 追加や有効化は拒否（`limit: "global_enabled"`）。ユーザーの job は数えません |
+| 最短間隔 | `every_ms` ≥ 300000（5 分）、`max_runs_per_day` ≤ 288 | 保存は拒否（`limit: "min_every_ms"` または `"max_runs_per_day"`） |
+| agent の job 全体の 1 日の実行回数 | 300（ローカルの日付単位） | 予定のスロットは `budget_global` としてスキップ。agent の `run_now` は拒否され（`limit: "agent_runs_per_day"`）、`run_now` も合計に数えられます。job を削除してもリセットされません |
+
+上限を超えると `{ok: false, code: "SCHEDULER_LIMIT", limit, max, used, error}` を返します。
+`max` は境界値です（`min_every_ms` では最小値）。agent の定期 job は、所有者が最後に保存・有効化
+してから、または誰かが再度有効化してから 7 日後に自動で無効になります（スキップ理由 `expired`）。
+ユーザーは期限切れにならないよう保持できます。agent の once job は実行から 30 日後に削除されます。
 
 ### CLI の権限
 
