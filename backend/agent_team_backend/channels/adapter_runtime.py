@@ -37,6 +37,23 @@ WS_PING_TIMEOUT_S = 20.0
 # Max number of 429 / connect-failure retries for one request.
 SEND_MAX_RETRIES = 3
 
+# How long a stop waits for a cancelled receive task before cancelling it again.
+CANCEL_RETRY_S = 0.5
+
+
+async def cancel_and_wait(task: asyncio.Task[Any]) -> None:
+    """Cancel ``task`` and wait until it has ended, cancelling again while it runs on.
+
+    A single cancel can be lost: anyio's connect_tcp (under httpx) uncancels its
+    host task when the cancel lands while its own happy-eyeballs task group is
+    winding down, and a poll loop then carries on as if never asked to stop.
+    """
+    while not task.done():
+        task.cancel()
+        await asyncio.wait({task}, timeout=CANCEL_RETRY_S)
+    if not task.cancelled():
+        task.exception()  # retrieved: an error on the way out is not worth a warning
+
 
 class StallError(Exception):
     """No activity for longer than the stall watchdog allows."""
@@ -101,9 +118,7 @@ class ReceiveLoop:
         self._stopping = True
         task, self._task = self._task, None
         if task and not task.done():
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await task
+            await cancel_and_wait(task)
         self.status.lifecycle = "stopped"
         self.status.connected = False
 

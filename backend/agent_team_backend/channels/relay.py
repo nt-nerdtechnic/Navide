@@ -8,6 +8,9 @@ Answers: ``yes <id>`` / ``no <id>`` (also ``y`` / ``n``) for a permission,
 ``<n> <id>`` for a question option, or a button whose callback data is
 ``nv1:<id>:<choice>`` (choice ``y`` / ``n`` / ``1``..``9``, well under
 Telegram's 64-byte limit).
+
+A permanent-allow option ("don't ask again", "always allow", "for this session" …)
+is never offered or accepted from chat: that choice is made at the computer.
 """
 
 from __future__ import annotations
@@ -28,6 +31,16 @@ CALLBACK_PREFIX = "nv1:"
 
 _TEXT_ANSWER_RE = re.compile(rf"^\s*(yes|y|no|n|[1-9])\s+([{ID_ALPHABET}]{{{ID_LENGTH}}})\s*$", re.IGNORECASE)
 _CALLBACK_RE = re.compile(rf"^nv1:([{ID_ALPHABET}]{{{ID_LENGTH}}}):(y|n|[1-9])$")
+
+# Keep in sync with PERMANENT_ALLOW in src/renderer/src/lib/paneAnswerKeys.ts.
+_PERMANENT_ALLOW_RE = re.compile(
+    r"\bdon['’]?t ask again\b|\bdo not ask again\b|\balways\b|\b(?:this|the) session\b"
+    r"|\bauto[- ]?accept|\ballow all\b|\bpermanent"
+    r"|不再詢問|不再询问|一律允許|一律允许|自動核准|自动批准|總是允許|总是允许|始終允許|始终允许"
+    r"|本次工作階段|此工作階段|本次会话|此会话"
+    r"|今後|以降|常に許可|次回から|このセッション",
+    re.IGNORECASE,
+)
 
 
 def new_request_id() -> str:
@@ -63,6 +76,29 @@ def parse_answer(text: str, callback_data: str) -> RelayAnswer | None:
     return RelayAnswer(m.group(2).lower(), choice)
 
 
+def is_permanent_allow(option: str) -> bool:
+    """True for an option that allows more than this one prompt."""
+    return bool(_PERMANENT_ALLOW_RE.search(option or ""))
+
+
+def refuses_permanent(request: RelayRequest, choice: str) -> bool:
+    """``choice`` would press a permanent-allow option (``yes`` presses option 1)."""
+    if request.kind == "permission":
+        return choice == "y" and bool(request.options) and is_permanent_allow(request.options[0])
+    if choice.isdigit() and 1 <= int(choice) <= len(request.options):
+        return is_permanent_allow(request.options[int(choice) - 1])
+    return False
+
+
+def _offered(request: RelayRequest) -> list[tuple[int, str]]:
+    return [(i, opt) for i, opt in enumerate(request.options[:MAX_BUTTON_OPTIONS], 1)
+            if not is_permanent_allow(opt)]
+
+
+def _allow_offered(request: RelayRequest) -> bool:
+    return not (request.options and is_permanent_allow(request.options[0]))
+
+
 def answer_payload(request: RelayRequest, choice: str) -> dict[str, Any] | None:
     """The ``ui.pane.sendKeys`` answer for ``choice``, or None if it does not fit the request."""
     if request.kind == "permission" and choice in ("y", "n"):
@@ -86,19 +122,21 @@ def prompt_text(request: RelayRequest, prompt: str) -> str:
     if prompt.strip():
         lines.append(prompt.strip())
     if request.kind == "question":
-        for i, opt in enumerate(request.options[:MAX_BUTTON_OPTIONS], 1):
+        for i, opt in _offered(request):
             lines.append(f"{i}. {opt}")
         lines.append(f"回覆 <選項編號> {request.id}")
-    else:
+    elif _allow_offered(request):
         lines.append(f"回覆 yes {request.id} / no {request.id}")
+    else:
+        lines.append(f"回覆 no {request.id}（允許會永久放行，請在電腦前操作）")
     return "\n".join(lines)
 
 
 def buttons_for(request: RelayRequest) -> list[tuple[str, str]]:
     if request.kind == "permission":
-        return [("允許", f"{CALLBACK_PREFIX}{request.id}:y"), ("拒絕", f"{CALLBACK_PREFIX}{request.id}:n")]
-    return [(f"{i}. {opt}"[:40], f"{CALLBACK_PREFIX}{request.id}:{i}")
-            for i, opt in enumerate(request.options[:MAX_BUTTON_OPTIONS], 1)]
+        deny = ("拒絕", f"{CALLBACK_PREFIX}{request.id}:n")
+        return [("允許", f"{CALLBACK_PREFIX}{request.id}:y"), deny] if _allow_offered(request) else [deny]
+    return [(f"{i}. {opt}"[:40], f"{CALLBACK_PREFIX}{request.id}:{i}") for i, opt in _offered(request)]
 
 
 class RelayTable:

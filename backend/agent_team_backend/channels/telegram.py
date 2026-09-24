@@ -44,6 +44,7 @@ from .base import (
     backoff_delay,
 )
 from . import redact
+from .adapter_runtime import cancel_and_wait
 from .text import TEXT_LIMITS, chunk_text, is_telegram_parse_error, markdown_to_telegram_html
 
 log = logging.getLogger(__name__)
@@ -122,11 +123,7 @@ class TelegramAdapter:
     async def stop(self) -> None:
         task, self._task = self._task, None
         if task:
-            task.cancel()
-            try:
-                await task
-            except (asyncio.CancelledError, Exception):
-                pass
+            await cancel_and_wait(task)
         if self._client:
             await self._client.aclose()
             self._client = None

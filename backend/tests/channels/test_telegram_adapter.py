@@ -258,3 +258,36 @@ def test_create_adapter_rejects_non_http_api_base(base: str) -> None:
 
     with pytest.raises(ValueError, match="api_base"):
         create_adapter({"api_base": base}, {"token": TOKEN})
+
+
+async def test_stop_ends_polling_even_if_a_cancel_is_swallowed(api: FakeBotApi, monkeypatch) -> None:
+    # anyio's connect_tcp (under httpx) uncancels its host task when a cancel lands
+    # while its happy-eyeballs task group winds down: the poll loop carries on.
+    ad = _adapter(api)
+    real_call = ad._call
+    swallowed: list[str] = []
+
+    async def call(method, params=None):
+        if method == "getUpdates" and not swallowed:
+            try:
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                asyncio.current_task().uncancel()
+                swallowed.append(method)
+                return []
+        return await real_call(method, params)
+
+    monkeypatch.setattr(ad, "_call", call)
+
+    async def emit(msg: InboundMessage) -> None:
+        pass
+
+    await ad.start(emit)
+    await _until(lambda: api.calls_of("deleteWebhook"))
+    await asyncio.sleep(0.05)
+    started = time.monotonic()
+    # Not wait_for: a stop that swallows wait_for's own cancel returns normally.
+    done, _ = await asyncio.wait({asyncio.ensure_future(ad.stop())}, timeout=3)
+    assert done, "stop() did not return"
+    assert time.monotonic() - started < 2
+    assert swallowed and ad.status.lifecycle == "stopped"

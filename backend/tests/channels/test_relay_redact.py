@@ -10,6 +10,7 @@ from agent_team_backend.channels.relay import (
     RelayRequest,
     RelayTable,
     answer_payload,
+    is_permanent_allow,
     new_request_id,
     parse_answer,
 )
@@ -41,6 +42,25 @@ def test_answer_payload_must_fit_the_request() -> None:
     assert answer_payload(perm, "1") is None
     assert answer_payload(question, "2") == {"kind": "question", "option": 2}
     assert answer_payload(question, "3") is None and answer_payload(question, "y") is None
+
+
+def test_permanent_allow_wording() -> None:
+    for text in (
+        "Yes, and don't ask again this session",
+        "Yes, and don't ask again for this command in this session",
+        "Yes, allow all edits during this session (shift+tab)",
+        "Always allow Bash(rm:*)",
+        "Yes, and do not ask again",
+        "Auto-accept edits",
+        "是，並且不再詢問",
+        "一律允許",
+        "自動核准",
+        "はい、今後は確認しない",
+    ):
+        assert is_permanent_allow(text), text
+    for text in ("Yes", "Yes, just this once", "No, and tell Claude what to do differently (esc)",
+                 "Keep it", "Discard"):
+        assert not is_permanent_allow(text), text
 
 
 def test_table_single_use_and_pane_expiry() -> None:

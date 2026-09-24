@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { awaitingPromptText, parseMenuOptions, resolveAnswerKeys, type PaneAnswer } from '../paneAnswerKeys'
+import { awaitingPromptText, isPermanentAllow, parseMenuOptions, resolveAnswerKeys, type PaneAnswer } from '../paneAnswerKeys'
 
 const CLAUDE_PERMISSION = [
   'Do you want to make this edit to useTerminal.ts?',
@@ -112,5 +112,37 @@ describe('resolveAnswerKeys', () => {
     expect(resolve('claude', { kind: 'permission', choice: 'allow' }, 'plain output')).toMatchObject({ ok: false })
     expect(resolve('claude', { kind: 'permission', choice: 'allow' }, CLAUDE_QUESTION)).toMatchObject({ ok: false })
     expect(resolve('claude', { kind: 'permission', choice: 'deny' }, CLAUDE_QUESTION)).toMatchObject({ ok: false })
+  })
+
+  it('never presses a permanent-allow option, whichever way it is asked for', () => {
+    expect(resolve('claude', { kind: 'question', option: 2 }, CLAUDE_PERMISSION, 'permission')).toMatchObject({ ok: false })
+    expect(resolve('codex', { kind: 'question', option: 2 }, CODEX_PERMISSION, 'permission')).toMatchObject({ ok: false })
+    const permanentFirst = ['Allow this?', "❯ 1. Yes, and don't ask again this session", '  2. No'].join('\n')
+    expect(resolve('claude', { kind: 'permission', choice: 'allow' }, permanentFirst)).toMatchObject({ ok: false })
+    expect(resolve('claude', { kind: 'question', option: 1 }, permanentFirst, 'permission')).toMatchObject({ ok: false })
+    // The safe choices on the same menus still work.
+    expect(resolve('claude', { kind: 'question', option: 1 }, CLAUDE_PERMISSION, 'permission')).toEqual({ ok: true, keys: '1' })
+    expect(resolve('claude', { kind: 'permission', choice: 'deny' }, permanentFirst)).toEqual({ ok: true, keys: '\x1b' })
+  })
+})
+
+describe('isPermanentAllow', () => {
+  it('matches the claude / codex permanent wording and nothing one-off', () => {
+    for (const text of [
+      "Yes, and don't ask again this session",
+      "Yes, and don’t ask again for this command in this session",
+      'Yes, allow all edits during this session (shift+tab)',
+      'Always allow Bash(rm:*)',
+      'Auto-accept edits',
+      '是，並且不再詢問',
+      '一律允許',
+      '自動核准',
+      'はい、今後は確認しない',
+    ]) {
+      expect(isPermanentAllow(text), text).toBe(true)
+    }
+    for (const text of ['Yes', 'Yes, just this once', 'No, and tell Claude what to do differently (esc)', 'Keep it']) {
+      expect(isPermanentAllow(text), text).toBe(false)
+    }
   })
 })

@@ -64,6 +64,7 @@ MSG_EMPTY_REPLY = "（pane 回合結束，沒有文字輸出）"
 MSG_STILL_RUNNING = "⏳ 仍在執行，完成時會再回覆"
 MSG_OFFLINE = "⚠️ pane 目前不在線上（可能在其他 workspace 或已關閉）"
 MSG_RELAY_EXPIRED = "⚠️ 這個確認已失效"
+MSG_RELAY_PERMANENT = "⚠️ 這個選項會永久放行，請在電腦前操作"
 
 
 def _secret_name(platform: str) -> str:
@@ -743,6 +744,9 @@ class ChannelManager:
         request = self.relay.take(answer.request_id)
         if request is None or request.loc.platform != msg.platform or request.loc.chat_id != msg.chat_id:
             await self._reply(msg, MSG_RELAY_EXPIRED)
+            return
+        if relay.refuses_permanent(request, answer.choice):
+            await self._reply(msg, MSG_RELAY_PERMANENT)
             return
         payload = relay.answer_payload(request, answer.choice)
         if payload is None:

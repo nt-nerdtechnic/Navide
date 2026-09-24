@@ -712,3 +712,47 @@ async def test_options_starting_with_yes_relay_as_permission(env: Env) -> None:
     assert f"yes {rid} / no {rid}" in next(t for t in env.tg.texts() if t.startswith("⏸"))
     await env.inbound(f"no {rid}")
     assert env.fake.answers == [("pane-1", {"kind": "permission", "choice": "deny"})]
+
+
+async def test_permanent_allow_option_is_neither_offered_nor_accepted(env: Env) -> None:
+    env.fake.kind = "question"
+    env.fake.options = ["Run it once", "Always allow Bash(rm:*)", "Cancel"]
+    sent_buttons: list = []
+    orig = env.tg.send_text
+
+    async def capture(loc, text, *, buttons=None):
+        if buttons:
+            sent_buttons.append(buttons)
+        return await orig(loc, text, buttons=buttons)
+
+    env.tg.send_text = capture
+    await _awaiting(env, relay_on=True)
+    await _until(lambda: sent_buttons)
+    rid = _relay_id(env)
+    # Offered options keep their on-screen numbers; the permanent one is left out.
+    assert sent_buttons[0] == [("1. Run it once", f"nv1:{rid}:1"), ("3. Cancel", f"nv1:{rid}:3")]
+    text = next(t for t in env.tg.texts() if t.startswith("⏸"))
+    assert "2. Always allow" not in text and "3. Cancel" in text
+    await env.inbound(f"2 {rid}")
+    assert env.fake.answers == []
+    assert env.tg.texts()[-1] == mgr_mod.MSG_RELAY_PERMANENT
+
+
+async def test_yes_refused_when_option_one_is_permanent_allow(env: Env) -> None:
+    env.fake.options = ["Yes, and don't ask again this session", "No"]
+    sent_buttons: list = []
+    orig = env.tg.send_text
+
+    async def capture(loc, text, *, buttons=None):
+        if buttons:
+            sent_buttons.append(buttons)
+        return await orig(loc, text, buttons=buttons)
+
+    env.tg.send_text = capture
+    await _awaiting(env, relay_on=True)
+    await _until(lambda: sent_buttons)
+    rid = _relay_id(env)
+    assert sent_buttons[0] == [("拒絕", f"nv1:{rid}:n")]
+    await env.inbound(f"yes {rid}")
+    assert env.fake.answers == []
+    assert env.tg.texts()[-1] == mgr_mod.MSG_RELAY_PERMANENT
