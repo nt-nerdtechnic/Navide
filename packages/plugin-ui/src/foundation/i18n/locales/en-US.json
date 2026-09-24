@@ -8903,7 +8903,7 @@
     "unavailable": "Navide Guard is not available from this backend yet. Restart Navide after updating.",
     "enabled": {
       "title": "Navide Guard",
-      "desc": "Judge each CLI action by how dangerous it is and who asked for it; stop or ask before the dangerous ones. The rules are fixed code, never an AI."
+      "desc": "Judge each CLI action by how dangerous it is and who asked for it; stop or ask before the dangerous ones. The rules are fixed code, never an AI. Approving a high-risk action from a chat channel stays refused even when this is off."
     },
     "counts": {
       "critical": "Critical {n}",

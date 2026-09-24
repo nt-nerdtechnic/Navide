@@ -75,10 +75,18 @@ def test_unparseable_is_high_only_when_tainted():
 
 def test_disabled_allows_everything_but_still_audits(guard_store):
     guard_store.set_enabled(False)
-    d = run(CMD["critical"], source="relay")
-    assert d.action == "allow"
+    d = run(CMD["critical"], source="local")
+    assert d.action == "allow" and d.reason.startswith("guard disabled; ")
     entries = guard_store.audit_list()
     assert entries[0]["level"] == "critical" and entries[0]["action"] == "allow"
+
+
+@pytest.mark.parametrize("level", ["critical", "high"])
+def test_disabled_guard_still_refuses_chat_approvals(guard_store, level):
+    guard_store.set_enabled(False)
+    d = run(CMD[level], source="relay")
+    assert d.action == "deny" and not d.reason.startswith("guard disabled")
+    assert run(CMD["normal"], source="relay").action == "allow"
 
 
 def test_audit_records_non_normal_only_and_redacts(guard_store):

@@ -55,6 +55,14 @@ async def test_remote_allow_of_dangerous_prompt_is_refused(env: Env, guard_store
     assert entry["source"] == "relay" and entry["action"] == "deny" and entry["pane_id"] == "pane-1"
 
 
+async def test_chat_approval_is_refused_even_with_guard_switched_off(env: Env, guard_store) -> None:
+    guard_store.set_enabled(False)
+    rid = await _request(env, CRITICAL)
+    await env.inbound(f"yes {rid}")
+    assert env.fake.answers == []
+    assert env.tg.texts()[-1] == mgr_mod.MSG_RELAY_NEEDS_LOCAL
+
+
 async def test_remote_deny_always_goes_through(env: Env) -> None:
     rid = await _request(env, CRITICAL)
     await env.inbound(f"no {rid}")

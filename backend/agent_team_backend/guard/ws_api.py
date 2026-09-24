@@ -85,7 +85,7 @@ def _test(payload: dict) -> dict[str, Any]:
     store = runtime.store()
     level, rule_ids = policy.apply_user_rules(verdict.level, verdict.rule_ids, command, store.rules_list())
     level = policy.effective_level(level, parseable=verdict.parseable, tainted=tainted)
-    action = policy.decide(level, source, tainted=tainted) if store.enabled() else "allow"
+    action = policy.decide(level, source, tainted=tainted) if policy.enforced(store.enabled(), source) else "allow"
     return {
         "ok": True,
         "verdict": {

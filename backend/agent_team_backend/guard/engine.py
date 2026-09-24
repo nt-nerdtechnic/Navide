@@ -127,10 +127,10 @@ def _evaluate(*, pane_id, vendor, tool, tool_input, cwd, workspace, source) -> D
     )
     tainted = is_tainted(pane_id)
     level = policy.effective_level(level, parseable=verdict.parseable, tainted=tainted)
-    enabled = store.enabled()
-    action = policy.decide(level, source, tainted=tainted) if enabled else "allow"
+    enforced = policy.enforced(store.enabled(), source)
+    action = policy.decide(level, source, tainted=tainted) if enforced else "allow"
     reason = _reason(action, level, verdict.reasons, source, tainted, verdict.parseable)
-    if not enabled and level != "normal":
+    if not enforced and level != "normal":
         reason = f"guard disabled; {reason}"
     decision = Decision(action, level, rule_ids, reason, tainted)
     # Bookkeeping must never overturn the decision: an audit write failing

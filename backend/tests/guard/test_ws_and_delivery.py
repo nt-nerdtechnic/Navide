@@ -97,6 +97,15 @@ async def test_audit_list_and_test_box(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_test_box_matches_the_relay_veto_with_guard_off(monkeypatch, guard_store):
+    monkeypatch.setenv("HOME", "/home/tester")
+    guard_store.set_enabled(False)
+    relay = await ws("guard.test", {"command": "git push -f origin main", "source": "relay"})
+    local = await ws("guard.test", {"command": "git push -f origin main", "source": "local"})
+    assert (relay["decision"]["action"], local["decision"]["action"]) == ("deny", "allow")
+
+
+@pytest.mark.asyncio
 async def test_ui_invoke_cannot_reach_guard_requests(monkeypatch, guard_store):
     """ui_invoke only forwards a renderer UI action as a ui.invoke.request
     event; it never dispatches a ws request type, so naming one does nothing."""

@@ -11,7 +11,8 @@ Pure and deterministic; the matrix is the approved plan's decision table
 | tainted pane, any source | ask      | ask              | allow  |
 
 Relay wins over taint: a chat approval can never become "ask", because the
-person answering is not at the computer. Unparseable commands count as
+person answering is not at the computer. The relay row also holds while the
+Guard switch is off (see enforced()). Unparseable commands count as
 "high" on a tainted pane.
 """
 
@@ -33,6 +34,13 @@ def effective_level(level: str, *, parseable: bool, tainted: bool) -> str:
     if tainted and not parseable and LEVEL_ORDER[level] < LEVEL_ORDER["high"]:
         return "high"
     return level
+
+
+def enforced(enabled: bool, source: str) -> bool:
+    """Whether the matrix applies. The Guard switch turns it off everywhere
+    except the chat relay: approving a high/critical action from chat always
+    needs someone at the computer, whatever the switch says."""
+    return enabled or source == "relay"
 
 
 def decide(level: str, source: str, *, tainted: bool) -> str:
