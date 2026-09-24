@@ -30,6 +30,14 @@ One **item** is one logical row in one **scope**. Scopes are exactly:
 | `skills` | skill enable/route state (content is Phase 4, not v1) |
 | `memory` | user-scope instruction-file records (never project scope) |
 | `credentials` | portable CLI credentials the user pasted in Settings → Accounts (see below) |
+| `skill-files` | file manifests of skills too large for one `skills` record (see Blobs) |
+
+`skill-files` is not a switch of its own: it rides with `skills`. It is a
+separate scope rather than a field on the `skills` record on purpose — a
+client that predates blobs stores a `skills` record as `{enabled, targets}`
+and pushes that shape back, so a manifest added as a field would be silently
+erased by the first old client that saw it. Old clients never pull
+`skill-files`, so they keep syncing settings only and cannot damage anything.
 
 The `credentials` scope is, to the server, indistinguishable from the other
 four: same tables, same handlers, same ciphertext-only `body`. What differs is
@@ -87,9 +95,17 @@ the account's current max `rev` for the scope; `more` says another page waits.
 ### `sync.push`
 
 ```
-payload   {scope, items: [{itemId, baseRev, updatedAt, deleted?, body?, sig}]}
-result    {scope, cursor, accepted: [{itemId, rev}], conflicts: [<item>]}
+payload   {scope, items: [{itemId, baseRev, updatedAt, deleted?, body?, sig, refs?}]}
+result    {scope, cursor, accepted: [{itemId, rev}], conflicts: [<item>], rejected?}
 ```
+
+`refs` (optional, ≤ 256) lists the blob ids the record uses. Every ref must
+be a complete blob of the same account, or the item is not written and comes
+back in `rejected: [{itemId, code: "MISSING_BLOB", message, missing}]` — per
+item, like a conflict, and without spending a `rev`. The ids replace the
+item's previous set; a tombstone (which may not carry refs) empties it. The
+server cannot read the sealed record, so this list is what blob garbage
+collection goes by. A push without `refs` gets exactly the old result shape.
 
 A pushed item carries no `deviceId`: the server stamps the connection's own
 device on every row it writes. One may be sent, and then it must equal the
@@ -170,8 +186,72 @@ Over-limit is `BAD_REQUEST`. Error codes reuse the existing set:
    conflict, because the server said both were fine. Taking the scope's
    counter-row lock at the start of the push is what closes it.
 
-## Not in v1
+## Blobs
 
-Skill **content** (`SKILL.md` trees and attachments) needs a blob layer —
-`sync.blob.put` / `sync.blob.get`, content-addressed. That is Phase 4 of the
-plan and is specified when it is built. v1 carries records only.
+Small skills carry their files inside the `skills` record. A skill whose
+sealed record would exceed the body limit keeps only its settings there, and
+its files travel as **blobs**: one blob per file, stored in object storage
+(S3), named in a `skill-files` record.
+
+**The bytes never pass through the Navide server.** It checks ownership,
+signs short-lived URLs (15 minutes), records sizes and references, and
+finishes multipart uploads. Uploads go straight to object storage as a
+multipart upload over presigned part URLs; downloads are one presigned GET of
+the whole object (resumable with an HTTP `Range`). So neither the 1 MiB frame,
+the load balancer, nor the server's memory is on the data path.
+
+### Object format (version 2)
+
+```
+segment = nonce (12) ‖ AES-256-GCM(plaintext ≤ 1 MiB) ‖ tag (16)
+AAD     = "navide/blob/v2" ‖ kid ‖ blobId ‖ segment index ‖ segment count
+part    = 8 whole segments (8 MiB + 224 B); only the last part is shorter
+```
+
+Part `n` therefore starts at plaintext offset `(n-1) × 8 MiB`, which makes a
+resumed upload a part-level question, and every part but the last is above
+S3's 5 MiB minimum. An empty file is one empty segment. The segment count is
+bound into every segment, so a truncated object cannot pass as a shorter
+file. The layout is reported by `blobs.caps`; clients never hard-code it.
+
+**Blob id** = HMAC-SHA256 of the plaintext under a key derived from the
+account sync key (HKDF, info `navide/blob-id/v1`), 64 hex. Within one account
+identical files share one blob; across accounts the ids cannot be compared,
+and without the key the server cannot confirm a guess of a file. A plain
+content hash would leak both. After a key rotation new uploads get new ids.
+
+### Manifest (`skill-files` record body, sealed like any record)
+
+```
+{v: 1, files: {"<relative path>": {blob, kid, size, x?}}}
+```
+
+`size` is the plaintext size, `x` marks an executable file. The receiver
+downloads every file, opens every segment, recomputes the blob id, and only
+then swaps the whole skill in; until then the record is deferred (the pull
+holds the cursor on it). A tombstone drops the record and never deletes files.
+
+### Requests
+
+| type | payload | result |
+|---|---|---|
+| `blobs.caps` | — | `{version: 2, segmentBytes, segmentsPerPart, partBytes, maxBlobBytes, maxRefs, quotaBytes, usedBytes, presignTtlS}`; `UNSUPPORTED` when the server has no object storage |
+| `blobs.stat` | `{blobIds: [≤256]}` | `{blobs: [{blobId, state: complete\|partial\|absent, sizeBytes?, partCount?}]}` |
+| `blobs.begin` | `{blobId, sizeBytes}` (sealed size) | `{state: complete}` (dedup) or `{state: partial, partBytes, partCount, parts: [{partNumber, size}]}` |
+| `blobs.presignPut` | `{blobId, partNumbers: [1..100]}` | `{urls: [{partNumber, url}], expiresAt}` |
+| `blobs.commit` | `{blobId}` | `{state: complete}`; `INCOMPLETE {missing}` names parts absent or of the wrong size |
+| `blobs.presignGet` | `{blobId}` | `{url, sizeBytes, expiresAt}` |
+
+`caps`, `stat` and `presignGet` count as reads for throttling. A client that
+gets `UNKNOWN_TYPE` (older server) or `UNSUPPORTED` from `blobs.caps` does
+not use `skill-files` and syncs large skills' settings only.
+
+### Storage, quota, collection
+
+Metadata (owner, size, part count, references, upload id) lives in the
+database; bytes live in S3 under `<prefix><memberId>/<blobId>/<upload suffix>`.
+`quotaBytes` is per account in sealed bytes, `null` when unlimited
+(`NAVIDE_BLOB_QUOTA_BYTES` unset). A blob with no reference left is deleted
+24 hours after it lost the last one; an upload with no activity for 7 days is
+aborted. `account.delete` removes the metadata in its transaction and queues
+the account's prefix for deletion in the same commit.

@@ -933,6 +933,96 @@ class SkillsStore:
         log.info("wrote skill %s from another device", name)
         return True
 
+    # ── Files, for skills too large to ride in one sync record ──────────────
+    #
+    # The same ownership rules as export_content / import_content, without the
+    # size limits: these files travel as blobs (skill_blobs), streamed from and
+    # to disk, never as one record. Neither method reads a whole file.
+
+    def list_files(self, name: str) -> dict[str, Path] | None:
+        """Every file a managed skill would carry, by relative path, or None when
+        it is not ours to send (or has no SKILL.md).
+
+        A path the receiving side would refuse — a dotfile, say — is left out
+        here rather than sent, since one refused path refuses the whole skill.
+        """
+        name = self._validate_name(name)
+        skill_dir = self._skill_dir(name)
+        if not skill_dir.is_dir() or not self._is_managed(skill_dir):
+            return None
+        files: dict[str, Path] = {}
+        for path in sorted(skill_dir.rglob("*")):
+            if path.is_symlink() or not path.is_file():
+                continue
+            relative = path.relative_to(skill_dir).as_posix()
+            if relative == MARKER_FILE or _is_generated(relative):
+                continue
+            if _safe_relative(relative) is None:
+                log.info("skill %s: %s is not carried to other devices", name, relative)
+                continue
+            files[relative] = path
+        return files if SKILL_FILE in files else None
+
+    def can_import(self, name: str) -> bool:
+        """Whether a synced copy of *name* may be written here at all — asked
+        before downloading hundreds of megabytes only to be refused."""
+        name = self._validate_name(name)
+        skill_dir = self._skill_dir(name)
+        if (skill_dir.exists() or skill_dir.is_symlink()) and not self._is_managed(skill_dir):
+            return False
+        return not self._native_conflict(name)
+
+    @_serialized
+    def import_files(self, name: str, files: dict[str, Path], *, executable: set[str] | None = None) -> bool:
+        """Write a skill whose files arrived as blobs. *files* maps each relative
+        path to a verified local file, which is copied (streamed) into place.
+
+        The same refusals as ``import_content``, and the same atomic swap: the
+        skill is either wholly the new version or untouched.
+        """
+        name = self._validate_name(name)
+        self._ensure_safe_root()
+        if not isinstance(files, dict) or SKILL_FILE not in files:
+            log.warning("skill %s arrived without %s; not written", name, SKILL_FILE)
+            return False
+        skill_dir = self._skill_dir(name)
+        if (skill_dir.exists() or skill_dir.is_symlink()) and not self._is_managed(skill_dir):
+            log.warning("skill %s already exists here and is not ours; leaving it alone", name)
+            return False
+        if self._native_conflict(name):
+            log.warning("skill %s collides with a native skill; leaving it alone", name)
+            return False
+        safe_files: dict[str, Path] = {}
+        for relative, source in files.items():
+            safe = _safe_relative(relative)
+            if safe is None or not isinstance(source, Path) or not source.is_file():
+                log.warning("skill %s: refusing the path %r", name, relative)
+                return False
+            safe_files[safe] = source
+
+        self._root.mkdir(parents=True, exist_ok=True)
+        staging = Path(tempfile.mkdtemp(prefix=f".{name}-", dir=self._root))
+        try:
+            (staging / MARKER_FILE).write_text("", encoding="utf-8")
+            for relative, source in safe_files.items():
+                target = staging / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(source, target)
+                if executable and relative in executable:
+                    target.chmod(0o755)
+            backup = self._root / f".{name}.old"
+            self._remove_tree(backup)
+            if skill_dir.exists() or skill_dir.is_symlink():
+                os.replace(skill_dir, backup)
+            os.replace(staging, skill_dir)
+            self._remove_tree(backup)
+        except Exception:
+            self._remove_tree(staging)
+            raise
+        self._refresh_runtime_projection()
+        log.info("wrote skill %s (%d files) from another device", name, len(safe_files))
+        return True
+
     def rebuild_runtime_projection(self) -> Path:
         """Atomically replace the enabled-only runtime directory."""
         self._ensure_safe_root()

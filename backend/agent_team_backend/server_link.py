@@ -1001,6 +1001,13 @@ class ServerLink:
             engine.register(sync_scopes.PromptsScope(broadcast=_broadcast))
             engine.register(sync_scopes.McpScope())
             engine.register(sync_scopes.SkillsStateScope())
+            # Files of skills too large for one record, as blobs; rides with
+            # the Skills switch. Its transfers report progress to every window.
+            skill_files = sync_scopes.skill_files_scope()
+            skill_files.set_notify(
+                lambda progress: self._spawn(app.broadcast(make_event("skills.sync_progress", progress)))
+            )
+            engine.register(skill_files)
             engine.register(sync_scopes.MemoryScope())
             # One instance, shared with the spawn and sign-out paths; see
             # sync_scopes.credentials_scope.

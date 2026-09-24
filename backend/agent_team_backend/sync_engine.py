@@ -53,6 +53,11 @@ _COMPONENT = "sync"
 #: the wire, so a typo in an adapter cannot create a private fifth scope that
 #: only one build knows about.
 SCOPES: tuple[str, ...] = ("prompts", "mcp", "skills", "memory", "credentials")
+#: Scopes the protocol also carries but no one switches on or off: each rides
+#: along with a user-facing scope (its adapter's ``enabled`` answer). Kept out
+#: of ``SCOPES`` because that tuple is the list of switches Settings shows.
+#: ``skill-files``: the file manifests of skills too large for one record.
+INTERNAL_SCOPES: tuple[str, ...] = ("skill-files",)
 
 #: Matches the server's cap. Larger batches are split, not rejected.
 PUSH_BATCH = 64
@@ -90,6 +95,13 @@ INVENTORY_DISABLED = "disabled"
 
 class SyncError(Exception):
     """A sync round could not be completed. Always recoverable by retrying."""
+
+
+class DeferItem(Exception):
+    """Raised by an adapter's ``apply`` when a record cannot land yet — its
+    files are still on their way. The pull stops just short of that row, the
+    same way it does for a record under a key this machine lacks, so the next
+    round reads it again instead of stepping past it."""
 
 
 class ScopeAdapter(Protocol):
@@ -510,9 +522,11 @@ class SyncEngine:
         #: same items from the same base rev, and one of them would come
         #: back as a conflict with itself.
         self._locks: dict[str, asyncio.Lock] = {}
+        #: Rounds started by ``_kick``, held so they are not collected mid-run.
+        self._kicked: set[asyncio.Task[Any]] = set()
 
     def register(self, adapter: ScopeAdapter) -> None:
-        if adapter.scope not in SCOPES:
+        if adapter.scope not in SCOPES + INTERNAL_SCOPES:
             raise SyncError(f"{adapter.scope!r} is not a protocol scope")
         self._adapters[adapter.scope] = adapter
         if _sensitive(adapter):
@@ -520,7 +534,9 @@ class SyncEngine:
 
     @property
     def scopes(self) -> list[str]:
-        return [s for s in SCOPES if s in self._adapters]
+        # Internal scopes last: skill-files follows skills, whose settings the
+        # files are applied under.
+        return [s for s in SCOPES + INTERNAL_SCOPES if s in self._adapters]
 
     # ── one round ───────────────────────────────────────────────────────
     async def sync(self, scope: str) -> dict[str, Any]:
@@ -532,6 +548,12 @@ class SyncEngine:
         if not await asyncio.to_thread(sync_keyring.has_account_key):
             return {"scope": scope, "skipped": "no-key"}
         async with self._locks.setdefault(scope, asyncio.Lock()):
+            # An adapter that needs the server for more than records (blob
+            # transfers) is handed the connection here, and may decline the
+            # round when the server cannot serve it.
+            prepare = getattr(adapter, "prepare", None)
+            if prepare is not None and not await prepare(self._request, lambda: self._kick(scope)):
+                return {"scope": scope, "skipped": "unsupported"}
             pulled = await self._pull(adapter)
             pushed = await self._push(adapter)
         return {
@@ -540,6 +562,13 @@ class SyncEngine:
             "pushed": pushed,
             "conflicts": len(self._store.conflict_ids(scope)),
         }
+
+    def _kick(self, scope: str) -> None:
+        """Run one more round of *scope* soon. For an adapter whose background
+        work (a finished download) has made a held record appliable."""
+        task = asyncio.get_running_loop().create_task(self.sync(scope))
+        self._kicked.add(task)
+        task.add_done_callback(self._kicked.discard)
 
     async def sync_all(self) -> list[dict[str, Any]]:
         results = []
@@ -576,7 +605,7 @@ class SyncEngine:
                 if cursor > since:
                     self._store.set_cursor(scope, cursor)
                 self._cursor_barrier[scope] = cursor
-                log.info("sync.pull on %s is waiting for a newer key at rev %d", scope, held_rev)
+                log.info("sync.pull on %s is holding at rev %d (a newer key, or files in transit)", scope, held_rev)
                 break
             if cursor > since:
                 self._store.set_cursor(scope, cursor)
@@ -700,7 +729,10 @@ class SyncEngine:
             # does not hold it — a credential switched off on this device.
             # The rev is still recorded so the row is not re-read, but the
             # agreed hash stays empty: this machine holds nothing for it.
-            held = adapter.apply(item_id, remote) is not False
+            try:
+                held = adapter.apply(item_id, remote) is not False
+            except DeferItem:
+                raise _HoldPull(rev) from None
         self._store.set_state(
             scope,
             item_id,
@@ -737,6 +769,13 @@ class SyncEngine:
         # One hop for everything that reads disk or encrypts; what comes back is
         # ready to put on the wire.
         pending, built = await asyncio.to_thread(self._prepare_push, adapter)
+        ready = getattr(adapter, "ready", None)
+        if ready is not None:
+            # An item whose files are not all on the server yet waits: the
+            # server would refuse a manifest naming a missing blob anyway, and
+            # the adapter starts the upload that lets it go next round.
+            keep = {item_id for item_id, payload, _ in pending if payload is None or await ready(item_id, payload)}
+            built = [entry for entry in built if entry[0]["itemId"] in keep]
         return await self._send_all(adapter.scope, pending, built)
 
     async def _send_all(
@@ -859,6 +898,12 @@ class SyncEngine:
                 body=body,
             ),
         }
+        refs = getattr(self._adapters.get(scope), "refs", None)
+        if refs is not None and not deleted:
+            # The blob ids the record names, in the clear, so the server can
+            # tell which blobs are still in use. Ids only: they are keyed
+            # hashes, and the record naming them stays sealed.
+            item["refs"] = refs(payload)
         return item, len(canonical(item).encode("utf-8"))
 
     async def _send_batch(
@@ -888,6 +933,9 @@ class SyncEngine:
                 deleted=payload is None,
                 sealed_kid=(sync_keyring.active_key_id() or "") if payload is not None else "",
             )
+        for entry in reply.get("rejected") or []:
+            # Not recorded, so the next round offers it again.
+            log.info("sync.push on %s: %s was turned away: %s", scope, entry.get("itemId"), entry.get("code"))
         conflicts = reply.get("conflicts")
         adapter = self._adapters.get(scope)
         for entry in conflicts if isinstance(conflicts, list) else []:
@@ -983,7 +1031,13 @@ class SyncEngine:
             raise SyncError(f"no unresolved conflict for {scope}/{item_id}")
         if keep == KEEP_REMOTE:
             remote = row["remote"]
-            adapter.apply(item_id, remote)
+            try:
+                adapter.apply(item_id, remote)
+            except DeferItem as err:
+                # Its files are still downloading. Keeping the conflict is the
+                # safe answer: marking it agreed now would push this machine's
+                # old files over the copy that was just chosen.
+                raise SyncError(f"{scope}/{item_id} is still downloading; try again shortly") from err
             # Recorded under the key the winning body actually came sealed
             # with (empty when unknown), so a copy under a retired key is
             # still re-sealed by the next push rather than taken as current.
