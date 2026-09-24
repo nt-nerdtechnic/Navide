@@ -62,8 +62,11 @@ SYSTEM_BIN_PREFIXES = (
 _TEMP_ROOTS = ("/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp", "/var/folders", "/private/var/folders")
 _GLOB_CHARS = set("*?[")
 # Every path is compared in one canonical form: '/'-separated and, on
-# Windows, drive-lettered and case-folded (NTFS is case-insensitive).
+# Windows, drive-lettered. Case is folded where the default filesystem is
+# case-insensitive (NTFS, APFS), so ~/.SSH/id_rsa is the same file as
+# ~/.ssh/id_rsa there; Linux filesystems are case-sensitive, so it is not.
 _WINDOWS = osplat.platform_id == "win32"
+_FOLD_CASE = osplat.platform_id in ("darwin", "win32")
 _DRIVE_RE = re.compile(r"^[A-Za-z]:")
 _MSYS_DRIVE_RE = re.compile(r"^/([A-Za-z])(?=/|$)")  # Git Bash's /c/Users/...
 _HOME_TOKENS = ("${HOME}", "$HOME", "${env:USERPROFILE}", "$env:USERPROFILE", "$USERPROFILE", "%USERPROFILE%")
@@ -108,16 +111,22 @@ class _Ctx:
     workspace: str
     home: str
     downloaded: set[str] = field(default_factory=set)
+    # Windows: $HOME when it differs from %USERPROFILE% (Git Bash with a custom HOME).
+    env_home: str = ""
 
 
 # ---------------------------------------------------------------- paths
+
+
+def _fold(path: str) -> str:
+    return path.lower() if _FOLD_CASE else path
 
 
 def _norm(path: str) -> str:
     if not path:
         return path
     if not _WINDOWS:
-        return posixpath.normpath(path)
+        return _fold(posixpath.normpath(path))
     p = path.replace("\\", "/")
     m = _MSYS_DRIVE_RE.match(p)
     if m:
@@ -126,7 +135,7 @@ def _norm(path: str) -> str:
         p = p[:2] + posixpath.normpath("/" + p[2:].lstrip("/"))
     else:
         p = posixpath.normpath(p)
-    return p.lower()
+    return _fold(p)
 
 
 def _isabs(path: str) -> bool:
@@ -137,6 +146,17 @@ def _home() -> str:
     return _norm(os.path.expanduser("~"))
 
 
+def _env_home() -> str:
+    """Windows only: $HOME, which Python's "~" ignores there but Git Bash uses."""
+    return _norm(os.environ.get("HOME", "")) if _WINDOWS else ""
+
+
+def _homes(ctx: _Ctx) -> tuple[str, ...]:
+    if ctx.env_home and ctx.env_home != ctx.home:
+        return (ctx.home, ctx.env_home)
+    return (ctx.home,)
+
+
 def _resolve(arg: str, ctx: _Ctx) -> str | None:
     """Absolute normalized path for an argument, or None when it cannot be
     known statically (variable other than HOME, command substitution)."""
@@ -145,7 +165,8 @@ def _resolve(arg: str, ctx: _Ctx) -> str | None:
     p = arg.replace("\\", "/") if _WINDOWS else arg
     for token in _HOME_TOKENS:
         if p == token or p.startswith(token + "/"):
-            p = ctx.home + p[len(token):]
+            home = (ctx.env_home or ctx.home) if token in ("${HOME}", "$HOME") else ctx.home
+            p = home + p[len(token):]
     if "$" in p:
         return None
     if p == "~" or p.startswith("~/"):
@@ -185,9 +206,10 @@ def _is_temp(path: str) -> bool:
 
 def _credential_kind(path: str, ctx: _Ctx) -> str | None:
     """'credential' for secret stores, None otherwise."""
-    h = ctx.home
-    rel = path[len(h) + 1:] if _inside(h, path) and path != h else None
-    if rel is not None:
+    for h in _homes(ctx):
+        if not _inside(h, path) or path == h:
+            continue
+        rel = path[len(h) + 1:]
         first = rel.split("/", 1)[0]
         if first in {".ssh", ".aws", ".gnupg", ".netrc", ".kube", ".docker", ".azure", ".gcloud"}:
             if first == ".kube" and not rel.startswith(".kube/config"):
@@ -195,7 +217,7 @@ def _credential_kind(path: str, ctx: _Ctx) -> str | None:
             if first == ".docker" and rel != ".docker/config.json":
                 return None
             return "credential"
-        if rel.startswith("Library/Keychains"):
+        if rel.startswith(_fold("Library/Keychains")):
             return "credential"
         if rel.startswith(".config/gcloud") or rel == ".config/gh/hosts.yml":
             return "credential"
@@ -204,7 +226,7 @@ def _credential_kind(path: str, ctx: _Ctx) -> str | None:
             return "credential"
         if rel.startswith(".codex/") and base.startswith("auth"):
             return "credential"
-    if path.startswith("/Library/Keychains") or path.endswith(".keychain") or path.endswith(".keychain-db"):
+    if path.startswith(_fold("/Library/Keychains")) or path.endswith(".keychain") or path.endswith(".keychain-db"):
         return "credential"
     return None
 
@@ -215,12 +237,13 @@ def _is_dotenv(path: str) -> bool:
 
 
 def _agent_config(path: str, ctx: _Ctx) -> bool:
-    h = ctx.home
-    return (
-        _inside(posixpath.join(h, ".claude"), path)
-        and fnmatch.fnmatch(posixpath.basename(path), "settings*.json")
-        and posixpath.dirname(path) == posixpath.join(h, ".claude")
-    ) or path == posixpath.join(h, ".codex", "config.toml")
+    return any(
+        (
+            fnmatch.fnmatch(posixpath.basename(path), "settings*.json")
+            and posixpath.dirname(path) == posixpath.join(h, ".claude")
+        ) or path == posixpath.join(h, ".codex", "config.toml")
+        for h in _homes(ctx)
+    )
 
 
 def _check_path(acc: _Acc, path: str, ctx: _Ctx, *, write: bool, list_only: bool = False) -> None:
@@ -549,9 +572,9 @@ def _check_script_exec(script: str, ctx: _Ctx, acc: _Acc, sub_downloads: set[int
         acc.hit("critical", "download-then-exec", f"executes a file downloaded in the same command: {script}")
         acc.opaque("download-then-exec", "executes a downloaded script")
         return
-    if _inside(ctx.workspace, path) or path.startswith(SYSTEM_BIN_PREFIXES):
+    if _inside(ctx.workspace, path) or path.startswith(tuple(_fold(p) for p in SYSTEM_BIN_PREFIXES)):
         return
-    if _inside(posixpath.join(ctx.home, ".local", "bin"), path):
+    if any(_inside(posixpath.join(h, ".local", "bin"), path) for h in _homes(ctx)):
         return
     acc.opaque("unknown-script", f"executes a script outside the workspace: {path}")
 
@@ -700,7 +723,7 @@ def _classify_rm(
         if _credential_kind(base, ctx) or _credential_kind(path, ctx):
             acc.hit("critical", "credential-access", f"deletes a credential store: {path}")
             continue
-        if base in {"/", ctx.home} or (_WINDOWS and _DRIVE_RE.fullmatch(base.rstrip("/"))) or (ws and _inside(base, ws) and base != ws):
+        if base == "/" or base in _homes(ctx) or (_WINDOWS and _DRIVE_RE.fullmatch(base.rstrip("/"))) or (ws and _inside(base, ws) and base != ws):
             acc.hit("critical", "rm-root-or-home", f"deletes the root, home, or a parent of the workspace: {path}")
             continue
         if ws and _inside(ws, path):
@@ -788,7 +811,7 @@ def _ctx(cwd: str, workspace: str) -> _Ctx:
     home = _home()
     ws = _norm(os.path.expanduser(workspace)) if workspace else ""
     base = _norm(os.path.expanduser(cwd)) if cwd else (ws or home)
-    return _Ctx(cwd=base, workspace=ws, home=home)
+    return _Ctx(cwd=base, workspace=ws, home=home, env_home=_env_home())
 
 
 def _tool_command(tool_input: dict) -> str | None:
@@ -867,11 +890,11 @@ def classify_prompt_text(text: str, *, workspace: str) -> Verdict:
         candidates = [line] + ([m.group(1)] if m else [])
         for cand in candidates:
             sub = _Acc()
-            _classify_script(cand, _Ctx(ctx.cwd, ctx.workspace, ctx.home), sub)
+            _classify_script(cand, _Ctx(ctx.cwd, ctx.workspace, ctx.home, env_home=ctx.env_home), sub)
             if "unbalanced-quotes" in sub.rules:
                 # Prose with apostrophes ("don't ask again"): retry without quotes.
                 sub = _Acc()
-                _classify_script(re.sub(r"[\"'`]", " ", cand), _Ctx(ctx.cwd, ctx.workspace, ctx.home), sub)
+                _classify_script(re.sub(r"[\"'`]", " ", cand), _Ctx(ctx.cwd, ctx.workspace, ctx.home, env_home=ctx.env_home), sub)
             for rule, reason in zip(sub.rules, sub.reasons):
                 if rule != "unbalanced-quotes" and rule not in acc.rules:
                     acc.rules.append(rule)

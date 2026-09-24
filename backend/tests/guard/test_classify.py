@@ -261,7 +261,9 @@ def windows(monkeypatch):
 
     mod = importlib.import_module("agent_team_backend.guard.classify")
     monkeypatch.setattr(mod, "_WINDOWS", True)
+    monkeypatch.setattr(mod, "_FOLD_CASE", True)
     monkeypatch.setattr(mod, "_home", lambda: mod._norm(WIN_HOME))
+    monkeypatch.delenv("HOME", raising=False)
     monkeypatch.delenv("TEMP", raising=False)
     monkeypatch.delenv("TMP", raising=False)
 
@@ -304,3 +306,78 @@ def test_windows_paths(windows, tool, inp, level, rule):
         assert rule in v.rule_ids
     else:
         assert v.parseable
+
+
+@pytest.mark.parametrize(
+    "command, level, rule",
+    [
+        ("cat ~/.ssh/id_rsa", "critical", "credential-access"),
+        ("cat $HOME/.aws/credentials", "critical", "credential-access"),
+        ("cat /d/msys/home/alice/.ssh/id_rsa", "critical", "credential-access"),
+        ("cat D:/msys/home/alice/.claude/.credentials.json", "critical", "credential-access"),
+        ("cat C:/Users/alice/.ssh/id_rsa", "critical", "credential-access"),
+        ("cp x D:/msys/home/alice/.claude/settings.json", "high", "agent-config-write"),
+        ("rm -rf $HOME", "critical", "rm-root-or-home"),
+        ("rm -rf D:/msys/home/alice", "critical", "rm-root-or-home"),
+        ("cat D:/msys/home/alice/notes.txt", "normal", None),
+    ],
+)
+def test_windows_home_and_userprofile_both_count(windows, monkeypatch, command, level, rule):
+    # Git Bash with a custom HOME: both it and %USERPROFILE% hold credentials.
+    monkeypatch.setenv("HOME", r"D:\msys\home\alice")
+    v = classify("Bash", {"command": command}, cwd=WIN_WS, workspace=WIN_WS)
+    assert v.level == level, (command, v)
+    if rule:
+        assert rule in v.rule_ids
+
+
+# ---------------------------------------------------------------- path case
+
+@pytest.fixture()
+def fold_case(monkeypatch):
+    """macOS semantics: default APFS is case-insensitive."""
+    import importlib
+
+    monkeypatch.setattr(importlib.import_module("agent_team_backend.guard.classify"), "_FOLD_CASE", True)
+
+
+@pytest.fixture()
+def keep_case(monkeypatch):
+    """Linux semantics: case-sensitive filesystems."""
+    import importlib
+
+    monkeypatch.setattr(importlib.import_module("agent_team_backend.guard.classify"), "_FOLD_CASE", False)
+
+
+@pytest.mark.parametrize(
+    "tool, inp, level, rule",
+    [
+        ("Bash", {"command": "cat ~/.SSH/id_rsa"}, "critical", "credential-access"),
+        ("Bash", {"command": "ls ~/.Ssh"}, "high", "credential-path-list"),
+        ("Read", {"file_path": "~/.Ssh/config"}, "critical", "credential-access"),
+        ("Read", {"file_path": "/HOME/Tester/.aws/Credentials"}, "critical", "credential-access"),
+        ("Read", {"file_path": "~/.CLAUDE/.Credentials.json"}, "critical", "credential-access"),
+        ("Read", {"file_path": "~/library/keychains/login.keychain-db"}, "critical", "credential-access"),
+        ("Edit", {"file_path": ".GIT/hooks/pre-push"}, "high", "git-hooks-write"),
+        ("Edit", {"file_path": ".github/Workflows/ci.yml"}, "high", "ci-workflow-write"),
+        ("Write", {"file_path": "~/.Claude/Settings.json"}, "high", "agent-config-write"),
+        ("Read", {"file_path": "~/Elsewhere/.ENV"}, "critical", "dotenv-outside-workspace"),
+        ("Read", {"file_path": "/home/tester/PROJ/.env"}, "normal", None),
+        ("Bash", {"command": "rm -rf /home/tester/Proj/node_modules"}, "high", "rm-recursive-in-workspace"),
+        ("Bash", {"command": "/USR/bin/env python3 x.py"}, "normal", None),
+    ],
+)
+def test_case_insensitive_fs_folds_case(fold_case, tool, inp, level, rule):
+    v = classify(tool, inp, cwd=WS, workspace=WS)
+    assert v.level == level, (tool, inp, v)
+    if rule:
+        assert rule in v.rule_ids
+    else:
+        assert v.parseable
+
+
+def test_case_sensitive_fs_keeps_case(keep_case):
+    # ~/.SSH is a different directory from ~/.ssh on a case-sensitive filesystem.
+    assert sh("cat ~/.SSH/id_rsa").level == "normal"
+    assert sh("cat ~/.ssh/id_rsa").level == "critical"
+    assert sh("rm -rf /home/tester/Proj/x").level == "critical"
