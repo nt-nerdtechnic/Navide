@@ -147,6 +147,31 @@ def test_evaluate_past_its_budget_fails_open(guard, monkeypatch) -> None:
     assert elapsed < 0.45
 
 
+def test_a_fail_open_is_announced_to_the_window(guard, monkeypatch) -> None:
+    announced = []
+    monkeypatch.setattr(guard_hooks, "_announce_failure", lambda pane, reason: announced.append((pane, reason)))
+    monkeypatch.setattr(guard_hooks, "EVALUATE_BUDGET_S", 0.1)
+    guard.answer = lambda **kw: (time.sleep(0.5), FakeDecision("deny"))[1]
+    assert asyncio.run(
+        guard_hooks.respond("claude", CLAUDE_BASH, pane_id="p", cwd="/w", workspace="/w")
+    ) is None
+    assert announced == [("p", "Navide Guard error, allowed: no decision within 0.1s")]
+
+
+def test_announcing_a_fail_open_never_raises(monkeypatch) -> None:
+    # The guard package itself unimportable: the announcement is best effort.
+    monkeypatch.setitem(sys.modules, "agent_team_backend.guard", None)
+    guard_hooks._announce_failure("p", "x")
+
+
+def test_decision_body_is_ascii_json(client, guard) -> None:
+    # Reasons carry non-ASCII ("—", CJK paths); the hook's shell must not re-encode them.
+    guard.answer = lambda **kw: FakeDecision("ask", reason="rm ~/專案 — confirm locally")
+    resp = _post(client, "claude", CLAUDE_BASH)
+    assert resp.content.isascii()
+    assert "專案" in resp.json()["hookSpecificOutput"]["permissionDecisionReason"]
+
+
 def test_guard_not_importable_fails_open(client, monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "agent_team_backend.guard", None)
     monkeypatch.delattr(agent_team_backend, "guard", raising=False)

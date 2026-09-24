@@ -381,3 +381,20 @@ def test_case_sensitive_fs_keeps_case(keep_case):
     assert sh("cat ~/.SSH/id_rsa").level == "normal"
     assert sh("cat ~/.ssh/id_rsa").level == "critical"
     assert sh("rm -rf /home/tester/Proj/x").level == "critical"
+
+
+def test_deep_nesting_still_screens_the_words():
+    for depth in (7, 12):
+        cmd = "$(" * depth + "rm -rf ~" + ")" * depth
+        v = classify("bash", {"command": cmd}, cwd=WS, workspace=WS)
+        assert v.level == "critical" and not v.parseable, depth
+
+
+def test_oversized_command_is_graded_without_parsing():
+    import time
+
+    cmd = "echo " + "a" * 1_000_000 + " ; rm -rf ~"
+    started = time.monotonic()
+    v = classify("bash", {"command": cmd}, cwd=WS, workspace=WS)
+    assert time.monotonic() - started < 1.0
+    assert v.level == "high" and not v.parseable and "too-long" in v.rule_ids

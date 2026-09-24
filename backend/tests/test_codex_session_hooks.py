@@ -151,7 +151,7 @@ def test_hook_preserves_all_custom_session_hook_override_shapes(tmp_path):
 
 def test_windows_hook_script_keeps_unicode_stdin(monkeypatch):
     import base64
-    monkeypatch.setattr(hooks.osplat, 'platform_id', 'windows')
+    monkeypatch.setattr(hooks.osplat, 'platform_id', 'win32')
     command=hooks.hook_command()
     script=base64.b64decode(command.rsplit(' ',1)[1]).decode('utf-16-le')
     assert '[Console]::InputEncoding = [Text.UTF8Encoding]::new($false)' in script
@@ -169,7 +169,7 @@ def test_native_hook_posts_unicode_payload_and_launch_header(tmp_path, monkeypat
     if hooks.osplat.paths.resolve_program('curl') is None:
         pytest.skip('curl is unavailable for the Codex hook')
     entry = {'command':hooks.hook_command()}
-    if hooks.osplat.platform_id == 'windows':
+    if hooks.osplat.platform_id == 'win32':
         entry['shell'] = 'powershell'
     argv = hook_shell.shell_argv(entry)
     received = []
@@ -277,3 +277,11 @@ def test_an_unreadable_store_leaves_the_hook_injected(tmp_path, monkeypatch):
     monkeypatch.setattr(hooks, '_hooks_state', lambda: {})
     assert hooks.trust_gate_blocks_injection() is False
     assert 'hooks.SessionStart' in _wire(tmp_path)[0]
+
+
+def test_windows_hooks_are_powershell_on_the_real_platform_id(monkeypatch):
+    # osplat.platform_id is "win32" on Windows, never "windows"; a branch on the
+    # latter is dead code and ships the sh script to PowerShell.
+    monkeypatch.setattr(hooks.osplat, 'platform_id', 'win32')
+    assert hooks.hook_command().startswith('powershell.exe ')
+    assert hooks.guard_hook_command().startswith('powershell.exe ')

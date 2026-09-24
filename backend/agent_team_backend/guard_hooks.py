@@ -53,9 +53,11 @@ qwen — qwenlm.github.io/qwen-code-docs/en/users/features/hooks. Payload:
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 log = logging.getLogger("agent_team_backend.guard_hooks")
@@ -67,6 +69,11 @@ VENDORS = frozenset({"claude", "codex", "copilot", "qwen"})
 #: timeout; answering by 5s keeps a slow guard from ever reaching either, which
 #: matters most for copilot, where a hook timeout silently allows.
 EVALUATE_BUDGET_S = 5.0
+
+#: Decisions get their own threads: queued behind other work on the loop's
+#: shared default executor they could spend the whole budget waiting and
+#: fail open without ever being evaluated.
+_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="navide-guard")
 
 _ACTION_RANK = {"allow": 0, "ask": 1, "deny": 2}
 
@@ -187,12 +194,26 @@ async def respond(
     """decide + render with the local fail-open rule applied."""
     try:
         decision = await asyncio.wait_for(
-            asyncio.to_thread(
-                decide, vendor, payload, pane_id=pane_id, cwd=cwd, workspace=workspace
+            asyncio.get_running_loop().run_in_executor(
+                _EXECUTOR,
+                functools.partial(decide, vendor, payload, pane_id=pane_id, cwd=cwd, workspace=workspace),
             ),
             timeout=EVALUATE_BUDGET_S,
         )
     except Exception as err:  # noqa: BLE001 - fail-open for local panes (Phase 0)
         log.warning("guard %s pretooluse failed open for pane %r: %r", vendor, pane_id, err)
+        why = f"no decision within {EVALUATE_BUDGET_S:g}s" if isinstance(err, TimeoutError) else repr(err)
+        _announce_failure(pane_id, f"Navide Guard error, allowed: {why}")
         return None
     return render(vendor, decision) if decision is not None else None
+
+
+def _announce_failure(pane_id: str, reason: str) -> None:
+    """Tell the window a call went through undecided; never raises (the guard
+    itself may be what is broken)."""
+    try:
+        from .guard.engine import _emit_failure
+
+        _emit_failure(pane_id, reason)
+    except Exception:  # noqa: BLE001
+        log.warning("guard: could not announce a fail-open", exc_info=True)

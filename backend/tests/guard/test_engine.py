@@ -134,6 +134,32 @@ def test_fail_mode(monkeypatch):
     assert d.action == "allow" and "guard-error" in d.rule_ids
 
 
+def test_fail_open_is_announced(monkeypatch):
+    from agent_team_backend.guard import engine
+
+    events = []
+    monkeypatch.setattr(runtime, "emit", lambda t, p: events.append((t, p)))
+    monkeypatch.setattr(engine, "classify", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("kaput")))
+    run("ls", source="local", pane="p7")
+    run("ls", source="relay", pane="p8")
+    assert [(p["pane_id"], p["action"], p["reason"]) for _t, p in events] == [
+        ("p7", "error", "Navide Guard error, allowed: kaput"),
+        ("p8", "deny", "Navide Guard error, denied: kaput"),
+    ]
+
+
+def test_bookkeeping_failure_keeps_the_decision(guard_store, monkeypatch):
+    import sqlite3
+
+    def locked(*_a, **_k):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(guard_store, "audit_add", locked)
+    monkeypatch.setattr(runtime, "emit", locked)
+    d = run("rm -rf ~")
+    assert (d.level, d.action) == ("critical", "ask") and "guard-error" not in d.rule_ids
+
+
 def test_taint_persists_across_store_instances(tmp_path):
     db_path = tmp_path / "persist.db"
     runtime.set_store_for_test(GuardStore(Database(db_path)))
@@ -173,3 +199,12 @@ def test_taint_affects_only_its_pane():
     mark_tainted("p1", "agent")
     assert run("git push", pane="p1").action == "ask"
     assert run("git push", pane="p2").action == "allow"
+
+
+def test_taint_list_names_the_current_pane_id():
+    from agent_team_backend.guard.taint import list_tainted
+
+    mark_tainted("old-id", "remote", "chat")
+    agent_messaging.register("new-id", "p", "/ws/alpha", agent_key="claude")
+    agent_messaging.add_aliases("new-id", ["old-id"], "/ws/alpha")
+    assert [r["pane_id"] for r in list_tainted()] == ["new-id"]

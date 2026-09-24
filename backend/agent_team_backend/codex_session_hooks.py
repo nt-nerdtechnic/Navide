@@ -36,7 +36,7 @@ def resume_identity(value: str) -> str:
 
 
 def hook_command() -> str:
-    if osplat.platform_id == 'windows':
+    if osplat.platform_id == 'win32':
         script = '''[Console]::InputEncoding = [Text.UTF8Encoding]::new($false)
 $OutputEncoding = [Text.UTF8Encoding]::new($false)
 if (-not $env:NAVIDE_CODEX_LAUNCH) { exit 0 }; try {
@@ -63,7 +63,7 @@ def guard_hook_command() -> str:
     SessionStart hook above, but the response body is printed — it is the
     decision (guard_hooks.render). Every failure leaves stdout empty and the
     exit 0, which Codex reads as no decision."""
-    if osplat.platform_id == 'windows':
+    if osplat.platform_id == 'win32':
         script = '''[Console]::InputEncoding = [Text.UTF8Encoding]::new($false)
 $OutputEncoding = [Text.UTF8Encoding]::new($false)
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)

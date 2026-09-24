@@ -27,6 +27,9 @@ from .. import osplat
 
 LEVEL_ORDER = {"normal": 0, "high": 1, "critical": 2}
 
+#: Longer shell commands are graded without being parsed (see classify()).
+MAX_COMMAND_CHARS = 64_000
+
 SHELL_TOOLS = {
     "shell", "bash", "exec", "exec_command", "local_shell", "run_shell_command",
     "shell_command", "run_command", "terminal", "powershell",
@@ -427,6 +430,14 @@ def _unwrap(argv: list[str], acc: _Acc) -> tuple[list[str], bool]:
 def _classify_script(text: str, ctx: _Ctx, acc: _Acc, depth: int = 0) -> None:
     if depth > 6:
         acc.opaque("nesting-too-deep", "command nests too deeply to analyse")
+        # Still screen the words, flattened: without this, wrapping `rm -rf ~`
+        # in seven $( ) hid it entirely.
+        try:
+            pipelines = _split(re.sub(r"\$\(|[`()]", " ", text))
+        except ValueError:
+            return
+        for pipeline in pipelines:
+            _classify_pipeline(pipeline, ctx, acc, set(), depth)
         return
     flat, subs = _extract_substitutions(text)
     try:
@@ -847,7 +858,12 @@ def classify(tool: str, tool_input: dict, *, cwd: str, workspace: str) -> Verdic
         if command and name == "powershell":
             # A backslash separates paths in PowerShell rather than escaping; '/' is equivalent there.
             command = command.replace("\\", "/")
-        if command:
+        if command and len(command) > MAX_COMMAND_CHARS:
+            # shlex is quadratic in a token's length: a padded command took
+            # longer than the hook's budget and so failed open unexamined.
+            acc.hit("high", "too-long", f"command is longer than {MAX_COMMAND_CHARS} characters")
+            acc.opaque("too-long", "command is too long to analyse")
+        elif command:
             _classify_script(command, ctx, acc)
     elif name in WRITE_TOOLS or name in READ_TOOLS:
         for raw in _tool_paths(tool_input):

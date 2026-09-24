@@ -833,6 +833,22 @@ def _refuse_unresumable_session(
     }
 
 
+
+def _taint_spawned(caller: _Caller, pane_id: str) -> None:
+    """Navide Guard: a spawned pane's task is typed by the window, not sent
+    through _dispatch_delivery, so it would start unmarked. A tainted pane (or
+    an MCP client) must not launder its instructions through a fresh pane."""
+    if not pane_id:
+        return
+    from agent_team_backend.guard.taint import is_tainted, safe_mark_tainted
+
+    try:
+        inherits = caller.kind == "external" or (caller.kind == "pane" and is_tainted(caller.pane_id))
+    except Exception:  # noqa: BLE001 - marking only adds friction, so fail closed
+        inherits = True
+    if inherits:
+        safe_mark_tainted(pane_id, "agent", f"opened by {caller.pane_id or caller.kind}")
+
 @server.tool()
 async def cli_open_agent(
     agent: str,
@@ -1115,6 +1131,7 @@ async def cli_open_agent(
     if not verdict.get("ok"):
         _pending_kickoffs.pop(request_id, None)
         return {"ok": False, "error": str(verdict.get("error") or "spawn refused")}
+    _taint_spawned(caller, str(verdict.get("pane_id") or ""))
     # The pane exists; now the task. Waited for here rather than reported by
     # message: the caller acts on this answer, and "ok" alone was taken as
     # "delivered" by every caller that got it.

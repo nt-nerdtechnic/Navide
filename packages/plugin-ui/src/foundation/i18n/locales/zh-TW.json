@@ -8985,7 +8985,8 @@
     },
     "notice": {
       "denied": "Navide Guard 已拒絕一個動作：{reason}",
-      "asked": "Navide Guard 要求你確認：{reason}"
+      "asked": "Navide Guard 要求你確認：{reason}",
+      "failedOpen": "Navide Guard 無法檢查一個動作，已放行：{reason}"
     },
     "error": {
       "generic": "發生錯誤，請再試一次。"

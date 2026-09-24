@@ -76,6 +76,18 @@ describe('useGuard', () => {
     expect(useNotify().toasts.value[0].type).toBe('error')
   })
 
+  it('announces a fail-open (action error) as an error notice', async () => {
+    const mock = createMockBackend('connected')
+    seed(mock)
+    useGuard(mock.backend)
+    await flush()
+    mock.emit('guard.decision', { pane_id: 'p1', action: 'error', level: 'normal', reason: 'Navide Guard error, allowed: no decision within 5s', excerpt: '' })
+    await flush()
+    const toast = useNotify().toasts.value[0]
+    expect(toast.message).toBe('Navide Guard could not check an action and let it run: Navide Guard error, allowed: no decision within 5s')
+    expect(toast.type).toBe('error')
+  })
+
   it('sends mutations with the contract payloads', async () => {
     const mock = createMockBackend('connected')
     seed(mock)

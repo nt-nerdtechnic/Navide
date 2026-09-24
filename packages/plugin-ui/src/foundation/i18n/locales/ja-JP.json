@@ -8985,7 +8985,8 @@
     },
     "notice": {
       "denied": "Navide Guard が操作を拒否しました：{reason}",
-      "asked": "Navide Guard が確認を求めています：{reason}"
+      "asked": "Navide Guard が確認を求めています：{reason}",
+      "failedOpen": "Navide Guard が操作を確認できなかったため、そのまま実行されました：{reason}"
     },
     "error": {
       "generic": "エラーが発生しました。もう一度お試しください。"

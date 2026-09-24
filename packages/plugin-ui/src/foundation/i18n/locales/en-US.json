@@ -8985,7 +8985,8 @@
     },
     "notice": {
       "denied": "Navide Guard blocked an action: {reason}",
-      "asked": "Navide Guard wants your confirmation: {reason}"
+      "asked": "Navide Guard wants your confirmation: {reason}",
+      "failedOpen": "Navide Guard could not check an action and let it run: {reason}"
     },
     "error": {
       "generic": "Something went wrong. Try again."

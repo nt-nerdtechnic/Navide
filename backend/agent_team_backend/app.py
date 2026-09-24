@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import functools
+import json
 import logging
 import mimetypes
 import os
@@ -2551,7 +2552,9 @@ async def cli_pretooluse_guard_hook(vendor: str, request: Request) -> Response:
     answer = await guard_hooks.respond(
         vendor, payload, pane_id=pane_id or "", cwd=cwd, workspace=ws_path or cwd
     )
-    return JSONResponse(answer) if answer else Response(status_code=200)
+    # ASCII-only JSON: the body goes back through the hook's shell, and a
+    # Windows PowerShell re-encodes native output with the console code page.
+    return Response(json.dumps(answer), media_type="application/json") if answer else Response(status_code=200)
 
 
 @app.post("/hooks/{vendor}")

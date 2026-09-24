@@ -13,6 +13,8 @@ import type { useBackend } from './useBackend'
 export type GuardLevel = 'normal' | 'high' | 'critical'
 export type GuardSource = 'local' | 'relay' | 'remote' | 'agent'
 export type GuardAction = 'allow' | 'ask' | 'deny'
+/** `error`: Guard failed and the call went through undecided (fail-open). */
+export type GuardEventAction = GuardAction | 'error'
 export type GuardHookSupport = 'block' | 'none'
 
 export interface GuardCounts {
@@ -68,7 +70,7 @@ export interface GuardDecision {
 
 export interface GuardDecisionEvent {
   pane_id: string
-  action: GuardAction
+  action: GuardEventAction
   level: GuardLevel
   reason: string
   excerpt: string
@@ -150,9 +152,10 @@ function createGuardStore(backend: Backend) {
 
   function notifyDecision(ev: GuardDecisionEvent): void {
     const t = i18n.global.t
-    const key = ev.action === 'deny' ? 'guard.notice.denied' : 'guard.notice.asked'
+    const key =
+      ev.action === 'deny' ? 'guard.notice.denied' : ev.action === 'error' ? 'guard.notice.failedOpen' : 'guard.notice.asked'
     useNotify().toast(t(key, { reason: ev.reason || t(`guard.level.${ev.level}`) }), {
-      type: ev.action === 'deny' ? 'error' : 'info',
+      type: ev.action === 'ask' ? 'info' : 'error',
       duration: 8000,
     })
   }

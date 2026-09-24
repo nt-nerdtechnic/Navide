@@ -82,4 +82,10 @@ def clear_taint(pane_id: str) -> None:
 
 
 def list_tainted() -> list[dict]:
-    return runtime.store().taint_list()
+    """Rows under each pane's current id: a restored pane's row stays under its
+    former id until a lookup adopts it, and the window only knows the new id."""
+    rows: dict[str, dict] = {}
+    for row in runtime.store().taint_list():
+        pane_id = _canonical(row["pane_id"])
+        rows.setdefault(pane_id, {**row, "pane_id": pane_id})
+    return list(rows.values())

@@ -101,7 +101,20 @@ def evaluate(
         # with a visible warning so a guard bug never wedges every CLI.
         log.warning("guard: evaluate failed (%s): %s", source, err, exc_info=True)
         action = "deny" if source == "relay" else "allow"
-        return Decision(action, "normal", ("guard-error",), f"Navide Guard error, {action}ed: {err}", False)
+        reason = f"Navide Guard error, {'denied' if action == 'deny' else 'allowed'}: {err}"
+        _emit_failure(pane_id, reason, action="deny" if action == "deny" else "error")
+        return Decision(action, "normal", ("guard-error",), reason, False)
+
+
+def _emit_failure(pane_id: str, reason: str, *, action: str = "error") -> None:
+    """Make a guard error visible in the window: "error" = let through
+    undecided (fail-open), "deny" = refused because of it (relay)."""
+    try:
+        runtime.emit("guard.decision", {
+            "pane_id": pane_id, "action": action, "level": "normal", "reason": reason, "excerpt": "",
+        })
+    except Exception:  # noqa: BLE001 - already failing; the log line above stands
+        log.warning("guard: could not report a guard error", exc_info=True)
 
 
 def _evaluate(*, pane_id, vendor, tool, tool_input, cwd, workspace, source) -> Decision:
@@ -120,16 +133,25 @@ def _evaluate(*, pane_id, vendor, tool, tool_input, cwd, workspace, source) -> D
     if not enabled and level != "normal":
         reason = f"guard disabled; {reason}"
     decision = Decision(action, level, rule_ids, reason, tainted)
+    # Bookkeeping must never overturn the decision: an audit write failing
+    # (database is locked) used to raise into evaluate()'s fail-open branch
+    # and turn this ask/deny into an allow.
     if level != "normal" or action != "allow":
-        store.audit_add({
-            "ts": time.time(), "pane_id": pane_id or "", "vendor": vendor or "", "source": source,
-            "tool": tool or "", "excerpt": excerpt, "level": level, "action": action,
-            "rule_ids": rule_ids, "tainted": tainted,
-        })
+        try:
+            store.audit_add({
+                "ts": time.time(), "pane_id": pane_id or "", "vendor": vendor or "", "source": source,
+                "tool": tool or "", "excerpt": excerpt, "level": level, "action": action,
+                "rule_ids": rule_ids, "tainted": tainted,
+            })
+        except Exception:  # noqa: BLE001
+            log.warning("guard: audit write failed; decision %s stands", action, exc_info=True)
     if action != "allow":
-        runtime.emit("guard.decision", {
-            "pane_id": pane_id, "action": action, "level": level, "reason": reason, "excerpt": excerpt,
-        })
+        try:
+            runtime.emit("guard.decision", {
+                "pane_id": pane_id, "action": action, "level": level, "reason": reason, "excerpt": excerpt,
+            })
+        except Exception:  # noqa: BLE001
+            log.warning("guard: decision event failed; decision %s stands", action, exc_info=True)
     return decision
 
 
