@@ -4,6 +4,8 @@
 //! the phrase tables they consult only pick the right character for
 //! one-to-many mappings (头发 → 頭髮); vocabulary is never reworded
 //! (软件 → 軟件, not 軟體). Dictionaries are compiled into the binary.
+//! One exception for Taiwan: s2tw writes 台 as the official 臺 (台湾 → 臺灣,
+//! even 台灣 → 臺灣), but 台 is what people here write, so it is kept.
 
 use std::sync::OnceLock;
 
@@ -38,8 +40,15 @@ impl Script {
             Self::HantTw => (&HANT_TW, BuiltinConfig::S2tw),
             Self::Hans => (&HANS, BuiltinConfig::Tw2s),
         };
-        cell.get_or_init(|| OpenCC::from_config(config).expect("embedded OpenCC config"))
-            .convert(text)
+        let converted = cell
+            .get_or_init(|| OpenCC::from_config(config).expect("embedded OpenCC config"))
+            .convert(text);
+        // Simplified 台 is the same code point, so s2tw is where 臺 comes from.
+        if self == Self::HantTw {
+            converted.replace('臺', "台")
+        } else {
+            converted
+        }
     }
 }
 
@@ -59,11 +68,19 @@ mod tests {
     #[test]
     fn simplified_to_taiwan_traditional() {
         assert_eq!(Script::HantTw.convert("简体中文测试"), "簡體中文測試");
-        assert_eq!(Script::HantTw.convert("台湾"), "臺灣");
         assert_eq!(Script::HantTw.convert("帮我分析项目结构"), "幫我分析項目結構");
         // Taiwan standard glyph forms, not generic OpenCC Traditional.
         assert_eq!(Script::HantTw.convert("为什么"), "為什麼");
         assert_eq!(Script::HantTw.convert("线"), "線");
+    }
+
+    #[test]
+    fn taiwan_keeps_tai() {
+        assert_eq!(Script::HantTw.convert("台湾"), "台灣");
+        assert_eq!(Script::HantTw.convert("台北、台中、台南"), "台北、台中、台南");
+        assert_eq!(Script::HantTw.convert("台灣"), "台灣");
+        // Only 臺 is kept as 台; the other readings of 台 still convert.
+        assert_eq!(Script::HantTw.convert("台风"), "颱風");
     }
 
     #[test]
