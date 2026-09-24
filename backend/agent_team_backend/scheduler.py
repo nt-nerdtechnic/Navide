@@ -7,6 +7,11 @@ window and wait a bounded time for that window's delivery verdict. Nothing here
 writes to a PTY, so the idle gate, echo verification, typing hold and per-pair
 rate limit all apply to a scheduled message just as they do to an agent's.
 
+Every job has an ``owner``. A change made in a Navide window acts as the user,
+who may change any job; an agent (an MCP caller) may change only the jobs it
+created. A job whose creating pane is gone belongs to nobody an agent can act
+as, so only the user can change it — see :func:`may_change`.
+
 It runs only while the backend runs. Slots missed while Navide was closed are
 caught up at most once per job (``catch_up: "once"``) or dropped (``"skip"``).
 
@@ -75,6 +80,11 @@ SKIP_BUDGET = "budget"
 SKIP_TARGET_GONE = "target_gone"
 SKIP_MISSED = "missed"
 SKIP_INTERRUPTED = "interrupted"
+
+
+#: The actor behind a change made in a Navide window.
+USER: dict[str, Any] = {"kind": "user"}
+NOT_OWNER = "SCHEDULER_NOT_OWNER"
 
 
 class JobInvalid(ValueError):
@@ -339,6 +349,70 @@ def normalize_job(raw: Any, existing: dict[str, Any] | None, now_ms: int) -> dic
         "policy": policy,
         "state": state,
     }
+
+
+# ── ownership ───────────────────────────────────────────────────────────────
+
+
+def owner_of(actor: dict[str, Any]) -> dict[str, Any]:
+    """The owner record of a job ``actor`` creates."""
+    if actor.get("kind") == "pane":
+        return {key: actor.get(key, "") for key in ("kind", "pane_id", "pane_name", "workspace")}
+    return {"kind": actor.get("kind") or "external"}
+
+
+def is_agent(who: dict[str, Any] | None) -> bool:
+    """Whether an owner or actor is an agent (anything but the user)."""
+    return (who or USER).get("kind") != "user"
+
+
+def _owner_pane(owner: dict[str, Any]) -> str | None:
+    """The live pane id a pane owner resolves to now, or None once it is gone.
+
+    Resolved through the alias table: reattaching a pane mints a new id, and the
+    job still belongs to the pane the old one became.
+    """
+    from . import agent_messaging
+
+    entry = agent_messaging.current(str(owner.get("pane_id") or ""))
+    return entry.pane_id if entry is not None else None
+
+
+def owner_gone(owner: dict[str, Any]) -> bool:
+    return owner.get("kind") == "pane" and _owner_pane(owner) is None
+
+
+def may_change(actor: dict[str, Any], job: dict[str, Any]) -> bool:
+    """The user may change any job; an agent only a job it created itself."""
+    if not is_agent(actor):
+        return True
+    owner = job.get("owner") or USER
+    if owner.get("kind") == "pane":
+        return actor.get("kind") == "pane" and _owner_pane(owner) == actor.get("pane_id")
+    return owner.get("kind") == "external" and actor.get("kind") == "external"
+
+
+def _not_owner(job: dict[str, Any]) -> dict[str, Any]:
+    owner = job.get("owner") or USER
+    if not is_agent(owner):
+        why = "this job was created by the user"
+    elif owner_gone(owner):
+        why = "the pane that created this job is gone, so only the user can change it now"
+    else:
+        name = owner.get("pane_name") or owner.get("kind")
+        why = f'this job belongs to another agent ("{name}")'
+    return {
+        "ok": False,
+        "code": NOT_OWNER,
+        "error": f"{why}; an agent may only change jobs it created — ask the user to change it "
+        "in Navide's Schedule panel, or create a job of your own",
+        "owner": dict(owner),
+    }
+
+
+def view(job: dict[str, Any]) -> dict[str, Any]:
+    """A job as clients see it: with ``owner_gone`` for a pane owner that is gone."""
+    return {**job, "owner_gone": owner_gone(job.get("owner") or USER)}
 
 
 # ── bridge to the existing delivery path ────────────────────────────────────
@@ -730,17 +804,22 @@ class SchedulerService:
 
     async def _changed(self) -> None:
         try:
-            await self._notify(await self.store.list_jobs())
+            await self._notify([view(job) for job in await self.store.list_jobs()])
         except Exception as err:  # noqa: BLE001 — a notify failure must not stop a run
             log.warning("scheduler.changed broadcast failed: %s", err)
 
     # ── API shared by the WS handlers and the MCP tools ──────────────────
 
     async def list(self) -> dict[str, Any]:
-        return {"ok": True, "jobs": await self.store.list_jobs(), "now": self.now_ms()}
+        jobs = [view(job) for job in await self.store.list_jobs()]
+        return {"ok": True, "jobs": jobs, "now": self.now_ms()}
 
-    async def upsert(self, raw: Any) -> dict[str, Any]:
-        """Create or update a job. Raises :class:`JobInvalid` for a bad definition."""
+    async def upsert(self, raw: Any, actor: dict[str, Any] = USER) -> dict[str, Any]:
+        """Create or update a job on behalf of ``actor``.
+
+        Raises :class:`JobInvalid` for a bad definition; a job ``actor`` may not
+        change answers ``{ok: false, code: SCHEDULER_NOT_OWNER}``.
+        """
         job_id = raw.get("id") if isinstance(raw, dict) else None
         async with self._lock:
             existing = None
@@ -750,27 +829,50 @@ class SchedulerService:
                 existing = await self.store.get_job(job_id)
                 if existing is None:
                     raise JobInvalid(f'unknown job id "{job_id}"')
+                if not may_change(actor, existing):
+                    return _not_owner(existing)
             job = normalize_job(raw, existing, self.now_ms())
+            job["owner"] = existing["owner"] if existing else owner_of(actor)
+            job["updated_by"] = owner_of(actor)
             await self.store.put_job(job)
         self.wake()
-        return {"ok": True, "job": job}
+        return {"ok": True, "job": view(job)}
 
-    async def remove(self, job_id: str) -> dict[str, Any]:
-        async with self._lock:
-            removed = await self.store.delete_job(job_id)
-            entry = self._runs.pop(job_id, None)
-        if entry is not None:
-            entry[0].cancel()
-        if not removed:
-            return {"ok": False, "error": f'unknown job id "{job_id}"'}
-        self.wake()
-        return {"ok": True}
-
-    async def set_enabled(self, job_id: str, enabled: bool) -> dict[str, Any]:
+    async def remove(self, job_id: str, actor: dict[str, Any] = USER) -> dict[str, Any]:
         async with self._lock:
             job = await self.store.get_job(job_id)
             if job is None:
                 return {"ok": False, "error": f'unknown job id "{job_id}"'}
+            if not may_change(actor, job):
+                return _not_owner(job)
+            await self.store.delete_job(job_id)
+            entry = self._runs.pop(job_id, None)
+        if entry is not None:
+            entry[0].cancel()
+        self.wake()
+        return {"ok": True}
+
+    async def adopt(self, job_id: str) -> dict[str, Any]:
+        """Make a job the user's ("make it mine"); only a window calls this."""
+        async with self._lock:
+            job = await self.store.get_job(job_id)
+            if job is None:
+                return {"ok": False, "error": f'unknown job id "{job_id}"'}
+            job["owner"] = dict(USER)
+            job["updated_by"] = dict(USER)
+            job["updated_at"] = self.now_ms()
+            await self.store.put_job(job)
+        return {"ok": True, "job": view(job)}
+
+    async def set_enabled(
+        self, job_id: str, enabled: bool, actor: dict[str, Any] = USER
+    ) -> dict[str, Any]:
+        async with self._lock:
+            job = await self.store.get_job(job_id)
+            if job is None:
+                return {"ok": False, "error": f'unknown job id "{job_id}"'}
+            if not may_change(actor, job):
+                return _not_owner(job)
             state = job["state"]
             if enabled and not job["enabled"]:
                 # Re-enabling never fires a slot that passed while disabled.
@@ -781,11 +883,13 @@ class SchedulerService:
                         return {"ok": False, "error": str(err)}
                 else:
                     state["next_run_at"] = next_run_after(job["schedule"], self.now_ms())
-            await self.store.set_enabled(job_id, enabled, state, self.now_ms())
+            await self.store.set_enabled(
+                job_id, enabled, state, self.now_ms(), updated_by=owner_of(actor)
+            )
         self.wake()
         return {"ok": True}
 
-    async def run_now(self, job_id: str) -> dict[str, Any]:
+    async def run_now(self, job_id: str, actor: dict[str, Any] = USER) -> dict[str, Any]:
         """Start one run immediately, outside the schedule; answers before it ends.
 
         Bypasses the skip gates (the user asked for it) but not the reentry
@@ -796,6 +900,8 @@ class SchedulerService:
             job = await self.store.get_job(job_id)
             if job is None:
                 return {"ok": False, "error": f'unknown job id "{job_id}"'}
+            if not may_change(actor, job):
+                return _not_owner(job)
             if job["state"].get("running_at") is not None:
                 return {"ok": False, "error": "that job is already running"}
             if job["state"].get("backoff_until") is not None:
@@ -827,7 +933,8 @@ def get_service() -> SchedulerService:
 
 async def broadcast_changed(exclude: Any = None) -> None:
     """Push the whole job list to every window (optionally minus the requester)."""
-    await _broadcast_jobs(await get_service().store.list_jobs(), exclude=exclude)
+    jobs = await get_service().store.list_jobs()
+    await _broadcast_jobs([view(job) for job in jobs], exclude=exclude)
 
 
 async def shutdown() -> None:

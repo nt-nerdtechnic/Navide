@@ -10322,6 +10322,22 @@ async def scheduler_set_enabled(session: "Session", msg_id: str, msg_type: str, 
         await scheduler.broadcast_changed(exclude=session)
 
 
+@handler("scheduler.adopt")
+async def scheduler_adopt(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
+    """Make an agent's job the user's ("make it mine"). Deliberately not an MCP
+    tool: it is how the user takes over a job no agent may change any more."""
+    from . import scheduler
+
+    job_id = _scheduler_id(payload)
+    if job_id is None:
+        await _scheduler_bad_request(session, msg_id, msg_type, "scheduler.adopt needs an id")
+        return
+    result = await scheduler.get_service().adopt(job_id)
+    await session.send_json(make_response(msg_id, msg_type, result))
+    if result.get("ok"):
+        await scheduler.broadcast_changed(exclude=session)
+
+
 @handler("scheduler.run_now")
 async def scheduler_run_now(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     """Start one run and answer at once; the run's own start and end reach

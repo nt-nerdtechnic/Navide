@@ -8,6 +8,10 @@ Two tables in the global ``navide.db``:
 - ``scheduler_runs`` — append-only run history, trimmed to the newest
   :data:`RUNS_PER_JOB` rows of a job on every append.
 
+Schema v2 adds ``owner`` (who created the job) and ``updated_by`` (who
+last changed it) to ``scheduler_jobs``. Rows that predate v2 — and any written
+by a downgraded build, which leaves ``owner`` NULL — read as the user's.
+
 Every public method is a coroutine that runs its SQLite work through
 ``asyncio.to_thread``: the scheduler lives on the event loop, and a disk stall
 there freezes every PTY reader and WebSocket send (the 2026-08-24 typing-latency
@@ -30,6 +34,8 @@ _COMPONENT = "scheduler"
 RUNS_PER_JOB = 200
 
 _JSON_COLUMNS = ("schedule", "action", "policy", "state")
+#: The owner of a job saved before owners were recorded.
+LEGACY_OWNER: dict[str, Any] = {"kind": "user", "legacy": True}
 
 
 def _create_scheduler_schema(cur: sqlite3.Cursor) -> None:
@@ -58,8 +64,22 @@ def _create_scheduler_schema(cur: sqlite3.Cursor) -> None:
     cur.execute("CREATE INDEX scheduler_runs_job ON scheduler_runs (job_id, id)")
 
 
+def _add_owners(cur: sqlite3.Cursor) -> None:
+    cur.execute("ALTER TABLE scheduler_jobs ADD COLUMN owner TEXT")
+    cur.execute("ALTER TABLE scheduler_jobs ADD COLUMN updated_by TEXT")
+    cur.execute("UPDATE scheduler_jobs SET owner = ?", (_dumps(LEGACY_OWNER),))
+
+
 def _dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def _loads_or(value: Any, default: Any) -> Any:
+    try:
+        loaded = json.loads(value)
+    except (TypeError, ValueError):
+        return default
+    return loaded if isinstance(loaded, dict) else default
 
 
 def _job_row(row: sqlite3.Row) -> dict[str, Any]:
@@ -75,6 +95,8 @@ def _job_row(row: sqlite3.Row) -> dict[str, Any]:
             job[column] = json.loads(row[column])
         except (TypeError, ValueError):
             job[column] = {}
+    job["owner"] = _loads_or(row["owner"], dict(LEGACY_OWNER))
+    job["updated_by"] = _loads_or(row["updated_by"], None)
     return job
 
 
@@ -96,6 +118,7 @@ class SchedulerStore:
     def __init__(self, db: Database) -> None:
         self.db = db
         db.migrate(_COMPONENT, 1, _create_scheduler_schema)
+        db.migrate(_COMPONENT, 2, _add_owners)
 
     # ── sync bodies (always called through to_thread) ────────────────────
 
@@ -113,16 +136,20 @@ class SchedulerStore:
         with self.db.transaction() as cur:
             cur.execute(
                 "INSERT INTO scheduler_jobs"
-                " (id, name, enabled, created_at, updated_at, schedule, action, policy, state)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                " (id, name, enabled, created_at, updated_at, schedule, action, policy, state,"
+                " owner, updated_by)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                 " ON CONFLICT(id) DO UPDATE SET"
                 " name = excluded.name, enabled = excluded.enabled,"
                 " updated_at = excluded.updated_at, schedule = excluded.schedule,"
-                " action = excluded.action, policy = excluded.policy, state = excluded.state",
+                " action = excluded.action, policy = excluded.policy, state = excluded.state,"
+                " owner = excluded.owner, updated_by = excluded.updated_by",
                 (
                     job["id"], job["name"], int(bool(job["enabled"])),
                     job["created_at"], job["updated_at"],
                     *(_dumps(job[column]) for column in _JSON_COLUMNS),
+                    _dumps(job.get("owner") or LEGACY_OWNER),
+                    _dumps(job["updated_by"]) if job.get("updated_by") else None,
                 ),
             )
 
@@ -133,11 +160,23 @@ class SchedulerStore:
             )
             return cur.rowcount > 0
 
-    def _set_enabled(self, job_id: str, enabled: bool, state: dict[str, Any], now: int) -> bool:
+    def _set_enabled(
+        self, job_id: str, enabled: bool, state: dict[str, Any], now: int,
+        updated_by: dict[str, Any] | None, owner: dict[str, Any] | None,
+    ) -> bool:
+        """``updated_by`` / ``owner`` left None keep their stored value: the
+        scheduler's own disables (a once job's run, expiry) are nobody's edit."""
         with self.db.transaction() as cur:
             cur.execute(
-                "UPDATE scheduler_jobs SET enabled = ?, state = ?, updated_at = ? WHERE id = ?",
-                (int(enabled), _dumps(state), now, job_id),
+                "UPDATE scheduler_jobs SET enabled = ?, state = ?, updated_at = ?,"
+                " updated_by = COALESCE(?, updated_by), owner = COALESCE(?, owner)"
+                " WHERE id = ?",
+                (
+                    int(enabled), _dumps(state), now,
+                    _dumps(updated_by) if updated_by else None,
+                    _dumps(owner) if owner else None,
+                    job_id,
+                ),
             )
             return cur.rowcount > 0
 
@@ -196,8 +235,13 @@ class SchedulerStore:
     async def set_state(self, job_id: str, state: dict[str, Any]) -> bool:
         return await asyncio.to_thread(self._set_state, job_id, state)
 
-    async def set_enabled(self, job_id: str, enabled: bool, state: dict[str, Any], now: int) -> bool:
-        return await asyncio.to_thread(self._set_enabled, job_id, enabled, state, now)
+    async def set_enabled(
+        self, job_id: str, enabled: bool, state: dict[str, Any], now: int,
+        *, updated_by: dict[str, Any] | None = None, owner: dict[str, Any] | None = None,
+    ) -> bool:
+        return await asyncio.to_thread(
+            self._set_enabled, job_id, enabled, state, now, updated_by, owner
+        )
 
     async def delete_job(self, job_id: str) -> bool:
         return await asyncio.to_thread(self._delete_job, job_id)
@@ -210,3 +254,4 @@ class SchedulerStore:
 
     async def count_dispatched_since(self, job_id: str, since: int) -> int:
         return await asyncio.to_thread(self._count_dispatched_since, job_id, since)
+

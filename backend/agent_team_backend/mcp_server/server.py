@@ -6840,18 +6840,48 @@ async def _announce_scheduler() -> None:
     await scheduler.broadcast_changed()
 
 
+def _scheduler_actor(caller: _Caller) -> dict[str, Any]:
+    """Who an MCP caller acts as on a job. A caller with no pane identity (host
+    or external) is one shared "external" agent."""
+    from agent_team_backend import agent_messaging
+
+    if caller.kind != "pane":
+        return {"kind": "external"}
+    me = agent_messaging.get(caller.pane_id)
+    return {
+        "kind": "pane",
+        "pane_id": caller.pane_id,
+        "pane_name": me.name if me is not None else "",
+        "workspace": _caller_workspace(caller),
+    }
+
+
+_CROSS_WORKSPACE = "SCHEDULER_CROSS_WORKSPACE"
+
+
 @server.tool()
 async def scheduler_list(ctx: Context) -> dict[str, Any]:
     """List Navide's scheduled jobs. Returns {ok, jobs, now}.
 
+    Every job is listed, including ones you may not change: `editable` says
+    whether you may (you may change only jobs you created), `owner` says who
+    created it ({kind: "user"}, {kind: "pane", pane_id, pane_name, workspace}
+    or {kind: "external"}), and `owner_gone` is true when the creating pane is
+    gone — such a job is the user's to change now.
+
     Jobs fire only while Navide is running; nothing wakes the machine or the
     app. See scheduler_upsert for the shape of a job.
     """
+    from agent_team_backend.scheduler import may_change
+
     try:
-        _resolve_caller(ctx)
+        caller = _resolve_caller(ctx)
     except CallerUnknown as err:
         return {"ok": False, "error": str(err)}
-    return await _scheduler_service().list()
+    actor = _scheduler_actor(caller)
+    result = await _scheduler_service().list()
+    result["jobs"] = [{**job, "editable": may_change(actor, job)} for job in result["jobs"]]
+    return result
 
 
 @server.tool()
@@ -6879,6 +6909,14 @@ async def scheduler_upsert(job: dict[str, Any], ctx: Context) -> dict[str, Any]:
     "message", text}}. Do not use "every" for a one-off wake-up — it repeats. A
     caller with no pane identity must pass workspace and a target.
 
+    OWNERSHIP. A job you create is yours; you may update, remove, pause/resume
+    or run_now only your own jobs — the user's and other agents' answer {ok:
+    false, code: "SCHEDULER_NOT_OWNER"}; ask the user to change those. If your
+    pane is closed, its jobs keep running but become the user's to change. A
+    pane caller may only target panes in its own workspace (another workspace
+    answers code "SCHEDULER_CROSS_WORKSPACE"); a caller with no pane identity
+    has no own workspace and is not limited this way.
+
     A once job runs a single time, then disables itself whatever the outcome
     (ok, error or skipped); it stays listed with its state. Enabling it again
     after its moment has passed is refused — give it a new at_ms / in_ms.
@@ -6891,7 +6929,8 @@ async def scheduler_upsert(job: dict[str, Any], ctx: Context) -> dict[str, Any]:
     (no `id`) needs name, schedule and action.
 
     A job is {id, name, enabled, created_at, updated_at, schedule, action, policy,
-    state}; times are epoch milliseconds.
+    state, owner, updated_by, owner_gone}; times are epoch milliseconds. owner
+    and updated_by are recorded by Navide; anything sent there is ignored.
 
       schedule — one of:
         {kind: "every",  every_ms, anchor_ms?}   every N ms (60000 .. 7 days),
@@ -6933,22 +6972,35 @@ async def scheduler_upsert(job: dict[str, Any], ctx: Context) -> dict[str, Any]:
             if me is not None:
                 action["pane_name"] = me.name
         job["action"] = action
+        own = agent_messaging._normalize_workspace(_caller_workspace(caller))
+        target = agent_messaging._normalize_workspace(str(action.get("workspace") or ""))
+        if target != own:
+            return {
+                "ok": False,
+                "code": _CROSS_WORKSPACE,
+                "error": f'a pane may only schedule panes in its own workspace ("{own}"), '
+                f'not "{target}" — ask the user, or a pane in that workspace, to schedule it',
+            }
     try:
-        result = await _scheduler_service().upsert(job)
+        result = await _scheduler_service().upsert(job, _scheduler_actor(caller))
     except JobInvalid as err:
         return {"ok": False, "error": str(err)}
-    await _announce_scheduler()
+    if result.get("ok"):
+        await _announce_scheduler()
     return result
 
 
 @server.tool()
 async def scheduler_remove(id: str, ctx: Context) -> dict[str, Any]:
-    """Delete a scheduled job and its run history. Returns {ok} or {ok: false, error}."""
+    """Delete a scheduled job and its run history. Returns {ok} or {ok: false, error}.
+
+    Only a job you created (see scheduler_upsert, OWNERSHIP).
+    """
     try:
-        _resolve_caller(ctx)
+        caller = _resolve_caller(ctx)
     except CallerUnknown as err:
         return {"ok": False, "error": str(err)}
-    result = await _scheduler_service().remove(str(id or ""))
+    result = await _scheduler_service().remove(str(id or ""), _scheduler_actor(caller))
     if result.get("ok"):
         await _announce_scheduler()
     return result
@@ -6960,13 +7012,16 @@ async def scheduler_set_enabled(id: str, enabled: bool, ctx: Context) -> dict[st
 
     Resuming never fires a slot that passed while the job was paused; it waits
     for the next one. Resuming a once job whose moment has passed answers
-    {ok: false, error} — set a new time with scheduler_upsert instead.
+    {ok: false, error} — set a new time with scheduler_upsert instead. Only a
+    job you created (see scheduler_upsert, OWNERSHIP).
     """
     try:
-        _resolve_caller(ctx)
+        caller = _resolve_caller(ctx)
     except CallerUnknown as err:
         return {"ok": False, "error": str(err)}
-    result = await _scheduler_service().set_enabled(str(id or ""), bool(enabled))
+    result = await _scheduler_service().set_enabled(
+        str(id or ""), bool(enabled), _scheduler_actor(caller)
+    )
     if result.get("ok"):
         await _announce_scheduler()
     return result
@@ -6979,13 +7034,14 @@ async def scheduler_run_now(id: str, ctx: Context) -> dict[str, Any]:
     Answers as soon as the run has started, not when it ends — read
     scheduler_runs for the outcome. Refused while that job is already running.
     Clears a failure backoff; the error count resets only if this run succeeds.
-    The run does not move the job's next scheduled slot.
+    The run does not move the job's next scheduled slot. Only a job you created
+    (see scheduler_upsert, OWNERSHIP).
     """
     try:
-        _resolve_caller(ctx)
+        caller = _resolve_caller(ctx)
     except CallerUnknown as err:
         return {"ok": False, "error": str(err)}
-    return await _scheduler_service().run_now(str(id or ""))
+    return await _scheduler_service().run_now(str(id or ""), _scheduler_actor(caller))
 
 
 @server.tool()
