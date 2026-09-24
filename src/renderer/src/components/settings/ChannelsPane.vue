@@ -56,7 +56,6 @@ const expanded = ref<ChannelPlatform | null>(null)
 const busy = ref(false)
 const errorByPlatform = reactive<Partial<Record<ChannelPlatform, string>>>({})
 const drafts = reactive<Partial<Record<ChannelPlatform, Record<string, string>>>>({})
-const relayDrafts = reactive<Partial<Record<ChannelPlatform, boolean>>>({})
 const listError = ref('')
 
 function stateOf(platform: ChannelPlatform): ChannelPlatformState | null {
@@ -114,15 +113,8 @@ function toggleExpanded(platform: ChannelPlatform): void {
     draft[f.key] = typeof v === 'string' ? v : (f.options?.[0] ?? '')
   }
   drafts[platform] = draft
-  relayDrafts[platform] = st?.config.permission_relay !== false
   errorByPlatform[platform] = ''
   expanded.value = platform
-}
-
-function relayValue(platform: ChannelPlatform): boolean {
-  const st = stateOf(platform)
-  if (st?.configured) return st.config.permission_relay !== false
-  return relayDrafts[platform] !== false
 }
 
 async function run(platform: ChannelPlatform | null, op: () => Promise<{ ok: boolean; error?: string }>): Promise<boolean> {
@@ -142,7 +134,9 @@ async function save(spec: ChannelPlatformSpec): Promise<void> {
   const platform = spec.platform
   const st = stateOf(platform)
   const draft = drafts[platform] ?? {}
-  const config: Record<string, unknown> = { ...(st?.config ?? {}), permission_relay: relayValue(platform) }
+  const config: Record<string, unknown> = { ...(st?.config ?? {}) }
+  // The permission relay is always on (Navide Guard screens every chat approval).
+  delete config.permission_relay
   const secret: Record<string, string> = {}
   for (const f of spec.fields) {
     const v = (draft[f.key] ?? '').trim()
@@ -165,15 +159,6 @@ async function save(spec: ChannelPlatformSpec): Promise<void> {
   const sendSecret = Object.keys(secret).length > 0 || !spec.fields.some((f) => f.secret)
   const ok = await run(platform, () => store.configure(platform, config, sendSecret ? secret : undefined))
   if (ok) expanded.value = null
-}
-
-async function setRelay(platform: ChannelPlatform, on: boolean): Promise<void> {
-  const st = stateOf(platform)
-  if (!st?.configured) {
-    relayDrafts[platform] = on
-    return
-  }
-  await run(platform, () => store.configure(platform, { ...st.config, permission_relay: on }))
 }
 
 async function removePlatform(platform: ChannelPlatform): Promise<void> {
@@ -271,19 +256,6 @@ function formatTime(ts: number | null | undefined): string {
                 :placeholder="f.secret && stateOf(spec.platform)?.configured ? t('channels.secret-stored') : ''"
               />
             </label>
-            <div class="ch-relay">
-              <div class="ch-relay-text">
-                <div class="ch-relay-title">{{ t('channels.relay.title') }}</div>
-                <div class="ch-relay-desc">{{ t('channels.relay.desc') }}</div>
-              </div>
-              <ToggleSwitch
-                data-testid="channel-relay"
-                :model-value="relayValue(spec.platform)"
-                :disabled="busy"
-                :aria-label="t('channels.relay.title')"
-                @update:model-value="(v: boolean) => setRelay(spec.platform, v)"
-              />
-            </div>
             <p v-if="errorByPlatform[spec.platform]" class="ch-error" role="alert">{{ errorByPlatform[spec.platform] }}</p>
             <div class="ch-form-actions">
               <button
@@ -415,10 +387,6 @@ function formatTime(ts: number | null | undefined): string {
 }
 .ch-input:hover { border-color: var(--border-strong); }
 .ch-input:focus { outline: none; border-color: var(--accent-focus); }
-.ch-relay { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 10px; border-top: 1px solid var(--border-muted); }
-.ch-relay-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.ch-relay-title { font-size: var(--font-row-title); font-weight: 600; color: var(--text-bright); }
-.ch-relay-desc { font-size: var(--font-row-desc); color: var(--text-secondary); }
 .ch-form-actions { display: flex; align-items: center; gap: 8px; }
 .ch-spacer { flex: 1; }
 

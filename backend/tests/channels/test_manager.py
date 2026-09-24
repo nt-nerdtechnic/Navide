@@ -342,16 +342,15 @@ async def test_held_gone_posts_notice(env: Env, monkeypatch) -> None:
     assert sum("gone" in t for t in env.tg.texts()) == 1
 
 
-async def test_awaiting_posts_notice_once(env: Env) -> None:
-    env.store.upsert_account("telegram", {"permission_relay": False})  # plain-notice path
+async def test_awaiting_posts_relay_prompt_once(env: Env) -> None:
     await env.inbound("go")
     env.fake.verdicts["k1"] = {"status": "delivered"}
     await _until(lambda: MSG_WORKING in env.tg.texts())
     env.fake.states["pane-1"] = {"exists": True, "busy": True, "display_status": "awaiting"}
     env.fake.kind = "question"
-    await _until(lambda: "⏸ pane 等待確認（question）" in env.tg.texts())
+    await _until(lambda: any(t.startswith("⏸ pane 需要確認（question）") for t in env.tg.texts()))
     await asyncio.sleep(0.1)
-    assert env.tg.texts().count("⏸ pane 等待確認（question）") == 1
+    assert sum(t.startswith("⏸ pane 需要確認") for t in env.tg.texts()) == 1
 
 
 async def test_kill_switch_stops_everything(env: Env) -> None:
@@ -503,9 +502,9 @@ async def test_debounce_joins_quick_lines_but_not_stop_words(env: Env, monkeypat
     assert [d[1] for d in env.fake.delivered[1:]] == ["from bob", "later"]
 
 
-async def _awaiting(env: Env, *, relay_on: bool) -> None:
-    # On unless explicitly turned off: the default case is exercised by relay_on=True.
-    if not relay_on:
+async def _awaiting(env: Env, *, stale_off_config: bool = False) -> None:
+    # The relay is always on; a stale ``permission_relay: false`` must not turn it off.
+    if stale_off_config:
         env.store.upsert_account("telegram", {"permission_relay": False})
     await env.inbound("go")
     env.fake.verdicts["k1"] = {"status": "delivered"}
@@ -517,18 +516,17 @@ def _relay_id(env: Env) -> str:
     return next(iter(env.m.relay._by_id))
 
 
-async def test_relay_off_posts_plain_notice_and_yes_is_text(env: Env) -> None:
-    await _awaiting(env, relay_on=False)
-    await _until(lambda: "⏸ pane 等待確認（permission）" in env.tg.texts())
-    assert env.m.relay._by_id == {}
-    await env.inbound("yes abcde")
-    assert env.fake.delivered[-1][1] == "yes abcde" and env.fake.answers == []
+async def test_stale_relay_off_config_is_ignored(env: Env) -> None:
+    await _awaiting(env, stale_off_config=True)
+    await _until(lambda: any(t.startswith("⏸ pane 需要確認") for t in env.tg.texts()))
+    assert env.m.relay._by_id != {}
+    assert "⏸ pane 等待確認（permission）" not in env.tg.texts()
 
 
 async def test_relay_on_prompt_buttons_and_yes(env: Env) -> None:
     import re
 
-    await _awaiting(env, relay_on=True)
+    await _awaiting(env)
     await _until(lambda: any(t.startswith("⏸ pane 需要確認") for t in env.tg.texts()))
     rid = _relay_id(env)
     assert re.fullmatch(r"[a-km-z]{5}", rid)
@@ -555,7 +553,7 @@ async def test_relay_buttons_via_callback_and_question_option(env: Env) -> None:
         return await orig(loc, text, buttons=buttons)
 
     env.tg.send_text = capture
-    await _awaiting(env, relay_on=True)
+    await _awaiting(env)
     await _until(lambda: sent_buttons)
     rid = _relay_id(env)
     assert sent_buttons[0] == [("1. Keep", f"nv1:{rid}:1"), ("2. Discard", f"nv1:{rid}:2")]
@@ -570,7 +568,7 @@ async def test_relay_buttons_via_callback_and_question_option(env: Env) -> None:
 
 
 async def test_relay_rejects_stranger_and_reports_seam_error(env: Env) -> None:
-    await _awaiting(env, relay_on=True)
+    await _awaiting(env)
     await _until(lambda: env.m.relay._by_id)
     rid = _relay_id(env)
     await env.inbound(f"yes {rid}", sender="99")  # not allowlisted: dropped by the gate
@@ -582,7 +580,7 @@ async def test_relay_rejects_stranger_and_reports_seam_error(env: Env) -> None:
 
 async def test_relay_id_expires_when_pane_leaves_awaiting_or_ttl(clocked, monkeypatch) -> None:
     env, clock = clocked
-    await _awaiting(env, relay_on=True)
+    await _awaiting(env)
     clock.t += 1  # the fake clock only moves when told: let the awaiting probe run
     await _until(lambda: env.m.relay._by_id)
     rid = _relay_id(env)
@@ -702,7 +700,7 @@ async def test_alias_sync_never_overwrites_an_existing_binding(env: Env) -> None
 async def test_options_not_starting_with_yes_relay_as_question(env: Env) -> None:
     env.fake.kind = "permission"  # what Claude's AskUserQuestion reports
     env.fake.options = ["Keep it", "Discard"]
-    await _awaiting(env, relay_on=True)
+    await _awaiting(env)
     await _until(lambda: env.m.relay._by_id)
     rid = _relay_id(env)
     text = next(t for t in env.tg.texts() if t.startswith("⏸"))
@@ -714,7 +712,7 @@ async def test_options_not_starting_with_yes_relay_as_question(env: Env) -> None
 async def test_options_starting_with_yes_relay_as_permission(env: Env) -> None:
     env.fake.kind = "question"
     env.fake.options = ["Yes", "Yes, and don't ask again", "No"]
-    await _awaiting(env, relay_on=True)
+    await _awaiting(env)
     await _until(lambda: env.m.relay._by_id)
     rid = _relay_id(env)
     assert f"yes {rid} / no {rid}" in next(t for t in env.tg.texts() if t.startswith("⏸"))
@@ -734,7 +732,7 @@ async def test_permanent_allow_option_is_neither_offered_nor_accepted(env: Env) 
         return await orig(loc, text, buttons=buttons)
 
     env.tg.send_text = capture
-    await _awaiting(env, relay_on=True)
+    await _awaiting(env)
     await _until(lambda: sent_buttons)
     rid = _relay_id(env)
     # Offered options keep their on-screen numbers; the permanent one is left out.
@@ -757,7 +755,7 @@ async def test_yes_refused_when_option_one_is_permanent_allow(env: Env) -> None:
         return await orig(loc, text, buttons=buttons)
 
     env.tg.send_text = capture
-    await _awaiting(env, relay_on=True)
+    await _awaiting(env)
     await _until(lambda: sent_buttons)
     rid = _relay_id(env)
     assert sent_buttons[0] == [("拒絕", f"nv1:{rid}:n")]

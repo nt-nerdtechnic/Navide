@@ -869,9 +869,9 @@ not grant access.
 - Delivery failures (pane gone, not ready, queued too long) are reported in the
   chat instead of being dropped silently.
 
-### Permission relay (on by default)
+### Permission relay (always on)
 
-Unless `permission_relay` is turned off for a platform, a pane waiting on a permission
+On every configured platform, a pane waiting on a permission
 prompt or a question posts the prompt with a 5-letter request id (a–z without
 `l`) and, where supported, buttons. Reply `yes <id>` / `no <id>`, or
 `<option number> <id>` for a question. Answers are handled before the message
@@ -880,8 +880,8 @@ to; each id is single-use and expires when the pane leaves the prompt or after
 30 minutes. Only vendor-known answer keystrokes are sent — never raw text.
 
 **Security note:** anyone on the allowlist can approve tool calls on your
-machine while the relay is on. Keep the allowlist short and turn the relay off
-for platforms you share with others.
+machine while the relay is on. Keep the allowlist short; Navide Guard refuses
+remote approval of high-risk and critical actions.
 
 ### Same bot token, one consumer
 

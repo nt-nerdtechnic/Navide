@@ -8853,10 +8853,6 @@
       "robot_code": "Robot code"
     },
     "secret-stored": "已儲存 ••••••••（留空則保留原值）",
-    "relay": {
-      "title": "權限提示轉發",
-      "desc": "允許名單內的寄件者可在聊天室回答 pane 的權限提示與提問。"
-    },
     "remove": "移除",
     "save": "儲存",
     "pairing": {
@@ -8876,10 +8872,13 @@
       "unbind": "中斷聊天室連接",
       "where": "連到哪裡？",
       "loading": "載入聊天室中…",
-      "no-locations": "bot 還沒看過任何聊天室。請先把 bot 加入聊天室並發一則訊息。",
       "new-topic": "新開主題「{name}」",
       "use-existing": "使用此聊天室",
-      "open-settings": "聊天室設定…"
+      "kind-group": "群組",
+      "kind-direct": "私訊",
+      "new-topic-short": "新開主題",
+      "no-chats-yet": "先在聊天室傳一則訊息給 bot，這裡就會出現",
+      "manage-chats": "管理聊天室設定"
     },
     "option": {
       "feishu": "飛書（中國）",

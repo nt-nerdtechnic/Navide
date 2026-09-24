@@ -151,7 +151,7 @@ describe('ChannelsPane', () => {
     await tg.get('form').trigger('submit')
     await flushPromises()
     const sent = mock.sent.find((s) => s.type === 'channels.configure')
-    expect(sent?.payload).toEqual({ platform: 'telegram', config: { permission_relay: false } })
+    expect(sent?.payload).toEqual({ platform: 'telegram', config: {} })
   })
 
   it('requires the secret for a new platform and sends it once', async () => {
@@ -168,7 +168,7 @@ describe('ChannelsPane', () => {
     await flushPromises()
     expect(mock.sent.find((s) => s.type === 'channels.configure')?.payload).toEqual({
       platform: 'feishu',
-      config: { domain: 'feishu', permission_relay: true },
+      config: { domain: 'feishu' },
       secret: { app_id: 'cli_x', app_secret: 's3cret' },
     })
   })
@@ -181,7 +181,7 @@ describe('ChannelsPane', () => {
     await flushPromises()
     expect(mock.sent.find((s) => s.type === 'channels.configure')?.payload).toEqual({
       platform: 'imessage',
-      config: { permission_relay: true },
+      config: {},
       secret: {},
     })
   })
@@ -206,15 +206,10 @@ describe('ChannelsPane', () => {
     expect(mock.sent.find((s) => s.type === 'channels.set_global_enabled')?.payload).toEqual({ enabled: false })
   })
 
-  it('toggles permission relay on a configured platform', async () => {
+  it('has no permission-relay switch: the relay is always on', async () => {
     const w = await render()
     const tg = w.get('[data-platform="telegram"]')
     await tg.get('[data-testid="channel-manage"]').trigger('click')
-    await tg.get('[data-testid="channel-relay"]').trigger('click')
-    await flushPromises()
-    expect(mock.sent.find((s) => s.type === 'channels.configure')?.payload).toEqual({
-      platform: 'telegram',
-      config: { permission_relay: true },
-    })
+    expect(tg.find('[data-testid="channel-relay"]').exists()).toBe(false)
   })
 })

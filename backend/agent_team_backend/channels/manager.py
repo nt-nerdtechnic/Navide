@@ -741,7 +741,9 @@ class ChannelManager:
 
     def _relay_enabled(self, platform: str) -> bool:
         acct = self.store.accounts().get(platform)
-        return bool(acct) and acct["config"].get("permission_relay") is not False
+        # Always on: every chat approval is screened by Navide Guard (Phase C), so there
+        # is no per-platform switch; a stale ``permission_relay: false`` is ignored.
+        return bool(acct)
 
     async def _handle_relay_answer(self, msg: InboundMessage, answer: relay.RelayAnswer) -> None:
         request = self.relay.take(answer.request_id)

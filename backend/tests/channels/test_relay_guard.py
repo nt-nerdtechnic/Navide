@@ -32,7 +32,7 @@ async def _request(env: Env, prompt: str, *, kind: str = "permission", options=N
     env.fake.prompt = prompt
     env.fake.kind = kind
     env.fake.options = options or []
-    await _awaiting(env, relay_on=True)
+    await _awaiting(env)
     await _until(lambda: env.m.relay._by_id)
     return _relay_id(env)
 

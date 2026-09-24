@@ -6,6 +6,7 @@ import {
   channelsKey,
   type ChannelLocation,
   type ChannelPlatform,
+  type ChannelPlatformState,
   type ChannelsStore,
 } from '../composables/useChannels'
 import { guardKey, type GuardStore } from '../composables/useGuard'
@@ -13,8 +14,10 @@ import { vendorRunsYolo } from '../lib/guardYolo'
 
 /**
  * Pane-header entry to chat channels. Unbound: a small button that opens a
- * popover of configured platforms (or Settings → Channels when none is
- * configured). Bound: a chip naming the platform and chat, with ✕ to unbind.
+ * popover listing every chat the configured, connected platforms know, grouped
+ * by platform; one click binds the pane (or Settings → Channels opens when no
+ * platform is configured). Bound: a chip naming the platform and chat, with ✕
+ * to unbind.
  */
 const props = defineProps<{
   paneId: string
@@ -36,9 +39,18 @@ const binding = computed(() => store?.bindingFor(props.paneId) ?? null)
 const open = ref(false)
 const busy = ref(false)
 const error = ref('')
-const picked = ref<ChannelPlatform | null>(null)
-const locations = ref<ChannelLocation[]>([])
-const loadingLocations = ref(false)
+interface PlatformGroup {
+  platform: ChannelPlatform
+  identity: string
+  /** Status text when the platform cannot be bound to right now; empty when connected. */
+  unavailable: string
+  loading: boolean
+  error: string
+  locations: ChannelLocation[]
+}
+const groups = ref<PlatformGroup[]>([])
+// Bumped per open, so a slow `channels.locations` reply from an earlier open is dropped.
+let loadSeq = 0
 const btnRef = ref<HTMLElement | null>(null)
 const popRef = ref<HTMLElement | null>(null)
 const popStyle = ref<Record<string, string>>({})
@@ -54,6 +66,44 @@ function platformName(platform: string): string {
 
 function canCreate(platform: ChannelPlatform): boolean {
   return store?.platformState(platform)?.capabilities?.create_location === true
+}
+
+// Platforms name one-to-one chats differently: Telegram `private`, Slack `im`,
+// Discord `dm`, Mattermost `D`, the rest `direct`.
+const DIRECT_KINDS = new Set(['direct', 'dm', 'private', 'im', 'D'])
+function kindLabel(loc: ChannelLocation): string {
+  return t(DIRECT_KINDS.has(loc.kind) ? 'channels.pane.kind-direct' : 'channels.pane.kind-group')
+}
+
+function unavailableText(p: ChannelPlatformState): string {
+  if (!p.enabled || !store?.enabled.value) return t('channels.status.disabled')
+  if (p.status.connected) return ''
+  return t(`channels.lifecycle.${p.status.lifecycle}`)
+}
+
+async function loadGroups(): Promise<void> {
+  if (!store) return
+  const seq = ++loadSeq
+  groups.value = store.configuredPlatforms.value.map((p) => {
+    const unavailable = unavailableText(p)
+    return { platform: p.platform, identity: p.status.identity, unavailable, loading: !unavailable, error: '', locations: [] }
+  })
+  await Promise.all(
+    groups.value
+      .filter((g) => !g.unavailable)
+      .map(async (g) => {
+        const res = await store.locations(g.platform)
+        if (seq !== loadSeq) return
+        const group = groups.value.find((x) => x.platform === g.platform)
+        if (!group) return
+        group.loading = false
+        if (res.ok) group.locations = res.data?.locations ?? []
+        else group.error = res.error ?? t('channels.error.generic')
+      })
+  )
+  if (seq !== loadSeq || !open.value) return
+  await nextTick()
+  position()
 }
 
 function position(): void {
@@ -77,8 +127,6 @@ async function toggle(): Promise<void> {
     return
   }
   error.value = ''
-  picked.value = null
-  locations.value = []
   unguardedYolo.value =
     !!props.agentKey && guard?.hookSupportFor(props.agentKey) === 'none' && vendorRunsYolo(props.agentKey)
   open.value = true
@@ -86,10 +134,12 @@ async function toggle(): Promise<void> {
   document.addEventListener('keydown', onKeydown, true)
   await nextTick()
   position()
+  await loadGroups()
 }
 
 function close(): void {
   open.value = false
+  loadSeq++
   document.removeEventListener('pointerdown', onPointerDown, true)
   document.removeEventListener('keydown', onKeydown, true)
 }
@@ -109,28 +159,14 @@ function onKeydown(event: KeyboardEvent): void {
 
 onBeforeUnmount(close)
 
-async function pick(platform: ChannelPlatform): Promise<void> {
+async function bind(platform: ChannelPlatform, loc: ChannelLocation, mode: 'new' | 'existing'): Promise<void> {
   if (!store) return
-  picked.value = platform
-  error.value = ''
-  locations.value = []
-  loadingLocations.value = true
-  const res = await store.locations(platform)
-  loadingLocations.value = false
-  if (picked.value !== platform) return
-  if (res.ok) locations.value = res.data?.locations ?? []
-  else error.value = res.error ?? t('channels.error.generic')
-  await nextTick()
-  position()
-}
-
-async function bind(loc: ChannelLocation, mode: 'new' | 'existing'): Promise<void> {
-  if (!store || !picked.value) return
   busy.value = true
+  error.value = ''
   const res = await store.bind({
     pane_id: props.paneId,
     pane_name: props.paneName,
-    platform: picked.value,
+    platform,
     mode,
     chat_id: loc.chat_id,
     ...(mode === 'new' ? { title: props.paneName } : {}),
@@ -197,44 +233,41 @@ function openSettings(): void {
       >
         <div class="pch-pop-head">{{ t('channels.pane.where') }}</div>
         <p v-if="unguardedYolo" class="pch-warn" role="note" data-testid="channel-guard-warning">{{ t('guard.pane.no-hook-warning') }}</p>
-        <template v-if="!picked">
-          <button
-            v-for="p in store.configuredPlatforms.value"
-            :key="p.platform"
-            type="button"
-            class="pch-item"
-            data-testid="channel-platform"
-            :disabled="!p.enabled || !store.enabled.value"
-            @click="pick(p.platform)"
-          >{{ platformName(p.platform) }}<span v-if="p.status.identity" class="pch-sub">{{ p.status.identity }}</span></button>
-        </template>
-        <template v-else>
-          <button type="button" class="pch-back" @click="picked = null">‹ {{ platformName(picked) }}</button>
-          <div v-if="loadingLocations" class="pch-sub">{{ t('channels.pane.loading') }}</div>
-          <div v-else-if="!locations.length" class="pch-sub">{{ t('channels.pane.no-locations') }}</div>
-          <div v-for="loc in locations" :key="loc.chat_id" class="pch-loc" data-testid="channel-location">
-            <div class="pch-loc-title">{{ loc.title || loc.chat_id }}</div>
-            <div class="pch-loc-actions">
-              <button
-                v-if="loc.supports_topics && canCreate(picked)"
-                type="button"
-                class="pch-item"
-                data-testid="channel-bind-new"
-                :disabled="busy"
-                @click="bind(loc, 'new')"
-              >{{ t('channels.pane.new-topic', { name: paneName }) }}</button>
-              <button
-                type="button"
-                class="pch-item"
-                data-testid="channel-bind-existing"
-                :disabled="busy"
-                @click="bind(loc, 'existing')"
-              >{{ t('channels.pane.use-existing') }}</button>
-            </div>
+        <section v-for="g in groups" :key="g.platform" class="pch-group" data-testid="channel-group">
+          <div class="pch-group-head">
+            <span class="pch-mark" aria-hidden="true">{{ platformName(g.platform).charAt(0) }}</span>
+            <span class="pch-group-name">{{ platformName(g.platform) }}</span>
+            <span v-if="g.identity" class="pch-sub pch-ellipsis">{{ g.identity }}</span>
           </div>
-        </template>
+          <div v-if="g.unavailable" class="pch-row pch-row-off" data-testid="channel-platform-off" aria-disabled="true">{{ g.unavailable }}</div>
+          <div v-else-if="g.loading" class="pch-sub">{{ t('channels.pane.loading') }}</div>
+          <p v-else-if="g.error" class="pch-error" role="alert">{{ g.error }}</p>
+          <div v-else-if="!g.locations.length" class="pch-sub" data-testid="channel-no-chats">{{ t('channels.pane.no-chats-yet') }}</div>
+          <div v-for="loc in g.locations" :key="loc.chat_id" class="pch-loc" data-testid="channel-location">
+            <button
+              type="button"
+              class="pch-row"
+              data-testid="channel-bind-existing"
+              :disabled="busy"
+              :title="t('channels.pane.use-existing')"
+              @click="bind(g.platform, loc, 'existing')"
+            >
+              <span class="pch-loc-title pch-ellipsis">{{ loc.title || loc.chat_id }}</span>
+              <span class="pch-kind">{{ kindLabel(loc) }}</span>
+            </button>
+            <button
+              v-if="loc.supports_topics && canCreate(g.platform)"
+              type="button"
+              class="pch-new"
+              data-testid="channel-bind-new"
+              :disabled="busy"
+              :title="t('channels.pane.new-topic', { name: paneName })"
+              @click="bind(g.platform, loc, 'new')"
+            >{{ t('channels.pane.new-topic-short') }}</button>
+          </div>
+        </section>
         <p v-if="error" class="pch-error" role="alert">{{ error }}</p>
-        <button type="button" class="pch-link" @click="openSettings">{{ t('channels.pane.open-settings') }}</button>
+        <button type="button" class="pch-link pch-foot" data-testid="channel-manage" @click="openSettings">{{ t('channels.pane.manage-chats') }}</button>
       </div>
     </Teleport>
   </span>
@@ -253,14 +286,25 @@ function openSettings(): void {
 .pch-chip-x:hover { opacity: 1; }
 .pch-pop { position: fixed; z-index: 300; box-sizing: border-box; width: 300px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow: auto; display: flex; flex-direction: column; gap: 4px; background: var(--bg-overlay); border: 1px solid var(--border-default); border-radius: 8px; padding: 10px 12px; box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45); font-size: var(--font-2xs); color: var(--text-secondary); }
 .pch-pop-head { font-weight: 600; color: var(--text-bright); margin-bottom: 2px; }
-.pch-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; font: inherit; text-align: left; color: var(--text-primary); background: var(--bg-subtle); border: 1px solid var(--border-muted); border-radius: var(--radius-xs); padding: 4px 8px; cursor: pointer; }
-.pch-item:hover:not(:disabled) { border-color: var(--border-default); }
-.pch-item:disabled { opacity: 0.5; cursor: default; }
 .pch-sub { color: var(--text-secondary); }
-.pch-back, .pch-link { font: inherit; text-align: left; color: var(--accent-fg); background: transparent; border: none; padding: 2px 0; cursor: pointer; }
-.pch-loc { display: flex; flex-direction: column; gap: 3px; padding: 4px 0; border-top: 1px solid var(--border-muted); }
+.pch-ellipsis { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pch-link { font: inherit; text-align: left; color: var(--accent-fg); background: transparent; border: none; padding: 2px 0; cursor: pointer; }
+.pch-foot { margin-top: 2px; padding-top: 6px; border-top: 1px solid var(--border-muted); }
+.pch-group { display: flex; flex-direction: column; gap: 3px; padding: 4px 0; }
+.pch-group + .pch-group { border-top: 1px solid var(--border-muted); }
+.pch-group-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.pch-group-name { font-weight: 600; color: var(--text-primary); flex-shrink: 0; }
+.pch-mark { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; flex-shrink: 0; font-size: 9px; font-weight: 700; color: var(--accent-fg); background: var(--accent-subtle); border: 1px solid var(--accent-muted); border-radius: 3px; }
+.pch-loc { display: flex; align-items: stretch; gap: 4px; }
+.pch-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex: 1; min-width: 0; font: inherit; text-align: left; color: var(--text-primary); background: var(--bg-subtle); border: 1px solid var(--border-muted); border-radius: var(--radius-xs); padding: 4px 8px; cursor: pointer; }
+.pch-row:hover:not(:disabled) { border-color: var(--border-default); }
+.pch-row:disabled { opacity: 0.5; cursor: default; }
+.pch-row-off { color: var(--text-secondary); opacity: 0.6; cursor: default; }
 .pch-loc-title { color: var(--text-bright); }
-.pch-loc-actions { display: flex; flex-direction: column; gap: 3px; }
+.pch-kind { flex-shrink: 0; color: var(--text-secondary); font-size: var(--font-3xs); }
+.pch-new { flex-shrink: 0; font: inherit; font-size: var(--font-3xs); color: var(--accent-fg); background: transparent; border: 1px solid var(--accent-muted); border-radius: var(--radius-xs); padding: 0 6px; cursor: pointer; }
+.pch-new:hover:not(:disabled) { background: var(--accent-subtle); }
+.pch-new:disabled { opacity: 0.5; cursor: default; }
 .pch-error { margin: 0; color: var(--danger-fg); }
 .pch-warn { margin: 0 0 2px; color: var(--attention-fg); line-height: 1.4; }
 </style>

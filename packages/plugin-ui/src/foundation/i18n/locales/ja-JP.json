@@ -8853,10 +8853,6 @@
       "robot_code": "Robot code"
     },
     "secret-stored": "保存済み ••••••••（空欄のままなら変更なし）",
-    "relay": {
-      "title": "権限プロンプトの転送",
-      "desc": "許可リストの送信者がチャットから pane の権限プロンプトや質問に回答できます。"
-    },
     "remove": "削除",
     "save": "保存",
     "pairing": {
@@ -8876,10 +8872,13 @@
       "unbind": "チャットとの接続を解除",
       "where": "どこに接続しますか？",
       "loading": "チャットを読み込み中…",
-      "no-locations": "bot はまだどのチャットも見ていません。bot をチャットに追加してメッセージを送ってください。",
       "new-topic": "新しいトピック「{name}」",
       "use-existing": "このチャットを使う",
-      "open-settings": "チャット連携の設定…"
+      "kind-group": "グループ",
+      "kind-direct": "DM",
+      "new-topic-short": "新しいトピック",
+      "no-chats-yet": "チャットで bot にメッセージを送ると、ここに表示されます",
+      "manage-chats": "チャット連携の設定を管理"
     },
     "option": {
       "feishu": "Feishu（中国）",

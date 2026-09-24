@@ -1,6 +1,6 @@
 """Permission / question relay (Phase F): answer a pane's awaiting prompt from chat.
 
-On by default per platform; ``permission_relay: false`` turns it off. A request id is 5
+Always on for every configured platform; Navide Guard screens each approval. A request id is 5
 letters a-z without ``l`` (Claude Code channels format) and is single-use: it
 expires when answered, when the pane leaves awaiting, or after 30 minutes.
 

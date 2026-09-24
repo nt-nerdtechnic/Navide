@@ -18,7 +18,12 @@ vi.mock('@navide/plugin-ui/shared', async (importOriginal) => ({
 let wrapper: VueWrapper | undefined
 let mock: ReturnType<typeof createMockBackend>
 
-function seed(opts: { configured: boolean; bound?: boolean }): void {
+function seed(opts: {
+  configured: boolean
+  bound?: boolean
+  extra?: Record<string, unknown>[]
+  locations?: Record<string, unknown>[]
+}): void {
   mock.setResponse('channels.list', {
     ok: true,
     enabled: true,
@@ -30,7 +35,7 @@ function seed(opts: { configured: boolean; bound?: boolean }): void {
           status: { lifecycle: 'ready', connected: true, identity: '@navide_bot' },
           config: {},
           capabilities: { threads: true, create_location: true, edit: true, typing: true, buttons: true, text_limit: 4000 },
-        }]
+        }, ...(opts.extra ?? [])]
       : [],
   })
   mock.setResponse('channels.bindings', {
@@ -44,8 +49,16 @@ function seed(opts: { configured: boolean; bound?: boolean }): void {
   mock.setResponse('channels.bind', { ok: true, binding: {} })
   mock.setResponse('channels.locations', {
     ok: true,
-    locations: [{ chat_id: '-100', title: 'Navide', kind: 'supergroup', supports_topics: true }],
+    locations: opts.locations ?? [{ chat_id: '-100', title: 'Navide', kind: 'supergroup', supports_topics: true }],
   })
+}
+
+const q = (sel: string) => document.querySelector(sel) as HTMLElement | null
+const qa = (sel: string) => Array.from(document.querySelectorAll(sel)) as HTMLElement[]
+
+async function openPopover(w: VueWrapper): Promise<void> {
+  await w.get('[data-testid="channel-connect"]').trigger('click')
+  await flushPromises()
 }
 
 async function render(): Promise<VueWrapper> {
@@ -83,14 +96,90 @@ describe('PaneChannelButton', () => {
     expect(document.querySelector('[data-testid="channel-popover"]')).toBeNull()
   })
 
+  it('lists the known chats on open, without picking a platform first', async () => {
+    seed({
+      configured: true,
+      locations: [
+        { chat_id: '-100', title: 'Navide', kind: 'supergroup', supports_topics: true },
+        { chat_id: '42', title: 'Alice', kind: 'private', supports_topics: false },
+      ],
+    })
+    const w = await render()
+    await openPopover(w)
+    expect(mock.sent.filter((s) => s.type === 'channels.locations').map((s) => s.payload)).toEqual([{ platform: 'telegram' }])
+    const group = q('[data-testid="channel-group"]')!
+    expect(group.textContent).toContain('Telegram')
+    expect(group.textContent).toContain('@navide_bot')
+    const rows = qa('[data-testid="channel-location"]')
+    expect(rows.map((r) => r.textContent)).toEqual([
+      expect.stringContaining('Navide'),
+      expect.stringContaining('Alice'),
+    ])
+    expect(rows[0].textContent).toContain('Group')
+    expect(rows[1].textContent).toContain('DM')
+    // Only the topic-capable group offers a new topic.
+    expect(rows[0].querySelector('[data-testid="channel-bind-new"]')).not.toBeNull()
+    expect(rows[1].querySelector('[data-testid="channel-bind-new"]')).toBeNull()
+  })
+
+  it('loads every connected platform and greys out the ones that are not', async () => {
+    seed({
+      configured: true,
+      extra: [
+        {
+          platform: 'discord', configured: true, enabled: true,
+          status: { lifecycle: 'ready', connected: true, identity: '' }, config: {},
+          capabilities: { threads: true, create_location: false, edit: true, typing: true, buttons: true, text_limit: 2000 },
+        },
+        {
+          platform: 'slack', configured: true, enabled: true,
+          status: { lifecycle: 'blocked', connected: false, identity: '' }, config: {}, capabilities: null,
+        },
+        {
+          platform: 'matrix', configured: true, enabled: false,
+          status: { lifecycle: 'stopped', connected: false, identity: '' }, config: {}, capabilities: null,
+        },
+      ],
+    })
+    const w = await render()
+    await openPopover(w)
+    expect(mock.sent.filter((s) => s.type === 'channels.locations').map((s) => s.payload)).toEqual([
+      { platform: 'telegram' },
+      { platform: 'discord' },
+    ])
+    expect(qa('[data-testid="channel-group"]')).toHaveLength(4)
+    const off = qa('[data-testid="channel-platform-off"]').map((r) => r.textContent)
+    expect(off).toEqual(['Blocked — check the credentials', 'Off'])
+    // Discord cannot create a location, so its topic-capable chat offers no new topic.
+    expect(qa('[data-testid="channel-bind-new"]')).toHaveLength(1)
+  })
+
+  it('hints to message the bot when a connected platform knows no chat yet', async () => {
+    seed({ configured: true, locations: [] })
+    const w = await render()
+    await openPopover(w)
+    expect(q('[data-testid="channel-no-chats"]')?.textContent).toContain('Send the bot a message')
+  })
+
+  it('links to channel settings from the footer', async () => {
+    seed({ configured: true })
+    const w = await render()
+    await openPopover(w)
+    const link = q('[data-testid="channel-manage"]')!
+    expect(link.textContent).toBe('Manage chat settings')
+    link.click()
+    await flushPromises()
+    expect(exec).toHaveBeenCalledWith('workbench.action.openSettingsChannels')
+    expect(q('[data-testid="channel-popover"]')).toBeNull()
+  })
+
   it('binds a new topic named after the pane', async () => {
     seed({ configured: true })
     const w = await render()
-    await w.get('[data-testid="channel-connect"]').trigger('click')
-    ;(document.querySelector('[data-testid="channel-platform"]') as HTMLElement).click()
-    await flushPromises()
-    const newBtn = document.querySelector('[data-testid="channel-bind-new"]') as HTMLElement
-    expect(newBtn.textContent).toContain('api-refactor')
+    await openPopover(w)
+    const newBtn = q('[data-testid="channel-bind-new"]')!
+    expect(newBtn.textContent).toBe('New topic')
+    expect(newBtn.getAttribute('title')).toContain('api-refactor')
     newBtn.click()
     await flushPromises()
     expect(mock.sent.find((s) => s.type === 'channels.locations')?.payload).toEqual({ platform: 'telegram' })
@@ -103,14 +192,13 @@ describe('PaneChannelButton', () => {
   it('binds an existing chat', async () => {
     seed({ configured: true })
     const w = await render()
-    await w.get('[data-testid="channel-connect"]').trigger('click')
-    ;(document.querySelector('[data-testid="channel-platform"]') as HTMLElement).click()
-    await flushPromises()
-    ;(document.querySelector('[data-testid="channel-bind-existing"]') as HTMLElement).click()
+    await openPopover(w)
+    q('[data-testid="channel-bind-existing"]')!.click()
     await flushPromises()
     expect(mock.sent.find((s) => s.type === 'channels.bind')?.payload).toEqual({
       pane_id: 'p1', pane_name: 'api-refactor', platform: 'telegram', mode: 'existing', chat_id: '-100',
     })
+    expect(q('[data-testid="channel-popover"]')).toBeNull()
   })
 
   describe('Guard warning for a CLI Guard cannot block', () => {
