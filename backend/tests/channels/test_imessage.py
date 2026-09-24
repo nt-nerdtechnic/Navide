@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 import stat
+import sys
 from pathlib import Path
 
 import pytest
@@ -142,6 +143,7 @@ async def test_inbound_mapping_skips_history_own_and_reactions(db: ChatDb) -> No
     assert titles["iMessage;+;chat123"] == "Ops"
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="the stub osascript is a POSIX shell script")
 async def test_send_chunks_via_argv_and_filters_self_chat_echo(db: ChatDb, osascript: Path, tmp_path: Path) -> None:
     db.add(3, "x", handle=2, from_me=1, account="E:me@icloud.com")
     adapter = make(db, osascript)

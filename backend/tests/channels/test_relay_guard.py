@@ -13,7 +13,7 @@ from agent_team_backend.db import Database
 from agent_team_backend.guard import runtime
 from agent_team_backend.guard.store import GuardStore
 
-from .test_manager import Env, _awaiting, _relay_id, _until, env, fast_timers  # noqa: F401
+from .test_manager import _MIDS, Env, _awaiting, _relay_id, _until, env, fast_timers  # noqa: F401
 
 CRITICAL = "Bash command\n\n  rm -rf ~\n  Clean up\n\nDo you want to proceed?"
 HIGH = "Bash command\n\n  git push origin feature\n\nDo you want to proceed?"
@@ -40,7 +40,7 @@ async def _request(env: Env, prompt: str, *, kind: str = "permission", options=N
 async def _press(env: Env, data: str) -> None:
     await env.m.handle_inbound(InboundMessage(
         platform="telegram", account="default", chat_id="-100", thread_id="50", sender_id="7",
-        sender_name="alice", text="", message_id=f"cb:{time.monotonic_ns()}", is_direct=False,
+        sender_name="alice", text="", message_id=f"cb:{next(_MIDS)}", is_direct=False,
         ts=time.time(), callback_data=data))
     await env.m.wait_idle()
 

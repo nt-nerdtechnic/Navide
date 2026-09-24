@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import itertools
 import time
 from typing import Any
 
@@ -19,6 +20,9 @@ from agent_team_backend.channels.manager import (
 )
 from agent_team_backend.channels.store import ChannelStore
 from agent_team_backend.db import Database
+
+# Unique per call: time.monotonic_ns() repeats within a ~15.6 ms tick on Windows.
+_MIDS = itertools.count()
 
 
 class FakeAdapter:
@@ -171,7 +175,7 @@ class Env:
     async def inbound(self, text: str, *, sender: str = "7", chat: str = "-100", thread: str = "50",
                       direct: bool = False, mid: str | None = None, platform: str = "telegram",
                       wait: bool = True) -> None:
-        mid = mid or f"m{time.monotonic_ns()}"
+        mid = mid or f"m{next(_MIDS)}"
         await self.m.handle_inbound(InboundMessage(
             platform=platform, account="default", chat_id=chat, thread_id=thread, sender_id=sender,
             sender_name="alice", text=text, message_id=mid, is_direct=direct, ts=time.time()))
@@ -179,8 +183,11 @@ class Env:
             await self.m.wait_idle()
 
     def turn_complete(self, pane_id: str, text: str) -> None:
+        # A turn ending now ended after anything already armed. On Windows, CPython < 3.13's
+        # monotonic clock ticks every ~15.6 ms, so a bare clock() can equal armed_at and the
+        # manager would take this for the turn that was running when the message went in.
         self.m.on_pane_activity(pane_id, {"event_type": "turn_complete", "text": text,
-                                          "ts_monotonic": self.clock()})
+                                          "ts_monotonic": self.clock() + 1e-6})
 
 
 class FakeClock:
