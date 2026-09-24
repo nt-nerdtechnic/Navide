@@ -1,6 +1,6 @@
 """navide.db persistence for the guard: audit log, taint marks, user rules.
 
-Component "guard", schema v1. Only guard_* tables and the ``guard.enabled``
+Component "guard", schema v2. Only guard_* tables and the ``guard.enabled``
 kv key are touched.
 """
 
@@ -16,6 +16,7 @@ from ..db import Database
 COMPONENT = "guard"
 KV_ENABLED = "guard.enabled"
 AUDIT_KEEP = 5000
+TAINT_EVENTS_KEEP = 50  # per pane
 
 
 def _v1(cur: sqlite3.Cursor) -> None:
@@ -41,10 +42,23 @@ def _v1(cur: sqlite3.Cursor) -> None:
     )
 
 
+def _v2(cur: sqlite3.Cursor) -> None:
+    """One row per delivery that marked a pane. ``msg_key`` is the routing key
+    the message log stores as ``correlation_id``, so the text is looked up
+    there instead of being stored twice; empty when the path mints none."""
+    cur.execute(
+        "CREATE TABLE IF NOT EXISTS guard_taint_events ("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT, pane_id TEXT NOT NULL, ts REAL NOT NULL,"
+        " source TEXT NOT NULL, detail TEXT NOT NULL, msg_key TEXT NOT NULL)"
+    )
+    cur.execute("CREATE INDEX IF NOT EXISTS guard_taint_events_pane ON guard_taint_events(pane_id, id)")
+
+
 class GuardStore:
     def __init__(self, db: Database) -> None:
         self._db = db
         db.migrate(COMPONENT, 1, _v1)
+        db.migrate(COMPONENT, 2, _v2)
         self._inserts = 0
 
     # ── enabled ──────────────────────────────────────────────────────
@@ -127,6 +141,38 @@ class GuardStore:
         with self._db.transaction() as cur:
             rows = cur.execute("SELECT * FROM guard_taint ORDER BY since DESC").fetchall()
         return [self._taint_row(r) for r in rows]
+
+    def taint_event_add(self, pane_id: str, ts: float, source: str, detail: str, msg_key: str) -> None:
+        with self._db.transaction() as cur:
+            cur.execute(
+                "INSERT INTO guard_taint_events (pane_id, ts, source, detail, msg_key) VALUES (?,?,?,?,?)",
+                (pane_id, ts, source, detail, msg_key),
+            )
+            cur.execute(
+                "DELETE FROM guard_taint_events WHERE pane_id = ? AND id NOT IN"
+                " (SELECT id FROM guard_taint_events WHERE pane_id = ? ORDER BY id DESC LIMIT ?)",
+                (pane_id, pane_id, TAINT_EVENTS_KEEP),
+            )
+
+    def taint_events(self, pane_ids: list[str]) -> list[dict[str, Any]]:
+        """Newest first."""
+        if not pane_ids:
+            return []
+        with self._db.transaction() as cur:
+            rows = cur.execute(
+                "SELECT id, pane_id, ts, source, detail, msg_key FROM guard_taint_events"
+                f" WHERE pane_id IN ({','.join('?' * len(pane_ids))}) ORDER BY ts DESC, id DESC LIMIT ?",
+                (*pane_ids, TAINT_EVENTS_KEEP),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def taint_events_move(self, old: str, new: str) -> None:
+        with self._db.transaction() as cur:
+            cur.execute("UPDATE guard_taint_events SET pane_id = ? WHERE pane_id = ?", (new, old))
+
+    def taint_events_delete(self, pane_id: str) -> None:
+        with self._db.transaction() as cur:
+            cur.execute("DELETE FROM guard_taint_events WHERE pane_id = ?", (pane_id,))
 
     @staticmethod
     def _taint_row(row: sqlite3.Row) -> dict[str, Any]:

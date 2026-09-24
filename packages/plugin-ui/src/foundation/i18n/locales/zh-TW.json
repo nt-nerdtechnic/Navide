@@ -8979,6 +8979,10 @@
     "pane": {
       "badge": "外部影響",
       "tooltip": "自 {since} 起收過來自{sources}的內容",
+      "console": "收件紀錄",
+      "expand": "顯示全文",
+      "text-missing": "訊息紀錄裡已沒有這段內文",
+      "text-none": "沒有記錄到訊息內文",
       "explain": "它的「高」與「嚴重」動作需要你在這台電腦上確認。確認過它收到的內容後再清除標記。",
       "clear": "清除",
       "no-hook-warning": "這個 CLI 無法被 Guard 阻擋，從聊天室下指令請謹慎"

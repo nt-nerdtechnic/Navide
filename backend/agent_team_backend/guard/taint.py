@@ -5,6 +5,10 @@ pane, or an MCP client is delivered into it; a human typing never marks it.
 The mark lives in navide.db so it survives restarts, and it follows pane-id
 aliases: a pane restored under a new id inherits its former id's mark.
 Only the renderer (``guard.taint.clear`` ws request) clears it.
+
+Every marking delivery is also recorded as an event carrying the message's
+routing key, so the badge can show what was actually sent: the text itself
+stays in the message log and is looked up by that key.
 """
 
 from __future__ import annotations
@@ -42,28 +46,31 @@ def _row(pane_id: str) -> dict | None:
         if prior is not None:
             store.taint_upsert(canonical, prior["sources"], prior["since"], prior["detail"])
             store.taint_delete(old)
+            store.taint_events_move(old, canonical)
             return store.taint_get(canonical)
     return None
 
 
-def mark_tainted(pane_id: str, source: str, detail: str = "") -> None:
+def mark_tainted(pane_id: str, source: str, detail: str = "", msg_key: str = "") -> None:
     if not pane_id:
         return
     canonical = _canonical(pane_id)
     row = _row(canonical)
+    now = time.time()
+    runtime.store().taint_event_add(canonical, now, source, (detail or "")[:200], msg_key or "")
     if row is not None and source in row["sources"]:
         return
     sources = (row["sources"] if row else []) + [source]
-    since = row["since"] if row else time.time()
+    since = row["since"] if row else now
     runtime.store().taint_upsert(canonical, sources, since, (detail or "")[:200])
     if row is None:
         runtime.emit("guard.taint_changed", {"pane_id": canonical, "tainted": True})
 
 
-def safe_mark_tainted(pane_id: str, source: str, detail: str = "") -> None:
+def safe_mark_tainted(pane_id: str, source: str, detail: str = "", msg_key: str = "") -> None:
     """For delivery paths: marking must never break message delivery."""
     try:
-        mark_tainted(pane_id, source, detail)
+        mark_tainted(pane_id, source, detail, msg_key)
     except Exception as err:  # noqa: BLE001
         log.warning("guard: could not mark pane %s tainted: %s", pane_id, err)
 
@@ -77,6 +84,7 @@ def clear_taint(pane_id: str) -> None:
     removed = False
     for pid in {canonical, pane_id, *_former_ids(canonical)}:
         removed = runtime.store().taint_delete(pid) or removed
+        runtime.store().taint_events_delete(pid)
     if removed:
         runtime.emit("guard.taint_changed", {"pane_id": canonical, "tainted": False})
 
@@ -135,3 +143,15 @@ def pipeline_pane_spawned(workspace: str, pane_id: str) -> None:
 def _reset_pipeline_runs_for_test() -> None:
     _ARMED_RUNS.clear()
     _TAINTED_RUNS.clear()
+
+
+def taint_events(pane_id: str) -> list[dict]:
+    """A pane's marking deliveries, newest first, each with the delivered
+    message looked up in the message log by its routing key. ``message`` is
+    None when the path minted no key or the log has pruned the row."""
+    from .. import app
+
+    canonical = _canonical(pane_id)
+    events = runtime.store().taint_events(sorted({canonical, pane_id, *_former_ids(canonical)}))
+    messages = app.agent_message_log.by_correlation([e["msg_key"] for e in events if e["msg_key"]])
+    return [{**e, "message": messages.get(e["msg_key"])} for e in events]

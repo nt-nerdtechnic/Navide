@@ -516,6 +516,31 @@ class AgentMessageLog:
                 return []
         return [dict(row) for row in reversed(found)]
 
+    def by_correlation(self, keys: list[str]) -> dict[str, dict[str, Any]]:
+        """``sender``, ``content`` and ``created_at`` of the newest row per
+        routing key (both windows of a routed message log it under the same
+        key). A key the log has pruned — or a sqlite failure, logged and
+        swallowed — is simply absent from the result."""
+        keys = sorted({str(k) for k in keys if k})[:MAX_ROWS]
+        if not keys:
+            return {}
+        with self._lock:
+            try:
+                with self._db.transaction() as cur:
+                    found = cur.execute(
+                        "SELECT correlation_id, sender, content, created_at FROM agent_message_log"
+                        f" WHERE correlation_id IN ({', '.join('?' * len(keys))})"
+                        " ORDER BY created_at ASC, seq ASC",
+                        keys,
+                    ).fetchall()
+            except sqlite3.Error as err:
+                log.warning("agent message log correlation read failed: %s", err)
+                return {}
+        return {
+            row["correlation_id"]: {"sender": row["sender"], "content": row["content"], "created_at": row["created_at"]}
+            for row in found
+        }
+
     def tail(self, limit: int = MAX_ROWS) -> list[dict[str, Any]]:
         """The most recent rows, newest last — the renderer's array order.
 

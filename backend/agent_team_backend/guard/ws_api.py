@@ -24,7 +24,7 @@ log = logging.getLogger(__name__)
 
 MESSAGE_TYPES = (
     "guard.status", "guard.set_enabled", "guard.rules.list", "guard.rules.add", "guard.rules.remove",
-    "guard.audit.list", "guard.taint.list", "guard.taint.clear", "guard.test",
+    "guard.audit.list", "guard.taint.list", "guard.taint.events", "guard.taint.clear", "guard.test",
 )
 _SOURCES = ("local", "relay", "remote", "agent")
 
@@ -62,6 +62,11 @@ def _dispatch(msg_type: str, payload: dict) -> dict[str, Any]:
                                                           str(pane_id) if pane_id else None)}
     if msg_type == "guard.taint.list":
         return {"ok": True, "panes": taint.list_tainted()}
+    if msg_type == "guard.taint.events":
+        pane_id = str(payload.get("pane_id") or "")
+        if not pane_id:
+            raise ValueError("pane_id is required")
+        return {"ok": True, "events": taint.taint_events(pane_id)}
     if msg_type == "guard.taint.clear":
         pane_id = str(payload.get("pane_id") or "")
         if not pane_id:

@@ -9869,7 +9869,12 @@ async def agent_msg_route(session: "Session", msg_id: str, msg_type: str, payloa
         deliver_payload["reply_to"] = reply_to
     from .guard.taint import safe_mark_tainted
 
-    safe_mark_tainted(result.pane.pane_id, "agent", f"message from {from_display}")
+    safe_mark_tainted(
+        result.pane.pane_id,
+        "agent",
+        f"message from {agent_messaging.readable_sender(from_pane_id, from_display)}",
+        msg_key,
+    )
     asyncio.create_task(app.broadcast(make_event("agent_msg.deliver", deliver_payload)))
     await session.send_json(
         make_response(

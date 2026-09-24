@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, inject, nextTick, onBeforeUnmount, ref } from 'vue'
 import { i18n } from '@navide/plugin-ui/foundation'
-import { guardKey, type GuardStore } from '../composables/useGuard'
+import { guardKey, type GuardStore, type GuardTaintEvent } from '../composables/useGuard'
 
 /**
  * Pane-header badge for a pane Navide Guard marks as influenced by external
@@ -46,6 +46,49 @@ const why = computed(() => {
   return t('guard.pane.tooltip', { sources, since: formatTime(e.since) }) + (e.detail ? ` — ${e.detail}` : '')
 })
 
+// Loaded each time the popover opens: every delivery that marked the pane.
+const events = ref<GuardTaintEvent[] | null>(null)
+const expanded = ref<string[]>([])
+const PREVIEW = 40
+
+function preview(text: string): string {
+  const flat = text.replace(/\s+/g, ' ').trim()
+  return flat.length > PREVIEW ? `${flat.slice(0, PREVIEW)}…` : flat
+}
+
+/** One line per delivery, newest first; `full` is the delivered text when the message log still has it. */
+const consoleLines = computed(() => {
+  const e = entry.value
+  if (!e) return []
+  if (!events.value?.length) {
+    // A mark made before deliveries were recorded, or the list failed to load.
+    return [{ key: 'since', ts: e.since, source: (e.sources ?? []).map(sourceText).join(', '), text: e.detail, full: null as string | null }]
+  }
+  return events.value.map((ev) => {
+    const message = ev.message
+    const text = message
+      ? `${message.sender || ev.detail}: "${preview(message.content)}"`
+      : `${ev.detail} (${t(ev.msg_key ? 'guard.pane.text-missing' : 'guard.pane.text-none')})`
+    return { key: String(ev.id), ts: ev.ts, source: sourceText(ev.source), text, full: message ? message.content : null }
+  })
+})
+
+function clock(ts: number): string {
+  return new Date(ts < 1e12 ? ts * 1000 : ts).toLocaleTimeString(i18n.global.locale.value, { hour12: false })
+}
+
+function toggleLine(key: string): void {
+  expanded.value = expanded.value.includes(key) ? expanded.value.filter((k) => k !== key) : [...expanded.value, key]
+}
+
+async function loadEvents(): Promise<void> {
+  if (!store) return
+  const res = await store.taintEvents(props.paneId)
+  events.value = res.ok ? (res.data?.events ?? []) : []
+  await nextTick()
+  if (open.value) position()
+}
+
 function position(): void {
   const rect = btnRef.value?.getBoundingClientRect()
   const pop = popRef.value
@@ -67,10 +110,13 @@ async function toggle(): Promise<void> {
   document.addEventListener('keydown', onKeydown, true)
   await nextTick()
   position()
+  void loadEvents()
 }
 
 function close(): void {
   open.value = false
+  events.value = null
+  expanded.value = []
   document.removeEventListener('pointerdown', onPointerDown, true)
   document.removeEventListener('keydown', onKeydown, true)
 }
@@ -129,6 +175,23 @@ async function clear(): Promise<void> {
         <div class="pgd-pop-head">{{ t('guard.pane.badge') }}</div>
         <p class="pgd-text">{{ why }}</p>
         <p class="pgd-text">{{ t('guard.pane.explain') }}</p>
+        <details class="pgd-console" data-testid="guard-taint-console">
+          <summary>{{ t('guard.pane.console') }}</summary>
+          <ol>
+            <li v-for="line in consoleLines" :key="line.key">
+              <button
+                v-if="line.full !== null"
+                type="button"
+                class="pgd-line"
+                :title="t('guard.pane.expand')"
+                :aria-expanded="expanded.includes(line.key)"
+                @click="toggleLine(line.key)"
+              >{{ `${clock(line.ts)}  [${line.source}] ${line.text}` }}</button>
+              <span v-else class="pgd-line">{{ `${clock(line.ts)}  [${line.source}] ${line.text}` }}</span>
+              <pre v-if="line.full !== null && expanded.includes(line.key)" class="pgd-full" data-testid="guard-taint-full">{{ line.full }}</pre>
+            </li>
+          </ol>
+        </details>
         <p v-if="error" class="pgd-error" role="alert">{{ error }}</p>
         <div class="pgd-actions">
           <button type="button" class="pgd-btn" @click="close">{{ t('guard.cancel') }}</button>
@@ -159,4 +222,10 @@ async function clear(): Promise<void> {
 .pgd-btn { font: inherit; color: var(--text-primary); background: transparent; border: 1px solid var(--border-default); border-radius: var(--radius-xs); padding: 3px 8px; cursor: pointer; }
 .pgd-btn:disabled { opacity: 0.5; cursor: default; }
 .pgd-btn.primary { background: var(--accent-emphasis); border-color: var(--accent-emphasis); color: var(--text-on-emphasis); }
+.pgd-console summary { cursor: pointer; color: var(--text-bright); }
+/* Lines keep their shape and scroll inside; the popover never widens. */
+.pgd-console ol { list-style: none; margin: 6px 0 0; padding: 6px 8px; max-height: 200px; overflow: auto; background: var(--bg-inset); border-radius: var(--radius-xs); font-family: var(--font-mono); color: var(--text-primary); }
+.pgd-line { display: block; font: inherit; color: inherit; background: none; border: 0; padding: 0; text-align: left; white-space: pre; }
+button.pgd-line { cursor: pointer; text-decoration: underline dotted; }
+.pgd-full { margin: 4px 0 6px; padding: 4px 6px; border-left: 2px solid var(--border-default); font: inherit; white-space: pre-wrap; overflow-wrap: anywhere; }
 </style>

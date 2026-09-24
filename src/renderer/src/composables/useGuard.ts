@@ -53,6 +53,19 @@ export interface GuardTaint {
   detail: string
 }
 
+/** One delivery that marked a pane. `message` is the delivered text, looked up
+ *  in the message log by `msg_key`; null when no key was minted or the log has
+ *  pruned the row. */
+export interface GuardTaintEvent {
+  id: number
+  pane_id: string
+  ts: number
+  source: string
+  detail: string
+  msg_key: string
+  message: { sender: string; content: string; created_at: number } | null
+}
+
 export interface GuardVerdict {
   level: GuardLevel
   rule_ids: string[]
@@ -208,6 +221,7 @@ function createGuardStore(backend: Backend) {
       mutate('guard.rules.add', { kind, pattern, note }, refreshRules),
     removeRule: (id: GuardRule['id']) => mutate('guard.rules.remove', { id }, refreshRules),
     clearTaint: (paneId: string) => mutate('guard.taint.clear', { pane_id: paneId }, refreshTaint),
+    taintEvents: (paneId: string) => call<{ events: GuardTaintEvent[] }>('guard.taint.events', { pane_id: paneId }),
     test: (command: string, source: GuardSource, tainted: boolean) =>
       call<{ verdict: GuardVerdict; decision: GuardDecision }>('guard.test', { command, source, tainted }),
   }

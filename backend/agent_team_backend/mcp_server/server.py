@@ -1650,7 +1650,7 @@ async def _send_to_group(
 async def _dispatch_delivery(
     entry: Any, text: str, *, caller: "_Caller", me: str, cross_workspace: bool,
     reply_to: str = "", kind: str = "", from_display: str = "",
-    origin: str = "", taint_detail: str = "",
+    origin: str = "", taint_detail: str = "", taint_source: str = "agent",
 ) -> str:
     """Hand one message to the windows and record it; returns its msg_key.
 
@@ -1680,11 +1680,12 @@ async def _dispatch_delivery(
     if kind != "ack" and (caller.kind in ("pane", "external") or taint_detail):
         # Navide Guard: text from another agent or an MCP client taints the
         # target. A host caller passes taint_detail when the text is
-        # agent-authored (an agent's scheduled job); chat channels mark at
-        # their own seam.
+        # agent-authored (an agent's scheduled job); a chat channel passes its
+        # own detail with taint_source="remote".
         from agent_team_backend.guard.taint import safe_mark_tainted
 
-        safe_mark_tainted(entry.pane_id, "agent", taint_detail or f"message from {me or caller.kind}")
+        sender_name = agent_messaging.readable_sender(me, from_display) if me else caller.kind
+        safe_mark_tainted(entry.pane_id, taint_source, taint_detail or f"message from {sender_name}", msg_key)
     await app.broadcast(
         make_event(
             "agent_msg.deliver",

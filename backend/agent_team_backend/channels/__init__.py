@@ -39,12 +39,11 @@ def default_seams() -> Seams:
             opened = await mcp._open_placeholder(target)
             if opened.get("ok"):
                 target = opened["pane"]
-        from ..guard.taint import safe_mark_tainted
-
-        safe_mark_tainted(target.pane_id, "remote", f"chat message from {from_display}")
+        # _dispatch_delivery marks the pane for Guard, linked to the msg_key it mints.
         msg_key = await mcp._dispatch_delivery(
             target, text, caller=mcp._Caller(kind="host"), me="",
             cross_workspace=res.cross_workspace, from_display=from_display, origin="channel",
+            taint_detail=f"chat message from {from_display}", taint_source="remote",
         )
         return {"ok": True, "msg_key": msg_key, "pane_id": target.pane_id}
 
