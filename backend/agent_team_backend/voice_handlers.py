@@ -37,6 +37,7 @@ import os
 import re
 import sys
 import tempfile
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -362,21 +363,28 @@ def _new_temp_pcm() -> Path:
     return Path(name)
 
 
+# Serializes temp PCM writes against their cleanup: Windows refuses to delete
+# a file that is still open for writing, so a cleanup landing mid-write would
+# fail and leave the audio on disk.
+_pcm_io_lock = threading.Lock()
+
+
 def _write_pcm(path: Path, pcm: bytes) -> None:
     """Fill the file _new_temp_pcm made. Never creates it: if a cancelled
     caller's cleanup already removed it (the pool has two workers, so that can
-    run first), the audio is not written anywhere; if the cleanup runs mid
-    write, it unlinks the file and the data dies with the descriptor."""
-    try:
-        fd = os.open(path, os.O_WRONLY | os.O_TRUNC)
-    except FileNotFoundError:
-        return
-    with os.fdopen(fd, "wb") as fh:
-        fh.write(pcm)
+    run first), the audio is not written anywhere; a cleanup that arrives
+    mid-write waits for the write, then deletes the file."""
+    with _pcm_io_lock:
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_TRUNC)
+        except FileNotFoundError:
+            return
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(pcm)
 
 
 def _remove(path: Path) -> None:
-    with contextlib.suppress(OSError):
+    with _pcm_io_lock, contextlib.suppress(OSError):
         path.unlink()
 
 

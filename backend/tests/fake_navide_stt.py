@@ -66,6 +66,10 @@ def decode(data: bytes, noise: int | None, noise_all: bool = False, skew: int = 
 
 
 def main() -> int:
+    # The real sidecar speaks UTF-8 on its pipes; Python would use the locale
+    # encoding there (cp1252 on Windows), which cannot write the decoded text.
+    sys.stdin.reconfigure(encoding="utf-8")
+    sys.stdout.reconfigure(encoding="utf-8", newline="\n")
     model = sys.argv[sys.argv.index("--model") + 1]
     mode = os.environ.get("FAKE_STT_MODE", "ok")
     print("fake sidecar starting", file=sys.stderr, flush=True)

@@ -355,6 +355,24 @@ async def _speak(session: _Session, sid: str, blocks: range, pause: float = 0.06
         await asyncio.sleep(pause)
 
 
+async def _speak_in_step(session: _Session, sid: str, blocks: range, timeout: float = 5.0) -> None:
+    """Like _speak, but each partial hears the same amount of new audio: two
+    blocks (the least a partial waits for) go in, then nothing more until the
+    partials have caught up. _speak's pace is wall-clock, so how much audio a
+    partial takes in depends on the machine (and on Windows' 15.6 ms clock);
+    the window size scales with it."""
+    rec = voice_handlers._active
+    assert rec is not None
+    for i in blocks:
+        await _speak(session, sid, range(i, i + 1), pause=0.0)
+        if (i - blocks.start) % 2 == 0:
+            continue
+        deadline = time.monotonic() + timeout
+        while voice_handlers._partial_due(rec) or (rec.partial is not None and not rec.partial.done()):
+            assert time.monotonic() < deadline, "partials did not catch up"
+            await asyncio.sleep(0.01)
+
+
 def _partials(session: _Session) -> list[dict]:
     return [m["payload"] for m in session.sent if m.get("type") == "voice.partial"]
 
@@ -418,7 +436,7 @@ async def test_window_advances_so_each_partial_stays_bounded(
 ) -> None:
     session = _Session()
     sid = (await _send(session, "voice.start", {}))["sessionId"]
-    await _speak(session, sid, range(48))  # 12 s of speech
+    await _speak_in_step(session, sid, range(48))  # 12 s of speech
     await asyncio.sleep(0.2)
     await _settle(session)
     assert voice_handlers._active.win_start > 0
@@ -496,6 +514,53 @@ async def test_cancel_during_the_temp_write_leaves_no_audio(
     await _send(session, "voice.cancel", {"sessionId": sid})
     await asyncio.sleep(0.6)
     assert not list(voice.glob("navide-voice-*.pcm"))
+
+
+def test_cleanup_during_the_temp_write_still_deletes_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Windows refuses to delete a file that is open (the write's descriptor
+    # does not share delete access), so a cleanup landing mid-write must wait
+    # for the write rather than fail and leave the audio on disk.
+    path = tmp_path / "navide-voice-take.pcm"
+    path.write_bytes(b"")
+    open_paths: set[Path] = set()
+    writing, release = threading.Event(), threading.Event()
+
+    class _HeldFile:
+        def __init__(self, fh: Any) -> None:
+            self.fh = fh
+
+        def __enter__(self) -> _HeldFile:
+            open_paths.add(path)
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            self.fh.close()
+            open_paths.discard(path)
+
+        def write(self, data: bytes) -> None:
+            writing.set()
+            release.wait(5)
+            self.fh.write(data)
+
+    real_fdopen, real_unlink = voice_handlers.os.fdopen, Path.unlink
+
+    def unlink(self: Path, missing_ok: bool = False) -> None:
+        if self in open_paths:
+            raise PermissionError(13, "The process cannot access the file because it is being used by another process")
+        real_unlink(self, missing_ok)
+
+    monkeypatch.setattr(voice_handlers.os, "fdopen", lambda fd, mode: _HeldFile(real_fdopen(fd, mode)))
+    monkeypatch.setattr(Path, "unlink", unlink)
+    writer = threading.Thread(target=voice_handlers._write_pcm, args=(path, b"\x01\x02"))
+    writer.start()
+    assert writing.wait(5)
+    cleaner = threading.Thread(target=voice_handlers._remove, args=(path,))
+    cleaner.start()
+    cleaner.join(0.2)
+    release.set()
+    writer.join(5)
+    cleaner.join(5)
+    assert not path.exists()
 
 
 def test_strip_overlap() -> None:
