@@ -57,6 +57,30 @@ fn transcribes_fixture_over_json_lines() {
     let reply = next();
     assert_eq!(reply["ok"], false);
 
+    let request = serde_json::json!({"id": "t3", "op": "transcribe", "pcm_path": pcm_path, "segments": true});
+    writeln!(stdin, "{request}").unwrap();
+    let reply = next();
+    assert_eq!(reply["ok"], true, "{reply}");
+    let segments = reply["segments"].as_array().expect("segments");
+    let joined: String = segments.iter().map(|s| s["text"].as_str().unwrap()).collect();
+    assert_eq!(joined.trim(), reply["text"].as_str().unwrap());
+    assert!(segments.iter().all(|s| s["t1_ms"].as_i64() >= s["t0_ms"].as_i64()));
+
+    // A cancel sent right behind a request aborts it (or, on a fast machine,
+    // lands after it finished); either way the next request still works.
+    let long = std::env::temp_dir().join(format!("navide-stt-long-{}.pcm", std::process::id()));
+    std::fs::write(&long, vec![0u8; 32_000 * 25]).unwrap();
+    let request = serde_json::json!({"id": "t4", "op": "transcribe", "pcm_path": long});
+    writeln!(stdin, "{request}").unwrap();
+    writeln!(stdin, r#"{{"op":"cancel","target":"t4"}}"#).unwrap();
+    let reply = next();
+    assert_eq!(reply["id"], "t4");
+    assert!(reply["ok"] == true || reply["cancelled"] == true, "{reply}");
+    eprintln!("cancel reply: {reply}");
+    writeln!(stdin, r#"{{"id":"p2","op":"ping"}}"#).unwrap();
+    assert_eq!(next(), serde_json::json!({"id": "p2", "ok": true}));
+    let _ = std::fs::remove_file(&long);
+
     writeln!(stdin, r#"{{"op":"shutdown"}}"#).unwrap();
     assert!(child.wait().unwrap().success());
 }

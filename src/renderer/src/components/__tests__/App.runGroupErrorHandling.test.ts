@@ -44,8 +44,9 @@ describe('run-group menu failure paths', () => {
 })
 
 describe('voice wiring in App', () => {
-  it('the capsule can send a capped transcript', () => {
-    expect(appSource).toContain('@send="voiceInput.send"')
+  it('the capsule never sends: it only dismisses, and dictation types through the paste path', () => {
+    expect(appSource).toContain('<VoiceCapsule :state="voiceInput.state" @dismiss="voiceInput.dismiss" />')
+    expect(appSource).toContain('insertText: (paneId, text) => paneRefs[paneId]?.insertText(text) ?? false,')
   })
 
   it('a failed pre-warm surfaces as a toast, not a modal', () => {

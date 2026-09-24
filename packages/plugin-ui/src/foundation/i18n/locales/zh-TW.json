@@ -121,19 +121,15 @@
   "prewarm-failed": "語音輸入尚未就緒：{reason}",
     "capsule": {
       "starting": "準備麥克風…",
-      "recording": "錄音中，放開即送出",
-      "recording-hands-free": "免持錄音中，再按一次快捷鍵送出",
+      "recording": "錄音中，放開即填入",
+      "recording-hands-free": "免持錄音中，再按一次快捷鍵填入",
       "cap-left": "剩 {s} 秒",
       "esc-cancel": "Esc 取消",
-      "withdraw": "撤回",
       "dismiss": "關閉",
+      "copy": "複製",
+      "copied": "已複製",
       "transcribing": "轉錄中…",
-      "delivering": "送出中…",
-      "held": "等待中：{reason}",
-      "device-fallback": "找不到選定的麥克風，改用系統預設麥克風",
-      "cap-reached": "已達錄音上限——要送出嗎？",
-      "send": "送出",
-      "discard": "捨棄"
+      "device-fallback": "找不到選定的麥克風，改用系統預設麥克風"
     },
     "error": {
       "generic": "語音輸入失敗（{code}）",
@@ -154,11 +150,9 @@
       "stop-transcribe-failed": "轉錄失敗",
       "stop-failed": "轉錄失敗",
       "no-speech": "沒有偵測到語音",
+      "insert-failed": "無法把文字填入這個 pane",
       "mic-silent": "麥克風沒有收到聲音——請到 系統設定→隱私權與安全性→麥克風 允許，或在語音設定換一支麥克風（藍牙耳機可能在休眠）",
       "mic-authorized": "已允許麥克風，請再按住快捷鍵說話"
-    },
-    "readback": {
-      "done": "{name} 已完成"
     }
   },
   "msg": {
@@ -1326,7 +1320,7 @@
     "voice": {
       "section": "語音輸入",
       "enabled": "語音輸入（按住說話）",
-      "enabled-hint": "按住 Ctrl+Alt+M（可在快捷鍵設定中更改）即可對目前聚焦的 CLI pane 說話。語音由本機的 Whisper 模型轉成文字，音訊不會離開這台電腦。",
+      "enabled-hint": "按住 Ctrl+Alt+M（可在快捷鍵設定中更改）即可對目前聚焦的 CLI pane 聽寫。文字會像手動輸入一樣填進輸入框，不會自動送出，確認後請自己按 Enter。語音由本機的 Whisper 模型轉成文字，音訊不會離開這台電腦。",
       "device": "麥克風",
       "device-default": "系統預設",
       "device-unavailable": "（未連接）",
@@ -1335,13 +1329,11 @@
       "device-missing-note": "選擇的麥克風未連接，將改用系統預設麥克風。",
       "mode": "錄音方式",
       "mode-hold-tap": "按住說話，點一下鎖定",
-      "mode-hold-tap-hint": "按住快捷鍵說話、放開送出；快速點一下則保持免持錄音，直到再按一次（最長 5 分鐘）。",
+      "mode-hold-tap-hint": "按住快捷鍵說話、放開即填入文字；快速點一下則保持免持錄音，直到再按一次（最長 5 分鐘）。",
       "mode-hold": "按住說話",
-      "mode-hold-hint": "說話時按住快捷鍵，放開即送出。最長 60 秒。",
+      "mode-hold-hint": "說話時按住快捷鍵，放開即填入文字。最長 60 秒。",
       "mode-toggle": "按一下開始，再按一下結束",
-      "mode-toggle-hint": "按一下快捷鍵開始錄音，再按一下送出；Esc 取消。最長 5 分鐘。",
-      "readback": "朗讀回覆",
-      "readback-hint": "對某個 pane 說話後，它完成回合時用系統語音念出簡短摘要。",
+      "mode-toggle-hint": "按一下快捷鍵開始錄音，再按一下填入文字；Esc 取消。最長 5 分鐘。",
       "model": "語音模型",
       "status-checking": "檢查中…",
       "status-unavailable": "無法取得狀態（後端沒有回應）",

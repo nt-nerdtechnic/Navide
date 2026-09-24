@@ -1,18 +1,18 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { CAP_WARNING_MS, COUNTDOWN_MS, voiceErrorI18nKey, type VoiceCapsuleState } from '../composables/useVoiceInput'
+import { CAP_WARNING_MS, voiceErrorI18nKey, type VoiceCapsuleState } from '../composables/useVoiceInput'
 
 // The voice input capsule: a small pill pinned to the bottom of the target
 // pane. Positioned from the pane's own rect (found by its data-pane-id) rather
 // than rendered inside TerminalPane, so the pane component stays untouched.
 
 const props = defineProps<{ state: VoiceCapsuleState }>()
-const emit = defineEmits<{ withdraw: []; dismiss: []; send: [] }>()
+const emit = defineEmits<{ dismiss: [] }>()
 const { t } = useI18n()
 
 const rect = ref<{ left: number; top: number; width: number } | null>(null)
-const remaining = ref(1)
+const liveEl = ref<HTMLElement | null>(null)
 /** Whole seconds left before the cap, in its last CAP_WARNING_MS; else 0. */
 const capSeconds = ref(0)
 let frame = 0
@@ -32,10 +32,6 @@ function measure(): void {
 // resizes and sidebar drags, and the capsule is only up for a few seconds.
 function tick(): void {
   measure()
-  if (props.state.phase === 'countdown') {
-    const left = props.state.countdownEndsAt - Date.now()
-    remaining.value = Math.max(0, Math.min(1, left / COUNTDOWN_MS))
-  }
   const capLeft = props.state.phase === 'recording' && props.state.capEndsAt ? props.state.capEndsAt - Date.now() : Infinity
   capSeconds.value = capLeft <= CAP_WARNING_MS ? Math.max(0, Math.ceil(capLeft / 1000)) : 0
   frame = requestAnimationFrame(tick)
@@ -51,6 +47,14 @@ watch(
 )
 onBeforeUnmount(() => cancelAnimationFrame(frame))
 
+// The live text grows at its end; keep the end in view once it overflows.
+watch(
+  () => props.state.committed + props.state.tentative,
+  () => void nextTick(() => {
+    if (liveEl.value) liveEl.value.scrollTop = liveEl.value.scrollHeight
+  }),
+)
+
 const style = computed(() => {
   if (!rect.value) return { display: 'none' }
   return {
@@ -63,10 +67,22 @@ const style = computed(() => {
 // Not a failure: the press was spent granting mic access; the next one records.
 const isNotice = computed(() => props.state.phase === 'error' && props.state.error?.key === 'mic-authorized')
 
+const hasLive = computed(() => (props.state.phase === 'recording' || props.state.phase === 'transcribing') &&
+  (props.state.committed !== '' || props.state.tentative !== ''))
+
+// A transcript the pane did not take stays here until dismissed; copying it
+// is the way to keep it.
+const copied = ref(false)
+watch(() => props.state.error, () => { copied.value = false })
+function copyKept(): void {
+  const text = props.state.error?.text
+  if (!text) return
+  void navigator.clipboard.writeText(text).then(() => { copied.value = true }, () => {})
+}
+
 const errorText = computed(() => {
   const e = props.state.error
   if (!e) return ''
-  if (e.reason) return t(`msg.reason-${e.reason.key}`, e.reason.params ?? {})
   return t(voiceErrorI18nKey(e.key), { code: e.key, ...(e.params ?? {}) })
 })
 </script>
@@ -75,52 +91,41 @@ const errorText = computed(() => {
   <div
     v-if="state.phase !== 'idle'"
     class="voice-capsule"
-    :class="[`voice-capsule--${state.phase}`, { 'voice-capsule--notice': isNotice }]"
+    :class="[`voice-capsule--${state.phase}`, { 'voice-capsule--notice': isNotice, 'voice-capsule--live': hasLive || !!state.error?.text }]"
     :style="style"
     role="status"
     aria-live="polite"
   >
-    <template v-if="state.phase === 'starting'">
-      <span class="vc-dot vc-dot--idle" />
-      <span>{{ t('voice.capsule.starting') }}</span>
-    </template>
-    <template v-else-if="state.phase === 'recording'">
-      <span class="vc-dot vc-dot--rec" />
-      <span class="vc-meter" aria-hidden="true"><span class="vc-meter-fill" :style="{ transform: `scaleX(${state.level})` }" /></span>
-      <span>{{ t(state.handsFree ? 'voice.capsule.recording-hands-free' : 'voice.capsule.recording') }}</span>
-      <span v-if="state.deviceFallback" class="vc-hint vc-cap">{{ t('voice.capsule.device-fallback') }}</span>
-      <span v-if="capSeconds > 0" class="vc-hint vc-cap">{{ t('voice.capsule.cap-left', { s: capSeconds }) }}</span>
-      <span class="vc-hint">{{ t('voice.capsule.esc-cancel') }}</span>
-    </template>
-    <template v-else-if="state.phase === 'transcribing'">
-      <span class="vc-spinner" />
-      <span>{{ t('voice.capsule.transcribing') }}</span>
-    </template>
-    <template v-else-if="state.phase === 'countdown' && state.awaitingSend">
-      <span class="vc-text">{{ state.text }}</span>
-      <span class="vc-hint">{{ t('voice.capsule.cap-reached') }}</span>
-      <button type="button" class="vc-action" @click="emit('send')">{{ t('voice.capsule.send') }}</button>
-      <button type="button" class="vc-action" :aria-label="t('voice.capsule.discard')" @click="emit('dismiss')">✕</button>
-    </template>
-    <template v-else-if="state.phase === 'countdown'">
-      <span class="vc-text">{{ state.text }}</span>
-      <span class="vc-hint">{{ t('voice.capsule.esc-cancel') }}</span>
-      <span class="vc-bar" :style="{ transform: `scaleX(${remaining})` }" />
-    </template>
-    <template v-else-if="state.phase === 'delivering'">
-      <span class="vc-spinner" />
-      <span>{{ t('voice.capsule.delivering') }}</span>
-    </template>
-    <template v-else-if="state.phase === 'held'">
-      <span class="vc-dot vc-dot--held" />
-      <span>{{ t('voice.capsule.held', { reason: state.hold ? t(`msg.hold-${state.hold.key}`, { n: state.hold.n ?? 0 }) : '' }) }}</span>
-      <button type="button" class="vc-action" @click="emit('withdraw')">✕ {{ t('voice.capsule.withdraw') }}</button>
-    </template>
-    <template v-else-if="state.phase === 'error'">
-      <span class="vc-dot" :class="isNotice ? 'vc-dot--idle' : 'vc-dot--error'" />
-      <span>{{ errorText }}</span>
-      <button type="button" class="vc-action" :aria-label="t('voice.capsule.dismiss')" @click="emit('dismiss')">✕</button>
-    </template>
+    <div class="vc-row">
+      <template v-if="state.phase === 'starting'">
+        <span class="vc-dot vc-dot--idle" />
+        <span>{{ t('voice.capsule.starting') }}</span>
+      </template>
+      <template v-else-if="state.phase === 'recording'">
+        <span class="vc-dot vc-dot--rec" />
+        <span class="vc-meter" aria-hidden="true"><span class="vc-meter-fill" :style="{ transform: `scaleX(${state.level})` }" /></span>
+        <span>{{ t(state.handsFree ? 'voice.capsule.recording-hands-free' : 'voice.capsule.recording') }}</span>
+        <span v-if="state.deviceFallback" class="vc-hint vc-cap">{{ t('voice.capsule.device-fallback') }}</span>
+        <span v-if="capSeconds > 0" class="vc-hint vc-cap">{{ t('voice.capsule.cap-left', { s: capSeconds }) }}</span>
+        <span class="vc-hint">{{ t('voice.capsule.esc-cancel') }}</span>
+      </template>
+      <template v-else-if="state.phase === 'transcribing'">
+        <span class="vc-spinner" />
+        <span>{{ t('voice.capsule.transcribing') }}</span>
+      </template>
+      <template v-else-if="state.phase === 'error'">
+        <span class="vc-dot" :class="isNotice ? 'vc-dot--idle' : 'vc-dot--error'" />
+        <span>{{ errorText }}</span>
+        <button v-if="state.error?.text" type="button" class="vc-action" @click="copyKept">
+          {{ copied ? t('voice.capsule.copied') : t('voice.capsule.copy') }}
+        </button>
+        <button type="button" class="vc-action" :aria-label="t('voice.capsule.dismiss')" @click="emit('dismiss')">✕</button>
+      </template>
+    </div>
+    <div v-if="hasLive" ref="liveEl" class="vc-live">
+      <span class="vc-committed">{{ state.committed }}</span><span class="vc-tentative">{{ state.tentative }}</span>
+    </div>
+    <div v-else-if="state.phase === 'error' && state.error?.text" class="vc-live vc-kept">{{ state.error.text }}</div>
   </div>
 </template>
 
@@ -130,8 +135,8 @@ const errorText = computed(() => {
   z-index: 60;
   transform: translate(-50%, -100%);
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  gap: 4px;
   padding: 6px 12px;
   overflow: hidden;
   border: 1px solid var(--border-default);
@@ -156,13 +161,22 @@ const errorText = computed(() => {
 .vc-action:hover { color: var(--text-primary); border-color: var(--accent-emphasis); }
 .voice-capsule--error { border-color: var(--danger-fg); }
 .voice-capsule--notice { border-color: var(--accent-emphasis); }
-.voice-capsule--held { border-color: var(--attention-fg); }
-.vc-text {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.voice-capsule--live { border-radius: 12px; }
+.vc-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
+.vc-live {
+  max-height: calc(var(--font-xs) * 1.5 * 6);
+  overflow-y: auto;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  scrollbar-width: none;
+}
+.vc-kept { user-select: text; pointer-events: auto; }
+.vc-tentative { color: var(--text-secondary); opacity: 0.7; }
 .vc-hint {
   flex-shrink: 0;
   color: var(--text-secondary);
@@ -176,7 +190,6 @@ const errorText = computed(() => {
 }
 .vc-dot--idle { background: var(--text-secondary); }
 .vc-dot--rec { background: var(--danger-fg); animation: vc-pulse 1s ease-in-out infinite; }
-.vc-dot--held { background: var(--attention-fg); }
 .vc-dot--error { background: var(--danger-fg); }
 .vc-spinner {
   flex-shrink: 0;
@@ -186,15 +199,6 @@ const errorText = computed(() => {
   border-top-color: var(--accent-emphasis);
   border-radius: 50%;
   animation: vc-spin 0.8s linear infinite;
-}
-.vc-bar {
-  position: absolute;
-  left: 0;
-  bottom: 0;
-  width: 100%;
-  height: 2px;
-  background: var(--accent-emphasis);
-  transform-origin: left;
 }
 .vc-meter {
   flex-shrink: 0;

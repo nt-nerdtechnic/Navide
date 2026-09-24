@@ -56,13 +56,12 @@ off the chord is not consumed and reaches the focused terminal as before.
 
 | Shortcut | Action |
 |----------|--------|
-| `⌃⌥M` (hold) | Hold to talk into the focused CLI pane; releasing any key of the chord stops recording. No `⌘`: macOS drops the key-up of a key held with Cmd, so a `⌘` chord could never be released |
-| `Escape` | During a take only: cancel the recording or its transcription, or drop the transcript during its 1.5 s countdown (while it is being typed in, Esc is swallowed and does nothing). Not a rule in the table — it is only listened for in those short phases |
+| `⌃⌥M` (hold) | Dictate into the focused CLI pane (the recording mode in Settings decides hold, tap-to-lock or press-to-toggle). The words appear in the capsule as you speak; when the take ends, the text is typed into the pane's input box like a paste — it is **not** sent: review it and press Enter yourself. It goes straight to the pane, even while the CLI is busy. Releasing any key of the chord stops a held take. No `⌘`: macOS drops the key-up of a key held with Cmd, so a `⌘` chord could never be released |
+| `Escape` | During a take only: cancel the recording or its transcription; nothing is typed in. Not a rule in the table — it is only listened for while a take records or transcribes |
 
-Once the transcript is queued behind a busy pane, or the capsule shows an
-error, Esc is left alone so it still interrupts the CLI as usual. A queued
-voice message is withdrawn with the capsule's **✕ Withdraw** button; an error
-closes with its **✕** or by itself after a few seconds.
+Once the capsule shows an error, Esc is left alone so it still interrupts the
+CLI as usual; the error closes with its **✕** or by itself after a few seconds.
+A pane that is asleep (not yet started) refuses dictation — open it first.
 
 ### Quick Open
 

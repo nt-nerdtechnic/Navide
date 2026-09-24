@@ -60,6 +60,8 @@ describe('Settings ▸ Voice Input tab', { timeout: 15000 }, () => {
     const body = wrapper!.get('[data-settings-section="voice"]')
     expect(body.findComponent(VoiceSettingsSection).exists()).toBe(true)
     expect(body.isVisible()).toBe(true)
+    // Dictation never sends, so there is no reply to read aloud.
+    expect(wrapper!.find('[data-settings-section="voice-readback"]').exists()).toBe(false)
   })
 
   it('renders it exactly once, and not in General', async () => {
@@ -211,7 +213,7 @@ describe('VoiceSettingsSection microphone device', () => {
     expect(select.findAll('option').every((o) => !o.text().startsWith('settings.'))).toBe(true)
     await select.setValue('toggle')
     expect(useVoiceSettings().voiceRecordingMode.value).toBe('toggle')
-    expect(w.get('[data-settings-section="voice-mode"]').text()).toContain('again to send')
+    expect(w.get('[data-settings-section="voice-mode"]').text()).toContain('again to insert the text')
     useVoiceSettings().setVoiceRecordingMode('hold-tap')
   })
 

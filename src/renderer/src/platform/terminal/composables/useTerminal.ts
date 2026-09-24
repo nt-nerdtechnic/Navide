@@ -4472,6 +4472,19 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
     term.clearSelection()
   }
 
+  /**
+   * pasteFromClipboard for text that exists nowhere else (voice dictation):
+   * false, with nothing sent, when the paste would be dropped — the pane is
+   * still preparing, has no live session, or the transport is down — so the
+   * caller can keep the text instead of losing it.
+   */
+  function insertText(text: string): boolean {
+    if (!text || _stdinGated || !inputTransportReady()) return false
+    if (!sessionId.value || status.value === 'exited' || status.value === 'error') return false
+    pasteFromClipboard(text)
+    return true
+  }
+
   /** Returns whether the interrupt was actually issued. The two early exits
    *  below are silent no-ops, and STOP pressed by hand does not care — but
    *  ui.pane.interrupt reports this to an MCP caller that has no other way to
@@ -4643,6 +4656,7 @@ export function useTerminal(paneId: string, terminalPort: TerminalDockPort, opts
     redraw,
     pasteText,
     pasteFromClipboard,
+    insertText,
     status,
     displayStatus,
     awaitingKind,

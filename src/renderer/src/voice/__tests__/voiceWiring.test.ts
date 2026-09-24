@@ -3,12 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { effectScope, nextTick } from 'vue'
 import { i18n } from '@navide/plugin-ui/foundation'
 import { canonicalizeKeySpec, defaults, executeCommand, getContext, parseKeySpec } from '@navide/plugin-ui/shared'
-import {
-  NOTICE_SENDER,
-  _resetMessagingForTest,
-  useAgentMessaging,
-} from '../../composables/useAgentMessaging'
-import { COUNTDOWN_MS, HANDS_FREE_MAX_MS, RELEASE_TAIL_MS } from '../../composables/useVoiceInput'
+import { _resetMessagingForTest, useAgentMessaging } from '../../composables/useAgentMessaging'
+import { HANDS_FREE_MAX_MS, RELEASE_TAIL_MS } from '../../composables/useVoiceInput'
 import { useVoiceSettings } from '../voiceSettings'
 
 const openMicCapture = vi.fn()
@@ -24,9 +20,12 @@ async function settle(): Promise<void> {
 describe('voice wiring', () => {
   let sent: Array<{ type: string; payload: Record<string, unknown> }>
   let delivered: Array<{ paneId: string; text: string }>
+  let inserted: Array<{ paneId: string; text: string }>
+  let listeners: Map<string, (payload: unknown) => void>
   let idle: boolean
   let prewarmBody: Record<string, unknown>
   let hints: string[]
+  let focused: string
   let scope: ReturnType<typeof effectScope>
   let voice: ReturnType<typeof setupVoiceInput>
   const messaging = useAgentMessaging()
@@ -36,13 +35,15 @@ describe('voice wiring', () => {
     vi.useFakeTimers()
     _resetMessagingForTest()
     settings.setVoiceInputEnabled(false)
-    settings.setVoiceReadbackEnabled(false)
     settings.setVoiceRecordingMode('hold')
     sent = []
     delivered = []
+    inserted = []
+    listeners = new Map()
     idle = true
     prewarmBody = { ok: true }
     hints = []
+    focused = 'pane-a'
     openMicCapture.mockReset()
     openMicCapture.mockImplementation(async (onChunk: (pcm: Int16Array) => void) => ({
       flush: async () => { onChunk(Int16Array.from([1, 2])) },
@@ -57,6 +58,7 @@ describe('voice wiring', () => {
       isPaneIdle: () => idle,
       idleHoldKey: () => 'busy',
     })
+    // The messaging queue is set up only to prove dictation never uses it.
     messaging.registerPane('pane-a', 'claude', 'claude-1')
     scope = effectScope()
     voice = scope.run(() =>
@@ -71,11 +73,17 @@ describe('voice wiring', () => {
               : { ok: true }
             return { id: 'x', type: `${type}.result`, ok: true, payload: body, error: null, timestamp: '' }
           }) as never,
+          on: (type: string, cb: (payload: unknown) => void) => {
+            listeners.set(type, cb)
+            return () => listeners.delete(type)
+          },
         },
-        messaging,
-        focusedPaneId: () => 'pane-a',
+        focusedPaneId: () => focused,
         paneInfo: (id) => (id === 'pane-a' ? { realized: true, messagingName: 'claude-1' } : { realized: false, messagingName: 'sleepy' }),
-        paneLabel: (id) => id,
+        insertText: (paneId, text) => {
+          inserted.push({ paneId, text })
+          return true
+        },
         hint: (text) => hints.push(text),
       }),
     )!
@@ -104,7 +112,7 @@ describe('voice wiring', () => {
     add.mockRestore()
   })
 
-  it('setting ON: hold → release → countdown → bare text through the messaging queue', async () => {
+  it('setting ON: hold → live partials → release → text typed into the pane, no Enter, no messaging queue', async () => {
     settings.setVoiceInputEnabled(true)
     await nextTick()
     expect(getContext().voiceInput).toBe(true)
@@ -115,22 +123,25 @@ describe('voice wiring', () => {
     // Key repeat while held is swallowed and starts nothing new.
     expect(executeCommand('workbench.action.holdToTalk')).toBe(true)
 
+    listeners.get('voice.partial')!({ sessionId: 'S', seq: 0, committed: '列出', tentative: '所有' })
+    expect(voice.state.committed).toBe('列出')
+    expect(voice.state.tentative).toBe('所有')
+    listeners.get('voice.partial')!({ sessionId: 'other', seq: 1, committed: '別人的', tentative: '' })
+    expect(voice.state.committed).toBe('列出')
+
     window.dispatchEvent(new KeyboardEvent('keyup', { key: 'm' }))
     vi.advanceTimersByTime(RELEASE_TAIL_MS)
     await settle()
-    expect(voice.state.phase).toBe('countdown')
     expect(sent.map((s) => s.type)).toEqual(['voice.prewarm', 'voice.start', 'voice.chunk', 'voice.stop'])
-
-    vi.advanceTimersByTime(COUNTDOWN_MS)
-    await settle()
-    const row = messaging.messages.value.at(-1)!
-    expect(row.from).toBe(NOTICE_SENDER)
-    expect(row.to).toBe('claude-1')
-    expect(row.kind).toBe('notice')
-    // Verbatim: no envelope, no correlation id, exactly what was said.
-    expect(delivered).toEqual([{ paneId: 'pane-a', text: '列出所有測試' }])
-    expect(row.status).toBe('delivered')
+    // At once, no countdown; exactly what was said, with no CR to submit it.
+    expect(inserted).toEqual([{ paneId: 'pane-a', text: '列出所有測試' }])
+    expect(inserted[0].text).not.toContain('\r')
     expect(voice.state.phase).toBe('idle')
+    vi.advanceTimersByTime(10_000)
+    messaging.pump()
+    await settle()
+    expect(messaging.messages.value).toEqual([])
+    expect(delivered).toEqual([])
   })
 
   it('opens the microphone the user chose in settings', async () => {
@@ -146,20 +157,17 @@ describe('voice wiring', () => {
     await settle()
 
     settings.setVoiceInputDevice('', '')
-    vi.advanceTimersByTime(COUNTDOWN_MS)
-    await settle()
     executeCommand('workbench.action.holdToTalk')
     await settle()
     expect(openMicCapture.mock.calls.at(-1)![1]).toBe('')
     window.dispatchEvent(new KeyboardEvent('keyup', { key: 'm' }))
     vi.advanceTimersByTime(RELEASE_TAIL_MS)
     await settle()
-    vi.advanceTimersByTime(COUNTDOWN_MS)
-    await settle()
     expect(voice.state.phase).toBe('idle')
+    expect(inserted).toHaveLength(2)
   })
 
-  it('a busy pane holds the message; Esc passes through to the CLI, the withdraw button takes it back', async () => {
+  it('a busy pane still receives the text: nothing waits for the CLI to go idle', async () => {
     settings.setVoiceInputEnabled(true)
     await nextTick()
     idle = false
@@ -168,28 +176,26 @@ describe('voice wiring', () => {
     window.dispatchEvent(new KeyboardEvent('keyup', { key: 'Control' }))
     vi.advanceTimersByTime(RELEASE_TAIL_MS)
     await settle()
-    vi.advanceTimersByTime(COUNTDOWN_MS)
-    await settle()
-    messaging.pump()
-    await settle()
-    expect(voice.state.phase).toBe('held')
-    expect(voice.state.hold?.key).toBe('busy')
-
+    expect(inserted).toEqual([{ paneId: 'pane-a', text: '列出所有測試' }])
+    expect(voice.state.phase).toBe('idle')
+    expect(messaging.messages.value).toEqual([])
+    // Esc after the take belongs to the CLI (it is how a busy pane is interrupted).
     const esc = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true })
     window.dispatchEvent(esc)
-    await settle()
     expect(esc.defaultPrevented).toBe(false)
-    expect(voice.state.phase).toBe('held')
-    expect(messaging.messages.value.at(-1)!.status).toBe('queued')
+  })
 
-    voice.withdraw()
+  it('a sleeping (placeholder) pane is refused with a message: no mic, no backend, nothing typed', async () => {
+    settings.setVoiceInputEnabled(true)
+    await nextTick()
+    focused = 'pane-b'
+    expect(executeCommand('workbench.action.holdToTalk')).toBe(true)
     await settle()
-    expect(voice.state.phase).toBe('idle')
-    expect(messaging.messages.value.at(-1)!.status).toBe('cancelled')
-    idle = true
-    messaging.pump()
-    await settle()
-    expect(delivered).toEqual([])
+    expect(voice.state.phase).toBe('error')
+    expect(voice.state.error?.key).toBe('pane-asleep')
+    expect(openMicCapture).not.toHaveBeenCalled()
+    expect(sent.map((s) => s.type)).toEqual(['voice.prewarm'])
+    expect(inserted).toEqual([])
   })
 
   it('Esc while recording is taken and cancels the take', async () => {
@@ -245,7 +251,7 @@ describe('voice wiring', () => {
     expect(voice.state.phase).toBe('recording')
     vi.advanceTimersByTime(RELEASE_TAIL_MS)
     await settle()
-    expect(voice.state.phase).toBe('countdown')
+    expect(inserted).toHaveLength(1)
   })
 
   it('blur is ignored while the take is starting (the mic dialog), and ends it once recording', async () => {
@@ -263,7 +269,7 @@ describe('voice wiring', () => {
       window.dispatchEvent(new Event('blur'))
       vi.advanceTimersByTime(RELEASE_TAIL_MS)
       await settle()
-      expect(voice.state.phase).toBe('countdown')
+      expect(inserted).toHaveLength(1)
     } finally {
       vi.unstubAllGlobals()
     }
@@ -280,7 +286,8 @@ describe('voice wiring', () => {
       await settle()
       vi.advanceTimersByTime(RELEASE_TAIL_MS)
       await settle()
-      expect(voice.state.phase).toBe('countdown')
+      expect(inserted).toEqual([{ paneId: 'pane-a', text: '列出所有測試' }])
+      expect(voice.state.phase).toBe('idle')
     } finally {
       focus.mockRestore()
       vi.unstubAllGlobals()
@@ -316,7 +323,7 @@ describe('voice wiring', () => {
     expect(executeCommand('workbench.action.holdToTalk')).toBe(true)
     vi.advanceTimersByTime(RELEASE_TAIL_MS)
     await settle()
-    expect(voice.state.phase).toBe('countdown')
+    expect(inserted).toHaveLength(1)
     expect(types()).toEqual(['voice.start', 'voice.chunk', 'voice.stop'])
   })
 
@@ -327,7 +334,7 @@ describe('voice wiring', () => {
     keyup({ key: 'm', code: 'KeyM', ctrlKey: true, altKey: true })
     vi.advanceTimersByTime(RELEASE_TAIL_MS)
     await settle()
-    expect(voice.state.phase).toBe('countdown')
+    expect(inserted).toHaveLength(1)
     expect(voice.state.handsFree).toBe(false)
   })
 
@@ -349,7 +356,7 @@ describe('voice wiring', () => {
     executeCommand('workbench.action.holdToTalk')
     vi.advanceTimersByTime(RELEASE_TAIL_MS)
     await settle()
-    expect(voice.state.phase).toBe('countdown')
+    expect(inserted).toHaveLength(1)
   })
 
   it('toggle: Esc cancels the take', async () => {
@@ -389,23 +396,16 @@ describe('voice wiring', () => {
     expect(sent).toHaveLength(3)
   })
 
-  it('toggle: a take stopped by the cap waits for a press to send it, and leaves Esc to the CLI', async () => {
+  it('toggle: a take stopped by the cap is inserted, never sent', async () => {
     settings.setVoiceRecordingMode('toggle')
     await start()
     vi.advanceTimersByTime(HANDS_FREE_MAX_MS)
     await settle()
-    expect(voice.state.phase).toBe('countdown')
-    vi.advanceTimersByTime(COUNTDOWN_MS * 5)
+    expect(inserted).toEqual([{ paneId: 'pane-a', text: '列出所有測試' }])
+    expect(voice.state.phase).toBe('idle')
+    messaging.pump()
     await settle()
     expect(delivered).toEqual([])
-    const esc = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true })
-    window.dispatchEvent(esc)
-    expect(esc.defaultPrevented).toBe(false)
-    expect(voice.state.phase).toBe('countdown')
-    expect(executeCommand('workbench.action.holdToTalk')).toBe(true)
-    await settle()
-    expect(delivered).toEqual([{ paneId: 'pane-a', text: '列出所有測試' }])
-    expect(types().filter((t) => t === 'voice.start')).toHaveLength(1)
   })
 
   it('says once, without a modal, that a pre-warm failed; a later success re-arms it', async () => {
@@ -434,29 +434,6 @@ describe('voice wiring', () => {
     settings.setVoiceInputEnabled(true)
     await settle()
     expect(hints).toEqual([])
-  })
-
-  it('readback speaks only after a voice message reached the pane', async () => {
-    const speak = vi.fn()
-    vi.stubGlobal('speechSynthesis', { cancel: vi.fn(), speak })
-    vi.stubGlobal('SpeechSynthesisUtterance', class { lang = ''; constructor(public text: string) {} })
-    settings.setVoiceInputEnabled(true)
-    settings.setVoiceReadbackEnabled(true)
-    await nextTick()
-    voice.onTurnComplete('pane-a', 'Nothing voiced yet.')
-    expect(speak).not.toHaveBeenCalled()
-
-    executeCommand('workbench.action.holdToTalk')
-    await settle()
-    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'm' }))
-    vi.advanceTimersByTime(RELEASE_TAIL_MS)
-    await settle()
-    vi.advanceTimersByTime(COUNTDOWN_MS)
-    await settle()
-    voice.onTurnComplete('pane-a', 'All tests pass. 12 files changed.')
-    expect(speak).toHaveBeenCalledTimes(1)
-    expect((speak.mock.calls[0][0] as { text: string }).text).toBe('All tests pass. 12 files changed.')
-    vi.unstubAllGlobals()
   })
 })
 

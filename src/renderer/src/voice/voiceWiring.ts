@@ -11,10 +11,8 @@ import {
   setContext,
   type ParsedKey,
 } from '@navide/plugin-ui/shared'
-import { NOTICE_SENDER, type useAgentMessaging } from '../composables/useAgentMessaging'
 import type { useBackend } from '../composables/useBackend'
-import { useVoiceInput, voiceErrorI18nKey, type VoiceDeps, type VoiceTarget } from '../composables/useVoiceInput'
-import { speakWithSynthesis, useVoiceReadback } from '../composables/useVoiceReadback'
+import { useVoiceInput, voiceErrorI18nKey, type VoiceDeps, type VoicePartial, type VoiceTarget } from '../composables/useVoiceInput'
 import { openMicCapture } from './micCapture'
 import { useVoiceSettings } from './voiceSettings'
 
@@ -68,28 +66,25 @@ export function isChordKeyUp(e: KeyboardEvent, chords: readonly ParsedKey[]): bo
 
 /** What the main window must hand over to wire voice input. */
 export interface VoiceWiringHost {
-  backend: Pick<ReturnType<typeof useBackend>, 'send'>
-  messaging: Pick<
-    ReturnType<typeof useAgentMessaging>,
-    'sendMessage' | 'messages' | 'cancelMessage' | 'pump' | 'paneIdOf'
-  >
+  backend: Pick<ReturnType<typeof useBackend>, 'send' | 'on'>
   /** The focused CLI pane right now, if any. */
   focusedPaneId: () => string | null
   /** A pane's messaging handle and whether a CLI is running behind it. */
   paneInfo: (paneId: string) => { realized: boolean; messagingName?: string } | undefined
-  /** Display name for the readback fallback line. */
-  paneLabel: (paneId: string) => string
+  /** Type text into a pane's input the way a ⌘V paste does (never submits);
+   *  false when the pane has no terminal to type into. */
+  insertText: (paneId: string, text: string) => boolean
   /** A non-blocking notice (a toast), for a pre-warm that failed. */
   hint?: (text: string) => void
 }
 
 /**
- * Voice input for the main window: hotkey, capture, delivery and readback.
+ * Voice input for the main window: hotkey, capture, live text and insertion.
  *
- * Delivery is a bare-text system message on the ordinary messaging queue —
- * the same path, gates and verbatim injection a Navide `notice` takes (idle
- * gate, typing hold, echo verification) — so the transcript is typed into the
- * pane exactly as the user would have typed it, with no envelope.
+ * Dictation: the final transcript is pasted into the target pane's input box
+ * through the pane's own paste path — the one ⌘V uses — so it lands like text
+ * the user typed: no envelope, no messaging queue or idle gate (a busy CLI
+ * still takes it), and no Enter. The user submits it themselves.
  *
  * With the setting off: the `voiceInput` context is false, so the hotkey rule
  * never matches and the chord reaches the PTY as before; the command handler
@@ -98,12 +93,6 @@ export interface VoiceWiringHost {
  */
 export function setupVoiceInput(host: VoiceWiringHost) {
   const settings = useVoiceSettings()
-
-  const readback = useVoiceReadback({
-    enabled: () => settings.voiceReadbackEnabled.value,
-    speak: (text) => speakWithSynthesis(text, String(i18n.global.locale.value)),
-    doneLine: (paneId) => i18n.global.t('voice.readback.done', { name: host.paneLabel(paneId) }),
-  })
 
   const deps: VoiceDeps = {
     enabled: () => settings.voiceInputEnabled.value,
@@ -125,19 +114,13 @@ export function setupVoiceInput(host: VoiceWiringHost) {
       // Refused rather than woken: realizing takes tens of seconds and may ask
       // which session to resume — not something to start from a key press.
       if (!pane.realized) return { ok: false, reason: 'asleep' }
-      if (host.messaging.paneIdOf(pane.messagingName) !== paneId) return { ok: false, reason: 'not-cli' }
-      return { ok: true, name: pane.messagingName }
+      return { ok: true }
     },
-    deliver: (name, text) => {
-      const msg = host.messaging.sendMessage(NOTICE_SENDER, name, text, { kind: 'notice' })
-      host.messaging.pump()
-      return msg.id
-    },
-    messageView: (id) => host.messaging.messages.value.find((m) => m.id === id),
-    cancelMessage: (id) => host.messaging.cancelMessage(id),
-    onDelivered: (paneId) => readback.noteVoiceDelivered(paneId),
+    insert: (paneId, text) => host.insertText(paneId, text),
   }
   const voice = useVoiceInput(deps)
+  // Pushed only to the window that is recording; the take checks the session.
+  const offPartial = host.backend.on('voice.partial', (raw) => voice.partial(raw as VoicePartial))
 
   // ── Hotkey ──────────────────────────────────────────────────────────────────
   // The key resolver only sees keydown, so the rest of a press is followed
@@ -212,7 +195,7 @@ export function setupVoiceInput(host: VoiceWiringHost) {
   )
   // A blur while starting was let through (the mic dialog), but a held take
   // that reaches recording in a window that is still unfocused lost its keyup
-  // for good: without this it records until the cap and then sends.
+  // for good: without this it records until the cap and then inserts.
   watch(
     () => voice.state.phase,
     (phase, prev) => {
@@ -224,9 +207,9 @@ export function setupVoiceInput(host: VoiceWiringHost) {
   )
 
   // ── Esc during a take ───────────────────────────────────────────────────────
-  // Listened for only in the short-lived phases (see useVoiceInput.cancel). A
-  // held or failed capsule leaves Esc to the CLI — it is how a busy pane is
-  // interrupted — and offers its own buttons instead.
+  // Listened for only while a take records or transcribes (see
+  // useVoiceInput.cancel). A failed capsule leaves Esc to the CLI — it is how
+  // a busy pane is interrupted — and offers its own button instead.
   function onEsc(e: KeyboardEvent): void {
     if (e.key !== 'Escape' || e.isComposing) return
     if (!voice.cancel()) return
@@ -234,9 +217,9 @@ export function setupVoiceInput(host: VoiceWiringHost) {
     e.stopImmediatePropagation()
     disarm()
   }
-  const ESC_PHASES = new Set(['starting', 'recording', 'transcribing', 'countdown', 'delivering'])
+  const ESC_PHASES = new Set(['starting', 'recording', 'transcribing'])
   watch(
-    () => ESC_PHASES.has(voice.state.phase) && !voice.state.awaitingSend,
+    () => ESC_PHASES.has(voice.state.phase),
     (owned) => {
       if (owned) window.addEventListener('keydown', onEsc, true)
       else window.removeEventListener('keydown', onEsc, true)
@@ -291,6 +274,7 @@ export function setupVoiceInput(host: VoiceWiringHost) {
   )
 
   onScopeDispose(() => {
+    offPartial()
     disarm()
     window.removeEventListener('focus', onFocus)
     window.removeEventListener('keydown', onEsc, true)
@@ -299,10 +283,6 @@ export function setupVoiceInput(host: VoiceWiringHost) {
 
   return {
     state: voice.state,
-    withdraw: voice.withdraw,
     dismiss: voice.dismiss,
-    send: voice.send,
-    /** Feed every turn_complete here; only voice-driven panes are read out. */
-    onTurnComplete: readback.onTurnComplete,
   }
 }

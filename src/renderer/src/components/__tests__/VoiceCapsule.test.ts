@@ -1,56 +1,89 @@
 // @vitest-environment happy-dom
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mount, type VueWrapper } from '@vue/test-utils'
+// The voice capsule while dictating: committed text solid, the tentative tail
+// faded, both only while a take records or transcribes; plus its hints.
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
+import { nextTick, reactive } from 'vue'
 import { i18n } from '@navide/plugin-ui/foundation'
 import VoiceCapsule from '../VoiceCapsule.vue'
 import type { VoiceCapsuleState } from '../../composables/useVoiceInput'
 
-let wrapper: VueWrapper
-
-function state(over: Partial<VoiceCapsuleState>): VoiceCapsuleState {
-  return {
-    phase: 'idle', paneId: 'p1', text: '', countdownEndsAt: 0, hold: null, handsFree: false,
-    capEndsAt: 0, level: 0, deviceFallback: false, awaitingSend: false, error: null, ...over,
-  }
+function makeState(over: Partial<VoiceCapsuleState> = {}): VoiceCapsuleState {
+  return reactive<VoiceCapsuleState>({
+    phase: 'recording',
+    paneId: 'p1',
+    committed: '',
+    tentative: '',
+    handsFree: false,
+    capEndsAt: Date.now() + 60_000,
+    level: 0.5,
+    deviceFallback: false,
+    error: null,
+    ...over,
+  })
 }
 
-function render(s: VoiceCapsuleState): VueWrapper {
-  wrapper = mount(VoiceCapsule, { props: { state: s }, global: { plugins: [i18n] } })
-  return wrapper
-}
+describe('VoiceCapsule live text', () => {
+  let wrapper: VueWrapper | undefined
+  let pane: HTMLElement
 
-beforeEach(() => {
-  i18n.global.locale.value = 'en-US'
-  // The capsule hides itself without a pane to sit on.
-  const pane = document.createElement('div')
-  pane.dataset.paneId = 'p1'
-  document.body.appendChild(pane)
-})
-afterEach(() => {
-  wrapper?.unmount()
-  document.body.innerHTML = ''
-})
-
-describe('VoiceCapsule', () => {
-  it('a capped transcript offers send and discard instead of a countdown', async () => {
-    render(state({ phase: 'countdown', text: '幫我跑測試', awaitingSend: true }))
-    expect(wrapper.text()).toContain('Time limit reached — send it?')
-    expect(wrapper.find('.vc-bar').exists()).toBe(false)
-    const [send, discard] = wrapper.findAll('button')
-    await send.trigger('click')
-    expect(wrapper.emitted('send')).toHaveLength(1)
-    await discard.trigger('click')
-    expect(wrapper.emitted('dismiss')).toHaveLength(1)
+  beforeEach(() => {
+    i18n.global.locale.value = 'en-US'
+    pane = document.createElement('div')
+    pane.setAttribute('data-pane-id', 'p1')
+    document.body.appendChild(pane)
+  })
+  afterEach(() => {
+    wrapper?.unmount()
+    wrapper = undefined
+    pane.remove()
   })
 
-  it('an ordinary countdown keeps its bar and no buttons', () => {
-    render(state({ phase: 'countdown', text: '幫我跑測試', countdownEndsAt: Date.now() + 1_000 }))
-    expect(wrapper.find('.vc-bar').exists()).toBe(true)
-    expect(wrapper.findAll('button')).toHaveLength(0)
+  it('shows committed text and the tentative tail in separate spans, keeping the level meter', async () => {
+    const state = makeState({ committed: '幫我跑', tentative: '測試' })
+    wrapper = mount(VoiceCapsule, { props: { state }, global: { plugins: [i18n] } })
+    await nextTick()
+    expect(wrapper.get('.vc-committed').text()).toBe('幫我跑')
+    expect(wrapper.get('.vc-tentative').text()).toBe('測試')
+    expect(wrapper.find('.vc-meter').exists()).toBe(true)
+    expect(wrapper.classes()).toContain('voice-capsule--live')
+
+    state.committed = '幫我跑測試'
+    state.tentative = ''
+    await nextTick()
+    expect(wrapper.get('.vc-committed').text()).toBe('幫我跑測試')
+    expect(wrapper.get('.vc-tentative').text()).toBe('')
   })
 
-  it('names the stand-in microphone while recording', () => {
-    render(state({ phase: 'recording', deviceFallback: true }))
+  it('an undelivered transcript stays readable with a Copy button', async () => {
+    const writeText = vi.fn(async () => {})
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    const state = makeState({ phase: 'error', error: { key: 'insert-failed', text: '幫我跑測試' } })
+    wrapper = mount(VoiceCapsule, { props: { state }, global: { plugins: [i18n] } })
+    await nextTick()
+    expect(wrapper.get('.vc-kept').text()).toBe('幫我跑測試')
+    const copy = wrapper.findAll('button.vc-action').find((b) => b.text() === 'Copy')!
+    await copy.trigger('click')
+    await flushPromises()
+    expect(writeText).toHaveBeenCalledWith('幫我跑測試')
+    expect(copy.text()).toBe('Copied')
+  })
+
+  it('has no text block before any words arrive, nor on an error', async () => {
+    const state = makeState()
+    wrapper = mount(VoiceCapsule, { props: { state }, global: { plugins: [i18n] } })
+    await nextTick()
+    expect(wrapper.find('.vc-live').exists()).toBe(false)
+    state.phase = 'error'
+    state.error = { key: 'no-speech' }
+    state.committed = 'stale'
+    await nextTick()
+    expect(wrapper.find('.vc-live').exists()).toBe(false)
+  })
+
+  it('names the stand-in microphone while recording', async () => {
+    wrapper = mount(VoiceCapsule, { props: { state: makeState({ deviceFallback: true }) }, global: { plugins: [i18n] } })
+    await nextTick()
     expect(wrapper.text()).toContain('Chosen microphone unavailable — using the system default')
   })
 })

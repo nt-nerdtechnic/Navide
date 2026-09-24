@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import subprocess
 import sys
 import threading
@@ -73,6 +74,46 @@ async def test_ready_ping_and_transcribe(fake_sidecar, tmp_path: Path) -> None:
     finally:
         await _stop(fake_sidecar)
     assert not fake_sidecar.running
+
+
+async def test_transcribe_segments_flag(fake_sidecar, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FAKE_STT_DECODE", "1")
+    log_path = tmp_path / "log.jsonl"
+    monkeypatch.setenv("FAKE_STT_LOG", str(log_path))
+    pcm = tmp_path / "a.pcm"
+    tone = lambda v: v.to_bytes(2, "little", signed=True) * 3200  # noqa: E731 - 200 ms
+    pcm.write_bytes(tone(1000) + bytes(1600) + tone(1001) + bytes(1600))
+    try:
+        plain = await fake_sidecar.transcribe(pcm, "zh", None)
+        assert plain["text"] == "\u4e00\u4e01" and "segments" not in plain
+        result = await fake_sidecar.transcribe(pcm, "zh", None, segments=True)
+        assert result["segments"] == [{"t0_ms": 0, "t1_ms": 500, "text": "\u4e00\u4e01"}]
+    finally:
+        await _stop(fake_sidecar)
+    flags = [json.loads(line)["segments"] for line in log_path.read_text(encoding="utf-8").splitlines()]
+    assert flags == [False, True]
+
+
+async def test_cancelled_request_is_aborted_in_the_sidecar(
+    fake_sidecar, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FAKE_STT_DELAY_S", "5")
+    pcm = tmp_path / "a.pcm"
+    pcm.write_bytes(b"\0" * 3200)
+    try:
+        task = asyncio.create_task(fake_sidecar.transcribe(pcm, "zh", None))
+        for _ in range(500):
+            if fake_sidecar._pending or task.done():
+                break
+            await asyncio.sleep(0.01)
+        assert fake_sidecar._pending, "request never reached the sidecar"
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        # The sidecar is serial: this answers only because the 5 s request was aborted.
+        assert await asyncio.wait_for(fake_sidecar.ping(), 2) == {"id": "r2", "ok": True}
+    finally:
+        await _stop(fake_sidecar)
 
 
 async def test_concurrent_requests_are_matched_by_id(fake_sidecar) -> None:

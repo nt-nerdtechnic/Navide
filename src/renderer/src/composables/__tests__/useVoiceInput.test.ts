@@ -1,9 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { nextTick, reactive } from 'vue'
+import { nextTick } from 'vue'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
-  COUNTDOWN_MS,
   VOICE_ERROR_CODES,
   voiceErrorI18nKey,
   ERROR_VISIBLE_MS,
@@ -11,7 +10,6 @@ import {
   HANDS_FREE_MAX_MS,
   RELEASE_TAIL_MS,
   useVoiceInput,
-  type DeliveredMessageView,
   type VoiceDeps,
   type VoiceTarget,
 } from '../useVoiceInput'
@@ -24,16 +22,14 @@ async function settle(): Promise<void> {
 interface Harness {
   deps: VoiceDeps
   requests: Array<{ type: string; payload: Record<string, unknown> }>
-  delivered: Array<{ name: string; text: string }>
-  rows: Record<number, DeliveredMessageView>
-  cancelled: number[]
+  inserted: Array<{ paneId: string; text: string }>
+  insertOk: boolean
   onChunk: ((pcm: Int16Array) => void) | null
   onEnded: (() => void) | null
   captureClosed: number
   enabled: boolean
   stopText: string
   targets: Record<string, VoiceTarget>
-  noted: string[]
   logs: string[]
   stopExtra: Record<string, unknown>
 }
@@ -41,21 +37,18 @@ interface Harness {
 function harness(): Harness {
   const h: Harness = {
     requests: [],
-    delivered: [],
-    rows: reactive({}) as Record<number, DeliveredMessageView>,
-    cancelled: [],
+    inserted: [],
+    insertOk: true,
     onChunk: null,
     onEnded: null,
     captureClosed: 0,
     enabled: true,
     stopText: '幫我跑測試',
-    targets: { p1: { ok: true, name: 'claude-1' } },
-    noted: [],
+    targets: { p1: { ok: true } },
     logs: [],
     stopExtra: {},
     deps: null as unknown as VoiceDeps,
   }
-  let nextId = 100
   h.deps = {
     enabled: () => h.enabled,
     request: async (type, payload) => {
@@ -76,19 +69,10 @@ function harness(): Harness {
       }
     },
     resolveTarget: (paneId) => h.targets[paneId] ?? { ok: false, reason: 'not-cli' },
-    deliver: (name, text) => {
-      h.delivered.push({ name, text })
-      const id = nextId++
-      h.rows[id] = { status: 'queued' }
-      return id
+    insert: (paneId, text) => {
+      if (h.insertOk) h.inserted.push({ paneId, text })
+      return h.insertOk
     },
-    messageView: (id) => h.rows[id],
-    cancelMessage: (id) => {
-      h.cancelled.push(id)
-      h.rows[id] = { status: 'cancelled' }
-      return true
-    },
-    onDelivered: (paneId) => h.noted.push(paneId),
     log: (line) => h.logs.push(line),
   }
   return h
@@ -107,7 +91,7 @@ describe('useVoiceInput — capsule state machine', () => {
   beforeEach(() => { vi.useFakeTimers() })
   afterEach(() => { vi.useRealTimers() })
 
-  it('press → recording → release → transcribing → countdown → delivered', async () => {
+  it('press → recording → release → transcribing → text inserted at once, no countdown', async () => {
     const h = harness()
     const v = useVoiceInput(h.deps)
     expect(v.press('p1')).toBe(true)
@@ -125,8 +109,9 @@ describe('useVoiceInput — capsule state machine', () => {
     vi.advanceTimersByTime(1)
     expect(v.state.phase).toBe('transcribing')
     await settle()
-    expect(v.state.phase).toBe('countdown')
-    expect(v.state.text).toBe('幫我跑測試')
+    expect(h.inserted).toEqual([{ paneId: 'p1', text: '幫我跑測試' }])
+    expect(v.state.phase).toBe('idle')
+    expect(v.visible.value).toBe(false)
     expect(h.captureClosed).toBe(1)
 
     const chunks = h.requests.filter((r) => r.type === 'voice.chunk')
@@ -135,19 +120,6 @@ describe('useVoiceInput — capsule state machine', () => {
     // The flushed tail went out before voice.stop.
     expect(types(h).indexOf('voice.stop')).toBeGreaterThan(types(h).lastIndexOf('voice.chunk'))
     expect(h.requests.find((r) => r.type === 'voice.stop')!.payload).toEqual({ sessionId: 's1', language: 'zh' })
-
-    // Not delivered until the countdown runs out.
-    vi.advanceTimersByTime(COUNTDOWN_MS - 1)
-    expect(h.delivered).toEqual([])
-    vi.advanceTimersByTime(1)
-    expect(h.delivered).toEqual([{ name: 'claude-1', text: '幫我跑測試' }])
-    expect(v.state.phase).toBe('delivering')
-
-    h.rows[100] = { status: 'delivered' }
-    await nextTick()
-    expect(v.state.phase).toBe('idle')
-    expect(v.visible.value).toBe(false)
-    expect(h.noted).toEqual(['p1'])
   })
 
   it('a microphone unplugged mid-take ends it with an error, not a silent listen', async () => {
@@ -163,17 +135,60 @@ describe('useVoiceInput — capsule state machine', () => {
     expect(h.requests.at(-1)).toEqual({ type: 'voice.cancel', payload: { sessionId: 's1' } })
   })
 
-  it('Esc during the countdown drops the transcript', async () => {
+  it('a transcript with line breaks is inserted as one line: never a CR that would submit', async () => {
+    const h = harness()
+    h.stopText = ' 第一句\n第二句\r\n第三句 \n'
+    const v = useVoiceInput(h.deps)
+    v.press('p1')
+    await settle()
+    await releaseAndStop(v)
+    expect(h.inserted).toEqual([{ paneId: 'p1', text: '第一句 第二句 第三句' }])
+    expect(h.inserted[0].text).not.toMatch(/[\r\n]/)
+  })
+
+  it('shows partials: committed text grows, the tentative tail is replaced, stale or foreign events are ignored', async () => {
+    const h = harness()
+    const v = useVoiceInput(h.deps)
+    v.press('p1')
+    // Before the session exists nothing is taken.
+    v.partial({ sessionId: 's1', seq: 0, committed: 'x', tentative: '' })
+    await settle()
+    expect(v.state.committed).toBe('')
+
+    v.partial({ sessionId: 's1', seq: 0, committed: '', tentative: '幫我' })
+    expect(v.state.committed).toBe('')
+    expect(v.state.tentative).toBe('幫我')
+    v.partial({ sessionId: 's1', seq: 1, committed: '幫我跑', tentative: '側' })
+    expect(v.state.committed).toBe('幫我跑')
+    expect(v.state.tentative).toBe('側')
+    // Older seq: ignored.
+    v.partial({ sessionId: 's1', seq: 1, committed: '幫我跑', tentative: '別的' })
+    v.partial({ sessionId: 's1', seq: 0, committed: '', tentative: '舊' })
+    expect(v.state.tentative).toBe('側')
+    // Another session: ignored.
+    v.partial({ sessionId: 's9', seq: 5, committed: '幫我跑測試了', tentative: '' })
+    expect(v.state.committed).toBe('幫我跑')
+    // Committed text is never rewritten.
+    v.partial({ sessionId: 's1', seq: 2, committed: '幫你跑', tentative: '' })
+    expect(v.state.committed).toBe('幫我跑')
+    expect(v.state.tentative).toBe('側')
+    v.partial({ sessionId: 's1', seq: 3, committed: '幫我跑測試', tentative: '' })
+    expect(v.state.committed).toBe('幫我跑測試')
+    expect(v.state.tentative).toBe('')
+
+    // Still shown while transcribing; cleared once the final text is inserted.
+    await releaseAndStop(v)
+    expect(v.state.committed).toBe('')
+    expect(h.inserted).toEqual([{ paneId: 'p1', text: '幫我跑測試' }])
+  })
+
+  it('a take with no partials at all still inserts the final text', async () => {
     const h = harness()
     const v = useVoiceInput(h.deps)
     v.press('p1')
     await settle()
     await releaseAndStop(v)
-    expect(v.state.phase).toBe('countdown')
-    expect(v.cancel()).toBe(true)
-    expect(v.state.phase).toBe('idle')
-    vi.advanceTimersByTime(COUNTDOWN_MS * 2)
-    expect(h.delivered).toEqual([])
+    expect(h.inserted).toEqual([{ paneId: 'p1', text: '幫我跑測試' }])
   })
 
   it('Esc while recording cancels the backend session and frees the mic', async () => {
@@ -181,13 +196,16 @@ describe('useVoiceInput — capsule state machine', () => {
     const v = useVoiceInput(h.deps)
     v.press('p1')
     await settle()
+    v.partial({ sessionId: 's1', seq: 0, committed: '幫我', tentative: '' })
     expect(v.cancel()).toBe(true)
     expect(v.state.phase).toBe('idle')
+    expect(v.state.committed).toBe('')
     expect(h.captureClosed).toBe(1)
     expect(h.requests.at(-1)).toEqual({ type: 'voice.cancel', payload: { sessionId: 's1' } })
     // A late release does nothing.
     await releaseAndStop(v)
     expect(types(h)).not.toContain('voice.stop')
+    expect(h.inserted).toEqual([])
   })
 
   it('Esc while transcribing discards the result when it lands', async () => {
@@ -207,62 +225,36 @@ describe('useVoiceInput — capsule state machine', () => {
     answer({ ok: true, payload: { ok: true, text: 'late' } })
     await settle()
     expect(v.state.phase).toBe('idle')
-    vi.advanceTimersByTime(COUNTDOWN_MS * 2)
-    expect(h.delivered).toEqual([])
+    expect(h.inserted).toEqual([])
   })
 
-  it('a held message shows its hold; Esc leaves it alone, the withdraw button takes it back', async () => {
+  it('a pane that could not take the text (preparing, exited) keeps it on screen until dismissed', async () => {
     const h = harness()
+    h.insertOk = false
     const v = useVoiceInput(h.deps)
     v.press('p1')
     await settle()
     await releaseAndStop(v)
-    vi.advanceTimersByTime(COUNTDOWN_MS)
-    h.rows[100] = { status: 'queued', hold: { key: 'typing' } }
-    await nextTick()
-    expect(v.state.phase).toBe('held')
-    expect(v.state.hold).toEqual({ key: 'typing' })
-    // Esc belongs to the busy CLI here (it is how the user interrupts it).
-    expect(v.cancel()).toBe(false)
-    expect(h.cancelled).toEqual([])
-    expect(v.state.phase).toBe('held')
-    v.withdraw()
-    expect(h.cancelled).toEqual([100])
-    expect(v.state.phase).toBe('idle')
-  })
-
-  it('a refused send shows the messaging reason as an error', async () => {
-    const h = harness()
-    const deliver = h.deps.deliver
-    h.deps.deliver = (name, text) => {
-      const id = deliver(name, text)
-      h.rows[id] = { status: 'failed', reason: { key: 'rate-limit', params: { max: 5, seconds: 60 } } }
-      return id
-    }
-    const v = useVoiceInput(h.deps)
-    v.press('p1')
-    await settle()
-    await releaseAndStop(v)
-    vi.advanceTimersByTime(COUNTDOWN_MS)
     expect(v.state.phase).toBe('error')
-    expect(v.state.error?.reason?.key).toBe('rate-limit')
-    vi.advanceTimersByTime(ERROR_VISIBLE_MS)
+    expect(v.state.error).toEqual({ key: 'insert-failed', params: undefined, text: '幫我跑測試' })
+    expect(h.logs.at(-1)).toContain('outcome=insert-failed')
+    // Not timed out: the transcript exists nowhere else.
+    vi.advanceTimersByTime(ERROR_VISIBLE_MS * 10)
+    expect(v.state.error?.text).toBe('幫我跑測試')
+    v.dismiss()
     expect(v.state.phase).toBe('idle')
   })
 
-  it('Esc is swallowed but changes nothing while the text is being typed in', async () => {
+  it('a pane reclaimed during the take also keeps the transcript', async () => {
     const h = harness()
     const v = useVoiceInput(h.deps)
     v.press('p1')
     await settle()
+    h.targets.p1 = { ok: false, reason: 'asleep' }
     await releaseAndStop(v)
-    vi.advanceTimersByTime(COUNTDOWN_MS)
-    h.rows[100] = { status: 'delivering' }
-    await nextTick()
-    expect(v.state.phase).toBe('delivering')
-    expect(v.cancel()).toBe(true)
-    expect(v.state.phase).toBe('delivering')
-    expect(h.cancelled).toEqual([])
+    expect(v.state.error?.key).toBe('pane-asleep')
+    expect(v.state.error?.text).toBe('幫我跑測試')
+    expect(h.inserted).toEqual([])
   })
 
   it('Esc is not taken by an error capsule or by no capsule; the close button and the timeout clear it', async () => {
@@ -296,15 +288,14 @@ describe('useVoiceInput — capsule state machine', () => {
     expect(h.requests).toEqual([])
   })
 
-  it('re-checks the target before delivering: a pane reclaimed during the countdown is refused', async () => {
+  it('re-checks the target before inserting: a pane reclaimed during the take is refused', async () => {
     const h = harness()
     const v = useVoiceInput(h.deps)
     v.press('p1')
     await settle()
-    await releaseAndStop(v)
     h.targets.p1 = { ok: false, reason: 'asleep' }
-    vi.advanceTimersByTime(COUNTDOWN_MS)
-    expect(h.delivered).toEqual([])
+    await releaseAndStop(v)
+    expect(h.inserted).toEqual([])
     expect(v.state.error?.key).toBe('pane-asleep')
   })
 
@@ -318,7 +309,7 @@ describe('useVoiceInput — capsule state machine', () => {
     vi.advanceTimersByTime(RELEASE_TAIL_MS)
     await settle()
     expect(types(h)).toContain('voice.stop')
-    expect(v.state.phase).toBe('countdown')
+    expect(h.inserted).toHaveLength(1)
   })
 
   it('key repeat is swallowed', async () => {
@@ -366,7 +357,7 @@ describe('useVoiceInput — capsule state machine', () => {
     vi.advanceTimersByTime(MAX_RECORDING_MS)
     await settle()
     expect(types(h)).toContain('voice.stop')
-    expect(v.state.phase).toBe('countdown')
+    expect(h.inserted).toHaveLength(1)
   })
 
   it('disable() drops a running take', async () => {
@@ -449,7 +440,7 @@ describe('useVoiceInput — capture during start-up, endings and diagnostics', (
     await settle()
     // Early chunk, the flushed tail, then stop.
     expect(types(h)).toEqual(['voice.start', 'voice.chunk', 'voice.chunk', 'voice.stop'])
-    expect(v.state.phase).toBe('countdown')
+    expect(h.inserted).toHaveLength(1)
   })
 
   it('a failed voice.start after the mic opened frees the mic', async () => {
@@ -532,7 +523,7 @@ describe('useVoiceInput — capture during start-up, endings and diagnostics', (
     await settle()
     expect(v.state.phase).toBe('recording')
     await releaseAndStop(v, 'toggle')
-    expect(v.state.phase).toBe('countdown')
+    expect(h.inserted).toHaveLength(1)
     expect(h.logs.at(-1)).toContain('end=toggle')
     expect(h.logs.at(-1)).toContain('mode=hands-free')
   })
@@ -548,61 +539,22 @@ describe('useVoiceInput — capture during start-up, endings and diagnostics', (
     expect(v.state.phase).toBe('recording')
     vi.advanceTimersByTime(1)
     await settle()
-    expect(v.state.phase).toBe('countdown')
+    expect(h.inserted).toHaveLength(1)
     expect(h.logs.at(-1)).toContain('end=cap')
   })
 
-  it('a capped hands-free transcript waits to be sent; the next press sends it and records nothing', async () => {
+  it('a capped hands-free take is inserted like any other: nothing waits to be sent', async () => {
     const h = harness()
     const v = useVoiceInput(h.deps)
     v.press('p1', { handsFree: true })
     await settle()
     vi.advanceTimersByTime(HANDS_FREE_MAX_MS)
     await settle()
-    expect(v.state.phase).toBe('countdown')
-    expect(v.state.awaitingSend).toBe(true)
-    vi.advanceTimersByTime(COUNTDOWN_MS * 10)
-    await settle()
-    expect(h.delivered).toEqual([])
-    // Esc stays the CLI's while it waits.
-    expect(v.cancel()).toBe(false)
-    const starts = types(h).filter((t) => t === 'voice.start').length
-    expect(v.press('p1')).toBe(true)
-    expect(h.delivered).toEqual([{ name: 'claude-1', text: '幫我跑測試' }])
-    expect(v.state.phase).toBe('delivering')
-    await settle()
-    expect(types(h).filter((t) => t === 'voice.start')).toHaveLength(starts)
-  })
-
-  it('the capsule sends or discards a capped transcript', async () => {
-    const h = harness()
-    const v = useVoiceInput(h.deps)
-    v.press('p1', { handsFree: true })
-    await settle()
-    vi.advanceTimersByTime(HANDS_FREE_MAX_MS)
-    await settle()
-    v.dismiss()
+    expect(h.inserted).toEqual([{ paneId: 'p1', text: '幫我跑測試' }])
     expect(v.state.phase).toBe('idle')
-    expect(h.delivered).toEqual([])
-    v.press('p1', { handsFree: true })
-    await settle()
-    vi.advanceTimersByTime(HANDS_FREE_MAX_MS)
-    await settle()
-    v.send()
-    expect(h.delivered).toEqual([{ name: 'claude-1', text: '幫我跑測試' }])
-  })
-
-  it('a held take at its 60 s cap still sends after the countdown', async () => {
-    const h = harness()
-    const v = useVoiceInput(h.deps)
-    v.press('p1')
-    await settle()
-    vi.advanceTimersByTime(MAX_RECORDING_MS)
-    await settle()
-    expect(v.state.awaitingSend).toBe(false)
-    vi.advanceTimersByTime(COUNTDOWN_MS)
-    await settle()
-    expect(h.delivered).toEqual([{ name: 'claude-1', text: '幫我跑測試' }])
+    // The next press starts a new take rather than acting on the old one.
+    expect(v.press('p1')).toBe(true)
+    expect(v.state.phase).toBe('starting')
   })
 
   it('says so while the system default stands in for a missing chosen microphone', async () => {
@@ -630,7 +582,7 @@ describe('useVoiceInput — capture during start-up, endings and diagnostics', (
     // 1600 samples + the 2-sample flush at 16 kHz.
     expect(line).toContain('audio=100ms')
     expect(line).toContain('peak=1234')
-    vi.advanceTimersByTime(COUNTDOWN_MS)
+    vi.advanceTimersByTime(ERROR_VISIBLE_MS)
     expect(h.logs).toHaveLength(1)
   })
 

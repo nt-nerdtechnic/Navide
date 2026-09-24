@@ -1,5 +1,4 @@
-import { computed, reactive, watch, type WatchStopHandle } from 'vue'
-import type { MessageHold, MessageReason, MessageStatus } from './useAgentMessaging'
+import { computed, reactive } from 'vue'
 import type { VoiceCapture } from '../voice/micCapture'
 import { int16ToBase64 } from '../voice/pcm'
 
@@ -10,16 +9,16 @@ import { int16ToBase64 } from '../voice/pcm'
  * and the mic opens at once while voice.start (which may have to load the
  * sidecar) runs alongside; ~250 ms s16le chunks are kept locally until the
  * session id arrives, then stream to the backend (voice.chunk) in order.
- * Release → RELEASE_TAIL_MS more audio, then voice.stop returns the
- * transcript, which sits in a capsule on the target pane for COUNTDOWN_MS so
- * Esc can still drop it, and is then handed to the ordinary messaging queue as
- * bare text (see VoiceDeps.deliver).
+ * While recording, the backend's voice.partial events show the text so far in
+ * the capsule. Release → RELEASE_TAIL_MS more audio, then voice.stop returns
+ * the final transcript, which is typed into the target pane's input box like a
+ * paste — never submitted: the user reviews it and presses Enter themselves
+ * (see VoiceDeps.insert).
  *
  * Inert while the setting is off: every entry point checks `enabled()` first,
  * so no mic, no voice.* request and no listener runs.
  */
 
-export const COUNTDOWN_MS = 1_500
 /** Cap of a held take. */
 export const MAX_RECORDING_MS = 60_000
 /** Cap of a hands-free take (quick-tap lock or toggle mode). */
@@ -48,20 +47,15 @@ export type VoicePhase =
   | 'starting'
   | 'recording'
   | 'transcribing'
-  | 'countdown'
-  | 'delivering'
-  | 'held'
   | 'error'
 
 export interface VoiceCapsuleState {
   phase: VoicePhase
   paneId: string | null
-  /** The transcript, from `countdown` on. */
-  text: string
-  /** Wall-clock time the countdown ends, while phase === 'countdown'. */
-  countdownEndsAt: number
-  /** Why the message is still queued, while phase === 'held'. */
-  hold: MessageHold | null
+  /** Live transcript while recording/transcribing: `committed` only ever
+   *  grows; `tentative` is the tail the recognizer may still revise. */
+  committed: string
+  tentative: string
   /** The take runs hands-free (locked by a quick tap, or toggle mode). */
   handsFree: boolean
   /** Wall-clock time the recording cap ends the take, while recording. */
@@ -70,12 +64,10 @@ export interface VoiceCapsuleState {
   level: number
   /** The chosen microphone was gone and the system default is recording. */
   deviceFallback: boolean
-  /** A hands-free take hit its cap: the transcript waits in `countdown` with
-   *  no timer until the user sends it (the shortcut or the capsule's send
-   *  button) or drops it (the capsule's discard button). */
-  awaitingSend: boolean
-  /** i18n key under `voice.error.` (or a messaging reason), while phase === 'error'. */
-  error: { key: string; params?: Record<string, string | number>; reason?: MessageReason } | null
+  /** i18n key under `voice.error.`, while phase === 'error'. `text` is a
+   *  transcript the pane did not take: kept on screen until dismissed so it
+   *  can be copied rather than lost. */
+  error: { key: string; params?: Record<string, string | number>; text?: string } | null
 }
 
 /** The `voice.error.*` codes the capsule has a sentence for: target refusals,
@@ -91,6 +83,7 @@ export const VOICE_ERROR_CODES = [
   'mic-silent',
   'backend',
   'no-speech',
+  'insert-failed',
   'start-sidecar-missing',
   'start-model-missing',
   'start-sidecar-failed',
@@ -115,13 +108,15 @@ export interface VoiceResponse<T> {
 }
 
 export type VoiceTarget =
-  | { ok: true; name: string }
+  | { ok: true }
   | { ok: false; reason: 'asleep' | 'not-cli' }
 
-export interface DeliveredMessageView {
-  status: MessageStatus
-  hold?: MessageHold
-  reason?: MessageReason
+/** Payload of the backend's `voice.partial` event. */
+export interface VoicePartial {
+  sessionId?: string
+  seq?: number
+  committed?: string
+  tentative?: string
 }
 
 export interface VoiceDeps {
@@ -131,15 +126,11 @@ export interface VoiceDeps {
    *  the first-time system dialog. */
   askMicrophone: () => Promise<{ granted: boolean; prompted: boolean }>
   openCapture: (onChunk: (pcm: Int16Array) => void, onEnded: () => void) => Promise<VoiceCapture>
-  /** Whether a pane can take a voice message right now. */
+  /** Whether a pane can take dictated text right now. */
   resolveTarget: (paneId: string) => VoiceTarget
-  /** Queue `text` for `name` as bare text; returns the log row's id. */
-  deliver: (name: string, text: string) => number
-  /** Live view of a queued row (reactive), or undefined once it left the log. */
-  messageView: (id: number) => DeliveredMessageView | undefined
-  cancelMessage: (id: number) => boolean
-  /** Called when a voice message reached its pane (readback bookkeeping). */
-  onDelivered?: (paneId: string) => void
+  /** Type `text` into the pane's input as a paste: no Enter, no messaging
+   *  queue. False when the pane had nothing to type into. */
+  insert: (paneId: string, text: string) => boolean
   now?: () => number
   /** One diagnostic line per take (default console.info). */
   log?: (line: string) => void
@@ -175,14 +166,12 @@ export function useVoiceInput(deps: VoiceDeps) {
   const state = reactive<VoiceCapsuleState>({
     phase: 'idle',
     paneId: null,
-    text: '',
-    countdownEndsAt: 0,
-    hold: null,
+    committed: '',
+    tentative: '',
     handsFree: false,
     capEndsAt: 0,
     level: 0,
     deviceFallback: false,
-    awaitingSend: false,
     error: null,
   })
   const visible = computed(() => state.phase !== 'idle')
@@ -200,8 +189,7 @@ export function useVoiceInput(deps: VoiceDeps) {
   let sessionReady: Promise<string | null> = Promise.resolve(null)
   let recordingSince = 0
   let stats: TakeStats | null = null
-  let messageId: number | null = null
-  let stopWatch: WatchStopHandle | null = null
+  let partialSeq = -1
   let timer: ReturnType<typeof setTimeout> | null = null
   let maxTimer: ReturnType<typeof setTimeout> | null = null
   let tailTimer: ReturnType<typeof setTimeout> | null = null
@@ -221,9 +209,7 @@ export function useVoiceInput(deps: VoiceDeps) {
   function reset(): void {
     clearTimer()
     clearTakeTimers()
-    stopWatch?.()
-    stopWatch = null
-    messageId = null
+    partialSeq = -1
     capture?.close()
     capture = null
     sessionId = null
@@ -233,14 +219,12 @@ export function useVoiceInput(deps: VoiceDeps) {
     stats = null
     state.phase = 'idle'
     state.paneId = null
-    state.text = ''
-    state.countdownEndsAt = 0
-    state.hold = null
+    state.committed = ''
+    state.tentative = ''
     state.handsFree = false
     state.capEndsAt = 0
     state.level = 0
     state.deviceFallback = false
-    state.awaitingSend = false
     state.error = null
   }
 
@@ -265,7 +249,7 @@ export function useVoiceInput(deps: VoiceDeps) {
     void deps.request('voice.cancel', { sessionId: sid }, CANCEL_TIMEOUT_MS).catch(() => {})
   }
 
-  function fail(key: string, params?: Record<string, string | number>, reason?: MessageReason): void {
+  function fail(key: string, params?: Record<string, string | number>, text?: string): void {
     logTake(key)
     const paneId = state.paneId
     const sid = sessionId
@@ -274,7 +258,8 @@ export function useVoiceInput(deps: VoiceDeps) {
     take++
     state.phase = 'error'
     state.paneId = paneId
-    state.error = { key, params, reason }
+    state.error = text ? { key, params, text } : { key, params }
+    if (text) return
     timer = setTimeout(() => {
       if (state.phase === 'error') reset()
     }, ERROR_VISIBLE_MS)
@@ -316,15 +301,6 @@ export function useVoiceInput(deps: VoiceDeps) {
     if (!deps.enabled()) return false
     if (state.phase === 'starting' || state.phase === 'recording' || state.phase === 'transcribing') return true
     if (!paneId) return false
-    // A capped hands-free transcript waiting to be sent: this press sends it,
-    // and starts nothing — the user was asked to send, not to record again.
-    if (state.phase === 'countdown' && state.awaitingSend) {
-      deliverNow()
-      return true
-    }
-    // A transcript still counting down goes out now rather than being lost to
-    // the new take; a held one stays in its queue either way.
-    if (state.phase === 'countdown') deliverNow()
     reset()
     const target = deps.resolveTarget(paneId)
     if (!target.ok) {
@@ -418,9 +394,9 @@ export function useVoiceInput(deps: VoiceDeps) {
       maxTimer = null
       if (mine !== take || state.phase !== 'recording') return
       if (stats && !stats.end) stats.end = 'cap'
-      // A hands-free take can run for minutes with nobody watching: its
-      // transcript waits to be sent instead of going out on its own.
-      void finish(mine, !state.handsFree)
+      // Dictation never sends, so a capped take (even a hands-free one nobody
+      // is watching) is inserted like any other; the user reviews it.
+      void finish(mine)
     }, Math.max(0, state.capEndsAt - now()))
   }
 
@@ -447,7 +423,7 @@ export function useVoiceInput(deps: VoiceDeps) {
     }
   }
 
-  async function finish(mine: number, autoSend = true): Promise<void> {
+  async function finish(mine: number): Promise<void> {
     const cap = capture
     if (mine !== take || state.phase !== 'recording' || !cap) return
     clearTakeTimers()
@@ -471,7 +447,9 @@ export function useVoiceInput(deps: VoiceDeps) {
     if (mine !== take) return
     sessionId = null
     if (!res.ok || !res.payload?.ok) return fail(`stop-${res.payload?.reason ?? 'failed'}`)
-    const text = (res.payload.text ?? '').trim()
+    // One line: a line break reaches a PTY as CR, which a CLI not in
+    // bracketed paste takes as Enter — and dictation never submits.
+    const text = (res.payload.text ?? '').replace(/\s*[\r\n]+\s*/g, ' ').trim()
     if (!text) {
       const durationMs = res.payload.durationMs ?? Math.round((stats?.samples ?? 0) / 16)
       const peak = res.payload.peak ?? stats?.peak ?? 0
@@ -483,110 +461,51 @@ export function useVoiceInput(deps: VoiceDeps) {
       }
       return fail(peak < SILENT_PEAK ? 'mic-silent' : 'no-speech')
     }
-    logTake('text')
-    state.text = text
-    state.phase = 'countdown'
-    if (!autoSend) {
-      state.awaitingSend = true
-      return
-    }
-    state.countdownEndsAt = now() + COUNTDOWN_MS
-    timer = setTimeout(() => {
-      if (mine === take && state.phase === 'countdown') deliverNow()
-    }, COUNTDOWN_MS)
-  }
-
-  function deliverNow(): void {
-    clearTimer()
-    const paneId = state.paneId
-    const text = state.text
-    if (!paneId || !text) return reset()
     // Re-checked: the pane may have closed or been reclaimed since key-down.
+    const paneId = state.paneId ?? ''
     const target = deps.resolveTarget(paneId)
-    if (!target.ok) return fail(target.reason === 'asleep' ? 'pane-asleep' : 'not-cli')
-    const id = deps.deliver(target.name, text)
-    const mine = take
-    messageId = id
-    state.phase = 'delivering'
-    const view = (): DeliveredMessageView | undefined => {
-      const m = deps.messageView(id)
-      return m ? { status: m.status, hold: m.hold ? { ...m.hold } : undefined, reason: m.reason } : undefined
-    }
-    const apply = (m: DeliveredMessageView | undefined): void => {
-      if (mine !== take || messageId !== id) return
-      if (!m || m.status === 'cancelled') return reset()
-      if (m.status === 'delivered') {
-        deps.onDelivered?.(paneId)
-        return reset()
-      }
-      if (m.status === 'failed') return fail('delivery', undefined, m.reason)
-      if (m.status === 'queued' && m.hold) {
-        state.phase = 'held'
-        state.hold = m.hold
-      } else {
-        state.phase = 'delivering'
-        state.hold = null
-      }
-    }
-    // Applied once up front: a send can be refused on the spot (rate limit,
-    // queue cap), and a row that settled here needs no watcher at all.
-    apply(view())
-    if (messageId === id) stopWatch = watch(view, apply, { deep: true })
+    if (!target.ok) return fail(target.reason === 'asleep' ? 'pane-asleep' : 'not-cli', undefined, text)
+    if (!deps.insert(paneId, text)) return fail('insert-failed', undefined, text)
+    logTake('text')
+    take++
+    reset()
   }
 
   /**
-   * Esc. Only the short-lived states own it: a take being recorded or
-   * transcribed, a transcript counting down, and a transcript being typed in
-   * (eaten there without effect — an Esc reaching the CLI mid-injection would
-   * interrupt it). `held` and `error` can sit on screen for minutes while the
-   * pane is busy, and Esc is how the user interrupts a busy CLI, so there it is
-   * left alone: withdraw() and dismiss() are the capsule's own buttons.
+   * A voice.partial event: the text so far of the current take. Events for
+   * another session, or older than one already shown, are ignored, and so is
+   * one that would rewrite committed text — committed text never changes.
+   */
+  function partial(ev: VoicePartial): void {
+    if (!sessionId || ev.sessionId !== sessionId) return
+    if (state.phase !== 'recording' && state.phase !== 'transcribing') return
+    const n = typeof ev.seq === 'number' ? ev.seq : -1
+    if (n <= partialSeq) return
+    const committed = ev.committed ?? ''
+    if (!committed.startsWith(state.committed)) return
+    partialSeq = n
+    state.committed = committed
+    state.tentative = ev.tentative ?? ''
+  }
+
+  /**
+   * Esc. Only a take being recorded or transcribed owns it. An `error` capsule
+   * can sit on screen for seconds, and Esc is how the user interrupts a busy
+   * CLI, so there it is left alone: dismiss() is the capsule's own button.
    * Returns true when the key was the capsule's.
    */
   function cancel(): boolean {
-    switch (state.phase) {
-      case 'delivering':
-        return true
-      case 'countdown':
-        // A capped transcript can wait for minutes, like `held`: Esc stays
-        // the CLI's, and the capsule's own buttons send or discard it.
-        if (state.awaitingSend) return false
-        break
-      case 'starting':
-      case 'recording':
-      case 'transcribing':
-        logTake('cancelled')
-        if (sessionId) cancelSession(sessionId)
-        break
-      default:
-        return false
-    }
+    if (state.phase !== 'starting' && state.phase !== 'recording' && state.phase !== 'transcribing') return false
+    logTake('cancelled')
+    if (sessionId) cancelSession(sessionId)
     take++
     reset()
     return true
   }
 
-  /** The capsule's withdraw button: take a held message back out of the queue. */
-  function withdraw(): void {
-    if (state.phase !== 'held') return
-    if (messageId !== null) deps.cancelMessage(messageId)
-    take++
-    reset()
-  }
-
-  /** The capsule's close button on an error (it also times out on its own),
-   *  or its discard button on a capped transcript waiting to be sent. */
+  /** The capsule's close button on an error (it also times out on its own). */
   function dismiss(): void {
-    if (state.phase === 'error') return reset()
-    if (state.phase === 'countdown' && state.awaitingSend) {
-      take++
-      reset()
-    }
-  }
-
-  /** The capsule's send button on a capped transcript. */
-  function send(): void {
-    if (state.phase === 'countdown' && state.awaitingSend) deliverNow()
+    if (state.phase === 'error') reset()
   }
 
   /** The setting went off (or the window is going away): drop any take. */
@@ -598,7 +517,7 @@ export function useVoiceInput(deps: VoiceDeps) {
     reset()
   }
 
-  return { state, visible, press, lock, release, cancel, withdraw, dismiss, send, disable }
+  return { state, visible, press, lock, release, partial, cancel, dismiss, disable }
 }
 
 export type VoiceInput = ReturnType<typeof useVoiceInput>

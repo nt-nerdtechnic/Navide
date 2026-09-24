@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -305,3 +307,325 @@ async def test_late_prewarm_from_before_switch_off_keeps_the_re_enabled_sidecar(
     release.set()
     assert await asyncio.wait_for(a, 30) == {"ok": True}
     assert stt_service.get_sidecar().running
+
+
+# ── Streaming partials (voice.partial) ──────────────────────────────────────
+# FAKE_STT_DECODE makes the fake sidecar "hear" a run of sample 1000 + i as the
+# character chr(0x4E00 + i), so hypotheses are exact. Each 250 ms block below is
+# one character: 200 ms of tone, then a 50 ms pause.
+
+BLOCK = SECOND // 4
+
+
+@pytest.fixture
+async def stream(voice: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    log_path = tmp_path / "requests.jsonl"
+    monkeypatch.setenv("FAKE_STT_DECODE", "1")
+    monkeypatch.setenv("FAKE_STT_LOG", str(log_path))
+    monkeypatch.setattr(voice_handlers, "PARTIAL_INTERVAL_S", 0.05)
+    yield log_path
+
+
+def _requests(log_path: Path) -> list[dict]:
+    if not log_path.exists():
+        return []
+    return [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+
+
+def _text(n: int) -> str:
+    return "".join(chr(0x4E00 + i) for i in range(n))
+
+
+async def _send(session: _Session, msg_type: str, payload: dict) -> dict:
+    """Like call(), but tolerant of voice.partial events arriving meanwhile."""
+    before = len(session.sent)
+    await app_module.handle_message(session, {"id": "m", "type": msg_type, "payload": payload})  # type: ignore[arg-type]
+    replies = [m for m in session.sent[before:] if m.get("type") == f"{msg_type}.result"]
+    assert len(replies) == 1, session.sent[before:]
+    return replies[0]["payload"]
+
+
+async def _speak(session: _Session, sid: str, blocks: range, pause: float = 0.06) -> None:
+    for i in blocks:
+        tone = (1000 + i).to_bytes(2, "little", signed=True) * (BLOCK * 4 // 5 // 2)
+        pcm = base64.b64encode(tone + bytes(BLOCK - len(tone))).decode()
+        await app_module.handle_message(session, {  # type: ignore[arg-type]
+            "id": "c", "type": "voice.chunk", "payload": {"sessionId": sid, "seq": i, "pcm": pcm},
+        })
+        await asyncio.sleep(pause)
+
+
+def _partials(session: _Session) -> list[dict]:
+    return [m["payload"] for m in session.sent if m.get("type") == "voice.partial"]
+
+
+async def _settle(session: _Session, timeout: float = 5.0) -> None:
+    """Wait until the in-flight partial (if any) has landed."""
+    rec = voice_handlers._active
+    if rec is not None and rec.partial is not None:
+        await asyncio.wait_for(asyncio.shield(rec.partial), timeout)
+
+
+async def test_partials_reach_only_the_owner_and_final_extends_committed(
+    stream: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    broadcasts: list[dict] = []
+
+    async def broadcast(msg: dict) -> None:
+        broadcasts.append(msg)
+
+    monkeypatch.setattr(app_module, "broadcast", broadcast)
+    owner, other = _Session(), _Session()
+    sid = (await _send(owner, "voice.start", {}))["sessionId"]
+    await _speak(owner, sid, range(16))
+    await asyncio.sleep(0.2)
+    await _settle(owner)
+    partials = _partials(owner)
+    assert len(partials) >= 3
+    assert all(p["sessionId"] == sid for p in partials)
+    seqs = [p["seq"] for p in partials]
+    assert seqs == sorted(set(seqs))
+    committed = [p["committed"] for p in partials]
+    assert all(b.startswith(a) for a, b in zip(committed, committed[1:]))
+    assert committed[-1], "stable hypotheses must commit text"
+    assert all(_text(16).startswith(p["committed"] + p["tentative"]) for p in partials)
+    stop = await _send(owner, "voice.stop", {"sessionId": sid})
+    assert stop["ok"] is True
+    assert stop["text"] == _text(16) and stop["text"].startswith(committed[-1])
+    assert other.sent == [] and not [b for b in broadcasts if b.get("type") == "voice.partial"]
+    # Partials after the first carry the committed text as context.
+    assert any((r["prompt"] or "").startswith(voice_handlers.DEFAULT_INITIAL_PROMPT) for r in _requests(stream))
+
+
+async def test_unstable_tail_is_never_committed(stream: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FAKE_STT_TAIL_NOISE", "1")
+    session = _Session()
+    sid = (await _send(session, "voice.start", {}))["sessionId"]
+    await _speak(session, sid, range(12))
+    await asyncio.sleep(0.2)
+    await _settle(session)
+    partials = _partials(session)
+    assert partials and partials[-1]["committed"]
+    assert not any(ch.isdigit() for p in partials for ch in p["committed"])
+    assert any(p["tentative"][-1:].isdigit() for p in partials)
+    stop = await _send(session, "voice.stop", {"sessionId": sid})
+    # The final pass keeps whatever the tail pass heard, noise digit included.
+    assert stop["text"][:-1] == _text(12) and stop["text"][-1].isdigit()
+
+
+async def test_window_advances_so_each_partial_stays_bounded(
+    stream: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _Session()
+    sid = (await _send(session, "voice.start", {}))["sessionId"]
+    await _speak(session, sid, range(48))  # 12 s of speech
+    await asyncio.sleep(0.2)
+    await _settle(session)
+    assert voice_handlers._active.win_start > 0
+    stop = await _send(session, "voice.stop", {"sessionId": sid})
+    assert stop["text"] == _text(48)
+    *partials, final = _requests(stream)
+    partial_sizes = [r["bytes"] for r in partials]
+    assert len(partial_sizes) >= 10
+    # Agreed segments leave the window at once: it stays a few seconds long.
+    assert max(partial_sizes) <= 4 * SECOND
+    assert final["bytes"] <= 4 * SECOND + PAD
+
+
+@pytest.mark.parametrize("skew_ms", [600, -600])
+async def test_skewed_boundaries_neither_drop_nor_repeat_words(
+    stream: Path, monkeypatch: pytest.MonkeyPatch, skew_ms: int,
+) -> None:
+    # Late boundaries used to cut off the start of the next clause (a drop);
+    # early ones left the end of the committed clause in the next window (a
+    # repeat). The overlap plus text dedup must give the exact text either way.
+    monkeypatch.setenv("FAKE_STT_SKEW_MS", str(skew_ms))
+    session = _Session()
+    sid = (await _send(session, "voice.start", {}))["sessionId"]
+    await _speak(session, sid, range(48))
+    await asyncio.sleep(0.2)
+    await _settle(session)
+    committed = [p["committed"] for p in _partials(session)]
+    assert committed[-1] and voice_handlers._active.win_start > 0
+    assert all(b.startswith(a) for a, b in zip(committed, committed[1:]))
+    assert all(_text(48).startswith(c) for c in committed)
+    stop = await _send(session, "voice.stop", {"sessionId": sid})
+    assert stop["text"] == _text(48)
+
+
+def test_unrecognised_overlap_is_held_not_committed_twice() -> None:
+    # The window starts 1.5 s inside committed audio, and whisper hears that
+    # overlap as other words (戊己庚), so the text dedup cannot strip it.
+    rec = voice_handlers._Recording(id="x", owner=None)
+    rec.committed, rec.committed_until = "甲乙丙丁,", SECOND * 3 // 2
+    window = 5 * SECOND
+    garbled = [
+        {"t0_ms": 0, "t1_ms": 1200, "text": "戊己庚,"},
+        {"t0_ms": 1200, "t1_ms": 3000, "text": "新的字,"},
+        {"t0_ms": 3000, "t1_ms": 4200, "text": "尾巴"},
+    ]
+    for _ in range(2):  # two agreeing hypotheses would normally commit
+        tentative = voice_handlers._apply_hypothesis(rec, garbled, window)
+        assert rec.committed == "甲乙丙丁," and "戊己庚" not in tentative
+    assert tentative == "新的字,尾巴"
+    # Once a hypothesis re-hears the overlap, agreement commits again.
+    # (It agrees with the held hypothesis, which already had the overlap cut.)
+    heard = [{"t0_ms": 0, "t1_ms": 1200, "text": "乙丙丁,"}, *garbled[1:]]
+    voice_handlers._apply_hypothesis(rec, heard, window)
+    assert rec.committed == "甲乙丙丁,新的字,"
+
+
+async def test_cancel_during_the_temp_write_leaves_no_audio(
+    stream: Path, voice: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The cleanup (on the other pool worker) runs before the delayed write
+    # opens the file; the write must not create it again.
+    entered = threading.Event()
+    write = voice_handlers._write_pcm
+
+    def slow_write(path: Path, pcm: bytes) -> None:
+        entered.set()
+        time.sleep(0.3)
+        write(path, pcm)
+
+    monkeypatch.setattr(voice_handlers, "_write_pcm", slow_write)
+    session = _Session()
+    sid = (await _send(session, "voice.start", {}))["sessionId"]
+    await _speak(session, sid, range(8), pause=0.0)
+    assert await asyncio.to_thread(entered.wait, 5)
+    await _send(session, "voice.cancel", {"sessionId": sid})
+    await asyncio.sleep(0.6)
+    assert not list(voice.glob("navide-voice-*.pcm"))
+
+
+def test_strip_overlap() -> None:
+    def strip(done: str, texts: list[str]) -> list[str]:
+        return voice_handlers._strip_overlap(done, texts)[0]
+
+    assert strip("我們一直打字,接著,", ["打字,接著,我們", "再說"]) == ["我們", "再說"]
+    assert strip("我們一直打字,接著,", ["著", "直打字,接著,我們"]) == ["", "我們"]  # clipped word
+    assert strip("最後,", ["最後,", "當你放開按鍵,"]) == ["", "當你放開按鍵,"]
+    assert strip("最後,", ["當你放開按鍵,"]) == ["當你放開按鍵,"]
+    assert strip("今天天氣不錯", ["天汽不錯,我們"]) == ["我們"]  # a misheard character
+    assert strip("今天天氣真的不錯", ["天氣不錯,我們"]) == ["我們"]  # a dropped one
+    assert strip("run the tests", [" the tests now"]) == ["now"]
+    assert strip("", ["abc"]) == ["abc"]
+    assert voice_handlers._strip_overlap("最後,", ["當你放開按鍵,"])[1] is False
+
+
+async def test_force_trim_when_no_agreement_at_cap(stream: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Every segment ends in a digit that changes per request, so no two
+    # hypotheses agree: only the cap moves the window.
+    monkeypatch.setenv("FAKE_STT_TAIL_NOISE", "all")
+    monkeypatch.setattr(voice_handlers, "WINDOW_CAP_BYTES", 3 * SECOND)
+    session = _Session()
+    sid = (await _send(session, "voice.start", {}))["sessionId"]
+    await _speak(session, sid, range(40))
+    await asyncio.sleep(0.2)
+    await _settle(session)
+    assert max(r["bytes"] for r in _requests(stream) if r["segments"]) <= 4 * SECOND
+    committed = [p["committed"] for p in _partials(session)]
+    assert all(b.startswith(a) for a, b in zip(committed, committed[1:]))
+    stop = await _send(session, "voice.stop", {"sessionId": sid})
+    assert stop["text"].startswith(committed[-1])
+    # Per-segment random digits also defeat the overlap dedup (real whisper
+    # does not scatter noise like that), so only require that nothing was
+    # lost: every character, in order.
+    heard = iter(stop["text"])
+    assert all(ch in heard for ch in _text(40)), stop["text"]
+
+
+async def test_busy_partials_are_skipped_not_queued(stream: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FAKE_STT_DELAY_S", "0.3")
+    session = _Session()
+    sid = (await _send(session, "voice.start", {}))["sessionId"]
+    await _speak(session, sid, range(20))  # ~1.2 s at 20 ticks/s
+    await _settle(session)
+    requests = [r for r in _requests(stream) if r["segments"]]
+    assert 1 <= len(requests) <= 6
+    # Serial, one at a time: no request started before the previous ended.
+    assert all(b["start"] >= a["end"] for a, b in zip(requests, requests[1:]))
+    await _send(session, "voice.cancel", {"sessionId": sid})
+
+
+async def test_stop_cancels_an_in_flight_partial_then_runs_the_tail(
+    stream: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FAKE_STT_DELAY_S", "0.6")
+    session = _Session()
+    sid = (await _send(session, "voice.start", {}))["sessionId"]
+    await _speak(session, sid, range(8), pause=0.0)
+    for _ in range(200):
+        if stt_service.get_sidecar()._pending:  # the partial reached the sidecar
+            break
+        await asyncio.sleep(0.01)
+    else:
+        pytest.fail("no partial started")
+    started = time.monotonic()
+    stop = await _send(session, "voice.stop", {"sessionId": sid})
+    elapsed = time.monotonic() - started
+    assert stop["ok"] is True and stop["text"] == _text(8)
+    # One tail pass (0.6 s), not the rest of the partial plus the tail.
+    assert elapsed < 1.0, (elapsed, _requests(stream))
+    partial, final = _requests(stream)
+    assert partial["cancelled"] and not final["cancelled"]
+    await asyncio.sleep(0.1)
+    assert _partials(session) == []
+
+
+async def test_cancel_aborts_the_in_flight_partial_and_leaves_no_audio(
+    stream: Path, voice: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FAKE_STT_DELAY_S", "5")
+    session = _Session()
+    sid = (await _send(session, "voice.start", {}))["sessionId"]
+    await _speak(session, sid, range(8), pause=0.0)
+    for _ in range(200):
+        if stt_service.get_sidecar()._pending:
+            break
+        await asyncio.sleep(0.01)
+    else:
+        pytest.fail("no partial started")
+    partial = voice_handlers._active.partial
+    await _send(session, "voice.cancel", {"sessionId": sid})
+    with pytest.raises(asyncio.CancelledError):
+        await partial
+    # The sidecar aborted it (a ping answers at once) and the temp file is gone.
+    assert (await asyncio.wait_for(stt_service.get_sidecar().ping(), 2))["ok"] is True
+    await asyncio.sleep(0.1)
+    assert not list(voice.glob("navide-voice-*.pcm"))
+
+
+async def test_switch_off_ends_partials(stream: Path) -> None:
+    session = _Session()
+    sid = (await _send(session, "voice.start", {}))["sessionId"]
+    await _speak(session, sid, range(8))
+    rec = voice_handlers._active
+    assert rec.ticker is not None
+    await _send(session, "voice.shutdown", {})
+    count = len(_partials(session))
+    await asyncio.sleep(0.3)
+    assert rec.ticker is None and voice_handlers._active is None
+    assert len(_partials(session)) == count
+
+
+async def test_no_partials_for_a_silent_mic(stream: Path) -> None:
+    session = _Session()
+    sid = (await _send(session, "voice.start", {}))["sessionId"]
+    frame = (0).to_bytes(2, "little", signed=True)
+    for i in range(8):
+        pcm = base64.b64encode(frame * (BLOCK // 2)).decode()
+        await app_module.handle_message(session, {  # type: ignore[arg-type]
+            "id": "c", "type": "voice.chunk", "payload": {"sessionId": sid, "seq": i, "pcm": pcm},
+        })
+        await asyncio.sleep(0.06)
+    assert _requests(stream) == [] and _partials(session) == []
+    stop = await _send(session, "voice.stop", {"sessionId": sid})
+    assert stop["text"] == "" and stop["peak"] == 0
+
+
+def test_join_restores_the_space_between_latin_words() -> None:
+    assert voice_handlers._join("hello", "world") == "hello world"
+    assert voice_handlers._join("hello.", "World") == "hello. World"
+    assert voice_handlers._join("你好，", "world") == "你好，world"
+    assert voice_handlers._join("你好", "世界") == "你好世界"

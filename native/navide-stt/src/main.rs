@@ -5,11 +5,12 @@
 
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
+use std::sync::{mpsc, Arc, Mutex};
 use std::process::ExitCode;
 use std::time::Instant;
 
 use navide_stt::protocol::{self, Request};
-use navide_stt::stt::{decode_s16le, Transcriber};
+use navide_stt::stt::{decode_s16le, join_segments, Transcriber};
 use serde_json::Value;
 
 struct Args {
@@ -66,29 +67,70 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    for line in io::stdin().lock().lines() {
-        let Ok(line) = line else { break };
-        let reply = match protocol::parse_request(&line) {
-            None => continue,
-            Some(Request::Shutdown) => break,
-            Some(Request::Ping { id }) => protocol::ok(&id),
-            Some(Request::Invalid { id, error }) => protocol::err(id.as_deref(), &error),
-            Some(Request::Transcribe {
+    // stdin is read on its own thread so a `cancel` can reach a transcription
+    // that is already running; every reply is still written from this thread.
+    let cancel_target: Arc<Mutex<Option<String>>> = Arc::default();
+    let (tx, rx) = mpsc::channel::<Request>();
+    {
+        let cancel_target = Arc::clone(&cancel_target);
+        std::thread::spawn(move || {
+            for line in io::stdin().lock().lines() {
+                let Ok(line) = line else { break };
+                match protocol::parse_request(&line) {
+                    None => {}
+                    Some(Request::Cancel { target }) => {
+                        *cancel_target.lock().unwrap() = Some(target);
+                    }
+                    Some(Request::Shutdown) => {
+                        let _ = tx.send(Request::Shutdown);
+                        break;
+                    }
+                    Some(request) => {
+                        if tx.send(request).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+    }
+    let is_cancelled = |id: &str| cancel_target.lock().unwrap().as_deref() == Some(id);
+
+    for request in rx {
+        let reply = match request {
+            Request::Shutdown => break,
+            Request::Cancel { .. } => continue,
+            Request::Ping { id } => protocol::ok(&id),
+            Request::Invalid { id, error } => protocol::err(id.as_deref(), &error),
+            Request::Transcribe { id, .. } if is_cancelled(&id) => protocol::cancelled(&id),
+            Request::Transcribe {
                 id,
                 pcm_path,
                 language,
                 initial_prompt,
-            }) => {
+                segments,
+            } => {
                 let started = Instant::now();
                 let result = std::fs::read(&pcm_path)
                     .map_err(|e| format!("cannot read pcm_path: {e}"))
                     .and_then(|bytes| {
                         transcriber
-                            .transcribe(&decode_s16le(&bytes), &language, &initial_prompt)
+                            .transcribe_segments(&decode_s16le(&bytes), &language, &initial_prompt, segments, &|| {
+                                is_cancelled(&id)
+                            })
                             .map_err(|e| format!("{e:#}"))
                     });
                 match result {
-                    Ok(text) => protocol::ok_text(&id, &text, started.elapsed().as_millis()),
+                    _ if is_cancelled(&id) => protocol::cancelled(&id),
+                    Ok(segs) => {
+                        let text = join_segments(&segs);
+                        let ms = started.elapsed().as_millis();
+                        if segments {
+                            protocol::ok_segments(&id, &text, ms, &segs)
+                        } else {
+                            protocol::ok_text(&id, &text, ms)
+                        }
+                    }
                     Err(error) => protocol::err(Some(&id), &error),
                 }
             }

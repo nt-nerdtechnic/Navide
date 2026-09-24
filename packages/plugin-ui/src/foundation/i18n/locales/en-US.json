@@ -121,19 +121,15 @@
   "prewarm-failed": "Voice input is not ready: {reason}",
     "capsule": {
       "starting": "Preparing microphone…",
-      "recording": "Listening — release to send",
-      "recording-hands-free": "Listening hands-free — press the shortcut again to send",
+      "recording": "Listening — release to insert",
+      "recording-hands-free": "Listening hands-free — press the shortcut again to insert",
       "cap-left": "{s}s left",
       "esc-cancel": "Esc to cancel",
-      "withdraw": "Withdraw",
       "dismiss": "Dismiss",
+      "copy": "Copy",
+      "copied": "Copied",
       "transcribing": "Transcribing…",
-      "delivering": "Sending…",
-      "held": "Waiting: {reason}",
-      "device-fallback": "Chosen microphone unavailable — using the system default",
-      "cap-reached": "Time limit reached — send it?",
-      "send": "Send",
-      "discard": "Discard"
+      "device-fallback": "Chosen microphone unavailable — using the system default"
     },
     "error": {
       "generic": "Voice input failed ({code})",
@@ -154,11 +150,9 @@
       "stop-transcribe-failed": "Transcription failed",
       "stop-failed": "Transcription failed",
       "no-speech": "No speech detected",
+      "insert-failed": "Could not type the text into this pane",
       "mic-silent": "The microphone is not picking up any sound — allow Navide in System Settings → Privacy & Security → Microphone, or choose another microphone in the voice settings (a Bluetooth headset may be asleep)",
       "mic-authorized": "Microphone allowed — hold the shortcut again to speak"
-    },
-    "readback": {
-      "done": "{name} is done"
     }
   },
   "msg": {
@@ -1326,7 +1320,7 @@
     "voice": {
       "section": "Voice input",
       "enabled": "Voice input (hold to talk)",
-      "enabled-hint": "Hold Ctrl+Alt+M (rebindable under Shortcuts) to speak into the focused CLI pane. Speech is transcribed on this computer by a local Whisper model; audio never leaves the machine.",
+      "enabled-hint": "Hold Ctrl+Alt+M (rebindable under Shortcuts) to dictate into the focused CLI pane. The text goes into its input box as if you typed it — nothing is sent until you press Enter yourself. Speech is transcribed on this computer by a local Whisper model; audio never leaves the machine.",
       "device": "Microphone",
       "device-default": "System default",
       "device-unavailable": "(not connected)",
@@ -1335,13 +1329,11 @@
       "device-missing-note": "The chosen microphone is not connected; the system default will be used.",
       "mode": "Recording mode",
       "mode-hold-tap": "Hold, or tap to lock",
-      "mode-hold-tap-hint": "Hold the shortcut to talk and let go to send; a quick tap keeps listening hands-free until you press it again (up to 5 minutes).",
+      "mode-hold-tap-hint": "Hold the shortcut to talk and let go to insert the text; a quick tap keeps listening hands-free until you press it again (up to 5 minutes).",
       "mode-hold": "Hold to talk",
-      "mode-hold-hint": "Hold the shortcut while you speak; letting go sends. Up to 60 seconds.",
+      "mode-hold-hint": "Hold the shortcut while you speak; letting go inserts the text. Up to 60 seconds.",
       "mode-toggle": "Press to start, press again to stop",
-      "mode-toggle-hint": "Press the shortcut once to start and again to send; Esc cancels. Up to 5 minutes.",
-      "readback": "Read replies aloud",
-      "readback-hint": "When a pane you spoke to finishes its turn, speak a short summary with the system voice.",
+      "mode-toggle-hint": "Press the shortcut once to start and again to insert the text; Esc cancels. Up to 5 minutes.",
       "model": "Speech model",
       "status-checking": "Checking…",
       "status-unavailable": "Status unavailable (the backend is not responding)",

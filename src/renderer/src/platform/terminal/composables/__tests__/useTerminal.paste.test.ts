@@ -272,6 +272,46 @@ describe('useTerminal — manual paste', () => {
     scope.stop()
   })
 
+  // Voice dictation: the text exists nowhere else, so a paste that would be
+  // dropped must say so instead of vanishing.
+  describe('insertText', () => {
+    it('pastes like ⌘V, as the user, with no Enter', async () => {
+      const { mock, scope, terminal } = await spawnedTerminal('claude')
+      expect(terminal.insertText('幫我跑測試')).toBe(true)
+      expect(pastedData(mock)).toBe('幫我跑測試')
+      const sent = mock.sent.filter((s) => s.type === 'terminal.input').map((s) => s.payload)
+      for (const p of sent) expect(p).toMatchObject({ human: true })
+      scope.stop()
+    })
+
+    it('refuses, sending nothing, while the pane is still preparing', async () => {
+      const { mock, scope, terminal } = await spawnedTerminal('claude')
+      terminal.setDisableStdin(true)
+      expect(terminal.insertText('kept by the caller')).toBe(false)
+      expect(pastedData(mock)).toBe('')
+      scope.stop()
+    })
+
+    it('refuses once the CLI has exited', async () => {
+      const { mock, scope, terminal } = await spawnedTerminal('claude')
+      mock.emit('terminal.exit', { terminal_session_id: 'sess-1', exit_code: 0, signal: null })
+      await settle()
+      expect(terminal.status.value).toBe('exited')
+      expect(terminal.insertText('kept by the caller')).toBe(false)
+      expect(pastedData(mock)).toBe('')
+      scope.stop()
+    })
+
+    it('refuses a pane that never spawned', async () => {
+      const mock = createMockBackend()
+      const { result, scope } = withScope(() => useTerminal('pane-1', mock.backend, { agentProfileFor }))
+      result.mount(document.createElement('div'))
+      expect(result.insertText('kept by the caller')).toBe(false)
+      expect(pastedData(mock)).toBe('')
+      scope.stop()
+    })
+  })
+
   // Every way a paste can come to nothing used to return silently, so they were
   // indistinguishable in a "the paste vanished" report. Each now says which one
   // it was, and the ones that had text say how much of it was lost.

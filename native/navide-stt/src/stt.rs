@@ -2,10 +2,12 @@
 //! Ported from nt-type's `src-tauri/src/stt/mod.rs`, without `single_segment`
 //! (it truncated longer utterances to the first segment).
 
+use std::ffi::c_void;
 use std::os::raw::c_int;
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use crate::protocol::Segment;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
 pub const SAMPLE_RATE: usize = 16_000;
@@ -64,8 +66,27 @@ impl Transcriber {
 
     /// Transcribe 16 kHz mono f32 samples into one trimmed string.
     pub fn transcribe(&self, samples: &[f32], language: &str, initial_prompt: &str) -> Result<String> {
+        let segments = self.transcribe_segments(samples, language, initial_prompt, false, &|| false)?;
+        Ok(join_segments(&segments))
+    }
+
+    /// Transcribe into whisper's segments. Segment text has non-speech markers
+    /// removed but keeps its leading space, so joining them preserves word
+    /// spacing; times are relative to the start of `samples`. With `clauses`
+    /// each segment is further split after clause punctuation, timed by token
+    /// timestamps (whisper emits one segment for many seconds of Chinese).
+    /// whisper.cpp polls `should_abort` between encoder/decoder steps and
+    /// fails the run once it returns true.
+    pub fn transcribe_segments(
+        &self,
+        samples: &[f32],
+        language: &str,
+        initial_prompt: &str,
+        clauses: bool,
+        should_abort: &dyn Fn() -> bool,
+    ) -> Result<Vec<Segment>> {
         if samples.is_empty() {
-            return Ok(String::new());
+            return Ok(Vec::new());
         }
         let padded;
         let samples = if samples.len() < MIN_SAMPLES {
@@ -87,19 +108,85 @@ impl Transcriber {
         // Voice input is always a fresh utterance — no cross-sentence context.
         params.set_no_context(true);
         params.set_n_threads(self.n_threads);
+        params.set_token_timestamps(clauses);
         if !initial_prompt.is_empty() {
             params.set_initial_prompt(initial_prompt);
+        }
+        // Our own trampoline: whisper-rs 0.14's set_abort_callback_safe casts
+        // its boxed closure to the wrong type. `abort` outlives `state.full`.
+        let abort: &dyn Fn() -> bool = should_abort;
+        unsafe {
+            params.set_abort_callback(Some(abort_trampoline));
+            params.set_abort_callback_user_data(&abort as *const &dyn Fn() -> bool as *mut c_void);
         }
 
         state.full(params, samples).context("whisper inference failed")?;
 
+        // whisper.cpp reports times in 10 ms units.
         let n = state.full_n_segments()?;
-        let mut out = String::new();
+        let mut out = Vec::with_capacity(n.max(0) as usize);
         for i in 0..n {
-            out.push_str(&state.full_get_segment_text_lossy(i)?);
+            let (seg_t0, seg_t1) = (state.full_get_segment_t0(i)?, state.full_get_segment_t1(i)?);
+            if !clauses {
+                out.push(Segment {
+                    t0_ms: seg_t0 * 10,
+                    t1_ms: seg_t1 * 10,
+                    text: remove_non_speech(&state.full_get_segment_text_lossy(i)?),
+                });
+                continue;
+            }
+            // Token bytes are accumulated per clause, so a character spread
+            // over two tokens is decoded whole; a clause only ends after a
+            // punctuation token, which is always a complete character.
+            let eot = self.ctx.token_eot();
+            let mut bytes: Vec<u8> = Vec::new();
+            let mut t0 = seg_t0;
+            for j in 0..state.full_n_tokens(i)? {
+                let data = state.full_get_token_data(i, j)?;
+                if data.id >= eot {
+                    continue;
+                }
+                let token = state.full_get_token_bytes(i, j)?;
+                bytes.extend_from_slice(&token);
+                if ends_clause(&String::from_utf8_lossy(&token)) {
+                    let t1 = data.t1.clamp(t0, seg_t1);
+                    out.push(Segment {
+                        t0_ms: t0 * 10,
+                        t1_ms: t1 * 10,
+                        text: remove_non_speech(&String::from_utf8_lossy(&bytes)),
+                    });
+                    bytes.clear();
+                    t0 = t1;
+                }
+            }
+            if !bytes.is_empty() {
+                out.push(Segment {
+                    t0_ms: t0 * 10,
+                    t1_ms: seg_t1.max(t0) * 10,
+                    text: remove_non_speech(&String::from_utf8_lossy(&bytes)),
+                });
+            }
         }
-        Ok(strip_non_speech(&out))
+        Ok(out)
     }
+}
+
+/// True for a token that ends a clause (Chinese or Latin punctuation).
+fn ends_clause(token: &str) -> bool {
+    token
+        .trim_end()
+        .ends_with(['，', '。', '、', '！', '？', '；', '：', ',', '.', '!', '?', ';'])
+}
+
+unsafe extern "C" fn abort_trampoline(data: *mut c_void) -> bool {
+    let should_abort = &*(data as *const &dyn Fn() -> bool);
+    should_abort()
+}
+
+/// The trimmed transcript of `segments`, as `transcribe` returns it.
+pub fn join_segments(segments: &[Segment]) -> String {
+    let joined: String = segments.iter().map(|s| s.text.as_str()).collect();
+    joined.trim().to_string()
 }
 
 /// True when ggml registered a GPU device (Metal on macOS). whisper.cpp uses
@@ -126,6 +213,11 @@ pub fn decode_s16le(bytes: &[u8]) -> Vec<f32> {
 /// Remove whisper non-speech annotations like [BLANK_AUDIO], [Music], [音樂],
 /// 【...】 — these are model markers, not user speech, and must not be typed out.
 pub fn strip_non_speech(text: &str) -> String {
+    remove_non_speech(text).trim().to_string()
+}
+
+/// `strip_non_speech` without the trim.
+fn remove_non_speech(text: &str) -> String {
     let mut out = String::new();
     let mut depth: i32 = 0;
     for c in text.chars() {
@@ -136,12 +228,13 @@ pub fn strip_non_speech(text: &str) -> String {
             _ => {}
         }
     }
-    out.trim().to_string()
+    out
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_s16le, strip_non_speech};
+    use super::{decode_s16le, ends_clause, join_segments, strip_non_speech};
+    use crate::protocol::Segment;
 
     #[test]
     fn strips_blank_audio_marker() {
@@ -164,6 +257,23 @@ mod tests {
     #[test]
     fn unbalanced_close_does_not_swallow_speech() {
         assert_eq!(strip_non_speech("a]b"), "ab");
+    }
+
+    #[test]
+    fn joins_segments_like_transcribe() {
+        let seg = |t: &str| Segment { t0_ms: 0, t1_ms: 0, text: t.into() };
+        assert_eq!(join_segments(&[seg(" Hello"), seg(" world")]), "Hello world");
+        assert_eq!(join_segments(&[seg("你好"), seg("世界 ")]), "你好世界");
+        assert_eq!(join_segments(&[]), "");
+    }
+
+    #[test]
+    fn clause_punctuation() {
+        assert!(ends_clause("，"));
+        assert!(ends_clause("話。"));
+        assert!(ends_clause(" world."));
+        assert!(!ends_clause("麥克風"));
+        assert!(!ends_clause(" hello"));
     }
 
     #[test]

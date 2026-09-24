@@ -9,19 +9,17 @@ import { useVoiceSettings, VOICE_RECORDING_MODES, type VoiceRecordingMode } from
 import type { useBackend } from '../../composables/useBackend'
 
 // Settings → Voice Input. The model status is only asked for while
-// voice input is on: with it off this section is two switches and nothing is
+// voice input is on: with it off this section is one switch and nothing is
 // sent to the backend.
 
 const props = defineProps<{ backend: ReturnType<typeof useBackend> }>()
 const { t } = useI18n()
 const {
   voiceInputEnabled,
-  voiceReadbackEnabled,
   voiceInputDeviceId,
   voiceInputDeviceLabel,
   voiceRecordingMode,
   setVoiceInputEnabled,
-  setVoiceReadbackEnabled,
   setVoiceInputDevice,
   setVoiceRecordingMode,
 } = useVoiceSettings()
@@ -258,20 +256,6 @@ const canDownload = computed(
           >
             <option v-for="m in VOICE_RECORDING_MODES" :key="m" :value="m">{{ t(`settings.voice.mode-${m}`) }}</option>
           </select>
-        </template>
-      </SettingRow>
-
-      <SettingRow
-        data-settings-section="voice-readback"
-        :title="t('settings.voice.readback')"
-        :description="t('settings.voice.readback-hint')"
-      >
-        <template #control>
-          <ToggleSwitch
-            :model-value="voiceReadbackEnabled"
-            :aria-label="t('settings.voice.readback')"
-            @update:model-value="(v: boolean) => setVoiceReadbackEnabled(v)"
-          />
         </template>
       </SettingRow>
 

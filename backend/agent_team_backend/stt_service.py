@@ -10,6 +10,8 @@ Sidecar protocol (JSON Lines; stdout is protocol only, logs go to stderr):
 - after the model loads it prints ``{"event":"ready",...,"gpu":bool}``, or
   ``{"event":"fatal","error":...}`` and exits;
 - requests carry an ``id`` and are answered with the same ``id``;
+- ``{"op":"cancel","target":<id>}`` aborts that request (no reply of its own;
+  the target answers ``{"ok":false,"cancelled":true}``);
 - ``{"op":"shutdown"}`` or stdin EOF ends it.
 
 Only the process this module spawned is ever signalled — by its own handle,
@@ -322,6 +324,14 @@ class SttSidecar:
             proc.stdin.write((json.dumps({"id": req_id, **payload}, ensure_ascii=False) + "\n").encode())
             await proc.stdin.drain()
             return await asyncio.wait_for(future, timeout)
+        except asyncio.CancelledError:
+            # Nobody wants the answer: have the sidecar abort the work too, so
+            # the next request is not stuck behind it. Its reply is dropped.
+            # (wait_for has cancelled `future` by now unless a reply won.)
+            if (future.cancelled() or not future.done()) and proc.returncode is None:
+                with contextlib.suppress(Exception):
+                    proc.stdin.write((json.dumps({"op": "cancel", "target": req_id}) + "\n").encode())
+            raise
         except (BrokenPipeError, ConnectionResetError) as err:
             raise SidecarError(f"sidecar pipe closed: {err}") from err
         except asyncio.TimeoutError as err:
@@ -332,10 +342,15 @@ class SttSidecar:
             self._pending.pop(req_id, None)
             self._touch()
 
-    async def transcribe(self, pcm_path: Path, language: str, initial_prompt: str | None) -> dict:
+    async def transcribe(
+        self, pcm_path: Path, language: str, initial_prompt: str | None, segments: bool = False,
+    ) -> dict:
+        """``segments=True`` adds ``segments: [{t0_ms, t1_ms, text}]`` to the reply."""
         payload: dict[str, Any] = {"op": "transcribe", "pcm_path": str(pcm_path), "language": language}
         if initial_prompt:
             payload["initial_prompt"] = initial_prompt
+        if segments:
+            payload["segments"] = True
         return await self.request(payload)
 
     async def ping(self) -> dict:
