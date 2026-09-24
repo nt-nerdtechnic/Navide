@@ -100,6 +100,23 @@ jobs:
         working-directory: backend
         run: uv run pyinstaller agent_team_backend.spec
 
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native/navide-stt
+
+      - name: Build speech-to-text sidecar
+        # Compiles whisper.cpp (cmake) into build/stt/, which electron-builder
+        # packages as bin/navide-stt. Required here: a release without it silently
+        # loses voice input.
+        shell: bash
+        env:
+          NAVIDE_STT_REQUIRED: '1'
+        run: pnpm build:stt
+
       - name: Build, sign & notarize application
         shell: bash
         run: |
@@ -142,6 +159,12 @@ jobs:
           test ! -e "${app_path}/Contents/Resources/plugins/plans/backend/navide-plans-go"
           # …and the v2 package that replaces it does carry its backend.
           test -x "${app_path}/Contents/Resources/plugins/navide-plans/backend/navide-plans"
+          # The voice sidecar is a loose Mach-O in Resources/bin; it must carry
+          # the Developer ID signature with the hardened runtime flag.
+          stt_bin="${app_path}/Contents/Resources/bin/navide-stt"
+          test -x "${stt_bin}"
+          codesign --verify --strict --verbose=2 "${stt_bin}"
+          codesign --display --verbose=2 "${stt_bin}" 2>&1 | grep -q 'flags=.*runtime'
           echo "Verifying ${app_path}"
           # Signed with a valid Developer ID and the seal is intact.
           codesign --verify --deep --strict --verbose=2 "${app_path}"
@@ -284,6 +307,23 @@ jobs:
         working-directory: backend
         run: uv run pyinstaller agent_team_backend.spec
 
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native/navide-stt
+
+      - name: Build speech-to-text sidecar
+        # Compiles whisper.cpp (cmake) into build/stt/, which electron-builder
+        # packages as bin/navide-stt. Required here: a release without it silently
+        # loses voice input.
+        shell: bash
+        env:
+          NAVIDE_STT_REQUIRED: '1'
+        run: pnpm build:stt
+
       - name: Build application
         shell: bash
         run: |
@@ -425,6 +465,27 @@ jobs:
         # come from an arm64 runner.
         working-directory: backend
         run: uv run pyinstaller agent_team_backend.spec
+
+      - name: Set up Rust
+        # Best-effort on this runner: never block the release on the sidecar.
+        continue-on-error: true
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        continue-on-error: true
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native/navide-stt
+
+      - name: Build speech-to-text sidecar
+        continue-on-error: true
+        # Compiles whisper.cpp (cmake) into build/stt/, which electron-builder
+        # packages as bin/navide-stt. Best-effort here: on failure the script
+        # warns and the build ships without it (voice input shows as unavailable).
+        shell: bash
+        env:
+          NAVIDE_STT_REQUIRED: '0'
+        run: pnpm build:stt
 
       - name: Build application
         shell: bash
@@ -569,6 +630,23 @@ jobs:
         # a build that dropped OpenConsole.exe exits every pane at once with
         # STATUS_CONTROL_C_EXIT, so this step goes red before that ever ships.
         run: backend/dist/agent_team_backend.exe --self-check conpty
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native/navide-stt
+
+      - name: Build speech-to-text sidecar
+        # Compiles whisper.cpp (cmake) into build/stt/, which electron-builder
+        # packages as bin/navide-stt. Required here: a release without it silently
+        # loses voice input.
+        shell: bash
+        env:
+          NAVIDE_STT_REQUIRED: '1'
+        run: pnpm build:stt
 
       - name: Build application
         run: |
@@ -721,6 +799,27 @@ jobs:
         # moment it opens, and nothing but a real ConPTY inside the frozen exe
         # can see it. Native arm64 is a fresh chance to get that wrong.
         run: backend/dist/agent_team_backend.exe --self-check conpty
+
+      - name: Set up Rust
+        # Best-effort on this runner: never block the release on the sidecar.
+        continue-on-error: true
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        continue-on-error: true
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native/navide-stt
+
+      - name: Build speech-to-text sidecar
+        continue-on-error: true
+        # Compiles whisper.cpp (cmake) into build/stt/, which electron-builder
+        # packages as bin/navide-stt. Best-effort here: on failure the script
+        # warns and the build ships without it (voice input shows as unavailable).
+        shell: bash
+        env:
+          NAVIDE_STT_REQUIRED: '0'
+        run: pnpm build:stt
 
       - name: Build application
         run: |

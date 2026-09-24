@@ -111,6 +111,39 @@
     "send-failed": "Unable to send input to the AI CLI session",
     "resize-failed": "Unable to resize the AI CLI session"
   },
+  "voice": {
+    "capsule": {
+      "starting": "Preparing microphone…",
+      "recording": "Listening — release to send",
+      "esc-cancel": "Esc to cancel",
+      "withdraw": "Withdraw",
+      "dismiss": "Dismiss",
+      "transcribing": "Transcribing…",
+      "delivering": "Sending…",
+      "held": "Waiting: {reason}"
+    },
+    "error": {
+      "generic": "Voice input failed ({code})",
+      "pane-asleep": "This pane is asleep — open it first",
+      "not-cli": "Voice input only goes to CLI panes",
+      "mic-denied": "Microphone access denied — allow Navide in System Settings → Privacy & Security → Microphone",
+      "mic-failed": "Could not open the microphone: {error}",
+      "backend": "The backend is not responding",
+      "start-sidecar-missing": "The speech engine is not installed in this build",
+      "start-model-missing": "Speech model not downloaded — Settings → General → Voice input",
+      "start-sidecar-failed": "The speech engine failed to start",
+      "start-busy": "Another recording is already in progress",
+      "start-failed": "Could not start recording",
+      "stop-no-session": "The recording session was lost",
+      "stop-sidecar-failed": "The speech engine crashed or timed out",
+      "stop-transcribe-failed": "Transcription failed",
+      "stop-failed": "Transcription failed",
+      "no-speech": "No speech detected"
+    },
+    "readback": {
+      "done": "{name} is done"
+    }
+  },
   "msg": {
     "panel-title": "Inter-CLI Messages",
     "pause": "Pause delivery",
@@ -987,6 +1020,10 @@
           "title": "Status Badges",
           "summary": "Rename each pane status and pick its colour, per language."
         },
+        "voice-input": {
+          "title": "Voice Input",
+          "summary": "Hold-to-talk dictation into a CLI pane, reading replies aloud, and the local speech model."
+        },
         "general-environment": {
           "title": "Environment",
           "summary": "Rerun the environment check (onboarding)."
@@ -1269,6 +1306,28 @@
       "safeStorage": "Encrypted local safeStorage registry",
       "cliFiles": "Each CLI's own instruction files"
     },
+    "voice": {
+      "section": "Voice input",
+      "enabled": "Voice input (hold to talk)",
+      "enabled-hint": "Hold Ctrl+Alt+M (rebindable under Shortcuts) to speak into the focused CLI pane. Speech is transcribed on this computer by a local Whisper model; audio never leaves the machine.",
+      "readback": "Read replies aloud",
+      "readback-hint": "When a pane you spoke to finishes its turn, speak a short summary with the system voice.",
+      "model": "Speech model",
+      "status-checking": "Checking…",
+      "status-unavailable": "Status unavailable (the backend is not responding)",
+      "sidecar-missing": "Speech engine not found in this build",
+      "model-missing": "Model not downloaded (about 148 MB)",
+      "model-ready": "Ready ({size} MB)",
+      "gpu-on": "GPU",
+      "gpu-off": "CPU",
+      "download": "Download",
+      "downloading": "Downloading…",
+      "recheck": "Re-check",
+      "download-starting": "Starting download…",
+      "download-progress": "{done} / {total} MB ({pct}%)",
+      "download-done": "Download complete",
+      "download-failed": "Download failed: {error}"
+    },
     "general": {
       "auto-resume-reconnect": "Resume sessions after a backend restart",
       "system-notify": "System notifications",
@@ -1413,6 +1472,7 @@
       "marketplace": "Marketplace",
       "executionPolicy": "Execution Policy",
       "statusBadges": "Status badges",
+      "voice": "Voice Input",
       "keybindings": "Shortcuts",
       "updates": "Updates",
       "help": "Help"
@@ -6354,6 +6414,7 @@
         "workbench_action_focusSourceControl": "Focus Source Control",
         "workbench_action_gotoSymbol": "Go To Symbol In File",
         "workbench_action_gotoWorkspaceSymbol": "Go To Symbol In Workspace",
+        "workbench_action_holdToTalk": "Hold To Talk (Voice Input)",
         "workbench_action_moveEditorLeftInGroup": "Move Editor Left In Group",
         "workbench_action_moveEditorRightInGroup": "Move Editor Right In Group",
         "workbench_action_navigateBack": "Navigate Back",

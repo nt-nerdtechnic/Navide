@@ -111,6 +111,39 @@
     "send-failed": "無法傳送輸入至 AI CLI session",
     "resize-failed": "無法調整 AI CLI session 大小"
   },
+  "voice": {
+    "capsule": {
+      "starting": "準備麥克風…",
+      "recording": "錄音中，放開即送出",
+      "esc-cancel": "Esc 取消",
+      "withdraw": "撤回",
+      "dismiss": "關閉",
+      "transcribing": "轉錄中…",
+      "delivering": "送出中…",
+      "held": "等待中：{reason}"
+    },
+    "error": {
+      "generic": "語音輸入失敗（{code}）",
+      "pane-asleep": "此 pane 已休眠，請先開啟",
+      "not-cli": "語音輸入只能送往 CLI pane",
+      "mic-denied": "麥克風權限被拒，請到 系統設定 → 隱私權與安全性 → 麥克風 允許 Navide",
+      "mic-failed": "無法開啟麥克風：{error}",
+      "backend": "後端沒有回應",
+      "start-sidecar-missing": "此版本未安裝語音引擎",
+      "start-model-missing": "尚未下載語音模型 — 設定 → 一般 → 語音輸入",
+      "start-sidecar-failed": "語音引擎啟動失敗",
+      "start-busy": "另一段錄音正在進行中",
+      "start-failed": "無法開始錄音",
+      "stop-no-session": "錄音工作階段已遺失",
+      "stop-sidecar-failed": "語音引擎當機或逾時",
+      "stop-transcribe-failed": "轉錄失敗",
+      "stop-failed": "轉錄失敗",
+      "no-speech": "沒有偵測到語音"
+    },
+    "readback": {
+      "done": "{name} 已完成"
+    }
+  },
   "msg": {
     "panel-title": "CLI 互傳訊息",
     "pause": "暫停投遞",
@@ -987,6 +1020,10 @@
           "title": "狀態徽章",
           "summary": "替九種面板狀態各自重新命名並選顏色，中文、英文與日文名稱可分開填。"
         },
+        "voice-input": {
+          "title": "語音輸入",
+          "summary": "按住說話輸入到 CLI pane、朗讀回覆，以及本機語音模型的下載與狀態。"
+        },
         "general-environment": {
           "title": "環境檢測",
           "summary": "重跑首次啟動的環境偵測精靈。"
@@ -1269,6 +1306,28 @@
       "safeStorage": "本機加密的 safeStorage 登錄",
       "cliFiles": "各 CLI 自己的指示檔"
     },
+    "voice": {
+      "section": "語音輸入",
+      "enabled": "語音輸入（按住說話）",
+      "enabled-hint": "按住 Ctrl+Alt+M（可在快捷鍵設定中更改）即可對目前聚焦的 CLI pane 說話。語音由本機的 Whisper 模型轉成文字，音訊不會離開這台電腦。",
+      "readback": "朗讀回覆",
+      "readback-hint": "對某個 pane 說話後，它完成回合時用系統語音念出簡短摘要。",
+      "model": "語音模型",
+      "status-checking": "檢查中…",
+      "status-unavailable": "無法取得狀態（後端沒有回應）",
+      "sidecar-missing": "此版本找不到語音引擎",
+      "model-missing": "尚未下載模型（約 148 MB）",
+      "model-ready": "已就緒（{size} MB）",
+      "gpu-on": "GPU",
+      "gpu-off": "CPU",
+      "download": "下載",
+      "downloading": "下載中…",
+      "recheck": "重新檢查",
+      "download-starting": "開始下載…",
+      "download-progress": "{done} / {total} MB（{pct}%）",
+      "download-done": "下載完成",
+      "download-failed": "下載失敗：{error}"
+    },
     "general": {
       "auto-resume-reconnect": "後端重啟後自動接回工作階段",
       "system-notify": "系統通知",
@@ -1413,6 +1472,7 @@
       "marketplace": "市集",
       "executionPolicy": "執行政策",
       "statusBadges": "狀態徽章",
+      "voice": "語音輸入",
       "keybindings": "快捷鍵",
       "updates": "更新",
       "help": "說明"
@@ -6354,6 +6414,7 @@
         "workbench_action_focusSourceControl": "聚焦原始碼控制",
         "workbench_action_gotoSymbol": "跳到檔案內的符號",
         "workbench_action_gotoWorkspaceSymbol": "跳到工作區內的符號",
+        "workbench_action_holdToTalk": "按住說話（語音輸入）",
         "workbench_action_moveEditorLeftInGroup": "編輯器分頁左移",
         "workbench_action_moveEditorRightInGroup": "編輯器分頁右移",
         "workbench_action_navigateBack": "返回上一個位置",

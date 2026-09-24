@@ -111,6 +111,39 @@
     "send-failed": "AI CLI セッションに入力を送信できません",
     "resize-failed": "AI CLI セッションのサイズを変更できません"
   },
+  "voice": {
+    "capsule": {
+      "starting": "マイクを準備中…",
+      "recording": "録音中 — 離すと送信",
+      "esc-cancel": "Esc でキャンセル",
+      "withdraw": "取り下げ",
+      "dismiss": "閉じる",
+      "transcribing": "文字起こし中…",
+      "delivering": "送信中…",
+      "held": "待機中：{reason}"
+    },
+    "error": {
+      "generic": "音声入力に失敗しました（{code}）",
+      "pane-asleep": "このペインはスリープ中です。先に開いてください",
+      "not-cli": "音声入力は CLI ペインにのみ送れます",
+      "mic-denied": "マイクへのアクセスが拒否されました。システム設定 → プライバシーとセキュリティ → マイク で Navide を許可してください",
+      "mic-failed": "マイクを開けませんでした：{error}",
+      "backend": "バックエンドが応答しません",
+      "start-sidecar-missing": "このビルドには音声エンジンが含まれていません",
+      "start-model-missing": "音声モデルが未ダウンロードです — 設定 → 一般 → 音声入力",
+      "start-sidecar-failed": "音声エンジンを起動できませんでした",
+      "start-busy": "別の録音が進行中です",
+      "start-failed": "録音を開始できませんでした",
+      "stop-no-session": "録音セッションが失われました",
+      "stop-sidecar-failed": "音声エンジンがクラッシュまたはタイムアウトしました",
+      "stop-transcribe-failed": "文字起こしに失敗しました",
+      "stop-failed": "文字起こしに失敗しました",
+      "no-speech": "音声が検出されませんでした"
+    },
+    "readback": {
+      "done": "{name} が完了しました"
+    }
+  },
   "msg": {
     "panel-title": "CLI 間メッセージ",
     "pause": "配信を一時停止",
@@ -987,6 +1020,10 @@
           "title": "ステータスバッジ",
           "summary": "ペインの各ステータスの名前と色を、言語ごとに設定します。"
         },
+        "voice-input": {
+          "title": "音声入力",
+          "summary": "CLI ペインへの押して話す音声入力、返答の読み上げ、ローカル音声モデルの管理。"
+        },
         "general-environment": {
           "title": "環境",
           "summary": "環境チェック（初期設定）を再実行します。"
@@ -1269,6 +1306,28 @@
       "safeStorage": "暗号化されたローカルの safeStorage レジストリ",
       "cliFiles": "各 CLI 固有の指示ファイル"
     },
+    "voice": {
+      "section": "音声入力",
+      "enabled": "音声入力（押して話す）",
+      "enabled-hint": "Ctrl+Alt+M を押している間（ショートカットで変更可）、フォーカス中の CLI ペインに話しかけられます。音声はこのコンピューター上のローカル Whisper モデルで文字起こしされ、外部に送信されません。",
+      "readback": "返答を読み上げる",
+      "readback-hint": "話しかけたペインがターンを終えると、短い要約をシステム音声で読み上げます。",
+      "model": "音声モデル",
+      "status-checking": "確認中…",
+      "status-unavailable": "状態を取得できません（バックエンドが応答しません）",
+      "sidecar-missing": "このビルドには音声エンジンがありません",
+      "model-missing": "モデル未ダウンロード（約 148 MB）",
+      "model-ready": "準備完了（{size} MB）",
+      "gpu-on": "GPU",
+      "gpu-off": "CPU",
+      "download": "ダウンロード",
+      "downloading": "ダウンロード中…",
+      "recheck": "再確認",
+      "download-starting": "ダウンロードを開始しています…",
+      "download-progress": "{done} / {total} MB（{pct}%）",
+      "download-done": "ダウンロード完了",
+      "download-failed": "ダウンロードに失敗しました：{error}"
+    },
     "general": {
       "auto-resume-reconnect": "バックエンドの再起動後にセッションを再開",
       "system-notify": "システム通知",
@@ -1413,6 +1472,7 @@
       "marketplace": "マーケットプレイス",
       "executionPolicy": "実行ポリシー",
       "statusBadges": "ステータスバッジ",
+      "voice": "音声入力",
       "keybindings": "ショートカット",
       "updates": "更新",
       "help": "ヘルプ"
@@ -6354,6 +6414,7 @@
         "workbench_action_focusSourceControl": "ソース管理にフォーカス",
         "workbench_action_gotoSymbol": "ファイル内のシンボルへ移動",
         "workbench_action_gotoWorkspaceSymbol": "ワークスペース内のシンボルへ移動",
+        "workbench_action_holdToTalk": "押して話す（音声入力）",
         "workbench_action_moveEditorLeftInGroup": "エディターをグループ内で左へ移動",
         "workbench_action_moveEditorRightInGroup": "エディターをグループ内で右へ移動",
         "workbench_action_navigateBack": "戻る",

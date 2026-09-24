@@ -4,6 +4,8 @@ import ViewPanel, { type LayoutMode } from './components/ViewPanel.vue'
 import TerminalPane from './components/TerminalPane.vue'
 import WindowControls from './components/WindowControls.vue'
 import RestoredPanePlaceholder from './components/RestoredPanePlaceholder.vue'
+import VoiceCapsule from './components/VoiceCapsule.vue'
+import { setupVoiceInput } from './voice/voiceWiring'
 import { buildWorkspaceGroups } from './lib/workspaceGroups'
 import { workspaceAliasKey } from './lib/workspaceAlias'
 import { buildPaneLineage, effectiveParents, withDescendants } from './lib/paneLineage'
@@ -8633,6 +8635,19 @@ registerCommand('workbench.action.zoomUiReset', () => { resetUiScale() })
 setContext('paneStage', true)
 registerCommand('workbench.action.focusNextPane', () => { cycleFocusedPane(1) })
 registerCommand('workbench.action.focusPreviousPane', () => { cycleFocusedPane(-1) })
+// Hold-to-talk voice input (Settings → General → Voice input, default off).
+// All of it lives in voice/voiceWiring.ts; this window only lends its panes,
+// focus and messaging queue.
+const voiceInput = setupVoiceInput({
+  backend,
+  messaging,
+  focusedPaneId: () => effectiveFocusPaneId.value,
+  paneInfo: (paneId) => panes.value.find((p) => p.id === paneId),
+  paneLabel: (paneId) => {
+    const p = panes.value.find((pn) => pn.id === paneId)
+    return p ? p.customName || p.autoName || p.agentLabel : paneId
+  },
+})
 
 // ── External UI action bus (MCP-driven) ─────────────────────────────────────
 // Actions a UI-control MCP client can invoke via ui.invoke.request. See
@@ -12578,6 +12593,8 @@ backend.on('agent.activity', (raw) => {
     // A marker reply is scanned as empty text — nothing in it was addressed to
     // anyone — but the pump still runs, since the pane is now idle.
     onTurnCompleteForMessaging(ev.pane_id, markerReply ? '' : (ev.text ?? ''), ev.timestamp ?? '')
+    // Spoken readback, for panes the user just talked to (setting, default off).
+    if (!markerReply && !ev.superseded) voiceInput.onTurnComplete(ev.pane_id, ev.text ?? '', parseEventMs(ev.timestamp ?? ''))
     // Auto-name fallback: for vendors whose readers can't surface the user's
     // prompt text, name a still-unnamed pane from its first completed turn's
     // text. Set-once via setPaneAutoName; deliberately independent of
@@ -19487,6 +19504,7 @@ function paneIsCommander(p: ActivePane): boolean {
           @context-menu="(ev) => openPaneCtxMenu(ev, p.id)"
         />
         </template>
+        <VoiceCapsule :state="voiceInput.state" @withdraw="voiceInput.withdraw" @dismiss="voiceInput.dismiss" />
         <!-- Auto/sidebar mode: meeting-style agent list on the right -->
         <div v-if="effectiveLayoutMode === 'sidebar'" class="auto-meeting-list" :style="dualFocusActive ? { gridColumn: '3' } : {}">
           <div

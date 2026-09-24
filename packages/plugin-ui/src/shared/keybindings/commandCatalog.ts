@@ -272,6 +272,7 @@ export const COMMAND_IDS: readonly string[] = [
   'workbench.action.focusSourceControl',
   'workbench.action.gotoSymbol',
   'workbench.action.gotoWorkspaceSymbol',
+  'workbench.action.holdToTalk',
   'workbench.action.moveEditorLeftInGroup',
   'workbench.action.moveEditorRightInGroup',
   'workbench.action.navigateBack',

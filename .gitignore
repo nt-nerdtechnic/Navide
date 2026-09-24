@@ -26,6 +26,8 @@ backend/.venv/
 *.pyc
 backend/dist/
 build/pane-helper/
+build/stt/
+native/navide-stt/target/
 backend/build/
 # ─── Electron packaging output ──────────────────────────────────────────────
 dist-local/

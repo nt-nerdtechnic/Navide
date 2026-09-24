@@ -351,6 +351,9 @@ declare global {
         ) => Promise<TccPermissionStatus>
         openSettings: (key: TccPermissionKey) => Promise<{ ok: boolean; error?: string }>
       }
+      media?: {
+        askMicrophone: () => Promise<{ granted: boolean; status: string }>
+      }
       executionPolicy?: ExecutionPolicyApi
       plugins?: {
         listInstalled: () => Promise<InstalledPluginSummary[]>

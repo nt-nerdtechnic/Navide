@@ -276,7 +276,7 @@ const WINDOW_SCENES: { id: string; ctx: Record<string, boolean> }[] = [
  * it just waits for it. Every combination is tried when asking whether a rule
  * can ever win.
  */
-const TRANSIENT_KEYS = ['findOpen', 'modalOpen', 'terminalFocus', 'editorTextFocus'] as const
+const TRANSIENT_KEYS = ['findOpen', 'modalOpen', 'terminalFocus', 'editorTextFocus', 'voiceInput'] as const
 
 function transientAssignments(): Record<string, boolean>[] {
   const out: Record<string, boolean>[] = []

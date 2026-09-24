@@ -18,6 +18,7 @@
     "dev": "vite build --config vite.plans.config.ts && vite build --config plugins/navide-plans/vite.config.ts && node scripts/build-plans-v2-backend.mjs --if-needed && electron-vite dev",
     "build": "pnpm run build:official-plugins && pnpm run build:git:legacy && pnpm run build:pane-helper && electron-vite build",
     "build:pane-helper": "node scripts/build-pane-helper.mjs",
+    "build:stt": "node scripts/build-stt.mjs",
     "build:official-plugins": "pnpm run build:mini-ide && pnpm run build:plans && pnpm run build:git:v2",
     "build:mini-ide": "vite build --config vite.mini-ide.config.ts",
     "build:plans:legacy": "vite build --config vite.plans.config.ts",
@@ -116,7 +117,8 @@
               "public.folder"
             ]
           }
-        ]
+        ],
+        "NSMicrophoneUsageDescription": "Navide uses the microphone for push-to-talk voice input. Speech is transcribed locally on this Mac and is never uploaded."
       },
       "extraResources": [
         {
@@ -126,6 +128,13 @@
         {
           "from": "build/pane-helper/Navide Pane.app",
           "to": "bin/Navide Pane.app"
+        },
+        {
+          "from": "build/stt",
+          "to": "bin",
+          "filter": [
+            "navide-stt"
+          ]
         }
       ]
     },
@@ -136,6 +145,13 @@
         {
           "from": "backend/dist/agent_team_backend.exe",
           "to": "bin/agent_team_backend.exe"
+        },
+        {
+          "from": "build/stt",
+          "to": "bin",
+          "filter": [
+            "navide-stt.exe"
+          ]
         }
       ]
     },
@@ -162,6 +178,13 @@
         {
           "from": "backend/dist/agent_team_backend",
           "to": "bin/agent_team_backend"
+        },
+        {
+          "from": "build/stt",
+          "to": "bin",
+          "filter": [
+            "navide-stt"
+          ]
         }
       ]
     },

@@ -2235,6 +2235,9 @@ async def _stop_log_watcher() -> None:
     from . import scheduler
 
     await scheduler.shutdown()
+    from . import voice_handlers
+
+    await voice_handlers.shutdown()
     await loop_watchdog.stop()
     # PTY children are detached process groups (start_new_session=True); they
     # must be killed here or they outlive the app as CPU-spinning orphans.
@@ -2862,6 +2865,9 @@ async def ws(websocket: WebSocket) -> None:
         # just reconnecting, and a deleted entry told callers the pane did not
         # exist. See agent_messaging.drop_owner.
         agent_messaging.drop_owner(session)
+        from . import voice_handlers
+
+        voice_handlers.drop_owner(session)
         server_link.roster_changed()
         # PTYs survive this disconnect so the frontend can reattach after a
         # transient network outage. They are killed only when the user explicitly

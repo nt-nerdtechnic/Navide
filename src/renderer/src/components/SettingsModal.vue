@@ -133,6 +133,7 @@ import SettingsSection from './settings/SettingsSection.vue'
 import SettingsCard from './settings/SettingsCard.vue'
 import SettingRow from './settings/SettingRow.vue'
 import ToggleSwitch from './settings/ToggleSwitch.vue'
+import VoiceSettingsSection from './settings/VoiceSettingsSection.vue'
 import { formatBytes } from '../lib/formatBytes'
 import { UI_SCALE_STEPS, formatUiScale, getUiScale, setUiScale } from '../lib/uiScale'
 import {
@@ -222,7 +223,7 @@ const reclaimNowCount = computed(() => props.reclaimableNowCount ?? 0)
 const reclaimNowSize = computed(() => formatBytes(props.reclaimableNowBytes ?? 0))
 
 // ── Tab ───────────────────────────────────────────────────────────────────────
-type Tab = 'mcp' | 'skills' | 'prompts' | 'memory' | 'analyzer' | 'cliAgents' | 'general' | 'cross-device' | 'updates' | 'appearance' | 'language' | 'statusBadges' | 'layout' | 'notifications' | 'accounts' | 'extensions' | 'marketplace' | 'keybindings' | 'help'
+type Tab = 'mcp' | 'skills' | 'prompts' | 'memory' | 'analyzer' | 'cliAgents' | 'general' | 'cross-device' | 'updates' | 'appearance' | 'language' | 'statusBadges' | 'layout' | 'notifications' | 'voice' | 'accounts' | 'extensions' | 'marketplace' | 'keybindings' | 'help'
 
 /** Topics inside the Help tab — read-only reference material, no settings. */
 type HelpTopic =
@@ -911,6 +912,15 @@ const settingsSearchItems = computed<SettingsSearchItem[]>(() => [
     keywords: 'status badge badges colour color rename label idle running awaiting starting stopped exited error 狀態 徽章 顏色 名稱 重新命名 閒置 執行中 等待回應 啟動中 已停止 已結束 錯誤',
   },
   {
+    id: 'voice-input',
+    tab: 'voice',
+    section: 'voice-input',
+    title: t('settings.search.item.voice-input.title'),
+    group: t('settings.nav.voice'),
+    summary: t('settings.search.item.voice-input.summary'),
+    keywords: 'voice input speech dictation microphone mic hold to talk push to talk whisper transcribe model download read aloud readback tts 語音 語音輸入 麥克風 按住說話 聽寫 轉文字 模型 下載 朗讀 音声入力 マイク 読み上げ',
+  },
+  {
     id: 'general-environment',
     tab: 'general',
     section: 'general-environment',
@@ -1485,6 +1495,8 @@ const settingsScopeNotes: Record<SettingsTab, { scope: SettingsScope; storage: k
   layout: { scope: 'user', storage: 'localStorage' },
   // The two notification toggles are localStorage flags like General's.
   notifications: { scope: 'user', storage: 'localStorage' },
+  // Both switches are localStorage flags; the model file is the backend's.
+  voice: { scope: 'user', storage: 'localStorage' },
   accounts: { scope: 'userWorkspaceBindings', storage: 'safeStorage' },
   extensions: { scope: 'user', storage: 'mainProcess' },
   // Browsing the registry reads nothing of the user's, so this page has no
@@ -2448,6 +2460,11 @@ watch(activeTab, (tab) => {
               <SettingsNavItem :label="$t('settings.nav.notifications')" :active="activeTab === 'notifications'" @select="activeTab = 'notifications'">
                 <template #icon>
                   <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.2a3.6 3.6 0 0 0-3.6 3.6v2.4L3 10.4v.8h10v-.8l-1.4-2.2V5.8A3.6 3.6 0 0 0 8 2.2Z"/><path d="M6.6 13a1.4 1.4 0 0 0 2.8 0"/></svg>
+                </template>
+              </SettingsNavItem>
+              <SettingsNavItem :label="$t('settings.nav.voice')" :active="activeTab === 'voice'" @select="activeTab = 'voice'">
+                <template #icon>
+                  <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="5.8" y="1.8" width="4.4" height="7.6" rx="2.2"/><path d="M3.5 7.6a4.5 4.5 0 0 0 9 0M8 12.1v2.1"/></svg>
                 </template>
               </SettingsNavItem>
             </div>
@@ -4269,6 +4286,12 @@ watch(activeTab, (tab) => {
           <LayoutSettingsPane />
         </div>
 
+        <!-- ── VOICE TAB ─────────────────────────────────────────────────── -->
+        <div v-show="activeTab === 'voice'" class="s-body voice-body" data-settings-section="voice">
+          <h1 class="s-page-title">{{ $t('settings.nav.voice') }}</h1>
+          <VoiceSettingsSection :backend="backend" />
+        </div>
+
         <!-- ── NOTIFICATIONS TAB ─────────────────────────────────────────── -->
         <div v-show="activeTab === 'notifications'" class="s-body notifications-body" data-settings-section="notifications">
           <h1 class="s-page-title">{{ $t('settings.nav.notifications') }}</h1>
@@ -4821,6 +4844,7 @@ watch(activeTab, (tab) => {
    .s-body (overflow:hidden, no padding) does not give. */
 .layout-body { overflow-y: auto; padding: 18px 22px; }
 .notifications-body { overflow-y: auto; padding: 18px 22px; }
+.voice-body { overflow-y: auto; padding: 18px 22px; }
 /* Same reason: a scrolling list of status rows needs the gutter and its own
    scroll, which the bare .s-body does not give. */
 .status-badges-body { overflow-y: auto; padding: 18px 22px; }

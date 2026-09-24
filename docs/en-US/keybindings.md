@@ -49,6 +49,21 @@ rules the editor writes.
 | `⌘⇧L` | Open Debug (backend log, shell, AI) — outside the Mini IDE, where this chord belongs to the editor |
 | `Escape` / `⌘W` | Close modal dialog (⌘W also works with focus in an embedded terminal, where Escape belongs to the CLI) |
 
+### Voice Input
+
+Only while **Settings → General → Voice input** is on (off by default); with it
+off the chord is not consumed and reaches the focused terminal as before.
+
+| Shortcut | Action |
+|----------|--------|
+| `⌃⌥M` (hold) | Hold to talk into the focused CLI pane; releasing any key of the chord stops recording. No `⌘`: macOS drops the key-up of a key held with Cmd, so a `⌘` chord could never be released |
+| `Escape` | During a take only: cancel the recording or its transcription, or drop the transcript during its 1.5 s countdown (while it is being typed in, Esc is swallowed and does nothing). Not a rule in the table — it is only listened for in those short phases |
+
+Once the transcript is queued behind a busy pane, or the capsule shows an
+error, Esc is left alone so it still interrupts the CLI as usual. A queued
+voice message is withdrawn with the capsule's **✕ Withdraw** button; an error
+closes with its **✕** or by itself after a few seconds.
+
 ### Quick Open
 
 | Shortcut | Action |
@@ -430,7 +445,7 @@ condition that greys out the matching toolbar button.
 
 ## When-Clause Conditions
 
-Keybindings can be gated by context conditions. These eight are the whole set —
+Keybindings can be gated by context conditions. These nine are the whole set —
 every condition any rule tests, and every one any window publishes.
 
 **Window identity.** No window ever sets two of these, which is what lets the
@@ -455,6 +470,7 @@ stays open, so a rule that waits on one is not dead — it just waits.
 | `findOpen` | The find widget is currently open |
 | `modalOpen` | A modal dialog is currently open |
 | `terminalFocus` | A terminal has focus — ESC and friends belong to the PTY |
+| `voiceInput` | Voice input is switched on in Settings (main window only) |
 
 Conditions support `&&` (and), `||` (or), `!` (not); `!editorTextFocus` reads as
 "the editor is there but the text area does not have focus". There are no

@@ -765,6 +765,11 @@ contextBridge.exposeInMainWorld('agentTeam', {
     openSettings: (key: PermissionKey): Promise<{ ok: boolean; error?: string }> =>
       ipcRenderer.invoke('permissions:open-settings', key),
   },
+  media: {
+    /** macOS microphone consent for voice input; granted elsewhere. */
+    askMicrophone: (): Promise<{ granted: boolean; status: string }> =>
+      ipcRenderer.invoke('media:ask-microphone'),
+  },
   executionPolicy: {
     inspect: (workspacePath?: string): ReturnType<ExecutionPolicyApi['inspect']> =>
       ipcRenderer.invoke('execution-policy:inspect', workspacePath),

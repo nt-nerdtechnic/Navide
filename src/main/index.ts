@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, Notification, powerMonitor, safeStorage, session, shell, type IpcMainInvokeEvent } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, Notification, powerMonitor, safeStorage, session, shell, systemPreferences, type IpcMainInvokeEvent } from 'electron'
 import { createGuestAttachHooks, type MutableWebPreferences } from './plugins/pluginGuestAttach'
 import { guardLastWindowClose } from './last-window-close'
 import { join, dirname } from 'node:path'
@@ -134,6 +134,7 @@ import { isAppWindowSender, UNTRUSTED_SENDER } from './ipcSender'
 import { drawnFrameWhereNeeded, installWindowControls } from './window-controls'
 import { openInExternalTerminal } from './external-terminal'
 import { isMac } from '../shared/osplat'
+import { installMediaPermissionHandlers } from './media-permissions'
 import {
   GitAccountsStore,
   type GitAccountCrypto,
@@ -3446,6 +3447,19 @@ ipcMain.handle(
     await requestPermission(key, payload)
 )
 
+// Voice input: ask macOS for microphone access right before the first capture.
+// Only the voice feature calls this, and only once the user turned it on and
+// pressed the hotkey — nothing prompts at startup. Elsewhere there is no OS
+// gate beyond getUserMedia itself, so this answers granted.
+ipcMain.handle('media:ask-microphone', async () => {
+  if (!isMac()) return { granted: true, status: 'not-applicable' }
+  const status = systemPreferences.getMediaAccessStatus('microphone')
+  if (status === 'granted') return { granted: true, status }
+  // 'denied'/'restricted' never prompt again; askForMediaAccess answers false.
+  const granted = await systemPreferences.askForMediaAccess('microphone')
+  return { granted, status: granted ? 'granted' : status }
+})
+
 ipcMain.handle('permissions:open-settings', async (_event, key: PermissionKey) => {
   try {
     await openPermissionSettings(key)
@@ -4000,6 +4014,11 @@ registerTerminalContextMenu()
 
 app.whenReady().then(async () => {
   if (!gotSingleInstanceLock) return
+  // Keeps every permission on Electron's default (allow) except `media`, which
+  // only a main window's own renderer gets, audio only. See media-permissions.ts.
+  installMediaPermissionHandlers(session.defaultSession, (wc) =>
+    wc !== null && [...mainWindows].some((w) => !w.isDestroyed() && w.webContents.id === wc.id)
+  )
   if (gitRecoveryEnabled) {
     const recovery = registerLegacyBundledGit(frontendPluginManager, {
       isPackaged: app.isPackaged,

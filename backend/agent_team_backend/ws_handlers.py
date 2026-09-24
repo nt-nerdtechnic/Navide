@@ -10383,3 +10383,16 @@ async def scheduler_runs(session: "Session", msg_id: str, msg_type: str, payload
     await session.send_json(
         make_response(msg_id, msg_type, await scheduler.get_service().runs(job_id, limit))
     )
+
+
+# ── Voice input (voice.*) ───────────────────────────────────────────────────
+# Handlers live in voice_handlers; the sidecar and model in stt_service. Both
+# stay inert until one of these messages arrives.
+from . import voice_handlers  # noqa: E402
+
+handler("voice.status")(voice_handlers.voice_status)
+handler("voice.model.download")(voice_handlers.voice_model_download)
+handler("voice.start")(voice_handlers.voice_start)
+handler("voice.chunk")(voice_handlers.voice_chunk)
+handler("voice.stop")(voice_handlers.voice_stop)
+handler("voice.cancel")(voice_handlers.voice_cancel)

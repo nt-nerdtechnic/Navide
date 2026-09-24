@@ -318,6 +318,15 @@ export const defaults: KeybindingRule[] = [
   // that rule to win where it applies.
   { key: 'cmd+shift+g', command: 'workbench.action.openGitWindow', when: 'paneStage && !findOpen' },
 
+  // ── Voice input ─────────────────────────────────────────────────────────────
+  // Hold to talk into the focused CLI pane; releasing any key of the chord
+  // stops the take (useVoiceInput). `voiceInput` is set only while the setting
+  // is on, so with it off the chord is not consumed and reaches the PTY as
+  // before. No Cmd: macOS withholds the keyup of a key held with Cmd, and the
+  // release is the whole gesture. No !terminalFocus: a focused CLI pane is
+  // exactly where this is meant to be pressed.
+  { key: 'ctrl+alt+m', command: 'workbench.action.holdToTalk', when: 'paneStage && voiceInput && !modalOpen' },
+
   // Only the standalone Git window (GitWindowApp) sets `gitWindow`, and these
   // rules sit LAST so the reversed resolver tries them first: several of these
   // chords are claimed above by workbench commands that the Git window never
