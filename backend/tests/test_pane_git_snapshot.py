@@ -151,6 +151,33 @@ class TestPaneGitSnapshot:
         assert snap["fetchedAt"] is not None
 
     @pytest.mark.asyncio
+    async def test_a_fetch_run_in_any_worktree_counts(self, tmp_path: Path) -> None:
+        # FETCH_HEAD is a per-worktree pseudo-ref: a fetch run inside a linked
+        # worktree writes .git/worktrees/<name>/FETCH_HEAD, never .git/FETCH_HEAD,
+        # while the origin/main it refreshed is shared by every worktree.
+        upstream = tmp_path / "upstream"
+        _init_repo(upstream)
+        main = tmp_path / "main"
+        _git(tmp_path, "clone", "-q", str(upstream), str(main))
+        linked = tmp_path / "linked"
+        _git(main, "worktree", "add", "-b", "feature", str(linked))
+        _git(linked, "fetch", "-q", "origin")
+        assert not (main / ".git" / "FETCH_HEAD").exists()
+
+        linked_head = Path(_git(linked, "rev-parse", "--absolute-git-dir")) / "FETCH_HEAD"
+        os.utime(linked_head, (1_790_000_000, 1_790_000_000))
+        for path in (linked, main):
+            snap = await git_service.pane_git_snapshot(str(path))
+            assert snap["fetchedAt"] == "2026-09-21T14:13:20Z"
+
+        # The most recent fetch wins, wherever it ran.
+        main_head = main / ".git" / "FETCH_HEAD"
+        main_head.write_text("")
+        os.utime(main_head, (1_790_003_600, 1_790_003_600))
+        snap = await git_service.pane_git_snapshot(str(linked))
+        assert snap["fetchedAt"] == "2026-09-21T15:13:20Z"
+
+    @pytest.mark.asyncio
     async def test_non_repository_is_all_none(self, tmp_path: Path) -> None:
         snap = await git_service.pane_git_snapshot(str(tmp_path))
         assert snap == {key: None for key in SNAPSHOT_KEYS}

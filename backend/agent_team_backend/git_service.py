@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import glob
 import json
 import logging
 import os
@@ -428,11 +429,19 @@ async def pane_git_snapshot(path: str) -> dict[str, Any]:
     if rc == 0 and len(counts) == 2 and all(c.isdigit() for c in counts):
         snapshot["behind"], snapshot["ahead"] = int(counts[0]), int(counts[1])
 
-    try:
-        mtime = os.stat(os.path.join(common_dir, "FETCH_HEAD")).st_mtime
-    except OSError:
-        pass
-    else:
+    # FETCH_HEAD is per worktree (a fetch in a linked worktree writes
+    # worktrees/<name>/FETCH_HEAD), but the origin/main it refreshes is shared,
+    # so the latest fetch from any worktree is the one that dates the drift.
+    fetch_heads = [os.path.join(common_dir, "FETCH_HEAD")]
+    fetch_heads += glob.glob(os.path.join(glob.escape(common_dir), "worktrees", "*", "FETCH_HEAD"))
+    mtimes = []
+    for fetch_head in fetch_heads:
+        try:
+            mtimes.append(os.stat(fetch_head).st_mtime)
+        except OSError:
+            pass
+    if mtimes:
+        mtime = max(mtimes)
         snapshot["fetchedAt"] = (
             datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat().replace("+00:00", "Z")
         )
