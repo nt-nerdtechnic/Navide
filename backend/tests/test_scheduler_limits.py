@@ -124,8 +124,13 @@ async def test_each_agent_may_have_ten_enabled_jobs(env) -> None:
     )
     # Another agent has its own ten.
     assert (await env.service.upsert(job(env), agent(env, "b")))["ok"] is True
-    # Freeing one makes room.
-    first = (await env.service.list())["jobs"][0]
+    # Freeing one makes room. Under the frozen clock every job shares one
+    # created_at, so list order falls to the random id: pick one of a's own
+    # enabled jobs rather than whichever job happens to sort first.
+    first = next(
+        j for j in (await env.service.list())["jobs"]
+        if j["enabled"] and j["owner"]["pane_id"] == "a"
+    )
     assert (await env.service.set_enabled(first["id"], False, me))["ok"] is True
     assert (await env.service.set_enabled(parked["id"], True, me)) == {"ok": True}
 
