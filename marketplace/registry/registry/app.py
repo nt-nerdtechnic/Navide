@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
+from typing import BinaryIO, Iterator
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import Engine
+from starlette.types import ASGIApp, Receive, Scope, Send
 from sqlmodel import Session
 
 from .auth import PublisherIdentity, get_publisher_identity
@@ -70,8 +71,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         trust_signer=RegistryTrustSigner.from_settings(settings),
     )
 
-    app = FastAPI(title="Navide Marketplace Registry", version="0.1.0")
+    # root_path lets the registry sit under a reverse-proxy path prefix. Routing
+    # accepts both prefixed (ALB forwards the path unchanged) and prefix-stripped
+    # request paths, and every URL the website emits carries the prefix.
+    app = FastAPI(
+        title="Navide Marketplace Registry",
+        version="0.1.0",
+        root_path=settings.root_path,
+    )
     app.state.registry = state
+    if settings.root_path:
+        app.add_middleware(_RootPathMiddleware, root_path=settings.root_path)
 
     _register_routes(app)
 
@@ -83,6 +93,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
     app.include_router(create_web_router())
     return app
+
+
+class _RootPathMiddleware:
+    """Normalize a prefix-stripped request path back under `root_path`.
+
+    Starlette routes a path that already carries `root_path` (the form an ALB
+    forwards) correctly everywhere, but mounted apps such as StaticFiles miss a
+    path a proxy stripped. Re-prefixing gives every route one path form.
+    """
+
+    def __init__(self, app: ASGIApp, root_path: str) -> None:
+        self.app = app
+        self.root_path = root_path
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] in {"http", "websocket"}:
+            path = scope["path"]
+            if path != self.root_path and not path.startswith(self.root_path + "/"):
+                scope = dict(scope)
+                scope["path"] = self.root_path + path
+                if "raw_path" in scope and scope["raw_path"] is not None:
+                    scope["raw_path"] = self.root_path.encode() + scope["raw_path"]
+        await self.app(scope, receive, send)
 
 
 # -- dependencies -------------------------------------------------------
@@ -138,6 +171,18 @@ def _summary(extension: Extension, versions: list[ExtensionVersion]) -> Extensio
         rating_count=extension.rating_count,
         featured=extension.featured,
     )
+
+
+_DOWNLOAD_CHUNK_SIZE = 1024 * 1024
+
+
+def _file_chunks(stream: BinaryIO) -> Iterator[bytes]:
+    """Yield fixed-size chunks. Iterating a binary file directly splits it on
+    newline bytes, which turns a multi-MB package into thousands of tiny
+    threadpool round-trips (a 10 MB package took ~30 s to download)."""
+    with stream:
+        while chunk := stream.read(_DOWNLOAD_CHUNK_SIZE):
+            yield chunk
 
 
 def _register_routes(app: FastAPI) -> None:
@@ -379,7 +424,7 @@ def _register_routes(app: FastAPI) -> None:
         repo.increment_download(extension, row)
         filename = f"{namespace}.{name}-{version}.vsix"
         return StreamingResponse(
-            stream,
+            _file_chunks(stream),
             media_type="application/zip",
             headers={
                 "Content-Disposition": f'attachment; filename="{filename}"',

@@ -1,0 +1,43 @@
+# Example Compose deployment of the Official Registry behind a reverse proxy
+# that routes https://server.navide.dev/registry/* to this container.
+# Copy next to the host's secrets and adjust paths; nothing here is a secret.
+#
+#   docker compose -f compose.example.yml up -d --build
+services:
+  navide-registry:
+    build:
+      context: ..            # marketplace/registry
+    image: navide-registry:latest
+    restart: unless-stopped
+    ports:
+      # Host port the load balancer target group points at.
+      - "${REGISTRY_HOST_PORT:-8791}:8787"
+    environment:
+      REGISTRY_TRUST_PROFILE: official
+      REGISTRY_TRUST_CONFIG_FILE: /etc/navide-registry/official-trust.json
+      REGISTRY_ROOT_PATH: /registry
+      REGISTRY_ADMIN_TOKEN_FILE: /run/secrets/navide-registry-admin-token
+    secrets:
+      - navide-registry-root.pem
+      - navide-registry-signer.pem
+      - navide-registry-admin-token
+    volumes:
+      - navide-registry-data:/data
+      - ./official-trust.json:/etc/navide-registry/official-trust.json:ro
+    tmpfs:
+      # Owner-only copies of the private keys (see deploy/entrypoint.sh).
+      - /run/navide-keys:uid=10001,gid=10001,mode=0700
+
+secrets:
+  # Compose file secrets are bind mounts that keep the host file's owner and
+  # mode: make them readable by the container user (uid 10001), e.g.
+  #   chown 10001:10001 <file> && chmod 0400 <file>
+  navide-registry-root.pem:
+    file: /srv/navide-registry/secrets/registry_root.key
+  navide-registry-signer.pem:
+    file: /srv/navide-registry/secrets/registry_signer.key
+  navide-registry-admin-token:
+    file: /srv/navide-registry/secrets/admin_token
+
+volumes:
+  navide-registry-data:

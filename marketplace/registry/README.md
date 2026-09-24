@@ -7,18 +7,18 @@ Electron app or `backend/agent_team_backend/` — it is purely additive under
 
 See [`FORMAT.md`](./FORMAT.md) for the `.vsix`-style package format.
 
-> **Not deployed.** This service currently runs locally only, for development
-> and for exercising the publish/install path end to end. Navide ships
-> first-party plugins bundled into the app package, so nothing installs from a
-> registry in production, and third-party publishing is not open — see
-> [the plugin development guide](../../docs/en-US/plugin-development.md) for
-> how to get in touch about building one.
->
-> Before this is ever exposed publicly, at minimum: add a schema migration
-> mechanism (`db.py` only calls `SQLModel.metadata.create_all`, which will not
-> add columns to existing tables), set `REGISTRY_ADMIN_TOKEN` (the publisher
-> endpoint is open when unset), serve over https, and replace
-> `LocalStorageBackend` with real object storage.
+> **Deployment status.** The Official Registry is planned at
+> `https://server.navide.dev/registry` (a path prefix on the Navide server
+> host); packaged App builds point there by default. See
+> [Deployment](#deployment-official-registry-at-servernavidedevregistry) for
+> the container, secrets and operational requirements. Known limits before
+> wider use: no schema migration mechanism (`db.py` only calls
+> `SQLModel.metadata.create_all`, which will not add columns to existing
+> tables), package blobs live on the local data volume
+> (`LocalStorageBackend`), and one version of a package can carry only one
+> target (see [Publishing first-party plugins](#publishing-first-party-plugins)).
+> Third-party publishing is not open — see
+> [the plugin development guide](../../docs/en-US/plugin-development.md).
 
 ## Run locally
 
@@ -132,6 +132,7 @@ Extensions view to warn users. This is metadata/gating only — no runtime sandb
 | `REGISTRY_ADMIN_TOKEN` | _(unset)_ | Gates `POST /api/publishers` when set; required and non-empty for the `official` profile. |
 | `REGISTRY_TRUST_PROFILE` | `self-hosted-dev` | `self-hosted-dev` for persistent locally generated trust material, or `official` for explicitly provisioned production material. |
 | `REGISTRY_TRUST_CONFIG_FILE` | _(unset)_ | Required with `official`; path to the complete signer, root, rotation, validity, and blocklist policy below. Rejected for the default profile. |
+| `REGISTRY_ROOT_PATH` | _(unset)_ | Public path prefix when served behind a reverse proxy, e.g. `/registry`. Requests are accepted with the prefix forwarded unchanged (AWS ALB) or stripped by the proxy, and every link the website emits carries it. `/registry-evil/...` is not served. Do not combine with `uvicorn --root-path`. |
 
 ### Official Registry trust deployment
 
@@ -143,10 +144,10 @@ Set `REGISTRY_TRUST_PROFILE=official` and point
   "schemaVersion": 1,
   "profile": "official",
   "expectedRootFingerprint": "sha256:<App-build-pinned-SPKI-digest>",
-  "rootPrivateKeyFile": "/run/secrets/navide-registry-root.pem",
+  "rootPrivateKeyFile": "/run/navide-keys/navide-registry-root.pem",
   "signer": {
     "keyId": "registry-2026-02",
-    "privateKeyFile": "/run/secrets/navide-registry-signer.pem",
+    "privateKeyFile": "/run/navide-keys/navide-registry-signer.pem",
     "status": "active",
     "notBefore": "2026-08-01T00:00:00Z",
     "notAfter": "2027-08-01T00:00:00Z"
@@ -193,11 +194,111 @@ navide-plugin keygen  --out-dir . --name acme        # Ed25519 keypair -> acme.k
 navide-plugin pack    ./plugin-src --out my.vsix      # build + validate a .vsix
 navide-plugin sign    my.vsix --key acme.key --out my.sig
 navide-plugin publish my.vsix --registry http://localhost:8787 \
-  --token <bearer> --signature my.sig
+  --token <bearer> --signature my.sig [--target darwin-arm64]
 ```
+
+`keygen` writes the private key owner-only (`0600`). `publish` reads the token
+from `NAVIDE_PLUGIN_TOKEN` when `--token` is omitted, and `--target` (default
+`universal`) selects the Registry target bound into the signed envelope; a
+package with a native backend must be published for its exact
+`<platform>-<arch>` target.
 
 `pack` reuses the format builder in `registry/package.py`; `sign` reuses the
 Ed25519 primitives in `registry/signing.py`.
+
+## Deployment (Official Registry at server.navide.dev/registry)
+
+The Registry runs as one container behind the load balancer that already
+serves `wss://server.navide.dev/ws`, routed by the path rule `/registry/*`.
+Deployment files live in `deploy/`:
+
+| File | Purpose |
+|---|---|
+| `Dockerfile` | uv-built image, non-root user (uid 10001), data volume `/data`, health check on `/api/health`. Build context: `marketplace/registry`. |
+| `deploy/entrypoint.sh` | Copies the key secrets into an owner-only directory, reads the admin token from a file, starts uvicorn. |
+| `deploy/compose.example.yml` | Example Compose service: env, secrets, tmpfs key directory, data volume. |
+| `deploy/official-trust.example.json` | Official trust config template (paths and the pinned root fingerprint; no secrets). |
+
+**Path prefix.** Set `REGISTRY_ROOT_PATH=/registry`. An AWS ALB forwards the
+path unchanged, which the app accepts; a proxy that strips the prefix works
+too. The load balancer health check is `GET /registry/api/health`.
+
+**Secrets.** The root and signer private keys must reach the process as
+regular, non-symlink, owner-only (`0600`) files; the Registry refuses to start
+otherwise. Docker/Swarm secrets are mounted `0444` (Compose file secrets keep
+the host file's owner and mode), so `deploy/entrypoint.sh` copies
+`/run/secrets/navide-registry-root.pem` and
+`/run/secrets/navide-registry-signer.pem` into `/run/navide-keys/` (a tmpfs
+owned by the container user) as `0600`, and the trust config points at those
+copies. With Compose file secrets, make the host files readable by uid 10001
+(`chown 10001:10001 <file>; chmod 0400 <file>`). Never bake keys into the
+image. The container needs:
+
+- `REGISTRY_TRUST_PROFILE=official`
+- `REGISTRY_TRUST_CONFIG_FILE` pointing at the trust config (non-secret; mount
+  it read-only). Its `expectedRootFingerprint` must equal the root pinned in
+  the App build, `resources/official-registry-root.pem`
+  (`sha256:89dd424a…a35367`); startup fails on a mismatch.
+- `REGISTRY_ADMIN_TOKEN`, or `REGISTRY_ADMIN_TOKEN_FILE` naming a secret file
+  (read by the entrypoint). It gates `POST /api/publishers` and
+  `/featured`; generate it randomly and keep it out of shell history.
+
+**Data volume and backup.** `/data` holds the SQLite index (`registry.db`) and
+every package blob (`packages/`). Use a named volume or host directory, back
+it up (stop-the-world copy or `sqlite3 registry.db ".backup …"` plus the
+`packages/` tree), and run a single worker: SQLite is the only index.
+
+**Availability.** Root-signed trust metadata expires 24 hours after it is
+generated (a fresh copy per request). Each App revalidates installed Registry
+plugins against the copy from its last successful refresh; once that copy is
+older than 24 hours, for example during a Registry outage longer than a day,
+installed Registry plugins are quarantined until the Registry answers again. Put
+uptime monitoring and alerting on `https://server.navide.dev/registry/api/health`.
+
+### Publishing first-party plugins
+
+One-off admin step: register the `navide` publisher with its public key and a
+bearer token (the token is stored hashed; keep the plaintext for publishing):
+
+```bash
+python3 - <<'PY'
+import json, os, pathlib, urllib.request
+body = {
+    "name": "navide",
+    "display_name": "Navide",
+    "public_key": pathlib.Path(os.path.expanduser(
+        "~/navide-signing/plugin_publisher.pub.pem")).read_text(),
+    "token": os.environ["NAVIDE_PLUGIN_TOKEN"],
+}
+req = urllib.request.Request(
+    "https://server.navide.dev/registry/api/publishers",
+    data=json.dumps(body).encode(), method="POST",
+    headers={"Content-Type": "application/json",
+             "X-Admin-Token": os.environ["REGISTRY_ADMIN_TOKEN"]})
+print(urllib.request.urlopen(req).read().decode())
+PY
+```
+
+Then, from the repository root:
+
+```bash
+NAVIDE_REGISTRY_URL=https://server.navide.dev/registry \
+NAVIDE_PUBLISHER_KEY=~/navide-signing/plugin_publisher.key \
+NAVIDE_PLUGIN_TOKEN=<navide publisher token> \
+scripts/publish-first-party-plugins.sh
+```
+
+The script builds, packs, signs and publishes `navide.git` as `universal` and
+`navide.plans` for the host target (for example `darwin-arm64`), reusing the
+`navide-plugin` CLI. `--skip-build` reuses `dist-plugins/`, `--only git|plans`
+publishes one. Plans carries a PyInstaller backend, so each other target must
+be built on a machine of that platform and architecture.
+
+**Limitation:** a Registry version row is unique per package and version, and
+blobs are stored per version, so a second target of the same version is
+rejected with `409`. Publishing `navide.plans` for more than one target needs
+the Registry to key versions and blobs by target (and the Client to select the
+row matching its host target) first.
 
 ## Seams left for later Phase 3 todos
 

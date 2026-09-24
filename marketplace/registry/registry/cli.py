@@ -6,7 +6,11 @@ and signing primitives (`signing`). Commands:
     navide-plugin keygen  [--out-dir DIR] [--name NAME]
     navide-plugin pack    <src_dir> [--out FILE]
     navide-plugin sign    <package> --key <privkey> [--out SIG]
-    navide-plugin publish <package> --registry URL --token TOKEN [--signature SIG]
+    navide-plugin publish <package> --registry URL [--token TOKEN] [--signature SIG]
+                          [--target TARGET]
+
+`publish` reads the bearer token from NAVIDE_PLUGIN_TOKEN when --token is
+omitted, which keeps it out of the process list.
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
 import urllib.error
 import urllib.parse
@@ -23,6 +28,9 @@ from pathlib import Path
 
 from .package import PackageError, build_package
 from .signing import generate_keypair, sign_digest
+
+
+TOKEN_ENV = "NAVIDE_PLUGIN_TOKEN"
 
 
 def _digest(data: bytes) -> str:
@@ -35,7 +43,21 @@ def cmd_keygen(args: argparse.Namespace) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     priv_path = out_dir / f"{args.name}.key"
     pub_path = out_dir / f"{args.name}.pub"
-    priv_path.write_text(private_pem)
+    # The private key is owner-only from creation; the registry refuses to read
+    # a private key file readable by group/other.
+    fd = os.open(
+        priv_path,
+        os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+    )
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="ascii") as stream:
+            fd = -1
+            stream.write(private_pem)
+    finally:
+        if fd >= 0:
+            os.close(fd)
     pub_path.write_text(public_pem)
     print(f"private key: {priv_path}")
     print(f"public key:  {pub_path}")
@@ -75,6 +97,7 @@ def post_package(
     token: str,
     signature: str | None = None,
     *,
+    target: str = "universal",
     client: object | None = None,
 ) -> tuple[int, str]:
     """Upload a package to `<registry_url>/api/publish`.
@@ -86,7 +109,9 @@ def post_package(
     package_path = Path(package_path)
     data = package_path.read_bytes()
     url = registry_url.rstrip("/") + "/api/publish"
-    params = {"signature": signature} if signature else None
+    params = {"target": target}
+    if signature:
+        params["signature"] = signature
     headers = {"Authorization": f"Bearer {token}"}
 
     if client is not None:
@@ -98,8 +123,7 @@ def post_package(
         )
         return resp.status_code, resp.text
 
-    if signature:
-        url += f"?signature={urllib.parse.quote(signature)}"
+    url += "?" + urllib.parse.urlencode(params)
     body, content_type = _multipart(package_path.name, data)
     req = urllib.request.Request(url, data=body, headers=headers, method="POST")
     req.add_header("Content-Type", content_type)
@@ -128,8 +152,12 @@ def cmd_publish(args: argparse.Namespace) -> int:
         signature = (
             sig_path.read_text().strip() if sig_path.is_file() else args.signature
         )
+    token = args.token or os.environ.get(TOKEN_ENV)
+    if not token:
+        print(f"publish needs --token or {TOKEN_ENV}", file=sys.stderr)
+        return 2
     status, text = post_package(
-        args.registry, args.package, args.token, signature
+        args.registry, args.package, token, signature, target=args.target
     )
     print(f"{status} {text}")
     return 0 if 200 <= status < 300 else 1
@@ -158,7 +186,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_pub = sub.add_parser("publish", help="upload a package to a registry")
     p_pub.add_argument("package")
     p_pub.add_argument("--registry", required=True)
-    p_pub.add_argument("--token", required=True)
+    p_pub.add_argument("--token", help=f"bearer token (default: ${TOKEN_ENV})")
+    p_pub.add_argument(
+        "--target",
+        default="universal",
+        help="registry target, e.g. universal or darwin-arm64",
+    )
     p_pub.add_argument("--signature", help="signature string or a file path")
     p_pub.set_defaults(func=cmd_publish)
 

@@ -1263,9 +1263,9 @@ it does not restrict filesystem, network, subprocess, or OS access.
   Client trust roots in v2.
 - An Official Registry can claim the reserved `navide.` namespace only when
   the App build provisions an independent Registry root for the exact Official
-  Registry URL and the current root-signed profile is `official`. This build
-  intentionally ships with that production root unprovisioned, so the Official
-  Registry path fails closed until release provisioning supplies it. The
+  Registry URL and the current root-signed profile is `official`. The production
+  root is provisioned as `resources/official-registry-root.pem`; a build
+  without that file fails the Official Registry path closed. The
   publisher namespace key is never reused as a Registry root.
 - A self-hosted Registry must have a durable Host-owned approval that binds its
   URL, root PEM, and a separately confirmed SPKI SHA-256 fingerprint before
@@ -1276,7 +1276,10 @@ it does not restrict filesystem, network, subprocess, or OS access.
   The approval document uses the exact fields `schemaVersion`, `registryUrl`,
   `rootPublicKeyPem`, and `confirmedFingerprint`; unknown or duplicate JSON
   fields fail closed. The local development default (`http://localhost:8787`)
-  is self-hosted and therefore requires this approval too.
+  is self-hosted and therefore requires this approval too. Packaged builds
+  default to the Official Registry, `https://server.navide.dev/registry`; the
+  path is part of its identity, so another path on the same host is not
+  official.
 - Registry envelope signatures identify the Registry signer key ID. Root-signed
   trust metadata records active,
   rotating, expired, and revoked keys. Rotation has a bounded old/new overlap.

@@ -2,13 +2,13 @@
 {% block title %}{{ ext.display_name }} — Navide Marketplace{% endblock %}
 
 {% block content %}
-<nav class="crumbs"><a href="/">← Marketplace</a></nav>
+<nav class="crumbs"><a href="{{ base }}/">← Marketplace</a></nav>
 
 <article class="detail">
   <header class="detail-head">
     {% if icon_path and latest_version %}
     <img class="detail-icon"
-         src="/extensions/{{ ext.namespace }}/{{ ext.name }}/{{ latest_version }}/assets/{{ icon_path }}"
+         src="{{ base }}/extensions/{{ ext.namespace }}/{{ ext.name }}/{{ latest_version }}/assets/{{ icon_path }}"
          alt="{{ ext.display_name }} icon">
     {% endif %}
     <div class="detail-head-text">
@@ -50,7 +50,7 @@
     <p>Fetch with the registry CLI:</p>
     <pre class="code">navide-plugin install {{ ext.identity }}</pre>
     <p>Or download the package directly:</p>
-    <pre class="code">GET /api/extensions/{{ ext.namespace }}/{{ ext.name }}/{{ latest_version }}/download</pre>
+    <pre class="code">GET {{ base }}/api/extensions/{{ ext.namespace }}/{{ ext.name }}/{{ latest_version }}/download</pre>
   </section>
   {% endif %}
 
@@ -59,7 +59,7 @@
     <h2 class="section-title">Screenshots</h2>
     <div class="shots">
       {% for s in screenshots %}
-      <img src="/extensions/{{ ext.namespace }}/{{ ext.name }}/{{ latest_version }}/assets/{{ s }}"
+      <img src="{{ base }}/extensions/{{ ext.namespace }}/{{ ext.name }}/{{ latest_version }}/assets/{{ s }}"
            alt="screenshot" loading="lazy">
       {% endfor %}
     </div>

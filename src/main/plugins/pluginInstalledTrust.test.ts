@@ -230,7 +230,7 @@ describe('verifyInstalledRegistryPackage', () => {
         {
           ...context(),
           registryAuthority: 'official',
-          officialRegistryUrl: 'https://registry.navide.dev',
+          officialRegistryUrl: 'https://server.navide.dev/registry',
         }
       )
     ).toMatchObject({

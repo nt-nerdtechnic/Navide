@@ -43,7 +43,9 @@ vi.mock('electron', () => ({
   },
 }))
 
+import { app as electronApp } from 'electron'
 import {
+  OFFICIAL_MARKETPLACE_URL,
   isTrustedPluginManagementSender,
   registerPluginIpc,
   resolveConfiguredMarketplace,
@@ -844,7 +846,7 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
       approvalFile,
       JSON.stringify({
         schemaVersion: 1,
-        registryUrl: 'https://registry.navide.dev',
+        registryUrl: 'https://server.navide.dev/registry',
         rootPublicKeyPem: registrySigner.pubPem,
         confirmedFingerprint: registryRootFingerprint(registrySigner.pubPem),
       })
@@ -857,11 +859,11 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
       configurable: true,
       value: root,
     })
-    process.env['AGENT_TEAM_MARKETPLACE_URL'] = 'https://registry.navide.dev'
+    process.env['AGENT_TEAM_MARKETPLACE_URL'] = 'https://server.navide.dev/registry'
     process.env['AGENT_TEAM_REGISTRY_ROOT_APPROVAL_FILE'] = approvalFile
     try {
       expect(resolveConfiguredMarketplace()).toMatchObject({
-        registryUrl: 'https://registry.navide.dev',
+        registryUrl: 'https://server.navide.dev/registry',
         trust: {
           pinnedRegistryRootKey: registryRoot.pubPem,
           registryAuthority: 'official',
@@ -875,6 +877,78 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
       }
       rmSync(root, { recursive: true, force: true })
     }
+  })
+
+  it('defaults a packaged App to the Official Registry and a dev App to localhost', () => {
+    const root = mkdtempSync(join(tmpdir(), 'navide-packaged-default-'))
+    const resources = join(root, 'resources')
+    mkdirSync(resources, { recursive: true })
+    writeFileSync(join(resources, 'official-registry-root.pem'), registryRoot.pubPem)
+    const previousResourcesDescriptor = Object.getOwnPropertyDescriptor(
+      process,
+      'resourcesPath'
+    )
+    Object.defineProperty(process, 'resourcesPath', {
+      configurable: true,
+      value: root,
+    })
+    delete process.env['AGENT_TEAM_MARKETPLACE_URL']
+    delete process.env['AGENT_TEAM_REGISTRY_ROOT_APPROVAL_FILE']
+    const mutableApp = electronApp as { isPackaged: boolean }
+    try {
+      mutableApp.isPackaged = true
+      expect(resolveConfiguredMarketplace()).toMatchObject({
+        registryUrl: OFFICIAL_MARKETPLACE_URL,
+        trust: {
+          pinnedRegistryRootKey: registryRoot.pubPem,
+          registryAuthority: 'official',
+          officialRegistryUrl: 'https://server.navide.dev/registry',
+        },
+      })
+      mutableApp.isPackaged = false
+      // The development default is a self-hosted Registry and never inherits
+      // the packaged Official root.
+      expect(() => resolveConfiguredMarketplace()).toThrow(/root approval file/)
+    } finally {
+      mutableApp.isPackaged = false
+      if (previousResourcesDescriptor) {
+        Object.defineProperty(process, 'resourcesPath', previousResourcesDescriptor)
+      } else {
+        Reflect.deleteProperty(process, 'resourcesPath')
+      }
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps the Registry path prefix when searching the marketplace', async () => {
+    process.env['AGENT_TEAM_MARKETPLACE_URL'] = 'https://server.navide.dev/registry/'
+    const fetchMock = vi.fn(async (_url: unknown) => ({
+      ok: true,
+      status: 200,
+      async json() {
+        return { items: [] }
+      },
+    }))
+    global.fetch = fetchMock as unknown as typeof fetch
+    registerPluginIpc(new FrontendPluginManager(), '/plugins', () => true, TRUST_CONFIG)
+    const handler = handlers.get('plugins:marketplaceSearch')
+    if (!handler) throw new Error('marketplaceSearch handler not registered')
+    await handler(null, 'git')
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      'https://server.navide.dev/registry/api/extensions?q=git'
+    )
+  })
+
+  it('fetches detail and download under the Registry path prefix', async () => {
+    const { bytes, digest } = buildPkg()
+    installFetch(signedDetail(digest), bytes, digest)
+    process.env['AGENT_TEAM_MARKETPLACE_URL'] = 'https://server.navide.dev/registry'
+    await register()(null, { namespace: 'acme', name: 'demo' })
+    const urls = vi.mocked(global.fetch).mock.calls.map((call) => String(call[0]))
+    expect(urls).toEqual([
+      'https://server.navide.dev/registry/api/extensions/acme/demo',
+      'https://server.navide.dev/registry/api/extensions/acme/demo/1.0.0/download',
+    ])
   })
 
   it('does not activate a self-hosted reserved package after restart', () => {
@@ -940,7 +1014,7 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
           pinnedRootKey: registryRoot.pubPem,
           snapshot: readRegistryTrustSnapshot(root),
           registryAuthority: 'self-hosted',
-          officialRegistryUrl: 'https://registry.navide.dev',
+          officialRegistryUrl: 'https://server.navide.dev/registry',
           now: FIXED_NOW,
         },
       })
@@ -1746,13 +1820,13 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
     installFetch(signedDetail(digest), bytes, digest)
     const root = mkdtempSync(join(tmpdir(), 'navide-official-post-commit-'))
     const previousUrl = process.env['AGENT_TEAM_MARKETPLACE_URL']
-    process.env['AGENT_TEAM_MARKETPLACE_URL'] = 'https://registry.navide.dev'
+    process.env['AGENT_TEAM_MARKETPLACE_URL'] = 'https://server.navide.dev/registry'
     try {
       const manager = new FrontendPluginManager()
       registerPluginIpc(manager, root, () => true, {
         ...TRUST_CONFIG,
         registryAuthority: 'official',
-        officialRegistryUrl: 'https://registry.navide.dev',
+        officialRegistryUrl: 'https://server.navide.dev/registry',
       })
       const prepareHandler = handlers.get('plugins:prepareInstall')
       const commitHandler = handlers.get('plugins:commitInstall')
@@ -1786,13 +1860,13 @@ describe('plugins:prepareInstall wire → verifier mapping', () => {
     installFetch(detail, bytes, digest)
     const root = mkdtempSync(join(tmpdir(), 'navide-official-publisher-trust-'))
     const previousUrl = process.env['AGENT_TEAM_MARKETPLACE_URL']
-    process.env['AGENT_TEAM_MARKETPLACE_URL'] = 'https://registry.navide.dev'
+    process.env['AGENT_TEAM_MARKETPLACE_URL'] = 'https://server.navide.dev/registry'
     try {
       const manager = new FrontendPluginManager()
       registerPluginIpc(manager, root, () => true, {
         ...TRUST_CONFIG,
         registryAuthority: 'official',
-        officialRegistryUrl: 'https://registry.navide.dev',
+        officialRegistryUrl: 'https://server.navide.dev/registry',
       })
       const prepareHandler = handlers.get('plugins:prepareInstall')
       if (!prepareHandler) throw new Error('prepareInstall handler not registered')

@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "profile": "official",
+  "expectedRootFingerprint": "sha256:89dd424a5f4749d33e066db003cd8d372bb0de7b3444f430280069cb47a35367",
+  "rootPrivateKeyFile": "/run/navide-keys/navide-registry-root.pem",
+  "signer": {
+    "keyId": "registry-2026-09",
+    "privateKeyFile": "/run/navide-keys/navide-registry-signer.pem",
+    "status": "active",
+    "notBefore": "2026-09-24T00:00:00Z",
+    "notAfter": "2027-09-24T00:00:00Z"
+  },
+  "trustedSigners": [],
+  "blockedPublishers": [],
+  "blockedPackages": []
+}

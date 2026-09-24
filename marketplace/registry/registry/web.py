@@ -121,9 +121,16 @@ def _extract_readme(request: Request, row: ExtensionVersion) -> str | None:
     return render_markdown(raw)
 
 
+def _base_path_context(request: Request) -> dict[str, str]:
+    """Expose the public path prefix so every emitted link carries it."""
+    return {"base": request.scope.get("root_path", "").rstrip("/")}
+
+
 def create_web_router() -> APIRouter:
     router = APIRouter(include_in_schema=False)
-    templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
+    templates = Jinja2Templates(
+        directory=str(_TEMPLATES_DIR), context_processors=[_base_path_context]
+    )
 
     @router.get("/", response_class=HTMLResponse)
     def home(

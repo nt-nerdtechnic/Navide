@@ -61,11 +61,18 @@ import type {
 
 /** Development-only endpoint. It is intentionally not the official Registry
  * identity: a local Registry must establish trust through root approval. */
-const DEFAULT_MARKETPLACE_URL = 'http://localhost:8787'
+const DEV_MARKETPLACE_URL = 'http://localhost:8787'
 /** App-shipped Official Registry identity. A normalized match is always
  * resolved through the independent packaged root pin and cannot be downgraded
- * by approval. */
-const OFFICIAL_MARKETPLACE_URL = 'https://registry.navide.dev'
+ * by approval. The path is part of the identity: the Registry is served under
+ * the `/registry` prefix of the Navide server host. */
+export const OFFICIAL_MARKETPLACE_URL = 'https://server.navide.dev/registry'
+
+/** Packaged builds talk to the Official Registry; development builds keep the
+ * local Registry. `AGENT_TEAM_MARKETPLACE_URL` overrides both. */
+function defaultMarketplaceUrl(): string {
+  return app.isPackaged ? OFFICIAL_MARKETPLACE_URL : DEV_MARKETPLACE_URL
+}
 
 /** Resolve the marketplace registry URL, enforcing the transport policy
  *  (production forbids plaintext http except loopback). Throws before any
@@ -74,7 +81,7 @@ export function resolveConfiguredMarketplace(
   explicitTrust?: InstallerTrustConfig
 ): { registryUrl: string; trust: InstallerTrustConfig } {
   if (explicitTrust) {
-    const registryUrl = process.env['AGENT_TEAM_MARKETPLACE_URL'] ?? DEFAULT_MARKETPLACE_URL
+    const registryUrl = process.env['AGENT_TEAM_MARKETPLACE_URL'] ?? defaultMarketplaceUrl()
     assertRegistryUrlAllowed(registryUrl, app.isPackaged)
     return {
       registryUrl,
@@ -88,7 +95,7 @@ export function resolveConfiguredMarketplace(
   }
   const resolved = resolveMarketplaceRegistryRoot({
     registryUrlOverride: process.env['AGENT_TEAM_MARKETPLACE_URL'],
-    defaultRegistryUrl: DEFAULT_MARKETPLACE_URL,
+    defaultRegistryUrl: defaultMarketplaceUrl(),
     officialRegistryUrl: OFFICIAL_MARKETPLACE_URL,
     officialRootPublicKey: loadOfficialRegistryRootKey(process.resourcesPath),
     approvalFile: process.env['AGENT_TEAM_REGISTRY_ROOT_APPROVAL_FILE'],
@@ -343,7 +350,9 @@ export function registerPluginIpc(
   ipcMain.handle('plugins:marketplaceSearch', async (event, query?: string) => {
     assertAuthorized(event)
     const { registryUrl } = resolveConfiguredMarketplace(trust)
-    const url = new URL('/api/extensions', registryUrl)
+    // Resolve relative to the base path: the Registry may be served under a
+    // path prefix (the Official Registry lives at `/registry`).
+    const url = new URL(`${registryUrl.replace(/\/+$/, '')}/api/extensions`)
     if (query) url.searchParams.set('q', query)
     const res = await fetch(url)
     if (!res.ok) throw new Error(`marketplace search failed: HTTP ${res.status}`)

@@ -4,16 +4,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Navide Marketplace{% endblock %}</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="{{ base }}/static/style.css">
 </head>
 <body>
   <header class="site-header">
     <div class="wrap header-inner">
-      <a class="brand" href="/">
+      <a class="brand" href="{{ base }}/">
         <span class="brand-mark">◆</span>
         <span class="brand-name">Navide Marketplace</span>
       </a>
-      <form class="search" action="/" method="get" role="search">
+      <form class="search" action="{{ base }}/" method="get" role="search">
         <input type="search" name="q" value="{{ query|default('') }}"
                placeholder="Search extensions…" aria-label="Search extensions">
         <button type="submit">Search</button>

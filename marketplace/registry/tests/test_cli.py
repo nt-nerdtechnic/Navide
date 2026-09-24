@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
+import stat
 from pathlib import Path
 
 import pytest
 
 from registry import cli
 from registry.package import read_package
-from registry.signing import Ed25519SignatureVerifier
+from registry.signing import Ed25519SignatureVerifier, read_private_key_file
 from tests.conftest import SignedEnv
 from tests.fixtures import valid_manifest
 
@@ -38,6 +39,16 @@ def test_keygen_writes_usable_keypair(tmp_path: Path) -> None:
     assert Ed25519SignatureVerifier().verify(
         digest=digest, signature=sig, public_key=pub
     )
+
+
+def test_keygen_writes_owner_only_private_key(tmp_path: Path) -> None:
+    existing = tmp_path / "acme.key"
+    existing.write_text("old")
+    existing.chmod(0o644)
+    assert cli.main(["keygen", "--out-dir", str(tmp_path), "--name", "acme"]) == 0
+    assert stat.S_IMODE(existing.stat().st_mode) == 0o600
+    # The registry's own strict reader accepts it.
+    assert read_private_key_file(existing).startswith("-----BEGIN PRIVATE KEY-----")
 
 
 def test_pack_builds_valid_package(tmp_path: Path) -> None:
@@ -73,3 +84,34 @@ def test_pack_sign_publish_roundtrip(
 
     detail = signed_env.client.get("/api/extensions/acme/hello").json()
     assert detail["versions"][0]["trust_tier"] == "signed-verified"
+
+
+def test_publish_carries_the_registry_target(
+    tmp_path: Path, signed_env: SignedEnv
+) -> None:
+    src = _make_src(tmp_path)
+    pkg = tmp_path / "acme.hello-1.0.0.vsix"
+    assert cli.main(["pack", str(src), "--out", str(pkg)]) == 0
+    signature = signed_env.sign(cli._digest(pkg.read_bytes()))
+    status, _ = cli.post_package(
+        "http://testserver",
+        pkg,
+        signed_env.token,
+        signature,
+        target="darwin-arm64",
+        client=signed_env.client,
+    )
+    assert status == 201
+    detail = signed_env.client.get("/api/extensions/acme/hello").json()
+    assert detail["versions"][0]["target"] == "darwin-arm64"
+    assert detail["versions"][0]["registry_envelope"]["target"] == "darwin-arm64"
+
+
+def test_publish_requires_a_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    monkeypatch.delenv(cli.TOKEN_ENV, raising=False)
+    pkg = tmp_path / "x.vsix"
+    pkg.write_bytes(b"")
+    assert cli.main(["publish", str(pkg), "--registry", "http://127.0.0.1:9"]) == 2
+    assert cli.TOKEN_ENV in capsys.readouterr().err

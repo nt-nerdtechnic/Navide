@@ -1,0 +1,8 @@
+.venv
+.registry-data
+.pytest_cache
+.ruff_cache
+**/__pycache__
+tests
+deploy/*.json
+deploy/secrets

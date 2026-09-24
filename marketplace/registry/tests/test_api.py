@@ -195,3 +195,14 @@ def test_yank_excludes_from_latest_but_keeps_download(client: TestClient) -> Non
 
 def test_yank_missing_404(client: TestClient) -> None:
     assert client.post("/api/extensions/acme/hello/1.0.0/yank").status_code == 404
+
+
+def test_download_streams_fixed_size_chunks_not_lines() -> None:
+    import io
+
+    from registry.app import _DOWNLOAD_CHUNK_SIZE, _file_chunks
+
+    data = b"x\n" * (_DOWNLOAD_CHUNK_SIZE + 10)
+    chunks = list(_file_chunks(io.BytesIO(data)))
+    assert b"".join(chunks) == data
+    assert len(chunks) == 3

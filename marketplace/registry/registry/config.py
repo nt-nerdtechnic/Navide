@@ -22,6 +22,7 @@ ENV_REQUIRE_AUTH = "REGISTRY_REQUIRE_AUTH"
 ENV_ADMIN_TOKEN = "REGISTRY_ADMIN_TOKEN"
 ENV_TRUST_PROFILE = "REGISTRY_TRUST_PROFILE"
 ENV_TRUST_CONFIG_FILE = "REGISTRY_TRUST_CONFIG_FILE"
+ENV_ROOT_PATH = "REGISTRY_ROOT_PATH"
 
 TRUST_PROFILE_OFFICIAL = "official"
 TRUST_PROFILE_SELF_HOSTED_DEV = "self-hosted-dev"
@@ -71,8 +72,18 @@ class Settings:
     trusted_signers: tuple[TrustedSignerConfig, ...] = ()
     blocked_publishers: tuple[str, ...] = ()
     blocked_packages: tuple[str, ...] = ()
+    root_path: str = ""
+    """Public path prefix when served behind a reverse proxy (e.g. "/registry")."""
 
     def __post_init__(self) -> None:
+        if self.root_path and (
+            not self.root_path.startswith("/")
+            or self.root_path.endswith("/")
+            or "//" in self.root_path
+        ):
+            raise ValueError(
+                "root_path must be empty or start with '/' and have no trailing '/'"
+            )
         if self.trust_profile != TRUST_PROFILE_OFFICIAL:
             return
         if self.verifier_kind != VERIFIER_ED25519:
@@ -307,5 +318,6 @@ def load_settings() -> Settings:
         require_signature=_env_bool(ENV_REQUIRE_SIGNATURE, True),
         require_auth=_env_bool(ENV_REQUIRE_AUTH, True),
         admin_token=os.environ.get(ENV_ADMIN_TOKEN),
+        root_path=os.environ.get(ENV_ROOT_PATH, "").strip().rstrip("/"),
         **trust_config,
     )

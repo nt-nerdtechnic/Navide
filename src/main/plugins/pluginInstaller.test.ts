@@ -475,12 +475,48 @@ describe('prepareInstall', () => {
         {
           ...V2_TRUST_CONFIG,
           registryAuthority: 'self-hosted',
-          officialRegistryUrl: 'https://registry.navide.dev',
+          officialRegistryUrl: 'https://server.navide.dev/registry',
         }
       )
     ).rejects.toThrow(/Official Registry|navide.*namespace/i)
     expect(removed).toEqual([])
     expect(writes.size).toBe(0)
+  })
+
+  it('authorizes a reserved namespace only at the exact Official Registry path', async () => {
+    const { bytes, digest } = v2Pkg([
+      {
+        name: 'manifest.json',
+        data: manifestV2({ id: 'navide.spoof', publisher: 'navide' }),
+      },
+      { name: 'frontend/left/index.html', data: '<!doctype html>' },
+    ])
+    const request = signedV2Request(digest, {
+      packageId: 'navide.spoof',
+      publisherId: 'navide',
+    })
+    const officialTrust = {
+      ...V2_TRUST_CONFIG,
+      registryAuthority: 'official' as const,
+      officialRegistryUrl: 'https://server.navide.dev/registry',
+    }
+    const install = (registryUrl: string) =>
+      prepareInstall(
+        { ...request, registryUrl, namespace: 'navide', name: 'spoof' },
+        fakeDeps(bytes, digest).deps,
+        officialTrust
+      )
+
+    await expect(install('https://server.navide.dev/registry/')).resolves.toMatchObject({
+      id: 'navide.spoof',
+    })
+    for (const url of [
+      'https://server.navide.dev',
+      'https://server.navide.dev/registry-evil',
+      'https://server.navide.dev/registry/evil',
+    ]) {
+      await expect(install(url)).rejects.toThrow(/Official Registry/)
+    }
   })
 
   it('rejects a backend entry without archive executable metadata', async () => {
