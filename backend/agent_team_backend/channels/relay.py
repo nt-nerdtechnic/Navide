@@ -55,6 +55,8 @@ class RelayRequest:
     options: list[str]
     loc: Location
     created: float = field(default_factory=time.monotonic)
+    # The prompt text the request was made for; an answer applies only to it.
+    prompt: str = ""
 
 
 @dataclass(frozen=True)
@@ -88,6 +90,22 @@ def refuses_permanent(request: RelayRequest, choice: str) -> bool:
     if choice.isdigit() and 1 <= int(choice) <= len(request.options):
         return is_permanent_allow(request.options[int(choice) - 1])
     return False
+
+
+_DENY_OPTION_RE = re.compile(r"^\s*(no|deny|reject|decline|cancel|abort|拒絕|取消|否)\b", re.IGNORECASE)
+
+
+def is_deny(request: RelayRequest, answer: dict[str, Any]) -> bool:
+    """The answer refuses: ``no``, or a question option that reads as a refusal."""
+    if answer.get("kind") == "permission":
+        return answer.get("choice") == "deny"
+    n = int(answer.get("option") or 0)
+    return 1 <= n <= len(request.options) and bool(_DENY_OPTION_RE.match(request.options[n - 1]))
+
+
+def same_prompt(a: str, b: str) -> bool:
+    """Equal up to whitespace (the probe re-renders the same screen)."""
+    return " ".join((a or "").split()) == " ".join((b or "").split())
 
 
 def _offered(request: RelayRequest) -> list[tuple[int, str]]:
@@ -144,12 +162,14 @@ class RelayTable:
         self._clock = clock
         self._by_id: dict[str, RelayRequest] = {}
 
-    def create(self, pane_id: str, kind: str, options: list[str], loc: Location) -> RelayRequest:
+    def create(
+        self, pane_id: str, kind: str, options: list[str], loc: Location, prompt: str = ""
+    ) -> RelayRequest:
         self.prune()
         rid = new_request_id()
         while rid in self._by_id:
             rid = new_request_id()
-        req = RelayRequest(rid, pane_id, kind, list(options), loc, self._clock())
+        req = RelayRequest(rid, pane_id, kind, list(options), loc, self._clock(), prompt)
         self._by_id[rid] = req
         return req
 

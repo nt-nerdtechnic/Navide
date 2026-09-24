@@ -855,3 +855,73 @@ async def test_workspace_switch_refuses_an_empty_path_without_asking_a_window(
     assert result["ok"] is False
     assert "path" in result["error"]
     assert plan_mcp._ui_invoke_pending.pending == {}
+
+
+# ── human-only actions ──────────────────────────────────────────────────────
+# An agent must not answer a pane's permission prompt (its own or another's) or
+# switch the permission bypass on through ui_invoke. The chat relay presses keys
+# through _ui_request directly, which is not this tool and keeps working.
+
+
+@pytest.mark.parametrize("ctx_factory", [_pane_ctx, _ctx])
+@pytest.mark.parametrize(
+    ("action", "args"),
+    [
+        ("ui.pane.sendKeys", {"paneId": "pa", "answer": {"kind": "permission", "choice": "allow"}}),
+        ("ui.pane.sendKeys", {"paneId": "pb", "answer": {"kind": "question", "option": 2}}),
+        ("ui.settings.yolo", {"yolo": True}),
+    ],
+)
+@pytest.mark.asyncio
+async def test_an_agent_cannot_press_prompt_keys_or_enable_yolo_through_ui_invoke(
+    monkeypatch: pytest.MonkeyPatch, ctx_factory: Any, action: str, args: dict[str, Any]
+) -> None:
+    _no_window_reached(monkeypatch)
+    agent_messaging.register("pa", "worker", "/ws/alpha", agent_key="claude", owner=_Window())
+    agent_messaging.register("pb", "victim", "/ws/alpha", agent_key="claude", owner=_Window())
+
+    result = await plan_mcp.ui_invoke("/ws/alpha", action, ctx_factory(), args)
+
+    assert result["ok"] is False
+    assert result["error_code"] == "ui_human_only"
+
+
+@pytest.mark.parametrize(
+    ("action", "args"),
+    [("ui.settings.yolo", None), ("ui.settings.yolo", {"yolo": False}), ("ui.settings.open", {"tab": "general"})],
+)
+@pytest.mark.asyncio
+async def test_reading_or_turning_yolo_off_still_passes_through_ui_invoke(
+    broadcasts: list[dict[str, Any]], action: str, args: dict[str, Any] | None
+) -> None:
+    task = asyncio.create_task(_answer("ok"))
+    result = await plan_mcp.ui_invoke("/ws/alpha", action, _ctx(), args)
+    await task
+    assert result["ok"] is True
+    assert broadcasts[0]["payload"]["action"] == action
+
+
+@pytest.mark.asyncio
+async def test_the_chat_relay_still_presses_keys_through_its_internal_path(
+    addressed: list[tuple[Any, dict[str, Any]]],
+) -> None:
+    from agent_team_backend.channels import default_seams
+
+    agent_messaging.register("pa", "worker", "/ws/alpha", agent_key="claude", owner=_Window())
+
+    async def window_sends() -> None:
+        for _ in range(200):
+            keys = list(plan_mcp._ui_invoke_pending.pending)
+            if keys:
+                plan_mcp.resolve_ui_invoke(keys[0], {"ok": True, "result": {"ok": True, "sent": True}, "error": None})
+                return
+            await asyncio.sleep(0.005)
+        raise AssertionError("the relay's ui.pane.sendKeys never reached the window")
+
+    task = asyncio.create_task(window_sends())
+    result = await default_seams().answer("pa", {"kind": "permission", "choice": "allow"})
+    await task
+
+    assert result == {"ok": True}
+    _session, event = addressed[0]
+    assert event["payload"]["action"] == "ui.pane.sendKeys"

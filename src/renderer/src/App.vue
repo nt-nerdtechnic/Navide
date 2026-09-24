@@ -22,6 +22,7 @@ import { formatBytes } from './lib/formatBytes'
 import { formatCpuPercent, machineCpuShare, machineMemoryShare } from './lib/resourceSampling'
 import { cliRiskKey, useResourceUsage, type ResourceUsageWire } from './composables/useResourceUsage'
 import { channelsKey, useChannels } from './composables/useChannels'
+import { guardKey, useGuard } from './composables/useGuard'
 import { awaitingPromptText, parseMenuOptions, resolveAnswerKeys, type PaneAnswer } from './lib/paneAnswerKeys'
 import ResourceSummaryPanel, { type ResourceSummaryRow } from './components/ResourceSummaryPanel.vue'
 import ResourceManagerModal from './components/ResourceManagerModal.vue'
@@ -58,7 +59,7 @@ import { useAgentMessaging, encodeReason, isBroadcastTarget, NOTICE_SENDER } fro
 import type { PushOutcome, RouteResult } from './composables/useAgentMessaging'
 import { createMessageLogPersistence } from './composables/useMessageLogPersistence'
 import type { ParsedAgentMessage } from './lib/agentMessaging'
-import { VENDORS_WITHOUT_TURN_END, hasUnparsedMessageAttempt, isInjectedMessageText, isTurnInFlight, normalizeMessagingName, parseMessages, parseSpawns, pushCooldownMs, renderFallbackReport, renderFormatNotice, renderSpawnKickoff, renderSpawnNotice, turnEndConsumesDeliveries } from './lib/agentMessaging'
+import { VENDORS_WITHOUT_TURN_END, hasUnparsedMessageAttempt, isExternalDelivery, isInjectedMessageText, isTurnInFlight, normalizeMessagingName, parseMessages, parseSpawns, pushCooldownMs, renderFallbackReport, renderFormatNotice, renderSpawnKickoff, renderSpawnNotice, turnEndConsumesDeliveries } from './lib/agentMessaging'
 import {
   evaluateTurnSpawns,
   evaluateSpawnRequest,
@@ -12853,6 +12854,7 @@ backend.on('agent_msg.deliver', (raw) => {
     rate_limit?: boolean
     reply_to?: string
     kind?: string
+    origin?: string
   }
   if (!ev?.msg_key || !ev.target_pane_id || !ev.content) return
   // The broadcast reaches the sending window too. When the sender is one of our
@@ -12885,6 +12887,8 @@ backend.on('agent_msg.deliver', (raw) => {
     replyTo: ev.reply_to,
     // Only cli_send(kind="ack") sets this: log the row, never inject it.
     kind: ev.kind === 'ack' ? 'ack' : undefined,
+    // Chat channel / remote device: fenced as external content, not the user's.
+    external: isExternalDelivery(ev),
   })
   if (!accepted || !ev.cross_workspace) return
   // The instruction came from another project — say so, since nothing else in
@@ -17512,6 +17516,7 @@ const resourceUsage = useResourceUsage({
 })
 provide(cliRiskKey, resourceUsage)
 provide(channelsKey, useChannels(backend))
+provide(guardKey, useGuard(backend))
 
 const resourceRows = computed<ResourceSummaryRow[]>(() => {
   const statusById = new Map(paneViews.value.map((v) => [v.id, v.status]))

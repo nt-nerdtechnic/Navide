@@ -8891,5 +8891,99 @@
       "dingtalk": "DingTalk has no threads: one group is one pane.",
       "imessage": "Needs Full Disk Access (System Settings → Privacy & Security). The first reply triggers a macOS prompt to allow controlling Messages."
     }
+  },
+  "guard": {
+    "nav": "Security",
+    "unavailable": "Navide Guard is not available from this backend yet. Restart Navide after updating.",
+    "enabled": {
+      "title": "Navide Guard",
+      "desc": "Judge each CLI action by how dangerous it is and who asked for it; stop or ask before the dangerous ones. The rules are fixed code, never an AI."
+    },
+    "counts": {
+      "critical": "Critical {n}",
+      "high": "High {n}",
+      "asks": "Asked {n}",
+      "denies": "Denied (24h) {n}"
+    },
+    "policy": {
+      "title": "What Guard does",
+      "hint": "Each action is graded, then handled by where the request came from.",
+      "source": "Request source",
+      "levels": "Critical: deleting outside the workspace or home, disk/system commands, sudo, curl | sh, touching credentials, force-push to main, cloud teardown. High: rm -rf inside the workspace, git push / reset --hard, publishing packages, editing CI or git hooks.",
+      "row": {
+        "local": "You, on this computer",
+        "relay": "Approved from a chat app",
+        "remote": "Remote device, other pane or agent",
+        "tainted": "Pane with external influence"
+      }
+    },
+    "level": {
+      "critical": "Critical",
+      "high": "High",
+      "normal": "Normal"
+    },
+    "action": {
+      "allow": "Allow",
+      "allow-audit": "Allow + record",
+      "ask": "Ask on this computer",
+      "deny": "Deny"
+    },
+    "source": {
+      "local": "Local",
+      "relay": "Chat app",
+      "remote": "Remote",
+      "agent": "Other agent"
+    },
+    "vendors": {
+      "title": "Which CLIs Guard can block",
+      "hint": "Guard stops an action through the CLI's own hook. CLIs without one can only be protected by chat-approval refusal and by not running them in YOLO mode.",
+      "block": "Can be blocked",
+      "none": "Cannot be blocked",
+      "unknown": "Unknown"
+    },
+    "rules": {
+      "title": "Custom rules",
+      "hint": "Allow patterns downgrade a High match (never Critical). Deny patterns always count as Critical.",
+      "kind": {
+        "allow": "Allow",
+        "deny": "Deny"
+      },
+      "kind-label": "Rule type",
+      "pattern": "Pattern, e.g. rm -rf build",
+      "note": "Note (optional)",
+      "add": "Add",
+      "remove": "Remove"
+    },
+    "test": {
+      "title": "Try it",
+      "placeholder": "Type a shell command, e.g. rm -rf ~",
+      "tainted": "Externally influenced pane",
+      "run": "Check",
+      "unparseable": "Cannot be judged statically (variable expansion, eval, encoded script)."
+    },
+    "taint": {
+      "title": "Panes with external influence",
+      "hint": "A pane that received content from a chat app, a remote device, another pane or an MCP caller asks here before any High or Critical action, until you clear it.",
+      "empty": "No pane is marked."
+    },
+    "audit": {
+      "title": "Recent decisions",
+      "empty": "No decisions recorded yet."
+    },
+    "pane": {
+      "badge": "External influence",
+      "tooltip": "Received content from {sources} since {since}",
+      "explain": "Its High and Critical actions need your confirmation on this computer. Clear the mark only if you have checked what it was sent.",
+      "clear": "Clear",
+      "no-hook-warning": "Navide Guard cannot block this CLI, and it runs without permission prompts. Be careful giving it commands from a chat room."
+    },
+    "notice": {
+      "denied": "Navide Guard blocked an action: {reason}",
+      "asked": "Navide Guard wants your confirmation: {reason}"
+    },
+    "error": {
+      "generic": "Something went wrong. Try again."
+    },
+    "cancel": "Cancel"
   }
 }

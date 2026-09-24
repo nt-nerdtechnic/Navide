@@ -128,6 +128,7 @@ import SyncSettings from './SyncSettings.vue'
 import MemoryPane from './MemoryPane.vue'
 import StatusBadgeSettingsPane from './StatusBadgeSettingsPane.vue'
 import ChannelsPane from './settings/ChannelsPane.vue'
+import SecurityPane from './settings/SecurityPane.vue'
 import NavideCloudMark from './NavideCloudMark.vue'
 import SettingsNavItem from './settings/SettingsNavItem.vue'
 import SettingsSection from './settings/SettingsSection.vue'
@@ -224,7 +225,7 @@ const reclaimNowCount = computed(() => props.reclaimableNowCount ?? 0)
 const reclaimNowSize = computed(() => formatBytes(props.reclaimableNowBytes ?? 0))
 
 // ── Tab ───────────────────────────────────────────────────────────────────────
-type Tab = 'mcp' | 'skills' | 'prompts' | 'memory' | 'analyzer' | 'cliAgents' | 'general' | 'cross-device' | 'updates' | 'appearance' | 'language' | 'statusBadges' | 'layout' | 'notifications' | 'voice' | 'accounts' | 'extensions' | 'marketplace' | 'keybindings' | 'channels' | 'help'
+type Tab = 'mcp' | 'skills' | 'prompts' | 'memory' | 'analyzer' | 'cliAgents' | 'general' | 'cross-device' | 'updates' | 'appearance' | 'language' | 'statusBadges' | 'layout' | 'notifications' | 'voice' | 'accounts' | 'extensions' | 'marketplace' | 'keybindings' | 'channels' | 'security' | 'help'
 
 /** Topics inside the Help tab — read-only reference material, no settings. */
 type HelpTopic =
@@ -1506,6 +1507,8 @@ const settingsScopeNotes: Record<SettingsTab, { scope: SettingsScope; storage: k
   keybindings: { scope: 'user', storage: 'mainProcess' },
   // Platform config is in navide.db; tokens are in the credential vault.
   channels: { scope: 'user', storage: 'safeStorage' },
+  // Guard's switch, rules, audit and taint marks are tables in navide.db.
+  security: { scope: 'user', storage: 'app_data_dir' },
 }
 
 function scopeLabel(scope: SettingsScope): string {
@@ -2492,6 +2495,11 @@ watch(activeTab, (tab) => {
               <SettingsNavItem :label="$t('channels.nav')" :active="activeTab === 'channels'" @select="activeTab = 'channels'">
                 <template #icon>
                   <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.6 3.4h10.8v7.2H7l-3 2.4v-2.4H2.6Z"/><path d="M5.4 6.2h5.2M5.4 8.2h3.2"/></svg>
+                </template>
+              </SettingsNavItem>
+              <SettingsNavItem :label="$t('guard.nav')" :active="activeTab === 'security'" @select="activeTab = 'security'">
+                <template #icon>
+                  <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.8 13 3.6v4c0 3.1-2.1 5.4-5 6.6-2.9-1.2-5-3.5-5-6.6v-4Z"/><path d="M5.8 8l1.6 1.6 2.9-3"/></svg>
                 </template>
               </SettingsNavItem>
               <SettingsNavItem :label="$t('settings.nav.crossDevice')" :active="activeTab === 'cross-device'" @select="activeTab = 'cross-device'">
@@ -4299,6 +4307,11 @@ watch(activeTab, (tab) => {
           <ChannelsPane v-if="activeTab === 'channels'" :backend="props.backend" />
         </div>
 
+        <div v-show="activeTab === 'security'" class="s-body security-body" data-settings-section="security">
+          <h1 class="s-page-title">{{ $t('guard.nav') }}</h1>
+          <SecurityPane v-if="activeTab === 'security'" :backend="props.backend" />
+        </div>
+
         <!-- ── VOICE TAB ─────────────────────────────────────────────────── -->
         <div v-show="activeTab === 'voice'" class="s-body voice-body" data-settings-section="voice">
           <h1 class="s-page-title">{{ $t('settings.nav.voice') }}</h1>
@@ -4859,6 +4872,7 @@ watch(activeTab, (tab) => {
 .notifications-body { overflow-y: auto; padding: 18px 22px; }
 .voice-body { overflow-y: auto; padding: 18px 22px; }
 .channels-body { overflow-y: auto; padding: 18px 22px; }
+.security-body { overflow-y: auto; padding: 18px 22px; }
 /* Same reason: a scrolling list of status rows needs the gutter and its own
    scroll, which the bare .s-body does not give. */
 .status-badges-body { overflow-y: auto; padding: 18px 22px; }

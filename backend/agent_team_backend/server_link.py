@@ -3372,11 +3372,15 @@ class ServerLink:
             )
             if part
         )
+        from .guard.taint import safe_mark_tainted
+
+        safe_mark_tainted(pane.pane_id, "remote", f"message from device {from_display}")
         await app.broadcast(
             make_event(
                 "agent_msg.deliver",
                 {
                     "msg_key": msg_key,
+                    "origin": "remote",
                     "target_pane_id": pane.pane_id,
                     "target_workspace_path": pane.workspace_path,
                     "target_name": pane.name,

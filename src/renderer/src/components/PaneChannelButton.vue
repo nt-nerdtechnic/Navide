@@ -8,6 +8,8 @@ import {
   type ChannelPlatform,
   type ChannelsStore,
 } from '../composables/useChannels'
+import { guardKey, type GuardStore } from '../composables/useGuard'
+import { vendorRunsYolo } from '../lib/guardYolo'
 
 /**
  * Pane-header entry to chat channels. Unbound: a small button that opens a
@@ -17,13 +19,18 @@ import {
 const props = defineProps<{
   paneId: string
   paneName: string
+  /** The pane's CLI vendor, for the Guard warning in the popover. */
+  agentKey?: string
   /** Test seam; the app provides the store through `channelsKey`. */
   store?: ChannelsStore
+  /** Test seam; the app provides the store through `guardKey`. */
+  guardStore?: GuardStore
 }>()
 
 // Global instance, as TerminalPane does: headers mount in tests without the plugin.
 const t = i18n.global.t
 const store = props.store ?? inject(channelsKey, null)
+const guard = props.guardStore ?? inject(guardKey, null)
 
 const binding = computed(() => store?.bindingFor(props.paneId) ?? null)
 const open = ref(false)
@@ -35,6 +42,11 @@ const loadingLocations = ref(false)
 const btnRef = ref<HTMLElement | null>(null)
 const popRef = ref<HTMLElement | null>(null)
 const popStyle = ref<Record<string, string>>({})
+
+// A vendor Guard cannot block, running with its permission prompts off: a chat
+// room would drive it with nothing between the message and the shell. Read
+// when the popover opens, so a settings change since mount is picked up.
+const unguardedYolo = ref(false)
 
 function platformName(platform: string): string {
   return t(`channels.platform.${platform}`)
@@ -67,6 +79,8 @@ async function toggle(): Promise<void> {
   error.value = ''
   picked.value = null
   locations.value = []
+  unguardedYolo.value =
+    !!props.agentKey && guard?.hookSupportFor(props.agentKey) === 'none' && vendorRunsYolo(props.agentKey)
   open.value = true
   document.addEventListener('pointerdown', onPointerDown, true)
   document.addEventListener('keydown', onKeydown, true)
@@ -182,6 +196,7 @@ function openSettings(): void {
         @mousedown.stop
       >
         <div class="pch-pop-head">{{ t('channels.pane.where') }}</div>
+        <p v-if="unguardedYolo" class="pch-warn" role="note" data-testid="channel-guard-warning">{{ t('guard.pane.no-hook-warning') }}</p>
         <template v-if="!picked">
           <button
             v-for="p in store.configuredPlatforms.value"
@@ -247,4 +262,5 @@ function openSettings(): void {
 .pch-loc-title { color: var(--text-bright); }
 .pch-loc-actions { display: flex; flex-direction: column; gap: 3px; }
 .pch-error { margin: 0; color: var(--danger-fg); }
+.pch-warn { margin: 0 0 2px; color: var(--attention-fg); line-height: 1.4; }
 </style>

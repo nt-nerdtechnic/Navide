@@ -545,8 +545,28 @@ class LiveBridge:
             wait_for_delivery_s=DELIVERY_WAIT_S,
             pane_id=action.get("pane_id") or "",
             open_target=True,
+            taint_detail=action.get(TAINT_KEY) or "",
         )
         return outcome_of_send(answer)
+
+
+#: Carries "scheduled by <agent>" from a job to LiveBridge.deliver; never stored.
+TAINT_KEY = "_guard_taint_detail"
+
+
+def _with_origin(job: dict[str, Any]) -> dict[str, Any]:
+    """The job's action, marked for Navide Guard when an agent wrote it.
+
+    Agent-authored means the owner or the last editor is an agent. A job the
+    user adopted is the user's again ("make it mine" is the user vouching for
+    it); a job saved before owners were recorded counts as the user's.
+    """
+    action = job["action"]
+    who = next((w for w in (job.get("updated_by"), job.get("owner")) if w and is_agent(w)), None)
+    if who is None:
+        return action
+    name = who.get("pane_name") or who.get("pane_id") or who.get("kind")
+    return {**action, TAINT_KEY: f"scheduled by {name}"}
 
 
 def _qualified(action: dict[str, Any]) -> str:
@@ -850,7 +870,7 @@ class SchedulerService:
 
     async def _execute(self, job: dict[str, Any], started: int, manual: bool) -> None:
         try:
-            outcome = await self.bridge.deliver(job["action"])
+            outcome = await self.bridge.deliver(_with_origin(job))
         except asyncio.CancelledError:
             raise
         except Exception as err:  # noqa: BLE001 — a failed run is an error row

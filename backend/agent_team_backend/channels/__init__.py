@@ -39,9 +39,12 @@ def default_seams() -> Seams:
             opened = await mcp._open_placeholder(target)
             if opened.get("ok"):
                 target = opened["pane"]
+        from ..guard.taint import safe_mark_tainted
+
+        safe_mark_tainted(target.pane_id, "remote", f"chat message from {from_display}")
         msg_key = await mcp._dispatch_delivery(
             target, text, caller=mcp._Caller(kind="host"), me="",
-            cross_workspace=res.cross_workspace, from_display=from_display,
+            cross_workspace=res.cross_workspace, from_display=from_display, origin="channel",
         )
         return {"ok": True, "msg_key": msg_key, "pane_id": target.pane_id}
 
@@ -110,6 +113,10 @@ def default_seams() -> Seams:
         pane = agent_messaging.current(pane_id)
         return pane.pane_id if pane is not None else ""
 
+    def pane_workspace(pane_id: str) -> str:
+        pane = agent_messaging.current(pane_id)
+        return pane.workspace_path if pane is not None else ""
+
     async def broadcast(event_type: str, payload: dict[str, Any]) -> None:
         from .. import app
 
@@ -129,7 +136,7 @@ def default_seams() -> Seams:
     return Seams(
         deliver=deliver, await_verdict=await_verdict, interrupt=interrupt, pane_state=pane_state,
         awaiting_info=awaiting_info, answer=answer, resolve_pane=resolve_pane, broadcast=broadcast,
-        read_secret=read_secret, write_secret=write_secret,
+        read_secret=read_secret, write_secret=write_secret, pane_workspace=pane_workspace,
     )
 
 

@@ -1624,6 +1624,7 @@ async def _send_to_group(
 async def _dispatch_delivery(
     entry: Any, text: str, *, caller: "_Caller", me: str, cross_workspace: bool,
     reply_to: str = "", kind: str = "", from_display: str = "",
+    origin: str = "", taint_detail: str = "",
 ) -> str:
     """Hand one message to the windows and record it; returns its msg_key.
 
@@ -1650,6 +1651,14 @@ async def _dispatch_delivery(
 
     sender = agent_messaging.get(me) if me else None
     msg_key = f"{me or caller.kind}:mcp:{secrets.token_hex(8)}"
+    if kind != "ack" and (caller.kind in ("pane", "external") or taint_detail):
+        # Navide Guard: text from another agent or an MCP client taints the
+        # target. A host caller passes taint_detail when the text is
+        # agent-authored (an agent's scheduled job); chat channels mark at
+        # their own seam.
+        from agent_team_backend.guard.taint import safe_mark_tainted
+
+        safe_mark_tainted(entry.pane_id, "agent", taint_detail or f"message from {me or caller.kind}")
     await app.broadcast(
         make_event(
             "agent_msg.deliver",
@@ -1678,6 +1687,9 @@ async def _dispatch_delivery(
                 **({"reply_to": reply_to} if reply_to else {}),
                 # Only present for an ack — see the docstring.
                 **({"kind": kind} if kind else {}),
+                # "channel" for a chat-channel message, so the window can mark
+                # it as external; absent otherwise.
+                **({"origin": origin} if origin else {}),
             },
         )
     )
@@ -1860,6 +1872,7 @@ async def _send(
     reply_to: str = "",
     kind: str = "message",
     open_target: bool = False,
+    taint_detail: str = "",
 ) -> dict[str, Any]:
     """cli_send once its caller is resolved.
 
@@ -1976,6 +1989,7 @@ async def _send(
         cross_workspace=result.cross_workspace,
         reply_to=reply_to,
         kind=send_kind,
+        taint_detail=taint_detail,
     )
     answer: dict[str, Any] = {
         "ok": True,
@@ -4433,6 +4447,24 @@ _UI_INVOKE_SLOW_TIMEOUT_S = 60.0
 #: close, getStatus and interrupt are cross-pane by design.
 _PANE_PRIVATE_UI_ACTIONS = frozenset({"ui.messaging.readIncoming", "ui.messaging.settleRead"})
 
+
+def _human_only_refusal(action: str, args: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Refuse what only the user at the computer may do, for any MCP caller.
+
+    ui.pane.sendKeys answers a pane's permission prompt or option menu, and
+    ui.settings.yolo with yolo true makes every CLI skip its prompts; an agent
+    doing either approves its own actions. Reading the switch and turning it
+    off stay open. The chat relay presses keys through _ui_request directly
+    (channels.default_seams), not through these tools, and is not affected.
+    """
+    if action == "ui.pane.sendKeys":
+        error = "ui.pane.sendKeys answers a pane's prompt; only the user can do that, at the computer"
+    elif action == "ui.settings.yolo" and (args or {}).get("yolo") is True:
+        error = "請在 Settings 由使用者切換: turning the permission bypass on is the user's call"
+    else:
+        return None
+    return {"ok": False, "result": None, "error": error, "error_code": "ui_human_only"}
+
 # ui.pipeline.start spawns every slot of the run's first stage before it
 # answers, so it is at least as slow as a single pane create and usually
 # several times over. next / resume / restart all reach the same spawn loop
@@ -4679,8 +4711,15 @@ async def ui_invoke(
     hosting window has switched to another project, rather than silently
     running against the wrong one. Switch that window back, or spawn the pane
     from a window that has the project open.
+
+    ui.pane.sendKeys, and ui.settings.yolo with yolo true, are refused with
+    error_code "ui_human_only": answering a pane's prompt and switching the
+    permission bypass on are the user's to do.
     """
     caller = _resolve_caller(ctx)
+    refusal = _human_only_refusal(action, args)
+    if refusal is not None:
+        return refusal
     if action in _PANE_PRIVATE_UI_ACTIONS:
         # Refused here as well as in the window: the renderer check is the one
         # that holds for every path a request can take, this one gives the
@@ -7098,15 +7137,15 @@ async def cli_permission_settings(
     every path that starts a CLI: new panes, pipeline slots, resumes and
     restores alike.
 
-    Called with no argument it only reads. Passing `yolo` sets it, and the new
-    value applies to CLIs started AFTER the change; processes already running
-    keep the flags they were launched with, so turning it off does not reach
-    back into a pane that is already going.
+    Called with no argument it only reads. Passing `yolo=false` turns it off,
+    and the new value applies to CLIs started AFTER the change; processes
+    already running keep the flags they were launched with, so turning it off
+    does not reach back into a pane that is already going.
 
-    WHAT TURNING IT ON MEANS: the CLIs Navide starts stop asking before they
-    edit files, run shell commands or make network calls in the user's
-    workspace, and act on their own judgement instead. That is the user's
-    call to make. Do not switch it on to get your own work past a prompt.
+    `yolo=true` is REFUSED (ok false, error_code "ui_human_only"): with it on,
+    the CLIs Navide starts stop asking before they edit files, run shell
+    commands or make network calls in the user's workspace. Only the user can
+    switch it on, in Settings. Ask them if your work needs it.
 
     Returns {ok, result, error}; `result` is {yolo, agents}. `yolo` is the
     global switch. `agents` is one entry per CLI vendor — {agent, mode,
@@ -7140,6 +7179,9 @@ async def cli_permission_settings(
     # always carried the key would turn every read into a write of whatever
     # the default happened to serialise to.
     args: dict[str, Any] = {} if yolo is None else {"yolo": bool(yolo)}
+    refusal = _human_only_refusal("ui.settings.yolo", args)
+    if refusal is not None:
+        return refusal
     # Soft resolve: unlike the pipeline tools this must not refuse a caller who
     # has no workspace, because the setting does not belong to one. With
     # nothing to address, is_global sends it to any one open window.

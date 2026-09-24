@@ -1,0 +1,181 @@
+"""What each vendor's installer writes for Navide Guard's PreToolUse hook.
+
+The guard hook is added beside the existing hooks, never in place of them: the
+signal hooks feed activity detection and must keep their exact text, while the
+guard hook is the one whose printed body the CLI reads as a decision.
+"""
+
+from __future__ import annotations
+
+import json
+import shlex
+import threading
+import tomllib
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+import pytest
+
+from agent_team_backend import claude_hooks, codex_session_hooks, copilot_hooks, osplat, qwen_hooks
+from agent_team_backend.claude_hooks import _build_curl_command
+from tests import hook_shell
+from tests.test_claude_hooks import _run_to_completion
+
+
+@pytest.fixture(autouse=True)
+def _push_channel_off(monkeypatch):
+    # The rewake waiter is conditional on claude's push channel; pinning it
+    # keeps these goldens independent of the test database's switch.
+    monkeypatch.setattr(claude_hooks, "_rewake_wanted", lambda: False)
+
+
+def _ours(entries: list) -> list[dict]:
+    return [
+        h for e in entries for h in e.get("hooks", [])
+        if claude_hooks._is_ours(str(h.get("command", "")))
+    ]
+
+
+def test_claude_pretooluse_keeps_the_signal_hook_and_adds_a_guard_hook(tmp_path) -> None:
+    settings = tmp_path / "settings.json"
+    claude_hooks.install_hooks("/tmp/port-file", settings_file=settings)
+
+    hooks = json.loads(settings.read_text())["hooks"]
+    pre = _ours(hooks["PreToolUse"])
+    assert len(pre) == 2
+    signal, guard = pre
+    # The signal hook is byte-for-byte what earlier builds wrote.
+    assert signal == osplat.scripts.hook_entry(_build_curl_command("/tmp/port-file", "pre_tool_use"))
+    assert guard["command"].startswith("# agent-team-hook kind=guard\n")
+    assert "/hooks/claude/pretooluse" in guard["command"]
+    assert guard["timeout"] == 10
+    # The body is the decision: it must reach stdout.
+    assert "-o /dev/null" not in guard["command"]
+    assert "-m 9 " in guard["command"]
+
+
+def test_claude_other_events_are_unchanged(tmp_path) -> None:
+    settings = tmp_path / "settings.json"
+    claude_hooks.install_hooks("/tmp/port-file", settings_file=settings)
+
+    hooks = json.loads(settings.read_text())["hooks"]
+    for event, kind in (("Stop", "stop"), ("Notification", "notification"), ("SubagentStop", "subagent_stop")):
+        assert _ours(hooks[event]) == [
+            osplat.scripts.hook_entry(_build_curl_command("/tmp/port-file", kind))
+        ], event
+
+
+def test_claude_reinstall_and_uninstall_handle_the_guard_hook(tmp_path) -> None:
+    # The marker is what an older installer (the other Navide sharing this
+    # settings.json) strips by, so the guard hook must carry it too.
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({"hooks": {"PreToolUse": [
+        {"matcher": "Bash", "hooks": [{"type": "command", "command": "mine.sh"}]},
+    ]}}))
+    for _ in range(3):
+        claude_hooks.install_hooks("/tmp/port-file", settings_file=settings)
+    pre = json.loads(settings.read_text())["hooks"]["PreToolUse"]
+    assert len(_ours(pre)) == 2
+    assert pre[0] == {"matcher": "Bash", "hooks": [{"type": "command", "command": "mine.sh"}]}
+
+    claude_hooks.uninstall_hooks(settings_file=settings)
+    assert json.loads(settings.read_text())["hooks"] == {"PreToolUse": [
+        {"matcher": "Bash", "hooks": [{"type": "command", "command": "mine.sh"}]},
+    ]}
+
+
+def test_qwen_installs_a_guard_pretooluse_hook(tmp_path) -> None:
+    settings = tmp_path / "settings.json"
+    qwen_hooks.install_hooks("/tmp/port-file", settings_file=settings)
+
+    entry = json.loads(settings.read_text())["hooks"]["PreToolUse"]
+    assert len(entry) == 1
+    (hook,) = entry[0]["hooks"]
+    assert hook["type"] == "command"
+    assert hook["timeout"] == 10
+    assert "/hooks/qwen/pretooluse" in hook["command"]
+    assert "-o /dev/null" not in hook["command"]
+
+
+def test_copilot_guard_hook_keeps_the_body_and_always_exits_zero(tmp_path) -> None:
+    copilot_hooks.install_hooks("/tmp/port-file", hooks_directory=tmp_path)
+
+    doc = json.loads((tmp_path / "agent-team.json").read_text())
+    (entry,) = doc["hooks"]["preToolUse"]
+    assert entry["timeoutSec"] == 10
+    for key in ("command", "bash", "powershell"):
+        assert "/hooks/copilot/pretooluse" in entry[key]
+        assert entry[key].rstrip().endswith("exit 0"), key
+    # A non-zero exit DENIES in copilot, but the body must still be printed.
+    assert "-o /dev/null" not in entry["bash"]
+    assert " >/dev/null" not in entry["bash"]
+    assert "-o NUL" not in entry["powershell"]
+    # The notification hook is untouched.
+    assert "/hooks/copilot\"" in doc["hooks"]["notification"][0]["bash"]
+
+
+def test_codex_wire_adds_a_parseable_pretooluse_hook(tmp_path) -> None:
+    result = codex_session_hooks.wire("codex", {}, {}, tmp_path, tmp_path / "port", tmp_path / "auth")
+
+    values = [a.split("=", 1) for a in shlex.split(result)[1:] if a != "-c"]
+    keys = [k for k, _ in values]
+    assert keys == ["hooks.SessionStart", "hooks.PreToolUse"]
+    parsed = tomllib.loads("v = " + dict(values)["hooks.PreToolUse"])["v"]
+    (hook,) = parsed[0]["hooks"]
+    assert hook == {"type": "command", "command": codex_session_hooks.guard_hook_command(), "timeout": 10}
+    assert "/hooks/codex/pretooluse" in hook["command"]
+    assert hook["command"].endswith("exit 0")
+
+
+def test_codex_trust_gate_leaves_the_guard_hook_out_too(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(codex_session_hooks, "trust_gate_blocks_injection", lambda: True)
+    assert codex_session_hooks.wire("codex", {}, {}, tmp_path, tmp_path / "p", tmp_path / "a") == "codex"
+
+
+def _serve_once(body: bytes, status: int = 200):
+    received: list[tuple[str, bytes]] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            received.append((self.path, self.rfile.read(int(self.headers["Content-Length"]))))
+            self.send_response(status)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args) -> None:
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    server.timeout = 45
+    thread = threading.Thread(target=server.handle_request)
+    thread.start()
+    return server, thread, received
+
+
+@pytest.mark.parametrize("status,body,expected", [
+    (200, b'{"hookSpecificOutput":{"permissionDecision":"deny"}}', '{"hookSpecificOutput":{"permissionDecision":"deny"}}'),
+    # A 403 (hook secret from another install) is "no decision", not an error.
+    (403, b"", ""),
+])
+def test_claude_guard_hook_prints_the_decision_and_exits_zero(tmp_path, status, body, expected) -> None:
+    port_file = tmp_path / "backend.port"
+    argv = hook_shell.shell_argv(osplat.scripts.hook_entry(claude_hooks._build_guard_command(str(port_file))))
+    server, thread, received = _serve_once(body, status)
+    port_file.write_text(str(server.server_port), encoding="utf-8")
+    try:
+        result = _run_to_completion(argv, '{"tool_name":"Bash"}', timeout=45)
+    finally:
+        thread.join(timeout=46)
+        server.server_close()
+    assert received and received[0][0] == "/hooks/claude/pretooluse"
+    assert result.returncode == 0
+    assert result.stdout.removesuffix("\n").removesuffix("\r") == expected
+
+
+def test_claude_guard_hook_without_a_backend_is_no_decision(tmp_path) -> None:
+    argv = hook_shell.shell_argv(osplat.scripts.hook_entry(
+        claude_hooks._build_guard_command(str(tmp_path / "absent.port"))
+    ))
+    result = _run_to_completion(argv, '{"tool_name":"Bash"}', timeout=45)
+    assert result.returncode == 0
+    assert result.stdout == ""

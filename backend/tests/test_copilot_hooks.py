@@ -26,7 +26,8 @@ def test_installs_a_flat_notification_handler(tmp_path) -> None:
     assert doc["version"] == 1
     assert doc["disableAllHooks"] is False
     # Copilot's event names are lowercase, unlike Claude's.
-    assert list(doc["hooks"]) == ["notification"]
+    # preToolUse is Navide Guard's hook, covered in tests/guard_hooks.
+    assert list(doc["hooks"]) == ["notification", "preToolUse"]
     handler = doc["hooks"]["notification"][0]
     # Flat shape: the command sits directly on the entry, not nested under a
     # second "hooks" list the way Claude and Qwen do it.

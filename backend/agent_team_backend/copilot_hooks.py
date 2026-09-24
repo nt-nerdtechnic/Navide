@@ -16,6 +16,9 @@ two vendors use, and ``permission_prompt`` there was measured to fire only
 when a prompt actually blocks the turn. Its sibling ``permissionRequest`` hook
 is deliberately NOT used: it also fires when a tool is auto-approved (verified
 with --allow-all-tools), which would report a working pane as blocked.
+
+A second event, ``preToolUse``, carries Navide Guard's synchronous decision
+(see guard_hooks for the verified Copilot facts, notably timeout = allow).
 """
 
 from __future__ import annotations
@@ -63,6 +66,32 @@ def _build_command(port_file: str, shell: str) -> str:
     )
 
 
+#: Navide Guard's hook budget. Copilot lets a call through when a hook times
+#: out, so curl (9s) and the backend's evaluate budget (5s) both finish first.
+_GUARD_TIMEOUT_S = 10
+
+
+def _build_guard_command(port_file: str, shell: str) -> str:
+    """The synchronous preToolUse hook: POST the payload, print the decision.
+
+    Unlike the notification hook, the body is kept — it is the decision
+    (guard_hooks.render). The exit is still 0 no matter what: in Copilot a
+    non-zero preToolUse exit DENIES the call, so a backend that is down must
+    read as "no decision", not as a refusal of every tool.
+    """
+    from . import hook_auth
+
+    return osplat.scripts_by_shell[shell].hook_post_json(
+        port_file=port_file,
+        header_file=str(hook_auth.header_file()),
+        url_path="/hooks/copilot/pretooluse",
+        event="pre_tool_use",
+        timeout_s=_GUARD_TIMEOUT_S - 1,
+        keep_body=True,
+        exit_zero=True,
+    )
+
+
 def install_hooks(port_file: str, hooks_directory: Path | None = None) -> dict[str, Any]:
     """Write our hook file. Idempotent by construction — the file is ours.
 
@@ -90,7 +119,15 @@ def install_hooks(port_file: str, hooks_directory: Path | None = None) -> dict[s
                     "powershell": _build_command(port_file, "powershell"),
                     "timeoutSec": 5,
                 }
-            ]
+            ],
+            "preToolUse": [
+                {
+                    "command": _build_guard_command(port_file, "bash"),
+                    "bash": _build_guard_command(port_file, "bash"),
+                    "powershell": _build_guard_command(port_file, "powershell"),
+                    "timeoutSec": _GUARD_TIMEOUT_S,
+                }
+            ],
         },
     }
     try:
@@ -107,4 +144,4 @@ def install_hooks(port_file: str, hooks_directory: Path | None = None) -> dict[s
         return {"installed": False, "path": str(path), "error": str(err)}
 
     log.info("installed Copilot hook → %s (port_file=%s)", path, port_file)
-    return {"installed": True, "path": str(path), "events": 1, "port_file": port_file}
+    return {"installed": True, "path": str(path), "events": 2, "port_file": port_file}

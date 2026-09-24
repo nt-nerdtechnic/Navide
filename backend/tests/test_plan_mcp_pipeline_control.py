@@ -867,13 +867,12 @@ async def test_reading_the_permission_switch_sends_no_yolo_key_at_all(
     assert "yolo" not in ui_calls[0]["args"]
 
 
-@pytest.mark.parametrize("value", [True, False])
 @pytest.mark.asyncio
-async def test_setting_the_permission_switch_sends_the_value(
-    value: bool, ui_calls: list[dict[str, Any]]
+async def test_turning_the_permission_switch_off_sends_the_value(
+    ui_calls: list[dict[str, Any]],
 ) -> None:
     result = await plan_mcp.cli_permission_settings(
-        _ctx(), yolo=value, workspace_path="/ws/alpha"
+        _ctx(), yolo=False, workspace_path="/ws/alpha"
     )
 
     assert result["ok"] is True
@@ -882,10 +881,26 @@ async def test_setting_the_permission_switch_sends_the_value(
             "workspace_path": "/ws/alpha",
             "op": "invoke",
             "action": "ui.settings.yolo",
-            "args": {"yolo": value},
+            "args": {"yolo": False},
             "is_global": False,
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_an_agent_cannot_turn_the_permission_switch_on(
+    ui_calls: list[dict[str, Any]],
+) -> None:
+    """Skipping every CLI's permission prompts is the user's call: the MCP path
+    refuses it before any window is asked."""
+    result = await plan_mcp.cli_permission_settings(
+        _ctx(), yolo=True, workspace_path="/ws/alpha"
+    )
+
+    assert result["ok"] is False
+    assert result["error_code"] == "ui_human_only"
+    assert "Settings" in result["error"]
+    assert ui_calls == []
 
 
 @pytest.mark.asyncio
@@ -915,7 +930,7 @@ async def test_the_permission_switch_reports_a_window_that_refused(
 
     monkeypatch.setattr(plan_mcp, "_ui_request", refusing)
 
-    result = await plan_mcp.cli_permission_settings(_ctx(), yolo=True)
+    result = await plan_mcp.cli_permission_settings(_ctx(), yolo=False)
 
     assert result["ok"] is False
     assert result["result"] is None

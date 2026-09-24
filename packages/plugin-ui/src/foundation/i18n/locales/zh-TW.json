@@ -8891,5 +8891,99 @@
       "dingtalk": "釘釘沒有討論串：一個群組＝一個 pane。",
       "imessage": "需要「完整磁碟取用權限」（系統設定 → 隱私權與安全性）；第一次送出時 macOS 會跳出「自動化控制 Messages」授權。"
     }
+  },
+  "guard": {
+    "nav": "安全",
+    "unavailable": "目前的後端還沒有 Navide Guard，更新後請重新啟動 Navide。",
+    "enabled": {
+      "title": "Navide Guard",
+      "desc": "依動作的危險程度與要求來源判斷每個 CLI 動作，危險的先擋下或要求確認。判斷是固定規則的程式碼，不經過 AI。"
+    },
+    "counts": {
+      "critical": "嚴重 {n}",
+      "high": "高 {n}",
+      "asks": "要求確認 {n}",
+      "denies": "拒絕（24 小時）{n}"
+    },
+    "policy": {
+      "title": "Guard 怎麼處理",
+      "hint": "每個動作先分級，再依要求來自哪裡決定處置。",
+      "source": "要求來源",
+      "levels": "嚴重：刪除 workspace 或家目錄以外的檔案、磁碟與系統指令、sudo、curl | sh、讀寫憑證、強制推送到 main、雲端資源刪除。高：workspace 內 rm -rf、git push／reset --hard、發布套件、修改 CI 或 git hooks。",
+      "row": {
+        "local": "你本人，在這台電腦上",
+        "relay": "從聊天室核准",
+        "remote": "遠端裝置、其他 pane 或 agent",
+        "tainted": "受外部影響的 pane"
+      }
+    },
+    "level": {
+      "critical": "嚴重",
+      "high": "高",
+      "normal": "一般"
+    },
+    "action": {
+      "allow": "放行",
+      "allow-audit": "放行並記錄",
+      "ask": "要求本機確認",
+      "deny": "拒絕"
+    },
+    "source": {
+      "local": "本機",
+      "relay": "聊天室",
+      "remote": "遠端",
+      "agent": "其他 agent"
+    },
+    "vendors": {
+      "title": "Guard 能擋哪些 CLI",
+      "hint": "Guard 透過 CLI 自己的 hook 擋下動作。沒有 hook 的 CLI 只能靠拒絕聊天室核准、以及不用 YOLO 模式執行來保護。",
+      "block": "可阻擋",
+      "none": "無法阻擋",
+      "unknown": "未知"
+    },
+    "rules": {
+      "title": "自訂規則",
+      "hint": "允許樣式可讓「高」等級放行（不影響「嚴重」）；拒絕樣式一律視為「嚴重」。",
+      "kind": {
+        "allow": "允許",
+        "deny": "拒絕"
+      },
+      "kind-label": "規則類型",
+      "pattern": "樣式，例如 rm -rf build",
+      "note": "備註（選填）",
+      "add": "新增",
+      "remove": "移除"
+    },
+    "test": {
+      "title": "試試看",
+      "placeholder": "輸入一行 shell 指令，例如 rm -rf ~",
+      "tainted": "受外部影響的 pane",
+      "run": "判斷",
+      "unparseable": "無法靜態判斷（含變數展開、eval 或編碼後執行）。"
+    },
+    "taint": {
+      "title": "受外部影響的 pane",
+      "hint": "收過聊天室、遠端裝置、其他 pane 或 MCP 送入內容的 pane，在你清除標記前，所有「高」與「嚴重」動作都會先在這台電腦上要求確認。",
+      "empty": "目前沒有被標記的 pane。"
+    },
+    "audit": {
+      "title": "最近的判斷",
+      "empty": "還沒有任何紀錄。"
+    },
+    "pane": {
+      "badge": "外部影響",
+      "tooltip": "自 {since} 起收過來自{sources}的內容",
+      "explain": "它的「高」與「嚴重」動作需要你在這台電腦上確認。確認過它收到的內容後再清除標記。",
+      "clear": "清除",
+      "no-hook-warning": "這個 CLI 無法被 Guard 阻擋，從聊天室下指令請謹慎"
+    },
+    "notice": {
+      "denied": "Navide Guard 已拒絕一個動作：{reason}",
+      "asked": "Navide Guard 要求你確認：{reason}"
+    },
+    "error": {
+      "generic": "發生錯誤，請再試一次。"
+    },
+    "cancel": "取消"
   }
 }

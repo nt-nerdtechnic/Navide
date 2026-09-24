@@ -58,6 +58,34 @@ $body | curl.exe -fsS -m 2 -o NUL -X POST -H 'Content-Type: application/json' -H
     )
 
 
+def guard_hook_command() -> str:
+    """Navide Guard's PreToolUse hook: same environment and identity as the
+    SessionStart hook above, but the response body is printed — it is the
+    decision (guard_hooks.render). Every failure leaves stdout empty and the
+    exit 0, which Codex reads as no decision."""
+    if osplat.platform_id == 'windows':
+        script = '''[Console]::InputEncoding = [Text.UTF8Encoding]::new($false)
+$OutputEncoding = [Text.UTF8Encoding]::new($false)
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+if (-not $env:NAVIDE_CODEX_LAUNCH) { exit 0 }; try {
+$navidePort = Get-Content -ErrorAction Stop $env:NAVIDE_CODEX_PORT_FILE
+$body = [Console]::In.ReadToEnd()
+$body | curl.exe -fsS -m 9 -X POST -H 'Content-Type: application/json' -H ("@" + $env:NAVIDE_CODEX_AUTH_FILE) -H ("X-Navide-Codex-Launch: " + $env:NAVIDE_CODEX_LAUNCH) --data-binary '@-' ("http://127.0.0.1:" + $navidePort + "/hooks/codex/pretooluse")
+} catch {}; exit 0'''
+        return 'powershell.exe -NoProfile -NonInteractive -EncodedCommand ' + base64.b64encode(script.encode('utf-16-le')).decode()
+    return (
+        '[ -n "$NAVIDE_CODEX_LAUNCH" ] || exit 0; '
+        'navide_port=$(cat "$NAVIDE_CODEX_PORT_FILE" 2>/dev/null); '
+        '[ -n "$navide_port" ] || exit 0; '
+        'curl -fsS -m 9 -X POST '
+        '-H "Content-Type: application/json" '
+        '-H "@$NAVIDE_CODEX_AUTH_FILE" '
+        '-H "X-Navide-Codex-Launch: $NAVIDE_CODEX_LAUNCH" '
+        '--data-binary @- "http://127.0.0.1:$navide_port/hooks/codex/pretooluse" '
+        '2>/dev/null; exit 0'
+    )
+
+
 _HOOKS_KV_KEY = 'codex_hooks'
 _TRUST_BLOCKED_FIELD = 'session_start_trust_blocked'
 
@@ -125,6 +153,10 @@ def wire(command: Any, env: dict, metadata: dict, home: Path, port_file: Path, a
     env.update({LAUNCH_ENV: nonce, 'NAVIDE_CODEX_PORT_FILE': str(port_file), 'NAVIDE_CODEX_AUTH_FILE': str(auth_file)})
     definition = 'hooks.SessionStart=[{matcher="^(startup|resume)$",hooks=[{type="command",command=' + json.dumps(hook_command()) + ',timeout=3}]}]'
     text += ' -c ' + osplat.paths.quote_arg(definition)
+    # Navide Guard. Behind the same trust gate and user-override check as
+    # SessionStart: it is one more hook Codex may ask the user to trust.
+    guard = 'hooks.PreToolUse=[{hooks=[{type="command",command=' + json.dumps(guard_hook_command()) + ',timeout=10}]}]'
+    text += ' -c ' + osplat.paths.quote_arg(guard)
     return [*command[:-1], text] if isinstance(command, list) else text
 
 

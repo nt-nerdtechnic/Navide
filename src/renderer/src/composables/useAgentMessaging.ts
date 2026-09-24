@@ -988,6 +988,9 @@ function acceptRemoteMessage(args: {
   /** Only ever 'ack', and only from the MCP cli_send tool: the message is
    *  logged here and never injected. Absent for every other sender. */
   kind?: 'ack'
+  /** From a chat channel or a remote device: fence the body as external
+   *  content (see isExternalDelivery / renderEnvelope). */
+  external?: boolean
 }): boolean {
   if (!deps) return false
   const localName = nameByPane.get(args.targetPaneId)
@@ -1065,7 +1068,7 @@ function acceptRemoteMessage(args: {
   // it is the correlation id the reply is asked to echo.
   envelopes.set(
     msg.id,
-    renderEnvelope(args.fromDisplay, args.content, { correlationId: args.msgKey }),
+    renderEnvelope(args.fromDisplay, args.content, { correlationId: args.msgKey, external: args.external }),
   )
   correlations.set(args.msgKey, { id: msg.id, sentAt: msg.createdAt })
   remoteInbound.set(msg.id, args.msgKey)

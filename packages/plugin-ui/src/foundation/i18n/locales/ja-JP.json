@@ -8891,5 +8891,99 @@
       "dingtalk": "DingTalk にはスレッドがありません。1 グループ＝1 pane です。",
       "imessage": "フルディスクアクセス（システム設定 → プライバシーとセキュリティ）が必要です。最初の送信時に「メッセージの自動操作」の許可ダイアログが表示されます。"
     }
+  },
+  "guard": {
+    "nav": "セキュリティ",
+    "unavailable": "このバックエンドにはまだ Navide Guard がありません。更新後に Navide を再起動してください。",
+    "enabled": {
+      "title": "Navide Guard",
+      "desc": "CLI の各操作を危険度と依頼元で判断し、危険なものは止めるか確認を求めます。判断は固定ルールのコードで、AI は使いません。"
+    },
+    "counts": {
+      "critical": "重大 {n}",
+      "high": "高 {n}",
+      "asks": "確認 {n}",
+      "denies": "拒否（24 時間）{n}"
+    },
+    "policy": {
+      "title": "Guard の動作",
+      "hint": "各操作を分類し、依頼元に応じて処理します。",
+      "source": "依頼元",
+      "levels": "重大：workspace やホーム外の削除、ディスク・システム操作、sudo、curl | sh、認証情報の読み書き、main への強制プッシュ、クラウドリソースの削除。高：workspace 内の rm -rf、git push／reset --hard、パッケージ公開、CI や git hooks の変更。",
+      "row": {
+        "local": "このコンピューターのあなた",
+        "relay": "チャットアプリで承認",
+        "remote": "リモート端末・他の pane・agent",
+        "tainted": "外部の影響を受けた pane"
+      }
+    },
+    "level": {
+      "critical": "重大",
+      "high": "高",
+      "normal": "通常"
+    },
+    "action": {
+      "allow": "許可",
+      "allow-audit": "許可して記録",
+      "ask": "このコンピューターで確認",
+      "deny": "拒否"
+    },
+    "source": {
+      "local": "ローカル",
+      "relay": "チャットアプリ",
+      "remote": "リモート",
+      "agent": "他の agent"
+    },
+    "vendors": {
+      "title": "Guard がブロックできる CLI",
+      "hint": "Guard は CLI 自身の hook で操作を止めます。hook のない CLI は、チャットでの承認を拒否することと YOLO モードで動かさないことでしか守れません。",
+      "block": "ブロック可能",
+      "none": "ブロック不可",
+      "unknown": "不明"
+    },
+    "rules": {
+      "title": "カスタムルール",
+      "hint": "許可パターンは「高」を許可に下げます（「重大」は対象外）。拒否パターンは常に「重大」として扱います。",
+      "kind": {
+        "allow": "許可",
+        "deny": "拒否"
+      },
+      "kind-label": "ルールの種類",
+      "pattern": "パターン（例：rm -rf build）",
+      "note": "メモ（任意）",
+      "add": "追加",
+      "remove": "削除"
+    },
+    "test": {
+      "title": "試してみる",
+      "placeholder": "シェルコマンドを入力（例：rm -rf ~）",
+      "tainted": "外部の影響を受けた pane",
+      "run": "判定",
+      "unparseable": "静的に判断できません（変数展開、eval、エンコードされたスクリプト）。"
+    },
+    "taint": {
+      "title": "外部の影響を受けた pane",
+      "hint": "チャットアプリ、リモート端末、他の pane、MCP から内容を受け取った pane は、マークを解除するまで「高」と「重大」の操作をこのコンピューターで確認します。",
+      "empty": "マークされた pane はありません。"
+    },
+    "audit": {
+      "title": "最近の判定",
+      "empty": "まだ記録はありません。"
+    },
+    "pane": {
+      "badge": "外部の影響",
+      "tooltip": "{since} から {sources} の内容を受信",
+      "explain": "「高」と「重大」の操作には、このコンピューターでの確認が必要です。受け取った内容を確認してからマークを解除してください。",
+      "clear": "解除",
+      "no-hook-warning": "この CLI は Guard でブロックできず、権限確認なしで動いています。チャットから指示するときは注意してください。"
+    },
+    "notice": {
+      "denied": "Navide Guard が操作を拒否しました：{reason}",
+      "asked": "Navide Guard が確認を求めています：{reason}"
+    },
+    "error": {
+      "generic": "エラーが発生しました。もう一度お試しください。"
+    },
+    "cancel": "キャンセル"
   }
 }

@@ -21,6 +21,7 @@ import { invokeCommand, isMacPlatform } from '@navide/plugin-ui/shared'
 import RebuildIcon from './RebuildIcon.vue'
 import UsageBadge from './UsageBadge.vue'
 import PaneChannelButton from './PaneChannelButton.vue'
+import PaneGuardBadge from './PaneGuardBadge.vue'
 import CliRiskPill from './CliRiskPill.vue'
 import { cliRiskKey } from '../composables/useResourceUsage'
 import type { CliRiskAnalysisSpawn } from '../lib/cliRiskAnalysisPrompt'
@@ -693,7 +694,8 @@ onMounted(() => {
           :title="statusTooltipKey ? $t(statusTooltipKey) : ''"
         >{{ statusBadgeText }}</span>
         <UsageBadge v-if="agentKey" :agent-key="agentKey" :cli-profiles="cliProfiles" />
-        <PaneChannelButton :pane-id="paneId" :pane-name="title" />
+        <PaneGuardBadge :pane-id="paneId" />
+        <PaneChannelButton :pane-id="paneId" :pane-name="title" :agent-key="agentKey" />
       </div>
       <div v-if="subtitle" class="header-sub">{{ subtitle }}</div>
     </header>

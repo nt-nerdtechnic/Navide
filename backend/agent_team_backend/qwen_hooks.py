@@ -34,7 +34,10 @@ from pathlib import Path
 from typing import Any
 
 from .claude_hooks import (
+    _GUARD_TIMEOUT_S,
+    GUARD_EVENT,
     _build_curl_command,
+    _build_guard_command,
     _is_ours,
     _read_settings,
     _write_settings,
@@ -47,6 +50,10 @@ log = logging.getLogger("agent_team_backend.qwen_hooks")
 _HOOK_EVENTS: dict[str, str] = {
     "Notification": "notification",
 }
+
+# Navide Guard rides on PreToolUse with the same synchronous hook claude uses
+# (see guard_hooks for the verified qwen facts: same hookSpecificOutput shape,
+# "ask" degrades to deny in headless runs).
 
 
 def settings_path() -> Path:
@@ -109,7 +116,7 @@ def install_hooks(port_file: str, settings_file: Path | None = None) -> dict[str
         return {"installed": False, "path": str(path), "reason": "production hook active"}
 
     added = 0
-    for event_name, event_kind in _HOOK_EVENTS.items():
+    for event_name, event_kind in [*_HOOK_EVENTS.items(), (GUARD_EVENT, "")]:
         entries = hooks_section.get(event_name)
         if not isinstance(entries, list):
             entries = []
@@ -129,12 +136,19 @@ def install_hooks(port_file: str, settings_file: Path | None = None) -> dict[str
                 # else: drop the wrapper we emptied
             else:
                 cleaned.append(entry)
-        cleaned.append({
-            "hooks": [{
+        if event_name == GUARD_EVENT:
+            # Same entry shape as the Notification hook below, plus a timeout.
+            ours = {
+                "type": "command",
+                "command": _build_guard_command(port_file, endpoint="qwen"),
+                "timeout": _GUARD_TIMEOUT_S,
+            }
+        else:
+            ours = {
                 "type": "command",
                 "command": _build_curl_command(port_file, event_kind, endpoint="qwen"),
-            }],
-        })
+            }
+        cleaned.append({"hooks": [ours]})
         hooks_section[event_name] = cleaned
         added += 1
 

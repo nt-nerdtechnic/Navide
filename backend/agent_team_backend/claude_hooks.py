@@ -11,6 +11,9 @@ orchestrator gets reliable signals (better than buffer-scanning):
   - Notification  → user attention requested (e.g. waiting for approval)
   - SubagentStop  → a subagent (Task tool) finished
 
+PreToolUse also carries a second, synchronous hook: Navide Guard's decision
+(`_build_guard_command`), whose printed body can deny or ask for the call.
+
 PreToolUse and SubagentStop together are what let the backend count the
 background subagents a pane is waiting on: Task going in, its stop coming
 back out. The unattended loop reads that count to tell "the turn ended
@@ -123,6 +126,49 @@ def _build_curl_command(port_file: str, event_kind: str, endpoint: str = "claude
         timeout_s=_STOP_TIMEOUT_S if keeps_body else 2,
         keep_body=keeps_body,
     )
+
+
+#: Navide Guard's synchronous PreToolUse decision. The hook's own timeout sits
+#: above curl's deadline, which sits above the backend's evaluate budget
+#: (guard_hooks.EVALUATE_BUDGET_S), so a slow guard is always given up on by
+#: the backend first and answered with "no decision".
+GUARD_EVENT = "PreToolUse"
+_GUARD_TIMEOUT_S = 10
+_GUARD_CURL_TIMEOUT_S = 9
+
+
+def _build_guard_command(port_file: str, endpoint: str = "claude") -> str:
+    """Build the Navide Guard hook: POST the payload, print the decision.
+
+    A separate hook object from the PreToolUse signal hook, which stays
+    fire-and-forget: the two run side by side, so activity detection is not
+    made to wait on the guard and the guard's body is the only one the CLI
+    reads. Fails open by construction — no port file, a refused connection,
+    a 403 or a timeout all leave stdout empty and the exit code 0, which is
+    "no decision" and lets the CLI's own permission flow carry on.
+
+    A command hook rather than Claude Code's `type: "http"`: an http hook's
+    URL is fixed when written and its headers interpolate env vars only, so
+    it could neither follow the backend to a new port nor send the secret,
+    which lives in a 0600 file (see hook_auth). Qwen shares this builder.
+    """
+    from . import hook_auth
+
+    return f"{_AGENT_TEAM_MARKER} kind=guard\n" + osplat.scripts.hook_post_json(
+        port_file=port_file,
+        header_file=str(hook_auth.header_file()),
+        url_path=f"/hooks/{endpoint}/pretooluse",
+        event="pre_tool_use",
+        timeout_s=_GUARD_CURL_TIMEOUT_S,
+        keep_body=True,
+    )
+
+
+def guard_hook_entry(port_file: str, endpoint: str = "claude") -> dict[str, Any]:
+    return {
+        **osplat.scripts.hook_entry(_build_guard_command(port_file, endpoint)),
+        "timeout": _GUARD_TIMEOUT_S,
+    }
 
 
 def _build_rewake_command(port_file: str) -> str:
@@ -279,6 +325,8 @@ def install_hooks(port_file: str, settings_file: Path | None = None) -> dict[str
         ours: list[dict[str, Any]] = []
         if event_kind:
             ours.append(osplat.scripts.hook_entry(_build_curl_command(port_file, event_kind)))
+        if event_name == GUARD_EVENT:
+            ours.append(guard_hook_entry(port_file))
         if event_name in _REWAKE_EVENTS and rewake_wanted:
             ours.append({
                 **osplat.scripts.hook_entry(_build_rewake_command(port_file)),

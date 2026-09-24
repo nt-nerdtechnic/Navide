@@ -78,7 +78,7 @@ class FakeSeams:
         self.events: list[tuple[str, dict[str, Any]]] = []
         self.secrets: dict[str, str | None] = {}
         self.kind = "permission"
-        self.prompt = "Allow Bash(rm -rf build)?"
+        self.prompt = "Allow Bash(npm run build)?"
         self.options: list[str] = []
         self.gone: set[str] = set()
         self.answers: list[tuple[str, dict[str, Any]]] = []
@@ -526,7 +526,7 @@ async def test_relay_on_prompt_buttons_and_yes(env: Env) -> None:
     rid = _relay_id(env)
     assert re.fullmatch(r"[a-km-z]{5}", rid)
     text = next(t for t in env.tg.texts() if t.startswith("⏸"))
-    assert "Allow Bash(rm -rf build)?" in text and f"yes {rid} / no {rid}" in text
+    assert "Allow Bash(npm run build)?" in text and f"yes {rid} / no {rid}" in text
     delivered_before = len(env.fake.delivered)
     await env.inbound(f"YES {rid}")
     assert env.fake.answers == [("pane-1", {"kind": "permission", "choice": "allow"})]
@@ -619,7 +619,8 @@ async def test_stuck_seam_does_not_block_other_chats(env: Env, stuck: str) -> No
     env.store.bind("pane-2", Location("telegram", "default", "-200", "", "other"))
     if stuck == "answer":
         env.store.upsert_account("telegram", {"permission_relay": True})
-        req = env.m.relay.create("pane-1", "permission", [], Location("telegram", "default", "-100", "50"))
+        req = env.m.relay.create("pane-1", "permission", [], Location("telegram", "default", "-100", "50"),
+                                 prompt=env.fake.prompt)
         env.m._seams.answer = gate.block
         first = f"yes {req.id}"
     elif stuck == "interrupt":

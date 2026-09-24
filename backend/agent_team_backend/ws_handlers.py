@@ -9848,6 +9848,9 @@ async def agent_msg_route(session: "Session", msg_id: str, msg_type: str, payloa
     # exact payload it saw before.
     if reply_to:
         deliver_payload["reply_to"] = reply_to
+    from .guard.taint import safe_mark_tainted
+
+    safe_mark_tainted(result.pane.pane_id, "agent", f"message from {from_display}")
     asyncio.create_task(app.broadcast(make_event("agent_msg.deliver", deliver_payload)))
     await session.send_json(
         make_response(
@@ -10405,3 +10408,9 @@ handler("voice.cancel")(voice_handlers.voice_cancel)
 from .channels import ws_api as channels_ws_api  # noqa: E402
 
 handler(*channels_ws_api.MESSAGE_TYPES)(channels_ws_api.handle)
+
+# ── Navide Guard (guard.*) ──
+# Renderer-only: ws request types, unreachable through MCP ui_invoke.
+from .guard import ws_api as guard_ws_api  # noqa: E402
+
+handler(*guard_ws_api.MESSAGE_TYPES)(guard_ws_api.handle)

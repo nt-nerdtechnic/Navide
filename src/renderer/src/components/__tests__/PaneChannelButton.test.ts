@@ -4,6 +4,9 @@ import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { i18n } from '@navide/plugin-ui/foundation'
 import { createMockBackend } from '../../composables/__tests__/mockBackend'
 import { useChannels } from '../../composables/useChannels'
+import { useGuard } from '../../composables/useGuard'
+import { settingsSet } from '@navide/plugin-ui/shared'
+import { __resetSettingsForTest } from '@navide/plugin-ui/shared/testing'
 import PaneChannelButton from '../PaneChannelButton.vue'
 
 const exec = vi.hoisted(() => vi.fn())
@@ -107,6 +110,47 @@ describe('PaneChannelButton', () => {
     await flushPromises()
     expect(mock.sent.find((s) => s.type === 'channels.bind')?.payload).toEqual({
       pane_id: 'p1', pane_name: 'api-refactor', platform: 'telegram', mode: 'existing', chat_id: '-100',
+    })
+  })
+
+  describe('Guard warning for a CLI Guard cannot block', () => {
+    async function renderFor(agentKey: string, support: Record<string, string>): Promise<VueWrapper> {
+      mock.setResponse('guard.status', { enabled: true, counts: {}, hook_support: support })
+      mock.setResponse('guard.taint.list', { panes: [] })
+      const store = useChannels(mock.backend)
+      const guardStore = useGuard(mock.backend)
+      wrapper = mount(PaneChannelButton, {
+        props: { paneId: 'p1', paneName: 'api-refactor', agentKey, store, guardStore },
+        global: { plugins: [i18n] },
+        attachTo: document.body,
+      })
+      await flushPromises()
+      await wrapper.get('[data-testid="channel-connect"]').trigger('click')
+      return wrapper
+    }
+    const warning = () => document.querySelector('[data-testid="channel-guard-warning"]')
+
+    beforeEach(() => {
+      __resetSettingsForTest()
+      seed({ configured: true })
+    })
+
+    it('warns when the vendor has no hook and runs in YOLO', async () => {
+      settingsSet('agentTeam.yolo', '1')
+      await renderFor('cursor', { cursor: 'none', claude: 'block' })
+      expect(warning()?.textContent).toContain('cannot block this CLI')
+    })
+
+    it('stays quiet for a vendor Guard can block', async () => {
+      settingsSet('agentTeam.yolo', '1')
+      await renderFor('claude', { cursor: 'none', claude: 'block' })
+      expect(warning()).toBeNull()
+    })
+
+    it('stays quiet when YOLO is off', async () => {
+      settingsSet('agentTeam.yolo', '0')
+      await renderFor('cursor', { cursor: 'none' })
+      expect(warning()).toBeNull()
     })
   })
 

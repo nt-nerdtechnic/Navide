@@ -65,6 +65,7 @@ MSG_STILL_RUNNING = "⏳ 仍在執行，完成時會再回覆"
 MSG_OFFLINE = "⚠️ pane 目前不在線上（可能在其他 workspace 或已關閉）"
 MSG_RELAY_EXPIRED = "⚠️ 這個確認已失效"
 MSG_RELAY_PERMANENT = "⚠️ 這個選項會永久放行，請在電腦前操作"
+MSG_RELAY_NEEDS_LOCAL = "⚠️ 這個動作需要在電腦前確認"
 
 
 def _secret_name(platform: str) -> str:
@@ -90,6 +91,8 @@ class Seams:
     broadcast: Callable[[str, dict[str, Any]], Awaitable[None]]
     read_secret: Callable[[str], Awaitable[str | None]]
     write_secret: Callable[[str, str | None], Awaitable[None]]
+    # pane_id -> its workspace path ("" if unknown); scopes Navide Guard's paths
+    pane_workspace: Callable[[str], str] = lambda _pane_id: ""
 
 
 AdapterFactory = Callable[[dict[str, Any], dict[str, Any], ChannelStore], ChannelAdapter]
@@ -753,6 +756,18 @@ class ChannelManager:
             await self._reply(msg, MSG_RELAY_EXPIRED if request.kind == "permission"
                               else "⚠️ 請回覆有效的選項編號")
             return
+        if not relay.is_deny(request, payload) and self._guard_vetoes(request):
+            await self._reply(msg, MSG_RELAY_NEEDS_LOCAL)
+            return
+        # Bind the answer to the prompt it was requested for: the screen may
+        # have moved on to a different prompt since the chat saw it.
+        try:
+            info = await self._seams.awaiting_info(request.pane_id)
+        except Exception:  # noqa: BLE001
+            info = {}
+        if not relay.same_prompt(str(info.get("prompt") or ""), request.prompt):
+            await self._reply(msg, MSG_RELAY_EXPIRED)
+            return
         try:
             result = await self._seams.answer(request.pane_id, payload)
         except Exception as exc:  # noqa: BLE001
@@ -761,6 +776,23 @@ class ChannelManager:
             await self._reply(msg, f"✅ 已送出：{relay.describe_answer(payload)}")
         else:
             await self._reply(msg, f"⚠️ 送出失敗：{result.get('error') or 'not sent'}")
+
+    def _guard_vetoes(self, request: relay.RelayRequest) -> bool:
+        """Navide Guard on a remote approval: high/critical (or unscreenable)
+        prompts need someone at the computer. Deterministic, never an LLM."""
+        from .. import guard
+
+        if not request.prompt.strip():
+            return True  # nothing to screen: a chat approval fails closed
+        try:
+            workspace = self._seams.pane_workspace(request.pane_id)
+        except Exception:  # noqa: BLE001
+            workspace = ""
+        decision = guard.evaluate(
+            pane_id=request.pane_id, vendor="", tool="prompt", tool_input={"text": request.prompt},
+            cwd=workspace, workspace=workspace, source="relay",
+        )
+        return decision.action != "allow"
 
     async def _pairing_reply(self, msg: InboundMessage) -> None:
         outcome = self.gate.request_pairing(msg.platform, msg.sender_id, msg.sender_name, msg.chat_id)
@@ -942,8 +974,9 @@ class ChannelManager:
             await self._notice(adapter, pending.loc, f"⏸ pane 等待確認（{kind}）")
             return
         self.relay.expire_pane(pane_id)  # one live request per pane
-        request = self.relay.create(pane_id, kind, options, pending.loc)
-        text = relay.prompt_text(request, str(info.get("prompt") or ""))
+        prompt = str(info.get("prompt") or "")
+        request = self.relay.create(pane_id, kind, options, pending.loc, prompt=prompt)
+        text = relay.prompt_text(request, prompt)
         buttons = relay.buttons_for(request) if adapter.capabilities.buttons else None
         try:
             await adapter.send_text(pending.loc, text, buttons=buttons or None)

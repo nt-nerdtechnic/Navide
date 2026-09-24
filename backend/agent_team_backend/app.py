@@ -27,6 +27,8 @@ from . import __version__
 from . import agent_messaging
 from . import hook_auth
 from . import hook_drain
+from . import guard_hooks
+from .guard import runtime as guard_runtime
 from . import ws_auth
 from . import loop_watchdog
 from . import mem_probe
@@ -2122,6 +2124,8 @@ async def _start_log_watcher() -> None:
     # loop thread's stack when the loop stops turning (issue #24), instead of
     # the freeze being reproducible only under sample(1).
     loop_watchdog.start(asyncio.get_running_loop())
+    # Guard events raised in hook worker threads are handed back to this loop.
+    guard_runtime.remember_loop(asyncio.get_running_loop())
 
     global _log_watcher
     _log_watcher = LogWatcher(
@@ -2511,6 +2515,43 @@ async def codex_session_start_hook(request: Request) -> Response:
     await _retry_codex_session_start(token)
     # Hook stdout is empty: identity reporting adds no context or model turn.
     return Response(status_code=200)
+
+
+@app.post("/hooks/{vendor}/pretooluse")
+async def cli_pretooluse_guard_hook(vendor: str, request: Request) -> Response:
+    """Navide Guard's synchronous PreToolUse decision (see guard_hooks).
+
+    The body is printed to the CLI as the hook's own output, so it is either a
+    vendor-native decision or empty — empty is "no decision", which is also
+    what every failure answers (local fail-open).
+    """
+    if vendor not in guard_hooks.VENDORS:
+        return Response(status_code=404)
+    if not hook_auth.presented(request.headers.get(hook_auth.HEADER)):
+        return Response(status_code=403)
+    try:
+        payload = await request.json()
+    except ValueError:
+        payload = None
+    if not isinstance(payload, dict):
+        return Response(status_code=200)
+    cwd = str(payload.get("cwd") or "")
+    pane_id, ws_path = "", ""
+    if vendor == "codex":
+        # Same identity the SessionStart hook uses: the per-launch token in the
+        # pane's environment, which exists before any rollout is attributed.
+        term = _live_codex_hook_terms().get(
+            request.headers.get(codex_session_hooks.LAUNCH_HEADER, "")
+        )
+        pane_id = str(getattr(term, "pane_id", "") or "")
+    if not pane_id:
+        pane_id, ws_path, _ = attribution.pane_for_session(
+            str(payload.get("session_id") or payload.get("sessionId") or "")
+        )
+    answer = await guard_hooks.respond(
+        vendor, payload, pane_id=pane_id or "", cwd=cwd, workspace=ws_path or cwd
+    )
+    return JSONResponse(answer) if answer else Response(status_code=200)
 
 
 @app.post("/hooks/{vendor}")

@@ -311,6 +311,10 @@ class PosixScripts:
         exit_zero: bool = False,
     ) -> str:
         tail = ' >/dev/null 2>&1; exit 0' if exit_zero else " || true"
+        if exit_zero and keep_body:
+            # The body is the answer (Copilot's guard hook), so only stderr
+            # is silenced; the exit stays 0 because non-zero means deny there.
+            tail = " 2>/dev/null; exit 0"
         post = self._post(
             header_file=header_file, url_path=url_path, event=event, timeout_s=timeout_s,
             discard=not keep_body,
