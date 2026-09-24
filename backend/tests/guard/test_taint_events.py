@@ -152,3 +152,14 @@ async def test_route_from_unregistered_pane_uses_the_senders_name(captured):  # 
                                  "to": "beta/reviewer", "content": "x", "msg_key": "k1"})
     (event,) = taint.taint_events("pb")
     assert event["detail"] == "message from Agent-Team/分析開發進度"
+
+
+def test_events_are_capped_across_panes(guard_store, monkeypatch):
+    from agent_team_backend.guard import store as store_mod
+
+    monkeypatch.setattr(store_mod, "TAINT_EVENTS_TOTAL", 3)
+    for i in range(5):
+        guard_store.taint_event_add(f"closed-{i}", float(i), "agent", "d", "")
+    with guard_store._db.transaction() as cur:
+        panes = [r[0] for r in cur.execute("SELECT pane_id FROM guard_taint_events ORDER BY id")]
+    assert panes == ["closed-2", "closed-3", "closed-4"]

@@ -148,3 +148,18 @@ def test_listener_lookup_is_one_process_per_poll(monkeypatch):
     monkeypatch.setattr(cli_network, "command", fake)
     asyncio.run(cli_network.listeners_lsof([5173, 5174, 5173]))
     assert calls == [["lsof", "-nP", "-iTCP:5173,5174", "-sTCP:LISTEN", "-Fpcn"]]
+
+
+def test_a_listener_pid_reused_after_the_listing_is_not_described(monkeypatch):
+    import asyncio
+
+    from agent_team_backend.osplat import cli_network
+
+    async def fake_command(argv):
+        return 0, "p4242\ncnode\nn127.0.0.1:3000\n", ""
+
+    monkeypatch.setattr(cli_network, "command", fake_command)
+    monkeypatch.setattr(cli_network, "describe_processes",
+                        lambda pids: {4242: cli_network.ProcessInfo(4242, "sshd", "sshd: root")})
+    found = asyncio.run(cli_network.listeners_lsof([3000]))
+    assert found[3000] == cli_network.Listener("resolved", cli_network.ProcessInfo(4242, "node", None))

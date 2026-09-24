@@ -309,7 +309,8 @@ async function reveal(signal: CliRiskSignal): Promise<void> {
             </template>
             <template v-if="signal.listener">
               <dt>{{ t('cli-risk.listener') }}</dt>
-              <dd v-if="signal.listener.status === 'resolved'"><code>{{ processLabel(signal.listener) }}</code> {{ signal.listener.command ?? '' }}</dd>
+              <!-- A resolved listener outlives failed lookups, so say when it was seen. -->
+              <dd v-if="signal.listener.status === 'resolved'"><code>{{ processLabel(signal.listener) }}</code> {{ signal.listener.command ?? '' }}<time v-if="signal.listener.observedAt" data-testid="cli-risk-listener-at" :datetime="signal.listener.observedAt">{{ ' · ' + clock(signal.listener.observedAt) }}</time></dd>
               <dd v-else>{{ t('cli-risk.listener-unknown') }}</dd>
             </template>
           </template>

@@ -105,6 +105,33 @@ describe('PaneGuardBadge console', () => {
     expect(console.querySelector('[data-testid="guard-taint-full"]')).toBeNull()
   })
 
+  it('shows why the delivery log could not be loaded', async () => {
+    mock.setRejection('guard.taint.events', 'ws not open')
+    await openConsole()
+    expect(document.querySelector('[role="alert"]')?.textContent).toBe('ws not open')
+  })
+
+  it('ignores an answer that arrives after the popover was reopened', async () => {
+    const store = useGuard(mock.backend)
+    const pending: ((v: Awaited<ReturnType<typeof store.taintEvents>>) => void)[] = []
+    store.taintEvents = () => new Promise((resolve) => pending.push(resolve))
+    wrapper = mount(PaneGuardBadge, { props: { paneId: 'p1', store }, global: { plugins: [i18n] }, attachTo: document.body })
+    await flushPromises()
+    const badge = wrapper.get('[data-testid="guard-taint-badge"]')
+    await badge.trigger('click')
+    await badge.trigger('click')
+    await badge.trigger('click')
+    await flushPromises()
+    expect(pending).toHaveLength(2)
+    pending[1]({ ok: true, data: { events: [events[1]] } })
+    await flushPromises()
+    pending[0]({ ok: true, data: { events } })
+    await flushPromises()
+    const lines = [...document.querySelectorAll('[data-testid="guard-taint-console"] .pgd-line')]
+    expect(lines).toHaveLength(1)
+    expect(lines[0].textContent).toContain('message from device dev2')
+  })
+
   it('shows the mark itself when no delivery was recorded', async () => {
     mock.setResponse('guard.taint.events', { events: [] })
     const console = await openConsole()

@@ -301,6 +301,9 @@ async def _listeners(ports: list[int], argv: list[str], parse) -> dict[int, List
     described = await asyncio.to_thread(describe_processes, [pid for pid, _ in found.values()])
     for port, (pid, name) in found.items():
         info = described.get(pid) or ProcessInfo(pid)
+        if name and info.name and not info.name.startswith(name):
+            # The pid was reused since the listing: that process is not the listener.
+            info = ProcessInfo(pid)
         # The listener may have exited since the listing: keep the name it had.
         unknown[port] = Listener("resolved", ProcessInfo(pid, info.name or name or None, info.command))
     return unknown

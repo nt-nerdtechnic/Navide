@@ -323,6 +323,14 @@ describe('CliRiskPill console', () => {
     expect(details).toContain('node(8812) node /repo/node_modules/.bin/vite')
   })
 
+  it('says when the listening process was last resolved', async () => {
+    render(riskState([loopback()]))
+    const pop = await open()
+    const at = pop.querySelector('[data-signal-id="loop"] [data-testid="cli-risk-listener-at"]')!
+    expect(at.getAttribute('datetime')).toBe('2026-09-21T01:30:00Z')
+    expect(at.textContent).toBe(` · ${new Date('2026-09-21T01:30:00Z').toLocaleTimeString('en-US', { hour12: false })}`)
+  })
+
   it('lists one line per observation, newest first, with unknown never shown as none', async () => {
     render(riskState([loopback(), diskSignal()]))
     const pop = await open()

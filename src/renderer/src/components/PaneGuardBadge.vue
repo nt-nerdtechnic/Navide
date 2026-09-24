@@ -81,10 +81,16 @@ function toggleLine(key: string): void {
   expanded.value = expanded.value.includes(key) ? expanded.value.filter((k) => k !== key) : [...expanded.value, key]
 }
 
+// Bumped on each load and on close, so a slow answer never lands on a newer open.
+let loadSeq = 0
+
 async function loadEvents(): Promise<void> {
   if (!store) return
+  const seq = ++loadSeq
   const res = await store.taintEvents(props.paneId)
+  if (seq !== loadSeq || !open.value) return
   events.value = res.ok ? (res.data?.events ?? []) : []
+  if (!res.ok) error.value = res.error ?? t('guard.error.generic')
   await nextTick()
   if (open.value) position()
 }
@@ -114,6 +120,7 @@ async function toggle(): Promise<void> {
 }
 
 function close(): void {
+  loadSeq++
   open.value = false
   events.value = null
   expanded.value = []

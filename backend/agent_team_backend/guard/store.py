@@ -17,6 +17,7 @@ COMPONENT = "guard"
 KV_ENABLED = "guard.enabled"
 AUDIT_KEEP = 5000
 TAINT_EVENTS_KEEP = 50  # per pane
+TAINT_EVENTS_TOTAL = 5000  # across panes: a closed pane never clears its own rows
 
 
 def _v1(cur: sqlite3.Cursor) -> None:
@@ -152,6 +153,11 @@ class GuardStore:
                 "DELETE FROM guard_taint_events WHERE pane_id = ? AND id NOT IN"
                 " (SELECT id FROM guard_taint_events WHERE pane_id = ? ORDER BY id DESC LIMIT ?)",
                 (pane_id, pane_id, TAINT_EVENTS_KEEP),
+            )
+            cur.execute(
+                "DELETE FROM guard_taint_events WHERE id <= (SELECT id FROM guard_taint_events"
+                " ORDER BY id DESC LIMIT 1 OFFSET ?)",
+                (TAINT_EVENTS_TOTAL,),
             )
 
     def taint_events(self, pane_ids: list[str]) -> list[dict[str, Any]]:
