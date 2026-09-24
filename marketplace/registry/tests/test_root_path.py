@@ -95,6 +95,32 @@ def test_website_links_and_assets_carry_the_prefix(prefixed: TestClient) -> None
     assert "text/css" in css.headers["content-type"]
 
 
+def test_platform_artifact_links_and_install_guidance_carry_the_prefix(
+    prefixed: TestClient,
+) -> None:
+    from tests.test_multi_target import MACHO_ARM64, _backend_package
+
+    resp = prefixed.post(
+        f"{PREFIX}/api/publish",
+        files={"package": ("pkg.vsix", _backend_package(MACHO_ARM64), "application/zip")},
+        params={"target": "darwin-arm64"},
+    )
+    assert resp.status_code == 201, resp.text
+    home = prefixed.get(f"{PREFIX}/").text
+    assert '<span class="chip chip-target">darwin-arm64</span>' in home
+    detail = prefixed.get(f"{PREFIX}/extensions/navide/skills").text
+    assert "navide-plugin install" not in detail
+    assert (
+        f"GET {PREFIX}/api/extensions/navide/skills/1.0.0/download?target=darwin-arm64"
+        in detail
+    )
+    download = prefixed.get(
+        f"{PREFIX}/api/extensions/navide/skills/1.0.0/download",
+        params={"target": "darwin-arm64"},
+    )
+    assert download.status_code == 200
+
+
 def test_default_root_path_keeps_root_relative_links(client: TestClient) -> None:
     home = client.get("/")
     assert 'href="/static/style.css"' in home.text

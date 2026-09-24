@@ -33,6 +33,7 @@ from .schemas import (
     PublishResponse,
     RatingRequest,
     RatingResponse,
+    ReadmeResponse,
     VersionInfo,
     YankResponse,
 )
@@ -44,6 +45,7 @@ from .signing import (
 from .storage import LocalStorageBackend, StorageBackend, StorageError
 from .trust import compute_trust_tier, sensitive_capabilities
 from .versions import latest_version
+from .web import readme_text
 
 
 @dataclass
@@ -133,8 +135,38 @@ def _repo(session: Session = Depends(_session)) -> RegistryRepository:
 
 
 # -- helpers ------------------------------------------------------------
-def _package_key(namespace: str, name: str, version: str) -> str:
-    return f"{namespace}/{name}/{version}/package.vsix"
+UNIVERSAL_TARGET = "universal"
+
+
+def _package_key(namespace: str, name: str, version: str, target: str) -> str:
+    # Rows published before per-target artifacts keep their stored
+    # `{version}/package.vsix` key; the key is read from the row, never rebuilt.
+    return f"{namespace}/{name}/{version}/{target}/package.vsix"
+
+
+def _publish_conflict(
+    identity: str, version: str, target: str, existing: list[ExtensionVersion]
+) -> str | None:
+    """Why `target` cannot join the artifacts already published for `version`.
+
+    A version is either one `universal` artifact or a set of platform
+    artifacts, never both: the client prefers an exact platform match over
+    `universal`, so a mix would make which bytes a host installs depend on
+    publish order, and a frontend-only package (the only kind that may be
+    universal) has nothing platform-specific to split.
+    """
+    targets = [row.target for row in existing]
+    if target in targets:
+        return f"version {version} of {identity} already exists for target {target}"
+    if any(row.yanked for row in existing):
+        return f"version {version} of {identity} is yanked"
+    if targets and UNIVERSAL_TARGET in (target, *targets):
+        return (
+            f"version {version} of {identity} is published for "
+            f"{', '.join(targets)}; a version is either universal or "
+            "per-platform"
+        )
+    return None
 
 
 def _version_info(row: ExtensionVersion) -> VersionInfo:
@@ -157,6 +189,7 @@ def _version_info(row: ExtensionVersion) -> VersionInfo:
 
 def _summary(extension: Extension, versions: list[ExtensionVersion]) -> ExtensionSummary:
     active = [v.version for v in versions if not v.yanked]
+    latest = latest_version(active)
     return ExtensionSummary(
         namespace=extension.namespace,
         name=extension.name,
@@ -164,7 +197,10 @@ def _summary(extension: Extension, versions: list[ExtensionVersion]) -> Extensio
         display_name=extension.display_name,
         description=extension.description,
         categories=extension.categories,
-        latest_version=latest_version(active),
+        latest_version=latest,
+        latest_targets=sorted(
+            v.target for v in versions if v.version == latest and not v.yanked
+        ),
         updated_at=extension.updated_at,
         download_count=extension.download_count,
         rating_average=rating_average(extension),
@@ -305,14 +341,14 @@ def _register_routes(app: FastAPI) -> None:
             categories=categories,
         )
 
-        if repo.get_version(extension.id, manifest.version) is not None:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"version {manifest.version} of {extension.identity} "
-                    "already exists"
-                ),
-            )
+        conflict = _publish_conflict(
+            extension.identity,
+            manifest.version,
+            target,
+            repo.list_version_artifacts(extension.id, manifest.version),
+        )
+        if conflict is not None:
+            raise HTTPException(status_code=409, detail=conflict)
 
         try:
             registry_envelope, registry_signature = state.trust_signer.sign_envelope(
@@ -328,7 +364,7 @@ def _register_routes(app: FastAPI) -> None:
         # integrity is established by the registry signature created above.
         trust_tier = compute_trust_tier(signed=True)
 
-        key = _package_key(namespace, name, manifest.version)
+        key = _package_key(namespace, name, manifest.version, target)
         state.storage.put(key, data)
         row = repo.add_version(
             extension=extension,
@@ -347,6 +383,7 @@ def _register_routes(app: FastAPI) -> None:
             namespace=namespace,
             name=name,
             version=row.version,
+            target=row.target,
             package_digest=row.package_digest,
             yanked=row.yanked,
         )
@@ -402,27 +439,77 @@ def _register_routes(app: FastAPI) -> None:
             versions=[_version_info(v) for v in ordered],
         )
 
+    @app.get(
+        "/api/extensions/{namespace}/{name}/readme", response_model=ReadmeResponse
+    )
+    def extension_readme(
+        request: Request,
+        namespace: str,
+        name: str,
+        repo: RegistryRepository = Depends(_repo),
+    ) -> ReadmeResponse:
+        """Raw README markdown of the latest non-yanked version.
+
+        Unlike the website, the JSON API returns text, not HTML: the desktop
+        client renders it without trusting registry-produced markup.
+        """
+        extension = repo.get_extension(namespace, name)
+        if extension is None:
+            raise HTTPException(status_code=404, detail="extension not found")
+        active = [v for v in repo.list_versions(extension.id) if not v.yanked]
+        latest = latest_version([v.version for v in active])
+        row = next((v for v in active if v.version == latest), None)
+        if row is None:
+            return ReadmeResponse(version=None, markdown=None)
+        return ReadmeResponse(version=row.version, markdown=readme_text(request, row))
+
     @app.get("/api/extensions/{namespace}/{name}/{version}/download")
     def download(
         request: Request,
         namespace: str,
         name: str,
         version: str,
+        target: str | None = None,
         repo: RegistryRepository = Depends(_repo),
     ) -> StreamingResponse:
+        """Stream one artifact. `target` names it exactly (no fallback to
+        `universal`: the client picks the row and asks for its target); it may
+        be omitted only when the version has a single artifact."""
         state: RegistryState = request.app.state.registry
         extension = repo.get_extension(namespace, name)
         if extension is None:
             raise HTTPException(status_code=404, detail="extension not found")
-        row = repo.get_version(extension.id, version)
-        if row is None:
+        artifacts = repo.list_version_artifacts(extension.id, version)
+        if not artifacts:
             raise HTTPException(status_code=404, detail="version not found")
+        available = ", ".join(a.target for a in artifacts)
+        if target is None:
+            if len(artifacts) > 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"version {version} has per-target artifacts; pass "
+                        f"?target= (available: {available})"
+                    ),
+                )
+            row = artifacts[0]
+        else:
+            row = next((a for a in artifacts if a.target == target), None)
+            if row is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        f"version {version} has no {target} artifact "
+                        f"(available: {available})"
+                    ),
+                )
         try:
             stream = state.storage.open_stream(row.package_key)
         except StorageError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         repo.increment_download(extension, row)
-        filename = f"{namespace}.{name}-{version}.vsix"
+        suffix = "" if row.target == UNIVERSAL_TARGET else f"@{row.target}"
+        filename = f"{namespace}.{name}-{version}{suffix}.vsix"
         return StreamingResponse(
             _file_chunks(stream),
             media_type="application/zip",
@@ -456,12 +543,18 @@ def _register_routes(app: FastAPI) -> None:
         extension = repo.get_extension(namespace, name)
         if extension is None:
             raise HTTPException(status_code=404, detail="extension not found")
-        row = repo.get_version(extension.id, version)
-        if row is None:
+        # A version is yanked as a whole, across every target's artifact, so
+        # "latest" resolves the same on every platform.
+        artifacts = repo.list_version_artifacts(extension.id, version)
+        if not artifacts:
             raise HTTPException(status_code=404, detail="version not found")
-        row = repo.yank_version(row)
+        repo.yank_version(artifacts)
         return YankResponse(
-            namespace=namespace, name=name, version=version, yanked=row.yanked
+            namespace=namespace,
+            name=name,
+            version=version,
+            yanked=True,
+            targets=[a.target for a in artifacts],
         )
 
     @app.post(

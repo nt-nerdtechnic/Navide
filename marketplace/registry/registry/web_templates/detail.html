@@ -47,10 +47,13 @@
   {% if latest_version %}
   <section class="install">
     <h2 class="section-title">Install</h2>
-    <p>Fetch with the registry CLI:</p>
-    <pre class="code">navide-plugin install {{ ext.identity }}</pre>
-    <p>Or download the package directly:</p>
-    <pre class="code">GET {{ base }}/api/extensions/{{ ext.namespace }}/{{ ext.name }}/{{ latest_version }}/download</pre>
+    <p>Install from the Navide app: open <strong>Settings → Marketplace</strong>,
+      search for <code>{{ ext.identity }}</code> and choose Install. The app
+      picks the build for its own platform and verifies the registry
+      signature before installing.</p>
+    <p>{% if 'universal' in latest_targets %}Or download the package directly (all platforms):{% else %}Or download the package for a platform directly:{% endif %}</p>
+    <pre class="code">{% for t in latest_targets %}GET {{ base }}/api/extensions/{{ ext.namespace }}/{{ ext.name }}/{{ latest_version }}/download{% if t != 'universal' %}?target={{ t }}{% endif %}
+{% endfor %}</pre>
   </section>
   {% endif %}
 
@@ -79,12 +82,13 @@
     <h2 class="section-title">Versions</h2>
     <table class="version-table">
       <thead>
-        <tr><th>Version</th><th>Trust</th><th>Capabilities</th><th>Downloads</th><th>Published</th></tr>
+        <tr><th>Version</th><th>Target</th><th>Trust</th><th>Capabilities</th><th>Downloads</th><th>Published</th></tr>
       </thead>
       <tbody>
         {% for v in versions %}
         <tr class="{% if v.yanked %}yanked{% endif %}">
           <td>{{ v.version }}{% if v.yanked %} <span class="tag">yanked</span>{% endif %}</td>
+          <td>{{ v.target }}</td>
           <td>
             {% if v.trust_tier == 'signed-verified' %}
               <span class="badge badge-signed">✓ signed</span>

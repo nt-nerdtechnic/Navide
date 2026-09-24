@@ -25,6 +25,7 @@ import {
   registerPluginIpc,
   resolveConfiguredMarketplace,
 } from './plugins/pluginIpc'
+import { refreshTrustThenUpdates } from './plugins/pluginUpdateReminder'
 import { readRegistryTrustSnapshot } from './plugins/pluginInstalledTrust'
 import { contributionIcon } from './plugins/pluginContributionIcon'
 import { broadcastQuitStage } from './quit-progress'
@@ -1119,9 +1120,25 @@ async function refreshInstalledPluginTrust(): Promise<void> {
     )
   }
 }
+// Update reminder: runs after each trust refresh settles, never inside it, so
+// a failed check cannot touch trust state or quarantine decisions. Detection
+// only — installing an update still goes through the consent dialogs.
+const refreshInstalledPluginTrustAndUpdates = (): void => {
+  void refreshTrustThenUpdates({
+    refreshTrust: refreshInstalledPluginTrust,
+    checkUpdates: () => pluginTrustRefresh.checkUpdates(),
+    publish: (updates) => {
+      for (const hostWindow of mainWindows) {
+        if (hostWindow.isDestroyed() || detachedWindowIds.has(hostWindow.id)) continue
+        hostWindow.webContents.send('plugins:updatesChanged', updates)
+      }
+    },
+    warn: (message) => console.warn(message),
+  })
+}
 app.whenReady().then(() => {
-  void refreshInstalledPluginTrust()
-  const timer = setInterval(() => void refreshInstalledPluginTrust(), 15 * 60 * 1000)
+  refreshInstalledPluginTrustAndUpdates()
+  const timer = setInterval(refreshInstalledPluginTrustAndUpdates, 15 * 60 * 1000)
   timer.unref()
 })
 const approvedBackendPluginCatalog = () =>

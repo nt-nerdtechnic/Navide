@@ -18,6 +18,7 @@ import {
   prepareInstall,
   commitInstallTransaction,
   removePlugin,
+  isUpdateAvailable,
   type PreparedInstall,
   type InstallerTrustConfig,
 } from './pluginInstaller'
@@ -50,7 +51,11 @@ import {
   writeRegistryTrustSnapshot,
   type InstalledTrustDecision,
 } from './pluginInstalledTrust'
-import { currentPluginHostTarget } from './pluginTarget'
+import {
+  currentPluginHostTarget,
+  isPluginTargetCompatible,
+  selectPluginArtifact,
+} from './pluginTarget'
 import type { FrontendPluginManager } from './frontendPluginManager'
 import type { ContributionIcon } from './pluginContributionIcon'
 import { PluginCapabilityGrantStore } from './pluginCapabilityGrantStore'
@@ -130,11 +135,50 @@ export interface FactoryPackageSummary {
   optedOut: boolean
 }
 
+const MARKETPLACE_SORTS = new Set(['updated', 'downloads', 'rating'])
+
+/**
+ * Newest non-yanked version with an artifact this Host can install. The
+ * Registry's `latest_version` ignores targets, so a platform-only release for
+ * another OS must not count as an installable update here.
+ */
+function newestInstallableVersion(
+  versions: ReadonlyArray<{ version?: unknown; target?: unknown; yanked?: unknown }>,
+  hostTarget: string
+): string | null {
+  let newest: string | null = null
+  for (const row of versions) {
+    if (row.yanked === true || typeof row.version !== 'string') continue
+    if (!isPluginTargetCompatible(row.target, hostTarget)) continue
+    if (newest === null || isUpdateAvailable(newest, row.version)) newest = row.version
+  }
+  return newest
+}
+
+/** Validate one Registry URL path segment supplied by the renderer. */
+function marketplacePathSegment(value: unknown): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 128) {
+    throw new Error('invalid marketplace extension identifier')
+  }
+  return encodeURIComponent(value)
+}
+
+export interface PluginUpdateInfo {
+  id: string
+  namespace: string
+  name: string
+  installedVersion: string
+  latestVersion: string
+}
+
 export interface PluginTrustRefreshController {
   refreshRegistryTrust(): Promise<{
     decisions: Array<{ pluginId: string; action: 'allow' | 'quarantine'; reason?: string }>
     activationCatalog: ReturnType<FrontendPluginManager['loadInstalledPlugins']>['activationCatalog']
   }>
+  /** Detect newer installable Registry versions of installed packages and
+   *  remember the answer for `plugins:pendingUpdates`. Detection only. */
+  checkUpdates(): Promise<PluginUpdateInfo[]>
 }
 
 export interface PluginIpcOptions {
@@ -347,16 +391,150 @@ export function registerPluginIpc(
     }
   )
 
-  ipcMain.handle('plugins:marketplaceSearch', async (event, query?: string) => {
+  ipcMain.handle('plugins:marketplaceSearch', async (event, query?: string, sort?: string) => {
     assertAuthorized(event)
-    const { registryUrl } = resolveConfiguredMarketplace(trust)
+    const marketplace = resolveConfiguredMarketplace(trust)
     // Resolve relative to the base path: the Registry may be served under a
     // path prefix (the Official Registry lives at `/registry`).
-    const url = new URL(`${registryUrl.replace(/\/+$/, '')}/api/extensions`)
+    const url = new URL(`${marketplace.registryUrl.replace(/\/+$/, '')}/api/extensions`)
     if (query) url.searchParams.set('q', query)
+    if (sort && MARKETPLACE_SORTS.has(sort)) url.searchParams.set('sort', sort)
     const res = await fetch(url)
     if (!res.ok) throw new Error(`marketplace search failed: HTTP ${res.status}`)
-    return res.json()
+    const body = (await res.json()) as { items?: Array<Record<string, unknown>> }
+    // Target compatibility is decided here, with the same rule install uses,
+    // so the renderer never re-derives it. A Registry that predates
+    // per-target artifacts sends no `latest_targets`; those stay installable.
+    const hostTarget = marketplace.trust.expectedTarget ?? currentPluginHostTarget()
+    return {
+      ...body,
+      items: (body.items ?? []).map((item) => ({
+        ...item,
+        installable: Array.isArray(item.latest_targets)
+          ? item.latest_targets.some((target) => isPluginTargetCompatible(target, hostTarget))
+          : true,
+      })),
+    }
+  })
+
+  // Read-only detail for the Marketplace detail view. Trust metadata and
+  // signed envelopes stay main-side: the renderer only needs display fields,
+  // and install still re-fetches and verifies through prepareInstall.
+  ipcMain.handle(
+    'plugins:marketplaceDetail',
+    async (event, args: { namespace?: unknown; name?: unknown } | null) => {
+      assertAuthorized(event)
+      const namespace = marketplacePathSegment(args?.namespace)
+      const name = marketplacePathSegment(args?.name)
+      const marketplace = resolveConfiguredMarketplace(trust)
+      const hostTarget = marketplace.trust.expectedTarget ?? currentPluginHostTarget()
+      const base = `${marketplace.registryUrl.replace(/\/+$/, '')}/api/extensions/${namespace}/${name}`
+      const res = await fetch(base)
+      if (!res.ok) throw new Error(`marketplace detail failed: HTTP ${res.status}`)
+      const detail = (await res.json()) as Record<string, unknown> & {
+        versions?: Array<Record<string, unknown>>
+      }
+      // A Registry without the README endpoint (or a package without a
+      // README) still yields a usable detail view.
+      let readme: string | null = null
+      try {
+        const readmeRes = await fetch(`${base}/readme`)
+        if (readmeRes.ok) {
+          const body = (await readmeRes.json()) as { markdown?: unknown }
+          if (typeof body.markdown === 'string') readme = body.markdown
+        }
+      } catch {
+        readme = null
+      }
+      return {
+        namespace: detail.namespace,
+        name: detail.name,
+        identity: detail.identity,
+        display_name: detail.display_name ?? null,
+        description: detail.description ?? null,
+        categories: detail.categories ?? [],
+        latest_version: detail.latest_version ?? null,
+        updated_at: detail.updated_at ?? null,
+        download_count: detail.download_count ?? 0,
+        rating_average: detail.rating_average ?? 0,
+        rating_count: detail.rating_count ?? 0,
+        featured: detail.featured ?? false,
+        publisher: detail.publisher ?? detail.namespace,
+        host_target: hostTarget,
+        latest_installable_version: newestInstallableVersion(detail.versions ?? [], hostTarget),
+        versions: (detail.versions ?? []).map((v) => ({
+          version: v.version,
+          published_at: v.published_at,
+          target: v.target,
+          yanked: v.yanked,
+          trust_tier: v.trust_tier,
+          capabilities: v.capabilities ?? [],
+          sensitive_capabilities: v.sensitive_capabilities ?? [],
+          download_count: v.download_count ?? 0,
+          installable: isPluginTargetCompatible(v.target, hostTarget),
+        })),
+        readme,
+      }
+    }
+  )
+
+  // Update detection for installed Registry packages: compares each installed
+  // version against the newest version this Host can install. Detection only —
+  // installing the update goes through the normal prepareInstall/commitInstall
+  // consent path. The last answer is kept for windows that open later.
+  let pendingUpdates: PluginUpdateInfo[] = []
+  const checkInstalledUpdates = async (): Promise<PluginUpdateInfo[]> => {
+    const candidates = manager
+      .listInstalledPackages()
+      .filter((pkg) => pkg.provenance === 'official-registry' && pkg.packageVersion)
+    if (candidates.length === 0) {
+      pendingUpdates = []
+      return pendingUpdates
+    }
+    const marketplace = resolveConfiguredMarketplace(trust)
+    const base = marketplace.registryUrl.replace(/\/+$/, '')
+    const hostTarget = marketplace.trust.expectedTarget ?? currentPluginHostTarget()
+    const checked = await Promise.all(
+      candidates.map(async (pkg) => {
+        const dot = pkg.id.indexOf('.')
+        if (dot <= 0) return null
+        const namespace = pkg.id.slice(0, dot)
+        const name = pkg.id.slice(dot + 1)
+        try {
+          const res = await fetch(
+            `${base}/api/extensions/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`
+          )
+          if (!res.ok) return null
+          const detail = (await res.json()) as {
+            versions?: Array<{ version?: unknown; target?: unknown; yanked?: unknown }>
+          }
+          const latestVersion = newestInstallableVersion(detail.versions ?? [], hostTarget)
+          if (!latestVersion || !isUpdateAvailable(pkg.packageVersion!, latestVersion)) return null
+          return {
+            id: pkg.id,
+            namespace,
+            name,
+            installedVersion: pkg.packageVersion!,
+            latestVersion,
+          }
+        } catch {
+          // One unreachable package must not hide updates for the others.
+          return null
+        }
+      })
+    )
+    pendingUpdates = checked.filter((entry) => entry !== null)
+    return pendingUpdates
+  }
+
+  ipcMain.handle('plugins:checkUpdates', async (event) => {
+    assertAuthorized(event)
+    return checkInstalledUpdates()
+  })
+
+  ipcMain.handle('plugins:pendingUpdates', (event) => {
+    assertAuthorized(event)
+    return pendingUpdates
   })
 
   ipcMain.handle(
@@ -382,8 +560,14 @@ export function registerPluginIpc(
         }>
       }
       const wanted = args.version ?? detail.latest_version
-      const versionRow = detail.versions.find((v) => v.version === wanted && !v.yanked)
-      if (!versionRow) throw new Error(`no installable version ${wanted ?? '(latest)'} found`)
+      const artifacts = detail.versions.filter((v) => v.version === wanted && !v.yanked)
+      if (artifacts.length === 0) throw new Error(`no installable version ${wanted ?? '(latest)'} found`)
+      // One row per target artifact: take this Host's platform build, else the
+      // universal one.
+      const versionRow = selectPluginArtifact(
+        artifacts,
+        marketplace.trust.expectedTarget ?? currentPluginHostTarget()
+      )
 
       // The selected Registry envelope and current root-signed trust metadata
       // are verified against the Host-owned root pin before any install write.
@@ -680,6 +864,7 @@ export function registerPluginIpc(
   })
 
   return {
+    checkUpdates: checkInstalledUpdates,
     async refreshRegistryTrust() {
       const packageIds = discoverInstalledRegistryPackageIds(pluginsRoot)
       const activeRegistryPackages = new Set(

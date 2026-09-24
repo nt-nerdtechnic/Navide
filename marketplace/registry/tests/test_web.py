@@ -193,3 +193,28 @@ def test_download_count_shows_on_home_card(client: TestClient) -> None:
     client.get("/api/extensions/acme/hello/1.0.0/download")
     html = client.get("/").text
     assert "⬇ 1" in html
+
+
+def test_api_readme_returns_raw_markdown_of_latest(client: TestClient) -> None:
+    _publish(client, build_package(manifest=valid_manifest(version="1.0.0")))
+    _publish(client, build_package(manifest=valid_manifest(version="1.2.0")))
+    resp = client.get("/api/extensions/acme/hello/readme")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["version"] == "1.2.0"
+    # Raw text, not registry-rendered HTML: the client renders it itself.
+    assert body["markdown"].startswith("# Hello")
+    assert "<h1>" not in body["markdown"]
+
+
+def test_api_readme_absent_and_missing(client: TestClient) -> None:
+    manifest = valid_manifest(id="acme.bare", publisher="acme")
+    assert _publish(
+        client,
+        _package_with_files(manifest, {"icon.png": b"\x89PNG\r\n\x1a\n-fake"}),
+    ).status_code == 201
+    assert client.get("/api/extensions/acme/bare/readme").json() == {
+        "version": "1.0.0",
+        "markdown": None,
+    }
+    assert client.get("/api/extensions/acme/nope/readme").status_code == 404

@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
-import { i18n } from '@navide/plugin-ui/foundation'
+import { i18n, useNotify } from '@navide/plugin-ui/foundation'
 import ExtensionsPane from '../ExtensionsPane.vue'
 
 function mountExtensions() {
@@ -153,6 +153,10 @@ describe('ExtensionsPane', () => {
     expect(wrapper.get('[data-id="acme.backend"]').text()).toContain('acme.backend')
     await wrapper.get('[data-id="acme.backend"] .ext-remove').trigger('click')
     await flushPromises()
+    // Removal waits on the in-app confirmation; say yes for the user.
+    expect(useNotify().dialog.value?.kind).toBe('confirm')
+    useNotify().resolveDialog(true)
+    await flushPromises()
 
     expect(api.remove).toHaveBeenCalledWith('acme.backend')
     expect(wrapper.find('[data-id="acme.backend"]').exists()).toBe(false)
@@ -238,6 +242,25 @@ describe('ExtensionsPane', () => {
     await flushPromises()
     await wrapper.get('[data-id="navide.mini-ide"] .ext-remove').trigger('click')
     await flushPromises()
+    expect(useNotify().dialog.value?.message).toContain('navide.mini-ide')
+    expect(useNotify().dialog.value?.danger).toBe(true)
+    // One term on the page and in the dialog.
+    expect(wrapper.get('[data-id="navide.mini-ide"] .ext-remove').text()).toBe('Uninstall')
+    expect(useNotify().dialog.value?.confirmText).toBe('Uninstall')
+    useNotify().resolveDialog(true)
+    await flushPromises()
     expect(api.remove).toHaveBeenCalledWith('navide.mini-ide')
+  })
+
+  it('keeps the plugin when the removal confirmation is cancelled', async () => {
+    const api = mockPlugins()
+    wrapper = mountExtensions()
+    await flushPromises()
+    await wrapper.get('[data-id="navide.mini-ide"] .ext-remove').trigger('click')
+    await flushPromises()
+    useNotify().resolveDialog(false)
+    await flushPromises()
+    expect(api.remove).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-id="navide.mini-ide"]').exists()).toBe(true)
   })
 })

@@ -381,7 +381,17 @@ declare global {
         }) => Promise<{ ok: boolean; error?: string }>
         closeContribution: (args: { contributionKey: string }) => Promise<{ ok: boolean }>
         onContributionsChanged: (handler: () => void) => () => void
-        marketplaceSearch: (query?: string) => Promise<MarketplaceListResponse>
+        marketplaceSearch: (
+          query?: string,
+          sort?: 'updated' | 'downloads' | 'rating'
+        ) => Promise<MarketplaceListResponse>
+        marketplaceDetail: (args: {
+          namespace: string
+          name: string
+        }) => Promise<MarketplaceExtensionDetail>
+        checkUpdates: () => Promise<PluginUpdateInfo[]>
+        pendingUpdates: () => Promise<PluginUpdateInfo[]>
+        onUpdatesChanged: (handler: (updates: PluginUpdateInfo[]) => void) => () => void
         prepareInstall: (args: {
           namespace: string
           name: string
@@ -423,9 +433,46 @@ declare global {
     description: string | null
     categories: string[]
     latest_version: string | null
+    /** Targets the latest version is published for (multi-target Registries). */
+    latest_targets?: string[]
+    /** Main-process verdict: the latest version has an artifact for this Host. */
+    installable?: boolean
     download_count: number
     rating_average: number
     featured: boolean
+  }
+
+  interface MarketplaceVersionInfo {
+    version: string
+    published_at: string
+    target: string
+    yanked: boolean
+    trust_tier: string
+    capabilities: string[]
+    sensitive_capabilities: string[]
+    download_count: number
+    /** Main-process verdict: this row's target can be installed on this Host. */
+    installable: boolean
+  }
+
+  interface MarketplaceExtensionDetail extends MarketplaceExtension {
+    updated_at: string | null
+    rating_count: number
+    publisher: string
+    host_target: string
+    /** Newest non-yanked version with an artifact for this Host. */
+    latest_installable_version: string | null
+    versions: MarketplaceVersionInfo[]
+    /** Raw README markdown; rendered as text nodes, never as HTML. */
+    readme: string | null
+  }
+
+  interface PluginUpdateInfo {
+    id: string
+    namespace: string
+    name: string
+    installedVersion: string
+    latestVersion: string
   }
 
   interface MarketplaceListResponse {

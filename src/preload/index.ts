@@ -134,9 +134,46 @@ export interface MarketplaceExtension {
   description: string | null
   categories: string[]
   latest_version: string | null
+  /** Targets the latest version is published for (multi-target Registries). */
+  latest_targets?: string[]
+  /** Main-process verdict: the latest version has an artifact for this Host. */
+  installable?: boolean
   download_count: number
   rating_average: number
   featured: boolean
+}
+
+export interface MarketplaceVersionInfo {
+  version: string
+  published_at: string
+  target: string
+  yanked: boolean
+  trust_tier: string
+  capabilities: string[]
+  sensitive_capabilities: string[]
+  download_count: number
+  /** Main-process verdict: this row's target can be installed on this Host. */
+  installable: boolean
+}
+
+export interface MarketplaceExtensionDetail extends MarketplaceExtension {
+  updated_at: string | null
+  rating_count: number
+  publisher: string
+  host_target: string
+  /** Newest non-yanked version with an artifact for this Host. */
+  latest_installable_version: string | null
+  versions: MarketplaceVersionInfo[]
+  /** Raw README markdown; rendered as text nodes, never as HTML. */
+  readme: string | null
+}
+
+export interface PluginUpdateInfo {
+  id: string
+  namespace: string
+  name: string
+  installedVersion: string
+  latestVersion: string
 }
 
 export interface MarketplaceListResponse {
@@ -833,8 +870,20 @@ contextBridge.exposeInMainWorld('agentTeam', {
       ipcRenderer.on('plugins:contributionsChanged', listener)
       return () => ipcRenderer.removeListener('plugins:contributionsChanged', listener)
     },
-    marketplaceSearch: (query?: string): Promise<MarketplaceListResponse> =>
-      ipcRenderer.invoke('plugins:marketplaceSearch', query),
+    marketplaceSearch: (
+      query?: string,
+      sort?: 'updated' | 'downloads' | 'rating'
+    ): Promise<MarketplaceListResponse> =>
+      ipcRenderer.invoke('plugins:marketplaceSearch', query, sort),
+    marketplaceDetail: (args: { namespace: string; name: string }): Promise<MarketplaceExtensionDetail> =>
+      ipcRenderer.invoke('plugins:marketplaceDetail', args),
+    checkUpdates: (): Promise<PluginUpdateInfo[]> => ipcRenderer.invoke('plugins:checkUpdates'),
+    pendingUpdates: (): Promise<PluginUpdateInfo[]> => ipcRenderer.invoke('plugins:pendingUpdates'),
+    onUpdatesChanged: (handler: (updates: PluginUpdateInfo[]) => void): (() => void) => {
+      const listener = (_event: unknown, updates: PluginUpdateInfo[]): void => handler(updates)
+      ipcRenderer.on('plugins:updatesChanged', listener)
+      return () => ipcRenderer.removeListener('plugins:updatesChanged', listener)
+    },
     prepareInstall: (args: {
       namespace: string
       name: string

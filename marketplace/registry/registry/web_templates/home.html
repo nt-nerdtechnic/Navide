@@ -16,6 +16,12 @@
   <div class="card-cats">
     {% for c in e.categories %}<span class="chip">{{ c }}</span>{% endfor %}
   </div>
+  {% if e.latest_targets %}
+  <div class="card-targets" title="Platforms v{{ e.latest_version }} is published for">
+    {% if 'universal' in e.latest_targets %}<span class="chip chip-target">All platforms</span>
+    {% else %}{% for t in e.latest_targets %}<span class="chip chip-target">{{ t }}</span>{% endfor %}{% endif %}
+  </div>
+  {% endif %}
   {% if e.sensitive_capabilities %}
   <div class="warn" title="Requests filesystem/terminal access">
     ⚠ sensitive: {{ e.sensitive_capabilities|join(', ') }}

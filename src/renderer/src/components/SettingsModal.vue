@@ -120,6 +120,7 @@ import CrossPlatformHelp from './CrossPlatformHelp.vue'
 import ExtensionsPane from './ExtensionsPane.vue'
 import ExecutionPolicyPane from './ExecutionPolicyPane.vue'
 import MarketplacePane from './MarketplacePane.vue'
+import { usePluginUpdates } from '../composables/usePluginUpdates'
 import LayoutSettingsPane from '../layout/LayoutSettingsPane.vue'
 import McpPane from './McpPane.vue'
 import SkillsPane from './SkillsPane.vue'
@@ -1934,8 +1935,13 @@ function onKeyDown(e: KeyboardEvent) {
   if (e.defaultPrevented) return
   emit('close')
 }
+// Pending Registry plugin updates (pushed by the main process's periodic
+// check) badge the Extensions nav item.
+const pluginUpdates = usePluginUpdates()
+let stopPluginUpdates: (() => void) | null = null
 onMounted(() => {
   window.addEventListener('keydown', onKeyDown)
+  stopPluginUpdates = pluginUpdates.subscribe()
   refreshCliBinaryOverrides()
   refreshLaunchOverrides()
   if (activeTab.value === 'cliAgents') void onboarding.refresh()
@@ -1945,6 +1951,7 @@ onMounted(() => {
 })
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeyDown)
+  stopPluginUpdates?.()
   // The onboarding instance is this component's now, so its timers are too:
   // an install watched from the CLI management panel keeps a poll and an
   // elapsed-seconds ticker running, and closing Settings has to stop them.
@@ -2533,7 +2540,7 @@ watch(activeTab, (tab) => {
                   <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.2 2.6h6.1l3.5 3.5v7.3H3.2Z"/><path d="M9.1 2.7v3.5h3.5"/><path d="M5.4 8.4h5.2M5.4 10.7h3.4"/></svg>
                 </template>
               </SettingsNavItem>
-              <SettingsNavItem :label="$t('settings.nav.extensions')" :active="activeTab === 'extensions'" @select="activeTab = 'extensions'">
+              <SettingsNavItem :label="$t('settings.nav.extensions')" :active="activeTab === 'extensions'" :badge="pluginUpdates.count.value" @select="activeTab = 'extensions'">
                 <template #icon>
                   <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6.4 2.6h3.2v1.5a1.3 1.3 0 0 0 2.4 0V2.6h1.4v3.2h-1.5a1.3 1.3 0 0 0 0 2.4h1.5v3.2H6.4v-1.5a1.3 1.3 0 0 0-2.4 0v1.5H2.6V8.2h1.5a1.3 1.3 0 0 0 0-2.4H2.6V2.6h3.8Z"/></svg>
                 </template>

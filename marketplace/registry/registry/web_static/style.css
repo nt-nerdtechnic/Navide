@@ -123,6 +123,8 @@ main.wrap { padding-top: 28px; padding-bottom: 48px; }
   margin: 0 4px 4px 0;
 }
 .chip-warn { background: var(--warn-bg); color: var(--warn-fg); }
+.card-targets { margin-bottom: 8px; }
+.chip-target { background: transparent; border: 1px solid var(--border); }
 
 .badge {
   display: inline-block;

@@ -11,12 +11,11 @@ See [`FORMAT.md`](./FORMAT.md) for the `.vsix`-style package format.
 > `https://server.navide.dev/registry` (a path prefix on the Navide server
 > host); packaged App builds point there by default. See
 > [Deployment](#deployment-official-registry-at-servernavidedevregistry) for
-> the container, secrets and operational requirements. Known limits before
-> wider use: no schema migration mechanism (`db.py` only calls
-> `SQLModel.metadata.create_all`, which will not add columns to existing
-> tables), package blobs live on the local data volume
-> (`LocalStorageBackend`), and one version of a package can carry only one
-> target (see [Publishing first-party plugins](#publishing-first-party-plugins)).
+> the container, secrets and operational requirements. Known limit before
+> wider use: package blobs live on the local data volume
+> (`LocalStorageBackend`). Schema changes go through
+> [migrations](#schema-migrations); a version may carry one artifact per
+> platform target (see [Per-target artifacts](#per-target-artifacts)).
 > Third-party publishing is not open — see
 > [the plugin development guide](../../docs/en-US/plugin-development.md).
 
@@ -45,18 +44,64 @@ uv --project marketplace/registry run pytest marketplace/registry/tests
 |---|---|---|
 | GET | `/api/health` | Liveness probe. |
 | POST | `/api/publishers` | Register/update a publisher's Ed25519 public key + bearer token. Admin-gated by `X-Admin-Token` when `REGISTRY_ADMIN_TOKEN` is set (open in dev). |
-| POST | `/api/publish` | Upload a `.vsix` package (multipart field `package`); requires a `Bearer` publisher token and (in strict mode) a valid `signature`. Validates manifest, verifies signature, stores blob + assets, appends a version with a trust tier. 409 on duplicate, 403 on cross-namespace/bad-signature, 401 on bad/missing token. |
+| POST | `/api/publish` | Upload a `.vsix` package (multipart field `package`); requires a `Bearer` publisher token and (in strict mode) a valid `signature`. Validates manifest, verifies signature, stores blob + assets, appends a version artifact for `?target=` (default `universal`) with a trust tier. 409 on a duplicate (version, target), on mixing `universal` with platform targets in one version, or on a yanked version; 403 on cross-namespace/bad-signature, 401 on bad/missing token. |
 | GET | `/api/extensions` | Search (`q`) over name/description/categories, newest first, paginated (`offset`, `limit`). |
 | GET | `/api/extensions/{namespace}/{name}` | Extension detail + full version list, registry envelopes/signatures, and root-signed trust metadata. |
-| GET | `/api/extensions/{namespace}/{name}/{version}/download` | Stream the package blob **and increment** the per-version + aggregate download counters. |
-| POST | `/api/extensions/{namespace}/{name}/{version}/yank` | Soft-yank a version (excluded from latest resolution, still downloadable by exact version). |
+| GET | `/api/extensions/{namespace}/{name}/{version}/download` | Stream one artifact's blob **and increment** its download counter plus the aggregate one. `?target=` picks the artifact exactly (no fallback to `universal`); it may be omitted only when the version has a single artifact, else `400` lists the available targets. |
+| POST | `/api/extensions/{namespace}/{name}/{version}/yank` | Soft-yank a version — every target's artifact of it (excluded from latest resolution, still downloadable by exact version). |
 | POST | `/api/extensions/{namespace}/{name}/rating` | Add a `{ "score": 1..5 }` rating; returns the new average + count. Per-user auth/dedup is deferred (see below). |
 | POST | `/api/extensions/{namespace}/{name}/featured` | Set the curation flag `{ "featured": bool }`. Admin-gated by `X-Admin-Token` (same gate as `/api/publishers`). |
 
 `GET /api/extensions` also accepts `category` (exact category filter) and
 `sort` (`updated` default, `downloads`, `rating`). Each summary now carries
-`download_count`, `rating_average`, `rating_count`, `featured`; each version
-carries `download_count`.
+`download_count`, `rating_average`, `rating_count`, `featured`, and
+`latest_targets` (the targets `latest_version` is published for); each entry in
+a detail's `versions` is one artifact, carrying its `target` and
+`download_count`.
+
+## Per-target artifacts
+
+A package version is published as **either** one `universal` artifact **or**
+one artifact per platform target (`<platform>-<arch>` as Node reports it, e.g.
+`darwin-arm64`, `win32-x64`) — never both. Rows are unique on
+(extension, version, target); a duplicate target returns `409`, and so does a
+platform artifact for a version that is universal (or the reverse). Mixing is
+refused because the Client prefers an exact platform match over `universal`,
+so a mixed version would install different bytes depending on what was
+published when, and only a frontend-only package — which has nothing
+platform-specific to split — is ever universal.
+
+- **Storage.** New blobs live at `{namespace}/{name}/{version}/{target}/package.vsix`.
+  Each row stores its own key, so artifacts published before per-target
+  support keep their `{version}/package.vsix` key and still download.
+- **Signing.** The registry-signed envelope already binds `target`; each
+  artifact gets its own envelope, and the Client rejects an envelope whose
+  target is not its own host target (or `universal`).
+- **Yank** applies to the whole version, so "latest" resolves to the same
+  version on every platform. A yanked version accepts no further targets.
+- **Latest.** `latest_version` is the newest non-yanked version across all
+  targets. A Host whose target the latest version lacks gets a clear
+  "no artifact for host target" error rather than an older version.
+- **Client selection** (`src/main/plugins/pluginTarget.ts`
+  `selectPluginArtifact`): among the chosen version's rows, the exact host
+  target, else `universal`, else an error naming the available targets. The
+  download then passes `?target=` for a platform artifact.
+- **Older Clients** pick the first row of a version and download without a
+  target, so a multi-target version gets them a `400` (or an envelope target
+  mismatch) instead of an install; universal versions are unaffected.
+
+## Schema migrations
+
+`registry/migrations.py` holds numbered, idempotent steps recorded in the
+`schema_migrations` table; `create_db_engine` runs pending ones at startup,
+after `create_all` creates any missing tables. Each step checks the live
+schema before changing it (so a fresh database records every step without
+work) and runs with its record in one `BEGIN IMMEDIATE` transaction, so a
+failed step leaves nothing behind and concurrent starters apply it once.
+Steps so far: `1` discovery counter columns, `2` registry-signing columns,
+`3` rebuild `extension_version` unique on (extension, version, target).
+Add a step by appending to `MIGRATIONS` with explicit SQL; never edit an
+applied one.
 
 ## Discovery website (p3-discovery)
 
@@ -294,11 +339,10 @@ The script builds, packs, signs and publishes `navide.git` as `universal` and
 publishes one. Plans carries a PyInstaller backend, so each other target must
 be built on a machine of that platform and architecture.
 
-**Limitation:** a Registry version row is unique per package and version, and
-blobs are stored per version, so a second target of the same version is
-rejected with `409`. Publishing `navide.plans` for more than one target needs
-the Registry to key versions and blobs by target (and the Client to select the
-row matching its host target) first.
+Running the script with the same version on each platform adds that
+platform's artifact to the version (see
+[Per-target artifacts](#per-target-artifacts)); re-running on one platform
+returns `409` for the target already published.
 
 ## Seams left for later Phase 3 todos
 

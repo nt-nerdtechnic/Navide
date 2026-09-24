@@ -10,7 +10,8 @@
 # navide.plans ships a PyInstaller backend, so its package is built for, and
 # published as, the current host target only (`<platform>-<arch>`, e.g.
 # darwin-arm64). Other targets must be built and published from a machine of
-# that platform/architecture with the same command.
+# that platform/architecture with the same command; the Registry keeps one
+# artifact per target of the same version and 409s a target published twice.
 #
 # Packing and signing reuse the Registry's own `navide-plugin` CLI
 # (marketplace/registry/registry/cli.py). The publisher key path and the token

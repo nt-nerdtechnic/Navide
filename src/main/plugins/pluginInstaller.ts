@@ -56,7 +56,7 @@ import {
 } from './installedPlugins'
 import { compareSemver } from './pluginManifestV2'
 import type { PluginLaunchDescriptor } from './frontendPluginManager'
-import { currentPluginHostTarget } from './pluginTarget'
+import { UNIVERSAL_PLUGIN_TARGET, currentPluginHostTarget } from './pluginTarget'
 import {
   PLUGIN_QUARANTINE_DIR,
   PLUGIN_QUARANTINE_MARKER,
@@ -212,7 +212,12 @@ export const defaultInstallerDeps: InstallerDeps = {
 
 function downloadUrl(req: InstallRequest): string {
   const base = req.registryUrl.replace(/\/+$/, '')
-  return `${base}/api/extensions/${req.namespace}/${req.name}/${req.version}/download`
+  const url = `${base}/api/extensions/${req.namespace}/${req.name}/${req.version}/download`
+  // A platform build is one of several artifacts of its version; a universal
+  // version has exactly one, which the Registry serves without a target.
+  return req.target && req.target !== UNIVERSAL_PLUGIN_TARGET
+    ? `${url}?target=${encodeURIComponent(req.target)}`
+    : url
 }
 
 function canonicalEntryPath(entry: ZipEntry): string {
