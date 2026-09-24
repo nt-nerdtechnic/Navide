@@ -483,6 +483,17 @@ def encrypt(plaintext: str, *, scope: str, item_id: str) -> str:
     return _encode(_ENVELOPE_V2 + bytes.fromhex(kid) + nonce + sealed)
 
 
+def sealed_length(plaintext: str) -> int:
+    """How many bytes ``encrypt(plaintext, ...)`` returns, without a key.
+
+    Envelope byte, key id, nonce and the 16-byte GCM tag around the UTF-8
+    plaintext, then base64. Lets a caller ask whether a record will fit
+    before it holds, or spends, a key.
+    """
+    raw = 1 + _KID_LEN + _NONCE_LEN + len(plaintext.encode("utf-8")) + 16
+    return 4 * ((raw + 2) // 3)
+
+
 def _v2_key_id(raw: bytes) -> str | None:
     """The key id a body names if it is shaped like a v2 envelope, else None."""
     if len(raw) < 1 + _KID_LEN + _NONCE_LEN + 16 or raw[:1] != _ENVELOPE_V2:

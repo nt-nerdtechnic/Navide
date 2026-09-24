@@ -662,6 +662,13 @@ class SkillsStore:
     CONTENT_FILE_LIMIT = 256 * 1024
     MAX_CONTENT_FILES = 64
 
+    #: What an installed skill may hold. Larger than the sync limits on
+    #: purpose: a skill too big to sync still installs, and only its
+    #: enabled/targets decision travels between devices.
+    INSTALL_TOTAL_LIMIT = 32 * 1024 * 1024
+    INSTALL_FILE_LIMIT = 8 * 1024 * 1024
+    MAX_INSTALL_FILES = 512
+
     def export_content(self, name: str) -> dict[str, dict[str, str]] | None:
         """Every file of a managed skill, or None when it is not ours to send.
 
@@ -684,8 +691,9 @@ class SkillsStore:
                 continue
             size = path.stat().st_size
             if size > self.CONTENT_FILE_LIMIT:
-                log.warning("skill %s: %s is too large to sync", name, relative)
-                continue
+                # Sending the rest would land a skill with a file missing.
+                log.warning("skill %s: %s is too large to sync; not sending its files", name, relative)
+                return None
             total += size
             if total > self.CONTENT_TOTAL_LIMIT or len(files) >= self.MAX_CONTENT_FILES:
                 log.warning("skill %s is too large to sync whole; not sending its files", name)
@@ -718,7 +726,7 @@ class SkillsStore:
             destination = self._skill_dir(name)
             if destination.exists() or destination.is_symlink() or self._native_conflict(name):
                 raise SkillConflictError(f"skill already exists: {name}")
-            if not isinstance(files, dict) or "SKILL.md" not in files or len(files) > self.MAX_CONTENT_FILES:
+            if not isinstance(files, dict) or "SKILL.md" not in files or len(files) > self.MAX_INSTALL_FILES:
                 raise SkillValidationError("invalid skill bundle")
             _validate_bundle_paths(files)
             total = 0
@@ -726,12 +734,12 @@ class SkillsStore:
                 if _safe_relative(relative) is None or ":" in relative or not isinstance(entry, dict):
                     raise SkillValidationError("invalid skill bundle path")
                 data = entry.get("data")
-                if not isinstance(data, bytes) or len(data) > self.CONTENT_FILE_LIMIT:
+                if not isinstance(data, bytes) or len(data) > self.INSTALL_FILE_LIMIT:
                     raise SkillValidationError("invalid skill bundle file")
                 if not isinstance(entry.get("executable"), bool):
                     raise SkillValidationError("invalid executable flag")
                 total += len(data)
-            if total > self.CONTENT_TOTAL_LIMIT:
+            if total > self.INSTALL_TOTAL_LIMIT:
                 raise SkillValidationError("skill bundle exceeds size limit")
             try:
                 fields, _ = self._parse_skill_file(files["SKILL.md"]["data"].decode("utf-8"))

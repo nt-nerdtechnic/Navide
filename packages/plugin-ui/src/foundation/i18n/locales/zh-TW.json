@@ -5675,6 +5675,8 @@
       "disable": "停用 {name}",
       "invalid": "檔案無效",
       "native-conflict": "原生 skill 優先",
+      "sync-too-large": "檔案太大，不跨裝置同步",
+      "sync-too-large-hint": "這個 skill 的檔案太大，不會在裝置之間同步；開關與派送設定仍會同步。",
       "editor-hint": "可編輯已知欄位；其他 frontmatter 值會保留。",
       "open-folder": "開啟資料夾",
       "name": "名稱",

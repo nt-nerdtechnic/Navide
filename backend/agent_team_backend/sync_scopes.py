@@ -218,6 +218,44 @@ class McpScope:
 SKILLS_INTENT_KEY = "sync-skills-intent"
 
 
+def skill_entry(store: Any, skill: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    """One skill's sync item, and whether its files were too large to carry.
+
+    A record over the engine's body limit is skipped whole, which would take
+    the enabled/targets decision down with the files. So the size is checked
+    here, on the sealed body the engine will build, and an entry that would
+    not fit goes without its content instead.
+    """
+    name = skill["name"]
+    entry: dict[str, Any] = {
+        "enabled": bool(skill.get("enabled", True)),
+        "targets": skill.get("targets"),
+    }
+    try:
+        content = store.export_content(name)
+    except Exception as err:  # noqa: BLE001 - an unreadable skill still routes
+        log.warning("the files of %s could not be read: %s", name, err)
+        return entry, False
+    if content is None:
+        # export_content also answers None for a skill that is not ours.
+        return entry, bool(skill.get("managed")) and skill.get("valid", True) is not False
+    body = sync_keyring.sealed_length(sync_engine.canonical({**entry, "content": content}))
+    if body > sync_engine.MAX_BODY_BYTES:
+        log.warning("skill %s is too large to sync whole; sending only its settings", name)
+        return entry, True
+    entry["content"] = content
+    return entry, False
+
+
+def annotate_content_sync(listing: dict[str, Any], store: Any) -> dict[str, Any]:
+    """Mark each managed skill whose files stay on this device (``sync_too_large``)."""
+    for skill in listing.get("skills", []):
+        name = skill.get("name")
+        if skill.get("managed") and isinstance(name, str) and name:
+            skill["sync_too_large"] = skill_entry(store, skill)[1]
+    return listing
+
+
 class SkillsStateScope:
     """Which skills are on, which CLIs each one goes to, and — for the ones
     Navide created — the files themselves.
@@ -270,18 +308,7 @@ class SkillsStateScope:
             name = skill.get("name")
             if not (isinstance(name, str) and name):
                 continue
-            entry: dict[str, Any] = {
-                "enabled": bool(skill.get("enabled", True)),
-                "targets": skill.get("targets"),
-            }
-            try:
-                content = store.export_content(name)
-            except Exception as err:  # noqa: BLE001 - an unreadable skill still routes
-                log.warning("the files of %s could not be read: %s", name, err)
-                content = None
-            if content is not None:
-                entry["content"] = content
-            out[name] = entry
+            out[name] = skill_entry(store, skill)[0]
         return out
 
     def snapshot(self) -> dict[str, Any]:

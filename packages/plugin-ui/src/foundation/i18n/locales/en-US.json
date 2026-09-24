@@ -5675,6 +5675,8 @@
       "disable": "Disable {name}",
       "invalid": "Invalid file",
       "native-conflict": "Native skill wins",
+      "sync-too-large": "Not synced: too large",
+      "sync-too-large-hint": "This skill's files are too large to sync between devices. Its on/off and delivery settings still sync.",
       "editor-hint": "Known fields are editable. Other frontmatter values are preserved.",
       "open-folder": "Open folder",
       "name": "Name",

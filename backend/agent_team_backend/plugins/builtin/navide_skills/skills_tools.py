@@ -189,7 +189,10 @@ async def skills_prepare_install(
     selects the repository root. Multiple candidates return selection_required
     and candidates without an installable preview_id; select a path and retry.
     A selected preview contains immutable instructions, a file inventory,
-    source, digest and warnings. Unauthenticated GitHub retrieval never runs
+    source, digest and warnings. Repository housekeeping (.gitignore,
+    .gitkeep, .DS_Store, .git/, .github/) is left out and listed in excluded;
+    any other dotfile refuses the source. A skill may hold up to 512 files,
+    8 MiB per file and 32 MiB in total. Unauthenticated GitHub retrieval never runs
     package code or changes the shared library. The preview belongs to this
     caller, expires in 15 minutes and is lost on backend restart. Review it
     before skills_install; a digest is not human approval or write permission.

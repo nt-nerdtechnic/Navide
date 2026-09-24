@@ -3002,9 +3002,12 @@ async def _run_skill_operation(
 async def skills_list(session: "Session", msg_id: str, msg_type: str, payload: dict) -> None:
     from . import app
 
-    result = await _run_skill_operation(
-        session, msg_id, msg_type, app.skills_store.list_skills
-    )
+    from .sync_scopes import annotate_content_sync
+
+    def list_skills() -> dict[str, Any]:
+        return annotate_content_sync(app.skills_store.list_skills(), app.skills_store)
+
+    result = await _run_skill_operation(session, msg_id, msg_type, list_skills)
     if result is not None:
         await session.send_json(make_response(msg_id, msg_type, result))
 

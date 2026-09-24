@@ -18,6 +18,8 @@ interface SkillSummary {
   managed: boolean
   /** Original location, when this skill was migrated from a CLI's own directory. */
   migratedFrom: string | null
+  /** Managed skill whose files stay on this device; only its settings sync. */
+  syncTooLarge?: boolean
   path?: string
 }
 
@@ -150,6 +152,7 @@ function normalizeSummary(value: unknown): SkillSummary | null {
     targets: normalizeTargets(value.targets),
     managed: booleanValue(value.managed, true),
     migratedFrom: stringValue(value.migrated_from) || null,
+    syncTooLarge: value.sync_too_large === true,
     path: stringValue(value.path) || undefined,
   }
 }
@@ -942,6 +945,12 @@ watch(
                 <span class="skill-card-head">
                   <strong>{{ row.skill.name }}</strong>
                   <span class="skill-source-tag" :class="row.kind">{{ rowSourceLabel(row) }}</span>
+                  <span
+                    v-if="row.kind === 'shared' && row.skill.syncTooLarge"
+                    class="skill-badge warning"
+                    data-testid="skill-sync-too-large"
+                    :title="t('settings.skills.sync-too-large-hint')"
+                  >{{ t('settings.skills.sync-too-large') }}</span>
                 </span>
                 <span class="skill-card-desc">
                   {{ row.skill.description || (row.kind === 'native' ? row.skill.error : '') || t('settings.skills.no-description') }}
@@ -1055,6 +1064,12 @@ watch(
               class="skill-badge warning"
               :title="t('settings.skills.native-conflict-hint')"
             >{{ t('settings.skills.native-conflict') }}</span>
+            <span
+              v-if="selectedRow.kind === 'shared' && selectedRow.skill.syncTooLarge"
+              class="skill-badge warning"
+              data-testid="skill-drawer-sync-too-large"
+              :title="t('settings.skills.sync-too-large-hint')"
+            >{{ t('settings.skills.sync-too-large') }}</span>
           </div>
           <button type="button" class="skill-drawer-close" :aria-label="t('action.close')" @click="closeDrawer">✕</button>
         </header>

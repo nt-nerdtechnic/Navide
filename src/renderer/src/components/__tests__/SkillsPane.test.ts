@@ -120,6 +120,37 @@ describe('SkillsPane', () => {
     expect(openPath).toHaveBeenCalledWith('/tmp/skills/review-code')
   })
 
+  it('marks a managed skill whose files are too large to sync', async () => {
+    const { backend } = mockBackend({
+      'skills.list': {
+        ok: true,
+        payload: {
+          skills: [{ ...skill, managed: true, sync_too_large: true }, { ...skill, name: 'small', managed: true, sync_too_large: false }],
+          root: '/tmp/skills', agents, write_consented: true,
+        },
+      },
+    })
+    wrapper = mount(SkillsPane, { props: { backend }, global: { plugins: [i18n] } })
+    await flushPromises()
+
+    const badges = wrapper.findAll('[data-testid="skill-sync-too-large"]')
+    expect(badges).toHaveLength(1)
+    expect(badges[0].text()).toBe('Not synced: too large')
+    expect(badges[0].attributes('title')).toContain('on/off and delivery settings still sync')
+
+    await openCard(wrapper, 'review-code')
+    expect(wrapper.get('[data-testid="skill-drawer-sync-too-large"]').text()).toBe('Not synced: too large')
+    await openCard(wrapper, 'small')
+    expect(wrapper.find('[data-testid="skill-drawer-sync-too-large"]').exists()).toBe(false)
+
+    i18n.global.locale.value = 'zh-TW'
+    await flushPromises()
+    expect(wrapper.get('[data-testid="skill-sync-too-large"]').text()).toBe('檔案太大，不跨裝置同步')
+    i18n.global.locale.value = 'ja-JP'
+    await flushPromises()
+    expect(wrapper.get('[data-testid="skill-sync-too-large"]').text()).toBe('大きすぎて同期不可')
+  })
+
   it('creates a skill and reloads it into the editor', async () => {
     const { backend, send } = mockBackend()
     wrapper = mount(SkillsPane, { props: { backend }, global: { plugins: [i18n] } })
