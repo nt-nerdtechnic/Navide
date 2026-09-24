@@ -152,6 +152,25 @@ const analyzing = ref(false)
 const analysisVendor = computed(() => props.agentKey || first.value?.vendor || '')
 const canAnalyze = computed(() => !!props.spawn && !!props.workspacePath && !!analysisVendor.value)
 
+/** ui.pane.create words its errors for MCP callers. The one that leaves a pane
+ *  behind — spawned, but its task never typed in — is said in the UI's words,
+ *  and says so; the rest keep their detail inside a localized sentence. */
+function analyzeErrorText(detail?: string): string {
+  if (detail?.includes('failed to inject task')) return t('cli-risk.analyze-inject-failed')
+  return detail ? t('cli-risk.analyze-failed-detail', { detail }) : t('cli-risk.analyze-failed')
+}
+
+/** Spawning waits for the CLI to come up, so the dialog may have been closed
+ *  by the time it fails; reopen it (without taking focus from the terminal)
+ *  rather than leave the error where nobody sees it. */
+async function showAnalyzeError(message: string): Promise<void> {
+  error.value = message
+  if (open.value) return
+  open.value = true
+  await nextTick()
+  position()
+}
+
 async function analyze(signals: CliRiskSignal[]): Promise<void> {
   if (!props.spawn || !props.workspacePath || !props.state || analyzing.value) return
   analyzing.value = true
@@ -169,9 +188,9 @@ async function analyze(signals: CliRiskSignal[]): Promise<void> {
         locale: i18n.global.locale.value,
       }),
     })
-    if (!response.ok) error.value = response.error || t('cli-risk.analyze-failed')
+    if (!response.ok) await showAnalyzeError(analyzeErrorText(response.error))
   } catch (err) {
-    error.value = err instanceof Error ? err.message : t('cli-risk.analyze-failed')
+    await showAnalyzeError(analyzeErrorText(err instanceof Error ? err.message : undefined))
   } finally {
     analyzing.value = false
   }

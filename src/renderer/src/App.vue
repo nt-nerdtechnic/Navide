@@ -7614,7 +7614,10 @@ async function rebuildPanesViaResume(
   /** Narrows the batch to these panes — one run group, from its right-click menu. */
   onlyPaneIds?: readonly string[]
 ): Promise<void> {
-  if (rebuildingTabPanes.value) return
+  if (rebuildingTabPanes.value) {
+    notifyRestore.toast(i18n.global.t('pane.terminal.rebuild-in-progress'), { type: 'info' })
+    return
+  }
   // A sidebar heading's ↻ names its own workspace; the toolbar's and the tab
   // strip's name none, meaning the workspace on screen. Rebuild reads each
   // pane's own workspacePath, so another project's panes rebuild in place —
@@ -8662,6 +8665,7 @@ const voiceInput = setupVoiceInput({
     const p = panes.value.find((pn) => pn.id === paneId)
     return p ? p.customName || p.autoName || p.agentLabel : paneId
   },
+  hint: (text) => notifyRestore.toast(text, { type: 'info' }),
 })
 
 // ── External UI action bus (MCP-driven) ─────────────────────────────────────
@@ -16049,6 +16053,19 @@ async function closeRunGroup(id: string, keepGroup = false): Promise<void> {
   const affected = id === 'manual'
     ? panesInView.value.filter((p) => !p.runGroupId)
     : panesInView.value.filter((p) => p.runGroupId === id)
+  // Same rule as a batch rebuild: stopping CLIs mid-turn is asked first.
+  const runningCount = countPanesBusyForRebuild(affected.map((p) => p.id))
+  if (runningCount > 0) {
+    const ok = await notifyRestore.confirm(
+      i18n.global.t('stageTab.close-running-confirm-body', { count: runningCount }),
+      {
+        title: i18n.global.t('pane.terminal.rebuild-running-confirm-title'),
+        confirmText: i18n.global.t('stageTab.close-running-confirm-confirm'),
+        cancelText: i18n.global.t('pane.terminal.rebuild-running-confirm-cancel'),
+      },
+    )
+    if (!ok) return
+  }
   // Closing the tab takes every pane of the run with it. A running pipeline
   // would be left at state='running' with no panes and its slot counts intact
   // — an orchestration waiting on agents that no longer exist. Abort it first
@@ -16272,7 +16289,17 @@ async function runRunGroupCtxAction(
   // actions below only see the workspace on screen — so go there first, the
   // same switch a click on its heading makes. A declined switch acts on nothing.
   if (normWs(m.workspacePath) !== normWs(currentWorkspace.value)) {
-    await switchToWorkspace(m.workspacePath)
+    // A declined or failed switch toasts on its own; one that throws would
+    // otherwise end as an unhandled rejection from this menu click.
+    try {
+      await switchToWorkspace(m.workspacePath)
+    } catch {
+      notifyRestore.toast(
+        i18n.global.t('switchWorkspace.failed', { name: wsDisplayName(m.workspacePath) }),
+        { type: 'error' },
+      )
+      return
+    }
     if (normWs(m.workspacePath) !== normWs(currentWorkspace.value)) return
   }
   // Only a group this window shows as a tab; one handed to a detached window
@@ -19665,7 +19692,7 @@ function paneIsCommander(p: ActivePane): boolean {
           @context-menu="(ev) => openPaneCtxMenu(ev, p.id)"
         />
         </template>
-        <VoiceCapsule :state="voiceInput.state" @withdraw="voiceInput.withdraw" @dismiss="voiceInput.dismiss" />
+        <VoiceCapsule :state="voiceInput.state" @withdraw="voiceInput.withdraw" @dismiss="voiceInput.dismiss" @send="voiceInput.send" />
         <!-- Auto/sidebar mode: meeting-style agent list on the right -->
         <div v-if="effectiveLayoutMode === 'sidebar'" class="auto-meeting-list" :style="dualFocusActive ? { gridColumn: '3' } : {}">
           <div

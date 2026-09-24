@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { effectScope, nextTick } from 'vue'
+import { i18n } from '@navide/plugin-ui/foundation'
 import { canonicalizeKeySpec, defaults, executeCommand, getContext, parseKeySpec } from '@navide/plugin-ui/shared'
 import {
   NOTICE_SENDER,
@@ -24,6 +25,8 @@ describe('voice wiring', () => {
   let sent: Array<{ type: string; payload: Record<string, unknown> }>
   let delivered: Array<{ paneId: string; text: string }>
   let idle: boolean
+  let prewarmBody: Record<string, unknown>
+  let hints: string[]
   let scope: ReturnType<typeof effectScope>
   let voice: ReturnType<typeof setupVoiceInput>
   const messaging = useAgentMessaging()
@@ -38,6 +41,8 @@ describe('voice wiring', () => {
     sent = []
     delivered = []
     idle = true
+    prewarmBody = { ok: true }
+    hints = []
     openMicCapture.mockReset()
     openMicCapture.mockImplementation(async (onChunk: (pcm: Int16Array) => void) => ({
       flush: async () => { onChunk(Int16Array.from([1, 2])) },
@@ -62,6 +67,7 @@ describe('voice wiring', () => {
             const body =
               type === 'voice.start' ? { ok: true, sessionId: 'S' }
               : type === 'voice.stop' ? { ok: true, text: '列出所有測試', ms: 5, durationMs: 800 }
+              : type === 'voice.prewarm' ? prewarmBody
               : { ok: true }
             return { id: 'x', type: `${type}.result`, ok: true, payload: body, error: null, timestamp: '' }
           }) as never,
@@ -70,6 +76,7 @@ describe('voice wiring', () => {
         focusedPaneId: () => 'pane-a',
         paneInfo: (id) => (id === 'pane-a' ? { realized: true, messagingName: 'claude-1' } : { realized: false, messagingName: 'sleepy' }),
         paneLabel: (id) => id,
+        hint: (text) => hints.push(text),
       }),
     )!
   })
@@ -262,6 +269,24 @@ describe('voice wiring', () => {
     }
   })
 
+  it('a held take that starts recording in an unfocused window ends at once', async () => {
+    const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(false)
+    let grant!: (v: { granted: boolean; status: string }) => void
+    vi.stubGlobal('agentTeam', { media: { askMicrophone: () => new Promise((r) => { grant = r }) } })
+    try {
+      await start()
+      window.dispatchEvent(new Event('blur'))
+      grant({ granted: true, status: 'granted' })
+      await settle()
+      vi.advanceTimersByTime(RELEASE_TAIL_MS)
+      await settle()
+      expect(voice.state.phase).toBe('countdown')
+    } finally {
+      focus.mockRestore()
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('the press that showed the first-time mic dialog only authorises', async () => {
     vi.stubGlobal('agentTeam', { media: { askMicrophone: async () => ({ granted: true, status: 'granted', prompted: true }) } })
     try {
@@ -362,6 +387,53 @@ describe('voice wiring', () => {
     await settle()
     expect(sent.at(-1)?.type).toBe('voice.shutdown')
     expect(sent).toHaveLength(3)
+  })
+
+  it('toggle: a take stopped by the cap waits for a press to send it, and leaves Esc to the CLI', async () => {
+    settings.setVoiceRecordingMode('toggle')
+    await start()
+    vi.advanceTimersByTime(HANDS_FREE_MAX_MS)
+    await settle()
+    expect(voice.state.phase).toBe('countdown')
+    vi.advanceTimersByTime(COUNTDOWN_MS * 5)
+    await settle()
+    expect(delivered).toEqual([])
+    const esc = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true })
+    window.dispatchEvent(esc)
+    expect(esc.defaultPrevented).toBe(false)
+    expect(voice.state.phase).toBe('countdown')
+    expect(executeCommand('workbench.action.holdToTalk')).toBe(true)
+    await settle()
+    expect(delivered).toEqual([{ paneId: 'pane-a', text: '列出所有測試' }])
+    expect(types().filter((t) => t === 'voice.start')).toHaveLength(1)
+  })
+
+  it('says once, without a modal, that a pre-warm failed; a later success re-arms it', async () => {
+    i18n.global.locale.value = 'en-US'
+    prewarmBody = { ok: false, reason: 'model-missing' }
+    settings.setVoiceInputEnabled(true)
+    await settle()
+    expect(hints).toEqual(['Voice input is not ready: Speech model not downloaded — Settings → General → Voice input'])
+    vi.advanceTimersByTime(60_000)
+    window.dispatchEvent(new Event('focus'))
+    await settle()
+    expect(hints).toHaveLength(1)
+    prewarmBody = { ok: true }
+    vi.advanceTimersByTime(60_000)
+    window.dispatchEvent(new Event('focus'))
+    await settle()
+    prewarmBody = { ok: false, reason: 'model-missing' }
+    vi.advanceTimersByTime(60_000)
+    window.dispatchEvent(new Event('focus'))
+    await settle()
+    expect(hints).toHaveLength(2)
+  })
+
+  it('a pre-warm answered "disabled" (switched off while loading) is not a failure', async () => {
+    prewarmBody = { ok: false, reason: 'disabled' }
+    settings.setVoiceInputEnabled(true)
+    await settle()
+    expect(hints).toEqual([])
   })
 
   it('readback speaks only after a voice message reached the pane', async () => {

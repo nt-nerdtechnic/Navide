@@ -8,7 +8,7 @@ import { CAP_WARNING_MS, COUNTDOWN_MS, voiceErrorI18nKey, type VoiceCapsuleState
 // than rendered inside TerminalPane, so the pane component stays untouched.
 
 const props = defineProps<{ state: VoiceCapsuleState }>()
-const emit = defineEmits<{ withdraw: []; dismiss: [] }>()
+const emit = defineEmits<{ withdraw: []; dismiss: []; send: [] }>()
 const { t } = useI18n()
 
 const rect = ref<{ left: number; top: number; width: number } | null>(null)
@@ -88,12 +88,19 @@ const errorText = computed(() => {
       <span class="vc-dot vc-dot--rec" />
       <span class="vc-meter" aria-hidden="true"><span class="vc-meter-fill" :style="{ transform: `scaleX(${state.level})` }" /></span>
       <span>{{ t(state.handsFree ? 'voice.capsule.recording-hands-free' : 'voice.capsule.recording') }}</span>
+      <span v-if="state.deviceFallback" class="vc-hint vc-cap">{{ t('voice.capsule.device-fallback') }}</span>
       <span v-if="capSeconds > 0" class="vc-hint vc-cap">{{ t('voice.capsule.cap-left', { s: capSeconds }) }}</span>
       <span class="vc-hint">{{ t('voice.capsule.esc-cancel') }}</span>
     </template>
     <template v-else-if="state.phase === 'transcribing'">
       <span class="vc-spinner" />
       <span>{{ t('voice.capsule.transcribing') }}</span>
+    </template>
+    <template v-else-if="state.phase === 'countdown' && state.awaitingSend">
+      <span class="vc-text">{{ state.text }}</span>
+      <span class="vc-hint">{{ t('voice.capsule.cap-reached') }}</span>
+      <button type="button" class="vc-action" @click="emit('send')">{{ t('voice.capsule.send') }}</button>
+      <button type="button" class="vc-action" :aria-label="t('voice.capsule.discard')" @click="emit('dismiss')">✕</button>
     </template>
     <template v-else-if="state.phase === 'countdown'">
       <span class="vc-text">{{ state.text }}</span>

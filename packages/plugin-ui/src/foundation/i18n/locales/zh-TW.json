@@ -67,6 +67,8 @@
     "analyze": "用 CLI 分析",
     "analyze-hint": "開啟新的 {vendor} 面板，以唯讀方式調查並提出防護建議；任何變更前都會先徵求你的同意。",
     "analyze-failed": "無法啟動分析用的 CLI 面板，請再試一次。",
+    "analyze-inject-failed": "分析用面板已開啟，但任務沒能輸入進去。請把任務貼進該面板，或關閉後再試一次。",
+    "analyze-failed-detail": "無法啟動分析用的 CLI 面板（{detail}），請再試一次。",
     "shared-cdn-field": "共用 CDN",
     "shared-cdn": "{label}（共用 CDN，無法分辨網站）",
     "ranges-title": "共用 CDN 位址範圍",
@@ -116,6 +118,7 @@
     "resize-failed": "無法調整 AI CLI session 大小"
   },
   "voice": {
+  "prewarm-failed": "語音輸入尚未就緒：{reason}",
     "capsule": {
       "starting": "準備麥克風…",
       "recording": "錄音中，放開即送出",
@@ -126,7 +129,11 @@
       "dismiss": "關閉",
       "transcribing": "轉錄中…",
       "delivering": "送出中…",
-      "held": "等待中：{reason}"
+      "held": "等待中：{reason}",
+      "device-fallback": "找不到選定的麥克風，改用系統預設麥克風",
+      "cap-reached": "已達錄音上限——要送出嗎？",
+      "send": "送出",
+      "discard": "捨棄"
     },
     "error": {
       "generic": "語音輸入失敗（{code}）",
@@ -134,6 +141,7 @@
       "not-cli": "語音輸入只能送往 CLI pane",
       "mic-denied": "麥克風權限被拒，請到 系統設定 → 隱私權與安全性 → 麥克風 允許 Navide",
       "mic-failed": "無法開啟麥克風：{error}",
+      "mic-disconnected": "麥克風已中斷連線——請重新接上，或在語音設定換一支麥克風",
       "backend": "後端沒有回應",
       "start-sidecar-missing": "此版本未安裝語音引擎",
       "start-model-missing": "尚未下載語音模型 — 設定 → 一般 → 語音輸入",
@@ -7342,6 +7350,8 @@
     "close-group": "關閉群組",
     "close-group-title": "移除這個群組，裡面的 CLI 視窗會移到其他群組",
     "close-group-and-panes": "關閉群組與 CLI 視窗",
+    "close-running-confirm-body": "此群組有 {count} 個 CLI 正在執行——關閉會中斷進行中的回合。仍要關閉嗎？",
+    "close-running-confirm-confirm": "關閉",
     "remove-panes": "移除此群組的 CLI（{count}）",
     "move-to-group": "移到其他分組",
     "close-all-panes": "關閉所有 pane"

@@ -68,6 +68,12 @@ export interface VoiceCapsuleState {
   capEndsAt: number
   /** Input level 0..1 of the latest chunk, while recording. */
   level: number
+  /** The chosen microphone was gone and the system default is recording. */
+  deviceFallback: boolean
+  /** A hands-free take hit its cap: the transcript waits in `countdown` with
+   *  no timer until the user sends it (the shortcut or the capsule's send
+   *  button) or drops it (the capsule's discard button). */
+  awaitingSend: boolean
   /** i18n key under `voice.error.` (or a messaging reason), while phase === 'error'. */
   error: { key: string; params?: Record<string, string | number>; reason?: MessageReason } | null
 }
@@ -81,6 +87,7 @@ export const VOICE_ERROR_CODES = [
   'mic-denied',
   'mic-authorized',
   'mic-failed',
+  'mic-disconnected',
   'mic-silent',
   'backend',
   'no-speech',
@@ -123,7 +130,7 @@ export interface VoiceDeps {
   /** macOS mic consent (granted elsewhere); `prompted` when this call showed
    *  the first-time system dialog. */
   askMicrophone: () => Promise<{ granted: boolean; prompted: boolean }>
-  openCapture: (onChunk: (pcm: Int16Array) => void) => Promise<VoiceCapture>
+  openCapture: (onChunk: (pcm: Int16Array) => void, onEnded: () => void) => Promise<VoiceCapture>
   /** Whether a pane can take a voice message right now. */
   resolveTarget: (paneId: string) => VoiceTarget
   /** Queue `text` for `name` as bare text; returns the log row's id. */
@@ -174,6 +181,8 @@ export function useVoiceInput(deps: VoiceDeps) {
     handsFree: false,
     capEndsAt: 0,
     level: 0,
+    deviceFallback: false,
+    awaitingSend: false,
     error: null,
   })
   const visible = computed(() => state.phase !== 'idle')
@@ -230,6 +239,8 @@ export function useVoiceInput(deps: VoiceDeps) {
     state.handsFree = false
     state.capEndsAt = 0
     state.level = 0
+    state.deviceFallback = false
+    state.awaitingSend = false
     state.error = null
   }
 
@@ -305,6 +316,12 @@ export function useVoiceInput(deps: VoiceDeps) {
     if (!deps.enabled()) return false
     if (state.phase === 'starting' || state.phase === 'recording' || state.phase === 'transcribing') return true
     if (!paneId) return false
+    // A capped hands-free transcript waiting to be sent: this press sends it,
+    // and starts nothing — the user was asked to send, not to record again.
+    if (state.phase === 'countdown' && state.awaitingSend) {
+      deliverNow()
+      return true
+    }
     // A transcript still counting down goes out now rather than being lost to
     // the new take; a held one stays in its queue either way.
     if (state.phase === 'countdown') deliverNow()
@@ -350,7 +367,16 @@ export function useVoiceInput(deps: VoiceDeps) {
 
     let cap: VoiceCapture
     try {
-      cap = await deps.openCapture((pcm) => onChunk(mine, pcm))
+      cap = await deps.openCapture(
+        (pcm) => onChunk(mine, pcm),
+        // Unplugged mid-take: a hands-free take would otherwise sit on
+        // "listening" to nothing until its 5-minute cap.
+        () => {
+          if (mine === take && (state.phase === 'starting' || state.phase === 'recording')) {
+            fail('mic-disconnected')
+          }
+        },
+      )
     } catch (err) {
       if (mine === take) fail('mic-failed', { error: err instanceof Error ? err.message : String(err) })
       return
@@ -360,6 +386,7 @@ export function useVoiceInput(deps: VoiceDeps) {
       return
     }
     capture = cap
+    state.deviceFallback = cap.fellBack === true
     mark('capture')
     recordingSince = now()
     state.phase = 'recording'
@@ -391,7 +418,9 @@ export function useVoiceInput(deps: VoiceDeps) {
       maxTimer = null
       if (mine !== take || state.phase !== 'recording') return
       if (stats && !stats.end) stats.end = 'cap'
-      void finish(mine)
+      // A hands-free take can run for minutes with nobody watching: its
+      // transcript waits to be sent instead of going out on its own.
+      void finish(mine, !state.handsFree)
     }, Math.max(0, state.capEndsAt - now()))
   }
 
@@ -418,7 +447,7 @@ export function useVoiceInput(deps: VoiceDeps) {
     }
   }
 
-  async function finish(mine: number): Promise<void> {
+  async function finish(mine: number, autoSend = true): Promise<void> {
     const cap = capture
     if (mine !== take || state.phase !== 'recording' || !cap) return
     clearTakeTimers()
@@ -457,6 +486,10 @@ export function useVoiceInput(deps: VoiceDeps) {
     logTake('text')
     state.text = text
     state.phase = 'countdown'
+    if (!autoSend) {
+      state.awaitingSend = true
+      return
+    }
     state.countdownEndsAt = now() + COUNTDOWN_MS
     timer = setTimeout(() => {
       if (mine === take && state.phase === 'countdown') deliverNow()
@@ -515,6 +548,9 @@ export function useVoiceInput(deps: VoiceDeps) {
       case 'delivering':
         return true
       case 'countdown':
+        // A capped transcript can wait for minutes, like `held`: Esc stays
+        // the CLI's, and the capsule's own buttons send or discard it.
+        if (state.awaitingSend) return false
         break
       case 'starting':
       case 'recording':
@@ -538,9 +574,19 @@ export function useVoiceInput(deps: VoiceDeps) {
     reset()
   }
 
-  /** The capsule's close button on an error (it also times out on its own). */
+  /** The capsule's close button on an error (it also times out on its own),
+   *  or its discard button on a capped transcript waiting to be sent. */
   function dismiss(): void {
-    if (state.phase === 'error') reset()
+    if (state.phase === 'error') return reset()
+    if (state.phase === 'countdown' && state.awaitingSend) {
+      take++
+      reset()
+    }
+  }
+
+  /** The capsule's send button on a capped transcript. */
+  function send(): void {
+    if (state.phase === 'countdown' && state.awaitingSend) deliverNow()
   }
 
   /** The setting went off (or the window is going away): drop any take. */
@@ -552,7 +598,7 @@ export function useVoiceInput(deps: VoiceDeps) {
     reset()
   }
 
-  return { state, visible, press, lock, release, cancel, withdraw, dismiss, disable }
+  return { state, visible, press, lock, release, cancel, withdraw, dismiss, send, disable }
 }
 
 export type VoiceInput = ReturnType<typeof useVoiceInput>

@@ -13,7 +13,7 @@ import {
 } from '@navide/plugin-ui/shared'
 import { NOTICE_SENDER, type useAgentMessaging } from '../composables/useAgentMessaging'
 import type { useBackend } from '../composables/useBackend'
-import { useVoiceInput, type VoiceDeps, type VoiceTarget } from '../composables/useVoiceInput'
+import { useVoiceInput, voiceErrorI18nKey, type VoiceDeps, type VoiceTarget } from '../composables/useVoiceInput'
 import { speakWithSynthesis, useVoiceReadback } from '../composables/useVoiceReadback'
 import { openMicCapture } from './micCapture'
 import { useVoiceSettings } from './voiceSettings'
@@ -79,6 +79,8 @@ export interface VoiceWiringHost {
   paneInfo: (paneId: string) => { realized: boolean; messagingName?: string } | undefined
   /** Display name for the readback fallback line. */
   paneLabel: (paneId: string) => string
+  /** A non-blocking notice (a toast), for a pre-warm that failed. */
+  hint?: (text: string) => void
 }
 
 /**
@@ -115,7 +117,7 @@ export function setupVoiceInput(host: VoiceWiringHost) {
       const res = await media.askMicrophone()
       return { granted: res.granted, prompted: res.prompted === true }
     },
-    openCapture: (onChunk) => openMicCapture(onChunk, settings.voiceInputDeviceId.value),
+    openCapture: (onChunk, onEnded) => openMicCapture(onChunk, settings.voiceInputDeviceId.value, onEnded),
     resolveTarget: (paneId): VoiceTarget => {
       const pane = host.paneInfo(paneId)
       if (!pane || !pane.messagingName) return { ok: false, reason: 'not-cli' }
@@ -208,6 +210,18 @@ export function setupVoiceInput(host: VoiceWiringHost) {
       if (!live) disarm()
     },
   )
+  // A blur while starting was let through (the mic dialog), but a held take
+  // that reaches recording in a window that is still unfocused lost its keyup
+  // for good: without this it records until the cap and then sends.
+  watch(
+    () => voice.state.phase,
+    (phase, prev) => {
+      if (phase !== 'recording' || prev !== 'starting' || !armed || voice.state.handsFree) return
+      if (document.hasFocus()) return
+      disarm()
+      voice.release('blur')
+    },
+  )
 
   // ── Esc during a take ───────────────────────────────────────────────────────
   // Listened for only in the short-lived phases (see useVoiceInput.cancel). A
@@ -222,7 +236,7 @@ export function setupVoiceInput(host: VoiceWiringHost) {
   }
   const ESC_PHASES = new Set(['starting', 'recording', 'transcribing', 'countdown', 'delivering'])
   watch(
-    () => ESC_PHASES.has(voice.state.phase),
+    () => ESC_PHASES.has(voice.state.phase) && !voice.state.awaitingSend,
     (owned) => {
       if (owned) window.addEventListener('keydown', onEsc, true)
       else window.removeEventListener('keydown', onEsc, true)
@@ -235,9 +249,25 @@ export function setupVoiceInput(host: VoiceWiringHost) {
   // switched on, and when the window regains focus (the sidecar exits after
   // ten idle minutes). Switching the setting off stops it.
   let lastPrewarm = 0
+  // Said once per reason: focus re-runs the pre-warm every minute, and the
+  // same failure every minute would be noise. A success clears it.
+  let hinted = ''
+  function prewarmFailed(code: string): void {
+    if (code === hinted || !settings.voiceInputEnabled.value) return
+    hinted = code
+    host.hint?.(i18n.global.t('voice.prewarm-failed', { reason: i18n.global.t(voiceErrorI18nKey(code), { code }) }))
+  }
   function prewarm(): void {
     lastPrewarm = Date.now()
-    void host.backend.send('voice.prewarm', {}, PREWARM_TIMEOUT_MS).catch(() => {})
+    host.backend.send('voice.prewarm', {}, PREWARM_TIMEOUT_MS).then(
+      (res) => {
+        const body = res.payload as { ok?: boolean; reason?: string } | null
+        if (res.ok && body?.ok) hinted = ''
+        // Switched off while it loaded: not a failure.
+        else if (body?.reason !== 'disabled') prewarmFailed(`start-${body?.reason ?? 'failed'}`)
+      },
+      () => prewarmFailed('backend'),
+    )
   }
   function onFocus(): void {
     if (Date.now() - lastPrewarm >= PREWARM_FOCUS_INTERVAL_MS) prewarm()
@@ -271,6 +301,7 @@ export function setupVoiceInput(host: VoiceWiringHost) {
     state: voice.state,
     withdraw: voice.withdraw,
     dismiss: voice.dismiss,
+    send: voice.send,
     /** Feed every turn_complete here; only voice-driven panes are read out. */
     onTurnComplete: readback.onTurnComplete,
   }

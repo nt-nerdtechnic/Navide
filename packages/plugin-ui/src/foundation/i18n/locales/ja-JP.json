@@ -67,6 +67,8 @@
     "analyze": "CLI で分析",
     "analyze-hint": "新しい {vendor} ペインを開き、読み取り専用で調査して保護策を提案します。変更を加える前に必ず確認を求めます。",
     "analyze-failed": "分析用の CLI ペインを起動できませんでした。もう一度お試しください。",
+    "analyze-inject-failed": "分析用ペインは開きましたが、タスクを入力できませんでした。そのペインにタスクを貼り付けるか、閉じてからもう一度お試しください。",
+    "analyze-failed-detail": "分析用の CLI ペインを起動できませんでした（{detail}）。もう一度お試しください。",
     "shared-cdn-field": "共有 CDN",
     "shared-cdn": "{label}（共有 CDN のためサイトを特定できません）",
     "ranges-title": "共有 CDN のアドレス範囲",
@@ -116,6 +118,7 @@
     "resize-failed": "AI CLI セッションのサイズを変更できません"
   },
   "voice": {
+  "prewarm-failed": "音声入力の準備ができていません：{reason}",
     "capsule": {
       "starting": "マイクを準備中…",
       "recording": "録音中 — 離すと送信",
@@ -126,7 +129,11 @@
       "dismiss": "閉じる",
       "transcribing": "文字起こし中…",
       "delivering": "送信中…",
-      "held": "待機中：{reason}"
+      "held": "待機中：{reason}",
+      "device-fallback": "選択したマイクが見つからないため、システムの既定のマイクを使用しています",
+      "cap-reached": "時間の上限に達しました — 送信しますか？",
+      "send": "送信",
+      "discard": "破棄"
     },
     "error": {
       "generic": "音声入力に失敗しました（{code}）",
@@ -134,6 +141,7 @@
       "not-cli": "音声入力は CLI ペインにのみ送れます",
       "mic-denied": "マイクへのアクセスが拒否されました。システム設定 → プライバシーとセキュリティ → マイク で Navide を許可してください",
       "mic-failed": "マイクを開けませんでした：{error}",
+      "mic-disconnected": "マイクが切断されました — 接続し直すか、音声設定で別のマイクを選んでください",
       "backend": "バックエンドが応答しません",
       "start-sidecar-missing": "このビルドには音声エンジンが含まれていません",
       "start-model-missing": "音声モデルが未ダウンロードです — 設定 → 一般 → 音声入力",
@@ -7342,6 +7350,8 @@
     "close-group": "グループを閉じる",
     "close-group-title": "このグループを削除し、ペインは別のグループへ移動します",
     "close-group-and-panes": "グループとそのペインを閉じる",
+    "close-running-confirm-body": "このグループの {count} 個の CLI が実行中です — 閉じると進行中のターンが停止します。閉じますか？",
+    "close-running-confirm-confirm": "閉じる",
     "remove-panes": "このグループの CLI を削除 ({count})",
     "move-to-group": "別のグループに移動",
     "close-all-panes": "すべてのペインを閉じる"

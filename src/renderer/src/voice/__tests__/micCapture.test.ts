@@ -91,4 +91,24 @@ describe('openMicCapture device choice', () => {
     await expect(openMicCapture(() => {})).rejects.toThrow('NotFoundError')
     expect(getUserMedia).toHaveBeenCalledTimes(1)
   })
+
+  it('reports the device going away, but not its own close', async () => {
+    const track: { stop: () => void; onended: (() => void) | null } = { stop, onended: null }
+    getUserMedia.mockResolvedValue({ getTracks: () => [track] })
+    const onEnded = vi.fn()
+    const cap = await openMicCapture(() => {}, '', onEnded)
+    track.onended?.()
+    expect(onEnded).toHaveBeenCalledTimes(1)
+    cap.close()
+    track.onended?.()
+    expect(onEnded).toHaveBeenCalledTimes(1)
+  })
+
+  it('flags a capture that fell back to the system default', async () => {
+    const chosen = await openMicCapture(() => {}, 'mic-1')
+    expect(chosen.fellBack).toBe(false)
+    getUserMedia.mockRejectedValueOnce(domError('NotFoundError'))
+    const fallback = await openMicCapture(() => {}, 'mic-1')
+    expect(fallback.fellBack).toBe(true)
+  })
 })

@@ -6,6 +6,8 @@ export interface VoiceCapture {
   flush(): Promise<void>
   /** Release the mic and the audio graph. Idempotent. */
   close(): void
+  /** The chosen device was gone, so the system default is recording. */
+  fellBack?: boolean
 }
 
 const FLUSH_TIMEOUT_MS = 500
@@ -39,14 +41,21 @@ function requestStream(deviceId: string): Promise<MediaStream> {
  * from another origin) falls back to the system default once; a denied
  * permission is never retried.
  */
-export async function openMicCapture(onChunk: (pcm: Int16Array) => void, deviceId = ''): Promise<VoiceCapture> {
+export async function openMicCapture(
+  onChunk: (pcm: Int16Array) => void,
+  deviceId = '',
+  /** The device went away mid-capture (unplugged, Bluetooth dropped). */
+  onEnded?: () => void,
+): Promise<VoiceCapture> {
   let stream: MediaStream
+  let fellBack = false
   try {
     stream = await requestStream(deviceId)
   } catch (err) {
     const name = (err as { name?: string } | null)?.name
     if (!deviceId || (name !== 'OverconstrainedError' && name !== 'NotFoundError')) throw err
     stream = await requestStream('')
+    fellBack = true
   }
   let ctx: AudioContext | null = null
   try {
@@ -70,7 +79,11 @@ export async function openMicCapture(onChunk: (pcm: Int16Array) => void, deviceI
 
     let closed = false
     const audioCtx = ctx
+    // track.stop() in close() does not fire 'ended', so this only ever hears
+    // the device itself going away.
+    for (const t of stream.getTracks()) t.onended = () => { if (!closed) onEnded?.() }
     return {
+      fellBack,
       flush: () =>
         new Promise<void>((resolve) => {
           if (closed) return resolve()

@@ -256,6 +256,21 @@ describe('CliRiskPill', () => {
       expect(request.task).not.toContain(signals[0].id)
     })
 
+    it('reopens the dialog to show a failure that lands after it was closed', async () => {
+      let finish!: (value: unknown) => void
+      spawn.mockImplementation(() => new Promise((resolve) => { finish = resolve }))
+      render(riskState(), { spawn, workspacePath: '/work/project', agentKey: 'codex' })
+      actionButton(await open(), 'Analyze all with CLI').click()
+      await nextTick()
+      document.querySelector<HTMLElement>('.cli-risk-pop')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      await flushPromises()
+      expect(document.querySelector('.cli-risk-pop')).toBeNull()
+      finish({ ok: false, error: 'ui.pane.create failed to inject task into pane "p9"' })
+      await flushPromises()
+      expect(document.querySelector('.cli-risk-pop [role="alert"]')?.textContent)
+        .toBe('The analysis pane opened, but its task could not be typed in. Paste the task into that pane, or close it and try again.')
+    })
+
     it('disables analysis while the spawn is in flight and surfaces a failure', async () => {
       let finish!: (value: unknown) => void
       spawn.mockImplementation(() => new Promise((resolve) => { finish = resolve }))
@@ -274,13 +289,14 @@ describe('CliRiskPill', () => {
       expect(actionButton(pop, 'Analyze all with CLI').disabled).toBe(false)
     })
 
-    it('reports the spawner error message', async () => {
+    it('reports the spawner error inside a localized sentence', async () => {
       spawn.mockResolvedValue({ ok: false, error: 'ui.pane.create requires an agent and an open workspace' })
       render(riskState(), { spawn, workspacePath: '/work/project', agentKey: 'codex' })
       const pop = await open()
       actionButton(pop, 'Analyze with CLI').click()
       await flushPromises()
-      expect(pop.querySelector('[role="alert"]')?.textContent).toBe('ui.pane.create requires an agent and an open workspace')
+      expect(pop.querySelector('[role="alert"]')?.textContent)
+        .toBe('Could not start the analysis CLI pane (ui.pane.create requires an agent and an open workspace). Try again.')
     })
   })
 })

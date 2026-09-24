@@ -67,6 +67,8 @@
     "analyze": "Analyze with CLI",
     "analyze-hint": "Opens a new {vendor} pane that investigates read-only and proposes protective measures; it asks before changing anything.",
     "analyze-failed": "Could not start the analysis CLI pane. Try again.",
+    "analyze-inject-failed": "The analysis pane opened, but its task could not be typed in. Paste the task into that pane, or close it and try again.",
+    "analyze-failed-detail": "Could not start the analysis CLI pane ({detail}). Try again.",
     "shared-cdn-field": "Shared CDN",
     "shared-cdn": "{label} (shared CDN; the site cannot be identified)",
     "ranges-title": "Shared CDN address ranges",
@@ -116,6 +118,7 @@
     "resize-failed": "Unable to resize the AI CLI session"
   },
   "voice": {
+  "prewarm-failed": "Voice input is not ready: {reason}",
     "capsule": {
       "starting": "Preparing microphone…",
       "recording": "Listening — release to send",
@@ -126,7 +129,11 @@
       "dismiss": "Dismiss",
       "transcribing": "Transcribing…",
       "delivering": "Sending…",
-      "held": "Waiting: {reason}"
+      "held": "Waiting: {reason}",
+      "device-fallback": "Chosen microphone unavailable — using the system default",
+      "cap-reached": "Time limit reached — send it?",
+      "send": "Send",
+      "discard": "Discard"
     },
     "error": {
       "generic": "Voice input failed ({code})",
@@ -134,6 +141,7 @@
       "not-cli": "Voice input only goes to CLI panes",
       "mic-denied": "Microphone access denied — allow Navide in System Settings → Privacy & Security → Microphone",
       "mic-failed": "Could not open the microphone: {error}",
+      "mic-disconnected": "The microphone was disconnected — reconnect it or choose another one in the voice settings",
       "backend": "The backend is not responding",
       "start-sidecar-missing": "The speech engine is not installed in this build",
       "start-model-missing": "Speech model not downloaded — Settings → General → Voice input",
@@ -7342,6 +7350,8 @@
     "close-group": "Close group",
     "close-group-title": "Remove this group; its panes move to another group",
     "close-group-and-panes": "Close group and its panes",
+    "close-running-confirm-body": "{count} CLI(s) in this group are running — closing will stop their in-progress turns. Close anyway?",
+    "close-running-confirm-confirm": "Close",
     "remove-panes": "Remove this group's CLIs ({count})",
     "move-to-group": "Move to another group",
     "close-all-panes": "Close all panes"

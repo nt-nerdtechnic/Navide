@@ -28,6 +28,7 @@ interface Harness {
   rows: Record<number, DeliveredMessageView>
   cancelled: number[]
   onChunk: ((pcm: Int16Array) => void) | null
+  onEnded: (() => void) | null
   captureClosed: number
   enabled: boolean
   stopText: string
@@ -44,6 +45,7 @@ function harness(): Harness {
     rows: reactive({}) as Record<number, DeliveredMessageView>,
     cancelled: [],
     onChunk: null,
+    onEnded: null,
     captureClosed: 0,
     enabled: true,
     stopText: '幫我跑測試',
@@ -65,8 +67,9 @@ function harness(): Harness {
       return { ok: true, payload: { ok: true } as never }
     },
     askMicrophone: async () => ({ granted: true, prompted: false }),
-    openCapture: async (onChunk) => {
+    openCapture: async (onChunk, onEnded) => {
       h.onChunk = onChunk
+      h.onEnded = onEnded
       return {
         flush: async () => { onChunk(Int16Array.from([7, 8])) },
         close: () => { h.captureClosed++ },
@@ -145,6 +148,19 @@ describe('useVoiceInput — capsule state machine', () => {
     expect(v.state.phase).toBe('idle')
     expect(v.visible.value).toBe(false)
     expect(h.noted).toEqual(['p1'])
+  })
+
+  it('a microphone unplugged mid-take ends it with an error, not a silent listen', async () => {
+    const h = harness()
+    const v = useVoiceInput(h.deps)
+    v.press('p1', { handsFree: true })
+    await settle()
+    expect(v.state.phase).toBe('recording')
+    h.onEnded?.()
+    expect(v.state.phase).toBe('error')
+    expect(v.state.error?.key).toBe('mic-disconnected')
+    expect(h.captureClosed).toBe(1)
+    expect(h.requests.at(-1)).toEqual({ type: 'voice.cancel', payload: { sessionId: 's1' } })
   })
 
   it('Esc during the countdown drops the transcript', async () => {
@@ -534,6 +550,71 @@ describe('useVoiceInput — capture during start-up, endings and diagnostics', (
     await settle()
     expect(v.state.phase).toBe('countdown')
     expect(h.logs.at(-1)).toContain('end=cap')
+  })
+
+  it('a capped hands-free transcript waits to be sent; the next press sends it and records nothing', async () => {
+    const h = harness()
+    const v = useVoiceInput(h.deps)
+    v.press('p1', { handsFree: true })
+    await settle()
+    vi.advanceTimersByTime(HANDS_FREE_MAX_MS)
+    await settle()
+    expect(v.state.phase).toBe('countdown')
+    expect(v.state.awaitingSend).toBe(true)
+    vi.advanceTimersByTime(COUNTDOWN_MS * 10)
+    await settle()
+    expect(h.delivered).toEqual([])
+    // Esc stays the CLI's while it waits.
+    expect(v.cancel()).toBe(false)
+    const starts = types(h).filter((t) => t === 'voice.start').length
+    expect(v.press('p1')).toBe(true)
+    expect(h.delivered).toEqual([{ name: 'claude-1', text: '幫我跑測試' }])
+    expect(v.state.phase).toBe('delivering')
+    await settle()
+    expect(types(h).filter((t) => t === 'voice.start')).toHaveLength(starts)
+  })
+
+  it('the capsule sends or discards a capped transcript', async () => {
+    const h = harness()
+    const v = useVoiceInput(h.deps)
+    v.press('p1', { handsFree: true })
+    await settle()
+    vi.advanceTimersByTime(HANDS_FREE_MAX_MS)
+    await settle()
+    v.dismiss()
+    expect(v.state.phase).toBe('idle')
+    expect(h.delivered).toEqual([])
+    v.press('p1', { handsFree: true })
+    await settle()
+    vi.advanceTimersByTime(HANDS_FREE_MAX_MS)
+    await settle()
+    v.send()
+    expect(h.delivered).toEqual([{ name: 'claude-1', text: '幫我跑測試' }])
+  })
+
+  it('a held take at its 60 s cap still sends after the countdown', async () => {
+    const h = harness()
+    const v = useVoiceInput(h.deps)
+    v.press('p1')
+    await settle()
+    vi.advanceTimersByTime(MAX_RECORDING_MS)
+    await settle()
+    expect(v.state.awaitingSend).toBe(false)
+    vi.advanceTimersByTime(COUNTDOWN_MS)
+    await settle()
+    expect(h.delivered).toEqual([{ name: 'claude-1', text: '幫我跑測試' }])
+  })
+
+  it('says so while the system default stands in for a missing chosen microphone', async () => {
+    const h = harness()
+    h.deps.openCapture = async () => ({ flush: async () => {}, close: () => {}, fellBack: true })
+    const v = useVoiceInput(h.deps)
+    v.press('p1')
+    await settle()
+    expect(v.state.phase).toBe('recording')
+    expect(v.state.deviceFallback).toBe(true)
+    v.cancel()
+    expect(v.state.deviceFallback).toBe(false)
   })
 
   it('logs one line per take with timings, end reason, audio length and peak', async () => {
