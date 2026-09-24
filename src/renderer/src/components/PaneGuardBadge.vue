@@ -10,6 +10,8 @@ import { guardKey, type GuardStore } from '../composables/useGuard'
  */
 const props = defineProps<{
   paneId: string
+  /** Icon only, like CliRiskPill when the header is crowded. */
+  compact?: boolean
   /** Test seam; the app provides the store through `guardKey`. */
   store?: GuardStore
 }>()
@@ -104,13 +106,14 @@ async function clear(): Promise<void> {
       ref="btnRef"
       type="button"
       class="pgd-badge"
+      :class="{ compact }"
       data-testid="guard-taint-badge"
       :title="why"
       :aria-expanded="open"
       @click.stop="toggle"
       @mousedown.stop
       @dblclick.stop
-    ><svg class="pgd-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.8 13 3.6v4c0 3.1-2.1 5.4-5 6.6-2.9-1.2-5-3.5-5-6.6v-4Z" /><path d="M8 5.2v3.2M8 10.6v0.01" /></svg>{{ t('guard.pane.badge') }}</button>
+    ><svg class="pgd-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.8 13 3.6v4c0 3.1-2.1 5.4-5 6.6-2.9-1.2-5-3.5-5-6.6v-4Z" /><path d="M8 5.2v3.2M8 10.6v0.01" /></svg><span class="pgd-label">{{ t('guard.pane.badge') }}</span></button>
     <Teleport to="body">
       <div
         v-if="open"
@@ -138,9 +141,15 @@ async function clear(): Promise<void> {
 
 <style scoped>
 .pane-guard { display: inline-flex; align-items: center; flex-shrink: 0; }
-/* Same height and type as the header's status badge and channel chip. */
-.pgd-badge { display: inline-flex; align-items: center; gap: 3px; font: inherit; font-size: var(--font-3xs); line-height: 1.4; color: var(--attention-fg); background: var(--attention-subtle); border: 1px solid var(--attention-muted); border-radius: 999px; padding: 1px 7px 1px 5px; cursor: pointer; white-space: nowrap; }
+/* Sits in CliRiskPill's slot, so it takes the same shape and collapses by the same rules. */
+.pgd-badge { display: inline-flex; align-items: center; gap: 3px; font: inherit; font-size: var(--font-3xs); font-weight: 600; color: var(--attention-fg); background: var(--attention-subtle); border: 1px solid var(--attention-muted); border-radius: var(--radius-xs); padding: 1px 6px; cursor: pointer; white-space: nowrap; }
 .pgd-badge:hover { border-color: var(--attention-fg); }
+.pgd-badge.compact { padding: 1px 2px; }
+.compact .pgd-label { display: none; }
+@container cli-pane-header (max-width: 620px) {
+  .pgd-badge { padding: 1px 2px; }
+  .pgd-label { display: none; }
+}
 .pgd-icon { width: 11px; height: 11px; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 .pgd-pop { position: fixed; z-index: 300; box-sizing: border-box; width: 300px; max-width: calc(100vw - 16px); display: flex; flex-direction: column; gap: 6px; background: var(--bg-overlay); border: 1px solid var(--border-default); border-radius: 8px; padding: 10px 12px; box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45); font-size: var(--font-2xs); color: var(--text-secondary); }
 .pgd-pop-head { font-weight: 600; color: var(--text-bright); }

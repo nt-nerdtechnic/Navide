@@ -690,6 +690,7 @@ onMounted(() => {
           :workspace-path="workspacePath"
           :spawn="spawnCliRiskAnalysis"
         />
+        <PaneGuardBadge :pane-id="paneId" :compact="loginExpired && usageLimitHit" />
         <span
           class="status"
           :data-status="displayStatus"
@@ -697,7 +698,6 @@ onMounted(() => {
           :title="statusTooltipKey ? $t(statusTooltipKey) : ''"
         >{{ statusBadgeText }}</span>
         <UsageBadge v-if="agentKey" :agent-key="agentKey" :cli-profiles="cliProfiles" />
-        <PaneGuardBadge :pane-id="paneId" />
         <PaneChannelButton :pane-id="paneId" :pane-name="title" :agent-key="agentKey" />
       </div>
       <div v-if="subtitle" class="header-sub">{{ subtitle }}</div>
