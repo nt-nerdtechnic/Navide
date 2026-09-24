@@ -8248,6 +8248,8 @@
       "target_gone": "目標 pane 已不存在",
       "missed": "略過：錯過時段",
       "interrupted": "略過：執行中斷",
+      "budget_global": "略過：agent 每日總量已滿",
+      "expired": "已過期：agent job 7 天未更新",
       "unknown": "略過"
     },
     "editor": {
@@ -8288,6 +8290,23 @@
       "remove-confirm": "確定刪除這個排程工作？",
       "cancel": "取消",
       "save": "儲存"
+    },
+    "owner": {
+      "agent": "agent · {name}",
+      "external": "外部 agent",
+      "agent-title": "由 agent「{name}」建立；只有它和你可以修改",
+      "gone": "建立者已關閉",
+      "gone-title": "建立這個 job 的 pane 已關閉；agent 現在只能讀取，由你管理",
+      "adopt": "改為我的",
+      "expires-in": "{n} 天後過期",
+      "expires-title": "agent 建立的週期 job 會在最後一次儲存或啟用的 7 天後自動停用",
+      "keep": "保留",
+      "updated-by": "最後由 {name} 修改"
+    },
+    "limit": {
+      "meter": "agent 啟用中 {n}/{max} · 今日執行 {runs}/{runsMax}",
+      "enabled-full": "agent 的啟用中 job 已達上限（{n}/{max}），agent 無法再新增或啟用；你的 job 不受影響",
+      "runs-full": "agent job 今日執行已達上限（{runs}/{max}），其餘時段會略過到明天"
     }
   },
   "turn-stats": {

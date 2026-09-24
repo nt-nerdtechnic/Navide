@@ -8248,6 +8248,8 @@
       "target_gone": "Target pane no longer exists",
       "missed": "Skipped: missed slot",
       "interrupted": "Skipped: interrupted",
+      "budget_global": "Skipped: agents' daily total used up",
+      "expired": "Expired: agent job not renewed in 7 days",
       "unknown": "Skipped"
     },
     "editor": {
@@ -8288,6 +8290,23 @@
       "remove-confirm": "Delete this scheduled job?",
       "cancel": "Cancel",
       "save": "Save"
+    },
+    "owner": {
+      "agent": "agent · {name}",
+      "external": "external agent",
+      "agent-title": "Created by the agent \"{name}\"; only it and you can change it",
+      "gone": "Creator closed",
+      "gone-title": "The pane that created this job is closed; agents can only read it now, and it is yours to manage",
+      "adopt": "Make it mine",
+      "expires-in": "Expires in {n} d",
+      "expires-title": "An agent's periodic job disables itself 7 days after it was last saved or enabled",
+      "keep": "Keep",
+      "updated-by": "Last changed by {name}"
+    },
+    "limit": {
+      "meter": "Agent jobs enabled {n}/{max} · runs today {runs}/{runsMax}",
+      "enabled-full": "Agents have reached the enabled-job limit ({n}/{max}) and cannot add or enable more; your own jobs are not affected",
+      "runs-full": "Agent jobs have used today's runs ({runs}/{max}); their remaining slots are skipped until tomorrow"
     }
   },
   "turn-stats": {

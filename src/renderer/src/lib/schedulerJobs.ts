@@ -36,6 +36,8 @@ export type SkipReason =
   | 'target_gone'
   | 'missed'
   | 'interrupted'
+  | 'budget_global'
+  | 'expired'
 
 export interface JobState {
   next_run_at?: number | null
@@ -49,6 +51,26 @@ export interface JobState {
   last_skip_reason?: SkipReason | string | null
 }
 
+/** Who created a job (`owner`) or last changed it (`updated_by`). A job saved
+ *  before owners were recorded is the user's (`legacy`). On an agent's periodic
+ *  job `expires_at` is when it disables itself; null means the user kept it. */
+export interface JobOwner {
+  kind: 'user' | 'pane' | 'external'
+  pane_id?: string
+  pane_name?: string
+  workspace?: string
+  legacy?: boolean
+  expires_at?: number | null
+}
+
+/** The agent limits `scheduler.list` reports, and how much of them is in use. */
+export interface SchedulerLimits {
+  agent_enabled_total: number
+  agent_enabled: number
+  agent_runs_per_day: number
+  agent_runs_today: number
+}
+
 export interface SchedulerJob {
   id: string
   name: string
@@ -59,11 +81,18 @@ export interface SchedulerJob {
   action: JobAction
   policy?: JobPolicy
   state?: JobState
+  owner?: JobOwner
+  updated_by?: JobOwner | null
+  /** The pane that created it is gone; only the user may change it now. */
+  owner_gone?: boolean
 }
 
 /** What `scheduler.upsert` takes: a new job has no id yet (the backend mints a
  *  uuid4) and the state is backend-owned, so it is never sent. */
-export type JobDraft = Omit<SchedulerJob, 'id' | 'state' | 'created_at' | 'updated_at'> & {
+export type JobDraft = Omit<
+  SchedulerJob,
+  'id' | 'state' | 'created_at' | 'updated_at' | 'owner' | 'updated_by' | 'owner_gone'
+> & {
   id?: string
 }
 

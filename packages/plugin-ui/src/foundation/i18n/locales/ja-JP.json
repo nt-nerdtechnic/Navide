@@ -8248,6 +8248,8 @@
       "target_gone": "対象の pane はもう存在しません",
       "missed": "スキップ：時刻を逃した",
       "interrupted": "スキップ：中断",
+      "budget_global": "スキップ：agent の 1 日の合計に到達",
+      "expired": "期限切れ：agent のジョブが 7 日間更新されていません",
       "unknown": "スキップ"
     },
     "editor": {
@@ -8288,6 +8290,23 @@
       "remove-confirm": "このスケジュールジョブを削除しますか？",
       "cancel": "キャンセル",
       "save": "保存"
+    },
+    "owner": {
+      "agent": "agent · {name}",
+      "external": "外部 agent",
+      "agent-title": "agent「{name}」が作成；変更できるのはその agent とあなただけです",
+      "gone": "作成者は終了済み",
+      "gone-title": "このジョブを作成した pane は閉じられました。agent は読み取りのみで、管理はあなたが行います",
+      "adopt": "自分のものにする",
+      "expires-in": "{n} 日後に期限切れ",
+      "expires-title": "agent が作成した定期ジョブは、最後に保存または有効化してから 7 日後に自動で無効になります",
+      "keep": "保持",
+      "updated-by": "最終変更：{name}"
+    },
+    "limit": {
+      "meter": "agent 有効 {n}/{max} · 本日の実行 {runs}/{runsMax}",
+      "enabled-full": "agent の有効なジョブが上限（{n}/{max}）に達したため、agent は追加や有効化ができません。あなたのジョブには影響しません",
+      "runs-full": "agent のジョブは本日の実行上限（{runs}/{max}）に達しました。残りの時間枠は明日までスキップされます"
     }
   },
   "turn-stats": {

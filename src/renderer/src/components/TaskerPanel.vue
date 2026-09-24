@@ -467,6 +467,9 @@ onUnmounted(() => {
       <span class="tk-stamp">
         {{ scannedAtLabel ? t('executions.last-scan', { time: scannedAtLabel }) : '—' }}
       </span>
+      <span v-if="jobsApi.limitMeter.value" class="tk-meter" data-test="agent-meter">
+        {{ jobsApi.limitMeter.value }}
+      </span>
       <button class="tk-add" data-test="add-job" :title="t('scheduler.editor.title-new')" @click="openEditor(null)">
         {{ t('scheduler.add') }}
       </button>
@@ -492,6 +495,15 @@ onUnmounted(() => {
       </p>
       <p v-if="jobsApi.opError.value" class="tk-hint" data-test="op-error" :title="jobsApi.opError.value">
         <span class="tk-hint-text">{{ jobsApi.opError.value }}</span>
+      </p>
+      <p
+        v-for="notice in jobsApi.limitNotices.value"
+        :key="notice.key"
+        class="tk-hint"
+        :data-test="`agent-limit-${notice.key}`"
+        :title="notice.text"
+      >
+        <span class="tk-hint-text">{{ notice.text }}</span>
       </p>
       <template v-for="kind in (['crontab', 'launchagent'] as const)" :key="kind">
         <p v-if="opError[kind]" class="tk-hint tk-op-error" :data-error-section="kind" :title="opError[kind]">
@@ -810,6 +822,12 @@ onUnmounted(() => {
   color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tk-meter {
+  flex: none;
+  font-size: var(--font-3xs);
+  color: var(--text-secondary);
   white-space: nowrap;
 }
 .tk-add,
