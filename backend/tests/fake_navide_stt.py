@@ -15,6 +15,9 @@ boundary between two segments by that many ms (late if positive, early if
 negative), like whisper's approximate token timestamps; FAKE_STT_DELAY_S sleeps before answering (a
 ``{"op":"cancel","target":id}`` cuts that short, like the real sidecar);
 FAKE_STT_LOG names a file that gets one JSON line per transcribe request.
+FAKE_STT_STARTED names a file that gets the request id once the audio has
+been read and the request is running (before FAKE_STT_DELAY_S), so a test
+can wait for a request to be truly in flight.
 FAKE_STT_VARIANTS=1 hears every character of odd-numbered requests as its
 "Simplified" variant chr(0x5E00 + v % 1000), like whisper switching script
 between runs; a request with ``script`` "hant-tw" converts those back to the
@@ -96,6 +99,7 @@ def main() -> int:
     skew = int(os.environ.get("FAKE_STT_SKEW_MS") or 0)
     variants = os.environ.get("FAKE_STT_VARIANTS") == "1"
     log_path = os.environ.get("FAKE_STT_LOG")
+    started_path = os.environ.get("FAKE_STT_STARTED")
     requests = 0
     # stdin is read on its own thread so a cancel reaches a request that is
     # already "running" (sleeping out its delay).
@@ -133,6 +137,9 @@ def main() -> int:
                 continue
             requests += 1
             started = time.monotonic()
+            if started_path:
+                with open(started_path, "a", encoding="utf-8") as fh:
+                    fh.write(req["id"] + "\n")
             while time.monotonic() - started < delay and req["id"] not in cancelled:
                 time.sleep(0.005)
             was_cancelled = req["id"] in cancelled

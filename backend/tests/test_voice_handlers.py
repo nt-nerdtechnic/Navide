@@ -655,23 +655,28 @@ async def test_stop_cancels_an_in_flight_partial_then_runs_the_tail(
     stream: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("FAKE_STT_DELAY_S", "0.6")
+    # Written by the sidecar once it has read the partial's audio. Stopping any
+    # earlier (the request merely written to its stdin) lets the cancelled
+    # partial's audio be deleted before the sidecar reads it: no partial runs
+    # at all, and there is nothing in flight for stop to cancel.
+    started_path = stream.with_name("started.txt")
+    monkeypatch.setenv("FAKE_STT_STARTED", str(started_path))
     session = _Session()
     sid = (await _send(session, "voice.start", {}))["sessionId"]
     await _speak(session, sid, range(8), pause=0.0)
-    for _ in range(200):
-        if stt_service.get_sidecar()._pending:  # the partial reached the sidecar
-            break
+    deadline = time.monotonic() + 30
+    while not (started_path.exists() and started_path.read_text(encoding="utf-8").strip()):
+        if time.monotonic() > deadline:
+            pytest.fail("no partial started")
         await asyncio.sleep(0.01)
-    else:
-        pytest.fail("no partial started")
-    started = time.monotonic()
     stop = await _send(session, "voice.stop", {"sessionId": sid})
-    elapsed = time.monotonic() - started
     assert stop["ok"] is True and stop["text"] == _text(8)
-    # One tail pass (0.6 s), not the rest of the partial plus the tail.
-    assert elapsed < 1.0, (elapsed, _requests(stream))
     partial, final = _requests(stream)
     assert partial["cancelled"] and not final["cancelled"]
+    # The partial was cut short rather than waited out, then the tail ran.
+    # Timed by the sidecar's own clock, so a loaded machine cannot fail it.
+    assert partial["end"] - partial["start"] < 0.6, partial
+    assert final["start"] >= partial["end"] and final["end"] - final["start"] >= 0.6, final
     await asyncio.sleep(0.1)
     assert _partials(session) == []
 
