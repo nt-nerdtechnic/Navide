@@ -437,12 +437,60 @@ def _target_view(entry: Any, same_workspace: bool) -> dict[str, Any]:
     return view
 
 
+#: How long a read waits for one pane's git snapshot before leaving `git` off
+#: that pane. The computation carries on and fills the cache for the next read.
+_PANE_GIT_WAIT_S = 3.0
+
+
+def _pane_cwd(pane_id: str) -> str:
+    """Where the pane's CLI runs — its live terminal's cwd — or '' when unknown.
+
+    Not the workspace: a pane opened in a linked worktree runs there, and its
+    branch is the worktree's, not the workspace checkout's.
+    """
+    from agent_team_backend import app as _app
+
+    # Read the service only if it exists: get_terminals() would create one, and
+    # a roster read has no business starting the terminal service.
+    service = getattr(_app, "_TERMINALS", None)
+    sessions = list(getattr(service, "_sessions", {}).values())
+    for session in sessions:
+        if getattr(session, "pane_id", "") == pane_id and not getattr(session, "closed", True):
+            return str(getattr(session, "cwd", "") or "")
+    return ""
+
+
+async def pane_git(pane_id: str, workspace_path: str) -> dict[str, Any] | None:
+    """The pane's git snapshot, or None outside a repository or on a slow read."""
+    from agent_team_backend import git_service
+
+    path = _pane_cwd(pane_id) or workspace_path
+    try:
+        snapshot = await asyncio.wait_for(
+            git_service.pane_git_snapshots.get(path), _PANE_GIT_WAIT_S
+        )
+    except Exception:  # noqa: BLE001 - timeout included: a decoration, never a failure
+        return None
+    return snapshot if snapshot.get("worktreeRoot") else None
+
+
+async def _with_git(views: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Add `git` to each local target view that has one, in place."""
+    snapshots = await asyncio.gather(
+        *(pane_git(view["pane_id"], view["workspace_path"]) for view in views)
+    )
+    for view, snapshot in zip(views, snapshots):
+        if snapshot is not None:
+            view["git"] = snapshot
+    return views
+
+
 @server.tool()
 async def cli_list_targets(ctx: Context) -> dict[str, Any]:
     """List the CLI panes you can send instructions to with cli_send.
 
     Returns {you, targets}. Each target: {name, address, pane_id,
-    workspace_path, same_workspace, busy, offline}. Address a pane in YOUR
+    workspace_path, same_workspace, busy, offline, git?}. Address a pane in YOUR
     workspace by its bare name; a pane in another workspace window by the
     `<folder>/<pane>` address given here. A caller with no pane identity (host
     / external credential) has no "own workspace" — every target comes back
@@ -468,6 +516,20 @@ async def cli_list_targets(ctx: Context) -> dict[str, Any]:
 
     `offline` marks a pane whose Navide window has lost its connection: it still
     exists and is expected back, but sending to it fails until it returns.
+
+    `git` appears on a local target whose pane works inside a git checkout:
+    {branch, worktreeRoot, isLinkedWorktree, dirty, ahead, behind, fetchedAt}.
+    It describes the checkout the pane's CLI runs in (its terminal's cwd, so a
+    pane in a linked worktree reports that worktree), not the workspace folder.
+    `branch` is the short sha when HEAD is detached; `dirty` is the number of
+    `git status --porcelain` lines; `ahead` / `behind` count commits against
+    `origin/main` (null when there is no origin/main); `fetchedAt` is when
+    FETCH_HEAD was last written (ISO-8601 UTC, null when never fetched) —
+    nothing here fetches, so ahead/behind are only as fresh as that. The
+    snapshot is cached per worktree for up to ~30 s and refreshed early when
+    Navide's git watcher sees a change, so a just-made edit can take that long
+    to count. Absent outside a repository, or when git did not answer in
+    time; remote targets never carry it.
 
     `hold_reason` appears on a target that has a cli_send message still waiting
     to go in, and names what is holding it ("typing", "mid-turn", "starting",
@@ -525,6 +587,7 @@ async def cli_list_targets(ctx: Context) -> dict[str, Any]:
     else:
         targets = [_target_view(entry, False) for entry in agent_messaging.list_panes()]
         result = {"you": caller.kind, "targets": targets}
+    await _with_git(targets)
     # Absent, not empty, when there is nothing to say: a machine with no server
     # configured has an empty roster and must see byte-for-byte the answer it
     # saw before cross-device addressing existed.
@@ -3250,7 +3313,7 @@ async def cli_get_status(target: str, ctx: Context, pane_id: str = "") -> dict[s
 
     `target` uses the same addressing as cli_send, and `pane_id` names one
     exact pane instead. Returns {ok, name,
-    agent_key, busy, last_activity?, usage?, ui?}. `last_activity`, when known,
+    agent_key, busy, last_activity?, usage?, git?, ui?}. `last_activity`, when known,
     is {type: "agent_active"|"turn_complete", text? (turn_complete only),
     age_seconds}. `ui`, when the owning Navide window answers in time, is
     {status, buffer, logPath?, awaitingKind?, kickoff?, agentLabel?, model?,
@@ -3282,6 +3345,11 @@ async def cli_get_status(target: str, ctx: Context, pane_id: str = "") -> dict[s
     comes from. For claude it is the ACTIVE account's snapshot, which is the
     login every claude pane actually runs on (see `profileId` above). Absent
     when Navide has no snapshot for that vendor at all.
+
+    `git` is the pane's checkout, in the shape and with the caveats
+    cli_list_targets gives it: branch, worktree, dirty count and drift against
+    origin/main, cached for up to ~30 s. Absent outside a repository, when git
+    did not answer in time, and for a remote target.
 
     `ui.kickoff` is how this pane's spawn-time task injection ended, and it is
     the authoritative answer to "did cli_open_agent's task actually arrive":
@@ -3344,6 +3412,9 @@ async def cli_get_status(target: str, ctx: Context, pane_id: str = "") -> dict[s
     usage = await _cached_usage_snapshot(pane.agent_key)
     if usage is not None:
         status["usage"] = usage
+    git = await pane_git(pane.pane_id, pane.workspace_path)
+    if git is not None:
+        status["git"] = git
 
     ui_result = await _ui_request(
         pane.workspace_path,

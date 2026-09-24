@@ -663,6 +663,7 @@ async def _broadcast_git_changed(
 
     `paths` is additive — `workspace_path` stays exactly as the existing
     `git.changed` consumers read it."""
+    git_service.pane_git_snapshots.invalidate(ws_path)
     entries = [
         {"rel_path": rel_path, "change": _GIT_EVENT_CHANGES[event_type]}
         for rel_path, event_type in (paths or [])

@@ -18,6 +18,7 @@ import { linkErrorKey } from '../lib/linkStatus'
 import { usePairingState } from '../composables/usePairingState'
 import NavideCloudMark from './NavideCloudMark.vue'
 import { relativeTime } from '../lib/relativeTime'
+import PaneGitChip, { type PaneGit } from './PaneGitChip.vue'
 import type { useBackend } from '../composables/useBackend'
 
 const props = defineProps<{
@@ -130,6 +131,9 @@ interface NetworkPane {
    *  about age. It is a start time and is labelled as one — the roster carries
    *  no last-activity stamp, and printing one would be a claim we cannot make. */
   startedAt?: string
+  /** This machine's own panes only, and only inside a git checkout: the
+   *  backend reads it locally and never uploads it. */
+  git?: PaneGit
 }
 
 interface NetworkDevice {
@@ -2185,6 +2189,7 @@ onUnmounted(() => {
                                carrying the most information, and it was the one
                                being clipped. -->
                           <span class="pane-name" :title="row.pane.title">{{ row.pane.title }}</span>
+                          <PaneGitChip v-if="device.isLocal && row.pane.git" :git="row.pane.git" />
                           <span class="pane-time" :title="startedTitle(row.pane)">
                             {{ startedLabel(row.pane) }}
                           </span>

@@ -6096,6 +6096,11 @@
         "search-placeholder": "搜尋 pane、workspace 或裝置",
         "no-match": "沒有符合的 pane。",
         "started-at": "啟動於 {at}",
+        "git-dirty": "{count} 個未提交",
+        "git-stale": "可能過期",
+        "git-linked": "連結的 worktree",
+        "git-fetched": "上次 fetch：{at}",
+        "git-never-fetched": "從未 fetch，領先/落後可能不準",
         "collapse": "收合",
         "expand": "展開"
       },

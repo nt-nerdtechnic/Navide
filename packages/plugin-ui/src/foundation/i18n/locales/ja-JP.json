@@ -6096,6 +6096,11 @@
         "search-placeholder": "ペイン、ワークスペース、デバイスを検索",
         "no-match": "一致するペインはありません。",
         "started-at": "開始 {at}",
+        "git-dirty": "未コミット {count}",
+        "git-stale": "古い可能性あり",
+        "git-linked": "リンクされた worktree",
+        "git-fetched": "最終 fetch：{at}",
+        "git-never-fetched": "未 fetch — ahead/behind は古い可能性があります",
         "collapse": "折りたたむ",
         "expand": "展開"
       },
