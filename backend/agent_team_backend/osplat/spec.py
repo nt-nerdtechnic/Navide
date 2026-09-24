@@ -701,6 +701,7 @@ class Scripts(Protocol):
         timeout_s: int,
         keep_body: bool = False,
         exit_zero: bool = False,
+        env_header: tuple[str, str] | None = None,
     ) -> str:
         """A one-liner that POSTs the hook's stdin JSON to the running backend.
 
@@ -715,6 +716,11 @@ class Scripts(Protocol):
         decision from; everything else discards it. `exit_zero` ends the line
         with an unconditional success, for a CLI that reads a non-zero exit as
         a hook failure (Copilot) rather than as "nothing to report".
+
+        `env_header` is (header name, environment variable): the header is sent
+        with that variable's value as the hook sees it when it fires, so a
+        value only the CLI's own process tree carries (Navide's per-pane guard
+        token) reaches the backend; unset, the value is empty.
         """
         ...
 

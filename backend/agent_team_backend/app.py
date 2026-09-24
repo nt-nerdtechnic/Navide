@@ -981,6 +981,19 @@ from . import codex_session_hooks  # noqa: E402
 _codex_pending_starts = codex_session_hooks.PendingStarts()
 
 
+def _pane_for_guard_token(token: str) -> str:
+    """The pane whose spawn environment carries this guard token, or ""."""
+    if not token:
+        return ""
+    for terminal_id, owner in list(_PTY_OWNERS.items()):
+        term = owner.terminals.get(terminal_id)
+        if term and not term.closed and secrets.compare_digest(
+            str(term.metadata.get("guard_pane_token") or ""), token
+        ):
+            return str(getattr(term, "pane_id", "") or "")
+    return ""
+
+
 def _live_codex_hook_terms() -> dict[str, Any]:
     live = {}
     for terminal_id, owner in list(_PTY_OWNERS.items()):
@@ -2549,6 +2562,12 @@ async def cli_pretooluse_guard_hook(vendor: str, request: Request) -> Response:
         pane_id, ws_path, _ = attribution.pane_for_session(
             str(payload.get("session_id") or payload.get("sessionId") or "")
         )
+    if not pane_id:
+        # Not attributed yet: the per-pane token from the pane's environment.
+        # A hook fired outside Navide sends none and stays unattributed.
+        pane_id = _pane_for_guard_token(request.headers.get(guard_hooks.PANE_TOKEN_HEADER, ""))
+        pane = agent_messaging.current(pane_id) if pane_id else None
+        ws_path = pane.workspace_path if pane is not None else ws_path
     answer = await guard_hooks.respond(
         vendor, payload, pane_id=pane_id or "", cwd=cwd, workspace=ws_path or cwd
     )

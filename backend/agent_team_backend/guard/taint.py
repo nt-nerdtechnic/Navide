@@ -89,3 +89,49 @@ def list_tainted() -> list[dict]:
         pane_id = _canonical(row["pane_id"])
         rows.setdefault(pane_id, {**row, "pane_id": pane_id})
     return list(rows.values())
+
+
+# ── pipeline runs ────────────────────────────────────────────────────────
+# A pipeline's panes are spawned and handed their kickoffs by the window, so
+# none of it passes a delivery seam. A run started by a tainted caller taints
+# every pane it spawns: pipeline_start arms the workspace before asking the
+# window, the window's pipeline.start adopts the arming for that run (a start
+# nobody armed clears it), and each slot the run records is marked. In memory
+# only: panes already marked stay marked across a restart, respawns after one
+# do not inherit.
+_ARMED_RUNS: dict[str, str] = {}
+_TAINTED_RUNS: dict[str, str] = {}
+
+
+def _ws_key(workspace: str) -> str:
+    from .. import agent_messaging
+
+    return agent_messaging._normalize_workspace(workspace)
+
+
+def arm_pipeline_run(workspace: str, detail: str) -> None:
+    _ARMED_RUNS[_ws_key(workspace)] = detail
+
+
+def disarm_pipeline_run(workspace: str) -> None:
+    _ARMED_RUNS.pop(_ws_key(workspace), None)
+
+
+def pipeline_run_started(workspace: str) -> None:
+    key = _ws_key(workspace)
+    detail = _ARMED_RUNS.pop(key, None)
+    if detail:
+        _TAINTED_RUNS[key] = detail
+    else:
+        _TAINTED_RUNS.pop(key, None)
+
+
+def pipeline_pane_spawned(workspace: str, pane_id: str) -> None:
+    detail = _TAINTED_RUNS.get(_ws_key(workspace))
+    if detail:
+        safe_mark_tainted(pane_id, "agent", detail)
+
+
+def _reset_pipeline_runs_for_test() -> None:
+    _ARMED_RUNS.clear()
+    _TAINTED_RUNS.clear()

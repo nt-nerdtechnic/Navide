@@ -834,20 +834,29 @@ def _refuse_unresumable_session(
 
 
 
+def _inherited_taint(caller: _Caller, verb: str) -> str:
+    """The taint detail a caller passes on to panes it has the window start,
+    or "" when it passes none: a tainted pane or an MCP client does."""
+    from agent_team_backend.guard.taint import is_tainted
+
+    try:
+        inherits = caller.kind == "external" or (caller.kind == "pane" and is_tainted(caller.pane_id))
+    except Exception:  # noqa: BLE001 - marking only adds friction, so fail closed
+        inherits = True
+    return f"{verb} by {caller.pane_id or caller.kind}" if inherits else ""
+
+
 def _taint_spawned(caller: _Caller, pane_id: str) -> None:
     """Navide Guard: a spawned pane's task is typed by the window, not sent
     through _dispatch_delivery, so it would start unmarked. A tainted pane (or
     an MCP client) must not launder its instructions through a fresh pane."""
     if not pane_id:
         return
-    from agent_team_backend.guard.taint import is_tainted, safe_mark_tainted
+    from agent_team_backend.guard.taint import safe_mark_tainted
 
-    try:
-        inherits = caller.kind == "external" or (caller.kind == "pane" and is_tainted(caller.pane_id))
-    except Exception:  # noqa: BLE001 - marking only adds friction, so fail closed
-        inherits = True
-    if inherits:
-        safe_mark_tainted(pane_id, "agent", f"opened by {caller.pane_id or caller.kind}")
+    detail = _inherited_taint(caller, "opened")
+    if detail:
+        safe_mark_tainted(pane_id, "agent", detail)
 
 @server.tool()
 async def cli_open_agent(
@@ -6173,9 +6182,24 @@ async def pipeline_start(
     pipeline_id = str(pipeline_id or "").strip()
     if pipeline_id:
         args["pipelineId"] = pipeline_id
-    return await _ui_request(
-        workspace_path, "invoke", caller=caller, action="ui.pipeline.start", args=args
-    )
+    # Navide Guard: the run's panes are spawned and briefed by the window, so
+    # the caller's taint travels with the run (guard.taint arm/adopt).
+    from agent_team_backend.guard import taint as guard_taint
+
+    detail = _inherited_taint(caller, "pipeline started")
+    if detail:
+        guard_taint.arm_pipeline_run(workspace_path, detail)
+    result: dict[str, Any] = {}
+    try:
+        result = await _ui_request(
+            workspace_path, "invoke", caller=caller, action="ui.pipeline.start", args=args
+        )
+    finally:
+        if detail:
+            # Adopted by the run if it started; a leftover arming must not
+            # taint the next run someone starts at the computer.
+            guard_taint.disarm_pipeline_run(workspace_path)
+    return result
 
 
 @server.tool()

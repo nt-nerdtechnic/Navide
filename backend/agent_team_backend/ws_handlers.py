@@ -6627,7 +6627,7 @@ async def _terminal_create_impl(
     # These are server attestations, never renderer-provided metadata.
     for key in ("quota_transaction_id", "quota_original_pane_id", "credential_epoch",
                 "credential_store_verified", "credential_store_id", "credential_store_error",
-                "credential_launch_term_id"):
+                "credential_launch_term_id", "guard_pane_token"):
         metadata.pop(key, None)
     agent_key = payload.get("agent_key") or ""
     # The window's per-vendor env settings, first in the chain on purpose: the
@@ -6880,6 +6880,16 @@ async def _terminal_create_impl(
                 Path(env.get("CODEX_HOME") or app.codex_home_manager.real_home),
                 app.backend_port_file(), hook_auth.header_file(),
             )
+    from . import guard_hooks
+
+    if agent_key in guard_hooks.PANE_TOKEN_VENDORS:
+        # Navide Guard: names this pane to its PreToolUse hook when the hook's
+        # session id is not attributed yet. Only this pane's processes see it.
+        import secrets
+
+        guard_token = secrets.token_urlsafe(24)
+        metadata["guard_pane_token"] = guard_token
+        env[guard_hooks.PANE_TOKEN_ENV] = guard_token
     # Lines the pane prints at startup when this machine cannot wire it (see
     # wire_command): the only other trace is a backend log the user never sees.
     wiring_warnings: list[str] = []
@@ -8778,6 +8788,9 @@ async def pipeline_start(session: "Session", msg_id: str, msg_type: str, payload
         backend_version=app.__version__,
         pipeline_id=payload.get("pipeline_id", "") or app.stages_store.get_active_pipeline_id(),
     )
+    from .guard.taint import pipeline_run_started
+
+    pipeline_run_started(payload["workspace_path"])
     app._register_workspace_and_backfill(project.workspace_path)
     _mirror_pipeline_state(project)
     # Start a fresh token-stats run for this workspace.
@@ -8808,6 +8821,9 @@ async def pipeline_stage_spawn(session: "Session", msg_id: str, msg_type: str, p
         agent=payload.get("agent", ""),
         role=payload.get("role", ""),
     )
+    from .guard.taint import pipeline_pane_spawned
+
+    pipeline_pane_spawned(payload["workspace_path"], str(payload["pane_id"]))
     await session.send_json(
         make_response(msg_id, msg_type, app._project_payload(project))
     )
@@ -8834,6 +8850,9 @@ async def pipeline_slot_spawn(session: "Session", msg_id: str, msg_type: str, pa
         run_group_id=payload.get("run_group_id", ""),
     )
     app.pane_account_history.pin(str(payload["pane_id"]), _account_pin_for_history(slot_pin))
+    from .guard.taint import pipeline_pane_spawned
+
+    pipeline_pane_spawned(payload["workspace_path"], str(payload["pane_id"]))
     await session.send_json(
         make_response(msg_id, msg_type, app._project_payload(project))
     )

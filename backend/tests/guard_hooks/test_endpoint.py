@@ -229,3 +229,24 @@ def test_real_guard_asks_locally_for_a_critical_command_and_passes_a_normal_one(
     resp = _post(client, "claude", {**CLAUDE_BASH, "cwd": "/tmp/ws",
                                     "tool_input": {"command": "rm -rf node_modules"}})
     assert resp.content == b""
+
+
+def test_unattributed_session_is_named_by_the_pane_token(client, guard, monkeypatch) -> None:
+    import secrets as _secrets
+
+    token = _secrets.token_urlsafe(24)
+    term = types.SimpleNamespace(pane_id="token-pane", closed=False, metadata={"guard_pane_token": token})
+    owner = types.SimpleNamespace(terminals={"t1": term})
+    monkeypatch.setitem(app_module._PTY_OWNERS, "t1", owner)
+    payload = {**CLAUDE_BASH, "session_id": "not-attributed"}
+    _post(client, "claude", payload, **{guard_hooks.PANE_TOKEN_HEADER: token})
+    _post(client, "claude", payload, **{guard_hooks.PANE_TOKEN_HEADER: "wrong"})
+    _post(client, "claude", payload)
+    assert [c["pane_id"] for c in guard.calls] == ["token-pane", "", ""]
+
+
+def test_an_attributed_session_wins_over_the_token(client, guard, monkeypatch) -> None:
+    term = types.SimpleNamespace(pane_id="token-pane", closed=False, metadata={"guard_pane_token": "tok"})
+    monkeypatch.setitem(app_module._PTY_OWNERS, "t1", types.SimpleNamespace(terminals={"t1": term}))
+    _post(client, "claude", {**CLAUDE_BASH, "session_id": "s-1"}, **{guard_hooks.PANE_TOKEN_HEADER: "tok"})
+    assert guard.calls[0]["pane_id"] == "pane-1"

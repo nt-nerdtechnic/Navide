@@ -79,7 +79,7 @@ def _build_guard_command(port_file: str, shell: str) -> str:
     non-zero preToolUse exit DENIES the call, so a backend that is down must
     read as "no decision", not as a refusal of every tool.
     """
-    from . import hook_auth
+    from . import guard_hooks, hook_auth
 
     return osplat.scripts_by_shell[shell].hook_post_json(
         port_file=port_file,
@@ -89,6 +89,7 @@ def _build_guard_command(port_file: str, shell: str) -> str:
         timeout_s=_GUARD_TIMEOUT_S - 1,
         keep_body=True,
         exit_zero=True,
+        env_header=(guard_hooks.PANE_TOKEN_HEADER, guard_hooks.PANE_TOKEN_ENV),
     )
 
 

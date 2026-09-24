@@ -152,7 +152,7 @@ def _build_guard_command(port_file: str, endpoint: str = "claude") -> str:
     it could neither follow the backend to a new port nor send the secret,
     which lives in a 0600 file (see hook_auth). Qwen shares this builder.
     """
-    from . import hook_auth
+    from . import guard_hooks, hook_auth
 
     return f"{_AGENT_TEAM_MARKER} kind=guard\n" + osplat.scripts.hook_post_json(
         port_file=port_file,
@@ -161,6 +161,7 @@ def _build_guard_command(port_file: str, endpoint: str = "claude") -> str:
         event="pre_tool_use",
         timeout_s=_GUARD_CURL_TIMEOUT_S,
         keep_body=True,
+        env_header=(guard_hooks.PANE_TOKEN_HEADER, guard_hooks.PANE_TOKEN_ENV),
     )
 
 

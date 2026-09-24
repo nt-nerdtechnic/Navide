@@ -65,6 +65,15 @@ log = logging.getLogger("agent_team_backend.guard_hooks")
 #: Vendors with a synchronous PreToolUse hook Navide installs.
 VENDORS = frozenset({"claude", "codex", "copilot", "qwen"})
 
+#: A per-pane secret put in each pane's environment at spawn; the claude,
+#: qwen and copilot guard hooks send it back as a header. It names the pane
+#: when the hook's session id is not attributed yet (a fresh session after
+#: /clear, a backend restart). Codex needs none: its launch token already
+#: names the pane. A hook fired outside Navide carries none and is unaffected.
+PANE_TOKEN_ENV = "NAVIDE_GUARD_PANE_TOKEN"
+PANE_TOKEN_HEADER = "X-Navide-Pane-Token"
+PANE_TOKEN_VENDORS = frozenset({"claude", "copilot", "qwen"})
+
 #: Budget for one decision. The hooks give up at 9s (curl) inside a 10s hook
 #: timeout; answering by 5s keeps a slow guard from ever reaching either, which
 #: matters most for copilot, where a hook timeout silently allows.

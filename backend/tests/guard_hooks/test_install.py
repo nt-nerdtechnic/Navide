@@ -179,3 +179,62 @@ def test_claude_guard_hook_without_a_backend_is_no_decision(tmp_path) -> None:
     result = _run_to_completion(argv, '{"tool_name":"Bash"}', timeout=45)
     assert result.returncode == 0
     assert result.stdout == ""
+
+
+@pytest.mark.parametrize("build", [
+    lambda port: osplat.scripts.hook_entry(claude_hooks._build_guard_command(port)),
+    lambda port: osplat.scripts.hook_entry(claude_hooks._build_guard_command(port, endpoint="qwen")),
+    lambda port: {"command": copilot_hooks._build_guard_command(port, "bash")},
+], ids=["claude", "qwen", "copilot-bash"])
+@pytest.mark.parametrize("token", ["pane-token-123", None])
+@pytest.mark.parametrize("curl", [True, False], ids=["curl", "python3"])
+def test_guard_hook_sends_the_pane_token_from_its_environment(tmp_path, monkeypatch, build, token, curl) -> None:
+    from agent_team_backend import guard_hooks
+    from agent_team_backend.osplat import _posix_paths
+
+    if not curl:
+        if osplat.platform_id == "win32":
+            pytest.skip("the python3 spelling is the POSIX fallback")
+        real = _posix_paths.resolve_program
+        monkeypatch.setattr(_posix_paths, "resolve_program", lambda name: None if name == "curl" else real(name))
+    if token is None:
+        monkeypatch.delenv(guard_hooks.PANE_TOKEN_ENV, raising=False)
+    else:
+        monkeypatch.setenv(guard_hooks.PANE_TOKEN_ENV, token)
+    seen: list[str | None] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            self.rfile.read(int(self.headers["Content-Length"]))
+            seen.append(self.headers.get(guard_hooks.PANE_TOKEN_HEADER))
+            self.send_response(200)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *_args) -> None:
+            pass
+
+    port_file = tmp_path / "backend.port"
+    argv = hook_shell.shell_argv(build(str(port_file)))
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    server.timeout = 45
+    thread = threading.Thread(target=server.handle_request)
+    thread.start()
+    port_file.write_text(str(server.server_port), encoding="utf-8")
+    try:
+        result = _run_to_completion(argv, '{"tool_name":"Bash"}', timeout=45)
+    finally:
+        thread.join(timeout=46)
+        server.server_close()
+    assert result.returncode == 0
+    # Unset, the header is absent or empty: the backend reads both as "no token".
+    assert (seen[0] or None) == token
+
+
+def test_powershell_guard_hook_sends_the_pane_token_header() -> None:
+    # Static: this text is executed for real only on a Windows runner.
+    from agent_team_backend import guard_hooks
+
+    command = copilot_hooks._build_guard_command("C:/port", "powershell")
+    assert f"-H ('{guard_hooks.PANE_TOKEN_HEADER}: ' + $env:{guard_hooks.PANE_TOKEN_ENV})" in command
+    assert command.rstrip().endswith("exit 0")
