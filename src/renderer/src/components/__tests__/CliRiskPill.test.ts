@@ -300,3 +300,48 @@ describe('CliRiskPill', () => {
     })
   })
 })
+
+describe('CliRiskPill console', () => {
+  const loopback = () => networkSignal({
+    id: 'loop', ip: '127.0.0.1', port: 56654, connections: 1,
+    lastObservedAt: '2026-09-21T01:30:00Z',
+    local: [{ pid: 4312, name: 'claude', command: 'claude --resume' }],
+    listener: { status: 'resolved', pid: 8812, name: 'node', command: 'node /repo/node_modules/.bin/vite', observedAt: '2026-09-21T01:30:00Z' },
+    history: [
+      { at: '2026-09-21T01:20:00Z', connections: 3, local: [{ pid: 4312, name: 'claude' }], listener: { status: 'unknown' } },
+      { at: '2026-09-21T01:30:00Z', connections: 1, local: [{ pid: 4312, name: 'claude' }], listener: { status: 'resolved', pid: 8812, name: 'node' } },
+    ],
+  })
+
+  it('shows who opened a loopback endpoint and who listens on it', async () => {
+    render(riskState([loopback()]))
+    const pop = await open()
+    const details = pop.querySelector('[data-signal-id="loop"]')!.textContent!
+    expect(details).toContain('Opened by')
+    expect(details).toContain('claude(4312) claude --resume')
+    expect(details).toContain('Listening process')
+    expect(details).toContain('node(8812) node /repo/node_modules/.bin/vite')
+  })
+
+  it('lists one line per observation, newest first, with unknown never shown as none', async () => {
+    render(riskState([loopback(), diskSignal()]))
+    const pop = await open()
+    const console = pop.querySelector('[data-testid="cli-risk-console"]')!
+    expect(console.querySelector('summary')?.textContent).toBe('Observation log')
+    const lines = [...console.querySelectorAll('li')].map((li) => li.textContent!)
+    expect(lines).toHaveLength(3)
+    expect(lines[0]).toContain('claude(4312) → 127.0.0.1:56654  ← node (pid 8812, node /repo/node_modules/.bin/vite)  1 conn.')
+    expect(lines[1]).toContain('claude(4312) → 127.0.0.1:56654  ← listener unknown  3 conn.')
+    expect(lines[2]).toContain('/vendor-data/pending/archive.enc')
+    expect(console.querySelector('time')?.getAttribute('datetime')).toBe('2026-09-21T01:30:00Z')
+  })
+
+  it('falls back to the current observation for a signal without history', async () => {
+    render(riskState([networkSignal()]))
+    const pop = await open()
+    const line = pop.querySelector('[data-testid="cli-risk-console"] li')!.textContent!
+    expect(line).toContain('Unknown → 198.51.100.25:443')
+    expect(line).not.toContain('←')
+    expect(line).toContain('2 conn.')
+  })
+})

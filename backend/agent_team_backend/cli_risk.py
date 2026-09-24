@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 import time
 from collections import Counter
@@ -17,6 +18,12 @@ from .cli_vendors.registry import expected_hosts_for_context, vendor
 log = logging.getLogger(__name__)
 DISK_INTERVAL = 300.0
 LOOPBACK = ("127.0.0.1", "::1")
+MAX_LOCAL = 8  # pane processes kept per endpoint
+
+
+def process_dict(info, pid: int) -> dict:
+    """``name``/``command`` are None when unknown, never an empty string."""
+    return {"pid": pid, "name": getattr(info, "name", None), "command": getattr(info, "command", None)}
 
 
 def discovered_backend_port() -> int | None:
@@ -74,10 +81,13 @@ def active_panes(terminals, owners: dict) -> list[RiskPane]:
 
 class CliRiskService:
     def __init__(self, store: CliRiskStore, *, clock=time.time,
-                 network_collector=None, disk_collector=scan_disk, resolver=None):
+                 network_collector=None, disk_collector=scan_disk, resolver=None,
+                 listener_resolver=None, process_describer=None):
         self.store = store
         self.clock = clock
         self.network_collector = network_collector or osplat.collect_cli_connections
+        self.listener_resolver = listener_resolver or osplat.resolve_loopback_listeners
+        self.process_describer = process_describer or osplat.cli_network.describe_processes
         self.disk_collector = disk_collector
         self.resolver = resolver or ExpectedResolver(clock=clock)
         self.bound_port: int | None = None
@@ -145,25 +155,63 @@ class CliRiskService:
             sample = await self.network_collector(sorted({pid for pane in comparable for pid in pane.pids})) if comparable else None
             internal = await asyncio.to_thread(self._internal_endpoints)
             now = self.clock()
+            observed = {}
             for pane in panes:
                 expected = expected_by_profile.get((pane.vendor, pane.hosts), ExpectedAddresses("unsupported"))
                 status = expected.status
-                endpoints = Counter()
+                connections = []
                 if expected.status == "successful":
                     status = sample.status
                     if expected.observed_at is None or not 0 <= now - expected.observed_at < DNS_TTL:
                         status = "unknown"
                     if status == "successful":
-                        endpoints.update((c.ip, c.port) for c in sample.connections
-                                         if c.pid in pane.pids and c.ip not in expected.addresses
-                                         and (c.ip, c.port) not in internal)
+                        connections = [c for c in sample.connections
+                                       if c.pid in pane.pids and c.ip not in expected.addresses
+                                       and (c.ip, c.port) not in internal]
+                observed[pane.pane_id] = (expected, status, connections)
+            details = await self._attribute([c for _, _, found in observed.values() for c in found])
+            for pane in panes:
+                expected, status, connections = observed[pane.pane_id]
+                endpoints = Counter((c.ip, c.port) for c in connections)
                 await self._apply(self.store.apply_network, pane.pane_id, pane.vendor,
-                                  status, endpoints, expected, now)
+                                  status, endpoints, expected, now,
+                                  {key: details(key, connections) for key in endpoints})
         except Exception:  # A failed background observation must not break resource responses.
             log.exception("CLI network observation failed")
             for pane in panes:
                 await self._apply(self.store.apply_network, pane.pane_id, pane.vendor,
                                   "unknown", {}, ExpectedAddresses("unknown"), self.clock())
+
+    async def _attribute(self, connections: list):
+        """Who is on each end, captured now because either process can exit
+        before anyone looks: the pane processes that opened an endpoint and,
+        for a loopback endpoint, the process listening on that port. One
+        listener listing and one process read per poll, however many
+        connections share a port or a pid."""
+        ports = sorted({c.port for c in connections if ipaddress.ip_address(c.ip).is_loopback})
+        listeners = {}
+        if ports:
+            try:
+                listeners = await self.listener_resolver(ports)
+            except Exception:
+                log.exception("CLI loopback listener resolution failed")
+        try:
+            processes = await asyncio.to_thread(self.process_describer, {c.pid for c in connections})
+        except Exception:
+            log.exception("CLI process description failed")
+            processes = {}
+
+        def details(key, pane_connections):
+            ip, port = key
+            pids = sorted({c.pid for c in pane_connections if (c.ip, c.port) == key})
+            result = {"local": [process_dict(processes.get(pid), pid) for pid in pids[:MAX_LOCAL]]}
+            if ipaddress.ip_address(ip).is_loopback:
+                listener = listeners.get(port)
+                result["listener"] = ({"status": "resolved", **process_dict(listener.process, listener.process.pid)}
+                                      if listener is not None and listener.status == "resolved" and listener.process
+                                      else {"status": "unknown"})
+            return result
+        return details
 
     async def _disk(self, panes: list[RiskPane], due: set[str], attempted: float):
         roots = sorted({(pane.vendor, root) for pane in panes if pane.vendor in due for root in pane.roots})

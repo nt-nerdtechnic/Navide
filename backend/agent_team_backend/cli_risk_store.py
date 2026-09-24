@@ -21,6 +21,44 @@ def identity(*parts: str) -> str:
     return hashlib.sha256(json.dumps(parts).encode()).hexdigest()[:32]
 
 
+HISTORY_KEEP = 10  # distinct observations kept per network signal
+
+
+def _brief(process: dict) -> dict:
+    return {key: process[key] for key in ("status", "pid", "name") if key in process}
+
+
+def attribution(old: dict, detail: dict, count: int, now: float) -> dict:
+    """Merge one poll's process attribution into a network signal's data.
+
+    A listener that resolved before and is unknown now keeps the earlier
+    answer and its time: it is what the process was while observed, and the
+    process may simply have exited. ``history`` gets a row only when what was
+    seen changes; otherwise the newest row's time moves forward.
+    """
+    data: dict = {}
+    if "local" in detail:
+        data["local"] = detail["local"]
+    listener = detail.get("listener")
+    if listener is not None:
+        previous = old.get("listener")
+        if listener["status"] != "resolved" and previous and previous.get("status") == "resolved":
+            listener = previous
+        elif listener["status"] == "resolved":
+            listener = {**listener, "observedAt": iso(now)}
+        data["listener"] = listener
+    row = {"at": iso(now), "connections": count, "local": [_brief(p) for p in data.get("local", [])]}
+    if listener is not None:
+        row["listener"] = _brief(listener)
+    history = list(old.get("history", []))
+    if history and {**history[-1], "at": None} == {**row, "at": None}:
+        history[-1] = row
+    else:
+        history = (history + [row])[-HISTORY_KEEP:]
+    data["history"] = history
+    return data
+
+
 class CliRiskStore:
     """Record store, called serially by the service's application lock.
 
@@ -86,7 +124,7 @@ class CliRiskStore:
 
     def apply_network(self, pane: str, vendor: str, status: str,
                       endpoints: dict[tuple[str, int], int], expected: ExpectedAddresses,
-                      now: float):
+                      now: float, details: dict[tuple[str, int], dict] | None = None):
         availability = self._availability("network", pane, status, now)
         changes: dict[str, dict] = {}
         if status == "successful":
@@ -104,6 +142,9 @@ class CliRiskStore:
                     "lastObservedAt": iso(now), "expectedSetObservedAt": iso(expected.observed_at),
                     "stale": False,
                 }
+                if details and (ip, port) in details:
+                    data.update(attribution(old["data"] if old.get("active") else {},
+                                            details[(ip, port)], count, now))
                 # Record-only: a shared-CDN address is kept for the dialog but
                 # never lights the pill on its own.
                 shared = self.ranges.label_for(ip)

@@ -13,6 +13,8 @@ MAX_PIDS = 4096
 MAX_OUTPUT = 4 * 1024 * 1024
 COMMAND_TIMEOUT = 4.0
 CLEANUP_TIMEOUT = 0.5
+MAX_COMMAND = 200  # characters of a command line kept per process
+MAX_DESCRIBED = 256  # processes described per poll
 
 
 @dataclass(frozen=True)
@@ -26,6 +28,64 @@ class Connection:
 class NetworkSample:
     status: str
     connections: tuple[Connection, ...] = ()
+
+
+@dataclass(frozen=True)
+class ProcessInfo:
+    """None means unknown (exited, or not readable by this user), never empty."""
+    pid: int
+    name: str | None = None
+    command: str | None = None
+
+
+@dataclass(frozen=True)
+class Listener:
+    """The process listening on a loopback port: "resolved" or "unknown"."""
+    status: str
+    process: ProcessInfo | None = None
+
+
+def truncate_command(argv: list[str]) -> str | None:
+    text = " ".join(argv).strip()
+    if not text:
+        return None
+    return text if len(text) <= MAX_COMMAND else text[:MAX_COMMAND - 1] + "…"
+
+
+def describe_processes(pids) -> dict[int, ProcessInfo]:
+    """Name and truncated command line per pid, read in-process (no subprocess).
+
+    Blocking; callers run it in a thread. A process that has exited, or whose
+    arguments this user may not read, keeps whatever was readable.
+    """
+    import psutil
+
+    result: dict[int, ProcessInfo] = {}
+    for pid in sorted(set(pids))[:MAX_DESCRIBED]:
+        try:
+            proc = psutil.Process(pid)
+            name = proc.name() or None
+        except (psutil.Error, OSError, ValueError):
+            result[pid] = ProcessInfo(pid)
+            continue
+        try:
+            command = truncate_command(proc.cmdline())
+        except (psutil.Error, OSError):
+            command = None
+        result[pid] = ProcessInfo(pid, name, command)
+    return result
+
+
+def _listening_host(host: str) -> bool:
+    """A listener bound where a loopback client reaches it."""
+    host = host.strip("[]").split("%", 1)[0]
+    if host in ("*", ""):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return ip.is_loopback or ip.is_unspecified
 
 
 def endpoint(value: str) -> tuple[str, int]:
@@ -191,3 +251,70 @@ async def collect_ss(pids: list[int]) -> NetworkSample:
 
 async def unsupported(pids: list[int]) -> NetworkSample:
     return NetworkSample("unsupported")
+
+
+def parse_lsof_listeners(output: str, ports: set[int]) -> dict[int, tuple[int, str]]:
+    """``port -> (pid, short command)`` from ``lsof -sTCP:LISTEN -Fpcn``."""
+    result: dict[int, tuple[int, str]] = {}
+    pid, name = None, ""
+    for line in output.splitlines():
+        if line.startswith("p"):
+            pid, name = int(line[1:]), ""
+        elif line.startswith("c"):
+            name = line[1:]
+        elif line.startswith("n") and pid is not None:
+            host, _, port_text = line[1:].rpartition(":")
+            if port_text.isdigit() and int(port_text) in ports and _listening_host(host):
+                result.setdefault(int(port_text), (pid, name))
+    return result
+
+
+def parse_ss_listeners(output: str, ports: set[int]) -> dict[int, tuple[int, str]]:
+    """``port -> (pid, command)`` from ``ss -tlnp``; rows without ``users:`` are
+    another user's sockets and stay unresolved."""
+    result: dict[int, tuple[int, str]] = {}
+    for line in output.splitlines():
+        fields = line.split()
+        if len(fields) < 4 or fields[0] != "LISTEN":
+            continue
+        host, _, port_text = fields[3].rpartition(":")
+        owner = re.search(r'\("([^"]*)",pid=(\d+)', line)
+        if owner and port_text.isdigit() and int(port_text) in ports and _listening_host(host):
+            result.setdefault(int(port_text), (int(owner[2]), owner[1]))
+    return result
+
+
+async def _listeners(ports: list[int], argv: list[str], parse) -> dict[int, Listener]:
+    """One listing per poll for every port asked about; a failed or partial
+    listing leaves a port "unknown", never "no listener"."""
+    wanted = {port for port in ports if 0 < port <= 65535}
+    unknown = {port: Listener("unknown") for port in wanted}
+    if not wanted:
+        return unknown
+    try:
+        code, output, error = await command(argv)
+        if error.strip() or code not in (0, 1):
+            return unknown
+        found = parse(output, wanted)
+    except (OSError, ValueError, TimeoutError):
+        return unknown
+    described = await asyncio.to_thread(describe_processes, [pid for pid, _ in found.values()])
+    for port, (pid, name) in found.items():
+        info = described.get(pid) or ProcessInfo(pid)
+        # The listener may have exited since the listing: keep the name it had.
+        unknown[port] = Listener("resolved", ProcessInfo(pid, info.name or name or None, info.command))
+    return unknown
+
+
+async def listeners_lsof(ports: list[int]) -> dict[int, Listener]:
+    selection = ",".join(map(str, sorted(set(ports))))
+    return await _listeners(ports, ["lsof", "-nP", f"-iTCP:{selection}", "-sTCP:LISTEN", "-Fpcn"],
+                            parse_lsof_listeners)
+
+
+async def listeners_ss(ports: list[int]) -> dict[int, Listener]:
+    return await _listeners(ports, ["ss", "-tlnp"], parse_ss_listeners)
+
+
+async def listeners_unsupported(ports: list[int]) -> dict[int, Listener]:
+    return {port: Listener("unknown") for port in ports}
