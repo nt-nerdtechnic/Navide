@@ -6101,6 +6101,11 @@
         "search-placeholder": "Search panes, workspaces or devices",
         "no-match": "No pane matches that.",
         "started-at": "Started {at}",
+        "git-dirty": "{count} dirty",
+        "git-stale": "may be stale",
+        "git-linked": "Linked worktree",
+        "git-fetched": "Last fetched {at}",
+        "git-never-fetched": "Never fetched — ahead/behind may be out of date",
         "collapse": "Collapse",
         "expand": "Expand"
       },

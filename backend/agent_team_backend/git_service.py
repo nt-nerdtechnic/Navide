@@ -22,6 +22,7 @@ import unicodedata
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, asdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable
 from urllib.parse import urlparse
@@ -327,6 +328,214 @@ async def get_status(workspace_path: str, include_ignored: bool = False) -> dict
             status.operation_in_progress = "merge"
 
     return asdict(status)
+
+
+# ─── Pane git snapshot ────────────────────────────────────────────────────────
+# What an agent needs to know about the checkout a pane works in, without
+# opening the Git pane: which branch, which worktree, how much is uncommitted,
+# and how far it is from origin/main. Read by cli_list_targets / cli_get_status
+# and by the network view, all of which can ask for dozens of panes at once, so
+# every read goes through `pane_git_snapshots` (one snapshot per worktree root,
+# shared by all the panes in it) rather than spawning git per pane.
+
+#: Short on purpose: a snapshot is a decoration on a roster read, and a slow
+#: repository must cost that read a missing field, not a stall.
+_SNAPSHOT_GIT_TIMEOUT_S = 5.0
+#: Its own small budget rather than `_git_proc_semaphore`: a roster read over
+#: many worktrees must never hold the slots the Git pane's own commands wait on.
+_SNAPSHOT_PROC_LIMIT = 2
+_snapshot_proc_semaphores: dict[asyncio.AbstractEventLoop, asyncio.Semaphore] = {}
+
+
+def _snapshot_proc_semaphore() -> asyncio.Semaphore:
+    loop = asyncio.get_running_loop()
+    sem = _snapshot_proc_semaphores.get(loop)
+    if sem is None:
+        sem = asyncio.Semaphore(_SNAPSHOT_PROC_LIMIT)
+        _snapshot_proc_semaphores[loop] = sem
+    return sem
+
+
+async def _run_snapshot_git(args: list[str], cwd: str) -> tuple[int, str]:
+    async with _snapshot_proc_semaphore():
+        rc, stdout, _ = await run_allowlisted_text(args, cwd, timeout=_SNAPSHOT_GIT_TIMEOUT_S)
+    return rc, stdout
+
+
+def _empty_pane_git_snapshot() -> dict[str, Any]:
+    return {
+        "branch": None,
+        "worktreeRoot": None,
+        "isLinkedWorktree": None,
+        "dirty": None,
+        "ahead": None,
+        "behind": None,
+        "fetchedAt": None,
+    }
+
+
+async def pane_git_snapshot(path: str) -> dict[str, Any]:
+    """Branch, worktree and drift of the checkout containing *path*.
+
+    Returns ``{branch, worktreeRoot, isLinkedWorktree, dirty, ahead, behind,
+    fetchedAt}``. ``branch`` is the short sha when HEAD is detached; ``dirty``
+    counts ``git status --porcelain`` lines; ``ahead`` / ``behind`` are against
+    ``origin/main`` specifically, not the branch's upstream (``get_status``
+    reports that one); ``fetchedAt`` is when FETCH_HEAD was last written, as
+    ISO-8601 UTC — this never fetches, so the drift is only as fresh as that.
+
+    Never raises: a non-repository path, a cloud-synced mount, a missing
+    ``origin/main`` or a git that times out leaves the affected fields None.
+    """
+    snapshot = _empty_pane_git_snapshot()
+    # Same guard as repository discovery: a stat on a stalled cloud mount can
+    # block for minutes, and this runs on roster reads.
+    if not path or _is_cloud_synced_path(Path(path)) or not os.path.isdir(path):
+        return snapshot
+    rc, out = await _run_snapshot_git(
+        [
+            "git", "rev-parse", "--path-format=absolute",
+            "--show-toplevel", "--git-dir", "--git-common-dir",
+        ],
+        path,
+    )
+    lines = out.splitlines()
+    if rc != 0 or len(lines) < 3:
+        return snapshot
+    toplevel, git_dir, common_dir = lines[0], lines[1], lines[2]
+    snapshot["worktreeRoot"] = toplevel
+    snapshot["isLinkedWorktree"] = os.path.realpath(git_dir) != os.path.realpath(common_dir)
+
+    rc, out = await _run_snapshot_git(["git", "branch", "--show-current"], toplevel)
+    branch = out.strip() if rc == 0 else ""
+    if not branch:
+        rc, out = await _run_snapshot_git(["git", "rev-parse", "--short", "HEAD"], toplevel)
+        branch = out.strip() if rc == 0 else ""
+    snapshot["branch"] = branch or None
+
+    # --no-optional-locks: a read-only status must not take index.lock and make
+    # a concurrent commit in that worktree fail.
+    rc, out = await _run_snapshot_git(
+        ["git", "--no-optional-locks", "status", "--porcelain"], toplevel
+    )
+    if rc == 0:
+        snapshot["dirty"] = sum(1 for line in out.splitlines() if line.strip())
+
+    rc, out = await _run_snapshot_git(
+        ["git", "rev-list", "--left-right", "--count", "origin/main...HEAD"], toplevel
+    )
+    counts = out.split()
+    if rc == 0 and len(counts) == 2 and all(c.isdigit() for c in counts):
+        snapshot["behind"], snapshot["ahead"] = int(counts[0]), int(counts[1])
+
+    try:
+        mtime = os.stat(os.path.join(common_dir, "FETCH_HEAD")).st_mtime
+    except OSError:
+        pass
+    else:
+        snapshot["fetchedAt"] = (
+            datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+        )
+    return snapshot
+
+
+def _path_within(path: str, root: str) -> bool:
+    return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
+
+
+class PaneGitSnapshots:
+    """`pane_git_snapshot` behind a per-worktree cache.
+
+    Keyed by worktree root, so every pane in one checkout shares one snapshot
+    however many of them a roster read asks about; the path → root mapping is
+    remembered from the snapshot itself, so a warm read spawns no git at all.
+    An entry is recomputed when it is older than ``ttl_s`` or when the git
+    watcher reports a change under it (``invalidate``), and concurrent reads of
+    one cold root share a single computation.
+    """
+
+    def __init__(
+        self,
+        *,
+        ttl_s: float = 30.0,
+        compute: Callable[[str], Awaitable[dict[str, Any]]] | None = None,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._ttl_s = ttl_s
+        self._compute = compute or pane_git_snapshot
+        self._clock = clock
+        #: path asked about -> worktree root ("" for a path outside any repo)
+        self._root_of: dict[str, str] = {}
+        #: cache key (worktree root, or the path itself when it has none)
+        #: -> (snapshot, computed_at)
+        self._entries: dict[str, tuple[dict[str, Any], float]] = {}
+        self._inflight: dict[str, asyncio.Task[dict[str, Any]]] = {}
+        #: Bumped by every invalidate, so a computation that was already running
+        #: when the change landed is stored as stale instead of as fresh.
+        self._generation = 0
+
+    def _key_for(self, path: str) -> str:
+        return self._root_of.get(path) or path
+
+    def _fresh(self, key: str) -> dict[str, Any] | None:
+        entry = self._entries.get(key)
+        if entry is None or self._clock() - entry[1] >= self._ttl_s:
+            return None
+        return entry[0]
+
+    async def get(self, path: str) -> dict[str, Any]:
+        """The snapshot for *path*; see ``pane_git_snapshot`` for the shape."""
+        key = self._key_for(path)
+        cached = self._fresh(key)
+        if cached is not None:
+            return dict(cached)
+        task = self._inflight.get(key)
+        if task is None:
+            task = asyncio.ensure_future(self._refresh(path, key))
+            self._inflight[key] = task
+        # Shielded so a caller that gives up (a roster read's own timeout) does
+        # not cancel the computation every other reader of this root is sharing.
+        return dict(await asyncio.shield(task))
+
+    async def _refresh(self, path: str, key: str) -> dict[str, Any]:
+        generation = self._generation
+        try:
+            snapshot = await self._compute(path)
+        except Exception as err:  # noqa: BLE001 - a decoration must never break its read
+            log.warning("pane git snapshot failed for %s: %s", path, err)
+            snapshot = _empty_pane_git_snapshot()
+        finally:
+            self._inflight.pop(key, None)
+        root = snapshot.get("worktreeRoot") or ""
+        self._root_of[path] = root
+        computed_at = self._clock() if generation == self._generation else float("-inf")
+        self._entries[root or path] = (snapshot, computed_at)
+        return snapshot
+
+    def invalidate(self, changed_path: str) -> None:
+        """Drop every entry a change under *changed_path* can have touched.
+
+        The watcher reports the workspace it watches, which may be a worktree
+        root, a folder inside one, or a folder holding several repositories.
+        """
+        if not changed_path:
+            return
+        self._generation += 1
+        # git reports worktree roots with symlinks resolved (/var → /private/var
+        # on macOS), while the watcher reports the workspace as it was opened,
+        # so compare both spellings or a change would never reach its entry.
+        changed = {changed_path, os.path.realpath(changed_path)}
+        for key in list(self._entries):
+            if any(_path_within(key, c) or _path_within(c, key) for c in changed):
+                del self._entries[key]
+        # A path that was outside any repository may be inside one now (git init).
+        for path, root in list(self._root_of.items()):
+            if not root and any(_path_within(path, c) for c in changed):
+                del self._root_of[path]
+
+
+#: The process-wide cache every roster read shares.
+pane_git_snapshots = PaneGitSnapshots()
 
 
 #: Path segments that only ever appear inside a cloud-sync provider's mount.

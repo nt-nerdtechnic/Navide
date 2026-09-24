@@ -4751,7 +4751,32 @@ async def p2p_network_snapshot(
     # A link that is down still answers, carrying `state` and the last picture
     # the server sent: "the network you had a moment ago, and the link is
     # offline" is the truth, while an error would read as "you have no network".
+    await _add_local_pane_git(snapshot)
     await session.send_json(make_response(msg_id, msg_type, snapshot))
+
+
+async def _add_local_pane_git(snapshot: dict) -> None:
+    """Give this machine's own pane rows their `git` snapshot, in place.
+
+    Local panes only: another machine's checkout is not readable from here, and
+    nothing about git is uploaded to the server.
+    """
+    from .mcp_server.server import pane_git
+
+    panes = [
+        pane
+        for device in snapshot.get("devices") or []
+        if isinstance(device, dict) and device.get("isLocal")
+        for pane in device.get("panes") or []
+        if isinstance(pane, dict) and pane.get("paneId")
+    ]
+    workspaces = {entry.pane_id: entry.workspace_path for entry in agent_messaging.list_panes()}
+    snapshots = await asyncio.gather(
+        *(pane_git(pane["paneId"], workspaces.get(pane["paneId"], "")) for pane in panes)
+    )
+    for pane, git in zip(panes, snapshots):
+        if git is not None:
+            pane["git"] = git
 
 
 # ── Settings bundle / metadata (settings.*) ─────────────────────────────────
