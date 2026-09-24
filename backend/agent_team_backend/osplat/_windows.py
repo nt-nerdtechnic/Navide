@@ -348,14 +348,21 @@ class WindowsProcessTree:
 
     def snapshot(self) -> dict[int, ProcInfo]:
         rows: dict[int, tuple[int, float | None]] = {}
+        # A fresh Process per pid, not process_iter(): that caches one Process
+        # per pid module-wide, and when Windows recycles a pid between two
+        # snapshots the cached instance notices the reuse mid-read and the
+        # pid's new, live process is dropped from this snapshot altogether.
         try:
-            for proc in psutil.process_iter(["ppid", "create_time"]):
-                info = proc.info
+            for pid in psutil.pids():
+                try:
+                    info = psutil.Process(pid).as_dict(["ppid", "create_time"])
+                except psutil.NoSuchProcess:
+                    continue
                 try:
                     ppid = int(info.get("ppid") or 0)
                 except (TypeError, ValueError):
                     ppid = 0
-                rows[proc.pid] = (ppid, info.get("create_time"))
+                rows[pid] = (ppid, info.get("create_time"))
         except psutil.Error:
             return {}
         snap: dict[int, ProcInfo] = {}
