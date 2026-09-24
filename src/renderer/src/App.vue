@@ -67,6 +67,7 @@ import {
   spawnAdvisoriesFor,
 } from './lib/agentSpawnGate'
 import StageTabBar, { type TabItem } from './components/StageTabBar.vue'
+import RunGroupContextMenu from './components/RunGroupContextMenu.vue'
 import { rollupTabStatus, sameRenderedTabs } from './lib/tabStatus'
 import { sameRenderedPaneViews } from './lib/paneViews'
 import { paneStatusLabelText } from './lib/paneStatusLabel'
@@ -7606,7 +7607,12 @@ async function restartAgentPanes(agentKey: string): Promise<void> {
   )
 }
 
-async function rebuildPanesViaResume(scope: 'tab' | 'all', workspacePath?: string): Promise<void> {
+async function rebuildPanesViaResume(
+  scope: 'tab' | 'all',
+  workspacePath?: string,
+  /** Narrows the batch to these panes — one run group, from its right-click menu. */
+  onlyPaneIds?: readonly string[]
+): Promise<void> {
   if (rebuildingTabPanes.value) return
   // A sidebar heading's ↻ names its own workspace; the toolbar's and the tab
   // strip's name none, meaning the workspace on screen. Rebuild reads each
@@ -7618,6 +7624,7 @@ async function rebuildPanesViaResume(scope: 'tab' | 'all', workspacePath?: strin
   // Rebuild replaces pane ids, so capture the batch up front.
   const ids = pool
     .filter((p) => p.realized && (scope === 'all' || tabFilteredPaneIds.value.has(p.id)) && paneCanRebuild(p))
+    .filter((p) => !onlyPaneIds || onlyPaneIds.includes(p.id))
     .map((pane) => pane.id)
   if (!ids.length) return
   // The rebuild-all buttons hit every pane at once, so they always confirm:
@@ -7634,7 +7641,7 @@ async function rebuildPanesViaResume(scope: 'tab' | 'all', workspacePath?: strin
 
   rebuildingTabPanes.value = true
   pipelineLog(
-    `↻ rebuilding ${ids.length} CLI pane(s) in ${scope === 'all' ? 'all tabs' : 'the active tab'}`
+    `↻ rebuilding ${ids.length} CLI pane(s) in ${onlyPaneIds ? 'one run group' : scope === 'all' ? 'all tabs' : 'the active tab'}`
   )
   let busyCount = 0
   try {
@@ -16030,8 +16037,11 @@ async function movePaneToGroup(paneId: string, targetKey: string): Promise<void>
  *  Important: "手動" is not a persisted RunGroup. It is a synthetic tab for
  *  panes whose runGroupId is empty. Therefore deleting the last real RunGroup is
  *  valid when there is, or will be, a manual/ungrouped tab to show those panes.
+ *
+ *  `keepGroup` removes the panes and leaves the tab standing, empty — the
+ *  run-group menu's "remove all panes", as opposed to closing the group.
  */
-async function closeRunGroup(id: string): Promise<void> {
+async function closeRunGroup(id: string, keepGroup = false): Promise<void> {
   const affected = id === 'manual'
     ? panesInView.value.filter((p) => !p.runGroupId)
     : panesInView.value.filter((p) => p.runGroupId === id)
@@ -16045,7 +16055,7 @@ async function closeRunGroup(id: string): Promise<void> {
     await onPipelineAbort()
   }
   for (const p of [...affected]) await onKill(p.id)
-  if (id !== 'manual') {
+  if (id !== 'manual' && !keepGroup) {
     runGroups.value = runGroups.value.filter((g) => g.id !== id)
     if (currentRunGroupId.value === id) currentRunGroupId.value = ''
     if (activeTab.value === id) activeTab.value = runGroups.value[0]?.id ?? 'manual'
@@ -16168,6 +16178,115 @@ const stageTabs = computed<TabItem[]>(() => {
   _lastStageTabs = next
   return next
 })
+
+// Run-group right-click menu. One menu for both places a run group shows up —
+// a stage tab and a sidebar group heading — and its items call the tab bar's
+// own actions (inline rename, deleteRunGroup, closeRunGroup), so the two
+// surfaces cannot offer different things. Key 'manual' is the ungrouped
+// section, as on the tab bar.
+const stageTabBarRef = ref<InstanceType<typeof StageTabBar> | null>(null)
+const runGroupCtxMenu = ref<{
+  workspacePath: string
+  key: string
+  x: number
+  y: number
+  /** Where a detached window opens — the pointer, as a tab dragged out does. */
+  screenX: number
+  screenY: number
+  canRename: boolean
+  canMove: boolean
+  canDetach: boolean
+  rebuildCount: number
+  reclaimCount: number
+  paneCount: number
+} | null>(null)
+
+/** The panes of one run group. The workspace on screen reads panesInView, as
+ *  its tabs do (a resumed session from another folder shows there too);
+ *  another workspace reads its own panes. */
+function runGroupPanes(workspacePath: string, key: string): ActivePane[] {
+  const pool = normWs(workspacePath) === normWs(currentWorkspace.value)
+    ? panesInView.value
+    : panes.value.filter((p) => normWs(p.workspacePath) === normWs(workspacePath))
+  return pool.filter((p) => (key === 'manual' ? !p.runGroupId : p.runGroupId === key))
+}
+
+function runGroupReclaimableIds(workspacePath: string, key: string): string[] {
+  const ids = new Set(runGroupPanes(workspacePath, key).map((p) => p.id))
+  return reclaimableNowIds.value.filter((id) => ids.has(id))
+}
+
+function openRunGroupCtxMenu(workspacePath: string, key: string, e: MouseEvent): void {
+  // Moving the ungrouped panes needs another group to move them into. Another
+  // workspace's groups are not loaded until it is on screen, so its count
+  // comes from the sidebar's rows for it.
+  const groupCount = normWs(workspacePath) === normWs(currentWorkspace.value)
+    ? stageTabs.value.length
+    : workspaceGroups.value.find((w) => normWs(w.path) === normWs(workspacePath))?.groups.length ?? 0
+  runGroupCtxMenu.value = {
+    workspacePath,
+    key,
+    x: e.clientX,
+    y: e.clientY,
+    screenX: e.screenX,
+    screenY: e.screenY,
+    canRename: key !== 'manual',
+    canMove: key !== 'manual' || groupCount > 1,
+    // Same rule as dragging a tab out (onDetachGroup): only a real group, and
+    // never from a window that is itself a detached group.
+    canDetach: key !== 'manual' && !isDetachedWindow,
+    rebuildCount: runGroupPanes(workspacePath, key).filter((p) => p.realized && paneCanRebuild(p)).length,
+    reclaimCount: runGroupReclaimableIds(workspacePath, key).length,
+    paneCount: runGroupPanes(workspacePath, key).length,
+  }
+}
+
+async function runRunGroupCtxAction(
+  action: 'rename' | 'move' | 'detach' | 'rebuild' | 'reclaim' | 'remove-panes' | 'close-panes'
+): Promise<void> {
+  const m = runGroupCtxMenu.value
+  runGroupCtxMenu.value = null
+  if (!m) return
+  // Rebuild and reclaim work on pane ids wherever the panes live — the same
+  // as the sidebar heading's ↻ and the project menu's reclaim — so they need
+  // no switch.
+  if (action === 'rebuild') {
+    const ids = runGroupPanes(m.workspacePath, m.key).map((p) => p.id)
+    // No path for the workspace on screen: its pool is panesInView, which is
+    // where runGroupPanes found them.
+    const here = normWs(m.workspacePath) === normWs(currentWorkspace.value)
+    await rebuildPanesViaResume('all', here ? undefined : m.workspacePath, ids)
+    return
+  }
+  if (action === 'reclaim') {
+    const ids = runGroupReclaimableIds(m.workspacePath, m.key)
+    if (ids.length && (await reclaimPanesNow(ids))) return
+    notifyRestore.toast(i18n.global.t('resource.reclaim-blocked'), { type: 'info' })
+    return
+  }
+  // A heading under another workspace names a group of THAT workspace, and the
+  // actions below only see the workspace on screen — so go there first, the
+  // same switch a click on its heading makes. A declined switch acts on nothing.
+  if (normWs(m.workspacePath) !== normWs(currentWorkspace.value)) {
+    await switchToWorkspace(m.workspacePath)
+    if (normWs(m.workspacePath) !== normWs(currentWorkspace.value)) return
+  }
+  // Only a group this window shows as a tab; one handed to a detached window
+  // is that window's to manage.
+  if (!stageTabs.value.some((t) => t.key === m.key)) return
+  if (action === 'rename') {
+    await nextTick()
+    stageTabBarRef.value?.renameTab(m.key)
+  } else if (action === 'move') {
+    await deleteRunGroup(m.key)
+  } else if (action === 'detach') {
+    onDetachGroup(m.key, m.screenX, m.screenY)
+  } else if (action === 'remove-panes') {
+    await closeRunGroup(m.key, true)
+  } else {
+    await closeRunGroup(m.key)
+  }
+}
 
 const tabFilteredPaneIds = computed<Set<string>>(() =>
   // Structure, not stageTabs: this drives pane visibility and grid sizing, and
@@ -19097,6 +19216,7 @@ function paneIsCommander(p: ActivePane): boolean {
       @reorder-pane="reorderPane"
       @nest-pane="nestPane"
       @root-pane="rootPane"
+      @group-context-menu="(ws, groupId, ev) => openRunGroupCtxMenu(ws, groupId || 'manual', ev)"
       @select-panes="selectedPaneIds = new Set($event)"
       @open-settings="showSettings = true"
       @open-pipeline-manager="openPipelineManager"
@@ -19346,6 +19466,7 @@ function paneIsCommander(p: ActivePane): boolean {
       </div>
       <StageTabBar
         v-if="stageTabs.length > 0"
+        ref="stageTabBarRef"
         :tabs="stageTabs"
         :model-value="activeTab"
         :can-rebuild-all="rebuildablePaneCount > 0"
@@ -19362,6 +19483,7 @@ function paneIsCommander(p: ActivePane): boolean {
         @move-pane="(paneId, targetKey) => movePaneToGroup(paneId, targetKey)"
         @reorder-tab="(fromKey, toKey) => reorderRunGroupTab(fromKey, toKey)"
         @detach="(key, x, y) => onDetachGroup(key, x, y)"
+        @context-menu="(key, ev) => openRunGroupCtxMenu(currentWorkspace, key, ev)"
         @update:model-value="onUserSelectTab"
       >
         <template #actions>
@@ -20026,6 +20148,26 @@ function paneIsCommander(p: ActivePane): boolean {
         </template>
       </div>
     </Teleport>
+    <RunGroupContextMenu
+      v-if="runGroupCtxMenu"
+      :key="`${runGroupCtxMenu.workspacePath}|${runGroupCtxMenu.key}|${runGroupCtxMenu.x},${runGroupCtxMenu.y}`"
+      :x="runGroupCtxMenu.x"
+      :y="runGroupCtxMenu.y"
+      :can-rename="runGroupCtxMenu.canRename"
+      :can-move="runGroupCtxMenu.canMove"
+      :can-detach="runGroupCtxMenu.canDetach"
+      :rebuild-count="runGroupCtxMenu.rebuildCount"
+      :reclaim-count="runGroupCtxMenu.reclaimCount"
+      :pane-count="runGroupCtxMenu.paneCount"
+      @rename="runRunGroupCtxAction('rename')"
+      @move="runRunGroupCtxAction('move')"
+      @detach="runRunGroupCtxAction('detach')"
+      @rebuild="runRunGroupCtxAction('rebuild')"
+      @reclaim="runRunGroupCtxAction('reclaim')"
+      @remove-panes="runRunGroupCtxAction('remove-panes')"
+      @close-panes="runRunGroupCtxAction('close-panes')"
+      @dismiss="runGroupCtxMenu = null"
+    />
     <!-- Pane rename dialog -->
     <Teleport v-if="renamingPane" to="body">
       <div class="stall-overlay" @click.self="renamingPane = null">

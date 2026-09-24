@@ -40,6 +40,7 @@ const emit = defineEmits<{
   (e: 'detach', key: string, x: number, y: number): void
   (e: 'rebuild-all'): void
   (e: 'toggleFamilies'): void
+  (e: 'context-menu', key: string, ev: MouseEvent): void
 }>()
 
 const { t } = useI18n()
@@ -72,6 +73,15 @@ function onCloseClick(e: MouseEvent, key: string): void {
     return
   }
   actionMenu.value = { show: true, key, x: e.clientX, y: e.clientY }
+}
+
+// The right-click menu itself lives in App.vue (RunGroupContextMenu), shared
+// with the sidebar's group headings. While a tab is being renamed the native
+// menu stays, so Paste still works in the input.
+function onTabContextMenu(e: MouseEvent, key: string): void {
+  if (editingKey.value === key) return
+  e.preventDefault()
+  emit('context-menu', key, e)
 }
 function chooseMove(): void {
   emit('delete', actionMenu.value.key)
@@ -146,6 +156,14 @@ function commitRename(key: string): void {
   editingKey.value = null
 }
 
+/** Opens the inline rename for a tab by key — how the shared right-click menu,
+ *  which App.vue owns, starts a rename on this bar. */
+function renameTab(key: string): void {
+  const tab = props.tabs.find((t) => t.key === key)
+  if (tab) void startRename(tab)
+}
+defineExpose({ renameTab })
+
 function onRenameKeydown(e: KeyboardEvent, key: string): void {
   if (e.key === 'Enter') { e.preventDefault(); commitRename(key) }
   if (e.key === 'Escape') { e.preventDefault(); _cancelledRename = true; editingKey.value = null }
@@ -163,6 +181,7 @@ function onRenameKeydown(e: KeyboardEvent, key: string): void {
         :draggable="tab.type === 'stage' && editingKey !== tab.key"
         @click="emit('update:modelValue', tab.key)"
         @dblclick.prevent="startRename(tab)"
+        @contextmenu="onTabContextMenu($event, tab.key)"
         @dragstart="onTabDragStart($event, tab)"
         @dragend="onTabDragEnd($event, tab)"
         @dragover.prevent

@@ -31,8 +31,8 @@ function body(name: string): string {
 
 describe('a workspace heading acts on its own workspace', () => {
   it('rebuild takes the workspace as an argument', () => {
-    expect(appSource).toContain(
-      "async function rebuildPanesViaResume(scope: 'tab' | 'all', workspacePath?: string)",
+    expect(appSource).toMatch(
+      /async function rebuildPanesViaResume\(\s*scope: 'tab' \| 'all',\s*workspacePath\?: string,/,
     )
   })
 

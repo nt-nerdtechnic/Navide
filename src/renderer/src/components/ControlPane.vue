@@ -1095,6 +1095,9 @@ const emit = defineEmits<{
   /** A pane dropped on a run group's header row: make it a root of the
    *  lineage inside that group. */
   (e: 'root-pane', draggedId: string, workspacePath: string, runGroupId: string): void
+  /** Right-click on a group heading. App.vue opens the same run-group menu the
+   *  stage tabs use; runGroupId '' is the ungrouped section (the manual tab). */
+  (e: 'group-context-menu', workspacePath: string, runGroupId: string, ev: MouseEvent): void
   /** Replace the App-owned multi-selection with exactly these panes. Fired
    *  when a drag starts on a folded row: the hidden subtree travels with it,
    *  and App resolves every drop from the selection, so the selection must
@@ -3667,6 +3670,7 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
           @dragenter="onGroupDragOver($event, ws?.path ?? '', g.id)"
           @dragleave="onGroupDragLeave(ws?.path ?? '', g.id)"
           @drop.prevent="onGroupDrop($event, ws?.path ?? '', g.id)"
+          @contextmenu.prevent="ws && emit('group-context-menu', ws.path, g.id, $event)"
         >
           <button
             class="ws-grp-caret"
@@ -3717,9 +3721,9 @@ async function onTaskDrop(e: DragEvent): Promise<void> {
           </button>
           <!-- The sidebar's own entry point: ＋ here opens an agent in THIS
                group, which the stage tab bar cannot express — it can only open
-               into whichever group it is currently showing. Management (rename,
-               delete, detach) stays on the tab bar so there is one place to
-               change a group, not two that can disagree. -->
+               into whichever group it is currently showing. Management is the
+               right-click menu, which is the tab bar's own menu (App.vue opens
+               one RunGroupContextMenu for both), so the two cannot disagree. -->
           <button
             v-if="ws && !g.bare && canSpawn"
             class="ws-grp-add"
