@@ -500,7 +500,7 @@
       "auto-named-tooltip": "このセッションの最初の指示から自動で名前を付けました。名前を変更すると、その名前が保持されます",
       "loop-tag-tooltip": "このペインでループが実行中です",
       "subtree-tooltip": "このペインから起動した {count} 個のペインが {status}",
-      "subtree-summary": "子ペイン {count} 件が{status}",
+      "subtree-summary": "{status} {count}",
       "location-minimized": "サイドバーに最小化",
       "location-tab": "タブ：{name}",
       "location-workspace": "プロジェクト：{name}",

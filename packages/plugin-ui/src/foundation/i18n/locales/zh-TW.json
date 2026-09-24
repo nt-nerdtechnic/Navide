@@ -500,7 +500,7 @@
       "auto-named-tooltip": "此名稱由系統依這個 session 的第一句指令自動產生 — 只要你改過名，就不會再被自動命名",
       "loop-tag-tooltip": "此 pane 正在執行 Loop",
       "subtree-tooltip": "底下有 {count} 個派生 pane 處於 {status}",
-      "subtree-summary": "{count} 個子視窗{status}",
+      "subtree-summary": "{status} {count}",
       "location-minimized": "已縮到側欄",
       "location-tab": "分頁：{name}",
       "location-workspace": "工作區：{name}",

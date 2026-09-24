@@ -24,9 +24,12 @@ describe('the subtree chip on parent cards', () => {
     expect(appSource).toContain('const paneListSubtree = computed(() => subtreeSignals(paneViews.value))')
   })
 
-  it('renders on both card lists as a line under the vendor, in words', () => {
+  it('renders on both card lists under the status badge', () => {
     const chips = appSource.match(/class="meeting-subtree"\s+v-bind="paneListSubtreeAttrs\(p\.id\)"\s+>\{\{ paneListSubtreeText\(p\.id\) \}\}<\/span>/g) ?? []
     expect(chips).toHaveLength(2)
+    // Stacked under the badge, so a parent card stays two lines tall.
+    const stacked = appSource.match(/<div class="meeting-status-col">\s+<span class="meeting-badge"[^\n]*\n\s+<span\s+v-if="paneListSubtree\.has\(p\.id\)"\s+class="meeting-subtree"/g) ?? []
+    expect(stacked).toHaveLength(2)
     expect(appSource).not.toContain('>↳ {{ paneListSubtree.get(p.id)?.count }}</span>')
     // Only when there is something to say: an all-idle family leaves the card
     // exactly as it was.
@@ -85,16 +88,16 @@ describe('the subtree summary text', () => {
 
   it('names the selected status and only its own count', () => {
     // Two running, one awaiting: awaiting wins, and it counts one — not three.
-    expect(paneListSubtreeText('lead')).toBe(`1 child pane · ${paneStatusLabelText('awaiting')}`)
-    expect(paneListSubtreeText('solo')).toBe(`1 child pane · ${paneStatusLabelText('running')}`)
+    expect(paneListSubtreeText('lead')).toBe(`${paneStatusLabelText('awaiting')} 1`)
+    expect(paneListSubtreeText('solo')).toBe(`${paneStatusLabelText('running')} 1`)
     views.value = [...views.value, { id: 'kid2', spawnedBy: 'solo', status: 'running' }]
-    expect(paneListSubtreeText('solo')).toBe(`2 child panes · ${paneStatusLabelText('running')}`)
+    expect(paneListSubtreeText('solo')).toBe(`${paneStatusLabelText('running')} 2`)
     expect(paneListSubtreeText('a')).toBe('')
   })
 
   it('is translated, not hard-coded', () => {
     i18n.global.locale.value = 'zh-TW'
-    expect(paneListSubtreeText('lead')).toBe(`1 個子視窗${paneStatusLabelText('awaiting')}`)
+    expect(paneListSubtreeText('lead')).toBe(`${paneStatusLabelText('awaiting')} 1`)
   })
 })
 

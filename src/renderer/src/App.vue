@@ -18433,8 +18433,8 @@ function paneListSubtreeAttrs(id: string): Record<string, unknown> {
   }
 }
 
-/** The subtree signal in words — "1 child pane · Running" — for the card's
- *  second line; a bare "↳ 1" read as a count of something unnamed. */
+/** The subtree signal as status and count — "Running 1" — under the card's
+ *  badge; the chip's title spells out that the count is of child panes. */
 function paneListSubtreeText(id: string): string {
   const sub = paneListSubtree.value.get(id)
   if (!sub) return ''
@@ -19563,15 +19563,6 @@ function paneIsCommander(p: ActivePane): boolean {
               <span class="meeting-sub">
                 {{ agentSpecs.find(s => s.agentKey === p.agentKey)?.label ?? p.agentKey }}<span v-if="p.roleLabel"> · {{ p.roleLabel }}</span>
               </span>
-              <!-- What the family is doing, on the parent: the card's own badge
-                   says only what its terminal is doing, and a closed family's
-                   running or blocked child was otherwise invisible. A line of
-                   its own, so the words can wrap without squeezing the name. -->
-              <span
-                v-if="paneListSubtree.has(p.id)"
-                class="meeting-subtree"
-                v-bind="paneListSubtreeAttrs(p.id)"
-              >{{ paneListSubtreeText(p.id) }}</span>
               <!-- Where a carried descendant lives, so a click that switches
                    tab, workspace or restores it is not a surprise. -->
               <span
@@ -19586,7 +19577,18 @@ function paneIsCommander(p: ActivePane): boolean {
               :class="{ waiting: p.loopWaitUntil != null }"
               :title="$t('pane.terminal.loop-tag-tooltip')"
             >∞</span>
-            <span class="meeting-badge" :data-status="p.status" :style="statusBadgeStyle(p.status)">{{ paneStatusLabelText(p.status) }}</span>
+            <!-- What the family is doing, under the card's own badge: the badge
+                 says only what its terminal is doing, and a closed family's
+                 running or blocked child was otherwise invisible. Stacked here
+                 so a parent card stays two lines tall. -->
+            <div class="meeting-status-col">
+              <span class="meeting-badge" :data-status="p.status" :style="statusBadgeStyle(p.status)">{{ paneStatusLabelText(p.status) }}</span>
+              <span
+                v-if="paneListSubtree.has(p.id)"
+                class="meeting-subtree"
+                v-bind="paneListSubtreeAttrs(p.id)"
+              >{{ paneListSubtreeText(p.id) }}</span>
+            </div>
           </div>
           <div v-if="auxiliaryListPanes.length === 0" class="meeting-empty">
             {{ $t('label.no-agents-yet') }}
@@ -19780,15 +19782,6 @@ function paneIsCommander(p: ActivePane): boolean {
               <span class="meeting-sub">
                 {{ agentSpecs.find(s => s.agentKey === p.agentKey)?.label ?? p.agentKey }}<span v-if="p.roleLabel"> · {{ p.roleLabel }}</span>
               </span>
-              <!-- What the family is doing, on the parent: the card's own badge
-                   says only what its terminal is doing, and a closed family's
-                   running or blocked child was otherwise invisible. A line of
-                   its own, so the words can wrap without squeezing the name. -->
-              <span
-                v-if="paneListSubtree.has(p.id)"
-                class="meeting-subtree"
-                v-bind="paneListSubtreeAttrs(p.id)"
-              >{{ paneListSubtreeText(p.id) }}</span>
               <!-- Where a carried descendant lives, so a click that switches
                    tab, workspace or restores it is not a surprise. -->
               <span
@@ -19803,7 +19796,18 @@ function paneIsCommander(p: ActivePane): boolean {
               :class="{ waiting: p.loopWaitUntil != null }"
               :title="$t('pane.terminal.loop-tag-tooltip')"
             >∞</span>
-            <span class="meeting-badge" :data-status="p.status" :style="statusBadgeStyle(p.status)">{{ paneStatusLabelText(p.status) }}</span>
+            <!-- What the family is doing, under the card's own badge: the badge
+                 says only what its terminal is doing, and a closed family's
+                 running or blocked child was otherwise invisible. Stacked here
+                 so a parent card stays two lines tall. -->
+            <div class="meeting-status-col">
+              <span class="meeting-badge" :data-status="p.status" :style="statusBadgeStyle(p.status)">{{ paneStatusLabelText(p.status) }}</span>
+              <span
+                v-if="paneListSubtree.has(p.id)"
+                class="meeting-subtree"
+                v-bind="paneListSubtreeAttrs(p.id)"
+              >{{ paneListSubtreeText(p.id) }}</span>
+            </div>
           </div>
           <div v-if="auxiliaryListPanes.length === 0" class="meeting-empty">
             {{ $t('label.no-agents-yet') }}
@@ -21378,18 +21382,26 @@ function paneIsCommander(p: ActivePane): boolean {
 .meeting-loop.waiting {
   opacity: 0.55;
 }
-/* The parent card's subtree summary, "1 child pane · Running", on its own
-   line and painted in the loudest status among its spawned descendants (see
+/* The parent card's subtree summary, "Running 1", under the card's badge
+   and painted in the loudest status among its spawned descendants (see
    paneListSubtree). Only the states that mean
    something is still moving or stuck get a rule — idle and below never render
    the chip. Same shape and --status-badge-* hooks as .meeting-badge so a
    recoloured status in Settings moves this with it. */
+.meeting-status-col {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  flex-shrink: 0;
+}
 .meeting-subtree {
-  font-size: var(--font-3xs);
-  padding: 2px 6px;
+  font-size: 9px;
+  line-height: 1.2;
+  padding: 1px 4px;
   border-radius: 3px;
-  align-self: flex-start;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 /* A carried descendant's whereabouts: minimized, another tab, another
    workspace. One line, cut short with the full text on hover. */
