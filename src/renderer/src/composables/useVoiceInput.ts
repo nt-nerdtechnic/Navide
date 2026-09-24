@@ -121,6 +121,9 @@ export interface VoicePartial {
 
 export interface VoiceDeps {
   enabled: () => boolean
+  /** Chinese script for the transcript, sent with voice.start (omitted: the
+   *  sidecar leaves whisper's text as is). */
+  script?: () => string
   request: <T>(type: string, payload: Record<string, unknown>, timeoutMs: number) => Promise<VoiceResponse<T>>
   /** macOS mic consent (granted elsewhere); `prompted` when this call showed
    *  the first-time system dialog. */
@@ -336,7 +339,8 @@ export function useVoiceInput(deps: VoiceDeps) {
     // The mic opens at once; voice.start (possibly loading the sidecar) runs
     // alongside, and what is said meanwhile waits in `pending`.
     sessionReady = new Promise((resolve) => { sessionWaiter = resolve })
-    deps.request<StartResult>('voice.start', {}, START_TIMEOUT_MS).then(
+    const script = deps.script?.()
+    deps.request<StartResult>('voice.start', script ? { script } : {}, START_TIMEOUT_MS).then(
       (res) => onStarted(mine, res),
       () => { if (mine === take) fail('backend') },
     )

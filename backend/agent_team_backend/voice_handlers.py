@@ -71,6 +71,8 @@ DEFAULT_LANGUAGE = "zh"
 # Same as the sidecar's DEFAULT_INITIAL_PROMPT; restated here because a
 # partial's prompt is this plus the tail of the committed text.
 DEFAULT_INITIAL_PROMPT = "以下是繁體中文語音記錄。"
+# Chinese scripts the sidecar can convert transcripts to (its `script` field).
+SCRIPTS = ("hant-tw", "hans", "none")
 PARTIAL_INTERVAL_S = 1.0
 # A partial needs this much audio it has not heard yet, and a window at least
 # _PARTIAL_MIN_WINDOW_BYTES long.
@@ -108,6 +110,9 @@ class _Recording:
     touched: float = field(default_factory=time.monotonic)
     language: str = DEFAULT_LANGUAGE
     prompt: str | None = None
+    # Chinese script the sidecar converts every hypothesis to, so partials,
+    # segments and the final text (and _strip_overlap) all compare alike.
+    script: str | None = None
     # Streaming state. `committed` only grows; `win_start` is the byte offset
     # where the uncommitted window begins; `prev_segs` holds the previous
     # hypothesis's segments of that window (normalized); `heard` is how many
@@ -297,6 +302,9 @@ async def voice_start(session: "Session", msg_id: str, msg_type: str, payload: d
     prompt = payload.get("initialPrompt")
     if isinstance(prompt, str) and prompt:
         rec.prompt = prompt
+    script = payload.get("script")
+    if script in SCRIPTS:
+        rec.script = script
     _active = rec  # claimed before the (possibly slow) spawn so a second start is busy
     try:
         await stt_service.get_sidecar().ensure_started()
@@ -561,7 +569,9 @@ async def _transcribe_window(rec: _Recording, end: int, pad: bool, segments: boo
     path = _new_temp_pcm()
     try:
         await stt_service.run_blocking(_write_pcm, path, pcm)
-        return await stt_service.get_sidecar().transcribe(path, rec.language, _prompt_for(rec), segments=segments)
+        return await stt_service.get_sidecar().transcribe(
+            path, rec.language, _prompt_for(rec), segments=segments, script=rec.script,
+        )
     finally:
         await stt_service.run_blocking(_remove, path)
 

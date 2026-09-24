@@ -71,6 +71,9 @@ async def test_ready_ping_and_transcribe(fake_sidecar, tmp_path: Path) -> None:
         assert result["text"] == "bytes=3200 lang=zh prompt=-"
         result = await fake_sidecar.transcribe(pcm, "en", "hint")
         assert result["text"] == "bytes=3200 lang=en prompt=hint"
+        # Without a script (above) no `script` field is sent at all.
+        result = await fake_sidecar.transcribe(pcm, "zh", None, script="hant-tw")
+        assert result["text"] == "bytes=3200 lang=zh prompt=- script=hant-tw"
     finally:
         await _stop(fake_sidecar)
     assert not fake_sidecar.running

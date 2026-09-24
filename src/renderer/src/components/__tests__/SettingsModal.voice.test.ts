@@ -217,6 +217,22 @@ describe('VoiceSettingsSection microphone device', () => {
     useVoiceSettings().setVoiceRecordingMode('hold-tap')
   })
 
+  it('Chinese output: hidden while off; Traditional (Taiwan) by default; choosing one saves it', async () => {
+    useVoiceSettings().setVoiceInputEnabled(false)
+    const off = await mountSection()
+    expect(off.find('[data-settings-section="voice-script"]').exists()).toBe(false)
+    off.unmount()
+
+    useVoiceSettings().setVoiceInputEnabled(true)
+    const w = await mountSection()
+    const select = w.get('[data-settings-section="voice-script"] select')
+    expect((select.element as HTMLSelectElement).value).toBe('hant-tw')
+    expect(select.findAll('option').map((o) => o.text())).toEqual(['Traditional (Taiwan)', 'Simplified', 'No conversion'])
+    await select.setValue('none')
+    expect(useVoiceSettings().voiceScript.value).toBe('none')
+    useVoiceSettings().setVoiceScript('hant-tw')
+  })
+
   it('choosing a device saves its id and label', async () => {
     useVoiceSettings().setVoiceInputEnabled(true)
     const w = await mountSection()

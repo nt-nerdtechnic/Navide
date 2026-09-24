@@ -4,6 +4,8 @@
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use crate::script::Script;
+
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Decoder bias used when a request omits `initial_prompt`.
@@ -20,6 +22,8 @@ pub enum Request {
         /// Also return timed `segments` in the reply: whisper's segments
         /// split after clause punctuation (token timestamps).
         segments: bool,
+        /// Chinese script the text and segments are converted to.
+        script: Script,
     },
     Ping {
         id: String,
@@ -45,6 +49,7 @@ struct RawRequest {
     language: Option<String>,
     initial_prompt: Option<String>,
     segments: Option<bool>,
+    script: Option<String>,
     target: Option<String>,
 }
 
@@ -84,8 +89,12 @@ pub fn parse_request(line: &str) -> Option<Request> {
     };
     Some(match op {
         "ping" => Request::Ping { id },
-        "transcribe" => match raw.pcm_path {
-            Some(pcm_path) if !pcm_path.is_empty() => Request::Transcribe {
+        "transcribe" => match (raw.pcm_path, raw.script.as_deref().map_or(Some(Script::None), Script::parse)) {
+            (_, None) => Request::Invalid {
+                id: Some(id),
+                error: format!("unknown script: {:?}", raw.script.unwrap_or_default()),
+            },
+            (Some(pcm_path), Some(script)) if !pcm_path.is_empty() => Request::Transcribe {
                 id,
                 pcm_path,
                 language: raw
@@ -96,6 +105,7 @@ pub fn parse_request(line: &str) -> Option<Request> {
                     .initial_prompt
                     .unwrap_or_else(|| DEFAULT_INITIAL_PROMPT.to_string()),
                 segments: raw.segments.unwrap_or(false),
+                script,
             },
             _ => Request::Invalid {
                 id: Some(id),
@@ -166,6 +176,7 @@ mod tests {
                 language: "zh".into(),
                 initial_prompt: DEFAULT_INITIAL_PROMPT.into(),
                 segments: false,
+                script: Script::None,
             })
         );
     }
@@ -183,6 +194,7 @@ mod tests {
                 language: "en".into(),
                 initial_prompt: String::new(),
                 segments: false,
+                script: Script::None,
             })
         );
     }
@@ -193,6 +205,18 @@ mod tests {
         assert!(matches!(req, Some(Request::Transcribe { segments: true, .. })));
         let req = parse_request(r#"{"id":"s","op":"transcribe","pcm_path":"/p","segments":false}"#);
         assert!(matches!(req, Some(Request::Transcribe { segments: false, .. })));
+    }
+
+    #[test]
+    fn parses_script() {
+        for (value, script) in [("hant-tw", Script::HantTw), ("hans", Script::Hans), ("none", Script::None)] {
+            let line = format!(r#"{{"id":"z","op":"transcribe","pcm_path":"/p","script":"{value}"}}"#);
+            assert!(matches!(parse_request(&line), Some(Request::Transcribe { script: s, .. }) if s == script));
+        }
+        assert!(matches!(
+            parse_request(r#"{"id":"z","op":"transcribe","pcm_path":"/p","script":"zh-CN"}"#),
+            Some(Request::Invalid { id: Some(_), .. })
+        ));
     }
 
     #[test]

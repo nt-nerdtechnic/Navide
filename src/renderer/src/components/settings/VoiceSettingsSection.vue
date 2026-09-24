@@ -5,7 +5,13 @@ import SettingsSection from './SettingsSection.vue'
 import SettingsCard from './SettingsCard.vue'
 import SettingRow from './SettingRow.vue'
 import ToggleSwitch from './ToggleSwitch.vue'
-import { useVoiceSettings, VOICE_RECORDING_MODES, type VoiceRecordingMode } from '../../voice/voiceSettings'
+import {
+  useVoiceSettings,
+  VOICE_RECORDING_MODES,
+  VOICE_SCRIPTS,
+  type VoiceRecordingMode,
+  type VoiceScript,
+} from '../../voice/voiceSettings'
 import type { useBackend } from '../../composables/useBackend'
 
 // Settings → Voice Input. The model status is only asked for while
@@ -19,9 +25,11 @@ const {
   voiceInputDeviceId,
   voiceInputDeviceLabel,
   voiceRecordingMode,
+  voiceScript,
   setVoiceInputEnabled,
   setVoiceInputDevice,
   setVoiceRecordingMode,
+  setVoiceScript,
 } = useVoiceSettings()
 
 interface VoiceStatus {
@@ -255,6 +263,24 @@ const canDownload = computed(
             @change="setVoiceRecordingMode(($event.target as HTMLSelectElement).value as VoiceRecordingMode)"
           >
             <option v-for="m in VOICE_RECORDING_MODES" :key="m" :value="m">{{ t(`settings.voice.mode-${m}`) }}</option>
+          </select>
+        </template>
+      </SettingRow>
+
+      <SettingRow
+        v-if="voiceInputEnabled"
+        data-settings-section="voice-script"
+        :title="t('settings.voice.script')"
+        :description="t('settings.voice.script-hint')"
+      >
+        <template #control>
+          <select
+            class="voice-select"
+            :aria-label="t('settings.voice.script')"
+            :value="voiceScript"
+            @change="setVoiceScript(($event.target as HTMLSelectElement).value as VoiceScript)"
+          >
+            <option v-for="s in VOICE_SCRIPTS" :key="s" :value="s">{{ t(`settings.voice.script-${s}`) }}</option>
           </select>
         </template>
       </SettingRow>

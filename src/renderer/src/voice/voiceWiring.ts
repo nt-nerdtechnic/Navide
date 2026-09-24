@@ -96,6 +96,7 @@ export function setupVoiceInput(host: VoiceWiringHost) {
 
   const deps: VoiceDeps = {
     enabled: () => settings.voiceInputEnabled.value,
+    script: () => settings.voiceScript.value,
     request: async (type, payload, timeoutMs) => {
       const res = await host.backend.send(type, payload, timeoutMs)
       return { ok: res.ok, payload: res.payload as never }

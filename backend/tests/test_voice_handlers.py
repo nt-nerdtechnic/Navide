@@ -415,6 +415,44 @@ async def test_partials_reach_only_the_owner_and_final_extends_committed(
     assert any((r["prompt"] or "").startswith(voice_handlers.DEFAULT_INITIAL_PROMPT) for r in _requests(stream))
 
 
+async def test_script_is_forwarded_on_every_partial_and_the_final(stream: Path) -> None:
+    session = _Session()
+    sid = (await _send(session, "voice.start", {"script": "hant-tw"}))["sessionId"]
+    await _speak(session, sid, range(16))
+    await asyncio.sleep(0.2)
+    await _settle(session)
+    await _send(session, "voice.stop", {"sessionId": sid})
+    *partials, final = _requests(stream)
+    assert partials and all(r["segments"] for r in partials)
+    assert {r["script"] for r in [*partials, final]} == {"hant-tw"}
+
+
+@pytest.mark.parametrize("script", [None, "zh-CN", 3])
+async def test_missing_or_unknown_script_sends_none(stream: Path, script: Any) -> None:
+    session = _Session()
+    payload = {} if script is None else {"script": script}
+    sid = (await _send(session, "voice.start", payload))["sessionId"]
+    await _speak(session, sid, range(4))
+    await _send(session, "voice.stop", {"sessionId": sid})
+    assert {r["script"] for r in _requests(stream)} == {None}
+
+
+async def test_streaming_dedup_compares_converted_text(stream: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Every other run hears the "Simplified" forms; the sidecar converts them
+    # all to Traditional, so the overlap still matches and no word repeats.
+    monkeypatch.setenv("FAKE_STT_VARIANTS", "1")
+    session = _Session()
+    sid = (await _send(session, "voice.start", {"script": "hant-tw"}))["sessionId"]
+    await _speak_in_step(session, sid, range(48))
+    await asyncio.sleep(0.2)
+    await _settle(session)
+    assert voice_handlers._active.win_start > 0
+    committed = [p["committed"] for p in _partials(session)]
+    assert committed[-1] and all(_text(48).startswith(c) for c in committed)
+    stop = await _send(session, "voice.stop", {"sessionId": sid})
+    assert stop["text"] == _text(48)
+
+
 async def test_unstable_tail_is_never_committed(stream: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("FAKE_STT_TAIL_NOISE", "1")
     session = _Session()

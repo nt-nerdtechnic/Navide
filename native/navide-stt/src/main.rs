@@ -109,6 +109,7 @@ fn main() -> ExitCode {
                 language,
                 initial_prompt,
                 segments,
+                script,
             } => {
                 let started = Instant::now();
                 let result = std::fs::read(&pcm_path)
@@ -122,7 +123,10 @@ fn main() -> ExitCode {
                     });
                 match result {
                     _ if is_cancelled(&id) => protocol::cancelled(&id),
-                    Ok(segs) => {
+                    Ok(mut segs) => {
+                        for seg in &mut segs {
+                            seg.text = script.convert(&seg.text);
+                        }
                         let text = join_segments(&segs);
                         let ms = started.elapsed().as_millis();
                         if segments {

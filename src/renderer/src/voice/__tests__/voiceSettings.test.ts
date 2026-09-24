@@ -88,4 +88,20 @@ describe('voice recording mode setting', () => {
     expect(s.voiceRecordingMode.value).toBe('toggle')
     expect(shared.settingsGet(mod.VOICE_RECORDING_MODE_KEY, null)).toBe('toggle')
   })
+
+  it('Chinese output defaults to Traditional (Taiwan), persists a choice and rejects unknown values', () => {
+    const { mod, shared, createMockBackend } = ctx
+    const { backend, emit } = createMockBackend('connected')
+    shared.initSettingsBackend(backend)
+    const s = mod.useVoiceSettings()
+    expect(s.voiceScript.value).toBe('hant-tw')
+    emit('ui.settings_changed', { settings: { [mod.VOICE_SCRIPT_KEY]: 'none' } })
+    expect(s.voiceScript.value).toBe('none')
+    emit('ui.settings_changed', { settings: { [mod.VOICE_SCRIPT_KEY]: 'zh-CN' } })
+    expect(s.voiceScript.value).toBe('hant-tw')
+
+    s.setVoiceScript('hans')
+    expect(s.voiceScript.value).toBe('hans')
+    expect(shared.settingsGet(mod.VOICE_SCRIPT_KEY, null)).toBe('hans')
+  })
 })

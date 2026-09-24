@@ -344,13 +344,18 @@ class SttSidecar:
 
     async def transcribe(
         self, pcm_path: Path, language: str, initial_prompt: str | None, segments: bool = False,
+        script: str | None = None,
     ) -> dict:
-        """``segments=True`` adds ``segments: [{t0_ms, t1_ms, text}]`` to the reply."""
+        """``segments=True`` adds ``segments: [{t0_ms, t1_ms, text}]`` to the reply.
+        ``script`` (``hant-tw``/``hans``/``none``) converts the text and every
+        segment; None leaves whisper's output as is."""
         payload: dict[str, Any] = {"op": "transcribe", "pcm_path": str(pcm_path), "language": language}
         if initial_prompt:
             payload["initial_prompt"] = initial_prompt
         if segments:
             payload["segments"] = True
+        if script:
+            payload["script"] = script
         return await self.request(payload)
 
     async def ping(self) -> dict:

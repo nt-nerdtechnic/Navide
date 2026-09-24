@@ -18,6 +18,12 @@ export const VOICE_INPUT_DEVICE_LABEL_KEY = 'agentTeam.voiceInputDeviceLabel'
 export const VOICE_RECORDING_MODE_KEY = 'agentTeam.voiceRecordingMode'
 export const VOICE_RECORDING_MODES = ['hold-tap', 'hold', 'toggle'] as const
 export type VoiceRecordingMode = (typeof VOICE_RECORDING_MODES)[number]
+// Chinese script the transcript is converted to (sent with voice.start):
+// 'hant-tw' = Traditional, Taiwan standard (default; whisper sometimes answers
+// in Simplified); 'hans' = Simplified; 'none' = as whisper wrote it.
+export const VOICE_SCRIPT_KEY = 'agentTeam.voiceChineseScript'
+export const VOICE_SCRIPTS = ['hant-tw', 'hans', 'none'] as const
+export type VoiceScript = (typeof VOICE_SCRIPTS)[number]
 
 function read(key: string): boolean {
   return settingsGet<boolean>(key, false) === true
@@ -33,11 +39,17 @@ function readMode(): VoiceRecordingMode {
   return (VOICE_RECORDING_MODES as readonly unknown[]).includes(v) ? (v as VoiceRecordingMode) : 'hold-tap'
 }
 
+function readScript(): VoiceScript {
+  const v = settingsGet<unknown>(VOICE_SCRIPT_KEY, 'hant-tw')
+  return (VOICE_SCRIPTS as readonly unknown[]).includes(v) ? (v as VoiceScript) : 'hant-tw'
+}
+
 const voiceInputEnabled = ref(read(VOICE_INPUT_ENABLED_KEY))
 const voiceReadbackEnabled = ref(read(VOICE_READBACK_ENABLED_KEY))
 const voiceInputDeviceId = ref(readString(VOICE_INPUT_DEVICE_KEY))
 const voiceInputDeviceLabel = ref(readString(VOICE_INPUT_DEVICE_LABEL_KEY))
 const voiceRecordingMode = ref<VoiceRecordingMode>(readMode())
+const voiceScript = ref<VoiceScript>(readScript())
 
 let unsubscribe: (() => void) | null = null
 
@@ -50,6 +62,7 @@ function ensureSubscription(): void {
     if (keys.includes(VOICE_INPUT_DEVICE_KEY)) voiceInputDeviceId.value = readString(VOICE_INPUT_DEVICE_KEY)
     if (keys.includes(VOICE_INPUT_DEVICE_LABEL_KEY)) voiceInputDeviceLabel.value = readString(VOICE_INPUT_DEVICE_LABEL_KEY)
     if (keys.includes(VOICE_RECORDING_MODE_KEY)) voiceRecordingMode.value = readMode()
+    if (keys.includes(VOICE_SCRIPT_KEY)) voiceScript.value = readScript()
   })
 }
 
@@ -59,10 +72,12 @@ export function useVoiceSettings(): {
   voiceInputDeviceId: Readonly<Ref<string>>
   voiceInputDeviceLabel: Readonly<Ref<string>>
   voiceRecordingMode: Readonly<Ref<VoiceRecordingMode>>
+  voiceScript: Readonly<Ref<VoiceScript>>
   setVoiceInputEnabled: (on: boolean) => void
   setVoiceReadbackEnabled: (on: boolean) => void
   setVoiceInputDevice: (id: string, label: string) => void
   setVoiceRecordingMode: (mode: VoiceRecordingMode) => void
+  setVoiceScript: (script: VoiceScript) => void
 } {
   ensureSubscription()
   return {
@@ -71,6 +86,7 @@ export function useVoiceSettings(): {
     voiceInputDeviceId,
     voiceInputDeviceLabel,
     voiceRecordingMode,
+    voiceScript,
     setVoiceInputEnabled: (on) => {
       voiceInputEnabled.value = on
       settingsSet(VOICE_INPUT_ENABLED_KEY, on)
@@ -88,6 +104,10 @@ export function useVoiceSettings(): {
     setVoiceRecordingMode: (mode) => {
       voiceRecordingMode.value = mode
       settingsSet(VOICE_RECORDING_MODE_KEY, mode)
+    },
+    setVoiceScript: (script) => {
+      voiceScript.value = script
+      settingsSet(VOICE_SCRIPT_KEY, script)
     },
   }
 }

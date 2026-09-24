@@ -15,6 +15,10 @@ boundary between two segments by that many ms (late if positive, early if
 negative), like whisper's approximate token timestamps; FAKE_STT_DELAY_S sleeps before answering (a
 ``{"op":"cancel","target":id}`` cuts that short, like the real sidecar);
 FAKE_STT_LOG names a file that gets one JSON line per transcribe request.
+FAKE_STT_VARIANTS=1 hears every character of odd-numbered requests as its
+"Simplified" variant chr(0x5E00 + v % 1000), like whisper switching script
+between runs; a request with ``script`` "hant-tw" converts those back to the
+0x4E00 forms, as the real sidecar converts to Traditional.
 """
 
 import json
@@ -34,7 +38,13 @@ _FRAME = 320  # 10 ms of s16le mono 16 kHz
 _TAIL_MS = 50  # silence counted into a segment after its last character
 
 
-def decode(data: bytes, noise: int | None, noise_all: bool = False, skew: int = 0) -> tuple[str, list[dict]]:
+def _to_hant(text: str) -> str:
+    return "".join(chr(ord(c) - 0x1000) if 0x5E00 <= ord(c) < 0x5E00 + 1000 else c for c in text)
+
+
+def decode(
+    data: bytes, noise: int | None, noise_all: bool = False, skew: int = 0, variant: bool = False,
+) -> tuple[str, list[dict]]:
     runs: list[list[int]] = []  # [value, first frame, frame count]
     for frame in range(len(data) // _FRAME):
         (value,) = struct.unpack_from("<h", data, frame * _FRAME)
@@ -49,7 +59,7 @@ def decode(data: bytes, noise: int | None, noise_all: bool = False, skew: int = 
     for value, first, count in runs:
         if count < 5:
             continue  # a sliver of a sound, not a character
-        char = chr(0x4E00 + value % 1000)
+        char = chr((0x5E00 if variant else 0x4E00) + value % 1000)
         t0, t1 = first * 10, min((first + count) * 10 + _TAIL_MS, end_ms)
         if segments and len(segments[-1]["text"]) < 4:
             segments[-1]["text"] += char
@@ -84,6 +94,7 @@ def main() -> int:
     tail_noise = os.environ.get("FAKE_STT_TAIL_NOISE") or ""
     delay = float(os.environ.get("FAKE_STT_DELAY_S") or 0)
     skew = int(os.environ.get("FAKE_STT_SKEW_MS") or 0)
+    variants = os.environ.get("FAKE_STT_VARIANTS") == "1"
     log_path = os.environ.get("FAKE_STT_LOG")
     requests = 0
     # stdin is read on its own thread so a cancel reaches a request that is
@@ -129,16 +140,24 @@ def main() -> int:
                 with open(log_path, "a", encoding="utf-8") as fh:
                     fh.write(json.dumps({
                         "bytes": size, "segments": bool(req.get("segments")), "cancelled": was_cancelled,
-                        "prompt": req.get("initial_prompt"), "start": started, "end": time.monotonic(),
+                        "prompt": req.get("initial_prompt"), "script": req.get("script"), "start": started, "end": time.monotonic(),
                     }, ensure_ascii=False) + "\n")
             if was_cancelled:
                 send({"id": req["id"], "ok": False, "error": "cancelled", "cancelled": True})
                 continue
             if not decoding:
                 text = f"bytes={size} lang={req.get('language')} prompt={req.get('initial_prompt', '-')}"
+                if "script" in req:
+                    text += f" script={req['script']}"
                 send({"id": req["id"], "ok": True, "text": text, "ms": 5})
                 continue
-            text, segments = decode(data, requests if tail_noise else None, tail_noise == "all", skew)
+            text, segments = decode(
+                data, requests if tail_noise else None, tail_noise == "all", skew, variants and requests % 2 == 1,
+            )
+            if req.get("script") == "hant-tw":
+                text = _to_hant(text)
+                for seg in segments:
+                    seg["text"] = _to_hant(seg["text"])
             reply = {"id": req["id"], "ok": True, "text": text, "ms": 5}
             if req.get("segments"):
                 reply["segments"] = segments

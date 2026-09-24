@@ -7,6 +7,8 @@ description = "Navide local speech-to-text sidecar (whisper.cpp over JSON Lines)
 
 [dependencies]
 anyhow = "1"
+# Pure Rust OpenCC with its dictionaries embedded (Apache-2.0).
+ferrous-opencc = { version = "0.4", default-features = false, features = ["s2t-conversion", "t2s-conversion"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 whisper-rs-sys = "0.13"

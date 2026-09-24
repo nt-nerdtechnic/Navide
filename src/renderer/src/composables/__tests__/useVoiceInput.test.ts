@@ -339,6 +339,18 @@ describe('useVoiceInput — capsule state machine', () => {
     expect(v2.state.error?.key).toBe('start-model-missing')
   })
 
+  it('voice.start carries the chosen Chinese script, and nothing without one', async () => {
+    const h = harness()
+    const v = useVoiceInput({ ...h.deps, script: () => 'hans' })
+    v.press('p1')
+    await settle()
+    expect(h.requests.find((r) => r.type === 'voice.start')?.payload).toEqual({ script: 'hans' })
+    const bare = harness()
+    useVoiceInput(bare.deps).press('p1')
+    await settle()
+    expect(bare.requests.find((r) => r.type === 'voice.start')?.payload).toEqual({})
+  })
+
   it('mic denial stops before voice.start', async () => {
     const h = harness()
     h.deps.askMicrophone = async () => ({ granted: false, prompted: false })
