@@ -122,8 +122,14 @@ def test_codex_wire_adds_a_parseable_pretooluse_hook(tmp_path) -> None:
     parsed = tomllib.loads("v = " + dict(values)["hooks.PreToolUse"])["v"]
     (hook,) = parsed[0]["hooks"]
     assert hook == {"type": "command", "command": codex_session_hooks.guard_hook_command(), "timeout": 10}
-    assert "/hooks/codex/pretooluse" in hook["command"]
-    assert hook["command"].endswith("exit 0")
+    script = hook["command"]
+    if script.startswith("powershell.exe "):
+        # Windows: the script travels as -EncodedCommand (UTF-16LE, base64).
+        import base64
+
+        script = base64.b64decode(script.rsplit(" ", 1)[1]).decode("utf-16-le")
+    assert "/hooks/codex/pretooluse" in script
+    assert script.endswith("exit 0")
 
 
 def test_codex_trust_gate_leaves_the_guard_hook_out_too(tmp_path, monkeypatch) -> None:
