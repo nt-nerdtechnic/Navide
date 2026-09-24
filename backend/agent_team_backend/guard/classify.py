@@ -18,9 +18,12 @@ from __future__ import annotations
 
 import fnmatch
 import os
+import posixpath
 import re
 import shlex
 from dataclasses import dataclass, field
+
+from .. import osplat
 
 LEVEL_ORDER = {"normal": 0, "high": 1, "critical": 2}
 
@@ -58,6 +61,12 @@ SYSTEM_BIN_PREFIXES = (
 )
 _TEMP_ROOTS = ("/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp", "/var/folders", "/private/var/folders")
 _GLOB_CHARS = set("*?[")
+# Every path is compared in one canonical form: '/'-separated and, on
+# Windows, drive-lettered and case-folded (NTFS is case-insensitive).
+_WINDOWS = osplat.platform_id == "win32"
+_DRIVE_RE = re.compile(r"^[A-Za-z]:")
+_MSYS_DRIVE_RE = re.compile(r"^/([A-Za-z])(?=/|$)")  # Git Bash's /c/Users/...
+_HOME_TOKENS = ("${HOME}", "$HOME", "${env:USERPROFILE}", "$env:USERPROFILE", "$USERPROFILE", "%USERPROFILE%")
 _PLACEHOLDER = "\x00SUBST"
 
 
@@ -105,7 +114,23 @@ class _Ctx:
 
 
 def _norm(path: str) -> str:
-    return os.path.normpath(path) if path else path
+    if not path:
+        return path
+    if not _WINDOWS:
+        return posixpath.normpath(path)
+    p = path.replace("\\", "/")
+    m = _MSYS_DRIVE_RE.match(p)
+    if m:
+        p = m.group(1) + ":" + p[2:]
+    if _DRIVE_RE.match(p):
+        p = p[:2] + posixpath.normpath("/" + p[2:].lstrip("/"))
+    else:
+        p = posixpath.normpath(p)
+    return p.lower()
+
+
+def _isabs(path: str) -> bool:
+    return path.startswith("/") or (_WINDOWS and bool(_DRIVE_RE.match(path)))
 
 
 def _home() -> str:
@@ -117,8 +142,8 @@ def _resolve(arg: str, ctx: _Ctx) -> str | None:
     known statically (variable other than HOME, command substitution)."""
     if _PLACEHOLDER in arg:
         return None
-    p = arg
-    for token in ("${HOME}", "$HOME"):
+    p = arg.replace("\\", "/") if _WINDOWS else arg
+    for token in _HOME_TOKENS:
         if p == token or p.startswith(token + "/"):
             p = ctx.home + p[len(token):]
     if "$" in p:
@@ -127,10 +152,10 @@ def _resolve(arg: str, ctx: _Ctx) -> str | None:
         p = ctx.home + p[1:]
     elif p.startswith("~"):
         return None  # ~otheruser
-    if not os.path.isabs(p):
+    if not _isabs(p):
         if not ctx.cwd:
             return None  # after a `cd` to a computed directory
-        p = os.path.join(ctx.cwd, p)
+        p = posixpath.join(ctx.cwd, p)
     return _norm(p)
 
 
@@ -140,6 +165,8 @@ def _glob_base(path: str) -> str:
     for i, part in enumerate(parts):
         if _GLOB_CHARS & set(part):
             base = "/".join(parts[:i])
+            if _WINDOWS and _DRIVE_RE.fullmatch(base):
+                base += "/"
             return base or "/"
     return path
 
@@ -151,8 +178,8 @@ def _inside(root: str, path: str) -> bool:
 
 
 def _is_temp(path: str) -> bool:
-    tmpdir = os.environ.get("TMPDIR", "")
-    roots = _TEMP_ROOTS + ((_norm(tmpdir),) if tmpdir else ())
+    tmpdirs = [os.environ.get(v, "") for v in (("TMPDIR", "TEMP", "TMP") if _WINDOWS else ("TMPDIR",))]
+    roots = _TEMP_ROOTS + tuple(_norm(t) for t in tmpdirs if t)
     return any(path != r and _inside(r, path) for r in roots)
 
 
@@ -172,7 +199,7 @@ def _credential_kind(path: str, ctx: _Ctx) -> str | None:
             return "credential"
         if rel.startswith(".config/gcloud") or rel == ".config/gh/hosts.yml":
             return "credential"
-        base = os.path.basename(path)
+        base = posixpath.basename(path)
         if rel.startswith(".claude/") and base.startswith(".credentials"):
             return "credential"
         if rel.startswith(".codex/") and base.startswith("auth"):
@@ -183,17 +210,17 @@ def _credential_kind(path: str, ctx: _Ctx) -> str | None:
 
 
 def _is_dotenv(path: str) -> bool:
-    base = os.path.basename(path)
+    base = posixpath.basename(path)
     return base == ".env" or (base.startswith(".env.") and base not in {".env.example", ".env.sample", ".env.template"})
 
 
 def _agent_config(path: str, ctx: _Ctx) -> bool:
     h = ctx.home
     return (
-        _inside(os.path.join(h, ".claude"), path)
-        and fnmatch.fnmatch(os.path.basename(path), "settings*.json")
-        and os.path.dirname(path) == os.path.join(h, ".claude")
-    ) or path == os.path.join(h, ".codex", "config.toml")
+        _inside(posixpath.join(h, ".claude"), path)
+        and fnmatch.fnmatch(posixpath.basename(path), "settings*.json")
+        and posixpath.dirname(path) == posixpath.join(h, ".claude")
+    ) or path == posixpath.join(h, ".codex", "config.toml")
 
 
 def _check_path(acc: _Acc, path: str, ctx: _Ctx, *, write: bool, list_only: bool = False) -> None:
@@ -524,7 +551,7 @@ def _check_script_exec(script: str, ctx: _Ctx, acc: _Acc, sub_downloads: set[int
         return
     if _inside(ctx.workspace, path) or path.startswith(SYSTEM_BIN_PREFIXES):
         return
-    if _inside(os.path.join(ctx.home, ".local", "bin"), path):
+    if _inside(posixpath.join(ctx.home, ".local", "bin"), path):
         return
     acc.opaque("unknown-script", f"executes a script outside the workspace: {path}")
 
@@ -647,7 +674,9 @@ def _arg_paths(arg: str) -> list[str]:
         arg = arg.split("=", 1)[1]
     if arg.startswith("@"):
         arg = arg[1:]
-    if arg.startswith(("/", "~", ".", "$HOME", "${HOME}")) or "/" in arg or arg.startswith(".env"):
+    if arg.startswith(("/", "~", ".") + _HOME_TOKENS) or "/" in arg or arg.startswith(".env"):
+        cands.append(arg)
+    elif _WINDOWS and ("\\" in arg or _DRIVE_RE.match(arg)):
         cands.append(arg)
     return cands
 
@@ -671,7 +700,7 @@ def _classify_rm(
         if _credential_kind(base, ctx) or _credential_kind(path, ctx):
             acc.hit("critical", "credential-access", f"deletes a credential store: {path}")
             continue
-        if base in {"/", ctx.home} or (ws and _inside(base, ws) and base != ws):
+        if base in {"/", ctx.home} or (_WINDOWS and _DRIVE_RE.fullmatch(base.rstrip("/"))) or (ws and _inside(base, ws) and base != ws):
             acc.hit("critical", "rm-root-or-home", f"deletes the root, home, or a parent of the workspace: {path}")
             continue
         if ws and _inside(ws, path):
@@ -792,6 +821,9 @@ def classify(tool: str, tool_input: dict, *, cwd: str, workspace: str) -> Verdic
         return classify_prompt_text(str(tool_input.get("text") or ""), workspace=workspace)
     if name in SHELL_TOOLS:
         command = _tool_command(tool_input)
+        if command and name == "powershell":
+            # A backslash separates paths in PowerShell rather than escaping; '/' is equivalent there.
+            command = command.replace("\\", "/")
         if command:
             _classify_script(command, ctx, acc)
     elif name in WRITE_TOOLS or name in READ_TOOLS:
