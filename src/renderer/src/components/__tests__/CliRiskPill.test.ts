@@ -211,4 +211,76 @@ describe('CliRiskPill', () => {
     expect(document.querySelector('.cli-risk-pop')).toBeNull()
     expect(wrapper.find('button').exists()).toBe(false)
   })
+
+  describe('Analyze with CLI', () => {
+    const spawn = vi.fn()
+    beforeEach(() => { spawn.mockReset().mockResolvedValue({ ok: true, result: 'pane-new' }) })
+
+    it('hides the analyze buttons without a spawner or workspace path', async () => {
+      render(riskState([networkSignal()]), { spawn })
+      expect((await open()).querySelector('.cli-risk-analyze, .cli-risk-analyze-all')).toBeNull()
+      wrapper.unmount()
+      render(riskState([networkSignal()]), { workspacePath: '/work/project', agentKey: 'codex' })
+      expect((await open()).querySelector('.cli-risk-analyze, .cli-risk-analyze-all')).toBeNull()
+    })
+
+    it('spawns the same vendor with all findings from the header button', async () => {
+      const signals = [networkSignal(), diskSignal()]
+      render(riskState(signals), { spawn, workspacePath: '/work/project', agentKey: 'claude' })
+      const pop = await open()
+      expect(pop.querySelectorAll('.cli-risk-analyze')).toHaveLength(2)
+      actionButton(pop, 'Analyze all with CLI').click()
+      await flushPromises()
+      expect(spawn).toHaveBeenCalledTimes(1)
+      const request = spawn.mock.calls[0][0]
+      expect(request.agent).toBe('claude')
+      expect(request.name).toMatch(/^risk-[0-9a-f]{6}$/)
+      expect(request.task).toContain('pane id: pane-a')
+      expect(request.task).toContain('workspace path: /work/project')
+      expect(request.task).toContain(`Finding 1 (id: ${signals[0].id})`)
+      expect(request.task).toContain(`Finding 2 (id: ${signals[1].id})`)
+      expect(request.task).toContain('Respond in English (UI locale: en-US).')
+      expect(act).not.toHaveBeenCalled()
+      expect(document.querySelector('.cli-risk-pop')).not.toBeNull()
+    })
+
+    it('analyzes one finding and falls back to the signal vendor', async () => {
+      const signals = [networkSignal(), diskSignal()]
+      render(riskState(signals), { spawn, workspacePath: '/work/project' })
+      const pop = await open()
+      ;(pop.querySelector(`[data-signal-id="${signals[1].id}"] .cli-risk-analyze`) as HTMLButtonElement).click()
+      await flushPromises()
+      const request = spawn.mock.calls[0][0]
+      expect(request.agent).toBe('codex')
+      expect(request.task).toContain(`Finding 1 (id: ${signals[1].id})`)
+      expect(request.task).not.toContain(signals[0].id)
+    })
+
+    it('disables analysis while the spawn is in flight and surfaces a failure', async () => {
+      let finish!: (value: unknown) => void
+      spawn.mockImplementation(() => new Promise((resolve) => { finish = resolve }))
+      render(riskState(), { spawn, workspacePath: '/work/project', agentKey: 'codex' })
+      const pop = await open()
+      actionButton(pop, 'Analyze all with CLI').click()
+      await nextTick()
+      expect(actionButton(pop, 'Analyze all with CLI').disabled).toBe(true)
+      expect(actionButton(pop, 'Analyze with CLI').disabled).toBe(true)
+      expect(actionButton(pop, 'Ignore this IP').disabled).toBe(false)
+      actionButton(pop, 'Analyze with CLI').click()
+      expect(spawn).toHaveBeenCalledTimes(1)
+      finish({ ok: false })
+      await flushPromises()
+      expect(pop.querySelector('[role="alert"]')?.textContent).toBe('Could not start the analysis CLI pane. Try again.')
+      expect(actionButton(pop, 'Analyze all with CLI').disabled).toBe(false)
+    })
+
+    it('reports the spawner error message', async () => {
+      spawn.mockResolvedValue({ ok: false, error: 'ui.pane.create requires an agent and an open workspace' })
+      render(riskState(), { spawn, workspacePath: '/work/project', agentKey: 'codex' })
+      const pop = await open()
+      actionButton(pop, 'Analyze with CLI').click()
+      await flushPromises()
+      expect(pop.querySelector('[role="alert"]')?.textContent).toBe('ui.pane.create requires an agent and an open workspace')
+    })
+  })
 })

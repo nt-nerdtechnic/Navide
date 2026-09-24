@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { i18n } from '@navide/plugin-ui/foundation'
 import type { CliRiskContext } from '../composables/useResourceUsage'
 import type { CliRiskAction, CliRiskPaneState, CliRiskSignal } from '../lib/cliRisk'
+import { buildCliRiskAnalysisPrompt, cliRiskAnalysisPaneName, type CliRiskAnalysisSpawn } from '../lib/cliRiskAnalysisPrompt'
 
 const props = defineProps<{
   paneId: string
@@ -10,6 +11,11 @@ const props = defineProps<{
   available?: boolean
   compact?: boolean
   act: CliRiskContext['actOnCliRisk']
+  /** Observed pane's CLI vendor; the analysis pane runs the same vendor. */
+  agentKey?: string
+  workspacePath?: string
+  /** Spawns the "Analyze with CLI" pane; the analyze buttons hide without it. */
+  spawn?: CliRiskAnalysisSpawn
 }>()
 
 const t = i18n.global.t
@@ -142,6 +148,35 @@ async function act(signal: CliRiskSignal, action: CliRiskAction['action']): Prom
   }
 }
 
+const analyzing = ref(false)
+const analysisVendor = computed(() => props.agentKey || first.value?.vendor || '')
+const canAnalyze = computed(() => !!props.spawn && !!props.workspacePath && !!analysisVendor.value)
+
+async function analyze(signals: CliRiskSignal[]): Promise<void> {
+  if (!props.spawn || !props.workspacePath || !props.state || analyzing.value) return
+  analyzing.value = true
+  error.value = ''
+  try {
+    const response = await props.spawn({
+      agent: analysisVendor.value,
+      name: cliRiskAnalysisPaneName(),
+      task: buildCliRiskAnalysisPrompt({
+        paneId: props.paneId,
+        vendor: analysisVendor.value,
+        workspacePath: props.workspacePath,
+        state: props.state,
+        signals,
+        locale: i18n.global.locale.value,
+      }),
+    })
+    if (!response.ok) error.value = response.error || t('cli-risk.analyze-failed')
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : t('cli-risk.analyze-failed')
+  } finally {
+    analyzing.value = false
+  }
+}
+
 async function reveal(signal: CliRiskSignal): Promise<void> {
   if (!signal.path || pending.value) return
   pending.value = true
@@ -189,7 +224,10 @@ async function reveal(signal: CliRiskSignal): Promise<void> {
     >
       <div class="cli-risk-pop-head">
         <strong>{{ t('cli-risk.details') }}</strong>
-        <button type="button" :aria-label="t('cli-risk.close')" @click="close(true)">×</button>
+        <span class="cli-risk-head-actions">
+          <button v-if="canAnalyze" type="button" class="cli-risk-analyze-all" :title="t('cli-risk.analyze-hint', { vendor: analysisVendor })" :disabled="analyzing" @click="analyze(state.signals)">{{ t('cli-risk.analyze-all') }}</button>
+          <button type="button" :aria-label="t('cli-risk.close')" @click="close(true)">×</button>
+        </span>
       </div>
       <p v-if="available === false" class="cli-risk-stale">{{ t('cli-risk.unavailable') }}</p>
       <section v-for="signal in state.signals" :key="signal.id" class="cli-risk-signal" :data-signal-id="signal.id">
@@ -230,6 +268,7 @@ async function reveal(signal: CliRiskSignal): Promise<void> {
           <button type="button" :disabled="pending" @click="act(signal, 'ignore')">{{ t(signal.kind === 'network' ? 'cli-risk.ignore-ip' : 'cli-risk.ignore') }}</button>
           <button v-if="signal.kind === 'network' && signal.ip" type="button" :disabled="pending" @click="act(signal, 'allow')">{{ t('cli-risk.allow-ip', { vendor: signal.vendor }) }}</button>
           <button v-if="signal.kind === 'disk' && signal.path" type="button" :disabled="pending" @click="reveal(signal)">{{ t('cli-risk.reveal') }}</button>
+          <button v-if="canAnalyze" type="button" class="cli-risk-analyze" :title="t('cli-risk.analyze-hint', { vendor: analysisVendor })" :disabled="analyzing" @click="analyze([signal])">{{ t('cli-risk.analyze') }}</button>
         </div>
       </section>
       <p v-if="error" role="alert" class="cli-risk-error">{{ error }}</p>
@@ -280,6 +319,7 @@ async function reveal(signal: CliRiskSignal): Promise<void> {
   overflow-wrap: anywhere;
 }
 .cli-risk-pop-head { display: flex; align-items: center; justify-content: space-between; color: var(--text-bright); }
+.cli-risk-head-actions { display: flex; align-items: center; gap: 6px; }
 .cli-risk-signal + .cli-risk-signal { border-top: 1px solid var(--border-muted); margin-top: 10px; padding-top: 8px; }
 h3 { margin: 6px 0; font-size: inherit; }
 .yellow, .cli-risk-stale { color: var(--attention-fg); }

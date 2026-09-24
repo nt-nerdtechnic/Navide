@@ -17,12 +17,13 @@ import { paneStatusLabelText } from '../lib/paneStatusLabel'
 import { statusBadgeStyle } from '../composables/useStatusBadgePrefs'
 import { setBatchDragImage } from '../lib/batchDragImage'
 import { i18n } from '@navide/plugin-ui/foundation'
-import { isMacPlatform } from '@navide/plugin-ui/shared'
+import { invokeCommand, isMacPlatform } from '@navide/plugin-ui/shared'
 import RebuildIcon from './RebuildIcon.vue'
 import UsageBadge from './UsageBadge.vue'
 import PaneChannelButton from './PaneChannelButton.vue'
 import CliRiskPill from './CliRiskPill.vue'
 import { cliRiskKey } from '../composables/useResourceUsage'
+import type { CliRiskAnalysisSpawn } from '../lib/cliRiskAnalysisPrompt'
 import RestoredPanePlaceholder from './RestoredPanePlaceholder.vue'
 
 interface Props {
@@ -230,6 +231,8 @@ const terminal = useTerminal(props.paneId, props.terminalPort, {
 // that same backend-owned identity, just like the resource usage projection.
 const cliRiskPaneId = computed(() => cliRisk?.paneIdByKey.value.get(terminal.sessionId.value) ?? props.paneId)
 const cliRiskState = computed(() => cliRisk?.cliRisksByPaneId.value.get(cliRiskPaneId.value))
+/** Spawns the "Analyze with CLI" pane through the same command MCP ui_invoke uses. */
+const spawnCliRiskAnalysis: CliRiskAnalysisSpawn = (request) => invokeCommand('ui.pane.create', request)
 const { theme } = useTheme()
 watch(theme, () => terminal.updateXtermTheme())
 
@@ -679,6 +682,9 @@ onMounted(() => {
           :available="cliRisk.cliRisksAvailable.value"
           :compact="loginExpired && usageLimitHit"
           :act="cliRisk.actOnCliRisk"
+          :agent-key="agentKey"
+          :workspace-path="workspacePath"
+          :spawn="spawnCliRiskAnalysis"
         />
         <span
           class="status"
